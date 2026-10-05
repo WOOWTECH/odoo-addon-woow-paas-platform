@@ -2095,7 +2095,7 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.1（0.1.0＝#125）；
+        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.2（0.1.1＝#131、0.1.0＝#125）；
              image paas-odoo-ci tailscale/（#240，官方 tailscale 1.102.5＋衍生自 podman 版的 entrypoint，
              uid 1000、userspace）。定位＝工作區私有入口（PLAN Q2）：節點加入租戶自己的 tailnet（官方或
              Headscale），用 tailscale serve TCP 轉發把**同 namespace** 的服務掛上 tailnet。
@@ -2111,6 +2111,14 @@
              實測）；0.1.1 帶 label，搭配 #1398 的 operator 才會成功（重啟數十秒，節點身分在 PVC、回來仍是
              同一台）。reset 釘服務現行 chart 版本（F-461-2），既有 0.1.0 服務要 redeploy 升到 0.1.1 才修好。
              tailscale.authKey 刻意**不在** config.sensitive 底下（平台會剝掉）。
+             控制平面（chart 0.1.2，PLAN §10.2）：tailscale.controlPlane 三選一——official（官方 Tailscale）／
+             workspace（同工作區 Headscale：平台在組裝第 7 步把同工作區最早建立、running 的 Headscale 叢集內網址
+             http://<release>-headscale.<ns>.svc.cluster.local:8080 注入 tailscale.workspaceHeadscaleUrl，
+             _WORKSPACE_HEADSCALE_URL_VALUE_PATHS；**只帶網址**，preauth key 仍由租戶在 Headplane 建好貼進
+             tailscale.authKey）／custom（tailscale.loginServer）。注入值只進 chart 的 runtime ConfigMap、不入
+             pod template（重設路徑照常重算）。select 預設 official；chart 端 controlPlane 未設＝0.1.1 語意
+             （loginServer 非空→custom），既有服務由 cloud_service._heal_tailscale_control_plane 補上
+             controlPlane=custom，設定頁才不會把它顯示成「官方」、儲存時誤切回官方。
              1 vCPU／0.5 GB／1 GB：方案 overlay 套在 tailscale 容器；persistence.size＝節點身分那顆 PVC。
              image：#240 合併後從 main build 並核可（#244，promote run 14211）＝tailscale:20261004.0747；
              digest 與沙盒實測的 #239 候選逐位相同（可重現建置）。
@@ -2121,13 +2129,18 @@
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 節點（相容 Tailscale）</field>
             <field name="slug">tailscale</field>
-            <field name="description">把工作區裡的服務接進你自己的 VPN（tailnet）：節點加入官方 Tailscale 或同工作區的 VPN 控制台，用轉發清單把 Odoo、Home Assistant 等服務掛上 VPN，不必走公開網址。1 vCPU／0.5 GB RAM／1 GB 磁碟</field>
+            <field name="description">把工作區裡的服務接進你自己的 VPN（tailnet）：節點加入官方 Tailscale 或同工作區的 VPN 控制台（平台自動帶入內部網址），用轉發清單把 Odoo、Home Assistant 等服務掛上 VPN，不必走公開網址。1 vCPU／0.5 GB RAM／1 GB 磁碟</field>
             <field name="full_description">VPN 節點（相容 Tailscale，tailscale 1.102）：在你的工作區放一台 Tailscale 節點，加入你自己的 tailnet
                 （官方 Tailscale 帳號，或同工作區的「VPN 控制台（Headscale）」），再用轉發清單把同一工作區的服務以 TCP 掛到 tailnet 上——
                 你的裝置經 VPN 直接連線，不必走公開網址，也不受平台入口單次請求 100 MB 的限制。需自備 Tailscale 帳號或同工作區的 Headscale。
+                **控制平面**：在服務設定的「控制平面」三選一——「官方 Tailscale」（預設）、「同工作區 Headscale」（平台自動帶入同工作區
+                「VPN 控制台（Headscale）」的內部網址 http://&lt;Headscale 服務的 Helm Release&gt;-headscale:8080，不必自己填；工作區有好幾台時用最早建立、
+                執行中的那台；平台只帶網址，pre-auth key 仍要你在 Headscale 的網頁後台 Headplane 建好、貼到下方 auth key 欄位）、
+                「自訂網址」（填「控制伺服器」欄位，例如其他地方的 Headscale）。選「同工作區 Headscale」但工作區還沒有執行中的 Headscale 時，
+                節點不登入並寫入服務記錄；開好 Headscale 後，貼上它的 pre-auth key 儲存設定即可。
+                換控制平面（或換網址）＝這台節點會登記成一台新機器（新的 tailnet IP），舊機器要自己到原本的控制台移除。
                 **登入 tailnet**：二擇一——在服務設定填 auth key（建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄），
-                或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。控制伺服器留空＝官方 Tailscale；使用同工作區的 Headscale 時
-                填它的內部網址 http://&lt;Headscale 服務的 Helm Release&gt;-headscale:8080。換控制伺服器＝這台節點會登記成一台新機器（新的 tailnet IP）。
+                或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。
                 **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
                 IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
                 **網頁介面**：帳號預設 admin，帳號與密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
@@ -2143,12 +2156,15 @@
             <field name="documentation_url">https://tailscale.com/kb</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
-            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_chart_version">0.1.2</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "tailscale.loginServer", "label": "控制伺服器（選填）", "type": "text",
-                "placeholder": "http://svc-xxxxxxxx-headscale:8080",
-                "description": "留空＝官方 Tailscale。使用 Headscale 時填它的網址；同工作區的 VPN 控制台請填內部網址 http://&lt;它的 Helm Release&gt;-headscale:8080。換控制伺服器＝這台節點登記成新機器（新的 tailnet IP）；網址格式不正確時維持目前的登入並寫入服務記錄"},
+                {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official",
+                "options": [{"value": "official", "label": "官方 Tailscale"}, {"value": "workspace", "label": "同工作區 Headscale"}, {"value": "custom", "label": "自訂網址"}],
+                "description": "選「同工作區 Headscale」時平台自動帶入同工作區 VPN 控制台的內部網址（有好幾台時用最早建立、執行中的那台），只帶網址：pre-auth key 仍要你在它的網頁後台 Headplane 建好、貼到 auth key 欄位；工作區還沒有執行中的 Headscale 時節點不登入並寫入服務記錄。選「自訂網址」時用下方「控制伺服器」欄位。換控制平面＝這台節點登記成新機器（新的 tailnet IP）"},
+                {"key": "tailscale.loginServer", "label": "控制伺服器（自訂網址）", "type": "text",
+                "placeholder": "https://headscale.example.com",
+                "description": "只在「控制平面」選「自訂網址」時使用，例如其他地方的 Headscale；同工作區的 VPN 控制台請改選「同工作區 Headscale」，不必自己填。換網址＝這台節點登記成新機器（新的 tailnet IP）；網址格式不正確或留空時維持目前的登入並寫入服務記錄"},
                 {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password",
                 "description": "Tailscale 的 tskey-auth-… 或 Headscale 的 pre-auth key，只在節點尚未登入時使用。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
                 {"key": "tailscale.hostname", "label": "節點名稱（選填）", "type": "text",
@@ -2264,6 +2280,12 @@
              and docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md. -->
         <function model="woow_paas_platform.cloud_app_template"
                   name="_heal_sticky_helm_value_specs"/>
+
+        <!-- tailscale chart 0.1.2 的「控制平面」select（預設「官方 Tailscale」）：0.1.2 之前開通、填了
+             tailscale.loginServer 的服務補上 controlPlane=custom（＝chart 對它們本來的解讀），設定頁才不會
+             顯示成「官方」、儲存時誤切回官方。冪等，每次 -u 都跑；見 cloud_service._heal_tailscale_control_plane。 -->
+        <function model="woow_paas_platform.cloud_service"
+                  name="_heal_tailscale_control_plane"/>
 
         <!-- #552 層 4：升級期的活體檢查。層 4 起，helm_chart_version 留空的商品會被
              供給閘門擋在購買前 —— 而那個失效形態**完全靜默**：商品從貨架上消失、
