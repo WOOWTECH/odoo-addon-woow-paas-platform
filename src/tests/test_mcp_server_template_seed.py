@@ -1,7 +1,7 @@
 """Seed assertions for the mcp-server chart family of cloud service templates.
 
-家族成員（7 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
-hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign。
+家族成員（8 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
+hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm（2026-10-05 以隱藏範本進 seed）。
 
 ## 為什麼是兩層 mixin（#686）
 
@@ -14,7 +14,7 @@ hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign。
 
 修法是**拆層**而不是硬塞：
 
-* ``_McpServerFamilyAssertions``——家族不變式，**7 個成員全部繼承**。
+* ``_McpServerFamilyAssertions``——家族不變式，**所有成員全部繼承**。
 * ``_McpServerSeedAssertions``——僅適用於「非 hermes」的那一條（必須顯式覆寫
   chart 的 hermes 形預設 command）。
 
@@ -68,7 +68,7 @@ def _assert_storage_resources_aligned(tc, tmpl):
 
 
 class _McpServerFamilyAssertions:
-    """mcp-server chart 家族的**家族不變式**——7 個成員全部必須繼承。
+    """mcp-server chart 家族的**家族不變式**——所有成員全部必須繼承。
 
     Subclasses bind app-specific xmlids/values. This mixin is intentionally
     NOT a TransactionCase, so Odoo's test runner would skip it and only run
@@ -89,11 +89,11 @@ class _McpServerFamilyAssertions:
     PROD_M = None
     IMAGE_REPO_SUFFIX = None  # e.g. 'odoo-mcp-admin'
     APP = None  # helm values `app:` selector, e.g. 'odoo'
-    EXPECT_ENV_PREFIX = ''  # odoo/n8n/k8s/vk/opendesign 空；hermes 用 'HERMES_'
+    EXPECT_ENV_PREFIX = ''  # odoo/n8n/k8s/vk/opendesign 空；hermes 用 'HERMES_'、litellm 用 'LITELLM_MCP_'
     # seed 覆寫的 config.nonSensitive.mcp_server.command。**None＝刻意不覆寫、
     # 吃 chart 預設**（只有 pilot hermes 是這個形態）。
     EXPECT_MCP_COMMAND = None
-    # 上架與否；目前 7 個成員都是 True，欄位保留給未來待上架的成員。
+    # 上架與否；目前 8 個成員都是 True（mcp-litellm 隱藏是 is_hidden，與本欄正交），欄位保留給未來待上架的成員。
     EXPECT_ACTIVE = True
     # 月繳／年繳定價。hermes 是 1500／15000（#330 定價重定），其餘齊一 3000／24000。
     EXPECT_PLAN_PRICE_M = 3000
@@ -167,7 +167,7 @@ class _McpServerFamilyAssertions:
         不會是複製貼上滑過去的。
 
         衍生層 ``_McpServerSeedAssertions`` 另有更強的一條（非 hermes **必須**
-        顯式覆寫且不得等於 chart 預設）；這裡是 7 個成員都成立的那一半。
+        顯式覆寫且不得等於 chart 預設）；這裡是所有成員都成立的那一半。
         """
         command = self._seeded_mcp_command(self._values())
         self.assertEqual(
@@ -475,6 +475,25 @@ class TestMcpOpenDesignTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     IMAGE_REPO_SUFFIX = 'opendesign-mcp-admin'
     APP = 'opendesign'
     EXPECT_MCP_COMMAND = 'supergateway'
+
+
+class TestMcpLitellmTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """mcp-litellm template（PLAN §10）：LiteLLM 管理 MCP，launcher 直跑 Streamable HTTP。
+
+    唯一 envPrefix 非空的非 pilot 成員（``LITELLM_MCP_``：connection 鍵 base_url／master_key 經前綴
+    注入子行程）。出廠唯讀、同工作區網址注入、隱藏盤點等本 app 專屬守線在 test_mcp_litellm_seed.py；
+    這裡只守家族不變式。``is_hidden=True`` 不影響 ``is_active``（曝光層與上架旗標正交）。
+    """
+
+    SLUG = 'mcp-litellm'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_litellm'
+    PLAN_M = 'woow_paas_platform.plan_mcp_litellm_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_litellm_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_litellm_monthly'
+    IMAGE_REPO_SUFFIX = 'litellm-mcp-admin'
+    APP = 'litellm'
+    EXPECT_ENV_PREFIX = 'LITELLM_MCP_'
+    EXPECT_MCP_COMMAND = 'litellm-mcp-server'
 
 
 def _all_subclasses(cls):
