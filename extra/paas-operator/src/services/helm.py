@@ -3560,7 +3560,11 @@ class KubernetesService:
         namespace: str,
         statefulset_name: str,
     ) -> None:
-        """``kubectl rollout restart statefulset/<name>`` (pod template annotation bump)."""
+        """``kubectl rollout restart statefulset/<name>`` (pod template annotation bump).
+
+        #1432: open-design's daemon is a StatefulSet; restarting only Deployments
+        left it untouched through 17 helm revisions in R8 (restartCount 0).
+        """
         validate_namespace(namespace)
         self._run_command([
             "rollout", "restart",

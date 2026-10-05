@@ -628,6 +628,23 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def restart_release(
+        self,
+        namespace: str,
+        release_name: str,
+    ) -> Dict[str, Any]:
+        """#1432：rollout restart release 下所有 Deployment 與 StatefulSet。
+
+        operator 只「下達」不等待（回應 ``rollout_awaited: False``）；收斂交給平台
+        狀態機（呼叫端把服務轉 ``upgrading``，poll 轉回 ``running``）。PVC、Secret、
+        values 都不動。沒有任何 workload 時 operator 回 404。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/restart',
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def rollback_release(
         self,
         namespace: str,
