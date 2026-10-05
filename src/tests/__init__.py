@@ -1037,3 +1037,5 @@ from . import test_rollback_preserves_credentials_1433
 from . import test_platform_ux_r8
 # #1432 租戶重新啟動、#1435 改金鑰後重啟、#1455 金鑰未設定／清除。
 from . import test_restart_and_secret_keys_1432
+# #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
+from . import test_neutralize_1201
