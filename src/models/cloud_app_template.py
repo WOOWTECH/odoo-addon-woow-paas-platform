@@ -1169,11 +1169,26 @@ class CloudAppTemplate(models.Model):
         return {} if specs is SPECS_UNPARSEABLE else specs
 
     def _filter_allowed_helm_values(self, values):
-        """
-        Filter Helm values to only include keys allowed by this template's value_specs.
+        """租戶送來的 helm values 只放行本 template ``helm_value_specs`` 宣告的鍵（白名單）。
 
-        This prevents users from overriding critical system values like namespace,
-        resource limits, or security settings that should be controlled by the template.
+        擋的是租戶改掉平台刻意控制的值（namespace、資源規格、securityContext、
+        image……）。開通（``controllers/paas.py`` ``_create_service``：被拒的鍵靜默丟棄、
+        只留 log）與儲存設定（``_update_service``：有被拒的鍵就整筆拒絕）都經過這裡；
+        平台自己的寫入路徑（redeploy／reset／init／換 image／方案 overlay）不經過。
+
+        比對規則（#1488 未改動）：values 的**頂層鍵**對 spec 的 ``key`` 字串做精確比對。
+        前端送的是扁平 dot-path（``{"auth.openrouterApiKey": "..."}``），呼叫端之後才
+        ``_unflatten_dotpath_keys``；巢狀形狀（``{"auth": {...}}``）或更深一層的
+        dot-path（``auth.openrouterApiKey.x``）都不等於宣告的字串 ⇒ 拒絕。宣告鍵的值
+        本身不檢查形狀。
+
+        #1488 fail-closed：specs 沒有任何允許的鍵——欄位空白／null、``{}``、
+        ``{"required": [], "optional": []}``、解析失敗或不是 dict——租戶送的 values
+        **一律拒絕**（全部列入 rejected）。舊版這兩種情況都走「allow all
+        （backward compatibility）」，於是 specs 空白的公開範本（7 個 mcp-*、pi-agent、
+        ha-full）的租戶可經開通與儲存設定覆寫 chart 的 securityContext／image／
+        resources／serviceAccount／tolerations 等。需要租戶參數的範本必須在 specs
+        明列 key；允許的鍵與 #1408 redeploy 保留的「租戶鍵」同源（``_tenant_value_keys``）。
 
         Args:
             values (dict): User-provided Helm values
@@ -1184,25 +1199,14 @@ class CloudAppTemplate(models.Model):
         if not values:
             return {}, []
 
-        specs = self._parse_helm_value_specs()
-        if not specs:
-            # No specs defined - allow all values (backward compatibility)
-            return values, []
-
-        # Build set of allowed keys from specs
-        allowed_keys = set()
-
-        # Get keys from required and optional fields
-        for field_list in [specs.get('required', []), specs.get('optional', [])]:
-            for field in field_list:
-                if isinstance(field, dict) and 'key' in field:
-                    allowed_keys.add(field['key'])
-                elif isinstance(field, str):
-                    allowed_keys.add(field)
-
+        allowed_keys = self._tenant_value_keys()
         if not allowed_keys:
-            # No keys defined in specs - allow all
-            return values, []
+            rejected = list(values)
+            _logger.warning(
+                "[#1488] Template %s declares no tenant-settable helm value keys; "
+                "rejecting all tenant helm values %s", self.name, rejected,
+            )
+            return {}, rejected
 
         # Filter values to only allowed keys
         filtered = {}
@@ -1225,6 +1229,8 @@ class CloudAppTemplate(models.Model):
         """租戶可設定的 helm value 鍵（helm_value_specs 的 required／optional ``key``）。
 
         #1408：Redeploy 以範本 image 覆蓋服務值時，這些鍵屬於租戶，不覆蓋。
+        #1488：同一組鍵也是 ``_filter_allowed_helm_values`` 的白名單；空集合＝租戶
+        什麼都不能設（fail-closed），不是「全部放行」。
         """
         specs = self._parse_helm_value_specs()
         keys = set()
