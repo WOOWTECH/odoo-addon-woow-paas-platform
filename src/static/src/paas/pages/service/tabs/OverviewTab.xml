@@ -2,6 +2,41 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.OverviewTab">
         <div class="o_woow_overview_tab">
+            <!-- #1454：方案與帳期。雲端服務詳情頁原本只有「Skip Trial」按鈕，看不到試用
+                 到期日與何時開始扣款（Smart Home 詳情頁早就有）。試用中的訂閱 start_date
+                 是「試用結束隔天」＝首個計費日（subscription_lifecycle_mixin），所以這裡
+                 標成 First Billing Date，不叫「開始日期」。 -->
+            <WoowCard t-if="subscription" class="'o_woow_info_card'">
+                <div class="o_woow_card_header">
+                    <WoowIcon name="'card_membership'" size="20"/>
+                    <h3>Plan &amp; Billing</h3>
+                    <span t-if="subscription.is_trial" class="o_woow_badge o_woow_badge_blue">Trial</span>
+                </div>
+                <div class="o_woow_info_grid">
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label">Plan</span>
+                        <span class="o_woow_info_value">
+                            <t t-esc="subscription.plan_name or '—'"/>
+                            <t t-if="subscription.plan_price"> (<t t-esc="formattedPlanPrice"/>)</t>
+                        </span>
+                    </div>
+                    <t t-if="subscription.is_trial">
+                        <div class="o_woow_info_row" t-if="subscription.trial_end_date">
+                            <span class="o_woow_info_label">Trial Ends</span>
+                            <span class="o_woow_info_value" t-esc="formatDate(subscription.trial_end_date)"/>
+                        </div>
+                        <div class="o_woow_info_row" t-if="firstBillingDate">
+                            <span class="o_woow_info_label">First Billing Date</span>
+                            <span class="o_woow_info_value" t-esc="formatDate(firstBillingDate)"/>
+                        </div>
+                    </t>
+                    <div class="o_woow_info_row" t-elif="subscription.next_payment">
+                        <span class="o_woow_info_label">Next Payment</span>
+                        <span class="o_woow_info_value" t-esc="formatDate(subscription.next_payment)"/>
+                    </div>
+                </div>
+            </WoowCard>
+
             <!-- Connection Info Card -->
             <WoowCard class="'o_woow_info_card'">
                 <div class="o_woow_card_header">
@@ -12,9 +47,12 @@
                     <!-- Status -->
                     <div class="o_woow_info_row">
                         <span class="o_woow_info_label">Status</span>
-                        <span t-att-class="'o_woow_info_value o_woow_connection_status ' + (isOnline ? 'online' : 'offline')">
+                        <!-- #1456：升級／重新部署期間舊版本仍在服務，原本一律顯示 OFFLINE，
+                             客戶以為服務壞了。判準見 connectionStatus。 -->
+                        <span t-att-class="'o_woow_info_value o_woow_connection_status ' + connectionStatus">
                             <span class="o_woow_status_indicator"/>
-                            <t t-if="isOnline">ONLINE</t>
+                            <t t-if="connectionStatus === 'online'">ONLINE</t>
+                            <t t-elif="connectionStatus === 'updating'">UPDATING</t>
                             <t t-else="">OFFLINE</t>
                         </span>
                     </div>
@@ -86,6 +124,18 @@
                             <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.custom_domain, 'domain')" title="Copy domain">
                                 <WoowIcon name="copyIcon('domain')" size="16"/>
                             </button>
+                        </span>
+                    </div>
+
+                    <!-- #1453：服務的使用說明（範本的 documentation_url；原本只藏在配置頁，
+                         而且服務 API 漏帶這一格，連結從來沒出現過）。 -->
+                    <div class="o_woow_info_row" t-if="props.service.template?.documentation_url">
+                        <span class="o_woow_info_label">Service Guide</span>
+                        <span class="o_woow_info_value">
+                            <a t-att-href="props.service.template.documentation_url" target="_blank" rel="noopener noreferrer">
+                                View Documentation
+                                <WoowIcon name="'open_in_new'" size="14"/>
+                            </a>
                         </span>
                     </div>
 

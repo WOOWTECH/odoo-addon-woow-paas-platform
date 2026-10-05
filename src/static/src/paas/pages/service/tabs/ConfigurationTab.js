@@ -71,6 +71,11 @@ export class ConfigurationTab extends Component {
     }
 
     get canEdit() {
+        // #1456：沒有任何可調設定（HA、pi-agent…）時不給「修改配置」——原本照樣能按
+        // 「儲存變更」，送出一次空的 helm upgrade（51–65 秒「升級中」、鎖住其他操作）。
+        if (this.allSpecs.length === 0) {
+            return false;
+        }
         const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         if (disabledStates.includes(this.props.service.state)) {
             return false;
@@ -195,8 +200,33 @@ export class ConfigurationTab extends Component {
         return payload;
     }
 
+    /**
+     * #1456：使用者沒有改任何值（密碼欄留白＝不變更，已由 buildSavePayload 拿掉）時
+     * 不送出——每次送出都是一次 helm upgrade（服務短暫進入「升級中」）。
+     * 比對基準是進入編輯時的回填值（startEditing 用的同一個 getSpecValue）。
+     */
+    hasChanges(payload) {
+        for (const [key, value] of Object.entries(payload)) {
+            const spec = this.allSpecs.find((s) => s.key === key);
+            if (!spec || this.isPasswordSpec(spec)) {
+                return true;
+            }
+            if (String(value ?? "") !== String(this.getSpecValue(spec) ?? "")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     async saveChanges() {
+        if (this.state.saving) return;
         if (!this.validateForm()) return;
+
+        const payload = this.buildSavePayload();
+        if (!this.hasChanges(payload)) {
+            this.cancelEditing();
+            return;
+        }
 
         this.state.saving = true;
         this.state.error = null;
@@ -205,7 +235,7 @@ export class ConfigurationTab extends Component {
             const result = await cloudService.updateService(
                 this.props.workspaceId,
                 this.props.service.id,
-                this.buildSavePayload()
+                payload
             );
 
             if (result.success) {

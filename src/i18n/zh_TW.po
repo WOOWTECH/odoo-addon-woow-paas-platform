@@ -20343,3 +20343,33 @@ msgstr "回復期間服務會重新啟動（約一分鐘），進行中的工作
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Confirm Rollback"
 msgstr "確認回復"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "UPDATING"
+msgstr "更新中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Plan & Billing"
+msgstr "方案與帳期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "First Billing Date"
+msgstr "首次扣款日"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
+msgid "Billing Start Date"
+msgstr "計費開始日"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Service Guide"
+msgstr "使用說明"
