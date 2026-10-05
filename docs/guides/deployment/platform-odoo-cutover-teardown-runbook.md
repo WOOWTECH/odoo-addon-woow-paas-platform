@@ -19,9 +19,9 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 |---|---|---|
 | T1 | 新 release 名 | ✅ `paas-odoo-platform`（cd#145 留言 18089）；PVC `data-paas-odoo-platform-postgresql-0`、`paas-odoo-platform-data` |
 | T2 | 穩定 Service 名與 raw bundle 目錄 | ✅ `paas-system/paas-odoo-active`＋`paas-odoo-edge/`（woow-paas/paas-app-bundle-cd#199） |
-| T3 | `paas-odoo-backup-pvc` 根目錄舊 `*.pg` 的處置 | 部分定案：7 份未輪替的 `paas_odoo_*.pg` 併入退役 dump（WMO#5 裁決 Q5d）；`woow_prod_*.pg` 的處置〔待裁決：G6〕 |
+| T3 | `paas-odoo-backup-pvc` 根目錄舊 `*.pg` 的處置 | 部分定案：7 份未輪替的 `paas_odoo_*.pg` 併入退役 dump（WMO#5 裁決 Q5d）；`woow_prod_*.pg` 最新一份併入退役 dump、其餘刪除（G6） |
 | T4 | 離叢集 backup target（#443）定案後的遷移 | ✅ 保留到窗口結束後 90 天；到期時 #443 未落地就自動延長到 #443 落地（WMO#5 裁決 Q5c） |
-| T5 | teardown 用的 dump push helper pod 形狀 | 〔待裁決：G3〕 |
+| T5 | teardown 用的 dump push helper pod 形狀 | ✅ [cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T 的 T1～T4（G3） |
 
 ## 操作者圖例
 
@@ -54,7 +54,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 1. 【agent 執行・人類逐步放行】在叢集內產出舊 postgres 的最終 `pg_dump -Fc`：`bitnami_odoo`（88 MB，13439 ⑦）與 `woow_prod` 各一份；filestore（舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/`）打 tar；`paas-odoo-backup-pvc` 根目錄 7 份從未輪替的 `paas_odoo_2026082*～0904*.pg`（約 72 MB）一起打包（WMO#5 裁決 Q5d）；每份附 sha256，dump 另附 `pg_restore -f /dev/null` 結果（13439 ⑦；map 裁決；WMO#5 裁決 Q5b）。
    - 舊 odoo 已是 0 副本、舊 pg 仍 Running（cutover PR-B 只縮 odoo；woow-paas/paas-app-bundle-cd#144 PR-B 驗收）。
-   - 只能叢集內 HTTP PUT push，⛔ 不用 `kubectl exec … > file`（[pitfall](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)）；helper pod 形狀〔待裁決：G3〕。
+   - 只能叢集內 HTTP PUT push，⛔ 不用 `kubectl exec … > file`（[pitfall](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)）；用 [cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T 的 T1～T4，T4 額外唯讀掛 `paas-odoo-backup-pvc` 取根目錄舊 `*.pg`（2026-10-05 發起人裁決 G3，#1495）。
+   - 離叢集：發起人從 receiver 以 HTTP over port-forward 分塊（100 MB）＋逐塊 sha256 拉到本機再 `age` 加密（#1032 plan:91、:99 的 prod 實作；port-forward 會斷，要能續傳）。
    - `bitnami_odoo` 若已在 cutover B0 第 4～5 步上傳且 sha256 未變，可沿用、不重產（推論）。
 2. 【人類】發起人把上一步產物以 `age` 加密，上傳公司 Google Drive 專用資料夾，回填 sha256 到本 runbook 的「退役 dump 紀錄」表（下方）與 teardown issue；保留到回退窗口結束後再 90 天（map 裁決；13439 ⑦；WMO#5 裁決 Q5b）。
    - `age` 私鑰由發起人保管，另存一份到公司密碼庫（WMO#5 裁決 Q5a）。
@@ -91,7 +92,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 刪除紀錄（PV 名、時間、操作者）寫進 teardown issue，補上 #319 的稽核缺口（WMO#16 追查過不明批次刪除）。
 4. 【agent】唯讀確認：兩顆 PVC、兩顆 PV、對應 Longhorn volume 都已不存在；另盤點叢集上其他 Released PV，依 [guard doc](shared-cluster-paas-scope-guard.md) 的分流／溯源做法確認歸屬——非本次 teardown 的 PV 走 #319 SOP，不在本檔順手刪。
 5. 【人類】刪除舊 fleet-local secret `paas-odoo-fleet-secrets`（`fleet-local` 只碰 `paas-*` 前綴資源；CLAUDE.md §kubectl）。
-6. 【人類】處置 `paas-odoo-backup-pvc` 根目錄的舊檔：7 份 `paas_odoo_*.pg` 已併入 D1 退役 dump，sha256 回填後刪除（WMO#5 裁決 Q5d）；`woow_prod_*.pg`（舊 `pg-backup` CronJob 的 7 份輪替 dump）〔待裁決：G6，建議最新一份併入退役 dump、其餘刪除〕。
+6. 【人類】處置 `paas-odoo-backup-pvc` 根目錄的舊檔：7 份 `paas_odoo_*.pg` 已併入 D1 退役 dump，sha256 回填後刪除（WMO#5 裁決 Q5d）；`woow_prod_*.pg`（舊 `pg-backup` CronJob 的 7 份輪替 dump）最新一份併入 D1 退役 dump、其餘刪除（2026-10-05 發起人裁決 G6，#1495）。
    - 新 release 的備份寫在 `daily/`、`weekly/`、`pre-upgrade/` 子目錄（chart README §備份格式與驗證），不會動到根目錄舊檔。
 
 ## D5 保留物
@@ -104,7 +105,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## D6 後續銜接
 
-1. 【人類】若平台發版尚未切到只 build `paas-odoo-official`（[cutover runbook](platform-odoo-cutover-runbook.md) B8 第 2 步；〔待裁決：G2〕），在本步切換；之後不再 build Bitnami `paas-odoo`（#1392 留言 17382）。
+1. 【人類】若平台發版尚未切到只 build `paas-odoo-official`（[cutover runbook](platform-odoo-cutover-runbook.md) B8 第 2 步定在 cutover 當下（2026-10-05 發起人裁決 G2，#1495）；正常情況此時早已切換），在本步補切；之後不再 build Bitnami `paas-odoo`（#1392 留言 17382）。
 2. 【agent】列待修清單並另開票（本檔不改寫 SOP；#1231「不在範圍」）：
    - `prod-release-sop.md` 的 S1 三處 pin（:37）對新 chart 已不成立：新 chart 沒有 `module-version-gate` initContainer 寫死的 image（chart README §Pod 啟動順序）。
    - `prod-release-sop.md` §5.1.1 的 PVC 名改成新 release 的 `data-paas-odoo-platform-postgresql-0`／`paas-odoo-platform-data`（#1137 G35），並寫入「每顆 volume 保留最近 3 次發版前 snapshot」（WMO#5 裁決 Q4）與「升級閘 `-u all` 前不自動備份 ⇒ 發版前人工 snapshot＋pre-upgrade 備份」（charts#99 留言 18097）。

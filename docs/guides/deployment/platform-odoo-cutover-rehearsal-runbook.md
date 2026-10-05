@@ -22,7 +22,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | R3 | 中和腳本、斷言 fixture、中和段 runbook | ✅ `seed-from-prod.sh`／`neutralize-clone.sh`／`prod-clone/assertions.toml`／[prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206，PR #1493 已 merge）；fixture 第一次彩排前人審 commit |
 | R4 | 穩定 Service 名與 raw bundle 目錄 | ✅ `paas-odoo-active`／`paas-odoo-edge/`（woow-paas/paas-app-bundle-cd#199） |
 | R5 | 平台新 release 名與 bundle 目錄 | ✅ `paas-odoo-platform`（cd#145 留言 18089） |
-| R6 | 平台還原的人工段 | 〔待裁決：G3〕#1217 platform 人工段仍未落地 |
+| R6 | 平台還原的人工段 | ✅ 沿用 #1206 形狀（[cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T）；本檔 A7 第 3 步（G3） |
 | R7 | 沙盒容量 | ✅ WMO#5 裁決 Q2：彩排沙盒建立前的 in-scope 清理已執行（woow-machines-operator#5 留言 18189）；2026-10-05 重量後 59mqj 剩 35 GiB、其餘三台寬裕 |
 | R8 | cc/woowprd#6 一次性升級 Job 與本路徑的關係 | ✅ 不是前置：新 chart 路徑不經一次性升級 Job（#1206 留言 14673）；cc/woowprd#6（PR cc/woowprd#14）已 merge，服務 plugin 內建 chart 的 stg mode |
 | R9 | chart 版號 | ✅ `woow-odoo` 0.2.7（0.2.6 起 platform 記憶體預設 soft 4GiB／hard 5GiB） |
@@ -201,7 +201,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 驗：產出 `daily/<UTC ISO8601>/` 下 `db.dump`、`filestore/`、`attachments.txt`、`manifest.json`；沒有 `skipped_reason`（chart README §備份格式與驗證）。
 2. 【agent】跑一次 D11 升級前備份路徑：平台 release 由 Fleet 管、不經 operator（13439「給其他票」#1128 條）⇒ 以 backup CronJob 的 jobTemplate 自組 Job，注入 `MODE=backup`、`BACKUP_KIND=pre-upgrade`（chart README §operator 參數契約；#1145 留言 14180）。
    - 驗：產出在 `pre-upgrade/`，retention 2 份（chart README）。
-3. 【agent】從備份還原一輪〔待裁決：G3，建議用 #1206 的 restore Job 形狀對 A7 第 1 步產出的 `daily/<ts>/` 備份組做〕；platform `restore.enabled` 預設 false（14201 D11；chart README）。
+3. 【agent】從備份還原一輪（2026-10-05 發起人裁決 G3，#1495）：server 與 cron 同時 scale 0 → 以 superuser `DROP DATABASE woow_prod` 並把 `/var/lib/odoo/filestore/woow_prod` 改名保留 → `seed-from-prod.sh receive` → 沙盒內一次性 Job 把 A7 第 1 步的 `daily/<ts>/` 打成備份組形狀（`db.dump`、`filestore.tar`、`manifest.json`、`attachments.txt`、`SHA256SUMS`）PUT 進 receiver → `seed-from-prod.sh restore … --no-upgrade-marker`（再預寫 marker 照 A4 第 3 步）；platform `restore.enabled` 預設 false（14201 D11；chart README）。
+   - 驗：`ir_module_module` 全表、admin 指紋、`res_partner` 筆數與備份當下相同；斷言 gate 全綠。
    - 還原前確認該 release 沒有 Running 的 `component=db-backup` Job（13786 D2）。
    - 歸零時 server 與 cron 一起 scale 0。
 

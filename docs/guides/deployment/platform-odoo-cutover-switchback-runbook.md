@@ -19,9 +19,9 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 |---|---|---|
 | S1 | 穩定 Service 名與 raw bundle 目錄 | ✅ `paas-system/paas-odoo-active`＋`paas-odoo-edge/`（woow-paas/paas-app-bundle-cd#199；緊急回切 JSON patch 在 `paas-odoo-edge/fleet.yaml` 檔頭） |
 | S2 | 新 release 名與 bundle 目錄 | ✅ `paas-odoo-platform`（cd#145 留言 18089） |
-| S3 | 搬運 helper pod 形狀與指令 | 〔待裁決：G3〕#1217 platform 人工段仍未落地 |
+| S3 | 搬運 helper pod 形狀與指令 | ✅ [cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T 的 T1～T4（G3）；寫入端指令見 C3 |
 | S4 | 停機前要停的三支 cron 的 xml id | ✅ 見 C2 第 2 步（#1163 scout §5.1） |
-| S5 | 回切後新 release 的處置 | 〔待裁決：G5〕 |
+| S5 | 回切後新 release 的處置 | ✅ 保留 0 副本、PVC 與 Secret 不刪，等原因釐清與下一次 cutover 決策（G5） |
 
 2026-10-05 定稿輪：原「待驗」的反向 filestore owner 與 Bitnami 路徑已依 #1032 plan:112（2026-09-04 prod 實作）填入，彩排 A8 再驗一次；反向 push 的 pod 形狀隨 G3。
 
@@ -86,17 +86,18 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 2. 【agent 執行・人類逐步放行】ECPay 前置：停用 `woow_paas_platform.cron_topup_cleanup`、`woow_paas_platform.ir_cron_issue_pending_ecpay_invoices`、`payment.cron_post_process_payment_tx`，記下 pending tx 清單與 T0；⛔ 不 disable provider（#1163 留言 13476 第 9 點；scout §5.1）。
 3. 【agent 開 PR・人類 merge】`paas-odoo-platform/` 的新 release **同時** scale `replicas: 0` 與 `cron.replicas: 0`（R2-Q3；14686；14701）。
 4. 【agent】驗新 web 與 cron pod 都已消失，新 postgres 仍 Running。
-5. 【人類】發起人（eugene）親跑、叢集運維備援：新 release 兩顆 PVC `data-paas-odoo-platform-postgresql-0`、`paas-odoo-platform-data` 的 Longhorn snapshot（名稱〔待裁決：G4，建議 `snap-paas-odoo-platform-{pg,fs}-preswitchback-{YYYYMMDD}`〕）；保留到回退結束後的處置定案（WMO#5 裁決 Q3、Q4；G5）。
+5. 【人類】發起人（eugene）親跑、叢集運維備援：新 release 兩顆 PVC `data-paas-odoo-platform-postgresql-0`、`paas-odoo-platform-data` 的 Longhorn snapshot（名稱 `snap-paas-odoo-platform-{pg,fs}-preswitchback-{YYYYMMDD}`（2026-10-05 發起人裁決 G4，#1495））；保留到回退結束後的處置定案（WMO#5 裁決 Q3、Q4；G5）。
 6. 【agent】唯讀驗兩顆 `readyToUse=true` 且 `markRemoved=false`；任一不符 ⇒ STOP（`prod-release-sop.md` §5.1.1）。
 
 ## C3 反向搬遷
 
-1. 【agent 執行・人類逐步放行】新 pg 對 `woow_prod` 跑 `pg_dump -Fc`，叢集內 HTTP PUT push 到舊側〔待裁決：G3〕；附 sha256 與 `pg_restore -f /dev/null` 結果。⛔ 不用 `kubectl exec … > file`（[pitfall](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)）。
+1. 【agent 執行・人類逐步放行】建 [cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T 的 T1～T3，跑 T4 來源 Job，來源改為新 pg（`paas-odoo-platform-postgresql`）的 `woow_prod` 與新 PVC `paas-odoo-platform-data` 的 `/var/lib/odoo/filestore/woow_prod`；每個 PUT 的 sha256 與來源相符，`pg_restore -f /dev/null` 通過（2026-10-05 發起人裁決 G3，#1495）。⛔ 不用 `kubectl exec … > file`（[pitfall](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)）。
 2. 【agent 執行・人類逐步放行】舊 pg 上把現有 `woow_prod` 改名保留（例 `woow_prod__pre_switchback`），再以 `bn_odoo` 建空的 `woow_prod`（`bn_odoo` 有 `rolcreatedb`，2026-09-04 prod 實作即如此；#1032 plan:112），接著 `pg_restore --no-owner --no-privileges -L <list>`（13439 ⑤；#1032 plan:112）。
    - `<list>`：濾掉 `COMMENT - EXTENSION`、`EXTENSION`、vector 相關條目（13439 ⑤；14201 D2）。
    - `bn_odoo` 不是 superuser（#1032 plan:75、:112）。
    - ⛔ 不用 `--no-comments`（Odoo 18 `_sql_constraints` 存在 `COMMENT ON CONSTRAINT`；14201 D2）。
    - 改名保留是本檔的推論（比照 14201 的「改名切換、`__old` 保留」）；舊庫在 C7 確認回切成功後才 DROP。
+   - 執行位置：一次性 Job，`paas-postgres` image，唯讀掛 T1、讀 `paas-odoo-postgresql` Secret 的 `bn_odoo` 密碼（secretKeyRef，不上 argv），label `app.kubernetes.io/component: transfer-source`（T3 已放行到舊 pg）；先跑 `sha256sum --strict -c SHA256SUMS` 與 `pg_restore -f /dev/null` 再動 DB（附錄 T）。
    - 驗反向 restore 零錯誤。
 3. 【agent】唯讀驗：舊 pg 上 `database.secret`／`database.uuid`、admin login／password、`ir_module_module` 全表指紋，與新側凍結當下相同。
 4. 【agent 執行・人類逐步放行】filestore 全量 push（不用增量 rsync）新 PVC `/var/lib/odoo/filestore/woow_prod` → 舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/woow_prod`（先把現有目錄改名保留，與 C3 第 2 步同理）；檔數＋`find -type f -printf '%s\n'` 位元組總和兩端相等；再 `chown -R 999:0`（2026-09-04 prod 實作值，#1032 plan:112；13439 ⑤ 原寫 `999:999`，以實作為準，彩排 A8 第 2 步再量一次）。
@@ -127,7 +128,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## C7 事後
 
 1. 【agent】在 #1142 與 woow-paas/paas-app-bundle-cd#144 留言記錄：回切原因、各步時間戳、實測停機 vs 彩排量測、C0 斷言結果。
-2. 【人類】決定新 release 的處置〔待裁決：G5，建議保留 0 副本、PVC 與 Secret 不刪，等原因釐清與下一次 cutover 決策〕；新 release 的 PVC 與 Secret 在決定前不得刪除。
+2. 【人類】新 release 維持兩個 component 0 副本，PVC 與 fleet-local secret 不刪，等原因釐清與下一次 cutover 決策（2026-10-05 發起人裁決 G5，#1495）；若之後決定放棄，另走 teardown 同形的人工刪 PVC／Released PV 流程。
 3. 【agent 執行・人類逐步放行】**再次 cutover 前**，重寫或刪除 `woow_prod` 的 `woow_paas_platform.upgrade_done`／`upgrade_attempt`：預寫的 marker 會隨反向 dump 回到 Bitnami 側；第二次 cutover 若換了 image digest，升級閘會自動 `-u all`（R2「本輪不裁」第 2 條；14662 C7）。
 4. 【人類】確認回切穩定後，DROP C3 第 2 步改名保留的舊庫；回退窗口重算（下一次 cutover 從頭起算 14 天，13439 ③）。
 

@@ -15,18 +15,18 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 `status: draft`——**先草擬、後定稿**（#1231 票面）。須在 13439 ④ 觸發條件成立前定稿；佔位落地＋彩排量測回填後改 `status: active`，由發起人覆核。
 
-2026-10-05 定稿輪：已落地的佔位直接改寫進本文（下表「狀態」欄註明出處）；仍需發起人裁決的題目以〔待裁決：G<n>〕標在本文，題目與建議見 #1231 定稿 PR 描述。
+2026-10-05 定稿輪：已落地的佔位直接改寫進本文（下表「狀態」欄註明出處）；需要發起人裁決的 G1～G7 已於同日裁決（G1～G6 選建議案 A；G7 由 woow-paas/paas-app-bundle-cd#209 取代），題目全文見 #1495 描述。
 
 | # | 佔位 | 狀態 |
 |---|---|---|
 | C1 | 穩定 Service 名與 raw bundle 目錄 | ✅ `paas-system/paas-odoo-active`（80→8069、8072→8072）＋`paas-odoo-edge/`；cd#143 PR-1～3（#199～#201）已上線，B1～B7 驗收完成（cd#143 留言 18070、18105、18135、18165；WMO#4 留言 18151） |
 | C2 | 新 release 名、bundle 目錄、fleet-local secret 名 | ✅ `paas-odoo-platform`（目錄、releaseName 同名）、`paas-odoo-platform-fleet-secrets`（2026-10-05 發起人定案；cd#145 留言 18089） |
 | C3 | 正式平台 image＋chart 的實機 smoke 結論 | ✅ PASS：chart 0.2.7 搭 `.203` 與 `.209` 官方 image 各一輪（含 `.209` 升級閘實跑 `-u all` 88 s）；woow-paas/woow-paas-charts#99 留言 18097 |
-| C4 | 搬運 helper pod 形狀與指令 | 〔待裁決：G3〕#1217 platform 人工段仍未落地 |
-| C5 | 窗口容量、snapshot 命名與保留 | ✅ 容量與保留政策：WMO#5 裁決 Q1～Q6（woow-machines-operator#5 留言 18108；Q2 清理已執行，留言 18189）；〔待裁決：G4〕版號不變時的 snapshot 名 |
+| C4 | 搬運 helper pod 形狀與指令 | ✅ 附錄 T：沿用 #1206 形狀，不等 #1217（G3） |
+| C5 | 窗口容量、snapshot 命名與保留 | ✅ 容量與保留政策：WMO#5 裁決 Q1～Q6（woow-machines-operator#5 留言 18108；Q2 清理已執行，留言 18189）；snapshot 名見 B4（G4） |
 | C6 | 關舊 Ingress 是否排進停機窗口 | ✅ 不排停機窗口、避開上班尖峰（2026-10-05 發起人裁決，cd#143 留言 18090）；#200 已上線 |
-| C7 | cron 副本 0→1 走哪張 CD PR | 〔待裁決：G1〕 |
-| C8 | 平台發版改 build `paas-odoo-official` 的切換時點與載體 | 〔待裁決：G2〕 |
+| C7 | cron 副本 0→1 走哪張 CD PR | ✅ 獨立小 PR「PR-C2」，B6a 第 3 步驗收後、PR-D 前 merge（G1） |
+| C8 | 平台發版改 build `paas-odoo-official` 的切換時點與載體 | ✅ cutover 當下（PR-D 生效後立即）；載體＝本 repo 一張 PR 同改 `trigger-odoo-build.yml`、`/woow:deploy`、`prod-release-sop.md`（G2） |
 | C9 | chart 版號 | ✅ `woow-odoo` **0.2.7**（0.2.6 起 platform 記憶體預設 soft 4GiB／hard 5GiB；0.2.7 備份 Job 起跑等 PG；charts#99 留言 18097） |
 | C10 | 停機前要停的三支 cron 的 xml id | ✅ `woow_paas_platform.cron_topup_cleanup`、`woow_paas_platform.ir_cron_issue_pending_ecpay_invoices`、`payment.cron_post_process_payment_tx`（#1163 scout §5.1；`src/data/cron_topup.xml:4`、`src/data/ecpay_invoice_cron.xml:4`、Odoo 18 `addons/payment/data/payment_cron.xml:4`） |
 
@@ -117,7 +117,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - 基準：2026-10-05 16:00Z 59mqj 剩 35 GiB、其餘三台合計剩約 875 GiB；新 release 額度 40 GiB（Q1）＋backup PVC 擴容 10 GiB（Q6）（woow-machines-operator#5 留言 18189）。
 8. 【agent】確認 woow-paas/woow-machines-operator#4 回報 mcp-odoo ConfigMap（`mcp-admin-config`、`mcp-admin-init-config`）已改指穩定 Service（13439 ⑧；cd#143「交接與盤點」）。
 9. 【agent】確認 woow-paas/paas-app-bundle-cd#145（SOP／`promote-acceptance-checklist.md` 參數化）已落地——窗口內仍可能發 hotfix（13439 ③）。
-10. 【agent】確認平台發版改 build `paas-odoo-official` 的切換已備妥〔待裁決：G2，建議 cutover 當下切〕：`.gitea/workflows/trigger-odoo-build.yml`、`/woow:deploy` 與 `prod-release-sop.md` 的修改 PR 已開好、等 B8 第 2 步 merge（#1392 留言 17382）。
+10. 【agent】確認平台發版改 build `paas-odoo-official` 的切換已備妥（2026-10-05 發起人裁決 G2，#1495）：`.gitea/workflows/trigger-odoo-build.yml`、`/woow:deploy` 與 `prod-release-sop.md` 的修改 PR 已開好、等 B8 第 2 步 merge（#1392 留言 17382）。
 11. 【agent】確認 Step 1 平台 image 是以「停機窗口當下的 prod 版號」build 的：image 內 addon 版號＝prod 現行 `src/__manifest__.py` 版號（16804「cutover」段；ci#145 留言 18075 §1.3）；不是就照 B5 第 1～3 步重 build、重 pin。
 12. 【agent】唯讀確認舊 Bitnami 兩顆 PVC 的保護仍在（WMO#16）：
    - `paas-odoo`（filestore，helm release 管）：帶 `helm.sh/resource-policy: keep`——由 values `persistence.resourcePolicy: keep` 寫進 release manifest（woow-paas/paas-app-bundle-cd#209，2026-10-05 merge 並驗收）。helm 的 keep 只讀 release 內存的 manifest，`kubectl annotate` 擋不住 uninstall，所以必須走 values（helm v3.13.3 `pkg/action/uninstall.go:204-214`）。
@@ -167,7 +167,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 > 時點：B6 第 2 步凍結舊側之後、第 4 步 dump 之前（舊 odoo 已 0，DB 靜止；推論）。命名沿 `prod-release-sop.md` §5.1.1。
 
 1. 【人類】發起人（eugene）親跑、叢集運維備援（WMO#5 裁決 Q3）：建 Longhorn snapshot 兩顆，舊 pg PVC `data-paas-odoo-postgresql-0`、舊 filestore PVC `paas-odoo`。
-   - 名稱〔待裁決：G4，建議 `snap-paas-odoo-{pg,fs}-precutover-{YYYYMMDD}`〕；`prod-release-sop.md` §5.1.1 的 `pre{版號}` 在本次版號不變時無法區分。
+   - 名稱 `snap-paas-odoo-{pg,fs}-precutover-{YYYYMMDD}`（2026-10-05 發起人裁決 G4，#1495）；`prod-release-sop.md` §5.1.1 的 `pre{版號}` 在本次版號不變時無法區分。之後新 release 的發版前 snapshot 用 `snap-paas-odoo-platform-{pg,fs}-pre{版號}-{YYYYMMDD}`（B8 第 7 步）。
    - 保留到回退窗口結束、且退役 dump 已在叢集外驗過 sha256（WMO#5 裁決 Q4）；舊 volume 上既有的歷史 snapshot 不另清，隨 teardown 消失。
 2. 【agent】唯讀驗兩顆都 `readyToUse=true` 且 `markRemoved=false`；任一不符＝沒有還原錨點 ⇒ STOP（`prod-release-sop.md` §5.1.1）。
 
@@ -197,10 +197,11 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - ⛔ 不 disable payment provider，會 archive token（13476 第 9 點）。
 2. 【agent 開 PR・人類 merge】PR-B：`paas-odoo/values-prod.yaml` **只加** `replicaCount: 0`（merge 前用 `helm show values` 實拉確認 Bitnami 28.2.10 的鍵路徑）。這是窗口內唯一一次對舊 release 的 upgrade（13439 ③；cd#144 PR-B）。
 3. 【agent】驗：`deploy/paas-odoo` replicas 0、pod 已消失；`paas-odoo-postgresql-0` pod UID 與 restartCount 不變；兩顆舊 PVC 仍 Bound（cd#144 PR-B 驗收）。接著做 B4。
-4. 【agent 執行・人類逐步放行】舊 pg 對 `woow_prod` 跑 `pg_dump -Fc`，叢集內 HTTP PUT push 到搬運 helper pod〔待裁決：G3，建議沿用 #1206 已實測的 receiver＋一次性 restore Job 形狀〕；附 sha256 與 `pg_restore -f /dev/null` 結果。
+4. 【agent 執行・人類逐步放行】建附錄 T 的 T1～T3，跑 T4 來源 Job：舊 pg（`paas-odoo-postgresql`，`bn_odoo`）的 `woow_prod` `pg_dump -Fc`＋manifest＋attachments、舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/woow_prod` 打 tar，HTTP PUT 到 receiver；每個 PUT 回應的 sha256 與來源端相符（2026-10-05 發起人裁決 G3，#1495）。
    - ⛔ 不用 `kubectl exec … > file`，也不用 exec 串 exec 的 stdout 管線（同一個截斷面；pitfall doc）。
-   - 舊 pg 的 NP 只放行 `name=odoo`＋`instance=paas-odoo`（cd#144 背景）。建議由舊 pg pod 內直接 `pg_dump -Fc | curl -T -` 送到新側 receiver（#1032 plan:111 的 prod 實作同形），不需另開舊 pg 的 NP；新側 receiver 的 ingress 放行與 label 隨 G3 定案〔待驗：彩排 A8〕。
-5. 【agent 執行・人類逐步放行】新 pg 以 superuser 建角色、建庫、預建 extension（14201 D2；R2-Q4、R2-Q6）：
+   - 舊 pg 的 NP 只放行 `name=odoo`＋`instance=paas-odoo`（cd#144 背景）⇒ T3 另放行 `component=transfer-source` → 舊 pg 5432；⛔ 來源 Job 不可帶 `instance=paas-odoo`＋`name=odoo`（會被 `paas-odoo-active` 舊形狀 selector 選進去）。
+   - 舊 odoo 已 0 副本，舊 PVC `paas-odoo`（RWO）可由 T4 唯讀掛載。
+5. 【agent 執行・人類逐步放行】跑附錄 T 的 T5 restore Job，涵蓋本步與第 6、9 步。它以 superuser 建角色、建庫、預建 extension（14201 D2；R2-Q4、R2-Q6），等價 SQL：
 
    ```sql
    -- 角色：屬性同 chart bootstrap ②；密碼由 helper pod 以 secretKeyRef 讀 <release>-credentials 的 odoo-password，經 psql \getenv 代入（不進 argv）
@@ -214,7 +215,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
    - platform web 副本 0 時 bootstrap 從未跑過，新 pg 上沒有 `odoo` 角色（chart `files/bootstrap.sh` 檔頭 ②）；之後 bootstrap ② 每次開機會同步密碼。
    - ⛔ 不套 chart canonical（`LC_COLLATE 'C'`）：既有 DB 搬遷一律取來源值（R2-Q4）。
-6. 【agent 執行・人類逐步放行】以 `odoo` 帳號 `pg_restore -1 -d woow_prod -L <list>`，`<list>` 由 `pg_restore -l` 濾掉 `COMMENT - EXTENSION`、`EXTENSION`，以及 `ALTER SCHEMA public OWNER` 條目（`woow_prod` 的 `public` owner 若不是 `pg_database_owner`，dump 會多出這條；chart invariant 永不 `ALTER SCHEMA public OWNER`）（14201 D2 與「給其他票」）。
+6. 【agent】讀 T5 的 log 確認資料段：以 `odoo` 帳號 `pg_restore -1 -d woow_prod -L <list>`，`<list>` 由 `pg_restore -l` 濾掉 `COMMENT - EXTENSION`、`EXTENSION`，以及 `ALTER SCHEMA public OWNER` 條目（`woow_prod` 的 `public` owner 若不是 `pg_database_owner`，dump 會多出這條；chart invariant 永不 `ALTER SCHEMA public OWNER`）（14201 D2 與「給其他票」）。
    - ⛔ 不用 `-C`；⛔ 不用 `--no-comments`（Odoo 18 `_sql_constraints` 存在 `COMMENT ON CONSTRAINT`；14201 D2）。
 7. 【agent】唯讀驗：`database.secret`／`database.uuid`、admin login／password、`ir_module_module` 全表的指紋都與 B3 第 3 步相同；`woow_prod` 內沒有 `vector` extension、沒有 vector 型別欄位（14050；R2-Q6；14668）。
 8. 【agent 執行・人類逐步放行】預寫升級閘 marker（R2-Q1；14662 B3）：
@@ -230,7 +231,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - digest＝PR-A／promote 證明後最終 pin 的 `image.digest`；`core_date`＝該 image 內 `dpkg-query -W -f='${Version}' odoo` 去 epoch／revision 後前三段（chart `files/lib.sh` `core_date`；16804 實值 `18.0.20250807`）。
    - ⛔ 不預寫 `upgrade_attempt`；attempt 缺席視為等於 done，PR-C 的 on-demand 備份不會 `skipped_reason=partial_upgrade`（R2-Q1、14690）。
    - 不預寫 ⇒ 新 odoo 第一次開機升級閘 exit 3 fail-loud（chart `upgrade-gate.sh`）；預寫錯 digest ⇒ 自動 `-u all`，打掉 Step 1 的「不 -u」（13439 ①、14363 D2(3)）。
-9. 【agent 執行・人類逐步放行】filestore 全量 push（不用增量 rsync），舊 PVC `paas-odoo` 上的 `/bitnami/odoo/data/filestore/woow_prod`（Bitnami data_dir；#1032 plan:112 的 2026-09-04 prod 實作與 `docs/scout/2026-09-18-odoo-bitnami-coupling-inventory.md:194`）→ 新 PVC `paas-odoo-platform-data` 的 `/var/lib/odoo/filestore/woow_prod`（chart README 固定契約）。
+9. 【agent】讀 T5 的 log 確認 filestore 段：全量 push（不用增量 rsync），舊 PVC `paas-odoo` 上的 `/bitnami/odoo/data/filestore/woow_prod`（Bitnami data_dir；#1032 plan:112 的 2026-09-04 prod 實作與 `docs/scout/2026-09-18-odoo-bitnami-coupling-inventory.md:194`）→ 新 PVC `paas-odoo-platform-data` 的 `/var/lib/odoo/filestore/woow_prod`（chart README 固定契約）。
    - 校驗：檔數＋`find -type f -printf '%s\n'` 位元組總和，兩端相等（不用 `du -sb`；#1137 §4.2）。參考量：7,194 檔、1,963,901,297 bytes（2026-09-04；#1032 plan:111，引自 cd#144 PR-C）。
    - 校驗通過後 `chown -R 100:101`（chart README uid／fsGroup）。
 
@@ -243,7 +244,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - `replicas: 1`、`cron.replicas: 0`、`backup.enabled: true`（retention／timeZone／schedule 用 chart 預設：7 daily＋4 weekly、Asia/Taipei、02:00＋adler32 偏移；13786 D4）。
    - 刪除 `paas-odoo-backup/pg-backup-cronjob.yaml`；⛔ 保留 `backup-pvc.yaml` 與 `fleet.yaml`（刪整個目錄會連 `paas-odoo-backup-pvc` 一起下架；cd#144 PR-C）。PR 描述記下被刪檔的最後 commit sha，回切要重新 apply（13786 D7）。
 3. 【agent】驗：`upgrade-gate` log 出現 `skip: woow_paas_platform.upgrade_done.digest == current image digest`、web Ready；`ir_module_module` 全表 sha256 與凍結當下相同（＝沒有 `-u all`）；admin、`database.secret`／`uuid` 指紋不變；中文 PDF 抽查交人類（cd#144 PR-C 驗收）。
-4. 【agent 開 PR・人類 merge】`cron.replicas: 1`〔待裁決：G1，建議獨立一張小 PR（PR-C2），在第 3 步驗收後、PR-D 前 merge〕；cron pod 的 `cron-wait` 應放行（chart README）。
+4. 【agent 開 PR・人類 merge】PR-C2：只改 `cron.replicas: 1`，第 3 步驗收後、PR-D 前 merge（2026-10-05 發起人裁決 G1，#1495）；cron pod 的 `cron-wait` 應放行（chart README）。PR-D 因此維持「只改 selector」，回切對照單純。
    - ⚠ 新 pod 開頭約 1～2 秒 NetworkPolicy 尚未生效，`cron-wait` 第一次輪詢常連不到 DB、約 10 秒後放行，屬預期（woowprd#13 實測；#1206 證據）。
 5. 【agent】cron pod 起來後照 #1162 不變式再過一次檢查：只有預期的 cron 是 active、`database.is_neutralized` 不存在（prod 不得出現中和標記）、`ir_module_module` 全表 sha256 不變。
 6. 【agent 執行・人類逐步放行】on-demand 備份一次：`kubectl --context woow-k3s -n paas-system create job --from=cronjob/<release>-backup <name>`；Job Complete、產出 `db.dump`＋`filestore/`＋`manifest.json`、沒有 `skipped_reason`；PVC 根目錄舊 `*.pg` 仍在；任何時點都沒有兩支指向 `paas-odoo-backup-pvc` 的 CronJob（cd#144 PR-C 驗收）。
@@ -267,8 +268,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 ## B8 回退窗口啟動
 
 1. 【agent】在 #1142 與 woow-paas/paas-app-bundle-cd#144 留言記錄窗口起訖：起點＝PR-D 生效時間（新側開始接寫入），訖點＝起點＋14 天（13439 ③；cd#144 PR-D）。
-2. 【人類】merge 平台發版改 build `paas-odoo-official` 的 PR〔待裁決：G2，建議本步（PR-D 生效後立即）〕；窗口內**不雙 build**（2026-10-04 發起人裁決；#1392 留言 17382）。
-   - 理由（建議依據）：窗口內新 release 只 pin `paas-odoo-official`（第 4 步）、舊 release image 凍結，若仍 build Bitnami `paas-odoo`，窗口內的發版就沒有可部署的 image。
+2. 【人類】PR-D 生效後立即 merge 平台發版改 build `paas-odoo-official` 的 PR（2026-10-05 發起人裁決 G2，#1495）；窗口內**不雙 build**（2026-10-04 發起人裁決；#1392 留言 17382）。
+   - 理由：窗口內新 release 只 pin `paas-odoo-official`（第 4 步）、舊 release image 凍結，若仍 build Bitnami `paas-odoo`，窗口內的發版就沒有可部署的 image。
 3. 【agent】窗口內每次平台發版前檢查 `git diff v<cutover 當下版>..v<新版> -- src/migrations/` 為空（以整個 release 連坐，跟版 seed PR 也會被同 release 的 migration 連坐；13439 ③、14356）。
    - 非空 ⇒ 在 #1142 記錄「窗口提前關閉（單向門）」並通知發起人；反向搬遷不再保證（13439 ③）。
 4. 【agent】窗口內 pin 規則：新 release 只 pin `paas-odoo-official` 的 digest；舊 release 只允許動 `replicas`，image 凍結在 cutover 前那顆（env、persistence、`postgresql.*` 同樣凍結；13439 ③；2026-10-04 發起人裁決）。
@@ -281,6 +282,22 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 ## B9 收尾紀錄
 
 1. 【agent】在 cutover issue 寫收尾紀錄：新舊 release 的 helm revision、PR-A～PR-D 與 promote 證明 PR 號、各步時間戳、實測停機時間 vs 彩排量測（[彩排 runbook](platform-odoo-cutover-rehearsal-runbook.md) A8 第 4 步）、Longhorn snapshot 名稱與 `readyToUse` 結果、退役 dump 的 sha256。
+
+## 附錄 T：prod 搬運 helper（G3 裁決：沿用 #1206 形狀，不等 #1217）
+
+> 2026-10-05 發起人裁決 G3（#1495）：不等 #1217 的 platform 人工段，四份 runbook 直接沿用 #1206 在沙盒實測過的形狀；#1217 之後引用本附錄。所有物件都在 `paas-system`、帶 label `app.kubernetes.io/part-of: platform-cutover-transfer`，用完由人類刪除。建立／刪除都是 prod 寫入 ⇒ 【agent 執行・人類逐步放行】。manifest 以彩排 A8 實跑版為準〔待驗：彩排 A8 回填〕。
+
+| 物件 | 形狀 | 來源 |
+|---|---|---|
+| T1 搬運 PVC | `platform-cutover-transfer`，5Gi、`longhorn-delete`（dump 約 26 MB＋filestore 約 2 GiB；用完即刪） | WMO#5 c18108 容量估算 |
+| T2 receiver | 平台 image（有 python3）跑 `.claude/skills/woow-e2e-fixtures/scripts/prod-clone/receiver.py`（ConfigMap 掛入）；掛 T1；token 放一次性 Secret；Service `platform-cutover-receiver:8080` | #1206 `receiver.py` |
+| T3 NP | 只放行 `component=transfer-source` → receiver 8080、`component=transfer-source` → 來源 pg 5432；不動既有 NP | #1206 搬運洞 NP 同形 |
+| T4 來源 Job（`component=transfer-source`） | initContainer＝`paas-postgres` image：`pg_dump -Fc` 來源 DB，另以 psql 產 `manifest.json`（欄位同 prod clone 中和 runbook §B）與 `attachments.txt`；主容器＝平台 image：`tar -C <filestore 目錄> -cf filestore.tar .`、`sha256sum` 產 `SHA256SUMS`，以 python `http.client` PUT 五個檔到 receiver | #1206 端到端實測的合成備份組產生 Job（PR #1493 描述「驗證」段） |
+| T5 restore Job（正向） | `paas-postgres` image 跑 `prod-clone/restore-in-pod.sh`：`sha256sum --strict`、`pg_restore -f /dev/null` 全讀、superuser 建 `odoo` 角色、locale 取 manifest 建庫、只建 manifest 列的 extension（`vector` 拒絕）、TOC 只濾 EXTENSION、以 `odoo` 角色 `pg_restore -1 --exit-on-error --no-owner --no-privileges`、filestore 解到 `/var/lib/odoo/filestore/woow_prod` 並 `chown -R 100:101`、驗 `attachments.txt` 引用都在；label `app.kubernetes.io/instance=paas-odoo-platform`（新 pg NP 只放行這個 label） | #1206 `restore-in-pod.sh`（沙盒實測 64/64 gate） |
+
+- `--no-owner` 會跳過 `ALTER … OWNER`（含 `ALTER SCHEMA public OWNER`），所以 B6 第 6 步要濾的那條不必另處理（14201「給其他票」）。
+- 反向（回切 C3）與 teardown（D1）用同一組 T1～T4，只換來源與目的；反向的寫入端是 Bitnami `bn_odoo`（非 superuser），不用 T5，改用回切 runbook C3 寫明的指令。
+- 新 pod 開頭約 1～2 秒 NP 尚未生效：T4／T5 都先等 DB 可連再動作（#1206 證據；woowprd#13）。
 
 ## 相關
 
