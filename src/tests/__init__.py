@@ -1035,3 +1035,5 @@ from . import test_rollback_preserves_credentials_1433
 # R8 平台 UX（#1453 說明網址／documentation_url、#1456 同步時間時區與 helm_revision 回寫、
 # #1457 平台頁面安全標頭）。
 from . import test_platform_ux_r8
+# #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
+from . import test_neutralize_1201
