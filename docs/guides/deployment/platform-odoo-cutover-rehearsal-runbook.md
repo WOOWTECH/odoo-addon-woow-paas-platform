@@ -3,7 +3,7 @@ title: 平台 Odoo 換 chart：彩排 runbook
 category: guides
 status: draft
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-04T08:30:00Z
+updated: 2026-10-05T17:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -15,17 +15,17 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 `status: draft`——**先草擬、後定稿**（#1231 票面）。下表的佔位落地、且至少一次彩排的量測回填後，替換全部待定佔位並改 `status: active`，由發起人覆核。
 
-| # | 佔位 | 出處票 |
+| # | 佔位 | 狀態 |
 |---|---|---|
-| R1 | 沙盒工具以 web／cron 副本 0 部署 `woow-odoo` platform profile 的子命令與參數 | cc/woowprd#8 |
-| R2 | 正式平台 image＋chart 0.2.5 的實機 smoke 結論（彩排前置） | woow-paas/woow-paas-charts#99 |
-| R3 | ~~中和腳本名、斷言 fixture、中和段彩排 runbook 的檔名與介面~~ 已定：`seed-from-prod.sh`／`neutralize-clone.sh`／`prod-clone/assertions.toml`／[prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206 PR；fixture 待人審 commit） | #1206 |
-| R4 | 穩定 Service 名與 raw bundle 目錄（暫名 `paas-odoo-active`／`paas-odoo-edge/`） | woow-paas/paas-app-bundle-cd#143 |
-| R5 | 平台新 release 名與 bundle 目錄（暫名 `paas-odoo-platform`） | woow-paas/paas-app-bundle-cd#144 |
-| R6 | 平台還原的人工段（helper pod 形狀、指令） | #1217 |
-| R7 | 叢集容量第一版結論（沙盒容量是否放行） | woow-paas/woow-machines-operator#5 |
-| R8 | cc/woowprd#6 一次性升級 Job 與本路徑的關係（新 chart 路徑不經它，是否仍是 #1206 前置） | #1206 留言 14673（「由發起人定」） |
-| R9 | chart 版號：platform 記憶體預設改為 soft 4GiB／hard 5GiB 的那一版（進行中，暫記 0.2.6） | woow-paas/woow-paas-charts#99 |
+| R1 | 沙盒工具以 web／cron 副本 0 部署 platform profile | ✅ `create --mode platform`＋`scale --component server\|cron`（cc/woowprd#8，PR cc/woowprd#12）；lockdown＝`SANDBOX_NEUTRALIZE_LOCKDOWN=1`（cc/woowprd#13）。⚠ `status`／`logs` 對 platform 沙盒 rc=1，workaround 見 cc/woowprd#15 |
+| R2 | 正式平台 image＋chart 的實機 smoke 結論 | ✅ PASS：chart 0.2.7＋`.203`／`.209`（woow-paas/woow-paas-charts#99 留言 18097） |
+| R3 | 中和腳本、斷言 fixture、中和段 runbook | ✅ `seed-from-prod.sh`／`neutralize-clone.sh`／`prod-clone/assertions.toml`／[prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206，PR #1493 已 merge）；fixture 第一次彩排前人審 commit |
+| R4 | 穩定 Service 名與 raw bundle 目錄 | ✅ `paas-odoo-active`／`paas-odoo-edge/`（woow-paas/paas-app-bundle-cd#199） |
+| R5 | 平台新 release 名與 bundle 目錄 | ✅ `paas-odoo-platform`（cd#145 留言 18089） |
+| R6 | 平台還原的人工段 | ✅ 沿用 #1206 形狀（[cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T）；本檔 A7 第 3 步（G3） |
+| R7 | 沙盒容量 | ✅ WMO#5 裁決 Q2：彩排沙盒建立前的 in-scope 清理已執行（woow-machines-operator#5 留言 18189）；2026-10-05 重量後 59mqj 剩 35 GiB、其餘三台寬裕 |
+| R8 | cc/woowprd#6 一次性升級 Job 與本路徑的關係 | ✅ 不是前置：新 chart 路徑不經一次性升級 Job（#1206 留言 14673）；cc/woowprd#6（PR cc/woowprd#14）已 merge，服務 plugin 內建 chart 的 stg mode |
+| R9 | chart 版號 | ✅ `woow-odoo` 0.2.7（0.2.6 起 platform 記憶體預設 soft 4GiB／hard 5GiB） |
 
 ## 操作者圖例
 
@@ -57,7 +57,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | 14363、14698 | [#1194 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1194#issuecomment-14363) |
 | 14632（R2-Qn） | [woow-paas/woow-paas-charts#81 Round 2 resolution](https://git-prod.woowtech.io/woow-paas/woow-paas-charts/issues/81#issuecomment-14632) |
 | 14662、16804 | [#1231 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1231#issuecomment-14662) |
-| chart README | woow-paas/woow-paas-charts `main` 的 `charts/woow-odoo/README.md`（0.2.5） |
+| chart README | woow-paas/woow-paas-charts `main` 的 `charts/woow-odoo/README.md`（0.2.7） |
 | #1032 plan | [`2026-09-03-woowtech-odoo-paas-migration-implementation.md`](../../plans/2026-Q3/2026-09-03-woowtech-odoo-paas-migration-implementation.md) |
 
 ## A0 定位與邊界
@@ -67,8 +67,9 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 - 與 #1206 交付 3 分工：中和段、斷言表、外連證據、PII 與銷毀規則一律**引用** [prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206）；本檔只寫 chart 切換段。
 - 彩排不是正式切換的替身；與正式切換的差異列在 A3 差異表（CONTEXT.md:136）。
 - 彩排使用的現成值（已落地，不必佔位）：
-  - chart：`woow-odoo` **0.2.5**（woow-paas/woow-paas-charts#120 merged；platform `addons_path` 含 `/opt/woow/addons`）。彩排改用含 platform 記憶體新預設的下一版〔待定：woow-paas/woow-paas-charts#99（R9）〕。
-  - 平台 image：`jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-official:20261003.1514@sha256:0be8cc620dc457ee81ef804f0b8c974c22ccec37d137576c27d07ecdc63fce87`（官方 `odoo:18.0-20250807` base、Odoo deb `18.0.20250807`、addon `18.0.1.0.203`；16804）。這顆綁 addon .203，只適合彩排與「promote 走通」演練；cutover 時以當時 prod 版號重 build（16804）。
+  - chart：`woow-odoo` **0.2.7**（platform `addons_path` 含 `/opt/woow/addons`、記憶體預設 soft 4GiB／hard 5GiB、備份 Job 起跑等 PG；woow-paas/woow-paas-charts#99 留言 18097）。
+  - 平台 image：`jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-official:20261005.1128@sha256:76debd4b2176fcfc039628b57569fa7d3ee99e9eb19208910ae49cd218cb6c73`（官方 `odoo:18.0-20250807` base、Odoo deb `18.0.20250807`、addon `18.0.1.0.209`；woow-paas/paas-odoo-ci#145 留言 18075）。彩排時 prod 若已升版，照 cutover runbook B5 第 1～3 步以當時版號重 build；cutover 同理（16804）。
+  - A5 的 base／head 對照：head＝上面這顆，base＝同 addon 版號的 Bitnami `paas-odoo`（prod 現役 `paas-odoo@sha256:c4d9b0779d66…`＝tag `20261004.2352`，addon .209；ci#145 留言 18075 §1.1）。
 
 ## A1 授權與稽核
 
@@ -79,23 +80,35 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## A2 前置與輸入
 
 1. 【agent】確認前置票都已落地，任一未落地就停：#1201、#1205、#1206、cc/woowprd#8、woow-paas/woow-paas-charts#99（14662 A 段「依賴」補 woowprd#8；#1206 前置見其票面）。
-   - charts#99 smoke 結論〔待定：woow-paas/woow-paas-charts#99（R2）〕。
-   - #1206 前置與 cc/woowprd#6 的關係〔待定：#1206 留言 14673（R8）〕。
-2. 【agent】確認沙盒容量已由 woow-paas/woow-machines-operator#5 放行〔待定：woow-paas/woow-machines-operator#5（R7）〕。
-   - 2026-09-30 唯讀量測：Longhorn 排程額度是瓶頸（z0v3w 已用 99.51%，單顆 2-replica 新 volume 最大 70.52 GiB；woow-machines-operator#5 留言 15571）。
+   - 2026-10-05 狀態：#1201（PR #1491）、#1205（#1490）、#1206（#1493）、cc/woowprd#5／#6／#8（PR #13／#14／#12）皆已 merge；charts#99 smoke PASS（留言 18097）。
+   - cc/woowprd#6 不是本路徑的前置（R8）。
+   - 彩排沙盒的斷言 fixture `prod-clone/assertions.toml` 已由人審 commit（#1162 D10；未審 ⇒ 停）。
+2. 【agent】確認沙盒容量已放行：WMO#5 裁決 Q2 的 in-scope 清理已完成（woow-machines-operator#5 留言 18189）。
+   - 2026-10-05 16:00Z 重量：31zix 71%、59mqj 97%（剩 35 GiB）、pggrg 86%、z0v3w 76%（留言 18189）。沙盒預估 data 5Gi＋pg 8Gi＋backup 5Gi，額度約 36 GiB（woow-machines-operator#5 留言 18108 的容量估算）。
+   - 彩排結束一律 destroy（A10）；沙盒 TTL 可能靜默失效（cc/woowprd#7）。
 3. 【人類】取資料段：產出 #1145 備份組形狀的輸入（dump＋filestore 快照＋manifest；14057 D1、#1145 留言 14055），以叢集內 HTTP PUT push 進沙盒。
    - classifier 擋 agent 做這一步（14057 D8）。
    - ⛔ 不用 `kubectl exec … > file`：超過約 20 MB 會尾端截斷、exit 0，`pg_restore -l` 驗不出來（[pitfall](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)；#1032 plan:70-71）。
    - 來源可用 live `pg_dump -Fc` 或 `paas-odoo-backup-pvc` 上的每日 dump 包成同形（#1206 交付 1）。
-4. 【agent】建沙盒：`/woow-dev:k8s-dev-sandbox create --context woow-k3s`，platform mode、web 與 cron 副本 0、走 #1205 lockdown gate〔待定：cc/woowprd#8（R1）〕。
-   - cc/woowprd#8 開工留言（17217）預定介面：`create --mode platform --chart-version <版> --platform-image <ref>@sha256:…`，web／cron 一律 0 起手；新子命令 `scale <name> --component server|cron --replicas N`。以 PR 落地為準。
+   - 搬運洞與 push recipe：[prod clone 中和 runbook](prod-clone-neutralization-runbook.md) §B（`seed-from-prod.sh receive` 開 receiver，人類從 `paas-system` HTTP PUT）。
+4. 【agent】建 lockdown 平台沙盒（cc/woowprd#8、#13）：
+
+   ```bash
+   SANDBOX_NEUTRALIZE_LOCKDOWN=1 bash <woow-dev plugin>/skills/k8s-dev-sandbox/scripts/create.sh --mode platform \
+     --repo "$(git rev-parse --show-toplevel)" --context woow-k3s --branch <slug> --ttl 24h \
+     --chart-version 0.2.7 --platform-image '<A0 的 Step 1 image ref@sha256>'
+   ```
+
+   - web／cron 一律 0 起手；之後用 `scale <slug> --context woow-k3s --component server|cron --replicas N`，一次只動一個 component（cc/woowprd#8）。
+   - Gitea helm registry 要登入：設 `SANDBOX_CHART_REPO_USERNAME`／`SANDBOX_CHART_REPO_PASSWORD`（onboard profile 沒有，臨時以 env 帶入、不印出；charts#99 留言 18097 觀察）。
+   - 驗：namespace 有 `dev-sandbox.io/neutralize-lockdown=1`；外殼 NP egress 只剩 DNS＋同 ns（cc/woowprd#13 實機驗證）。
    - ns 名 `dev-sandbox-<slug>`，`<slug>` 必填、不從 branch 推導（#1206 交付 1 第 0 條防呆）。
-5. 【agent】準備 platform profile values（鍵名以 chart 0.2.5 `values.schema.json` 為準）：
+5. 【agent】確認 platform profile values（鍵名以 chart 0.2.7 `values.schema.json` 為準；下列多數由 `create --mode platform` 自動 render，cc/woowprd#8）：
    - `profile: platform`、`postgres.database: woow_prod`（R2-Q4）。
    - `conf.emailFrom`：**中和值**，⛔ 不得帶 prod `odooEmail` 現值（R2-Q5、14676、14673）。
    - `postgres.extensions.vector: false`（R2-Q6）。
    - `conf.limitTimeRealCron ≥ 1800`、`cron.maxCronThreads ≥ 3`（woow-paas/woow-paas-charts#100 cutover gate；chart README §values 重點）。
-   - 記憶體上限不明設，用 chart 預設 soft 4GiB／hard 5GiB〔待定：woow-paas/woow-paas-charts#99（R9）〕（charts#99 裁決；彩排應用含此預設的 chart 版號）。
+   - 記憶體上限不明設，用 chart 0.2.7 預設 soft 4GiB／hard 5GiB（woow-paas/woow-paas-charts#99）。
    - `replicas: 0`、`cron.replicas: 0`（chart README；woowprd#8 留言 17217）。
    - `image.*`＝A0 的 Step 1 image；`credentials.*` 由沙盒工具隨機產生（woowprd#8 留言 17217）。
    - `backup.enabled: true`（沙盒用自己的 PVC，無 #1145 D7 共寫問題；13786 D7）。
@@ -169,7 +182,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## A6 正向 cutover 演練
 
-1. 【agent】在沙盒內建穩定 Service（名稱比照正式〔待定：woow-paas/paas-app-bundle-cd#143（R4）〕），先用舊形狀指向 Bitnami 形狀的對照 pod，再切新形狀：
+1. 【agent】在沙盒內建穩定 Service（名稱比照正式 `paas-odoo-active`；woow-paas/paas-app-bundle-cd#199），先用舊形狀指向 Bitnami 形狀的對照 pod，再切新形狀：
    - 新形狀 selector：`app.kubernetes.io/instance: <release>`＋`app.kubernetes.io/component: server`（排除同樣開 8069 的 cron pod，以及 `db-backup`／`db-restore` Job pod；13439 ②、cd#143 陷阱 2）。
    - port 80 與 8072 都以**數字** targetPort `8080` 指向 nginx sidecar（chart README 固定契約）。⚠ 不可用具名 targetPort，否則 0 endpoints 靜默斷線（13439 ②）。
    - 驗：endpoints 非 0、只含 web pod IP；cron pod 與 `db-backup` pod IP 不在其中。
@@ -188,7 +201,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 驗：產出 `daily/<UTC ISO8601>/` 下 `db.dump`、`filestore/`、`attachments.txt`、`manifest.json`；沒有 `skipped_reason`（chart README §備份格式與驗證）。
 2. 【agent】跑一次 D11 升級前備份路徑：平台 release 由 Fleet 管、不經 operator（13439「給其他票」#1128 條）⇒ 以 backup CronJob 的 jobTemplate 自組 Job，注入 `MODE=backup`、`BACKUP_KIND=pre-upgrade`（chart README §operator 參數契約；#1145 留言 14180）。
    - 驗：產出在 `pre-upgrade/`，retention 2 份（chart README）。
-3. 【agent】從備份還原一輪，走 #1217 platform 人工段〔待定：#1217（R6）〕；platform `restore.enabled` 預設 false（14201 D11；chart README）。
+3. 【agent】從備份還原一輪（2026-10-05 發起人裁決 G3，#1495）：server 與 cron 同時 scale 0 → 以 superuser `DROP DATABASE woow_prod` 並把 `/var/lib/odoo/filestore/woow_prod` 改名保留 → `seed-from-prod.sh receive` → 沙盒內一次性 Job 把 A7 第 1 步的 `daily/<ts>/` 打成備份組形狀（`db.dump`、`filestore.tar`、`manifest.json`、`attachments.txt`、`SHA256SUMS`）PUT 進 receiver → `seed-from-prod.sh restore … --no-upgrade-marker`（再預寫 marker 照 A4 第 3 步）；platform `restore.enabled` 預設 false（14201 D11；chart README）。
+   - 驗：`ir_module_module` 全表、admin 指紋、`res_partner` 筆數與備份當下相同；斷言 gate 全綠。
    - 還原前確認該 release 沒有 Running 的 `component=db-backup` Job（13786 D2）。
    - 歸零時 server 與 cron 一起 scale 0。
 
@@ -198,7 +212,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 凍結：新 release server 與 cron 同時 scale 0（R2-Q3）。
    - 新 pg `pg_dump -Fc` → Bitnami 側 `pg_restore --no-owner --no-privileges -L <濾 COMMENT - EXTENSION 與 vector>`；⛔ 不用 `--no-comments`（13439 ⑤、14201 D2）。
    - 驗反向 restore **零錯誤**。
-2. 【agent】量 Bitnami filestore 目錄的 owner，回填 C3 的 chown 值〔待驗：13439 ⑤ 寫 `999:999`，#1032 plan:112 實際用 `999:0`〕。
+2. 【agent】確認對照 Bitnami pod 的 filestore 目錄 owner 與回切 runbook C3 第 4 步一致（`999:0`，2026-09-04 prod 實作值，#1032 plan:112）；不一致就回填回切 runbook 並在彩排報告註明。
 3. 【agent】雙向 selector 切換各一次（舊→新、新→舊），每次驗 endpoints 非 0、`/web/health` 200、`/websocket` 101；並演練一次「緊急回切」JSON patch（selector 與兩個 targetPort 一起改；cd#143 PR-1 檔頭程序）。
 4. 【agent】量測秒數：dump、restore、filestore push、selector 切換、web Ready，回填 cutover B6／B7 與回切 C3／C4 的停機估算。
    - 現行估算：技術停機 15～20 分（13439 ⑧）；Step 1 切回約 5～8 分、反向搬遷再加約 5 分（#1137 [scout §7 情境一](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/src/branch/research/platform-odoo-chart-gap/docs/scout/2026-09-19-platform-odoo-chart-gap.md)，推論，待本步量測）。
