@@ -119,7 +119,10 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 9. 【agent】確認 woow-paas/paas-app-bundle-cd#145（SOP／`promote-acceptance-checklist.md` 參數化）已落地——窗口內仍可能發 hotfix（13439 ③）。
 10. 【agent】確認平台發版改 build `paas-odoo-official` 的切換已備妥〔待裁決：G2，建議 cutover 當下切〕：`.gitea/workflows/trigger-odoo-build.yml`、`/woow:deploy` 與 `prod-release-sop.md` 的修改 PR 已開好、等 B8 第 2 步 merge（#1392 留言 17382）。
 11. 【agent】確認 Step 1 平台 image 是以「停機窗口當下的 prod 版號」build 的：image 內 addon 版號＝prod 現行 `src/__manifest__.py` 版號（16804「cutover」段；ci#145 留言 18075 §1.3）；不是就照 B5 第 1～3 步重 build、重 pin。
-12. 【人類】舊 Bitnami 兩顆 PVC 的保護檢查（WMO#16）：`data-paas-odoo-postgresql-0`、`paas-odoo` 的 PV 都是 Retain，但 PVC 沒有 `helm.sh/resource-policy: keep`；`paas-odoo` 由 helm release 管，uninstall 或 Fleet 移除 bundle 會刪 PVC，而叢集上的 Released PV 曾被不明批次刪除（woow-machines-operator#5 留言 18189）。處置方式〔待裁決：G7〕。
+12. 【agent】唯讀確認舊 Bitnami 兩顆 PVC 的保護仍在（WMO#16）：
+   - `paas-odoo`（filestore，helm release 管）：帶 `helm.sh/resource-policy: keep`——由 values `persistence.resourcePolicy: keep` 寫進 release manifest（woow-paas/paas-app-bundle-cd#209，2026-10-05 merge 並驗收）。helm 的 keep 只讀 release 內存的 manifest，`kubectl annotate` 擋不住 uninstall，所以必須走 values（helm v3.13.3 `pkg/action/uninstall.go:204-214`）。
+   - `data-paas-odoo-postgresql-0`：STS 的 volumeClaimTemplate PVC，不在 release manifest，helm uninstall 不會刪；STS retention `whenDeleted: Retain`。不另加 annotation（2026-10-05 發起人決定）。
+   - 兩顆 PV 都是 Retain／Bound。⚠ keep 擋不住 `kubectl delete pvc`、刪 ns，也擋不住 WMO#16 追查中的不明批次刪除；那些屬 WMO#16 範疇。
 13. 【agent】確認舊 `paas-odoo` 兩顆 PVC 在本次 cutover 期間沒有任何 Fleet／helm 變更計畫會動到它們（cd#145 守門腳本 R1～R5：同目錄一律不准改 releaseName；woow-paas/paas-app-bundle-cd#202）。
 
 ## B1 窗口與公告

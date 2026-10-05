@@ -70,23 +70,28 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## D2 錨點聲明
 
 1. 【agent】在 teardown issue 寫明錨點聲明：Longhorn snapshot 住在同一顆 volume 內，volume 刪掉 snapshot 就一起沒了（`prod-release-sop.md` §9 坑 17）⇒ D4 刪除舊 PVC 之後，**唯一**的錨點是 D1 的離叢集退役 dump。D1 未完成不得進 D4。
-   - cutover B4 建的 `snap-paas-odoo-{pg,fs}-pre…` 兩顆會隨 D4 一起消失，屬預期（`prod-release-sop.md` §5.1.1）。
+   - cutover B4 建的舊側 snapshot 兩顆會在 D4 第 3 步刪 volume 時一起消失，屬預期（`prod-release-sop.md` §5.1.1；WMO#5 裁決 Q4）。
 
 ## D3 移除舊 release bundle
 
 1. 【agent】確認 Ingress 與穩定 Service 都在 raw bundle `paas-odoo-edge/`（`Ingress/paas-odoo-edge`、`Service/paas-odoo-active`；woow-paas/paas-app-bundle-cd#199）、舊 release 的 `ingress.enabled` 已是 `false`（#200）——所以移除舊 bundle 不會變成第二次 cutover（13439 ②）。
 2. 【agent 開 PR・人類 merge】移除 `paas-odoo/` bundle 目錄（舊 Bitnami release）。
    - ⛔ 不動 `paas-odoo-backup/`：它在 cutover PR-C 後只剩 `paas-odoo-backup-pvc`，是新 release 備份的 `existingClaim`（woow-paas/paas-app-bundle-cd#144 PR-C）。
-   - Fleet 原始碼查證：Bundle 消失 ⇒ helm uninstall（`keepResources: true` 只刪 release secret）；同目錄改 `releaseName` 也會 uninstall 舊 release（cd#145 留言 18010；rancher/fleet v0.10～main）。helm 管的 PVC `paas-odoo` 會一起被刪（PV Retain 會留下 Released），STS 的 `data-paas-odoo-postgresql-0` 不會；所以 D4 仍逐顆確認、不假設。
+   - Fleet 原始碼查證：Bundle 消失 ⇒ helm uninstall（`keepResources: true` 只刪 release secret）；同目錄改 `releaseName` 也會 uninstall 舊 release（cd#145 留言 18010；rancher/fleet v0.10～main）。
+   - 兩顆舊 PVC 在 uninstall 後都**會留下**：`paas-odoo` 帶 `helm.sh/resource-policy: keep`（values `persistence.resourcePolicy: keep`，woow-paas/paas-app-bundle-cd#209），helm 會跳過它；`data-paas-odoo-postgresql-0` 是 STS 的 PVC、不在 release manifest。⇒ D4 必須人工刪除。
 3. 【agent】驗：4 個 host（`paas.woowtech.io`、`aiot.woowtech.io`、`www.designsmart.com.tw`、`woowtech-ds.woowtech.io`）`/web/health` 200、`/websocket` 101；4 個 TLS Secret 的 `creationTimestamp` 不變、沒有新的 CertificateRequest／Order（未重簽）；穩定 Service endpoints 不變、只含新 web pod（woow-paas/paas-app-bundle-cd#143 驗收 B3／B4）。
 
 ## D4 儲存與 Secret 清理
 
-1. 【人類】刪除舊 PVC `data-paas-odoo-postgresql-0` 與 `paas-odoo`（若 D3 未一併回收）。⚠ **不可逆**；執行前再看一次 D1 的 sha256 回填。
-   - PV 為 Retain（#1137 G30），刪 PVC 後會留下 Released PV。
-2. 【agent】唯讀盤點 Released PV（cluster-scoped），依 [guard doc](shared-cluster-paas-scope-guard.md) 的分流／溯源做法確認歸屬；回收走 #319 SOP，不在本檔順手刪。
-3. 【人類】刪除舊 fleet-local secret `paas-odoo-fleet-secrets`（`fleet-local` 只碰 `paas-*` 前綴資源；CLAUDE.md §kubectl）。
-4. 【人類】處置 `paas-odoo-backup-pvc` 根目錄的舊檔：7 份 `paas_odoo_*.pg` 已併入 D1 退役 dump，sha256 回填後刪除（WMO#5 裁決 Q5d）；`woow_prod_*.pg`（舊 `pg-backup` CronJob 的 7 份輪替 dump）〔待裁決：G6，建議最新一份併入退役 dump、其餘刪除〕。
+1. 【agent】唯讀確認刪除前狀態：D3 後舊 odoo 與 postgres pod 都已不存在；兩顆 PVC 仍 Bound、沒有任何 pod 掛載；記下兩顆 PV 名（`kubectl --context woow-k3s -n paas-system get pvc paas-odoo data-paas-odoo-postgresql-0 -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.volumeName}{"\n"}{end}'`）與 `persistentVolumeReclaimPolicy`（預期都是 `Retain`）。
+2. 【人類】刪除舊 PVC `paas-odoo` 與 `data-paas-odoo-postgresql-0`。⚠ **不可逆**；執行前再看一次 D1 的 sha256 回填。
+   - helm 不會替你刪：`paas-odoo` 有 keep（cd#209），postgres PVC 屬 STS、不在 release manifest（woow-paas/paas-app-bundle-cd#209 驗收）。
+   - PV 為 Retain（#1137 G30），刪 PVC 後兩顆 PV 會變 `Released`，Longhorn volume 與資料仍在。
+3. 【人類】處置上一步留下的兩顆 Released PV：確認它們就是第 1 步記下的 PV 名、D1 的退役 dump 已離叢集並驗過 sha256 後，刪除 PV（Retain PV 刪除後 Longhorn volume 仍可能殘留，需一併刪除對應的 `volumes.longhorn.io`；longhorn-system 屬叢集運維，交 woow-machines-operator 執行）。
+   - 刪除紀錄（PV 名、時間、操作者）寫進 teardown issue，補上 #319 的稽核缺口（WMO#16 追查過不明批次刪除）。
+4. 【agent】唯讀確認：兩顆 PVC、兩顆 PV、對應 Longhorn volume 都已不存在；另盤點叢集上其他 Released PV，依 [guard doc](shared-cluster-paas-scope-guard.md) 的分流／溯源做法確認歸屬——非本次 teardown 的 PV 走 #319 SOP，不在本檔順手刪。
+5. 【人類】刪除舊 fleet-local secret `paas-odoo-fleet-secrets`（`fleet-local` 只碰 `paas-*` 前綴資源；CLAUDE.md §kubectl）。
+6. 【人類】處置 `paas-odoo-backup-pvc` 根目錄的舊檔：7 份 `paas_odoo_*.pg` 已併入 D1 退役 dump，sha256 回填後刪除（WMO#5 裁決 Q5d）；`woow_prod_*.pg`（舊 `pg-backup` CronJob 的 7 份輪替 dump）〔待裁決：G6，建議最新一份併入退役 dump、其餘刪除〕。
    - 新 release 的備份寫在 `daily/`、`weekly/`、`pre-upgrade/` 子目錄（chart README §備份格式與驗證），不會動到根目錄舊檔。
 
 ## D5 保留物
