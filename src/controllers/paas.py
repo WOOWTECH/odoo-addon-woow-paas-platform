@@ -4160,21 +4160,35 @@ class PaasController(HiddenChainMixin, Controller):
         if not client:
             return {'success': False, 'error': _('PaaS Operator not configured')}
 
+        # #1433：平台管的憑證（管理員帳密、gateway key）不跟著回復——請 operator 以
+        # 「目標 revision 的設定＋目前的憑證」重現目標版本，而不是純 helm rollback
+        # （那會讓已撤銷的舊密碼復活、目前的密碼失效）。沒有平台憑證的模板照舊。
+        preserve_paths = service._rollback_preserved_value_paths()
+
         try:
-            client.rollback_release(
+            rollback_result = client.rollback_release(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 revision=revision,
+                chart=service.template_id.helm_chart_name if preserve_paths else None,
+                preserve_value_paths=preserve_paths or None,
             )
 
             # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
             # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
             # （`fields.Datetime.now()` 的 UTC 基準要求見 `_update_service`。）
-            service.write({
+            rollback_vals = {
                 'state': 'upgrading',
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
-            })
+            }
+            # #1433：保留憑證的回復是一次 helm upgrade，operator 回報它實際渲染的 chart
+            # 版本（＝目標 revision 的版本）。記下來，否則下一次「修改配置」會以
+            # `service.helm_chart_version`（回復前的新版）釘版，把剛回復的 chart 又升回去
+            # （#552 的 resolved_version 以服務自己的版本優先）。
+            if isinstance(rollback_result, dict) and rollback_result.get('chart_version'):
+                rollback_vals['helm_chart_version'] = rollback_result['chart_version']
+            service.write(rollback_vals)
             # #1257 Q23／#1267：還欠 init 的服務（含 init 額度用完的 error）rollback
             # 開新的一代——保留欠 init、計數歸零，下一輪導回 initializing。之前只寫
             # upgrading、不設 `addon_update_pending`，首次部署 init 失敗、已轉 error 的
