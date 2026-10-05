@@ -190,6 +190,9 @@ class TestAppAdminResetFlow1370(_AppAdminResetFixture):
         self.assertFalse(result['success'])
         self.assertIn('archived', result['error'])
         self.assertIn('not changed', result['error'])
+        # #1186：告訴租戶能自己做的事（其他管理員重新啟用），否則開工單。
+        self.assertIn('reactivate', result['error'])
+        self.assertIn('support ticket', result['error'])
         self.assertFalse(self._secret(self.odoo_service).admin_password)
         self.assertNotIn('admin_password', json.dumps(result))
 

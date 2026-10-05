@@ -2199,9 +2199,12 @@ class CloudService(models.Model):
             'admin_missing': _(
                 "The administrator account could not be found in this service, so the "
                 "password was not changed. Please contact support."),
+            # 只有 Odoo 會回這個碼；封存可由租戶自己的其他管理員解（#1186 驗收文案）。
             'admin_inactive': _(
                 "The administrator account of this service has been archived, so the "
-                "password was not changed. Please contact support."),
+                "password was not changed. Ask another administrator in Odoo to "
+                "reactivate it, then reset again; if there is none, please open a "
+                "support ticket."),
             'owner_ambiguous': _(
                 "This service has more than one owner account, so the password was not "
                 "changed. Please contact support."),

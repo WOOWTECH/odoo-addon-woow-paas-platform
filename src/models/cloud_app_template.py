@@ -550,6 +550,11 @@ class CloudAppTemplate(models.Model):
     # config_json 誤標成 helm_secret＝helm upgrade 成功但 config.json 沒動、密碼靜默
     # 不生效（更糟，因為它假裝成功）。新 template 上架時以「chart 有沒有把 Secret
     # 落成 PVC 上的設定檔」判定，不要照 slug 猜。
+    #
+    # Odoo（與 n8n）不適用本欄位：密碼權威在 app 自己的 DB，helm upgrade 換不到
+    # （woow-odoo 的 conf.adminPassword 只在首次 -i base 套用），而本欄位兩種可重設
+    # 載體的前提都是「reset 一定 helm upgrade」。它們走下方 app_admin_reset_kind 的
+    # operator exec 契約（#1186）。
     admin_password_carrier = fields.Selection(
         selection=[
             ('config_json',

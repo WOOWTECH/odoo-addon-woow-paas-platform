@@ -19814,8 +19814,8 @@ msgstr "找不到此服務的管理員帳號，密碼沒有變更。請聯絡客
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
-"The administrator account of this service has been archived, so the password was not changed. Please contact support."
-msgstr "此服務的管理員帳號已被封存，密碼沒有變更。請聯絡客服。"
+"The administrator account of this service has been archived, so the password was not changed. Ask another administrator in Odoo to reactivate it, then reset again; if there is none, please open a support ticket."
+msgstr "此服務的管理員帳號已被封存，密碼沒有變更。請由 Odoo 內其他管理員重新啟用此帳號後再重設；若沒有其他管理員，請開工單聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python
