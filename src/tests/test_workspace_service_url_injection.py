@@ -407,8 +407,11 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
                          '控制埠是 headscale.port，不是入口第一個埠 service.port（Headplane）')
         hs.write({'helm_values': json.dumps({'fullnameOverride': 'vpn-ctl'})})
         self.assertEqual(self._hs_injected(), _hs_url('vpn-ctl'))
+        hs.write({'helm_values': json.dumps({'nameOverride': 'vpn'})})
+        self.assertEqual(self._hs_injected(), _hs_url('svc-hs000001-vpn'))
         hs.write({'helm_values': json.dumps({'nameOverride': 'hs'})})
-        self.assertEqual(self._hs_injected(), _hs_url('svc-hs000001-hs'))
+        self.assertEqual(self._hs_injected(), _hs_url('svc-hs000001'),
+                         'chart 的 contains 規則：release 名已含 name（svc-hs… 含 hs）→ 用 release 名')
         hs.write({'helm_values': json.dumps({'headscale': {'port': '8080; reboot'}})})
         self.assertIsNone(self._hs_injected(), '非整數 port 不組網址')
         hs.write({'helm_values': json.dumps({'fullnameOverride': 'Bad_Name'})})
