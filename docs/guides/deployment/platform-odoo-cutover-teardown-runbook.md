@@ -49,6 +49,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 窗口已因含 migration 的 release 提前關閉（單向門），且發起人已在 #1142 確認進 teardown（13439 ③）。
 2. 【人類】發起人確認「不再需要回切」，在 teardown issue 留言放行。
 3. 【agent】確認 D1 已完成（退役 dump 已離叢集並回填 sha256）——D1 是本檔所有刪除步驟的硬前置（見 D2）。
+4. 【agent】確認 woow-paas/woow-machines-operator#14（輪替 Gitea registry token）已完成並關票；未完成不得進 teardown。
+   - 發起人裁決延後到 cutover 後一週內執行（2026-10-05）；teardown 會移除舊 bundle 與舊 fleet-local secret，輪替須先落地，避免舊 token 仍在使用中卻失去對照（推論）。
 
 ## D1 退役 dump
 
