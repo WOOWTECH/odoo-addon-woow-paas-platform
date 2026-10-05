@@ -32,6 +32,10 @@ export class PlanSelector extends Component {
     // #1261：這台服務目前的 route 數（只有 Security Access 會傳）。optional ⇒
     // 建立流程與 CS／SH 不傳，卡片不標任何 route 警告，行為與本 PR 之前完全相同。
     usedRoutes: { type: Number, optional: true },
+    // #1454：變更方案時新訂閱一律沒有試用（後端 `plan.sh_trial and not
+    // entity_has_prior_sub` 對既有服務恆 False，見 ChangePlanModal 的 willEndTrial），
+    // 卡片上的「N 天免費試用」是錯的承諾。只有 ChangePlanModal 傳 true。
+    hideTrial: { type: Boolean, optional: true },
   };
 
   setup() {

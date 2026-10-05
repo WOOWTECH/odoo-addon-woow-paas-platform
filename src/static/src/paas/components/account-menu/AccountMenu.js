@@ -3,8 +3,7 @@ import { Component, onMounted, onWillUnmount, useRef, useState } from "@odoo/owl
 import { billingService } from "../../services/billing_service";
 import { profileService } from "../../services/profile_service";
 import { formatPoints } from "../../utils/billing_helpers";
-
-export const HELP_URL = "https://docs.woowtech.io";
+import { helpUrl } from "../../core/platform_config";
 
 /**
  * Account menu opened from the header avatar (#1310).
@@ -50,7 +49,7 @@ export class AccountMenu extends Component {
 
   openHelp() {
     this.props.onClose();
-    window.open(HELP_URL, "_blank", "noopener");
+    window.open(helpUrl(), "_blank", "noopener");
   }
 
   logout() {

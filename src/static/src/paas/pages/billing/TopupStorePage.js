@@ -11,6 +11,7 @@ import { translateTopupError } from "../../services/topup_errors";
 import { router } from "../../core/router";
 import { formatPoints } from "../../utils/billing_helpers";
 import { formatFloat } from "@web/core/utils/numbers";
+import { helpUrl } from "../../core/platform_config";
 
 const CATEGORY_TABS = [
   { key: null, label: _t("All Packs") },
@@ -73,6 +74,11 @@ export class TopupStorePage extends Component {
 
   get categoryTabs() {
     return CATEGORY_TABS;
+  }
+
+  /** #1453：「說明與支援」網址統一由 core/platform_config 提供。 */
+  get helpUrl() {
+    return helpUrl();
   }
 
   get loading() {

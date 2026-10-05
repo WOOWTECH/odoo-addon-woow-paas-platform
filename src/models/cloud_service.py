@@ -2477,6 +2477,7 @@ class CloudService(models.Model):
             cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
                 self.workspace_id,
             )
+            eph_request, eph_limit = self._compute_ns_ephemeral_quota(self.workspace_id)
             try:
                 client.create_namespace(
                     namespace=helm_namespace,
@@ -2484,6 +2485,8 @@ class CloudService(models.Model):
                     memory_limit=memory_limit,
                     storage_limit=storage_limit,
                     workspace_id=self.workspace_id.id or None,
+                    ephemeral_storage_request=eph_request,
+                    ephemeral_storage_limit=eph_limit,
                 )
             except PaaSOperatorError as e:
                 if e.status_code != 409:
@@ -4073,6 +4076,37 @@ class CloudService(models.Model):
         if gateway_api_key and self._chart_has_gateway():
             values['auth'] = {'apiServerKey': gateway_api_key}
         return values
+
+    def _rollback_preserved_value_paths(self):
+        """#1433：「回復版本」時必須維持**目前值**的 helm values 路徑（平台管的憑證）。
+
+        純 ``helm rollback`` 會把目標 revision 的 ``config.sensitive.admin_password``
+        一起回復 ⇒ 租戶換掉（撤銷）的舊密碼復活、目前的密碼失效，而平台 DB 的
+        ``cloud_service_secret`` 與帳號仍是新的（R8：open-design、code-server 重現）。
+        回傳非空時 controller 會請 operator 改走「保留這些路徑」的回復。
+
+        路徑與供給鏈同源（不自建 slug 名單，#357 C01 同一紀律）：
+
+        - ``config.sensitive``：``_build_mcp_sensitive_values`` 的唯一通道，閘門
+          ``template.has_admin_gui``。
+        - ``auth.apiServerKey``：#530 gateway key，閘門 ``_chart_has_gateway``。
+        - ``template.admin_username_helm_path``：租戶自設的帳號——帳號與密碼是同一組
+          登入憑證，只保留密碼會變成「舊帳號＋新密碼」。
+
+        woow-odoo 的 ``conf.adminPassword`` 刻意**不**列入：chart 只在首次建庫時套用，
+        對既有 DB 是 no-op（見 ``_build_odoo_sensitive_values``），回復它不會讓舊密碼
+        生效；列入反而會把 Odoo 的回復全部改成重新渲染，擴大這張單的影響面。
+        """
+        self.ensure_one()
+        template = self.template_id
+        if not template.has_admin_gui:
+            return []
+        paths = ['config.sensitive']
+        if self._chart_has_gateway():
+            paths.append('auth.apiServerKey')
+        if template.admin_username_helm_path:
+            paths.append(template.admin_username_helm_path)
+        return paths
 
     def _build_odoo_sensitive_values(self):
         """#1130：woow-odoo 的初始管理員密碼 sensitive value（odoo 專屬 helper）。
@@ -7643,6 +7677,27 @@ class CloudService(models.Model):
             f"{max(storage * 3, 100)}Gi",
         )
 
+    def _compute_ns_ephemeral_quota(self, workspace):
+        """#1434：ns ResourceQuota 的 ``requests/limits.ephemeral-storage``。
+
+        與 ``_compute_ns_quota`` 同一個存活集（非 deleting），但按**服務數**而非方案
+        規格算：ephemeral-storage 不是方案賣的資源，上限的目的只是「一個租戶不能把節點
+        系統碟寫滿」。每個容器的預設上限由 operator 的 LimitRange 給（4Gi／request
+        128Mi）；這裡的總額按每台服務 2Gi request／40Gi limit 估——R8 盤點單一 release
+        最多 6 個容器（6×4Gi＝24Gi），滾動更新新舊 Pod 並存時翻倍約 48Gi，floor 80Gi
+        蓋得住；額度太緊的代價是**開通／更新時 Pod 被 admission 拒絕**，所以寧寬勿緊。
+        回傳字串 quantity（與其他 quota 欄位一致）。
+        """
+        Svc = self.env['woow_paas_platform.cloud_service'].sudo()
+        live_count = Svc.search_count([
+            ('workspace_id', '=', workspace.id),
+            ('state', '!=', 'deleting'),
+        ])
+        return (
+            f"{max(live_count * 2, 4)}Gi",
+            f"{max(live_count * 40, 80)}Gi",
+        )
+
     def _push_ns_quota(self, workspace, helm_namespace):
         """best-effort：重算並 PUT ns quota；operator 未設定 / 失敗只 log，
         絕不 abort 刪除。"""
@@ -7653,8 +7708,13 @@ class CloudService(models.Model):
         if not client:
             return
         cpu, mem, storage = self._compute_ns_quota(workspace)
+        eph_request, eph_limit = self._compute_ns_ephemeral_quota(workspace)
         try:
-            client.update_namespace_quota(helm_namespace, cpu, mem, storage)
+            client.update_namespace_quota(
+                helm_namespace, cpu, mem, storage,
+                ephemeral_storage_request=eph_request,
+                ephemeral_storage_limit=eph_limit,
+            )
         except Exception as e:
             _logger.warning(
                 "quota recompute PUT failed for %s: %s", helm_namespace, e,

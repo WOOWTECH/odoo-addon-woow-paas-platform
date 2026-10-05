@@ -288,7 +288,10 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
         # 存活 4 vCPU／4 GB／50 GB ×3＝12／12Gi／150Gi。先收的那台重算時另一台仍在 deleting，
         # 若被計入會是 18 或 21 vCPU。
         self.assertEqual(client.update_namespace_quota.call_args_list,
-                         [call('paas-ws-525cron', '12', '12Gi', '150Gi')] * 2)
+                         [call('paas-ws-525cron', '12', '12Gi', '150Gi',
+                               # #1434：存活 1 台 → floor 4Gi／80Gi。
+                               ephemeral_storage_request='4Gi',
+                               ephemeral_storage_limit='80Gi')] * 2)
 
     def test_teardown_failure_does_not_push_quota_for_a_half_deleted_service(self):
         """teardown 中途失敗、整台回捲留在 deleting 時，不得以半刪狀態推 quota。"""

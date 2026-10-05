@@ -20307,3 +20307,69 @@ msgstr "PaaS：從未正常運作的服務暫停扣款"
 #: model:mail.template,subject:woow_paas_platform.mail_template_billing_hold_never_running
 msgid "[Woow PaaS] A service that never started will not be charged"
 msgstr "[Woow PaaS] 從未正常運作的服務不會扣款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Roll back to revision"
+msgstr "確定要回復到版本"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Chart version:"
+msgstr "Chart 版本："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Settings, including API keys, return to the values saved in that revision."
+msgstr "應用設定（包含 API 金鑰）會回到該版本當時儲存的值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "The admin username and password are not rolled back: the current credentials stay in effect."
+msgstr "管理員帳號與密碼不會被回復，維持目前的帳密。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "The service restarts during the rollback (about a minute); work in progress may be interrupted."
+msgstr "回復期間服務會重新啟動（約一分鐘），進行中的工作可能會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Confirm Rollback"
+msgstr "確認回復"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "UPDATING"
+msgstr "更新中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Plan & Billing"
+msgstr "方案與帳期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "First Billing Date"
+msgstr "首次扣款日"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
+msgid "Billing Start Date"
+msgstr "計費開始日"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Service Guide"
+msgstr "使用說明"

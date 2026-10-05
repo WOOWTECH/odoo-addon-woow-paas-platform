@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     storage_capacity_render_timeout_seconds: int = Field(default=45, gt=0)
     longhorn_namespace: str = "longhorn-system"
 
+    # #1434：租戶 ns LimitRange 的 ephemeral-storage 預設（只補「容器沒宣告」的那一格；
+    # chart 自己有設就以 chart 為準）。容器寫 overlay（/、/tmp、/var/tmp）與容器 log 都
+    # 算 ephemeral-storage，超過 limit 時 kubelet 只驅逐該 Pod，不會把節點系統碟寫到
+    # DiskPressure 連坐同節點其他租戶與正式站。request 很小是刻意的：它會計入節點
+    # allocatable 的排程帳（節點系統碟約 100G），只保留最低額度。
+    tenant_ephemeral_storage_default_request: str = "128Mi"
+    tenant_ephemeral_storage_default_limit: str = "4Gi"
+
     # Private Registry (for tenant namespace imagePullSecrets)
     registry_server: str = ""
     registry_username: str = ""

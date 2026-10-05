@@ -520,6 +520,9 @@ class TestCloudService(TransactionCase):
             # 存活集只剩 serviceB → survivor-only 重算
             client.update_namespace_quota.assert_called_once_with(
                 ns, "30", "30Gi", "150Gi",
+                # #1434：存活 1 台 → floor。
+                ephemeral_storage_request="4Gi",
+                ephemeral_storage_limit="80Gi",
             )
 
 

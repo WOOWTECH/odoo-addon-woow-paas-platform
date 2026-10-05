@@ -19,3 +19,16 @@ import { session } from "@web/session";
 export function showProjects() {
     return session.woow_show_projects === true;
 }
+
+/**
+ * #1453：「說明與支援」網址的唯一來源（側欄、頭像選單、儲值頁共用）。
+ * 後端 `_help_url()` 注入 session（config_parameter `woow_paas_platform.help_url`，
+ * 缺值時用預設幫助中心）；這裡的預設值只在 session 沒帶時（舊頁面快取）兜底，
+ * 與後端 DEFAULT_HELP_URL 相同。原本三處寫死的 docs.woowtech.io 是不存在的網域。
+ */
+export const DEFAULT_HELP_URL = "https://aiot.woowtech.io/blog/help-center-7";
+
+export function helpUrl() {
+    const url = session.woow_help_url;
+    return typeof url === "string" && /^https?:\/\//.test(url) ? url : DEFAULT_HELP_URL;
+}

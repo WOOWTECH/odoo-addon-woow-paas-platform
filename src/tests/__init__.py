@@ -1030,3 +1030,8 @@ from . import test_never_running_orphan_grace_1431
 # #1424：開通被 operator 拒絕（#1348／#1415）且從未 running ⇒ 自動取消訂閱；一直停在 error、
 # 從未 running 的服務暫停扣款並提醒一次，恢復 running 後照常計費。
 from . import test_never_running_billing_1424
+# #1433：回復版本保留平台管的管理員帳密；#1434：ns 的 ephemeral-storage 額度。
+from . import test_rollback_preserves_credentials_1433
+# R8 平台 UX（#1453 說明網址／documentation_url、#1456 同步時間時區與 helm_revision 回寫、
+# #1457 平台頁面安全標頭）。
+from . import test_platform_ux_r8

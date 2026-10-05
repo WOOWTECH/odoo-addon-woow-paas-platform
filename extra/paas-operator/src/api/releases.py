@@ -786,7 +786,7 @@ async def delete_release(
 
 @router.post(
     "/{namespace}/{name}/rollback",
-    response_model=Dict[str, str],
+    response_model=Dict[str, Any],
     summary="Rollback a Helm release",
 )
 def rollback_release(
@@ -807,6 +807,9 @@ def rollback_release(
     Raises:
         HTTPException: If rollback fails
     """
+    if request.preserve_value_paths:
+        return _rollback_preserving_values(namespace, name, request)
+
     try:
         result = helm_service.rollback(namespace, name, request.revision)
         logger.info(f"Rolled back release {name} in {namespace}")
@@ -822,6 +825,178 @@ def rollback_release(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Helm rollback failed. Check operator logs for details.",
+        )
+
+
+_PATH_MISSING = object()
+
+
+def _get_path(values: Dict[str, Any], path: str) -> Any:
+    node: Any = values
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _PATH_MISSING
+        node = node[part]
+    return node
+
+
+def _set_path(values: Dict[str, Any], path: str, value: Any) -> None:
+    parts = path.split(".")
+    node = values
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            node[part] = child
+        node = child
+    node[parts[-1]] = value
+
+
+def _delete_path(values: Dict[str, Any], path: str) -> None:
+    parts = path.split(".")
+    node: Any = values
+    for part in parts[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return
+        node = node[part]
+    if isinstance(node, dict):
+        node.pop(parts[-1], None)
+
+
+def overlay_preserved_paths(
+    target_values: Dict[str, Any],
+    current_values: Dict[str, Any],
+    paths: List[str],
+) -> Dict[str, Any]:
+    """#1433：把 ``paths`` 在**目前** values 的狀態（含「不存在」）蓋到目標 values 上。
+
+    純函式、回傳新的 dict（不改呼叫端的物件）。「目前不存在」也要蓋過去：目標
+    revision 若帶著一份目前已經沒有的憑證，留著它就是讓被撤銷的值復活——與本票
+    要堵的是同一件事。
+    """
+    import copy
+
+    merged = copy.deepcopy(target_values or {})
+    for path in paths:
+        current = _get_path(current_values or {}, path)
+        if current is _PATH_MISSING:
+            _delete_path(merged, path)
+        else:
+            _set_path(merged, path, copy.deepcopy(current))
+    return merged
+
+
+def _rollback_preserving_values(
+    namespace: str,
+    name: str,
+    request: ReleaseRollbackRequest,
+) -> Dict[str, Any]:
+    """#1433：「回復版本」但保留目前的憑證——以 helm upgrade 重現目標 revision。
+
+    為什麼不是 ``helm rollback`` 之後再補一次 reset：rollback 一落地 Secret 就是舊
+    密碼，open-design 的 authproxy 每個請求重讀 htpasswd ⇒ 補救之前那段時間舊密碼
+    可以登入、目前的密碼被拒（R8 實測約 30–60 秒），而補救本身若失敗就停在最糟的
+    狀態。改成一次 upgrade：目標 revision 的 values（一般設定）＋目前 revision 的
+    ``preserve_value_paths``（憑證）＋目標 revision 的 chart 版本，憑證從頭到尾沒有
+    離開目前的值。
+
+    與純 rollback 的差異（刻意的取捨）：
+    - helm rollback 重放 stored manifest；這裡是用目標 chart 版本＋目標 values
+      **重新渲染**。chart 若有 ``randAlphaNum`` 這類非決定性模板，結果可能與當時不同
+      ——但同一個 chart 的平常 reconfigure 也是這樣渲染，不是新的風險面。
+    - 會重新拉目標版本的 chart；registry 裡那一版若已被刪，回 500 而**不**退回純
+      rollback（退回就是讓舊憑證復活，fail-open 的方向錯了）。
+    - 與 reconfigure 一樣先跑 #1407 不可變欄位 preflight。
+    """
+    _validate_namespace_or_raise(namespace)
+    try:
+        history = helm_service.history(namespace, name)
+        if not history:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Release {name} has no revision history",
+            )
+        current_revision = max(rev.revision for rev in history)
+        target_revision = request.revision or (current_revision - 1)
+        known = {rev.revision for rev in history}
+        if target_revision < 1 or target_revision not in known:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Revision {target_revision} not found in release history",
+            )
+        if target_revision == current_revision:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target revision is the current revision",
+            )
+
+        target_version = helm_service.get_revision_chart_version(
+            namespace, name, target_revision,
+        )
+        # #552 同一道閘：遠端 chart 沒有版本就會解析成 registry latest——「回復版本」
+        # 結果反而升版。讀不到目標版本就拒絕，不猜。
+        if _chart_ref_is_remote(request.chart) and not target_version:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Cannot determine the chart version of revision {target_revision}; "
+                    "refusing to roll back without a pinned version"
+                ),
+            )
+
+        # ⛔ 兩份都是**明文** values（含憑證）：只進下面 upgrade 的 --values 暫存檔，
+        # 不 log、不回傳。
+        target_values = helm_service.get_values(namespace, name, revision=target_revision)
+        current_values = helm_service.get_values(namespace, name)
+        merged_values = overlay_preserved_paths(
+            target_values, current_values, request.preserve_value_paths,
+        )
+
+        upgrade_kwargs = dict(
+            namespace=namespace,
+            name=name,
+            chart=request.chart,
+            values=_ensure_image_pull_secrets(namespace, merged_values),
+            version=target_version,
+            reset_values=True,
+            reuse_values=False,
+        )
+        _upgrade_preflight(upgrade_kwargs)
+        release = helm_service.upgrade(
+            **upgrade_kwargs,
+            description=(
+                f"Rollback to {target_revision} (credentials preserved)"
+            ),
+        )
+        logger.info(
+            "Rolled back release %s in %s to revision %s via upgrade "
+            "(preserved %d value path(s))",
+            name, namespace, target_revision, len(request.preserve_value_paths),
+        )
+        return {
+            "message": f"Rolled back to revision {target_revision} (credentials preserved)",
+            "mode": "upgrade_preserving",
+            "target_revision": target_revision,
+            # `helm upgrade -o json` 把 revision 放在頂層 `version`，`_parse_release_info`
+            # 讀 `info.revision` 恆為 0（既有缺陷，與 helm_revision=0 同源）；這裡以歷史
+            # 推算的新 revision 兜底，不把 0 回給平台。
+            "revision": release.revision or (current_revision + 1),
+            "chart_version": release.chart_version or target_version,
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except HelmException as e:
+        logger.error(
+            "Preserving rollback failed for %s/%s: %s\nStderr: %s",
+            namespace, name, e.message, e.stderr,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=describe_helm_failure(e.stderr),
         )
 
 
