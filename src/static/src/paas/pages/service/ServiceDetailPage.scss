@@ -564,6 +564,31 @@ $woow-radius-lg: 1.25rem;
     font-size: 0.8rem;
 }
 
+// #1455：清除已設定的金鑰
+.o_woow_config_clear_secrets {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+
+    &__title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+
+    &__item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+        color: $woow-text-secondary;
+        cursor: pointer;
+    }
+}
+
 .o_woow_config_textarea {
     width: 100%;
     min-height: 400px;

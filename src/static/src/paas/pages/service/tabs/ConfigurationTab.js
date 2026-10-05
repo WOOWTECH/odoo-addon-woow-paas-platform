@@ -35,6 +35,8 @@ export class ConfigurationTab extends Component {
             editedValues: {},
             showAdvanced: false,
             errors: {},
+            // #1455：勾選要清除的憑證欄位（spec key 陣列）。
+            clearKeys: [],
         });
     }
 
@@ -106,9 +108,23 @@ export class ConfigurationTab extends Component {
         return spec.default !== undefined ? spec.default : "";
     }
 
+    /**
+     * #1455：憑證欄位有沒有設定——讀後端的 `password_specs_set`（布林，不含值）。
+     * 舊後端沒有這個欄位時退回「helm_values 裡有沒有非空值」（遮罩後仍是非空）。
+     */
+    isSecretSet(spec) {
+        const states = this.props.service.password_specs_set;
+        if (states && Object.prototype.hasOwnProperty.call(states, spec.key)) {
+            return !!states[spec.key];
+        }
+        const value = this.getSpecValue(spec);
+        return value !== undefined && value !== null && value !== "";
+    }
+
     formatSpecValue(spec) {
         const value = this.getSpecValue(spec);
-        if (spec.type === "password") return "********";
+        // #1455：從沒設定過的金鑰原本也顯示成 ********，租戶以為已設定。
+        if (spec.type === "password") return this.isSecretSet(spec) ? "********" : _t("Not set");
         if (spec.type === "boolean") return value ? _t("Enabled") : _t("Disabled");
         if (value === null || value === undefined) return "-";
         return String(value);
@@ -117,6 +133,33 @@ export class ConfigurationTab extends Component {
     /** 是否為憑證欄位（`type: password`）。三處回填／驗證／送出共用同一判準。 */
     isPasswordSpec(spec) {
         return spec.type === "password";
+    }
+
+    /** #1435：有憑證欄位的服務才顯示「改金鑰會重新啟動」提示。 */
+    get hasSecretSpecs() {
+        return this.allSpecs.some((spec) => this.isPasswordSpec(spec));
+    }
+
+    /**
+     * #1455：可清除的憑證欄位＝optional、目前有設定的 password spec。
+     * 與後端 `_clearable_password_keys` 同一判準（required 的清掉服務就壞了）。
+     */
+    get clearableSecretSpecs() {
+        return this.configurableSpecs.optional.filter(
+            (spec) => this.isPasswordSpec(spec) && this.isSecretSet(spec)
+        );
+    }
+
+    isClearChecked(spec) {
+        return this.state.clearKeys.includes(spec.key);
+    }
+
+    toggleClear(spec) {
+        if (this.isClearChecked(spec)) {
+            this.state.clearKeys = this.state.clearKeys.filter((k) => k !== spec.key);
+        } else {
+            this.state.clearKeys = [...this.state.clearKeys, spec.key];
+        }
     }
 
     /**
@@ -142,6 +185,7 @@ export class ConfigurationTab extends Component {
         this.state.editing = true;
         this.state.error = null;
         this.state.errors = {};
+        this.state.clearKeys = [];
     }
 
     cancelEditing() {
@@ -150,6 +194,7 @@ export class ConfigurationTab extends Component {
         this.state.error = null;
         this.state.errors = {};
         this.state.showAdvanced = false;
+        this.state.clearKeys = [];
     }
 
     onHelmValueUpdate(key, value) {
@@ -197,6 +242,10 @@ export class ConfigurationTab extends Component {
                 delete payload[spec.key];
             }
         }
+        // #1455：勾了清除的欄位不送值（後端也是「清除優先」）。
+        for (const key of this.state.clearKeys) {
+            delete payload[key];
+        }
         return payload;
     }
 
@@ -223,7 +272,8 @@ export class ConfigurationTab extends Component {
         if (!this.validateForm()) return;
 
         const payload = this.buildSavePayload();
-        if (!this.hasChanges(payload)) {
+        // #1455：只勾「清除」時 payload 是空的，但仍要送出。
+        if (!this.hasChanges(payload) && !this.state.clearKeys.length) {
             this.cancelEditing();
             return;
         }
@@ -235,13 +285,16 @@ export class ConfigurationTab extends Component {
             const result = await cloudService.updateService(
                 this.props.workspaceId,
                 this.props.service.id,
-                payload
+                payload,
+                null,
+                this.state.clearKeys
             );
 
             if (result.success) {
                 this.state.editing = false;
                 this.state.editedValues = {};
                 this.state.showAdvanced = false;
+                this.state.clearKeys = [];
                 if (this.props.onSave) {
                     this.props.onSave(result.data);
                 }

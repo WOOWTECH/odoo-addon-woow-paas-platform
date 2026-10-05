@@ -20244,6 +20244,78 @@ msgstr ""
 "服務第一次進入「執行中」的時間。空白表示從未正常運作過：刪除後留下的磁碟只保留 1 天。18.0.1.0.209 以前建立的服務已保守回填。"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+msgid "Not set"
+msgstr "未設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Changing or clearing an API key or password restarts the service after saving (about a minute) so the new value takes effect; work in progress will be interrupted."
+msgstr "變更或清除 API 金鑰、密碼後，儲存時服務會重新啟動（約一分鐘）讓新值生效，進行中的工作會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Clear saved keys"
+msgstr "清除已設定的金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Clear"
+msgstr "清除"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Restart Service"
+msgstr "重新啟動服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Restart"
+msgstr "重新啟動"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Restarting..."
+msgstr "重新啟動中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Every component of the service is restarted; this usually takes about a minute."
+msgstr "服務的所有元件都會重新啟動，通常約需一分鐘。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "The service is unavailable while it restarts, and work in progress is interrupted."
+msgstr "重新啟動期間服務暫時無法使用，進行中的工作會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Data and settings are kept."
+msgstr "資料與設定都會保留。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.js:0
+msgid "Failed to restart the service"
+msgstr "無法重新啟動服務"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This type of service cannot be restarted from the platform."
+msgstr "這類服務無法從平台重新啟動。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
@@ -20254,11 +20326,23 @@ msgstr "請刪除這個服務；如需提早釋放儲存空間請聯絡客服，
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Only a running service can be restarted."
+msgstr "只有執行中的服務可以重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
 "Its subscription has been cancelled automatically, so it will not be charged"
 " again; the points already paid have been refunded to your wallet for the "
 "unused days."
 msgstr "這個服務的訂閱已自動取消，不會再扣款；已扣的點數已依未使用天數退回錢包。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Service has no helm release yet — deploy first before restarting it."
+msgstr "服務尚未完成部署，無法重新啟動。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -20373,3 +20457,27 @@ msgstr "計費開始日"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
 msgid "Service Guide"
 msgstr "使用說明"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "An initialization request for this service may still be running. Please try again in a few minutes."
+msgstr "這個服務的初始化可能仍在進行中，請過幾分鐘再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Restart failed. Check service status and retry."
+msgstr "重新啟動失敗，請確認服務狀態後再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while restarting the service."
+msgstr "重新啟動服務時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "These settings cannot be cleared: %(keys)s"
+msgstr "這些設定無法清除：%(keys)s"
