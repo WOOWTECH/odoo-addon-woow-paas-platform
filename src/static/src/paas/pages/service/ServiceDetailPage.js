@@ -12,6 +12,7 @@ import { McpServersTab } from "./tabs/McpServersTab";
 import { AccessTab } from "./tabs/AccessTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
+import { RestartServiceModal } from "../../components/modal/RestartServiceModal";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
@@ -59,6 +60,7 @@ export class ServiceDetailPage extends Component {
         AccessTab,
         DeleteServiceModal,
         RollbackModal,
+        RestartServiceModal,
         SkipTrialModal,
         EditDomainModal,
         ChangePlanModal,
@@ -80,6 +82,7 @@ export class ServiceDetailPage extends Component {
             currentTab: this.props.initialTab || "overview",
             showDeleteModal: false,
             showRollbackModal: false,
+            showRestartModal: false,
             showSkipTrialModal: false,
             showDomainModal: false,
             showChangePlanModal: false,
@@ -458,6 +461,36 @@ export class ServiceDetailPage extends Component {
     }
 
     // Rollback Modal
+    // #1432 Restart
+    /**
+     * 「重新啟動」只對 running 的服務開放（後端 `_restart_workloads` 同一判準）；
+     * VM 型服務不支援（鏡射 `template.restart_supported`，前端不自建判準）。
+     */
+    get canRestart() {
+        return (
+            !!this.service &&
+            this.service.state === "running" &&
+            this.service.template?.restart_supported !== false
+        );
+    }
+
+    get showRestartButton() {
+        return !!this.service && this.service.template?.restart_supported !== false;
+    }
+
+    showRestart() {
+        this.state.showRestartModal = true;
+    }
+
+    hideRestart() {
+        this.state.showRestartModal = false;
+    }
+
+    onRestarted() {
+        this.hideRestart();
+        this.loadService();
+    }
+
     showRollback() {
         this.state.showRollbackModal = true;
     }

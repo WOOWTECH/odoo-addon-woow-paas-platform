@@ -414,7 +414,7 @@ export const cloudService = reactive({
      * @param {string} version - Optional chart version
      * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
      */
-    async updateService(workspaceId, serviceId, values, version = null) {
+    async updateService(workspaceId, serviceId, values, version = null, clearKeys = null) {
         this.operationLoading.updateService = true;
         try {
             const params = {
@@ -423,6 +423,10 @@ export const cloudService = reactive({
             };
             if (version) {
                 params.version = version;
+            }
+            // #1455：要清除的憑證欄位（只在有勾選時送，舊後端不認得也不會帶到）。
+            if (clearKeys && clearKeys.length) {
+                params.clear_keys = clearKeys;
             }
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, params);
             if (result.success) {
@@ -449,6 +453,31 @@ export const cloudService = reactive({
      * @param {number[]} odooAddonIds - Selected addon IDs
      * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
      */
+    /**
+     * #1432：重新啟動服務（rollout restart 所有 Deployment／StatefulSet）。
+     * 後端只「下達」不等待，回來時服務已轉 `upgrading`，由輪詢轉回 running。
+     */
+    async restartService(workspaceId, serviceId) {
+        this.operationLoading.restartService = true;
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}`, {
+                action: "restart",
+            });
+            if (result.success) {
+                const index = this.services.findIndex(s => s.id === serviceId);
+                if (index !== -1) {
+                    this.services[index] = { ...this.services[index], ...result.data };
+                }
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.restartService = false;
+        }
+    },
+
     async updateServiceAddons(workspaceId, serviceId, odooAddonIds) {
         this.operationLoading.updateServiceAddons = true;
         try {
