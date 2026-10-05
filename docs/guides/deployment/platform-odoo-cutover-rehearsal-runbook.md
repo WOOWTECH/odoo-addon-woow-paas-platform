@@ -19,7 +19,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 |---|---|---|
 | R1 | 沙盒工具以 web／cron 副本 0 部署 `woow-odoo` platform profile 的子命令與參數 | cc/woowprd#8 |
 | R2 | 正式平台 image＋chart 0.2.5 的實機 smoke 結論（彩排前置） | woow-paas/woow-paas-charts#99 |
-| R3 | 中和腳本名、斷言 fixture、中和段彩排 runbook 的檔名與介面 | #1206 |
+| R3 | ~~中和腳本名、斷言 fixture、中和段彩排 runbook 的檔名與介面~~ 已定：`seed-from-prod.sh`／`neutralize-clone.sh`／`prod-clone/assertions.toml`／[prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206 PR；fixture 待人審 commit） | #1206 |
 | R4 | 穩定 Service 名與 raw bundle 目錄（暫名 `paas-odoo-active`／`paas-odoo-edge/`） | woow-paas/paas-app-bundle-cd#143 |
 | R5 | 平台新 release 名與 bundle 目錄（暫名 `paas-odoo-platform`） | woow-paas/paas-app-bundle-cd#144 |
 | R6 | 平台還原的人工段（helper pod 形狀、指令） | #1217 |
@@ -64,7 +64,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 - 只處理平台 `woow_prod`（14057 D1）。租戶 odoo DB clone 不在範圍。
 - ⛔ 禁止重用或覆蓋 `dev-sandbox-stg`：它是 `seed-from-stg.sh` 的來源，也是 `paas-operator-stg` 的 `odooBaseUrl` 目標，誤用＝stg 全租戶事故（13439 ⑥）。
-- 與 #1206 交付 3 分工：中和段、斷言表、外連證據、PII 與銷毀規則一律**引用** #1206〔待定：#1206（R3）〕；本檔只寫 chart 切換段。
+- 與 #1206 交付 3 分工：中和段、斷言表、外連證據、PII 與銷毀規則一律**引用** [prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206）；本檔只寫 chart 切換段。
 - 彩排不是正式切換的替身；與正式切換的差異列在 A3 差異表（CONTEXT.md:136）。
 - 彩排使用的現成值（已落地，不必佔位）：
   - chart：`woow-odoo` **0.2.5**（woow-paas/woow-paas-charts#120 merged；platform `addons_path` 含 `/opt/woow/addons`）。彩排改用含 platform 記憶體新預設的下一版〔待定：woow-paas/woow-paas-charts#99（R9）〕。
@@ -104,11 +104,11 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 > 順序依 R2「彩排順序改寫」（14662 A3、14673）。#1162 不變式：**任何會啟動 Odoo 程序的步驟之後都要再過一次 gate**（14057 答案表「順序」）。一次性 `--stop-after-init` 升級 Job 不在新 chart 路徑上（14662）。
 
-1. 【agent】restore：`seed-from-prod.sh <slug> --from <備份組>`〔待定：#1206（R3）〕。
+1. 【agent】restore：先 `seed-from-prod.sh receive <slug> --context woow-k3s --set <set>` 開搬運洞、由人類 push 備份組，再 `seed-from-prod.sh restore <slug> --context woow-k3s --set <set> --no-upgrade-marker`（本段不預寫 marker，見下一步；細節 [prod clone 中和 runbook](prod-clone-neutralization-runbook.md) §B～§C）。
    - 建庫 locale 取來源 `woow_prod` 實測值 `UTF8 | en_US.UTF-8 | en_US.UTF-8`（PG 17.6，2026-09-27 唯讀；R2-Q4、14676）；不套 chart canonical。
    - 資料段以 `odoo` 帳號 `pg_restore -1 -L <濾 COMMENT - EXTENSION>`；⛔ 不用 `-C`、⛔ 不用 `--no-comments`（14201 D2）。
-   - ⚠ platform profile web 副本 0 時 bootstrap 從未跑過 ⇒ 新 postgres 上還沒有 `odoo` 角色（bootstrap ② 才建，chart `files/bootstrap.sh` 檔頭 ②）。restore 前要由 superuser 先建 `odoo` 角色（屬性同 bootstrap：`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`），密碼之後由 bootstrap ② 每次同步。〔待驗：本次彩排實測，回填 #1206 腳本〕
-2. 【agent】Stage A 中和＋gate：`neutralize-clone.sh <slug> --db woow_prod`，斷言表全綠才往下〔待定：#1206（R3）〕。
+   - ⚠ platform profile web 副本 0 時 bootstrap 從未跑過 ⇒ 新 postgres 上還沒有 `odoo` 角色（bootstrap ② 才建，chart `files/bootstrap.sh` 檔頭 ②）。restore 前要由 superuser 先建 `odoo` 角色（屬性同 bootstrap：`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`），密碼之後由 bootstrap ② 每次同步。已寫進 `seed-from-prod.sh restore`（密碼＝chart credentials 的 `odoo-password`）。
+2. 【agent】Stage A 中和＋gate：`restore` 結尾自動跑 `neutralize-clone.sh`（不帶 `--write-upgrade-marker`），斷言表全綠才往下。
    - 同一段**不**預寫 `upgrade_done`——A4 第 1 步要先刻意驗一次「無 marker」的 fail-loud（14662 A4）。
 3. 【agent】記錄差異表（彩排 vs 正式切換；固定段落引 14057 D10 (5)，已依 14676、14662 修訂）：
 
@@ -133,7 +133,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 讀法：`kubectl --context woow-k3s -n dev-sandbox-<slug> logs deploy/<release> -c upgrade-gate`（chart README）。
    - 記錄：exit code、訊息全文、pod 是否停在 `Init:Error`。
 2. 【agent】web 副本歸 0，重跑 Stage B 中和＋gate（上一步啟動過 Odoo 程序的 initContainer；#1162 不變式，14662 推導）。
-3. 【agent】預寫 marker（屬 Stage A 同段，在 web 起來前完成；14673）：
+3. 【agent】預寫 marker（屬 Stage A 同段，在 web 起來前完成；14673）：`neutralize-clone.sh <slug> --context woow-k3s --write-upgrade-marker`（同時重跑中和＋gate）。等價 SQL：
 
    ```sql
    -- 在沙盒 postgres 的 woow_prod 執行；digest 取 values image.digest，core_date 取 image 內 dpkg-query
@@ -216,7 +216,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## A10 報告與銷毀
 
-1. 【agent】寫彩排報告，固定段落引 14057 D10 (5)：差異表（A3）、既知限制（clone 當下卡 deploying／upgrading 的服務整場不動，14057 D4）、產物 PII 規則（只輸出 count／聚合、截圖不拍 PII 頁、不附 Gitea、報告後刪本機目錄）、外連證據（引 #1206）〔待定：#1206（R3）〕。
+1. 【agent】寫彩排報告，固定段落引 14057 D10 (5)：差異表（A3）、既知限制（clone 當下卡 deploying／upgrading 的服務整場不動，14057 D4）、產物 PII 規則（只輸出 count／聚合、截圖不拍 PII 頁、不附 Gitea、報告後刪本機目錄）、外連證據（[prod clone 中和 runbook](prod-clone-neutralization-runbook.md) §E）。
 2. 【人類】覆核者親跑斷言 SQL 與兩支 operator log 指令（14057 D10 (4)）。
 3. 【agent】銷毀沙盒：`/woow-dev:k8s-dev-sandbox destroy dev-sandbox-<slug> --context woow-k3s`。
    - 證據＝ns、PVC、PV 都已不存在；TTL 只當後備（cc/woowprd#7 實測過靜默失效；14057 D10 (5)）。
