@@ -3,7 +3,7 @@ title: 平台 Odoo 換 chart：cutover runbook（Step 1）
 category: guides
 status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-06T05:30:00Z
+updated: 2026-10-06T06:30:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -61,7 +61,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | 14201、14686 | [#1174 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1174#issuecomment-14201) |
 | 14363、14698 | [#1194 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1194#issuecomment-14363) |
 | 14632（R2-Qn） | [woow-paas/woow-paas-charts#81 Round 2 resolution](https://git-prod.woowtech.io/woow-paas/woow-paas-charts/issues/81#issuecomment-14632) |
-| 14662、16804 | [#1231 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1231#issuecomment-14662) |
+| 14662、16804、18487 | [#1231 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1231#issuecomment-14662) |
 | 14668、16802 | [woow-paas/paas-app-bundle-cd#144 留言](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/144#issuecomment-14668) |
 | WMO#5 裁決 | [woow-paas/woow-machines-operator#5 留言 18108](https://git-prod.woowtech.io/woow-paas/woow-machines-operator/issues/5#issuecomment-18108)（Q1～Q6）；#1231 pointer 留言 18116 |
 | #1137 scout | [`2026-09-19-platform-odoo-chart-gap.md`](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/src/branch/research/platform-odoo-chart-gap/docs/scout/2026-09-19-platform-odoo-chart-gap.md)（未合併分支） |
@@ -81,7 +81,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | 副本鍵 | web `replicas`、cron `cron.replicas` | chart README §values 重點；cc/woowprd#8 留言 17217 |
 | marker | `woow_paas_platform.upgrade_done`＝`{"digest":"sha256:…","core_date":"18.0.YYYYMMDD"}` | chart README 固定契約；chart `files/lib.sh` |
 | 平台 image 線 | `paas-odoo-official`（`Dockerfile.official`，官方 `odoo:18.0-20250807` base，Odoo deb `18.0.20250807`）；最新一顆 `20261005.1128@sha256:76debd4b2176fcfc039628b57569fa7d3ee99e9eb19208910ae49cd218cb6c73`（addon **18.0.1.0.209**）；cutover 當天 prod 若已升版，照 B5 第 1～3 步以當時版號重 build | woow-paas/paas-odoo-ci#145 留言 18075；16804 |
-| 回退窗口 build 規則 | **不雙 build**；舊 Bitnami release 只動 `replicas`、image 凍結在 cutover 前那顆；回切時維持該 image（2026-10-04 發起人裁決，維持 13439 ③；#1392 已改題為「平台換 chart 後發版改 build `paas-odoo-official`」） | 13439 ③；#1392 |
+| 回退窗口 build 規則 | **不雙 build**；舊 Bitnami release 只動 `replicas`、image 凍結在 cutover 前那顆（2026-10-04 發起人裁決，維持 13439 ③；#1392 已改題為「平台換 chart 後發版改 build `paas-odoo-official`」）。窗口內**照常發版**；回切時若平台已升版，先建同版 Bitnami image 並改 pin，再反向搬遷（2026-10-06 發起人裁決；[回切 runbook](platform-odoo-cutover-switchback-runbook.md) C0a） | 13439 ③；#1392；18487 |
 | platform 記憶體預設 | `limit_memory_soft` 4GiB／`limit_memory_hard` 5GiB，由 chart 預設提供（0.2.6 起）、values 不明設 | woow-paas/woow-paas-charts#99 |
 | 新 release PVC | data 10Gi、pg 10Gi，`storageClass: longhorn`（Retain）；必須覆寫 chart 預設的 5/8Gi `longhorn-delete`；`paas-odoo-backup-pvc` cutover 前擴到 10Gi（併入 PR-A） | WMO#5 裁決 Q1、Q6；cd#144 留言 18127 |
 | 升級閘與備份 | 升級閘跑 `-u all` 前**不會**自動做 pre-upgrade 備份 ⇒ 每次會換新 release image digest 的發版，都要先由人做 snapshot＋on-demand 備份（B8 第 7 步） | charts#99 留言 18097；#1231 留言 18116 |
@@ -290,7 +290,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 3. 【agent】窗口內每次平台發版前檢查 `git diff v<cutover 當下版>..v<新版> -- src/migrations/` 為空（以整個 release 連坐，跟版 seed PR 也會被同 release 的 migration 連坐；13439 ③、14356）。
    - 非空 ⇒ 在 #1142 記錄「窗口提前關閉（單向門）」並通知發起人；反向搬遷不再保證（13439 ③）。
 4. 【agent】窗口內 pin 規則：新 release 只 pin `paas-odoo-official` 的 digest；舊 release 只允許動 `replicas`，image 凍結在 cutover 前那顆（env、persistence、`postgresql.*` 同樣凍結；13439 ③；2026-10-04 發起人裁決）。
-   - 回切時舊 release 維持 cutover 前 image：窗口內禁含 migration 的發版，所以回切後只有 addon 程式碼較舊，DB 結構不受影響（2026-10-04 發起人裁決）。
+   - 2026-10-06 發起人裁決（18487）：窗口內照常發版（.210 起）。回切時若 prod 已不是 cutover 當下版，先依[回切 runbook](platform-odoo-cutover-switchback-runbook.md) C0a 手動 dispatch `paas-odoo-ci` `build-image.yml`（`image_name=paas-odoo`、`addon_ref=v<當時 prod 版號>`，經 `/approve`），建一顆同版 Bitnami image，CD 把舊 release 的三處 pin 改到它，再反向搬遷。沒有升版時才維持 cutover 前 image（2026-10-04 發起人裁決）。
+   - 為什麼不能沿用舊 image：舊 release 的 `module-version-gate` 不分方向，image 較舊時會用舊程式碼跑 `-u`，把 seed 靜默降級。窗口內禁含 migration 的發版這條仍然有效，C0a 只拉齊程式碼與 seed 版本。
 5. 【agent】窗口內 `postgres.extensions.vector` 維持 `false`；回退窗口結束後隨 Step 2 的 CD PR 改回 `true`（R2-Q6）。不做 Step 2（13439 ③）。
 6. 【agent】緊急回切入口：[回切 runbook](platform-odoo-cutover-switchback-runbook.md) C1。
 7. 【人類】窗口內（以及之後）每一次會改變新 release image digest 的平台發版：升級閘會跑 `-u all`，且**不會**先自動備份（charts#99 留言 18097）⇒ 發版前由發起人親跑新 release 兩顆 PVC 的 Longhorn snapshot（`data-paas-odoo-platform-postgresql-0`、`paas-odoo-platform-data`），驗 `readyToUse=true`／`markRemoved=false`（WMO#5 裁決 Q3）；每顆 volume 保留最近 3 次發版前的 snapshot（Q4）。
