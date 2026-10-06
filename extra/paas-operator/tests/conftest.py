@@ -73,6 +73,24 @@ def storage_quota_snapshot(request):
 
 
 @pytest.fixture(autouse=True)
+def orphaned_release_resources(request):
+    """#1157：``create_release`` 開通前會查同名 release 的孤兒 PVC／DataVolume——真 kubectl。
+
+    預設回「沒有孤兒資源」（＝檢查放行，行為與加入檢查前相同）。要測 409／503 的測試把本
+    fixture 收進參數、改 ``return_value``／``side_effect`` 即可。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    with patch(
+        "src.api.releases.k8s_service.list_orphaned_release_resources",
+        return_value={"pvcs": [], "datavolumes": []},
+    ) as mock_lookup:
+        yield mock_lookup
+
+
+@pytest.fixture(autouse=True)
 def longhorn_capacity_snapshot(request):
     """#1415：``create_release`` 開通前與 ``/api/cluster/storage-capacity`` 會讀 Longhorn
     節點／設定與 StorageClass——真 kubectl，同樣擋掉。

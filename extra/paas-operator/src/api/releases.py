@@ -360,6 +360,71 @@ def _precheck_cluster_storage_capacity(request: ReleaseCreateRequest) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
+#: #1157：同名 release 的孤兒 PVC／DataVolume 還在 ⇒ 拒絕 install。平台照一般錯誤顯示
+#: （release name 隨機，正常流程撞不到；會撞到的是手動操作與 integration test）。
+ORPHANED_RELEASE_RESOURCES_ERROR_CODE = "orphaned_release_resources_exist"
+#: #1157：查不到孤兒資源（kubectl 失敗）⇒ 不放行，回 503。
+ORPHANED_RELEASE_CHECK_UNAVAILABLE_ERROR_CODE = "orphaned_release_check_unavailable"
+
+
+def _precheck_orphaned_release_resources(namespace: str, name: str) -> None:
+    """#1157 裁決 A：install 前拒絕「同 namespace＋同 release name」的孤兒資源接回。
+
+    uninstall 留下的 PVC／DataVolume 帶 ``orphaned-at`` 等三個 label（``delete_release``）。
+    同名重裝時 helm 會靜默接回它們（舊站原地復活、新填的 admin 帳密不生效），而 label
+    沒人清 ⇒ 回收 CronJob 在保留期到期後刪掉活站資料。這裡在任何叢集寫入之前擋下，
+    回 409 要呼叫端明確表態：確認資料不要就先刪掉那些資源，或改用新的 release name。
+
+    P1 刻意**不**提供「接回」旗標（裁決不做 B：會讓上一個租戶的資料／備份歷史被新站
+    接回）；日後要加，接回成功後必須同時拔掉三個 label。
+
+    與 #1348／#1415 兩個預檢相反，這裡查詢失敗走 **fail-closed**（503）：放行就等於回到
+    #1157 的資料遺失路徑；而 kubectl 連 ``get pvc`` 都失敗時，接下來的 helm install 本來
+    也很難成功。
+    """
+    try:
+        found = k8s_service.list_orphaned_release_resources(namespace, name)
+    except KubectlException as exc:
+        logger.error(
+            "Orphaned-resource pre-check failed for %s/%s; refusing install: %s",
+            namespace, name, exc.stderr or exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": ORPHANED_RELEASE_CHECK_UNAVAILABLE_ERROR_CODE,
+                "message": (
+                    f"Cannot verify whether release {name} in {namespace} has orphaned "
+                    f"PVCs/DataVolumes from a previous uninstall; install refused. Retry later."
+                ),
+            },
+        )
+    pvcs = sorted(found.get("pvcs") or [])
+    datavolumes = sorted(found.get("datavolumes") or [])
+    if not pvcs and not datavolumes:
+        return
+    logger.warning(
+        "Refusing install of %s/%s: orphaned resources from a previous uninstall: "
+        "pvcs=%s datavolumes=%s", namespace, name, pvcs, datavolumes,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error_code": ORPHANED_RELEASE_RESOURCES_ERROR_CODE,
+            "message": (
+                f"Release {name} in {namespace} still has orphaned resources from a previous "
+                f"uninstall (PVCs: {', '.join(pvcs) or '-'}; DataVolumes: "
+                f"{', '.join(datavolumes) or '-'}). Installing under the same name would "
+                f"silently re-attach the old data while the orphan labels stay, so the "
+                f"pvc-cleanup CronJob would later delete the live data. Either delete these "
+                f"resources first (if the data is not needed) or use a new release name."
+            ),
+            "pvcs": pvcs,
+            "datavolumes": datavolumes,
+        },
+    )
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -376,10 +441,14 @@ async def create_release(request: ReleaseCreateRequest):
         Information about the created release
 
     Raises:
-        HTTPException: If installation fails（儲存配額不足回 409，#1348；叢集儲存
-            排程額度放不下回 409，#1415）
+        HTTPException: If installation fails（同名 release 的孤兒 PVC／DataVolume 還在回
+            409、查不到回 503，#1157；儲存配額不足回 409，#1348；叢集儲存排程額度放不下
+            回 409，#1415）
     """
     try:
+        # #1157：同名 release 的孤兒資源還在就拒絕（helm 會靜默接回、回收 CronJob 之後
+        # 會刪掉活站資料）——放最前面：它是確定性的拒絕，不必先跑容量預檢的 dry-run。
+        _precheck_orphaned_release_resources(request.namespace, request.name)
         # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
         _precheck_storage_quota(request.namespace)
         # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
