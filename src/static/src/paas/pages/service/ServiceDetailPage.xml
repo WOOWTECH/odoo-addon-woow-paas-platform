@@ -335,7 +335,7 @@
                 currentPlanId="serviceForModal.subscription?.plan_id ?? undefined"
                 loadPlans="loadCloudServicePlans"
                 confirmChange="confirmCloudServiceChangePlan"
-                resourcesNotResized="true"
+                resizesResources="true"
                 onClose.bind="hideChangePlan"
                 onChanged.bind="onPlanChanged"/>
 

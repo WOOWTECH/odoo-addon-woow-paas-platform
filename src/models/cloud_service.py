@@ -2,6 +2,7 @@ import contextlib
 import copy
 import json
 import logging
+import math
 import re
 import secrets
 import time
@@ -77,6 +78,19 @@ WOOW_ODOO_SERVICE_PORT = 80
 #: 不得落 `helm_values`（`_strip_mcp_sensitive_values`）；詳情 API 的第二道遮罩見
 #: `PaasController._sanitize_helm_values`。
 WOOW_ODOO_ADMIN_PASSWORD_PATH = ('conf', 'adminPassword')
+
+#: #1158：K8s storage quantity（只收二進位單位，平台與 chart 一律寫 Gi）→ GiB。
+_STORAGE_QUANTITY_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*(Mi|Gi|Ti)\s*$')
+_STORAGE_UNIT_GIB = {'Mi': 1 / 1024, 'Gi': 1, 'Ti': 1024}
+
+
+def _storage_quantity_gib(size):
+    """``'30Gi'`` → ``30.0``；看不懂（含十進位單位、純數字）回 ``None``。"""
+    match = _STORAGE_QUANTITY_RE.match(str(size))
+    if not match:
+        return None
+    return float(match.group(1)) * _STORAGE_UNIT_GIB[match.group(2)]
+
 
 #: #1130：Bitnami odoo 時代 seed 寫進每台服務 helm_values 的頂層鍵（woow-odoo tenant schema
 #: 全部拒收）。`_woow_odoo_legacy_release_error` 用它辨識 #1128 範圍的存量服務。
@@ -2135,7 +2149,8 @@ class CloudService(models.Model):
         # 管線）。reset_values 語意讓 chart 自身預設補位，不再以 --reuse-values
         # 沿用舊 coalesced values（同一 bug class，見 #411）。chart 版本見下方
         # `pinned_chart_version`：reset **不**升版。
-        values = self._assemble_deploy_values()['values']
+        # #1158：不疊方案規格——那會改 pod template，15 秒等不到新 pod（F-461-2）。
+        values = self._assemble_deploy_values(apply_plan=False)['values']
         if new_username is not None:
             # 只改送給 operator 的這份；helm_values 等 2xx 之後才落庫（2xx 前失敗
             # 叢集仍是舊帳號，DB 也必須還是舊帳號）。
@@ -2972,7 +2987,7 @@ class CloudService(models.Model):
     #  #411 — 全量 values 組裝（單一真相源）                              #
     # ------------------------------------------------------------------ #
 
-    def _assemble_deploy_values(self):
+    def _assemble_deploy_values(self, apply_plan=True):
         """組裝部署用的全量「非敏感」helm values ＋ expose_config（單一真相源）。
 
         Fresh install 與既存 release 升級**共用這一條**組裝管線，讓 helm 在
@@ -3006,6 +3021,13 @@ class CloudService(models.Model):
            ``_WORKSPACE_URL_INJECTORS``。
         8. odoo addon selection（initContainer + addons_path）
 
+        #1158：步驟 1 之後再疊**目前訂閱方案**的 cs_* 規格（``_apply_plan_spec_overlay``
+        既有服務模式：儲存只擴不縮）——方案是規格的真相源，換方案的背景 upgrade 若失敗，
+        之後任何一次 deploy／redeploy／reconfigure 都收斂到目前方案。換方案當下已把同一份
+        結果寫回 ``helm_values``，所以正常情況這一步是 no-op（prod 2026-10-06 盤點 44 台
+        0 差異）。``apply_plan=False`` 只給 reset 密碼那條（``--atomic`` 15 秒預算）：方案
+        規格改的是 pod template，夾帶進 reset 必定等不到新 pod 而回退（F-461-2）。
+
         **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，
         取 ``['values']`` 去比對 ``helm get values <rel>``（stored、非敏感）。
         ``sensitive_values``（admin_password）不在此組：它是敏感值、且 stored
@@ -3027,6 +3049,11 @@ class CloudService(models.Model):
         # 的 git.tokenHosts「github.com, git.example.com」→ https URL list）。
         # helm_values 保留租戶原文；不合法的值丟掉、chart 預設補位。
         values = template._apply_spec_formats(values)
+        if apply_plan:
+            plan = self._current_plan()
+            if plan:
+                values = self._apply_plan_spec_overlay(
+                    values, template, plan, existing=True)
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -4627,6 +4654,11 @@ class CloudService(models.Model):
           ``src/data/cloud_service_cron.xml:15-23`` 未設 ``user_id``，且 #699
           實測其身分為 ``SUPERUSER_ID``，故 ir.rule 不生效；租戶不能取得該
           cron 身分，因此不是攻擊面。
+        - ``src/controllers/paas.py`` 的 ``api_service_change_plan``（#1158）：
+          ``auth="user"``、owner/admin role gate 之後，以 ``_PaaSCapability`` 取得的
+          ``service`` 呼叫（與 ``_update_service`` 同一個來源與身分）；寫的是
+          ``allocated_*``／state／``helm_chart_version``／``last_upgraded_at``／
+          ``error_message``，與 reconfigure 寫的欄位同類。
 
         新增帶 ``extra_vals`` 的呼叫點時，須回來補上這份身分清單（#699）。
         """
@@ -8709,11 +8741,87 @@ class CloudService(models.Model):
         }
 
     @api.model
-    def _apply_plan_spec_overlay(self, values, template, plan):
+    def _plan_storage_size(self, current_size, plan_gb):
+        """#1158 Q2：既有服務套方案時 ``persistence.size`` 的規則——**只擴不縮**。
+
+        ⚠ 暫定做法（討論票 #1512）：改策略只改這一個函式。PVC 不能縮（K8s API 直接拒絕，
+        整次 helm upgrade 失敗），所以新方案較小時保留目前大小、只調 CPU／RAM／workers。
+        現值缺 ⇒ 用方案值；現值看不懂 ⇒ 保留原字串（不冒險送出可能更小的值）。
+        """
+        plan_size = f'{plan_gb}Gi'
+        if not current_size:
+            return plan_size
+        current_gib = _storage_quantity_gib(current_size)
+        if current_gib is None:
+            _logger.warning(
+                "#1158 persistence.size %r 無法解析，保留原值不套方案 %sGi",
+                current_size, plan_gb)
+            return current_size
+        return current_size if current_gib >= plan_gb else plan_size
+
+    def _current_plan(self):
+        """服務目前訂閱的方案（sudo；沒有訂閱回空 recordset）。"""
+        self.ensure_one()
+        return self._sub().sh_subscription_plan_id
+
+    def _plan_values_for(self, plan):
+        """#1158：這台**既有**服務改套 ``plan`` 之後應存的 helm values（新 dict，不寫 DB）。
+
+        與 create 同一條 overlay，但走既有服務模式（儲存只擴不縮、不碰 Bitnami 字串替換）。
+        woow-odoo values 缺 ``conf`` 時照 overlay 的 fail-loud raise ``ValueError``。
+        """
+        self.ensure_one()
+        values = copy.deepcopy(self._helm_values_dict() or {})
+        return self._apply_plan_spec_overlay(
+            values, self.template_id, plan, existing=True)
+
+    def _plan_allocated_vals(self, plan, values):
+        """#1158 Q4：``plan`` 套在 ``values`` 上時帳面 ``allocated_*`` 應有的值。
+
+        CPU／RAM 照 ``_allocated_vals_from``；儲存記**實際**大小（只擴不縮之下可能大於
+        方案值），讀不到實際大小時退回方案值。
+        """
+        self.ensure_one()
+        vals = self._allocated_vals_from(self.template_id, plan)
+        if plan.cs_storage_gb:
+            size = (values.get('persistence') or {}).get('size')
+            gib = _storage_quantity_gib(size) if size else None
+            if gib is not None:
+                vals['allocated_storage_gb'] = math.ceil(gib)
+        return vals
+
+    def _plan_change_allocated_vals(self, old_plan, new_plan, old_values, new_values):
+        """#1158 Q4：換方案要寫的 ``allocated_*``（只回有變的欄位）。
+
+        逐欄比對「現值」與「舊方案推得的值」：不相等＝營運手調過（例：prod service 174
+        刻意調大 allocated 來放大 ns quota），保留現值、只 log——租戶換方案不該把它洗掉。
+        """
+        self.ensure_one()
+        expected_old = self._plan_allocated_vals(old_plan, old_values)
+        target = self._plan_allocated_vals(new_plan, new_values)
+        vals = {}
+        for field, new in target.items():
+            current = self[field]
+            if abs((current or 0) - (expected_old[field] or 0)) > 1e-6:
+                _logger.info(
+                    "[CLOUD_SVC] change_plan service=%s 保留手調的 %s=%s"
+                    "（舊方案推得 %s，新方案 %s）",
+                    self.id, field, current, expected_old[field], new)
+                continue
+            if abs((current or 0) - (new or 0)) > 1e-6:
+                vals[field] = new
+        return vals
+
+    @api.model
+    def _apply_plan_spec_overlay(self, values, template, plan, existing=False):
         """#332 runtime overlay：把選定 plan 的 cs_* 疊進 helm values。
 
         刻意不改 template seed（避開 sticky noupdate）；cs_* 為 0 的維度一律
         不碰＝與現狀 bit-for-bit 相同。就地疊加並回傳同一 dict。
+
+        #1158 ``existing=True``（既有服務：換方案、``_assemble_deploy_values`` 重算）：
+        儲存走 ``_plan_storage_size``（只擴不縮），且不做下方 Bitnami 字串替換——
+        那段只認 seed 原文 ``workers = 0``，建好之後就已被換掉，重算必定 raise。
 
         workers／memory 用精確字串替換（裁定② 2026-07-12 by Eugene）：seed 內
         為 `echo 'workers = 0'`（非裸行），故 body.replace + 逐 marker「全 script
@@ -8735,7 +8843,10 @@ class CloudService(models.Model):
             for key in ('requests', 'limits'):
                 res.setdefault(key, {})['memory'] = mem
         if plan.cs_storage_gb:
-            values.setdefault('persistence', {})['size'] = f'{plan.cs_storage_gb}Gi'
+            persistence = values.setdefault('persistence', {})
+            persistence['size'] = (
+                self._plan_storage_size(persistence.get('size'), plan.cs_storage_gb)
+                if existing else f'{plan.cs_storage_gb}Gi')
         conf = values.get('conf')
         if plan.cs_odoo_workers and template._is_woow_odoo_chart():
             # #1130：woow-odoo 的 odoo.conf 是 chart render 的 Secret，plan 只能寫 typed
@@ -8755,7 +8866,7 @@ class CloudService(models.Model):
                 conf['limitMemorySoft'] = int(ram_bytes * 0.70 / n)
             return values
         scripts = values.get('customPostInitScripts')
-        if plan.cs_odoo_workers and scripts:
+        if plan.cs_odoo_workers and scripts and not existing:
             n = plan.cs_odoo_workers
             replacements = [('workers = 0', f'workers = {n}')]
             if plan.cs_ram_gb:

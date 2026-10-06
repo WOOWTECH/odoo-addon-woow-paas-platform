@@ -732,9 +732,22 @@ class CloudService(models.Model):
 - **上方 `allocated_*` 欄位改讀選定 plan 規格**，template `min_*` 退為
   fallback（`_allocated_vals_from`，`src/models/cloud_service.py:1541-1543`：
   `plan.cs_vcpu or template.min_vcpu` 依此類推）。
-- **overlay 只接 create 路徑**：change-plan endpoint
-  （`src/controllers/paas.py:956`）只換訂閱、不觸發 redeploy，
-  既有實例規格不隨新 plan 更新（#342 待排期）。
+- **既有服務也套目前方案（#1158，Closes #342）**：`_assemble_deploy_values` 在
+  `helm_values` 之後疊**目前訂閱方案**的 overlay（`existing=True`：儲存只擴不縮、
+  不做 Bitnami 字串替換），所以 deploy／redeploy／reconfigure 都收斂到目前方案；
+  reset 密碼那條（`--atomic` 15 秒）傳 `apply_plan=False` 不疊（規格改 pod template，
+  會撞 F-461-2）。
+- **換方案立即生效（#1158）**：`api_service_change_plan` 在第一個寫入（退點）之前算出
+  新 values（`_plan_values_for`）；values 有變才觸發 upgrade，並先擋「非 running／
+  suspended」「init lease 在途」「Bitnami 存量」「operator 未設定」「overlay
+  fail-loud」。帳務完成後同一交易寫 `helm_values`＋`allocated_*`（營運手調過的維度
+  保留，`_plan_change_allocated_vals`）、push ns quota，再走 reconfigure 同一支
+  `_start_background_upgrade`（釘現行 chart、`reset_values=True`、不 refresh image；
+  停權服務 upgrade 後 scale 回 0）。背景失敗不回捲帳務：服務翻 `error` 並寫
+  「方案已變更，但資源調整失敗」，之後任何一次成功的 redeploy／reconfigure 收斂。
+- **儲存只擴不縮（暫定，討論票 #1512）**：PVC 不能縮，降級時保留目前
+  `persistence.size`，`allocated_storage_gb` 記實際大小。規則只在
+  `CloudService._plan_storage_size` 一處。
 
 template（產品形狀）與 plan（規格檔位）的屬性歸屬邊界見
 `../../decisions/patterns/template-vs-plan-property-boundary.md`。

@@ -1290,6 +1290,29 @@ msgid ""
 msgstr "管理員 Email 必須是收得到信的信箱（%(domain)s 是保留給範例用的網域，密碼重設信永遠寄不到）"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"If the new plan has different compute resources, the service restarts to "
+"apply them (about 30 seconds of downtime). Storage is never reduced: on a "
+"plan with less storage, the current storage size is kept."
+msgstr ""
+"新方案的運算規格不同時，服務會重新啟動以套用新規格（約 30 秒無法使用）。儲存空間不會縮小："
+"換到儲存空間較小的方案時，會保留目前的大小。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "The plan can only be changed while the service is running (current state: %(state)s)."
+msgstr "服務執行中才能變更方案（目前狀態：%(state)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "The plan was changed, but resizing the service failed: %(reason)s. Please contact support to redeploy the service."
+msgstr "方案已變更，但服務資源調整失敗：%(reason)s。請聯絡客服重新部署服務。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
@@ -3324,14 +3347,6 @@ msgid "Completion"
 msgstr "完成度"
 
 #. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
-msgid ""
-"Compute resources (vCPU, RAM, storage) of an already deployed service are "
-"not resized by a plan change yet."
-msgstr "已部署服務的運算資源（vCPU、RAM、儲存空間）目前不會因變更方案而調整。"
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__conceal_instances
 msgid "Conceal Existing Instances"
 msgstr "隱藏既有實例"
@@ -4467,6 +4482,12 @@ msgstr "部署失敗"
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "Deployment failed: %(detail)s"
 msgstr "部署失敗：%(detail)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "This plan cannot be applied to the service. Please contact support."
+msgstr "此方案無法套用到這個服務，請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python

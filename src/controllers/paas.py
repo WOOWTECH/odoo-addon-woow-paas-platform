@@ -1309,6 +1309,35 @@ class PaasController(HiddenChainMixin, Controller):
                     'error': _denial['error'],
                     'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
+        # #1158：新方案的規格要套到已部署的服務（helm upgrade）。能預判的失敗全部擋在
+        # 第一個寫入（退點）之前——背景 upgrade 失敗**不回捲帳務**（Q5），所以這裡放行的
+        # 必須是「照理會成功」的。values 沒變（月繳↔年繳同規格、非 odoo 的全 0 方案）就
+        # 不 upgrade，也不加新閘：帳務行為與修之前相同。
+        old_values = service._helm_values_dict()
+        try:
+            new_values = service._plan_values_for(plan)
+        except ValueError:
+            _logger.exception(
+                "[CLOUD_SVC] change_plan service=%s 無法套用 plan=%s 的規格",
+                service_id, plan_id)
+            return {'success': False, 'error': _(
+                'This plan cannot be applied to the service. Please contact support.')}
+        reapply = new_values != old_values
+        client = None
+        if reapply:
+            legacy_error = service._woow_odoo_legacy_release_error()
+            if legacy_error:
+                return {'success': False, 'error': legacy_error}
+            if service.state not in ('running', 'suspended'):
+                return {'success': False, 'error': _(
+                    'The plan can only be changed while the service is running '
+                    '(current state: %(state)s).', state=service.state)}
+            if service._init_lease_active():
+                return {'success': False, 'error': self._init_in_flight_error(service)}
+            client = get_paas_operator_client(request.env)
+            if not client:
+                return {'success': False, 'error': _('PaaS Operator not configured')}
+
         refund = old_sub._compute_unused_refund()
 
         partner = old_sub.sh_partner_id
@@ -1346,12 +1375,46 @@ class PaasController(HiddenChainMixin, Controller):
             service.subscription_id.id if service.subscription_id else None,
         )
 
+        # #1158 Q4：帳面 allocated_* 與新方案同步（營運手調過的維度保留），同一交易寫入；
+        # ns quota 在 helm upgrade **之前** push——先擴 quota，新 pod 才不會被 admission 擋。
+        allocated_vals = service._plan_change_allocated_vals(
+            old_sub.sh_subscription_plan_id, plan, old_values, new_values)
+        if reapply:
+            # 停權中的服務照 reconfigure（#482）：values 套上、upgrade 後 scale 回 0、
+            # state 留在 suspended。換方案不升 chart、不 refresh image（#1160／#1184）。
+            halted = service._is_halted()
+            resolved_version = (
+                service.helm_chart_version or service.template_id.helm_chart_version)
+            service._apply_helm_values(new_values, extra_vals={
+                **allocated_vals,
+                'state': 'suspended' if halted else 'upgrading',
+                'helm_chart_version': resolved_version,
+                'last_upgraded_at': fields.Datetime.now(),
+                'error_message': False,
+            })
+        elif allocated_vals:
+            service.write(allocated_vals)
+        if allocated_vals:
+            service._push_ns_quota(service.workspace_id, service.helm_namespace)
+        if reapply:
+            self._start_background_upgrade(
+                service, client, resolved_version, halted,
+                failure_message=lambda detail: _(
+                    'The plan was changed, but resizing the service failed: '
+                    '%(reason)s. Please contact support to redeploy the service.',
+                    reason=detail))
+            _logger.info(
+                "[CLOUD_SVC] change_plan reapply service=%s plan=%s allocated=%s",
+                service_id, plan_id, allocated_vals)
+
         return {
             'success': True,
             'data': {
                 'refund_amount': refund,
                 'new_plan': plan.name,
                 'subscription': service._get_subscription_info(),
+                # #1158：前端據此提示「服務正在套用新方案」（約 30 秒無法使用）。
+                'resources_reapplied': reapply,
             },
         }
 
@@ -4153,135 +4216,10 @@ class PaasController(HiddenChainMixin, Controller):
                 service.write({'addon_update_pending': True})
             response_data = self._format_service(service)
 
-            # Capture values for the background thread (no ORM access).
-            db_name = request.env.cr.dbname
-            service_id = service.id
-            # #411: 送 operator 的 values 必須是「全量組裝」結果（含 4 injectors
-            # ＋ odoo addon），因為改走 reset_values 語意後不再靠 --reuse-values
-            # 保留首裝注入的 injector 值（storage_class / image_pull_secrets /
-            # allowed_origins / apiserver_cidrs）——若只送 merged_values，reset 後
-            # 這些會全部從 rendered manifest 消失。組裝必須在**主執行緒**先算好
-            # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
-            # svc.helm_values 已於上方 write 更新，helper 讀到的即最新 user config。
-            assembled_values = service._assemble_deploy_values()['values']
-            # #1130：woow-odoo 的 conf.adminPassword 每次全量送（reset_values 下不送就
-            # 變空值；chart 對既有 DB 是 no-op）。只補 odoo 這一支——MCP 家族在
-            # reconfigure 缺 sensitive 的既有行為不在本票範圍。
-            odoo_sensitive = service._build_odoo_sensitive_values()
-            upgrade_kwargs = dict(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                chart=service.template_id.helm_chart_name,
-                values=assembled_values,
-                # #552: 見上方 `resolved_version` 的說明——這裡原本傳恆為 None 的
-                # `version`，等於把版本決定權交給 registry 的 latest。
-                version=resolved_version,
-                reset_values=True,
-            )
-            if odoo_sensitive:
-                upgrade_kwargs['sensitive_values'] = odoo_sensitive
-            operator_url = client.base_url
-            operator_api_key = client._session.headers.get('X-API-Key', '')
             # #1435：停權中的服務 upgrade 後會被 scale 回 0，不重啟（重啟只會白白拉起來）。
-            restart_after_upgrade = bool(secrets_changed and not halted)
-
-            def _bg_upgrade():
-                """Run helm upgrade in a background thread with its own cursor."""
-                import odoo
-                from ..services.paas_operator import PaaSOperatorClient
-                bg_client = PaaSOperatorClient(operator_url, operator_api_key)
-                try:
-                    release_info = bg_client.upgrade_release(**upgrade_kwargs)
-                    # #482: upgrade 以 chart 預設重渲染 workload，會把停權中的
-                    # 容器喚醒（實測 replicas 0→1、pod 真的 Running）。收回停機
-                    # 必須在 upgrade **之後**，所以只能在這條背景執行緒裡做；
-                    # halted 是主執行緒算好傳進來的（這裡沒有 ORM 可用）。
-                    if halted:
-                        try:
-                            bg_client.scale_release(
-                                upgrade_kwargs['release_name'],
-                                upgrade_kwargs['namespace'],
-                                replicas=0,
-                            )
-                        except Exception:
-                            _logger.exception(
-                                "Failed to scale suspended service %s back down "
-                                "after upgrade — workload may still be running "
-                                "(billing bypass)", service_id,
-                            )
-                    # #1435：helm upgrade 回來時 Secret 已是新值；沒有 checksum/secret 的
-                    # chart 不會因此滾 Pod ⇒ 這裡補一次 rollout restart，讓以 env 注入的
-                    # 新金鑰生效。有 checksum 的 chart 會多滾一次（無害，只是多一次重建）。
-                    # 失敗不翻 error：設定已套用，租戶可用「重新啟動」（#1432）補上。
-                    if restart_after_upgrade:
-                        try:
-                            bg_client.restart_release(
-                                namespace=upgrade_kwargs['namespace'],
-                                release_name=upgrade_kwargs['release_name'],
-                            )
-                        except Exception:
-                            _logger.exception(
-                                "Failed to restart service %s after a credential "
-                                "change — new keys take effect on the next restart",
-                                service_id,
-                            )
-                    with odoo.registry(db_name).cursor() as cr:
-                        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
-                        svc = env['woow_paas_platform.cloud_service'].browse(service_id)
-                        # 'suspended' 一併放行：#482 之後停權服務走的是這個 state，
-                        # 少了它 helm_revision 就永遠停在升級前的版本。
-                        if svc.exists() and svc.state in ('upgrading', 'suspended'):
-                            svc.write({
-                                'helm_revision': release_info.get('revision', svc.helm_revision + 1),
-                                # #552: 第四條回寫路徑。upgrade 成功後才拿得到
-                                # helm 真正解析出來的 chart 版本（fallback 都空
-                                # 時仍是 registry latest，此時這行是唯一知道裝了
-                                # 哪一版的地方）。`or svc.helm_chart_version` ＝
-                                # 對舊版 operator 向後相容：讀不到就保留原值，
-                                # 不把帳本洗成空。回寫對象是 per-service 欄位，
-                                # 不是 template（seed noupdate=0＋healer 會還原）。
-                                'helm_chart_version': (
-                                    release_info.get('chart_version')
-                                    or svc.helm_chart_version
-                                ),
-                            })
-                        elif svc.exists() and svc.state != 'deleting':
-                            # #1456：背景 poll 可能早一步把服務推回 running——operator 還在
-                            # 拉 chart、helm 尚未進入 pending-upgrade 時，release 仍是上一版
-                            # 的 deployed、pods 也都 ready。舊碼只在 upgrading／suspended 時
-                            # 回寫，於是帳本停在升級前的 revision，直到每日對帳才追上
-                            # （R8：OD 平台 9／實際 10、Code Server 5／6）。這裡只做**單調**
-                            # 回寫：operator 明確回報、且比帳本新才寫，不碰 state。
-                            reported = release_info.get('revision')
-                            if isinstance(reported, int) and reported > (svc.helm_revision or 0):
-                                svc.write({
-                                    'helm_revision': reported,
-                                    'helm_chart_version': (
-                                        release_info.get('chart_version')
-                                        or svc.helm_chart_version
-                                    ),
-                                })
-                except Exception as exc:
-                    _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
-                    try:
-                        with odoo.registry(db_name).cursor() as cr:
-                            env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
-                            svc = env['woow_paas_platform.cloud_service'].browse(service_id)
-                            if svc.exists() and svc.state in ('upgrading', 'suspended'):
-                                detail = getattr(exc, 'detail', None) or str(exc)
-                                vals = {'error_message': _('Upgrade failed: %(reason)s', reason=detail)}
-                                # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
-                                # 會讓它離開停權語意（且 lifecycle cron 會把
-                                # error 當成可再 suspend 的狀態來回搬）。錯誤本身
-                                # 仍寫進 error_message，不靜默。
-                                if svc.state == 'upgrading':
-                                    vals['state'] = 'error'
-                                svc.write(vals)
-                    except Exception:
-                        _logger.exception("Failed to write error state for service %s", service_id)
-
-            thread = threading.Thread(target=_bg_upgrade, daemon=True)
-            thread.start()
+            self._start_background_upgrade(
+                service, client, resolved_version, halted,
+                restart_after_upgrade=bool(secrets_changed and not halted))
 
             return {
                 'success': True,
@@ -4290,6 +4228,145 @@ class PaasController(HiddenChainMixin, Controller):
 
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': _('Unable to connect to deployment service')}
+
+    def _start_background_upgrade(self, service, client, resolved_version, halted,
+                                  restart_after_upgrade=False, failure_message=None):
+        """在背景執行緒對既存 release 跑全量 values 的 helm upgrade（reconfigure／#1158 換方案共用）。
+
+        呼叫前必須已把 ``helm_values`` 與 state（``upgrading``／停權留 ``suspended``）寫好：
+        values 在**主執行緒**組裝（背景執行緒沒有 ORM）。``failure_message(detail)`` 給
+        背景失敗時寫進 ``error_message`` 的文字（預設「Upgrade failed: …」）。
+        """
+        if failure_message is None:
+            def failure_message(detail):
+                return _('Upgrade failed: %(reason)s', reason=detail)
+        # Capture values for the background thread (no ORM access).
+        db_name = request.env.cr.dbname
+        service_id = service.id
+        # #411: 送 operator 的 values 必須是「全量組裝」結果（含 4 injectors
+        # ＋ odoo addon），因為改走 reset_values 語意後不再靠 --reuse-values
+        # 保留首裝注入的 injector 值（storage_class / image_pull_secrets /
+        # allowed_origins / apiserver_cidrs）——若只送 merged_values，reset 後
+        # 這些會全部從 rendered manifest 消失。組裝必須在**主執行緒**先算好
+        # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
+        # svc.helm_values 已由呼叫端寫好，helper 讀到的即最新 user config。
+        assembled_values = service._assemble_deploy_values()['values']
+        # #1130：woow-odoo 的 conf.adminPassword 每次全量送（reset_values 下不送就
+        # 變空值；chart 對既有 DB 是 no-op）。只補 odoo 這一支——MCP 家族在
+        # reconfigure 缺 sensitive 的既有行為不在本票範圍。
+        odoo_sensitive = service._build_odoo_sensitive_values()
+        upgrade_kwargs = dict(
+            namespace=service.helm_namespace,
+            release_name=service.helm_release_name,
+            chart=service.template_id.helm_chart_name,
+            values=assembled_values,
+            # #552: 見 `_update_service` 的 `resolved_version` 說明——這裡原本傳恆為
+            # None 的 `version`，等於把版本決定權交給 registry 的 latest。
+            version=resolved_version,
+            reset_values=True,
+        )
+        if odoo_sensitive:
+            upgrade_kwargs['sensitive_values'] = odoo_sensitive
+        operator_url = client.base_url
+        operator_api_key = client._session.headers.get('X-API-Key', '')
+
+        def _bg_upgrade():
+            """Run helm upgrade in a background thread with its own cursor."""
+            import odoo
+            from ..services.paas_operator import PaaSOperatorClient
+            bg_client = PaaSOperatorClient(operator_url, operator_api_key)
+            try:
+                release_info = bg_client.upgrade_release(**upgrade_kwargs)
+                # #482: upgrade 以 chart 預設重渲染 workload，會把停權中的
+                # 容器喚醒（實測 replicas 0→1、pod 真的 Running）。收回停機
+                # 必須在 upgrade **之後**，所以只能在這條背景執行緒裡做；
+                # halted 是主執行緒算好傳進來的（這裡沒有 ORM 可用）。
+                if halted:
+                    try:
+                        bg_client.scale_release(
+                            upgrade_kwargs['release_name'],
+                            upgrade_kwargs['namespace'],
+                            replicas=0,
+                        )
+                    except Exception:
+                        _logger.exception(
+                            "Failed to scale suspended service %s back down "
+                            "after upgrade — workload may still be running "
+                            "(billing bypass)", service_id,
+                        )
+                # #1435：helm upgrade 回來時 Secret 已是新值；沒有 checksum/secret 的
+                # chart 不會因此滾 Pod ⇒ 這裡補一次 rollout restart，讓以 env 注入的
+                # 新金鑰生效。有 checksum 的 chart 會多滾一次（無害，只是多一次重建）。
+                # 失敗不翻 error：設定已套用，租戶可用「重新啟動」（#1432）補上。
+                if restart_after_upgrade:
+                    try:
+                        bg_client.restart_release(
+                            namespace=upgrade_kwargs['namespace'],
+                            release_name=upgrade_kwargs['release_name'],
+                        )
+                    except Exception:
+                        _logger.exception(
+                            "Failed to restart service %s after a credential "
+                            "change — new keys take effect on the next restart",
+                            service_id,
+                        )
+                with odoo.registry(db_name).cursor() as cr:
+                    env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                    svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                    # 'suspended' 一併放行：#482 之後停權服務走的是這個 state，
+                    # 少了它 helm_revision 就永遠停在升級前的版本。
+                    if svc.exists() and svc.state in ('upgrading', 'suspended'):
+                        svc.write({
+                            'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                            # #552: 第四條回寫路徑。upgrade 成功後才拿得到
+                            # helm 真正解析出來的 chart 版本（fallback 都空
+                            # 時仍是 registry latest，此時這行是唯一知道裝了
+                            # 哪一版的地方）。`or svc.helm_chart_version` ＝
+                            # 對舊版 operator 向後相容：讀不到就保留原值，
+                            # 不把帳本洗成空。回寫對象是 per-service 欄位，
+                            # 不是 template（seed noupdate=0＋healer 會還原）。
+                            'helm_chart_version': (
+                                release_info.get('chart_version')
+                                or svc.helm_chart_version
+                            ),
+                        })
+                    elif svc.exists() and svc.state != 'deleting':
+                        # #1456：背景 poll 可能早一步把服務推回 running——operator 還在
+                        # 拉 chart、helm 尚未進入 pending-upgrade 時，release 仍是上一版
+                        # 的 deployed、pods 也都 ready。舊碼只在 upgrading／suspended 時
+                        # 回寫，於是帳本停在升級前的 revision，直到每日對帳才追上
+                        # （R8：OD 平台 9／實際 10、Code Server 5／6）。這裡只做**單調**
+                        # 回寫：operator 明確回報、且比帳本新才寫，不碰 state。
+                        reported = release_info.get('revision')
+                        if isinstance(reported, int) and reported > (svc.helm_revision or 0):
+                            svc.write({
+                                'helm_revision': reported,
+                                'helm_chart_version': (
+                                    release_info.get('chart_version')
+                                    or svc.helm_chart_version
+                                ),
+                            })
+            except Exception as exc:
+                _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
+                try:
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                        if svc.exists() and svc.state in ('upgrading', 'suspended'):
+                            detail = getattr(exc, 'detail', None) or str(exc)
+                            vals = {'error_message': failure_message(detail)}
+                            # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
+                            # 會讓它離開停權語意（且 lifecycle cron 會把
+                            # error 當成可再 suspend 的狀態來回搬）。錯誤本身
+                            # 仍寫進 error_message，不靜默。
+                            if svc.state == 'upgrading':
+                                vals['state'] = 'error'
+                            svc.write(vals)
+                except Exception:
+                    _logger.exception("Failed to write error state for service %s", service_id)
+
+        thread = threading.Thread(target=_bg_upgrade, daemon=True)
+        thread.start()
 
     @staticmethod
     def _init_in_flight_error(service: Any) -> str:
