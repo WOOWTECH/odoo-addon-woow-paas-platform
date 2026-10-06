@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Omnigent 上架 seed 與 app_managed 密碼載體的守線斷言。
 
-契約來源：woow-paas-charts charts/omnigent 0.1.0 起（0.1.2 加租戶 LLM 金鑰，#1379；server :8000 是唯一入口、無 auth-proxy；
+契約來源：woow-paas-charts charts/omnigent 0.1.0 起（0.1.2 加租戶 LLM 金鑰，#1379；0.1.3 金鑰改放
+LLM proxy、runner 只拿代用 token，#1449；server :8000 是唯一入口、無 auth-proxy；
 admin 由 OMNIGENT_ACCOUNTS_INIT_ADMIN_* 在第一次開機建立；SQLite；runner 走上游
 kubernetes managed sandbox），paas-odoo-ci mirror-image.yml #159/#160（上游 image 原樣鏡像）。
 
@@ -46,8 +47,9 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.2',
-                         '0.1.2：#1379 租戶 LLM 金鑰＋host_config、#1358 PaaS 登入文案')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3',
+                         '0.1.3：#1449 LLM 金鑰代簽 proxy、#1436 egress、#1434 ephemeral-storage、'
+                         '#1460 runner 3 vCPU／6Gi、#1451 暫存提示（charts #134）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；
@@ -106,9 +108,10 @@ class TestOmnigentSeed(TransactionCase):
     def test_llm_key_specs(self):
         """#1379：受管 session 要有模型可用，租戶只能經這兩個 password 欄位帶金鑰。
 
-        chart 0.1.2 只把 auth.openrouterApiKey／auth.anthropicApiKey 寫進 runner env Secret，
-        並據此產生 sandbox.host_config；欄位必須是 password（服務詳情 API 遮罩、#535），
-        不能是 required（沒有金鑰也能只用自己的機器）。
+        chart 0.1.3 只把 auth.openrouterApiKey／auth.anthropicApiKey 放進 LLM proxy 自己的
+        Secret（runner env 只拿 per-release 代用 token，#1449），並據此產生 sandbox.host_config；
+        欄位必須是 password（服務詳情 API 遮罩、#535），不能是 required（沒有金鑰也能只用
+        自己的機器）。
         """
         specs = json.loads(self._tpl().helm_value_specs)
         self.assertEqual(specs['required'], [])
@@ -118,6 +121,21 @@ class TestOmnigentSeed(TransactionCase):
             self.assertEqual(spec['type'], 'password', key)
             self.assertNotIn('default', spec, '%s 不能有預設值' % key)
         self.assertNotIn('auth', self._values(), '金鑰不得寫進 helm_default_values')
+
+    def test_key_wording_matches_llm_proxy(self):
+        """#1449（chart 0.1.3）：金鑰只在 LLM proxy，雲端工作機拿不到。
+
+        0.1.2 的說明寫「金鑰會以環境變數注入每台雲端工作機」——換到 0.1.3 後那句是錯的，
+        而且會讓租戶以為升級沒有修好；反過來，「從舊版升級要更換金鑰」必須講（0.1.2 期間
+        金鑰已暴露給能開工作階段的成員，舊 warm runner 仍帶真金鑰直到被回收）。
+        """
+        tpl = self._tpl()
+        specs = json.loads(tpl.helm_value_specs)
+        texts = [s['description'] for s in specs['optional']] + [tpl.full_description]
+        for text in texts:
+            self.assertNotIn('注入每台雲端工作機', text)
+            self.assertIn('LLM 代理', text)
+            self.assertIn('更換一次金鑰', text)
 
     def test_listed(self):
         """2026-09-30 公開上架（is_hidden=False）；不 conceal、既有實例照常可見。
