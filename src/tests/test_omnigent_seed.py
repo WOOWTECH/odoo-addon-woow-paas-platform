@@ -6,9 +6,10 @@ admin 由 OMNIGENT_ACCOUNTS_INIT_ADMIN_* 在第一次開機建立；SQLite；run
 kubernetes managed sandbox），paas-odoo-ci mirror-image.yml #159/#160（上游 image 原樣鏡像）。
 
 核心守線：
-1. app_managed ⇒ admin_reset_supported=False：平台只供給初始密碼，之後密碼活在 omnigent
-   自己的資料庫。照 helm_secret 走 reset 會 helm upgrade 成功、密碼卻沒變（假裝成功），
-   所以 controller gate、model 防線、前端按鈕三處都必須擋下。
+1. app_managed：平台只供給初始密碼，之後密碼活在 omnigent 自己的資料庫。照 helm_secret
+   走 reset 會 helm upgrade 成功、密碼卻沒變（假裝成功），所以 helm 這條 reset 在 model
+   防線仍擋下。#1370 後續起 Reset 改走 app_admin_reset_kind=omnigent_exec（operator exec
+   改 omnigent DB），所以 admin_reset_supported=True。
 2. 開通時照樣供給（has_admin_gui=True），一次性顯示初始密碼。
 3. 上架（is_hidden=False）的 image／runner image 都必須雙釘 tag@sha256。
 """
@@ -49,11 +50,14 @@ class TestOmnigentSeed(TransactionCase):
                          '0.1.2：#1379 租戶 LLM 金鑰＋host_config、#1358 PaaS 登入文案')
 
     def test_initial_password_only(self):
-        """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（之後平台不能重設）。"""
+        """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；
+        Reset 走 omnigent_exec（#1370 後續）。"""
         tpl = self._tpl()
         self.assertTrue(tpl.has_admin_gui)
         self.assertEqual(tpl.admin_password_carrier, 'app_managed')
-        self.assertFalse(tpl.admin_reset_supported)
+        self.assertEqual(tpl.app_admin_reset_kind, 'omnigent_exec')
+        self.assertTrue(tpl.admin_reset_supported)
+        self.assertFalse(tpl.admin_credentials_settable, '只能 Reset，不開放租戶自設')
         self.assertFalse(tpl.admin_username_helm_path,
                          'omnigent 沒有改名 API，帳號不開放修改')
         self.assertEqual(self._values()['admin']['username'], 'admin')

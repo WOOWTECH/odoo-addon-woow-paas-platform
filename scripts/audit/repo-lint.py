@@ -1279,8 +1279,9 @@ def check_reset_budget_ladder(root):
     # 又必須蓋過平台——否則 exec 已 commit、平台卻先斷線 ⇒ 新密碼沒落庫也沒交付。
     app_src = _read_repo_file(root, RESET_LADDER_APP_OPERATOR)
     app = _fold_int_constants(app_src or "")
-    needed_app = ("ODOO_RESET_EXEC_TIMEOUT_SECONDS", "N8N_RESET_EXEC_TIMEOUT_SECONDS",
-                  "APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS")
+    exec_app = ("ODOO_RESET_EXEC_TIMEOUT_SECONDS", "N8N_RESET_EXEC_TIMEOUT_SECONDS",
+                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS")
+    needed_app = exec_app + ("APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS",)
     missing_app = [k for k in needed_app if k not in app]
     if app_src is None or missing_app:
         fail("%s 缺少預算常數 %s" % (RESET_LADDER_APP_OPERATOR, ", ".join(missing_app or needed_app)))
@@ -1289,7 +1290,7 @@ def check_reset_budget_ladder(root):
         fail("%s 缺少 APP_ADMIN_RESET_TIMEOUT" % RESET_LADDER_PLATFORM)
         return violations
     app_platform = plat["APP_ADMIN_RESET_TIMEOUT"]
-    for name in needed_app[:2]:
+    for name in exec_app:
         worst = app[name] + app["APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS"]
         if not app_platform > worst:
             fail("平台 APP_ADMIN_RESET_TIMEOUT=%ss 必須 > operator %s＋找 pod 餘裕=%ss"
@@ -1297,7 +1298,7 @@ def check_reset_budget_ladder(root):
                  % (app_platform, name, worst))
     if not frontend_seconds > app_platform:
         fail("前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 APP_ADMIN_RESET_TIMEOUT=%ss"
-             "（Odoo／n8n 的 Reset 與 reset-config 共用同一條前端 route）"
+             "（Odoo／n8n／Omnigent 的 Reset 與 reset-config 共用同一條前端 route）"
              % (frontend_seconds, app_platform))
     return violations
 
