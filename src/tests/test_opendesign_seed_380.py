@@ -65,13 +65,15 @@ class TestOpendesignTemplateSeed(TransactionCase):
         改帳號不再改動 pod 設定（charts#91；原本必定撞 reset 的 15 秒上限而回退）。
         0.3.0＝daemon 改 StatefulSet，console RBAC 全部以 resourceNames 綁 daemon pod
         （charts#114，Refs #1360：舊版 console SA 可 exec 進同工作區所有 pod）；
-        htpasswd 改 Secret volume，改密碼不重啟 daemon。"""
+        htpasswd 改 Secret volume，改密碼不重啟 daemon。
+        0.4.x＝R8（#1462）：開箱預設代理（OpenCode＋釘死模型）、改 LLM 金鑰自動重啟
+        （checksum/api-keys）、ephemeral-storage、白牌；0.4.1＝同工作區 LiteLLM 網址。"""
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.3.0')
+        self.assertEqual(tpl.helm_chart_version, '0.4.1')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""

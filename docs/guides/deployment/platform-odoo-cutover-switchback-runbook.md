@@ -3,7 +3,7 @@ title: 平台 Odoo 換 chart：回切 runbook（反向搬遷）
 category: guides
 status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-06T02:00:00Z
+updated: 2026-10-06T06:30:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -52,6 +52,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | 14201、14686 | [#1174 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1174#issuecomment-14201) |
 | 14632（R2-Qn） | [woow-paas/woow-paas-charts#81 Round 2 resolution](https://git-prod.woowtech.io/woow-paas/woow-paas-charts/issues/81#issuecomment-14632) |
 | 14662 | [#1231 留言](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1231#issuecomment-14662) |
+| 18487 | [#1231 留言（2026-10-06 發起人裁決：窗口內照常發版）](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1231#issuecomment-18487) |
 | #1032 plan | [`2026-09-03-woowtech-odoo-paas-migration-implementation.md`](../../plans/2026-Q3/2026-09-03-woowtech-odoo-paas-migration-implementation.md) |
 | WMO#5 裁決 | [woow-paas/woow-machines-operator#5 留言 18108](https://git-prod.woowtech.io/woow-paas/woow-machines-operator/issues/5#issuecomment-18108)（Q3 snapshot 操作者、Q4 保留） |
 
@@ -70,6 +71,33 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 任一非 0 ⇒ 對應表反向 restore 必然失敗（舊側 `bn_odoo` 不是 superuser、建不了 vector；#1032 plan:75），**停**。
 3. 【agent】讀方向檢查訊號：woow-odoo 升級閘的方向檢查是 **exit 78**、訊息 `DB core newer than image`（chart `files/upgrade-gate.sh` 步驟 d）。窗口內 Step 2 未做（13439 ③）⇒ 新 release 不應出現 78；若出現，表示有人改了 image 或 marker，先查清楚再回切。
    - 反向目的地 Bitnami 沒有這道閘；Bitnami 側以 `odooSkipInstall`／`ODOO_SKIP_MODULES_UPDATE` 行為為準（`prod-release-sop.md` §5.1）。
+4. 【agent】唯讀判定窗口內平台是否已升版：讀新 `woow_prod` 的 `ir_module_module.latest_version`（`name='woow_paas_platform'`），記為 `<X>`；舊 release 凍結的 image 是 cutover 當下版（2026-10-06 cutover 為 `18.0.1.0.209`，`paas-odoo/values-prod.yaml` `image.digest` `sha256:c4d9b077…d518`）。
+   - `<X>` 等於 cutover 當下版 ⇒ 跳過 C0a。
+   - `<X>` 較新 ⇒ **C0a 必做**，且必須在 C4 第 1 步（舊 release 起 pod）之前完成（18487）。
+
+## C0a 同版 Bitnami image（窗口內平台已升版時才做）
+
+> 2026-10-06 發起人裁決（18487）：回退窗口內**照常發版**（.210 起走 #1499 的 `paas-odoo-official` 路徑），發版時仍**不雙 build**（cutover runbook B8 第 2 步）。代價由回切承擔：回切前先補建一顆與 prod 現行版號相同的 Bitnami image，舊 release 改 pin 到它，再反向搬遷。
+
+為什麼不能沿用凍結的舊 image：舊 release 的 `module-version-gate` initContainer 只比對「image 版號 ≠ DB 版號」，不分方向（`paas-app-bundle-cd` `paas-odoo/values-prod.yaml` 的 gate 腳本）。DB 是 `<X>`、image 是舊版時，它會用**舊程式碼**跑 `odoo-bin -u woow_paas_platform`，把 `noupdate=0` 的 seed 倒回舊版，而且 post-verify 看到 DB 版號被寫成舊版後判定成功，pod 照樣起來，**是一次靜默降級**。換成同版 image 後，gate 走「版本一致 skip」分支。
+
+1. 【agent】確認 build 前置（唯讀）：
+   - `v<X>` tag 存在於 odoo-addons/woow_paas_platform。
+   - woow-paas/paas-odoo-ci `main` 的 `.gitea/workflows/build-image.yml` 仍接受 `image_name=paas-odoo`：input `image_name` 預設就是 `paas-odoo`；「Resolve Dockerfile lineage」步驟只有 `paas-odoo-official` 用 `Dockerfile.official`，其餘一律用 Bitnami `Dockerfile`。2026-10-06 已查證；#1499 只改平台 repo 的 `trigger-odoo-build.yml`，沒有動這個檔。回切當下仍要再查一次 main。
+   - Bitnami 基底 `bitnamilegacy/odoo:18.0.20250805-debian-12-r9`（`Dockerfile` 的 `FROM`）拉得到。鏡像進 JCR 的 woow-paas/paas-odoo-ci#146 尚未完成前，來源是 Docker Hub。
+2. 【人類】手動 dispatch woow-paas/paas-odoo-ci 的 `build-image.yml`，必填 `tag`（UTC `YYYYMMDD.HHMM`）。
+   - 指令：`tea actions workflows dispatch build-image.yml --repo woow-paas/paas-odoo-ci --input tag=<YYYYMMDD.HHMM> --input addon_ref=v<X> --input image_name=paas-odoo`
+   - ⚠ `image_name` 要寫明 `paas-odoo`，**不要**寫 `paas-odoo-official`：官方線 image 的 addon 路徑、使用者與 Bitnami chart 對不上。
+   - `addon_ref` 必須是 tag：prod build 不接受 branch，也不接受留空。
+3. 【人類】在 approval issue `[prod-approval:build-image.yml] Build …/paas-odoo:<tag>` 留言 `/approve`。⛔ agent 不代簽。
+4. 【agent】從 build log 取錨點：`Cloned addon version: <X> (from ref: v<X>)`，以及 push 的 digest。版號不符就停。
+5. 【agent 開 PR・人類 merge】CD PR：`paas-odoo/values-prod.yaml` **三處 pin 同進同退**——`image.tag`、`image.digest`、`module-version-gate` initContainer 的 `image:`（`prod-release-sop.md` §5.1 S1 陷阱：digest 優先於 tag；gate 漏改會讀到舊版號）。**`replicaCount: 0` 保留不動**，所以這張 PR 只換 image、不起 pod，可以跟 C2～C3 並行。
+   - 這是窗口內第二種允許對舊 release 做的變更（另一種是 C4 第 1 步的 replicas），只在本步適用（18487）。
+   - 回切 PR 描述要寫明 `<X>`、build run／approval issue、digest、build log 錨點。
+6. 【agent】merge 後唯讀驗：`paas-odoo` Deployment 的 image digest、gate initContainer 的 `image` 都等於新 digest，replicas 仍是 0。
+
+- C0a 只解決「程式碼與 seed 版本」對不上，不解決 schema 單向門：窗口內禁止含 `src/migrations/` 的發版這條仍然有效（C0 第 1 步）。
+- 時間預算：C0a 要等 build 與人工 `/approve`，彩排沒有量過。緊急模式（C1 (a)）只能先切 Service，舊 pod 要等 C0a 完成才能起。是否在每次窗口內發版後就預先建好同版 Bitnami image（只建不 pin），由發起人決定，本檔不預設。
 
 ## C1 兩種模式
 
@@ -77,7 +105,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 舊形狀：`app.kubernetes.io/instance: paas-odoo`＋`app.kubernetes.io/name: odoo`（無 component）；80→8069、8072→8072，targetPort 寫數字（cd#143 設計確認，2026-10-05 live 實查；cutover PR-D 描述另附全文）。
    - 只改 selector 不改 targetPort ⇒ 流量打到舊 pod 上不存在的 8080（cd#143 PR-1）。
    - patch 後 Bundle 轉 `Modified` 屬預期；任何新 commit 都會把 git 版本 apply 回去，對齊 PR 必須先於其他變更，處理期間可暫停 GitRepo（cd#143 PR-1）。
-   - ⚠ 緊急模式只省略「切流量走 PR」這一步，**不省略 C2～C3**。舊 pod 在 C3 完成前仍是 0 副本；若要立刻恢復服務而跳過反向搬遷，就是丟掉 cutover 後的全部寫入，須人類在 #1142 明示接受（推論自 13439 ⑤＋⑧）。
+   - ⚠ 緊急模式只省略「切流量走 PR」這一步，**不省略 C0a（適用時）與 C2～C3**。舊 pod 在 C3 完成前仍是 0 副本；若要立刻恢復服務而跳過反向搬遷，就是丟掉 cutover 後的全部寫入，須人類在 #1142 明示接受（推論自 13439 ⑤＋⑧）。
 2. 【agent 開 PR・人類 merge】(b) 計畫回切：照 C2～C7 依序走，C4 的 selector 變更走 CD PR。
 
 ## C2 凍結新側
@@ -110,8 +138,9 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 > 彩排實測（2026-10-05 A8）：凍結（新 server＋cron 0）94 s，主要是 odoo pod 優雅終止；舊側 Ready 29 s；selector patch 0.2 s 生效；**凍結到舊側可服務共 243 s**。舊形狀的 port 80→8069 不服務 `/websocket`，websocket 由 Ingress 路徑導到 8072（驗 101 要打 8072）。
 
-1. 【agent 開 PR・人類 merge】`paas-odoo/values-prod.yaml` 刪掉 `replicaCount: 0`（或改 1）——窗口內唯一允許對舊 release 做的變更種類（13439 ③；cd#144 PR-B）。
-   - 舊 release 維持 cutover 前的 image，⛔ 不改 pin：窗口內不雙 build、禁含 migration 的發版，所以回切後只有 addon 程式碼較舊，DB 結構不受影響（2026-10-04 發起人裁決，維持 13439 ③）。
+1. 【agent 開 PR・人類 merge】`paas-odoo/values-prod.yaml` 刪掉 `replicaCount: 0`（或改 1）——窗口內允許對舊 release 做的兩種變更之一（13439 ③；cd#144 PR-B）；另一種是 C0a 的同版 image pin（18487）。
+   - 前置：C0 第 4 步判定窗口內已升版時，C0a 的 CD PR 必須先 merge 並驗過（18487）。沒有升版時，舊 release 維持 cutover 前的 image、不改 pin（2026-10-04 發起人裁決，維持 13439 ③）。
+   - 不論哪一種，窗口內都禁止含 migration 的發版，所以 DB 結構不受影響。2026-10-06 起窗口內照常發版，「回切後只有 addon 程式碼較舊」的說法只在沒有升版時成立；有升版時由 C0a 拉齊版號（18487）。
 2. 【agent】驗舊 odoo pod Ready、log 沒有 init（DR 槍未擊發）。
 3. 【agent 開 PR・人類 merge】穩定 Service selector 鍵集合＋targetPort 回到舊形狀（80→8069、8072→8072）。⚠ 不可用具名 targetPort（13439 ②）。緊急模式已 patch 者，本步就是 24h 內的對齊 PR。
 4. 【agent】驗收同 [cutover runbook](platform-odoo-cutover-runbook.md) B7 第 2 步：endpoints 非 0 且只含舊 pod IP、4 host `/web/health` 200、`/websocket` 101（`--http1.1`＋`Origin`，#1032 plan:126）、OAuth、`/woow`、operator webhook。
