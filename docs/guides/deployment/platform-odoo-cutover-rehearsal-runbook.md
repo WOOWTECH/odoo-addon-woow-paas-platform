@@ -1,9 +1,9 @@
 ---
 title: 平台 Odoo 換 chart：彩排 runbook
 category: guides
-status: draft
+status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-05T17:00:00Z
+updated: 2026-10-06T02:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -13,7 +13,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## 狀態
 
-`status: draft`——**先草擬、後定稿**（#1231 票面）。下表的佔位落地、且至少一次彩排的量測回填後，替換全部待定佔位並改 `status: active`，由發起人覆核。
+`status: active`——2026-10-06 定稿：佔位全數落地（#1495），且第一次彩排（2026-10-05，`dev-sandbox-rehearsal-1`，已銷毀）的量測已回填；發起人以合併回填 PR 覆核（#1231 票面定稿條件）。
 
 | # | 佔位 | 狀態 |
 |---|---|---|
@@ -26,6 +26,25 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | R7 | 沙盒容量 | ✅ WMO#5 裁決 Q2：彩排沙盒建立前的 in-scope 清理已執行（woow-machines-operator#5 留言 18189）；2026-10-05 重量後 59mqj 剩 35 GiB、其餘三台寬裕 |
 | R8 | cc/woowprd#6 一次性升級 Job 與本路徑的關係 | ✅ 不是前置：新 chart 路徑不經一次性升級 Job（#1206 留言 14673）；cc/woowprd#6（PR cc/woowprd#14）已 merge，服務 plugin 內建 chart 的 stg mode |
 | R9 | chart 版號 | ✅ `woow-odoo` 0.2.7（0.2.6 起 platform 記憶體預設 soft 4GiB／hard 5GiB） |
+
+## 彩排紀錄（第一次，2026-10-05）
+
+> 沙盒 `dev-sandbox-rehearsal-1`（woow-odoo 0.2.7＋`paas-odoo-official:20261005.1128@sha256:76debd4b…`，addon .209，lockdown），2026-10-06T01:27:05Z 已銷毀（#1231 留言 18257）。只列 count／耗時／指紋前綴。
+
+| 段 | 結果 |
+|---|---|
+| A1 授權 | 發起人核准 2026-10-05T16:47Z；稽核留言在 #1231 |
+| A2 取資料（人類） | live `pg_dump`（`bn_odoo`）6 s／27.6 MB；filestore 7,361 檔／2.02 GB、owner `999:0`，tar 52 s；叢集內 PUT 21 s；receiver 端 sha256 全符 |
+| A3 restore＋Stage A | 184 s（含 lockdown gate、restore Job、刪 incoming、中和＋斷言）；manifest locale `en_US.UTF-8`、extensions `pg_trgm`；斷言 **64 PASS／0 FAIL** |
+| A4 | 無 marker ⇒ `upgrade-gate` exit 3、不 `-u`；預寫後 web Ready 29 s、marker 相等 skip；模組（installed 208）／admin／`database.uuid` 指紋與筆數開機前後**完全相同**；Stage B 98 s；cron Ready 32 s、`cron-wait` 約 10 s 放行；autovacuum 探針被接走；每次 gate 64/0 |
+| A4 方向檢查 | digest 改假值＋`core_date` 較新 ⇒ exit 78、未寫 attempt（見 A4 第 6 步修正） |
+| A5 | 全模組 base（Bitnami .209）／head（official .209）各 4857 tests、0 failed、0 errors，test 名集合相同；check26 全項正常（admin uid 2、posted move lines 7,299、invoices 407、SO 735、cloud_app_template 25、LINE 四路由、`/woow` → 登入） |
+| A6 | 新形狀 endpoints 只含 web pod；`/websocket` 經 80／8072 帶 `Origin` 皆 101、無 `Origin` 400；chart NP 三條 render 正確；ProxyFix 動態探針不具鑑別力（改以 chart nginx 設定為證據，OAuth `redirect_uri` 留 cutover B7） |
+| A7 | nightly 95 s、pre-upgrade 94 s（皆 Verified）；從 daily 備份還原一輪 222 s，指紋完全相同 |
+| A8 | 沙盒內以 prod 同款 Bitnami pg／odoo 搭對照側：雙向 selector 各兩輪、patch 0.2 s 生效；反向搬遷 `bn_odoo` 零錯誤、指紋相同、filestore 位元組全等；**回切總停機 243 s**（凍結 94 s、DB 19 s 與 filestore 43 s 並行、舊側 Ready 29 s） |
+| 正向停機估算 | 凍結舊側約 90 s＋取資料約 80 s＋restore 約 60～90 s＋web Ready 約 30 s ⇒ **技術停機約 5～6 分**（不含 ECPay 收尾與人工驗收） |
+| A10 覆核者親跑 | gate 64/0、NP-LOCKDOWN-CHECK PASS；prod 兩顆與 stg operator access log（扣 `/health`）來自沙盒 IP 的請求皆 0（2026-10-06） |
+| 未驗、移到 cutover 當下 | G25（Safari overlay／OAuth email fallback）與中文 PDF 字型需人類看截圖；OAuth `redirect_uri`／forwarded host |
 
 ## 操作者圖例
 
@@ -165,7 +184,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - 驗 admin 指紋不變：`res_users` id 2 的 `login`／`password` sha256 前 12 碼，開機前後相同（R2-Q2）。
    - 驗 `ir_module_module` name→`latest_version` 全表與 restore 當下逐筆相同（＝沒有被 `-u`；woow-paas/paas-app-bundle-cd#144 PR-C 驗收同法）。
 5. 【agent】Stage B 再中和＋gate，全綠後 cron 副本 1；cron pod 的 `cron-wait` initContainer 應立刻放行（chart README；14673）。
-6. 【agent】記錄方向檢查訊號：把 `upgrade_done.core_date` 暫改成比 image 新的值（例 `18.0.29991231`）後重啟 web，預期 `upgrade-gate` **exit 78**，訊息 `DB core newer than image`；驗完改回原值、再過一次 Stage B gate（chart `upgrade-gate.sh` 步驟 d）。
+6. 【agent】記錄方向檢查訊號：把 `upgrade_done` 的 **digest 改成假值（例 `sha256:` 加 64 個 0）且 `core_date` 改成比 image 新的值**（例 `18.0.29991231`）後重啟 web，預期 `upgrade-gate` **exit 78**，訊息 `DB core newer than image`，且不寫 `upgrade_attempt`；驗完改回原值、再過一次 Stage B gate。
+   - ⚠ 只改 `core_date`、digest 不變時，升級閘在方向檢查之前就以「digest 相等」skip（chart `files/upgrade-gate.sh:258` 早於 `:266`），exit 0、驗不到 78（2026-10-05 彩排實測）。
 7. 【agent】把 A4 第 1、4、6 步的實測結果回填 [cutover runbook](platform-odoo-cutover-runbook.md) B3／B6a 與 [回切 runbook](platform-odoo-cutover-switchback-runbook.md) C0。
 
 ## A5 全模組測試＋check26

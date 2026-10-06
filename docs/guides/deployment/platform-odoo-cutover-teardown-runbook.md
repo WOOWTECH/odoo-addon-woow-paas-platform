@@ -1,9 +1,9 @@
 ---
 title: 平台 Odoo 換 chart：teardown runbook（退役 Bitnami release）
 category: guides
-status: draft
+status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-05T17:00:00Z
+updated: 2026-10-06T02:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md, docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/prod-release-sop.md, docs/guides/deployment/shared-cluster-paas-scope-guard.md]
 ---
 
@@ -13,7 +13,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## 狀態
 
-`status: draft`——**先草擬、後定稿**（#1231 票面）。須在回退窗口結束前定稿；佔位落地後改 `status: active`，由發起人覆核。
+`status: active`——2026-10-06 定稿：佔位全數落地（#1495），且第一次彩排（2026-10-05，`dev-sandbox-rehearsal-1`，已銷毀）的量測已回填；發起人以合併回填 PR 覆核（#1231 票面定稿條件）。
 
 | # | 佔位 | 狀態 |
 |---|---|---|
