@@ -1048,3 +1048,5 @@ from . import test_restart_and_secret_keys_1432
 from . import test_neutralize_1201
 # #1488：helm values 白名單 fail-closed（specs 沒有任何鍵＝租戶值全部拒絕，不再全部放行）。
 from . import test_helm_values_whitelist_fail_closed_1488
+# #1370 後半：n8n 範本選填 SMTP（忘記密碼／邀請信）。
+from . import test_n8n_smtp_fields_1370

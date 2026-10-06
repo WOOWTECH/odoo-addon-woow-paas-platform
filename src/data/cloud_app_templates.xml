@@ -132,7 +132,19 @@
                 "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
                 "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]},
                 {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select",
-                "default": "info", "options": ["info", "warn", "error", "debug"]}
+                "default": "info", "options": ["info", "warn", "error", "debug"]},
+                {"key": "main.config.N8N_SMTP_HOST", "label": "SMTP Host", "type": "text",
+                "placeholder": "smtp.example.com",
+                "description": "寄信伺服器（選填）。設定後 n8n 才能寄忘記密碼、邀請成員等信件；未設定時這些信不會寄出"},
+                {"key": "main.config.N8N_SMTP_PORT", "label": "SMTP Port", "type": "number",
+                "default": 465, "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
+                {"key": "main.config.N8N_SMTP_SSL", "label": "SMTP SSL", "type": "select",
+                "default": "true", "options": ["true", "false"]},
+                {"key": "main.config.N8N_SMTP_USER", "label": "SMTP Username", "type": "text"},
+                {"key": "main.secret.N8N_SMTP_PASS", "label": "SMTP Password", "type": "password",
+                "description": "只存於 Kubernetes Secret；重新設定時留空＝不變更"},
+                {"key": "main.config.N8N_SMTP_SENDER", "label": "Sender", "type": "text",
+                "placeholder": "n8n &lt;you@example.com&gt;", "description": "寄件者（可含名稱）"}
                 ]}</field>
 
             <!-- Service Configuration -->
