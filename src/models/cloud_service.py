@@ -2974,6 +2974,15 @@ class CloudService(models.Model):
             return
         return super()._check_operation_allowed(operation=operation)
 
+    def _alert_storage_expansion_rejection(self, plan, detail):
+        """#1513：換方案在扣款前被 operator 升級預檢擋下（磁碟擴不了）時告警給系統管理員。
+
+        租戶身分呼叫（換方案端點）⇒ 告警寫入要提權（activity 給 base.group_system）。
+        """
+        self.ensure_one()
+        self.env['woow_paas_platform.platform_monitor'].sudo()._report_storage_expansion_rejection(
+            self.sudo(), plan.sudo(), detail)
+
     def _alert_cluster_storage_capacity_rejection(self, detail):
         """#1415：開通被叢集儲存額度擋下時，告警給系統管理員（一台一行，同 summary 未處理前追加）。"""
         self.ensure_one()
@@ -2987,7 +2996,7 @@ class CloudService(models.Model):
     #  #411 — 全量 values 組裝（單一真相源）                              #
     # ------------------------------------------------------------------ #
 
-    def _assemble_deploy_values(self, apply_plan=True):
+    def _assemble_deploy_values(self, apply_plan=True, values=None, plan=None):
         """組裝部署用的全量「非敏感」helm values ＋ expose_config（單一真相源）。
 
         Fresh install 與既存 release 升級**共用這一條**組裝管線，讓 helm 在
@@ -3028,6 +3037,10 @@ class CloudService(models.Model):
         0 差異）。``apply_plan=False`` 只給 reset 密碼那條（``--atomic`` 15 秒預算）：方案
         規格改的是 pod template，夾帶進 reset 必定等不到新 pod 而回退（F-461-2）。
 
+        #1513：``values``／``plan`` 給換方案在**扣款前**預演用——以「換方案後要存的
+        values」與「新方案」組出真正 upgrade 會送的全量 values（送 operator 預檢），
+        此時 DB 裡還是舊 values、舊訂閱。兩者都不給＝現行行為（讀 stored values、目前方案）。
+
         **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，
         取 ``['values']`` 去比對 ``helm get values <rel>``（stored、非敏感）。
         ``sensitive_values``（admin_password）不在此組：它是敏感值、且 stored
@@ -3044,13 +3057,14 @@ class CloudService(models.Model):
         self.ensure_one()
         template = self.template_id
         # #559：helm_values 有 groups=，屬性直讀會 AccessError。走唯一入口。
-        values = self._strip_mcp_sensitive_values(self._helm_values_dict()) or {}
+        values = self._strip_mcp_sensitive_values(
+            values if values is not None else self._helm_values_dict()) or {}
         # helm_value_specs 帶 ``format`` 的租戶文字欄位 → chart 形態（例 code-server
         # 的 git.tokenHosts「github.com, git.example.com」→ https URL list）。
         # helm_values 保留租戶原文；不合法的值丟掉、chart 預設補位。
         values = template._apply_spec_formats(values)
         if apply_plan:
-            plan = self._current_plan()
+            plan = plan or self._current_plan()
             if plan:
                 values = self._apply_plan_spec_overlay(
                     values, template, plan, existing=True)

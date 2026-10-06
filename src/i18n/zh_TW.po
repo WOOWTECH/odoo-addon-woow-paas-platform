@@ -20544,3 +20544,33 @@ msgstr "重設管理員密碼會產生立即生效的新密碼，已登入的裝
 msgid ""
 "The administrator account of this service no longer has administrator rights, so the password was not changed. Ask another administrator in Omnigent to make it an administrator again, then reset again; if there is none, please open a support ticket."
 msgstr "此服務的管理員帳號已不具管理員權限，密碼沒有變更。請由 Omnigent 內其他管理員將它重新設為管理員後再重設；若沒有其他管理員，請開工單聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "There is not enough cluster storage to enlarge this service's disk to the new plan's size. The plan was not changed and nothing was charged. Please contact support."
+msgstr "叢集儲存空間不足，無法把這個服務的磁碟擴充到新方案的大小。方案沒有變更，也沒有扣款，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "This service's disk cannot be enlarged to the new plan's size. The plan was not changed and nothing was charged. Please contact support."
+msgstr "這個服務的磁碟無法擴充到新方案的大小。方案沒有變更，也沒有扣款，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "The service could not be checked for the new plan right now. The plan was not changed and nothing was charged. Please try again later or contact support."
+msgstr "目前無法確認服務能否套用新方案。方案沒有變更，也沒有扣款，請稍後再試或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s, namespace %(ns)s) → plan \"%(plan)s\": %(pvcs)s (%(reason)s)"
+msgstr "%(name)s（id=%(id)s，namespace %(ns)s）→ 方案「%(plan)s」：%(pvcs)s（%(reason)s）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Plan changes were rejected before anything was charged or applied because a disk could not be enlarged (reason \"capacity\" means the cluster storage (Longhorn) has no room for the extra size on the disks holding its replicas). Free scheduling capacity or add storage, then ask the tenant to try again:"
+msgstr "以下換方案在扣款與套用之前就被擋下：磁碟無法擴充（原因為「capacity」表示叢集儲存（Longhorn）在存放該磁碟副本的硬碟上放不下增加的容量）。請釋放排程額度或增加儲存空間後，再請租戶重試："

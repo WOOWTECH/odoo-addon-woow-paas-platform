@@ -75,8 +75,8 @@ class TestPlanStorageRule1158(TransactionCase):
         self.assertEqual(self.Svc._plan_storage_size('lots', 30), 'lots')
 
 
-@tagged('post_install', '-at_install')
-class TestChangePlanReapply1158(TransactionCase):
+class _ChangePlanFixture:
+    """woow-odoo template＋三個方案、照 create 路徑造服務、打換方案端點（#1158／#1513 共用）。"""
 
     @classmethod
     def setUpClass(cls):
@@ -160,6 +160,15 @@ class TestChangePlanReapply1158(TransactionCase):
     @staticmethod
     def _values(svc):
         return svc.sudo()._helm_values_dict()
+
+    def _assert_untouched(self, svc, old_sub, values_before):
+        self.assertEqual(svc.sudo().subscription_id, old_sub, '不得換訂閱')
+        self.assertEqual(old_sub.state, 'in_progress', '不得關舊訂閱')
+        self.assertEqual(self._values(svc), values_before)
+
+
+@tagged('post_install', '-at_install')
+class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
 
     # ---------------- 升級 ---------------- #
 
@@ -248,11 +257,6 @@ class TestChangePlanReapply1158(TransactionCase):
         self.assertTrue(res['success'], res.get('error'))
 
     # ---------------- 前置 gate（第一個寫入之前） ---------------- #
-
-    def _assert_untouched(self, svc, old_sub, values_before):
-        self.assertEqual(svc.sudo().subscription_id, old_sub, '不得換訂閱')
-        self.assertEqual(old_sub.state, 'in_progress', '不得關舊訂閱')
-        self.assertEqual(self._values(svc), values_before)
 
     def test_rejects_when_service_is_not_running(self):
         for state in ('error', 'deploying', 'upgrading', 'initializing', 'pending'):
@@ -375,3 +379,113 @@ class TestLegacyScriptOverlayNotReapplied1158(TransactionCase):
         out = Svc._apply_plan_spec_overlay(values, tpl, plan, existing=True)
         self.assertEqual(out['customPostInitScripts'], {'a.sh': "echo 'workers = 2'"})
         self.assertEqual(out['resources']['limits']['memory'], '4Gi')
+
+
+_CAPACITY_DETAIL = {
+    'error_code': 'storage_expansion_rejected', 'reason': 'capacity',
+    'namespace': 'paas-ws-test-1158-x',
+    'pvcs': [{'name': 'svc-data', 'live': '20Gi', 'rendered': '30Gi', 'reason': 'capacity'}],
+    'message': '升級前檢查發現磁碟無法擴充，已停止升級（沒有套用任何變更）：…',
+}
+
+
+@tagged('post_install', '-at_install')
+class TestChangePlanExpansionPreflight1513(_ChangePlanFixture, TransactionCase):
+    """#1513：扣款前問 operator（``upgrade-preflight``）磁碟擴得了嗎；擴不了整筆擋下、不扣款。
+
+    #1158 實測：Longhorn 排程額度不足時 data PVC 擴容被拒，背景 upgrade 失敗，而帳單已換。
+    """
+
+    @staticmethod
+    def _api_error(status, detail):
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
+        return PaaSOperatorAPIError(message='API error: %s' % detail, status_code=status,
+                                    detail=detail)
+
+    def test_preflight_runs_with_the_exact_upgrade_arguments(self):
+        owner, svc = self._service('pf-args')
+        client = self._client()
+        res = self._change(owner, svc, self.plan_b, client)
+        self.assertTrue(res['success'], res.get('error'))
+        pre = client.upgrade_preflight.call_args.kwargs
+        up = client.upgrade_release.call_args.kwargs
+        self.assertEqual(pre, up, '預檢與真正的 upgrade 必須是同一組參數，否則預檢沒有意義')
+        self.assertEqual(pre['values']['persistence']['size'], '30Gi')
+        self.assertEqual(pre['values']['conf']['workers'], 3)
+        names = [c[0] for c in client.method_calls]
+        self.assertLess(names.index('upgrade_preflight'), names.index('update_namespace_quota'))
+
+    def test_capacity_denial_blocks_before_billing(self):
+        owner, svc = self._service('pf-cap')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        allocated = (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb)
+        client = self._client()
+        client.upgrade_preflight.side_effect = self._api_error(409, _CAPACITY_DETAIL)
+        Monitor = type(self.env['woow_paas_platform.platform_monitor'])
+        with patch.object(Monitor, '_report_storage_expansion_rejection') as alert:
+            res = self._change(owner, svc, self.plan_b, client)
+        self.assertFalse(res['success'])
+        self.assertIn('storage', res['error'])
+        self.assertEqual(res['data']['code'], 'storage_expansion_rejected')
+        self._assert_untouched(svc, old_sub, before)
+        self.assertEqual(
+            (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb), allocated)
+        self.assertEqual(svc.state, 'running')
+        client.upgrade_release.assert_not_called()
+        client.update_namespace_quota.assert_not_called()
+        alert.assert_called_once()
+        self.assertEqual(alert.call_args.args[-1], _CAPACITY_DETAIL)
+
+    def test_other_preflight_conflict_blocks_too(self):
+        """#1407 不可變欄位衝突（detail 是字串）——真正的 upgrade 也一定 409，同樣擋在扣款前。"""
+        owner, svc = self._service('pf-1407')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        client = self._client()
+        client.upgrade_preflight.side_effect = self._api_error(409, '升級前檢查發現下列欄位…')
+        res = self._change(owner, svc, self.plan_b, client)
+        self.assertFalse(res['success'])
+        self._assert_untouched(svc, old_sub, before)
+        client.upgrade_release.assert_not_called()
+
+    def test_unreachable_operator_blocks(self):
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorConnectionError, PaaSOperatorTimeoutError)
+        for exc in (PaaSOperatorConnectionError('down'), PaaSOperatorTimeoutError('slow'),
+                    self._api_error(500, 'Helm 升級失敗：…')):
+            with self.subTest(exc=type(exc).__name__):
+                owner, svc = self._service('pf-down-%s-%s' % (
+                    type(exc).__name__.lower()[-10:], exc.status_code or 0))
+                old_sub, before = svc.sudo().subscription_id, self._values(svc)
+                client = self._client()
+                client.upgrade_preflight.side_effect = exc
+                res = self._change(owner, svc, self.plan_b, client)
+                self.assertFalse(res['success'])
+                self._assert_untouched(svc, old_sub, before)
+
+    def test_operator_without_the_endpoint_is_allowed(self):
+        """舊版 operator（404）：放行，行為與 #1513 之前相同（發版順序：operator 先）。"""
+        owner, svc = self._service('pf-404')
+        client = self._client()
+        client.upgrade_preflight.side_effect = self._api_error(404, 'Not Found')
+        res = self._change(owner, svc, self.plan_b, client)
+        self.assertTrue(res['success'], res.get('error'))
+        client.upgrade_release.assert_called_once()
+
+    def test_same_spec_change_does_not_ask(self):
+        owner, svc = self._service('pf-same')
+        client = self._client()
+        self._change(owner, svc, self.plan_a_yearly, client)
+        client.upgrade_preflight.assert_not_called()
+
+    def test_capacity_denial_records_one_admin_activity(self):
+        """不 mock 告警：真的開 activity 給管理員（同 summary 未處理前只追加一行）。"""
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        summary = Monitor.SUMMARY_STORAGE_EXPANSION_REJECTED
+        owner, svc = self._service('pf-alert')
+        client = self._client()
+        client.upgrade_preflight.side_effect = self._api_error(409, _CAPACITY_DETAIL)
+        self._change(owner, svc, self.plan_b, client)
+        activities = self.env['mail.activity'].sudo().search([('summary', '=', summary)])
+        self.assertTrue(activities)
+        self.assertIn('id=%s' % svc.id, activities[0].note)
+        self.assertIn('svc-data 20Gi→30Gi', activities[0].note)

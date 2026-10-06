@@ -28,8 +28,10 @@ from ..models.workspace_access import (
 from ..services.paas_capability import _PaaSCapability
 from ..services.paas_operator import (
     get_paas_operator_client,
+    PaaSOperatorAPIError,
     PaaSOperatorError,
     PaaSOperatorConnectionError,
+    STORAGE_EXPANSION_ERROR_CODE,
 )
 from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 parser 搬到 template model
 from ..models.cloud_service import WOOW_ODOO_ADMIN_PASSWORD_PATH, _internal_provision
@@ -1337,6 +1339,17 @@ class PaasController(HiddenChainMixin, Controller):
             client = get_paas_operator_client(request.env)
             if not client:
                 return {'success': False, 'error': _('PaaS Operator not configured')}
+            # #1513：扣款前用「真正 upgrade 會送的那一組參數」問 operator 擴得了嗎——磁碟要
+            # 變大時由 Longhorn validator 判斷（server dry-run），放不下就整筆擋下、不扣款。
+            # 換方案不升 chart、不 refresh image（#1160／#1184）：釘服務現行 chart 版本。
+            resolved_version = (
+                service.helm_chart_version or service.template_id.helm_chart_version)
+            upgrade_kwargs = self._upgrade_kwargs(
+                service, resolved_version,
+                service._assemble_deploy_values(values=new_values, plan=plan)['values'])
+            denial = self._change_plan_preflight_denial(service, plan, client, upgrade_kwargs)
+            if denial:
+                return denial
 
         refund = old_sub._compute_unused_refund()
 
@@ -1383,8 +1396,6 @@ class PaasController(HiddenChainMixin, Controller):
             # 停權中的服務照 reconfigure（#482）：values 套上、upgrade 後 scale 回 0、
             # state 留在 suspended。換方案不升 chart、不 refresh image（#1160／#1184）。
             halted = service._is_halted()
-            resolved_version = (
-                service.helm_chart_version or service.template_id.helm_chart_version)
             service._apply_helm_values(new_values, extra_vals={
                 **allocated_vals,
                 'state': 'suspended' if halted else 'upgrading',
@@ -1398,7 +1409,7 @@ class PaasController(HiddenChainMixin, Controller):
             service._push_ns_quota(service.workspace_id, service.helm_namespace)
         if reapply:
             self._start_background_upgrade(
-                service, client, resolved_version, halted,
+                service, client, resolved_version, halted, upgrade_kwargs=upgrade_kwargs,
                 failure_message=lambda detail: _(
                     'The plan was changed, but resizing the service failed: '
                     '%(reason)s. Please contact support to redeploy the service.',
@@ -1417,6 +1428,45 @@ class PaasController(HiddenChainMixin, Controller):
                 'resources_reapplied': reapply,
             },
         }
+
+    def _change_plan_preflight_denial(self, service, plan, client, upgrade_kwargs):
+        """#1513：換方案扣款前的 operator 升級預檢；要擋就回 endpoint 的失敗回應，放行回 None。
+
+        只有一種放行：舊版 operator 沒有這個端點（404／405）——行為與 #1513 之前相同（發版
+        順序是 operator 先）。其餘失敗（409 擴容被拒／不可變欄位衝突、5xx 渲染失敗、連不上、
+        逾時）真正的 upgrade 也幾乎一定失敗，所以擋在扣款前（#1158 Q5「能預判的失敗全部擋在
+        帳務之前」）。
+        """
+        try:
+            client.upgrade_preflight(**upgrade_kwargs)
+            return None
+        except PaaSOperatorError as exc:
+            detail = exc.detail
+            if isinstance(exc, PaaSOperatorAPIError) and exc.status_code in (404, 405):
+                _logger.warning(
+                    "[CLOUD_SVC] change_plan service=%s: operator has no upgrade-preflight "
+                    "(HTTP %s); proceeding without the #1513 check", service.id, exc.status_code)
+                return None
+            _logger.warning(
+                "[CLOUD_SVC] change_plan service=%s plan=%s refused by upgrade preflight: "
+                "status=%s detail=%s", service.id, plan.id, exc.status_code, detail)
+        if (isinstance(detail, dict)
+                and detail.get('error_code') == STORAGE_EXPANSION_ERROR_CODE):
+            service._alert_storage_expansion_rejection(plan, detail)
+            if detail.get('reason') == 'capacity':
+                error = _('There is not enough cluster storage to enlarge this service\'s '
+                          'disk to the new plan\'s size. The plan was not changed and nothing '
+                          'was charged. Please contact support.')
+            else:
+                error = _('This service\'s disk cannot be enlarged to the new plan\'s size. '
+                          'The plan was not changed and nothing was charged. Please contact '
+                          'support.')
+            return {'success': False, 'error': error,
+                    'data': {'code': STORAGE_EXPANSION_ERROR_CODE,
+                             'reason': detail.get('reason')}}
+        return {'success': False, 'error': _(
+            'The service could not be checked for the new plan right now. The plan was not '
+            'changed and nothing was charged. Please try again later or contact support.')}
 
     def _skip_trial_invoice_payability(self, service, sub=None):
         """預演 skip-trial 將建立的 invoice，套用 billing 的 replay-safe SSOT。
@@ -4229,28 +4279,9 @@ class PaasController(HiddenChainMixin, Controller):
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': _('Unable to connect to deployment service')}
 
-    def _start_background_upgrade(self, service, client, resolved_version, halted,
-                                  restart_after_upgrade=False, failure_message=None):
-        """在背景執行緒對既存 release 跑全量 values 的 helm upgrade（reconfigure／#1158 換方案共用）。
-
-        呼叫前必須已把 ``helm_values`` 與 state（``upgrading``／停權留 ``suspended``）寫好：
-        values 在**主執行緒**組裝（背景執行緒沒有 ORM）。``failure_message(detail)`` 給
-        背景失敗時寫進 ``error_message`` 的文字（預設「Upgrade failed: …」）。
-        """
-        if failure_message is None:
-            def failure_message(detail):
-                return _('Upgrade failed: %(reason)s', reason=detail)
-        # Capture values for the background thread (no ORM access).
-        db_name = request.env.cr.dbname
-        service_id = service.id
-        # #411: 送 operator 的 values 必須是「全量組裝」結果（含 4 injectors
-        # ＋ odoo addon），因為改走 reset_values 語意後不再靠 --reuse-values
-        # 保留首裝注入的 injector 值（storage_class / image_pull_secrets /
-        # allowed_origins / apiserver_cidrs）——若只送 merged_values，reset 後
-        # 這些會全部從 rendered manifest 消失。組裝必須在**主執行緒**先算好
-        # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
-        # svc.helm_values 已由呼叫端寫好，helper 讀到的即最新 user config。
-        assembled_values = service._assemble_deploy_values()['values']
+    @staticmethod
+    def _upgrade_kwargs(service, resolved_version, assembled_values):
+        """送 operator ``upgrade_release``／``upgrade_preflight`` 的參數（兩者必須同一組，#1513）。"""
         # #1130：woow-odoo 的 conf.adminPassword 每次全量送（reset_values 下不送就
         # 變空值；chart 對既有 DB 是 no-op）。只補 odoo 這一支——MCP 家族在
         # reconfigure 缺 sensitive 的既有行為不在本票範圍。
@@ -4267,6 +4298,35 @@ class PaasController(HiddenChainMixin, Controller):
         )
         if odoo_sensitive:
             upgrade_kwargs['sensitive_values'] = odoo_sensitive
+        return upgrade_kwargs
+
+    def _start_background_upgrade(self, service, client, resolved_version, halted,
+                                  restart_after_upgrade=False, failure_message=None,
+                                  upgrade_kwargs=None):
+        """在背景執行緒對既存 release 跑全量 values 的 helm upgrade（reconfigure／#1158 換方案共用）。
+
+        呼叫前必須已把 ``helm_values`` 與 state（``upgrading``／停權留 ``suspended``）寫好：
+        values 在**主執行緒**組裝（背景執行緒沒有 ORM）。``failure_message(detail)`` 給
+        背景失敗時寫進 ``error_message`` 的文字（預設「Upgrade failed: …」）。
+        ``upgrade_kwargs``：已經送過 ``upgrade_preflight`` 的那一組（#1513，確保預檢與真正
+        upgrade 同參數）；不給就從 stored values 組。
+        """
+        if failure_message is None:
+            def failure_message(detail):
+                return _('Upgrade failed: %(reason)s', reason=detail)
+        # Capture values for the background thread (no ORM access).
+        db_name = request.env.cr.dbname
+        service_id = service.id
+        # #411: 送 operator 的 values 必須是「全量組裝」結果（含 4 injectors
+        # ＋ odoo addon），因為改走 reset_values 語意後不再靠 --reuse-values
+        # 保留首裝注入的 injector 值（storage_class / image_pull_secrets /
+        # allowed_origins / apiserver_cidrs）——若只送 merged_values，reset 後
+        # 這些會全部從 rendered manifest 消失。組裝必須在**主執行緒**先算好
+        # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
+        # svc.helm_values 已由呼叫端寫好，helper 讀到的即最新 user config。
+        if upgrade_kwargs is None:
+            upgrade_kwargs = self._upgrade_kwargs(
+                service, resolved_version, service._assemble_deploy_values()['values'])
         operator_url = client.base_url
         operator_api_key = client._session.headers.get('X-API-Key', '')
 

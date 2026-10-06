@@ -2869,6 +2869,32 @@ class KubernetesService:
             return []
         return output.split()
 
+    #: #1513：一次 server dry-run 的上限。逾時＝「不知道」（呼叫端放行），所以寧短勿長——
+    #: 這段時間會疊加在升級（含 reset 密碼）的預算上（reset-async-budget-ladder）。
+    PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS = 10
+
+    def dry_run_pvc_resize(self, namespace: str, name: str, size: str) -> None:
+        """#1513：問 API server「把這顆 PVC 加大到 ``size`` 會不會被接受」，什麼都不改。
+
+        ``kubectl patch --dry-run=server`` 會跑完整的 admission 鏈：Longhorn 的
+        ``validator.longhorn.io`` 宣告 ``sideEffects: None``，dry-run 照樣呼叫它，所以
+        「replica 所在磁碟放不放得下增量」由 Longhorn 自己判斷（``CheckReplicasSizeExpansion``），
+        operator 不必重寫排程規則、也不需要讀 ``replicas.longhorn.io`` 的權限。
+
+        Raises:
+            KubectlException: 被拒絕或 kubectl 失敗（解讀在
+                ``upgrade_preflight.classify_expansion_rejection``）。
+            ValueError: namespace 不在允許範圍。
+        """
+        validate_namespace(namespace)
+        patch = json.dumps({"spec": {"resources": {"requests": {"storage": size}}}},
+                           separators=(",", ":"))
+        self._run_command(
+            ["patch", "pvc", name, "--namespace", namespace, "--type", "merge",
+             "--patch", patch, "--dry-run=server", "--output", "name"],
+            timeout=self.PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS,
+        )
+
     def get_storage_quota_snapshot(
         self, namespace: str
     ) -> Dict[str, List[Dict[str, Any]]]:
