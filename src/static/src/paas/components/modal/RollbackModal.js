@@ -32,6 +32,9 @@ export class RollbackModal extends Component {
             loading: true,
             rolling: false,
             error: null,
+            // #1433：選好版本後先進確認步驟（說明會回復什麼、不會回復什麼），
+            // 再按一次才真的送出。原本單擊即執行、對話框也沒提帳密。
+            confirming: false,
         });
 
         onMounted(() => {
@@ -75,6 +78,38 @@ export class RollbackModal extends Component {
         }
     }
 
+    /**
+     * #1433：平台管的管理員帳密在回復時保留目前的值（後端改走保留憑證的回復）。
+     * 判準鏡射 `template.has_admin_gui`——與後端 `_rollback_preserved_value_paths`
+     * 同一個欄位，前端不自建 slug 名單。
+     */
+    get keepsAdminCredentials() {
+        return !!this.props.service.template?.has_admin_gui;
+    }
+
+    _revisionByNumber(number) {
+        return this.state.revisions.find((r) => r.revision === number) || null;
+    }
+
+    /** 確認步驟的 chart 版本差異；兩邊相同或缺資料時回 null（不顯示這一行）。 */
+    get chartChange() {
+        const current = this._revisionByNumber(this.currentRevision);
+        const target = this._revisionByNumber(this.state.selectedRevision);
+        if (!current || !target || !current.chart || !target.chart) {
+            return null;
+        }
+        if (current.chart === target.chart) {
+            return null;
+        }
+        return { from: current.chart, to: target.chart };
+    }
+
+    onBack() {
+        if (!this.state.rolling) {
+            this.state.confirming = false;
+        }
+    }
+
     isSelected(revision) {
         return this.state.selectedRevision === revision.revision;
     }
@@ -111,6 +146,11 @@ export class RollbackModal extends Component {
 
     async onRollback() {
         if (!this.canRollback) {
+            return;
+        }
+        if (!this.state.confirming) {
+            this.state.confirming = true;
+            this.state.error = null;
             return;
         }
 

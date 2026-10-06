@@ -239,6 +239,8 @@ class PaaSOperatorClient:
         memory_limit: str = '4Gi',
         storage_limit: str = '20Gi',
         workspace_id: Optional[int] = None,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
     ) -> Dict[str, str]:
         """Create a Kubernetes namespace with resource quota.
 
@@ -265,6 +267,12 @@ class PaaSOperatorClient:
         }
         if workspace_id is not None:
             data['workspace_id'] = workspace_id
+        # #1434：只在有值時送——舊 operator 的 pydantic model 會忽略未知欄位，但不送
+        # 讓 payload 對「沒有 ephemeral 額度」的呼叫端維持原樣。
+        if ephemeral_storage_request:
+            data['ephemeral_storage_request'] = ephemeral_storage_request
+        if ephemeral_storage_limit:
+            data['ephemeral_storage_limit'] = ephemeral_storage_limit
         return self._request('POST', '/api/namespaces', data=data)
 
     def update_namespace_quota(
@@ -273,6 +281,8 @@ class PaaSOperatorClient:
         cpu_limit: str,
         memory_limit: str,
         storage_limit: str,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
     ) -> Dict[str, Any]:
         """#278 A1：PUT 整組 ns quota（值 = 存活 service 集重算）。
 
@@ -292,6 +302,11 @@ class PaaSOperatorClient:
                 'cpu_limit': cpu_limit,
                 'memory_limit': memory_limit,
                 'storage_limit': storage_limit,
+                # #1434：見 create_namespace 同名欄位。
+                **({'ephemeral_storage_request': ephemeral_storage_request}
+                   if ephemeral_storage_request else {}),
+                **({'ephemeral_storage_limit': ephemeral_storage_limit}
+                   if ephemeral_storage_limit else {}),
             },
             timeout=HELM_OPERATION_TIMEOUT,
         )
@@ -552,6 +567,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         subdomain: Optional[str] = None,
+        grace_period_days: Optional[int] = None,
     ) -> Dict[str, str]:
         """Uninstall a Helm release.
 
@@ -559,6 +575,10 @@ class PaaSOperatorClient:
             namespace: Release namespace
             release_name: Release name
             subdomain: Optional subdomain to delete from Cloudflare
+            grace_period_days: #1431 — keep the release's orphaned PVCs / DataVolumes
+                for only this many days (the platform sends 1 for a service that never
+                reached running). The operator honours ``1..PVC_GRACE_PERIOD_DAYS`` and
+                falls back to its default otherwise; operators older than #1431 ignore it.
 
         Returns:
             Deletion confirmation
@@ -566,12 +586,15 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If uninstallation fails
         """
-        url = f'/api/releases/{namespace}/{release_name}'
+        params = {}
         if subdomain:
-            url += f'?subdomain={subdomain}'
+            params['subdomain'] = subdomain
+        if grace_period_days:
+            params['grace_period_days'] = int(grace_period_days)
         return self._request(
             'DELETE',
-            url,
+            f'/api/releases/{namespace}/{release_name}',
+            params=params or None,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
@@ -605,18 +628,44 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def restart_release(
+        self,
+        namespace: str,
+        release_name: str,
+    ) -> Dict[str, Any]:
+        """#1432：rollout restart release 下所有 Deployment 與 StatefulSet。
+
+        operator 只「下達」不等待（回應 ``rollout_awaited: False``）；收斂交給平台
+        狀態機（呼叫端把服務轉 ``upgrading``，poll 轉回 ``running``）。PVC、Secret、
+        values 都不動。沒有任何 workload 時 operator 回 404。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/restart',
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def rollback_release(
         self,
         namespace: str,
         release_name: str,
         revision: int = 0,
-    ) -> Dict[str, str]:
+        chart: Optional[str] = None,
+        preserve_value_paths: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Rollback a Helm release to a previous revision.
+
+        #1433：帶 ``preserve_value_paths``（必須同時帶 ``chart``）時 operator 改走
+        「目標 revision 的 values ＋ 目前 revision 的這些路徑 ＋ 目標 chart 版本」的
+        helm upgrade，憑證（``config.sensitive`` 等）維持目前的值，不會跟著回到舊版。
+        回應多了 ``mode``／``revision``／``chart_version``。不帶＝純 helm rollback。
 
         Args:
             namespace: Release namespace
             release_name: Release name
             revision: Target revision (0 = previous)
+            chart: Chart reference (required with preserve_value_paths)
+            preserve_value_paths: Dot-paths whose current values must survive
 
         Returns:
             Rollback confirmation
@@ -624,7 +673,10 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If rollback fails
         """
-        data = {'revision': revision}
+        data: Dict[str, Any] = {'revision': revision}
+        if preserve_value_paths:
+            data['chart'] = chart
+            data['preserve_value_paths'] = list(preserve_value_paths)
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/rollback',
@@ -840,28 +892,41 @@ class PaaSOperatorClient:
         )
 
 
-    def get_mqtt_address(self, namespace: str, release_name: str) -> Dict[str, Any]:
-        """本服務對外 MQTT 位址（由 chart 的 tunnel agent 廣告的那一個）。
+    def get_public_address(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """本服務的對外位址（由 chart 的 ngrok sidecar 廣告：EMQX 的 tcp://、Headscale 的 https://）。
 
-        只有 `cloud_app_template.has_public_mqtt_address` 的商品需要問；呼叫端的
-        閘門是 `CloudService._chart_has_public_mqtt_address`，不要在這裡自建判準。
+        只有 `cloud_app_template.has_public_tunnel_address` 的商品需要問；呼叫端的
+        閘門是 `CloudService._chart_has_public_tunnel_address`，不要在這裡自建判準。
+
+        舊 operator（還沒有 ``/public-address``，回 404）時退回舊端點
+        ``/mqtt-address``：那支只回 ``tcp://``，EMQX 照常顯示，Headscale 的 https
+        位址要等 operator 升級後才看得到。部署順序本來就是 operator 先上
+        （見 PR 說明），這個退路只是讓「平台先上了」不至於讓 EMQX 的位址整格消失。
 
         Args:
             namespace: Release namespace
             release_name: Release name
 
         Returns:
-            ``{'public_url': 'tcp://host:port'}``，或 ``{'public_url': None}``
-            —— 後者是**正常狀態**（租戶沒開、agent 還沒連上、pod 還沒起來），
-            不是失敗，呼叫端不得把它當錯誤處理。
+            ``{'public_url': 'tcp://host:port' | 'https://host'}``，或
+            ``{'public_url': None}`` —— 後者是**正常狀態**（租戶沒開、agent 還沒連上、
+            sidecar 撤回、pod 還沒起來），不是失敗，呼叫端不得把它當錯誤處理。
 
         Raises:
             PaaSOperatorError: operator 本身失敗（kubectl 掛了、namespace 越界）
         """
-        return self._request(
-            'GET',
-            f'/api/releases/{namespace}/{release_name}/mqtt-address',
-        )
+        try:
+            return self._request(
+                'GET',
+                f'/api/releases/{namespace}/{release_name}/public-address',
+            )
+        except PaaSOperatorAPIError as e:
+            if e.status_code != 404:
+                raise
+            return self._request(
+                'GET',
+                f'/api/releases/{namespace}/{release_name}/mqtt-address',
+            )
 
 
     # ==================== Tunnel Operations ====================
@@ -1117,6 +1182,25 @@ class PaaSOperatorClient:
             （B.0 / §機械守線）。
         """
         return self._request('GET', '/api/reconcile/inventory')
+
+    def get_cluster_storage_capacity(self, storage_class: Optional[str] = None) -> Dict[str, Any]:
+        """GET /api/cluster/storage-capacity — 叢集儲存（Longhorn）排程額度（#1415，唯讀）。
+
+        Args:
+            storage_class: 以哪個 StorageClass 的 replica 數估「最大可放單顆 volume」；
+                None＝叢集預設 SC。
+
+        Returns:
+            Dict：``{available, reason?, nodes:[{name, limit_bytes, scheduled_bytes,
+            headroom_bytes, scheduled_ratio, ...}], largest_placeable_volume_bytes, replicas,
+            orphaned_pvcs:{count, requested, longhorn_scheduled, ...}|None, ...}``。
+            讀不到 Longhorn 時 operator 仍回 200、``available: false``。
+
+        Raises:
+            PaaSOperatorError（及子類）：404＝operator 太舊、沒有這個端點（呼叫端安靜略過）。
+        """
+        params = {'storage_class': storage_class} if storage_class else None
+        return self._request('GET', '/api/cluster/storage-capacity', params=params)
 
 
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:

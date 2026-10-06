@@ -41,12 +41,12 @@ SEED_TEMPLATE_FLOOR = 15
 
 #: #552 本次補上的四個釘版契約（xmlid -> 版本）。
 #: #1130：cloud_app_odoo 從 Bitnami odoo 28.2.10 換成自家 woow-odoo chart 0.2.3
-#: （woow-paas/woow-paas-charts#81；0.2.3 只加 platform 下限，tenant 與 0.2.2 相同）。
+#: （woow-paas/woow-paas-charts#81）；2026-10-04 升 0.2.7（備份 Job 起跑等 PG，woow-paas-charts#136）。
 EXPECTED_PINS = {
     'cloud_app_postgresql': '18.8.5',
     'cloud_app_n8n': '2.0.1',
     'cloud_app_redis': '27.0.18',
-    'cloud_app_odoo': '0.2.3',
+    'cloud_app_odoo': '0.2.7',
 }
 
 #: 仍在第三方 registry 的那幾個（「版本決定權在上游」的釘版理由只適用它們）。

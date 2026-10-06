@@ -71,3 +71,16 @@ class ShSubscriptionExtensionFields(models.Model):
         help='Set when the auto-cancellation email has been queued, so a '
              'state-transition retrigger does not double-send.',
     )
+
+    # --- #1424 billing hold ------------------------------------------------ #
+
+    woow_billing_hold_notified_at = fields.Datetime(
+        string='Billing Hold Notice Sent At',
+        copy=False,
+        readonly=True,
+        help='#1424: when the tenant was told (once) that this subscription is not '
+             'charged because its cloud service never worked (it has stayed in error '
+             'since it was created). The auto-invoice cron skips such subscriptions; '
+             'billing resumes once the service reaches running. Stamped only after the '
+             'notice reached the mail queue.',
+    )

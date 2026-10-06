@@ -72,8 +72,15 @@
                                     </div>
                                 </div>
                                 <div class="o_woow_sub_card_middle">
+                                    <!-- #1454：start_date 在試用中是「試用結束隔天」＝首個計費日，
+                                         原標籤「開始日期」讓人以為服務還沒開始；試用到期日
+                                         原本只出現在略過試用的確認視窗。 -->
                                     <t t-if="isActive(sub)">
-                                        <span class="o_woow_sub_card_date_label">Start Date</span>
+                                        <t t-if="sub.is_trial and sub.trial_end_date">
+                                            <span class="o_woow_sub_card_date_label">Trial Ends</span>
+                                            <span class="o_woow_sub_card_date" t-esc="formatDate(sub.trial_end_date)"/>
+                                        </t>
+                                        <span class="o_woow_sub_card_date_label">Billing Start Date</span>
                                         <span class="o_woow_sub_card_date" t-esc="formatDate(sub.start_date)"/>
                                     </t>
                                     <t t-else="">

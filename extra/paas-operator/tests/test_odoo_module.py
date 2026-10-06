@@ -139,3 +139,112 @@ class TestOdooModuleService:
                 release_name="my-odoo",
                 module_names=["sale"],
             )
+
+
+# --- #1477：module-states 走 woow-odoo exec 契約（與 init/odoo 同源）---------------
+
+
+def _module_states_output():
+    return MagicMock(stdout=json.dumps({
+        "success": True,
+        "modules": {"mcp_server": {"state": "uninstalled", "dependents": []}},
+    }))
+
+
+class TestModuleStatesWoowOdooContract1477:
+    """exec 參數斷言比照 #1249 的 ``test_odoo_init_contract.py``。"""
+
+    def test_targets_server_pod_with_chart_contract(self):
+        """同 release 的 PG／cron 不得取代 server；容器 odoo、PATH python3、/etc/odoo/odoo.conf。"""
+        k8s = MagicMock()
+        pods = [
+            ("pg-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/component": "postgresql"}),
+            ("cron-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo",
+                        "app.kubernetes.io/component": "cron"}),
+            ("web-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo",
+                       "app.kubernetes.io/component": "server"}),
+        ]
+
+        def get_pod_name(namespace, selector):
+            requested = dict(part.split("=", 1) for part in selector.split(","))
+            for name, labels in pods:
+                if requested.items() <= labels.items():
+                    return name
+            raise KubectlException("No pods", "get pods", "")
+
+        k8s.get_pod_name.side_effect = get_pod_name
+        k8s.exec_in_pod.return_value = _module_states_output()
+
+        result = OdooModuleService(k8s).get_module_states(
+            "paas-ws-test", "tenant", ["mcp_server"],
+        )
+
+        assert result["modules"]["mcp_server"]["state"] == "uninstalled"
+        k8s.get_pod_name.assert_called_once_with(
+            "paas-ws-test",
+            "app.kubernetes.io/instance=tenant,app.kubernetes.io/component=server",
+        )
+        k8s.get_pod.assert_not_called()
+        call = k8s.exec_in_pod.call_args
+        assert call.kwargs["pod_name"] == "web-0"
+        assert call.kwargs["container"] == "odoo"
+        command = call.kwargs["command"]
+        assert command[:2] == ["python3", "-c"]
+        assert "'/etc/odoo/odoo.conf'" in command[2]
+        assert "bitnami" not in " ".join(command)
+
+    @staticmethod
+    def _legacy_pod():
+        return {
+            "metadata": {
+                "name": "legacy-0",
+                "namespace": "paas-ws-test",
+                "labels": {"app.kubernetes.io/instance": "tenant"},
+            },
+            "spec": {"containers": [{"name": "odoo"}]},
+        }
+
+    def _fallback_k8s(self, pod):
+        k8s = MagicMock()
+        k8s.get_pod_name.side_effect = [
+            KubectlException("No server", "get pods", ""), "legacy-0",
+        ]
+        k8s.get_pod.return_value = pod
+        k8s.exec_in_pod.return_value = _module_states_output()
+        return k8s
+
+    @pytest.mark.parametrize("case", [
+        "cron", "postgresql", "job-owner", "no-odoo-container", "foreign-instance", "get-failure",
+    ])
+    def test_rejects_unverified_fallback_without_exec(self, case):
+        pod = self._legacy_pod()
+        labels = pod["metadata"]["labels"]
+        if case in ("cron", "postgresql"):
+            labels["app.kubernetes.io/component"] = case
+        elif case == "job-owner":
+            pod["metadata"]["ownerReferences"] = [{"kind": "Job", "name": "backup"}]
+        elif case == "no-odoo-container":
+            # Bitnami 時代的容器名 <release>-odoo 也不再被接受。
+            pod["spec"]["containers"] = [{"name": "tenant-odoo"}]
+        elif case == "foreign-instance":
+            labels["app.kubernetes.io/instance"] = "other"
+        k8s = self._fallback_k8s(pod)
+        if case == "get-failure":
+            k8s.get_pod.side_effect = KubectlException("Forbidden", "get pod", "")
+
+        with pytest.raises(OdooModuleError) as error:
+            OdooModuleService(k8s).get_module_states("paas-ws-test", "tenant", ["mcp_server"])
+
+        assert error.value.step == "find_pod"
+        k8s.exec_in_pod.assert_not_called()
+
+    def test_verified_legacy_fallback_still_queries(self):
+        k8s = self._fallback_k8s(self._legacy_pod())
+
+        result = OdooModuleService(k8s).get_module_states(
+            "paas-ws-test", "tenant", ["mcp_server"],
+        )
+
+        assert result["success"] is True
+        assert k8s.exec_in_pod.call_args.kwargs["pod_name"] == "legacy-0"
+        assert k8s.exec_in_pod.call_args.kwargs["container"] == "odoo"

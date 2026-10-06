@@ -21,7 +21,7 @@
                t-on-click="() => this.onPlanClick(base)">
             <div class="o_woow_plan_card__name" t-esc="base.name"/>
             <div class="o_woow_plan_card__price" t-esc="formatPrice(base)"/>
-            <div t-if="base.has_trial" class="o_woow_plan_card__trial" t-esc="formatTrial(base)"/>
+            <div t-if="base.has_trial and !props.hideTrial" class="o_woow_plan_card__trial" t-esc="formatTrial(base)"/>
             <!-- 規格（難題 9）：plan.specs 才渲染，service_type 無感 -->
             <div t-if="base.specs and base.specs.length" class="o_woow_plan_card__specs">
               <t t-foreach="base.specs" t-as="spec" t-key="spec_index">

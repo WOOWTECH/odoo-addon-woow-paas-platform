@@ -6767,8 +6767,9 @@ _STATUS_CONTRACT_GOLDEN = "src/tests/fixtures/status_contract_golden.json"
 #: golden 的 body 由這幾個 class 決定（Pod 身分在 PodInfo、能力旗標在
 #: ReleaseStatusResponse、release 子物件在 ReleaseInfo）。順序有意義，同 route。
 #: ⚠ 刻意不含 VmiInfo／DataVolumeInfo：golden 只有 include_vm=false 的情形。
-_STATUS_CONTRACT_CLASSES = ("PodPhase", "PodInfo", "ReleaseStatus", "ReleaseInfo",
-                            "ReleaseStatusResponse")
+# #1417：PodInfo 的巢狀診斷欄位（ContainerWaitingInfo／PodWarningEvent）一併納入指紋。
+_STATUS_CONTRACT_CLASSES = ("PodPhase", "ContainerWaitingInfo", "PodWarningEvent", "PodInfo",
+                            "ReleaseStatus", "ReleaseInfo", "ReleaseStatusResponse")
 STATUS_CONTRACT_FILES = (_OPERATOR_SCHEMA, _STATUS_CONTRACT_GOLDEN)
 
 

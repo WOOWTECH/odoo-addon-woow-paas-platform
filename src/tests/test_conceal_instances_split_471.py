@@ -109,6 +109,9 @@ class TestConcealInstancesSeed(TransactionCase):
         # （code-server 2026-09-30 image 釘上 20260930.1503@sha256 後公開上架＝不再 hidden。）
         # （emqx／nextcloud 2026-10-02 #1321 以隱藏卡片進 seed，10-02 image 鏡像與 chart 0.1.1
         #  落地後公開上架＝不再 hidden；當時只翻 is_hidden，實例層從未設。）
+        # （headscale／tailscale／litellm 2026-10-04 #1413 以隱藏卡片進 seed、隨 .206 上正式站，
+        #  image 鏡像核可、chart 0.1.0 發佈與整合實測通過後同日公開上架＝不再 hidden；
+        #  當時只翻 is_hidden，實例層從未設。）
         self.assertEqual(
             set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')

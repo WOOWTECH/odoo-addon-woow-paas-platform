@@ -6,5 +6,19 @@
         <record id="platform_monitor_singleton" model="woow_paas_platform.platform_monitor">
             <field name="name">PaaS Platform Monitor</field>
         </record>
+        <!-- Cron: 叢集儲存（Longhorn）排程額度告警（#1415）
+
+             呼叫 operator GET /api/cluster/storage-capacity（唯讀）；額度偏低時開 activity 給
+             系統管理員。每 15 分一次：額度是慢變量，開通前另有 operator 的硬檢查。
+             ⚠ noupdate=1：新 record 在升級時會建立，日後改 interval 要改 DB 或走 migration。 -->
+        <record id="ir_cron_check_cluster_storage_capacity" model="ir.cron">
+            <field name="name">PaaS Monitor: Cluster Storage Capacity</field>
+            <field name="model_id" ref="model_woow_paas_platform_platform_monitor"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_check_cluster_storage_capacity()</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

@@ -3,7 +3,7 @@
 能力事實源是 ``template.admin_username_helm_path``：有值＝帳密是 chart Secret 管的
 一組 basic-auth，租戶可自設；空值＝只能 Reset（mcp-server 家族、hermes-agent）。
 
-本檔守四件事：
+本檔守五件事：
 
 1. **能力 gate 單一來源**：model、controller、payload 都讀同一個欄位，沒有 slug 名單。
 2. **提交點語意不變**：operator 回 2xx 之前失敗 ⇒ DB 的帳號與密碼都還是舊值（叢集
@@ -11,12 +11,18 @@
 3. **輸入把關**：帳號會原樣進 htpasswd 與 ttyd ``-c``，含 ':'／空白會把帳密切成
    另一組；壞輸入必須在呼叫 operator **之前**被擋下。
 4. **明文外洩面**：租戶自己填的密碼不回傳；平台鑄造的（選「隨機產生」）照舊一次性交付。
+5. **換發的 gateway key 一定交付**（LiteLLM 的 master key）：有 gateway 的 chart 每次
+   重設都換一把、舊的立即失效，租戶自填密碼時回應仍要帶新 key，前端也要為它開視窗
+   （``TestTenantSetDeliversGatewayKey``）。
 """
 import json
+import os
+import re
 from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
+from odoo.tools.translate import PoFileReader
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from odoo.addons.woow_paas_platform.models.workspace_access import ROLE_USER
@@ -331,3 +337,150 @@ class TestAdminCredentialsPayload(_CredentialsFixture):
         self.service.sudo().write({'helm_values': '{not json'})
         payload = self.controller._format_service(self.service)
         self.assertEqual(payload['admin_username'], 'admin', '退回 template 預設')
+
+
+#: 租戶自填密碼（不回傳）、但 gateway key 被換發時的回應訊息。程式字串，走 .po。
+TENANT_SET_KEY_REPLACED = (
+    'Admin credentials updated and the Gateway API Key was replaced. '
+    'Save the new Gateway API Key now — it will not be shown again. '
+    'The service restarts to apply them.'
+)
+#: 其他情境原本的訊息（本修正不動）。
+BOTH_RESET = (
+    'Admin password and Gateway API Key reset. Save both now — '
+    'they will not be shown again. Update the Gateway API Key '
+    'wherever you configured it (e.g. your MCP server).'
+)
+TENANT_SET_NO_GATEWAY = (
+    'Admin credentials updated. The service restarts to apply them '
+    '(about a minute).'
+)
+
+
+class TestTenantSetDeliversGatewayKey(_CredentialsFixture):
+    """有 gateway 的服務（LiteLLM 的 master key）租戶自設密碼：新 key 必須交付。
+
+    model 端 ``_reset_admin_password`` 對有 gateway 的 chart **每次**都換發 gateway
+    key、舊的立即失效；controller 只是不回傳租戶自填的密碼。修前前端只在回應帶
+    ``admin_password`` 時開一次性視窗 ⇒ 新 master key 從未交到租戶手上，租戶所有用
+    master key 的自動化當場斷掉，只能再按一次「隨機產生」才拿得到。
+
+    用真的 LiteLLM seed（不是自建模板）：守的是「上架中的那張卡」的實際行為。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', 'gw-tenant-set.invalid')
+        self.litellm = self.env.ref('woow_paas_platform.cloud_app_litellm')
+        self.gw_service = _internal_provision(
+            self.env['woow_paas_platform.cloud_service']).create({
+                'name': 'Svc litellm tenant-set',
+                'workspace_id': self.workspace.id,
+                'template_id': self.litellm.id,
+                'state': 'running',
+                'subdomain': 'svc-gw-tenant-set',
+                'helm_namespace': 'paas-ws-test',
+                'helm_release_name': 'svc-gw-tenant-set',
+                'helm_values': self.litellm.helm_default_values,
+            })
+        # 有 gateway 的 chart 在這裡補鑄 key（_set_admin_password_secret 的不變式）。
+        self.gw_service._set_admin_password_secret('old-password-0000')
+        self.old_key = self._secret(self.gw_service).gateway_api_key
+
+    def _secret(self, service):
+        return self.env['woow_paas_platform.cloud_service_secret'].sudo().search(
+            [('service_id', '=', service.id)], limit=1)
+
+    def _set(self, service, **params):
+        with self._patch_request_as(self.admin_user):
+            return self.controller.api_service_set_admin_credentials(
+                self.workspace.id, service.id, **params)
+
+    @patch(_OPERATOR_CLIENT)
+    def test_tenant_password_delivers_only_the_new_gateway_key(self, get_client):
+        client = MagicMock()
+        get_client.return_value = client
+        self.assertTrue(self.litellm.admin_credentials_settable, '前提：LiteLLM 可自設帳密')
+        self.assertTrue(self.old_key, '前提：有 gateway 的服務已經有一把 key')
+
+        result = self._set(self.gw_service, username='llm.ops', password=GOOD_PASSWORD)
+
+        self.assertTrue(result.get('success'), result)
+        data = result['data']
+        new_key = self._secret(self.gw_service).gateway_api_key
+        self.assertNotEqual(new_key, self.old_key, '前提：model 端換發了 key（舊的已失效）')
+        self.assertEqual(
+            data.get('gateway_api_key'), new_key,
+            '新 key 只在這次回應出現；少了它租戶的自動化全斷、且拿不回來')
+        self.assertEqual(
+            client.reset_release_config.call_args.kwargs[
+                'sensitive_values']['auth']['apiServerKey'],
+            new_key, '交付給租戶的就是叢集生效的那一把')
+        self.assertEqual(data.get('gateway_url'), 'https://svc-gw-tenant-set.gw-tenant-set.invalid/v1')
+        self.assertEqual(data.get('gateway_api_key_hint'), self.litellm.gateway_api_key_hint)
+        self.assertEqual(data.get('admin_username'), 'llm.ops')
+        self.assertNotIn('admin_password', data, '租戶自填的密碼不回傳')
+        self.assertNotIn(GOOD_PASSWORD, json.dumps(result))
+        self.assertEqual(
+            data.get('message'), TENANT_SET_KEY_REPLACED,
+            '不能說「兩個都存好」：密碼沒有回傳，要交代的是新 key')
+
+    @patch(_OPERATOR_CLIENT)
+    def test_generated_password_still_delivers_both(self, get_client):
+        """自設流程選「隨機產生」：密碼與 key 都交付，訊息維持原樣。"""
+        get_client.return_value = MagicMock()
+
+        result = self._set(self.gw_service, password='')
+
+        self.assertTrue(result.get('success'), result)
+        data = result['data']
+        self.assertEqual(data.get('admin_password'), self._secret(self.gw_service).admin_password)
+        self.assertEqual(data.get('gateway_api_key'), self._secret(self.gw_service).gateway_api_key)
+        self.assertEqual(data.get('message'), BOTH_RESET)
+
+    @patch(_OPERATOR_CLIENT)
+    def test_reset_endpoint_is_unchanged(self, get_client):
+        get_client.return_value = MagicMock()
+        with self._patch_request_as(self.admin_user):
+            result = self.controller.api_service_reset_admin_password(
+                self.workspace.id, self.gw_service.id)
+
+        self.assertTrue(result.get('success'), result)
+        self.assertTrue(result['data'].get('admin_password'))
+        self.assertTrue(result['data'].get('gateway_api_key'))
+        self.assertEqual(result['data'].get('message'), BOTH_RESET)
+
+    @patch(_OPERATOR_CLIENT)
+    def test_tenant_password_without_gateway_is_unchanged(self, get_client):
+        """沒有 gateway 的服務（open-design 型）：不交付 key、訊息維持原樣。"""
+        get_client.return_value = MagicMock()
+
+        result = self._set(self.service, password=GOOD_PASSWORD)
+
+        self.assertTrue(result.get('success'), result)
+        self.assertNotIn('gateway_api_key', result['data'])
+        self.assertNotIn('admin_password', result['data'])
+        self.assertEqual(result['data'].get('message'), TENANT_SET_NO_GATEWAY)
+
+    def test_new_strings_are_translated(self):
+        """新訊息是程式字串（走 .po），一次性視窗新增的帳號提示也要有中文。"""
+        po = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'i18n', 'zh_TW.po')
+        code = {e['src']: e['value'] for e in PoFileReader(po) if e.get('type') == 'code'}
+        for src in (TENANT_SET_KEY_REPLACED,
+                    'Signs in to this service, together with the password you set.'):
+            self.assertTrue(code.get(src), 'zh_TW.po 缺中文：%r' % src)
+
+    def test_frontend_opens_the_dialog_for_a_gateway_key(self):
+        """前端契約（靜態讀檔）：回應只帶 gateway key、沒有密碼時也要開一次性視窗。"""
+        src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        page = os.path.join(src, 'static', 'src', 'paas', 'pages', 'service',
+                            'ServiceDetailPage.js')
+        with open(page, encoding='utf-8') as f:
+            text = f.read()
+        match = re.search(r'async onAdminCredentialsSaved\(data\)\s*\{(.*?)\n    \}', text, re.S)
+        self.assertTrue(match, '找不到 onAdminCredentialsSaved（改名了？同步更新本測試）')
+        self.assertIn(
+            'data.gateway_api_key', match.group(1),
+            '只看 admin_password 會把換發的 gateway key 丟掉（舊的已失效）')

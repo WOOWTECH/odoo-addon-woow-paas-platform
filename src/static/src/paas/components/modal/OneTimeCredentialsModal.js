@@ -161,19 +161,32 @@ export function buildOneTimeCredentials(data) {
                 "Shared by the console and the dashboard (username: admin). Also enter it in the Dashboard REST API section of the MCP connection settings, together with the Dashboard API URL below."
             ),
         });
+    } else if (data && data.gateway_api_key && data.admin_username) {
+        // 租戶自填密碼（後端不回傳明文）、但 gateway key 換發了（例 LiteLLM 的 master
+        // key）：視窗只為交付新 key 而開。帳號不是敏感值，順帶列出方便對照；密碼格整個
+        // 不出現（不是空格），提示也不能寫「下方密碼」——這裡沒有密碼。
+        credentials.push({
+            label: _t("Username"),
+            value: data.admin_username,
+            hint: _t("Signs in to this service, together with the password you set."),
+        });
     }
+    // P3：gateway 兩格的提示依範本（後端 `gateway_api_key_hint`／`gateway_url_hint`，
+    // 範本的資料值、seed 原文）。沒帶時沿用 hermes-agent 的 MCP 說明（程式碼字串，走 po）——
+    // 其他有 gateway 的模板（例 LiteLLM：master key ＋ OpenAI 相容 Base URL）會帶自己的。
     if (data && data.gateway_api_key) {
         credentials.push({
             label: _t("Gateway API Key"),
             value: data.gateway_api_key,
-            hint: _t("Enter this in the Gateway API Server section of the MCP connection settings."),
+            hint: data.gateway_api_key_hint
+                || _t("Enter this in the Gateway API Server section of the MCP connection settings."),
         });
     }
     if (data && data.gateway_url) {
         credentials.push({
             label: _t("Gateway API URL"),
             value: data.gateway_url,
-            hint: _t(
+            hint: data.gateway_url_hint || _t(
                 "Enter this in the Gateway API Server section of the MCP connection settings. This is the full address including its sub-path; the service root URL on its own will not connect. This applies to this field only — the Dashboard API URL below is the opposite and needs the root URL with no sub-path."
             ),
         });

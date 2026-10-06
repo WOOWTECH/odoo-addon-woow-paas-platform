@@ -307,7 +307,11 @@ class TestCloudServiceController(TransactionCase):
         self.assertIn('image', rejected)
 
     def test_helm_values_filtering_no_specs(self):
-        """Test that all values pass through when no specs defined."""
+        """#1488：沒有 specs ⇒ 租戶 values 全部拒絕（舊版：全部放行）。
+
+        完整守線（null／``{}``／空陣列、遍歷 seed 範本、端到端）見
+        ``test_helm_values_whitelist_fail_closed_1488``。
+        """
         # Template without specs
         template_no_specs = self.Template.create({
             'name': 'No Specs Template',
@@ -326,9 +330,9 @@ class TestCloudServiceController(TransactionCase):
 
         filtered, rejected = template_no_specs._filter_allowed_helm_values(user_values)
 
-        # All values should pass through, nothing rejected
-        self.assertEqual(filtered, user_values)
-        self.assertEqual(rejected, [])
+        # Fail-closed: nothing passes, every key is reported back.
+        self.assertEqual(filtered, {})
+        self.assertEqual(sorted(rejected), sorted(user_values))
 
     def test_helm_values_filtering_empty_values(self):
         """Test filtering with empty values."""

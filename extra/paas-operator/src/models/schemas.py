@@ -94,10 +94,54 @@ class ReleaseUpgradeRequest(BaseModel):
     )
 
 
+#: #1433：``preserve_value_paths`` 每一條的合法形態——點分式、每段是 values 鍵名。
+#: 與平台 ``cloud_app_template.admin_username_helm_path`` 的驗證同形；不收萬用字元、
+#: 不收陣列索引（憑證通道都是 dict 葉節點或子樹）。
+_VALUE_PATH_RE = r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$"
+
+
 class ReleaseRollbackRequest(BaseModel):
-    """Request to rollback a Helm release."""
+    """Request to rollback a Helm release.
+
+    #1433：``helm rollback`` 重放的是目標 revision **整份** stored values——包含
+    ``config.sensitive.admin_password`` 等平台管的憑證 ⇒ 租戶換掉（撤銷）的舊密碼會
+    跟著復活、目前的密碼失效。帶 ``preserve_value_paths`` 時 operator 改走
+    「讀目標 revision 的 values ＋ 用**目前** revision 的值覆寫這些路徑 ＋ helm upgrade
+    釘目標 revision 的 chart 版本」，只回復 chart 與一般設定、憑證維持現值。
+
+    不帶（或空清單）＝原本的純 ``helm rollback``，舊平台零行為變化（operator 可先發版）。
+    """
 
     revision: Optional[int] = Field(None, description="Target revision number. If not provided, rolls back to the previous revision.")
+    chart: Optional[str] = Field(
+        default=None,
+        description="#1433: chart reference — required when preserve_value_paths is "
+        "non-empty (the preserving rollback is a helm upgrade, and Helm does not store "
+        "the original chart URL)",
+    )
+    preserve_value_paths: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="#1433: dot-paths whose CURRENT values must survive the rollback "
+        "(e.g. config.sensitive, auth.username). A path absent from the current values "
+        "is removed from the target values as well — current state wins, including absence.",
+    )
+
+    @field_validator("preserve_value_paths")
+    @classmethod
+    def _validate_preserve_paths(cls, paths: List[str]) -> List[str]:
+        import re
+
+        for path in paths:
+            if not isinstance(path, str) or not re.match(_VALUE_PATH_RE, path):
+                raise ValueError(f"invalid value path: {path!r}")
+        return paths
+
+    @model_validator(mode="after")
+    def _preserve_requires_chart(self) -> "ReleaseRollbackRequest":
+        if self.preserve_value_paths and not self.chart:
+            raise ValueError("preserve_value_paths requires chart")
+        return self
 
 
 class ReleaseResetConfigRequest(BaseModel):
@@ -167,6 +211,15 @@ class NamespaceCreateRequest(BaseModel):
     cpu_limit: str = Field(default="2", description="CPU limit (e.g., '2' or '2000m')")
     memory_limit: str = Field(default="4Gi", description="Memory limit")
     storage_limit: str = Field(default="20Gi", description="Storage limit")
+    ephemeral_storage_request: Optional[str] = Field(
+        default=None,
+        description="#1434: requests.ephemeral-storage quota. None (older platform) "
+        "keeps the quota free of ephemeral-storage keys",
+    )
+    ephemeral_storage_limit: Optional[str] = Field(
+        default=None,
+        description="#1434: limits.ephemeral-storage quota. None keeps the key absent",
+    )
     workspace_id: Optional[int] = Field(
         default=None,
         description="Odoo workspace id of the owning CloudService; stamped as the "
@@ -180,6 +233,10 @@ class NamespaceQuotaUpdateRequest(BaseModel):
     cpu_limit: str = Field(..., description="requests.cpu / limits.cpu")
     memory_limit: str = Field(..., description="requests.memory / limits.memory, e.g. 8Gi")
     storage_limit: str = Field(..., description="requests.storage, e.g. 100Gi")
+    ephemeral_storage_request: Optional[str] = Field(
+        default=None, description="#1434: requests.ephemeral-storage, e.g. 4Gi")
+    ephemeral_storage_limit: Optional[str] = Field(
+        default=None, description="#1434: limits.ephemeral-storage, e.g. 80Gi")
 
 
 class BaselineNetpolBackfillRequest(BaseModel):
@@ -256,6 +313,29 @@ class TunnelConfigUpdateRequest(BaseModel):
 # Response Models
 
 
+class ContainerWaitingInfo(BaseModel):
+    """#1417：Pod 卡在哪個容器、為什麼（``state.waiting``）。
+
+    先看 initContainerStatuses 再看 containerStatuses；``PodInitializing``／
+    ``ContainerCreating`` 這類「只是還沒輪到」的 reason 排在有實質內容的 reason
+    （``ImagePullBackOff``、``CrashLoopBackOff``…）之後。
+    """
+
+    container: str
+    init_container: bool = False
+    reason: str
+    message: Optional[str] = None  # 截短過（見 KubernetesService.DIAGNOSTIC_TEXT_LIMIT）
+
+
+class PodWarningEvent(BaseModel):
+    """#1417：這顆 Pod 最近一筆 Warning 事件（``FailedAttachVolume``、``FailedScheduling``…）。"""
+
+    reason: str
+    message: Optional[str] = None  # 截短過
+    count: Optional[int] = None
+    last_seen: Optional[str] = None  # RFC 3339（lastTimestamp／eventTime 原值）
+
+
 class PodInfo(BaseModel):
     """Information about a pod."""
 
@@ -276,6 +356,15 @@ class PodInfo(BaseModel):
     # #1222 升級提早收斂：metadata.creationTimestamp 原值（RFC 3339 UTC）。``age`` 是
     # 人讀字串且隨時間變，不能拿來判斷「Pod 建立於某時刻之後」。
     creation_timestamp: Optional[str] = None
+    # #1408：主要容器（``spec.containers``，不含 init）的 image 參照，順序同 spec。
+    # 舊 operator 不帶這個 key ⇒ 平台看到 None 就跳過 Redeploy 後的 image 核對。
+    images: Optional[List[str]] = None
+    # ---- #1417：未就緒 Pod 的診斷（選填；舊平台忽略即可）----------------------------
+    # 部署逾時訊息要說得出「卡在哪」：Pending 的 Pod 是沒排程、磁碟掛不上，還是拉不到
+    # image。None＝沒有可報的（容器都沒在 waiting／沒有 Warning 事件／事件查詢失敗），
+    # 不是錯誤。``last_warning`` 只在 status 端點、且這顆 Pod 未就緒時才查。
+    waiting: Optional[ContainerWaitingInfo] = None
+    last_warning: Optional[PodWarningEvent] = None
 
 
 class VmiInfo(BaseModel):
@@ -751,11 +840,27 @@ class OdooModuleStatesResponse(BaseModel):
 
 
 
-class MqttAddressResponse(BaseModel):
-    """對外 MQTT 位址（charts/emqx 的 ngrok sidecar 所廣告的那一個）。
+class PublicAddressResponse(BaseModel):
+    """對外位址（chart 的 ngrok sidecar 所廣告的那一個；EMQX 的 MQTT、Headscale 的控制網址）。
 
-    ``public_url`` 為 None 不代表錯誤：租戶沒開對外 MQTT、agent 還沒連上、
+    ``public_url`` 為 None 不代表錯誤：租戶沒開、agent 還沒連上、sidecar 撤回了位址、
     pod 還在起來，都會落在這裡。呼叫端不得把 None 當失敗。
+    """
+
+    public_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "ngrok agent 當前持有的 tcp://host:port 或 https://host[:port]；"
+            "沒有可報告的位址時為 None"
+        ),
+    )
+
+
+class MqttAddressResponse(BaseModel):
+    """舊端點 ``/mqtt-address`` 的回應（平台 ≤ 18.0.1.0.205 仍會呼叫）。
+
+    只會回 ``tcp://`` 位址；新平台改呼叫 ``/public-address``（``PublicAddressResponse``）。
+    ``public_url`` 為 None 不代表錯誤。
     """
 
     public_url: Optional[str] = Field(

@@ -4,6 +4,8 @@ ODOO_CONTAINER_NAME = "odoo"
 # 正式 image 透過 PATH launcher 選共同 venv，不綁 image 內部路徑。
 ODOO_PYTHON = "python3"
 ODOO_SERVER_LABEL = "app.kubernetes.io/component=server"
+# chart 掛 conf Secret 的位置（含 db_*）；注入租戶的 script 各自寫同值常數。
+ODOO_CONF_PATH = "/etc/odoo/odoo.conf"
 
 
 def odoo_pod_selectors(release_name: str) -> tuple[str, str]:

@@ -69,6 +69,7 @@
                   currentPlanId="props.currentPlanId"
                   usedSeats="usedSeats"
                   usedRoutes="props.usedRoutes"
+                  hideTrial="true"
                   onSelect.bind="onSelectPlan"/>
               </div>
 

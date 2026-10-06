@@ -91,6 +91,72 @@ _WOOW_ODOO_PODS = [
          phase="Succeeded", ready=(0, 1), task="backup"),
 ]
 
+#: #1417：10-04 事件的形狀——Pod 卡在 Init（磁碟掛不上）、另一顆反覆重啟、一顆就緒。
+#: 事件由同一個端點的第二次 kubectl（``get events``）回來；就緒那顆的舊事件不得被附上，
+#: 同名但不同 UID（前一顆 Pod）的事件也不得被附上。
+_DIAG_NS_EVENTS_UID = {"stuck": "uid-stuck-0", "crash": "uid-crash-0", "ok": "uid-ok-0"}
+
+
+def _diag_pod(name, uid, phase, init_statuses, statuses):
+    return {
+        "metadata": {
+            "name": name, "namespace": _NS, "uid": uid, "creationTimestamp": _CREATED,
+            "labels": {"app.kubernetes.io/instance": _RELEASE},
+            "ownerReferences": [_owner("StatefulSet")],
+        },
+        "spec": {"containers": [{"name": "app", "image": "example/app:1"}]},
+        "status": {"phase": phase, "initContainerStatuses": init_statuses,
+                   "containerStatuses": statuses},
+    }
+
+
+def _cs(name, ready=False, waiting=None, running=False, restarts=0):
+    state = {"waiting": waiting} if waiting else ({"running": {}} if running else {})
+    return {"name": name, "ready": ready, "restartCount": restarts, "state": state}
+
+
+_DIAG_PODS = [
+    # Init:0/1、主容器 PodInitializing（2026-10-04 svc 147 Nextcloud 的實際形狀）。
+    _diag_pod("svc-1263-stuck-0", _DIAG_NS_EVENTS_UID["stuck"], "Pending",
+              [_cs("volume-permissions", waiting={"reason": "PodInitializing"})],
+              [_cs("app", waiting={"reason": "PodInitializing"})]),
+    # Running 但主容器反覆重啟：實質 reason（CrashLoopBackOff）排在 sidecar 的 generic 之前。
+    _diag_pod("svc-1263-crash-0", _DIAG_NS_EVENTS_UID["crash"], "Running", [],
+              [_cs("sidecar", waiting={"reason": "ContainerCreating"}),
+               _cs("app", waiting={"reason": "CrashLoopBackOff",
+                                   "message": "back-off 5m0s restarting failed container=app"},
+                   restarts=7)]),
+    _diag_pod("svc-1263-ok-0", _DIAG_NS_EVENTS_UID["ok"], "Running", [],
+              [_cs("app", ready=True, running=True)]),
+]
+
+
+def _event(uid, name, reason, message, last, count=1):
+    return {"type": "Warning", "reason": reason, "message": message, "count": count,
+            "lastTimestamp": last,
+            "involvedObject": {"kind": "Pod", "name": name, "uid": uid, "namespace": _NS}}
+
+
+_DIAG_EVENTS = [
+    _event("uid-stuck-0", "svc-1263-stuck-0", "FailedScheduling",
+           "0/4 nodes are available: pod has unbound immediate PersistentVolumeClaims.",
+           "2026-10-04T01:17:30Z"),
+    # 較新那筆勝出；訊息照 2026-10-04 的事件原文（Longhorn 排程額度不足）。
+    _event("uid-stuck-0", "svc-1263-stuck-0", "FailedAttachVolume",
+           'AttachVolume.Attach failed for volume "pvc-0a1b" : rpc error: code = Aborted '
+           'desc = volume pvc-0a1b is not ready for workloads',
+           "2026-10-04T01:46:02Z", count=12),
+    _event("uid-crash-0", "svc-1263-crash-0", "BackOff",
+           "Back-off restarting failed container app in pod svc-1263-crash-0",
+           "2026-10-04T01:40:00Z", count=30),
+    # 就緒的 Pod 的舊事件：不附。
+    _event("uid-ok-0", "svc-1263-ok-0", "Unhealthy", "Readiness probe failed: 503",
+           "2026-10-04T01:00:00Z"),
+    # 同名、前一顆（不同 UID）的事件：不附。
+    _event("uid-stuck-old", "svc-1263-stuck-0", "FailedMount", "old pod",
+           "2026-10-04T01:59:00Z"),
+]
+
 #: 每一格宣告它**應該**長成的樣子；產生後自檢，沒走到的分支不會變成看似正常的 golden。
 CASES = {
     "woow_odoo_chart": lambda body: (
@@ -110,6 +176,15 @@ CASES = {
         body["pods"] == [] and bool(body["pod_retrieval_error"])
         and body["pod_identity_included"] is True
     ),
+    # #1417：未就緒 Pod 的診斷（waiting 容器＋最近一筆 Warning 事件）。
+    "unready_pod_diagnostics": lambda body: (
+        {p["name"]: ((p["waiting"] or {}).get("reason"), (p["waiting"] or {}).get("init_container"),
+                     (p["last_warning"] or {}).get("reason")) for p in body["pods"]} == {
+            "svc-1263-stuck-0": ("PodInitializing", True, "FailedAttachVolume"),
+            "svc-1263-crash-0": ("CrashLoopBackOff", False, "BackOff"),
+            "svc-1263-ok-0": (None, None, None),
+        }
+    ),
 }
 
 
@@ -126,9 +201,12 @@ def build_cases():
         chart="woow-odoo", chart_version="0.2.2", app_version="18.0",
         updated="2026-09-29T01:00:00Z",
     )
+    # 每格是依序回給 subprocess.run 的 kubectl 結果：先 get pods，有未就緒的 Pod 時再
+    # get events（#1417）。全部就緒的格子只會有第一次呼叫。
     kubectl = {
-        "woow_odoo_chart": _kubectl(0, _WOOW_ODOO_PODS),
-        "pod_retrieval_failed": _kubectl(1),
+        "woow_odoo_chart": [_kubectl(0, _WOOW_ODOO_PODS)],
+        "pod_retrieval_failed": [_kubectl(1)],
+        "unready_pod_diagnostics": [_kubectl(0, _DIAG_PODS), _kubectl(0, _DIAG_EVENTS)],
     }
     cases = {}
     with patch("src.main.settings.api_key", "golden-1263"), \
@@ -137,7 +215,7 @@ def build_cases():
                   staticmethod(lambda created: "5m")):
         client = TestClient(app, headers={"X-API-Key": "golden-1263"})
         for name in CASES:
-            with patch("subprocess.run", return_value=kubectl[name]):
+            with patch("subprocess.run", side_effect=list(kubectl[name])):
                 response = client.get(f"/api/releases/{_NS}/{_RELEASE}/status")
             assert response.status_code == 200, (name, response.text)
             cases[name] = response.json()

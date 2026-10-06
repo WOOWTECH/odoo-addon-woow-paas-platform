@@ -1,0 +1,10 @@
+// #1432 重新啟動確認框
+.o_woow_restart_notes {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+}
