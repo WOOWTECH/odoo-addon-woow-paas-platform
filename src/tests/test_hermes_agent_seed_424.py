@@ -341,12 +341,16 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.2.1（0.2.0→0.2.1＝#1377：agent pod 加 checksum/tenant-llm-keys，租戶改金鑰即 rollout）。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.3.1。
 
         版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
         0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
         test_webui_block_removed）→ 0.2.0（#717，租戶自裝 CLI 的落點收斂：十個安裝器
-        落點覆寫 env ＋ cli-landing-init initContainer）。
+        落點覆寫 env ＋ cli-landing-init initContainer）→ 0.2.1（#1377：agent pod 加
+        checksum/tenant-llm-keys，租戶改金鑰即 rollout）→ 0.3.0（#1397：agent 改
+        StatefulSet、console RBAC 綁 agent pod 名；依賴 operator 重設時重啟 opt-in
+        StatefulSet，#1398）→ 0.3.1（charts #138：認得平台注入的 llmGateway.baseUrl，
+        網址非空才開 networkPolicy.litellmEgress；見 cloud_service._LITELLM_BASE_URL_VALUE_PATHS）。
         這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
         artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
         跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
@@ -362,7 +366,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.2.1')
+        self.assertEqual(tpl.helm_chart_version, '0.3.1')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
@@ -1068,10 +1072,13 @@ class TestHermesAgentValueInjection(TransactionCase):
         # （2026-10-04 起 cloud_app_litellm 也刻意帶 gateway.externalPath=/v1：
         #  charts/litellm 0.1.0 把 auth.apiServerKey 當 LITELLM_MASTER_KEY，守線在
         #  test_litellm_seed.test_master_key_rides_the_gateway_channel。）
+        # （cloud_app_mcp_litellm 刻意**沒有**：它連的是 LiteLLM，金鑰由租戶自己貼，平台不鑄、
+        #  不交付——PLAN §10「不跨服務傳秘密」。）
         for xmlid in ('cloud_app_mcp_hermes',
                       'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
                       'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',
                       'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
+                      'cloud_app_mcp_litellm',
                       'cloud_app_haos', 'cloud_app_ha_paas'):
             with self.subTest(template=xmlid):
                 tpl = self.env.ref('woow_paas_platform.%s' % xmlid)

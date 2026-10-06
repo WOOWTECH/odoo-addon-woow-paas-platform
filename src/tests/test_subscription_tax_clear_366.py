@@ -71,7 +71,8 @@ class TestSeedProductCorpusIntact(TransactionCase):
     # 321 → 323：Omnigent 月/年；323 → 325：Code Server 月/年。
     # 325 → 329：EMQX 月/年 ＋ Nextcloud 月/年（皆無加購變體）。
     # 329 → 335：Headscale、Tailscale、LiteLLM 各月/年（皆無加購變體；範本先隱藏）。
-    _MIN_SEEDED_PRODUCTS = 335
+    # 335 → 337：MCP：AI 模型閘道（mcp-litellm）月/年（無加購變體；範本先隱藏）。
+    _MIN_SEEDED_PRODUCTS = 337
 
     def test_no_seed_product_is_silently_dropped(self):
         imd = self.env['ir.model.data'].sudo().search([
