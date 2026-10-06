@@ -23,6 +23,7 @@ from src.services.upgrade_preflight import (
     build_expansion_error_detail,
     classify_expansion_rejection,
     find_pvc_expansions,
+    longhorn_volume_expansion_blocker,
 )
 
 _LONGHORN_DENIAL = (
@@ -38,10 +39,20 @@ _NO_EXPANSION_SC = (
 )
 
 
-def _pvc(name, size, kind="PersistentVolumeClaim"):
-    return {"kind": kind, "metadata": {"name": name},
-            "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "longhorn-delete",
-                     "resources": {"requests": {"storage": size}}}}
+def _pvc(name, size, kind="PersistentVolumeClaim", volume=None):
+    spec = {"accessModes": ["ReadWriteOnce"], "storageClassName": "longhorn-delete",
+            "resources": {"requests": {"storage": size}}}
+    if volume:
+        spec["volumeName"] = volume
+    return {"kind": kind, "metadata": {"name": name}, "spec": spec}
+
+
+def _lh_volume(scheduled="True", state="attached"):
+    return {"kind": "Volume", "metadata": {"name": "pvc-1"},
+            "status": {"state": state, "robustness": "degraded",
+                       "conditions": [{"type": "Scheduled", "status": scheduled,
+                                       "reason": "ReplicaSchedulingFailure",
+                                       "message": "insufficient storage"}]}}
 
 
 # --- 純函式 ------------------------------------------------------------------------
@@ -52,6 +63,28 @@ def test_only_growing_live_pvcs_are_expansions():
     live = [_pvc("r-data", "20Gi"), _pvc("r-backup", "20Gi"), _pvc("r-same", "8Gi")]
     assert find_pvc_expansions(rendered, live) == [
         {"name": "r-data", "live": "20Gi", "rendered": "30Gi"}]
+
+
+def test_expansion_carries_the_bound_volume_name():
+    rendered = [_pvc("r-data", "30Gi")]
+    live = [_pvc("r-data", "20Gi", volume="pvc-1")]
+    assert find_pvc_expansions(rendered, live) == [
+        {"name": "r-data", "live": "20Gi", "rendered": "30Gi", "volume": "pvc-1"}]
+
+
+def test_degraded_longhorn_volume_cannot_expand():
+    """longhorn-manager v1.10.2 ``VolumeManager.Expand``：``Scheduled`` 條件不是 True 就拒絕
+    （"cannot expand volume before replica scheduling success"）——admission 放行、事後才卡住。"""
+    assert "replica" in longhorn_volume_expansion_blocker(_lh_volume(scheduled="False"))
+
+
+def test_fully_scheduled_volume_is_not_blocked():
+    assert longhorn_volume_expansion_blocker(_lh_volume(scheduled="True")) is None
+
+
+def test_unreadable_volume_shape_is_not_a_verdict():
+    for obj in ({}, {"status": {}}, {"status": {"conditions": "x"}}, None):
+        assert longhorn_volume_expansion_blocker(obj) is None
 
 
 def test_unit_change_without_growth_is_not_an_expansion():
@@ -158,6 +191,39 @@ def test_upgrade_refuses_expansion_longhorn_cannot_place(mock_helm, mock_k8s, cl
     mock_k8s.dry_run_pvc_resize.assert_called_once_with("paas-ws-test", "r-data", "30Gi")
     # 只跑了 dry-run——什麼都沒套用（#1158 實測的半套狀態不會再出現）
     assert [c.kwargs.get("dry_run") for c in mock_helm.upgrade.call_args_list] == [True]
+
+
+@patch("src.api.releases.k8s_service")
+@patch("src.api.releases.helm_service")
+def test_upgrade_refuses_expanding_a_degraded_volume(mock_helm, mock_k8s, client,
+                                                      live_objects_lookup):
+    """#1158 e2e 實測：admission 放行、PVC 卻永遠停在 Resizing——Longhorn volume 的 replica
+    沒排滿（degraded）時不給擴。這種要在 helm 之前擋，dry-run 看不到。"""
+    mock_helm.upgrade.side_effect = _dry_run_aware([_pvc("r-data", "30Gi")])
+    live_objects_lookup["objects"].return_value = [_pvc("r-data", "20Gi", volume="pvc-1")]
+    mock_k8s.get_longhorn_volume.return_value = _lh_volume(scheduled="False")
+    mock_k8s.dry_run_pvc_resize.return_value = None
+    r = client.patch("/api/releases/paas-ws-test/r", json=_BODY)
+    assert r.status_code == 409
+    assert r.json()["detail"]["reason"] == "capacity"
+    mock_k8s.get_longhorn_volume.assert_called_once_with("pvc-1")
+    assert [c.kwargs.get("dry_run") for c in mock_helm.upgrade.call_args_list] == [True]
+
+
+@patch("src.api.releases.k8s_service")
+@patch("src.api.releases.helm_service")
+def test_unreadable_longhorn_volume_falls_back_to_dry_run(mock_helm, mock_k8s, client,
+                                                         live_objects_lookup):
+    """讀不到 volumes.longhorn.io（舊 ClusterRole 沒給、volume 不是 Longhorn）＝不知道，照跑 dry-run。"""
+    mock_helm.upgrade.side_effect = _dry_run_aware([_pvc("r-data", "30Gi")])
+    live_objects_lookup["objects"].return_value = [_pvc("r-data", "20Gi", volume="pvc-1")]
+    mock_k8s.get_longhorn_volume.side_effect = _denial(
+        'Error from server (Forbidden): volumes.longhorn.io "pvc-1" is forbidden: User '
+        '"system:serviceaccount:paas-system:paas-operator" cannot get resource "volumes"')
+    mock_k8s.dry_run_pvc_resize.return_value = None
+    r = client.patch("/api/releases/paas-ws-test/r", json=_BODY)
+    assert r.status_code == 200
+    mock_k8s.dry_run_pvc_resize.assert_called_once()
 
 
 @patch("src.api.releases.k8s_service")

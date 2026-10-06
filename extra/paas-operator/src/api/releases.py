@@ -42,6 +42,7 @@ from src.services.upgrade_preflight import (
     describe_helm_failure,
     find_immutable_conflicts,
     find_pvc_expansions,
+    longhorn_volume_expansion_blocker,
 )
 from src.services.storage_quota import (
     build_quota_error_detail,
@@ -576,7 +577,8 @@ def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _refuse_unplaceable_expansions(
     namespace: str, name: str, expansions: List[Dict[str, Any]],
 ) -> None:
-    """#1513：每顆要變大的 PVC 先送 ``kubectl patch --dry-run=server``；被拒就 raise 409。
+    """#1513：每顆要變大的 PVC 先看 Longhorn volume 的 replica 排滿沒（沒排滿 Longhorn 不給擴，
+    ``longhorn_volume_expansion_blocker``），再送 ``kubectl patch --dry-run=server``；被拒就 raise 409。
 
     helm upgrade 不是交易：#1158 實測 data PVC 擴容被 Longhorn 拒絕時，Deployment／Secret
     與 backup PVC 已經換新、release 標 failed。這裡在 helm 套用任何東西之前問一次。
@@ -590,6 +592,21 @@ def _refuse_unplaceable_expansions(
         return
     denials = []
     for exp in expansions:
+        public = {k: exp[k] for k in ("name", "live", "rendered")}
+        if exp.get("volume"):
+            try:
+                blocker = longhorn_volume_expansion_blocker(
+                    k8s_service.get_longhorn_volume(exp["volume"]))
+            except (KubectlException, ValueError) as exc:
+                blocker = None
+                logger.warning(
+                    "PVC expansion pre-check for %s/%s: Longhorn volume %s unreadable: %s",
+                    namespace, exp["name"], exp["volume"],
+                    (getattr(exc, "stderr", None) or str(exc)).strip()[:300],
+                )
+            if blocker:
+                denials.append(dict(public, reason="capacity", message=blocker))
+                continue
         try:
             k8s_service.dry_run_pvc_resize(namespace, exp["name"], exp["rendered"])
         except KubectlException as exc:
@@ -600,7 +617,7 @@ def _refuse_unplaceable_expansions(
                     namespace, exp["name"], exc.message, (exc.stderr or "").strip()[:300],
                 )
                 continue
-            denials.append(dict(exp, reason=reason, message=(exc.stderr or "").strip()))
+            denials.append(dict(public, reason=reason, message=(exc.stderr or "").strip()))
     if denials:
         detail = build_expansion_error_detail(namespace, denials)
         logger.warning("Upgrade preflight refused %s/%s: %s", namespace, name, detail["message"])

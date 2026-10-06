@@ -138,8 +138,36 @@ def find_pvc_expansions(rendered_docs: Iterable[Any], live_items: Iterable[Dict]
         new = claim_facts(doc.get("spec"))["storage"]
         old_size, new_size = parse_quantity(old), parse_quantity(new)
         if old_size is not None and new_size is not None and new_size > old_size:
-            out.append({"name": name, "live": old, "rendered": new})
+            exp = {"name": name, "live": old, "rendered": new}
+            volume = (current.get("spec") or {}).get("volumeName")
+            if volume:
+                exp["volume"] = volume
+            out.append(exp)
     return out
+
+
+def longhorn_volume_expansion_blocker(volume: Any) -> Optional[str]:
+    """#1513：Longhorn volume 物件 → 不能擴容的原因（中文），可以擴或看不懂回 None。
+
+    longhorn-manager v1.10.2 ``VolumeManager.Expand``：volume 的 ``Scheduled`` 條件不是 True
+    （replica 沒排滿，叢集額度不足時以 degraded 建出來的 volume 就是這樣）一律拒絕
+    "cannot expand volume before replica scheduling success"。admission webhook 只檢查**已排上**
+    的 replica 所在磁碟，看不到這件事——#1158 e2e 實測：helm upgrade 成功、PVC 永遠停在 Resizing。
+    """
+    if not isinstance(volume, dict):
+        return None
+    conditions = (volume.get("status") or {}).get("conditions")
+    if isinstance(conditions, dict):  # 舊版 Longhorn 以 type 為 key
+        conditions = [dict(c, type=t) for t, c in conditions.items() if isinstance(c, dict)]
+    if not isinstance(conditions, list):
+        return None
+    for cond in conditions:
+        if isinstance(cond, dict) and cond.get("type") == "Scheduled":
+            if cond.get("status") == "True":
+                return None
+            return "Longhorn volume 的 replica 尚未全部排上（%s），Longhorn 不允許擴容" % (
+                cond.get("message") or cond.get("reason") or "Scheduled=%s" % cond.get("status"))
+    return None
 
 
 def classify_expansion_rejection(stderr: Optional[str]) -> Optional[str]:

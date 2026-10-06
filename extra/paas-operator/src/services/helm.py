@@ -2895,6 +2895,22 @@ class KubernetesService:
             timeout=self.PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS,
         )
 
+    def get_longhorn_volume(self, volume_name: str) -> Dict[str, Any]:
+        """#1513：讀一顆 Longhorn volume（``volumes.longhorn.io``，唯讀）。
+
+        operator ClusterRole 需要 longhorn.io ``volumes`` get（woow-paas-charts
+        charts/paas-operator）；沒有時 raise，呼叫端當「不知道」放行。
+
+        Raises:
+            KubectlException: 不存在、權限不足、逾時。
+        """
+        result = self._run_command(
+            ["get", "volumes.longhorn.io", volume_name,
+             "--namespace", settings.longhorn_namespace, "-o", "json"],
+            timeout=self.PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS,
+        )
+        return json.loads(result.stdout or "{}")
+
     def get_storage_quota_snapshot(
         self, namespace: str
     ) -> Dict[str, List[Dict[str, Any]]]:
