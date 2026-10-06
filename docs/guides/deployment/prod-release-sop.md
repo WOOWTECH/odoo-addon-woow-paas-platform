@@ -190,6 +190,16 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
 
 **何時**：本 addon（`src/`）改動要上 prod。
 
+> **🔴 平台換 chart 後（cutover PR-D 生效起，#1392／#1231 G2）本節的 Bitnami 專屬部分不再適用**，改依下表；Bitnami 時代的段落保留到 teardown 後另票整併（teardown runbook D6 待修清單）。
+>
+> | 項目 | Bitnami 時代（本節原文） | 換 chart 後 |
+> |---|---|---|
+> | build 的 image | `paas-odoo`（`Dockerfile`） | `paas-odoo-official`（`Dockerfile.official`）；`trigger-odoo-build.yml` 固定帶 `image_name=paas-odoo-official`，**不雙 build** |
+> | CD pin | `paas-odoo/values-prod.yaml` 三處（S1 陷阱） | `paas-odoo-platform/values-prod.yaml` 的 `image.tag`＋`image.digest`（woow-odoo chart 沒有 `module-version-gate` initContainer） |
+> | 模組升級 | `ODOO_SKIP_MODULES_UPDATE` 兩段式 PR（§5.1.2／§5.1.3） | woow-odoo 升級閘：`upgrade_done.digest` ≠ 新 digest ⇒ 自動 `-u all`；不再有 SKIP 開關 |
+> | 發版前錨點 | snapshot `snap-paas-odoo-{pg,fs}-pre{版號}`（§5.1.1） | 升級閘 `-u all` 前**不會**自動備份 ⇒ 人類先建 `snap-paas-odoo-platform-{pg,fs}-pre{版號}-{YYYYMMDD}`（PVC `data-paas-odoo-platform-postgresql-0`、`paas-odoo-platform-data`，驗 `readyToUse=true`／`markRemoved=false`），再跑一次 `MODE=backup BACKUP_KIND=pre-upgrade` 備份；每顆 volume 保留最近 3 次（[cutover runbook](platform-odoo-cutover-runbook.md) B8 第 7 步；WMO#5 裁決 Q3／Q4） |
+> | 回退窗口（cutover 起 14 天） | — | 禁含新 `src/migrations/<X>/` 的發版；舊 release image 凍結（cutover runbook B8） |
+
 > **🔴 步驟 0：pre-flight 起點實查——發版單本身是要被查證的對象，不是依據**
 >
 > 發版單（或前一輪留下的 note）寫的「prod 現役版本」「本次要發什麼」**都是快照，會過期**。三次實例各壞在不同地方：
@@ -279,6 +289,7 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
 2. 發版 PR merge 進 develop（⛔ 不代 merge）→ 本地 pull    git show origin/develop:src/__manifest__.py
 3. git tag v18.0.1.0.XX && git push origin v18.0.1.0.XX  （= /woow:deploy 自動化此段）
    → 觸發 trigger-odoo-build.yml → dispatch paas-odoo-ci
+     （換 chart 後固定 image_name=paas-odoo-official，見本節開頭對照表）
 4. 等 paas-odoo-ci build 完成，取得 image tag 與 digest  CI log 的 image_tag=YYYYMMDD.HHMM
    （tag = UTC date，非 addon 版號）                     ＋該 tag 的 sha256 digest
    ⚠ image_tag / digest 驗不出「烤到別的 ref」——         ＋build log 三行錨點都對上本次版號：
