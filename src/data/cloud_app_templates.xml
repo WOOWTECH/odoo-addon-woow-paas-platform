@@ -1076,15 +1076,20 @@
                  migration：本 xmlid 首建於 ea5433ab（2026-07-28），晚於 noupdate=0
                  收斂 d1cb2e32（2026-04-06），故既有 DB 的 ir.model.data.noupdate=False、
                  `-u` 直接重套本欄位，無需 migration。
-                 0.2.0 → 0.3.0（#1397，同 #1360 的洞）：agent 改 StatefulSet（pod 名固定
+                 0.2.1 → 0.3.0（#1397，同 #1360 的洞）：agent 改 StatefulSet（pod 名固定
                  <fullname>-0），console Role 的 pods／pods/exec／pods/log 全綁 resourceNames，
-                 console 不再能 exec 進同工作區其他服務。一併帶入 0.2.1（#1377：改 LLM 金鑰
-                 會滾 pod）。⚠ 依賴 paas-operator 的 helm_secret reset 會重啟帶
-                 paas.woowtech.io/restart-on-credential-reset 的 StatefulSet（平台 #1398）——
+                 console 不再能 exec 進同工作區其他服務。⚠ 依賴 paas-operator 的 helm_secret
+                 reset 會重啟帶 paas.woowtech.io/restart-on-credential-reset 的 StatefulSet（平台 #1398）——
                  operator 未換版前不可上這一版，否則重設密碼回成功但 agent 仍吃舊密碼。
-                 helm_default_values 不需新增任何鍵。既有服務管理員 Redeploy 時 Deployment
-                 換 StatefulSet，約中斷 1～2 分鐘、資料保留。 -->
-            <field name="helm_chart_version">0.3.0</field>
+                 0.3.0 → 0.3.1（charts #138）：同工作區 LiteLLM 網址串接——平台注入的
+                 llmGateway.baseUrl 經 runtime ConfigMap envFrom 成 agent 的 LITELLM_BASE_URL，
+                 網址非空才由 networkPolicy.litellmEgress 開 agent → 同 ns LiteLLM proxy TCP 4000
+                 （注入見 cloud_service._LITELLM_BASE_URL_VALUE_PATHS；0.3.1 之前的 chart 不認得
+                 這兩個鍵，注入了也沒有 env、egress 也不通）。
+                 helm_default_values 不需新增任何鍵（llmGateway 由平台注入、litellmEgress 用
+                 chart 預設）。既有服務管理員 Redeploy 時 Deployment 換 StatefulSet，約中斷
+                 1～2 分鐘、資料保留。 -->
+            <field name="helm_chart_version">0.3.1</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261003.1400@sha256:7b095a7258e627c156d7c08301b699fda42365548fdb868c94b4d3848823a9a4"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
