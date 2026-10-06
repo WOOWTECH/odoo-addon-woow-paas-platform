@@ -2276,8 +2276,9 @@
 
         <!-- MCP：AI 模型閘道（mcp-litellm，PLAN §10 第二階段）——LiteLLM 管理 MCP。鏡射 cloud_app_mcp_k8s
              骨架（chart mcp-server 0.1.5、category=mcp、has_admin_gui=True、mcp_enabled=False＝MCP 內建於 body、
-             載體 config_json）。image＝woow-mcp-server apps/litellm（#33 合進 main 0687392f，main CI run 14916
-             job 15895 推的 litellm-mcp-admin，雙釘 git-sha@sha256）。MCP server 本體 vendor 自 GitHub
+             載體 config_json）。image＝woow-mcp-server apps/litellm（#33 加入；#34 子行程看門狗合進 main d5032a72 後，
+             main CI run 15219 job 16285 推的 litellm-mcp-admin，雙釘 git-sha@sha256；與其他 *-mcp-admin
+             同一個 main commit，見 #1501）。MCP server 本體 vendor 自 GitHub
              WOOWTECH/Woow_litellm_mcp_server 4d41903（40 工具：唯讀 18、寫入 22、其中破壞性 8）。
              啟動契約（apps/litellm README §PaaS seed 契約）：console script ``litellm-mcp-server``，launcher
              固定 Streamable HTTP、**只綁 127.0.0.1**（安全邊界，故 args 不帶 host）；``mcp_server.port`` 8000
@@ -2318,7 +2319,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "0687392fb22f7e01a97f6fd53313c336e6343757@sha256:465dd741cc5cccdc42627660af6ced91a1e4b0f8ed06e64758b39d1371b61833"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "d5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:7de9a85ab177d0f04c40427bad5d104c3e3915f33a38fd2ff3de3ab8a8e2d147"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
