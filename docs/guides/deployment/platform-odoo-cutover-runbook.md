@@ -3,7 +3,7 @@ title: 平台 Odoo 換 chart：cutover runbook（Step 1）
 category: guides
 status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-06T02:00:00Z
+updated: 2026-10-06T05:30:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -17,6 +17,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 2026-10-05 定稿輪：已落地的佔位直接改寫進本文（下表「狀態」欄註明出處）；需要發起人裁決的 G1～G7 已於同日裁決（G1～G6 選建議案 A；G7 由 woow-paas/paas-app-bundle-cd#209 取代），題目全文見 #1495 描述。
 
+2026-10-06 **正式 cutover 已執行**（04:17Z T0 → 04:39:08Z PR-D 生效；回退窗口至 2026-10-20T04:39Z）。實跑結果與修正點見文末「cutover 實跑紀錄（2026-10-06）」節，各步驟的對應修正已就地回填（B9 收尾紀錄：#1231 留言 18456、woow-paas/paas-app-bundle-cd#144 留言 18466）。
+
 | # | 佔位 | 狀態 |
 |---|---|---|
 | C1 | 穩定 Service 名與 raw bundle 目錄 | ✅ `paas-system/paas-odoo-active`（80→8069、8072→8072）＋`paas-odoo-edge/`；cd#143 PR-1～3（#199～#201）已上線，B1～B7 驗收完成（cd#143 留言 18070、18105、18135、18165；WMO#4 留言 18151） |
@@ -27,7 +29,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | C6 | 關舊 Ingress 是否排進停機窗口 | ✅ 不排停機窗口、避開上班尖峰（2026-10-05 發起人裁決，cd#143 留言 18090）；#200 已上線 |
 | C7 | cron 副本 0→1 走哪張 CD PR | ✅ 獨立小 PR「PR-C2」，B6a 第 3 步驗收後、PR-D 前 merge（G1） |
 | C8 | 平台發版改 build `paas-odoo-official` 的切換時點與載體 | ✅ cutover 當下（PR-D 生效後立即）；載體＝本 repo 一張 PR 同改 `trigger-odoo-build.yml`、`/woow:deploy`、`prod-release-sop.md`（G2） |
-| C9 | chart 版號 | ✅ `woow-odoo` **0.2.7**（0.2.6 起 platform 記憶體預設 soft 4GiB／hard 5GiB；0.2.7 備份 Job 起跑等 PG；charts#99 留言 18097） |
+| C9 | chart 版號 | ✅ 定稿時 `woow-odoo` **0.2.7**（0.2.6 起 platform 記憶體預設 soft 4GiB／hard 5GiB；0.2.7 備份 Job 起跑等 PG；charts#99 留言 18097）；正式 cutover 實際用 **0.2.8**（只多 `conf.dbMaxconnGevent`；woow-paas/woow-paas-charts#140，cd#144 留言 18359／18388） |
 | C10 | 停機前要停的三支 cron 的 xml id | ✅ `woow_paas_platform.cron_topup_cleanup`、`woow_paas_platform.ir_cron_issue_pending_ecpay_invoices`、`payment.cron_post_process_payment_tx`（#1163 scout §5.1；`src/data/cron_topup.xml:4`、`src/data/ecpay_invoice_cron.xml:4`、Odoo 18 `addons/payment/data/payment_cron.xml:4`） |
 
 ## 操作者圖例
@@ -71,7 +73,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | 項目 | 值 | 出處 |
 |---|---|---|
 | chart | `woow-odoo` **0.2.7**；merge `main` 即同時推 Gitea helm registry（Fleet 用）與 JCR OCI | woow-paas/woow-paas-charts#99 留言 18097；chart README §發佈 |
-| platform cutover gate | `conf.limitTimeRealCron ≥ 1800`、`cron.maxCronThreads ≥ 3`（schema fail-loud） | woow-paas/woow-paas-charts#100；chart README |
+| platform cutover gate | `conf.limitTimeRealCron ≥ 1800`、`cron.maxCronThreads ≥ 3`（schema fail-loud）；連線池 `conf.dbMaxconn ≥ 2×maxCronThreads＋餘裕`（＝至少 8，見 B5 第 4 步） | woow-paas/woow-paas-charts#100；chart README；2026-10-06 cutover 實測 |
 | `addons_path`（platform） | core、`/opt/woow/addons`、`/mnt/extra-addons` | woow-paas/woow-paas-charts#120；chart README 固定契約 |
 | Service／port | port 80 與 8072 都以數字 targetPort **8080** 指向 nginx sidecar | chart README 固定契約 |
 | pod label | `app.kubernetes.io/name=odoo`、`instance=<release>`、`component=server｜cron｜postgresql｜db-backup｜db-restore` | chart README 固定契約 |
@@ -94,7 +96,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | 窗口前數週 | B0、B2 | 進入條件；edge bundle 與消費者改指（2026-10-05 已完成） |
 | 窗口前數日 | B5 | 新 release 並存（web／cron 0）、promote 走通 |
 | 窗口前 ≥3 日 | B1 | 內部公告 |
-| 停機窗口（彩排實測組合） | B6～B7 | 技術停機約 5～6 分：凍結舊側約 90 s（odoo 優雅終止）＋取資料約 80 s＋restore 約 60～90 s＋web Ready 約 30 s＋selector < 1 s（[彩排 runbook](platform-odoo-cutover-rehearsal-runbook.md)「彩排紀錄」） |
+| 停機窗口 | B6～B7 | 機器時間約 5～6 分：凍結舊側約 40～90 s（odoo 優雅終止）＋取資料約 80 s＋restore 約 60～90 s＋web Ready 約 30～60 s＋selector < 1 s（[彩排 runbook](platform-odoo-cutover-rehearsal-runbook.md)「彩排紀錄」）。⚠ **服務中斷要另加**每張窗口內 PR（#214／#215／#216／#217 共 4 張）merge 後等 Fleet 同步約 1 分，以及人工逐步放行＋唯讀驗收：2026-10-06 實測 **約 21 分**（T0 → PR-D 生效）。排窗口與公告以 25 分估 |
 | 停機窗口 T0 | B6 第 1～3 步 | ECPay 前置、凍結舊側 |
 | 凍結後 | B4 | Longhorn snapshot 兩顆 |
 | 凍結後 | B6 第 4 步起、B6a | 正向搬遷、預寫 marker、起新 odoo |
@@ -128,7 +130,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 ## B1 窗口與公告
 
-1. 【人類】排停機窗口：非上班日凌晨 60 分（技術停機 15～20 分），內部公告 ERP 使用者停機時段與「切換後須重新登入」；官網不另公告；sessions 不搬（13439 ⑧）。
+1. 【人類】排停機窗口：非上班日凌晨 60 分（服務中斷以 25 分估：2026-10-06 實測約 21 分，見時序總覽），內部公告 ERP 使用者停機時段與「切換後須重新登入」；官網不另公告；sessions 不搬（13439 ⑧）。
+   - 2026-10-06 實測：Odoo 用 filesystem session store（`data_dir/sessions`），附錄 T 只搬 `filestore/<db>` ⇒ 切換後**全員**（內部使用者、租戶、`/woow` 使用者）既有 session 失效、須重新登入。公告要寫明；B7 第 3 步抽查前先重新登入。
 2. 【人類】依 #1163 以「停機 ≥ 15 分即視為會丟 ECPay 回呼」規劃金流段，指定 B6／B7 的 ECPay 前置與收尾負責人（13476 第 2、9 點）。
 
 ## B2 一次性前置變更（✅ 2026-10-05 已全部完成）
@@ -181,6 +184,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 3. 【agent】記下新 digest，部署後以 Pod `imageID` 做 64 hex 逐字比對（JCR 不給匿名讀，16804）。
 4. 【agent 開 PR・人類 merge】PR-A：新 bundle 目錄 `paas-odoo-platform/`、releaseName `paas-odoo-platform`（cd#145 留言 18089），release 名 ≠ `paas-odoo`（原地換 chart 會刪 Helm 管的 PVC 與 Secret，#1137 G30）。PR 描述必須貼 `scripts/ci/check-fleet-chart-coordinates.py` 手跑輸出（woow-paas/paas-app-bundle-cd#202；sop-cd §2、§5；CI 化另案 cd#205）。values 要點：
    - `profile: platform`、`postgres.database: woow_prod`、`conf.emailFrom`（B3 第 2 步）、`postgres.extensions.vector: false`（R2-Q6）、`conf.limitTimeRealCron ≥ 1800`、`cron.maxCronThreads ≥ 3`。
+   - ⚠ 連線池：platform 的 cron 是**單一 threaded 程序**，`ir_cron` 每條執行緒同時要「取 job」與「跑 job」兩條連線，另有 dispatcher 監聽 ⇒ `conf.dbMaxconn ≥ 2×maxCronThreads＋餘裕`。chart schema 對 platform 的 `maxCronThreads` 下限是 3，無法改小 ⇒ `dbMaxconn` 至少 **8**。2026-10-06 實測：`dbMaxconn: 6` 時 cron 04:36～04:38Z 出現 3 起 `PoolError: The Connection Pool Is Full`，woow-paas/paas-app-bundle-cd#219 改 8 後歸 0（代價：web 一起重啟約 60 s）。`dbMaxconn` 同時是 web 每個 worker 的池上限，改大要重算最壞總連線數（web workers×D＋gevent G＋cron D，< PG `max_connections` 100；cd#144 留言 18359）。建議 chart 另加 cron 專用 `db_maxconn`（另案）。
    - `replicas: 0`、`cron.replicas: 0`、postgres 1：restore 前起 odoo 會停在 `Init:Error`（bootstrap exit 3 `platform DB must be restored before first boot`；R2-Q2、14668）。
    - `image.*`＝Step 1 digest；`postgres.image.*`＝chart 預設 paas-postgres（PG 17.11、pgvector 0.8.6、rsync；chart README）；`imagePullSecrets: [jfrog-registry]`（cd#144 PR-A）。
    - `ingress.enabled: false`（Ingress 由 raw bundle 管，13439 ②）。
@@ -196,6 +200,15 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 1. 【agent 執行・人類逐步放行】ECPay 前置（#1163 scout §5.1 T-1）：停用三支 cron `woow_paas_platform.cron_topup_cleanup`、`woow_paas_platform.ir_cron_issue_pending_ecpay_invoices`、`payment.cron_post_process_payment_tx`；等發票 cron 當下那一趟跑完（沒有 `issuing` 殘留）；記下 pending tx／topup／發票三張清單與 T0（13476 第 9 點）。
    - ⛔ 不 disable payment provider，會 archive token（13476 第 9 點）。
+   - 先記下三支 cron 的**原始** `active`，收尾時照原值恢復、不一律開啟（2026-10-06 prod 實查：三支原值都是 `false`，`write_date` 停在 2026-09-04；cd#144 留言 18414）。
+   - 清單 SQL 若第一欄放常數標籤，`GROUP BY`／`ORDER BY` 的位置號要指實際欄位（2026-10-06 實撞：`GROUP BY 1` 指到常數欄而報錯，改 `GROUP BY 2` 補跑）：
+
+     ```sql
+     SELECT 'invoice-state', woow_invoice_issue_state, count(*) FROM account_move
+      WHERE woow_invoice_issue_state IN ('pending','issuing','failed') GROUP BY 2 ORDER BY 2;
+     ```
+
+   - `payment_transaction.provider_code` 是 related 欄位（不一定 stored），篩 ECPay 一律 `JOIN payment_provider p ON p.id = t.provider_id WHERE p.code = 'ECPay'`。
 2. 【agent 開 PR・人類 merge】PR-B：`paas-odoo/values-prod.yaml` **只加** `replicaCount: 0`（merge 前用 `helm show values` 實拉確認 Bitnami 28.2.10 的鍵路徑）。這是窗口內唯一一次對舊 release 的 upgrade（13439 ③；cd#144 PR-B）。
 3. 【agent】驗：`deploy/paas-odoo` replicas 0、pod 已消失（彩排實測 odoo pod 優雅終止約 90 s）；`paas-odoo-postgresql-0` pod UID 與 restartCount 不變；兩顆舊 PVC 仍 Bound（cd#144 PR-B 驗收）。接著做 B4。
 4. 【agent 執行・人類逐步放行】建附錄 T 的 T1～T3，跑 T4 來源 Job：舊 pg（`paas-odoo-postgresql`，`bn_odoo`）的 `woow_prod` `pg_dump -Fc`＋manifest＋attachments、舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/woow_prod` 打 tar，HTTP PUT 到 receiver；每個 PUT 回應的 sha256 與來源端相符（2026-10-05 發起人裁決 G3，#1495）。
@@ -245,6 +258,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - `replicas: 1`、`cron.replicas: 0`、`backup.enabled: true`（retention／timeZone／schedule 用 chart 預設：7 daily＋4 weekly、Asia/Taipei、02:00＋adler32 偏移；13786 D4）。
    - 刪除 `paas-odoo-backup/pg-backup-cronjob.yaml`；⛔ 保留 `backup-pvc.yaml` 與 `fleet.yaml`（刪整個目錄會連 `paas-odoo-backup-pvc` 一起下架；cd#144 PR-C）。PR 描述記下被刪檔的最後 commit sha，回切要重新 apply（13786 D7）。
 3. 【agent】驗：`upgrade-gate` log 出現 `skip: woow_paas_platform.upgrade_done.digest == current image digest`、web Ready；`ir_module_module` 全表 sha256 與凍結當下相同（＝沒有 `-u all`）；admin、`database.secret`／`uuid` 指紋不變；中文 PDF 抽查交人類（cd#144 PR-C 驗收）。
+   - 2026-10-06 觀察（字形）：舊 Bitnami pod 另掛 live `configmap/paas-odoo-fontconfig` 的 `98-woow-cjk-tc.conf`（不在任何 repo），把 `sans-serif`／`serif`／`monospace`／`Open Sans` accept 到 `Noto … CJK TC`。官方 image 只有發行版 `70-fonts-noto-cjk.conf`，`fc-match "Open Sans"` → DejaVu Sans；wkhtmltopdf 不看 `lang` 選 face，CJK fallback 落到 Noto Sans CJK OTC 的 index 0（JP）⇒ PDF 嵌入 `NotoSansCJKjp`，骨／直／令／次等字印成日文字形。修正走 chart 或 image 補同內容的 fontconfig（另案）；抽查時看 PDF 內嵌字型名，是 `NotoSansCJKtc` 才算過。
 4. 【agent 開 PR・人類 merge】PR-C2：只改 `cron.replicas: 1`，第 3 步驗收後、PR-D 前 merge（2026-10-05 發起人裁決 G1，#1495）；cron pod 的 `cron-wait` 應放行（chart README）。PR-D 因此維持「只改 selector」，回切對照單純。
    - ⚠ 新 pod 開頭約 1～2 秒 NetworkPolicy 尚未生效，`cron-wait` 第一次輪詢常連不到 DB、約 10 秒後放行，屬預期（woowprd#13 實測；#1206 證據）。
 5. 【agent】cron pod 起來後照 #1162 不變式再過一次檢查：只有預期的 cron 是 active、`database.is_neutralized` 不存在（prod 不得出現中和標記）、`ir_module_module` 全表 sha256 不變。
@@ -261,6 +275,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - 4 個 host 的 `/web/health` 200 與登入頁。
    - `/websocket` 回 101，探針帶 `--http1.1`＋`Origin`（不帶 `Origin` 會回 400；#1032 plan:126、charts#99 留言 18097）。新形狀下 80 與 8072 都經 nginx 8080 回 101（彩排 A6）。
    - OAuth `redirect_uri`、`/woow` 起得來。
+     - 2026-10-06 真 host 實測：ProxyFix ✅——4 host 未登入打 `/odoo`，303 `Location` 都是 `https://<該 host>/web/login?...`（彩排 A6 的動態探針 inconclusive，以此取代）。OAuth `redirect_uri` 在 4 host 都是 `https://aiot.woowtech.io/auth_oauth/signin`：屬設計，`auth_oauth_proxy_fix` 覆寫 `list_providers` 改用 `web.base.url`（core 18.0 用 `url_root`），每次登入頁會記一行 `ProxyFix: rewrote redirect_uri` WARNING。
+     - operator→odoo 若切換後沒有流量，標「待首次 spawn」，下一次租戶 spawn／agent session 時補驗回呼 2xx；反方向看 operator access log 來源 IP 是否為新 web pod（2026-10-06：19 筆 `GET /api/tunnels/<id>` 200）。
    - operator webhook：paas-operator 對 Odoo 的呼叫回 2xx；反方向 Odoo → operator 仍通（cd#144 PR-D 驗收）。
 3. 【人類】以內部帳號登入 4 個 host 抽查 ERP 與 `/woow`；請 woow-machines-operator 從 `woowtech-odoo` 確認 mcp-odoo 呼叫正常（cd#144 PR-D 驗收）。
 4. 【agent 執行・人類逐步放行】ECPay 收尾（13476 第 9 點；#1163 scout §5.1 T+0）：恢復後等 15 分讓重送進來 → 對 pending tx 用 SDK `query_credit_trade()` 逐筆查（付款後 ≥10 分才查，過快 403 鎖 30 分；13476 第 4 點）→ 有扣款走 `_set_done()`（已 cancel 者走 #864 repair 路徑）→ 查 `woow_invoice_issue_state='issuing'` 殘留 → 依序重新啟用 `ir_cron_issue_pending_ecpay_invoices` → `cron_post_process_payment_tx` → `cron_topup_cleanup`（最後）。
@@ -397,6 +413,34 @@ spec:
 - `--no-owner` 會跳過 `ALTER … OWNER`（含 `ALTER SCHEMA public OWNER`），所以 B6 第 6 步要濾的那條不必另處理（14201「給其他票」）。
 - 反向（回切 C3）與 teardown（D1）用同一組 T1～T4，只換來源與目的；反向的寫入端是 Bitnami `bn_odoo`（非 superuser），不用 T5，改用回切 runbook C3 寫明的指令。
 - 新 pod 開頭約 1～2 秒 NP 尚未生效：T4／T5 都先等 DB 可連再動作（#1206 證據；woowprd#13）。
+- 刻意**不搬** `data_dir/sessions`（13439 ⑧）：切換後全員重新登入（B1 第 1 步公告）。
+- 本機背景 port-forward 收尾：⛔ 不用 `pkill -f '<pattern>'` 直接打字面 pattern——以 `!`／`bash -c` 執行時，呼叫端 shell 自己的 command line 也含該 pattern，`pkill` 會連自己一起殺掉（同一行後面的步驟不會執行，exit 143／144）。改用 `kill "$(cat <pidfile>)"`，或把 pattern 第一個字元包成字元類別（`pkill -f '[p]ort-forward .*18000:8000'`）。2026-10-06 B0 第 4～5 步人類指令第 8 步實撞。
+
+## cutover 實跑紀錄（2026-10-06）
+
+完整時間線、helm revision、snapshot 與退役 dump 見 B9 收尾紀錄（#1231 留言 18456）。
+
+| 量測 | 實測 | 彩排／估計 |
+|---|---|---|
+| 舊 odoo 優雅終止 | 約 37 s（04:19:16 `Killing` → 04:19:53 前消失；#214 merge 到 helm v137 另有約 1 分 Fleet 同步） | 90 s |
+| T4 來源 Job | dump 5 s、filestore tar 55 s、PUT 五檔 20 s，sha256 全符 | 6／52／21 s |
+| T5 restore | `RESTORE-DONE` | 60～90 s |
+| 指紋 | W2 舊側 vs restore 後／web 開機後／cron 開機後 **三次 FP-IDENTICAL** | — |
+| 升級閘 | `skip`（沒有 `-u all`），web 約 60 s Ready | 約 30 s |
+| 服務中斷 | **約 21 分**（T0 04:17:23 → PR-D 04:39:08） | 5～6 分（機器時間） |
+| 切換後修正 | woow-paas/paas-app-bundle-cd#219 `dbMaxconn 6→8`：web 重啟約 60 s | — |
+
+差距主因與已回填的修正：
+
+| 項 | 現象 | 回填處 |
+|---|---|---|
+| 停機估計 | 每張窗口內 PR 等 Fleet 約 1 分 ×4、人工逐步放行與唯讀驗收 | 時序總覽、B1 第 1 步 |
+| session | filesystem session store 未搬，全員重新登入 | B1 第 1 步、附錄 T |
+| ECPay SQL | `GROUP BY 1` 指到常數欄；三支 cron 原值即 `false` | B6 第 1 步 |
+| cron 連線池 | `dbMaxconn 6` → cron PoolError；schema 擋 `maxCronThreads < 3` | 術語表、B5 第 4 步 |
+| port-forward 收尾 | `pkill -f` 殺到自己 | 附錄 T |
+| ProxyFix／OAuth | 真 host 驗過；`redirect_uri` 固定 aiot 屬設計 | B7 第 2 步 |
+| 中文 PDF 字形 | `NotoSansCJKjp` 嵌入（fontconfig 未隨 image） | B6a 第 3 步 |
 
 ## 相關
 
