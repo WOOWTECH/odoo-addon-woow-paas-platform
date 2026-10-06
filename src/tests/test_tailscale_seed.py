@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """VPN 節點（相容 Tailscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/tailscale 0.1.1（0.1.0＝#125）——StatefulSet ×1、userspace
+契約來源：woow-paas-charts charts/tailscale 0.1.2（0.1.1＝#131、0.1.0＝#125）——StatefulSet ×1、userspace
 tailscaled（uid 1000）、唯一入口 Service 8080 → nginx Basic auth（帳號＝entrance.basicAuthUsername）→
 ``tailscale web``（127.0.0.2:8088，唯讀）；``tailscale serve`` TCP 轉發只接受同 namespace 的
 服務；exit node／app connector／subnet route／SSH／Funnel 一律不開（values 裡沒有這些鍵）。
@@ -19,6 +19,10 @@ image：paas-odoo-ci ``tailscale/``（#240，官方 1.102.5＋衍生自 podman �
 4. **規格對帳**：1 vCPU／0.5 GB／1 GB——template min_*、plan cs_*、chart 唯一一顆 PVC 三處一致。
 5. **上架即雙釘**：image 為 #240 合併後從 main build 並核可的 20261004.0747（#244）。2026-10-04 公開上架，
    ``test_hidden_until_listed`` 從此是實際生效的守線（``is_hidden=False`` ⟹ image 要 ``tag@sha256``）。
+6. **控制平面三選一**（chart 0.1.2，PLAN §10.2）：``tailscale.controlPlane`` select（官方 Tailscale／同工作區
+   Headscale／自訂網址，預設官方）。「同工作區 Headscale」的網址由平台注入 ``tailscale.workspaceHeadscaleUrl``
+   （``test_workspace_service_url_injection``），那個鍵**不是**租戶欄位、白名單擋掉；只帶網址，preauth key
+   仍是租戶自己貼。
 """
 import json
 import re
@@ -63,7 +67,7 @@ class TestTailscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, TAILSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1',
+        self.assertEqual(tpl.helm_chart_version, '0.1.2',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝'
                          'StatefulSet 帶 restart-on-credential-reset label、帳號可設定（.207 缺陷）')
 
@@ -171,6 +175,7 @@ class TestTailscaleSeed(TransactionCase):
         self.assertEqual(specs['required'], [], '開通不需要租戶先填任何東西')
         by_key = self._optional()
         self.assertEqual(set(by_key), {
+            'tailscale.controlPlane',
             'tailscale.loginServer',
             'tailscale.authKey',
             'tailscale.hostname',
@@ -185,6 +190,13 @@ class TestTailscaleSeed(TransactionCase):
             self.assertEqual(by_key[key]['type'], 'text', key)
         self.assertEqual(by_key['tailscale.noLogs']['type'], 'boolean')
         self.assertIs(by_key['tailscale.noLogs']['default'], True)
+        cp = by_key['tailscale.controlPlane']
+        self.assertEqual(cp['type'], 'select')
+        self.assertEqual(cp['default'], 'official', '預設＝官方 Tailscale（＝0.1.1 行為）')
+        self.assertEqual([o['value'] for o in cp['options']], ['official', 'workspace', 'custom'],
+                         'chart 0.1.2 只認這三個值（其他值 chart 端不登入）')
+        self.assertEqual([o['label'] for o in cp['options']],
+                         ['官方 Tailscale', '同工作區 Headscale', '自訂網址'])
         for key in by_key:
             self.assertFalse(re.match(r'^(resources|persistence|replicaCount)\b', key),
                              'CPU/RAM/磁碟由訂閱方案決定；副本數固定 1（身分在單一 RWO PVC）')
@@ -197,6 +209,7 @@ class TestTailscaleSeed(TransactionCase):
         """specs 的 key 同時是白名單：硬塞 exit node／子網路由／方案維度都要被擋掉。"""
         allowed, rejected = self._tpl()._filter_allowed_helm_values({
             'tailscale.serve': '8069=svc-1a2b3c4d:80',
+            'tailscale.workspaceHeadscaleUrl': 'http://evil.example.com',
             'tailscale.advertiseExitNode': True,
             'tailscale.advertiseRoutes': '10.43.0.0/16',
             'networkPolicy.enabled': False,
@@ -205,7 +218,9 @@ class TestTailscaleSeed(TransactionCase):
         self.assertEqual(allowed, {'tailscale.serve': '8069=svc-1a2b3c4d:80'})
         self.assertEqual(sorted(rejected), [
             'networkPolicy.enabled', 'resources.limits.cpu',
-            'tailscale.advertiseExitNode', 'tailscale.advertiseRoutes'])
+            'tailscale.advertiseExitNode', 'tailscale.advertiseRoutes',
+            'tailscale.workspaceHeadscaleUrl'],
+            'workspaceHeadscaleUrl 只能由平台注入，租戶不能指向任意控制伺服器（自訂請選 custom）')
 
     def test_description_states_scope_and_limits(self):
         desc = self._tpl().full_description
@@ -222,9 +237,18 @@ class TestTailscaleSeed(TransactionCase):
                 ('仍是同一台', '節點身分在 PVC，重設後不是新機器'),
                 ('最久約 12 分鐘', '同工作區 Headscale 重啟後，靠 chart 0.1.1 的 liveness 看門狗回線'),
                 ('從瀏覽器開服務網址', '入口擋 127/8（port-forward 一律 403），網頁介面只能經服務網址開'),
+                ('同工作區 Headscale', '控制平面三選一（chart 0.1.2）'),
+                ('只帶網址', '平台不跨服務傳 preauth key（使用者拍板：金鑰租戶自己貼）'),
+                ('Headplane', 'preauth key 在 Headscale 的網頁後台建'),
+                ('最早建立', '工作區有多台 Headscale 時用哪台'),
         ):
             self.assertIn(needle, desc, why)
         self.assertNotIn('不必重啟', desc, '重設帳密會重啟節點，不能再寫「不必重啟」（與管理員帳密對話框一致）')
+        cp = self._optional()['tailscale.controlPlane']['description']
+        for needle in ('自動帶入', '只帶網址', 'pre-auth key', '新機器'):
+            self.assertIn(needle, cp, '控制平面說明：%s' % needle)
+        self.assertIn('自訂網址', self._optional()['tailscale.loginServer']['description'],
+                      '控制伺服器欄位只在選「自訂網址」時使用')
         auth = self._optional()['tailscale.authKey']['description']
         for needle in ('一次性', 'tag', '清空'):
             self.assertIn(needle, auth, 'authkey 建議：一次性＋帶 tag＋登入後清空')
