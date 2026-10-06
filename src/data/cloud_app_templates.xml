@@ -509,6 +509,10 @@
             <field name="has_admin_gui" eval="True" />
             <field name="post_deploy_init_type">none</field>
 
+            <!-- 2026-10-06 下架：決定只用「Odoo MCP Server」（cloud_app_mcp_odoo），Odoo Manage
+                 不再販售。只翻曝光層 is_hidden（商店不列、不能新開），is_active 照舊、方案與實例層
+                 不動，要重新上架時把 is_hidden 改回 False 即可。正式站唯一實例 #199 已刪。 -->
+            <field name="is_hidden" eval="True"/>
             <field name="is_active" eval="True" />
         </record>
 
