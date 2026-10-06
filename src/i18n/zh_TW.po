@@ -1260,6 +1260,15 @@ msgid "Admin access required"
 msgstr "需要管理員權限"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Admin credentials updated and the Gateway API Key was replaced. Save the new"
+" Gateway API Key now — it will not be shown again. The service restarts to "
+"apply them."
+msgstr "管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——它不會再顯示。服務會重新啟動以套用變更。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__external_mcp_allowed
 msgid ""
 "Admin gate for NetworkPolicy egress to external MCP endpoints (design §6.3 "
@@ -18739,6 +18748,12 @@ msgstr "僅初始密碼（首次開機後由應用程式自行保管，例 omnig
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid "Signs in to this service, together with the password below."
 msgstr "與下方密碼一起登入此服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Signs in to this service, together with the password you set."
+msgstr "與你設定的密碼一起登入此服務。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

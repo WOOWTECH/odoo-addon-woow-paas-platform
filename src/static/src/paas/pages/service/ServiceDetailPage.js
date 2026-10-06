@@ -597,7 +597,10 @@ export class ServiceDetailPage extends Component {
     async onAdminCredentialsSaved(data) {
         this.state.showAdminCredentialsModal = false;
         // 平台產生的密碼（選「隨機產生」）才有明文要一次性交付；租戶自設的後端不回傳。
-        if (data && data.admin_password) {
+        // 但有 gateway 的服務（LiteLLM 的 master key）不論密碼怎麼設，後端都換發了新的
+        // Gateway API Key、舊的已失效，而這次回應是唯一一次交付——只看 admin_password
+        // 會把它丟掉。視窗內容由 buildOneTimeCredentials 依實際帶回的欄位決定。
+        if (data && (data.admin_password || data.gateway_api_key)) {
             this.state.oneTimeCredentials = buildOneTimeCredentials(data);
         }
         await this.loadService();
