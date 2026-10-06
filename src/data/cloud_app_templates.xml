@@ -1756,20 +1756,22 @@
         <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Omnigent</field>
             <field name="slug">omnigent</field>
-            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。方案 4 vCPU／8 GB RAM（伺服器＋兩台雲端工作機的合計；每個工作階段最多 1.5 vCPU／3 GB）／10 GB 磁碟</field>
+            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。方案 4 vCPU／8 GB RAM（伺服器約 1 vCPU／1 GB，其餘給雲端工作機；單一工作階段最多 3 vCPU／6 GB）／10 GB 磁碟</field>
             <field name="full_description">Omnigent 雲端指揮中心：一個網頁管理多種 AI 代理（Claude Code、Codex、pi 等）
                 的工作階段，對話紀錄、設定與上傳檔案保存在你的持久磁碟上。**雲端工作機**：每開一個
                 工作階段，平台自動開一台隔離的工作機。**工作機上的檔案是暫存的**：工作機最長存活
                 7 天，遇到節點維護、資源不足或重新喚醒工作階段時會換一台全新的工作機——對話紀錄會
                 保留，但工作機裡的檔案不會，請把程式碼推到 Git 或下載重要檔案。**資源**：方案的
-                4 vCPU／8 GB 是以「伺服器（約 1 vCPU／1 GB）＋兩台雲端工作機」規劃，單一工作階段
-                最多使用 1.5 vCPU／3 GB，不會用到整個 4 vCPU；同時開超過兩個工作階段時會與同工作區
-                的其他服務共用資源額度，額度不足時新的工作機可能開不起來。
+                4 vCPU／8 GB 是以「伺服器（約 1 vCPU／1 GB）＋雲端工作機（3 vCPU／6 GB）」規劃，
+                單一工作階段最多使用 3 vCPU／6 GB；同時開多個工作階段時會與同工作區的其他服務
+                共用資源額度，額度不足時新的工作機可能開不起來。
                 **模型金鑰自備**：雲端工作機要在服務設定填入
                 OpenRouter API Key（pi 與 Claude Code 皆可用）或 Anthropic API Key（Claude Code 優先使用）
                 才能對話，填好後新工作階段的模型選單會列出可用模型；未填時登入後會看到提示。
-                **金鑰會注入每台雲端工作機**：工作階段裡的程式、AI 代理與能開工作階段的成員都讀得到，
-                請使用有額度上限的專用子金鑰，移除成員後請更換金鑰。
+                **金鑰只存放在服務內的 LLM 代理**：雲端工作機只拿到一組只在本服務內有效的代用權杖，
+                工作階段裡的程式、AI 代理與成員都讀不到金鑰本身；但仍可經代理使用你的額度，請使用
+                有額度上限的專用子金鑰。較早開通的服務升級到新版後，請更換一次金鑰（舊版會把金鑰
+                放進工作機）。
                 **接上自己的機器**：在任何電腦執行 `omnigent login` 與 `omnigent host` 即可把它接成
                 工作機，檔案與模型登入都留在那台機器上；開新工作階段時點輸入框左下的電腦圖示選擇它
                 （機器只會出現在執行 `omnigent login` 的那個帳號）。
@@ -1781,13 +1783,13 @@
             <field name="documentation_url">https://omnigent-guide.woowtech.io</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.3</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20260929.1400@sha256:ba384bba57cb1f80b28e3cbfab7c58d6ad94f5cd99c3773a86a1987ffe3bf902"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20260929.1400@sha256:558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
-                "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。⚠ 金鑰會以環境變數注入每台雲端工作機，工作階段裡的程式、AI 代理與能開工作階段的成員都讀得到：請用有額度上限的專用子金鑰，移除成員後請更換。儲存後服務約一分鐘重啟，新開的工作階段生效"},
+                "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
-                "description": "雲端工作機上 Claude Code 使用的 Anthropic Key（選填，優先於 OpenRouter）；未填 OpenRouter 時 pi 也用它。⚠ 金鑰會以環境變數注入每台雲端工作機，工作階段裡的程式、AI 代理與能開工作階段的成員都讀得到：請用有用量上限的專用金鑰，移除成員後請更換。儲存後服務約一分鐘重啟，新開的工作階段生效"}
+                "description": "雲端工作機上 Claude Code 使用的 Anthropic Key（選填，優先於 OpenRouter）；未填 OpenRouter 時 pi 也用它。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用用量，請用有用量上限的專用金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"}
                 ]}</field>
             <field name="default_port">8000</field>
             <field name="ingress_enabled" eval="True"/>
