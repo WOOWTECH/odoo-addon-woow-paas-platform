@@ -1,9 +1,9 @@
 ---
 title: 平台 Odoo 換 chart：回切 runbook（反向搬遷）
 category: guides
-status: draft
+status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-05T17:00:00Z
+updated: 2026-10-06T02:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -13,7 +13,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## 狀態
 
-`status: draft`——**先草擬、後定稿**（#1231 票面）。須在 13439 ④ 觸發條件成立前定稿；佔位落地＋彩排 A8 量測回填後改 `status: active`，由發起人覆核。
+`status: active`——2026-10-06 定稿：佔位全數落地（#1495），且第一次彩排（2026-10-05，`dev-sandbox-rehearsal-1`，已銷毀）的量測已回填；發起人以合併回填 PR 覆核（#1231 票面定稿條件）。
 
 | # | 佔位 | 狀態 |
 |---|---|---|
@@ -93,17 +93,22 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 1. 【agent 執行・人類逐步放行】建 [cutover runbook](platform-odoo-cutover-runbook.md) 附錄 T 的 T1～T3，跑 T4 來源 Job，來源改為新 pg（`paas-odoo-platform-postgresql`）的 `woow_prod` 與新 PVC `paas-odoo-platform-data` 的 `/var/lib/odoo/filestore/woow_prod`；每個 PUT 的 sha256 與來源相符，`pg_restore -f /dev/null` 通過（2026-10-05 發起人裁決 G3，#1495）。⛔ 不用 `kubectl exec … > file`（[pitfall](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)）。
 2. 【agent 執行・人類逐步放行】舊 pg 上把現有 `woow_prod` 改名保留（例 `woow_prod__pre_switchback`），再以 `bn_odoo` 建空的 `woow_prod`（`bn_odoo` 有 `rolcreatedb`，2026-09-04 prod 實作即如此；#1032 plan:112），接著 `pg_restore --no-owner --no-privileges -L <list>`（13439 ⑤；#1032 plan:112）。
-   - `<list>`：濾掉 `COMMENT - EXTENSION`、`EXTENSION`、vector 相關條目（13439 ⑤；14201 D2）。
+   - `<list>`：`pg_restore -l` 後**只**濾掉 `COMMENT - EXTENSION`（非 superuser 不能改 extension 註解）與 vector 相關條目；⛔ 保留 `EXTENSION pg_trgm`——它是 trusted extension，DB owner `bn_odoo` 可以建（13439 ⑤；14201 D2；2026-09-04 prod 實作同樣只濾 vector，#1032 plan:112）。
+   - ⚠ 若把 `EXTENSION` 條目全濾掉，`pg_trgm` 不會建，Odoo 的 `gin_trgm_ops` 索引讓單一交易 restore 失敗（2026-10-05 彩排 A8 實際撞到）；替代做法是 restore 前以 `bn_odoo` 先 `CREATE EXTENSION IF NOT EXISTS pg_trgm`。
+   - 彩排實測（A8，以 prod 同款 bitnamilegacy/postgresql 17.6）：DB 196 MB，改名＋建庫＋restore 19 s、零錯誤；模組／admin／筆數指紋與新側凍結當下相同。
    - `bn_odoo` 不是 superuser（#1032 plan:75、:112）。
    - ⛔ 不用 `--no-comments`（Odoo 18 `_sql_constraints` 存在 `COMMENT ON CONSTRAINT`；14201 D2）。
    - 改名保留是本檔的推論（比照 14201 的「改名切換、`__old` 保留」）；舊庫在 C7 確認回切成功後才 DROP。
    - 執行位置：一次性 Job，`paas-postgres` image，唯讀掛 T1、讀 `paas-odoo-postgresql` Secret 的 `bn_odoo` 密碼（secretKeyRef，不上 argv），label `app.kubernetes.io/component: transfer-source`（T3 已放行到舊 pg）；先跑 `sha256sum --strict -c SHA256SUMS` 與 `pg_restore -f /dev/null` 再動 DB（附錄 T）。
-   - 驗反向 restore 零錯誤。
+   - 驗反向 restore 零錯誤，並比對模組（name＝latest_version＝state 全表）、admin login／password、主要表筆數的 sha256 指紋與新側凍結當下相同。
 3. 【agent】唯讀驗：舊 pg 上 `database.secret`／`database.uuid`、admin login／password、`ir_module_module` 全表指紋，與新側凍結當下相同。
-4. 【agent 執行・人類逐步放行】filestore 全量 push（不用增量 rsync）新 PVC `/var/lib/odoo/filestore/woow_prod` → 舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/woow_prod`（先把現有目錄改名保留，與 C3 第 2 步同理）；檔數＋`find -type f -printf '%s\n'` 位元組總和兩端相等；再 `chown -R 999:0`（2026-09-04 prod 實作值，#1032 plan:112；13439 ⑤ 原寫 `999:999`，以實作為準，彩排 A8 第 2 步再量一次）。
+4. 【agent 執行・人類逐步放行】filestore 全量 push（不用增量 rsync）新 PVC `/var/lib/odoo/filestore/woow_prod` → 舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/woow_prod`（先把現有目錄改名保留，與 C3 第 2 步同理）；檔數＋`find -type f -printf '%s\n'` 位元組總和兩端相等；再 `chown -R 999:0`（2026-09-04 prod 實作值，#1032 plan:112；2026-10-05 彩排 A2 實測 prod filestore owner 亦為 `999:0`）。
+   - 彩排實測（A8）：7,361 檔、2.02 GB，複製＋chown 43 s，與 DB 段並行。
 5. 【agent】確認 Bitnami DR 槍不會擊發：舊 PVC 仍在、`ODOO_DATABASE_NAME=bitnami_odoo`＋`odooSkipInstall=false` 在 PVC 存在時不會 init（13439 ③；#1137 G05）。
 
 ## C4 切回流量
+
+> 彩排實測（2026-10-05 A8）：凍結（新 server＋cron 0）94 s，主要是 odoo pod 優雅終止；舊側 Ready 29 s；selector patch 0.2 s 生效；**凍結到舊側可服務共 243 s**。舊形狀的 port 80→8069 不服務 `/websocket`，websocket 由 Ingress 路徑導到 8072（驗 101 要打 8072）。
 
 1. 【agent 開 PR・人類 merge】`paas-odoo/values-prod.yaml` 刪掉 `replicaCount: 0`（或改 1）——窗口內唯一允許對舊 release 做的變更種類（13439 ③；cd#144 PR-B）。
    - 舊 release 維持 cutover 前的 image，⛔ 不改 pin：窗口內不雙 build、禁含 migration 的發版，所以回切後只有 addon 程式碼較舊，DB 結構不受影響（2026-10-04 發起人裁決，維持 13439 ③）。

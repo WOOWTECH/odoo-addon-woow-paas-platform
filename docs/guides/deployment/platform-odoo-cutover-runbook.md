@@ -1,9 +1,9 @@
 ---
 title: 平台 Odoo 換 chart：cutover runbook（Step 1）
 category: guides
-status: draft
+status: active
 created: 2026-10-04T08:30:00Z
-updated: 2026-10-05T17:00:00Z
+updated: 2026-10-06T02:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md, docs/guides/deployment/platform-odoo-cutover-teardown-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -13,7 +13,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 ## 狀態
 
-`status: draft`——**先草擬、後定稿**（#1231 票面）。須在 13439 ④ 觸發條件成立前定稿；佔位落地＋彩排量測回填後改 `status: active`，由發起人覆核。
+`status: active`——2026-10-06 定稿：佔位全數落地（#1495），且第一次彩排（2026-10-05，`dev-sandbox-rehearsal-1`，已銷毀）的量測已回填；發起人以合併回填 PR 覆核（#1231 票面定稿條件）。
 
 2026-10-05 定稿輪：已落地的佔位直接改寫進本文（下表「狀態」欄註明出處）；需要發起人裁決的 G1～G7 已於同日裁決（G1～G6 選建議案 A；G7 由 woow-paas/paas-app-bundle-cd#209 取代），題目全文見 #1495 描述。
 
@@ -94,6 +94,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | 窗口前數週 | B0、B2 | 進入條件；edge bundle 與消費者改指（2026-10-05 已完成） |
 | 窗口前數日 | B5 | 新 release 並存（web／cron 0）、promote 走通 |
 | 窗口前 ≥3 日 | B1 | 內部公告 |
+| 停機窗口（彩排實測組合） | B6～B7 | 技術停機約 5～6 分：凍結舊側約 90 s（odoo 優雅終止）＋取資料約 80 s＋restore 約 60～90 s＋web Ready 約 30 s＋selector < 1 s（[彩排 runbook](platform-odoo-cutover-rehearsal-runbook.md)「彩排紀錄」） |
 | 停機窗口 T0 | B6 第 1～3 步 | ECPay 前置、凍結舊側 |
 | 凍結後 | B4 | Longhorn snapshot 兩顆 |
 | 凍結後 | B6 第 4 步起、B6a | 正向搬遷、預寫 marker、起新 odoo |
@@ -196,10 +197,10 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 1. 【agent 執行・人類逐步放行】ECPay 前置（#1163 scout §5.1 T-1）：停用三支 cron `woow_paas_platform.cron_topup_cleanup`、`woow_paas_platform.ir_cron_issue_pending_ecpay_invoices`、`payment.cron_post_process_payment_tx`；等發票 cron 當下那一趟跑完（沒有 `issuing` 殘留）；記下 pending tx／topup／發票三張清單與 T0（13476 第 9 點）。
    - ⛔ 不 disable payment provider，會 archive token（13476 第 9 點）。
 2. 【agent 開 PR・人類 merge】PR-B：`paas-odoo/values-prod.yaml` **只加** `replicaCount: 0`（merge 前用 `helm show values` 實拉確認 Bitnami 28.2.10 的鍵路徑）。這是窗口內唯一一次對舊 release 的 upgrade（13439 ③；cd#144 PR-B）。
-3. 【agent】驗：`deploy/paas-odoo` replicas 0、pod 已消失；`paas-odoo-postgresql-0` pod UID 與 restartCount 不變；兩顆舊 PVC 仍 Bound（cd#144 PR-B 驗收）。接著做 B4。
+3. 【agent】驗：`deploy/paas-odoo` replicas 0、pod 已消失（彩排實測 odoo pod 優雅終止約 90 s）；`paas-odoo-postgresql-0` pod UID 與 restartCount 不變；兩顆舊 PVC 仍 Bound（cd#144 PR-B 驗收）。接著做 B4。
 4. 【agent 執行・人類逐步放行】建附錄 T 的 T1～T3，跑 T4 來源 Job：舊 pg（`paas-odoo-postgresql`，`bn_odoo`）的 `woow_prod` `pg_dump -Fc`＋manifest＋attachments、舊 PVC `paas-odoo` 的 `/bitnami/odoo/data/filestore/woow_prod` 打 tar，HTTP PUT 到 receiver；每個 PUT 回應的 sha256 與來源端相符（2026-10-05 發起人裁決 G3，#1495）。
    - ⛔ 不用 `kubectl exec … > file`，也不用 exec 串 exec 的 stdout 管線（同一個截斷面；pitfall doc）。
-   - 舊 pg 的 NP 只放行 `name=odoo`＋`instance=paas-odoo`（cd#144 背景）⇒ T3 另放行 `component=transfer-source` → 舊 pg 5432；⛔ 來源 Job 不可帶 `instance=paas-odoo`＋`name=odoo`（會被 `paas-odoo-active` 舊形狀 selector 選進去）。
+   - 舊 pg 的 NP 放行 `name=odoo`＋`instance=paas-odoo`，以及 label `paas-odoo-postgresql-client: "true"`（`pg-backup` 同款；2026-10-05 彩排實查）⇒ T4 帶後者即可連舊 pg，不必新增 NP 規則；⛔ 來源 Job 不可帶 `instance=paas-odoo`＋`name=odoo`（會被 `paas-odoo-active` 舊形狀 selector 選進去）。
    - 舊 odoo 已 0 副本，舊 PVC `paas-odoo`（RWO）可由 T4 唯讀掛載。
 5. 【agent 執行・人類逐步放行】跑附錄 T 的 T5 restore Job，涵蓋本步與第 6、9 步。它以 superuser 建角色、建庫、預建 extension（14201 D2；R2-Q4、R2-Q6），等價 SQL：
 
@@ -258,7 +259,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 2. 【agent】驗 endpoints 非 0、只含新 web pod IP、80 與 8072 都在，接著跑驗收清單（#1137 scout §7 情境一）：
    - check26（[design doc](../../plans/2026-Q3/2026-09-03-woowtech-odoo-paas-migration-design.md):101；#1032 plan:83-88）。
    - 4 個 host 的 `/web/health` 200 與登入頁。
-   - `/websocket` 回 101，探針帶 `--http1.1`＋`Origin`（不帶 `Origin` 會回 400；#1032 plan:126、charts#99 留言 18097）。
+   - `/websocket` 回 101，探針帶 `--http1.1`＋`Origin`（不帶 `Origin` 會回 400；#1032 plan:126、charts#99 留言 18097）。新形狀下 80 與 8072 都經 nginx 8080 回 101（彩排 A6）。
    - OAuth `redirect_uri`、`/woow` 起得來。
    - operator webhook：paas-operator 對 Odoo 的呼叫回 2xx；反方向 Odoo → operator 仍通（cd#144 PR-D 驗收）。
 3. 【人類】以內部帳號登入 4 個 host 抽查 ERP 與 `/woow`；請 woow-machines-operator 從 `woowtech-odoo` 確認 mcp-odoo 呼叫正常（cd#144 PR-D 驗收）。
@@ -285,15 +286,113 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 ## 附錄 T：prod 搬運 helper（G3 裁決：沿用 #1206 形狀，不等 #1217）
 
-> 2026-10-05 發起人裁決 G3（#1495）：不等 #1217 的 platform 人工段，四份 runbook 直接沿用 #1206 在沙盒實測過的形狀；#1217 之後引用本附錄。所有物件都在 `paas-system`、帶 label `app.kubernetes.io/part-of: platform-cutover-transfer`，用完由人類刪除。建立／刪除都是 prod 寫入 ⇒ 【agent 執行・人類逐步放行】。manifest 以彩排 A8 實跑版為準〔待驗：彩排 A8 回填〕。
+> 2026-10-05 發起人裁決 G3（#1495）：不等 #1217 的 platform 人工段，四份 runbook 直接沿用 #1206 在沙盒實測過的形狀；#1217 之後引用本附錄。所有物件都在 `paas-system`、帶 label `app.kubernetes.io/part-of: platform-cutover-transfer`，用完由人類刪除。建立／刪除都是 prod 寫入 ⇒ 【agent 執行・人類逐步放行】。2026-10-05 彩排已實跑：T4＝A2 取資料 Job（下方 manifest，原樣在 prod `paas-system` 由人類 apply 過）、T5＝A3 restore Job（`restore-in-pod.sh`）、反向＝A8（回切 runbook C3）。
 
 | 物件 | 形狀 | 來源 |
 |---|---|---|
 | T1 搬運 PVC | `platform-cutover-transfer`，5Gi、`longhorn-delete`（dump 約 26 MB＋filestore 約 2 GiB；用完即刪） | WMO#5 c18108 容量估算 |
 | T2 receiver | 平台 image（有 python3）跑 `.claude/skills/woow-e2e-fixtures/scripts/prod-clone/receiver.py`（ConfigMap 掛入）；掛 T1；token 放一次性 Secret；Service `platform-cutover-receiver:8080` | #1206 `receiver.py` |
-| T3 NP | 只放行 `component=transfer-source` → receiver 8080、`component=transfer-source` → 來源 pg 5432；不動既有 NP | #1206 搬運洞 NP 同形 |
+| T3 NP | 只放行 `component=transfer-source` → receiver 8080（`paas-system` 有 ns 級 ingress default-deny）。來源若是舊 Bitnami pg，**不必**新增規則：舊 pg NP 已放行 label `paas-odoo-postgresql-client: "true"`（`pg-backup` 同款），T4 帶這個 label 即可；`paas-system` 沒有 egress 限制。不動既有 NP | #1206 搬運洞 NP 同形；2026-10-05 彩排 A2 實查 |
 | T4 來源 Job（`component=transfer-source`） | initContainer＝`paas-postgres` image：`pg_dump -Fc` 來源 DB，另以 psql 產 `manifest.json`（欄位同 prod clone 中和 runbook §B）與 `attachments.txt`；主容器＝平台 image：`tar -C <filestore 目錄> -cf filestore.tar .`、`sha256sum` 產 `SHA256SUMS`，以 python `http.client` PUT 五個檔到 receiver | #1206 端到端實測的合成備份組產生 Job（PR #1493 描述「驗證」段） |
 | T5 restore Job（正向） | `paas-postgres` image 跑 `prod-clone/restore-in-pod.sh`：`sha256sum --strict`、`pg_restore -f /dev/null` 全讀、superuser 建 `odoo` 角色、locale 取 manifest 建庫、只建 manifest 列的 extension（`vector` 拒絕）、TOC 只濾 EXTENSION、以 `odoo` 角色 `pg_restore -1 --exit-on-error --no-owner --no-privileges`、filestore 解到 `/var/lib/odoo/filestore/woow_prod` 並 `chown -R 100:101`、驗 `attachments.txt` 引用都在；label `app.kubernetes.io/instance=paas-odoo-platform`（新 pg NP 只放行這個 label） | #1206 `restore-in-pod.sh`（沙盒實測 64/64 gate） |
+
+### T4 來源 Job（彩排 A2 實跑版）
+
+- 彩排實測：`pg_dump` 6 s（27.6 MB）、filestore tar 52 s（7,361 檔、2.02 GB）、PUT 五檔 21 s；Job 以 nodeSelector 釘在舊 odoo pod 所在 node，唯讀共掛 RWO 的 `paas-odoo` PVC。cutover 時舊 odoo 已 0 副本，可拿掉 nodeSelector。
+- token：人類從 T2 的 Secret 複製到 `platform-cutover-upload-token`（值經 stdin，不上 argv）。用完刪 Job 與 Secret。
+
+```yaml
+# 附錄 T4 來源 Job（2026-10-05 彩排 A2 實跑版，改為 cutover 目的地）。【人類】apply；image digest 換成 cutover 當下的值
+# 只讀：pg_dump（bn_odoo）＋唯讀掛載舊 filestore PVC；產物送到同 ns 的 T2 receiver（cutover）。
+# 不改任何既有 paas-system 物件：舊 pg NP 已放行 label paas-odoo-postgresql-client=true（pg-backup CronJob 同款）；
+# paas-system 沒有 egress 限制。用完由人類刪除本 Job 與 Secret platform-cutover-upload-token。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: platform-cutover-source-<YYYYMMDD>
+  namespace: paas-system
+  labels:
+    app.kubernetes.io/part-of: platform-cutover-transfer
+    app.kubernetes.io/component: transfer-source
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: platform-cutover-transfer
+        app.kubernetes.io/component: transfer-source
+        paas-odoo-postgresql-client: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      # 舊 filestore PVC（RWO）正被 ubuntuserver-59mqj 上的 paas-odoo pod 掛著 ⇒ 同 node 才能再唯讀掛載
+      nodeSelector: {kubernetes.io/hostname: ubuntuserver-59mqj}
+      imagePullSecrets: [{name: jfrog-registry}]
+      initContainers:
+        - name: dump
+          image: jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres:17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PGHOST=paas-odoo-postgresql PGUSER=bn_odoo PGDATABASE=woow_prod
+              for i in $(seq 1 60); do pg_isready -q -t 2 && break; sleep 1; done
+              t0=$(date +%s)
+              pg_dump -Fc -f /out/db.dump
+              echo "TIMING pg_dump $(( $(date +%s) - t0 ))s $(stat -c %s /out/db.dump) bytes"
+              psql -X -tA -c "SELECT json_build_object('schema_version',1,'db_name',current_database(),'encoding',pg_encoding_to_char(encoding),'datcollate',datcollate,'datctype',datctype,'datlocprovider',datlocprovider,'extensions',(SELECT json_object_agg(extname,extversion) FROM pg_extension),'pg_version',current_setting('server_version'),'db_size_bytes',pg_database_size(current_database()),'source','paas-system/paas-odoo-postgresql live pg_dump') FROM pg_database WHERE datname=current_database()" > /out/manifest.json
+              psql -X -tA -c "SELECT DISTINCT store_fname FROM ir_attachment WHERE store_fname IS NOT NULL ORDER BY 1" > /out/attachments.txt
+              pg_restore -f /dev/null /out/db.dump && echo "VERIFY pg_restore full-read OK"
+          env:
+            - name: PGPASSWORD
+              valueFrom: {secretKeyRef: {name: paas-odoo-postgresql, key: password}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          volumeMounts: [{name: out, mountPath: /out}]
+      containers:
+        - name: push
+          image: jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-official:20261005.1128@sha256:76debd4b2176fcfc039628b57569fa7d3ee99e9eb19208910ae49cd218cb6c73
+          securityContext: {runAsUser: 0}   # 只為讀 Bitnami 999:0 擁有的 filestore；PVC 唯讀掛載
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              cd /out
+              src=/src/data/filestore/woow_prod
+              echo "SOURCE files=$(find "$src" -type f | wc -l) bytes=$(find "$src" -type f -printf '%s\n' | awk '{s+=$1} END {print s}') owner=$(stat -c %u:%g "$src")"
+              t0=$(date +%s); tar -C "$src" -cf filestore.tar .; echo "TIMING tar $(( $(date +%s) - t0 ))s $(stat -c %s filestore.tar) bytes"
+              sha256sum db.dump filestore.tar manifest.json attachments.txt > SHA256SUMS
+              cat SHA256SUMS
+              t0=$(date +%s)
+              python3 - <<'PY'
+              import http.client, os
+              tok = os.environ["UPLOAD_TOKEN"]
+              host = "platform-cutover-receiver.paas-system.svc.cluster.local"
+              for f in ["db.dump", "filestore.tar", "manifest.json", "attachments.txt", "SHA256SUMS"]:
+                  c = http.client.HTTPConnection(host, 8080, timeout=900)
+                  with open(f, "rb") as fh:
+                      c.request("PUT", "/cutover/" + f, body=fh,
+                                headers={"X-Upload-Token": tok, "Content-Length": str(os.path.getsize(f))})
+                  r = c.getresponse(); print("PUT", f, r.status, r.read().decode().strip(), flush=True)
+                  assert r.status == 201, f
+              PY
+              echo "TIMING push $(( $(date +%s) - t0 ))s"
+          env:
+            - name: UPLOAD_TOKEN
+              valueFrom: {secretKeyRef: {name: platform-cutover-upload-token, key: token}}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: out, mountPath: /out}
+            - {name: src, mountPath: /src, readOnly: true}
+      volumes:
+        - {name: out, emptyDir: {sizeLimit: 8Gi}}
+        - name: src
+          persistentVolumeClaim: {claimName: paas-odoo, readOnly: true}
+```
 
 - `--no-owner` 會跳過 `ALTER … OWNER`（含 `ALTER SCHEMA public OWNER`），所以 B6 第 6 步要濾的那條不必另處理（14201「給其他票」）。
 - 反向（回切 C3）與 teardown（D1）用同一組 T1～T4，只換來源與目的；反向的寫入端是 Bitnami `bn_odoo`（非 superuser），不用 T5，改用回切 runbook C3 寫明的指令。
