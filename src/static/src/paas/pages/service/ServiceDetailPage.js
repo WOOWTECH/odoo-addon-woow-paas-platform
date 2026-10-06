@@ -341,6 +341,14 @@ export class ServiceDetailPage extends Component {
         return !!kind && kind !== "none";
     }
 
+    /**
+     * Omnigent（omnigent_exec）的 Reset 與上游 Members → Reset 相同：不登出既有 session、
+     * 沒有 2FA 可關——提示文案不能沿用 Odoo／n8n 的「舊裝置會被登出」。
+     */
+    get appResetKeepsSessions() {
+        return this.service?.template?.app_admin_reset_kind === "omnigent_exec";
+    }
+
     get credentialsModalMode() {
         return this.isAppAdminReset ? "in_place" : "reset";
     }

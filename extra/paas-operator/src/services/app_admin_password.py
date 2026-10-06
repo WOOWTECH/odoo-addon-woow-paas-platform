@@ -1,4 +1,5 @@
-"""租戶 app 自管的管理員密碼重設（#1370／#1186）：Odoo 的 base.user_admin、n8n 的 owner。
+"""租戶 app 自管的管理員密碼重設（#1370／#1186）：Odoo 的 base.user_admin、n8n 的 owner、
+Omnigent 的 admin（#1370 後續）。
 
 這兩種 app 的密碼權威在 app 自己的 DB（不是 chart Secret、也不是 PVC 上的
 config.json），所以既有的 reset-config（helm upgrade／exec patch config.json）
@@ -6,6 +7,9 @@ config.json），所以既有的 reset-config（helm upgrade／exec patch config
 
 - Odoo：``odoo_scripts/reset_admin_password.py``（ORM，同交易清 2FA）
 - n8n：``n8n_scripts/reset_owner_password.js``（bcryptjs hash ＋ 單列 UPDATE，同交易關 MFA）
+- Omnigent：``omnigent_scripts/reset_admin_password.py``（omnigent 自己的 AccountStore＋
+  hash_password，與 Members → Reset 同一條寫入；不動 account_generation ⇒ 與上游 admin
+  reset 一樣，已登入的 session 與已配對的 host 不受影響）
 
 共同紀律：
 
@@ -35,15 +39,24 @@ logger = logging.getLogger(__name__)
 # bcrypt ＋ 一次 UPDATE（實測約 1 秒）。
 ODOO_RESET_EXEC_TIMEOUT_SECONDS = 45
 N8N_RESET_EXEC_TIMEOUT_SECONDS = 30
+# Omnigent：冷 import omnigent＋一次 scrypt/argon hash＋SQLite 寫入，沙盒實測約 5.5 秒。
+OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS = 30
 # 找 pod 最多三次 kubectl get（selector 兩次＋fallback 驗證一次）的餘裕。
 APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS = 15
 
 N8N_CONTAINER_NAME = "n8n"
+# woow-paas-charts omnigent：server Deployment 的主容器（另有 runner-gc sidecar）。
+OMNIGENT_CONTAINER_NAME = "server"
+# omnigent server image 的 venv python（PATH 上的 python 即此；寫絕對路徑免受 PATH 影響）。
+OMNIGENT_PYTHON = "/opt/venv/bin/python"
 
 _SCRIPTS = Path(__file__).resolve().parent
 # import 時就讀——檔案不見要在 operator 啟動當下就炸，不要等到租戶按 Reset 才發現。
 ODOO_RESET_ADMIN_SCRIPT = (_SCRIPTS / "odoo_scripts" / "reset_admin_password.py").read_text(encoding="utf-8")
 N8N_RESET_OWNER_SCRIPT = (_SCRIPTS / "n8n_scripts" / "reset_owner_password.js").read_text(encoding="utf-8")
+OMNIGENT_RESET_ADMIN_SCRIPT = (
+    _SCRIPTS / "omnigent_scripts" / "reset_admin_password.py"
+).read_text(encoding="utf-8")
 
 
 class AppAdminResetError(Exception):
@@ -60,7 +73,7 @@ class AppAdminResetError(Exception):
 
 
 class AppAdminPasswordService:
-    """Odoo／n8n 管理員密碼重設（operator 端唯一實作）。"""
+    """Odoo／n8n／Omnigent 管理員密碼重設（operator 端唯一實作）。"""
 
     def __init__(self, k8s_service: KubernetesService | None = None):
         self.k8s = k8s_service or KubernetesService()
@@ -91,6 +104,23 @@ class AppAdminPasswordService:
             namespace, pod_name, N8N_CONTAINER_NAME,
             ["node", "-e", N8N_RESET_OWNER_SCRIPT],
             new_password, N8N_RESET_EXEC_TIMEOUT_SECONDS, app="n8n",
+        )
+
+    def reset_omnigent_admin(self, namespace: str, release_name: str, new_password: str) -> dict:
+        # server pod 才有 DATABASE_URL；runner Job 的 pod 不帶 instance label，不會被選到。
+        selector = (f"app.kubernetes.io/instance={release_name},"
+                    f"app.kubernetes.io/name=omnigent,app.kubernetes.io/component=server")
+        try:
+            pod_name = self.k8s.get_pod_name(namespace, selector)
+        except (KubectlException, ValueError) as exc:
+            raise AppAdminResetError(
+                f"Cannot find the Omnigent server pod for release {release_name} in {namespace}",
+                step="find_pod", kind="not_executed",
+            ) from exc
+        return self._run(
+            namespace, pod_name, OMNIGENT_CONTAINER_NAME,
+            [OMNIGENT_PYTHON, "-c", OMNIGENT_RESET_ADMIN_SCRIPT],
+            new_password, OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS, app="omnigent",
         )
 
     # --- internal ---------------------------------------------------------

@@ -781,11 +781,12 @@ class OdooInitResponse(BaseModel):
 
 # 腳本回報的原因碼（``success: false`` 時）。平台據此轉成租戶看得懂的可行動訊息。
 AppAdminResetCode = Literal[
-    "admin_missing",      # Odoo：找不到 base.user_admin／n8n：沒有 owner 或 owner 從未 setup
-    "admin_inactive",     # Odoo：base.user_admin 已封存
+    "admin_missing",      # Odoo：找不到 base.user_admin／n8n：沒有 owner 或 owner 從未 setup／
+                          # Omnigent：找不到 admin 帳號
+    "admin_inactive",     # Odoo：base.user_admin 已封存／Omnigent：admin 已被拿掉管理員角色
     "owner_ambiguous",    # n8n：owner 不只一列，或 UPDATE 影響列數 != 1
     "hash_unavailable",   # n8n：n8n 安裝目錄裡找不到 bcryptjs／DB driver
-    "db_unsupported",     # n8n：DB_TYPE／schema 不在支援範圍
+    "db_unsupported",     # n8n：DB_TYPE／schema 不在支援範圍／Omnigent：沒有 DATABASE_URL 或非 accounts 模式
     "invalid_password",   # 新密碼長度不在 12–128
 ]
 

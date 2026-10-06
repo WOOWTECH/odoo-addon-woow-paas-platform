@@ -132,7 +132,19 @@
                 "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
                 "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]},
                 {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select",
-                "default": "info", "options": ["info", "warn", "error", "debug"]}
+                "default": "info", "options": ["info", "warn", "error", "debug"]},
+                {"key": "main.config.N8N_SMTP_HOST", "label": "SMTP Host", "type": "text",
+                "placeholder": "smtp.example.com",
+                "description": "寄信伺服器（選填）。設定後 n8n 才能寄忘記密碼、邀請成員等信件；未設定時這些信不會寄出"},
+                {"key": "main.config.N8N_SMTP_PORT", "label": "SMTP Port", "type": "number",
+                "default": 465, "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
+                {"key": "main.config.N8N_SMTP_SSL", "label": "SMTP SSL", "type": "select",
+                "default": "true", "options": ["true", "false"]},
+                {"key": "main.config.N8N_SMTP_USER", "label": "SMTP Username", "type": "text"},
+                {"key": "main.secret.N8N_SMTP_PASS", "label": "SMTP Password", "type": "password",
+                "description": "只存於 Kubernetes Secret；重新設定時留空＝不變更"},
+                {"key": "main.config.N8N_SMTP_SENDER", "label": "Sender", "type": "text",
+                "placeholder": "n8n &lt;you@example.com&gt;", "description": "寄件者（可含名稱）"}
                 ]}</field>
 
             <!-- Service Configuration -->
@@ -1075,8 +1087,21 @@
                  docs/decisions/hermes-agent-installer-landing-env.md 的判別法 A/B。
                  migration：本 xmlid 首建於 ea5433ab（2026-07-28），晚於 noupdate=0
                  收斂 d1cb2e32（2026-04-06），故既有 DB 的 ir.model.data.noupdate=False、
-                 `-u` 直接重套本欄位，無需 migration。 -->
-            <field name="helm_chart_version">0.2.1</field>
+                 `-u` 直接重套本欄位，無需 migration。
+                 0.2.1 → 0.3.0（#1397，同 #1360 的洞）：agent 改 StatefulSet（pod 名固定
+                 <fullname>-0），console Role 的 pods／pods/exec／pods/log 全綁 resourceNames，
+                 console 不再能 exec 進同工作區其他服務。⚠ 依賴 paas-operator 的 helm_secret
+                 reset 會重啟帶 paas.woowtech.io/restart-on-credential-reset 的 StatefulSet（平台 #1398）——
+                 operator 未換版前不可上這一版，否則重設密碼回成功但 agent 仍吃舊密碼。
+                 0.3.0 → 0.3.1（charts #138）：同工作區 LiteLLM 網址串接——平台注入的
+                 llmGateway.baseUrl 經 runtime ConfigMap envFrom 成 agent 的 LITELLM_BASE_URL，
+                 網址非空才由 networkPolicy.litellmEgress 開 agent → 同 ns LiteLLM proxy TCP 4000
+                 （注入見 cloud_service._LITELLM_BASE_URL_VALUE_PATHS；0.3.1 之前的 chart 不認得
+                 這兩個鍵，注入了也沒有 env、egress 也不通）。
+                 helm_default_values 不需新增任何鍵（llmGateway 由平台注入、litellmEgress 用
+                 chart 預設）。既有服務管理員 Redeploy 時 Deployment 換 StatefulSet，約中斷
+                 1～2 分鐘、資料保留。 -->
+            <field name="helm_chart_version">0.3.1</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261003.1400@sha256:7b095a7258e627c156d7c08301b699fda42365548fdb868c94b4d3848823a9a4"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
@@ -1768,6 +1793,10 @@
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
+            <!-- #1370 後續：初始密碼照舊由 has_admin_gui 供給（chart 只在首次開機建 admin）；
+                 忘記密碼時服務頁 Reset 由 operator exec 進 server 容器、用 omnigent 自己的
+                 AccountStore 改密碼（不重啟；與上游一樣不登出既有 session）。 -->
+            <field name="app_admin_reset_kind">omnigent_exec</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>

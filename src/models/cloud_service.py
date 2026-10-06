@@ -2050,7 +2050,12 @@ class CloudService(models.Model):
         # 欄位，這裡是第二道防線（本 method 還有別的 caller 時也守得住）。
         # 只擋「有供給、但不能重設」：has_admin_gui=False 的授權一直由 controller
         # 負責（model 端既有行為不變，縱深測試直接呼叫本 method 驗 state 守衛）。
-        if self.template_id.has_admin_gui and not self.template_id.admin_reset_supported:
+        # #1370 後續：omnigent 現在 admin_reset_supported=True，但那是 omnigent_exec
+        # （_reset_app_admin_password）的能力；helm 這條對 app_managed 仍然是假裝成功，
+        # 所以載體本身也要擋。
+        if self.template_id.has_admin_gui and (
+                not self.template_id.admin_reset_supported
+                or self.template_id.admin_password_carrier == 'app_managed'):
             raise UserError(
                 _("This service manages its own admin password. "
                   "Change it inside the app.")
@@ -2342,12 +2347,20 @@ class CloudService(models.Model):
 
     # #1370：operator 腳本回報的原因碼 → 租戶看得懂、能行動的訊息。這些都是「交易已
     # rollback、密碼未變」的確定失敗（error_kind=failed／not_executed）。
-    def _app_admin_reset_refusal_message(self, code):
+    def _app_admin_reset_refusal_message(self, code, kind=None):
+        # Omnigent 的 admin_inactive 意思是「帳號還在、但已被拿掉管理員角色」（Members 裡
+        # 降級），不是 Odoo 的封存——共用 Odoo 文案會叫租戶去「Odoo 內」重新啟用。
+        if kind == 'omnigent_exec' and code == 'admin_inactive':
+            return _(
+                "The administrator account of this service no longer has administrator "
+                "rights, so the password was not changed. Ask another administrator in "
+                "Omnigent to make it an administrator again, then reset again; if there "
+                "is none, please open a support ticket.")
         messages = {
             'admin_missing': _(
                 "The administrator account could not be found in this service, so the "
                 "password was not changed. Please contact support."),
-            # 只有 Odoo 會回這個碼；封存可由租戶自己的其他管理員解（#1186 驗收文案）。
+            # Odoo：封存可由租戶自己的其他管理員解（#1186 驗收文案）；Omnigent 見上方。
             'admin_inactive': _(
                 "The administrator account of this service has been archived, so the "
                 "password was not changed. Ask another administrator in Odoo to "
@@ -2362,7 +2375,8 @@ class CloudService(models.Model):
             "and try again.")
 
     def _reset_app_admin_password(self):
-        """#1370／#1186：重設 app 自管的管理員密碼（Odoo base.user_admin／n8n owner）。
+        """#1370／#1186：重設 app 自管的管理員密碼（Odoo base.user_admin／n8n owner／
+        Omnigent admin）。
 
         與 ``_reset_admin_password``（helm Secret／config.json）是兩條不同的契約：這兩個
         app 的密碼權威在 app 自己的 DB，operator exec 一支腳本直接改，**不 helm
@@ -2391,7 +2405,7 @@ class CloudService(models.Model):
         )
 
         kind = self.template_id.app_admin_reset_kind or 'none'
-        if kind not in ('odoo_exec', 'n8n_exec'):
+        if kind not in ('odoo_exec', 'n8n_exec', 'omnigent_exec'):
             raise UserError(_("This service does not support resetting its admin password."))
 
         # 同 _reset_admin_password：列鎖序列化同一台服務的並發 Reset。
@@ -2424,8 +2438,11 @@ class CloudService(models.Model):
             raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         new_password = self._generate_admin_password()
-        reset = (client.reset_odoo_admin_password if kind == 'odoo_exec'
-                 else client.reset_n8n_owner_password)
+        reset = {
+            'odoo_exec': client.reset_odoo_admin_password,
+            'n8n_exec': client.reset_n8n_owner_password,
+            'omnigent_exec': client.reset_omnigent_admin_password,
+        }[kind]
         unknown_message = _(
             "Reset status unknown — the request timed out before the service confirmed "
             "it. The password may already have changed, so it was not saved. Wait a "
@@ -2474,13 +2491,16 @@ class CloudService(models.Model):
             )
             if error_kind == 'unknown' or not error_kind:
                 raise UserError(unknown_message)
-            raise UserError(self._app_admin_reset_refusal_message(result.get('error_code')))
+            raise UserError(self._app_admin_reset_refusal_message(
+                result.get('error_code'), kind))
 
         login = result.get('login') or None
         # ================= 提交點之後：只剩記帳（#525 B3） =================
         try:
             with self.env.cr.savepoint():
-                if kind == 'odoo_exec':
+                if kind in ('odoo_exec', 'omnigent_exec'):
+                    # omnigent：chart Secret 的 admin_password 只在首次開機用；存回憑證記錄
+                    # 讓平台與 app 一致（redeploy 重送也是 no-op）。
                     self._set_admin_password_secret(new_password)
                 else:
                     vals = {'n8n_owner_password': new_password}

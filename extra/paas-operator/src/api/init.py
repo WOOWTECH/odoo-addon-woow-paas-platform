@@ -224,3 +224,17 @@ def reset_n8n_owner_password(namespace: str, release_name: str,
                              request: AppAdminPasswordResetRequest):
     return _app_admin_reset("n8n", namespace, release_name, request,
                             app_admin_password_service.reset_n8n_owner)
+
+
+@router.post(
+    "/{namespace}/{release_name}/omnigent/admin-password",
+    response_model=AppAdminPasswordResetResponse,
+    summary="Reset the Omnigent administrator password",
+    description="Set a new password on the Omnigent admin account (username unchanged) directly in "
+                "the Omnigent database, the same write as the in-app Members → Reset. No helm upgrade, "
+                "no restart; signed-in sessions and paired hosts are left as they are.",
+)
+def reset_omnigent_admin_password(namespace: str, release_name: str,
+                                  request: AppAdminPasswordResetRequest):
+    return _app_admin_reset("Omnigent", namespace, release_name, request,
+                            app_admin_password_service.reset_omnigent_admin)
