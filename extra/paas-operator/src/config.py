@@ -28,6 +28,23 @@ class Settings(BaseSettings):
     # PVC Lifecycle
     pvc_grace_period_days: int = 7  # Days before orphaned PVCs are deleted
 
+    # #1415：開通前的叢集儲存（Longhorn）排程額度預檢（src/services/storage_capacity.py）。
+    # 只有「確定放不下」才回 409；讀不到 Longhorn／渲染失敗一律放行。這個開關是 kill switch
+    # （env STORAGE_CAPACITY_PRECHECK_ENABLED=false ⇒ 開通行為回到 #1415 之前）。
+    storage_capacity_precheck_enabled: bool = True
+    # 預檢用 `helm install --dry-run` 渲染（含 OCI 拉 chart）的 subprocess 上限；逾時＝放行。
+    # 平台 install_release 的 HTTP 預算是 120s（HELM_OPERATION_TIMEOUT），這裡留給真正的 install。
+    storage_capacity_render_timeout_seconds: int = Field(default=45, gt=0)
+    longhorn_namespace: str = "longhorn-system"
+
+    # #1434：租戶 ns LimitRange 的 ephemeral-storage 預設（只補「容器沒宣告」的那一格；
+    # chart 自己有設就以 chart 為準）。容器寫 overlay（/、/tmp、/var/tmp）與容器 log 都
+    # 算 ephemeral-storage，超過 limit 時 kubelet 只驅逐該 Pod，不會把節點系統碟寫到
+    # DiskPressure 連坐同節點其他租戶與正式站。request 很小是刻意的：它會計入節點
+    # allocatable 的排程帳（節點系統碟約 100G），只保留最低額度。
+    tenant_ephemeral_storage_default_request: str = "128Mi"
+    tenant_ephemeral_storage_default_limit: str = "4Gi"
+
     # Private Registry (for tenant namespace imagePullSecrets)
     registry_server: str = ""
     registry_username: str = ""

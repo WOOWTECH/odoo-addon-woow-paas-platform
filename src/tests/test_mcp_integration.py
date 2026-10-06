@@ -213,6 +213,50 @@ class TestBuildMCPSidecarConfig(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
+class TestN8nSeedNoBuiltinMcp1426(TransactionCase):
+    """#1426：n8n 不再附帶內建 MCP sidecar（與「n8n MCP Server」商品重複）。
+
+    sidecar 跟 n8n 在同一個 pod，映像拉不下來時 n8n 本身也不可用。欄位必須在 seed 裡
+    明確寫成空值——noupdate=0 的 -u 不會清掉 XML 沒列出的欄位。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.template = self.env.ref('woow_paas_platform.cloud_app_n8n')
+
+    def test_seed_has_no_sidecar(self):
+        self.assertFalse(self.template.mcp_enabled)
+        self.assertFalse(self.template.mcp_sidecar_image)
+        self.assertFalse(self.template.mcp_sidecar_env)
+        self.assertFalse(self.template.mcp_api_key_helm_path)
+
+    def test_owner_init_is_kept(self):
+        # 開通時就建立擁有者，不讓別人搶先註冊。
+        self.assertEqual(self.template.post_deploy_init_type, 'n8n')
+
+    def test_seed_keeps_api_key_secret_placeholder(self):
+        # #1471：沒有 main.secret，chart 就不建 app-secret，operator init 會卡在 find_secret。
+        values = json.loads(self.template.helm_default_values)
+        self.assertTrue(values['main']['secret'].get('N8N_API_KEY'))
+
+
+@tagged('post_install', '-at_install')
+class TestN8nSeedImagesFromJcr1426(TransactionCase):
+    """#1426：n8n 映像從 JCR 拉、釘 digest。
+
+    從 Docker Hub 拉時，pod 換到沒有快取的主機會卡很久（實測含 sidecar 約 21 分鐘）。
+    """
+
+    JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
+
+    def test_n8n_image_is_jcr_and_pinned(self):
+        template = self.env.ref('woow_paas_platform.cloud_app_n8n')
+        image = json.loads(template.helm_default_values)['image']
+        self.assertTrue(image['repository'].startswith(self.JCR), image)
+        self.assertIn('@sha256:', image['tag'])
+
+
+@tagged('post_install', '-at_install')
 class TestAutoCreateMCPServer(TransactionCase):
     """Test _auto_create_mcp_server logic.
 

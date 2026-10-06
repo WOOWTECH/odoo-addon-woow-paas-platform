@@ -11,6 +11,7 @@ from src.api import (
     access,
     agent_runtimes,
     analytics,
+    cluster,
     init,
     namespaces,
     odoo_modules,
@@ -186,6 +187,8 @@ app.include_router(agent_runtimes.router)
 app.include_router(access.router)
 app.include_router(reconcile.router)
 app.include_router(analytics.router)
+# #1415：叢集層唯讀查詢（Longhorn 排程額度）。
+app.include_router(cluster.router)
 
 
 # Root endpoint

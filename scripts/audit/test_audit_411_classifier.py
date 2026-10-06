@@ -57,13 +57,18 @@ class TestInjectorAndSensitivePaths(unittest.TestCase):
             ("nextcloud", "publicUrl"),
             ("config", "dashboardPublicUrl"),
             ("omnigentHost", "serverUrl"),
+            ("tailscale", "workspaceHeadscaleUrl"),
+            ("llmGateway", "baseUrl"),
+            ("config", "nonSensitive", "connection", "base_url"),
         ]:
             self.assertTrue(audit._is_injector_path(p), p)
 
     def test_partial_or_deeper_paths_are_not_injector(self):
         # 整條路徑比對：同前綴但不同葉子的租戶鍵不得被誤判成自癒
         for p in [("omnigentHost", "hostName"), ("omnigentHost",),
-                  ("omnigentHost", "serverUrl", "x"), ("config", "allowedOriginsX")]:
+                  ("omnigentHost", "serverUrl", "x"), ("config", "allowedOriginsX"),
+                  ("tailscale", "loginServer"), ("tailscale", "controlPlane"),
+                  ("llmGateway",), ("config", "nonSensitive", "connection", "api_key")]:
             self.assertFalse(audit._is_injector_path(p), p)
 
     def test_non_injector_paths(self):
@@ -132,7 +137,9 @@ class TestInjectorPathsLockstep(unittest.TestCase):
         # floor：解析器若壞掉（找不到任何表）這支測試就變成空跑，所以釘住幾條已知的
         paths = {path for _table, path in found}
         for must in [("omnigentHost", "serverUrl"), ("config", "dashboardPublicUrl"),
-                     ("config", "allowedOrigins"), ("persistence", "storageClass")]:
+                     ("config", "allowedOrigins"), ("persistence", "storageClass"),
+                     ("tailscale", "workspaceHeadscaleUrl"), ("llmGateway", "baseUrl"),
+                     ("config", "nonSensitive", "connection", "base_url")]:
             self.assertIn(must, paths)
         missing = sorted(
             "%s: %s" % (table, ".".join(path))

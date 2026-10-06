@@ -45,6 +45,34 @@
                         </div>
                     </t>
 
+                    <!-- #1433 Confirm step -->
+                    <t t-elif="state.confirming">
+                        <div class="o_woow_rollback_confirm">
+                            <p class="o_woow_rollback_confirm_title">
+                                Roll back to revision <strong t-esc="state.selectedRevision"/>?
+                            </p>
+                            <ul class="o_woow_rollback_confirm_list">
+                                <li t-if="chartChange">
+                                    Chart version: <t t-esc="chartChange.from"/> → <t t-esc="chartChange.to"/>
+                                </li>
+                                <li>
+                                    Settings, including API keys, return to the values saved in that revision.
+                                </li>
+                                <li t-if="keepsAdminCredentials">
+                                    The admin username and password are not rolled back: the current credentials stay in effect.
+                                </li>
+                                <li>
+                                    The service restarts during the rollback (about a minute); work in progress may be interrupted.
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div t-if="state.error" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.error"/>
+                        </div>
+                    </t>
+
                     <!-- Revisions List -->
                     <t t-else="">
                         <div class="o_woow_rollback_info">
@@ -106,6 +134,15 @@
 
                 <div class="o_woow_modal_footer">
                     <WoowButton
+                        t-if="state.confirming"
+                        variant="'secondary'"
+                        size="'md'"
+                        onClick.bind="onBack"
+                        disabled="state.rolling">
+                        Back
+                    </WoowButton>
+                    <WoowButton
+                        t-else=""
                         variant="'secondary'"
                         size="'md'"
                         onClick="props.onClose"
@@ -120,6 +157,10 @@
                         <t t-if="state.rolling">
                             <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
                             Rolling back...
+                        </t>
+                        <t t-elif="state.confirming">
+                            <WoowIcon name="'history'" size="18"/>
+                            Confirm Rollback
                         </t>
                         <t t-else="">
                             <WoowIcon name="'history'" size="18"/>

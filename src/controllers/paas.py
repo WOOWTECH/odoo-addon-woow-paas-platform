@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import ipaddress
 import json
 import logging
 import threading
 import traceback
 import uuid
+from datetime import timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -125,6 +127,27 @@ def _show_projects(env) -> bool:
         SHOW_PROJECTS_FLAG) or '').strip().lower() in ('true', '1')
 
 
+# #1453：「說明與支援」的唯一網址來源（側欄、頭像選單、儲值頁共用）。原本三處各自寫死
+# https://docs.woowtech.io，該網域根本不存在（NXDOMAIN）。預設值是現有的幫助中心；
+# 日後有專屬文件站時改 config_parameter 即可，不必發版。
+HELP_URL_PARAM = 'woow_paas_platform.help_url'
+DEFAULT_HELP_URL = 'https://aiot.woowtech.io/blog/help-center-7'
+
+
+def _help_url(env) -> str:
+    """回傳「說明與支援」網址；參數缺值或不是 http(s) 網址時退回預設值。
+
+    只接受 http(s)：這個值會被前端直接 window.open／放進 href，`javascript:` 之類
+    的 scheme 一律不收（設定錯了也只會退回預設，而不是變成可執行的連結）。
+    """
+    raw = (env['ir.config_parameter'].sudo().get_param(HELP_URL_PARAM) or '').strip()
+    if raw:
+        parsed = urlparse(raw)
+        if parsed.scheme in ('http', 'https') and parsed.netloc:
+            return raw
+    return DEFAULT_HELP_URL
+
+
 def _account_denial(env) -> dict[str, Any] | None:
     """Product access is independent of Odoo's internal/Portal identity.
 
@@ -200,6 +223,7 @@ class PaasController(HiddenChainMixin, Controller):
         # 單次頁面載入成本可忽略）；router + nav 同步共用此注入值。
         session_info = dict(request.env['ir.http'].session_info())
         session_info['woow_show_projects'] = _show_projects(request.env)
+        session_info['woow_help_url'] = _help_url(request.env)
         return request.render(
             'woow_paas_platform.paas_app',
             {'session_info': session_info}
@@ -1025,8 +1049,9 @@ class PaasController(HiddenChainMixin, Controller):
     def _portal_config_values(cls, values, template):
         """DTO of declared scalar settings only, never a raw Helm tree.
 
-        The write filter has a legacy allow-all fallback for missing specs;
-        that is not an acceptable disclosure policy for privileged reads.
+        Templates without declared specs expose nothing here; since #1488 the
+        write filter (``_filter_allowed_helm_values``) is fail-closed the same
+        way — no declared keys means tenants can neither read nor write values.
         """
         specs = template._parse_helm_value_specs()
         if not isinstance(specs, dict):
@@ -1603,16 +1628,17 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
-    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
+    def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None, **kw: Any) -> dict[str, Any]:
         """
         Handle operations on a specific cloud service.
 
         Args:
             workspace_id (int): Workspace ID
             service_id (int): Service ID
-            action (str): 'get', 'update', or 'delete'
+            action (str): 'get', 'update', 'delete', or 'restart' (#1432)
             values (dict, optional): Helm values (for update)
             version (str, optional): Chart version (for update)
+            clear_keys (list, optional): #1455 password spec keys to clear (for update)
 
         Returns:
             dict: Response containing:
@@ -1653,12 +1679,15 @@ class PaasController(HiddenChainMixin, Controller):
                 _logger.exception("Error checking service update: %s", e)
                 return {'success': False,
                         'error': _('An error occurred while updating the service.')}
-            return self._update_service(service, values, version, odoo_addon_ids)
+            return self._update_service(service, values, version, odoo_addon_ids,
+                                        clear_keys=clear_keys)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
             try:
-                service._check_operation_allowed(operation='write')
+                # #1424：'delete' 在訂閱閘裡與 write 同級，唯一差別是開通被拒、訂閱已自動
+                # 取消的服務仍可刪除（見 CloudService._check_operation_allowed）。
+                service._check_operation_allowed(operation='delete')
             except OperationalError:
                 raise
             except (AccessDenied, AccessError, MissingError) as e:
@@ -1672,6 +1701,28 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False,
                         'error': _('An error occurred while deleting the service.')}
             return self._delete_service(service)
+        elif action == 'restart':
+            # #1432：租戶的「重新啟動」。與 update／delete 同一道 role gate ＋訂閱閘
+            # （停權／欠費擋在這裡）；狀態、VM、lease 等業務判準在 model 的
+            # `_restart_workloads`（private，RPC 直呼不到）。
+            if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+                return {'success': False, 'error': _('Permission denied')}
+            try:
+                service._check_operation_allowed(operation='write')
+                service._restart_workloads()
+            except OperationalError:
+                raise
+            except (AccessDenied, AccessError, MissingError) as e:
+                _logger.exception("Access error restarting service: %s", e)
+                return {'success': False,
+                        'error': _('An error occurred while restarting the service.')}
+            except (ValidationError, UserError) as e:
+                return {'success': False, 'error': str(e)}
+            except Exception as e:
+                _logger.exception("Error restarting service: %s", e)
+                return {'success': False,
+                        'error': _('An error occurred while restarting the service.')}
+            return {'success': True, 'data': self._format_service(service)}
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
@@ -1951,6 +2002,10 @@ class PaasController(HiddenChainMixin, Controller):
                 service.id,
             )
             gateway = {}
+        # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
+        # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
+        # 判準只算這一次：下方的 message 與 payload 都讀它，兩者不得各判各的。
+        deliver_password = not (tenant_set and new_password is not None)
         message = (
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'
@@ -1968,11 +2023,21 @@ class PaasController(HiddenChainMixin, Controller):
         # 判準的話，那種服務會收到一句「Gateway API Key 已重設」的假話，而租戶會
         # 回 MCP 那端去換一把根本沒換過的 key。
         if gateway.get('gateway_api_key'):
-            message = (
-                'Admin password and Gateway API Key reset. Save both now — '
-                'they will not be shown again. Update the Gateway API Key '
-                'wherever you configured it (e.g. your MCP server).'
-            )
+            if deliver_password:
+                message = (
+                    'Admin password and Gateway API Key reset. Save both now — '
+                    'they will not be shown again. Update the Gateway API Key '
+                    'wherever you configured it (e.g. your MCP server).'
+                )
+            else:
+                # 租戶自填密碼（不回傳），但 model 端對有 gateway 的 chart 每次都換發
+                # gateway key（LiteLLM 的 master key）、舊的立即失效 ⇒ 這次回應的
+                # 新 key 是租戶唯一拿得到它的機會。不能說「兩個都存好」：密碼沒有回傳。
+                message = _(
+                    'Admin credentials updated and the Gateway API Key was replaced. '
+                    'Save the new Gateway API Key now — it will not be shown again. '
+                    'The service restarts to apply them.'
+                )
         if app_reset_kind == 'omnigent_exec':
             # Omnigent：與上游 Members → Reset 相同——不重啟、立刻生效，但不登出既有 session。
             message = (
@@ -2024,9 +2089,9 @@ class PaasController(HiddenChainMixin, Controller):
             message=message,
             template=template_flags,
         )
-        # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
-        # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
-        if not (tenant_set and new_password is not None):
+        # 判準見上方 deliver_password。gateway key 不受它影響：有就交付（換發後舊的
+        # 已失效），前端 onAdminCredentialsSaved 也因此不能只看 admin_password。
+        if deliver_password:
             data['admin_password'] = applied_password
         return {'success': True, 'data': data}
 
@@ -3184,6 +3249,81 @@ class PaasController(HiddenChainMixin, Controller):
                 paths.add((key,))
         return paths
 
+    @staticmethod
+    def _password_specs(template: Any) -> list[dict[str, Any]]:
+        """#1455／#1435：template 可設定的 ``type: password`` spec（不含 ``_init.*``）。
+
+        specs 讀不懂時回 ``[]``——呼叫端據此「不提供清除」「不判定有變」，都是保守方向
+        （遮罩那條的 fail-closed 另由 ``_sanitize_helm_values`` 負責）。
+        """
+        specs = template._parse_helm_value_specs_or_fail() if template else {}
+        if specs is SPECS_UNPARSEABLE or not isinstance(specs, dict):
+            return []
+        result = []
+        for group in ('required', 'optional'):
+            group_specs = specs.get(group) or []
+            if not isinstance(group_specs, list):
+                continue
+            for spec in group_specs:
+                if not isinstance(spec, dict) or spec.get('type') != 'password':
+                    continue
+                key = spec.get('key')
+                if not key or not isinstance(key, str) or key.startswith('_init.'):
+                    continue
+                result.append({'key': key, 'required': group == 'required'})
+        return result
+
+    @classmethod
+    def _clearable_password_keys(cls, template: Any) -> set[str]:
+        """#1455：可清除的憑證欄位＝optional 的 password spec（required 的清掉服務就壞了）。"""
+        return {s['key'] for s in cls._password_specs(template) if not s['required']}
+
+    @classmethod
+    def _password_spec_states(cls, values: dict, template: Any) -> dict[str, bool]:
+        """#1455：每個 password spec 目前「有沒有設定」（只回布林，不回值）。
+
+        前端原本對 password 欄一律顯示 ``********``，從沒設定過的金鑰也一樣，租戶
+        以為已設定而排錯方向錯誤（R8：open-design 的 Anthropic API Key、code-server
+        的 Git Token）。空字串視同未設定（chart 拿到空值等同沒有）。
+        """
+        states = {}
+        for spec in cls._password_specs(template):
+            value = _lookup_helm_value(values or {}, spec['key'])
+            states[spec['key']] = value is not _HELM_VALUE_MISSING and value not in (None, '')
+        return states
+
+    @classmethod
+    def _password_values_changed(cls, template: Any, before: dict, after: dict) -> bool:
+        """#1435：任一 password spec 的值在 before／after 之間不同（含設定、清除）。"""
+        for spec in cls._password_specs(template):
+            old = _lookup_helm_value(before or {}, spec['key'])
+            new = _lookup_helm_value(after or {}, spec['key'])
+            if old is _HELM_VALUE_MISSING:
+                old = None
+            if new is _HELM_VALUE_MISSING:
+                new = None
+            if (old or None) != (new or None):
+                return True
+        return False
+
+    @staticmethod
+    def _delete_helm_value(values: dict, key: str) -> None:
+        """#1455：刪掉一個 spec key——字面鍵與 dot-path 兩種落庫形態都刪
+        （與 ``_lookup_helm_value`` 的查法對稱）。"""
+        if not isinstance(values, dict):
+            return
+        values.pop(key, None)
+        parts = key.split('.')
+        if len(parts) == 1:
+            return
+        cursor: Any = values
+        for part in parts[:-1]:
+            if not isinstance(cursor, dict) or part not in cursor:
+                return
+            cursor = cursor[part]
+        if isinstance(cursor, dict):
+            cursor.pop(parts[-1], None)
+
     @classmethod
     def _sanitize_helm_values(cls, values: dict, template: Any) -> dict:
         """Remove secret values from helm_values before exposing in API responses.
@@ -3441,6 +3581,13 @@ class PaasController(HiddenChainMixin, Controller):
         的 chart 能力（gateway 有子路徑、dashboard 是 root），今天恰好只有
         hermes-agent 兩者兼具。綁在一起的話，哪天有 chart 只具其一，交付就會整組
         消失或整組多出來——而兩種錯法都不會有任何一端報錯。
+
+        ## P3：gateway 兩格的提示（`gateway_api_key_hint`／`gateway_url_hint`）
+
+        前端內建的提示是 hermes-agent 的（「填進 MCP 連線設定的 Gateway API Server
+        區」）。其他有 gateway 的模板（LiteLLM：key 是 master key、URL 是 OpenAI 相容
+        Base URL）在範本的同名欄位寫自己的說明（資料值，seed 原文），這裡跟著 key 一起帶出；空值
+        不帶，前端沿用內建文案。只是顯示字，交付判準不變。
         """
         creds: dict[str, Any] = {}
         secret = service._get_secret_record()
@@ -3448,6 +3595,14 @@ class PaasController(HiddenChainMixin, Controller):
         if secret and secret.gateway_api_key and gateway_url:
             creds['gateway_api_key'] = secret.gateway_api_key
             creds['gateway_url'] = gateway_url
+            # P3：兩格的提示依範本（資料值，seed 原文、不走 .po）。只跟著 key 一起出現：
+            # 沒有交付 key 時沒有那兩格可以掛提示。空值不帶，前端沿用 hermes-agent
+            # 的內建文案（MCP 連線設定）。
+            template = service.template_id
+            if template.gateway_api_key_hint:
+                creds['gateway_api_key_hint'] = template.gateway_api_key_hint
+            if template.gateway_url_hint:
+                creds['gateway_url_hint'] = template.gateway_url_hint
         dashboard_url = service._dashboard_public_url()
         if dashboard_url:
             creds['dashboard_url'] = dashboard_url
@@ -3784,8 +3939,16 @@ class PaasController(HiddenChainMixin, Controller):
             'data': self._format_service(service, include_details=True),
         }
 
-    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
-        """Update/upgrade a service."""
+    def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None) -> dict[str, Any]:
+        """Update/upgrade a service.
+
+        #1455 ``clear_keys``：要清除的 ``type: password`` 欄位（只收 optional、非
+        ``_init.*``）。留空＝不變更的語意不變；清除是另一個顯式動作。
+        #1435：任何憑證欄位真的變了（設定、更換、清除）⇒ helm upgrade 之後再對所有
+        Deployment／StatefulSet 下 rollout restart。金鑰多以 secretKeyRef env 注入，
+        只在容器啟動時讀；chart 若沒有 ``checksum/secret``，upgrade 不會滾 Pod，
+        新金鑰永遠不生效（R8 open-design 實測）。
+        """
         # #1159 Q30（後端守衛在 #1257）：error 按原因拆開。init 的**額度**用完
         # （確定失敗／結果未知）而轉 error 時放行 reconfigure，並一律開新的一代
         # ——v1 沒有 retry-init 按鈕，這是租戶唯一的出口。helm 失敗、等待逾時等
@@ -3802,6 +3965,20 @@ class PaasController(HiddenChainMixin, Controller):
         # helm upgrade 會與它互踩（也會改掉 CAS 要比對的 state）。
         if service._init_lease_active():
             return {'success': False, 'error': self._init_in_flight_error(service)}
+
+        # #1455：清除清單在任何寫入**之前**驗證（下方 addon 那段會先寫 odoo_addon_ids）。
+        if clear_keys is not None and not isinstance(clear_keys, list):
+            return {'success': False, 'error': _('Invalid request')}
+        clear_keys = list(clear_keys or [])
+        if clear_keys:
+            if not all(isinstance(k, str) for k in clear_keys):
+                return {'success': False, 'error': _('Invalid request')}
+            clearable = self._clearable_password_keys(service.template_id)
+            not_clearable = sorted({k for k in clear_keys if k not in clearable})
+            if not_clearable:
+                return {'success': False, 'error': _(
+                    'These settings cannot be cleared: %(keys)s',
+                    keys=', '.join(not_clearable))}
 
         client = get_paas_operator_client(request.env)
         if not client:
@@ -3870,8 +4047,22 @@ class PaasController(HiddenChainMixin, Controller):
             format_error = service.template_id._validate_spec_formats(filtered_user_values)
             if format_error:
                 return {'success': False, 'error': format_error}
+            # #1455：清除優先於同一請求裡對同一格的輸入。
+            if clear_keys:
+                filtered_user_values = {
+                    k: v for k, v in filtered_user_values.items() if k not in clear_keys}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
-            merged_values = self._deep_merge(existing_values, nested_user_values)
+            # `_deep_merge` 只淺拷貝被覆寫的那幾層，沒被碰到的子樹與 existing 共用
+            # 同一個物件 ⇒ 下面清除前先整份 deepcopy，否則刪 merged 會連 existing 一起刪，
+            # 「憑證有沒有變」的比對就失準。
+            existing_snapshot = copy.deepcopy(existing_values)
+            merged_values = copy.deepcopy(
+                self._deep_merge(existing_values, nested_user_values))
+            for key in clear_keys:
+                self._delete_helm_value(merged_values, key)
+            # #1435：憑證欄位（設定／更換／清除）真的變了才需要重啟。
+            secrets_changed = self._password_values_changed(
+                service.template_id, existing_snapshot, merged_values)
 
             # #1130：woow-odoo 的 conf.adminEmail 與 create 同一個檢查——只在本次真的送了
             # 這一格時檢查。只改 addon／其他設定的 reconfigure 不得因為舊資料（例：#1128
@@ -3991,6 +4182,8 @@ class PaasController(HiddenChainMixin, Controller):
                 upgrade_kwargs['sensitive_values'] = odoo_sensitive
             operator_url = client.base_url
             operator_api_key = client._session.headers.get('X-API-Key', '')
+            # #1435：停權中的服務 upgrade 後會被 scale 回 0，不重啟（重啟只會白白拉起來）。
+            restart_after_upgrade = bool(secrets_changed and not halted)
 
             def _bg_upgrade():
                 """Run helm upgrade in a background thread with its own cursor."""
@@ -4016,6 +4209,22 @@ class PaasController(HiddenChainMixin, Controller):
                                 "after upgrade — workload may still be running "
                                 "(billing bypass)", service_id,
                             )
+                    # #1435：helm upgrade 回來時 Secret 已是新值；沒有 checksum/secret 的
+                    # chart 不會因此滾 Pod ⇒ 這裡補一次 rollout restart，讓以 env 注入的
+                    # 新金鑰生效。有 checksum 的 chart 會多滾一次（無害，只是多一次重建）。
+                    # 失敗不翻 error：設定已套用，租戶可用「重新啟動」（#1432）補上。
+                    if restart_after_upgrade:
+                        try:
+                            bg_client.restart_release(
+                                namespace=upgrade_kwargs['namespace'],
+                                release_name=upgrade_kwargs['release_name'],
+                            )
+                        except Exception:
+                            _logger.exception(
+                                "Failed to restart service %s after a credential "
+                                "change — new keys take effect on the next restart",
+                                service_id,
+                            )
                     with odoo.registry(db_name).cursor() as cr:
                         env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                         svc = env['woow_paas_platform.cloud_service'].browse(service_id)
@@ -4036,6 +4245,22 @@ class PaasController(HiddenChainMixin, Controller):
                                     or svc.helm_chart_version
                                 ),
                             })
+                        elif svc.exists() and svc.state != 'deleting':
+                            # #1456：背景 poll 可能早一步把服務推回 running——operator 還在
+                            # 拉 chart、helm 尚未進入 pending-upgrade 時，release 仍是上一版
+                            # 的 deployed、pods 也都 ready。舊碼只在 upgrading／suspended 時
+                            # 回寫，於是帳本停在升級前的 revision，直到每日對帳才追上
+                            # （R8：OD 平台 9／實際 10、Code Server 5／6）。這裡只做**單調**
+                            # 回寫：operator 明確回報、且比帳本新才寫，不碰 state。
+                            reported = release_info.get('revision')
+                            if isinstance(reported, int) and reported > (svc.helm_revision or 0):
+                                svc.write({
+                                    'helm_revision': reported,
+                                    'helm_chart_version': (
+                                        release_info.get('chart_version')
+                                        or svc.helm_chart_version
+                                    ),
+                                })
                 except Exception as exc:
                     _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
                     try:
@@ -4100,12 +4325,9 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             service.write({'state': 'deleting'})
 
-            # Uninstall Helm release (pass subdomain for Cloudflare cleanup)
-            client.uninstall_release(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                subdomain=service.subdomain,
-            )
+            # Uninstall Helm release (pass subdomain for Cloudflare cleanup；#1431：從未
+            # running 過的服務請 operator 把孤兒 PVC 只留 1 天——判準在 model 的 helper)
+            service._uninstall_release(client)
 
             # Delete the record
             service.unlink()
@@ -4153,21 +4375,35 @@ class PaasController(HiddenChainMixin, Controller):
         if not client:
             return {'success': False, 'error': _('PaaS Operator not configured')}
 
+        # #1433：平台管的憑證（管理員帳密、gateway key）不跟著回復——請 operator 以
+        # 「目標 revision 的設定＋目前的憑證」重現目標版本，而不是純 helm rollback
+        # （那會讓已撤銷的舊密碼復活、目前的密碼失效）。沒有平台憑證的模板照舊。
+        preserve_paths = service._rollback_preserved_value_paths()
+
         try:
-            client.rollback_release(
+            rollback_result = client.rollback_release(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 revision=revision,
+                chart=service.template_id.helm_chart_name if preserve_paths else None,
+                preserve_value_paths=preserve_paths or None,
             )
 
             # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
             # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
             # （`fields.Datetime.now()` 的 UTC 基準要求見 `_update_service`。）
-            service.write({
+            rollback_vals = {
                 'state': 'upgrading',
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
-            })
+            }
+            # #1433：保留憑證的回復是一次 helm upgrade，operator 回報它實際渲染的 chart
+            # 版本（＝目標 revision 的版本）。記下來，否則下一次「修改配置」會以
+            # `service.helm_chart_version`（回復前的新版）釘版，把剛回復的 chart 又升回去
+            # （#552 的 resolved_version 以服務自己的版本優先）。
+            if isinstance(rollback_result, dict) and rollback_result.get('chart_version'):
+                rollback_vals['helm_chart_version'] = rollback_result['chart_version']
+            service.write(rollback_vals)
             # #1257 Q23／#1267：還欠 init 的服務（含 init 額度用完的 error）rollback
             # 開新的一代——保留欠 init、計數歸零，下一輪導回 initializing。之前只寫
             # upgrading、不設 `addon_update_pending`，首次部署 init 失敗、已轉 error 的
@@ -4314,6 +4550,9 @@ class PaasController(HiddenChainMixin, Controller):
                 'name': service.template_id.name,
                 'slug': service.template_id.slug or '',
                 'category': service.template_id.category,
+                # #1453：配置頁「View Documentation」讀這一格；原本漏帶，連結永遠不出現
+                # （marketplace 的 template API 有帶，服務詳情這份沒有）。
+                'documentation_url': service.template_id.documentation_url or '',
                 # #460 S1：前端 Reset 密碼按鈕的顯示判準（ServiceDetailPage 的
                 # hasAdminGui getter）唯一的資料入口。**直接鏡射模板欄位、不做任何
                 # 推導**——與 reset endpoint 的授權判準（:1293 的
@@ -4340,6 +4579,9 @@ class PaasController(HiddenChainMixin, Controller):
                 # 挑文案（不重啟、立刻生效、2FA 已關），不自建 slug 判準。
                 'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
                 'helm_value_specs': service.template_id._parse_helm_value_specs(),
+                # #1432：「重新啟動」按鈕的顯示判準——與 `_restart_workloads` 的 VM 閘
+                # 讀同一個欄位（workload_type），前端不自建判準。
+                'restart_supported': service.template_id.workload_type != 'vm',
             },
             # 目前生效的 admin 帳號（非敏感；不開放改帳號的模板為 None），供對話框預填。
             'admin_username': service._admin_username(),
@@ -4365,8 +4607,12 @@ class PaasController(HiddenChainMixin, Controller):
                 # Odoo 的 `json_default`，序列化成 SQL 空格格式（`2026-08-26 12:34:56`），
                 # 與同一份 payload 其他 datetime 欄位的 ISO `T` 格式不一致，
                 # 而前端那格又是裸 `t-esc` ⇒ 原始字串直接印給租戶。
+                # #1456：帶上 UTC offset。前端對「不帶 offset」的時間字串目前仍照 ECMA
+                # 規格當成當地時間讀（全面切換見 #914），這一格因此把 UTC 當台灣時間
+                # 顯示、比同頁回復版本清單（helm 回的值帶 offset）慢 8 小時。帶 offset
+                # 的形狀（SHAPE-4）在兩種讀法下都正確，#914 切換後也不必再改。
                 'last_release_sync_at': (
-                    service.last_release_sync_at.isoformat()
+                    service.last_release_sync_at.replace(tzinfo=timezone.utc).isoformat()
                     if service.last_release_sync_at else None
                 ),
                 # #559：helm_values 有 groups='base.group_system'，屬性直讀會
@@ -4377,19 +4623,25 @@ class PaasController(HiddenChainMixin, Controller):
                     if request.env.user.share else self._sanitize_helm_values(
                         service._helm_values_dict(), service.template_id)
                 ),
+                # #1455：每個 password spec「有沒有設定」（布林，不含值）。前端據此顯示
+                # 「未設定」或遮罩，並決定要不要提供「清除」。
+                'password_specs_set': self._password_spec_states(
+                    service._helm_values_dict(), service.template_id),
                 # #745：Access 設定（拍板 10 的欄位組）。只掛在 detail 那一側
                 # ——Access 頁籤只存在於 detail 頁，而 list 端點會為一個
                 # workspace 的**每一台**服務各 walk 一次 `access_policy_ids`。
                 # 顯示條件本身（`ac_max_access_seats > 0`）走 `subscription`，
                 # 那個 key 兩側都有，所以精簡版不會因此少掉判斷依據。
                 'access': service._access_to_dict(),
-                # 對外 MQTT 位址（charts/emqx）。能力旗標與值分開給：旗標決定前端
-                # 要不要畫這一格（空位址時顯示「尚未取得」而不是整格消失——那會讓
-                # 租戶以為自己沒開成功），值是背景 poll 回讀到的最後一筆。
-                # ⚠ 前端的 gate 必須讀 `has_public_mqtt_address`，不得用 slug 判
+                # 對外位址（ngrok sidecar：EMQX 的 MQTT、Headscale 的控制網址）。
+                # 能力旗標與值分開給：旗標決定前端要不要畫這一格（空位址時顯示
+                # 「尚未取得」而不是整格消失——那會讓租戶以為自己沒開成功），值是
+                # 背景 poll 回讀到的最後一筆，標題是範本的標籤（資料值，seed 原文）。
+                # ⚠ 前端的 gate 必須讀 `has_public_tunnel_address`，不得用 slug 判
                 # （repo-lint 第 7 條；見 cloud_app_template 同名欄位註解）。
-                'has_public_mqtt_address': service._chart_has_public_mqtt_address(),
-                'mqtt_public_url': service.mqtt_public_url or None,
+                'has_public_tunnel_address': service._chart_has_public_tunnel_address(),
+                'public_tunnel_label': service.template_id.public_tunnel_label or None,
+                'public_tunnel_url': service.public_tunnel_url or None,
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,

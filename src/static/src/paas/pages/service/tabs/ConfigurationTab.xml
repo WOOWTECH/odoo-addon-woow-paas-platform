@@ -87,6 +87,11 @@
                             <WoowIcon name="'info'" size="16"/>
                             <span>Modify configuration values below. Changes will trigger a service upgrade.</span>
                         </div>
+                        <!-- #1435：改金鑰／密碼後服務會重新啟動，新值才會生效。 -->
+                        <div t-if="hasSecretSpecs" class="o_woow_editor_hint">
+                            <WoowIcon name="'restart_alt'" size="16"/>
+                            <span>Changing or clearing an API key or password restarts the service after saving (about a minute) so the new value takes effect; work in progress will be interrupted.</span>
+                        </div>
                         <HelmValueForm
                             specs="configurableSpecs"
                             values="state.editedValues"
@@ -95,6 +100,19 @@
                             errors="state.errors"
                             passwordBlankMeansUnchanged="true"
                         />
+                        <!-- #1455：清除已設定的金鑰（留空＝不變更，清除是另一個顯式動作）。 -->
+                        <div t-if="clearableSecretSpecs.length" class="o_woow_config_clear_secrets">
+                            <div class="o_woow_config_clear_secrets__title">Clear saved keys</div>
+                            <t t-foreach="clearableSecretSpecs" t-as="spec" t-key="spec.key">
+                                <label class="o_woow_config_clear_secrets__item">
+                                    <input
+                                        type="checkbox"
+                                        t-att-checked="isClearChecked(spec)"
+                                        t-on-change="() => this.toggleClear(spec)"/>
+                                    <span>Clear <t t-esc="spec.label || spec.key"/></span>
+                                </label>
+                            </t>
+                        </div>
                         <t t-if="hasOptionalSettings">
                             <button
                                 type="button"

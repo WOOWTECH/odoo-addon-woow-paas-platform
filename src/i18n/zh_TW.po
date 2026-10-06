@@ -1260,6 +1260,15 @@ msgid "Admin access required"
 msgstr "需要管理員權限"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Admin credentials updated and the Gateway API Key was replaced. Save the new"
+" Gateway API Key now — it will not be shown again. The service restarts to "
+"apply them."
+msgstr "管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——它不會再顯示。服務會重新啟動以套用變更。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__external_mcp_allowed
 msgid ""
 "Admin gate for NetworkPolicy egress to external MCP endpoints (design §6.3 "
@@ -4494,6 +4503,36 @@ msgstr "最早將於 %(date)s 釋放。"
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "Contact support to release it early, or deploy this service in another workspace."
 msgstr "如需提早釋放請聯絡客服，或改在其他工作區開通此服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The platform is temporarily short of storage space and cannot create the disk this service needs (%(size)s)."
+msgstr "平台儲存空間暫時不足，無法建立這個服務需要的磁碟（%(size)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The platform is temporarily short of storage space and cannot create the disks this service needs."
+msgstr "平台儲存空間暫時不足，無法建立這個服務需要的磁碟。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Nothing was created for this deployment, and the platform administrators have been notified."
+msgstr "這次開通沒有建立任何資源，系統管理員已收到通知。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Please delete this service and deploy it again later, or contact support."
+msgstr "請刪除這個服務後稍後再重新開通，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Deleting it also cancels its subscription: nothing is charged during the trial, and points already paid are refunded for the unused days."
+msgstr "刪除服務會一併取消訂閱：試用期內不會扣款，已扣的點數會依未使用天數退回。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -10432,6 +10471,48 @@ msgstr "以下 post-deploy 初始化以 unknown 或 partial 結果結束："
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
 msgid "Post-deploy initialization gave up on the following service(s):"
 msgstr "以下服務的 post-deploy 初始化已放棄等待："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s, namespace %(ns)s): cannot schedule %(volumes)s; the largest new volume that still fits is %(largest)s. Orphaned PVCs: %(orphans)s."
+msgstr "%(name)s（id=%(id)s，namespace %(ns)s）：無法排程 %(volumes)s；目前還能新建的最大單顆 volume 為 %(largest)s。孤兒 PVC：%(orphans)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Deployments were rejected before anything was created because the cluster storage (Longhorn) has no room for their disks. The tenants were told to retry later. Free scheduling capacity (for example orphaned PVCs still in their retention period) or add storage:"
+msgstr "以下開通在建立任何資源之前就被擋下：叢集儲存（Longhorn）已經放不下它們的磁碟，租戶已被告知稍後再試。請釋放排程額度（例如仍在保留期內的孤兒 PVC）或增加儲存空間："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(count)s PVCs, %(size)s requested, %(scheduled)s of Longhorn scheduling capacity including replicas"
+msgstr "%(count)s 個 PVC，請求 %(size)s，連同副本佔用 Longhorn 排程額度 %(scheduled)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "The largest new volume with all %(replicas)s replicas that still fits is %(largest)s, below the %(min)s GiB the largest template disk needs (StorageClass %(sc)s)."
+msgstr "目前還能新建、%(replicas)s 個副本都排得上的最大單顆 volume 為 %(largest)s，低於最大範本磁碟需要的 %(min)s GiB（StorageClass %(sc)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(node)s: %(scheduled)s of %(limit)s reserved, %(headroom)s left on its largest disk"
+msgstr "%(node)s：已預訂 %(scheduled)s／上限 %(limit)s，最大磁碟還剩 %(headroom)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Node %(node)s has %(pct)s%% of its Longhorn scheduling limit reserved."
+msgstr "節點 %(node)s 的 Longhorn 排程額度已預訂 %(pct)s%%。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Orphaned PVCs (kept for their retention period): %(orphans)s"
+msgstr "孤兒 PVC（保留期內）：%(orphans)s"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_postgresql_monthly_product_template
@@ -18671,6 +18752,12 @@ msgstr "與下方密碼一起登入此服務。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Signs in to this service, together with the password you set."
+msgstr "與你設定的密碼一起登入此服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid "Initial Password"
 msgstr "初始密碼"
 
@@ -19654,6 +19741,85 @@ msgstr "設定值格式不正確。"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: enter the domain name only, without https:// (for example abc-123.ngrok-free.app instead of \"%(entry)s\")."
+msgstr "網域：只填網域名稱，不要加 https://（例如填 abc-123.ngrok-free.app，而不是「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: enter the domain name only, without a path, \"/\" or \"@\" (\"%(entry)s\" is not a domain name)."
+msgstr "網域：只填網域名稱，不要包含路徑、「/」或「@」（「%(entry)s」不是網域名稱）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: enter the domain name only, without a port number (\"%(entry)s\")."
+msgstr "網域：只填網域名稱，不要加埠號（「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: \"%(entry)s\" is not a full domain name; use a dotted name such as abc-123.ngrok-free.app."
+msgstr "網域：「%(entry)s」不是完整的網域名稱，請填含點的完整名稱，例如 abc-123.ngrok-free.app。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: at most %(max)s characters."
+msgstr "網域最長 %(max)s 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: \"%(entry)s\" is not a valid domain name. Use letters, digits and hyphens separated by dots, for example abc-123.ngrok-free.app."
+msgstr "網域：「%(entry)s」不是有效的網域名稱。請只用英文字母、數字與連字號，以點分隔，例如 abc-123.ngrok-free.app。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Public address"
+msgstr "對外位址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Not available yet. This address needs your own ngrok authtoken in Configuration; once the agent connects it appears here (re-checked in the background). With a reserved ngrok address or your own domain it stays the same; otherwise it may change whenever the service restarts."
+msgstr "尚未取得。這個位址需要你在「配置」填入自己的 ngrok authtoken；agent 連上後就會顯示在這裡（背景會定期重新檢查）。使用 ngrok 保留位址或自己的網域時位址固定，否則服務重啟後可能會改變。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Copy address"
+msgstr "複製位址"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__has_public_tunnel_address
+msgid "Advertises a public tunnel address"
+msgstr "回報對外通道位址"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_label
+msgid "Public Tunnel Address Label"
+msgstr "對外通道位址標籤"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__gateway_api_key_hint
+msgid "Gateway API Key Hint"
+msgstr "Gateway API 金鑰提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__gateway_url_hint
+msgid "Gateway API URL Hint"
+msgstr "Gateway API 網址提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_url
+msgid "Public Tunnel Address"
+msgstr "對外通道位址"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
 "The administrator account could not be found in this service, so the password was not changed. Please contact support."
@@ -19663,8 +19829,8 @@ msgstr "找不到此服務的管理員帳號，密碼沒有變更。請聯絡客
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
-"The administrator account of this service has been archived, so the password was not changed. Please contact support."
-msgstr "此服務的管理員帳號已被封存，密碼沒有變更。請聯絡客服。"
+"The administrator account of this service has been archived, so the password was not changed. Ask another administrator in Odoo to reactivate it, then reset again; if there is none, please open a support ticket."
+msgstr "此服務的管理員帳號已被封存，密碼沒有變更。請由 Odoo 內其他管理員重新啟用此帳號後再重設；若沒有其他管理員，請開工單聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -19746,6 +19912,592 @@ msgid "n8n owner (operator exec)"
 msgstr "n8n 擁有者（operator exec）"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Redeploy finished, but the release runs chart %(actual)s while the product "
+"pins %(expected)s."
+msgstr "已重新部署，但 release 跑的是 chart %(actual)s，商品釘的是 %(expected)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"After the redeploy the workload is not running the expected image: "
+"%(detail)s"
+msgstr "重新部署後，workload 跑的不是預期的 image：%(detail)s"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_check_message
+msgid "Redeploy Check"
+msgstr "重新部署核對"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_check_message
+msgid ""
+"Result of comparing the running workload with the product template after the"
+" last redeploy (chart version and images). Empty when they match."
+msgstr "上次重新部署後，實際執行的 workload 與商品範本的核對結果（chart 版本與 image）。相符時為空。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_verify_pending
+msgid "Redeploy Verification Pending"
+msgstr "等待重新部署核對"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Deployment timeout recovery fields are managed by the platform: %(fields)s"
+msgstr "部署逾時自動恢復的欄位由平台管理：%(fields)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the release runs a different chart than the template expects — an in-place "
+"upgrade cannot switch charts; a fresh install is required (see #1128)"
+msgstr "release 跑的 chart 與範本預期的不同——原地升級換不了 chart，需要重新安裝（見 #1128）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the operator does not report Pod identity (component/owner) — upgrade paas-"
+"operator first (#1263), woow-odoo readiness fails closed without it"
+msgstr ""
+"operator 沒有回報 Pod 身分（component／owner）——請先升級 paas-operator（#1263），沒有它 woow-"
+"odoo 的就緒判定一律不放行"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the chart's server/postgresql Pod was never created (or is not owned by its "
+"ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for "
+"FailedCreate (namespace ResourceQuota, admission)"
+msgstr ""
+"chart 的 server／postgresql Pod 從未建立（或不屬於它的 ReplicaSet／StatefulSet）——請查 "
+"ReplicaSet／StatefulSet 事件裡的 FailedCreate（namespace ResourceQuota、admission）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a required Pod exists but never reached Running — check its pod events "
+"(scheduling, Multi-Attach, image pull); an exempt backup Job listed in the "
+"detail may still hold the RWO data PVC"
+msgstr ""
+"必要的 Pod 存在但從未進入 Running——請查它的 Pod 事件（排程、Multi-Attach、拉 image）；細節裡列出的豁免備份 Job"
+" 可能還佔著 RWO 資料 PVC"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a volume could not be attached to the node — check the Longhorn volume and "
+"whether its replicas can be scheduled (disk space, storage over-"
+"provisioning, orphaned PVCs still holding capacity)"
+msgstr ""
+"磁碟掛不到節點上——請檢查 Longhorn volume 與它的 replica 能否排程（磁碟空間、Storage Over "
+"Provisioning、仍佔著容量的孤兒 PVC）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a volume could not be mounted — check the PVC/PV binding and the CSI driver "
+"events of the pod"
+msgstr "磁碟無法掛載——請檢查 PVC／PV 的綁定與這個 Pod 的 CSI driver 事件"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the pod could not be scheduled — check node CPU/memory capacity, unbound "
+"PVCs (storage class, Longhorn capacity) and node selectors"
+msgstr ""
+"Pod 排不上節點——請檢查節點 CPU／記憶體容量、未綁定的 PVC（storage class、Longhorn 容量）與 node "
+"selector"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the container image could not be pulled — check the image reference, the "
+"registry credentials (imagePullSecrets) and that the registry is reachable "
+"from the node"
+msgstr ""
+"拉不到容器 image——請檢查 image 參照、registry 憑證（imagePullSecrets），以及節點連不連得到 registry"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a container keeps crashing on start — check its previous logs (kubectl logs "
+"--previous) and its configuration"
+msgstr "容器一啟動就反覆當掉——請查它上一次的 log（kubectl logs --previous）與設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the container could not be created — check the Secrets/ConfigMaps it "
+"references and its container spec"
+msgstr "容器建立不起來——請檢查它引用的 Secret／ConfigMap 與容器設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "the operator could not list pods — check its RBAC and the API server"
+msgstr "operator 列不出 Pod——請檢查它的 RBAC 與 API server"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"no Pod object was ever created — check the namespace ResourceQuota (a "
+"rejected Pod never materialises) and that the chart labels its pods with "
+"app.kubernetes.io/instance"
+msgstr ""
+"一顆 Pod 都沒有建立——請檢查 namespace 的 ResourceQuota（被拒絕的 Pod 不會出現），以及 chart 有沒有替 Pod"
+" 標上 app.kubernetes.io/instance"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"pods exist but none reached Running — check pod events (scheduling, image "
+"pull) and node capacity"
+msgstr "Pod 存在但沒有一顆進入 Running——請查 Pod 事件（排程、拉 image）與節點容量"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"pods never started (still Pending) — check the pod events (scheduling, "
+"volume attach/mount, image pull) and node capacity"
+msgstr "Pod 從未啟動（仍是 Pending）——請查 Pod 事件（排程、磁碟掛載、拉 image）與節點容量"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"pods are Running but never became ready — check container logs and the "
+"readiness probe"
+msgstr "Pod 已 Running 但一直沒有就緒——請查容器 log 與 readiness probe"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the platform never received VM status — the operator is likely too old to "
+"report it"
+msgstr "平台從未收到 VM 狀態——operator 版本可能太舊、不會回報"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the operator could not read the VirtualMachineInstance — check its RBAC for "
+"virtualmachineinstances"
+msgstr ""
+"operator 讀不到 VirtualMachineInstance——請檢查它對 virtualmachineinstances 的 RBAC"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"no VirtualMachineInstance was created — check the DataVolume / CDI importer,"
+" the disk import may have stalled"
+msgstr "沒有建立 VirtualMachineInstance——請檢查 DataVolume／CDI importer，磁碟匯入可能卡住了"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the VM is running but never reported Ready — check the guest boot inside the"
+" VM"
+msgstr "VM 已在執行但一直沒有回報 Ready——請檢查 VM 內的開機狀況"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the helm release never reached \"deployed\" — a killed rollback leaves it "
+"stuck in pending-*; inspect `helm history` for the release"
+msgstr ""
+"helm release 一直沒到 \"deployed\"——rollback 被中斷會卡在 pending-*；請查這個 release 的 "
+"`helm history`"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the service is suspended — its workload is intentionally halted, so it can "
+"never become ready while a deploy/upgrade is pending (see #482)"
+msgstr "服務停權中——workload 被刻意停機，部署／升級等待期間永遠不會就緒（見 #482）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service is suspended, so it cannot finish deploying. It will resume "
+"automatically once the subscription is active again."
+msgstr "服務目前停權中，因此無法完成部署；訂閱恢復有效後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes because the "
+"platform could not provide the storage or computing resources it needs in "
+"time. This is a platform-side issue and you do not need to do anything; the "
+"service will recover automatically once it is resolved."
+msgstr ""
+"服務在 %(minutes)s "
+"分鐘內沒能啟動完成：平台沒能及時提供它需要的儲存或運算資源。這是平台端的問題，您不需要做任何操作；問題排除後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes because its "
+"software image could not be downloaded. This is a platform-side issue and "
+"you do not need to do anything; the service will recover automatically once "
+"it is resolved."
+msgstr ""
+"服務在 %(minutes)s 分鐘內沒能啟動完成：服務的程式映像檔下載不下來。這是平台端的問題，您不需要做任何操作；問題排除後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes because it "
+"keeps restarting while starting up. If you recently changed its settings, "
+"please check them; otherwise you do not need to do anything. The service "
+"will recover automatically once the problem is resolved."
+msgstr ""
+"服務在 %(minutes)s "
+"分鐘內沒能啟動完成：服務啟動時一直重新啟動。如果您最近修改過服務設定，請確認設定是否正確；否則您不需要做任何操作。問題排除後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service started but did not report that it was ready within %(minutes)s "
+"minutes. You do not need to do anything; the service will recover "
+"automatically once it becomes ready."
+msgstr "服務已啟動，但在 %(minutes)s 分鐘內沒有回報可以使用。您不需要做任何操作；服務就緒後會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes. You do not "
+"need to do anything for now; the service will recover automatically once the"
+" problem is resolved. If it does not recover, please contact support."
+msgstr "服務在 %(minutes)s 分鐘內沒能啟動完成。您目前不需要做任何操作；問題排除後服務會自動恢復，若一直沒有恢復，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"%(summary)s\n"
+"Technical details for the administrator: %(details)s"
+msgstr ""
+"%(summary)s\n"
+"技術細節（給管理員）：%(details)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Service %(name)s (id=%(id)s) recovered on its own after the deployment "
+"timeout of %(timed_out_at)s UTC: the release became ready, so it moved to "
+"%(state)s."
+msgstr ""
+"服務 %(name)s（id=%(id)s）在 %(timed_out_at)s UTC 部署逾時後已自行恢復：release 已就緒，狀態改為 "
+"%(state)s。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__transition_timeout_at
+msgid "Deployment Timed Out At"
+msgstr "部署逾時時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__transition_timeout_at
+msgid ""
+"Set when the deployment age timeout turned this service into an error. While"
+" set, a background job keeps checking the release for a limited time and "
+"resumes the service as soon as it becomes ready."
+msgstr "部署等候逾時把這個服務轉成錯誤的時間。有值時，背景排程會在一段時間內繼續檢查 release，一就緒就自動恢復服務。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_recover_timed_out_services_ir_actions_server
+msgid "Cloud Service: Recover Timed-out Deployments"
+msgstr "雲端服務：部署逾時自動恢復"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Service history fields are managed by the platform: %(fields)s"
+msgstr "服務歷程欄位由平台管理：%(fields)s"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__first_running_at
+msgid "First Running At"
+msgstr "首次正常運作時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__first_running_at
+msgid ""
+"When the service reached the running state for the first time. Empty means "
+"it never worked: its leftover disks are kept for only 1 day after deletion. "
+"Services created before version 18.0.1.0.209 were backfilled conservatively."
+msgstr ""
+"服務第一次進入「執行中」的時間。空白表示從未正常運作過：刪除後留下的磁碟只保留 1 天。18.0.1.0.209 以前建立的服務已保守回填。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+msgid "Not set"
+msgstr "未設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Changing or clearing an API key or password restarts the service after saving (about a minute) so the new value takes effect; work in progress will be interrupted."
+msgstr "變更或清除 API 金鑰、密碼後，儲存時服務會重新啟動（約一分鐘）讓新值生效，進行中的工作會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Clear saved keys"
+msgstr "清除已設定的金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Clear"
+msgstr "清除"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Restart Service"
+msgstr "重新啟動服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Restart"
+msgstr "重新啟動"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Restarting..."
+msgstr "重新啟動中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Every component of the service is restarted; this usually takes about a minute."
+msgstr "服務的所有元件都會重新啟動，通常約需一分鐘。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "The service is unavailable while it restarts, and work in progress is interrupted."
+msgstr "重新啟動期間服務暫時無法使用，進行中的工作會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.xml:0
+msgid "Data and settings are kept."
+msgstr "資料與設定都會保留。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RestartServiceModal.js:0
+msgid "Failed to restart the service"
+msgstr "無法重新啟動服務"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This type of service cannot be restarted from the platform."
+msgstr "這類服務無法從平台重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Please delete this service, then contact support to release the storage "
+"early, or deploy it again in another workspace."
+msgstr "請刪除這個服務；如需提早釋放儲存空間請聯絡客服，或改在其他工作區重新開通。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Only a running service can be restarted."
+msgstr "只有執行中的服務可以重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Its subscription has been cancelled automatically, so it will not be charged"
+" again; the points already paid have been refunded to your wallet for the "
+"unused days."
+msgstr "這個服務的訂閱已自動取消，不會再扣款；已扣的點數已依未使用天數退回錢包。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Service has no helm release yet — deploy first before restarting it."
+msgstr "服務尚未完成部署，無法重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Its subscription has been cancelled automatically, so it will not be "
+"charged."
+msgstr "這個服務的訂閱已自動取消，不會扣款。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__provision_rejected_code
+msgid "Provisioning Rejected"
+msgstr "開通被拒"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__provision_rejected_code
+msgid ""
+"Error code with which the deployment service refused to create this service "
+"(workspace storage quota or cluster storage capacity). The subscription of a"
+" service that never ran was cancelled automatically at that moment, so it is"
+" never charged; the service can still be deleted."
+msgstr "部署服務拒絕建立這個服務時回的錯誤碼（工作區儲存配額或叢集儲存額度）。從未正常運作過的服務，訂閱已在當下自動取消、不會扣款；服務仍可刪除。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_sh_subscription_subscription__woow_billing_hold_notified_at
+msgid "Billing Hold Notice Sent At"
+msgstr "暫停扣款通知寄出時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_subscription__woow_billing_hold_notified_at
+msgid ""
+"#1424: when the tenant was told (once) that this subscription is not charged"
+" because its cloud service never worked (it has stayed in error since it was"
+" created). The auto-invoice cron skips such subscriptions; billing resumes "
+"once the service reaches running. Stamped only after the notice reached the "
+"mail queue."
+msgstr ""
+"#1424：告知租戶（只寄一次）「這筆訂閱的雲端服務從沒正常運作過（建立後一直停在錯誤），因此不扣款」的時間。自動扣款排程會跳過這類訂閱；服務進入執行中後恢復計費。只有通知真的排進寄信佇列才會記錄。"
+
+#. module: woow_paas_platform
+#: model:mail.template,name:woow_paas_platform.mail_template_billing_hold_never_running
+msgid "PaaS: Billing Paused for a Service That Never Worked"
+msgstr "PaaS：從未正常運作的服務暫停扣款"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_billing_hold_never_running
+msgid "[Woow PaaS] A service that never started will not be charged"
+msgstr "[Woow PaaS] 從未正常運作的服務不會扣款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Roll back to revision"
+msgstr "確定要回復到版本"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Chart version:"
+msgstr "Chart 版本："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Settings, including API keys, return to the values saved in that revision."
+msgstr "應用設定（包含 API 金鑰）會回到該版本當時儲存的值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "The admin username and password are not rolled back: the current credentials stay in effect."
+msgstr "管理員帳號與密碼不會被回復，維持目前的帳密。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "The service restarts during the rollback (about a minute); work in progress may be interrupted."
+msgstr "回復期間服務會重新啟動（約一分鐘），進行中的工作可能會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Confirm Rollback"
+msgstr "確認回復"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "UPDATING"
+msgstr "更新中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Plan & Billing"
+msgstr "方案與帳期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "First Billing Date"
+msgstr "首次扣款日"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
+msgid "Billing Start Date"
+msgstr "計費開始日"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Service Guide"
+msgstr "使用說明"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "An initialization request for this service may still be running. Please try again in a few minutes."
+msgstr "這個服務的初始化可能仍在進行中，請過幾分鐘再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Restart failed. Check service status and retry."
+msgstr "重新啟動失敗，請確認服務狀態後再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while restarting the service."
+msgstr "重新啟動服務時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "These settings cannot be cleared: %(keys)s"
+msgstr "這些設定無法清除：%(keys)s"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__app_admin_reset_kind__omnigent_exec
 msgid "Omnigent administrator (operator exec)"
 msgstr "Omnigent 管理員（operator exec）"
@@ -19764,3 +20516,10 @@ msgid ""
 "Reset Admin Password issues a new password that works right away.\n"
 "                    Devices that are already signed in stay signed in."
 msgstr "重設管理員密碼會產生立即生效的新密碼，已登入的裝置不會被登出。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The administrator account of this service no longer has administrator rights, so the password was not changed. Ask another administrator in Omnigent to make it an administrator again, then reset again; if there is none, please open a support ticket."
+msgstr "此服務的管理員帳號已不具管理員權限，密碼沒有變更。請由 Omnigent 內其他管理員將它重新設為管理員後再重設；若沒有其他管理員，請開工單聯絡客服。"

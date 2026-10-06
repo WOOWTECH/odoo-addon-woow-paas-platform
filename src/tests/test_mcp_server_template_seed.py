@@ -338,7 +338,13 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     EXPECT_MCP_COMMAND = 'odoo-mcp'
     # 與上面那條 launch spec 綁成 lockstep 的常數，見
     # test_image_repin_must_recheck_launch_spec。
-    EXPECT_IMAGE_TAG = '7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876'
+    # 2026-10-03 重釘 e310dfe0（#20–#27）：已覆核 apps/odoo/Dockerfile 與 uv.lock 的
+    # woow-odoo-mcp-server／odoo-mcp 依賴自 7b5944c4 起未變，console script ``odoo-mcp``
+    # 與 streamable-http args 照舊成立。
+    # 2026-10-06 重釘 d5032a72（woow-mcp-server #34，#1500 看門狗）：已覆核 e310dfe0..d5032a72 之間
+    # apps/odoo 與 uv.lock 的 odoo-mcp（1.1.0）／mcp（1.28.1）皆未變，只有 mcp-admin-core process.py
+    # 改動，console script ``odoo-mcp`` 與 streamable-http args 照舊成立。
+    EXPECT_IMAGE_TAG = 'd5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:aa02feab68f0e140d9e7dd3ac995b955ff2e54b760be588d5bd966dbd0305441'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

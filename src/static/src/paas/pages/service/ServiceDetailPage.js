@@ -12,6 +12,7 @@ import { McpServersTab } from "./tabs/McpServersTab";
 import { AccessTab } from "./tabs/AccessTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
+import { RestartServiceModal } from "../../components/modal/RestartServiceModal";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
@@ -59,6 +60,7 @@ export class ServiceDetailPage extends Component {
         AccessTab,
         DeleteServiceModal,
         RollbackModal,
+        RestartServiceModal,
         SkipTrialModal,
         EditDomainModal,
         ChangePlanModal,
@@ -80,6 +82,7 @@ export class ServiceDetailPage extends Component {
             currentTab: this.props.initialTab || "overview",
             showDeleteModal: false,
             showRollbackModal: false,
+            showRestartModal: false,
             showSkipTrialModal: false,
             showDomainModal: false,
             showChangePlanModal: false,
@@ -108,9 +111,16 @@ export class ServiceDetailPage extends Component {
         });
     }
 
-    async loadService() {
-        this.state.loading = true;
-        this.state.error = null;
+    /**
+     * @param {{silent?: boolean}} [options] `silent`：背景輪詢用——不切到整頁的
+     *   「Loading service...」、失敗時保留目前畫面（#1456：原本每 5 秒整頁閃一次，
+     *   配置頁編輯到一半也會被洗掉）。
+     */
+    async loadService({ silent = false } = {}) {
+        if (!silent) {
+            this.state.loading = true;
+            this.state.error = null;
+        }
 
         const result = await cloudService.fetchService(
             this.props.workspaceId,
@@ -119,13 +129,16 @@ export class ServiceDetailPage extends Component {
 
         if (result.success) {
             this.state.service = result.data;
+            this.state.error = null;
             this._publishBreadcrumb();
             this.startPollingIfNeeded();
-        } else {
+        } else if (!silent) {
             this.state.error = result.error || _t("Failed to load service");
         }
 
-        this.state.loading = false;
+        if (!silent) {
+            this.state.loading = false;
+        }
     }
 
     /**
@@ -144,20 +157,43 @@ export class ServiceDetailPage extends Component {
         ]);
     }
 
+    /**
+     * 轉移中每 5 秒、其餘狀態每 60 秒背景重讀一次。
+     *
+     * #1456：原本只有轉移中才輪詢，頁面開著時服務狀態（含別人做的操作、停權）
+     * 一直停在進頁那一刻，R8 實測 24–60 分鐘不變。重讀的是平台最近一次觀測，
+     * 不會觸發任何探測（list/get 純讀，#1159）。
+     */
     startPollingIfNeeded() {
         const pendingStates = ["deploying", "initializing", "upgrading", "deleting"];
-        if (this.state.service && pendingStates.includes(this.state.service.state)) {
-            this.stopPolling(); // Clear any existing interval
-            this.pollingInterval = setInterval(() => this.loadService(), 5000);
-        } else {
+        if (!this.state.service) {
             this.stopPolling();
+            return;
         }
+        const interval = pendingStates.includes(this.state.service.state) ? 5000 : 60000;
+        if (this.pollingInterval && this.pollingIntervalMs === interval) {
+            return;
+        }
+        this.stopPolling(); // Clear any existing interval
+        this.pollingIntervalMs = interval;
+        this.pollingInterval = setInterval(() => {
+            // 對話框開著時不換掉 service（確認內容不該在使用者眼前變動）；下一輪再讀。
+            if (!this.isModalOpen) {
+                this.loadService({ silent: true });
+            }
+        }, interval);
+    }
+
+    get isModalOpen() {
+        const s = this.state;
+        return Object.keys(s).some((k) => /^show\w*Modal$/.test(k) && s[k]) || !!s.oneTimeCredentials;
     }
 
     stopPolling() {
         if (this.pollingInterval) {
             clearInterval(this.pollingInterval);
             this.pollingInterval = null;
+            this.pollingIntervalMs = null;
         }
     }
 
@@ -433,6 +469,36 @@ export class ServiceDetailPage extends Component {
     }
 
     // Rollback Modal
+    // #1432 Restart
+    /**
+     * 「重新啟動」只對 running 的服務開放（後端 `_restart_workloads` 同一判準）；
+     * VM 型服務不支援（鏡射 `template.restart_supported`，前端不自建判準）。
+     */
+    get canRestart() {
+        return (
+            !!this.service &&
+            this.service.state === "running" &&
+            this.service.template?.restart_supported !== false
+        );
+    }
+
+    get showRestartButton() {
+        return !!this.service && this.service.template?.restart_supported !== false;
+    }
+
+    showRestart() {
+        this.state.showRestartModal = true;
+    }
+
+    hideRestart() {
+        this.state.showRestartModal = false;
+    }
+
+    onRestarted() {
+        this.hideRestart();
+        this.loadService();
+    }
+
     showRollback() {
         this.state.showRollbackModal = true;
     }
@@ -539,7 +605,10 @@ export class ServiceDetailPage extends Component {
     async onAdminCredentialsSaved(data) {
         this.state.showAdminCredentialsModal = false;
         // 平台產生的密碼（選「隨機產生」）才有明文要一次性交付；租戶自設的後端不回傳。
-        if (data && data.admin_password) {
+        // 但有 gateway 的服務（LiteLLM 的 master key）不論密碼怎麼設，後端都換發了新的
+        // Gateway API Key、舊的已失效，而這次回應是唯一一次交付——只看 admin_password
+        // 會把它丟掉。視窗內容由 buildOneTimeCredentials 依實際帶回的欄位決定。
+        if (data && (data.admin_password || data.gateway_api_key)) {
             this.state.oneTimeCredentials = buildOneTimeCredentials(data);
         }
         await this.loadService();

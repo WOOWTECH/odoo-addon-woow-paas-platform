@@ -132,6 +132,15 @@
                             Custom Domain
                         </WoowButton>
                         <WoowButton
+                            t-if="showRestartButton"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showRestart"
+                            disabled="!canRestart">
+                            <WoowIcon name="'restart_alt'" size="18"/>
+                            Restart
+                        </WoowButton>
+                        <WoowButton
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showRollback"
@@ -301,6 +310,13 @@
                 service="serviceForModal"
                 onClose.bind="hideRollback"
                 onRollback.bind="onRollbackComplete"/>
+
+            <!-- #1432 Restart Modal -->
+            <RestartServiceModal
+                t-if="state.showRestartModal and serviceForModal"
+                service="serviceForModal"
+                onClose.bind="hideRestart"
+                onRestarted.bind="onRestarted"/>
 
             <!-- Skip Trial Modal -->
             <SkipTrialModal

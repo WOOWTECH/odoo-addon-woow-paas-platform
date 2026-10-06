@@ -99,10 +99,16 @@ export class SubscribedServicesModal extends Component {
   }
 
   getServiceStateLabel(service) {
+    // #1454：這是**服務**狀態，不是訂閱狀態——running 原本標「Active」（啟用中），
+    // 與訂閱的「啟用中」撞字，試用中的訂閱看起來像已開始計費。
     const stateMap = {
-      running: _t("Active"),
+      running: _t("Running"),
       stopped: _t("Stopped"),
       deploying: _t("Deploying"),
+      initializing: _t("Initializing"),
+      upgrading: _t("Upgrading"),
+      suspended: _t("Suspended"),
+      deleting: _t("Deleting"),
       error: _t("Error"),
       pending: _t("Pending"),
     };
@@ -114,6 +120,10 @@ export class SubscribedServicesModal extends Component {
       running: "o_woow_svc_status_green",
       stopped: "o_woow_svc_status_gray",
       deploying: "o_woow_svc_status_blue",
+      initializing: "o_woow_svc_status_blue",
+      upgrading: "o_woow_svc_status_blue",
+      deleting: "o_woow_svc_status_gray",
+      suspended: "o_woow_svc_status_gray",
       error: "o_woow_svc_status_red",
       pending: "o_woow_svc_status_blue",
     };

@@ -190,6 +190,9 @@ class TestAppAdminResetFlow1370(_AppAdminResetFixture):
         self.assertFalse(result['success'])
         self.assertIn('archived', result['error'])
         self.assertIn('not changed', result['error'])
+        # #1186：告訴租戶能自己做的事（其他管理員重新啟用），否則開工單。
+        self.assertIn('reactivate', result['error'])
+        self.assertIn('support ticket', result['error'])
         self.assertFalse(self._secret(self.odoo_service).admin_password)
         self.assertNotIn('admin_password', json.dumps(result))
 
@@ -331,4 +334,20 @@ class TestOmnigentAdminReset1370(_AppAdminResetFixture):
 
         self.assertFalse(result['success'])
         self.assertIn('could not be found', result['error'])
+        self.assertEqual(self._secret(self.omni_service).admin_password, before)
+
+    @patch(CLIENT_PATH)
+    def test_admin_inactive_message_is_omnigent_specific(self, get_client):
+        """Omnigent 的 admin_inactive＝被拿掉管理員角色，不能沿用 Odoo「封存／去 Odoo 啟用」文案。"""
+        get_client.return_value.reset_omnigent_admin_password.return_value = {
+            'success': False, 'error_kind': 'failed', 'error_code': 'admin_inactive'}
+        before = self._secret(self.omni_service).admin_password
+
+        result = self._reset(self.omni_service)
+
+        self.assertFalse(result['success'])
+        self.assertIn('no longer has administrator rights', result['error'])
+        self.assertIn('Omnigent', result['error'])
+        self.assertNotIn('archived', result['error'])
+        self.assertNotIn('in Odoo', result['error'])
         self.assertEqual(self._secret(self.omni_service).admin_password, before)

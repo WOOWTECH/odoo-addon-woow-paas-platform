@@ -858,8 +858,10 @@ class TestNamespaceEndpoints:
             json={"cpu_limit": "12", "memory_limit": "12Gi", "storage_limit": "150Gi"},
         )
         assert r.status_code == 200
+        # #1434：舊平台不送 ephemeral 欄位 → 兩個 kwargs 是 None（quota 不加那兩個鍵）。
         mock_k8s.update_namespace_quota.assert_called_once_with(
-            "paas-ws-test-abc", "12", "12Gi", "150Gi")
+            "paas-ws-test-abc", "12", "12Gi", "150Gi",
+            ephemeral_storage_request=None, ephemeral_storage_limit=None)
 
     @patch("src.api.namespaces.k8s_service")
     def test_put_quota_bad_ns_400(self, mock_k8s, client):

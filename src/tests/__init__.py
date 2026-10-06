@@ -364,9 +364,21 @@ from . import test_code_server_seed
 # Nextcloud 另含 publicUrl 注入（缺了它服務會開起來但整站回「不信任的網域」）
 from . import test_emqx_seed
 from . import test_nextcloud_seed
-# feat: EMQX 對外 MQTT 位址回讀 —— 能力 gate 單一事實源（slug 反直覺 fixture）、
-# 探測三態與 _release_facts 的「只有探過才寫」、operator 掛掉降級成沒探、detail payload
-from . import test_mqtt_address_readback
+# feat: 對外通道位址回讀（EMQX 起、P1 泛化給 Headscale）—— 能力 gate 單一事實源
+# （slug 反直覺 fixture）、探測三態與 _release_facts 的「只有探過才寫」、operator 掛掉
+# 降級成沒探、detail payload（旗標／標籤／值）、改名的舊值搬移、舊 operator 404 退路、zh_TW
+from . import test_public_tunnel_address
+# feat: P2 helm_value_specs format=domain（Headscale ngrok.domain）—— 存檔即擋＋中文訊息、
+# 部署組裝正規化
+from . import test_spec_format_domain
+# feat: P3 一次性憑證視窗的 gateway 提示依範本（LiteLLM 前置）
+from . import test_gateway_hint_template
+# feat: Headscale／Tailscale／LiteLLM 上架 seed（範本先隱藏）—— 憑證形態（helm_secret 可自設）、
+# image 雙釘與 headscale／bootstrap 同版、對外通道標籤（中文資料值、不走 .po）、ngrok.domain 存檔即擋、
+# LiteLLM master key 走 gateway 通道＋提示、方案定價、租戶旋鈕白名單（不開 exit node／路由）
+from . import test_headscale_seed
+from . import test_tailscale_seed
+from . import test_litellm_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
@@ -995,13 +1007,41 @@ from . import test_member_create_service_1317
 # Omnigent BYO host：部署 code-server／pi-agent／open-design 時把同工作區 running
 # Omnigent 的叢集內網址注入 omnigentHost.serverUrl（只有網址，不帶 token）。
 from . import test_omnigent_server_url_injection
+# PLAN §10.2：同工作區服務網址注入泛化——Headscale → tailscale.workspaceHeadscaleUrl、
+# LiteLLM → llmGateway.baseUrl（/v1）／mcp-litellm connection.base_url；只帶網址，不帶金鑰。
+# 另含 tailscale chart 0.1.2「控制平面」select 的既有服務 healer。
+from . import test_workspace_service_url_injection
 # QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
 # 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。
 from . import test_code_server_git_settings
 # #1348：operator 回儲存配額已滿（孤兒 PVC 仍計入配額）時，租戶看到的說明訊息。
 from . import test_storage_quota_message_1348
+# #1415：叢集儲存（Longhorn）排程額度不足時的租戶訊息、管理員告警與定時監控。
+from . import test_cluster_storage_capacity_1415
 # #1334：n8n storageClass 改在首裝時釘進 helm_values（PVC 不可變）＋公開網址注入；
 # 範本說明的孤兒磁碟保留天數與正式站 operator 一致。
 from . import test_n8n_storage_class_public_url_1334
 # #1370／#1186：Odoo／n8n 管理員密碼重設（app_admin_reset_kind、operator exec、不 helm upgrade）。
 from . import test_app_admin_password_reset_1370
+# #1408：Redeploy 帶範本 image、就緒後核對 workload image（#1407 為 operator 側）。
+from . import test_redeploy_images_1408
+# #1417：部署逾時訊息分辨 Pending／Running、依原因分型，先給租戶一句建立者語言的話。
+from . import test_deploy_timeout_diagnosis_1417
+# #1416：逾時轉 error 後 release 就緒會自動恢復（背景低頻重查、只碰逾時造成的 error）。
+from . import test_deploy_timeout_recovery_1416
+# #1431：從未 running 過的服務刪除時孤兒 PVC 只留 1 天；first_running_at 的寫入、守衛與保守回填。
+from . import test_never_running_orphan_grace_1431
+# #1424：開通被 operator 拒絕（#1348／#1415）且從未 running ⇒ 自動取消訂閱；一直停在 error、
+# 從未 running 的服務暫停扣款並提醒一次，恢復 running 後照常計費。
+from . import test_never_running_billing_1424
+# #1433：回復版本保留平台管的管理員帳密；#1434：ns 的 ephemeral-storage 額度。
+from . import test_rollback_preserves_credentials_1433
+# R8 平台 UX（#1453 說明網址／documentation_url、#1456 同步時間時區與 helm_revision 回寫、
+# #1457 平台頁面安全標頭）。
+from . import test_platform_ux_r8
+# #1432 租戶重新啟動、#1435 改金鑰後重啟、#1455 金鑰未設定／清除。
+from . import test_restart_and_secret_keys_1432
+# #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
+from . import test_neutralize_1201
+# #1488：helm values 白名單 fail-closed（specs 沒有任何鍵＝租戶值全部拒絕，不再全部放行）。
+from . import test_helm_values_whitelist_fail_closed_1488

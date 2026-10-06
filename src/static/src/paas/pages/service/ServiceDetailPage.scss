@@ -352,6 +352,16 @@ $woow-radius-lg: 1.25rem;
             background: #6b7280;
         }
     }
+
+    // #1456：升級／重新部署中（舊版本仍在服務）。
+    &.updating {
+        color: #3b82f6;
+
+        .o_woow_status_indicator {
+            background: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+    }
 }
 
 .o_woow_status_indicator {
@@ -552,6 +562,31 @@ $woow-radius-lg: 1.25rem;
     border-radius: $woow-radius-default;
     color: $woow-text-secondary;
     font-size: 0.8rem;
+}
+
+// #1455：清除已設定的金鑰
+.o_woow_config_clear_secrets {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+
+    &__title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: $woow-text-primary;
+    }
+
+    &__item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+        color: $woow-text-secondary;
+        cursor: pointer;
+    }
 }
 
 .o_woow_config_textarea {
