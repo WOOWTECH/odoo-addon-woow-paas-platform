@@ -44,18 +44,24 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 
 ### Releases
 
-- `POST /api/releases` - Install a Helm chart
+- `POST /api/releases` - Install a Helm chart. Before any cluster write it runs two read-only pre-checks and answers **409** with a structured `detail.error_code` when the install could not succeed: `workspace_storage_quota_exhausted` (namespace ResourceQuota already full, #1348) and `cluster_storage_capacity_exhausted` (the PVCs / StatefulSet `volumeClaimTemplates` / CDI DataVolumes this install would create — rendered with `helm install --dry-run` from the same chart, version and values — cannot be scheduled by Longhorn under its own rules, #1415; `detail` lists the volumes, per-node headroom and orphaned PVCs). Both checks let the install through when they cannot read their data. Kill switch: env `STORAGE_CAPACITY_PRECHECK_ENABLED=false` (chart ≥ 0.1.22: `config.storageCapacityPrecheck: false`).
 - `GET /api/releases/{namespace}/{name}` - Get release info
 - `PATCH /api/releases/{namespace}/{name}` - Upgrade release
-- `DELETE /api/releases/{namespace}/{name}` - Uninstall release
+- `DELETE /api/releases/{namespace}/{name}` - Uninstall release. The release's leftover PVCs / CDI DataVolumes (kept by #317) are labelled `paas.woowtech.io/orphaned-at` + `grace-period-days` for the chart's pvc-cleanup CronJob. Query: `subdomain` (Cloudflare route to delete); `grace_period_days` (#1431, optional) shortens the retention of those orphans to N days — the platform sends `1` for a service that never reached `running`. Only `1 ≤ N ≤ PVC_GRACE_PERIOD_DAYS` is honoured; anything else (missing, non-integer, out of range) falls back to `PVC_GRACE_PERIOD_DAYS` and never fails the delete. Operators older than #1431 ignore the parameter (FastAPI drops undeclared query parameters).
 - `POST /api/releases/{namespace}/{name}/rollback` - Rollback release
 - `GET /api/releases/{namespace}/{name}/revisions` - Get revision history
+- `POST /api/releases/{namespace}/{name}/restart` - (#1432) `kubectl rollout restart` every Deployment **and** StatefulSet labelled `app.kubernetes.io/instance={name}`; issued, not awaited (`rollout_awaited: false`). VirtualMachines are not touched. 404 when the release has no Deployment/StatefulSet.
 - `GET /api/releases/{namespace}/{name}/status` - Get release and pod status
-- `GET /api/releases/{namespace}/{name}/mqtt-address` - Get the public MQTT address the release's tunnel agent advertises on its container log (charts/emqx). `public_url: null` is a normal state (not enabled / agent not connected yet), not an error.
+- `GET /api/releases/{namespace}/{name}/public-address` - Get the public address the release's ngrok sidecar advertises on its container log: `tcp://host:port` (charts/emqx, native MQTT) or `https://host[:port]` (charts/headscale, control URL). Contract: the sidecar container is named `ngrok` and prints `WOOW_PUBLIC_URL=<url>` (legacy `WOOW_MQTT_PUBLIC_URL=` is still honoured) at the **start of a line**; the last valid line wins and an empty value retracts the address. `public_url: null` is a normal state (not enabled / agent not connected yet / retracted), not an error.
+- `GET /api/releases/{namespace}/{name}/mqtt-address` - **Legacy** (called by platform ≤ 18.0.1.0.205): same contract, `tcp://` addresses only. Keep until no deployed platform calls it.
 
 ### Namespaces
 
 - `POST /api/namespaces` - Create namespace with resource quota
+
+### Cluster (read-only)
+
+- `GET /api/cluster/storage-capacity?storage_class=<sc>` - Longhorn scheduling capacity (#1415): per node limit / scheduled / headroom / ratio, the largest new volume that still fits with all replicas (and degraded), and orphaned PVCs (`paas.woowtech.io/orphaned-at`, all namespaces). Always 200; `available: false` + `reason` when Longhorn cannot be read. Polled by the platform monitor cron.
 
 ### Routes (Cloudflare Tunnel)
 
@@ -269,6 +275,7 @@ The service uses a dedicated ServiceAccount (`paas-system/paas-operator`) bound 
 - `resourcequotas`, `poddisruptionbudgets`, `horizontalpodautoscalers`, `leases`
 - `jobs`, `cronjobs`
 - Cluster-scoped: `persistentvolumes` (get/list/patch/delete), `storageclasses` (get/list)
+- Longhorn (read-only, chart ≥ 0.1.22, #1415): `nodes.longhorn.io`, `settings.longhorn.io` (get/list) — without it the capacity pre-check fails open
 - RBAC: `roles`, `rolebindings` (RWCU — needed for per-tenant Role provisioning)
 
 > The `ClusterRole` is defined and published from the cross-repo **`woow-paas-charts`** `paas-operator` chart and applied via Fleet (`paas-app-bundle-cd`); it is _not_ managed from this repo. Edit it there, not with a local `helm upgrade`.

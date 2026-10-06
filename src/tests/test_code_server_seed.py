@@ -43,7 +43,7 @@ class TestCodeServerSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.slug, 'code-server')
         self.assertEqual(tpl.category, 'ai_llm')
-        self.assertEqual(tpl.default_port, 8080, 'code-server 本身就是唯一入口（無 auth-proxy）')
+        self.assertEqual(tpl.default_port, 8080, '唯一入口 :8080（chart 0.1.4 起是 cookie-proxy，code-server 在其後）')
         self.assertTrue(tpl.ingress_enabled)
         self.assertEqual(tpl.max_per_partner, 0)
         self.assertFalse(tpl.mcp_enabled)
@@ -52,7 +52,7 @@ class TestCodeServerSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.2')
+        self.assertEqual(tpl.helm_chart_version, '0.1.5')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()

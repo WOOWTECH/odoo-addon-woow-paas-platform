@@ -34,6 +34,7 @@ STRUCTURES = {
         'N8nInitService._setup_owner', 'N8nInitService._login',
         'N8nInitService._get_api_key_scopes', 'N8nInitService._create_api_key',
         'N8nInitService._find_secret', 'N8nInitService._find_deployment',
+        'N8nInitService._delete_api_keys_labelled',
     ),
     KUBECTL: (
         'KubernetesService._run_command', 'KubernetesService.get_pod_name',
@@ -183,6 +184,32 @@ def check(root):
 
         steps = sum(_node_seconds(h, h.definition(op, name), node) for name in NODE_STEPS)
 
+        # #1471：建 key 前先列出並刪掉同名舊 key。列出 1 次（迴圈外）＋迴圈內最多
+        # _MAX_KEY_DELETES 次刪除；兩個請求都必須帶明確 timeout，迴圈必須切在常數上限。
+        prune_fn = h.definition(op, 'N8nInitService._delete_api_keys_labelled')
+        prune_loop = h.one((n for n in ast.walk(prune_fn) if isinstance(n, ast.For)), 'prune loop')
+        in_loop = {id(c) for c in h.calls(prune_loop, '_node_request')}
+        prune_calls = h.calls(prune_fn, '_node_request')
+        if len(prune_calls) != 2 or len(in_loop) != 1:
+            raise ValueError('prune 必須是迴圈外列出 1 次＋迴圈內刪除 1 個呼叫')
+        cap = h.constant(op, '_MAX_KEY_DELETES')
+        if not (isinstance(prune_loop.iter, ast.Subscript) and isinstance(prune_loop.iter.slice, ast.Slice)
+                and isinstance(prune_loop.iter.slice.upper, ast.Name)
+                and prune_loop.iter.slice.upper.id == '_MAX_KEY_DELETES'):
+            raise ValueError('prune 迴圈必須切在 [:_MAX_KEY_DELETES]')
+        per = []
+        for call in prune_calls:
+            explicit = [k.value for k in call.keywords if k.arg == 'timeout']
+            if not explicit:
+                raise ValueError('prune 的 node request 必須帶明確 timeout')
+            value = explicit[0]
+            if isinstance(value, ast.Name):
+                value = h.constant(op, value.id)
+            else:
+                value = h.positive_int(value, 'prune timeout')
+            per.append((id(call) in in_loop, value))
+        prune = sum(v * (cap if looped else 1) for looped, v in per)
+
         secret = kubectl * kubectl_calls(op, 'N8nInitService._find_secret')
         patch = kubectl * kubectl_calls(kube, 'KubernetesService.patch_secret')
         deployment = kubectl * kubectl_calls(kube, 'KubernetesService.get_deployments')
@@ -192,10 +219,10 @@ def check(root):
         restart = attempts * kubectl * kubectl_calls(kube, 'KubernetesService.rollout_restart_deployment') \
             + min(attempts, h.positive_int(bound, 'restart sleep 上界')) * h.positive_int(seconds, 'restart 間隔')
 
-        envelope = discovery + readiness + steps + secret + patch + deployment + restart
+        envelope = discovery + readiness + steps + prune + secret + patch + deployment + restart
         if read <= envelope:
             return [prefix + f'client read={read}s 必須 > 宣告子步 envelope={envelope}s '
-                    f'（discovery={discovery}，readiness={readiness}，node steps={steps}，'
+                    f'（discovery={discovery}，readiness={readiness}，node steps={steps}，prune={prune}，'
                     f'secret+patch+deployment={secret + patch + deployment}，restart={restart}）；'
                     '不是 server 硬上限']
         return []

@@ -1,11 +1,106 @@
 {
-  "_contract_fingerprint": "6dc56c715de05ffb94ac1b3c7388e6164be45b0a5a74100c2f618bb69ef42657",
+  "_contract_fingerprint": "9b06b35601a6b4e2695baeaadd1a960e56cbd84786ac15c6a6e22d626a730328",
   "pod_retrieval_failed": {
     "datavolume_retrieval_error": null,
     "datavolumes": null,
     "pod_identity_included": true,
     "pod_retrieval_error": "kubectl command failed with code 1",
     "pods": [],
+    "release": {
+      "app_version": "18.0",
+      "chart": "woow-odoo",
+      "chart_version": "0.2.2",
+      "description": null,
+      "name": "svc-1263",
+      "namespace": "paas-ws-test-1263",
+      "revision": 3,
+      "route": null,
+      "status": "deployed",
+      "updated": "2026-09-29T01:00:00Z",
+      "values": null
+    },
+    "vm_included": false,
+    "vmi_retrieval_error": null,
+    "vmis": null
+  },
+  "unready_pod_diagnostics": {
+    "datavolume_retrieval_error": null,
+    "datavolumes": null,
+    "pod_identity_included": true,
+    "pod_retrieval_error": null,
+    "pods": [
+      {
+        "age": "5m",
+        "component": null,
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "images": [
+          "example/app:1"
+        ],
+        "last_warning": {
+          "count": 12,
+          "last_seen": "2026-10-04T01:46:02Z",
+          "message": "AttachVolume.Attach failed for volume \"pvc-0a1b\" : rpc error: code = Aborted desc = volume pvc-0a1b is not ready for workloads",
+          "reason": "FailedAttachVolume"
+        },
+        "name": "svc-1263-stuck-0",
+        "owner_kind": "StatefulSet",
+        "phase": "Pending",
+        "ready": "0/1",
+        "restarts": 0,
+        "task": null,
+        "waiting": {
+          "container": "volume-permissions",
+          "init_container": true,
+          "message": null,
+          "reason": "PodInitializing"
+        }
+      },
+      {
+        "age": "5m",
+        "component": null,
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "images": [
+          "example/app:1"
+        ],
+        "last_warning": {
+          "count": 30,
+          "last_seen": "2026-10-04T01:40:00Z",
+          "message": "Back-off restarting failed container app in pod svc-1263-crash-0",
+          "reason": "BackOff"
+        },
+        "name": "svc-1263-crash-0",
+        "owner_kind": "StatefulSet",
+        "phase": "Running",
+        "ready": "0/2",
+        "restarts": 7,
+        "task": null,
+        "waiting": {
+          "container": "app",
+          "init_container": false,
+          "message": "back-off 5m0s restarting failed container=app",
+          "reason": "CrashLoopBackOff"
+        }
+      },
+      {
+        "age": "5m",
+        "component": null,
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "images": [
+          "example/app:1"
+        ],
+        "last_warning": null,
+        "name": "svc-1263-ok-0",
+        "owner_kind": "StatefulSet",
+        "phase": "Running",
+        "ready": "1/1",
+        "restarts": 0,
+        "task": null,
+        "waiting": null
+      }
+    ],
     "release": {
       "app_version": "18.0",
       "chart": "woow-odoo",
@@ -34,60 +129,75 @@
         "component": "server",
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
+        "images": [],
+        "last_warning": null,
         "name": "svc-1263-6d8f7c9b5-server",
         "owner_kind": "ReplicaSet",
         "phase": "Running",
         "ready": "2/2",
         "restarts": 0,
-        "task": null
+        "task": null,
+        "waiting": null
       },
       {
         "age": "5m",
         "component": "server",
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": "2026-09-29T01:05:00Z",
+        "images": [],
+        "last_warning": null,
         "name": "svc-1263-5c7e6b8a4-old",
         "owner_kind": "ReplicaSet",
         "phase": "Running",
         "ready": "0/2",
         "restarts": 0,
-        "task": null
+        "task": null,
+        "waiting": null
       },
       {
         "age": "5m",
         "component": "cron",
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
+        "images": [],
+        "last_warning": null,
         "name": "svc-1263-cron-7f9d8c6b5-x",
         "owner_kind": "ReplicaSet",
         "phase": "Running",
         "ready": "1/1",
         "restarts": 0,
-        "task": null
+        "task": null,
+        "waiting": null
       },
       {
         "age": "5m",
         "component": "postgresql",
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
+        "images": [],
+        "last_warning": null,
         "name": "svc-1263-postgresql-0",
         "owner_kind": "StatefulSet",
         "phase": "Running",
         "ready": "1/1",
         "restarts": 0,
-        "task": null
+        "task": null,
+        "waiting": null
       },
       {
         "age": "5m",
         "component": "db-backup",
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
+        "images": [],
+        "last_warning": null,
         "name": "svc-1263-backup-29000000-abcde",
         "owner_kind": "Job",
         "phase": "Succeeded",
         "ready": "0/1",
         "restarts": 0,
-        "task": "backup"
+        "task": "backup",
+        "waiting": null
       }
     ],
     "release": {

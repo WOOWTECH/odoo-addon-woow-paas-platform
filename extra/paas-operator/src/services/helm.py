@@ -12,9 +12,11 @@ from typing import Any, Dict, List, Optional
 
 from src.config import settings
 from src.models.schemas import (
+    ContainerWaitingInfo,
     DataVolumeInfo,
     PodInfo,
     PodPhase,
+    PodWarningEvent,
     ReleaseInfo,
     ReleaseRevision,
     ReleaseStatus,
@@ -45,12 +47,53 @@ _PVC_KEEP_POST_RENDERER = str(
 )
 
 
-def _pvc_keep_post_renderer_args() -> List[str]:
-    """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade)."""
-    return [
+def _pvc_keep_post_renderer_args(live_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade).
+
+    #1407: ``live_snapshot`` (``pvc_keep_post_renderer.live_snapshot`` shape) is handed
+    to the renderer as a second arg so objects that already exist render with the live
+    values of their immutable fields (PVC storageClassName/accessModes/volumeMode/size,
+    StatefulSet volumeClaimTemplates). Omitted when there is nothing live to reuse.
+    """
+    args = [
         "--post-renderer", sys.executable,
         "--post-renderer-args", _PVC_KEEP_POST_RENDERER,
     ]
+    if live_snapshot and (live_snapshot.get("pvc") or live_snapshot.get("sts")):
+        args.extend([
+            "--post-renderer-args",
+            json.dumps(live_snapshot, sort_keys=True, separators=(",", ":")),
+        ])
+    return args
+
+
+def _live_objects(namespace: str, kinds: str = "pvc,statefulsets") -> Optional[List[Dict[str, Any]]]:
+    """Live objects of ``kinds`` in ``namespace`` (kubectl ``items``); None on failure.
+
+    #1407. Callers treat None as "unknown" and fall back to the pre-#1407 behaviour,
+    so a failed lookup can never make an install/upgrade fail that would otherwise
+    have succeeded.
+    """
+    try:
+        result = KubernetesService()._run_command(
+            ["get", kinds, "--namespace", namespace, "--output", "json"]
+        )
+        items = json.loads(result.stdout or "{}").get("items")
+        return items if isinstance(items, list) else []
+    except Exception as e:  # noqa: BLE001 — degrade to pre-#1407 behaviour
+        logger.warning(
+            "Could not list %s in %s for live-value reuse (#1407): %s", kinds, namespace, e,
+        )
+        return None
+
+
+def _live_snapshot(namespace: str) -> Dict[str, Any]:
+    """Renderer snapshot of the namespace's PVCs and StatefulSets ({} when unknown)."""
+    from src.pvc_keep_post_renderer import live_snapshot
+
+    items = _live_objects(namespace)
+    return live_snapshot(items) if items else {}
+
 
 # issue #29: the private Helm repo token is passed via ``--password`` on the helm
 # argv. Redact credential values BEFORE they reach the "Executing:" log line and
@@ -479,6 +522,25 @@ _SA_LOOKUP_ATTEMPTS = 5
 _SA_LOOKUP_BACKOFF_SECONDS = 0.5
 
 
+def _dry_run_manifest(release_data: Dict[str, Any]) -> str:
+    """``helm … --dry-run --output json`` 的 release → manifest 字串（含 hooks 的 manifest）。
+
+    #1415：hook 的物件（例 pre-install Job 帶的 PVC）不在 ``manifest`` 裡，另放在
+    ``hooks[].manifest``；容量預檢要看到它們，所以接在後面。
+    """
+    parts = [release_data.get("manifest") or ""]
+    for hook in release_data.get("hooks") or []:
+        if isinstance(hook, dict) and hook.get("manifest"):
+            parts.append(hook["manifest"])
+    return "\n---\n".join(p for p in parts if p)
+
+
+# Opt-in label a chart puts on a StatefulSet whose pods consume the admin credential
+# at start, so the helm_secret reset rolls it too (hermes-agent >= 0.3.0;
+# headscale/tailscale >= 0.1.1, which have no Deployment at all).
+CREDENTIAL_RESET_RESTART_LABEL = "paas.woowtech.io/restart-on-credential-reset"
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -646,8 +708,16 @@ class HelmService:
         repo: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        dry_run: bool = False,
+        subprocess_timeout_seconds: Optional[int] = None,
     ) -> ReleaseInfo:
         """Install a Helm chart.
+
+        ``dry_run=True`` (#1415 capacity precheck) runs the exact same command with
+        ``--dry-run`` — same chart, version, values and post-renderer, nothing applied —
+        and returns the rendered manifest **string** (hook manifests appended) instead of a
+        ``ReleaseInfo``. Mirrors ``upgrade(dry_run=True)`` (#1407). The manifest can hold
+        rendered Secrets: callers must never log it.
 
         Args:
             namespace: Target namespace
@@ -661,6 +731,9 @@ class HelmService:
                 Leave None for direct/OCI chart refs (marketplace default).
             username: Optional repo username for a private Helm repo (--username).
             password: Optional repo password/token for a private repo (--password).
+            dry_run: Render only (``--dry-run``); returns the manifest string.
+            subprocess_timeout_seconds: Per-call subprocess ceiling. ``None`` keeps
+                ``settings.helm_timeout``.
 
         Returns:
             Release information
@@ -686,10 +759,14 @@ class HelmService:
             "json",
         ]
         # #317: PVC-keep post-renderer — before ALL conditional flags.
-        args.extend(_pvc_keep_post_renderer_args())
+        # #1407: a retried install can meet PVCs a failed attempt left behind
+        # (keep-annotated, same names) — reuse their live immutable fields too.
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
 
-        if create_namespace:
+        if create_namespace and not dry_run:
             args.append("--create-namespace")
+        if dry_run:
+            args.append("--dry-run")
 
         if version:
             args.extend(["--version", version])
@@ -721,8 +798,10 @@ class HelmService:
                 temp_file = f.name
 
         try:
-            result = self._run_command(args)
+            result = self._run_command(args, timeout=subprocess_timeout_seconds)
             release_data = json.loads(result.stdout)
+            if dry_run:
+                return _dry_run_manifest(release_data)
             return self._parse_release_info(release_data)
         finally:
             if merged_values:
@@ -779,8 +858,14 @@ class HelmService:
         atomic: bool = False,
         timeout_seconds: Optional[int] = None,
         subprocess_timeout_seconds: Optional[int] = None,
+        dry_run: bool = False,
+        description: Optional[str] = None,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
+
+        ``dry_run=True`` (#1407 preflight) runs the exact same command with
+        ``--dry-run`` — same values, same post-renderer, nothing applied — and returns
+        the rendered manifest **string** instead of a ``ReleaseInfo``.
 
         Args:
             namespace: Release namespace
@@ -846,7 +931,8 @@ class HelmService:
         # conditional flags (incl. both the --reset-values and --reuse-values
         # branches) so every upgrade variant rewrites the stored manifest WITH
         # keep; otherwise the next uninstall would delete the PVC.
-        args.extend(_pvc_keep_post_renderer_args())
+        # #1407: existing PVCs/StatefulSets render with their live immutable fields.
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
 
         if version:
             args.extend(["--version", version])
@@ -857,10 +943,17 @@ class HelmService:
             args.append("--reuse-values")
         if atomic:
             args.append("--atomic")
+        if dry_run:
+            args.append("--dry-run")
         # #461: omitted when None so every pre-existing caller keeps helm's 5m
         # default verbatim (behaviour-neutral); only the reset path bounds it.
         if timeout_seconds is not None:
             args.extend(["--timeout", f"{timeout_seconds}s"])
+        # #1433: the preserving rollback is an upgrade; without a description the
+        # revision list would read "Upgrade complete" and the tenant could not tell
+        # it was a rollback.
+        if description:
+            args.extend(["--description", description])
 
         # Classic Helm repo (stateless) — mirrors install(); see its note.
         if repo:
@@ -887,6 +980,8 @@ class HelmService:
         try:
             result = self._run_command(args, timeout=subprocess_timeout_seconds)
             release_data = json.loads(result.stdout)
+            if dry_run:
+                return release_data.get("manifest") or ""
             return self._parse_release_info(release_data)
         finally:
             if merged_values:
@@ -942,6 +1037,44 @@ class HelmService:
 
         result = self._run_command(args)
         return {"message": result.stdout.strip()}
+
+    def get_values(
+        self, namespace: str, name: str, revision: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """#1433: user-supplied values of a release revision (``helm get values``).
+
+        Returns the **raw** values — including ``config.sensitive.*``. Callers must
+        never log or return them; the preserving rollback only feeds them back into
+        ``helm upgrade --values <tempfile>``. ``revision=None`` ＝ the current one.
+        """
+        validate_namespace(namespace)
+        args = ["get", "values", name, "--namespace", namespace, "--output", "json"]
+        if revision is not None:
+            args.extend(["--revision", str(int(revision))])
+        result = self._run_command(args)
+        data = json.loads(result.stdout or "null")
+        # helm prints `null` for a revision installed without any values.
+        return data if isinstance(data, dict) else {}
+
+    def get_revision_chart_version(
+        self, namespace: str, name: str, revision: int
+    ) -> Optional[str]:
+        """#1433: the chart version a revision was rendered from.
+
+        Read from the release object itself (``Chart.Metadata.Version``) instead of
+        splitting ``helm history``'s ``<name>-<version>`` string, which is ambiguous
+        for chart names or prerelease versions containing dashes.
+        """
+        validate_namespace(namespace)
+        args = [
+            "get", "all", name,
+            "--namespace", namespace,
+            "--revision", str(int(revision)),
+            "--template", "{{.Release.Chart.Metadata.Version}}",
+        ]
+        result = self._run_command(args)
+        version = (result.stdout or "").strip()
+        return version or None
 
     def history(self, namespace: str, name: str) -> List[ReleaseRevision]:
         """Get release revision history.
@@ -1086,6 +1219,74 @@ def _controller_owner_kind(metadata: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# #1417：這些 waiting reason 只說「還沒輪到」（前一個容器／volume 還沒好），本身不是
+# 原因。有其他容器帶著實質 reason（ImagePullBackOff、CrashLoopBackOff…）時優先回報那個。
+_GENERIC_WAITING_REASONS = frozenset({"PodInitializing", "ContainerCreating"})
+
+
+def _truncate(text: Optional[str], limit: int) -> Optional[str]:
+    """診斷文字截短：事件訊息可能很長（Longhorn 的 attach 錯誤一行數百字）。"""
+    if not text:
+        return None
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _pod_waiting(status: Dict[str, Any], limit: int) -> Optional[ContainerWaitingInfo]:
+    """#1417：Pod 卡住的容器（``state.waiting``）；先看 init 容器再看主要容器。
+
+    回第一個帶實質 reason 的容器；都只有「還沒輪到」的 reason 時回第一個；沒有任何容器
+    在 waiting 回 None。
+    """
+    first_generic = None
+    for is_init, key in ((True, "initContainerStatuses"), (False, "containerStatuses")):
+        for cs in status.get(key) or []:
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            reason = waiting.get("reason")
+            if not reason:
+                continue
+            info = ContainerWaitingInfo(
+                container=cs.get("name") or "",
+                init_container=is_init,
+                reason=reason,
+                message=_truncate(waiting.get("message"), limit),
+            )
+            if reason not in _GENERIC_WAITING_REASONS:
+                return info
+            if first_generic is None:
+                first_generic = info
+    return first_generic
+
+
+def _pod_is_unready(phase: str, metadata: Dict[str, Any], ready_count: int, total: int) -> bool:
+    """與平台 ``_is_container_ready`` 同一套「有效 Pod」定義：收尾中的 Pod 不算。"""
+    if phase in ("Succeeded", "Failed") or metadata.get("deletionTimestamp"):
+        return False
+    return phase != "Running" or ready_count < total
+
+
+def _event_time(event: Dict[str, Any]) -> str:
+    """事件「最後一次發生」的時間字串（RFC 3339）；排序用，取不到回空字串。
+
+    core/v1 Event 依產生者不同，時間落在不同欄位：舊式 ``lastTimestamp``、新式
+    ``series.lastObservedTime``／``eventTime``，最後退回 ``metadata.creationTimestamp``。
+    """
+    series = event.get("series") or {}
+    return (
+        series.get("lastObservedTime")
+        or event.get("lastTimestamp")
+        or event.get("eventTime")
+        or (event.get("metadata") or {}).get("creationTimestamp")
+        or ""
+    )
+
+
+def _event_sort_key(event: Dict[str, Any]) -> str:
+    """時間字串正規化成可比較的形狀（去掉小數秒，``Z`` 對齊）。"""
+    stamp = _event_time(event)
+    return re.sub(r"\.\d+", "", stamp).replace("+00:00", "Z")
+
+
 class KubernetesService:
     """Service for Kubernetes operations (via kubectl)."""
 
@@ -1155,10 +1356,16 @@ class KubernetesService:
                 stderr="",
             )
 
-    # ── EMQX 的對外 MQTT 位址（charts/emqx 0.1.0 契約）────────────────────────
+    # ── 對外位址回讀（ngrok sidecar；charts/emqx 0.1.0 起、charts/headscale）──
     #
-    # chart 的 ngrok sidecar 把當前的公開位址每 60 秒印一次到自己的 stdout
-    # （`WOOW_MQTT_PUBLIC_URL=tcp://…`）。平台從 container log 讀它，而不是
+    # chart 的 ngrok sidecar 把當前的公開位址每 60 秒印一次到自己的 stdout，
+    # 一行一筆：`WOOW_PUBLIC_URL=<url>`（通用 marker）或 `WOOW_MQTT_PUBLIC_URL=<url>`
+    # （EMQX 0.1.x 的舊 marker，繼續認）。`<url>` 是
+    #   * `tcp://host:port` —— ngrok TCP endpoint（EMQX 原生 MQTT）；
+    #   * `https://host[:port]` —— ngrok HTTP endpoint（Headscale 控制網址）。
+    # 值是空的（`WOOW_PUBLIC_URL=`）＝撤回：agent 退出、沒填 token、連線失敗。
+    #
+    # 平台從 container log 讀它，而不是
     #   * 開一個 :4040 的 Service —— agent 的本機 API 能**建立**隧道，開成 Service
     #     等於讓同一個租戶 namespace 內的其他服務操作它；
     #   * 讓 sidecar 寫 ConfigMap —— 那需要掛 SA token ＋ RBAC（chart 目前
@@ -1169,26 +1376,79 @@ class KubernetesService:
     # 刻意**不**回傳任何原始 log 內容：只回傳比對成功的那個位址。容器 log 是
     # 第三方（ngrok agent）的輸出，整段轉出去等於把一個不受控的字串管道接到
     # Odoo 的 HTTP 回應上。
+    #
+    # marker 必須在**行首**（sidecar 是 `echo "WOOW_PUBLIC_URL=${url}"`）。同一個
+    # stdout 也印 ngrok agent 自己的 log（`--log stdout`），而 HTTP endpoint 的那幾行
+    # 可能帶外部訪客可控的字串（請求路徑之類）；marker 若能出現在行中間，訪客打一個
+    # `/WOOW_PUBLIC_URL=https://evil.example` 就可能讓平台把攻擊者的網址顯示成
+    # 「你的 Headscale 控制網址」，租戶照著設定裝置＝把整個 tailnet 交出去。
     NGROK_CONTAINER_NAME = "ngrok"
-    NGROK_ADDRESS_MARKER = "WOOW_MQTT_PUBLIC_URL="
+    # 順序無關：同一份 log 裡兩種 marker 一視同仁，取**最後一筆**。
+    NGROK_ADDRESS_MARKERS = ("WOOW_PUBLIC_URL=", "WOOW_MQTT_PUBLIC_URL=")
     NGROK_LOG_TAIL_LINES = 200
     NGROK_LOG_TIMEOUT_SECONDS = 15
-    # ngrok TCP endpoint 的形狀。fail-closed：對不上就當沒有，不把來源字串轉出去。
-    _NGROK_ADDRESS_RE = re.compile(r"^tcp://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}$")
+    # 對外位址的形狀。fail-closed：對不上就當沒有，不把來源字串轉出去。
+    # 主機名逐段驗（RFC 1123 label、至少一個點、總長 ≤ 253），只收 ASCII；不收
+    # userinfo（`user@`）、路徑、query、fragment、結尾的 `/` 或 `.`。`https` 的埠
+    # 可省略（ngrok HTTP endpoint 的 public_url 本來就不帶埠），`tcp` 必須有埠。
+    _HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    _PUBLIC_ADDRESS_RE = re.compile(
+        r"(?P<scheme>tcp|https)://"
+        r"(?P<host>%s(?:\.%s)+)"
+        r"(?::(?P<port>[0-9]{1,5}))?" % (_HOST_LABEL, _HOST_LABEL)
+    )
+    PUBLIC_ADDRESS_SCHEMES = ("tcp", "https")
 
-    def get_advertised_mqtt_address(self, namespace: str, release: str) -> Optional[str]:
-        """Read the public MQTT address the release's ngrok sidecar advertises.
+    @classmethod
+    def _parse_public_address(cls, candidate: str, schemes) -> Optional[str]:
+        """``candidate`` 是合法的對外位址就原樣回傳，否則 None（fail-closed）。"""
+        match = cls._PUBLIC_ADDRESS_RE.fullmatch(candidate)
+        if not match or match.group("scheme") not in schemes:
+            return None
+        if len(match.group("host")) > 253:
+            return None
+        port = match.group("port")
+        if port is None:
+            # TCP endpoint 沒有埠就連不上——那不是一個位址。
+            return None if match.group("scheme") == "tcp" else candidate
+        return candidate if 0 < int(port) < 65536 else None
+
+    @classmethod
+    def _marker_value(cls, line: str) -> Optional[str]:
+        """行首是 marker 就回傳 marker 後面的值（去掉 ASCII 空白；空字串＝撤回），否則 None。
+
+        行首就是第 0 個字元：前面有任何東西（含空白）都不算。只去 ASCII 的空白與
+        ``\r``——``str.strip()`` 會連 U+2028／U+0085 之類一起吃掉，等於讓行中間的
+        Unicode 換行字元重新造出一個「行首」。
+        """
+        line = line.rstrip("\r")
+        for marker in cls.NGROK_ADDRESS_MARKERS:
+            if line.startswith(marker):
+                return line[len(marker):].strip(" \t")
+        return None
+
+    def get_advertised_public_address(
+        self,
+        namespace: str,
+        release: str,
+        schemes=PUBLIC_ADDRESS_SCHEMES,
+    ) -> Optional[str]:
+        """Read the public address the release's ngrok sidecar advertises.
 
         Args:
             namespace: Release namespace
             release: Helm release name (``app.kubernetes.io/instance``)
+            schemes: Accepted URL schemes. The generic endpoint accepts both
+                ``tcp`` and ``https``; the legacy ``/mqtt-address`` endpoint
+                passes ``("tcp",)`` so it keeps returning exactly what it did.
 
         Returns:
-            The advertised ``tcp://host:port``, or None when there is nothing to
-            report — no pod, no ngrok sidecar (the tenant left it off), the agent
-            has not connected yet, or the line did not match the expected shape.
-            All of those are ordinary states, NOT errors: the caller must not
-            treat None as a failure.
+            The advertised ``tcp://host:port`` / ``https://host[:port]``, or None
+            when there is nothing to report — no pod, no ngrok sidecar (the tenant
+            left it off), the agent has not connected yet, the sidecar retracted
+            the address, or the line did not match the expected shape. All of
+            those are ordinary states, NOT errors: the caller must not treat None
+            as a failure.
         """
         validate_namespace(namespace)
 
@@ -1213,7 +1473,7 @@ class KubernetesService:
                 )
             except KubectlException as e:
                 # The usual case: this pod has no `ngrok` container because the
-                # tenant has not enabled public MQTT. Also covers a pod that is
+                # tenant has not enabled the tunnel. Also covers a pod that is
                 # still initialising. Debug-level on purpose — it is not a fault.
                 logger.debug(
                     "No ngrok log for %s/%s: %s", namespace, pod.name, e.message
@@ -1221,15 +1481,18 @@ class KubernetesService:
                 continue
 
             address = None
-            for line in (result.stdout or "").splitlines():
-                marker_at = line.find(self.NGROK_ADDRESS_MARKER)
-                if marker_at == -1:
+            # 只以 "\n" 切行（kubectl logs 的行界）。`splitlines()` 還會在 U+2028、
+            # U+0085、\x1c–\x1e、\r 切開——ngrok 自己那幾行若夾帶這些字元，行中間的
+            # marker 就會被切成「行首」，行首錨定等於失效。
+            for line in (result.stdout or "").split("\n"):
+                candidate = self._marker_value(line)
+                if candidate is None:
                     continue
-                candidate = line[marker_at + len(self.NGROK_ADDRESS_MARKER):].strip()
-                if self._NGROK_ADDRESS_RE.match(candidate):
+                parsed = self._parse_public_address(candidate, schemes) if candidate else None
+                if parsed:
                     # Keep scanning: the sidecar re-prints on an interval, so the
                     # LAST match is the address the agent currently holds.
-                    address = candidate
+                    address = parsed
                 elif not candidate:
                     # An EMPTY announcement is a retraction: the sidecar prints it
                     # whenever the agent exits (bad token, expired account…)
@@ -1249,12 +1512,75 @@ class KubernetesService:
 
         return None
 
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[PodInfo]:
+    # #1417：診斷文字（waiting message、事件訊息）的長度上限；事件查詢的 subprocess 上限。
+    # 事件只是錦上添花，查不到不能拖垮 status 端點（平台背景 poll 每分鐘逐台打一次）。
+    DIAGNOSTIC_TEXT_LIMIT = 300
+    POD_EVENTS_TIMEOUT_SECONDS = 10
+
+    def get_pod_warning_events(self, namespace: str) -> Dict[str, PodWarningEvent]:
+        """#1417：namespace 內每顆 Pod 最近一筆 Warning 事件，以 Pod UID 與名字為鍵。
+
+        一次 list（field selector 只取 ``type=Warning`` 且 ``involvedObject.kind=Pod``），
+        再依 ``involvedObject`` 對應——不逐顆 Pod 查。鍵是 ``uid:<uid>``；事件本身沒帶 UID
+        時才用 ``name:<name>``——同名重建的 Pod（StatefulSet）不會拿到前一顆的事件。
+
+        Raises:
+            KubectlException: kubectl 失敗或逾時（呼叫端負責吞掉，見 ``get_pods``）
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            [
+                "get",
+                "events",
+                "--namespace",
+                namespace,
+                "--field-selector",
+                "type=Warning,involvedObject.kind=Pod",
+                "--output",
+                "json",
+            ],
+            timeout=self.POD_EVENTS_TIMEOUT_SECONDS,
+        )
+        items = json.loads(result.stdout or "{}").get("items") or []
+        latest: Dict[str, Dict[str, Any]] = {}
+        for event in sorted(items, key=_event_sort_key):
+            obj = event.get("involvedObject") or {}
+            if not event.get("reason"):
+                continue
+            if obj.get("uid"):
+                key = f"uid:{obj['uid']}"
+            elif obj.get("name"):
+                key = f"name:{obj['name']}"
+            else:
+                continue
+            # 排序後逐筆覆寫 ⇒ 留下的是每顆 Pod 最後一筆。
+            latest[key] = event
+        limit = self.DIAGNOSTIC_TEXT_LIMIT
+        out: Dict[str, PodWarningEvent] = {}
+        for key, event in latest.items():
+            count = (event.get("series") or {}).get("count") or event.get("count")
+            out[key] = PodWarningEvent(
+                reason=event["reason"],
+                message=_truncate(event.get("message") or event.get("note"), limit),
+                count=count if isinstance(count, int) else None,
+                last_seen=_event_time(event) or None,
+            )
+        return out
+
+    def get_pods(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        include_warning_events: bool = False,
+    ) -> List[PodInfo]:
         """Get pods in a namespace.
 
         Args:
             namespace: Namespace name
             label_selector: Optional label selector
+            include_warning_events: #1417——對未就緒的 Pod 附上最近一筆 Warning 事件
+                （``last_warning``）。只有 status 端點開；全部就緒時不查事件。事件查詢
+                失敗只記 log、``last_warning`` 留 None，**不**讓本方法失敗。
 
         Returns:
             List of pod information
@@ -1277,6 +1603,8 @@ class KubernetesService:
         pods_data = json.loads(result.stdout)
 
         pods = []
+        # #1417：未就緒 Pod 的事件查詢鍵（UID 優先、名字備援），與 pods 同序。
+        unready_keys: List[Optional[tuple]] = []
         for pod in pods_data.get("items", []):
             metadata = pod.get("metadata", {})
             status = pod.get("status", {})
@@ -1286,6 +1614,11 @@ class KubernetesService:
             ready_count = sum(1 for c in container_statuses if c.get("ready"))
             total_count = len(container_statuses)
             ready_str = f"{ready_count}/{total_count}"
+            phase = status.get("phase", "Unknown")
+            unready_keys.append(
+                (metadata.get("uid"), metadata.get("name"))
+                if _pod_is_unready(phase, metadata, ready_count, total_count) else None
+            )
 
             # Calculate restarts
             restarts = sum(c.get("restartCount", 0) for c in container_statuses)
@@ -1307,8 +1640,36 @@ class KubernetesService:
                     task=labels.get("woow.paas/task"),
                     owner_kind=_controller_owner_kind(metadata),
                     creation_timestamp=created or None,
+                    # #1408：spec 上寫的 image 參照（不是 imageID）——平台拿來核對
+                    # Redeploy 之後 workload 真的換成範本釘的 image。
+                    images=[
+                        c.get("image") for c in (pod.get("spec") or {}).get("containers") or []
+                        if c.get("image")
+                    ],
+                    # #1417：卡住的容器（就緒的 Pod 自然沒有 waiting 容器）。
+                    waiting=_pod_waiting(status, self.DIAGNOSTIC_TEXT_LIMIT),
                 )
             )
+
+        if include_warning_events and any(unready_keys):
+            # 一次 list namespace 的 Warning 事件，再對到未就緒的 Pod；就緒的 Pod 不附
+            # （它們的舊事件只會誤導）。查詢失敗只記 log：status 端點不能因此失敗。
+            try:
+                events = self.get_pod_warning_events(namespace)
+            except Exception as e:  # noqa: BLE001 —— 見上
+                logger.warning(
+                    "Could not list pod warning events in %s (pod status still "
+                    "reported without them): %s", namespace, getattr(e, "message", e),
+                )
+                events = {}
+            for pod_info, keys in zip(pods, unready_keys):
+                if not keys:
+                    continue
+                uid, name = keys
+                pod_info.last_warning = (
+                    (events.get(f"uid:{uid}") if uid else None)
+                    or events.get(f"name:{name}")
+                )
 
         return pods
 
@@ -1319,6 +1680,8 @@ class KubernetesService:
         memory_limit: str,
         storage_limit: str,
         workspace_id: Optional[int] = None,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
     ) -> Dict[str, str]:
         """Create namespace with resource quota.
 
@@ -1352,24 +1715,10 @@ class KubernetesService:
         }
 
         # Create quota manifest using yaml.safe_dump to prevent injection
-        quota_manifest = {
-            "apiVersion": "v1",
-            "kind": "ResourceQuota",
-            "metadata": {
-                "name": f"{name}-quota",
-                "namespace": name,
-            },
-            "spec": {
-                "hard": {
-                    "requests.cpu": cpu_limit,
-                    "requests.memory": memory_limit,
-                    "limits.cpu": cpu_limit,
-                    "limits.memory": memory_limit,
-                    "persistentvolumeclaims": "10",
-                    "requests.storage": storage_limit,
-                },
-            },
-        }
+        quota_manifest = self._build_quota_manifest(
+            name, cpu_limit, memory_limit, storage_limit,
+            ephemeral_storage_request, ephemeral_storage_limit,
+        )
 
         # Apply namespace
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -1381,6 +1730,12 @@ class KubernetesService:
         finally:
             Path(ns_file).unlink(missing_ok=True)
 
+        # #278 A2: CS ns LimitRange — #1434 起排在 quota **之前**：quota 一旦 hard
+        # 宣告 limits.ephemeral-storage，admission 就拒收沒宣告它的容器；既有 ns 重跑
+        # 本流程（每次開通都會）時若先換 quota、後補 LimitRange 預設，中間那一瞬間建的
+        # Pod 會被拒。先補預設、再收緊額度，任何時刻都不會出現「額度要求、預設缺席」。
+        self._apply_limitrange(name)
+
         # Apply quota
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.safe_dump(quota_manifest, f)
@@ -1390,16 +1745,6 @@ class KubernetesService:
             self._run_command(["apply", "-f", quota_file])
         finally:
             Path(quota_file).unlink(missing_ok=True)
-
-        # #278 A2: CS ns LimitRange（quota 之後、registry secret 之前）
-        limits_manifest = self._build_limitrange_manifest(name)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(limits_manifest, f)
-            limits_file = f.name
-        try:
-            self._run_command(["apply", "-f", limits_file])
-        finally:
-            Path(limits_file).unlink(missing_ok=True)
 
         self.ensure_registry_secret(name)
 
@@ -1428,37 +1773,92 @@ class KubernetesService:
 
     def _build_limitrange_manifest(self, name: str) -> dict:
         """CS ns LimitRange（#278 A2）：ns quota hard-宣告 limits.cpu/memory 後，
-        admission 拒收未設 limits 的容器；default 補上安全預設讓其可建。"""
+        admission 拒收未設 limits 的容器；default 補上安全預設讓其可建。
+
+        #1434：再補 ephemeral-storage。R8 實測所有租戶容器都沒有 ephemeral-storage
+        上限，/tmp 等 overlay 路徑可無限寫進節點系統碟（含正式站節點）。LimitRange 的
+        default 只補「容器沒宣告」的格子，chart 自己有設的照 chart。"""
         return {
             "apiVersion": "v1",
             "kind": "LimitRange",
             "metadata": {"name": f"{name}-limits", "namespace": name},
             "spec": {"limits": [{
                 "type": "Container",
-                "default": {"cpu": "500m", "memory": "512Mi"},
-                "defaultRequest": {"cpu": "500m", "memory": "512Mi"},
+                "default": {
+                    "cpu": "500m",
+                    "memory": "512Mi",
+                    "ephemeral-storage": settings.tenant_ephemeral_storage_default_limit,
+                },
+                "defaultRequest": {
+                    "cpu": "500m",
+                    "memory": "512Mi",
+                    "ephemeral-storage": settings.tenant_ephemeral_storage_default_request,
+                },
             }]},
         }
 
-    def update_namespace_quota(self, name: str, cpu_limit: str,
-                               memory_limit: str, storage_limit: str) -> Dict[str, str]:
-        """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
-        apply 完整 6-key hard map（含 pvc=10），無 stale key。"""
-        validate_namespace(name)
+    def _apply_limitrange(self, name: str) -> None:
         import yaml
-        quota_manifest = {
+        limits_manifest = self._build_limitrange_manifest(name)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(limits_manifest, f)
+            limits_file = f.name
+        try:
+            self._run_command(["apply", "-f", limits_file])
+        finally:
+            Path(limits_file).unlink(missing_ok=True)
+
+    @staticmethod
+    def _build_quota_manifest(
+        name: str,
+        cpu_limit: str,
+        memory_limit: str,
+        storage_limit: str,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
+    ) -> dict:
+        """ns ResourceQuota 的唯一組裝點（create 與 update 共用，避免兩份 hard map 漂移）。
+
+        #1434：``ephemeral_storage_*`` 為 None（舊平台沒送）時**不加**這兩個鍵——
+        行為與 #1434 之前完全相同，operator 可以先於平台發版。"""
+        hard = {
+            "requests.cpu": cpu_limit,
+            "requests.memory": memory_limit,
+            "limits.cpu": cpu_limit,
+            "limits.memory": memory_limit,
+            "persistentvolumeclaims": "10",
+            "requests.storage": storage_limit,
+        }
+        if ephemeral_storage_request:
+            hard["requests.ephemeral-storage"] = ephemeral_storage_request
+        if ephemeral_storage_limit:
+            hard["limits.ephemeral-storage"] = ephemeral_storage_limit
+        return {
             "apiVersion": "v1",
             "kind": "ResourceQuota",
             "metadata": {"name": f"{name}-quota", "namespace": name},
-            "spec": {"hard": {
-                "requests.cpu": cpu_limit,
-                "requests.memory": memory_limit,
-                "limits.cpu": cpu_limit,
-                "limits.memory": memory_limit,
-                "persistentvolumeclaims": "10",
-                "requests.storage": storage_limit,
-            }},
+            "spec": {"hard": hard},
         }
+
+    def update_namespace_quota(self, name: str, cpu_limit: str,
+                               memory_limit: str, storage_limit: str,
+                               ephemeral_storage_request: Optional[str] = None,
+                               ephemeral_storage_limit: Optional[str] = None,
+                               ) -> Dict[str, str]:
+        """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
+        apply 完整 hard map（含 pvc=10），無 stale key。
+
+        #1434：quota 帶 ephemeral-storage 時先重套 LimitRange（補預設），理由見
+        ``create_namespace`` 同一段——既有 ns 第一次收到含 ephemeral 的 quota 時，
+        LimitRange 可能還是舊的（沒有 ephemeral 預設）。"""
+        validate_namespace(name)
+        import yaml
+        if ephemeral_storage_request or ephemeral_storage_limit:
+            self._apply_limitrange(name)
+        quota_manifest = self._build_quota_manifest(
+            name, cpu_limit, memory_limit, storage_limit,
+            ephemeral_storage_request, ephemeral_storage_limit,
+        )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.safe_dump(quota_manifest, f)
             quota_file = f.name
@@ -2495,6 +2895,75 @@ class KubernetesService:
             "pvcs": json.loads(pvcs.stdout or "{}").get("items", []),
         }
 
+    # #1415：叢集儲存（Longhorn）排程額度。全部唯讀；解讀在 ``storage_capacity``。
+    CAPACITY_KUBECTL_TIMEOUT_SECONDS = 15
+
+    def get_longhorn_capacity_snapshot(self) -> Dict[str, List[Dict[str, Any]]]:
+        """#1415：讀 Longhorn 排程需要的原始資料（三次唯讀 ``kubectl get``）。
+
+        * ``nodes.longhorn.io``（``settings.longhorn_namespace``）：各磁碟的
+          storageMaximum／Available／Scheduled、storageReserved、allowScheduling、tags；
+        * ``settings.longhorn.io``：**只留** ``storage_capacity.LONGHORN_SETTING_NAMES``
+          （其他設定與排程無關，不往外帶）；
+        * StorageClass：provisioner、parameters（numberOfReplicas、selector）、預設註記。
+
+        Raises:
+            KubectlException: CRD 不存在、權限不足（operator ClusterRole 需要 longhorn.io
+                nodes／settings get/list，見 woow-paas-charts charts/paas-operator）、逾時。
+                呼叫端一律當「不知道」放行。
+        """
+        from src.services.storage_capacity import LONGHORN_SETTING_NAMES
+
+        ns = settings.longhorn_namespace
+        timeout = self.CAPACITY_KUBECTL_TIMEOUT_SECONDS
+        nodes = self._run_command(
+            ["get", "nodes.longhorn.io", "--namespace", ns, "-o", "json"], timeout=timeout)
+        lh_settings = self._run_command(
+            ["get", "settings.longhorn.io", "--namespace", ns, "-o", "json"], timeout=timeout)
+        classes = self._run_command(["get", "storageclasses", "-o", "json"], timeout=timeout)
+        wanted = set(LONGHORN_SETTING_NAMES)
+        return {
+            "nodes": json.loads(nodes.stdout or "{}").get("items", []),
+            "settings": [
+                item for item in json.loads(lh_settings.stdout or "{}").get("items", [])
+                if (item.get("metadata") or {}).get("name") in wanted
+            ],
+            "storage_classes": json.loads(classes.stdout or "{}").get("items", []),
+        }
+
+    def list_orphaned_pvcs_all_namespaces(self) -> List[Dict[str, Any]]:
+        """#1415：全叢集帶 ``paas.woowtech.io/orphaned-at`` 的 PVC（唯讀，供額度回報）。
+
+        不呼 validate_namespace：這是跨 namespace 的唯讀盤點，範圍由 label selector 圈定
+        （同 ``list_managed_namespaces``）。
+        """
+        from src.services.storage_quota import ORPHANED_AT_LABEL
+
+        result = self._run_command(
+            ["get", "pvc", "--all-namespaces", "-l", ORPHANED_AT_LABEL, "-o", "json"],
+            timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
+        )
+        return json.loads(result.stdout or "{}").get("items", [])
+
+    def get_cdi_filesystem_overhead(self) -> Optional[Dict[str, Any]]:
+        """#1415：CDIConfig 的 ``status.filesystemOverhead``（``{"global": "0.06",
+        "storageClass": {...}}``）；讀不到回 None（呼叫端用 CDI 預設值）。
+
+        叢集內 ``system:authenticated`` 有 ``cdi.kubevirt.io:config-reader``，不需要另給 RBAC。
+        """
+        try:
+            result = self._run_command(
+                ["get", "cdiconfig", "config", "-o", "json"],
+                timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
+            )
+            overhead = (json.loads(result.stdout or "{}").get("status") or {}).get(
+                "filesystemOverhead")
+            return overhead if isinstance(overhead, dict) else None
+        except (KubectlException, ValueError) as exc:
+            logger.warning("CDI filesystem overhead unavailable, using CDI default: %s",
+                           getattr(exc, "stderr", None) or exc)
+            return None
+
     def list_managed_namespaces(self) -> List[str]:
         """#277 唯讀反向發現：列本 env 帶 paas-managed=true 的 ns 名。
 
@@ -2796,6 +3265,34 @@ class KubernetesService:
             )
         return names
 
+    def get_credential_reset_statefulset_names(
+        self, namespace: str, label_selector: str
+    ) -> List[str]:
+        """StatefulSets of a release that opted in to a restart on credential reset.
+
+        hermes-agent 0.3.0 runs its agent as a StatefulSet (fixed pod name so the
+        console Role can pin pods/exec with resourceNames — platform #1360 follow-up)
+        and reads admin_password from env at start, so a helm_secret reset must roll
+        it like the Deployments; headscale/tailscale 0.1.1 are StatefulSet-only
+        charts that read it the same way. Only StatefulSets labelled
+        ``CREDENTIAL_RESET_RESTART_LABEL=true`` are returned: open-design 0.3.0's daemon
+        StatefulSet hot-reloads its htpasswd and must NOT be restarted, and a bundled
+        database StatefulSet has nothing to do with the admin password.
+
+        Returns an empty list when nothing matches (unlike ``get_deployment_names``):
+        the caller decides whether "no workload at all" is an error.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "statefulsets",
+            "--namespace", namespace,
+            "--selector", f"{label_selector},{CREDENTIAL_RESET_RESTART_LABEL}=true",
+            "--output", "jsonpath={.items[*].metadata.name}",
+        ]
+        result = self._run_command(args)
+        return result.stdout.split()
+
     def get_deployment_name(self, namespace: str, label_selector: str) -> str:
         """Resolve **exactly one** Deployment name from a label selector.
 
@@ -3055,6 +3552,23 @@ class KubernetesService:
         self._run_command([
             "rollout", "restart",
             f"deployment/{deployment_name}",
+            "--namespace", namespace,
+        ])
+
+    def rollout_restart_statefulset(
+        self,
+        namespace: str,
+        statefulset_name: str,
+    ) -> None:
+        """``kubectl rollout restart statefulset/<name>`` (pod template annotation bump).
+
+        #1432: open-design's daemon is a StatefulSet; restarting only Deployments
+        left it untouched through 17 helm revisions in R8 (restartCount 0).
+        """
+        validate_namespace(namespace)
+        self._run_command([
+            "rollout", "restart",
+            f"statefulset/{statefulset_name}",
             "--namespace", namespace,
         ])
 

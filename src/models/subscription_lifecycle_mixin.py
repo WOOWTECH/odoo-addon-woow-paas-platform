@@ -434,7 +434,8 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         """Check if the current user can perform an operation.
 
         Args:
-            operation: 'read' or 'write'
+            operation: 'read', 'write' or 'delete'（#1424：這裡與 'write' 同級；
+                CloudService 對開通被拒、訂閱已自動取消的服務放行 'delete'）
         Raises:
             UserError if not allowed
         """

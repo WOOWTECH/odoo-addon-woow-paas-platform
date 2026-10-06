@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import json
 import logging
 import re
@@ -13,7 +14,8 @@ from psycopg2 import errors as pg_errors
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tools import mute_logger
+from odoo.tools import SQL, mute_logger
+from odoo.tools.sql import column_exists
 
 from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
@@ -87,6 +89,18 @@ BITNAMI_ODOO_VALUE_KEYS = frozenset({
 #: #1348：operator 開通前儲存配額檢查的錯誤碼（``extra/paas-operator/src/services/
 #: storage_quota.py`` 的同名常數；改名兩邊一起改）。
 STORAGE_QUOTA_ERROR_CODE = 'workspace_storage_quota_exhausted'
+#: #1415：operator 開通前叢集儲存（Longhorn）排程額度檢查的錯誤碼（``extra/paas-operator/
+#: src/services/storage_capacity.py`` 的 ``CAPACITY_ERROR_CODE``；改名兩邊一起改）。
+CLUSTER_STORAGE_CAPACITY_ERROR_CODE = 'cluster_storage_capacity_exhausted'
+#: #1431：從未進過 running 的服務刪除時，孤兒 PVC／DataVolume 只保留這麼多天（operator
+#: ``DELETE /api/releases/...?grace_period_days=``；只能縮短預設、不能延長）。沒有租戶資料
+#: 要保護，不必佔 Longhorn 排程額度 90 天（#1415 事件）。
+NEVER_RUNNING_ORPHAN_GRACE_DAYS = 1
+#: #1424：operator「明確拒絕開通、沒有建立服務」的錯誤碼。收到時若服務從未 running 過，
+#: 平台自動取消它的訂閱（不扣款），租戶刪除服務後再重新開通即可。
+PROVISION_REJECTION_ERROR_CODES = (
+    STORAGE_QUOTA_ERROR_CODE, CLUSTER_STORAGE_CAPACITY_ERROR_CODE,
+)
 
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 #: #1335：保留給文件／測試、永遠收不到信的網域（RFC 2606 §3 的 example.com／.net／.org
@@ -331,6 +345,43 @@ def _reject_observation_control_writes(env, vals):
             fields=', '.join(touched)))
 
 
+# #1416：「這筆 error 是部署逾時寫的」標記。背景 cron 以 superuser 依它重查、就緒就把
+# 服務推回 running／initializing——租戶若能自己寫它，就能讓 init 額度出口、刪除失敗等
+# 其他來源的 error 被 cron 推回去（同 `_INIT_CONTROL_FIELDS` 的理由，判準也同樣是
+# `env.is_system()`：平台自己的寫入全走 cron／sudo）。
+_TIMEOUT_RECOVERY_CONTROL_FIELDS = frozenset({'transition_timeout_at'})
+
+
+def _reject_timeout_recovery_control_writes(env, vals):
+    """write() 側：逾時自癒標記只能由平台寫入（#1416）。"""
+    if env.is_system():
+        return
+    touched = sorted(_TIMEOUT_RECOVERY_CONTROL_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Deployment timeout recovery fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
+
+
+# #1431／#1424：服務「曾經正常運作過」的事實。平台依它決定刪除後孤兒 PVC 保留多久
+# （從未 running ⇒ 1 天）與要不要扣款（從未 running 的 error 服務暫停扣款）——租戶若能自己
+# 寫它，就能把用過的服務偽裝成沒用過（縮短資料保留、逃避計費）。判準同上：`env.is_system()`。
+# `provision_rejected_code`（#1424）同理：它讓 lifecycle cron 不去停權、讓已取消訂閱的服務
+# 仍可刪除——租戶自己寫得進去就能讓欠費服務逃過停權。
+_SERVICE_HISTORY_FIELDS = frozenset({'first_running_at', 'provision_rejected_code'})
+
+
+def _reject_service_history_writes(env, vals):
+    """write() 側：服務歷程事實只能由平台寫入（#1431）。"""
+    if env.is_system():
+        return
+    touched = sorted(_SERVICE_HISTORY_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Service history fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
+
+
 # ------------------------------------------------------------------------- #
 #  #787：CS Access sync 的抑制鑰匙（private sentinel，形狀抄 #536）           #
 # ------------------------------------------------------------------------- #
@@ -465,6 +516,8 @@ _GLOBAL_CAP_CONFLICT_SQL = (
 # upgrading / initializing 才呼叫，一旦寫進 `error` 就再也沒有任何路徑會把它
 # poll 回 `running`——即使叢集裡的服務在門檻之後其實就緒了。誤殺＝本來會好的
 # 服務被打成 error、租戶得重新下單；晚報＝維運晚 N 分鐘知道。兩者不對稱。
+# （#1416 起逾時造成的 error 由 `_cron_recover_timed_out_services` 在時間窗內低頻
+# 重查、就緒就推回來——那是補救，不是放寬門檻的理由：誤殺期間租戶照樣看到錯誤。）
 #
 # 預設值的實證依據（見 PR 論證）：
 #   * 容器型 30 分 —— 本 repo 沒有容器型的分段計時實測，取 #489 建議值 15 分
@@ -557,64 +610,69 @@ _init_cron_clock = time.monotonic
 # 以 detail 的子字串比對（順序即優先序）。detail 字串日後若改動，
 # `TestTimeoutDiagnosis` 會紅——這個耦合是刻意用測試守住的，而不是靠註解。
 # 未命中時不附 hint（fail-soft：訊息仍有前綴與 detail，只是少了方向）。
+#
+# #1417：每筆是 ``(needle, hint key, 原因分型)``。
+#   * hint 文字在 `CloudService._timeout_hint_text`——要以**服務建立者的語言**翻譯
+#     （cron 的 env 語言不是租戶的），模組常數做不到，所以這裡只放 key。
+#   * 原因分型決定給租戶看的那一句話（`_timeout_tenant_summary`）。
+#   * `waiting=`／`event=` 是 `_describe_unready_pod` 依 operator 回報（PodInfo
+#     `waiting`／`last_warning`）寫進 detail 的標記，排在通用的
+#     `pods not started`／`pods not ready` 之前：有具體原因就不要給籠統的方向。
+#     同一則 detail 有多顆 Pod 時，表上越前面的原因越根本（掛不上磁碟 > 拉不到
+#     image > 反覆重啟 > readiness）。
+TIMEOUT_CAUSE_STORAGE = 'storage'      # 磁碟掛載／Pod 排程（含儲存額度）
+TIMEOUT_CAUSE_IMAGE = 'image'          # 拉不到 image
+TIMEOUT_CAUSE_CRASH = 'crash_loop'     # 容器反覆重啟
+TIMEOUT_CAUSE_READINESS = 'readiness'  # 起來了但沒回報 ready
+TIMEOUT_CAUSE_SUSPENDED = 'suspended'  # 停權中（#482）
+TIMEOUT_CAUSE_OTHER = 'other'
+
 _TIMEOUT_HINTS = (
     # #1251 Q45：woow-odoo 判定專屬的 hint。刻意排在最前面（至少要在 'pods not ready'
     # 之前）：先比中先用，別讓通用 hint 把方向帶偏。
     # detail 字串的撞名規則見 docs/decisions/patterns/woow-odoo-readiness-identity.md
-    ('chart mismatch',
-     'the release runs a different chart than the template expects — an '
-     'in-place upgrade cannot switch charts; a fresh install is required (see '
-     '#1128)'),
-    ('operator lacks pod identity',
-     'the operator does not report Pod identity (component/owner) — upgrade '
-     'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
+    ('chart mismatch', 'chart_mismatch', TIMEOUT_CAUSE_OTHER),
+    ('operator lacks pod identity', 'operator_lacks_identity', TIMEOUT_CAUSE_OTHER),
     # #1251 review S2（使用者裁定，超出 Q45 字面的兩筆）：woow-odoo 最常卡住的兩種
     # 情形。前者只擋 server 的 FailedCreate 不產 Pod，'no pods found' 蓋不到；後者若落到
     # 'pods not ready' 會被帶去看 container log，方向錯。
-    ('required component missing',
-     "the chart's server/postgresql Pod was never created (or is not owned by "
-     'its ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for '
-     'FailedCreate (namespace ResourceQuota, admission)'),
-    ('required pods not running',
-     'a required Pod exists but never reached Running — check its pod events '
-     '(scheduling, Multi-Attach, image pull); an exempt backup Job listed in '
-     'the detail may still hold the RWO data PVC'),
-    ('pod lookup failed',
-     'the operator could not list pods — check its RBAC and the API server'),
-    ('no pods found',
-     'no Pod object was ever created — check the namespace ResourceQuota (a '
-     'rejected Pod never materialises) and that the chart labels its pods '
-     'with app.kubernetes.io/instance'),
-    ('no active pods',
-     'pods exist but none reached Running — check pod events (scheduling, '
-     'image pull) and node capacity'),
-    ('pods not ready',
-     'pods are Running but never became ready — check container logs and the '
-     'readiness probe'),
-    ('include_vm',
-     'the platform never received VM status — the operator is likely too old '
-     'to report it'),
-    ('VMI lookup failed',
-     'the operator could not read the VirtualMachineInstance — check its RBAC '
-     'for virtualmachineinstances'),
-    ('no VMI yet',
-     'no VirtualMachineInstance was created — check the DataVolume / CDI '
-     'importer, the disk import may have stalled'),
-    ('VMI not ready',
-     'the VM is running but never reported Ready — check the guest boot '
-     'inside the VM'),
-    ('helm release status is',
-     'the helm release never reached "deployed" — a killed rollback leaves it '
-     'stuck in pending-*; inspect `helm history` for the release'),
+    ('required component missing', 'required_component_missing', TIMEOUT_CAUSE_OTHER),
+    ('required pods not running', 'required_pods_not_running', TIMEOUT_CAUSE_OTHER),
+    # #1417：operator 報上來的具體原因（只有通用判定 `_is_container_ready` 會寫這些標記）。
+    ('event=FailedAttachVolume', 'volume_attach', TIMEOUT_CAUSE_STORAGE),
+    ('event=FailedMount', 'volume_mount', TIMEOUT_CAUSE_STORAGE),
+    ('event=FailedScheduling', 'scheduling', TIMEOUT_CAUSE_STORAGE),
+    ('waiting=ErrImagePull', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=ImagePullBackOff', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=InvalidImageName', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=ErrImageNeverPull', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=CrashLoopBackOff', 'crash_loop', TIMEOUT_CAUSE_CRASH),
+    ('waiting=CreateContainerConfigError', 'container_config', TIMEOUT_CAUSE_OTHER),
+    ('waiting=CreateContainerError', 'container_config', TIMEOUT_CAUSE_OTHER),
+    ('waiting=RunContainerError', 'container_config', TIMEOUT_CAUSE_OTHER),
+    ('event=Unhealthy', 'pods_not_ready', TIMEOUT_CAUSE_READINESS),
+    ('pod lookup failed', 'pod_lookup_failed', TIMEOUT_CAUSE_OTHER),
+    ('no pods found', 'no_pods_found', TIMEOUT_CAUSE_OTHER),
+    ('no active pods', 'no_active_pods', TIMEOUT_CAUSE_OTHER),
+    # #1417：Pod 根本沒跑起來（Pending）與「Running 但未 ready」分開——10-04 事件的 Pod
+    # 從頭到尾停在 Init，卻被下一筆說成 Running、叫人去看 container log。
+    ('pods not started', 'pods_not_started', TIMEOUT_CAUSE_OTHER),
+    ('pods not ready', 'pods_not_ready', TIMEOUT_CAUSE_READINESS),
+    ('include_vm', 'vm_status_missing', TIMEOUT_CAUSE_OTHER),
+    ('VMI lookup failed', 'vmi_lookup_failed', TIMEOUT_CAUSE_OTHER),
+    ('no VMI yet', 'no_vmi_yet', TIMEOUT_CAUSE_OTHER),
+    ('VMI not ready', 'vmi_not_ready', TIMEOUT_CAUSE_OTHER),
+    ('helm release status is', 'helm_status_stuck', TIMEOUT_CAUSE_OTHER),
 )
 
 # 停權中的服務被 redeploy 後會卡在 `deploying`（#482）：VM 被**正確地** Halted
 # 著，所以永遠不會 ready。此時上面那些 hint 全是誤導（叫人去查 pod / quota，
-# 而真因是停權），故停權時**取代**而非附加。
-_SUSPENDED_HINT = (
-    'the service is suspended — its workload is intentionally halted, so it '
-    'can never become ready while a deploy/upgrade is pending (see #482)'
-)
+# 而真因是停權），故停權時**取代**而非附加（hint key ``suspended``）。
+
+# #1416：逾時轉 error 的服務繼續由背景 cron 低頻重查的時間窗（小時，從逾時那一刻算）。
+# 缺值、非正整數一律退回預設——不停用自癒（同 `_transition_timeout_minutes` 的 fail-safe）。
+TIMEOUT_RECOVERY_WINDOW_HOURS_DEFAULT = 7 * 24
+_TIMEOUT_RECOVERY_WINDOW_PARAM = 'woow_paas_platform.timeout_recovery_window_hours'
 
 # #497 一次性收斂的判別式：停權旗標仍在，但 state 已被 #493 合併前的舊碼汙染成
 # 這些「對租戶不可用」的狀態之一。`initializing` 在內是因為容器型被 upgrade 喚醒後
@@ -679,38 +737,228 @@ _INSTALL_PINNED_STORAGE_CLASS_PATHS = {
 _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 
 
-# Omnigent BYO host：哪些 chart 在主容器裡內建 omnigent host（woow-paas-charts
-# ``shared/omnigent-host`` 共用套件；host 和產品跑在同一個主容器裡），
-# 要把「同工作區 Omnigent 的叢集內網址」寫進哪個 value path（套件標準 values 區塊
-# ``omnigentHost.serverUrl``）。
+# #1408：範本 ``helm_default_values`` 裡的 image 參照（含 ``repository`` 與 ``tag``
+# 或 ``digest`` 的 dict）是**商品版本**的一部分，與 chart 版本同進同退（#336）。
+# 開通時它們被 deep-merge 進服務自己的 ``helm_values`` 後就凍結了；管理員 Redeploy
+# 會把 chart 升到範本釘的版本，image 卻永遠停在開通當時 ⇒ 新 chart 配舊 image。
+# Redeploy 時以範本為準覆蓋這幾個鍵（租戶可設定的 spec 鍵除外）。
+_IMAGE_REF_KEYS = ('registry', 'repository', 'tag', 'digest')
+
+
+def _iter_image_refs(values, path=()):
+    """Yield ``(path tuple, ref dict)`` for every image reference in a values tree."""
+    if not isinstance(values, dict):
+        return
+    if isinstance(values.get('repository'), str) and (
+            values.get('tag') or values.get('digest')):
+        yield path, values
+    for key, child in values.items():
+        if isinstance(child, dict):
+            yield from _iter_image_refs(child, path + (key,))
+
+
+def _refresh_image_refs(service_values, template_values, tenant_keys=()):
+    """Copy the template's image refs over the service's values.
+
+    Returns ``(new_values, changes)``; ``changes`` is a list of
+    ``(dotted path, old, new)``. Only ``_IMAGE_REF_KEYS`` are touched, only at paths
+    where the template has an image ref, and never a key a tenant may set
+    (``tenant_keys``: dotted helm_value_specs keys — the key itself or any ancestor).
+    A ref key the service carries but the template no longer does (e.g. a stale
+    ``digest`` after the template moved to ``tag@sha256``) is removed, since the chart
+    would otherwise keep rendering it.
+    """
+    new_values = copy.deepcopy(service_values) if isinstance(service_values, dict) else {}
+    tenant = set(tenant_keys or ())
+    changes = []
+
+    def tenant_owned(dotted):
+        parts = dotted.split('.')
+        return any('.'.join(parts[:i]) in tenant for i in range(1, len(parts) + 1))
+
+    for path, ref in _iter_image_refs(template_values):
+        target = new_values
+        for key in path:
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            target = target[key]
+        for key in _IMAGE_REF_KEYS:
+            dotted = '.'.join(path + (key,))
+            if tenant_owned(dotted):
+                continue
+            if key in ref:
+                if target.get(key) != ref[key]:
+                    changes.append((dotted, target.get(key), ref[key]))
+                    target[key] = ref[key]
+            elif key in target:
+                changes.append((dotted, target[key], None))
+                del target[key]
+    return new_values, changes
+
+
+def _split_image(image):
+    """``registry/repo:tag@digest`` → ``(repo without registry host, tag, digest)``."""
+    image = (image or '').strip()
+    digest = None
+    if '@' in image:
+        image, digest = image.split('@', 1)
+    tag = None
+    slash = image.rfind('/')
+    colon = image.rfind(':')
+    if colon > slash:
+        image, tag = image[:colon], image[colon + 1:]
+    parts = image.split('/')
+    if len(parts) > 1 and ('.' in parts[0] or ':' in parts[0] or parts[0] == 'localhost'):
+        parts = parts[1:]
+    if len(parts) == 2 and parts[0] == 'library':
+        parts = parts[1:]
+    return '/'.join(parts), tag, digest
+
+
+def _expected_image(ref):
+    """An image-ref dict → ``(repo, tag, digest)`` the running container should show."""
+    repository = ref.get('repository') or ''
+    if ref.get('registry'):
+        repository = '%s/%s' % (ref['registry'].rstrip('/'), repository)
+    tag = ref.get('tag') or ''
+    digest = ref.get('digest') or None
+    if '@' in tag:
+        tag, digest = tag.split('@', 1)
+    repo, _tag, _digest = _split_image(repository)
+    return repo, (tag or None), digest
+
+
+def _image_mismatches(values, pod_images):
+    """Image refs in ``values`` whose repository runs with a different tag/digest.
+
+    A ref whose repository does not appear in any running container is skipped
+    (that component is disabled or runs elsewhere) — the check only catches
+    "the right container, the wrong version", which is what a stale
+    ``helm_values`` produces. Returns a list of ``(expected str, running list)``.
+    """
+    running = [_split_image(image) for image in pod_images or [] if image]
+    mismatches = []
+    for _path, ref in _iter_image_refs(values):
+        repo, tag, digest = _expected_image(ref)
+        same_repo = [r for r in running if r[0] == repo]
+        if not same_repo:
+            continue
+        if digest:
+            ok = any(r[2] == digest for r in same_repo)
+        else:
+            ok = any(r[1] == tag for r in same_repo)
+        if not ok:
+            expected = repo + (':' + tag if tag else '') + ('@' + digest if digest else '')
+            shown = sorted({
+                r[0] + (':' + r[1] if r[1] else '') + ('@' + r[2] if r[2] else '')
+                for r in same_repo
+            })
+            mismatches.append((expected, shown))
+    return mismatches
+
+
+# ── 同工作區服務網址注入（只帶網址，絕不帶 token／密碼） ─────────────────────────
+# 消費端 chart 學不到「同工作區有沒有某個服務、release 叫什麼」，由平台在組裝第 7 步
+# （``_assemble_deploy_values``）把「同工作區、running、最早建立」的提供者叢集內網址
+# 寫進消費端的 value path（和 ``_inject_allowed_origins`` 同一 family）。共同規則
+# （#1340 Omnigent 起，PLAN §10.2 泛化）：
 #
-# 這個值**只是網址**，而且是**執行期設定**：chart 只把它 render 進一個小
-# ConfigMap（``<name>-runtime``，key ``server-url``），以目錄掛進容器、**不在**
-# pod template 的 checksum annotation 裡 ⇒ 網址出現、改變或消失都**不會**讓 pod
-# 重啟，kubelet 約一分鐘內就地換檔，supervisor 與 ``omnigent-host-status`` 每次
-# 用到時重讀（套件 README「Environment contract」）。所以每條部署路徑（含 reset
-# 密碼那條 ``helm upgrade --atomic --timeout 15s``）都可以照常重算它，不會重演
-# F-461-2（pod template 變動 → 15 秒等不到新 pod → 回退斷線）。
-#
-# supervisor 拿它印 ``omnigent login <url>`` 提示，並在租戶還沒登入過時當備援；
-# host 實際連的永遠是租戶最後一次 ``omnigent login`` 的那個 server。平台**絕不**
-# 注入任何 token／密碼——登入是租戶在自己的終端機裡做的事，host 歸屬也由那次登入
-# 決定（WOOW 預設用 Omnigent 的 admin 帳號登入三台 host）。
-#
-# 工作區沒有 running 的 Omnigent ⇒ 不注入（chart 預設 ""＝租戶可登入任何網址）。
-# helm_values 裡已經有非空的 ``omnigentHost.serverUrl``（管理員刻意設的，例如
-# 外部或公開網址）⇒ 尊重它、不覆寫。
+# - 只注入**網址**：金鑰（preauth key、LiteLLM virtual key、omnigent login）一律由租戶
+#   在提供者後台建好、自己貼進消費端；平台絕不跨服務傳秘密。
+# - **執行期設定**：消費端 chart 只把它 render 進不入 checksum 的 runtime ConfigMap
+#   （或 env from ConfigMap）、**不在** pod template 裡 ⇒ 網址出現、改變或消失都**不會**
+#   讓 pod 重啟，所以每條部署路徑（含 reset 密碼那條 ``helm upgrade --atomic --timeout
+#   15s``）都可以照常重算它，不會重演 F-461-2（pod template 變動 → 15 秒等不到新 pod
+#   → 回退斷線）。各 chart 的 render-contract 測試鎖住這一點。
+# - 工作區沒有 running 的提供者 ⇒ 不注入（不寫鍵，chart 預設補位）。
+# - helm_values 裡已經有非空值（管理員／seed，或白名單退回 allow-all 的 template 由
+#   租戶經 API 明確指定）⇒ 尊重它、不覆寫。注入結果只存在於組裝出的 values，從不寫回
+#   ``helm_values``。
+# - 沒有 fan-out：提供者晚開時，消費端要等自己下一次部署、儲存設定或 reset 才補上。
+# - 新增 value path 一律登記 ``scripts/audit/audit_411_reset_values.py``
+#   ``_INJECTOR_VALUE_PATHS``（``test_audit_411_classifier`` 以 AST 對帳本檔所有
+#   ``*_VALUE_PATHS`` 表）。
+
+# Omnigent BYO host：code-server／pi-agent／open-design 在主容器裡內建 omnigent host
+# （woow-paas-charts ``shared/omnigent-host`` 共用套件），標準 values 區塊
+# ``omnigentHost.serverUrl``。chart 把它放進 ``<name>-runtime`` ConfigMap（key
+# ``server-url``），以目錄掛進容器，kubelet 約一分鐘內就地換檔，supervisor 與
+# ``omnigent-host-status`` 每次用到時重讀（套件 README「Environment contract」）。
+# supervisor 拿它印 ``omnigent login <url>`` 提示，並在租戶還沒登入過時當備援；host
+# 實際連的永遠是租戶最後一次 ``omnigent login`` 的那個 server（WOOW 預設用 Omnigent
+# 的 admin 帳號登入三台 host）。
 _OMNIGENT_SERVER_URL_VALUE_PATHS = {
     'code-server': [('omnigentHost', 'serverUrl')],
     'pi-agent': [('omnigentHost', 'serverUrl')],
     'open-design': [('omnigentHost', 'serverUrl')],
 }
-# Omnigent 服務本身的 template slug 與 chart 名（chart 的 fullname helper 用
-# chart 名判斷 release 名是否已含 chart 名）。Service port 預設＝chart
-# values.yaml 的 ``service.port``。三者都對齊 woow-paas-charts charts/omnigent。
+# VPN 節點（woow-paas-charts charts/tailscale ≥ 0.1.2）：``tailscale.controlPlane=workspace``
+# 時登入這個網址（同工作區 Headscale 的控制埠 8080）。chart 把它放進
+# ``<fullname>-runtime`` ConfigMap，tailscaled 啟動時以 env ``TS_LOGIN_SERVER`` 讀入；
+# 其他模式不用它。preauth key 仍是租戶在 Headplane 建好貼進 ``tailscale.authKey``。
+# 舊 chart（0.1.1）不認得這個鍵，多寫無害。
+_WORKSPACE_HEADSCALE_URL_VALUE_PATHS = {
+    'tailscale': [('tailscale', 'workspaceHeadscaleUrl')],
+}
+# 同工作區 LiteLLM（AI 模型閘道）：四個 agent／IDE chart 的 ``llmGateway.baseUrl``
+# （進非 checksum 的 ConfigMap，env ``LITELLM_BASE_URL``；hermes-agent／open-design 只在
+# 這個值有設時對同 ns ``app.kubernetes.io/name=litellm``:4000 開 egress 洞），以及
+# mcp-litellm（mcp-server chart；範本之後才上）的 ``config.nonSensitive.connection.base_url``
+# （app 第一次啟動 seed-if-absent，只對新開通生效）。virtual key／master key 一律由租戶
+# 在 LiteLLM 後台建立後自己貼。網址後綴見 ``_LITELLM_BASE_URL_SUFFIXES``。
+_LITELLM_BASE_URL_VALUE_PATHS = {
+    'pi-agent': [('llmGateway', 'baseUrl')],
+    'code-server': [('llmGateway', 'baseUrl')],
+    'open-design': [('llmGateway', 'baseUrl')],
+    'hermes-agent': [('llmGateway', 'baseUrl')],
+    'mcp-litellm': [('config', 'nonSensitive', 'connection', 'base_url')],
+}
+# LiteLLM 的 OpenAI 相容 API 在 ``/v1``：``llmGateway.baseUrl`` 是 OpenAI SDK 慣例的
+# base_url ⇒ 帶 ``/v1``；mcp-litellm 的 ``connection.base_url`` 是 LiteLLM 管理 API 的根
+# （app 自己接 ``/model/info``、``/key/generate`` 等路徑）⇒ **不帶**。
+_LITELLM_BASE_URL_SUFFIXES = {
+    'pi-agent': '/v1',
+    'code-server': '/v1',
+    'open-design': '/v1',
+    'hermes-agent': '/v1',
+    'mcp-litellm': '',
+}
+
+# 提供者（被連的服務）：template slug → 怎麼鏡射它的入口 Service。
+#   label：log 用的名稱
+#   chart：chart 名（chart 的 fullname helper 用它判斷 release 名是否已含 chart 名）
+#   port_path／default_port：決定網址 port 的 helm values 路徑與 chart values.yaml 預設
+# 每一列對齊 woow-paas-charts ``charts/<chart>/templates/_helpers.tpl``（``<chart>.fullname``）
+# 與 ``values.yaml``（omnigent：``service.port`` 8000；headscale：入口 Service 的第二個埠
+# ``headscale.port`` 8080——第一個埠 ``service.port`` 3000 是 Headplane 網頁；litellm：
+# ``service.port`` 4000）。seed lockstep 由 ``test_workspace_service_url_injection`` 守線。
 _OMNIGENT_TEMPLATE_SLUG = 'omnigent'
 _OMNIGENT_CHART_NAME = 'omnigent'
 _OMNIGENT_DEFAULT_SERVICE_PORT = 8000
+_HEADSCALE_TEMPLATE_SLUG = 'headscale'
+_LITELLM_TEMPLATE_SLUG = 'litellm'
+_WORKSPACE_PROVIDERS = {
+    _OMNIGENT_TEMPLATE_SLUG: {
+        'label': 'Omnigent', 'chart': _OMNIGENT_CHART_NAME,
+        'port_path': ('service', 'port'), 'default_port': _OMNIGENT_DEFAULT_SERVICE_PORT,
+    },
+    _HEADSCALE_TEMPLATE_SLUG: {
+        'label': 'Headscale', 'chart': 'headscale',
+        'port_path': ('headscale', 'port'), 'default_port': 8080,
+    },
+    _LITELLM_TEMPLATE_SLUG: {
+        'label': 'LiteLLM', 'chart': 'litellm',
+        'port_path': ('service', 'port'), 'default_port': 4000,
+    },
+}
+# 組裝第 7 步依序跑的注入器：(消費端 value path 表, 提供者 slug, 每個消費端的網址後綴)。
+# 一個 chart 可以同時是好幾個注入器的消費端（例 code-server：Omnigent＋LiteLLM）。
+_WORKSPACE_URL_INJECTORS = (
+    (_OMNIGENT_SERVER_URL_VALUE_PATHS, _OMNIGENT_TEMPLATE_SLUG, {}),
+    (_WORKSPACE_HEADSCALE_URL_VALUE_PATHS, _HEADSCALE_TEMPLATE_SLUG, {}),
+    (_LITELLM_BASE_URL_VALUE_PATHS, _LITELLM_TEMPLATE_SLUG, _LITELLM_BASE_URL_SUFFIXES),
+)
+
 # open-design 的 ``networkPolicy.omnigentEgress`` 只對 Omnigent pod 的這個 port 開洞
 # （NetworkPolicy 比對的是 pod 的 containerPort＝Service 的 targetPort，不是
 # service.port）。Omnigent 的 targetPort 被改掉時，OD 會連不到注入的網址。
@@ -723,6 +971,12 @@ _OMNIGENT_EGRESS_PINNED_TARGET_PORT = 8000
 # 只有「Service 名＝``<release>-omnigent``、沒有 nameOverride」時兩邊才對得上。
 _OMNIGENT_EGRESS_SELECTOR_NAME = 'omnigent'
 _OMNIGENT_EGRESS_HOST_SUFFIX = '-omnigent'
+# hermes-agent／open-design 的 ``networkPolicy.litellmEgress``：pod selector
+# ``app.kubernetes.io/name=litellm``＋``component=app``、只開 pod port 4000（charts/litellm
+# 的 pod name 標籤＝``nameOverride``（預設 chart 名）、containerPort＝``service.targetPort``）。
+# 對不上時這兩個 chart 連不到注入的網址（pi-agent／code-server 的 egress 不受影響）。
+_LITELLM_EGRESS_SELECTOR_NAME = 'litellm'
+_LITELLM_EGRESS_PINNED_TARGET_PORT = 4000
 # k8s DNS label（RFC 1123）：release 名、namespace、Service 名都必須符合，
 # 否則不組網址（防止奇怪的 helm_values 把任意字串拼進 URL）。
 _DNS_LABEL_RE = re.compile(r'^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
@@ -757,6 +1011,43 @@ def _deep_merge(base, override):
         else:
             result[key] = value
     return result
+
+
+# #1417：逾時 detail 裡每類最多列幾顆 Pod、事件訊息最多留幾個字（error_message 會上畫面）。
+_UNREADY_PODS_LISTED = 3
+_UNREADY_EVENT_TEXT_LIMIT = 200
+
+
+def _describe_unready_pod(pod):
+    """detail 用的未就緒 Pod 摘要（#1417）：``name[phase ready waiting=… event=…]``。
+
+    ``waiting=<reason>``／``event=<reason>`` 是 `_TIMEOUT_HINTS` 比對的標記，來源是
+    operator 的 ``PodInfo.waiting``／``last_warning``；舊 operator 沒有這兩個 key ⇒ 只剩
+    名字、phase、ready（照舊可用，只是沒有具體原因）。
+    """
+    parts = [pod.get('phase') or 'Unknown', pod.get('ready') or '?']
+    waiting = pod.get('waiting') or {}
+    if waiting.get('reason'):
+        kind = 'init container' if waiting.get('init_container') else 'container'
+        parts.append('waiting=%s(%s %s)' % (
+            waiting['reason'], kind, waiting.get('container') or '?'))
+    event = pod.get('last_warning') or {}
+    if event.get('reason'):
+        message = ' '.join(str(event.get('message') or '').split())
+        if len(message) > _UNREADY_EVENT_TEXT_LIMIT:
+            message = message[:_UNREADY_EVENT_TEXT_LIMIT - 1] + '…'
+        parts.append('event=%s: %s' % (event['reason'], message) if message
+                     else 'event=%s' % event['reason'])
+    return '%s[%s]' % (pod.get('name') or '?', ' '.join(parts))
+
+
+def _describe_unready_pods(label, pods):
+    """``label: a[…], b[…] (+N more)``；沒有 Pod 回 None。"""
+    if not pods:
+        return None
+    listed = ', '.join(map(_describe_unready_pod, pods[:_UNREADY_PODS_LISTED]))
+    extra = len(pods) - _UNREADY_PODS_LISTED
+    return '%s: %s%s' % (label, listed, ' (+%d more)' % extra if extra > 0 else '')
 
 
 class CloudService(models.Model):
@@ -840,6 +1131,45 @@ class CloudService(models.Model):
     error_message = fields.Text(
         string='Error Message',
         help='Error details if deployment failed',
+    )
+    # #1416：目前這筆 error 是 #489 的部署逾時寫的——以及何時寫的。逾時只代表「等太久」，
+    # 不代表失敗；有值時背景 cron（`_cron_recover_timed_out_services`）會在時間窗內繼續
+    # 重查，release 就緒就照正常路徑推進。它描述的是「現在這則 error_message 的來源」：
+    # 改寫 error_message 或離開 error（停權除外）都會清掉它（`write()`），其他來源的
+    # error 因此永遠不會被這條自癒碰到。只有平台寫得進去（`_reject_timeout_recovery_control_writes`）。
+    transition_timeout_at = fields.Datetime(
+        string='Deployment Timed Out At',
+        copy=False,
+        readonly=True,
+        help='Set when the deployment age timeout turned this service into an error. '
+             'While set, a background job keeps checking the release for a limited '
+             'time and resumes the service as soon as it becomes ready.',
+    )
+    # #1431：服務第一次進 running 的時間。由 `write()`／`create()` 在 state 第一次變成
+    # running 時統一寫入（不逐路徑 stamp，pitfall reaped-since-single-path-stamp-gc-immunity），
+    # 之後不再改、也不會被清——`init_ready_*` 那類「本段 initializing」的觀測會被清掉，不能
+    # 拿來回答「曾經能用過嗎」。空值＝從未正常運作過：刪除時孤兒 PVC 只留 1 天（#1431）。
+    # 18.0.1.0.209 以前的服務由 migration 保守回填（見 `_woow_migrate_first_running_at_1431`）。
+    first_running_at = fields.Datetime(
+        string='First Running At',
+        copy=False,
+        readonly=True,
+        help='When the service reached the running state for the first time. Empty means '
+             'it never worked: its leftover disks are kept for only 1 day after deletion. '
+             'Services created before version 18.0.1.0.209 were backfilled conservatively.',
+    )
+    # #1424：operator 明確拒絕開通（#1348 工作區儲存配額、#1415 叢集儲存額度，回 409）、
+    # 服務也從沒 running 過時，平台自動取消它的訂閱，並在這裡記下拒絕的錯誤碼。有值的服務：
+    # lifecycle cron 不對它停權（叢集上沒有可停的東西，打 operator 只會 404、把說明蓋掉）；
+    # 訂閱雖已取消，租戶仍可刪除它（`_check_operation_allowed`）。只有平台寫得進去。
+    provision_rejected_code = fields.Char(
+        string='Provisioning Rejected',
+        copy=False,
+        readonly=True,
+        help='Error code with which the deployment service refused to create this service '
+             '(workspace storage quota or cluster storage capacity). The subscription of a '
+             'service that never ran was cancelled automatically at that moment, so it is '
+             'never charged; the service can still be deleted.',
     )
 
     # VM 型服務的開通進度（#423 W5a，design §7.4）。
@@ -1028,17 +1358,19 @@ class CloudService(models.Model):
     )
 
     # Network
-    # 對外 MQTT 位址（charts/emqx 的 tunnel agent 廣告的那一個）。由背景 poll 經
-    # `_release_facts` 回寫——**唯讀帳本欄位**，不是設定：租戶要改位址是去改
-    # helm values 的 ngrok 設定，不是改這裡。
-    # 空值是正常狀態（商品沒這個能力、租戶沒開對外 MQTT、agent 還沒連上）。
-    mqtt_public_url = fields.Char(
-        string='Public MQTT Address',
+    # 對外位址（chart 的 ngrok sidecar 廣告的那一個：EMQX 的 tcp://、Headscale 的
+    # https://）。由背景 poll 經 `_release_facts` 回寫——**唯讀帳本欄位**，不是設定：
+    # 租戶要改位址是去改 helm values 的 ngrok 設定，不是改這裡。
+    # 空值是正常狀態（商品沒這個能力、租戶沒開、agent 還沒連上、sidecar 撤回）。
+    # 18.0.1.0.205 以前叫 mqtt_public_url；改名後的值搬移見 `init()`。
+    public_tunnel_url = fields.Char(
+        string='Public Tunnel Address',
         readonly=True,
         copy=False,
-        help='The tcp://host:port the chart\'s tunnel agent currently advertises, '
-             'read back from its container log by the background poll. Empty when '
-             'the product has no such address or the agent has not connected.',
+        help='The tcp://host:port or https://host the chart\'s ngrok sidecar currently '
+             'advertises, read back from its container log by the background poll. '
+             'Empty when the product has no such address or the agent has not '
+             'connected.',
     )
     subdomain = fields.Char(
         string='Subdomain',
@@ -1249,6 +1581,23 @@ class CloudService(models.Model):
         string='Last Upgraded At',
         help='Timestamp of the most recent upgrade',
     )
+    # #1408：Redeploy 之後「實際跑的」是否等於範本預期——helm upgrade 成功不代表
+    # workload 換到了新 image（pi-agent 就是 chart 升了、image 沒動）。pending 在
+    # Redeploy 成功時設起，服務下一次就緒時由 poll 核對並清掉；結果寫進 message。
+    redeploy_verify_pending = fields.Boolean(
+        string='Redeploy Verification Pending',
+        default=False,
+        copy=False,
+        groups='base.group_system',
+    )
+    redeploy_check_message = fields.Text(
+        string='Redeploy Check',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='Result of comparing the running workload with the product template '
+             'after the last redeploy (chart version and images). Empty when they match.',
+    )
 
     # Odoo Addons
     odoo_addon_ids = fields.Many2many(
@@ -1299,6 +1648,46 @@ class CloudService(models.Model):
             ON woow_paas_platform_cloud_service (subscription_id)
             WHERE subscription_id IS NOT NULL
         """)
+        self._carry_over_legacy_tunnel_url()
+
+    def _carry_over_legacy_tunnel_url(self):
+        """P1：帳本欄位改名 mqtt_public_url → public_tunnel_url，把舊值搬過來。
+
+        為什麼在 ``init()`` 而不是 migration：migration 要 bump manifest 版號（規則 B），
+        會和並行的發版 PR 搶號；``init()`` 每次 install／``-u`` 都跑，而且跑在
+        ``_auto_init`` 建好新欄位之後、``ir.model.data._process_end`` 清掉已移除欄位
+        （連同舊 column）之前——正好是舊值還在、新欄位已在的那一刻。
+
+        不搬的後果：EMQX 服務的對外位址在升級後消失，直到每日對帳 cron 重新探到
+        （最多一天），租戶看到「還沒取得位址」。
+
+        冪等：搬完把舊 column 清成 NULL。舊 column 若沒被 Odoo 刪掉，下次 ``-u`` 也
+        不會把一個已經撤回（public_tunnel_url 清空）的舊位址又搬回來。column 不存在
+        （全新安裝、或已被刪）就什麼都不做。
+        """
+        cr = self.env.cr
+        if not column_exists(cr, self._table, 'mqtt_public_url'):
+            return
+        cr.execute(SQL(
+            """
+            UPDATE %(table)s
+               SET public_tunnel_url = mqtt_public_url
+             WHERE public_tunnel_url IS NULL
+               AND mqtt_public_url IS NOT NULL
+               AND mqtt_public_url <> ''
+            """,
+            table=SQL.identifier(self._table),
+        ))
+        moved = cr.rowcount
+        cr.execute(SQL(
+            "UPDATE %(table)s SET mqtt_public_url = NULL WHERE mqtt_public_url IS NOT NULL",
+            table=SQL.identifier(self._table),
+        ))
+        if moved:
+            _logger.info(
+                'P1: carried %s public tunnel address(es) over from mqtt_public_url',
+                moved,
+            )
 
     # ------------------------------------------------------------------ #
     #  Actions                                                            #
@@ -1432,6 +1821,9 @@ class CloudService(models.Model):
             # #552 層 4：沒釘版就拒絕（理由見 helper）。這條路只有 `action_redeploy`
             # 的 group_system gate（#1185；在那之前連租戶都能經 `call_kw` 打到這裡）。
             self._redeploy_require_pinned_version()
+            # #1408：範本改釘的 image 寫回服務自己的 helm_values（之後租戶儲存設定
+            # 也沿用同一組）。upgrade 失敗時 UserError 讓整筆交易回捲，這次寫入一起撤銷。
+            image_changes = self._refresh_template_images()
             values = self._assemble_deploy_values()['values']
             # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
             sensitive_values = self._build_deploy_sensitive_values()
@@ -1479,7 +1871,16 @@ class CloudService(models.Model):
                     release_info.get('chart_version') or self.helm_chart_version
                 ),
                 'last_upgraded_at': fields.Datetime.now(),
+                # #1408：就緒後由 poll 核對 image；chart 版本當場就能核對。
+                'redeploy_verify_pending': True,
+                'redeploy_check_message': self._redeploy_chart_check_message(
+                    release_info.get('chart_version')),
             })
+            if image_changes:
+                _logger.info(
+                    "Redeploy of service id=%s refreshed template images: %s",
+                    self.id, image_changes,
+                )
             # #1257 Q24：人工 redeploy 開新的一代（計數歸零、欠 init）。
             self._open_init_generation()
             # #482: upgrade 用 chart 預設把 replicas 渲染回去了，收回停機。
@@ -1522,6 +1923,78 @@ class CloudService(models.Model):
             if cron:
                 cron._trigger()
 
+        return True
+
+    # #1432 — 租戶「重新啟動」
+    # ------------------------------------------------------------------ #
+
+    def _restart_workloads(self):
+        """#1432：rollout restart 這台服務的所有 Deployment／StatefulSet。
+
+        R8：所有範本都沒有租戶可用的重新啟動入口；HA 網頁卡死（tcpSocket liveness
+        偵測不到）時只能找客服，其他服務只能靠「用原密碼重存帳密」之類的繞路。
+
+        - **private**（``_`` 開頭）：授權（workspace owner／admin、訂閱閘）只在
+          controller，``get_public_method`` 擋 RPC 直呼（同 #357 C05、#1185）。
+        - 只接受 ``running``：``upgrading`` 中再重啟會與進行中的 helm／rollout 互踩；
+          ``error`` 的成因（helm 失敗、init 額度用完）重啟救不了，出口是修改配置或
+          回復版本；``suspended`` 是停權（訂閱閘已擋，這裡是第二道）。
+        - VM 型（HAOS）不支援：KubeVirt 沒有 rollout 語意，硬關機重開不是同一種操作。
+        - 列鎖序列化：與 reset 同一招，第二個請求等第一個提交後會看到 ``upgrading``。
+        - 成功後轉 ``upgrading``＋``last_upgraded_at``（#489 的時間錨），poll 在 Pod
+          就緒後轉回 ``running``；前端同時鎖住其他操作。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+        )
+
+        if self._needs_vm_status():
+            raise UserError(_("This type of service cannot be restarted from the platform."))
+
+        self.env.cr.execute(
+            "SELECT id FROM woow_paas_platform_cloud_service WHERE id = %s FOR UPDATE",
+            [self.id],
+        )
+        self.invalidate_recordset()
+        if self.state == 'upgrading':
+            raise UserError(
+                _("Service is finishing an update (usually under a minute). "
+                  "Please wait and try again.")
+            )
+        if self.state != 'running':
+            raise UserError(_("Only a running service can be restarted."))
+        if not (self.helm_release_name and self.helm_namespace):
+            raise UserError(
+                _("Service has no helm release yet — deploy first before restarting it.")
+            )
+        if self._init_lease_active():
+            raise UserError(
+                _("An initialization request for this service may still be running. "
+                  "Please try again in a few minutes.")
+            )
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
+        try:
+            client.restart_release(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+            )
+        except PaaSOperatorError as e:
+            _logger.error(
+                "restart failed for service %s (id=%s): %s",
+                self.name, self.id, e.detail or e.message,
+            )
+            raise UserError(_("Restart failed. Check service status and retry.")) from e
+
+        self.write({
+            'state': 'upgrading',
+            'error_message': False,
+            'last_upgraded_at': fields.Datetime.now(),
+        })
         return True
 
     # #357 — admin_password 重置
@@ -1874,9 +2347,12 @@ class CloudService(models.Model):
             'admin_missing': _(
                 "The administrator account could not be found in this service, so the "
                 "password was not changed. Please contact support."),
+            # 只有 Odoo 會回這個碼；封存可由租戶自己的其他管理員解（#1186 驗收文案）。
             'admin_inactive': _(
                 "The administrator account of this service has been archived, so the "
-                "password was not changed. Please contact support."),
+                "password was not changed. Ask another administrator in Odoo to "
+                "reactivate it, then reset again; if there is none, please open a "
+                "support ticket."),
             'owner_ambiguous': _(
                 "This service has more than one owner account, so the password was not "
                 "changed. Please contact support."),
@@ -2149,6 +2625,7 @@ class CloudService(models.Model):
             cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
                 self.workspace_id,
             )
+            eph_request, eph_limit = self._compute_ns_ephemeral_quota(self.workspace_id)
             try:
                 client.create_namespace(
                     namespace=helm_namespace,
@@ -2156,6 +2633,8 @@ class CloudService(models.Model):
                     memory_limit=memory_limit,
                     storage_limit=storage_limit,
                     workspace_id=self.workspace_id.id or None,
+                    ephemeral_storage_request=eph_request,
+                    ephemeral_storage_limit=eph_limit,
                 )
             except PaaSOperatorError as e:
                 if e.status_code != 409:
@@ -2245,16 +2724,27 @@ class CloudService(models.Model):
 
         except PaaSOperatorError as e:
             _logger.error("Operator error: %s", e)
-            quota_message = self._storage_quota_error_message(e.detail)
+            # #1424：operator 明確拒絕開通 ⇒ 先取消訂閱（不扣款），訊息才說得準。
+            rejection = self._cancel_subscription_on_provision_rejection(e.detail)
+            quota_message = (
+                self._storage_quota_error_message(e.detail, rejection=rejection)
+                # #1415：叢集儲存排程額度不足（operator 在 helm install 前擋下）。
+                or self._cluster_storage_capacity_error_message(e.detail, rejection=rejection)
+            )
             self.write({
                 'state': 'error',
                 'error_message': quota_message or _(
                     'Deployment failed: %(detail)s',
                     detail=e.detail or e.message),
             })
+            self._alert_cluster_storage_capacity_rejection(e.detail)
 
-    def _storage_quota_error_message(self, detail):
+    def _storage_quota_error_message(self, detail, rejection=None):
         """#1348：operator 回「工作區儲存配額已滿」時，給租戶看得懂的訊息；其他錯誤回 ``None``。
+
+        ``rejection``（#1424）：``_cancel_subscription_on_provision_rejection`` 的結果。訂閱真的
+        被自動取消時（``cancelled``），訊息改成說明「訂閱已取消、不會扣款，請刪除這個服務」；
+        沒有訂閱可取消時照舊。
 
         operator（``extra/paas-operator/src/services/storage_quota.py``）在 helm install
         前檢查 namespace ResourceQuota 的 PVC 數量／requests.storage，用滿時回 409、
@@ -2295,9 +2785,168 @@ class CloudService(models.Model):
                 tz = pytz.timezone(self.sudo().create_uid.tz or 'Asia/Taipei')
                 when = datetime.fromtimestamp(release_epoch, tz).strftime('%Y-%m-%d')
                 parts.append(env._('The earliest of them is released on %(date)s.', date=when))
-        parts.append(env._(
-            'Contact support to release it early, or deploy this service in another workspace.'))
+        if rejection and rejection.get('cancelled'):
+            # #1424：訂閱已自動取消；下一步是刪掉這個服務，再到有空間的地方重開。
+            parts.append(self._provision_rejection_billing_note(env, rejection))
+            parts.append(env._(
+                'Please delete this service, then contact support to release the storage '
+                'early, or deploy it again in another workspace.'))
+        else:
+            parts.append(env._(
+                'Contact support to release it early, or deploy this service in another '
+                'workspace.'))
         return ' '.join(parts)
+
+    def _cluster_storage_capacity_error_message(self, detail, rejection=None):
+        """#1415：operator 回「叢集儲存排程額度不足」時給租戶的訊息；其他錯誤回 ``None``。
+
+        operator（``extra/paas-operator/src/services/storage_capacity.py``）在 helm install
+        前用同一份 chart／values 渲染出這次要建的磁碟，照 Longhorn 的排程規則模擬放置；
+        確定排不下時回 409、``detail.error_code == CLUSTER_STORAGE_CAPACITY_ERROR_CODE``，
+        **什麼都沒建**。原本這種情況 PVC 建了排不上，pod 卡 Init 30 分鐘後逾時（#1415）。
+
+        訊息寫給租戶：這是平台的儲存空間問題、不是他的設定錯；沒有建立任何資源；系統管理員
+        已收到通知（``_alert_cluster_storage_capacity_rejection``）。租戶能做的只有刪除後
+        稍後重開、或聯絡客服。訂閱的說法對照實際行為：#1424 起從未 running 過的服務在這裡
+        已被自動取消訂閱（``rejection``）——說「已取消、不會扣款」；沒有自動取消的（曾經 running
+        過、平台代管的服務）維持舊說法：刪除服務會取消訂閱（``_settle_on_entity_delete``），
+        試用期內不扣款，已扣的點數依未使用天數退回。語言同 #1348：以服務建立者的語言組字串。
+        """
+        self.ensure_one()
+        if (not isinstance(detail, dict)
+                or detail.get('error_code') != CLUSTER_STORAGE_CAPACITY_ERROR_CODE):
+            return None
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        # operator 的 "80Gi"／"77.2Gi" → 租戶看得懂的 "80 GiB"。
+        sizes = [
+            str(v['size'])[:-2] + ' GiB' if str(v['size']).endswith('Gi') else str(v['size'])
+            for v in detail.get('unschedulable') or []
+            if isinstance(v, dict) and v.get('size')
+        ]
+        if sizes:
+            parts = [env._(
+                'The platform is temporarily short of storage space and cannot create the '
+                'disk this service needs (%(size)s).', size=', '.join(sizes))]
+        else:
+            parts = [env._(
+                'The platform is temporarily short of storage space and cannot create the '
+                'disks this service needs.')]
+        parts.append(env._(
+            'Nothing was created for this deployment, and the platform administrators have '
+            'been notified.'))
+        cancelled = bool(rejection and rejection.get('cancelled'))
+        if cancelled:
+            parts.append(self._provision_rejection_billing_note(env, rejection))
+        parts.append(env._(
+            'Please delete this service and deploy it again later, or contact support.'))
+        if not cancelled and self.sudo().subscription_id:
+            parts.append(env._(
+                'Deleting it also cancels its subscription: nothing is charged during the '
+                'trial, and points already paid are refunded for the unused days.'))
+        return ' '.join(parts)
+
+    @staticmethod
+    def _provision_rejection_billing_note(env, rejection):
+        """#1424：訂閱已自動取消時，給租戶的計費說明（以呼叫端組好的建立者語言 env）。"""
+        if rejection.get('credited'):
+            return env._(
+                'Its subscription has been cancelled automatically, so it will not be charged '
+                'again; the points already paid have been refunded to your wallet for the '
+                'unused days.')
+        return env._(
+            'Its subscription has been cancelled automatically, so it will not be charged.')
+
+    def _is_tenant_managed(self):
+        """#1424：這台服務的生命週期是不是租戶自己在 /woow 管的。
+
+        平台代開的「每帳號一台」服務（``provision_partner_id``，例如 HA PaaS）與隱藏實例的
+        商品（``template_id.conceal_instances``）不是：租戶在 /woow 看不到、也刪不了它們，
+        HA App 還會在 error 時原地重試開通（error → pending）。對它們自動取消訂閱或寄「請刪除
+        這個服務」的提醒都沒有意義——取消後重試成功的服務反而會被 lifecycle cron 停權。
+        """
+        self.ensure_one()
+        svc = self.sudo()
+        return not svc.provision_partner_id and not svc.template_id.conceal_instances
+
+    def _cancel_subscription_on_provision_rejection(self, detail):
+        """#1424：operator 明確拒絕開通時，取消這台服務的訂閱（不扣款）；不適用回 ``None``。
+
+        只在三個條件同時成立時動手：
+
+        1. 錯誤碼是 ``PROVISION_REJECTION_ERROR_CODES``（#1348 工作區儲存配額、#1415 叢集儲存
+           額度，operator 回 409）——operator 確定開不起來、服務沒有建立；
+        2. 服務從未 running 過（``first_running_at`` 空）——曾經能用的服務不在這裡取消；
+        3. 租戶自己管的服務（``_is_tenant_managed``）。
+
+        取消走 ``_settle_on_entity_delete``（與刪除服務同一個結算點）：試用期內什麼都不扣、
+        也沒有東西可退；已付費的方案依未使用天數退回錢包（剛下單就被拒＝整期退回）。同時記下
+        ``provision_rejected_code``，讓 lifecycle cron 不去停權、讓租戶仍能刪除這台服務。
+
+        取消與記錄在同一個 savepoint：任一步失敗就整組不生效（訂閱照舊、回 ``None``，訊息
+        退回舊說法），開通失敗本身照常寫 error——這裡只是記帳，不能讓它把 error 的落地
+        一起拖垮。``OperationalError`` 一律外拋（post-commit-bookkeeping-rollback-unit 規則一）。
+
+        回傳 ``{'code', 'cancelled', 'credited'}``；``cancelled`` 為 False 表示沒有可取消的
+        進行中訂閱（沒有訂閱、或早已不是 in_progress），仍會記下拒絕碼。
+        """
+        self.ensure_one()
+        code = detail.get('error_code') if isinstance(detail, dict) else None
+        if code not in PROVISION_REJECTION_ERROR_CODES:
+            return None
+        if self.first_running_at or not self._is_tenant_managed():
+            return None
+        sub = self.sudo().subscription_id
+        try:
+            with self.env.cr.savepoint():
+                credited = 0.0
+                cancelled = False
+                if sub and sub.state == 'in_progress':
+                    credited = sub._settle_on_entity_delete(
+                        reason='Provisioning rejected (%s)' % code)
+                    cancelled = True
+                self.sudo().write({'provision_rejected_code': code})
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[#1424] could not cancel the subscription of service %s (id=%s) after the "
+                "operator refused provisioning (%s); the subscription is left untouched",
+                self.name, self.id, code)
+            return None
+        _logger.info(
+            "[#1424] operator refused provisioning service %s (id=%s, %s): subscription %s "
+            "cancelled=%s credited=%s", self.name, self.id, code,
+            sub.id if sub else None, cancelled, credited)
+        return {'code': code, 'cancelled': cancelled, 'credited': credited}
+
+    def _provision_rejected_nothing_created(self):
+        """#1424：operator 拒絕開通後一直停在 error、從沒跑起來的服務（沒有可停權的東西）。"""
+        self.ensure_one()
+        return bool(
+            self.provision_rejected_code and not self.first_running_at
+            and self.state == 'error')
+
+    def _check_operation_allowed(self, operation='write'):
+        """#1424：訂閱因為開通被拒而自動取消的服務，租戶仍要能刪除它。
+
+        mixin 的訂閱閘對已取消的訂閱一律拒絕（「訂閱已到期、服務已停權，請續約」）——對
+        這種服務，錯誤訊息正叫租戶「請刪除這個服務」，擋下刪除就是死路。只放行
+        ``operation='delete'``（controller 的刪除分支傳這個值），更新／rollback 照舊擋。
+        """
+        self.ensure_one()
+        if operation == 'delete' and self._provision_rejected_nothing_created():
+            return
+        return super()._check_operation_allowed(operation=operation)
+
+    def _alert_cluster_storage_capacity_rejection(self, detail):
+        """#1415：開通被叢集儲存額度擋下時，告警給系統管理員（一台一行，同 summary 未處理前追加）。"""
+        self.ensure_one()
+        if (not isinstance(detail, dict)
+                or detail.get('error_code') != CLUSTER_STORAGE_CAPACITY_ERROR_CODE):
+            return
+        self.env['woow_paas_platform.platform_monitor']._report_storage_capacity_rejection(
+            self, detail)
 
     # ------------------------------------------------------------------ #
     #  #411 — 全量 values 組裝（單一真相源）                              #
@@ -2327,9 +2976,14 @@ class CloudService(models.Model):
         5. dashboard_public_url injector（hermes-agent MCP OAuth 回呼，#424①）
            ＋ n8n 公開網址（main.config.WEBHOOK_URL／N8N_EDITOR_BASE_URL，#1334 附帶）
         6. apiserver_cidrs injector（open-design／hermes-agent console egress，#404）
-        7. omnigent_server_url injector（code-server／pi-agent／open-design 主容器內的
-           omnigent host：同工作區 running Omnigent 的叢集內網址，只有網址；chart 放進
-           不入 checksum 的 runtime ConfigMap，不會讓 pod 重啟；已有明確值就不覆寫）
+        7. workspace_service_url injectors（同工作區 running 提供者的叢集內網址，只有網址；
+           chart 放進不入 checksum 的 runtime ConfigMap，不會讓 pod 重啟；已有明確值就
+           不覆寫）：Omnigent → code-server／pi-agent／open-design 的
+           ``omnigentHost.serverUrl``；Headscale → tailscale 的
+           ``tailscale.workspaceHeadscaleUrl``；LiteLLM → pi-agent／code-server／
+           open-design／hermes-agent 的 ``llmGateway.baseUrl``（帶 /v1）與 mcp-litellm 的
+           ``config.nonSensitive.connection.base_url``（不帶）。見
+           ``_WORKSPACE_URL_INJECTORS``。
         8. odoo addon selection（initContainer + addons_path）
 
         **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，
@@ -2406,26 +3060,14 @@ class CloudService(models.Model):
                 values, template.slug, apiserver_cidrs,
             )
 
-        # Inject the same-workspace Omnigent's in-cluster URL for charts that
-        # run the omnigent host inside their main container (code-server /
-        # pi-agent / open-design). URL only — never a token. Runtime config
-        # only: the charts put it in a ConfigMap outside the pod checksum, so a
-        # new/changed/removed URL never restarts the pod (safe on the 15 s
-        # reset path too). An explicit non-empty value in helm_values wins.
-        # No-op when the workspace has no running Omnigent or the chart has no
-        # such value path.
-        if template.slug in _OMNIGENT_SERVER_URL_VALUE_PATHS:
-            if self._explicit_omnigent_server_url(values, template.slug):
-                _logger.info(
-                    "Service id=%s keeps its explicit omnigentHost.serverUrl; "
-                    "skip same-workspace Omnigent URL injection", self.id,
-                )
-            else:
-                omnigent_url = self._workspace_omnigent_url()
-                if omnigent_url:
-                    values = self._inject_omnigent_server_url(
-                        values, template.slug, omnigent_url,
-                    )
+        # Inject same-workspace service URLs (Omnigent → omnigent host,
+        # Headscale → tailscale control plane, LiteLLM → LLM gateway base URL).
+        # URL only — never a token / key. Runtime config only: the charts put
+        # it in a ConfigMap outside the pod checksum, so a new/changed/removed
+        # URL never restarts the pod (safe on the 15 s reset path too). An
+        # explicit non-empty value in helm_values wins. No-op when the
+        # workspace has no running provider or the chart has no such path.
+        values = self._inject_workspace_service_urls(values, template.slug)
 
         # #423 W5a：VM 型的 runStrategy 必須與服務狀態同源。
         #
@@ -3009,18 +3651,21 @@ class CloudService(models.Model):
             d[path[-1]] = list(cidrs)
         return values
 
-    @staticmethod
-    def _explicit_omnigent_server_url(values, template_slug):
-        """helm_values 裡已經有的非空 ``omnigentHost.serverUrl``（沒有回 ''）。
+    # ------------------------------------------------------------------ #
+    #  同工作區服務網址注入（組裝第 7 步；常數與規則見 _WORKSPACE_URL_INJECTORS） #
+    # ------------------------------------------------------------------ #
 
-        這個值只可能是**刻意**設的：注入結果只存在於組裝出的 values、從不寫回
-        ``helm_values``（``_assemble_deploy_values`` 唯讀），設定頁也沒有這個欄位。
-        所以非空＝管理員、seed，或（helm_value_specs 為空清單、白名單退回 allow-all
-        的 template，例 pi-agent）租戶自己經 API 明確指定（例如外部／公開 https
-        網址），平台不覆寫；空字串視同沒設。它只影響那台服務自己的登入提示與
-        備援，不會讓別的服務或別的工作區受影響。
+    @staticmethod
+    def _explicit_value_at_paths(values, paths):
+        """``paths`` 裡第一個非空白字串值（沒有回 ''）。
+
+        注入結果只存在於組裝出的 values、從不寫回 ``helm_values``
+        （``_assemble_deploy_values`` 唯讀），設定頁也沒有這些欄位（不在
+        helm_value_specs）。所以非空＝管理員、seed，或（helm_value_specs 為空清單、
+        白名單退回 allow-all 的 template，例 pi-agent）租戶自己經 API 明確指定，
+        平台不覆寫；空字串、純空白、``None`` 視同沒設。
         """
-        for path in _OMNIGENT_SERVER_URL_VALUE_PATHS.get(template_slug) or ():
+        for path in paths or ():
             d = values
             for key in path:
                 d = d.get(key) if isinstance(d, dict) else None
@@ -3029,47 +3674,79 @@ class CloudService(models.Model):
         return ''
 
     @staticmethod
-    def _inject_omnigent_server_url(values, template_slug, server_url):
-        """把同工作區 Omnigent 的叢集內網址注入 ``omnigentHost.serverUrl``。
+    def _inject_value_at_paths(values, paths, value):
+        """把 ``value`` 寫進 ``values`` 的每一條 ``paths``（就地修改並回傳）。
 
-        code-server／pi-agent／open-design 的 chart 都在主容器裡跑 omnigent host
-        （woow-paas-charts ``shared/omnigent-host`` 共用套件，跑在同一個主容器裡），它把
-        這個網址用在登入提示（``omnigent login <url>``）、狀態訊息，以及租戶還沒
-        登入過時的備援；chart 自己學不到同工作區有沒有 Omnigent、release 叫什麼，
-        所以和 ``_inject_allowed_origins`` 同一 family，由平台補上。
-
-        **執行期設定**：chart 只把它放進不入 checksum 的 runtime ConfigMap，網址
-        變動不會讓 pod 重啟（見 ``_OMNIGENT_SERVER_URL_VALUE_PATHS`` 的說明）。
-
-        ⚠ 只注入網址，**絕不**注入 token／密碼：Omnigent 是 accounts 模式，host 的
-        擁有者＝在終端機裡 ``omnigent login`` 的那個帳號，平台不代登入。
-
-        無此 value path 的 chart、網址為空、或已有明確（非空）值一律 no-op。
-
-        Args:
-            values: Helm values dict（就地修改並回傳）
-            template_slug: Template identifier（例 'code-server'）
-            server_url: 例 "http://svc-xxxx-omnigent.paas-ws-xxxx.svc.cluster.local:8000"
-
-        Returns:
-            Modified values dict
+        中間層不存在就建；是 ``None`` 或被誤設成非 dict（例 ``omnigentHost: null``）
+        時換成新 dict，免得 ``setdefault`` 拋 TypeError 讓整個部署失敗。
         """
-        paths = _OMNIGENT_SERVER_URL_VALUE_PATHS.get(template_slug)
-        if not paths or not server_url:
-            return values
-        if CloudService._explicit_omnigent_server_url(values, template_slug):
-            return values
-        for path in paths:
+        for path in paths or ():
             d = values
             for key in path[:-1]:
                 nxt = d.get(key)
                 if not isinstance(nxt, dict):
-                    # ``omnigentHost: null``（或被誤設成非 dict）時不能
-                    # setdefault —— 換成新 dict，免得 TypeError 讓整個部署失敗。
                     nxt = {}
                     d[key] = nxt
                 d = nxt
-            d[path[-1]] = server_url
+            d[path[-1]] = value
+        return values
+
+    @staticmethod
+    def _inject_workspace_service_url(values, template_slug, provider_slug, provider_url):
+        """把提供者（``provider_slug``）的叢集內網址注入消費端（``template_slug``）。
+
+        依 ``_WORKSPACE_URL_INJECTORS`` 找出這個提供者在這個 chart 的 value path，
+        網址後面接上該消費端的後綴（LiteLLM 的 ``llmGateway.baseUrl`` 帶 ``/v1``）。
+        沒有這條 value path 的 chart、網址為空、或已有明確（非空）值一律 no-op。
+
+        ⚠ 只注入網址，**絕不**注入 token／密碼。
+
+        Args:
+            values: Helm values dict（就地修改並回傳）
+            template_slug: 消費端 template slug（例 'tailscale'）
+            provider_slug: 提供者 template slug（'omnigent'／'headscale'／'litellm'）
+            provider_url: 例 "http://svc-xxxx-headscale.paas-ws-xxxx.svc.cluster.local:8080"
+
+        Returns:
+            Modified values dict
+        """
+        if not provider_url:
+            return values
+        for path_table, provider, suffixes in _WORKSPACE_URL_INJECTORS:
+            if provider != provider_slug:
+                continue
+            paths = path_table.get(template_slug)
+            if not paths or CloudService._explicit_value_at_paths(values, paths):
+                continue
+            values = CloudService._inject_value_at_paths(
+                values, paths, provider_url + suffixes.get(template_slug, ''),
+            )
+        return values
+
+    def _inject_workspace_service_urls(self, values, template_slug):
+        """組裝第 7 步：依序跑每個同工作區網址注入器（見 ``_WORKSPACE_URL_INJECTORS``）。
+
+        每個注入器：本 chart 不是它的消費端 → 跳過；helm_values 已有明確值 → 記 info、
+        不覆寫（log 不帶值：管理員可能帶了 userinfo）；否則查同工作區最早建立的 running
+        提供者（``_workspace_provider_url``），有網址才注入。唯讀、不寫 DB。
+        """
+        self.ensure_one()
+        for path_table, provider_slug, _suffixes in _WORKSPACE_URL_INJECTORS:
+            paths = path_table.get(template_slug)
+            if not paths:
+                continue
+            if self._explicit_value_at_paths(values, paths):
+                _logger.info(
+                    "Service id=%s keeps its explicit %s; skip same-workspace "
+                    "%s URL injection", self.id, '.'.join(paths[0]),
+                    _WORKSPACE_PROVIDERS[provider_slug]['label'],
+                )
+                continue
+            provider_url = self._workspace_provider_url(provider_slug)
+            if provider_url:
+                values = self._inject_workspace_service_url(
+                    values, template_slug, provider_slug, provider_url,
+                )
         return values
 
     @staticmethod
@@ -3080,61 +3757,39 @@ class CloudService(models.Model):
             name = name[:-1]
         return name
 
-    def _omnigent_internal_url(self):
-        """本筆（Omnigent 服務）在叢集內的網址；組不出來回 ''。
+    def _provider_endpoint(self, provider_slug):
+        """本筆（提供者服務）的入口 Service：``{service, namespace, port, release, values}``；
+        組不出來回 ``None``（已記 warning）。
 
-        鏡射 woow-paas-charts ``charts/omnigent/templates/_helpers.tpl`` 的
-        ``omnigent.fullname``（入口 Service 名）：
+        鏡射 woow-paas-charts ``charts/<chart>/templates/_helpers.tpl`` 的
+        ``<chart>.fullname``（入口 Service 名）：
 
         - ``fullnameOverride`` 有值 → 用它；
-        - 否則 name＝``nameOverride`` 或 chart 名 ``omnigent``；release 名已含
-          name → 用 release 名，不然 ``<release>-<name>``；
+        - 否則 name＝``nameOverride`` 或 chart 名；release 名已含 name → 用 release 名，
+          不然 ``<release>-<name>``；
         - 都經 ``trunc 63 | trimSuffix "-"``。
 
-        Port＝``service.port``（chart 預設 8000）。值都讀自本筆的 helm_values
-        （template 預設＋user config，create 時已 merge），所以 seed 若覆寫了
-        名稱或 port，這裡會跟著變。
-
-        網址形如 ``http://<service>.<namespace>.svc.cluster.local:<port>``，叢集內
-        走 http（流量留在 pod 網路裡，但跨節點時以明文經 flannel／vxlan，租戶的
-        Omnigent 帳密在 ``omnigent login`` 時也走這條；想避開可改用公開 https 網址
-        登入，host 會照租戶登入的網址連）。
-
-        ⚠ **連不連得到由各 chart 自己的 egress 規則決定，平台不保證**：租戶
-        namespace 的 baseline NetworkPolicy（``paas-baseline-allow-same-ns``）只管
-        **Ingress**。code-server 靠 ``networkPolicy.sameNamespaceEgress``（或
-        ``allowAllEgress``）、pi-agent 靠 ``allowAllEgress``；open-design 的 internet
-        egress 排除 10.0.0.0/8，要靠 ``networkPolicy.omnigentEgress`` 開洞，而那條
-        規則同時取決於 **port 與 pod selector**：
-
-        - port：只開 Omnigent pod 的 targetPort 8000——``service.targetPort`` 不是
-          8000 時 OD 連不到；
-        - selector：``app.kubernetes.io/name=omnigent``＋``component=server``，網址
-          主機是 ``<X>-omnigent`` 形態時再釘 ``app.kubernetes.io/instance=<X>``。
-          Omnigent pod 的 instance 是 release 名、name 是 ``nameOverride``（預設
-          ``omnigent``），所以 release 名本來就含 ``omnigent``（例 ``my-omnigent``，
-          Service 名照 chart 用 release 名原樣 ⇒ OD 釘成 instance=``my``）、
-          ``fullnameOverride`` 成 ``<X>-omnigent`` 而 X 不是 release 名、或設了
-          ``nameOverride`` 時，selector 對不上 pod，OD 一樣連不到
-          （``_omnigent_matches_od_egress_selector``）。
-
-        兩種情形平台都照常注入（code-server／pi-agent 不受影響），只記 warning；
-        OD 那台只能改用公開網址登入，或由 chart 端放寬 selector。正式站的 release
-        都是 ``svc-xxxxxxxx``、沒有 override，兩條都不會觸發。
+        Port＝``_WORKSPACE_PROVIDERS[slug]['port_path']``（缺省用 chart 預設）。值都讀自
+        本筆的 helm_values（template 預設＋user config，create 時已 merge），所以 seed
+        若覆寫了名稱或 port，這裡會跟著變。Service 名與 namespace 都必須是 DNS label、
+        port 必須是 1–65535 的整數，否則不組網址（防止奇怪的 helm_values 把任意字串拼進
+        URL）。
         """
         self.ensure_one()
+        provider = _WORKSPACE_PROVIDERS[provider_slug]
+        label = provider['label']
         release = self.helm_release_name or ''
         namespace = self.helm_namespace or ''
         if not release or not namespace:
-            return ''
+            return None
         try:
             values = self._helm_values_dict()
         except ValueError:
             _logger.warning(
-                "Omnigent service id=%s has unparsable helm_values; "
-                "skip omnigentHost.serverUrl injection", self.id,
+                "%s service id=%s has unparsable helm_values; "
+                "skip same-workspace %s URL injection", label, self.id, label,
             )
-            return ''
+            return None
         if not isinstance(values, dict):
             values = {}
         fullname_override = values.get('fullnameOverride')
@@ -3145,30 +3800,98 @@ class CloudService(models.Model):
             name = (
                 name_override
                 if isinstance(name_override, str) and name_override
-                else _OMNIGENT_CHART_NAME
+                else provider['chart']
             )
             if name in release:
                 service_name = self._helm_trunc63(release)
             else:
                 service_name = self._helm_trunc63('%s-%s' % (release, name))
-        svc_values = values.get('service')
-        port = _OMNIGENT_DEFAULT_SERVICE_PORT
-        if isinstance(svc_values, dict) and svc_values.get('port') is not None:
-            port = svc_values.get('port')
+        port = provider['default_port']
+        node = values
+        for key in provider['port_path']:
+            node = node.get(key) if isinstance(node, dict) else None
+        if node is not None:
+            port = node
         if isinstance(port, bool) or not isinstance(port, int) \
                 or not 0 < port < 65536:
             _logger.warning(
-                "Omnigent service id=%s has invalid service.port %r; "
-                "skip omnigentHost.serverUrl injection", self.id, port,
+                "%s service id=%s has invalid %s %r; skip same-workspace %s URL "
+                "injection", label, self.id, '.'.join(provider['port_path']), port,
+                label,
             )
-            return ''
+            return None
         if not (_DNS_LABEL_RE.match(service_name)
                 and _DNS_LABEL_RE.match(namespace)):
             _logger.warning(
-                "Omnigent service id=%s has a non-DNS-label service/namespace "
-                "name; skip omnigentHost.serverUrl injection", self.id,
+                "%s service id=%s has a non-DNS-label service/namespace name; "
+                "skip same-workspace %s URL injection", label, self.id, label,
             )
+            return None
+        return {
+            'service': service_name, 'namespace': namespace, 'port': port,
+            'release': release, 'values': values,
+        }
+
+    def _provider_internal_url(self, provider_slug):
+        """本筆（提供者服務）在叢集內的網址；組不出來回 ''。
+
+        網址形如 ``http://<service>.<namespace>.svc.cluster.local:<port>``（組法見
+        ``_provider_endpoint``）。叢集內走 http：流量留在 pod 網路裡，但跨節點時以明文
+        經 flannel／vxlan——租戶之後在消費端貼的金鑰（preauth key 只在登入時用一次、
+        LiteLLM virtual key 每個請求都帶）會走這條；要避開可改用提供者的公開 https 網址
+        並自行設定（已有明確值時平台不覆寫）。
+
+        ⚠ **連不連得到由各消費端 chart 自己的 egress 規則決定，平台不保證**：租戶
+        namespace 的 baseline NetworkPolicy（``paas-baseline-allow-same-ns``）只管
+        **Ingress**。各提供者另有可達性檢查（對不上只記 warning、照常注入）：
+        Omnigent 見 ``_omnigent_internal_url``；LiteLLM 見
+        ``_warn_litellm_egress_reachability``；Headscale 不需要（tailscale chart 的
+        egress 放行同 namespace 所有 pod）。
+        """
+        endpoint = self._provider_endpoint(provider_slug)
+        if not endpoint:
             return ''
+        if provider_slug == _OMNIGENT_TEMPLATE_SLUG:
+            self._warn_omnigent_egress_reachability(endpoint)
+        elif provider_slug == _LITELLM_TEMPLATE_SLUG:
+            self._warn_litellm_egress_reachability(endpoint)
+        return 'http://%s.%s.svc.cluster.local:%d' % (
+            endpoint['service'], endpoint['namespace'], endpoint['port'],
+        )
+
+    def _omnigent_internal_url(self):
+        """本筆（Omnigent 服務）在叢集內的網址；組不出來回 ''。
+
+        Service 名鏡射 ``charts/omnigent`` 的 ``omnigent.fullname``、port＝``service.port``
+        （chart 預設 8000），見 ``_provider_endpoint``。Omnigent 帳密在
+        ``omnigent login`` 時也走這條 http；想避開可改用公開 https 網址登入，host 會照
+        租戶登入的網址連。
+
+        code-server 靠 ``networkPolicy.sameNamespaceEgress``（或 ``allowAllEgress``）、
+        pi-agent 靠 ``allowAllEgress``；open-design 的 internet egress 排除 10.0.0.0/8，
+        要靠 ``networkPolicy.omnigentEgress`` 開洞，而那條規則同時取決於 **port 與 pod
+        selector**（``_warn_omnigent_egress_reachability``）。
+        """
+        return self._provider_internal_url(_OMNIGENT_TEMPLATE_SLUG)
+
+    def _warn_omnigent_egress_reachability(self, endpoint):
+        """open-design 的 ``networkPolicy.omnigentEgress`` 連不連得到這台 Omnigent。
+
+        - port：只開 Omnigent pod 的 targetPort 8000——``service.targetPort`` 不是 8000
+          時 OD 連不到；
+        - selector：``app.kubernetes.io/name=omnigent``＋``component=server``，網址主機是
+          ``<X>-omnigent`` 形態時再釘 ``app.kubernetes.io/instance=<X>``。Omnigent pod 的
+          instance 是 release 名、name 是 ``nameOverride``（預設 ``omnigent``），所以
+          release 名本來就含 ``omnigent``（例 ``my-omnigent``，Service 名照 chart 用
+          release 名原樣 ⇒ OD 釘成 instance=``my``）、``fullnameOverride`` 成
+          ``<X>-omnigent`` 而 X 不是 release 名、或設了 ``nameOverride`` 時，selector
+          對不上 pod，OD 一樣連不到（``_omnigent_matches_od_egress_selector``）。
+
+        兩種情形平台都照常注入（code-server／pi-agent 不受影響），只記 warning；OD 那台
+        只能改用公開網址登入，或由 chart 端放寬 selector。正式站的 release 都是
+        ``svc-xxxxxxxx``、沒有 override，兩條都不會觸發。
+        """
+        svc_values = endpoint['values'].get('service')
         target_port = (svc_values.get('targetPort')
                        if isinstance(svc_values, dict) else None)
         if target_port is not None \
@@ -3181,7 +3904,7 @@ class CloudService(models.Model):
                 _OMNIGENT_EGRESS_PINNED_TARGET_PORT,
             )
         if not self._omnigent_matches_od_egress_selector(
-                release, service_name, values):
+                endpoint['release'], endpoint['service'], endpoint['values']):
             _logger.warning(
                 "Omnigent service id=%s: service name / nameOverride does not "
                 "match open-design networkPolicy.omnigentEgress's pod selector "
@@ -3190,9 +3913,6 @@ class CloudService(models.Model):
                 self.id, _OMNIGENT_EGRESS_SELECTOR_NAME,
                 _OMNIGENT_EGRESS_HOST_SUFFIX,
             )
-        return 'http://%s.%s.svc.cluster.local:%d' % (
-            service_name, namespace, port,
-        )
 
     @staticmethod
     def _omnigent_matches_od_egress_selector(release, service_name, values):
@@ -3213,47 +3933,75 @@ class CloudService(models.Model):
             return pinned == release
         return True
 
-    def _workspace_omnigent_url(self):
-        """同工作區 running Omnigent 的叢集內網址（給主容器內的 omnigent host）。
+    def _warn_litellm_egress_reachability(self, endpoint):
+        """hermes-agent／open-design 的 ``networkPolicy.litellmEgress`` 連不連得到這台 LiteLLM。
 
-        只對 ``_OMNIGENT_SERVER_URL_VALUE_PATHS`` 裡的 chart 查詢；其他 chart、
-        沒有工作區、或工作區沒有 running 的 Omnigent → ''（不注入，chart 預設
-        ``""``＝租戶自己 ``omnigent login`` 任何網址）。
+        那條洞的 pod selector 是 ``app.kubernetes.io/name=litellm``＋``component=app``、
+        只開 pod port 4000。charts/litellm 的 pod name 標籤＝``nameOverride``（預設
+        ``litellm``）、containerPort＝``service.targetPort``（預設 4000）。任一對不上時
+        照常注入（pi-agent／code-server 不受影響），只記 warning。正式站的 release 都
+        沒有 override，不會觸發。
+        """
+        values = endpoint['values']
+        svc_values = values.get('service')
+        target_port = (svc_values.get('targetPort')
+                       if isinstance(svc_values, dict) else None)
+        if target_port is not None \
+                and target_port != _LITELLM_EGRESS_PINNED_TARGET_PORT:
+            _logger.warning(
+                "LiteLLM service id=%s has service.targetPort %r (not %d): "
+                "hermes-agent / open-design networkPolicy.litellmEgress (pod "
+                "port %d) cannot reach the injected URL",
+                self.id, target_port, _LITELLM_EGRESS_PINNED_TARGET_PORT,
+                _LITELLM_EGRESS_PINNED_TARGET_PORT,
+            )
+        name_override = values.get('nameOverride')
+        if isinstance(name_override, str) and name_override \
+                and name_override != _LITELLM_EGRESS_SELECTOR_NAME:
+            _logger.warning(
+                "LiteLLM service id=%s has nameOverride (pod label "
+                "app.kubernetes.io/name is not %s): hermes-agent / open-design "
+                "networkPolicy.litellmEgress's pod selector cannot reach the "
+                "injected URL", self.id, _LITELLM_EGRESS_SELECTOR_NAME,
+            )
 
-        條件：同 ``workspace_id``、template slug＝``omnigent``、``state='running'``、
-        已有 release 名與 namespace；本筆有 namespace 時另要求同一 namespace
-        （各 chart 開給 Omnigent 的 egress 都只涵蓋自己的 namespace——code-server
-        的 sameNamespaceEgress、open-design 的 omnigentEgress；跨 namespace 的網址
-        給了多半連不上。實際連不連得到見 ``_omnigent_internal_url`` 的說明）。
+    def _workspace_provider_url(self, provider_slug):
+        """同工作區 running 提供者（``provider_slug``）的叢集內網址；沒有回 ''。
 
-        只認 ``running``：Omnigent 正在 upgrading／suspended／error 時這次組裝不帶
-        網址。因為網址只進 runtime ConfigMap，這只會讓登入提示暫時少了網址，
-        已登入的 host 不受影響，下一次部署／重設就補回來。
+        條件：同 ``workspace_id``、template slug＝``provider_slug``、``state='running'``、
+        已有 release 名與 namespace；本筆有 namespace 時另要求同一 namespace（各消費端
+        chart 開給提供者的 egress 都只涵蓋自己的 namespace——code-server 的
+        sameNamespaceEgress、open-design 的 omnigentEgress／litellmEgress、tailscale 的
+        同 namespace 規則；跨 namespace 的網址給了多半連不上）。本筆自己不算。
 
-        多個 Omnigent 時取**最早建立**的那個（``create_date``、``id`` 由小到大，
-        決定性），並記一行 info log 列出被略過的。
+        只認 ``running``：提供者正在 upgrading／suspended／error 時這次組裝不帶網址。
+        因為網址只進 runtime ConfigMap，這只會讓消費端暫時少了網址（已連上的不受影響，
+        chart 端在網址消失時的行為各自定義，例 tailscale 保持原登入），下一次部署／重設
+        就補回來。
+
+        多個提供者時取**最早建立**的那個（``create_date``、``id`` 由小到大，決定性），
+        並記一行 info log 列出被略過的；最早那台組不出網址（壞掉的 helm_values 等，已
+        log）就照同一順序試下一個。
 
         唯讀、不寫 DB、不呼叫 operator（``_assemble_deploy_values`` 的契約）。
 
-        以 sudo 查詢＝**防禦性**：注入結果只該由工作區內有哪些 Omnigent 決定，不該
-        由觸發部署的是誰決定。**今天**不存在「讀得到本筆、卻讀不到同工作區
-        Omnigent」的非系統使用者——cloud_service 的讀取 rule（``ir_rules.xml``
-        ``cloud_service_rule_member_read``）對同一工作區的每一筆都一樣（成員＝全看
-        得到），系統管理員有 ``cloud_service_rule_admin_full``，cron 是 superuser。
-        sudo 守的是**日後**：只要哪天多一條會遮住部分服務的 record rule（例如依服務
-        或依角色的可見性），未 sudo 的查詢就會讓「誰按了儲存設定」決定網址有沒有
-        注入。``test_omnigent_server_url_injection`` 以一條測試專用 rule 重現這種
-        情形釘住它。讀到的只有 release 名／namespace／helm_values 裡的名稱與 port，
-        不讀任何敏感欄位。
+        以 sudo 查詢＝**防禦性**：注入結果只該由工作區內有哪些提供者決定，不該由觸發
+        部署的是誰決定。**今天**不存在「讀得到本筆、卻讀不到同工作區提供者」的非系統
+        使用者——cloud_service 的讀取 rule（``ir_rules.xml``
+        ``cloud_service_rule_member_read``）對同一工作區的每一筆都一樣（成員＝全看得到），
+        系統管理員有 ``cloud_service_rule_admin_full``，cron 是 superuser。sudo 守的是
+        **日後**：只要哪天多一條會遮住部分服務的 record rule（例如依服務或依角色的
+        可見性），未 sudo 的查詢就會讓「誰按了儲存設定」決定網址有沒有注入。
+        ``test_omnigent_server_url_injection`` 以一條測試專用 rule 重現這種情形釘住它。
+        讀到的只有 release 名／namespace／helm_values 裡的名稱與 port，不讀任何敏感欄位。
         """
         self.ensure_one()
-        if self.template_id.slug not in _OMNIGENT_SERVER_URL_VALUE_PATHS:
-            return ''
-        if not self.workspace_id:
+        provider = _WORKSPACE_PROVIDERS.get(provider_slug)
+        if not provider or not self.workspace_id:
             return ''
         domain = [
             ('workspace_id', '=', self.workspace_id.id),
-            ('template_id.slug', '=', _OMNIGENT_TEMPLATE_SLUG),
+            ('template_id.slug', '=', provider_slug),
             ('state', '=', 'running'),
             ('helm_release_name', '!=', False),
             ('helm_namespace', '!=', False),
@@ -3264,21 +4012,87 @@ class CloudService(models.Model):
             domain.append(('helm_namespace', '=', self.helm_namespace))
         candidates = self.sudo().search(domain, order='create_date asc, id asc')
         for chosen in candidates:
-            url = chosen._omnigent_internal_url()
+            url = chosen._provider_internal_url(provider_slug)
             if not url:
-                # 組不出網址（壞掉的 helm_values 等，已 log）→ 照同一順序試下一個。
                 continue
             if len(candidates) > 1:
                 _logger.info(
-                    "Workspace %s has %d running Omnigent services; injecting "
+                    "Workspace %s has %d running %s services; injecting "
                     "the oldest usable one (id=%s, release=%s) into service "
                     "id=%s, other ids=%s",
-                    self.workspace_id.id, len(candidates), chosen.id,
-                    chosen.helm_release_name, self.id,
+                    self.workspace_id.id, len(candidates), provider['label'],
+                    chosen.id, chosen.helm_release_name, self.id,
                     (candidates - chosen).ids,
                 )
             return url
         return ''
+
+    # ---- Omnigent 的相容入口（#1340；行為不變，邏輯在上面的通用 helper） ----
+
+    @staticmethod
+    def _explicit_omnigent_server_url(values, template_slug):
+        """helm_values 裡已經有的非空 ``omnigentHost.serverUrl``（沒有回 ''）。"""
+        return CloudService._explicit_value_at_paths(
+            values, _OMNIGENT_SERVER_URL_VALUE_PATHS.get(template_slug))
+
+    @staticmethod
+    def _inject_omnigent_server_url(values, template_slug, server_url):
+        """把同工作區 Omnigent 的叢集內網址注入 ``omnigentHost.serverUrl``。
+
+        只有網址、絕不帶 token（Omnigent 是 accounts 模式，host 的擁有者＝在終端機裡
+        ``omnigent login`` 的那個帳號，平台不代登入）。無此 value path 的 chart、網址
+        為空、或已有明確（非空）值一律 no-op。
+        """
+        return CloudService._inject_workspace_service_url(
+            values, template_slug, _OMNIGENT_TEMPLATE_SLUG, server_url)
+
+    def _workspace_omnigent_url(self):
+        """同工作區 running Omnigent 的叢集內網址（只對 ``_OMNIGENT_SERVER_URL_VALUE_PATHS``
+        裡的 chart；其他 chart 回 ''）。查找規則見 ``_workspace_provider_url``。"""
+        self.ensure_one()
+        if self.template_id.slug not in _OMNIGENT_SERVER_URL_VALUE_PATHS:
+            return ''
+        return self._workspace_provider_url(_OMNIGENT_TEMPLATE_SLUG)
+
+    @api.model
+    def _heal_tailscale_control_plane(self):
+        """升級期 healer（data XML ``<function>``，每次 ``-u`` 都跑；冪等）。
+
+        tailscale 範本（chart 0.1.2 起）多了 ``tailscale.controlPlane`` select，設定頁
+        預設顯示「官方 Tailscale」（spec ``default: official``）。chart 0.1.2 之前開通、
+        填了 ``tailscale.loginServer`` 的服務，helm_values 沒有 ``controlPlane``——chart
+        端未設＝0.1.1 語意（loginServer 非空 → custom），部署行為不變；但設定頁會把它
+        **顯示成「官方」**，租戶一按儲存就把 ``controlPlane=official`` 寫回去，節點改登官方
+        控制伺服器（登出原本的 Headscale、變成新機器）。
+
+        這裡把這類服務補上 ``controlPlane='custom'``（＝chart 對它們本來的解讀，部署出來的
+        manifest 不變）。只動「``tailscale.loginServer`` 是非空字串、``controlPlane``
+        沒設或空」的服務；loginServer 空的服務本來就是官方，不必補。helm_values 解析失敗的
+        跳過（不在升級時替人修壞資料）。只寫 DB、不呼叫 operator。
+        """
+        services = self.sudo().search([('template_id.slug', '=', 'tailscale')])
+        healed = []
+        for svc in services:
+            try:
+                values = svc._helm_values_dict()
+            except ValueError:
+                continue
+            node = values.get('tailscale') if isinstance(values, dict) else None
+            if not isinstance(node, dict) or node.get('controlPlane'):
+                continue
+            login_server = node.get('loginServer')
+            if not (isinstance(login_server, str) and login_server):
+                continue
+            node['controlPlane'] = 'custom'
+            svc._apply_helm_values(values)
+            healed.append(svc.id)
+        if healed:
+            _logger.info(
+                "tailscale.controlPlane=custom backfilled for %d service(s) that "
+                "set tailscale.loginServer before chart 0.1.2: ids=%s",
+                len(healed), healed,
+            )
+        return healed
 
     @staticmethod
     def _generate_admin_password():
@@ -3423,42 +4237,42 @@ class CloudService(models.Model):
         self.ensure_one()
         return bool(self.template_id._gateway_external_path())
 
-    def _chart_has_public_mqtt_address(self):
-        """本服務的 chart 有沒有一個要回讀給租戶看的對外 MQTT 位址。
+    def _chart_has_public_tunnel_address(self):
+        """本服務的 chart 有沒有一個要回讀給租戶看的對外位址（ngrok sidecar）。
 
-        唯一事實源是 `cloud_app_template.has_public_mqtt_address`（能力 gate 一律
+        唯一事實源是 `cloud_app_template.has_public_tunnel_address`（能力 gate 一律
         收斂成單一欄位，見該欄位註解與
         docs/decisions/patterns/capability-gate-single-source-field.md）。
         poll 的探測閘門、service payload 與前端文案都必須讀本方法／本欄位，
         **不得**任何一端自建 slug 名單。
         """
         self.ensure_one()
-        return bool(self.template_id.has_public_mqtt_address)
+        return bool(self.template_id.has_public_tunnel_address)
 
-    def _probe_mqtt_address(self, client):
-        """問 operator 一次：agent 現在廣告的對外 MQTT 位址是什麼。
+    def _probe_public_tunnel_address(self, client):
+        """問 operator 一次：ngrok agent 現在廣告的對外位址是什麼。
 
         回傳值的三態**刻意**與 `_release_facts` 的「只有探過才寫」對齊：
 
         * ``None``  ——「這一輪沒探」：商品沒這個能力，或 operator 掛了。帳本原值不動。
-        * ``''``    ——「探過，現在沒有位址」：租戶關掉對外 MQTT、agent 還沒連上、
-                      隧道斷了。這是**有結論**的觀測，要把帳本清掉，否則租戶會一直
-                      看到一個已經連不上的舊位址（比空值更糟）。
+        * ``''``    ——「探過，現在沒有位址」：租戶關掉 ngrok、agent 還沒連上、
+                      隧道斷了（sidecar 撤回）。這是**有結論**的觀測，要把帳本清掉，
+                      否則租戶會一直看到一個已經連不上的舊位址（比空值更糟）。
         * 位址字串 ——「探過，就是這個」。
 
         operator 失敗一律降級成 ``None`` 並 log：對外位址是服務頁上的一個附帶資訊，
         讓它把整輪 poll 打斷（state 回寫、就緒判定都在同一輪）是完全不成比例的。
         """
         self.ensure_one()
-        if not self._chart_has_public_mqtt_address():
+        if not self._chart_has_public_tunnel_address():
             return None
         try:
-            payload = client.get_mqtt_address(
+            payload = client.get_public_address(
                 self.helm_namespace, self.helm_release_name
             )
         except Exception as e:  # noqa: BLE001 — 見 docstring：附帶資訊不得打斷 poll
             _logger.warning(
-                'Could not read the advertised MQTT address for %s: %s',
+                'Could not read the advertised public address for %s: %s',
                 self.name, e,
             )
             return None
@@ -3576,6 +4390,37 @@ class CloudService(models.Model):
             values['auth'] = {'apiServerKey': gateway_api_key}
         return values
 
+    def _rollback_preserved_value_paths(self):
+        """#1433：「回復版本」時必須維持**目前值**的 helm values 路徑（平台管的憑證）。
+
+        純 ``helm rollback`` 會把目標 revision 的 ``config.sensitive.admin_password``
+        一起回復 ⇒ 租戶換掉（撤銷）的舊密碼復活、目前的密碼失效，而平台 DB 的
+        ``cloud_service_secret`` 與帳號仍是新的（R8：open-design、code-server 重現）。
+        回傳非空時 controller 會請 operator 改走「保留這些路徑」的回復。
+
+        路徑與供給鏈同源（不自建 slug 名單，#357 C01 同一紀律）：
+
+        - ``config.sensitive``：``_build_mcp_sensitive_values`` 的唯一通道，閘門
+          ``template.has_admin_gui``。
+        - ``auth.apiServerKey``：#530 gateway key，閘門 ``_chart_has_gateway``。
+        - ``template.admin_username_helm_path``：租戶自設的帳號——帳號與密碼是同一組
+          登入憑證，只保留密碼會變成「舊帳號＋新密碼」。
+
+        woow-odoo 的 ``conf.adminPassword`` 刻意**不**列入：chart 只在首次建庫時套用，
+        對既有 DB 是 no-op（見 ``_build_odoo_sensitive_values``），回復它不會讓舊密碼
+        生效；列入反而會把 Odoo 的回復全部改成重新渲染，擴大這張單的影響面。
+        """
+        self.ensure_one()
+        template = self.template_id
+        if not template.has_admin_gui:
+            return []
+        paths = ['config.sensitive']
+        if self._chart_has_gateway():
+            paths.append('auth.apiServerKey')
+        if template.admin_username_helm_path:
+            paths.append(template.admin_username_helm_path)
+        return paths
+
     def _build_odoo_sensitive_values(self):
         """#1130：woow-odoo 的初始管理員密碼 sensitive value（odoo 專屬 helper）。
 
@@ -3664,6 +4509,71 @@ class CloudService(models.Model):
     # 不要在「還沒授權的 recordset」上呼叫它們——那才是
     # docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md 講的那種洞。
     # ------------------------------------------------------------------
+
+    def _refresh_template_images(self):
+        """#1408：把範本目前釘的 image 參照寫進服務的 helm_values；回傳變更清單。
+
+        只在管理員 Redeploy 呼叫——租戶儲存設定與重設密碼（15 秒 atomic）不換
+        image，避免 pod template 變動。範本 JSON 壞掉時不動（create 時就擋過）。
+        """
+        self.ensure_one()
+        try:
+            template_values = json.loads(self.template_id.helm_default_values or '{}')
+        except ValueError:
+            _logger.warning(
+                "Service id=%s: template %s has invalid helm_default_values; "
+                "images not refreshed", self.id, self.template_id.id)
+            return []
+        new_values, changes = _refresh_image_refs(
+            self._helm_values_dict(), template_values,
+            self.template_id._tenant_value_keys(),
+        )
+        if changes:
+            self._apply_helm_values(new_values)
+        return changes
+
+    def _redeploy_chart_check_message(self, resolved_version):
+        """Redeploy 後 chart 版本與範本不符時的提示（相符或無從得知回 False）。"""
+        self.ensure_one()
+        expected = self.template_id.helm_chart_version
+        if resolved_version and expected and resolved_version != expected:
+            return _(
+                'Redeploy finished, but the release runs chart %(actual)s while the '
+                'product pins %(expected)s.',
+                actual=resolved_version, expected=expected)
+        return False
+
+    def _verify_redeploy_images(self, pods):
+        """#1408：服務就緒時核對 Redeploy 後 workload 的 image；結果寫進 message。
+
+        舊 operator 的 PodInfo 沒有 ``images``（None）⇒ 無從核對，只清 pending。
+        收尾中的 Pod（deletionTimestamp）不算。
+        """
+        self.ensure_one()
+        live = [p for p in pods or [] if not p.get('deletion_timestamp')]
+        if not live or any(p.get('images') is None for p in live):
+            self.sudo().write({'redeploy_verify_pending': False})
+            return
+        images = [image for p in live for image in p.get('images') or []]
+        try:
+            values = self._helm_values_dict()
+        except ValueError:
+            values = {}
+        mismatches = _image_mismatches(values, images)
+        vals = {'redeploy_verify_pending': False}
+        if mismatches:
+            detail = '; '.join(
+                '%s (running: %s)' % (expected, ', '.join(shown))
+                for expected, shown in mismatches)
+            message = _(
+                'After the redeploy the workload is not running the expected '
+                'image: %(detail)s', detail=detail)
+            previous = self.sudo().redeploy_check_message
+            vals['redeploy_check_message'] = (
+                '%s\n%s' % (previous, message) if previous else message)
+            _logger.warning(
+                "Service id=%s redeploy image check failed: %s", self.id, mismatches)
+        self.sudo().write(vals)
 
     def _helm_values_dict(self):
         """讀出 helm_values 並解析成 dict（空值／未設定回 ``{}``）。
@@ -4013,14 +4923,14 @@ class CloudService(models.Model):
                         release_name=service.helm_release_name,
                         include_vm=service._needs_vm_status(),
                     )
-                    # 對外 MQTT 位址也在這裡對帳：本 cron 是**唯一會看 running 的
-                    # 路徑**，而 ngrok 免費方案每次 agent 重連就換位址——那種變動
-                    # 發生時服務正是 running（poll 的 domain 只收轉移狀態）。
-                    # 無此能力的商品 `_probe_mqtt_address` 直接回 None、不打 operator，
-                    # 所以這行對其餘商品零成本。
+                    # 對外位址也在這裡對帳：本 cron 是**唯一會看 running 的路徑**，
+                    # 而 ngrok 免費方案每次 agent 重連就換 TCP 位址——那種變動發生時
+                    # 服務正是 running（poll 的 domain 只收轉移狀態）。
+                    # 無此能力的商品 `_probe_public_tunnel_address` 直接回 None、不打
+                    # operator，所以這行對其餘商品零成本。
                     facts = service._release_facts(
                         status.get('release', {}),
-                        mqtt_address=service._probe_mqtt_address(client),
+                        tunnel_address=service._probe_public_tunnel_address(client),
                     )
                     # 舊值必須**在寫入之前**收起來：寫完之後 `service[field]` already
                     # 是新值，log 就只印得出「現在是什麼」而不是「從什麼變成什麼」，
@@ -4281,13 +5191,24 @@ class CloudService(models.Model):
             return False, 'HARD: no pods found for this release'
         if not active_pods:
             return False, 'no active pods'
-        ready = all(
-            pod.get('phase') == 'Running'
-            and '/' in pod.get('ready', '0/0')
-            and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-            for pod in active_pods
-        )
-        return ready, 'pods ready' if ready else 'pods not ready'
+
+        def containers_ready(pod):
+            ready = pod.get('ready', '0/0')
+            return '/' in ready and ready.split('/')[0] == ready.split('/')[1]
+
+        # #1417：沒跑起來（Pending／Unknown，含 initContainer 執行中、等磁碟、等排程）與
+        # 「Running 但未 ready」分開說——兩者該查的地方完全不同（pod events vs container
+        # log／readiness probe）。10-04 svc 147 停在 Init:0/1，舊碼一律回 'pods not ready'，
+        # 逾時訊息就叫人去看 container log。
+        not_started = [p for p in active_pods if p.get('phase') != 'Running']
+        not_ready = [p for p in active_pods
+                     if p.get('phase') == 'Running' and not containers_ready(p)]
+        if not (not_started or not_ready):
+            return True, 'pods ready'
+        return False, '; '.join(filter(None, (
+            _describe_unready_pods('pods not started', not_started),
+            _describe_unready_pods('pods not ready', not_ready),
+        )))
 
     @staticmethod
     def _is_vm_ready(status):
@@ -4678,24 +5599,187 @@ class CloudService(models.Model):
                 _logger.exception(
                     "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)
 
-    def _timeout_diagnosis(self, detail):
-        """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
+    def _timeout_classify(self, detail):
+        """detail → ``(原因分型, hint key)``（#1417）；hint key 為 None＝沒有方向可給。
+
+        停權中（#482）優先於一切：那時的 pod／quota 方向全是誤導。
+        """
+        self.ensure_one()
+        if self._is_halted():
+            return TIMEOUT_CAUSE_SUSPENDED, 'suspended'
+        for needle, key, cause in _TIMEOUT_HINTS:
+            if needle in (detail or ''):
+                return cause, key
+        return TIMEOUT_CAUSE_OTHER, None
+
+    def _timeout_hint_text(self, env, key):
+        """hint key → 給維運的方向（以 ``env`` 的語言翻譯）。
+
+        逐條字面呼叫 ``env._``，Odoo 的抽取工具（babel，keywords ``_``）才抓得到——
+        所以不能把英文留在模組常數裡再 ``env._(變數)``。
+        """
+        texts = {
+            'chart_mismatch': env._(
+                'the release runs a different chart than the template expects — an '
+                'in-place upgrade cannot switch charts; a fresh install is required (see '
+                '#1128)'),
+            'operator_lacks_identity': env._(
+                'the operator does not report Pod identity (component/owner) — upgrade '
+                'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
+            'required_component_missing': env._(
+                "the chart's server/postgresql Pod was never created (or is not owned by "
+                'its ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for '
+                'FailedCreate (namespace ResourceQuota, admission)'),
+            'required_pods_not_running': env._(
+                'a required Pod exists but never reached Running — check its pod events '
+                '(scheduling, Multi-Attach, image pull); an exempt backup Job listed in '
+                'the detail may still hold the RWO data PVC'),
+            'volume_attach': env._(
+                'a volume could not be attached to the node — check the Longhorn volume '
+                'and whether its replicas can be scheduled (disk space, storage '
+                'over-provisioning, orphaned PVCs still holding capacity)'),
+            'volume_mount': env._(
+                'a volume could not be mounted — check the PVC/PV binding and the CSI '
+                'driver events of the pod'),
+            'scheduling': env._(
+                'the pod could not be scheduled — check node CPU/memory capacity, unbound '
+                'PVCs (storage class, Longhorn capacity) and node selectors'),
+            'image_pull': env._(
+                'the container image could not be pulled — check the image reference, the '
+                'registry credentials (imagePullSecrets) and that the registry is reachable '
+                'from the node'),
+            'crash_loop': env._(
+                'a container keeps crashing on start — check its previous logs (kubectl '
+                'logs --previous) and its configuration'),
+            'container_config': env._(
+                'the container could not be created — check the Secrets/ConfigMaps it '
+                'references and its container spec'),
+            'pod_lookup_failed': env._(
+                'the operator could not list pods — check its RBAC and the API server'),
+            'no_pods_found': env._(
+                'no Pod object was ever created — check the namespace ResourceQuota (a '
+                'rejected Pod never materialises) and that the chart labels its pods '
+                'with app.kubernetes.io/instance'),
+            'no_active_pods': env._(
+                'pods exist but none reached Running — check pod events (scheduling, '
+                'image pull) and node capacity'),
+            'pods_not_started': env._(
+                'pods never started (still Pending) — check the pod events (scheduling, '
+                'volume attach/mount, image pull) and node capacity'),
+            'pods_not_ready': env._(
+                'pods are Running but never became ready — check container logs and the '
+                'readiness probe'),
+            'vm_status_missing': env._(
+                'the platform never received VM status — the operator is likely too old '
+                'to report it'),
+            'vmi_lookup_failed': env._(
+                'the operator could not read the VirtualMachineInstance — check its RBAC '
+                'for virtualmachineinstances'),
+            'no_vmi_yet': env._(
+                'no VirtualMachineInstance was created — check the DataVolume / CDI '
+                'importer, the disk import may have stalled'),
+            'vmi_not_ready': env._(
+                'the VM is running but never reported Ready — check the guest boot '
+                'inside the VM'),
+            'helm_status_stuck': env._(
+                'the helm release never reached "deployed" — a killed rollback leaves it '
+                'stuck in pending-*; inspect `helm history` for the release'),
+            'suspended': env._(
+                'the service is suspended — its workload is intentionally halted, so it '
+                'can never become ready while a deploy/upgrade is pending (see #482)'),
+        }
+        return texts[key]
+
+    def _timeout_diagnosis(self, detail, env=None):
+        """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話（``env`` 的語言）。
 
         回空字串代表沒有對應的方向可給（fail-soft：訊息仍帶前綴與 detail）。
         """
         self.ensure_one()
-        if self._is_halted():
-            return _SUSPENDED_HINT
-        for needle, hint in _TIMEOUT_HINTS:
-            if needle in (detail or ''):
-                return hint
-        return ''
+        _cause, key = self._timeout_classify(detail)
+        return self._timeout_hint_text(env or self.env, key) if key else ''
+
+    def _timeout_tenant_summary(self, env, cause, minutes):
+        """給租戶的那一句話（#1417）：發生什麼、要不要他做事、之後會怎樣。
+
+        租戶看不懂 readiness probe，也處理不了平台的儲存或排程——除了「反覆重啟」可能
+        是他剛改的設定造成的，其餘都不需要他動手；而問題排除後服務會自己恢復（#1416
+        的背景自癒）。
+        """
+        if cause == TIMEOUT_CAUSE_SUSPENDED:
+            return env._(
+                'The service is suspended, so it cannot finish deploying. It will resume '
+                'automatically once the subscription is active again.')
+        if cause == TIMEOUT_CAUSE_STORAGE:
+            return env._(
+                'The service did not finish starting within %(minutes)s minutes because '
+                'the platform could not provide the storage or computing resources it '
+                'needs in time. This is a platform-side issue and you do not need to do '
+                'anything; the service will recover automatically once it is resolved.',
+                minutes=minutes)
+        if cause == TIMEOUT_CAUSE_IMAGE:
+            return env._(
+                'The service did not finish starting within %(minutes)s minutes because '
+                'its software image could not be downloaded. This is a platform-side '
+                'issue and you do not need to do anything; the service will recover '
+                'automatically once it is resolved.',
+                minutes=minutes)
+        if cause == TIMEOUT_CAUSE_CRASH:
+            return env._(
+                'The service did not finish starting within %(minutes)s minutes because '
+                'it keeps restarting while starting up. If you recently changed its '
+                'settings, please check them; otherwise you do not need to do anything. '
+                'The service will recover automatically once the problem is resolved.',
+                minutes=minutes)
+        if cause == TIMEOUT_CAUSE_READINESS:
+            return env._(
+                'The service started but did not report that it was ready within '
+                '%(minutes)s minutes. You do not need to do anything; the service will '
+                'recover automatically once it becomes ready.',
+                minutes=minutes)
+        return env._(
+            'The service did not finish starting within %(minutes)s minutes. You do not '
+            'need to do anything for now; the service will recover automatically once '
+            'the problem is resolved. If it does not recover, please contact support.',
+            minutes=minutes)
+
+    def _timeout_error_message(self, minutes, detail):
+        """逾時轉 error 的 ``error_message``（#1417）：先一句給租戶，再附給管理員的技術細節。
+
+        ``error_message`` 由 cron 寫入、畫面直接顯示原文，cron 的 env 語言不是租戶的
+        ⇒ 以服務建立者的語言（沒有就用目前 env）組字串（同 `_storage_quota_error_message`）。
+        技術細節沿用 #489 的「Deployment timed out after N minutes: <detail> — <hint>」；
+        detail 本身是 Pod 名稱與 Kubernetes 的原因代碼，不翻。
+
+        Returns:
+            ``(message, cause)``
+        """
+        self.ensure_one()
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        cause, key = self._timeout_classify(detail)
+        technical = env._(
+            "Deployment timed out after %(minutes)s minutes: %(detail)s",
+            minutes=minutes, detail=detail,
+        )
+        if key:
+            # 純格式串（無可翻內容）：兩端都已各自翻譯過。
+            technical = '%s — %s' % (technical, self._timeout_hint_text(env, key))
+        # 換行：後台表單（Text）分兩段；/woow 的 t-esc 會把它收成一個空白。
+        message = env._(
+            '%(summary)s\nTechnical details for the administrator: %(details)s',
+            summary=self._timeout_tenant_summary(env, cause, minutes),
+            details=technical,
+        )
+        return message, cause
 
     def _check_transition_timeout(self, detail):
         """轉移狀態逾時就翻 ``error``；回傳「是否已翻」。
 
         **只變狀態與訊息**——不刪任何叢集資源、不觸發 rollback。卡住的 release
-        原樣留在叢集裡供診斷，維運看完再決定要 redeploy 還是清掉。
+        原樣留在叢集裡供診斷，維運看完再決定要 redeploy 還是清掉。#1416 起同時記下
+        ``transition_timeout_at``：逾時只代表「等太久」，release 之後就緒時由
+        `_cron_recover_timed_out_services` 照正常路徑推回來。
 
         呼叫端契約：必須在 poll 的 optimistic locking（re-fetch ＋ 比對
         ``original_state``）**之後**呼叫，且 ``self`` 是 re-fetch 過的 record。
@@ -4715,28 +5799,116 @@ class CloudService(models.Model):
             return False
 
         minutes = self._transition_timeout_minutes()
-        age = fields.Datetime.now() - anchor
+        now = fields.Datetime.now()
+        age = now - anchor
         if age.total_seconds() <= minutes * 60:
             return False
 
-        hint = self._timeout_diagnosis(detail)
-        message = _(
-            "Deployment timed out after %(minutes)s minutes: %(detail)s",
-            minutes=minutes, detail=detail,
-        )
-        if hint:
-            # 純格式串（無可翻內容）：兩端都已各自翻譯過。
-            message = '%s — %s' % (message, hint)
+        message, cause = self._timeout_error_message(minutes, detail)
 
         # error 分兩種來源，log 要能一眼分辨：這條是「平台判定逾時」，
         # `release_status == 'failed'` 那條是「operator 明確回報失敗」。
+        # （log 用英文 detail；error_message 是建立者語言。）
         _logger.error(
             "Service %s (id=%s) timed out in state %s after %s minutes "
-            "(anchor=%s): %s",
-            self.name, self.id, self.state, minutes, anchor, message,
+            "(anchor=%s, cause=%s): %s",
+            self.name, self.id, self.state, minutes, anchor, cause, detail,
         )
-        self.write({'state': 'error', 'error_message': message})
+        # 標記只有平台寫得進去（`_reject_timeout_recovery_control_writes`）；poll 只在 cron
+        # 跑，這裡的 sudo 只是不依賴呼叫端身分。
+        self.sudo().write({
+            'state': 'error',
+            'error_message': message,
+            'transition_timeout_at': now,
+        })
         return True
+
+    # ------------------------------------------------------------------ #
+    #  #1416：部署逾時的有限度自癒                                         #
+    # ------------------------------------------------------------------ #
+
+    def _timeout_recovery_window_hours(self):
+        """逾時後繼續重查多久（小時）。缺值／看不懂一律退回預設，不停用自癒。"""
+        return self._init_positive_int_param(
+            _TIMEOUT_RECOVERY_WINDOW_PARAM, TIMEOUT_RECOVERY_WINDOW_HOURS_DEFAULT)
+
+    @api.model
+    def _timed_out_services_to_recheck(self):
+        """自癒的候選：逾時造成的 error、仍在時間窗內、未停權、有 release 座標。
+
+        停權（``pre_suspend_state`` 有值，#482／#497）刻意排除：停權中的 workload 是
+        被正確地停著，推回 running 就是計費繞過；復權由 `_do_resume` 走自己的路。
+        刪除中的服務 state 是 ``deleting``，天然不在內。
+        """
+        cutoff = fields.Datetime.now() - timedelta(
+            hours=self._timeout_recovery_window_hours())
+        return self.search([
+            ('state', '=', 'error'),
+            ('transition_timeout_at', '!=', False),
+            ('transition_timeout_at', '>=', cutoff),
+            ('pre_suspend_state', '=', False),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ], order='transition_timeout_at')
+
+    @api.model
+    def _cron_recover_timed_out_services(self):
+        """#1416：逾時轉 error 的服務低頻重查；release 就緒就照正常路徑推進。
+
+        **重用** `_poll_and_update_status`（#1159 Q1「由觀測推進離開狀態」的唯一寫入者）
+        而不是另寫一份判定：就緒判定、release 事實、需要 init 的進 ``initializing``
+        （否則 ``running``）、Redeploy 後的 image 核對全部同一條路。頻率寫在
+        ``cloud_service_cron.xml``（每 5 分）；時間窗由 `_timeout_recovery_window_hours`。
+
+        每台服務一個回捲單位（同 `_cron_check_deploying_services`，Q36）。
+        """
+        services = self._timed_out_services_to_recheck()
+        if not services:
+            return
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                service._poll_and_update_status(client)
+                self.env.cr.commit()
+            except Exception:
+                # ⚠ #1052 標記（非裁定）：逐筆 batch isolation，同短 poll 的站點。
+                self.env.cr.rollback()
+                _logger.exception(
+                    "[#1416] Error re-checking timed-out service %s (id=%s)",
+                    *service_label)
+
+    def _note_timeout_recovery(self, next_state, timed_out_at):
+        """自癒成功留紀錄：log ＋ PaaS Platform Monitor 的 chatter（#1416）。
+
+        cloud_service 不是 mail.thread（見 platform_monitor.py 檔頭的掛點裁決），所以
+        紀錄掛在只有 ``base.group_system`` 看得到的 monitor 單例上；用 ``_message_log``
+        ——只留紀錄、不通知任何人。留紀錄失敗不得擋住狀態推進。
+        """
+        self.ensure_one()
+        _logger.info(
+            "[#1416] Service %s (id=%s) recovered after the deployment timeout of %s: "
+            "the release became ready, state -> %s",
+            self.name, self.id, timed_out_at, next_state,
+        )
+        try:
+            with self.env.cr.savepoint():
+                monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+                monitor._message_log(body=_(
+                    'Service %(name)s (id=%(id)s) recovered on its own after the deployment '
+                    'timeout of %(timed_out_at)s UTC: the release became ready, so it moved '
+                    'to %(state)s.',
+                    name=self.name, id=self.id, timed_out_at=timed_out_at, state=next_state))
+        except OperationalError:
+            raise
+        except Exception:  # noqa: BLE001 —— 見 docstring
+            _logger.exception(
+                "[#1416] Could not log the timeout recovery of service %s (id=%s) on the "
+                "platform monitor", self.name, self.id)
 
     @api.model
     def _woow_migrate_refresh_transition_anchor_489(self):
@@ -4748,6 +5920,8 @@ class CloudService(models.Model):
         時間。`-u` 完成後第一次 cron 會拿那個陳舊的錨去判 age，於是**正在正常
         部署**的服務也會被判逾時——而誤殺不可自癒（poll 只撈轉移狀態，寫進
         ``error`` 後沒有任何路徑會把它 poll 回 ``running``）。
+        （#1416 起逾時造成的 error 會被 ``_cron_recover_timed_out_services`` 在時間窗
+        內重查、就緒就推回來；本 method 寫於那之前，描述的是當時的狀況。）
 
         本 method 給它們一個新鮮的起點，把那個窗口降到零。**代價**：真正已經
         卡住的那批（#456 / #482 那類）會晚一個門檻週期才被抓到——一次性，且
@@ -4882,6 +6056,52 @@ class CloudService(models.Model):
                 ', '.join(f"{s.name}(id={s.id})" for s in unconfirmed),
             )
         return stuck
+
+    @api.model
+    def _woow_migrate_first_running_at_1431(self):
+        """回填 ``first_running_at``（18.0.1.0.209 新欄位）——**一律保守**。
+
+        欄位上線前沒有可靠的「曾經 running 過」紀錄（``init_ready_*`` 會被清掉）。回填錯的
+        兩個方向代價不同：
+
+        * 把**用過**的服務當成沒用過 ⇒ 刪除後資料只留 1 天（#1431）、error 時停止扣款
+          （#1424）——資料保護承諾被打破，不可逆；
+        * 把**沒用過**的服務當成用過 ⇒ 照舊保留 90 天、照舊扣款——就是上線前的行為。
+
+        所以只留下「明確還在開通中、而且沒有任何曾經跑過的跡象」的服務為空：state 是
+        pending／deploying／initializing，且沒有升級紀錄（``last_upgraded_at``）、helm
+        revision 沒超過 1、init 沒開過第二代、沒有停權前狀態。其餘（running、error、
+        upgrading、suspended、deleting、state 為空……）一律回填。它們之後第一次進 running
+        時 ``write()`` 才會寫入真正的時間。
+
+        回填值用 ``deployed_at``（首次 helm install 成功），沒有就用 ``create_date``——只是
+        近似值，沒有任何邏輯依賴它的精確時間，只依賴「有沒有值」。
+
+        冪等：只碰 ``first_running_at`` 為空的列；重跑不改已有的值。回傳被回填的服務。
+        """
+        Service = self.sudo().with_context(active_test=False)
+        missing = Service.search([('first_running_at', '=', False)])
+
+        def still_provisioning(svc):
+            return (
+                svc.state in ('pending', 'deploying', 'initializing')
+                and not svc.last_upgraded_at
+                and (svc.helm_revision or 1) <= 1
+                and (svc.init_generation or 0) <= 1
+                and not svc.pre_suspend_state
+            )
+
+        left_empty = missing.filtered(still_provisioning)
+        backfilled = missing - left_empty
+        for svc in backfilled:
+            svc.write({'first_running_at': svc.deployed_at or svc.create_date})
+        _logger.info(
+            "#1431 migration: backfilled first_running_at on %d service(s); left %d "
+            "still-provisioning service(s) empty: %s",
+            len(backfilled), len(left_empty),
+            ', '.join(f"{s.name}(id={s.id},state={s.state})" for s in left_empty) or '-',
+        )
+        return backfilled
 
     def _woow_migrate_init_execution_control_1257(self):
         """#1257 上線過渡（Q15＋Q26）：回填欠 init、替在途的 init 寫合成 legacy lease。
@@ -5019,7 +6239,7 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
-    def _release_facts(self, release, dns_state=None, mqtt_address=None):
+    def _release_facts(self, release, dns_state=None, tunnel_address=None):
         """operator 回報的 release 事實 → 帳本回寫欄位。**所有寫入者的單一來源。**
 
         （#1159 起 list/get 純讀、controller 那份 poll 已刪除；以下是 #627 當時的背景。）
@@ -5068,19 +6288,22 @@ class CloudService(models.Model):
         # 不該留下任何痕跡。
         if dns_state in ('ok', 'missing'):
             vals['public_url_dns_unverified'] = dns_state == 'missing'
-        # 對外 MQTT 位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
+        # 對外位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
         # `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 帳本原值不動；
         # `''` ＝ 探過而且現在沒有位址 ⇒ 清掉（留著一個連不上的舊位址比空值更糟）。
-        if mqtt_address is not None:
-            vals['mqtt_public_url'] = mqtt_address or False
+        if tunnel_address is not None:
+            vals['public_tunnel_url'] = tunnel_address or False
         return vals
 
     def _poll_and_update_status(self, client):
         """背景短 poll：向 operator 取一次 status，推進單一服務的轉移狀態。
 
         #1159 Q1：這是「由觀測推進、離開轉移狀態」的**唯一**寫入者——transition 完成、
-        init 分派、deleting 404→unlink 都只在這裡寫；list/get 自 #1159 起純讀。唯一的
-        生產呼叫端是 ``_cron_check_deploying_services``（per-service commit）。
+        init 分派、deleting 404→unlink 都只在這裡寫；list/get 自 #1159 起純讀。生產呼叫端
+        是 ``_cron_check_deploying_services``（轉移狀態）與 #1416 的
+        ``_cron_recover_timed_out_services``（逾時造成的 ``error``，標記
+        ``transition_timeout_at``），兩者都 per-service commit。後者就緒時走與轉移狀態
+        完全相同的推進路徑；未就緒時什麼都不改（``error`` 不受 age timeout 管轄）。
 
         它**不執行 init**（Q4：init 不與短 poll 同 job、同交易）：觀測到 initializing
         的 pods ready 時只記下來、trigger init cron；init 由 ``_cron_run_post_deploy_inits``
@@ -5124,6 +6347,13 @@ class CloudService(models.Model):
                 self._init_settle_expired_lease()
                 if self.state == 'initializing':
                     self._init_check_wait_timeout()
+            elif e.status_code == 404 and original_state == 'error':
+                # #1416：release 已不在叢集 ⇒ 不會再就緒，停止自癒重查（error 與訊息照舊，
+                # 只撤標記）。
+                _logger.info(
+                    "[#1416] Release of timed-out service %s (id=%s) is gone — no "
+                    "longer re-checking it", self.name, self.id)
+                self.sudo().write({'transition_timeout_at': False})
             else:
                 _logger.warning("Error polling status for %s: %s", self.name, e)
             return
@@ -5136,6 +6366,11 @@ class CloudService(models.Model):
         # Re-fetch for optimistic locking
         service = self.browse(self.id)
         if not service.exists() or service.state != original_state:
+            return
+        # #1416：error 只有逾時造成、且標記還在的才推（別的路徑同時改寫了 error_message
+        # ＝來源已換，標記被 write() 清掉）。停權判準同 `_timed_out_services_to_recheck`。
+        timed_out_at = service.transition_timeout_at
+        if original_state == 'error' and (not timed_out_at or service._is_halted()):
             return
 
         # #1159 Q1／Q40：list/get 只回這個「最近觀測」。拿到 status 就 stamp，不論
@@ -5162,12 +6397,13 @@ class CloudService(models.Model):
 
         # 與 DNS 同一條紀律：**一輪只探一次**，結果餵進 `_release_facts`。
         # 只在 release 已 deployed 時探——還沒 deploy 的服務裡根本還沒有 agent。
-        mqtt_address = (
-            service._probe_mqtt_address(client) if release_status == 'deployed' else None
+        tunnel_address = (
+            service._probe_public_tunnel_address(client)
+            if release_status == 'deployed' else None
         )
 
         release_facts = service._release_facts(
-            release, dns_state=dns_state, mqtt_address=mqtt_address
+            release, dns_state=dns_state, tunnel_address=tunnel_address
         )
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
@@ -5188,16 +6424,22 @@ class CloudService(models.Model):
                 # #1267：去向只由欠 init 標記決定（與 controller 那份共用同一判準）。
                 next_state = service._next_state_when_ready()
                 if next_state != original_state:
-                    # 進 initializing 時的等待錨點由 write() 集中 stamp（Q10）。
+                    # 進 initializing 時的等待錨點由 write() 集中 stamp（Q10）；離開 error
+                    # 時逾時標記也由 write() 清（#1416）。
                     service.write({
                         'state': next_state,
                         **release_facts,
                         'error_message': False,
                     })
+                if original_state == 'error':
+                    service._note_timeout_recovery(next_state, timed_out_at)
                 if next_state == 'initializing':
                     # #1159 Q1「init 分派」：只排進 init cron 的佇列，不在這裡執行。
                     ready_for_init = True
                     service._init_mark_ready_observed()
+                # #1408：Redeploy 後第一次就緒——核對 workload 真的換到範本 image。
+                if service.sudo().redeploy_verify_pending:
+                    service._verify_redeploy_images(status.get('pods'))
 
         elif release_status == 'failed':
             service.write({
@@ -6609,6 +7851,14 @@ class CloudService(models.Model):
         )
         if self.state == 'suspended':
             return
+        if self._provision_rejected_nothing_created():
+            # #1424：開通被 operator 拒絕、訂閱已自動取消的服務。叢集上沒有可停的 workload，
+            # 打 operator 只會 404、把寫給租戶的說明蓋成「Suspend failed」，而且 lifecycle
+            # cron 每天都會再來一次。維持 error 與說明，等租戶刪除（或 cleanup 期滿）。
+            _logger.info(
+                "[CLOUD_SVC] _do_suspend skipped service=%s: provisioning was rejected "
+                "(%s), nothing to suspend", self.id, self.provision_rejected_code)
+            return
 
         from ..services.paas_operator import get_paas_operator_client
 
@@ -6740,6 +7990,27 @@ class CloudService(models.Model):
             f"{max(storage * 3, 100)}Gi",
         )
 
+    def _compute_ns_ephemeral_quota(self, workspace):
+        """#1434：ns ResourceQuota 的 ``requests/limits.ephemeral-storage``。
+
+        與 ``_compute_ns_quota`` 同一個存活集（非 deleting），但按**服務數**而非方案
+        規格算：ephemeral-storage 不是方案賣的資源，上限的目的只是「一個租戶不能把節點
+        系統碟寫滿」。每個容器的預設上限由 operator 的 LimitRange 給（4Gi／request
+        128Mi）；這裡的總額按每台服務 2Gi request／40Gi limit 估——R8 盤點單一 release
+        最多 6 個容器（6×4Gi＝24Gi），滾動更新新舊 Pod 並存時翻倍約 48Gi，floor 80Gi
+        蓋得住；額度太緊的代價是**開通／更新時 Pod 被 admission 拒絕**，所以寧寬勿緊。
+        回傳字串 quantity（與其他 quota 欄位一致）。
+        """
+        Svc = self.env['woow_paas_platform.cloud_service'].sudo()
+        live_count = Svc.search_count([
+            ('workspace_id', '=', workspace.id),
+            ('state', '!=', 'deleting'),
+        ])
+        return (
+            f"{max(live_count * 2, 4)}Gi",
+            f"{max(live_count * 40, 80)}Gi",
+        )
+
     def _push_ns_quota(self, workspace, helm_namespace):
         """best-effort：重算並 PUT ns quota；operator 未設定 / 失敗只 log，
         絕不 abort 刪除。"""
@@ -6750,8 +8021,13 @@ class CloudService(models.Model):
         if not client:
             return
         cpu, mem, storage = self._compute_ns_quota(workspace)
+        eph_request, eph_limit = self._compute_ns_ephemeral_quota(workspace)
         try:
-            client.update_namespace_quota(helm_namespace, cpu, mem, storage)
+            client.update_namespace_quota(
+                helm_namespace, cpu, mem, storage,
+                ephemeral_storage_request=eph_request,
+                ephemeral_storage_limit=eph_limit,
+            )
         except Exception as e:
             _logger.warning(
                 "quota recompute PUT failed for %s: %s", helm_namespace, e,
@@ -6797,24 +8073,29 @@ class CloudService(models.Model):
         client = get_paas_operator_client(self.env)
         if client and self.helm_release_name and self.helm_namespace:
             try:
-                client.uninstall_release(
-                    self.helm_namespace, self.helm_release_name,
-                    subdomain=self.subdomain,
-                )
+                self._uninstall_release(client)
                 _logger.info(
                     "[CLOUD_SVC] _do_cleanup helm uninstalled service=%s",
                     self.id,
                 )
             except Exception as e:
-                _logger.warning(
-                    "[CLOUD_SVC] _do_cleanup helm uninstall failed service=%s: %s",
-                    self.id, e,
-                )
-                self.write({
-                    'state': 'error',
-                    'error_message': _('Cleanup failed: %(error)s', error=e),
-                })
-                return
+                if getattr(e, 'status_code', None) == 404:
+                    # #1424：release 本來就不在（開通被拒、從沒建立過，或已被別的路徑拆掉）
+                    # ＝要的結果已經成立，與 `_cleanup_helm` 同一個判準。之前會寫成
+                    # 「Cleanup failed」，而 lifecycle cron 每天再撞一次、永遠收不了尾。
+                    _logger.info(
+                        "[CLOUD_SVC] _do_cleanup release already gone service=%s",
+                        self.id)
+                else:
+                    _logger.warning(
+                        "[CLOUD_SVC] _do_cleanup helm uninstall failed service=%s: %s",
+                        self.id, e,
+                    )
+                    self.write({
+                        'state': 'error',
+                        'error_message': _('Cleanup failed: %(error)s', error=e),
+                    })
+                    return
 
         # Step 2.5 — #744：拆掉本服務的 Cloudflare Access app（＋ reusable
         # policies）。放在 helm 之後、狀態改寫之前，理由與 SA 的 `_do_cleanup`
@@ -6841,6 +8122,29 @@ class CloudService(models.Model):
         # Step 4 — #278 A1：本 record 已 state=deleting、被 domain 排除，
         # 以存活集重算 ns quota 並權威覆寫（best-effort，不影響刪除）。
         self._push_ns_quota(self.workspace_id, self.helm_namespace)
+
+    def _orphan_grace_period_days(self):
+        """#1431：刪除時請 operator 把孤兒 PVC／DataVolume 的保留期縮短成幾天；``None``＝預設。
+
+        從未進過 running（``first_running_at`` 空）的服務沒有租戶資料要保護 ⇒ 1 天；其餘照
+        預設（正式站 90 天，#317）。
+        """
+        self.ensure_one()
+        return None if self.first_running_at else NEVER_RUNNING_ORPHAN_GRACE_DAYS
+
+    def _uninstall_release(self, client):
+        """三條刪除路徑（租戶刪除 `_delete_service`、lifecycle `_do_cleanup`、`unlink` 兜底的
+        `_cleanup_helm`）共用的 operator 呼叫——保留期的判準只在這裡（#1431）。
+
+        曾經 running 的服務呼叫形狀與 #1431 之前完全相同（不帶 ``grace_period_days``）。
+        """
+        self.ensure_one()
+        kwargs = {'subdomain': self.subdomain}
+        grace = self._orphan_grace_period_days()
+        if grace:
+            kwargs['grace_period_days'] = grace
+        return client.uninstall_release(
+            self.helm_namespace, self.helm_release_name, **kwargs)
 
     def _cleanup_helm(self):
         """Idempotent helm uninstall for the direct-unlink / workspace-cascade
@@ -6869,10 +8173,7 @@ class CloudService(models.Model):
         if not client:
             return True  # operator unconfigured — no live release to tear down
         try:
-            client.uninstall_release(
-                self.helm_namespace, self.helm_release_name,
-                subdomain=self.subdomain,
-            )
+            self._uninstall_release(client)
             return True
         except PaaSOperatorError as e:
             if getattr(e, 'status_code', None) == 404:
@@ -7115,6 +8416,8 @@ class CloudService(models.Model):
         _reject_cs_access_identity_anchor_writes(self.env, vals)
         _reject_init_control_writes(self.env, vals)
         _reject_observation_control_writes(self.env, vals)
+        _reject_timeout_recovery_control_writes(self.env, vals)
+        _reject_service_history_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -7219,6 +8522,21 @@ class CloudService(models.Model):
                 and vals['state'] not in ('error', 'suspended')):
             leaving_init_exit = self.filtered(
                 lambda r: r.init_exit and r.state != vals['state'])
+        # #1416：`transition_timeout_at` 說的是「目前這則 error_message 是部署逾時寫的」。
+        # 改寫 error_message（別的來源接手，或推回正常時清空）、或離開 error 都讓它失效——
+        # 自癒 cron 因此只會碰到真正由逾時造成、之後沒人動過的 error。停權（error →
+        # suspended → error，Q25）不算離開：復權回到 error 後仍可自癒。集中在這裡而不是
+        # 逐路徑清（pitfall reaped-since-single-path-stamp-gc-immunity）。
+        leaving_timeout = self.browse()
+        if 'transition_timeout_at' not in vals and (
+                'error_message' in vals
+                or ('state' in vals and vals['state'] not in ('error', 'suspended'))):
+            leaving_timeout = self.filtered('transition_timeout_at')
+        # #1431：第一次進 running 就記下來（之後不再動）。集中在這裡，任何把 state 寫成
+        # running 的路徑（poll、resume、init 完成、逾時自癒……）自動跟上。明寫的呼叫端優先。
+        first_running = self.browse()
+        if vals.get('state') == 'running' and 'first_running_at' not in vals:
+            first_running = self.filtered(lambda r: not r.first_running_at)
         # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
         #
         # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
@@ -7269,6 +8587,12 @@ class CloudService(models.Model):
                         super(CloudService, reset_capacity).write({'init_capacity_wait_since': False})
             if leaving_init_exit:
                 super(CloudService, leaving_init_exit).write({'init_exit': False})
+            if leaving_timeout:
+                super(CloudService, leaving_timeout).write({'transition_timeout_at': False})
+            if first_running:
+                super(CloudService, first_running).write({
+                    'first_running_at': fields.Datetime.now(),
+                })
             if rebinding:
                 rebinding._assert_subscription_binding()
             elif 'workspace_id' in vals:
@@ -7633,6 +8957,12 @@ class CloudService(models.Model):
                 observation_started if defaulted.get('state') in OBSERVATION_TRANSITION_STATES
                 else False
             )
+            # #1431：直接建成 running 的列（遷移資料、測試）也算「第一次進 running」，與
+            # write() 同一個規則；明寫的值優先（建立閘已保證只有平台程式碼走得到這裡）。
+            if 'first_running_at' not in normalized:
+                normalized['first_running_at'] = (
+                    observation_started if defaulted.get('state') == 'running' else False
+                )
             raw_values = normalized.get('helm_values')
             if raw_values:
                 try:

@@ -17,6 +17,11 @@
                            statusbar_visible="pending,deploying,running"/>
                 </header>
                 <sheet>
+                    <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->
+                    <div class="alert alert-warning" role="alert"
+                         invisible="not redeploy_check_message">
+                        <field name="redeploy_check_message" nolabel="1"/>
+                    </div>
                     <div class="oe_title">
                         <h1>
                             <field name="name" placeholder="Service Name"/>
@@ -72,6 +77,9 @@
                               invisible="not error_message and not init_error">
                             <group>
                                 <field name="error_message"/>
+                                <!-- #1416：有值＝這筆 error 是部署逾時寫的，背景仍在重查、就緒會自動恢復。 -->
+                                <field name="transition_timeout_at"
+                                       invisible="not transition_timeout_at"/>
                                 <field name="init_error"/>
                                 <field name="init_retries"/>
                             </group>

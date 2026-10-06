@@ -44,6 +44,8 @@ async def create_namespace(request: NamespaceCreateRequest):
             memory_limit=request.memory_limit,
             storage_limit=request.storage_limit,
             workspace_id=request.workspace_id,
+            ephemeral_storage_request=request.ephemeral_storage_request,
+            ephemeral_storage_limit=request.ephemeral_storage_limit,
         )
         logger.info(f"Created namespace {request.name} with quota")
         return result
@@ -70,7 +72,10 @@ async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest
     """整組覆寫既有 ns 的 ResourceQuota（值由 Odoo 依存活 service 集算好傳入）。"""
     try:
         result = k8s_service.update_namespace_quota(
-            name, request.cpu_limit, request.memory_limit, request.storage_limit)
+            name, request.cpu_limit, request.memory_limit, request.storage_limit,
+            ephemeral_storage_request=request.ephemeral_storage_request,
+            ephemeral_storage_limit=request.ephemeral_storage_limit,
+        )
         logger.info(f"Updated quota for namespace {name}")
         return result
     except ValueError as e:

@@ -203,8 +203,9 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             svc_id = svc.id
             subdomain = svc.subdomain
             ws.unlink()
+            # #1431：fixture 從未進過 running ⇒ 另帶 grace_period_days=1。
             mock_client.uninstall_release.assert_called_once_with(
-                'ns-cs', 'rel-cs', subdomain=subdomain)
+                'ns-cs', 'rel-cs', subdomain=subdomain, grace_period_days=1)
         self.assertFalse(
             self.env['woow_paas_platform.cloud_service'].browse(svc_id).exists())
 
@@ -291,7 +292,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             subdomain = cs.subdomain
             ws.unlink()
             cs_client.uninstall_release.assert_called_once_with(
-                'ns-cs', 'rel-cs', subdomain=subdomain)
+                'ns-cs', 'rel-cs', subdomain=subdomain, grace_period_days=1)
             sh_client.delete_tunnel.assert_called_once_with(
                 'tun-mix-sh', tunnel_name=False)
             sa_client.delete_tunnel.assert_called_once_with(

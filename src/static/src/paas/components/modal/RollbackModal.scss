@@ -204,3 +204,28 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+// #1433：確認步驟（說明會回復什麼、不會回復什麼）
+.o_woow_rollback_confirm {
+    padding: 0.25rem 0;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+
+    &_title {
+        font-size: 1rem;
+        color: $woow-text-primary;
+        margin-bottom: 0.75rem;
+
+        strong {
+            color: $woow-primary;
+        }
+    }
+
+    &_list {
+        margin: 0;
+        padding-left: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+}

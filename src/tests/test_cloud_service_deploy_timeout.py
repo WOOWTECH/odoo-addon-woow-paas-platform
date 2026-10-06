@@ -13,7 +13,9 @@ cron 每分鐘、前台每 5 秒都只是「再問一次 operator」，沒有一
 #1159 起 list/get 純讀、不再 poll），所以一旦寫進 ``error``，就再也沒有任何路徑會把
 它 poll 回 ``running``——即使叢集裡的服務其實在門檻之後就緒了。誤殺的代價是「本來會好的服務
 被打成 error，租戶得重新下單」，晚報的代價只是「維運晚 N 分鐘知道」。兩者不對稱，
-故門檻一律取寬。這也是下面 #4（錨取較晚者）與 #6（VM 獨立門檻）存在的理由：它們
+故門檻一律取寬。（#1416 起逾時造成的 error 會由背景 cron 在時間窗內重查、就緒就推回來
+——見 ``test_deploy_timeout_recovery_1416.py``；那是補救，不改變「門檻取寬」的理由：誤殺
+期間租戶照樣看到錯誤。）這也是下面 #4（錨取較晚者）與 #6（VM 獨立門檻）存在的理由：它們
 各自堵住一種會**提早**觸發的錯算。
 
 ## 模擬時鐘的做法
@@ -482,20 +484,27 @@ class TestTimeoutDiagnosis(_Base):
         self.assertEqual(svc.state, 'error', '前置：這條應該要逾時')
         return svc.error_message
 
-    def test_message_has_grepable_prefix(self):
-        """固定前綴讓維運能把「逾時」與「operator 明確回報失敗」分開撈。"""
+    def test_timeout_source_is_marked_and_prefix_kept(self):
+        """維運要能把「逾時」與「operator 明確回報失敗」分開撈。
+
+        #1417 起 ``error_message`` 先給租戶一句話（建立者的語言），訊息不再以固定前綴
+        開頭——分得開的依據改成 #1416 的 ``transition_timeout_at`` 欄位（可 search，
+        不受語言影響）；給管理員的技術細節仍保留 #489 的固定片段。
+        """
         svc = self._make_service('container',
                                  anchor_minutes_ago=_CONTAINER_DEFAULT + 1)
 
         msg = self._timeout_message(svc, _status(pods=[]))
 
-        self.assertTrue(
-            msg.startswith('Deployment timed out after'),
-            f'訊息前綴不穩定，維運無法 grep：{msg!r}',
+        self.assertTrue(svc.transition_timeout_at, '逾時來源沒有記下來，自癒與盤點都無從判斷')
+        self.assertIn(
+            '\nTechnical details for the administrator: Deployment timed out after %s minutes'
+            % _CONTAINER_DEFAULT, msg,
+            f'技術細節的固定片段不見了：{msg!r}',
         )
 
     def test_operator_reported_failure_is_not_labelled_timeout(self):
-        """對照組：operator 回 failed 的 error 不得帶逾時前綴（兩種來源要分得開）。"""
+        """對照組：operator 回 failed 的 error 不得帶逾時前綴與逾時標記（兩種來源要分得開）。"""
         svc = self._make_service('container',
                                  anchor_minutes_ago=_CONTAINER_DEFAULT + 1)
 
@@ -503,6 +512,7 @@ class TestTimeoutDiagnosis(_Base):
 
         self.assertEqual(svc.state, 'error')
         self.assertNotIn('timed out', svc.error_message or '')
+        self.assertFalse(svc.transition_timeout_at)
 
     def test_no_pods_points_at_quota_or_labels(self):
         """無 pod：Pod 物件從沒被建出來 → 方向是 quota 或 chart 標籤。"""
@@ -514,7 +524,10 @@ class TestTimeoutDiagnosis(_Base):
         self.assertIn('quota', msg.lower())
 
     def test_pods_not_ready_points_at_the_pods(self):
-        """有 pod 但沒 ready → 方向是 pod 本身（events / logs）。"""
+        """Running 但沒 ready → 方向是 pod 本身（logs／readiness probe）。
+
+        Pending（沒跑起來）是另一個方向，見 ``test_deploy_timeout_diagnosis_1417.py``。
+        """
         svc = self._make_service('container',
                                  anchor_minutes_ago=_CONTAINER_DEFAULT + 1)
 

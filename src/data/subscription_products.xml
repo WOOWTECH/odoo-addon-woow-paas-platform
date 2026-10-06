@@ -2248,6 +2248,202 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
+        <!-- VPN 控制台（Headscale）（1 vCPU／1 GB／1 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
+             cs_vcpu／cs_ram_gb 由 chart 套在 headplane（頂層 resources overlay）；cs_storage_gb＝唯一一顆 PVC。 -->
+        <record id="plan_headscale_monthly" model="sh.subscription.plan">
+            <field name="name">VPN 控制台（Headscale）雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">750</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">1.0</field>
+            <field name="cs_storage_gb">1</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="plan_headscale_yearly" model="sh.subscription.plan">
+            <field name="name">VPN 控制台（Headscale）雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">7500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">1.0</field>
+            <field name="cs_storage_gb">1</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="product_headscale_monthly" model="product.product">
+            <field name="name">VPN 控制台（Headscale）雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">750</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_headscale_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+        <record id="product_headscale_yearly" model="product.product">
+            <field name="name">VPN 控制台（Headscale）雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">7500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_headscale_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <!-- VPN 節點（相容 Tailscale）（1 vCPU／0.5 GB／1 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
+             cs_ram_gb=0.5 ⇒ overlay 寫 512Mi（套在 tailscale 容器）；cs_storage_gb＝節點身分那顆 PVC。 -->
+        <record id="plan_tailscale_monthly" model="sh.subscription.plan">
+            <field name="name">VPN 節點（相容 Tailscale）雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">400</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">0.5</field>
+            <field name="cs_storage_gb">1</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="plan_tailscale_yearly" model="sh.subscription.plan">
+            <field name="name">VPN 節點（相容 Tailscale）雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">4000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">0.5</field>
+            <field name="cs_storage_gb">1</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="product_tailscale_monthly" model="product.product">
+            <field name="name">VPN 節點（相容 Tailscale）雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">400</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_tailscale_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+        <record id="product_tailscale_yearly" model="product.product">
+            <field name="name">VPN 節點（相容 Tailscale）雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_tailscale_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <!-- AI 模型閘道（LiteLLM）（1 vCPU／2 GB／10 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
+             cs_vcpu／cs_ram_gb 套在 litellm 容器（內附 PG 用 chart 自己的 requests／limits）；
+             cs_storage_gb＝唯一一顆 PVC（PG 資料＋每日備份）。 -->
+        <record id="plan_litellm_monthly" model="sh.subscription.plan">
+            <field name="name">AI 模型閘道（LiteLLM）雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">1500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">10</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="plan_litellm_yearly" model="sh.subscription.plan">
+            <field name="name">AI 模型閘道（LiteLLM）雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">15000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">1</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">10</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="product_litellm_monthly" model="product.product">
+            <field name="name">AI 模型閘道（LiteLLM）雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">1500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_litellm_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+        <record id="product_litellm_yearly" model="product.product">
+            <field name="name">AI 模型閘道（LiteLLM）雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">15000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_litellm_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
              的 plan_ha_paas_monthly / product_ha_paas_monthly（自帶 storefront_hidden=True），
              本 PR 原有的 plan_ha_paas / product_ha_paas 已移除避免重複 0 元 HA seed。

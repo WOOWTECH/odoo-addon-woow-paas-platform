@@ -1,0 +1,515 @@
+# prod clone 中和斷言 fixture（#1206 交付 2；裁決 #1162 留言 14057 D10）
+#
+# ⚠ 第一次彩排前由人審 commit；改這份檔案＝改 gate，PR 必須有人覆核。
+# expected 取自 #1200 的 prod 量測（留言 14397）：那是「中和前」的值，這裡寫的是「中和後必須成立」的值。
+#
+# 欄位（schema 固定）：
+#   check_id  唯一 ID；前綴＝#1162 的層：A 排程、B 外連、C 身分、D 進入面、E 租戶憑證、P PII、K 網路／叢集、I 只記錄
+#   table     查詢的主表；表不存在時依 when_absent 判定（預設 fail——表名打錯不得靜默通過）
+#   columns   （選填）必須存在的欄位；任一缺席同 table 缺席處理（vendored 欄位改名會落在這裡）
+#   query     單一純量的 SELECT；kind="builtin" 時是腳本內建檢查的名字
+#   expected  比對值（字串相等）；可加前綴 >=、<=、>、<、!=（數值比較）；"*" 只記錄不判定
+#   kind      （選填）"sql"（預設）｜"builtin"
+#   when_absent（選填）"fail"（預設）｜"pass"（該 addon 在 prod 未安裝，#1200 已確認）
+#   note      （選填）說明
+#
+# 執行：seed-from-prod.sh gate <slug>（或 neutralize-clone.sh 結尾自動跑）。輸出只有 count／聚合，不含資料值。
+
+# ───── 先決條件 ─────
+[[check]]
+check_id = "A00_is_neutralized"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT lower(value) FROM ir_config_parameter WHERE key = 'database.is_neutralized'), '<missing>')"
+expected = "true"
+note = "先於 IAP 斷言：iap_account 的 +disabled 綁定 is_neutralized"
+
+# ───── A 排程 ─────
+[[check]]
+check_id = "A01_cron_active_non_autovacuum"
+table = "ir_cron"
+query = """
+SELECT count(*) FROM ir_cron
+ WHERE active AND id NOT IN (SELECT res_id FROM ir_model_data
+                              WHERE model = 'ir.cron' AND module = 'base' AND name = 'autovacuum_job')"""
+expected = "0"
+note = "每次 -u／Odoo 起來後都要重跑（billing_ssot_guard.xml noupdate=0）"
+
+[[check]]
+check_id = "A02_cron_trigger"
+table = "ir_cron_trigger"
+query = "SELECT count(*) FROM ir_cron_trigger"
+expected = "0"
+
+[[check]]
+check_id = "A03_base_automation_active"
+table = "base_automation"
+columns = ["active"]
+query = "SELECT count(*) FROM base_automation WHERE active"
+expected = "0"
+note = "#1200：prod 2 筆，皆為 n8n webhook"
+
+[[check]]
+check_id = "A04_webhook_url_live"
+table = "ir_act_server"
+columns = ["webhook_url"]
+query = "SELECT count(*) FROM ir_act_server WHERE state = 'webhook' AND webhook_url IS DISTINCT FROM 'neutralization - disable webhook'"
+expected = "0"
+
+[[check]]
+check_id = "A05_autovacuum_probe_present"
+table = "ir_cron"
+query = """
+SELECT count(*) FROM ir_cron
+ WHERE active AND id IN (SELECT res_id FROM ir_model_data
+                          WHERE model = 'ir.cron' AND module = 'base' AND name = 'autovacuum_job')"""
+expected = "1"
+note = "#1162 D3-A：autovacuum 留作 cron 探針"
+
+# ───── B 外連 ─────
+[[check]]
+check_id = "B01_mail_server_live"
+table = "ir_mail_server"
+query = "SELECT count(*) FROM ir_mail_server WHERE active AND smtp_host IS DISTINCT FROM 'invalid'"
+expected = "0"
+
+[[check]]
+check_id = "B02_mail_server_dummy"
+table = "ir_mail_server"
+query = "SELECT count(*) FROM ir_mail_server WHERE active AND name = 'neutralization - disable emails' AND smtp_host = 'invalid'"
+expected = "1"
+note = "dummy 必須存在：刪掉會 fallback 到 conf 的 localhost:25"
+
+[[check]]
+check_id = "B03_mail_server_credentials"
+table = "ir_mail_server"
+query = "SELECT count(*) FROM ir_mail_server WHERE smtp_user IS NOT NULL OR smtp_pass IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B04_gmail_tokens"
+table = "ir_mail_server"
+columns = ["google_gmail_refresh_token", "google_gmail_access_token"]
+query = "SELECT count(*) FROM ir_mail_server WHERE google_gmail_refresh_token IS NOT NULL OR google_gmail_access_token IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B05_mail_template_server"
+table = "mail_template"
+query = "SELECT count(*) FROM mail_template WHERE mail_server_id IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B06_mail_outgoing"
+table = "mail_mail"
+query = "SELECT count(*) FROM mail_mail WHERE state = 'outgoing'"
+expected = "0"
+note = "#1200：prod 有 99 筆 exception；彩排後另以 state='outgoing' AND write_date > T0 判外送"
+
+[[check]]
+check_id = "B07_vapid_keys"
+table = "ir_config_parameter"
+query = "SELECT count(*) FROM ir_config_parameter WHERE key IN ('mail.web_push_vapid_private_key', 'mail.web_push_vapid_public_key', 'mail.sfu_server_key')"
+expected = "0"
+
+[[check]]
+check_id = "B08_push_devices"
+table = "mail_push_device"
+query = "SELECT count(*) FROM mail_push_device"
+expected = "0"
+
+[[check]]
+check_id = "B09_iap_tokens"
+table = "iap_account"
+query = "SELECT count(*) FROM iap_account WHERE account_token IS NOT NULL AND account_token NOT LIKE '%+disabled'"
+expected = "0"
+note = "#1200：prod 3 筆有 token"
+
+[[check]]
+check_id = "B10_payment_provider"
+table = "payment_provider"
+query = "SELECT count(*) FROM payment_provider WHERE state NOT IN ('disabled', 'test')"
+expected = "0"
+note = "#1200：ECPay、custom 為 enabled"
+
+[[check]]
+check_id = "B11_ecpay_demo_mode"
+table = "res_company"
+columns = ["ecpay_demo_mode"]
+query = "SELECT coalesce(bool_and(ecpay_demo_mode), false)::text FROM res_company"
+expected = "true"
+
+[[check]]
+check_id = "B12_ecpay_merchant"
+table = "res_company"
+columns = ["ecpay_MerchantID", "ecpay_HashKey", "ecpay_HashIV"]
+query = """SELECT count(*) FROM res_company
+ WHERE "ecpay_MerchantID" IS DISTINCT FROM '2000132' OR "ecpay_HashKey" IS DISTINCT FROM 'ejCk326UnaZWKisg'
+    OR "ecpay_HashIV" IS DISTINCT FROM 'q9jcZX8Ib9LM8wYk'"""
+expected = "0"
+note = "ECPay 官方公開測試商店碼"
+
+[[check]]
+check_id = "B13_auto_invoice"
+table = "res_company"
+columns = ["auto_invoice"]
+query = "SELECT count(*) FROM res_company WHERE auto_invoice IS DISTINCT FROM 'manual'"
+expected = "0"
+
+[[check]]
+check_id = "B14_line_liff_config"
+table = "line_liff_config"
+columns = ["messaging_channel_secret", "messaging_access_token", "login_channel_secret"]
+query = """SELECT count(*) FROM line_liff_config
+ WHERE coalesce(messaging_channel_id, messaging_channel_secret, messaging_access_token,
+                login_channel_id, login_channel_secret) IS NOT NULL"""
+expected = "0"
+
+[[check]]
+check_id = "B15_line_icp"
+table = "ir_config_parameter"
+query = """SELECT count(*) FROM ir_config_parameter
+ WHERE key IN ('woow_line_base.messaging_access_token', 'woow_line_base.messaging_channel_id',
+               'woow_line_base.messaging_channel_secret', 'woow_line_base.login_channel_id',
+               'woow_line_base.login_channel_secret') AND coalesce(value, '') <> ''"""
+expected = "0"
+
+[[check]]
+check_id = "B16_livechat_line_secret"
+table = "im_livechat_channel"
+columns = ["line_channel_secret"]
+query = "SELECT count(*) FROM im_livechat_channel WHERE line_channel_secret IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B17_livechat_ai"
+table = "im_livechat_channel"
+columns = ["ai_enabled", "ai_api_key"]
+query = "SELECT count(*) FROM im_livechat_channel WHERE ai_enabled OR ai_api_key IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B18_gdrive"
+table = "cl_link_drive_gdrive"
+columns = ["gdrive_service_account_info", "gdrive_client_secret_file", "gdrive_refresh_token"]
+query = """SELECT count(*) FROM cl_link_drive_gdrive
+ WHERE coalesce(gdrive_service_account_info, gdrive_client_secret_file, nullif(gdrive_refresh_token, '')) IS NOT NULL"""
+expected = "0"
+when_absent = "pass"
+note = "cloud_link_gdrive 未必安裝"
+
+[[check]]
+check_id = "B19_ai_config"
+table = "ai_config"
+columns = ["api_key"]
+query = "SELECT count(*) FROM ai_config WHERE api_key IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B20_google_calendar"
+table = "res_users_settings"
+columns = ["google_calendar_rtoken", "google_calendar_token"]
+query = "SELECT count(*) FROM res_users_settings WHERE google_calendar_rtoken IS NOT NULL OR google_calendar_token IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "B21_operator_url"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'woow_paas_platform.operator_url'), '<missing>')"
+expected = "http://127.0.0.1:9"
+note = "#1162 D4：黑洞 sentinel（不清空：兩處對 None 靜默 return）"
+
+[[check]]
+check_id = "B22_operator_api_key"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'woow_paas_platform.operator_api_key'), '<missing>')"
+expected = "neutralized"
+
+[[check]]
+check_id = "B23_agent_runtime_default"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'woow_paas_platform.default_enable_agent_runtime'), '<missing>')"
+expected = "False"
+
+[[check]]
+check_id = "B24_agent_session_live"
+table = "woow_paas_platform_agent_session"
+columns = ["state"]
+query = "SELECT count(*) FROM woow_paas_platform_agent_session WHERE state NOT IN ('reaped', 'absent')"
+expected = "0"
+note = "#1201：absent 沒有 pod，刻意不改"
+
+[[check]]
+check_id = "B25_mcp_server_api_key"
+table = "woow_paas_platform_mcp_server"
+columns = ["active", "api_key", "headers_json"]
+query = """SELECT count(*) FROM woow_paas_platform_mcp_server
+ WHERE active OR (api_key IS NOT NULL AND api_key <> 'neutralized') OR headers_json IS NOT NULL"""
+expected = "0"
+note = "#1201：同步關＝active=false；headers_json 可能夾帶 Bearer token"
+
+# ───── C 身分 ─────
+[[check]]
+check_id = "C01_web_base_url"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'web.base.url'), '<missing>')"
+expected = "http://localhost:8069"
+
+[[check]]
+check_id = "C02_web_base_url_freeze"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'web.base.url.freeze'), '<missing>')"
+expected = "True"
+
+[[check]]
+check_id = "C03_website_domain"
+table = "website"
+columns = ["domain"]
+query = "SELECT count(*) FROM website WHERE domain IS NOT NULL"
+expected = "0"
+note = "#1200：prod 為 https://aiot.woowtech.io"
+
+[[check]]
+check_id = "C04_database_secret_dummy"
+table = "ir_config_parameter"
+query = "SELECT count(*) FROM ir_config_parameter WHERE key = 'database.secret' AND value LIKE 'neutralized-%'"
+expected = "1"
+
+[[check]]
+check_id = "C05_database_uuid_rotated"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT substr(value, 15, 1) FROM ir_config_parameter WHERE key = 'database.uuid'), '<missing>')"
+expected = "4"
+note = "Odoo 產的是 uuid1；版本位 4＝已輪替成 gen_random_uuid()"
+
+[[check]]
+check_id = "C06_deploy_env"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'woow_paas_platform.deploy_env'), '<missing>')"
+expected = "stg"
+
+[[check]]
+check_id = "C07_namespace_prefix"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'woow_paas_platform.namespace_prefix'), '<missing>')"
+expected = "paas-ws-stg-"
+
+[[check]]
+check_id = "C08_conf_email_from"
+table = ""
+kind = "builtin"
+query = "conf_email_from"
+expected = "noreply@sandbox.invalid"
+note = "R2-Q5：conf email_from 在 conf Secret、psql 碰不到；不得帶 prod odooEmail 現值"
+
+# ───── D 進入面 ─────
+[[check]]
+check_id = "D01_oauth_token"
+table = "woow_paas_platform_oauth_token"
+query = "SELECT count(*) FROM woow_paas_platform_oauth_token"
+expected = "0"
+note = "#1200：prod 95 筆（3 筆未 revoked）；MCP 的 OAuth token 也存在這張表"
+
+[[check]]
+check_id = "D02_oauth_code"
+table = "woow_paas_platform_oauth_code"
+query = "SELECT count(*) FROM woow_paas_platform_oauth_code"
+expected = "0"
+
+[[check]]
+check_id = "D03_oauth_device_code"
+table = "woow_paas_platform_oauth_device_code"
+query = "SELECT count(*) FROM woow_paas_platform_oauth_device_code"
+expected = "0"
+
+[[check]]
+check_id = "D04_user_oauth_access_token"
+table = "res_users"
+columns = ["oauth_access_token"]
+query = "SELECT count(*) FROM res_users WHERE oauth_access_token IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "D05_user_apikeys"
+table = "res_users_apikeys"
+query = "SELECT count(*) FROM res_users_apikeys"
+expected = "0"
+
+[[check]]
+check_id = "D06_totp_device"
+table = "auth_totp_device"
+query = "SELECT count(*) FROM auth_totp_device"
+expected = "0"
+
+[[check]]
+check_id = "D07_totp_secret"
+table = "res_users"
+columns = ["totp_secret"]
+query = "SELECT count(*) FROM res_users WHERE totp_secret IS NOT NULL"
+expected = "0"
+
+[[check]]
+check_id = "D08_oauth_provider"
+table = "auth_oauth_provider"
+columns = ["enabled"]
+query = "SELECT count(*) FROM auth_oauth_provider WHERE enabled"
+expected = "0"
+
+[[check]]
+check_id = "D09_mcp_oauth_token"
+table = "mcp_oauth_token"
+columns = ["revoked"]
+query = "SELECT count(*) FROM mcp_oauth_token WHERE NOT revoked"
+expected = "0"
+when_absent = "pass"
+note = "#1200：prod 無此表（vendored mcp_server 未安裝）"
+
+[[check]]
+check_id = "D10_passwords_reset"
+table = ""
+kind = "builtin"
+query = "passwords_reset"
+expected = "0"
+note = "非沙盒 hash 的 res_users（id≠1、password 非空）筆數"
+
+[[check]]
+check_id = "I01_admin_fingerprint"
+table = "res_users"
+query = "SELECT coalesce((SELECT left(encode(sha256(convert_to(login || ':' || coalesce(password, ''), 'UTF8')), 'hex'), 12) FROM res_users WHERE id = 2), '<missing>')"
+expected = "*"
+note = "R2-Q2：首次開機前後必須相同（runbook 比對兩次輸出）"
+
+[[check]]
+check_id = "I02_upgrade_done"
+table = "ir_config_parameter"
+query = "SELECT coalesce((SELECT value FROM ir_config_parameter WHERE key = 'woow_paas_platform.upgrade_done'), '<absent>')"
+expected = "*"
+
+# ───── E 平台 DB 內的租戶 live 憑證 ─────
+[[check]]
+check_id = "E01_security_access_tunnel"
+table = "woow_paas_platform_security_access"
+columns = ["tunnel_token"]
+query = "SELECT count(*) FROM woow_paas_platform_security_access WHERE tunnel_token IS NOT NULL AND tunnel_token <> 'neutralized'"
+expected = "0"
+note = "#1200：prod 1 筆"
+
+[[check]]
+check_id = "E02_smart_home_tunnel"
+table = "woow_paas_platform_smart_home"
+columns = ["tunnel_token"]
+query = "SELECT count(*) FROM woow_paas_platform_smart_home WHERE tunnel_token IS NOT NULL AND tunnel_token <> 'neutralized'"
+expected = "0"
+note = "#1200：prod 2 筆"
+
+[[check]]
+check_id = "E03_cloud_service_secret"
+table = "woow_paas_platform_cloud_service_secret"
+columns = ["admin_password", "gateway_api_key"]
+query = """SELECT count(*) FROM woow_paas_platform_cloud_service_secret
+ WHERE (admin_password IS NOT NULL AND admin_password <> 'neutralized')
+    OR (gateway_api_key IS NOT NULL AND gateway_api_key <> 'neutralized')"""
+expected = "0"
+note = "#1200：prod 1 筆"
+
+[[check]]
+check_id = "E04_cloud_service_tokens"
+table = "woow_paas_platform_cloud_service"
+columns = ["mcp_auth_token", "n8n_api_key", "n8n_owner_password"]
+query = """SELECT count(*) FROM woow_paas_platform_cloud_service
+ WHERE (mcp_auth_token IS NOT NULL AND mcp_auth_token <> 'neutralized')
+    OR (n8n_api_key IS NOT NULL AND n8n_api_key <> 'neutralized')
+    OR (n8n_owner_password IS NOT NULL AND n8n_owner_password <> 'neutralized')"""
+expected = "0"
+
+# ───── PII ─────
+[[check]]
+check_id = "P01_partner_email"
+table = "res_partner"
+columns = ["email"]
+query = "SELECT count(*) FROM res_partner WHERE email IS NOT NULL AND email NOT LIKE '%@sandbox.invalid'"
+expected = "0"
+note = "#1200：prod 316 筆有 email"
+
+[[check]]
+check_id = "P02_partner_phone"
+table = "res_partner"
+columns = ["phone", "mobile"]
+query = """SELECT count(*) FROM res_partner
+ WHERE (phone IS NOT NULL AND phone NOT LIKE '+0-000-%') OR (mobile IS NOT NULL AND mobile NOT LIKE '+0-000-%')"""
+expected = "0"
+
+[[check]]
+check_id = "P03_employee_email"
+table = "hr_employee"
+columns = ["private_email", "work_email"]
+query = """SELECT count(*) FROM hr_employee
+ WHERE (private_email IS NOT NULL AND private_email NOT LIKE '%@sandbox.invalid')
+    OR (work_email IS NOT NULL AND work_email NOT LIKE '%@sandbox.invalid')"""
+expected = "0"
+
+[[check]]
+check_id = "P04_employee_phone"
+table = "hr_employee"
+columns = ["private_phone", "mobile_phone", "work_phone"]
+query = """SELECT count(*) FROM hr_employee
+ WHERE (private_phone IS NOT NULL AND private_phone NOT LIKE '+0-000-%')
+    OR (mobile_phone IS NOT NULL AND mobile_phone NOT LIKE '+0-000-%')
+    OR (work_phone IS NOT NULL AND work_phone NOT LIKE '+0-000-%')"""
+expected = "0"
+
+# ───── K 網路／叢集（腳本內建檢查）─────
+[[check]]
+check_id = "K00_target_guard"
+table = ""
+kind = "builtin"
+query = "target_guard"
+expected = "ok"
+note = "第 0 條防呆：dev-sandbox-*、≠ dev-sandbox-stg、ns label、platform 沙盒、lockdown annotation"
+
+[[check]]
+check_id = "K01_np_content"
+table = ""
+kind = "builtin"
+query = "np_content"
+expected = "PASS"
+note = "無 0.0.0.0/0、無 paas-managed、無指向 paas-* 的 selector、egress 只剩 kube-system:53＋同 ns"
+
+[[check]]
+check_id = "K02_np_marker"
+table = ""
+kind = "builtin"
+query = "np_marker"
+expected = "present"
+note = "腳本 apply 的固定命名正向標記 NP（prod-clone-lockdown-marker）"
+
+[[check]]
+check_id = "K03_np_probe"
+table = ""
+kind = "builtin"
+query = "np_probe"
+expected = "blocked"
+note = "沙盒內對 api.line.me:443 連線必須失敗（先等 NP 生效窗口，見 woowprd#13）"
+
+[[check]]
+check_id = "K04_transfer_hole_absent"
+table = ""
+kind = "builtin"
+query = "transfer_hole"
+expected = "absent"
+note = "搬運洞（放行 paas-system 的 NP）與 receiver pod 已移除"
+
+[[check]]
+check_id = "K05_incoming_clean"
+table = ""
+kind = "builtin"
+query = "incoming_clean"
+expected = "clean"
+note = "restore 驗完已刪 incoming/ 原始檔（PVC 不存在也算 clean）"
+
+[[check]]
+check_id = "K06_all_dbs_neutralized"
+table = ""
+kind = "builtin"
+query = "all_dbs_neutralized"
+expected = "0"
+note = "非 template、非 postgres 的 DB 中 database.is_neutralized≠true 的個數"

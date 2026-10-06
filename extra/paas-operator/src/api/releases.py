@@ -5,13 +5,15 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import yaml
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
 from src.models.schemas import (
     MqttAddressResponse,
+    PublicAddressResponse,
     ReleaseCreateRequest,
     ReleaseInfo,
     ReleaseResetConfigRequest,
@@ -32,12 +34,29 @@ from src.services.helm import (
     KubectlException,
     KubernetesService,
 )
-from src.services.helm import _sanitize_release_values
+from src.services.helm import _live_objects, _sanitize_release_values
+from src.services.upgrade_preflight import (
+    describe_conflicts,
+    describe_helm_failure,
+    find_immutable_conflicts,
+)
 from src.services.storage_quota import (
     build_quota_error_detail,
     exhausted_resources,
     is_storage_quota_rejection,
     summarize,
+)
+from src.services.storage_capacity import (
+    CapacityDataError,
+    LonghornCluster,
+    build_capacity_error_detail,
+    collect_volume_requests,
+    format_gib,
+    has_storage_datavolume,
+    is_schedulable,
+    parse_storage_classes,
+    simulate,
+    summarize_orphans,
 )
 
 
@@ -149,7 +168,15 @@ def _ensure_image_pull_secrets(
     # CDI 立刻生出 importer pod，屆時再 patch SA 已經來不及（admission 只在 pod
     # 建立當下併入）。
     k8s_service.ensure_default_sa_image_pull_secret(namespace)
+    return _with_default_pull_secrets(values)
 
+
+def _with_default_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """values 淺複本＋預設 imagePullSecrets（純函式；不碰叢集）。
+
+    #1415：容量預檢的 dry-run 要用與真正 install **同一份** values 渲染，但必須在任何
+    叢集寫入（SA patch）之前，所以把「改 values」從 ``_ensure_image_pull_secrets`` 拆出來。
+    """
     merged = dict(values or {})
     merged.setdefault(
         "imagePullSecrets", [{"name": settings.registry_secret_name}]
@@ -201,6 +228,138 @@ def _precheck_storage_quota(namespace: str) -> None:
         raise _storage_quota_conflict(namespace, summary, resources)
 
 
+def _cluster_capacity_conflict_detail(request: ReleaseCreateRequest) -> Optional[Dict[str, Any]]:
+    """#1415：這次 install 要新建的 Longhorn volume 是否「確定」排不進叢集。
+
+    排不進回 409 的 ``detail``；放得下、或任何一步拿不到資料（不知道）回 None＝放行。
+    步驟（全部唯讀，渲染不套用任何東西）：
+
+    1. 讀 Longhorn 節點／設定與 StorageClass（叢集沒有 Longhorn、權限不足、逾時 ⇒ 放行）；
+    2. 用與真正 install **同一組** chart／version／values／post-renderer 跑
+       ``helm install --dry-run``，拿到這次會建的 PVC、StatefulSet volumeClaimTemplates、
+       CDI DataVolume（manifest 可能含渲染後的 Secret，**不得進 log**）；
+    3. 扣掉 namespace 裡已經存在的同名 PVC（重試安裝），只算 provisioner 是 Longhorn 的；
+    4. 照 Longhorn 排程規則模擬放置（``storage_capacity.simulate``）。
+
+    為什麼用 dry-run 而不是在 post-renderer 裡判斷：post-renderer 是 helm 的子程序，拿不到
+    operator 的設定與 kubectl，失敗只能透過 stderr 字串傳回來；dry-run 多一次 chart 渲染
+    （實測數秒），換來資料流單純、任何失敗都能明確放行，形制同 #1407 的 upgrade 預檢。
+    """
+    namespace, name = request.namespace, request.name
+    try:
+        snapshot = k8s_service.get_longhorn_capacity_snapshot()
+    except (KubectlException, ValueError) as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (Longhorn unreadable): %s",
+            namespace, name, getattr(exc, "stderr", None) or exc,
+        )
+        return None
+    try:
+        cluster = LonghornCluster.from_snapshot(snapshot["nodes"], snapshot["settings"])
+        classes, default_class = parse_storage_classes(snapshot["storage_classes"])
+    except CapacityDataError as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (unexpected Longhorn data): %s",
+            namespace, name, exc,
+        )
+        return None
+    if not cluster.nodes or not any(sc.is_longhorn for sc in classes.values()):
+        logger.info("Cluster storage capacity pre-check: no Longhorn in this cluster, skipped")
+        return None
+
+    try:
+        manifest = helm_service.install(
+            namespace=namespace,
+            name=name,
+            chart=request.chart,
+            values=_with_default_pull_secrets(request.values),
+            sensitive_values=request.sensitive_values,
+            version=request.version,
+            dry_run=True,
+            subprocess_timeout_seconds=settings.storage_capacity_render_timeout_seconds,
+        )
+    except (HelmException, ValueError) as exc:
+        # 真正的 install 會在同一步失敗並走原本的錯誤處理（含 #1348 的 quota 辨識）。
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (render failed): %s",
+            namespace, name, getattr(exc, "message", None) or exc,
+        )
+        return None
+    if not isinstance(manifest, str):
+        return None
+    try:
+        docs = [d for d in yaml.safe_load_all(manifest) if isinstance(d, dict)]
+    except yaml.YAMLError as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (manifest unparsable: %s)",
+            namespace, name, type(exc).__name__,
+        )
+        return None
+    try:
+        existing = k8s_service.list_pvcs(namespace)
+    except KubectlException as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (cannot list PVCs): %s",
+            namespace, name, exc.stderr or exc,
+        )
+        return None
+    overheads = k8s_service.get_cdi_filesystem_overhead() if has_storage_datavolume(docs) else None
+    volumes = collect_volume_requests(
+        docs, classes, default_class, cluster.settings, existing, overheads,
+    )
+    if not volumes:
+        return None
+    placements = simulate(cluster, volumes)
+    degraded = [
+        p for p in placements
+        if is_schedulable(p, cluster.settings) and p.placed < p.volume.replicas
+    ]
+    if degraded:
+        # Longhorn 會建、可以掛載，但少了備援——不擋（不是「確定放不下」），留給監控告警。
+        logger.warning(
+            "Cluster storage capacity: %s/%s will be created DEGRADED: %s", namespace, name,
+            ", ".join(f"{p.volume.name} {p.placed}/{p.volume.replicas} replicas"
+                      for p in degraded),
+        )
+    if all(is_schedulable(p, cluster.settings) for p in placements):
+        logger.info(
+            "Cluster storage capacity pre-check passed for %s/%s: %s", namespace, name,
+            ", ".join(f"{v.name} {format_gib(v.size_bytes)}x{v.replicas}" for v in volumes),
+        )
+        return None
+    try:
+        orphans = summarize_orphans(
+            k8s_service.list_orphaned_pvcs_all_namespaces(), classes, cluster.settings,
+        )
+    except (KubectlException, ValueError):
+        orphans = None
+    return build_capacity_error_detail(namespace, cluster, placements, orphans)
+
+
+def _precheck_cluster_storage_capacity(request: ReleaseCreateRequest) -> None:
+    """#1415：helm install 前確認叢集（Longhorn）排得下這次要建的 volume；排不下 raise 409。
+
+    只有「確定放不下」才擋；預檢本身的任何意外都放行（log），行為與本檢查加入前相同。
+    與 #1348 的工作區配額檢查分工：那邊看 namespace ResourceQuota，這裡看叢集層排程額度。
+    """
+    if not settings.storage_capacity_precheck_enabled:
+        return
+    try:
+        detail = _cluster_capacity_conflict_detail(request)
+    except Exception:  # noqa: BLE001 — 預檢的意外不能變成擋開通
+        logger.exception(
+            "Cluster storage capacity pre-check failed unexpectedly for %s/%s; allowing install",
+            request.namespace, request.name,
+        )
+        return
+    if detail is not None:
+        logger.warning(
+            "Cluster storage capacity exhausted for %s/%s: %s",
+            request.namespace, request.name, detail["message"],
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -217,11 +376,14 @@ async def create_release(request: ReleaseCreateRequest):
         Information about the created release
 
     Raises:
-        HTTPException: If installation fails（儲存配額不足回 409，#1348）
+        HTTPException: If installation fails（儲存配額不足回 409，#1348；叢集儲存
+            排程額度放不下回 409，#1415）
     """
     try:
         # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
         _precheck_storage_quota(request.namespace)
+        # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
+        _precheck_cluster_storage_capacity(request)
         # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
         # _ensure_image_pull_secrets docstring）。
         values = _ensure_image_pull_secrets(request.namespace, request.values)
@@ -340,7 +502,7 @@ def upgrade_release(
         # 全量 reset values，沒有這行時私有 image 的 CS 任一次 redeploy /
         # reconfigure 都會掉 pull secret → ImagePullBackOff 401。
         # #423：同一個呼叫連帶收斂 ns default SA（VM 型 CS 重跑 import 時要用）。
-        release = helm_service.upgrade(
+        upgrade_kwargs = dict(
             namespace=namespace,
             name=name,
             chart=request.chart,
@@ -350,6 +512,11 @@ def upgrade_release(
             reset_values=request.reset_values,
             reuse_values=request.reuse_values,
         )
+        # #1407：helm upgrade 不是交易——中途被 API server 拒絕時，前面的資源已經
+        # 換成新版、release 卻標 failed。先用同一組參數 dry-run 出 manifest，跟 live
+        # 物件比對不可變欄位；有衝突就在這裡擋下（409，什麼都還沒套用）。
+        _upgrade_preflight(upgrade_kwargs)
+        release = helm_service.upgrade(**upgrade_kwargs)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
         logger.info(f"Upgraded release {name} in {namespace}")
@@ -362,9 +529,38 @@ def upgrade_release(
         )
     except HelmException as e:
         logger.error(f"Helm upgrade failed: {e.message}\nStderr: {e.stderr}")
+        # #1407：管理員只看得到 detail——原本是「Check operator logs」，看不出原因。
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Helm upgrade failed. Check operator logs for details.",
+            detail=describe_helm_failure(e.stderr),
+        )
+
+
+def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> None:
+    """#1407：dry-run 比對不可變欄位；有衝突 raise 409（中文、指出物件與欄位）。
+
+    dry-run 本身失敗（chart 拉不到、template 錯）照樣 raise HelmException——真正
+    upgrade 也一定會在同一步失敗，提早回報而且什麼都沒套用。live 物件讀不到時
+    不擋（log warning），行為退回 #1407 之前。
+    """
+    namespace = upgrade_kwargs["namespace"]
+    manifest = helm_service.upgrade(**upgrade_kwargs, dry_run=True)
+    live_items = _live_objects(namespace, "pvc,statefulsets,deployments")
+    if live_items is None:
+        logger.warning(
+            "Upgrade preflight for %s/%s skipped: live objects unavailable",
+            namespace, upgrade_kwargs["name"],
+        )
+        return
+    docs = [d for d in yaml.safe_load_all(manifest or "") if isinstance(d, dict)]
+    conflicts = find_immutable_conflicts(docs, live_items)
+    if conflicts:
+        logger.warning(
+            "Upgrade preflight refused %s/%s: %s", namespace, upgrade_kwargs["name"], conflicts,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=describe_conflicts(conflicts),
         )
 
 
@@ -385,18 +581,59 @@ def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[s
     }
 
 
+def resolve_orphan_grace_period_days(
+    requested: Optional[str], namespace: str, name: str
+) -> int:
+    """#1431：這次刪除的孤兒 PVC／DataVolume 保留天數。
+
+    平台對「從未正常運作過」的服務會帶 ``grace_period_days=1``（沒有租戶資料要保護，
+    不必佔用 Longhorn 排程額度 90 天）。只接受 ``1 ≤ n ≤ settings.pvc_grace_period_days``
+    ——只能**縮短**、不能延長預設保留期；沒帶、不是整數、超出範圍一律用預設，
+    **不回 422**：刪除是不可重來的操作，參數寫壞不該讓服務刪不掉（超出範圍時記 warning）。
+
+    參數宣告成字串再自己解析，正是為了不讓 FastAPI 對非整數回 422。
+    """
+    default = settings.pvc_grace_period_days
+    if requested is None or requested == "":
+        return default
+    try:
+        days = int(requested)
+    except (TypeError, ValueError):
+        days = None
+    if days is None or not 1 <= days <= default:
+        logger.warning(
+            "Ignoring grace_period_days=%r for %s/%s (allowed 1..%s); using the default %s",
+            requested, namespace, name, default, default,
+        )
+        return default
+    return days
+
+
 @router.delete(
     "/{namespace}/{name}",
     response_model=Dict[str, str],
     summary="Uninstall a Helm release",
 )
-async def delete_release(namespace: str, name: str, subdomain: Optional[str] = None):
+async def delete_release(
+    namespace: str,
+    name: str,
+    subdomain: Optional[str] = None,
+    grace_period_days: Optional[str] = Query(
+        default=None,
+        description=(
+            "#1431: shorten how long the orphaned PVCs / DataVolumes of this release are "
+            "kept (1..PVC_GRACE_PERIOD_DAYS). Anything else is ignored and the default is used."
+        ),
+    ),
+):
     """Uninstall a Helm release.
 
     Args:
         namespace: Release namespace
         name: Release name
         subdomain: Optional subdomain to delete from Cloudflare (if not provided, auto-generated)
+        grace_period_days: #1431 optional shorter retention for the orphaned PVCs /
+            DataVolumes (see ``resolve_orphan_grace_period_days``)
 
     Returns:
         Deletion confirmation message
@@ -404,6 +641,8 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
     Raises:
         HTTPException: If uninstallation fails
     """
+    # 先解析（純函式、不會失敗），PVC 與 DataVolume 兩段共用同一個值。
+    orphan_grace_days = resolve_orphan_grace_period_days(grace_period_days, namespace, name)
     try:
         result = helm_service.uninstall(namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
@@ -420,13 +659,11 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
             if remaining_pvcs:
-                labels = build_orphan_pvc_labels(
-                    name, settings.pvc_grace_period_days
-                )
+                labels = build_orphan_pvc_labels(name, orphan_grace_days)
                 k8s_service.label_pvcs(namespace, remaining_pvcs, labels)
                 logger.info(
-                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace}: "
-                    f"{remaining_pvcs}"
+                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace} "
+                    f"(grace {orphan_grace_days}d): {remaining_pvcs}"
                 )
         except Exception as e:
             logger.warning(f"Failed to label orphaned PVCs in {namespace}: {e}")
@@ -450,9 +687,7 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
             if remaining_dvs:
-                labels = build_orphan_pvc_labels(
-                    name, settings.pvc_grace_period_days
-                )
+                labels = build_orphan_pvc_labels(name, orphan_grace_days)
                 labelled = k8s_service.label_datavolumes(
                     namespace, remaining_dvs, labels
                 )
@@ -551,7 +786,7 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
 
 @router.post(
     "/{namespace}/{name}/rollback",
-    response_model=Dict[str, str],
+    response_model=Dict[str, Any],
     summary="Rollback a Helm release",
 )
 def rollback_release(
@@ -572,6 +807,9 @@ def rollback_release(
     Raises:
         HTTPException: If rollback fails
     """
+    if request.preserve_value_paths:
+        return _rollback_preserving_values(namespace, name, request)
+
     try:
         result = helm_service.rollback(namespace, name, request.revision)
         logger.info(f"Rolled back release {name} in {namespace}")
@@ -587,6 +825,178 @@ def rollback_release(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Helm rollback failed. Check operator logs for details.",
+        )
+
+
+_PATH_MISSING = object()
+
+
+def _get_path(values: Dict[str, Any], path: str) -> Any:
+    node: Any = values
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _PATH_MISSING
+        node = node[part]
+    return node
+
+
+def _set_path(values: Dict[str, Any], path: str, value: Any) -> None:
+    parts = path.split(".")
+    node = values
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            node[part] = child
+        node = child
+    node[parts[-1]] = value
+
+
+def _delete_path(values: Dict[str, Any], path: str) -> None:
+    parts = path.split(".")
+    node: Any = values
+    for part in parts[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return
+        node = node[part]
+    if isinstance(node, dict):
+        node.pop(parts[-1], None)
+
+
+def overlay_preserved_paths(
+    target_values: Dict[str, Any],
+    current_values: Dict[str, Any],
+    paths: List[str],
+) -> Dict[str, Any]:
+    """#1433：把 ``paths`` 在**目前** values 的狀態（含「不存在」）蓋到目標 values 上。
+
+    純函式、回傳新的 dict（不改呼叫端的物件）。「目前不存在」也要蓋過去：目標
+    revision 若帶著一份目前已經沒有的憑證，留著它就是讓被撤銷的值復活——與本票
+    要堵的是同一件事。
+    """
+    import copy
+
+    merged = copy.deepcopy(target_values or {})
+    for path in paths:
+        current = _get_path(current_values or {}, path)
+        if current is _PATH_MISSING:
+            _delete_path(merged, path)
+        else:
+            _set_path(merged, path, copy.deepcopy(current))
+    return merged
+
+
+def _rollback_preserving_values(
+    namespace: str,
+    name: str,
+    request: ReleaseRollbackRequest,
+) -> Dict[str, Any]:
+    """#1433：「回復版本」但保留目前的憑證——以 helm upgrade 重現目標 revision。
+
+    為什麼不是 ``helm rollback`` 之後再補一次 reset：rollback 一落地 Secret 就是舊
+    密碼，open-design 的 authproxy 每個請求重讀 htpasswd ⇒ 補救之前那段時間舊密碼
+    可以登入、目前的密碼被拒（R8 實測約 30–60 秒），而補救本身若失敗就停在最糟的
+    狀態。改成一次 upgrade：目標 revision 的 values（一般設定）＋目前 revision 的
+    ``preserve_value_paths``（憑證）＋目標 revision 的 chart 版本，憑證從頭到尾沒有
+    離開目前的值。
+
+    與純 rollback 的差異（刻意的取捨）：
+    - helm rollback 重放 stored manifest；這裡是用目標 chart 版本＋目標 values
+      **重新渲染**。chart 若有 ``randAlphaNum`` 這類非決定性模板，結果可能與當時不同
+      ——但同一個 chart 的平常 reconfigure 也是這樣渲染，不是新的風險面。
+    - 會重新拉目標版本的 chart；registry 裡那一版若已被刪，回 500 而**不**退回純
+      rollback（退回就是讓舊憑證復活，fail-open 的方向錯了）。
+    - 與 reconfigure 一樣先跑 #1407 不可變欄位 preflight。
+    """
+    _validate_namespace_or_raise(namespace)
+    try:
+        history = helm_service.history(namespace, name)
+        if not history:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Release {name} has no revision history",
+            )
+        current_revision = max(rev.revision for rev in history)
+        target_revision = request.revision or (current_revision - 1)
+        known = {rev.revision for rev in history}
+        if target_revision < 1 or target_revision not in known:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Revision {target_revision} not found in release history",
+            )
+        if target_revision == current_revision:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Target revision is the current revision",
+            )
+
+        target_version = helm_service.get_revision_chart_version(
+            namespace, name, target_revision,
+        )
+        # #552 同一道閘：遠端 chart 沒有版本就會解析成 registry latest——「回復版本」
+        # 結果反而升版。讀不到目標版本就拒絕，不猜。
+        if _chart_ref_is_remote(request.chart) and not target_version:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Cannot determine the chart version of revision {target_revision}; "
+                    "refusing to roll back without a pinned version"
+                ),
+            )
+
+        # ⛔ 兩份都是**明文** values（含憑證）：只進下面 upgrade 的 --values 暫存檔，
+        # 不 log、不回傳。
+        target_values = helm_service.get_values(namespace, name, revision=target_revision)
+        current_values = helm_service.get_values(namespace, name)
+        merged_values = overlay_preserved_paths(
+            target_values, current_values, request.preserve_value_paths,
+        )
+
+        upgrade_kwargs = dict(
+            namespace=namespace,
+            name=name,
+            chart=request.chart,
+            values=_ensure_image_pull_secrets(namespace, merged_values),
+            version=target_version,
+            reset_values=True,
+            reuse_values=False,
+        )
+        _upgrade_preflight(upgrade_kwargs)
+        release = helm_service.upgrade(
+            **upgrade_kwargs,
+            description=(
+                f"Rollback to {target_revision} (credentials preserved)"
+            ),
+        )
+        logger.info(
+            "Rolled back release %s in %s to revision %s via upgrade "
+            "(preserved %d value path(s))",
+            name, namespace, target_revision, len(request.preserve_value_paths),
+        )
+        return {
+            "message": f"Rolled back to revision {target_revision} (credentials preserved)",
+            "mode": "upgrade_preserving",
+            "target_revision": target_revision,
+            # `helm upgrade -o json` 把 revision 放在頂層 `version`，`_parse_release_info`
+            # 讀 `info.revision` 恆為 0（既有缺陷，與 helm_revision=0 同源）；這裡以歷史
+            # 推算的新 revision 兜底，不把 0 回給平台。
+            "revision": release.revision or (current_revision + 1),
+            "chart_version": release.chart_version or target_version,
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except HelmException as e:
+        logger.error(
+            "Preserving rollback failed for %s/%s: %s\nStderr: %s",
+            namespace, name, e.message, e.stderr,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=describe_helm_failure(e.stderr),
         )
 
 
@@ -625,36 +1035,10 @@ def get_release_revisions(namespace: str, name: str):
         )
 
 
-@router.get(
-    "/{namespace}/{name}/mqtt-address",
-    response_model=MqttAddressResponse,
-    summary="Get the public MQTT address advertised by the release's ngrok sidecar",
-)
-def get_mqtt_address(namespace: str, name: str):
-    """對外 MQTT 位址（charts/emqx）。
-
-    平台的 Cloudflare 通道只載 HTTP/WS，所以原生 MQTT 走租戶自己的 ngrok agent
-    （chart 的 sidecar）。固定位址（ngrok 保留位址）平台本來就知道——它是租戶填進
-    helm values 的；本端點要解的是**隨機指派**那一種：agent 每次連線拿到的位址只有
-    agent 自己知道，它每 60 秒把當前位址印到自己的 stdout，平台從那裡讀回來。
-
-    回 200 ＋ ``public_url: null`` 是正常狀態（租戶沒開、agent 還沒連上、pod 還沒起來），
-    **不是**錯誤；只有 kubectl 本身失敗才會是 5xx。
-
-    Args:
-        namespace: Release namespace
-        name: Release name
-
-    Returns:
-        The advertised address, or ``public_url: null`` when there is none.
-
-    Raises:
-        HTTPException: 403 namespace 越界、500 kubectl 失敗
-    """
+def _read_advertised_address(namespace: str, name: str, schemes) -> Optional[str]:
+    """兩個位址端點共用：403 namespace 越界、500 kubectl 失敗（不外洩 stderr）。"""
     try:
-        return MqttAddressResponse(
-            public_url=k8s_service.get_advertised_mqtt_address(namespace, name)
-        )
+        return k8s_service.get_advertised_public_address(namespace, name, schemes=schemes)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -662,15 +1046,71 @@ def get_mqtt_address(namespace: str, name: str):
         )
     except KubectlException as e:
         logger.error(
-            "Failed to read the advertised MQTT address for %s/%s: %s",
+            "Failed to read the advertised public address for %s/%s: %s",
             namespace,
             name,
             e.message,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to read the advertised MQTT address. Check operator logs.",
+            detail="Failed to read the advertised public address. Check operator logs.",
         )
+
+
+@router.get(
+    "/{namespace}/{name}/public-address",
+    response_model=PublicAddressResponse,
+    summary="Get the public address advertised by the release's ngrok sidecar",
+)
+def get_public_address(namespace: str, name: str):
+    """對外位址（chart 的 ngrok sidecar；EMQX 的 MQTT、Headscale 的控制網址）。
+
+    平台的 Cloudflare 通道只載 HTTP/WS，而且會剝掉 Tailscale 控制協議的
+    ``Upgrade`` header，所以原生 MQTT（TCP）與 Headscale 控制面（HTTPS）都走租戶
+    自己的 ngrok agent（chart 的 sidecar）。agent 實際拿到的位址只有它自己知道
+    （隨機指派、或 dev domain 由 agent API 才查得到），它每 60 秒把當前位址印到
+    自己的 stdout，平台從那裡讀回來。log 契約見
+    ``KubernetesService.get_advertised_public_address``。
+
+    回 200 ＋ ``public_url: null`` 是正常狀態（租戶沒開、agent 還沒連上、sidecar
+    撤回、pod 還沒起來），**不是**錯誤；只有 kubectl 本身失敗才會是 5xx。
+
+    Args:
+        namespace: Release namespace
+        name: Release name
+
+    Returns:
+        The advertised ``tcp://host:port`` / ``https://host[:port]``, or
+        ``public_url: null`` when there is none.
+
+    Raises:
+        HTTPException: 403 namespace 越界、500 kubectl 失敗
+    """
+    return PublicAddressResponse(
+        public_url=_read_advertised_address(
+            namespace, name, KubernetesService.PUBLIC_ADDRESS_SCHEMES
+        )
+    )
+
+
+@router.get(
+    "/{namespace}/{name}/mqtt-address",
+    response_model=MqttAddressResponse,
+    summary="[Legacy] Get the public MQTT address advertised by the release's ngrok sidecar",
+)
+def get_mqtt_address(namespace: str, name: str):
+    """舊端點：對外 MQTT 位址（charts/emqx）。
+
+    平台 ≤ 18.0.1.0.205 呼叫這支；operator 必須比改呼叫 ``/public-address`` 的平台版本
+    先上線，所以這支要留到沒有任何已部署的平台還在呼叫為止。行為與舊版相同：只回
+    ``tcp://`` 位址（marker 新舊兩種都認，見 ``get_public_address``）。
+
+    Raises:
+        HTTPException: 403 namespace 越界、500 kubectl 失敗
+    """
+    return MqttAddressResponse(
+        public_url=_read_advertised_address(namespace, name, ("tcp",))
+    )
 
 
 @router.get(
@@ -716,6 +1156,9 @@ def get_release_status(
             pods = k8s_service.get_pods(
                 namespace=namespace,
                 label_selector=selector,
+                # #1417：未就緒的 Pod 附最近一筆 Warning 事件，讓平台的部署逾時訊息
+                # 說得出「卡在哪」。事件查詢失敗由 get_pods 自己吞掉，不會落到下面。
+                include_warning_events=True,
             )
         except Exception as e:
             logger.error(f"Failed to get pods for {namespace}/{name}: {e}")
@@ -941,6 +1384,70 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to scale workload. Check operator logs for details.",
+        )
+
+
+@router.post(
+    "/{namespace}/{name}/restart",
+    response_model=Dict[str, Any],
+    summary="#1432: rollout-restart every Deployment and StatefulSet of a release",
+)
+def restart_release(namespace: str, name: str):
+    """#1432：租戶的「重新啟動」——對 release 下**所有** Deployment 與 StatefulSet
+    下 ``kubectl rollout restart``（改 pod template annotation，由 controller 依各自
+    的更新策略重建 Pod；PVC、Secret、values 都不動）。
+
+    - 只「下達」不等待，與 reset-config（#461）同一個理由：收斂交給平台狀態機
+      （``upgrading`` → poll → ``running``），等 Pod 會讓回應時間綁在 image pull 與
+      RWO PVC re-attach 上。
+    - 一律查兩種 workload（scale 端點 #423 W6.3 的教訓：不要猜 chart 拓撲）。
+      open-design 的 daemon 是 StatefulSet，只重啟 Deployment 等於沒重啟主程式。
+    - VirtualMachine **不**處理（KubeVirt 沒有 rollout 語意；硬關機重開屬另一種
+      操作），回應列出略過的 VM，平台據此對 VM 型服務不提供本功能。
+    - 一個都沒有 → 404（靜默成功會讓租戶以為重啟了）。
+    - 任一個下達失敗 → 500，回應不宣稱成功；已下達的那幾個照常收斂（rollout
+      restart 本身是冪等、無害的，沒有需要補償的狀態）。
+    """
+    _validate_namespace_or_raise(namespace)
+    selector = f"app.kubernetes.io/instance={name}"
+    try:
+        deployments = k8s_service.get_deployments(namespace=namespace, label_selector=selector)
+        statefulsets = k8s_service.get_statefulsets(namespace=namespace, label_selector=selector)
+        if not deployments and not statefulsets:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"No deployments or statefulsets found for release {name} "
+                    f"in namespace {namespace}"
+                ),
+            )
+        restarted_deps = []
+        for dep in deployments:
+            k8s_service.rollout_restart_deployment(namespace, dep["name"])
+            restarted_deps.append(dep["name"])
+        restarted_sts = []
+        for sts in statefulsets:
+            k8s_service.rollout_restart_statefulset(namespace, sts["name"])
+            restarted_sts.append(sts["name"])
+        logger.info(
+            "Restart issued for %s/%s: deployments=%s statefulsets=%s",
+            namespace, name, restarted_deps, restarted_sts,
+        )
+        return {
+            "action": "restart",
+            "namespace": namespace,
+            "release": name,
+            "deployments": restarted_deps,
+            "statefulsets": restarted_sts,
+            "rollout_awaited": False,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except KubectlException as e:
+        logger.error(f"Restart failed for {namespace}/{name}: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to restart workloads. Check operator logs for details.",
         )
 
 
@@ -1249,10 +1756,10 @@ def _reset_via_helm_secret(
             detail="reset-config: failed to update the chart Secret",
         )
 
+    statefulset_names: List[str] = []
     try:
-        deployment_names = k8s_service.get_deployment_names(
-            namespace=namespace,
-            label_selector=label_selector,
+        deployment_names, statefulset_names = _credential_reset_workloads(
+            namespace, label_selector,
         )
         # #461：全部下 restart 後**直接回**，不再逐一等 rollout。原本的「先全部下、
         # 再逐一等」是為了讓兩顆並行推進（總耗時 ≈max 而非 sum）以塞進 120s 預算；
@@ -1262,6 +1769,13 @@ def _reset_via_helm_secret(
             k8s_service.rollout_restart_deployment(
                 namespace=namespace,
                 deployment_name=deployment_name,
+            )
+        # hermes-agent >= 0.3.0、headscale／tailscale >= 0.1.1：吃密碼的是 StatefulSet
+        # （opt-in label），一樣要滾。
+        for statefulset_name in statefulset_names:
+            k8s_service.rollout_restart_statefulset(
+                namespace=namespace,
+                statefulset_name=statefulset_name,
             )
     except KubectlException as e:
         recovery_failed = _rollback_helm_secret_reset(
@@ -1291,8 +1805,45 @@ def _reset_via_helm_secret(
         "rollout_awaited": False,
         "admin_password_carrier": "helm_secret",
         "restarted_deployments": deployment_names,
+        "restarted_statefulsets": statefulset_names,
         "note": "password lives in the chart Secret — no config.json patch",
     }
+
+
+def _credential_reset_workloads(
+    namespace: str, label_selector: str,
+) -> Tuple[List[str], List[str]]:
+    """Every workload a helm_secret reset must roll: (deployments, statefulsets).
+
+    Deployments: all of the release (#449). StatefulSets: only those carrying
+    ``CREDENTIAL_RESET_RESTART_LABEL`` (hermes-agent >= 0.3.0 runs its agent as a
+    StatefulSet — platform #1360 follow-up — and reads admin_password at start).
+    A release may now have zero Deployments (hermes-agent with console.enabled=false;
+    headscale/tailscale >= 0.1.1, which are StatefulSet-only charts — before this,
+    their reset always ended in "No deployments found" → rollback → 500), so
+    "no Deployment" is only an error when no opted-in StatefulSet exists either:
+    restarting nothing would report a rotation that never reached a pod.
+    """
+    try:
+        deployment_names = k8s_service.get_deployment_names(
+            namespace=namespace,
+            label_selector=label_selector,
+        )
+    except KubectlException as e:
+        if "No deployments found" not in (e.message or ""):
+            raise
+        deployment_names = []
+    statefulset_names = k8s_service.get_credential_reset_statefulset_names(
+        namespace=namespace,
+        label_selector=label_selector,
+    )
+    if not deployment_names and not statefulset_names:
+        raise KubectlException(
+            message=f"No deployments or opted-in statefulsets found matching selector '{label_selector}'",
+            command=f"get deployments,statefulsets --namespace {namespace} --selector {label_selector}",
+            stderr="",
+        )
+    return deployment_names, statefulset_names
 
 
 def _rollback_helm_secret_reset(
@@ -1329,12 +1880,13 @@ def _rollback_helm_secret_reset(
         return recovery_failed
 
     try:
-        deployment_names = k8s_service.get_deployment_names(
-            namespace=namespace,
-            label_selector=label_selector,
+        deployment_names, statefulset_names = _credential_reset_workloads(
+            namespace, label_selector,
         )
         for deployment_name in deployment_names:
             k8s_service.rollout_restart_deployment(namespace, deployment_name)
+        for statefulset_name in statefulset_names:
+            k8s_service.rollout_restart_statefulset(namespace, statefulset_name)
     except KubectlException as e:
         logger.error(
             "reset-config (helm_secret) rollback rollout failed for %s/%s: %s",
