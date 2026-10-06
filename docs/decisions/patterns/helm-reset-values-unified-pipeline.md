@@ -49,16 +49,26 @@ values = svc.helm_values            # template 預設 + user config（create 時
          ├─ + image_pull_secrets     injector（私有 registry）
          ├─ + allowed_origins        injector（open-design 瀏覽器 Origin 白名單，#380）
          ├─ + apiserver_cidrs        injector（open-design console egress，#404）
-         ├─ + omnigent_server_url    injector（code-server／pi-agent／open-design 主容器內的
-         │                            omnigent host：同工作區 running Omnigent 的叢集內
-         │                            網址，只有網址、不帶 token；runtime-config-only）
+         ├─ + workspace_service_url  injectors（同工作區 running 提供者的叢集內網址，只有網址、
+         │                            不帶 token；runtime-config-only；`_WORKSPACE_URL_INJECTORS`）：
+         │                            Omnigent → code-server／pi-agent／open-design `omnigentHost.serverUrl`
+         │                            Headscale → tailscale `tailscale.workspaceHeadscaleUrl`
+         │                            LiteLLM → pi-agent／code-server／open-design／hermes-agent
+         │                              `llmGateway.baseUrl`（帶 /v1）、mcp-litellm
+         │                              `config.nonSensitive.connection.base_url`（不帶）
          └─ + odoo addon selection   （initContainer + addons_path）
 ```
 
-`omnigent_server_url` 是唯一**讀別的服務**的 injector：同工作區（且同 namespace）、
-`state='running'` 的 Omnigent，多個時取 `create_date`／`id` 最小者並記 log；沒有就
-no-op（chart 預設 `""`）。`helm_values` 裡已有非空的 `omnigentHost.serverUrl`（管理員
-刻意設的，例如公開 https 網址）時尊重它、不覆寫（記 info log，不記網址）。
+`workspace_service_url` 是唯一**讀別的服務**的一族 injector（#1340 Omnigent 起；2026-10-05
+泛化成 `_workspace_provider_url(provider_slug)`，Headscale／LiteLLM 共用同一套查找）：
+同工作區（且同 namespace）、`state='running'` 的提供者，多個時取 `create_date`／`id` 最小者
+並記 log；沒有就 no-op（不寫鍵，chart 預設補位）。Service 名鏡射提供者 chart 的
+`<chart>.fullname`、port 讀 `_WORKSPACE_PROVIDERS` 指定的 values 路徑，Service 名／namespace
+必須是 DNS label。`helm_values` 裡已有非空值（管理員刻意設的，例如公開 https 網址）時尊重它、
+不覆寫（記 info log，不記網址）。**只帶網址**：preauth key、LiteLLM virtual key、`omnigent
+login` 都由租戶自己在提供者後台建立後貼進消費端，平台絕不跨服務傳秘密。下文以 Omnigent 為例，
+其他提供者同理（tailscale chart 的 `<fullname>-runtime` ConfigMap、四個 LiteLLM 消費端 chart 的
+`llmGateway.baseUrl` ConfigMap 都不入 checksum，各自的 render-contract 測試守線）。
 
 **它是執行期設定，不是 pod template 的一部分**——這是它能和其他 injector 一樣在
 **每一條**路徑（含 reset 密碼那條 `helm upgrade --atomic --timeout 15s`）重算的前提：
@@ -69,8 +79,11 @@ annotation；supervisor 與 `omnigent-host-status` 執行期讀檔。所以 Omni
 **pod 不重啟**，不會踩 F-461-2（reset 夾帶 pod template 變動 → 15 秒等不到新 pod →
 回退斷線；見 `reset-async-budget-ladder.md`）。chart 側由套件的
 `kit_assert_runtime_server_url` 守線；平台側 `test_reset_after_late_omnigent_carries_the_url`
-釘住 reset 與 deploy 走同一條組裝。**日後任何 chart 若把這個值放進 env 或 checksum，
-就會讓 reset 路徑重新變成 F-461-2**——那是 chart 的 bug，不要在平台這邊繞。
+（與 `test_workspace_service_url_injection` 的 reset 測試）釘住 reset 與 deploy 走同一條組裝、
+reset 前後只差注入的那條路徑。**日後任何 chart 若把這個值以字面值寫進 pod template（env
+`value:`、args）或 checksum，就會讓 reset 路徑重新變成 F-461-2**——那是 chart 的 bug，不要在
+平台這邊繞。（env 用 `valueFrom.configMapKeyRef` 讀 ConfigMap 不在此限：pod template 只有
+引用、沒有值，例 tailscale 0.1.2 的 `TS_LOGIN_SERVER`；代價是新值要等容器下次啟動才生效。）
 
 網址只是登入提示與「還沒登入過」的備援：host 實際連的永遠是租戶最後一次
 `omnigent login` 的 server（WOOW 預設以 Omnigent 的 admin 帳號登入三台 host）。
@@ -86,7 +99,8 @@ release 名本來就含 `omnigent`（例 `my-omnigent` ⇒ OD 釘 instance=`my`�
 OD 都連不到；平台照常注入、只記 warning（`_omnigent_matches_od_egress_selector`），OD
 那台只能改用公開網址登入。正式站 release 都是 `svc-xxxxxxxx`、沒有 override，不會觸發。
 
-`audit_411_reset_values.py` 把 `omnigentHost.serverUrl` 與其他整條路徑的 injector 鍵
+`audit_411_reset_values.py` 把 `omnigentHost.serverUrl`、`tailscale.workspaceHeadscaleUrl`、
+`llmGateway.baseUrl`、`config.nonSensitive.connection.base_url` 與其他整條路徑的 injector 鍵
 登記在 `_INJECTOR_VALUE_PATHS`（(a) 自癒類；例如 Omnigent 刪除後 stored release 殘留
 舊網址不該被叫去 backfill），`test_audit_411_classifier.TestInjectorPathsLockstep`
 以 AST 讀 `cloud_service.py` 的 value-path 表對帳，新增 injector 沒登記會紅。

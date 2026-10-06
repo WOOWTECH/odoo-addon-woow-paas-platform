@@ -253,7 +253,19 @@ class ShSubscriptionFix(models.Model):
         XML 是 noupdate=1——被關掉後沒有任何 XML reload 會救回。接線：
         data/billing_ssot_guard.xml（每次 -u）＋ hooks.post_init_hook
         （fresh install），兩路都晚於 wallet 的關閉動作。
+
+        [#1201] 中和過的 DB（``odoo neutralize`` 設了 ``database.is_neutralized``）
+        一律不開、回 False：billing_ssot_guard.xml 是 noupdate=0，不擋的話中和後
+        每次 ``-u`` 都會把計費 cron 寫回 active，讓 prod clone 對真實租戶開帳單。
+        判斷與 Odoo 18 ``ir.cron.toggle()`` 的既有防線一致（值 truthy 即視為已
+        中和；官方 SQL 寫入的是字串 ``'true'``）。
         """
+        if self.env['ir.config_parameter'].sudo().get_param('database.is_neutralized'):
+            _logger.info(
+                "[SUB_FIX] database is neutralized; skip re-asserting %s "
+                "active (#1201)", _BASE_AUTO_INVOICE_CRON_XMLID,
+            )
+            return False
         cron = self.env.ref(_BASE_AUTO_INVOICE_CRON_XMLID, raise_if_not_found=False)
         if not cron:
             # sh_subscription 是硬依賴，正常環境不該發生；warning 而非硬炸，

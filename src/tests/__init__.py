@@ -1007,6 +1007,10 @@ from . import test_member_create_service_1317
 # Omnigent BYO host：部署 code-server／pi-agent／open-design 時把同工作區 running
 # Omnigent 的叢集內網址注入 omnigentHost.serverUrl（只有網址，不帶 token）。
 from . import test_omnigent_server_url_injection
+# PLAN §10.2：同工作區服務網址注入泛化——Headscale → tailscale.workspaceHeadscaleUrl、
+# LiteLLM → llmGateway.baseUrl（/v1）／mcp-litellm connection.base_url；只帶網址，不帶金鑰。
+# 另含 tailscale chart 0.1.2「控制平面」select 的既有服務 healer。
+from . import test_workspace_service_url_injection
 # QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
 # 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。
 from . import test_code_server_git_settings
@@ -1037,3 +1041,7 @@ from . import test_rollback_preserves_credentials_1433
 from . import test_platform_ux_r8
 # #1432 租戶重新啟動、#1435 改金鑰後重啟、#1455 金鑰未設定／清除。
 from . import test_restart_and_secret_keys_1432
+# #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
+from . import test_neutralize_1201
+# #1488：helm values 白名單 fail-closed（specs 沒有任何鍵＝租戶值全部拒絕，不再全部放行）。
+from . import test_helm_values_whitelist_fail_closed_1488
