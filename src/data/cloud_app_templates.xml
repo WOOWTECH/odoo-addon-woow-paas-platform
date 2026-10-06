@@ -2274,6 +2274,69 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- MCP：AI 模型閘道（mcp-litellm，PLAN §10 第二階段）——LiteLLM 管理 MCP。鏡射 cloud_app_mcp_k8s
+             骨架（chart mcp-server 0.1.5、category=mcp、has_admin_gui=True、mcp_enabled=False＝MCP 內建於 body、
+             載體 config_json）。image＝woow-mcp-server apps/litellm（#33 加入；#34 子行程看門狗合進 main d5032a72 後，
+             main CI run 15219 job 16285 推的 litellm-mcp-admin，雙釘 git-sha@sha256；與其他 *-mcp-admin
+             同一個 main commit，見 #1501）。MCP server 本體 vendor 自 GitHub
+             WOOWTECH/Woow_litellm_mcp_server 4d41903（40 工具：唯讀 18、寫入 22、其中破壞性 8）。
+             啟動契約（apps/litellm README §PaaS seed 契約）：console script ``litellm-mcp-server``，launcher
+             固定 Streamable HTTP、**只綁 127.0.0.1**（安全邊界，故 args 不帶 host）；``mcp_server.port`` 8000
+             ＝args 的 port（core proxy 轉發目標，不一致一律 502）。
+             env_prefix：chart configmap 以頂層 ``envPrefix`` 蓋掉 config.nonSensitive.mcp_server.env_prefix
+             （sprig merge 以第一個 dict 為準），兩處寫同值 LITELLM_MCP_；connection 鍵 base_url／master_key 經
+             前綴大寫注入子行程（LITELLM_MCP_BASE_URL／LITELLM_MCP_MASTER_KEY）。
+             **出廠唯讀**：mcp_server.env.LITELLM_MCP_READONLY="1"（子行程 gate 註冊時移除所有非 read 工具）；
+             租戶在 admin Settings 頁「Read-only Mode」關閉才解鎖寫入。app 啟動時鍵不存在也會補 "1"（保險）。
+             connection.base_url 刻意**不**寫在 seed：由 cloud_service ``_WORKSPACE_URL_INJECTORS`` 在組裝時
+             注入同工作區 running LiteLLM 的 ``http://<release>-litellm.<ns>.svc.cluster.local:4000``（不含 /v1，
+             #1482）；chart 是 seed-if-absent ⇒ 只有第一次開通生效。master_key **絕不**由平台供給（不跨服務傳
+             秘密，PLAN §10 決策）——租戶自己在 Connection 頁貼，建議貼 proxy_admin_viewer 使用者金鑰。
+             requiredFields 只列 admin_password（REPLACE 語意；connection.* 列進去＝每個新租戶 pod 永遠卡 Init）。
+             隱藏（is_hidden=True）：等正式站開通實測（同工作區預填網址、viewer key 唯讀可用、解鎖寫入）後另開
+             PR 只翻 is_hidden（實例層不設），與 Headscale／Tailscale／LiteLLM 同流程。
+             守線：test_mcp_litellm_seed、test_mcp_server_template_seed.TestMcpLitellmTemplateSeed（家族不變式）、
+             test_workspace_service_url_injection（真範本注入）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
+        <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
+            <field name="name">MCP：AI 模型閘道（LiteLLM）</field>
+            <field name="slug">mcp-litellm</field>
+            <field name="description">用 MCP 讓 AI agent 查 LiteLLM 模型閘道的用量與花費、管理金鑰／團隊／使用者／模型。出廠唯讀（18 支查詢工具），在管理介面解鎖後才能寫入。1 vCPU／1 GB RAM／5 GB 磁碟</field>
+            <field name="full_description">讓 Claude、Hermes、pi-agent 等 AI agent 透過 MCP 管理你的
+                LiteLLM AI 模型閘道——查模型、用量與花費、健康狀態，管理虛擬金鑰、團隊、使用者與模型，共 40 支工具。
+                **出廠唯讀**：開通後只提供 18 支查詢工具；要發金鑰、改模型、管團隊與使用者（22 支寫入工具，其中 8 支是刪除、封鎖等
+                破壞性工具），須在本服務管理介面的 Settings 頁關閉「Read-only Mode」才會解鎖。也可以在 Tools 頁逐支停用工具。
+                **金鑰**：建議在 LiteLLM 後台建立一個 proxy_admin_viewer（唯讀管理員）使用者，用他的金鑰貼到本服務管理介面的
+                Connection 頁，不要貼 master key；需要寫入時再換成有寫入權限的金鑰並解除唯讀。金鑰只存在本服務的磁碟，
+                平台不代管，也不會自動帶入。
+                **LiteLLM 網址**：同一工作區已有執行中的「AI 模型閘道（LiteLLM）」時，平台只在第一次開通時預填它的內部網址
+                （之後才開通或更換的 LiteLLM 不會自動帶入）；其他情況請在 Connection 頁自己填 LiteLLM 網址（不含 /v1）。
+                **接上 AI 用戶端**：管理介面密碼於開通時一次性顯示（可在服務頁重設）。在 Tokens 頁產生 MCP token，用戶端的
+                MCP 端點網址填 https://你的服務網址/private_&lt;token&gt;/mcp（結尾不要加斜線，加了會連不上），傳輸方式選
+                Streamable HTTP。這個網址本身就是憑證，外洩時請到 Tokens 頁換新。</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "litellm", "llm", "ai-gateway", "mcp-server", "ai"]</field>
+
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
+            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "d5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:7de9a85ab177d0f04c40427bad5d104c3e3915f33a38fd2ff3de3ab8a8e2d147"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">5</field>
+
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">config_json</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
