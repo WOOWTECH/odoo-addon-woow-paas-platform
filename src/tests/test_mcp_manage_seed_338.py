@@ -12,6 +12,8 @@ class TestMcpManageTemplateSeed(TransactionCase):
         self.assertEqual(tpl.category, 'mcp')
         # 範疇①上架：image ready 後翻 is_active=True（原骨架為 False）。
         self.assertTrue(tpl.is_active, 'image ready 後上架，應 is_active=True（#338 範疇①）')
+        # 2026-10-06 下架：只用 Odoo MCP Server，Odoo Manage 改為隱藏（曝光層），不刪範本
+        self.assertTrue(tpl.is_hidden, 'Odoo Manage 已下架，商店不列、不能新開（is_hidden=True）')
         self.assertFalse(tpl.mcp_enabled, 'MCP 內建於 body、非 sidecar（比照三 MCP admin）')
         values = json.loads(tpl.helm_default_values)
         self.assertIn('odoo-manage-mcp-admin', values['image']['repository'])
