@@ -1,4 +1,10 @@
-name: Trigger paas-odoo Image Build
+name: Trigger paas-odoo-official Image Build
+
+# 平台換 chart（woow-paas/paas-app-bundle-cd#144）後，平台 Odoo 跑 woow-odoo chart platform profile，
+# image 改用官方 base 的 paas-odoo-official（paas-odoo-ci Dockerfile.official）。
+# 只 build 這一顆、不雙 build：回退窗口內舊 Bitnami release 只動 replicas、image 凍結在 cutover 前那顆
+# （odoo-addons/woow_paas_platform#1392 留言 17382；#1142 13439 ③）。
+# ⛔ 本變更要在 cutover PR-D（穩定 Service 切到新 release）生效後才 merge（#1231 G2）。
 
 on:
   push:
@@ -15,7 +21,7 @@ jobs:
           IMAGE_TAG="$(date -u +'%Y%m%d.%H%M')"
           echo "TAG_REF=${TAG_REF}" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
-          echo "Addon ref: ${TAG_REF}, image tag: ${IMAGE_TAG}"
+          echo "Addon ref: ${TAG_REF}, image tag: ${IMAGE_TAG}, image name: paas-odoo-official"
 
       - name: Trigger paas-odoo-ci build
         run: |
@@ -23,10 +29,10 @@ jobs:
             "http://gitea-http.gitea.svc.cluster.local:3000/api/v1/repos/woow-paas/paas-odoo-ci/actions/workflows/build-image.yml/dispatches" \
             -H "Authorization: token ${{ secrets.CI_GITEA_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"ref\": \"main\", \"inputs\": {\"tag\": \"${IMAGE_TAG}\", \"addon_ref\": \"${TAG_REF}\"}}")
+            -d "{\"ref\": \"main\", \"inputs\": {\"tag\": \"${IMAGE_TAG}\", \"addon_ref\": \"${TAG_REF}\", \"image_name\": \"paas-odoo-official\"}}")
 
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "✅ Triggered paas-odoo-ci build: image_tag=${IMAGE_TAG}, addon_ref=${TAG_REF}"
+            echo "✅ Triggered paas-odoo-ci build: image=paas-odoo-official image_tag=${IMAGE_TAG}, addon_ref=${TAG_REF}"
           else
             echo "❌ Failed to trigger paas-odoo-ci (HTTP ${HTTP_CODE})"
             cat /tmp/response.txt
