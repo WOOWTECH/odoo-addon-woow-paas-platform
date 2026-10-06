@@ -1049,8 +1049,9 @@ class PaasController(HiddenChainMixin, Controller):
     def _portal_config_values(cls, values, template):
         """DTO of declared scalar settings only, never a raw Helm tree.
 
-        The write filter has a legacy allow-all fallback for missing specs;
-        that is not an acceptable disclosure policy for privileged reads.
+        Templates without declared specs expose nothing here; since #1488 the
+        write filter (``_filter_allowed_helm_values``) is fail-closed the same
+        way — no declared keys means tenants can neither read nor write values.
         """
         specs = template._parse_helm_value_specs()
         if not isinstance(specs, dict):
@@ -2001,6 +2002,10 @@ class PaasController(HiddenChainMixin, Controller):
                 service.id,
             )
             gateway = {}
+        # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
+        # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
+        # 判準只算這一次：下方的 message 與 payload 都讀它，兩者不得各判各的。
+        deliver_password = not (tenant_set and new_password is not None)
         message = (
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'
@@ -2018,11 +2023,21 @@ class PaasController(HiddenChainMixin, Controller):
         # 判準的話，那種服務會收到一句「Gateway API Key 已重設」的假話，而租戶會
         # 回 MCP 那端去換一把根本沒換過的 key。
         if gateway.get('gateway_api_key'):
-            message = (
-                'Admin password and Gateway API Key reset. Save both now — '
-                'they will not be shown again. Update the Gateway API Key '
-                'wherever you configured it (e.g. your MCP server).'
-            )
+            if deliver_password:
+                message = (
+                    'Admin password and Gateway API Key reset. Save both now — '
+                    'they will not be shown again. Update the Gateway API Key '
+                    'wherever you configured it (e.g. your MCP server).'
+                )
+            else:
+                # 租戶自填密碼（不回傳），但 model 端對有 gateway 的 chart 每次都換發
+                # gateway key（LiteLLM 的 master key）、舊的立即失效 ⇒ 這次回應的
+                # 新 key 是租戶唯一拿得到它的機會。不能說「兩個都存好」：密碼沒有回傳。
+                message = _(
+                    'Admin credentials updated and the Gateway API Key was replaced. '
+                    'Save the new Gateway API Key now — it will not be shown again. '
+                    'The service restarts to apply them.'
+                )
         if app_reset_kind != 'none':
             # #1370：不重啟、立刻生效；舊 session 失效、兩步驟驗證已關。
             message = (
@@ -2067,9 +2082,9 @@ class PaasController(HiddenChainMixin, Controller):
             message=message,
             template=template_flags,
         )
-        # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
-        # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
-        if not (tenant_set and new_password is not None):
+        # 判準見上方 deliver_password。gateway key 不受它影響：有就交付（換發後舊的
+        # 已失效），前端 onAdminCredentialsSaved 也因此不能只看 admin_password。
+        if deliver_password:
             data['admin_password'] = applied_password
         return {'success': True, 'data': data}
 

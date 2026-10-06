@@ -641,6 +641,8 @@ class CloudAppTemplate(models.Model):
 }
 ```
 
+`required`／`optional` 的 `key` 同時是租戶 helm values 的**白名單**（`CloudAppTemplate._filter_allowed_helm_values`；開通時被拒的鍵靜默丟棄、儲存設定時整筆拒絕）。比對單位是租戶送來的頂層鍵（扁平 dot-path）對 `key` 字串的精確比對。**沒有任何 `key`（欄位空白、`{}`、`{"required": [], "optional": []}`）＝租戶什麼都不能設**（#1488 起 fail-closed；之前是全部放行）——需要租戶參數的範本必須明列 key。
+
 ### CloudService (Deployed Instance)
 
 ```python
