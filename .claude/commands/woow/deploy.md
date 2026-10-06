@@ -2,9 +2,11 @@
 allowed-tools: Bash, Read, Grep
 ---
 
-# Deploy: Tag & Trigger paas-odoo Build
+# Deploy: Tag & Trigger paas-odoo-official Build
 
-This command reads the version from `src/__manifest__.py`, creates a git tag, and pushes it to trigger the paas-odoo image build pipeline.
+This command reads the version from `src/__manifest__.py`, creates a git tag, and pushes it to trigger the paas-odoo-official image build pipeline.
+
+> **平台換 chart 後（cutover PR-D 生效起）**：`trigger-odoo-build.yml` 只 dispatch `image_name=paas-odoo-official`（官方 `odoo:18.0` base、`Dockerfile.official`），不再 build Bitnami `paas-odoo`、也不雙 build（#1392 留言 17382；#1231 G2）。CD pin 改在 `paas-app-bundle-cd` 的 `paas-odoo-platform/values-prod.yaml`（`image.tag`＋`image.digest`），模組升級由 woow-odoo chart 的升級閘依 marker 決定，發版前要先做 snapshot 與 pre-upgrade 備份（[`platform-odoo-cutover-runbook.md`](../../../docs/guides/deployment/platform-odoo-cutover-runbook.md) B8 第 7 步）。
 
 ## 前置條件（一次性設定）
 
@@ -117,7 +119,7 @@ Display a summary and ask for confirmation before proceeding:
 🔗 Trigger Flow:
   1. Push tag v{version} to origin
   2. Gitea workflow trigger-odoo-build.yml fires
-  3. Calls paas-odoo-ci → build-image.yml (addon_ref=v{version})
+  3. Calls paas-odoo-ci → build-image.yml (addon_ref=v{version}, image_name=paas-odoo-official)
   4. paas-odoo-ci 驗 addon_ref → 開 prod approval issue → ⏸ 停在這裡，尚未 build
   5. 授權者在該 issue 留言 /approve → 觸發新的一次 run（見 Step 6）
   6. clone addon at ref v{version} → build → 版號驗證 → push 到 JCR
@@ -144,7 +146,7 @@ git push origin v{version}
   2. paas-odoo-ci phase 1: 驗 addon_ref → 開 approval issue → 結束（⚠ 還沒 build）
   3. ⏸ 等授權者留言 /approve 放行 —— 見 Step 6
   4. paas-odoo-ci phase 2: clone → build → 版號驗證 → push
-  5. Image pushed to JCR: woow-paas-docker-local/paas-odoo:{timestamp}
+  5. Image pushed to JCR: woow-paas-docker-local/paas-odoo-official:{timestamp}
 
 🔍 Check build status:
   - woow_paas_platform CI: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/actions
@@ -166,7 +168,7 @@ git push origin v{version}
 ### 6. ⏸ Prod build 人工核可 gate（push tag 後**不會**自動 build）
 
 push tag 只跑完 **phase 1**：paas-odoo-ci 驗過 `addon_ref` 後，開一張
-`[prod-approval:build-image.yml] Build .../paas-odoo:{timestamp}` issue 就**結束**——
+`[prod-approval:build-image.yml] Build .../paas-odoo-official:{timestamp}` issue 就**結束**——
 job 立刻完成、不佔 runner、**image 還沒 build**。要有人放行才會觸發 **phase 2** 真正 build。
 
 > ⚠ **phase 1 的 success ≠ 發版完成。** 兩個 phase 都是 `build-image.yml` 的 run、
@@ -192,7 +194,8 @@ job 立刻完成、不佔 runner、**image 還沒 build**。要有人放行才�
 | push `stg-*` tag | ❌ 跳過 | ✅ 完全自動 |
 | `workflow_dispatch` 帶 `image_name=paas-odoo-stg` | ❌ 跳過 | ✅ 完全自動 |
 | push `v*` tag（**本命令這條**） | ✅ 擋 | ⚠️ 需人工 `/approve` |
-| `workflow_dispatch` 帶 `image_name=paas-odoo`／未指定 | ✅ 擋 | ⚠️ 需人工 `/approve` |
+| `workflow_dispatch` 帶 `image_name=paas-odoo-official` | ✅ 擋 | ⚠️ 需人工 `/approve` |
+| `workflow_dispatch` 帶 `image_name=paas-odoo`／未指定（Bitnami 舊線，cutover 後不再用） | ✅ 擋 | ⚠️ 需人工 `/approve` |
 
 **放行後怎麼確認 phase 2 是真的 build**：放行時 bot 會留言，而**那則 bot 留言本身也是
 `issue_comment`**，會再觸發一個驗不過即結束的 no-op run —— 它同樣是 `build-image.yml`、
@@ -213,6 +216,7 @@ tea api "repos/woow-paas/paas-odoo-ci/actions/runs/{run}/jobs"
 
 - `addon_ref` = `v{version}`（本次發版 tag）
 - `tag` = 新的 `YYYYMMDD.HHMM`
+- `image_name` = `paas-odoo-official`（⚠ 未指定會 build Bitnami `paas-odoo`，cutover 後部署不上去）
 
 ⚠ **這條人工路徑一樣會撞到 Step 6 的核可 gate**（`image_name` 未指定即視為 prod）——
 dispatch 後只會再開一張新的 approval issue，**仍須有人 `/approve` 才會 build**。
