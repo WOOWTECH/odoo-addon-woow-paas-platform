@@ -156,6 +156,12 @@
                    eval="[(6, 0, [ref('plan_litellm_monthly'), ref('plan_litellm_yearly')])]"/>
         </record>
 
+        <!-- MCP：AI 模型閘道（mcp-litellm）：範本先隱藏（is_hidden=True），方案先掛好（沒掛 plan 會被 _create_service 擋）。 -->
+        <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_mcp_litellm_monthly'), ref('plan_mcp_litellm_yearly')])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
              不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且
              storefront_hidden 已在 plan 層擋前台）。provision 端點直接把 plan ref 傳給

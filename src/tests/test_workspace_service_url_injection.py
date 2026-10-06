@@ -10,8 +10,8 @@
   埠 ``headscale.port``；第一個埠 3000 是 Headplane）
 - pi-agent／code-server／open-design／hermes-agent 的 ``llmGateway.baseUrl``＝同工作區
   running 的 LiteLLM：``http://<release>-litellm.<ns>.svc.cluster.local:4000/v1``；
-  mcp-litellm（範本之後才上）的 ``config.nonSensitive.connection.base_url`` 同一台但**不帶**
-  ``/v1``
+  mcp-litellm（``cloud_app_mcp_litellm``，mcp-server chart）的 ``config.nonSensitive.connection.base_url``
+  同一台但**不帶** ``/v1``
 
 共同規則：只帶網址（絕不帶 preauth key／virtual key／master key）；沒有提供者、非 running、
 跨工作區／跨 namespace ⇒ 不寫鍵；多台取最早建立；helm_values 已有非空值 ⇒ 尊重；組裝唯讀；
@@ -42,8 +42,6 @@ _OPERATOR_CLIENT = (
     'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
 )
 LLM_CONSUMERS = ('pi-agent', 'code-server', 'open-design', 'hermes-agent')
-# 已登記注入、但範本還沒進 seed 的消費端（mcp-litellm：monorepo apps/litellm 上架時才有範本）。
-PENDING_TEMPLATE_SLUGS = {'mcp-litellm'}
 
 
 def _hs_url(service, namespace=_NS, port=8080):
@@ -259,6 +257,31 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
             'mcp_server': {'port': 8000},
             'connection': {'base_url': _ll_url('svc-ll000001-litellm')},
         })
+
+    def test_real_mcp_litellm_template_gets_only_the_url_on_top_of_its_seed(self):
+        """真範本（seed 的 cloud_app_mcp_litellm）：開通時 helm_values＝範本預設。同工作區有 running
+        LiteLLM ⇒ 組裝結果只多 ``connection.base_url`` 一條（不含 /v1）；啟動契約、唯讀開關、envPrefix、
+        requiredFields 原樣，任何地方都不帶金鑰。沒有 LiteLLM ⇒ 不寫 connection（租戶自己填）。"""
+        real = self.env.ref('woow_paas_platform.cloud_app_mcp_litellm')
+        seed = json.loads(real.helm_default_values)
+        mcp = self._svc('mcp-litellm', 'svc-mcpreal1', template=real, helm_values=seed)
+        before = self._values(mcp)
+        self.assertNotIn('connection', before['config']['nonSensitive'])
+        self._litellm()
+        after = self._values(mcp)
+        b, a = _flatten(before), _flatten(after)
+        path = ('config', 'nonSensitive', 'connection', 'base_url')
+        self.assertEqual({k for k in set(a) | set(b) if a.get(k) != b.get(k)}, {path})
+        self.assertEqual(a[path], _ll_url('svc-ll000001-litellm'))
+        self.assertFalse(a[path].endswith('/v1'), 'LiteLLM 管理 API 的根，不是 OpenAI 相容的 /v1')
+        self.assertEqual(after['config']['nonSensitive']['mcp_server'],
+                         seed['config']['nonSensitive']['mcp_server'])
+        self.assertEqual(after['config']['nonSensitive']['mcp_server']['env'],
+                         {'LITELLM_MCP_READONLY': '1'}, '注入不會動到出廠唯讀')
+        self.assertEqual(after['envPrefix'], 'LITELLM_MCP_')
+        self.assertEqual(after['config']['requiredFields'], ['admin_password'])
+        self.assertFalse(after['config'].get('sensitive'))
+        self.assertNotIn('master_key', json.dumps(after), '只帶網址，絕不帶金鑰')
 
     def test_code_server_gets_both_omnigent_and_litellm(self):
         """一個 chart 可同時是兩個注入器的消費端，互不干擾。"""
@@ -515,17 +538,25 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
     # ---- seed lockstep ----------------------------------------------------
 
     def test_constants_match_seed(self):
-        """消費端都是真的範本（mcp-litellm 例外：範本之後才上）；提供者的 chart 名、port
-        與 seed 一致；tailscale 範本已釘到懂 controlPlane 的 chart。"""
+        """消費端都是真的範本（含 mcp-litellm，2026-10-05 以隱藏範本進 seed）；提供者的 chart 名、port
+        與 seed 一致；tailscale 範本已釘到懂 controlPlane 的 chart；mcp-litellm 的注入路徑落在
+        mcp-server chart 的 config.nonSensitive（chart 把它整棵寫進 config.base.json）。"""
         Template = self.Template.with_context(active_test=False)
         seeded = lambda slug: Template.search(  # noqa: E731
             [('slug', '=', slug), ('id', 'not in', list(t.id for t in self.tpl.values()))],
             limit=1)
         for table, _provider, _suffixes in _WORKSPACE_URL_INJECTORS:
             for slug in table:
-                if slug in PENDING_TEMPLATE_SLUGS:
-                    continue
                 self.assertTrue(seeded(slug), slug)
+        mcp = self.env.ref('woow_paas_platform.cloud_app_mcp_litellm')
+        self.assertEqual(seeded('mcp-litellm'), mcp)
+        self.assertTrue(mcp.helm_chart_name.endswith('/mcp-server'), mcp.helm_chart_name)
+        mcp_seed = json.loads(mcp.helm_default_values)['config']['nonSensitive']
+        self.assertIsInstance(mcp_seed, dict)
+        self.assertNotIn('connection', mcp_seed, '網址交給注入；seed 寫死會蓋掉它（explicit value wins）')
+        self.assertEqual(_LITELLM_BASE_URL_VALUE_PATHS['mcp-litellm'],
+                         [('config', 'nonSensitive', 'connection', 'base_url')],
+                         'apps/litellm 的 connection 鍵是 base_url（→ LITELLM_MCP_BASE_URL）')
         hs = self.env.ref('woow_paas_platform.cloud_app_headscale')
         self.assertEqual(hs.helm_chart_name.rsplit('/', 1)[-1],
                          _WORKSPACE_PROVIDERS['headscale']['chart'])

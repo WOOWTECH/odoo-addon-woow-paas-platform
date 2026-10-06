@@ -903,7 +903,7 @@ _WORKSPACE_HEADSCALE_URL_VALUE_PATHS = {
 # 同工作區 LiteLLM（AI 模型閘道）：四個 agent／IDE chart 的 ``llmGateway.baseUrl``
 # （進非 checksum 的 ConfigMap，env ``LITELLM_BASE_URL``；hermes-agent／open-design 只在
 # 這個值有設時對同 ns ``app.kubernetes.io/name=litellm``:4000 開 egress 洞），以及
-# mcp-litellm（mcp-server chart；範本之後才上）的 ``config.nonSensitive.connection.base_url``
+# mcp-litellm（mcp-server chart，cloud_app_mcp_litellm）的 ``config.nonSensitive.connection.base_url``
 # （app 第一次啟動 seed-if-absent，只對新開通生效）。virtual key／master key 一律由租戶
 # 在 LiteLLM 後台建立後自己貼。網址後綴見 ``_LITELLM_BASE_URL_SUFFIXES``。
 _LITELLM_BASE_URL_VALUE_PATHS = {
