@@ -1039,3 +1039,5 @@ from . import test_platform_ux_r8
 from . import test_restart_and_secret_keys_1432
 # #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
 from . import test_neutralize_1201
+# #1488：helm values 白名單 fail-closed（specs 沒有任何鍵＝租戶值全部拒絕，不再全部放行）。
+from . import test_helm_values_whitelist_fail_closed_1488

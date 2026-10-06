@@ -1049,8 +1049,9 @@ class PaasController(HiddenChainMixin, Controller):
     def _portal_config_values(cls, values, template):
         """DTO of declared scalar settings only, never a raw Helm tree.
 
-        The write filter has a legacy allow-all fallback for missing specs;
-        that is not an acceptable disclosure policy for privileged reads.
+        Templates without declared specs expose nothing here; since #1488 the
+        write filter (``_filter_allowed_helm_values``) is fail-closed the same
+        way — no declared keys means tenants can neither read nor write values.
         """
         specs = template._parse_helm_value_specs()
         if not isinstance(specs, dict):
