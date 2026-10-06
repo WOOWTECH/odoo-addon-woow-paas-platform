@@ -1491,7 +1491,7 @@
         <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
             <field name="name">Home Assistant 完整版</field>
             <field name="slug">ha-full</field>
-            <field name="description">容器版 Home Assistant，整合集完整（911 個設定入口）、28 個內建整合任你挑（不含內建 AI 對話與語音助理），1 vCPU／1 GB RAM／10 GB 磁碟</field>
+            <field name="description">容器版 Home Assistant，整合集完整（911 個設定入口）、28 個內建整合任你挑（不含內建 AI 對話與語音助理），1 vCPU／1 GB RAM／20 GB 磁碟</field>
             <field name="full_description">Home Assistant 完整版雲端服務：採 Home Assistant 官方
                 兩種安裝方式中的 **Container** 方式，跑的是完整的 Home Assistant Core，
                 **整合集完全不做精簡**——911 個具設定入口的官方整合全部保留，可直接在
@@ -1501,6 +1501,8 @@
                 但一律不自動啟用，由你自己挑要用哪些、什麼時候用——不會有任何你沒同意過的
                 裝置或自動化被預先建立。開通後於瀏覽器完成初始設定（建立你自己的管理者帳號）
                 即可使用；平台不持有你的 Home Assistant 帳密。
+                服務附 20 GB 資料磁碟：設定、歷史紀錄，以及你在「媒體」（我的媒體，/media）
+                上傳或錄製的檔案都保存在這顆磁碟上，重新啟動、暫停後恢復都不會遺失。
                 **本版沒有下列三項功能，購買前請務必確認**（這是 Home Assistant 官方對
                 Container 安裝方式的既有限制，非平台刪減）：**① 沒有 Add-on 商店**
                 （官方新稱「Apps」）；**② 沒有內建備份**；**③ 沒有一鍵更新**。
@@ -1527,16 +1529,46 @@
             <!-- 2026-10-03 換 chart 0.1.5（woow-paas-charts #115＋#118）：0.1.4 新實例預設座標台北
                  （.storage/core.config，缺才寫，#1374）；0.1.5 平台注入的公開網址寫入
                  core.config external_url（_inject_allowed_origins，#1388）。helm_default_values 不需改。 -->
+            <!-- 2026-10-07 換 chart 0.1.6（woow-paas-charts #130），照使用者當天的決定只取一部分：
+                 採用（chart 預設，seed 不寫）：
+                   - #1444 /media 以 subPath media 掛同一顆資料磁碟（persistence.media.enabled）。
+                   - #1436 egress＝DNS＋公網＋同 namespace（同工作區服務互連）；叢集內部、私網、
+                     跨工作區擋（networkPolicy.allowAllEgress=false、sameNamespaceEgress=true）。
+                   - #1432 三個 probe 改 httpGet /manifest.json；#1434 主容器 ephemeral-storage 4Gi。
+                   - #1441 ⚠ **暫時止血**：seed.disableIntegrations=[zeroconf, ssdp]＋egress 擋
+                     224.0.0.0/4，同工作區內的 HA 現在也互相探索不到。使用者要的是「同工作區像區網
+                     可互相探索、跨工作區不行」的全平台方案（另一條線設計中）；那個方案上線時要
+                     回來覆寫這兩項，不是把止血當成終局。
+                 不採用（seed 明寫關掉，避免吃到 chart 預設 true）：
+                   - #1446 haProxy.ipBanEnabled=false（不做登入失敗封鎖 IP）。
+                   - #1447 seed.unlockCoreConfig=false（不把 configuration.yaml 的核心設定搬進
+                     .storage/core.config）。
+                   - #1442 不由平台給初始密碼：has_admin_gui 維持 False ⇒ 平台不送
+                     config.sensitive.admin_password ⇒ chart 不 render `-owner` Secret、不跑
+                     owner bootstrap，onboarding 由客戶自己建擁有者。0.1.6 沒有 `owner.enabled`
+                     之類的開關，seed log 仍會印一行「no initial owner password supplied」
+                     WARNING（純訊息，不影響行為）；要消掉得改 chart。
+                 這兩個「不採用」的鍵對既有服務也成立：開通當下的 helm_values 快照沒有它們，
+                 Redeploy 時由 cloud_service._inject_template_policy_keys 以本範本的值補上
+                 （否則 0.1.6 的 chart 預設 true 會在 Redeploy 時生效）。 -->
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_chart_version">0.1.6</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
                  - persistence.mountPath /config：HA config 目錄固定值，chart 明令不可改。
-                 - persistence.size 10Gi：與 min_storage_gb 齊（quota lockstep，見下）。
+                 - persistence.size 20Gi：與 min_storage_gb 齊（quota lockstep，見下）。
+                   2026-10-07 由 10Gi 調為 20Gi（使用者決定，與 pi-agent、code-server 一致；
+                   0.1.6 起 /media 也在這顆磁碟上）。只影響**新開通**：既有服務的 helm_values
+                   是開通當下的快照（仍是 10Gi），Redeploy 只換 image 與下面兩個政策鍵，不會
+                   把 PVC 線上擴容；既有服務要不要擴容另行決定。
                    ⚠ PVC 只能長大不能縮——縮小會讓整個 `helm upgrade` 被 API server 拒絕。
+                 - haProxy.ipBanEnabled false、seed.unlockCoreConfig false：使用者決定不做
+                   #1446／#1447（見上方 0.1.6 換版註解）。chart 0.1.6 兩者預設都是 true，所以
+                   必須明寫；也因此列在 cloud_service 的 _TEMPLATE_POLICY_KEYS，讓既有服務
+                   Redeploy 時跟著範本走。
                  - service.port/targetPort 8123：HA 前端埠，＝default_port。
                  - ingress.*：對外走平台 subdomain + Cloudflare tunnel，故明寫關閉
                    （沿用 ha-paas 形制；本 chart 有 ingress 區塊，與 haos 不同）。
@@ -1574,10 +1606,20 @@
                    amd64，排到 arm64 會 exec format error CrashLoop）。且 helm deep-merge
                    下 `{}` 蓋不掉，要清得寫 null——所以連鍵都不該出現。
                  - persistence.storageClass：平台 `_inject_storage_class` 每次部署注入。
-                 - networkPolicy.allowAllEgress：chart 預設 true 且**必須維持**（HACS
-                   要從 github.com 下載；DNS-only egress 會讓它變成裝不了東西的整合，
-                   且沒有清楚錯誤）。平台沒有理由覆寫。 -->
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260923.0804@sha256:3eaf22a5396877b7742a410809709450fc6f925c7e552fbd1bf6977be07598af"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+                 - networkPolicy.*：chart 0.1.6 起預設 allowAllEgress=false（DNS＋公網＋同
+                   namespace，擋叢集內部／私網／多播；HACS 走 github.com 公網照常可用）、
+                   sameNamespaceEgress=true（同工作區服務互連，#1436）。多播被擋是 #1441
+                   的暫時止血，待全平台「同工作區可探索」方案取代（屆時才在這裡覆寫）。
+                 - seed.disableIntegrations：chart 0.1.6 預設 [zeroconf, ssdp]（#1441 暫時
+                   止血，理由同上）。
+                 - persistence.media.*：chart 0.1.6 預設 /media 以 subPath media 掛同一顆
+                   資料磁碟（#1444）。
+                 - probe／ephemeral-storage：chart 0.1.6 預設（httpGet /manifest.json；主容器
+                   ephemeral-storage 4Gi）。平台 resources 只寫 cpu／memory，helm deep-merge
+                   保留 chart 的 ephemeral-storage。
+                 - owner.*／config.sensitive.admin_password：#1442 不做（has_admin_gui=False，
+                   平台不送密碼）。 -->
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260923.0804@sha256:3eaf22a5396877b7742a410809709450fc6f925c7e552fbd1bf6977be07598af"},"persistence":{"mountPath":"/config","size":"20Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true,"ipBanEnabled":false},"seed":{"unlockCoreConfig":false},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HA 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1593,7 +1635,9 @@
                  皆為 0 → allocated_* 走 fallback 取這三個 min_*（`_allocated_vals_from`）：
                    Σlimits.cpu    = 2    → min_vcpu       = 1  貢獻 3 vCPU
                    Σlimits.memory = 2Gi  → min_ram_gb     = 1.0 貢獻 3Gi
-                   PVC            = 10Gi → min_storage_gb = 10  貢獻 30Gi
+                   PVC            = 20Gi → min_storage_gb = 20  貢獻 60Gi
+                   （2026-10-07 由 10Gi／10 調為 20Gi／20；只影響新開通——既有服務的
+                   allocated_storage_gb 是開通當下寫入的值，不會因為改這裡而重算）
                  🔴 **min_ram_gb 不可低於 1.0**：填 0.5 只貢獻 1Gi，同 workspace 併存
                  其他服務時 pod 會 `exceeded quota`，而唯一可見症狀是「服務永遠 CF 502」。
                  ⚠ 日後把 limits.memory 調到 3Gi 以上，min_ram_gb 必須同一次調高。
@@ -1601,7 +1645,7 @@
                  不硬編：改 resources／persistence.size 而不同步這裡就會紅）。 -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">10</field>
+            <field name="min_storage_gb">20</field>
 
             <!-- MCP 能力不在本 template（HA 的 MCP 生態由 smart_home／mcp-* 系列承擔）。 -->
             <field name="mcp_enabled" eval="False"/>
@@ -1609,7 +1653,9 @@
                  畫面建立，平台不生成、不持有、也無從重置（同 cloud_app_haos）。開了這個
                  旗標會讓平台憑空生一組 admin_password 塞進 config.sensitive（chart 沒有
                  對應鍵＝白生），並在前台長出一顆按了必失敗的「重置密碼」按鈕（#460 能力
-                 gate 直接鏡射本欄位）。admin_password_carrier 因此維持預設、不具意義。 -->
+                 gate 直接鏡射本欄位）。admin_password_carrier 因此維持預設、不具意義。
+                 2026-10-07：chart 0.1.6 雖然有了對應鍵（平台給初始密碼、開機建擁有者，#1442），
+                 使用者決定**不做**，維持客戶自己在 onboarding 建擁有者（#1504 的方案被取代）。 -->
             <field name="has_admin_gui" eval="False"/>
             <field name="post_deploy_init_type">none</field>
 

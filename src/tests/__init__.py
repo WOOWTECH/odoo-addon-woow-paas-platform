@@ -356,6 +356,9 @@ from . import test_workspace_access_authz_556
 # ＋ quota lockstep 現算 ＋ base plan/product/M2M（3000/24000）
 from . import test_ha_full_seed_661
 from . import test_ha_full_apporo_seed
+# ha-full 換 chart 0.1.6：使用者 2026-10-07 的決定（#1446／#1447／#1442 不做、磁碟 20G）
+# ＋既有服務 Redeploy 不擴容、政策鍵跟著範本走。
+from . import test_ha_full_016_user_decisions
 from . import test_pi_agent_seed
 from . import test_omnigent_seed
 from . import test_code_server_seed
