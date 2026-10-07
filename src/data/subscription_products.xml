@@ -2446,7 +2446,7 @@
 
         <!-- MCP：AI 模型閘道（mcp-litellm，PLAN §10）：比照其他 MCP 單一方案 月 3000／年 24000、試用 7 天，
              無 +1access 變體、無 cs_*（規格走範本 min_*＋helm_default_values，同 plan_mcp_k8s）。
-             taxes_id 明寫空（#366）。範本先隱藏（is_hidden=True），方案先掛好（沒掛 plan 會被 _create_service 擋）。 -->
+             taxes_id 明寫空（#366）。範本 2026-10-07 公開上架（10-05 以隱藏範本＋方案先掛好進 seed；沒掛 plan 會被 _create_service 擋）。 -->
         <record id="plan_mcp_litellm_monthly" model="sh.subscription.plan">
             <field name="name">MCP：AI 模型閘道（LiteLLM）月繳</field>
             <field name="sh_duration">1</field>

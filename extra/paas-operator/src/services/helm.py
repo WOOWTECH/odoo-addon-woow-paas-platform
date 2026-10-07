@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.config import settings
+from src.services.tenant_baseline import (
+    PSA_EXEMPT_ANNOTATION,
+    PSA_EXEMPT_REASON,
+    build_baseline_egress_netpol,
+    build_pod_security_labels,
+    is_psa_exempt,
+    parse_namespace_list,
+    psa_label_keys,
+)
 from src.models.schemas import (
     ContainerWaitingInfo,
     DataVolumeInfo,
@@ -1756,6 +1765,8 @@ class KubernetesService:
 
         # #279 O4: apply the leg-2 tenant-isolation baseline NetworkPolicy bundle.
         if workspace_id is not None:
+            # #1441：PSA 排在 NP 之前——之後任何一步失敗重跑，ns 也已經不收特權 pod。
+            self.apply_pod_security(name)
             self._apply_baseline_netpol(name, workspace_id)
         else:
             # A tenant CloudService ns should always carry a workspace_id; None here is
@@ -1889,8 +1900,14 @@ class KubernetesService:
              the n8n sidecar (:3000) and standalone mcp-server (:8080) diverge, and
              within-workspace-ns reach is within-tenant.
 
-        egress is intentionally NOT restricted here — leg-1 (agent-runtime chart) owns
-        agent egress. Idempotent via ``kubectl apply``.
+        5. ``paas-baseline-egress``（#1441／#1436／#514，``TENANT_BASELINE_EGRESS_ENABLED``
+           打開時才套）— 工作區＝自己的區網：egress 只剩同 ns 全部 pod 全部埠、kube-dns
+           53、公網（排除私網／metadata／CGNAT／多播／240/4）。單一一條、原子套用；
+           內容見 ``tenant_baseline.build_baseline_egress_netpol``。開關關著時**不刪**已
+           存在的這條（關開關＝不再新增，不是回滾；回滾用 scripts/ws_lan_backfill.py
+           --rollback）。
+
+        Idempotent via ``kubectl apply``.
         """
         validate_namespace(namespace)
 
@@ -1929,8 +1946,53 @@ class KubernetesService:
                 **env_ml,
             }}}]}],
         ))
+        if settings.tenant_baseline_egress_enabled:
+            manifests.append(build_baseline_egress_netpol(namespace))
         for manifest in manifests:
             self.apply_manifest(manifest)
+
+    def apply_pod_security(self, namespace: str) -> Dict[str, str]:
+        """#1441：租戶 ns 的 Pod Security Admission 標籤（``TENANT_POD_SECURITY_ENABLED``）。
+
+        * 一般租戶 ns：``kubectl label --overwrite`` enforce／warn／audit（＋各自的
+          -version），內容見 ``tenant_baseline.build_pod_security_labels``。
+        * 例外 ns（``PSA_EXEMPT_NAMESPACES``，預設只有管理者用的 Omnigent
+          paas-ws-ab6564da）：移除所有 PSA 標籤（不設 enforce），並註記理由。
+
+        開關關著時什麼都不做（回傳空 dict）。冪等。回傳實際寫入的標籤（例外 ns 回傳空
+        dict），供測試與回填端點觀察。
+        """
+        validate_namespace(namespace)
+        if not settings.tenant_pod_security_enabled:
+            return {}
+        exempt = parse_namespace_list(settings.psa_exempt_namespaces)
+        if is_psa_exempt(namespace, exempt):
+            # `key-` 對不存在的標籤是 no-op（kubectl 只回 "not labeled"），所以可以重跑。
+            self._run_command(
+                ["label", "ns", namespace] + [f"{k}-" for k in psa_label_keys()]
+            )
+            self._run_command([
+                "annotate", "ns", namespace, "--overwrite",
+                f"{PSA_EXEMPT_ANNOTATION}={PSA_EXEMPT_REASON}",
+            ])
+            logger.warning(
+                "apply_pod_security(%s): PSA exempt namespace — no enforce label", namespace
+            )
+            return {}
+        labels = build_pod_security_labels(
+            enforce=settings.tenant_psa_enforce_level,
+            warn=settings.tenant_psa_warn_level,
+            audit=settings.tenant_psa_audit_level,
+            version=settings.tenant_psa_version,
+        )
+        for key, value in labels.items():
+            validate_label_key(key)
+            validate_label_value(key, value)
+        self._run_command(
+            ["label", "ns", namespace, "--overwrite"]
+            + [f"{k}={v}" for k, v in labels.items()]
+        )
+        return labels
 
     def ensure_registry_secret(self, namespace: str) -> Optional[str]:
         """Create/update a dockerconfigjson secret for private registry access.
@@ -2869,6 +2931,48 @@ class KubernetesService:
             return []
         return output.split()
 
+    #: #1513：一次 server dry-run 的上限。逾時＝「不知道」（呼叫端放行），所以寧短勿長——
+    #: 這段時間會疊加在升級（含 reset 密碼）的預算上（reset-async-budget-ladder）。
+    PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS = 10
+
+    def dry_run_pvc_resize(self, namespace: str, name: str, size: str) -> None:
+        """#1513：問 API server「把這顆 PVC 加大到 ``size`` 會不會被接受」，什麼都不改。
+
+        ``kubectl patch --dry-run=server`` 會跑完整的 admission 鏈：Longhorn 的
+        ``validator.longhorn.io`` 宣告 ``sideEffects: None``，dry-run 照樣呼叫它，所以
+        「replica 所在磁碟放不放得下增量」由 Longhorn 自己判斷（``CheckReplicasSizeExpansion``），
+        operator 不必重寫排程規則、也不需要讀 ``replicas.longhorn.io`` 的權限。
+
+        Raises:
+            KubectlException: 被拒絕或 kubectl 失敗（解讀在
+                ``upgrade_preflight.classify_expansion_rejection``）。
+            ValueError: namespace 不在允許範圍。
+        """
+        validate_namespace(namespace)
+        patch = json.dumps({"spec": {"resources": {"requests": {"storage": size}}}},
+                           separators=(",", ":"))
+        self._run_command(
+            ["patch", "pvc", name, "--namespace", namespace, "--type", "merge",
+             "--patch", patch, "--dry-run=server", "--output", "name"],
+            timeout=self.PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS,
+        )
+
+    def get_longhorn_volume(self, volume_name: str) -> Dict[str, Any]:
+        """#1513：讀一顆 Longhorn volume（``volumes.longhorn.io``，唯讀）。
+
+        operator ClusterRole 需要 longhorn.io ``volumes`` get（woow-paas-charts
+        charts/paas-operator）；沒有時 raise，呼叫端當「不知道」放行。
+
+        Raises:
+            KubectlException: 不存在、權限不足、逾時。
+        """
+        result = self._run_command(
+            ["get", "volumes.longhorn.io", volume_name,
+             "--namespace", settings.longhorn_namespace, "-o", "json"],
+            timeout=self.PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS,
+        )
+        return json.loads(result.stdout or "{}")
+
     def get_storage_quota_snapshot(
         self, namespace: str
     ) -> Dict[str, List[Dict[str, Any]]]:
@@ -2944,6 +3048,44 @@ class KubernetesService:
             timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
         )
         return json.loads(result.stdout or "{}").get("items", [])
+
+    def list_orphaned_release_resources(
+        self, namespace: str, release_name: str
+    ) -> Dict[str, List[str]]:
+        """#1157：namespace 內屬於 ``release_name`` 且帶孤兒標記的 PVC／DataVolume（唯讀）。
+
+        選取條件＝uninstall 時 ``build_orphan_pvc_labels`` 打上的兩個 label：
+        ``paas.woowtech.io/release-name=<release>`` **且**有 ``paas.woowtech.io/orphaned-at``。
+        同名重裝會讓 helm 靜默接回這些資源，而回收 CronJob 只看孤兒標記 ⇒ 保留期一到就刪掉
+        活站資料；``create_release`` 據此回 409（#1157 裁決 A）。
+
+        叢集沒有 CDI（DataVolume CRD 不存在）時 ``datavolumes`` 回空 list；其他 kubectl 失敗
+        一律 raise，由呼叫端決定（install 前的檢查走 fail-closed）。
+
+        Returns:
+            ``{"pvcs": [...names], "datavolumes": [...names]}``
+
+        Raises:
+            ValueError: namespace 越界，或 release name 不是合法的 label 值（會改變 selector 語意）。
+            KubectlException: 查詢失敗（CDI 不存在除外）。
+        """
+        from src.services.storage_quota import ORPHANED_AT_LABEL, RELEASE_NAME_LABEL
+
+        validate_namespace(namespace)
+        # release name 直接拼進 selector：含 ',' 等字元會變成另一個 selector，
+        # 先用 label 值語法擋掉（合法的 helm release name 一定也是合法的 label 值）。
+        validate_label_value(RELEASE_NAME_LABEL, release_name)
+        selector = f"{RELEASE_NAME_LABEL}={release_name},{ORPHANED_AT_LABEL}"
+
+        pvcs = self.list_pvcs(namespace, label_selector=selector)
+        datavolumes: List[str] = []
+        if self.has_datavolume_crd():
+            try:
+                datavolumes = self.list_datavolumes(namespace, label_selector=selector)
+            except KubectlException as e:
+                if not self.is_crd_absent_error(e):
+                    raise
+        return {"pvcs": pvcs, "datavolumes": datavolumes}
 
     def get_cdi_filesystem_overhead(self) -> Optional[Dict[str, Any]]:
         """#1415：CDIConfig 的 ``status.filesystemOverhead``（``{"global": "0.06",

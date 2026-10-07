@@ -112,11 +112,13 @@ class TestConcealInstancesSeed(TransactionCase):
         # （headscale／tailscale／litellm 2026-10-04 #1413 以隱藏卡片進 seed、隨 .206 上正式站，
         #  image 鏡像核可、chart 0.1.0 發佈與整合實測通過後同日公開上架＝不再 hidden；
         #  當時只翻 is_hidden，實例層從未設。）
-        # mcp-litellm：hidden-only（曝光層）——2026-10-05 以隱藏卡片進 seed（PLAN §10），等正式站
-        # 開通實測（同工作區預填網址、viewer key 唯讀可用、解鎖寫入）後另開 PR 公開上架；實例層不設，
-        # 上架時只翻 is_hidden 並把 slug 從這裡拿掉。
+        # （mcp-litellm 2026-10-05 #1487 以隱藏卡片進 seed、隨 .210 上正式站，沙盒實測（woow-mcp-server
+        #  #33）通過後 2026-10-07 公開上架＝不再 hidden；只翻 is_hidden，實例層從未設。）
+        # mcp-odoo-manage：hidden-only（曝光層）——2026-10-06 #1507 下架（Odoo MCP 只保留
+        # mcp-odoo），只翻 is_hidden、實例層不設；重新上架時改回 False 並把 slug 從這裡拿掉。
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo', 'mcp-litellm'},
+            set(hidden.mapped('slug')),
+            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(

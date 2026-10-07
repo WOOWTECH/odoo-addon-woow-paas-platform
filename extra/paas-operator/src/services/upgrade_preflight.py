@@ -103,6 +103,105 @@ def find_immutable_conflicts(rendered_docs: Iterable[Any], live_items: Iterable[
     return conflicts
 
 
+#: #1513：PVC 擴容被 Kubernetes／Longhorn 拒絕的 409 ``detail.error_code``。平台
+#: （woow_paas_platform ``api_service_change_plan``）認這個字串，改名要兩邊一起改。
+STORAGE_EXPANSION_ERROR_CODE = "storage_expansion_rejected"
+
+#: Longhorn validator 拒絕擴容的特徵（longhorn-manager v1.10.2
+#: ``ReplicaScheduler.CheckReplicasSizeExpansion``）。
+_LONGHORN_CAPACITY_MARKERS = ("CheckReplicasSizeExpansion", "cannot schedule")
+#: API server 明確拒絕的前綴（kubectl 把 HTTP 403／422 印成這兩種）。其他失敗（逾時、
+#: 連不上、5xx）都是「不知道」。
+_API_REJECTION_PREFIXES = ("Error from server (Forbidden)", "Error from server (Invalid)")
+
+
+def find_pvc_expansions(rendered_docs: Iterable[Any], live_items: Iterable[Dict]) -> List[Dict]:
+    """#1513：rendered 與 live 同名的 PVC 中，要求容量**變大**的那些。
+
+    縮小不在這裡（那是 ``find_immutable_conflicts`` 的衝突）；新建的 PVC 不在這裡（那是
+    #1415 開通預檢的範圍）；StatefulSet ``volumeClaimTemplates`` 不能就地擴容，也不在這裡。
+    """
+    live = {}
+    for item in live_items or []:
+        meta = item.get("metadata") or {}
+        if item.get("kind") == "PersistentVolumeClaim" and meta.get("name"):
+            live[meta["name"]] = item
+    out = []
+    for doc in rendered_docs:
+        if not isinstance(doc, dict) or doc.get("kind") != "PersistentVolumeClaim":
+            continue
+        name = (doc.get("metadata") or {}).get("name")
+        current = live.get(name)
+        if current is None:
+            continue
+        old = claim_facts(current.get("spec"))["storage"]
+        new = claim_facts(doc.get("spec"))["storage"]
+        old_size, new_size = parse_quantity(old), parse_quantity(new)
+        if old_size is not None and new_size is not None and new_size > old_size:
+            exp = {"name": name, "live": old, "rendered": new}
+            volume = (current.get("spec") or {}).get("volumeName")
+            if volume:
+                exp["volume"] = volume
+            out.append(exp)
+    return out
+
+
+def longhorn_volume_expansion_blocker(volume: Any) -> Optional[str]:
+    """#1513：Longhorn volume 物件 → 不能擴容的原因（中文），可以擴或看不懂回 None。
+
+    longhorn-manager v1.10.2 ``VolumeManager.Expand``：volume 的 ``Scheduled`` 條件不是 True
+    （replica 沒排滿，叢集額度不足時以 degraded 建出來的 volume 就是這樣）一律拒絕
+    "cannot expand volume before replica scheduling success"。admission webhook 只檢查**已排上**
+    的 replica 所在磁碟，看不到這件事——#1158 e2e 實測：helm upgrade 成功、PVC 永遠停在 Resizing。
+    """
+    if not isinstance(volume, dict):
+        return None
+    conditions = (volume.get("status") or {}).get("conditions")
+    if isinstance(conditions, dict):  # 舊版 Longhorn 以 type 為 key
+        conditions = [dict(c, type=t) for t, c in conditions.items() if isinstance(c, dict)]
+    if not isinstance(conditions, list):
+        return None
+    for cond in conditions:
+        if isinstance(cond, dict) and cond.get("type") == "Scheduled":
+            if cond.get("status") == "True":
+                return None
+            return "Longhorn volume 的 replica 尚未全部排上（%s），Longhorn 不允許擴容" % (
+                cond.get("message") or cond.get("reason") or "Scheduled=%s" % cond.get("status"))
+    return None
+
+
+def classify_expansion_rejection(stderr: Optional[str]) -> Optional[str]:
+    """``kubectl patch --dry-run=server`` 的失敗 → ``capacity``／``rejected``／None（不知道）。
+
+    ``capacity``＝Longhorn 排程額度放不下；``rejected``＝API server 明確拒絕（例如
+    StorageClass 不支援擴容）——兩者真正的 helm upgrade 都一定會在同一步失敗。
+    """
+    text = (stderr or "").strip()
+    if not text.startswith(_API_REJECTION_PREFIXES):
+        return None
+    if "validator.longhorn.io" in text and all(m in text for m in _LONGHORN_CAPACITY_MARKERS):
+        return "capacity"
+    return "rejected"
+
+
+def build_expansion_error_detail(namespace: str, denials: List[Dict]) -> Dict[str, Any]:
+    """#1513 的 409 ``detail``：機器可讀（error_code／reason／pvcs）＋給管理員的中文訊息。"""
+    reason = "capacity" if all(d["reason"] == "capacity" for d in denials) else "rejected"
+    lines = ["升級前檢查發現磁碟無法擴充，已停止升級（沒有套用任何變更）："]
+    for d in denials:
+        why = ("叢集儲存（Longhorn）排程額度不足" if d["reason"] == "capacity"
+               else "Kubernetes 拒絕擴容")
+        lines.append("・磁碟（PVC）「%s」%s → %s：%s（%s）" % (
+            d["name"], d["live"], d["rendered"], why, (d.get("message") or "")[:300]))
+    return {
+        "error_code": STORAGE_EXPANSION_ERROR_CODE,
+        "reason": reason,
+        "namespace": namespace,
+        "pvcs": [{k: d.get(k) for k in ("name", "live", "rendered", "reason")} for d in denials],
+        "message": "\n".join(lines),
+    }
+
+
 def _fmt(value):
     if isinstance(value, (list, dict)):
         return yaml.safe_dump(value, default_flow_style=True, allow_unicode=True).strip()

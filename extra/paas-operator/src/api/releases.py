@@ -36,9 +36,13 @@ from src.services.helm import (
 )
 from src.services.helm import _live_objects, _sanitize_release_values
 from src.services.upgrade_preflight import (
+    build_expansion_error_detail,
+    classify_expansion_rejection,
     describe_conflicts,
     describe_helm_failure,
     find_immutable_conflicts,
+    find_pvc_expansions,
+    longhorn_volume_expansion_blocker,
 )
 from src.services.storage_quota import (
     build_quota_error_detail,
@@ -360,6 +364,71 @@ def _precheck_cluster_storage_capacity(request: ReleaseCreateRequest) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
+#: #1157：同名 release 的孤兒 PVC／DataVolume 還在 ⇒ 拒絕 install。平台照一般錯誤顯示
+#: （release name 隨機，正常流程撞不到；會撞到的是手動操作與 integration test）。
+ORPHANED_RELEASE_RESOURCES_ERROR_CODE = "orphaned_release_resources_exist"
+#: #1157：查不到孤兒資源（kubectl 失敗）⇒ 不放行，回 503。
+ORPHANED_RELEASE_CHECK_UNAVAILABLE_ERROR_CODE = "orphaned_release_check_unavailable"
+
+
+def _precheck_orphaned_release_resources(namespace: str, name: str) -> None:
+    """#1157 裁決 A：install 前拒絕「同 namespace＋同 release name」的孤兒資源接回。
+
+    uninstall 留下的 PVC／DataVolume 帶 ``orphaned-at`` 等三個 label（``delete_release``）。
+    同名重裝時 helm 會靜默接回它們（舊站原地復活、新填的 admin 帳密不生效），而 label
+    沒人清 ⇒ 回收 CronJob 在保留期到期後刪掉活站資料。這裡在任何叢集寫入之前擋下，
+    回 409 要呼叫端明確表態：確認資料不要就先刪掉那些資源，或改用新的 release name。
+
+    P1 刻意**不**提供「接回」旗標（裁決不做 B：會讓上一個租戶的資料／備份歷史被新站
+    接回）；日後要加，接回成功後必須同時拔掉三個 label。
+
+    與 #1348／#1415 兩個預檢相反，這裡查詢失敗走 **fail-closed**（503）：放行就等於回到
+    #1157 的資料遺失路徑；而 kubectl 連 ``get pvc`` 都失敗時，接下來的 helm install 本來
+    也很難成功。
+    """
+    try:
+        found = k8s_service.list_orphaned_release_resources(namespace, name)
+    except KubectlException as exc:
+        logger.error(
+            "Orphaned-resource pre-check failed for %s/%s; refusing install: %s",
+            namespace, name, exc.stderr or exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": ORPHANED_RELEASE_CHECK_UNAVAILABLE_ERROR_CODE,
+                "message": (
+                    f"Cannot verify whether release {name} in {namespace} has orphaned "
+                    f"PVCs/DataVolumes from a previous uninstall; install refused. Retry later."
+                ),
+            },
+        )
+    pvcs = sorted(found.get("pvcs") or [])
+    datavolumes = sorted(found.get("datavolumes") or [])
+    if not pvcs and not datavolumes:
+        return
+    logger.warning(
+        "Refusing install of %s/%s: orphaned resources from a previous uninstall: "
+        "pvcs=%s datavolumes=%s", namespace, name, pvcs, datavolumes,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error_code": ORPHANED_RELEASE_RESOURCES_ERROR_CODE,
+            "message": (
+                f"Release {name} in {namespace} still has orphaned resources from a previous "
+                f"uninstall (PVCs: {', '.join(pvcs) or '-'}; DataVolumes: "
+                f"{', '.join(datavolumes) or '-'}). Installing under the same name would "
+                f"silently re-attach the old data while the orphan labels stay, so the "
+                f"pvc-cleanup CronJob would later delete the live data. Either delete these "
+                f"resources first (if the data is not needed) or use a new release name."
+            ),
+            "pvcs": pvcs,
+            "datavolumes": datavolumes,
+        },
+    )
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -376,10 +445,14 @@ async def create_release(request: ReleaseCreateRequest):
         Information about the created release
 
     Raises:
-        HTTPException: If installation fails（儲存配額不足回 409，#1348；叢集儲存
-            排程額度放不下回 409，#1415）
+        HTTPException: If installation fails（同名 release 的孤兒 PVC／DataVolume 還在回
+            409、查不到回 503，#1157；儲存配額不足回 409，#1348；叢集儲存排程額度放不下
+            回 409，#1415）
     """
     try:
+        # #1157：同名 release 的孤兒資源還在就拒絕（helm 會靜默接回、回收 CronJob 之後
+        # 會刪掉活站資料）——放最前面：它是確定性的拒絕，不必先跑容量預檢的 dry-run。
+        _precheck_orphaned_release_resources(request.namespace, request.name)
         # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
         _precheck_storage_quota(request.namespace)
         # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
@@ -536,12 +609,15 @@ def upgrade_release(
         )
 
 
-def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> None:
+def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
     """#1407：dry-run 比對不可變欄位；有衝突 raise 409（中文、指出物件與欄位）。
 
     dry-run 本身失敗（chart 拉不到、template 錯）照樣 raise HelmException——真正
     upgrade 也一定會在同一步失敗，提早回報而且什麼都沒套用。live 物件讀不到時
     不擋（log warning），行為退回 #1407 之前。
+
+    #1513：接著檢查要**變大**的 PVC（``_refuse_unplaceable_expansions``）。回傳這次會擴容的
+    PVC 清單（``upgrade-preflight`` 端點回給呼叫端）。
     """
     namespace = upgrade_kwargs["namespace"]
     manifest = helm_service.upgrade(**upgrade_kwargs, dry_run=True)
@@ -551,7 +627,7 @@ def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> None:
             "Upgrade preflight for %s/%s skipped: live objects unavailable",
             namespace, upgrade_kwargs["name"],
         )
-        return
+        return []
     docs = [d for d in yaml.safe_load_all(manifest or "") if isinstance(d, dict)]
     conflicts = find_immutable_conflicts(docs, live_items)
     if conflicts:
@@ -562,6 +638,103 @@ def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail=describe_conflicts(conflicts),
         )
+    expansions = find_pvc_expansions(docs, live_items)
+    _refuse_unplaceable_expansions(namespace, upgrade_kwargs["name"], expansions)
+    return expansions
+
+
+def _refuse_unplaceable_expansions(
+    namespace: str, name: str, expansions: List[Dict[str, Any]],
+) -> None:
+    """#1513：每顆要變大的 PVC 先看 Longhorn volume 的 replica 排滿沒（沒排滿 Longhorn 不給擴，
+    ``longhorn_volume_expansion_blocker``），再送 ``kubectl patch --dry-run=server``；被拒就 raise 409。
+
+    helm upgrade 不是交易：#1158 實測 data PVC 擴容被 Longhorn 拒絕時，Deployment／Secret
+    與 backup PVC 已經換新、release 標 failed。這裡在 helm 套用任何東西之前問一次。
+    只有 API server／Longhorn **明確拒絕**才擋；逾時、連不上等「不知道」一律放行
+    （同 #1415 原則）。與 #1415 開通預檢共用 ``storage_capacity_precheck_enabled`` 開關。
+
+    ⚠ 每顆 PVC 各自 dry-run：同一顆磁碟上同時擴兩顆時，Longhorn 真正套用也是逐顆判斷，
+    兩顆合計放不下而各自放得下的邊界情況這裡看不到（偏樂觀＝少擋，不會誤擋）。
+    """
+    if not expansions or not settings.storage_capacity_precheck_enabled:
+        return
+    denials = []
+    for exp in expansions:
+        public = {k: exp[k] for k in ("name", "live", "rendered")}
+        if exp.get("volume"):
+            try:
+                blocker = longhorn_volume_expansion_blocker(
+                    k8s_service.get_longhorn_volume(exp["volume"]))
+            except (KubectlException, ValueError) as exc:
+                blocker = None
+                logger.warning(
+                    "PVC expansion pre-check for %s/%s: Longhorn volume %s unreadable: %s",
+                    namespace, exp["name"], exp["volume"],
+                    (getattr(exc, "stderr", None) or str(exc)).strip()[:300],
+                )
+            if blocker:
+                denials.append(dict(public, reason="capacity", message=blocker))
+                continue
+        try:
+            k8s_service.dry_run_pvc_resize(namespace, exp["name"], exp["rendered"])
+        except KubectlException as exc:
+            reason = classify_expansion_rejection(exc.stderr)
+            if reason is None:
+                logger.warning(
+                    "PVC expansion pre-check for %s/%s skipped (%s): %s",
+                    namespace, exp["name"], exc.message, (exc.stderr or "").strip()[:300],
+                )
+                continue
+            denials.append(dict(public, reason=reason, message=(exc.stderr or "").strip()))
+    if denials:
+        detail = build_expansion_error_detail(namespace, denials)
+        logger.warning("Upgrade preflight refused %s/%s: %s", namespace, name, detail["message"])
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+@router.post(
+    "/{namespace}/{name}/upgrade-preflight",
+    summary="Check an upgrade without applying it (#1407 immutable fields, #1513 PVC expansion)",
+)
+def upgrade_release_preflight(
+    namespace: str,
+    name: str,
+    request: ReleaseUpgradeRequest,
+) -> Dict[str, Any]:
+    """#1513：用與 ``PATCH /{namespace}/{name}`` **同一組**參數跑升級預檢，不套用任何東西。
+
+    平台換方案時在**扣款前**呼叫：放不下就整筆擋下，不會出現「帳單已換、磁碟沒擴」。
+    與真正的 upgrade 唯一的差別：這裡不收斂 namespace default SA 的 pull secret（那是寫入），
+    values 只做純函式的預設 pull secret 補位——兩者送給 helm 的 values 相同。
+
+    Returns:
+        ``{"ok": True, "expansions": [...]}``（這次會擴容的 PVC）。
+
+    Raises:
+        HTTPException: 409（不可變欄位衝突／擴容被拒）、500（dry-run 渲染失敗）。
+    """
+    upgrade_kwargs = dict(
+        namespace=namespace,
+        name=name,
+        chart=request.chart,
+        values=_with_default_pull_secrets(request.values),
+        sensitive_values=request.sensitive_values,
+        version=request.version,
+        reset_values=request.reset_values,
+        reuse_values=request.reuse_values,
+    )
+    try:
+        expansions = _upgrade_preflight(upgrade_kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except HelmException as e:
+        logger.error(f"Helm upgrade preflight failed: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=describe_helm_failure(e.stderr),
+        )
+    return {"ok": True, "expansions": expansions}
 
 
 def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[str, str]:
