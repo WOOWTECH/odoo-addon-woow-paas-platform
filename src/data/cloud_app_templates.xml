@@ -1948,7 +1948,14 @@
         </record>
 
 
-        <!-- EMQX（開源版 5.8，Apache-2.0）cloud service。chart woow-paas-charts charts/emqx 0.1.2。
+        <!-- EMQX（開源版 5.8，Apache-2.0）cloud service。chart woow-paas-charts charts/emqx 0.1.6。
+             ⚠ 0.1.6（#1529 資安稽核）：MQTT 授權預設拒絕——no_match=deny＋預設 ACL 只讓每個帳號用
+             「<帳號>/#」（0.1.5 以前是 EMQX 原廠全放行：一般帳號訂 +/+/# 讀得到所有裝置、可發布任何主題，
+             ngrok 進來的用戶端被當 127.0.0.1 拿到 # 與 $SYS/#）。走 etc/base.hocon／acl.conf 預設值，
+             租戶在後台改的授權設定（存在資料磁碟 cluster.hocon）一律優先，所以說明要教租戶勾
+             「超級使用者」或自己加規則。公開網址不再提供 /api/v5/prometheus/*、/api-docs、/status。
+             既有服務 Redeploy 後：沒動過授權設定的 broker 立刻改成預設拒絕（跨帳號主題會收不到），
+             動過授權設定的 broker 保留租戶自己的設定（含原廠的 {allow, all}）——見 PR 說明的遷移注意。
              ⚠ ngrok token 的 spec key 是 ngrok.authtoken，**不得**放在 config.sensitive 底下：
              平台把 config.sensitive 整棵當成自己的通道，會從租戶送來的值裡剝掉
              （_strip_mcp_sensitive_values）⇒ 0.1.1 時 token 從未送進 helm，正式站開 ngrok
@@ -1981,6 +1988,12 @@
                 EMQX 的設計是這組密碼只在首次開機寫入它自己的資料庫，平台事後無法代為重設，請務必保存。
                 **裝置連線帳號**：broker 拒絕匿名連線，開通時沒有任何 MQTT 帳號；請在後台的存取控制（Access Control）→
                 認證（Authentication）為裝置建立帳號密碼。
+                **主題權限（預設拒絕）**：每個帳號只能發布／訂閱以自己帳號名稱開頭的主題（帳號 sensor01 → sensor01/#，
+                例如 sensor01/temp），其他主題一律拒絕（訂閱回覆失敗、發布被丟棄）；帳號名稱含 + 或 #、或以 $ 開頭的帳號沒有預設權限。
+                要收發所有裝置訊息的中控（Home Assistant、Node-RED、n8n 等）建帳號時勾選「超級使用者（Is Superuser）」；
+                其他跨帳號需求請到 存取控制 → 授權（Authorization）→ File 編輯規則（檔案內附範例）。
+                用後台 WebSocket 客户端測試時，主題也要用「帳號名稱/…」。
+                後台改過的授權設定會保存在服務磁碟，之後重啟或升級都不會被覆蓋。
                 **對外連線**：MQTT over WebSocket 直接走服務網址——wss://（你的服務網址）/mqtt，埠 443
                 （後台「诊断工具 → WebSocket 客户端」預設就連這個位址，可直接測試）。原生 MQTT（1883）要讓外部裝置連上，
                 需在服務設定填入你自己的 ngrok authtoken；填了 ngrok 保留位址就固定用該位址，
@@ -1995,7 +2008,7 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
-            <field name="helm_chart_version">0.1.4</field>
+            <field name="helm_chart_version">0.1.6</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"10Gi"},"log":{"size":"2Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """EMQX 上架 seed 與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/emqx 0.1.4（:18083 是唯一入口——pod 內 nginx 把 /mqtt 轉給
+契約來源：woow-paas-charts charts/emqx 0.1.6（:18083 是唯一入口——pod 內 nginx 把 /mqtt 轉給
 WebSocket listener、其餘轉給 dashboard；ClusterIP-only、release 前綴命名、built_in_database
-authenticator 不再種任何 MQTT 帳號（#1361）、retained 存磁碟（#1362）、ngrok sidecar 對外轉 1883），
+authenticator 不再種任何 MQTT 帳號（#1361）、retained 存磁碟（#1362）、ngrok sidecar 對外轉 1883；
+0.1.6 起 MQTT 授權預設拒絕、每個帳號只有「<帳號>/#」（#1529）），
 以及 paas-odoo-ci mirror-image.yml 鏡像進 JCR 的 image。
 
 核心守線：
@@ -68,9 +69,10 @@ class TestEmqxSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, EMQX_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.4',
+        self.assertEqual(tpl.helm_chart_version, '0.1.6',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；'
-                         '0.1.4 起後台 WebSocket 客户端預設連頁面本身的埠（#1418）')
+                         '0.1.4 起後台 WebSocket 客户端預設連頁面本身的埠（#1418）；'
+                         '0.1.6 起 MQTT 授權預設拒絕、公開網址不給 Prometheus／API 文件（#1529）')
 
     def test_description_matches_chart_013(self):
         """#1361／#1362／#1366：說明要跟 chart 0.1.3 的實際行為一致。"""
@@ -83,6 +85,20 @@ class TestEmqxSeed(TransactionCase):
                          '0.1.4 起後台 WebSocket 客户端預設就連 443，不要再叫租戶手改（#1418）')
         ws = {s['key']: s for s in tpl._parse_helm_value_specs()['optional']}['emqx.listeners.ws.enabled']
         self.assertIn('/mqtt', ws['description'], 'WS 旋鈕要寫出外部怎麼連')
+
+    def test_description_explains_default_deny_acl(self):
+        """#1529：chart 0.1.6 起授權預設拒絕，每個帳號只能用「<帳號>/#」。
+
+        不寫清楚，租戶照舊建一個帳號給 Home Assistant 就會「連得上、收不到」（訂閱被拒、發布被丟），
+        比 #1465 的「連不上」更難查。說明必須講出：預設只有自己帳號開頭的主題、中控勾超級使用者、
+        其他規則在後台授權 File 編，以及改過的設定不會被重啟／升級蓋掉。
+        """
+        desc = self._tpl().full_description
+        self.assertIn('預設拒絕', desc)
+        self.assertIn('sensor01/#', desc, '要用具體例子說明「帳號名稱/#」')
+        self.assertIn('超級使用者', desc, '中控（HA／Node-RED／n8n）要勾超級使用者')
+        self.assertIn('授權（Authorization）', desc, '要指到後台的授權頁')
+        self.assertIn('不會被覆蓋', desc, 'chart 走 base.hocon 預設值：租戶改的設定要保證留著')
 
 
     def test_platform_cannot_reset_credentials(self):
