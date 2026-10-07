@@ -63,9 +63,16 @@
             <field name="name">n8n</field>
             <field name="slug">n8n</field>
             <field name="description">工作流程自動化工具</field>
+            <!-- #1533：n8n 2.x 的 Python Code 節點需要另外部署外部 task runner（n8nio/runners），
+                 本服務沒有包含 ⇒ 平台部署時設 N8N_PYTHON_ENABLED=false（cloud_service
+                 `_N8N_RUNTIME_DEFAULT_CONFIG`），商品說明同步寫明。runner sidecar 的評估與沙盒
+                 結果見 #1533。 -->
             <field name="full_description">n8n is a fair-code licensed workflow automation tool. It
                 allows you to connect apps and services in flexible ways to automate tasks. With
-                over 280+ integrations, you can build workflows without code.</field>
+                over 280+ integrations, you can build workflows without code.
+                Code 節點只支援 JavaScript；本服務不提供 Python（n8n 2.x 的 Python 需要另外部署
+                task runner，本服務未包含），選 Python 的 Code 節點執行時會出現「This instance
+                disallows Python execution」錯誤。</field>
             <field name="category">automation</field>
             <field name="tags">["n8n", "automation", "workflow", "integration", "no-code"]</field>
 

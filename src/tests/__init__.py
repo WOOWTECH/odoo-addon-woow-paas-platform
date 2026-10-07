@@ -1089,3 +1089,5 @@ from . import test_skip_trial_end_date_1562
 from . import test_auto_expire_never_expire_1574
 # #1532：n8n 方案規格寫進 8gears chart 讀的 main.resources／main.persistence.size；拿掉 Database Type。
 from . import test_n8n_plan_spec_paths_1532
+# #1533：n8n 沒有外部 task runner ⇒ 部署時注入 N8N_PYTHON_ENABLED=false，商品說明寫明。
+from . import test_n8n_python_disabled_1533

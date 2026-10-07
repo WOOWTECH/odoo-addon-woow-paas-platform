@@ -966,6 +966,14 @@ def _drop_legacy_top_level_plan_spec(values):
 # ``main.config`` 每個鍵直接變成容器 env（``toEnvVars``）。
 _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 
+# #1533：n8n 2.x 的 Python Code 節點要另外部署外部 task runner（n8nio/runners），範本沒有
+# ⇒ 執行一律失敗（「Python 3 is missing from this system」）。在決定要不要加 runner 之前，
+# 明確關掉 Python：錯誤訊息直接說「本服務不允許 Python」，JavaScript 不受影響。部署時注入
+# （``_inject_n8n_runtime_defaults``）而不是寫在範本預設：存量服務的 helm_values 是開通時凍結
+# 的，寫在範本只會影響新服務。服務自己的 helm_values 有明確值就不覆寫（將來加 runner 時，
+# 個別服務可改成 'true'）。
+_N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
+
 
 # 範本的「平台政策鍵」：每次部署都以範本 ``helm_default_values`` 的值為準，不吃服務
 # 自己 ``helm_values`` 快照裡的值、也不讓 chart 預設補位。
@@ -3471,6 +3479,8 @@ class CloudService(models.Model):
         4. allowed_origins injector（open-design 瀏覽器 Origin 白名單，#380）
         5. dashboard_public_url injector（hermes-agent MCP OAuth 回呼，#424①）
            ＋ n8n 公開網址（main.config.WEBHOOK_URL／N8N_EDITOR_BASE_URL，#1334 附帶）
+           ＋ n8n 固定執行設定（main.config.N8N_PYTHON_ENABLED=false，#1533；與公開網址無關，
+           沒有網址也注入）
         6. apiserver_cidrs injector（open-design／hermes-agent console egress，#404）
         7. workspace_service_url injectors（同工作區 running 提供者的叢集內網址，只有網址；
            chart 放進不入 checksum 的 runtime ConfigMap，不會讓 pod 重啟；已有明確值就
@@ -3566,6 +3576,9 @@ class CloudService(models.Model):
             values = self._inject_n8n_public_urls(
                 values, template.slug, public_base_url,
             )
+
+        # n8n 的平台固定執行設定（#1533：關掉沒有 runner 的 Python Code 節點）。
+        values = self._inject_n8n_runtime_defaults(values, template.slug)
 
         # Inject the kube-apiserver egress allowlist for charts whose pods run
         # kubectl from under a tenant NetworkPolicy (open-design console).
@@ -3956,6 +3969,26 @@ class CloudService(models.Model):
         for key in _N8N_PUBLIC_URL_CONFIG_KEYS:
             if not str(config.get(key) or '').strip():
                 config[key] = url
+        return values
+
+    @staticmethod
+    def _inject_n8n_runtime_defaults(values, template_slug):
+        """n8n 的平台固定執行設定（``_N8N_RUNTIME_DEFAULT_CONFIG``，#1533）寫進 ``main.config``。
+
+        ``main.config`` 的每個鍵由 8gears chart 變成容器 env。已有非空值（服務自己的設定）
+        就不覆寫。其他範本 no-op。
+        """
+        if template_slug != 'n8n':
+            return values
+        main = values.get('main')
+        if not isinstance(main, dict):
+            main = values['main'] = {}
+        config = main.get('config')
+        if not isinstance(config, dict):
+            config = main['config'] = {}
+        for key, value in _N8N_RUNTIME_DEFAULT_CONFIG.items():
+            if not str(config.get(key) or '').strip():
+                config[key] = value
         return values
 
     @staticmethod
