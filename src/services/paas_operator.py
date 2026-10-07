@@ -42,7 +42,7 @@ INIT_N8N_READ_TIMEOUT = 600
 #
 #     前端 RESET_REQUEST_TIMEOUT_MS(90_000)
 #       > 本常數(75s)
-#         > operator RESET_HARD_CAP_SECONDS(65s，見 extra/paas-operator/src/api/releases.py)
+#         > operator RESET_HARD_CAP_SECONDS(73s，含 #1552 等 helm 名額的 8s；見 extra/paas-operator/src/api/releases.py)
 #
 # 由 scripts/audit/repo-lint.py 的 check_reset_budget_ladder 跨三層驗算；改任一層
 # 的數字而沒同步，那道 gate 會紅。**這個 75 比 120 小是刻意的**：reset 移除

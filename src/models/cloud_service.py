@@ -2372,7 +2372,7 @@ class CloudService(models.Model):
             # not storing is still exactly right.
             #
             # What this branch now means: the budget ladder makes the platform's
-            # 75s strictly larger than the operator's own 65s hard cap
+            # 75s strictly larger than the operator's own 73s hard cap (#1552: 65s + 8s queue)
             # (RESET_HARD_CAP_SECONDS), so a client timeout is no longer the
             # expected outcome of a slow-but-healthy reset — it means the operator
             # blew its own ceiling, or the 2xx was lost in flight. The cluster may
