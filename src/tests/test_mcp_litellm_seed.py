@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MCP：AI 模型閘道（mcp-litellm）seed 的守線斷言（2026-10-05 以隱藏範本進 seed）。
+"""MCP：AI 模型閘道（mcp-litellm）seed 的守線斷言（2026-10-05 以隱藏範本進 seed，10-07 公開上架）。
 
 契約來源：Gitea WOOWTECH/woow-mcp-server ``apps/litellm``（#33，main 0687392f）README §PaaS seed 契約；
 chart＝woow-paas-charts ``charts/mcp-server`` 0.1.5（平台共用）。家族不變式（has_admin_gui、requiredFields
@@ -17,10 +17,13 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
    （解鎖在服務自己的 admin Settings 頁）。
 5. **不帶秘密、不帶網址**：``config.sensitive`` 空、``nonSensitive`` 沒有 connection——網址由平台組裝時
    注入（同工作區 LiteLLM），金鑰由租戶自己貼；本範本也沒有 gateway 通道，平台不鑄／不交付任何 key。
-6. **方案與隱藏盤點**：月 3,000／年 24,000、試用 7 天、免稅、雙向綁定；隱藏只在曝光層（is_hidden），
-   實例層不設，上架時只翻 is_hidden。
+6. **方案與上架**：月 3,000／年 24,000、試用 7 天、免稅、雙向綁定；上架只翻曝光層（is_hidden），
+   實例層從未設。
 7. **說明**：唯讀／解鎖／建議 viewer key／預填網址只在第一次開通／``/mcp`` 不加結尾斜線；資料值直接寫
    中文、⛔ 不進 .po（docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
+8. **上架即雙釘**：#1487 以隱藏卡片進 seed（隨 .210 上正式站），沙盒實測（woow-mcp-server #33）通過後
+   2026-10-07 公開上架；``test_hidden_until_listed`` 從此是實際生效的守線（``is_hidden=False`` ⟹ image
+   要 git-sha@sha256 雙釘）。
 """
 import json
 import os
@@ -168,13 +171,19 @@ class TestMcpLitellmSeed(TransactionCase):
         self.assertNotIn('gateway_api_key', creds)
         self.assertNotIn('gateway_url', creds)
 
-    def test_hidden_only_exposure_layer(self):
-        """隱藏只在曝光層：上架時只翻 is_hidden，方案早已掛好、實例層從不設。"""
+    def test_hidden_until_listed(self):
+        """上架 ⟹ image 雙釘（2026-10-07 公開上架；之後若翻回隱藏，這條仍要綠）。
+
+        上架只翻曝光層 is_hidden：方案早已掛好、實例層 conceal_instances 從不設。
+        """
         tpl = self._tpl()
         self.assertTrue(tpl.is_active)
         self.assertFalse(tpl.conceal_instances, 'hidden-only（曝光層），實例層不設')
         self.assertEqual(tpl.max_per_partner, 0)
         self.assertTrue(tpl.sudo().subscription_plan_ids, '沒掛 plan 會被 _create_service 擋')
+        if not tpl.is_hidden:
+            self.assertRegex(self._values()['image']['tag'], GIT_SHA_PINNED_TAG_RE,
+                             '上架中的範本 image 一律 git-sha@sha256 雙釘（mutable tag 不可重現）')
 
     def test_plans_linked_and_priced(self):
         tpl = self._tpl()
