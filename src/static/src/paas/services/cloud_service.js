@@ -19,6 +19,17 @@ import { jsonRpc } from "./rpc";
 const RESET_REQUEST_TIMEOUT_MS = 90000;
 
 /**
+ * LiteLLM「ChatGPT 訂閱」的前端預算（階梯最外層）：一般 action 60s、add_models 100s、
+ * test 190s，必須各自大於平台 client 的 CHATGPT_SUBSCRIPTION_TIMEOUT(45s)／
+ * CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT(90s)／CHATGPT_SUBSCRIPTION_TEST_TIMEOUT(180s)
+ * （src/services/paas_operator.py），由 repo-lint check_reset_budget_ladder 驗算。
+ * test 會真的送一個模型請求；典型 2–10 秒，最壞時可能先撞上入口約 100 秒的限制。
+ */
+const CHATGPT_SUBSCRIPTION_REQUEST_TIMEOUT_MS = 60000;
+const CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT_MS = 100000;
+const CHATGPT_SUBSCRIPTION_TEST_TIMEOUT_MS = 190000;
+
+/**
  * @typedef {Object} TemplateData
  * @property {number} id - Template ID
  * @property {string} name - Template name
@@ -453,6 +464,46 @@ export const cloudService = reactive({
      * @param {number[]} odooAddonIds - Selected addon IDs
      * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
      */
+    /**
+     * LiteLLM「ChatGPT 訂閱」（template.chatgpt_subscription_supported 的服務）。
+     * action：status｜start｜poll｜disconnect｜add_models｜test；params 可帶
+     * `models`（add_models，省略＝chart 預設清單）或 `model`（test）。
+     * 回傳保留後端的 `error_code`（卡片／視窗依它決定下一步，例如 unsupported_chart 時不給重試）。
+     * ⚠ 不寫進 operationLoading／不 console.log：回應裡的 pending.user_code 是一次性登入代碼。
+     *
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {string} action
+     * @param {{models?: string[], model?: string}} [params]
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, error_code?: string}>}
+     */
+    async chatgptSubscription(workspaceId, serviceId, action, params = {}) {
+        let timeoutMs = CHATGPT_SUBSCRIPTION_REQUEST_TIMEOUT_MS;
+        if (action === "add_models") {
+            timeoutMs = CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT_MS;
+        } else if (action === "test") {
+            timeoutMs = CHATGPT_SUBSCRIPTION_TEST_TIMEOUT_MS;
+        }
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/chatgpt-subscription`,
+                { action, ...params },
+                timeoutMs
+            );
+            if (result.success) {
+                return { success: true, data: result.data || {} };
+            }
+            return {
+                success: false,
+                error: result.error,
+                error_code: result.error_code || null,
+                data: result.data || null,
+            };
+        } catch (err) {
+            return { success: false, error: err.message, error_code: null, data: null };
+        }
+    },
+
     /**
      * #1432：重新啟動服務（rollout restart 所有 Deployment／StatefulSet）。
      * 後端只「下達」不等待，回來時服務已轉 `upgrading`，由輪詢轉回 running。

@@ -134,6 +134,104 @@ TENANT_ADMIN_USERNAME_RE = re.compile(r'^[A-Za-z0-9._@-]{1,64}$')
 #: 在不同元件會被不同地 trim，換行會長出第二行 htpasswd。
 TENANT_ADMIN_PASSWORD_RE = re.compile(r'^[\x21-\x7e]{12,128}$')
 
+# ------------------------------------------------------------------------- #
+#  LiteLLM「ChatGPT 訂閱」（chart 0.2.0；template.chatgpt_subscription_supported）
+# ------------------------------------------------------------------------- #
+#: 平台端 action（前端／controller 的寫法）→ operator ``/chatgpt-subscription/{action}``。
+CHATGPT_SUBSCRIPTION_ACTIONS = {
+    'status': 'status',
+    'start': 'start',
+    'poll': 'poll',
+    'disconnect': 'disconnect',
+    'add_models': 'add-models',
+    'test': 'test',
+}
+#: 與 operator 同一條規則（DESIGN §2）：``chatgpt/`` 前綴可省，名稱只收英數與 ``._-``。
+#: 平台先擋（給租戶看得懂的訊息、不打 operator），operator 那道是第二層。
+CHATGPT_SUBSCRIPTION_MODEL_RE = re.compile(r'(chatgpt/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
+CHATGPT_SUBSCRIPTION_MAX_MODELS = 12
+#: device code 的登入頁。chart 回的值只在它確實是 OpenAI 的 https 網址時才照用——前端會
+#: 把它開成新分頁，平台不轉送任何其他網址。
+CHATGPT_SUBSCRIPTION_VERIFICATION_URL = 'https://auth.openai.com/codex/device'
+_CHATGPT_SUBSCRIPTION_VERIFICATION_PREFIX = 'https://auth.openai.com/'
+#: 回給前端的欄位白名單（型別、字串長度上限）。operator 已刪 token 鍵，這裡是第二道：
+#: 不在表上的鍵一律丟掉（``access_token``／``refresh_token``／``id_token``、chart 未來新增的
+#: 任何欄位），不靠黑名單。
+_CHATGPT_SUBSCRIPTION_TEXT_FIELDS = {
+    'state': 32, 'email': 320, 'plan_type': 64, 'account_id_tail': 16,
+    'model': 80, 'reply': 80,
+}
+_CHATGPT_SUBSCRIPTION_LIST_FIELDS = ('models', 'added', 'kept', 'failed')
+#: operator／chart 的 error_code 中「平台認得」的那些——log 只記這些名字。test 失敗時 chart 把
+#: 上游的錯誤訊息放在 ``error``（operator 原樣當成 error_code），那是自由文字，不進 log。
+_CHATGPT_SUBSCRIPTION_KNOWN_CODES = frozenset({
+    'pod_not_found', 'unsupported_chart', 'invalid_model', 'exec_timeout', 'bad_output',
+    'internal', 'not_connected', 'device_code_request_failed',
+    'device_code_response_incomplete', 'poll_failed', 'token_exchange_failed',
+    'token_response_incomplete', 'db_delete_failed', 'model_info_failed', 'no_chatgpt_model',
+    'operator_unsupported', 'operator_rejected', 'operator_error', 'operator_unreachable',
+})
+
+
+def _chatgpt_subscription_view(data):
+    """operator 回的 ``data`` → 給租戶的白名單視圖（不含任何 token）。
+
+    ``pending.expires_in`` 由平台用自己的時鐘算（伺服器間有 NTP，瀏覽器時鐘不可靠）：前端
+    倒數以它為準，``expires_at`` 只是參考。
+    """
+    if not isinstance(data, dict):
+        return {}
+    view = {}
+    for key, limit in _CHATGPT_SUBSCRIPTION_TEXT_FIELDS.items():
+        value = data.get(key)
+        if isinstance(value, str):
+            view[key] = value[:limit]
+    for key in ('connected', 'persisted'):
+        if isinstance(data.get(key), bool):
+            view[key] = data[key]
+    for key in ('access_token_expires_at', 'seconds'):
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            view[key] = value
+    if isinstance(data.get('status_code'), int) and not isinstance(data.get('status_code'), bool):
+        view['status_code'] = data['status_code']
+    until = data.get('subscription_active_until')
+    if isinstance(until, (str, int, float)) and not isinstance(until, bool):
+        view['subscription_active_until'] = until[:64] if isinstance(until, str) else until
+    for key in _CHATGPT_SUBSCRIPTION_LIST_FIELDS:
+        if key not in data:
+            continue
+        value = data.get(key)
+        if value is None:
+            # status 的 models=None ＝「proxy 還沒起來、查不到」，與「查了但沒有」的 [] 不同。
+            view[key] = None
+        elif isinstance(value, list):
+            view[key] = [v[:100] for v in value[:100] if isinstance(v, str)]
+    pending = data.get('pending')
+    if isinstance(pending, dict) and isinstance(pending.get('user_code'), str) \
+            and pending['user_code'].strip():
+        url = pending.get('verification_url')
+        if not (isinstance(url, str) and url.startswith(_CHATGPT_SUBSCRIPTION_VERIFICATION_PREFIX)):
+            url = CHATGPT_SUBSCRIPTION_VERIFICATION_URL
+        try:
+            expires_at = int(pending.get('expires_at') or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        try:
+            interval = int(pending.get('interval') or 5)
+        except (TypeError, ValueError):
+            interval = 5
+        view['pending'] = {
+            'verification_url': url,
+            'user_code': pending['user_code'].strip()[:32],
+            'expires_at': expires_at,
+            'expires_in': max(0, int(expires_at - time.time())),
+            'interval': min(max(interval, 3), 60),
+        }
+    elif 'pending' in data:
+        view['pending'] = None
+    return view
+
 
 # ------------------------------------------------------------------------- #
 #  #519：cloud_service 的建立閘（private sentinel）                           #
@@ -2536,6 +2634,170 @@ class CloudService(models.Model):
             bool(result.get('second_factor_cleared')),
         )
         return new_password, login
+
+    # ------------------------------------------------------------------ #
+    #  LiteLLM「ChatGPT 訂閱」（chart 0.2.0）                              #
+    # ------------------------------------------------------------------ #
+
+    def _chatgpt_subscription_message(self, action, code, data):
+        """operator／chart 的原因碼 → 租戶看得懂、能行動的訊息（都走 ``_()``＋zh_TW.po）。"""
+        if code in ('exec_timeout', 'bad_output', 'operator_error'):
+            return _("The service did not respond. Try again.")
+        if action == 'add_models' and data.get('failed') and code in (None, 'add_models_partial'):
+            return _("Some models could not be added: %(models)s",
+                     models=', '.join(data['failed']))
+        if action == 'test' and code == 'test_failed':
+            return _("The test request failed (HTTP %(status)s): %(message)s",
+                     status=data.get('status_code') or '?',
+                     message=data.get('message') or _("no details"))
+        messages = {
+            'operator_unsupported': _(
+                "This feature is not available yet. Please try again later."),
+            'unsupported_chart': _(
+                "This service runs an older version. Redeploy it to enable ChatGPT "
+                "subscription."),
+            'pod_not_found': _(
+                "The service is not ready yet. Wait until it is running, then try again."),
+            'not_connected': _("Connect your ChatGPT subscription first."),
+            'device_code_request_failed': _(
+                "Could not get a sign-in code from OpenAI. Try again later."),
+            'device_code_response_incomplete': _(
+                "Could not get a sign-in code from OpenAI. Try again later."),
+            'poll_failed': _("Sign-in failed. Start again."),
+            'token_exchange_failed': _("Sign-in failed. Start again."),
+            'token_response_incomplete': _("Sign-in failed. Start again."),
+            'no_chatgpt_model': _("Add the ChatGPT models first."),
+            'model_info_failed': _(
+                "The service could not list its models. Try again in a minute."),
+            'db_delete_failed': _(
+                "The saved sign-in could not be removed. Try again."),
+            'invalid_model': _("Invalid model name."),
+        }
+        return messages.get(code) or _(
+            "The ChatGPT subscription request failed. Try again.")
+
+    def _chatgpt_subscription(self, action, models=None, model=None):
+        """LiteLLM「ChatGPT 訂閱」：經 operator exec chart 的 ``woow_chatgpt.py``。
+
+        ``action``：``status``／``start``／``poll``／``disconnect``／``add_models``／``test``。
+        ``models``（add_models，省略＝chart 的預設清單）、``model``（test，省略＝第一個
+        ``chatgpt/`` 模型）。
+
+        Returns:
+            ``{'success': True, 'data': <白名單視圖>}`` 或
+            ``{'success': False, 'error': <租戶訊息>, 'error_code': <碼>[, 'data': ...]}``。
+            前置條件不成立（範本不支援、服務不是 running、名稱不合法…）丟 ``UserError``。
+
+        - **private**（``_`` 開頭）：授權（workspace owner／admin、訂閱閘）只在 controller，
+          ``get_public_method`` 擋 RPC 直呼（同 ``_restart_workloads``、#357 C05）。
+        - 不寫任何資料：token 只存在租戶自己的 pod（tmpfs）與 DB，平台不保存。不改 state、
+          不鎖列（狀態查詢與 poll 會被前端每幾秒打一次）。
+        - ⛔ ``data.pending.user_code`` 是租戶的一次性登入代碼：本方法的 log 只記 action、
+          結果與平台認得的原因碼，**不記** operator 回應。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorAPIError,
+            PaaSOperatorError,
+            PaaSOperatorTimeoutError,
+        )
+
+        if not self.template_id.chatgpt_subscription_supported:
+            raise UserError(_("This service does not support ChatGPT subscription."))
+        operator_action = CHATGPT_SUBSCRIPTION_ACTIONS.get(action)
+        if not operator_action:
+            raise UserError(_("Unknown action: %(action)s", action=action))
+
+        payload = None
+        if operator_action == 'add-models' and models:
+            if (not isinstance(models, (list, tuple))
+                    or len(models) > CHATGPT_SUBSCRIPTION_MAX_MODELS
+                    or not all(isinstance(m, str) and CHATGPT_SUBSCRIPTION_MODEL_RE.fullmatch(m)
+                               for m in models)):
+                raise UserError(_("Invalid model name."))
+            payload = {'models': list(models)}
+        elif operator_action == 'test' and model:
+            if not (isinstance(model, str) and CHATGPT_SUBSCRIPTION_MODEL_RE.fullmatch(model)):
+                raise UserError(_("Invalid model name."))
+            payload = {'model': model}
+
+        if self.state == 'upgrading':
+            raise UserError(
+                _("Service is finishing an update (usually under a minute). "
+                  "Please wait and try again.")
+            )
+        if self.state != 'running':
+            raise UserError(
+                _("The service must be running to manage its ChatGPT subscription."))
+        if not (self.helm_release_name and self.helm_namespace):
+            raise UserError(
+                _("The service must be running to manage its ChatGPT subscription."))
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
+
+        def failure(code, data=None, kind=None):
+            data = data or {}
+            logged = code if code in _CHATGPT_SUBSCRIPTION_KNOWN_CODES or code in (
+                'add_models_partial', 'test_failed') else ('upstream' if code else None)
+            _logger.warning(
+                "[chatgpt-subscription] service %s (id=%s) action=%s failed: "
+                "error_kind=%s error_code=%s", self.name, self.id, action, kind, logged,
+            )
+            response = {
+                'success': False,
+                'error': self._chatgpt_subscription_message(action, code, data),
+                'error_code': code,
+            }
+            view = _chatgpt_subscription_view(data)
+            if view:
+                response['data'] = view
+            return response
+
+        try:
+            result = client.chatgpt_subscription(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+                action=operator_action,
+                payload=payload,
+            )
+        except PaaSOperatorTimeoutError:
+            return failure('exec_timeout', kind='unknown')
+        except PaaSOperatorAPIError as e:
+            # 404＝operator 還沒有這個端點（平台先於 operator 上線）：什麼都沒跑。
+            if e.status_code == 404:
+                return failure('operator_unsupported', kind='not_executed')
+            if e.status_code and e.status_code < 500:
+                return failure('operator_rejected', kind='not_executed')
+            return failure('operator_error', kind='unknown')
+        except PaaSOperatorError:
+            return failure('operator_unreachable', kind='not_executed')
+
+        result = result if isinstance(result, dict) else {}
+        data = result.get('data') if isinstance(result.get('data'), dict) else {}
+        if result.get('success'):
+            view = _chatgpt_subscription_view(data)
+            _logger.info(
+                "[chatgpt-subscription] service %s (id=%s) action=%s ok state=%s",
+                self.name, self.id, action, view.get('state'),
+            )
+            return {'success': True, 'data': view}
+
+        code = result.get('error_code')
+        kind = result.get('error_kind')
+        if kind == 'unknown' and code not in ('exec_timeout', 'bad_output'):
+            code = 'bad_output'
+        elif action == 'add_models' and data.get('failed') and not code:
+            code = 'add_models_partial'
+        elif (action == 'test' and kind == 'failed'
+                and code not in _CHATGPT_SUBSCRIPTION_KNOWN_CODES):
+            # chart 把上游錯誤訊息放在 error（operator 原樣當 error_code）：那是自由文字，
+            # 只給租戶看（含 chart 的中英提示），不當成碼、不進 log。
+            data = dict(data, message=str(data.get('error') or code or '')[:300])
+            code = 'test_failed'
+        return failure(code, data=data, kind=kind)
 
     # ------------------------------------------------------------------ #
     #  Cron: process pending deployments                                  #
