@@ -4,7 +4,9 @@
 不直接呼叫 slug generator，也不 mock ORM／ir.rule。
 """
 import json
+import secrets
 import uuid
+from unittest.mock import patch
 
 from odoo.tests.common import HttpCase, tagged
 
@@ -31,6 +33,17 @@ class TestWorkspaceSlug1516(HttpCase):
         env = self.env['res.users'].with_user(self.users[label]).env
         self.assertFalse(env.su, '測試必須以真實使用者身分走 capability')
         return _PaaSCapability(env)
+
+    def _slug_suffixes(self, values):
+        # 只固定 slug 的 randomness；ws_hash 的 4-byte 抽值保持真實且獨立。
+        values = iter(values)
+        token_hex = secrets.token_hex
+
+        def draw(nbytes=None):
+            return next(values) if nbytes == 3 else token_hex(nbytes)
+
+        return patch('odoo.addons.woow_paas_platform.models.workspace.secrets.token_hex',
+                     side_effect=draw)
 
     def _listed_workspaces(self, label):
         user = self.users[label]
@@ -59,3 +72,15 @@ class TestWorkspaceSlug1516(HttpCase):
         self.assertEqual([(row['id'], row['name']) for row in listed],
                          [(second.id, 'omnigent')],
                          'B 的列表應保留 name，且不洩漏 A 的 workspace')
+
+    def test_suffix_collision_is_redrawn_across_users(self):
+        capability = self._capability('a')
+        self.assertEqual(capability.create_workspace('omnigent', '').slug,
+                         'omnigent')
+        self.assertEqual(capability.create_workspace('omnigent-a1b2c3', '').slug,
+                         'omnigent-a1b2c3')
+        with self._slug_suffixes(['a1b2c3', 'd4e5f6']), self.env.cr.savepoint():
+            workspace = self._capability('b').create_workspace('omnigent', '')
+        self.assertEqual(workspace.slug, 'omnigent-d4e5f6')
+        self.assertEqual(workspace.name, 'omnigent')
+        self.assertRegex(workspace.ws_hash, r'^[0-9a-f]{8}$')

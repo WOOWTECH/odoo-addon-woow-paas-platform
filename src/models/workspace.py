@@ -68,6 +68,7 @@ _WS_HASH_MAX_ATTEMPTS = 8
 
 # #1516：同名 workspace 的 slug 後綴；3 bytes → 6 個小寫 hex。
 _SLUG_SUFFIX_BYTES = 3
+_SLUG_SUFFIX_MAX_ATTEMPTS = 8
 
 
 class Workspace(models.Model):
@@ -276,9 +277,16 @@ class Workspace(models.Model):
         slug = re.sub(r'[^\w\s-]', '', name.lower())
         slug = re.sub(r'[-\s]+', '-', slug).strip('-')
         # #1516：必須看見其他租戶與孤兒，與 DB UNIQUE(slug) 的範圍一致。
-        if self.sudo().search_count([('slug', '=', slug)]):
-            return f"{slug}-{secrets.token_hex(_SLUG_SUFFIX_BYTES)}"
-        return slug
+        if not self.sudo().search_count([('slug', '=', slug)]):
+            return slug
+        for _attempt in range(_SLUG_SUFFIX_MAX_ATTEMPTS):
+            candidate = f"{slug}-{secrets.token_hex(_SLUG_SUFFIX_BYTES)}"
+            if not self.sudo().search_count([('slug', '=', candidate)]):
+                return candidate
+        raise ValidationError(
+            _("Could not allocate a free workspace slug after %s attempts. "
+              "Please try again.") % _SLUG_SUFFIX_MAX_ATTEMPTS
+        )
 
     def _generate_ws_hash(self) -> str:
         """產生本 workspace 在 K8s／Cloudflare 命名裡的身分碼（#677）。
