@@ -224,6 +224,8 @@ _INJECTOR_VALUE_PATHS = frozenset({
     ("tailscale", "workspaceHeadscaleUrl"),  # workspace_service_url injector（同工作區 Headscale）
     ("llmGateway", "baseUrl"),            # workspace_service_url injector（同工作區 LiteLLM）
     ("config", "nonSensitive", "connection", "base_url"),  # 同上（mcp-litellm）
+    ("haProxy", "ipBanEnabled"),          # template_policy_keys（ha-full，chart 0.1.6 #1446 不做）
+    ("seed", "unlockCoreConfig"),         # template_policy_keys（ha-full，chart 0.1.6 #1447 不做）
 })
 
 
