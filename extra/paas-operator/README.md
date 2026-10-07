@@ -59,6 +59,15 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 ### Namespaces
 
 - `POST /api/namespaces` - Create namespace with resource quota
+- `POST /api/namespaces/{name}/baseline-netpol` - Idempotent backfill of the tenant baseline on an existing workspace namespace (#279 P5): the four ingress NetworkPolicies, the managed labels and — when their switches are on — the #1441 egress baseline and Pod Security labels (below).
+
+#### Workspace = its own LAN (#1441 / #1436 / #514)
+
+Both switches default **off** (behaviour unchanged); they are flipped per environment through the paas-operator chart (`config.tenantBaselineEgress`, `config.tenantPodSecurity`) after the existing namespaces have been backfilled. Manifests come from `src/services/tenant_baseline.py` (pure functions, shared with the backfill script).
+
+- `TENANT_BASELINE_EGRESS_ENABLED` — adds NetworkPolicy `paas-baseline-egress` (`podSelector: {}`, Egress only): same namespace on every port, kube-dns pods on 53, and the internet `0.0.0.0/0` except `10.0.0.0/8` (pod/Service CIDR, subnet broadcasts), `172.16.0.0/12`, `192.168.0.0/16` (node IPs, kube-apiserver :6443, NodePorts), `169.254.0.0/16` (metadata), `100.64.0.0/10`, `224.0.0.0/4` (mDNS/SSDP), `240.0.0.0/4` (255.255.255.255). NetworkPolicies are a union: a chart rule that is wider (`- {}`, an un-excepted `0.0.0.0/0`) cancels this baseline for the pods it selects — woow-paas-charts enforces that with `scripts/np-audit.py` in CI. Charts that need the kube-apiserver (open-design console, omnigent server) keep their own narrow rule.
+- `TENANT_POD_SECURITY_ENABLED` — labels the namespace `pod-security.kubernetes.io/enforce=baseline` (+ `warn`/`audit=restricted`, versions pinned by `TENANT_PSA_VERSION`, default `v1.34`). Namespaces in `PSA_EXEMPT_NAMESPACES` (default: only the administrators' Omnigent, `paas-ws-ab6564da`) get no PSA labels and an annotation `paas.woowtech.io/psa-exempt-reason`.
+- Existing namespaces: `python3 scripts/ws_lan_backfill.py --ns <ns,...>` previews (server-side dry-run, lists pods that would violate PSA), `--apply` writes, `--rollback [--apply]` removes the egress policy and the PSA labels.
 
 ### Cluster (read-only)
 

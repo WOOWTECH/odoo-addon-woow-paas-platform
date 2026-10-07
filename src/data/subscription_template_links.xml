@@ -156,7 +156,7 @@
                    eval="[(6, 0, [ref('plan_litellm_monthly'), ref('plan_litellm_yearly')])]"/>
         </record>
 
-        <!-- MCP：AI 模型閘道（mcp-litellm）：範本先隱藏（is_hidden=True），方案先掛好（沒掛 plan 會被 _create_service 擋）。 -->
+        <!-- MCP：AI 模型閘道（mcp-litellm）：2026-10-05 以隱藏範本＋方案先掛好進 seed（沒掛 plan 會被 _create_service 擋），10-07 公開上架。 -->
         <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="subscription_plan_ids"
                    eval="[(6, 0, [ref('plan_mcp_litellm_monthly'), ref('plan_mcp_litellm_yearly')])]"/>

@@ -1011,8 +1011,8 @@ from . import test_omnigent_server_url_injection
 # LiteLLM → llmGateway.baseUrl（/v1）／mcp-litellm connection.base_url；只帶網址，不帶金鑰。
 # 另含 tailscale chart 0.1.2「控制平面」select 的既有服務 healer。
 from . import test_workspace_service_url_injection
-# PLAN §10：「MCP：AI 模型閘道」（mcp-litellm）隱藏範本＋方案——image 雙釘＋重釘 lockstep、啟動契約、
-# 出廠唯讀、seed 不帶網址與金鑰（網址由上面的注入帶、金鑰租戶自貼）、方案定價與隱藏盤點。
+# PLAN §10：「MCP：AI 模型閘道」（mcp-litellm）範本＋方案（2026-10-07 公開上架）——image 雙釘＋重釘 lockstep、
+# 啟動契約、出廠唯讀、seed 不帶網址與金鑰（網址由上面的注入帶、金鑰租戶自貼）、方案定價與上架即雙釘。
 from . import test_mcp_litellm_seed
 # QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
 # 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。

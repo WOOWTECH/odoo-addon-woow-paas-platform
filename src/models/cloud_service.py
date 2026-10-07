@@ -3701,6 +3701,11 @@ class CloudService(models.Model):
             # console image、同一支 connect.sh kubectl exec 進 daemon 容器），故
             # 同樣需要 apiserver egress 白名單，鍵名亦沿用（chart 由 open-design 派生）。
             'hermes-agent': [('networkPolicy', 'apiServerCidrs')],
+            # #1441：omnigent server 以 K8s API 在本 ns 建 runner Job（Role 只限本 ns）。
+            # chart ≥ 0.1.5 拿掉了「RFC 1918 全段 :6443」的 fallback，空值只剩 Service
+            # ClusterIP（woow-k3s 是 DNAT 後比對，光有 ClusterIP 連不到）⇒ 平台必須注入
+            # 同一份 node /32。鍵名照 chart（小寫 s：apiserverCidrs）。
+            'omnigent': [('networkPolicy', 'apiserverCidrs')],
         }
         paths = path_map.get(template_slug)
         if not paths or not cidrs:
