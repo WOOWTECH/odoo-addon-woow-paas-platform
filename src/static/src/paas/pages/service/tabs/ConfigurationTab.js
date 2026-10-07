@@ -24,6 +24,8 @@ export class ConfigurationTab extends Component {
     static props = {
         service: { type: Object },
         workspaceId: { type: Number },
+        // #1560：呼叫者是不是 owner／admin（父層讀 payload 的 viewer_can_manage）。
+        canManage: { type: Boolean, optional: true },
         onSave: { type: Function, optional: true },
     };
 
@@ -73,6 +75,11 @@ export class ConfigurationTab extends Component {
     }
 
     get canEdit() {
+        // #1560：user／guest 不給「修改配置」（後端 update 會回「權限不足」）。fail-closed：
+        // 父層沒傳就當不能管理。
+        if (this.props.canManage !== true) {
+            return false;
+        }
         // #1456：沒有任何可調設定（HA、pi-agent…）時不給「修改配置」——原本照樣能按
         // 「儲存變更」，送出一次空的 helm upgrade（51–65 秒「升級中」、鎖住其他操作）。
         if (this.allSpecs.length === 0) {

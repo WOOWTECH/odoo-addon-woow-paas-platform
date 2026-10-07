@@ -167,6 +167,44 @@ export class RollbackModal extends Component {
         return formatUserDateTime(dateStr, { showSeconds: false }, "-");
     }
 
+    /**
+     * #1560：revision 的狀態是 helm 原文（deployed／superseded／failed／pending-*…），
+     * 原本直接顯示英文。已知值翻成中文，未知值照原文顯示（不吞掉資訊）。
+     * ⚠ "Failed" 這個 msgid 在其他模組有兩種譯法（失敗／失敗的），撞名時畫面顯示哪一個
+     * 是隨機的（見 zh_TW.po 檔頭），所以這裡用不撞名的字面值。
+     */
+    statusLabel(status) {
+        const labels = {
+            deployed: _t("Deployed"),
+            superseded: _t("Superseded"),
+            failed: _t("Update failed"),
+            "pending-install": _t("In progress"),
+            "pending-upgrade": _t("In progress"),
+            "pending-rollback": _t("In progress"),
+            unknown: _t("Unknown"),
+        };
+        return labels[status] || status || "";
+    }
+
+    /**
+     * #1560：helm 的 revision 說明（"Install complete"／"Upgrade complete"／
+     * "Rollback to 3"）。常見的三種翻成中文；其他（多為錯誤訊息原文）照原文顯示。
+     */
+    revisionDescription(description) {
+        const text = String(description || "").trim();
+        if (text === "Install complete") {
+            return _t("Installed");
+        }
+        if (text === "Upgrade complete") {
+            return _t("Updated");
+        }
+        const rollback = /^Rollback to (\d+)$/.exec(text);
+        if (rollback) {
+            return _t("Rolled back to revision %s", rollback[1]);
+        }
+        return text;
+    }
+
     getStatusClass(status) {
         const statusMap = {
             deployed: "o_woow_revision_success",

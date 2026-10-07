@@ -1778,7 +1778,7 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Service not found')}
 
         if action == 'get':
-            result = self._get_service(service)
+            result = self._get_service(service, access=access)
             if result.get('success'):
                 # 檢視者在這個工作區的角色（非敏感）：前端只在 owner／admin 時畫「管理」類
                 # 卡片（ChatGPT 訂閱），省掉 user／guest 一進頁就打一個必然被拒的請求。
@@ -1945,7 +1945,10 @@ class PaasController(HiddenChainMixin, Controller):
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN)
+        # #1560：先驗「是不是成員」、再驗角色。原本直接要 required_role=ROLE_ADMIN，
+        # 工作區的 user／guest 會收到「找不到工作區，或沒有存取權限」——他們明明看得到
+        # 這個工作區。與 update／delete／restart 同一個順序與訊息（權限不足）。
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -1953,6 +1956,9 @@ class PaasController(HiddenChainMixin, Controller):
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
+
+        if not self._can_manage_service(access):
+            return {'success': False, 'error': _('Permission denied')}
 
         # #423 W5a MAJOR-1：補上訂閱閘。
         #
@@ -2031,7 +2037,9 @@ class PaasController(HiddenChainMixin, Controller):
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN)
+        # #1560：成員資格與角色分開驗（見 api_service_rollback 同款註解）。role gate 仍在
+        # 任何能力判準與 model 呼叫之前——#357 C05 的授權只存在這一層。
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -2044,6 +2052,11 @@ class PaasController(HiddenChainMixin, Controller):
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
+
+        # #1560：role gate 放在存在性之後、能力判準之前（能力判準的 400 不能先於授權
+        # 回給 user／guest，否則他們會看到「不支援重設」之類與權限無關的訊息）。
+        if not self._can_manage_service(access):
+            return {'success': False, 'error': _('Permission denied')}
 
         # #1370／#1186：app 自管密碼、由 operator exec 改 app DB 的模板（Odoo／n8n）。
         # 判別器讀 template.app_admin_reset_kind（與 admin_reset_supported 的 compute、
@@ -4143,15 +4156,33 @@ class PaasController(HiddenChainMixin, Controller):
     # ConnectionPool lock contention seen when the platform ran Odoo 18 with workers=0
     # (prod is now prefork workers=6 + max_cron_threads=2, #1159 Q12).
 
-    def _get_service(self, service: Any) -> dict[str, Any]:
+    def _get_service(self, service: Any, access: Any = None) -> dict[str, Any]:
         """Get service details.
 
         #1159 Q1：**純讀**，同 ``_list_services``。
+
+        #1560：``access`` 有給時多帶 ``viewer_can_manage``——呼叫者在這個工作區能不能
+        操作這台服務（＝``_can_manage_service``，與 update／delete／restart／rollback／
+        重設帳密／換方案／略過試用的 role gate 同一個判準）。前端用它決定要不要顯示
+        管理按鈕，不自己拿 role 字串再算一次（capability-gate-single-source-field）。
         """
+        data = self._format_service(service, include_details=True)
+        if access is not None:
+            data['viewer_can_manage'] = self._can_manage_service(access)
         return {
             'success': True,
-            'data': self._format_service(service, include_details=True),
+            'data': data,
         }
+
+    @staticmethod
+    def _can_manage_service(access: Any) -> bool:
+        """#1560：工作區成員能不能操作（而不只是檢視）服務——owner／admin。
+
+        服務的每一個寫入端點都是這個判準（各端點目前仍各自寫
+        ``access.role not in [ROLE_OWNER, ROLE_ADMIN]``）；payload 的
+        ``viewer_can_manage`` 由這裡產生，前端只讀這個布林。
+        """
+        return bool(access) and access.role in (ROLE_OWNER, ROLE_ADMIN)
 
     def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None) -> dict[str, Any]:
         """Update/upgrade a service.

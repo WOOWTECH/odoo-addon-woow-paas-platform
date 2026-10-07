@@ -21,6 +21,7 @@ import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../componen
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
 import { ChatGPTSubscriptionModal } from "../../components/modal/ChatGPTSubscriptionModal";
 import { ChatGPTSubscriptionCard } from "../../components/chatgpt-subscription/ChatGPTSubscriptionCard";
+import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswordModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -71,6 +72,7 @@ export class ServiceDetailPage extends Component {
         AdminCredentialsModal,
         ChatGPTSubscriptionModal,
         ChatGPTSubscriptionCard,
+        ResetAdminPasswordModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -103,6 +105,8 @@ export class ServiceDetailPage extends Component {
             showChatgptSubscriptionModal: false,
             chatgptPending: null,
             chatgptCardKey: 0,
+            // #1560：重設管理員密碼的確認框。
+            showResetConfirmModal: false,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -221,6 +225,18 @@ export class ServiceDetailPage extends Component {
 
     get domain() {
         return cloudService.domain;
+    }
+
+    /**
+     * #1560：呼叫者能不能操作這台服務（owner／admin）。讀 detail payload 的
+     * `viewer_can_manage`（＝後端 `_can_manage_service`，與各寫入端點的 role gate
+     * 同一個判準），前端不自己拿 role 字串再算一份。
+     *
+     * fail-closed：欄位缺席（舊快取、list payload）一律當作不能管理——寧可少顯示
+     * 按鈕，也不要讓 user／guest 看到按了必然被拒的操作（原本的 N5）。
+     */
+    get canManageService() {
+        return this.service?.viewer_can_manage === true;
     }
 
     get canPerformActions() {
@@ -633,6 +649,26 @@ export class ServiceDetailPage extends Component {
     onDomainSaved() {
         this.hideDomainModal();
         this.loadService();
+    }
+
+    // #1560：Reset 一按就讓目前的密碼失效（MCP 類還會重啟服務），先確認再送出。
+    showResetConfirm() {
+        this.state.resetPasswordError = null;
+        this.state.showResetConfirmModal = true;
+    }
+
+    hideResetConfirm() {
+        if (!this.isResetAdminPasswordLoading) {
+            this.state.showResetConfirmModal = false;
+        }
+    }
+
+    async confirmResetAdminPassword() {
+        try {
+            await this.resetAdminPassword();
+        } finally {
+            this.state.showResetConfirmModal = false;
+        }
     }
 
     async resetAdminPassword() {

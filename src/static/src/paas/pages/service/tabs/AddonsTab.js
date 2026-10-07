@@ -14,6 +14,8 @@ export class AddonsTab extends Component {
   static props = {
     service: { type: Object },
     workspaceId: { type: Number },
+    // #1560：呼叫者是不是 owner／admin（父層讀 payload 的 viewer_can_manage）。
+    canManage: { type: Boolean, optional: true },
     onSave: { type: Function, optional: true },
   };
 
@@ -48,6 +50,10 @@ export class AddonsTab extends Component {
   }
 
   get canEdit() {
+    // #1560：user／guest 不給編輯（後端 update 會回「權限不足」）。fail-closed。
+    if (this.props.canManage !== true) {
+      return false;
+    }
     const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
     if (disabledStates.includes(this.props.service.state)) {
       return false;

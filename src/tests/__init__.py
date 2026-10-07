@@ -1077,3 +1077,5 @@ from . import test_mcp_onetime_credentials_1542
 from . import test_upgrade_failure_1552
 # #1535：自訂網域未實作，服務頁按鈕與 CNAME 教學對租戶隱藏。
 from . import test_custom_domain_hidden_1535
+# #1560：服務頁依角色顯示管理按鈕、權限不足訊息、重設密碼確認框、回復版本中文化。
+from . import test_service_role_ux_1560

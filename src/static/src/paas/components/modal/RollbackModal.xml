@@ -115,7 +115,7 @@
                                             </span>
                                             <span
                                                 t-att-class="'o_woow_revision_status ' + getStatusClass(revision.status)"
-                                                t-esc="revision.status"/>
+                                                t-esc="statusLabel(revision.status)"/>
                                             <span t-if="isCurrent(revision)" class="o_woow_revision_badge">
                                                 Current
                                             </span>
@@ -129,7 +129,7 @@
                                                 <t t-esc="formatDate(revision.updated)"/>
                                             </span>
                                             <span t-if="revision.description" class="o_woow_revision_desc">
-                                                <t t-esc="revision.description"/>
+                                                <t t-esc="revisionDescription(revision.description)"/>
                                             </span>
                                         </div>
                                     </div>

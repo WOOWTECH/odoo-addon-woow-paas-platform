@@ -88,6 +88,9 @@
                             <WoowIcon name="'open_in_new'" size="18"/>
                             Open Web UI
                         </WoowButton>
+                        <!-- #1560：以下是 owner／admin 才能做的操作，user／guest 不顯示
+                             （後端 role gate 照舊；判準讀 payload 的 viewer_can_manage）。 -->
+                        <t t-if="canManageService">
                         <WoowButton
                             t-if="service.subscription and service.subscription.is_trial"
                             variant="'secondary'"
@@ -101,7 +104,7 @@
                             t-if="adminResetSupported and !canEditAdminCredentials"
                             variant="'secondary'"
                             size="'md'"
-                            onClick.bind="resetAdminPassword"
+                            onClick.bind="showResetConfirm"
                             disabled="!canResetAdminCredentials or isResetAdminPasswordLoading">
                             <WoowIcon name="'key'" size="18"/>
                             Reset Admin Password
@@ -157,6 +160,7 @@
                             disabled="!canDelete">
                             <WoowIcon name="'delete'" size="18"/>
                         </WoowButton>
+                        </t>
                     </div>
                 </div>
 
@@ -175,6 +179,8 @@
                     check_gateway_copy_gate_anchor ＋ test_gateway_capability_payload_530。
                 -->
                 <!-- #1370：Odoo／n8n 的 Reset 直接改 app DB——先講清楚後果再讓租戶按。 -->
+                <!-- #1560：按鈕只給 owner／admin，說明它的提示也一樣。 -->
+                <t t-if="canManageService">
                 <p t-if="adminResetSupported and isAppAdminReset and appResetKeepsSessions" class="o_woow_hint">
                     Reset Admin Password issues a new password that works right away.
                     Devices that are already signed in stay signed in.
@@ -188,6 +194,7 @@
                     Reset Admin Password also issues a new Gateway API Key. Update it
                     wherever you configured it (e.g. your MCP server).
                 </p>
+                </t>
 
                 <!-- Error Message Banner -->
                 <!-- #1159 Q30：init 失敗時顯示固定文案＋attempt 序號並導向 support 入口；
@@ -285,11 +292,13 @@
                         t-if="currentTab === 'configuration'"
                         service="service"
                         workspaceId="props.workspaceId"
+                        canManage="canManageService"
                         onSave.bind="handleConfigSave"/>
                     <AddonsTab
                         t-if="currentTab === 'addons'"
                         service="service"
                         workspaceId="props.workspaceId"
+                        canManage="canManageService"
                         onSave.bind="handleConfigSave"/>
                     <McpServersTab
                         t-if="currentTab === 'mcp-servers'"
@@ -365,6 +374,15 @@
                 cloudServiceName="service and service.name"
                 onClose.bind="hideCreateProject"
                 onCreated.bind="onProjectCreated"/>
+
+            <!-- #1560：重設管理員密碼先確認（一按就讓目前的密碼失效）。 -->
+            <ResetAdminPasswordModal
+                t-if="state.showResetConfirmModal and serviceForModal"
+                service="serviceForModal"
+                appReset="isAppAdminReset"
+                keepsSessions="appResetKeepsSessions"
+                onClose.bind="hideResetConfirm"
+                onConfirm.bind="confirmResetAdminPassword"/>
 
             <AdminCredentialsModal
                 t-if="state.showAdminCredentialsModal"

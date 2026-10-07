@@ -11584,6 +11584,84 @@ msgstr "正在回復版本..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Deployed"
+msgstr "已部署"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Superseded"
+msgstr "已被取代"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "In progress"
+msgstr "進行中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Installed"
+msgstr "已安裝"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Updated"
+msgstr "已更新"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Rolled back to revision %s"
+msgstr "已回復到版本 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "Reset the admin password of this service?"
+msgstr "要重設這個服務的管理員密碼嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "A new password is generated and shown only once. The current password stops working right away."
+msgstr "會產生一組新密碼，只會顯示這一次；目前的密碼立即失效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "The service does not restart. Devices that are already signed in stay signed in."
+msgstr "服務不會重新啟動，已登入的裝置不會被登出。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "The service does not restart. Devices signed in with the current password are signed out, and two-factor sign-in is turned off."
+msgstr "服務不會重新啟動；用目前密碼登入的裝置會被登出，兩步驟驗證也會關閉。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "The service restarts to apply the new password (about a minute); work in progress is interrupted."
+msgstr "服務會重新啟動以套用新密碼（約一分鐘），進行中的工作會中斷。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "The Gateway API Key is replaced too; update it wherever you configured it (e.g. your MCP server)."
+msgstr "Gateway API 金鑰也會一併換新，請到有設定它的地方（例如 MCP 伺服器）更新。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid "Resetting..."
+msgstr "重設中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
 msgid ""
 "Route #%s came back from the server but is not on the current screen — what "
