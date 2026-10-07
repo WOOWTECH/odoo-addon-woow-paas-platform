@@ -1091,3 +1091,5 @@ from . import test_auto_expire_never_expire_1574
 from . import test_n8n_plan_spec_paths_1532
 # #1533：n8n 沒有外部 task runner ⇒ 部署時注入 N8N_PYTHON_ENABLED=false，商品說明寫明。
 from . import test_n8n_python_disabled_1533
+# #1561：只在開通時生效的設定（Odoo 管理員 Email／示範資料）開通後唯讀。
+from . import test_create_only_settings_1561

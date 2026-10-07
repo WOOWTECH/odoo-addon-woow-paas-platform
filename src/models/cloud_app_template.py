@@ -1278,6 +1278,30 @@ class CloudAppTemplate(models.Model):
                     keys.add(field)
         return keys
 
+    def _create_only_value_specs(self):
+        """#1561：只在開通時生效的 spec：``{key: spec dict}``（spec 帶 ``"create_only": true``）。
+
+        例：woow-odoo 的 ``conf.adminEmail``／``loadDemoData``——chart 只在首次
+        ``-i base`` 套用（woow-paas-charts ``charts/woow-odoo`` README），對既有資料庫
+        完全沒有作用。這類鍵仍在 helm_values 裡（開通與 redeploy 都要送），但開通後
+        不給改：前端配置頁唯讀顯示，``_update_service`` 拒絕變更（見該處）。
+        只認嚴格的 ``True``：寫錯成字串之類的值一律當作一般可改的設定（fail-open 到
+        既有行為，不會因為 seed 打錯字讓一格設定突然改不了）。
+        """
+        specs = self._parse_helm_value_specs()
+        out = {}
+        if not isinstance(specs, dict):
+            return out
+        for section in ('required', 'optional'):
+            fields_list = specs.get(section)
+            if not isinstance(fields_list, list):
+                continue
+            for field in fields_list:
+                if (isinstance(field, dict) and isinstance(field.get('key'), str)
+                        and field['key'] and field.get('create_only') is True):
+                    out[field['key']] = field
+        return out
+
     def _formatted_value_specs(self):
         """這個 template 帶 ``format`` 的 spec：``{key: format}``（未知 format 略過）。"""
         specs = self._parse_helm_value_specs()

@@ -371,14 +371,15 @@ class TestWoowOdooAdminPassword1130(TransactionCase):
                 patch(f'{_CONTROLLER}.request', new=fake_request), \
                 patch(client_path, return_value=client), \
                 patch(f'{_CONTROLLER}.threading.Thread', _SyncThread):
-            result = PaasController()._update_service(
-                svc, values={'conf.adminEmail': 'new-owner@example.com'}, version=None)
+            # #1561：conf.adminEmail 開通後不能改（chart 只在首次建庫套用），reconfigure 改用
+            # 空的 values 觸發（改 addon／重新套用設定時也是這條路）。
+            result = PaasController()._update_service(svc, values={}, version=None)
 
         self.assertTrue(result['success'], result)
         kwargs = client.upgrade_release.call_args.kwargs
         self.assertEqual(kwargs['sensitive_values'],
                          {'conf': {'adminPassword': svc._get_secret_record().admin_password}})
-        self.assertEqual(kwargs['values']['conf']['adminEmail'], 'new-owner@example.com')
+        self.assertNotIn('adminPassword', kwargs['values'].get('conf', {}))
         self.assertNotIn('adminPassword', json.dumps(svc.sudo()._helm_values_dict()))
 
     def test_reconfigure_without_email_is_not_blocked_by_stored_values(self):
@@ -405,27 +406,37 @@ class TestWoowOdooAdminPassword1130(TransactionCase):
                 patch(f'{_CONTROLLER}.request', new=fake_request), \
                 patch(client_path, return_value=client), \
                 patch(f'{_CONTROLLER}.threading.Thread', _SyncThread):
+            # #1561：loadDemoData 只在開通時生效；送回與目前相同的值（前端舊分頁整包送出）
+            # 當作沒送，reconfigure 照常——仍不會因為存的 values 沒有 conf.adminEmail 被擋。
             result = PaasController()._update_service(
-                svc, values={'loadDemoData': True}, version=None)
+                svc, values={'loadDemoData': False}, version=None)
         self.assertTrue(result['success'], result)
 
-    def test_reconfigure_rejects_a_malformed_email(self):
+    def test_reconfigure_refuses_create_only_changes(self):
+        """#1561（取代原本的「格式錯誤的 email 要回 email 格式錯誤」）：conf.adminEmail 與
+        loadDemoData 只在首次建庫時套用，開通後改了沒有作用、還會重啟一次——直接拒絕，
+        訊息說清楚原因（改管理員登入要在 Odoo 裡改）。"""
         svc = self._service()
         from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 
         client = MagicMock()
         fake_request = MagicMock()
         fake_request.env = self.env
+        before = svc.sudo()._helm_values_dict()
         with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
                 patch(f'{_CONTROLLER}.request', new=fake_request):
-            result = PaasController()._update_service(
-                svc, values={'conf.adminEmail': 'not-an-email'}, version=None)
+            for values in ({'conf.adminEmail': 'not-an-email'},
+                           {'conf.adminEmail': 'new-owner@example.com'},
+                           {'loadDemoData': True}):
+                with self.subTest(values=values):
+                    result = PaasController()._update_service(svc, values=values, version=None)
+                    self.assertFalse(result['success'])
+                    self.assertIn('only take effect when the service is created',
+                                  result['error'])
 
-        self.assertFalse(result['success'])
-        # 擋下的理由必須是 email 格式——不是「conf.adminEmail 不是可改的鍵」
-        # （那會讓租戶永遠改不了 login email，卻與本條斷言長得一樣）。
-        self.assertEqual(result['error'], 'Administrator email must be a valid email address')
         client.upgrade_release.assert_not_called()
+        self.assertEqual(svc.sudo()._helm_values_dict(), before)
+        self.assertEqual(svc.state, 'running')
 
 
 @tagged('post_install', '-at_install')

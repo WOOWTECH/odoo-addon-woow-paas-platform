@@ -3732,6 +3732,57 @@ class PaasController(HiddenChainMixin, Controller):
             kept[key] = value
         return kept
 
+    @staticmethod
+    def _drop_create_only_values(
+        service: Any, values: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """#1561：reconfigure 對「只在開通時生效」的設定的處理；回 ``(values, error)``。
+
+        2026-10-07 實測（N9）：Odoo 的「管理員 Email」「載入示範資料」開通後仍可改，存檔
+        會重建 Pod，但 chart 只在首次建庫時套用它們——管理員帳號不變、示範資料不會載入，
+        畫面也沒有任何說明。
+
+        * 值與目前相同（含沒存過、等於 spec 預設）⇒ 當作沒送，從 payload 拿掉，避免
+          舊分頁整包送出時白白重啟一次；
+        * 值不同 ⇒ 整筆拒絕，訊息說清楚只在開通時生效。改 Odoo 管理員的登入帳號要在
+          Odoo 裡改（或用「重設管理員密碼」，#1370 會回報實際的帳號）。
+
+        比對前依 spec type 正規化：boolean 比真假值（``'false'`` 字串視為 False）、其他
+        比去掉前後空白的字串；與前端 HelmValueForm 送出的形態一致。
+        """
+        if not values or not isinstance(values, dict):
+            return values, None
+        specs = service.template_id._create_only_value_specs()
+        if not specs:
+            return values, None
+        existing = service._helm_values_dict()
+
+        def _normalize(spec, value):
+            if spec.get('type') == 'boolean':
+                if isinstance(value, str):
+                    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+                return bool(value)
+            return '' if value is None else str(value).strip()
+
+        kept: dict[str, Any] = {}
+        changed: list[str] = []
+        for key, value in values.items():
+            spec = specs.get(key)
+            if spec is None:
+                kept[key] = value
+                continue
+            current = _lookup_helm_value(existing, key)
+            if current is _HELM_VALUE_MISSING:
+                current = spec.get('default')
+            if _normalize(spec, value) != _normalize(spec, current):
+                changed.append(spec.get('label') or key)
+        if changed:
+            return values, _(
+                'These settings only take effect when the service is created and '
+                'cannot be changed afterwards: %(labels)s',
+                labels=', '.join(changed))
+        return kept, None
+
     def _list_services(self, workspace: Any) -> dict[str, Any]:
         """List all services in a workspace.
 
@@ -4256,6 +4307,12 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False, 'error': _(
                     'These settings cannot be cleared: %(keys)s',
                     keys=', '.join(not_clearable))}
+
+        # #1561：只在開通時生效的設定（spec ``create_only``）在任何寫入之前處理——下面
+        # 改 addon 那段會先寫 odoo_addon_ids，被拒的請求不能留下半套變更。
+        values, create_only_error = self._drop_create_only_values(service, values)
+        if create_only_error:
+            return {'success': False, 'error': create_only_error}
 
         client = get_paas_operator_client(request.env)
         if not client:

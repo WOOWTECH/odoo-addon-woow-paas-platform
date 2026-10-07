@@ -58,12 +58,34 @@ export class ConfigurationTab extends Component {
      * value gets written into helm_values in plaintext on save.
      */
     get configurableSpecs() {
-        const notInit = (s) => !String(s.key || "").startsWith("_init.");
+        // #1561：`create_only` 的設定（例 Odoo 的管理員 Email／載入示範資料）chart 只在
+        // 開通時套用，之後改了沒有作用、還會重啟一次——不進編輯表單，只在檢視模式唯讀
+        // 顯示（createOnlySpecs）。後端 `_drop_create_only_values` 同樣拒絕變更。
+        const editable = (s) =>
+            !String(s.key || "").startsWith("_init.") && !this.isCreateOnlySpec(s);
         const base = this.helmValueSpecs;
         return {
-            required: (base.required || []).filter(notInit),
-            optional: (base.optional || []).filter(notInit),
+            required: (base.required || []).filter(editable),
+            optional: (base.optional || []).filter(editable),
         };
+    }
+
+    /** #1561：spec 是否只在開通時生效（與後端 `_create_only_value_specs` 同一判準：嚴格 true）。 */
+    isCreateOnlySpec(spec) {
+        return spec?.create_only === true;
+    }
+
+    /** #1561：檢視模式要唯讀列出的「只在開通時生效」設定（`_init.*` 不在 helm_values，不列）。 */
+    get createOnlySpecs() {
+        const base = this.helmValueSpecs;
+        return [...(base.required || []), ...(base.optional || [])].filter(
+            (s) => !String(s.key || "").startsWith("_init.") && this.isCreateOnlySpec(s)
+        );
+    }
+
+    /** #1561：檢視模式列出的全部設定＝可改的＋只在開通時生效的。 */
+    get displaySpecs() {
+        return [...this.allSpecs, ...this.createOnlySpecs];
     }
 
     get allSpecs() {

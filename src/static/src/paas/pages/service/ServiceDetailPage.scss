@@ -528,6 +528,15 @@ $woow-radius-lg: 1.25rem;
     color: $woow-primary;
 }
 
+// #1561：只在開通時生效的設定（唯讀）的說明
+.o_woow_config_create_only {
+    display: block;
+    margin-top: 0.25rem;
+    font-family: $woow-font-body;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+}
+
 .o_woow_config_value {
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 0.8rem;
