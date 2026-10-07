@@ -1081,3 +1081,5 @@ from . import test_custom_domain_hidden_1535
 from . import test_service_role_ux_1560
 # #1557：LiteLLM 改管理員帳密預設保留 Gateway API Key（master key），換 key 改為明確勾選。
 from . import test_litellm_master_key_1557
+# #1555：退點時同步建立貸項並以退點沖銷原發票。
+from . import test_refund_credit_note_1555

@@ -553,6 +553,8 @@ class SecurityAccessController(Controller):
                 subscription=old_sub,
             )
             partner.invalidate_recordset(['wallet_balance'])
+            # #1555：舊訂閱那一期的發票同步開貸項並以退點沖銷（只記帳，失敗不外拋）。
+            old_sub._woow_record_refund_credit_note(refund, 'Plan change')
         # sudo: closing the old subscription needs sh.subscription.subscription
         # write ACL workspace owners lack; continuation of the gated cascade.
         old_sub.sudo().write({

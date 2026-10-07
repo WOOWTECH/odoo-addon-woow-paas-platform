@@ -6,6 +6,7 @@ from . import ecpay_invoice_cron
 from . import ecpg_query_circuit
 from . import res_partner_invoice
 from . import sh_subscription_fix
+from . import sh_subscription_refund_credit_note
 from . import sh_subscription_warning_field
 from . import sh_subscription_plan_sa_quota
 from . import sh_subscription_plan_sh_mcp

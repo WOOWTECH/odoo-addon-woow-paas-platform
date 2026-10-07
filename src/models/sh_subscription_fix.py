@@ -203,6 +203,8 @@ class ShSubscriptionFix(models.Model):
             )
             partner.invalidate_recordset(['wallet_balance'])
             credited = refund
+            # #1555：退點同步建貸項並沖銷原發票（只記帳，失敗不外拋，見該 method）。
+            self._woow_record_refund_credit_note(refund, reason)
         self.sudo().write({'state': 'cancel', 'sh_reason': reason})
         return credited
 

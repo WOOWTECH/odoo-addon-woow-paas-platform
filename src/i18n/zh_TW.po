@@ -11243,6 +11243,48 @@ msgid "Refund amount must be greater than 0"
 msgstr "退還金額必須大於 0"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "Refund for %(invoice)s: %(reason)s"
+msgstr "%(invoice)s 退點：%(reason)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "Refund: %(line)s"
+msgstr "退點：%(line)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "Wallet refund: %(credit_note)s"
+msgstr "退回錢包：%(credit_note)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "E-invoice %(number)s was already issued for %(invoice)s. Credit note %(credit_note)s (%(amount)s) needs an ECPay allowance issued manually."
+msgstr "%(invoice)s 已開立電子發票 %(number)s。貸項 %(credit_note)s（%(amount)s）需要人工在綠界開立折讓。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "Fully refunded by credit note %(credit_note)s before an e-invoice was issued; no e-invoice is required for this invoice any more."
+msgstr "開立電子發票前已由貸項 %(credit_note)s 全額退點，這張發票不再需要開立電子發票。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "Partly refunded by credit note %(credit_note)s (%(amount)s) before an e-invoice was issued. When issuing the e-invoice, deduct the refunded part or issue an allowance for it afterwards."
+msgstr "開立電子發票前已由貸項 %(credit_note)s（%(amount)s）部分退點。開立電子發票時請扣除已退部分，或開立後再就該部分開立折讓。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_refund_credit_note.py:0
+msgid "ECPay allowance needed"
+msgstr "需開立綠界折讓"
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_oauth_client_form
 msgid "Regenerate Secret"
 msgstr ""

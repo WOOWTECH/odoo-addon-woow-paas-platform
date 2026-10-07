@@ -146,6 +146,25 @@ class AccountMove(models.Model):
             return
         return super().create_ecpay_invoice()
 
+    def run_refund(self):
+        """#1555：PaaS 建立的貸項不在上游 inline hook 打 ECPay 折讓。
+
+        上游 ``ecpay_invoice_tw.action_post()`` 在 ``company.auto_invoice='automatic'`` 時對
+        ``out_refund`` inline 呼叫 ``run_refund()``（對外開折讓，失敗即 raise）。平台在租戶的
+        刪除／換方案請求裡建的退點貸項（``sh_subscription_refund_credit_note``）帶
+        ``woow_skip_upstream_hook``：外部呼叫不可在那個交易裡發生（billing-philosophy §5；
+        本檔 billing-philosophy「Scope limitation」記著這一格待補）。需要折讓的貸項由該處
+        建待辦交給人工在綠界開立。沒有 skip 旗標的貸項（ERP／官網）照舊走上游。
+        """
+        self.ensure_one()
+        if self.woow_skip_upstream_hook:
+            _logger.info(
+                "[INV] run_refund short-circuit credit_note=%s (PaaS refund; allowance is "
+                "issued manually)", self.id,
+            )
+            return
+        return super().run_refund()
+
     def _pay_from_wallet(self, subscription=None):
         """Settle this invoice using wallet points.
 

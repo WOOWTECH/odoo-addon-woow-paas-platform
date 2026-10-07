@@ -54,6 +54,13 @@ skip-trial 尚未傳入同一個 `before_mutation` guard，因此未受保護；
 > only isolates `out_invoice` issuance (`create_ecpay_invoice`). Refund flows
 > (`out_refund` → upstream `run_refund`) are not yet covered — `run_refund` will
 > need a parallel override when 折讓/退費 is implemented.
+>
+> **#1555（2026-10）**：退點（刪除服務、換方案）同步建立貸項（`out_refund`，
+> `reversed_entry_id` 指回原發票）並以退回錢包的點數沖銷；`run_refund` 已加上對帶
+> skip 旗標貸項的平行 override——平台不在租戶請求裡 inline 打 ECPay 折讓。原發票已開
+> 電子發票時改為留言＋替帳務管理群組建待辦、由人工在綠界開立折讓（尚無 async 折讓
+> cron）；原發票未開且被全額沖銷時改標 `not_required`。退點只退未稅金額（#1261 待決），
+> 含稅商品的貸項會留下稅額那段未沖。細節見 `src/models/sh_subscription_refund_credit_note.py`。
 
 ---
 

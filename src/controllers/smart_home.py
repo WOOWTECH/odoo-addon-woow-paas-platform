@@ -302,6 +302,8 @@ class SmartHomeController(Controller):
                 subscription=old_sub,
             )
             partner.invalidate_recordset(['wallet_balance'])
+            # #1555：舊訂閱那一期的發票同步開貸項並以退點沖銷（只記帳，失敗不外拋）。
+            old_sub._woow_record_refund_credit_note(refund, 'Plan change')
             _logger.info(
                 "[SH] change_plan refund credited sh=%s partner=%s amount=%s",
                 smarthome_id, partner.id, refund,
