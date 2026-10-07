@@ -101,7 +101,8 @@ JSON-RPC）。`{ws}` / `{id}` 為資料庫整數 ID。
 ### 2.1 `GET /api/security-access/workspaces`
 
 列出已認證使用者有 access 的 **active** workspace（`workspace_access` →
-`workspace_id.state='active'`）。
+`workspace_id.state='active'`）。成員判準與 `/woow` 相同（`_PaaSCapability`，
+#1528）：Portal 帳號與內部帳號一視同仁。
 
 - Scope：`workspace:read`
 - Handler：`HAIntegrationController.sa_list_workspaces`

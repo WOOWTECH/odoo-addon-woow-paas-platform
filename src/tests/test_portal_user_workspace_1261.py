@@ -3,8 +3,10 @@
 
 2026-10-01 supersedes the temporary Portal product denial: invitations and
 existing memberships now work via /woow's private capability seam. Preserve
-internal-first duplicate-email selection, no group changes, model-helper deny,
-and HA/OAuth's historical deny. Real HTTP still catches raw ACL traceback leaks.
+internal-first duplicate-email selection, no group changes and model-helper
+deny. 2026-10-07 (#1528): the HA REST API now follows the same capability, so
+a Portal member's HA view matches /woow (full matrix in
+test_ha_api_portal_1528). Real HTTP still catches raw ACL traceback leaks.
 """
 import json
 import uuid
@@ -218,19 +220,15 @@ class TestPortalUserWorkspace1261(HttpCase):
         self.assertFalse(result.get('success'), result)
         self.assertEqual(result.get('error'), 'Access denied', result)
 
-    def test_portal_user_with_legacy_membership_ha_api_denied(self):
-        """HA 串接 API（OAuth bearer，`auth='none'`）的 sudo 成員查詢同樣不認殘留列。
+    def test_portal_user_with_legacy_membership_ha_api_matches_woow(self):
+        """HA 串接 API（OAuth bearer，`auth='none'`）與 /woow 同一把尺（#1528）。
 
-        `ha_api._get_user_workspaces` / `_check_workspace_access` 都是 sudo
-        search，修正前 portal 帳號憑 #1261 之前的殘留成員列就能列 workspace、
-        讀 smart home 清單。
+        #1261 時 `ha_api._get_user_workspaces`／`_check_workspace_access` 對
+        portal 一律回空／403；#991 之後 /woow 已讓 portal 成員使用產品，HA 這邊
+        沒跟上 ⇒ 正式站所有 Portal 客戶在 HA 元件看到「沒有任何工作區」。
+        現在：portal 成員（含 #1261 之前邀請的列）在 HA 端看得到同一個
+        workspace，非成員照舊看不到。完整角色矩陣見 test_ha_api_portal_1528。
         """
-        self.WorkspaceAccess.create({
-            'workspace_id': self.workspace.id,
-            'user_id': self.portal_user.id,
-            'role': 'user',
-            'invited_by_id': self.owner.id,
-        })
         client = self.env.ref('woow_paas_platform.oauth_client_ha_smart_home')
         Token = self.env['woow_paas_platform.oauth_token'].sudo()
 
@@ -249,22 +247,32 @@ class TestPortalUserWorkspace1261(HttpCase):
                 url, headers={'Authorization': f'Bearer {token.access_token}'})
 
         ws = self.workspace.id
-        # 陽性對照：同一組端點對 internal owner 照常放行——少了它，「一律
-        # 403／空清單」的壞修法（例如 token 本身失效）也會讓下面的陰性斷言全綠。
-        owner_token = make_token(self.owner)
-        resp = get('/api/smarthome/workspaces', owner_token)
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn(ws, [w['id'] for w in resp.json()['workspaces']])
-        resp = get('/api/smarthome/workspaces/%s/homes' % ws, owner_token)
-        self.assertEqual(resp.status_code, 200)
-
         portal_token = make_token(self.portal_user)
+        # 陰性對照：尚未成為成員前，portal 看不到這個 workspace。
         resp = get('/api/smarthome/workspaces', portal_token)
         self.assertEqual(resp.status_code, 200)
-        self.assertNotIn(ws, [w['id'] for w in resp.json()['workspaces']],
-                         '殘留的 portal 成員列不得讓 workspace 出現在清單')
+        self.assertNotIn(ws, [w['id'] for w in resp.json()['workspaces']])
         resp = get('/api/smarthome/workspaces/%s/homes' % ws, portal_token)
         self.assertEqual(resp.status_code, 403)
+
+        self.WorkspaceAccess.create({
+            'workspace_id': self.workspace.id,
+            'user_id': self.portal_user.id,
+            'role': 'user',
+            'invited_by_id': self.owner.id,
+        })
+        # 模型層 helper 的歷史契約不變（只有 /woow 與 HA API 走 capability）。
+        self.assertFalse(self.workspace.sudo().check_user_access(self.portal_user))
+
+        owner_token = make_token(self.owner)
+        for token in (owner_token, portal_token):
+            with self.subTest(user=token.user_id.login):
+                resp = get('/api/smarthome/workspaces', token)
+                self.assertEqual(resp.status_code, 200)
+                self.assertIn(ws, [w['id'] for w in resp.json()['workspaces']])
+                resp = get('/api/smarthome/workspaces/%s/homes' % ws, token)
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.json()['homes'], [])
 
     # ================================================================
     #  internal 不變（陽性對照）

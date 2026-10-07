@@ -12,7 +12,8 @@ from typing import Any
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
-from ..models.workspace_access import ROLE_ADMIN, ROLE_OWNER
+from ..models.workspace_access import ROLE_ADMIN
+from ..services.paas_capability import _PaaSCapability
 from odoo import _
 
 _logger = logging.getLogger(__name__)
@@ -73,49 +74,64 @@ def _authenticate(
         return _json_error('Forbidden', str(exc.description), 403)
 
 
+def _capability(user: Any) -> _PaaSCapability:
+    """Token 主體（``token.user_id``）的 /woow capability（#1528）。
+
+    HA 端點是 ``auth='none'``：``request.env`` 沒有 uid，而 ``user`` 是
+    ``verify_oauth_token`` 以 sudo 搜到的 token 擁有者。這裡用**該使用者、非 sudo**
+    的 env 建 capability，成員／角色判準就與 /woow（``smart_home.py``／
+    ``security_access.py``／``paas.py``）完全同一把尺：
+
+    * internal：照舊走 ``workspace.check_user_access`` 與 ORM rules；
+    * Portal（``share=True``）：capability 以固定 uid、sudo 查 ``workspace_access``，
+      只認 active workspace、active 使用者的成員列。
+
+    修正前這兩支 helper 對 ``user.share`` 直接回空／``None``（#1261 時代「Portal
+    用不了 workspace」的判斷），但 /woow 自 #991 起已讓 Portal 成員使用產品——
+    結果 Portal 客戶在 /woow 看得到自己的 SH／SA，HA 元件卻回「沒有任何工作區」。
+    """
+    return _PaaSCapability(request.env(user=user.id))
+
+
 def _get_user_workspaces(user: Any) -> Any:
-    """Return active workspaces the user has access to.
+    """Return active workspaces the user is a member of.
+
+    Internal 與 Portal 同一判準（``_PaaSCapability.memberships``，見
+    ``_capability``）；封存的 workspace、停用的帳號都不列出。
 
     Args:
-        user: ``res.users`` browse record.
+        user: ``res.users`` browse record（token 擁有者）。
 
     Returns:
         Recordset of ``woow_paas_platform.workspace``.
     """
-    # #1261：portal/share 帳號不算任何 workspace 的成員（與
-    # `workspace.check_user_access` 同一把尺）。這裡是 sudo search，不會丟
-    # AccessError，但會撈到 #1261 之前邀請殘留的 portal 成員列並放行——
-    # portal 本來就用不了 workspace，那種列不該再授予任何東西。
-    if user.share:
+    capability = _capability(user)
+    if not capability.authenticated:
+        # 停用／public 帳號：capability.memberships() 會丟 AccessError（→ 500）；
+        # HA 端點的契約是「沒有成員資格 ⇒ 空清單」。
         return request.env['woow_paas_platform.workspace']
-    access_records = request.env['woow_paas_platform.workspace_access'].sudo().search([
-        ('user_id', '=', user.id),
-        ('workspace_id.state', '=', 'active'),
-    ])
-    return access_records.mapped('workspace_id')
+    return capability.memberships().mapped('workspace_id')
 
 
 def _check_workspace_access(user: Any, workspace_id: int) -> Any | None:
-    """Verify user has access to a specific workspace.
+    """Verify user is a member of an active workspace.
+
+    與 /woow 的 ``_get_workspace_or_error`` 同形：capability 判定成員資格，
+    再要求 ``state == 'active'``（internal 的 ``check_user_access`` 本身不看
+    workspace 狀態，封存的 workspace 必須在這裡擋）。
 
     Args:
-        user: ``res.users`` browse record.
+        user: ``res.users`` browse record（token 擁有者）。
         workspace_id: Database ID of the workspace.
 
     Returns:
-        Workspace browse record if accessible, ``None`` otherwise.
+        Workspace browse record if accessible, ``None`` otherwise. 呼叫端只拿
+        ``.id`` 去做後續 sudo 查詢，不依賴回傳 record 的 env。
     """
-    # #1261：同 `_get_user_workspaces`——殘留的 portal 成員列不再放行（sudo search）。
-    if user.share:
+    workspace = _capability(user).workspace(workspace_id)
+    if not workspace or workspace.state != 'active':
         return None
-    access = request.env['woow_paas_platform.workspace_access'].sudo().search([
-        ('user_id', '=', user.id),
-        ('workspace_id', '=', workspace_id),
-        ('workspace_id.state', '=', 'active'),
-    ], limit=1)
-    if not access:
-        return None
-    return access.workspace_id
+    return workspace
 
 
 def _require_manage_role(user: Any, workspace: Any) -> Response | None:
@@ -132,15 +148,14 @@ def _require_manage_role(user: Any, workspace: Any) -> Response | None:
     不足」「不是成員」（同樣 403）區分——重新授權修不好角色，component 要改提示
     「請 owner／admin 設定」而不是叫使用者 reauth。
 
+    角色判定與 /woow 的 SA token 出口同一把尺（``_PaaSCapability.access``，
+    owner ≥ admin 放行），Portal owner／admin 也適用（#1528）；``workspace`` 是
+    sudo 取得的父層 record，capability 只用它的 id、不繼承 sudo。
+
     Returns:
         ``None`` 表示放行；否則為 403 JSON ``Response``。
     """
-    allowed = request.env['woow_paas_platform.workspace_access'].sudo().search_count([
-        ('user_id', '=', user.id),
-        ('workspace_id', '=', workspace.id),
-        ('role', 'in', [ROLE_OWNER, ROLE_ADMIN]),
-    ])
-    if allowed:
+    if _capability(user).access(workspace, required_role=ROLE_ADMIN):
         return None
     return _json_error(
         'insufficient_role',

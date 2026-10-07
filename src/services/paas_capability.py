@@ -1,7 +1,9 @@
 """Private /woow capability boundary; deliberately NOT an ORM/RPC API.
 
-Portal has no PaaS ACL. Only the three product controllers use this seam;
-HA/OAuth and model.check_user_access retain their historical contracts.
+Portal has no PaaS ACL. Only the three product controllers and the HA REST
+API (``controllers/ha_api.py``, membership/role checks for the OAuth token's
+user, #1528) use this seam; the OAuth endpoints themselves and
+model.check_user_access retain their historical contracts.
 Internal callers keep their actual ORM environment/rules. Portal lookups use
 fixed models and server-owned anchors, never a client model/domain/context.
 Return recordsets only to controller code, which must serialize explicit DTOs

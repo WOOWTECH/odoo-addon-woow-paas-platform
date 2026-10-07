@@ -271,6 +271,11 @@ Authorization: Bearer <access_token>
 
 列出已認證使用者可存取的 **active** workspace。
 
+> 成員資格與角色的判準與 `/woow` 相同（`src/services/paas_capability.py`
+> 的 `_PaaSCapability`，#1528）：Portal（外部註冊）帳號與內部帳號一視同仁；
+> 停用的帳號回空清單。tunnel-token 端點另限 workspace owner／admin
+> （user／guest 回 `403 insufficient_role`）。
+
 ```json
 {
   "workspaces": [

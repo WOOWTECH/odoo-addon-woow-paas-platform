@@ -15,7 +15,7 @@ _Avoid_: 「使用者權限」「Odoo 角色」「群組角色」
 >
 > **Portal 沒有 PaaS 原始 ORM CRUD 權限**：`ir.model.access.csv`／`ir_rules.xml` 未對 `base.group_portal` 新增授權；對外功能由受控 API 提供，不等於可呼叫任意 model/method。
 >
-> **2026-10-01 的產品契約**：新舊已登入、active、非 public 的外部帳號可使用對外 PaaS。`src/services/paas_capability.py` 固定真實 uid、驗證 workspace 成員／角色和資源歸屬，再提供窄範圍 Portal recordset；內部帳號仍走原有 ORM/rules。付款、配額、欄位白名單由既有 BFF 留守，request.env 不全域提權，群組不升級。Project/AI 分享與 HA machine/OAuth 不因此開放。修改這條邊界時讀 [Portal 存取設計](docs/plans/2026-Q4/2026-10-01-portal-paas-access-design.md)。
+> **2026-10-01 的產品契約**：新舊已登入、active、非 public 的外部帳號可使用對外 PaaS。`src/services/paas_capability.py` 固定真實 uid、驗證 workspace 成員／角色和資源歸屬，再提供窄範圍 Portal recordset；內部帳號仍走原有 ORM/rules。付款、配額、欄位白名單由既有 BFF 留守，request.env 不全域提權，群組不升級。Project/AI 分享不因此開放；HA REST API（`src/controllers/ha_api.py`）自 #1528 起以同一 capability 判斷 OAuth token 擁有者的成員／角色（與 /woow 一致：Portal 成員可在 HA 元件連自己的 SH／SA，tunnel token 仍限 owner／admin），OAuth 端點本身的授權不變。修改這條邊界時讀 [Portal 存取設計](docs/plans/2026-Q4/2026-10-01-portal-paas-access-design.md)。
 >
 > 歷史：2026-09-01 的裸 `request.env` 讓 Portal workspace API 拋 AccessError，#1261 後改為明確拒絕外部帳號。本次受控 API 取代的是該產品端點拒絕，不是所有 controller／model 的授權通則；部署狀態須另驗。
 >
@@ -25,7 +25,7 @@ _Avoid_: 「使用者權限」「Odoo 角色」「群組角色」
 >
 > ⇒ 因此 `src/models/subscription_lifecycle_mixin.py:115` 的「典型租戶（只有 `base.group_user` 的內部使用者）」是**設計時的想像，不是實況**。它與 `src/tests/test_subscription_mixin_cascade_sudo_29.py:103`／`:381`／`:486` 的 fixture 同源。⚠ 這個身分前提不只在那一支：`src/tests/` 275 支裡有 89 支釘 `base.group_user`、只有 7 支用 `base.group_portal`——**改動這條敘述前先想清楚波及面**。
 >
-> **「Portal 可用 PaaS」的射程**已由 2026-10-01 使用者需求確認為對外產品流程，不含 ERP 後台、原始 PaaS ORM、未分享專案或機器 OAuth 的額外權限；以本文上方的受控 API 邊界為準。
+> **「Portal 可用 PaaS」的射程**已由 2026-10-01 使用者需求確認為對外產品流程，不含 ERP 後台、原始 PaaS ORM、未分享專案或機器 OAuth 的額外權限（HA REST API 只是把成員判準對齊 /woow，#1528，不多給 /woow 以外的權限）；以本文上方的受控 API 邊界為準。
 
 > ⚠ **`res_users.share` 不是第二個訊號。** 它是 stored computed，唯一依據就是 `groups_id` 裡有沒有 `base.group_user`（`odoo/addons/base/models/res_users.py:386` 欄位定義、`:531-534` 的 `_compute_share`）。**「`share=True`」與「非 `base.group_user`」是同一個事實的兩種讀法**，並列出現時不構成互相佐證——拿它們當兩把尺互證是零證據。
 

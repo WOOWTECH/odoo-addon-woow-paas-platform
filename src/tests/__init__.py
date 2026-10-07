@@ -23,6 +23,8 @@ from . import test_ha_api
 from . import test_ha_api_security_access
 # HA API tunnel-token 只給 owner／admin（role=user／guest 回 insufficient_role）。
 from . import test_ha_api_tunnel_token_role
+# #1528：HA API 的成員／角色判準與 /woow 一致（Portal owner／admin／user／guest／非成員）。
+from . import test_ha_api_portal_1528
 from . import test_naming
 # feat: L4 reconciler 左集蒐集（SA 2 層 walk + CS MCP 重建 + SM）
 from . import test_reconciler_left_set

@@ -308,6 +308,7 @@
 6	test_ha_api.TestHAApiAccessControl
 8	test_ha_api.TestHAApiData
 2	test_ha_api.TestHAApiIntegration
+13	test_ha_api_portal_1528.TestHaApiPortalMembership1528
 10	test_ha_api_security_access.TestHaApiSecurityAccess
 6	test_ha_api_tunnel_token_role.TestHaApiTunnelTokenRole
 8	test_ha_full_016_user_decisions.TestHaFull016TemplateDecisions
