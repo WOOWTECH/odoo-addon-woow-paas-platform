@@ -244,7 +244,7 @@ sequenceDiagram
 - **Service Name**：自訂服務名稱
 - **n8n Admin Email**：管理員帳號 Email
 - **n8n Admin Password**：管理員密碼（至少 8 字元，含大小寫字母與數字）
-- **可選設定**：Database Type、Timezone、Log Level
+- **可選設定**：Timezone、Log Level、SMTP（資料庫一律是 PVC 上的 SQLite；原本的「Database Type」選項 chart 不讀，#1532 已拿掉）
 
 ### 4.2 API 請求
 
@@ -259,7 +259,6 @@ POST /api/workspaces/{workspace_id}/services
     "values": {
         "_init.owner_email": "user@example.com",
         "_init.owner_password": "MyP@ssw0rd",
-        "config.database.type": "sqlite",
         "main.config.GENERIC_TIMEZONE": "Asia/Taipei"
     }
 }

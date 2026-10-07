@@ -895,6 +895,72 @@ _INSTALL_PINNED_STORAGE_CLASS_PATHS = {
 }
 
 
+# #1532：方案規格（cs_*）要寫進 chart **真正讀的** values 路徑。
+#
+# 自家 chart（woow-paas-charts 全系列）與 Bitnami 讀頂層 ``resources``／
+# ``persistence.size``，是預設。8gears n8n chart 2.0.1 沒有頂層 ``resources``／
+# ``persistence``：Pod 讀 ``main.resources``（templates/deployment.yaml）、PVC 讀
+# ``main.persistence.size``（templates/pvc.yaml）。以前 overlay 一律寫頂層 ⇒ chart 完全
+# 沒讀到，所有 n8n 方案都是範本預設（100m/256Mi～1/1Gi、PVC 2Gi），畫面卻顯示 10～40 GB。
+#
+# 鍵是範本 slug（與 ``_INSTALL_PINNED_STORAGE_CLASS_PATHS`` 同一套）；換 chart 時這裡要
+# 跟著改。``storage`` 的最後一段是「大小」鍵，前面是它所在的 dict。
+_PLAN_SPEC_DEFAULT_PATHS = {
+    'resources': ('resources',),
+    'storage': ('persistence', 'size'),
+}
+_PLAN_SPEC_VALUE_PATHS = {
+    'n8n': {
+        'resources': ('main', 'resources'),
+        'storage': ('main', 'persistence', 'size'),
+    },
+}
+
+
+def _plan_spec_paths(template):
+    """``template`` 的方案規格寫入路徑（#1532）；沒列的範本用頂層預設。"""
+    return _PLAN_SPEC_VALUE_PATHS.get(template.slug, _PLAN_SPEC_DEFAULT_PATHS)
+
+
+def _values_dict_at(values, path):
+    """回傳 ``values`` 在 ``path`` 的 dict，沿路缺的或不是 dict 的層都換成新的 ``{}``。"""
+    d = values
+    for key in path:
+        if not isinstance(d.get(key), dict):
+            d[key] = {}
+        d = d[key]
+    return d
+
+
+def _value_at(values, path):
+    """``values`` 在 ``path`` 的值；任一層缺或不是 dict 回 ``None``（純讀）。"""
+    d = values
+    for key in path:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(key)
+    return d
+
+
+#: 舊 overlay（#1532 以前）在**不讀頂層**的 chart 上留下的殘值：頂層 ``resources`` 只有
+#: requests／limits 的 cpu／memory、頂層 ``persistence`` 只有 size。形狀完全符合才移除，
+#: 避免誤刪別人有意寫的值。
+_LEGACY_TOP_LEVEL_RESOURCE_KEYS = {'requests', 'limits'}
+_LEGACY_TOP_LEVEL_QUANTITY_KEYS = {'cpu', 'memory'}
+
+
+def _drop_legacy_top_level_plan_spec(values):
+    """移除舊 overlay 寫在頂層、chart 根本不讀的方案規格殘值（#1532）。就地修改。"""
+    res = values.get('resources')
+    if (isinstance(res, dict) and set(res) <= _LEGACY_TOP_LEVEL_RESOURCE_KEYS
+            and all(isinstance(v, dict) and set(v) <= _LEGACY_TOP_LEVEL_QUANTITY_KEYS
+                    for v in res.values())):
+        values.pop('resources')
+    persistence = values.get('persistence')
+    if isinstance(persistence, dict) and set(persistence) <= {'size'}:
+        values.pop('persistence')
+
+
 # #1334 附帶：n8n 要知道自己的公開網址，否則 webhook 節點顯示的網址、OAuth
 # 憑證的 callback、邀請信連結都會是 ``http://localhost:5678``。8gears chart 的
 # ``main.config`` 每個鍵直接變成容器 env（``toEnvVars``）。
@@ -9457,12 +9523,12 @@ class CloudService(models.Model):
         """#1158 Q4：``plan`` 套在 ``values`` 上時帳面 ``allocated_*`` 應有的值。
 
         CPU／RAM 照 ``_allocated_vals_from``；儲存記**實際**大小（只擴不縮之下可能大於
-        方案值），讀不到實際大小時退回方案值。
+        方案值），讀不到實際大小時退回方案值。大小從 chart 真正讀的路徑取（#1532）。
         """
         self.ensure_one()
         vals = self._allocated_vals_from(self.template_id, plan)
         if plan.cs_storage_gb:
-            size = (values.get('persistence') or {}).get('size')
+            size = _value_at(values, _plan_spec_paths(self.template_id)['storage'])
             gib = _storage_quantity_gib(size) if size else None
             if gib is not None:
                 vals['allocated_storage_gb'] = math.ceil(gib)
@@ -9473,9 +9539,19 @@ class CloudService(models.Model):
 
         逐欄比對「現值」與「舊方案推得的值」：不相等＝營運手調過（例：prod service 174
         刻意調大 allocated 來放大 ns quota），保留現值、只 log——租戶換方案不該把它洗掉。
+
+        #1532：「舊方案推得的值」以「舊 values 疊上舊方案」計（與部署時
+        ``_assemble_deploy_values`` 同一條 overlay）。overlay 已寫對路徑的服務這是
+        no-op；#1532 以前開通的 n8n 存的是範本的 ``main.persistence.size``（2Gi），直接讀
+        會被誤判成營運手調而保留舊的 ``allocated_storage_gb``。
         """
         self.ensure_one()
-        expected_old = self._plan_allocated_vals(old_plan, old_values)
+        try:
+            old_effective = self._apply_plan_spec_overlay(
+                copy.deepcopy(old_values or {}), self.template_id, old_plan, existing=True)
+        except ValueError:
+            old_effective = old_values
+        expected_old = self._plan_allocated_vals(old_plan, old_effective)
         target = self._plan_allocated_vals(new_plan, new_values)
         vals = {}
         for field, new in target.items():
@@ -9508,23 +9584,32 @@ class CloudService(models.Model):
 
         #1130：woow-odoo chart 的 template 改寫 typed `conf.workers`／
         `conf.limitMemory{Hard,Soft}`（同一組公式）；上面的字串替換只剩 Bitnami 形。
+
+        #1532：規格寫到 ``_plan_spec_paths(template)``——chart 真正讀的路徑（n8n 是
+        ``main.resources``／``main.persistence.size``）。路徑不是頂層的 chart，順手移除舊
+        overlay 留在頂層的殘值（``_drop_legacy_top_level_plan_spec``）。
         """
+        paths = _plan_spec_paths(template)
         if plan.cs_vcpu:
-            res = values.setdefault('resources', {})
+            res = _values_dict_at(values, paths['resources'])
             for key in ('requests', 'limits'):
-                res.setdefault(key, {})['cpu'] = str(plan.cs_vcpu)
+                _values_dict_at(res, (key,))['cpu'] = str(plan.cs_vcpu)
         if plan.cs_ram_gb:
             mem = (f'{int(plan.cs_ram_gb)}Gi'
                    if float(plan.cs_ram_gb).is_integer()
                    else f'{int(plan.cs_ram_gb * 1024)}Mi')
-            res = values.setdefault('resources', {})
+            res = _values_dict_at(values, paths['resources'])
             for key in ('requests', 'limits'):
-                res.setdefault(key, {})['memory'] = mem
+                _values_dict_at(res, (key,))['memory'] = mem
         if plan.cs_storage_gb:
-            persistence = values.setdefault('persistence', {})
-            persistence['size'] = (
-                self._plan_storage_size(persistence.get('size'), plan.cs_storage_gb)
+            *parent_path, size_key = paths['storage']
+            persistence = _values_dict_at(values, parent_path)
+            persistence[size_key] = (
+                self._plan_storage_size(persistence.get(size_key), plan.cs_storage_gb)
                 if existing else f'{plan.cs_storage_gb}Gi')
+        if paths is not _PLAN_SPEC_DEFAULT_PATHS and (
+                plan.cs_vcpu or plan.cs_ram_gb or plan.cs_storage_gb):
+            _drop_legacy_top_level_plan_spec(values)
         conf = values.get('conf')
         if plan.cs_odoo_workers and template._is_woow_odoo_chart():
             # #1130：woow-odoo 的 odoo.conf 是 chart render 的 Secret，plan 只能寫 typed

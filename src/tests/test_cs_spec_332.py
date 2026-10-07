@@ -176,13 +176,16 @@ class TestPlanSpecOverlay(TransactionCase):
         self.assertEqual(out, base)
 
     def test_n8n_no_workers_touch(self):
-        """n8n plan（workers=0）：不碰 script；resources 照 overlay。"""
+        """n8n plan（workers=0）：不碰 script；resources 照 overlay。
+
+        #1532：8gears chart 讀 ``main.resources``（頂層 resources 它根本不讀）。"""
         Svc = self.env['woow_paas_platform.cloud_service']
         tpl = self.env.ref('woow_paas_platform.cloud_app_n8n')
         plan = self.env.ref('woow_paas_platform.plan_n8n_t3_monthly')
         base = json.loads(tpl.helm_default_values)
         out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, plan)
-        self.assertEqual(out['resources']['requests']['cpu'], '2')
+        self.assertEqual(out['main']['resources']['requests']['cpu'], '2')
+        self.assertNotIn('resources', out)
         self.assertEqual(
             out.get('customPostInitScripts'), base.get('customPostInitScripts'))
 

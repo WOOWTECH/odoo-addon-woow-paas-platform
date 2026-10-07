@@ -106,7 +106,13 @@
                  `<release>-n8n-app-secret`，而 operator 的 n8n init 最後一步要把真的 API key 寫進這個
                  Secret，找不到就判 partial、服務卡在 initializing。以前這個值是平台在 mcp_enabled 時
                  注入的；#1429 移除內建 MCP 後改成範本直接帶。值本身不是秘密，init 成功後會被換成真的 key。 -->
-            <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}},
+            <!-- #1532：拿掉 `config.database.type`（原本的「Database Type」選項）。8gears chart 不讀頂層
+                 `config`，選 postgres 從來沒有作用（也沒有附 PostgreSQL），一律是 SQLite（PVC 上的
+                 /home/node/.n8n/database.sqlite）。要真的支援 PostgreSQL 得另外部署 DB、管密碼與備份，
+                 並寫 `main.config.DB_TYPE=postgresdb`／`DB_POSTGRESDB_*`，屬另一張單的範圍。
+                 方案規格（cs_*）由平台 overlay 寫進 `main.resources`／`main.persistence.size`
+                 （cloud_service `_PLAN_SPEC_VALUE_PATHS`）；下面 `main.*` 的值只是沒有方案時的預設。 -->
+            <field name="helm_default_values">{
                 "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n",
                 "tag": "20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2"},
                 "main":
@@ -126,8 +132,6 @@
                 {"key": "_init.owner_password", "label": "n8n Admin Password", "type": "password",
                 "description": "至少 8 字元，需含大小寫字母與數字"}
                 ], "optional": [
-                {"key": "config.database.type", "label": "Database Type", "type": "select",
-                "default": "sqlite", "options": ["sqlite", "postgres"]},
                 {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select",
                 "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
                 "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]},

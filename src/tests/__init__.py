@@ -1087,3 +1087,5 @@ from . import test_refund_credit_note_1555
 from . import test_skip_trial_end_date_1562
 # #1574：上游到期 cron 跳過 never-expire 方案（平台訂閱不得在第一期最後一天被轉 expire）。
 from . import test_auto_expire_never_expire_1574
+# #1532：n8n 方案規格寫進 8gears chart 讀的 main.resources／main.persistence.size；拿掉 Database Type。
+from . import test_n8n_plan_spec_paths_1532
