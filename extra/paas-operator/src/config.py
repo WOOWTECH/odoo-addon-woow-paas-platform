@@ -45,6 +45,36 @@ class Settings(BaseSettings):
     tenant_ephemeral_storage_default_request: str = "128Mi"
     tenant_ephemeral_storage_default_limit: str = "4Gi"
 
+    # #1441／#1436／#514「工作區＝自己的區域網路」（src/services/tenant_baseline.py）。
+    # 兩個開關都是 kill switch，預設關＝行為與本變更之前完全相同，operator 可以先發版；
+    # 由 Fleet values（paas-operator chart config.tenantBaselineEgress／tenantPodSecurity）
+    # 在既有 namespace 回填並驗證之後才翻開。開了之後，每次建立／重跑 create_namespace
+    # 與 POST /api/namespaces/{name}/baseline-netpol 都會套用。
+    #
+    # TENANT_BASELINE_EGRESS_ENABLED：租戶 ns 加 NetworkPolicy paas-baseline-egress
+    # （同 ns 全通＋kube-dns 53＋公網排除私網／metadata／CGNAT／多播／240/4）。
+    tenant_baseline_egress_enabled: bool = False
+    # TENANT_POD_SECURITY_ENABLED：租戶 ns 加 pod-security.kubernetes.io/enforce=<level>
+    # （＋warn／audit），例外清單內的 ns 不加、並移除殘留的 PSA 標籤。
+    tenant_pod_security_enabled: bool = False
+    tenant_psa_enforce_level: str = "baseline"   # env TENANT_PSA_ENFORCE_LEVEL
+    tenant_psa_warn_level: str = "restricted"    # env TENANT_PSA_WARN_LEVEL（只警告）
+    tenant_psa_audit_level: str = "restricted"   # env TENANT_PSA_AUDIT_LEVEL（只稽核）
+    # 釘 Pod Security Standards 版本＝叢集的 k8s 小版號（woow-k3s v1.34），避免升 k8s 時
+    # 標準悄悄變嚴把既有 pod 擋掉；升級叢集時一起檢查再改。
+    tenant_psa_version: str = "v1.34"            # env TENANT_PSA_VERSION
+    # 逗號分隔。只能放管理者自己的 ns，每加一個都要寫理由（見 tenant_baseline 的註解）。
+    psa_exempt_namespaces: str = "paas-ws-ab6564da"  # env PSA_EXEMPT_NAMESPACES
+
+    @field_validator("tenant_psa_enforce_level", "tenant_psa_warn_level",
+                     "tenant_psa_audit_level")
+    @classmethod
+    def _validate_psa_level(cls, v: str) -> str:
+        allowed = {"", "privileged", "baseline", "restricted"}
+        if v not in allowed:
+            raise ValueError(f"PSA level must be one of {sorted(allowed)}; got {v!r}")
+        return v
+
     # Private Registry (for tenant namespace imagePullSecrets)
     registry_server: str = ""
     registry_username: str = ""

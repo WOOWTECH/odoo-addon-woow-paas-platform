@@ -89,6 +89,7 @@ class PlatformMonitor(models.Model):
     SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner not yet confirmed by the platform'
     SUMMARY_STORAGE_LOW = 'PaaS monitor: cluster storage scheduling capacity is running low'
     SUMMARY_STORAGE_REJECTED = 'PaaS monitor: deployments rejected for lack of cluster storage'
+    SUMMARY_STORAGE_EXPANSION_REJECTED = 'PaaS monitor: plan changes rejected because a disk cannot be enlarged'
 
     @api.model
     def _singleton(self):
@@ -462,6 +463,22 @@ class PlatformMonitor(models.Model):
             '(Longhorn) has no room for their disks. The tenants were told to retry later. Free '
             'scheduling capacity (for example orphaned PVCs still in their retention period) or '
             'add storage:'), append_line=line)
+
+    @api.model
+    def _report_storage_expansion_rejection(self, service, plan, detail):
+        """#1513：換方案在扣款前被 operator 升級預檢擋下（磁碟擴不了）——一台一行。"""
+        pvcs = ', '.join(
+            '%s %s→%s' % (v.get('name'), v.get('live'), v.get('rendered'))
+            for v in detail.get('pvcs') or [] if isinstance(v, dict))
+        line = _(
+            '%(name)s (id=%(id)s, namespace %(ns)s) → plan "%(plan)s": %(pvcs)s (%(reason)s)',
+            name=service.name, id=service.id, ns=detail.get('namespace') or '?',
+            plan=plan.name, pvcs=pvcs or '?', reason=detail.get('reason') or '?')
+        return self._safe_alert(self.SUMMARY_STORAGE_EXPANSION_REJECTED, _(
+            'Plan changes were rejected before anything was charged or applied because a disk '
+            'could not be enlarged (reason "capacity" means the cluster storage (Longhorn) has no '
+            'room for the extra size on the disks holding its replicas). Free scheduling capacity '
+            'or add storage, then ask the tenant to try again:'), append_line=line)
 
     @api.model
     def _orphans_text(self, orphans):

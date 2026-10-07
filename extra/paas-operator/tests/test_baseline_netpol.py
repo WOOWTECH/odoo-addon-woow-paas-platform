@@ -63,6 +63,7 @@ def test_baseline_bundle_stg_four_nps(mock_settings):
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
     mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     names = [x["metadata"]["name"] for x in m]
     assert names == [
@@ -86,6 +87,7 @@ def test_default_deny_has_no_ingress(mock_settings):
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
     mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     dd = next(x for x in m if x["metadata"]["name"] == "paas-baseline-default-deny-ingress")
     assert "ingress" not in dd["spec"]
@@ -96,6 +98,7 @@ def test_same_ns_allows_podselector_empty(mock_settings):
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
     mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     same = next(x for x in m if x["metadata"]["name"] == "paas-baseline-allow-same-ns")
     assert same["spec"]["ingress"] == [{"from": [{"podSelector": {}}]}]
@@ -107,6 +110,7 @@ def test_cloudflared_selects_connector_ns(mock_settings):
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
     mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     cf = next(x for x in m if x["metadata"]["name"] == "paas-baseline-allow-cloudflared")
     assert cf["spec"]["ingress"] == [{"from": [{"namespaceSelector": {
@@ -119,6 +123,7 @@ def test_mcp_reach_selector_reach_ws_plus_env(mock_settings):
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
     mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture(wid=3)
     mcp = next(x for x in m if x["metadata"]["name"] == "paas-baseline-allow-mcp-reach")
     ingress = mcp["spec"]["ingress"][0]
@@ -134,6 +139,7 @@ def test_dev_no_env_no_cloudflared_three_nps(mock_settings):
     mock_settings.paas_env = ""
     mock_settings.cloudflared_namespace = ""
     mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     names = [x["metadata"]["name"] for x in m]
     assert "paas-baseline-allow-cloudflared" not in names
@@ -163,9 +169,11 @@ def test_create_namespace_wires_baseline_when_workspace_id(mock_run, mock_settin
     # #423：本組只驗 baseline NP 接線，default-SA 收斂另有專屬測試；
     # 這裡 mock 掉，避免 settings 被整顆 MagicMock 化後 json.dumps 炸開。
     k.ensure_default_sa_image_pull_secret = MagicMock()
+    k.apply_pod_security = MagicMock()  # #1441：PSA 另有專屬測試
     k.create_namespace("paas-ws-stg-abc", cpu_limit="1", memory_limit="1Gi",
                        storage_limit="1Gi", workspace_id=7)
     k._apply_baseline_netpol.assert_called_once_with("paas-ws-stg-abc", 7)
+    k.apply_pod_security.assert_called_once_with("paas-ws-stg-abc")
 
 
 @patch("src.services.helm.settings")
@@ -186,8 +194,10 @@ def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_set
     # #423：本組只驗 baseline NP 接線，default-SA 收斂另有專屬測試；
     # 這裡 mock 掉，避免 settings 被整顆 MagicMock 化後 json.dumps 炸開。
     k.ensure_default_sa_image_pull_secret = MagicMock()
+    k.apply_pod_security = MagicMock()
     k.create_namespace("paas-ws-dev", cpu_limit="1", memory_limit="1Gi", storage_limit="1Gi")
     k._apply_baseline_netpol.assert_not_called()
+    k.apply_pod_security.assert_not_called()  # 非租戶 ns 不加 PSA（與 NP 同一個判準）
 
 
 # --- P5 backfill: stamp_managed_ns_labels ------------------------------------

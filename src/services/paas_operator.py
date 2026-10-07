@@ -60,6 +60,10 @@ RESET_CONFIG_TIMEOUT = 75
 # 由 scripts/audit/repo-lint.py 的 check_app_admin_reset_budget_ladder 驗算。
 APP_ADMIN_RESET_TIMEOUT = 75
 
+#: #1513：operator ``upgrade-preflight``／upgrade 擴容被拒的 409 ``detail.error_code``
+#: （extra/paas-operator ``upgrade_preflight.STORAGE_EXPANSION_ERROR_CODE``；改名兩邊一起改）。
+STORAGE_EXPANSION_ERROR_CODE = 'storage_expansion_rejected'
+
 
 class PaaSOperatorError(Exception):
     """Base exception for PaaS Operator client errors."""
@@ -469,6 +473,49 @@ class PaaSOperatorClient:
         return self._request(
             'PATCH',
             f'/api/releases/{namespace}/{release_name}',
+            data=data,
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def upgrade_preflight(
+        self,
+        namespace: str,
+        release_name: str,
+        values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
+        version: Optional[str] = None,
+        chart: Optional[str] = None,
+        reset_values: bool = False,
+        reuse_values: bool = False,
+    ) -> Dict[str, Any]:
+        """#1513：用與 ``upgrade_release`` **同一組**參數跑 operator 的升級預檢，不套用任何東西。
+
+        operator 會 dry-run 渲染、比對不可變欄位（#1407），並對每顆要變大的 PVC 送
+        ``kubectl patch --dry-run=server``，由 Longhorn validator 判斷擴得了嗎。
+
+        Returns:
+            ``{"ok": True, "expansions": [...]}``
+
+        Raises:
+            PaaSOperatorAPIError: 409（擴容被拒的 ``detail`` 是 dict，``error_code``＝
+                ``storage_expansion_rejected``；不可變欄位衝突是字串）；舊版 operator 沒有這個
+                端點時 404。
+        """
+        data = {
+            'reset_values': reset_values,
+            'reuse_values': reuse_values,
+        }
+        if chart:
+            data['chart'] = chart
+        if version:
+            data['version'] = version
+        if values:
+            data['values'] = values
+        if sensitive_values:
+            data['sensitive_values'] = sensitive_values
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/upgrade-preflight',
             data=data,
             timeout=HELM_OPERATION_TIMEOUT,
         )

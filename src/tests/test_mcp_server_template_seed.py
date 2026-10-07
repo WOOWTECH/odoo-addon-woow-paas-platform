@@ -1,7 +1,7 @@
 """Seed assertions for the mcp-server chart family of cloud service templates.
 
 家族成員（8 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
-hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm（2026-10-05 以隱藏範本進 seed）。
+hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm（2026-10-05 以隱藏範本進 seed，10-07 公開上架）。
 
 ## 為什麼是兩層 mixin（#686）
 
@@ -93,7 +93,7 @@ class _McpServerFamilyAssertions:
     # seed 覆寫的 config.nonSensitive.mcp_server.command。**None＝刻意不覆寫、
     # 吃 chart 預設**（只有 pilot hermes 是這個形態）。
     EXPECT_MCP_COMMAND = None
-    # 上架與否；目前 8 個成員都是 True（mcp-litellm 隱藏是 is_hidden，與本欄正交），欄位保留給未來待上架的成員。
+    # 上架與否；目前 8 個成員都是 True（is_hidden 是曝光層，與本欄正交：odoo-manage 已下架仍 True），欄位保留給未來待上架的成員。
     EXPECT_ACTIVE = True
     # 月繳／年繳定價。hermes 是 1500／15000（#330 定價重定），其餘齊一 3000／24000。
     EXPECT_PLAN_PRICE_M = 3000
@@ -344,7 +344,10 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 2026-10-06 重釘 d5032a72（woow-mcp-server #34，#1500 看門狗）：已覆核 e310dfe0..d5032a72 之間
     # apps/odoo 與 uv.lock 的 odoo-mcp（1.1.0）／mcp（1.28.1）皆未變，只有 mcp-admin-core process.py
     # 改動，console script ``odoo-mcp`` 與 streamable-http args 照舊成立。
-    EXPECT_IMAGE_TAG = 'd5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:aa02feab68f0e140d9e7dd3ac995b955ff2e54b760be588d5bd966dbd0305441'
+    # 2026-10-07 重釘 cfc2a2b（woow-mcp-server #37，#1500 跟進：狀態 API 補看門狗欄位）：已覆核
+    # d5032a72..cfc2a2b 只動 mcp-admin-core routers/settings.py 與其測試，apps/odoo、uv.lock 未變，
+    # console script ``odoo-mcp`` 與 streamable-http args 照舊成立。
+    EXPECT_IMAGE_TAG = 'cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
@@ -484,8 +487,8 @@ class TestMcpLitellmTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     """mcp-litellm template（PLAN §10）：LiteLLM 管理 MCP，launcher 直跑 Streamable HTTP。
 
     唯一 envPrefix 非空的非 pilot 成員（``LITELLM_MCP_``：connection 鍵 base_url／master_key 經前綴
-    注入子行程）。出廠唯讀、同工作區網址注入、隱藏盤點等本 app 專屬守線在 test_mcp_litellm_seed.py；
-    這裡只守家族不變式。``is_hidden=True`` 不影響 ``is_active``（曝光層與上架旗標正交）。
+    注入子行程）。出廠唯讀、同工作區網址注入、上架即雙釘等本 app 專屬守線在 test_mcp_litellm_seed.py；
+    這裡只守家族不變式。``is_hidden`` 不影響 ``is_active``（曝光層與上架旗標正交；2026-10-07 公開上架）。
     """
 
     SLUG = 'mcp-litellm'
