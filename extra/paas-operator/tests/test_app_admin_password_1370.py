@@ -161,6 +161,23 @@ class _FakeCursor:
         self.log.append("rollback")
 
 
+class _FakeRegistry:
+    def __init__(self, log, signal_error=None):
+        self.log = log
+        self.signal_error = signal_error
+
+    def cursor(self):
+        return _FakeCursor(self.log)
+
+    def clear_cache(self):
+        self.log.append("clear_cache")
+
+    def signal_changes(self):
+        if self.signal_error:
+            raise self.signal_error
+        self.log.append("signal_changes")
+
+
 def _fake_odoo(user, log):
     config = {"db_name": "tenant"}
     odoo = types.ModuleType("odoo")
@@ -168,7 +185,7 @@ def _fake_odoo(user, log):
     odoo.tools = types.SimpleNamespace(config=MagicMock())
     odoo.tools.config.__getitem__ = lambda self, key: config[key]
     odoo.tools.config.parse_config = lambda args: log.append(("parse_config", tuple(args)))
-    odoo.registry = lambda db: types.SimpleNamespace(cursor=lambda: _FakeCursor(log))
+    odoo.registry = lambda db: _FakeRegistry(log)
     odoo.api = types.SimpleNamespace(Environment=lambda cr, uid, ctx: FakeEnv(user))
     return odoo
 
@@ -192,6 +209,31 @@ def test_odoo_script_main_commits_only_on_success(user, committed, monkeypatch, 
     assert ("parse_config", ("-c", "/etc/odoo/odoo.conf", "--no-http")) in log
     assert ("commit" in log) is committed
     assert ("rollback" in log) is (not committed)
+    # #1485：commit（且 cursor 關閉）之後才通知其他 worker；失敗時什麼都不送。
+    if committed:
+        assert log[-3:] == ["close", "clear_cache", "signal_changes"], log
+        assert log.index("commit") < log.index("signal_changes")
+    else:
+        assert "signal_changes" not in log and "clear_cache" not in log
+
+
+def test_odoo_script_signal_failure_after_commit_is_not_a_plain_failure(monkeypatch, capsys):
+    """#1485：密碼已 commit、訊號送不出去——回 sessions_not_revoked，不可冒充「什麼都沒改」。"""
+    log = []
+    odoo = _fake_odoo(FakeUser(), log)
+    odoo.registry = lambda db: _FakeRegistry(log, signal_error=RuntimeError("db gone " + NEW_PASSWORD))
+    monkeypatch.setitem(sys.modules, "odoo", odoo)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(NEW_PASSWORD))
+
+    with pytest.raises(SystemExit):
+        _load_odoo_script()["main"]()
+
+    out = capsys.readouterr().out
+    payload = json.loads(out.strip().splitlines()[-1])
+    assert (payload["success"], payload["code"]) == (False, "sessions_not_revoked")
+    assert "RuntimeError" in payload["error"]
+    assert NEW_PASSWORD not in out
+    assert "commit" in log
 
 
 def test_odoo_script_main_reports_exception_class_only(monkeypatch, capsys):
@@ -290,6 +332,18 @@ def test_service_script_failure_is_failed_with_code(k8s):
         AppAdminPasswordService(k8s).reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
 
     assert (exc.value.kind, exc.value.code, str(exc.value)) == ("failed", "admin_inactive", "archived")
+
+
+def test_service_failure_after_commit_is_unknown(k8s):
+    """#1485：密碼已 commit、只差通知 worker——平台不得宣稱「密碼未變」⇒ unknown。"""
+    k8s.exec_in_pod.side_effect = KubectlException(
+        "exit 1", "kubectl exec", "command terminated with exit code 1",
+        stdout='{"success": false, "code": "sessions_not_revoked", "error": "signal failed"}\n')
+
+    with pytest.raises(AppAdminResetError) as exc:
+        AppAdminPasswordService(k8s).reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
+
+    assert (exc.value.kind, exc.value.code) == ("unknown", "sessions_not_revoked")
 
 
 @pytest.mark.parametrize("side_effect", [

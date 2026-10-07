@@ -3049,6 +3049,44 @@ class KubernetesService:
         )
         return json.loads(result.stdout or "{}").get("items", [])
 
+    def list_orphaned_release_resources(
+        self, namespace: str, release_name: str
+    ) -> Dict[str, List[str]]:
+        """#1157：namespace 內屬於 ``release_name`` 且帶孤兒標記的 PVC／DataVolume（唯讀）。
+
+        選取條件＝uninstall 時 ``build_orphan_pvc_labels`` 打上的兩個 label：
+        ``paas.woowtech.io/release-name=<release>`` **且**有 ``paas.woowtech.io/orphaned-at``。
+        同名重裝會讓 helm 靜默接回這些資源，而回收 CronJob 只看孤兒標記 ⇒ 保留期一到就刪掉
+        活站資料；``create_release`` 據此回 409（#1157 裁決 A）。
+
+        叢集沒有 CDI（DataVolume CRD 不存在）時 ``datavolumes`` 回空 list；其他 kubectl 失敗
+        一律 raise，由呼叫端決定（install 前的檢查走 fail-closed）。
+
+        Returns:
+            ``{"pvcs": [...names], "datavolumes": [...names]}``
+
+        Raises:
+            ValueError: namespace 越界，或 release name 不是合法的 label 值（會改變 selector 語意）。
+            KubectlException: 查詢失敗（CDI 不存在除外）。
+        """
+        from src.services.storage_quota import ORPHANED_AT_LABEL, RELEASE_NAME_LABEL
+
+        validate_namespace(namespace)
+        # release name 直接拼進 selector：含 ',' 等字元會變成另一個 selector，
+        # 先用 label 值語法擋掉（合法的 helm release name 一定也是合法的 label 值）。
+        validate_label_value(RELEASE_NAME_LABEL, release_name)
+        selector = f"{RELEASE_NAME_LABEL}={release_name},{ORPHANED_AT_LABEL}"
+
+        pvcs = self.list_pvcs(namespace, label_selector=selector)
+        datavolumes: List[str] = []
+        if self.has_datavolume_crd():
+            try:
+                datavolumes = self.list_datavolumes(namespace, label_selector=selector)
+            except KubectlException as e:
+                if not self.is_crd_absent_error(e):
+                    raise
+        return {"pvcs": pvcs, "datavolumes": datavolumes}
+
     def get_cdi_filesystem_overhead(self) -> Optional[Dict[str, Any]]:
         """#1415：CDIConfig 的 ``status.filesystemOverhead``（``{"global": "0.06",
         "storageClass": {...}}``）；讀不到回 None（呼叫端用 CDI 預設值）。

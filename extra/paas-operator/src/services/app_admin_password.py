@@ -5,7 +5,8 @@ Omnigent 的 admin（#1370 後續）。
 config.json），所以既有的 reset-config（helm upgrade／exec patch config.json）
 動不到它們。這裡走「exec 一支腳本進 app 容器、直接改 DB」：
 
-- Odoo：``odoo_scripts/reset_admin_password.py``（ORM，同交易清 2FA）
+- Odoo：``odoo_scripts/reset_admin_password.py``（ORM，同交易清 2FA；commit 後送 cache
+  signaling，讓常駐 worker 的 session／密碼快取失效，#1485）
 - n8n：``n8n_scripts/reset_owner_password.js``（bcryptjs hash ＋ 單列 UPDATE，同交易關 MFA）
 - Omnigent：``omnigent_scripts/reset_admin_password.py``（omnigent 自己的 AccountStore＋
   hash_password，與 Members → Reset 同一條寫入；不動 account_generation ⇒ 與上游 admin
@@ -17,7 +18,8 @@ config.json），所以既有的 reset-config（helm upgrade／exec patch config
   operator 的 ``Executing: kubectl ...`` log 與 KubectlException.command，stdin 不會。
 - 不 helm upgrade、不 rollout restart：兩個 app 每次登入都讀 DB，改完立刻生效。
 - 結果分類沿用 ``InitErrorKind``：找不到 pod＝``not_executed``（DB 沒被碰）；
-  腳本自己回報失敗＝``failed``（交易已 rollback，密碼未變）；逾時／輸出不可解析
+  腳本自己回報失敗＝``failed``（交易已 rollback，密碼未變）——例外是 commit 之後才
+  失敗的 ``SCRIPT_CODES_AFTER_COMMIT``（#1485）＝``unknown``；逾時／輸出不可解析
   ＝``unknown``（不知道 commit 了沒有，平台不得宣稱「密碼未變」）。
 """
 
@@ -49,6 +51,9 @@ N8N_CONTAINER_NAME = "n8n"
 OMNIGENT_CONTAINER_NAME = "server"
 # omnigent server image 的 venv python（PATH 上的 python 即此；寫絕對路徑免受 PATH 影響）。
 OMNIGENT_PYTHON = "/opt/venv/bin/python"
+
+# 腳本在 commit **之後**才回報的失敗碼：密碼可能已變 ⇒ 不可歸類成 failed。
+SCRIPT_CODES_AFTER_COMMIT = frozenset({"sessions_not_revoked"})
 
 _SCRIPTS = Path(__file__).resolve().parent
 # import 時就讀——檔案不見要在 operator 啟動當下就炸，不要等到租戶按 Reset 才發現。
@@ -169,5 +174,8 @@ class AppAdminPasswordService:
         code = reported.get("code")
         error = reported.get("error") or "reset script reported a failure"
         logger.warning("%s admin password reset refused by script: code=%s error=%s", app, code, error)
-        return AppAdminResetError(str(error), step="reset", kind="failed", code=code if isinstance(code, str) else None)
+        # 密碼已 commit、只差通知其他 worker（#1485）：不是「交易已 rollback」的確定失敗，
+        # 平台不得宣稱密碼未變 ⇒ unknown（租戶重按一次即補送訊號）。
+        kind: InitErrorKind = "unknown" if code in SCRIPT_CODES_AFTER_COMMIT else "failed"
+        return AppAdminResetError(str(error), step="reset", kind=kind, code=code if isinstance(code, str) else None)
 

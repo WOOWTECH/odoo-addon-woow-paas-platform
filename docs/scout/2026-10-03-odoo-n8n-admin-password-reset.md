@@ -86,6 +86,9 @@ Odoo 與 n8n 都**不是**這種形態：
      （Odoo 18 `odoo/addons/base/models/res_users.py`）。
    - `env.cr.commit()`；最後一行印 `{"success": true, "login": "<login>", "totp_cleared": <bool>}`。
    - 改密碼會改變 session token ⇒ 既有登入 session 自然失效（預期行為，寫進租戶文案）。
+     ⚠ **本條只對冷 process 成立**（#1485，prod 實測重設後舊 session 仍有效）：token 與 RPC
+     密碼檢查都在常駐 worker 的 ormcache 裡，獨立 process 改完 commit 後還要
+     `registry.signal_changes()` 通知其他 worker 清快取，現行腳本已補。
 5. 不需要 rollout restart：Odoo 每次登入都讀 DB，改完立刻生效。
 
 ### 4.2 逾時與錯誤分類
