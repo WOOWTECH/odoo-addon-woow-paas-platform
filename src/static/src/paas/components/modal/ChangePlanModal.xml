@@ -115,16 +115,14 @@
                 <WoowIcon name="'bolt'" size="14"/>
                 <span>The change takes effect immediately: the new plan and its limits apply as soon as you confirm and are billed from today. The unused part of the current period is refunded as described above.</span>
               </div>
-              <!-- #1261／#342：唯一**不是**立即生效的是 Cloud Service 的運算規格。
-                   plan 的 cs_vcpu／cs_ram_gb／cs_storage_gb 只在建立服務時由
-                   `_apply_plan_spec_overlay` 疊進 helm values，change-plan 不觸發
-                   redeploy（#342 查證定案）——不是「下個週期」，是目前根本不會調。
-                   只有 CS 父頁會傳 resourcesNotResized；SA／SH 的方案沒有運算規格。
-                   TODO(Refs #342)：change-plan 生效 re-apply 落地後移除這格
-                   （見 docs/tracking/followups/follow-ups.md F-368-1）。 -->
-              <div t-if="props.resourcesNotResized" class="o_woow_change_plan__notice">
+              <!-- #1158（Closes #342）：Cloud Service 的運算規格也是立即生效——確認後
+                   後端在同一次呼叫內排 helm upgrade，服務重啟套用新方案的 vCPU／RAM／
+                   workers。儲存空間只擴不縮（暫定，#1512）：PVC 不能縮，換到儲存較小的
+                   方案時保留目前大小。只有 CS 父頁會傳 resizesResources；SA／SH 的方案
+                   沒有運算規格。 -->
+              <div t-if="props.resizesResources" class="o_woow_change_plan__notice">
                 <WoowIcon name="'info'" size="14"/>
-                <span>Compute resources (vCPU, RAM, storage) of an already deployed service are not resized by a plan change yet.</span>
+                <span>If the new plan has different compute resources, the service restarts to apply them (about 30 seconds of downtime). Storage is never reduced: on a plan with less storage, the current storage size is kept.</span>
               </div>
             </t>
           </t>

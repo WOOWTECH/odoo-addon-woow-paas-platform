@@ -34,12 +34,12 @@ from ..models.cloud_service import _internal_provision
 JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
 MCP_SERVER_CHART = 'oci://%smcp-server' % JCR
 IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
-# woow-mcp-server #34（mcp-admin-core 子行程看門狗）合進 main 的 merge commit d5032a72；
-# main CI run 15219 job 16285 推的 litellm-mcp-admin（log：「d5032a72…: digest: sha256:7de9a85a…d147」）。
-# 前一個 pin 是 #33 的 0687392f（run 14916），少了看門狗。
+# woow-mcp-server #37（/api/settings/mcp/status 補上看門狗欄位，#1500 跟進）合進 main 的 merge
+# commit cfc2a2b；main CI 推的 litellm-mcp-admin（2026-10-07 以 JCR manifest HEAD 核對 digest）。
+# 前一個 pin 是 #34 的 d5032a72（看門狗本體，run 15219），狀態 API 還沒有 restart_count 等欄位。
 EXPECT_IMAGE_TAG = (
-    'd5032a72f8d8c48b00b474a5193bd2c26ac5613c'
-    '@sha256:7de9a85ab177d0f04c40427bad5d104c3e3915f33a38fd2ff3de3ab8a8e2d147')
+    'cfc2a2b1f7689c970628bd9092f79d9f4779e07f'
+    '@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'

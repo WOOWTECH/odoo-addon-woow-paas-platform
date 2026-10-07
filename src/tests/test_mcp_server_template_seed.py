@@ -344,7 +344,10 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 2026-10-06 重釘 d5032a72（woow-mcp-server #34，#1500 看門狗）：已覆核 e310dfe0..d5032a72 之間
     # apps/odoo 與 uv.lock 的 odoo-mcp（1.1.0）／mcp（1.28.1）皆未變，只有 mcp-admin-core process.py
     # 改動，console script ``odoo-mcp`` 與 streamable-http args 照舊成立。
-    EXPECT_IMAGE_TAG = 'd5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:aa02feab68f0e140d9e7dd3ac995b955ff2e54b760be588d5bd966dbd0305441'
+    # 2026-10-07 重釘 cfc2a2b（woow-mcp-server #37，#1500 跟進：狀態 API 補看門狗欄位）：已覆核
+    # d5032a72..cfc2a2b 只動 mcp-admin-core routers/settings.py 與其測試，apps/odoo、uv.lock 未變，
+    # console script ``odoo-mcp`` 與 streamable-http args 照舊成立。
+    EXPECT_IMAGE_TAG = 'cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

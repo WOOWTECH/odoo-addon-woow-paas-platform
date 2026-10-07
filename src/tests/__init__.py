@@ -1050,3 +1050,5 @@ from . import test_neutralize_1201
 from . import test_helm_values_whitelist_fail_closed_1488
 # #1370 後半：n8n 範本選填 SMTP（忘記密碼／邀請信）。
 from . import test_n8n_smtp_fields_1370
+# #1158：換方案把新方案規格套到已部署服務（overlay 進 assemble、儲存只擴不縮 #1512）。
+from . import test_change_plan_reapply_1158
