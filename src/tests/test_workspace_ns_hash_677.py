@@ -5,8 +5,9 @@
 
 兩件事湊起來才是洞：
 
-1. `Workspace._generate_slug()` 對 `[a-z0-9_-]` 字串是**恆等函式**，而 `name` 是租戶
-   本來就該自由指定的欄位 ⇒ 租戶完全決定自己的 `slug`。
+1. `Workspace._generate_slug()` 對**未被佔用**的 `[a-z0-9_-]` 字串仍是恆等函式，
+   而 `name` 是租戶本來就該自由指定的欄位 ⇒ 未撞名時 slug 仍逐字等於 name。
+   #1516 起撞名會加 `-{6 hex}` 隨機後綴，不改這組未佔用的歷史碰撞對。
 2. namespace／公開子網域是 `md5(slug)[:8]` ＝ **32 bit 截斷**。`UNIQUE(slug)` 只擋
    得住**字面相同**的 slug，擋不住兩個不同 slug 映到同一個 namespace。
 
@@ -24,13 +25,12 @@
 `UNIQUE(ws_hash)` SQL constraint。所有 namespace／subdomain 推導改吃這個 stored 值，
 不再吃 `slug`。
 
-🔴 **為什麼不能用「create 時 search 一下有沒有撞到」那種檢查**（本檔 N2 是它的
-陽性對照）：`Workspace._generate_slug()` 既有的唯一性迴圈
-`while self.search_count([('slug','=',slug)]) > 0` **沒有 `sudo()`** ⇒ 走呼叫者身分
-⇒ 受 ir.rule 限制 ⇒ **看不到別的租戶的 workspace**。攻擊者正好就站在「看不見受害者」
-這個位置上，所以任何以呼叫者身分做的碰撞檢查對他一律回 0、**靜默放行**。今天字面
-碰撞擋得住是靠 DB 的 `UNIQUE(slug)`（它不看 ir.rule）拋 IntegrityError，不是靠那個
-迴圈。⇒ 唯一站得住的守線在 DB 層：N2 量出「攻擊者看不見」，N3 量出「DB 仍然擋得下」。
+🔴 **為什麼 create 時查重不能取代 DB UNIQUE**：#1516 起
+`Workspace._generate_slug()` 已以 sudo 全域查重，包含其他租戶與孤兒；但查詢與
+INSERT 之間仍有 TOCTOU，因此 `UNIQUE(slug)` 才是 slug 唯一性的真正守線。
+`ws_hash` 同樣靠 DB 的 `UNIQUE(ws_hash)` 保證，而不是 Python 查重迴圈。
+N2 仍量出「攻擊者以自己的身分看不見受害者」（ir.rule 沒被放寬），N3 則繞過
+Python 層，量出「DB 仍擋得下重複 namespace 身分」。
 
 隨機值（`secrets.token_hex(4)`）而不是 `md5(slug)`／`hmac(secret, id)` 的理由寫在
 `workspace.py::_generate_ws_hash` 的 docstring，這裡不重複。
@@ -141,7 +141,7 @@ class TestWorkspaceNamespaceHash677(HttpCase):
             {'name': VICTIM_NAME})
         self.assertEqual(
             self.victim_ws.sudo().slug, VICTIM_NAME,
-            'fixture 前提：`_generate_slug` 對這個字串是恆等函式（本 PR 沒有改它）')
+            'fixture 前提：`_generate_slug` 對這個未被佔用的字串仍是恆等函式')
 
     # ------------------------------------------------------------------ #
     #  helper                                                             #
@@ -238,11 +238,10 @@ class TestWorkspaceNamespaceHash677(HttpCase):
 
         attacker_ws = self._attacker_creates_colliding_workspace()
 
-        # 缺口的機制本身**沒有被關掉**，也刻意不關：slug 仍逐字等於租戶給的 name。
+        # #1516 起撞名才加隨機後綴；本 fixture 未撞名，slug 仍逐字等於 name。
         self.assertEqual(
             attacker_ws.slug, ATTACKER_NAME,
-            '本 PR 不改 slug 生成（那會波及 #525 A2 鎖死的行為）；改的是 namespace '
-            '身分不再由 slug 決定')
+            '未被佔用的 name 仍逐字成為 slug；namespace 身分不得由 slug 決定')
 
         victim_seg = self._sa_ws_segment(self._sa_canonical_name(self.victim_ws))
         attacker_seg = self._sa_ws_segment(self._sa_canonical_name(attacker_ws))
@@ -275,7 +274,8 @@ class TestWorkspaceNamespaceHash677(HttpCase):
         攻擊者以自己的身分 search 受害者的 workspace 一律回 0（ir.rule 讓他看不見），
         而 `sudo()` 看得到 1。⇒ 任何以呼叫者身分做的碰撞檢查在攻擊路徑上恆回「沒撞到」
         並**靜默放行**——這正是本 repo 記錄有案的「壞掉的探針最愛回答『零／空／
-        找不到』」。能同時看見雙方的只有不看 ir.rule 的 DB constraint（N3）。
+        找不到』」。#1516 起產生器已用 sudo 看見雙方，但仍有 TOCTOU；真正的
+        唯一性保證仍在不看 ir.rule 的 DB constraint（N3）。
 
         沒有這條，N1 綠了也不知道測試有沒有真的走在攻擊路徑上（攻擊者若剛好看得見
         受害者，整組攻擊前提就不成立）。

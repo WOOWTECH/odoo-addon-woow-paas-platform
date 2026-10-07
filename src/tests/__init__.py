@@ -390,9 +390,9 @@ from . import test_workspace_access_authz_664
 # ＋ model 層 identity anchor（owner_id / slug，create 與 write 兩個方向）
 # ＋ migration 18.0.1.0.131 退役兩條 sticky 舊 rule（HttpCase，group_user-only）
 from . import test_workspace_authz_658
-# fix: #677 租戶可經 workspace name 決定自己的 K8s namespace —— slug 由 name 逐字
-# 推導 ＋ namespace 是 md5(slug)[:8] 的 32-bit 截斷。改用 stored `ws_hash` 欄位
-# ＋ DB 層 UNIQUE（呼叫者身分的 search 在跨租戶下是瞎的）（HttpCase，group_user-only）
+# fix: #677 租戶可經未撞名的 workspace name 影響 slug，舊 namespace 卻吃
+# md5(slug)[:8] 的 32-bit 截斷。改用 stored `ws_hash` ＋ DB 層 UNIQUE。
+# #1516 起 slug 查重已 sudo 化、撞名加隨機後綴；TOCTOU 仍由 DB 擋（HttpCase）。
 from . import test_workspace_ns_hash_677
 # fix: #676 cloud_service 的 ir.rule 無 role 條件 ⇒ guest 成員可對該 workspace 的
 # 每一筆服務全 CRUD（含走 helm 清理的 unlink）。A 系列＝讀寫拆開後的授權矩陣；
@@ -1052,3 +1052,5 @@ from . import test_helm_values_whitelist_fail_closed_1488
 from . import test_n8n_smtp_fields_1370
 # #1158：換方案把新方案規格套到已部署服務（overlay 進 assemble、儲存只擴不縮 #1512）。
 from . import test_change_plan_reapply_1158
+# #1516：跨使用者同名建立，slug 全域查重與隨機 hex 後綴。
+from . import test_workspace_slug_1516

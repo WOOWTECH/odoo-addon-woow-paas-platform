@@ -46,11 +46,11 @@
 namespace 的 workspace，之後在自己的 workspace 部署服務就會落進受害者的 K8s
 namespace。X7-X10、X14 關掉的是「呼叫端**直接指定** slug／owner_id」這一族通道。
 
-🔴 **但「slug 由伺服器決定」這句話即使加了 create 守衛也仍然是假的**，不要那樣讀：
-`_generate_slug()` 對 `[a-z0-9_-]` 字串是恆等函式，租戶把同一個字串放進 `name`
-就得到逐字相同的 slug（`name` 本來就該由租戶自由指定）。這條通道**本 PR 沒有關**，
-它是先前就存在的，修它要動 slug 生成或 namespace 推導（會波及既有部署與 #525 A2
-已鎖死的行為）⇒ 另開 issue。守門測試見 `test_X8b_*`。
+🔴 **create 守衛不等於 slug 不受租戶輸入影響**：`_generate_slug()` 對未被佔用的
+`[a-z0-9_-]` 字串仍是恆等函式，租戶把同一個字串放進 `name`，未撞名時就得到
+逐字相同的 slug（`name` 本來就該由租戶自由指定）。#1516 起撞名才加伺服器產生的
+`-{6 hex}` 後綴，查重也已 sudo 化；未佔用時的 name 通道仍開著。#677 已把
+namespace 推導移到 stored `ws_hash`，不再受 slug 影響。守門測試見 `test_X8b_*`。
 
 而 create 方向的守衛**不能看 raw vals**：context 的 `default_<field>` 是 RPC
 用戶端可控的（`call_kw` 整份取代 context、不是 merge），default 要到
@@ -434,18 +434,20 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
     def test_X8b_name_derives_the_slug_verbatim_documented_gap(self):
         """📌 **已知殘留缺口的守門測試**（不是攻擊測試，也不是回歸對照）。
 
-        `_generate_slug()` 對 `[a-z0-9_-]` 字串是恆等函式，所以租戶把字串從
-        `slug` 鍵搬到 `name` 鍵，就拿到逐字相同的 slug ——X8 關掉的通道旁邊還開著
-        一條。本條把這個**現況**釘住，目的是：日後有人修好 slug 生成（讓它不再由
-        租戶完全決定）時，這條會**變紅**，逼他回來更新
-        `workspace.py::_check_tenant_create_anchors` 的 docstring 與相關 issue，
-        而不是讓那段「殘留缺口」的說明默默過期成假話。
+        `_generate_slug()` 對未被佔用的 `[a-z0-9_-]` 字串仍是恆等函式，所以租戶
+        把字串從 `slug` 鍵搬到 `name` 鍵，未撞名時就拿到逐字相同的 slug ——X8
+        關掉的通道旁邊還開著 name 通道。本條釘住的是這個**未佔用情況**；若未來
+        連未佔用的 slug 都不再逐字由 name 推導，斷言才會變紅，須同步更新
+        `workspace.py::_check_tenant_create_anchors` 的 docstring 與相關說明。
 
-        📌 **#677 的更新（缺口的後果變了，機制沒變）**：`slug` 仍然由租戶完全決定
-        （所以本條第一個斷言照舊、也照舊是綠的），但 namespace／公開子網域已經改
-        由伺服器產生的 stored `ws_hash` 決定 ⇒ 租戶決定 slug 不再等於租戶決定
-        namespace。原本第三個斷言 `make_namespace(ws.slug) == …`（＝「namespace
-        完全由租戶提供的字串決定」）**在修法後為假**，換成下面那條反向斷言。
+        📌 **#1516 的更新**：查重已 sudo 化，撞名會加 `-{6 hex}` 隨機後綴，
+        因此最終 slug 不再總由租戶完全決定。但本 fixture 的 `ws-137425` 未被
+        佔用，仍逐字等於 name；未撞名時的缺口機制照舊，第一個斷言仍成立。
+
+        📌 **#677 的更新**：namespace／公開子網域改由伺服器產生的 stored
+        `ws_hash` 決定 ⇒ 租戶影響 slug 不等於租戶決定 namespace。原本第三個
+        斷言 `make_namespace(ws.slug) == …`（＝「namespace 完全由租戶提供的
+        字串決定」）在修法後為假，換成下面那條反向斷言。
 
         ⚠ 這條刻意**不**斷言 namespace 真的撞上受害者（那要靠 preimage 搜尋，
         不是單元測試該做的事）。跨租戶碰撞的守門測試在
@@ -455,12 +457,12 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
         result = self._call_kw(
             'woow_paas_platform.workspace', 'create',
             [{'name': 'ws-137425'}])
-        self._assert_ok(result, 'name 這條通道今天是通的（這正是缺口本身）')
+        self._assert_ok(result, '未被佔用的 name 通道仍然可用（#1516 只在撞名時加後綴）')
         ws = self.Workspace.sudo().browse(result['result'])
         self.assertEqual(
             ws.slug, 'ws-137425',
-            '缺口的機制：slug 逐字等於租戶給的 name。這條變紅代表 slug 生成被改'
-            '過了 —— 請一併更新 workspace.py 的 docstring 與 follow-up issue')
+            '未被佔用時 slug 仍逐字等於 name；若這個前提改變，請同步更新 '
+            'workspace.py 的 docstring 與相關說明')
         # #677：同一個攻擊者再建一個「舊公式下與上面那個相撞」的 slug。斷言用
         # 兩列相異（由 `UNIQUE(ws_hash)` **確定性**保證），不用
         # `ws_hash != generate_ws_hash(slug)`——後者有 2^-32 的隨機假紅面。

@@ -35,9 +35,9 @@ _Avoid_: 「專案」「租戶」（租戶是**人**，workspace 是**容器**�
 > 🔴 **它有兩個識別碼，只有一個是伺服器權威的，而它們決定的東西不同。**
 >
 > - `ws_hash`——8 hex、`readonly`、伺服器產生、**從不由租戶輸入推導**。**K8s namespace（`paas-ws-{ws_hash}`）與公開子網域（`paas-cs-/sa-/sm-{ws_hash}-...`）吃的是它**（#677；見 `src/controllers/paas.py:3386`、`:3388`、`src/controllers/ha_paas.py:273-274`）。
-> - `slug`——URL 友善識別碼，由 `name` 推導 ⇒ **租戶影響得到**。只用在 URL，**不參與任何基礎設施命名**。
+> - `slug`——URL 友善識別碼，由 `name` 推導 ⇒ **租戶影響得到**。#1516 起未撞名保留 base slug，撞名加伺服器產生的 6 碼隨機 hex 後綴；**不參與任何基礎設施命名**。
 >
-> ⚠ 兩者都有 `UNIQUE` constraint，但角色不對稱：`unique_ws_hash` 是 #677 的**唯一**真正守線，不是 belt-and-braces。跨租戶碰撞檢查在 Python 層做不到——`_generate_slug()` 的 `search_count` 走呼叫者身分、受 `ir.rule` 限制，而攻擊者正好站在「看不見受害者」的位置上 ⇒ 那種檢查對他恆回 0、靜默放行。DB constraint 不看 `ir.rule` 也不怕 TOCTOU（見 `src/models/workspace.py:46-56` 的逐字說明）。**寫任何碰基礎設施命名的 code 前先確認你吃的是 `ws_hash` 不是 `slug`。**
+> ⚠ 兩者都有 `UNIQUE` constraint，但角色不對稱：`unique_ws_hash` 是 #677 的 namespace 唯一性真正守線，不是 belt-and-braces。#1516 起 slug 查重已 sudo 化、全域可見；但 Python 查重仍有 TOCTOU，不能取代寫入當下的 DB UNIQUE 保證（見 `src/models/workspace.py` 的 `_sql_constraints` 說明）。**寫任何碰基礎設施命名的 code 前先確認你吃的是 `ws_hash` 不是 `slug`。**
 
 > ⚠ **Workspace 不是計費單位。** 訂閱掛在**每一個服務**上（`subscription_id` 來自 `src/models/subscription_lifecycle_mixin.py`，由 CloudService／SmartHome／SecurityAccess 三個 model 各自持有），workspace 本體沒有 `subscription_id` 欄位。所以「這個 workspace 的訂閱狀態」不是一個有定義的問題——要問的是「這個 workspace 裡的哪個服務」。
 

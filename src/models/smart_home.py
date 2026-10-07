@@ -469,9 +469,10 @@ class SmartHome(models.Model):
     def _naming_ws_hash(self):
         """Workspace 的 **stored** namespace 身分碼，Cloudflare 命名的 hash 種子。
 
-        #677 之前這裡回的是 `workspace.slug`，而 slug 由租戶提供的 `name` 逐字決定、
-        namespace 是它的 `md5[:8]`（32-bit 截斷）⇒ 租戶可以讓自己的子網域落在別人
-        的 ws_hash 段上。現在回 stored `ws_hash`（伺服器產生、DB `UNIQUE`）。
+        #677 之前這裡回的是 `workspace.slug`，未撞名時 slug 由租戶提供的 `name`
+        逐字決定，namespace 是它的 `md5[:8]`（32-bit 截斷）⇒ 租戶可以讓自己的
+        子網域落在別人的 ws_hash 段上。現在回 stored `ws_hash`（伺服器產生、DB
+        `UNIQUE`）；#1516 起 slug 撞名會加隨機後綴，仍不參與 namespace 推導。
 
         原本那個「`slug` 取不到就退回 `name.lower()`」的 fallback 一併移除：
         `workspace_id` 是 `required=True`，該分支在空 recordset 上本來就會炸
