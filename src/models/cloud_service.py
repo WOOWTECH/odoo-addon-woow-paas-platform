@@ -27,7 +27,7 @@ from ..services.woow_odoo_readiness import (
     woow_odoo_contract,
     woow_odoo_ready,
 )
-from .cloud_app_template import SupplyGateError
+from .cloud_app_template import SPECS_UNPARSEABLE, SupplyGateError
 from .cloud_service_init_attempt import (
     InitOutcome,
     INIT_ATTEMPT_WORST_SECONDS,
@@ -4832,17 +4832,55 @@ class CloudService(models.Model):
         woow-odoo 的 ``conf.adminPassword`` 刻意**不**列入：chart 只在首次建庫時套用，
         對既有 DB 是 no-op（見 ``_build_odoo_sensitive_values``），回復它不會讓舊密碼
         生效；列入反而會把 Odoo 的回復全部改成重新渲染，擴大這張單的影響面。
+
+        #1526：``helm_value_specs`` 裡 ``type: password`` 的可調設定（OpenRouter／
+        Anthropic 金鑰、Git token、ngrok／Tailscale auth key、n8n SMTP 密碼…）也列入，
+        與管理員帳密同一個語意：**憑證不跟著回復**。否則租戶因外洩而撤換（或 #1455
+        清除）的金鑰，回復到換金鑰之前的 revision 就會復活；而平台不回寫 DB 的
+        ``helm_values``，下一次「修改配置」又悄悄換回新金鑰、服務再重啟一次（sbx-b
+        #16 實測 open-design）。保留後 DB 與叢集的金鑰始終一致。這會讓「只有 password
+        knob、沒有 admin GUI」的模板（n8n）也改走保留憑證的回復。
         """
         self.ensure_one()
         template = self.template_id
-        if not template.has_admin_gui:
-            return []
-        paths = ['config.sensitive']
-        if self._chart_has_gateway():
-            paths.append('auth.apiServerKey')
-        if template.admin_username_helm_path:
-            paths.append(template.admin_username_helm_path)
+        paths = []
+        if template.has_admin_gui:
+            paths.append('config.sensitive')
+            if self._chart_has_gateway():
+                paths.append('auth.apiServerKey')
+            if template.admin_username_helm_path:
+                paths.append(template.admin_username_helm_path)
+        for key in self._rollback_password_spec_paths():
+            if key not in paths:
+                paths.append(key)
         return paths
+
+    def _rollback_password_spec_paths(self):
+        """#1526：範本 ``helm_value_specs`` 裡 ``type: password`` 的 helm 路徑（不含 ``_init.*``）。
+
+        specs 讀不懂 ⇒ 無從得知哪些鍵是憑證 ⇒ ``UserError``（fail-closed：寧可這次回復
+        做不了，也不要讓撤換過的金鑰復活；與 #535 遮罩層同一判準）。
+        """
+        self.ensure_one()
+        specs = self.template_id._parse_helm_value_specs_or_fail()
+        if specs is SPECS_UNPARSEABLE:
+            raise UserError(_(
+                'The settings definition of this application cannot be read, so the '
+                'rollback cannot keep its API keys safe. Please contact support.'))
+        if not isinstance(specs, dict):
+            return []
+        keys = []
+        for group in ('required', 'optional'):
+            group_specs = specs.get(group) or []
+            if not isinstance(group_specs, list):
+                continue
+            for spec in group_specs:
+                if not isinstance(spec, dict) or spec.get('type') != 'password':
+                    continue
+                key = spec.get('key')
+                if isinstance(key, str) and key and not key.startswith('_init.'):
+                    keys.append(key)
+        return keys
 
     def _build_odoo_sensitive_values(self):
         """#1130：woow-odoo 的初始管理員密碼 sensitive value（odoo 專屬 helper）。

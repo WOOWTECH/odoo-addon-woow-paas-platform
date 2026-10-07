@@ -31,6 +31,19 @@ def client():
         yield TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
+def _same_chart_history(mock_helm, chart_name):
+    """#1526：回復前 operator 會讀歷史比對 chart 版本；這裡給兩版同 chart 的歷史。"""
+    mock_helm.history.return_value = [
+        ReleaseRevision(
+            revision=r, updated="2024-01-0%dT00:00:00Z" % r,
+            status=ReleaseStatus.DEPLOYED if r == 2 else ReleaseStatus.SUPERSEDED,
+            chart=f"{chart_name}-1.0.0", app_version="1", description="",
+        )
+        for r in (1, 2)
+    ]
+    mock_helm.get_revision_chart_version.return_value = "1.0.0"
+
+
 class TestHealthEndpoint:
     """Test health check endpoint."""
 
@@ -589,6 +602,7 @@ class TestReleaseEndpoints:
     @patch("src.api.releases.helm_service")
     def test_rollback_release(self, mock_helm, client):
         """Test rollback release endpoint."""
+        _same_chart_history(mock_helm, "test-release")
         mock_helm.rollback.return_value = {"message": "Rollback successful"}
 
         response = client.post(
@@ -1087,6 +1101,7 @@ class TestFullDeploymentFlow:
         )
 
         # Rollback to revision 1
+        _same_chart_history(mock_helm, "nginx")
         mock_helm.rollback.return_value = {"message": "Rollback successful"}
 
         rollback_response = client.post(

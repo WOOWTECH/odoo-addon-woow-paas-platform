@@ -73,9 +73,42 @@ export class RollbackModal extends Component {
     }
 
     selectRevision(revision) {
-        if (revision.revision !== this.currentRevision && !this.state.rolling) {
+        if (
+            revision.revision !== this.currentRevision &&
+            !this.isBlocked(revision) &&
+            !this.state.rolling
+        ) {
             this.state.selectedRevision = revision.revision;
         }
+    }
+
+    /**
+     * #1526：chart 版本比目前部署中舊的 revision 不能回復（後端與 operator 都會擋）。
+     * 判準由後端算好放在 `rollback_allowed`；舊後端沒有這個欄位時一律可選（照舊）。
+     */
+    isBlocked(revision) {
+        return revision.rollback_allowed === false && !this.isCurrent(revision);
+    }
+
+    get hasBlockedRevisions() {
+        return this.state.revisions.some((r) => this.isBlocked(r));
+    }
+
+    /**
+     * #1526：範本有 password 型的可調設定（API 金鑰等）時，這些值在回復時維持目前的值
+     * （後端 `_rollback_password_spec_paths`，同一份 helm_value_specs）。
+     */
+    get keepsApiKeys() {
+        const specs = this.props.service.template?.helm_value_specs || {};
+        return ["required", "optional"].some((group) =>
+            (specs[group] || []).some(
+                (spec) =>
+                    spec &&
+                    spec.type === "password" &&
+                    typeof spec.key === "string" &&
+                    !spec.key.startsWith("_init.")
+            )
+        );
     }
 
     /**

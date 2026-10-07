@@ -1063,3 +1063,5 @@ from . import test_chatgpt_subscription
 from . import test_plan_names_zh_tw_migration
 # #1525：租戶不能指定 chart 版本（controller version 參數＋helm_chart_version 寫入守衛）。
 from . import test_tenant_chart_version_1525
+# #1526：回復版本不降 chart、password 型設定不跟著回復。
+from . import test_rollback_chart_floor_1526

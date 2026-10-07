@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from src.models.schemas import (
     ReleaseResetConfigRequest,
     ReleaseRevisionsResponse,
     ReleaseRollbackRequest,
+    ReleaseStatus,
     ReleaseStatusResponse,
     ReleaseUpgradeRequest,
     RouteInfo,
@@ -984,9 +986,20 @@ def rollback_release(
         return _rollback_preserving_values(namespace, name, request)
 
     try:
-        result = helm_service.rollback(namespace, name, request.revision)
+        # #1526：純 helm rollback 重放目標 revision 的 stored manifest——chart 版本也一起
+        # 回到當時。與保留憑證的回復同一道版本下限（見 `_refuse_chart_downgrade`）。
+        _validate_namespace_or_raise(namespace)
+        history = helm_service.history(namespace, name)
+        target_revision = _resolve_rollback_target(history, request.revision, name)
+        target_version = _refuse_chart_downgrade(namespace, name, history, target_revision)
+
+        result = helm_service.rollback(namespace, name, target_revision)
         logger.info(f"Rolled back release {name} in {namespace}")
-        return result
+        # #1526：回報回復後的 chart 版本，平台據此更新帳本（同版或升版都可能——例如從
+        # 早先被降過版的狀態回到較新的 revision）；不回報的話平台帳本與叢集不一致，
+        # 下一次修改配置會以舊帳本釘版。
+        return {**result, "mode": "rollback", "target_revision": target_revision,
+                "chart_version": target_version}
 
     except ValueError as e:
         raise HTTPException(
@@ -999,6 +1012,140 @@ def rollback_release(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Helm rollback failed. Check operator logs for details.",
         )
+
+
+#: #1526：回復被 chart 版本下限擋下時的錯誤碼（409 的 ``detail.error_code``）。
+#: 平台據此顯示租戶看得懂的訊息；字串與平台 ``controllers/paas.py`` 的同名常數一致。
+ROLLBACK_CHART_DOWNGRADE_ERROR_CODE = "rollback_chart_downgrade"
+
+_SEMVER_RE = re.compile(
+    r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
+)
+
+
+def chart_version_key(version: Optional[str]) -> Optional[Tuple]:
+    """#1526：chart 版本（SemVer 2）的比較鍵；讀不懂回 ``None``。
+
+    prerelease 低於同號正式版（``1.0.0-rc.1 < 1.0.0``），數字識別字低於英數識別字、
+    逐段比較——SemVer §11 的規則。build metadata（``+…``）不參與比較。平台
+    ``services/chart_version.py`` 有一份同規則的實作（兩邊是不同的部署單位，不能共用）。
+    """
+    if not isinstance(version, str):
+        return None
+    m = _SEMVER_RE.match(version.strip())
+    if not m:
+        return None
+    major, minor, patch, pre = m.groups()
+    if pre is None:
+        pre_key: Tuple = ()
+        release_rank = 1
+    else:
+        pre_key = tuple(
+            (0, int(part), "") if part.isdigit() else (1, 0, part)
+            for part in pre.split(".")
+        )
+        release_rank = 0
+    return (int(major), int(minor), int(patch), release_rank, pre_key)
+
+
+def chart_version_not_lower(target: Optional[str], current: Optional[str]) -> bool:
+    """#1526：``target`` 是否**不低於** ``current``。任一方未知或讀不懂 ⇒ False（fail-closed）。
+
+    字串完全相同直接放行（同一版、即使不是 SemVer 也不必比較）。
+    """
+    if not target or not current:
+        return False
+    if target == current:
+        return True
+    target_key, current_key = chart_version_key(target), chart_version_key(current)
+    if target_key is None or current_key is None:
+        return False
+    return target_key >= current_key
+
+
+def _baseline_revision(history) -> int:
+    """#1526：版本下限的基準 revision＝目前**實際部署中**的那一版。
+
+    最新的 revision 不一定是部署中的（升級失敗的 revision 狀態是 failed，前一版仍是
+    deployed）；以失敗的新版當下限，會連「退回原本那一版」都被擋掉。沒有 deployed
+    （例如首裝就失敗）時退回最新的 revision。
+    """
+    deployed = [r.revision for r in history if r.status == ReleaseStatus.DEPLOYED]
+    if deployed:
+        return max(deployed)
+    return max(r.revision for r in history)
+
+
+def _resolve_rollback_target(history, requested: Optional[int], name: str) -> int:
+    """回復的目標 revision（``None``／0＝上一版），並驗證它在歷史裡、不是目前那一版。"""
+    if not history:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Release {name} has no revision history",
+        )
+    current_revision = max(rev.revision for rev in history)
+    target_revision = requested or (current_revision - 1)
+    known = {rev.revision for rev in history}
+    if target_revision < 1 or target_revision not in known:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Revision {target_revision} not found in release history",
+        )
+    if target_revision == current_revision:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target revision is the current revision",
+        )
+    return target_revision
+
+
+def _refuse_chart_downgrade(
+    namespace: str,
+    name: str,
+    history,
+    target_revision: int,
+    target_version: Optional[str] = None,
+) -> Optional[str]:
+    """#1526：回復不得讓 chart 版本低於目前部署中的版本；擋下時 409。回傳目標版本。
+
+    chart 升版帶著平台的安全修正（例：pi-agent 0.1.5 收斂 egress、加 ephemeral-storage
+    上限；hermes-agent 0.3.0 修 console RBAC）。回復原本照目標 revision 的 chart 版本
+    重新渲染／重放 manifest，工作區 admin 按兩下就能把這些修正撤掉，之後平台的改帳密、
+    修改配置也都釘在那個舊版。chart 升版是管理員 Redeploy 的職責，退回舊 chart 同理。
+
+    同版或更高版的 revision 照常可回復（設定錯了要退回去的用例不受影響）。版本讀不到或
+    不是 SemVer ⇒ 拒絕（fail-closed）——寧可擋下一次回復，也不放行一次降版。
+    """
+    if target_version is None:
+        target_version = helm_service.get_revision_chart_version(
+            namespace, name, target_revision,
+        )
+    baseline = _baseline_revision(history)
+    current_version = (
+        target_version if baseline == target_revision
+        else helm_service.get_revision_chart_version(namespace, name, baseline)
+    )
+    if chart_version_not_lower(target_version, current_version):
+        return target_version
+    logger.warning(
+        "Refusing rollback of %s/%s to revision %s: chart %s is older than the "
+        "deployed %s (revision %s)",
+        namespace, name, target_revision, target_version, current_version, baseline,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error_code": ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
+            "message": (
+                f"Revision {target_revision} uses chart version {target_version or 'unknown'}, "
+                f"older than the deployed {current_version or 'unknown'}; rolling back to "
+                "an older chart is not allowed"
+            ),
+            "target_revision": target_revision,
+            "target_chart_version": target_version,
+            "current_chart_version": current_version,
+        },
+    )
 
 
 _PATH_MISSING = object()
@@ -1066,6 +1213,10 @@ def _rollback_preserving_values(
 ) -> Dict[str, Any]:
     """#1433：「回復版本」但保留目前的憑證——以 helm upgrade 重現目標 revision。
 
+    #1526：目標 revision 的 chart 版本不得低於目前部署中的版本（``_refuse_chart_downgrade``）；
+    平台另把 ``helm_value_specs`` 裡 ``type: password`` 的可調設定（API 金鑰等）也列進
+    ``preserve_value_paths``——與管理員帳密同一個語意：憑證不跟著回復。
+
     為什麼不是 ``helm rollback`` 之後再補一次 reset：rollback 一落地 Secret 就是舊
     密碼，open-design 的 authproxy 每個請求重讀 htpasswd ⇒ 補救之前那段時間舊密碼
     可以登入、目前的密碼被拒（R8 實測約 30–60 秒），而補救本身若失敗就停在最糟的
@@ -1084,24 +1235,8 @@ def _rollback_preserving_values(
     _validate_namespace_or_raise(namespace)
     try:
         history = helm_service.history(namespace, name)
-        if not history:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Release {name} has no revision history",
-            )
+        target_revision = _resolve_rollback_target(history, request.revision, name)
         current_revision = max(rev.revision for rev in history)
-        target_revision = request.revision or (current_revision - 1)
-        known = {rev.revision for rev in history}
-        if target_revision < 1 or target_revision not in known:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Revision {target_revision} not found in release history",
-            )
-        if target_revision == current_revision:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Target revision is the current revision",
-            )
 
         target_version = helm_service.get_revision_chart_version(
             namespace, name, target_revision,
@@ -1116,6 +1251,10 @@ def _rollback_preserving_values(
                     "refusing to roll back without a pinned version"
                 ),
             )
+        # #1526：chart 版本不得低於目前部署中的版本。
+        _refuse_chart_downgrade(
+            namespace, name, history, target_revision, target_version=target_version,
+        )
 
         # ⛔ 兩份都是**明文** values（含憑證）：只進下面 upgrade 的 --values 暫存檔，
         # 不 log、不回傳。

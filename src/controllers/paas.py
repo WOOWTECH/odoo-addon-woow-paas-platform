@@ -34,6 +34,11 @@ from ..services.paas_operator import (
     STORAGE_EXPANSION_ERROR_CODE,
 )
 from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 parser 搬到 template model
+from ..services.chart_version import (
+    ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
+    annotate_rollback_floor,
+    rollback_floor_violation,
+)
 from ..models.cloud_service import WOOW_ODOO_ADMIN_PASSWORD_PATH, _internal_provision
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
@@ -4622,9 +4627,28 @@ class PaasController(HiddenChainMixin, Controller):
         # #1433：平台管的憑證（管理員帳密、gateway key）不跟著回復——請 operator 以
         # 「目標 revision 的設定＋目前的憑證」重現目標版本，而不是純 helm rollback
         # （那會讓已撤銷的舊密碼復活、目前的密碼失效）。沒有平台憑證的模板照舊。
-        preserve_paths = service._rollback_preserved_value_paths()
+        # #1526：password 型的可調設定（API 金鑰等）也列入（見 model 的 docstring）。
+        try:
+            preserve_paths = service._rollback_preserved_value_paths()
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
 
         try:
+            # #1526：chart 版本不得低於目前部署中的版本。operator 是權威的那一道（讀
+            # release 本身的 Chart.Metadata.Version），這裡先擋是為了給租戶看得懂的
+            # 訊息，以及 operator 還沒升到有下限的版本時仍然擋得住。讀不到歷史 ⇒ 不送
+            # （fail-closed，回復本來就要讀歷史才選得到 revision）。
+            floor = rollback_floor_violation(
+                client.get_revisions(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                ).get('revisions') or [],
+                revision,
+            )
+            if floor:
+                return {'success': False,
+                        'error': self._rollback_chart_downgrade_error(floor)}
+
             rollback_result = client.rollback_release(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
@@ -4641,13 +4665,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
             }
-            # #1433：保留憑證的回復是一次 helm upgrade，operator 回報它實際渲染的 chart
-            # 版本（＝目標 revision 的版本）。記下來，否則下一次「修改配置」會以
-            # `service.helm_chart_version`（回復前的新版）釘版，把剛回復的 chart 又升回去
-            # （#552 的 resolved_version 以服務自己的版本優先）。
             service.write(rollback_vals)
+            # #1433：operator 回報回復後實際的 chart 版本（#1526 起兩種模式都回報，且
+            # 不會低於回復前）。記下來，帳本才與叢集一致——下一次「修改配置」以
+            # `service.helm_chart_version` 釘版（#552 的 resolved_version 以服務自己的版本
+            # 優先）。#1525：帳本只有平台身分寫得進去；值是 operator 回報的事實。
             if isinstance(rollback_result, dict) and rollback_result.get('chart_version'):
-                # #1525：帳本只有平台身分寫得進去；值是 operator 回報的事實，不是租戶輸入。
                 service._record_chart_version(rollback_result['chart_version'])
             # #1257 Q23／#1267：還欠 init 的服務（含 init 額度用完的 error）rollback
             # 開新的一代——保留欠 init、計數歸零，下一輪導回 initializing。之前只寫
@@ -4667,10 +4690,31 @@ class PaasController(HiddenChainMixin, Controller):
 
         except PaaSOperatorError as e:
             _logger.error("Operator error during rollback: %s", str(e))
+            detail = e.detail
+            if (e.status_code == 409 and isinstance(detail, dict)
+                    and detail.get('error_code') == ROLLBACK_CHART_DOWNGRADE_ERROR_CODE):
+                return {'success': False,
+                        'error': self._rollback_chart_downgrade_error(detail)}
             return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=e.detail or e.message)}
 
+    @staticmethod
+    def _rollback_chart_downgrade_error(floor: dict) -> str:
+        """#1526：回復被 chart 版本下限擋下時給租戶的訊息（平台預檢與 operator 409 共用）。"""
+        return _(
+            'Revision %(revision)s uses chart version %(target)s, which is older than the '
+            'version this service runs now (%(current)s). Rolling back to an older chart '
+            'version is not allowed because it would undo platform security fixes. '
+            'Contact support if you need an older version.',
+            revision=floor.get('target_revision') or '-',
+            target=floor.get('target_chart_version') or '-',
+            current=floor.get('current_chart_version') or '-')
+
     def _get_service_revisions(self, service: Any) -> dict[str, Any]:
-        """Get revision history for a service."""
+        """Get revision history for a service.
+
+        #1526：每個 revision 另帶 ``chart_version`` 與 ``rollback_allowed``——chart 比
+        目前部署中舊的 revision 不能回復，對話框據此把它們標成不可選。
+        """
         client = get_paas_operator_client(request.env)
         if not client:
             return {'success': False, 'error': _('PaaS Operator not configured')}
@@ -4683,7 +4727,7 @@ class PaasController(HiddenChainMixin, Controller):
 
             return {
                 'success': True,
-                'data': result.get('revisions', []),
+                'data': annotate_rollback_floor(result.get('revisions', [])),
             }
 
         except PaaSOperatorConnectionError:

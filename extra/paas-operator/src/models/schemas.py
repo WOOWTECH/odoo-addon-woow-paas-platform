@@ -110,6 +110,9 @@ class ReleaseRollbackRequest(BaseModel):
     釘目標 revision 的 chart 版本」，只回復 chart 與一般設定、憑證維持現值。
 
     不帶（或空清單）＝原本的純 ``helm rollback``，舊平台零行為變化（operator 可先發版）。
+
+    #1526：兩種模式都有 chart 版本下限——目標 revision 的 chart 版本低於目前部署中的
+    版本 ⇒ 409（``detail.error_code == "rollback_chart_downgrade"``）。
     """
 
     revision: Optional[int] = Field(None, description="Target revision number. If not provided, rolls back to the previous revision.")

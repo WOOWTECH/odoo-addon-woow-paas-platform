@@ -56,7 +56,10 @@
                                     Chart version: <t t-esc="chartChange.from"/> → <t t-esc="chartChange.to"/>
                                 </li>
                                 <li>
-                                    Settings, including API keys, return to the values saved in that revision.
+                                    Settings return to the values saved in that revision. The chart version never goes below the current one.
+                                </li>
+                                <li t-if="keepsApiKeys">
+                                    API keys and other credential settings are not rolled back: the current values stay in effect.
                                 </li>
                                 <li t-if="keepsAdminCredentials">
                                     The admin username and password are not rolled back: the current credentials stay in effect.
@@ -83,6 +86,13 @@
                             </span>
                         </div>
 
+                        <div t-if="hasBlockedRevisions" class="o_woow_rollback_info o_woow_rollback_floor_hint">
+                            <WoowIcon name="'lock'" size="18"/>
+                            <span>
+                                Revisions that use an older chart version than the current one cannot be restored: that would undo platform security fixes.
+                            </span>
+                        </div>
+
                         <div class="o_woow_revisions_list">
                             <t t-foreach="state.revisions" t-as="revision" t-key="revision.revision">
                                 <div
@@ -90,7 +100,7 @@
                                         'o_woow_revision_item': true,
                                         'o_woow_revision_current': isCurrent(revision),
                                         'o_woow_revision_selected': isSelected(revision),
-                                        'o_woow_revision_disabled': state.rolling
+                                        'o_woow_revision_disabled': state.rolling or isBlocked(revision)
                                     }"
                                     t-on-click="() => this.selectRevision(revision)">
                                     <div class="o_woow_revision_radio">
@@ -108,6 +118,9 @@
                                                 t-esc="revision.status"/>
                                             <span t-if="isCurrent(revision)" class="o_woow_revision_badge">
                                                 Current
+                                            </span>
+                                            <span t-if="isBlocked(revision)" class="o_woow_revision_badge o_woow_revision_badge_blocked">
+                                                Older chart
                                             </span>
                                         </div>
                                         <div class="o_woow_revision_meta">

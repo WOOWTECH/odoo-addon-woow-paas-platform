@@ -166,7 +166,8 @@ class TestEndpoint:
         })
         assert resp.status_code == 200, resp.text
         assert resp.json()["target_revision"] == 11
-        mock_helm.get_revision_chart_version.assert_called_with("paas-ws-x", "svc-x", 11)
+        # #1526 起另外會讀部署中那一版（12）的 chart 版本當下限，所以用 any_call。
+        mock_helm.get_revision_chart_version.assert_any_call("paas-ws-x", "svc-x", 11)
 
     @patch("src.api.releases.helm_service")
     def test_unknown_revision_400(self, mock_helm, client):
@@ -211,7 +212,8 @@ class TestEndpoint:
 
     @patch("src.api.releases.helm_service")
     def test_without_preserve_paths_is_plain_rollback(self, mock_helm, client):
-        """舊平台（不帶新欄位）行為不變。"""
+        """舊平台（不帶新欄位）仍走純 helm rollback（#1526 起多一道 chart 版本下限）。"""
+        _mock_helm(mock_helm)
         mock_helm.rollback.return_value = {"message": "Rollback was a success!"}
         resp = client.post("/api/releases/paas-ws-x/svc-x/rollback", json={"revision": 10})
         assert resp.status_code == 200

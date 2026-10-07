@@ -400,6 +400,11 @@ curl -X POST http://paas-operator/api/releases/paas-ws-demo/my-nginx/rollback \
   }'
 ```
 
+目標 revision 的 chart 版本不得低於目前部署中的版本（#1526）：違反時回 409，`detail.error_code` 為
+`rollback_chart_downgrade`（另帶 `target_chart_version`／`current_chart_version`）。成功的回應帶
+`mode`（`rollback`／`upgrade_preserving`）與回復後的 `chart_version`。帶 `chart`＋`preserve_value_paths`
+時改走保留這些路徑目前值的 helm upgrade（#1433）。
+
 ### Create Namespace with Quota
 
 ```bash

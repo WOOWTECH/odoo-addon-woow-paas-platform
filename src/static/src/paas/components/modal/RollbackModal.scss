@@ -183,6 +183,16 @@
     letter-spacing: 0.05em;
 }
 
+// #1526：chart 比目前舊、不能回復的 revision。
+.o_woow_revision_badge.o_woow_revision_badge_blocked {
+    background: rgba(0, 0, 0, 0.06);
+    color: $woow-text-secondary;
+}
+
+.o_woow_rollback_floor_hint {
+    margin-top: -0.5rem;
+}
+
 .o_woow_revision_meta {
     display: flex;
     flex-direction: column;

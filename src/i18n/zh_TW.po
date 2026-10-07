@@ -20392,8 +20392,32 @@ msgstr "Chart 版本："
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
-msgid "Settings, including API keys, return to the values saved in that revision."
-msgstr "應用設定（包含 API 金鑰）會回到該版本當時儲存的值。"
+msgid ""
+"Settings return to the values saved in that revision. The chart version "
+"never goes below the current one."
+msgstr "應用設定會回到該版本當時儲存的值；chart 版本不會低於目前的版本。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid ""
+"API keys and other credential settings are not rolled back: the current "
+"values stay in effect."
+msgstr "API 金鑰等憑證設定不會被回復，維持目前的值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid ""
+"Revisions that use an older chart version than the current one cannot be "
+"restored: that would undo platform security fixes."
+msgstr "chart 版本比目前舊的版本無法回復，因為那會撤回平台的安全修正。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Older chart"
+msgstr "較舊的 chart"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -21076,3 +21100,21 @@ msgstr "Chart 版本由平台管理，修改服務時不能指定（這個服務
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "The chart version of a service is managed by the platform: %(fields)s"
 msgstr "服務的 chart 版本由平台管理：%(fields)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s uses chart version %(target)s, which is older than "
+"the version this service runs now (%(current)s). Rolling back to an older "
+"chart version is not allowed because it would undo platform security fixes."
+" Contact support if you need an older version."
+msgstr "版本 %(revision)s 使用的 chart 版本是 %(target)s，比這個服務目前的版本（%(current)s）舊。回復到較舊的 chart 版本會撤回平台的安全修正，因此不允許。如果需要較舊的版本，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The settings definition of this application cannot be read, so the rollback"
+" cannot keep its API keys safe. Please contact support."
+msgstr "無法讀取這個應用的設定定義，回復時無法確保 API 金鑰維持目前的值，因此不能回復。請聯絡客服。"
