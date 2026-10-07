@@ -4661,6 +4661,19 @@ class CloudService(models.Model):
         )
         return 'https://%s.%s' % (self.subdomain, paas_domain)
 
+    def _admin_page_public_url(self):
+        """mcp-server 家族的管理頁網址（＝服務對外根位址）；其他模板或無 subdomain 回 ''。
+
+        #1542：一次性憑證視窗要附「登入網址」。判準直接讀模板欄位（has_admin_gui＋
+        config_json 載體＝8 個 mcp-*，不建 slug 名單）：這類服務的後台只有一組密碼、
+        沒有帳號，也沒有 console／dashboard，GUI 掛在根路徑 "/"。
+        """
+        self.ensure_one()
+        template = self.template_id
+        if not (template.has_admin_gui and template.admin_password_carrier == 'config_json'):
+            return ''
+        return self._public_base_url()
+
     def _chart_has_gateway(self):
         """本服務的 chart 有沒有對外 gateway ⇒ 該不該有 gateway API key。
 

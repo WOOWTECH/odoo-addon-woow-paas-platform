@@ -1071,3 +1071,5 @@ from . import test_rollback_chart_floor_1526
 from . import test_public_tunnel_error_1559
 # #1534：n8n init 在 owner 已存在時不用密碼登入；舊 operator 401／998 對已確認的服務不計額度。
 from . import test_n8n_init_owner_changed_1534
+# #1542：mcp-server 家族的一次性帳密視窗（MCP 專用文案、admin_url、carrier 鏡射）。
+from . import test_mcp_onetime_credentials_1542

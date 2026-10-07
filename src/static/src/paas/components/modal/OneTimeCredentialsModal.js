@@ -162,7 +162,25 @@ export function buildOneTimeCredentials(data) {
             value: data.admin_password,
             hint: _t("Signs in to this service (there is no username). You can reset it or set your own later from Admin Credentials on the service page."),
         });
+    } else if (data && data.admin_password && data.template
+            && data.template.admin_password_carrier === "config_json") {
+        // #1542：mcp-server 家族（8 個 mcp-*，config_json 載體）。後台只有一組密碼、沒有
+        // 帳號，也沒有 console／dashboard——不能落到下方 hermes-agent 的說明。登入網址由
+        // 後端給（`admin_url`），沒有對外網址時就只列密碼。
+        credentials.push({
+            label: _t("Admin Password"),
+            value: data.admin_password,
+            hint: _t("Signs in to the MCP admin page (password only, no username). If you forget it, use Reset Admin Password on the service page to issue a new one."),
+        });
+        if (data.admin_url) {
+            credentials.push({
+                label: _t("Admin Page URL"),
+                value: data.admin_url,
+                hint: _t("Next: open this page, sign in with the password above, and fill in the connection settings under Connection. The MCP endpoint for your AI client is on the Tokens page."),
+            });
+        }
     } else if (data && data.admin_password) {
+        // hermes-agent（helm_secret 載體、有 gateway／dashboard）的說明。
         credentials.push({
             label: _t("Admin Password"),
             value: data.admin_password,

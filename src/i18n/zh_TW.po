@@ -21184,3 +21184,26 @@ msgstr "平台無法確認這台 n8n 的管理員帳號：n8n 裡的管理員已
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "Initialization failed %(count)s times (attempt #%(seq)s). Please contact support."
 msgstr "初始化已失敗 %(count)s 次（第 %(seq)s 次嘗試），請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Admin Page URL"
+msgstr "管理頁網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Next: open this page, sign in with the password above, and fill in the "
+"connection settings under Connection. The MCP endpoint for your AI client "
+"is on the Tokens page."
+msgstr "下一步：打開這個網址、用上方密碼登入，到 Connection 頁填好連線設定。要給 AI 用戶端的 MCP 連線網址在 Tokens 頁。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Signs in to the MCP admin page (password only, no username). If you forget "
+"it, use Reset Admin Password on the service page to issue a new one."
+msgstr "登入 MCP 管理頁用（只需要密碼，沒有帳號）。忘記密碼時，可在服務頁按「重設管理員密碼」取得新的密碼。"

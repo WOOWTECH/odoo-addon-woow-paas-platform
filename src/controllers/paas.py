@@ -2265,6 +2265,8 @@ class PaasController(HiddenChainMixin, Controller):
                 'admin_username_editable': bool(
                     service.template_id.admin_username_helm_path),
                 'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
+                # #1542：一次性視窗挑 MCP 文案（config_json＝mcp-server 家族）。
+                'admin_password_carrier': service.template_id.admin_password_carrier or '',
             }
         except Exception:
             _logger.exception(
@@ -3796,6 +3798,12 @@ class PaasController(HiddenChainMixin, Controller):
         dashboard_url = service._dashboard_public_url()
         if dashboard_url:
             creds['dashboard_url'] = dashboard_url
+        # #1542：mcp-server 家族的管理頁網址（非敏感，判準見 model 端
+        # `_admin_page_public_url`）。跟著建立／Reset 兩個呼叫點一起交付，前端
+        # 一次性視窗的 MCP 文案用它當「登入網址」——網址一律由後端給，前端不拼字串。
+        admin_url = service._admin_page_public_url()
+        if admin_url:
+            creds['admin_url'] = admin_url
         return creds
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
@@ -4867,6 +4875,10 @@ class PaasController(HiddenChainMixin, Controller):
                 # #1370：Reset 走 operator exec 改 app DB（Odoo／n8n）時的種類；前端用它
                 # 挑文案（不重啟、立刻生效、2FA 已關），不自建 slug 判準。
                 'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
+                # #1542：一次性憑證視窗（buildOneTimeCredentials）挑 MCP 文案用——
+                # config_json 載體＝mcp-server 家族（後台只有密碼、沒有帳號）。直接鏡射
+                # 模板欄位，不自建 slug 判準；Reset 回應的 template 子物件同名同值。
+                'admin_password_carrier': service.template_id.admin_password_carrier or '',
                 'helm_value_specs': service.template_id._parse_helm_value_specs(),
                 # #1432：「重新啟動」按鈕的顯示判準——與 `_restart_workloads` 的 VM 閘
                 # 讀同一個欄位（workload_type），前端不自建判準。
