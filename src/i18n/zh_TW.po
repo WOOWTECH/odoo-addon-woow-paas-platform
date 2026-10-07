@@ -1290,6 +1290,29 @@ msgid ""
 msgstr "管理員 Email 必須是收得到信的信箱（%(domain)s 是保留給範例用的網域，密碼重設信永遠寄不到）"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"If the new plan has different compute resources, the service restarts to "
+"apply them (about 30 seconds of downtime). Storage is never reduced: on a "
+"plan with less storage, the current storage size is kept."
+msgstr ""
+"新方案的運算規格不同時，服務會重新啟動以套用新規格（約 30 秒無法使用）。儲存空間不會縮小："
+"換到儲存空間較小的方案時，會保留目前的大小。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "The plan can only be changed while the service is running (current state: %(state)s)."
+msgstr "服務執行中才能變更方案（目前狀態：%(state)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "The plan was changed, but resizing the service failed: %(reason)s. Please contact support to redeploy the service."
+msgstr "方案已變更，但服務資源調整失敗：%(reason)s。請聯絡客服重新部署服務。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
@@ -3324,14 +3347,6 @@ msgid "Completion"
 msgstr "完成度"
 
 #. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
-msgid ""
-"Compute resources (vCPU, RAM, storage) of an already deployed service are "
-"not resized by a plan change yet."
-msgstr "已部署服務的運算資源（vCPU、RAM、儲存空間）目前不會因變更方案而調整。"
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__conceal_instances
 msgid "Conceal Existing Instances"
 msgstr "隱藏既有實例"
@@ -4467,6 +4482,12 @@ msgstr "部署失敗"
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "Deployment failed: %(detail)s"
 msgstr "部署失敗：%(detail)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "This plan cannot be applied to the service. Please contact support."
+msgstr "此方案無法套用到這個服務，請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -20523,3 +20544,33 @@ msgstr "重設管理員密碼會產生立即生效的新密碼，已登入的裝
 msgid ""
 "The administrator account of this service no longer has administrator rights, so the password was not changed. Ask another administrator in Omnigent to make it an administrator again, then reset again; if there is none, please open a support ticket."
 msgstr "此服務的管理員帳號已不具管理員權限，密碼沒有變更。請由 Omnigent 內其他管理員將它重新設為管理員後再重設；若沒有其他管理員，請開工單聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "There is not enough cluster storage to enlarge this service's disk to the new plan's size. The plan was not changed and nothing was charged. Please contact support."
+msgstr "叢集儲存空間不足，無法把這個服務的磁碟擴充到新方案的大小。方案沒有變更，也沒有扣款，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "This service's disk cannot be enlarged to the new plan's size. The plan was not changed and nothing was charged. Please contact support."
+msgstr "這個服務的磁碟無法擴充到新方案的大小。方案沒有變更，也沒有扣款，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "The service could not be checked for the new plan right now. The plan was not changed and nothing was charged. Please try again later or contact support."
+msgstr "目前無法確認服務能否套用新方案。方案沒有變更，也沒有扣款，請稍後再試或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s, namespace %(ns)s) → plan \"%(plan)s\": %(pvcs)s (%(reason)s)"
+msgstr "%(name)s（id=%(id)s，namespace %(ns)s）→ 方案「%(plan)s」：%(pvcs)s（%(reason)s）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Plan changes were rejected before anything was charged or applied because a disk could not be enlarged (reason \"capacity\" means the cluster storage (Longhorn) has no room for the extra size on the disks holding its replicas). Free scheduling capacity or add storage, then ask the tenant to try again:"
+msgstr "以下換方案在扣款與套用之前就被擋下：磁碟無法擴充（原因為「capacity」表示叢集儲存（Longhorn）在存放該磁碟副本的硬碟上放不下增加的容量）。請釋放排程額度或增加儲存空間後，再請租戶重試："
