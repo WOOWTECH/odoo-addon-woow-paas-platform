@@ -38,7 +38,7 @@ import logging
 
 from psycopg2 import OperationalError
 
-from odoo import _, models
+from odoo import SUPERUSER_ID, _, models
 from odoo.tools import float_compare, float_is_zero
 
 _logger = logging.getLogger(__name__)
@@ -169,6 +169,13 @@ class ShSubscriptionRefundCreditNote(models.Model):
         credit_note.invalidate_recordset(['payment_state', 'amount_residual'])
         return payment
 
+    @staticmethod
+    def _woow_internal_note(record, body):
+        """內部備註（不對 portal 顯示）、以 OdooBot 署名——呼叫端常是租戶自己的刪除請求，
+        不能把租戶記成帳務文件上的留言者（也不讓他變成 follower）。"""
+        record.with_user(SUPERUSER_ID).message_post(
+            body=body, subtype_xmlid='mail.mt_note')
+
     def _woow_flag_refund_for_einvoice(self, invoice, credit_note):
         """電子發票的後續處理標示（見模組 docstring）。"""
         currency = invoice.currency_id
@@ -182,17 +189,17 @@ class ShSubscriptionRefundCreditNote(models.Model):
                 '%(credit_note)s (%(amount)s) needs an ECPay allowance issued manually.',
                 number=invoice.ecpay_invoice_id.name, invoice=invoice.name,
                 credit_note=credit_note.name, amount=amount_label)
-            credit_note.message_post(body=note)
-            invoice.message_post(body=note)
+            self._woow_internal_note(credit_note, note)
+            self._woow_internal_note(invoice, note)
             self._woow_notify_allowance_needed(credit_note, note)
         elif full and invoice.woow_invoice_issue_state in _UNISSUED_STATES:
             invoice.write({'woow_invoice_issue_state': 'not_required'})
-            invoice.message_post(body=_(
+            self._woow_internal_note(invoice, _(
                 'Fully refunded by credit note %(credit_note)s before an e-invoice was '
                 'issued; no e-invoice is required for this invoice any more.',
                 credit_note=credit_note.name))
         elif invoice.woow_invoice_issue_state in _UNISSUED_STATES:
-            invoice.message_post(body=_(
+            self._woow_internal_note(invoice, _(
                 'Partly refunded by credit note %(credit_note)s (%(amount)s) before an '
                 'e-invoice was issued. When issuing the e-invoice, deduct the refunded '
                 'part or issue an allowance for it afterwards.',
