@@ -4935,6 +4935,8 @@ class PaasController(HiddenChainMixin, Controller):
                 'has_public_tunnel_address': service._chart_has_public_tunnel_address(),
                 'public_tunnel_label': service.template_id.public_tunnel_label or None,
                 'public_tunnel_url': service.public_tunnel_url or None,
+                # #1559：沒有位址時 ngrok 說得出的原因（已是建立者語言的一句話）。
+                'public_tunnel_error': service.public_tunnel_error or None,
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,

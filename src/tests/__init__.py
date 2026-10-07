@@ -1067,3 +1067,5 @@ from . import test_plan_names_zh_tw_migration
 from . import test_tenant_chart_version_1525
 # #1526：回復版本不降 chart、password 型設定不跟著回復。
 from . import test_rollback_chart_floor_1526
+# #1559：ngrok 連不上的原因（authtoken 錯、沒填、網域被占用、要重啟）顯示在服務頁。
+from . import test_public_tunnel_error_1559

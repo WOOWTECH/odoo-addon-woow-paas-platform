@@ -264,22 +264,22 @@ class TestPublicAddressEndpoint:
 
     def test_returns_the_address_with_both_schemes(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.return_value = "https://a.ngrok-free.app"
+            k8s.get_public_address_status.return_value = ("https://a.ngrok-free.app", None)
             resp = get_public_address(NS, REL)
         assert resp.public_url == "https://a.ngrok-free.app"
-        assert k8s.get_advertised_public_address.call_args.kwargs["schemes"] == (
+        assert k8s.get_public_address_status.call_args.kwargs["schemes"] == (
             "tcp", "https")
 
     def test_absent_address_is_200_with_null(self):
         """正常狀態（沒開／還沒連上）必須是 200 null，不是 4xx/5xx。"""
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.return_value = None
+            k8s.get_public_address_status.return_value = (None, None)
             resp = get_public_address(NS, REL)
         assert resp.public_url is None
 
     def test_namespace_out_of_scope_is_403(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.side_effect = ValueError(
+            k8s.get_public_address_status.side_effect = ValueError(
                 "Namespace 'kube-system' is not managed by this operator"
             )
             with pytest.raises(HTTPException) as e:
@@ -288,7 +288,7 @@ class TestPublicAddressEndpoint:
 
     def test_kubectl_failure_is_500_without_leaking_stderr(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.side_effect = KubectlException(
+            k8s.get_public_address_status.side_effect = KubectlException(
                 message="kubectl command timed out after 15s",
                 command="kubectl logs …",
                 stderr="connection to the server was refused",
@@ -304,10 +304,10 @@ class TestLegacyMqttAddressEndpoint:
 
     def test_asks_for_tcp_only(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.return_value = "tcp://6.tcp.ngrok.io:22222"
+            k8s.get_public_address_status.return_value = ("tcp://6.tcp.ngrok.io:22222", None)
             resp = get_mqtt_address(NS, REL)
         assert resp.public_url == "tcp://6.tcp.ngrok.io:22222"
-        assert k8s.get_advertised_public_address.call_args.kwargs["schemes"] == ("tcp",)
+        assert k8s.get_public_address_status.call_args.kwargs["schemes"] == ("tcp",)
 
     def test_end_to_end_with_legacy_marker(self):
         svc = _svc_with_log(f"{LEGACY}tcp://6.tcp.ngrok.io:22222")
@@ -321,19 +321,19 @@ class TestLegacyMqttAddressEndpoint:
 
     def test_absent_address_is_200_with_null(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.return_value = None
+            k8s.get_public_address_status.return_value = (None, None)
             assert get_mqtt_address(NS, REL).public_url is None
 
     def test_namespace_out_of_scope_is_403(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.side_effect = ValueError("nope")
+            k8s.get_public_address_status.side_effect = ValueError("nope")
             with pytest.raises(HTTPException) as e:
                 get_mqtt_address("kube-system", "whatever")
         assert e.value.status_code == 403
 
     def test_kubectl_failure_is_500_without_leaking_stderr(self):
         with patch("src.api.releases.k8s_service") as k8s:
-            k8s.get_advertised_public_address.side_effect = KubectlException(
+            k8s.get_public_address_status.side_effect = KubectlException(
                 message="kubectl command timed out after 15s",
                 command="kubectl logs …",
                 stderr="connection to the server was refused",

@@ -107,6 +107,11 @@
                                     <WoowIcon name="copyIcon('tunnel')" size="16"/>
                                 </button>
                             </t>
+                            <t t-elif="props.service.public_tunnel_error">
+                                <!-- #1559：ngrok 說得出原因（authtoken 錯、沒填、網域被占用、要重啟）時
+                                     直接顯示，不再只寫「尚未取得」。文案由後端依建立者語言組好。 -->
+                                <small class="text-danger" t-esc="props.service.public_tunnel_error"/>
+                            </t>
                             <t t-else="">
                                 <small class="text-muted" t-esc="publicTunnelPendingHint"/>
                             </t>

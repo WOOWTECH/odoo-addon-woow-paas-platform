@@ -1530,6 +1530,17 @@ class CloudService(models.Model):
              'Empty when the product has no such address or the agent has not '
              'connected.',
     )
+    # #1559：沒有對外位址時，ngrok sidecar log 說得出的原因（authtoken 錯、沒填、網域被占用、
+    # Headscale 要重啟才會改用 ngrok 網址……），已依服務建立者的語言組好的一句話。與
+    # public_tunnel_url 同一個咽喉回寫（`_release_facts`），有位址時一律清掉。operator 只回
+    # 封閉集合的原因碼，這裡不會出現任何原始 log。
+    public_tunnel_error = fields.Char(
+        string='Public Tunnel Error',
+        readonly=True,
+        copy=False,
+        help='Why the ngrok sidecar has no public address, when its log says so '
+             '(wrong or missing authtoken, domain already in use, restart needed).',
+    )
     subdomain = fields.Char(
         string='Subdomain',
         help='Subdomain for accessing this service (combined with PaaS domain, e.g., myapp.woowtech.io)',
@@ -4687,8 +4698,17 @@ class CloudService(models.Model):
         讓它把整輪 poll 打斷（state 回寫、就緒判定都在同一輪）是完全不成比例的。
         """
         self.ensure_one()
+        return self._probe_public_tunnel(client)[0]
+
+    def _probe_public_tunnel(self, client):
+        """#1559：同 `_probe_public_tunnel_address`，再加上「沒有位址時的原因」。
+
+        回 ``(address, error)``：``address`` 三態同上；``error`` 只在探過而且沒有位址時才可能
+        非空（已依服務建立者的語言組好），沒探時是 ``None``、有位址時是 ``''``。
+        """
+        self.ensure_one()
         if not self._chart_has_public_tunnel_address():
-            return None
+            return None, None
         try:
             payload = client.get_public_address(
                 self.helm_namespace, self.helm_release_name
@@ -4698,8 +4718,58 @@ class CloudService(models.Model):
                 'Could not read the advertised public address for %s: %s',
                 self.name, e,
             )
-            return None
-        return payload.get('public_url') or ''
+            return None, None
+        address = payload.get('public_url') or ''
+        if address:
+            return address, ''
+        return '', self._public_tunnel_error_text(payload.get('error_code'))
+
+    def _public_tunnel_error_text(self, code):
+        """#1559：operator 回的原因碼 → 服務建立者語言的一句話（未知形狀一律 ''）。
+
+        只認封閉集合（operator ``ngrok_errors``）：``NO_AUTHTOKEN``、``SERVER_URL_MISMATCH``、
+        ``ERR_NGROK_<n>``。operator 的 ``error`` 文字不採用——平台自己有多語系文案，而且不把
+        operator 給的任何字串直接放到租戶畫面上。
+        """
+        self.ensure_one()
+        if not isinstance(code, str) or not code:
+            return ''
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        if code == 'NO_AUTHTOKEN':
+            return env._(
+                'ngrok is turned on, but no ngrok authtoken has been entered. Enter the '
+                'authtoken of your own ngrok account in Configuration.')
+        if code == 'SERVER_URL_MISMATCH':
+            return env._(
+                'ngrok is connected, but the service started before it was, so it still uses '
+                'the in-cluster address. Restart the service to switch to the ngrok address.')
+        if code in ('ERR_NGROK_105', 'ERR_NGROK_107'):
+            return env._(
+                'The ngrok authtoken is not valid (%(code)s). Copy it again from the "Your '
+                'Authtoken" page of your ngrok dashboard and enter it in Configuration.',
+                code=code)
+        if code == 'ERR_NGROK_108':
+            return env._(
+                'This ngrok account already has the maximum number of agents online '
+                '(ERR_NGROK_108). Stop the other ngrok agent that uses this account, or use '
+                'another account.')
+        if code == 'ERR_NGROK_334':
+            return env._(
+                'This ngrok domain is already online somewhere else (ERR_NGROK_334). A domain '
+                'can be used by only one agent at a time: stop the other one or use another '
+                'domain.')
+        if code == 'ERR_NGROK_4018':
+            return env._(
+                'ngrok needs a verified account and authtoken (ERR_NGROK_4018). Verify your '
+                'ngrok account and enter its authtoken in Configuration.')
+        if re.fullmatch(r'ERR_NGROK_[0-9]{1,5}', code):
+            return env._(
+                'The ngrok agent could not connect (%(code)s, see '
+                'https://ngrok.com/docs/errors/%(slug)s). Check the ngrok authtoken and '
+                'domain in Configuration.',
+                code=code, slug=code.lower())
+        return ''
 
     def _gateway_public_url(self):
         """本服務的 gateway 完整網址（chart 無 gateway 或服務無 subdomain 時回 ''）。
@@ -5407,9 +5477,11 @@ class CloudService(models.Model):
                     # 服務正是 running（poll 的 domain 只收轉移狀態）。
                     # 無此能力的商品 `_probe_public_tunnel_address` 直接回 None、不打
                     # operator，所以這行對其餘商品零成本。
+                    tunnel_address, tunnel_error = service._probe_public_tunnel(client)
                     facts = service._release_facts(
                         status.get('release', {}),
-                        tunnel_address=service._probe_public_tunnel_address(client),
+                        tunnel_address=tunnel_address,
+                        tunnel_error=tunnel_error,
                     )
                     # 舊值必須**在寫入之前**收起來：寫完之後 `service[field]` already
                     # 是新值，log 就只印得出「現在是什麼」而不是「從什麼變成什麼」，
@@ -6718,7 +6790,7 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
-    def _release_facts(self, release, dns_state=None, tunnel_address=None):
+    def _release_facts(self, release, dns_state=None, tunnel_address=None, tunnel_error=None):
         """operator 回報的 release 事實 → 帳本回寫欄位。**所有寫入者的單一來源。**
 
         （#1159 起 list/get 純讀、controller 那份 poll 已刪除；以下是 #627 當時的背景。）
@@ -6772,6 +6844,9 @@ class CloudService(models.Model):
         # `''` ＝ 探過而且現在沒有位址 ⇒ 清掉（留著一個連不上的舊位址比空值更糟）。
         if tunnel_address is not None:
             vals['public_tunnel_url'] = tunnel_address or False
+            # #1559：原因只描述「現在沒有位址」——有位址就清掉；同一個「探過才寫」的閘門。
+            vals['public_tunnel_error'] = (
+                False if tunnel_address else (tunnel_error or False))
         return vals
 
     def _poll_and_update_status(self, client):
@@ -6876,13 +6951,14 @@ class CloudService(models.Model):
 
         # 與 DNS 同一條紀律：**一輪只探一次**，結果餵進 `_release_facts`。
         # 只在 release 已 deployed 時探——還沒 deploy 的服務裡根本還沒有 agent。
-        tunnel_address = (
-            service._probe_public_tunnel_address(client)
-            if release_status == 'deployed' else None
+        tunnel_address, tunnel_error = (
+            service._probe_public_tunnel(client)
+            if release_status == 'deployed' else (None, None)
         )
 
         release_facts = service._release_facts(
-            release, dns_state=dns_state, tunnel_address=tunnel_address
+            release, dns_state=dns_state, tunnel_address=tunnel_address,
+            tunnel_error=tunnel_error,
         )
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。

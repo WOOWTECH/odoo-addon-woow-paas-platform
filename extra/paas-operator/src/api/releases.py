@@ -38,6 +38,7 @@ from src.services.helm import (
 )
 from src.services.helm import _live_objects, _sanitize_release_values
 from src.services.helm_limiter import helm_operation_slot
+from src.services.ngrok_errors import describe_ngrok_error
 from src.services.upgrade_preflight import (
     build_expansion_error_detail,
     classify_expansion_rejection,
@@ -1370,10 +1371,13 @@ def get_release_revisions(namespace: str, name: str):
         )
 
 
-def _read_advertised_address(namespace: str, name: str, schemes) -> Optional[str]:
-    """兩個位址端點共用：403 namespace 越界、500 kubectl 失敗（不外洩 stderr）。"""
+def _read_advertised_address(namespace: str, name: str, schemes) -> Tuple[Optional[str], Optional[str]]:
+    """兩個位址端點共用：403 namespace 越界、500 kubectl 失敗（不外洩 stderr）。
+
+    回 ``(address, error_code)``；#1559 起沒有位址時附上 sidecar log 說得出的原因碼。
+    """
     try:
-        return k8s_service.get_advertised_public_address(namespace, name, schemes=schemes)
+        return k8s_service.get_public_address_status(namespace, name, schemes=schemes)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1421,10 +1425,14 @@ def get_public_address(namespace: str, name: str):
     Raises:
         HTTPException: 403 namespace 越界、500 kubectl 失敗
     """
+    address, error_code = _read_advertised_address(
+        namespace, name, KubernetesService.PUBLIC_ADDRESS_SCHEMES
+    )
+    # #1559：沒有位址時一併回原因（authtoken 錯、沒填 token、網域被占用……），平台顯示在服務頁。
     return PublicAddressResponse(
-        public_url=_read_advertised_address(
-            namespace, name, KubernetesService.PUBLIC_ADDRESS_SCHEMES
-        )
+        public_url=address,
+        error_code=error_code if not address else None,
+        error=describe_ngrok_error(error_code) if not address else None,
     )
 
 
@@ -1444,7 +1452,7 @@ def get_mqtt_address(namespace: str, name: str):
         HTTPException: 403 namespace 越界、500 kubectl 失敗
     """
     return MqttAddressResponse(
-        public_url=_read_advertised_address(namespace, name, ("tcp",))
+        public_url=_read_advertised_address(namespace, name, ("tcp",))[0]
     )
 
 

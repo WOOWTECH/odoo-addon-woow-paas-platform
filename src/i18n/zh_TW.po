@@ -21118,3 +21118,57 @@ msgid ""
 "The settings definition of this application cannot be read, so the rollback"
 " cannot keep its API keys safe. Please contact support."
 msgstr "無法讀取這個應用的設定定義，回復時無法確保 API 金鑰維持目前的值，因此不能回復。請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "ngrok is turned on, but no ngrok authtoken has been entered. Enter the authtoken of your own ngrok account in Configuration."
+msgstr "已開啟 ngrok，但還沒有填 ngrok authtoken。請到「配置」填入你自己 ngrok 帳號的 authtoken。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "ngrok is connected, but the service started before it was, so it still uses the in-cluster address. Restart the service to switch to the ngrok address."
+msgstr "ngrok 已連上，但服務啟動時還沒等到它，目前仍使用叢集內網址。請重新啟動服務以改用 ngrok 對外網址。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The ngrok authtoken is not valid (%(code)s). Copy it again from the \"Your Authtoken\" page of your ngrok dashboard and enter it in Configuration."
+msgstr "ngrok authtoken 不正確（%(code)s）。請到 ngrok 後台的「Your Authtoken」頁重新複製，再到「配置」填入。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This ngrok account already has the maximum number of agents online (ERR_NGROK_108). Stop the other ngrok agent that uses this account, or use another account."
+msgstr "這個 ngrok 帳號同時連線的 agent 數已達上限（ERR_NGROK_108）。請停掉其他使用同一個帳號的 ngrok agent，或改用另一個帳號。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This ngrok domain is already online somewhere else (ERR_NGROK_334). A domain can be used by only one agent at a time: stop the other one or use another domain."
+msgstr "這個 ngrok 網域已經在別處上線（ERR_NGROK_334）。同一個網域同時只能給一個 agent 用：請停掉另一邊，或改用別的網域。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "ngrok needs a verified account and authtoken (ERR_NGROK_4018). Verify your ngrok account and enter its authtoken in Configuration."
+msgstr "ngrok 需要已驗證的帳號與 authtoken（ERR_NGROK_4018）。請完成 ngrok 帳號驗證，再到「配置」填入它的 authtoken。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The ngrok agent could not connect (%(code)s, see https://ngrok.com/docs/errors/%(slug)s). Check the ngrok authtoken and domain in Configuration."
+msgstr "ngrok agent 無法連線（%(code)s，說明見 https://ngrok.com/docs/errors/%(slug)s）。請檢查「配置」裡的 ngrok authtoken 與網域。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_error
+msgid "Public Tunnel Error"
+msgstr "對外位址錯誤原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_error
+msgid ""
+"Why the ngrok sidecar has no public address, when its log says so (wrong or"
+" missing authtoken, domain already in use, restart needed)."
+msgstr "ngrok sidecar 沒有對外位址、而它的 log 說得出原因時的說明（authtoken 錯誤或未填、網域已被占用、需要重新啟動）。"

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.config import settings
 from src.services.helm_limiter import helm_operation_slot
@@ -1507,6 +1507,36 @@ class KubernetesService:
                 return line[len(marker):].strip(" \t")
         return None
 
+    # #1559：agent 連不上時，原因只在 sidecar log（例：authtoken 錯 ⇒ ERR_NGROK_105），服務頁
+    # 只能寫「尚未取得」。這裡讀回**原因碼**——同樣不回任何原始 log 內容（ngrok 在認證失敗時
+    # 會把 authtoken 印回來，EMQX 的 sidecar 沒有過濾），只回封閉集合裡的代碼：
+    #   * ``ERR_NGROK_<n>``：只認 ngrok 自己的錯誤區塊那一行（整行就是
+    #     ``ERROR:  ERR_NGROK_<n>``）。ngrok 的一般 log 是 logfmt（行首 ``t=``），訪客可控的
+    #     字串進不了「整行完全等於」這個形狀。
+    #   * ``NO_AUTHTOKEN``：chart 的 sidecar 在「開了 ngrok 卻沒填 token」時印的固定句（行首）。
+    #   * ``SERVER_URL_MISMATCH``：Headscale 的 sidecar：ngrok 已連上，但 Headscale 啟動時用的
+    #     server_url 不是它（啟動時 ngrok 還沒連上）⇒ 要重新啟動服務。
+    # 只有「最後一次宣告的位址是空的」時才回原因：之後又連上（印出非空位址）就清掉。
+    NGROK_ERROR_LINE_RE = re.compile(r"ERROR:[ \t]+(ERR_NGROK_[0-9]{1,5})[ \t]*")
+    NGROK_NO_TOKEN_PREFIXES = (
+        "ngrok authtoken is not set",          # charts/emqx
+        "[ngrok] 未設定 ngrok authtoken",       # charts/headscale（woow_log）
+    )
+    NGROK_SERVER_URL_MISMATCH_PREFIX = "[ngrok] ngrok 已連上 "  # charts/headscale ngrok.sh
+
+    @classmethod
+    def _ngrok_error_code(cls, line: str) -> Optional[str]:
+        """一行 sidecar log → 原因碼（封閉集合）或 None。"""
+        line = line.rstrip("\r")
+        match = cls.NGROK_ERROR_LINE_RE.fullmatch(line)
+        if match:
+            return match.group(1)
+        if line.startswith(cls.NGROK_NO_TOKEN_PREFIXES):
+            return "NO_AUTHTOKEN"
+        if line.startswith(cls.NGROK_SERVER_URL_MISMATCH_PREFIX) and "server_url" in line:
+            return "SERVER_URL_MISMATCH"
+        return None
+
     def get_advertised_public_address(
         self,
         namespace: str,
@@ -1514,6 +1544,18 @@ class KubernetesService:
         schemes=PUBLIC_ADDRESS_SCHEMES,
     ) -> Optional[str]:
         """Read the public address the release's ngrok sidecar advertises.
+
+        Thin wrapper over :meth:`get_public_address_status` (address only).
+        """
+        return self.get_public_address_status(namespace, release, schemes)[0]
+
+    def get_public_address_status(
+        self,
+        namespace: str,
+        release: str,
+        schemes=PUBLIC_ADDRESS_SCHEMES,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Read the advertised public address and, when there is none, why (#1559).
 
         Args:
             namespace: Release namespace
@@ -1523,18 +1565,21 @@ class KubernetesService:
                 passes ``("tcp",)`` so it keeps returning exactly what it did.
 
         Returns:
-            The advertised ``tcp://host:port`` / ``https://host[:port]``, or None
-            when there is nothing to report — no pod, no ngrok sidecar (the tenant
-            left it off), the agent has not connected yet, the sidecar retracted
-            the address, or the line did not match the expected shape. All of
-            those are ordinary states, NOT errors: the caller must not treat None
-            as a failure.
+            ``(address, error_code)``. ``address`` is the advertised
+            ``tcp://host:port`` / ``https://host[:port]`` or None when there is
+            nothing to report — no pod, no ngrok sidecar (the tenant left it off),
+            the agent has not connected yet, the sidecar retracted the address, or
+            the line did not match the expected shape. All of those are ordinary
+            states, NOT errors: the caller must not treat None as a failure.
+            ``error_code`` is only set when ``address`` is None and the sidecar log
+            says why (closed set, see ``_ngrok_error_code``); never raw log text.
         """
         validate_namespace(namespace)
 
         pods = self.get_pods(
             namespace, label_selector=f"app.kubernetes.io/instance={release}"
         )
+        last_error: Optional[str] = None
         for pod in pods:
             if pod.deletion_timestamp:
                 continue
@@ -1561,18 +1606,24 @@ class KubernetesService:
                 continue
 
             address = None
+            error = None
             # 只以 "\n" 切行（kubectl logs 的行界）。`splitlines()` 還會在 U+2028、
             # U+0085、\x1c–\x1e、\r 切開——ngrok 自己那幾行若夾帶這些字元，行中間的
             # marker 就會被切成「行首」，行首錨定等於失效。
             for line in (result.stdout or "").split("\n"):
                 candidate = self._marker_value(line)
                 if candidate is None:
+                    code = self._ngrok_error_code(line)
+                    if code:
+                        error = code
                     continue
                 parsed = self._parse_public_address(candidate, schemes) if candidate else None
                 if parsed:
                     # Keep scanning: the sidecar re-prints on an interval, so the
                     # LAST match is the address the agent currently holds.
                     address = parsed
+                    # #1559：連上了 ⇒ 之前的失敗原因不再描述現況。
+                    error = None
                 elif not candidate:
                     # An EMPTY announcement is a retraction: the sidecar prints it
                     # whenever the agent exits (bad token, expired account…)
@@ -1588,9 +1639,10 @@ class KubernetesService:
                         pod.name,
                     )
             if address:
-                return address
+                return address, None
+            last_error = error or last_error
 
-        return None
+        return None, last_error
 
     # #1417：診斷文字（waiting message、事件訊息）的長度上限；事件查詢的 subprocess 上限。
     # 事件只是錦上添花，查不到不能拖垮 status 端點（平台背景 poll 每分鐘逐台打一次）。

@@ -895,6 +895,16 @@ class PublicAddressResponse(BaseModel):
             "沒有可報告的位址時為 None"
         ),
     )
+    # #1559：沒有位址、而 sidecar log 說得出原因時（例：authtoken 錯 ⇒ ERR_NGROK_105）。
+    # 封閉集合的代碼＋operator 端固定中文說明；絕不是原始 log。舊平台不讀這兩欄（純加法）。
+    error_code: Optional[str] = Field(
+        default=None,
+        description="ERR_NGROK_<n> | NO_AUTHTOKEN | SERVER_URL_MISMATCH；有位址時恆為 None",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="error_code 的中文說明（固定文案，不含任何 log 內容）",
+    )
 
 
 class MqttAddressResponse(BaseModel):
