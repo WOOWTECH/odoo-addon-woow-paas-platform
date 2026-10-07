@@ -16,7 +16,7 @@
 
 | 路徑 | 內容 |
 |------|------|
-| [`api/`](api/) | API contract：[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定）、[`ha-component-integration`](api/ha-component-integration.md)（HA component 串接總覽：概念 / OAuth / Smart Home API，SA 速覽）、[`security-access-ha-integration`](api/security-access-ha-integration.md)（Security Access HA 端點權威規格）、[`ha-app-oauth-provisioning`](api/ha-app-oauth-provisioning.md)（給 HA App 的 OAuth＋開通串接包）。整站端點權威=`grep @route`（src/controllers/）與 `src/static/src/paas/core/router.js`；早期整站設計稿已 archive（`../archived/reference/`） |
+| [`api/`](api/) | API contract：[`agent-runtime-ws-protocol`](api/agent-runtime-ws-protocol.md)（Agent-Runtime Pod WebSocket 協定）、[`ha-component-integration`](api/ha-component-integration.md)（HA component 串接總覽：概念 / OAuth / Smart Home API，SA 速覽）、[`security-access-ha-integration`](api/security-access-ha-integration.md)（Security Access HA 端點權威規格）、[`ha-app-oauth-provisioning`](api/ha-app-oauth-provisioning.md)（給 HA App 的 OAuth＋開通串接包）、[`litellm-chatgpt-subscription-operator`](api/litellm-chatgpt-subscription-operator.md)（LiteLLM ChatGPT 訂閱登入：operator 端點＋chart CLI 契約）。整站端點權威=`grep @route`（src/controllers/）與 `src/static/src/paas/core/router.js`；早期整站設計稿已 archive（`../archived/reference/`） |
 | [`features/`](features/) | 功能規格（workspace、cloud-services、odoo-service-config、subscription-failure-handling-gap）。訂閱整合的歷史建置藍圖已歸位 `../plans/2026-Q2/subscription-integration-{design,workflow}.md`；現行訂閱行為權威=src/models/sh_subscription\*.py 與 `../decisions/philosophy/billing-philosophy.md` |
 | [`architecture/`](architecture/) | 架構生命週期圖（目前：[`n8n-cloud-service-lifecycle`](architecture/n8n-cloud-service-lifecycle.md)） |
 | [`pencil/`](pencil/) | `.pen` 設計檔（圖表） |

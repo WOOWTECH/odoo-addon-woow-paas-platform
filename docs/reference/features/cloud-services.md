@@ -126,6 +126,7 @@ rules:
 | GET    | `/api/releases/{namespace}/{name}/status`    | Get pod/deployment status   |
 | GET    | `/api/releases/{namespace}/{name}/public-address` | 對外通道位址回讀（ngrok sidecar：`tcp://` 或 `https://`，見下方「對外通道位址回讀」） |
 | GET    | `/api/releases/{namespace}/{name}/mqtt-address` | 舊端點（平台 ≤ 18.0.1.0.205 呼叫）：同一份契約、只回 `tcp://` |
+| POST   | `/api/releases/{namespace}/{name}/chatgpt-subscription/{action}` | LiteLLM「ChatGPT 訂閱」device code 登入（exec chart CLI；契約見 [litellm-chatgpt-subscription-operator](../api/litellm-chatgpt-subscription-operator.md)） |
 | POST   | `/api/namespaces`                            | Create namespace with quota |
 
 **Request/Response Example**：
