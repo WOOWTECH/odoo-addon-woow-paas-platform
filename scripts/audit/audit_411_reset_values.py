@@ -219,6 +219,7 @@ _INJECTOR_VALUE_PATHS = frozenset({
     ("seed", "coreConfig", "externalUrl"),  # allowed_origins injector（ha-full，#1388）
     ("config", "dashboardPublicUrl"),     # dashboard_public_url injector（hermes-agent，#424①）
     ("networkPolicy", "apiServerCidrs"),  # apiserver_cidrs injector（#404）
+    ("networkPolicy", "apiserverCidrs"),  # apiserver_cidrs injector — omnigent 的小寫鍵（#1441）
     ("omnigentHost", "serverUrl"),        # workspace_service_url injector（同工作區 Omnigent）
     ("tailscale", "workspaceHeadscaleUrl"),  # workspace_service_url injector（同工作區 Headscale）
     ("llmGateway", "baseUrl"),            # workspace_service_url injector（同工作區 LiteLLM）
