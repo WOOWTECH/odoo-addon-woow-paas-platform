@@ -65,12 +65,13 @@ APP_ADMIN_RESET_TIMEOUT = 75
 #     前端 CHATGPT_SUBSCRIPTION_*_TIMEOUT_MS（60_000／100_000／190_000，
 #       src/static/src/paas/services/cloud_service.js）
 #       > 本檔三個常數（一般 45s／add-models 90s／test 180s）
-#         > operator 的 exec 逾時（status／start／poll／disconnect 30s、add-models 60s、
-#           test 150s；extra/paas-operator 的 chatgpt-subscription 端點）
+#         > operator 的 exec 逾時＋找 pod 餘裕（status／start／poll／disconnect 30＋10s、
+#           add-models 60＋10s、test 150＋10s；operator #1547 的
+#           CHATGPT_EXEC_TIMEOUT_SECONDS／CHATGPT_POD_LOOKUP_SLACK_SECONDS）
 #
 # 前兩層由 scripts/audit/repo-lint.py 的 check_reset_budget_ladder 驗算；operator 那層
-# 的常數在 operator PR 合併後補進同一條 gate。test 會真的送一個模型請求（chart 端 120s），
-# 所以是最寬的一檔。
+# 目前由 src/tests/test_chatgpt_subscription.py 以數字鎖住，#1547 合併後再把它的常數
+# 補進同一條 gate。test 會真的送一個模型請求（chart 端 120s），所以是最寬的一檔。
 CHATGPT_SUBSCRIPTION_TIMEOUT = 45
 CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT = 90
 CHATGPT_SUBSCRIPTION_TEST_TIMEOUT = 180
