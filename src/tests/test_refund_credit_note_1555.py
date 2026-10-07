@@ -168,6 +168,29 @@ class TestRefundCreditNote1555(_RefundFixture):
         upstream.assert_not_called()
         self.assertEqual(self._credit_notes(invoice).state, 'posted')
 
+    def test_plan_change_then_delete_credits_each_invoice_once(self):
+        """換方案（舊訂閱退剩餘期間）後再刪除（新訂閱退剩餘期間）：兩張發票各一張貸項。
+
+        換方案的步驟照三個 controller 的順序：算退點 → 退回錢包 → 建貸項 → 關舊訂閱。
+        """
+        old_sub, old_invoice = self._paid_sub()
+        with _today(_MID_CYCLE):
+            refund = old_sub._compute_unused_refund()
+            self.partner.sudo().refund_wallet_points(
+                amount=refund, description='Plan change refund', subscription=old_sub)
+            old_sub._woow_record_refund_credit_note(refund, 'Plan change')
+            old_sub.write({'state': 'close'})
+        new_sub, new_invoice = self._paid_sub(taxes=self.tax_5)
+        with _today(_MID_CYCLE):
+            credited = new_sub._settle_on_entity_delete()
+        old_cn, new_cn = self._credit_notes(old_invoice), self._credit_notes(new_invoice)
+        self.assertEqual((len(old_cn), len(new_cn)), (1, 1))
+        self.assertAlmostEqual(old_cn.amount_untaxed, refund, places=2)
+        self.assertAlmostEqual(new_cn.amount_untaxed, credited, places=2)
+        self.assertIn('Plan change', old_cn.ref)
+        self.assertEqual(old_cn.payment_state, 'paid')
+        self.assertEqual(new_cn.payment_state, 'partial', '含稅：稅額那段留著（#1261）')
+
     def test_trial_or_unpaid_creates_nothing(self):
         sub = self.Sub.create({
             'sh_partner_id': self.partner.id,
