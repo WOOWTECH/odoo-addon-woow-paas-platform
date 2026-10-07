@@ -1052,3 +1052,5 @@ from . import test_helm_values_whitelist_fail_closed_1488
 from . import test_n8n_smtp_fields_1370
 # #1158：換方案把新方案規格套到已部署服務（overlay 進 assemble、儲存只擴不縮 #1512）。
 from . import test_change_plan_reapply_1158
+# #1516：跨使用者同名建立，slug 全域查重與隨機 hex 後綴。
+from . import test_workspace_slug_1516

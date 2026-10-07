@@ -66,6 +66,9 @@ _WS_HASH_BYTES = 4
 # `_generate_ws_hash` 的 docstring）。
 _WS_HASH_MAX_ATTEMPTS = 8
 
+# #1516：同名 workspace 的 slug 後綴；3 bytes → 6 個小寫 hex。
+_SLUG_SUFFIX_BYTES = 3
+
 
 class Workspace(models.Model):
     _name = 'woow_paas_platform.workspace'
@@ -93,10 +96,9 @@ class Workspace(models.Model):
     _sql_constraints = [
         ('unique_slug', 'UNIQUE(slug)', 'Slug must be unique.'),
         # 🔴 這條 SQL constraint 是 #677 的**唯一**真正守線，不是 belt-and-braces。
-        # 跨租戶碰撞檢查在 Python 層做不到：`_generate_slug()` 既有的
-        # `while self.search_count(...)` 走呼叫者身分、受 ir.rule 限制，而攻擊者正好
-        # 站在「看不見受害者」的位置上 ⇒ 那種檢查對他恆回 0、靜默放行。DB constraint
-        # 不看 ir.rule，也不怕 TOCTOU（保證在寫入當下成立，不是在寫入之前查一次）。
+        # Python 層即使用 sudo 查重，也無法避免查詢與 INSERT 之間的 TOCTOU；
+        # DB constraint 不看 ir.rule，且保證唯一性在寫入當下成立。slug／ws_hash
+        # 的全域查重只降低撞號機率，不能取代各自的 DB UNIQUE。
         ('unique_ws_hash', 'UNIQUE(ws_hash)',
          'Two workspaces must never share a Kubernetes namespace identity.'),
     ]
@@ -178,18 +180,14 @@ class Workspace(models.Model):
         `slug`：擋掉呼叫端**直接指定** slug 的兩條通道（vals 的 `slug` 鍵、context
         的 `default_slug`）。
 
-        🔴 **這道守衛「不」等於「slug 由伺服器決定」——不要那樣讀它。** 下面
-        `create()` 產生 slug 的方式是 `_generate_slug(resolved['name'])`，而
-        `_generate_slug()` 對 `[a-z0-9_-]` 字串**是恆等函式**（它只做小寫化、
-        刪掉非 word/空白/連字號的字元、把空白／連字號序列併成單一 `-`）。⇒ 租戶把同一個字串
-        從 `slug` 鍵搬到 `name` 鍵，就得到逐字相同的 slug。`name` 是租戶本來就
-        該能自由指定的欄位（`_create_workspace` 只做 `.strip()`），所以這條通道
-        **仍然開著**，#677 也刻意沒有關它（關它要動 `_generate_slug`，會波及
-        #525 A2 鎖死的孤兒 slug 行為，爆炸半徑不同）。
+        租戶仍可透過 `name` 影響 base slug：`_generate_slug()` 做小寫化、
+        刪除非 word/空白/連字號字元，再把空白／連字號序列併成單一 `-`。
+        #1516 改為 sudo 全域查重；未佔用時保留 base slug，撞名（含不可見孤兒）
+        才加伺服器產生的 6 碼隨機 hex 後綴。因此 `name` 可影響 slug，卻不保證
+        逐字決定最終 slug，且顯示用的 `name` 不變。
 
-        ⇒ **`slug` 今天仍然是租戶完全決定的字串。** 之所以不再有份量，是因為
-        #677 把 namespace／subdomain 的推導從 `slug` 移到了 `ws_hash`（下一段），
-        `slug` 從此只是給人看的識別字。守門測試：
+        #677 已把 namespace／subdomain 的推導從 `slug` 移到了 `ws_hash`（下一段），
+        `slug` 只是給人看的識別字，不是基礎設施身分。守門測試：
         `test_workspace_authz_658.py::test_X8b_*`。
 
         `ws_hash`（#677）：K8s namespace 與所有公開子網域的**唯一**輸入。舊的
@@ -272,18 +270,14 @@ class Workspace(models.Model):
         return workspaces
 
     def _generate_slug(self, name: str) -> str:
-        """Generate a URL-friendly slug from name"""
+        """由 name 正規化 slug；全域撞名時加隨機 hex，不更動顯示名稱。"""
         if not name:
             return ''
-        # Convert to lowercase and replace spaces/special chars with hyphens
         slug = re.sub(r'[^\w\s-]', '', name.lower())
         slug = re.sub(r'[-\s]+', '-', slug).strip('-')
-        # Ensure uniqueness
-        base_slug = slug
-        counter = 1
-        while self.search_count([('slug', '=', slug)]) > 0:
-            slug = f"{base_slug}-{counter}"
-            counter += 1
+        # #1516：必須看見其他租戶與孤兒，與 DB UNIQUE(slug) 的範圍一致。
+        if self.sudo().search_count([('slug', '=', slug)]):
+            return f"{slug}-{secrets.token_hex(_SLUG_SUFFIX_BYTES)}"
         return slug
 
     def _generate_ws_hash(self) -> str:
