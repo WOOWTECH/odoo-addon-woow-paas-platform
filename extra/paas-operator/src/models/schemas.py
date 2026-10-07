@@ -815,6 +815,43 @@ class AppAdminPasswordResetResponse(BaseModel):
     error_kind: Optional[InitErrorKind] = None
 
 
+# --- LiteLLM「ChatGPT 訂閱」登入（device code 經 operator exec；woow-paas-charts litellm ≥ 0.2.0）---
+
+#: 對平台暴露的 CLI 指令白名單（路徑參數；其他值 FastAPI 直接 422、不 exec）。
+#: chart CLI 另有 restore／selfcheck，只給 chart 自己用，刻意不在這裡。
+ChatGPTSubscriptionAction = Literal["status", "start", "poll", "disconnect", "add-models", "test"]
+
+#: ``InitErrorKind`` 的子集（這裡沒有 partial）：not_executed＝沒 exec（pod 不在、
+#: 名稱不合法、舊 chart）；failed＝CLI 明說 ok:false；unknown＝逾時／輸出不可解析。
+ChatGPTSubscriptionErrorKind = Literal["not_executed", "failed", "unknown"]
+
+
+class ChatGPTSubscriptionRequest(BaseModel):
+    """body 可整個省略。名稱格式由 endpoint 自己驗（不合法回 200＋``invalid_model``）。"""
+
+    models: Optional[List[str]] = Field(
+        None,
+        description="add-models: model names, `chatgpt/` prefix optional, at most 12; "
+                    "omitted or empty = the chart's default list",
+    )
+    model: Optional[str] = Field(
+        None, description="test: the model to call; omitted = the first chatgpt/ model",
+    )
+
+
+class ChatGPTSubscriptionResponse(BaseModel):
+    """業務結果一律 200；``data`` 是 CLI 那一行 JSON 去掉 ``ok``（token 鍵已刪）。
+
+    ⚠ ``data.pending.user_code`` 是要給租戶看的一次性登入代碼——呼叫端不可寫進 log。
+    """
+
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+    error_kind: Optional[ChatGPTSubscriptionErrorKind] = None
+
+
 # --- Odoo Module Management ---
 
 

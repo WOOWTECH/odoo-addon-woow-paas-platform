@@ -11,6 +11,7 @@ from src.api import (
     access,
     agent_runtimes,
     analytics,
+    chatgpt_subscription,
     cluster,
     init,
     namespaces,
@@ -189,6 +190,8 @@ app.include_router(reconcile.router)
 app.include_router(analytics.router)
 # #1415：叢集層唯讀查詢（Longhorn 排程額度）。
 app.include_router(cluster.router)
+# LiteLLM「ChatGPT 訂閱」登入（device code 經 exec；charts/litellm ≥ 0.2.0）。
+app.include_router(chatgpt_subscription.router)
 
 
 # Root endpoint
