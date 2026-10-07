@@ -325,7 +325,9 @@ class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
             res = self._change(owner, svc, self.plan_b)
         self.assertTrue(res['success'], res.get('error'))
         self.assertTrue(res['data']['resources_reapplied'])
-        message = start.call_args.kwargs['failure_message']('boom')
+        # #1552：文案改由 model 依服務建立者的語言組（背景執行緒沒有語言）。
+        self.assertIs(start.call_args.kwargs['plan_change'], True)
+        message = svc._upgrade_failure_message(Exception('boom'), plan_change=True)
         self.assertIn('The plan was changed', message)
         self.assertIn('boom', message)
 

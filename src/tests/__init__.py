@@ -1073,3 +1073,5 @@ from . import test_public_tunnel_error_1559
 from . import test_n8n_init_owner_changed_1534
 # #1542：mcp-server 家族的一次性帳密視窗（MCP 專用文案、admin_url、carrier 鏡射）。
 from . import test_mcp_onetime_credentials_1542
+# #1552：背景 upgrade 失敗不再靜默（poll 先推回 running 也記 error）、中文說明、error 可重新送出修改配置。
+from . import test_upgrade_failure_1552

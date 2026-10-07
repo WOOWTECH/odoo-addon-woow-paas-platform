@@ -82,9 +82,14 @@ export class ConfigurationTab extends Component {
         if (disabledStates.includes(this.props.service.state)) {
             return false;
         }
-        // #1159 Q30：error 只有 init 額度出口可以改設定（算新一代）；helm 失敗、等待
-        // 逾時等其他 error 後端照擋。讀後端同一判準的鏡射欄位，前端不自建。
-        return this.props.service.state !== "error" || !!this.props.service.init_reconfigure_allowed;
+        // #1159 Q30：error 只有 init 額度出口可以改設定（算新一代）；#1552：背景 upgrade
+        // 沒有確認套用的 error 也可以重新送出。等待逾時等其他 error 後端照擋。讀後端同一
+        // 判準的鏡射欄位，前端不自建。
+        return (
+            this.props.service.state !== "error" ||
+            !!this.props.service.init_reconfigure_allowed ||
+            !!this.props.service.upgrade_retry_allowed
+        );
     }
 
     getSpecValue(spec) {

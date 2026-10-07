@@ -1308,12 +1308,6 @@ msgstr "服務執行中才能變更方案（目前狀態：%(state)s）。"
 
 #. module: woow_paas_platform
 #. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "The plan was changed, but resizing the service failed: %(reason)s. Please contact support to redeploy the service."
-msgstr "方案已變更，但服務資源調整失敗：%(reason)s。請聯絡客服重新部署服務。"
-
-#. module: woow_paas_platform
-#. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
 "This Odoo service still runs on the previous Odoo deployment and cannot be "
@@ -21207,3 +21201,58 @@ msgid ""
 "Signs in to the MCP admin page (password only, no username). If you forget "
 "it, use Reset Admin Password on the service page to issue a new one."
 msgstr "登入 MCP 管理頁用（只需要密碼，沒有帳號）。忘記密碼時，可在服務頁按「重設管理員密碼」取得新的密碼。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Upgrade failure fields are managed by the platform: %(fields)s"
+msgstr "升級失敗標記由平台管理：%(fields)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The connection to the deployment service was interrupted, so it is not certain whether the new settings were applied."
+msgstr "與部署服務的連線中斷，無法確認新的設定是否已經套用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The deployment service did not answer in time, so it is not certain whether the new settings were applied."
+msgstr "部署服務沒有在時間內回應，無法確認新的設定是否已經套用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The deployment service was busy with other changes, so the new settings were not applied."
+msgstr "部署服務正在處理其他變更，這次新的設定沒有套用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The deployment service could not apply the new settings: %(detail)s"
+msgstr "部署服務無法套用新的設定：%(detail)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The plan was changed, but resizing the service did not complete. %(reason)s Submit the configuration again to retry, or contact support."
+msgstr "方案已變更，但服務規格沒有調整完成。%(reason)s 請到「配置」再按一次「儲存變更」，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "%(reason)s Submit the configuration again to retry. If it keeps failing, use Rollback or contact support."
+msgstr "%(reason)s 請到「配置」再按一次「儲存變更」；若一直失敗，請使用「回復版本」或聯絡客服。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__upgrade_failed_at
+msgid "Upgrade Failed At"
+msgstr "升級失敗時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__upgrade_failed_at
+msgid ""
+"Set when a configuration change could not be confirmed as applied (the "
+"deployment service was unreachable, busy or failed). While set, the tenant "
+"can submit the configuration again from the error state."
+msgstr "修改配置沒有確認套用（部署服務連不上、忙碌或失敗）時記下的時間。有值時，租戶可以在錯誤狀態下直接重新送出修改配置。"

@@ -478,6 +478,24 @@ def _reject_timeout_recovery_control_writes(env, vals):
             fields=', '.join(touched)))
 
 
+# #1552：「這筆 error 是背景 upgrade（修改配置／換方案）沒有確認套用寫的」標記。有值時
+# 租戶可以直接重新送出修改配置（``_update_service`` 的守衛放行）；其他來源的 error（安裝
+# 失敗、刪除失敗、部署逾時……）照舊擋。租戶若能自己寫它，就能讓刪除失敗等 error 被
+# reconfigure 拉起來（同 `_TIMEOUT_RECOVERY_CONTROL_FIELDS` 的理由與判準）。
+_UPGRADE_FAILURE_CONTROL_FIELDS = frozenset({'upgrade_failed_at'})
+
+
+def _reject_upgrade_failure_control_writes(env, vals):
+    """write() 側：升級失敗標記只能由平台寫入（#1552）。"""
+    if env.is_system():
+        return
+    touched = sorted(_UPGRADE_FAILURE_CONTROL_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Upgrade failure fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
+
+
 # #1431／#1424：服務「曾經正常運作過」的事實。平台依它決定刪除後孤兒 PVC 保留多久
 # （從未 running ⇒ 1 天）與要不要扣款（從未 running 的 error 服務暫停扣款）——租戶若能自己
 # 寫它，就能把用過的服務偽裝成沒用過（縮短資料保留、逃避計費）。判準同上：`env.is_system()`。
@@ -1312,6 +1330,18 @@ class CloudService(models.Model):
              'While set, a background job keeps checking the release for a limited '
              'time and resumes the service as soon as it becomes ready.',
     )
+    # #1552：目前這筆 error 是背景 upgrade（修改配置／換方案）失敗、新設定**沒有確認套用**
+    # 寫的——以及何時寫的。有值＝租戶可以直接重新送出修改配置（出口），其他來源的 error
+    # 不受影響。與 ``transition_timeout_at`` 同一套生命週期：改寫 error_message 或離開
+    # error（停權除外）都會清掉它（`write()`）；只有平台寫得進去。
+    upgrade_failed_at = fields.Datetime(
+        string='Upgrade Failed At',
+        copy=False,
+        readonly=True,
+        help='Set when a configuration change could not be confirmed as applied (the '
+             'deployment service was unreachable, busy or failed). While set, the tenant '
+             'can submit the configuration again from the error state.',
+    )
     # #1431：服務第一次進 running 的時間。由 `write()`／`create()` 在 state 第一次變成
     # running 時統一寫入（不逐路徑 stamp，pitfall reaped-since-single-path-stamp-gc-immunity），
     # 之後不再改、也不會被清——`init_ready_*` 那類「本段 initializing」的觀測會被清掉，不能
@@ -2016,8 +2046,10 @@ class CloudService(models.Model):
                     reset_values=True,
                 )
             except PaaSOperatorError as e:
+                # #1552：503 operator_busy 的 detail 是 dict（error_code＋中文 message）。
+                detail = e.detail.get('message') if isinstance(e.detail, dict) else e.detail
                 raise UserError(
-                    _("Upgrade failed: %(reason)s", reason=e.detail or e.message)
+                    _("Upgrade failed: %(reason)s", reason=detail or e.message)
                 ) from e
 
             # #482: 停權中的服務不得被 upgrade 拉出停權。寫成 'deploying' 會讓
@@ -7292,6 +7324,61 @@ class CloudService(models.Model):
         self.ensure_one()
         return self.state == 'error' and self.init_exit in ('failed', 'unknown')
 
+    def _upgrade_failure_reconfigure_exit(self):
+        """#1552：這個 error 是不是背景 upgrade 沒有確認套用造成的（出口＝重新送出修改配置）。
+
+        controller 的 reconfigure 守衛與前端按鈕（``upgrade_retry_allowed``）讀同一個判準。
+        """
+        self.ensure_one()
+        return self.state == 'error' and bool(self.upgrade_failed_at)
+
+    def _upgrade_failure_message(self, exc, plan_change=False):
+        """#1552：背景 upgrade 失敗時寫進 ``error_message`` 的說明（服務建立者的語言）。
+
+        背景執行緒的 env 沒有語言 ⇒ 舊碼的 ``_()`` 一律英文、還把 operator 的原始例外
+        （``('Connection aborted.', RemoteDisconnected(...))``）原樣給租戶看。這裡依失敗種類
+        說清楚「新設定有沒有套用」與「下一步」：
+
+        - 連線中斷／逾時：不確定有沒有套用 ⇒ 請重新送出；
+        - operator 忙碌（503 ``operator_busy``）：確定沒有套用 ⇒ 請重新送出；
+        - 其他 operator 錯誤：附上 operator 的說明（operator 端已是中文）。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            OPERATOR_BUSY_ERROR_CODE,
+            PaaSOperatorConnectionError,
+            PaaSOperatorTimeoutError,
+        )
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        detail = getattr(exc, 'detail', None)
+        if isinstance(exc, PaaSOperatorConnectionError):
+            reason = env._(
+                'The connection to the deployment service was interrupted, so it is not '
+                'certain whether the new settings were applied.')
+        elif isinstance(exc, PaaSOperatorTimeoutError):
+            reason = env._(
+                'The deployment service did not answer in time, so it is not certain '
+                'whether the new settings were applied.')
+        elif isinstance(detail, dict) and detail.get('error_code') == OPERATOR_BUSY_ERROR_CODE:
+            reason = env._(
+                'The deployment service was busy with other changes, so the new settings '
+                'were not applied.')
+        else:
+            text = detail.get('message') if isinstance(detail, dict) else detail
+            reason = env._(
+                'The deployment service could not apply the new settings: %(detail)s',
+                detail=str(text or getattr(exc, 'message', None) or exc)[:500])
+        if plan_change:
+            return env._(
+                'The plan was changed, but resizing the service did not complete. '
+                '%(reason)s Submit the configuration again to retry, or contact support.',
+                reason=reason)
+        return env._(
+            '%(reason)s Submit the configuration again to retry. If it keeps failing, use '
+            'Rollback or contact support.',
+            reason=reason)
+
     def _init_mark_ready_observed(self):
         """短 poll 觀測到 initializing 的 pods ready ⇒ 排進 init cron 的佇列（#1159 Q1）。
 
@@ -9035,6 +9122,7 @@ class CloudService(models.Model):
         _reject_init_control_writes(self.env, vals)
         _reject_observation_control_writes(self.env, vals)
         _reject_timeout_recovery_control_writes(self.env, vals)
+        _reject_upgrade_failure_control_writes(self.env, vals)
         _reject_service_history_writes(self.env, vals)
         _reject_chart_version_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
@@ -9151,6 +9239,13 @@ class CloudService(models.Model):
                 'error_message' in vals
                 or ('state' in vals and vals['state'] not in ('error', 'suspended'))):
             leaving_timeout = self.filtered('transition_timeout_at')
+        # #1552：`upgrade_failed_at` 與逾時標記同一套生命週期——它說的是「目前這則
+        # error_message 是背景 upgrade 失敗寫的」，別的來源接手或離開 error 就失效。
+        leaving_upgrade_failure = self.browse()
+        if 'upgrade_failed_at' not in vals and (
+                'error_message' in vals
+                or ('state' in vals and vals['state'] not in ('error', 'suspended'))):
+            leaving_upgrade_failure = self.filtered('upgrade_failed_at')
         # #1431：第一次進 running 就記下來（之後不再動）。集中在這裡，任何把 state 寫成
         # running 的路徑（poll、resume、init 完成、逾時自癒……）自動跟上。明寫的呼叫端優先。
         first_running = self.browse()
@@ -9208,6 +9303,8 @@ class CloudService(models.Model):
                 super(CloudService, leaving_init_exit).write({'init_exit': False})
             if leaving_timeout:
                 super(CloudService, leaving_timeout).write({'transition_timeout_at': False})
+            if leaving_upgrade_failure:
+                super(CloudService, leaving_upgrade_failure).write({'upgrade_failed_at': False})
             if first_running:
                 super(CloudService, first_running).write({
                     'first_running_at': fields.Datetime.now(),

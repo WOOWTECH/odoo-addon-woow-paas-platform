@@ -83,6 +83,11 @@ CHATGPT_SUBSCRIPTION_ACTIONS = ('status', 'start', 'poll', 'disconnect', 'add-mo
 #: （extra/paas-operator ``upgrade_preflight.STORAGE_EXPANSION_ERROR_CODE``；改名兩邊一起改）。
 STORAGE_EXPANSION_ERROR_CODE = 'storage_expansion_rejected'
 
+#: #1552：operator 同時處理的 helm 作業已達上限、排隊逾時的 503 ``detail.error_code``
+#: （extra/paas-operator ``helm_limiter.OPERATOR_BUSY_ERROR_CODE``；改名兩邊一起改）。
+#: 回這個碼時什麼都沒套用，重送是安全的。
+OPERATOR_BUSY_ERROR_CODE = 'operator_busy'
+
 
 class PaaSOperatorError(Exception):
     """Base exception for PaaS Operator client errors."""

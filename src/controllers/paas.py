@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import threading
+import time
 import traceback
 import uuid
 from datetime import timezone
@@ -1415,10 +1416,7 @@ class PaasController(HiddenChainMixin, Controller):
         if reapply:
             self._start_background_upgrade(
                 service, client, resolved_version, halted, upgrade_kwargs=upgrade_kwargs,
-                failure_message=lambda detail: _(
-                    'The plan was changed, but resizing the service failed: '
-                    '%(reason)s. Please contact support to redeploy the service.',
-                    reason=detail))
+                plan_change=True)
             _logger.info(
                 "[CLOUD_SVC] change_plan reapply service=%s plan=%s allocated=%s",
                 service_id, plan_id, allocated_vals)
@@ -4174,8 +4172,13 @@ class PaasController(HiddenChainMixin, Controller):
         if legacy_error:
             return {'success': False, 'error': legacy_error}
         init_exhausted_error = service._init_reconfigure_exit()
+        # #1552：背景 upgrade（修改配置／換方案）沒有確認套用而轉的 error 也放行——租戶重新
+        # 送出就是同一個 helm upgrade（全量 values），不會比 running 時多拿到任何權限；
+        # 安裝失敗、刪除失敗、部署逾時等其他 error 照擋。
+        upgrade_failed_error = service._upgrade_failure_reconfigure_exit()
         if service.state in ['pending', 'deleting'] or (
-                service.state == 'error' and not init_exhausted_error):
+                service.state == 'error'
+                and not (init_exhausted_error or upgrade_failed_error)):
             return {'success': False, 'error': _('Cannot update service in %(state)s state', state=service.state)}
         # #1257 Q9：lease 持有期間可能有一次 init 正在叢集內執行，reconfigure 的
         # helm upgrade 會與它互踩（也會改掉 CAS 要比對的 state）。
@@ -4438,22 +4441,24 @@ class PaasController(HiddenChainMixin, Controller):
         return upgrade_kwargs
 
     def _start_background_upgrade(self, service, client, resolved_version, halted,
-                                  restart_after_upgrade=False, failure_message=None,
+                                  restart_after_upgrade=False, plan_change=False,
                                   upgrade_kwargs=None):
         """在背景執行緒對既存 release 跑全量 values 的 helm upgrade（reconfigure／#1158 換方案共用）。
 
         呼叫前必須已把 ``helm_values`` 與 state（``upgrading``／停權留 ``suspended``）寫好：
-        values 在**主執行緒**組裝（背景執行緒沒有 ORM）。``failure_message(detail)`` 給
-        背景失敗時寫進 ``error_message`` 的文字（預設「Upgrade failed: …」）。
+        values 在**主執行緒**組裝（背景執行緒沒有 ORM）。``plan_change``：背景失敗時的說明
+        要講「方案已換、資源沒調成」（#1158 Q5）；文案由 ``_upgrade_failure_message`` 依服務
+        建立者的語言組（#1552：背景執行緒沒有語言，舊碼一律英文＋原始例外）。
         ``upgrade_kwargs``：已經送過 ``upgrade_preflight`` 的那一組（#1513，確保預檢與真正
         upgrade 同參數）；不給就從 stored values 組。
         """
-        if failure_message is None:
-            def failure_message(detail):
-                return _('Upgrade failed: %(reason)s', reason=detail)
         # Capture values for the background thread (no ORM access).
         db_name = request.env.cr.dbname
         service_id = service.id
+        # #1552：這次升級的識別——呼叫端剛寫進去的 `last_upgraded_at`。失敗時只在它沒被更新
+        # 的升級（reconfigure／換方案／rollback／redeploy 都會寫它）蓋過時才記 error，舊的
+        # 失敗不會把新一次的操作翻成 error。
+        attempt_anchor = service.last_upgraded_at
         # #411: 送 operator 的 values 必須是「全量組裝」結果（含 4 injectors
         # ＋ odoo addon），因為改走 reset_values 語意後不再靠 --reuse-values
         # 保留首裝注入的 injector 值（storage_class / image_pull_secrets /
@@ -4466,6 +4471,52 @@ class PaasController(HiddenChainMixin, Controller):
                 service, resolved_version, service._assemble_deploy_values()['values'])
         operator_url = client.base_url
         operator_api_key = client._session.headers.get('X-API-Key', '')
+
+        def _record_upgrade_failure(exc):
+            """#1552：把背景 upgrade 的失敗記到服務上（新 cursor、superuser）。
+
+            主執行緒的交易可能還沒 commit（operator 完全連不上時，連線失敗只要幾毫秒）——
+            此時讀到的還是升級前的列（``last_upgraded_at`` 比這次舊），等它 commit 再判斷，
+            最多 5 秒；否則又是一次「DB 是新值、沒有錯誤、叢集沒套用」。
+            """
+            import odoo
+            deadline = time.monotonic() + 5
+            while True:
+                with odoo.registry(db_name).cursor() as cr:
+                    env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                    svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                    if not svc.exists():
+                        return
+                    seen = svc.last_upgraded_at
+                    if (attempt_anchor and (not seen or seen < attempt_anchor)
+                            and time.monotonic() < deadline):
+                        uncommitted = True
+                    else:
+                        uncommitted = False
+                        # #1552：背景 poll 可能早一步把服務推回 running（operator 還在拉
+                        # chart／預檢、release 仍是上一版 deployed、pods 也 ready，#1456）。
+                        # 舊碼只在 upgrading／suspended 時記錯 ⇒ 正式站 13:53 Nextcloud 的
+                        # 新設定已寫進 DB、畫面顯示執行中、叢集卻沒套用，沒有任何錯誤。
+                        # 只認「還是這一次升級」（last_upgraded_at 沒被更新）——舊的失敗
+                        # 不把新一次的操作翻成 error；initializing 不碰（init 有自己的租約
+                        # 與時限）。
+                        same_attempt = seen == attempt_anchor
+                        if svc.state == 'suspended' or (
+                                same_attempt and svc.state in ('upgrading', 'running')):
+                            vals = {'error_message': svc._upgrade_failure_message(
+                                exc, plan_change=plan_change)}
+                            # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
+                            # 會讓它離開停權語意（且 lifecycle cron 會把
+                            # error 當成可再 suspend 的狀態來回搬）。錯誤本身
+                            # 仍寫進 error_message，不靜默。
+                            if svc.state in ('upgrading', 'running'):
+                                vals['state'] = 'error'
+                                # #1552：出口＝重新送出修改配置（_update_service 放行）。
+                                vals['upgrade_failed_at'] = fields.Datetime.now()
+                            svc.write(vals)
+                if not uncommitted:
+                    return
+                time.sleep(0.5)
 
         def _bg_upgrade():
             """Run helm upgrade in a background thread with its own cursor."""
@@ -4546,19 +4597,7 @@ class PaasController(HiddenChainMixin, Controller):
             except Exception as exc:
                 _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
                 try:
-                    with odoo.registry(db_name).cursor() as cr:
-                        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
-                        svc = env['woow_paas_platform.cloud_service'].browse(service_id)
-                        if svc.exists() and svc.state in ('upgrading', 'suspended'):
-                            detail = getattr(exc, 'detail', None) or str(exc)
-                            vals = {'error_message': failure_message(detail)}
-                            # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
-                            # 會讓它離開停權語意（且 lifecycle cron 會把
-                            # error 當成可再 suspend 的狀態來回搬）。錯誤本身
-                            # 仍寫進 error_message，不靜默。
-                            if svc.state == 'upgrading':
-                                vals['state'] = 'error'
-                            svc.write(vals)
+                    _record_upgrade_failure(exc)
                 except Exception:
                     _logger.exception("Failed to write error state for service %s", service_id)
 
@@ -4850,6 +4889,9 @@ class PaasController(HiddenChainMixin, Controller):
             'init_exit': service.init_exit or None,
             'init_attempt_seq': service.init_attempt_seq,
             'init_reconfigure_allowed': service._init_reconfigure_exit(),
+            # #1552：背景 upgrade 沒有確認套用而轉的 error 可以直接重新送出修改配置；
+            # 與 `_update_service` 的守衛同一判準（ConfigurationTab／AddonsTab 讀它）。
+            'upgrade_retry_allowed': service._upgrade_failure_reconfigure_exit(),
             'has_project': bool(service.project_ids),
             # #530：前端「Reset 會一併換發 Gateway API Key」那句文案的唯一資料入口
             # （ServiceDetailPage 的 hasGateway getter）。值＝**交付判準本體**

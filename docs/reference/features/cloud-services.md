@@ -545,6 +545,12 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 
 - `error` 狀態只有 init 額度出口（`init_reconfigure_allowed`）可以改設定並重新 init；
   helm 失敗、等待逾時、fast-fail 的 error 不開放（#1159 Q30）
+- 背景 upgrade（修改配置／換方案）沒有確認套用時（operator 連線中斷、逾時、503 `operator_busy`、
+  其他 operator 錯誤）轉 `error`、記下 `upgrade_failed_at`，`error_message` 用服務建立者的語言說明
+  「新設定有沒有套用、下一步」；這種 error 可以直接重新送出修改配置（`upgrade_retry_allowed`，#1552）。
+  背景 poll 先一步把服務推回 `running` 的情形一樣記錯（只認同一次升級：`last_upgraded_at` 沒被更新），
+  不再「DB 是新值、畫面執行中、叢集沒套用」。`upgrade_failed_at` 與逾時標記同一套生命週期（改寫
+  `error_message` 或離開 error 就清掉，停權除外），只有平台寫得進去。
 - 更新 Helm values（環境變數、資源配置等）
 - 升級 Chart 版本
 - 自動建立新的 Helm revision

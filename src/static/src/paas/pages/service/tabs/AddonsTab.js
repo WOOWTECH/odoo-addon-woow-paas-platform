@@ -53,8 +53,13 @@ export class AddonsTab extends Component {
       return false;
     }
     // #1159 Q30：error 只有 init 額度出口可以改 addon（reconfigure，算新一代）；
-    // 其他 error 後端照擋。讀後端同一判準的鏡射欄位，前端不自建。
-    return this.props.service.state !== "error" || !!this.props.service.init_reconfigure_allowed;
+    // #1552：背景 upgrade 沒有確認套用的 error 也可以重新送出。其他 error 後端照擋。
+    // 讀後端同一判準的鏡射欄位，前端不自建。
+    return (
+      this.props.service.state !== "error" ||
+      !!this.props.service.init_reconfigure_allowed ||
+      !!this.props.service.upgrade_retry_allowed
+    );
   }
 
   get removedAddonIds() {
