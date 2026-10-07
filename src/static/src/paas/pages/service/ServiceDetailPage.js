@@ -603,7 +603,26 @@ export class ServiceDetailPage extends Component {
     };
 
     // Domain Modal
+    /**
+     * #1535：「自訂網域」從未實作——平台沒有任何寫入 `custom_domain` 的路徑，operator
+     * 與 Cloudflare tunnel 也都不讀它；#1489 之後儲存一律回「未授權的配置鍵：
+     * custom_domain」。按鈕與 CNAME 教學先對租戶隱藏，EditDomainModal 與下面的
+     * handler 保留不刪。
+     *
+     * 真要開放需要：Cloudflare 自訂主機名（SaaS custom hostname）與 TLS 憑證簽發、
+     * 獨立的寫入路徑（不能走 helm values 白名單）、以及各服務的 trusted_domains／
+     * allowedOrigins 注入（例 Nextcloud `NEXTCLOUD_TRUSTED_DOMAINS`）。屆時改成讀
+     * 後端 payload 的能力欄位（capability-gate-single-source-field），不要只把這裡
+     * 改成 true。
+     */
+    get customDomainSupported() {
+        return false;
+    }
+
     showDomainModal() {
+        if (!this.customDomainSupported) {
+            return;
+        }
         this.state.showDomainModal = true;
     }
 
