@@ -20,8 +20,18 @@
 4. ``write({"password": ...})``（經 ``_set_password`` 以 passlib hash）
 5. ``auth_totp`` 有裝時清掉 ``totp_secret`` 與受信任裝置
 6. commit
+7. ``registry.signal_changes()``：通知常駐 worker 清 ormcache（#1485）
 
-改密碼會改變 session token ⇒ 已登入的 session 會自然失效（預期行為）。
+為什麼第 7 步不可省（#1485）：session token（``_compute_session_token``，
+``@ormcache('sid')``）與 RPC 密碼檢查（``res.users.check``，``@ormcache('uid', 'passwd')``）
+都快取在**每個常駐 worker 的記憶體**裡。``write({"password"})`` 只清得到本 process
+（這支 ``python3 -c``）的快取；其他 worker 要等 DB 的 ``base_cache_signaling_default``
+sequence 前進，下一個 request 的 ``check_signaling()`` 才整批清。HTTP request 由
+``Registry.manage_changes()`` 在結尾自動送這個訊號，獨立 process 不會——少了它，
+重設前登入的 session 與舊密碼的 XML-RPC／JSON-RPC 在快取過的 worker 上都還有效，
+直到 worker 回收或 pod 重啟。
+
+送訊號之後：重設前的 session 在下一個 request 失效（導回登入）、舊密碼的 RPC 被拒。
 不需要重啟：Odoo 每次登入都讀 DB。
 """
 import json
@@ -110,6 +120,30 @@ def run(new_password):
             cr.commit()
         else:
             cr.rollback()
+    if payload.get("success"):
+        payload = signal_other_workers(registry, payload)
+    return payload
+
+
+def signal_other_workers(registry, payload):
+    """commit 之後通知其他 worker 清 ormcache（#1485）；回傳要 print 的 payload。
+
+    ``write({"password"})`` 已在本 process 標記 ``default`` cache 失效；這裡再明確
+    ``clear_cache()`` 一次，不依賴上游 ``res.users.write`` 的失效欄位清單（第三方
+    addon override 掉也照樣送得出去）。
+
+    ⛔ 密碼已經 commit：訊號送不出去時**不可**回報成一般失敗（平台會宣稱「密碼未變」）。
+    回 ``sessions_not_revoked``，由 operator 歸類成 unknown——租戶再按一次重設即可補送。
+    """
+    try:
+        registry.clear_cache()
+        registry.signal_changes()
+    except Exception as exc:  # noqa: BLE001 — 一律轉成 JSON 回報給 operator
+        return {
+            "success": False,
+            "code": "sessions_not_revoked",
+            "error": "password changed but signaling the Odoo workers failed (%s)" % type(exc).__name__,
+        }
     return payload
 
 
