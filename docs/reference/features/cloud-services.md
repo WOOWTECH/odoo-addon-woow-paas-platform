@@ -745,6 +745,12 @@ class CloudService(models.Model):
   `_start_background_upgrade`（釘現行 chart、`reset_values=True`、不 refresh image；
   停權服務 upgrade 後 scale 回 0）。背景失敗不回捲帳務：服務翻 `error` 並寫
   「方案已變更，但資源調整失敗」，之後任何一次成功的 redeploy／reconfigure 收斂。
+- **扣款前擴容預檢（#1513）**：規格有變時，退點之前以真正 upgrade 的同一組參數呼叫 operator
+  `POST /api/releases/{ns}/{name}/upgrade-preflight`（`_change_plan_preflight_denial`）。operator 對每顆
+  要變大的 PVC 先看 Longhorn volume 的 replica 排滿沒、再 `kubectl patch --dry-run=server` 交給 Longhorn
+  validator 判斷；擴不了回 409（`storage_expansion_rejected`）⇒ 整筆擋下、不扣款，並開 activity 告警
+  系統管理員（`platform_monitor._report_storage_expansion_rejection`）。5xx／連不上／逾時也擋；只有舊版
+  operator 的 404／405 放行。
 - **儲存只擴不縮（暫定，討論票 #1512）**：PVC 不能縮，降級時保留目前
   `persistence.size`，`allocated_storage_gb` 記實際大小。規則只在
   `CloudService._plan_storage_size` 一處。
