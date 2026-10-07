@@ -486,7 +486,7 @@
 3	test_oauth2_device_flow.TestDeviceGrantHealer
 7	test_oauth2_device_flow.TestOAuthDeviceCodeModel
 4	test_omnigent_seed.TestAppManagedCarrier
-10	test_omnigent_seed.TestOmnigentSeed
+11	test_omnigent_seed.TestOmnigentSeed
 7	test_omnigent_server_url_injection.TestInjectOmnigentServerUrl
 27	test_omnigent_server_url_injection.TestWorkspaceOmnigentUrlInjection
 4	test_opendesign_seed_380.TestOpendesignPlansSeed
