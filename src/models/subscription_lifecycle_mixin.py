@@ -619,7 +619,19 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             }
             delta = unit_deltas.get(sub.sh_unit)
             if delta:
-                sub.sh_date_of_next_payment = today + delta
+                # #1562：週期終點跟著 next_payment 從今天重算，與
+                # `_force_active_dates_from_plan`（換方案／直接開通）同一個慣例：
+                # end = start + cycle − 1 天。原本只推進 next_payment，sh_end_date 留著
+                # 試用推算的值（試用結束後才開始的那一期），比實際週期晚「略過的試用
+                # 天數」——例 10-07 略過 7 天試用：end 11-13、next_payment 11-07。
+                # 讀 sh_end_date 的有：上游 `_sh_auto_expired_subscription`
+                # （sh_end_date == today → expire）、到期寬限期判斷
+                # （`_is_in_grace_period`／生命週期 cron）、上游提醒／續約按鈕 cron、
+                # 訂閱確認信與帳務頁的「結束日」；續扣與退點只看 next_payment。
+                sub.write({
+                    'sh_date_of_next_payment': today + delta,
+                    'sh_end_date': today + delta - relativedelta(days=1),
+                })
 
             # Post/pay invoice based on company settings
             sub._handle_invoice_creation(invoice)

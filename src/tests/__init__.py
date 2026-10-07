@@ -1083,3 +1083,5 @@ from . import test_service_role_ux_1560
 from . import test_litellm_master_key_1557
 # #1555：退點時同步建立貸項並以退點沖銷原發票。
 from . import test_refund_credit_note_1555
+# #1562：略過試用後 sh_end_date 跟著 next_payment 重算。
+from . import test_skip_trial_end_date_1562
