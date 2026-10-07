@@ -303,6 +303,10 @@ class TestChatgptSubscriptionEndpoint(_ChatgptFixture):
              'did not respond', 'exec_timeout'),
             ({'return_value': {'success': False, 'error_kind': 'unknown', 'error_code': None}},
              'did not respond', 'bad_output'),
+            # 平台不認得的碼（自由文字、未來新增的碼）不原樣轉給前端。
+            ({'return_value': {'success': False, 'error_kind': 'failed',
+                               'error_code': 'something new from the chart'}},
+             'request failed', 'failed'),
         ]
         for outcome, needle, code in cases:
             client = MagicMock()

@@ -13,8 +13,13 @@ import {
 
 /** 預設輪詢間隔（chart 回的 pending.interval 缺席時）。 */
 const DEFAULT_POLL_INTERVAL_S = 5;
-/** 連續幾次「網路／逾時」類失敗（沒有 error_code）才放棄；有 error_code 的失敗立即停。 */
+/**
+ * 連續幾次「網路／逾時」類失敗才放棄。這類失敗代碼仍有效（服務端的登入還在等），再等一輪
+ * 即可；沒有 error_code（瀏覽器端逾時、斷線）或下列碼都算。其他碼（登入被拒、換 token
+ * 失敗…）立即停。
+ */
 const MAX_TRANSIENT_POLL_FAILURES = 3;
+const TRANSIENT_POLL_ERRORS = ["exec_timeout", "bad_output", "operator_error", "operator_unreachable"];
 
 /**
  * ChatGPTSubscriptionModal — 用 device code 連接 ChatGPT 訂閱（LiteLLM chart 0.2.0 起）。
@@ -223,7 +228,8 @@ export class ChatGPTSubscriptionModal extends Component {
       return;
     }
     if (!result.success) {
-      if (!result.error_code && this.transientFailures + 1 < MAX_TRANSIENT_POLL_FAILURES) {
+      const transient = !result.error_code || TRANSIENT_POLL_ERRORS.includes(result.error_code);
+      if (transient && this.transientFailures + 1 < MAX_TRANSIENT_POLL_FAILURES) {
         // 網路抖動、單次逾時：再等一輪（代碼仍有效）。
         this.transientFailures += 1;
         this._schedulePoll();

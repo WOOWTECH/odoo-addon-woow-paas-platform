@@ -2740,16 +2740,19 @@ class CloudService(models.Model):
 
         def failure(code, data=None, kind=None):
             data = data or {}
-            logged = code if code in _CHATGPT_SUBSCRIPTION_KNOWN_CODES or code in (
-                'add_models_partial', 'test_failed') else ('upstream' if code else None)
+            # 回給前端與寫進 log 的都只有平台認得的碼；其他（自由文字、未來新增的碼）一律
+            # 收斂成 'failed'——前端依碼決定能不能重試，不該看到任意字串。
+            known = code in _CHATGPT_SUBSCRIPTION_KNOWN_CODES or code in (
+                'add_models_partial', 'test_failed')
+            public_code = code if known else ('failed' if code else None)
             _logger.warning(
                 "[chatgpt-subscription] service %s (id=%s) action=%s failed: "
-                "error_kind=%s error_code=%s", self.name, self.id, action, kind, logged,
+                "error_kind=%s error_code=%s", self.name, self.id, action, kind, public_code,
             )
             response = {
                 'success': False,
                 'error': self._chatgpt_subscription_message(action, code, data),
-                'error_code': code,
+                'error_code': public_code,
             }
             view = _chatgpt_subscription_view(data)
             if view:
