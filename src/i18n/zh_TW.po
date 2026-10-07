@@ -12416,6 +12416,24 @@ msgstr "自行設定密碼"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid "Also replace the Gateway API Key"
+msgstr "一併換掉 Gateway API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid "Not selected: the current Gateway API Key keeps working, so scripts and integrations that use it are not affected."
+msgstr "不勾選：目前的 Gateway API 金鑰繼續有效，使用它的腳本與整合不受影響。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid "The current Gateway API Key stops working as soon as you save; every script or integration that uses it is rejected until you update it. The new key is shown once after saving."
+msgstr "儲存後目前的 Gateway API 金鑰立即失效，所有使用它的腳本與整合都會被拒絕，直到換上新金鑰。新金鑰只會在儲存後顯示一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Set up a secure tunnel to access your Home Assistant from anywhere."
 msgstr "建立安全通道，隨時隨地連線到你的 Home Assistant。"

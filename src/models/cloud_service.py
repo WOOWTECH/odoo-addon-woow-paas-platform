@@ -2210,8 +2210,14 @@ class CloudService(models.Model):
     # #357 — admin_password 重置
     # ------------------------------------------------------------------ #
 
-    def _reset_admin_password(self, new_password=None, new_username=None):
+    def _reset_admin_password(self, new_password=None, new_username=None,
+                              rotate_gateway_key=True):
         """#357 外科式 reset mcp admin password（保留 GUI 自填 connection/tools）。
+
+        ``rotate_gateway_key``（#1557）：有 gateway 的 chart 要不要一併換發 Gateway API
+        Key。預設 True＝#530 的 Reset 語意（一次換兩把）；租戶自設帳密時由 controller
+        依租戶的選擇傳入，False＝保留目前那一把（明確送回 chart，不靠 chart 的回讀）。
+        服務還沒有 key（legacy）時照樣鑄一把——否則叢集與 DB 會各自一把。
 
         ``new_password`` / ``new_username``（租戶自設憑證）：只開放給
         ``template.admin_credentials_settable`` 的模板——``admin_username_helm_path``
@@ -2338,9 +2344,17 @@ class CloudService(models.Model):
         # 沒有 gateway 的 chart 傳 None：`_set_admin_password_secret` 的補鑄同樣受
         # `_chart_has_gateway` 閘門管，這裡硬生一把會繞過那道閘門（鑄造／供給／交付
         # 三個閘門必須同源，否則就是 review finding 3 那條隱性契約再長回來）。
-        new_gateway_api_key = (
-            self._generate_admin_password() if self._chart_has_gateway() else None
-        )
+        new_gateway_api_key = None
+        if self._chart_has_gateway():
+            # #1557：租戶只想改後台登入密碼時保留目前的 key（LiteLLM 的 master key，
+            # 所有管理腳本與整合都用它）。保留也要**明確送回**同一把：不送的話 chart
+            # 會退到「查既有 Secret」那段優先序，結果取決於 chart 實作，不是平台決定的。
+            existing_secret = self._get_secret_record()
+            existing_key = existing_secret.gateway_api_key if existing_secret else False
+            if rotate_gateway_key or not existing_key:
+                new_gateway_api_key = self._generate_admin_password()
+            else:
+                new_gateway_api_key = existing_key
         # #411: values 走全量組裝 helper（與 deploy/redeploy/reconfigure 同一條
         # 管線）。reset_values 語意讓 chart 自身預設補位，不再以 --reuse-values
         # 沿用舊 coalesced values（同一 bug class，見 #411）。chart 版本見下方

@@ -17,6 +17,11 @@ const PASSWORD_RE = /^[\x21-\x7e]{12,128}$/;
  *
  * 密碼兩種模式：平台隨機產生（預設，成功後由 OneTimeCredentialsModal 一次性顯示）
  * 或自行設定（後端不回傳明文）。儲存走 helm upgrade ＋ rollout restart，服務會重啟。
+ *
+ * #1557：有 gateway 的服務（LiteLLM 的 master key）多一個「一併換掉 Gateway API Key」
+ * 勾選，預設不勾＝保留目前的 key（腳本與整合不受影響）；勾了才換發，並在送出前把後果
+ * 寫清楚。判準讀 `service.has_gateway`（與後端交付判準同一欄位，repo-lint
+ * check_gateway_copy_gate_anchor 鎖這段文案的 gate）。
  */
 export class AdminCredentialsModal extends Component {
   static template = "woow_paas_platform.AdminCredentialsModal";
@@ -26,6 +31,8 @@ export class AdminCredentialsModal extends Component {
     serviceId: { type: Number },
     currentUsername: { type: [String, { value: null }], optional: true },
     usernameEditable: { type: Boolean, optional: true },
+    // #1557：detail payload（讀 has_gateway）。沒傳＝當作沒有 gateway。
+    service: { type: Object, optional: true },
     onClose: { type: Function },
     onSaved: { type: Function },
   };
@@ -36,8 +43,20 @@ export class AdminCredentialsModal extends Component {
       passwordMode: "generate",
       password: "",
       passwordConfirm: "",
+      // #1557：預設保留目前的 Gateway API Key。
+      rotateGatewayKey: false,
       error: null,
     });
+  }
+
+  /** #1557：這台服務有沒有 Gateway API Key（fail-closed：欄位缺席＝沒有）。 */
+  get hasGateway() {
+    return this.props.service?.has_gateway === true;
+  }
+
+  onRotateGatewayKeyChange(ev) {
+    this.state.rotateGatewayKey = !!ev.target.checked;
+    this.state.error = null;
   }
 
   get loading() {
@@ -98,7 +117,11 @@ export class AdminCredentialsModal extends Component {
 
     this.state.error = null;
     // 帳號沒變就不送，避免一次無意義的 values 寫入。
-    const payload = { password };
+    // #1557：一律明確送出要不要換 Gateway API Key（後端預設不換）。
+    const payload = {
+      password,
+      rotate_gateway_key: this.hasGateway && this.state.rotateGatewayKey,
+    };
     if (this.showUsername && username !== (this.props.currentUsername || "")) {
       payload.username = username;
     }

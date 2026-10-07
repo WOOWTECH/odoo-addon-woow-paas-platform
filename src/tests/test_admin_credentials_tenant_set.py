@@ -360,6 +360,9 @@ TENANT_SET_NO_GATEWAY = (
 class TestTenantSetDeliversGatewayKey(_CredentialsFixture):
     """有 gateway 的服務（LiteLLM 的 master key）租戶自設密碼：新 key 必須交付。
 
+    #1557 之後換 key 是租戶勾選的選項（預設保留）；本 class 守「勾了換」的那一半，
+    「沒勾就保留、不交付」在 ``test_litellm_master_key_1557``。
+
     model 端 ``_reset_admin_password`` 對有 gateway 的 chart **每次**都換發 gateway
     key、舊的立即失效；controller 只是不回傳租戶自填的密碼。修前前端只在回應帶
     ``admin_password`` 時開一次性視窗 ⇒ 新 master key 從未交到租戶手上，租戶所有用
@@ -404,7 +407,9 @@ class TestTenantSetDeliversGatewayKey(_CredentialsFixture):
         self.assertTrue(self.litellm.admin_credentials_settable, '前提：LiteLLM 可自設帳密')
         self.assertTrue(self.old_key, '前提：有 gateway 的服務已經有一把 key')
 
-        result = self._set(self.gw_service, username='llm.ops', password=GOOD_PASSWORD)
+        # #1557：換 key 改成租戶明確勾選（預設保留，見 test_litellm_master_key_1557）。
+        result = self._set(self.gw_service, username='llm.ops', password=GOOD_PASSWORD,
+                           rotate_gateway_key=True)
 
         self.assertTrue(result.get('success'), result)
         data = result['data']
@@ -428,10 +433,10 @@ class TestTenantSetDeliversGatewayKey(_CredentialsFixture):
 
     @patch(_OPERATOR_CLIENT)
     def test_generated_password_still_delivers_both(self, get_client):
-        """自設流程選「隨機產生」：密碼與 key 都交付，訊息維持原樣。"""
+        """自設流程選「隨機產生」＋勾選換 key：密碼與 key 都交付，訊息維持原樣。"""
         get_client.return_value = MagicMock()
 
-        result = self._set(self.gw_service, password='')
+        result = self._set(self.gw_service, password='', rotate_gateway_key=True)
 
         self.assertTrue(result.get('success'), result)
         data = result['data']

@@ -2002,7 +2002,8 @@ class PaasController(HiddenChainMixin, Controller):
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/admin-credentials", auth="user", methods=["POST"], type="json")
     def api_service_set_admin_credentials(
         self, workspace_id: int, service_id: int,
-        username: str | None = None, password: str | None = None, **kw: Any,
+        username: str | None = None, password: str | None = None,
+        rotate_gateway_key: bool = False, **kw: Any,
     ) -> dict[str, Any]:
         """租戶自設 admin 帳號／密碼（open-design 的 OpenDesign 與 ttyd 共用這組）。
 
@@ -2010,6 +2011,12 @@ class PaasController(HiddenChainMixin, Controller):
         只能 Reset）。只有密碼的模板（code-server）不收 ``username``。``password`` 空值＝平台鑄造新密碼並一次性回傳（同 Reset）；
         給了就用租戶的值、**不回傳明文**（租戶自己知道）。``username`` 空值＝不改。
         生效方式與 Reset 相同：helm upgrade ＋ rollout restart（服務重啟約一分鐘）。
+
+        #1557：``rotate_gateway_key``（預設 False）——有 gateway 的服務（LiteLLM 的 master
+        key）改帳密時**預設保留**目前的 Gateway API Key；租戶在對話框勾選「一併換掉」才
+        換發（舊的立即失效、新的在這次回應一次性交付）。原本每次改帳密都連帶換掉，所有
+        用 master key 的腳本與整合當場 401，操作前也沒有提醒（2026-10-07 實測 N13）。
+        Reset 端點不受影響（hermes-agent 的 Reset 照 #530 一次換發兩把）。
 
         Returns:
             success=true 帶 data.admin_username（與鑄造時的 data.admin_password）
@@ -2020,12 +2027,13 @@ class PaasController(HiddenChainMixin, Controller):
             new_password=password if password not in (None, '') else None,
             new_username=username if username not in (None, '') else None,
             tenant_set=True,
+            rotate_gateway_key=rotate_gateway_key is True,
         )
 
     def _service_admin_credentials(
         self, workspace_id: int, service_id: int,
         new_password: str | None = None, new_username: str | None = None,
-        tenant_set: bool = False,
+        tenant_set: bool = False, rotate_gateway_key: bool = True,
     ) -> dict[str, Any]:
         """Reset 與租戶自設憑證共用的授權、執行與回應組裝（兩個 route 的唯一實作）。
 
@@ -2111,12 +2119,21 @@ class PaasController(HiddenChainMixin, Controller):
             # resolved service capability, after membership + admin checks;
             # credential/lifecycle gates in the private model method remain.
             app_login = None
+            # #1557：這一次 Gateway API Key 會不會被換掉——決定下面要不要交付它。Reset
+            # 一律換（#530）；自設帳密只在租戶勾選時換，但服務還沒有 key（legacy）時
+            # model 端照樣得鑄一把（見 _reset_admin_password），那把也要交付。
+            # 必須在呼叫 model **之前**讀：之後讀到的永遠是有值。
+            gateway_key_replaced = True
+            if tenant_set and not rotate_gateway_key and service._chart_has_gateway():
+                secret = service._get_secret_record()
+                gateway_key_replaced = not (secret and secret.gateway_api_key)
             if app_reset_kind != 'none':
                 # #1370：同樣 private、同樣只有本 endpoint 一個入口（#357 C05）。
                 applied_password, app_login = service._reset_app_admin_password()
             elif tenant_set:
                 applied_password = service._reset_admin_password(
                     new_password=new_password, new_username=new_username,
+                    rotate_gateway_key=rotate_gateway_key,
                 )
             else:
                 applied_password = service._reset_admin_password()
@@ -2182,7 +2199,9 @@ class PaasController(HiddenChainMixin, Controller):
         # gateway 憑證是附加品，取不到就少交付一把（租戶可再 Reset），但那把
         # **已生效的 admin 密碼**一定要送出去。
         try:
-            gateway = self._gateway_credentials(service)
+            # #1557：key 沒換就不交付——交出一把沒換過的 key 等於開了一條回讀端點
+            # （#530：憑證一律一次性），訊息也會變成「已換新」的假話。
+            gateway = self._gateway_credentials(service) if gateway_key_replaced else {}
         except Exception:
             # 🔴 #533 **刻意不在這一段補 `except OperationalError: raise`**（上面那個
             # try 補了，這裡沒有——這個不一致是有意的，不是漏的）。

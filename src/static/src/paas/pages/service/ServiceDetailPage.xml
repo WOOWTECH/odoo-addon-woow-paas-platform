@@ -190,7 +190,9 @@
                     signed in with the old password are signed out, and two-factor sign-in
                     is turned off.
                 </p>
-                <p t-if="adminResetSupported and hasGateway" class="o_woow_hint">
+                <!-- #1557：可自設帳密的服務（LiteLLM）改帳密預設保留 key、要不要換在對話框裡選，
+                     這句只講 Reset 那顆按鈕（hermes-agent）。 -->
+                <p t-if="adminResetSupported and hasGateway and !canEditAdminCredentials" class="o_woow_hint">
                     Reset Admin Password also issues a new Gateway API Key. Update it
                     wherever you configured it (e.g. your MCP server).
                 </p>
@@ -390,6 +392,7 @@
                 serviceId="props.serviceId"
                 currentUsername="service and service.admin_username"
                 usernameEditable="canEditAdminUsername"
+                service="service or undefined"
                 onClose.bind="hideAdminCredentials"
                 onSaved.bind="onAdminCredentialsSaved"/>
 

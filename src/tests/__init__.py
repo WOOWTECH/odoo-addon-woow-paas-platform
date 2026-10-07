@@ -1079,3 +1079,5 @@ from . import test_upgrade_failure_1552
 from . import test_custom_domain_hidden_1535
 # #1560：服務頁依角色顯示管理按鈕、權限不足訊息、重設密碼確認框、回復版本中文化。
 from . import test_service_role_ux_1560
+# #1557：LiteLLM 改管理員帳密預設保留 Gateway API Key（master key），換 key 改為明確勾選。
+from . import test_litellm_master_key_1557
