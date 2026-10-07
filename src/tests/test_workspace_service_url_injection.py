@@ -538,7 +538,7 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
     # ---- seed lockstep ----------------------------------------------------
 
     def test_constants_match_seed(self):
-        """消費端都是真的範本（含 mcp-litellm，2026-10-05 以隱藏範本進 seed）；提供者的 chart 名、port
+        """消費端都是真的範本（含 mcp-litellm，2026-10-05 以隱藏範本進 seed、10-07 公開上架）；提供者的 chart 名、port
         與 seed 一致；tailscale 範本已釘到懂 controlPlane 的 chart；mcp-litellm 的注入路徑落在
         mcp-server chart 的 config.nonSensitive（chart 把它整棵寫進 config.base.json）。"""
         Template = self.Template.with_context(active_test=False)

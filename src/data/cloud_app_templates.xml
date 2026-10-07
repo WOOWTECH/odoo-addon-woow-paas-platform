@@ -2328,9 +2328,13 @@
              #1482）；chart 是 seed-if-absent ⇒ 只有第一次開通生效。master_key **絕不**由平台供給（不跨服務傳
              秘密，PLAN §10 決策）——租戶自己在 Connection 頁貼，建議貼 proxy_admin_viewer 使用者金鑰。
              requiredFields 只列 admin_password（REPLACE 語意；connection.* 列進去＝每個新租戶 pod 永遠卡 Init）。
-             隱藏（is_hidden=True）：等正式站開通實測（同工作區預填網址、viewer key 唯讀可用、解鎖寫入）後另開
-             PR 只翻 is_hidden（實例層不設），與 Headscale／Tailscale／LiteLLM 同流程。
-             守線：test_mcp_litellm_seed、test_mcp_server_template_seed.TestMcpLitellmTemplateSeed（家族不變式）、
+             上架（is_hidden=False，2026-10-07）：#1487 以隱藏卡片進 seed、隨 .210 上正式站（chart 0.1.5、image d5032a72；
+             #1523 已改釘 cfc2a2b，只動 mcp-admin-core 狀態 API）；
+             沙盒實測 36＋1 項全過（woow-mcp-server #33：預填網址、viewer key 唯讀 18 支、解鎖 40 支、viewer key 解鎖後
+             寫入仍被 LiteLLM 403、log 不含 token／金鑰）後只翻 is_hidden（實例層從未設），與 Headscale／Tailscale／
+             LiteLLM 同流程；正式站接搬遷後的 LiteLLM 驗收排在本版上線後。
+             守線：test_mcp_litellm_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
+             test_mcp_server_template_seed.TestMcpLitellmTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
         <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：AI 模型閘道（LiteLLM）</field>
@@ -2368,7 +2372,7 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">config_json</field>
             <field name="post_deploy_init_type">none</field>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
