@@ -54,7 +54,7 @@ def init_n8n(
 
     This endpoint:
     1. Waits for n8n API to be ready
-    2. Creates owner user
+    2. Creates owner user（已存在時不登入，exec 進容器沿用／簽發 key，#1534）
     3. Generates API key
     4. Updates K8s Secret and sidecar env
 
@@ -72,6 +72,7 @@ def init_n8n(
             release_name=release_name,
             owner_email=request.owner_email,
             owner_password=request.owner_password,
+            owner_confirmed=request.owner_confirmed,
         )
 
         is_success = result.get("success", True)

@@ -740,6 +740,13 @@ class N8nInitRequest(BaseModel):
         ...,
         description="Password for the n8n owner user",
     )
+    # #1534：舊平台不送 ⇒ False（既有 owner 必須是 owner_email 才發 key）；pydantic 預設忽略
+    # 未知欄位，新平台送給舊 operator 也不會被拒。
+    owner_confirmed: bool = Field(
+        default=False,
+        description="The platform has completed an n8n init for this service before, so an "
+                    "existing owner is the tenant's account even if its email changed",
+    )
 
 
 #: init 失敗分類（#1263／#1257 Q11），依「遠端副作用是否可能已發生」：

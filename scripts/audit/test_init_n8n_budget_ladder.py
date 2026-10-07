@@ -68,8 +68,9 @@ class InitN8nBudgetCLITests(unittest.TestCase):
         self.assertIn(RULE, result.stdout)
 
     def test_read_budget_must_exceed_server_envelope(self):
-        # 真 envelope＝531（find_pod 60＋readiness 206＋5 次 node 75＋secret／patch／
-        # deployment 90＋restart 100）；把 read 壓到 envelope 以下／相等都要紅。
+        # 真 envelope＝571（find_pod 60＋readiness 206＋owner check 15＋max(新建 owner 4 次 node
+        # 60＋prune 40, 既有 owner exec 40)＋secret／patch／deployment 90＋restart 100）；
+        # 把 read 壓到 envelope 以下／相等都要紅。
         self.mutation(CLIENT, 'INIT_N8N_READ_TIMEOUT = 600',
                       'INIT_N8N_READ_TIMEOUT = 120', 'envelope=571', full=True)
         self.mutation(CLIENT, 'INIT_N8N_READ_TIMEOUT = 600',
@@ -120,7 +121,11 @@ class InitN8nBudgetCLITests(unittest.TestCase):
              'for attempt in range(MAX_READY_RETRIES + 1):'),
             (OPERATOR, 'cookie = self._login(namespace, pod_name, container, owner_email, owner_password)',
              'cookie = self._login(namespace, pod_name, container, owner_email, owner_password)\n'
-             '        cookie = self._login(namespace, pod_name, container, owner_email, owner_password)'),
+             '            cookie = self._login(namespace, pod_name, container, owner_email, owner_password)'),
+            # #1534：owner 已存在的分支又登入（回到 401／998 的老路）。
+            (OPERATOR, '            api_key = self._ensure_api_key(\n',
+             '            self._login(namespace, pod_name, container, owner_email, owner_password)\n'
+             '            api_key = self._ensure_api_key(\n'),
             (OPERATOR, '"POST", "/rest/owner/setup",', '"POST", "/rest/owner/setup", timeout=999,'),
             (OPERATOR, 'f"app.kubernetes.io/instance={release_name}",\n        ]',
              'f"app.kubernetes.io/instance={release_name}",\n            "x",\n        ]'),
@@ -132,6 +137,12 @@ class InitN8nBudgetCLITests(unittest.TestCase):
         for case in cases:
             with self.subTest(source=case[0], change=case[2]):
                 self.mutation(*case, '結構變動')
+
+    def test_existing_owner_exec_counts_toward_envelope(self):
+        # #1534：owner 已存在那條路（一次 exec）若比新建 owner 那條路長，envelope 跟著它走：
+        # 60＋206＋15＋max(100, 400)＋90＋100＝871。
+        self.mutation(OPERATOR, '_ENSURE_KEY_EXEC_TIMEOUT = 40',
+                      '_ENSURE_KEY_EXEC_TIMEOUT = 400', 'envelope=871')
 
     def test_key_prune_cap_counts_toward_envelope(self):
         # #1471：刪舊 key 的上限調大，最壞耗時就超過 client read，必須被擋下。

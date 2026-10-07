@@ -34,7 +34,7 @@ STRUCTURES = {
         'N8nInitService._setup_owner', 'N8nInitService._login',
         'N8nInitService._get_api_key_scopes', 'N8nInitService._create_api_key',
         'N8nInitService._find_secret', 'N8nInitService._find_deployment',
-        'N8nInitService._delete_api_keys_labelled',
+        'N8nInitService._delete_api_keys_labelled', 'N8nInitService._ensure_api_key',
     ),
     KUBECTL: (
         'KubernetesService._run_command', 'KubernetesService.get_pod_name',
@@ -46,13 +46,17 @@ STRUCTURES = {
 }
 
 # 每步各打一次 node request（沒帶 timeout ⇒ 用 ``_node_request`` 的預設值）。
-# ``_create_api_key`` 內部先呼叫 ``_get_api_key_scopes``，兩者分開計；最壞情況
-# owner 尚未建立，``_is_owner_setup_done`` 與 ``_setup_owner`` 都會跑。
-NODE_STEPS = (
-    'N8nInitService._is_owner_setup_done', 'N8nInitService._setup_owner',
+# ``_create_api_key`` 內部先呼叫 ``_get_api_key_scopes``，兩者分開計。
+# #1534：``_is_owner_setup_done`` 之後分兩條互斥的路——owner 尚未建立走 FRESH_STEPS（建
+# owner、登入、建 key＋prune），已存在走 ``_ensure_api_key``（一次 exec，不登入）。envelope
+# 取兩條路的較大者；互斥由 ``_owner_branches`` 從 AST 確認。
+OWNER_CHECK = ('N8nInitService._is_owner_setup_done',)
+FRESH_STEPS = (
+    'N8nInitService._setup_owner',
     'N8nInitService._login', 'N8nInitService._get_api_key_scopes',
     'N8nInitService._create_api_key',
 )
+NODE_STEPS = OWNER_CHECK + FRESH_STEPS
 
 _ODOO = None
 
@@ -85,6 +89,42 @@ def _restart_loop(initialize):
             and isinstance(guard.test.ops[0], ast.Lt)):
         raise ValueError('restart sleep 條件不是可解析的 attempt < K')
     return loop, it.args[0], sleep.args[0], guard.test.comparators[0]
+
+
+def _owner_branches(initialize):
+    """#1534：``initialize`` 裡 ``if self._is_owner_setup_done(...)`` 的兩個分支必須互斥。
+
+    body（owner 已存在）只走 ``_ensure_api_key``、不登入不建 owner；orelse 走建 owner／
+    登入／建 key、不碰 ``_ensure_api_key``。成立時 envelope 才能取兩條路的較大者。
+    """
+    h = _odoo()
+    branch = h.one((n for n in ast.walk(initialize) if isinstance(n, ast.If)
+                    and h.calls(n.test, '_is_owner_setup_done')), 'owner branch')
+    existing = ast.Module(body=branch.body, type_ignores=[])
+    fresh = ast.Module(body=branch.orelse, type_ignores=[])
+    if len(h.calls(existing, '_ensure_api_key')) != 1 or any(
+            h.calls(existing, n) for n in ('_setup_owner', '_login', '_create_api_key')):
+        raise ValueError('owner 已存在的分支必須恰好呼叫一次 _ensure_api_key，且不登入、不建 owner／key')
+    if h.calls(fresh, '_ensure_api_key') or any(
+            len(h.calls(fresh, n)) != 1 for n in ('_setup_owner', '_login', '_create_api_key')):
+        raise ValueError('owner 尚未建立的分支必須各呼叫一次 _setup_owner／_login／_create_api_key')
+    outside = [c for c in h.calls(initialize, '_ensure_api_key') + h.calls(initialize, '_login')
+               if not any(c is n for n in ast.walk(branch))]
+    if outside:
+        raise ValueError('_ensure_api_key／_login 不可出現在 owner 分支之外')
+
+
+def _ensure_seconds(op):
+    """``_ensure_api_key`` 的最壞耗時：恰好一次 exec_in_pod，timeout 必須是模組常數。"""
+    h = _odoo()
+    fn = h.definition(op, 'N8nInitService._ensure_api_key')
+    call = h.one(h.calls(fn, 'exec_in_pod'), 'ensure exec')
+    if h.calls(fn, '_node_request'):
+        raise ValueError('_ensure_api_key 不可另打 node request')
+    timeout = h.keyword(call, 'timeout')
+    if not isinstance(timeout, ast.Name):
+        raise ValueError('ensure exec 的 timeout 必須是模組常數')
+    return h.constant(op, timeout.id)
 
 
 def structure_fingerprints(trees):
@@ -182,7 +222,10 @@ def check(root):
         omitted = h.positive_int(condition.comparators[0].right, '最後省略的 sleep')
         readiness = retries * ready_exec + (retries - omitted) * delay
 
-        steps = sum(_node_seconds(h, h.definition(op, name), node) for name in NODE_STEPS)
+        _owner_branches(h.definition(op, 'N8nInitService.initialize'))
+        owner_check = sum(_node_seconds(h, h.definition(op, name), node) for name in OWNER_CHECK)
+        fresh = sum(_node_seconds(h, h.definition(op, name), node) for name in FRESH_STEPS)
+        existing = _ensure_seconds(op)
 
         # #1471：建 key 前先列出並刪掉同名舊 key。列出 1 次（迴圈外）＋迴圈內最多
         # _MAX_KEY_DELETES 次刪除；兩個請求都必須帶明確 timeout，迴圈必須切在常數上限。
@@ -219,10 +262,13 @@ def check(root):
         restart = attempts * kubectl * kubectl_calls(kube, 'KubernetesService.rollout_restart_deployment') \
             + min(attempts, h.positive_int(bound, 'restart sleep 上界')) * h.positive_int(seconds, 'restart 間隔')
 
-        envelope = discovery + readiness + steps + prune + secret + patch + deployment + restart
+        # prune 只在 owner 尚未建立那條路（_create_api_key 內）。
+        branch = max(fresh + prune, existing)
+        envelope = discovery + readiness + owner_check + branch + secret + patch + deployment + restart
         if read <= envelope:
             return [prefix + f'client read={read}s 必須 > 宣告子步 envelope={envelope}s '
-                    f'（discovery={discovery}，readiness={readiness}，node steps={steps}，prune={prune}，'
+                    f'（discovery={discovery}，readiness={readiness}，owner check={owner_check}，'
+                    f'max(新建 owner {fresh}+prune {prune}，既有 owner exec {existing})={branch}，'
                     f'secret+patch+deployment={secret + patch + deployment}，restart={restart}）；'
                     '不是 server 硬上限']
         return []

@@ -1069,3 +1069,5 @@ from . import test_tenant_chart_version_1525
 from . import test_rollback_chart_floor_1526
 # #1559：ngrok 連不上的原因（authtoken 錯、沒填、網域被占用、要重啟）顯示在服務頁。
 from . import test_public_tunnel_error_1559
+# #1534：n8n init 在 owner 已存在時不用密碼登入；舊 operator 401／998 對已確認的服務不計額度。
+from . import test_n8n_init_owner_changed_1534

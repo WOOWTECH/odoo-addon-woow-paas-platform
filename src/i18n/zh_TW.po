@@ -21172,3 +21172,15 @@ msgid ""
 "Why the ngrok sidecar has no public address, when its log says so (wrong or"
 " missing authtoken, domain already in use, restart needed)."
 msgstr "ngrok sidecar 沒有對外位址、而它的 log 說得出原因時的說明（authtoken 錯誤或未填、網域已被占用、需要重新啟動）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The platform could not confirm the n8n administrator account: the account in n8n is no longer the one set when this service was created (its email or password was changed, or two-step verification was turned on, before the platform finished setting it up), or someone else completed the n8n setup first. The n8n service itself is still running. Please contact support to verify the account (attempt #%(seq)s)."
+msgstr "平台無法確認這台 n8n 的管理員帳號：n8n 裡的管理員已不是開通時設定的那一個（在平台完成設定前，Email 或密碼已被修改、或已開啟兩步驟驗證），也可能是別人搶先完成了 n8n 的初始設定。n8n 服務本身仍在運作。請聯絡客服協助確認帳號（第 %(seq)s 次嘗試）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Initialization failed %(count)s times (attempt #%(seq)s). Please contact support."
+msgstr "初始化已失敗 %(count)s 次（第 %(seq)s 次嘗試），請聯絡客服。"

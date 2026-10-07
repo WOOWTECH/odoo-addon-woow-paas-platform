@@ -819,7 +819,8 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                          'operator 呼叫期間入口的連線不得停在交易中（idle in transaction）')
         client.init_n8n.assert_called_once_with(
             namespace=f'dev-sandbox-1257-n8n-{self.tag}', release_name=f'svc-n8n-{self.tag}',
-            owner_email=f'owner-{self.tag}@example.invalid', owner_password=f'pw-{self.tag}')
+            owner_email=f'owner-{self.tag}@example.invalid', owner_password=f'pw-{self.tag}',
+            owner_confirmed=False)  # #1534：服務還沒有 n8n_api_key＝平台沒確認過 owner
         state = self._read('n8n')
         self.assertEqual(state['state'], 'initializing')  # #1333：等重啟後的 Pod ready
         self.assertEqual(state['n8n_api_key'], _JWT)

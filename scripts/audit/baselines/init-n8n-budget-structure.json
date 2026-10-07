@@ -1,5 +1,5 @@
 {
-  "extra/paas-operator/src/api/init.py:init_n8n": "377d1bbf98af8b8d997dd4f1be1b347402320b10e1b32761c579ceb103d931dd",
+  "extra/paas-operator/src/api/init.py:init_n8n": "fc58370fa51779ea3cfb7345a099ea611efa24403c3a731c035a8c8bc3c25ca0",
   "extra/paas-operator/src/services/helm.py:KubernetesService._run_command": "9ac7a713ab97ad2ed42f1063e5f352bf0803553789755a2da8beba20d2a91a90",
   "extra/paas-operator/src/services/helm.py:KubernetesService.exec_in_pod": "69adac9a99a4a833537c3988a90c8cf809b432d5f9ef68eeb4de2fe14109db1d",
   "extra/paas-operator/src/services/helm.py:KubernetesService.get_deployments": "d524d64955a0cebd59f6dbbfbb3f44869ab5f30fae1dc067824e2be383cdb7c2",
@@ -9,6 +9,7 @@
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService.__init__": "e5b3fb1fd4e1d56825b6e03b6216be8853402412e6d28a8f08d786258ab4cf2f",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._create_api_key": "c6963c4b5df6ecb31111099acb8e923fdc8c8ae9a30a800617165915168fca32",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._delete_api_keys_labelled": "4ce495f72b9b055d15182f046b138ed4319d1ae134fcac00bf4760e9d77865a7",
+  "extra/paas-operator/src/services/n8n_init.py:N8nInitService._ensure_api_key": "4123def652622d11a830916ae1507b0e4d6dc3f470beb5407e171a6cd36b0bde",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._find_deployment": "affbb8a35e1373ec6368ca28c6b96e0e62035cb016905196f8d96343a0f6fe60",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._find_secret": "963d1c8ad983fcc38b32e4c510da6f6d67fc0ce0655b3314791a73045f3d43cc",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._get_api_key_scopes": "2a5afe641650a0c9fa6b91c26cc08e75dbe34cd53a861c431353c55861c3443a",
@@ -18,7 +19,7 @@
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._node_request": "071ee6dbc42c5f03b7d9c7ddb17a56d78187c698ac29ce7e1f7701481fe9c9e1",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._setup_owner": "e0bb2aa4aa42c9ceb6f145107ca95ce52db885d6f54aaefa0eb1ecd396975bb9",
   "extra/paas-operator/src/services/n8n_init.py:N8nInitService._wait_for_ready": "00764291e9c4583e5395d858ef11140c55f32e64cf8d0c5bd3357aede5210eba",
-  "extra/paas-operator/src/services/n8n_init.py:N8nInitService.initialize": "702118d74e43e2b16379d065ea72ee8506a4f9913574081a120b6c85b63277ef",
+  "extra/paas-operator/src/services/n8n_init.py:N8nInitService.initialize": "fa3a055b1e4e53f986cba4342e3ebeb20b6a8a79cfa093c53c8a4a05050a3b8b",
   "src/services/paas_operator.py:PaaSOperatorClient._request": "5f18c0090216bc193a568b0b7c5fb70290a69f2eb65cc8c16554662d06c41419",
-  "src/services/paas_operator.py:PaaSOperatorClient.init_n8n": "3f96d4131d485138f93bd1ce0f8e1114687e6f57c8a395f403999f84bf87727e"
+  "src/services/paas_operator.py:PaaSOperatorClient.init_n8n": "792f8ebdd4e18e8dbf0bb6b84197e3c2548eb3010bb6edfc65aba1181914b476"
 }

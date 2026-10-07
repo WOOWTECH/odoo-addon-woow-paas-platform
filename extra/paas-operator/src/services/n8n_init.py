@@ -5,14 +5,20 @@ n8n instances so MCP sidecar can connect immediately.
 
 Uses Node.js (available in n8n container) for HTTP requests since wget
 has encoding issues with n8n's body parser.
+
+#1534：owner 已存在時**不再用平台存的 owner 密碼登入**——那組密碼在租戶於 n8n 介面改密碼
+或開 MFA 之後就失效（401／998），以前 Redeploy 的 init 因此連續失敗、服務轉 error。改由
+``n8n_scripts/ensure_api_key.js`` 在容器內直接沿用或簽發 init 用的 API key（見該檔說明）。
 """
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Dict, Optional
 
 from src.models.schemas import InitErrorKind
 from src.services.helm import KubectlException, KubernetesService
+from src.services.odoo_init import _last_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,18 @@ _API_KEY_LABEL = "mcp-sidecar"
 #: （scripts/audit/init_n8n_budget.py 會把 1 次列出＋本上限次刪除計入 envelope）。
 _MAX_KEY_DELETES = 3
 _KEY_PRUNE_REQUEST_TIMEOUT = 10
+#: 與上面 POST /rest/api-keys 的 expiresAt 相同（2100-01-01），exec 路徑簽出的 key 一樣不實際過期。
+_API_KEY_EXPIRES_AT = 4102444800
+
+#: #1534：owner 已存在時沿用／簽發 API key 的腳本。import 時就讀——檔案不見要在 operator 啟動
+#: 當下就炸，不要等到 Redeploy 才發現。
+ENSURE_API_KEY_SCRIPT = (
+    Path(__file__).resolve().parent / "n8n_scripts" / "ensure_api_key.js"
+).read_text(encoding="utf-8")
+#: 腳本最壞耗時：SQLite busyTimeout 10s＋最多兩次公開 API 自我驗證（各 8s）＋node 冷啟動。
+_ENSURE_KEY_EXEC_TIMEOUT = 40
+#: 腳本回報「owner 不是平台要的那個」的原因碼 ⇒ error_step=owner_identity（平台據此給說明）。
+_OWNER_IDENTITY_CODES = frozenset({"owner_missing", "owner_ambiguous", "owner_mismatch"})
 
 
 def _api_key_items(payload) -> list:
@@ -118,6 +136,9 @@ class N8nInitService:
     4. Create API key via /rest/api-keys
     5. Update K8s Secret with real API key
     6. Rollout restart deployment so sidecar picks up the new key via secretKeyRef
+
+    #1534：owner 已存在時 2–4 改成 ``_ensure_api_key``（exec 進容器沿用或簽發 key），
+    不用 owner 密碼登入；5–6 不變。
     """
 
     def __init__(self, k8s_service: Optional[KubernetesService] = None):
@@ -163,8 +184,14 @@ class N8nInitService:
         release_name: str,
         owner_email: str,
         owner_password: str,
+        owner_confirmed: bool = False,
     ) -> Dict:
-        """Complete n8n initialization sequence."""
+        """Complete n8n initialization sequence.
+
+        ``owner_confirmed``（#1534）：平台曾對這台服務 init 成功過（owner 是平台建立、之後歸
+        租戶管理）。為 False 時，既有 owner 的 Email 必須等於 ``owner_email``，否則不發 key——
+        可能是別人搶先完成了 setup。
+        """
         logger.info(
             "Starting n8n initialization for %s/%s",
             namespace, release_name,
@@ -176,17 +203,22 @@ class N8nInitService:
         # Step 1: Wait for n8n to be ready
         self._wait_for_ready(namespace, pod_name, container)
 
-        # Step 2: Check if owner already exists
+        # Step 2: owner 已存在 ⇒ 不登入（#1534）；否則建 owner、登入、建 key。
         if self._is_owner_setup_done(namespace, pod_name, container):
-            logger.info("n8n owner already set up, skipping setup step")
+            logger.info(
+                "n8n owner already set up; ensuring the API key without the owner password "
+                "(confirmed by platform: %s)", owner_confirmed,
+            )
+            api_key = self._ensure_api_key(
+                namespace, pod_name, container,
+                expected_email=None if owner_confirmed else owner_email,
+            )
         else:
             self._setup_owner(namespace, pod_name, container, owner_email, owner_password)
-
-        # Step 3: Login to get auth cookie
-        cookie = self._login(namespace, pod_name, container, owner_email, owner_password)
-
-        # Step 4: Create API key
-        api_key = self._create_api_key(namespace, pod_name, container, cookie)
+            # Step 3: Login to get auth cookie（owner 剛由這一次 init 建立，密碼必定是這組）
+            cookie = self._login(namespace, pod_name, container, owner_email, owner_password)
+            # Step 4: Create API key
+            api_key = self._create_api_key(namespace, pod_name, container, cookie)
 
         # Step 5: Update K8s Secret with real API key
         # This is critical — without it, the sidecar keeps the placeholder key.
@@ -564,6 +596,59 @@ class N8nInitService:
                 step="create_api_key",
                 kind="unknown",
             )
+
+    def _ensure_api_key(
+        self,
+        namespace: str,
+        pod_name: str,
+        container: str,
+        expected_email: Optional[str],
+    ) -> str:
+        """#1534：owner 已存在時，不用 owner 密碼取得 init 用的 API key（沿用或簽發）。
+
+        參數走 stdin（不進 argv／operator log）。分類：腳本明說的失敗＝``failed``（沒有留下
+        新 key：寫入前失敗，或自我驗證失敗時已刪掉剛寫的那列）；逾時、輸出不可解析、腳本內
+        非預期例外＝``unknown``（不知道 key 寫進去了沒有）。
+        """
+        payload = json.dumps({
+            "label": _API_KEY_LABEL,
+            "expected_email": expected_email,
+            "expires_at": _API_KEY_EXPIRES_AT,
+        })
+        try:
+            result = self.k8s.exec_in_pod(
+                namespace=namespace,
+                pod_name=pod_name,
+                container=container,
+                command=["node", "-e", ENSURE_API_KEY_SCRIPT],
+                timeout=_ENSURE_KEY_EXEC_TIMEOUT,
+                input_data=payload,
+            )
+            reported = _last_json_object(result.stdout)
+        except KubectlException as e:
+            # 腳本失敗時先印 JSON 再 exit 1 ⇒ kubectl 非 0，最後一行仍是腳本的回報。
+            reported = None if e.timed_out else _last_json_object(e.stdout)
+            if reported is None:
+                raise N8nInitError(
+                    "timed out waiting for the API key script" if e.timed_out
+                    else "failed to execute the API key script",
+                    step="ensure_api_key",
+                    kind="unknown",
+                ) from e
+        if reported is None:
+            raise N8nInitError(
+                "API key script returned no parsable result", step="ensure_api_key", kind="unknown")
+        if reported.get("success") is True and reported.get("api_key"):
+            logger.info("n8n API key %s without the owner password",
+                        "reused" if reported.get("reused") else "issued")
+            return reported["api_key"]
+        code = reported.get("code")
+        error = str(reported.get("error") or "API key script reported a failure")
+        if not isinstance(code, str):
+            # 腳本內非預期例外：可能在寫入之後才發生。
+            raise N8nInitError(error, step="ensure_api_key", kind="unknown")
+        step = "owner_identity" if code in _OWNER_IDENTITY_CODES else "ensure_api_key"
+        raise N8nInitError(f"{code}: {error}", step=step, kind="failed")
 
     def _find_secret(self, namespace: str, release_name: str) -> Optional[str]:
         """Find the secret name for the release by label selector."""

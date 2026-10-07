@@ -28,8 +28,9 @@ INIT_ODOO_READ_TIMEOUT = 900
 # #1257 Q31：n8n init 專屬 connect/read 預算，不再共用 HELM_OPERATION_TIMEOUT=120
 # （那個 120s 比 operator 端的子步 envelope 短，client 會先斷線、server 照跑）。
 # envelope 由 repo-lint init-n8n-budget-ladder 從 operator 原始碼的 AST 算出（目前
-# 531s：find_pod 60＋readiness 206＋node request 5×15＋secret／patch／deployment
-# 3×30＋restart 100）；read 600 留約 70s 餘裕。同樣不是 server／整體 HTTP 的硬
+# 571s：find_pod 60＋readiness 206＋owner check 15＋max(新建 owner：node request 4×15＋
+# 刪舊 key 40，既有 owner：exec 40)＋secret／patch／deployment 3×30＋restart 100；#1471
+# ／#1534）；read 600 留約 29s 餘裕。同樣不是 server／整體 HTTP 的硬
 # deadline，lease 由這組常數推導（src/models/cloud_service_init_attempt.py）。
 INIT_N8N_CONNECT_TIMEOUT = 120
 INIT_N8N_READ_TIMEOUT = 600
@@ -806,6 +807,7 @@ class PaaSOperatorClient:
         release_name: str,
         owner_email: str,
         owner_password: str,
+        owner_confirmed: bool = False,
     ) -> Dict[str, Any]:
         """Initialize n8n instance after deployment.
 
@@ -816,6 +818,9 @@ class PaaSOperatorClient:
             release_name: Helm release name
             owner_email: Email for n8n owner user
             owner_password: Password for n8n owner user
+            owner_confirmed: #1534：平台曾對這台服務 init 成功過。operator 在 owner 已存在時
+                不再登入；這個值為 False 時它會要求既有 owner 的 Email 等於 ``owner_email``。
+                舊 operator 忽略未知欄位。
 
         Returns:
             Dict with success, api_key, owner_email
@@ -829,6 +834,7 @@ class PaaSOperatorClient:
             data={
                 'owner_email': owner_email,
                 'owner_password': owner_password,
+                'owner_confirmed': bool(owner_confirmed),
             },
             timeout=(INIT_N8N_CONNECT_TIMEOUT, INIT_N8N_READ_TIMEOUT),
         )

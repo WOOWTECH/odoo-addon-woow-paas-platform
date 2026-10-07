@@ -719,6 +719,15 @@ _TIMEOUT_GOVERNED_STATES = ('deploying', 'upgrading')
 # 設計權威：docs/decisions/refactor/post-deploy-init-execution-model.md。
 # 每一代（Q24）確定失敗 5 次即轉 error——沿用 #489 以前的 `init_retries` 上界。
 INIT_FAILED_LIMIT = 5
+# #1534：n8n init 的確定失敗裡，屬於「平台認不得現在的 owner」的步驟。``owner_identity`` 是新
+# operator（owner 已存在、平台沒確認過、Email 對不上）；``login`` 是舊 operator 或首次建立時
+# 的登入失敗。用完額度時給專屬說明（``_init_failed_message``）。
+_N8N_OWNER_FAILURE_STEPS = ('owner_identity', 'login')
+
+
+def _n8n_owner_login_rejected(outcome):
+    """舊 operator 用平台存的 owner 密碼登入被 n8n 拒絕（401；MFA 也是 401＋code 998）。"""
+    return outcome.error_step == 'login' and 'HTTP 401' in (outcome.message or '')
 # Q8／Q37：unknown 與 partial 共用的額度（第 2 次即轉 error）；可用 param 覆寫。
 INIT_UNKNOWN_LIMIT_DEFAULT = 2
 _INIT_UNKNOWN_LIMIT_PARAM = 'woow_paas_platform.init_unknown_limit'
@@ -2564,9 +2573,10 @@ class CloudService(models.Model):
         落庫只是記帳，失敗也不翻轉「已生效」（#525 B3 同一紀律）：
           - Odoo：``cloud_service_secret.admin_password``（redeploy 會重送 conf.adminPassword，
             chart 只在首次 -i base 套用，重送新值是 no-op，但保持平台與 app 一致）。
-          - n8n：``n8n_owner_password``／``n8n_owner_email``——post-deploy init（redeploy、
-            addon 變更）用它們 ``POST /rest/login``；不同步的話下一次 init 必在 login 失敗。
-            租戶在 n8n 介面自己改過 owner 密碼／email 的漂移也一併由這裡對齊。
+          - n8n：``n8n_owner_password``／``n8n_owner_email``——平台記住的 owner 帳密。#1534 起
+            post-deploy init 只在建立 owner 那一次用密碼登入；owner 已存在時不登入，平台沒確認
+            過 owner 時才比對 Email。租戶在 n8n 介面自己改過 owner 密碼／email 的漂移一併由這裡
+            對齊（平台記的與實際一致）。
         """
         self.ensure_one()
         from ..services.paas_operator import (
@@ -7203,18 +7213,30 @@ class CloudService(models.Model):
             self.env['woow_paas_platform.platform_monitor']._report_gave_up(
                 self, exit_kind, message)
 
-    def _init_check_exhausted(self):
-        """額度已用完（例如 unknown 在停權期間才被收斂計數）⇒ 轉 error。"""
+    def _init_check_exhausted(self, failed_step=None):
+        """額度已用完（例如 unknown 在停權期間才被收斂計數）⇒ 轉 error。
+
+        ``failed_step``：剛記下的那次確定失敗是在哪一步（#1534：owner 帳號類的失敗給專屬說明）。
+        """
         self.ensure_one()
         if self.init_retries >= INIT_FAILED_LIMIT:
-            self._init_to_error('failed', self._init_failed_message())
+            self._init_to_error('failed', self._init_failed_message(failed_step))
             return True
         if self.init_unknown_count >= self._init_unknown_limit():
             self._init_to_error('unknown', self._init_unknown_message())
             return True
         return False
 
-    def _init_failed_message(self):
+    def _init_failed_message(self, failed_step=None):
+        if self._init_type() == 'n8n' and failed_step in _N8N_OWNER_FAILURE_STEPS:
+            # #1534：n8n 本身照常運作，只是平台認不得現在的 owner——說清楚是哪件事、該找誰。
+            return _(
+                'The platform could not confirm the n8n administrator account: the account '
+                'in n8n is no longer the one set when this service was created (its email or '
+                'password was changed, or two-step verification was turned on, before the '
+                'platform finished setting it up), or someone else completed the n8n setup '
+                'first. The n8n service itself is still running. Please contact support to '
+                'verify the account (attempt #%(seq)s).', seq=self.init_attempt_seq)
         return _(
             'Initialization failed %(count)s times (attempt #%(seq)s). Please '
             'contact support.', count=self.init_retries, seq=self.init_attempt_seq)
@@ -7556,6 +7578,9 @@ class CloudService(models.Model):
             # Fallback for services created before this feature
             params['owner_password'] = (svc.n8n_owner_password
                                         or 'W' + str(uuid.uuid4()).upper())
+            # #1534：曾 init 成功＝owner 是平台建立、之後歸租戶管理。operator 在 owner 已存在時
+            # 不再用上面那組密碼登入（租戶可能已改密碼／開 MFA）；沒確認過的才核對 Email。
+            params['owner_confirmed'] = bool(svc.n8n_api_key)
         return params
 
     @staticmethod
@@ -7863,6 +7888,31 @@ class CloudService(models.Model):
             _logger.info(
                 "[#1257] %s init succeeded for service %s (attempt #%s)",
                 attempt.init_type, svc.name, attempt.sequence)
+        elif (kind == OUTCOME_FAILED and attempt.init_type == 'n8n' and svc.n8n_api_key
+                and _n8n_owner_login_rejected(outcome)):
+            # #1534 過渡期（平台先於 operator 上線、或 operator 回退）：舊 operator 在 owner 已
+            # 存在時仍用平台存的 owner 密碼登入。這台服務 init 成功過（有 n8n_api_key）⇒ owner 是
+            # 平台當時建立、之後歸租戶管理的那個；登入 401（MFA 是 code 998）＝租戶自己改了
+            # 密碼或開了 MFA。init 要保護的事（不讓別人搶先完成 owner setup）早已成立，API key
+            # 沿用上一次的——不計額度、不重試，直接完成。新 operator 不會走到這裡（owner 已存在
+            # 時不登入）。舊 operator 失敗在登入，沒有重啟 Pod ⇒ 直接 running。
+            svc.write(dict(release, **{
+                'state': 'running',
+                'init_pending': False,
+                'addon_update_pending': False,
+                'init_retries': 0,
+                'init_unknown_count': 0,
+                'init_exit': False,
+                'init_error': masked_error,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
+                'init_queue_turn': False,
+            }))
+            _logger.warning(
+                "[#1534] n8n init for service %s (attempt #%s): the owner password or MFA was "
+                "changed in n8n; init completed without rotating the API key",
+                svc.name, attempt.sequence)
         elif kind == OUTCOME_FAILED:
             # D2-R2：明確 failed 已證明 request 執行，重置 operator readiness wait；
             # failed quota itself still increments in this generation.
@@ -7874,7 +7924,7 @@ class CloudService(models.Model):
                 'init_wait_started_at': False,
                 'init_retry_eligible_at': False,
             }))
-            svc._init_check_exhausted()
+            svc._init_check_exhausted(failed_step=outcome.error_step)
         elif kind in (OUTCOME_UNKNOWN, OUTCOME_PARTIAL):
             # Q8：重送前必須等 lease 到期，由 settle 釋放。D2-R2：partial 已證明執行，
             # 重置 operator 等待；unknown 保留既有預算，兩者都不提前釋放 lease。
