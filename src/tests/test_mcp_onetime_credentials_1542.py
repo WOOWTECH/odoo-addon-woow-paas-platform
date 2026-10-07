@@ -80,18 +80,20 @@ class TestMcpOneTimeCredentials1542(TransactionCase):
 
     def test_admin_url_delivered_for_mcp_only(self):
         service = self._service('cloud_app_mcp_vk')
-        creds = PaasController._gateway_credentials(service)
-        self.assertEqual(creds.get('admin_url'), 'https://%s.issue-1542.invalid' % service.subdomain)
-        self.assertNotIn('gateway_api_key', creds, 'MCP 沒有 gateway，不得交付 key')
-        self.assertNotIn('dashboard_url', creds, 'MCP 沒有 dashboard，不得交付 Dashboard API URL')
-        # hermes-agent（helm_secret）沿用原本的 gateway／dashboard 交付，不帶 admin_url
+        self.assertEqual(
+            PaasController._admin_page_link(service),
+            {'admin_url': 'https://%s.issue-1542.invalid' % service.subdomain})
+        # 管理頁網址與 gateway 憑證交付分開：MCP 沒有 gateway／dashboard，憑證交付維持 {}
+        self.assertEqual(PaasController._gateway_credentials(service), {},
+                         'admin_url 不得混進 gateway 憑證交付（沒有 gateway 的 chart 必須回 {}）')
+        # hermes-agent（helm_secret）不帶 admin_url
         hermes = self._service('cloud_app_hermes_agent')
-        hermes._set_admin_password_secret('pw-1542-hermes')
-        self.assertNotIn('admin_url', PaasController._gateway_credentials(hermes))
+        self.assertEqual(PaasController._admin_page_link(hermes), {})
 
     def test_no_admin_url_without_public_address(self):
-        creds = PaasController._gateway_credentials(self._service('cloud_app_mcp_n8n', subdomain=False))
-        self.assertNotIn('admin_url', creds, '沒有對外根位址就不交付半條網址')
+        self.assertEqual(
+            PaasController._admin_page_link(self._service('cloud_app_mcp_n8n', subdomain=False)), {},
+            '沒有對外根位址就不交付半條網址')
 
     # ── Reset 回應 ─────────────────────────────────────────────────────────────
     def test_reset_response_carries_carrier_and_admin_url(self):
@@ -106,7 +108,8 @@ class TestMcpOneTimeCredentials1542(TransactionCase):
         self.assertEqual(data['template'].get('admin_password_carrier'), 'config_json')
         self.assertEqual(data.get('admin_password'), 'new-pw-1542')
         self.assertEqual(data.get('admin_url'), 'https://%s.issue-1542.invalid' % service.subdomain)
-        self.assertNotIn('dashboard_url', data)
+        for key in ('gateway_api_key', 'gateway_url', 'dashboard_url'):
+            self.assertNotIn(key, data, 'MCP 沒有 gateway／dashboard')
 
     # ── 前端分支與翻譯 ─────────────────────────────────────────────────────────
     def test_frontend_branch_and_zh_tw(self):

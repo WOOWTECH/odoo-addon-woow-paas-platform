@@ -2281,6 +2281,14 @@ class PaasController(HiddenChainMixin, Controller):
             message=message,
             template=template_flags,
         )
+        # #1542：管理頁網址只是顯示用；同上，讀取失敗不得翻轉「已生效」的回應。
+        try:
+            data.update(self._admin_page_link(service))
+        except Exception:
+            _logger.exception(
+                "admin page url lookup failed for service %s after credentials "
+                "took effect", service.id,
+            )
         # 判準見上方 deliver_password。gateway key 不受它影響：有就交付（換發後舊的
         # 已失效），前端 onAdminCredentialsSaved 也因此不能只看 admin_password。
         if deliver_password:
@@ -3798,13 +3806,20 @@ class PaasController(HiddenChainMixin, Controller):
         dashboard_url = service._dashboard_public_url()
         if dashboard_url:
             creds['dashboard_url'] = dashboard_url
-        # #1542：mcp-server 家族的管理頁網址（非敏感，判準見 model 端
-        # `_admin_page_public_url`）。跟著建立／Reset 兩個呼叫點一起交付，前端
-        # 一次性視窗的 MCP 文案用它當「登入網址」——網址一律由後端給，前端不拼字串。
-        admin_url = service._admin_page_public_url()
-        if admin_url:
-            creds['admin_url'] = admin_url
         return creds
+
+    @staticmethod
+    def _admin_page_link(service: Any) -> dict[str, Any]:
+        """#1542：mcp-server 家族一次性視窗的「管理頁網址」（`admin_url`）。
+
+        刻意**不**併進 `_gateway_credentials`：那支是 gateway／dashboard 憑證的交付
+        合約（沒有 gateway 的 chart 必須回 {}，見 test_mcp_admin_password）；管理頁網址
+        不是憑證，是租戶本來就用來開這台服務的對外根位址（判準見 model 端
+        `_admin_page_public_url`：has_admin_gui＋config_json 載體＋有 subdomain）。
+        建立與 Reset 兩個呼叫點各自併入；網址一律由後端給，前端不拼字串。
+        """
+        admin_url = service._admin_page_public_url()
+        return {'admin_url': admin_url} if admin_url else {}
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
@@ -4056,6 +4071,8 @@ class PaasController(HiddenChainMixin, Controller):
             # 同樣是一次性。兩組各有自己的閘門，只有具備該能力的 chart 才交付
             # （見 _gateway_credentials）。
             resp_data.update(self._gateway_credentials(service))
+            # #1542：mcp-server 家族的管理頁網址（非憑證、與 gateway 交付分開判）
+            resp_data.update(self._admin_page_link(service))
             return {
                 'success': True,
                 'data': resp_data,
