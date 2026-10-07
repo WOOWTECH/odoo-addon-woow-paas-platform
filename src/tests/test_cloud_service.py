@@ -842,6 +842,16 @@ class TestInjectApiServerCidrs(TransactionCase):
         out = CloudService._inject_apiserver_cidrs({}, 'open-design', cidrs)
         self.assertEqual(out['networkPolicy']['apiServerCidrs'], cidrs)
 
+    def test_inject_omnigent_sets_lowercase_key(self):
+        """#1441：omnigent chart ≥ 0.1.5 沒有 RFC 1918 :6443 fallback，平台要注入
+        node /32；chart 的鍵名是 ``apiserverCidrs``（小寫 s），不是 open-design 的
+        ``apiServerCidrs``——注入錯鍵 chart 會默默用預設、server 建不了 runner。"""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        cidrs = ['10.43.0.1/32', '192.168.10.21/32']
+        out = CloudService._inject_apiserver_cidrs({}, 'omnigent', cidrs)
+        self.assertEqual(out['networkPolicy']['apiserverCidrs'], cidrs)
+        self.assertNotIn('apiServerCidrs', out['networkPolicy'])
+
     def test_inject_noop_for_other_slug(self):
         """Unknown slug (n8n / mcp-*) must NOT gain a networkPolicy key — that
         value path is open-design-specific."""

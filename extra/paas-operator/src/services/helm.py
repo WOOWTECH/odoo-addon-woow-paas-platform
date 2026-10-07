@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.config import settings
+from src.services.tenant_baseline import (
+    PSA_EXEMPT_ANNOTATION,
+    PSA_EXEMPT_REASON,
+    build_baseline_egress_netpol,
+    build_pod_security_labels,
+    is_psa_exempt,
+    parse_namespace_list,
+    psa_label_keys,
+)
 from src.models.schemas import (
     ContainerWaitingInfo,
     DataVolumeInfo,
@@ -1756,6 +1765,8 @@ class KubernetesService:
 
         # #279 O4: apply the leg-2 tenant-isolation baseline NetworkPolicy bundle.
         if workspace_id is not None:
+            # #1441：PSA 排在 NP 之前——之後任何一步失敗重跑，ns 也已經不收特權 pod。
+            self.apply_pod_security(name)
             self._apply_baseline_netpol(name, workspace_id)
         else:
             # A tenant CloudService ns should always carry a workspace_id; None here is
@@ -1889,8 +1900,14 @@ class KubernetesService:
              the n8n sidecar (:3000) and standalone mcp-server (:8080) diverge, and
              within-workspace-ns reach is within-tenant.
 
-        egress is intentionally NOT restricted here — leg-1 (agent-runtime chart) owns
-        agent egress. Idempotent via ``kubectl apply``.
+        5. ``paas-baseline-egress``（#1441／#1436／#514，``TENANT_BASELINE_EGRESS_ENABLED``
+           打開時才套）— 工作區＝自己的區網：egress 只剩同 ns 全部 pod 全部埠、kube-dns
+           53、公網（排除私網／metadata／CGNAT／多播／240/4）。單一一條、原子套用；
+           內容見 ``tenant_baseline.build_baseline_egress_netpol``。開關關著時**不刪**已
+           存在的這條（關開關＝不再新增，不是回滾；回滾用 scripts/ws_lan_backfill.py
+           --rollback）。
+
+        Idempotent via ``kubectl apply``.
         """
         validate_namespace(namespace)
 
@@ -1929,8 +1946,53 @@ class KubernetesService:
                 **env_ml,
             }}}]}],
         ))
+        if settings.tenant_baseline_egress_enabled:
+            manifests.append(build_baseline_egress_netpol(namespace))
         for manifest in manifests:
             self.apply_manifest(manifest)
+
+    def apply_pod_security(self, namespace: str) -> Dict[str, str]:
+        """#1441：租戶 ns 的 Pod Security Admission 標籤（``TENANT_POD_SECURITY_ENABLED``）。
+
+        * 一般租戶 ns：``kubectl label --overwrite`` enforce／warn／audit（＋各自的
+          -version），內容見 ``tenant_baseline.build_pod_security_labels``。
+        * 例外 ns（``PSA_EXEMPT_NAMESPACES``，預設只有管理者用的 Omnigent
+          paas-ws-ab6564da）：移除所有 PSA 標籤（不設 enforce），並註記理由。
+
+        開關關著時什麼都不做（回傳空 dict）。冪等。回傳實際寫入的標籤（例外 ns 回傳空
+        dict），供測試與回填端點觀察。
+        """
+        validate_namespace(namespace)
+        if not settings.tenant_pod_security_enabled:
+            return {}
+        exempt = parse_namespace_list(settings.psa_exempt_namespaces)
+        if is_psa_exempt(namespace, exempt):
+            # `key-` 對不存在的標籤是 no-op（kubectl 只回 "not labeled"），所以可以重跑。
+            self._run_command(
+                ["label", "ns", namespace] + [f"{k}-" for k in psa_label_keys()]
+            )
+            self._run_command([
+                "annotate", "ns", namespace, "--overwrite",
+                f"{PSA_EXEMPT_ANNOTATION}={PSA_EXEMPT_REASON}",
+            ])
+            logger.warning(
+                "apply_pod_security(%s): PSA exempt namespace — no enforce label", namespace
+            )
+            return {}
+        labels = build_pod_security_labels(
+            enforce=settings.tenant_psa_enforce_level,
+            warn=settings.tenant_psa_warn_level,
+            audit=settings.tenant_psa_audit_level,
+            version=settings.tenant_psa_version,
+        )
+        for key, value in labels.items():
+            validate_label_key(key)
+            validate_label_value(key, value)
+        self._run_command(
+            ["label", "ns", namespace, "--overwrite"]
+            + [f"{k}={v}" for k, v in labels.items()]
+        )
+        return labels
 
     def ensure_registry_secret(self, namespace: str) -> Optional[str]:
         """Create/update a dockerconfigjson secret for private registry access.
