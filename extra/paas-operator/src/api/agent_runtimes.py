@@ -33,6 +33,7 @@ from src.services import (
     skill_invalidator,
     webhook_dispatcher,
 )
+from src.services.helm_limiter import HelmOperationBusy
 from src.services.helm import (
     HelmException,
     HelmService,
@@ -753,7 +754,9 @@ def sync_workspaces(project_hash: str, request: SyncWorkspacesRequest):
                     reuse_values=True,
                     **_chart_source_kwargs(),
                 )
-            except HelmException as exc:
+            # #1552：排不到 helm 名額（HelmOperationBusy）跟 helm 失敗一樣只記這一腿——
+            # leg-2（reach labels）與 helm 無關，照樣要收斂。
+            except (HelmException, HelmOperationBusy) as exc:
                 errors.append("egress")
                 logger.error("sync_workspaces leg-1 egress failed (%s): %s", namespace, exc)
 

@@ -1345,6 +1345,21 @@ class TestSyncWorkspacesDualLeg:
             assert "egress" in resp.text
             mock_k8s.reconcile_ns_reach_labels.assert_called_once()
 
+    def test_leg1_busy_still_runs_leg2_and_500(self, client):
+        """#1552：排不到 helm 名額（HelmOperationBusy）跟 helm 失敗一樣，leg-2 照跑。"""
+        from src.services.helm_limiter import HelmOperationBusy
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s:
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_helm.upgrade.side_effect = HelmOperationBusy("upgrade", 45.0, 3)
+            resp = client.post(
+                f"/api/agent-runtimes/{_HASH}/sync-workspaces",
+                json={"project_workspace_ids": [3]},
+            )
+            assert resp.status_code == 500, resp.text
+            assert "egress" in resp.text
+            mock_k8s.reconcile_ns_reach_labels.assert_called_once()
+
     def test_leg2_kubectl_error_500(self, client):
         from src.services.helm import KubectlException
         with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
