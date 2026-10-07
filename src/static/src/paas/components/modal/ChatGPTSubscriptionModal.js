@@ -240,7 +240,8 @@ export class ChatGPTSubscriptionModal extends Component {
     }
     this.transientFailures = 0;
     const data = result.data || {};
-    if (data.state === "connected" || data.connected === true) {
+    // 只認 state：重新連接時舊的登入還在，其他回應的 connected 可能仍是 true。
+    if (data.state === "connected") {
       this._stopTimers();
       this.changed = true;
       this.state.account = { email: data.email, plan_type: data.plan_type };
