@@ -73,7 +73,7 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.4.1')
+        self.assertEqual(tpl.helm_chart_version, '0.4.4')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""

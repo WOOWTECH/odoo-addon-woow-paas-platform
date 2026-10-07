@@ -47,9 +47,9 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.3',
-                         '0.1.3：#1449 LLM 金鑰代簽 proxy、#1436 egress、#1434 ephemeral-storage、'
-                         '#1460 runner 3 vCPU／6Gi、#1451 暫存提示（charts #134）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.6',
+                         '0.1.6：#1536 server SA 去 pods:create、runner.gc 可選 Job 硬上限'
+                         '（接在 0.1.4 外部 DB／0.1.5 workspace=LAN 之後）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；

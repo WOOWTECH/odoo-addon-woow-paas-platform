@@ -52,7 +52,7 @@ class TestNextcloudSeed(TransactionCase):
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, NC_CHART)
         self.assertEqual(
-            tpl.helm_chart_version, '0.1.4',
+            tpl.helm_chart_version, '0.1.6',
             '0.1.2 起 chart 以 before-starting hook 把上傳 chunk（系統鍵 '
             'files.chunked_upload.max_size）設 50 MiB、關 bulk upload'
             '（Cloudflare 每請求 100 MB 上限）並把背景工作改 cron；'
@@ -149,8 +149,11 @@ class TestNextcloudSeed(TransactionCase):
         specs = self._tpl()._parse_helm_value_specs()
         self.assertEqual(specs['required'], [])
         keys = [s['key'] for s in specs['optional']]
-        self.assertEqual(sorted(keys), [
-            'nextcloud.phpMemoryLimit', 'nextcloud.phpUploadLimit'])
+        # #1541: phpUploadLimit removed — it was a fake knob (it governs only the
+        # multipart POST path, not file uploads, whose real ceiling is Cloudflare
+        # 100 MB / Apache 1 GiB). Only phpMemoryLimit remains tenant-adjustable.
+        self.assertEqual(sorted(keys), ['nextcloud.phpMemoryLimit'])
+        self.assertNotIn('nextcloud.phpUploadLimit', keys)
         for s in specs['optional']:
             self.assertEqual(s['type'], 'select')
             self.assertIn(s['default'], s['options'],
@@ -160,8 +163,8 @@ class TestNextcloudSeed(TransactionCase):
 
     def test_whitelist_filters_resource_overrides(self):
         allowed, rejected = self._tpl()._filter_allowed_helm_values({
-            'nextcloud.phpUploadLimit': '2G',
+            'nextcloud.phpMemoryLimit': '1G',
             'resources.limits.memory': '64Gi',
         })
-        self.assertEqual(allowed, {'nextcloud.phpUploadLimit': '2G'})
+        self.assertEqual(allowed, {'nextcloud.phpMemoryLimit': '1G'})
         self.assertEqual(rejected, ['resources.limits.memory'])
