@@ -21061,3 +21061,18 @@ msgstr "規則數不限"
 #: code:addons/woow_paas_platform/models/sh_subscription_plan_visibility.py:0
 msgid "Encrypted MCP connection"
 msgstr "加密 MCP 連線"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"The chart version is managed by the platform and cannot be chosen when "
+"changing a service (this service uses %(version)s). Contact support if the "
+"service needs an upgrade."
+msgstr "Chart 版本由平台管理，修改服務時不能指定（這個服務目前是 %(version)s）。如需升級請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The chart version of a service is managed by the platform: %(fields)s"
+msgstr "服務的 chart 版本由平台管理：%(fields)s"

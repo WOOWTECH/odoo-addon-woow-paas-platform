@@ -497,6 +497,28 @@ def _reject_service_history_writes(env, vals):
             fields=', '.join(touched)))
 
 
+# #1525：chart 版本帳本。reconfigure／換方案／改帳密都以 `helm_chart_version` 釘版
+# （#552 的 fallback：服務自己的版本優先）——租戶若能自己寫它，就能經
+# `/web/dataset/call_kw` 先把帳本改成 registry 裡的任何一版、再按一次「儲存設定」，
+# 等於繞過 controller 對 `version` 參數的檢查，把服務降回有洞的舊 chart。
+# ACL 給 `base.group_user` 完整寫入、`cloud_service_rule_owner_admin_manage` 給
+# owner／admin 寫入，而 owner 資格可自我滿足（自建 workspace），所以只能在這裡擋。
+# 平台自己的寫入全部走 `_record_chart_version`（sudo）或 cron／背景執行緒
+# （superuser）；判準同上：`env.is_system()`。
+_CHART_VERSION_CONTROL_FIELDS = frozenset({'helm_chart_version'})
+
+
+def _reject_chart_version_writes(env, vals):
+    """write() 側：chart 版本帳本只能由平台寫入（#1525）。"""
+    if env.is_system():
+        return
+    touched = sorted(_CHART_VERSION_CONTROL_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'The chart version of a service is managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
+
+
 # ------------------------------------------------------------------------- #
 #  #787：CS Access sync 的抑制鑰匙（private sentinel，形狀抄 #536）           #
 # ------------------------------------------------------------------------- #
@@ -2448,24 +2470,26 @@ class CloudService(models.Model):
                 self.write({
                     'state': 'suspended' if halted else 'upgrading',
                     'error_message': False,
-                    # #552: reset sends `pinned_chart_version` (the service's own
-                    # chart; it no longer rides a template upgrade — F-461-2), but
-                    # it is still a helm upgrade, so it stays one of the four places
-                    # the ledger is refreshed from what helm actually resolved.
-                    # `or self.helm_chart_version` =
-                    # backward compatibility with an operator whose reset response
-                    # has no `chart_version` yet.
-                    # Per-service field only — never `template.helm_chart_version`.
-                    #
-                    # #525 B3：帳本更新與 state stamp 同屬「記帳」，一起進 savepoint。
-                    # 它失敗時整組回捲（帳本維持舊值＝與失敗前一致），但**不會**
-                    # 波及上一段已落庫的憑證，也不會翻轉「密碼已生效」的回應。
-                    'helm_chart_version': (
-                        (reset_result or {}).get('chart_version')
-                        or self.helm_chart_version
-                    ),
                     'last_upgraded_at': fields.Datetime.now(),
                 })
+                # #552: reset sends `pinned_chart_version` (the service's own
+                # chart; it no longer rides a template upgrade — F-461-2), but
+                # it is still a helm upgrade, so it stays one of the four places
+                # the ledger is refreshed from what helm actually resolved.
+                # `or self.helm_chart_version` =
+                # backward compatibility with an operator whose reset response
+                # has no `chart_version` yet.
+                # Per-service field only — never `template.helm_chart_version`.
+                #
+                # #525 B3：帳本更新與 state stamp 同屬「記帳」，一起進 savepoint。
+                # 它失敗時整組回捲（帳本維持舊值＝與失敗前一致），但**不會**
+                # 波及上一段已落庫的憑證，也不會翻轉「密碼已生效」的回應。
+                # #1525：帳本走平台身分（租戶身分的 write 會被擋）——`self` 在這條路上
+                # 是租戶身分（`_service_admin_credentials` 的 internal user）。
+                self._record_chart_version(
+                    (reset_result or {}).get('chart_version')
+                    or self.helm_chart_version
+                )
                 self._rescale_halted_after_upgrade(client)
         except OperationalError:
             raise
@@ -5009,8 +5033,9 @@ class CloudService(models.Model):
         - ``src/controllers/paas.py`` 的 ``api_service_change_plan``（#1158）：
           ``auth="user"``、owner/admin role gate 之後，以 ``_PaaSCapability`` 取得的
           ``service`` 呼叫（與 ``_update_service`` 同一個來源與身分）；寫的是
-          ``allocated_*``／state／``helm_chart_version``／``last_upgraded_at``／
-          ``error_message``，與 reconfigure 寫的欄位同類。
+          ``allocated_*``／state／``last_upgraded_at``／``error_message``，與
+          reconfigure 寫的欄位同類。``helm_chart_version`` 自 #1525 起不經這裡（租戶
+          身分寫不進去），兩條路都改走 ``_record_chart_version``。
 
         新增帶 ``extra_vals`` 的呼叫點時，須回來補上這份身分清單（#699）。
         """
@@ -5019,6 +5044,18 @@ class CloudService(models.Model):
             self.write(extra_vals)
         stripped = self._strip_mcp_sensitive_values(values)
         self.sudo().write({'helm_values': json.dumps(stripped)})
+
+    def _record_chart_version(self, version):
+        """以平台身分回寫 chart 版本帳本（#1525）。
+
+        ``helm_chart_version`` 只有平台身分寫得進去（``_reject_chart_version_writes``），
+        而 reconfigure／換方案／回復／改帳密這幾條路的 ``self`` 是租戶身分。呼叫端
+        已經做完授權（role gate、訂閱閘），值是平台自己決定的（服務目前版本或範本
+        pin）或 operator 回報的事實，不是租戶輸入。空值不寫（未知不得覆蓋成空）。
+        """
+        self.ensure_one()
+        if version and version != self.helm_chart_version:
+            self.sudo().write({'helm_chart_version': version})
 
     def _set_deploy_params(self, params):
         """以平台身分寫入 ``deploy_params``（#1317）。
@@ -8822,6 +8859,7 @@ class CloudService(models.Model):
         _reject_observation_control_writes(self.env, vals)
         _reject_timeout_recovery_control_writes(self.env, vals)
         _reject_service_history_writes(self.env, vals)
+        _reject_chart_version_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)

@@ -1061,3 +1061,5 @@ from . import test_workspace_slug_1516
 from . import test_chatgpt_subscription
 # 方案名稱中文化 migration（18.0.1.0.214）：27 個英文方案／商品名改中文，只改仍是舊原名者。
 from . import test_plan_names_zh_tw_migration
+# #1525：租戶不能指定 chart 版本（controller version 參數＋helm_chart_version 寫入守衛）。
+from . import test_tenant_chart_version_1525

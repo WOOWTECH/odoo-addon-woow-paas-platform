@@ -346,15 +346,18 @@ class TestReconfigureVersionFallback(_Base):
 
         self.assertEqual(self._sent_version(client), '0.2.1')
 
-    def test_explicit_version_still_wins(self):
-        """不回歸：呼叫端真的指定版本時，fallback 不得蓋掉它。"""
+    def test_explicit_other_version_is_rejected(self):
+        """#1525 推翻了原本「呼叫端指定的版本優先」的契約：那等於讓租戶自選 chart
+        （可降回有洞的舊版）。現在不一致的版本直接回錯誤、不呼叫 operator。
+        完整矩陣見 ``test_tenant_chart_version_1525``。"""
         template = self._template('reconf-explicit-552', '0.2.1')
         service = self._service(template, chart_version='0.1.5')
 
         client = self._client()
-        self._run_update(service, client, version='9.9.9')
+        result = self._run_update(service, client, version='9.9.9')
 
-        self.assertEqual(self._sent_version(client), '9.9.9')
+        self.assertFalse(result['success'], result)
+        client.upgrade_release.assert_not_called()
 
     def test_reconfigure_with_no_pin_anywhere_still_sends_none(self):
         """🔴 三處全空時**不得**拒絕——這是刻意的取捨，釘成契約。

@@ -1342,8 +1342,7 @@ class PaasController(HiddenChainMixin, Controller):
             # #1513：扣款前用「真正 upgrade 會送的那一組參數」問 operator 擴得了嗎——磁碟要
             # 變大時由 Longhorn validator 判斷（server dry-run），放不下就整筆擋下、不扣款。
             # 換方案不升 chart、不 refresh image（#1160／#1184）：釘服務現行 chart 版本。
-            resolved_version = (
-                service.helm_chart_version or service.template_id.helm_chart_version)
+            resolved_version = self._reconfigure_chart_version(service)
             upgrade_kwargs = self._upgrade_kwargs(
                 service, resolved_version,
                 service._assemble_deploy_values(values=new_values, plan=plan)['values'])
@@ -1399,10 +1398,11 @@ class PaasController(HiddenChainMixin, Controller):
             service._apply_helm_values(new_values, extra_vals={
                 **allocated_vals,
                 'state': 'suspended' if halted else 'upgrading',
-                'helm_chart_version': resolved_version,
                 'last_upgraded_at': fields.Datetime.now(),
                 'error_message': False,
             })
+            # #1525：chart 版本帳本只有平台身分寫得進去（見 `_record_chart_version`）。
+            service._record_chart_version(resolved_version)
         elif allocated_vals:
             service.write(allocated_vals)
         if allocated_vals:
@@ -1750,7 +1750,8 @@ class PaasController(HiddenChainMixin, Controller):
             service_id (int): Service ID
             action (str): 'get', 'update', 'delete', or 'restart' (#1432)
             values (dict, optional): Helm values (for update)
-            version (str, optional): Chart version (for update)
+            version (str, optional): #1525 只接受「這台服務目前的 chart 版本」（舊客戶端
+                相容）；其他值回錯誤——chart 版本由平台決定，租戶不能指定
             clear_keys (list, optional): #1455 password spec keys to clear (for update)
 
         Returns:
@@ -4151,6 +4152,12 @@ class PaasController(HiddenChainMixin, Controller):
         if service._init_lease_active():
             return {'success': False, 'error': self._init_in_flight_error(service)}
 
+        # #1525：chart 版本由平台決定，租戶不能經 API 指定。在任何寫入**之前**擋下
+        # （下方 addon 那段會先寫 odoo_addon_ids）。見 `_tenant_chart_version_error`。
+        version_error = self._tenant_chart_version_error(service, version)
+        if version_error:
+            return {'success': False, 'error': version_error}
+
         # #1455：清除清單在任何寫入**之前**驗證（下方 addon 那段會先寫 odoo_addon_ids）。
         if clear_keys is not None and not isinstance(clear_keys, list):
             return {'success': False, 'error': _('Invalid request')}
@@ -4277,27 +4284,24 @@ class PaasController(HiddenChainMixin, Controller):
             # #552: reconfigure 的 chart version fallback。**主執行緒**解析，兩個
             # 消費端（下面的 write ＋ upgrade_kwargs）共用同一個值。
             #
-            # `version` 這個參數**永遠是 None**：前端三個入口都不帶它
-            # （services/cloud_service.js:451 的 `version = null` 預設，:458 只在
-            # 有值時才塞進 params；ConfigurationTab「儲存設定」／EditDomainModal
-            # 「改網域」／AddonsTab「改 addon」都只傳 3 個參數）。⇒ 送進
+            # 前端三個入口都不帶 `version`（ConfigurationTab「儲存設定」／
+            # EditDomainModal「改網域」／AddonsTab「改 addon」）。#552 之前送進
             # `upgrade_release` 的 `version` 恆為 None ⇒ operator 不帶 `--version`
-            # ⇒ helm 解析成 registry **當下的 latest**。這條路與 template 有沒有
-            # 填版號無關，**全部 15 個 template 的 reconfigure 都不釘版**：
-            # mcp-* 釘 0.1.5、home-assistant 釘 0.2.1 的 pin 在這裡完全沒作用。
+            # ⇒ helm 解析成 registry **當下的 latest**，全部 template 的 reconfigure
+            # 都不釘版。
             #
             # fallback 順序＝「這台服務現在跑的版本」優先於「商品目前釘的版本」：
             # reconfigure 的語意是改設定、不是升版，所以先原地釘住 service 已知的
             # 版本；service 沒有記錄（legacy）才退到 template 的 pin。
             #
+            # #1525：租戶送來的 `version` **不再**參與解析——它原本排在最前面，
+            # 等於讓任何 owner／admin 自己送 RPC 把 chart 換成 registry 裡的任何一版
+            # （可降回有洞的舊版）。不一致的值已在函式開頭被拒（不是靜默忽略）。
+            #
             # ⚠ 刻意**不**在 `PaasOperatorClient.upgrade_release` 加 fail-closed
             # guard：那條路走背景執行緒，失敗回不到前端，會讓全部 15 個商品的
             # 「儲存設定」靜默壞掉（#552 修法順序：fallback 先於 fail-closed）。
-            resolved_version = (
-                version
-                or service.helm_chart_version
-                or service.template_id.helm_chart_version
-            )
+            resolved_version = self._reconfigure_chart_version(service)
 
             # #482: 停權中的服務 reconfigure 後不得停在 'upgrading' —— poll
             # (_cron_check_deploying_services 掃 deploying/upgrading/initializing)
@@ -4313,13 +4317,9 @@ class PaasController(HiddenChainMixin, Controller):
             # （ir.rule 對它們照常生效）。兩次 write 在同一個 transaction 內。
             service._apply_helm_values(merged_values, extra_vals={
                 'state': 'suspended' if halted else 'upgrading',
-                # #552: 與 upgrade_kwargs 用同一個 `resolved_version`，兩處語意不
-                # 分岔（原式 `version or service.helm_chart_version` 在 fallback
-                # 之後恆等於 `resolved_version`）。這是升級**前**的樂觀值；成功後
-                # 由背景執行緒以 operator 回報的實際版本覆蓋。
                 # #559：`helm_values` 已移出這個 write，改由 `_apply_helm_values`
                 # 以提權入口寫入（欄位加了 groups=，租戶身分寫不進來）。
-                'helm_chart_version': resolved_version,
+                # #1525：`helm_chart_version` 也移出（見下方 `_record_chart_version`）。
                 # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
                 # （本機時區）。#489 讓這個欄位從「前台顯示用」變成 age timeout
                 # 的**判定用**錨：伺服器時區若不是 UTC，錨與 `fields.Datetime.now()`
@@ -4328,6 +4328,10 @@ class PaasController(HiddenChainMixin, Controller):
                 'last_upgraded_at': fields.Datetime.now(),
                 'error_message': False,
             })
+            # #552: 與 upgrade_kwargs 用同一個 `resolved_version`，兩處語意不分岔。
+            # 這是升級**前**的樂觀值；成功後由背景執行緒以 operator 回報的實際版本覆蓋。
+            # #1525：帳本只有平台身分寫得進去（租戶身分的 write 會被 model 擋）。
+            service._record_chart_version(resolved_version)
             # #1267：**不再**把 `addon_update_pending` 覆寫成「這次有沒有改 addon」
             # ——那會把前一次 addon 變更留下的待辦、以及首次部署還欠的 init 一起蓋掉。
             # 要不要 init 由欠 init 標記決定：改 addon 或從額度出口的 error 出發才開
@@ -4350,6 +4354,37 @@ class PaasController(HiddenChainMixin, Controller):
 
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': _('Unable to connect to deployment service')}
+
+    @staticmethod
+    def _reconfigure_chart_version(service):
+        """#552／#1525：改設定（reconfigure、換方案）釘的 chart 版本——服務目前的版本，
+        沒有記錄（legacy）才退到範本釘的版本。**不收**呼叫端指定的版本。"""
+        return service.helm_chart_version or service.template_id.helm_chart_version
+
+    @classmethod
+    def _tenant_chart_version_error(cls, service, version):
+        """#1525：租戶 API 帶來的 ``version`` 不得改變 chart 版本；回錯誤訊息或 None。
+
+        原本 ``resolved_version = version or …`` 讓租戶送的值優先，直接成為 helm 的
+        ``--version``：任何 owner／admin 都能自己送 RPC 把服務換成 registry 裡的任何
+        一版（例如降回有 console RBAC 洞的 hermes-agent 0.2.1、沒有 egress 收斂的
+        pi-agent 0.1.4），等於讓租戶撤回平台的安全修正。前端三個入口都不帶它。
+
+        沒帶（``None``／空字串）＝照舊；帶了且**等於**這次會用的版本（舊客戶端回傳
+        目前版本）＝放行；其餘一律回清楚的錯誤，不靜默忽略——靜默忽略會讓呼叫端以為
+        版本換成功了。刻意**不**放行「等於範本釘的版本、但服務目前是別版」：那等於
+        讓租戶自己升版，卻跳過管理員 Redeploy 的 image 刷新（#1408）與版本核對。
+        """
+        if version is None or version == '':
+            return None
+        expected = cls._reconfigure_chart_version(service)
+        if isinstance(version, str) and expected and version == expected:
+            return None
+        return _(
+            'The chart version is managed by the platform and cannot be chosen '
+            'when changing a service (this service uses %(version)s). '
+            'Contact support if the service needs an upgrade.',
+            version=expected or '-')
 
     @staticmethod
     def _upgrade_kwargs(service, resolved_version, assembled_values):
@@ -4610,9 +4645,10 @@ class PaasController(HiddenChainMixin, Controller):
             # 版本（＝目標 revision 的版本）。記下來，否則下一次「修改配置」會以
             # `service.helm_chart_version`（回復前的新版）釘版，把剛回復的 chart 又升回去
             # （#552 的 resolved_version 以服務自己的版本優先）。
-            if isinstance(rollback_result, dict) and rollback_result.get('chart_version'):
-                rollback_vals['helm_chart_version'] = rollback_result['chart_version']
             service.write(rollback_vals)
+            if isinstance(rollback_result, dict) and rollback_result.get('chart_version'):
+                # #1525：帳本只有平台身分寫得進去；值是 operator 回報的事實，不是租戶輸入。
+                service._record_chart_version(rollback_result['chart_version'])
             # #1257 Q23／#1267：還欠 init 的服務（含 init 額度用完的 error）rollback
             # 開新的一代——保留欠 init、計數歸零，下一輪導回 initializing。之前只寫
             # upgrading、不設 `addon_update_pending`，首次部署 init 失敗、已轉 error 的
