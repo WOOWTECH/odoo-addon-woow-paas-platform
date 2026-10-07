@@ -29,9 +29,10 @@ def generate_ws_hash(slug: str) -> str:
        被重推，所以回填守的不是它們；呼叫點實查見該 migration 的檔頭。）
     2. 測試拿它當「修復前的期望值」現算（寫死字面常數會假綠）。
 
-    🔴 為什麼不能再拿它推導新名字：``slug`` 由租戶提供的 ``name`` 逐字決定
-    （``Workspace._generate_slug()`` 對 ``[a-z0-9_-]`` 是恆等函式），而 ``[:8]``
-    是 **32 bit 截斷** ⇒ 租戶離線搜一個 name 就能讓自己的 workspace 映到別人的
+    🔴 為什麼不能再拿它推導新名字：未撞名時 ``slug`` 仍由租戶提供的 ``name``
+    逐字決定（``Workspace._generate_slug()`` 對未被佔用的 ``[a-z0-9_-]`` 字串
+    仍是恆等函式；#1516 起撞名會加隨機後綴），而 ``[:8]`` 是 **32 bit 截斷**
+    ⇒ 租戶離線搜一個 name 就能讓自己的 workspace 映到別人的
     K8s namespace（目標值逐字印在受害者每個公開子網域上，不必猜）。即使沒有攻擊
     者，N 個 workspace 的生日碰撞機率約 N²/2^33（N=10,000 時約 1.2%）。
     ⇒ namespace 身分改成 ``workspace.ws_hash``（伺服器產生、DB UNIQUE），見

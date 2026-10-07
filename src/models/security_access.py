@@ -862,8 +862,9 @@ class SecurityAccess(models.Model):
     def _generate_canonical_name(self):
         """#677：hash 種子是 workspace 的 **stored** `ws_hash`，不是 `slug`。
 
-        `slug` 由租戶提供的 `name` 逐字決定，而舊種子是它的 `md5[:8]`（32-bit
-        截斷）⇒ 租戶搜得出一個 name，讓自己的 SA 子網域落在受害者的 ws_hash 段上。
+        未撞名時 `slug` 仍由租戶提供的 `name` 逐字決定（#1516 起撞名會加隨機
+        後綴），而舊種子是它的 `md5[:8]`（32-bit 截斷）⇒ 租戶搜得出一個 name，
+        讓自己的 SA 子網域落在受害者的 ws_hash 段上。
         原本「slug 空就退回 `name.lower()`」的 fallback 一併移除：`workspace_id` 是
         `required=True`，而靜默退回 name 推導正是這個洞的形狀；ws_hash 缺值交給
         `naming.py::_require_ws_hash` fail-loud。

@@ -6,7 +6,9 @@
 
 2026-08-02 落地 #525 **A2**（`_create_workspace` 孤兒 workspace）＋**A3**（`_invite_member` 已入群卻回失敗）＝ **PR#540**（develop，兩個獨立 commit，manifest .92→.93，`Refs #525`）。修法沿用 A1／PR#527 的 `cr.savepoint()` 形態。全套：baseline `develop@cfe5cd7a` **0F/0E of 2212** → fix **0F/0E of 2223**（＋11）。
 
-**🔴 勘誤：#525 A2 對 slug 後果的敘述是錯的。** issue 寫「`_generate_slug` 會靜默改成 name-1、缺陷不會浮現只會累積」。實測相反——`unique_slug` 是 DB 層 constraint 不看 ir.rule，但 `_generate_slug` 用的是**使用者身分**的 `search_count`，而 `workspace_rule_member_access` 的 domain 是 `access_ids.user_id` ⇒ 孤兒對使用者不可見 ⇒ 產生器回**同一個** slug → 撞 unique → `IntegrityError` → controller 吞掉但交易已毀 → request 尾端 `cr.commit()` 撞 **`InFailedSqlTransaction` → 框架層 500**。同名重試每次硬失敗，`-1` 後綴只在孤兒**看得見**時才走得到。⇒ 照 issue 敘述寫測試會斷言到錯誤的行為；**別人盤點出來的「後果」跟「行號」一樣要自己驗**（同 [[project_520_create_service_rollback_landing]] 的 5 處因果不符）。
+**🔴 歷史勘誤（#525 落地當時）：A2 對 slug 後果的敘述是錯的。** issue 寫「`_generate_slug` 會靜默改成 name-1、缺陷不會浮現只會累積」。實測相反——`unique_slug` 是 DB 層 constraint 不看 ir.rule，但 `_generate_slug` 用的是**使用者身分**的 `search_count`，而 `workspace_rule_member_access` 的 domain 是 `access_ids.user_id` ⇒ 孤兒對使用者不可見 ⇒ 產生器回**同一個** slug → 撞 unique → `IntegrityError` → controller 吞掉但交易已毀 → request 尾端 `cr.commit()` 撞 **`InFailedSqlTransaction` → 框架層 500**。同名重試每次硬失敗，`-1` 後綴只在孤兒**看得見**時才走得到。⇒ 照 issue 敘述寫測試會斷言到錯誤的行為；**別人盤點出來的「後果」跟「行號」一樣要自己驗**（同 [[project_520_create_service_rollback_landing]] 的 5 處因果不符）。
+
+**#1516 後續更新**：slug 查重已改為 sudo 全域可見，包含孤兒；同名重試會取得 `-{6 hex}` 隨機後綴，不再因看不到孤兒而撞 UNIQUE。上述 2026-08-02 的實測保留為歷史，#525 的 savepoint 仍不可省略：孤兒依然不可見、刪不掉且佔住 base slug。
 
 **🔴 注入點選錯兩次，都是前提斷言擋下的**（[[feedback_absence_assertion_needs_its_premise_asserted]] 的實戰價值）：
 

@@ -305,10 +305,11 @@ class Workspace(models.Model):
           workspace 會拿到什麼 hash，可以搶先佔走（DoS／預先蹲點）。隨機值沒有
           這個面。
 
-        🔴 **這個迴圈不是安全邊界，不要那樣讀它。** `search_count` 走的是呼叫者
-        身分（受 ir.rule 限制），在攻擊路徑上恆回 0——那正是 #677 的核心觀察。
-        真正的保證是 `_sql_constraints` 的 `UNIQUE(ws_hash)`：DB constraint 不看
-        ir.rule、也不怕 TOCTOU。這裡加 `sudo()` 只是為了讓那個 N/2^32 機率的隨機
+        🔴 **這個迴圈不是安全邊界，不要那樣讀它。** 未提權的 `search_count` 會
+        受 ir.rule 限制、看不到其他租戶；這裡已用 sudo，#1516 起 slug 查重也同樣
+        全域可見，但查詢與 INSERT 之間仍有 TOCTOU。真正的保證是
+        `_sql_constraints` 的 `UNIQUE(ws_hash)`：DB constraint 不看 ir.rule，
+        且保證唯一性在寫入當下成立。這裡的 `sudo()` 只是為了讓 N/2^32 機率的隨機
         撞號變成重抽、而不是使用者眼前的 IntegrityError；即使把整個迴圈刪掉，
         跨租戶保證仍然成立（守門測試 `test_workspace_ns_hash_677.py::test_N3_*`
         直接下 raw SQL 繞過所有 Python 層，量的就是 DB 那一層）。
