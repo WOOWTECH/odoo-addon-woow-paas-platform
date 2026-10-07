@@ -42,8 +42,12 @@ Subscription state machine — `sh.subscription.subscription.state` only
 mutates through:
 
 - `sh_subscription_confirm` (→ `in_progress`)
-- upstream `auto_expired` cron (end-date driven; **never fires** for
-  `sh_never_expire=True` plans, which is *all* PaaS plans today)
+- upstream `auto_expired` cron (end-date driven). ⚠ #1574: upstream code does
+  **not** check `sh_never_expire` — it expires any `in_progress` sub whose
+  `sh_end_date == today`, and the platform writes `sh_end_date` (first cycle's
+  last day) without ever advancing it. The platform now overrides
+  `_sh_auto_expired_subscription` (`sh_subscription_fix.py`) so it skips
+  `sh_never_expire=True` plans, which is *all* PaaS plans today.
 - manual `cancel` action
 - `change_subscription_plan_wizard` / `[SH] change_plan` (→ `close`)
 

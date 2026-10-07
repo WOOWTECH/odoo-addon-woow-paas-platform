@@ -1085,3 +1085,5 @@ from . import test_litellm_master_key_1557
 from . import test_refund_credit_note_1555
 # #1562：略過試用後 sh_end_date 跟著 next_payment 重算。
 from . import test_skip_trial_end_date_1562
+# #1574：上游到期 cron 跳過 never-expire 方案（平台訂閱不得在第一期最後一天被轉 expire）。
+from . import test_auto_expire_never_expire_1574

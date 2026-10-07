@@ -230,6 +230,48 @@ class ShSubscriptionFix(models.Model):
         return
 
     @api.model
+    def _sh_auto_expired_subscription(self):
+        """[#1574] 上游每日到期 cron：跳過 ``sh_never_expire`` 方案的訂閱。
+
+        上游（``sh_subscription``）對所有 ``in_progress`` 且 ``sh_end_date == today`` 的
+        訂閱一律轉 ``expire``（有已生效子訂閱則 ``renewed``），**不檢查**
+        ``sh_never_expire``。平台所有方案都是 never-expire（訂閱持續到取消為止），但
+        ``_force_trial_dates_from_plan``／``_force_active_dates_from_plan``／``_skip_trial``
+        都會寫 ``sh_end_date``（＝第一期最後一天），續期又只推進 next_payment ⇒ 每張
+        平台訂閱都會在第一期的 ``sh_end_date`` 當天被轉 expire：隔天不續扣
+        （``_sh_create_auto_invoice`` 只撈 in_progress）、生命週期 cron 在寬限期後
+        停權，而從來沒有人取消它（#1574，沙盒以平台正規建立路徑重現）。
+
+        上游的 onchange 本來就不替 never-expire 方案設 ``sh_end_date``——「never
+        expire」的語意就是不會到期；平台訂閱的終止只由取消與 dunning（#324 T19）負責。
+        非 never-expire 的訂閱（ERP／官網若有固定期數的方案）照上游行為處理。
+
+        刻意不呼叫 ``super()``（同 ``_cron_wallet_charge`` 的 #324 做法）：上游的迴圈
+        自己 search 全部 in_progress，無法只交給它一個子集合。下面三行就是上游的判準與
+        動作（含 #15 之後「draft 子訂閱不算續約」），只多一個 never-expire 過濾。
+        """
+        today = fields.Date.today()
+        Subscription = self.env['sh.subscription.subscription'].sudo()
+        due = Subscription.search([
+            ('state', '=', 'in_progress'),
+            ('sh_end_date', '=', today),
+        ])
+        never_expire = due.filtered(lambda s: s.sh_subscription_plan_id.sh_never_expire)
+        if never_expire:
+            _logger.info(
+                "[SUB_FIX] _sh_auto_expired_subscription skips %s never-expire "
+                "subscription(s) whose sh_end_date is today (#1574): %s",
+                len(never_expire), never_expire.ids,
+            )
+        for subscription in due - never_expire:
+            renewed_children = Subscription.search_count([
+                ('sh_subscription_id', '=', subscription.id),
+                ('state', '!=', 'draft'),
+            ])
+            subscription.state = 'renewed' if renewed_children else 'expire'
+            subscription._sh_send_subscription_email(False)
+
+    @api.model
     def _cron_wallet_charge_retry(self):
         """[#324] Neutralize 上游 sh_subscription_wallet 的 hourly 重試 cron。
 
