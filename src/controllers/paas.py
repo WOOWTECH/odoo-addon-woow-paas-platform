@@ -405,10 +405,10 @@ class PaasController(HiddenChainMixin, Controller):
         #      ⇒ 沒有 access 列的 workspace 對每個非 superuser 都不存在：看不到、
         #      進不去、刪不掉。（#658 之前這條規則叫 `workspace_rule_member_access`
         #      且讀寫合一；讀方向的判準沒變，只有寫方向被收窄到 owner/admin。）
-        #   2. `unique_slug` 是 DB 層 constraint、不看 ir.rule，但 `_generate_slug`
-        #      用的是**使用者身分**的 `search_count`、看不到孤兒 ⇒ 同名重試會產生
-        #      同一個 slug → 撞 unique → IntegrityError → 交易毀損 → 框架層 500。
-        #      使用者從此再也用不了那個名字，錯誤訊息也指不出原因。
+        #   2. `unique_slug` 是 DB 層 constraint、不看 ir.rule。#1516 的
+        #      `_generate_slug` 以 sudo 查重，同名重試會改用隨機 hex 後綴而成功，
+        #      但孤兒仍永久佔住原本的 base slug。舊產生器看不到孤兒、導致同名
+        #      重試撞 unique／交易毀損的後果已修正；不可見的孤兒本身仍必須撤回。
         #
         # savepoint 而非整個 request 的 `cr.rollback()`：形態沿用 #525 A1／PR #527，
         # 把撤回界定在這一段，不依賴「try 之前永遠沒有別的寫入」這個會隨程式碼

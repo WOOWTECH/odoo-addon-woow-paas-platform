@@ -8,6 +8,7 @@ import secrets
 import uuid
 from unittest.mock import patch
 
+from odoo.exceptions import ValidationError
 from odoo.tests.common import HttpCase, tagged
 
 from ..services.paas_capability import _PaaSCapability
@@ -19,13 +20,14 @@ class TestWorkspaceSlug1516(HttpCase):
         super().setUp()
         self.users = {}
         suffix = uuid.uuid4().hex[:10]
-        for label in ('a', 'b'):
+        for label in ('a', 'b', 'portal'):
             login = 'slug-1516-%s-%s@example.invalid' % (label, suffix)
+            group = 'base.group_portal' if label == 'portal' else 'base.group_user'
             user = self.env['res.users'].with_context(no_reset_password=True).create({
                 'name': login, 'login': login, 'email': login, 'password': login,
-                'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+                'groups_id': [(6, 0, [self.env.ref(group).id])],
             })
-            self.assertFalse(user.share)
+            self.assertEqual(user.share, label == 'portal')
             self.assertFalse(user.has_group('base.group_system'))
             self.users[label] = user
 
@@ -84,3 +86,60 @@ class TestWorkspaceSlug1516(HttpCase):
         self.assertEqual(workspace.slug, 'omnigent-d4e5f6')
         self.assertEqual(workspace.name, 'omnigent')
         self.assertRegex(workspace.ws_hash, r'^[0-9a-f]{8}$')
+
+    def test_eight_suffix_collisions_raise_validation_error(self):
+        capability = self._capability('a')
+        self.assertEqual(capability.create_workspace('omnigent', '').slug,
+                         'omnigent')
+        self.assertEqual(capability.create_workspace('omnigent-a1b2c3', '').slug,
+                         'omnigent-a1b2c3')
+        # 第九個值刻意可用：若越過八次上限，就會成功而使此斷言失敗。
+        with self._slug_suffixes(['a1b2c3'] * 8 + ['d4e5f6']):
+            # capability 不吞例外；controller 會轉成通用錯誤，故在此斷言型別。
+            with self.assertRaises(ValidationError):
+                self._capability('b').create_workspace('omnigent', '')
+
+    def test_eighth_suffix_draw_can_still_succeed(self):
+        capability = self._capability('a')
+        self.assertEqual(capability.create_workspace('omnigent', '').slug,
+                         'omnigent')
+        self.assertEqual(capability.create_workspace('omnigent-a1b2c3', '').slug,
+                         'omnigent-a1b2c3')
+        with self._slug_suffixes(['a1b2c3'] * 7 + ['d4e5f6']):
+            workspace = self._capability('b').create_workspace('omnigent', '')
+        self.assertEqual(workspace.slug, 'omnigent-d4e5f6')
+
+    def test_same_user_can_create_three_workspaces_with_the_same_name(self):
+        capability = self._capability('a')
+        with self._slug_suffixes(['a1b2c3', 'd4e5f6']):
+            workspaces = [capability.create_workspace('omnigent', '')
+                          for _ in range(3)]
+        self.assertEqual([(ws.slug, ws.name) for ws in workspaces], [
+            ('omnigent', 'omnigent'),
+            ('omnigent-a1b2c3', 'omnigent'),
+            ('omnigent-d4e5f6', 'omnigent'),
+        ])
+
+    def test_portal_user_can_create_same_name_and_list_original_name(self):
+        first = self._capability('a').create_workspace('omnigent', '')
+        self.assertEqual(first.slug, 'omnigent')
+        portal_capability = self._capability('portal')
+        self.assertTrue(portal_capability.portal)
+        self.assertFalse(portal_capability.memberships())
+        with self._slug_suffixes(['a1b2c3']):
+            second = portal_capability.create_workspace('omnigent', '')
+        self.assertEqual((second.slug, second.name),
+                         ('omnigent-a1b2c3', 'omnigent'))
+        listed = self._listed_workspaces('portal')
+        self.assertEqual([(row['id'], row['name']) for row in listed],
+                         [(second.id, 'omnigent')])
+
+    def test_archived_workspace_still_reserves_its_normalized_slug(self):
+        first = self._capability('a').create_workspace('OmniGENT!', '')
+        self.assertEqual(first.slug, 'omnigent')
+        first.action_archive()
+        self.assertEqual(first.state, 'archived')
+        with self._slug_suffixes(['a1b2c3']):
+            second = self._capability('b').create_workspace('omnigent', '')
+        self.assertEqual((second.slug, second.name),
+                         ('omnigent-a1b2c3', 'omnigent'))

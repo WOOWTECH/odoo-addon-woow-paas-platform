@@ -19,18 +19,13 @@ controller 只呼叫一次 `Workspace.create()`，但 model 覆寫（`workspace.
    workspace 對每一個非 superuser 都不存在：看不到、進不去、刪不掉。
    （#658 之前這條叫 `workspace_rule_member_access`、讀寫合一；本段依賴的是
    **讀**方向的判準，而讀方向沒有被 #658 動到。）
-2. **永久佔住 slug**——`unique_slug` 是 DB 層 constraint，**不看 ir.rule**；而
-   `_generate_slug` 用的是**使用者身分**的 `search_count`，看不到孤兒。於是
-   「DB 說這個 slug 有人用了」與「產生器說沒人用」同時成立，使用者拿不回自己
-   的 slug。
+2. **永久佔住原本的 slug**——`unique_slug` 是 DB 層 constraint，**不看 ir.rule**。
+   #1516 後 `_generate_slug` 以 sudo 全域查重，包含使用者看不到的孤兒；同名重試
+   會成功並取得 6 碼隨機 hex 後綴，但原本的 base slug 仍被孤兒佔住。
 
-   ⚠ 實測（本檔 RED，2026-08-02）修正 #525 A2 對這一點的敘述：**不是**「靜默
-   改成 name-1、name-2、缺陷不會浮現」。因為產生器看不到佔位的孤兒，它會回傳
-   **同一個** slug → INSERT 撞 `unique_slug` → psycopg2 `IntegrityError` →
-   controller 吞掉但交易已毀 → request 尾端 `cr.commit()` 撞
-   `InFailedSqlTransaction` → **框架層 500**。所以同名重試不是悄悄換號，而是
-   每一次都硬失敗，且錯誤訊息完全指不出真正原因。`-1` 後綴那條路只在孤兒**看
-   得見**時才會走到（例如 superuser 或未來規則放寬）。
+   歷史 RED（2026-08-02）中，舊產生器以使用者身分查重、看不到孤兒，回傳同一個
+   slug，INSERT 撞 `unique_slug`，交易毀損後以框架層 500 收場。#1516 已修正這個
+   重試後果，但不能取代 #525 的 savepoint：不可見且刪不掉的孤兒仍不該被留下。
 
 第二個殘留來源在同一段：原本的 `except Exception` 一路包到**純讀取的回應組裝**，
 連組裝時的例外都會被歸類成「建立失敗」，但那時 workspace 其實已完整建成（含
@@ -156,7 +151,7 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
                       'list 端點必須看得到它——可見性探針有鑑別力的證明')
 
     # ================================================================
-    #  孤兒的兩個後果（直接造孤兒，不經缺陷；修好之後仍成立）
+    #  孤兒不可見且佔住 base slug；#1516 後同名重試須改用隨機後綴
     # ================================================================
     def test_orphan_workspace_is_invisible_via_the_list_endpoint(self):
         visible = self._create()
@@ -199,13 +194,24 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
         self.assertEqual(
             self.Workspace.sudo().search_count([('slug', '=', _WS_SLUG)]), 1,
             'slug 確實被佔住——unique_slug 是 DB 層約束')
-        # 但 `_generate_slug` 用的是使用者身分的 search_count，看不到它
+        # 原始 ORM 查詢仍受 ir.rule 限縮；#1516 的 generator 則用 sudo 查重。
         self.assertEqual(
             self.Workspace.with_user(self.admin_user).search_count(
                 [('slug', '=', _WS_SLUG)]), 0,
-            '孤兒對使用者不可見 ⇒ `_generate_slug` 的 search_count 數不到它。'
-            '「DB 說有人用了」與「產生器說沒人用」同時成立，正是使用者拿不回'
-            '自己 slug 的機制')
+            '孤兒對使用者不可見，但不代表 sudo 的 slug 產生器看不到它')
+
+        retry = self._create()
+        self.assertIn('result', retry, retry)
+        self.assertTrue(retry['result'].get('success'), retry)
+        self.assertRegex(retry['result']['data']['slug'],
+                         r'^ws-525-a2-[0-9a-f]{6}$',
+                         '孤兒佔住 base slug 時，同名重試應成功並取得隨機後綴')
+        self.assertEqual(retry['result']['data']['name'], _WS_NAME)
+        listed = self._post('/api/workspaces', {'action': 'list'})
+        self.assertTrue(listed['result'].get('success'), listed)
+        self.assertEqual([row['id'] for row in listed['result']['data']],
+                         [retry['result']['data']['id']],
+                         '同名重試可見，但孤兒仍不可出現在使用者列表')
 
     # ================================================================
     #  前提：注入確實發生在主表列 INSERT 之後
@@ -246,8 +252,9 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
     def test_user_can_retry_with_the_same_name_and_get_the_intended_slug(self):
         """失敗 → 排除原因 → 用同一個名字再建一次，必須拿到乾淨的 slug。
 
-        孤兒殘留時這條走不通：`unique_slug` 已被佔住，而 `_generate_slug` 看不到
-        佔住它的那一列。使用者不會收到任何提示，缺陷只會累積。
+        #525 的 savepoint 撤掉失敗建立，不留下孤兒 ⇒ base slug 仍可用。
+        若有孤兒佔位，#1516 雖會讓重試成功，卻只能拿到帶後綴的 slug；因此這條
+        仍須斷言乾淨的 slug，不能只看「建立成功」而漏掉殘留。
         """
         with self._fail_owner_access_create():
             first = self._create()
