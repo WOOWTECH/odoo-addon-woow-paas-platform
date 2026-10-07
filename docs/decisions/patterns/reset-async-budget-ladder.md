@@ -49,7 +49,8 @@ related:
 | --- | --- | --- |
 | 前端 | `RESET_REQUEST_TIMEOUT_MS`（`src/static/src/paas/services/cloud_service.js`） | 90_000 |
 | 平台 client | `RESET_CONFIG_TIMEOUT`（`src/services/paas_operator.py`） | 75 |
-| operator 硬上限 | `RESET_HARD_CAP_SECONDS`（`extra/paas-operator/src/api/releases.py`） | 65 |
+| operator 硬上限 | `RESET_HARD_CAP_SECONDS`（`extra/paas-operator/src/api/releases.py`） | 73 |
+| ├ 等 helm 名額（#1552） | `RESET_QUEUE_TIMEOUT_SECONDS`（排不到回 503、什麼都沒動） | 8 |
 | ├ helm subprocess | `RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS` ＝ `2n + O` | 45 |
 | ├ config.json exec | `RESET_EXEC_TIMEOUT_SECONDS` | 12 |
 | ├ backup cleanup exec | `RESET_CLEANUP_EXEC_TIMEOUT_SECONDS` | 5 |

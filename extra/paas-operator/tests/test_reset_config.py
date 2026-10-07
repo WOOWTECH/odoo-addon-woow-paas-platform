@@ -13,6 +13,7 @@ from src.api.releases import (
     RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
     RESET_HELM_TIMEOUT_SECONDS,
     RESET_KUBECTL_SLACK_SECONDS,
+    RESET_QUEUE_TIMEOUT_SECONDS,
     _validate_namespace_or_raise,
     reset_release_config,
 )
@@ -464,12 +465,13 @@ class TestResetBudgetLadder:
         check_reset_budget_ladder 驗（它讀得到平台與前端的常數，這裡讀不到）。
         """
         assert RESET_HARD_CAP_SECONDS == (
-            RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS
+            RESET_QUEUE_TIMEOUT_SECONDS  # #1552：等 helm 名額
+            + RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS
             + RESET_EXEC_TIMEOUT_SECONDS
             + RESET_CLEANUP_EXEC_TIMEOUT_SECONDS
             + RESET_KUBECTL_SLACK_SECONDS
         )
-        assert RESET_HARD_CAP_SECONDS == 65
+        assert RESET_HARD_CAP_SECONDS == 73
 
 
 class TestResetBackupHygiene:

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.config import settings
+from src.services.helm_limiter import helm_operation_slot
 from src.services.tenant_baseline import (
     PSA_EXEMPT_ANNOTATION,
     PSA_EXEMPT_REASON,
@@ -74,6 +75,16 @@ def _pvc_keep_post_renderer_args(live_snapshot: Optional[Dict[str, Any]] = None)
             json.dumps(live_snapshot, sort_keys=True, separators=(",", ":")),
         ])
     return args
+
+
+def _openapi_validation_args() -> List[str]:
+    """#1552：install／upgrade 不讓 helm 下載＋解析整份 ``/openapi/v2``（見 settings 註解）。
+
+    k8s ≥ 1.27 的 API server 支援 fieldValidation，helm 3.13 本來就略過 client 端 schema
+    驗證，下載的 schema 只佔記憶體（本叢集每個 helm 約 +150MiB）。``HELM_DISABLE_OPENAPI_VALIDATION=false``
+    回到舊行為。
+    """
+    return ["--disable-openapi-validation"] if settings.helm_disable_openapi_validation else []
 
 
 def _live_objects(namespace: str, kinds: str = "pvc,statefulsets") -> Optional[List[Dict[str, Any]]]:
@@ -753,6 +764,31 @@ class HelmService:
         """
         validate_namespace(namespace)
 
+        # #1552：整個 install（registry login、讀 live 物件、helm 本身）佔一個 helm 名額。
+        with helm_operation_slot("install --dry-run" if dry_run else "install"):
+            return self._install_locked(
+                namespace, name, chart, values=values, sensitive_values=sensitive_values,
+                version=version, create_namespace=create_namespace, repo=repo,
+                username=username, password=password, dry_run=dry_run,
+                subprocess_timeout_seconds=subprocess_timeout_seconds,
+            )
+
+    def _install_locked(
+        self,
+        namespace: str,
+        name: str,
+        chart: str,
+        values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
+        version: Optional[str] = None,
+        create_namespace: bool = False,
+        repo: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        dry_run: bool = False,
+        subprocess_timeout_seconds: Optional[int] = None,
+    ) -> ReleaseInfo:
+        """``install`` 的本體；呼叫端已持有 helm 名額（#1552）。"""
         # Private OCI charts need `helm registry login` before pull (GA blocker
         # fix): OCI auth != classic-repo --username/--password. No-op for
         # non-OCI refs or public OCI (no creds).
@@ -771,6 +807,7 @@ class HelmService:
         # #1407: a retried install can meet PVCs a failed attempt left behind
         # (keep-annotated, same names) — reuse their live immutable fields too.
         args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
+        args.extend(_openapi_validation_args())
 
         if create_namespace and not dry_run:
             args.append("--create-namespace")
@@ -923,6 +960,37 @@ class HelmService:
                 "Please provide the full chart reference (e.g., oci://registry-1.docker.io/bitnamicharts/postgresql)"
             )
 
+        # #1552：整個 upgrade 佔一個 helm 名額（端點已持有時可重入，不重複排隊）。
+        with helm_operation_slot("upgrade --dry-run" if dry_run else "upgrade"):
+            return self._upgrade_locked(
+                namespace, name, chart, values=values, sensitive_values=sensitive_values,
+                version=version, reset_values=reset_values, reuse_values=reuse_values,
+                repo=repo, username=username, password=password, atomic=atomic,
+                timeout_seconds=timeout_seconds,
+                subprocess_timeout_seconds=subprocess_timeout_seconds,
+                dry_run=dry_run, description=description,
+            )
+
+    def _upgrade_locked(
+        self,
+        namespace: str,
+        name: str,
+        chart: str,
+        values: Optional[Dict[str, Any]] = None,
+        sensitive_values: Optional[Dict[str, Any]] = None,
+        version: Optional[str] = None,
+        reset_values: bool = False,
+        reuse_values: bool = True,
+        repo: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        atomic: bool = False,
+        timeout_seconds: Optional[int] = None,
+        subprocess_timeout_seconds: Optional[int] = None,
+        dry_run: bool = False,
+        description: Optional[str] = None,
+    ) -> ReleaseInfo:
+        """``upgrade`` 的本體；呼叫端已持有 helm 名額（#1552）。"""
         # Private OCI charts need `helm registry login` before pull (GA blocker
         # fix) — symmetric with install(), covers retry/upgrade paths.
         self._ensure_oci_login(chart)
@@ -942,6 +1010,7 @@ class HelmService:
         # keep; otherwise the next uninstall would delete the PVC.
         # #1407: existing PVCs/StatefulSets render with their live immutable fields.
         args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
+        args.extend(_openapi_validation_args())
 
         if version:
             args.extend(["--version", version])
@@ -1015,7 +1084,8 @@ class HelmService:
             namespace,
         ]
 
-        result = self._run_command(args)
+        with helm_operation_slot("uninstall"):  # #1552
+            result = self._run_command(args)
         return {"message": result.stdout.strip()}
 
     def rollback(
@@ -1044,7 +1114,8 @@ class HelmService:
         if revision is not None:
             args.append(str(revision))
 
-        result = self._run_command(args)
+        with helm_operation_slot("rollback"):  # #1552
+            result = self._run_command(args)
         return {"message": result.stdout.strip()}
 
     def get_values(

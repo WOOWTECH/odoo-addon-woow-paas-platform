@@ -22,6 +22,25 @@ class Settings(BaseSettings):
     helm_binary: str = "/usr/local/bin/helm"
     helm_timeout: int = 300  # seconds
 
+    # #1552：helm／kubectl 子行程都跑在 operator 同一個容器（同一個 memory cgroup）。
+    # 2026-10-07 沙盒實測（同 image 3c037f9、limit 512Mi）：一個 helm install／upgrade
+    # （含 --dry-run）因為要下載並解析整份 /openapi/v2（本叢集 213 個 CRD，約 11.6MB）
+    # RSS 約 200MiB；同時 3 個就把容器 OOMKilled，進行中的請求全斷。
+    #
+    # HELM_DISABLE_OPENAPI_VALIDATION：install／upgrade 加 --disable-openapi-validation。
+    # 對 k8s ≥ 1.27 是**純省資源**：helm 3.13 在 API server 支援 fieldValidation 時本來就
+    # 不做 client 端 schema 驗證，只是照樣把 schema 抓下來解析（沙盒實測：開或關，未知欄位
+    # 都只有同樣的 server 端 warning、照樣安裝）。關掉後每個 upgrade 約 45MiB、快一倍。
+    # 只有明確 false 才回到舊行為（kill switch）。
+    helm_disable_openapi_validation: bool = True
+    # HELM_MAX_CONCURRENT_OPERATIONS：同時執行的 helm install／upgrade／rollback／uninstall
+    # 上限（含 dry-run）；超過的請求排隊。查詢類（list／status／history／get）不受限。
+    helm_max_concurrent_operations: int = Field(default=3, ge=1)
+    # HELM_QUEUE_TIMEOUT_SECONDS：排隊最多等多久；等不到就回 503（error_code
+    # operator_busy，什麼都沒套用，可以直接重送）。平台 helm 類請求的 HTTP 預算是 120s
+    # （HELM_OPERATION_TIMEOUT），這裡要留給真正的 helm 作業。
+    helm_queue_timeout_seconds: int = Field(default=45, gt=0)
+
     # CORS
     cors_origins: str = ""  # Comma-separated list of allowed origins, empty = block all external
 

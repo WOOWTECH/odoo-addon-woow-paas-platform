@@ -37,6 +37,7 @@ from src.services.helm import (
     KubernetesService,
 )
 from src.services.helm import _live_objects, _sanitize_release_values
+from src.services.helm_limiter import helm_operation_slot
 from src.services.upgrade_preflight import (
     build_expansion_error_detail,
     classify_expansion_rejection,
@@ -97,9 +98,14 @@ RESET_EXEC_TIMEOUT_SECONDS = 12
 RESET_CLEANUP_EXEC_TIMEOUT_SECONDS = 5
 # Deployment 探索 ＋ rollout restart 下達（各 ~1s 的 kubectl 呼叫）。
 RESET_KUBECTL_SLACK_SECONDS = 3
+# #1552：等 helm 名額（helm_limiter）最多幾秒。reset 有自己的階梯，不能用一般的
+# HELM_QUEUE_TIMEOUT_SECONDS（45s）：排隊 45s 再跑完整個 reset 會超過平台的 75s，
+# 平台先斷線、operator 之後才換掉密碼＝租戶不知道的新密碼。排不到就 503、什麼都沒動。
+RESET_QUEUE_TIMEOUT_SECONDS = 8
 # operator 對 reset-config 的**硬上限**：外層預算必須大於它。
 RESET_HARD_CAP_SECONDS = (
-    RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS
+    RESET_QUEUE_TIMEOUT_SECONDS
+    + RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS
     + RESET_EXEC_TIMEOUT_SECONDS
     + RESET_CLEANUP_EXEC_TIMEOUT_SECONDS
     + RESET_KUBECTL_SLACK_SECONDS
@@ -431,6 +437,34 @@ def _precheck_orphaned_release_resources(namespace: str, name: str) -> None:
     )
 
 
+def _install_release_blocking(request: ReleaseCreateRequest) -> ReleaseInfo:
+    """``create_release`` 的同步段（在 thread 裡跑）：預檢 → SA pull secret → helm install。
+
+    #1552：整段佔**一個** helm 名額——容量預檢的 ``helm install --dry-run`` 與真正的
+    install 不會各排一次隊（排到一半才被拒＝預檢白做）。
+    """
+    with helm_operation_slot("install"):
+        # #1157：同名 release 的孤兒資源還在就拒絕（helm 會靜默接回、回收 CronJob 之後
+        # 會刪掉活站資料）——放最前面：它是確定性的拒絕，不必先跑容量預檢的 dry-run。
+        _precheck_orphaned_release_resources(request.namespace, request.name)
+        # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
+        _precheck_storage_quota(request.namespace)
+        # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
+        _precheck_cluster_storage_capacity(request)
+        # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
+        # _ensure_image_pull_secrets docstring）。
+        values = _ensure_image_pull_secrets(request.namespace, request.values)
+        return helm_service.install(
+            namespace=request.namespace,
+            name=request.name,
+            chart=request.chart,
+            values=values,
+            sensitive_values=request.sensitive_values,
+            version=request.version,
+            create_namespace=request.create_namespace,
+        )
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -452,25 +486,10 @@ async def create_release(request: ReleaseCreateRequest):
             回 409，#1415）
     """
     try:
-        # #1157：同名 release 的孤兒資源還在就拒絕（helm 會靜默接回、回收 CronJob 之後
-        # 會刪掉活站資料）——放最前面：它是確定性的拒絕，不必先跑容量預檢的 dry-run。
-        _precheck_orphaned_release_resources(request.namespace, request.name)
-        # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
-        _precheck_storage_quota(request.namespace)
-        # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
-        _precheck_cluster_storage_capacity(request)
-        # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
-        # _ensure_image_pull_secrets docstring）。
-        values = _ensure_image_pull_secrets(request.namespace, request.values)
-        release = helm_service.install(
-            namespace=request.namespace,
-            name=request.name,
-            chart=request.chart,
-            values=values,
-            sensitive_values=request.sensitive_values,
-            version=request.version,
-            create_namespace=request.create_namespace,
-        )
+        # #1552：預檢（含容量預檢的 helm --dry-run）與 install 都是阻塞的子行程，而且
+        # 可能要排隊等 helm 名額——整段放到 thread，排隊時不卡住 event loop（/health
+        # 探針、其他 async 端點照常回應）。
+        release = await asyncio.to_thread(_install_release_blocking, request)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
         logger.info(f"Installed release {request.name} in {request.namespace}")
@@ -590,8 +609,11 @@ def upgrade_release(
         # #1407：helm upgrade 不是交易——中途被 API server 拒絕時，前面的資源已經
         # 換成新版、release 卻標 failed。先用同一組參數 dry-run 出 manifest，跟 live
         # 物件比對不可變欄位；有衝突就在這裡擋下（409，什麼都還沒套用）。
-        _upgrade_preflight(upgrade_kwargs)
-        release = helm_service.upgrade(**upgrade_kwargs)
+        # #1552：預檢＋真正 upgrade 共用**一個** helm 名額——通過預檢的請求不會在
+        # 第二段又排一次隊（排不到就變成「預檢過了、卻沒套用」）。
+        with helm_operation_slot("upgrade"):
+            _upgrade_preflight(upgrade_kwargs)
+            release = helm_service.upgrade(**upgrade_kwargs)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
         logger.info(f"Upgraded release {name} in {namespace}")
@@ -819,7 +841,8 @@ async def delete_release(
     # 先解析（純函式、不會失敗），PVC 與 DataVolume 兩段共用同一個值。
     orphan_grace_days = resolve_orphan_grace_period_days(grace_period_days, namespace, name)
     try:
-        result = helm_service.uninstall(namespace, name)
+        # #1552：同 create_release——uninstall 可能排隊，不在 event loop 上等。
+        result = await asyncio.to_thread(helm_service.uninstall, namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
 
         # Label orphaned PVCs for deferred cleanup — scoped to THIS release's own
@@ -1769,6 +1792,21 @@ def restart_release(namespace: str, name: str):
     summary="#357/#449：reset admin_password（依 admin_password_carrier 分流）",
 )
 def reset_release_config(
+    namespace: str,
+    name: str,
+    request: ReleaseResetConfigRequest,
+):
+    """Reset the admin password（本體見 ``_reset_release_config_unlocked``）。
+
+    #1552：整個 reset（helm upgrade／exec／restart）佔一個 helm 名額，最多排隊
+    ``RESET_QUEUE_TIMEOUT_SECONDS``——已算進 ``RESET_HARD_CAP_SECONDS``（#461 階梯）。
+    排不到回 503 ``operator_busy``，密碼沒有變。
+    """
+    with helm_operation_slot("reset-config", timeout=RESET_QUEUE_TIMEOUT_SECONDS):
+        return _reset_release_config_unlocked(namespace, name, request)
+
+
+def _reset_release_config_unlocked(
     namespace: str,
     name: str,
     request: ReleaseResetConfigRequest,

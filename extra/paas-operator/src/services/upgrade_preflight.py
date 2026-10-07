@@ -245,6 +245,11 @@ def describe_helm_failure(stderr: Optional[str], action: str = "升級") -> str:
         return "Helm %s失敗：%s「%s」已經存在，但不屬於這個服務的 release，不能接手。" % (
             action, _KIND_LABEL.get(m.group("kind"), m.group("kind")), m.group("name"))
     lowered = text.lower()
+    if "another operation" in lowered and "in progress" in lowered:
+        # #1552：上一次 helm 作業被中斷（operator OOMKilled／重啟）會讓 release 停在
+        # pending-*，之後每一次 upgrade 都撞這句。沙盒實測：helm rollback 會把它收掉。
+        return ("Helm %s失敗：這個服務上一次的 Helm 作業被中斷，release 停在「進行中」，"
+                "新的設定無法套用。請先用「回復版本」回到上一個正常版本，再重新送出。" % action)
     if "timed out" in lowered or "deadline exceeded" in lowered:
         return "Helm %s失敗：等待資源就緒逾時。" % action
     if "not found" in lowered and ("chart" in lowered or "manifest unknown" in lowered):

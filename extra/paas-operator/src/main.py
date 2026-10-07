@@ -24,6 +24,7 @@ from src.api import (
 from src.config import assert_env_guard, settings
 from src.models.schemas import ErrorResponse, HealthResponse
 from src.services.helm import HelmService
+from src.services.helm_limiter import HelmOperationBusy
 
 # Configure logging
 logging.basicConfig(
@@ -133,6 +134,23 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         content=ErrorResponse(
             detail=exc.detail,
             error_type="HTTPException",
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(HelmOperationBusy)
+async def helm_operation_busy_handler(request: Request, exc: HelmOperationBusy):
+    """#1552：helm 名額排隊逾時 ⇒ 503（什麼都沒套用，可以直接重送）。
+
+    結構化 ``detail.error_code=operator_busy`` 讓平台顯示自己的中文說明，而不是把它當成
+    一般的升級失敗。``Retry-After`` 給 HTTP 層的重試一個合理的間隔。
+    """
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        headers={"Retry-After": "15"},
+        content=ErrorResponse(
+            detail=exc.detail(),
+            error_type="HelmOperationBusy",
         ).model_dump(),
     )
 

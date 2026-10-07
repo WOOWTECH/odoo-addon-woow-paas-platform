@@ -1226,7 +1226,8 @@ def check_reset_budget_ladder(root):
     needed_op = (
         "RESET_HELM_TIMEOUT_SECONDS", "RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS",
         "RESET_EXEC_TIMEOUT_SECONDS", "RESET_CLEANUP_EXEC_TIMEOUT_SECONDS",
-        "RESET_KUBECTL_SLACK_SECONDS", "RESET_HARD_CAP_SECONDS",
+        "RESET_KUBECTL_SLACK_SECONDS", "RESET_QUEUE_TIMEOUT_SECONDS",
+        "RESET_HARD_CAP_SECONDS",
     )
     missing = [k for k in needed_op if k not in op]
     if missing:
@@ -1255,8 +1256,11 @@ def check_reset_budget_ladder(root):
             " pending-rollback、Secret 停在沒人持有的新密碼"
             % (subprocess_budget, n, overhead, 2 * n + overhead))
 
+    # #1552：reset 先排 helm 名額（RESET_QUEUE_TIMEOUT_SECONDS）——排隊也是 operator
+    # 端的耗時，不算進來就等於讓平台在 operator 還沒動手前斷線。
     parts_sum = (
-        subprocess_budget + op["RESET_EXEC_TIMEOUT_SECONDS"]
+        op["RESET_QUEUE_TIMEOUT_SECONDS"]
+        + subprocess_budget + op["RESET_EXEC_TIMEOUT_SECONDS"]
         + op["RESET_CLEANUP_EXEC_TIMEOUT_SECONDS"] + op["RESET_KUBECTL_SLACK_SECONDS"]
     )
     if hard_cap != parts_sum:
