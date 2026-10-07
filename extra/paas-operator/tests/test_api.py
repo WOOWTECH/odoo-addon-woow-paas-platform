@@ -878,13 +878,19 @@ class TestNamespaceEndpoints:
         """#279 P5: baseline-netpol backfill applies NP bundle + re-stamps labels."""
         mock_k8s.stamp_managed_ns_labels.return_value = {
             "paas-managed": "true", "woow.tw/workspace-id": "7"}
+        mock_k8s.apply_pod_security.return_value = {
+            "pod-security.kubernetes.io/enforce": "baseline"}
         resp = client.post(
             "/api/namespaces/paas-ws-x/baseline-netpol", json={"workspace_id": 7})
         assert resp.status_code == 200, resp.text
         mock_k8s._apply_baseline_netpol.assert_called_once_with("paas-ws-x", 7)
         mock_k8s.stamp_managed_ns_labels.assert_called_once_with(
             "paas-ws-x", workspace_id=7)
+        # #1441：同一條回填路徑也補 Pod Security 標籤（開關在 apply_pod_security 內判斷）。
+        mock_k8s.apply_pod_security.assert_called_once_with("paas-ws-x")
         assert resp.json()["labels"]["woow.tw/workspace-id"] == "7"
+        assert resp.json()["pod_security_labels"] == {
+            "pod-security.kubernetes.io/enforce": "baseline"}
 
     @patch("src.api.namespaces.k8s_service")
     def test_backfill_baseline_netpol_invalid_ns_400(self, mock_k8s, client):
