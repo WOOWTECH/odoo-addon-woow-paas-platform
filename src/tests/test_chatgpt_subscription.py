@@ -303,6 +303,12 @@ class TestChatgptSubscriptionEndpoint(_ChatgptFixture):
              'did not respond', 'exec_timeout'),
             ({'return_value': {'success': False, 'error_kind': 'unknown', 'error_code': None}},
              'did not respond', 'bad_output'),
+            ({'return_value': {'success': False, 'error_kind': 'failed',
+                               'error_code': 'command_failed', 'error': 'boom'}},
+             'could not complete', 'command_failed'),
+            ({'return_value': {'success': False, 'error_kind': 'failed',
+                               'error_code': 'db_delete_failed'}},
+             'could not be removed', 'db_delete_failed'),
             # 平台不認得的碼（自由文字、未來新增的碼）不原樣轉給前端。
             ({'return_value': {'success': False, 'error_kind': 'failed',
                                'error_code': 'something new from the chart'}},
@@ -318,24 +324,36 @@ class TestChatgptSubscriptionEndpoint(_ChatgptFixture):
 
     def test_test_failure_shows_the_upstream_message(self):
         upstream = 'ChatGPT is not connected (請先在平台連接 ChatGPT 訂閱)'
-        client = self._client({'success': False, 'error_kind': 'failed', 'error_code': upstream,
-                               'data': {'model': 'chatgpt/gpt-5.4', 'status_code': 401,
-                                        'seconds': 0.2, 'error': upstream}})
-        result, _client = self._call('test', client=client)
-        self.assertFalse(result['success'])
-        self.assertEqual(result['error_code'], 'test_failed')
-        self.assertIn('HTTP 401', result['error'])
-        self.assertIn(upstream, result['error'])
+        responses = (
+            # operator #1547：test_failed，上游原文在 error 與 data.error。
+            {'success': False, 'error_kind': 'failed', 'error_code': 'test_failed',
+             'error': upstream, 'data': {'model': 'chatgpt/gpt-5.4', 'status_code': 401,
+                                         'seconds': 0.2, 'error': upstream}},
+            # 只有頂層 error 帶原文。
+            {'success': False, 'error_kind': 'failed', 'error_code': 'test_failed',
+             'error': upstream, 'data': {'model': 'chatgpt/gpt-5.4', 'status_code': 401}},
+            # DESIGN §2 原稿的形狀：原文直接當 error_code。
+            {'success': False, 'error_kind': 'failed', 'error_code': upstream,
+             'data': {'model': 'chatgpt/gpt-5.4', 'status_code': 401}},
+        )
+        for response in responses:
+            result, _client = self._call('test', client=self._client(response))
+            self.assertFalse(result['success'])
+            self.assertEqual(result['error_code'], 'test_failed')
+            self.assertIn('HTTP 401', result['error'])
+            self.assertIn(upstream, result['error'])
+            self.assertNotIn('error', result.get('data', {}), '原文只放在訊息裡，不另外轉送')
 
     def test_add_models_partial_failure_lists_the_models(self):
-        client = self._client({'success': False, 'error_kind': 'failed', 'error_code': None,
-                               'data': {'added': ['chatgpt/gpt-5.4'], 'kept': [],
-                                        'failed': ['chatgpt/gpt-9']}})
-        result, _client = self._call('add_models', client=client)
-        self.assertFalse(result['success'])
-        self.assertEqual(result['error_code'], 'add_models_partial')
-        self.assertIn('chatgpt/gpt-9', result['error'])
-        self.assertEqual(result['data']['added'], ['chatgpt/gpt-5.4'])
+        data = {'added': ['chatgpt/gpt-5.4'], 'kept': [], 'failed': ['chatgpt/gpt-9']}
+        for code in ('models_failed', None, 'command_failed'):
+            client = self._client({'success': False, 'error_kind': 'failed', 'error_code': code,
+                                   'error': code, 'data': data})
+            result, _client = self._call('add_models', client=client)
+            self.assertFalse(result['success'], code)
+            self.assertEqual(result['error_code'], 'models_failed', code)
+            self.assertIn('chatgpt/gpt-9', result['error'], code)
+            self.assertEqual(result['data']['added'], ['chatgpt/gpt-5.4'])
 
     def test_response_is_a_whitelisted_view_without_tokens(self):
         data = dict(CONNECTED, access_token='at-secret', refresh_token='rt-secret',
@@ -400,7 +418,7 @@ class TestChatgptSubscriptionEndpoint(_ChatgptFixture):
             with self.assertRaises(ValueError):
                 client.chatgpt_subscription('paas-ws-x', 'rel', 'restore')
             req.assert_not_called()
-        # operator 的 exec 逾時（30／60／150 秒）＋找 pod 的餘裕必須蓋得過（DESIGN §2）。
-        self.assertGreater(CHATGPT_SUBSCRIPTION_TIMEOUT, 30)
-        self.assertGreater(CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT, 60)
-        self.assertGreater(CHATGPT_SUBSCRIPTION_TEST_TIMEOUT, 150)
+        # operator（#1547）的 exec 逾時 30／60／150 秒＋找 pod 餘裕 10 秒必須蓋得過。
+        self.assertGreater(CHATGPT_SUBSCRIPTION_TIMEOUT, 30 + 10)
+        self.assertGreater(CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT, 60 + 10)
+        self.assertGreater(CHATGPT_SUBSCRIPTION_TEST_TIMEOUT, 150 + 10)

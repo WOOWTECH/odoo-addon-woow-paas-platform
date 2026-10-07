@@ -162,13 +162,16 @@ _CHATGPT_SUBSCRIPTION_TEXT_FIELDS = {
     'model': 80, 'reply': 80,
 }
 _CHATGPT_SUBSCRIPTION_LIST_FIELDS = ('models', 'added', 'kept', 'failed')
-#: operator／chart 的 error_code 中「平台認得」的那些——log 只記這些名字。test 失敗時 chart 把
-#: 上游的錯誤訊息放在 ``error``（operator 原樣當成 error_code），那是自由文字，不進 log。
+#: operator／chart 的 error_code 中「平台認得」的那些——回給前端與 log 只用這些名字，其他一律
+#: 收斂成 ``failed``。operator（#1547）只把長得像碼的 CLI ``error`` 當 error_code；test 失敗
+#: 是 ``test_failed``（上游原文在 ``data.error``／``error``），add-models 部分失敗是
+#: ``models_failed``，其他 ``command_failed``。平台另有 ``operator_*``（HTTP 層）。
 _CHATGPT_SUBSCRIPTION_KNOWN_CODES = frozenset({
-    'pod_not_found', 'unsupported_chart', 'invalid_model', 'exec_timeout', 'bad_output',
-    'internal', 'not_connected', 'device_code_request_failed',
+    'pod_not_found', 'unsupported_chart', 'invalid_model', 'invalid_action', 'exec_timeout',
+    'bad_output', 'internal', 'not_connected', 'device_code_request_failed',
     'device_code_response_incomplete', 'poll_failed', 'token_exchange_failed',
     'token_response_incomplete', 'db_delete_failed', 'model_info_failed', 'no_chatgpt_model',
+    'test_failed', 'models_failed', 'command_failed',
     'operator_unsupported', 'operator_rejected', 'operator_error', 'operator_unreachable',
 })
 
@@ -2643,7 +2646,7 @@ class CloudService(models.Model):
         """operator／chart 的原因碼 → 租戶看得懂、能行動的訊息（都走 ``_()``＋zh_TW.po）。"""
         if code in ('exec_timeout', 'bad_output', 'operator_error'):
             return _("The service did not respond. Try again.")
-        if action == 'add_models' and data.get('failed') and code in (None, 'add_models_partial'):
+        if action == 'add_models' and data.get('failed') and code == 'models_failed':
             return _("Some models could not be added: %(models)s",
                      models=', '.join(data['failed']))
         if action == 'test' and code == 'test_failed':
@@ -2672,6 +2675,8 @@ class CloudService(models.Model):
             'db_delete_failed': _(
                 "The saved sign-in could not be removed. Try again."),
             'invalid_model': _("Invalid model name."),
+            'models_failed': _("Some models could not be added. Try again."),
+            'command_failed': _("The service could not complete the request. Try again."),
         }
         return messages.get(code) or _(
             "The ChatGPT subscription request failed. Try again.")
@@ -2742,9 +2747,8 @@ class CloudService(models.Model):
             data = data or {}
             # 回給前端與寫進 log 的都只有平台認得的碼；其他（自由文字、未來新增的碼）一律
             # 收斂成 'failed'——前端依碼決定能不能重試，不該看到任意字串。
-            known = code in _CHATGPT_SUBSCRIPTION_KNOWN_CODES or code in (
-                'add_models_partial', 'test_failed')
-            public_code = code if known else ('failed' if code else None)
+            public_code = code if code in _CHATGPT_SUBSCRIPTION_KNOWN_CODES else (
+                'failed' if code else None)
             _logger.warning(
                 "[chatgpt-subscription] service %s (id=%s) action=%s failed: "
                 "error_kind=%s error_code=%s", self.name, self.id, action, kind, public_code,
@@ -2792,13 +2796,16 @@ class CloudService(models.Model):
         kind = result.get('error_kind')
         if kind == 'unknown' and code not in ('exec_timeout', 'bad_output'):
             code = 'bad_output'
-        elif action == 'add_models' and data.get('failed') and not code:
-            code = 'add_models_partial'
-        elif (action == 'test' and kind == 'failed'
-                and code not in _CHATGPT_SUBSCRIPTION_KNOWN_CODES):
-            # chart 把上游錯誤訊息放在 error（operator 原樣當 error_code）：那是自由文字，
-            # 只給租戶看（含 chart 的中英提示），不當成碼、不進 log。
-            data = dict(data, message=str(data.get('error') or code or '')[:300])
+        elif (action == 'add_models' and data.get('failed')
+                and code in (None, 'command_failed', 'models_failed')):
+            code = 'models_failed'
+        elif action == 'test' and kind == 'failed' and (
+                code == 'test_failed' or code not in _CHATGPT_SUBSCRIPTION_KNOWN_CODES):
+            # 上游的錯誤訊息（含 chart 的中英提示）在 data.error／error：自由文字，只截短後
+            # 給租戶看，不當成碼、不進 log。（舊形狀：operator 把它原樣放在 error_code。）
+            upstream = data.get('error') or result.get('error') or (
+                code if code not in _CHATGPT_SUBSCRIPTION_KNOWN_CODES else '')
+            data = dict(data, message=str(upstream or '')[:300])
             code = 'test_failed'
         return failure(code, data=data, kind=kind)
 

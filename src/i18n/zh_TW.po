@@ -20668,6 +20668,18 @@ msgstr "模型名稱格式不正確。"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Some models could not be added. Try again."
+msgstr "部分模型無法加入，請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The service could not complete the request. Try again."
+msgstr "服務無法完成這個操作，請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "The ChatGPT subscription request failed. Try again."
 msgstr "ChatGPT 訂閱的操作失敗，請再試一次。"
 
