@@ -252,6 +252,13 @@ class TestTailscaleSeed(TransactionCase):
         auth = self._optional()['tailscale.authKey']['description']
         for needle in ('一次性', 'tag', '清空'):
             self.assertIn(needle, auth, 'authkey 建議：一次性＋帶 tag＋登入後清空')
+        # #1554：Headscale 0.29 拒絕 pre-auth key 登入時節點自帶的 --advertise-tags（tag 只能
+        # 來自 key 本身）；同工作區模式填 tags 會讓節點被登出（chart 0.1.4 起略過並寫 log）。
+        tags = self._optional()['tailscale.tags']['description']
+        for needle in ('同工作區 Headscale', '留空', 'pre-auth key', 'Headplane', 'tagOwners'):
+            self.assertIn(needle, tags, '#1554 標籤說明：%s' % needle)
+        self.assertIn('標籤（tag）要建在 pre-auth key 上', desc,
+                      '#1554：同工作區 Headscale 的 tag 要建在 pre-auth key 上')
 
     def test_no_public_url_injection(self):
         CloudService = self.env['woow_paas_platform.cloud_service']

@@ -2237,7 +2237,8 @@
                 節點不登入並寫入服務記錄；開好 Headscale 後，貼上它的 pre-auth key 儲存設定即可。
                 換控制平面（或換網址）＝這台節點會登記成一台新機器（新的 tailnet IP），舊機器要自己到原本的控制台移除。
                 **登入 tailnet**：二擇一——在服務設定填 auth key（建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄），
-                或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。
+                或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。使用同工作區 Headscale 時，標籤（tag）要建在 pre-auth key 上
+                （Headplane 建 key 時指定），「標籤 tags」欄位請留空：Headscale 不接受節點登入時自己要求的標籤，帶了節點會被登出。
                 **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
                 IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
                 **網頁介面**：帳號預設 admin，帳號與密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
@@ -2269,7 +2270,7 @@
                 "description": "tailnet 上顯示的名稱（英文字母、數字與連字號）；留空或格式不合時用 woow-&lt;Helm Release&gt;"},
                 {"key": "tailscale.tags", "label": "標籤 tags（選填）", "type": "text",
                 "placeholder": "tag:server",
-                "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過"},
+                "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過。控制平面選「同工作區 Headscale」時請留空（新版節點會略過這一欄）：Headscale 不接受節點用 pre-auth key 登入時自己要求的標籤，帶了會被登出；要帶 tag，請在 Headplane 建 pre-auth key 時就指定 tags（tag 要先列在 ACL 的 tagOwners）"},
                 {"key": "tailscale.serve", "label": "轉發清單", "type": "text",
                 "placeholder": "8069=svc-1a2b3c4d:80",
                 "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔；只接受同一工作區的服務，不合格的項目（IP、外部網址、其他工作區）會被略過並寫入服務記錄"},
