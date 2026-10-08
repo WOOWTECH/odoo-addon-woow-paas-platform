@@ -532,26 +532,6 @@ class CloudAppTemplate(models.Model):
              'built-in hermes-agent text (MCP connection settings).',
     )
 
-    # LiteLLM「ChatGPT 訂閱」（chart charts/litellm 0.2.0 起）：租戶在服務頁用 device code
-    # 登入 ChatGPT Plus／Pro，讓 LiteLLM 的 ``chatgpt/`` provider 用訂閱額度。operator
-    # ``POST /api/releases/{ns}/{rel}/chatgpt-subscription/{action}`` exec 進 proxy 容器跑
-    # chart 的 ``woow_chatgpt.py``。
-    #
-    # 「這個商品有沒有 ChatGPT 訂閱卡片」的**唯一事實源**（capability-gate-single-source-field）：
-    # controller 的能力 gate、model 端 ``_chatgpt_subscription`` 的防線、``_format_service``
-    # 的 template 鏡射（前端卡片讀它）三處都讀這個欄位，前端不得改判 slug。
-    # ⚠ 旗標開著不代表每台服務都能用：0.1.x 的舊 release 沒有那支 CLI，operator 回
-    # ``unsupported_chart``、平台請租戶「重新部署」——那是逐台的事實，不是範本屬性。
-    chatgpt_subscription_supported = fields.Boolean(
-        string='ChatGPT Subscription Sign-in',
-        default=False,
-        help='The chart ships the ChatGPT subscription helper (LiteLLM chart 0.2.0 and '
-             'later): tenant admins can sign in with ChatGPT Plus/Pro from the service '
-             'page (device code), check the connection, add the chatgpt/ models and '
-             'disconnect. Services still on an older chart version must be redeployed '
-             'first.',
-    )
-
     # #449 密碼載體：**只影響 reset 路徑，不影響供給路徑**。
     # 供給側（建立服務時把 admin_password 經 sensitive_values 送進 chart）兩種載體
     # 完全相同——都是 config.sensitive.admin_password，由 has_admin_gui 這條供給鏈

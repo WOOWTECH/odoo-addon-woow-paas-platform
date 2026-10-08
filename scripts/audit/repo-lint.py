@@ -1304,27 +1304,6 @@ def check_reset_budget_ladder(root):
         fail("前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 APP_ADMIN_RESET_TIMEOUT=%ss"
              "（Odoo／n8n／Omnigent 的 Reset 與 reset-config 共用同一條前端 route）"
              % (frontend_seconds, app_platform))
-
-    # LiteLLM「ChatGPT 訂閱」：前端三檔 > 平台 client 三檔（同一個 exec 端點的 action 預算
-    # 不同：test 會真的送一個模型請求）。瀏覽器先 abort 的話，登入其實完成了、租戶卻只看到
-    # 「逾時」。operator 那層（exec 逾時）在 operator 的 chatgpt-subscription 端點，待那支 PR
-    # 合併後補進這裡。
-    for js_name, plat_name in (
-            ("CHATGPT_SUBSCRIPTION_REQUEST_TIMEOUT_MS", "CHATGPT_SUBSCRIPTION_TIMEOUT"),
-            ("CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT_MS", "CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT"),
-            ("CHATGPT_SUBSCRIPTION_TEST_TIMEOUT_MS", "CHATGPT_SUBSCRIPTION_TEST_TIMEOUT")):
-        js_match = re.search(
-            r"^const\s+%s\s*=\s*(\d+)\s*;" % js_name, js, re.MULTILINE)
-        if js_match is None:
-            fail("%s 缺少 %s" % (RESET_LADDER_FRONTEND, js_name))
-            continue
-        if plat_name not in plat:
-            fail("%s 缺少 %s" % (RESET_LADDER_PLATFORM, plat_name))
-            continue
-        js_seconds = int(js_match.group(1)) / 1000
-        if not js_seconds > plat[plat_name]:
-            fail("前端 %s=%ss 必須 > 平台 %s=%ss；否則瀏覽器先 abort ⇒ 動作其實完成了、"
-                 "租戶卻只看到逾時" % (js_name, js_seconds, plat_name, plat[plat_name]))
     return violations
 
 

@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **700** 份文件（含 `archived/` 324 份）。
+目前共 **699** 份文件（含 `archived/` 324 份）。
 
 ## 我要照步驟做一件事
 
@@ -18,7 +18,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`reference/api/`](reference/api/) | HTTP / JSON API 端點 | 5 |
+| [`reference/api/`](reference/api/) | HTTP / JSON API 端點 | 4 |
 | [`reference/features/`](reference/features/) | 功能規格與產品行為 | 8 |
 | [`reference/gotchas/`](reference/gotchas/) | 框架與基礎設施的行為陷阱（踩過才知道的那種） | 7 |
 | [`reference/architecture/`](reference/architecture/) | 生命週期與架構圖 | 1 |

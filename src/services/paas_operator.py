@@ -60,24 +60,6 @@ RESET_CONFIG_TIMEOUT = 75
 #
 # 由 scripts/audit/repo-lint.py 的 check_app_admin_reset_budget_ladder 驗算。
 APP_ADMIN_RESET_TIMEOUT = 75
-# LiteLLM「ChatGPT 訂閱」（chart 0.2.0）：operator exec chart 的 woow_chatgpt.py。三檔預算，
-# 階梯是
-#
-#     前端 CHATGPT_SUBSCRIPTION_*_TIMEOUT_MS（60_000／100_000／190_000，
-#       src/static/src/paas/services/cloud_service.js）
-#       > 本檔三個常數（一般 45s／add-models 90s／test 180s）
-#         > operator 的 exec 逾時＋找 pod 餘裕（status／start／poll／disconnect 30＋10s、
-#           add-models 60＋10s、test 150＋10s；operator #1547 的
-#           CHATGPT_EXEC_TIMEOUT_SECONDS／CHATGPT_POD_LOOKUP_SLACK_SECONDS）
-#
-# 前兩層由 scripts/audit/repo-lint.py 的 check_reset_budget_ladder 驗算；operator 那層
-# 目前由 src/tests/test_chatgpt_subscription.py 以數字鎖住，#1547 合併後再把它的常數
-# 補進同一條 gate。test 會真的送一個模型請求（chart 端 120s），所以是最寬的一檔。
-CHATGPT_SUBSCRIPTION_TIMEOUT = 45
-CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT = 90
-CHATGPT_SUBSCRIPTION_TEST_TIMEOUT = 180
-#: operator ``/chatgpt-subscription/{action}`` 接受的 action（其他值 operator 回 4xx、不 exec）。
-CHATGPT_SUBSCRIPTION_ACTIONS = ('status', 'start', 'poll', 'disconnect', 'add-models', 'test')
 
 #: #1513：operator ``upgrade-preflight``／upgrade 擴容被拒的 409 ``detail.error_code``
 #: （extra/paas-operator ``upgrade_preflight.STORAGE_EXPANSION_ERROR_CODE``；改名兩邊一起改）。
@@ -925,38 +907,6 @@ class PaaSOperatorClient:
             f'/api/releases/{namespace}/{release_name}/omnigent/admin-password',
             data={'new_password': new_password},
             timeout=APP_ADMIN_RESET_TIMEOUT,
-        )
-
-    def chatgpt_subscription(
-        self,
-        namespace: str,
-        release_name: str,
-        action: str,
-        payload: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """LiteLLM「ChatGPT 訂閱」：operator exec 進 proxy 容器跑 chart 的 ``woow_chatgpt.py``。
-
-        ``action`` 是 operator 的寫法（``add-models`` 用連字號）；``payload`` 只有
-        ``{"models": [...]}``（add-models）或 ``{"model": "..."}``（test），沒有秘密。
-        業務失敗回 200＋``success: false``（``error_code``／``error_kind``，見 operator 的
-        ``ChatGPTSubscriptionResponse``）；舊 operator 沒有這個端點 → 404（``PaaSOperatorAPIError``）。
-
-        ⛔ 回應的 ``data.pending.user_code`` 是租戶的一次性登入代碼：本 client 只在
-        ``debug`` 記 method／endpoint，呼叫端也**不可**把回應寫進 log。
-        """
-        if action not in CHATGPT_SUBSCRIPTION_ACTIONS:
-            raise ValueError('unknown chatgpt-subscription action: %r' % (action,))
-        if action == 'test':
-            timeout = CHATGPT_SUBSCRIPTION_TEST_TIMEOUT
-        elif action == 'add-models':
-            timeout = CHATGPT_SUBSCRIPTION_ADD_MODELS_TIMEOUT
-        else:
-            timeout = CHATGPT_SUBSCRIPTION_TIMEOUT
-        return self._request(
-            'POST',
-            f'/api/releases/{namespace}/{release_name}/chatgpt-subscription/{action}',
-            data=payload or None,
-            timeout=timeout,
         )
 
     def get_odoo_module_states(
