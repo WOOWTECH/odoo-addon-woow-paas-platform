@@ -116,9 +116,12 @@ class TestConcealInstancesSeed(TransactionCase):
         #  #33）通過後 2026-10-07 公開上架＝不再 hidden；只翻 is_hidden，實例層從未設。）
         # mcp-odoo-manage：hidden-only（曝光層）——2026-10-06 #1507 下架（Odoo MCP 只保留
         # mcp-odoo），只翻 is_hidden、實例層不設；重新上架時改回 False 並把 slug 從這裡拿掉。
+        # mcp-nextcloud：hidden-only（曝光層）——以隱藏卡片進 seed（woow-mcp-server #44 的單一映像
+        # MCP Admin），等沙盒開通實測（同工作區預填公開網址、應用程式密碼唯讀可用、Tools 頁開啟寫入）
+        # 後另開 PR 公開上架；實例層不設，上架時只翻 is_hidden 並把 slug 從這裡拿掉。
         self.assertEqual(
             set(hidden.mapped('slug')),
-            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage'},
+            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage', 'mcp-nextcloud'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(

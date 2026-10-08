@@ -1073,12 +1073,13 @@ class TestHermesAgentValueInjection(TransactionCase):
         #  charts/litellm 0.1.0 把 auth.apiServerKey 當 LITELLM_MASTER_KEY，守線在
         #  test_litellm_seed.test_master_key_rides_the_gateway_channel。）
         # （cloud_app_mcp_litellm 刻意**沒有**：它連的是 LiteLLM，金鑰由租戶自己貼，平台不鑄、
-        #  不交付——PLAN §10「不跨服務傳秘密」。）
+        #  不交付——PLAN §10「不跨服務傳秘密」。cloud_app_mcp_nextcloud 同理：app password 由租戶在
+        #  Nextcloud 建立後自己貼。）
         for xmlid in ('cloud_app_mcp_hermes',
                       'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
                       'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',
                       'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
-                      'cloud_app_mcp_litellm',
+                      'cloud_app_mcp_litellm', 'cloud_app_mcp_nextcloud',
                       'cloud_app_haos', 'cloud_app_ha_paas'):
             with self.subTest(template=xmlid):
                 tpl = self.env.ref('woow_paas_platform.%s' % xmlid)

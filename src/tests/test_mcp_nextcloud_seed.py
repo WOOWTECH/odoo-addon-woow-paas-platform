@@ -1,0 +1,257 @@
+# -*- coding: utf-8 -*-
+"""MCP：Nextcloud（mcp-nextcloud）seed 的守線斷言（以隱藏範本進 seed，沙盒實測後另開 PR 上架）。
+
+契約來源：Gitea WOOWTECH/woow-mcp-server ``apps/nextcloud``（#44，main 9a0fafa2）README §PaaS seed 契約；
+chart＝woow-paas-charts ``charts/mcp-server`` 0.1.7（#1530 非 root）。家族不變式（has_admin_gui、requiredFields
+REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
+``test_mcp_server_template_seed.TestMcpNextcloudTemplateSeed`` 守；同工作區 Nextcloud 公開網址注入（真範本）由
+``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
+
+1. **釘版**：chart mcp-server 0.1.7（OCI；image 以 uid／gid 1000 執行，要非 root 的 chart）；image
+   nextcloud-mcp-admin 來自 JCR、雙釘，而且釘的就是 #44 合併後 main CI（run 16653 job 18203）推的那一顆——
+   換 image 時這條會紅，逼下一個人覆核啟動契約（#708 教訓）。
+2. **啟動契約**：``nextcloud-mcp-server``、args 只有 port 8000（launcher 硬綁 127.0.0.1，seed 不給 host；
+   app 的 LaunchPolicy 固定 command／args）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
+3. **env_prefix 兩處同值**：chart 的 configmap 以頂層 ``envPrefix`` 蓋掉巢狀那格；connection 鍵
+   base_url／username／app_password 靠它變成 ``NEXTCLOUD_MCP_*``。
+4. **出廠唯讀由 app 自己做**：seed 不帶 ``mcp_server.env``（LaunchPolicy 的 env_keys 為空，帶了也被忽略）、
+   不帶 ``tools``（app 的 seed_defaults 第一次啟動時把 4 支寫入／刪除工具併入 tools.disabled）；平台設定表單
+   不開任何欄位（開啟寫入工具在服務自己的 Tools 頁）。
+5. **不帶秘密、不帶網址**：``config.sensitive`` 空、``nonSensitive`` 沒有 connection——網址由平台組裝時
+   注入（同工作區 Nextcloud 的公開網址），app password 由租戶自己貼；本範本也沒有 gateway 通道，平台不鑄／
+   不交付任何 key。
+6. **方案與隱藏**：照抄 mcp-litellm——月 3,000／年 24,000、試用 7 天、免稅、雙向綁定；隱藏只在曝光層
+   （is_hidden），實例層不設，上架時只翻 is_hidden。
+7. **說明**：出廠唯讀／Tools 頁逐支開啟／專用帳號＋應用程式密碼（不是登入密碼）／暴力破解防護與停止重試／
+   預填網址只在第一次開通／``/mcp`` 不加結尾斜線；資料值直接寫中文、⛔ 不進 .po
+   （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
+8. **上架即雙釘**：``test_hidden_until_listed``——現在是隱藏卡片，翻成上架（``is_hidden=False``）時 image
+   必須 git-sha@sha256 雙釘。
+"""
+import json
+import os
+
+from odoo.tests.common import TransactionCase, tagged
+from odoo.tools.translate import PoFileReader
+
+from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from ..models.cloud_service import _internal_provision
+
+JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
+MCP_SERVER_CHART = 'oci://%smcp-server' % JCR
+# woow-paas-charts main 3746cd6（#1530）：runAsNonRoot、uid／gid 1000、保留 fsGroup 1000。publish-charts
+# run 16234 已推上 OCI（verify 步驟 OK oci mcp-server:0.1.7）。
+MCP_SERVER_CHART_VERSION = '0.1.7'
+IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
+# woow-mcp-server #44（Nextcloud MCP 改為單一映像 MCP Admin：app password＋MCP 子行程）合進 main 的 merge
+# commit 9a0fafa2；main CI run 16653 job 18203 推的 nextcloud-mcp-admin（log 的 push digest）。
+EXPECT_IMAGE_TAG = (
+    '9a0fafa2d61f11cc77c37a2c0da0c5dc64acf52b'
+    '@sha256:e9257783345849fa0b8de52af23e1d653a3677847ebb0f7ce155785ff202ecd9')
+GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
+ENV_PREFIX = 'NEXTCLOUD_MCP_'
+
+
+@tagged('post_install', '-at_install')
+class TestMcpNextcloudSeed(TransactionCase):
+
+    def _tpl(self):
+        return self.env.ref('woow_paas_platform.cloud_app_mcp_nextcloud')
+
+    def _values(self):
+        return json.loads(self._tpl().helm_default_values)
+
+    def _mcp_server(self):
+        return self._values()['config']['nonSensitive']['mcp_server']
+
+    def _po_entries(self):
+        po = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'i18n', 'zh_TW.po')
+        return list(PoFileReader(po))
+
+    def test_marketplace_fields(self):
+        tpl = self._tpl()
+        self.assertEqual(tpl.slug, 'mcp-nextcloud')
+        self.assertEqual(tpl.name, 'MCP：Nextcloud')
+        self.assertEqual(tpl.category, 'mcp')
+        self.assertEqual(tpl.workload_type, 'container')
+        self.assertEqual(tpl.default_port, 8080, 'admin GUI＋/private_<token>/mcp 同一個 8080')
+        self.assertEqual(self._values()['service']['port'], tpl.default_port)
+        self.assertEqual(self._values()['app'], 'nextcloud')
+
+    def test_chart_oci_pin_is_the_non_root_chart(self):
+        tpl = self._tpl()
+        self.assertEqual(tpl.helm_repo_url or '', '')
+        self.assertEqual(tpl.helm_chart_name, MCP_SERVER_CHART)
+        self.assertEqual(
+            tpl.helm_chart_version, MCP_SERVER_CHART_VERSION,
+            'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；image 以 uid／gid 1000 執行，'
+            '要 #1530 的非 root chart（0.1.7）——退回 0.1.5 時 pod 以 root 跑、/data 擁有者與 image 不一致')
+
+    def test_image_from_jcr_and_double_pinned(self):
+        image = self._values()['image']
+        self.assertEqual(image['repository'], IMAGE_REPOSITORY)
+        self.assertRegex(image['tag'], GIT_SHA_PINNED_TAG_RE, 'git-sha@sha256 雙釘')
+
+    def test_image_repin_must_recheck_launch_spec(self):
+        """#708 lockstep：image 一被重釘這條就紅，逼人先覆核啟動契約再更新常數。
+
+        同一個 monorepo commit 會推出多個 app image（git-sha 相同、digest 不同），全域替換 git-sha
+        會造出 tag 新／digest 舊的組合——所以連 digest 一起逐字釘。
+        """
+        self.assertEqual(
+            self._values()['image']['tag'], EXPECT_IMAGE_TAG,
+            'image 被重釘了：請先實查新 image 的 apps/nextcloud（pyproject 的 console script '
+            'nextcloud-mcp-server、main.py 的 LaunchPolicy、launcher 的 port／綁定位址、seed_defaults '
+            '的出廠停用清單），確認本檔 test_launch_contract／test_read_only_is_the_apps_own_default 仍成立，'
+            '最後才更新 EXPECT_IMAGE_TAG。')
+
+    def test_launch_contract(self):
+        mcp = self._mcp_server()
+        self.assertEqual(mcp['command'], 'nextcloud-mcp-server',
+                         'app 的 LaunchPolicy 固定這個 command；不一致子行程不會被拉起')
+        self.assertEqual(mcp['args'], ['--port', '8000'],
+                         'launcher 固定 Streamable HTTP、硬綁 127.0.0.1；seed 只給 port')
+        self.assertNotIn('--host', mcp['args'], '子行程只綁 127.0.0.1（安全邊界），不由 seed 決定')
+        self.assertEqual(mcp['port'], 8000)
+        self.assertEqual(mcp['args'][mcp['args'].index('--port') + 1], str(mcp['port']),
+                         'args 的 port 必須等於 proxy 讀的 mcp_server.port，否則 /mcp 一律 502')
+
+    def test_env_prefix_in_both_places(self):
+        """chart configmap：merge(dict mcp_server.env_prefix←頂層 envPrefix, nonSensitive)，頂層勝出。"""
+        values = self._values()
+        self.assertEqual(values['envPrefix'], ENV_PREFIX)
+        self.assertEqual(self._mcp_server()['env_prefix'], ENV_PREFIX,
+                         '兩處不同值時以頂層為準——寫成同值，讀 seed 的人才不會被巢狀那格誤導')
+        self.assertNotIn('env_prefix', values, 'camelCase：helm 會默默忽略 env_prefix 這個鍵')
+
+    def test_read_only_is_the_apps_own_default(self):
+        """出廠唯讀由 app 自己做：seed_defaults 停用 4 支寫入／刪除工具，launcher 依 Tools 頁算 gating env。
+
+        seed 帶 ``mcp_server.env``（例 READONLY）沒有作用（LaunchPolicy 的 env_keys 為空），還會讓讀 seed 的人
+        以為唯讀是平台開關；seed 帶 ``tools`` 則會和 app 的出廠標記（nextcloud_policy_seeded）重複維護兩份。
+        """
+        self.assertNotIn('env', self._mcp_server())
+        self.assertEqual(set(self._mcp_server()), {'command', 'args', 'port', 'env_prefix'})
+        non_sensitive = self._values()['config']['nonSensitive']
+        self.assertNotIn('tools', non_sensitive, '出廠停用清單由 app 的 seed_defaults 寫，seed 不重複維護')
+        self.assertNotIn('READONLY', json.dumps(self._values()))
+
+    def test_no_platform_form_fields(self):
+        """平台設定表單一格都不開（同家族）：工具開關、帳密、網址都在服務自己的 admin 介面設定。"""
+        specs = self._tpl()._parse_helm_value_specs()
+        self.assertEqual(specs['required'], [], '開通不需要租戶先填任何東西')
+        self.assertEqual(specs['optional'], [])
+
+    def test_no_secret_and_no_url_in_seed(self):
+        config = self._values()['config']
+        self.assertEqual(config['sensitive'], {})
+        self.assertEqual(set(config['nonSensitive']), {'mcp_server'})
+        self.assertNotIn(
+            'connection', config['nonSensitive'],
+            'base_url 由平台組裝時注入（同工作區 Nextcloud 的公開網址）；seed 寫死網址會蓋過注入、'
+            '也會漏到別的工作區')
+        dumped = json.dumps(self._values())
+        for needle in ('app_password', 'username', 'base_url', 'nextcloud.woowtech.io'):
+            self.assertNotIn(needle, dumped)
+
+    def test_required_fields_only_admin_password(self):
+        """REPLACE 語意：app_password／username／base_url 是租戶在 admin 自己填的，列進去＝每個新租戶 pod 卡 Init。"""
+        config = self._values()['config']
+        self.assertTrue(config['requireFields'])
+        self.assertEqual(config['requiredFields'], ['admin_password'])
+
+    def test_no_gateway_channel_so_no_secret_is_minted_or_delivered(self):
+        """app password 絕不由平台供給（不跨服務傳秘密）：沒有 gateway.externalPath ⇒ 不鑄、不交付。"""
+        tpl = self._tpl()
+        self.assertEqual(tpl._gateway_external_path(), '')
+        self.assertFalse(tpl.has_public_tunnel_address)
+        self.assertEqual(tpl.admin_password_carrier, 'config_json')
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', 'mcp-nextcloud-seed.invalid')
+        workspace = self.env['woow_paas_platform.workspace'].create({'name': 'mcp-nextcloud seed WS'})
+        service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
+            'name': 'svc-mcpn-seed',
+            'workspace_id': workspace.id,
+            'template_id': tpl.id,
+            'state': 'running',
+            'subdomain': 'svc-mcpn-seed',
+            'helm_namespace': 'paas-ws-test',
+            'helm_release_name': 'svc-mcpn-seed',
+            'helm_values': tpl.helm_default_values,
+        })
+        creds = PaasController._gateway_credentials(service)
+        self.assertNotIn('gateway_api_key', creds)
+        self.assertNotIn('gateway_url', creds)
+
+    def test_hidden_until_listed(self):
+        """上架 ⟹ image 雙釘。現在是隱藏卡片（等沙盒實測後另開 PR 只翻 is_hidden）。
+
+        隱藏只在曝光層 is_hidden：方案先掛好、實例層 conceal_instances 從不設。
+        """
+        tpl = self._tpl()
+        self.assertTrue(tpl.is_active)
+        self.assertFalse(tpl.conceal_instances, 'hidden-only（曝光層），實例層不設')
+        self.assertEqual(tpl.max_per_partner, 0)
+        self.assertTrue(tpl.sudo().subscription_plan_ids, '沒掛 plan 會被 _create_service 擋')
+        if not tpl.is_hidden:
+            self.assertRegex(self._values()['image']['tag'], GIT_SHA_PINNED_TAG_RE,
+                             '上架中的範本 image 一律 git-sha@sha256 雙釘（mutable tag 不可重現）')
+
+    def test_plans_linked_and_priced(self):
+        """照抄 mcp-litellm 的單一方案（其他 MCP 同價）。"""
+        tpl = self._tpl()
+        monthly = self.env.ref('woow_paas_platform.plan_mcp_nextcloud_monthly')
+        yearly = self.env.ref('woow_paas_platform.plan_mcp_nextcloud_yearly')
+        self.assertEqual(set(tpl.sudo().subscription_plan_ids.ids), {monthly.id, yearly.id})
+        self.assertEqual((monthly.sh_plan_price, monthly.sh_unit), (3000, 'month'))
+        self.assertEqual((yearly.sh_plan_price, yearly.sh_unit), (24000, 'year'),
+                         '同其他 MCP：年繳＝月繳 ×8')
+        litellm_m = self.env.ref('woow_paas_platform.plan_mcp_litellm_monthly')
+        for plan in (monthly, yearly):
+            self.assertEqual(plan.service_type, 'cloud_service')
+            self.assertTrue(plan.sh_trial)
+            self.assertEqual(plan.sh_trial_duration, 7)
+            self.assertEqual(plan.sh_trial_unit, 'day')
+            self.assertEqual(plan.sh_no_of_billing_cycle, litellm_m.sh_no_of_billing_cycle)
+            self.assertEqual(plan.sh_never_expire, litellm_m.sh_never_expire)
+            self.assertFalse(plan.storefront_hidden, '方案本身不藏：上架只翻範本的 is_hidden')
+            self.assertEqual(plan.ac_max_access_seats, 0, 'base 方案，無 +1access 變體')
+        for product, plan in (
+            (self.env.ref('woow_paas_platform.product_mcp_nextcloud_monthly'), monthly),
+            (self.env.ref('woow_paas_platform.product_mcp_nextcloud_yearly'), yearly),
+        ):
+            self.assertEqual(product.sh_subscription_plan_id, plan)
+            self.assertEqual(product.list_price, plan.sh_plan_price)
+            self.assertTrue(product.sh_product_subscribe)
+            self.assertFalse(product.taxes_id, 'seed 明寫 taxes_id=[]，不吃 company 預設')
+
+    def test_description_states_the_contract(self):
+        tpl = self._tpl()
+        self.assertIn('出廠唯讀', tpl.description)
+        desc = tpl.full_description
+        for needle, why in (
+                ('一個指定的 Nextcloud 帳號', '以單一帳號的權限工作'),
+                ('出廠唯讀', '預設只有讀取工具'),
+                ('5 支讀取工具', '出廠可用的工具數'),
+                ('4 支寫入與刪除工具', '出廠關閉的工具數'),
+                ('Tools 頁', '開啟寫入工具的位置'),
+                ('專用帳號', '建議另建帳號、只分享需要的資料夾'),
+                ('個人設定 → 安全性 → 建立新的應用程式密碼', '應用程式密碼的建立路徑'),
+                ('Connection 頁', '貼帳密的位置'),
+                ('請勿貼該帳號的登入密碼', '不是登入密碼'),
+                ('平台不代為提供', 'app password 由租戶自己貼'),
+                ('暴力破解防護', 'Nextcloud 對錯誤密碼的處置'),
+                ('停止嘗試', '錯誤密碼時本服務停止重試，存新密碼後恢復'),
+                ('只在第一次開通時預填它的公開網址', '同工作區網址只在第一次開通帶入（seed-if-absent）'),
+                ('/mcp（結尾不要加斜線', '/mcp/ 會被子行程 307 到內部位址'),
+                ('Streamable HTTP', '用戶端傳輸方式'),
+                ('這個網址本身就是憑證', 'path token 外洩要換新'),
+        ):
+            self.assertIn(needle, desc, why)
+
+    def test_marketplace_copy_is_data_not_po(self):
+        """範本名稱與說明是 record 的資料值 ⇒ seed 直接寫中文，⛔ 不進 .po（Eugene 定案通則）。"""
+        entries = [e for e in self._po_entries()
+                   if e['type'] == 'model' and e['imd_name'] == 'cloud_app_mcp_nextcloud']
+        self.assertEqual(entries, [], '資料值不走 .po：改 seed 的中文原文即可')

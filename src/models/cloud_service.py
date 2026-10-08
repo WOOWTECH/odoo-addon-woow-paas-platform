@@ -1119,6 +1119,7 @@ def _image_mismatches(values, pod_images):
 # ── 同工作區服務網址注入（只帶網址，絕不帶 token／密碼） ─────────────────────────
 # 消費端 chart 學不到「同工作區有沒有某個服務、release 叫什麼」，由平台在組裝第 7 步
 # （``_assemble_deploy_values``）把「同工作區、running、最早建立」的提供者叢集內網址
+# （Nextcloud 例外：公開 https 網址，見 ``_NEXTCLOUD_BASE_URL_VALUE_PATHS``）
 # 寫進消費端的 value path（和 ``_inject_allowed_origins`` 同一 family）。共同規則
 # （#1340 Omnigent 起，PLAN §10.2 泛化）：
 #
@@ -1182,11 +1183,24 @@ _LITELLM_BASE_URL_SUFFIXES = {
     'hermes-agent': '/v1',
     'mcp-litellm': '',
 }
+# 同工作區 Nextcloud：mcp-nextcloud（mcp-server chart，cloud_app_mcp_nextcloud）的
+# ``config.nonSensitive.connection.base_url``（app 第一次啟動 seed-if-absent，只對新開通生效）。
+# ⚠ 唯一注入**公開** https 網址的提供者（``_WORKSPACE_PROVIDERS`` 的 ``public_url``）：
+# Nextcloud 以 trusted_domains 比對 Host、以 overwritehost／overwrite.cli.url 產生網址，
+# 叢集內網址會被當成不信任的網域拒絕，WebDAV 回傳的 href 也是公開網址。值＝提供者的
+# ``_public_base_url()``，與 Nextcloud chart 的 ``nextcloud.publicUrl``（``_inject_allowed_origins``）
+# 同一個字串。app password 一律由租戶在 Nextcloud 建立後自己貼，平台絕不供給。
+_NEXTCLOUD_BASE_URL_VALUE_PATHS = {
+    'mcp-nextcloud': [('config', 'nonSensitive', 'connection', 'base_url')],
+}
 
 # 提供者（被連的服務）：template slug → 怎麼鏡射它的入口 Service。
 #   label：log 用的名稱
 #   chart：chart 名（chart 的 fullname helper 用它判斷 release 名是否已含 chart 名）
 #   port_path／default_port：決定網址 port 的 helm values 路徑與 chart values.yaml 預設
+#   public_url：True ＝ 改給提供者的公開 https 根位址（``_public_base_url()``），不組叢集內
+#     網址（此時 port_path／default_port 不用；目前只有 Nextcloud，理由見
+#     ``_NEXTCLOUD_BASE_URL_VALUE_PATHS``）
 # 每一列對齊 woow-paas-charts ``charts/<chart>/templates/_helpers.tpl``（``<chart>.fullname``）
 # 與 ``values.yaml``（omnigent：``service.port`` 8000；headscale：入口 Service 的第二個埠
 # ``headscale.port`` 8080——第一個埠 ``service.port`` 3000 是 Headplane 網頁；litellm：
@@ -1196,6 +1210,7 @@ _OMNIGENT_CHART_NAME = 'omnigent'
 _OMNIGENT_DEFAULT_SERVICE_PORT = 8000
 _HEADSCALE_TEMPLATE_SLUG = 'headscale'
 _LITELLM_TEMPLATE_SLUG = 'litellm'
+_NEXTCLOUD_TEMPLATE_SLUG = 'nextcloud'
 _WORKSPACE_PROVIDERS = {
     _OMNIGENT_TEMPLATE_SLUG: {
         'label': 'Omnigent', 'chart': _OMNIGENT_CHART_NAME,
@@ -1209,6 +1224,9 @@ _WORKSPACE_PROVIDERS = {
         'label': 'LiteLLM', 'chart': 'litellm',
         'port_path': ('service', 'port'), 'default_port': 4000,
     },
+    _NEXTCLOUD_TEMPLATE_SLUG: {
+        'label': 'Nextcloud', 'chart': 'nextcloud', 'public_url': True,
+    },
 }
 # 組裝第 7 步依序跑的注入器：(消費端 value path 表, 提供者 slug, 每個消費端的網址後綴)。
 # 一個 chart 可以同時是好幾個注入器的消費端（例 code-server：Omnigent＋LiteLLM）。
@@ -1216,6 +1234,7 @@ _WORKSPACE_URL_INJECTORS = (
     (_OMNIGENT_SERVER_URL_VALUE_PATHS, _OMNIGENT_TEMPLATE_SLUG, {}),
     (_WORKSPACE_HEADSCALE_URL_VALUE_PATHS, _HEADSCALE_TEMPLATE_SLUG, {}),
     (_LITELLM_BASE_URL_VALUE_PATHS, _LITELLM_TEMPLATE_SLUG, _LITELLM_BASE_URL_SUFFIXES),
+    (_NEXTCLOUD_BASE_URL_VALUE_PATHS, _NEXTCLOUD_TEMPLATE_SLUG, {}),
 )
 
 # open-design 的 ``networkPolicy.omnigentEgress`` 只對 Omnigent pod 的這個 port 開洞
@@ -3488,7 +3507,8 @@ class CloudService(models.Model):
            ``omnigentHost.serverUrl``；Headscale → tailscale 的
            ``tailscale.workspaceHeadscaleUrl``；LiteLLM → pi-agent／code-server／
            open-design／hermes-agent 的 ``llmGateway.baseUrl``（帶 /v1）與 mcp-litellm 的
-           ``config.nonSensitive.connection.base_url``（不帶）。見
+           ``config.nonSensitive.connection.base_url``（不帶）；Nextcloud → mcp-nextcloud 的
+           ``config.nonSensitive.connection.base_url``（唯一給**公開** https 網址的提供者）。見
            ``_WORKSPACE_URL_INJECTORS``。
         8. odoo addon selection（initContainer + addons_path）
 
@@ -3590,7 +3610,8 @@ class CloudService(models.Model):
             )
 
         # Inject same-workspace service URLs (Omnigent → omnigent host,
-        # Headscale → tailscale control plane, LiteLLM → LLM gateway base URL).
+        # Headscale → tailscale control plane, LiteLLM → LLM gateway base URL,
+        # Nextcloud → mcp-nextcloud connection.base_url — the PUBLIC https URL).
         # URL only — never a token / key. Runtime config only: the charts put
         # it in a ConfigMap outside the pod checksum, so a new/changed/removed
         # URL never restarts the pod (safe on the 15 s reset path too). An
@@ -4293,8 +4314,9 @@ class CloudService(models.Model):
         Args:
             values: Helm values dict（就地修改並回傳）
             template_slug: 消費端 template slug（例 'tailscale'）
-            provider_slug: 提供者 template slug（'omnigent'／'headscale'／'litellm'）
+            provider_slug: 提供者 template slug（'omnigent'／'headscale'／'litellm'／'nextcloud'）
             provider_url: 例 "http://svc-xxxx-headscale.paas-ws-xxxx.svc.cluster.local:8080"
+                （nextcloud 是公開網址，例 "https://svc-xxxx.woowtech.io"）
 
         Returns:
             Modified values dict
@@ -4420,6 +4442,18 @@ class CloudService(models.Model):
             'service': service_name, 'namespace': namespace, 'port': port,
             'release': release, 'values': values,
         }
+
+    def _provider_url(self, provider_slug):
+        """本筆（提供者服務）要交給同工作區消費端的網址；組不出來回 ''。
+
+        預設是叢集內網址（``_provider_internal_url``）；``_WORKSPACE_PROVIDERS`` 標了
+        ``public_url`` 的提供者（Nextcloud）改給它的公開 https 根位址
+        （``_public_base_url()``，沒有 subdomain 回 ''）——與提供者自己 chart 收到的公開
+        網址同一個組法，不另立網址規則。
+        """
+        if _WORKSPACE_PROVIDERS[provider_slug].get('public_url'):
+            return self._public_base_url()
+        return self._provider_internal_url(provider_slug)
 
     def _provider_internal_url(self, provider_slug):
         """本筆（提供者服務）在叢集內的網址；組不出來回 ''。
@@ -4555,13 +4589,17 @@ class CloudService(models.Model):
             )
 
     def _workspace_provider_url(self, provider_slug):
-        """同工作區 running 提供者（``provider_slug``）的叢集內網址；沒有回 ''。
+        """同工作區 running 提供者（``provider_slug``）的網址；沒有回 ''。
+
+        網址由 ``_provider_url`` 決定：預設叢集內網址，Nextcloud 是公開 https 網址。
 
         條件：同 ``workspace_id``、template slug＝``provider_slug``、``state='running'``、
         已有 release 名與 namespace；本筆有 namespace 時另要求同一 namespace（各消費端
         chart 開給提供者的 egress 都只涵蓋自己的 namespace——code-server 的
         sameNamespaceEgress、open-design 的 omnigentEgress／litellmEgress、tailscale 的
         同 namespace 規則；跨 namespace 的網址給了多半連不上）。本筆自己不算。
+        公開網址的提供者（Nextcloud）沿用同一套條件（工作區與 namespace 一對一，不另立規則）；
+        它的連線走公開網址（消費端 chart 的 internet egress），不靠 namespace 內的放行。
 
         只認 ``running``：提供者正在 upgrading／suspended／error 時這次組裝不帶網址。
         因為網址只進 runtime ConfigMap，這只會讓消費端暫時少了網址（已連上的不受影響，
@@ -4601,7 +4639,7 @@ class CloudService(models.Model):
             domain.append(('helm_namespace', '=', self.helm_namespace))
         candidates = self.sudo().search(domain, order='create_date asc, id asc')
         for chosen in candidates:
-            url = chosen._provider_internal_url(provider_slug)
+            url = chosen._provider_url(provider_slug)
             if not url:
                 continue
             if len(candidates) > 1:
@@ -4810,7 +4848,7 @@ class CloudService(models.Model):
         """mcp-server 家族的管理頁網址（＝服務對外根位址）；其他模板或無 subdomain 回 ''。
 
         #1542：一次性憑證視窗要附「登入網址」。判準直接讀模板欄位（has_admin_gui＋
-        config_json 載體＝8 個 mcp-*，不建 slug 名單）：這類服務的後台只有一組密碼、
+        config_json 載體＝mcp-server 家族，不建 slug 名單）：這類服務的後台只有一組密碼、
         沒有帳號，也沒有 console／dashboard，GUI 掛在根路徑 "/"。
         """
         self.ensure_one()

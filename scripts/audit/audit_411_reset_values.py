@@ -223,7 +223,7 @@ _INJECTOR_VALUE_PATHS = frozenset({
     ("omnigentHost", "serverUrl"),        # workspace_service_url injector（同工作區 Omnigent）
     ("tailscale", "workspaceHeadscaleUrl"),  # workspace_service_url injector（同工作區 Headscale）
     ("llmGateway", "baseUrl"),            # workspace_service_url injector（同工作區 LiteLLM）
-    ("config", "nonSensitive", "connection", "base_url"),  # 同上（mcp-litellm）
+    ("config", "nonSensitive", "connection", "base_url"),  # 同上（mcp-litellm；mcp-nextcloud 同一條路徑，同工作區 Nextcloud 的公開網址）
     ("haProxy", "ipBanEnabled"),          # template_policy_keys（ha-full，chart 0.1.6 #1446 不做）
     ("seed", "unlockCoreConfig"),         # template_policy_keys（ha-full，chart 0.1.6 #1447 不做）
 })
