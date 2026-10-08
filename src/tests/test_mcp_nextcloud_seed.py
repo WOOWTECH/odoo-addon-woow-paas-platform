@@ -25,7 +25,7 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 7. **說明**：出廠唯讀／Tools 頁逐支開啟／專用帳號＋應用程式密碼（不是登入密碼）／暴力破解防護與停止重試／
    預填網址只在第一次開通／``/mcp`` 不加結尾斜線；資料值直接寫中文、⛔ 不進 .po
    （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
-8. **上架即雙釘**：``test_hidden_until_listed``——現在是隱藏卡片，翻成上架（``is_hidden=False``）時 image
+8. **上架即雙釘**：``test_hidden_until_listed``——2026-10-08 已上架（``is_hidden=False``），image
    必須 git-sha@sha256 雙釘。
 """
 import json
@@ -185,7 +185,7 @@ class TestMcpNextcloudSeed(TransactionCase):
         self.assertNotIn('gateway_url', creds)
 
     def test_hidden_until_listed(self):
-        """上架 ⟹ image 雙釘。現在是隱藏卡片（等沙盒實測後另開 PR 只翻 is_hidden）。
+        """上架 ⟹ image 雙釘。2026-10-08 沙盒實測後已上架（只翻 is_hidden）。
 
         隱藏只在曝光層 is_hidden：方案先掛好、實例層 conceal_instances 從不設。
         """
