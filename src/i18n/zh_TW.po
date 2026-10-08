@@ -1769,12 +1769,12 @@ msgstr "任何使用此網域 Email 的人。"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_anythingllm_monthly_product_template
-msgid "AnythingLLM Monthly Subscription"
+msgid "AnythingLLM 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_anythingllm_yearly_product_template
-msgid "AnythingLLM Yearly Subscription"
+msgid "AnythingLLM 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6129,7 +6129,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_paas_monthly_product_template
-msgid "HA PaaS Free"
+msgid "HA PaaS 免費版"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6321,12 +6321,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_monthly_product_template
-msgid "Hermes MCP Server T1（1–3 人）Monthly Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_yearly_product_template
-msgid "Hermes MCP Server T1（1–3 人）Yearly Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6391,12 +6391,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）Monthly Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）Yearly Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6501,12 +6501,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）Monthly Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）Yearly Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7358,12 +7358,12 @@ msgstr "類別"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_k8s_monthly_product_template
-msgid "Kubernetes MCP Server Monthly Subscription"
+msgid "Kubernetes MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_k8s_yearly_product_template
-msgid "Kubernetes MCP Server Yearly Subscription"
+msgid "Kubernetes MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9265,22 +9265,22 @@ msgstr "Odoo 模組"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_monthly_product_template
-msgid "Odoo MCP Server Monthly Subscription"
+msgid "Odoo MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_yearly_product_template
-msgid "Odoo MCP Server Yearly Subscription"
+msgid "Odoo MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_manage_monthly_product_template
-msgid "Odoo Manage MCP Server Monthly Subscription"
+msgid "Odoo Manage MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_manage_yearly_product_template
-msgid "Odoo Manage MCP Server Yearly Subscription"
+msgid "Odoo Manage MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9737,12 +9737,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_opendesign_monthly_product_template
-msgid "Open Design MCP Server Monthly Subscription"
+msgid "Open Design MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_opendesign_yearly_product_template
-msgid "Open Design MCP Server Yearly Subscription"
+msgid "Open Design MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10537,12 +10537,12 @@ msgstr "孤兒 PVC（保留期內）：%(orphans)s"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_postgresql_monthly_product_template
-msgid "PostgreSQL Monthly Subscription"
+msgid "PostgreSQL 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_postgresql_yearly_product_template
-msgid "PostgreSQL Yearly Subscription"
+msgid "PostgreSQL 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12695,12 +12695,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_monthly_product_template
-msgid "Smart Home + MCP Monthly Subscription"
+msgid "智慧家庭＋MCP 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_yearly_product_template
-msgid "Smart Home + MCP Yearly Subscription"
+msgid "智慧家庭＋MCP 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12716,12 +12716,12 @@ msgstr "Smart Home Connect"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_monthly_product_template
-msgid "Smart Home Connect Monthly Subscription"
+msgid "智慧家庭連線 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_yearly_product_template
-msgid "Smart Home Connect Yearly Subscription"
+msgid "智慧家庭連線 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -15271,12 +15271,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_vk_monthly_product_template
-msgid "Vibe Kanban MCP Server Monthly Subscription"
+msgid "Vibe Kanban MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_vk_yearly_product_template
-msgid "Vibe Kanban MCP Server Yearly Subscription"
+msgid "Vibe Kanban MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16395,12 +16395,12 @@ msgstr "n8n Key 已持久化"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_monthly_product_template
-msgid "n8n MCP Server Monthly Subscription"
+msgid "n8n MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_yearly_product_template
-msgid "n8n MCP Server Yearly Subscription"
+msgid "n8n MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform

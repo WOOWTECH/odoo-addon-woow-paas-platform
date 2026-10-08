@@ -13,6 +13,7 @@ from . import sh_subscription_plan_service_type
 from . import sh_subscription_plan_ac
 from . import sh_subscription_plan_visibility
 from . import sh_subscription_plan_cs_spec
+from . import sh_subscription_plan_names_zh_tw
 from . import subscription_lifecycle_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron

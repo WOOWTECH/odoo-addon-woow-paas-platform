@@ -1056,3 +1056,5 @@ from . import test_change_plan_reapply_1158
 from . import test_workspace_slug_1516
 # LiteLLM「ChatGPT 訂閱」：device code 登入、狀態、預設模型、中斷（chart 0.2.0、operator exec）。
 from . import test_chatgpt_subscription
+# 方案名稱中文化 migration（18.0.1.0.214）：27 個英文方案／商品名改中文，只改仍是舊原名者。
+from . import test_plan_names_zh_tw_migration

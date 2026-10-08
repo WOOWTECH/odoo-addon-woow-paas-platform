@@ -32,22 +32,22 @@ EXPECTED_PLANS = {
     'plan_n8n_t3_monthly': (4500, 'n8n 雲端訂閱服務（6 人）'),
     'plan_n8n_t3_yearly': (36000, 'n8n 雲端訂閱服務（6 人）'),
     # CS-MCP — 統一單階（改價 only、不改名；年 30000→24000 對齊 ×8）
-    'plan_mcp_odoo_monthly': (3000, 'Odoo MCP Server Monthly'),
-    'plan_mcp_odoo_yearly': (24000, 'Odoo MCP Server Yearly'),
-    'plan_mcp_n8n_monthly': (3000, 'n8n MCP Server Monthly'),
-    'plan_mcp_n8n_yearly': (24000, 'n8n MCP Server Yearly'),
+    'plan_mcp_odoo_monthly': (3000, 'Odoo MCP 伺服器 月繳'),
+    'plan_mcp_odoo_yearly': (24000, 'Odoo MCP 伺服器 年繳'),
+    'plan_mcp_n8n_monthly': (3000, 'n8n MCP 伺服器 月繳'),
+    'plan_mcp_n8n_yearly': (24000, 'n8n MCP 伺服器 年繳'),
     # CS-MCP — Hermes 三階（封存原價、Wave B 不動；年繳 ×10）
-    'plan_mcp_hermes_monthly': (1500, 'Hermes MCP Server T1（1–3 人）Monthly'),
-    'plan_mcp_hermes_yearly': (15000, 'Hermes MCP Server T1（1–3 人）Yearly'),
-    'plan_mcp_hermes_t2_monthly': (4500, 'Hermes MCP Server T2（3–6 人）Monthly'),
-    'plan_mcp_hermes_t2_yearly': (45000, 'Hermes MCP Server T2（3–6 人）Yearly'),
-    'plan_mcp_hermes_t3_monthly': (6000, 'Hermes MCP Server T3（6–10 人）Monthly'),
-    'plan_mcp_hermes_t3_yearly': (60000, 'Hermes MCP Server T3（6–10 人）Yearly'),
+    'plan_mcp_hermes_monthly': (1500, 'Hermes MCP 伺服器 T1（1–3 人）月繳'),
+    'plan_mcp_hermes_yearly': (15000, 'Hermes MCP 伺服器 T1（1–3 人）年繳'),
+    'plan_mcp_hermes_t2_monthly': (4500, 'Hermes MCP 伺服器 T2（3–6 人）月繳'),
+    'plan_mcp_hermes_t2_yearly': (45000, 'Hermes MCP 伺服器 T2（3–6 人）年繳'),
+    'plan_mcp_hermes_t3_monthly': (6000, 'Hermes MCP 伺服器 T3（6–10 人）月繳'),
+    'plan_mcp_hermes_t3_yearly': (60000, 'Hermes MCP 伺服器 T3（6–10 人）年繳'),
     # SH — Connect（月 150 不動、年 1500→1200）／+MCP（400→300、4000→2400）
-    'plan_smarthome_monthly': (150, 'Smart Home Connect Monthly'),
-    'plan_smarthome_yearly': (1200, 'Smart Home Connect Yearly'),
-    'plan_smarthome_mcp_monthly': (300, 'Smart Home + MCP Monthly'),
-    'plan_smarthome_mcp_yearly': (2400, 'Smart Home + MCP Yearly'),
+    'plan_smarthome_monthly': (150, '智慧家庭連線 月繳'),
+    'plan_smarthome_yearly': (1200, '智慧家庭連線 年繳'),
+    'plan_smarthome_mcp_monthly': (300, '智慧家庭＋MCP 月繳'),
+    'plan_smarthome_mcp_yearly': (2400, '智慧家庭＋MCP 年繳'),
     # SA — 6 組／10 組（改名＋reprice；quota 隨 routes、年繳 ×9）
     'plan_security_access_entry_monthly': (1200, '遠端安全連結訂閱服務（6 組）'),
     'plan_security_access_entry_yearly': (10800, '遠端安全連結訂閱服務（6 組）'),
@@ -98,10 +98,10 @@ MONTHLY_YEARLY_PAIRS = [
 
 # 4 筆 placeholder（G5：不動——價格/名稱原樣）
 PLACEHOLDER_PLANS = {
-    'plan_postgresql_monthly': (99, 'PostgreSQL Monthly'),
-    'plan_postgresql_yearly': (990, 'PostgreSQL Yearly'),
-    'plan_anythingllm_monthly': (299, 'AnythingLLM Monthly'),
-    'plan_anythingllm_yearly': (2990, 'AnythingLLM Yearly'),
+    'plan_postgresql_monthly': (99, 'PostgreSQL 月繳'),
+    'plan_postgresql_yearly': (990, 'PostgreSQL 年繳'),
+    'plan_anythingllm_monthly': (299, 'AnythingLLM 月繳'),
+    'plan_anythingllm_yearly': (2990, 'AnythingLLM 年繳'),
 }
 
 # 34 筆 plan 的 service_type 歸屬（D4 backfill 對照表；含 placeholder）

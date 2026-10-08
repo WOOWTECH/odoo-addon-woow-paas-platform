@@ -202,7 +202,7 @@
 
         <!-- PostgreSQL Plans（placeholder，價格/名稱不動——總表 Q9） -->
         <record id="plan_postgresql_monthly" model="sh.subscription.plan">
-            <field name="name">PostgreSQL Monthly</field>
+            <field name="name">PostgreSQL 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">99</field>
@@ -220,7 +220,7 @@
         </record>
 
         <record id="plan_postgresql_yearly" model="sh.subscription.plan">
-            <field name="name">PostgreSQL Yearly</field>
+            <field name="name">PostgreSQL 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">990</field>
@@ -372,7 +372,7 @@
 
         <!-- AnythingLLM Plans（placeholder、無 template＝orphan——guard 放行；價格/名稱不動） -->
         <record id="plan_anythingllm_monthly" model="sh.subscription.plan">
-            <field name="name">AnythingLLM Monthly</field>
+            <field name="name">AnythingLLM 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">299</field>
@@ -390,7 +390,7 @@
         </record>
 
         <record id="plan_anythingllm_yearly" model="sh.subscription.plan">
-            <field name="name">AnythingLLM Yearly</field>
+            <field name="name">AnythingLLM 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">2990</field>
@@ -409,7 +409,7 @@
 
         <!-- Smart Home Plans（Connect 150／+MCP 400；mcp_integration 字面精確） -->
         <record id="plan_smarthome_monthly" model="sh.subscription.plan">
-            <field name="name">Smart Home Connect Monthly</field>
+            <field name="name">智慧家庭連線 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">150</field>
@@ -427,7 +427,7 @@
         </record>
 
         <record id="plan_smarthome_yearly" model="sh.subscription.plan">
-            <field name="name">Smart Home Connect Yearly</field>
+            <field name="name">智慧家庭連線 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">1200</field>
@@ -445,7 +445,7 @@
         </record>
 
         <record id="plan_smarthome_mcp_monthly" model="sh.subscription.plan">
-            <field name="name">Smart Home + MCP Monthly</field>
+            <field name="name">智慧家庭＋MCP 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">300</field>
@@ -464,7 +464,7 @@
         </record>
 
         <record id="plan_smarthome_mcp_yearly" model="sh.subscription.plan">
-            <field name="name">Smart Home + MCP Yearly</field>
+            <field name="name">智慧家庭＋MCP 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">2400</field>
@@ -489,7 +489,7 @@
              sh_no_of_billing_cycle=-1＋sh_never_expire＝無期限、每月照跑 0 元。
              不掛任何 template M2M（HA template 等 Elmo 輕量 image，plan 先為 orphan）。 -->
         <record id="plan_ha_paas_monthly" model="sh.subscription.plan">
-            <field name="name">HA PaaS Free</field>
+            <field name="name">HA PaaS 免費版</field>
             <field name="sh_plan_price">0</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
@@ -715,7 +715,7 @@
              本 family）：漏帶會讓三階變體全部 fallback 到同一組 template.min_*
              ＝ #431 的病灶原地復發，而症狀只是「付不同價拿一樣的算力」。 -->
         <record id="plan_mcp_hermes_monthly" model="sh.subscription.plan">
-            <field name="name">Hermes MCP Server T1（1–3 人）Monthly</field>
+            <field name="name">Hermes MCP 伺服器 T1（1–3 人）月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">1500</field>
@@ -737,7 +737,7 @@
         </record>
 
         <record id="plan_mcp_hermes_yearly" model="sh.subscription.plan">
-            <field name="name">Hermes MCP Server T1（1–3 人）Yearly</field>
+            <field name="name">Hermes MCP 伺服器 T1（1–3 人）年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">15000</field>
@@ -759,7 +759,7 @@
         </record>
 
         <record id="plan_mcp_hermes_t2_monthly" model="sh.subscription.plan">
-            <field name="name">Hermes MCP Server T2（3–6 人）Monthly</field>
+            <field name="name">Hermes MCP 伺服器 T2（3–6 人）月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">4500</field>
@@ -781,7 +781,7 @@
         </record>
 
         <record id="plan_mcp_hermes_t2_yearly" model="sh.subscription.plan">
-            <field name="name">Hermes MCP Server T2（3–6 人）Yearly</field>
+            <field name="name">Hermes MCP 伺服器 T2（3–6 人）年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">45000</field>
@@ -803,7 +803,7 @@
         </record>
 
         <record id="plan_mcp_hermes_t3_monthly" model="sh.subscription.plan">
-            <field name="name">Hermes MCP Server T3（6–10 人）Monthly</field>
+            <field name="name">Hermes MCP 伺服器 T3（6–10 人）月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">6000</field>
@@ -825,7 +825,7 @@
         </record>
 
         <record id="plan_mcp_hermes_t3_yearly" model="sh.subscription.plan">
-            <field name="name">Hermes MCP Server T3（6–10 人）Yearly</field>
+            <field name="name">Hermes MCP 伺服器 T3（6–10 人）年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">60000</field>
@@ -848,7 +848,7 @@
 
         <!-- MCP Server: Odoo Plans（統一單階 3000；改價 only、名稱不動） -->
         <record id="plan_mcp_odoo_monthly" model="sh.subscription.plan">
-            <field name="name">Odoo MCP Server Monthly</field>
+            <field name="name">Odoo MCP 伺服器 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">3000</field>
@@ -866,7 +866,7 @@
         </record>
 
         <record id="plan_mcp_odoo_yearly" model="sh.subscription.plan">
-            <field name="name">Odoo MCP Server Yearly</field>
+            <field name="name">Odoo MCP 伺服器 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">24000</field>
@@ -885,7 +885,7 @@
 
         <!-- MCP Server: n8n Plans（統一單階 3000；改價 only、名稱不動） -->
         <record id="plan_mcp_n8n_monthly" model="sh.subscription.plan">
-            <field name="name">n8n MCP Server Monthly</field>
+            <field name="name">n8n MCP 伺服器 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">3000</field>
@@ -903,7 +903,7 @@
         </record>
 
         <record id="plan_mcp_n8n_yearly" model="sh.subscription.plan">
-            <field name="name">n8n MCP Server Yearly</field>
+            <field name="name">n8n MCP 伺服器 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">24000</field>
@@ -924,7 +924,7 @@
              HTML 權威 ID 1202/1203）；既有 MCP odoo/n8n 年繳 30000（×10）本 PR 不動，
              全平台年繳倍率統一至 ×8 屬 Wave B base reprice。 -->
         <record id="plan_mcp_odoo_manage_monthly" model="sh.subscription.plan">
-            <field name="name">Odoo Manage MCP Server Monthly</field>
+            <field name="name">Odoo Manage MCP 伺服器 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">3000</field>
@@ -942,7 +942,7 @@
         </record>
 
         <record id="plan_mcp_odoo_manage_yearly" model="sh.subscription.plan">
-            <field name="name">Odoo Manage MCP Server Yearly</field>
+            <field name="name">Odoo Manage MCP 伺服器 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">24000</field>
@@ -963,7 +963,7 @@
              plan_mcp_odoo_manage。+1access 變體（3600/28800）由 generator 生成於
              subscription_products_variants.xml。 -->
         <record id="plan_mcp_k8s_monthly" model="sh.subscription.plan">
-            <field name="name">Kubernetes MCP Server Monthly</field>
+            <field name="name">Kubernetes MCP 伺服器 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">3000</field>
@@ -981,7 +981,7 @@
         </record>
 
         <record id="plan_mcp_k8s_yearly" model="sh.subscription.plan">
-            <field name="name">Kubernetes MCP Server Yearly</field>
+            <field name="name">Kubernetes MCP 伺服器 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">24000</field>
@@ -999,7 +999,7 @@
         </record>
 
         <record id="plan_mcp_vk_monthly" model="sh.subscription.plan">
-            <field name="name">Vibe Kanban MCP Server Monthly</field>
+            <field name="name">Vibe Kanban MCP 伺服器 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">3000</field>
@@ -1017,7 +1017,7 @@
         </record>
 
         <record id="plan_mcp_vk_yearly" model="sh.subscription.plan">
-            <field name="name">Vibe Kanban MCP Server Yearly</field>
+            <field name="name">Vibe Kanban MCP 伺服器 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">24000</field>
@@ -1035,7 +1035,7 @@
         </record>
 
         <record id="plan_mcp_opendesign_monthly" model="sh.subscription.plan">
-            <field name="name">Open Design MCP Server Monthly</field>
+            <field name="name">Open Design MCP 伺服器 月繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">month</field>
             <field name="sh_plan_price">3000</field>
@@ -1053,7 +1053,7 @@
         </record>
 
         <record id="plan_mcp_opendesign_yearly" model="sh.subscription.plan">
-            <field name="name">Open Design MCP Server Yearly</field>
+            <field name="name">Open Design MCP 伺服器 年繳</field>
             <field name="sh_duration">1</field>
             <field name="sh_unit">year</field>
             <field name="sh_plan_price">24000</field>
@@ -1376,7 +1376,7 @@
         </record>
 
         <record id="product_postgresql_monthly" model="product.product">
-            <field name="name">PostgreSQL Monthly Subscription</field>
+            <field name="name">PostgreSQL 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">99</field>
             <field name="sale_ok" eval="True"/>
@@ -1387,7 +1387,7 @@
         </record>
 
         <record id="product_postgresql_yearly" model="product.product">
-            <field name="name">PostgreSQL Yearly Subscription</field>
+            <field name="name">PostgreSQL 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">990</field>
             <field name="sale_ok" eval="True"/>
@@ -1464,7 +1464,7 @@
         </record>
 
         <record id="product_anythingllm_monthly" model="product.product">
-            <field name="name">AnythingLLM Monthly Subscription</field>
+            <field name="name">AnythingLLM 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">299</field>
             <field name="sale_ok" eval="True"/>
@@ -1475,7 +1475,7 @@
         </record>
 
         <record id="product_anythingllm_yearly" model="product.product">
-            <field name="name">AnythingLLM Yearly Subscription</field>
+            <field name="name">AnythingLLM 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">2990</field>
             <field name="sale_ok" eval="True"/>
@@ -1486,7 +1486,7 @@
         </record>
 
         <record id="product_smarthome_monthly" model="product.product">
-            <field name="name">Smart Home Connect Monthly Subscription</field>
+            <field name="name">智慧家庭連線 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">150</field>
             <field name="sale_ok" eval="True"/>
@@ -1497,7 +1497,7 @@
         </record>
 
         <record id="product_smarthome_yearly" model="product.product">
-            <field name="name">Smart Home Connect Yearly Subscription</field>
+            <field name="name">智慧家庭連線 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">1200</field>
             <field name="sale_ok" eval="True"/>
@@ -1508,7 +1508,7 @@
         </record>
 
         <record id="product_smarthome_mcp_monthly" model="product.product">
-            <field name="name">Smart Home + MCP Monthly Subscription</field>
+            <field name="name">智慧家庭＋MCP 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">300</field>
             <field name="sale_ok" eval="True"/>
@@ -1519,7 +1519,7 @@
         </record>
 
         <record id="product_smarthome_mcp_yearly" model="product.product">
-            <field name="name">Smart Home + MCP Yearly Subscription</field>
+            <field name="name">智慧家庭＋MCP 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">2400</field>
             <field name="sale_ok" eval="True"/>
@@ -1531,7 +1531,7 @@
 
         <!-- HA PaaS Free product（#336：0 元） -->
         <record id="product_ha_paas_monthly" model="product.product">
-            <field name="name">HA PaaS Free</field>
+            <field name="name">HA PaaS 免費版</field>
             <field name="type">service</field>
             <field name="list_price">0</field>
             <field name="sale_ok" eval="True"/>
@@ -1629,7 +1629,7 @@
         </record>
 
         <record id="product_mcp_hermes_monthly" model="product.product">
-            <field name="name">Hermes MCP Server T1（1–3 人）Monthly Subscription</field>
+            <field name="name">Hermes MCP 伺服器 T1（1–3 人）月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">1500</field>
             <field name="sale_ok" eval="True"/>
@@ -1640,7 +1640,7 @@
         </record>
 
         <record id="product_mcp_hermes_yearly" model="product.product">
-            <field name="name">Hermes MCP Server T1（1–3 人）Yearly Subscription</field>
+            <field name="name">Hermes MCP 伺服器 T1（1–3 人）年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">15000</field>
             <field name="sale_ok" eval="True"/>
@@ -1651,7 +1651,7 @@
         </record>
 
         <record id="product_mcp_hermes_t2_monthly" model="product.product">
-            <field name="name">Hermes MCP Server T2（3–6 人）Monthly Subscription</field>
+            <field name="name">Hermes MCP 伺服器 T2（3–6 人）月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">4500</field>
             <field name="sale_ok" eval="True"/>
@@ -1662,7 +1662,7 @@
         </record>
 
         <record id="product_mcp_hermes_t2_yearly" model="product.product">
-            <field name="name">Hermes MCP Server T2（3–6 人）Yearly Subscription</field>
+            <field name="name">Hermes MCP 伺服器 T2（3–6 人）年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">45000</field>
             <field name="sale_ok" eval="True"/>
@@ -1673,7 +1673,7 @@
         </record>
 
         <record id="product_mcp_hermes_t3_monthly" model="product.product">
-            <field name="name">Hermes MCP Server T3（6–10 人）Monthly Subscription</field>
+            <field name="name">Hermes MCP 伺服器 T3（6–10 人）月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">6000</field>
             <field name="sale_ok" eval="True"/>
@@ -1684,7 +1684,7 @@
         </record>
 
         <record id="product_mcp_hermes_t3_yearly" model="product.product">
-            <field name="name">Hermes MCP Server T3（6–10 人）Yearly Subscription</field>
+            <field name="name">Hermes MCP 伺服器 T3（6–10 人）年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">60000</field>
             <field name="sale_ok" eval="True"/>
@@ -1696,7 +1696,7 @@
 
         <!-- MCP Server: Odoo Products (one per plan) -->
         <record id="product_mcp_odoo_monthly" model="product.product">
-            <field name="name">Odoo MCP Server Monthly Subscription</field>
+            <field name="name">Odoo MCP 伺服器 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">3000</field>
             <field name="sale_ok" eval="True"/>
@@ -1707,7 +1707,7 @@
         </record>
 
         <record id="product_mcp_odoo_yearly" model="product.product">
-            <field name="name">Odoo MCP Server Yearly Subscription</field>
+            <field name="name">Odoo MCP 伺服器 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">24000</field>
             <field name="sale_ok" eval="True"/>
@@ -1719,7 +1719,7 @@
 
         <!-- MCP Server: n8n Products (one per plan) -->
         <record id="product_mcp_n8n_monthly" model="product.product">
-            <field name="name">n8n MCP Server Monthly Subscription</field>
+            <field name="name">n8n MCP 伺服器 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">3000</field>
             <field name="sale_ok" eval="True"/>
@@ -1730,7 +1730,7 @@
         </record>
 
         <record id="product_mcp_n8n_yearly" model="product.product">
-            <field name="name">n8n MCP Server Yearly Subscription</field>
+            <field name="name">n8n MCP 伺服器 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">24000</field>
             <field name="sale_ok" eval="True"/>
@@ -1742,7 +1742,7 @@
 
         <!-- MCP Server: Odoo Manage Products（#338） -->
         <record id="product_mcp_odoo_manage_monthly" model="product.product">
-            <field name="name">Odoo Manage MCP Server Monthly Subscription</field>
+            <field name="name">Odoo Manage MCP 伺服器 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">3000</field>
             <field name="sale_ok" eval="True"/>
@@ -1753,7 +1753,7 @@
         </record>
 
         <record id="product_mcp_odoo_manage_yearly" model="product.product">
-            <field name="name">Odoo Manage MCP Server Yearly Subscription</field>
+            <field name="name">Odoo Manage MCP 伺服器 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">24000</field>
             <field name="sale_ok" eval="True"/>
@@ -1765,7 +1765,7 @@
 
         <!-- MCP admin 三型（#375）base product：taxes_id 明寫空、pts 免稅（#366）。 -->
         <record id="product_mcp_k8s_monthly" model="product.product">
-            <field name="name">Kubernetes MCP Server Monthly Subscription</field>
+            <field name="name">Kubernetes MCP 伺服器 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">3000</field>
             <field name="sale_ok" eval="True"/>
@@ -1776,7 +1776,7 @@
         </record>
 
         <record id="product_mcp_k8s_yearly" model="product.product">
-            <field name="name">Kubernetes MCP Server Yearly Subscription</field>
+            <field name="name">Kubernetes MCP 伺服器 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">24000</field>
             <field name="sale_ok" eval="True"/>
@@ -1787,7 +1787,7 @@
         </record>
 
         <record id="product_mcp_vk_monthly" model="product.product">
-            <field name="name">Vibe Kanban MCP Server Monthly Subscription</field>
+            <field name="name">Vibe Kanban MCP 伺服器 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">3000</field>
             <field name="sale_ok" eval="True"/>
@@ -1798,7 +1798,7 @@
         </record>
 
         <record id="product_mcp_vk_yearly" model="product.product">
-            <field name="name">Vibe Kanban MCP Server Yearly Subscription</field>
+            <field name="name">Vibe Kanban MCP 伺服器 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">24000</field>
             <field name="sale_ok" eval="True"/>
@@ -1809,7 +1809,7 @@
         </record>
 
         <record id="product_mcp_opendesign_monthly" model="product.product">
-            <field name="name">Open Design MCP Server Monthly Subscription</field>
+            <field name="name">Open Design MCP 伺服器 月繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">3000</field>
             <field name="sale_ok" eval="True"/>
@@ -1820,7 +1820,7 @@
         </record>
 
         <record id="product_mcp_opendesign_yearly" model="product.product">
-            <field name="name">Open Design MCP Server Yearly Subscription</field>
+            <field name="name">Open Design MCP 伺服器 年繳 Subscription</field>
             <field name="type">service</field>
             <field name="list_price">24000</field>
             <field name="sale_ok" eval="True"/>
