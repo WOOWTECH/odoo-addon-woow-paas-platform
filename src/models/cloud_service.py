@@ -852,6 +852,27 @@ _INSTALL_PINNED_STORAGE_CLASS_PATHS = {
 _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 
 
+# 範本的「平台政策鍵」：每次部署都以範本 ``helm_default_values`` 的值為準，不吃服務
+# 自己 ``helm_values`` 快照裡的值、也不讓 chart 預設補位。
+#
+# 為什麼需要：服務的 ``helm_values`` 是開通當下的快照，Redeploy 只換 image
+# （#1408）。chart 升版新增的鍵若預設會**開啟**某個行為，而平台決定不開，新開通的服務
+# 快照裡有範本寫的 false，既有服務的快照卻沒有這個鍵 ⇒ Redeploy 時 chart 預設 true
+# 生效，同一個商品兩種行為。
+#
+# ha-full（chart home-assistant-full 0.1.6，使用者 2026-10-07 決定）：
+#   - ``haProxy.ipBanEnabled``：#1446 不做（登入失敗不封 IP）；
+#   - ``seed.unlockCoreConfig``：#1447 不做（不把核心設定搬進 .storage/core.config）。
+#
+# ⚠ 只列平台決定、租戶不能設的鍵（ha-full 的 helm_value_specs 為空）。刻意**不**收
+# ``persistence.size``：PVC 只能長大，範本調大後套到既有服務就是一次沒人決定過的線上
+# 擴容（既有服務維持自己快照裡的大小）。範本沒有該鍵時不動（no-op，不刪服務的值）。
+_TEMPLATE_POLICY_VALUE_PATHS = {
+    'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig')],
+}
+_MISSING = object()
+
+
 # #1408：範本 ``helm_default_values`` 裡的 image 參照（含 ``repository`` 與 ``tag``
 # 或 ``digest`` 的 dict）是**商品版本**的一部分，與 chart 版本同進同退（#336）。
 # 開通時它們被 deep-merge 進服務自己的 ``helm_values`` 後就凍結了；管理員 Redeploy
@@ -3285,6 +3306,8 @@ class CloudService(models.Model):
            ``config.sensitive`` 子樹（``_strip_mcp_sensitive_values``），再把
            helm_value_specs 帶 ``format`` 的租戶文字欄位轉成 chart 形態
            （``template._apply_spec_formats``，例 code-server git.tokenHosts）。
+           接著以範本值蓋上「平台政策鍵」（``_TEMPLATE_POLICY_VALUE_PATHS``；
+           ``_inject_template_policy_keys``）。
         2. storage_class injector（PVC 生命週期；n8n 例外，首裝時已寫進
            helm_values，見 ``_pin_install_storage_class``／#1334）
         3. image_pull_secrets injector（私有 registry）
@@ -3340,6 +3363,9 @@ class CloudService(models.Model):
             if plan:
                 values = self._apply_plan_spec_overlay(
                     values, template, plan, existing=True)
+        # 範本的平台政策鍵（ha-full 的 ipBanEnabled／unlockCoreConfig）以範本為準：
+        # 既有服務的快照沒有這些鍵，不補就會在 Redeploy 時吃到 chart 預設。
+        values = self._inject_template_policy_keys(values, template)
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -3807,6 +3833,41 @@ class CloudService(models.Model):
         elif secret_name not in existing:
             existing.append(secret_name)
         values['global']['imagePullSecrets'] = existing
+        return values
+
+    @api.model
+    def _inject_template_policy_keys(self, values, template):
+        """以範本 ``helm_default_values`` 的值蓋上平台政策鍵（就地修改並回傳）。
+
+        鍵清單見 ``_TEMPLATE_POLICY_VALUE_PATHS``（含為什麼 ``persistence.size`` 刻意
+        不在裡面）。範本沒有該鍵、或範本 JSON 壞掉時不動——壞 JSON 在開通時就擋過，
+        這裡不讓它把部署整個卡住。
+        """
+        paths = _TEMPLATE_POLICY_VALUE_PATHS.get(template.slug)
+        if not paths:
+            return values
+        try:
+            defaults = json.loads(template.helm_default_values or '{}')
+        except ValueError:
+            _logger.warning(
+                "Template %s has invalid helm_default_values; policy keys not applied",
+                template.id)
+            return values
+        for path in paths:
+            src = defaults
+            for key in path:
+                if not isinstance(src, dict) or key not in src:
+                    src = _MISSING
+                    break
+                src = src[key]
+            if src is _MISSING:
+                continue
+            dst = values
+            for key in path[:-1]:
+                if not isinstance(dst.get(key), dict):
+                    dst[key] = {}
+                dst = dst[key]
+            dst[path[-1]] = copy.deepcopy(src)
         return values
 
     @staticmethod

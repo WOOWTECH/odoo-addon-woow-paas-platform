@@ -110,11 +110,13 @@ class TestHaFullSeed661(TransactionCase):
         sentinel 2 判 dst<src 而 FATAL、pod 卡 Init:Error。
         0.1.4 = 新實例預設座標台北（.storage/core.config，缺才寫；charts #115，#1374）。
         0.1.5 = 平台注入的公開網址寫入 core.config external_url（charts #118，#1388）。
+        0.1.6 = R8 修正（charts #130）；平台只採用其中一部分，逐項守線在
+        test_ha_full_016_user_decisions.py。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HA_FULL_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.5')
+        self.assertEqual(tpl.helm_chart_version, '0.1.6')
         self.assertNotEqual(
             tpl.helm_chart_version, '0.1.0',
             '0.1.0 的 seed 錨點指向 woow_panel_frontend（非 component）→ '
@@ -192,12 +194,18 @@ class TestHaFullSeed661(TransactionCase):
 
         ⚠ 若日後真有理由覆寫，值必須是**帶 manifest.json 的第一方 v2-only component**
         （chart values.yaml 列出的三個條件），且與 image pin 同一次變更一起動。
+
+        2026-10-07 起 seed 區塊只放 ``unlockCoreConfig: false``（chart 0.1.6，#1447 不做；
+        見 test_ha_full_016_user_decisions），其餘 seed.* 仍沿用 chart 預設。
         """
-        values = self._values()
+        seed = self._values().get('seed', {})
         self.assertNotIn(
-            'seed', values,
-            'seed.* 應沿用 chart 0.1.1 預設；覆寫 requiredComponents 是把 0.1.0 的'
+            'requiredComponents', seed,
+            'seed.requiredComponents 應沿用 chart 預設；覆寫它是把 0.1.0 的'
             '錯錨點抄回來的唯一途徑')
+        self.assertEqual(
+            set(seed), {'unlockCoreConfig'},
+            'seed 區塊只放使用者決定的 unlockCoreConfig，其餘沿用 chart 預設')
 
     def test_chart_defaults_not_overridden(self):
         """其餘刻意不覆寫的鍵不得出現在 seed values。
@@ -208,8 +216,8 @@ class TestHaFullSeed661(TransactionCase):
         - imagePullSecrets：chart 預設已是 paas-registry（image 在私有 JCR），
           operator ``_ensure_image_pull_secrets`` 另有一層。
         - persistence.storageClass：由平台 ``_inject_storage_class`` 注入。
-        - networkPolicy：``allowAllEgress`` 預設 true 且必須維持（HACS 要從 github.com
-          下載；DNS-only egress 會讓它變成裝不了東西的整合，且沒有清楚錯誤）。
+        - networkPolicy：沿用 chart 0.1.6 預設（allowAllEgress=false：DNS＋公網＋同
+          namespace，HACS 走 github.com 公網照常可用；多播被擋是 #1441 的暫時止血）。
         """
         values = self._values()
         self.assertNotIn('nodeSelector', values)
@@ -219,10 +227,10 @@ class TestHaFullSeed661(TransactionCase):
 
     # ── chart 固定契約 ───────────────────────────────────────────────────────
     def test_config_mount_path_fixed(self):
-        """HA config 目錄固定 /config（chart 明令不可改）；PVC 10Gi。"""
+        """HA config 目錄固定 /config（chart 明令不可改）；PVC 20Gi（2026-10-07 由 10Gi 調高）。"""
         persistence = self._values()['persistence']
         self.assertEqual(persistence['mountPath'], '/config')
-        self.assertEqual(persistence['size'], '10Gi')
+        self.assertEqual(persistence['size'], '20Gi')
 
     def test_service_ports_8123(self):
         """service.port／targetPort 固定 8123（＝default_port＝HA 前端埠）。"""
@@ -280,6 +288,7 @@ class TestHaFullSeed661(TransactionCase):
 
         開了這個旗標會讓平台憑空生一組 admin_password 塞進 config.sensitive（chart
         沒有對應鍵＝白生），並在前台長出一顆按了必失敗的「重置密碼」按鈕。
+        2026-10-07：chart 0.1.6 有了對應鍵（#1442），使用者決定仍不由平台給密碼。
         """
         self.assertFalse(self._tpl().has_admin_gui)
 
@@ -328,7 +337,7 @@ class TestHaFullQuotaLockstep(TransactionCase):
         self.assertGreaterEqual(tpl.min_vcpu * 3, cpu, limits_cpu)
 
     def test_min_storage_matches_pvc(self):
-        """min_storage_gb 必須等於 chart 的 PVC 大小（10Gi）。
+        """min_storage_gb 必須等於範本的 PVC 大小（20Gi，2026-10-07 由 10Gi 調高）。
 
         ⚠ PVC 只能長大不能縮——縮小 persistence.size 會讓整個 ``helm upgrade`` 被
         API server 拒絕，所以這兩個值一旦上線就只能同向調高。
