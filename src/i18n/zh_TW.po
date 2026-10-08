@@ -451,7 +451,7 @@ msgstr "+%s 條必要條件"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
 msgid "+1 access seat ("
-msgstr "+1 access seat（"
+msgstr "+1 存取席位（"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -706,7 +706,7 @@ msgstr "AC 最大存取席位數"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
 msgid "AC Seats:"
-msgstr "AC 席數："
+msgstr "存取席位："
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1144,7 +1144,7 @@ msgstr "新增付款方式"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Add Policy"
-msgstr "新增政策"
+msgstr "新增規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1168,7 +1168,7 @@ msgstr "新增服務"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.xml:0
 msgid "Add Sidecar MCP"
-msgstr "新增 Sidecar MCP"
+msgstr "新增附掛 MCP"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4332,7 +4332,7 @@ msgstr "刪除失敗"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Delete policy"
-msgstr "刪除政策"
+msgstr "刪除規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4873,7 +4873,7 @@ msgstr "拖曳以調整順序"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
 msgid "Dry-run read-only list · deletion stays in human hands"
-msgstr "dry-run 唯讀清單 · 刪除權留人手"
+msgstr "試跑唯讀清單 · 刪除權留人手"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4989,7 +4989,7 @@ msgstr "編輯選擇"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Edit policy"
-msgstr "編輯政策"
+msgstr "編輯規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5099,7 +5099,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__mcp_enabled
 msgid "Enable MCP Sidecar"
-msgstr "啟用 MCP Sidecar"
+msgstr "啟用附掛 MCP"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__mcp_enabled
@@ -8847,7 +8847,7 @@ msgstr "還沒有任何訊息，開始對話吧！"
 #: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
 msgid ""
 "No orphan candidates yet (or the cron has not run its first reconciliation)."
-msgstr "目前無孤兒候選（或 cron 尚未跑過第一次對帳）。"
+msgstr "目前無孤兒候選（或排程尚未跑過第一次對帳）。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -8877,7 +8877,7 @@ msgstr "目前沒有可用的方案"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "No policies yet — without any allow rule, no visitor passes."
-msgstr "尚無政策——沒有任何允許規則時，所有訪客都進不來。"
+msgstr "尚無規則——沒有任何允許規則時，所有訪客都進不來。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10416,13 +10416,13 @@ msgstr "已刪除規則"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Policy name"
-msgstr "政策名稱"
+msgstr "規則名稱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
 msgid "Policy name is required"
-msgstr "請輸入政策名稱"
+msgstr "請輸入規則名稱"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -12515,8 +12515,8 @@ msgid ""
 "Sidecar-backed MCP server '%s' must use an in-cluster URL (http scheme + "
 "hostname ending in '.svc.cluster.local'); got: %s"
 msgstr ""
-"Sidecar-backed 的 MCP 伺服器「%s」必須使用叢集內網址（http scheme ＋主機名稱"
-"結尾為 '.svc.cluster.local'）；實際收到：%s"
+"附掛式 MCP 伺服器「%s」必須使用叢集內網址（http scheme ＋主機名稱結尾為 '.svc.cluster.local'）；實際"
+"收到：%s"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_consent
@@ -12689,7 +12689,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
 msgid "Smart Home Connect"
-msgstr "Smart Home Connect"
+msgstr "智慧家庭連線"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_monthly_product_template
@@ -14121,7 +14121,9 @@ msgstr "此方案不含任何路由，但這個安全存取目前有 %(used)s �
 #. odoo-python
 #: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
 msgid "This plan includes %(seats)s Access seat(s), but this service currently lists %(used)s email address(es). Delete access rules or policies until at most %(seats)s address(es) remain, then change the plan."
-msgstr "此方案含 %(seats)s 個存取席位，但這台服務目前列了 %(used)s 個 email 位址。請先刪除存取規則或政策，把位址數降到 %(seats)s 個以內，才能換到此方案。"
+msgstr ""
+"此方案含 %(seats)s 個存取席位，但這台服務目前列了 %(used)s 個 email 位址。請先刪除存取規則，把位址數降到 %(s"
+"eats)s 個以內，才能換到此方案。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -14185,7 +14187,7 @@ msgstr "這個專案已經有專屬 template。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
 msgid "This project has user-scope MCP servers. Remove them first."
-msgstr "這個專案有 user-scope MCP server，請先移除。"
+msgstr "這個專案有使用者層級 MCP 伺服器，請先移除。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -14193,8 +14195,7 @@ msgstr "這個專案有 user-scope MCP server，請先移除。"
 msgid ""
 "This scan is incomplete (list-all failed for one of the right-hand sets), so "
 "orphans may be under-reported — do not delete anything based on this list."
-msgstr ""
-"本次掃描不完整（某類右集 list-all 失敗）→ 孤兒可能少報，請勿據此清單刪除。"
+msgstr "本次掃描不完整（某類右集全量列出失敗）→ 孤兒可能少報，請勿據此清單刪除。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -14834,7 +14835,7 @@ msgstr "未授權的配置鍵：%(keys)s"
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
 msgid ""
 "Unbind this project from %s? This will block if user-scope MCP servers exist."
-msgstr "要將這個專案與 %s 解除綁定嗎？若存在 user-scope MCP server 會被阻擋。"
+msgstr "要將這個專案與 %s 解除綁定嗎？若存在使用者層級 MCP 伺服器會被阻擋。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15346,7 +15347,7 @@ msgstr "訪客還必須符合每一條必要規則。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
 msgid "Visitor passes this policy if they match ANY include rule."
-msgstr "訪客只要符合任一條包含規則，即通過此政策。"
+msgstr "訪客只要符合任一條包含規則，即通過此規則。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18798,7 +18799,7 @@ msgstr "刪除中…"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Delete this policy?"
-msgstr "刪除這條政策？"
+msgstr "刪除這條規則？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18822,7 +18823,7 @@ msgstr "的存取應用程式中移除。此操作無法復原。"
 msgid ""
 "Visitors this policy blocks will be judged by the remaining policies "
 "instead, so some of them may get in."
-msgstr "原本被這條政策擋下的訪客，改由其餘政策判斷，其中有些人可能因此進得來。"
+msgstr "原本被這條規則擋下的訪客，改由其餘規則判斷，其中有些人可能因此進得來。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18830,7 +18831,7 @@ msgstr "原本被這條政策擋下的訪客，改由其餘政策判斷，其中
 msgid ""
 "Visitors this policy lets straight through will have to pass the remaining "
 "policies from now on."
-msgstr "原本被這條政策直接放行的訪客，之後都要通過其餘政策才能進入。"
+msgstr "原本被這條規則直接放行的訪客，之後都要通過其餘規則才能進入。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18838,13 +18839,13 @@ msgstr "原本被這條政策直接放行的訪客，之後都要通過其餘政
 msgid ""
 "This is the only Allow policy on this address. Without any Allow policy no "
 "visitor gets in, including you, until you add a new one."
-msgstr "這是這個網址唯一的允許政策。沒有任何允許政策時，所有訪客（包含你自己）都進不來，直到你新增一條為止。"
+msgstr "這是這個網址唯一的允許規則。沒有任何允許規則時，所有訪客（包含你自己）都進不來，直到你新增一條為止。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 msgid "Visitors who only match this policy will no longer get in."
-msgstr "只符合這條政策的訪客之後將無法進入。"
+msgstr "只符合這條規則的訪客之後將無法進入。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -19210,13 +19211,15 @@ msgstr "初始化未完成。請聯絡客服。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 msgid "1 policy"
-msgstr "1 條政策"
+msgstr "1 條規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_plan_visibility.py:0
 msgid "%s policies"
-msgstr "%s 條政策"
+msgstr "%s 條規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -20918,3 +20921,165 @@ msgstr "ChatGPT 訂閱登入"
 msgid ""
 "The chart ships the ChatGPT subscription helper (LiteLLM chart 0.2.0 and later): tenant admins can sign in with ChatGPT Plus/Pro from the service page (device code), check the connection, add the chatgpt/ models and disconnect. Services still on an older chart version must be redeployed first."
 msgstr "chart 內附 ChatGPT 訂閱工具（LiteLLM chart 0.2.0 起）：工作區管理員可在服務頁用 ChatGPT Plus／Pro 登入（裝置代碼）、查看連接狀態、加入 chatgpt/ 模型與中斷連接。仍是舊版 chart 的服務要先重新部署。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Service deleted refund: %(plan)s"
+msgstr "服務刪除退款：%(plan)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Smart Home deleted refund: %(plan)s"
+msgstr "智慧家庭刪除退款：%(plan)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Security Access deleted refund: %(plan)s"
+msgstr "安全存取刪除退款：%(plan)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Provisioning rejected (%(code)s) refund: %(plan)s"
+msgstr "開通遭拒（%(code)s）退款：%(plan)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Plan change refund: %(plan)s"
+msgstr "換方案退款：%(plan)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Subscription invoice: %(invoice)s"
+msgstr "訂閱帳單：%(invoice)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Invoice payment: %(invoice)s"
+msgstr "帳單付款：%(invoice)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Gift card redeemed: %(code)s"
+msgstr "禮品卡兌換：%(code)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Top-up: %(plan)s"
+msgstr "儲值：%(plan)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Wallet top-up (auto)"
+msgstr "錢包自動儲值"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Wallet top-up"
+msgstr "錢包儲值"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "topped up"
+msgstr "儲值"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "subscription charge"
+msgstr "訂閱扣款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "refund"
+msgstr "退款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "adjustment"
+msgstr "調整"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "card charge"
+msgstr "信用卡扣款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "card added"
+msgstr "綁定信用卡"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "card removed"
+msgstr "移除信用卡"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Wallet"
+msgstr "錢包"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Refund"
+msgstr "退款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Adjustment"
+msgstr "調整"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Card charge"
+msgstr "信用卡扣款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Card added"
+msgstr "已綁定信用卡"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Card removed"
+msgstr "已移除信用卡"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_plan_visibility.py:0
+msgid "%s routes"
+msgstr "%s 條路由"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_plan_visibility.py:0
+msgid "unlimited policies"
+msgstr "規則數不限"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_plan_visibility.py:0
+msgid "Encrypted MCP connection"
+msgstr "加密 MCP 連線"

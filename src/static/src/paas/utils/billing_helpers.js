@@ -206,6 +206,73 @@ export function getInvoiceStatusInfo(invoice) {
 // ---------------------------------------------------------------------------
 
 /**
+ * 後端寫進 wallet.transaction.description 的固定英文句型（存的是資料、不經翻譯）→
+ * 顯示時換成可翻譯的文字。舊紀錄同樣適用；不認得的句子原樣回傳。
+ * 句型來源：sh_subscription_fix._settle_on_entity_delete（"<reason> refund: <plan>"）、
+ * account_move._pay_from_wallet、loyalty_card、wallet_topup、各 change-plan controller。
+ */
+const TXN_DESCRIPTION_PATTERNS = [
+  [/^Service deleted refund: (.*)$/s, (m) => _t("Service deleted refund: %(plan)s", { plan: m[1] })],
+  [/^Smart Home deleted refund: (.*)$/s, (m) => _t("Smart Home deleted refund: %(plan)s", { plan: m[1] })],
+  [/^Security Access deleted refund: (.*)$/s, (m) => _t("Security Access deleted refund: %(plan)s", { plan: m[1] })],
+  [/^Provisioning rejected \((.*?)\) refund: (.*)$/s,
+    (m) => _t("Provisioning rejected (%(code)s) refund: %(plan)s", { code: m[1], plan: m[2] })],
+  [/^Plan change refund: (.*)$/s, (m) => _t("Plan change refund: %(plan)s", { plan: m[1] })],
+  [/^Subscription invoice: (.*)$/s, (m) => _t("Subscription invoice: %(invoice)s", { invoice: m[1] })],
+  [/^Invoice payment: (.*)$/s, (m) => _t("Invoice payment: %(invoice)s", { invoice: m[1] })],
+  [/^Gift card redeemed: (.*)$/s, (m) => _t("Gift card redeemed: %(code)s", { code: m[1] })],
+  [/^Top-up: (.*)$/s, (m) => _t("Top-up: %(plan)s", { plan: m[1] })],
+  [/^Wallet Top-up \(auto\)$/, () => _t("Wallet top-up (auto)")],
+  [/^Wallet Top-up$/, () => _t("Wallet top-up")],
+];
+
+export function translateTxnDescription(description) {
+  if (!description) return "";
+  for (const [re, render] of TXN_DESCRIPTION_PATTERNS) {
+    const m = description.match(re);
+    if (m) return render(m);
+  }
+  return description;
+}
+
+/**
+ * 錢包動態的動作（dashboard controller 的 _ACTION_MAP 值）→ 顯示文字。
+ * @param {string} action
+ * @returns {string}
+ */
+export function getWalletActionLabel(action) {
+  const labels = {
+    topup: _t("topped up"),
+    subscription_charge: _t("subscription charge"),
+    refund: _t("refund"),
+    adjustment: _t("adjustment"),
+    card_charge: _t("card charge"),
+    card_bind: _t("card added"),
+    card_unbind: _t("card removed"),
+  };
+  return labels[action] || (action || "").replaceAll("_", " ");
+}
+
+/**
+ * 錢包動態的對象。後端在找不到方案名時回固定英文（"Wallet"、"Subscription"，
+ * 或交易類型的 title case，見 dashboard controller._derive_target）。
+ * @param {string} target
+ * @returns {string}
+ */
+export function getWalletTargetLabel(target) {
+  const labels = {
+    Wallet: _t("Wallet"),
+    Subscription: _t("Subscription"),
+    Refund: _t("Refund"),
+    Adjustment: _t("Adjustment"),
+    "Card Charge": _t("Card charge"),
+    "Card Bind": _t("Card added"),
+    "Card Unbind": _t("Card removed"),
+  };
+  return labels[target] || target || "";
+}
+
+/**
  * Render a top-up description with bonus breakdown when applicable.
  *
  * For top-up transactions that include a bonus, expands the stored
@@ -222,11 +289,11 @@ export function getInvoiceStatusInfo(invoice) {
 export function formatTopupDescription(txn) {
   if (!txn) return "";
   const bonus = txn.bonus_amount || 0;
-  if (bonus <= 0) return txn.description || "";
+  if (bonus <= 0) return translateTxnDescription(txn.description);
   const base = txn.base_amount || 0;
   const total = base + bonus;
   // Defensive against a falsy description: avoid interpolating literal "undefined".
-  const desc = txn.description || "";
+  const desc = translateTxnDescription(txn.description);
   return _t("%(description)s + %(bonus)s bonus = %(total)s pts", {
     description: desc,
     bonus: formatFloat(bonus, { digits: [16, 0] }),
