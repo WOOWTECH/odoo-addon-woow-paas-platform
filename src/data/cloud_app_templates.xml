@@ -2490,8 +2490,10 @@
              chart：mcp-server **0.1.7**（woow-paas-charts main 3746cd6，#1530 以非 root 執行：runAsNonRoot、uid／gid 1000、
              保留 fsGroup 1000）。本 image 以 uid／gid 1000 執行，需要這版非 root chart；其他 mcp-* 範本仍釘 0.1.5、由 #1530
              另行改釘，本範本不跟它們對齊。
-             隱藏（is_hidden=True）：等沙盒開通實測（同工作區預填網址、專用帳號＋應用程式密碼唯讀可用、Tools 頁開啟寫入、
-             錯誤密碼停止重試、log 不含 token／密碼）後另開 PR 只翻 is_hidden（實例層不設），與 mcp-litellm 同流程。
+             上架（is_hidden=False，2026-10-08）：#1587 以隱藏卡片進 seed；沙盒開通實測 30＋1 項全過（chart 0.1.7＋本範本 values、
+             uid 1000、預填公開網址、出廠唯讀 5 支、錯誤密碼停止重試且存新密碼立即恢復、Tools 頁開啟後 9 支含 ETag 防覆寫、
+             /private_<token>/mcp 結尾斜線不通、log 不含 token／密碼；另以 Claude Code 經 /private_<token>/mcp 實跑 9 支工具）
+             後只翻 is_hidden（實例層從未設），與 mcp-litellm 同流程。
              守線：test_mcp_nextcloud_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpNextcloudTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入公開網址）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
@@ -2537,7 +2539,7 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">config_json</field>
             <field name="post_deploy_init_type">none</field>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
