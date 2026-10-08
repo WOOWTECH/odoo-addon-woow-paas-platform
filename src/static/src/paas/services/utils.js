@@ -1,5 +1,6 @@
 /** @odoo-module **/
 
+import { _t } from "@web/core/l10n/translation";
 import { formatUserDate } from "../utils/datetime_helpers";
 
 /**
@@ -30,6 +31,22 @@ export function getRoleBadgeClass(role) {
         [ROLES.GUEST]: "o_woow_badge_gray",
     };
     return classes[role] || "o_woow_badge_gray";
+}
+
+/**
+ * 角色徽章的顯示文字。後端回的是代碼（owner／admin／user／guest），直接 t-esc 會在
+ * 中文介面露出英文小寫；這裡統一轉成可翻譯的標籤（與邀請成員視窗用同一組 msgid）。
+ * @param {string} role - The role value (owner, admin, user, guest)
+ * @returns {string} Translated role label
+ */
+export function getRoleLabel(role) {
+    const labels = {
+        [ROLES.OWNER]: _t("Owner"),
+        [ROLES.ADMIN]: _t("Admin"),
+        [ROLES.USER]: _t("User"),
+        [ROLES.GUEST]: _t("Guest"),
+    };
+    return labels[role] || role;
 }
 
 /**
