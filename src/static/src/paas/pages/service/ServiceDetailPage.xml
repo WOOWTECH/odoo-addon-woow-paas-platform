@@ -281,15 +281,6 @@
                     <OverviewTab
                         t-if="currentTab === 'overview'"
                         service="service"/>
-                    <!-- LiteLLM「ChatGPT 訂閱」（chart 0.2.0 起）：gate 見 showChatgptSubscriptionCard
-                         （鏡射 template.chatgpt_subscription_supported，不判 slug）。t-key 讓視窗關閉後
-                         重掛、重讀一次 status——卡片不跟頁面輪詢。 -->
-                    <ChatGPTSubscriptionCard
-                        t-if="currentTab === 'overview' and showChatgptSubscriptionCard"
-                        t-key="state.chatgptCardKey"
-                        workspaceId="props.workspaceId"
-                        serviceId="props.serviceId"
-                        onConnect.bind="openChatgptSubscription"/>
                     <ConfigurationTab
                         t-if="currentTab === 'configuration'"
                         service="service"
@@ -395,13 +386,6 @@
                 service="service or undefined"
                 onClose.bind="hideAdminCredentials"
                 onSaved.bind="onAdminCredentialsSaved"/>
-
-            <ChatGPTSubscriptionModal
-                t-if="state.showChatgptSubscriptionModal"
-                workspaceId="props.workspaceId"
-                serviceId="props.serviceId"
-                initialPending="state.chatgptPending or undefined"
-                onClose.bind="closeChatgptSubscription"/>
 
             <OneTimeCredentialsModal
                 t-if="state.oneTimeCredentials"
