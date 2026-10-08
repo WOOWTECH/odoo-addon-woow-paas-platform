@@ -8,7 +8,7 @@
 都不符合，掉進最後的 hermes 預設分支。
 
 修法：payload 的 template 子物件（服務 payload 與 Reset 回應兩處）鏡射模板的
-`admin_password_carrier`，前端以 ``config_json``（＝has_admin_gui 的 8 個 mcp-*）走 MCP 專用文案；
+`admin_password_carrier`，前端以 ``config_json``（＝has_admin_gui 的 mcp-server 家族，見 MCP_SEEDS）走 MCP 專用文案；
 一次性交付另帶 `admin_url`（管理頁＝服務對外根位址，網址由後端給、前端不拼）。
 """
 from unittest.mock import MagicMock, patch
@@ -22,6 +22,7 @@ from ..models.cloud_service import _internal_provision
 MCP_SEEDS = (
     'cloud_app_mcp_hermes', 'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage', 'cloud_app_mcp_n8n',
     'cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign', 'cloud_app_mcp_litellm',
+    'cloud_app_mcp_nextcloud',
 )
 
 

@@ -56,6 +56,8 @@ values = svc.helm_values            # template 預設 + user config（create 時
          │                            LiteLLM → pi-agent／code-server／open-design／hermes-agent
          │                              `llmGateway.baseUrl`（帶 /v1）、mcp-litellm
          │                              `config.nonSensitive.connection.base_url`（不帶）
+         │                            Nextcloud → mcp-nextcloud `config.nonSensitive.connection.base_url`
+         │                              （唯一給**公開** https 網址的提供者：`_public_base_url()`）
          └─ + odoo addon selection   （initContainer + addons_path）
 ```
 
@@ -64,7 +66,8 @@ values = svc.helm_values            # template 預設 + user config（create 時
 同工作區（且同 namespace）、`state='running'` 的提供者，多個時取 `create_date`／`id` 最小者
 並記 log；沒有就 no-op（不寫鍵，chart 預設補位）。Service 名鏡射提供者 chart 的
 `<chart>.fullname`、port 讀 `_WORKSPACE_PROVIDERS` 指定的 values 路徑，Service 名／namespace
-必須是 DNS label。`helm_values` 裡已有非空值（管理員刻意設的，例如公開 https 網址）時尊重它、
+必須是 DNS label（標了 `public_url` 的提供者——目前只有 Nextcloud——改給它的 `_public_base_url()`，
+因為 Nextcloud 以 trusted_domains／overwritehost 拒絕叢集內網址）。`helm_values` 裡已有非空值（管理員刻意設的，例如公開 https 網址）時尊重它、
 不覆寫（記 info log，不記網址）。**只帶網址**：preauth key、LiteLLM virtual key、`omnigent
 login` 都由租戶自己在提供者後台建立後貼進消費端，平台絕不跨服務傳秘密。下文以 Omnigent 為例，
 其他提供者同理（tailscale chart 的 `<fullname>-runtime` ConfigMap、四個 LiteLLM 消費端 chart 的

@@ -1,7 +1,8 @@
 """Seed assertions for the mcp-server chart family of cloud service templates.
 
-家族成員（8 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
-hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm（2026-10-05 以隱藏範本進 seed，10-07 公開上架）。
+家族成員（9 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
+hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm（2026-10-05 以隱藏範本進 seed，10-07 公開上架）／
+nextcloud（以隱藏範本進 seed，沙盒實測後上架）。
 
 ## 為什麼是兩層 mixin（#686）
 
@@ -89,11 +90,11 @@ class _McpServerFamilyAssertions:
     PROD_M = None
     IMAGE_REPO_SUFFIX = None  # e.g. 'odoo-mcp-admin'
     APP = None  # helm values `app:` selector, e.g. 'odoo'
-    EXPECT_ENV_PREFIX = ''  # odoo/n8n/k8s/vk/opendesign 空；hermes 用 'HERMES_'、litellm 用 'LITELLM_MCP_'
+    EXPECT_ENV_PREFIX = ''  # odoo/n8n/k8s/vk/opendesign 空；hermes 用 'HERMES_'、litellm 用 'LITELLM_MCP_'、nextcloud 用 'NEXTCLOUD_MCP_'
     # seed 覆寫的 config.nonSensitive.mcp_server.command。**None＝刻意不覆寫、
     # 吃 chart 預設**（只有 pilot hermes 是這個形態）。
     EXPECT_MCP_COMMAND = None
-    # 上架與否；目前 8 個成員都是 True（is_hidden 是曝光層，與本欄正交：odoo-manage 已下架仍 True），欄位保留給未來待上架的成員。
+    # 上架與否；目前 9 個成員都是 True（is_hidden 是曝光層，與本欄正交：odoo-manage 已下架仍 True），欄位保留給未來待上架的成員。
     EXPECT_ACTIVE = True
     # 月繳／年繳定價。hermes 是 1500／15000（#330 定價重定），其餘齊一 3000／24000。
     EXPECT_PLAN_PRICE_M = 3000
@@ -500,6 +501,26 @@ class TestMcpLitellmTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     APP = 'litellm'
     EXPECT_ENV_PREFIX = 'LITELLM_MCP_'
     EXPECT_MCP_COMMAND = 'litellm-mcp-server'
+
+
+class TestMcpNextcloudTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """mcp-nextcloud template：以一個 Nextcloud 帳號（app password）工作的 MCP，launcher 直跑 Streamable HTTP。
+
+    envPrefix 非空（``NEXTCLOUD_MCP_``：connection 鍵 base_url／username／app_password 經前綴注入子行程）。
+    唯一釘 chart 0.1.7（#1530 非 root）的成員——image 以 uid／gid 1000 執行。出廠唯讀（由 app 自己做）、
+    同工作區 Nextcloud 公開網址注入、隱藏到沙盒實測後等本 app 專屬守線在 test_mcp_nextcloud_seed.py；
+    這裡只守家族不變式。``is_hidden=True`` 不影響 ``is_active``（曝光層與上架旗標正交）。
+    """
+
+    SLUG = 'mcp-nextcloud'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_nextcloud'
+    PLAN_M = 'woow_paas_platform.plan_mcp_nextcloud_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_nextcloud_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_nextcloud_monthly'
+    IMAGE_REPO_SUFFIX = 'nextcloud-mcp-admin'
+    APP = 'nextcloud'
+    EXPECT_ENV_PREFIX = 'NEXTCLOUD_MCP_'
+    EXPECT_MCP_COMMAND = 'nextcloud-mcp-server'
 
 
 def _all_subclasses(cls):

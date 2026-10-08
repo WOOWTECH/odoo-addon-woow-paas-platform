@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""同工作區服務網址注入（PLAN §10.2）：Headscale → tailscale、LiteLLM → 四個 agent／IDE＋mcp-litellm。
+"""同工作區服務網址注入（PLAN §10.2）：Headscale → tailscale、LiteLLM → 四個 agent／IDE＋mcp-litellm、
+Nextcloud → mcp-nextcloud（公開網址）。
 
 #1340 的 Omnigent 網址注入泛化成 ``_workspace_provider_url(provider_slug)``＋
 ``_WORKSPACE_URL_INJECTORS``（Omnigent 自己的行為由 ``test_omnigent_server_url_injection``
@@ -12,8 +13,11 @@
   running 的 LiteLLM：``http://<release>-litellm.<ns>.svc.cluster.local:4000/v1``；
   mcp-litellm（``cloud_app_mcp_litellm``，mcp-server chart）的 ``config.nonSensitive.connection.base_url``
   同一台但**不帶** ``/v1``
+- mcp-nextcloud（``cloud_app_mcp_nextcloud``，mcp-server chart）的 ``config.nonSensitive.connection.base_url``
+  ＝同工作區 running 的 Nextcloud 的**公開** https 網址（``_public_base_url()``，與 Nextcloud chart 收到的
+  ``nextcloud.publicUrl`` 同一個值）：叢集內網址過不了 Nextcloud 的 trusted_domains／overwrite 檢查
 
-共同規則：只帶網址（絕不帶 preauth key／virtual key／master key）；沒有提供者、非 running、
+共同規則：只帶網址（絕不帶 preauth key／virtual key／master key／app password）；沒有提供者、非 running、
 跨工作區／跨 namespace ⇒ 不寫鍵；多台取最早建立；helm_values 已有非空值 ⇒ 尊重；組裝唯讀；
 reset 路徑與 deploy 同一條組裝，前後只差注入的那條路徑（chart 端把它放在不入 pod template
 的 runtime ConfigMap，所以 15 秒的 reset 不會等新 pod）。
@@ -30,6 +34,7 @@ from odoo.tests.common import TransactionCase, tagged
 from ..models.cloud_service import (
     _LITELLM_BASE_URL_SUFFIXES,
     _LITELLM_BASE_URL_VALUE_PATHS,
+    _NEXTCLOUD_BASE_URL_VALUE_PATHS,
     _WORKSPACE_HEADSCALE_URL_VALUE_PATHS,
     _WORKSPACE_PROVIDERS,
     _WORKSPACE_URL_INJECTORS,
@@ -42,6 +47,12 @@ _OPERATOR_CLIENT = (
     'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
 )
 LLM_CONSUMERS = ('pi-agent', 'code-server', 'open-design', 'hermes-agent')
+_PAAS_DOMAIN = 'wire-url.invalid'
+_NC_PATH = ('config', 'nonSensitive', 'connection', 'base_url')
+
+
+def _nc_url(subdomain, domain=_PAAS_DOMAIN):
+    return 'https://%s.%s' % (subdomain, domain)
 
 
 def _hs_url(service, namespace=_NS, port=8080):
@@ -106,6 +117,22 @@ class TestInjectWorkspaceServiceUrl(TransactionCase):
             'connection': {'base_url': self.LL},
         })
 
+    def test_nextcloud_url_goes_to_mcp_nextcloud_only(self):
+        """Nextcloud 的公開網址只進 mcp-nextcloud 的 connection.base_url，不加後綴、不動其他鍵。"""
+        nc = 'https://svc-c.paas.example'
+        out = self._inject(
+            {'config': {'nonSensitive': {'mcp_server': {'port': 8000}}}},
+            'mcp-nextcloud', 'nextcloud', nc)
+        self.assertEqual(out['config']['nonSensitive'], {
+            'mcp_server': {'port': 8000},
+            'connection': {'base_url': nc},
+        })
+        for slug in ('nextcloud', 'mcp-litellm', 'pi-agent', 'tailscale', 'n8n', 'odoo'):
+            self.assertEqual(self._inject({'x': 1}, slug, 'nextcloud', nc), {'x': 1}, slug)
+        self.assertEqual(
+            self._inject({'x': 1}, 'mcp-nextcloud', 'litellm', self.LL), {'x': 1},
+            'mcp-nextcloud 不是 LiteLLM 的消費端')
+
     def test_litellm_url_not_for_other_slugs(self):
         for slug in ('tailscale', 'litellm', 'headscale', 'omnigent', 'n8n', 'odoo'):
             self.assertEqual(
@@ -152,6 +179,14 @@ class TestInjectWorkspaceServiceUrl(TransactionCase):
             self.assertNotIn(provider, table, '提供者不會注入自己')
         self.assertEqual(_WORKSPACE_HEADSCALE_URL_VALUE_PATHS,
                          {'tailscale': [('tailscale', 'workspaceHeadscaleUrl')]})
+        self.assertEqual(_NEXTCLOUD_BASE_URL_VALUE_PATHS, {'mcp-nextcloud': [_NC_PATH]})
+        self.assertEqual(
+            {slug for slug, p in _WORKSPACE_PROVIDERS.items() if p.get('public_url')}, {'nextcloud'},
+            '公開網址的提供者目前只有 Nextcloud；其他提供者給叢集內網址')
+        for slug, provider in _WORKSPACE_PROVIDERS.items():
+            if not provider.get('public_url'):
+                self.assertIn('port_path', provider, slug)
+                self.assertIn('default_port', provider, slug)
 
 
 @tagged('post_install', '-at_install')
@@ -168,8 +203,11 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
         self.tpl = {
             slug: self._tpl(slug) for slug in (
                 'headscale', 'litellm', 'omnigent', 'tailscale', 'mcp-litellm', 'n8n',
+                'nextcloud', 'mcp-nextcloud',
             ) + LLM_CONSUMERS
         }
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', _PAAS_DOMAIN)
         self.ts = self._svc('tailscale', 'svc-ts000001', helm_values={
             'tailscale': {'controlPlane': 'workspace', 'authKey': 'hskey-auth-tenant'},
         })
@@ -187,7 +225,7 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
         return self.Template.create(vals)
 
     def _svc(self, slug, release, ws=None, namespace=_NS, state='running', helm_values=None,
-             template=None):
+             template=None, subdomain=None):
         svc = self.Service.create({
             'name': release,
             'workspace_id': (ws or self.ws).id,
@@ -195,6 +233,7 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
             'helm_release_name': release,
             'helm_namespace': namespace,
             'helm_values': json.dumps(helm_values or {}),
+            'subdomain': subdomain or False,
         })
         svc.write({'state': state})
         return svc
@@ -204,6 +243,13 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
 
     def _litellm(self, release='svc-ll000001', **kw):
         return self._svc('litellm', release, **kw)
+
+    def _nextcloud(self, release='svc-nc000001', **kw):
+        kw.setdefault('subdomain', release)
+        return self._svc('nextcloud', release, **kw)
+
+    def _nc_injected(self, svc):
+        return _get(self._values(svc), _NC_PATH)
 
     def _set_create_date(self, svc, ts):
         self.env.cr.execute(
@@ -282,6 +328,75 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
         self.assertEqual(after['config']['requiredFields'], ['admin_password'])
         self.assertFalse(after['config'].get('sensitive'))
         self.assertNotIn('master_key', json.dumps(after), '只帶網址，絕不帶金鑰')
+
+    def test_real_mcp_nextcloud_template_gets_only_the_public_url_on_top_of_its_seed(self):
+        """真範本（seed 的 cloud_app_mcp_nextcloud）：開通時 helm_values＝範本預設。同工作區有 running
+        Nextcloud ⇒ 組裝結果只多 ``connection.base_url`` 一條，值是 Nextcloud 的**公開** https 網址
+        （＝它自己 chart 收到的 nextcloud.publicUrl）；啟動契約、envPrefix、requiredFields 原樣，任何地方都不帶
+        app password／username。沒有 Nextcloud ⇒ 不寫 connection（租戶自己填）。"""
+        real = self.env.ref('woow_paas_platform.cloud_app_mcp_nextcloud')
+        seed = json.loads(real.helm_default_values)
+        mcp = self._svc('mcp-nextcloud', 'svc-mcpnrea1', template=real, helm_values=seed,
+                        subdomain='svc-mcpnrea1')
+        before = self._values(mcp)
+        self.assertNotIn('connection', before['config']['nonSensitive'])
+        nc = self._nextcloud()
+        after = self._values(mcp)
+        b, a = _flatten(before), _flatten(after)
+        self.assertEqual({k for k in set(a) | set(b) if a.get(k) != b.get(k)}, {_NC_PATH})
+        self.assertEqual(a[_NC_PATH], _nc_url('svc-nc000001'))
+        self.assertEqual(a[_NC_PATH], nc._public_base_url())
+        self.assertEqual(a[_NC_PATH], self._values(nc)['nextcloud']['publicUrl'],
+                         '與 Nextcloud 自己 chart 收到的公開網址（trusted_domains／overwritehost）同一個值')
+        self.assertNotIn('svc.cluster.local', a[_NC_PATH], '叢集內網址過不了 trusted_domains')
+        self.assertEqual(after['config']['nonSensitive']['connection'], {'base_url': a[_NC_PATH]},
+                         '只帶網址：username／app_password 由租戶自己在 Connection 頁填')
+        self.assertEqual(after['config']['nonSensitive']['mcp_server'],
+                         seed['config']['nonSensitive']['mcp_server'])
+        self.assertEqual(after['envPrefix'], 'NEXTCLOUD_MCP_')
+        self.assertEqual(after['config']['requiredFields'], ['admin_password'])
+        self.assertFalse(after['config'].get('sensitive'))
+        dumped = json.dumps(after)
+        for needle in ('app_password', 'username'):
+            self.assertNotIn(needle, dumped, '只帶網址，絕不帶帳密')
+
+    def test_mcp_nextcloud_gets_nothing_without_a_usable_nextcloud(self):
+        """沒有 Nextcloud、非 running、別的工作區、沒有 subdomain（組不出公開網址）⇒ 不寫 connection。"""
+        mcp = self._svc('mcp-nextcloud', 'svc-mcpn0001', helm_values={
+            'config': {'nonSensitive': {'mcp_server': {'port': 8000}}}})
+        self.assertIsNone(_get(self._values(mcp), ('config', 'nonSensitive', 'connection')))
+        self._nextcloud(release='svc-ncother1', ws=self.other_ws, namespace='paas-ws-other001')
+        nc = self._nextcloud(state='deploying')
+        for state in ('pending', 'deploying', 'initializing', 'error',
+                      'upgrading', 'suspended', 'deleting'):
+            nc.write({'state': state})
+            self.assertIsNone(self._nc_injected(mcp), state)
+        nc.write({'state': 'running', 'subdomain': False})
+        self.assertIsNone(self._nc_injected(mcp), '沒有 subdomain 就沒有公開網址可給')
+        self.assertIsNone(_get(self._values(mcp), ('config', 'nonSensitive', 'connection')))
+
+    def test_mcp_nextcloud_several_nextclouds_pick_oldest_and_explicit_wins(self):
+        """多台取最早建立（同其他提供者）；helm_values 已有非空 base_url ⇒ 尊重、不覆寫。"""
+        newer = self._nextcloud(release='svc-ncnewer1')
+        older = self._nextcloud(release='svc-ncolder1')
+        self._set_create_date(newer, '2026-10-04 12:00:00')
+        self._set_create_date(older, '2026-09-01 12:00:00')
+        mcp = self._svc('mcp-nextcloud', 'svc-mcpn0001')
+        with self.assertLogs(_LOGGER, level=logging.INFO) as logs:
+            self.assertEqual(self._nc_injected(mcp), _nc_url('svc-ncolder1'))
+        self.assertTrue(any('2 running Nextcloud' in line and str(older.id) in line
+                            for line in logs.output), logs.output)
+        explicit = 'https://cloud.example.com'
+        mine = self._svc('mcp-nextcloud', 'svc-mcpn0002', helm_values={
+            'config': {'nonSensitive': {'connection': {'base_url': explicit}}}})
+        self.assertEqual(self._nc_injected(mine), explicit)
+
+    def test_nextcloud_url_is_not_given_to_other_charts(self):
+        """Nextcloud 不是其他 chart 的提供者；mcp-litellm 不會拿到 Nextcloud 的網址。"""
+        self._nextcloud()
+        for slug in ('mcp-litellm', 'pi-agent', 'n8n', 'nextcloud'):
+            svc = self._svc(slug, 'svc-%s' % slug[:8].replace('-', '0') + 'x')
+            self.assertIsNone(_get(self._values(svc), ('config', 'nonSensitive', 'connection')), slug)
 
     def test_code_server_gets_both_omnigent_and_litellm(self):
         """一個 chart 可同時是兩個注入器的消費端，互不干擾。"""
@@ -557,6 +672,18 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
         self.assertEqual(_LITELLM_BASE_URL_VALUE_PATHS['mcp-litellm'],
                          [('config', 'nonSensitive', 'connection', 'base_url')],
                          'apps/litellm 的 connection 鍵是 base_url（→ LITELLM_MCP_BASE_URL）')
+        mcp_nc = self.env.ref('woow_paas_platform.cloud_app_mcp_nextcloud')
+        self.assertEqual(seeded('mcp-nextcloud'), mcp_nc)
+        self.assertTrue(mcp_nc.helm_chart_name.endswith('/mcp-server'), mcp_nc.helm_chart_name)
+        self.assertNotIn('connection', json.loads(mcp_nc.helm_default_values)['config']['nonSensitive'],
+                         '網址交給注入；seed 寫死會蓋掉它（explicit value wins）')
+        self.assertEqual(_NEXTCLOUD_BASE_URL_VALUE_PATHS['mcp-nextcloud'], [_NC_PATH],
+                         'apps/nextcloud 的 connection 鍵是 base_url（→ NEXTCLOUD_MCP_BASE_URL）')
+        nc = self.env.ref('woow_paas_platform.cloud_app_nextcloud')
+        self.assertEqual(seeded('nextcloud'), nc)
+        self.assertEqual(nc.helm_chart_name.rsplit('/', 1)[-1],
+                         _WORKSPACE_PROVIDERS['nextcloud']['chart'])
+        self.assertTrue(_WORKSPACE_PROVIDERS['nextcloud']['public_url'])
         hs = self.env.ref('woow_paas_platform.cloud_app_headscale')
         self.assertEqual(hs.helm_chart_name.rsplit('/', 1)[-1],
                          _WORKSPACE_PROVIDERS['headscale']['chart'])

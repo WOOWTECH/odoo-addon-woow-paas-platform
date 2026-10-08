@@ -2502,6 +2502,64 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
+        <!-- MCP：Nextcloud（mcp-nextcloud）：照抄 mcp-litellm 的單一方案——月 3000／年 24000、試用 7 天、
+             無 +1access 變體、無 cs_*（規格走範本 min_*＋helm_default_values，同 plan_mcp_k8s）。
+             taxes_id 明寫空（#366）。範本先隱藏（is_hidden=True），方案先掛好（沒掛 plan 會被 _create_service 擋）。 -->
+        <record id="plan_mcp_nextcloud_monthly" model="sh.subscription.plan">
+            <field name="name">MCP：Nextcloud 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">3000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+        <record id="plan_mcp_nextcloud_yearly" model="sh.subscription.plan">
+            <field name="name">MCP：Nextcloud 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">24000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+        <record id="product_mcp_nextcloud_monthly" model="product.product">
+            <field name="name">MCP：Nextcloud 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">3000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_nextcloud_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+        <record id="product_mcp_nextcloud_yearly" model="product.product">
+            <field name="name">MCP：Nextcloud 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">24000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_mcp_nextcloud_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
              的 plan_ha_paas_monthly / product_ha_paas_monthly（自帶 storefront_hidden=True），
              本 PR 原有的 plan_ha_paas / product_ha_paas 已移除避免重複 0 元 HA seed。
