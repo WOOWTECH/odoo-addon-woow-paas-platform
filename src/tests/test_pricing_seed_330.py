@@ -44,10 +44,10 @@ EXPECTED_PLANS = {
     'plan_mcp_hermes_t3_monthly': (6000, 'Hermes MCP 伺服器 T3（6–10 人）月繳'),
     'plan_mcp_hermes_t3_yearly': (60000, 'Hermes MCP 伺服器 T3（6–10 人）年繳'),
     # SH — Connect（月 150 不動、年 1500→1200）／+MCP（400→300、4000→2400）
-    'plan_smarthome_monthly': (150, '智慧家庭連線 月繳'),
-    'plan_smarthome_yearly': (1200, '智慧家庭連線 年繳'),
-    'plan_smarthome_mcp_monthly': (300, '智慧家庭＋MCP 月繳'),
-    'plan_smarthome_mcp_yearly': (2400, '智慧家庭＋MCP 年繳'),
+    'plan_smarthome_monthly': (150, '智慧家庭連結訂閱服務（方案一：對外網址）月繳'),
+    'plan_smarthome_yearly': (1200, '智慧家庭連結訂閱服務（方案一：對外網址）年繳'),
+    'plan_smarthome_mcp_monthly': (300, '智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）月繳'),
+    'plan_smarthome_mcp_yearly': (2400, '智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）年繳'),
     # SA — 6 組／10 組（改名＋reprice；quota 隨 routes、年繳 ×9）
     'plan_security_access_entry_monthly': (1200, '遠端安全連結訂閱服務（6 組）'),
     'plan_security_access_entry_yearly': (10800, '遠端安全連結訂閱服務（6 組）'),

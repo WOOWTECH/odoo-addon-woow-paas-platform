@@ -13,14 +13,32 @@ noupdate=1 ⇒ 既有 DB 只能靠 migration 改（18.0.1.0.214）。新裝直�
 
 商品名沿用全平台慣例「方案名＋' Subscription'」（例：Odoo 訂閱服務（1-3 人） Subscription），
 HA PaaS 免費版例外（原本就沒有後綴）。
+
+AC 席數變體（262 方案＋262 商品，subscription_products_variants.xml，同為 noupdate=1）：
+名稱由 generator 產生，規則改由 `scripts/seed/generate_plan_variants.display_name()`
+套在輸出上——「+Naccess月繳」→「+N 存取席位 月繳」、「MCP Server」→「MCP 伺服器」。
+既有 DB 用同一條規則（`_variant_display_name`）改本模組 xmlid 的方案／商品；規則只會
+把舊格式轉成新格式，對已是新格式的名稱是 no-op（冪等）。
 """
 import logging
+import re
 
 from odoo import models
 
 _logger = logging.getLogger(__name__)
 
 MOD = 'woow_paas_platform'
+
+
+_VARIANT_SEAT = re.compile(r'\+(\d+)access(月|年)繳')
+
+
+def _variant_display_name(name):
+    """與 generator 的 display_name() 同一條規則（不錨定行尾：商品名後面還有 ' Subscription'）。"""
+    if not name:
+        return name
+    name = _VARIANT_SEAT.sub(lambda m: '+%s 存取席位 %s繳' % (m.group(1), m.group(2)), name)
+    return name.replace('MCP Server', 'MCP 伺服器')
 
 
 class ShSubscriptionPlanNamesZhTw(models.Model):
@@ -36,14 +54,14 @@ class ShSubscriptionPlanNamesZhTw(models.Model):
             'AnythingLLM Monthly Subscription', 'AnythingLLM 月繳 Subscription'),
         'anythingllm_yearly': ('AnythingLLM Yearly', 'AnythingLLM 年繳',
             'AnythingLLM Yearly Subscription', 'AnythingLLM 年繳 Subscription'),
-        'smarthome_monthly': ('Smart Home Connect Monthly', '智慧家庭連線 月繳',
-            'Smart Home Connect Monthly Subscription', '智慧家庭連線 月繳 Subscription'),
-        'smarthome_yearly': ('Smart Home Connect Yearly', '智慧家庭連線 年繳',
-            'Smart Home Connect Yearly Subscription', '智慧家庭連線 年繳 Subscription'),
-        'smarthome_mcp_monthly': ('Smart Home + MCP Monthly', '智慧家庭＋MCP 月繳',
-            'Smart Home + MCP Monthly Subscription', '智慧家庭＋MCP 月繳 Subscription'),
-        'smarthome_mcp_yearly': ('Smart Home + MCP Yearly', '智慧家庭＋MCP 年繳',
-            'Smart Home + MCP Yearly Subscription', '智慧家庭＋MCP 年繳 Subscription'),
+        'smarthome_monthly': ('Smart Home Connect Monthly', '智慧家庭連結訂閱服務（方案一：對外網址）月繳',
+            'Smart Home Connect Monthly Subscription', '智慧家庭連結訂閱服務（方案一：對外網址）月繳 Subscription'),
+        'smarthome_yearly': ('Smart Home Connect Yearly', '智慧家庭連結訂閱服務（方案一：對外網址）年繳',
+            'Smart Home Connect Yearly Subscription', '智慧家庭連結訂閱服務（方案一：對外網址）年繳 Subscription'),
+        'smarthome_mcp_monthly': ('Smart Home + MCP Monthly', '智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）月繳',
+            'Smart Home + MCP Monthly Subscription', '智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）月繳 Subscription'),
+        'smarthome_mcp_yearly': ('Smart Home + MCP Yearly', '智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）年繳',
+            'Smart Home + MCP Yearly Subscription', '智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）年繳 Subscription'),
         'ha_paas_monthly': ('HA PaaS Free', 'HA PaaS 免費版',
             'HA PaaS Free', 'HA PaaS 免費版'),
         'mcp_hermes_monthly': ('Hermes MCP Server T1（1–3 人）Monthly', 'Hermes MCP 伺服器 T1（1–3 人）月繳',
@@ -103,6 +121,25 @@ class ShSubscriptionPlanNamesZhTw(models.Model):
                     updates[lang] = pnew
             if 'en_US' not in updates and tmpl.with_context(lang='en_US').name == pold:
                 updates['en_US'] = pnew
+            if updates:
+                tmpl.update_field_translations('name', updates)
+                products += 1
+        # AC 席數變體：本模組 xmlid 的方案／商品，名稱仍是舊格式者套同一條規則。
+        imd = self.env['ir.model.data'].sudo()
+        plan_ids = imd.search([('module', '=', MOD), ('model', '=', 'sh.subscription.plan')]).mapped('res_id')
+        for plan in self.sudo().browse(plan_ids).exists():
+            new = _variant_display_name(plan.name)
+            if new != plan.name:
+                plan.write({'name': new})
+                plans += 1
+        prod_ids = imd.search([('module', '=', MOD), ('model', '=', 'product.product')]).mapped('res_id')
+        for tmpl in self.env['product.product'].sudo().browse(prod_ids).exists().mapped('product_tmpl_id'):
+            updates = {}
+            for lang in set(langs) | {'en_US'}:
+                cur = tmpl.with_context(lang=lang).name
+                new = _variant_display_name(cur)
+                if new != cur:
+                    updates[lang] = new
             if updates:
                 tmpl.update_field_translations('name', updates)
                 products += 1
