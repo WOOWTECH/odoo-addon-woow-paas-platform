@@ -20636,6 +20636,24 @@ msgid "Set when the service was created; it cannot be changed afterwards."
 msgstr "開通服務時設定，之後無法修改。"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "To change the administrator password, use Admin Credentials at the top of this page."
+msgstr "要變更管理員密碼，請使用本頁上方的「管理員帳密」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "To change the administrator password, use Reset Admin Password at the top of this page."
+msgstr "要變更管理員密碼，請使用本頁上方的「重設管理員密碼」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/config/HelmValueForm.xml:0
+msgid "This setting can only be chosen now; it cannot be changed after the service is created."
+msgstr "此設定只能在現在選擇，開通服務後無法修改。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__app_admin_reset_kind__omnigent_exec
 msgid "Omnigent administrator (operator exec)"
 msgstr "Omnigent 管理員（operator exec）"

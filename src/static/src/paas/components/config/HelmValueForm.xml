@@ -92,6 +92,13 @@
                                 </p>
                             </t>
 
+                            <!-- #1479：只在開通時生效的設定（spec create_only，嚴格 true；與
+                                 ConfigurationTab.isCreateOnlySpec 同一判準）：建立頁先講清楚，
+                                 開通後配置頁唯讀（#1561）。 -->
+                            <p t-if="spec.create_only === true" class="o_woow_field_hint">
+                                This setting can only be chosen now; it cannot be changed after the service is created.
+                            </p>
+
                             <!-- Error Message -->
                             <t t-if="hasError(spec.key)">
                                 <p class="o_woow_field_error">
@@ -190,6 +197,13 @@
                                     <t t-esc="spec.description"/>
                                 </p>
                             </t>
+
+                            <!-- #1479：只在開通時生效的設定（spec create_only，嚴格 true；與
+                                 ConfigurationTab.isCreateOnlySpec 同一判準）：建立頁先講清楚，
+                                 開通後配置頁唯讀（#1561）。 -->
+                            <p t-if="spec.create_only === true" class="o_woow_field_hint">
+                                This setting can only be chosen now; it cannot be changed after the service is created.
+                            </p>
 
                             <!-- Error Message -->
                             <t t-if="hasError(spec.key)">

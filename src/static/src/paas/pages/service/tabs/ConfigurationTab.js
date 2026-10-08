@@ -83,6 +83,20 @@ export class ConfigurationTab extends Component {
         );
     }
 
+    /**
+     * #1479：唯讀的設定裡有管理員帳號（例 Odoo 的管理員 Email）時，提示改密碼的入口。
+     * 回 `"credentials"`（頁首是「Admin Credentials」）、`"reset"`（頁首是「Reset Admin
+     * Password」）或 `null`（平台不能重設、不提示）——與 ServiceDetailPage 的
+     * adminResetSupported／canEditAdminCredentials 讀同兩個後端鏡射欄位，不自建判準。
+     */
+    get adminPasswordEntry() {
+        const template = this.props.service.template || {};
+        if (!this.createOnlySpecs.length || template.admin_reset_supported !== true) {
+            return null;
+        }
+        return template.admin_credentials_settable === true ? "credentials" : "reset";
+    }
+
     /** #1561：檢視模式列出的全部設定＝可改的＋只在開通時生效的。 */
     get displaySpecs() {
         return [...this.allSpecs, ...this.createOnlySpecs];
