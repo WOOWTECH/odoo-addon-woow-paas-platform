@@ -9,6 +9,7 @@ import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddo
 import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
 import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
+import { getCategoryLabel } from "../../components/marketplace/CategoryFilter";
 import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { formatTemplatePrice } from "../../utils/pricing_label";
 import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
@@ -28,6 +29,10 @@ export class AppConfigurationPage extends Component {
         workspaceId: { type: Number },
         templateId: { type: Number },
     };
+
+    getCategoryLabel(key) {
+        return getCategoryLabel(key);
+    }
 
     setup() {
         this.state = useState({

@@ -7,7 +7,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { CreateWorkspaceModal } from "../../components/modal/CreateWorkspaceModal";
 import { workspaceService } from "../../services/workspace_service";
 import { router } from "../../core/router";
-import { getRoleBadgeClass, formatDate } from "../../services/utils";
+import { getRoleBadgeClass, getRoleLabel, formatDate } from "../../services/utils";
 
 export class WorkspaceListPage extends Component {
     static template = "woow_paas_platform.WorkspaceListPage";
@@ -61,6 +61,10 @@ export class WorkspaceListPage extends Component {
 
     getRoleBadgeClass(role) {
         return getRoleBadgeClass(role);
+    }
+
+    getRoleLabel(role) {
+        return getRoleLabel(role);
     }
 
     formatDate(dateString) {

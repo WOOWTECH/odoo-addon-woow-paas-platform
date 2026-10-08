@@ -51,7 +51,7 @@
                                     <div class="o_woow_member_name">
                                         <span t-esc="member.name"/>
                                         <span t-att-class="'o_woow_badge ' + getRoleBadgeClass(member.role)">
-                                            <t t-esc="member.role"/>
+                                            <t t-esc="getRoleLabel(member.role)"/>
                                         </span>
                                     </div>
                                     <div class="o_woow_member_email" t-esc="member.email"/>

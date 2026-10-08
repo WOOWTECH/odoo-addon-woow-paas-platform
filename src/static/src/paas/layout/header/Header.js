@@ -109,7 +109,7 @@ export class Header extends Component {
             items.push({ label: _t("Payment Methods"), path: "settings/payment-methods" });
         }
         const currentRoute = this.props.router.routes.find(r => r.routeName === route);
-        const currentLabel = currentRoute ? currentRoute.name : _t("Dashboard");
+        const currentLabel = currentRoute ? currentRoute.name : _t("Overview");
         items.push({ label: currentLabel, path: null });
         return items;
     }

@@ -8,7 +8,7 @@ import { InviteMemberModal } from "../../components/modal/InviteMemberModal";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
-import { MANAGEMENT_ROLES, getRoleBadgeClass, formatDate, getInitials } from "../../services/utils";
+import { MANAGEMENT_ROLES, getRoleBadgeClass, getRoleLabel, formatDate, getInitials } from "../../services/utils";
 
 export class WorkspaceTeamPage extends Component {
     static template = "woow_paas_platform.WorkspaceTeamPage";
@@ -126,6 +126,10 @@ export class WorkspaceTeamPage extends Component {
 
     getRoleBadgeClass(role) {
         return getRoleBadgeClass(role);
+    }
+
+    getRoleLabel(role) {
+        return getRoleLabel(role);
     }
 
     formatDate(dateString) {

@@ -16,7 +16,7 @@ import { securityAccessService } from "../../services/security_access";
 import { cloudService, getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
-import { getRoleBadgeClass, formatDate } from "../../services/utils";
+import { getRoleBadgeClass, getRoleLabel, formatDate } from "../../services/utils";
 import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 export class WorkspaceDetailPage extends Component {
@@ -389,6 +389,10 @@ export class WorkspaceDetailPage extends Component {
 
     getRoleBadgeClass(role) {
         return getRoleBadgeClass(role);
+    }
+
+    getRoleLabel(role) {
+        return getRoleLabel(role);
     }
 
     formatDate(dateString) {

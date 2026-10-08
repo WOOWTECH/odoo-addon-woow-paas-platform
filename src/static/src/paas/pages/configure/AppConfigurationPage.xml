@@ -39,7 +39,7 @@
                             <div class="o_woow_template_meta">
                                 <span class="o_woow_template_category">
                                     <WoowIcon name="'category'" size="14"/>
-                                    <t t-esc="template.category"/>
+                                    <t t-esc="getCategoryLabel(template.category)"/>
                                 </span>
                                 <!-- #478：起價（與 marketplace 卡片同源）；查無價格
                                      時整欄不渲染，不再硬寫 Free。 -->
