@@ -52,7 +52,8 @@ class TestCodeServerSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.5')
+        # 0.1.6＝charts #153（工作區＝區網）；0.1.7＝#1556（選填金鑰一律輸出，清除後 Secret／Pod 不留舊值）。
+        self.assertEqual(tpl.helm_chart_version, '0.1.7')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()

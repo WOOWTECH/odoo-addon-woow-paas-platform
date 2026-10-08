@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """VPN 節點（相容 Tailscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/tailscale 0.1.2（0.1.1＝#131、0.1.0＝#125）——StatefulSet ×1、userspace
-tailscaled（uid 1000）、唯一入口 Service 8080 → nginx Basic auth（帳號＝entrance.basicAuthUsername）→
+契約來源：woow-paas-charts charts/tailscale 0.1.4（0.1.3＝#153 工作區＝區網、0.1.2＝控制平面、0.1.1＝#131、
+0.1.0＝#125）——StatefulSet ×1、userspace tailscaled（uid 1000）、
+唯一入口 Service 8080 → nginx Basic auth（帳號＝entrance.basicAuthUsername）→
 ``tailscale web``（127.0.0.2:8088，唯讀）；``tailscale serve`` TCP 轉發只接受同 namespace 的
 服務；exit node／app connector／subnet route／SSH／Funnel 一律不開（values 裡沒有這些鍵）。
 image：paas-odoo-ci ``tailscale/``（#240，官方 1.102.5＋衍生自 podman 版的 entrypoint）。
@@ -67,9 +68,10 @@ class TestTailscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, TAILSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.2',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝'
-                         'StatefulSet 帶 restart-on-credential-reset label、帳號可設定（.207 缺陷）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.4',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.4＝'
+                         '#1553 Headscale 重啟後約 1 分鐘內回線、#1554 workspace 模式略過 tags、'
+                         '#1539 金鑰登入中不回報 Ready（0.1.1＝restart-on-credential-reset label）')
 
     def test_service_port_lockstep(self):
         self.assertEqual(self._values()['service']['port'], self._tpl().default_port)
@@ -235,7 +237,9 @@ class TestTailscaleSeed(TransactionCase):
                 ('帳號預設 admin', '帳號可改（admin_username_helm_path）'),
                 ('重新啟動，約數十秒', '重設帳密會重啟節點（operator #1398 重啟 opt-in StatefulSet）'),
                 ('仍是同一台', '節點身分在 PVC，重設後不是新機器'),
-                ('最久約 12 分鐘', '同工作區 Headscale 重啟後，靠 chart 0.1.1 的 liveness 看門狗回線'),
+                ('約 1 分鐘內自動重新連上',
+                 '#1553：同工作區 Headscale 重啟後，chart 0.1.4 的 liveness 在 Headscale 一回來就重啟 '
+                 'tailscaled（沙盒 42／46 秒；0.1.1 的 8 分鐘看門狗最久約 12 分鐘）'),
                 ('從瀏覽器開服務網址', '入口擋 127/8（port-forward 一律 403），網頁介面只能經服務網址開'),
                 ('同工作區 Headscale', '控制平面三選一（chart 0.1.2）'),
                 ('只帶網址', '平台不跨服務傳 preauth key（使用者拍板：金鑰租戶自己貼）'),
@@ -244,6 +248,7 @@ class TestTailscaleSeed(TransactionCase):
         ):
             self.assertIn(needle, desc, why)
         self.assertNotIn('不必重啟', desc, '重設帳密會重啟節點，不能再寫「不必重啟」（與管理員帳密對話框一致）')
+        self.assertNotIn('12 分鐘', desc, 'chart 0.1.4（#1553）起不再要等 8 分鐘看門狗，說明不能再寫最久約 12 分鐘')
         cp = self._optional()['tailscale.controlPlane']['description']
         for needle in ('自動帶入', '只帶網址', 'pre-auth key', '新機器'):
             self.assertIn(needle, cp, '控制平面說明：%s' % needle)

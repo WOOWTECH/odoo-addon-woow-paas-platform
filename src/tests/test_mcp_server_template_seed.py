@@ -39,7 +39,7 @@ from odoo.tests.common import TransactionCase
 # 常數——兩邊各自宣告才會在 chart 改名時各自紅，而不是一起靜默失效。
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 
-# chart mcp-server 0.1.5 的 config.nonSensitive 預設是 hermes 形的
+# chart mcp-server（0.1.5～0.1.7 皆同）的 config.nonSensitive 預設是 hermes 形的
 # （values.yaml: config.nonSensitive.mcp_server.command）。hermes 靠它拿到啟動
 # 命令；其餘 app 必須覆寫，否則子行程從不 spawn、MCP endpoint 靜默 502 而
 # /healthz 與 GUI 看起來都正常（GAP-O1）。
@@ -348,7 +348,11 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 2026-10-07 重釘 cfc2a2b（woow-mcp-server #37，#1500 跟進：狀態 API 補看門狗欄位）：已覆核
     # d5032a72..cfc2a2b 只動 mcp-admin-core routers/settings.py 與其測試，apps/odoo、uv.lock 未變，
     # console script ``odoo-mcp`` 與 streamable-http args 照舊成立。
-    EXPECT_IMAGE_TAG = 'cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e'
+    # 2026-10-08 重釘 ff32a7c1（woow-mcp-server #45，#1530：子行程 command／args 改由 app 的 LaunchPolicy
+    # 固定、env 白名單、非 root）：已覆核 apps/odoo/odoo_mcp_admin/main.py 的 LaunchPolicy＝``odoo-mcp``＋
+    # ``--transport streamable-http --host 127.0.0.1 --port {port}``，與 seed 的 command／args 逐字一致；
+    # cfc2a2b..ff32a7c1 之間 uv.lock 的 odoo-mcp 依賴未變（只多了 nextcloud 用的 psycopg）。
+    EXPECT_IMAGE_TAG = 'ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

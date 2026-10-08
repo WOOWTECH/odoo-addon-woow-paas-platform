@@ -73,7 +73,9 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.4.4')
+        # 0.4.4＝#1538（loopback 路由經 auth-proxy、SSRF 放行同工作區 LiteLLM）；
+        # 0.4.5＝#1556（ANTHROPIC／OPENROUTER 金鑰一律輸出，清除後 daemon 不留舊值）。
+        self.assertEqual(tpl.helm_chart_version, '0.4.5')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
