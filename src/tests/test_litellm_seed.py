@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 模型閘道（LiteLLM）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/litellm 0.2.1（0.1.0＝#123；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt 在 LiteLLM 內）——litellm-non_root 1.103.3（uid 65534）
+契約來源：woow-paas-charts charts/litellm 0.2.2（0.1.0＝#123；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt 在 LiteLLM 內；0.2.2＝後台 Add Credential 子畫面）——litellm-non_root 1.103.3（uid 65534）
 ＋內附 PostgreSQL（平台 paas-postgres 17.11），唯一入口 ``<release>-litellm:4000``、只有一顆 PVC。
 UI 帳號＝``auth.adminUser``（預設 admin，可改）、密碼＝``config.sensitive.admin_password``；master key＝平台 #530 gateway
 key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、不需 ``sk-`` 前綴）。
@@ -75,9 +75,10 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.2.1',
+        self.assertEqual(tpl.helm_chart_version, '0.2.2',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
-                         '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt')
+                         '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt；'
+                         '0.2.2＝後台 Add Credential 選 ChatGPT 跳出登入方式子畫面')
 
     def test_chatgpt_login_inside_litellm(self):
         """chart 0.2.1 起 ChatGPT 訂閱登入在 LiteLLM 自己的 /woow/chatgpt（用 LiteLLM 管理員登入）；
@@ -86,6 +87,8 @@ class TestLitellmSeed(TransactionCase):
         for needle, why in (
                 ('ChatGPT 訂閱（選用）', '商品說明要讓租戶知道有這個選用功能'),
                 ('/woow/chatgpt', '入口在 LiteLLM 服務網址的 /woow/chatgpt，不在平台服務頁'),
+                ('LLM Credentials → Add Credential', '0.2.2 起也能從 LiteLLM 後台的 Add Credential 連結'),
+                ('瀏覽器登入或裝置代碼', '兩種登入方式（瀏覽器登入不需改 ChatGPT 設定）'),
                 ('LiteLLM 管理員登入', '那一頁用 LiteLLM 管理員帳號登入'),
                 ('非 OpenAI 官方', '條款風險要講在購買前'),
                 ('帳號風險自負', '帳號風險由租戶承擔'),
