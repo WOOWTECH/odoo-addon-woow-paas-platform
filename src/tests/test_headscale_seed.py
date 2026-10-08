@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """VPN 控制台（Headscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/headscale 0.1.1（0.1.0＝#124）——一個 Pod：headscale v0.29.4、
-Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，平台密碼 Basic auth，
-固定送 Remote-User: admin）、選配 ngrok sidecar（租戶自己的 token；每 60 秒印
+契約來源：woow-paas-charts charts/headscale 0.1.3（0.1.2＝#153 工作區＝區網、0.1.1＝#131、0.1.0＝#124）——
+一個 Pod：headscale v0.29.4、Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，
+平台密碼 Basic auth，固定送 Remote-User: admin）、選配 ngrok sidecar（租戶自己的 token；每 60 秒印
 ``WOOW_PUBLIC_URL=https://…``）。Service 第二個埠 8080＝Headscale（同工作區節點登入）。
 平台側用到 #1412：``has_public_tunnel_address``／``public_tunnel_label``（P1）與 spec
 ``format: domain``（P2）。
@@ -79,9 +79,10 @@ class TestHeadscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HEADSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝'
-                         'StatefulSet 帶 restart-on-credential-reset label（.207 重設必失敗的修正）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.3＝'
+                         '#1559 設定的 ngrok 網域等 agent 上線才當 server_url'
+                         '（0.1.1＝restart-on-credential-reset label，.207 重設必失敗的修正）')
 
     def test_service_port_is_the_entrance(self):
         """Service 第一個埠＝入口；operator 依 Service 自己的埠順序挑第一個 HTTP 埠。"""
@@ -277,10 +278,12 @@ class TestHeadscaleSeed(TransactionCase):
                 ('-headscale:8080', '同工作區節點的內部網址'),
                 ('Admin Credentials', '帳密可重設、可自設'),
                 ('重新啟動，約數十秒', '重設帳密會重啟服務（operator #1398 重啟 opt-in StatefulSet）'),
-                ('同工作區的 VPN 節點最久約', 'Headscale 重啟後內部網址節點要等 tailscale 看門狗才回線'),
+                ('同工作區的 VPN 節點約 1 分鐘內自動重連',
+                 'Headscale 重啟後內部網址節點靠 tailscale chart 0.1.4 的 liveness 回線（#1553，沙盒 42／46 秒）'),
         ):
             self.assertIn(needle, desc, why)
         self.assertNotIn('不必重啟', desc, '重設帳密會重啟服務，不能再寫「不必重啟」（與管理員帳密對話框一致）')
+        self.assertNotIn('12 分鐘', desc, 'tailscale chart 0.1.4（#1553）起不再要等 8 分鐘看門狗')
 
     def test_no_public_url_injection(self):
         """chart 不需要平台注入自己的公開網址（Headplane 走相對路徑、server_url 由 ngrok 決定）。"""

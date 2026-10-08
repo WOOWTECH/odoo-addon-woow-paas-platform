@@ -2,13 +2,14 @@
 """MCP：AI 模型閘道（mcp-litellm）seed 的守線斷言（2026-10-05 以隱藏範本進 seed，10-07 公開上架）。
 
 契約來源：Gitea WOOWTECH/woow-mcp-server ``apps/litellm``（#33，main 0687392f）README §PaaS seed 契約；
-chart＝woow-paas-charts ``charts/mcp-server`` 0.1.5（平台共用）。家族不變式（has_admin_gui、requiredFields
+chart＝woow-paas-charts ``charts/mcp-server`` 0.1.7（平台共用；2026-10-08 起，#1530 非 root）。家族不變式（has_admin_gui、requiredFields
 REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 ``test_mcp_server_template_seed.TestMcpLitellmTemplateSeed`` 守；同工作區網址注入（真範本）由
 ``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
 
-1. **釘版**：chart mcp-server 0.1.5（OCI）；image litellm-mcp-admin 來自 JCR、雙釘，而且釘的就是 #33
-   合併後 main CI（run 14916）推的那一顆——換 image 時這條會紅，逼下一個人覆核啟動契約（#708 教訓）。
+1. **釘版**：chart mcp-server 0.1.7（OCI）；image litellm-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI
+   推的那一顆（現行＝woow-mcp-server #45 合併 ff32a7c1、run 16237）——換 image 時這條會紅，逼下一個人覆核啟動
+   契約（#708 教訓）。
 2. **啟動契約**：``litellm-mcp-server``、args 只有 ``--port 8000``（launcher 硬綁 127.0.0.1，seed 不給
    host）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
 3. **env_prefix 兩處同值**：chart 的 configmap 以頂層 ``envPrefix`` 蓋掉巢狀那格；connection 鍵
@@ -37,12 +38,16 @@ from ..models.cloud_service import _internal_provision
 JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
 MCP_SERVER_CHART = 'oci://%smcp-server' % JCR
 IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
-# woow-mcp-server #37（/api/settings/mcp/status 補上看門狗欄位，#1500 跟進）合進 main 的 merge
-# commit cfc2a2b；main CI 推的 litellm-mcp-admin（2026-10-07 以 JCR manifest HEAD 核對 digest）。
-# 前一個 pin 是 #34 的 d5032a72（看門狗本體，run 15219），狀態 API 還沒有 restart_count 等欄位。
+# woow-mcp-server #45（#1530 子行程指令改由 LaunchPolicy 固定＋env 白名單＋非 root；#1531 n8n）合進 main 的
+# merge commit ff32a7c1；main CI run 16237 推的 litellm-mcp-admin（digest 抄自該 build job 的 push log）。
+# 2026-10-08 已覆核 apps/litellm：LaunchPolicy＝litellm-mcp-server＋args ``--port {port}``、env 白名單只有
+# LITELLM_MCP_READONLY、connection 白名單 base_url／master_key；launcher 與 seed_defaults 未變 ⇒
+# test_launch_contract／test_read_only_by_default 照舊成立。
+# 前一個 pin 是 #37 的 cfc2a2b（狀態 API 補看門狗欄位）：
+# cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878。
 EXPECT_IMAGE_TAG = (
-    'cfc2a2b1f7689c970628bd9092f79d9f4779e07f'
-    '@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878')
+    'ff32a7c11f57f32838417fb3aa3a4d4593210818'
+    '@sha256:b9ae4e2133fb773ec287a4d983c8060332d206f35e50726c57bc156e27fa98ea')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'
@@ -79,8 +84,9 @@ class TestMcpLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, MCP_SERVER_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.5',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.5＝家族現行版')
+        self.assertEqual(tpl.helm_chart_version, '0.1.7',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.7＝家族現行版'
+                         '（0.1.6＝#1441 egress 不再全放、0.1.7＝#1530 非 root）')
 
     def test_image_from_jcr_and_double_pinned(self):
         image = self._values()['image']

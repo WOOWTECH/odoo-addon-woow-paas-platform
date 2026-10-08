@@ -361,10 +361,37 @@
                  只能列平台真正供給的 admin_password。connection.* 是租戶自己在 admin
                  GUI 填的、mcp_auth_token 也不由平台供給，任何一條列進去都會讓
                  **每個新租戶的 pod 永遠卡 Init**。 -->
+            <!-- 2026-10-08 家族改釘（#1543 稽核：#1530／#1531）：本筆與 cloud_app_mcp_odoo／_n8n／_k8s／_vk／
+                 _opendesign／_litellm 共 7 筆一起從 chart 0.1.5＋image cfc2a2b1 改成 chart 0.1.7＋image ff32a7c1；
+                 cloud_app_mcp_odoo_manage 已下架、image 不再建置，刻意維持 0.1.5＋d5032a72。
+                 chart mcp-server（publish-charts run 16234，charts main 791d4107，OCI
+                 sha256:c4e7d782…）：
+                 - 0.1.6＝charts #153（#1441／#1436 工作區＝區網）：allowAllEgress 不再 render `- {}`，改成
+                   「公網，排除叢集／私網／metadata／CGNAT／多播」＋同 namespace 全部 pod、全部埠（egress 與
+                   ingress）。⚠ 其他 namespace 的後端（例如用叢集內網址或私網 IP 接的 Odoo／n8n）從此連不到，
+                   要改走對外網址；既有服務 redeploy 前先確認 Connection 頁填的網址。
+                 - 0.1.7＝charts #163（#1530）：pod／container 以非 root（runAsNonRoot、uid／gid 1000）執行，
+                   保留 fsGroup 1000，舊版 root 容器寫的 /data/config.json 升級後仍可讀寫（沙盒實測）。
+                 image＝woow-mcp-server #45 合併 commit ff32a7c11f57f32838417fb3aa3a4d4593210818（main CI
+                 run 16237；7 個 digest 逐筆抄自各 build job 的 push log，皆為單一 manifest.v2 linux/amd64）：
+                 - #1530：子行程 command／args 改由各 app 程式碼的 LaunchPolicy 固定，config.json 的
+                   command／args 只剩顯示用途（本檔 seed 的 command／args 不再被執行；與 LaunchPolicy 不同的
+                   舊寫法——例如 cloud_app_mcp_opendesign 的 supergateway——以 app 預設啟動）；connection 與
+                   mcp_server.env 改白名單、擋 NODE_OPTIONS／LD_*／PYTHON* 等；映像 USER 1000:1000。
+                 - #1531（n8n）：Permissions 停用的操作真的生效（DISABLED_TOOL_OPERATIONS）、Session 兩欄改用
+                   上游正確的變數與單位、子行程改跑上游 dist/mcp/index.js（有狀態 session）、工具清單 28 支、
+                   測試連線套 SSRF 規則。
+                 helm_default_values 除 image.tag 外不變：n8n 的 Permissions／Session 是租戶在 admin 頁存進
+                 config.json 的設定，不是範本值。
+                 爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本）；
+                 redeploy 時 Recreate 重啟 pod 一次（短暫中斷）；n8n MCP 子行程重啟後既有 session 失效，
+                 用戶端要重新 initialize。
+                 回滾值：chart 0.1.5＋各筆舊 image（本筆 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
+                 ba8f63e3ec19619635cd7a82230bbf3da28d79aea022dd0c91248650862332f5；其餘見各筆註解）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:ba8f63e3ec19619635cd7a82230bbf3da28d79aea022dd0c91248650862332f5"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:44f4a19a77a6c78ebe1ba9eac57aa5f1079d5317e7401cd18ceb3d7ce8573917"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -417,7 +444,7 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "odoo", "mcp-server", "ai"]</field>
 
-            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.5, values 切 app).
+            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.7, values 切 app).
                  envPrefix MUST be camelCase + empty string for odoo (design 階段1 守線).
                  config.nonSensitive.mcp_server OVERRIDES the chart's hermes-shaped
                  default config (chart default command='hermes-mcp-server'); without it
@@ -436,11 +463,18 @@
                  seed 是 seed-if-absent（/data/config.json 存在就跳過），改這裡只止血
                  未來的新部署，救不了既有實例。
                  stg 實測（#708，svc-fbc97612）：initialize 200、tools/list 41 tools、
-                 tools/call 真的打到 Odoo XML-RPC。odoo 子行程啟動仍不需 sensitive。 -->
+                 tools/call 真的打到 Odoo XML-RPC。odoo 子行程啟動仍不需 sensitive。
+                 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（woow-mcp-server #45，家族說明見
+                 cloud_app_mcp_hermes）：已覆核 apps/odoo 的 LaunchPolicy＝
+                 odoo-mcp＋args［transport streamable-http、host 127.0.0.1、port {port}］，與本區 command／args
+                 一致（#45 起子行程以 LaunchPolicy 為準，本區只剩顯示用途）；cfc2a2b1..ff32a7c1 之間
+                 uv.lock 的 odoo-mcp 依賴未變。沙盒（dev-sandbox-mcp1530，正式映像疊 #45 分支程式碼、
+                 chart 0.1.7）以 uid 1000 起、經 proxy initialize＋tools/list 41 支。回滾值：chart 0.1.5＋
+                 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -499,6 +533,9 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "odoo", "mcp-server", "manage", "ai"]</field>
 
+            <!-- 2026-10-08 家族改釘（chart 0.1.7＋image ff32a7c1，見 cloud_app_mcp_hermes）刻意不含本筆：
+                 已下架（is_hidden，見下方）、woow-mcp-server 已封存 apps/odoo-manage、main CI 不再建它的
+                 image，所以沒有 ff32a7c1 的 odoo-manage-mcp-admin。維持 chart 0.1.5＋d5032a72。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
@@ -554,7 +591,7 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "n8n", "mcp-server", "ai"]</field>
 
-            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.5, values 切 app).
+            <!-- Helm Configuration (OCI; shared mcp-server chart 0.1.7, values 切 app).
                  0.1.4 self-generates config.authToken (randAlphaNum, app=n8n only) so n8n
                  needs no externally-supplied token (replaces the dropped operator
                  per-instance Secret). envPrefix MUST be camelCase + empty string for n8n
@@ -570,11 +607,20 @@
                  614ae663（main，與 odoo-manage-mcp-admin 同一批）：apps/n8n 與 ed098b60
                  只差 config router／前端 2 檔、launcher 未動。正式站以 paas-registry
                  實拉驗證：imageID digest 與本欄逐字一致、launcher n8n-mcp-http 存在（吃 port 參數）、
-                 `npm root -g` 下有 n8n-mcp。 -->
+                 `npm root -g` 下有 n8n-mcp。
+                 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（woow-mcp-server #45，#1530／#1531，家族說明見
+                 cloud_app_mcp_hermes）：LaunchPolicy＝n8n-mcp-http＋args［port {port}］，與本區 command／args 一致；
+                 launcher 內部改跑上游 dist/mcp/index.js（n8n-mcp@2.92.1 釘版、MCP_MODE=http、不設
+                 USE_FIXED_HTTP），子行程 env 只剩 N8N_API_URL／N8N_API_KEY／AUTH_TOKEN（chart 產生、
+                 env 白名單內）＋依 admin 頁設定推導的 SESSION_TIMEOUT_MINUTES／N8N_MCP_MAX_SESSIONS／
+                 DISABLED_TOOL_OPERATIONS。範本不需新增任何鍵。⚠ 改成有狀態 session：子行程重啟（改連線、
+                 改 Permissions、redeploy）後既有 session 404，用戶端要重新 initialize。上游 SSRF 規則
+                 （WEBHOOK_SECURITY_MODE 預設 strict）擋私網 IP，n8n_api_url 要填對外網址。回滾值：chart 0.1.5＋
+                 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:fe97e99e438c29a261603e9b1dfb95bb9188e4286efb8638d1a0ab67d796fad2。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:fe97e99e438c29a261603e9b1dfb95bb9188e4286efb8638d1a0ab67d796fad2"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:db66a0f333add5cef0a5a6a072b9048dcfdf6a2e5487c633f478f4b624588536"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -608,7 +654,13 @@
              config.mcp_server 契約逐字取自各 app k8s-deploy.yaml 檔頭（#375 comment）
              ＋port 實查：三型對外 8080、內部 mcp_server.port 齊一 8000＝args 內 port
              （core proxy 反代目標，兩者不一致 proxy 一律 502）。三型 launch 契約與治理
-             語意各異、勿互抄。三 xmlid 首建於本檔 noupdate=0 塊、-u 自建、無 migration。 -->
+             語意各異、勿互抄。三 xmlid 首建於本檔 noupdate=0 塊、-u 自建、無 migration。
+             2026-10-08 起三型皆釘 chart 0.1.7＋image ff32a7c1（woow-mcp-server #45；家族說明見
+             cloud_app_mcp_hermes）：子行程 command／args 以各 app 的 LaunchPolicy 為準——k8s
+             k8s-mcp-http＋args［port {port}］、vk supergateway（vibe-kanban-mcp，同本檔 args），與 seed 一致；
+             opendesign 是 opendesign-mcp-server＋args［host 127.0.0.1、port {port}］（woow-mcp-server #22 起
+             原生 Streamable HTTP），本檔 seed 仍是舊的 supergateway 寫法，只剩顯示用途、實際以 app 預設啟動。
+             k8s 的四個 K8S_MCP_* env 在 LaunchPolicy 的 env 白名單內（也是 Settings 頁可改的開關）。 -->
 
         <!-- k8s：kubernetes-mcp-server（Go binary 原生 http，command=k8s-mcp-http，
              非 supergateway 橋）。治理三 toggle 走 mcp_server.env 全名
@@ -632,10 +684,13 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "kubernetes", "k8s", "mcp-server", "ai"]</field>
 
+            <!-- 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（見上方三型說明與 cloud_app_mcp_hermes）。
+                 回滾值：chart 0.1.5＋cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
+                 5beb1f1de006000ee3f5e29f06374ff9352d344df38bd064e02a0f9994e0ab6d。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:5beb1f1de006000ee3f5e29f06374ff9352d344df38bd064e02a0f9994e0ab6d"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:4774f40d7c7daa41dbb0e40fe30bc67fafe56530d32f5b75b7f99eaa0a95efca"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -669,10 +724,13 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "vibe-kanban", "vk", "kanban", "mcp-server", "ai"]</field>
 
+            <!-- 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（見上方三型說明與 cloud_app_mcp_hermes）。
+                 回滾值：chart 0.1.5＋cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
+                 4ac1632676a31c81459a22ad41b9544dd092947d4a748ab95056721ceedffbcf。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:4ac1632676a31c81459a22ad41b9544dd092947d4a748ab95056721ceedffbcf"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:87982c513b8f75f7d26f0cdeb1fd611ade90f616f1ff204e2fcd58276007a7c1"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -716,10 +774,13 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "opendesign", "design", "mcp-server", "ai"]</field>
 
+            <!-- 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（見上方三型說明與 cloud_app_mcp_hermes）。
+                 回滾值：chart 0.1.5＋cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
+                 2e6676decf07a09444ffd5271bb2ddb81705300918a65383bb0b09828d83e954。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:2e6676decf07a09444ffd5271bb2ddb81705300918a65383bb0b09828d83e954"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:f954ceb588f2051258ac7f77cb672bc6530a119e87f82ace96e83041c05e1553"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -894,10 +955,17 @@
                  rollout restart Deployment（現在只有 console），daemon 不重啟、約 1–2 分鐘內
                  由 kubelet 同步生效（沙盒實測 97 秒）。既有服務 Redeploy 時 Deployment→
                  StatefulSet 換一次（約 1 分鐘，PVC 名稱不變、資料保留；podAntiAffinity
-                 確保新舊 daemon 不會同時掛同一組 PVC）。helm_default_values 不需改。 -->
+                 確保新舊 daemon 不會同時掛同一組 PVC）。helm_default_values 不需改。
+                 2026-10-08 chart 0.4.4 → 0.4.5（charts #156，#1556；0.4.4＝#1538，develop 612b39a6 改釘）：
+                 ANTHROPIC_API_KEY／OPENROUTER_API_KEY 一律輸出到 chart Secret（未設＝""）。舊版只在有值時
+                 寫，平台清除金鑰後 helm 三方合併刪不掉 data 裡的舊值，daemon 重啟後仍拿舊金鑰。
+                 open-design.apiKeysChecksum 多了常數 ⇒ 升到 0.4.5 時 daemon 重啟一次（PVC 資料保留），
+                 卡住的舊金鑰也一併離開執行中的程序。publish-charts run 16650（charts main bc970850，OCI
+                 sha256:9a4478c0…）。image 與 helm_default_values 不變。只影響新開通與之後 redeploy 的服務
+                 （既有服務要 redeploy 升到 0.4.5 才修好 #1556）。回滾值：0.4.4。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.4.4</field>
+            <field name="helm_chart_version">0.4.5</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261005.1409@sha256:0c257c7715f87c293744252aeb905d66dca87355b93c3293fde52bc2db586c7c"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
@@ -1118,8 +1186,15 @@
                  這兩個鍵，注入了也沒有 env、egress 也不通）。
                  helm_default_values 不需新增任何鍵（llmGateway 由平台注入、litellmEgress 用
                  chart 預設）。既有服務管理員 Redeploy 時 Deployment 換 StatefulSet，約中斷
-                 1～2 分鐘、資料保留。 -->
-            <field name="helm_chart_version">0.3.3</field>
+                 1～2 分鐘、資料保留。
+                 0.3.3 → 0.3.4（2026-10-08，charts #156，#1556；0.3.3＝#1537，develop 612b39a6 改釘）：
+                 MINIMAX_API_KEY／OPENROUTER_API_KEY 一律輸出到 chart Secret（未設＝""）。舊版只在有值時寫，
+                 平台清除金鑰後 helm 三方合併刪不掉 data 裡的舊值，agent 重啟後仍拿舊金鑰。
+                 checksum/tenant-llm-keys 多了常數 ⇒ 升到 0.3.4 時 agent 重啟一次（PVC 資料保留），卡住的
+                 舊金鑰也一併離開執行中的程序。publish-charts run 16650（charts main bc970850，OCI
+                 sha256:72929785…）。image 與 helm_default_values 不變。只影響新開通與之後 redeploy 的服務
+                 （既有服務要 redeploy 升到 0.3.4 才修好 #1556）。回滾值：0.3.3。 -->
+            <field name="helm_chart_version">0.3.4</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261003.1400@sha256:7b095a7258e627c156d7c08301b699fda42365548fdb868c94b4d3848823a9a4"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
@@ -1906,7 +1981,17 @@
              code-server 的 trusted-origins 參數）。
              T1 = 2 vCPU / 4 Gi / 25 Gi：workspace 20Gi（/workspace）＋ pi-data 5Gi（pi／Claude
              Code 登入、sessions、IDE 設定、租戶自裝擴充）。容器 limits 2 CPU／4 Gi（＋ pi-seed
-             init 0.5／256Mi，只在啟動時跑）＜ quota 3×。 -->
+             init 0.5／256Mi，只在啟動時跑）＜ quota 3×。
+             2026-10-08 chart 0.1.5 → 0.1.7（#1543 稽核；image 與 helm_default_values 不變）：
+             - 0.1.6＝charts #153（#1441／#1436 工作區＝區網）：同 namespace 全部 pod、全部埠的 ingress／egress；
+               allowAllEgress 不再 render `- {}`，公網規則多排除 224.0.0.0/4、240.0.0.0/4。
+             - 0.1.7＝charts #156（#1556）：auth.anthropicApiKey／openrouterApiKey／gitToken 一律輸出到 chart
+               Secret（未設＝""）。舊版只在有值時寫 stringData，平台清除金鑰後 helm 三方合併刪不掉 data 裡的
+               舊值，Secret 與重啟後的 pod 仍拿舊金鑰（正式站 2026-10-07）。publish-charts run 16650（charts main
+               bc970850，OCI sha256:29328050…）。
+             爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本，既有服務
+             要 redeploy 升到 0.1.7 才修好 #1556）；升到 0.1.7 時 checksum/optional-auth 多了常數，pod 重啟一次
+             （約一分鐘、磁碟保留），卡住的舊金鑰也一併離開執行中的程序。回滾值：0.1.5。 -->
         <record id="cloud_app_code_server" model="woow_paas_platform.cloud_app_template">
             <field name="name">Code Server</field>
             <field name="slug">code-server</field>
@@ -1927,7 +2012,7 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
-            <field name="helm_chart_version">0.1.5</field>
+            <field name="helm_chart_version">0.1.7</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
@@ -2103,7 +2188,8 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.1（0.1.0＝#124）：
+        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.3（0.1.2＝#153、0.1.1＝#131、
+             0.1.0＝#124）：
              一個 Pod＝headscale v0.29.4（BSD-3）＋Headplane 0.7.1（MIT）網頁＋nginx 入口＋選配 ngrok sidecar。
              入口 Service 第一個埠 3000＝nginx（平台密碼 Basic auth → Headplane 127.0.0.1:3001，proxy_auth
              固定送 Remote-User: admin），第二個埠 8080＝Headscale（同工作區 Tailscale 節點用
@@ -2124,8 +2210,24 @@
              現行 chart 版本（F-461-2），既有 0.1.0 服務要 redeploy 升到 0.1.1 才修好。
              ⚠ Headscale 每次重啟（儲存設定、重設帳密、升級）後，用內部網址 http://…-headscale:8080 的
              同工作區節點會卡在只撥 443（Tailscale 用戶端「recent noise dial」啟發式），tailscale chart 0.1.1
-             以 liveness 看門狗（8 分鐘 Out of sync → 重啟 tailscaled）自動恢復，沙盒實測 681 秒回線；外部裝置走
+             以 liveness 看門狗（8 分鐘 Out of sync → 重啟 tailscaled）自動恢復，沙盒實測 681 秒回線；tailscale
+             chart 0.1.4（#1553）改成 Headscale 一回來（GET /health 通）就重啟 tailscaled，沙盒實測 42／46 秒
+             回線（修前 717 秒），說明改寫「約 1 分鐘內」——前提是同工作區的 VPN 節點已升到 0.1.4。外部裝置走
              ngrok https 不受影響。
+             2026-10-08 chart 0.1.1 → 0.1.3（#1543 稽核；image 與 helm_default_values 不變）：
+             - 0.1.2＝charts #153（#1441／#1436 工作區＝區網）：ingress 由「只開 Headscale 埠給同 namespace」
+               放寬成同 namespace 全部 pod、全部埠，另加同 namespace 全部埠的 egress；公網規則多排除
+               224.0.0.0/4、240.0.0.0/4。真正的守門仍是 Headplane 只綁 127.0.0.1、入口密碼與 Headscale 的
+               API key／pre-auth key。
+             - 0.1.3＝charts #165（#1559）：設定的 ngrok.domain 要等 agent 真的在那個網域上線（同 dev domain
+               的 90 秒等待）才當 server_url，否則用叢集內網址。舊版 authtoken 錯（ERR_NGROK_105）或網域不屬於
+               該帳號時照樣把它當 server_url，所有登入連結都指向沒人回應的位址、租戶看不到錯誤。
+             publish-charts run 16236（charts main b56d9976，OCI sha256:88eafcb5…）；0.1.2 由 #153 的發佈帶出。
+             爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本）；
+             redeploy 時 StatefulSet 重啟一次（數十秒，資料在 PVC）、同工作區節點隨後依上述機制重連；
+             設了 ngrok.domain 的服務，啟動時 agent 90 秒內沒在該網域上線就先用叢集內網址當 server_url
+             （log 寫明哪個網域沒上線、服務頁顯示 #1559 平台端讀回的原因），ngrok 修好後重新啟動服務才改回
+             對外網址。回滾值：0.1.1。
              ⚠ image／bootstrap.image 必須同一版 headscale（bootstrap 用它的 binary 跑 migration；0.29 起
              只能逐個 minor 升、不能降）——test_headscale_seed 以 digest→版本對照表鎖步。ngrok／entrance
              image 用 chart 預設（chart 以分開的 digest 欄位釘死；範本若改寫 tag@sha256 必須同時清空
@@ -2158,7 +2260,7 @@
                 **同工作區**：同一工作區的「VPN 節點（相容 Tailscale）」可直接用內部網址 http://&lt;服務 release&gt;-headscale:8080
                 登入，不需要 ngrok（&lt;服務 release&gt; 是本服務頁 Helm Release 那一格，例如 svc-1a2b3c4d）。
                 **資料**：使用者、裝置與金鑰存在你的持久磁碟，重啟後仍在；儲存設定或重設帳密時服務會重新啟動，外部裝置數十秒內
-                自動重連，同工作區的 VPN 節點最久約 12 分鐘自動重連。
+                自動重連，同工作區的 VPN 節點約 1 分鐘內自動重連。
                 Headscale 只能逐版升級、不能降版，平台會按版次安排。
                 欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通（所有裝置要重新登入），
                 原磁碟依平台保留政策 90 天後回收。</field>
@@ -2167,7 +2269,7 @@
             <field name="documentation_url">https://headscale.net/stable/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
-            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_chart_version">0.1.3</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0502@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
@@ -2210,7 +2312,8 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.2（0.1.1＝#131、0.1.0＝#125）；
+        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.4（0.1.3＝#153、0.1.2＝控制平面、
+             0.1.1＝#131、0.1.0＝#125）；
              image paas-odoo-ci tailscale/（#240，官方 tailscale 1.102.5＋衍生自 podman 版的 entrypoint，
              uid 1000、userspace）。定位＝工作區私有入口（PLAN Q2）：節點加入租戶自己的 tailnet（官方或
              Headscale），用 tailscale serve TCP 轉發把**同 namespace** 的服務掛上 tailnet。
@@ -2240,7 +2343,26 @@
              上架（is_hidden=False，2026-10-04）：同 Headscale，#1413 以隱藏卡片進 seed、隨 .206 上正式站；
              chart 0.1.0 已發佈；整合實測 10/10 通過（含 egress 防線、exit node 鎖死）。⚠ 入口擋 127/8 ⇒
              kubectl port-forward 一律 403，網頁介面只能從服務網址開（說明已寫）。
-             test_tailscale_seed.test_hidden_until_listed 守線：上架 ⟹ image 雙釘。 -->
+             test_tailscale_seed.test_hidden_until_listed 守線：上架 ⟹ image 雙釘。
+             2026-10-08 chart 0.1.2 → 0.1.4（#1543 稽核；image 與 helm_default_values 不變）：
+             - 0.1.3＝charts #153（#1441／#1436 工作區＝區網）：ingress 加同 namespace 全部 pod、全部埠；公網
+               egress 多排除 224.0.0.0/4、240.0.0.0/4（私網與 100.64/10 照舊排除）。
+             - 0.1.4＝charts #164，只動 pod template：
+               #1553 Headscale 重啟後的 :443 陷阱：liveness 在「Running、上次收到控制端訊息後已送 ≥2 次 map
+               請求、而且 http:// 控制伺服器 GET /health 已回應」時判失敗 ⇒ Headscale 一回來約 30 秒內重啟
+               tailscaled（0.1.1 要等 8 分鐘 Out of sync，正式站 627 秒；沙盒修前 717 秒、修後 42／46 秒）；
+               登入撞上同一個陷阱也會重啟。periodSeconds 30→15、failureThreshold 5→2。
+               #1554 controlPlane=workspace 時忽略 tailscale.tags（寫 log）：Headscale 0.29 拒絕 pre-auth key
+               登入時節點自帶的 advertise-tags 參數，舊版會讓節點被登出、服務卻顯示 running（說明文字已在
+               b0b059a9／7c3417ff 先改好，本次換版後才名實相符）。
+               #1539 readiness：用 auth key 登入中（NoState／NeedsLogin／Starting、沒有互動登入網址、tailscaled
+               起來未滿 150 秒）不回報 Ready ⇒ 平台改金鑰後補的第二次滾動（#1435）會等登入完成，一次性 key
+               不再被 SIGTERM 燒掉（沙盒舊版 3/7 次燒掉、新版 5/5 登入後才滾）。
+             publish-charts run 16235（charts main a52797af，OCI sha256:0b469f5a…）；0.1.3 由 #153 的發佈帶出。
+             爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本）；redeploy
+             時 StatefulSet 重啟一次（節點身分在 PVC，回來仍是同一台）。workspace 模式填了 tags 的節點，換版後
+             tags 被略過（沙盒：被舊版登出的節點升級後由 liveness 重啟一次、約 40 秒救回），節點的 tag 改由
+             pre-auth key 決定。回滾值：0.1.2。 -->
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 節點（相容 Tailscale）</field>
             <field name="slug">tailscale</field>
@@ -2265,14 +2387,14 @@
                 **限制**：不提供出口節點（exit node）、子網路由（subnet router）、app connector、Tailscale SSH 與 Funnel；平台出口是共用 NAT，
                 連線多半經 Tailscale 公共中繼（DERP）轉送，速度有限。
                 **身分**：節點身分存在持久磁碟，重啟後不變。使用同工作區的 VPN 控制台時，控制台重新啟動（儲存設定、重設帳密）後
-                本節點最久約 12 分鐘自動重新連上。欠費停權時服務停止（磁碟保留），恢復繳費後原樣還在；
+                本節點約 1 分鐘內自動重新連上。欠費停權時服務停止（磁碟保留），恢復繳費後原樣還在；
                 刪除服務即全新節點（要重新登入），原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">devops</field>
             <field name="tags">["tailscale", "vpn", "wireguard", "tailnet"]</field>
             <field name="documentation_url">https://tailscale.com/kb</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.4</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official",
@@ -2419,6 +2541,12 @@
              沙盒實測 36＋1 項全過（woow-mcp-server #33：預填網址、viewer key 唯讀 18 支、解鎖 40 支、viewer key 解鎖後
              寫入仍被 LiteLLM 403、log 不含 token／金鑰）後只翻 is_hidden（實例層從未設），與 Headscale／Tailscale／
              LiteLLM 同流程；正式站接搬遷後的 LiteLLM 驗收排在本版上線後。
+             2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（woow-mcp-server #45，家族說明見 cloud_app_mcp_hermes）：
+             已覆核 apps/litellm 的 LaunchPolicy＝litellm-mcp-server＋args［port {port}］、env 白名單只有
+             LITELLM_MCP_READONLY（Settings 頁開關）、connection 白名單 base_url／master_key，launcher 與
+             seed_defaults 未變，與本筆 seed 一致。注入的同工作區 LiteLLM 網址是同 namespace，chart 0.1.6 起
+             sameNamespaceEgress 預設開，照常連得到。回滾值：chart 0.1.5＋
+             cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878。
              守線：test_mcp_litellm_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpLitellmTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
@@ -2443,8 +2571,8 @@
 
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:b9ae4e2133fb773ec287a4d983c8060332d206f35e50726c57bc156e27fa98ea"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
