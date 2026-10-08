@@ -30,7 +30,7 @@ export class Sidebar extends Component {
     }
 
     navItems = [
-        { path: "dashboard", name: _t("Dashboard"), icon: "dashboard" },
+        { path: "dashboard", name: _t("Overview"), icon: "dashboard" },
         { path: "workspaces", name: _t("Workspaces"), icon: "workspaces" },
         { path: "projects", name: _t("Projects"), icon: "folder", requiresProjects: true },
         { section: _t("Finance") },

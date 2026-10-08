@@ -5,7 +5,7 @@ import { showProjects } from "./platform_config";
 
 /** @type {Array<{path: string, name: string, routeName?: string, pattern?: RegExp}>} */
 const routes = [
-    { path: "dashboard", name: _t("Dashboard"), routeName: "dashboard" },
+    { path: "dashboard", name: _t("Overview"), routeName: "dashboard" },
     { path: "workspaces", name: _t("Workspaces"), routeName: "workspaces" },
     { path: "workspace/:id", name: _t("Workspace Detail"), routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: _t("Workspace Team"), routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },

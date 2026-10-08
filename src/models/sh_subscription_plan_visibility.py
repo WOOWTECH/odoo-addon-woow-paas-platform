@@ -7,7 +7,7 @@ storefront_hidden 刻意不用 Odoo `active`：active=False 會被 active_test
 import logging
 import re
 
-from odoo import fields, models
+from odoo import _, fields, models
 
 _logger = logging.getLogger(__name__)
 
@@ -167,11 +167,12 @@ class ShSubscriptionPlanVisibility(models.Model):
             #   sa_max_routes          0 = none allowed
             #   sa_max_access_policies 0 = unlimited
             # 擠在同一個字串裡時，一個 `or 'unlimited'` 會同時蓋到兩個。
-            routes_text = '%s routes' % self.sa_max_routes  # 0 維持字面 0
+            # 可翻譯（中文介面原本露出英文）；測試在 en_US 下跑，仍拿到原文。
+            routes_text = _('%s routes', self.sa_max_routes)  # 0 維持字面 0
             # routes 側該顯示成什麼是 #770 的 quota 語意拍板題，#750 不代決。
             policies_text = (
-                '%s policies' % self.sa_max_access_policies
-                if self.sa_max_access_policies else 'unlimited policies')
+                _('%s policies', self.sa_max_access_policies)
+                if self.sa_max_access_policies else _('unlimited policies'))
             specs.append({
                 'icon': 'route',
                 'label': '%s · %s' % (routes_text, policies_text),
@@ -179,7 +180,7 @@ class ShSubscriptionPlanVisibility(models.Model):
         elif self.service_type == 'smart_home':
             if self.mcp_integration:
                 specs.append({'icon': 'lock',
-                              'label': 'Encrypted MCP connection'})
+                              'label': _('Encrypted MCP connection')})
         return specs
 
     # #336 A5（hide，18.0.1.0.54）與 #431（unhide，18.0.1.0.79）共用的定位清單。

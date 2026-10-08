@@ -35,7 +35,7 @@
                                     <div class="o_woow_workspace_item_header">
                                         <h3 t-esc="workspace.name"/>
                                         <span t-att-class="'o_woow_badge ' + getRoleBadgeClass(workspace.role)">
-                                            <t t-esc="workspace.role"/>
+                                            <t t-esc="getRoleLabel(workspace.role)"/>
                                         </span>
                                     </div>
                                     <p t-if="workspace.description" class="o_woow_workspace_item_desc" t-esc="workspace.description"/>

@@ -5,7 +5,14 @@ import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { dashboardService } from "../../services/dashboard_service";
 import { profileService } from "../../services/profile_service";
-import { formatPoints, formatDate, formatDateTimeShort } from "../../utils/billing_helpers";
+import {
+    formatPoints,
+    formatDate,
+    formatDateTimeShort,
+    getWalletActionLabel,
+    getWalletTargetLabel,
+    translateTxnDescription,
+} from "../../utils/billing_helpers";
 
 export class DashboardPage extends Component {
     static template = "woow_paas_platform.DashboardPage";
@@ -117,6 +124,18 @@ export class DashboardPage extends Component {
     }
 
     /** Render `Mitchell Admin` → `MA` for the avatar circle. */
+    activityAction(activity) {
+        return getWalletActionLabel(activity.action);
+    }
+
+    activityTarget(activity) {
+        return getWalletTargetLabel(activity.target);
+    }
+
+    activityDescription(activity) {
+        return translateTxnDescription(activity.description);
+    }
+
     initialsFor(actor) {
         if (!actor) return "?";
         return actor

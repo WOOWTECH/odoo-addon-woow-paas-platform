@@ -9,7 +9,7 @@ export class BottomNav extends Component {
     static props = { router: Object };
 
     navItems = [
-        { path: "dashboard", name: _t("Dashboard"), icon: "dashboard" },
+        { path: "dashboard", name: _t("Overview"), icon: "dashboard" },
         { path: "workspaces", name: _t("Workspaces"), icon: "workspaces" },
         { path: "projects", name: _t("Projects"), icon: "folder", requiresProjects: true },
         { path: "billing", name: _t("Billing"), icon: "payments" },

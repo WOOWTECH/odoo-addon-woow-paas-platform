@@ -62,7 +62,7 @@
         <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
             <field name="name">n8n</field>
             <field name="slug">n8n</field>
-            <field name="description">Workflow automation tool</field>
+            <field name="description">工作流程自動化工具</field>
             <field name="full_description">n8n is a fair-code licensed workflow automation tool. It
                 allows you to connect apps and services in flexible ways to automate tasks. With
                 over 280+ integrations, you can build workflows without code.</field>
@@ -235,7 +235,7 @@
         <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
             <field name="name">Odoo</field>
             <field name="slug">odoo</field>
-            <field name="description">Open-source business apps suite</field>
+            <field name="description">開源企業管理應用套件</field>
             <field name="full_description">Odoo is a comprehensive suite of open-source business
                 applications including CRM, eCommerce, accounting, inventory, project management,
                 and more. It provides an all-in-one management software that is fully integrated and
@@ -312,7 +312,7 @@
         <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
             <field name="name">Hermes MCP Server</field>
             <field name="slug">mcp-hermes</field>
-            <field name="description">Hermes MCP server with admin GUI</field>
+            <field name="description">附管理後台的 Hermes MCP 伺服器</field>
             <field name="full_description">Hermes MCP server — a managed Model Context
                 Protocol server with an admin GUI and an MCP client endpoint, persisting
                 its configuration on a dedicated volume.</field>
@@ -396,7 +396,7 @@
         <record id="cloud_app_mcp_odoo" model="woow_paas_platform.cloud_app_template">
             <field name="name">Odoo MCP Server</field>
             <field name="slug">mcp-odoo</field>
-            <field name="description">Odoo MCP server with admin GUI</field>
+            <field name="description">附管理後台的 Odoo MCP 伺服器</field>
             <field name="full_description">Odoo MCP server — a managed Model Context
                 Protocol server with an admin GUI and an MCP client endpoint, persisting
                 its configuration on a dedicated volume.</field>
@@ -533,7 +533,7 @@
         <record id="cloud_app_mcp_n8n" model="woow_paas_platform.cloud_app_template">
             <field name="name">n8n MCP Server</field>
             <field name="slug">mcp-n8n</field>
-            <field name="description">n8n MCP server with admin GUI</field>
+            <field name="description">附管理後台的 n8n MCP 伺服器</field>
             <field name="full_description">n8n MCP server — a managed Model Context
                 Protocol server with an admin GUI and an MCP client endpoint, persisting
                 its configuration on a dedicated volume.</field>

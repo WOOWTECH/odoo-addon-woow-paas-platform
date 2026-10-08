@@ -3,6 +3,26 @@ import { Component } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 
 /**
+ * 範本分類代碼（cloud_app_template.category）→ 顯示文字。與下方分頁用同一組 msgid；
+ * 設定頁直接 t-esc 代碼會在中文介面露出 `ai_llm` 這類值。
+ * @param {string} key
+ * @returns {string}
+ */
+export function getCategoryLabel(key) {
+    const labels = {
+        ai_llm: _t("AI & LLM"),
+        automation: _t("Automation"),
+        database: _t("Database"),
+        analytics: _t("Analytics"),
+        devops: _t("DevOps"),
+        web: _t("Web"),
+        container: _t("Container"),
+        mcp: _t("MCP Server"),
+    };
+    return labels[key] || key;
+}
+
+/**
  * CategoryFilter Component
  * Displays category tabs for filtering marketplace templates
  */
