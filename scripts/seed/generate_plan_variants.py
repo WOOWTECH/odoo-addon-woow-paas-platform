@@ -74,6 +74,18 @@ _VAR = re.compile(r"\+(\d+)access(月|年)繳$")
 _BASE = re.compile(r"(月|年)繳$")
 
 
+def display_name(name):
+    """manifest 原名 → seed 寫進 DB 的方案名（2026-10-08 中文化，使用者核可）。
+
+    manifest 仍維持「+Naccess月繳」與「Hermes MCP Server」原格式——classify 靠
+    `_VAR` 與 `_FAMILY_RULES` 的 prefix 解析席數／週期／家族，改 manifest 會連帶改判準。
+    只在輸出那一刻轉成畫面用字：「+N 存取席位 月繳」、「MCP 伺服器」。
+    既有 DB 由 migrations/18.0.1.0.214 以同一條規則補改。
+    """
+    name = _VAR.sub(lambda m: f'+{m.group(1)} 存取席位 {m.group(2)}繳', name)
+    return name.replace('MCP Server', 'MCP 伺服器')
+
+
 def parse_manifest(path):
     items = []
     for line in Path(path).read_text(encoding='utf-8').splitlines():
@@ -279,7 +291,7 @@ def _template_model(v):
 def _plan_record(v):
     lines = [
         f'        <record id="{_plan_xmlid(v)}" model="sh.subscription.plan">',
-        f'            <field name="name">{escape(v.name)}</field>',
+        f'            <field name="name">{escape(display_name(v.name))}</field>',
         '            <field name="sh_duration">1</field>',
         f'            <field name="sh_unit">{v.cycle}</field>',
         f'            <field name="sh_plan_price">{v.price}</field>',
@@ -324,7 +336,7 @@ def _plan_record(v):
 def _product_record(v):
     return '\n'.join([
         f'        <record id="{_product_xmlid(v)}" model="product.product">',
-        f'            <field name="name">{escape(v.name)} Subscription</field>',
+        f'            <field name="name">{escape(display_name(v.name))} Subscription</field>',
         '            <field name="type">service</field>',
         f'            <field name="list_price">{v.price}</field>',
         '            <field name="sale_ok" eval="True"/>',

@@ -1770,12 +1770,12 @@ msgstr "任何使用此網域 Email 的人。"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_anythingllm_monthly_product_template
-msgid "AnythingLLM Monthly Subscription"
+msgid "AnythingLLM 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_anythingllm_yearly_product_template
-msgid "AnythingLLM Yearly Subscription"
+msgid "AnythingLLM 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6112,7 +6112,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_paas_monthly_product_template
-msgid "HA PaaS Free"
+msgid "HA PaaS 免費版"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6264,232 +6264,232 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_hermes_agent_ac1_yearly_product_template
-msgid "Hermes Agent 雲端訂閱服務+1access年繳 Subscription"
+msgid "Hermes Agent 雲端訂閱服務+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_hermes_agent_ac1_monthly_product_template
-msgid "Hermes Agent 雲端訂閱服務+1access月繳 Subscription"
+msgid "Hermes Agent 雲端訂閱服務+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_ac1_yearly_product_template
-msgid "Hermes MCP Server T1（1–3 人）+1access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_ac1_monthly_product_template
-msgid "Hermes MCP Server T1（1–3 人）+1access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_ac2_yearly_product_template
-msgid "Hermes MCP Server T1（1–3 人）+2access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_ac2_monthly_product_template
-msgid "Hermes MCP Server T1（1–3 人）+2access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_ac3_yearly_product_template
-msgid "Hermes MCP Server T1（1–3 人）+3access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_ac3_monthly_product_template
-msgid "Hermes MCP Server T1（1–3 人）+3access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_monthly_product_template
-msgid "Hermes MCP Server T1（1–3 人）Monthly Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_yearly_product_template
-msgid "Hermes MCP Server T1（1–3 人）Yearly Subscription"
+msgid "Hermes MCP 伺服器 T1（1–3 人）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac1_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+1access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac1_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+1access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac2_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+2access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac2_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+2access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac3_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+3access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac3_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+3access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac4_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+4access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac4_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+4access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac5_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+5access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac5_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+5access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac6_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+6access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_ac6_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）+6access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_monthly_product_template
-msgid "Hermes MCP Server T2（3–6 人）Monthly Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t2_yearly_product_template
-msgid "Hermes MCP Server T2（3–6 人）Yearly Subscription"
+msgid "Hermes MCP 伺服器 T2（3–6 人）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac10_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+10access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac10_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+10access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac1_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+1access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac1_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+1access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac2_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+2access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac2_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+2access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac3_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+3access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac3_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+3access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac4_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+4access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac4_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+4access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac5_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+5access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac5_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+5access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac6_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+6access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac6_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+6access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac7_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+7access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac7_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+7access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac8_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+8access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac8_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+8access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac9_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+9access年繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_ac9_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）+9access月繳 Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_monthly_product_template
-msgid "Hermes MCP Server T3（6–10 人）Monthly Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_hermes_t3_yearly_product_template
-msgid "Hermes MCP Server T3（6–10 人）Yearly Subscription"
+msgid "Hermes MCP 伺服器 T3（6–10 人）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6558,32 +6558,32 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_full_ac1_yearly_product_template
-msgid "Home Assistant 完整版 雲端訂閱服務+1access年繳 Subscription"
+msgid "Home Assistant 完整版 雲端訂閱服務+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_full_ac1_monthly_product_template
-msgid "Home Assistant 完整版 雲端訂閱服務+1access月繳 Subscription"
+msgid "Home Assistant 完整版 雲端訂閱服務+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_full_ac2_yearly_product_template
-msgid "Home Assistant 完整版 雲端訂閱服務+2access年繳 Subscription"
+msgid "Home Assistant 完整版 雲端訂閱服務+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_full_ac2_monthly_product_template
-msgid "Home Assistant 完整版 雲端訂閱服務+2access月繳 Subscription"
+msgid "Home Assistant 完整版 雲端訂閱服務+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_full_ac3_yearly_product_template
-msgid "Home Assistant 完整版 雲端訂閱服務+3access年繳 Subscription"
+msgid "Home Assistant 完整版 雲端訂閱服務+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_ha_full_ac3_monthly_product_template
-msgid "Home Assistant 完整版 雲端訂閱服務+3access月繳 Subscription"
+msgid "Home Assistant 完整版 雲端訂閱服務+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7341,22 +7341,22 @@ msgstr "類別"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_k8s_monthly_product_template
-msgid "Kubernetes MCP Server Monthly Subscription"
+msgid "Kubernetes MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_k8s_yearly_product_template
-msgid "Kubernetes MCP Server Yearly Subscription"
+msgid "Kubernetes MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_k8s_ac1_yearly_product_template
-msgid "Kubernetes MCP 管理+1access年繳 Subscription"
+msgid "Kubernetes MCP 管理+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_k8s_ac1_monthly_product_template
-msgid "Kubernetes MCP 管理+1access月繳 Subscription"
+msgid "Kubernetes MCP 管理+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9182,22 +9182,22 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_ac1_yearly_product_template
-msgid "ODOO MCP 標準版+1access年繳 Subscription"
+msgid "ODOO MCP 標準版+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_ac1_monthly_product_template
-msgid "ODOO MCP 標準版+1access月繳 Subscription"
+msgid "ODOO MCP 標準版+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_manage_ac1_yearly_product_template
-msgid "ODOO MCP 管理控制台+1access年繳 Subscription"
+msgid "ODOO MCP 管理控制台+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_manage_ac1_monthly_product_template
-msgid "ODOO MCP 管理控制台+1access月繳 Subscription"
+msgid "ODOO MCP 管理控制台+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9246,22 +9246,22 @@ msgstr "Odoo 模組"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_monthly_product_template
-msgid "Odoo MCP Server Monthly Subscription"
+msgid "Odoo MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_yearly_product_template
-msgid "Odoo MCP Server Yearly Subscription"
+msgid "Odoo MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_manage_monthly_product_template
-msgid "Odoo Manage MCP Server Monthly Subscription"
+msgid "Odoo Manage MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_odoo_manage_yearly_product_template
-msgid "Odoo Manage MCP Server Yearly Subscription"
+msgid "Odoo Manage MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9323,212 +9323,212 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_ac1_yearly_product_template
-msgid "Odoo訂閱服務（1-3人）+1access年繳 Subscription"
+msgid "Odoo訂閱服務（1-3人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_ac1_monthly_product_template
-msgid "Odoo訂閱服務（1-3人）+1access月繳 Subscription"
+msgid "Odoo訂閱服務（1-3人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_ac2_yearly_product_template
-msgid "Odoo訂閱服務（1-3人）+2access年繳 Subscription"
+msgid "Odoo訂閱服務（1-3人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_ac2_monthly_product_template
-msgid "Odoo訂閱服務（1-3人）+2access月繳 Subscription"
+msgid "Odoo訂閱服務（1-3人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_ac3_yearly_product_template
-msgid "Odoo訂閱服務（1-3人）+3access年繳 Subscription"
+msgid "Odoo訂閱服務（1-3人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_ac3_monthly_product_template
-msgid "Odoo訂閱服務（1-3人）+3access月繳 Subscription"
+msgid "Odoo訂閱服務（1-3人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac1_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+1access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac1_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+1access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac2_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+2access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac2_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+2access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac3_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+3access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac3_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+3access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac4_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+4access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac4_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+4access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac5_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+5access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac5_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+5access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac6_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+6access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac6_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+6access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac7_yearly_product_template
-msgid "Odoo訂閱服務（4-7人）+7access年繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t2_ac7_monthly_product_template
-msgid "Odoo訂閱服務（4-7人）+7access月繳 Subscription"
+msgid "Odoo訂閱服務（4-7人）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac10_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+10access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac10_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+10access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac11_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+11access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+11 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac11_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+11access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+11 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac1_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+1access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac1_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+1access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac2_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+2access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac2_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+2access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac3_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+3access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac3_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+3access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac4_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+4access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac4_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+4access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac5_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+5access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac5_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+5access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac6_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+6access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac6_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+6access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac7_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+7access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac7_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+7access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac8_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+8access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac8_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+8access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac9_yearly_product_template
-msgid "Odoo訂閱服務（8-11人）+9access年繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_odoo_t3_ac9_monthly_product_template
-msgid "Odoo訂閱服務（8-11人）+9access月繳 Subscription"
+msgid "Odoo訂閱服務（8-11人）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9714,22 +9714,22 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_opendesign_monthly_product_template
-msgid "Open Design MCP Server Monthly Subscription"
+msgid "Open Design MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_opendesign_yearly_product_template
-msgid "Open Design MCP Server Yearly Subscription"
+msgid "Open Design MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_opendesign_ac1_yearly_product_template
-msgid "Open Design MCP+1access年繳 Subscription"
+msgid "Open Design MCP+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_opendesign_ac1_monthly_product_template
-msgid "Open Design MCP+1access月繳 Subscription"
+msgid "Open Design MCP+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9744,12 +9744,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_opendesign_ac1_yearly_product_template
-msgid "Open Design 雲端訂閱服務+1access年繳 Subscription"
+msgid "Open Design 雲端訂閱服務+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_opendesign_ac1_monthly_product_template
-msgid "Open Design 雲端訂閱服務+1access月繳 Subscription"
+msgid "Open Design 雲端訂閱服務+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10520,12 +10520,12 @@ msgstr "孤兒 PVC（保留期內）：%(orphans)s"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_postgresql_monthly_product_template
-msgid "PostgreSQL Monthly Subscription"
+msgid "PostgreSQL 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_postgresql_yearly_product_template
-msgid "PostgreSQL Yearly Subscription"
+msgid "PostgreSQL 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12672,12 +12672,12 @@ msgstr "智慧家庭 %(name)s 已經有主要路由。主要網址在開通時�
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_monthly_product_template
-msgid "Smart Home + MCP Monthly Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_yearly_product_template
-msgid "Smart Home + MCP Yearly Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12693,12 +12693,12 @@ msgstr "智慧家庭連結"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_monthly_product_template
-msgid "Smart Home Connect Monthly Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_yearly_product_template
-msgid "Smart Home Connect Yearly Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -15249,22 +15249,22 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_vk_monthly_product_template
-msgid "Vibe Kanban MCP Server Monthly Subscription"
+msgid "Vibe Kanban MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_vk_yearly_product_template
-msgid "Vibe Kanban MCP Server Yearly Subscription"
+msgid "Vibe Kanban MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_vk_ac1_yearly_product_template
-msgid "Vibe Kanban MCP+1access年繳 Subscription"
+msgid "Vibe Kanban MCP+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_vk_ac1_monthly_product_template
-msgid "Vibe Kanban MCP+1access月繳 Subscription"
+msgid "Vibe Kanban MCP+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16373,22 +16373,22 @@ msgstr "n8n Key 已持久化"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_monthly_product_template
-msgid "n8n MCP Server Monthly Subscription"
+msgid "n8n MCP 伺服器 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_yearly_product_template
-msgid "n8n MCP Server Yearly Subscription"
+msgid "n8n MCP 伺服器 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_ac1_yearly_product_template
-msgid "n8n MCP 工具包+1access年繳 Subscription"
+msgid "n8n MCP 工具包+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_ac1_monthly_product_template
-msgid "n8n MCP 工具包+1access月繳 Subscription"
+msgid "n8n MCP 工具包+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16434,202 +16434,202 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac10_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+10access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac10_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+10access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac1_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+1access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac1_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+1access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac2_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+2access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac2_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+2access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac3_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+3access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac3_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+3access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac4_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+4access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac4_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+4access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac5_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+5access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac5_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+5access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac6_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+6access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac6_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+6access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac7_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+7access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac7_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+7access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac8_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+8access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac8_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+8access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac9_yearly_product_template
-msgid "n8n雲端訂閱服務（10人）+9access年繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t4_ac9_monthly_product_template
-msgid "n8n雲端訂閱服務（10人）+9access月繳 Subscription"
+msgid "n8n雲端訂閱服務（10人）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_ac1_yearly_product_template
-msgid "n8n雲端訂閱服務（1人）+1access年繳 Subscription"
+msgid "n8n雲端訂閱服務（1人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_ac1_monthly_product_template
-msgid "n8n雲端訂閱服務（1人）+1access月繳 Subscription"
+msgid "n8n雲端訂閱服務（1人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t2_ac1_yearly_product_template
-msgid "n8n雲端訂閱服務（3人）+1access年繳 Subscription"
+msgid "n8n雲端訂閱服務（3人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t2_ac1_monthly_product_template
-msgid "n8n雲端訂閱服務（3人）+1access月繳 Subscription"
+msgid "n8n雲端訂閱服務（3人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t2_ac2_yearly_product_template
-msgid "n8n雲端訂閱服務（3人）+2access年繳 Subscription"
+msgid "n8n雲端訂閱服務（3人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t2_ac2_monthly_product_template
-msgid "n8n雲端訂閱服務（3人）+2access月繳 Subscription"
+msgid "n8n雲端訂閱服務（3人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t2_ac3_yearly_product_template
-msgid "n8n雲端訂閱服務（3人）+3access年繳 Subscription"
+msgid "n8n雲端訂閱服務（3人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t2_ac3_monthly_product_template
-msgid "n8n雲端訂閱服務（3人）+3access月繳 Subscription"
+msgid "n8n雲端訂閱服務（3人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac1_yearly_product_template
-msgid "n8n雲端訂閱服務（6人）+1access年繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac1_monthly_product_template
-msgid "n8n雲端訂閱服務（6人）+1access月繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac2_yearly_product_template
-msgid "n8n雲端訂閱服務（6人）+2access年繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac2_monthly_product_template
-msgid "n8n雲端訂閱服務（6人）+2access月繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac3_yearly_product_template
-msgid "n8n雲端訂閱服務（6人）+3access年繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac3_monthly_product_template
-msgid "n8n雲端訂閱服務（6人）+3access月繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac4_yearly_product_template
-msgid "n8n雲端訂閱服務（6人）+4access年繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac4_monthly_product_template
-msgid "n8n雲端訂閱服務（6人）+4access月繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac5_yearly_product_template
-msgid "n8n雲端訂閱服務（6人）+5access年繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac5_monthly_product_template
-msgid "n8n雲端訂閱服務（6人）+5access月繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac6_yearly_product_template
-msgid "n8n雲端訂閱服務（6人）+6access年繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_n8n_t3_ac6_monthly_product_template
-msgid "n8n雲端訂閱服務（6人）+6access月繳 Subscription"
+msgid "n8n雲端訂閱服務（6人）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -17213,224 +17213,202 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac10_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+10access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac10_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+10access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac1_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+1access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac1_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+1access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac2_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+2access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac2_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+2access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac3_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+3access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac3_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+3access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac4_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+4access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac4_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+4access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac5_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+5access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac5_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+5access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac6_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+6access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac6_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+6access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac7_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+7access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac7_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+7access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac8_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+8access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac8_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+8access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac9_yearly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+9access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_ac9_monthly_product_template
-msgid "智慧家庭連結訂閱服務（方案一：對外網址）+9access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案一：對外網址）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac10_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+10access年繳 "
-"Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac10_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+10access月繳 "
-"Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac1_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+1access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac1_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+1access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac2_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+2access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac2_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+2access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac3_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+3access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac3_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+3access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac4_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+4access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac4_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+4access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac5_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+5access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac5_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+5access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac6_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+6access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac6_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+6access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac7_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+7access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac7_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+7access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac8_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+8access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac8_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+8access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac9_yearly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+9access年繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_mcp_ac9_monthly_product_template
-msgid ""
-"智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+9access月繳 Subscription"
+msgid "智慧家庭連結訂閱服務（方案二：對外網址+MCP加密連線）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -17597,202 +17575,202 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac10_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+10access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac10_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+10access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac1_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+1access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac1_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+1access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac2_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+2access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac2_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+2access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac3_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+3access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac3_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+3access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac4_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+4access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac4_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+4access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac5_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+5access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac5_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+5access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac6_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+6access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac6_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+6access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac7_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+7access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac7_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+7access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac8_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+8access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac8_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+8access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac9_yearly_product_template
-msgid "遠端安全連結訂閱服務（10個）+9access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_pro_ac9_monthly_product_template
-msgid "遠端安全連結訂閱服務（10個）+9access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（10個）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac10_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+10access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac10_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+10access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac1_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+1access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac1_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+1access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac2_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+2access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac2_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+2access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac3_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+3access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac3_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+3access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac4_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+4access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac4_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+4access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac5_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+5access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac5_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+5access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac6_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+6access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac6_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+6access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac7_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+7access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac7_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+7access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac8_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+8access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac8_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+8access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac9_yearly_product_template
-msgid "遠端安全連結訂閱服務（1個）+9access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r1_ac9_monthly_product_template
-msgid "遠端安全連結訂閱服務（1個）+9access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（1個）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -17803,102 +17781,102 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac10_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+10access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac10_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+10access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac1_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+1access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac1_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+1access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac2_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+2access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac2_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+2access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac3_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+3access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac3_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+3access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac4_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+4access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac4_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+4access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac5_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+5access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac5_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+5access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac6_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+6access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac6_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+6access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac7_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+7access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac7_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+7access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac8_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+8access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac8_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+8access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac9_yearly_product_template
-msgid "遠端安全連結訂閱服務（3個）+9access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_r3_ac9_monthly_product_template
-msgid "遠端安全連結訂閱服務（3個）+9access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（3個）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -17909,102 +17887,102 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac10_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+10access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+10 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac10_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+10access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+10 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac1_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+1access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+1 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac1_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+1access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+1 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac2_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+2access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+2 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac2_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+2access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+2 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac3_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+3access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+3 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac3_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+3access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+3 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac4_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+4access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+4 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac4_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+4access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+4 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac5_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+5access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+5 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac5_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+5access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+5 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac6_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+6access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+6 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac6_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+6access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+6 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac7_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+7access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+7 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac7_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+7access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+7 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac8_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+8access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+8 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac8_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+8access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+8 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac9_yearly_product_template
-msgid "遠端安全連結訂閱服務（6個）+9access年繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+9 存取席位 年繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_security_access_entry_ac9_monthly_product_template
-msgid "遠端安全連結訂閱服務（6個）+9access月繳 Subscription"
+msgid "遠端安全連結訂閱服務（6個）+9 存取席位 月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
