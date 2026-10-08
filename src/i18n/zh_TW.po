@@ -12689,7 +12689,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
 msgid "Smart Home Connect"
-msgstr "智慧家庭連線"
+msgstr "智慧家庭連結"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_monthly_product_template
