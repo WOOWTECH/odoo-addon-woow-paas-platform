@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 模型閘道（LiteLLM）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/litellm 0.1.1（0.1.0＝#123）——litellm-non_root 1.103.3（uid 65534）
+契約來源：woow-paas-charts charts/litellm 0.2.0（0.1.0＝#123；0.2.0＝ChatGPT 訂閱登入）——litellm-non_root 1.103.3（uid 65534）
 ＋內附 PostgreSQL（平台 paas-postgres 17.11），唯一入口 ``<release>-litellm:4000``、只有一顆 PVC。
 UI 帳號＝``auth.adminUser``（預設 admin，可改）、密碼＝``config.sensitive.admin_password``；master key＝平台 #530 gateway
 key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、不需 ``sk-`` 前綴）。
@@ -75,9 +75,21 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝UI_USERNAME '
-                         '走 Secret，改帳號不改 pod template（admin_username_helm_path 的前提）')
+        self.assertEqual(tpl.helm_chart_version, '0.2.0',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
+                         '走 Secret（admin_username_helm_path 的前提）；0.2.0＝ChatGPT 訂閱（woow_chatgpt.py）')
+
+    def test_chatgpt_subscription_enabled(self):
+        """chart 0.2.0 內附 woow_chatgpt.py ⇒ 服務頁有「ChatGPT 訂閱」卡片（能力唯一事實源）。"""
+        tpl = self._tpl()
+        self.assertTrue(tpl.chatgpt_subscription_supported)
+        desc = tpl.full_description
+        for needle, why in (
+                ('ChatGPT 訂閱', '商品說明要讓租戶知道有這個選用功能'),
+                ('非 OpenAI 官方', '條款風險要講在購買前'),
+                ('帳號風險自負', '帳號風險由租戶承擔'),
+        ):
+            self.assertIn(needle, desc, why)
 
     def test_service_port_lockstep(self):
         self.assertEqual(self._values()['service']['port'], self._tpl().default_port)

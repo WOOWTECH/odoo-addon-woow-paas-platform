@@ -793,6 +793,24 @@ container log 讀回來顯示在服務頁。
 `_gateway_credentials` 帶出（同名 payload 鍵）；空值時前端沿用 hermes-agent 的內建
 文案（MCP 連線設定的 Gateway API Server 區）。只是顯示字，交付判準不變。
 
+#### LiteLLM「ChatGPT 訂閱」（device code；chart litellm 0.2.0 起）
+
+租戶在服務頁用 ChatGPT Plus／Pro 登入，讓 LiteLLM 的 `chatgpt/` provider 用訂閱額度。chart 在
+proxy 容器內附 `/woow/py/woow_chatgpt.py`，operator `POST /api/releases/{ns}/{rel}/chatgpt-subscription/{action}`
+exec 它（契約見 `docs/reference/api/litellm-chatgpt-subscription-operator.md`，operator #1547）。token 只存在租戶 pod 的
+tmpfs 與租戶自己的 DB，平台不保存。
+
+- **能力旗標**：`cloud_app_template.chatgpt_subscription_supported`（唯一事實源；seed 只有 `cloud_app_litellm`）。
+  payload `template.chatgpt_subscription_supported` 鏡射；前端卡片另看 get 回應的 `viewer_role`（owner／admin）
+  與服務 running。
+- **端點**：`POST /api/workspaces/<wid>/services/<sid>/chatgpt-subscription`，`action` ∈
+  status／start／poll／disconnect／add_models／test；ROLE_ADMIN，status 以外過訂閱閘；model 端
+  private `CloudService._chatgpt_subscription`（running 才可、模型名稱白名單、error_code → 中文化訊息、
+  回應走白名單視圖 `_chatgpt_subscription_view`）。一次性登入代碼 `pending.user_code` 不進任何 log。
+- **前端**：`ChatGPTSubscriptionCard`（Overview 分頁，掛載時查一次 status）＋ `ChatGPTSubscriptionModal`
+  （同意條款 → 代碼 → 自己的 poll 計時器 → 連上後加入預設模型）。
+- **既有服務**：0.1.x 的 release 沒有那支 CLI，operator 回 `unsupported_chart`，卡片請租戶「重新部署」。
+
 ### CloudServiceBackup _(Future Phase)_
 
 ### CloudServiceLog _(Future Phase)_

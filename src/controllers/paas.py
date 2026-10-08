@@ -1774,7 +1774,13 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Service not found')}
 
         if action == 'get':
-            return self._get_service(service)
+            result = self._get_service(service)
+            if result.get('success'):
+                # 檢視者在這個工作區的角色（非敏感）：前端只在 owner／admin 時畫「管理」類
+                # 卡片（ChatGPT 訂閱），省掉 user／guest 一進頁就打一個必然被拒的請求。
+                # 授權仍只在各端點的 role gate，這個值只決定要不要顯示。
+                result['data']['viewer_role'] = access.role
+            return result
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
@@ -1838,6 +1844,71 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': True, 'data': self._format_service(service)}
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/chatgpt-subscription", auth="user", methods=["POST"], type="json")
+    def api_service_chatgpt_subscription(
+        self, workspace_id: int, service_id: int, action: str = 'status',
+        models: list[str] | None = None, model: str | None = None, **kw: Any,
+    ) -> dict[str, Any]:
+        """LiteLLM「ChatGPT 訂閱」：device code 登入、狀態、加入預設模型、測試、中斷。
+
+        ``action``：``status``／``start``／``poll``／``disconnect``／``add_models``／``test``；
+        ``models``（add_models，省略＝chart 預設清單）、``model``（test）。
+
+        授權順序沿用 reset／rollback：workspace 可見 → role ≥ admin（owner／admin；user／
+        guest 一律「Workspace not found or access denied」）→ service 釘在這個工作區、
+        ``conceal_instances`` 當不存在 → 能力 gate（``template.chatgpt_subscription_supported``，
+        與 payload 鏡射、model 防線同一欄位）→ 會動到東西的 action 過訂閱閘（停權／欠費
+        擋在這裡）。狀態、名稱格式等業務判準在 model 的 private ``_chatgpt_subscription``。
+
+        Returns:
+            ``{'success': True, 'data': {...}}``（``data.pending.user_code`` 是要顯示給租戶
+            的一次性代碼）或 ``{'success': False, 'error': <訊息>, 'error_code': <碼>}``。
+        """
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
+        if not workspace.exists():
+            return {'success': False, 'error': _('Workspace not found or access denied')}
+
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN)
+        if not access:
+            return {'success': False, 'error': _('Workspace not found or access denied')}
+
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.conceal_instances):
+            return {'success': False, 'error': _('Service not found')}
+
+        # 能力 gate 讀範本欄位（capability-gate-single-source-field），不判 slug。
+        if not service.template_id.chatgpt_subscription_supported:
+            return {
+                'success': False,
+                'error': _('This service does not support ChatGPT subscription.'),
+                'error_code': 'not_supported',
+            }
+        if action not in ('status', 'start', 'poll', 'disconnect', 'add_models', 'test'):
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
+
+        try:
+            if action != 'status':
+                # 登入、加模型、測試（會用到訂閱額度）、中斷都算「操作服務」：與 update／
+                # restart 同一道訂閱閘。status 只讀，停權中的服務本來就不是 running。
+                service._check_operation_allowed(operation='write')
+            return service._chatgpt_subscription(action, models=models, model=model)
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.exception("Access error on ChatGPT subscription (service %s, action %s): %s",
+                              service.id, action, e)
+            return {'success': False,
+                    'error': _('An error occurred while accessing the service.')}
+        except (ValidationError, UserError) as e:
+            return {'success': False, 'error': str(e)}
+        except Exception:
+            # ⛔ 不帶例外內容以外的任何回應資料進 log（user_code 只活在回應裡）。
+            _logger.exception("ChatGPT subscription request failed (service %s, action %s)",
+                              service.id, action)
+            return {'success': False,
+                    'error': _('An error occurred while accessing the service.')}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
@@ -4720,6 +4791,10 @@ class PaasController(HiddenChainMixin, Controller):
                 # #1432：「重新啟動」按鈕的顯示判準——與 `_restart_workloads` 的 VM 閘
                 # 讀同一個欄位（workload_type），前端不自建判準。
                 'restart_supported': service.template_id.workload_type != 'vm',
+                # LiteLLM「ChatGPT 訂閱」卡片的顯示判準：直接鏡射範本欄位（與
+                # chatgpt-subscription endpoint 的能力 gate、model 防線同一欄位），不推導。
+                'chatgpt_subscription_supported': bool(
+                    service.template_id.chatgpt_subscription_supported),
             },
             # 目前生效的 admin 帳號（非敏感；不開放改帳號的模板為 None），供對話框預填。
             'admin_username': service._admin_username(),

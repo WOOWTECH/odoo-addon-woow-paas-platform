@@ -92,6 +92,11 @@
                             <group string="App Admin Password Reset (operator exec)">
                                 <field name="app_admin_reset_kind"/>
                             </group>
+                            <!-- LiteLLM 的 ChatGPT 訂閱卡片（chart 0.2.0 起）；能力的唯一事實源，
+                                 前端卡片讀 payload 鏡射的同名欄位。 -->
+                            <group string="ChatGPT Subscription (operator exec)">
+                                <field name="chatgpt_subscription_supported"/>
+                            </group>
                             <group invisible="not mcp_enabled">
                                 <group string="Sidecar Image">
                                     <field name="mcp_sidecar_image"

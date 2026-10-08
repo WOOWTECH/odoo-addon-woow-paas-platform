@@ -19,6 +19,8 @@ import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
+import { ChatGPTSubscriptionModal } from "../../components/modal/ChatGPTSubscriptionModal";
+import { ChatGPTSubscriptionCard } from "../../components/chatgpt-subscription/ChatGPTSubscriptionCard";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -67,6 +69,8 @@ export class ServiceDetailPage extends Component {
         CreateProjectModal,
         OneTimeCredentialsModal,
         AdminCredentialsModal,
+        ChatGPTSubscriptionModal,
+        ChatGPTSubscriptionCard,
     };
     static props = {
         workspaceId: { type: Number },
@@ -94,6 +98,11 @@ export class ServiceDetailPage extends Component {
             oneTimeCredentials: null,
             resetPasswordError: null,
             showAdminCredentialsModal: false,
+            // LiteLLM「ChatGPT 訂閱」：連接視窗（名字符合 isModalOpen 的 show*Modal ⇒ 開著時
+            // 頁面輪詢暫停）、要接續的登入、卡片的重掛序號（視窗關閉後重掛＝重讀一次 status）。
+            showChatgptSubscriptionModal: false,
+            chatgptPending: null,
+            chatgptCardKey: 0,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -355,6 +364,38 @@ export class ServiceDetailPage extends Component {
 
     get isResetAdminPasswordLoading() {
         return !!cloudService.operationLoading.resetAdminPassword;
+    }
+
+    /**
+     * LiteLLM「ChatGPT 訂閱」卡片的顯示判準。
+     *
+     * 能力讀 payload 的 template.chatgpt_subscription_supported（＝後端範本欄位，與
+     * chatgpt-subscription endpoint 的能力 gate 同一欄位；不判 slug），fail-closed（`=== true`）。
+     * 另外兩個條件只是「現在能不能用」：檢視者是 owner／admin（endpoint 要求 admin 以上；
+     * get 回應的 viewer_role）、服務 running（model 端同一判準）。
+     */
+    get chatgptSubscriptionSupported() {
+        return this.service?.template?.chatgpt_subscription_supported === true;
+    }
+
+    get showChatgptSubscriptionCard() {
+        return (
+            this.chatgptSubscriptionSupported &&
+            ["owner", "admin"].includes(this.service?.viewer_role) &&
+            this.service?.state === "running"
+        );
+    }
+
+    openChatgptSubscription(pending) {
+        this.state.chatgptPending = pending || null;
+        this.state.showChatgptSubscriptionModal = true;
+    }
+
+    closeChatgptSubscription() {
+        this.state.showChatgptSubscriptionModal = false;
+        this.state.chatgptPending = null;
+        // 卡片重掛＝重讀一次 status（不論這次有沒有連上：關掉時可能留下進行中的登入）。
+        this.state.chatgptCardKey += 1;
     }
 
     /**
