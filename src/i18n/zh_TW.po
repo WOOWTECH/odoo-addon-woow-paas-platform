@@ -21166,3 +21166,308 @@ msgid ""
 "subscription is no longer in progress (%(state)s). Confirm the payment again "
 "if it returns to in progress without being paid."
 msgstr "訂閱已不在進行中（%(state)s），已自動取消「允許復權（已人工確認付款）」。訂閱之後若回到進行中但仍未付款，請重新確認付款。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "This service has no subscription to renew."
+msgstr "這個服務沒有可以續訂的訂閱。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service's subscription is still active; there is nothing to renew."
+msgstr "這個服務的訂閱仍然有效，不需要續訂。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This subscription has already been renewed. The service will be restored "
+"automatically once the renewal is complete."
+msgstr "這個訂閱已經續訂過了。續訂完成後，服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "This subscription cannot be renewed in its current state."
+msgstr "這個訂閱目前的狀態無法續訂。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service has already been removed, so it cannot be renewed. Please "
+"create a new service."
+msgstr "這個服務已經被清除，無法續訂。請重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service was never set up, so it cannot be renewed. Please delete it and "
+"create a new service."
+msgstr "這個服務從未開通成功，無法續訂。請刪除後重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"The current billing period has not ended yet (it ends on %(date)s). You can "
+"renew after it ends."
+msgstr "目前的計費週期還沒結束（到 %(date)s 為止），週期結束後才能續訂。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"The retention period of this service has ended, so it can no longer be "
+"renewed. Please create a new service."
+msgstr "這個服務的保留期已過，無法再續訂。請重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "This plan cannot be used to renew this service."
+msgstr "這個方案不能用來續訂這個服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service is being processed right now. Please try again in a moment."
+msgstr "這個服務正在處理中，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "Insufficient wallet balance. %(shortage)s more points are needed."
+msgstr "錢包餘額不足，還需要 %(shortage)s 點。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"The payment could not be completed, so nothing was renewed or charged. "
+"Please try again."
+msgstr "付款沒有完成，因此沒有續訂、也沒有扣款。請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while preparing the renewal."
+msgstr "準備續訂時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while renewing the subscription."
+msgstr "續訂時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Failed to load the renewal details"
+msgstr "無法載入續訂資訊"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Failed to renew the subscription"
+msgstr "續訂失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Renew the subscription of %(name)s to bring the service back."
+msgstr "續訂「%(name)s」的訂閱，讓服務恢復運作。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Renew by %(date)s; after that the service and its data are removed."
+msgstr "請在 %(date)s 前續訂；之後服務與資料會被清除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Tax (%(rate)s)"
+msgstr "稅金（%(rate)s）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Insufficient balance. You need %(amount)s more to renew."
+msgstr "餘額不足，還需要 %(amount)s 才能續訂。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+msgid "Renew Subscription"
+msgstr "續訂服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Loading renewal details..."
+msgstr "正在載入續訂資訊…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "A new billing period starts today. The unpaid period is not charged."
+msgstr "新的計費週期從今天開始，欠費期間不另外收費。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid ""
+"The service is restored automatically right after the payment, usually "
+"within a few minutes."
+msgstr "付款完成後服務會自動恢復，通常幾分鐘內完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Previous plan"
+msgstr "原方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid ""
+"To change the resources (CPU, memory, storage), renew first and then use "
+"Change Plan."
+msgstr "要調整規格（CPU、記憶體、儲存空間），請先續訂，再使用「變更方案」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Billing Period"
+msgstr "計費週期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "The payment is taken from the workspace owner's wallet."
+msgstr "費用從工作區擁有者的錢包扣除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Ask the workspace owner to top up their wallet."
+msgstr "請工作區擁有者先為錢包儲值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Renew & Pay"
+msgstr "續訂並付款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The service is suspended."
+msgstr "服務已停權。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The service will be suspended soon."
+msgstr "服務即將停權。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Renew by %(date)s to keep the service and its data."
+msgstr "請在 %(date)s 前續訂，以保留服務與資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Ask a workspace owner or admin to renew it."
+msgstr "請工作區擁有者或管理員續訂。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The subscription of this service was cancelled"
+msgstr "這個服務的訂閱已取消"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The subscription of this service has ended"
+msgstr "這個服務的訂閱已結束"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Subscription renewed"
+msgstr "已續訂"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The service is being restored. This usually takes a few minutes."
+msgstr "服務正在恢復，通常幾分鐘內完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The retention period of this service has ended"
+msgstr "這個服務的保留期已過"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "It can no longer be renewed. Create a new service to continue."
+msgstr "已無法續訂。如需繼續使用，請重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "This subscription will not renew automatically"
+msgstr "這個訂閱不會自動續約"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid ""
+"The service keeps running until %(date)s. You can renew it here after that "
+"date."
+msgstr "服務會運作到 %(date)s，之後可以在這裡續訂。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Renew by %(date)s"
+msgstr "%(date)s 前可續訂"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Subscription ended"
+msgstr "訂閱已結束"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
+msgid "Services Awaiting Renewal"
+msgstr "待續訂的服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
+msgid ""
+"The subscriptions of these services were cancelled or have ended. Renew to "
+"restore them."
+msgstr "這些服務的訂閱已取消或已結束，續訂後即可恢復。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
+msgid "Renew"
+msgstr "續訂"

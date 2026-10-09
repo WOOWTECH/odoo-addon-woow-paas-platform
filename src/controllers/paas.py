@@ -41,6 +41,7 @@ from ..services.chart_version import (
     rollback_floor_violation,
 )
 from ..models.cloud_service import WOOW_ODOO_ADMIN_PASSWORD_PATH, _internal_provision
+from ..models.cloud_service_renewal import RENEWABLE_SUBSCRIPTION_STATES, RenewalRefused
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
@@ -1706,6 +1707,179 @@ class PaasController(HiddenChainMixin, Controller):
                 'subscription': service._get_subscription_info(),
             },
         }
+
+    # ==================== #1611 自助續訂 ====================
+    #
+    # 訂閱被取消（欠費）或到期、服務還在保留期內時，owner／admin 在 /woow 選方案 → 錢包付款
+    # → 沿用上游續約鏈產生新訂閱、綁回原服務 → #1599 的 cron 立即復權。判準與寫入都在
+    # model（`cloud_service_renewal.py`）；這裡只做身分／角色、#980 付款能力與回應形狀。
+    # 只做 Cloud Service；Security Access／Smart Home 另議。
+
+    def _renewal_service(self, service_id):
+        """續訂端點共用的前置：回 ``(service, None)`` 或 ``(None, 拒絕回應)``。
+
+        conceal_instances 閘排在角色之前（#471）；非成員＝找不到；user／guest＝權限不足
+        （判準＝``_can_manage_service``，與換方案／略過試用同一個 owner／admin 線，#1560）。
+        """
+        service = _PaaSCapability(request.env).cloud_service(service_id)
+        if not service.exists() or service.template_id.conceal_instances:
+            return None, {'success': False, 'error': _('Service not found')}
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        if not self._can_manage_service(access):
+            return None, {'success': False, 'error': _('Permission denied'),
+                          'code': 'permission_denied'}
+        return service, None
+
+    @staticmethod
+    def _renewal_refusal(service, code, data=None):
+        return {'success': False,
+                'error': service._renewal_refusal_message(code, data),
+                'code': code,
+                'data': data or {}}
+
+    @route("/api/cloud-services/services/<int:service_id>/renew-estimate", auth="user", methods=["POST"], type="json")
+    def api_service_renew_estimate(self, service_id: int, **kw: Any) -> dict[str, Any]:
+        """續訂前的確認內容：可選方案與各自的首期金額、錢包餘額、付款能力。不寫 DB。"""
+        service, denied = self._renewal_service(service_id)
+        if denied:
+            return denied
+        status = service._renewal_status()
+        if not status['available']:
+            return self._renewal_refusal(service, status['reason'], {'renewal': status, **status})
+        try:
+            old = service._sub()
+            current_plan = old.sh_subscription_plan_id
+            plans = []
+            for plan in service._renewal_plans():
+                quote = service._renewal_quote(plan)
+                quote.update({
+                    'name': plan.name,
+                    'unit': plan.sh_unit,
+                    'duration': plan.sh_duration,
+                    'is_current': plan == current_plan,
+                })
+                plans.append(quote)
+            # #980：與略過試用同一個付款能力判準（以舊訂閱的開票 vals 預演；只看公司與旗標）。
+            payability = self._skip_trial_invoice_payability(service, sub=old)
+            partner = old.sh_partner_id
+            data = {
+                'renewal': status,
+                'service_name': service.name,
+                'previous_plan_name': current_plan.name or '',
+                'plans': plans,
+                'wallet_balance': float(partner.wallet_balance or 0.0),
+                # 扣款的是訂閱的 partner（工作區擁有者）——admin 續訂時前端要講清楚。
+                'payer_is_viewer': partner == request.env.user.partner_id,
+                **payability,
+            }
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.error("ORM error estimating renewal for service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while preparing the renewal.')}
+        except (ValidationError, UserError) as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error("Error estimating renewal for service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while preparing the renewal.')}
+        return {'success': True, 'data': data}
+
+    @route("/api/cloud-services/services/<int:service_id>/renew", auth="user", methods=["POST"], type="json")
+    def api_service_renew(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
+        """自助續訂：錢包付款、產生新訂閱並綁回這台服務；停權中的服務 commit 後立即復權。
+
+        失敗不留任何東西（model 在第一個寫入前擋下能預判的失敗，寫入包在 savepoint）。
+        """
+        service, denied = self._renewal_service(service_id)
+        if denied:
+            return denied
+        if not plan_id:
+            return {'success': False, 'error': _('plan_id is required')}
+        try:
+            plan = service._renewal_plans().filtered(lambda p: p.id == int(plan_id))
+            if not plan:
+                status = service._renewal_status()
+                code = status['reason'] or 'plan_not_available'
+                return self._renewal_refusal(service, code, {'renewal': status, **status})
+            payability = self._skip_trial_invoice_payability(service, sub=service._sub())
+            if not payability['payable_via_woow']:
+                return {'success': False,
+                        'error': _('This invoice cannot be paid in /woow while automatic '
+                                   'e-invoicing is enabled. Please contact support.'),
+                        'code': payability['pay_blocked_reason']}
+            result = service._renew_lapsed_subscription(plan)
+        except RenewalRefused as e:
+            _logger.info("[CLOUD_SVC] renew refused service=%s code=%s", service_id, e.code)
+            return {'success': False, 'error': str(e), 'code': e.code, 'data': e.data}
+        except OperationalError:
+            # #518／#533：並發類例外交給框架的 retrying()（新快照重播）。
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.error("Access error renewing service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while renewing the subscription.')}
+        except (ValidationError, UserError) as e:
+            _logger.warning("Renewal rejected for service %s: %s", service_id, e)
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error("Error renewing service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while renewing the subscription.')}
+        invoice = result['invoice']
+        return {
+            'success': True,
+            'data': {
+                'subscription': service._get_subscription_info(),
+                'renewal': service._renewal_status(),
+                'invoice': {'id': invoice.id, 'name': invoice.name or '',
+                            'amount': invoice.amount_total} if invoice else None,
+            },
+        }
+
+    @route("/api/cloud-services/renewals", auth="user", methods=["POST"], type="json")
+    def api_cloud_service_renewals(self, **kw: Any) -> dict[str, Any]:
+        """呼叫者（owner／admin）各工作區裡現在可以自助續訂的服務——帳務頁的「待續訂」清單。
+
+        停權說明頁（#1563）的續訂連結指向 /woow#/billing，租戶從那裡就看得到要續哪一台。
+        """
+        capability = _PaaSCapability(request.env)
+        rows = []
+        for access in capability.memberships():
+            if not self._can_manage_service(access):
+                continue
+            workspace = capability.workspace(access.workspace_id.id, ROLE_ADMIN)
+            if not workspace:
+                continue
+            services = workspace.env['woow_paas_platform.cloud_service'].search([
+                ('workspace_id', '=', workspace.id),
+                ('subscription_state', 'in', list(RENEWABLE_SUBSCRIPTION_STATES)),
+            ], order='id')
+            for service in services:
+                if service.template_id.conceal_instances:
+                    continue
+                status = service._renewal_status()
+                if not status['available']:
+                    continue
+                rows.append({
+                    'id': service.id,
+                    'name': service.name,
+                    'workspace_id': workspace.id,
+                    'workspace_name': workspace.name,
+                    'state': service.state,
+                    'template': {
+                        'name': service.template_id.name,
+                        'slug': service.template_id.slug or '',
+                    },
+                    'plan_name': service._sub().sh_subscription_plan_id.name or '',
+                    'renewal': status,
+                })
+        return {'success': True, 'data': rows}
 
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
     def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
@@ -5047,6 +5221,10 @@ class PaasController(HiddenChainMixin, Controller):
                 'allocated_ram_gb': service.allocated_ram_gb,
                 'allocated_storage_gb': service.allocated_storage_gb,
                 'last_upgraded_at': service.last_upgraded_at.isoformat() if service.last_upgraded_at else None,
+                # #1611：服務頁的續訂橫幅／按鈕讀這一格（能不能續、保留到哪天、恢復中）。
+                # 所有成員都看得到狀態；「續訂」按鈕另外要 viewer_can_manage（owner／admin），
+                # 與兩支續訂端點的角色閘同一個判準。只放 detail：list 不需要。
+                'renewal': service._renewal_status(),
             })
 
             # Expose n8n login credentials if applicable

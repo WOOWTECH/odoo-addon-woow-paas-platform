@@ -79,6 +79,52 @@ class SubscriptionLifecycleCron(models.AbstractModel):
             ('state', '=', 'in_progress'),
         ], limit=1)
 
+    def _follow_renewal_chain(self, entity):
+        """分支 1：綁的是 renewed 就改綁到續約鏈的下一筆（in_progress）；回傳改綁後的訂閱。
+
+        每日 cron、付款後即時復權（#1599）與 /woow 自助續訂（#1611）共用這一段——續訂
+        交易 commit 前就改綁，租戶馬上看到新訂閱；停權中的服務仍由 #1599 的 cron 復權。
+        """
+        sub = entity.subscription_id
+        if sub.state == 'renewed':
+            new_sub = self._renewal_successor(sub)
+            if new_sub:
+                entity.write({'subscription_id': new_sub.id})
+                _logger.info(
+                    "[SUB_CRON] renewal_chain %s %s → new sub=%s",
+                    entity._name, entity.id, new_sub.id,
+                )
+                return new_sub
+        return sub
+
+    def _cancel_cleanup_date(self, sub, cleanup_months, today):
+        """取消（cancel）的訂閱，每日 cron 從哪一天起會清除（``_do_cleanup``）它的服務。
+
+        分支 4 的判準是 ``(today - cancel_date).days / 30 > cleanup_months``，取消日取
+        ``sub.write_date``（沒有就當作今天）。``cleanup_months`` 是整數 ⇒ 等價於
+        ``today >= cancel_date + 30 × cleanup_months + 1 天``。#1611 的自助續訂用同一個日期
+        判斷「保留期還在不在」，兩邊不得各算一份。
+        """
+        cancel_date = sub.write_date.date() if sub.write_date else today
+        return cancel_date + timedelta(days=30 * cleanup_months + 1)
+
+    def _lock_for_transition(self, entity):
+        """停權／清除之前先取 ``_acquire_resume_lock``（#1611）；拿不到回 False＝這一輪跳過。
+
+        #1611 的自助續訂會在同一列上改綁新訂閱。每日 cron 的交易很長、快照在開頭就定了：
+        續訂若在快照之後 commit，cron 看到的仍是「取消／到期」，照舊停權甚至清除
+        （helm uninstall 回捲不了）。先取鎖：續訂交易正拿著 ⇒ ``LockNotAvailable``；續訂已
+        commit、快照比它舊 ⇒ ``SerializationFailure``——兩種都跳過，明天再以新快照判斷。
+        Smart Home／Security Access 的 seam 恆為 True（沒有自助續訂，行為不變）。
+        """
+        if entity._acquire_resume_lock():
+            return True
+        _logger.info(
+            "[SUB_CRON] skip %s %s: locked by another transaction (renewal in flight?)",
+            entity._name, entity.id,
+        )
+        return False
+
     def _enforce_single(self, entity, grace_days, cleanup_months, today,
                         resume_only=False):
         """依訂閱狀態對單一記錄做復權／停權／清除。
@@ -109,15 +155,7 @@ class SubscriptionLifecycleCron(models.AbstractModel):
             return
 
         # 1. Follow renewal chain
-        if sub.state == 'renewed':
-            new_sub = self._renewal_successor(sub)
-            if new_sub:
-                entity.write({'subscription_id': new_sub.id})
-                _logger.info(
-                    "[SUB_CRON] renewal_chain %s %s → new sub=%s",
-                    entity._name, entity.id, new_sub.id,
-                )
-                sub = new_sub
+        sub = self._follow_renewal_chain(entity)
 
         # 2. Active subscription → resume if halted
         #
@@ -170,6 +208,8 @@ class SubscriptionLifecycleCron(models.AbstractModel):
             # 'deleting'→'suspended' state thrash on every subsequent pass.
             if (days_expired > grace_days
                     and entity.state not in ('suspended', 'deleting')):
+                if not self._lock_for_transition(entity):
+                    return
                 entity._do_suspend()
                 _logger.info(
                     "[SUB_CRON] suspended %s %s (expired %d days, grace=%d)",
@@ -181,20 +221,23 @@ class SubscriptionLifecycleCron(models.AbstractModel):
         if sub.state == 'cancel':
             # See branch 3: never re-suspend a record already cleaned up
             # ('deleting'); that reverse transition is the state thrash.
-            if entity.state not in ('suspended', 'deleting'):
+            suspend = entity.state not in ('suspended', 'deleting')
+            cleanup_date = self._cancel_cleanup_date(sub, cleanup_months, today)
+            cleanup = today >= cleanup_date
+            if (suspend or cleanup) and not self._lock_for_transition(entity):
+                return
+            if suspend:
                 entity._do_suspend()
                 _logger.info(
                     "[SUB_CRON] suspended %s %s (cancelled)",
                     entity._name, entity.id,
                 )
 
-            cancel_date = sub.write_date.date() if sub.write_date else today
-            months_since_cancel = (today - cancel_date).days / 30.0
-            if months_since_cancel > cleanup_months:
+            if cleanup:
                 entity._do_cleanup()
                 _logger.info(
-                    "[SUB_CRON] cleaned up %s %s (cancelled %.1f months ago)",
-                    entity._name, entity.id, months_since_cancel,
+                    "[SUB_CRON] cleaned up %s %s (cancelled; cleanup due %s)",
+                    entity._name, entity.id, cleanup_date,
                 )
 
     # ------------------------------------------------------------------ #
