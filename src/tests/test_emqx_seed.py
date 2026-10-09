@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """EMQX 上架 seed 與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/emqx 0.1.6（:18083 是唯一入口——pod 內 nginx 把 /mqtt 轉給
+契約來源：woow-paas-charts charts/emqx 0.1.7（:18083 是唯一入口——pod 內 nginx 把 /mqtt 轉給
 WebSocket listener、其餘轉給 dashboard；ClusterIP-only、release 前綴命名、built_in_database
 authenticator 不再種任何 MQTT 帳號（#1361）、retained 存磁碟（#1362）、ngrok sidecar 對外轉 1883；
-0.1.6 起 MQTT 授權預設拒絕、每個帳號只有「<帳號>/#」（#1529）），
+0.1.6 起 MQTT 授權預設拒絕、每個帳號只有「<帳號>/#」（#1529）；0.1.7 起 ngrok agent 的輸出經過遮蔽
+authtoken 的過濾器、ngrok.remoteAddr 不再 render 進 shell（#1613）），
 以及 paas-odoo-ci mirror-image.yml 鏡像進 JCR 的 image。
 
 核心守線：
@@ -69,10 +70,11 @@ class TestEmqxSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, EMQX_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.6',
+        self.assertEqual(tpl.helm_chart_version, '0.1.7',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；'
                          '0.1.4 起後台 WebSocket 客户端預設連頁面本身的埠（#1418）；'
-                         '0.1.6 起 MQTT 授權預設拒絕、公開網址不給 Prometheus／API 文件（#1529）')
+                         '0.1.6 起 MQTT 授權預設拒絕、公開網址不給 Prometheus／API 文件（#1529）；'
+                         '0.1.7 起 ngrok authtoken 不再出現在容器 log（#1613）')
 
     def test_description_matches_chart_013(self):
         """#1361／#1362／#1366：說明要跟 chart 0.1.3 的實際行為一致。"""
