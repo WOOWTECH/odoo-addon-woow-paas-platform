@@ -5,7 +5,7 @@
              t-on-click="onCardClick">
             <div class="o_woow_app_card_header">
                 <div t-att-class="'o_woow_app_card_icon o_woow_app_card_icon_' + categoryColor">
-                    <WoowIcon name="categoryIcon" size="28"/>
+                    <BrandIcon brand="brandKey" fallback="categoryIcon" size="28" fill="true"/>
                 </div>
                 <!-- #501：售罄／停售時商品**照常顯示**（拍板：顯示並標示，不是
                      下架），只把下單入口換成狀態標籤。翻 is_hidden 會讓整張卡片

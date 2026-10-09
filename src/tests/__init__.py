@@ -1097,3 +1097,5 @@ from . import test_n8n_python_disabled_1533
 from . import test_create_only_settings_1561
 # #1563：欠費停權時對外網址指到共用停權說明頁（park），復權改回服務（unpark，失敗 fail-loud）。
 from . import test_suspend_route_park_1563
+# 服務品牌圖示：訂閱 API 帶模板代碼與服務類型（前台 brand_icons.js 挑圖示用）。
+from . import test_brand_icon_payload

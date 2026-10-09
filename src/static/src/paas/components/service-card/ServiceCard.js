@@ -3,6 +3,8 @@ import { Component, useState, onWillStart } from "@odoo/owl";
 import { StatusBadge } from "../common/StatusBadge";
 import { SubscriptionBadge } from "../subscription/SubscriptionBadge";
 import { WoowIcon } from "../icon/WoowIcon";
+import { BrandIcon } from "../brand-icon/BrandIcon";
+import { templateBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../button/WoowButton";
 import { getDomain } from "../../services/cloud_service";
 import { getInitFailureText } from "../../utils/service_presentation";
@@ -20,7 +22,7 @@ import { getInitFailureText } from "../../utils/service_presentation";
  */
 export class ServiceCard extends Component {
     static template = "woow_paas_platform.ServiceCard";
-    static components = { StatusBadge, SubscriptionBadge, WoowIcon, WoowButton };
+    static components = { StatusBadge, SubscriptionBadge, WoowIcon, BrandIcon, WoowButton };
     static props = {
         service: { type: Object },
         onOpen: { type: Function, optional: true },
@@ -51,6 +53,10 @@ export class ServiceCard extends Component {
         development: "code",
         default: "cloud",
     };
+
+    get brandKey() {
+        return templateBrand(this.props.service.template?.slug);
+    }
 
     get templateIcon() {
         const category = this.props.service.template?.category || "default";

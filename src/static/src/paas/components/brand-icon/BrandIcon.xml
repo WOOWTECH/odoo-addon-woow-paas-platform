@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.BrandIcon">
+    <img t-if="url"
+         t-att-src="url"
+         t-att-style="imgStyle"
+         t-att-class="'o_woow_brand_icon' + (props.fill ? ' o_woow_brand_icon--fill' : '') + (props.class ? ' ' + props.class : '')"
+         alt=""
+         draggable="false"/>
+    <WoowIcon t-else="" name="props.fallback" size="props.size" class="props.class"/>
+  </t>
+</templates>

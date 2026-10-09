@@ -3,6 +3,8 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { templateBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { HelmValueForm } from "../../components/config/HelmValueForm";
 import { OdooAddonSelector } from "../../components/odoo-addon-selector/OdooAddonSelector";
@@ -24,7 +26,7 @@ import { router } from "../../core/router";
  */
 export class AppConfigurationPage extends Component {
     static template = "woow_paas_platform.AppConfigurationPage";
-    static components = { WoowCard, WoowIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, OneTimeCredentialsModal };
+    static components = { WoowCard, WoowIcon, BrandIcon, WoowButton, HelmValueForm, OdooAddonSelector, PlanSelector, PlanTotalBar, OneTimeCredentialsModal };
     static props = {
         workspaceId: { type: Number },
         templateId: { type: Number },
@@ -222,6 +224,10 @@ export class AppConfigurationPage extends Component {
      * Get category icon name
      * @returns {string}
      */
+    get brandKey() {
+        return templateBrand(this.state.template?.slug);
+    }
+
     get categoryIcon() {
         const iconMap = {
             database: 'database',

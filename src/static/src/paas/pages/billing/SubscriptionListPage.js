@@ -4,6 +4,8 @@ import { _t } from "@web/core/l10n/translation";
 import { workspaceService } from "../../services/workspace_service";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { subscriptionBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { CancelSubscriptionModal } from "../../components/modal/CancelSubscriptionModal";
 import { SubscribedServicesModal } from "../../components/modal/SubscribedServicesModal";
@@ -31,7 +33,7 @@ export class SubscriptionListPage extends Component {
   static template = "woow_paas_platform.SubscriptionListPage";
   static components = {
     WoowCard,
-    WoowIcon,
+    WoowIcon, BrandIcon,
     WoowButton,
     CancelSubscriptionModal,
     SubscribedServicesModal,
@@ -110,6 +112,10 @@ export class SubscriptionListPage extends Component {
   getStateClass(sub) {
     if (sub.is_trial) return "o_woow_sub_status_blue";
     return `o_woow_sub_status_${this.getStateInfo(sub).color}`;
+  }
+
+  getSubBrand(sub) {
+    return subscriptionBrand(sub);
   }
 
   getSubIcon(sub) {
