@@ -7,12 +7,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import yaml
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
 from src.models.schemas import (
+    ROUTE_SUBDOMAIN_PATTERN,
     MqttAddressResponse,
     PublicAddressResponse,
     ReleaseCreateRequest,
@@ -24,11 +26,23 @@ from src.models.schemas import (
     ReleaseStatusResponse,
     ReleaseUpgradeRequest,
     RouteInfo,
+    RouteParkRequest,
+    RouteParkResponse,
+    RouteParkStatus,
     RouteStatus,
+    RouteUnparkRequest,
     SidecarPatchRequest,
     SidecarPatchResponse,
 )
-from src.services.cloudflare import CloudflareException, CloudflareService
+from src.services.cloudflare import (
+    REFUSED_FOREIGN,
+    REFUSED_MULTIPLE_TARGETS,
+    RULE_FOREIGN,
+    RULE_KEEP,
+    RULE_RETARGET,
+    CloudflareException,
+    CloudflareService,
+)
 from src.services.helm import (
     HELM_CLI_OVERHEAD_SECONDS,
     HelmException,
@@ -36,7 +50,7 @@ from src.services.helm import (
     KubectlException,
     KubernetesService,
 )
-from src.services.helm import _live_objects, _sanitize_release_values
+from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values
 from src.services.helm_limiter import helm_operation_slot
 from src.services.ngrok_errors import describe_ngrok_error
 from src.services.upgrade_preflight import (
@@ -1730,6 +1744,259 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
         )
 
 
+# ── woow_paas_platform #1563：停權說明頁（park／unpark）──────────────────────────
+#
+# 欠費停權（scale 0）時把服務的對外 hostname 指向共用的停權說明頁，復權（scale 1）後
+# 指回服務。說明頁由 paas-app-bundle-cd 部署在 cloudflared 的 namespace（Service
+# ``settings.suspended_page_service``），任何 path 都回 503＋說明文字。
+#
+# 錯誤一律帶 ``detail.error_code``，**不回 404**：平台把 404 解讀為「operator 是沒有這兩個
+# 端點的舊 image」（只記 log）。
+
+#: park 拒絕：這個 operator 沒設定說明頁（cloudflared namespace 推不出來或 Service 名為空）。
+SUSPENDED_PAGE_NOT_CONFIGURED_ERROR_CODE = "suspended_page_not_configured"
+#: park 拒絕：說明頁的 Service 不在（CD 還沒部署）——不把 hostname 指到不存在的位址。
+SUSPENDED_PAGE_UNAVAILABLE_ERROR_CODE = "suspended_page_unavailable"
+#: park 拒絕：查說明頁 Service 時 kubectl 本身失敗（權限、逾時），不知道在不在。
+SUSPENDED_PAGE_CHECK_FAILED_ERROR_CODE = "suspended_page_check_failed"
+#: park 拒絕：這個 hostname 有規則指向本 namespace 以外的位置（不是這個 release 的 route）。
+ROUTE_NOT_OWNED_ERROR_CODE = "route_not_owned"
+#: park 拒絕：同 hostname 的規則分流到不只一個 service，unpark 還原不回來。
+ROUTE_MULTIPLE_TARGETS_ERROR_CODE = "route_multiple_targets"
+#: unpark 失敗：推不出要指回的 service（release 沒有 Service／沒有可用 port）。
+ROUTE_TARGET_UNRESOLVED_ERROR_CODE = "route_target_unresolved"
+#: Cloudflare API 讀寫 tunnel config 失敗（park／unpark 都可能），什麼都沒改或狀態不明。
+ROUTE_CLOUDFLARE_ERROR_CODE = "cloudflare_error"
+
+
+def _suspended_page_url() -> Optional[str]:
+    """停權說明頁的 tunnel 目標 URL；只從 settings 組（呼叫端無法指定）。沒設定回 None。"""
+    namespace = _cloudflared_namespace()
+    if not namespace or not settings.suspended_page_service:
+        return None
+    return cloudflare_service.generate_service_url(
+        namespace=namespace,
+        service_name=settings.suspended_page_service,
+        port=settings.suspended_page_port,
+    )
+
+
+def _service_url_in_namespace(service: Optional[str], namespace: str) -> bool:
+    """tunnel 規則的 ``service`` 是否指向 ``namespace`` 裡的某個 Service。
+
+    接受 ``http(s)://<svc>.<ns>[.svc[.cluster.local]][:port]``（安裝時一律產生最長那種）；
+    ``http_status:*``、``unix:``、別的 namespace、外部網址都不算。
+    """
+    if not service:
+        return False
+    try:
+        parsed = urlsplit(service)
+        host = (parsed.hostname or "").rstrip(".")
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    for suffix in (".svc.cluster.local", ".svc", ""):
+        tail = f".{namespace}{suffix}"
+        if host.endswith(tail):
+            svc_name = host[: -len(tail)]
+            return bool(svc_name) and "." not in svc_name
+    return False
+
+
+def _route_error(status_code: int, error_code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code, detail={"error_code": error_code, "message": message})
+
+
+@router.post(
+    "/{namespace}/{name}/route/park",
+    response_model=RouteParkResponse,
+    summary="#1563: point the release's public hostname at the shared suspended page",
+)
+async def park_release_route(namespace: str, name: str, request: RouteParkRequest):
+    """欠費停權後呼叫：把 ``<subdomain>.<domain>`` 的**所有** ingress 規則（含 path 規則）
+    改指停權說明頁。
+
+    - 目標只從 settings 組（``_suspended_page_url``），不收呼叫端傳入。
+    - 只改指向**本 namespace** 的規則；``http_status:*``（不通往任何服務）原樣保留；有任何
+      一條指向別處（``route_not_owned``）或要改的規則分流到不只一個 service
+      （``route_multiple_targets``，unpark 會還原不回來）就 409、一條都不改。
+    - 說明頁 Service 不在就 409 ``suspended_page_unavailable``：不把 hostname 指到不存在的
+      位址。
+    - 冪等：已經指向說明頁回 ``already_parked``、不 PUT；這個 hostname 沒有規則回
+      ``not_found``；只有 ``http_status:*`` 規則回 ``no_service_rule``；沒開 Cloudflare 整合回
+      ``disabled``。都是 200。
+    - 與 ``create_route`` 同一種整份 read-modify-write，catch-all 不動。
+    """
+    _validate_namespace_or_raise(namespace)
+    if not cloudflare_service.enabled:
+        return RouteParkResponse(status=RouteParkStatus.DISABLED)
+    page_url = _suspended_page_url()
+    if not page_url:
+        raise _route_error(
+            status.HTTP_409_CONFLICT, SUSPENDED_PAGE_NOT_CONFIGURED_ERROR_CODE,
+            "This operator has no suspended page configured (no cloudflared namespace "
+            "or SUSPENDED_PAGE_SERVICE is empty); the route was not changed.",
+        )
+    try:
+        page_exists = await asyncio.to_thread(k8s_service.suspended_page_service_exists)
+    except KubectlException as e:
+        logger.error("Suspended page lookup failed: %s", e.stderr or e.message)
+        raise _route_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE, SUSPENDED_PAGE_CHECK_FAILED_ERROR_CODE,
+            "Could not check whether the suspended page Service exists; the route was "
+            "not changed. Retry later.",
+        )
+    if not page_exists:
+        raise _route_error(
+            status.HTTP_409_CONFLICT, SUSPENDED_PAGE_UNAVAILABLE_ERROR_CODE,
+            f"The suspended page Service ({page_url}) does not exist yet; the route was "
+            f"not changed.",
+        )
+
+    def _classify(rule: dict) -> str:
+        service = rule.get("service") or ""
+        if _service_url_in_namespace(service, namespace):
+            return RULE_RETARGET
+        if service.startswith("http_status:"):
+            # 不通往任何服務的規則（例：MCP 公開網址只放行秘密 path、同 hostname 其他 path
+            # 一律 http_status:404）。原樣保留——停權中照樣擋，unpark 也不會碰它（unpark 只改
+            # 指向說明頁的規則）。若把它也改指說明頁，unpark 會把它改成服務 URL，等於把秘密
+            # path 的保護拆掉。
+            return RULE_KEEP
+        return RULE_FOREIGN
+
+    try:
+        outcome = await cloudflare_service.retarget_hostname_rules(
+            request.subdomain, page_url, _classify, single_source=True)
+    except CloudflareException as e:
+        logger.error("Park %s/%s (%s) failed: %s", namespace, name, request.subdomain, e.message)
+        raise _route_error(
+            status.HTTP_502_BAD_GATEWAY, ROUTE_CLOUDFLARE_ERROR_CODE,
+            f"Cloudflare API error while parking {request.subdomain}: {e.message}",
+        )
+    if outcome.refused == REFUSED_FOREIGN:
+        raise _route_error(
+            status.HTTP_409_CONFLICT, ROUTE_NOT_OWNED_ERROR_CODE,
+            f"{outcome.hostname} has ingress rules that do not point into namespace "
+            f"{namespace}; nothing was changed.",
+        )
+    if outcome.refused == REFUSED_MULTIPLE_TARGETS:
+        raise _route_error(
+            status.HTTP_409_CONFLICT, ROUTE_MULTIPLE_TARGETS_ERROR_CODE,
+            f"{outcome.hostname} routes its paths to more than one service, which unpark "
+            f"could not restore; nothing was changed.",
+        )
+    if outcome.matched == 0:
+        logger.warning("Park %s/%s: no ingress rule for %s", namespace, name, outcome.hostname)
+        result_status = RouteParkStatus.NOT_FOUND
+    elif outcome.changed == 0 and outcome.already:
+        result_status = RouteParkStatus.ALREADY_PARKED
+    elif outcome.changed == 0:
+        logger.warning(
+            "Park %s/%s: %s has no rule pointing at a service in %s (only http_status:*)",
+            namespace, name, outcome.hostname, namespace,
+        )
+        result_status = RouteParkStatus.NO_SERVICE_RULE
+    else:
+        result_status = RouteParkStatus.PARKED
+        logger.info(
+            "Parked %s/%s: %s -> %s (%d rule(s))",
+            namespace, name, outcome.hostname, page_url, outcome.changed,
+        )
+    return RouteParkResponse(
+        hostname=outcome.hostname,
+        status=result_status,
+        matched=outcome.matched,
+        changed=outcome.changed,
+        service_url=page_url if outcome.matched else None,
+    )
+
+
+@router.post(
+    "/{namespace}/{name}/route/unpark",
+    response_model=RouteParkResponse,
+    summary="#1563: point the release's public hostname back at the release",
+)
+async def unpark_release_route(namespace: str, name: str, request: RouteUnparkRequest):
+    """復權後呼叫：把指向停權說明頁的規則改回這個 release 的 service。
+
+    - service_url 用安裝時**同一段**邏輯重算（``_resolve_route_target``，``expose`` 傳安裝
+      時那一份），平台不必存 URL。
+    - **只改**目前指向說明頁的規則；其他規則（沒被 park 過的、手動加的）一律不碰——
+      因此對一個從沒 park 過（或 park 被拒絕）的 hostname 是 no-op。
+    - 冪等：沒有指向說明頁的規則回 ``not_parked``；沒有任何規則回 ``not_found``；
+      沒開 Cloudflare 整合回 ``disabled``。都是 200，而且不需要推 service_url。
+    - 推不出 service（release 沒有 Service／port）回 409 ``route_target_unresolved``——
+      hostname 仍是說明頁，平台要 fail-loud。
+    """
+    _validate_namespace_or_raise(namespace)
+    if not cloudflare_service.enabled:
+        return RouteParkResponse(status=RouteParkStatus.DISABLED)
+    subdomain = request.expose.subdomain or cloudflare_service.generate_subdomain(
+        namespace, name)
+    if not re.fullmatch(ROUTE_SUBDOMAIN_PATTERN, subdomain) or len(subdomain) > 63:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid subdomain {subdomain!r}: expected one DNS label",
+        )
+    page_url = _suspended_page_url()
+    hostname = f"{subdomain}.{cloudflare_service.domain}"
+    try:
+        rules = await cloudflare_service.hostname_rules(subdomain)
+    except CloudflareException as e:
+        logger.error("Unpark %s/%s (%s) failed: %s", namespace, name, subdomain, e.message)
+        raise _route_error(
+            status.HTTP_502_BAD_GATEWAY, ROUTE_CLOUDFLARE_ERROR_CODE,
+            f"Cloudflare API error while reading the route of {subdomain}: {e.message}",
+        )
+    if not rules:
+        logger.warning("Unpark %s/%s: no ingress rule for %s", namespace, name, hostname)
+        return RouteParkResponse(hostname=hostname, status=RouteParkStatus.NOT_FOUND)
+    if not page_url or not any(rule.get("service") == page_url for rule in rules):
+        return RouteParkResponse(
+            hostname=hostname, status=RouteParkStatus.NOT_PARKED, matched=len(rules))
+
+    _, service_url, reason = await _resolve_route_target(
+        namespace, name, request.expose, wait_for_services=False)
+    if reason:
+        logger.error(
+            "Unpark %s/%s: cannot resolve the release service (%s); %s stays parked",
+            namespace, name, reason, hostname,
+        )
+        raise _route_error(
+            status.HTTP_409_CONFLICT, ROUTE_TARGET_UNRESOLVED_ERROR_CODE,
+            f"Cannot determine which service {hostname} should point back to ({reason}); "
+            f"it still shows the suspended page.",
+        )
+
+    def _classify(rule: dict) -> str:
+        return RULE_RETARGET if rule.get("service") == page_url else RULE_KEEP
+
+    try:
+        outcome = await cloudflare_service.retarget_hostname_rules(
+            subdomain, service_url, _classify)
+    except CloudflareException as e:
+        logger.error("Unpark %s/%s (%s) failed: %s", namespace, name, subdomain, e.message)
+        raise _route_error(
+            status.HTTP_502_BAD_GATEWAY, ROUTE_CLOUDFLARE_ERROR_CODE,
+            f"Cloudflare API error while unparking {subdomain}: {e.message}",
+        )
+    if outcome.changed:
+        logger.info(
+            "Unparked %s/%s: %s -> %s (%d rule(s))",
+            namespace, name, outcome.hostname, service_url, outcome.changed,
+        )
+    return RouteParkResponse(
+        hostname=outcome.hostname,
+        status=RouteParkStatus.UNPARKED if outcome.changed else RouteParkStatus.NOT_PARKED,
+        matched=outcome.matched,
+        changed=outcome.changed,
+        service_url=service_url,
+    )
+
+
 @router.post(
     "/{namespace}/{name}/restart",
     response_model=Dict[str, Any],
@@ -2542,6 +2809,84 @@ async def _create_sidecar_service(
 # Helper functions for Cloudflare integration
 
 
+async def _resolve_route_target(
+    namespace: str,
+    release_name: str,
+    expose_config,
+    *,
+    wait_for_services: bool = True,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """解析一個 release 的對外 route：回 ``(subdomain, service_url, failure_reason)``。
+
+    安裝時建 route（``_create_cloudflare_route``）與 woow_paas_platform #1563 的
+    unpark 共用這**一段**邏輯——unpark 要把 hostname 改回「安裝時會指到的那個
+    service」，兩邊各算一份的話，哪天自動偵測規則改了，unpark 就會指到不同的地方。
+
+    ``failure_reason`` 非 None 時 ``service_url`` 一定是 None（沒算出來就是沒有，
+    不填空字串，#648 (a)）；``subdomain`` 一律先算好（失敗訊息要帶 hostname）。
+
+    ``wait_for_services``：安裝剛 apply 完，Service 可能還沒建好，先等 3 秒再偵測
+    （既有行為）；unpark 時 release 早就在了，不必等。
+    """
+    subdomain = expose_config.subdomain
+    if not subdomain:
+        subdomain = cloudflare_service.generate_subdomain(namespace, release_name)
+
+    # Determine service name and port
+    service_name = expose_config.service_name
+    service_port = expose_config.service_port
+
+    if not service_name or not service_port:
+        # Auto-detect from K8s services
+        # Wait a bit for services to be created
+        if wait_for_services:
+            await asyncio.sleep(3)
+
+        services = k8s_service.get_services(
+            namespace=namespace,
+            label_selector=f"app.kubernetes.io/instance={release_name}",
+        )
+
+        if not services:
+            return subdomain, None, "no services found for this release"
+
+        # Find first non-headless service with HTTP-like port
+        for svc in services:
+            # Skip headless services
+            if svc.get("clusterIP") == "None":
+                continue
+
+            # Use provided values or detect from service
+            if not service_name:
+                service_name = svc["name"]
+
+            if not service_port:
+                # Prefer common HTTP ports
+                http_ports = [80, 8080, 3000, 8000, 443, 8443]
+                for port_info in svc.get("ports", []):
+                    port = port_info.get("port")
+                    if port in http_ports:
+                        service_port = port
+                        break
+                # Fallback to first port
+                if not service_port and svc.get("ports"):
+                    service_port = svc["ports"][0].get("port")
+
+            if service_name and service_port:
+                break
+
+    if not service_name or not service_port:
+        return subdomain, None, "could not determine which service/port to expose"
+
+    # Generate internal service URL
+    service_url = cloudflare_service.generate_service_url(
+        namespace=namespace,
+        service_name=service_name,
+        port=service_port,
+    )
+    return subdomain, service_url, None
+
+
 async def _create_cloudflare_route(
     namespace: str,
     release_name: str,
@@ -2601,62 +2946,11 @@ async def _create_cloudflare_route(
         )
 
     try:
-        # Determine subdomain
-        subdomain = expose_config.subdomain
-        if not subdomain:
-            subdomain = cloudflare_service.generate_subdomain(namespace, release_name)
-
-        # Determine service name and port
-        service_name = expose_config.service_name
-        service_port = expose_config.service_port
-
-        if not service_name or not service_port:
-            # Auto-detect from K8s services
-            # Wait a bit for services to be created
-            await asyncio.sleep(3)
-
-            services = k8s_service.get_services(
-                namespace=namespace,
-                label_selector=f"app.kubernetes.io/instance={release_name}",
-            )
-
-            if not services:
-                return _failed("no services found for this release")
-
-            # Find first non-headless service with HTTP-like port
-            for svc in services:
-                # Skip headless services
-                if svc.get("clusterIP") == "None":
-                    continue
-
-                # Use provided values or detect from service
-                if not service_name:
-                    service_name = svc["name"]
-
-                if not service_port:
-                    # Prefer common HTTP ports
-                    http_ports = [80, 8080, 3000, 8000, 443, 8443]
-                    for port_info in svc.get("ports", []):
-                        port = port_info.get("port")
-                        if port in http_ports:
-                            service_port = port
-                            break
-                    # Fallback to first port
-                    if not service_port and svc.get("ports"):
-                        service_port = svc["ports"][0].get("port")
-
-                if service_name and service_port:
-                    break
-
-        if not service_name or not service_port:
-            return _failed("could not determine which service/port to expose")
-
-        # Generate internal service URL
-        service_url = cloudflare_service.generate_service_url(
-            namespace=namespace,
-            service_name=service_name,
-            port=service_port,
-        )
+        # #1563：解析與 unpark 共用（_resolve_route_target），兩邊必須算出同一個 service_url。
+        subdomain, service_url, reason = await _resolve_route_target(
+            namespace, release_name, expose_config)
+        if reason:
+            return _failed(reason)
 
         # Create the route
         outcome = await cloudflare_service.create_route(

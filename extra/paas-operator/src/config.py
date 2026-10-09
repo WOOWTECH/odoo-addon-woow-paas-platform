@@ -216,6 +216,14 @@ class Settings(BaseSettings):
     # Empty => derive from PAAS_ENV (see helm._cloudflared_namespace); a genuine dev/local
     # run with no CF connector renders no such allow.
     cloudflared_namespace: str = ""  # env CLOUDFLARED_NAMESPACE
+    # woow_paas_platform #1563：停權說明頁（paas-app-bundle-cd 的 paas-suspended-page／-stg）。
+    # Service 固定放在上面那個 cloudflared namespace（同 ns 直連、不必另開 NetworkPolicy）。
+    # `POST /api/releases/{ns}/{name}/route/park` 的目標**只**從這兩個設定組
+    # （http://<service>.<cloudflared ns>.svc.cluster.local:<port>），不收呼叫端傳入——呼叫端
+    # 無法拿 park 把某個 hostname 指到任意位址。預設值對齊 CD 的 Service，所以不需要 chart
+    # 新增 env；空字串＝關閉 park（409 suspended_page_not_configured），unpark 照常可用。
+    suspended_page_service: str = "paas-suspended-page"  # env SUSPENDED_PAGE_SERVICE
+    suspended_page_port: int = Field(default=8080, gt=0, lt=65536)  # env SUSPENDED_PAGE_PORT
 
     # Deploy environment (L1): prod/stg discriminator stamped onto tenant namespace
     # labels (L2, #279) + future account-level reconciler env filtering. Injected
