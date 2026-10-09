@@ -246,6 +246,14 @@ Example: paas-ws-123-anythingllm-01
 
 > **Note**: 不提供 Start/Stop 操作。若需要暫停服務，請使用 Delete 移除；需要時再重新 Deploy。這樣設計是因為一個 Helm Chart 可能包含多種 workloads（Deployment、StatefulSet、CronJob 等），無法用單一 scale 指令控制。
 
+> **欠費停權／復權（生命週期 cron，#1563）**：停權＝operator `POST …/scale?replicas=0`，成功後再呼叫
+> `POST …/route/park` 把服務的對外 hostname（同 hostname 的所有 tunnel 規則）指到共用的停權說明頁
+> （paas-app-bundle-cd 的 `paas-suspended-page`，任何 path 都回 503＋說明，不帶租戶資訊）；park 失敗只記
+> log，停權照樣成功。復權＝`scale?replicas=1` 後呼叫 `POST …/route/unpark`（operator 用安裝時同一段邏輯
+> 重算 service_url）；unpark 失敗寫 `error`＋說明並保留 `pre_suspend_state`，cron 下一輪重試。只做有對外
+> 網址的 Cloud Service；Security Access／Smart Home 另議。停權中的 redeploy／reconfigure 走 helm upgrade、
+> 不碰 tunnel 規則，網址維持說明頁。
+
 ### DNS & TLS Architecture (Cloudflare)
 
 > ⚠️ **早期設計、未在生產採用**：以下 Traefik Ingress + wildcard A record（`*.woowtech.io` → K3s Node IP）的架構是早期設計方案，**未在生產環境採用**。現行生產的 DNS/TLS 實際走 **Cloudflare Tunnel**（cloudflared + 每服務 CNAME → `{tunnel_id}.cfargotunnel.com`），不對外暴露 K3s Node IP、也不依賴 Traefik Ingress 入口。權威說明請見 [n8n-cloud-service-lifecycle.md](../architecture/n8n-cloud-service-lifecycle.md)。以下內容保留作早期設計考古。

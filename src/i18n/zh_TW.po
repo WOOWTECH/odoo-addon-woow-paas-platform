@@ -11538,6 +11538,14 @@ msgid "Resume failed: %(error)s"
 msgstr "恢復失敗：%(error)s"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Resume failed: the service was started again, but its public URL still "
+"shows the suspension notice (%(error)s). It will be retried automatically."
+msgstr "恢復失敗：服務已重新啟動，但對外網址仍顯示停權說明頁（%(error)s）。系統會自動重試。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0

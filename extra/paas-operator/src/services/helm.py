@@ -2362,6 +2362,32 @@ class KubernetesService:
         )
         return True
 
+    def suspended_page_service_exists(self) -> bool:
+        """woow_paas_platform #1563：停權說明頁的 Service 在不在。
+
+        刻意**不經**租戶 namespace 前綴驗證（``validate_namespace``）：說明頁住在
+        cloudflared 的 namespace，不是租戶 ns。也因此 namespace 與 Service 名**只**
+        取自 settings（``_cloudflared_namespace()``／``settings.suspended_page_service``），
+        沒有任何呼叫端輸入能流進這條 kubectl——它無法被拿來探別的 namespace。
+        （ClusterRole 的 core ``services`` get 是叢集範圍，不必另加 RBAC。）
+
+        Service 不存在（CD 的 paas-suspended-page 還沒上）時回 False，讓 park 拒絕，
+        不會把 hostname 指到一個不存在的位址（那會從「慢慢逾時」變成「立刻 502」）。
+
+        Raises:
+            KubectlException: 查詢本身失敗（權限、逾時）——不是「不存在」。
+        """
+        namespace = _cloudflared_namespace()
+        if not namespace or not settings.suspended_page_service:
+            return False
+        result = self._run_command([
+            "get", "service", settings.suspended_page_service,
+            "--namespace", namespace,
+            "--ignore-not-found",
+            "--output", "name",
+        ])
+        return bool((result.stdout or "").strip())
+
     def get_services(
         self, namespace: str, label_selector: Optional[str] = None
     ) -> List[Dict[str, Any]]:
