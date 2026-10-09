@@ -8419,6 +8419,96 @@ class CloudService(models.Model):
                     pol.cf_policy_id = False
         return ok
 
+    # ------------------------------------------------------------------ #
+    # #1563 — 停權說明頁（共用頁；operator route park／unpark）
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _route_park_error_text(error):
+        """operator 錯誤的可讀說明：``detail`` 是 dict（帶 ``error_code``）時取 ``message``。"""
+        detail = getattr(error, 'detail', None)
+        if isinstance(detail, dict):
+            return detail.get('message') or detail.get('error_code') or str(error)
+        return detail or getattr(error, 'message', None) or str(error)
+
+    def _park_public_route(self, client):
+        """停權後把對外 hostname 指向共用的停權說明頁（#1563）。**永不 raise**。
+
+        說明頁位址由 operator 自己的設定決定（平台不傳 URL）。這一步純粹是給訪客看的
+        說明：停權的提交點是 scale 0，這裡任何失敗（舊 operator 沒有端點的 404、說明頁
+        還沒部署的 409、Cloudflare 錯誤…）都只記 log——停權本身照樣成功，訪客頂多看到
+        和以前一樣的逾時／502。
+
+        只處理有對外網址的服務（``_build_expose_config``：template 開 ingress 且有
+        subdomain，與安裝時同一個判準）；Security Access／Smart Home 不在本範圍。
+        """
+        self.ensure_one()
+        expose = self._build_expose_config()
+        if not expose:
+            return
+        from ..services.paas_operator import PaaSOperatorError
+        try:
+            result = client.park_release_route(
+                self.helm_namespace, self.helm_release_name, expose['subdomain'],
+            )
+        except PaaSOperatorError as e:
+            if e.status_code == 404:
+                _logger.info(
+                    "[CLOUD_SVC] park skipped service=%s: operator has no route/park "
+                    "endpoint yet (older image)", self.id)
+            else:
+                _logger.warning(
+                    "[CLOUD_SVC] park failed service=%s subdomain=%s (suspend still "
+                    "effective): %s", self.id, expose['subdomain'],
+                    self._route_park_error_text(e))
+            return
+        except Exception as e:  # noqa: BLE001 — 說明頁失敗不得讓停權失敗
+            _logger.warning(
+                "[CLOUD_SVC] park failed service=%s subdomain=%s (suspend still "
+                "effective): %s", self.id, expose['subdomain'], e)
+            return
+        _logger.info(
+            "[CLOUD_SVC] park service=%s subdomain=%s status=%s",
+            self.id, expose['subdomain'], (result or {}).get('status'))
+
+    def _unpark_public_route(self, client):
+        """復權後把對外 hostname 從停權說明頁改回服務（#1563）。
+
+        Returns:
+            ``None``＝完成（含「本來就沒 park」「沒開 Cloudflare」「沒有對外網址」「舊
+            operator 沒有端點」——舊 operator 不可能 park 過任何東西）；否則回可讀的失敗
+            原因，呼叫端（``_do_resume``）據此 fail-loud。
+        """
+        self.ensure_one()
+        expose = self._build_expose_config()
+        if not expose:
+            return None
+        from ..services.paas_operator import PaaSOperatorError
+        try:
+            result = client.unpark_release_route(
+                self.helm_namespace, self.helm_release_name, expose,
+            )
+        except PaaSOperatorError as e:
+            if e.status_code == 404:
+                _logger.warning(
+                    "[CLOUD_SVC] unpark skipped service=%s: operator has no route/unpark "
+                    "endpoint (older image, so nothing can have been parked)", self.id)
+                return None
+            reason = self._route_park_error_text(e)
+            _logger.warning(
+                "[CLOUD_SVC] unpark failed service=%s subdomain=%s: %s",
+                self.id, expose['subdomain'], reason)
+            return reason
+        except Exception as e:  # noqa: BLE001 — 交給 _do_resume fail-loud
+            _logger.warning(
+                "[CLOUD_SVC] unpark failed service=%s subdomain=%s: %s",
+                self.id, expose['subdomain'], e)
+            return str(e)
+        _logger.info(
+            "[CLOUD_SVC] unpark service=%s subdomain=%s status=%s",
+            self.id, expose['subdomain'], (result or {}).get('status'))
+        return None
+
     def _do_suspend(self):
         """Scale down Helm release to 0 replicas.
 
@@ -8466,6 +8556,9 @@ class CloudService(models.Model):
                     'error_message': _('Suspend failed: %(error)s', error=e),
                 })
                 return
+            # #1563：停權已生效（提交點＝scale 0）。把對外網址指到共用的停權說明頁只是讓
+            # 訪客看得懂——刻意放在上面那個 try 之外，失敗只記 log，不能讓停權回報失敗。
+            self._park_public_route(client)
 
         self.write({
             # #497 縱深：已經在停權中的服務（旗標仍在、state 被別的路徑改寫過）再走
@@ -8522,6 +8615,20 @@ class CloudService(models.Model):
                 self.write({
                     'state': 'error',
                     'error_message': _('Resume failed: %(error)s', error=e),
+                })
+                return
+            # #1563：對外網址從停權說明頁改回服務。這一步失敗＝付了錢的服務網址仍是說明頁，
+            # 必須 fail-loud：與上面 scale 失敗同形——寫 error＋說明、**保留**
+            # pre_suspend_state（_is_halted() 仍為真），生命週期 cron 下一輪會再走一次
+            # _do_resume（scale 1 冪等、unpark 冪等）。
+            unpark_error = self._unpark_public_route(client)
+            if unpark_error:
+                self.write({
+                    'state': 'error',
+                    'error_message': _(
+                        'Resume failed: the service was started again, but its public URL '
+                        'still shows the suspension notice (%(error)s). It will be retried '
+                        'automatically.', error=unpark_error),
                 })
                 return
 

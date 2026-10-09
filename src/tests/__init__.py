@@ -1095,3 +1095,5 @@ from . import test_n8n_plan_spec_paths_1532
 from . import test_n8n_python_disabled_1533
 # #1561：只在開通時生效的設定（Odoo 管理員 Email／示範資料）開通後唯讀。
 from . import test_create_only_settings_1561
+# #1563：欠費停權時對外網址指到共用停權說明頁（park），復權改回服務（unpark，失敗 fail-loud）。
+from . import test_suspend_route_park_1563
