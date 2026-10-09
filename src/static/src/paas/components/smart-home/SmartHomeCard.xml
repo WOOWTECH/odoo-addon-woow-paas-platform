@@ -5,7 +5,7 @@
             <!-- Card Header with Icon and Status -->
             <div class="o_woow_smart_home_card_header">
                 <div class="o_woow_smart_home_icon">
-                    <WoowIcon name="'home_iot_device'" size="28"/>
+                    <BrandIcon brand="brandKey" fallback="'home_iot_device'" size="28" fill="true"/>
                 </div>
                 <StatusBadge status="props.home.state" size="'sm'"/>
                 <SubscriptionBadge subscription="props.home.subscription"/>

@@ -31,7 +31,7 @@
                 <div class="o_woow_service_header">
                     <div class="o_woow_service_header_info">
                         <div class="o_woow_service_header_icon">
-                            <WoowIcon name="templateIcon" size="32"/>
+                            <BrandIcon brand="brandKey" fallback="templateIcon" size="32" fill="true"/>
                         </div>
                         <div class="o_woow_service_header_text">
                             <div class="o_woow_service_header_title">

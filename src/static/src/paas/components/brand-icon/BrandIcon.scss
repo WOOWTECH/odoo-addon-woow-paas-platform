@@ -1,0 +1,17 @@
+.o_woow_brand_icon {
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
+  user-select: none;
+
+  // 放進既有的彩色圖示底框：鋪滿底框、白底細框，品牌圖示本身留邊。
+  &--fill {
+    width: 100%;
+    height: 100%;
+    padding: 12%;
+    box-sizing: border-box;
+    background: #fff;
+    border: 1px solid $woow-border-light;
+    border-radius: inherit;
+  }
+}

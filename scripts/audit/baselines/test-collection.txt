@@ -153,6 +153,7 @@
 2	test_billing_ssot_guard.TestBillingSsotOptout
 1	test_billing_ssot_guard.TestGuardDataFileCascade
 1	test_billing_ssot_guard.TestGuardWiring
+2	test_brand_icon_payload.TestBrandIconPayload
 3	test_cf_policy_reap_ledger_528.TestCsReap
 5	test_cf_policy_reap_ledger_528.TestReapLedgerModel
 8	test_cf_policy_reap_ledger_528.TestSaRouteReap

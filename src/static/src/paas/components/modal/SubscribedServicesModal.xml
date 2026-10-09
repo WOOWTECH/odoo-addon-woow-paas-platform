@@ -48,7 +48,7 @@
                                     <div class="o_woow_svc_modal_item">
                                         <div class="o_woow_svc_modal_item_left">
                                             <div class="o_woow_svc_modal_item_icon">
-                                                <WoowIcon name="getServiceIcon(svc)" size="20"/>
+                                                <BrandIcon brand="getServiceBrand(svc)" fallback="getServiceIcon(svc)" size="20" fill="true"/>
                                             </div>
                                             <div class="o_woow_svc_modal_item_info">
                                                 <span class="o_woow_svc_modal_item_name" t-esc="svc.name"/>

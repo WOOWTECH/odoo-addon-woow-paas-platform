@@ -84,7 +84,7 @@
                                  t-on-click="openCreateModal"
                                  t-on-keydown="(ev) => (ev.key === 'Enter' or ev.key === ' ') and this.openCreateModal()">
                                 <div class="o_woow_service_icon">
-                                    <WoowIcon name="service.icon" size="32"/>
+                                    <BrandIcon brand="service.brand" fallback="service.icon" size="32" fill="true"/>
                                 </div>
                                 <h3><t t-esc="service.name"/></h3>
                                 <p><t t-esc="service.description"/></p>

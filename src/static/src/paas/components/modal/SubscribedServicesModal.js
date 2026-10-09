@@ -3,6 +3,8 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
+import { BrandIcon } from "../brand-icon/BrandIcon";
+import { templateBrand } from "../../utils/brand_icons";
 import { billingService } from "../../services/billing_service";
 import { formatPoints, planUnitLabel } from "../../utils/billing_helpers";
 import { formatUserDate } from "../../utils/datetime_helpers";
@@ -27,7 +29,7 @@ const TEMPLATE_ICONS = {
  */
 export class SubscribedServicesModal extends Component {
   static template = "woow_paas_platform.SubscribedServicesModal";
-  static components = { WoowButton, WoowIcon };
+  static components = { WoowButton, WoowIcon, BrandIcon };
   static props = {
     subscription: { type: Object },
     onClose: { type: Function },
@@ -86,6 +88,10 @@ export class SubscribedServicesModal extends Component {
 
   get serviceCount() {
     return this.services.length;
+  }
+
+  getServiceBrand(service) {
+    return templateBrand(service.template_slug);
   }
 
   getServiceIcon(service) {

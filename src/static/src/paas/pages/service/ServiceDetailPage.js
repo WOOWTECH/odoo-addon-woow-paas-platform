@@ -3,6 +3,8 @@ import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { templateBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
@@ -51,7 +53,7 @@ export class ServiceDetailPage extends Component {
     static template = "woow_paas_platform.ServiceDetailPage";
     static components = {
         WoowCard,
-        WoowIcon,
+        WoowIcon, BrandIcon,
         WoowButton,
         StatusBadge,
         OverviewTab,
@@ -675,6 +677,10 @@ export class ServiceDetailPage extends Component {
     }
 
     // Template icon helper
+    get brandKey() {
+        return templateBrand(this.service?.template?.slug);
+    }
+
     get templateIcon() {
         // Use template icon if available, otherwise default to cloud icon
         return this.service?.template?.icon || "cloud";

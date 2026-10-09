@@ -5,6 +5,8 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { SECURITY_ACCESS_BRAND } from "../../utils/brand_icons";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
@@ -120,9 +122,11 @@ const PROTECT_CONFIRM = {
 export class SecurityAccessDetailPage extends Component {
   static template = "woow_paas_platform.SecurityAccessDetailPage";
   static components = {
-    WoowCard, WoowButton, WoowIcon, StatusBadge, SkipTrialModal,
+    WoowCard, WoowButton, WoowIcon, BrandIcon, StatusBadge, SkipTrialModal,
     ChangePlanModal, AddPolicyModal, AccessAppCard,
   };
+
+  brandKey = SECURITY_ACCESS_BRAND;
   static props = {
     workspaceId: { type: Number },
     saId: { type: Number },

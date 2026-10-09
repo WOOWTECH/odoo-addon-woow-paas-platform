@@ -3,6 +3,8 @@ import { Component, useState, onMounted, onWillUnmount, onWillStart } from "@odo
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { SMART_HOME_BRAND, SECURITY_ACCESS_BRAND } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { ServiceCard } from "../../components/service-card/ServiceCard";
 import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
@@ -21,10 +23,13 @@ import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge };
+    static components = { WoowCard, WoowIcon, BrandIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge };
     static props = {
         workspaceId: { type: Number },
     };
+
+    smartHomeBrand = SMART_HOME_BRAND;
+    securityAccessBrand = SECURITY_ACCESS_BRAND;
 
     setup() {
         this.state = useState({
@@ -411,6 +416,7 @@ export class WorkspaceDetailPage extends Component {
             name: _t("Security Access"),
             description: _t("Setup Zero Trust Tunnels."),
             icon: "shield",
+            brand: SECURITY_ACCESS_BRAND,
             // 'emerald' is the existing green-toned card style
             // (o_woow_service_card_emerald); there is no 'green' variant.
             color: "emerald",
@@ -420,6 +426,7 @@ export class WorkspaceDetailPage extends Component {
             name: _t("Smart Home"),
             description: _t("Connect Home Assistant."),
             icon: "home_iot_device",
+            brand: SMART_HOME_BRAND,
             color: "orange",
             action: "smarthome",
         },

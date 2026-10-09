@@ -31,7 +31,7 @@
                 <div class="o_woow_smart_home_detail_header">
                     <div class="o_woow_smart_home_detail_info">
                         <div class="o_woow_smart_home_detail_icon">
-                            <WoowIcon name="'home_iot_device'" size="28"/>
+                            <BrandIcon brand="brandKey" fallback="'home_iot_device'" size="28" fill="true"/>
                         </div>
                         <div>
                             <div class="o_woow_smart_home_detail_title">

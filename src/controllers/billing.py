@@ -870,6 +870,10 @@ class BillingController(HiddenChainMixin, Controller):
         CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
         linked_service = CloudService.search([('subscription_id', '=', sub.id)], limit=1)
         service_name = linked_service.name if linked_service else None
+        # 前台品牌圖示（brand_icons.js subscriptionBrand）：有雲端服務看模板代碼，
+        # 否則（智慧家庭／安全存取）看方案的服務類型。
+        service_template_slug = (
+            linked_service.template_id.slug or None) if linked_service else None
 
         return {
             'id': sub.id,
@@ -887,6 +891,8 @@ class BillingController(HiddenChainMixin, Controller):
             'unit': sub.sh_unit or '',
             'recurrency': sub.sh_recurrency or 1,
             'service_name': service_name,
+            'service_template_slug': service_template_slug,
+            'service_type': sub.sh_subscription_plan_id.service_type or None,
         }
 
     @route("/api/billing/subscriptions", auth="user", methods=["POST"], type="json")
@@ -958,6 +964,7 @@ class BillingController(HiddenChainMixin, Controller):
                 'state': svc.state,
                 'subdomain': svc.subdomain or '',
                 'template_name': template_name,
+                'template_slug': svc.template_id.slug or '',
             })
 
         data = self._serialize_subscription(sub)
