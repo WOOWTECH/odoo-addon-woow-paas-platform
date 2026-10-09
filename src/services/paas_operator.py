@@ -61,6 +61,11 @@ RESET_CONFIG_TIMEOUT = 75
 # 由 scripts/audit/repo-lint.py 的 check_app_admin_reset_budget_ladder 驗算。
 APP_ADMIN_RESET_TIMEOUT = 75
 
+#: #1563：停權說明頁 park／unpark 的預算。operator 端最壞是 kubectl（30s）＋Cloudflare
+#: 讀＋寫 tunnel config（各 30s），unpark 另多一次讀與 Service 查詢——給 150s，逾時仍是
+#: 「不知道有沒有改到」，呼叫端照各自的失敗語意處理（park 只記 log、unpark fail-loud）。
+ROUTE_PARK_TIMEOUT = 150
+
 #: #1513：operator ``upgrade-preflight``／upgrade 擴容被拒的 409 ``detail.error_code``
 #: （extra/paas-operator ``upgrade_preflight.STORAGE_EXPANSION_ERROR_CODE``；改名兩邊一起改）。
 STORAGE_EXPANSION_ERROR_CODE = 'storage_expansion_rejected'
@@ -679,6 +684,47 @@ class PaaSOperatorClient:
             f'/api/releases/{namespace}/{release_name}/scale',
             params={'replicas': replicas},
             timeout=HELM_OPERATION_TIMEOUT,
+        )
+
+    def park_release_route(
+        self,
+        namespace: str,
+        release_name: str,
+        subdomain: str,
+    ) -> Dict[str, Any]:
+        """#1563：把服務的對外 hostname（所有規則）指向共用的停權說明頁。
+
+        說明頁的位址由 operator 自己的設定決定（不由平台傳入）。200 的 ``status``：
+        ``parked``／``already_parked``／``not_found``（tunnel 上沒有這個 hostname）／
+        ``disabled``（operator 沒開 Cloudflare 整合）。拒絕一律 4xx／5xx＋
+        ``detail.error_code``，operator 刻意不回 404 ⇒ **404＝沒有這個端點的舊 operator**。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/route/park',
+            data={'subdomain': subdomain},
+            timeout=ROUTE_PARK_TIMEOUT,
+        )
+
+    def unpark_release_route(
+        self,
+        namespace: str,
+        release_name: str,
+        expose: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """#1563：把指向停權說明頁的規則改回服務。
+
+        ``expose`` 傳安裝時那一份（``CloudService._build_expose_config``）：operator 用
+        安裝時同一段邏輯重算 service_url，平台不必存 URL。200 的 ``status``：
+        ``unparked``／``not_parked``（沒有指向說明頁的規則）／``not_found``／
+        ``disabled``。409 ``route_target_unresolved``＝推不出要指回的 service（仍是說明頁）。
+        同 park，**404＝沒有這個端點的舊 operator**（它不可能 park 過任何東西）。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/route/unpark',
+            data={'expose': expose},
+            timeout=ROUTE_PARK_TIMEOUT,
         )
 
     def restart_release(
