@@ -48,6 +48,20 @@
         font-size: 28px;
         color: $woow-primary;
     }
+
+    .o_woow_brand_logo {
+        width: 32px;
+        height: 32px;
+    }
+}
+
+// 左上角品牌：WoowTech 白底藍字商標（2026-10-09 使用者指定，與智慧家庭連結同一張）＋全小寫 woowtech。
+.o_woow_brand_logo {
+    display: block;
+    flex-shrink: 0;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 6px;
 }
 
 .o_woow_sidebar_nav {
@@ -184,6 +198,11 @@
     .material-symbols-outlined {
         font-size: 24px;
         color: $woow-primary;
+    }
+
+    .o_woow_brand_logo {
+        width: 28px;
+        height: 28px;
     }
 }
 
