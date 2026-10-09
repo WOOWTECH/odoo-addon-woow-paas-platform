@@ -13,7 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import compat_check  # noqa: E402
-from odoo_inspect import adapt_version, dir_digest, scan_addons, version_key  # noqa: E402
+from odoo_inspect import adapt_version, dir_digest, fingerprint_lines, scan_addons, version_key  # noqa: E402
 
 
 def make_module(root, name, version="1.0", depends=("base",), python=(), extra_files=None):
@@ -149,6 +149,38 @@ class TestClassify(unittest.TestCase):
             blocked = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(blocked.returncode, 3)
             self.assertIn("postgis", blocked.stdout)
+
+
+class FakeCursor:
+    """記錄執行過的語句；SELECT 回傳固定結果，generator 查詢回傳兩條子查詢。"""
+
+    def __init__(self):
+        self.executed, self._rows = [], []
+
+    def execute(self, sql):
+        self.executed.append(sql.strip())
+        head = sql.strip().split(None, 1)[0].upper()
+        if "format(" in sql:
+            self._rows = [("SELECT 'table|a|1|x'",), ("SELECT 'table|b|2|y'",)]
+        elif head == "SELECT":
+            self._rows = [(sql.strip().split("'")[1],)] if "'" in sql else [("v",)]
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return self._rows
+
+
+class TestFingerprintLines(unittest.TestCase):
+    def test_parses_real_sql_and_never_ends_the_callers_transaction(self):
+        sql = (SCRIPTS / "fingerprint.sql").read_text()
+        cur = FakeCursor()
+        out = fingerprint_lines(cur, sql)
+        heads = [stmt.split(None, 1)[0].upper().rstrip(";") for stmt in cur.executed]
+        self.assertNotIn("COMMIT", heads)
+        self.assertNotIn("BEGIN", heads)
+        self.assertIn("SET", heads)
+        self.assertTrue(out.endswith("table|a|1|x\ntable|b|2|y\n"), out)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@
       目標 image：core 與 image 內 addon 目錄的模組版本、非 core 模組的內容 hash、pip。不連 DB。
   fingerprint --sql-b64 <base64 of fingerprint.sql> [--db NAME] [--conf PATH]
       來源站資料指紋：以 psql 跑 fingerprint.sql（READ ONLY），filestore 逐檔 sha256。DB 密碼只在 pod 內。
+  export --sql-b64 … --url <http://receiver…/<set>> [--db NAME] [--conf PATH] [--image-digest sha256:…]
+      搬遷匯出（在來源 helper pod 內）：同一個 REPEATABLE READ snapshot 內採 DB 指紋＋pg_dump --snapshot，
+      filestore 逐檔 sha256＋tar 串流，全部 HTTP PUT 到 receiver（token 取 env UPLOAD_TOKEN），最後送 SHA256SUMS。
 
 輸出：stdout 上 MARK_START／MARK_END 之間的一行 JSON（Odoo 或 shell 的雜訊可能混進 stdout）。
 敏感值：密碼、token、SMTP 帳號、email、使用者 login 一律不輸出；DB 密碼只在 pod 內使用。
@@ -20,11 +23,16 @@
 import argparse
 import ast
 import base64
+import http.client
+import io
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import tarfile
+import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 MARK_START = "---ODOO-INSPECT-JSON-START---"
@@ -274,12 +282,16 @@ def _conf_value(conf, key):
 
 
 def db_params(conf):
-    """連線參數：odoo.conf 優先，官方 image 慣例的 env（HOST／PORT／USER／PASSWORD）次之。"""
+    """連線參數：官方 image 慣例的 env（HOST／PORT／USER／PASSWORD）優先，odoo.conf 次之。
+
+    官方 entrypoint 以命令列參數蓋過 conf；harumi 類站則在啟動時用 env 改寫一份 /tmp/odoo.conf，
+    ConfigMap 裡的 db_password 只是佔位。helper pod 讀的是 ConfigMap 原檔 ⇒ env 必須優先。
+    """
     return {
-        "host": _conf_value(conf, "db_host") or os.environ.get("HOST") or "db",
-        "port": int(_conf_value(conf, "db_port") or os.environ.get("PORT") or 5432),
-        "user": _conf_value(conf, "db_user") or os.environ.get("USER") or "odoo",
-        "password": _conf_value(conf, "db_password") or os.environ.get("PASSWORD") or "",
+        "host": os.environ.get("HOST") or _conf_value(conf, "db_host") or "db",
+        "port": int(os.environ.get("PORT") or _conf_value(conf, "db_port") or 5432),
+        "user": os.environ.get("USER") or _conf_value(conf, "db_user") or "odoo",
+        "password": os.environ.get("PASSWORD") or _conf_value(conf, "db_password") or "",
     }
 
 
@@ -451,7 +463,7 @@ def run_fingerprint(args):
     params = db_params(conf)
     dbname = pick_db(params, args.db, conf)
     sql = base64.b64decode(args.sql_b64).decode("utf-8")
-    env = dict(os.environ, PGPASSWORD=params["password"])
+    env = dict(os.environ, PGPASSWORD=params["password"], LC_ALL="C.UTF-8")
     res = subprocess.run(["psql", "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1", "-h", params["host"],
                           "-p", str(params["port"]), "-U", params["user"], "-d", dbname, "-f", "-"],
                          input=sql, capture_output=True, text=True, env=env)
@@ -460,6 +472,151 @@ def run_fingerprint(args):
     data_dir = _conf_value(conf, "data_dir") or "/var/lib/odoo"
     emit({"mode": "fingerprint", "db_name": dbname, "db": res.stdout,
           "fs": filestore_listing(Path(data_dir) / "filestore" / dbname)})
+
+
+# ---------------------------------------------------------------- export 模式
+
+def fingerprint_lines(cur, sql):
+    """在既有交易內執行 fingerprint.sql，輸出與 `psql -X -q -At -f fingerprint.sql` 相同的行。
+
+    只認得 fingerprint.sql 用到的語法：SET、單行結尾分號的 SELECT、`\\gexec`；BEGIN／COMMIT 交給呼叫端（export
+    要讓指紋與 pg_dump 共用同一個 snapshot）。SQL 只有一份（fingerprint.sql），目標端以 psql 跑同一個檔。
+    """
+    out, buf = [], []
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if stripped == "\\gexec":
+            cur.execute("\n".join(buf))
+            for (query,) in cur.fetchall():
+                cur.execute(query)
+                out.extend(str(r[0]) for r in cur.fetchall())
+            buf = []
+            continue
+        buf.append(line)
+        if stripped.endswith(";"):
+            stmt = "\n".join(buf)
+            buf = []
+            head = stmt.strip().rstrip(";").split(None, 1)[0].upper()
+            if head in ("BEGIN", "COMMIT", "ROLLBACK"):
+                continue
+            cur.execute(stmt)
+            if head == "SELECT":
+                out.extend(str(r[0]) for r in cur.fetchall())
+    return "".join(line + "\n" for line in out)
+
+
+class ChunkedPut:
+    """HTTP PUT（Transfer-Encoding: chunked），邊送邊算 sha256；close() 回傳 (bytes, sha256, 回應)。"""
+
+    def __init__(self, url, name, token):
+        parsed = urllib.parse.urlsplit(url.rstrip("/") + "/" + name)
+        self.conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=600)
+        self.conn.putrequest("PUT", parsed.path)
+        self.conn.putheader("Transfer-Encoding", "chunked")
+        self.conn.putheader("X-Upload-Token", token)
+        self.conn.endheaders()
+        self.digest, self.total = hashlib.sha256(), 0
+
+    def write(self, data):
+        if data:
+            self.conn.send(b"%x\r\n" % len(data) + bytes(data) + b"\r\n")
+            self.digest.update(data)
+            self.total += len(data)
+        return len(data)
+
+    def close(self):
+        self.conn.send(b"0\r\n\r\n")
+        resp = self.conn.getresponse()
+        body = resp.read().decode().strip()
+        if resp.status != 201:
+            raise SystemExit("upload failed: HTTP %s %s" % (resp.status, body))
+        local = "%d %s" % (self.total, self.digest.hexdigest())
+        if body != local:
+            raise SystemExit("receiver checksum mismatch: local %s vs receiver %s" % (local, body))
+        return self.total, self.digest.hexdigest()
+
+
+def put_bytes(url, name, token, data):
+    up = ChunkedPut(url, name, token)
+    up.write(data)
+    return up.close()
+
+
+def run_export(args):
+    import psycopg2
+    token = os.environ.get("UPLOAD_TOKEN") or ""
+    if not token:
+        raise SystemExit("UPLOAD_TOKEN env is required")
+    conf = read_conf(find_conf(args.conf))
+    params = db_params(conf)
+    dbname = pick_db(params, args.db, conf)
+    data_dir = _conf_value(conf, "data_dir") or "/var/lib/odoo"
+    fs_root = Path(data_dir) / "filestore" / dbname
+    sums = {}
+
+    conn = psycopg2.connect(dbname=dbname, **params)
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_export_snapshot()")
+        snapshot = cur.fetchone()[0]
+        fp = fingerprint_lines(cur, base64.b64decode(args.sql_b64).decode("utf-8"))
+        cur.execute("SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_database "
+                    "WHERE datname = current_database()")
+        encoding, collate, ctype = cur.fetchone()
+        try:
+            cur.execute("SELECT datlocprovider FROM pg_database WHERE datname = current_database()")
+            provider = cur.fetchone()[0]
+        except psycopg2.Error:
+            raise SystemExit("export needs PostgreSQL >= 15 (datlocprovider)")
+        cur.execute("SELECT extname, extversion FROM pg_extension ORDER BY 1")
+        extensions = dict(cur.fetchall())
+        cur.execute("SELECT current_setting('server_version'), pg_database_size(current_database())")
+        server_version, db_size = cur.fetchone()
+        # pg_dump 在 snapshot 仍有效時（本交易未結束）以 --snapshot 讀同一份資料
+        env = dict(os.environ, PGPASSWORD=params["password"], LC_ALL="C.UTF-8")
+        dump = subprocess.Popen(["pg_dump", "-Fc", "--snapshot", snapshot, "-h", params["host"],
+                                 "-p", str(params["port"]), "-U", params["user"], "-d", dbname],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        up = ChunkedPut(args.url, "db.dump", token)
+        for chunk in iter(lambda: dump.stdout.read(1 << 20), b""):
+            up.write(chunk)
+        err = dump.stderr.read().decode()
+        if dump.wait() != 0:
+            raise SystemExit("pg_dump failed: %s" % err.strip())
+        sums["db.dump"] = up.close()
+    conn.rollback()
+    conn.close()
+    pg_dump_version = subprocess.run(["pg_dump", "--version"], capture_output=True, text=True,
+                                     env=dict(os.environ, LC_ALL="C.UTF-8")).stdout.strip()
+
+    fs_listing = filestore_listing(fs_root)
+    up = ChunkedPut(args.url, "filestore.tar", token)
+    with tarfile.open(fileobj=up, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+        for line in fs_listing.splitlines():
+            rel = line.split("  ", 1)[1]
+            tar.add(str(fs_root / rel), arcname=rel, recursive=False)
+    sums["filestore.tar"] = up.close()
+
+    manifest = {
+        "schema_version": 1, "kind": "standalone-odoo-export",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "db_name": dbname, "encoding": encoding, "datcollate": collate, "datctype": ctype,
+        "datlocprovider": provider, "extensions": extensions, "pg_version": server_version,
+        "db_size_bytes": db_size, "pg_dump_version": pg_dump_version,
+        "filestore_files": len(fs_listing.splitlines()),
+        "source_image_digest": args.image_digest, "source_core_date": core_date(),
+    }
+    sums["source.fp"] = put_bytes(args.url, "source.fp", token, fp.encode())
+    sums["source.fs"] = put_bytes(args.url, "source.fs", token, fs_listing.encode())
+    sums["manifest.json"] = put_bytes(args.url, "manifest.json", token,
+                                      json.dumps(manifest, indent=2, sort_keys=True).encode())
+    sha_text = "".join("%s  %s\n" % (sha, name) for name, (_n, sha) in sorted(sums.items()))
+    put_bytes(args.url, "SHA256SUMS", token, sha_text.encode())
+    emit({"mode": "export", "manifest": manifest,
+          "uploaded": {name: {"bytes": n, "sha256": sha} for name, (n, sha) in sums.items()},
+          "tables": sum(1 for line in fp.splitlines() if line.startswith("table|"))})
 
 
 # ---------------------------------------------------------------- image 模式
@@ -490,8 +647,14 @@ def main(argv=None):
     fp.add_argument("--sql-b64", required=True)
     fp.add_argument("--db")
     fp.add_argument("--conf")
+    ex = sub.add_parser("export")
+    ex.add_argument("--sql-b64", required=True)
+    ex.add_argument("--url", required=True)
+    ex.add_argument("--db")
+    ex.add_argument("--conf")
+    ex.add_argument("--image-digest")
     args = parser.parse_args(argv)
-    {"source": run_source, "image": run_image, "fingerprint": run_fingerprint}[args.mode](args)
+    {"source": run_source, "image": run_image, "fingerprint": run_fingerprint, "export": run_export}[args.mode](args)
 
 
 if __name__ == "__main__":
