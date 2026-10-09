@@ -42,8 +42,8 @@
                 "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
                 {"cpu": "2000m", "memory": "2Gi"}}}}</field>
             <field name="helm_value_specs">{"required": [
-                {"key": "auth.username", "label": "Database Username", "type": "text", "default": "woow"},
-                {"key": "auth.database", "label": "Database Name", "type": "text", "default": "woowdb"}
+                {"key": "auth.username", "label": "資料庫使用者名稱", "type": "text", "default": "woow"},
+                {"key": "auth.database", "label": "資料庫名稱", "type": "text", "default": "woowdb"}
                 ], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -134,27 +134,27 @@
                  會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端
                  Application Settings 區塊靜默消失（見 fix/n8n-creation-issue）。 -->
             <field name="helm_value_specs">{"required": [
-                {"key": "_init.owner_email", "label": "n8n Admin Email", "type": "text",
+                {"key": "_init.owner_email", "label": "n8n 管理員 Email", "type": "text",
                 "placeholder": "you@example.com", "description": "n8n 管理員登入 Email"},
-                {"key": "_init.owner_password", "label": "n8n Admin Password", "type": "password",
+                {"key": "_init.owner_password", "label": "n8n 管理員密碼", "type": "password",
                 "description": "至少 8 字元，需含大小寫字母與數字"}
                 ], "optional": [
-                {"key": "main.config.GENERIC_TIMEZONE", "label": "Timezone", "type": "select",
+                {"key": "main.config.GENERIC_TIMEZONE", "label": "時區", "type": "select",
                 "default": "Asia/Taipei", "options": ["Asia/Taipei", "Asia/Tokyo", "Asia/Shanghai",
                 "Asia/Hong_Kong", "America/New_York", "America/Los_Angeles", "Europe/London", "UTC"]},
-                {"key": "main.config.N8N_LOG_LEVEL", "label": "Log Level", "type": "select",
+                {"key": "main.config.N8N_LOG_LEVEL", "label": "記錄等級", "type": "select",
                 "default": "info", "options": ["info", "warn", "error", "debug"]},
-                {"key": "main.config.N8N_SMTP_HOST", "label": "SMTP Host", "type": "text",
+                {"key": "main.config.N8N_SMTP_HOST", "label": "SMTP 主機", "type": "text",
                 "placeholder": "smtp.example.com",
                 "description": "寄信伺服器（選填）。設定後 n8n 才能寄忘記密碼、邀請成員等信件；未設定時這些信不會寄出"},
-                {"key": "main.config.N8N_SMTP_PORT", "label": "SMTP Port", "type": "number",
+                {"key": "main.config.N8N_SMTP_PORT", "label": "SMTP 連接埠", "type": "number",
                 "default": 465, "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
-                {"key": "main.config.N8N_SMTP_SSL", "label": "SMTP SSL", "type": "select",
+                {"key": "main.config.N8N_SMTP_SSL", "label": "SMTP 使用 SSL", "type": "select",
                 "default": "true", "options": ["true", "false"]},
-                {"key": "main.config.N8N_SMTP_USER", "label": "SMTP Username", "type": "text"},
-                {"key": "main.secret.N8N_SMTP_PASS", "label": "SMTP Password", "type": "password",
+                {"key": "main.config.N8N_SMTP_USER", "label": "SMTP 帳號", "type": "text"},
+                {"key": "main.secret.N8N_SMTP_PASS", "label": "SMTP 密碼", "type": "password",
                 "description": "只存於 Kubernetes Secret；重新設定時留空＝不變更"},
-                {"key": "main.config.N8N_SMTP_SENDER", "label": "Sender", "type": "text",
+                {"key": "main.config.N8N_SMTP_SENDER", "label": "寄件者", "type": "text",
                 "placeholder": "n8n &lt;you@example.com&gt;", "description": "寄件者（可含名稱）"}
                 ]}</field>
 
@@ -227,7 +227,7 @@
                 {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory":
                 "512Mi"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "architecture",
-                "label": "Architecture", "type": "select", "default": "standalone", "options":
+                "label": "架構", "type": "select", "default": "standalone", "options":
                 ["standalone", "replication"]}]}</field>
 
             <!-- Service Configuration -->
@@ -288,18 +288,20 @@
                  舊版預填 user@example.com，沒改就成了收不到信的管理員帳號。create 另擋保留網域。SMTP 欄位暫時拿掉：Bitnami 的 smtpHost 等鍵在新 chart 會被
                  schema 擋，dot-path smtp.* 的版本由 #1193 補回。
                  #1561：兩格都標 create_only——chart 只在首次 -i base 套用（對既有資料庫無效），
-                 開通後配置頁唯讀顯示、reconfigure 拒絕變更（_drop_create_only_values）。 -->
+                 開通後配置頁唯讀顯示、reconfigure 拒絕變更（_drop_create_only_values）。
+                 #1612：label／description 直接寫中文（比照其他範本、#1584）——前端表單、配置頁
+                 與 reconfigure 拒絕訊息都讀同一個 spec label，改這裡即全部一致。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo</field>
             <field name="helm_chart_version">0.2.7</field>
             <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20261002.0402", "digest": "sha256:69aa54941462b5eb0e6c36541a55c4db27ea153af71e8e2937152e151d21a6bb"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "10Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo"}}</field>
             <field name="helm_value_specs">{"required": [
-                {"key": "conf.adminEmail", "label": "Administrator Email", "type": "text",
+                {"key": "conf.adminEmail", "label": "管理員 Email", "type": "text",
                 "create_only": true,
                 "placeholder": "you@example.com",
-                "description": "Login email for the Odoo administrator. The initial password is generated by the platform and shown once after creation."}
+                "description": "Odoo 管理員的登入 Email。初始密碼由平台產生，開通後只顯示一次。"}
                 ], "optional": [
-                {"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean",
+                {"key": "loadDemoData", "label": "載入示範資料", "type": "boolean",
                 "create_only": true, "default": false}
                 ]}</field>
 
@@ -968,9 +970,9 @@
             <field name="helm_chart_version">0.4.5</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261005.1409@sha256:0c257c7715f87c293744252aeb905d66dca87355b93c3293fde52bc2db586c7c"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
+                {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
-                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "容器內 OpenCode 使用的伺服器端 OpenRouter Key（選填）；填了就預設用 OpenCode，修改後服務會自動重啟（約 1–2 分鐘）；網頁介面自行輸入的 BYOK Key 不受影響"}
                 ]}</field>
 
@@ -1197,9 +1199,9 @@
             <field name="helm_chart_version">0.3.4</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261003.1400@sha256:7b095a7258e627c156d7c08301b699fda42365548fdb868c94b4d3848823a9a4"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
+                {"key": "auth.minimaxApiKey", "label": "MiniMax API 金鑰", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
-                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "自帶 OpenRouter API Key（選填）；供 agent 的 model routes 使用，同樣只存於 Secret"}
                 ]}</field>
 
@@ -1921,9 +1923,9 @@
             <field name="helm_chart_version">0.1.6</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20260929.1400@sha256:ba384bba57cb1f80b28e3cbfab7c58d6ad94f5cd99c3773a86a1987ffe3bf902"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20260929.1400@sha256:558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},
-                {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
+                {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "雲端工作機上 Claude Code 使用的 Anthropic Key（選填，優先於 OpenRouter）；未填 OpenRouter 時 pi 也用它。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用用量，請用有用量上限的專用金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"}
                 ]}</field>
             <field name="default_port">8000</field>
@@ -2015,9 +2017,9 @@
             <field name="helm_chart_version">0.1.7</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
+                {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},
-                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "pi 使用的 OpenRouter Key（選填）；未填 Anthropic API Key 時，Claude Code 也改經 OpenRouter 連線"},
                 {"key": "auth.gitToken", "label": "Git Token", "type": "password",
                 "description": "Git 個人存取權杖（選填，GitHub／GitLab／Gitea 皆可）；git 推送／拉取「Git Token 適用主機」時自動帶入，不寫入磁碟"},
