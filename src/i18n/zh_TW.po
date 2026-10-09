@@ -15802,13 +15802,6 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.xml:0
-#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.xml:0
-msgid "WoowTech"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid ""
 "WoowTech provides cloud infrastructure and smart home integration\n"

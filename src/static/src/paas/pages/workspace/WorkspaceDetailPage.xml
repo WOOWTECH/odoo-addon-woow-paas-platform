@@ -110,7 +110,7 @@
                     <!-- Empty State -->
                     <t t-elif="!hasServices and !state.loadingServices">
                         <div class="o_woow_empty_services">
-                            <WoowIcon name="'cloud_upload'" size="48"/>
+                            <BrandIcon brand="cloudServiceBrand" fallback="'cloud_upload'" size="48"/>
                             <h3>Get Started: Deploy Your First Service</h3>
                             <p>Launch containerized applications like databases, automation tools, and more with one click.</p>
                             <WoowButton

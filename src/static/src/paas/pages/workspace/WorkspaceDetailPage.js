@@ -4,7 +4,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { BrandIcon } from "../../components/brand-icon/BrandIcon";
-import { SMART_HOME_BRAND, SECURITY_ACCESS_BRAND } from "../../utils/brand_icons";
+import { CLOUD_SERVICE_BRAND, SMART_HOME_BRAND, SECURITY_ACCESS_BRAND } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { ServiceCard } from "../../components/service-card/ServiceCard";
 import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
@@ -28,6 +28,7 @@ export class WorkspaceDetailPage extends Component {
         workspaceId: { type: Number },
     };
 
+    cloudServiceBrand = CLOUD_SERVICE_BRAND;
     smartHomeBrand = SMART_HOME_BRAND;
     securityAccessBrand = SECURITY_ACCESS_BRAND;
 
@@ -409,6 +410,7 @@ export class WorkspaceDetailPage extends Component {
             name: _t("Cloud Services"),
             description: _t("Deploy Docker apps with one click."),
             icon: "cloud",
+            brand: CLOUD_SERVICE_BRAND,
             color: "blue",
             action: "marketplace",
         },

@@ -2,7 +2,7 @@
 
 /**
  * 服務品牌圖示（2026-10-09 使用者決定）：每個服務改用原生品牌圖示；MCP 伺服器用所連軟體
- * 的圖示；智慧家庭連結用 WoowTech 商標、安全存取用 Cloudflare。
+ * 的圖示；智慧家庭連結用 WoowTech 商標、安全存取用 Cloudflare、「雲端服務」類型用 Kubernetes。
  *
  * 圖檔在 static/src/img/brands/，來源與雜湊見同目錄 README.md。
  * 查不到的模板代碼回 null，呼叫端退回原本的 Material 圖示（新模板沒登記也不會破圖）。
@@ -58,6 +58,8 @@ const TEMPLATE_BRANDS = {
   tailscale: "tailscale",
 };
 
+// 雲端服務是平台用 k3s（Kubernetes）替使用者架設的，服務類型卡片用 Kubernetes 圖示（使用者 2026-10-09 指定）。
+export const CLOUD_SERVICE_BRAND = "kubernetes";
 export const SMART_HOME_BRAND = "woowtech";
 export const SECURITY_ACCESS_BRAND = "cloudflare";
 

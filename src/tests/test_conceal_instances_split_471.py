@@ -118,9 +118,12 @@ class TestConcealInstancesSeed(TransactionCase):
         # mcp-odoo），只翻 is_hidden、實例層不設；重新上架時改回 False 並把 slug 從這裡拿掉。
         # （mcp-nextcloud 2026-10-08 #1587 以隱藏卡片進 seed，沙盒開通實測通過後同日公開上架＝不再 hidden；
         #  只翻 is_hidden，實例層從未設。）
+        # mcp-k8s／mcp-vk：hidden-only（曝光層）——2026-10-09 #1624 下架（使用者決定不再使用），
+        # 比照 mcp-odoo-manage 只翻 is_hidden、實例層不設（下架時叢集內 0 實例）；重新上架時改回
+        # False 並把 slug 從這裡拿掉。
         self.assertEqual(
             set(hidden.mapped('slug')),
-            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage'},
+            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage', 'mcp-k8s', 'mcp-vk'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(
