@@ -502,6 +502,7 @@ class TestPaidResumeCron1599(_PaidResumeBase):
             self.Lifecycle._cron_enforce_subscription_lifecycle()
         self.assertEqual(service.state, 'running')
         self.assertFalse(service.pre_suspend_state)
+        self.assertFalse(service.error_message, '重試成功後不能留著「Resume failed」橫幅')
 
     def test_unpark_failure_is_loud_and_retried_by_the_daily_cron(self):
         sub = self._new_sub()
@@ -520,6 +521,7 @@ class TestPaidResumeCron1599(_PaidResumeBase):
         with patch(_CLIENT_SEAM, return_value=client):
             self.Lifecycle._cron_enforce_subscription_lifecycle()
         self.assertEqual(service.state, 'running')
+        self.assertFalse(service.error_message, '重試成功後不能留著「Resume failed」橫幅')
 
     def test_backlog_triggers_another_pass(self):
         services = self.Service
@@ -541,6 +543,35 @@ class TestPaidResumeCron1599(_PaidResumeBase):
         """``_trigger()`` 對停用的 cron 不建立立即觸發 ⇒ 這顆 cron 必須是 active。"""
         self.assertTrue(self.cron.active)
         self.assertEqual(self.cron.code.strip(), 'model._cron_resume_paid_cloud_services()')
+
+
+@tagged('post_install', '-at_install')
+class TestResumeClearsStaleError1599(_PaidResumeBase):
+    """復權成功後清掉停權期間留下的錯誤說明（#1599 沙盒端到端發現）。
+
+    ServiceDetailPage 的紅色橫幅只看 ``error_message``、不看 state：上一輪復權失敗寫的
+    「Resume failed …will be retried automatically」若不清，重試成功後租戶會看到一台
+    running 的服務掛著錯誤。回到 error 的服務（停權前就是 error）維持原說明。
+    """
+
+    def test_successful_resume_clears_the_previous_resume_failure(self):
+        sub = self._new_sub()
+        service = self._suspend(self._service(sub))
+        service.write({'error_message': 'Resume failed: operator down'})
+        with patch(_CLIENT_SEAM, return_value=_client()):
+            service._do_resume()
+        self.assertEqual(service.state, 'running')
+        self.assertFalse(service.error_message)
+
+    def test_service_that_was_in_error_keeps_its_message(self):
+        sub = self._new_sub()
+        service = self._service(sub)
+        service.write({'state': 'suspended', 'pre_suspend_state': 'error',
+                       'error_message': 'ImagePullBackOff'})
+        with patch(_CLIENT_SEAM, return_value=_client()):
+            service._do_resume()
+        self.assertEqual(service.state, 'error')
+        self.assertEqual(service.error_message, 'ImagePullBackOff')
 
 
 @tagged('post_install', '-at_install')

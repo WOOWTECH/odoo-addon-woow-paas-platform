@@ -8698,6 +8698,13 @@ class CloudService(models.Model):
             # 不欠 init 的轉移狀態：沿用 #1266 以前的行為（記錄值原本就是 running）。
             restore_state = 'running'
         vals['state'] = restore_state
+        if restore_state != 'error':
+            # 復權成功、服務不是回到 error：停權期間留下的錯誤說明都過時了——最常見的是
+            # 上一輪復權失敗寫的「Resume failed …will be retried automatically」（#1563
+            # unpark 失敗、scale 失敗），由每日 cron 重試成功之後若不清，租戶會看到一台
+            # running 的服務掛著紅色錯誤橫幅（ServiceDetailPage 的 banner 只看
+            # error_message、不看 state）。#1599 沙盒端到端發現。回到 error 的維持原說明。
+            vals['error_message'] = False
         self.write(vals)
         _logger.info(
             "[CLOUD_SVC] _do_resume done service=%s new_state=%s",
