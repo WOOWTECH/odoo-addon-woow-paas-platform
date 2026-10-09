@@ -126,7 +126,8 @@ spec:
             "owner_email": reset_it.OWNER_EMAIL, "owner_password": reset_it._password()})
         elapsed = time.monotonic() - started
     finally:
-        holder.wait(timeout=_HOLD_SECONDS + 60)
+        # communicate 會讀完並關掉 pipe（只 wait 會留下 ResourceWarning）。
+        _, holder_err = holder.communicate(timeout=_HOLD_SECONDS + 60)
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -134,5 +135,5 @@ spec:
     assert body["secret_patched"] is True
     assert _secret_key(test_namespace, release) == body["api_key"]
     # 真的有等：init 回來時鎖已經放開過（不是剛好在空窗之後才送出）。
-    assert holder.returncode == 0, holder.stderr.read() if holder.stderr else ""
+    assert holder.returncode == 0, holder_err
     assert elapsed > 5, elapsed
