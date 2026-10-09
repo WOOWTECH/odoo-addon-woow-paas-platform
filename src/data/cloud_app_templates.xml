@@ -707,6 +707,10 @@
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
+            <!-- 2026-10-09 下架（使用者決定：Kubernetes MCP 接下來不會用到）。只翻曝光層 is_hidden
+                 （商店不列、不能新開），is_active、方案與實例層不動；正式站下架時沒有任何
+                 執行中的實例。要重新上架時把 is_hidden 改回 False 即可。 -->
+            <field name="is_hidden" eval="True"/>
         </record>
 
         <!-- vk：Vibe Kanban vibe-kanban-mcp（stdio-only，command=supergateway 橋
@@ -747,6 +751,10 @@
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
+            <!-- 2026-10-09 下架（使用者決定：Vibe Kanban MCP 接下來不會用到）。只翻曝光層 is_hidden
+                 （商店不列、不能新開），is_active、方案與實例層不動；正式站下架時沒有任何
+                 執行中的實例。要重新上架時把 is_hidden 改回 False 即可。 -->
+            <field name="is_hidden" eval="True"/>
         </record>
 
         <!-- opendesign：vendored od_mcp_server（stdio-only，command=supergateway 橋

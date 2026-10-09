@@ -4,7 +4,7 @@
 改用各軟體的原生品牌圖示（使用者 2026-10-09 決定）：
 
 - MCP 伺服器用它所連軟體的圖示（例：Odoo MCP Server 用 Odoo 圖示）。
-- 智慧家庭連結用 WoowTech 藍色商標；安全存取用 Cloudflare。
+- 智慧家庭連結用 WoowTech 藍色商標；安全存取用 Cloudflare；「雲端服務」類型用 Kubernetes（雲端服務由 k3s 架設）。
 - 圖示與 HA App Store／MCP add-on 盡量一致：商店已有的直接取用（逐位元相同），商店沒有的取自各軟體官方 repo。
 
 對照表在 `static/src/paas/utils/brand_icons.js`（模板代碼 → 品牌），顯示元件是
@@ -20,8 +20,8 @@
 | `litellm.png` | LiteLLM | AI 模型閘道（LiteLLM）、MCP：AI 模型閘道（LiteLLM） | [BerriAI/litellm `a6f6c64`](https://github.com/BerriAI/litellm/blob/a6f6c64b6ec37782d871b7cda2f2fd0d9202d85c/litellm/proxy/logo_monogram.png) `litellm/proxy/logo_monogram.png`（與 Woow LiteLLM MCP Server add-on 同一張） | `5903e2fcc009a17c7f518db364fafccdca23192206419966585039ffbb635df0` |
 | `hermes.png` | Hermes Agent | Hermes Agent、Hermes MCP Server | [HA App Store](https://github.com/WOOWTECH/Woow_HA_App_Store/blob/0c4c21f/woow-hermes/icon.png) `woow-hermes/icon.png` | `799c862dca5cb00213ef6c1a61ffb22909d0d9b4ef7cf25ff7a5a03f8dbde9e7` |
 | `opendesign.png` | Open Design | Open Design、Open Design MCP | [HA App Store](https://github.com/WOOWTECH/Woow_HA_App_Store/blob/0c4c21f/woow_ha_opendesign/icon.png) `woow_ha_opendesign/icon.png` | `4b1c8f1948898dbe7de912c84cf98a24d9166c080184cf49343c203b73e04d0c` |
-| `kubernetes.svg` | Kubernetes | Kubernetes MCP | [kubernetes/kubernetes `fa03e68`](https://github.com/kubernetes/kubernetes/blob/fa03e68/logo/logo.svg) `logo/logo.svg` | `a8f6c3b81e588eb0eee4b5ae707ad11b16d0c5ce132719871e559eed0e61e6bf` |
-| `vibe-kanban.png` | Vibe Kanban | Vibe Kanban MCP | [BloopAI/vibe-kanban `d5cbb53`](https://github.com/BloopAI/vibe-kanban/blob/d5cbb53/crates/tauri-app/icons/128x128@2x.png) `crates/tauri-app/icons/128x128@2x.png` | `1fcc4f128cd3bee0cc92ba7efff0b6cef83466cf4860606f645fa169e460a228` |
+| `kubernetes.svg` | Kubernetes | 「雲端服務」類型（平台用 k3s 替使用者架設，2026-10-09 使用者指定）、Kubernetes MCP（2026-10-09 已下架） | [kubernetes/kubernetes `fa03e68`](https://github.com/kubernetes/kubernetes/blob/fa03e68/logo/logo.svg) `logo/logo.svg` | `a8f6c3b81e588eb0eee4b5ae707ad11b16d0c5ce132719871e559eed0e61e6bf` |
+| `vibe-kanban.png` | Vibe Kanban | Vibe Kanban MCP（2026-10-09 已下架；圖檔留著，重新上架或既有畫面仍可用） | [BloopAI/vibe-kanban `d5cbb53`](https://github.com/BloopAI/vibe-kanban/blob/d5cbb53/crates/tauri-app/icons/128x128@2x.png) `crates/tauri-app/icons/128x128@2x.png` | `1fcc4f128cd3bee0cc92ba7efff0b6cef83466cf4860606f645fa169e460a228` |
 | `home-assistant.png` | Home Assistant | Home Assistant 完整版、Home Assistant OS | [home-assistant/brands `c3b8287`](https://github.com/home-assistant/brands/blob/c3b8287/core_integrations/_homeassistant/icon@2x.png) `core_integrations/_homeassistant/icon@2x.png` | `b6528267eb85d9662bbf765cbd4fa13627b2169459a9ce93c71691fe619b7767` |
 | `emqx.png` | EMQX | EMQX | [HA App Store](https://github.com/WOOWTECH/Woow_HA_App_Store/blob/0c4c21f/emqx/icon.png) `emqx/icon.png` | `0ca9e6cf4c66ae5fe009562f49434b96a5f019629fa9b2399ee05d65331673f9` |
 | `omnigent.png` | Omnigent | Omnigent | [HA App Store](https://github.com/WOOWTECH/Woow_HA_App_Store/blob/0c4c21f/omnigent/icon.png) `omnigent/icon.png` | `33ac41168fc6f3e0eddc8f92fb900dcf218b5d28e2ad18edfd1d55a71db50ec4` |
