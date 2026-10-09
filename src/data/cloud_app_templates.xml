@@ -390,10 +390,32 @@
                  用戶端要重新 initialize。
                  回滾值：chart 0.1.5＋各筆舊 image（本筆 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
                  ba8f63e3ec19619635cd7a82230bbf3da28d79aea022dd0c91248650862332f5；其餘見各筆註解）。 -->
+            <!-- 2026-10-10 家族改釘 image（#1614／#1615）：本筆與 cloud_app_mcp_odoo／_n8n／_k8s／_vk／_opendesign／
+                 _litellm／_nextcloud 共 8 筆，image 改成 woow-mcp-server #48 合併 commit
+                 1ec1bb0ba196d1b964005e01c513ce2158fd45c1（main CI run 17227；8 個 digest 逐筆抄自各 build job 的
+                 push log，jobs 18844–18851，皆為單一 manifest.v2）。helm_chart_version 全部不動（0.1.7）；
+                 cloud_app_mcp_odoo_manage 已封存，維持 0.1.5＋d5032a72。
+                 版本內容（#48）：
+                 - #1614：mcp-admin-core 新增 log_redaction，create_app() 統一安裝；uvicorn.access／error、httpx 等
+                   log 裡的 /private_<token> 與 ?token=／access_token=（含 Logs 頁 EventSource 帶的 admin JWT）
+                   在進任何 handler 之前遮成 ***，Logs 頁 ring buffer 與容器 stdout 都不再出現。litellm／nextcloud
+                   原本各自的遮罩改用共用層（nextcloud 保留 app password 遮罩）。
+                 - #1615（只影響 n8n）：launcher 最後寫死 N8N_MCP_TELEMETRY_DISABLED=true、移除
+                   N8N_MCP_TELEMETRY_URL／KEY；映像建置時跑 telemetry_check，確認上游匿名統計是關的。
+                 爆炸半徑（相對 ff32a7c1；nextcloud 相對 9a0fafa2）：只差 #48 的 log 遮蔽與 telemetry 關閉。
+                 中間的 #44／#47 只動 apps/nextcloud 與舊 gateway；root uv.lock 只差 nextcloud 的套件（其他 app
+                 依賴的套件版本逐筆相同）、package-lock 只差 nextcloud 前端。各 app 的 LaunchPolicy 都沒變（逐筆
+                 覆核，與本檔 seed 的 command／args 一致），範本不需新增或修改任何鍵。只影響新開通與之後被
+                 Redeploy 的服務（#1408：Redeploy 以範本的 image 參照為準）；Redeploy 時 Recreate 重啟 pod 一次，
+                 n8n MCP 既有 session 失效、用戶端要重新 initialize。已寫進舊 log 的 token 不會因此消失，要不要
+                 輪換另案決定。
+                 回滾值（chart 不變，只把 image.tag 改回）：本筆
+                 ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:44f4a19a77a6c78ebe1ba9eac57aa5f1079d5317e7401cd18ceb3d7ce8573917；
+                 其餘見各筆註解。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:44f4a19a77a6c78ebe1ba9eac57aa5f1079d5317e7401cd18ceb3d7ce8573917"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:86f9a31ed0715706543883c0d3e801ed6b72820c9223d502908b82e36d68436a"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -472,11 +494,18 @@
                  一致（#45 起子行程以 LaunchPolicy 為準，本區只剩顯示用途）；cfc2a2b1..ff32a7c1 之間
                  uv.lock 的 odoo-mcp 依賴未變。沙盒（dev-sandbox-mcp1530，正式映像疊 #45 分支程式碼、
                  chart 0.1.7）以 uid 1000 起、經 proxy initialize＋tools/list 41 支。回滾值：chart 0.1.5＋
-                 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e。 -->
+                 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:0ec2297f817ccf95a160bd95cd3dd7c6c34492ae1af2bb955165535b74d4f00e。
+                 2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614 log 遮蔽 URL 憑證；main CI run 17227
+                 job 18849；家族說明見 cloud_app_mcp_hermes）：ff32a7c1..1ec1bb0b 之間 apps/odoo 沒有任何變動，
+                 LaunchPolicy 仍是 odoo-mcp＋args［transport streamable-http、host 127.0.0.1、port {port}］，與本區
+                 command／args 一致；uv.lock 的 odoo-mcp（1.1.0）／mcp（1.28.1）未變。映像差異只有共用層的 log 遮蔽。
+                 爆炸半徑：正式站 17 台 odoo MCP 要 Redeploy 才換版，Recreate 重啟一次。
+                 回滾值（chart 0.1.7 不動）：
+                 ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:ee5d8f6954866f954f604e24421fb7b0f87f629f11c439138000dedf2133ce40"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -537,7 +566,9 @@
 
             <!-- 2026-10-08 家族改釘（chart 0.1.7＋image ff32a7c1，見 cloud_app_mcp_hermes）刻意不含本筆：
                  已下架（is_hidden，見下方）、woow-mcp-server 已封存 apps/odoo-manage、main CI 不再建它的
-                 image，所以沒有 ff32a7c1 的 odoo-manage-mcp-admin。維持 chart 0.1.5＋d5032a72。 -->
+                 image，所以沒有 ff32a7c1 的 odoo-manage-mcp-admin。維持 chart 0.1.5＋d5032a72。
+                 2026-10-10 家族改釘 image 1ec1bb0b（#1614／#1615）同樣不含本筆，理由同上（run 17227 也沒有
+                 odoo-manage 的 build job）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
@@ -618,11 +649,20 @@
                  DISABLED_TOOL_OPERATIONS。範本不需新增任何鍵。⚠ 改成有狀態 session：子行程重啟（改連線、
                  改 Permissions、redeploy）後既有 session 404，用戶端要重新 initialize。上游 SSRF 規則
                  （WEBHOOK_SECURITY_MODE 預設 strict）擋私網 IP，n8n_api_url 要填對外網址。回滾值：chart 0.1.5＋
-                 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:fe97e99e438c29a261603e9b1dfb95bb9188e4286efb8638d1a0ab67d796fad2。 -->
+                 cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:fe97e99e438c29a261603e9b1dfb95bb9188e4286efb8638d1a0ab67d796fad2。
+                 2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614／#1615；main CI run 17227 job 18847；
+                 家族說明見 cloud_app_mcp_hermes）：除了共用層的 log 遮蔽，launcher 的 build_env 最後寫死
+                 N8N_MCP_TELEMETRY_DISABLED=true、移除 N8N_MCP_TELEMETRY_URL／KEY（LaunchPolicy 的 env 白名單只有
+                 AUTH_TOKEN，管理頁與 config.json 都打不開）；Dockerfile 建置時跑 telemetry_check（實際執行的是分支
+                 run 17162 job 18751，輸出 disabledByEnv true、enabled false；run 17227 這一步是 cache 命中）。LaunchPolicy 仍是 n8n-mcp-http＋args［port {port}］，與本區一致；
+                 n8n-mcp 仍釘 2.92.1。範本不需新增任何鍵。爆炸半徑：正式站 2 台 n8n MCP 要 Redeploy 才換版，Recreate
+                 重啟一次、既有 session 失效、用戶端要重新 initialize；n8n_health_check 查 npm 版本、template／community
+                 工具連 api.n8n.io 是功能性外連，不是 telemetry，這次沒動。回滾值（chart 0.1.7 不動）：
+                 ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:db66a0f333add5cef0a5a6a072b9048dcfdf6a2e5487c633f478f4b624588536。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:db66a0f333add5cef0a5a6a072b9048dcfdf6a2e5487c633f478f4b624588536"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:2d485ae74fb0a6a911b6d753d4322be147c6f14e1f772127fd4c71f4d61dec53"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -662,7 +702,10 @@
              k8s-mcp-http＋args［port {port}］、vk supergateway（vibe-kanban-mcp，同本檔 args），與 seed 一致；
              opendesign 是 opendesign-mcp-server＋args［host 127.0.0.1、port {port}］（woow-mcp-server #22 起
              原生 Streamable HTTP），本檔 seed 仍是舊的 supergateway 寫法，只剩顯示用途、實際以 app 預設啟動。
-             k8s 的四個 K8S_MCP_* env 在 LaunchPolicy 的 env 白名單內（也是 Settings 頁可改的開關）。 -->
+             k8s 的四個 K8S_MCP_* env 在 LaunchPolicy 的 env 白名單內（也是 Settings 頁可改的開關）。
+             2026-10-10 三型 image 一起改釘 1ec1bb0b（woow-mcp-server #48，#1614；家族說明見 cloud_app_mcp_hermes）：
+             ff32a7c1..1ec1bb0b 之間 apps/k8s、apps/vk、apps/opendesign 都沒有變動，映像差異只有共用層的 log 遮蔽；
+             三者的 LaunchPolicy 同上、未變。k8s、vk 已下架（is_hidden），照樣改釘，之後重新上架時就是安全的映像。 -->
 
         <!-- k8s：kubernetes-mcp-server（Go binary 原生 http，command=k8s-mcp-http，
              非 supergateway 橋）。治理三 toggle 走 mcp_server.env 全名
@@ -688,11 +731,14 @@
 
             <!-- 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（見上方三型說明與 cloud_app_mcp_hermes）。
                  回滾值：chart 0.1.5＋cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
-                 5beb1f1de006000ee3f5e29f06374ff9352d344df38bd064e02a0f9994e0ab6d。 -->
+                 5beb1f1de006000ee3f5e29f06374ff9352d344df38bd064e02a0f9994e0ab6d。
+                 2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18845；見上方三型說明）。
+                 apps/k8s 無變動、只多共用層 log 遮蔽；已下架，正式站沒有實例。回滾值（chart 0.1.7 不動）：
+                 ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:4774f40d7c7daa41dbb0e40fe30bc67fafe56530d32f5b75b7f99eaa0a95efca。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:4774f40d7c7daa41dbb0e40fe30bc67fafe56530d32f5b75b7f99eaa0a95efca"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:5bde7fd00cad448e3a6a2a9646e71f3f4f7c58fafb66ef698494f7f9b6e0fc61"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -732,11 +778,14 @@
 
             <!-- 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（見上方三型說明與 cloud_app_mcp_hermes）。
                  回滾值：chart 0.1.5＋cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
-                 4ac1632676a31c81459a22ad41b9544dd092947d4a748ab95056721ceedffbcf。 -->
+                 4ac1632676a31c81459a22ad41b9544dd092947d4a748ab95056721ceedffbcf。
+                 2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18851；見上方三型說明）。
+                 apps/vk 無變動、只多共用層 log 遮蔽；已下架，正式站沒有實例。回滾值（chart 0.1.7 不動）：
+                 ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:87982c513b8f75f7d26f0cdeb1fd611ade90f616f1ff204e2fcd58276007a7c1。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:87982c513b8f75f7d26f0cdeb1fd611ade90f616f1ff204e2fcd58276007a7c1"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:77a3fa347e9d300ca99b25702770fe71026837fcf69d32edad88dbd8a2d8866e"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -786,11 +835,15 @@
 
             <!-- 2026-10-08 改釘 chart 0.1.7＋image ff32a7c1（見上方三型說明與 cloud_app_mcp_hermes）。
                  回滾值：chart 0.1.5＋cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:
-                 2e6676decf07a09444ffd5271bb2ddb81705300918a65383bb0b09828d83e954。 -->
+                 2e6676decf07a09444ffd5271bb2ddb81705300918a65383bb0b09828d83e954。
+                 2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18850；見上方三型說明）。
+                 apps/opendesign 無變動、只多共用層 log 遮蔽；正式站沒有實例（stg 一台釘 723182e、replicas 0）。
+                 回滾值（chart 0.1.7 不動）：
+                 ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:f954ceb588f2051258ac7f77cb672bc6530a119e87f82ace96e83041c05e1553。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:f954ceb588f2051258ac7f77cb672bc6530a119e87f82ace96e83041c05e1553"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:04693463d47884834816a360825705ccafa34381e40c80f69442190a15b7b169"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -2589,6 +2642,13 @@
              seed_defaults 未變，與本筆 seed 一致。注入的同工作區 LiteLLM 網址是同 namespace，chart 0.1.6 起
              sameNamespaceEgress 預設開，照常連得到。回滾值：chart 0.1.5＋
              cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878。
+             2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18846；家族說明見
+             cloud_app_mcp_hermes）：apps/litellm 只有 litellm_mcp_admin/log_redaction.py 改成沿用共用層
+             （mcp_admin_core.log_redaction，多遮 Logs 頁 ?token=<admin JWT>），已覆核 LaunchPolicy＝
+             litellm-mcp-server＋args［port {port}］、env 白名單只有 LITELLM_MCP_READONLY、connection 白名單
+             base_url／master_key，launcher 與 seed_defaults 未變，與本筆 seed 一致。爆炸半徑：只差 #48 的 log 遮蔽；
+             正式站沒有 mcp-litellm 實例。回滾值（chart 0.1.7 不動）：
+             ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:b9ae4e2133fb773ec287a4d983c8060332d206f35e50726c57bc156e27fa98ea。
              守線：test_mcp_litellm_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpLitellmTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
@@ -2614,7 +2674,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:b9ae4e2133fb773ec287a4d983c8060332d206f35e50726c57bc156e27fa98ea"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:4e31c10acb93e1f888f14cfc012f68b930609e35f0e734330a64abb81bd134d7"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -2664,6 +2724,14 @@
              uid 1000、預填公開網址、出廠唯讀 5 支、錯誤密碼停止重試且存新密碼立即恢復、Tools 頁開啟後 9 支含 ETag 防覆寫、
              /private_<token>/mcp 結尾斜線不通、log 不含 token／密碼；另以 Claude Code 經 /private_<token>/mcp 實跑 9 支工具）
              後只翻 is_hidden（實例層從未設），與 mcp-litellm 同流程。
+             2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18848；家族說明見
+             cloud_app_mcp_hermes）。相對 9a0fafa2：#47（移除舊 OAuth Gateway）只改 apps/nextcloud 的 Dockerfile 註解、
+             README、VENDORED.md，並從 root uv.lock 刪掉舊 gateway 的套件（本 app 的依賴逐筆相同）；#48 把
+             nextcloud_mcp_admin/log_redaction.py 的 path token 遮罩改用共用層（多遮 Logs 頁 ?token=<admin JWT>），
+             app password 遮罩保留。已覆核 LaunchPolicy＝nextcloud-mcp-server＋args［port {port}］、env_prefix
+             NEXTCLOUD_MCP_、connection 白名單 base_url／username／app_password，launcher 與 seed_defaults 未變，
+             與本筆 seed 一致。爆炸半徑：只差 #48 的 log 遮蔽；正式站沒有 mcp-nextcloud 實例。回滾值（chart 0.1.7 不動）：
+             9a0fafa2d61f11cc77c37a2c0da0c5dc64acf52b@sha256:e9257783345849fa0b8de52af23e1d653a3677847ebb0f7ce155785ff202ecd9。
              守線：test_mcp_nextcloud_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpNextcloudTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入公開網址）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
@@ -2695,7 +2763,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "9a0fafa2d61f11cc77c37a2c0da0c5dc64acf52b@sha256:e9257783345849fa0b8de52af23e1d653a3677847ebb0f7ce155785ff202ecd9"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:57bfd8a107a53df493be854d6e5dad9edb731b3cd4d9d8411a17691dbea2ef2f"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
