@@ -2472,12 +2472,16 @@
              （憑證 api_key＝帳號參照 woow-chatgpt:<帳號>），另有預設帳號；同名模型跨帳號自動分流。使用者 10-09 要求。
              chart 0.2.4（2026-10-09）：修正舊快取的後台頁面（304）不載入 ChatGPT bridge（手機出現 Failed to add credential）。
              chart 0.2.5（2026-10-09）：憑證名稱前後空白刪不掉（URL 去掉尾端空白 → 404）、0.2.2 舊憑證歸預設帳號、同一 ChatGPT 帳號不可重複連。
+             chart 0.3.0（2026-10-09）：LiteLLM 1.103.3 → 1.104.0（鏡像 litellm 20261009.1344，digest＝上游
+             litellm-non_root:1.104.0 index digest，paas-odoo-ci #274），與 HA「Woow LiteLLM」add-on 同一顆映像（負責人
+             10-09 決定兩邊一起升）；5 個新 schema migration（換映像前 db-agent 自動 dump）；Woow 外掛不變（含 0.2.6 的路徑
+             前綴支援，PaaS 行為不變）。既有服務要「重新部署」才會換版。
              商品說明的 ChatGPT 段落是資料值，直接寫中文、不走 .po。 -->
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
             <field name="slug">litellm</field>
             <field name="description">OpenAI 相容的 AI 模型閘道：一個 API 端點接上 OpenAI、Anthropic、Google、OpenRouter 等多家模型，用虛擬金鑰分給各應用程式並控管預算與用量，附網頁管理後台與專屬資料庫。1 vCPU／2 GB RAM／10 GB 磁碟</field>
-            <field name="full_description">AI 模型閘道（LiteLLM 1.103 開源版）：提供 OpenAI 相容的 API（/v1/chat/completions 等，也支援 Anthropic 格式），
+            <field name="full_description">AI 模型閘道（LiteLLM 1.104 開源版）：提供 OpenAI 相容的 API（/v1/chat/completions 等，也支援 Anthropic 格式），
                 後面接 OpenAI、Anthropic、Google、OpenRouter 等上百家模型供應商；用虛擬金鑰分給各個應用程式，可設預算、速率上限與
                 可用模型，並記錄每把金鑰的用量與花費。隨附專屬 PostgreSQL。
                 **帳密**：網頁後台帳號預設 admin，帳號與密碼於開通時一次性顯示；同時一次性顯示 master key 與 API Base URL
@@ -2500,8 +2504,8 @@
             <field name="documentation_url">https://docs.litellm.ai/docs/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
-            <field name="helm_chart_version">0.2.5</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0502@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
+            <field name="helm_chart_version">0.3.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261009.1344@sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
