@@ -163,3 +163,61 @@ class TestCreateOnlyFrontendContract1561(TransactionCase):
         ):
             with self.subTest(src=src):
                 self.assertTrue(code.get(src), 'zh_TW.po 缺中文：%r' % src)
+
+
+@tagged('post_install', '-at_install')
+class TestCreateOnlyHints1479(TransactionCase):
+    """#1479 補上 #1561 沒有的兩個提示（靜態讀檔＋seed 前提）。
+
+    * 建立頁（HelmValueForm）：create_only 欄位下提示「建立後無法變更」；
+    * 配置頁檢視模式：唯讀設定裡有管理員帳號時，指向頁首改密碼的按鈕——按鈕名稱跟
+      ServiceDetailPage 同兩個鏡射欄位走（admin_credentials_settable ⇒「Admin
+      Credentials」，否則「Reset Admin Password」），平台不能重設就不提示。
+    """
+
+    HELM_FORM_HINT = ('This setting can only be chosen now; it cannot be changed '
+                      'after the service is created.')
+    CREDENTIALS_HINT = ('To change the administrator password, use Admin Credentials '
+                        'at the top of this page.')
+    RESET_HINT = ('To change the administrator password, use Reset Admin Password '
+                  'at the top of this page.')
+
+    def setUp(self):
+        super().setUp()
+        config = os.path.join(_SRC, 'static', 'src', 'paas', 'components', 'config')
+        with open(os.path.join(config, 'HelmValueForm.xml'), encoding='utf-8') as f:
+            self.form_xml = f.read()
+        with open(os.path.join(_TAB, 'ConfigurationTab.js'), encoding='utf-8') as f:
+            self.js = f.read()
+        with open(os.path.join(_TAB, 'ConfigurationTab.xml'), encoding='utf-8') as f:
+            self.xml = f.read()
+
+    def test_create_form_hints_create_only_fields(self):
+        # required 與 optional 兩段各一處；判準與 isCreateOnlySpec 相同（嚴格 true）。
+        self.assertEqual(self.form_xml.count('t-if="spec.create_only === true"'), 2)
+        self.assertEqual(self.form_xml.count(self.HELM_FORM_HINT), 2)
+
+    def test_admin_password_entry_reads_mirrored_capability_fields(self):
+        start = self.js.find('get adminPasswordEntry() {')
+        self.assertGreaterEqual(start, 0)
+        body = self.js[start:self.js.find('\n    }\n', start)]
+        self.assertIn('this.createOnlySpecs.length', body)
+        self.assertIn('template.admin_reset_supported !== true', body)
+        self.assertIn('template.admin_credentials_settable === true', body)
+
+    def test_view_mode_points_to_the_matching_button(self):
+        self.assertIn('t-if="adminPasswordEntry === \'credentials\'"', self.xml)
+        self.assertIn('t-if="adminPasswordEntry === \'reset\'"', self.xml)
+        self.assertIn(self.CREDENTIALS_HINT, self.xml)
+        self.assertIn(self.RESET_HINT, self.xml)
+
+    def test_odoo_template_can_reset_admin_password(self):
+        # 前提：Odoo 範本平台能重設管理員密碼，配置頁才會出現改密碼的提示。
+        self.assertTrue(_odoo_template(self.env).admin_reset_supported)
+
+    def test_new_strings_are_translated(self):
+        po = os.path.join(_SRC, 'i18n', 'zh_TW.po')
+        code = {e['src']: e['value'] for e in PoFileReader(po) if e.get('type') == 'code'}
+        for src in (self.HELM_FORM_HINT, self.CREDENTIALS_HINT, self.RESET_HINT):
+            with self.subTest(src=src):
+                self.assertTrue(code.get(src), 'zh_TW.po 缺中文：%r' % src)

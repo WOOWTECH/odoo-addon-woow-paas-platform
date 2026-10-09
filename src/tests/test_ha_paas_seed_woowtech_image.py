@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HA PaaS seed 切換到 woowtech-ha image ＋ chart 0.2.1 的守線斷言（#336 後續）。
+"""HA PaaS seed 切換到 woowtech-ha image ＋ chart 0.2.x 的守線斷言（#336 後續）。
 
 鏡射 test_opendesign_seed_380.py 結構。本檔的核心是 **原子性守線**：chart 0.2.x 與
 image 必須同進同退（chart NOTES.txt「OPERATOR COUPLING」）——
@@ -52,7 +52,9 @@ class TestHAPaaSWoowtechImageSeed(TransactionCase):
             % (tpl.helm_chart_version, repo))
 
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的 home-assistant OCI，釘在 0.2.1。
+        """chart＝woow-paas-charts 發佈的 home-assistant OCI，釘在 0.2.2。
+
+        0.2.2（#1441）：NetworkPolicy 同工作區全通、拿掉 egress `- {}`、排除多播；seed 與 image 不變。
 
         **不可回退 0.2.0**：0.2.0 的 seed initContainer 用 `cp -rn /config/. /seed-target/`
         單一指令，在 image 內的 busybox v1.37.0 上 exit 0 卻複製 0 個檔（-n 把既存目的
@@ -64,7 +66,7 @@ class TestHAPaaSWoowtechImageSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant')
-        self.assertEqual(tpl.helm_chart_version, '0.2.1')
+        self.assertEqual(tpl.helm_chart_version, '0.2.2')
 
     # ── image pin ────────────────────────────────────────────────────────────
     def test_image_repository_is_woowtech_ha(self):

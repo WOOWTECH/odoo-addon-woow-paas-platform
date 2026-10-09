@@ -1063,8 +1063,6 @@ from . import test_n8n_smtp_fields_1370
 from . import test_change_plan_reapply_1158
 # #1516：跨使用者同名建立，slug 全域查重與隨機 hex 後綴。
 from . import test_workspace_slug_1516
-# LiteLLM「ChatGPT 訂閱」：device code 登入、狀態、預設模型、中斷（chart 0.2.0、operator exec）。
-from . import test_chatgpt_subscription
 # 方案名稱中文化 migration（18.0.1.0.214）：27 個英文方案／商品名改中文，只改仍是舊原名者。
 from . import test_plan_names_zh_tw_migration
 # #1525：租戶不能指定 chart 版本（controller version 參數＋helm_chart_version 寫入守衛）。
@@ -1097,3 +1095,5 @@ from . import test_n8n_plan_spec_paths_1532
 from . import test_n8n_python_disabled_1533
 # #1561：只在開通時生效的設定（Odoo 管理員 Email／示範資料）開通後唯讀。
 from . import test_create_only_settings_1561
+# #1563：欠費停權時對外網址指到共用停權說明頁（park），復權改回服務（unpark，失敗 fail-loud）。
+from . import test_suspend_route_park_1563

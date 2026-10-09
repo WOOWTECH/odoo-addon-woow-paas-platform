@@ -422,6 +422,60 @@ class RouteStatus(str, Enum):
     FAILED = "failed"
 
 
+#: woow_paas_platform #1563：park／unpark 的 subdomain 必須是**一個** DNS label（平台的
+#: ``paas-cs-<ws>-<svc>`` 與 operator 自動產生的 ``<release>-<ns 尾>`` 都符合）。
+ROUTE_SUBDOMAIN_PATTERN = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+
+
+class RouteParkStatus(str, Enum):
+    """woow_paas_platform #1563：park／unpark 成功時（HTTP 200）的結果。
+
+    失敗一律是 4xx／5xx＋``detail.error_code``，**刻意不用 404**：平台把 404 當成
+    「operator 還沒有這兩個端點」（舊 image），只記 log。
+    """
+
+    PARKED = "parked"              # 這次把規則改指停權說明頁
+    ALREADY_PARKED = "already_parked"  # 早就指向說明頁（冪等重送）
+    NO_SERVICE_RULE = "no_service_rule"  # 有規則，但沒有一條指向本 namespace 的服務（只有 http_status:*）
+    UNPARKED = "unparked"          # 這次把規則改回服務
+    NOT_PARKED = "not_parked"      # 沒有指向說明頁的規則（冪等重送／從沒 park 過）
+    NOT_FOUND = "not_found"        # 這個 hostname 在 tunnel 上沒有任何規則
+    DISABLED = "disabled"          # 這個 operator 沒開 Cloudflare 整合，什麼都不做
+
+
+class RouteParkRequest(BaseModel):
+    """把一個 release 的對外 hostname 指向停權說明頁（目標不由呼叫端指定）。"""
+
+    subdomain: str = Field(
+        ...,
+        min_length=1,
+        max_length=63,
+        pattern=ROUTE_SUBDOMAIN_PATTERN,
+        description="Subdomain the release was exposed on (one DNS label).",
+    )
+
+
+class RouteUnparkRequest(BaseModel):
+    """把 hostname 改回服務：用與安裝時同一個 expose 設定重算 service_url。"""
+
+    expose: ExposeConfig = Field(
+        ...,
+        description=(
+            "The same expose config the release was installed with; the operator "
+            "re-derives the service URL with the install-time logic."
+        ),
+    )
+
+
+class RouteParkResponse(BaseModel):
+    hostname: Optional[str] = None
+    status: RouteParkStatus
+    matched: int = Field(0, description="Ingress rules found for this hostname")
+    changed: int = Field(0, description="Ingress rules rewritten by this call")
+    service_url: Optional[str] = Field(
+        None, description="Where the rewritten rules point after this call")
+
+
 class RouteInfo(BaseModel):
     """Information about a Cloudflare Tunnel route.
 
@@ -823,43 +877,6 @@ class AppAdminPasswordResetResponse(BaseModel):
     error_step: Optional[str] = None
     error_code: Optional[AppAdminResetCode] = None
     error_kind: Optional[InitErrorKind] = None
-
-
-# --- LiteLLM「ChatGPT 訂閱」登入（device code 經 operator exec；woow-paas-charts litellm ≥ 0.2.0）---
-
-#: 對平台暴露的 CLI 指令白名單（路徑參數；其他值 FastAPI 直接 422、不 exec）。
-#: chart CLI 另有 restore／selfcheck，只給 chart 自己用，刻意不在這裡。
-ChatGPTSubscriptionAction = Literal["status", "start", "poll", "disconnect", "add-models", "test"]
-
-#: ``InitErrorKind`` 的子集（這裡沒有 partial）：not_executed＝沒 exec（pod 不在、
-#: 名稱不合法、舊 chart）；failed＝CLI 明說 ok:false；unknown＝逾時／輸出不可解析。
-ChatGPTSubscriptionErrorKind = Literal["not_executed", "failed", "unknown"]
-
-
-class ChatGPTSubscriptionRequest(BaseModel):
-    """body 可整個省略。名稱格式由 endpoint 自己驗（不合法回 200＋``invalid_model``）。"""
-
-    models: Optional[List[str]] = Field(
-        None,
-        description="add-models: model names, `chatgpt/` prefix optional, at most 12; "
-                    "omitted or empty = the chart's default list",
-    )
-    model: Optional[str] = Field(
-        None, description="test: the model to call; omitted = the first chatgpt/ model",
-    )
-
-
-class ChatGPTSubscriptionResponse(BaseModel):
-    """業務結果一律 200；``data`` 是 CLI 那一行 JSON 去掉 ``ok``（token 鍵已刪）。
-
-    ⚠ ``data.pending.user_code`` 是要給租戶看的一次性登入代碼——呼叫端不可寫進 log。
-    """
-
-    success: bool
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    error_code: Optional[str] = None
-    error_kind: Optional[ChatGPTSubscriptionErrorKind] = None
 
 
 # --- Odoo Module Management ---

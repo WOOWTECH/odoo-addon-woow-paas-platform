@@ -847,7 +847,7 @@
                  helm_chart_name 帶完整 oci://。chart 由 woow-paas-charts repo 發佈。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant</field>
-            <field name="helm_chart_version">0.2.1</field>
+            <field name="helm_chart_version">0.2.2</field>
             <!-- woowtech-ha image（HA core 2026.7.2、整合集 ~999→~125、seed 檔烤入
                  /config：無 http/無 default_config 的 configuration.yaml ＋ 9 個
                  custom_components）＋ /config PVC 5Gi。
@@ -1842,7 +1842,7 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <field name="helm_chart_version">0.1.6</field>
+            <field name="helm_chart_version">0.1.7</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261003.1400@sha256:a00d92d8465dd1a4ad2d7c4d4c20d5b6b21073b350cb13ec86d49eadf0996048"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
@@ -2433,7 +2433,7 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- AI 模型閘道（LiteLLM）cloud service。chart woow-paas-charts charts/litellm 0.1.1（0.1.0＝#123）：
+        <!-- AI 模型閘道（LiteLLM）cloud service。chart woow-paas-charts charts/litellm 0.2.1（0.1.0＝#123）：
              litellm-non_root 1.103.3（uid 65534）＋內附 PostgreSQL（平台 paas-postgres 17.11，與 woow-odoo
              同一顆 pin），只有一顆 PVC（pgdata＋每日／升級前 pg_dump）。唯一入口 <release>-litellm:4000
              （PG Service 為 headless，operator 不會挑它）。
@@ -2458,11 +2458,19 @@
              重設帳密／master key 斷線約 2 分 15 秒（說明已寫）。
              test_litellm_seed.test_hidden_until_listed 守線：上架 ⟹ litellm 與 PG 兩顆 image 雙釘。
              營運：上游只支援最近四條線、半年 3 個未授權漏洞 ⇒ 每月升 minor 並 backfill 既有服務。
-             chart 0.2.0（2026-10-07）：ChatGPT 訂閱登入（LiteLLM chatgpt/ provider）——proxy 容器內附
-             /woow/py/woow_chatgpt.py，operator exec 它跑 device code 登入／狀態／加模型／測試／中斷；token 存 tmpfs
-             ＋租戶自己的 DB（重啟不掉）、proxy 內不跑互動登入。chatgpt_subscription_supported=True 讓服務頁出現
-             「ChatGPT 訂閱」卡片（能力唯一事實源）。image 不變；既有 0.1.x 服務要「重新部署」到 0.2.0 才能用
-             （舊 release 回 unsupported_chart，卡片請租戶重新部署）。 -->
+             chart 0.2.1（2026-10-08）：ChatGPT 訂閱登入（LiteLLM chatgpt/ provider）改在 LiteLLM 自己裡面——
+             服務網址的 /woow/chatgpt 頁（chart files/woow_chatgpt_plugin.py，用 LiteLLM 管理員登入）跑 device code
+             登入、勾選要加入的 chatgpt/ 模型（清單即時讀自租戶帳號）；token 存 tmpfs＋租戶自己的 DB（重啟不掉）。
+             平台端不再參與：0.2.0 時期的服務頁卡片、平台路由、範本能力欄位與 operator exec 端點
+             都已移除（使用者 2026-10-08 決定登入不靠 PaaS）。image 不變；既有 0.1.x／0.2.0 服務要「重新部署」
+             到 0.2.1 才有 /woow/chatgpt（已登入的 token 在租戶 DB，升級不受影響）。
+             chart 0.2.2（2026-10-08）：LiteLLM 後台「LLM Credentials → Add Credential」選 ChatGPT Subscription，
+             未連結時按 Add Credential 會在視窗內跳出子畫面選登入方式（瀏覽器登入＝PKCE 貼回跳轉網址、不用改 ChatGPT
+             設定；或裝置代碼登入），再勾選模型並建立憑證（files/woow_chatgpt_plugin.py 的 ui-bridge.js；LiteLLM 程式不改）。
+             /woow/chatgpt 頁也有兩種登入方式。使用者 2026-10-08 要求「同 pi web 的做法」。
+             chart 0.2.3（2026-10-09）：一台 LiteLLM 可連多個 ChatGPT 帳號——每個「ChatGPT Subscription」憑證一個帳號
+             （憑證 api_key＝帳號參照 woow-chatgpt:<帳號>），另有預設帳號；同名模型跨帳號自動分流。使用者 10-09 要求。
+             商品說明的 ChatGPT 段落是資料值，直接寫中文、不走 .po。 -->
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
             <field name="slug">litellm</field>
@@ -2475,7 +2483,8 @@
                 舊的立即失效（已建立的虛擬金鑰與供應商金鑰不受影響），請妥善保存。重設管理員密碼或 master key 時，服務會重新啟動，約中斷 2 分鐘。
                 **模型與供應商金鑰**：開通時沒有任何模型。請在後台新增模型並填入你自己的供應商 API Key；金鑰加密後存在你自己的資料庫，
                 平台不代管。
-                **ChatGPT 訂閱（選用）**：服務頁可用 ChatGPT Plus／Pro 帳號登入（裝置代碼），把訂閱額度當成 chatgpt/ 模型使用。
+                **ChatGPT 訂閱（選用）**：在 LiteLLM 後台「LLM Credentials → Add Credential」選 ChatGPT Subscription，或打開本服務網址的 /woow/chatgpt（用 LiteLLM 管理員登入），以 ChatGPT Plus／Pro 帳號登入（瀏覽器登入或裝置代碼），並勾選要加入的 chatgpt/ 模型（清單即時讀自你的帳號，例如 gpt-6-astra）。
+                可連多個 ChatGPT 帳號（每個帳號一個憑證），同名模型會在帳號間自動分流。
                 這是借用 Codex 的登入方式、非 OpenAI 官方的第三方整合，用量算在你的訂閱、帳號風險自負，僅限你自己使用。
                 **使用 API**：應用程式請一律用後台建立的虛擬金鑰，master key 只給管理腳本。經公開網址單次請求上限 100 MB；
                 長回應請用串流（stream），否則超過約 100 秒沒有任何輸出會被平台入口中斷。同一工作區的其他服務可改用內部網址
@@ -2489,7 +2498,7 @@
             <field name="documentation_url">https://docs.litellm.ai/docs/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
-            <field name="helm_chart_version">0.2.0</field>
+            <field name="helm_chart_version">0.2.3</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0502@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
@@ -2511,7 +2520,6 @@
             <field name="gateway_api_key_hint">這是 LiteLLM 的 master key（等同管理員金鑰）。應用程式請一律在 LiteLLM 後台建立虛擬金鑰使用，master key 只給管理腳本。</field>
             <field name="gateway_url_hint">OpenAI 相容 API 的 Base URL。同工作區其他服務請改用內部網址 http://&lt;服務 release&gt;-litellm:4000/v1。</field>
             <field name="post_deploy_init_type">none</field>
-            <field name="chatgpt_subscription_supported" eval="True"/>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
@@ -2618,8 +2626,10 @@
              chart：mcp-server **0.1.7**（woow-paas-charts main 3746cd6，#1530 以非 root 執行：runAsNonRoot、uid／gid 1000、
              保留 fsGroup 1000）。本 image 以 uid／gid 1000 執行，需要這版非 root chart；其他 mcp-* 範本仍釘 0.1.5、由 #1530
              另行改釘，本範本不跟它們對齊。
-             隱藏（is_hidden=True）：等沙盒開通實測（同工作區預填網址、專用帳號＋應用程式密碼唯讀可用、Tools 頁開啟寫入、
-             錯誤密碼停止重試、log 不含 token／密碼）後另開 PR 只翻 is_hidden（實例層不設），與 mcp-litellm 同流程。
+             上架（is_hidden=False，2026-10-08）：#1587 以隱藏卡片進 seed；沙盒開通實測 30＋1 項全過（chart 0.1.7＋本範本 values、
+             uid 1000、預填公開網址、出廠唯讀 5 支、錯誤密碼停止重試且存新密碼立即恢復、Tools 頁開啟後 9 支含 ETag 防覆寫、
+             /private_<token>/mcp 結尾斜線不通、log 不含 token／密碼；另以 Claude Code 經 /private_<token>/mcp 實跑 9 支工具）
+             後只翻 is_hidden（實例層從未設），與 mcp-litellm 同流程。
              守線：test_mcp_nextcloud_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpNextcloudTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入公開網址）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
@@ -2665,7 +2675,7 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">config_json</field>
             <field name="post_deploy_init_type">none</field>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 

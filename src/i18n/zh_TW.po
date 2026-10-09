@@ -11538,6 +11538,14 @@ msgid "Resume failed: %(error)s"
 msgstr "恢復失敗：%(error)s"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Resume failed: the service was started again, but its public URL still "
+"shows the suspension notice (%(error)s). It will be retried automatically."
+msgstr "恢復失敗：服務已重新啟動，但對外網址仍顯示停權說明頁（%(error)s）。系統會自動重試。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
@@ -20636,6 +20644,24 @@ msgid "Set when the service was created; it cannot be changed afterwards."
 msgstr "開通服務時設定，之後無法修改。"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "To change the administrator password, use Admin Credentials at the top of this page."
+msgstr "要變更管理員密碼，請使用本頁上方的「管理員帳密」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "To change the administrator password, use Reset Admin Password at the top of this page."
+msgstr "要變更管理員密碼，請使用本頁上方的「重設管理員密碼」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/config/HelmValueForm.xml:0
+msgid "This setting can only be chosen now; it cannot be changed after the service is created."
+msgstr "此設定只能在現在選擇，開通服務後無法修改。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__app_admin_reset_kind__omnigent_exec
 msgid "Omnigent administrator (operator exec)"
 msgstr "Omnigent 管理員（operator exec）"
@@ -20691,382 +20717,6 @@ msgstr "%(name)s（id=%(id)s，namespace %(ns)s）→ 方案「%(plan)s」：%(p
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
 msgid "Plan changes were rejected before anything was charged or applied because a disk could not be enlarged (reason \"capacity\" means the cluster storage (Longhorn) has no room for the extra size on the disks holding its replicas). Free scheduling capacity or add storage, then ask the tenant to try again:"
 msgstr "以下換方案在扣款與套用之前就被擋下：磁碟無法擴充（原因為「capacity」表示叢集儲存（Longhorn）在存放該磁碟副本的硬碟上放不下增加的容量）。請釋放排程額度或增加儲存空間後，再請租戶重試："
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The service did not respond. Try again."
-msgstr "服務沒有回應，請再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "Some models could not be added: %(models)s"
-msgstr "部分模型無法加入：%(models)s"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The test request failed (HTTP %(status)s): %(message)s"
-msgstr "測試請求失敗（HTTP %(status)s）：%(message)s"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "no details"
-msgstr "沒有詳細資訊"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "This feature is not available yet. Please try again later."
-msgstr "此功能尚未開放，請稍後再試。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid ""
-"This service runs an older version. Redeploy it to enable ChatGPT subscription."
-msgstr "此服務仍是舊版本，請先「重新部署」才能使用 ChatGPT 訂閱。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid ""
-"The service is not ready yet. Wait until it is running, then try again."
-msgstr "服務尚未就緒，請等它顯示「執行中」後再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "Connect your ChatGPT subscription first."
-msgstr "請先連接 ChatGPT 訂閱。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid "Could not get a sign-in code from OpenAI. Try again later."
-msgstr "無法向 OpenAI 取得登入代碼，請稍後再試。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid "Sign-in failed. Start again."
-msgstr "登入失敗，請重新開始。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "Add the ChatGPT models first."
-msgstr "請先加入 ChatGPT 模型。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The service could not list its models. Try again in a minute."
-msgstr "服務暫時無法列出模型，請稍等一分鐘再試。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The saved sign-in could not be removed. Try again."
-msgstr "無法移除已儲存的登入資料，請再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "Invalid model name."
-msgstr "模型名稱格式不正確。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "Some models could not be added. Try again."
-msgstr "部分模型無法加入，請再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The service could not complete the request. Try again."
-msgstr "服務無法完成這個操作，請再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The ChatGPT subscription request failed. Try again."
-msgstr "ChatGPT 訂閱的操作失敗，請再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "This service does not support ChatGPT subscription."
-msgstr "此服務不支援 ChatGPT 訂閱。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The service must be running to manage its ChatGPT subscription."
-msgstr "服務必須在執行中才能管理 ChatGPT 訂閱。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/chatgpt_subscription_helpers.js:0
-msgid "Added: %s."
-msgstr "已加入：%s。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/chatgpt_subscription_helpers.js:0
-msgid "Already there: %s."
-msgstr "原本就有：%s。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/chatgpt_subscription_helpers.js:0
-msgid "No models were added."
-msgstr "沒有加入任何模型。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid "Could not check the ChatGPT subscription."
-msgstr "無法查詢 ChatGPT 訂閱狀態。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid "A sign-in is waiting for you. Its code expires in about %s min."
-msgstr "有一個登入正在等你完成，代碼約 %s 分鐘後失效。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid ""
-"This sign-in has not been saved to the service's database yet; it is retried each time this card checks the status. If the service restarts before that, you will need to connect again."
-msgstr "這次登入還沒存進服務的資料庫，每次這張卡片查詢狀態時都會再試一次；若在那之前服務重新啟動，就需要重新連接。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid ""
-"Use your ChatGPT Plus or Pro subscription as a model provider in this gateway (model names start with chatgpt/). You sign in on OpenAI's own page with a one-time code; your ChatGPT password never passes through the platform."
-msgstr "用你的 ChatGPT Plus 或 Pro 訂閱當作這個閘道的模型供應商（模型名稱以 chatgpt/ 開頭）。登入是在 OpenAI 自己的頁面用一次性代碼完成，你的 ChatGPT 密碼不會經過平台。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid ""
-"Disconnect ChatGPT? The chatgpt/ models stop working until you connect again. The models stay in the list, and nothing else in the service changes."
-msgstr "要中斷 ChatGPT 連接嗎？chatgpt/ 模型會停止運作，直到你重新連接。模型仍會留在清單中，服務的其他設定不受影響。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid "Could not add the models."
-msgstr "無法加入模型。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid "%s answered in %s seconds."
-msgstr "%s 在 %s 秒內回應。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid "The test request failed."
-msgstr "測試請求失敗。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid "ChatGPT has been disconnected."
-msgstr "已中斷 ChatGPT 連接。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.js:0
-msgid "Could not disconnect ChatGPT."
-msgstr "無法中斷 ChatGPT 連接。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "ChatGPT Subscription"
-msgstr "ChatGPT 訂閱"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Not connected"
-msgstr "未連線"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Checking the ChatGPT subscription..."
-msgstr "正在查詢 ChatGPT 訂閱…"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Subscription active until"
-msgstr "訂閱有效至"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Models"
-msgstr "模型"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Not available right now"
-msgstr "目前無法取得"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "None yet"
-msgstr "尚無"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Access token valid until (renews automatically)"
-msgstr "存取憑證有效至（會自動更新）"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid ""
-"Add the default models so your apps can call them by name (for example chatgpt/gpt-5.4)."
-msgstr "加入預設模型後，應用程式就能用名稱呼叫它們（例如 chatgpt/gpt-5.4）。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Disconnect"
-msgstr "中斷連接"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Add default models"
-msgstr "加入預設模型"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Test connection"
-msgstr "測試連線"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Reconnect"
-msgstr "重新連接"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-msgid "Continue sign-in"
-msgstr "繼續登入"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/chatgpt-subscription/ChatGPTSubscriptionCard.xml:0
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid "Connect ChatGPT subscription"
-msgstr "連接 ChatGPT 訂閱"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid ""
-"ChatGPT Plus or Pro is required. First, in ChatGPT go to Settings → Security and turn on device code sign-in (Codex). This feature borrows the sign-in method of Codex; it is not an official OpenAI integration for third parties. Usage counts against your ChatGPT subscription, and you accept any risk to your account. The code is for your own use only — do not give it to anyone."
-msgstr "需要 ChatGPT Plus 或 Pro。請先到 ChatGPT「設定 → 安全性」開啟「裝置代碼登入（Codex）」。此功能借用 Codex 的登入方式，不是 OpenAI 官方的第三方整合；用量會算在你的 ChatGPT 訂閱，帳號風險由你自行承擔。代碼只能自己使用，不要給別人。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid "I have read the above and agree."
-msgstr "我已閱讀上述內容並同意。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid ""
-"Open the OpenAI sign-in page, sign in with your ChatGPT account and enter this code. This window updates by itself once you finish."
-msgstr "打開 OpenAI 登入頁，用你的 ChatGPT 帳號登入並輸入這組代碼。完成後這個視窗會自動更新。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid "The code has expired. Get a new one to try again."
-msgstr "代碼已過期，請重新取得代碼再試一次。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.js:0
-msgid ""
-"Connected. Add the default models to start using them, or close this window."
-msgstr "已連線。加入預設模型即可開始使用，或直接關閉視窗。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Copied"
-msgstr "已複製"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Copy code"
-msgstr "複製代碼"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Open the OpenAI sign-in page"
-msgstr "打開 OpenAI 登入頁"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Waiting for you to sign in"
-msgstr "等待你完成登入"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Get sign-in code"
-msgstr "取得登入代碼"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChatGPTSubscriptionModal.xml:0
-msgid "Get a new code"
-msgstr "重新取得代碼"
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__chatgpt_subscription_supported
-msgid "ChatGPT Subscription Sign-in"
-msgstr "ChatGPT 訂閱登入"
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__chatgpt_subscription_supported
-msgid ""
-"The chart ships the ChatGPT subscription helper (LiteLLM chart 0.2.0 and later): tenant admins can sign in with ChatGPT Plus/Pro from the service page (device code), check the connection, add the chatgpt/ models and disconnect. Services still on an older chart version must be redeployed first."
-msgstr "chart 內附 ChatGPT 訂閱工具（LiteLLM chart 0.2.0 起）：工作區管理員可在服務頁用 ChatGPT Plus／Pro 登入（裝置代碼）、查看連接狀態、加入 chatgpt/ 模型與中斷連接。仍是舊版 chart 的服務要先重新部署。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
