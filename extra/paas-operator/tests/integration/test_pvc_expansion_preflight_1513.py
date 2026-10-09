@@ -13,6 +13,7 @@ volume」再加 1 TiB，任何一顆磁碟都放不下這個增量。叢集沒�
 """
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -92,14 +93,32 @@ def _revision(namespace):
     return [r["revision"] for r in json.loads(out.stdout or "[]")]
 
 
+def _bound_volume_name(namespace, timeout=120):
+    """等 PVC Bound，回傳 ``spec.volumeName``（Longhorn 是 Immediate，通常幾秒內）。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        pvc = _kubectl_json("get", "pvc", "probe-data", "-n", namespace) or {}
+        if (pvc.get("status") or {}).get("phase") == "Bound":
+            return pvc["spec"]["volumeName"]
+        assert time.monotonic() < deadline, f"probe-data never bound: {pvc.get('status')}"
+        time.sleep(2)
+
+
 def test_preflight_accepts_a_small_expansion_and_changes_nothing(
     app_client, test_namespace, probe_release,
 ):
+    volume = _bound_volume_name(test_namespace)
     r = app_client.post(f"/api/releases/{test_namespace}/probe/upgrade-preflight", json={
         "chart": probe_release, "reset_values": True, "values": {"size": "2Gi"}})
     assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "expansions": [
-        {"name": "probe-data", "live": "1Gi", "rendered": "2Gi"}]}
+    body = r.json()
+    assert body["ok"] is True, body
+    # 只比對平台用得到的欄位；87998eac 起每筆多一個 ``volume``（live PVC 的 spec.volumeName），
+    # replica 排程檢查就是拿它去讀 volumes.longhorn.io——對真 PVC 驗它接對了（#1616）。
+    [exp] = body["expansions"]
+    assert {k: exp[k] for k in ("name", "live", "rendered")} == {
+        "name": "probe-data", "live": "1Gi", "rendered": "2Gi"}, body
+    assert exp.get("volume") == volume, body
     assert _pvc_size(test_namespace) == "1Gi"
     assert _revision(test_namespace) == ["1"]
 

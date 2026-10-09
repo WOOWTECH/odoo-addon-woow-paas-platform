@@ -74,6 +74,20 @@ def _api_key_items(payload) -> list:
     return [k for k in data if isinstance(k, dict)] if isinstance(data, list) else []
 
 
+def _is_json_object(body) -> bool:
+    """``body`` 是 JSON 物件嗎（#1616）。
+
+    n8n 2.x 一啟動就先開一個暫時的 HTTP server：DB migration 跑完之前，除了
+    ``/healthz/readiness`` 之外**任何路徑**（含 ``GET /rest/settings``、``POST /rest/owner/setup``）
+    都回 200＋純文字「n8n is starting up. Please wait」（2.35.3 實測：sqlite 約 2–4 秒、
+    postgres 約 1–6 秒），請求不會被處理。只有 JSON 才是真正的 REST API 回的。
+    """
+    try:
+        return isinstance(json.loads(body), dict)
+    except (TypeError, ValueError):
+        return False
+
+
 def _http_error_kind(resp: dict) -> str:
     """非 200 的 node 回應 → 分類（#1263）。
 
@@ -312,7 +326,13 @@ class N8nInitService:
         )
 
     def _wait_for_ready(self, namespace: str, pod_name: str, container: str) -> None:
-        """Wait for n8n REST API to be ready."""
+        """Wait for n8n REST API to be ready.
+
+        #1616：200 不夠——n8n 2.x 啟動中的暫時 server 對 ``/rest/settings`` 也回 200（純文字，
+        見 ``_is_json_object``）；chart 的 readinessProbe 打 ``/healthz``，那段時間 pod 已經
+        Ready。以前在這個空窗送 init，``POST /rest/owner/setup`` 拿到 200＋非 JSON，init 以
+        500（JSONDecodeError、error_step 空白）收場。要等到回 JSON 才算 ready。
+        """
         logger.info("Waiting for n8n API to be ready...")
 
         for attempt in range(MAX_READY_RETRIES):
@@ -322,7 +342,7 @@ class N8nInitService:
                     "GET", "/rest/settings",
                     timeout=10,
                 )
-                if resp.get("status") == 200 and resp.get("body"):
+                if resp.get("status") == 200 and _is_json_object(resp.get("body")):
                     logger.info("n8n API is ready (attempt %d)", attempt + 1)
                     return
             except (KubectlException, N8nInitError, json.JSONDecodeError):
