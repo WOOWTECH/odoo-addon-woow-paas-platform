@@ -2,7 +2,7 @@
 import base64
 import logging
 import secrets
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 import httpx
 from pydantic import BaseModel
@@ -122,6 +122,34 @@ class RouteOutcome(NamedTuple):
 
     configured: bool
     dns_failed: bool
+
+
+#: ``retarget_hostname_rules`` 的 ``classify(rule)`` 回傳值（woow_paas_platform #1563）。
+RULE_RETARGET = "retarget"  # 這條改指 new_service
+RULE_KEEP = "keep"          # 這條原樣保留
+RULE_FOREIGN = "foreign"    # 這條不准動，而且它在就**整筆拒絕**（一條都不改）
+
+#: ``RetargetOutcome.refused`` 的值。
+REFUSED_FOREIGN = "foreign"
+REFUSED_MULTIPLE_TARGETS = "multiple_targets"
+
+
+class RetargetOutcome(NamedTuple):
+    """``retarget_hostname_rules`` 的結果（woow_paas_platform #1563）。
+
+    ``matched``：這個 hostname 有幾條 ingress 規則；``changed``：這次實際改了幾條
+    （0＝冪等的重送、沒有規則、或被拒絕）；``previous``：被改掉的那幾條原本的 service；
+    ``refused``：``None``＝照做了；否則是拒絕的理由（``REFUSED_*``），此時**一條都沒改**、
+    也沒有 PUT；``already``：呼叫前就已經指向 ``new_service`` 的條數（冪等重送時 > 0）。
+    """
+
+    hostname: str
+    matched: int
+    changed: int
+    previous: List[str]
+    refused: Optional[str] = None
+    already: int = 0
+
 
 class CloudflareService:
     """Service for managing Cloudflare Tunnel routes and DNS records via API."""
@@ -1016,6 +1044,86 @@ class CloudflareService:
             # Don't fail - route is already deleted
 
         return True
+
+    async def hostname_rules(self, subdomain: str) -> List[dict]:
+        """``<subdomain>.<domain>`` 目前的 ingress 規則（唯讀；woow_paas_platform #1563）。
+
+        Raises:
+            CloudflareException: 讀 tunnel config 失敗。
+        """
+        hostname = f"{subdomain}.{self.domain}"
+        current_config = await self.get_tunnel_config()
+        ingress_rules = current_config.get("config", {}).get("ingress", [])
+        return [dict(rule) for rule in ingress_rules if rule.get("hostname") == hostname]
+
+    async def retarget_hostname_rules(
+        self,
+        subdomain: str,
+        new_service: str,
+        classify: Callable[[dict], str],
+        *,
+        single_source: bool = False,
+    ) -> RetargetOutcome:
+        """woow_paas_platform #1563：把 ``<subdomain>.<domain>`` 的 ingress 規則改指 ``new_service``。
+
+        停權說明頁的 park／unpark 共用。與 ``create_route`` 同一種 read-modify-write
+        （讀整份 tunnel config → 只改這個 hostname 的規則 → PUT 整份回去），所以：
+
+        * **同 hostname 的所有規則**都看（含帶 ``path`` 的）；只換 ``service``，其他鍵
+          （``path``、``originRequest``）與規則順序原樣保留。
+        * catch-all（沒有 ``hostname`` 的最後一條）不屬於任何 hostname，不會被動到；
+          ``update_tunnel_config`` 另有「最後一條必須是 catch-all」的保底。
+        * 已經是 ``new_service`` 的規則不問 ``classify``、不算變更；其餘每條由
+          ``classify(rule)`` 決定 ``RULE_RETARGET``／``RULE_KEEP``／``RULE_FOREIGN``。只要有
+          一條 ``RULE_FOREIGN`` 就整筆拒絕（只改一半的 hostname 比完全不改更糟：有的 path 停權、
+          有的沒有）。
+        * ``single_source=True``：要改的規則原本若指向**不只一個** service 就整筆拒絕。
+          park 用它保證 unpark 還原得回來——unpark 只知道「安裝時那一個」service，
+          原本分流到不同 service 的 path 規則一旦都指到說明頁，就分不回去了。
+        * **冪等**：沒有任何變更就不 PUT。
+
+        Raises:
+            CloudflareException: 讀或寫 tunnel config 失敗。
+        """
+        hostname = f"{subdomain}.{self.domain}"
+        current_config = await self.get_tunnel_config()
+        ingress_rules = current_config.get("config", {}).get("ingress", [])
+        matched = [rule for rule in ingress_rules if rule.get("hostname") == hostname]
+        to_change = []
+        refused = None
+        already = 0
+        for rule in matched:
+            if rule.get("service") == new_service:
+                already += 1
+                continue
+            verdict = classify(rule)
+            if verdict == RULE_FOREIGN:
+                refused = REFUSED_FOREIGN
+            elif verdict == RULE_RETARGET:
+                to_change.append(rule)
+        if refused is None and single_source and len(
+                {rule.get("service", "") for rule in to_change}) > 1:
+            refused = REFUSED_MULTIPLE_TARGETS
+        if refused is not None:
+            logger.warning(
+                "Refused to retarget %s -> %s (%s): %s", hostname, new_service, refused,
+                [rule.get("service", "") for rule in matched],
+            )
+            return RetargetOutcome(
+                hostname=hostname, matched=len(matched), changed=0, previous=[],
+                refused=refused, already=already)
+        previous = [rule.get("service", "") for rule in to_change]
+        for rule in to_change:
+            rule["service"] = new_service
+        if to_change:
+            await self.update_tunnel_config(ingress_rules)
+            logger.info(
+                "Retargeted %d of %d ingress rule(s) for %s -> %s (was %s)",
+                len(to_change), len(matched), hostname, new_service, previous,
+            )
+        return RetargetOutcome(
+            hostname=hostname, matched=len(matched), changed=len(to_change),
+            previous=previous, already=already)
 
     async def list_routes(self) -> List[TunnelRoute]:
         """List all tunnel routes.
