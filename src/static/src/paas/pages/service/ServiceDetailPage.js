@@ -18,6 +18,7 @@ import { RestartServiceModal } from "../../components/modal/RestartServiceModal"
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
+import { RenewSubscriptionModal } from "../../components/modal/RenewSubscriptionModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
@@ -26,6 +27,7 @@ import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
+import { formatUserDate } from "../../utils/datetime_helpers";
 import { showProjects } from "../../core/platform_config";
 import {
     getInitFailureText,
@@ -67,6 +69,7 @@ export class ServiceDetailPage extends Component {
         SkipTrialModal,
         EditDomainModal,
         ChangePlanModal,
+        RenewSubscriptionModal,
         CreateProjectModal,
         OneTimeCredentialsModal,
         AdminCredentialsModal,
@@ -90,6 +93,8 @@ export class ServiceDetailPage extends Component {
             showSkipTrialModal: false,
             showDomainModal: false,
             showChangePlanModal: false,
+            // #1611：自助續訂（訂閱取消／到期、服務還在保留期內）。
+            showRenewModal: false,
             showCreateProjectModal: false,
             supportProject: null,
             supportProjectLoading: false,
@@ -176,7 +181,11 @@ export class ServiceDetailPage extends Component {
             this.stopPolling();
             return;
         }
-        const interval = pendingStates.includes(this.state.service.state) ? 5000 : 60000;
+        // #1611：續訂完成、服務恢復中（後端 renewal.resuming）也用 5 秒，恢復後馬上看得到。
+        const fast =
+            pendingStates.includes(this.state.service.state) ||
+            this.state.service.renewal?.resuming === true;
+        const interval = fast ? 5000 : 60000;
         if (this.pollingInterval && this.pollingIntervalMs === interval) {
             return;
         }
@@ -553,6 +562,94 @@ export class ServiceDetailPage extends Component {
 
     confirmCloudServiceSkip = () => {
         return cloudService.skipTrial(this.props.serviceId);
+    };
+
+    // #1611 Renew — 訂閱被取消（欠費）或到期、服務還在保留期內時自助續訂。
+    /**
+     * 續訂橫幅的內容；不需要顯示時回 null。判準全部讀後端 `renewal`
+     * （`cloud_service._renewal_status()`，與兩支續訂端點同一份），前端不自己看訂閱狀態推導。
+     * 「續訂」按鈕另外要 canManageService（owner／admin，與端點的角色閘同一個判準）。
+     */
+    get renewalBanner() {
+        const renewal = this.service?.renewal;
+        if (!renewal) {
+            return null;
+        }
+        if (renewal.available) {
+            const details = [
+                this.service.state === "suspended"
+                    ? _t("The service is suspended.")
+                    : _t("The service will be suspended soon."),
+            ];
+            if (renewal.retention_until) {
+                details.push(_t("Renew by %(date)s to keep the service and its data.", {
+                    date: formatUserDate(renewal.retention_until, ""),
+                }));
+            }
+            if (!this.canManageService) {
+                details.push(_t("Ask a workspace owner or admin to renew it."));
+            }
+            return {
+                tone: "warning",
+                icon: "autorenew",
+                title: renewal.subscription_state === "cancel"
+                    ? _t("The subscription of this service was cancelled")
+                    : _t("The subscription of this service has ended"),
+                detail: details.join(" "),
+                canRenew: this.canManageService,
+            };
+        }
+        if (renewal.resuming) {
+            return {
+                tone: "info",
+                icon: "sync",
+                title: _t("Subscription renewed"),
+                detail: _t("The service is being restored. This usually takes a few minutes."),
+                canRenew: false,
+            };
+        }
+        if (renewal.reason === "retention_expired") {
+            return {
+                tone: "error",
+                icon: "block",
+                title: _t("The retention period of this service has ended"),
+                detail: _t("It can no longer be renewed. Create a new service to continue."),
+                canRenew: false,
+            };
+        }
+        if (renewal.reason === "period_not_ended") {
+            return {
+                tone: "info",
+                icon: "event",
+                title: _t("This subscription will not renew automatically"),
+                detail: _t("The service keeps running until %(date)s. You can renew it here after that date.", {
+                    date: formatUserDate(renewal.period_end, ""),
+                }),
+                canRenew: false,
+            };
+        }
+        return null;
+    }
+
+    showRenew() {
+        this.state.showRenewModal = true;
+    }
+
+    hideRenew() {
+        this.state.showRenewModal = false;
+    }
+
+    async onRenewed() {
+        this.hideRenew();
+        await this.loadService();
+    }
+
+    loadRenewEstimate = () => {
+        return cloudService.getRenewEstimate(this.props.serviceId);
+    };
+
+    confirmRenew = (planId) => {
+        return cloudService.renew(this.props.serviceId, planId);
     };
 
     // Change Plan Modal — 改方案／改席數（復用 ChangePlanModal + PlanSelector）

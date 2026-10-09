@@ -6,9 +6,12 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { CreditHistoryModal } from "../../components/modal/CreditHistoryModal";
 import { ManagePaymentMethodsModal } from "../../components/modal/ManagePaymentMethodsModal";
+import { RenewSubscriptionModal } from "../../components/modal/RenewSubscriptionModal";
 import { billingService } from "../../services/billing_service";
+import { cloudService } from "../../services/cloud_service";
 import { router } from "../../core/router";
 import { formatDate, formatPoints } from "../../utils/billing_helpers";
+import { formatUserDate } from "../../utils/datetime_helpers";
 
 const STATUS_MAP = {
   draft: { label: _t("Draft"), color: "gray" },
@@ -27,7 +30,10 @@ const SUB_STATE_MAP = {
 
 export class BillingOverviewPage extends Component {
   static template = "woow_paas_platform.BillingOverviewPage";
-  static components = { WoowCard, WoowIcon, WoowButton, CreditHistoryModal, ManagePaymentMethodsModal };
+  static components = {
+    WoowCard, WoowIcon, WoowButton, CreditHistoryModal, ManagePaymentMethodsModal,
+    RenewSubscriptionModal,
+  };
 
   setup() {
     this.billing = useState(billingService);
@@ -39,6 +45,9 @@ export class BillingOverviewPage extends Component {
       redeeming: false,
       redeemError: null,
       redeemSuccess: null,
+      // #1611：可以自助續訂的服務（停權說明頁的續訂連結指到本頁）。
+      renewals: [],
+      renewTarget: null,
     });
 
     onMounted(() => {
@@ -46,7 +55,56 @@ export class BillingOverviewPage extends Component {
       billingService.fetchInvoices(1, 3);
       billingService.fetchSubscriptions("active", 1, 3);
       billingService.fetchUpcomingRenewals();
+      this.loadRenewals();
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // #1611 待續訂的服務
+  // ---------------------------------------------------------------------------
+
+  async loadRenewals() {
+    const result = await cloudService.fetchRenewals();
+    this.state.renewals = result.success ? result.data : [];
+  }
+
+  renewalMeta(item) {
+    const parts = [item.workspace_name];
+    if (item.plan_name) {
+      parts.push(item.plan_name);
+    }
+    if (item.renewal?.retention_until) {
+      parts.push(_t("Renew by %(date)s", {
+        date: formatUserDate(item.renewal.retention_until, ""),
+      }));
+    }
+    return parts.join(" · ");
+  }
+
+  renewalStateLabel(item) {
+    return item.state === "suspended" ? _t("Suspended") : _t("Subscription ended");
+  }
+
+  openRenew(item) {
+    this.state.renewTarget = item;
+  }
+
+  closeRenew() {
+    this.state.renewTarget = null;
+  }
+
+  loadRenewEstimate = () => {
+    return cloudService.getRenewEstimate(this.state.renewTarget.id);
+  };
+
+  confirmRenew = (planId) => {
+    return cloudService.renew(this.state.renewTarget.id, planId);
+  };
+
+  onRenewed() {
+    const target = this.state.renewTarget;
+    this.state.renewTarget = null;
+    this.router.navigate(`workspace/${target.workspace_id}/services/${target.id}`);
   }
 
   async loadWallet() {

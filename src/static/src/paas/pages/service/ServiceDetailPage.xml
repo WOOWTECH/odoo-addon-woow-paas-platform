@@ -198,6 +198,25 @@
                 </p>
                 </t>
 
+                <!-- #1611：訂閱被取消／到期後的自助續訂入口。內容全由後端 renewal 決定
+                     （renewalBanner getter）；「續訂」按鈕只給 owner／admin（canManageService）。 -->
+                <div t-if="renewalBanner"
+                     t-attf-class="o_woow_service_renewal_banner o_woow_service_renewal_banner--{{ renewalBanner.tone }}">
+                    <WoowIcon name="renewalBanner.icon" size="20"/>
+                    <div class="o_woow_service_renewal_banner__text">
+                        <strong t-esc="renewalBanner.title"/>
+                        <span t-esc="renewalBanner.detail"/>
+                    </div>
+                    <WoowButton
+                        t-if="renewalBanner.canRenew"
+                        variant="'primary'"
+                        size="'sm'"
+                        onClick.bind="showRenew">
+                        <WoowIcon name="'autorenew'" size="16"/>
+                        Renew Subscription
+                    </WoowButton>
+                </div>
+
                 <!-- Error Message Banner -->
                 <!-- #1159 Q30：init 失敗時顯示固定文案＋attempt 序號並導向 support 入口；
                      operator 的原始錯誤只在後台的 attempt 記錄（租戶看不到）。 -->
@@ -340,6 +359,15 @@
                 requireWoowPayable="true"
                 onClose.bind="hideSkipTrial"
                 onSkipped.bind="onTrialSkipped"/>
+
+            <!-- #1611 Renew Subscription Modal -->
+            <RenewSubscriptionModal
+                t-if="state.showRenewModal and service"
+                serviceName="service.name"
+                loadEstimate="loadRenewEstimate"
+                confirmRenew="confirmRenew"
+                onClose.bind="hideRenew"
+                onRenewed.bind="onRenewed"/>
 
             <!-- Change Plan Modal（改方案／改席數，內嵌 PlanSelector） -->
             <ChangePlanModal

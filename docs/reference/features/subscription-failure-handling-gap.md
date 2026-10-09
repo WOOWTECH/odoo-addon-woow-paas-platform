@@ -235,6 +235,12 @@ A customer who fixed their card after auto-cancel must:
    future "re-link existing release on re-subscribe" feature is feasible
    without code change in T19.
 
+> **2026-10 更新（#1599、#1611）**：Cloud Service 已有原地恢復的路——租戶在 /woow 自助續訂
+> （上游續約鏈：舊訂閱 → `renewed`、子訂閱付清後改綁原服務），付款 commit 後由 #1599 的 cron 立即復權；
+> 計價從續訂當天起算新週期，**不補繳**欠費期間（Decision 4 的「不追討」語意不變）。保留期（cancel 後
+> `cleanup_after_months`）過了、服務已清除的，仍只能重新開通。Security Access／Smart Home 另議。
+> 見 `docs/reference/features/cloud-services.md` 的停權段與 `src/models/cloud_service_renewal.py`。
+
 Communicating this to customers is the job of the cancellation email
 (template added by Decision 2): it should call out the 6-month preservation
 window and the path back to service.

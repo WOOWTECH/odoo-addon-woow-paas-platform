@@ -248,19 +248,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         )
         Subscription = self.env['sh.subscription.subscription']
 
-        # sh_subscription_plan_id is on product.template; find product via template
-        product_tmpl = self.env['product.template'].sudo().search([
-            ('sh_product_subscribe', '=', True),
-            ('sh_subscription_plan_id', '=', plan.id),
-        ], limit=1)
-
-        if not product_tmpl:
-            raise UserError(
-                _("No subscription product found for plan: %s") % plan.name
-            )
-
-        # Get the first variant of this template
-        product = product_tmpl.product_variant_id
+        product = self._subscription_product_for(plan)
 
         # Validate subscription journal is configured
         # (sh_subscription uses company.sh_journal_id for invoice creation;
@@ -313,6 +301,25 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             self._name, self.id, subscription.sh_trial,
         )
         return subscription
+
+    def _subscription_product_for(self, plan):
+        """``plan`` 的訂閱產品（第一個 variant）；沒有就 raise UserError。
+
+        新開訂閱（``_create_and_confirm_subscription``）與 #1611 自助續訂共用。
+        """
+        # sh_subscription_plan_id is on product.template; find product via template
+        product_tmpl = self.env['product.template'].sudo().search([
+            ('sh_product_subscribe', '=', True),
+            ('sh_subscription_plan_id', '=', plan.id),
+        ], limit=1)
+
+        if not product_tmpl:
+            raise UserError(
+                _("No subscription product found for plan: %s") % plan.name
+            )
+
+        # Get the first variant of this template
+        return product_tmpl.product_variant_id
 
     def _force_trial_dates_from_plan(self, subscription, plan):
         """Force trial fields and dates on ``subscription`` from ``plan``.

@@ -176,6 +176,63 @@ $woow-radius-lg: 1.25rem;
     }
 }
 
+// #1611：訂閱取消／到期後的續訂橫幅（warning＝可續訂、info＝恢復中／週期未結束、
+// error＝保留期已過）。版面同 .o_woow_service_error_banner：手機上按鈕換到下一列。
+.o_woow_service_renewal_banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.25rem;
+    border-radius: $woow-radius-default;
+    font-size: 0.875rem;
+    margin-bottom: 1.5rem;
+
+    &--warning {
+        background: #fef3c7;
+        border: 1px solid #fcd34d;
+        color: #92400e;
+    }
+
+    &--info {
+        background: rgba(95, 129, 252, 0.08);
+        border: 1px solid rgba(95, 129, 252, 0.25);
+        color: $woow-primary-hover;
+    }
+
+    &--error {
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.2);
+        color: #ef4444;
+    }
+
+    > .material-symbols-outlined {
+        flex-shrink: 0;
+    }
+
+    &__text {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        flex: 1 1 12rem;
+        min-width: 0;
+        overflow-wrap: anywhere;
+
+        strong {
+            font-weight: 600;
+        }
+    }
+
+    .o_woow_btn {
+        margin-left: auto;
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+
+    @media (max-width: $woow-bp-sm) {
+        flex-wrap: wrap;
+    }
+}
+
 // =============================================================================
 // Tab Navigation
 // =============================================================================
