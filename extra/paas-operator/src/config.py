@@ -225,6 +225,20 @@ class Settings(BaseSettings):
     suspended_page_service: str = "paas-suspended-page"  # env SUSPENDED_PAGE_SERVICE
     suspended_page_port: int = Field(default=8080, gt=0, lt=65536)  # env SUSPENDED_PAGE_PORT
 
+    # woow_paas_platform #1540：停權／刪除後的限時唯讀資料取回入口（src/services/data_retrieval.py）。
+    # image 與停權說明頁、平台 web 的 nginx sidecar 同一顆（叢集已在用，以 digest 釘）；預設值即正式值，
+    # 不需要 chart 新增 env。
+    data_retrieval_image: str = (
+        "docker.io/nginxinc/nginx-unprivileged:1.27-alpine"
+        "@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0"
+    )  # env DATA_RETRIEVAL_IMAGE
+    # 一個入口最長開多久（平台送的 ttl_hours 超過就截到這裡）。
+    data_retrieval_max_ttl_hours: int = Field(default=72, ge=1, le=24 * 30)  # env DATA_RETRIEVAL_MAX_TTL_HOURS
+    # 已刪除服務的孤兒 PVC 剩不到這麼多分鐘就不開（開了也來不及下載完）。
+    data_retrieval_min_remaining_minutes: int = Field(default=60, ge=0)  # env DATA_RETRIEVAL_MIN_REMAINING_MINUTES
+    # 逗號分隔的節點名：取回 pod 不排到這些節點（nodeAffinity NotIn）。預設空＝不限制。
+    data_retrieval_excluded_nodes: str = ""  # env DATA_RETRIEVAL_EXCLUDED_NODES
+
     # Deploy environment (L1): prod/stg discriminator stamped onto tenant namespace
     # labels (L2, #279) + future account-level reconciler env filtering. Injected
     # per-environment via the operator Deployment env (cross-repo paas-app-bundle-cd

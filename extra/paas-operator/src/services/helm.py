@@ -3236,6 +3236,66 @@ class KubernetesService:
                     raise
         return {"pvcs": pvcs, "datavolumes": datavolumes}
 
+    # ── woow_paas_platform #1540：限時唯讀資料取回入口（純規則在 data_retrieval）──────────
+
+    RETRIEVAL_KUBECTL_TIMEOUT_SECONDS = 20
+
+    def get_items(
+        self, kinds: str, namespace: str, label_selector: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """``kubectl get <kinds> -o json`` 的 items（namespace 先過前綴驗證）。"""
+        validate_namespace(namespace)
+        args = ["get", kinds, "--namespace", namespace, "--output", "json"]
+        if label_selector:
+            args.extend(["--selector", label_selector])
+        result = self._run_command(args, timeout=self.RETRIEVAL_KUBECTL_TIMEOUT_SECONDS)
+        items = json.loads(result.stdout or "{}").get("items")
+        return items if isinstance(items, list) else []
+
+    def helm_release_exists(self, namespace: str, release: str) -> bool:
+        """release 的 helm 狀態 Secret（任一 status）還在不在——與 pvc-cleanup 的 live guard 同一判準。"""
+        validate_namespace(namespace)
+        validate_label_value("name", release)
+        result = self._run_command(
+            ["get", "secret", "--namespace", namespace,
+             "--selector", f"owner=helm,name={release}", "--output", "name"],
+            timeout=self.RETRIEVAL_KUBECTL_TIMEOUT_SECONDS,
+        )
+        return bool((result.stdout or "").strip())
+
+    def create_manifests(self, manifests: List[Dict[str, Any]]) -> None:
+        """依序 ``kubectl create -f -``（內容走 stdin，不上 argv；撞名 raise AlreadyExists）。"""
+        for manifest in manifests:
+            meta = manifest.get("metadata") or {}
+            validate_namespace(meta.get("namespace") or "")
+            self._run_command(
+                ["create", "-f", "-", "--output", "name"],
+                input_data=json.dumps(manifest),
+                timeout=self.RETRIEVAL_KUBECTL_TIMEOUT_SECONDS,
+            )
+
+    def delete_by_selector(self, kinds: str, namespace: str, label_selector: str) -> None:
+        """刪掉 namespace 內符合 selector 的物件（冪等、不等 finalizer）。selector 不可為空。"""
+        validate_namespace(namespace)
+        if not label_selector:
+            raise ValueError("delete_by_selector refuses an empty label selector")
+        self._run_command(
+            ["delete", kinds, "--namespace", namespace, "--selector", label_selector,
+             "--ignore-not-found", "--wait=false"],
+            timeout=self.RETRIEVAL_KUBECTL_TIMEOUT_SECONDS,
+        )
+
+    def list_items_all_namespaces(self, kind: str, label_selector: str) -> List[Dict[str, Any]]:
+        """跨 namespace 唯讀盤點（範圍由 selector 圈定；呼叫端再逐筆過 ``validate_namespace``）。"""
+        if not label_selector:
+            raise ValueError("list_items_all_namespaces refuses an empty label selector")
+        result = self._run_command(
+            ["get", kind, "--all-namespaces", "--selector", label_selector, "--output", "json"],
+            timeout=self.RETRIEVAL_KUBECTL_TIMEOUT_SECONDS,
+        )
+        items = json.loads(result.stdout or "{}").get("items")
+        return items if isinstance(items, list) else []
+
     def get_cdi_filesystem_overhead(self) -> Optional[Dict[str, Any]]:
         """#1415：CDIConfig 的 ``status.filesystemOverhead``（``{"global": "0.06",
         "storageClass": {...}}``）；讀不到回 None（呼叫端用 CDI 預設值）。
