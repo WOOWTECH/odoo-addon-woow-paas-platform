@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from psycopg2 import OperationalError
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 
 _logger = logging.getLogger(__name__)
 
@@ -13,6 +13,10 @@ _PAID_RESUME_CRON_XMLID = 'woow_paas_platform.ir_cron_resume_paid_cloud_services
 _PAID_RESUME_BATCH = 20
 #: 鎖被別的交易拿著（例如每日生命週期 cron 正在跑）時，隔多久再試一次。
 _PAID_RESUME_RETRY_MINUTES = 1
+#: #1610：付清以外的人工出口（訂閱上的欄位，定義在 sh_subscription_resume_trigger.py）。
+_MANUAL_RESUME_FIELD = 'woow_resume_payment_confirmed'
+#: #1610：復權暫停說明裡最多列幾張發票（其餘以「…」帶過，說明不會無限長）。
+_HOLD_NOTE_MAX_INVOICES = 5
 
 
 class SubscriptionLifecycleCron(models.AbstractModel):
@@ -24,7 +28,9 @@ class SubscriptionLifecycleCron(models.AbstractModel):
 
         Checks all entities with a subscription and takes action:
           - subscription renewed → follow renewal chain, resume if suspended
-          - subscription in_progress + entity suspended → resume
+          - subscription in_progress + entity suspended → resume, but only when the
+            subscription has no unpaid invoice or a billing administrator confirmed the
+            payment manually (#1610, ``_paid_resume_block_reason``)
           - subscription expired/closed > grace period → suspend
           - subscription cancelled → suspend + check cleanup threshold
         """
@@ -125,15 +131,32 @@ class SubscriptionLifecycleCron(models.AbstractModel):
         # 喚醒後被 poll 標成 `running` 但停權旗標還在的服務，`_do_resume` 會把旗標
         # 清掉——不清的話，#493 的 state 收斂會在它下一次被 redeploy／reconfigure
         # 時把這台**正在跑的付費服務**關掉。scale 1 對已在跑的服務是冪等的，零停機。
+        #
+        # #1610：訂閱 in_progress 還不夠——還要付清（或帳務管理員人工確認過付款）才復權，
+        # 與 #1599 付款後即時復權共用同一個判斷 `_paid_resume_block_reason`。原本這裡只看
+        # in_progress：後台確認續約、發票沒付，即時那條路擋下了，隔天每日 cron 照樣復權。
+        # 擋下時留 log 與 `resume_hold_reason`（維運看得到為什麼還沒恢復），服務維持停權；
+        # 停權那一側（分支 3、4）不變。
         if sub.state == 'in_progress':
             if entity._is_halted():
+                hold = self._paid_resume_block_reason(sub)
+                if hold:
+                    self._hold_resume(entity, sub, hold)
+                    return
+                manual_unpaid = self._manually_confirmed_unpaid_invoices(sub)
                 entity._do_resume()
                 _logger.info(
                     "[SUB_CRON] resumed %s %s (subscription active)",
                     entity._name, entity.id,
                 )
+                if manual_unpaid and not entity._is_halted():
+                    self._log_manual_resume(entity, sub, manual_unpaid)
+            self._clear_resume_hold(entity)
             return
 
+        # 訂閱已不是 in_progress：之前「未付清，暫不復權」的說明不再適用（停權原因回到
+        # 訂閱狀態本身）。
+        self._clear_resume_hold(entity)
         if resume_only:
             return
 
@@ -182,13 +205,15 @@ class SubscriptionLifecycleCron(models.AbstractModel):
     # 仍是停權說明頁（#1563）。這裡補一條「付款入帳就排一次」的路：
     #
     # 1. 付款入帳／訂閱回到 in_progress 的交易內（`account.move._pay_from_wallet`、
-    #    `sh.subscription.subscription.write`）只呼叫 `_request_paid_resume`：替這張訂閱
+    #    `sh.subscription.subscription.write`，#1610 起也包括帳務管理員勾選「允許復權
+    #    （已人工確認付款）」）只呼叫 `_request_paid_resume`：替這張訂閱
     #    底下停權中的雲端服務寫 `resume_requested`，再 `_trigger()` 下面那顆 cron。
     #    **不呼叫 operator**——付款回呼不會因此變慢，operator 失敗也不會讓付款回捲。
     # 2. 旗標與 ir.cron.trigger 都是 DB 列，跟著付款交易 commit；付款回捲（含只回捲包著它
     #    的 savepoint）時一起消失 ⇒ 不會替沒付成的訂閱復權。
     # 3. commit 之後由 cron worker 跑 `_cron_resume_paid_cloud_services`：取鎖 → 再判一次
-    #    「訂閱（沿續約鏈）是 in_progress，而且沒有未付清的發票」→
+    #    `_paid_resume_block_reason`（訂閱沿續約鏈是 in_progress，而且沒有未付清的發票或
+    #    帳務管理員已人工確認；#1610 起每日 cron 也用同一個判斷）→
     #    `_enforce_single(..., resume_only=True)`。復權本身與每日 cron 同一段
     #    （`_do_resume`：scale 1 → unpark；失敗寫 error 並保留停權旗標，由每日 cron 重試）。
     #
@@ -202,33 +227,120 @@ class SubscriptionLifecycleCron(models.AbstractModel):
             return self._renewal_successor(sub) or sub
         return sub
 
-    def _paid_resume_block_reason(self, sub):
-        """付款後即時復權的前置條件：成立回 ``None``，不成立回原因代碼。
+    def _unpaid_subscription_invoices(self, sub):
+        """這筆訂閱還沒付清的客戶發票（``_paid_resume_block_reason`` 的判準本體）。
 
-        * ``subscription_not_active``：訂閱（已沿續約鏈）不是 in_progress。付款失敗、付的是
-          已取消訂閱的舊帳、續約還沒確認……都不能復權。
-        * ``unpaid_invoice``：這筆訂閱還有沒付清的客戶發票——草稿且金額不為 0（dunning
-          沒扣成的週期發票就停在草稿），或已過帳但 ``payment_state`` 不是
-          paid／in_payment／reversed（部分付款是 ``partial``）。例如續約確認時錢包不足，
-          發票只過帳沒付。
+        * 草稿且金額不為 0：dunning 沒扣成的週期發票就停在草稿（金額 0 的草稿不算——0 元
+          方案不能因此被擋）。
+        * 已過帳但 ``payment_state`` 不是 paid／in_payment／reversed：例如續約確認時錢包不足，
+          發票只過帳沒付；部分付款是 ``partial``。已過帳的 0 元發票 Odoo 直接記成 paid。
 
-        ⚠ 這是**即時**這條路自己的門檻，比每日 cron 嚴：每日 cron 的分支 2 只看訂閱是不是
-        in_progress（既有行為，本單不改）。這裡擋下的，照舊由每日 cron 依原判準處理。
+        刻意**不**只看「逾期」：訂閱發票沒有設付款條件（到期日＝開立日），而停權中的服務
+        只會在續約確認／人工改回 in_progress 時遇到這個判斷——那一刻開的發票當天還沒逾期，
+        只看逾期等於「續約確認、沒付錢」也照樣復權（#1610 要堵的就是這一格）。
         """
-        if not sub or sub.state != 'in_progress':
-            return 'subscription_not_active'
+        if not sub:
+            return self.env['account.move']
         invoices = self.env['account.move'].sudo().search([
             ('sh_subscription_id', '=', sub.id),
             ('move_type', '=', 'out_invoice'),
             ('state', 'in', ('draft', 'posted')),
             ('payment_state', 'not in', ('paid', 'in_payment', 'reversed')),
-        ])
-        unpaid = invoices.filtered(
+        ], order='id')
+        return invoices.filtered(
             lambda inv: inv.state == 'posted'
             or not inv.currency_id.is_zero(inv.amount_total))
-        if unpaid:
+
+    def _paid_resume_block_reason(self, sub):
+        """**唯一**的「這筆訂閱底下停權中的服務可以復權嗎」判斷：可以回 ``None``，不行回原因代碼。
+
+        兩個復權執行者共用（#1610）：#1599 付款後即時復權的 cron（``_resume_paid_single``）
+        與每日生命週期 cron（``_enforce_single`` 分支 2）。不要在別處另寫一套。
+
+        * ``subscription_not_active``：訂閱（已沿續約鏈）不是 in_progress。付款失敗、付的是
+          已取消訂閱的舊帳、續約還沒確認……都不能復權。人工出口也不能越過這一格。
+        * ``unpaid_invoice``：還有沒付清的發票（``_unpaid_subscription_invoices``），而且
+          帳務管理員沒有在訂閱上勾「允許復權（已人工確認付款）」
+          （``woow_resume_payment_confirmed``，線下付款、人工確認但還沒在系統沖帳的出口）。
+
+        試用中、0 元方案、沒有發票的訂閱沒有未付清的發票，照舊可以復權。
+        """
+        if not sub or sub.state != 'in_progress':
+            return 'subscription_not_active'
+        if sub.sudo()[_MANUAL_RESUME_FIELD]:
+            return None
+        if self._unpaid_subscription_invoices(sub):
             return 'unpaid_invoice'
         return None
+
+    def _manually_confirmed_unpaid_invoices(self, sub):
+        """人工出口真的派上用場（有未付清的發票、靠人工確認才放行）時回那些發票，否則空。"""
+        if not sub.sudo()[_MANUAL_RESUME_FIELD]:
+            return self.env['account.move']
+        return self._unpaid_subscription_invoices(sub)
+
+    @staticmethod
+    def _invoice_list_text(invoices):
+        """「INV/2026/00012 (300.00)」；草稿沒有號碼，``display_name`` 只有「Draft Invoice」，
+        所以補上 id，好讓維運在後台找得到是哪一張。"""
+        names = []
+        for inv in invoices[:_HOLD_NOTE_MAX_INVOICES]:
+            label = inv.display_name
+            if inv.state == 'draft':
+                label = '%s #%s' % (label, inv.id)
+                amount = inv.amount_total
+            else:
+                amount = inv.amount_residual
+            names.append('%s (%.2f)' % (label, amount))
+        if len(invoices) > _HOLD_NOTE_MAX_INVOICES:
+            names.append('…')
+        return ', '.join(names)
+
+    def _hold_resume(self, entity, sub, reason):
+        """#1610：判斷不讓復權——服務維持停權，留 log 與 ``resume_hold_reason`` 說明原因。
+
+        說明只在內容變了才寫（每日 cron 每天都會走到，不要每天改一次 write_date）。
+        """
+        invoices = self._unpaid_subscription_invoices(sub)
+        _logger.info(
+            "[SUB_CRON] resume held %s %s sub=%s reason=%s unpaid_invoices=%s",
+            entity._name, entity.id, sub.id, reason, invoices.ids,
+        )
+        note = _(
+            'Resume on hold: subscription %(subscription)s has unpaid invoices '
+            '(%(invoices)s). The service resumes automatically once they are paid, or '
+            'after a billing administrator ticks "Allow Resume (Payment Confirmed '
+            'Manually)" on the subscription.',
+            subscription=sub.display_name,
+            invoices=self._invoice_list_text(invoices),
+        )
+        entity = entity.sudo()
+        if entity.resume_hold_reason != note:
+            entity.write({'resume_hold_reason': note})
+
+    def _clear_resume_hold(self, entity):
+        entity = entity.sudo()
+        if entity.resume_hold_reason:
+            entity.write({'resume_hold_reason': False})
+
+    def _log_manual_resume(self, entity, sub, invoices):
+        """人工出口讓一台服務在發票未付清時復權：log＋訂閱 chatter（審計）。
+
+        附上復權後的 state：Security Access／Smart Home 的復權失敗是寫 ``error``（不再算
+        停權中），不能在 chatter 寫成「已恢復」卻不交代結果。
+        """
+        _logger.info(
+            "[SUB_CRON] resumed %s %s on manual payment confirmation sub=%s state=%s "
+            "unpaid_invoices=%s",
+            entity._name, entity.id, sub.id, entity.state, invoices.ids,
+        )
+        sub.sudo().message_post(body=_(
+            '%(service)s was resumed (now %(state)s) although invoices %(invoices)s are '
+            'unpaid, because a billing administrator confirmed the payment manually.',
+            service='%s #%s (%s)' % (entity._description, entity.id, entity.display_name),
+            state=entity.state,
+            invoices=self._invoice_list_text(invoices),
+        ))
 
     @api.model
     def _request_paid_resume(self, subscriptions, source):
@@ -355,6 +467,9 @@ class SubscriptionLifecycleCron(models.AbstractModel):
         target = self._resume_target_subscription(service)
         reason = self._paid_resume_block_reason(target)
         if reason:
+            if reason == 'unpaid_invoice':
+                # 與每日 cron 同一段說明（#1610）：維運看得到為什麼付款／確認之後還沒恢復。
+                self._hold_resume(service, target, reason)
             _logger.info(
                 "[SUB_CRON] paid-resume skipped service=%s sub=%s reason=%s",
                 service.id, target.id, reason,

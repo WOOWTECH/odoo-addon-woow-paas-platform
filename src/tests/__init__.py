@@ -1101,3 +1101,5 @@ from . import test_suspend_route_park_1563
 from . import test_brand_icon_payload
 # #1599：續訂付款成功後立即復權（付款交易只寫旗標＋_trigger，commit 後由 cron 復權）。
 from . import test_paid_resume_1599
+# #1610：每日生命週期 cron 也「付清才復權」（與 #1599 共用判斷）＋帳務管理員人工出口。
+from . import test_cron_resume_paid_gate_1610

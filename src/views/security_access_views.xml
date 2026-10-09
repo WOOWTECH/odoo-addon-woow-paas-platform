@@ -18,6 +18,11 @@
                            statusbar_visible="pending,provisioning,active"/>
                 </header>
                 <sheet>
+                    <!-- #1610：同 Cloud Service 表單——訂閱已恢復、還有未付清的發票所以仍停權。 -->
+                    <div class="alert alert-warning" role="alert" groups="base.group_system"
+                         invisible="not resume_hold_reason">
+                        <field name="resume_hold_reason" nolabel="1"/>
+                    </div>
                     <div class="oe_title">
                         <h1>
                             <field name="name" placeholder="Nickname (e.g. secure-gateway)"/>

@@ -163,6 +163,19 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         string='Pre-Suspend State',
         help='State before suspension, used to restore on resume',
     )
+    # #1610：訂閱已回到 in_progress、服務仍停權中，但「付清才復權」的判斷沒過
+    # （`subscription_lifecycle_cron._paid_resume_block_reason`）——這裡寫明為什麼還沒恢復。
+    # 只有生命週期 cron 會寫；復權、或判斷不再擋下時清掉。`groups='base.group_system'`：
+    # 給維運看的說明，租戶經 ORM 讀不到也寫不進去。
+    resume_hold_reason = fields.Text(
+        string='Resume On Hold',
+        readonly=True,
+        copy=False,
+        groups='base.group_system',
+        help='Why this suspended service has not been resumed although its subscription '
+             'is in progress again: it still has unpaid invoices. Written and cleared by '
+             'the subscription lifecycle jobs.',
+    )
 
     # ----------------------------------------------------------------
     # Subscription access

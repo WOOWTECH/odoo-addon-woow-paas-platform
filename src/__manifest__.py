@@ -74,6 +74,8 @@
         "data/agent_template_default.xml",
         "data/demo_system_skill.xml",
         "views/account_move_views.xml",
+        # #1610：訂閱上的「允許復權（已人工確認付款）」（帳務管理員）
+        "views/sh_subscription_resume_views.xml",
         "views/paas_app.xml",
         "views/portal_templates.xml",
         "views/oauth2_templates.xml",

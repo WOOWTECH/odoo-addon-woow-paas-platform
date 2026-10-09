@@ -22,6 +22,12 @@
                          invisible="not redeploy_check_message">
                         <field name="redeploy_check_message" nolabel="1"/>
                     </div>
+                    <!-- #1610：訂閱已回到 in_progress、服務仍停權——還有未付清的發票（付清或帳務
+                         管理員在訂閱上人工確認付款後才復權）。 -->
+                    <div class="alert alert-warning" role="alert" groups="base.group_system"
+                         invisible="not resume_hold_reason">
+                        <field name="resume_hold_reason" nolabel="1"/>
+                    </div>
                     <div class="oe_title">
                         <h1>
                             <field name="name" placeholder="Service Name"/>
