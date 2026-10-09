@@ -6,8 +6,9 @@ up. Please wait」。chart 的 readinessProbe 打 ``/healthz``，這段時間 po
 ``_wait_for_ready`` 只看 200 ⇒ owner setup 拿到 200＋非 JSON ⇒ init 500（JSONDecodeError）。
 
 空窗本來只有幾秒（2.35.3 實測 postgres 約 1–6 秒），測試要穩定重現就得把它撐開：先建好
-TypeORM 的 ``migrations`` 表、在另一個連線以 ACCESS EXCLUSIVE 鎖住 ``_HOLD_SECONDS`` 秒，n8n 讀
-migration 紀錄時就卡在暫時 server 階段；鎖放開後 migration 照常從頭跑完。init 的 ready 等待上限
+TypeORM 的 ``migrations`` 表、在 PG 容器內背景開一個交易以 ACCESS EXCLUSIVE 鎖住 ``_HOLD_SECONDS``
+秒（不靠一條長時間的 kubectl exec——經 Rancher 代理的 exec 串流會被提早切斷），n8n 讀 migration
+紀錄時就卡在暫時 server 階段；鎖放開後 migration 照常從頭跑完。init 的 ready 等待上限
 是 ``MAX_READY_RETRIES × READY_RETRY_DELAY``（60 秒），要大於鎖住的時間加上 migration 時間。
 
 本地跑（無 CI runner；與其他 integration 同一套 recipe）::
@@ -16,7 +17,6 @@ migration 紀錄時就卡在暫時 server 階段；鎖放開後 migration 照常
     OPERATOR_TEST_NODE_NAME=<避開正式站的 node> \\
     pytest -m integration tests/integration/test_n8n_init_during_startup_1616.py -v
 """
-import subprocess
 import time
 
 import pytest
@@ -35,9 +35,16 @@ _SETTINGS_PROBE = (
 )
 
 
-def _psql(namespace, pod, sql, db="n8n"):
-    out = reset_it._exec(namespace, pod, "postgres", ["psql", "-U", "postgres", "-d", db, "-qc", sql])
+def _psql(namespace, pod, sql):
+    out = reset_it._exec(namespace, pod, "postgres", ["psql", "-U", "postgres", "-d", "n8n", "-tAqc", sql])
     assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+def _lock_granted(namespace, pod):
+    return _psql(namespace, pod, "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation "
+                                 "WHERE c.relname = 'migrations' AND l.mode = 'AccessExclusiveLock' "
+                                 "AND l.granted") == "1"
 
 
 def test_init_sent_while_n8n_is_starting_waits_for_the_real_api(app_client, test_namespace):
@@ -101,39 +108,36 @@ spec:
         assert time.monotonic() < deadline, "n8n container never started"
         time.sleep(2)
 
-    holder = subprocess.Popen(
-        ["kubectl", "exec", pg_pod, "-n", test_namespace, "-c", "postgres", "--",
-         "psql", "-U", "postgres", "-d", "n8n", "-qc",
-         f'BEGIN; LOCK TABLE "migrations" IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep({_HOLD_SECONDS}); COMMIT;'],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-    )
-    try:
-        time.sleep(2)  # 讓鎖先拿到
-        assert reset_it._exec(test_namespace, release, "n8n", ["touch", "/tmp/go"]).returncode == 0
-        # 先確認真的在暫時 server 階段（不然這支測不到東西）——鎖住期間它一直在。
-        deadline = time.monotonic() + 240
-        while True:
-            out = reset_it._exec(test_namespace, release, "n8n", ["node", "-e", _SETTINGS_PROBE])
-            last = out.stdout.strip()
-            if last.startswith("200 " + _PLACEHOLDER):
-                break
-            assert holder.poll() is None, f"lock released before n8n reached its startup server ({last})"
-            assert time.monotonic() < deadline, f"n8n never served its startup page (last {last!r})"
-            time.sleep(1)
+    lock_sql = (f'BEGIN; LOCK TABLE "migrations" IN ACCESS EXCLUSIVE MODE; '
+                f'SELECT pg_sleep({_HOLD_SECONDS}); COMMIT;')
+    out = reset_it._exec(test_namespace, pg_pod, "postgres", [
+        "sh", "-c", f"nohup psql -U postgres -d n8n -qc '{lock_sql}' >/tmp/lock-1616.log 2>&1 &"])
+    assert out.returncode == 0, out.stderr
+    deadline = time.monotonic() + 60
+    while not _lock_granted(test_namespace, pg_pod):
+        assert time.monotonic() < deadline, "could not take the lock on migrations"
+        time.sleep(1)
+    assert reset_it._exec(test_namespace, release, "n8n", ["touch", "/tmp/go"]).returncode == 0
+    # 先確認真的在暫時 server 階段（不然這支測不到東西）——鎖住期間它一直在。
+    deadline = time.monotonic() + 240
+    while True:
+        out = reset_it._exec(test_namespace, release, "n8n", ["node", "-e", _SETTINGS_PROBE])
+        last = out.stdout.strip()
+        if last.startswith("200 " + _PLACEHOLDER):
+            break
+        assert time.monotonic() < deadline, f"n8n never served its startup page (last {last!r})"
+        time.sleep(1)
 
-        started = time.monotonic()
-        resp = app_client.post(f"/api/releases/{test_namespace}/{release}/init/n8n", json={
-            "owner_email": reset_it.OWNER_EMAIL, "owner_password": reset_it._password()})
-        elapsed = time.monotonic() - started
-    finally:
-        # communicate 會讀完並關掉 pipe（只 wait 會留下 ResourceWarning）。
-        _, holder_err = holder.communicate(timeout=_HOLD_SECONDS + 60)
+    started = time.monotonic()
+    resp = app_client.post(f"/api/releases/{test_namespace}/{release}/init/n8n", json={
+        "owner_email": reset_it.OWNER_EMAIL, "owner_password": reset_it._password()})
+    elapsed = time.monotonic() - started
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["success"] is True, body
     assert body["secret_patched"] is True
     assert _secret_key(test_namespace, release) == body["api_key"]
-    # 真的有等：init 回來時鎖已經放開過（不是剛好在空窗之後才送出）。
-    assert holder.returncode == 0, holder_err
+    # 真的有等（送出時 n8n 還在暫時 server 階段，上面已確認）；鎖已放開、migration 跑完。
     assert elapsed > 5, elapsed
+    assert not _lock_granted(test_namespace, pg_pod)
