@@ -66,6 +66,12 @@ APP_ADMIN_RESET_TIMEOUT = 75
 #: 「不知道有沒有改到」，呼叫端照各自的失敗語意處理（park 只記 log、unpark fail-loud）。
 ROUTE_PARK_TIMEOUT = 150
 
+#: #1540：資料取回入口開／關的預算。operator 端是一串 kubectl（各 20s 上限，實測通常 <1s）＋
+#: Cloudflare 讀寫 tunnel config（各 30s 上限）；實測開一次約數秒。給 75s——前端 90s
+#: （``services/data_retrieval.js``），再長會撞 Cloudflare 約 100s 的 524。逾時＝不知道有沒有
+#: 開成，呼叫端不寫 session（operator 端的入口有 activeDeadlineSeconds 與 sweep 兜底）。
+DATA_RETRIEVAL_TIMEOUT = 75
+
 #: #1513：operator ``upgrade-preflight``／upgrade 擴容被拒的 409 ``detail.error_code``
 #: （extra/paas-operator ``upgrade_preflight.STORAGE_EXPANSION_ERROR_CODE``；改名兩邊一起改）。
 STORAGE_EXPANSION_ERROR_CODE = 'storage_expansion_rejected'
@@ -726,6 +732,56 @@ class PaaSOperatorClient:
             data={'expose': expose},
             timeout=ROUTE_PARK_TIMEOUT,
         )
+
+    # ==================== #1540 限時唯讀資料取回入口 ====================
+
+    def open_data_retrieval(
+        self,
+        namespace: str,
+        release_name: str,
+        profile: str,
+        ttl_hours: int,
+    ) -> Dict[str, Any]:
+        """#1540：開一個限時唯讀取回入口（201）。
+
+        回應帶 ``hostname``／``url``／``username``／**``password``（只有這一次，operator 不存）**／
+        ``expires_at``／``data_expires_at``。呼叫端不得把回應寫進 log 或 DB。拒絕一律
+        4xx／5xx＋``detail.error_code``；operator 刻意不回 404 ⇒ **404＝沒有這組端點的舊 operator**。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/retrieval',
+            data={'profile': profile, 'ttl_hours': int(ttl_hours)},
+            timeout=DATA_RETRIEVAL_TIMEOUT,
+        )
+
+    def get_data_retrieval(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """#1540：入口狀態（``active``／``starting``／``stopped``／``not_found``）。不含密碼。"""
+        return self._request(
+            'GET',
+            f'/api/releases/{namespace}/{release_name}/retrieval',
+            timeout=DEFAULT_TIMEOUT,
+        )
+
+    def close_data_retrieval(
+        self,
+        namespace: str,
+        release_name: str,
+        subdomain: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """#1540：關入口（冪等）。``subdomain`` 是開的時候記下的 hostname 第一段，只在 k8s 物件
+        已不在、route 還沒刪成時讓 operator 補刪。502 ``route_cleanup_failed``＝pod 已停、route 待重試。"""
+        params = {'subdomain': subdomain} if subdomain else None
+        return self._request(
+            'DELETE',
+            f'/api/releases/{namespace}/{release_name}/retrieval',
+            params=params,
+            timeout=DATA_RETRIEVAL_TIMEOUT,
+        )
+
+    def sweep_data_retrievals(self) -> Dict[str, Any]:
+        """#1540：請 operator 關掉所有已到期的入口（平台記錄漏掉的也會收）。"""
+        return self._request('POST', '/api/retrievals/sweep', timeout=HELM_OPERATION_TIMEOUT)
 
     def restart_release(
         self,

@@ -2019,6 +2019,91 @@ class PaasController(HiddenChainMixin, Controller):
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
+    # ------------------------------------------------------------------ #
+    #  #1540 — 停權／刪除後的限時唯讀資料取回入口                          #
+    # ------------------------------------------------------------------ #
+
+    def _data_retrieval_workspace(self, workspace_id: int) -> tuple[Any, dict[str, Any] | None]:
+        """``(workspace, error)``：只有工作區 owner／admin（與服務寫入端點同一個判準）。"""
+        capability = _PaaSCapability(request.env)
+        workspace = capability.workspace(workspace_id)
+        if not workspace.exists():
+            return None, {'success': False, 'error': _('Workspace not found or access denied')}
+        access = capability.access(workspace)
+        if not access:
+            return None, {'success': False, 'error': _('Workspace not found or access denied')}
+        if not self._can_manage_service(access):
+            return None, {'success': False, 'error': _('Permission denied')}
+        return workspace, None
+
+    @staticmethod
+    def _data_retrieval_action(action: str, target: Any, open_fn: Any, close_fn: Any,
+                               view_fn: Any) -> dict[str, Any]:
+        """status／open／close 三個動作（服務與已刪除服務的帳本列共用）。
+
+        刻意**不**走訂閱閘：這個功能就是給停權、欠費、已刪除的服務用的；狀態閘在 model。
+        ``open`` 的回應帶一次性密碼（``data.credentials.password``），平台不存、不 log。
+        """
+        try:
+            if action == 'status':
+                return {'success': True, 'data': view_fn(live=True)}
+            if action == 'open':
+                _session, credentials = open_fn(request.env.user)
+                return {'success': True, 'data': dict(view_fn(), credentials=credentials)}
+            if action == 'close':
+                close_fn()
+                return {'success': True, 'data': view_fn()}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.exception("Access error in data retrieval %s for %s: %s", action, target, e)
+            return {'success': False,
+                    'error': _('An error occurred while handling data retrieval.')}
+        except (ValidationError, UserError) as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.exception("Error in data retrieval %s for %s: %s", action, target, e)
+            return {'success': False,
+                    'error': _('An error occurred while handling data retrieval.')}
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/data-retrieval", auth="user", methods=["POST"], type="json")
+    def api_service_data_retrieval(self, workspace_id: int, service_id: int, action: str = 'status', **kw: Any) -> dict[str, Any]:
+        """#1540：停權中服務的限時唯讀取回入口（``action``：status／open／close）。"""
+        workspace, error = self._data_retrieval_workspace(workspace_id)
+        if error:
+            return error
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
+        if (not service.exists() or service.workspace_id.id != workspace.id
+                or service.template_id.conceal_instances):
+            return {'success': False, 'error': _('Service not found')}
+        return self._data_retrieval_action(
+            action, f'service {service.id}', service._open_data_retrieval,
+            service._close_data_retrieval, service._data_retrieval_view)
+
+    @route("/api/workspaces/<int:workspace_id>/retained-data", auth="user", methods=["POST"], type="json")
+    def api_workspace_retained_data(self, workspace_id: int, **kw: Any) -> dict[str, Any]:
+        """#1540：工作區裡已刪除、磁碟仍在保留期的服務（只給 owner／admin）。"""
+        workspace, error = self._data_retrieval_workspace(workspace_id)
+        if error:
+            return error
+        rows = request.env['woow_paas_platform.retained_service_data']._for_workspace(workspace)
+        return {'success': True, 'data': [row._to_dict() for row in rows]}
+
+    @route("/api/workspaces/<int:workspace_id>/retained-data/<int:retained_id>/data-retrieval", auth="user", methods=["POST"], type="json")
+    def api_retained_data_retrieval(self, workspace_id: int, retained_id: int, action: str = 'status', **kw: Any) -> dict[str, Any]:
+        """#1540：已刪除服務（保留期內）的限時唯讀取回入口（``action``：status／open／close）。"""
+        workspace, error = self._data_retrieval_workspace(workspace_id)
+        if error:
+            return error
+        row = request.env['woow_paas_platform.retained_service_data']._get_for_workspace(
+            workspace, retained_id)
+        if not row:
+            return {'success': False, 'error': _('Retained data not found')}
+        return self._data_retrieval_action(
+            action, f'retained {row.id}', row._open_retrieval, row._close_retrieval,
+            row._retrieval_view)
+
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
         """
@@ -4344,6 +4429,10 @@ class PaasController(HiddenChainMixin, Controller):
         data = self._format_service(service, include_details=True)
         if access is not None:
             data['viewer_can_manage'] = self._can_manage_service(access)
+            # #1540：開著的取回入口（網址、帳號、到期）只給能操作的人看；不問 operator，
+            # 就緒狀態由取回視窗自己查。
+            if data['viewer_can_manage']:
+                data['data_retrieval'] = service._data_retrieval_view()
         return {
             'success': True,
             'data': data,
@@ -5113,6 +5202,10 @@ class PaasController(HiddenChainMixin, Controller):
             # 發生的事。放在 service 層而非 template 子物件，因為判準含「這台服務有沒有
             # 對外根位址」（subdomain），那是 service 的屬性不是 template 的。
             'has_gateway': bool(service._gateway_public_url()),
+            # #1540：「取回資料」按鈕的判準（supported＝範本有 operator profile、available＝
+            # 停權中）。前端只讀這兩個布林（capability-gate-single-source-field）；detail 另帶
+            # 開著的入口（session，見 include_details）。
+            'data_retrieval': service._data_retrieval_capability(),
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,

@@ -410,6 +410,20 @@ class CloudAppTemplate(models.Model):
              'instead of replicas.',
     )
 
+    # #1540：停權／刪除後的「取回資料」（限時唯讀入口）用哪個 operator profile。空＝這個範本
+    # 不支援。值必須是 operator ``services/data_retrieval.PROFILES`` 裡的名字——profile 決定
+    # 掛哪顆 PVC、用哪個 uid、匯出哪些路徑，平台只送名字（呼叫端不能指定 PVC 或路徑）。
+    # 前端按鈕讀 service payload 的 ``data_retrieval``（由本欄位推出），不自建 slug 判準。
+    data_retrieval_profile = fields.Selection(
+        selection=[
+            ('nextcloud', 'Nextcloud user files'),
+        ],
+        string='Data Retrieval Profile',
+        help='Lets the owner open a temporary read-only download link for the service data '
+             'while the service is suspended or after it was deleted (disk still retained). '
+             'The value names an operator whitelist profile; empty = not supported.',
+    )
+
     # MCP Sidecar Configuration
     mcp_enabled = fields.Boolean(
         string='Enable MCP Sidecar',

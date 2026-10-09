@@ -2179,10 +2179,12 @@
                 **大版本升級**：Nextcloud 只支援逐版升級，平台會按版次安排，不會跨版跳升。
                 欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通，
                 原磁碟依平台保留政策 90 天後回收。
-                **刪除前請先備份（#1540）**：服務一旦停權或刪除就沒有自助取回途徑，平台也不代為下載。
-                趁服務還在執行時，每位使用者各自把資料取回：網頁左上角「檔案」→ 全選 →「下載」會打包成 zip；
+                **刪除前請先備份（#1540）**：趁服務還在執行時，每位使用者各自把資料取回：網頁左上角「檔案」→ 全選 →「下載」會打包成 zip；
                 或在「設定 → 帳號遷移（Account migration）」匯出整個帳號（檔案＋設定）成單一封存檔；
-                桌面／手機同步用戶端、CalDAV／CardDAV 也可整份下載。管理員無法代下載其他使用者的檔案。</field>
+                桌面／手機同步用戶端、CalDAV／CardDAV 也可整份下載。管理員無法代下載其他使用者的檔案。
+                **停權或刪除後的取回**：服務停權中、或刪除後磁碟仍在保留期內，工作區擁有者／管理員可在服務頁
+                （刪除後在工作區頁的「已刪除服務的保留資料」）按「取回資料」，開一個 72 小時的唯讀下載網址
+                （帳號密碼只顯示一次），可瀏覽並下載每位使用者的檔案；行事曆、聯絡人不在其中。</field>
             <field name="category">web</field>
             <field name="tags">["nextcloud", "files", "storage", "collaboration", "calendar"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_nextcloud#readme</field>
@@ -2201,6 +2203,9 @@
             <field name="admin_password_carrier">app_managed</field>
             <field name="admin_password_settable" eval="False"/>
             <field name="post_deploy_init_type">none</field>
+            <!-- #1540：停權／刪除後的限時唯讀取回入口（operator profile nextcloud：只匯出
+                 <使用者>/files）。本檔 noupdate=0，-u 即生效。 -->
+            <field name="data_retrieval_profile">nextcloud</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
