@@ -764,6 +764,18 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         self.ensure_one()
         return self.state == 'suspended'
 
+    def _acquire_resume_lock(self):
+        """復權前先鎖住這一列；拿不到（別的交易正在處理它）回 ``False``（#1599）。
+
+        生命週期 cron 的 ``_enforce_single`` 在「停權中、訂閱可能已恢復」時先問這個 seam，
+        拿不到就跳過這一輪。預設**不取鎖、恆回 True**：Smart Home／Security Access 的
+        復權只有每日生命週期 cron 一個執行者，不會有兩筆交易同時復權同一台（#1599 的
+        付款後即時復權只做 Cloud Service）——對它們是零行為變化。CloudService override
+        成真的取鎖。
+        """
+        self.ensure_one()
+        return True
+
     def _do_suspend(self):
         """Suspend the service. Implemented by CloudService / SmartHome."""
         raise NotImplementedError
