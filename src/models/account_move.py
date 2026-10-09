@@ -290,4 +290,11 @@ class AccountMove(models.Model):
             "[INV] _pay_from_wallet done invoice=%s name=%s amount=%s partner=%s",
             self.id, self.name, amount, partner.id,
         )
+        # #1599：訂閱發票付清了 ⇒ 請付款後復權的 cron 在 commit 之後立即復權這筆訂閱底下
+        # 停權中的雲端服務。這裡仍在付款交易內：只寫旗標＋排程，不呼叫 operator，也不會讓
+        # 付款失敗（見 `_request_paid_resume`）。訂閱扣款、/woow 付發票、略過試用、確認
+        # 訂閱開票都經過這裡。
+        if subscription:
+            lifecycle = self.env['woow_paas_platform.subscription_lifecycle_cron'].sudo()
+            lifecycle._request_paid_resume(subscription, source='invoice_paid')
         return True

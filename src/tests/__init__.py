@@ -1099,3 +1099,5 @@ from . import test_create_only_settings_1561
 from . import test_suspend_route_park_1563
 # 服務品牌圖示：訂閱 API 帶模板代碼與服務類型（前台 brand_icons.js 挑圖示用）。
 from . import test_brand_icon_payload
+# #1599：續訂付款成功後立即復權（付款交易只寫旗標＋_trigger，commit 後由 cron 復權）。
+from . import test_paid_resume_1599

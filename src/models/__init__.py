@@ -8,6 +8,8 @@ from . import res_partner_invoice
 from . import sh_subscription_fix
 from . import sh_subscription_refund_credit_note
 from . import sh_subscription_warning_field
+# #1599：訂閱回到 in_progress ⇒ 請付款後復權的 cron 立即復權停權中的雲端服務
+from . import sh_subscription_resume_trigger
 from . import sh_subscription_plan_sa_quota
 from . import sh_subscription_plan_sh_mcp
 from . import sh_subscription_plan_service_type

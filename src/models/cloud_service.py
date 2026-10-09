@@ -1815,6 +1815,18 @@ class CloudService(models.Model):
         groups='base.group_system',
         help='JSON parameters for pending deployment (expose_config, mcp_api_key, etc.)',
     )
+    # #1599：付款入帳／訂閱回到 in_progress 的交易只寫這個旗標並 `_trigger()` 付款後
+    # 復權的 cron，commit 之後才由 cron 呼叫 operator（見 subscription_lifecycle_cron）。
+    # `groups='base.group_system'`：只有平台身分寫得進去（同 `deploy_params`）——
+    # 這是「請盡快復權」的佇列，不是租戶的設定。
+    resume_requested = fields.Boolean(
+        string='Resume Requested',
+        copy=False,
+        groups='base.group_system',
+        help='Set by the platform when a payment or a renewal makes the subscription of '
+             'this suspended service active again. A background job resumes the service '
+             'right after the payment is committed, then clears the flag.',
+    )
 
     def init(self):
         """建 partial unique index：同一 provision_partner_id 至多一列（#336 每帳號
@@ -8576,6 +8588,39 @@ class CloudService(models.Model):
             'state': 'suspended',
         })
         _logger.info("[CLOUD_SVC] _do_suspend done service=%s new_state=suspended", self.id)
+
+    def _acquire_resume_lock(self):
+        """#1599：復權前對這一列取 ``FOR NO KEY UPDATE NOWAIT``；拿不到回 ``False``。
+
+        Cloud Service 的復權有兩個執行者：每日生命週期 cron，以及付款入帳後立即跑的
+        ``_cron_resume_paid_cloud_services``。兩顆是不同的 ir.cron、可能同時在跑；兩邊都
+        經過 ``_enforce_single``，在呼叫 operator 之前先拿這把鎖：
+
+        * 對方正持有（正在復權、還沒 commit）⇒ ``LockNotAvailable``；
+        * 對方已經 commit 了一次復權，但本交易的 REPEATABLE READ 快照比它舊（快照裡
+          這台仍是停權）⇒ PostgreSQL 回 ``SerializationFailure``（40001）。
+
+        兩種都回 ``False``：這一輪跳過，不重複 scale／unpark，也不讓那筆 write 撞
+        40001 後整段回捲。鎖跟著交易結束釋放。``FOR NO KEY UPDATE`` 與 ORM 的 UPDATE
+        互斥，但不擋其他表以外鍵指向這一列（例如 chatter）。
+        """
+        self.ensure_one()
+        cr = self.env.cr
+        try:
+            # 同 `_init_guarded`／core ir_cron：預期中的衝突不該在 sql_db 印成 ERROR。
+            with mute_logger('odoo.sql_db'), cr.savepoint(flush=False):
+                cr.execute(
+                    f"SELECT id FROM {self._table} WHERE id = %s "
+                    "FOR NO KEY UPDATE NOWAIT",
+                    (self.id,),
+                )
+        except (pg_errors.SerializationFailure, pg_errors.LockNotAvailable) as exc:
+            _logger.info(
+                "[CLOUD_SVC] resume lock busy service=%s (%s): another transaction is "
+                "handling it", self.id, type(exc).__name__,
+            )
+            return False
+        return True
 
     def _do_resume(self):
         """Scale up Helm release to restore replicas."""

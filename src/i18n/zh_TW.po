@@ -21056,3 +21056,21 @@ msgid ""
 "deployment service was unreachable, busy or failed). While set, the tenant "
 "can submit the configuration again from the error state."
 msgstr "修改配置沒有確認套用（部署服務連不上、忙碌或失敗）時記下的時間。有值時，租戶可以在錯誤狀態下直接重新送出修改配置。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_requested
+msgid "Resume Requested"
+msgstr "等待付款後復權"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_requested
+msgid ""
+"Set by the platform when a payment or a renewal makes the subscription of "
+"this suspended service active again. A background job resumes the service "
+"right after the payment is committed, then clears the flag."
+msgstr "付款或續約讓這個停權中服務的訂閱恢復有效時，由平台設定。付款完成後，背景排程會立即恢復服務並清除這個標記。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_resume_paid_cloud_services_ir_actions_server
+msgid "PaaS: Resume Cloud Services After Payment"
+msgstr ""
