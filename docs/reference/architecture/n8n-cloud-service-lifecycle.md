@@ -242,9 +242,9 @@ sequenceDiagram
 使用者在 OWL Frontend (`/woow`) 的 Marketplace 頁面選擇 n8n 模板，填寫以下資訊：
 
 - **Service Name**：自訂服務名稱
-- **n8n Admin Email**：管理員帳號 Email
-- **n8n Admin Password**：管理員密碼（至少 8 字元，含大小寫字母與數字）
-- **可選設定**：Timezone、Log Level、SMTP（資料庫一律是 PVC 上的 SQLite；原本的「Database Type」選項 chart 不讀，#1532 已拿掉）
+- **n8n 管理員 Email**：管理員帳號 Email
+- **n8n 管理員密碼**：至少 8 字元，含大小寫字母與數字
+- **可選設定**：時區、記錄等級、SMTP（資料庫一律是 PVC 上的 SQLite；原本的「Database Type」選項 chart 不讀，#1532 已拿掉）
 
 ### 4.2 API 請求
 
