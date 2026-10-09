@@ -2057,7 +2057,15 @@
         </record>
 
 
-        <!-- EMQX（開源版 5.8，Apache-2.0）cloud service。chart woow-paas-charts charts/emqx 0.1.6。
+        <!-- EMQX（開源版 5.8，Apache-2.0）cloud service。chart woow-paas-charts charts/emqx 0.1.7。
+             ⚠ 0.1.7（#1613 資安）：ngrok agent 在認證失敗時會把 authtoken 原文印回來（「Your authtoken: …」，
+             格式錯的 token 一律 ERR_NGROK_105，ngrok 3.39.11 實測），0.1.6 以前 sidecar 把 agent 的 log 印到 stdout、
+             直接進容器 log（能讀 Pod log 的人都看得到）。0.1.7 起 agent 輸出經 shared/ngrok-redact 過濾器
+             （與 headscale chart 共用；過濾器不在就整段丟掉），#1559 平台讀回的 ERROR:  ERR_NGROK_<n> 那一行原樣保留；
+             sidecar 改為 files/ngrok.sh（ConfigMap），ngrok.remoteAddr 改走環境變數並在執行時驗證 host:port
+             （0.1.6 直接 render 進 shell 指令列，沙盒實證「x; <指令>」會被執行）；token 前後空白去掉；
+             agent 改 warn 等級。image 與 helm_default_values 不變。爆炸半徑：只影響新開通與之後 redeploy 的
+             服務；redeploy 時 StatefulSet 重啟一次（broker 數十秒中斷，retained 在磁碟）。回滾值：0.1.6。
              ⚠ 0.1.6（#1529 資安稽核）：MQTT 授權預設拒絕——no_match=deny＋預設 ACL 只讓每個帳號用
              「<帳號>/#」（0.1.5 以前是 EMQX 原廠全放行：一般帳號訂 +/+/# 讀得到所有裝置、可發布任何主題，
              ngrok 進來的用戶端被當 127.0.0.1 拿到 # 與 $SYS/#）。走 etc/base.hocon／acl.conf 預設值，
@@ -2117,7 +2125,7 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
-            <field name="helm_chart_version">0.1.6</field>
+            <field name="helm_chart_version">0.1.7</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"10Gi"},"log":{"size":"2Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
@@ -2198,8 +2206,8 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.3（0.1.2＝#153、0.1.1＝#131、
-             0.1.0＝#124）：
+        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.4（0.1.3＝#165、0.1.2＝#153、
+             0.1.1＝#131、0.1.0＝#124）：
              一個 Pod＝headscale v0.29.4（BSD-3）＋Headplane 0.7.1（MIT）網頁＋nginx 入口＋選配 ngrok sidecar。
              入口 Service 第一個埠 3000＝nginx（平台密碼 Basic auth → Headplane 127.0.0.1:3001，proxy_auth
              固定送 Remote-User: admin），第二個埠 8080＝Headscale（同工作區 Tailscale 節點用
@@ -2233,6 +2241,11 @@
                的 90 秒等待）才當 server_url，否則用叢集內網址。舊版 authtoken 錯（ERR_NGROK_105）或網域不屬於
                該帳號時照樣把它當 server_url，所有登入連結都指向沒人回應的位址、租戶看不到錯誤。
              publish-charts run 16236（charts main b56d9976，OCI sha256:88eafcb5…）；0.1.2 由 #153 的發佈帶出。
+             2026-10-09 chart 0.1.3 → 0.1.4（#1613；image 與 helm_default_values 不變）：ngrok agent 的輸出改走
+             shared/ngrok-redact 過濾器（與 EMQX 0.1.7 共用）。0.1.0–0.1.3 的 sed 過濾器只認 [A-Za-z0-9_-] 的 token，
+             格式錯的 token（正是 ngrok 回 ERR_NGROK_105 並印回原文的那種）從第一個標點或空白起整段外洩、前段
+             不滿 8 字元時整個外洩（沙盒以假 token「Fk1613.Hsb7/…」實證 0.1.3 全文出現在 log）。#1559 讀回的
+             ERROR:  ERR_NGROK_<n> 那一行原樣保留。redeploy 時 StatefulSet 重啟一次（同上）。回滾值：0.1.3。
              爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本）；
              redeploy 時 StatefulSet 重啟一次（數十秒，資料在 PVC）、同工作區節點隨後依上述機制重連；
              設了 ngrok.domain 的服務，啟動時 agent 90 秒內沒在該網域上線就先用叢集內網址當 server_url
@@ -2279,7 +2292,7 @@
             <field name="documentation_url">https://headscale.net/stable/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
-            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_chart_version">0.1.4</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0502@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
