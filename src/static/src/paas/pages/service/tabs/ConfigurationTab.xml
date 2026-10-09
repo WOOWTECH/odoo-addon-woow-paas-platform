@@ -79,6 +79,13 @@
                                 </div>
                             </t>
                         </div>
+                        <!-- #1479：改管理員密碼不在這裡——指向頁首的按鈕（名稱隨模板能力不同）。 -->
+                        <p t-if="adminPasswordEntry === 'credentials'" class="o_woow_config_create_only">
+                            To change the administrator password, use Admin Credentials at the top of this page.
+                        </p>
+                        <p t-if="adminPasswordEntry === 'reset'" class="o_woow_config_create_only">
+                            To change the administrator password, use Reset Admin Password at the top of this page.
+                        </p>
                     </t>
                 </WoowCard>
             </t>
