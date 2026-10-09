@@ -64,6 +64,8 @@
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",
         "data/agent_session_cron.xml",
+        # #1540：限時唯讀資料取回入口的到期關閉 cron
+        "data/data_retrieval_cron.xml",
         "data/reach_reconciler_cron.xml",
         "data/reconcile_report_cron.xml",
         # #784：待回收 CF Access 物件帳本的 dead-anchor 回收 cron

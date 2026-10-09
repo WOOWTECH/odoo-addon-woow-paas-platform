@@ -1107,3 +1107,5 @@ from . import test_cron_resume_paid_gate_1610
 from . import test_self_renew_1611
 # #1612：範本 helm_value_specs 的欄位名稱一律中文（Odoo 管理員 Email／載入示範資料等）。
 from . import test_spec_labels_zh_1612
+# #1540：停權／刪除後的限時唯讀資料取回入口（owner／admin、一次性密碼、復權先關、刪除記帳本、cron）。
+from . import test_data_retrieval_1540

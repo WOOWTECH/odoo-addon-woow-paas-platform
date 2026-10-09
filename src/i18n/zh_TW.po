@@ -21464,3 +21464,275 @@ msgstr "這些服務的訂閱已取消或已結束，續訂後即可恢復。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid "Renew"
 msgstr "續訂"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The retention period of this deleted service's data has ended."
+msgstr "這個已刪除服務的資料保留期已過。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "Data retrieval is not available yet on this platform. Please contact support."
+msgstr "平台尚未開放資料取回，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "A data retrieval link is already open for this service. Close it before opening a new one."
+msgstr "這個服務已經有一個開著的資料取回網址，請先關閉再開新的。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The service is still running. Data retrieval is only available while the service is suspended."
+msgstr "服務仍在執行中。只有在服務停權期間才能取回資料。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The service has not fully stopped yet. Please try again in a minute."
+msgstr "服務尚未完全停止，請一分鐘後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The previous data retrieval link is still shutting down. Please try again in a minute."
+msgstr "上一個資料取回網址還在關閉中，請一分鐘後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The data disk of this service could not be found."
+msgstr "找不到這個服務的資料磁碟。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "This workspace has no CPU or memory quota left for the download service. Stop another service in this workspace and try again."
+msgstr "這個工作區的 CPU 或記憶體配額已用完，無法啟動下載服務。請先停止工作區內的其他服務再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "This service does not support data retrieval."
+msgstr "這個服務不支援資料取回。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Could not open the data retrieval link. Please try again later."
+msgstr "無法開啟資料取回網址，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Could not close the data retrieval link. Please try again later."
+msgstr "無法關閉資料取回網址，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The service is changing state right now. Please try again in a minute."
+msgstr "服務正在變更狀態，請一分鐘後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Data retrieval is only available while the service is suspended. A running service can export its data from the app itself."
+msgstr "只有在服務停權期間才能用這個方式取回資料；執行中的服務請直接在應用程式內匯出。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while handling data retrieval."
+msgstr "處理資料取回時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Retained data not found"
+msgstr "找不到保留的資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+msgid "Retrieve Data"
+msgstr "取回資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "This service was deleted, but its disk is still retained. You can open a temporary, read-only download link for its files."
+msgstr "這個服務已刪除，但磁碟仍在保留期內。你可以開一個臨時、唯讀的下載網址取回檔案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "This service is suspended. You can open a temporary, read-only download link for its files. The service itself stays stopped."
+msgstr "這個服務目前停權中。你可以開一個臨時、唯讀的下載網址取回檔案；服務本身仍維持停止。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "The link closes automatically after 72 hours (or earlier, when the retained disk is reclaimed). You can close it sooner yourself."
+msgstr "網址會在 72 小時後自動關閉（磁碟保留期較早結束時會更早關閉），你也可以隨時提早關閉。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Files can only be viewed and downloaded; nothing can be changed or deleted."
+msgstr "只能瀏覽與下載檔案，無法修改或刪除任何內容。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Each user's files are in their own folder. Calendars, contacts and other app data are not included."
+msgstr "每位使用者的檔案各在自己的資料夾；行事曆、聯絡人與其他應用程式資料不包含在內。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Anyone with the address and password can download the files. The password is shown only once."
+msgstr "任何人只要有網址和密碼就能下載這些檔案。密碼只會顯示一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Data retrieval is available while the service is suspended, or after it was deleted until its disk is reclaimed."
+msgstr "服務停權期間，或刪除後磁碟回收之前，才能取回資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Save these now. The password is shown only once and cannot be displayed again."
+msgstr "請立即保存。密碼只會顯示這一次，之後無法再顯示。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "A download link for this service is open. The password was shown only once when it was opened; if you lost it, close the link and open a new one."
+msgstr "這個服務目前有一個開著的下載網址。密碼只在開啟時顯示一次；如果遺失，請關閉後重新開一個。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "To download everything at once (e.g. on a computer with wget):"
+msgstr "要一次下載全部（例如在有 wget 的電腦上）："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Ready. Open the address and sign in with the username and password."
+msgstr "已就緒。開啟網址並用帳號與密碼登入。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "The link has stopped. Close it and open a new one if you still need the files."
+msgstr "這個網址已停止。若仍需要檔案，請關閉後重新開一個。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Preparing the download link (usually under a minute)..."
+msgstr "正在準備下載網址（通常不到一分鐘）…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Download address"
+msgstr "下載網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Available until"
+msgstr "可用至"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Opened by"
+msgstr "開啟者"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Could not load the data retrieval status."
+msgstr "無法讀取資料取回狀態。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "The link is closing."
+msgstr "網址正在關閉中。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "Close link now"
+msgstr "立即關閉網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "Opening..."
+msgstr "開啟中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "Open download link"
+msgstr "開啟下載網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "I have saved them"
+msgstr "我已保存"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "A temporary download link for this service's data is open until %s."
+msgstr "這個服務的臨時資料下載網址開放至 %s。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "This service is suspended. You can open a temporary read-only link to download its files."
+msgstr "這個服務目前停權中，你可以開一個臨時的唯讀網址下載檔案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "These services were deleted, but their disks are still retained for a while. You can open a temporary read-only download link for their files."
+msgstr "這些服務已刪除，但磁碟仍會保留一段時間，你可以開一個臨時的唯讀下載網址取回檔案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Deleted %(deleted)s · retained until about %(until)s"
+msgstr "刪除於 %(deleted)s・約保留至 %(until)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Download link open until %s"
+msgstr "下載網址開放至 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+msgid "Retained data of deleted services"
+msgstr "已刪除服務的保留資料"

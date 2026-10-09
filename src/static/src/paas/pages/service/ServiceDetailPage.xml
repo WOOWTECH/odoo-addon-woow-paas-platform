@@ -136,6 +136,15 @@
                             <WoowIcon name="'language'" size="18"/>
                             Custom Domain
                         </WoowButton>
+                        <!-- #1540：停權（或已有開著的入口）時的限時唯讀取回入口。 -->
+                        <WoowButton
+                            t-if="canRetrieveData"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showDataRetrieval">
+                            <WoowIcon name="'download'" size="18"/>
+                            Retrieve Data
+                        </WoowButton>
                         <WoowButton
                             t-if="showRestartButton"
                             variant="'secondary'"
@@ -216,6 +225,11 @@
                         Renew Subscription
                     </WoowButton>
                 </div>
+                <!-- #1540：停權中可取回資料的提示／開著的取回入口。 -->
+                <t t-if="canRetrieveData">
+                    <p t-if="retrievalSession" class="o_woow_hint" t-esc="retrievalBannerText"/>
+                    <p t-else="" class="o_woow_hint" t-esc="retrievalSuspendedHint"/>
+                </t>
 
                 <!-- Error Message Banner -->
                 <!-- #1159 Q30：init 失敗時顯示固定文案＋attempt 序號並導向 support 入口；
@@ -414,6 +428,12 @@
                 service="service or undefined"
                 onClose.bind="hideAdminCredentials"
                 onSaved.bind="onAdminCredentialsSaved"/>
+
+            <DataRetrievalModal
+                t-if="state.showDataRetrievalModal and service"
+                endpoint="dataRetrievalEndpoint"
+                serviceName="service.name"
+                onClose.bind="hideDataRetrieval"/>
 
             <OneTimeCredentialsModal
                 t-if="state.oneTimeCredentials"

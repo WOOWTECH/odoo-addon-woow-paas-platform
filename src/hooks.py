@@ -191,6 +191,10 @@ _CONFIG_PARAMETERS = [
     # 「模組常數＋get_param()」寫法 ⇒ 補在
     # `test_platform_ux_r8.py::TestHelpUrl.test_registered_for_uninstall`。
     'woow_paas_platform.help_url',
+    # #1540：已刪除服務磁碟保留天數的平台端估計（缺值走 models/data_retrieval.py 的內建 90）。
+    # 「模組常數＋get_param()」寫法 ⇒ 補在
+    # `test_data_retrieval_1540.py::TestDataRetrievalConfigParameter`。
+    'woow_paas_platform.data_retention_days',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
     # #778：上游 sh_subscription_wallet 的 SSOT 開關——平台 pin '0'（opt-out）。
