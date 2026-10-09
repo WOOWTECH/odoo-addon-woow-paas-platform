@@ -21074,3 +21074,95 @@ msgstr "付款或續約讓這個停權中服務的訂閱恢復有效時，由平
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_resume_paid_cloud_services_ir_actions_server
 msgid "PaaS: Resume Cloud Services After Payment"
 msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_hold_reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__resume_hold_reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__resume_hold_reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_subscription_lifecycle_mixin__resume_hold_reason
+msgid "Resume On Hold"
+msgstr "暫不復權原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_hold_reason
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__resume_hold_reason
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_smart_home__resume_hold_reason
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_subscription_lifecycle_mixin__resume_hold_reason
+msgid ""
+"Why this suspended service has not been resumed although its subscription "
+"is in progress again: it still has unpaid invoices. Written and cleared by "
+"the subscription lifecycle jobs."
+msgstr "訂閱已回到進行中，這個停權中的服務卻還沒恢復的原因：仍有未付清的發票。由訂閱生命週期排程寫入與清除。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_sh_subscription_subscription__woow_resume_payment_confirmed
+msgid "Allow Resume (Payment Confirmed Manually)"
+msgstr "允許復權（已人工確認付款）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_subscription__woow_resume_payment_confirmed
+msgid ""
+"Tick after confirming the payment outside the system (for example a bank "
+"transfer that has not been reconciled yet). Suspended services on this "
+"subscription then resume even though its invoices are not paid in the "
+"system. Cleared automatically when the subscription leaves \"In Progress\". "
+"Only billing administrators can change it."
+msgstr "在系統外確認收到款項後勾選（例如還沒沖帳的銀行轉帳）。勾選後，這筆訂閱底下停權中的服務即使發票在系統內未付清也會恢復。訂閱離開「進行中」時自動清除。只有帳務管理員可以修改。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_sh_subscription_form_woow_resume
+msgid "PaaS Service Resume"
+msgstr "PaaS 服務復權"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_cron.py:0
+msgid ""
+"Resume on hold: subscription %(subscription)s has unpaid invoices "
+"(%(invoices)s). The service resumes automatically once they are paid, or "
+"after a billing administrator ticks \"Allow Resume (Payment Confirmed "
+"Manually)\" on the subscription."
+msgstr "暫不復權：訂閱 %(subscription)s 還有未付清的發票（%(invoices)s）。付清後會自動恢復，或由帳務管理員在訂閱上勾選「允許復權（已人工確認付款）」後恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_cron.py:0
+msgid ""
+"%(service)s was resumed (now %(state)s) although invoices %(invoices)s are "
+"unpaid, because a billing administrator confirmed the payment manually."
+msgstr "帳務管理員已人工確認付款，%(service)s 在發票 %(invoices)s 未付清的情況下已復權（目前狀態：%(state)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"Only billing administrators can allow a suspended service to resume without "
+"a paid invoice."
+msgstr "只有帳務管理員可以讓停權中的服務在發票未付清時復權。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"Payment confirmed manually by a billing administrator: suspended services on "
+"this subscription may resume while it stays in progress. Unpaid invoices at "
+"this moment: %(invoices)s."
+msgstr "帳務管理員已人工確認付款：訂閱維持進行中期間，底下停權中的服務可以復權。目前未付清的發票：%(invoices)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"Payment confirmed manually by a billing administrator: suspended services on "
+"this subscription may resume while it stays in progress. There are no unpaid "
+"invoices at this moment."
+msgstr "帳務管理員已人工確認付款：訂閱維持進行中期間，底下停權中的服務可以復權。目前沒有未付清的發票。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"\"Allow Resume (Payment Confirmed Manually)\" was cleared because the "
+"subscription is no longer in progress (%(state)s). Confirm the payment again "
+"if it returns to in progress without being paid."
+msgstr "訂閱已不在進行中（%(state)s），已自動取消「允許復權（已人工確認付款）」。訂閱之後若回到進行中但仍未付款，請重新確認付款。"

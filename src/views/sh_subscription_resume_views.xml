@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- #1610：「付清才復權」的人工出口。線下付款、人工確認但發票還沒在系統沖帳時，由帳務
+         管理員勾選；勾了之後這筆訂閱底下停權中的服務不看發票也會復權，訂閱離開
+         in_progress 時自動清掉。只有帳務管理員看得到、改得到（與欄位的 groups 一致，
+         model 端另有 write 守衛）；異動與勾選當下的未付清發票都記在 chatter。 -->
+    <record id="view_sh_subscription_form_woow_resume" model="ir.ui.view">
+        <field name="name">sh.subscription.subscription.form.woow.resume</field>
+        <field name="model">sh.subscription.subscription</field>
+        <field name="inherit_id" ref="sh_subscription.sh_subscription_subscription_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//group[@name='payment']" position="after">
+                <group name="woow_paas_resume" string="PaaS Service Resume"
+                       groups="account.group_account_manager">
+                    <field name="woow_resume_payment_confirmed"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>
