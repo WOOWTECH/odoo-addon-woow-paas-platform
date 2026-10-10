@@ -804,6 +804,23 @@ _INSTALL_PINNED_STORAGE_CLASS_PATHS = {
 #
 # 鍵是範本 slug（與 ``_INSTALL_PINNED_STORAGE_CLASS_PATHS`` 同一套）；換 chart 時這裡要
 # 跟著改。``storage`` 的最後一段是「大小」鍵，前面是它所在的 dict。
+#
+# #1637（同 #1532 的死鍵，資源稽核 2026-10-10 發現）：
+# - code-server 0.1.7：主容器讀 ``codeServer.resources``、PVC 讀 ``persistence.workspace.size``／
+#   ``persistence.piData.size``；頂層 ``resources``／``persistence.size`` chart 不讀。方案 2 核／
+#   4G／25G 從來沒生效，只是範本值剛好一樣。儲存走 ``_PLAN_STORAGE_SPLIT``（工作區＝總量 − pi-data）。
+# - pi-agent 0.1.7：主容器讀 ``piWeb.resources``（PVC 讀頂層 ``persistence.size``，本來就對）。
+#   ``existing: False``：**只在開通時**套方案。使用者 2026-10-10：pi1–pi5（正式站工作區 28，
+#   paas-ws-504a2b17；pi1／pi2 由管理員手調成 piWeb 12 核／16G）這次完全不動——既有 pi-agent 服務
+#   換方案／Redeploy／reconfigure 時 overlay 是 no-op（helm_values 原樣，不寫 resources、不清頂層殘值、
+#   不動 PVC）。正式站其他 pi-agent 的現值本來就是範本值（2 核／4G），#1637 以前方案沒生效時也一樣。
+# - headscale 0.1.4：頂層 ``resources`` 會被 chart deep-merge 進 **headplane**（網頁介面），
+#   不是 headscale 本體 ⇒ 改寫 ``headscale.resources``；headplane 回到 chart 預設。
+# - omnigent：方案的 4 vCPU／8 GB 是「伺服器 1 vCPU／1 GB（server 950m＋runner-gc 50m）＋
+#   雲端工作機」的總額。頂層 ``resources`` chart 不讀（伺服器一直是 chart 預設 950m／1Gi）。
+#   改寫 ``runner.resources`` 的 **limits**＝方案 − ``reserve``（伺服器那一份）＝3 vCPU／7Gi：
+#   每個工作階段的工作機最多用到這麼多。``requests: False``：runner 的 requests 是每個工作
+#   階段在工作區 quota 裡的保留量（chart 預設 500m／1Gi），刻意保持小，不跟著方案。
 _PLAN_SPEC_DEFAULT_PATHS = {
     'resources': ('resources',),
     'storage': ('persistence', 'size'),
@@ -813,7 +830,91 @@ _PLAN_SPEC_VALUE_PATHS = {
         'resources': ('main', 'resources'),
         'storage': ('main', 'persistence', 'size'),
     },
+    'code-server': {
+        'resources': ('codeServer', 'resources'),
+        'storage': ('persistence', 'workspace', 'size'),
+    },
+    'pi-agent': {
+        'resources': ('piWeb', 'resources'),
+        'storage': ('persistence', 'size'),
+        'existing': False,
+    },
+    'headscale': {
+        'resources': ('headscale', 'resources'),
+        'storage': ('persistence', 'size'),
+    },
+    'omnigent': {
+        'resources': ('runner', 'resources'),
+        'storage': ('persistence', 'size'),
+        'reserve': (1, 1.0),
+        'requests': False,
+    },
 }
+
+# #1637（使用者 2026-10-10 定案）：方案的 CPU／RAM 是 **limits**（容器最多能用多少，賣的規格）；
+# requests（scheduler 保留量）另算。以前 requests＝limits，節點 requests 被方案值塞滿，實際用量卻
+# 低很多（資源稽核 2026-10-10：CPU 平均 0.002–0.03 核、最多 0.15 核；記憶體 working set 是方案的
+# 9–65%）。
+# - CPU：limits × 25%，最低 0.1 核。
+# - 記憶體：max(limits × 50%, 該範本正式站實測峰值)，最低 128Mi，不超過 limits。實測峰值＝稽核
+#   報告表 1「實際 RAM」括號裡的 cgroup memory.peak，取整後往上進位到 GiB（沒有正式站實例的範本
+#   不列，只看 50%）：Odoo 1.51G（16 套舊 Odoo）→ 2、n8n 0.85 → 1、EMQX 0.47 → 1、LiteLLM 0.75 → 1、
+#   Code Server 0.50 → 1、pi Coding Agent 0.57 → 1。
+# 改規則只改這裡。``requests: False`` 的範本（omnigent runner：每個工作階段在工作區 quota 的保留
+# 量，chart 刻意保持 500m／1Gi）不寫 requests。
+_PLAN_REQUEST_CPU_RATIO = 0.25
+_PLAN_REQUEST_CPU_MIN = 0.1
+_PLAN_REQUEST_MEMORY_RATIO = 0.5
+_PLAN_REQUEST_MEMORY_MIN_MIB = 128
+_PLAN_REQUEST_MEMORY_PEAK_GIB = {
+    'odoo': 2,
+    'n8n': 1,
+    'emqx': 1,
+    'litellm': 1,
+    'code-server': 1,
+    'pi-agent': 1,
+}
+
+#: K8s CPU quantity（``'2'``、``'950m'``、``'1.5'``）。
+_CPU_QUANTITY_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*(m?)\s*$')
+
+
+def _cpu_quantity_cores(quantity):
+    """``'950m'`` → ``0.95``、``'2'`` → ``2.0``；看不懂回 ``None``。"""
+    if quantity is None:
+        return None
+    match = _CPU_QUANTITY_RE.match(str(quantity))
+    if not match:
+        return None
+    value = float(match.group(1))
+    return value / 1000 if match.group(2) else value
+
+
+def _cpu_quantity(cores):
+    """核數 → K8s quantity：整數寫 ``'2'``，其餘寫 millicore（``'750m'``）。"""
+    millis = int(round(cores * 1000))
+    return str(millis // 1000) if millis % 1000 == 0 else f'{millis}m'
+
+
+def _memory_quantity_gib(gib):
+    """GiB → K8s quantity：整數寫 ``'4Gi'``，其餘寫 ``'512Mi'``（與以前的 overlay 同格式）。"""
+    return f'{int(gib)}Gi' if float(gib).is_integer() else f'{int(round(gib * 1024))}Mi'
+
+
+def _plan_cpu_request(limit_cores):
+    """方案 CPU 上限 → requests（25%、最低 0.1 核，且不超過 limits）。"""
+    cores = min(max(limit_cores * _PLAN_REQUEST_CPU_RATIO, _PLAN_REQUEST_CPU_MIN), limit_cores)
+    return _cpu_quantity(cores)
+
+
+def _plan_memory_request(limit_gib, slug=None):
+    """方案記憶體上限 → requests：max(50%, 範本實測峰值)，最低 128Mi，不超過 limits。"""
+    limit_mib = int(round(limit_gib * 1024))
+    mib = max(int(limit_mib * _PLAN_REQUEST_MEMORY_RATIO),
+              _PLAN_REQUEST_MEMORY_PEAK_GIB.get(slug, 0) * 1024,
+              _PLAN_REQUEST_MEMORY_MIN_MIB)
+    mib = min(mib, limit_mib)
+    return f'{mib // 1024}Gi' if mib % 1024 == 0 else f'{mib}Mi'
 
 
 def _plan_spec_paths(template):
@@ -861,6 +962,11 @@ _PLAN_STORAGE_SPLIT = {
     'emqx': {
         'default_size': ('persistence', 'data', 'size'),
         'fixed': (('persistence', 'log', 'size'),),
+    },
+    # #1637 死鍵修正：code-server 的方案鍵是工作區（persistence.workspace.size），pi-data 固定
+    # （12 ＝ 10＋2）。以前方案寫到 chart 不讀的頂層 persistence.size。
+    'code-server': {
+        'fixed': (('persistence', 'piData', 'size'),),
     },
 }
 
@@ -968,16 +1074,30 @@ _LEGACY_TOP_LEVEL_RESOURCE_KEYS = {'requests', 'limits'}
 _LEGACY_TOP_LEVEL_QUANTITY_KEYS = {'cpu', 'memory'}
 
 
-def _drop_legacy_top_level_plan_spec(values):
-    """移除舊 overlay 寫在頂層、chart 根本不讀的方案規格殘值（#1532）。就地修改。"""
-    res = values.get('resources')
-    if (isinstance(res, dict) and set(res) <= _LEGACY_TOP_LEVEL_RESOURCE_KEYS
-            and all(isinstance(v, dict) and set(v) <= _LEGACY_TOP_LEVEL_QUANTITY_KEYS
-                    for v in res.values())):
-        values.pop('resources')
-    persistence = values.get('persistence')
-    if isinstance(persistence, dict) and set(persistence) <= {'size'}:
-        values.pop('persistence')
+def _drop_legacy_top_level_plan_spec(values, paths=None):
+    """移除舊 overlay 寫在頂層、chart 根本不讀的方案規格殘值（#1532）。就地修改。
+
+    #1637：逐維度判斷——只清「方案寫入路徑已不在頂層」的那一維（pi-agent／omnigent／headscale
+    只搬了 resources，頂層 ``persistence.size`` 是 chart 真的在讀的 PVC 大小，不能動）。
+    頂層 ``persistence`` 只有 ``size`` ⇒ 整個拿掉（同 #1532）；方案鍵在 ``persistence`` 底下另一層
+    （code-server 的 ``persistence.workspace.size``）⇒ 頂層 ``size`` 只可能是舊 overlay 寫的，只拿掉它、
+    保留 workspace／piData。其他形狀不碰。
+    """
+    paths = paths or {}
+    if paths.get('resources') != _PLAN_SPEC_DEFAULT_PATHS['resources']:
+        res = values.get('resources')
+        if (isinstance(res, dict) and set(res) <= _LEGACY_TOP_LEVEL_RESOURCE_KEYS
+                and all(isinstance(v, dict) and set(v) <= _LEGACY_TOP_LEVEL_QUANTITY_KEYS
+                        for v in res.values())):
+            values.pop('resources')
+    storage = paths.get('storage') or _PLAN_SPEC_DEFAULT_PATHS['storage']
+    if storage != _PLAN_SPEC_DEFAULT_PATHS['storage']:
+        persistence = values.get('persistence')
+        if isinstance(persistence, dict) and isinstance(persistence.get('size'), str):
+            if set(persistence) <= {'size'}:
+                values.pop('persistence')
+            elif storage[0] == 'persistence':
+                persistence.pop('size')
 
 
 # #1334 附帶：n8n 要知道自己的公開網址，否則 webhook 節點顯示的網址、OAuth
@@ -9800,6 +9920,87 @@ class CloudService(models.Model):
         return vals
 
     @api.model
+    def _plan_resource_limits(self, template, plan):
+        """``plan`` 套在 ``template`` 上的 limits（核、GiB；0 的維度回 ``None``）。
+
+        ``reserve``（omnigent）：方案是伺服器＋工作機的總額，寫進 runner 的是扣掉伺服器那一份。
+        """
+        reserve_cpu, reserve_mem = _plan_spec_paths(template).get('reserve', (0, 0))
+        cpu = plan.cs_vcpu - reserve_cpu if plan.cs_vcpu else None
+        mem = plan.cs_ram_gb - reserve_mem if plan.cs_ram_gb else None
+        if (cpu is not None and cpu <= 0) or (mem is not None and mem <= 0):
+            raise ValueError(
+                "#1637 %s 方案 %s 的 %s vCPU／%s GB 不夠扣掉伺服器的 %s vCPU／%s GB" % (
+                    template.slug, plan.id, plan.cs_vcpu, plan.cs_ram_gb,
+                    reserve_cpu, reserve_mem))
+        return cpu, mem
+
+    @api.model
+    def _plan_resources_hand_raised(self, values, template, plan):
+        """既有服務在方案路徑上的 limits 是否**超過**這個範本任何方案（與範本預設）會給的值。
+
+        超過＝管理員手動加大（例：正式站 pi1／pi2 的 piWeb 12 核／16G，#1637 稽核），套方案會
+        把它砍回 2 核／4G ⇒ 這種服務的 CPU／RAM 一律不覆寫、只 log。在方案範圍內的值（含降級前
+        的較大方案、#1532 以前存的範本值）照常收斂到目前方案。
+        """
+        paths = _plan_spec_paths(template)
+        current = _value_at(values, paths['resources'] + ('limits',))
+        if not isinstance(current, dict):
+            return False
+        cur_cpu = _cpu_quantity_cores(current.get('cpu'))
+        cur_mem = _storage_quantity_gib(current.get('memory')) if current.get('memory') else None
+        if cur_cpu is None and cur_mem is None:
+            return False
+        ceiling_cpu, ceiling_mem = [0.0], [0.0]
+        for candidate in template.sudo().subscription_plan_ids | plan:
+            try:
+                cpu, mem = self._plan_resource_limits(template, candidate)
+            except ValueError:
+                continue
+            ceiling_cpu.append(cpu or 0)
+            ceiling_mem.append(mem or 0)
+        try:
+            defaults = json.loads(template.helm_default_values or '{}')
+        except ValueError:
+            defaults = {}
+        tpl_limits = _value_at(defaults, paths['resources'] + ('limits',))
+        if isinstance(tpl_limits, dict):
+            ceiling_cpu.append(_cpu_quantity_cores(tpl_limits.get('cpu')) or 0)
+            if tpl_limits.get('memory'):
+                ceiling_mem.append(_storage_quantity_gib(tpl_limits['memory']) or 0)
+        return ((cur_cpu is not None and cur_cpu > max(ceiling_cpu) + 1e-9)
+                or (cur_mem is not None and cur_mem > max(ceiling_mem) + 1e-9))
+
+    @api.model
+    def _overlay_plan_resources(self, values, template, plan, existing):
+        """方案 cs_vcpu／cs_ram_gb 寫進 chart 的方案資源鍵（就地）。
+
+        #1637：limits＝方案（omnigent 扣掉伺服器那一份）；requests 取比例
+        （``_plan_cpu_request``／``_plan_memory_request``），``requests: False`` 的範本不寫。
+        既有服務（``existing=True``）目前的 limits 超過範本所有方案＝管理員手調，整維不動
+        （``_plan_resources_hand_raised``）。
+        """
+        paths = _plan_spec_paths(template)
+        cpu, mem = self._plan_resource_limits(template, plan)
+        if existing and self._plan_resources_hand_raised(values, template, plan):
+            _logger.info(
+                "#1637 %s 的 %s limits %s 超過所有方案，視為管理員手調、不套方案 %s",
+                template.slug, '.'.join(paths['resources']),
+                _value_at(values, paths['resources'] + ('limits',)), plan.id)
+            return
+        res = _values_dict_at(values, paths['resources'])
+        with_requests = paths.get('requests', True)
+        if cpu is not None:
+            _values_dict_at(res, ('limits',))['cpu'] = _cpu_quantity(cpu)
+            if with_requests:
+                _values_dict_at(res, ('requests',))['cpu'] = _plan_cpu_request(cpu)
+        if mem is not None:
+            _values_dict_at(res, ('limits',))['memory'] = _memory_quantity_gib(mem)
+            if with_requests:
+                _values_dict_at(res, ('requests',))['memory'] = _plan_memory_request(
+                    mem, template.slug)
+
+    @api.model
     def _overlay_plan_storage(self, values, template, plan, existing):
         """方案 ``cs_storage_gb`` 寫進 chart 的方案儲存鍵（就地；``plan.cs_storage_gb`` 非 0）。
 
@@ -9875,24 +10076,21 @@ class CloudService(models.Model):
 
         #1634：儲存那一維走 ``_overlay_plan_storage``——方案總量含固定開銷 volume 的範本
         （Nextcloud），方案鍵只拿扣掉固定開銷後的那一份。
+
+        #1637：CPU／RAM 走 ``_overlay_plan_resources``——limits＝方案、requests 另算
+        （``_PLAN_REQUEST_*``）；code-server／pi-agent／headscale／omnigent 改寫 chart 真正讀的鍵。
+        路徑表標 ``existing: False`` 的範本（pi-agent）既有服務整個不套（原樣回傳）。
         """
         paths = _plan_spec_paths(template)
-        if plan.cs_vcpu:
-            res = _values_dict_at(values, paths['resources'])
-            for key in ('requests', 'limits'):
-                _values_dict_at(res, (key,))['cpu'] = str(plan.cs_vcpu)
-        if plan.cs_ram_gb:
-            mem = (f'{int(plan.cs_ram_gb)}Gi'
-                   if float(plan.cs_ram_gb).is_integer()
-                   else f'{int(plan.cs_ram_gb * 1024)}Mi')
-            res = _values_dict_at(values, paths['resources'])
-            for key in ('requests', 'limits'):
-                _values_dict_at(res, (key,))['memory'] = mem
+        if existing and paths.get('existing') is False:
+            return values
+        if plan.cs_vcpu or plan.cs_ram_gb:
+            self._overlay_plan_resources(values, template, plan, existing)
         if plan.cs_storage_gb:
             self._overlay_plan_storage(values, template, plan, existing)
         if paths is not _PLAN_SPEC_DEFAULT_PATHS and (
                 plan.cs_vcpu or plan.cs_ram_gb or plan.cs_storage_gb):
-            _drop_legacy_top_level_plan_spec(values)
+            _drop_legacy_top_level_plan_spec(values, paths)
         conf = values.get('conf')
         if plan.cs_odoo_workers and template._is_woow_odoo_chart():
             # #1130：woow-odoo 的 odoo.conf 是 chart render 的 Secret，plan 只能寫 typed
@@ -9904,12 +10102,15 @@ class CloudService(models.Model):
                 raise ValueError(
                     "woow-odoo template 的 helm values 缺 conf 區塊，"
                     "cs_odoo_workers 無處可寫（fail-loud，不靜默 no-op）")
-            n = plan.cs_odoo_workers
-            conf['workers'] = n
-            if plan.cs_ram_gb:
-                ram_bytes = int(plan.cs_ram_gb * 1024 ** 3)
-                conf['limitMemoryHard'] = int(ram_bytes * 0.85 / n)
-                conf['limitMemorySoft'] = int(ram_bytes * 0.70 / n)
+            conf['workers'] = plan.cs_odoo_workers
+            # #1637（容量研究，使用者 2026-10-10 核可）：limit_memory_soft／hard 比的是每個 worker 的
+            # **VMS**（RLIMIT_AS，不是 RSS），新 worker 一 fork 就約 1.1–1.3 GiB VSZ；以前用「方案記憶體
+            # ×0.85÷workers」（T1 約 0.85 GiB）會讓 worker 一開就撞上限、大報表（wkhtmltopdf 繼承
+            # RLIMIT_AS）失敗。改成交給 chart 的 tenant 預設（soft 2 GiB／hard 2.5 GiB，與 16 套舊 Odoo
+            # 同值）：寫 None＝chart 預設，既有服務 Redeploy 也收斂（不留舊公式的值）。容器大小用 RSS
+            # 估，方案記憶體管的是 cgroup 上限。
+            conf['limitMemoryHard'] = None
+            conf['limitMemorySoft'] = None
             return values
         scripts = values.get('customPostInitScripts')
         if plan.cs_odoo_workers and scripts and not existing:

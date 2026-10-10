@@ -185,8 +185,9 @@ class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
         self.assertEqual(values['backup']['persistence']['size'], '16Gi')
         self.assertEqual(values['postgres']['persistence']['size'], '4Gi')
         self.assertEqual(values['conf']['workers'], 3)
-        self.assertEqual(values['conf']['limitMemoryHard'], int(4 * GIB * 0.85 / 3))
-        self.assertEqual(values['conf']['limitMemorySoft'], int(4 * GIB * 0.70 / 3))
+        # #1637：limit_memory_* 是 VMS 上限，交給 chart 的 tenant 預設（2／2.5 GiB），不再用方案記憶體÷workers。
+        self.assertIsNone(values['conf']['limitMemoryHard'])
+        self.assertIsNone(values['conf']['limitMemorySoft'])
         self.assertEqual(
             (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb),
             (2, 4.0, 30))

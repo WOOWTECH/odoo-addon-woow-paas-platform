@@ -1976,7 +1976,8 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- Omnigent T1（4 vCPU／8 Gi／5 Gi：server ＋ 雲端 runner）：cs_* 顯式寫，與 template min_* 一致
+        <!-- Omnigent T1（4 vCPU／8 Gi／5 Gi：server 1 vCPU／1 Gi ＋ 雲端 runner 每個工作階段最多 3 vCPU／7 Gi，
+             #1637 起 cs_vcpu／cs_ram_gb 真的寫進 runner.resources.limits）：cs_* 顯式寫，與 template min_* 一致
              （#1637 2026-10-10 磁碟 10 → 5 Gi，既有 DB 由 migrations/18.0.1.0.225 改）
              （cloud_service._assemble… 取 plan.cs_vcpu or template.min_vcpu）。年繳 = 10 個月。 -->
         <record id="plan_omnigent_monthly" model="sh.subscription.plan">
