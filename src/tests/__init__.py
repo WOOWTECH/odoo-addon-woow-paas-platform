@@ -1115,3 +1115,5 @@ from . import test_nextcloud_storage_20g_1634
 from . import test_trial_flag_stale_1010
 # #1637：範本磁碟按需分配、每台上限 30G（每個範本／方案 PVC 加總 ≤ 30Gi、Odoo 資料＋PG＋備份拆分、migration 18.0.1.0.225）。
 from . import test_template_disk_cap_1637
+# #1637：方案 overlay 的 CPU／RAM（limits＝方案、requests 取比例；code-server／pi-agent／headscale／omnigent 死鍵；管理員手調不覆寫）。
+from . import test_plan_overlay_resources_1637

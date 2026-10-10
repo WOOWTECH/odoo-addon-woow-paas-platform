@@ -148,7 +148,8 @@ class TestTailscaleSeed(TransactionCase):
         values = self.env['woow_paas_platform.cloud_service']._apply_plan_spec_overlay(
             {}, self._tpl(), plan)
         self.assertEqual(values['resources']['limits']['memory'], '512Mi')
-        self.assertEqual(values['resources']['requests']['memory'], '512Mi')
+        # #1637：requests 取 limits 的 50%（下限 128Mi）。
+        self.assertEqual(values['resources']['requests']['memory'], '256Mi')
         self.assertEqual(values['persistence']['size'], '1Gi')
 
     def test_plans_linked_and_priced(self):

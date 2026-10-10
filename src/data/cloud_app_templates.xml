@@ -2015,14 +2015,14 @@
         <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Omnigent</field>
             <field name="slug">omnigent</field>
-            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。方案 4 vCPU／8 GB RAM（伺服器約 1 vCPU／1 GB，其餘給雲端工作機；單一工作階段最多 3 vCPU／6 GB）／5 GB 磁碟</field>
+            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。方案 4 vCPU／8 GB RAM（伺服器 1 vCPU／1 GB，其餘 3 vCPU／7 GB 給雲端工作機：單一工作階段最多用到這麼多）／5 GB 磁碟</field>
             <field name="full_description">Omnigent 雲端指揮中心：一個網頁管理多種 AI 代理（Claude Code、Codex、pi 等）
                 的工作階段，對話紀錄、設定與上傳檔案保存在你的持久磁碟上。**雲端工作機**：每開一個
                 工作階段，平台自動開一台隔離的工作機。**工作機上的檔案是暫存的**：工作機最長存活
                 7 天，遇到節點維護、資源不足或重新喚醒工作階段時會換一台全新的工作機——對話紀錄會
                 保留，但工作機裡的檔案不會，請把程式碼推到 Git 或下載重要檔案。**資源**：方案的
-                4 vCPU／8 GB 是以「伺服器（約 1 vCPU／1 GB）＋雲端工作機（3 vCPU／6 GB）」規劃，
-                單一工作階段最多使用 3 vCPU／6 GB；同時開多個工作階段時會與同工作區的其他服務
+                4 vCPU／8 GB ＝「伺服器（1 vCPU／1 GB）＋雲端工作機（3 vCPU／7 GB）」，
+                單一工作階段最多使用 3 vCPU／7 GB；同時開多個工作階段時會與同工作區的其他服務
                 共用資源額度，額度不足時新的工作機可能開不起來。
                 **模型金鑰自備**：雲端工作機要在服務設定填入
                 OpenRouter API Key（pi 與 Claude Code 皆可用）或 Anthropic API Key（Claude Code 優先使用）
@@ -2052,6 +2052,13 @@
                 ]}</field>
             <field name="default_port">8000</field>
             <field name="ingress_enabled" eval="True"/>
+            <!-- #1637（資源稽核 2026-10-10：「賣 4 vCPU／8GB，實際 server 只有 0.95 核／1G」）：方案的
+                 cs_vcpu／cs_ram_gb 以前寫到 chart 不讀的頂層 resources（死鍵，同 #1532）。chart 0.1.6／
+                 0.1.7 的容器：server（250m／512Mi → 950m／1Gi）＋runner-gc sidecar（10m／64Mi → 50m／128Mi）
+                 ＋webui 一次性 init；llm-proxy（nginx 10m／32Mi → 200m／64Mi，填了金鑰才有）；每個雲端工作
+                 階段一個 runner Job（host，chart 預設 500m／1Gi → 3／6Gi）。現在方案寫進 runner.resources
+                 的 limits＝方案 − 伺服器 1 vCPU／1 GB（_PLAN_SPEC_VALUE_PATHS 的 reserve）＝3 vCPU／7Gi，
+                 伺服器維持 chart 預設；runner 的 requests 是每個工作階段在工作區 quota 的保留量，刻意不跟方案。 -->
             <field name="min_vcpu">4</field>
             <field name="min_ram_gb">8.0</field>
             <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：PVC 10Gi → 5Gi（方案 cs_storage_gb

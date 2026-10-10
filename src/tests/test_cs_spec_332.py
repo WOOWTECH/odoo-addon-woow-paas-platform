@@ -143,8 +143,10 @@ class TestPlanSpecOverlay(TransactionCase):
         plan = self.env.ref('woow_paas_platform.plan_odoo_t3_monthly')
         base = self._base_values()
         out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, plan)
-        self.assertEqual(out['resources']['requests']['cpu'], '3')
-        self.assertEqual(out['resources']['requests']['memory'], '4Gi')
+        # #1637：limits＝方案（3 vCPU／4 GB）、requests 另算（CPU 25%；記憶體 max(50%, Odoo 實測峰值 2Gi)）。
+        self.assertEqual(out['resources']['limits'], {'cpu': '3', 'memory': '4Gi'})
+        self.assertEqual(out['resources']['requests']['cpu'], '750m')
+        self.assertEqual(out['resources']['requests']['memory'], '2Gi')
         # #1637：cs_storage_gb 30 是整台總量＝資料 10＋PostgreSQL 4（固定）＋備份 16。
         self.assertEqual(out['persistence']['size'], '10Gi')
         self.assertEqual(out['backup']['persistence']['size'], '16Gi')
@@ -160,8 +162,10 @@ class TestPlanSpecOverlay(TransactionCase):
         out = Svc._apply_plan_spec_overlay(base, tpl, plan)
         ram_bytes = int(4.0 * 1024 ** 3)
         self.assertEqual(out['conf']['workers'], 5, '#1637 容量研究：T3 workers 4 → 5')
-        self.assertEqual(out['conf']['limitMemoryHard'], int(ram_bytes * 0.85 / 5))
-        self.assertEqual(out['conf']['limitMemorySoft'], int(ram_bytes * 0.70 / 5))
+        # #1637：limit_memory_* 比的是 VMS，交給 chart 的 tenant 預設（None＝chart 預設 2／2.5 GiB）。
+        self.assertIsNone(out['conf']['limitMemoryHard'])
+        self.assertIsNone(out['conf']['limitMemorySoft'])
+        self.assertTrue(ram_bytes)
         self.assertNotIn('customPostInitScripts', out,
                          'woow-odoo tenant schema 拒收 Bitnami 的 customPostInitScripts')
 
@@ -196,7 +200,8 @@ class TestPlanSpecOverlay(TransactionCase):
         plan = self.env.ref('woow_paas_platform.plan_n8n_t3_monthly')
         base = json.loads(tpl.helm_default_values)
         out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, plan)
-        self.assertEqual(out['main']['resources']['requests']['cpu'], '2')
+        self.assertEqual(out['main']['resources']['limits']['cpu'], '2')
+        self.assertEqual(out['main']['resources']['requests']['cpu'], '500m')
         self.assertNotIn('resources', out)
         self.assertEqual(
             out.get('customPostInitScripts'), base.get('customPostInitScripts'))
@@ -307,14 +312,15 @@ class TestOverlayLandsInStoredHelmValues(HttpCase):
             '下面的規格斷言不具鑑別力')
 
         # 核心：plan 的 cs_* 必須落進要交給 Helm 的那份 values
-        for scope in ('requests', 'limits'):
+        # #1637：limits＝方案；requests 另算（3 核 → 750m、4 GB → 2Gi），也與 base 的 1／1Gi 不同。
+        for scope, cpu, memory in (('limits', '3', '4Gi'), ('requests', '750m', '2Gi')):
             self.assertEqual(
-                stored['resources'][scope]['cpu'], '3',
+                stored['resources'][scope]['cpu'], cpu,
                 'resources.%s.cpu 仍是 template base 的 1 ⇒ overlay 沒接進'
                 ' _create_service（cs_vcpu=3）' % scope)
             self.assertEqual(
-                stored['resources'][scope]['memory'], '4Gi',
-                'resources.%s.memory 仍是 template base 的 1Gi ⇒ overlay 沒接進'
+                stored['resources'][scope]['memory'], memory,
+                'resources.%s.memory 不是預期值 ⇒ overlay 沒接進'
                 ' _create_service（cs_ram_gb=4.0）' % scope)
         self.assertEqual(
             stored['persistence']['size'], '40Gi',

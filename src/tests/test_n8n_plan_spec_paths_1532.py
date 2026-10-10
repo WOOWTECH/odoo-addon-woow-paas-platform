@@ -23,6 +23,8 @@ from odoo.tests import tagged
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from odoo.addons.woow_paas_platform.models.cloud_service import (
+    _plan_cpu_request, _plan_memory_request)
 from .test_change_plan_reapply_1158 import _ChangePlanFixture
 
 GIB = 1024 ** 3
@@ -70,8 +72,10 @@ class TestN8nPlanOverlayPaths1532(TransactionCase):
                 plan, out = self._overlay(xmlid)
                 cpu = str(plan.cs_vcpu)
                 mem = '%sGi' % int(plan.cs_ram_gb)
+                # #1637：limits＝方案、requests 另算（CPU 25%；記憶體 max(50%, n8n 實測峰值 1Gi)）。
                 self.assertEqual(out['main']['resources'], {
-                    'requests': {'cpu': cpu, 'memory': mem},
+                    'requests': {'cpu': _plan_cpu_request(plan.cs_vcpu),
+                                 'memory': _plan_memory_request(plan.cs_ram_gb, 'n8n')},
                     'limits': {'cpu': cpu, 'memory': mem},
                 })
                 self.assertEqual(out['main']['persistence']['size'],
@@ -202,7 +206,7 @@ class TestN8nChangePlan1532(_N8nChangePlanFixture, TransactionCase):
             (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb),
             (2, 4.0, 40))
         sent = client.upgrade_release.call_args.kwargs['values']
-        self.assertEqual(sent['main']['resources']['requests'], {'cpu': '2', 'memory': '4Gi'})
+        self.assertEqual(sent['main']['resources']['requests'], {'cpu': '500m', 'memory': '2Gi'})
         self.assertEqual(sent['main']['persistence']['size'], '40Gi')
         self.assertNotIn('resources', sent)
         self.assertNotIn('persistence', sent)
@@ -246,7 +250,8 @@ class TestN8nChangePlan1532(_N8nChangePlanFixture, TransactionCase):
         _owner, svc = self._legacy_service('legacy-asm')
         assembled = svc._assemble_deploy_values()['values']
         self.assertEqual(assembled['main']['persistence']['size'], '10Gi')
-        self.assertEqual(assembled['main']['resources']['requests'], {'cpu': '1', 'memory': '1Gi'})
+        self.assertEqual(assembled['main']['resources']['requests'],
+                         {'cpu': '250m', 'memory': '1Gi'})
         self.assertNotIn('resources', assembled)
         self.assertNotIn('persistence', assembled)
 
