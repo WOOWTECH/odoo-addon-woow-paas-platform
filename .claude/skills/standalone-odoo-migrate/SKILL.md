@@ -15,7 +15,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 
 | 段 | 執行者 | 交付物 |
 |---|---|---|
-| 來源 ns（standalone 站，不在白名單） | woow-machines-operator（WMO） | `scripts/source/` ＋ `scripts/odoo_inspect.py`，連同指令交給 WMO；收回 JSON |
+| 來源 ns（standalone 站，不在白名單） | woow-machines-operator（WMO） | `scripts/source/` ＋ `scripts/odoo_inspect.py`、`scripts/addons_unpack.py`，連同指令交給 WMO；收回 JSON 與導出的 addon 目錄 |
 | 目標（`dev-sandbox-*`、`paas-ws-stg-*`、`paas-ws-*`） | 本 repo agent | prod 寫入每一步都等人工放行 |
 | paas-odoo-ci PR merge、prod image `/approve` | 人 | agent 只開 PR |
 
@@ -38,9 +38,18 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
    與 `.fs`（filestore 逐檔 sha256），跟 dump 一起交回。目標還原後在目標端產同格式的兩個檔，用
    `scripts/fingerprint_diff.py --stage restore` 比對；升級閘跑完 `-u all` 後再以 `--stage upgrade` 比一次。
    完成條件：`restore` 階段 exit 0（逐位元一致）；`upgrade` 階段 exit 0，且「預期內的變動」逐條看過。
-5. **addon 進 image**（人＋paas-odoo-ci）：步驟 3 的清單開成 paas-odoo-ci PR，merge 並 build 出新 cloud-odoo 後，
-   目標服務改用這顆 image，回到步驟 2 重比到 `READY`。data_dir 的 addon 也要進 image：升級閘只讀 image 的
-   `addons_path`，不讀 data_dir。完成條件：目標 image 的盤點涵蓋來源所有已安裝模組。
+5. **addon 進 image**（WMO 導出、agent 開 PR、人 merge 與 `/approve`）：
+   - 導出原始碼（WMO）：`scripts/source/export-addons.sh --inventory <步驟 1 的盤點檔> --out-dir <新目錄>`。唯讀 exec，
+     逐模組對盤點檔驗內容 hash；完成條件：exit 0，拿到 `<out-dir>/addons/` 與 `addons-export.json`。原始碼是客戶的
+     程式碼，留在本機交接，不貼進 issue／PR 留言。
+   - paas-odoo-ci PR（agent）：以步驟 3 的報告為準——`NEED_IMPORT` 的模組從 `<out-dir>/addons/` 複製進 `addons/`，
+     `NEED_IMPORT`＋`NEED_LIST` 加進 `config/cloud-addons.list`；`scripts/check-addon-lists.sh` 要求 `addons/` 與
+     `config/paas-addons.list` 完全相等，所以新目錄也要進那份清單（⇒ 會一起進平台自用的 paas-odoo image）。
+     pip：`requirements-cloud.txt` 由 CI 從清單內模組 manifest 的 `external_dependencies` 產生，沒宣告的套件進不了
+     image ⇒ 缺口補進用到它的模組 manifest（補了以後該模組重比時是 `DIVERGED`，PR 描述註明只差這一處）。
+     `addons-export.json` 裡 `symlinks_outside` 非空的模組先處理連結。`DIVERGED` 與注意事項寫進 PR 描述給人裁決。
+   - build 出新 cloud-odoo 後，目標服務改用這顆 image，回到步驟 2 重比到 `READY`。data_dir 的 addon 也要進 image：
+     升級閘只讀 image 的 `addons_path`，不讀 data_dir。完成條件：目標 image 的盤點涵蓋來源所有已安裝模組。
 6. **搬運**：目標端 `scripts/target/receive.sh open`（agent）印出 `--url` 並寫出 token 檔 → 兩者交給 WMO 跑
    `scripts/source/export.sh`（預設凍結：來源 odoo 先 scale 0；`--live` 只給彩排）→ `receive.sh close`。
    完成條件：`export-<ns>-<UTC>.json` 每個檔的 sha256 都跟 receiver 回報一致（export.sh 失敗即 exit 3）。
