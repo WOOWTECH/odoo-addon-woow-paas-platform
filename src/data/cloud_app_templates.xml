@@ -2207,15 +2207,20 @@
              NetworkPolicy 擋下。test_nextcloud_seed.test_hidden_until_mirror_lands 守線同 EMQX。
              ⚠ 憑證形態 app_managed：NEXTCLOUD_ADMIN_* 只在首次 occ maintenance:install
              時被吃掉，之後密碼活在 Nextcloud 自己的資料庫。
-             ⚠ min_storage_gb=96 ＝ data 80 ＋ html 5 ＋ postgres 10 ＋ redis 1；
-             方案 cs_storage_gb=80 只決定使用者檔案那顆（#332 overlay）。
+             ⚠ 整台磁碟 20G（#1634，使用者 2026-10-10 決定；原 96＝80＋5＋10＋1）：
+             min_storage_gb=20 ＝ data 13 ＋ html 3 ＋ postgres 3 ＋ redis 1。方案 cs_storage_gb=20
+             是整台總量：CloudService._overlay_plan_storage 寫進 persistence.size 的是
+             20 − html − postgres − redis（_PLAN_STORAGE_SPLIT），四顆加總恆等於方案總量。
+             分配依沙盒實測（dev-sandbox-nc20g，chart 0.1.7）：html 用 976M（程式 839M＋Calendar／
+             Contacts／Account migration）→ 3Gi 留升級與租戶自裝 App 的餘裕；PG 3 萬檔後 101M，
+             3Gi 主要留給 WAL（max_wal_size 1GB）；Redis 只放鎖與快取 → 1Gi。
              ⚠ 公開網址由 CloudService._inject_allowed_origins 以 slug `nextcloud` 注入
              nextcloud.publicUrl —— 沒有它 Nextcloud 會以「不信任的網域」拒絕整站。 -->
         <record id="cloud_app_nextcloud" model="woow_paas_platform.cloud_app_template">
             <field name="name">Nextcloud</field>
             <field name="slug">nextcloud</field>
-            <field name="description">自架雲端硬碟與協作空間：檔案同步、分享連結、行事曆與聯絡人，資料存在你的持久磁碟。2 vCPU／4 GB RAM／96 GB 磁碟</field>
-            <field name="full_description">Nextcloud 雲端硬碟：瀏覽器與桌面／手機客戶端皆可用，檔案存在你自己的持久磁碟（使用者資料 80 GB），
+            <field name="description">自架雲端硬碟與協作空間：檔案同步、分享連結、行事曆與聯絡人，資料存在你的持久磁碟。2 vCPU／4 GB RAM／20 GB 磁碟（含使用者檔案 13 GB）</field>
+            <field name="full_description">Nextcloud 雲端硬碟：瀏覽器與桌面／手機客戶端皆可用，檔案存在你自己的持久磁碟：整台 20 GB，其中使用者檔案 13 GB，其餘給程式與 App（3 GB）、資料庫（3 GB）和快取（1 GB），
                 內含分享連結、版本歷史、Markdown 線上編輯（Text），並預先安裝行事曆（Calendar）與聯絡人（Contacts）——
                 開通後數分鐘內在背景裝好，可用 CalDAV／CardDAV 與手機同步。可自行從 Nextcloud 應用商店加裝擴充；
                 較大的 App 下載較慢，網頁安裝若逾時請稍後重試。
@@ -2244,13 +2249,13 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"nextcloud":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud","tag":"20261002.0258@sha256:fc04168b172e09d9b9bc7665476a77898634fe2833f0a320366fb9eb0db491db"},"resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}},"redis":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/redis","tag":"20261002.0258@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"},"persistence":{"size":"1Gi"}},"postgresql":{"persistence":{"size":"10Gi"}},"persistence":{"html":{"size":"5Gi"},"data":{"size":"80Gi"}},"service":{"port":80,"targetPort":80}}</field>
+            <field name="helm_default_values">{"nextcloud":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud","tag":"20261002.0258@sha256:fc04168b172e09d9b9bc7665476a77898634fe2833f0a320366fb9eb0db491db"},"resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}},"redis":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/redis","tag":"20261002.0258@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"},"persistence":{"size":"1Gi"}},"postgresql":{"persistence":{"size":"3Gi"}},"persistence":{"html":{"size":"3Gi"},"data":{"size":"13Gi"}},"service":{"port":80,"targetPort":80}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "nextcloud.phpMemoryLimit", "label": "PHP 記憶體上限", "type": "select", "default": "512M", "options": ["512M", "1G", "2G"], "description": "大量縮圖或線上文件編輯時可調高；不得超過方案的記憶體規格"}]}</field>
             <field name="default_port">80</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">2</field>
             <field name="min_ram_gb">4.0</field>
-            <field name="min_storage_gb">96</field>
+            <field name="min_storage_gb">20</field>
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>

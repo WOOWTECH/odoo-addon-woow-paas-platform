@@ -14,8 +14,10 @@ NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST 由 nextcloud.publicUrl 衍生）。
    之後密碼活在 Nextcloud 自己的資料庫 ⇒ 平台只供給初始值、不得宣稱可重設。
 3. **image 不得用 ``stable``**：該 tag 會跨大版本，而 Nextcloud 只支援逐版升級
    ——pod 一重啟落到下一個大版本就卡在維護模式。
-4. **規格對帳**：2 vCPU / 4 Gi / 96 Gi ——四顆 PVC 加總 ＝ min_storage_gb，
-   plan 的 cs_storage_gb 只對應使用者檔案那顆（#332 overlay 寫 ``persistence.size``）。
+4. **規格對帳**：2 vCPU / 4 Gi / 20 Gi（#1634，使用者 2026-10-10：整台 20G）——四顆 PVC
+   加總 ＝ min_storage_gb ＝ 方案 cs_storage_gb（整台總量；#332 overlay 寫進
+   ``persistence.size`` 的是扣掉 html／PG／Redis 後的使用者檔案大小，見
+   test_nextcloud_storage_20g_1634）。
 """
 import json
 import re
@@ -115,7 +117,7 @@ class TestNextcloudSeed(TransactionCase):
         v = self._values()
         self.assertEqual(tpl.min_vcpu, 2)
         self.assertEqual(tpl.min_ram_gb, 4.0)
-        self.assertEqual(tpl.min_storage_gb, 96)
+        self.assertEqual(tpl.min_storage_gb, 20, '#1634：整台 20G')
         sizes = {
             'data': int(v['persistence']['data']['size'].rstrip('Gi')),
             'html': int(v['persistence']['html']['size'].rstrip('Gi')),
@@ -127,8 +129,9 @@ class TestNextcloudSeed(TransactionCase):
         for plan in tpl.subscription_plan_ids:
             self.assertEqual(plan.cs_vcpu, tpl.min_vcpu)
             self.assertEqual(plan.cs_ram_gb, tpl.min_ram_gb)
-            self.assertEqual(plan.cs_storage_gb, sizes['data'],
-                             'cs_storage_gb 對應使用者檔案那顆（#332 overlay）')
+            self.assertEqual(plan.cs_storage_gb, tpl.min_storage_gb,
+                             '#1634：cs_storage_gb 是整台總量（overlay 扣掉固定開銷才寫進'
+                             '使用者檔案那顆）')
 
     def test_plans_linked_and_priced(self):
         tpl = self._tpl()
