@@ -4,7 +4,7 @@
 1	src/controllers/agent_runtime_skill.py
 1	src/controllers/agent_runtime_webhook.py
 42	src/controllers/ai_assistant.py
-27	src/controllers/billing.py
+28	src/controllers/billing.py
 7	src/controllers/dashboard.py
 2	src/controllers/ecpg_callback.py
 4	src/controllers/ha_api.py
