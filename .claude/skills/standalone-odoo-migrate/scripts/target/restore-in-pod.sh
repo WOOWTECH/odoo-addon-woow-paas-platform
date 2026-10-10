@@ -7,22 +7,28 @@
 #
 # env：SET_DIR（/incoming/<set>）、ODOO_DB_NAME、PGHOST、PGPORT、PGSUPERUSER_PASSWORD、ODOO_DB_PASSWORD、DATA_ROOT、
 #      FINGERPRINT_SQL、BUSINESS_SQL、REPLACE_DB（＝ODOO_DB_NAME 才允許 DROP 既有 DB）、WRITE_MARKER（1／0）
+#      PHASE：all（預設）／restore（步驟 1～7）／finalize（步驟 7a～8）。彩排中和時 restore.sh 把一個 Job 拆成
+#        restore →（release 的 odoo image 產官方中和 SQL）→ finalize 三個容器，所以要能分段跑。
+#      NEUTRALIZE（1／0）、NEUTRALIZE_SQL、NEUTRALIZE_ASSERT_SQL、NEUTRALIZE_EXTRA_SQL（選配）：見步驟 7a
 # 輸入（export.sh 經 receiver 送進來）：db.dump、filestore.tar、manifest.json、source.fp、source.fs、SHA256SUMS
 # 輸出：SET_DIR/target.fp、SET_DIR/target.fs、SET_DIR/baseline.bfp（客戶資料列基準，verify.sh --stage upgrade 用）、
-#      log 最後一行 RESTORE-DONE
+#      中和時另有 SET_DIR/neutralize-report.txt 與空檔 SET_DIR/neutralized（標記這組是彩排）、
+#      log 最後一行 RESTORE-DONE（PHASE=restore 時是 RESTORE-PHASE-RESTORE-DONE）
 # 每一步失敗都 exit 1、不寫 marker；odoo 沒有 marker 開機時升級閘會 exit 3，不會碰資料。
 # WRITE_MARKER=1 另寫 woow_paas_platform.tenant_localized，擋掉平台部署後初始化的台灣在地化（見步驟 8b）。
 set -euo pipefail
 die() { echo "RESTORE-FAIL: $*" >&2; exit 1; }
 : "${SET_DIR:?}" "${ODOO_DB_NAME:?}" "${PGHOST:?}" "${PGSUPERUSER_PASSWORD:?}" "${ODOO_DB_PASSWORD:?}" "${DATA_ROOT:?}" "${FINGERPRINT_SQL:?}" "${BUSINESS_SQL:?}"
 export PGPORT="${PGPORT:-5432}" LC_ALL=C
-REPLACE_DB=${REPLACE_DB:-} WRITE_MARKER=${WRITE_MARKER:-1}
+REPLACE_DB=${REPLACE_DB:-} WRITE_MARKER=${WRITE_MARKER:-1} PHASE=${PHASE:-all} NEUTRALIZE=${NEUTRALIZE:-0}
+case "$PHASE" in all|restore|finalize) ;; *) die "PHASE='${PHASE}' 不合法" ;; esac
 sup() { PGPASSWORD="$PGSUPERUSER_PASSWORD" psql -h "$PGHOST" -U postgres -X -q -v ON_ERROR_STOP=1 -tA "$@"; }
 odoo_sql() { PGPASSWORD="$ODOO_DB_PASSWORD" psql -h "$PGHOST" -U odoo -d "$ODOO_DB_NAME" -X -q -v ON_ERROR_STOP=1 -tA "$@"; }
 for _i in $(seq 1 60); do pg_isready -q -h "$PGHOST" -p "$PGPORT" -t 2 && break; sleep 1; done
 pg_isready -q -h "$PGHOST" -p "$PGPORT" -t 2 || die "連不到 ${PGHOST}:${PGPORT}"
 cd "$SET_DIR"
 
+if [[ "$PHASE" != finalize ]]; then
 # 1. 完整性
 [[ -f SHA256SUMS ]] || die "缺 SHA256SUMS"
 for f in db.dump filestore.tar manifest.json source.fp source.fs; do
@@ -33,6 +39,7 @@ sha256sum --strict -c SHA256SUMS || die "sha256 不符（傳輸截斷或檔案�
 pg_restore -f /dev/null db.dump || die "pg_restore 全讀失敗（archive 損毀）"
 if tar -tf filestore.tar | grep -E '(^/|(^|/)\.\.(/|$))' >/dev/null; then die "filestore.tar 含絕對路徑或 .."; fi
 echo "RESTORE integrity ok: $(stat -c %s db.dump) bytes dump, $(tar -tf filestore.tar | grep -vc '/$') files in filestore.tar"
+fi
 
 # 2. manifest（postgres image 沒有 jq／python ⇒ 用 psql 解析 JSON）
 MANIFEST="$(cat manifest.json)"
@@ -63,8 +70,9 @@ if [[ "$WRITE_MARKER" == 1 ]]; then
 fi
 echo "RESTORE manifest ok: ${ENC} ${COLL}/${CTYPE} extensions=[${EXTS}] source=${SRC_DIGEST:-?} core=${SRC_CORE:-?}"
 
-# 3. 既有 DB：chart 首裝會先建一個空庫（-i base），只有 REPLACE_DB 明確指名時才取代
 DEST="${DATA_ROOT}/filestore/${ODOO_DB_NAME}"
+if [[ "$PHASE" != finalize ]]; then
+# 3. 既有 DB：chart 首裝會先建一個空庫（-i base），只有 REPLACE_DB 明確指名時才取代
 EXISTS=$(sup -d postgres -v db="$ODOO_DB_NAME" <<'SQL'
 SELECT count(*) FROM pg_database WHERE datname = :'db';
 SQL
@@ -115,6 +123,38 @@ if ! diff source.fs target.fs > /tmp/fs.diff; then
     die "filestore 指紋不一致：不寫 marker"
 fi
 echo "RESTORE fingerprint ok: $(grep -c '^table|' target.fp) tables, $(grep -c '^seq|' target.fp) sequences, $(grep -c . target.fs) files identical"
+rm -f neutralized neutralize-report.txt neutralize-official.sql rehearsal.pwhash   # 重新還原過：上一輪彩排的產物作廢
+fi
+if [[ "$PHASE" == restore ]]; then
+    echo "RESTORE-PHASE-RESTORE-DONE"
+    exit 0
+fi
+
+# 7a. 彩排中和（只給彩排；正式切換不走這段）。此刻資料已證明與來源逐位元相同，中和之後才取客戶資料列基準，
+#     所以升級後的比對同時證明「中和過的設定沒有被 -u all 改回去」。
+#     官方 SQL＝release 的 odoo image 跑 `odoo neutralize --stdout`（依已安裝模組組出，restore.sh 的中間容器產生）；
+#     補充 SQL 見 neutralize-supplement.sql 檔頭。全部在同一個交易內；之後跑斷言，有任何 nfail 就停在這裡不寫 marker。
+if [[ "$NEUTRALIZE" == 1 ]]; then
+    : "${NEUTRALIZE_SQL:?}" "${NEUTRALIZE_ASSERT_SQL:?}"
+    [[ -s neutralize-official.sql ]] || die "缺 neutralize-official.sql（odoo neutralize --stdout 的輸出）"
+    [[ -s rehearsal.pwhash ]] || die "缺 rehearsal.pwhash（彩排密碼的 hash）"
+    PWHASH="$(cat rehearsal.pwhash)"
+    [[ "$PWHASH" == '$pbkdf2-sha512$'* ]] || die "rehearsal.pwhash 不是 pbkdf2_sha512 hash"
+    {
+        echo 'BEGIN;'
+        grep -vxE '(BEGIN|COMMIT);' neutralize-official.sql
+        cat "$NEUTRALIZE_SQL"
+        if [[ -n "${NEUTRALIZE_EXTRA_SQL:-}" ]]; then cat "$NEUTRALIZE_EXTRA_SQL"; fi
+        echo 'COMMIT;'
+    } > /tmp/neutralize.sql
+    odoo_sql -v pwhash="$PWHASH" -f /tmp/neutralize.sql || die "中和 SQL 失敗（交易已回滾，資料仍與來源相同）"
+    odoo_sql -v pwhash="$PWHASH" -f "$NEUTRALIZE_ASSERT_SQL" > neutralize-report.txt || die "中和斷言 SQL 執行失敗"
+    rm -f rehearsal.pwhash /tmp/neutralize.sql
+    echo "RESTORE neutralize report："; sed 's/^/  /' neutralize-report.txt
+    if grep -q '^nfail|' neutralize-report.txt; then die "中和斷言未通過（見上方 nfail 行）：不寫 marker"; fi
+    : > neutralized
+    echo "RESTORE neutralized ok: 官方 SQL $(grep -c . neutralize-official.sql) 行、$(grep -c '^nscan|' neutralize-report.txt || true) 個欄位待人檢查（nscan）"
+fi
 
 # 7b. 客戶資料列基準：此刻的資料已證明與來源相同；升級閘跑完 -u all 後 verify.sh 拿它比對（marker 還沒寫，不會算進基準）
 sup -d "$ODOO_DB_NAME" -f "$BUSINESS_SQL" > baseline.bfp

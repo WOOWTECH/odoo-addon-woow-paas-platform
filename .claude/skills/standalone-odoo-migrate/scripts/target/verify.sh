@@ -14,6 +14,8 @@
 #   啟動後新增的列、registry 表列為預期內。set 裡沒有 baseline.bfp（舊版 restore）時退回整表比對（只容許 metadata 表）。
 #   filestore：同時取目標 DB 仍引用的 store_fname（upgraded.refs）——仍被引用的檔不能少；已無引用而被 Odoo 回收的
 #   來源檔（模組附件換了內容）列為預期內。
+#   彩排（restore.sh --neutralize，set 裡有 neutralized 標記）：restore 階段比的仍是中和**之前**取的指紋；
+#   upgrade 階段另外重跑 neutralize-assert.sql——-u all 或新版模組若把排程、寄信、金流等開回來，這裡不通過。
 # --cleanup：比對通過後刪跑完的 restore Job 與 incoming PVC（含客戶資料的 dump）。
 # 取回的檔案放 --workdir（預設 ./verify-<set>）；檔案都小（指紋與清單），用 kubectl exec cat 取回不會撞截斷。
 # exit：0 通過、1 不通過、2 參數或前置條件不符、3 pod 失敗
@@ -66,6 +68,7 @@ if "${K[@]}" get pod "$POD" >/dev/null 2>&1; then
 fi
 "${K[@]}" create configmap "$POD" --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql" \
   --from-file=fingerprint_business.sql="$SCRIPT_DIR/../fingerprint_business.sql" \
+  --from-file=neutralize-assert.sql="$SCRIPT_DIR/neutralize-assert.sql" \
   --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 jq -n --arg pod "$POD" --arg image "$pg_image" --argjson ps "$pull_secrets" --argjson node "$node" \
   --arg rel "$RELEASE" --arg pvc "$PVC" --arg stage "$STAGE" '{
@@ -97,6 +100,10 @@ if [[ $STAGE == upgrade ]]; then
     fi
     psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 \
       -c 'SELECT DISTINCT store_fname FROM ir_attachment WHERE store_fname IS NOT NULL ORDER BY 1' > $S/upgraded.refs
+    if [[ -e $S/neutralized ]]; then
+      psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 \
+        -f /opt/verify/neutralize-assert.sql > $S/neutralize-upgraded.txt
+    fi
     cd /var/lib/odoo/filestore/'$db' && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum > $S/upgraded.fs" \
     || die 3 "fingerprint in verify pod failed"
   tgt=upgraded
@@ -119,6 +126,14 @@ if [[ $STAGE == upgrade ]]; then
     echo "note: $S/baseline.bfp missing — falling back to whole-table comparison" >&2
   fi
 fi
+neutralized=0
+if "${K[@]}" exec "$POD" -- test -e "$S/neutralized"; then
+  neutralized=1
+  if [[ $STAGE == upgrade ]]; then
+    "${K[@]}" exec "$POD" -- cat "$S/neutralize-upgraded.txt" > "$WORKDIR/neutralize-upgraded.txt" \
+      || die 3 "cannot read $S/neutralize-upgraded.txt"
+  fi
+fi
 "${K[@]}" delete configmap "$POD" --ignore-not-found >/dev/null
 
 rc=0
@@ -126,6 +141,21 @@ python3 "$SCRIPT_DIR/../fingerprint_diff.py" --stage "$STAGE" \
   --source-db "$WORKDIR/source.fp" --target-db "$WORKDIR/$tgt.fp" \
   --source-fs "$WORKDIR/source.fs" --target-fs "$WORKDIR/$tgt.fs" "${business[@]}" \
   --json "$WORKDIR/diff-$STAGE.json" || rc=$?
+if (( neutralized )); then
+  echo
+  if [[ $STAGE == restore ]]; then
+    echo "彩排（已中和）：上面比的是中和之前取的指紋；現在資料庫裡的排程、寄信、金流、登入密碼等已被改掉。"
+  else
+    fails=$(grep -c '^nfail|' "$WORKDIR/neutralize-upgraded.txt" || true)
+    if (( fails > 0 )); then
+      echo "彩排中和斷言：不通過（升級或開機後有 $fails 項被開回來）——先把 web 停掉再處理："
+      grep '^nfail|' "$WORKDIR/neutralize-upgraded.txt" | awk -F'|' '{printf "- %s：%s\n", $2, $3}'
+      (( rc != 0 )) || rc=1
+    else
+      echo "彩排中和斷言：通過（升級與開機後仍然是中和狀態）"
+    fi
+  fi
+fi
 if (( rc == 0 && CLEANUP )); then
   cleanup_pod
   "${K[@]}" wait --for=delete "pod/$POD" --timeout=120s >/dev/null 2>&1 || true
