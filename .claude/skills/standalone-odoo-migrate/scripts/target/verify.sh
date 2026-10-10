@@ -14,7 +14,7 @@
 #   啟動後新增的列、registry 表列為預期內。set 裡沒有 baseline.bfp（舊版 restore）時退回整表比對（只容許 metadata 表）。
 #   filestore：同時取目標 DB 仍引用的 store_fname（upgraded.refs）——仍被引用的檔不能少；已無引用而被 Odoo 回收的
 #   來源檔（模組附件換了內容）列為預期內。
-# --cleanup：比對通過後刪 incoming PVC（含客戶資料的 dump）。
+# --cleanup：比對通過後刪跑完的 restore Job 與 incoming PVC（含客戶資料的 dump）。
 # 取回的檔案放 --workdir（預設 ./verify-<set>）；檔案都小（指紋與清單），用 kubectl exec cat 取回不會撞截斷。
 # exit：0 通過、1 不通過、2 參數或前置條件不符、3 pod 失敗
 set -euo pipefail
@@ -129,6 +129,9 @@ python3 "$SCRIPT_DIR/../fingerprint_diff.py" --stage "$STAGE" \
 if (( rc == 0 && CLEANUP )); then
   cleanup_pod
   "${K[@]}" wait --for=delete "pod/$POD" --timeout=120s >/dev/null 2>&1 || true
+  # 跑完的 restore Job（ttl 一天）的 pod 還掛著 incoming PVC，不先刪掉 PVC 會一直卡在 Terminating（stg 實測）
+  "${K[@]}" delete job -l app.kubernetes.io/part-of=standalone-odoo-migrate,app.kubernetes.io/component=restore \
+    --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
   "${K[@]}" delete pvc "$PVC" --wait=false >/dev/null && echo "incoming PVC $PVC deleted" >&2
 fi
 exit "$rc"
