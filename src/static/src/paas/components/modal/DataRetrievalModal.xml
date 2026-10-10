@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.DataRetrievalModal">
+    <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_modal_sm o_woow_data_retrieval" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2 t-esc="title"/>
+          <button
+            class="o_woow_modal_close"
+            t-on-click="props.onClose"
+            t-att-disabled="state.busy">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <p class="o_woow_data_retrieval__service"><strong t-esc="props.serviceName"/></p>
+
+          <t t-if="state.loading">
+            <p>
+              <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+              <span>Loading...</span>
+            </p>
+          </t>
+
+          <!-- 剛開好：一次性帳密（只此一次）＋就緒狀態＋整包下載指令 -->
+          <t t-elif="credentials">
+            <p class="o_woow_hint o_woow_data_retrieval__warning" t-esc="saveNowText"/>
+            <t t-foreach="credentialRows" t-as="row" t-key="row.key">
+              <div class="o_woow_form_group">
+                <label><t t-esc="row.label"/></label>
+                <div class="o_woow_input_with_suffix">
+                  <input
+                    class="o_woow_input o_woow_input_readonly"
+                    type="text"
+                    t-att-value="row.value"
+                    readonly="readonly"/>
+                  <WoowButton
+                    variant="'secondary'"
+                    size="'sm'"
+                    onClick="() => this.copy(row.key, row.value)">
+                    <WoowIcon name="'content_copy'" size="16"/>
+                    <t t-if="state.copiedKey === row.key">Copied to clipboard</t>
+                    <t t-else="">Copy</t>
+                  </WoowButton>
+                </div>
+              </div>
+            </t>
+            <p t-if="session and session.expires_at">
+              <span t-esc="availableUntilLabel"/> <strong t-esc="formatTime(session.expires_at)"/>
+            </p>
+            <p class="o_woow_hint" t-esc="readinessText"/>
+            <t t-if="wgetCommand">
+              <p class="o_woow_hint" t-esc="wgetHint"/>
+              <pre class="o_woow_data_retrieval__command" t-esc="wgetCommand"/>
+            </t>
+          </t>
+
+          <!-- 已經有開著的入口（密碼不會再出現） -->
+          <t t-elif="session">
+            <p t-esc="activeText"/>
+            <div class="o_woow_data_retrieval__facts">
+              <div t-if="session.url">
+                <span t-esc="addressLabel"/>
+                <a t-att-href="session.url" target="_blank" rel="noopener noreferrer" t-esc="session.url"/>
+              </div>
+              <t t-foreach="sessionFacts" t-as="fact" t-key="fact.key">
+                <div>
+                  <span t-esc="fact.label"/>
+                  <strong t-esc="fact.value"/>
+                </div>
+              </t>
+            </div>
+            <p t-if="session.state === 'active'" class="o_woow_hint" t-esc="readinessText"/>
+            <p t-if="session.state === 'closing'" class="o_woow_hint">The link is closing.</p>
+          </t>
+
+          <!-- 可以開：說明＋確認 -->
+          <t t-elif="canOpen">
+            <p t-esc="introText"/>
+            <ul class="o_woow_data_retrieval__notes">
+              <t t-foreach="notes" t-as="note" t-key="note_index">
+                <li t-esc="note"/>
+              </t>
+            </ul>
+          </t>
+
+          <t t-else="">
+            <p t-esc="unavailableText"/>
+          </t>
+
+          <div t-if="state.error" class="o_woow_error_message">
+            <WoowIcon name="'error'" size="16"/>
+            <span t-esc="state.error"/>
+          </div>
+        </div>
+
+        <div class="o_woow_modal_footer">
+          <WoowButton
+            t-if="session and session.state === 'active'"
+            variant="'secondary'"
+            size="'md'"
+            onClick.bind="onCloseLink"
+            disabled="state.busy">
+            <WoowIcon name="'link_off'" size="18"/>
+            Close link now
+          </WoowButton>
+          <WoowButton
+            t-if="!credentials and canOpen"
+            variant="'primary'"
+            size="'md'"
+            onClick.bind="onOpen"
+            disabled="state.busy">
+            <t t-if="state.busy">
+              <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+              Opening...
+            </t>
+            <t t-else="">
+              <WoowIcon name="'download'" size="18"/>
+              Open download link
+            </t>
+          </WoowButton>
+          <WoowButton
+            variant="'secondary'"
+            size="'md'"
+            onClick="props.onClose"
+            disabled="state.busy">
+            <t t-if="credentials">I have saved them</t>
+            <t t-else="">Close</t>
+          </WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

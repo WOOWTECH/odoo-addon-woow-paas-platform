@@ -23,12 +23,15 @@ import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
 import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswordModal";
+import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
+import { serviceRetrievalEndpoint } from "../../services/data_retrieval";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { formatUserDate } from "../../utils/datetime_helpers";
 import { showProjects } from "../../core/platform_config";
+import { formatUserDateTime } from "../../utils/datetime_helpers";
 import {
     getInitFailureText,
     getStaleObservation,
@@ -74,6 +77,7 @@ export class ServiceDetailPage extends Component {
         OneTimeCredentialsModal,
         AdminCredentialsModal,
         ResetAdminPasswordModal,
+        DataRetrievalModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -105,6 +109,8 @@ export class ServiceDetailPage extends Component {
             showAdminCredentialsModal: false,
             // #1560：重設管理員密碼的確認框。
             showResetConfirmModal: false,
+            // #1540：停權後的限時唯讀取回入口。
+            showDataRetrievalModal: false,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -507,6 +513,44 @@ export class ServiceDetailPage extends Component {
             this.service.state === "running" &&
             this.service.template?.restart_supported !== false
         );
+    }
+
+    // #1540 停權後的限時唯讀取回入口
+    /**
+     * 「取回資料」按鈕：owner／admin，且後端說這台支援（範本有 profile）並且此刻可以開
+     * （停權中）或已經有開著的入口。判準全讀 payload 的 `data_retrieval`（後端
+     * `_data_retrieval_capability`），前端不自建 slug／狀態判準。
+     */
+    get canRetrieveData() {
+        const dr = this.service?.data_retrieval;
+        return this.canManageService && !!dr?.supported && (!!dr.available || !!dr.session);
+    }
+
+    get retrievalSession() {
+        return this.service?.data_retrieval?.session || null;
+    }
+
+    get retrievalBannerText() {
+        return _t("A temporary download link for this service's data is open until %s.",
+            formatUserDateTime(this.retrievalSession?.expires_at, {}, "-"));
+    }
+
+    get retrievalSuspendedHint() {
+        return _t("This service is suspended. You can open a temporary read-only link to download its files.");
+    }
+
+    get dataRetrievalEndpoint() {
+        return serviceRetrievalEndpoint(this.props.workspaceId, this.props.serviceId);
+    }
+
+    showDataRetrieval() {
+        this.state.showDataRetrievalModal = true;
+    }
+
+    hideDataRetrieval() {
+        // 視窗開著時輪詢暫停（isModalOpen）；關閉時重讀一次，讓提示與按鈕跟上開／關的結果。
+        this.state.showDataRetrievalModal = false;
+        this.loadService({ silent: true });
     }
 
     get showRestartButton() {

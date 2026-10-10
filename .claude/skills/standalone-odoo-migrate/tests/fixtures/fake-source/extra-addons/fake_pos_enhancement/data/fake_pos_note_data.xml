@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="fake_pos_note_seed" model="fake.pos.note">
+        <field name="name">seed note 種子</field>
+        <field name="body_md">**bold** _中文_</field>
+        <field name="amount">12.3456</field>
+    </record>
+</odoo>

@@ -83,3 +83,5 @@ from . import res_lang
 from . import platform_monitor
 # #1457：/woow、OAuth 頁面的安全標頭（只套本 addon 路徑）。
 from . import ir_http
+# #1540：停權／刪除後的限時唯讀資料取回入口（帳本＋session）。
+from . import data_retrieval

@@ -135,6 +135,33 @@
                     </t>
                 </section>
 
+                <!-- #1540：已刪除服務的保留資料（只有 owner／admin、且有資料時才出現）。 -->
+                <section t-if="canManageWorkspace and state.retainedData.length" class="o_woow_retained_data_section">
+                    <div class="o_woow_retained_data_section__header">
+                        <h2>Retained data of deleted services</h2>
+                        <p class="o_woow_hint" t-esc="retainedSectionIntro"/>
+                    </div>
+                    <div class="o_woow_retained_data_section__list">
+                        <t t-foreach="state.retainedData" t-as="row" t-key="row.id">
+                            <div class="o_woow_retained_data_section__row">
+                                <div class="o_woow_retained_data_section__meta">
+                                    <strong t-esc="row.name"/>
+                                    <span t-esc="row.template.name"/>
+                                    <span t-esc="retainedMeta(row)"/>
+                                    <span t-if="row.data_retrieval and row.data_retrieval.session" t-esc="retainedSessionText(row)"/>
+                                </div>
+                                <WoowButton
+                                    variant="'secondary'"
+                                    size="'sm'"
+                                    onClick="() => this.openRetainedRetrieval(row)">
+                                    <WoowIcon name="'download'" size="16"/>
+                                    Retrieve Data
+                                </WoowButton>
+                            </div>
+                        </t>
+                    </div>
+                </section>
+
                 <!-- Smart Home Section -->
                 <section class="o_woow_smart_homes_section">
                     <div class="o_woow_smart_homes_section_header">
@@ -315,6 +342,13 @@
                     </div>
                 </WoowCard>
             </t>
+
+            <DataRetrievalModal
+                t-if="state.retrievalTarget"
+                endpoint="retrievalEndpoint"
+                serviceName="state.retrievalTarget.name"
+                deleted="true"
+                onClose.bind="closeRetainedRetrieval"/>
         </div>
     </t>
 </templates>
