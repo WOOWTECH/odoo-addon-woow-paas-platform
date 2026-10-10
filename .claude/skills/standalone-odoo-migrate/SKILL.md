@@ -64,6 +64,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
      restore Job 要連 PG ⇒ 停權後 `kubectl scale sts/<release>-postgresql --replicas=1` 並等它 Ready。
    - restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫兩個標記：`upgrade_done`（來源 image
      digest＋core_date，讓 web 開機時升級閘自動跑 `-u all`）與 `tenant_localized`（擋掉平台的台灣在地化，見步驟 8）。
+   - **彩排**（來源還在營運）一律加 `--neutralize`，見下方「彩排與中和」。正式切換不加。
    完成條件：Job 印出 `RESTORE-DONE`，verify exit 0。
 8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
@@ -75,9 +76,30 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
      zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。要確認：第一次 verify 先不帶
      `--cleanup`，Redeploy 後再跑一次帶 `--cleanup` 的。
    - 匯入後管理員帳密是來源站的，平台存的那組不再適用；租戶可在服務頁按 Reset 重設（重設 `base.user_admin`、清掉 2FA）。
-   ⚠ web 一開回來 cron 就開始跑（寄信、外部整合）。來源沒凍結的彩排（`export.sh --live`）會讓兩邊同時對外動作，
-   彩排前先決定怎麼處理（#1604）。
+   ⚠ web 一開回來 cron 就開始跑（寄信、收信、金流、外部整合）。來源沒凍結的彩排（`export.sh --live`）不中和的話，
+   兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`。
 9. **cutover**（hostname、外部整合改指、來源下線）：尚未實作，設計與進度在 #1604。
+
+## 彩排與中和
+
+彩排＝來源站照常營運，用 `export.sh --live` 取一份資料到目標站走完步驟 6～8。目標站拿到的是真實資料與真實的對外設定，
+開機前必須中和：`restore.sh --replace-db --neutralize`。
+
+- **時機**：還原並與來源逐位元比對通過之後、取客戶資料列基準之前。所以 `verify.sh --stage restore` 證明的仍是「搬過來的
+  資料與來源相同」，`--stage upgrade` 證明「中和後的資料沒被升級動到」，並重跑一次中和斷言。
+- **官方 SQL**：Job 用 release 的 odoo image 跑 `odoo neutralize --stdout`，依已安裝模組組出——停用排程（autovacuum 除外）、
+  寄信主機換成假的、停用收信、金流供應商、webhook、網站網域等。
+- **補充 SQL**（`scripts/target/neutralize-supplement.sql`）：全部使用者的密碼換成彩排密碼、刪 API key 與 2FA；排程的
+  模組資料改 `noupdate`（`-u all` 不會把它開回來）；WoowTech addon 的對外整合（綠界發票換測試商店、綠界金流憑證、
+  POS 自助點餐的 Uber Direct 與出單代理）。
+- **斷言**（`scripts/target/neutralize-assert.sql`）：有任何一項沒中和（`nfail` 行）Job 就失敗、不寫 marker，Odoo 開不了機。
+- **要人看的清單**：Job log 與 `neutralize-report.txt` 的 `nscan` 行＝欄名像憑證、仍有值的欄位（只列表.欄與筆數）。
+  逐條判斷是不是對外憑證；是的話寫一段 SQL，用 `--extra-neutralize-sql <file>` 重跑還原。完成條件：`nscan` 逐條看過。
+- **登入**：彩排密碼在 Secret `standalone-odoo-rehearsal-login`（key `password`），所有原本有密碼的帳號共用；帳號名稱不變。
+  畫面上方會有 Odoo 的中和橫幅。
+- **限制**：目標站仍有平台給的對外網址；升級帶進來的新排程會是啟用的（`verify.sh --stage upgrade` 的斷言會抓到，
+  抓到就先把 web 停掉）；站別自己加的對外整合只能靠 `nscan` 與人工判斷。
+- ⛔ 中和過的資料庫不得用於正式切換。正式切換重新走一次凍結匯出與不帶 `--neutralize` 的還原。
 
 ## 平台服務的停權與復權
 
