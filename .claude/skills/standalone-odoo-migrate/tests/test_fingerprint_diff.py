@@ -18,6 +18,17 @@ table|fake_embedding|25|bbb
 table|ir_ui_view|900|ccc
 """
 
+BASE_BFP = """bcol|res_partner|id|1
+bcol|res_partner|phone|2
+bmax|res_partner|210
+bmax|fake_embedding|25
+bmax|ir_cron|14
+btable|res_partner|200|p1
+btable|fake_embedding|25|e1
+btable|ir_cron|14|c1
+btable|res_partner_tag_rel|3|r1
+"""
+
 
 class TestFingerprintDiff(unittest.TestCase):
     def setUp(self):
@@ -52,6 +63,39 @@ class TestFingerprintDiff(unittest.TestCase):
         self.assertEqual(self.run_diff(changed_meta, stage="upgrade"), 0)
         self.assertEqual(self.run_diff(SRC_FP.replace("fake_embedding|25|bbb", "fake_embedding|24|bbb"),
                                        stage="upgrade"), 1)
+
+    def run_business(self, dst_fp, base_bfp, cur_bfp):
+        return fingerprint_diff.main([
+            "--source-db", self.write("src.fp", SRC_FP), "--target-db", self.write("dst.fp", dst_fp),
+            "--source-business", self.write("base.bfp", base_bfp), "--target-business", self.write("cur.bfp", cur_bfp),
+            "--stage", "upgrade"])
+
+    def test_upgrade_business_rows_decide(self):
+        # 整表 hash 變了（模組資料列的 write_date 被重寫），但客戶資料列相同 ⇒ 通過
+        full_changed = SRC_FP.replace("res_partner|210|aaa", "res_partner|212|zzz").replace(
+            "res_partner_id_seq|210", "res_partner_id_seq|212")
+        self.assertEqual(self.run_business(full_changed, BASE_BFP, BASE_BFP + "badded|res_partner|2\n"), 0)
+        # 客戶資料列內容變了、少了一列、欄不見了 ⇒ 不通過
+        self.assertEqual(self.run_business(SRC_FP, BASE_BFP, BASE_BFP.replace("res_partner|200|p1", "res_partner|200|p2")), 1)
+        self.assertEqual(self.run_business(SRC_FP, BASE_BFP, BASE_BFP.replace("fake_embedding|25|e1", "fake_embedding|24|e2")), 1)
+        self.assertEqual(self.run_business(SRC_FP, BASE_BFP, BASE_BFP + "bmissing|res_partner|phone\n"), 1)
+        self.assertEqual(self.run_business(SRC_FP, BASE_BFP, BASE_BFP.replace("btable|fake_embedding|25|e1\n", "")), 1)
+
+    def test_upgrade_business_tolerates_registry_and_idless_growth(self):
+        cur = BASE_BFP.replace("ir_cron|14|c1", "ir_cron|14|c2").replace("res_partner_tag_rel|3|r1", "res_partner_tag_rel|4|r2")
+        self.assertEqual(self.run_business(SRC_FP, BASE_BFP, cur), 0)
+        # 沒有 id 的關聯表：列數沒增加卻內容不同 ⇒ 舊列被動過
+        self.assertEqual(self.run_business(SRC_FP, BASE_BFP, BASE_BFP.replace("res_partner_tag_rel|3|r1", "res_partner_tag_rel|3|r2")), 1)
+
+    def test_upgrade_business_sequences_only_move_forward(self):
+        self.assertEqual(self.run_business(SRC_FP.replace("res_partner_id_seq|210", "res_partner_id_seq|211"), BASE_BFP, BASE_BFP), 0)
+        self.assertEqual(self.run_business(SRC_FP.replace("res_partner_id_seq|210", "res_partner_id_seq|5"), BASE_BFP, BASE_BFP), 1)
+
+    def test_business_args_validation(self):
+        base = ["--source-db", self.write("src.fp", SRC_FP), "--target-db", self.write("dst.fp", SRC_FP)]
+        bfp = self.write("base.bfp", BASE_BFP)
+        self.assertEqual(fingerprint_diff.main(base + ["--stage", "upgrade", "--source-business", bfp]), 2)
+        self.assertEqual(fingerprint_diff.main(base + ["--stage", "restore", "--source-business", bfp, "--target-business", bfp]), 2)
 
     def test_filestore(self):
         src_fs = "h1  ab/ab12\nh2  cd/cd34\n"

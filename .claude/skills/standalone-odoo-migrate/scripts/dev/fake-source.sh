@@ -9,8 +9,16 @@
 # 用法：
 #   fake-source.sh up   <slug> --context <ctx> [--tenant fake]   建 ns、Secret、ConfigMap、PVC，helm install
 #   fake-source.sh seed <slug> --context <ctx> [--tenant fake]   放客製 addon、-i 模組、灌測試資料、vector 表
+#        [--from-image <registry/repo:tag@sha256:…> --extra-addons a,b [--data-dir-addons c] [--pip "<specs>"]
+#         [--pull-secret-from <ns>/<secret>]]
 #   fake-source.sh down <slug> --context <ctx>                   helm uninstall＋刪 ns（PVC 是 longhorn-delete）
 # ns 固定為 dev-sandbox-<slug>。密碼在本機以 openssl 產生、直接進 Secret，不印出。
+#
+# seed 的客製 addon 兩種來源：
+#   預設：tests/fixtures/fake-source 的兩個假 addon——目標 cloud-odoo 沒有它們，用來測「image 缺 addon」（升級閘 exit 4）。
+#   --from-image：從該 image 的 /all-addons 取（paas-odoo-ci 已經烘進去的 addon），--extra-addons 放 /mnt/extra-addons、
+#     --data-dir-addons 放 data_dir/addons/18.0，--pip 是它們的 python 相依（在 odoo 容器內 pip install，落在 data PVC 的
+#     ~/.local）。來源與目標的 addon 原始碼相同 ⇒ 用來測升級閘跑 -u all 的正向流程，不必另建 image。
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -22,20 +30,35 @@ export PATH=$HOME/.local/bin:$PATH   # yq
 
 CMD=${1:-}; shift || true
 SLUG=${1:-}; shift || true
-CTX="" T=fake
+CTX="" T=fake FROM_IMAGE="" EXTRA_ADDONS="" DATADIR_ADDONS="" PIP_SPECS="" PULL_FROM=paas-ws-stg-4360e1f5/paas-registry
 while [[ $# -gt 0 ]]; do
   case $1 in
     --context) CTX=$2; shift 2 ;;
     --tenant) T=$2; shift 2 ;;
+    --from-image) FROM_IMAGE=$2; shift 2 ;;
+    --extra-addons) EXTRA_ADDONS=$2; shift 2 ;;
+    --data-dir-addons) DATADIR_ADDONS=$2; shift 2 ;;
+    --pip) PIP_SPECS=$2; shift 2 ;;
+    --pull-secret-from) PULL_FROM=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 [[ $CMD =~ ^(up|seed|down)$ && $SLUG =~ ^[a-z0-9-]+$ && -n $CTX ]] || { usage >&2; exit 2; }
 [[ $T =~ ^[a-z][a-z0-9]*$ ]] || { echo "--tenant must match ^[a-z][a-z0-9]*$" >&2; exit 2; }
+MODLIST='^[a-z0-9_]+(,[a-z0-9_]+)*$'
+if [[ -n $FROM_IMAGE ]]; then
+  [[ $FROM_IMAGE =~ ^[^/]+/.+:[^@]+@sha256:[a-f0-9]{64}$ && $EXTRA_ADDONS =~ $MODLIST ]] \
+    || { echo "--from-image needs registry/repo:tag@sha256:… and --extra-addons a,b" >&2; exit 2; }
+  [[ -z $DATADIR_ADDONS || $DATADIR_ADDONS =~ $MODLIST ]] || { echo "bad --data-dir-addons" >&2; exit 2; }
+elif [[ -n $EXTRA_ADDONS$DATADIR_ADDONS$PIP_SPECS ]]; then
+  echo "--extra-addons／--data-dir-addons／--pip only apply with --from-image" >&2; exit 2
+fi
 NS=dev-sandbox-$SLUG
 K=(kubectl --context "$CTX" -n "$NS")
 log() { echo "[fake-source] $*" >&2; }
+# Odoo 啟動時會把 data_dir/addons/<series> 建成 0500（config.addons_data_dir：要手動 +w 才能放模組）
+DATADIR_UNPACK='d=/var/lib/odoo/addons/18.0; mkdir -p $d && chmod u+w $d && tar -xf - --no-same-owner --no-same-permissions -m -C $d'
 
 fetch_chart() {
   if [[ -d $CACHE/Woow_k3s_odoo/.git ]]; then
@@ -181,16 +204,62 @@ EOF
   log "odoo container started; run 'seed' now (startup probe restarts it after ~15 min without a DB)"
 }
 
-seed() {
-  local odoo=(exec "deploy/$T-odoo" -c odoo --)
-  log "copy fixture addons into /mnt/extra-addons and data_dir/addons/18.0"
-  # 只打包模組目錄（不含 "."）：PVC 根目錄屬 root，odoo 使用者改不了它的 mode／mtime
-  tar -C "$FIXTURES/extra-addons" -cf - fake_pos_enhancement | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- \
+copy_from_image() {
+  # 起一顆只 sleep 的 pod 跑該 image，把 /all-addons 裡指定的模組用 tar 管線直接送進來源站的 volume（不落地本機）
+  local pod=fake-source-addon-src
+  if ! "${K[@]}" get secret paas-registry >/dev/null 2>&1; then
+    kubectl --context "$CTX" -n "${PULL_FROM%%/*}" get secret "${PULL_FROM#*/}" -o json \
+      | jq '{apiVersion, kind, type, data, metadata: {name: "paas-registry"}}' | "${K[@]}" apply -f - >/dev/null
+  fi
+  "${K[@]}" delete pod "$pod" --ignore-not-found --wait >/dev/null
+  "${K[@]}" apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod
+spec:
+  restartPolicy: Never
+  imagePullSecrets: [{name: paas-registry}]
+  containers:
+    - name: src
+      image: $FROM_IMAGE
+      command: ["sleep", "900"]
+      resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+EOF
+  "${K[@]}" wait --for=condition=Ready "pod/$pod" --timeout=5m >/dev/null
+  # shellcheck disable=SC2086  # 模組清單已用 MODLIST 驗過，刻意展開成多個參數
+  "${K[@]}" exec "$pod" -- tar -C /all-addons -cf - ${EXTRA_ADDONS//,/ } | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- \
     tar -xf - --no-same-owner --no-same-permissions -m -C /mnt/extra-addons
-  tar -C "$FIXTURES/data-dir-addons" -cf - fake_apps_module | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- \
-    sh -c 'mkdir -p /var/lib/odoo/addons/18.0 && tar -xf - --no-same-owner --no-same-permissions -m -C /var/lib/odoo/addons/18.0'
-  log "odoo -i point_of_sale,fake_pos_enhancement,fake_apps_module（首次會順便初始化 base）"
-  "${K[@]}" "${odoo[@]}" odoo --config=/tmp/odoo.conf -d odoo -i point_of_sale,fake_pos_enhancement,fake_apps_module \
+  if [[ -n $DATADIR_ADDONS ]]; then
+    # shellcheck disable=SC2086
+    "${K[@]}" exec "$pod" -- tar -C /all-addons -cf - ${DATADIR_ADDONS//,/ } | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- \
+      sh -c "$DATADIR_UNPACK"
+  fi
+  "${K[@]}" delete pod "$pod" --wait=false >/dev/null
+}
+
+seed() {
+  local odoo=(exec "deploy/$T-odoo" -c odoo --) modules
+  if [[ -n $FROM_IMAGE ]]; then
+    log "copy $EXTRA_ADDONS${DATADIR_ADDONS:+ and $DATADIR_ADDONS} from /all-addons of $FROM_IMAGE"
+    copy_from_image
+    if [[ -n $PIP_SPECS ]]; then
+      log "pip install $PIP_SPECS"
+      # shellcheck disable=SC2086  # 多個 requirement spec，刻意斷詞；noglob 讓 >= 之類不被當 glob
+      (set -f; "${K[@]}" "${odoo[@]}" pip install --quiet --break-system-packages $PIP_SPECS)
+    fi
+    modules=point_of_sale,$EXTRA_ADDONS${DATADIR_ADDONS:+,$DATADIR_ADDONS}
+  else
+    log "copy fixture addons into /mnt/extra-addons and data_dir/addons/18.0"
+    # 只打包模組目錄（不含 "."）：PVC 根目錄屬 root，odoo 使用者改不了它的 mode／mtime
+    tar -C "$FIXTURES/extra-addons" -cf - fake_pos_enhancement | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- \
+      tar -xf - --no-same-owner --no-same-permissions -m -C /mnt/extra-addons
+    tar -C "$FIXTURES/data-dir-addons" -cf - fake_apps_module | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- \
+      sh -c "$DATADIR_UNPACK"
+    modules=point_of_sale,fake_pos_enhancement,fake_apps_module
+  fi
+  log "odoo -i $modules（首次會順便初始化 base）"
+  "${K[@]}" "${odoo[@]}" odoo --config=/tmp/odoo.conf -d odoo -i "$modules" \
     --without-demo=all --stop-after-init --no-http --log-level=warn
   log "seed business data via odoo shell"
   cat <<'PY' | "${K[@]}" exec -i "deploy/$T-odoo" -c odoo -- odoo shell --config=/tmp/odoo.conf -d odoo --no-http --log-level=warn
@@ -207,9 +276,10 @@ atts = env['ir.attachment'].create([
     {'name': 'file%d.bin' % i, 'datas': base64.b64encode(rnd.randbytes(1024 * (i + 1))),
      'res_model': 'res.partner', 'res_id': partners[i].id} for i in range(30)])
 env['ir.attachment'].create({'name': 'big.bin', 'datas': base64.b64encode(rnd.randbytes(3 * 1024 * 1024))})
-env['fake.pos.note'].create([
-    {'name': 'note %d' % i, 'body_md': '# 標題 %d\n\n- item' % i, 'amount': i / 7,
-     'partner_id': partners[i].id, 'attachment_ids': [(6, 0, atts[i:i + 2].ids)]} for i in range(20)])
+if 'fake.pos.note' in env:
+    env['fake.pos.note'].create([
+        {'name': 'note %d' % i, 'body_md': '# 標題 %d\n\n- item' % i, 'amount': i / 7,
+         'partner_id': partners[i].id, 'attachment_ids': [(6, 0, atts[i:i + 2].ids)]} for i in range(20)])
 env['ir.config_parameter'].sudo().set_param('web.base.url', 'https://fake-odoo.example.invalid')
 env.cr.commit()
 print('SEED-DONE')
@@ -229,7 +299,7 @@ down() {
   helm --kube-context "$CTX" -n "$NS" uninstall odoo-tenant --wait >/dev/null 2>&1 || true
   [[ $("${K[@]}" get ns "$NS" -o jsonpath='{.metadata.annotations.standalone-odoo-migrate/role}' 2>/dev/null) == fake-source ]] \
     || { echo "refuse: $NS is not a fake-source namespace" >&2; exit 2; }
-  kubectl --context "$CTX" delete ns "$NS" --wait=false
+  "${K[@]}" delete ns "$NS" --wait=false
 }
 
 "$CMD"
