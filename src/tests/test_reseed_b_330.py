@@ -28,7 +28,7 @@ class TestNewTierPlans(TransactionCase):
         self.assertEqual(plan.service_type, 'cloud_service')
         self.assertEqual(
             (plan.cs_vcpu, plan.cs_ram_gb, plan.cs_storage_gb,
-             plan.cs_odoo_workers), (2, 4.0, 40, 0))
+             plan.cs_odoo_workers), (2, 4.0, 20, 0), '#1637：n8n T4 磁碟 40 → 20')
 
     def test_sa_new_tiers_quota(self):
         r1 = self.env.ref('woow_paas_platform.plan_security_access_r1_monthly')

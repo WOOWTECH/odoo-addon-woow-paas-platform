@@ -64,14 +64,14 @@ class TestMcp3TypeTemplateSeed(TransactionCase):
             self.assertIn('@sha256:', tag, '%s image tag 必須雙釘 git-sha@sha256' % xmlid)
 
     def test_lockstep_min_specs(self):
-        """#268 lockstep：min_* 與 chart persistence 一致（vcpu1/ram1.0/storage5＝5Gi）。"""
+        """#268 lockstep：min_* 與 chart persistence 一致（vcpu1/ram1.0/storage1＝1Gi；#1637 由 5Gi 改）。"""
         for xmlid in self.TEMPLATES:
             tpl = self._tpl(xmlid)
             v = json.loads(tpl.helm_default_values)
             self.assertEqual(tpl.min_vcpu, 1, xmlid)
             self.assertEqual(tpl.min_ram_gb, 1.0, xmlid)
-            self.assertEqual(tpl.min_storage_gb, 5, xmlid)
-            self.assertEqual(v['persistence']['size'], '5Gi', xmlid)
+            self.assertEqual(tpl.min_storage_gb, 1, xmlid)
+            self.assertEqual(v['persistence']['size'], '1Gi', xmlid)
 
     def test_port_consistency_all_8000(self):
         """契約紅字：三型 mcp_server.port 齊一 8000 且 == args 內 --port

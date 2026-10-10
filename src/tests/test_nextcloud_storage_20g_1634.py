@@ -101,7 +101,8 @@ class TestNextcloudStorage20g1634(TransactionCase):
         self.assertEqual(self._plan('plan_nextcloud_yearly').sh_plan_price, 45000, '價格不變')
 
     def test_descriptions_say_20_gb_in_total(self):
-        self.assertIn('20 GB 磁碟（含使用者檔案 13 GB）', self.tpl.description)
+        self.assertIn('20 GB 磁碟（含使用者檔案 13 GB', self.tpl.description)
+        self.assertIn('實際約可放 8–10 GB', self.tpl.description, '#1637 容量研究：文案寫明實際可放量')
         self.assertIn('整台 20 GB，其中使用者檔案 13 GB', self.tpl.full_description)
         for text in (self.tpl.description, self.tpl.full_description):
             self.assertNotIn('80 GB', text)
@@ -186,15 +187,12 @@ class TestNextcloudStorage20g1634(TransactionCase):
     # ---------------- 其他範本 ---------------- #
 
     def test_other_templates_keep_plan_key_equal_to_plan_total(self):
-        odoo = self.env.ref('%s.cloud_app_odoo' % MOD)
-        out = self.Svc._apply_plan_spec_overlay(
-            json.loads(odoo.helm_default_values), odoo,
-            self._plan('plan_odoo_t3_monthly'))
-        self.assertEqual(out['persistence']['size'], '40Gi')
+        """沒有固定開銷 volume 的範本：方案鍵＝方案總量（Odoo／EMQX 的拆分見 #1637 的測試）。"""
         n8n = self.env.ref('%s.cloud_app_n8n' % MOD)
+        plan = self._plan('plan_n8n_t4_monthly')
         out = self.Svc._apply_plan_spec_overlay(
-            json.loads(n8n.helm_default_values), n8n, self._plan('plan_n8n_t4_monthly'))
-        self.assertEqual(out['main']['persistence']['size'], '40Gi')
+            json.loads(n8n.helm_default_values), n8n, plan)
+        self.assertEqual(out['main']['persistence']['size'], '%dGi' % plan.cs_storage_gb)
 
     # ---------------- migration 18.0.1.0.223 ---------------- #
 

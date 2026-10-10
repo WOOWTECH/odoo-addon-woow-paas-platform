@@ -189,8 +189,10 @@ class TestLitellmSeed(TransactionCase):
     def test_spec_matches_plan_and_pvc(self):
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 1)
-        self.assertEqual(tpl.min_ram_gb, 2.0)
-        self.assertEqual(tpl.min_storage_gb, 10)
+        self.assertEqual(tpl.min_ram_gb, 4.0, '#1637 容量研究：2 → 4（官方 "4Gi is a floor"）')
+        self.assertEqual(tpl.min_storage_gb, 5, '#1637：10 → 5')
+        self.assertEqual(self._values()['postgresql']['resources']['limits']['cpu'], '1',
+                         '#1637：內附 PG CPU 上限 0.5 → 1 核（實測被限速）')
         pvc = int(self._values()['persistence']['size'].rstrip('Gi'))
         self.assertEqual(pvc, tpl.min_storage_gb, '唯一一顆 PVC＝min_storage_gb（quota 對帳）')
         plans = tpl.sudo().subscription_plan_ids

@@ -15,9 +15,9 @@ authtoken 的過濾器、ngrok.remoteAddr 不再 render 進 shell（#1613））�
    所以這條用三個欄位一起釘：carrier / settable / reset_supported。
 2. **上架前提**：image 雙釘 ``tag@sha256``（emqx 與 ngrok 兩顆都要）。2026-10-02 鏡像落地後已公開上架，
    ``test_hidden_until_mirror_lands`` 從此是實際生效的守線（``is_hidden=False`` ⟹ 兩顆都要釘）。
-3. **規格對帳**：1 vCPU / 2 Gi / 12 Gi ——template min_*、plan cs_*、chart 兩顆 PVC 加總三處一致。
-   ⚠ plan 的 ``cs_storage_gb`` 只對應 data（#332 overlay 寫 ``persistence.size``），
-   log 是固定 overhead，故 min_storage_gb = cs_storage_gb + log。
+3. **規格對帳**：1 vCPU / 2 Gi / 3 Gi ——template min_*、plan cs_*、chart 兩顆 PVC 加總三處一致。
+   #1637 起 plan 的 ``cs_storage_gb`` 是**整台總量**（data 2＋log 1）：overlay 寫進
+   ``persistence.size`` 的是總量 − log（``_PLAN_STORAGE_SPLIT``），故 min_storage_gb = cs_storage_gb。
 4. **可調參數白名單**：只有應用層旋鈕（ngrok 三項 + ws listener），CPU/RAM/磁碟一律不開
    ——那三個維度由訂閱方案決定，開放等於讓租戶改自己買的規格。
 5. **授權（⛔ 最重要）**：EMQX 自 5.9.0 起為 BSL 1.1，明文禁止當託管 MQTT 服務提供給第三方
@@ -145,7 +145,7 @@ class TestEmqxSeed(TransactionCase):
         v = self._values()
         self.assertEqual(tpl.min_vcpu, 1)
         self.assertEqual(tpl.min_ram_gb, 2.0)
-        self.assertEqual(tpl.min_storage_gb, 12)
+        self.assertEqual(tpl.min_storage_gb, 3)
         data = int(v['persistence']['data']['size'].rstrip('Gi'))
         log = int(v['persistence']['log']['size'].rstrip('Gi'))
         self.assertEqual(data + log, tpl.min_storage_gb,
@@ -156,8 +156,8 @@ class TestEmqxSeed(TransactionCase):
         for plan in tpl.subscription_plan_ids:
             self.assertEqual(plan.cs_vcpu, tpl.min_vcpu)
             self.assertEqual(plan.cs_ram_gb, tpl.min_ram_gb)
-            self.assertEqual(plan.cs_storage_gb, data,
-                             'cs_storage_gb 對應 data volume（#332 overlay 寫 persistence.size）')
+            self.assertEqual(plan.cs_storage_gb, data + log,
+                             '#1637：cs_storage_gb 是整台總量（overlay 扣掉 log 才寫進 persistence.size）')
 
     def test_plans_linked_and_priced(self):
         tpl = self._tpl()

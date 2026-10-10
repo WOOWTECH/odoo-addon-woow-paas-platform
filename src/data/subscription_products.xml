@@ -23,6 +23,11 @@
         <!-- ============================================================ -->
 
         <!-- n8n Cloud Plans (T1-T3, 月 1000/3000/5000) -->
+        <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：T1–T4 磁碟 10／20／30／40 → 5／10／15／20 GB
+             （n8n 的唯一一顆 PVC，SQLite＋二進位資料；正式站兩台各只用 0.26G，n8n 預設只留 14 天執行紀錄）。
+             容量研究（使用者 10-10 核可）：T1 記憶體 1 → 2 GB（主程序＋task runner 兩個 Node heap 預設加總會超過
+             1Gi，整個容器被 OOMKilled；Cloudron／Render／Hetzner 指南都是 2GB）。
+             既有 DB 由 migrations/18.0.1.0.225 改（只改仍是舊 seed 值的方案）；既有服務只擴不縮。 -->
         <record id="plan_n8n_monthly" model="sh.subscription.plan">
             <field name="name">n8n 雲端訂閱服務（1 人）</field>
             <field name="sh_duration">1</field>
@@ -40,8 +45,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">1.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -62,8 +67,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">1.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -85,7 +90,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -107,7 +112,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -129,7 +134,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -151,7 +156,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -174,7 +179,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -196,7 +201,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
         </record>
 
@@ -238,6 +243,12 @@
         </record>
 
         <!-- Odoo Cloud Plans (T1-T3, 月 1000/3000/5000) -->
+        <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：cs_storage_gb 改成**整台總量**（資料＋PostgreSQL
+             ＋備份三顆 PVC 加總）。T1／T2／T3＝20／25／30（8＋4＋8／10＋4＋11／13＋4＋13，拆法見
+             CloudService._PLAN_STORAGE_SPLIT 的 odoo 項）；原本 20／30／40 只是資料那顆，備份跟著同大小、
+             PostgreSQL 另外 8，整台 48／68／88。既有 DB 由 migrations/18.0.1.0.225 改。
+             同一次容量研究（使用者 10-10 核可）：T1 記憶體 2 → 3 GB、workers T1／T2／T3 2／3／4 → 3／4／5
+             （workers 2 同時印 PDF 會死鎖；官方公式 (CPU×2)+1 允許），cron 一律 1（範本 conf）。 -->
         <record id="plan_odoo_monthly" model="sh.subscription.plan">
             <field name="name">Odoo 訂閱服務（1-3 人）</field>
             <field name="sh_duration">1</field>
@@ -255,9 +266,9 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_ram_gb">3.0</field>
             <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">2</field>
+            <field name="cs_odoo_workers">3</field>
         </record>
 
         <record id="plan_odoo_yearly" model="sh.subscription.plan">
@@ -277,9 +288,9 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
+            <field name="cs_ram_gb">3.0</field>
             <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">2</field>
+            <field name="cs_odoo_workers">3</field>
         </record>
 
         <record id="plan_odoo_t2_monthly" model="sh.subscription.plan">
@@ -300,8 +311,8 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">3</field>
+            <field name="cs_storage_gb">25</field>
+            <field name="cs_odoo_workers">4</field>
         </record>
 
         <record id="plan_odoo_t2_yearly" model="sh.subscription.plan">
@@ -322,8 +333,8 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">3</field>
+            <field name="cs_storage_gb">25</field>
+            <field name="cs_odoo_workers">4</field>
         </record>
 
         <record id="plan_odoo_t3_monthly" model="sh.subscription.plan">
@@ -344,8 +355,8 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">4</field>
+            <field name="cs_storage_gb">30</field>
+            <field name="cs_odoo_workers">5</field>
         </record>
 
         <record id="plan_odoo_t3_yearly" model="sh.subscription.plan">
@@ -366,8 +377,8 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">4</field>
+            <field name="cs_storage_gb">30</field>
+            <field name="cs_odoo_workers">5</field>
         </record>
 
         <!-- AnythingLLM Plans（placeholder、無 template＝orphan——guard 放行；價格/名稱不動） -->
@@ -699,9 +710,12 @@
              storefront_hidden（預設 False）。既有 DB 因本檔 noupdate="1" 不會被
              回填，一律靠 src/migrations/18.0.1.0.79/post-migrate.py force-write。
 
-             cs_* 三階規格（#431）：同價位對齊 n8n，月繳／年繳同 tier 一致；
-             cs_odoo_workers 一律 0（非 Odoo 服務）。留 0 會 fallback
-             template.min_*（1c/1G/5Gi）→ 三階同規格不同價。
+             cs_* 三階規格（#431）：曾經同價位對齊 n8n（1／2／2 vCPU、2／2／4 GB、20／30／40 GB）。
+             #1637（使用者 2026-10-10「按需分配，最大給到 30G」）拿掉 cs_*，規格回到範本值
+             （cloud_app_mcp_hermes：1 vCPU／1 GB／1 GB）：PVC 只放 config.json（同一支 chart
+             正式站 19 台實測約 32KB、記憶體 0.09G、CPU 0.008 核），20–40Gi 兩副本預留 40–80G 全是空的。
+             三階的差別只剩席數與價格；若 Hermes MCP 之後有額外負載，先在 stg 實測再定。
+             既有 DB 由 migrations/18.0.1.0.225 清成 0（只清仍是舊 seed 值的方案）。
 
              加購變體（#765，Eugene 2026-08-17 拍板）：席數隨 tier 放大——T1 開
              1–3 席、T2 開 1–6 席、T3 開 1–10 席（比照 Odoo／n8n multi-tier 先例），
@@ -711,9 +725,7 @@
              manifest 是 1..N 連續編號，中間插列會讓所有列號位移）。
              ⚠ 本 family 的年繳基底是月×10（家族異例，其餘家族月×8），加購側仍是
              +4800/席；generator 的 YEAR_RATIO 表把這個異例明列成一格。
-             ⚠ 變體**必須**帶與同 tier base 相同的 cs_*（generator 的 CS_SPECS 有收
-             本 family）：漏帶會讓三階變體全部 fallback 到同一組 template.min_*
-             ＝ #431 的病灶原地復發，而症狀只是「付不同價拿一樣的算力」。 -->
+             #1637 起 generator 的 CS_SPECS 不再收本 family，變體與 base 一樣不帶 cs_*（全部走範本值）。 -->
         <record id="plan_mcp_hermes_monthly" model="sh.subscription.plan">
             <field name="name">Hermes MCP 伺服器 T1（1–3 人）月繳</field>
             <field name="sh_duration">1</field>
@@ -730,10 +742,6 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_yearly" model="sh.subscription.plan">
@@ -752,10 +760,6 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t2_monthly" model="sh.subscription.plan">
@@ -774,10 +778,6 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t2_yearly" model="sh.subscription.plan">
@@ -796,10 +796,6 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t3_monthly" model="sh.subscription.plan">
@@ -818,10 +814,6 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
         </record>
 
         <record id="plan_mcp_hermes_t3_yearly" model="sh.subscription.plan">
@@ -840,10 +832,6 @@
             <field name="sh_reminder"
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
         </record>
 
         <!-- MCP Server: Odoo Plans（統一單階 3000；改價 only、名稱不動） -->
@@ -1922,7 +1910,8 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- pi Coding Agent T1（2 vCPU／4 Gi／20 Gi）：cs_* 顯式寫，與 template min_* 一致
+        <!-- pi Coding Agent T1（2 vCPU／8 Gi／30 Gi；#1637 2026-10-10 由 4 Gi／20 Gi 改，容量研究，既有 DB 由
+             migrations/18.0.1.0.225 改；只影響新開通，既有 pi-agent 服務不套方案）：cs_* 顯式寫，與 template min_* 一致
              （cloud_service._assemble… 取 plan.cs_vcpu or template.min_vcpu）。年繳 = 10 個月。 -->
         <record id="plan_pi_agent_monthly" model="sh.subscription.plan">
             <field name="name">pi Coding Agent 雲端訂閱服務 月繳</field>
@@ -1941,8 +1930,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_ram_gb">8.0</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="plan_pi_agent_yearly" model="sh.subscription.plan">
@@ -1962,8 +1951,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_ram_gb">8.0</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="product_pi_agent_monthly" model="product.product">
@@ -1987,7 +1976,8 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- Omnigent T1（4 vCPU／8 Gi／10 Gi：server ＋ 兩個雲端 runner）：cs_* 顯式寫，與 template min_* 一致
+        <!-- Omnigent T1（4 vCPU／8 Gi／5 Gi：server ＋ 雲端 runner）：cs_* 顯式寫，與 template min_* 一致
+             （#1637 2026-10-10 磁碟 10 → 5 Gi，既有 DB 由 migrations/18.0.1.0.225 改）
              （cloud_service._assemble… 取 plan.cs_vcpu or template.min_vcpu）。年繳 = 10 個月。 -->
         <record id="plan_omnigent_monthly" model="sh.subscription.plan">
             <field name="name">Omnigent 雲端訂閱服務 月繳</field>
@@ -2007,7 +1997,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">4</field>
             <field name="cs_ram_gb">8.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="plan_omnigent_yearly" model="sh.subscription.plan">
@@ -2028,7 +2018,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">4</field>
             <field name="cs_ram_gb">8.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="product_omnigent_monthly" model="product.product">
@@ -2052,7 +2042,9 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- Code Server T1（2 vCPU／4 Gi／25 Gi：workspace 20Gi ＋ pi-data 5Gi）：cs_* 顯式寫，與
+        <!-- Code Server T1（2 vCPU／8 Gi／20 Gi：workspace 16Gi ＋ pi-data 4Gi；#1637 2026-10-10 由 4 Gi／25＝20＋5
+             改（容量研究：Claude Code 官方要 4GB+，同容器還有 VS Code／pi／Omnigent session），既有 DB 由
+             migrations/18.0.1.0.225 改）：cs_* 顯式寫，與
              template min_* 一致（cloud_service._assemble… 取 plan.cs_vcpu or template.min_vcpu）。
              年繳 = 10 個月。 -->
         <record id="plan_code_server_monthly" model="sh.subscription.plan">
@@ -2072,8 +2064,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">25</field>
+            <field name="cs_ram_gb">8.0</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="plan_code_server_yearly" model="sh.subscription.plan">
@@ -2093,8 +2085,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">25</field>
+            <field name="cs_ram_gb">8.0</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="product_code_server_monthly" model="product.product">
@@ -2118,9 +2110,10 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- EMQX（1 vCPU／2 GB／10 GB 使用者磁碟＋2 GB log）。年繳＝10 個月。
-             cs_storage_gb 只對應 chart 的 data volume（#332 overlay 落在 persistence.size），
-             template.min_storage_gb=12 才是含 log 的實際佔用。 -->
+        <!-- EMQX（1 vCPU／2 GB／整台 3 GB＝資料 2＋log 1）。年繳＝10 個月。
+             #1637（使用者 2026-10-10）：原本 cs_storage_gb＝10 只對應 data volume（另有 2 GB log，整台 12）；
+             改成**整台總量** 3（CloudService._PLAN_STORAGE_SPLIT 的 emqx 項：data＝總量 − log），
+             與 template.min_storage_gb 相同。既有 DB 由 migrations/18.0.1.0.225 改。 -->
         <record id="plan_emqx_monthly" model="sh.subscription.plan">
             <field name="name">EMQX 雲端訂閱服務 月繳</field>
             <field name="sh_duration">1</field>
@@ -2139,7 +2132,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_storage_gb">3</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="plan_emqx_yearly" model="sh.subscription.plan">
@@ -2160,7 +2153,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_storage_gb">3</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="product_emqx_monthly" model="product.product">
@@ -2381,7 +2374,9 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- AI 模型閘道（LiteLLM）（1 vCPU／2 GB／10 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
+        <!-- AI 模型閘道（LiteLLM）（1 vCPU／4 GB／5 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
+             #1637（2026-10-10）磁碟 10 → 5 GB、記憶體 2 → 4 GB（官方 "4Gi is a floor"），既有 DB 由
+             migrations/18.0.1.0.225 改。
              cs_vcpu／cs_ram_gb 套在 litellm 容器（內附 PG 用 chart 自己的 requests／limits）；
              cs_storage_gb＝唯一一顆 PVC（PG 資料＋每日備份）。 -->
         <record id="plan_litellm_monthly" model="sh.subscription.plan">
@@ -2401,8 +2396,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="plan_litellm_yearly" model="sh.subscription.plan">
@@ -2422,8 +2417,8 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="product_litellm_monthly" model="product.product">

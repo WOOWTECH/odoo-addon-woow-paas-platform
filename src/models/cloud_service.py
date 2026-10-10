@@ -827,11 +827,23 @@ def _plan_spec_paths(template):
 # 等於方案賣的總量（Nextcloud 20Gi＝使用者檔案 13＋html 3＋PostgreSQL 3＋Redis 1）。
 #
 # - ``fixed``：固定開銷那幾顆的大小路徑，從同一份 values 讀（＝chart render 用的值）。
-# - ``default_size``：方案鍵沒有值時 chart 改讀的鍵（nextcloud chart
+# - ``default_size``（可省）：方案鍵沒有值時 chart 改讀的鍵（nextcloud chart
 #   ``nextcloud.dataSize``＝``persistence.size | default persistence.data.size``），算
 #   「目前實際大小」（只擴不縮、帳面 allocated）時用。
+# - ``shares``（可省）：跟方案鍵**分**「總量 − 固定開銷」的 volume（#1637 Odoo 的備份）。
+#   ``weights``（可省，預設平分）＝(方案鍵, 各 share) 的比例：方案鍵拿四捨五入的整數 GiB、
+#   最後一顆 share 拿餘數。值空時 chart 退回方案鍵的大小（woow-odoo ``backup.persistence.size |
+#   default persistence.size``），「目前大小」照同一條規則讀。
 #
 # 沒列的範本：方案鍵＝方案總量（現狀，不變）。換 chart 或改固定開銷的鍵時這裡要跟著改。
+#
+# #1637（使用者 2026-10-10「依性質跟使用需求按需分配，最大給到 30G」）：
+# - odoo：資料：備份＝3：5 分「總量 − PostgreSQL」（容量研究 2026-10-10，使用者核可）：備份卷
+#   要放一份完整 filestore（rsync 硬連結）＋約 12 份 pg_dump（daily 7＋weekly 4＋升級前）與 4 週內
+#   刪改的檔，資料區用滿前備份會先滿，所以備份要比資料大。PostgreSQL 是 StatefulSet 的
+#   volumeClaimTemplates，**建好之後大小不能改**（helm upgrade 會被 API server 拒絕），所以放
+#   ``fixed``——換方案只動資料與備份。20／25／30 ＝ 6＋4＋10／8＋4＋13／10＋4＋16。
+# - emqx：log 固定，資料＝總量 − log（3 ＝ 2＋1）。
 _PLAN_STORAGE_SPLIT = {
     'nextcloud': {
         'default_size': ('persistence', 'data', 'size'),
@@ -841,7 +853,48 @@ _PLAN_STORAGE_SPLIT = {
             ('redis', 'persistence', 'size'),
         ),
     },
+    'odoo': {
+        'fixed': (('postgres', 'persistence', 'size'),),
+        'shares': (('backup', 'persistence', 'size'),),
+        'weights': (3, 5),
+    },
+    'emqx': {
+        'default_size': ('persistence', 'data', 'size'),
+        'fixed': (('persistence', 'log', 'size'),),
+    },
 }
+
+
+def _plan_storage_targets(total_gb, fixed_gib, n_shares, weights=None):
+    """總量 − 固定開銷，照 ``weights`` 分給方案鍵＋``n_shares`` 顆 shares（整數 GiB）。
+
+    ``weights``＝(方案鍵, 各 share)，省略＝平分。方案鍵與前面的 share 拿四捨五入（.5 進位）的
+    整數 GiB，最後一顆 share 拿餘數。回傳 ``(方案鍵, [各 share])``；算不出來（固定開銷讀不到、
+    不是整數 GiB、任一顆不到 1 GiB）回 ``None``。
+    """
+    if fixed_gib is None:
+        return None
+    rest = total_gb - fixed_gib
+    if not float(rest).is_integer():
+        return None
+    rest = int(rest)
+    weights = tuple(weights or (1,) * (1 + n_shares))
+    if len(weights) != 1 + n_shares:
+        return None
+    total_weight = sum(weights)
+    sizes = [int(math.floor(rest * w / total_weight + 0.5)) for w in weights[:-1]]
+    sizes.append(rest - sum(sizes))
+    if min(sizes) < 1:
+        return None
+    return sizes[0], sizes[1:]
+
+
+def _plan_storage_share_sizes(values, template):
+    """``shares`` 每顆 chart 實際會用的大小（字串）；值空時退回方案鍵目前的大小。"""
+    split = _PLAN_STORAGE_SPLIT.get(template.slug) or {}
+    fallback = _plan_storage_current_size(values, template)
+    return [(_value_at(values, path) or fallback or None)
+            for path in split.get('shares', ())]
 
 
 def _plan_storage_fixed_gib(values, template):
@@ -867,19 +920,25 @@ def _plan_storage_current_size(values, template):
     size = _value_at(values, _plan_spec_paths(template)['storage'])
     if not size:
         split = _PLAN_STORAGE_SPLIT.get(template.slug)
-        if split:
+        if split and split.get('default_size'):
             size = _value_at(values, split['default_size'])
     return size or None
 
 
 def _plan_storage_total_gib(values, template):
-    """方案儲存鍵的實際大小＋固定開銷（GiB）；任一項讀不到回 ``None``。"""
+    """方案儲存鍵的實際大小＋固定開銷＋shares（GiB）；任一項讀不到回 ``None``。"""
     size = _plan_storage_current_size(values, template)
     gib = _storage_quantity_gib(size) if size else None
     fixed = _plan_storage_fixed_gib(values, template)
     if gib is None or fixed is None:
         return None
-    return gib + fixed
+    total = gib + fixed
+    for share in _plan_storage_share_sizes(values, template):
+        share_gib = _storage_quantity_gib(share) if share else None
+        if share_gib is None:
+            return None
+        total += share_gib
+    return total
 
 
 def _values_dict_at(values, path):
@@ -950,8 +1009,32 @@ _N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
 # ⚠ 只列平台決定、租戶不能設的鍵（ha-full 的 helm_value_specs 為空）。刻意**不**收
 # ``persistence.size``：PVC 只能長大，範本調大後套到既有服務就是一次沒人決定過的線上
 # 擴容（既有服務維持自己快照裡的大小）。範本沒有該鍵時不動（no-op，不刪服務的值）。
+#
+# #1637（容量研究，使用者 2026-10-10 核可）——穩定性設定也是平台政策，既有服務 Redeploy 時要跟上：
+#   - ha-full ``terminationGracePeriodSeconds`` 120（recorder 收尾）；
+#   - n8n ``main.livenessProbe``／``main.readinessProbe``（timeout 1 秒會在開機途中、大 JSON 卡住
+#     事件迴圈時被殺）；
+#   - litellm 內附 PostgreSQL 的 CPU 上限 1 核（0.5 核實測被限速 14.6%）；
+#   - hermes-agent agent 容器的 requests（閒置就 1.06G）；
+#   - mcp-server 家族的記憶體 requests（128Mi 低於實測）。
+#   都不是租戶可設的鍵；pi-agent 刻意不列（pi1–pi5 不動）。
+#   ⚠ 每一條都要寫成字面量：scripts/audit/audit_411_reset_values.py 的 _INJECTOR_VALUE_PATHS
+#   以 AST 對帳這張表（test_audit_411_classifier），推導式它讀不到。
 _TEMPLATE_POLICY_VALUE_PATHS = {
-    'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig')],
+    'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig'),
+                ('terminationGracePeriodSeconds',)],
+    'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe')],
+    'litellm': [('postgresql', 'resources', 'limits', 'cpu')],
+    'hermes-agent': [('agent', 'resources', 'requests')],
+    'mcp-hermes': [('resources', 'requests', 'memory')],
+    'mcp-odoo': [('resources', 'requests', 'memory')],
+    'mcp-odoo-manage': [('resources', 'requests', 'memory')],
+    'mcp-n8n': [('resources', 'requests', 'memory')],
+    'mcp-k8s': [('resources', 'requests', 'memory')],
+    'mcp-vk': [('resources', 'requests', 'memory')],
+    'mcp-opendesign': [('resources', 'requests', 'memory')],
+    'mcp-litellm': [('resources', 'requests', 'memory')],
+    'mcp-nextcloud': [('resources', 'requests', 'memory')],
 }
 _MISSING = object()
 
@@ -9728,13 +9811,20 @@ class CloudService(models.Model):
         - 既有服務（``existing=True``）：比較的「目前大小」是 chart 實際用的那個
           （``_plan_storage_current_size``），照 ``_plan_storage_size`` 只擴不縮；算不出來
           就保留現值、只 log——redeploy／換方案不能因此失敗，也絕不送出可能更小的值。
+
+        #1637：``shares``（Odoo 的備份）跟方案鍵照 ``weights`` 分「總量 − 固定開銷」，各自只擴不縮；
+        目前大小讀不到（值空）時以 chart 的退回值（方案鍵目前的大小）比較。
         """
         *parent_path, size_key = _plan_spec_paths(template)['storage']
         target_gb = plan.cs_storage_gb
-        if template.slug in _PLAN_STORAGE_SPLIT:
+        share_targets = []
+        split = _PLAN_STORAGE_SPLIT.get(template.slug)
+        if split:
             fixed = _plan_storage_fixed_gib(values, template)
-            target = None if fixed is None else plan.cs_storage_gb - fixed
-            if target is None or target < 1 or not float(target).is_integer():
+            share_paths = split.get('shares', ())
+            targets = _plan_storage_targets(
+                plan.cs_storage_gb, fixed, len(share_paths), split.get('weights'))
+            if targets is None:
                 msg = (
                     "#1634 %s 方案 %s 的 cs_storage_gb=%s 扣掉固定開銷 volume（%s GiB）"
                     "算不出使用者檔案大小" % (
@@ -9743,13 +9833,22 @@ class CloudService(models.Model):
                     raise ValueError(msg + "（fail-loud，不靜默開出加總不等於方案的服務）")
                 _logger.warning("%s；保留目前大小", msg)
                 return
-            target_gb = int(target)
+            target_gb, share_gbs = targets
+            share_targets = list(zip(share_paths, share_gbs))
         if existing:
+            # shares 的「目前大小」要在方案鍵改寫之前讀（值空時退回方案鍵目前的大小）。
+            current_shares = _plan_storage_share_sizes(values, template)
             size = self._plan_storage_size(
                 _plan_storage_current_size(values, template), target_gb)
         else:
+            current_shares = [None] * len(share_targets)
             size = f'{target_gb}Gi'
         _values_dict_at(values, parent_path)[size_key] = size
+        for (path, share_gb), current in zip(share_targets, current_shares):
+            *share_parent, share_key = path
+            _values_dict_at(values, share_parent)[share_key] = (
+                self._plan_storage_size(current, share_gb) if existing
+                else f'{share_gb}Gi')
 
     @api.model
     def _apply_plan_spec_overlay(self, values, template, plan, existing=False):

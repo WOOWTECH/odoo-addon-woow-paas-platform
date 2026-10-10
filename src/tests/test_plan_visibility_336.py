@@ -194,6 +194,9 @@ HERMES_PLAN_XMLIDS = [
 
 # #431：三階 cs_* 規格（同價位對齊 n8n；月繳／年繳同 tier 一致）。
 # (cs_vcpu, cs_ram_gb, cs_storage_gb)
+# ⚠ #1637（使用者 2026-10-10「按需分配，最大給到 30G」）起 seed 不再帶 cs_*（規格回到範本值，
+# 0＝fallback template.min_*）；本表只剩「18.0.1.0.79 升級軌寫的歷史值」的意義，升級軌接著跑
+# 18.0.1.0.225 的 ``_woow_migrate_spec_1637`` 才清成 0。
 HERMES_CS_SPEC_431 = {
     'plan_mcp_hermes_monthly': (1, 2.0, 20),
     'plan_mcp_hermes_yearly': (1, 2.0, 20),
@@ -239,18 +242,18 @@ class TestHermesRelisted(TransactionCase):
             self.assertEqual(plan.sh_plan_price, price)
 
     def test_hermes_seed_cs_specs(self):
-        """seed 軌：三階 cs_* 就位（0＝fallback template.min_* 的病灶已解）。"""
-        for xmlid, spec in HERMES_CS_SPEC_431.items():
+        """seed 軌：#1637 起三階都不帶 cs_*（0＝fallback template.min_*：1 vCPU／1 GB／1Gi）。
+
+        #431 曾給三階 1–2 vCPU／2–4 GB／20–40 GB；同一支 mcp-server chart 正式站 19 台實測
+        PVC 約 32KB、記憶體 0.09G、CPU 0.008 核，使用者 2026-10-10 決定回到範本值，三階只差
+        席數與價格。"""
+        for xmlid in HERMES_CS_SPEC_431:
             plan = self.env.ref(f'woow_paas_platform.{xmlid}')
             self.assertEqual(
-                (plan.cs_vcpu, plan.cs_ram_gb, plan.cs_storage_gb), spec, xmlid)
+                (plan.cs_vcpu, plan.cs_ram_gb, plan.cs_storage_gb), (0, 0.0, 0), xmlid)
 
-    def test_hermes_tiers_are_distinct(self):
-        """#431 病灶迴歸：三階不得同規格（否則付不同價拿一樣的算力）。
-
-        斷言讀 DB 實值而非模組常數——cs_* 全 0 時三階會 fallback 同一組
-        template.min_*，這正是 #431 要解的病灶。
-        """
+    def test_hermes_tiers_share_the_template_spec(self):
+        """#1637：三階規格相同（都是範本值），月繳／年繳一致。"""
         tiers = set()
         for sfx in ('', '_t2', '_t3'):
             monthly = self.env.ref(
@@ -263,7 +266,7 @@ class TestHermesRelisted(TransactionCase):
                 (yearly.cs_vcpu, yearly.cs_ram_gb, yearly.cs_storage_gb),
                 f'plan_mcp_hermes{sfx}：月繳／年繳同 tier 規格必須一致')
             tiers.add(spec)
-        self.assertEqual(len(tiers), 3, '三階規格必須彼此不同')
+        self.assertEqual(tiers, {(0, 0.0, 0)})
 
     def test_hermes_no_odoo_workers(self):
         """Hermes 非 Odoo：cs_odoo_workers 一律留 0（設了會誤觸 script 替換）。"""
@@ -307,7 +310,7 @@ class TestHermesRelisted(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestHermesSeatVariants765(TransactionCase):
-    """#765：Hermes MCP Server 的席數變體隨 tier 放大，且**繼承同 tier 的 cs_***。
+    """#765：Hermes MCP Server 的席數變體隨 tier 放大，且**繼承同 tier 的 cs_***（#1637 起三階都是 0）。
 
     為什麼守在本檔而不是只靠 test_plan_variants_generated：那份 GENERATED 檔驗的是
     「變體 cs_* == 同 tier base cs_*」——變體與 base **一起**掉成 0 時它照樣綠
@@ -331,21 +334,18 @@ class TestHermesSeatVariants765(TransactionCase):
                     self.assertEqual(plan.ac_max_access_seats, n, xmlid)
                     self.assertTrue(plan.storefront_hidden, xmlid)
 
-    def test_variant_tiers_stay_distinct(self):
-        """三階的變體規格必須彼此不同（否則付不同價拿一樣的算力，#431 復發）。"""
-        specs = set()
-        for sfx, (_max_seats, _bm, _by) in self.LADDERS.items():
+    def test_variants_follow_their_base_tier(self):
+        """變體規格與同 tier base 相同；#1637 起三階都不帶 cs_*（全部走範本值）。"""
+        for sfx, (max_seats, _bm, _by) in self.LADDERS.items():
             base = self.env.ref(f'woow_paas_platform.plan_mcp_hermes{sfx}_monthly')
-            variant = self.env.ref(
-                f'woow_paas_platform.plan_mcp_hermes{sfx}_ac1_monthly')
-            spec = (variant.cs_vcpu, variant.cs_ram_gb, variant.cs_storage_gb)
-            self.assertEqual(
-                spec, (base.cs_vcpu, base.cs_ram_gb, base.cs_storage_gb),
-                f'plan_mcp_hermes{sfx}_ac1_monthly 的 cs_* 應等同同 tier base')
-            self.assertTrue(all(spec), f'plan_mcp_hermes{sfx} 變體 cs_* 不得為 0'
-                                       '（0＝fallback template.min_*，三階會塌成同規格）')
-            specs.add(spec)
-        self.assertEqual(len(specs), 3, '三階變體規格必須彼此不同')
+            for n in range(1, max_seats + 1):
+                variant = self.env.ref(
+                    f'woow_paas_platform.plan_mcp_hermes{sfx}_ac{n}_monthly')
+                spec = (variant.cs_vcpu, variant.cs_ram_gb, variant.cs_storage_gb)
+                self.assertEqual(
+                    spec, (base.cs_vcpu, base.cs_ram_gb, base.cs_storage_gb),
+                    f'plan_mcp_hermes{sfx}_ac{n}_monthly 的 cs_* 應等同同 tier base')
+                self.assertEqual(spec, (0, 0.0, 0), '#1637：回到範本值')
 
     def test_variants_mounted_on_own_template_only(self):
         """變體只掛 cloud_app_mcp_hermes——勿與 Hermes Agent 完整應用互掛。"""

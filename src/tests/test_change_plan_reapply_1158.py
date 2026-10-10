@@ -180,7 +180,10 @@ class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
 
         values = self._values(svc)
         self.assertEqual(values['resources']['limits'], {'cpu': '2', 'memory': '4Gi'})
-        self.assertEqual(values['persistence']['size'], '30Gi')
+        # #1637：cs_storage_gb 30 是整台總量＝資料 10＋PostgreSQL 4（固定）＋備份 16（資料：備份＝3：5）。
+        self.assertEqual(values['persistence']['size'], '10Gi')
+        self.assertEqual(values['backup']['persistence']['size'], '16Gi')
+        self.assertEqual(values['postgres']['persistence']['size'], '4Gi')
         self.assertEqual(values['conf']['workers'], 3)
         self.assertEqual(values['conf']['limitMemoryHard'], int(4 * GIB * 0.85 / 3))
         self.assertEqual(values['conf']['limitMemorySoft'], int(4 * GIB * 0.70 / 3))
@@ -193,7 +196,7 @@ class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
         self.assertTrue(kwargs['reset_values'])
         self.assertEqual(kwargs['version'], '0.2.7', '換方案不升 chart：釘服務現行版本')
         self.assertEqual(kwargs['values']['conf']['workers'], 3)
-        self.assertEqual(kwargs['values']['persistence']['size'], '30Gi')
+        self.assertEqual(kwargs['values']['persistence']['size'], '10Gi')
         self.assertIn('sensitive_values', kwargs, 'woow-odoo 每次全量送 adminPassword')
 
     def test_quota_is_pushed_before_the_upgrade(self):
@@ -223,7 +226,8 @@ class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
         self.assertTrue(res['success'], res.get('error'))
 
         values = self._values(svc)
-        self.assertEqual(values['persistence']['size'], '30Gi', '儲存只擴不縮（#1512）')
+        self.assertEqual(values['persistence']['size'], '10Gi', '儲存只擴不縮（#1512）')
+        self.assertEqual(values['backup']['persistence']['size'], '16Gi')
         self.assertEqual(values['resources']['limits'], {'cpu': '2', 'memory': '2Gi'})
         self.assertEqual(values['conf']['workers'], 2)
         self.assertEqual(svc.allocated_storage_gb, 30, 'allocated 記實際大小')
@@ -341,14 +345,15 @@ class TestChangePlanReapply1158(_ChangePlanFixture, TransactionCase):
         assembled = svc._assemble_deploy_values()['values']
         self.assertEqual(assembled['conf']['workers'], 3)
         self.assertEqual(assembled['resources']['limits']['memory'], '4Gi')
-        self.assertEqual(assembled['persistence']['size'], '30Gi')
+        self.assertEqual(assembled['persistence']['size'], '10Gi')
 
     def test_assemble_never_shrinks_storage(self):
         owner, svc = self._service('conv-down', plan=self.plan_b)
         svc._create_and_confirm_subscription(
             svc.workspace_id.owner_id.partner_id, self.plan_a)
         assembled = svc._assemble_deploy_values()['values']
-        self.assertEqual(assembled['persistence']['size'], '30Gi')
+        self.assertEqual(assembled['persistence']['size'], '10Gi')
+        self.assertEqual(assembled['backup']['persistence']['size'], '16Gi')
         self.assertEqual(assembled['conf']['workers'], 2)
 
     def test_assemble_is_a_no_op_for_a_service_on_its_plan(self):
@@ -412,7 +417,7 @@ class TestChangePlanExpansionPreflight1513(_ChangePlanFixture, TransactionCase):
         pre = client.upgrade_preflight.call_args.kwargs
         up = client.upgrade_release.call_args.kwargs
         self.assertEqual(pre, up, '預檢與真正的 upgrade 必須是同一組參數，否則預檢沒有意義')
-        self.assertEqual(pre['values']['persistence']['size'], '30Gi')
+        self.assertEqual(pre['values']['persistence']['size'], '10Gi')
         self.assertEqual(pre['values']['conf']['workers'], 3)
         names = [c[0] for c in client.method_calls]
         self.assertLess(names.index('upgrade_preflight'), names.index('update_namespace_quota'))

@@ -106,8 +106,8 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertEqual(self._values()['service']['port'], 7457)
 
     def test_dual_pvc(self):
-        """雙 PVC（values.yaml 扁平 data/home）：data 8Gi→/app/.od、home 2Gi→
-        /home/opendesign（home 保 claude login／opencode 設定跨重啟）。"""
+        """雙 PVC（values.yaml 扁平 data/home）：data 4Gi→/app/.od、home 1Gi→
+        /home/opendesign（home 保 claude login／opencode 設定跨重啟）。#1637 容量研究：維持 8＋2。"""
         p = self._values()['persistence']
         self.assertEqual(p['data']['size'], '8Gi')
         self.assertEqual(p['data']['mountPath'], '/app/.od')

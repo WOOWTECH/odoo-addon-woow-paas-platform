@@ -95,15 +95,15 @@ class TestN8nPlanOverlayPaths1532(TransactionCase):
         _plan, out = self._overlay('plan_n8n_t4_monthly', values, existing=True)
         self.assertEqual(out['main']['persistence']['size'], '50Gi')
         values['main']['persistence']['size'] = '2Gi'
-        _plan, out = self._overlay('plan_n8n_monthly', values, existing=True)
-        self.assertEqual(out['main']['persistence']['size'], '10Gi')
+        plan, out = self._overlay('plan_n8n_monthly', values, existing=True)
+        self.assertEqual(out['main']['persistence']['size'], '%dGi' % plan.cs_storage_gb)
 
     def test_legacy_top_level_residue_is_removed(self):
         legacy = _legacy_values(self.base, 1, 1.0, 10)
-        _plan, out = self._overlay('plan_n8n_t4_monthly', legacy, existing=True)
+        plan, out = self._overlay('plan_n8n_t4_monthly', legacy, existing=True)
         self.assertNotIn('resources', out)
         self.assertNotIn('persistence', out)
-        self.assertEqual(out['main']['persistence']['size'], '40Gi')
+        self.assertEqual(out['main']['persistence']['size'], '%dGi' % plan.cs_storage_gb)
         self.assertEqual(out['main']['resources']['limits'], {'cpu': '2', 'memory': '4Gi'})
 
     def test_top_level_values_of_another_shape_are_kept(self):
@@ -128,7 +128,8 @@ class TestN8nPlanOverlayPaths1532(TransactionCase):
         out = self.Svc._apply_plan_spec_overlay(
             json.loads(odoo.helm_default_values), odoo, plan)
         self.assertEqual(out['resources']['limits']['cpu'], '3')
-        self.assertEqual(out['persistence']['size'], '40Gi')
+        # #1637：odoo 方案是整台總量 30＝資料 10＋PG 4＋備份 16；資料那顆仍在頂層。
+        self.assertEqual(out['persistence']['size'], '10Gi')
         self.assertNotIn('resources', out.get('main') or {})
 
 

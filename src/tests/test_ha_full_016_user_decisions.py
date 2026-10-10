@@ -9,11 +9,12 @@ chart 0.1.6（woow-paas-charts #130）一次帶了五個修正，使用者只採
 - 不採用（範本明寫 false）：登入失敗封 IP（#1446，``haProxy.ipBanEnabled``）、核心設定
   搬進 .storage（#1447，``seed.unlockCoreConfig``）、平台給初始密碼（#1442，
   ``has_admin_gui`` 維持 False）。
-- 資料磁碟 10G → 20G（只對新開通；既有服務不擴容，另行決定）。
+- 資料磁碟 10G → 20G（只對新開通；既有服務不擴容，另行決定）。#1637（使用者 2026-10-10「按需分配，
+  最大給到 30G」）改回 10G：正式站 8 台最多用 0.45G。10-07～10-10 之間開通的 20Gi 服務照舊（不縮）。
 
 本檔另外守兩件「既有服務」的事——它們都不是改範本就會自動對的：
 
-1. 既有服務 Redeploy **不會**把 PVC 改成 20Gi：服務的 ``helm_values`` 是開通當下的快照，
+1. 既有服務 Redeploy **不會**改 PVC 大小（不擴也不縮）：服務的 ``helm_values`` 是開通當下的快照，
    Redeploy 只換 image（#1408）；``allocated_storage_gb``（工作區配額）也是開通時寫入的值。
 2. 既有服務 Redeploy **會**吃到範本的 ``ipBanEnabled=false``／``unlockCoreConfig=false``：
    快照裡沒有這兩個鍵，不補的話 0.1.6 的 chart 預設 true 會生效
@@ -100,30 +101,30 @@ class TestHaFull016TemplateDecisions(TransactionCase):
             self.assertEqual(
                 set(values['resources'][section]), {'cpu', 'memory'}, section)
 
-    def test_disk_20g_everywhere_shown(self):
-        """資料磁碟 20G：PVC、min_storage_gb、卡片說明一致。"""
+    def test_disk_10g_everywhere_shown(self):
+        """資料磁碟 10G（#1637 改回）：PVC、min_storage_gb、卡片說明一致。"""
         tpl = _ha_full(self.env)
-        self.assertEqual(self._values()['persistence']['size'], '20Gi')
-        self.assertEqual(tpl.min_storage_gb, 20)
-        self.assertIn('20 GB 磁碟', tpl.description)
-        self.assertNotIn('10 GB', tpl.description)
-        self.assertNotIn('10 GB', tpl.full_description)
+        self.assertEqual(self._values()['persistence']['size'], '10Gi')
+        self.assertEqual(tpl.min_storage_gb, 10)
+        self.assertIn('10 GB 磁碟', tpl.description)
+        self.assertNotIn('20 GB', tpl.description)
+        self.assertNotIn('20 GB', tpl.full_description)
 
     def test_full_description_matches_decisions(self):
         """客戶自己建管理者、/media 在磁碟上；不提封鎖 IP 與初始密碼。"""
         text = _ha_full(self.env).full_description
         self.assertIn('建立你自己的管理者帳號', text)
         self.assertIn('/media', text)
-        self.assertIn('20 GB', text)
+        self.assertIn('10 GB', text)
         for word in ('封鎖', '封 IP', '初始密碼'):
             self.assertNotIn(word, text, word)
 
-    def test_new_service_allocation_is_20(self):
-        """新開通的工作區配額用量：plan 不設 cs_storage_gb ⇒ 取 min_storage_gb＝20。"""
+    def test_new_service_allocation_is_10(self):
+        """新開通的工作區配額用量：plan 不設 cs_storage_gb ⇒ 取 min_storage_gb＝10（#1637）。"""
         tpl = _ha_full(self.env)
         plan = self.env.ref('woow_paas_platform.plan_ha_full_monthly')
         vals = self.env['woow_paas_platform.cloud_service']._allocated_vals_from(tpl, plan)
-        self.assertEqual(vals['allocated_storage_gb'], 20)
+        self.assertEqual(vals['allocated_storage_gb'], 10)
 
 
 @tagged('post_install', '-at_install')
@@ -165,12 +166,25 @@ class TestHaFullExistingServiceRedeploy016(TransactionCase):
         return json.loads(self.service.sudo().helm_values)
 
     def test_redeploy_keeps_existing_pvc_size(self):
-        """🔴 不擴容：送進 helm 的 persistence.size 仍是服務自己的 10Gi，不是範本的 20Gi。"""
+        """🔴 不改 PVC：送進 helm 的 persistence.size 仍是服務自己的 10Gi。"""
         sent = self._redeploy()
         self.assertEqual(sent['version'], '0.1.6')
         self.assertTrue(sent['reset_values'])
         self.assertEqual(sent['values']['persistence']['size'], '10Gi')
         self.assertEqual(self._stored()['persistence']['size'], '10Gi')
+
+    def test_redeploy_never_shrinks_a_20g_service(self):
+        """🔴 #1637：10-07～10-10 開通的 20Gi 服務 Redeploy 仍送 20Gi（範本已改回 10Gi；PVC 縮小
+        會讓整次 helm upgrade 被 API server 拒絕）。"""
+        snapshot = json.loads(json.dumps(_LEGACY_SNAPSHOT))
+        snapshot['persistence']['size'] = '20Gi'
+        self.service._apply_helm_values(snapshot)
+        self.service.sudo().write({'allocated_storage_gb': 20})
+        sent = self._redeploy()
+        self.assertEqual(sent['values']['persistence']['size'], '20Gi')
+        self.assertEqual(self._stored()['persistence']['size'], '20Gi')
+        self.service.invalidate_recordset()
+        self.assertEqual(self.service.allocated_storage_gb, 20)
 
     def test_redeploy_keeps_workspace_quota_usage(self):
         """工作區配額用量（allocated_storage_gb）是開通時寫入的，Redeploy 不重算。"""
