@@ -25,7 +25,7 @@ OMNI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubern
 OMNI_HOST_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host'
 OMNI_CHART = 'oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent'
 PINNED_TAG_RE = r'^\d{8}\.\d{4}@sha256:[0-9a-f]{64}$'
-# chart 0.1.6／上游 v0.16.0 的 runner image 釘（migration 18.0.1.0.221 要換掉的值）。
+# chart 0.1.6／上游 v0.16.0 的 runner image 釘（migration 18.0.1.0.222 要換掉的值）。
 OMNI_HOST_016 = (OMNI_HOST_IMAGE + ':20260929.1400@sha256:'
                  '558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9')
 
@@ -200,7 +200,7 @@ class TestAppManagedCarrier(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestOmnigentRunnerImageMigration017(TransactionCase):
-    """migration 18.0.1.0.221：既有 omnigent 服務的 ``runner.image``（字串）改成範本的新釘。
+    """migration 18.0.1.0.222：既有 omnigent 服務的 ``runner.image``（字串）改成範本的新釘。
 
     Redeploy 的 #1408 只刷 ``{repository, tag}`` 形式的 image，``runner.image`` 是字串刷不到；
     不補的話既有服務 Redeploy 到 0.1.7 後雲端工作機仍是 0.16。只改仍指向平台

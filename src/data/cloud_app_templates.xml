@@ -1955,7 +1955,7 @@
              paas-odoo-ci mirror-image.yml #263／#264 原樣鏡像 ghcr v0.17.0，digest 保留）：只換 server
              與 runner image，chart 模板不變。既有服務仍要管理員 Redeploy 才會換版；Redeploy 的 #1408
              只刷 {repository, tag} 形式的 image，runner.image 是字串，所以既有服務的 runner.image 由
-             migration 18.0.1.0.221 改成這裡的釘（_woow_migrate_omnigent_runner_image_017）。
+             migration 18.0.1.0.222 改成這裡的釘（_woow_migrate_omnigent_runner_image_017）。
              ⚠ 0.17 開機會跑 alembic mm1a2b3c4d5e（agents 加 index；PostgreSQL 上是 CREATE INDEX
              CONCURRENTLY，會等所有舊 snapshot 結束）：外接 PostgreSQL 的服務 Redeploy 前先查
              pg_stat_activity 有沒有長 transaction，或在 0.16 還在跑時先預建同名 index。 -->
