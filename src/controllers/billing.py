@@ -899,7 +899,8 @@ class BillingController(HiddenChainMixin, Controller):
             'start_date': sub.sh_start_date.isoformat() if sub.sh_start_date else None,
             'end_date': sub.sh_end_date.isoformat() if sub.sh_end_date else None,
             'next_payment': sub.sh_date_of_next_payment.isoformat() if sub.sh_date_of_next_payment else None,
-            'is_trial': sub.sh_trial,
+            # 2026-10-10：「此刻在試用期內」（已取消／試用已結束的訂閱不算），見 sh.subscription.subscription._woow_in_trial。
+            'is_trial': sub._woow_in_trial(),
             'trial_end_date': sub.sh_trial_end_date.isoformat() if sub.sh_trial_end_date else None,
             'recurrency_label': recurrency_label,
             # #1310：SubscribedServicesModal 的價格週期（原本寫死 "/ month"，年繳也顯示月）。

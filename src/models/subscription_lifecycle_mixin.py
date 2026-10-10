@@ -511,7 +511,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             raise UserError(_("No subscription linked to this service."))
         if sub.state != 'in_progress':
             raise UserError(_("Subscription is not active."))
-        if not sub.sh_trial:
+        # 2026-10-10：試用已自然結束（已開始計費）的訂閱 sh_trial 仍可能是 True，
+        # 只看旗標會讓它再「略過試用」一次＝重複扣當期，所以看實際試用期。
+        if not sub._woow_in_trial():
             raise UserError(_("Subscription is not in trial period."))
 
         # Tax breakdown is computed by the shared helper so the dashboard's
@@ -566,7 +568,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             raise UserError(_("No subscription linked to this service."))
         if sub.state != 'in_progress':
             raise UserError(_("Subscription is not active."))
-        if not sub.sh_trial:
+        # 2026-10-10：試用已自然結束（已開始計費）的訂閱 sh_trial 仍可能是 True，
+        # 只看旗標會讓它再「略過試用」一次＝重複扣當期，所以看實際試用期。
+        if not sub._woow_in_trial():
             raise UserError(_("Subscription is not in trial period."))
 
         # Check wallet balance before proceeding
@@ -858,7 +862,8 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'ac_used_access_seats': len(
                 self.env['woow_paas_platform.security_access_access_policy']
                     ._seat_usage_for_anchor(self)),
-            'is_trial': sub.sh_trial,
+            # 2026-10-10：「此刻在試用期內」，不是上游 sh_trial（＝方案有試用，試用結束後不會被清）。
+            'is_trial': sub._woow_in_trial(),
             'trial_end_date': sub.sh_trial_end_date.isoformat() if sub.sh_trial_end_date else None,
             'start_date': sub.sh_start_date.isoformat() if sub.sh_start_date else None,
             'end_date': sub.sh_end_date.isoformat() if sub.sh_end_date else None,
