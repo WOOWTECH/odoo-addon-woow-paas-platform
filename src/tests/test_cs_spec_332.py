@@ -23,12 +23,13 @@ class TestCsSpecFields(TransactionCase):
 
 
 # #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：odoo 的 cs_storage_gb 改成整台總量
-# 20／25／30，n8n 5／10／15（原 #332 的 20／30／40、10／20／30）。
+# 20／25／30，n8n 5／10／15（原 #332 的 20／30／40、10／20／30）；容量研究（使用者同日核可）odoo T1 記憶體
+# 3 GB、workers 3／4／5，n8n T1 記憶體 2 GB。
 CS_SPEC_EXPECTED = {
-    'plan_odoo_monthly': (2, 2.0, 20, 2), 'plan_odoo_yearly': (2, 2.0, 20, 2),
-    'plan_odoo_t2_monthly': (2, 4.0, 25, 3), 'plan_odoo_t2_yearly': (2, 4.0, 25, 3),
-    'plan_odoo_t3_monthly': (3, 4.0, 30, 4), 'plan_odoo_t3_yearly': (3, 4.0, 30, 4),
-    'plan_n8n_monthly': (1, 1.0, 5, 0), 'plan_n8n_yearly': (1, 1.0, 5, 0),
+    'plan_odoo_monthly': (2, 3.0, 20, 3), 'plan_odoo_yearly': (2, 3.0, 20, 3),
+    'plan_odoo_t2_monthly': (2, 4.0, 25, 4), 'plan_odoo_t2_yearly': (2, 4.0, 25, 4),
+    'plan_odoo_t3_monthly': (3, 4.0, 30, 5), 'plan_odoo_t3_yearly': (3, 4.0, 30, 5),
+    'plan_n8n_monthly': (1, 2.0, 5, 0), 'plan_n8n_yearly': (1, 2.0, 5, 0),
     'plan_n8n_t2_monthly': (1, 2.0, 10, 0), 'plan_n8n_t2_yearly': (1, 2.0, 10, 0),
     'plan_n8n_t3_monthly': (2, 2.0, 15, 0), 'plan_n8n_t3_yearly': (2, 2.0, 15, 0),
 }
@@ -87,7 +88,7 @@ class TestCsSpecSeed(TransactionCase):
         """雙軌防漂移：fresh XML 值經 migration delegate 依序重跑後必須不變。
 
         #1637：#332 的 delegate 寫的是當時的值（odoo 30／40、n8n 10／20／30），升級軌接著跑
-        18.0.1.0.225 的 ``_woow_migrate_disk_30g_1637`` 才收斂到現在的 seed。
+        18.0.1.0.225 的 ``_woow_migrate_spec_1637`` 才收斂到現在的 seed。
         """
         Plan = self.env['sh.subscription.plan']
         before = {
@@ -96,7 +97,7 @@ class TestCsSpecSeed(TransactionCase):
             for p in [self.env.ref(f'woow_paas_platform.{xmlid}')]
         }
         Plan._woow_migrate_cs_spec_332()
-        Plan._woow_migrate_disk_30g_1637()
+        Plan._woow_migrate_spec_1637()
         for xmlid, snap in before.items():
             p = self.env.ref(f'woow_paas_platform.{xmlid}')
             self.assertEqual(
@@ -144,9 +145,9 @@ class TestPlanSpecOverlay(TransactionCase):
         out = Svc._apply_plan_spec_overlay(copy.deepcopy(base), tpl, plan)
         self.assertEqual(out['resources']['requests']['cpu'], '3')
         self.assertEqual(out['resources']['requests']['memory'], '4Gi')
-        # #1637：cs_storage_gb 30 是整台總量＝資料 13＋PostgreSQL 4（固定）＋備份 13。
-        self.assertEqual(out['persistence']['size'], '13Gi')
-        self.assertEqual(out['backup']['persistence']['size'], '13Gi')
+        # #1637：cs_storage_gb 30 是整台總量＝資料 10＋PostgreSQL 4（固定）＋備份 16。
+        self.assertEqual(out['persistence']['size'], '10Gi')
+        self.assertEqual(out['backup']['persistence']['size'], '16Gi')
         self.assertEqual(out['postgres']['persistence']['size'], '4Gi')
 
     def test_overlay_workers_substitution(self):
@@ -158,9 +159,9 @@ class TestPlanSpecOverlay(TransactionCase):
         self.assertEqual(base['conf']['workers'], 0, '前提：seed 是 threaded 預設')
         out = Svc._apply_plan_spec_overlay(base, tpl, plan)
         ram_bytes = int(4.0 * 1024 ** 3)
-        self.assertEqual(out['conf']['workers'], 4)
-        self.assertEqual(out['conf']['limitMemoryHard'], int(ram_bytes * 0.85 / 4))
-        self.assertEqual(out['conf']['limitMemorySoft'], int(ram_bytes * 0.70 / 4))
+        self.assertEqual(out['conf']['workers'], 5, '#1637 容量研究：T3 workers 4 → 5')
+        self.assertEqual(out['conf']['limitMemoryHard'], int(ram_bytes * 0.85 / 5))
+        self.assertEqual(out['conf']['limitMemorySoft'], int(ram_bytes * 0.70 / 5))
         self.assertNotIn('customPostInitScripts', out,
                          'woow-odoo tenant schema 拒收 Bitnami 的 customPostInitScripts')
 

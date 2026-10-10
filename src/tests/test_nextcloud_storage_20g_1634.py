@@ -101,7 +101,8 @@ class TestNextcloudStorage20g1634(TransactionCase):
         self.assertEqual(self._plan('plan_nextcloud_yearly').sh_plan_price, 45000, '價格不變')
 
     def test_descriptions_say_20_gb_in_total(self):
-        self.assertIn('20 GB 磁碟（含使用者檔案 13 GB）', self.tpl.description)
+        self.assertIn('20 GB 磁碟（含使用者檔案 13 GB', self.tpl.description)
+        self.assertIn('實際約可放 8–10 GB', self.tpl.description, '#1637 容量研究：文案寫明實際可放量')
         self.assertIn('整台 20 GB，其中使用者檔案 13 GB', self.tpl.full_description)
         for text in (self.tpl.description, self.tpl.full_description):
             self.assertNotIn('80 GB', text)

@@ -830,17 +830,19 @@ def _plan_spec_paths(template):
 # - ``default_size``（可省）：方案鍵沒有值時 chart 改讀的鍵（nextcloud chart
 #   ``nextcloud.dataSize``＝``persistence.size | default persistence.data.size``），算
 #   「目前實際大小」（只擴不縮、帳面 allocated）時用。
-# - ``shares``（可省）：跟方案鍵**平分**「總量 − 固定開銷」的 volume（#1637 Odoo 的備份）。
-#   方案鍵拿整數 GiB 的下取整、最後一顆拿餘數，所以 shares ≥ 方案鍵（備份不小於資料）。
-#   值空時 chart 退回方案鍵的大小（woow-odoo ``backup.persistence.size | default
-#   persistence.size``），「目前大小」照同一條規則讀。
+# - ``shares``（可省）：跟方案鍵**分**「總量 − 固定開銷」的 volume（#1637 Odoo 的備份）。
+#   ``weights``（可省，預設平分）＝(方案鍵, 各 share) 的比例：方案鍵拿四捨五入的整數 GiB、
+#   最後一顆 share 拿餘數。值空時 chart 退回方案鍵的大小（woow-odoo ``backup.persistence.size |
+#   default persistence.size``），「目前大小」照同一條規則讀。
 #
 # 沒列的範本：方案鍵＝方案總量（現狀，不變）。換 chart 或改固定開銷的鍵時這裡要跟著改。
 #
 # #1637（使用者 2026-10-10「依性質跟使用需求按需分配，最大給到 30G」）：
-# - odoo：資料＋備份平分「總量 − PostgreSQL」。PostgreSQL 是 StatefulSet 的
+# - odoo：資料：備份＝3：5 分「總量 − PostgreSQL」（容量研究 2026-10-10，使用者核可）：備份卷
+#   要放一份完整 filestore（rsync 硬連結）＋約 12 份 pg_dump（daily 7＋weekly 4＋升級前）與 4 週內
+#   刪改的檔，資料區用滿前備份會先滿，所以備份要比資料大。PostgreSQL 是 StatefulSet 的
 #   volumeClaimTemplates，**建好之後大小不能改**（helm upgrade 會被 API server 拒絕），所以放
-#   ``fixed``——換方案只動資料與備份。20／25／30 ＝ 8＋4＋8／10＋4＋11／13＋4＋13。
+#   ``fixed``——換方案只動資料與備份。20／25／30 ＝ 6＋4＋10／8＋4＋13／10＋4＋16。
 # - emqx：log 固定，資料＝總量 − log（3 ＝ 2＋1）。
 _PLAN_STORAGE_SPLIT = {
     'nextcloud': {
@@ -854,6 +856,7 @@ _PLAN_STORAGE_SPLIT = {
     'odoo': {
         'fixed': (('postgres', 'persistence', 'size'),),
         'shares': (('backup', 'persistence', 'size'),),
+        'weights': (3, 5),
     },
     'emqx': {
         'default_size': ('persistence', 'data', 'size'),
@@ -862,11 +865,12 @@ _PLAN_STORAGE_SPLIT = {
 }
 
 
-def _plan_storage_targets(total_gb, fixed_gib, n_shares):
-    """總量 − 固定開銷，平分給方案鍵＋``n_shares`` 顆 shares（整數 GiB）。
+def _plan_storage_targets(total_gb, fixed_gib, n_shares, weights=None):
+    """總量 − 固定開銷，照 ``weights`` 分給方案鍵＋``n_shares`` 顆 shares（整數 GiB）。
 
-    回傳 ``(方案鍵, [各 share])``；方案鍵拿下取整、最後一顆 share 拿餘數（≥ 方案鍵）。
-    算不出來（固定開銷讀不到、不是整數 GiB、方案鍵不到 1 GiB）回 ``None``。
+    ``weights``＝(方案鍵, 各 share)，省略＝平分。方案鍵與前面的 share 拿四捨五入（.5 進位）的
+    整數 GiB，最後一顆 share 拿餘數。回傳 ``(方案鍵, [各 share])``；算不出來（固定開銷讀不到、
+    不是整數 GiB、任一顆不到 1 GiB）回 ``None``。
     """
     if fixed_gib is None:
         return None
@@ -874,13 +878,15 @@ def _plan_storage_targets(total_gb, fixed_gib, n_shares):
     if not float(rest).is_integer():
         return None
     rest = int(rest)
-    base = rest // (1 + n_shares)
-    if base < 1:
+    weights = tuple(weights or (1,) * (1 + n_shares))
+    if len(weights) != 1 + n_shares:
         return None
-    shares = [base] * n_shares
-    if shares:
-        shares[-1] = rest - base * n_shares
-    return base, shares
+    total_weight = sum(weights)
+    sizes = [int(math.floor(rest * w / total_weight + 0.5)) for w in weights[:-1]]
+    sizes.append(rest - sum(sizes))
+    if min(sizes) < 1:
+        return None
+    return sizes[0], sizes[1:]
 
 
 def _plan_storage_share_sizes(values, template):
@@ -1003,8 +1009,25 @@ _N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
 # ⚠ 只列平台決定、租戶不能設的鍵（ha-full 的 helm_value_specs 為空）。刻意**不**收
 # ``persistence.size``：PVC 只能長大，範本調大後套到既有服務就是一次沒人決定過的線上
 # 擴容（既有服務維持自己快照裡的大小）。範本沒有該鍵時不動（no-op，不刪服務的值）。
+#
+# #1637（容量研究，使用者 2026-10-10 核可）——穩定性設定也是平台政策，既有服務 Redeploy 時要跟上：
+#   - ha-full ``terminationGracePeriodSeconds`` 120（recorder 收尾）；
+#   - n8n ``main.livenessProbe``／``main.readinessProbe``（timeout 1 秒會在開機途中、大 JSON 卡住
+#     事件迴圈時被殺）；
+#   - litellm 內附 PostgreSQL 的 CPU 上限 1 核（0.5 核實測被限速 14.6%）；
+#   - hermes-agent agent 容器的 requests（閒置就 1.06G）；
+#   - mcp-server 家族的記憶體 requests（128Mi 低於實測）。
+#   都不是租戶可設的鍵；pi-agent 刻意不列（pi1–pi5 不動）。
+_MCP_POLICY_PATHS = [('resources', 'requests', 'memory')]
 _TEMPLATE_POLICY_VALUE_PATHS = {
-    'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig')],
+    'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig'),
+                ('terminationGracePeriodSeconds',)],
+    'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe')],
+    'litellm': [('postgresql', 'resources', 'limits', 'cpu')],
+    'hermes-agent': [('agent', 'resources', 'requests')],
+    **{slug: list(_MCP_POLICY_PATHS) for slug in (
+        'mcp-hermes', 'mcp-odoo', 'mcp-odoo-manage', 'mcp-n8n', 'mcp-k8s', 'mcp-vk',
+        'mcp-opendesign', 'mcp-litellm', 'mcp-nextcloud')},
 }
 _MISSING = object()
 
@@ -9782,7 +9805,7 @@ class CloudService(models.Model):
           （``_plan_storage_current_size``），照 ``_plan_storage_size`` 只擴不縮；算不出來
           就保留現值、只 log——redeploy／換方案不能因此失敗，也絕不送出可能更小的值。
 
-        #1637：``shares``（Odoo 的備份）跟方案鍵平分「總量 − 固定開銷」，各自只擴不縮；
+        #1637：``shares``（Odoo 的備份）跟方案鍵照 ``weights`` 分「總量 − 固定開銷」，各自只擴不縮；
         目前大小讀不到（值空）時以 chart 的退回值（方案鍵目前的大小）比較。
         """
         *parent_path, size_key = _plan_spec_paths(template)['storage']
@@ -9793,7 +9816,7 @@ class CloudService(models.Model):
             fixed = _plan_storage_fixed_gib(values, template)
             share_paths = split.get('shares', ())
             targets = _plan_storage_targets(
-                plan.cs_storage_gb, fixed, len(share_paths))
+                plan.cs_storage_gb, fixed, len(share_paths), split.get('weights'))
             if targets is None:
                 msg = (
                     "#1634 %s 方案 %s 的 cs_storage_gb=%s 扣掉固定開銷 volume（%s GiB）"

@@ -173,11 +173,12 @@ TIER_BASE_XMLID = {
 # - n8n t1–t4 磁碟 10／20／30／40 → 5／10／15／20。
 # - mcp_hermes 拿掉（#431／#765 曾給三階 1–2 vCPU／2–4 GB／20–40 GB）：base 不再設
 #   cs_*、規格回到範本值，變體跟著不帶。
+# - 容量研究（使用者 10-10 核可）：odoo T1 記憶體 2 → 3、workers 2／3／4 → 3／4／5；n8n T1 記憶體 1 → 2。
 CS_SPECS = {
-    ('odoo', 't1'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=2),
-    ('odoo', 't2'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=25, cs_odoo_workers=3),
-    ('odoo', 't3'): dict(cs_vcpu=3, cs_ram_gb=4.0, cs_storage_gb=30, cs_odoo_workers=4),
-    ('n8n', 't1'): dict(cs_vcpu=1, cs_ram_gb=1.0, cs_storage_gb=5, cs_odoo_workers=0),
+    ('odoo', 't1'): dict(cs_vcpu=2, cs_ram_gb=3.0, cs_storage_gb=20, cs_odoo_workers=3),
+    ('odoo', 't2'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=25, cs_odoo_workers=4),
+    ('odoo', 't3'): dict(cs_vcpu=3, cs_ram_gb=4.0, cs_storage_gb=30, cs_odoo_workers=5),
+    ('n8n', 't1'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=5, cs_odoo_workers=0),
     ('n8n', 't2'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=10, cs_odoo_workers=0),
     ('n8n', 't3'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=15, cs_odoo_workers=0),
     ('n8n', 't4'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=20, cs_odoo_workers=0),

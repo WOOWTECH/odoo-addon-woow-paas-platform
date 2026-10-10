@@ -73,19 +73,21 @@ class TestPiAgentSeed(TransactionCase):
         self.assertNotEqual(build_tag, '00000000.0000', '佔位 tag 不得上架')
 
     def test_resources_match_t1(self):
-        """T1 = 2 vCPU / 4 Gi / 20 Gi：template min_*、plan cs_*、helm values 三處一致（quota lockstep）。"""
+        """T1 = 2 vCPU / 8 Gi / 30 Gi（#1637 容量研究：4 → 8、20 → 30）：template min_*、plan cs_*、helm values 三處一致。"""
         tpl = self._tpl()
         v = self._values()
         self.assertEqual(tpl.min_vcpu, 2)
-        self.assertEqual(tpl.min_ram_gb, 4.0)
-        self.assertEqual(tpl.min_storage_gb, 20)
+        self.assertEqual(tpl.min_ram_gb, 8.0)
+        self.assertEqual(tpl.min_storage_gb, 30)
         self.assertEqual(v['piWeb']['resources']['limits']['cpu'], '2')
-        self.assertEqual(v['piWeb']['resources']['limits']['memory'], '4Gi')
-        self.assertEqual(v['persistence']['size'], '20Gi')
+        self.assertEqual(v['piWeb']['resources']['limits']['memory'], '8Gi')
+        self.assertEqual(v['piWeb']['nodeMaxOldSpaceMb'], 1536, '3072 會讓每個 Node 子程序各自長到 3G')
+        self.assertEqual(v['startupProbe']['timeoutSeconds'], 5)
+        self.assertEqual(v['persistence']['size'], '30Gi')
         for plan in tpl.sudo().subscription_plan_ids:
             self.assertEqual(plan.cs_vcpu, 2, plan.name)
-            self.assertEqual(plan.cs_ram_gb, 4.0, plan.name)
-            self.assertEqual(plan.cs_storage_gb, 20, plan.name)
+            self.assertEqual(plan.cs_ram_gb, 8.0, plan.name)
+            self.assertEqual(plan.cs_storage_gb, 30, plan.name)
 
     def test_service_port_lockstep(self):
         v = self._values()

@@ -196,7 +196,7 @@ HERMES_PLAN_XMLIDS = [
 # (cs_vcpu, cs_ram_gb, cs_storage_gb)
 # ⚠ #1637（使用者 2026-10-10「按需分配，最大給到 30G」）起 seed 不再帶 cs_*（規格回到範本值，
 # 0＝fallback template.min_*）；本表只剩「18.0.1.0.79 升級軌寫的歷史值」的意義，升級軌接著跑
-# 18.0.1.0.225 的 ``_woow_migrate_disk_30g_1637`` 才清成 0。
+# 18.0.1.0.225 的 ``_woow_migrate_spec_1637`` 才清成 0。
 HERMES_CS_SPEC_431 = {
     'plan_mcp_hermes_monthly': (1, 2.0, 20),
     'plan_mcp_hermes_yearly': (1, 2.0, 20),

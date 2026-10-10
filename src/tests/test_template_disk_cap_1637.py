@@ -9,8 +9,9 @@
 - **賣的＝給的**：有 ``cs_storage_gb`` 的方案，PVC 加總＝方案值；沒有的，範本 ``min_storage_gb``
   ≥ PVC 加總（ns quota 以 ``min_storage_gb`` 計，HAOS 另含 CDI 匯入峰值）。
 - 各範本改後的大小（表 ``EXPECTED``）。
-- Odoo 拆分：資料＋PostgreSQL＋備份＝方案總量（20／25／30 ＝ 8＋4＋8／10＋4＋11／13＋4＋13），
-  備份不小於資料；既有服務只擴不縮、PostgreSQL 永遠不動（StatefulSet volumeClaimTemplates）。
+- Odoo 拆分：資料＋PostgreSQL＋備份＝方案總量（20／25／30 ＝ 6＋4＋10／8＋4＋13／10＋4＋16，
+  資料：備份＝3：5，容量研究），備份不小於資料；既有服務只擴不縮、PostgreSQL 永遠不動
+  （StatefulSet volumeClaimTemplates）。
 - EMQX 拆分：資料＝總量 − log。
 - migration 18.0.1.0.225：noupdate=1 的方案（含 generator 產的存取席位變體）改成新值，手調過的
   不覆蓋、冪等；seed 與 migration 表同值。
@@ -93,13 +94,13 @@ EXPECTED = {
     'mcp-nextcloud': (1, {'plan_mcp_nextcloud_monthly': 1}),
     'haos': (30, {'plan_haos_monthly': 30}),
     'ha-full': (10, {'plan_ha_full_monthly': 10}),
-    'code-server': (12, {'plan_code_server_monthly': 12}),
-    'pi-agent': (20, {'plan_pi_agent_monthly': 20}),
+    'code-server': (20, {'plan_code_server_monthly': 20}),
+    'pi-agent': (30, {'plan_pi_agent_monthly': 30}),
     'n8n': (2, {'plan_n8n_monthly': 5, 'plan_n8n_t2_monthly': 10, 'plan_n8n_t3_monthly': 15,
                 'plan_n8n_t4_monthly': 20}),
     'emqx': (3, {'plan_emqx_monthly': 3}),
     'litellm': (5, {'plan_litellm_monthly': 5}),
-    'open-design': (5, {'plan_opendesign_monthly': 5}),
+    'open-design': (10, {'plan_opendesign_monthly': 10}),
     'omnigent': (5, {'plan_omnigent_monthly': 5}),
     'hermes-agent': (5, {'plan_hermes_agent_monthly': 5}),
     'ha-paas': (5, {}),
@@ -110,8 +111,8 @@ EXPECTED = {
 
 # 改後的 min_storage_gb：除 HAOS（CDI 匯入峰值，見範本註解）外＝沒有方案時的 PVC 加總或 T1。
 EXPECTED_MIN_STORAGE = {
-    'odoo': 20, 'haos': 34, 'ha-full': 10, 'code-server': 12, 'pi-agent': 20, 'n8n': 5,
-    'emqx': 3, 'litellm': 5, 'open-design': 5, 'omnigent': 5, 'hermes-agent': 5, 'ha-paas': 5,
+    'odoo': 20, 'haos': 34, 'ha-full': 10, 'code-server': 20, 'pi-agent': 30, 'n8n': 5,
+    'emqx': 3, 'litellm': 5, 'open-design': 10, 'omnigent': 5, 'hermes-agent': 5, 'ha-paas': 5,
     'headscale': 1, 'tailscale': 1, 'nextcloud': 20,
     'mcp-hermes': 1, 'mcp-odoo': 1, 'mcp-odoo-manage': 1, 'mcp-n8n': 1, 'mcp-k8s': 1,
     'mcp-vk': 1, 'mcp-opendesign': 1, 'mcp-litellm': 1, 'mcp-nextcloud': 1,
@@ -264,7 +265,7 @@ class TestTemplateDiskCap1637(TransactionCase):
     def test_descriptions_match_the_new_sizes(self):
         for slug, now, before in (('haos', '30 GB 磁碟', '64 GB'),
                                   ('ha-full', '10 GB 磁碟', '20 GB'),
-                                  ('code-server', '12 GB 磁碟', '25 GB'),
+                                  ('code-server', '20 GB 磁碟', '25 GB'),
                                   ('emqx', '3 GB 磁碟', '12 GB'),
                                   ('litellm', '5 GB 磁碟', '10 GB 磁碟'),
                                   ('omnigent', '5 GB 磁碟', '10 GB 磁碟'),
@@ -277,12 +278,14 @@ class TestTemplateDiskCap1637(TransactionCase):
                 self.assertNotIn(before, tpl.full_description or '')
         self.assertIn('30 GB 專屬磁碟', self._tpl('haos').full_description)
         self.assertIn('服務附 10 GB 資料磁碟', self._tpl('ha-full').full_description)
-        self.assertIn('工作區 10 GB＋AI 助手資料 2 GB', self._tpl('code-server').full_description)
+        self.assertIn('工作區 16 GB＋AI 助手資料 4 GB', self._tpl('code-server').full_description)
+        self.assertIn('Supervisor', self._tpl('haos').full_description)
+        self.assertIn('備份請存到外部', self._tpl('haos').description)
 
 
 @tagged('post_install', '-at_install')
 class TestOdooStorageSplit1637(TransactionCase):
-    """Odoo：資料＋PostgreSQL＋備份＝方案總量；PostgreSQL 固定、備份不小於資料。"""
+    """Odoo：資料＋PostgreSQL＋備份＝方案總量；PostgreSQL 固定、資料：備份＝3：5。"""
 
     def setUp(self):
         super().setUp()
@@ -305,14 +308,14 @@ class TestOdooStorageSplit1637(TransactionCase):
         return self.Svc._apply_plan_spec_overlay(values, self.tpl, plan, existing=existing)
 
     def test_template_is_the_t1_split(self):
-        self.assertEqual(_odoo_pvcs(self.base), {'data': 8, 'pg': 4, 'backup': 8})
+        self.assertEqual(_odoo_pvcs(self.base), {'data': 6, 'pg': 4, 'backup': 10})
         self.assertEqual(self.base['postgres']['database'], 'odoo', '原本的鍵不能被蓋掉')
 
     def test_new_services_split_the_plan_total(self):
-        for xmlid, split in (('plan_odoo_monthly', {'data': 8, 'pg': 4, 'backup': 8}),
-                             ('plan_odoo_yearly', {'data': 8, 'pg': 4, 'backup': 8}),
-                             ('plan_odoo_t2_monthly', {'data': 10, 'pg': 4, 'backup': 11}),
-                             ('plan_odoo_t3_monthly', {'data': 13, 'pg': 4, 'backup': 13})):
+        for xmlid, split in (('plan_odoo_monthly', {'data': 6, 'pg': 4, 'backup': 10}),
+                             ('plan_odoo_yearly', {'data': 6, 'pg': 4, 'backup': 10}),
+                             ('plan_odoo_t2_monthly', {'data': 8, 'pg': 4, 'backup': 13}),
+                             ('plan_odoo_t3_monthly', {'data': 10, 'pg': 4, 'backup': 16})):
             with self.subTest(plan=xmlid):
                 plan = self._plan(xmlid)
                 out = self._overlay(plan)
@@ -338,11 +341,11 @@ class TestOdooStorageSplit1637(TransactionCase):
     def test_existing_upgrade_grows_data_and_backup_but_never_postgres(self):
         created = self._overlay(self._plan('plan_odoo_monthly'))
         up = self._overlay(self._plan('plan_odoo_t3_monthly'), created, existing=True)
-        self.assertEqual(_odoo_pvcs(up), {'data': 13, 'pg': 4, 'backup': 13})
+        self.assertEqual(_odoo_pvcs(up), {'data': 10, 'pg': 4, 'backup': 16})
         down = self._overlay(self._plan('plan_odoo_monthly'), up, existing=True)
-        self.assertEqual(_odoo_pvcs(down), {'data': 13, 'pg': 4, 'backup': 13}, '只擴不縮')
+        self.assertEqual(_odoo_pvcs(down), {'data': 10, 'pg': 4, 'backup': 16}, '只擴不縮')
         same = self._overlay(self._plan('plan_odoo_t2_monthly'), created, existing=True)
-        self.assertEqual(_odoo_pvcs(same), {'data': 10, 'pg': 4, 'backup': 11})
+        self.assertEqual(_odoo_pvcs(same), {'data': 8, 'pg': 4, 'backup': 13})
 
     def test_existing_service_on_its_plan_is_a_no_op(self):
         for xmlid in ('plan_odoo_monthly', 'plan_odoo_t2_monthly', 'plan_odoo_t3_monthly'):
@@ -410,18 +413,21 @@ class TestEmqxStorageSplit1637(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestDiskMigration1637(TransactionCase):
-    """migration 18.0.1.0.225：noupdate=1 的方案改新值；手調過的不覆蓋；冪等。"""
+    """migration 18.0.1.0.225：noupdate=1 的方案改新值（磁碟＋容量研究的 RAM／workers）；手調過的不覆蓋；冪等。"""
 
     OLD = {
-        'plan_odoo_t2_monthly': {'cs_storage_gb': 30},
-        'plan_odoo_t3_ac4_yearly': {'cs_storage_gb': 40},
-        'plan_n8n_monthly': {'cs_storage_gb': 10},
+        'plan_odoo_monthly': {'cs_ram_gb': 2.0, 'cs_odoo_workers': 2},
+        'plan_odoo_ac2_yearly': {'cs_ram_gb': 2.0, 'cs_odoo_workers': 2},
+        'plan_odoo_t2_monthly': {'cs_storage_gb': 30, 'cs_odoo_workers': 3},
+        'plan_odoo_t3_ac4_yearly': {'cs_storage_gb': 40, 'cs_odoo_workers': 4},
+        'plan_n8n_monthly': {'cs_storage_gb': 10, 'cs_ram_gb': 1.0},
         'plan_n8n_t4_ac10_monthly': {'cs_storage_gb': 40},
         'plan_mcp_hermes_t2_yearly': {'cs_vcpu': 2, 'cs_ram_gb': 2.0, 'cs_storage_gb': 30},
         'plan_mcp_hermes_t3_ac10_monthly': {'cs_vcpu': 2, 'cs_ram_gb': 4.0, 'cs_storage_gb': 40},
-        'plan_code_server_yearly': {'cs_storage_gb': 25},
+        'plan_code_server_yearly': {'cs_storage_gb': 25, 'cs_ram_gb': 4.0},
+        'plan_pi_agent_monthly': {'cs_storage_gb': 20, 'cs_ram_gb': 4.0},
         'plan_emqx_monthly': {'cs_storage_gb': 10},
-        'plan_litellm_yearly': {'cs_storage_gb': 10},
+        'plan_litellm_yearly': {'cs_storage_gb': 10, 'cs_ram_gb': 2.0},
         'plan_omnigent_monthly': {'cs_storage_gb': 10},
     }
 
@@ -441,7 +447,7 @@ class TestDiskMigration1637(TransactionCase):
         prices = {x: self._plan(x).sh_plan_price for x in self.OLD}
         for xmlid, old in self.OLD.items():
             self._plan(xmlid).write(old)
-        changed = self.Plan._woow_migrate_disk_30g_1637()
+        changed = self.Plan._woow_migrate_spec_1637()
         self.assertEqual(self._seed_values(), seed, 'migration 的結果＝新裝的 seed')
         self.assertGreaterEqual(len(changed), len(self.OLD))
         for xmlid, price in prices.items():
@@ -451,7 +457,7 @@ class TestDiskMigration1637(TransactionCase):
         """表裡每條規則至少對到一筆 seed 方案，且 seed 已經是新值（新裝＝升級後）。"""
         Data = self.env['ir.model.data'].sudo()
         rows = Data.search([('module', '=', MOD), ('model', '=', 'sh.subscription.plan')])
-        for pattern, rule in self.Plan._DISK_30G_1637:
+        for pattern, rule in self.Plan._SPEC_1637:
             matched = rows.filtered(lambda r: re.fullmatch(pattern, r.name))
             with self.subTest(rule=pattern):
                 self.assertTrue(matched)
@@ -464,10 +470,10 @@ class TestDiskMigration1637(TransactionCase):
         self._plan('plan_n8n_t2_monthly').write({'cs_storage_gb': 25})
         self._plan('plan_mcp_hermes_monthly').write(
             {'cs_vcpu': 1, 'cs_ram_gb': 2.0, 'cs_storage_gb': 5})
-        self._plan('plan_odoo_t3_monthly').write({'cs_storage_gb': 40})
+        self._plan('plan_odoo_t3_monthly').write({'cs_storage_gb': 40, 'cs_odoo_workers': 4})
         with mute_logger('odoo.addons.woow_paas_platform.models.sh_subscription_plan_cs_spec'):
-            self.Plan._woow_migrate_disk_30g_1637()
-            again = self.Plan._woow_migrate_disk_30g_1637()
+            self.Plan._woow_migrate_spec_1637()
+            again = self.Plan._woow_migrate_spec_1637()
         self.assertEqual(self._plan('plan_n8n_t2_monthly').cs_storage_gb, 25, '手調過的不覆蓋')
         self.assertEqual(self._plan('plan_mcp_hermes_monthly').cs_storage_gb, 5,
                          '任一欄手調過就整筆不動')
