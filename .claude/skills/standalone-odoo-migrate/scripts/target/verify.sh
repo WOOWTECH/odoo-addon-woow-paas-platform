@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# verify.sh — 目標端資料指紋比對（standalone-odoo-migrate skill，#1604）
+#
+# 執行者＝本 repo agent（目標 ns 必須在白名單）。
+#
+# 用法：
+#   verify.sh --context <ctx> --ns <target-ns> --release <R> --set <name> --stage restore|upgrade [--cleanup] [--workdir <dir>]
+#
+# restore：restore Job 已在 incoming PVC 留下 target.fp／target.fs；取回 source.*／target.* 在本機跑
+#   fingerprint_diff.py --stage restore（逐位元）。web 可以還是 0 副本。
+# upgrade：web 已開回 1 副本、升級閘跑完 -u all 且 Ready；在 web pod 所在 node 起一顆唯讀 pod，重算 DB 指紋與
+#   filestore 清單（upgraded.*），取回後跑 fingerprint_diff.py --stage upgrade（只容許模組 metadata 表變動）。
+# --cleanup：比對通過後刪 incoming PVC（含客戶資料的 dump）。
+# 取回的檔案放 --workdir（預設 ./verify-<set>）；檔案都小（指紋與清單），用 kubectl exec cat 取回不會撞截斷。
+# exit：0 通過、1 不通過、2 參數或前置條件不符、3 pod 失敗
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PVC=standalone-odoo-incoming
+POD=standalone-odoo-verify
+CTX="" NS="" RELEASE="" SET="" STAGE="" CLEANUP=0 WORKDIR=""
+
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+die() { echo "ERROR: $2" >&2; exit "$1"; }
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --context) CTX=$2; shift 2 ;;
+    --ns) NS=$2; shift 2 ;;
+    --release) RELEASE=$2; shift 2 ;;
+    --set) SET=$2; shift 2 ;;
+    --stage) STAGE=$2; shift 2 ;;
+    --cleanup) CLEANUP=1; shift ;;
+    --workdir) WORKDIR=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; die 2 "unknown argument: $1" ;;
+  esac
+done
+[[ -n $CTX && -n $NS && -n $RELEASE && -n $SET && $STAGE =~ ^(restore|upgrade)$ ]] \
+  || { usage >&2; die 2 "--context, --ns, --release, --set and --stage restore|upgrade are required"; }
+K=(kubectl --context "$CTX" -n "$NS")
+WORKDIR=${WORKDIR:-./verify-$SET}
+mkdir -p "$WORKDIR"
+
+dep=$("${K[@]}" get deploy "$RELEASE" -o json) || die 2 "deployment $RELEASE not found"
+db=$(jq -r '[.. | objects | select(.name? == "ODOO_DB_NAME") | .value] | first // empty' <<<"$dep")
+sts=$("${K[@]}" get sts "$RELEASE-postgresql" -o json) || die 2 "statefulset $RELEASE-postgresql not found"
+pg_image=$(jq -r '.spec.template.spec.containers[] | select(.name == "postgresql") | .image' <<<"$sts")
+pull_secrets=$(jq -c '.spec.template.spec.imagePullSecrets // []' <<<"$sts")
+node=null
+if [[ $STAGE == upgrade ]]; then
+  web=$("${K[@]}" get pod -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" -o json \
+    | jq '[.items[] | select(.status.phase == "Running" and ([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length > 0))]')
+  (( $(jq length <<<"$web") >= 1 )) || die 2 "upgrade stage needs a Ready web pod (upgrade gate finished)"
+  node=$(jq '.[0].spec.nodeName' <<<"$web")
+fi
+
+cleanup_pod() { "${K[@]}" delete pod "$POD" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
+trap cleanup_pod EXIT
+"${K[@]}" create configmap "$POD" --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql" \
+  --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+jq -n --arg pod "$POD" --arg image "$pg_image" --argjson ps "$pull_secrets" --argjson node "$node" \
+  --arg rel "$RELEASE" --arg pvc "$PVC" --arg stage "$STAGE" '{
+  apiVersion: "v1", kind: "Pod",
+  metadata: {name: $pod, labels: {"app.kubernetes.io/part-of": "standalone-odoo-migrate",
+                                  "app.kubernetes.io/instance": $rel, "app.kubernetes.io/component": "verify"}},
+  spec: ({
+    restartPolicy: "Never", automountServiceAccountToken: false, imagePullSecrets: $ps, activeDeadlineSeconds: 3600,
+    containers: [{name: "verify", image: $image, command: ["sleep", "3600"], securityContext: {runAsUser: 0},
+      env: [{name: "PGPASSWORD", valueFrom: {secretKeyRef: {name: ($rel + "-credentials"), key: "postgres-password"}}}],
+      volumeMounts: ([{name: "incoming", mountPath: "/incoming"}, {name: "code", mountPath: "/opt/verify", readOnly: true}]
+                     + (if $stage == "upgrade" then [{name: "data", mountPath: "/var/lib/odoo", readOnly: true}] else [] end))}],
+    volumes: ([{name: "incoming", persistentVolumeClaim: {claimName: $pvc}}, {name: "code", configMap: {name: $pod}}]
+              + (if $stage == "upgrade" then [{name: "data", persistentVolumeClaim: {claimName: ($rel + "-data"), readOnly: true}}] else [] end))
+  } + (if $node then {nodeName: $node} else {} end))}' | "${K[@]}" apply -f - >/dev/null
+"${K[@]}" wait --for=condition=Ready "pod/$POD" --timeout=300s >/dev/null \
+  || { "${K[@]}" describe pod "$POD" | tail -15 >&2; die 3 "verify pod not ready"; }
+
+S=/incoming/$SET
+if [[ $STAGE == upgrade ]]; then
+  "${K[@]}" exec "$POD" -- bash -c "set -euo pipefail; export LC_ALL=C
+    psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 -f /opt/verify/fingerprint.sql > $S/upgraded.fp
+    cd /var/lib/odoo/filestore/'$db' && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum > $S/upgraded.fs" \
+    || die 3 "fingerprint in verify pod failed"
+  tgt=upgraded
+else
+  tgt=target
+fi
+for f in source.fp source.fs "$tgt.fp" "$tgt.fs"; do
+  "${K[@]}" exec "$POD" -- cat "$S/$f" > "$WORKDIR/$f" || die 3 "cannot read $S/$f"
+done
+"${K[@]}" delete configmap "$POD" --ignore-not-found >/dev/null
+
+rc=0
+python3 "$SCRIPT_DIR/../fingerprint_diff.py" --stage "$STAGE" \
+  --source-db "$WORKDIR/source.fp" --target-db "$WORKDIR/$tgt.fp" \
+  --source-fs "$WORKDIR/source.fs" --target-fs "$WORKDIR/$tgt.fs" --json "$WORKDIR/diff-$STAGE.json" || rc=$?
+if (( rc == 0 && CLEANUP )); then
+  cleanup_pod
+  "${K[@]}" wait --for=delete "pod/$POD" --timeout=120s >/dev/null 2>&1 || true
+  "${K[@]}" delete pvc "$PVC" --wait=false >/dev/null && echo "incoming PVC $PVC deleted" >&2
+fi
+exit "$rc"
