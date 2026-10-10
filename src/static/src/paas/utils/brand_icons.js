@@ -81,13 +81,15 @@ export function templateBrand(slug) {
 }
 
 /**
- * 訂閱對應的品牌：有連到雲端服務就看該服務的模板；否則依方案的服務類型。
- * @param {{service_template_slug?: string, service_type?: string}} sub
+ * 訂閱對應的品牌，依序看：連到的雲端服務的模板 → 方案所屬雲端服務模板（服務已刪的
+ * 歷史訂閱靠這一格）→ 方案的服務類型（智慧家庭／安全存取）。
+ * @param {{service_template_slug?: string, plan_template_slug?: string, service_type?: string}} sub
  * @returns {string|null}
  */
 export function subscriptionBrand(sub) {
   if (!sub) return null;
-  const fromTemplate = templateBrand(sub.service_template_slug);
+  const fromTemplate =
+    templateBrand(sub.service_template_slug) || templateBrand(sub.plan_template_slug);
   if (fromTemplate) return fromTemplate;
   if (sub.service_type === "smart_home") return SMART_HOME_BRAND;
   if (sub.service_type === "security_access") return SECURITY_ACCESS_BRAND;

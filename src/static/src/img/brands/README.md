@@ -32,4 +32,12 @@
 | `cloudflare.png` | Cloudflare | 安全存取（遠端安全連結） | [HA App Store](https://github.com/WOOWTECH/Woow_HA_App_Store/blob/0c4c21f/cloudflared/icon.png) `cloudflared/icon.png` | `1a42122b16eef226c371006be3b451bfb09d6d043cd0aa3c19f83fdee72bbe2c` |
 | `woowtech.png` | WoowTech | 智慧家庭連結 | [HA App Store](https://github.com/WOOWTECH/Woow_HA_App_Store/blob/0c4c21f/woow_ha_core_1/icon.png) `woow_ha_core_1/icon.png`（WoowTech 藍色商標，使用者指定） | `53e23fbcd9d8b55c62351971f04712ff001ed28a946adc233de841974223cd7b` |
 
+## 左上角 logo
+
+| 檔案 | 用在 | 來源 | sha256 |
+|---|---|---|---|
+| `woowtech-site-logo.jpg` | /woow 左上角（手機頁首 `Header.xml`、桌面側欄 `Sidebar.xml`） | 官網 aiot.woowtech.io 網站 header 的 logo：`/web/image/website/1/logo`（`unique=2d98a0f`，2026-10-10 下載，1859×300 JPEG，逐位元相同）。使用者 2026-10-10 指定「要跟官網完全一樣」 | `e0a93b1501235f956f2fee4a7ee84ffa733753f5b45ed17cb6e8f1bbb6afbd06` |
+
+官網換 logo 時：重新下載 `/web/image/website/1/logo` 覆蓋這個檔、更新雜湊；圖案邊界變了要同步 `20_layout.scss` 的 `.o_woow_site_logo` 長寬比。
+
 換圖示時：照上表重新取檔、更新雜湊；新增服務時在 `brand_icons.js` 的 `TEMPLATE_BRANDS` 補上模板代碼。

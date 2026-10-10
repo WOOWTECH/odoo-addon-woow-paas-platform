@@ -845,6 +845,19 @@ class BillingController(HiddenChainMixin, Controller):
 
     # ==================== Subscription API ====================
 
+    @staticmethod
+    def _plan_template_slug(plan) -> str | None:
+        """方案掛在哪個雲端服務模板（cloud_app_template.subscription_plan_ids，含席數變體）。
+
+        同一個方案可能同時掛在兩個模板（例：ha-full 與 ha-full-apporo 鏡射同一組方案），
+        優先取上架中的（is_hidden=False）；只供前台挑品牌圖示，查不到回 None。
+        """
+        if not plan:
+            return None
+        tpl = request.env['woow_paas_platform.cloud_app_template'].sudo().search(
+            [('subscription_plan_ids', 'in', plan.ids)], order='is_hidden, id', limit=1)
+        return tpl.slug or None
+
     def _serialize_subscription(self, sub):
         """Return a compact dict for subscription list items."""
         # Recurrency label（#1310：原本是英文字面＋f-string 拼複數，zh_TW 下仍顯示英文）。
@@ -870,10 +883,12 @@ class BillingController(HiddenChainMixin, Controller):
         CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
         linked_service = CloudService.search([('subscription_id', '=', sub.id)], limit=1)
         service_name = linked_service.name if linked_service else None
-        # 前台品牌圖示（brand_icons.js subscriptionBrand）：有雲端服務看模板代碼，
-        # 否則（智慧家庭／安全存取）看方案的服務類型。
+        # 前台品牌圖示（brand_icons.js subscriptionBrand）依序看：連到的雲端服務的模板代碼 →
+        # 方案所屬雲端服務模板的代碼（服務已刪的歷史訂閱靠這一格）→ 方案的服務類型
+        # （智慧家庭／安全存取）。
         service_template_slug = (
             linked_service.template_id.slug or None) if linked_service else None
+        plan_template_slug = self._plan_template_slug(sub.sh_subscription_plan_id)
 
         return {
             'id': sub.id,
@@ -892,6 +907,7 @@ class BillingController(HiddenChainMixin, Controller):
             'recurrency': sub.sh_recurrency or 1,
             'service_name': service_name,
             'service_template_slug': service_template_slug,
+            'plan_template_slug': plan_template_slug,
             'service_type': sub.sh_subscription_plan_id.service_type or None,
         }
 
