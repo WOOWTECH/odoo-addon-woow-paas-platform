@@ -55,7 +55,8 @@ pull_secrets=$(jq -c '.spec.template.spec.imagePullSecrets // []' <<<"$sts")
 replace_db=""; (( REPLACE )) && replace_db=$db
 
 "${K[@]}" create configmap "$JOB" --from-file=restore-in-pod.sh="$SCRIPT_DIR/restore-in-pod.sh" \
-  --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql" >/dev/null
+  --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql" \
+  --from-file=fingerprint_business.sql="$SCRIPT_DIR/../fingerprint_business.sql" >/dev/null
 "${K[@]}" apply -f - >/dev/null <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -86,6 +87,7 @@ spec:
             - {name: PGPORT, value: "5432"}
             - {name: DATA_ROOT, value: /var/lib/odoo}
             - {name: FINGERPRINT_SQL, value: /opt/restore/fingerprint.sql}
+            - {name: BUSINESS_SQL, value: /opt/restore/fingerprint_business.sql}
             - {name: REPLACE_DB, value: "$replace_db"}
             - {name: WRITE_MARKER, value: "$MARKER"}
             - name: PGSUPERUSER_PASSWORD

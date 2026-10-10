@@ -9,7 +9,9 @@
 # restore：restore Job 已在 incoming PVC 留下 target.fp／target.fs；取回 source.*／target.* 在本機跑
 #   fingerprint_diff.py --stage restore（逐位元）。web 可以還是 0 副本。
 # upgrade：web 已開回 1 副本、升級閘跑完 -u all 且 Ready；在 web pod 所在 node 起一顆唯讀 pod，重算 DB 指紋與
-#   filestore 清單（upgraded.*），取回後跑 fingerprint_diff.py --stage upgrade（只容許模組 metadata 表變動）。
+#   filestore 清單（upgraded.*），取回後跑 fingerprint_diff.py --stage upgrade。判準是客戶資料列：restore Job 留下的
+#   baseline.bfp（還原後、Odoo 啟動前）對 upgraded.bfp——基準當時就存在的客戶資料列必須原封不動；模組資料列被重寫、
+#   啟動後新增的列、registry 表列為預期內。set 裡沒有 baseline.bfp（舊版 restore）時退回整表比對（只容許 metadata 表）。
 # --cleanup：比對通過後刪 incoming PVC（含客戶資料的 dump）。
 # 取回的檔案放 --workdir（預設 ./verify-<set>）；檔案都小（指紋與清單），用 kubectl exec cat 取回不會撞截斷。
 # exit：0 通過、1 不通過、2 參數或前置條件不符、3 pod 失敗
@@ -56,7 +58,12 @@ fi
 
 cleanup_pod() { "${K[@]}" delete pod "$POD" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
 trap cleanup_pod EXIT
+# 上一輪的 verify pod 可能還在終止中（收尾不等刪除完成）；同名 apply 會打到正在刪的那顆
+if "${K[@]}" get pod "$POD" >/dev/null 2>&1; then
+  "${K[@]}" wait --for=delete "pod/$POD" --timeout=120s >/dev/null 2>&1 || die 3 "previous verify pod still terminating"
+fi
 "${K[@]}" create configmap "$POD" --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql" \
+  --from-file=fingerprint_business.sql="$SCRIPT_DIR/../fingerprint_business.sql" \
   --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
 jq -n --arg pod "$POD" --arg image "$pg_image" --argjson ps "$pull_secrets" --argjson node "$node" \
   --arg rel "$RELEASE" --arg pvc "$PVC" --arg stage "$STAGE" '{
@@ -79,6 +86,10 @@ S=/incoming/$SET
 if [[ $STAGE == upgrade ]]; then
   "${K[@]}" exec "$POD" -- bash -c "set -euo pipefail; export LC_ALL=C
     psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 -f /opt/verify/fingerprint.sql > $S/upgraded.fp
+    if [[ -s $S/baseline.bfp ]]; then
+      BFP_BASELINE=$S/baseline.bfp psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 -v baseline=1 \
+        -f /opt/verify/fingerprint_business.sql > $S/upgraded.bfp
+    fi
     cd /var/lib/odoo/filestore/'$db' && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum > $S/upgraded.fs" \
     || die 3 "fingerprint in verify pod failed"
   tgt=upgraded
@@ -88,12 +99,24 @@ fi
 for f in source.fp source.fs "$tgt.fp" "$tgt.fs"; do
   "${K[@]}" exec "$POD" -- cat "$S/$f" > "$WORKDIR/$f" || die 3 "cannot read $S/$f"
 done
+business=()
+if [[ $STAGE == upgrade ]]; then
+  if "${K[@]}" exec "$POD" -- test -s "$S/upgraded.bfp"; then
+    for f in baseline.bfp upgraded.bfp; do
+      "${K[@]}" exec "$POD" -- cat "$S/$f" > "$WORKDIR/$f" || die 3 "cannot read $S/$f"
+    done
+    business=(--source-business "$WORKDIR/baseline.bfp" --target-business "$WORKDIR/upgraded.bfp")
+  else
+    echo "note: $S/baseline.bfp missing — falling back to whole-table comparison" >&2
+  fi
+fi
 "${K[@]}" delete configmap "$POD" --ignore-not-found >/dev/null
 
 rc=0
 python3 "$SCRIPT_DIR/../fingerprint_diff.py" --stage "$STAGE" \
   --source-db "$WORKDIR/source.fp" --target-db "$WORKDIR/$tgt.fp" \
-  --source-fs "$WORKDIR/source.fs" --target-fs "$WORKDIR/$tgt.fs" --json "$WORKDIR/diff-$STAGE.json" || rc=$?
+  --source-fs "$WORKDIR/source.fs" --target-fs "$WORKDIR/$tgt.fs" "${business[@]}" \
+  --json "$WORKDIR/diff-$STAGE.json" || rc=$?
 if (( rc == 0 && CLEANUP )); then
   cleanup_pod
   "${K[@]}" wait --for=delete "pod/$POD" --timeout=120s >/dev/null 2>&1 || true

@@ -6,13 +6,14 @@
 # 還原後在 pod 內比對指紋，一致才預寫 upgrade_done marker。
 #
 # env：SET_DIR（/incoming/<set>）、ODOO_DB_NAME、PGHOST、PGPORT、PGSUPERUSER_PASSWORD、ODOO_DB_PASSWORD、DATA_ROOT、
-#      FINGERPRINT_SQL、REPLACE_DB（＝ODOO_DB_NAME 才允許 DROP 既有 DB）、WRITE_MARKER（1／0）
+#      FINGERPRINT_SQL、BUSINESS_SQL、REPLACE_DB（＝ODOO_DB_NAME 才允許 DROP 既有 DB）、WRITE_MARKER（1／0）
 # 輸入（export.sh 經 receiver 送進來）：db.dump、filestore.tar、manifest.json、source.fp、source.fs、SHA256SUMS
-# 輸出：SET_DIR/target.fp、SET_DIR/target.fs、log 最後一行 RESTORE-DONE
+# 輸出：SET_DIR/target.fp、SET_DIR/target.fs、SET_DIR/baseline.bfp（客戶資料列基準，verify.sh --stage upgrade 用）、
+#      log 最後一行 RESTORE-DONE
 # 每一步失敗都 exit 1、不寫 marker；odoo 沒有 marker 開機時升級閘會 exit 3，不會碰資料。
 set -euo pipefail
 die() { echo "RESTORE-FAIL: $*" >&2; exit 1; }
-: "${SET_DIR:?}" "${ODOO_DB_NAME:?}" "${PGHOST:?}" "${PGSUPERUSER_PASSWORD:?}" "${ODOO_DB_PASSWORD:?}" "${DATA_ROOT:?}" "${FINGERPRINT_SQL:?}"
+: "${SET_DIR:?}" "${ODOO_DB_NAME:?}" "${PGHOST:?}" "${PGSUPERUSER_PASSWORD:?}" "${ODOO_DB_PASSWORD:?}" "${DATA_ROOT:?}" "${FINGERPRINT_SQL:?}" "${BUSINESS_SQL:?}"
 export PGPORT="${PGPORT:-5432}" LC_ALL=C
 REPLACE_DB=${REPLACE_DB:-} WRITE_MARKER=${WRITE_MARKER:-1}
 sup() { PGPASSWORD="$PGSUPERUSER_PASSWORD" psql -h "$PGHOST" -U postgres -X -q -v ON_ERROR_STOP=1 -tA "$@"; }
@@ -113,6 +114,10 @@ if ! diff source.fs target.fs > /tmp/fs.diff; then
     die "filestore 指紋不一致：不寫 marker"
 fi
 echo "RESTORE fingerprint ok: $(grep -c '^table|' target.fp) tables, $(grep -c '^seq|' target.fp) sequences, $(grep -c . target.fs) files identical"
+
+# 7b. 客戶資料列基準：此刻的資料已證明與來源相同；升級閘跑完 -u all 後 verify.sh 拿它比對（marker 還沒寫，不會算進基準）
+sup -d "$ODOO_DB_NAME" -f "$BUSINESS_SQL" > baseline.bfp
+echo "RESTORE business baseline ok: $(grep -c '^btable|' baseline.bfp) tables"
 
 # 8. 預寫升級閘 marker：來源 digest＋來源 core 日期 ⇒ 開機時升級閘看到 digest 不同，自動跑一次 -u all＋post-verify
 if [[ "$WRITE_MARKER" == 1 ]]; then
