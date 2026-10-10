@@ -1111,3 +1111,5 @@ from . import test_spec_labels_zh_1612
 from . import test_data_retrieval_1540
 # #1634：Nextcloud 整台磁碟 20G（四顆 PVC 加總＝方案總量；overlay 扣固定開銷；migration 18.0.1.0.223）。
 from . import test_nextcloud_storage_20g_1634
+# 2026-10-10：「試用中」看實際試用期（sh_trial 試用結束不會被清；略過試用不可對已付費訂閱重複扣款）。
+from . import test_trial_flag_stale_1010

@@ -123,6 +123,24 @@ class ShSubscriptionFix(models.Model):
             ('state', '=', 'done'),
         ]))
 
+    def _woow_in_trial(self):
+        """這筆訂閱**此刻**是否在試用期內（2026-10-10）。
+
+        上游 ``sh_trial`` 的語意是「方案有試用期」（開通時決定），試用自然結束、開始計費時
+        平台與上游都不會清它（只有略過試用／換方案的 active 分支會清）。直接拿它當「試用中」
+        會讓已付費、已取消的訂閱都顯示「試用中」，且付過一期的訂閱還能「略過試用」再扣一期。
+
+        判準：進行中 ＋ ``sh_trial`` ＋ 今天 ≤ 試用最後一天（``sh_trial_end_date``，含當天；
+        缺值時退回 ``今天 < sh_start_date``，即上游開帳單用的同一條界線）。
+        """
+        self.ensure_one()
+        if self.state != 'in_progress' or not self.sh_trial:
+            return False
+        today = fields.Date.today()
+        if self.sh_trial_end_date:
+            return today <= self.sh_trial_end_date
+        return bool(self.sh_start_date) and today < self.sh_start_date
+
     def _compute_unused_refund(self):
         """Pro-rata refund for the unused portion of the current paid cycle.
 
