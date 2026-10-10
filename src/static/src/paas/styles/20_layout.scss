@@ -48,20 +48,19 @@
         font-size: 28px;
         color: $woow-primary;
     }
-
-    .o_woow_brand_logo {
-        width: 32px;
-        height: 32px;
-    }
 }
 
-// 左上角品牌：WoowTech 白底藍字商標（2026-10-09 使用者指定，與智慧家庭連結同一張）＋全小寫 woowtech。
-.o_woow_brand_logo {
+// 左上角品牌＝官網（aiot.woowtech.io 網站 header）同一張 logo 檔（img/brands/woowtech-site-logo.jpg，
+// 逐位元相同，2026-10-10 使用者指定「要完全一樣」）。原檔 1859×300、圖案左右各留約 230px 白邊
+// （x 231–1629，左右幾乎等寬）⇒ 框的長寬比設成圖案本身的 1399:300、object-fit: cover 置中，
+// 等寬裁掉兩側白邊、檔案不動；高度 36px＝官網 header 實際顯示高度（整張圖 36px 高）。白底 JPEG，頁首與側欄都是白底。
+.o_woow_site_logo {
     display: block;
     flex-shrink: 0;
-    object-fit: contain;
-    background: #fff;
-    border-radius: 6px;
+    height: 36px;
+    aspect-ratio: 1399 / 300;
+    object-fit: cover;
+    object-position: center;
 }
 
 .o_woow_sidebar_nav {
@@ -198,11 +197,6 @@
     .material-symbols-outlined {
         font-size: 24px;
         color: $woow-primary;
-    }
-
-    .o_woow_brand_logo {
-        width: 28px;
-        height: 28px;
     }
 }
 
