@@ -44,19 +44,38 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 6. **搬運**：目標端 `scripts/target/receive.sh open`（agent）印出 `--url` 並寫出 token 檔 → 兩者交給 WMO 跑
    `scripts/source/export.sh`（預設凍結：來源 odoo 先 scale 0；`--live` 只給彩排）→ `receive.sh close`。
    完成條件：`export-<ns>-<UTC>.json` 每個檔的 sha256 都跟 receiver 回報一致（export.sh 失敗即 exit 3）。
-7. **還原**（agent）：目標 web 停到 0 副本 → `scripts/target/restore.sh --replace-db` → `scripts/target/verify.sh --stage restore`。
-   restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫 `upgrade_done` marker（來源 image
-   digest＋core_date），讓 web 開機時升級閘自動跑 `-u all`。完成條件：Job 印出 `RESTORE-DONE`，verify exit 0。
-   ⚠ 平台服務怎麼停到 0 副本尚未在 stg 實測。已知：平台的停權（`_do_suspend` → operator `scale`）會把
-   `<release>-postgresql` 也縮到 0，而 restore Job 要連 PG ⇒ 停權後得先把 postgres StatefulSet 開回 1。
-8. **升級驗證**（agent）：web 開回 1 副本，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
+7. **還原**（agent）：平台停權 → postgres 開回 1 → `scripts/target/restore.sh --replace-db` → `scripts/target/verify.sh --stage restore`。
+   - 停權走平台（見下方「平台服務的停權與復權」）：web 與 `<release>-postgresql` 都會縮到 0、對外網址改指停權說明頁。
+     restore Job 要連 PG ⇒ 停權後 `kubectl scale sts/<release>-postgresql --replicas=1` 並等它 Ready。
+   - restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫兩個標記：`upgrade_done`（來源 image
+     digest＋core_date，讓 web 開機時升級閘自動跑 `-u all`）與 `tenant_localized`（擋掉平台的台灣在地化，見步驟 8）。
+   完成條件：Job 印出 `RESTORE-DONE`，verify exit 0。
+8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
    判準是客戶資料列（`scripts/fingerprint_business.sql` 檔頭）：還原當時就存在的客戶資料列必須原封不動；模組資料列
-   被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。
+   被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。filestore：仍被附件引用的檔不能少、內容不能變；
+   模組附件換了內容後被 Odoo 回收的舊檔列為「預期內」。
    完成條件：verify exit 0，「預期內的變動」逐條看過；`--cleanup` 才會刪掉含客戶資料的 incoming PVC。
+   - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝
+     zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。要確認：第一次 verify 先不帶
+     `--cleanup`，Redeploy 後再跑一次帶 `--cleanup` 的。
+   - 匯入後管理員帳密是來源站的，平台存的那組不再適用；租戶可在服務頁按 Reset 重設（重設 `base.user_admin`、清掉 2FA）。
    ⚠ web 一開回來 cron 就開始跑（寄信、外部整合）。來源沒凍結的彩排（`export.sh --live`）會讓兩邊同時對外動作，
    彩排前先決定怎麼處理（#1604）。
 9. **cutover**（hostname、外部整合改指、來源下線）：尚未實作，設計與進度在 #1604。
+
+## 平台服務的停權與復權
+
+平台沒有「還原中」狀態，也沒有給人按的停權按鈕（停權由訂閱生命週期觸發）。搬遷時在平台 Odoo pod 以 `odoo shell` 直接呼叫
+同一組方法，交易要自己 commit：
+
+```python
+s = env['woow_paas_platform.cloud_service'].browse(<cloud_service id>)
+s._do_suspend(); env.cr.commit()   # web＋postgres 縮到 0、網址改指停權頁、state=suspended
+s._do_resume();  env.cr.commit()   # 全部開回 1、網址改回服務、state 回到停權前的值
+```
+
+呼叫後看 `s.state` 與 `s.error_message`：operator 失敗時 state 會是 `error`。prod 的平台 pod 屬 prod 寫入，每一步人工放行。
 
 ## 測試環境
 
@@ -71,6 +90,11 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 - 負向（image 缺 addon ⇒ 升級閘 exit 4）：`fake-source.sh seed` 用預設的 fixture addon。
 - 正向（升級閘跑 `-u all`）：`fake-source.sh seed --from-image <cloud-odoo ref> --extra-addons … [--data-dir-addons …] --pip "…"`
   讓來源改裝目標 image `/all-addons` 裡現成的 addon，`fake-target.sh up --addons` 勾同一批。不必另建 image。
+
+平台層彩排（stg）：`/woow:deploy-stg --slug <新 slug>` 起一套新的 stg 平台 → `cloud_odoo_addon.sync_from_catalog()` →
+以租戶身分打 `/api/workspaces`、`/api/workspaces/<id>/services`（`odoo_addon_ids` 勾來源用到的 addon）建服務 → 目標就是
+`paas-ws-stg-<hash>` 裡的 `svc-<id>`，步驟 6～8 照跑。2026-10-10 以 `fake-source.sh seed --from-image` 的來源跑通
+（含停權、復權、Redeploy、重設管理員密碼）。
 
 單元測試：`python3 -m unittest discover -s .claude/skills/standalone-odoo-migrate/tests`。
 

@@ -11,6 +11,7 @@
 # 輸出：SET_DIR/target.fp、SET_DIR/target.fs、SET_DIR/baseline.bfp（客戶資料列基準，verify.sh --stage upgrade 用）、
 #      log 最後一行 RESTORE-DONE
 # 每一步失敗都 exit 1、不寫 marker；odoo 沒有 marker 開機時升級閘會 exit 3，不會碰資料。
+# WRITE_MARKER=1 另寫 woow_paas_platform.tenant_localized，擋掉平台部署後初始化的台灣在地化（見步驟 8b）。
 set -euo pipefail
 die() { echo "RESTORE-FAIL: $*" >&2; exit 1; }
 : "${SET_DIR:?}" "${ODOO_DB_NAME:?}" "${PGHOST:?}" "${PGSUPERUSER_PASSWORD:?}" "${ODOO_DB_PASSWORD:?}" "${DATA_ROOT:?}" "${FINGERPRINT_SQL:?}" "${BUSINESS_SQL:?}"
@@ -127,6 +128,16 @@ VALUES ('woow_paas_platform.upgrade_done', :'v', 1, (now() AT TIME ZONE 'UTC'), 
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_uid = EXCLUDED.write_uid, write_date = EXCLUDED.write_date;
 SQL
     echo "RESTORE marker written: digest=${SRC_DIGEST} core_date=${SRC_CORE}"
+    # 8b. 平台的部署後初始化（Redeploy、改 addon 都會觸發 operator POST /init/odoo）帶一段台灣在地化
+    #     （extra/paas-operator/src/services/odoo_scripts/localize_tenant.py：裝 zh_TW、改管理員語言／時區、公司國家／幣別）。
+    #     它靠這個標記判斷「已處理過」；匯入的 DB 沒有標記、又剛好沒有登入紀錄時會被當成新開的站改掉（stg 實測）。
+    #     先寫標記 ⇒ 匯入的資料一律不被在地化。來源本來就有這個 key 的話保留原值。
+    odoo_sql <<'SQL'
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+VALUES ('woow_paas_platform.tenant_localized', 'skipped-imported', 1, (now() AT TIME ZONE 'UTC'), 1, (now() AT TIME ZONE 'UTC'))
+ON CONFLICT (key) DO NOTHING;
+SQL
+    echo "RESTORE localization marker written: woow_paas_platform.tenant_localized"
 else
     echo "RESTORE marker skipped (WRITE_MARKER=0)：odoo 開機時升級閘會 exit 3"
 fi

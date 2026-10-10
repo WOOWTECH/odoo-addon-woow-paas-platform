@@ -3,7 +3,7 @@
 
 用法：
   fingerprint_diff.py --source-db src.fp --target-db dst.fp [--source-fs src.fs --target-fs dst.fs]
-                      [--source-business baseline.bfp --target-business upgraded.bfp]
+                      [--source-business baseline.bfp --target-business upgraded.bfp] [--target-refs upgraded.refs]
                       [--stage restore|upgrade] [--json out.json]
 
 輸入：
@@ -11,13 +11,16 @@
   *.fs  filestore 逐檔清單：在 filestore/<db> 目錄內跑
         `find . -type f -printf '%P\\0' | sort -z | xargs -0 -r sha256sum`
   *.bfp fingerprint_business.sql 的輸出（客戶資料列指紋；只在 upgrade 階段用）
+  *.refs 目標 DB 此刻仍被附件引用的檔：`SELECT DISTINCT store_fname FROM ir_attachment WHERE store_fname IS NOT NULL`
+        （一行一個；只在 upgrade 階段用）
 
 兩個階段的判準不同：
   restore  還原後、Odoo 啟動前：每張表、每個 sequence、每個檔都必須一致（逐位元）。extension 版本可不同（另列）。
   upgrade  升級閘跑完 -u all 之後。有給 *.bfp 時以客戶資料列為準：基準當時就存在的客戶資料列（不含模組可更新的
            資料列、write_date／write_uid）必須完全相同；模組資料列被重寫、Odoo 啟動後新增的列、registry 表的變動
            列為「預期內」。沒給 *.bfp 時退回整表比對：只有模組 metadata 表（ir_*、res_groups* 等）可以變。
-           sequence 只能前進。filestore 只允許多出檔案，不允許少檔或內容改變。
+           sequence 只能前進。filestore：檔案內容不能變、可以多檔。有給 *.refs 時，少掉的檔只要已經沒有附件引用就列為
+           「預期內」（模組附件換了內容，舊檔被 Odoo 回收），仍被引用的檔不能少；沒給 *.refs 時少任何一個檔都不通過。
 exit：0 通過、1 不通過、2 輸入錯誤。
 """
 import argparse
@@ -159,11 +162,25 @@ def diff_db(src, dst, stage, business=False):
     return problems, expected, ext_changes
 
 
-def diff_fs(src, dst, stage):
+def parse_refs(path):
+    return {line.strip() for line in Path(path).read_text().splitlines() if line.strip()}
+
+
+def diff_fs(src, dst, stage, refs=None):
+    """refs：目標 DB 仍引用的 store_fname 集合（upgrade 階段）；None＝不知道，少任何檔都算不一致。"""
     problems, expected = [], []
     missing = sorted(set(src) - set(dst))
     changed = sorted(f for f in set(src) & set(dst) if src[f] != dst[f])
     extra = sorted(set(dst) - set(src))
+    if refs is not None:
+        # 客戶附件列由客戶資料列指紋保證原封不動（含 store_fname）⇒ 它的檔一定還在 refs 裡
+        dangling = sorted(refs - set(dst))
+        if dangling:
+            problems.append("%d 個仍被附件引用的檔不在目標 filestore（例：%s）" % (len(dangling), ", ".join(dangling[:5])))
+        collected = [f for f in missing if f not in refs]
+        if collected:
+            expected.append("%d 個來源檔已無附件引用、被 Odoo 回收（模組附件換了內容）" % len(collected))
+        missing = []  # 仍被引用而不見的檔已經算在 dangling
     if missing:
         problems.append("目標少了 %d 個檔（例：%s）" % (len(missing), ", ".join(missing[:5])))
     if changed:
@@ -182,6 +199,7 @@ def main(argv=None):
     parser.add_argument("--target-fs")
     parser.add_argument("--source-business", help="baseline.bfp（還原後、Odoo 啟動前）")
     parser.add_argument("--target-business", help="upgraded.bfp（升級閘跑完後）")
+    parser.add_argument("--target-refs", help="upgraded.refs（目標 DB 仍引用的 store_fname）")
     parser.add_argument("--stage", choices=("restore", "upgrade"), default="restore")
     parser.add_argument("--json")
     args = parser.parse_args(argv)
@@ -193,6 +211,9 @@ def main(argv=None):
         return 2
     if args.source_business and args.stage != "upgrade":
         print("ERROR: --source-business only applies to --stage upgrade", file=sys.stderr)
+        return 2
+    if args.target_refs and (args.stage != "upgrade" or not args.target_fs):
+        print("ERROR: --target-refs only applies to --stage upgrade with --source-fs/--target-fs", file=sys.stderr)
         return 2
     try:
         src, dst = parse_fp(args.source_db), parse_fp(args.target_db)
@@ -209,7 +230,9 @@ def main(argv=None):
             problems = b_problems + problems
         fs_stats = None
         if args.source_fs:
-            fs_problems, fs_expected, fs_stats = diff_fs(parse_fs(args.source_fs), parse_fs(args.target_fs), args.stage)
+            refs = parse_refs(args.target_refs) if args.target_refs else None
+            fs_problems, fs_expected, fs_stats = diff_fs(
+                parse_fs(args.source_fs), parse_fs(args.target_fs), args.stage, refs)
             problems += fs_problems
             expected += fs_expected
     except (OSError, ValueError) as exc:
