@@ -3,6 +3,8 @@ import { Component, useState, onMounted, onWillUnmount, onWillStart } from "@odo
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { CLOUD_SERVICE_BRAND, SMART_HOME_BRAND, SECURITY_ACCESS_BRAND } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { ServiceCard } from "../../components/service-card/ServiceCard";
 import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
@@ -18,13 +20,20 @@ import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, getRoleLabel, formatDate } from "../../services/utils";
 import { formatPointsPerUnit } from "../../utils/billing_helpers";
+import { formatUserDateTime } from "../../utils/datetime_helpers";
+import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
+import { listRetainedData, retainedRetrievalEndpoint } from "../../services/data_retrieval";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge };
+    static components = { WoowCard, WoowIcon, BrandIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge, DataRetrievalModal };
     static props = {
         workspaceId: { type: Number },
     };
+
+    cloudServiceBrand = CLOUD_SERVICE_BRAND;
+    smartHomeBrand = SMART_HOME_BRAND;
+    securityAccessBrand = SECURITY_ACCESS_BRAND;
 
     setup() {
         this.state = useState({
@@ -45,6 +54,9 @@ export class WorkspaceDetailPage extends Component {
             showCreateSecurityAccessModal: false,
             showDeleteWorkspaceModal: false,
             showWorkspaceSettings: false,
+            // #1540：已刪除、磁碟仍在保留期的服務（只有 owner／admin 拿得到）與正在開的那一筆。
+            retainedData: [],
+            retrievalTarget: null,
         });
         this.router = useState(router);
         this.servicesPollingInterval = null;
@@ -86,6 +98,9 @@ export class WorkspaceDetailPage extends Component {
 
         if (workspaceResult.success) {
             this.state.workspace = workspaceResult.data;
+            if (this.canManageWorkspace) {
+                this.loadRetainedData();
+            }
             breadcrumbService.set("workspace-detail", [
                 { label: _t("Workspaces"), path: "workspaces" },
                 { label: this.state.workspace.name, path: null },
@@ -331,6 +346,42 @@ export class WorkspaceDetailPage extends Component {
 
     // #1310：原本只有 TODO，按了沒反應。改開「工作區設定」（名稱／描述），
     // 後端 `_update_workspace` 限 owner／admin，按鈕也只對這兩種角色顯示。
+    // #1540 已刪除服務的保留資料
+    async loadRetainedData() {
+        const result = await listRetainedData(this.props.workspaceId);
+        // 拿不到（權限、舊後端）就不顯示這一區——它是附加資訊，不擋整頁。
+        this.state.retainedData = result.success ? (result.data || []) : [];
+    }
+
+    get retainedSectionIntro() {
+        return _t("These services were deleted, but their disks are still retained for a while. You can open a temporary read-only download link for their files.");
+    }
+
+    retainedMeta(row) {
+        return _t("Deleted %(deleted)s · retained until about %(until)s", {
+            deleted: formatUserDateTime(row.deleted_at, {}, "-"),
+            until: formatUserDateTime(row.retained_until, {}, "-"),
+        });
+    }
+
+    retainedSessionText(row) {
+        return _t("Download link open until %s", formatUserDateTime(row.data_retrieval?.session?.expires_at, {}, "-"));
+    }
+
+    get retrievalEndpoint() {
+        const row = this.state.retrievalTarget;
+        return row ? retainedRetrievalEndpoint(this.props.workspaceId, row.id) : "";
+    }
+
+    openRetainedRetrieval(row) {
+        this.state.retrievalTarget = row;
+    }
+
+    closeRetainedRetrieval() {
+        this.state.retrievalTarget = null;
+        this.loadRetainedData();
+    }
+
     get canManageWorkspace() {
         return ["owner", "admin"].includes(this.state.workspace?.role);
     }
@@ -404,6 +455,7 @@ export class WorkspaceDetailPage extends Component {
             name: _t("Cloud Services"),
             description: _t("Deploy Docker apps with one click."),
             icon: "cloud",
+            brand: CLOUD_SERVICE_BRAND,
             color: "blue",
             action: "marketplace",
         },
@@ -411,6 +463,7 @@ export class WorkspaceDetailPage extends Component {
             name: _t("Security Access"),
             description: _t("Setup Zero Trust Tunnels."),
             icon: "shield",
+            brand: SECURITY_ACCESS_BRAND,
             // 'emerald' is the existing green-toned card style
             // (o_woow_service_card_emerald); there is no 'green' variant.
             color: "emerald",
@@ -420,6 +473,7 @@ export class WorkspaceDetailPage extends Component {
             name: _t("Smart Home"),
             description: _t("Connect Home Assistant."),
             icon: "home_iot_device",
+            brand: SMART_HOME_BRAND,
             color: "orange",
             action: "smarthome",
         },

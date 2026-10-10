@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.RenewSubscriptionModal">
+    <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_modal_md o_woow_renew_modal" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2>Renew Subscription</h2>
+          <button
+            class="o_woow_modal_close"
+            t-on-click="props.onClose"
+            t-att-disabled="state.renewing">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <p class="o_woow_renew_modal__lead" t-esc="leadText"/>
+
+          <t t-if="state.loading">
+            <div class="o_woow_renew_modal__loading">
+              <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
+              <span>Loading renewal details...</span>
+            </div>
+          </t>
+
+          <t t-if="!state.loading and state.estimateError">
+            <div class="o_woow_error_message">
+              <WoowIcon name="'error'" size="16"/>
+              <span t-esc="state.estimateError"/>
+            </div>
+          </t>
+
+          <t t-if="!state.loading and !state.estimateError and state.estimate">
+            <ul class="o_woow_renew_modal__facts">
+              <li>A new billing period starts today. The unpaid period is not charged.</li>
+              <li>The service is restored automatically right after the payment, usually within a few minutes.</li>
+              <li t-if="retentionUntil" t-esc="retentionText"/>
+            </ul>
+
+            <div class="o_woow_form_group">
+              <label>Plan</label>
+              <div class="o_woow_renew_modal__plans" role="radiogroup">
+                <t t-foreach="plans" t-as="plan" t-key="plan.plan_id">
+                  <button
+                    type="button"
+                    role="radio"
+                    t-att-aria-checked="plan.plan_id === state.selectedPlanId ? 'true' : 'false'"
+                    t-att-disabled="state.renewing"
+                    t-attf-class="o_woow_renew_modal__plan {{ plan.plan_id === state.selectedPlanId ? 'o_woow_renew_modal__plan--selected' : '' }}"
+                    t-on-click="() => this.selectPlan(plan.plan_id)">
+                    <span class="o_woow_renew_modal__plan_name">
+                      <t t-esc="plan.name"/>
+                      <span t-if="plan.is_current" class="o_woow_renew_modal__plan_badge">Previous plan</span>
+                    </span>
+                    <span class="o_woow_renew_modal__plan_price" t-esc="formatPoints(plan.total)"/>
+                  </button>
+                </t>
+              </div>
+              <p class="o_woow_renew_modal__hint">
+                To change the resources (CPU, memory, storage), renew first and then use Change Plan.
+              </p>
+            </div>
+
+            <t t-if="selectedPlan">
+              <div class="o_woow_renew_modal__summary">
+                <div class="o_woow_renew_modal__row">
+                  <span>Subtotal</span>
+                  <span t-esc="formatPoints(selectedPlan.untaxed)"/>
+                </div>
+                <div class="o_woow_renew_modal__row">
+                  <span t-esc="taxLabel"/>
+                  <span t-esc="formatPoints(selectedPlan.tax_amount)"/>
+                </div>
+                <div class="o_woow_renew_modal__row o_woow_renew_modal__row--total">
+                  <span>Total</span>
+                  <span t-esc="formatPoints(selectedPlan.total)"/>
+                </div>
+                <div class="o_woow_renew_modal__row">
+                  <span>Billing Period</span>
+                  <span t-esc="periodText"/>
+                </div>
+                <div class="o_woow_renew_modal__row">
+                  <span>Wallet Balance</span>
+                  <span t-esc="formatPoints(walletBalance)"/>
+                </div>
+              </div>
+              <p t-if="!payerIsViewer" class="o_woow_renew_modal__hint">
+                The payment is taken from the workspace owner's wallet.
+              </p>
+            </t>
+
+            <div t-if="isPaymentBlocked" class="o_woow_renew_modal__warning">
+              <WoowIcon name="'warning'" size="20"/>
+              <p>This invoice cannot be paid in /woow while automatic e-invoicing is enabled. Please contact support.</p>
+            </div>
+
+            <div t-if="!isPaymentBlocked and selectedPlan and !sufficient" class="o_woow_renew_modal__warning">
+              <WoowIcon name="'warning'" size="20"/>
+              <div>
+                <p t-esc="shortageText"/>
+                <a t-if="payerIsViewer" href="#/billing/topup" class="o_woow_renew_modal__topup">
+                  <WoowIcon name="'add'" size="16"/>
+                  Top up your wallet
+                </a>
+                <p t-else="">Ask the workspace owner to top up their wallet.</p>
+              </div>
+            </div>
+          </t>
+
+          <div t-if="state.error" class="o_woow_error_message">
+            <WoowIcon name="'error'" size="16"/>
+            <span t-esc="state.error"/>
+          </div>
+        </div>
+
+        <div class="o_woow_modal_footer">
+          <WoowButton
+            variant="'secondary'"
+            size="'md'"
+            onClick="props.onClose"
+            disabled="state.renewing">
+            Cancel
+          </WoowButton>
+          <WoowButton
+            variant="'primary'"
+            size="'md'"
+            onClick.bind="onConfirm"
+            disabled="!canConfirm">
+            <t t-if="state.renewing">
+              <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+              Processing...
+            </t>
+            <t t-else="">
+              <WoowIcon name="'autorenew'" size="18"/>
+              Renew &amp; Pay
+            </t>
+          </WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

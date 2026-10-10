@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.218",
+    "version": "18.0.1.0.221",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -64,6 +64,8 @@
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",
         "data/agent_session_cron.xml",
+        # #1540：限時唯讀資料取回入口的到期關閉 cron
+        "data/data_retrieval_cron.xml",
         "data/reach_reconciler_cron.xml",
         "data/reconcile_report_cron.xml",
         # #784：待回收 CF Access 物件帳本的 dead-anchor 回收 cron
@@ -74,6 +76,8 @@
         "data/agent_template_default.xml",
         "data/demo_system_skill.xml",
         "views/account_move_views.xml",
+        # #1610：訂閱上的「允許復權（已人工確認付款）」（帳務管理員）
+        "views/sh_subscription_resume_views.xml",
         "views/paas_app.xml",
         "views/portal_templates.xml",
         "views/oauth2_templates.xml",

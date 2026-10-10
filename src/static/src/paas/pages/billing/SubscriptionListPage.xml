@@ -58,7 +58,7 @@
                             <div class="o_woow_sub_card">
                                 <div class="o_woow_sub_card_left">
                                     <div class="o_woow_sub_card_icon">
-                                        <WoowIcon name="getSubIcon(sub)" size="22"/>
+                                        <BrandIcon brand="getSubBrand(sub)" fallback="getSubIcon(sub)" size="22" fill="true"/>
                                     </div>
                                     <div class="o_woow_sub_card_info">
                                         <span class="o_woow_sub_card_id" t-esc="sub.name"/>

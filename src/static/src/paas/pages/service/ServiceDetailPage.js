@@ -3,6 +3,8 @@ import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { templateBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
@@ -16,15 +18,20 @@ import { RestartServiceModal } from "../../components/modal/RestartServiceModal"
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
+import { RenewSubscriptionModal } from "../../components/modal/RenewSubscriptionModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
 import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswordModal";
+import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
+import { serviceRetrievalEndpoint } from "../../services/data_retrieval";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
+import { formatUserDate } from "../../utils/datetime_helpers";
 import { showProjects } from "../../core/platform_config";
+import { formatUserDateTime } from "../../utils/datetime_helpers";
 import {
     getInitFailureText,
     getStaleObservation,
@@ -51,7 +58,7 @@ export class ServiceDetailPage extends Component {
     static template = "woow_paas_platform.ServiceDetailPage";
     static components = {
         WoowCard,
-        WoowIcon,
+        WoowIcon, BrandIcon,
         WoowButton,
         StatusBadge,
         OverviewTab,
@@ -65,10 +72,12 @@ export class ServiceDetailPage extends Component {
         SkipTrialModal,
         EditDomainModal,
         ChangePlanModal,
+        RenewSubscriptionModal,
         CreateProjectModal,
         OneTimeCredentialsModal,
         AdminCredentialsModal,
         ResetAdminPasswordModal,
+        DataRetrievalModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -88,6 +97,8 @@ export class ServiceDetailPage extends Component {
             showSkipTrialModal: false,
             showDomainModal: false,
             showChangePlanModal: false,
+            // #1611：自助續訂（訂閱取消／到期、服務還在保留期內）。
+            showRenewModal: false,
             showCreateProjectModal: false,
             supportProject: null,
             supportProjectLoading: false,
@@ -98,6 +109,8 @@ export class ServiceDetailPage extends Component {
             showAdminCredentialsModal: false,
             // #1560：重設管理員密碼的確認框。
             showResetConfirmModal: false,
+            // #1540：停權後的限時唯讀取回入口。
+            showDataRetrievalModal: false,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -174,7 +187,11 @@ export class ServiceDetailPage extends Component {
             this.stopPolling();
             return;
         }
-        const interval = pendingStates.includes(this.state.service.state) ? 5000 : 60000;
+        // #1611：續訂完成、服務恢復中（後端 renewal.resuming）也用 5 秒，恢復後馬上看得到。
+        const fast =
+            pendingStates.includes(this.state.service.state) ||
+            this.state.service.renewal?.resuming === true;
+        const interval = fast ? 5000 : 60000;
         if (this.pollingInterval && this.pollingIntervalMs === interval) {
             return;
         }
@@ -498,6 +515,44 @@ export class ServiceDetailPage extends Component {
         );
     }
 
+    // #1540 停權後的限時唯讀取回入口
+    /**
+     * 「取回資料」按鈕：owner／admin，且後端說這台支援（範本有 profile）並且此刻可以開
+     * （停權中）或已經有開著的入口。判準全讀 payload 的 `data_retrieval`（後端
+     * `_data_retrieval_capability`），前端不自建 slug／狀態判準。
+     */
+    get canRetrieveData() {
+        const dr = this.service?.data_retrieval;
+        return this.canManageService && !!dr?.supported && (!!dr.available || !!dr.session);
+    }
+
+    get retrievalSession() {
+        return this.service?.data_retrieval?.session || null;
+    }
+
+    get retrievalBannerText() {
+        return _t("A temporary download link for this service's data is open until %s.",
+            formatUserDateTime(this.retrievalSession?.expires_at, {}, "-"));
+    }
+
+    get retrievalSuspendedHint() {
+        return _t("This service is suspended. You can open a temporary read-only link to download its files.");
+    }
+
+    get dataRetrievalEndpoint() {
+        return serviceRetrievalEndpoint(this.props.workspaceId, this.props.serviceId);
+    }
+
+    showDataRetrieval() {
+        this.state.showDataRetrievalModal = true;
+    }
+
+    hideDataRetrieval() {
+        // 視窗開著時輪詢暫停（isModalOpen）；關閉時重讀一次，讓提示與按鈕跟上開／關的結果。
+        this.state.showDataRetrievalModal = false;
+        this.loadService({ silent: true });
+    }
+
     get showRestartButton() {
         return !!this.service && this.service.template?.restart_supported !== false;
     }
@@ -551,6 +606,94 @@ export class ServiceDetailPage extends Component {
 
     confirmCloudServiceSkip = () => {
         return cloudService.skipTrial(this.props.serviceId);
+    };
+
+    // #1611 Renew — 訂閱被取消（欠費）或到期、服務還在保留期內時自助續訂。
+    /**
+     * 續訂橫幅的內容；不需要顯示時回 null。判準全部讀後端 `renewal`
+     * （`cloud_service._renewal_status()`，與兩支續訂端點同一份），前端不自己看訂閱狀態推導。
+     * 「續訂」按鈕另外要 canManageService（owner／admin，與端點的角色閘同一個判準）。
+     */
+    get renewalBanner() {
+        const renewal = this.service?.renewal;
+        if (!renewal) {
+            return null;
+        }
+        if (renewal.available) {
+            const details = [
+                this.service.state === "suspended"
+                    ? _t("The service is suspended.")
+                    : _t("The service will be suspended soon."),
+            ];
+            if (renewal.retention_until) {
+                details.push(_t("Renew by %(date)s to keep the service and its data.", {
+                    date: formatUserDate(renewal.retention_until, ""),
+                }));
+            }
+            if (!this.canManageService) {
+                details.push(_t("Ask a workspace owner or admin to renew it."));
+            }
+            return {
+                tone: "warning",
+                icon: "autorenew",
+                title: renewal.subscription_state === "cancel"
+                    ? _t("The subscription of this service was cancelled")
+                    : _t("The subscription of this service has ended"),
+                detail: details.join(" "),
+                canRenew: this.canManageService,
+            };
+        }
+        if (renewal.resuming) {
+            return {
+                tone: "info",
+                icon: "sync",
+                title: _t("Subscription renewed"),
+                detail: _t("The service is being restored. This usually takes a few minutes."),
+                canRenew: false,
+            };
+        }
+        if (renewal.reason === "retention_expired") {
+            return {
+                tone: "error",
+                icon: "block",
+                title: _t("The retention period of this service has ended"),
+                detail: _t("It can no longer be renewed. Create a new service to continue."),
+                canRenew: false,
+            };
+        }
+        if (renewal.reason === "period_not_ended") {
+            return {
+                tone: "info",
+                icon: "event",
+                title: _t("This subscription will not renew automatically"),
+                detail: _t("The service keeps running until %(date)s. You can renew it here after that date.", {
+                    date: formatUserDate(renewal.period_end, ""),
+                }),
+                canRenew: false,
+            };
+        }
+        return null;
+    }
+
+    showRenew() {
+        this.state.showRenewModal = true;
+    }
+
+    hideRenew() {
+        this.state.showRenewModal = false;
+    }
+
+    async onRenewed() {
+        this.hideRenew();
+        await this.loadService();
+    }
+
+    loadRenewEstimate = () => {
+        return cloudService.getRenewEstimate(this.props.serviceId);
+    };
+
+    confirmRenew = (planId) => {
+        return cloudService.renew(this.props.serviceId, planId);
     };
 
     // Change Plan Modal — 改方案／改席數（復用 ChangePlanModal + PlanSelector）
@@ -675,6 +818,10 @@ export class ServiceDetailPage extends Component {
     }
 
     // Template icon helper
+    get brandKey() {
+        return templateBrand(this.service?.template?.slug);
+    }
+
     get templateIcon() {
         // Use template icon if available, otherwise default to cloud icon
         return this.service?.template?.icon || "cloud";

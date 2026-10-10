@@ -31,7 +31,7 @@
                 <WoowCard shadow="true" class="'o_woow_configure_header'">
                     <div class="o_woow_template_header">
                         <div t-att-class="'o_woow_template_icon o_woow_template_icon_' + template.category">
-                            <WoowIcon name="categoryIcon" size="32"/>
+                            <BrandIcon brand="brandKey" fallback="categoryIcon" size="32" fill="true"/>
                         </div>
                         <div class="o_woow_template_info">
                             <h1 t-esc="template.name"/>

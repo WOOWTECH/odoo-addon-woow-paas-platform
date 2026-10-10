@@ -210,6 +210,65 @@ export const cloudService = reactive({
         }
     },
 
+    /**
+     * #1611：續訂前的確認內容（可選方案與各自的首期金額、錢包餘額、付款能力）。不寫入。
+     * @param {number} serviceId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
+     */
+    async getRenewEstimate(serviceId) {
+        try {
+            const result = await jsonRpc(
+                `/api/cloud-services/services/${serviceId}/renew-estimate`,
+                {},
+            );
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error, code: result.code, data: result.data };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
+    /**
+     * #1611：自助續訂（錢包付款 → 新訂閱綁回服務；停權中的服務隨後自動恢復）。
+     * @param {number} serviceId
+     * @param {number} planId
+     * @returns {Promise<{success: boolean, data?: Object, error?: string, code?: string}>}
+     */
+    async renew(serviceId, planId) {
+        this.operationLoading.renew = true;
+        try {
+            const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/renew`, {
+                plan_id: planId,
+            });
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error, code: result.code, data: result.data };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.renew = false;
+        }
+    },
+
+    /**
+     * #1611：目前使用者（owner／admin）可以續訂的服務，帳務頁「待續訂」清單用。
+     * @returns {Promise<{success: boolean, data?: Object[], error?: string}>}
+     */
+    async fetchRenewals() {
+        try {
+            const result = await jsonRpc("/api/cloud-services/renewals", {});
+            if (result.success) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
     async fetchOdooAddons(templateId = null, category = null) {
         this.operationLoading.fetchOdooAddons = true;
         try {

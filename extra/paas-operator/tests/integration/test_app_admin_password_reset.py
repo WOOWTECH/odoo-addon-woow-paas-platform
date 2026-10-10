@@ -35,7 +35,9 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-N8N_IMAGE = os.environ.get("OPERATOR_TEST_N8N_IMAGE", "docker.io/n8nio/n8n:1.122.4")
+# 平台 seed 釘的是 JCR 鏡像 n8n:2.35.3@sha256:…（src/data/cloud_app_templates.xml），與 Docker Hub
+# 同一個 digest；這裡用 Docker Hub 那顆，節點不需要 JCR pull 憑證（同 test_n8n_init_owner_changed_1534）。
+N8N_IMAGE = os.environ.get("OPERATOR_TEST_N8N_IMAGE", "docker.io/n8nio/n8n:2.35.3")
 ODOO_IMAGE = os.environ.get(
     "OPERATOR_TEST_ODOO_IMAGE",
     "jcr-prod.woowtech.io/woow-paas-docker-local/cloud-odoo@sha256:"
@@ -94,16 +96,23 @@ _N8N_HTTP = """
 const http=require("http");let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
 const {method,path,body}=JSON.parse(s);const d=body?JSON.stringify(body):"";
 const r=http.request({hostname:"localhost",port:5678,path,method,headers:{"Content-Type":"application/json",
-"Content-Length":Buffer.byteLength(d)}},res=>{let b="";res.on("data",c=>b+=c).on("end",()=>
-console.log(JSON.stringify({status:res.statusCode})))});r.on("error",e=>console.log(JSON.stringify({status:0})));
+"Content-Length":Buffer.byteLength(d)}},res=>{let b="";res.on("data",c=>b+=c).on("end",()=>{let j=false;
+try{const v=JSON.parse(b);j=v!==null&&typeof v==="object"&&!Array.isArray(v)}catch(e){}
+console.log(JSON.stringify({status:res.statusCode,json:j}))})});
+r.on("error",e=>console.log(JSON.stringify({status:0,json:false})));
 r.write(d);r.end();});
 """
 
 
-def _n8n_http(namespace, pod, method, path, body=None):
+def _n8n_request(namespace, pod, method, path, body=None):
+    """``{"status": <HTTP 狀態>, "json": <body 是不是 JSON 物件>}``（body 本身不帶出來）。"""
     out = _exec(namespace, pod, "n8n", ["node", "-e", _N8N_HTTP],
                 stdin=json.dumps({"method": method, "path": path, "body": body}))
-    return json.loads(out.stdout.strip().splitlines()[-1])["status"]
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def _n8n_http(namespace, pod, method, path, body=None):
+    return _n8n_request(namespace, pod, method, path, body)["status"]
 
 
 def _n8n_login(namespace, pod, password):
@@ -166,10 +175,14 @@ spec:
 """)
     _wait_ready(namespace, f"app.kubernetes.io/instance={release}", timeout=600)
     pod = _pod_name(namespace, f"app.kubernetes.io/instance={release}")
-    # /healthz 比 REST 路由早起來（實測 owner/setup 先回 404）；比照 init/n8n 等 /rest/settings。
+    # #1616：pod Ready（/healthz）與 /rest/settings 回 200 都不代表 DB 已就緒。n8n 2.x 一啟動先開
+    # 暫時的 server：migration 跑完之前，除了 /healthz/readiness 之外任何路徑都回 200＋純文字
+    # 「n8n is starting up. Please wait」（2.35.3 實測 postgres 約 1–6 秒，那時 user 表還沒有
+    # roleSlug 欄位，reset 就回 db_unsupported），接著路由註冊完之前回 404。比照 init/n8n
+    # （n8n_init._wait_for_ready）：/rest/settings 回 200 **而且是 JSON** 才算 ready。
     deadline = time.monotonic() + 300
-    while _n8n_http(namespace, pod, "GET", "/rest/settings") != 200:
-        assert time.monotonic() < deadline, "n8n REST API never became ready"
+    while (resp := _n8n_request(namespace, pod, "GET", "/rest/settings")) != {"status": 200, "json": True}:
+        assert time.monotonic() < deadline, f"n8n REST API never became ready (last {resp})"
         time.sleep(3)
     return pod
 

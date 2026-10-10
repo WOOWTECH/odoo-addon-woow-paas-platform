@@ -501,3 +501,65 @@
     }
   }
 }
+
+// #1611：待續訂的服務
+.o_woow_billing_renewals_card {
+  margin-bottom: 1rem;
+  border: 1px solid #fcd34d;
+
+  .o_woow_billing_hint {
+    margin: 0.25rem 0 0.75rem;
+  }
+}
+
+.o_woow_billing_renewal_list {
+  display: flex;
+  flex-direction: column;
+}
+
+.o_woow_billing_renewal_row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid $woow-border-light;
+
+  .o_woow_btn {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+}
+
+.o_woow_billing_renewal_info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.o_woow_billing_renewal_name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: $woow-text-primary;
+  overflow-wrap: anywhere;
+}
+
+.o_woow_billing_renewal_state {
+  padding: 0.125rem 0.5rem;
+  border-radius: $woow-radius-full;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.o_woow_billing_renewal_meta {
+  color: $woow-text-secondary;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}

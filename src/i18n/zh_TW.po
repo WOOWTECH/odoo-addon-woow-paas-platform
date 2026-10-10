@@ -15802,13 +15802,6 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.xml:0
-#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.xml:0
-msgid "WoowTech"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid ""
 "WoowTech provides cloud infrastructure and smart home integration\n"
@@ -21056,3 +21049,690 @@ msgid ""
 "deployment service was unreachable, busy or failed). While set, the tenant "
 "can submit the configuration again from the error state."
 msgstr "修改配置沒有確認套用（部署服務連不上、忙碌或失敗）時記下的時間。有值時，租戶可以在錯誤狀態下直接重新送出修改配置。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_requested
+msgid "Resume Requested"
+msgstr "等待付款後復權"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_requested
+msgid ""
+"Set by the platform when a payment or a renewal makes the subscription of "
+"this suspended service active again. A background job resumes the service "
+"right after the payment is committed, then clears the flag."
+msgstr "付款或續約讓這個停權中服務的訂閱恢復有效時，由平台設定。付款完成後，背景排程會立即恢復服務並清除這個標記。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_resume_paid_cloud_services_ir_actions_server
+msgid "PaaS: Resume Cloud Services After Payment"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_hold_reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__resume_hold_reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__resume_hold_reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_subscription_lifecycle_mixin__resume_hold_reason
+msgid "Resume On Hold"
+msgstr "暫不復權原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__resume_hold_reason
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__resume_hold_reason
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_smart_home__resume_hold_reason
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_subscription_lifecycle_mixin__resume_hold_reason
+msgid ""
+"Why this suspended service has not been resumed although its subscription "
+"is in progress again: it still has unpaid invoices. Written and cleared by "
+"the subscription lifecycle jobs."
+msgstr "訂閱已回到進行中，這個停權中的服務卻還沒恢復的原因：仍有未付清的發票。由訂閱生命週期排程寫入與清除。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_sh_subscription_subscription__woow_resume_payment_confirmed
+msgid "Allow Resume (Payment Confirmed Manually)"
+msgstr "允許復權（已人工確認付款）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_subscription__woow_resume_payment_confirmed
+msgid ""
+"Tick after confirming the payment outside the system (for example a bank "
+"transfer that has not been reconciled yet). Suspended services on this "
+"subscription then resume even though its invoices are not paid in the "
+"system. Cleared automatically when the subscription leaves \"In Progress\". "
+"Only billing administrators can change it."
+msgstr "在系統外確認收到款項後勾選（例如還沒沖帳的銀行轉帳）。勾選後，這筆訂閱底下停權中的服務即使發票在系統內未付清也會恢復。訂閱離開「進行中」時自動清除。只有帳務管理員可以修改。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_sh_subscription_form_woow_resume
+msgid "PaaS Service Resume"
+msgstr "PaaS 服務復權"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_cron.py:0
+msgid ""
+"Resume on hold: subscription %(subscription)s has unpaid invoices "
+"(%(invoices)s). The service resumes automatically once they are paid, or "
+"after a billing administrator ticks \"Allow Resume (Payment Confirmed "
+"Manually)\" on the subscription."
+msgstr "暫不復權：訂閱 %(subscription)s 還有未付清的發票（%(invoices)s）。付清後會自動恢復，或由帳務管理員在訂閱上勾選「允許復權（已人工確認付款）」後恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_cron.py:0
+msgid ""
+"%(service)s was resumed (now %(state)s) although invoices %(invoices)s are "
+"unpaid, because a billing administrator confirmed the payment manually."
+msgstr "帳務管理員已人工確認付款，%(service)s 在發票 %(invoices)s 未付清的情況下已復權（目前狀態：%(state)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"Only billing administrators can allow a suspended service to resume without "
+"a paid invoice."
+msgstr "只有帳務管理員可以讓停權中的服務在發票未付清時復權。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"Payment confirmed manually by a billing administrator: suspended services on "
+"this subscription may resume while it stays in progress. Unpaid invoices at "
+"this moment: %(invoices)s."
+msgstr "帳務管理員已人工確認付款：訂閱維持進行中期間，底下停權中的服務可以復權。目前未付清的發票：%(invoices)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"Payment confirmed manually by a billing administrator: suspended services on "
+"this subscription may resume while it stays in progress. There are no unpaid "
+"invoices at this moment."
+msgstr "帳務管理員已人工確認付款：訂閱維持進行中期間，底下停權中的服務可以復權。目前沒有未付清的發票。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_resume_trigger.py:0
+msgid ""
+"\"Allow Resume (Payment Confirmed Manually)\" was cleared because the "
+"subscription is no longer in progress (%(state)s). Confirm the payment again "
+"if it returns to in progress without being paid."
+msgstr "訂閱已不在進行中（%(state)s），已自動取消「允許復權（已人工確認付款）」。訂閱之後若回到進行中但仍未付款，請重新確認付款。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "This service has no subscription to renew."
+msgstr "這個服務沒有可以續訂的訂閱。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service's subscription is still active; there is nothing to renew."
+msgstr "這個服務的訂閱仍然有效，不需要續訂。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This subscription has already been renewed. The service will be restored "
+"automatically once the renewal is complete."
+msgstr "這個訂閱已經續訂過了。續訂完成後，服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "This subscription cannot be renewed in its current state."
+msgstr "這個訂閱目前的狀態無法續訂。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service has already been removed, so it cannot be renewed. Please "
+"create a new service."
+msgstr "這個服務已經被清除，無法續訂。請重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service was never set up, so it cannot be renewed. Please delete it and "
+"create a new service."
+msgstr "這個服務從未開通成功，無法續訂。請刪除後重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"The current billing period has not ended yet (it ends on %(date)s). You can "
+"renew after it ends."
+msgstr "目前的計費週期還沒結束（到 %(date)s 為止），週期結束後才能續訂。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"The retention period of this service has ended, so it can no longer be "
+"renewed. Please create a new service."
+msgstr "這個服務的保留期已過，無法再續訂。請重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "This plan cannot be used to renew this service."
+msgstr "這個方案不能用來續訂這個服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"This service is being processed right now. Please try again in a moment."
+msgstr "這個服務正在處理中，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid "Insufficient wallet balance. %(shortage)s more points are needed."
+msgstr "錢包餘額不足，還需要 %(shortage)s 點。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service_renewal.py:0
+msgid ""
+"The payment could not be completed, so nothing was renewed or charged. "
+"Please try again."
+msgstr "付款沒有完成，因此沒有續訂、也沒有扣款。請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while preparing the renewal."
+msgstr "準備續訂時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while renewing the subscription."
+msgstr "續訂時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Failed to load the renewal details"
+msgstr "無法載入續訂資訊"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Failed to renew the subscription"
+msgstr "續訂失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Renew the subscription of %(name)s to bring the service back."
+msgstr "續訂「%(name)s」的訂閱，讓服務恢復運作。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Renew by %(date)s; after that the service and its data are removed."
+msgstr "請在 %(date)s 前續訂；之後服務與資料會被清除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Tax (%(rate)s)"
+msgstr "稅金（%(rate)s）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.js:0
+msgid "Insufficient balance. You need %(amount)s more to renew."
+msgstr "餘額不足，還需要 %(amount)s 才能續訂。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+msgid "Renew Subscription"
+msgstr "續訂服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Loading renewal details..."
+msgstr "正在載入續訂資訊…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "A new billing period starts today. The unpaid period is not charged."
+msgstr "新的計費週期從今天開始，欠費期間不另外收費。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid ""
+"The service is restored automatically right after the payment, usually "
+"within a few minutes."
+msgstr "付款完成後服務會自動恢復，通常幾分鐘內完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Previous plan"
+msgstr "原方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid ""
+"To change the resources (CPU, memory, storage), renew first and then use "
+"Change Plan."
+msgstr "要調整規格（CPU、記憶體、儲存空間），請先續訂，再使用「變更方案」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Billing Period"
+msgstr "計費週期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "The payment is taken from the workspace owner's wallet."
+msgstr "費用從工作區擁有者的錢包扣除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Ask the workspace owner to top up their wallet."
+msgstr "請工作區擁有者先為錢包儲值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RenewSubscriptionModal.xml:0
+msgid "Renew & Pay"
+msgstr "續訂並付款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The service is suspended."
+msgstr "服務已停權。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The service will be suspended soon."
+msgstr "服務即將停權。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Renew by %(date)s to keep the service and its data."
+msgstr "請在 %(date)s 前續訂，以保留服務與資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Ask a workspace owner or admin to renew it."
+msgstr "請工作區擁有者或管理員續訂。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The subscription of this service was cancelled"
+msgstr "這個服務的訂閱已取消"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The subscription of this service has ended"
+msgstr "這個服務的訂閱已結束"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Subscription renewed"
+msgstr "已續訂"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The service is being restored. This usually takes a few minutes."
+msgstr "服務正在恢復，通常幾分鐘內完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "The retention period of this service has ended"
+msgstr "這個服務的保留期已過"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "It can no longer be renewed. Create a new service to continue."
+msgstr "已無法續訂。如需繼續使用，請重新開通服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "This subscription will not renew automatically"
+msgstr "這個訂閱不會自動續約"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid ""
+"The service keeps running until %(date)s. You can renew it here after that "
+"date."
+msgstr "服務會運作到 %(date)s，之後可以在這裡續訂。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Renew by %(date)s"
+msgstr "%(date)s 前可續訂"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Subscription ended"
+msgstr "訂閱已結束"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
+msgid "Services Awaiting Renewal"
+msgstr "待續訂的服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
+msgid ""
+"The subscriptions of these services were cancelled or have ended. Renew to "
+"restore them."
+msgstr "這些服務的訂閱已取消或已結束，續訂後即可恢復。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
+msgid "Renew"
+msgstr "續訂"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The retention period of this deleted service's data has ended."
+msgstr "這個已刪除服務的資料保留期已過。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "Data retrieval is not available yet on this platform. Please contact support."
+msgstr "平台尚未開放資料取回，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "A data retrieval link is already open for this service. Close it before opening a new one."
+msgstr "這個服務已經有一個開著的資料取回網址，請先關閉再開新的。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The service is still running. Data retrieval is only available while the service is suspended."
+msgstr "服務仍在執行中。只有在服務停權期間才能取回資料。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The service has not fully stopped yet. Please try again in a minute."
+msgstr "服務尚未完全停止，請一分鐘後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The previous data retrieval link is still shutting down. Please try again in a minute."
+msgstr "上一個資料取回網址還在關閉中，請一分鐘後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "The data disk of this service could not be found."
+msgstr "找不到這個服務的資料磁碟。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "This workspace has no CPU or memory quota left for the download service. Stop another service in this workspace and try again."
+msgstr "這個工作區的 CPU 或記憶體配額已用完，無法啟動下載服務。請先停止工作區內的其他服務再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+msgid "This service does not support data retrieval."
+msgstr "這個服務不支援資料取回。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Could not open the data retrieval link. Please try again later."
+msgstr "無法開啟資料取回網址，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/models/data_retrieval.py:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Could not close the data retrieval link. Please try again later."
+msgstr "無法關閉資料取回網址，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The service is changing state right now. Please try again in a minute."
+msgstr "服務正在變更狀態，請一分鐘後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Data retrieval is only available while the service is suspended. A running service can export its data from the app itself."
+msgstr "只有在服務停權期間才能用這個方式取回資料；執行中的服務請直接在應用程式內匯出。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while handling data retrieval."
+msgstr "處理資料取回時發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Retained data not found"
+msgstr "找不到保留的資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+msgid "Retrieve Data"
+msgstr "取回資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "This service was deleted, but its disk is still retained. You can open a temporary, read-only download link for its files."
+msgstr "這個服務已刪除，但磁碟仍在保留期內。你可以開一個臨時、唯讀的下載網址取回檔案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "This service is suspended. You can open a temporary, read-only download link for its files. The service itself stays stopped."
+msgstr "這個服務目前停權中。你可以開一個臨時、唯讀的下載網址取回檔案；服務本身仍維持停止。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "The link closes automatically after 72 hours (or earlier, when the retained disk is reclaimed). You can close it sooner yourself."
+msgstr "網址會在 72 小時後自動關閉（磁碟保留期較早結束時會更早關閉），你也可以隨時提早關閉。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Files can only be viewed and downloaded; nothing can be changed or deleted."
+msgstr "只能瀏覽與下載檔案，無法修改或刪除任何內容。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Each user's files are in their own folder. Calendars, contacts and other app data are not included."
+msgstr "每位使用者的檔案各在自己的資料夾；行事曆、聯絡人與其他應用程式資料不包含在內。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Anyone with the address and password can download the files. The password is shown only once."
+msgstr "任何人只要有網址和密碼就能下載這些檔案。密碼只會顯示一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Data retrieval is available while the service is suspended, or after it was deleted until its disk is reclaimed."
+msgstr "服務停權期間，或刪除後磁碟回收之前，才能取回資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Save these now. The password is shown only once and cannot be displayed again."
+msgstr "請立即保存。密碼只會顯示這一次，之後無法再顯示。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "A download link for this service is open. The password was shown only once when it was opened; if you lost it, close the link and open a new one."
+msgstr "這個服務目前有一個開著的下載網址。密碼只在開啟時顯示一次；如果遺失，請關閉後重新開一個。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "To download everything at once (e.g. on a computer with wget):"
+msgstr "要一次下載全部（例如在有 wget 的電腦上）："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Ready. Open the address and sign in with the username and password."
+msgstr "已就緒。開啟網址並用帳號與密碼登入。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "The link has stopped. Close it and open a new one if you still need the files."
+msgstr "這個網址已停止。若仍需要檔案，請關閉後重新開一個。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Preparing the download link (usually under a minute)..."
+msgstr "正在準備下載網址（通常不到一分鐘）…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Download address"
+msgstr "下載網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Available until"
+msgstr "可用至"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Opened by"
+msgstr "開啟者"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.js:0
+msgid "Could not load the data retrieval status."
+msgstr "無法讀取資料取回狀態。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "The link is closing."
+msgstr "網址正在關閉中。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "Close link now"
+msgstr "立即關閉網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "Opening..."
+msgstr "開啟中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "Open download link"
+msgstr "開啟下載網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DataRetrievalModal.xml:0
+msgid "I have saved them"
+msgstr "我已保存"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "A temporary download link for this service's data is open until %s."
+msgstr "這個服務的臨時資料下載網址開放至 %s。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "This service is suspended. You can open a temporary read-only link to download its files."
+msgstr "這個服務目前停權中，你可以開一個臨時的唯讀網址下載檔案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "These services were deleted, but their disks are still retained for a while. You can open a temporary read-only download link for their files."
+msgstr "這些服務已刪除，但磁碟仍會保留一段時間，你可以開一個臨時的唯讀下載網址取回檔案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Deleted %(deleted)s · retained until about %(until)s"
+msgstr "刪除於 %(deleted)s・約保留至 %(until)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Download link open until %s"
+msgstr "下載網址開放至 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+msgid "Retained data of deleted services"
+msgstr "已刪除服務的保留資料"

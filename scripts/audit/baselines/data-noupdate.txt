@@ -9,6 +9,7 @@
 1	src/data/cf_access_reap_cron.xml
 1	src/data/cloud_service_cron.xml
 1	src/data/cron_topup.xml
+1	src/data/data_retrieval_cron.xml
 1	src/data/demo_system_skill.xml
 1	src/data/ecpay_invoice_cron.xml
 1	src/data/low_balance_warning_cron.xml

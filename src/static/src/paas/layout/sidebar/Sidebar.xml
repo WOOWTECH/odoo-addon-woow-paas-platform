@@ -4,8 +4,8 @@
         <aside class="o_woow_sidebar">
             <div class="o_woow_sidebar_header">
                 <div class="o_woow_logo">
-                    <span class="material-symbols-outlined" t-translation="off">deployed_code</span>
-                    <span class="o_woow_logo_text">WoowTech</span>
+                    <img class="o_woow_brand_logo" src="/woow_paas_platform/static/src/img/brands/woowtech.png" alt="" draggable="false"/>
+                    <span class="o_woow_logo_text" t-translation="off">woowtech</span>
                 </div>
             </div>
             <nav class="o_woow_sidebar_nav">

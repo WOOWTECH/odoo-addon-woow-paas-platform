@@ -31,7 +31,7 @@
                 <div class="o_woow_service_header">
                     <div class="o_woow_service_header_info">
                         <div class="o_woow_service_header_icon">
-                            <WoowIcon name="templateIcon" size="32"/>
+                            <BrandIcon brand="brandKey" fallback="templateIcon" size="32" fill="true"/>
                         </div>
                         <div class="o_woow_service_header_text">
                             <div class="o_woow_service_header_title">
@@ -136,6 +136,15 @@
                             <WoowIcon name="'language'" size="18"/>
                             Custom Domain
                         </WoowButton>
+                        <!-- #1540：停權（或已有開著的入口）時的限時唯讀取回入口。 -->
+                        <WoowButton
+                            t-if="canRetrieveData"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showDataRetrieval">
+                            <WoowIcon name="'download'" size="18"/>
+                            Retrieve Data
+                        </WoowButton>
                         <WoowButton
                             t-if="showRestartButton"
                             variant="'secondary'"
@@ -196,6 +205,30 @@
                     Reset Admin Password also issues a new Gateway API Key. Update it
                     wherever you configured it (e.g. your MCP server).
                 </p>
+                </t>
+
+                <!-- #1611：訂閱被取消／到期後的自助續訂入口。內容全由後端 renewal 決定
+                     （renewalBanner getter）；「續訂」按鈕只給 owner／admin（canManageService）。 -->
+                <div t-if="renewalBanner"
+                     t-attf-class="o_woow_service_renewal_banner o_woow_service_renewal_banner--{{ renewalBanner.tone }}">
+                    <WoowIcon name="renewalBanner.icon" size="20"/>
+                    <div class="o_woow_service_renewal_banner__text">
+                        <strong t-esc="renewalBanner.title"/>
+                        <span t-esc="renewalBanner.detail"/>
+                    </div>
+                    <WoowButton
+                        t-if="renewalBanner.canRenew"
+                        variant="'primary'"
+                        size="'sm'"
+                        onClick.bind="showRenew">
+                        <WoowIcon name="'autorenew'" size="16"/>
+                        Renew Subscription
+                    </WoowButton>
+                </div>
+                <!-- #1540：停權中可取回資料的提示／開著的取回入口。 -->
+                <t t-if="canRetrieveData">
+                    <p t-if="retrievalSession" class="o_woow_hint" t-esc="retrievalBannerText"/>
+                    <p t-else="" class="o_woow_hint" t-esc="retrievalSuspendedHint"/>
                 </t>
 
                 <!-- Error Message Banner -->
@@ -341,6 +374,15 @@
                 onClose.bind="hideSkipTrial"
                 onSkipped.bind="onTrialSkipped"/>
 
+            <!-- #1611 Renew Subscription Modal -->
+            <RenewSubscriptionModal
+                t-if="state.showRenewModal and service"
+                serviceName="service.name"
+                loadEstimate="loadRenewEstimate"
+                confirmRenew="confirmRenew"
+                onClose.bind="hideRenew"
+                onRenewed.bind="onRenewed"/>
+
             <!-- Change Plan Modal（改方案／改席數，內嵌 PlanSelector） -->
             <ChangePlanModal
                 t-if="state.showChangePlanModal and serviceForModal"
@@ -386,6 +428,12 @@
                 service="service or undefined"
                 onClose.bind="hideAdminCredentials"
                 onSaved.bind="onAdminCredentialsSaved"/>
+
+            <DataRetrievalModal
+                t-if="state.showDataRetrievalModal and service"
+                endpoint="dataRetrievalEndpoint"
+                serviceName="service.name"
+                onClose.bind="hideDataRetrieval"/>
 
             <OneTimeCredentialsModal
                 t-if="state.oneTimeCredentials"

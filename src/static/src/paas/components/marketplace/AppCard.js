@@ -1,6 +1,8 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
 import { WoowIcon } from "../icon/WoowIcon";
+import { BrandIcon } from "../brand-icon/BrandIcon";
+import { templateBrand } from "../../utils/brand_icons";
 import { formatTemplatePrice } from "../../utils/pricing_label";
 import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 
@@ -10,7 +12,7 @@ import { availabilityLabel, isPurchasable } from "../../utils/availability_label
  */
 export class AppCard extends Component {
     static template = "woow_paas_platform.AppCard";
-    static components = { WoowIcon };
+    static components = { WoowIcon, BrandIcon };
     static props = {
         template: { type: Object },
         onAdd: { type: Function, optional: true },
@@ -52,6 +54,14 @@ export class AppCard extends Component {
      */
     get categoryIcon() {
         return this.categoryIcons[this.props.template.category] || "apps";
+    }
+
+    /**
+     * 品牌圖示鍵（模板代碼對照；查不到＝null，退回分類圖示）。
+     * @returns {string|null}
+     */
+    get brandKey() {
+        return templateBrand(this.props.template.slug);
     }
 
     /**

@@ -8,7 +8,7 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 ``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
 
 1. **釘版**：chart mcp-server 0.1.7（OCI）；image litellm-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI
-   推的那一顆（現行＝woow-mcp-server #45 合併 ff32a7c1、run 16237）——換 image 時這條會紅，逼下一個人覆核啟動
+   推的那一顆（現行＝woow-mcp-server #48 合併 1ec1bb0b、run 17227）——換 image 時這條會紅，逼下一個人覆核啟動
    契約（#708 教訓）。
 2. **啟動契約**：``litellm-mcp-server``、args 只有 ``--port 8000``（launcher 硬綁 127.0.0.1，seed 不給
    host）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
@@ -38,16 +38,18 @@ from ..models.cloud_service import _internal_provision
 JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
 MCP_SERVER_CHART = 'oci://%smcp-server' % JCR
 IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
-# woow-mcp-server #45（#1530 子行程指令改由 LaunchPolicy 固定＋env 白名單＋非 root；#1531 n8n）合進 main 的
-# merge commit ff32a7c1；main CI run 16237 推的 litellm-mcp-admin（digest 抄自該 build job 的 push log）。
-# 2026-10-08 已覆核 apps/litellm：LaunchPolicy＝litellm-mcp-server＋args ``--port {port}``、env 白名單只有
-# LITELLM_MCP_READONLY、connection 白名單 base_url／master_key；launcher 與 seed_defaults 未變 ⇒
+# woow-mcp-server #48（#1614 共用層 log 遮蔽 URL 憑證；#1615 n8n telemetry）合進 main 的 merge commit
+# 1ec1bb0b；main CI run 17227 job 18846 推的 litellm-mcp-admin（digest 抄自該 build job 的 push log）。
+# 2026-10-10 已覆核 ff32a7c1..1ec1bb0b 的 apps/litellm：只有 litellm_mcp_admin/log_redaction.py 改成沿用
+# mcp_admin_core.log_redaction（舊名稱保留給既有呼叫者）；pyproject 的 console script litellm-mcp-server、
+# main.py 的 LaunchPolicy（args ``--port {port}``、env 白名單只有 LITELLM_MCP_READONLY、connection 白名單
+# base_url／master_key）、launcher 的 port／127.0.0.1 綁定、seed_defaults 的唯讀鍵都沒變 ⇒
 # test_launch_contract／test_read_only_by_default 照舊成立。
-# 前一個 pin 是 #37 的 cfc2a2b（狀態 API 補看門狗欄位）：
-# cfc2a2b1f7689c970628bd9092f79d9f4779e07f@sha256:3c94cbd2b21f12a08b264c4bd97b1ac7301a72a5c91cda216ad95b53fda16878。
+# 前一個 pin 是 #45 的 ff32a7c1（#1530 LaunchPolicy＋非 root）：
+# ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:b9ae4e2133fb773ec287a4d983c8060332d206f35e50726c57bc156e27fa98ea。
 EXPECT_IMAGE_TAG = (
-    'ff32a7c11f57f32838417fb3aa3a4d4593210818'
-    '@sha256:b9ae4e2133fb773ec287a4d983c8060332d206f35e50726c57bc156e27fa98ea')
+    '1ec1bb0ba196d1b964005e01c513ce2158fd45c1'
+    '@sha256:4e31c10acb93e1f888f14cfc012f68b930609e35f0e734330a64abb81bd134d7')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'

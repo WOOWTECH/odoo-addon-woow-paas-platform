@@ -20,7 +20,7 @@
         <!-- Header（mockup：icon + nickname + badge + hostname + delete） -->
         <div class="o_woow_sa_detail__header">
           <div class="o_woow_sa_detail__icon">
-            <WoowIcon name="'verified_user'" size="32"/>
+            <BrandIcon brand="brandKey" fallback="'verified_user'" size="32" fill="true"/>
           </div>
           <div class="o_woow_sa_detail__title">
             <t t-if="!state.editingName">

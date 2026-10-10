@@ -5,7 +5,7 @@
             <!-- Card Header with Icon and Status -->
             <div class="o_woow_cloud_service_card_header">
                 <div class="o_woow_cloud_service_icon">
-                    <WoowIcon name="templateIcon" size="28"/>
+                    <BrandIcon brand="brandKey" fallback="templateIcon" size="28" fill="true"/>
                 </div>
                 <StatusBadge status="props.service.state" phase="props.service.init_phase or ''" size="'sm'"/>
                 <SubscriptionBadge subscription="props.service.subscription"/>

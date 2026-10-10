@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """VPN 控制台（Headscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/headscale 0.1.3（0.1.2＝#153 工作區＝區網、0.1.1＝#131、0.1.0＝#124）——
+契約來源：woow-paas-charts charts/headscale 0.1.4（0.1.3＝#1559 網域上線才當 server_url、0.1.2＝#153
+工作區＝區網、0.1.1＝#131、0.1.0＝#124）——
 一個 Pod：headscale v0.29.4、Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，
 平台密碼 Basic auth，固定送 Remote-User: admin）、選配 ngrok sidecar（租戶自己的 token；每 60 秒印
 ``WOOW_PUBLIC_URL=https://…``）。Service 第二個埠 8080＝Headscale（同工作區節點登入）。
@@ -79,9 +80,10 @@ class TestHeadscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HEADSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.3',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.3＝'
-                         '#1559 設定的 ngrok 網域等 agent 上線才當 server_url'
+        self.assertEqual(tpl.helm_chart_version, '0.1.4',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.4＝'
+                         '#1613 ngrok agent 輸出改走共用的 authtoken 遮蔽過濾器（舊 sed 對格式錯的 token 會外洩）；'
+                         '0.1.3＝#1559 設定的 ngrok 網域等 agent 上線才當 server_url'
                          '（0.1.1＝restart-on-credential-reset label，.207 重設必失敗的修正）')
 
     def test_service_port_is_the_entrance(self):

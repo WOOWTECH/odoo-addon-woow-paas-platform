@@ -1097,3 +1097,15 @@ from . import test_n8n_python_disabled_1533
 from . import test_create_only_settings_1561
 # #1563：欠費停權時對外網址指到共用停權說明頁（park），復權改回服務（unpark，失敗 fail-loud）。
 from . import test_suspend_route_park_1563
+# 服務品牌圖示：訂閱 API 帶模板代碼與服務類型（前台 brand_icons.js 挑圖示用）。
+from . import test_brand_icon_payload
+# #1599：續訂付款成功後立即復權（付款交易只寫旗標＋_trigger，commit 後由 cron 復權）。
+from . import test_paid_resume_1599
+# #1610：每日生命週期 cron 也「付清才復權」（與 #1599 共用判斷）＋帳務管理員人工出口。
+from . import test_cron_resume_paid_gate_1610
+# #1611：欠費取消／到期後在 /woow 自助續訂（上游續約鏈＋錢包付款＋#1599 復權；邊界情況與端點角色）。
+from . import test_self_renew_1611
+# #1612：範本 helm_value_specs 的欄位名稱一律中文（Odoo 管理員 Email／載入示範資料等）。
+from . import test_spec_labels_zh_1612
+# #1540：停權／刪除後的限時唯讀資料取回入口（owner／admin、一次性密碼、復權先關、刪除記帳本、cron）。
+from . import test_data_retrieval_1540

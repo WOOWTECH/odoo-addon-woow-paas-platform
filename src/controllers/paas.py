@@ -41,6 +41,7 @@ from ..services.chart_version import (
     rollback_floor_violation,
 )
 from ..models.cloud_service import WOOW_ODOO_ADMIN_PASSWORD_PATH, _internal_provision
+from ..models.cloud_service_renewal import RENEWABLE_SUBSCRIPTION_STATES, RenewalRefused
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
@@ -1707,6 +1708,179 @@ class PaasController(HiddenChainMixin, Controller):
             },
         }
 
+    # ==================== #1611 自助續訂 ====================
+    #
+    # 訂閱被取消（欠費）或到期、服務還在保留期內時，owner／admin 在 /woow 選方案 → 錢包付款
+    # → 沿用上游續約鏈產生新訂閱、綁回原服務 → #1599 的 cron 立即復權。判準與寫入都在
+    # model（`cloud_service_renewal.py`）；這裡只做身分／角色、#980 付款能力與回應形狀。
+    # 只做 Cloud Service；Security Access／Smart Home 另議。
+
+    def _renewal_service(self, service_id):
+        """續訂端點共用的前置：回 ``(service, None)`` 或 ``(None, 拒絕回應)``。
+
+        conceal_instances 閘排在角色之前（#471）；非成員＝找不到；user／guest＝權限不足
+        （判準＝``_can_manage_service``，與換方案／略過試用同一個 owner／admin 線，#1560）。
+        """
+        service = _PaaSCapability(request.env).cloud_service(service_id)
+        if not service.exists() or service.template_id.conceal_instances:
+            return None, {'success': False, 'error': _('Service not found')}
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        if not self._can_manage_service(access):
+            return None, {'success': False, 'error': _('Permission denied'),
+                          'code': 'permission_denied'}
+        return service, None
+
+    @staticmethod
+    def _renewal_refusal(service, code, data=None):
+        return {'success': False,
+                'error': service._renewal_refusal_message(code, data),
+                'code': code,
+                'data': data or {}}
+
+    @route("/api/cloud-services/services/<int:service_id>/renew-estimate", auth="user", methods=["POST"], type="json")
+    def api_service_renew_estimate(self, service_id: int, **kw: Any) -> dict[str, Any]:
+        """續訂前的確認內容：可選方案與各自的首期金額、錢包餘額、付款能力。不寫 DB。"""
+        service, denied = self._renewal_service(service_id)
+        if denied:
+            return denied
+        status = service._renewal_status()
+        if not status['available']:
+            return self._renewal_refusal(service, status['reason'], {'renewal': status, **status})
+        try:
+            old = service._sub()
+            current_plan = old.sh_subscription_plan_id
+            plans = []
+            for plan in service._renewal_plans():
+                quote = service._renewal_quote(plan)
+                quote.update({
+                    'name': plan.name,
+                    'unit': plan.sh_unit,
+                    'duration': plan.sh_duration,
+                    'is_current': plan == current_plan,
+                })
+                plans.append(quote)
+            # #980：與略過試用同一個付款能力判準（以舊訂閱的開票 vals 預演；只看公司與旗標）。
+            payability = self._skip_trial_invoice_payability(service, sub=old)
+            partner = old.sh_partner_id
+            data = {
+                'renewal': status,
+                'service_name': service.name,
+                'previous_plan_name': current_plan.name or '',
+                'plans': plans,
+                'wallet_balance': float(partner.wallet_balance or 0.0),
+                # 扣款的是訂閱的 partner（工作區擁有者）——admin 續訂時前端要講清楚。
+                'payer_is_viewer': partner == request.env.user.partner_id,
+                **payability,
+            }
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.error("ORM error estimating renewal for service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while preparing the renewal.')}
+        except (ValidationError, UserError) as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error("Error estimating renewal for service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while preparing the renewal.')}
+        return {'success': True, 'data': data}
+
+    @route("/api/cloud-services/services/<int:service_id>/renew", auth="user", methods=["POST"], type="json")
+    def api_service_renew(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
+        """自助續訂：錢包付款、產生新訂閱並綁回這台服務；停權中的服務 commit 後立即復權。
+
+        失敗不留任何東西（model 在第一個寫入前擋下能預判的失敗，寫入包在 savepoint）。
+        """
+        service, denied = self._renewal_service(service_id)
+        if denied:
+            return denied
+        if not plan_id:
+            return {'success': False, 'error': _('plan_id is required')}
+        try:
+            plan = service._renewal_plans().filtered(lambda p: p.id == int(plan_id))
+            if not plan:
+                status = service._renewal_status()
+                code = status['reason'] or 'plan_not_available'
+                return self._renewal_refusal(service, code, {'renewal': status, **status})
+            payability = self._skip_trial_invoice_payability(service, sub=service._sub())
+            if not payability['payable_via_woow']:
+                return {'success': False,
+                        'error': _('This invoice cannot be paid in /woow while automatic '
+                                   'e-invoicing is enabled. Please contact support.'),
+                        'code': payability['pay_blocked_reason']}
+            result = service._renew_lapsed_subscription(plan)
+        except RenewalRefused as e:
+            _logger.info("[CLOUD_SVC] renew refused service=%s code=%s", service_id, e.code)
+            return {'success': False, 'error': str(e), 'code': e.code, 'data': e.data}
+        except OperationalError:
+            # #518／#533：並發類例外交給框架的 retrying()（新快照重播）。
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.error("Access error renewing service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while renewing the subscription.')}
+        except (ValidationError, UserError) as e:
+            _logger.warning("Renewal rejected for service %s: %s", service_id, e)
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.error("Error renewing service %s: %s\n%s",
+                          service_id, e, traceback.format_exc())
+            return {'success': False,
+                    'error': _('An error occurred while renewing the subscription.')}
+        invoice = result['invoice']
+        return {
+            'success': True,
+            'data': {
+                'subscription': service._get_subscription_info(),
+                'renewal': service._renewal_status(),
+                'invoice': {'id': invoice.id, 'name': invoice.name or '',
+                            'amount': invoice.amount_total} if invoice else None,
+            },
+        }
+
+    @route("/api/cloud-services/renewals", auth="user", methods=["POST"], type="json")
+    def api_cloud_service_renewals(self, **kw: Any) -> dict[str, Any]:
+        """呼叫者（owner／admin）各工作區裡現在可以自助續訂的服務——帳務頁的「待續訂」清單。
+
+        停權說明頁（#1563）的續訂連結指向 /woow#/billing，租戶從那裡就看得到要續哪一台。
+        """
+        capability = _PaaSCapability(request.env)
+        rows = []
+        for access in capability.memberships():
+            if not self._can_manage_service(access):
+                continue
+            workspace = capability.workspace(access.workspace_id.id, ROLE_ADMIN)
+            if not workspace:
+                continue
+            services = workspace.env['woow_paas_platform.cloud_service'].search([
+                ('workspace_id', '=', workspace.id),
+                ('subscription_state', 'in', list(RENEWABLE_SUBSCRIPTION_STATES)),
+            ], order='id')
+            for service in services:
+                if service.template_id.conceal_instances:
+                    continue
+                status = service._renewal_status()
+                if not status['available']:
+                    continue
+                rows.append({
+                    'id': service.id,
+                    'name': service.name,
+                    'workspace_id': workspace.id,
+                    'workspace_name': workspace.name,
+                    'state': service.state,
+                    'template': {
+                        'name': service.template_id.name,
+                        'slug': service.template_id.slug or '',
+                    },
+                    'plan_name': service._sub().sh_subscription_plan_id.name or '',
+                    'renewal': status,
+                })
+        return {'success': True, 'data': rows}
+
     @route("/api/workspaces/<int:workspace_id>/services", auth="user", methods=["POST"], type="json")
     def api_workspace_services(self, workspace_id: int, action: str = 'list', template_id: int | None = None, name: str | None = None, values: dict[str, Any] | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
         """
@@ -1844,6 +2018,91 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': True, 'data': self._format_service(service)}
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
+
+    # ------------------------------------------------------------------ #
+    #  #1540 — 停權／刪除後的限時唯讀資料取回入口                          #
+    # ------------------------------------------------------------------ #
+
+    def _data_retrieval_workspace(self, workspace_id: int) -> tuple[Any, dict[str, Any] | None]:
+        """``(workspace, error)``：只有工作區 owner／admin（與服務寫入端點同一個判準）。"""
+        capability = _PaaSCapability(request.env)
+        workspace = capability.workspace(workspace_id)
+        if not workspace.exists():
+            return None, {'success': False, 'error': _('Workspace not found or access denied')}
+        access = capability.access(workspace)
+        if not access:
+            return None, {'success': False, 'error': _('Workspace not found or access denied')}
+        if not self._can_manage_service(access):
+            return None, {'success': False, 'error': _('Permission denied')}
+        return workspace, None
+
+    @staticmethod
+    def _data_retrieval_action(action: str, target: Any, open_fn: Any, close_fn: Any,
+                               view_fn: Any) -> dict[str, Any]:
+        """status／open／close 三個動作（服務與已刪除服務的帳本列共用）。
+
+        刻意**不**走訂閱閘：這個功能就是給停權、欠費、已刪除的服務用的；狀態閘在 model。
+        ``open`` 的回應帶一次性密碼（``data.credentials.password``），平台不存、不 log。
+        """
+        try:
+            if action == 'status':
+                return {'success': True, 'data': view_fn(live=True)}
+            if action == 'open':
+                _session, credentials = open_fn(request.env.user)
+                return {'success': True, 'data': dict(view_fn(), credentials=credentials)}
+            if action == 'close':
+                close_fn()
+                return {'success': True, 'data': view_fn()}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.exception("Access error in data retrieval %s for %s: %s", action, target, e)
+            return {'success': False,
+                    'error': _('An error occurred while handling data retrieval.')}
+        except (ValidationError, UserError) as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.exception("Error in data retrieval %s for %s: %s", action, target, e)
+            return {'success': False,
+                    'error': _('An error occurred while handling data retrieval.')}
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/data-retrieval", auth="user", methods=["POST"], type="json")
+    def api_service_data_retrieval(self, workspace_id: int, service_id: int, action: str = 'status', **kw: Any) -> dict[str, Any]:
+        """#1540：停權中服務的限時唯讀取回入口（``action``：status／open／close）。"""
+        workspace, error = self._data_retrieval_workspace(workspace_id)
+        if error:
+            return error
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
+        if (not service.exists() or service.workspace_id.id != workspace.id
+                or service.template_id.conceal_instances):
+            return {'success': False, 'error': _('Service not found')}
+        return self._data_retrieval_action(
+            action, f'service {service.id}', service._open_data_retrieval,
+            service._close_data_retrieval, service._data_retrieval_view)
+
+    @route("/api/workspaces/<int:workspace_id>/retained-data", auth="user", methods=["POST"], type="json")
+    def api_workspace_retained_data(self, workspace_id: int, **kw: Any) -> dict[str, Any]:
+        """#1540：工作區裡已刪除、磁碟仍在保留期的服務（只給 owner／admin）。"""
+        workspace, error = self._data_retrieval_workspace(workspace_id)
+        if error:
+            return error
+        rows = request.env['woow_paas_platform.retained_service_data']._for_workspace(workspace)
+        return {'success': True, 'data': [row._to_dict() for row in rows]}
+
+    @route("/api/workspaces/<int:workspace_id>/retained-data/<int:retained_id>/data-retrieval", auth="user", methods=["POST"], type="json")
+    def api_retained_data_retrieval(self, workspace_id: int, retained_id: int, action: str = 'status', **kw: Any) -> dict[str, Any]:
+        """#1540：已刪除服務（保留期內）的限時唯讀取回入口（``action``：status／open／close）。"""
+        workspace, error = self._data_retrieval_workspace(workspace_id)
+        if error:
+            return error
+        row = request.env['woow_paas_platform.retained_service_data']._get_for_workspace(
+            workspace, retained_id)
+        if not row:
+            return {'success': False, 'error': _('Retained data not found')}
+        return self._data_retrieval_action(
+            action, f'retained {row.id}', row._open_retrieval, row._close_retrieval,
+            row._retrieval_view)
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
@@ -4170,6 +4429,10 @@ class PaasController(HiddenChainMixin, Controller):
         data = self._format_service(service, include_details=True)
         if access is not None:
             data['viewer_can_manage'] = self._can_manage_service(access)
+            # #1540：開著的取回入口（網址、帳號、到期）只給能操作的人看；不問 operator，
+            # 就緒狀態由取回視窗自己查。
+            if data['viewer_can_manage']:
+                data['data_retrieval'] = service._data_retrieval_view()
         return {
             'success': True,
             'data': data,
@@ -4939,6 +5202,10 @@ class PaasController(HiddenChainMixin, Controller):
             # 發生的事。放在 service 層而非 template 子物件，因為判準含「這台服務有沒有
             # 對外根位址」（subdomain），那是 service 的屬性不是 template 的。
             'has_gateway': bool(service._gateway_public_url()),
+            # #1540：「取回資料」按鈕的判準（supported＝範本有 operator profile、available＝
+            # 停權中）。前端只讀這兩個布林（capability-gate-single-source-field）；detail 另帶
+            # 開著的入口（session，見 include_details）。
+            'data_retrieval': service._data_retrieval_capability(),
             'template': {
                 'id': service.template_id.id,
                 'name': service.template_id.name,
@@ -5047,6 +5314,10 @@ class PaasController(HiddenChainMixin, Controller):
                 'allocated_ram_gb': service.allocated_ram_gb,
                 'allocated_storage_gb': service.allocated_storage_gb,
                 'last_upgraded_at': service.last_upgraded_at.isoformat() if service.last_upgraded_at else None,
+                # #1611：服務頁的續訂橫幅／按鈕讀這一格（能不能續、保留到哪天、恢復中）。
+                # 所有成員都看得到狀態；「續訂」按鈕另外要 viewer_can_manage（owner／admin），
+                # 與兩支續訂端點的角色閘同一個判準。只放 detail：list 不需要。
+                'renewal': service._renewal_status(),
             })
 
             # Expose n8n login credentials if applicable

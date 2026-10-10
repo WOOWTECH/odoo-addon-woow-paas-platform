@@ -1,0 +1,154 @@
+// #1611 自助續訂確認框
+.o_woow_renew_modal {
+  &__lead {
+    margin: 0 0 1rem;
+    color: $woow-text-primary;
+  }
+
+  &__loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: $woow-text-secondary;
+  }
+
+  &__facts {
+    margin: 0 0 1.25rem;
+    padding-left: 1.25rem;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+
+    li + li {
+      margin-top: 0.25rem;
+    }
+  }
+
+  &__plans {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__plan {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+
+    &:hover:not(:disabled) {
+      border-color: $woow-primary;
+    }
+
+    &--selected {
+      border-color: $woow-primary;
+      box-shadow: 0 0 0 2px rgba(95, 129, 252, 0.25);
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.7;
+    }
+  }
+
+  &__plan_name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    font-weight: 500;
+    color: $woow-text-primary;
+  }
+
+  &__plan_badge {
+    padding: 0.125rem 0.5rem;
+    border-radius: $woow-radius-full;
+    background: rgba(95, 129, 252, 0.12);
+    color: $woow-primary-hover;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  &__plan_price {
+    flex-shrink: 0;
+    font-weight: 600;
+    color: $woow-text-primary;
+  }
+
+  &__hint {
+    margin: 0.5rem 0 0;
+    color: $woow-text-secondary;
+    font-size: 0.8125rem;
+  }
+
+  &__summary {
+    margin-top: 1.25rem;
+    padding: 0.75rem 1rem;
+    border-radius: $woow-radius-default;
+    background: $woow-background-light;
+  }
+
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.25rem 0;
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+
+    > span:last-child {
+      text-align: right;
+      color: $woow-text-primary;
+    }
+
+    &--total {
+      font-weight: 600;
+
+      > span:first-child,
+      > span:last-child {
+        color: $woow-text-primary;
+      }
+    }
+  }
+
+  &__warning {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: $woow-radius-default;
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+    font-size: 0.875rem;
+
+    p {
+      margin: 0;
+    }
+
+    > .material-symbols-outlined {
+      flex-shrink: 0;
+    }
+  }
+
+  &__topup {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+    font-weight: 600;
+    color: $woow-primary-hover;
+  }
+
+  .o_woow_error_message {
+    margin-top: 1rem;
+  }
+}

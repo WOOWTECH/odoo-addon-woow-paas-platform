@@ -110,7 +110,7 @@
                     <!-- Empty State -->
                     <t t-elif="!hasServices and !state.loadingServices">
                         <div class="o_woow_empty_services">
-                            <WoowIcon name="'cloud_upload'" size="48"/>
+                            <BrandIcon brand="cloudServiceBrand" fallback="'cloud_upload'" size="48"/>
                             <h3>Get Started: Deploy Your First Service</h3>
                             <p>Launch containerized applications like databases, automation tools, and more with one click.</p>
                             <WoowButton
@@ -133,6 +133,33 @@
                             </t>
                         </div>
                     </t>
+                </section>
+
+                <!-- #1540：已刪除服務的保留資料（只有 owner／admin、且有資料時才出現）。 -->
+                <section t-if="canManageWorkspace and state.retainedData.length" class="o_woow_retained_data_section">
+                    <div class="o_woow_retained_data_section__header">
+                        <h2>Retained data of deleted services</h2>
+                        <p class="o_woow_hint" t-esc="retainedSectionIntro"/>
+                    </div>
+                    <div class="o_woow_retained_data_section__list">
+                        <t t-foreach="state.retainedData" t-as="row" t-key="row.id">
+                            <div class="o_woow_retained_data_section__row">
+                                <div class="o_woow_retained_data_section__meta">
+                                    <strong t-esc="row.name"/>
+                                    <span t-esc="row.template.name"/>
+                                    <span t-esc="retainedMeta(row)"/>
+                                    <span t-if="row.data_retrieval and row.data_retrieval.session" t-esc="retainedSessionText(row)"/>
+                                </div>
+                                <WoowButton
+                                    variant="'secondary'"
+                                    size="'sm'"
+                                    onClick="() => this.openRetainedRetrieval(row)">
+                                    <WoowIcon name="'download'" size="16"/>
+                                    Retrieve Data
+                                </WoowButton>
+                            </div>
+                        </t>
+                    </div>
                 </section>
 
                 <!-- Smart Home Section -->
@@ -159,7 +186,7 @@
                     <!-- Empty State -->
                     <t t-elif="!hasSmartHomes and !state.loadingSmartHomes">
                         <div class="o_woow_smart_homes_empty">
-                            <WoowIcon name="'home_iot_device'" size="48"/>
+                            <BrandIcon brand="smartHomeBrand" fallback="'home_iot_device'" size="48"/>
                             <h3>Connect Your Home Assistant</h3>
                             <p>Set up a secure tunnel to access your Home Assistant from anywhere.</p>
                             <WoowButton
@@ -216,7 +243,7 @@
                     <!-- Empty State -->
                     <t t-elif="!hasSecurityAccesses and !state.loadingSecurityAccesses">
                         <div class="o_woow_smart_homes_empty">
-                            <WoowIcon name="'shield'" size="48"/>
+                            <BrandIcon brand="securityAccessBrand" fallback="'shield'" size="48"/>
                             <h3>Set Up Zero Trust Access</h3>
                             <p>Expose your services securely with a Cloudflare Tunnel — no open ports, no public IP.</p>
                             <WoowButton
@@ -236,7 +263,7 @@
                                 <WoowCard shadow="true" class="'o_woow_security_access_card'">
                                     <div class="o_woow_security_access_card_inner" t-on-click="() => this.openSecurityAccess(sa.id)">
                                         <div class="o_woow_security_access_card_head">
-                                            <WoowIcon name="'verified_user'" size="24"/>
+                                            <BrandIcon brand="securityAccessBrand" fallback="'verified_user'" size="24"/>
                                             <span class="o_woow_security_access_card_name" t-esc="sa.name"/>
                                         </div>
                                         <span class="o_woow_security_access_card_host">Cloudflare Tunnel</span>
@@ -288,7 +315,7 @@
                             <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color"
                                  t-on-click="() => this.onServiceTypeClick(service)">
                                 <div class="o_woow_service_icon">
-                                    <WoowIcon name="service.icon" size="32"/>
+                                    <BrandIcon brand="service.brand" fallback="service.icon" size="32" fill="true"/>
                                 </div>
                                 <h3><t t-esc="service.name"/></h3>
                                 <p><t t-esc="service.description"/></p>
@@ -315,6 +342,13 @@
                     </div>
                 </WoowCard>
             </t>
+
+            <DataRetrievalModal
+                t-if="state.retrievalTarget"
+                endpoint="retrievalEndpoint"
+                serviceName="state.retrievalTarget.name"
+                deleted="true"
+                onClose.bind="closeRetainedRetrieval"/>
         </div>
     </t>
 </templates>

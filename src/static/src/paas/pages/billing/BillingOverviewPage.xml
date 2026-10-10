@@ -43,6 +43,40 @@
                     </WoowCard>
                 </t>
 
+                <!-- #1611：訂閱被取消／到期、還能自助續訂的服務（後端 /api/cloud-services/renewals，
+                     只列呼叫者是 owner／admin 的工作區）。 -->
+                <t t-if="state.renewals.length">
+                    <WoowCard shadow="true" class="'o_woow_billing_renewals_card'">
+                        <div class="o_woow_card_header">
+                            <WoowIcon name="'autorenew'" size="22"/>
+                            <h3>Services Awaiting Renewal</h3>
+                        </div>
+                        <p class="o_woow_billing_hint">
+                            The subscriptions of these services were cancelled or have ended. Renew to restore them.
+                        </p>
+                        <div class="o_woow_billing_renewal_list">
+                            <t t-foreach="state.renewals" t-as="item" t-key="item.id">
+                                <div class="o_woow_billing_renewal_row">
+                                    <div class="o_woow_billing_renewal_info">
+                                        <span class="o_woow_billing_renewal_name">
+                                            <t t-esc="item.name"/>
+                                            <span class="o_woow_billing_renewal_state" t-esc="renewalStateLabel(item)"/>
+                                        </span>
+                                        <span class="o_woow_billing_renewal_meta" t-esc="renewalMeta(item)"/>
+                                    </div>
+                                    <WoowButton
+                                        variant="'primary'"
+                                        size="'sm'"
+                                        onClick="() => this.openRenew(item)">
+                                        <WoowIcon name="'autorenew'" size="16"/>
+                                        Renew
+                                    </WoowButton>
+                                </div>
+                            </t>
+                        </div>
+                    </WoowCard>
+                </t>
+
                 <!-- Credit Balance Card -->
                 <WoowCard shadow="true" class="'o_woow_billing_credit_card'">
                     <div class="o_woow_billing_credit_content">
@@ -264,6 +298,16 @@
             <!-- Credit History Modal -->
             <t t-if="state.showCreditHistoryModal">
                 <CreditHistoryModal onClose.bind="hideCreditHistory"/>
+            </t>
+
+            <!-- #1611 Renew Subscription Modal -->
+            <t t-if="state.renewTarget">
+                <RenewSubscriptionModal
+                    serviceName="state.renewTarget.name"
+                    loadEstimate="loadRenewEstimate"
+                    confirmRenew="confirmRenew"
+                    onClose.bind="closeRenew"
+                    onRenewed.bind="onRenewed"/>
             </t>
 
             <!-- Manage Payment Methods Modal -->

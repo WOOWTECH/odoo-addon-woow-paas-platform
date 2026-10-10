@@ -352,7 +352,12 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 固定、env 白名單、非 root）：已覆核 apps/odoo/odoo_mcp_admin/main.py 的 LaunchPolicy＝``odoo-mcp``＋
     # ``--transport streamable-http --host 127.0.0.1 --port {port}``，與 seed 的 command／args 逐字一致；
     # cfc2a2b..ff32a7c1 之間 uv.lock 的 odoo-mcp 依賴未變（只多了 nextcloud 用的 psycopg）。
-    EXPECT_IMAGE_TAG = 'ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181'
+    # 2026-10-10 重釘 1ec1bb0b（woow-mcp-server #48，#1614：共用層 log 遮蔽 URL 憑證；main CI run 17227
+    # job 18849 的 push digest）：已覆核 ff32a7c1..1ec1bb0b 之間 apps/odoo 沒有任何變動（Dockerfile、
+    # pyproject、odoo_mcp_admin/main.py 都同），LaunchPolicy 仍是 ``odoo-mcp``＋``--transport streamable-http
+    # --host 127.0.0.1 --port {port}``；uv.lock 只差 nextcloud 的套件，odoo-mcp（1.1.0）／mcp（1.28.1）未變。
+    # 前一個 pin：ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181。
+    EXPECT_IMAGE_TAG = '1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:ee5d8f6954866f954f604e24421fb7b0f87f629f11c439138000dedf2133ce40'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

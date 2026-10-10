@@ -8,6 +8,8 @@ from . import res_partner_invoice
 from . import sh_subscription_fix
 from . import sh_subscription_refund_credit_note
 from . import sh_subscription_warning_field
+# #1599：訂閱回到 in_progress ⇒ 請付款後復權的 cron 立即復權停權中的雲端服務
+from . import sh_subscription_resume_trigger
 from . import sh_subscription_plan_sa_quota
 from . import sh_subscription_plan_sh_mcp
 from . import sh_subscription_plan_service_type
@@ -39,6 +41,8 @@ from . import security_access
 from . import security_access_access_policy
 from . import security_access_access_policy_rule
 from . import cloud_service
+# feat: #1611 欠費取消／到期後在 /woow 自助續訂（沿用上游續約鏈＋#1599 的復權觸發）
+from . import cloud_service_renewal
 from . import cloud_odoo_addon
 from . import ai_config
 from . import project_project
@@ -79,3 +83,5 @@ from . import res_lang
 from . import platform_monitor
 # #1457：/woow、OAuth 頁面的安全標頭（只套本 addon 路徑）。
 from . import ir_http
+# #1540：停權／刪除後的限時唯讀資料取回入口（帳本＋session）。
+from . import data_retrieval

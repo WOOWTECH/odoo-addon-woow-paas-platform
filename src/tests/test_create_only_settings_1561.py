@@ -99,8 +99,9 @@ class TestCreateOnlyReconfigure1561(TransactionCase):
     def test_changed_values_are_refused_with_their_labels(self):
         _kept, error = self._drop({'conf.adminEmail': 'new@woowtech.io', 'loadDemoData': True})
         self.assertIn(REFUSED, error)
-        self.assertIn('Administrator Email', error)
-        self.assertIn('Load Demo Data', error)
+        # #1612：拒絕訊息裡的名稱就是配置頁顯示的 spec label（seed 已是中文）。
+        self.assertIn('管理員 Email', error)
+        self.assertIn('載入示範資料', error)
 
     def test_other_keys_pass_through(self):
         kept, error = self._drop({'conf.adminEmail': 'owner@woowtech.io', 'other': 1})

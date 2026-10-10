@@ -476,6 +476,84 @@ class RouteParkResponse(BaseModel):
         None, description="Where the rewritten rules point after this call")
 
 
+class RetrievalOpenRequest(BaseModel):
+    """woow_paas_platform #1540：開一個限時唯讀取回入口。
+
+    平台只指定 profile（operator 白名單）與時效；要掛哪顆 PVC、用哪個 uid、匯出哪些路徑全由
+    operator 依 profile 決定。
+    """
+
+    profile: str = Field(
+        ..., min_length=1, max_length=40, pattern=r"^[a-z0-9][a-z0-9-]*$",
+        description="Retrieval profile name (operator whitelist, e.g. 'nextcloud').",
+    )
+    ttl_hours: int = Field(
+        72, ge=1, le=24 * 30,
+        description="Requested lifetime; capped by DATA_RETRIEVAL_MAX_TTL_HOURS and by the "
+                    "retention of a deleted service's volume.",
+    )
+
+
+class RetrievalRouteStatus(str, Enum):
+    """取回入口的 tunnel route 處理結果。"""
+
+    CREATED = "created"        # 開：建好了
+    DISABLED = "disabled"      # 這個 operator 沒開 Cloudflare 整合（沒有對外網址）
+    DELETED = "deleted"        # 關：刪掉了
+    NOT_FOUND = "not_found"    # 關：tunnel 上已經沒有這個 hostname
+    NOT_OWNED = "not_owned"    # 關：這個 hostname 有規則指向別處，不碰
+    NONE = "none"              # 關：沒有 hostname 可處理
+
+
+class RetrievalOpenResponse(BaseModel):
+    """開成功（201）。``password`` 只在這裡出現一次，operator 不存明文。"""
+
+    status: str = "opened"
+    hostname: Optional[str] = None
+    url: Optional[str] = None
+    username: str
+    password: str
+    opened_at: datetime
+    expires_at: datetime
+    data_expires_at: Optional[datetime] = Field(
+        None, description="When the retained volume of a deleted service will be reclaimed.")
+    pvc: str
+    profile: str
+    route: RetrievalRouteStatus
+    dns_failed: bool = False
+
+
+class RetrievalState(str, Enum):
+    ACTIVE = "active"          # pod Ready
+    STARTING = "starting"      # pod 還沒 Ready（掛 volume、拉 image）
+    STOPPED = "stopped"        # pod 不在或已結束（到期、被刪），錨點還在
+    NOT_FOUND = "not_found"    # 沒有取回入口
+
+
+class RetrievalStatusResponse(BaseModel):
+    status: RetrievalState
+    hostname: Optional[str] = None
+    url: Optional[str] = None
+    opened_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    pod_phase: Optional[str] = None
+    ready: bool = False
+    pvc: Optional[str] = None
+    profile: Optional[str] = None
+
+
+class RetrievalCloseResponse(BaseModel):
+    status: str = Field(..., description="'closed' or 'not_found' (nothing was open)")
+    hostname: Optional[str] = None
+    route: RetrievalRouteStatus
+
+
+class RetrievalSweepResponse(BaseModel):
+    checked: int
+    closed: List[str] = Field(default_factory=list, description="<namespace>/<release>")
+    failed: List[str] = Field(default_factory=list, description="<namespace>/<release>")
+
+
 class RouteInfo(BaseModel):
     """Information about a Cloudflare Tunnel route.
 

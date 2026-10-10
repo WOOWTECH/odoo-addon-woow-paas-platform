@@ -3,6 +3,8 @@ import { Component } from "@odoo/owl";
 import { StatusBadge } from "../common/StatusBadge";
 import { SubscriptionBadge } from "../subscription/SubscriptionBadge";
 import { WoowIcon } from "../icon/WoowIcon";
+import { BrandIcon } from "../brand-icon/BrandIcon";
+import { SMART_HOME_BRAND } from "../../utils/brand_icons";
 import { WoowButton } from "../button/WoowButton";
 
 /**
@@ -25,12 +27,14 @@ import { WoowButton } from "../button/WoowButton";
  */
 export class SmartHomeCard extends Component {
     static template = "woow_paas_platform.SmartHomeCard";
-    static components = { StatusBadge, SubscriptionBadge, WoowIcon, WoowButton };
+    static components = { StatusBadge, SubscriptionBadge, WoowIcon, BrandIcon, WoowButton };
     static props = {
         home: { type: Object },
         domain: { type: String, optional: true },
         onSelect: { type: Function, optional: true },
     };
+
+    brandKey = SMART_HOME_BRAND;
 
     get statusDotClass() {
         const state = this.props.home.state;

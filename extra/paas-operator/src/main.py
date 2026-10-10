@@ -17,6 +17,7 @@ from src.api import (
     odoo_modules,
     reconcile,
     releases,
+    retrieval,
     routes,
     tunnels,
 )
@@ -207,6 +208,8 @@ app.include_router(reconcile.router)
 app.include_router(analytics.router)
 # #1415：叢集層唯讀查詢（Longhorn 排程額度）。
 app.include_router(cluster.router)
+# woow_paas_platform #1540：停權／刪除後的限時唯讀資料取回入口。
+app.include_router(retrieval.router)
 
 
 # Root endpoint

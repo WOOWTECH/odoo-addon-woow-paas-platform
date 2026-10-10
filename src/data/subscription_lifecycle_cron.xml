@@ -11,5 +11,21 @@
             <field name="interval_type">days</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- #1599：續訂付款成功後立即復權（只做 Cloud Service）。
+
+             付款入帳／訂閱回到 in_progress 的交易只寫 cloud_service.resume_requested 並
+             _trigger() 本 cron；commit 之後才由這裡呼叫 operator（_enforce_single 的
+             resume_only）。平常都由 trigger 叫醒，每小時的排程只是保險（空佇列＝一次 search）。
+             ⚠ 必須 active：ir.cron._trigger() 對停用的 cron 不建立立即觸發。 -->
+        <record id="ir_cron_resume_paid_cloud_services" model="ir.cron">
+            <field name="name">PaaS: Resume Cloud Services After Payment</field>
+            <field name="model_id"
+                   ref="model_woow_paas_platform_subscription_lifecycle_cron"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_resume_paid_cloud_services()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">hours</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

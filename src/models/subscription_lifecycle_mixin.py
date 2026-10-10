@@ -163,6 +163,19 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         string='Pre-Suspend State',
         help='State before suspension, used to restore on resume',
     )
+    # #1610：訂閱已回到 in_progress、服務仍停權中，但「付清才復權」的判斷沒過
+    # （`subscription_lifecycle_cron._paid_resume_block_reason`）——這裡寫明為什麼還沒恢復。
+    # 只有生命週期 cron 會寫；復權、或判斷不再擋下時清掉。`groups='base.group_system'`：
+    # 給維運看的說明，租戶經 ORM 讀不到也寫不進去。
+    resume_hold_reason = fields.Text(
+        string='Resume On Hold',
+        readonly=True,
+        copy=False,
+        groups='base.group_system',
+        help='Why this suspended service has not been resumed although its subscription '
+             'is in progress again: it still has unpaid invoices. Written and cleared by '
+             'the subscription lifecycle jobs.',
+    )
 
     # ----------------------------------------------------------------
     # Subscription access
@@ -235,19 +248,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         )
         Subscription = self.env['sh.subscription.subscription']
 
-        # sh_subscription_plan_id is on product.template; find product via template
-        product_tmpl = self.env['product.template'].sudo().search([
-            ('sh_product_subscribe', '=', True),
-            ('sh_subscription_plan_id', '=', plan.id),
-        ], limit=1)
-
-        if not product_tmpl:
-            raise UserError(
-                _("No subscription product found for plan: %s") % plan.name
-            )
-
-        # Get the first variant of this template
-        product = product_tmpl.product_variant_id
+        product = self._subscription_product_for(plan)
 
         # Validate subscription journal is configured
         # (sh_subscription uses company.sh_journal_id for invoice creation;
@@ -300,6 +301,25 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             self._name, self.id, subscription.sh_trial,
         )
         return subscription
+
+    def _subscription_product_for(self, plan):
+        """``plan`` 的訂閱產品（第一個 variant）；沒有就 raise UserError。
+
+        新開訂閱（``_create_and_confirm_subscription``）與 #1611 自助續訂共用。
+        """
+        # sh_subscription_plan_id is on product.template; find product via template
+        product_tmpl = self.env['product.template'].sudo().search([
+            ('sh_product_subscribe', '=', True),
+            ('sh_subscription_plan_id', '=', plan.id),
+        ], limit=1)
+
+        if not product_tmpl:
+            raise UserError(
+                _("No subscription product found for plan: %s") % plan.name
+            )
+
+        # Get the first variant of this template
+        return product_tmpl.product_variant_id
 
     def _force_trial_dates_from_plan(self, subscription, plan):
         """Force trial fields and dates on ``subscription`` from ``plan``.
@@ -763,6 +783,18 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         """
         self.ensure_one()
         return self.state == 'suspended'
+
+    def _acquire_resume_lock(self):
+        """復權前先鎖住這一列；拿不到（別的交易正在處理它）回 ``False``（#1599）。
+
+        生命週期 cron 的 ``_enforce_single`` 在「停權中、訂閱可能已恢復」時先問這個 seam，
+        拿不到就跳過這一輪。預設**不取鎖、恆回 True**：Smart Home／Security Access 的
+        復權只有每日生命週期 cron 一個執行者，不會有兩筆交易同時復權同一台（#1599 的
+        付款後即時復權只做 Cloud Service）——對它們是零行為變化。CloudService override
+        成真的取鎖。
+        """
+        self.ensure_one()
+        return True
 
     def _do_suspend(self):
         """Suspend the service. Implemented by CloudService / SmartHome."""

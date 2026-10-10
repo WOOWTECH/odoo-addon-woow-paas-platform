@@ -3,6 +3,8 @@ import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
+import { BrandIcon } from "../../components/brand-icon/BrandIcon";
+import { SMART_HOME_BRAND } from "../../utils/brand_icons";
 import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
@@ -44,9 +46,11 @@ const RETRY_CONTEXT_STATES = ["pending", "error", "provisioning"];
 export class SmartHomeDetailPage extends Component {
     static template = "woow_paas_platform.SmartHomeDetailPage";
     static components = {
-        WoowCard, WoowIcon, WoowButton, StatusBadge, SkipTrialModal,
+        WoowCard, WoowIcon, BrandIcon, WoowButton, StatusBadge, SkipTrialModal,
         ChangePlanModal, SmartHomeAccessTab,
     };
+
+    brandKey = SMART_HOME_BRAND;
     static props = {
         workspaceId: { type: Number },
         homeId: { type: Number },

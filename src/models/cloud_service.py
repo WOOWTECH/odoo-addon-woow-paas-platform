@@ -1815,6 +1815,18 @@ class CloudService(models.Model):
         groups='base.group_system',
         help='JSON parameters for pending deployment (expose_config, mcp_api_key, etc.)',
     )
+    # #1599：付款入帳／訂閱回到 in_progress 的交易只寫這個旗標並 `_trigger()` 付款後
+    # 復權的 cron，commit 之後才由 cron 呼叫 operator（見 subscription_lifecycle_cron）。
+    # `groups='base.group_system'`：只有平台身分寫得進去（同 `deploy_params`）——
+    # 這是「請盡快復權」的佇列，不是租戶的設定。
+    resume_requested = fields.Boolean(
+        string='Resume Requested',
+        copy=False,
+        groups='base.group_system',
+        help='Set by the platform when a payment or a renewal makes the subscription of '
+             'this suspended service active again. A background job resumes the service '
+             'right after the payment is committed, then clears the flag.',
+    )
 
     def init(self):
         """建 partial unique index：同一 provision_partner_id 至多一列（#336 每帳號
@@ -2197,6 +2209,72 @@ class CloudService(models.Model):
             'error_message': False,
             'last_upgraded_at': fields.Datetime.now(),
         })
+        return True
+
+    # #1540 — 停權後的限時唯讀資料取回入口（刪除後的那半在 retained_service_data）
+    # ------------------------------------------------------------------ #
+
+    def _data_retrieval_capability(self):
+        """前端「取回資料」按鈕的判準（payload ``data_retrieval``；前端不自建 slug 判準）。
+
+        - ``supported``：範本有 operator profile（``template.data_retrieval_profile``）。
+        - ``available``：此刻可以開——服務停權中（scale 0）。執行中的服務請用 app 自己的匯出；
+          刪除後的服務改從工作區的「已刪除服務的保留資料」開。
+        """
+        self.ensure_one()
+        supported = bool(self.template_id.data_retrieval_profile)
+        return {
+            'supported': supported,
+            'available': supported and self.state == 'suspended' and bool(
+                self.helm_namespace and self.helm_release_name),
+        }
+
+    def _data_retrieval_view(self, live=False):
+        """capability＋目前開著的入口（``live`` 時另問 operator 就緒了沒）。"""
+        self.ensure_one()
+        view = self._data_retrieval_capability()
+        session = self.env['woow_paas_platform.data_retrieval']._open_session_for(
+            self.helm_namespace, self.helm_release_name)
+        live_status = session._live_status() if (session and live) else None
+        session = session.exists().filtered(lambda s: s.state != 'closed')
+        view['session'] = session._to_dict(live_status=live_status) if session else None
+        return view
+
+    def _open_data_retrieval(self, user):
+        """#1540：開這台停權服務的取回入口。回 ``(session, credentials)``（含一次性密碼）。
+
+        - **private**：授權（工作區 owner／admin）只在 controller；``_`` 開頭擋 RPC 直呼
+          （回傳值含明文密碼，同 #357 C05）。
+        - 刻意**不**走訂閱閘（``_check_operation_allowed``）：這個功能就是給停權、欠費的服務用的。
+          狀態閘在這裡：只收 ``suspended``。
+        - 與復權共用同一把列鎖（``_acquire_resume_lock``）：復權的 cron 會先關入口再 scale 1，
+          兩者交錯的話服務的 pod 會因 RWO 掛不上磁碟。拿不到鎖＝正在復權／停權，請稍後再試。
+        """
+        self.ensure_one()
+        profile = self.template_id.data_retrieval_profile
+        if not profile:
+            raise UserError(_("This service does not support data retrieval."))
+        if not self._acquire_resume_lock():
+            raise UserError(_("The service is changing state right now. Please try again in a "
+                              "minute."))
+        self.invalidate_recordset()
+        if self.state != 'suspended':
+            raise UserError(_("Data retrieval is only available while the service is "
+                              "suspended. A running service can export its data from the app "
+                              "itself."))
+        if not (self.helm_namespace and self.helm_release_name):
+            raise UserError(_("The data disk of this service could not be found."))
+        return self.env['woow_paas_platform.data_retrieval']._open(
+            workspace=self.workspace_id, name=self.name, namespace=self.helm_namespace,
+            release=self.helm_release_name, profile=profile, user=user, service=self)
+
+    def _close_data_retrieval(self):
+        """#1540：租戶手動關閉這台服務的取回入口（沒有開著的入口＝冪等成功）。"""
+        self.ensure_one()
+        session = self.env['woow_paas_platform.data_retrieval']._open_session_for(
+            self.helm_namespace, self.helm_release_name)
+        if session:
+            session._close('manual', raise_on_error=True)
         return True
 
     # #357 — admin_password 重置
@@ -8577,6 +8655,39 @@ class CloudService(models.Model):
         })
         _logger.info("[CLOUD_SVC] _do_suspend done service=%s new_state=suspended", self.id)
 
+    def _acquire_resume_lock(self):
+        """#1599：復權前對這一列取 ``FOR NO KEY UPDATE NOWAIT``；拿不到回 ``False``。
+
+        Cloud Service 的復權有兩個執行者：每日生命週期 cron，以及付款入帳後立即跑的
+        ``_cron_resume_paid_cloud_services``。兩顆是不同的 ir.cron、可能同時在跑；兩邊都
+        經過 ``_enforce_single``，在呼叫 operator 之前先拿這把鎖：
+
+        * 對方正持有（正在復權、還沒 commit）⇒ ``LockNotAvailable``；
+        * 對方已經 commit 了一次復權，但本交易的 REPEATABLE READ 快照比它舊（快照裡
+          這台仍是停權）⇒ PostgreSQL 回 ``SerializationFailure``（40001）。
+
+        兩種都回 ``False``：這一輪跳過，不重複 scale／unpark，也不讓那筆 write 撞
+        40001 後整段回捲。鎖跟著交易結束釋放。``FOR NO KEY UPDATE`` 與 ORM 的 UPDATE
+        互斥，但不擋其他表以外鍵指向這一列（例如 chatter）。
+        """
+        self.ensure_one()
+        cr = self.env.cr
+        try:
+            # 同 `_init_guarded`／core ir_cron：預期中的衝突不該在 sql_db 印成 ERROR。
+            with mute_logger('odoo.sql_db'), cr.savepoint(flush=False):
+                cr.execute(
+                    f"SELECT id FROM {self._table} WHERE id = %s "
+                    "FOR NO KEY UPDATE NOWAIT",
+                    (self.id,),
+                )
+        except (pg_errors.SerializationFailure, pg_errors.LockNotAvailable) as exc:
+            _logger.info(
+                "[CLOUD_SVC] resume lock busy service=%s (%s): another transaction is "
+                "handling it", self.id, type(exc).__name__,
+            )
+            return False
+        return True
+
     def _do_resume(self):
         """Scale up Helm release to restore replicas."""
         self.ensure_one()
@@ -8599,6 +8710,10 @@ class CloudService(models.Model):
 
         client = get_paas_operator_client(self.env)
         if client and self.helm_release_name and self.helm_namespace:
+            # #1540：先關掉這台的資料取回入口——入口的 pod 唯讀掛著同一顆 RWO 磁碟，它不走，
+            # 服務的 pod 會卡在 Multi-Attach。關不掉只記 log、照樣復權（入口到期也會自己停）。
+            self.env['woow_paas_platform.data_retrieval']._close_for_release(
+                self.helm_namespace, self.helm_release_name, 'resumed')
             try:
                 client.scale_release(
                     self.helm_release_name, self.helm_namespace, replicas=1,
@@ -8653,6 +8768,13 @@ class CloudService(models.Model):
             # 不欠 init 的轉移狀態：沿用 #1266 以前的行為（記錄值原本就是 running）。
             restore_state = 'running'
         vals['state'] = restore_state
+        if restore_state != 'error':
+            # 復權成功、服務不是回到 error：停權期間留下的錯誤說明都過時了——最常見的是
+            # 上一輪復權失敗寫的「Resume failed …will be retried automatically」（#1563
+            # unpark 失敗、scale 失敗），由每日 cron 重試成功之後若不清，租戶會看到一台
+            # running 的服務掛著紅色錯誤橫幅（ServiceDetailPage 的 banner 只看
+            # error_message、不看 state）。#1599 沙盒端到端發現。回到 error 的維持原說明。
+            vals['error_message'] = False
         self.write(vals)
         _logger.info(
             "[CLOUD_SVC] _do_resume done service=%s new_state=%s",
@@ -9942,6 +10064,18 @@ class CloudService(models.Model):
                             "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
                             "for service id=%s", len(user_mcps), service.id,
                         )
+                    # #1540：記下這台留下的磁碟（刪除後記錄就沒了，/woow 靠這本帳才能讓
+                    # owner／admin 在保留期內取回資料）；開著的取回入口改掛到帳本列，
+                    # 照常開到到期。在 savepoint 內：拆除失敗時一起回捲。
+                    retained = self.env[
+                        'woow_paas_platform.retained_service_data'
+                    ]._record_deleted_service(service)
+                    if retained:
+                        self.env['woow_paas_platform.data_retrieval'].sudo().search([
+                            ('helm_namespace', '=', service.helm_namespace),
+                            ('helm_release_name', '=', service.helm_release_name),
+                            ('state', 'in', ('active', 'closing')),
+                        ]).write({'retained_data_id': retained.id})
                 res = super().unlink()
                 # #318: teardown 成功後才結算訂閱（取消＋按比例退點）。放在
                 # super().unlink() 之後，故 helm fail-loud raise 時不會執行（全交易

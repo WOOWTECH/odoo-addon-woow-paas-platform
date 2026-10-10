@@ -254,6 +254,15 @@ Example: paas-ws-123-anythingllm-01
 > 網址的 Cloud Service；Security Access／Smart Home 另議。停權中的 redeploy／reconfigure 走 helm upgrade、
 > 不碰 tunnel 規則，網址維持說明頁。
 
+> **付款後立即復權（#1599）與自助續訂（#1611）**：訂閱付清（`account.move._pay_from_wallet`）或轉回
+> in_progress 時只寫 `resume_requested`＋`_trigger()`，commit 後由 `ir_cron_resume_paid_cloud_services`
+> 走同一段 `_enforce_single(resume_only=True)` 復權。訂閱被取消（欠費）或到期、服務還沒被清除時，owner／admin
+> 可在 /woow 自助續訂（服務頁橫幅、帳務總覽「待續訂的服務」；端點 `/api/cloud-services/services/<id>/renew-estimate`、
+> `/renew`、`/api/cloud-services/renewals`）：沿用上游續約鏈（`_sh_renew_subscription` → 子訂閱 `sh_subscription_confirm`）、
+> 從續訂當天起算新週期（不補繳欠費期間、不給試用）、錢包付清才改綁，復權交給 #1599 的 cron。判準集中在
+> `cloud_service._renewal_status()`（`src/models/cloud_service_renewal.py`）；cancel 的保留期與每日 cron 清除共用
+> `_cancel_cleanup_date`，每日 cron 停權／清除前也先取同一把列鎖，不與續訂交易交錯。只做 Cloud Service。
+
 ### DNS & TLS Architecture (Cloudflare)
 
 > ⚠️ **早期設計、未在生產採用**：以下 Traefik Ingress + wildcard A record（`*.woowtech.io` → K3s Node IP）的架構是早期設計方案，**未在生產環境採用**。現行生產的 DNS/TLS 實際走 **Cloudflare Tunnel**（cloudflared + 每服務 CNAME → `{tunnel_id}.cfargotunnel.com`），不對外暴露 K3s Node IP、也不依賴 Traefik Ingress 入口。權威說明請見 [n8n-cloud-service-lifecycle.md](../architecture/n8n-cloud-service-lifecycle.md)。以下內容保留作早期設計考古。
