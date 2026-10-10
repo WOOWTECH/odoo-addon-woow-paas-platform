@@ -9,8 +9,7 @@
                     <span class="material-symbols-outlined" t-translation="off">arrow_back</span>
                 </button>
                 <div class="o_woow_mobile_logo">
-                    <img class="o_woow_brand_logo" src="/woow_paas_platform/static/src/img/brands/woowtech.png" alt="" draggable="false"/>
-                    <span t-translation="off">woowtech</span>
+                    <img class="o_woow_site_logo" src="/woow_paas_platform/static/src/img/brands/woowtech-site-logo.jpg" alt="woowtech" draggable="false"/>
                 </div>
                 <nav class="o_woow_breadcrumb" aria-label="breadcrumb">
                     <t t-foreach="breadcrumbItems" t-as="item" t-key="item_index">
