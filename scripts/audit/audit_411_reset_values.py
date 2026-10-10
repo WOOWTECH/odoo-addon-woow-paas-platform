@@ -226,6 +226,18 @@ _INJECTOR_VALUE_PATHS = frozenset({
     ("config", "nonSensitive", "connection", "base_url"),  # 同上（mcp-litellm；mcp-nextcloud 同一條路徑，同工作區 Nextcloud 的公開網址）
     ("haProxy", "ipBanEnabled"),          # template_policy_keys（ha-full，chart 0.1.6 #1446 不做）
     ("seed", "unlockCoreConfig"),         # template_policy_keys（ha-full，chart 0.1.6 #1447 不做）
+    # #1637 template_policy_keys（容量研究的穩定性設定，每次部署以範本為準）
+    ("terminationGracePeriodSeconds",),   # ha-full
+    ("postgresql", "resources", "limits", "cpu"),  # litellm 內附 PG
+    ("resources", "requests", "memory"),  # mcp-server 家族
+})
+
+# 同上，但值是整棵子樹（dict）：stored／computed 攤平成葉子後，這些前綴底下的葉子都算
+# injector（#1637：n8n 探針、hermes-agent 的 requests）。
+_INJECTOR_SUBTREE_PATHS = frozenset({
+    ("main", "livenessProbe"),
+    ("main", "readinessProbe"),
+    ("agent", "resources", "requests"),
 })
 
 
@@ -237,7 +249,10 @@ def _is_injector_path(path: tuple) -> bool:
         return True
     if "imagePullSecrets" in path:                   # image_pull_secrets injector
         return True
-    return tuple(path) in _INJECTOR_VALUE_PATHS
+    path = tuple(path)
+    if any(path[:len(prefix)] == prefix for prefix in _INJECTOR_SUBTREE_PATHS):
+        return True
+    return path in _INJECTOR_VALUE_PATHS
 
 
 def _is_config_sensitive(path: tuple) -> bool:

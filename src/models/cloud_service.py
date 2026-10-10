@@ -1018,16 +1018,23 @@ _N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
 #   - hermes-agent agent 容器的 requests（閒置就 1.06G）；
 #   - mcp-server 家族的記憶體 requests（128Mi 低於實測）。
 #   都不是租戶可設的鍵；pi-agent 刻意不列（pi1–pi5 不動）。
-_MCP_POLICY_PATHS = [('resources', 'requests', 'memory')]
+#   ⚠ 每一條都要寫成字面量：scripts/audit/audit_411_reset_values.py 的 _INJECTOR_VALUE_PATHS
+#   以 AST 對帳這張表（test_audit_411_classifier），推導式它讀不到。
 _TEMPLATE_POLICY_VALUE_PATHS = {
     'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig'),
                 ('terminationGracePeriodSeconds',)],
     'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe')],
     'litellm': [('postgresql', 'resources', 'limits', 'cpu')],
     'hermes-agent': [('agent', 'resources', 'requests')],
-    **{slug: list(_MCP_POLICY_PATHS) for slug in (
-        'mcp-hermes', 'mcp-odoo', 'mcp-odoo-manage', 'mcp-n8n', 'mcp-k8s', 'mcp-vk',
-        'mcp-opendesign', 'mcp-litellm', 'mcp-nextcloud')},
+    'mcp-hermes': [('resources', 'requests', 'memory')],
+    'mcp-odoo': [('resources', 'requests', 'memory')],
+    'mcp-odoo-manage': [('resources', 'requests', 'memory')],
+    'mcp-n8n': [('resources', 'requests', 'memory')],
+    'mcp-k8s': [('resources', 'requests', 'memory')],
+    'mcp-vk': [('resources', 'requests', 'memory')],
+    'mcp-opendesign': [('resources', 'requests', 'memory')],
+    'mcp-litellm': [('resources', 'requests', 'memory')],
+    'mcp-nextcloud': [('resources', 'requests', 'memory')],
 }
 _MISSING = object()
 
