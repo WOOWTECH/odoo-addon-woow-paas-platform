@@ -821,6 +821,67 @@ def _plan_spec_paths(template):
     return _PLAN_SPEC_VALUE_PATHS.get(template.slug, _PLAN_SPEC_DEFAULT_PATHS)
 
 
+# #1634（使用者 2026-10-10）：方案 ``cs_storage_gb`` 是**整台**的磁碟總量，但 chart 的
+# 方案儲存鍵（``_plan_spec_paths(...)['storage']``）只決定其中一顆 volume。這張表列出
+# 「方案鍵以外、大小固定的 volume」：寫進方案鍵的值＝方案總量 − 這幾顆，四顆加起來才
+# 等於方案賣的總量（Nextcloud 20Gi＝使用者檔案 13＋html 3＋PostgreSQL 3＋Redis 1）。
+#
+# - ``fixed``：固定開銷那幾顆的大小路徑，從同一份 values 讀（＝chart render 用的值）。
+# - ``default_size``：方案鍵沒有值時 chart 改讀的鍵（nextcloud chart
+#   ``nextcloud.dataSize``＝``persistence.size | default persistence.data.size``），算
+#   「目前實際大小」（只擴不縮、帳面 allocated）時用。
+#
+# 沒列的範本：方案鍵＝方案總量（現狀，不變）。換 chart 或改固定開銷的鍵時這裡要跟著改。
+_PLAN_STORAGE_SPLIT = {
+    'nextcloud': {
+        'default_size': ('persistence', 'data', 'size'),
+        'fixed': (
+            ('persistence', 'html', 'size'),
+            ('postgresql', 'persistence', 'size'),
+            ('redis', 'persistence', 'size'),
+        ),
+    },
+}
+
+
+def _plan_storage_fixed_gib(values, template):
+    """``template`` 固定開銷 volume 的大小加總（GiB）；沒有固定開銷回 ``0.0``。
+
+    任一顆缺值或看不懂回 ``None``（呼叫端決定 fail-loud 或保留現值）。
+    """
+    split = _PLAN_STORAGE_SPLIT.get(template.slug)
+    if not split:
+        return 0.0
+    total = 0.0
+    for path in split['fixed']:
+        size = _value_at(values, path)
+        gib = _storage_quantity_gib(size) if size else None
+        if gib is None:
+            return None
+        total += gib
+    return total
+
+
+def _plan_storage_current_size(values, template):
+    """chart 實際會用的方案儲存鍵大小（字串）；方案鍵空時讀 ``default_size``。"""
+    size = _value_at(values, _plan_spec_paths(template)['storage'])
+    if not size:
+        split = _PLAN_STORAGE_SPLIT.get(template.slug)
+        if split:
+            size = _value_at(values, split['default_size'])
+    return size or None
+
+
+def _plan_storage_total_gib(values, template):
+    """方案儲存鍵的實際大小＋固定開銷（GiB）；任一項讀不到回 ``None``。"""
+    size = _plan_storage_current_size(values, template)
+    gib = _storage_quantity_gib(size) if size else None
+    fixed = _plan_storage_fixed_gib(values, template)
+    if gib is None or fixed is None:
+        return None
+    return gib + fixed
+
+
 def _values_dict_at(values, path):
     """回傳 ``values`` 在 ``path`` 的 dict，沿路缺的或不是 dict 的層都換成新的 ``{}``。"""
     d = values
@@ -9612,13 +9673,13 @@ class CloudService(models.Model):
         """#1158 Q4：``plan`` 套在 ``values`` 上時帳面 ``allocated_*`` 應有的值。
 
         CPU／RAM 照 ``_allocated_vals_from``；儲存記**實際**大小（只擴不縮之下可能大於
-        方案值），讀不到實際大小時退回方案值。大小從 chart 真正讀的路徑取（#1532）。
+        方案值），讀不到實際大小時退回方案值。大小從 chart 真正讀的路徑取（#1532）；
+        方案總量含固定開銷 volume 的範本（#1634 Nextcloud）記四顆加總。
         """
         self.ensure_one()
         vals = self._allocated_vals_from(self.template_id, plan)
         if plan.cs_storage_gb:
-            size = _value_at(values, _plan_spec_paths(self.template_id)['storage'])
-            gib = _storage_quantity_gib(size) if size else None
+            gib = _plan_storage_total_gib(values, self.template_id)
             if gib is not None:
                 vals['allocated_storage_gb'] = math.ceil(gib)
         return vals
@@ -9656,6 +9717,41 @@ class CloudService(models.Model):
         return vals
 
     @api.model
+    def _overlay_plan_storage(self, values, template, plan, existing):
+        """方案 ``cs_storage_gb`` 寫進 chart 的方案儲存鍵（就地；``plan.cs_storage_gb`` 非 0）。
+
+        一般範本：方案鍵＝方案總量。``_PLAN_STORAGE_SPLIT`` 的範本（#1634 Nextcloud）：方案鍵
+        ＝方案總量 − 固定開銷 volume（同一份 values 讀），四顆加總＝方案總量。
+
+        - 開通（``existing=False``）：算不出來（固定開銷讀不到、扣完不到 1 GiB、不是整數
+          GiB）⇒ raise ``ValueError``——範本或方案設錯，不能靜默開出一台加總不等於方案的服務。
+        - 既有服務（``existing=True``）：比較的「目前大小」是 chart 實際用的那個
+          （``_plan_storage_current_size``），照 ``_plan_storage_size`` 只擴不縮；算不出來
+          就保留現值、只 log——redeploy／換方案不能因此失敗，也絕不送出可能更小的值。
+        """
+        *parent_path, size_key = _plan_spec_paths(template)['storage']
+        target_gb = plan.cs_storage_gb
+        if template.slug in _PLAN_STORAGE_SPLIT:
+            fixed = _plan_storage_fixed_gib(values, template)
+            target = None if fixed is None else plan.cs_storage_gb - fixed
+            if target is None or target < 1 or not float(target).is_integer():
+                msg = (
+                    "#1634 %s 方案 %s 的 cs_storage_gb=%s 扣掉固定開銷 volume（%s GiB）"
+                    "算不出使用者檔案大小" % (
+                        template.slug, plan.id, plan.cs_storage_gb, fixed))
+                if not existing:
+                    raise ValueError(msg + "（fail-loud，不靜默開出加總不等於方案的服務）")
+                _logger.warning("%s；保留目前大小", msg)
+                return
+            target_gb = int(target)
+        if existing:
+            size = self._plan_storage_size(
+                _plan_storage_current_size(values, template), target_gb)
+        else:
+            size = f'{target_gb}Gi'
+        _values_dict_at(values, parent_path)[size_key] = size
+
+    @api.model
     def _apply_plan_spec_overlay(self, values, template, plan, existing=False):
         """#332 runtime overlay：把選定 plan 的 cs_* 疊進 helm values。
 
@@ -9677,6 +9773,9 @@ class CloudService(models.Model):
         #1532：規格寫到 ``_plan_spec_paths(template)``——chart 真正讀的路徑（n8n 是
         ``main.resources``／``main.persistence.size``）。路徑不是頂層的 chart，順手移除舊
         overlay 留在頂層的殘值（``_drop_legacy_top_level_plan_spec``）。
+
+        #1634：儲存那一維走 ``_overlay_plan_storage``——方案總量含固定開銷 volume 的範本
+        （Nextcloud），方案鍵只拿扣掉固定開銷後的那一份。
         """
         paths = _plan_spec_paths(template)
         if plan.cs_vcpu:
@@ -9691,11 +9790,7 @@ class CloudService(models.Model):
             for key in ('requests', 'limits'):
                 _values_dict_at(res, (key,))['memory'] = mem
         if plan.cs_storage_gb:
-            *parent_path, size_key = paths['storage']
-            persistence = _values_dict_at(values, parent_path)
-            persistence[size_key] = (
-                self._plan_storage_size(persistence.get(size_key), plan.cs_storage_gb)
-                if existing else f'{plan.cs_storage_gb}Gi')
+            self._overlay_plan_storage(values, template, plan, existing)
         if paths is not _PLAN_SPEC_DEFAULT_PATHS and (
                 plan.cs_vcpu or plan.cs_ram_gb or plan.cs_storage_gb):
             _drop_legacy_top_level_plan_spec(values)

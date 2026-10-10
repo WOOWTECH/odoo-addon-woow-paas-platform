@@ -2184,7 +2184,10 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- Nextcloud（2 vCPU／4 GB／80 GB 使用者檔案＋html 5＋pg 10＋redis 1）。年繳＝10 個月。 -->
+        <!-- Nextcloud（2 vCPU／4 GB／整台 20 GB＝使用者檔案 13＋html 3＋pg 3＋redis 1）。年繳＝10 個月。
+             #1634（使用者 2026-10-10）：原 80 GB 使用者檔案（整台 96）改為整台 20 GB、價格不變。
+             cs_storage_gb 是整台總量（CloudService._overlay_plan_storage 扣掉固定的 html／pg／redis
+             才寫進使用者檔案那顆）。本檔 noupdate=1：既有 DB 由 migrations/18.0.1.0.223 改值。 -->
         <record id="plan_nextcloud_monthly" model="sh.subscription.plan">
             <field name="name">Nextcloud 雲端訂閱服務 月繳</field>
             <field name="sh_duration">1</field>
@@ -2203,7 +2206,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">80</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="plan_nextcloud_yearly" model="sh.subscription.plan">
@@ -2224,7 +2227,7 @@
             <field name="service_type">cloud_service</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">80</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
         </record>
         <record id="product_nextcloud_monthly" model="product.product">
