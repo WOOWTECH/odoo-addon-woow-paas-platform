@@ -962,6 +962,9 @@ _MISSING = object()
 # 會把 chart 升到範本釘的版本，image 卻永遠停在開通當時 ⇒ 新 chart 配舊 image。
 # Redeploy 時以範本為準覆蓋這幾個鍵（租戶可設定的 spec 鍵除外）。
 _IMAGE_REF_KEYS = ('registry', 'repository', 'tag', 'digest')
+# omnigent 的 runner.image 是字串（chart 規定），#1408 的 image 刷新刷不到它，見
+# ``_woow_migrate_omnigent_runner_image_017``。
+_OMNIGENT_HOST_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host'
 
 
 def _iter_image_refs(values, path=()):
@@ -6726,6 +6729,64 @@ class CloudService(models.Model):
             ', '.join(f"{s.name}(id={s.id},state={s.state})" for s in left_empty) or '-',
         )
         return backfilled
+
+    @api.model
+    def _woow_migrate_omnigent_runner_image_017(self):
+        """omnigent chart 0.1.7（上游 v0.17.0）：既有服務的 ``runner.image`` 改成範本現在的釘。
+
+        Redeploy 的 #1408（``_refresh_template_images``）只刷 ``{repository, tag|digest}``
+        形式的 image（``_iter_image_refs``）；omnigent 的 ``runner.image`` 是 chart 規定的
+        **字串**（launcher 原樣寫進每個 runner Job），刷不到 ⇒ 既有服務 Redeploy 後 server
+        換到 0.17，雲端工作機卻停在 0.16。本 migration 補這一格。
+
+        只改「仍是平台鏡像 ``omnigent-host`` 的字串」：``runner`` 不是 dict、``image`` 不是
+        字串、指向其他 repository（有人手改過）、或 helm_values JSON 壞掉的服務一律不動並記
+        log。改寫只落 DB；叢集上的 release 要等下一次 helm upgrade（管理員 Redeploy）才換。
+
+        冪等：已等於範本值的跳過。回傳被改寫的服務。
+        """
+        template = self.env.ref(
+            'woow_paas_platform.cloud_app_omnigent', raise_if_not_found=False)
+        if not template:
+            return self.browse()
+        host_prefix = _OMNIGENT_HOST_IMAGE + ':'
+        try:
+            target = json.loads(template.helm_default_values or '{}').get('runner', {}).get('image')
+        except (ValueError, AttributeError):
+            target = None
+        if not isinstance(target, str) or not target.startswith(host_prefix):
+            _logger.warning(
+                "omnigent 0.17 migration: template runner.image is not an %s pin (%r); "
+                "nothing rewritten", _OMNIGENT_HOST_IMAGE, target)
+            return self.browse()
+
+        Service = self.sudo().with_context(active_test=False)
+        changed = Service.browse()
+        skipped = []
+        for svc in Service.search([('template_id', '=', template.id)]):
+            try:
+                values = svc._helm_values_dict()
+            except ValueError:
+                skipped.append(f"{svc.name}(id={svc.id},invalid json)")
+                continue
+            runner = values.get('runner') if isinstance(values, dict) else None
+            current = runner.get('image') if isinstance(runner, dict) else None
+            if current == target:
+                continue
+            if not isinstance(current, str) or not current.startswith(host_prefix):
+                if current is not None:
+                    skipped.append(f"{svc.name}(id={svc.id},runner.image={current!r})")
+                continue
+            runner['image'] = target
+            svc._apply_helm_values(values)
+            changed |= svc
+        _logger.info(
+            "omnigent 0.17 migration: runner.image -> %s on %d service(s): %s; skipped: %s",
+            target, len(changed),
+            ', '.join(f"{s.name}(id={s.id})" for s in changed) or '-',
+            ', '.join(skipped) or '-',
+        )
+        return changed
 
     def _woow_migrate_init_execution_control_1257(self):
         """#1257 上線過渡（Q15＋Q26）：回填欠 init、替在途的 init 寫合成 legacy lease。

@@ -2,7 +2,7 @@
 """Omnigent 上架 seed 與 app_managed 密碼載體的守線斷言。
 
 契約來源：woow-paas-charts charts/omnigent 0.1.0 起（0.1.2 加租戶 LLM 金鑰，#1379；0.1.3 金鑰改放
-LLM proxy、runner 只拿代用 token，#1449；server :8000 是唯一入口、無 auth-proxy；
+LLM proxy、runner 只拿代用 token，#1449；0.1.7 上游 v0.17.0，只換 image；server :8000 是唯一入口、無 auth-proxy；
 admin 由 OMNIGENT_ACCOUNTS_INIT_ADMIN_* 在第一次開機建立；SQLite；runner 走上游
 kubernetes managed sandbox），paas-odoo-ci mirror-image.yml #159/#160（上游 image 原樣鏡像）。
 
@@ -19,10 +19,15 @@ import json
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 
+from ..models.cloud_service import _OMNIGENT_HOST_IMAGE, _internal_provision
+
 OMNI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes'
 OMNI_HOST_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host'
 OMNI_CHART = 'oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent'
 PINNED_TAG_RE = r'^\d{8}\.\d{4}@sha256:[0-9a-f]{64}$'
+# chart 0.1.6／上游 v0.16.0 的 runner image 釘（migration 18.0.1.0.224 要換掉的值）。
+OMNI_HOST_016 = (OMNI_HOST_IMAGE + ':20260929.1400@sha256:'
+                 '558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9')
 
 
 @tagged('post_install', '-at_install')
@@ -47,9 +52,8 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.6',
-                         '0.1.6：#1536 server SA 去 pods:create、runner.gc 可選 Job 硬上限'
-                         '（接在 0.1.4 外部 DB／0.1.5 workspace=LAN 之後）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.7',
+                         '0.1.7：上游 omnigent v0.17.0（server／runner image pin，模板同 0.1.6）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；
@@ -192,3 +196,81 @@ class TestAppManagedCarrier(TransactionCase):
         tpl = self.env.ref('woow_paas_platform.cloud_app_omnigent')
         with self.assertRaises(ValidationError):
             tpl.write({'admin_username_helm_path': 'admin.username'})
+
+
+@tagged('post_install', '-at_install')
+class TestOmnigentRunnerImageMigration017(TransactionCase):
+    """migration 18.0.1.0.224：既有 omnigent 服務的 ``runner.image``（字串）改成範本的新釘。
+
+    Redeploy 的 #1408 只刷 ``{repository, tag}`` 形式的 image，``runner.image`` 是字串刷不到；
+    不補的話既有服務 Redeploy 到 0.1.7 後雲端工作機仍是 0.16。只改仍指向平台
+    ``omnigent-host`` 鏡像的值，其他一律不動。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tpl = self.env.ref('woow_paas_platform.cloud_app_omnigent')
+        self.target = json.loads(self.tpl.helm_default_values)['runner']['image']
+        self.ws = self.env['woow_paas_platform.workspace'].create({'name': 'WS omnigent 017'})
+        self.Service = self.env['woow_paas_platform.cloud_service']
+        self._seq = 0
+
+    def _service(self, helm_values, template=None):
+        self._seq += 1
+        name = 'svc-omni017-%s' % self._seq
+        return _internal_provision(self.Service).create({
+            'name': name, 'workspace_id': self.ws.id,
+            'template_id': (template or self.tpl).id, 'state': 'running',
+            'helm_namespace': 'paas-ws-omni017', 'helm_release_name': name,
+            'subdomain': 'paas-cs-omni017-%s' % self._seq,
+            'helm_values': json.dumps(helm_values),
+        })
+
+    def _values(self, svc):
+        svc.invalidate_recordset()
+        return json.loads(svc.helm_values)
+
+    def test_target_is_the_new_seed_pin(self):
+        self.assertEqual(_OMNIGENT_HOST_IMAGE, OMNI_HOST_IMAGE)
+        self.assertTrue(self.target.startswith(OMNI_HOST_IMAGE + ':'))
+        self.assertNotEqual(self.target, OMNI_HOST_016, 'seed 已換成 v0.17.0 的 omnigent-host')
+
+    def test_rewrites_platform_host_pin_and_keeps_other_values(self):
+        extra_env = [{'name': 'DATABASE_URL',
+                      'valueFrom': {'secretKeyRef': {'name': 'omnigent-db', 'key': 'DATABASE_URL'}}}]
+        svc = self._service({'runner': {'enabled': False, 'image': OMNI_HOST_016},
+                             'server': {'extraEnv': extra_env}})
+        done = self.Service._woow_migrate_omnigent_runner_image_017()
+        self.assertIn(svc, done)
+        values = self._values(svc)
+        self.assertEqual(values['runner']['image'], self.target)
+        self.assertIs(values['runner']['enabled'], False, '同一個 dict 的其他鍵不動')
+        self.assertEqual(values['server']['extraEnv'], extra_env, '外接 DB 的 extraEnv 原樣保留')
+
+    def test_idempotent(self):
+        svc = self._service({'runner': {'image': OMNI_HOST_016}})
+        self.assertIn(svc, self.Service._woow_migrate_omnigent_runner_image_017())
+        self.assertFalse(self.Service._woow_migrate_omnigent_runner_image_017(), '重跑不再改任何服務')
+        self.assertEqual(self._values(svc)['runner']['image'], self.target)
+
+    def test_leaves_foreign_or_missing_runner_image_alone(self):
+        custom = 'registry.example.com/my-host:1@sha256:' + 'a' * 64
+        foreign = self._service({'runner': {'image': custom}})
+        no_runner = self._service({})
+        not_a_dict = self._service({'runner': 'oops'})
+        done = self.Service._woow_migrate_omnigent_runner_image_017()
+        self.assertFalse(done & (foreign | no_runner | not_a_dict))
+        self.assertEqual(self._values(foreign)['runner']['image'], custom)
+        self.assertNotIn('runner', self._values(no_runner))
+        self.assertEqual(self._values(not_a_dict)['runner'], 'oops')
+
+    def test_other_templates_untouched(self):
+        other = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Not omnigent 017', 'slug': 'not-omnigent-017', 'helm_repo_url': '',
+            'helm_chart_name': 'oci://example.com/not-omnigent-017',
+            'helm_chart_version': '0.1.0', 'workload_type': 'container',
+            'post_deploy_init_type': 'none', 'mcp_enabled': False,
+        })
+        svc = self._service({'runner': {'image': OMNI_HOST_016}}, template=other)
+        self.assertNotIn(svc, self.Service._woow_migrate_omnigent_runner_image_017())
+        self.assertEqual(self._values(svc)['runner']['image'], OMNI_HOST_016)
