@@ -42,12 +42,18 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
    - 導出原始碼（WMO）：`scripts/source/export-addons.sh --inventory <步驟 1 的盤點檔> --out-dir <新目錄>`。唯讀 exec，
      逐模組對盤點檔驗內容 hash；完成條件：exit 0，拿到 `<out-dir>/addons/` 與 `addons-export.json`。原始碼是客戶的
      程式碼，留在本機交接，不貼進 issue／PR 留言。
-   - paas-odoo-ci PR（agent）：以步驟 3 的報告為準——`NEED_IMPORT` 的模組從 `<out-dir>/addons/` 複製進 `addons/`，
-     `NEED_IMPORT`＋`NEED_LIST` 加進 `config/cloud-addons.list`；`scripts/check-addon-lists.sh` 要求 `addons/` 與
-     `config/paas-addons.list` 完全相等，所以新目錄也要進那份清單（⇒ 會一起進平台自用的 paas-odoo image）。
-     pip：`requirements-cloud.txt` 由 CI 從清單內模組 manifest 的 `external_dependencies` 產生，沒宣告的套件進不了
-     image ⇒ 缺口補進用到它的模組 manifest（補了以後該模組重比時是 `DIVERGED`，PR 描述註明只差這一處）。
-     `addons-export.json` 裡 `symlinks_outside` 非空的模組先處理連結。`DIVERGED` 與注意事項寫進 PR 描述給人裁決。
+   - paas-odoo-ci PR（agent）：以步驟 3 的報告為準——`NEED_IMPORT` 的模組從 `<out-dir>/addons/` 原樣複製進
+     **`addons-cloud/`**（只進 cloud-odoo、不進平台 image；不要放 `addons/`，也不要列進 `config/paas-addons.list`），
+     `NEED_IMPORT`＋`NEED_LIST` 加進 `config/cloud-addons.list`，重跑 `generate-catalog.sh`／`generate-requirements.sh`
+     （來源目錄 `addons:addons-cloud`）更新 `addon-catalog.json`、`requirements-cloud.txt`。不改 addon 的任何檔，
+     git tree 的內容 hash 才會與來源相同。
+     - `DIVERGED`：同名模組不能同時在 `addons/` 與 `addons-cloud/`，只能「用 paas-odoo-ci／目標那份」或「把那份換成
+       來源的」。逐檔 diff（先 `--strip-trailing-cr`，差異常常只是 CRLF）後寫進 PR 描述給人裁決；裁決用現有那份的，
+       之後的比對加 `--accept-diverged <模組,…>`。
+     - pip：`requirements-cloud.txt` 由 CI 從清單內模組 manifest 的 `external_dependencies` 產生。manifest 寫的是
+       import 名而 pip 裝不了時（例 `PIL`），在 paas-odoo-ci 的 `generate-requirements.sh` 對照表補一筆，不改 manifest。
+     - 匯入前掃一次寫死的密碼／金鑰；`addons-export.json` 裡 `symlinks_outside` 非空的模組先處理連結。
+     - `cloud-addons.list` 一動，平台 image 也要重 build（catalog 在平台 image 裡，平台才看得到新 addon）。
    - build 出新 cloud-odoo 後，目標服務改用這顆 image，回到步驟 2 重比到 `READY`。data_dir 的 addon 也要進 image：
      升級閘只讀 image 的 `addons_path`，不讀 data_dir。完成條件：目標 image 的盤點涵蓋來源所有已安裝模組。
 6. **搬運**：目標端 `scripts/target/receive.sh open`（agent）印出 `--url` 並寫出 token 檔 → 兩者交給 WMO 跑

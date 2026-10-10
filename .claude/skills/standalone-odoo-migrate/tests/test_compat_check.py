@@ -94,7 +94,7 @@ class TestClassify(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_classify(self, db_modules):
+    def run_classify(self, db_modules, accepted=frozenset()):
         src = scan_addons([str(self.src_extra)], digest_filter=lambda _d: True)
         src["modules"]["base"] = {"dir": "/core", "version": "18.0.1.3"}
         tgt = {"mode": "image", "core_date": "18.0.20260926",
@@ -103,7 +103,7 @@ class TestClassify(unittest.TestCase):
         tgt["addons"]["modules"]["base"] = {"dir": "/core", "version": "18.0.1.3"}
         inv = inventory(db_modules, src)
         ci = compat_check.load_ci(str(self.ci))
-        rows = compat_check.classify(inv, tgt, ci, select_dirs={str(self.all_addons)})
+        rows = compat_check.classify(inv, tgt, ci, select_dirs={str(self.all_addons)}, accepted=accepted)
         return {r["module"]: r for r in rows}, inv, tgt, ci
 
     def test_statuses(self):
@@ -128,6 +128,27 @@ class TestClassify(unittest.TestCase):
         self.assertEqual([m["requirement"] for m in missing], ["Crypto"])
         self.assertEqual(missing[0]["source_dists"], ["pycryptodome"])
         self.assertEqual(source_only, ["google_genai"])
+
+    def test_accepted_divergence_follows_normal_rules(self):
+        mods = {name: {"state": "installed", "version": "18.0.1.0"} for name in ("in_ci_diff", "in_ci_same", "in_image")}
+        # 還沒進 image、paas-odoo-ci 那份與來源不同：裁決後當成「加進清單」
+        rows, *_ = self.run_classify(mods, accepted=frozenset({"in_ci_diff", "in_ci_same"}))
+        self.assertEqual(rows["in_ci_diff"]["status"], "NEED_LIST")
+        self.assertTrue(rows["in_ci_diff"]["accepted_divergence"])
+        # 列了但其實沒有差異：不加標記
+        self.assertNotIn("accepted_divergence", rows["in_ci_same"])
+        # 已進 image、內容與來源不同：裁決後照目錄歸類（/all-addons ⇒ SELECT）
+        make_module(self.all_addons, "in_ci_diff", version="1.0", extra_files={"a.py": "2"})
+        rows, *_ = self.run_classify(mods)
+        self.assertEqual(rows["in_ci_diff"]["status"], "DIVERGED")
+        rows, *_ = self.run_classify(mods, accepted=frozenset({"in_ci_diff"}))
+        self.assertEqual(rows["in_ci_diff"]["status"], "SELECT")
+        self.assertTrue(rows["in_ci_diff"]["accepted_divergence"])
+        # 裁決不能蓋過降版阻斷
+        mods["in_ci_diff"]["version"] = "18.0.1.1"
+        rows, *_ = self.run_classify(mods, accepted=frozenset({"in_ci_diff"}))
+        self.assertEqual(rows["in_ci_diff"]["status"], "BLOCK_DOWNGRADE")
+        self.assertNotIn("accepted_divergence", rows["in_ci_diff"])
 
     def test_db_newer_than_image_blocks(self):
         rows, *_ = self.run_classify({"in_image": {"state": "installed", "version": "18.0.1.1"}})
