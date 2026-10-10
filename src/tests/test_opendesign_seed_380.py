@@ -153,14 +153,14 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertNotIn('odApiToken', raw)
 
     def test_lockstep_min_specs(self):
-        """min_vcpu／min_storage 與 chart 一致（vcpu1／storage10＝8Gi data + 2Gi home）。
+        """min_vcpu／min_storage 與 chart 一致（vcpu1／storage5＝4Gi data + 1Gi home；#1637 由 10＝8＋2 改）。
         min_ram_gb 例外：不 lockstep chart requests(2Gi)，改為 quota-sized＝3.0——讓
         cloud_service._compute_ns_quota 的 3× headroom 蓋得住 chart daemon limits.memory(8Gi)
         ＋sidecar（見 test_min_ram_covers_daemon_quota；#380 端到端回歸）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 1)
         self.assertEqual(tpl.min_ram_gb, 3.0)
-        self.assertEqual(tpl.min_storage_gb, 10)
+        self.assertEqual(tpl.min_storage_gb, 5)
 
     def test_min_ram_covers_daemon_quota(self):
         """回歸守線（#380）：workspace ns quota = sum(存活 service allocated_ram_gb) × 3

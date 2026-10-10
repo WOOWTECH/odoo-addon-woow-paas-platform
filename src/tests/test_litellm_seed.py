@@ -190,7 +190,7 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 1)
         self.assertEqual(tpl.min_ram_gb, 2.0)
-        self.assertEqual(tpl.min_storage_gb, 10)
+        self.assertEqual(tpl.min_storage_gb, 5, '#1637：10 → 5')
         pvc = int(self._values()['persistence']['size'].rstrip('Gi'))
         self.assertEqual(pvc, tpl.min_storage_gb, '唯一一顆 PVC＝min_storage_gb（quota 對帳）')
         plans = tpl.sudo().subscription_plan_ids
