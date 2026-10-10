@@ -827,11 +827,21 @@ def _plan_spec_paths(template):
 # 等於方案賣的總量（Nextcloud 20Gi＝使用者檔案 13＋html 3＋PostgreSQL 3＋Redis 1）。
 #
 # - ``fixed``：固定開銷那幾顆的大小路徑，從同一份 values 讀（＝chart render 用的值）。
-# - ``default_size``：方案鍵沒有值時 chart 改讀的鍵（nextcloud chart
+# - ``default_size``（可省）：方案鍵沒有值時 chart 改讀的鍵（nextcloud chart
 #   ``nextcloud.dataSize``＝``persistence.size | default persistence.data.size``），算
 #   「目前實際大小」（只擴不縮、帳面 allocated）時用。
+# - ``shares``（可省）：跟方案鍵**平分**「總量 − 固定開銷」的 volume（#1637 Odoo 的備份）。
+#   方案鍵拿整數 GiB 的下取整、最後一顆拿餘數，所以 shares ≥ 方案鍵（備份不小於資料）。
+#   值空時 chart 退回方案鍵的大小（woow-odoo ``backup.persistence.size | default
+#   persistence.size``），「目前大小」照同一條規則讀。
 #
 # 沒列的範本：方案鍵＝方案總量（現狀，不變）。換 chart 或改固定開銷的鍵時這裡要跟著改。
+#
+# #1637（使用者 2026-10-10「依性質跟使用需求按需分配，最大給到 30G」）：
+# - odoo：資料＋備份平分「總量 − PostgreSQL」。PostgreSQL 是 StatefulSet 的
+#   volumeClaimTemplates，**建好之後大小不能改**（helm upgrade 會被 API server 拒絕），所以放
+#   ``fixed``——換方案只動資料與備份。20／25／30 ＝ 8＋4＋8／10＋4＋11／13＋4＋13。
+# - emqx：log 固定，資料＝總量 − log（3 ＝ 2＋1）。
 _PLAN_STORAGE_SPLIT = {
     'nextcloud': {
         'default_size': ('persistence', 'data', 'size'),
@@ -841,7 +851,44 @@ _PLAN_STORAGE_SPLIT = {
             ('redis', 'persistence', 'size'),
         ),
     },
+    'odoo': {
+        'fixed': (('postgres', 'persistence', 'size'),),
+        'shares': (('backup', 'persistence', 'size'),),
+    },
+    'emqx': {
+        'default_size': ('persistence', 'data', 'size'),
+        'fixed': (('persistence', 'log', 'size'),),
+    },
 }
+
+
+def _plan_storage_targets(total_gb, fixed_gib, n_shares):
+    """總量 − 固定開銷，平分給方案鍵＋``n_shares`` 顆 shares（整數 GiB）。
+
+    回傳 ``(方案鍵, [各 share])``；方案鍵拿下取整、最後一顆 share 拿餘數（≥ 方案鍵）。
+    算不出來（固定開銷讀不到、不是整數 GiB、方案鍵不到 1 GiB）回 ``None``。
+    """
+    if fixed_gib is None:
+        return None
+    rest = total_gb - fixed_gib
+    if not float(rest).is_integer():
+        return None
+    rest = int(rest)
+    base = rest // (1 + n_shares)
+    if base < 1:
+        return None
+    shares = [base] * n_shares
+    if shares:
+        shares[-1] = rest - base * n_shares
+    return base, shares
+
+
+def _plan_storage_share_sizes(values, template):
+    """``shares`` 每顆 chart 實際會用的大小（字串）；值空時退回方案鍵目前的大小。"""
+    split = _PLAN_STORAGE_SPLIT.get(template.slug) or {}
+    fallback = _plan_storage_current_size(values, template)
+    return [(_value_at(values, path) or fallback or None)
+            for path in split.get('shares', ())]
 
 
 def _plan_storage_fixed_gib(values, template):
@@ -867,19 +914,25 @@ def _plan_storage_current_size(values, template):
     size = _value_at(values, _plan_spec_paths(template)['storage'])
     if not size:
         split = _PLAN_STORAGE_SPLIT.get(template.slug)
-        if split:
+        if split and split.get('default_size'):
             size = _value_at(values, split['default_size'])
     return size or None
 
 
 def _plan_storage_total_gib(values, template):
-    """方案儲存鍵的實際大小＋固定開銷（GiB）；任一項讀不到回 ``None``。"""
+    """方案儲存鍵的實際大小＋固定開銷＋shares（GiB）；任一項讀不到回 ``None``。"""
     size = _plan_storage_current_size(values, template)
     gib = _storage_quantity_gib(size) if size else None
     fixed = _plan_storage_fixed_gib(values, template)
     if gib is None or fixed is None:
         return None
-    return gib + fixed
+    total = gib + fixed
+    for share in _plan_storage_share_sizes(values, template):
+        share_gib = _storage_quantity_gib(share) if share else None
+        if share_gib is None:
+            return None
+        total += share_gib
+    return total
 
 
 def _values_dict_at(values, path):
@@ -9728,13 +9781,20 @@ class CloudService(models.Model):
         - 既有服務（``existing=True``）：比較的「目前大小」是 chart 實際用的那個
           （``_plan_storage_current_size``），照 ``_plan_storage_size`` 只擴不縮；算不出來
           就保留現值、只 log——redeploy／換方案不能因此失敗，也絕不送出可能更小的值。
+
+        #1637：``shares``（Odoo 的備份）跟方案鍵平分「總量 − 固定開銷」，各自只擴不縮；
+        目前大小讀不到（值空）時以 chart 的退回值（方案鍵目前的大小）比較。
         """
         *parent_path, size_key = _plan_spec_paths(template)['storage']
         target_gb = plan.cs_storage_gb
-        if template.slug in _PLAN_STORAGE_SPLIT:
+        share_targets = []
+        split = _PLAN_STORAGE_SPLIT.get(template.slug)
+        if split:
             fixed = _plan_storage_fixed_gib(values, template)
-            target = None if fixed is None else plan.cs_storage_gb - fixed
-            if target is None or target < 1 or not float(target).is_integer():
+            share_paths = split.get('shares', ())
+            targets = _plan_storage_targets(
+                plan.cs_storage_gb, fixed, len(share_paths))
+            if targets is None:
                 msg = (
                     "#1634 %s 方案 %s 的 cs_storage_gb=%s 扣掉固定開銷 volume（%s GiB）"
                     "算不出使用者檔案大小" % (
@@ -9743,13 +9803,22 @@ class CloudService(models.Model):
                     raise ValueError(msg + "（fail-loud，不靜默開出加總不等於方案的服務）")
                 _logger.warning("%s；保留目前大小", msg)
                 return
-            target_gb = int(target)
+            target_gb, share_gbs = targets
+            share_targets = list(zip(share_paths, share_gbs))
         if existing:
+            # shares 的「目前大小」要在方案鍵改寫之前讀（值空時退回方案鍵目前的大小）。
+            current_shares = _plan_storage_share_sizes(values, template)
             size = self._plan_storage_size(
                 _plan_storage_current_size(values, template), target_gb)
         else:
+            current_shares = [None] * len(share_targets)
             size = f'{target_gb}Gi'
         _values_dict_at(values, parent_path)[size_key] = size
+        for (path, share_gb), current in zip(share_targets, current_shares):
+            *share_parent, share_key = path
+            _values_dict_at(values, share_parent)[share_key] = (
+                self._plan_storage_size(current, share_gb) if existing
+                else f'{share_gb}Gi')
 
     @api.model
     def _apply_plan_spec_overlay(self, values, template, plan, existing=False):

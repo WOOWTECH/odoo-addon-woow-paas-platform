@@ -80,16 +80,16 @@ class TestOmnigentSeed(TransactionCase):
             self.assertNotIn('ghcr.io', ref, '平台只從 jcr-prod 拉（叢集連 ghcr 慢且會斷）')
 
     def test_resources_match_t1(self):
-        """T1 = 4 vCPU / 8 Gi / 10 Gi：template min_*、plan cs_*、PVC 大小三處一致。"""
+        """T1 = 4 vCPU / 8 Gi / 5 Gi（#1637 磁碟 10 → 5）：template min_*、plan cs_*、PVC 大小三處一致。"""
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 4)
         self.assertEqual(tpl.min_ram_gb, 8.0)
-        self.assertEqual(tpl.min_storage_gb, 10)
-        self.assertEqual(self._values()['persistence']['size'], '10Gi')
+        self.assertEqual(tpl.min_storage_gb, 5)
+        self.assertEqual(self._values()['persistence']['size'], '5Gi')
         for plan in tpl.sudo().subscription_plan_ids:
             self.assertEqual(plan.cs_vcpu, 4, plan.name)
             self.assertEqual(plan.cs_ram_gb, 8.0, plan.name)
-            self.assertEqual(plan.cs_storage_gb, 10, plan.name)
+            self.assertEqual(plan.cs_storage_gb, 5, plan.name)
 
     def test_service_port_lockstep(self):
         v = self._values()

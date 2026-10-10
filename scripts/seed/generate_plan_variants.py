@@ -158,29 +158,29 @@ TIER_BASE_XMLID = {
     ('mcp_hermes', 't3'): 'plan_mcp_hermes_t3',
 }
 
-# (family, tier_key) → CS 規格（odoo/n8n/mcp_hermes）；＝同 tier base plan 的 cs_* 值
+# (family, tier_key) → CS 規格（odoo/n8n）；＝同 tier base plan 的 cs_* 值
 # （與 PR-B2 後 seed 同值——n8n t4 為 t3 外推一級）
 #
 # ⚠ 沒列進本表的 family 產出的變體就**不帶 cs_***，這是刻意的：hermes_agent／
 # ha_full／opendesign 的 base plan 也刻意不設 cs_*（那三欄非空會讓
 # `_allocated_vals_from` 改吃 plan 值、蓋掉 template 的 min_*＝quota 峰值模型，
 # 症狀是 pod 卡 exceeded quota 而 UI 照顯 Running，見 #456）。變體必須與同 tier
-# base 一致，故「base 沒設 → 變體也不能設」。反之 mcp_hermes 的 base 有 cs_*
-# （#431 三階規格），變體漏設會讓三階全部 fallback 到同一組 template.min_*
-# ——那正是 #431 要解的病灶原地復發。
+# base 一致，故「base 沒設 → 變體也不能設」。
+#
+# #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：
+# - odoo 的 cs_storage_gb 改成整台總量（資料＋PostgreSQL＋備份）：t2 30 → 25、t3 40 → 30
+#   （t1 20 不變；拆法見 CloudService._PLAN_STORAGE_SPLIT）。
+# - n8n t1–t4 磁碟 10／20／30／40 → 5／10／15／20。
+# - mcp_hermes 拿掉（#431／#765 曾給三階 1–2 vCPU／2–4 GB／20–40 GB）：base 不再設
+#   cs_*、規格回到範本值，變體跟著不帶。
 CS_SPECS = {
     ('odoo', 't1'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=2),
-    ('odoo', 't2'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=30, cs_odoo_workers=3),
-    ('odoo', 't3'): dict(cs_vcpu=3, cs_ram_gb=4.0, cs_storage_gb=40, cs_odoo_workers=4),
-    ('n8n', 't1'): dict(cs_vcpu=1, cs_ram_gb=1.0, cs_storage_gb=10, cs_odoo_workers=0),
-    ('n8n', 't2'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=0),
-    ('n8n', 't3'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=30, cs_odoo_workers=0),
-    ('n8n', 't4'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=40, cs_odoo_workers=0),
-    # #765：mcp_hermes 三階＝ #431 拍板的 base cs_*（同價位對齊 n8n；
-    # cs_odoo_workers 一律 0，非 Odoo 服務）
-    ('mcp_hermes', 't1'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=0),
-    ('mcp_hermes', 't2'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=30, cs_odoo_workers=0),
-    ('mcp_hermes', 't3'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=40, cs_odoo_workers=0),
+    ('odoo', 't2'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=25, cs_odoo_workers=3),
+    ('odoo', 't3'): dict(cs_vcpu=3, cs_ram_gb=4.0, cs_storage_gb=30, cs_odoo_workers=4),
+    ('n8n', 't1'): dict(cs_vcpu=1, cs_ram_gb=1.0, cs_storage_gb=5, cs_odoo_workers=0),
+    ('n8n', 't2'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=10, cs_odoo_workers=0),
+    ('n8n', 't3'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=15, cs_odoo_workers=0),
+    ('n8n', 't4'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=20, cs_odoo_workers=0),
 }
 
 # (family, tier_key) → SA quota；＝同級 SA base 的 sa_* 值

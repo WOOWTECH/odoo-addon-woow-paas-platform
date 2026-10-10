@@ -78,12 +78,12 @@ class TestCodeServerSeed(TransactionCase):
             self.assertRegex(self._values()['image']['tag'], PINNED_TAG_RE)
 
     def test_resources_match_t1(self):
-        """T1 = 2 vCPU / 4 Gi / 25 Gi：template min_*、plan cs_*、PVC 加總三處一致。"""
+        """T1 = 2 vCPU / 4 Gi / 12 Gi（#1637：workspace 10＋pi-data 2）：template min_*、plan cs_*、PVC 加總三處一致。"""
         tpl = self._tpl()
         v = self._values()
         self.assertEqual(tpl.min_vcpu, 2)
         self.assertEqual(tpl.min_ram_gb, 4.0)
-        self.assertEqual(tpl.min_storage_gb, 25)
+        self.assertEqual(tpl.min_storage_gb, 12)
         pvc = v['persistence']
         self.assertEqual(
             int(pvc['workspace']['size'].rstrip('Gi')) + int(pvc['piData']['size'].rstrip('Gi')),
@@ -93,7 +93,7 @@ class TestCodeServerSeed(TransactionCase):
         for plan in tpl.sudo().subscription_plan_ids:
             self.assertEqual(plan.cs_vcpu, 2, plan.name)
             self.assertEqual(plan.cs_ram_gb, 4.0, plan.name)
-            self.assertEqual(plan.cs_storage_gb, 25, plan.name)
+            self.assertEqual(plan.cs_storage_gb, 12, plan.name)
 
     def test_service_port_lockstep(self):
         v = self._values()

@@ -5,6 +5,7 @@
 既有 plan 行為零變。
 """
 import logging
+import re
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
@@ -113,6 +114,65 @@ class ShSubscriptionPlanCsSpec(models.Model):
                 continue
             plan.write({'cs_storage_gb': new})
             _logger.info("#1634 %s cs_storage_gb %s → %s", xmlid, old, new)
+
+    # #1637（使用者 2026-10-10「依性質跟使用需求按需分配，最大給到 30G」）：每台、每個方案的磁碟
+    # 加總 ≤ 30Gi。(xmlid 規則, {欄位: (舊 seed 值, 新值)})——規則同時涵蓋 base 與 generator 產的
+    # +N 存取席位變體（`<base>_ac<N>_<monthly|yearly>`），以 ir.model.data 的 xmlid 比對（R8：
+    # 不用價格／名稱）。與 subscription_products.xml／subscription_products_variants.xml（generator
+    # CS_SPECS）同源兩份手寫，test_template_disk_cap_1637 兩側各自釘住。
+    _DISK_30G_1637 = (
+        (r'plan_odoo_t2_(ac\d+_)?(monthly|yearly)', {'cs_storage_gb': (30, 25)}),
+        (r'plan_odoo_t3_(ac\d+_)?(monthly|yearly)', {'cs_storage_gb': (40, 30)}),
+        (r'plan_n8n_(ac\d+_)?(monthly|yearly)', {'cs_storage_gb': (10, 5)}),
+        (r'plan_n8n_t2_(ac\d+_)?(monthly|yearly)', {'cs_storage_gb': (20, 10)}),
+        (r'plan_n8n_t3_(ac\d+_)?(monthly|yearly)', {'cs_storage_gb': (30, 15)}),
+        (r'plan_n8n_t4_(ac\d+_)?(monthly|yearly)', {'cs_storage_gb': (40, 20)}),
+        (r'plan_mcp_hermes_(ac\d+_)?(monthly|yearly)',
+         {'cs_vcpu': (1, 0), 'cs_ram_gb': (2.0, 0.0), 'cs_storage_gb': (20, 0)}),
+        (r'plan_mcp_hermes_t2_(ac\d+_)?(monthly|yearly)',
+         {'cs_vcpu': (2, 0), 'cs_ram_gb': (2.0, 0.0), 'cs_storage_gb': (30, 0)}),
+        (r'plan_mcp_hermes_t3_(ac\d+_)?(monthly|yearly)',
+         {'cs_vcpu': (2, 0), 'cs_ram_gb': (4.0, 0.0), 'cs_storage_gb': (40, 0)}),
+        (r'plan_code_server_(monthly|yearly)', {'cs_storage_gb': (25, 12)}),
+        (r'plan_emqx_(monthly|yearly)', {'cs_storage_gb': (10, 3)}),
+        (r'plan_litellm_(monthly|yearly)', {'cs_storage_gb': (10, 5)}),
+        (r'plan_omnigent_(monthly|yearly)', {'cs_storage_gb': (10, 5)}),
+    )
+
+    def _woow_migrate_disk_30g_1637(self):
+        """#1637 升級軌：方案磁碟改成「整台 ≤ 30Gi」（xmlid 定位、冪等）。
+
+        seed 是 noupdate=1，既有 DB 只能靠本 method。一筆方案的規則欄位**全部**仍是舊 seed 值才改
+        （後台手調過任何一欄就整筆不覆蓋、只 log）；已是新值的跳過。價格與其他欄位不動。
+        回傳被改寫的方案。
+        """
+        Data = self.env['ir.model.data'].sudo()
+        rows = Data.search([
+            ('module', '=', 'woow_paas_platform'),
+            ('model', '=', 'sh.subscription.plan'),
+        ])
+        changed = self.browse()
+        for row in rows:
+            rule = next((fields_ for pattern, fields_ in self._DISK_30G_1637
+                         if re.fullmatch(pattern, row.name)), None)
+            if not rule:
+                continue
+            plan = self.browse(row.res_id).exists()
+            if not plan:
+                continue
+            if all(plan[f] == new for f, (_old, new) in rule.items()):
+                continue
+            if not all(plan[f] == old for f, (old, _new) in rule.items()):
+                _logger.warning(
+                    "#1637 %s %s 不是舊 seed 值（後台手調過），不覆蓋",
+                    row.name, {f: plan[f] for f in rule})
+                continue
+            plan.write({f: new for f, (_old, new) in rule.items()})
+            changed |= plan
+        _logger.info("#1637 方案磁碟改寫 %d 筆：%s", len(changed),
+                     ', '.join(sorted(changed.mapped(
+                         lambda p: p.get_external_id().get(p.id, str(p.id))))) or '-')
+        return changed
 
     def _woow_write_cs_spec(self, spec_by_xmlid):
         """共用 force-write：{xmlid: (vcpu, ram, storage, workers)}。

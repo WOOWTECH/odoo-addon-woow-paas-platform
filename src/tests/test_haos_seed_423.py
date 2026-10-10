@@ -154,11 +154,14 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
         self.assertEqual(self._values()['persistence']['volumeMode'], 'Filesystem')
 
     def test_sold_spec(self):
-        """賣給租戶的規格：2 vCPU／4Gi RAM／64Gi 磁碟（與 min_* 不同，見 quota 類）。"""
+        """賣給租戶的規格：2 vCPU／4Gi RAM／30Gi 磁碟（與 min_* 不同，見 quota 類）。
+
+        #1637（使用者 2026-10-10「按需分配，最大給到 30G」）由 64Gi 改成 30Gi：30 GiB＝32.2 GB，
+        仍符合 HAOS 官方最低 32 GB。"""
         values = self._values()
         self.assertEqual(values['vm']['cores'], 2)
         self.assertEqual(values['vm']['memory'], '4Gi')
-        self.assertEqual(values['persistence']['size'], '64Gi')
+        self.assertEqual(values['persistence']['size'], '30Gi')
 
     def test_service_port_matches_default_port(self):
         """service.port/targetPort 8123 ＝ default_port（HAOS 前台埠）。
@@ -242,7 +245,7 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
         persistence.storageClass —— chart 端此鍵 required 且不可為空。
 
         woow-k3s 有兩個 default StorageClass（local-path 與 longhorn），落到
-        node-local 的 local-path ＝ 64 GiB 磁碟無副本、節點死即資料失聯。
+        node-local 的 local-path ＝ 30 GiB 磁碟無副本、節點死即資料失聯。
         """
         Service = self.env['%s.cloud_service' % MOD]
         injected = Service._inject_storage_class(
@@ -347,16 +350,18 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
         }
 
     def test_min_star_values_are_the_d5_d6_measured_ones(self):
-        """D5／D6 回填值：3 / 5.0 / 72（**非** 原設計推算的 3 / 6.0 / 64）。"""
+        """D5／D6 回填值：3 / 5.0 / 72（**非** 原設計推算的 3 / 6.0 / 64）；#1637 磁碟 64 → 30Gi 後
+        儲存照同一比例（72／64＝1.125）改成 34（30×1.125＝33.75 → 34）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 3)
         self.assertEqual(tpl.min_ram_gb, 5.0)
-        self.assertEqual(tpl.min_storage_gb, 72)
+        self.assertEqual(tpl.min_storage_gb, 34)
 
     def test_min_storage_is_import_peak_not_disk_size(self):
-        """🔴 min_storage_gb 填的是 CDI import 峰值，**不是** 64 GiB 磁碟大小。
+        """🔴 min_storage_gb 填的是 CDI import 峰值，**不是** 30 GiB 磁碟大小。
 
-        這是最容易被「看到 64 就改回去」的一條。64×3＝192 GiB 短少 11.5 GiB，
+        這是最容易被「看到 30 就改回去」的一條。30×3＝90 GiB 短少 5.3 GiB（64Gi 時代是 64×3＝192
+        短少 11.5），
         scratch PVC 被 ErrExceededQuota 拒收，而 DataVolume 只顯示
         ImportInProgress、不再前進。
         """
@@ -479,7 +484,8 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
         """storage quota 的邊際貢獻必須蓋得住 import 峰值。
 
         峰值 ＝ 3 顆 PVC × (宣告大小 × CDI filesystem overhead)。
-        實測：64Gi → 每顆 67.8 GiB → 峰值 203.5 GiB；72×3＝216 GiB 放行。
+        實測：64Gi → 每顆 67.8 GiB → 峰值 203.5 GiB；72×3＝216 GiB 放行。#1637 改 30Gi 後峰值
+        3×30×1.059＝95.3 GiB，34×3＝102 GiB 放行。
 
         `_compute_ns_quota` 的 100Gi floor 只在 workspace 總量低於 floor 時提供保護；
         共用 workspace 增加一個 HAOS 時只會增加它自己那一份。這裡若套 floor，

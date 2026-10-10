@@ -292,11 +292,20 @@
                  #1561：兩格都標 create_only——chart 只在首次 -i base 套用（對既有資料庫無效），
                  開通後配置頁唯讀顯示、reconfigure 拒絕變更（_drop_create_only_values）。
                  #1612：label／description 直接寫中文（比照其他範本、#1584）——前端表單、配置頁
-                 與 reconfigure 拒絕訊息都讀同一個 spec label，改這裡即全部一致。 -->
+                 與 reconfigure 拒絕訊息都讀同一個 spec label，改這裡即全部一致。
+                 #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：整台磁碟＝方案總量，三顆 PVC
+                 （資料 persistence.size＋PostgreSQL postgres.persistence.size＋備份
+                 backup.persistence.size）加總恆等於方案的 cs_storage_gb（T1／T2／T3＝20／25／30：
+                 8＋4＋8／10＋4＋11／13＋4＋13）。CloudService._PLAN_STORAGE_SPLIT 的 odoo 項：PostgreSQL
+                 固定（StatefulSet volumeClaimTemplates 建好後不能改大小），資料與備份平分其餘、備份拿
+                 餘數（備份不小於資料：rsync 硬連結整份 filestore＋每日 dump）。依據＝16 套舊 Odoo
+                 實測：filestore 最大 0.41G、資料庫最大 0.63G、備份最大 0.68G。這裡的三個大小是
+                 「沒有方案時」的預設（＝T1），PostgreSQL 必須寫明（chart 預設 8Gi；拆分要從 values
+                 讀）。原本 data 10Gi＋chart 預設 PG 8Gi＋備份跟著 data，方案 overlay 後 T1 是 48Gi。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo</field>
             <field name="helm_chart_version">0.2.7</field>
-            <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20261010.1604", "digest": "sha256:c0c849aac39773ba13dc81ed781da8d7622780a296c2d94affdafe164f5743dc"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "10Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo"}}</field>
+            <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20261010.1604", "digest": "sha256:c0c849aac39773ba13dc81ed781da8d7622780a296c2d94affdafe164f5743dc"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "8Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo", "persistence": {"size": "4Gi"}}, "backup": {"persistence": {"size": "8Gi"}}}</field>
             <field name="helm_value_specs">{"required": [
                 {"key": "conf.adminEmail", "label": "管理員 Email", "type": "text",
                 "create_only": true,
@@ -312,10 +321,10 @@
             <field name="default_port">80</field>
             <field name="ingress_enabled" eval="True" />
 
-            <!-- Resource Requirements -->
+            <!-- Resource Requirements。min_storage_gb 20＝T1 整台（8＋4＋8，#1637）。 -->
             <field name="min_vcpu">2</field>
             <field name="min_ram_gb">2.0</field>
-            <field name="min_storage_gb">10</field>
+            <field name="min_storage_gb">20</field>
 
             <!-- Post-Deploy Init: auto-refresh module list after deployment -->
             <field name="post_deploy_init_type">odoo</field>
@@ -417,17 +426,21 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:86f9a31ed0715706543883c0d3e801ed6b72820c9223d502908b82e36d68436a"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:86f9a31ed0715706543883c0d3e801ed6b72820c9223d502908b82e36d68436a"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True" />
 
-            <!-- Resource Requirements -->
+            <!-- Resource Requirements。#1637（使用者 2026-10-10「按需分配，最大給到 30G」）：mcp-server
+                 家族（本筆與 odoo／odoo-manage／n8n／k8s／vk／opendesign／litellm／nextcloud 共 9 筆）PVC
+                 5Gi → 1Gi（＝chart 預設）。PVC 只放 /data/config.json：正式站 19 台實測 28–36KB。
+                 既有服務的 helm_values 照舊（Redeploy 不改 PVC 大小）。Hermes MCP 的三階方案不再帶
+                 cs_*（之前 20／30／40Gi、1–2 vCPU、2–4 GB），規格回到這裡的範本值。 -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
@@ -507,7 +520,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:ee5d8f6954866f954f604e24421fb7b0f87f629f11c439138000dedf2133ce40"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:ee5d8f6954866f954f604e24421fb7b0f87f629f11c439138000dedf2133ce40"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -517,7 +530,7 @@
             <!-- Resource Requirements -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
@@ -574,7 +587,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "d5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:daefcdcbaecc442a0c64bf2eab9d786fa26948a326c915d2db924fe606db3f82"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "d5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:daefcdcbaecc442a0c64bf2eab9d786fa26948a326c915d2db924fe606db3f82"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -582,7 +595,7 @@
 
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
@@ -664,7 +677,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:2d485ae74fb0a6a911b6d753d4322be147c6f14e1f772127fd4c71f4d61dec53"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:2d485ae74fb0a6a911b6d753d4322be147c6f14e1f772127fd4c71f4d61dec53"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -674,7 +687,7 @@
             <!-- Resource Requirements -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
@@ -740,7 +753,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:5bde7fd00cad448e3a6a2a9646e71f3f4f7c58fafb66ef698494f7f9b6e0fc61"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:5bde7fd00cad448e3a6a2a9646e71f3f4f7c58fafb66ef698494f7f9b6e0fc61"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -748,7 +761,7 @@
 
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <field name="mcp_enabled" eval="False" />
             <field name="has_admin_gui" eval="True" />
@@ -787,7 +800,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:77a3fa347e9d300ca99b25702770fe71026837fcf69d32edad88dbd8a2d8866e"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:77a3fa347e9d300ca99b25702770fe71026837fcf69d32edad88dbd8a2d8866e"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -795,7 +808,7 @@
 
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <field name="mcp_enabled" eval="False" />
             <field name="has_admin_gui" eval="True" />
@@ -845,7 +858,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:04693463d47884834816a360825705ccafa34381e40c80f69442190a15b7b169"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:04693463d47884834816a360825705ccafa34381e40c80f69442190a15b7b169"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -853,7 +866,7 @@
 
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <field name="mcp_enabled" eval="False" />
             <field name="has_admin_gui" eval="True" />
@@ -1031,7 +1044,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
             <field name="helm_chart_version">0.4.5</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261005.1409@sha256:0c257c7715f87c293744252aeb905d66dca87355b93c3293fde52bc2db586c7c"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261005.1409@sha256:0c257c7715f87c293744252aeb905d66dca87355b93c3293fde52bc2db586c7c"}, "service": {"port": 7457}, "persistence": {"data": {"size": "4Gi", "mountPath": "/app/.od"}, "home": {"size": "1Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
@@ -1043,7 +1056,8 @@
             <field name="default_port">7457</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements。min_storage_gb=10＝8Gi data + 2Gi home。
+            <!-- Resource Requirements。min_storage_gb=5＝4Gi data + 1Gi home（#1637 使用者 2026-10-10
+                 「按需分配，最大給到 30G」：原 8＋2＝10，正式站 2 台最多用 0.21G；既有服務只擴不縮）。
                  min_ram_gb 驅動 workspace ns quota（cloud_service._compute_ns_quota：
                  sum(存活 service 的 allocated_ram_gb) × 3；本 template 的 plan cs_ram_gb=0
                  故 allocated_ram_gb 走 fallback 取此值）。3× headroom 必須蓋得住本服務全
@@ -1053,7 +1067,7 @@
                  #380 端到端回歸）。根本解（sidecar 記憶體入 quota / chart daemon limit 收斂）另議。 -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">3.0</field>
-            <field name="min_storage_gb">10</field>
+            <field name="min_storage_gb">5</field>
 
             <!-- MCP 能力不在本 template（本體是完整應用，非 MCP server）；MCP 生態由
                  獨立的 cloud_app_mcp_opendesign 承擔，透過 od_api_base 指向本 daemon。 -->
@@ -1392,11 +1406,11 @@
         <record id="cloud_app_haos" model="woow_paas_platform.cloud_app_template">
             <field name="name">Home Assistant OS</field>
             <field name="slug">haos</field>
-            <field name="description">完整 Home Assistant OS 專屬虛擬機（含 Supervisor 與 Add-on 生態），2 vCPU／4 GB RAM／64 GB 磁碟</field>
+            <field name="description">完整 Home Assistant OS 專屬虛擬機（含 Supervisor 與 Add-on 生態），2 vCPU／4 GB RAM／30 GB 磁碟</field>
             <field name="full_description">Home Assistant OS（HAOS）雲端專屬虛擬機：跑的是完整的
                 Home Assistant 作業系統本體，而不是容器化的 Home Assistant Core——因此
                 Supervisor、Add-on 商店、HAOS 系統更新與備份快照全部原生可用，與自架
-                在樹莓派／NUC 上的體驗一致。規格為 2 vCPU、4 GB RAM、64 GB 專屬磁碟。
+                在樹莓派／NUC 上的體驗一致。規格為 2 vCPU、4 GB RAM、30 GB 專屬磁碟。
                 首次開通需匯入作業系統磁碟映像，耗時較一般容器服務長（數分鐘至數十分鐘），
                 期間服務顯示「部署中」屬正常。開通完成後於瀏覽器完成 HAOS 的初始設定
                 （建立你自己的管理者帳號）即可使用；平台不持有你的 Home Assistant 帳密。
@@ -1439,8 +1453,12 @@
                    secretRef 需要 accessKeyId／secretKey 形狀的 secret，而平台注入的
                    paas-registry 是 dockerconfigjson ——設錯的症狀是 DataVolume 卡在
                    ImportInProgress，原因埋在 importer pod log 裡（不指向根因）。
-                 - persistence.size 64Gi：賣給租戶的磁碟大小（⚠ 與 min_storage_gb 不同，
-                   見下方 Resource Requirements 註解）。
+                 - persistence.size 30Gi：賣給租戶的磁碟大小（⚠ 與 min_storage_gb 不同，
+                   見下方 Resource Requirements 註解）。#1637（使用者 2026-10-10「按需分配，
+                   最大給到 30G」）由 64Gi 改成 30Gi：30 GiB＝32.2 GB，仍符合 HAOS 官方最低 32 GB；
+                   64Gi 在 CDI 實建 67.8 GiB、兩副本預留 135.6G，匯入峰值約 271G，以 31zix 的
+                   排程餘量開一台就可能排不進去。⚠ CDI 會加 filesystem overhead（實測 ×1.059），
+                   實建的 PVC 約 31.8 GiB。
                  - persistence.volumeMode=Filesystem：🔴 **D1 實證**（#423 W1 PoC 受控
                    A/B，唯一變因＝volumeMode）。`Block` 在本叢集必掛：CDI importer 以
                    UID 107／runAsNonRoot 執行且 pod 層無 fsGroup，而 fsGroup 對 raw
@@ -1458,7 +1476,7 @@
                  - persistence.storageClass：平台 `_inject_storage_class` 每次部署注入
                    （預設 longhorn-delete）。⚠ 此鍵在 chart 端 required 且不可為空——
                    woow-k3s 有兩個 default StorageClass（local-path 與 longhorn），
-                   落到 node-local 的 local-path ＝ 64 GiB 磁碟無副本、節點死即資料失聯。
+                   落到 node-local 的 local-path ＝ 30 GiB 磁碟無副本、節點死即資料失聯。
                  - imagePullSecrets：operator `_ensure_image_pull_secrets` 注入，且
                    chart 自帶 paas-registry 預設（自足立場，同 home-assistant／
                    agent-runtime——後者的 e2e 曾因空預設撞 401 ImagePullBackOff）。
@@ -1475,7 +1493,7 @@
                    故 `_inject_apiserver_cidrs` 的 path_map 也刻意不收 'haos'。
                  - ingress.*：本 chart **沒有** ingress 區塊（對外走平台 subdomain +
                    Cloudflare tunnel）。寫了是死鍵，會讓後人以為 chart 支援 Ingress。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "64Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 8123}, "networkPolicy": {"enabled": true}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 8123}, "networkPolicy": {"enabled": true}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HAOS 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1510,32 +1528,34 @@
                    → quota 15Gi。**不是** guest 的 4Gi。
                    ⚠ xff-proxy 是 requests==limits（Guaranteed QoS），所以 quota 的
                    requests.* 與 limits.* 兩側都各加 50m／32Mi。
-                 - min_storage_gb 72：🔴 **不是賣給租戶的磁碟大小（那是 64 GiB，見
+                 - min_storage_gb 34：🔴 **不是賣給租戶的磁碟大小（那是 30 GiB，見
                    helm_default_values.persistence.size）**。CDI v1.64 走 volume
-                   populator，import 期間 ns 內同時存在多顆 PVC（各 67.8 GiB＝宣告
-                   64Gi 經 WebhookPvcRendering 加 filesystem overhead）。**兩條 source
-                   路徑的峰值不同，72 取的是保守的那條**：
+                   populator，import 期間 ns 內同時存在多顆 PVC（64Gi 時各 67.8 GiB＝宣告
+                   大小經 WebhookPvcRendering 加 filesystem overhead，×1.059）。**兩條 source
+                   路徑的峰值不同，取的是保守的那條**：
                      · http source（W1 PoC，chart 的 escape hatch）：**三顆**
-                       （target ＋ prime ＋ prime-scratch）＝實測峰值 **203.5 GiB**。
+                       （target ＋ prime ＋ prime-scratch）＝64Gi 時實測峰值 **203.5 GiB**。
                      · registry source（v1 正式路徑）：**兩顆**（target ＋ prime，
-                       無 scratch，因為不需要下載暫存）＝#423 W6 實測峰值 **135.7 GiB**。
-                   64×3＝192 GiB 對 http 路徑短少 11.5 GiB → scratch PVC 被
+                       無 scratch，因為不需要下載暫存）＝64Gi 時 #423 W6 實測峰值 **135.7 GiB**。
+                   #1637 磁碟改 30Gi 後照同一比例縮：http 峰值 3×30×1.059＝95.3 GiB，
+                   34×3＝102 GiB 放行（原 72 是 64 的 1.125 倍，30×1.125＝33.75 → 34）；
+                   30×3＝90 GiB 對 http 路徑短少 5.3 GiB → scratch PVC 被
                    ErrExceededQuota 拒收，而症狀只是 DataVolume 停在 ImportInProgress、
-                   要挖 events 才看得到 quota 拒收。72×3＝216 GiB 兩條路徑都放行。
-                   **看到 registry 路徑只要 135.7 就把這裡改小，會讓 http escape hatch
+                   要挖 events 才看得到 quota 拒收。
+                   **看到 registry 路徑只要約 64 GiB 就把這裡改小，會讓 http escape hatch
                    一被用到就靜默卡死。**
                  守線＝test_haos_seed_423.TestHaosQuotaModelling（由 seed values 現算、
                  不硬編：改 vm.memory／persistence.size 而不同步這裡就會紅）。
 
                  ⚠ 承上：本 template 的 plan **刻意不設 cs_vcpu／cs_ram_gb／cs_storage_gb**。
                  設了會有兩個後果：(1) allocated_* 改吃 plan 值，若填「賣給租戶的
-                 64GB」就直接重演上面那個 quota 卡死；(2) `_apply_plan_spec_overlay`
+                 30GB」就直接重演上面那個 quota 卡死；(2) `_apply_plan_spec_overlay`
                  會把 `resources.requests/limits` 疊進 values —— 那是**容器型**的鍵，
                  本 chart 用 `vm.cores`／`vm.memory`，疊上去是死鍵。守線＝
                  TestHaosPlansSeed.test_plans_do_not_override_cs_spec。 -->
             <field name="min_vcpu">3</field>
             <field name="min_ram_gb">5.0</field>
-            <field name="min_storage_gb">72</field>
+            <field name="min_storage_gb">34</field>
 
             <!-- MCP 能力不在本 template（HAOS 的 MCP 生態由 smart_home / mcp-* 系列承擔）。 -->
             <field name="mcp_enabled" eval="False"/>
@@ -1645,7 +1665,7 @@
         <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
             <field name="name">Home Assistant 完整版</field>
             <field name="slug">ha-full</field>
-            <field name="description">容器版 Home Assistant，整合集完整（911 個設定入口）、28 個內建整合任你挑（不含內建 AI 對話與語音助理），1 vCPU／1 GB RAM／20 GB 磁碟</field>
+            <field name="description">容器版 Home Assistant，整合集完整（911 個設定入口）、28 個內建整合任你挑（不含內建 AI 對話與語音助理），1 vCPU／1 GB RAM／10 GB 磁碟</field>
             <field name="full_description">Home Assistant 完整版雲端服務：採 Home Assistant 官方
                 兩種安裝方式中的 **Container** 方式，跑的是完整的 Home Assistant Core，
                 **整合集完全不做精簡**——911 個具設定入口的官方整合全部保留，可直接在
@@ -1655,7 +1675,7 @@
                 但一律不自動啟用，由你自己挑要用哪些、什麼時候用——不會有任何你沒同意過的
                 裝置或自動化被預先建立。開通後於瀏覽器完成初始設定（建立你自己的管理者帳號）
                 即可使用；平台不持有你的 Home Assistant 帳密。
-                服務附 20 GB 資料磁碟：設定、歷史紀錄，以及你在「媒體」（我的媒體，/media）
+                服務附 10 GB 資料磁碟：設定、歷史紀錄，以及你在「媒體」（我的媒體，/media）
                 上傳或錄製的檔案都保存在這顆磁碟上，重新啟動、暫停後恢復都不會遺失。
                 **本版沒有下列三項功能，購買前請務必確認**（這是 Home Assistant 官方對
                 Container 安裝方式的既有限制，非平台刪減）：**① 沒有 Add-on 商店**
@@ -1713,11 +1733,13 @@
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
                  - persistence.mountPath /config：HA config 目錄固定值，chart 明令不可改。
-                 - persistence.size 20Gi：與 min_storage_gb 齊（quota lockstep，見下）。
+                 - persistence.size 10Gi：與 min_storage_gb 齊（quota lockstep，見下）。
                    2026-10-07 由 10Gi 調為 20Gi（使用者決定，與 pi-agent、code-server 一致；
-                   0.1.6 起 /media 也在這顆磁碟上）。只影響**新開通**：既有服務的 helm_values
-                   是開通當下的快照（仍是 10Gi），Redeploy 只換 image 與下面兩個政策鍵，不會
-                   把 PVC 線上擴容；既有服務要不要擴容另行決定。
+                   0.1.6 起 /media 也在這顆磁碟上）；#1637（使用者 2026-10-10「按需分配，最大
+                   給到 30G」）改回 10Gi：正式站 8 台最多用 0.45G，10Gi 仍有 20 倍餘裕，/media
+                   錄影量大的租戶可另議加購。只影響**新開通**：既有服務的 helm_values
+                   是開通當下的快照（10Gi 或 10-07 之後開的 20Gi），Redeploy 只換 image 與下面
+                   兩個政策鍵，不會動 PVC（不擴也不縮）。
                    ⚠ PVC 只能長大不能縮——縮小會讓整個 `helm upgrade` 被 API server 拒絕。
                  - haProxy.ipBanEnabled false、seed.unlockCoreConfig false：使用者決定不做
                    #1446／#1447（見上方 0.1.6 換版註解）。chart 0.1.6 兩者預設都是 true，所以
@@ -1773,7 +1795,7 @@
                    保留 chart 的 ephemeral-storage。
                  - owner.*／config.sensitive.admin_password：#1442 不做（has_admin_gui=False，
                    平台不送密碼）。 -->
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260923.0804@sha256:3eaf22a5396877b7742a410809709450fc6f925c7e552fbd1bf6977be07598af"},"persistence":{"mountPath":"/config","size":"20Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true,"ipBanEnabled":false},"seed":{"unlockCoreConfig":false},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260923.0804@sha256:3eaf22a5396877b7742a410809709450fc6f925c7e552fbd1bf6977be07598af"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true,"ipBanEnabled":false},"seed":{"unlockCoreConfig":false},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HA 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1789,9 +1811,10 @@
                  皆為 0 → allocated_* 走 fallback 取這三個 min_*（`_allocated_vals_from`）：
                    Σlimits.cpu    = 2    → min_vcpu       = 1  貢獻 3 vCPU
                    Σlimits.memory = 2Gi  → min_ram_gb     = 1.0 貢獻 3Gi
-                   PVC            = 20Gi → min_storage_gb = 20  貢獻 60Gi
-                   （2026-10-07 由 10Gi／10 調為 20Gi／20；只影響新開通——既有服務的
-                   allocated_storage_gb 是開通當下寫入的值，不會因為改這裡而重算）
+                   PVC            = 10Gi → min_storage_gb = 10  貢獻 30Gi
+                   （2026-10-07 由 10Gi／10 調為 20Gi／20，#1637 2026-10-10 改回 10Gi／10；只影響
+                   新開通——既有服務的 allocated_storage_gb 是開通當下寫入的值，不會因為改這裡
+                   而重算）
                  🔴 **min_ram_gb 不可低於 1.0**：填 0.5 只貢獻 1Gi，同 workspace 併存
                  其他服務時 pod 會 `exceeded quota`，而唯一可見症狀是「服務永遠 CF 502」。
                  ⚠ 日後把 limits.memory 調到 3Gi 以上，min_ram_gb 必須同一次調高。
@@ -1799,7 +1822,7 @@
                  不硬編：改 resources／persistence.size 而不同步這裡就會紅）。 -->
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">20</field>
+            <field name="min_storage_gb">10</field>
 
             <!-- MCP 能力不在本 template（HA 的 MCP 生態由 smart_home／mcp-* 系列承擔）。 -->
             <field name="mcp_enabled" eval="False"/>
@@ -1964,7 +1987,7 @@
         <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Omnigent</field>
             <field name="slug">omnigent</field>
-            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。方案 4 vCPU／8 GB RAM（伺服器約 1 vCPU／1 GB，其餘給雲端工作機；單一工作階段最多 3 vCPU／6 GB）／10 GB 磁碟</field>
+            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。方案 4 vCPU／8 GB RAM（伺服器約 1 vCPU／1 GB，其餘給雲端工作機；單一工作階段最多 3 vCPU／6 GB）／5 GB 磁碟</field>
             <field name="full_description">Omnigent 雲端指揮中心：一個網頁管理多種 AI 代理（Claude Code、Codex、pi 等）
                 的工作階段，對話紀錄、設定與上傳檔案保存在你的持久磁碟上。**雲端工作機**：每開一個
                 工作階段，平台自動開一台隔離的工作機。**工作機上的檔案是暫存的**：工作機最長存活
@@ -1992,7 +2015,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261007.0720@sha256:31c83f122e2a2c0854997235ea5163596598933bc4faa4c12f619b3d9407cd4b"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261007.0720@sha256:51880f0edb7e0357f395f88f4bc3c4e1dfc3df06e46cffb55ae6700c1dfd82b2"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261007.0720@sha256:31c83f122e2a2c0854997235ea5163596598933bc4faa4c12f619b3d9407cd4b"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261007.0720@sha256:51880f0edb7e0357f395f88f4bc3c4e1dfc3df06e46cffb55ae6700c1dfd82b2"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},
@@ -2003,7 +2026,10 @@
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">4</field>
             <field name="min_ram_gb">8.0</field>
-            <field name="min_storage_gb">10</field>
+            <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：PVC 10Gi → 5Gi（方案 cs_storage_gb
+                 同步）。/data 只放 SQLite、上傳檔與 cookie secret：正式站一般台約 6MB、最多 0.25G。
+                 既有服務只擴不縮（Redeploy 保留開通時的 10Gi）。 -->
+            <field name="min_storage_gb">5</field>
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
@@ -2068,9 +2094,9 @@
         <record id="cloud_app_code_server" model="woow_paas_platform.cloud_app_template">
             <field name="name">Code Server</field>
             <field name="slug">code-server</field>
-            <field name="description">瀏覽器版 VS Code 雲端開發環境：內建 pi 與 Claude Code 兩個 AI 助手、繁體中文介面，程式碼存在你的持久磁碟。2 vCPU／4 GB RAM／25 GB 磁碟</field>
+            <field name="description">瀏覽器版 VS Code 雲端開發環境：內建 pi 與 Claude Code 兩個 AI 助手、繁體中文介面，程式碼存在你的持久磁碟。2 vCPU／4 GB RAM／12 GB 磁碟</field>
             <field name="full_description">Code Server 雲端開發環境：在瀏覽器裡使用完整的 VS Code（code-server），
-                程式碼與設定保存在你的持久磁碟上（工作區 20 GB＋AI 助手資料 5 GB），介面預設繁體中文。
+                程式碼與設定保存在你的持久磁碟上（工作區 10 GB＋AI 助手資料 2 GB），介面預設繁體中文。
                 **內建 AI 助手**：側欄聊天可選 pi 或 Claude Code，終端機也可直接執行 `pi`、`claude`；
                 另附 Claude Code 官方擴充。Claude Code 可用訂閱帳號在終端機 `claude` 登入，或於服務設定
                 填入 Anthropic API Key；也可填 OpenRouter API Key（pi 使用，未填 Anthropic 時 Claude Code
@@ -2086,7 +2112,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"10Gi"},"piData":{"size":"2Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},
@@ -2108,7 +2134,10 @@
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">2</field>
             <field name="min_ram_gb">4.0</field>
-            <field name="min_storage_gb">25</field>
+            <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：工作區 20 → 10Gi、pi-data 5 → 2Gi，
+                 整台 25 → 12Gi（方案 cs_storage_gb 同步）。正式站 2 台最多用 0.17G；開發專案一次可能
+                 幾 G，工作區留 10Gi。既有服務只擴不縮（Redeploy 保留開通時的 20＋5）。 -->
+            <field name="min_storage_gb">12</field>
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">helm_secret</field>
@@ -2161,7 +2190,7 @@
         <record id="cloud_app_emqx" model="woow_paas_platform.cloud_app_template">
             <field name="name">EMQX</field>
             <field name="slug">emqx</field>
-            <field name="description">開源 MQTT 訊息中介（broker）：物聯網裝置的連線與訊息轉送，附網頁管理後台。WebSocket 裝置直接連服務網址，原生 MQTT 對外透過你自己的 ngrok 帳號。1 vCPU／2 GB RAM／12 GB 磁碟</field>
+            <field name="description">開源 MQTT 訊息中介（broker）：物聯網裝置的連線與訊息轉送，附網頁管理後台。WebSocket 裝置直接連服務網址，原生 MQTT 對外透過你自己的 ngrok 帳號。1 vCPU／2 GB RAM／3 GB 磁碟</field>
             <field name="full_description">EMQX 開源版（5.8，Apache-2.0）雲端 MQTT broker：裝置以 MQTT 連進來、訊息由 broker 轉給其他訂閱者，
                 適合環控、感測器、自動化場景。內含網頁管理後台（連線中的裝置、主題、規則、流量）。
                 **帳密**：後台管理員帳號為 admin，密碼由平台在開通時產生並顯示一次，之後由你在後台自行變更——
@@ -2189,13 +2218,16 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"10Gi"},"log":{"size":"2Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"2Gi"},"log":{"size":"1Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">2.0</field>
-            <field name="min_storage_gb">12</field>
+            <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：資料 10 → 2Gi、log 2 → 1Gi，整台
+                 12 → 3Gi。方案 cs_storage_gb 改成整台總量 3（CloudService._PLAN_STORAGE_SPLIT 的 emqx
+                 項：資料＝總量 − log）。正式站實測資料 1.2MB、log 24KB。既有服務只擴不縮。 -->
+            <field name="min_storage_gb">3</field>
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
@@ -2576,7 +2608,7 @@
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
             <field name="slug">litellm</field>
-            <field name="description">OpenAI 相容的 AI 模型閘道：一個 API 端點接上 OpenAI、Anthropic、Google、OpenRouter 等多家模型，用虛擬金鑰分給各應用程式並控管預算與用量，附網頁管理後台與專屬資料庫。1 vCPU／2 GB RAM／10 GB 磁碟</field>
+            <field name="description">OpenAI 相容的 AI 模型閘道：一個 API 端點接上 OpenAI、Anthropic、Google、OpenRouter 等多家模型，用虛擬金鑰分給各應用程式並控管預算與用量，附網頁管理後台與專屬資料庫。1 vCPU／2 GB RAM／5 GB 磁碟</field>
             <field name="full_description">AI 模型閘道（LiteLLM 1.104 開源版）：提供 OpenAI 相容的 API（/v1/chat/completions 等，也支援 Anthropic 格式），
                 後面接 OpenAI、Anthropic、Google、OpenRouter 等上百家模型供應商；用虛擬金鑰分給各個應用程式，可設預算、速率上限與
                 可用模型，並記錄每把金鑰的用量與花費。隨附專屬 PostgreSQL。
@@ -2601,7 +2633,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
             <field name="helm_chart_version">0.3.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261009.1344@sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261009.1344@sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
@@ -2613,7 +2645,10 @@
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">2.0</field>
-            <field name="min_storage_gb">10</field>
+            <!-- #1637（使用者 2026-10-10「按需分配，最大給到 30G」）：唯一一顆（資料庫＋每日備份）10 → 5Gi，
+                 方案 cs_storage_gb 同步。舊 LiteLLM 跑了一個月資料庫只有 70MB；用量明細預設保留 90 天、
+                 chart 備份在剩餘空間低於 15% 時自動跳過。既有服務只擴不縮。 -->
+            <field name="min_storage_gb">5</field>
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">helm_secret</field>
@@ -2670,7 +2705,7 @@
         <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：AI 模型閘道（LiteLLM）</field>
             <field name="slug">mcp-litellm</field>
-            <field name="description">用 MCP 讓 AI agent 查 LiteLLM 模型閘道的用量與花費、管理金鑰／團隊／使用者／模型。出廠唯讀（18 支查詢工具），在管理介面解鎖後才能寫入。1 vCPU／1 GB RAM／5 GB 磁碟</field>
+            <field name="description">用 MCP 讓 AI agent 查 LiteLLM 模型閘道的用量與花費、管理金鑰／團隊／使用者／模型。出廠唯讀（18 支查詢工具），在管理介面解鎖後才能寫入。1 vCPU／1 GB RAM／1 GB 磁碟</field>
             <field name="full_description">讓 Claude、Hermes、pi-agent 等 AI agent 透過 MCP 管理你的
                 LiteLLM AI 模型閘道——查模型、用量與花費、健康狀態，管理虛擬金鑰、團隊、使用者與模型，共 40 支工具。
                 **出廠唯讀**：開通後只提供 18 支查詢工具；要發金鑰、改模型、管團隊與使用者（22 支寫入工具，其中 8 支是刪除、封鎖等
@@ -2689,7 +2724,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:4e31c10acb93e1f888f14cfc012f68b930609e35f0e734330a64abb81bd134d7"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:4e31c10acb93e1f888f14cfc012f68b930609e35f0e734330a64abb81bd134d7"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -2697,7 +2732,7 @@
 
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
@@ -2753,7 +2788,7 @@
         <record id="cloud_app_mcp_nextcloud" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：Nextcloud</field>
             <field name="slug">mcp-nextcloud</field>
-            <field name="description">用 MCP 讓 Claude 等 AI 用戶端讀寫一個 Nextcloud 帳號的檔案、行事曆與待辦。出廠唯讀（5 支讀取工具），寫入與刪除工具要在管理介面逐支開啟。1 vCPU／1 GB RAM／5 GB 磁碟</field>
+            <field name="description">用 MCP 讓 Claude 等 AI 用戶端讀寫一個 Nextcloud 帳號的檔案、行事曆與待辦。出廠唯讀（5 支讀取工具），寫入與刪除工具要在管理介面逐支開啟。1 vCPU／1 GB RAM／1 GB 磁碟</field>
             <field name="full_description">讓 Claude、Hermes、pi-agent 等支援 MCP 的 AI 用戶端，以**一個指定的 Nextcloud 帳號**
                 工作：瀏覽資料夾、讀取檔案內容、查看行事曆與待辦事項；開放後也能建立、改寫、上傳與刪除檔案，共 9 支工具。
                 **出廠唯讀**：開通後只開 5 支讀取工具（列出資料夾、讀取檔案內容、讀取文字檔、列出行事曆、讀取待辦）；
@@ -2778,7 +2813,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:57bfd8a107a53df493be854d6e5dad9edb731b3cd4d9d8411a17691dbea2ef2f"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:57bfd8a107a53df493be854d6e5dad9edb731b3cd4d9d8411a17691dbea2ef2f"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -2786,7 +2821,7 @@
 
             <field name="min_vcpu">1</field>
             <field name="min_ram_gb">1.0</field>
-            <field name="min_storage_gb">5</field>
+            <field name="min_storage_gb">1</field>
 
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>

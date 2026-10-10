@@ -227,10 +227,10 @@ class TestHaFullSeed661(TransactionCase):
 
     # ── chart 固定契約 ───────────────────────────────────────────────────────
     def test_config_mount_path_fixed(self):
-        """HA config 目錄固定 /config（chart 明令不可改）；PVC 20Gi（2026-10-07 由 10Gi 調高）。"""
+        """HA config 目錄固定 /config（chart 明令不可改）；PVC 10Gi（2026-10-07 調 20Gi，#1637 10-10 改回 10Gi）。"""
         persistence = self._values()['persistence']
         self.assertEqual(persistence['mountPath'], '/config')
-        self.assertEqual(persistence['size'], '20Gi')
+        self.assertEqual(persistence['size'], '10Gi')
 
     def test_service_ports_8123(self):
         """service.port／targetPort 固定 8123（＝default_port＝HA 前端埠）。"""

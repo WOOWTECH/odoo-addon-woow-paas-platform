@@ -169,7 +169,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -193,7 +193,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -217,7 +217,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -241,7 +241,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -265,7 +265,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -289,7 +289,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -313,7 +313,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -337,7 +337,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -361,7 +361,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -385,7 +385,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -409,7 +409,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -433,7 +433,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -457,7 +457,7 @@
             <field name="ac_max_access_seats">7</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -481,7 +481,7 @@
             <field name="ac_max_access_seats">7</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">25</field>
             <field name="cs_odoo_workers">3</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -505,7 +505,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -529,7 +529,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -553,7 +553,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -577,7 +577,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -601,7 +601,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -625,7 +625,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -649,7 +649,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -673,7 +673,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -697,7 +697,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -721,7 +721,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -745,7 +745,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -769,7 +769,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -793,7 +793,7 @@
             <field name="ac_max_access_seats">7</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -817,7 +817,7 @@
             <field name="ac_max_access_seats">7</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -841,7 +841,7 @@
             <field name="ac_max_access_seats">8</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -865,7 +865,7 @@
             <field name="ac_max_access_seats">8</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -889,7 +889,7 @@
             <field name="ac_max_access_seats">9</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -913,7 +913,7 @@
             <field name="ac_max_access_seats">9</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -937,7 +937,7 @@
             <field name="ac_max_access_seats">10</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -961,7 +961,7 @@
             <field name="ac_max_access_seats">10</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -985,7 +985,7 @@
             <field name="ac_max_access_seats">11</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1009,7 +1009,7 @@
             <field name="ac_max_access_seats">11</field>
             <field name="cs_vcpu">3</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">30</field>
             <field name="cs_odoo_workers">4</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1033,7 +1033,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">1.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1057,7 +1057,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">1.0</field>
-            <field name="cs_storage_gb">10</field>
+            <field name="cs_storage_gb">5</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1081,7 +1081,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1105,7 +1105,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1129,7 +1129,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1153,7 +1153,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1177,7 +1177,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1201,7 +1201,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">1</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
+            <field name="cs_storage_gb">10</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1225,7 +1225,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1249,7 +1249,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1273,7 +1273,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1297,7 +1297,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1321,7 +1321,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1345,7 +1345,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1369,7 +1369,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1393,7 +1393,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1417,7 +1417,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1441,7 +1441,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1465,7 +1465,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1489,7 +1489,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
+            <field name="cs_storage_gb">15</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1513,7 +1513,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1537,7 +1537,7 @@
             <field name="ac_max_access_seats">1</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1561,7 +1561,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1585,7 +1585,7 @@
             <field name="ac_max_access_seats">2</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1609,7 +1609,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1633,7 +1633,7 @@
             <field name="ac_max_access_seats">3</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1657,7 +1657,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1681,7 +1681,7 @@
             <field name="ac_max_access_seats">4</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1705,7 +1705,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1729,7 +1729,7 @@
             <field name="ac_max_access_seats">5</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1753,7 +1753,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1777,7 +1777,7 @@
             <field name="ac_max_access_seats">6</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1801,7 +1801,7 @@
             <field name="ac_max_access_seats">7</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1825,7 +1825,7 @@
             <field name="ac_max_access_seats">7</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1849,7 +1849,7 @@
             <field name="ac_max_access_seats">8</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1873,7 +1873,7 @@
             <field name="ac_max_access_seats">8</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1897,7 +1897,7 @@
             <field name="ac_max_access_seats">9</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1921,7 +1921,7 @@
             <field name="ac_max_access_seats">9</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1945,7 +1945,7 @@
             <field name="ac_max_access_seats">10</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -1969,7 +1969,7 @@
             <field name="ac_max_access_seats">10</field>
             <field name="cs_vcpu">2</field>
             <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
+            <field name="cs_storage_gb">20</field>
             <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
@@ -5251,10 +5251,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">1</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5275,10 +5271,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">1</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5299,10 +5291,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">2</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5323,10 +5311,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">2</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5347,10 +5331,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">3</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5371,10 +5351,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">3</field>
-            <field name="cs_vcpu">1</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">20</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5395,10 +5371,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">1</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5419,10 +5391,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">1</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5443,10 +5411,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">2</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5467,10 +5431,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">2</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5491,10 +5451,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">3</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5515,10 +5471,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">3</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5539,10 +5491,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">4</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5563,10 +5511,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">4</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5587,10 +5531,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">5</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5611,10 +5551,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">5</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5635,10 +5571,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">6</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5659,10 +5591,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">6</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">2.0</field>
-            <field name="cs_storage_gb">30</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5683,10 +5611,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">1</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5707,10 +5631,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">1</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5731,10 +5651,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">2</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5755,10 +5671,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">2</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5779,10 +5691,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">3</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5803,10 +5711,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">3</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5827,10 +5731,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">4</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5851,10 +5751,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">4</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5875,10 +5771,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">5</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5899,10 +5791,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">5</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5923,10 +5811,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">6</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5947,10 +5831,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">6</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5971,10 +5851,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">7</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -5995,10 +5871,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">7</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -6019,10 +5891,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">8</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -6043,10 +5911,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">8</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -6067,10 +5931,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">9</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -6091,10 +5951,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">9</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -6115,10 +5971,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">10</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 
@@ -6139,10 +5991,6 @@
                    eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
             <field name="service_type">cloud_service</field>
             <field name="ac_max_access_seats">10</field>
-            <field name="cs_vcpu">2</field>
-            <field name="cs_ram_gb">4.0</field>
-            <field name="cs_storage_gb">40</field>
-            <field name="cs_odoo_workers">0</field>
             <field name="storefront_hidden" eval="True"/>
         </record>
 

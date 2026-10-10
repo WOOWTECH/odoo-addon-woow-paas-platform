@@ -53,8 +53,9 @@ N8N_OWNER_WINDOW_MINUTES = 5
 N8N_OWNER_SCAN_STATES = ('initializing', 'error', 'running', 'suspended')
 #: #1415：叢集儲存額度告警。最大可放單顆 volume 的門檻是設定參數（「模組常數＋get_param」，
 #: 卸載清理登記在 hooks.py）：80 GiB 當初依 Nextcloud 資料磁碟 80 GiB 訂定；#1634（2026-10-10）
-#: Nextcloud 改為整台 20G 後，範本最大的單顆 PVC 是 HAOS 64 GiB、方案最大 40 GiB，預設值刻意
-#: 沿用 80（偏早告警；要調低改設定參數即可）；'0' 停用這一項。節點預訂率門檻是常數
+#: Nextcloud 改為整台 20G、#1637（同日「每台上限 30G」）之後，範本最大的單顆 PVC 是 HAOS 30 GiB
+#: （CDI 實建約 31.8 GiB）、方案最大單顆是 pi Coding Agent 20 GiB，預設值刻意沿用 80（偏早告警；
+#: 要調低改設定參數即可）；'0' 停用這一項。節點預訂率門檻是常數
 #: （Longhorn 排程額度＝(磁碟−保留)×over-provisioning%）。
 CLUSTER_STORAGE_MIN_VOLUME_PARAM = 'woow_paas_platform.cluster_storage_alert_min_volume_gib'
 CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT = 80
