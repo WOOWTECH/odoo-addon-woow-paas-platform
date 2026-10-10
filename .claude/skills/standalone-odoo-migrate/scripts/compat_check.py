@@ -3,12 +3,12 @@
 
 用法：
   compat_check.py --inventory inventory-<ns>.json --target image-inventory-<digest>.json \\
-                  [--ci-repo <paas-odoo-ci checkout>] [--json report.json]
+                  [--ci-repo <paas-odoo-ci checkout>] [--accept-diverged a,b] [--json report.json]
 
 輸入：
   --inventory  source/inventory.sh 的輸出（WMO 跑）
   --target     target/image-inventory.sh 的輸出（目標 cloud-odoo image）
-  --ci-repo    paas-odoo-ci 的 checkout（讀 addons/ 與 config/cloud-addons.list）；給了才能分辨
+  --ci-repo    paas-odoo-ci 的 checkout（讀 addons/、addons-cloud/ 與 config/cloud-addons.list）；給了才能分辨
                「只要加進清單」與「要匯入原始碼」
 
 每個 DB 內已安裝的模組歸成一類：
@@ -17,6 +17,8 @@
   NEED_LIST     paas-odoo-ci addons/ 已有原始碼、不在 cloud-addons.list ⇒ 加進清單、重 build image
   NEED_IMPORT   只有來源站有原始碼 ⇒ 匯入 paas-odoo-ci addons/＋加進清單
   DIVERGED      目標（或 paas-odoo-ci）有同名模組但程式碼與來源不同 ⇒ 要人決定用哪一份
+                裁決「用目標／paas-odoo-ci 那份」之後以 --accept-diverged 列出，該模組改照一般規則歸類
+                （OK／SELECT／NEED_LIST），報告另列「已裁決的差異」；版本低於 DB 的仍然阻斷
   BLOCK_DOWNGRADE  可用的程式碼版本低於 DB 內版本（Odoo 不支援降版）
   BLOCK_MISSING    DB 已安裝、但來源與目標都找不到原始碼
 
@@ -59,11 +61,12 @@ def load_ci(ci_repo):
             line = line.strip()
             if line and not line.startswith("#"):
                 listed.add(line)
-    scanned = scan_addons([str(root / "addons")], digest_filter=lambda _d: True)
+    # addons/＝平台 image 也帶；addons-cloud/＝只進 cloud-odoo（客戶站搬進來的 addon 放這裡）
+    scanned = scan_addons([str(root / "addons"), str(root / "addons-cloud")], digest_filter=lambda _d: True)
     return {"modules": scanned["modules"], "listed": listed}
 
 
-def classify(inv, tgt, ci, select_dirs=SELECT_DIRS):
+def classify(inv, tgt, ci, select_dirs=SELECT_DIRS, accepted=frozenset()):
     db_modules = inv["db"]["modules"]
     src = inv["addons"]["modules"]
     tmods = tgt["addons"]["modules"]
@@ -87,7 +90,8 @@ def classify(inv, tgt, ci, select_dirs=SELECT_DIRS):
             row.update(target_dir=t["dir"], target_version=t["version"])
             if too_old(t["version"]):
                 row["status"] = "BLOCK_DOWNGRADE"
-            elif s_custom and (not t.get("digest") or t["digest"]["sha256"] != s["digest"]["sha256"]):
+            elif (s_custom and (not t.get("digest") or t["digest"]["sha256"] != s["digest"]["sha256"])
+                  and name not in accepted):
                 row["status"] = "DIVERGED"
                 row["note"] = ("來源以客製副本覆蓋 core 模組" if not t.get("digest")
                                else "目標 image 內的程式碼與來源不同")
@@ -100,7 +104,7 @@ def classify(inv, tgt, ci, select_dirs=SELECT_DIRS):
             if too_old(c["version"]):
                 row["status"] = "BLOCK_DOWNGRADE"
                 row["note"] = "paas-odoo-ci 的版本低於 DB"
-            elif s_custom and c["digest"]["sha256"] != s["digest"]["sha256"]:
+            elif s_custom and c["digest"]["sha256"] != s["digest"]["sha256"] and name not in accepted:
                 row["status"] = "DIVERGED"
                 row["note"] = "paas-odoo-ci 的程式碼與來源不同"
             else:
@@ -114,6 +118,11 @@ def classify(inv, tgt, ci, select_dirs=SELECT_DIRS):
         else:
             row["status"] = "BLOCK_MISSING"
             row["note"] = ("來源 core 有、目標 core 沒有" if s else "來源與目標都找不到原始碼")
+        other = t or c
+        if (name in accepted and s_custom and other and row["status"] not in BLOCK
+                and (other.get("digest") or {}).get("sha256") != s["digest"]["sha256"]):
+            row["accepted_divergence"] = True
+            row["note"] = "已裁決：用%s那份（與來源站的程式碼不同）" % ("目標 image " if t else " paas-odoo-ci ")
         rows.append(row)
     return rows
 
@@ -238,6 +247,9 @@ def render(report):
            ("目標／ci 版本", "target_version"), ("說明", "note")])
     table("目標 image 已有、服務要勾選（SELECT）", by.get("SELECT", []),
           [("模組", "module"), ("DB 版本", "db_version"), ("目標版本", "target_version")])
+    table("已裁決的差異（--accept-diverged）", [r for r in report["modules"] if r.get("accepted_divergence")],
+          [("模組", "module"), ("歸類", "status"), ("DB 版本", "db_version"), ("來源版本", "source_version"),
+           ("說明", "note")])
     if report["pip_missing"]:
         lines += ["## 目標 image 缺的 python 依賴", ""]
         lines += ["- `%s`（%s；來源套件：%s）" % (m["requirement"], ", ".join(m["modules"]),
@@ -257,6 +269,8 @@ def main(argv=None):
     parser.add_argument("--inventory", required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--ci-repo")
+    parser.add_argument("--accept-diverged", default="",
+                        help="已裁決改用目標／paas-odoo-ci 版本的模組（逗號分隔）")
     parser.add_argument("--json")
     args = parser.parse_args(argv)
     try:
@@ -271,7 +285,8 @@ def main(argv=None):
               file=sys.stderr)
         return 2
     ci = load_ci(args.ci_repo)
-    rows = classify(inv, tgt, ci)
+    accepted = frozenset(m.strip() for m in args.accept_diverged.split(",") if m.strip())
+    rows = classify(inv, tgt, ci, accepted=accepted)
     deps = python_deps(rows, inv, ci)
     pip_missing, source_only = pip_gaps(deps, inv, tgt)
     extra_notes, env_blocks = notes(inv, tgt, doc.get("k8s"))
@@ -284,6 +299,9 @@ def main(argv=None):
         verdict, code = "ACTIONS", 1
     else:
         verdict, code = "READY", 0
+    unused = sorted(accepted - {r["module"] for r in rows if r.get("accepted_divergence")})
+    if unused:
+        extra_notes.insert(0, "--accept-diverged 列了沒有差異（或不存在）的模組：%s" % ", ".join(unused))
     if ci is None and any(r["status"] == "NEED_IMPORT" for r in rows):
         extra_notes.insert(0, "沒給 --ci-repo：NEED_IMPORT 裡可能有 paas-odoo-ci 已經有的 addon")
     report = {
