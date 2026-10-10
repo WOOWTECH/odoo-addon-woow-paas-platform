@@ -52,8 +52,10 @@ N8N_OWNER_WINDOW_MINUTES = 5
 # 晚到的確認）、停權都掃；deleting 不掃。
 N8N_OWNER_SCAN_STATES = ('initializing', 'error', 'running', 'suspended')
 #: #1415：叢集儲存額度告警。最大可放單顆 volume 的門檻是設定參數（「模組常數＋get_param」，
-#: 卸載清理登記在 hooks.py）：平台現有範本最大的單顆 PVC 是 Nextcloud 資料磁碟 80 GiB；'0' 停用
-#: 這一項。節點預訂率門檻是常數（Longhorn 排程額度＝(磁碟−保留)×over-provisioning%）。
+#: 卸載清理登記在 hooks.py）：80 GiB 當初依 Nextcloud 資料磁碟 80 GiB 訂定；#1634（2026-10-10）
+#: Nextcloud 改為整台 20G 後，範本最大的單顆 PVC 是 HAOS 64 GiB、方案最大 40 GiB，預設值刻意
+#: 沿用 80（偏早告警；要調低改設定參數即可）；'0' 停用這一項。節點預訂率門檻是常數
+#: （Longhorn 排程額度＝(磁碟−保留)×over-provisioning%）。
 CLUSTER_STORAGE_MIN_VOLUME_PARAM = 'woow_paas_platform.cluster_storage_alert_min_volume_gib'
 CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT = 80
 CLUSTER_STORAGE_NODE_RATIO_LIMIT = 0.9
@@ -533,7 +535,7 @@ class PlatformMonitor(models.Model):
         """#1415：定時查 operator 的叢集儲存（Longhorn）排程額度，偏低時告警給系統管理員。
 
         條件（任一）：有備援的最大可放單顆 volume ＜ ``CLUSTER_STORAGE_MIN_VOLUME_PARAM``
-        （預設 80 GiB，平台範本最大的單顆磁碟），或任一可排程節點的預訂率 ＞ 90%。告警附各節點
+        （預設 80 GiB，見 ``CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT``），或任一可排程節點的預訂率 ＞ 90%。告警附各節點
         額度與孤兒 PVC 佔用；同 summary 未處理前不重開（``_alert`` 的規則）。
 
         operator 太舊（沒有端點、404）安靜略過；operator 連不上或讀不到 Longhorn 只記 log
