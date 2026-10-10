@@ -43,11 +43,13 @@ class TestFingerprintDiff(unittest.TestCase):
         path.write_text(text)
         return str(path)
 
-    def run_diff(self, dst_fp, stage="restore", src_fs=None, dst_fs=None):
+    def run_diff(self, dst_fp, stage="restore", src_fs=None, dst_fs=None, refs=None):
         args = ["--source-db", self.write("src.fp", SRC_FP), "--target-db", self.write("dst.fp", dst_fp),
                 "--stage", stage]
         if src_fs is not None:
             args += ["--source-fs", self.write("src.fs", src_fs), "--target-fs", self.write("dst.fs", dst_fs)]
+        if refs is not None:
+            args += ["--target-refs", self.write("dst.refs", refs)]
         return fingerprint_diff.main(args)
 
     def test_identical_passes_and_extension_version_is_informational(self):
@@ -105,6 +107,19 @@ class TestFingerprintDiff(unittest.TestCase):
         extra = src_fs + "h3  ef/ef56\n"
         self.assertEqual(self.run_diff(SRC_FP, src_fs=src_fs, dst_fs=extra), 1)
         self.assertEqual(self.run_diff(SRC_FP, stage="upgrade", src_fs=src_fs, dst_fs=extra), 0)
+
+    def test_filestore_upgrade_with_refs(self):
+        src_fs = "h1  ab/ab12\nh2  cd/cd34\n"
+        # 模組附件換了內容：舊檔 cd/cd34 沒人引用、被回收，新檔 ef/ef56 被引用 ⇒ 通過
+        swapped = "h1  ab/ab12\nh3  ef/ef56\n"
+        self.assertEqual(self.run_diff(SRC_FP, stage="upgrade", src_fs=src_fs, dst_fs=swapped, refs="ab/ab12\nef/ef56\n"), 0)
+        # 少掉的檔仍被附件引用 ⇒ 不通過
+        self.assertEqual(self.run_diff(SRC_FP, stage="upgrade", src_fs=src_fs, dst_fs=swapped, refs="ab/ab12\ncd/cd34\n"), 1)
+        # 新附件引用的檔不在 filestore ⇒ 不通過
+        self.assertEqual(self.run_diff(SRC_FP, stage="upgrade", src_fs=src_fs, dst_fs=src_fs, refs="ab/ab12\nzz/zz99\n"), 1)
+        # 沒給 refs：少任何檔都不通過（舊行為）；refs 只能用在 upgrade 階段
+        self.assertEqual(self.run_diff(SRC_FP, stage="upgrade", src_fs=src_fs, dst_fs=swapped), 1)
+        self.assertEqual(self.run_diff(SRC_FP, stage="restore", src_fs=src_fs, dst_fs=src_fs, refs="ab/ab12\n"), 2)
 
 
 if __name__ == "__main__":

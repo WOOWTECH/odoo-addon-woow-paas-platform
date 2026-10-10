@@ -12,7 +12,9 @@
 #   filestore 清單（upgraded.*），取回後跑 fingerprint_diff.py --stage upgrade。判準是客戶資料列：restore Job 留下的
 #   baseline.bfp（還原後、Odoo 啟動前）對 upgraded.bfp——基準當時就存在的客戶資料列必須原封不動；模組資料列被重寫、
 #   啟動後新增的列、registry 表列為預期內。set 裡沒有 baseline.bfp（舊版 restore）時退回整表比對（只容許 metadata 表）。
-# --cleanup：比對通過後刪 incoming PVC（含客戶資料的 dump）。
+#   filestore：同時取目標 DB 仍引用的 store_fname（upgraded.refs）——仍被引用的檔不能少；已無引用而被 Odoo 回收的
+#   來源檔（模組附件換了內容）列為預期內。
+# --cleanup：比對通過後刪跑完的 restore Job 與 incoming PVC（含客戶資料的 dump）。
 # 取回的檔案放 --workdir（預設 ./verify-<set>）；檔案都小（指紋與清單），用 kubectl exec cat 取回不會撞截斷。
 # exit：0 通過、1 不通過、2 參數或前置條件不符、3 pod 失敗
 set -euo pipefail
@@ -84,12 +86,17 @@ jq -n --arg pod "$POD" --arg image "$pg_image" --argjson ps "$pull_secrets" --ar
 
 S=/incoming/$SET
 if [[ $STAGE == upgrade ]]; then
+  # 平台租戶 ns 有 baseline NetworkPolicy，新 pod 的規則約 1 秒後才生效，立刻連 PG 會被拒（stg 實測）⇒ 先等到連得上
   "${K[@]}" exec "$POD" -- bash -c "set -euo pipefail; export LC_ALL=C
+    for _i in \$(seq 1 60); do pg_isready -q -h '$RELEASE-postgresql' -t 2 && break; sleep 1; done
+    pg_isready -q -h '$RELEASE-postgresql' -t 2 || { echo 'cannot reach $RELEASE-postgresql:5432' >&2; exit 1; }
     psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 -f /opt/verify/fingerprint.sql > $S/upgraded.fp
     if [[ -s $S/baseline.bfp ]]; then
       BFP_BASELINE=$S/baseline.bfp psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 -v baseline=1 \
         -f /opt/verify/fingerprint_business.sql > $S/upgraded.bfp
     fi
+    psql -h '$RELEASE-postgresql' -U postgres -d '$db' -X -q -tA -v ON_ERROR_STOP=1 \
+      -c 'SELECT DISTINCT store_fname FROM ir_attachment WHERE store_fname IS NOT NULL ORDER BY 1' > $S/upgraded.refs
     cd /var/lib/odoo/filestore/'$db' && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum > $S/upgraded.fs" \
     || die 3 "fingerprint in verify pod failed"
   tgt=upgraded
@@ -101,11 +108,13 @@ for f in source.fp source.fs "$tgt.fp" "$tgt.fs"; do
 done
 business=()
 if [[ $STAGE == upgrade ]]; then
+  "${K[@]}" exec "$POD" -- cat "$S/upgraded.refs" > "$WORKDIR/upgraded.refs" || die 3 "cannot read $S/upgraded.refs"
+  business+=(--target-refs "$WORKDIR/upgraded.refs")
   if "${K[@]}" exec "$POD" -- test -s "$S/upgraded.bfp"; then
     for f in baseline.bfp upgraded.bfp; do
       "${K[@]}" exec "$POD" -- cat "$S/$f" > "$WORKDIR/$f" || die 3 "cannot read $S/$f"
     done
-    business=(--source-business "$WORKDIR/baseline.bfp" --target-business "$WORKDIR/upgraded.bfp")
+    business+=(--source-business "$WORKDIR/baseline.bfp" --target-business "$WORKDIR/upgraded.bfp")
   else
     echo "note: $S/baseline.bfp missing — falling back to whole-table comparison" >&2
   fi
@@ -120,6 +129,9 @@ python3 "$SCRIPT_DIR/../fingerprint_diff.py" --stage "$STAGE" \
 if (( rc == 0 && CLEANUP )); then
   cleanup_pod
   "${K[@]}" wait --for=delete "pod/$POD" --timeout=120s >/dev/null 2>&1 || true
+  # 跑完的 restore Job（ttl 一天）的 pod 還掛著 incoming PVC，不先刪掉 PVC 會一直卡在 Terminating（stg 實測）
+  "${K[@]}" delete job -l app.kubernetes.io/part-of=standalone-odoo-migrate,app.kubernetes.io/component=restore \
+    --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
   "${K[@]}" delete pvc "$PVC" --wait=false >/dev/null && echo "incoming PVC $PVC deleted" >&2
 fi
 exit "$rc"

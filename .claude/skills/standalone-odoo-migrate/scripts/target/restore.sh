@@ -10,7 +10,7 @@
 #   release R 的 odoo web 已經 0 副本（升級閘、bootstrap 都在 web pod 的 initContainer，web 停了才能安全換 DB）。
 #   平台服務怎麼停到 0 副本見 SKILL.md；dev 沙盒直接 kubectl scale。
 # Job：image＝R-postgresql 的 image，掛 incoming PVC 與 R-data，跑 restore-in-pod.sh——完整性、建庫（locale 取來源）、
-#   pg_restore、filestore、指紋逐位元比對，一致才預寫 upgrade_done marker。
+#   pg_restore、filestore、指紋逐位元比對，一致才預寫 upgrade_done 與 tenant_localized 兩個 marker。
 #   --replace-db：允許 DROP chart 首裝建的空庫（平台買服務時一定先有一個）。
 #   --no-marker：只還原＋比對，不寫 marker（odoo 開機時升級閘會 exit 3）。
 # incoming PVC 保留（升級後的指紋比對要用 source.fp／source.fs），由 verify.sh --stage upgrade --cleanup 刪除。印出 Job log 尾段。
