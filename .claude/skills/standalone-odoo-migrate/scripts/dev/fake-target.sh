@@ -19,7 +19,7 @@ CHARTS_REPO=${CHARTS_REPO:-$HOME/woow-repos/paas/woow-paas-charts}
 CMD=${1:-}; shift || true
 SLUG=${1:-}; shift || true
 CTX="" RELEASE=migtest CHART_REF=origin/main ADDONS=""
-IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/cloud-odoo:20261002.0402@sha256:69aa54941462b5eb0e6c36541a55c4db27ea153af71e8e2937152e151d21a6bb"
+IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/cloud-odoo:20261010.1604@sha256:c0c849aac39773ba13dc81ed781da8d7622780a296c2d94affdafe164f5743dc"
 PULL_FROM=paas-ws-stg-4360e1f5/paas-registry
 while [[ $# -gt 0 ]]; do
   case $1 in
