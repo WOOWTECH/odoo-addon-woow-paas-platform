@@ -4,8 +4,12 @@
 全欄 default 0＝「本 plan 未定義規格」→ 部署碼 fallback template.min_*，
 既有 plan 行為零變。
 """
+import logging
+
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
+
+_logger = logging.getLogger(__name__)
 
 
 class ShSubscriptionPlanCsSpec(models.Model):
@@ -80,6 +84,35 @@ class ShSubscriptionPlanCsSpec(models.Model):
         兩側各自釘住同一組值。
         """
         self._woow_write_cs_spec(self._CS_SPEC_HERMES_431)
+
+    # #1634（使用者 2026-10-10）：Nextcloud 整台磁碟 96 → 20G；方案 cs_storage_gb 由「使用者
+    # 檔案 80」改成「整台總量 20」（CloudService._overlay_plan_storage 再扣掉固定開銷）。
+    # (舊 seed 值, 新值)；與 subscription_products.xml 同源兩份手寫，test_nextcloud_storage_20g_1634
+    # 兩側各自釘住。
+    _NEXTCLOUD_STORAGE_1634 = {
+        'plan_nextcloud_monthly': (80, 20),
+        'plan_nextcloud_yearly': (80, 20),
+    }
+
+    def _woow_migrate_nextcloud_storage_1634(self):
+        """#1634 升級軌：兩個 Nextcloud 方案 ``cs_storage_gb`` 80 → 20（xmlid 定位、冪等）。
+
+        seed（subscription_products.xml）是 noupdate=1，既有 DB 只能靠本 method。只改仍是
+        舊 seed 值的方案——後台手調過的不覆蓋、只 log。價格與 vCPU／RAM 不動。
+        xmlid 不存在（fresh DB 未載 seed）時跳過不炸。
+        """
+        for xmlid, (old, new) in self._NEXTCLOUD_STORAGE_1634.items():
+            plan = self.env.ref(f'woow_paas_platform.{xmlid}',
+                                raise_if_not_found=False)
+            if not plan or plan.cs_storage_gb == new:
+                continue
+            if plan.cs_storage_gb != old:
+                _logger.warning(
+                    "#1634 %s cs_storage_gb=%s 不是舊 seed 值 %s（後台手調過），不覆蓋",
+                    xmlid, plan.cs_storage_gb, old)
+                continue
+            plan.write({'cs_storage_gb': new})
+            _logger.info("#1634 %s cs_storage_gb %s → %s", xmlid, old, new)
 
     def _woow_write_cs_spec(self, spec_by_xmlid):
         """共用 force-write：{xmlid: (vcpu, ram, storage, workers)}。

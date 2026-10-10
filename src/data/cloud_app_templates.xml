@@ -1950,7 +1950,15 @@
              選填 auth.openrouterApiKey／auth.anthropicApiKey（password，只進 runner env Secret；chart 依此
              產生 sandbox.host_config 的 provider 與 pi／Claude Code 模型清單，受管 session 才有模型可用，
              未填時前端顯示中文提示）；登入頁文案改 PaaS 流程；閒置 runner 24 h → 4 h。既有服務
-             要管理員 Redeploy 才會換到 0.1.2（#552：服務釘自己的 chart 版本）。 -->
+             要管理員 Redeploy 才會換到 0.1.2（#552：服務釘自己的 chart 版本）。
+             2026-10-09 換 chart 0.1.7＝上游 omnigent v0.17.0（woow-paas-charts #177；image 由
+             paas-odoo-ci mirror-image.yml #263／#264 原樣鏡像 ghcr v0.17.0，digest 保留）：只換 server
+             與 runner image，chart 模板不變。既有服務仍要管理員 Redeploy 才會換版；Redeploy 的 #1408
+             只刷 {repository, tag} 形式的 image，runner.image 是字串，所以既有服務的 runner.image 由
+             migration 18.0.1.0.224 改成這裡的釘（_woow_migrate_omnigent_runner_image_017）。
+             ⚠ 0.17 開機會跑 alembic mm1a2b3c4d5e（agents 加 index；PostgreSQL 上是 CREATE INDEX
+             CONCURRENTLY，會等所有舊 snapshot 結束）：外接 PostgreSQL 的服務 Redeploy 前先查
+             pg_stat_activity 有沒有長 transaction，或在 0.16 還在跑時先預建同名 index。 -->
         <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Omnigent</field>
             <field name="slug">omnigent</field>
@@ -1981,8 +1989,8 @@
             <field name="documentation_url">https://omnigent-guide.woowtech.io</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
-            <field name="helm_chart_version">0.1.6</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20260929.1400@sha256:ba384bba57cb1f80b28e3cbfab7c58d6ad94f5cd99c3773a86a1987ffe3bf902"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20260929.1400@sha256:558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261007.0720@sha256:31c83f122e2a2c0854997235ea5163596598933bc4faa4c12f619b3d9407cd4b"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261007.0720@sha256:51880f0edb7e0357f395f88f4bc3c4e1dfc3df06e46cffb55ae6700c1dfd82b2"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},
@@ -2207,15 +2215,20 @@
              NetworkPolicy 擋下。test_nextcloud_seed.test_hidden_until_mirror_lands 守線同 EMQX。
              ⚠ 憑證形態 app_managed：NEXTCLOUD_ADMIN_* 只在首次 occ maintenance:install
              時被吃掉，之後密碼活在 Nextcloud 自己的資料庫。
-             ⚠ min_storage_gb=96 ＝ data 80 ＋ html 5 ＋ postgres 10 ＋ redis 1；
-             方案 cs_storage_gb=80 只決定使用者檔案那顆（#332 overlay）。
+             ⚠ 整台磁碟 20G（#1634，使用者 2026-10-10 決定；原 96＝80＋5＋10＋1）：
+             min_storage_gb=20 ＝ data 13 ＋ html 3 ＋ postgres 3 ＋ redis 1。方案 cs_storage_gb=20
+             是整台總量：CloudService._overlay_plan_storage 寫進 persistence.size 的是
+             20 − html − postgres − redis（_PLAN_STORAGE_SPLIT），四顆加總恆等於方案總量。
+             分配依沙盒實測（dev-sandbox-nc20g，chart 0.1.7）：html 用 976M（程式 839M＋Calendar／
+             Contacts／Account migration）→ 3Gi 留升級與租戶自裝 App 的餘裕；PG 3 萬檔後 101M，
+             3Gi 主要留給 WAL（max_wal_size 1GB）；Redis 只放鎖與快取 → 1Gi。
              ⚠ 公開網址由 CloudService._inject_allowed_origins 以 slug `nextcloud` 注入
              nextcloud.publicUrl —— 沒有它 Nextcloud 會以「不信任的網域」拒絕整站。 -->
         <record id="cloud_app_nextcloud" model="woow_paas_platform.cloud_app_template">
             <field name="name">Nextcloud</field>
             <field name="slug">nextcloud</field>
-            <field name="description">自架雲端硬碟與協作空間：檔案同步、分享連結、行事曆與聯絡人，資料存在你的持久磁碟。2 vCPU／4 GB RAM／96 GB 磁碟</field>
-            <field name="full_description">Nextcloud 雲端硬碟：瀏覽器與桌面／手機客戶端皆可用，檔案存在你自己的持久磁碟（使用者資料 80 GB），
+            <field name="description">自架雲端硬碟與協作空間：檔案同步、分享連結、行事曆與聯絡人，資料存在你的持久磁碟。2 vCPU／4 GB RAM／20 GB 磁碟（含使用者檔案 13 GB）</field>
+            <field name="full_description">Nextcloud 雲端硬碟：瀏覽器與桌面／手機客戶端皆可用，檔案存在你自己的持久磁碟：整台 20 GB，其中使用者檔案 13 GB，其餘給程式與 App（3 GB）、資料庫（3 GB）和快取（1 GB），
                 內含分享連結、版本歷史、Markdown 線上編輯（Text），並預先安裝行事曆（Calendar）與聯絡人（Contacts）——
                 開通後數分鐘內在背景裝好，可用 CalDAV／CardDAV 與手機同步。可自行從 Nextcloud 應用商店加裝擴充；
                 較大的 App 下載較慢，網頁安裝若逾時請稍後重試。
@@ -2244,13 +2257,13 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"nextcloud":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud","tag":"20261002.0258@sha256:fc04168b172e09d9b9bc7665476a77898634fe2833f0a320366fb9eb0db491db"},"resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}},"redis":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/redis","tag":"20261002.0258@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"},"persistence":{"size":"1Gi"}},"postgresql":{"persistence":{"size":"10Gi"}},"persistence":{"html":{"size":"5Gi"},"data":{"size":"80Gi"}},"service":{"port":80,"targetPort":80}}</field>
+            <field name="helm_default_values">{"nextcloud":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud","tag":"20261002.0258@sha256:fc04168b172e09d9b9bc7665476a77898634fe2833f0a320366fb9eb0db491db"},"resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}},"redis":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/redis","tag":"20261002.0258@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"},"persistence":{"size":"1Gi"}},"postgresql":{"persistence":{"size":"3Gi"}},"persistence":{"html":{"size":"3Gi"},"data":{"size":"13Gi"}},"service":{"port":80,"targetPort":80}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "nextcloud.phpMemoryLimit", "label": "PHP 記憶體上限", "type": "select", "default": "512M", "options": ["512M", "1G", "2G"], "description": "大量縮圖或線上文件編輯時可調高；不得超過方案的記憶體規格"}]}</field>
             <field name="default_port">80</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">2</field>
             <field name="min_ram_gb">4.0</field>
-            <field name="min_storage_gb">96</field>
+            <field name="min_storage_gb">20</field>
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
