@@ -52,6 +52,15 @@ class TestBrandIconPayload(HttpCase):
         data = self._result('/api/billing/subscriptions/%s' % self.sub.id)
         self.assertEqual([s['template_slug'] for s in data['services']], ['n8n'])
 
+    def _detach(self, svc):
+        """模擬「服務已刪」：controller 判斷的是「有沒有 cloud_service 指向這筆訂閱」。
+        model 層禁止把服務與訂閱解綁（SubscriptionBindingError），測試直接改 DB 欄位，
+        只為造出「訂閱還在、已無服務連到它」的狀態。"""
+        self.env.cr.execute(
+            'UPDATE woow_paas_platform_cloud_service SET subscription_id = NULL WHERE id = %s',
+            [svc.id])
+        svc.invalidate_recordset(['subscription_id'])
+
     def _row(self, sub):
         rows = self._result('/api/billing/subscriptions', '{"filter":"all","limit":50}')
         row = next((r for r in rows if r['id'] == sub.id), None)
@@ -61,7 +70,7 @@ class TestBrandIconPayload(HttpCase):
     def test_plan_template_slug_survives_deleted_service(self):
         """服務刪掉（不再連到訂閱）後，仍可從方案反查模板代碼。"""
         self.assertEqual(self._row(self.sub)['plan_template_slug'], 'n8n')
-        self.svc.sudo().write({'subscription_id': False})
+        self._detach(self.svc)
         row = self._row(self.sub)
         self.assertIsNone(row['service_template_slug'], '已無連到的服務')
         self.assertEqual(row['plan_template_slug'], 'n8n')
@@ -76,11 +85,10 @@ class TestBrandIconPayload(HttpCase):
         svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': self.ws.id, 'template_id': tpl.id,
             'name': 'brand-ha-full', 'reference_id': 'test-brand-icon-ha-ref',
-            'state': 'running', 'subdomain': 'brand-icon-ha-test',
-            'provision_partner_id': self.partner.id})
+            'state': 'running', 'subdomain': 'brand-icon-ha-test'})
         svc._create_and_confirm_subscription(self.partner, plan)
         sub = svc.subscription_id
-        svc.sudo().write({'subscription_id': False})
+        self._detach(svc)
         self.assertEqual(self._row(sub)['plan_template_slug'], 'ha-full')
 
     def test_cross_user_cannot_see_plan_template_slug(self):
