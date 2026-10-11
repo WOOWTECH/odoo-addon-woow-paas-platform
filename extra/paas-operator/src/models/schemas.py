@@ -262,6 +262,22 @@ class RestampLabelsRequest(BaseModel):
     reach_workspace_ids: List[int] = Field(default_factory=list)
 
 
+class TunnelBareCreateRequest(BaseModel):
+    """Prototype: create only; no token, ingress, DNS or Access mutation."""
+
+    model_config = {"extra": "forbid"}
+    name: str = Field(..., min_length=1, max_length=100)
+    expected_account_id: str = Field(..., min_length=1, max_length=128)
+
+
+class TunnelBareCreateResponse(BaseModel):
+    """Non-secret anchor returned immediately after provider create."""
+
+    tunnel_id: str
+    tunnel_name: str
+    provider_account_id: str
+
+
 class TunnelCreateRequest(BaseModel):
     """Request to create a new dedicated Cloudflare Tunnel."""
 
