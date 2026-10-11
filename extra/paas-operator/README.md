@@ -66,6 +66,8 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 
 - `POST /api/namespaces` - Create namespace with resource quota
 - `POST /api/namespaces/{name}/baseline-netpol` - Idempotent backfill of the tenant baseline on an existing workspace namespace (#279 P5): the four ingress NetworkPolicies, the managed labels and — when their switches are on — the #1441 egress baseline and Pod Security labels (below).
+- `PUT /api/namespaces/{name}/quota` - (#278) Overwrite the namespace ResourceQuota as a whole (`cpu_limit` / `memory_limit` / `storage_limit`, optional `ephemeral_storage_*`); the platform recomputes the values from the workspace's live services and pushes them.
+- `GET /api/namespaces/{name}/quota` - (#1647) Read-only: the ResourceQuota `hard` / `used` of the namespace, i.e. how much of the quota is reserved (declared requests / limits and PVC sizes), not live usage. Always `200`: `available: true` with `resources` keyed by the k8s resource name (`limits.cpu`, `limits.memory`, `requests.storage`, `persistentvolumeclaims`, …; each `{hard, used, hard_value, used_value, unit, ratio, quota}`, the tightest quota wins when several declare the same resource), or `available: false` with `reason` `quota_not_found` (no unscoped ResourceQuota — a missing namespace looks the same) / `quota_unreadable` (kubectl failed or timed out). `400` only for a namespace outside the allowed prefix. An operator older than this endpoint answers the GET with `405` (the path exists for `PUT` only).
 
 #### Workspace = its own LAN (#1441 / #1436 / #514)
 
