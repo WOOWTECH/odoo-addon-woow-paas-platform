@@ -92,6 +92,17 @@ class ReleaseUpgradeRequest(BaseModel):
     reuse_values: bool = Field(
         default=True, description="Reuse last release values"
     )
+    check_compute_quota: bool = Field(
+        default=False,
+        description="#1647: also refuse (409 workspace_compute_quota_exceeded) when the "
+        "release's pods would certainly not fit the namespace ResourceQuota after the "
+        "upgrade. Opt-in per request; absent (older platform) = no check",
+    )
+    pending_quota: Optional["NamespaceQuotaUpdateRequest"] = Field(
+        default=None,
+        description="#1647: quota the platform will push right after this check (plan change). "
+        "Only honoured by upgrade-preflight; PATCH ignores it.",
+    )
 
 
 #: #1433：``preserve_value_paths`` 每一條的合法形態——點分式、每段是 values 鍵名。
@@ -128,6 +139,12 @@ class ReleaseRollbackRequest(BaseModel):
         description="#1433: dot-paths whose CURRENT values must survive the rollback "
         "(e.g. config.sensitive, auth.username). A path absent from the current values "
         "is removed from the target values as well — current state wins, including absence.",
+    )
+    check_compute_quota: bool = Field(
+        default=False,
+        description="#1647: same opt-in check as ReleaseUpgradeRequest.check_compute_quota. "
+        "Only effective with preserve_value_paths (that rollback is a helm upgrade); a plain "
+        "helm rollback is not checked",
     )
 
     @field_validator("preserve_value_paths")
@@ -240,6 +257,10 @@ class NamespaceQuotaUpdateRequest(BaseModel):
         default=None, description="#1434: requests.ephemeral-storage, e.g. 4Gi")
     ephemeral_storage_limit: Optional[str] = Field(
         default=None, description="#1434: limits.ephemeral-storage, e.g. 80Gi")
+
+
+# #1647：``ReleaseUpgradeRequest.pending_quota`` 以字串前向參照上面這個 model。
+ReleaseUpgradeRequest.model_rebuild()
 
 
 class BaselineNetpolBackfillRequest(BaseModel):
