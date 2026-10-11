@@ -20,6 +20,8 @@ import os
 import re
 from unittest.mock import MagicMock, call, patch
 
+from lxml import etree
+
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, tagged
 from odoo.tools.translate import PoFileReader
@@ -874,6 +876,13 @@ def _js_code(source):
     return _JS_COMMENT_RE.sub('', source)
 
 
+def _template_nodes(xml_text, xpath):
+    """OWL template 檔裡符合 ``xpath`` 的元素。註解不算節點（說明文字裡提到的 tag 不算數，
+    元素的「下一個兄弟」也不會是一段註解）。"""
+    parser = etree.XMLParser(remove_comments=True)
+    return etree.fromstring(xml_text.encode('utf-8'), parser).xpath(xpath)
+
+
 # OverviewTab 的 workspaceQuotaHint：getter 本體只有一句單行 _t()。
 _OVERVIEW_HINT_RE = re.compile(
     r'get workspaceQuotaHint\(\)\s*\{\s*return _t\("((?:[^"\\]|\\.)*)"\);')
@@ -1053,6 +1062,39 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         self.assertIn('share one overall CPU, memory and disk quota', sentence)
         self.assertNotIn('workspace page', sentence)
         self.assertNotIn('current usage', sentence)
+
+    def test_overview_hint_spacing_is_scoped_to_the_resource_grid(self):
+        """瀏覽器實走：說明句頂著上方三格的下緣（0px），卡片底部又比其他卡多出一段。
+
+        間距只下在「緊接在 .o_woow_resource_grid 後面的 .o_woow_hint」。.o_woow_hint 本身
+        在對話框、保留資料區等處共用，那條規則不可以帶 margin。
+        """
+        hints = _template_nodes(_read('pages', 'service', 'tabs', 'OverviewTab.xml'),
+                                '//p[@t-esc="workspaceQuotaHint"]')
+        self.assertEqual(len(hints), 1)
+        hint = hints[0]
+        self.assertEqual(hint.get('class'), 'o_woow_hint')
+        # 相鄰選擇器靠的就是這個位置：說明句的上一個兄弟元素是那三格。
+        grid = hint.getprevious()
+        self.assertIsNotNone(grid, '說明句前面沒有兄弟元素了')
+        self.assertEqual((grid.tag, grid.get('class')), ('div', 'o_woow_resource_grid'))
+
+        scss = _read('pages', 'service', 'ServiceDetailPage.scss')
+        scoped = re.search(
+            r'^\.o_woow_resource_grid \+ \.o_woow_hint \{\n([^{}]*)\}', scss, re.M)
+        self.assertIsNotNone(
+            scoped, 'ServiceDetailPage.scss 找不到 .o_woow_resource_grid + .o_woow_hint')
+        margin = re.search(r'^\s*margin:\s*([^;]+);\s*$', scoped.group(1), re.M)
+        self.assertIsNotNone(margin, '用 margin 簡寫：補上邊距，同時蓋掉 p 預設的下邊距')
+        values = margin.group(1).split()
+        top, bottom = values[0], values[2] if len(values) >= 3 else values[0]
+        zero = r'^0[a-z%]*$'
+        self.assertNotRegex(top, zero, '上邊距是 0 的話文字會頂著格子')
+        self.assertRegex(bottom, zero, '卡片本身已有 padding，句子下方不再留邊距')
+        # 共用的那條規則沒有被順手加上 margin。
+        shared = re.search(r'^\.o_woow_hint \{\n([^{}]*)\}', scss, re.M)
+        self.assertIsNotNone(shared)
+        self.assertNotIn('margin', shared.group(1))
 
     def test_follow_up_reload_is_one_shot_not_polling(self):
         """review display-B1：讀到資料後只補讀**一次**——不是輪詢。
