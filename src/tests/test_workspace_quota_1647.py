@@ -7,10 +7,11 @@
 * **換算**（``services/workspace_quota.build_view``）：CPU／記憶體看 ``limits.*``、磁碟看
   ``requests.storage``；bytes → GB 以 1024³；等級與百分比只由 hard／used 算（不採用
   operator 的 ``ratio``）；垃圾輸入不 raise。
-* **端點**（``POST /api/workspaces/<id>/quota``）：工作區任何成員都能看；非成員拿到與
-  服務清單同一句錯誤，而且 operator **一次都不會被呼叫**；送給 operator 的 namespace 是
-  伺服器由 ``ws_hash`` 推導的；沒有服務、只有隱藏實例、舊 namespace、operator 未設定、
-  operator 太舊、operator 失敗各有自己的 reason；端點不寫任何 record。
+* **端點**（``POST /api/workspaces/<id>/quota``）：工作區任何成員都能看（含 Portal 帳號——
+  真實租戶的帳號類型）；非成員拿到與服務清單同一句錯誤，而且 operator **一次都不會被
+  呼叫**；送給 operator 的 namespace 是伺服器由 ``ws_hash`` 推導的；沒有服務、只有隱藏
+  實例、舊 namespace、operator 未設定、operator 太舊、operator 失敗各有自己的 reason；
+  端點不寫任何 record。
 * **client**：``get_namespace_quota`` 的路徑與逾時；三層逾時維持階梯（前端 ＞ 平台 ＞
   ``DEFAULT_TIMEOUT`` 以下）。
 * **前端**（靜態讀檔）：面板有掛上工作區頁、等級讀後端欄位、文案都有 zh_TW。
@@ -19,6 +20,7 @@ import os
 import re
 from unittest.mock import MagicMock, call, patch
 
+from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, tagged
 from odoo.tools.translate import PoFileReader
 
@@ -450,6 +452,21 @@ class _Fixture(TransactionCase):
         })
         return user
 
+    def _portal_user(self, login, role=None):
+        """Portal 帳號（真實租戶的帳號類型，#1528）；給 ``role`` 就加入本工作區。"""
+        user = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': login, 'login': login, 'email': '%s@example.invalid' % login,
+            'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])],
+        })
+        # 鑑別力前提：帳號類型真的如名字所說（capability 以 ``share`` 分流）。
+        self.assertTrue(user.share)
+        self.assertFalse(user.has_group('base.group_user'))
+        if role:
+            self.env['woow_paas_platform.workspace_access'].create({
+                'workspace_id': self.workspace.id, 'user_id': user.id, 'role': role,
+            })
+        return user
+
     def _service(self, name='quota-1647', template=None, **extra):
         vals = {
             'name': name,
@@ -497,6 +514,47 @@ class TestWorkspaceQuotaEndpoint1647(_Fixture):
             self.assertIs(result['success'], True, user.login)
             self.assertIs(result['data']['available'], True, user.login)
             client.get_namespace_quota.assert_called_once_with(self.namespace)
+
+    def test_portal_members_can_read(self):
+        """review display-B7：真實租戶都是 Portal 帳號，Portal 成員一樣看得到配額。
+
+        Portal 對 cloud_service 沒有 ACL。端點查「這個工作區有沒有租戶看得到的服務」用的
+        是 capability 回傳的 workspace 的 env（Portal 時是 sudo 過的）；若有人把它改成
+        ``request.env[...]``，Portal 成員會直接 AccessError、面板變成「暫時無法取得」，
+        而全是 internal 帳號的測試不會紅——這一條就是守那個。
+        """
+        self._service()
+        for role in (ROLE_USER, ROLE_GUEST):
+            portal = self._portal_user('quota-1647-portal-%s' % role, role)
+            # 鑑別力前提：以 Portal 自己的權限查不了 cloud_service。
+            with self.assertRaises(AccessError):
+                self.Service.with_user(portal).search_count(
+                    [('workspace_id', '=', self.workspace.id)])
+            result, client, factory = self._call(portal)
+            self.assertIs(result['success'], True, role)
+            self.assertIs(result['data']['available'], True, role)
+            self.assertEqual([c['key'] for c in result['data']['resources']],
+                             ['cpu', 'memory', 'storage'], role)
+            self.assertEqual(client.method_calls,
+                             [call.get_namespace_quota(self.namespace)], role)
+            factory.assert_called_once()
+
+    def test_portal_member_of_an_empty_workspace_is_no_namespace(self):
+        """Portal 成員走「沒有服務」那條路徑也不會撞 ACL，而且不碰 operator。"""
+        portal = self._portal_user('quota-1647-portal-empty', ROLE_USER)
+        result, client, factory = self._call(portal)
+        self.assertEqual(
+            result, {'success': True, 'data': workspace_quota.unavailable('no_namespace')})
+        factory.assert_not_called()
+        self.assertEqual(client.mock_calls, [])
+
+    def test_portal_non_member_gets_nothing_and_operator_is_never_called(self):
+        self._service()
+        portal = self._portal_user('quota-1647-portal-outsider')
+        result, client, factory = self._call(portal)
+        self.assertEqual(result, {'success': False, 'error': NOT_FOUND})
+        factory.assert_not_called()
+        self.assertEqual(client.mock_calls, [])
 
     def test_non_member_gets_nothing_and_operator_is_never_called(self):
         self._service()
