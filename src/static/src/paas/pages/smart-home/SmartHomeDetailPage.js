@@ -380,9 +380,8 @@ export class SmartHomeDetailPage extends Component {
             this.props.homeId
         );
         if (result.success) {
-            // 端點成功不代表開通成功：operator 失敗時後端把記錄落 `error` ＋
-            // `error_message` 並照樣回 success（controllers/smart_home.py
-            // `_provision_smarthome`）。那一格由常駐錯誤橫幅顯示，這裡只收資料。
+            // success now means setup reached active; failures reload their
+            // persisted state below so retry and error details stay available.
             this.state.home = result.data;
             this.startPollingIfNeeded();
         } else {

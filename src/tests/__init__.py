@@ -1117,3 +1117,7 @@ from . import test_trial_flag_stale_1010
 from . import test_template_disk_cap_1637
 # #1637：方案 overlay 的 CPU／RAM（limits＝方案、requests 取比例；code-server／pi-agent／headscale／omnigent 死鍵；管理員手調不覆寫）。
 from . import test_plan_overlay_resources_1637
+
+from . import test_oauth_scope_http_20261011
+
+from . import test_workspace_route_identity_20261011

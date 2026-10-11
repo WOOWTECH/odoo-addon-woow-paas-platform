@@ -309,6 +309,25 @@ class OAuth2Controller(Controller):
                 params['state'] = state
             return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
 
+        # Revalidate at the code-issuance boundary: callers can POST without
+        # visiting GET, and the client's allowed scopes may have changed since
+        # the consent page was rendered.
+        requested_scopes = scope.split() if scope else []
+        allowed_scopes = client.get_allowed_scopes()
+        invalid_scopes = [s for s in requested_scopes if s not in allowed_scopes]
+        if invalid_scopes:
+            params = {
+                'error': 'invalid_scope',
+                'error_description': _('Invalid scope(s): %(scopes)s',
+                                       scopes=', '.join(invalid_scopes)),
+            }
+            if state:
+                params['state'] = state
+            return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
+        if not requested_scopes:
+            requested_scopes = sorted(allowed_scopes)
+        scope = ' '.join(requested_scopes)
+
         # User approved - generate authorization code
         now = http.request.env.cr.now()
         code = secrets.token_urlsafe(32)

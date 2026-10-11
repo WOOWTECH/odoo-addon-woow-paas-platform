@@ -168,7 +168,7 @@ export class CreateSmartHomeModal extends Component {
             this.state.error = provisionResult.error || _t("Provisioning failed");
             this.state.provisioning = false;
             // Still notify parent with the created data, even though provisioning failed
-            this.props.onCreated(createResult.data);
+            this.props.onCreated(provisionResult.data || createResult.data);
         }
     }
 }
