@@ -613,6 +613,37 @@ class TestChangePlanComputeQuotaPreflight1647(_ChangePlanFixture, TransactionCas
         alert.assert_called_once()
         self.assertEqual(alert.call_args.args[1:], ('change_plan', _QUOTA_DETAIL))
 
+    def test_malformed_quota_refusal_still_blocks_before_billing(self):
+        """409＋正確的 error_code、``shortfalls`` 不是 list：照樣擋在扣款前，訊息是通用說法。
+
+        實走時這種形狀讓儲存設定的請求丟 ``'int' object is not iterable``；換方案走同一個
+        組字函式，一起守。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
+
+        owner, svc = self._service('q-odd')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        client = self._client()
+        client.upgrade_preflight.side_effect = PaaSOperatorAPIError(
+            message='API error', status_code=409, detail={
+                'error_code': 'workspace_compute_quota_exceeded', 'shortfalls': 5,
+                'consumers': 7})
+        with mute_logger(_CONTROLLER):
+            res = self._change(owner, svc, self.plan_b, client)
+
+        self.assertFalse(res['success'])
+        self.assertEqual(
+            res['error'],
+            'This workspace does not have enough CPU or memory quota for this change. The plan '
+            'was not changed and nothing was charged. The service keeps running with its '
+            'current settings. Please contact support to adjust the workspace quota.')
+        self.assertEqual(
+            res['data'], {'code': 'workspace_compute_quota_exceeded', 'shortfalls': []})
+        self._assert_untouched(svc, old_sub, before)
+        self.assertEqual(svc.state, 'running')
+        client.upgrade_release.assert_not_called()
+        client.update_namespace_quota.assert_not_called()
+
     def test_quota_refusal_records_one_admin_activity(self):
         """不 mock 告警：租戶調不了工作區配額，真的開 activity 給管理員。"""
         Monitor = self.env['woow_paas_platform.platform_monitor']

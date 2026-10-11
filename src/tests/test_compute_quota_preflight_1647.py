@@ -46,7 +46,7 @@ from odoo.addons.woow_paas_platform.services.paas_operator import (
     PaaSOperatorConnectionError,
     PaaSOperatorTimeoutError,
 )
-from ..models.cloud_service import _internal_provision
+from ..models.cloud_service import _internal_provision, _join_sentences
 
 _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SERVICES = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -275,15 +275,94 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
     def test_tenant_message_in_the_requested_language(self):
         self.env['res.lang']._activate_lang('zh_TW')
         message = self.service._compute_quota_error_message(_quota_detail(), lang='zh_TW')
-        self.assertIn('這個工作區的CPU配額不足以套用這次變更', message)
-        self.assertIn('這個服務需要 8 vCPU', message)
-        self.assertIn('工作區上限是 12 vCPU', message)
-        self.assertIn('目前佔用 8 vCPU', message)
-        self.assertIn('還差 4 vCPU', message)
-        self.assertTrue(message.endswith(
-            '沒有套用任何變更，服務仍以原本的設定執行。請聯絡客服調整工作區配額。'), message)
+        self.assertEqual(
+            message,
+            '這個工作區的 CPU 配額不足以套用這次變更：這個服務需要 8 vCPU，工作區上限是 12 vCPU，'
+            '工作區內這個服務以外的用量目前是 8 vCPU（還差 4 vCPU）。'
+            '沒有套用任何變更，服務仍以原本的設定執行。請聯絡客服調整工作區配額。')
         english = self.service._compute_quota_error_message(_quota_detail(), lang='en_US')
         self.assertIn('the service needs 8 vCPU', english)
+
+    def test_traditional_chinese_spacing_and_wording(self):
+        """zh_TW 租戶訊息的三個細節（實走時看到的：「的CPU配額」「。 沒有」「其他 workload」）。
+
+        * 代入的英數資源名（CPU）前後各一個空格，與同句的「8 vCPU」一致；中文資源名不加。
+        * 句與句之間不夾半形空格（英文照舊一個空格）。
+        * 租戶版不留英文術語 workload。那個數字是「這個服務以外」的全部用量，包含平台看不到
+          的元件，所以譯文不說「其他服務」。
+        """
+        self.env['res.lang']._activate_lang('zh_TW')
+        memory = _shortfall('limits.memory', required='8Gi', hard='8Gi', other='1Gi',
+                            short_by='1Gi')
+        rolling = _shortfall(phase='rolling', workload='Deployment/svc-1647-omnigent',
+                             required='2', short_by='2')
+        downgrade_cpu = dict(_quota_detail(_shortfall(
+            phase='rolling', reason='rolling_on_downgrade', required='2', used='8', hard='9',
+            short_by='1')), quota_source='pending')
+        cases = {
+            'steady': (_quota_detail(), 'reconfigure'),
+            'two resources': (_quota_detail(_shortfall(), memory), 'reconfigure'),
+            'rolling': (_quota_detail(rolling), 'rollback'),
+            'change plan': (_quota_detail(), 'change_plan'),
+            'downgrade': (downgrade_cpu, 'change_plan'),
+            'no numbers': (dict(_quota_detail(), shortfalls=[]), 'reconfigure'),
+        }
+        messages = {}
+        for label, (detail, operation) in cases.items():
+            with self.subTest(case=label):
+                message = self.service._compute_quota_error_message(
+                    detail, operation=operation, lang='zh_TW')
+                messages[label] = message
+                self.assertNotIn('workload', message.lower())
+                self.assertNotIn('CPU配額', message)
+                self.assertNotIn('的CPU', message)
+                self.assertNotRegex(message, r'[。：，）] ', '全形標點後面不夾半形空格')
+                self.assertNotIn('  ', message)
+        self.assertIn('這個工作區的 CPU 配額不足以套用這次變更：', messages['steady'])
+        self.assertIn('這個工作區的 CPU 配額不足以套用這次變更：更換服務期間', messages['rolling'])
+        self.assertIn('新方案的 CPU 配額放不下更換中的這個服務：', messages['downgrade'])
+        self.assertIn('這個工作區的 CPU 或記憶體配額不足以套用這次變更。沒有套用任何變更',
+                      messages['no numbers'])
+        self.assertIn('（還差 4 vCPU）。這個工作區的記憶體配額不足以套用這次變更：',
+                      messages['two resources'], '兩句直接相接；中文資源名前後不加空格')
+        self.assertIn('（還差 4 vCPU）。方案沒有變更，也沒有扣款。服務仍以原本的設定執行。',
+                      messages['change plan'])
+        self.assertIn('工作區內這個服務以外的用量目前是 8 vCPU', messages['steady'])
+        queued = self.service.with_context(lang='zh_TW')
+        queued.create_uid.sudo().lang = 'zh_TW'
+        self.assertEqual(
+            queued._queued_redeploy_quota_message(_quota_detail()),
+            '排定的重新部署沒有執行：' + messages['steady'])
+
+    def test_english_sentences_are_still_joined_by_one_space(self):
+        """英文原文與組法不變：句與句之間一個空格，沒有被中文的規則動到。"""
+        memory = _shortfall('limits.memory', required='8Gi', hard='8Gi', other='1Gi',
+                            short_by='1Gi')
+        message = self.service._compute_quota_error_message(
+            _quota_detail(_shortfall(), memory), operation='change_plan', lang='en_US')
+        self.assertEqual(
+            message,
+            'This workspace does not have enough CPU quota for this change: the service needs '
+            '8 vCPU, the workspace limit is 12 vCPU and other workloads in the workspace are '
+            'using 8 vCPU (short by 4 vCPU). '
+            'This workspace does not have enough memory quota for this change: the service '
+            'needs 8 GiB, the workspace limit is 8 GiB and other workloads in the workspace '
+            'are using 1 GiB (short by 1 GiB). '
+            'The plan was not changed and nothing was charged. The service keeps running with '
+            'its current settings. Please contact support to adjust the workspace quota.')
+
+    def test_join_sentences(self):
+        english = ['First sentence (short by 4 vCPU).', 'Second sentence.']
+        self.assertEqual(_join_sentences(english), ' '.join(english))
+        self.assertEqual(_join_sentences(['只有一句。']), '只有一句。')
+        self.assertEqual(_join_sentences([]), '')
+        self.assertEqual(
+            _join_sentences(['這個工作區的CPU配額不足（還差 4 vCPU）。', '請聯絡客服。']),
+            '這個工作區的 CPU 配額不足（還差 4 vCPU）。請聯絡客服。')
+        self.assertEqual(
+            _join_sentences(['新方案的記憶體配額放不下：需要 8 GiB。']),
+            '新方案的記憶體配額放不下：需要 8 GiB。', '已經有空格、或兩邊都是中文的地方不動')
+        self.assertEqual(_join_sentences(['上限是12核', 'next']), '上限是 12 核 next')
 
     def test_rolling_shortfall_explains_the_overlap(self):
         detail = _quota_detail(_shortfall(
@@ -331,6 +410,38 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         message = self.service._compute_quota_error_message(detail)
         self.assertIn('does not have enough CPU or memory quota', message)
         self.assertIn('Nothing was changed', message)
+
+    def test_malformed_shortfalls_and_consumers_count_as_absent(self):
+        """409＋正確的 error_code、但 ``shortfalls``／``consumers`` 的形狀不對：當成沒有。
+
+        實走時 ``shortfalls`` 是數字 ⇒ ``'int' object is not iterable`` 直接顯示在租戶的畫面上。
+        operator 是自家的、形狀有契約測試，這裡守的是「非預期的形狀不變成例外」：租戶看到
+        不帶數字的通用說法，管理員版照樣組得出來。
+        """
+        generic = ('This workspace does not have enough CPU or memory quota for this change. '
+                   'Nothing was changed and the service keeps running with its current '
+                   'settings. Please contact support to adjust the workspace quota.')
+        for value in (5, 0, 7.5, True, 'limits.cpu', {'resource': 'limits.cpu'}, None,
+                      [5, 'x', None, ['nested']]):
+            with self.subTest(value=value):
+                detail = dict(_quota_detail(), shortfalls=value, consumers=value)
+                self.assertEqual(self.service._compute_quota_error_message(detail), generic)
+                self.assertEqual(
+                    self.service._queued_redeploy_quota_message(detail),
+                    'The queued redeploy did not run: ' + generic)
+                admin = self.service._compute_quota_error_message(
+                    detail, audience='admin', operation='redeploy')
+                self.assertIn('The redeploy was stopped before anything was applied', admin)
+                self.assertIn('Largest other consumers: -.', admin)
+                self.assertNotIn('limits.cpu:', admin, '沒有可列的 shortfall 就不列')
+        # 混在裡面的正常項目照用，形狀不對的元素略過。
+        mixed = dict(_quota_detail(), shortfalls=[7, _shortfall(), 'x'],
+                     consumers=[3, {'owner': 'StatefulSet/pg', 'value': '8'}])
+        self.assertIn('the service needs 8 vCPU',
+                      self.service._compute_quota_error_message(mixed))
+        self.assertIn('Largest other consumers: StatefulSet/pg (8).',
+                      self.service._compute_quota_error_message(
+                          mixed, audience='admin', operation='redeploy'))
 
     def _downgrade_detail(self, **numbers):
         """operator 在換方案降級時回的 shortfall：新舊並存放不下、``reason`` 標明是降級。"""
@@ -600,7 +711,7 @@ class TestRedeployComputeQuotaPreflight1647(_Fixture, TransactionCase):
         client.upgrade_release.side_effect = _refused()
         svc = self._run_queued_redeploy(client)
         self.assertIn('排定的重新部署沒有執行：', svc.error_message)
-        self.assertIn('這個工作區的CPU配額不足以套用這次變更', svc.error_message)
+        self.assertIn('這個工作區的 CPU 配額不足以套用這次變更', svc.error_message)
         self.assertIn('還差 4 vCPU', svc.error_message)
         self.assertIn('請聯絡客服調整工作區配額。', svc.error_message)
         self.assertNotIn('刪除', svc.error_message)
@@ -796,6 +907,32 @@ class TestReconfigureComputeQuotaPreflight1647(_Fixture, TransactionCase):
                     client.upgrade_release.call_args.kwargs['check_compute_quota'], False)
 
     @_quiet
+    def test_malformed_refusal_is_still_a_refusal_with_the_generic_message(self):
+        """409＋正確的 error_code、``shortfalls`` 是數字：照樣擋下，租戶看到通用說法而不是例外。"""
+        client = self._client()
+        client.upgrade_preflight.side_effect = _refused(
+            {'error_code': COMPUTE_QUOTA_ERROR_CODE, 'shortfalls': 5, 'consumers': 7})
+        before = self._reload()
+        snapshot = (before.state, before.sudo().helm_values, before.last_upgraded_at)
+
+        result = self._update(client, values={})
+
+        self.assertFalse(result.get('success'), result)
+        self.assertEqual(
+            result['error'],
+            'This workspace does not have enough CPU or memory quota for this change. Nothing '
+            'was changed and the service keeps running with its current settings. Please '
+            'contact support to adjust the workspace quota.')
+        self.assertEqual(result['data'], {'code': COMPUTE_QUOTA_ERROR_CODE, 'shortfalls': []})
+        client.upgrade_release.assert_not_called()
+        after = self._reload()
+        self.assertEqual((after.state, after.sudo().helm_values, after.last_upgraded_at), snapshot)
+        # 管理員照樣收到告警（沒有數字可列）。
+        [activity] = self._alerts()[:1]
+        self.assertIn('id=%s' % self.service.id, activity.note)
+        self.assertIn('reconfigure): ?. Largest other consumers: -.', activity.note)
+
+    @_quiet
     def test_refusal_that_only_shows_up_in_the_background_is_reported(self):
         """後備路徑：同步預檢通過（或沒問到），背景的 PATCH 才被 operator 擋下。"""
         client = self._client()
@@ -848,6 +985,24 @@ class TestRollbackComputeQuotaPreflight1647(_Fixture, TransactionCase):
         self.assertFalse(svc.error_message)
         [activity] = self._alerts()[:1]
         self.assertIn('rollback', activity.note)
+
+    @_quiet
+    def test_malformed_refusal_shows_the_generic_message(self):
+        """409＋正確的 error_code、``shortfalls`` 不是 list：通用說法，不是 Python 例外原文。"""
+        client = self._client()
+        client.rollback_release.side_effect = _refused(
+            {'error_code': COMPUTE_QUOTA_ERROR_CODE, 'shortfalls': 5, 'consumers': 7})
+        result = self._rollback(client)
+        self.assertFalse(result.get('success'), result)
+        self.assertEqual(
+            result['error'],
+            'This workspace does not have enough CPU or memory quota for this change. Nothing '
+            'was changed and the service keeps running with its current settings. Please '
+            'contact support to adjust the workspace quota.')
+        self.assertEqual(result['data'], {'code': COMPUTE_QUOTA_ERROR_CODE, 'shortfalls': []})
+        svc = self._reload()
+        self.assertEqual(svc.state, 'running')
+        self.assertFalse(svc.last_upgraded_at)
 
     @_quiet
     def test_structured_detail_is_not_printed_raw(self):
@@ -1246,7 +1401,6 @@ class TestComputeQuotaTranslations1647(TransactionCase):
                 self.assertEqual(
                     sorted(re.findall(r'%\(\w+\)s', entries.get(src) or '')),
                     sorted(re.findall(r'%\(\w+\)s', src)))
-
 
 # ====================================================================== #
 #  換方案對話框：被擋時錯誤訊息要看得到                                      #

@@ -20715,7 +20715,7 @@ msgstr "以下換方案在扣款與套用之前就被擋下：磁碟無法擴充
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "This workspace does not have enough %(resource)s quota for this change: the service needs %(required)s, the workspace limit is %(hard)s and other workloads in the workspace are using %(other)s (short by %(short)s)."
-msgstr "這個工作區的%(resource)s配額不足以套用這次變更：這個服務需要 %(required)s，工作區上限是 %(hard)s，同工作區的其他 workload 目前佔用 %(other)s（還差 %(short)s）。"
+msgstr "這個工作區的%(resource)s配額不足以套用這次變更：這個服務需要 %(required)s，工作區上限是 %(hard)s，工作區內這個服務以外的用量目前是 %(other)s（還差 %(short)s）。"
 
 #. module: woow_paas_platform
 #. odoo-python

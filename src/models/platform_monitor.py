@@ -39,6 +39,7 @@ from odoo import _, api, fields, models
 from .cloud_service import (
     OBSERVATION_TRANSITION_STATES,
     _COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE,
+    _compute_quota_detail_rows,
 )
 
 _logger = logging.getLogger(__name__)
@@ -537,8 +538,9 @@ class PlatformMonitor(models.Model):
 
         ``operation``：租戶的 ``reconfigure``／``change_plan``／``rollback``，與
         ``queued_redeploy``（管理員登記、由 cron 執行的 Redeploy；管理員當場按的 Redeploy 在
-        對話框就看到數字，不走這裡）。``detail`` 是 operator 409 的 dict。同一台同一個原因
-        反覆被擋時行的內容相同，``_alert`` 不會重複追加。
+        對話框就看到數字，不走這裡）。``detail`` 是 operator 409 的 dict（``shortfalls``／
+        ``consumers`` 形狀不對時當成沒有）。同一台同一個原因反覆被擋時行的內容相同，``_alert``
+        不會重複追加。
         """
         def describe(shortfall):
             text = '%s needs %s / limit %s / other workloads %s / short by %s' % (
@@ -552,10 +554,10 @@ class PlatformMonitor(models.Model):
             return text
 
         shortfalls = '; '.join(
-            describe(s) for s in detail.get('shortfalls') or [] if isinstance(s, dict))
+            describe(s) for s in _compute_quota_detail_rows(detail, 'shortfalls'))
         consumers = ', '.join(
             '%s (%s)' % (c.get('owner'), c.get('value'))
-            for c in detail.get('consumers') or [] if isinstance(c, dict))
+            for c in _compute_quota_detail_rows(detail, 'consumers'))
         line = _(
             '%(name)s (id=%(id)s, namespace %(ns)s, %(operation)s): %(shortfalls)s. Largest '
             'other consumers: %(consumers)s.',

@@ -645,6 +645,46 @@ def _compute_quota_refusal(message, detail):
     error.compute_quota_detail = detail
     return error
 
+
+def _compute_quota_detail_rows(detail, key):
+    """#1647：operator 409 ``detail`` 裡的清單欄位（``shortfalls``／``consumers``）→ dict 的 list。
+
+    只收「list 裡的 dict」。欄位缺席、不是 list（數字、字串、dict）或元素不是 dict，一律當成
+    沒有：訊息退成不帶數字的通用說法。⛔ 不要改回 ``detail.get(key) or []`` 直接迭代——值是
+    數字時那會丟 ``TypeError``，租戶在畫面上看到的就是 Python 例外原文
+    （``'int' object is not iterable``）。
+    """
+    rows = detail.get(key) if isinstance(detail, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+# 中文字與相鄰的英數字之間（不分先後）的位置；``_join_sentences`` 在這裡補一個空格。
+_CJK_LATIN_BOUNDARY = re.compile(
+    r'(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])')
+# 句尾的全形標點：下一句直接接上，中間不夾半形空格。
+_FULLWIDTH_SENTENCE_ENDINGS = ('。', '！', '？', '；', '：', '）', '」')
+
+
+def _join_sentences(sentences):
+    """#1647：把幾句已經翻好的話接成一段（租戶看的配額訊息）。
+
+    * 句與句之間一個半形空格；上一句以全形標點結尾（中文的「。」）時不加。
+    * 中文字與相鄰的英數字之間補一個空格。資源名是代入譯文的（「的%(resource)s配額」），譯文
+      無從得知代入的是「CPU」還是「記憶體」，只能組完之後補——補了才與同一句的「8 vCPU」
+      一致（「這個工作區的 CPU 配額」）。
+
+    英文句子兩條都碰不到，結果與 ``' '.join(sentences)`` 相同。
+    """
+    text = ''
+    for sentence in sentences:
+        if text and not text.endswith(_FULLWIDTH_SENTENCE_ENDINGS):
+            text += ' '
+        text += sentence
+    return _CJK_LATIN_BOUNDARY.sub(' ', text)
+
+
 # age timeout 管轄的狀態。**`initializing` 刻意不在內**，但它**不再是「不計時」**
 # （#1257 Q3 明文取代 #489 的原註解）：post-deploy init 有自己的一組上界，分工是
 # 「時間只管等待、次數只管結果」——
@@ -3611,7 +3651,9 @@ class CloudService(models.Model):
         if not isinstance(detail, dict) or detail.get('error_code') != COMPUTE_QUOTA_ERROR_CODE:
             return None
         env = self.with_context(lang=lang or self.env.lang).env
-        shortfalls = [s for s in detail.get('shortfalls') or [] if isinstance(s, dict)]
+        # 形狀不對的 ``shortfalls``／``consumers``（不是 list、元素不是 dict）當成沒有：訊息退成
+        # 不帶數字的通用說法，不丟例外。
+        shortfalls = _compute_quota_detail_rows(detail, 'shortfalls')
 
         def amount(shortfall, key):
             # operator 的數字都是字串：cpu 以核為單位，其餘 "8Gi"／"512Mi" → "8 GiB"／"512 MiB"。
@@ -3637,7 +3679,7 @@ class CloudService(models.Model):
                     other=amount(shortfall, 'other'), short=amount(shortfall, 'short_by')))
             consumers = ', '.join(
                 '%s (%s)' % (c.get('owner'), c.get('value'))
-                for c in detail.get('consumers') or [] if isinstance(c, dict))
+                for c in _compute_quota_detail_rows(detail, 'consumers'))
             lines.append(env._(
                 'Namespace %(ns)s, ResourceQuota %(quota)s. Largest other consumers: '
                 '%(consumers)s.',
@@ -3718,7 +3760,8 @@ class CloudService(models.Model):
                 parts.append(env._(
                     'Nothing was changed and the service keeps running with its current '
                     'settings. Please contact support to adjust the workspace quota.'))
-        return ' '.join(parts)
+        # 不是 ``' '.join``：中文的句號後面不夾半形空格、代入的「CPU」前後要有空格。
+        return _join_sentences(parts)
 
     def _queued_redeploy_quota_message(self, detail):
         """#1647：排隊的 Redeploy 被 compute 配額預檢擋下時寫進 ``error_message`` 的說明。

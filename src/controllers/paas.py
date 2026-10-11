@@ -42,7 +42,11 @@ from ..services.chart_version import (
     annotate_rollback_floor,
     rollback_floor_violation,
 )
-from ..models.cloud_service import WOOW_ODOO_ADMIN_PASSWORD_PATH, _internal_provision
+from ..models.cloud_service import (
+    WOOW_ODOO_ADMIN_PASSWORD_PATH,
+    _compute_quota_detail_rows,
+    _internal_provision,
+)
 from ..models.cloud_service_renewal import RENEWABLE_SUBSCRIPTION_STATES, RenewalRefused
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
@@ -1497,7 +1501,7 @@ class PaasController(HiddenChainMixin, Controller):
                     'error': service._compute_quota_error_message(
                         detail, operation='change_plan'),
                     'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
-                             'shortfalls': detail.get('shortfalls') or []}}
+                             'shortfalls': _compute_quota_detail_rows(detail, 'shortfalls')}}
         return {'success': False, 'error': _(
             'The service could not be checked for the new plan right now. The plan was not '
             'changed and nothing was charged. Please try again later or contact support.')}
@@ -1542,7 +1546,7 @@ class PaasController(HiddenChainMixin, Controller):
         return {'success': False,
                 'error': service._compute_quota_error_message(detail, operation='reconfigure'),
                 'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
-                         'shortfalls': detail.get('shortfalls') or []}}
+                         'shortfalls': _compute_quota_detail_rows(detail, 'shortfalls')}}
 
     def _skip_trial_invoice_payability(self, service, sub=None):
         """預演 skip-trial 將建立的 invoice，套用 billing 的 replay-safe SSOT。
@@ -5164,7 +5168,8 @@ class PaasController(HiddenChainMixin, Controller):
                         'error': service._compute_quota_error_message(
                             detail, operation='rollback'),
                         'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
-                                 'shortfalls': detail.get('shortfalls') or []}}
+                                 'shortfalls': _compute_quota_detail_rows(
+                                     detail, 'shortfalls')}}
             # dict 形的 detail（例 503 operator_busy）取它的 message，不把整個 dict 印給租戶。
             reason = detail.get('message') if isinstance(detail, dict) else detail
             return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=reason or e.message)}
