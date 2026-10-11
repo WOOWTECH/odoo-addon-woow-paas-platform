@@ -21,6 +21,7 @@ mock namespace（docs/decisions/patterns/unittest-mock-dual-namespace-patch.md�
 頂部 import 的 ``get_paas_operator_client``、model 函式內 import 的同名 helper（來源模組）、
 背景執行緒函式內 import 的 ``PaaSOperatorClient``——各自 patch。
 """
+import contextlib
 import json
 import logging
 import os
@@ -291,6 +292,67 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         self.assertIn('does not have enough CPU or memory quota', message)
         self.assertIn('Nothing was changed', message)
 
+    def _downgrade_detail(self, **numbers):
+        """operator 在換方案降級時回的 shortfall：新舊並存放不下、``reason`` 標明是降級。"""
+        return dict(_quota_detail(_shortfall(
+            'limits.memory', phase='rolling', workload='Deployment/svc-1647-omnigent',
+            reason='rolling_on_downgrade', required='2Gi', used='8Gi', hard='8Gi',
+            short_by='2Gi', other='0Mi', **numbers)), quota_source='pending')
+
+    def test_downgrade_shortfall_does_not_tell_the_tenant_to_delete_services(self):
+        """降到較小方案、更換服務時新舊並存才放不下：原因不是「其他服務佔太多」。
+
+        一般的結尾（停用或刪除不需要的服務、請客服調高配額）對降級是錯的指引——單一服務
+        的工作區沒有東西可刪，而調高配額與降級相反。租戶自己沒有出口：請他聯絡客服。
+        """
+        message = self.service._compute_quota_error_message(
+            self._downgrade_detail(), operation='change_plan')
+        self.assertIn('The memory quota of the new plan cannot hold this service while it is '
+                      'being replaced', message)
+        self.assertIn('needs 2 GiB more on top of the 8 GiB already in use', message)
+        self.assertIn('the workspace limit under the new plan would be 8 GiB', message)
+        self.assertIn('short by 2 GiB', message)
+        self.assertIn('The plan was not changed and nothing was charged. Please contact '
+                      'support to switch to this plan.', message)
+        for wrong in ('Stop or delete services', 'raise the workspace quota',
+                      'does not have enough'):
+            self.assertNotIn(wrong, message)
+        for leaked in (_NAMESPACE, 'ResourceQuota', 'svc-1647-omnigent', 'rolling_on_downgrade'):
+            self.assertNotIn(leaked, message)
+
+    def test_downgrade_message_in_traditional_chinese(self):
+        self.env['res.lang']._activate_lang('zh_TW')
+        message = self.service._compute_quota_error_message(
+            self._downgrade_detail(), operation='change_plan', lang='zh_TW')
+        self.assertIn('新方案的記憶體配額放不下更換中的這個服務', message)
+        self.assertIn('換到新方案後工作區上限會是 8 GiB', message)
+        self.assertIn('還差 2 GiB', message)
+        self.assertIn('方案沒有變更，也沒有扣款。請聯絡客服協助更換到這個方案。', message)
+        self.assertNotIn('請停用或刪除', message)
+
+    def test_downgrade_ending_only_when_every_shortfall_is_a_downgrade(self):
+        """同時還有一筆一般的放不下（其他 workload 佔著）：那一筆的出口仍是釋放資源。"""
+        detail = self._downgrade_detail()
+        detail['shortfalls'].insert(0, _shortfall('limits.cpu'))
+        message = self.service._compute_quota_error_message(detail, operation='change_plan')
+        self.assertIn('does not have enough CPU quota', message)
+        self.assertIn('The memory quota of the new plan cannot hold this service', message)
+        self.assertIn('Stop or delete services you no longer need', message)
+        self.assertNotIn('contact support to switch to this plan', message)
+
+    def test_rolling_shortfall_without_the_reason_keeps_the_ordinary_wording(self):
+        """沒有 ``reason``（上限沒有變小）或 reason 掛在別種 phase 上：照一般的說明。"""
+        plain = self._downgrade_detail()
+        del plain['shortfalls'][0]['reason']
+        message = self.service._compute_quota_error_message(plain, operation='change_plan')
+        self.assertIn('does not have enough memory quota', message)
+        self.assertIn('Stop or delete services you no longer need', message)
+
+        steady = dict(_quota_detail(_shortfall(reason='rolling_on_downgrade')))
+        message = self.service._compute_quota_error_message(steady, operation='change_plan')
+        self.assertIn('does not have enough CPU quota', message)
+        self.assertNotIn('contact support to switch to this plan', message)
+
     def test_change_plan_ending_talks_about_the_charge(self):
         message = self.service._compute_quota_error_message(
             _quota_detail(), operation='change_plan')
@@ -326,7 +388,9 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         self.assertIn('Raise the workspace quota or free resources', message)
 
     def test_admin_message_does_not_name_the_system_parameter(self):
-        """排隊的 redeploy 會把這則訊息寫進租戶看得到的 error_message——開關的名字只進 log。"""
+        """開關的名字只進 log 與 README。排隊的 redeploy 已改寫租戶版（見
+        ``test_queued_redeploy_refusal_shows_the_tenant_message``）；這條是縱深——管理員版
+        萬一又被帶到租戶面前，至少不洩漏平台的設定鍵。"""
         message = self.service._compute_quota_error_message(
             _quota_detail(), audience='admin', operation='redeploy')
         self.assertNotIn('compute_quota_precheck_enabled', message)
@@ -396,6 +460,115 @@ class TestRedeployComputeQuotaPreflight1647(_Fixture, TransactionCase):
         self.assertEqual(
             (svc.state, svc.helm_revision, svc.last_upgraded_at, svc.error_message), before)
         self.assertFalse(self._alerts(), '管理員已經在對話框看到數字，不另發 activity')
+
+    @_quiet
+    def test_refusal_stays_a_plain_user_error_and_carries_the_operator_detail(self):
+        """Odoo 18 的 web client 以例外的**完整類別名稱**挑對話框（``error_dialogs.js`` 只登記
+        ``odoo.exceptions.UserError`` 等幾個名字）：換成 ``UserError`` 的子類，管理員看到的
+        會是帶 traceback 的「Odoo Server Error」。所以型別不變，operator 的 detail 掛在例外上
+        給不該轉述管理員版的呼叫端用。"""
+        client = self._client()
+        client.upgrade_release.side_effect = _refused()
+        try:
+            self._redeploy(client)
+        except UserError as exc:
+            error = exc
+        else:
+            self.fail('前提：Redeploy 被擋下')
+        self.assertIs(type(error), UserError)
+        self.assertEqual(error.compute_quota_detail, _quota_detail())
+
+    @contextlib.contextmanager
+    def _cron_boundaries(self):
+        """``_cron_run_requested_redeploys`` 自己 commit／rollback，而 TransactionCase 的 cursor
+        兩者都不准呼叫 ⇒ 以 savepoint 模擬同樣的邊界：commit 之後的 rollback 回不到更早，
+        rollback 丟掉上一次 commit 之後的寫入（含還沒 flush 的）。"""
+        cr = self.env.cr
+        cr.execute('SAVEPOINT cron_1647')
+
+        def commit():
+            cr.flush()
+            cr.execute('RELEASE SAVEPOINT cron_1647')
+            cr.execute('SAVEPOINT cron_1647')
+
+        def rollback():
+            cr.clear()
+            cr.execute('ROLLBACK TO SAVEPOINT cron_1647')
+
+        with patch.object(cr, 'commit', commit), patch.object(cr, 'rollback', rollback):
+            yield
+        cr.execute('RELEASE SAVEPOINT cron_1647')
+
+    def _run_queued_redeploy(self, client):
+        """管理員在 init lease 期間按了 Redeploy（已登記意圖），lease 結束後由 cron 執行。"""
+        self.service.sudo().write({'init_redeploy_requested': True})
+        with patch(_MODEL_CLIENT, return_value=client), self._cron_boundaries():
+            self.env['woow_paas_platform.cloud_service']._cron_run_requested_redeploys()
+        return self._reload()
+
+    def test_queued_redeploy_refusal_shows_the_tenant_message(self):
+        """排隊的 Redeploy 被擋下時原因寫進 ``error_message``——那一欄租戶在服務頁看得到。
+
+        ``_redeploy`` 的 UserError 是管理員版（namespace、ResourceQuota 名、佔用最多的其他
+        workload）：它只能進 log 與管理員 activity，``error_message`` 要是租戶版。
+        """
+        client = self._client()
+        client.upgrade_release.side_effect = _refused()
+        before = (self.service.state, self.service.helm_revision, self.service.last_upgraded_at)
+        with self.assertLogs(_MODEL, level=logging.ERROR) as captured:
+            svc = self._run_queued_redeploy(client)
+
+        client.upgrade_release.assert_called_once()
+        message = svc.error_message
+        self.assertIn('The queued redeploy did not run:', message)
+        self.assertIn('does not have enough CPU quota', message)
+        self.assertIn('the service needs 8 vCPU', message)
+        self.assertIn('short by 4 vCPU', message)
+        self.assertIn('Nothing was changed and the service keeps running', message)
+        for leaked in (_NAMESPACE, 'Namespace', 'ResourceQuota', '-quota', 'StatefulSet',
+                       'Largest other consumers', 'limits.cpu', 'svc-1647-omnigent',
+                       'compute_quota_precheck_enabled', 'The redeploy was stopped'):
+            self.assertNotIn(leaked, message)
+        self.assertEqual((svc.state, svc.helm_revision, svc.last_upgraded_at), before)
+        self.assertFalse(svc.init_redeploy_requested, '被拒的意圖清掉，不每分鐘重撞')
+
+        # 管理員版沒有消失：在 log 裡……
+        log = '\n'.join(captured.output)
+        self.assertIn('Namespace %s, ResourceQuota %s-quota.' % (_NAMESPACE, _NAMESPACE), log)
+        self.assertIn('StatefulSet/pg (8)', log)
+        # ……也在管理員的 activity 裡（登記意圖的管理員此刻不在對話框前）。
+        activities = self._alerts()
+        self.assertTrue(activities)
+        note = str(activities[0].note)
+        self.assertIn('id=%s' % self.service.id, note)
+        self.assertIn('queued_redeploy', note)
+        self.assertIn(_NAMESPACE, note)
+        self.assertIn('StatefulSet/pg (8)', note)
+
+    @_quiet
+    def test_queued_redeploy_message_is_in_the_creators_language(self):
+        """cron 沒有租戶的語言：整句（含開頭）照服務建立者的語言組。"""
+        self.env['res.lang']._activate_lang('zh_TW')
+        self.service.create_uid.sudo().lang = 'zh_TW'
+        client = self._client()
+        client.upgrade_release.side_effect = _refused()
+        svc = self._run_queued_redeploy(client)
+        self.assertIn('排定的重新部署沒有執行：', svc.error_message)
+        self.assertIn('這個工作區的CPU配額不足以套用這次變更', svc.error_message)
+        self.assertIn('還差 4 vCPU', svc.error_message)
+        self.assertNotIn(_NAMESPACE, svc.error_message)
+
+    @_quiet
+    def test_other_queued_redeploy_refusals_keep_their_message(self):
+        """別種拒絕照舊原樣寫進 error_message，也不開配額告警。"""
+        client = self._client()
+        client.upgrade_release.side_effect = PaaSOperatorAPIError(
+            message='API error', status_code=500, detail='Helm 升級失敗：找不到指定版本的 chart')
+        svc = self._run_queued_redeploy(client)
+        self.assertEqual(
+            svc.error_message,
+            'The queued redeploy did not run: Upgrade failed: Helm 升級失敗：找不到指定版本的 chart')
+        self.assertFalse(self._alerts())
 
     def test_refusal_log_names_the_kill_switch(self):
         """開關的名字不進訊息（上一條），但管理員誤判時要找得到——寫在 log。"""
@@ -677,7 +850,7 @@ class TestComputeQuotaPrecheckSwitch1647(_Fixture, TransactionCase):
         self._suspend()
         self.assertTrue(self.service._compute_quota_check_enabled())
         self.assertFalse(self.service._compute_quota_check_requested())
-        # state 被中途改寫（reconfigure 先寫 upgrading）時仍然算停權中。
+        # state 被改寫成別的值（#482 之前的存量、復權失敗寫成 error…）時仍然算停權中。
         self.service.sudo().write({'state': 'upgrading'})
         self.assertFalse(self.service._compute_quota_check_requested())
 
@@ -844,8 +1017,12 @@ class TestComputeNsQuotaOverrides1647(_Fixture, TransactionCase):
 class TestComputeQuotaAdminAlert1647(_Fixture, TransactionCase):
 
     @_quiet
-    def test_tenant_refusals_open_one_activity_and_then_append(self):
-        """租戶自己調不了配額：告警給管理員。同 summary 未處理前只追加一行，不洗版。"""
+    def test_tenant_refusals_open_one_activity_with_one_line_per_reason(self):
+        """租戶自己調不了配額：告警給管理員。同一台同一個原因只佔一行，不洗版。
+
+        被擋下之後服務的 state 不變，租戶可以立刻再按（或用 RPC 重送）「儲存設定」——每按
+        一次就追加一行的話，同一張 activity 會被同一句話洗成幾百行。
+        """
         self.assertFalse(self._alerts(), '前提：還沒有這張告警')
         client = self._client()
         client.upgrade_preflight.side_effect = _refused()
@@ -862,10 +1039,69 @@ class TestComputeQuotaAdminAlert1647(_Fixture, TransactionCase):
         self.assertIn('StatefulSet/pg (8)', note)
         self.assertIn('rejected before anything was applied or charged', note)
 
+        for _attempt in range(3):
+            self._update(client, values={})
+        again = self._alerts()
+        self.assertEqual(len(again), len(first), '同 summary 未處理前不重建')
+        for activity in again:
+            self.assertEqual(str(activity.note).count(marker), 1,
+                             '同一台、同一個原因連續被擋 3 次仍然只有 1 行')
+        self.assertEqual(client.upgrade_preflight.call_count, 4, '前提：四次都真的被擋下')
+
+        # 原因變了（差的數字不同）才是新的一行。
+        client.upgrade_preflight.side_effect = _refused(
+            _quota_detail(_shortfall(required='10', short_by='6')))
         self._update(client, values={})
-        second = self._alerts()
-        self.assertEqual(len(second), len(first), '同 summary 未處理前不重建')
-        self.assertEqual(str(second[0].note).count(marker), 2, '第二次只追加一行')
+        changed = str(self._alerts()[0].note)
+        self.assertEqual(changed.count(marker), 2)
+        self.assertIn('limits.cpu needs 10 / limit 12 / other workloads 8 / short by 6', changed)
+
+    def _probe_activities(self, summary):
+        return self.env['mail.activity'].sudo().search([('summary', '=', summary)])
+
+    def test_same_line_is_recognised_after_the_note_was_sanitised(self):
+        """note 是 HTML、寫入時會被 sanitize（跳脫的寫法會變）：去重比的是純文字。
+
+        ``"``、``<``、``&``、``→`` 都是既有告警行（#1415／#1513）會出現的字元。
+        """
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        summary = 'PaaS monitor: 1647 dedupe probe'
+        line = 'svc-a (id=1, namespace x) → plan "Pro <4 vCPU> & more": data 20Gi→30Gi'
+        self.assertTrue(Monitor._alert(summary, 'What happened:', append_line=line))
+        for _attempt in range(2):
+            self.assertFalse(Monitor._alert(summary, 'What happened:', append_line=line))
+        self.assertFalse(Monitor._alert(summary, 'What happened:', append_line='svc-b (id=2)'))
+        activities = self._probe_activities(summary)
+        self.assertTrue(activities)
+        for activity in activities:
+            self.assertEqual(Monitor._note_paragraphs(activity.note),
+                             ['What happened:', line, 'svc-b (id=2)'])
+
+    def test_appended_lines_are_capped(self):
+        """行數有上限：滿了之後只補一行「還有更多」，其餘寫 log（不無聲消失）。"""
+        from ..models.platform_monitor import ALERT_MAX_APPENDED_LINES
+
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        summary = 'PaaS monitor: 1647 cap probe'
+        total = ALERT_MAX_APPENDED_LINES + 10
+        monitor_log = 'odoo.addons.woow_paas_platform.models.platform_monitor'
+        with self.assertLogs(monitor_log, level=logging.WARNING) as captured:
+            for index in range(total):
+                Monitor._alert(summary, 'What happened:', append_line='service %d' % index)
+        activities = self._probe_activities(summary)
+        self.assertTrue(activities)
+        expected = ['service %d' % index for index in range(ALERT_MAX_APPENDED_LINES)]
+        for activity in activities:
+            paragraphs = Monitor._note_paragraphs(activity.note)
+            self.assertEqual(paragraphs[0], 'What happened:')
+            self.assertEqual(paragraphs[1:-1], expected)
+            self.assertIn('More entries were not listed here', paragraphs[-1])
+            self.assertIn(str(ALERT_MAX_APPENDED_LINES), paragraphs[-1])
+            self.assertEqual(len(paragraphs), 1 + ALERT_MAX_APPENDED_LINES + 1)
+        # 被略過的每一行都留在 log 裡。
+        log = '\n'.join(captured.output)
+        for index in range(ALERT_MAX_APPENDED_LINES, total):
+            self.assertIn('not appended: service %d' % index, log)
 
     def test_alert_is_raised_with_elevated_rights_from_the_model(self):
         """提權只在 model 的 ``_alert_compute_quota_rejection``；租戶身分呼叫也寫得進去。"""
@@ -915,11 +1151,21 @@ class TestComputeQuotaTranslations1647(TransactionCase):
         'Raise the workspace quota or free resources in the namespace, then redeploy.',
         '%(name)s (id=%(id)s, namespace %(ns)s, %(operation)s): %(shortfalls)s. Largest other '
         'consumers: %(consumers)s.',
-        'Changes requested by tenants were rejected before anything was applied or charged '
-        'because the CPU / memory quota of their workspace cannot fit the service after the '
-        'change. The tenants were told to free resources or contact support. Raise the quota '
+        'Changes were rejected before anything was applied or charged because the CPU / '
+        'memory quota of the workspace cannot fit the service after the change. Tenants who '
+        'requested a change were told to free resources or contact support. Raise the quota '
         'of that workspace or free resources in its namespace, then ask the tenant to try '
-        'again:',
+        'again (for a queued redeploy: redeploy the service again):',
+        # review 之後補的（降級的說明、排隊 redeploy 的租戶版、告警行數上限）。
+        'The %(resource)s quota of the new plan cannot hold this service while it is being '
+        'replaced: the old and the new instance run side by side for a moment, which needs '
+        '%(required)s more on top of the %(used)s already in use, but the workspace limit '
+        'under the new plan would be %(hard)s (short by %(short)s).',
+        'The plan was not changed and nothing was charged. Please contact support to switch '
+        'to this plan.',
+        'The queued redeploy did not run: %(reason)s',
+        'More entries were not listed here (the limit of %(limit)s lines was reached); see '
+        'the server log.',
     )
 
     def _entries(self):

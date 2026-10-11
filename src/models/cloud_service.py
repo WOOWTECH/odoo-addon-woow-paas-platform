@@ -619,6 +619,27 @@ _FALSEY_PARAM_VALUES = ('0', 'false', 'no', 'off')
 # #1647：升級前的 compute 配額預檢（operator 端判斷）要不要請 operator 做。prod kill switch：
 # 預檢誤判時設成假值，平台就不再送旗標、行為回到加入預檢之前。未設＝開。
 _COMPUTE_QUOTA_PRECHECK_PARAM = 'woow_paas_platform.compute_quota_precheck_enabled'
+# operator 在換方案降級時給 rolling shortfall 帶的 ``reason``（extra/paas-operator
+# ``compute_quota.REASON_ROLLING_ON_DOWNGRADE`` 同字串，改名兩邊一起改）。
+_COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE = 'rolling_on_downgrade'
+
+
+def _compute_quota_refusal(message, detail):
+    """#1647：Redeploy 被 operator 的 compute 配額預檢擋下時要 raise 的 ``UserError``。
+
+    ``message`` 是**管理員版**（含 namespace、ResourceQuota 名與其他 workload 名）——當場按
+    Redeploy 的管理員在對話框看到它。operator 409 的原始 ``detail`` 掛在例外的
+    ``compute_quota_detail`` 上：不該把管理員版給租戶看的呼叫端
+    （``_cron_run_requested_redeploys`` 要寫租戶看得到的 ``error_message``）據此改組租戶版。
+
+    ⚠ 刻意不另開 ``UserError`` 的子類：Odoo 18 的 web client 以例外的**完整類別名稱**挑對話框
+    （``web/static/src/core/errors/error_dialogs.js`` 只登記 ``odoo.exceptions.UserError`` 等
+    幾個名字），子類的名字不在表上，管理員會看到帶 traceback 的「Odoo Server Error」而不是
+    原本的警告對話框。
+    """
+    error = UserError(message)
+    error.compute_quota_detail = detail
+    return error
 
 # age timeout 管轄的狀態。**`initializing` 刻意不在內**，但它**不再是「不計時」**
 # （#1257 Q3 明文取代 #489 的原註解）：post-deploy init 有自己的一組上界，分工是
@@ -2333,7 +2354,7 @@ class CloudService(models.Model):
                         "quota pre-check (nothing applied): %s. If the pre-check is wrong, set "
                         "the system parameter %s to False to turn it off.",
                         self.id, e.detail.get('shortfalls'), _COMPUTE_QUOTA_PRECHECK_PARAM)
-                    raise UserError(quota_message) from e
+                    raise _compute_quota_refusal(quota_message, e.detail) from e
                 # #1552：503 operator_busy 的 detail 是 dict（error_code＋中文 message）。
                 detail = e.detail.get('message') if isinstance(e.detail, dict) else e.detail
                 raise UserError(
@@ -3565,9 +3586,15 @@ class CloudService(models.Model):
         決定結尾（``change_plan`` 講「方案沒有變更、沒有扣款」，其餘講「沒有套用任何變更」）；
         ``with_ending=False`` 只回資源那幾句（``_upgrade_failure_message`` 自己有包裝句）。
 
+        換方案**降級**：shortfall 帶 ``reason == 'rolling_on_downgrade'``（新方案的上限比現在
+        小，更換服務時新舊並存才放不下）。那不是「其他服務佔太多」，叫租戶去刪服務或調高配額
+        是錯的指引——改講新方案的配額放不下更換中的服務；講到的全是這種時，結尾改成請他聯絡
+        客服（租戶自己沒有出口）。
+
         ``audience='admin'``：寫給按 Redeploy 的管理員——逐項數字、namespace、quota 名稱與佔用
-        最多的其他 workload。⛔ 不要把系統參數名稱寫進這則訊息：排隊的 redeploy
-        （``_cron_run_requested_redeploys``）會把它寫進租戶看得到的 ``error_message``；
+        最多的其他 workload。**只給管理員看**：排隊的 redeploy（``_cron_run_requested_redeploys``）
+        要寫租戶看得到的 ``error_message`` 時改用租戶版（``_queued_redeploy_quota_message``）。
+        ⛔ 仍然不要把系統參數名稱寫進這則訊息（縱深：萬一又有路徑把它帶到租戶面前）；
         kill switch 的名稱寫在 log 與 operator README。
 
         ``lang`` 不給＝呼叫端的語言；背景執行緒沒有語言，由 ``_upgrade_failure_message`` 傳
@@ -3621,13 +3648,29 @@ class CloudService(models.Model):
         }
         parts = []
         described = set()
+        # 講到的 shortfall 是不是全都是「降級後新舊並存放不下」——是的話結尾換成聯絡客服。
+        only_downgrade = True
         for shortfall in shortfalls:
             dimension = shortfall.get('dimension')
             if dimension in described:
                 continue
             described.add(dimension)
             resource = resource_names.get(dimension) or str(shortfall.get('resource') or '?')
-            if shortfall.get('phase') == 'rolling':
+            downgrade = (
+                shortfall.get('phase') == 'rolling'
+                and shortfall.get('reason') == _COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE)
+            only_downgrade = only_downgrade and downgrade
+            if downgrade:
+                parts.append(env._(
+                    'The %(resource)s quota of the new plan cannot hold this service while it '
+                    'is being replaced: the old and the new instance run side by side for a '
+                    'moment, which needs %(required)s more on top of the %(used)s already in '
+                    'use, but the workspace limit under the new plan would be %(hard)s (short '
+                    'by %(short)s).',
+                    resource=resource, required=amount(shortfall, 'required'),
+                    used=amount(shortfall, 'used'), hard=amount(shortfall, 'hard'),
+                    short=amount(shortfall, 'short_by')))
+            elif shortfall.get('phase') == 'rolling':
                 parts.append(env._(
                     'This workspace does not have enough %(resource)s quota for this change: '
                     'while the service is being replaced the old and the new instance run side '
@@ -3647,10 +3690,15 @@ class CloudService(models.Model):
             if len(parts) == 2:
                 break
         if not parts:
+            only_downgrade = False
             parts.append(env._(
                 'This workspace does not have enough CPU or memory quota for this change.'))
         if with_ending:
-            if operation == 'change_plan':
+            if operation == 'change_plan' and only_downgrade:
+                parts.append(env._(
+                    'The plan was not changed and nothing was charged. Please contact support '
+                    'to switch to this plan.'))
+            elif operation == 'change_plan':
                 parts.append(env._(
                     'The plan was not changed and nothing was charged. Stop or delete services '
                     'you no longer need in this workspace and try again, or contact support to '
@@ -3662,11 +3710,27 @@ class CloudService(models.Model):
                     'try again, or contact support to raise the workspace quota.'))
         return ' '.join(parts)
 
-    def _alert_compute_quota_rejection(self, operation, detail):
-        """#1647：租戶的變更（儲存設定／換方案／回復版本）被 compute 配額預檢擋下時告警給系統管理員。
+    def _queued_redeploy_quota_message(self, detail):
+        """#1647：排隊的 Redeploy 被 compute 配額預檢擋下時寫進 ``error_message`` 的說明。
 
-        租戶自己調不了工作區配額，出口在管理員手上。租戶身分呼叫 ⇒ 告警寫入要提權
-        （activity 給 base.group_system）；提權只在這裡，controller 不 sudo。
+        ``error_message`` 租戶在服務頁看得到，所以是**租戶版**（不含 namespace、ResourceQuota
+        名、其他 workload 名），整句用服務建立者的語言——cron 沒有租戶的語言
+        （同 ``_upgrade_failure_message`` 的取法）。
+        """
+        self.ensure_one()
+        lang = self.sudo().create_uid.lang or self.env.lang
+        return self.with_context(lang=lang).env._(
+            'The queued redeploy did not run: %(reason)s',
+            reason=self._compute_quota_error_message(
+                detail, operation='reconfigure', lang=lang))
+
+    def _alert_compute_quota_rejection(self, operation, detail):
+        """#1647：變更被 compute 配額預檢擋下、而當下沒有管理員在看時，告警給系統管理員。
+
+        ``operation``：租戶的 ``reconfigure``（儲存設定）／``change_plan``／``rollback``，以及
+        ``queued_redeploy``（管理員登記、由 cron 執行的 Redeploy；當場按的 Redeploy 在對話框
+        就看到數字，不走這裡）。租戶自己調不了工作區配額，出口在管理員手上。租戶身分呼叫 ⇒
+        告警寫入要提權（activity 給 base.group_system）；提權只在這裡，controller 不 sudo。
         """
         self.ensure_one()
         self.env['woow_paas_platform.platform_monitor'].sudo()._report_compute_quota_rejection(
@@ -8524,6 +8588,11 @@ class CloudService(models.Model):
         分鐘重撞同一個錯誤，而是把原因寫進 ``error_message``（admin 在後台與租戶在
         服務頁都看得到），不讓「Redeploy queued」之後靜默消失（Crosswind r1 S3）。
 
+        #1647：被 compute 配額預檢擋下時 ``_redeploy`` 的 UserError 是**管理員版**（namespace、
+        ResourceQuota 名、其他 workload 名）。它不可以原樣進 ``error_message``——那一欄租戶
+        看得到——所以這種拒絕寫租戶版（``_queued_redeploy_quota_message``），管理員版進 log
+        與管理員 activity。
+
         ⚠ #1052 標記（非裁定）：``_redeploy`` 是先 helm upgrade 再寫 DB。``UserError``
         全都發生在提交點之前（operator 未設定、#552 沒釘版、upgrade 被拒），回捲安全；
         其他例外可能落在提交點之後，回捲會讓 DB 與叢集不一致——與 HTTP 路徑（request
@@ -8548,9 +8617,21 @@ class CloudService(models.Model):
                 _logger.error(
                     "[#1257] requested redeploy of service %s (id=%s) was refused: %s",
                     svc.name, svc.id, exc)
-                svc.write({'error_message': _(
-                    'The queued redeploy did not run: %(reason)s', reason=str(exc))})
+                quota_detail = getattr(exc, 'compute_quota_detail', None)
+                if quota_detail is not None:
+                    # #1647：``error_message`` 租戶在服務頁看得到。compute 配額預檢的 UserError
+                    # 是管理員版（namespace、ResourceQuota 名、其他 workload 名）——它只進上面
+                    # 那行 log 與下面的管理員 activity；這裡改寫租戶版（服務建立者的語言）。
+                    message = svc._queued_redeploy_quota_message(quota_detail)
+                else:
+                    message = _('The queued redeploy did not run: %(reason)s', reason=str(exc))
+                svc.write({'error_message': message})
                 self.env.cr.commit()
+                if quota_detail is not None:
+                    # 登記意圖的管理員此刻不在對話框前：數字、namespace 與佔用最多的 workload
+                    # 交給管理員 activity。先 commit 上面的 error_message，告警出錯不連累它。
+                    svc._alert_compute_quota_rejection('queued_redeploy', quota_detail)
+                    self.env.cr.commit()
             except Exception:
                 self.env.cr.rollback()
                 _logger.exception(

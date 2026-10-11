@@ -20792,8 +20792,32 @@ msgstr "%(name)s（id=%(id)s，namespace %(ns)s，%(operation)s）：%(shortfall
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
-msgid "Changes requested by tenants were rejected before anything was applied or charged because the CPU / memory quota of their workspace cannot fit the service after the change. The tenants were told to free resources or contact support. Raise the quota of that workspace or free resources in its namespace, then ask the tenant to try again:"
-msgstr "以下租戶的變更在套用與扣款之前就被擋下：變更之後，工作區的 CPU／記憶體配額放不下該服務。租戶已被告知可釋放資源或聯絡客服。請調高該工作區的配額，或釋放其 namespace 內的資源後，再請租戶重試："
+msgid "Changes were rejected before anything was applied or charged because the CPU / memory quota of the workspace cannot fit the service after the change. Tenants who requested a change were told to free resources or contact support. Raise the quota of that workspace or free resources in its namespace, then ask the tenant to try again (for a queued redeploy: redeploy the service again):"
+msgstr "以下變更在套用與扣款之前就被擋下：變更之後，工作區的 CPU／記憶體配額放不下該服務。提出變更的租戶已被告知可釋放資源或聯絡客服。請調高該工作區的配額，或釋放其 namespace 內的資源後，再請租戶重試（排定的重新部署則請再按一次重新部署）："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The %(resource)s quota of the new plan cannot hold this service while it is being replaced: the old and the new instance run side by side for a moment, which needs %(required)s more on top of the %(used)s already in use, but the workspace limit under the new plan would be %(hard)s (short by %(short)s)."
+msgstr "新方案的%(resource)s配額放不下更換中的這個服務：更換服務期間新舊兩個執行個體會短暫同時存在，在目前已佔用的 %(used)s 之外還需要 %(required)s，但換到新方案後工作區上限會是 %(hard)s（還差 %(short)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The plan was not changed and nothing was charged. Please contact support to switch to this plan."
+msgstr "方案沒有變更，也沒有扣款。請聯絡客服協助更換到這個方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The queued redeploy did not run: %(reason)s"
+msgstr "排定的重新部署沒有執行：%(reason)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "More entries were not listed here (the limit of %(limit)s lines was reached); see the server log."
+msgstr "還有更多項目沒有列在這裡（已達 %(limit)s 行的上限）；請見 server log。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

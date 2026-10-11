@@ -625,6 +625,51 @@ class TestChangePlanComputeQuotaPreflight1647(_ChangePlanFixture, TransactionCas
         self.assertIn('change_plan', activities[0].note)
         self.assertIn('limits.cpu needs 8 / limit 12', activities[0].note)
 
+    def test_downgrade_that_cannot_roll_over_is_explained_as_a_downgrade(self):
+        """降到較小方案：新方案的上限放不下更換服務時並存的新舊兩顆 pod。
+
+        operator 照樣回 409（平台推送縮小後的 quota 之後那個升級確實會卡住），但 shortfall
+        帶 ``reason: rolling_on_downgrade``。這不是「其他服務佔太多」——一般的結尾（停用或
+        刪除不需要的服務、請客服調高配額）對降級是錯的指引，改成請租戶聯絡客服。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
+
+        detail = dict(_QUOTA_DETAIL, shortfalls=[{
+            'resource': 'limits.memory', 'dimension': 'memory', 'kind': 'limits',
+            'phase': 'rolling', 'workload': 'Deployment/svc-1158x-app',
+            'reason': 'rolling_on_downgrade',
+            'hard': '8Gi', 'used': '8Gi', 'release_current': '8Gi', 'other': '0Mi',
+            'required': '2Gi', 'available': '0Mi', 'short_by': '2Gi'}], consumers=[])
+        owner, svc = self._service('q-down')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        client = self._client()
+        client.upgrade_preflight.side_effect = PaaSOperatorAPIError(
+            message='API error', status_code=409, detail=detail)
+        with mute_logger(_CONTROLLER):
+            res = self._change(owner, svc, self.plan_b, client)
+
+        self.assertFalse(res['success'])
+        self.assertEqual(res['data']['code'], 'workspace_compute_quota_exceeded')
+        self.assertEqual(res['data']['shortfalls'][0]['reason'], 'rolling_on_downgrade')
+        self.assertIn('The memory quota of the new plan cannot hold this service while it is '
+                      'being replaced', res['error'])
+        self.assertIn('short by 2 GiB', res['error'])
+        self.assertIn('The plan was not changed and nothing was charged. Please contact '
+                      'support to switch to this plan.', res['error'])
+        for wrong in ('Stop or delete services', 'raise the workspace quota',
+                      'Deployment/svc-1158x-app', _QUOTA_DETAIL['namespace']):
+            self.assertNotIn(wrong, res['error'])
+        self._assert_untouched(svc, old_sub, before)
+        client.upgrade_release.assert_not_called()
+        client.update_namespace_quota.assert_not_called()
+        # 管理員的告警行註明這是降級（調高配額不是對的處置）。
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        activities = self.env['mail.activity'].sudo().search(
+            [('summary', '=', Monitor.SUMMARY_COMPUTE_QUOTA_REJECTED)])
+        self.assertTrue(activities)
+        self.assertIn('id=%s' % svc.id, activities[0].note)
+        self.assertIn('[plan downgrade:', activities[0].note)
+
     def test_allocated_vals_are_computed_once_and_reused(self):
         """預檢用的 allocated_* 與扣款後寫入的是同一次計算的結果——兩者不會分岔。"""
         owner, svc = self._service('q-once')

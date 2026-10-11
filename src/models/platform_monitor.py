@@ -29,6 +29,8 @@ init cron 看 ``active`` 與 ``lastcall``、不看 ``failure_count``：core 停�
 import logging
 from datetime import timedelta
 
+from lxml import etree
+from lxml import html as lxml_html
 from markupsafe import Markup
 from psycopg2 import OperationalError
 
@@ -61,6 +63,9 @@ CLUSTER_STORAGE_MIN_VOLUME_PARAM = 'woow_paas_platform.cluster_storage_alert_min
 CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT = 80
 CLUSTER_STORAGE_NODE_RATIO_LIMIT = 0.9
 _GIB = 1024 ** 3
+#: #1647：一張告警 activity 最多追加幾行（``_alert`` 的 ``append_line``）。事件型的來源有些
+#: 可以被反覆觸發；超過之後只補一行「還有更多」，其餘寫 log。
+ALERT_MAX_APPENDED_LINES = 50
 
 
 class PlatformMonitor(models.Model):
@@ -110,12 +115,34 @@ class PlatformMonitor(models.Model):
             'res_id': monitor.id, 'noupdate': True})
         return monitor
 
+    @staticmethod
+    def _note_paragraphs(note):
+        """activity note（HTML）→ 每個 ``<p>`` 的純文字（空白收斂成單一空格）。
+
+        比純文字而不是比 HTML 原始字串：``mail.activity.note`` 寫入時會被 sanitize，跳脫的
+        寫法會變（``&#34;`` → ``"``），拿原始字串比對會以為「這一行還沒寫過」。
+        """
+        if not note:
+            return []
+        try:
+            root = lxml_html.fragment_fromstring(str(note), create_parent='div')
+        except (etree.LxmlError, ValueError, TypeError):
+            return []
+        return [' '.join(p.text_content().split()) for p in root.iter('p')]
+
     @api.model
     def _alert(self, summary, note, append_line=None):
         """開一張 activity 給每位 ``base.group_system`` 使用者；同 summary 未處理前不重建。
 
         ``append_line`` 給值時，已存在的那一張追加這一行（事件型監控項：一台一行）。
         回傳是否新開了一張。
+
+        追加有兩道上限（#1647）——事件型的來源有些可以被反覆觸發（租戶對同一台、同一個
+        原因連按「儲存設定」，每次被擋都會走到這裡）：
+
+        * **同一行已經在 note 裡就不再追加**：同一台同一個原因只佔一行。
+        * **每張最多 ``ALERT_MAX_APPENDED_LINES`` 行**：滿了之後補一行「還有更多、見 server
+          log」就不再追加；被略過的那一行照樣寫進 log，不會無聲消失。
         """
         monitor = self._singleton()
         Activity = self.env['mail.activity'].sudo()
@@ -124,8 +151,25 @@ class PlatformMonitor(models.Model):
             ('summary', '=', summary)])
         if existing:
             if append_line:
+                line_html = Markup('<p>%s</p>') % append_line
+                line_text = ' '.join(self._note_paragraphs(line_html))
                 for activity in existing:
-                    activity.note = (activity.note or Markup()) + Markup('<p>%s</p>') % append_line
+                    paragraphs = self._note_paragraphs(activity.note)
+                    if line_text and line_text in paragraphs:
+                        continue
+                    # 第一段是說明文字，其餘才是追加的行（滿了之後多一行「還有更多」）。
+                    appended = len(paragraphs) - 1
+                    if appended >= ALERT_MAX_APPENDED_LINES:
+                        _logger.warning(
+                            "[#1647] monitor alert %r already lists %s lines; not appended: %s",
+                            summary, ALERT_MAX_APPENDED_LINES, line_text)
+                        if appended == ALERT_MAX_APPENDED_LINES:
+                            activity.note = (activity.note or Markup()) + Markup('<p>%s</p>') % _(
+                                'More entries were not listed here (the limit of %(limit)s '
+                                'lines was reached); see the server log.',
+                                limit=ALERT_MAX_APPENDED_LINES)
+                        continue
+                    activity.note = (activity.note or Markup()) + line_html
             return False
         todo, users = self._alert_recipients()
         if not (todo and users):
@@ -486,16 +530,26 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _report_compute_quota_rejection(self, service, operation, detail):
-        """#1647：租戶的變更在套用（與扣款）前被 operator 的 compute 配額預檢擋下——一台一行。
+        """#1647：變更在套用（與扣款）前被 operator 的 compute 配額預檢擋下——一台一行。
 
-        ``operation``：``reconfigure``／``change_plan``／``rollback``（管理員自己按的 Redeploy
-        當場在對話框看到數字，不走這裡）。``detail`` 是 operator 409 的 dict。
+        ``operation``：租戶的 ``reconfigure``／``change_plan``／``rollback``，與
+        ``queued_redeploy``（管理員登記、由 cron 執行的 Redeploy；管理員當場按的 Redeploy 在
+        對話框就看到數字，不走這裡）。``detail`` 是 operator 409 的 dict。同一台同一個原因
+        反覆被擋時行的內容相同，``_alert`` 不會重複追加。
         """
+        def describe(shortfall):
+            text = '%s needs %s / limit %s / other workloads %s / short by %s' % (
+                shortfall.get('resource'), shortfall.get('required'), shortfall.get('hard'),
+                shortfall.get('other'), shortfall.get('short_by'))
+            if shortfall.get('reason') == 'rolling_on_downgrade':
+                # 換方案降級：不是別人佔太多，而是新方案的上限放不下新舊並存——調高配額
+                # 不是對的處置（租戶已被告知聯絡客服）。
+                text += (' [plan downgrade: the smaller quota of the new plan cannot hold the '
+                         'old and the new pod side by side during the rolling update]')
+            return text
+
         shortfalls = '; '.join(
-            '%s needs %s / limit %s / other workloads %s / short by %s' % (
-                s.get('resource'), s.get('required'), s.get('hard'), s.get('other'),
-                s.get('short_by'))
-            for s in detail.get('shortfalls') or [] if isinstance(s, dict))
+            describe(s) for s in detail.get('shortfalls') or [] if isinstance(s, dict))
         consumers = ', '.join(
             '%s (%s)' % (c.get('owner'), c.get('value'))
             for c in detail.get('consumers') or [] if isinstance(c, dict))
@@ -505,11 +559,11 @@ class PlatformMonitor(models.Model):
             name=service.name, id=service.id, ns=detail.get('namespace') or '?',
             operation=operation, shortfalls=shortfalls or '?', consumers=consumers or '-')
         return self._safe_alert(self.SUMMARY_COMPUTE_QUOTA_REJECTED, _(
-            'Changes requested by tenants were rejected before anything was applied or charged '
-            'because the CPU / memory quota of their workspace cannot fit the service after the '
-            'change. The tenants were told to free resources or contact support. Raise the '
+            'Changes were rejected before anything was applied or charged because the CPU / '
+            'memory quota of the workspace cannot fit the service after the change. Tenants who '
+            'requested a change were told to free resources or contact support. Raise the '
             'quota of that workspace or free resources in its namespace, then ask the tenant to '
-            'try again:'), append_line=line)
+            'try again (for a queued redeploy: redeploy the service again):'), append_line=line)
 
     @api.model
     def _orphans_text(self, orphans):
