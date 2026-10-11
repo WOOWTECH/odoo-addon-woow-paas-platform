@@ -165,8 +165,9 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      對象是 `_NO_STATE_WRITE_FUNCTIONS`：每日對帳 cron，以及 #1647 兩個
                      只觀測 running 服務的函式（`_cron_check_running_workloads`／
                      `_apply_workload_observation`）。判準 5 看函式本體內任何 dict
-                     字面鍵、subscript 賦值、呼叫 keyword 是否出現 `state`／
-                     `error_message`（不只 `.write({字面 dict})`；先組變數再寫也抓得到）。
+                     字面鍵、subscript 賦值、呼叫 keyword、屬性賦值是否出現 `state`／
+                     `error_message`（不只 `.write({字面 dict})`；先組變數再寫、
+                     `service.state = …` 也抓得到）。
                      ⚠ 只守**結構**（單一 producer 沒被繞過），不驗證回寫的值對不對——
                      那由 src/tests/test_poll_mirror_release_facts_627.py 實跑驗證。
                      形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
@@ -3600,12 +3601,15 @@ def check_poll_release_facts_single_source(root):
        （`_cron_check_running_workloads`／`_apply_workload_observation`）同樣只看
        running 的服務、同樣只能寫自己的觀測欄位；這兩個函式找不到也當違規。
        ⚠ 看的是**函式本體內任何地方**出現 `_NO_STATE_WRITE_KEYS`（`state`／
-       `error_message`）的三種形狀，不是只看 `.write({字面 dict})`：(a) dict 字面的
+       `error_message`）的四種形狀，不是只看 `.write({字面 dict})`：(a) dict 字面的
        常數鍵（先存變數再 `write(vals)` 也抓得到）、(b) `vals['state'] = …` 這種
-       subscript 賦值、(c) 任何呼叫的 keyword（`dict(state=…)`、`vals.update(state=…)`）。
+       subscript 賦值、(c) 任何呼叫的 keyword（`dict(state=…)`、`vals.update(state=…)`）、
+       (d) 屬性賦值（`service.state = 'error'`、`service.error_message = …`；只看
+       屬性名、不分辨左邊是不是 record）。
        第一版只認 `.write({...})`，而 `_apply_workload_observation` 的每一次寫入都是
        先組變數 dict 再寫——往那些 dict 加 `'state'` 這條 gate 照樣綠（實測確認過），
-       也就是它對自己最主要的目標沒有鑑別力。domain 是 tuple 的 list，不會被誤擊。
+       也就是它對自己最主要的目標沒有鑑別力。domain 是 tuple 的 list、讀屬性
+       （`service.state != 'running'`）是 Load，都不會被誤擊。
     6. **list/get 純讀（#1159 Q1）。** `PaasController._list_services`／`_get_service`
        本體內不得呼叫 `_PURE_READ_FORBIDDEN_CALLS`（取 operator client、poll、DNS 探測、
        write／create／unlink／sudo／raw SQL `execute`）。它們回的是背景 poll 的最近觀測；在 request 裡
@@ -3631,9 +3635,9 @@ def check_poll_release_facts_single_source(root):
 
     - 只看**列名函式本體內**的 `.write()`。若有人把 write 搬進被它們呼叫的 helper，
       AST 走不到 ⇒ 看不見。這是已知邊界。
-    - 判準 5 只認上面列的三種形狀。**看不見**的寫法：屬性賦值（`service.state = …`）、
-      鍵不是字面常數（`vals[key] = …`、`dict.fromkeys(names, …)`、`{name: …}`）、
-      `setattr`、raw SQL，以及搬進 helper 的寫入。行為層由
+    - 判準 5 只認上面列的四種形狀。**看不見**的寫法：鍵或屬性名不是字面常數
+      （`vals[key] = …`、`dict.fromkeys(names, …)`、`{name: …}`、
+      `setattr(service, name, …)`）、raw SQL，以及搬進 helper 的寫入。行為層由
       `src/tests/test_workload_fault_1647.py` 的
       `test_state_and_error_message_are_never_touched` 實跑驗證（但 PR 的 CI 不跑 Odoo
       測試，那一層要等 merge 後或自己在沙盒跑）。
@@ -3692,9 +3696,9 @@ def check_poll_release_facts_single_source(root):
     def _forbidden_key_writes(func):
         """該函式本體內所有「可能寫到 `_NO_STATE_WRITE_KEYS`」的位置 → [(行號, 鍵, 形狀)]。
 
-        三種形狀（判準 5 的 docstring 有理由）：dict 字面的常數鍵、subscript 賦值、
-        呼叫的 keyword。同一個 (行號, 鍵) 只報一次——`self.write({'state': …})` 不會因為
-        同時是「dict 字面」又是「write 的引數」而被算兩筆。
+        四種形狀（判準 5 的 docstring 有理由）：dict 字面的常數鍵、subscript 賦值、
+        呼叫的 keyword、屬性賦值。同一個 (行號, 鍵) 只報一次——`self.write({'state': …})`
+        不會因為同時是「dict 字面」又是「write 的引數」而被算兩筆。
         """
         found = {}
         for node in ast.walk(func):
@@ -3706,6 +3710,11 @@ def check_poll_release_facts_single_source(root):
                 index = node.slice
                 if isinstance(index, ast.Constant) and index.value in _NO_STATE_WRITE_KEYS:
                     found.setdefault((node.lineno, index.value), "subscript 賦值")
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+                # `service.state = 'error'`：Odoo 裡最自然的寫法，ORM 會直接落庫。只看屬性名，
+                # 不分辨左邊是不是 record——這幾個函式裡沒有理由對任何物件賦這兩個屬性。
+                if node.attr in _NO_STATE_WRITE_KEYS:
+                    found.setdefault((node.lineno, node.attr), "屬性賦值")
             elif isinstance(node, ast.Call):
                 for keyword in node.keywords:
                     if keyword.arg in _NO_STATE_WRITE_KEYS:

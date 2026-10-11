@@ -7,7 +7,8 @@
 判準 5 的 #1647 擴充（`TestObserversNeverWriteState`）：workload 觀測的兩個函式
 （`_cron_check_running_workloads`／`_apply_workload_observation`）不得寫 `'state'`／
 `'error_message'`，找不到也要紅。寫入的形狀不只 `.write({字面 dict})`：先組變數 dict
-再寫、subscript 賦值、keyword 都要紅（那兩個函式實際上就是先組變數再寫）。
+再寫、subscript 賦值、keyword、屬性賦值（`service.state = …`）都要紅（那兩個函式實際上
+就是先組變數再寫；屬性賦值則是 Odoo 裡最自然的寫法）。
 
 守的是**這兩條判準自己**的鑑別力，不是被守的那棵樹乾不乾淨。分三半：
 
@@ -293,14 +294,17 @@ class TestObserversNeverWriteState(_Case):
     _FORBIDDEN_KEYS = ("state", "error_message")
 
     #: 判準 5 至少要認得的寫入形狀：名稱 → 以 `{key}` 為佔位的函式本體。
-    #: 第一個是原本唯一認得的形狀；其餘三個在只認 `.write({字面 dict})` 的實作下全綠
+    #: 第一個是原本唯一認得的形狀；其餘四個在只認 `.write({字面 dict})` 的實作下全綠
     #: ——而 `_apply_workload_observation` 真正的寫法正是「先組變數 dict 再寫」。
+    #: 最後一個（屬性賦值）不經任何 dict 或 `.write()`，ORM 照樣落庫。
     _WRITE_SHAPES = {
         "literal dict passed to write": "self.write({{'{key}': 'error'}})",
         "dict built in a variable": "vals = {{'{key}': 'error'}}\n        self.write(vals)",
         "subscript assignment": "vals = {{}}\n        vals['{key}'] = 'error'\n"
                                 "        self.write(vals)",
         "keyword argument": "self.write(dict({key}='error'))",
+        "attribute assignment": "for service in self:\n"
+                                "            service.{key} = 'error'",
     }
 
     def test_every_write_shape_of_every_forbidden_key_is_flagged(self):
@@ -345,7 +349,8 @@ class TestObserversNeverWriteState(_Case):
         """特異性：讀 state、拿它當 search domain、傳給無關的 keyword 都不是寫入。
 
         這幾個形狀就是真實的 `_cron_check_running_workloads`／
-        `_apply_workload_observation` 裡有的——誤擊的話真實 repo 會恆紅。
+        `_apply_workload_observation` 裡有的——誤擊的話真實 repo 會恆紅。最後一格（賦別的
+        屬性）真實函式裡目前沒有，放進來是守「屬性賦值只看 state／error_message」。
         """
         bodies = {
             "search domain": "return self.search([('state', '=', 'running')], order='id')",
@@ -355,6 +360,7 @@ class TestObserversNeverWriteState(_Case):
             "other dict keys": "vals = {'workload_checked_at': 1}\n"
                                "        vals['workload_fault_code'] = 'no_pods'\n"
                                "        self.write(vals)",
+            "other attribute assignment": "self.workload_fault_code = 'no_pods'",
         }
         for func_name in self._OBSERVERS:
             for label, body in bodies.items():
