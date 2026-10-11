@@ -1486,6 +1486,16 @@ def get_release_status(
             "container-only clusters never pay for the extra CR lookups."
         ),
     ),
+    include_workloads: bool = Query(
+        default=False,
+        description=(
+            "#1647: also return the release's Deployments and StatefulSets with "
+            "their desired/actual replica counts, the ReplicaFailure condition and "
+            "the latest controller warning event. Lets the platform notice a "
+            "workload that should have pods but has none (e.g. FailedCreate: "
+            "exceeded quota). Defaults to false so existing callers pay nothing."
+        ),
+    ),
 ):
     """Get detailed status including pod information.
 
@@ -1493,6 +1503,7 @@ def get_release_status(
         namespace: Release namespace
         name: Release name
         include_vm: Include VMI/DataVolume status (VM-type workloads)
+        include_workloads: Include Deployment/StatefulSet replica status (#1647)
 
     Returns:
         Release and pod status information
@@ -1556,6 +1567,19 @@ def get_release_status(
                 )
                 datavolume_retrieval_error = str(e)
 
+        # #1647：workload（Deployment／StatefulSet）副本數。Pod 被 quota 擋下時根本沒有
+        # Pod 物件，上面的 pods 清單看不出「本來該有」；平台要發現「期望有 Pod 但一顆都
+        # 沒有」得看 controller 這一層。與 VM 欄位同一套三態：沒帶旗標＝None（沒查），
+        # 查詢失敗＝None＋錯誤另外說，仍回 200（pods 與 release 照常可用）。
+        workloads = None
+        workload_retrieval_error = None
+        if include_workloads:
+            try:
+                workloads = k8s_service.get_workloads(namespace=namespace, label_selector=selector)
+            except Exception as e:
+                logger.error(f"Failed to get workloads for {namespace}/{name}: {e}")
+                workload_retrieval_error = str(e)
+
         return ReleaseStatusResponse(
             release=release,
             pods=pods,
@@ -1567,6 +1591,9 @@ def get_release_status(
             datavolumes=datavolumes,
             vmi_retrieval_error=vmi_retrieval_error,
             datavolume_retrieval_error=datavolume_retrieval_error,
+            workloads_included=include_workloads,
+            workloads=workloads,
+            workload_retrieval_error=workload_retrieval_error,
         )
 
     except ValueError as e:

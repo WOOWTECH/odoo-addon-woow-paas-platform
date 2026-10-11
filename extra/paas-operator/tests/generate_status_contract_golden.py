@@ -157,11 +157,64 @@ _DIAG_EVENTS = [
            "2026-10-04T01:59:00Z"),
 ]
 
+#: #1647：2026-10-10 事故的形狀——服務顯示 running，server 的 Recreate Deployment 被
+#: namespace quota 擋下（ReplicaSet ``FailedCreate: exceeded quota``），一顆 Pod 都沒有；
+#: 同 release 的 PG StatefulSet 照常。Pod 清單裡只剩 PG 那顆（而且健康），看不出「server
+#: 本來該有」——所以要有 workloads。
+_QUOTA_MESSAGE = (
+    'pods "svc-1263-server-7d9c8b6f5-" is forbidden: exceeded quota: '
+    "paas-ws-test-1263-quota, requested: limits.cpu=8, used: limits.cpu=8, "
+    "limited: limits.cpu=12"
+)
+_BLOCKED_WORKLOADS = [
+    {
+        "kind": "Deployment",
+        "metadata": {"name": "svc-1263-server", "namespace": _NS, "labels": dict(_INSTANCE)},
+        "spec": {"replicas": 1, "strategy": {"type": "Recreate"}},
+        # 被擋時 status 沒有 replicas／readyReplicas（0 的計數整個 key 不出現）。
+        "status": {
+            "observedGeneration": 4,
+            "unavailableReplicas": 1,
+            "conditions": [
+                {"type": "Available", "status": "False", "reason": "MinimumReplicasUnavailable",
+                 "lastTransitionTime": "2026-10-10T18:07:44Z"},
+                {"type": "ReplicaFailure", "status": "True", "reason": "FailedCreate",
+                 "message": _QUOTA_MESSAGE, "lastTransitionTime": "2026-10-10T18:07:45Z"},
+            ],
+        },
+    },
+    {
+        "kind": "StatefulSet",
+        "metadata": {"name": "svc-1263-postgresql", "namespace": _NS,
+                     "labels": dict(_INSTANCE)},
+        "spec": {"replicas": 1, "updateStrategy": {"type": "RollingUpdate"}},
+        "status": {"replicas": 1, "readyReplicas": 1, "updatedReplicas": 1},
+    },
+]
+#: quota 的 FailedCreate 掛在 ReplicaSet（``<deployment>-<pod-template-hash>``）上。
+_BLOCKED_EVENTS = [
+    {"type": "Warning", "reason": "FailedCreate", "count": 23,
+     "message": "Error creating: " + _QUOTA_MESSAGE,
+     "lastTimestamp": "2026-10-10T23:31:12Z",
+     "involvedObject": {"kind": "ReplicaSet", "name": "svc-1263-server-7d9c8b6f5",
+                        "namespace": _NS, "uid": "uid-rs-server"}},
+]
+
+#: 逐情形的 query string（沒列的情形不帶參數，與既有呼叫端相同）。
+_PARAMS = {"workload_create_blocked": {"include_workloads": "true"}}
+
+
+def _workload(body, kind):
+    return next(w for w in body["workloads"] if w["kind"] == kind)
+
+
 #: 每一格宣告它**應該**長成的樣子；產生後自檢，沒走到的分支不會變成看似正常的 golden。
 CASES = {
     "woow_odoo_chart": lambda body: (
         body["pod_identity_included"] is True
         and body["pod_retrieval_error"] is None
+        # #1647：沒帶 include_workloads ⇒ 沒查（None，不是 []），旗標 echo 為 False。
+        and body["workloads"] is None and body["workloads_included"] is False
         and {p["name"]: (p["component"], p["task"], p["owner_kind"]) for p in body["pods"]} == {
             "svc-1263-6d8f7c9b5-server": ("server", None, "ReplicaSet"),
             "svc-1263-5c7e6b8a4-old": ("server", None, "ReplicaSet"),
@@ -185,6 +238,19 @@ CASES = {
             "svc-1263-ok-0": (None, None, None),
         }
     ),
+    # #1647：帶 include_workloads——被 quota 擋的 Deployment 有 ReplicaFailure 與 ReplicaSet
+    # 的 FailedCreate 事件；健康的 StatefulSet 兩者皆 None（充足的 workload 不附事件）。
+    "workload_create_blocked": lambda body: (
+        body["workloads_included"] is True
+        and body["workload_retrieval_error"] is None
+        and (_workload(body, "Deployment")["desired_replicas"],
+             _workload(body, "Deployment")["replicas"]) == (1, 0)
+        and _workload(body, "Deployment")["replica_failure"]["reason"] == "FailedCreate"
+        and "exceeded quota" in _workload(body, "Deployment")["replica_failure"]["message"]
+        and _workload(body, "Deployment")["last_warning"]["reason"] == "FailedCreate"
+        and _workload(body, "StatefulSet")["replica_failure"] is None
+        and _workload(body, "StatefulSet")["last_warning"] is None
+    ),
 }
 
 
@@ -207,6 +273,13 @@ def build_cases():
         "woow_odoo_chart": [_kubectl(0, _WOOW_ODOO_PODS)],
         "pod_retrieval_failed": [_kubectl(1)],
         "unready_pod_diagnostics": [_kubectl(0, _DIAG_PODS), _kubectl(0, _DIAG_EVENTS)],
+        # #1647：get pods（只剩健康的 PG，不觸發 Pod 事件查詢）→ get deployments,statefulsets
+        # → 有副本不足的 workload，再 get events。
+        "workload_create_blocked": [
+            _kubectl(0, [_pod("svc-1263-postgresql-0", "postgresql", _owner("StatefulSet"))]),
+            _kubectl(0, _BLOCKED_WORKLOADS),
+            _kubectl(0, _BLOCKED_EVENTS),
+        ],
     }
     cases = {}
     with patch("src.main.settings.api_key", "golden-1263"), \
@@ -216,7 +289,8 @@ def build_cases():
         client = TestClient(app, headers={"X-API-Key": "golden-1263"})
         for name in CASES:
             with patch("subprocess.run", side_effect=list(kubectl[name])):
-                response = client.get(f"/api/releases/{_NS}/{_RELEASE}/status")
+                response = client.get(f"/api/releases/{_NS}/{_RELEASE}/status",
+                                      params=_PARAMS.get(name))
             assert response.status_code == 200, (name, response.text)
             cases[name] = response.json()
     return cases

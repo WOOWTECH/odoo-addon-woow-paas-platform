@@ -6773,7 +6773,10 @@ _STATUS_CONTRACT_GOLDEN = "src/tests/fixtures/status_contract_golden.json"
 #: ReleaseStatusResponse、release 子物件在 ReleaseInfo）。順序有意義，同 route。
 #: ⚠ 刻意不含 VmiInfo／DataVolumeInfo：golden 只有 include_vm=false 的情形。
 # #1417：PodInfo 的巢狀診斷欄位（ContainerWaitingInfo／PodWarningEvent）一併納入指紋。
+# #1647：``?include_workloads=true`` 的 workload 欄位（WorkloadReplicaFailure／WorkloadInfo）
+# 一併納入——golden 有一格（workload_create_blocked）帶這個旗標。
 _STATUS_CONTRACT_CLASSES = ("PodPhase", "ContainerWaitingInfo", "PodWarningEvent", "PodInfo",
+                            "WorkloadReplicaFailure", "WorkloadInfo",
                             "ReleaseStatus", "ReleaseInfo", "ReleaseStatusResponse")
 STATUS_CONTRACT_FILES = (_OPERATOR_SCHEMA, _STATUS_CONTRACT_GOLDEN)
 
