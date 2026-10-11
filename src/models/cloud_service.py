@@ -1832,17 +1832,25 @@ class CloudService(models.Model):
     #     就恢復了、帳面卻停在 error（repo-lint 第 19 條判準 5 機械守）。
     # 不帶 groups 的三格（code／since／checked_at）是 `_workload_fault_confirmed` 讀的，
     # 租戶身分的 /woow payload 會經過它；含叢集原文的 detail 與告警標記只給系統管理員。
+    # ⚠ 三個標籤刻意短：後台列表用 badge 顯示，欄寬由列表自動分配，長標籤會被截斷
+    # （瀏覽器實走 F5：1440px 下「Blocked by the namespace q…」「被 namespace 配…」，
+    # 而且沒有 tooltip）。完整的說明放兩處——這一格的 help，以及表單警示區塊裡依代碼顯示
+    # 的那一行（`cloud_service_views.xml`）。改標籤或加代碼時三處連同 zh_TW.po 一起改，
+    # `TestWorkloadFaultTranslations1647` 守長度、譯文與「每個代碼都有說明」。
     workload_fault_code = fields.Selection(
         selection=[
-            ('quota_exceeded', 'Blocked by the namespace quota'),
-            ('create_failed', 'Pod creation rejected'),
-            ('no_pods', 'No pods (cause unknown)'),
+            ('quota_exceeded', 'Quota blocked'),
+            ('create_failed', 'Create failed'),
+            ('no_pods', 'No pods'),
         ],
         string='Workload Fault',
         copy=False,
         readonly=True,
         help='Set while the service is marked running but one of its workloads '
              '(Deployment or StatefulSet) wants at least one pod and has none (#1647). '
+             'Quota blocked: the namespace ResourceQuota rejected the pods. '
+             'Create failed: the cluster rejected the pods for a reason other than the quota. '
+             'No pods: the pods are missing and the cluster reported no reason. '
              'Cleared automatically once the pods are back or the service leaves running. '
              'It never changes the service state.',
     )

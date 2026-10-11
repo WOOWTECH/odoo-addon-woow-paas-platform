@@ -29,6 +29,8 @@
   log 不變；
 * /woow payload 只給**已確認**的代碼，不帶叢集原文；
 * 後台表單警示的每一段可見文字在 zh_TW.po 都有譯文（review detect-S2）；
+* 後台列表徽章用的三個代碼標籤（英文與 zh_TW）短到放得下，完整的說明在欄位 help 與表單
+  警示裡依代碼顯示的那一行，每個代碼都要有（瀏覽器實走 F5）；
 * /woow 的三句租戶文案在 zh_TW.po 都有譯文，配額那一句（英文與譯文）只請租戶聯絡客服、
   不建議刪除／停用／停止服務來釋出配額，而且說的是「剩餘配額不足以啟動」、不說配額已滿
   （瀏覽器實走 F2）。
@@ -40,6 +42,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -1526,10 +1529,11 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
 
         text = ' '.join(''.join(rendered.itertext()).split())
         for english in ('This service', 'first seen', 'last change recorded', 'since',
-                        'last checked'):
+                        'last checked', 'rejected', 'are missing', 'other than'):
             self.assertNotIn(english, text)
         self.assertIn('首次觀測於', text)
         self.assertIn('觀測結果最後寫入於', text)
+        self.assertIn('拒絕建立 Pod', text)
 
     def test_new_field_labels_and_help_are_translated(self):
         fields_with_help = (
@@ -1547,6 +1551,83 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
                     self.assertTrue(
                         self._translations('model', name, imd_name).get(source),
                         'zh_TW.po 缺譯文，或 msgid 與欄位定義的文字不一致：%r' % source)
+
+    #: 後台列表徽章標籤的寬度上限，單位是半形字（全形字算 2 格）。
+    #:
+    #: 列表用 badge 顯示這一格，欄寬由列表自動分配，標籤太長會被截斷而且沒有 tooltip
+    #: （瀏覽器實走 F5）。1440px 實測：30 格的「Blocked by the namespace quota」、23 格的
+    #: 「No pods (cause unknown)」、21 格的「Pod creation rejected」、20 格的「被 namespace
+    #: 配額擋下」都被截斷；13 格的「Quota blocked」（徽章 105px、欄寬 115px）與 8 格的中文
+    #: 標籤放得下。上限取欄名「Workload Fault」的字數 14——比它長的沒有量過放不放得下。
+    #:
+    #: ⚠ 這是 1440px 的結論。視窗更窄（實測 1280px 以下）時列表會把這一欄壓到最小寬度，
+    #: 13 格的英文標籤仍然被截（欄名自己也被截）；那要靠欄位固定寬度，不是更短的標籤。
+    _BADGE_LABEL_MAX_COLUMNS = len('Workload Fault')
+
+    @staticmethod
+    def _columns(text):
+        return sum(2 if unicodedata.east_asian_width(char) in 'WF' else 1 for char in text)
+
+    def _fault_code_labels(self):
+        """``[(代碼, 英文標籤, zh_TW 標籤)]``；譯文缺席時第三格是 None。"""
+        field = self.env['woow_paas_platform.cloud_service']._fields['workload_fault_code']
+        self.assertEqual({value for value, _label in field.selection},
+                         {FAULT_QUOTA, FAULT_CREATE_FAILED, FAULT_NO_PODS},
+                         'fixture 前提：selection 就是 workload_health 的三個代碼')
+        labels = []
+        for value, label in field.selection:
+            imd_name = ('selection__woow_paas_platform_cloud_service__workload_fault_code__%s'
+                        % value)
+            translated = self._translations(
+                'model', 'ir.model.fields.selection,name', imd_name)
+            labels.append((value, label, translated.get(label)))
+        return labels
+
+    def test_fault_code_labels_fit_the_list_badge(self):
+        """列表徽章的標籤（英文與 zh_TW）都有譯文，而且短到放得下。"""
+        for value, english, chinese in self._fault_code_labels():
+            with self.subTest(code=value):
+                self.assertTrue(chinese,
+                                'zh_TW.po 缺譯文，或 msgid 與 selection 標籤不一致：%r' % english)
+                for label in (english, chinese):
+                    self.assertLessEqual(
+                        self._columns(label), self._BADGE_LABEL_MAX_COLUMNS,
+                        '標籤太長，列表的徽章會被截斷：%r' % label)
+
+    def test_fault_code_help_explains_every_label(self):
+        """標籤改短之後，欄位 help（英文與 zh_TW）要逐一說明每個標籤的意思。"""
+        field = self.env['woow_paas_platform.cloud_service']._fields['workload_fault_code']
+        chinese_help = self._translations(
+            'model', 'ir.model.fields,help',
+            'field_woow_paas_platform_cloud_service__workload_fault_code').get(field.help)
+        self.assertTrue(chinese_help, 'zh_TW.po 缺 help 的譯文，或 msgid 與欄位定義不一致')
+        for value, english, chinese in self._fault_code_labels():
+            with self.subTest(code=value):
+                self.assertIn('%s: ' % english, field.help)
+                self.assertIn('%s：' % chinese, chinese_help)
+
+    def test_backend_alert_explains_every_fault_code(self):
+        """表單警示裡每個代碼各有一行完整說明（只在該代碼時顯示），而且有譯文。
+
+        列表的標籤短，管理員在表單上要讀得到「這個代碼是什麼意思」；新增代碼卻沒補這一行，
+        表單上就只剩一個看不出意思的短標籤。
+        """
+        view = self.env.ref('woow_paas_platform.view_cloud_service_form')
+        arch = etree.fromstring(view.with_context(lang='en_US').arch_db)
+        alert = arch.xpath("//div[@role='alert'][.//field[@name='workload_fault_detail']]")[0]
+        translated = self._translations(
+            'model_terms', 'ir.ui.view,arch_db', 'view_cloud_service_form')
+        explanations = []
+        for value, english, _chinese in self._fault_code_labels():
+            lines = alert.xpath('./div[@invisible="workload_fault_code != \'%s\'"]' % value)
+            with self.subTest(code=value):
+                self.assertEqual(len(lines), 1, '表單警示要有這個代碼專屬的一行說明')
+                text = ' '.join(''.join(lines[0].itertext()).split())
+                self.assertGreater(len(text), 2 * len(english),
+                                   '這一行要是完整的說明，不是把短標籤再寫一次：%r' % text)
+                self.assertTrue(translated.get(text), 'zh_TW.po 缺這一行的譯文：%r' % text)
+                explanations.append(text)
+        self.assertEqual(len(set(explanations)), len(explanations), '每個代碼的說明各不相同')
 
     def _tenant_fault_strings(self):
         """/woow 的 workload 異常文案（詳情頁 banner＋服務卡片）在 JS 裡的 `_t()` 原文。"""

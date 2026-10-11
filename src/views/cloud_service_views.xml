@@ -23,8 +23,11 @@
                          第二個時間是 workload_checked_at＝最後一次**寫入**觀測結果的時間
                          （內容沒變的檢查不更新它），所以文字寫 last change recorded，
                          不寫 last checked。
-                         ⚠ 這段可見文字會被拆成三個翻譯 term（<strong> 整段連標籤、兩段
-                         <field/> 後面的文字），改字要同步 src/i18n/zh_TW.po。 -->
+                         代碼的標籤刻意短（列表的徽章放得下，瀏覽器實走 F5），完整的說明是
+                         下面依代碼顯示的那一行——每個代碼各一行，新增代碼時要補。
+                         ⚠ 這段可見文字會被拆成多個翻譯 term（<strong> 整段連標籤、兩段
+                         <field/> 後面的文字、每個代碼的說明各一段），改字要同步
+                         src/i18n/zh_TW.po。 -->
                     <div class="alert alert-danger" role="alert" groups="base.group_system"
                          invisible="not workload_fault_code">
                         <strong>This service is marked running, but a workload has no pods.</strong>
@@ -33,6 +36,9 @@
                             <field name="workload_fault_since" nolabel="1"/>, last change recorded
                             <field name="workload_checked_at" nolabel="1"/>
                         </div>
+                        <div invisible="workload_fault_code != 'quota_exceeded'">The namespace ResourceQuota rejected the pods (FailedCreate: exceeded quota).</div>
+                        <div invisible="workload_fault_code != 'create_failed'">The cluster rejected the pods for a reason other than the quota (FailedCreate).</div>
+                        <div invisible="workload_fault_code != 'no_pods'">The pods are missing and the cause is unknown: the cluster reported no FailedCreate condition and no recent warning event.</div>
                         <field name="workload_fault_detail" nolabel="1"/>
                     </div>
                     <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->

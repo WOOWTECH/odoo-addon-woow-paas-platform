@@ -12410,8 +12410,8 @@ msgstr "Workload 異常"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_code
-msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647). Cleared automatically once the pods are back or the service leaves running. It never changes the service state."
-msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有時設定（#1647）。Pod 恢復或服務離開 running 後自動清除。不會改變服務狀態。"
+msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647). Quota blocked: the namespace ResourceQuota rejected the pods. Create failed: the cluster rejected the pods for a reason other than the quota. No pods: the pods are missing and the cluster reported no reason. Cleared automatically once the pods are back or the service leaves running. It never changes the service state."
+msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有時設定（#1647）。配額擋下：namespace 的 ResourceQuota 拒絕建立 Pod。建立失敗：叢集因為配額以外的原因拒絕建立 Pod。沒有 Pod：Pod 不存在，而且叢集沒有回報原因。Pod 恢復或服務離開 running 後自動清除。不會改變服務狀態。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
@@ -12455,18 +12455,18 @@ msgstr "平台最後一次寫入這台 running 服務 workload 觀測結果的�
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__quota_exceeded
-msgid "Blocked by the namespace quota"
-msgstr "被 namespace 配額擋下"
+msgid "Quota blocked"
+msgstr "配額擋下"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__create_failed
-msgid "Pod creation rejected"
-msgstr "Pod 建立被拒絕"
+msgid "Create failed"
+msgstr "建立失敗"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__no_pods
-msgid "No pods (cause unknown)"
-msgstr "沒有 Pod（原因不明）"
+msgid "No pods"
+msgstr "沒有 Pod"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
@@ -12482,6 +12482,21 @@ msgstr "— 首次觀測於"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
 msgid ", last change recorded"
 msgstr "，觀測結果最後寫入於"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The namespace ResourceQuota rejected the pods (FailedCreate: exceeded quota)."
+msgstr "namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The cluster rejected the pods for a reason other than the quota (FailedCreate)."
+msgstr "叢集因為配額以外的原因拒絕建立 Pod（FailedCreate）。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods are missing and the cause is unknown: the cluster reported no FailedCreate condition and no recent warning event."
+msgstr "Pod 不存在，原因不明：叢集沒有回報 FailedCreate condition，也沒有近期的 warning 事件。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_platform_monitor__workload_check_cursor
