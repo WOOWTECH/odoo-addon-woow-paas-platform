@@ -81,7 +81,16 @@ DATA_RETRIEVAL_TIMEOUT = 75
 #:
 #: **刻意比 DEFAULT_TIMEOUT 短**：這是租戶開工作區頁時同步呼叫的唯讀查詢，operator 掛掉
 #: 或連不上時不能讓一個 Odoo worker 被卡 30 秒——拿不到就讓面板顯示「暫時無法取得」。
-#: 三層的大小關係由 ``src/tests/test_workspace_quota_1647.py`` 驗。
+#:
+#: 階梯的守線分兩處，各守自己讀得到的那一段：
+#:
+#:   * 前端 ＞ 本常數（connect＋read）、本常數 ＜ DEFAULT_TIMEOUT：
+#:     ``src/tests/test_workspace_quota_1647.py``（Odoo 測試讀得到前端的 JS，讀不到
+#:     extra/paas-operator）。
+#:   * 本常數的 read ＞ operator 的 NS_QUOTA_READ_TIMEOUT_SECONDS：
+#:     ``extra/paas-operator/tests/test_namespace_quota_1647.py``。它從 repo 根以 regex 讀
+#:     下面這一行 ⇒ 這一行要維持 ``NAMESPACE_QUOTA_TIMEOUT = (<connect>, <read>)``、兩個
+#:     整數字面值的形狀；改了形狀那支測試會紅（不會靜默失效），屆時連同它的 regex 一起改。
 NAMESPACE_QUOTA_TIMEOUT = (3, 8)
 
 #: #1513：operator ``upgrade-preflight``／upgrade 擴容被拒的 409 ``detail.error_code``
@@ -368,6 +377,7 @@ class PaaSOperatorClient:
                 （預算 ``NAMESPACE_QUOTA_TIMEOUT``）。
 
             本方法不吞例外——「沒有」「太舊」「失敗」怎麼對租戶呈現由呼叫端決定。
+
         """
         return self._request('GET', f'/api/namespaces/{namespace}/quota',
                              timeout=NAMESPACE_QUOTA_TIMEOUT)

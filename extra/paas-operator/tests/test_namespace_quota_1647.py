@@ -12,7 +12,9 @@ operator 原本只有建立／覆寫 quota 的端點；這裡守新增的「讀�
   失敗、逾時、輸出不是 JSON）不得變成 4xx／5xx——工作區頁開頁時同步呼叫它。
 """
 import json
+import re
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,6 +38,10 @@ from src.services.storage_quota import (
 )
 
 NS = "paas-ws-test1647"
+# 平台（Odoo addon）的 operator client：逾時階梯的上一層寫在那裡。operator 的 unit tests
+# 在 CI 是整個 repo checkout 後跑的（同 test_route_contract_golden_648 讀 repo 根的做法）。
+PLATFORM_OPERATOR_CLIENT = (Path(__file__).resolve().parents[3]
+                            / "src" / "services" / "paas_operator.py")
 QUOTA_NAME = f"{NS}-quota"
 CELL_KEYS = {"hard", "used", "hard_value", "used_value", "unit", "ratio", "quota"}
 
@@ -377,9 +383,27 @@ class TestGetResourceQuotas:
                 svc.get_resource_quotas(NS)
 
     def test_read_timeout_sits_under_the_platform_budget(self):
-        """階梯：前端 15s ＞ 平台 connect 3＋read 8 ＞ 本常數（平台端另有測試驗上兩層）。"""
+        """階梯最內層：kubectl 的上限必須嚴格小於平台等 operator 回應的 read 預算。
+
+        前端 ＞ 平台（connect＋read）那兩層由平台端的 Odoo 測試驗；Odoo 測試讀不到
+        extra/paas-operator，所以「平台 read ＞ 本常數」這一段守在這裡。平台的值直接從
+        ``src/services/paas_operator.py`` 讀、不寫死：有人把平台的 read 調到不大於 kubectl
+        的上限時，kubectl 還在正常回應平台就先斷線，租戶在 operator 慢但健康時會常態看到
+        「暫時無法取得用量」——那時這支要紅。讀不到（檔案搬走、常數改了形狀）也要紅，
+        不可靜默略過。
+        """
         assert KubernetesService.NS_QUOTA_READ_TIMEOUT_SECONDS == 5
-        assert KubernetesService.NS_QUOTA_READ_TIMEOUT_SECONDS < 8
+        source = PLATFORM_OPERATOR_CLIENT.read_text(encoding="utf-8")
+        declared = re.findall(
+            r"^NAMESPACE_QUOTA_TIMEOUT\s*=\s*\((\d+),\s*(\d+)\)\s*(?:#.*)?$", source, re.M)
+        assert len(declared) == 1, (
+            "src/services/paas_operator.py 應恰有一行 "
+            "NAMESPACE_QUOTA_TIMEOUT = (<connect>, <read>)（兩個整數字面值）；"
+            f"實際抓到 {declared!r}")
+        _connect, read = (int(part) for part in declared[0])
+        assert KubernetesService.NS_QUOTA_READ_TIMEOUT_SECONDS < read, (
+            f"operator kubectl 上限 {KubernetesService.NS_QUOTA_READ_TIMEOUT_SECONDS}s "
+            f"必須小於平台的 read 預算 {read}s")
 
 
 @pytest.fixture
