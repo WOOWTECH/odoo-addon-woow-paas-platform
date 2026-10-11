@@ -787,6 +787,15 @@ class TestWorkspaceQuotaClient1647(TransactionCase):
 
 
 _T_STRING_RE = re.compile(r'_t\("((?:[^"\\]|\\.)*)"')
+# JS 的註解（整行 ``//`` 與 ``/* */`` 區塊）：靜態斷言只看程式碼，不讓說明文字裡提到的
+# 識別字算數。只認「整行」的 ``//``，不會誤傷字串裡的 ``//``。
+_JS_COMMENT_RE = re.compile(r'/\*.*?\*/|^[ \t]*//[^\n]*$', re.S | re.M)
+
+
+def _js_code(source):
+    return _JS_COMMENT_RE.sub('', source)
+
+
 # OverviewTab 的 workspaceQuotaHint：getter 本體只有一句單行 _t()。
 _OVERVIEW_HINT_RE = re.compile(
     r'get workspaceQuotaHint\(\)\s*\{\s*return _t\("((?:[^"\\]|\\.)*)"\);')
@@ -854,6 +863,85 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         self.assertIn('share one overall CPU, memory and disk quota', sentence)
         self.assertNotIn('workspace page', sentence)
         self.assertNotIn('current usage', sentence)
+
+    def test_follow_up_reload_is_one_shot_not_polling(self):
+        """review display-B1：讀到資料後只補讀**一次**——不是輪詢。
+
+        刪除服務後回到工作區頁，pod 還在結束中、k8s 的用量還沒回補，而之後沒有任何東西
+        會觸發重讀 ⇒ 面板讀到資料後排一次延遲補讀。這裡釘住它的形狀：延遲來自 service
+        檔的常數、整個面板只有一個計時器、補讀本身不再排下一次、新的讀取與卸載都會取消
+        還沒觸發的那一次。行為本身（假計時器逐步觸發）另以 OWL＋jsdom 在本機驗過。
+        """
+        service = _js_code(_read('services', 'workspace_quota.js'))
+        delay = re.search(
+            r'export const QUOTA_FOLLOW_UP_DELAY_MS\s*=\s*([0-9_]+)\s*;', service)
+        self.assertIsNotNone(
+            delay, 'services/workspace_quota.js 找不到 QUOTA_FOLLOW_UP_DELAY_MS')
+        self.assertEqual(int(delay.group(1).replace('_', '')), 30000)
+
+        code = _js_code(_read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js'))
+        self.assertRegex(
+            code, r'import \{[^}]*\bQUOTA_FOLLOW_UP_DELAY_MS\b[^}]*\} '
+                  r'from "\.\./\.\./services/workspace_quota";')
+        # 不輪詢：沒有 setInterval；整個檔只有一個 setTimeout，延遲就是那個常數。
+        self.assertNotIn('setInterval', code)
+        self.assertEqual(code.count('setTimeout('), 1)
+        timer = re.search(
+            r'this\._followUpTimer = setTimeout\(\(\) => \{(.*?)\},\s*'
+            r'QUOTA_FOLLOW_UP_DELAY_MS\);', code, re.S)
+        self.assertIsNotNone(timer, '延遲補讀的計時器不是以 QUOTA_FOLLOW_UP_DELAY_MS 排的')
+        # 計時器觸發的那一次讀取標成 follow-up……
+        self.assertIn('this.load(workspaceId, true);', timer.group(1))
+        self.assertEqual(code.count('this.load(workspaceId, true)'), 1)
+        # ……而 follow-up 讀完不再排下一次：唯一的排程點要求「讀到資料且不是 follow-up」。
+        self.assertEqual(code.count('this.scheduleFollowUp('), 1)
+        self.assertIn('if (hasData && !isFollowUp) this.scheduleFollowUp(workspaceId);', code)
+        # 新的讀取（reloadKey／workspaceId 變動、重新整理）一開始就取消還沒觸發的那一次；
+        # 丟棄舊回應沿用同一個 _seq。
+        load = re.search(r'\n  async load\(.*?\n  \}\n', code, re.S)
+        self.assertIsNotNone(load)
+        body = load.group(0)
+        self.assertIn('isFollowUp = false', body)
+        self.assertLess(body.index('const seq = ++this._seq;'),
+                        body.index('this.cancelFollowUp();'))
+        self.assertLess(body.index('this.cancelFollowUp();'),
+                        body.index('await fetchWorkspaceQuota(workspaceId)'))
+        self.assertLess(body.index('if (seq !== this._seq) return;'),
+                        body.index('this.scheduleFollowUp('))
+        # 補讀沒讀到資料：留著畫面上那一份、不寫 state——不把一塊正常的面板換成
+        # 「暫時無法取得」。
+        keep = re.search(r'if \(isFollowUp && !hasData\) \{\s*return;\s*\}', body)
+        self.assertIsNotNone(keep, '補讀失敗時應保留原本的數字')
+        self.assertLess(keep.end(), body.index('this.state.quota ='))
+        # 卸載：作廢在途的回應，並取消計時器。
+        unmount = re.search(r'onWillUnmount\(\(\) => \{(.*?)\}\);', code, re.S)
+        self.assertIsNotNone(unmount)
+        self.assertIn('this._seq++;', unmount.group(1))
+        self.assertIn('this.cancelFollowUp();', unmount.group(1))
+        self.assertIn('clearTimeout(this._followUpTimer);', code)
+        # 陽性對照：註解被拿掉了（檔頭的說明提到了這個常數名，程式碼裡只剩 import 與使用）。
+        raw = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')
+        self.assertGreater(raw.count('QUOTA_FOLLOW_UP_DELAY_MS'),
+                           code.count('QUOTA_FOLLOW_UP_DELAY_MS'))
+        self.assertEqual(code.count('QUOTA_FOLLOW_UP_DELAY_MS'), 2)
+
+    def test_progressbar_value_stays_within_its_range(self):
+        """review display-B5：超額時 percent 大於 100，aria-valuenow 不可超過 aria-valuemax。"""
+        xml = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.xml')
+        bar = re.search(r'<div class="o_woow_quota_panel__bar"[^>]*>', xml)
+        self.assertIsNotNone(bar)
+        tag = bar.group(0)
+        self.assertIn('role="progressbar"', tag)
+        self.assertIn('aria-valuemin="0"', tag)
+        self.assertIn('aria-valuemax="100"', tag)
+        self.assertIn('t-att-aria-valuenow="row.ariaNow"', tag)
+        self.assertNotIn('row.percent"', tag, 'aria-valuenow 不可直接綁沒夾過的 percent')
+        # 實際的數字（可能是 133%）仍念得出來。
+        self.assertIn('t-att-aria-valuetext="row.percentText"', tag)
+        code = _js_code(_read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js'))
+        self.assertIn('const barPercent = Math.min(Math.max(percent, 0), 100);', code)
+        self.assertIn('ariaNow: barPercent,', code)
+        self.assertIn('fillStyle: `width: ${barPercent}%`,', code)
 
     def test_panel_formats_numbers_with_the_user_locale(self):
         js = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')

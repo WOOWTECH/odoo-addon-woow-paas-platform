@@ -23,7 +23,7 @@
               <span t-if="row.levelLabel" class="o_woow_quota_panel__level" t-esc="row.levelLabel"/>
             </div>
             <div class="o_woow_quota_panel__used" t-esc="row.usedText"/>
-            <div class="o_woow_quota_panel__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" t-att-aria-valuenow="row.percent" t-att-aria-label="row.label">
+            <div class="o_woow_quota_panel__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" t-att-aria-valuenow="row.ariaNow" t-att-aria-valuetext="row.percentText" t-att-aria-label="row.label">
               <div class="o_woow_quota_panel__fill" t-att-style="row.fillStyle"/>
             </div>
             <div class="o_woow_quota_panel__row_foot">

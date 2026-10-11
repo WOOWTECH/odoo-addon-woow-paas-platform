@@ -3,7 +3,7 @@ import { Component, useState, onMounted, onWillUpdateProps, onWillUnmount } from
 import { _t } from "@web/core/l10n/translation";
 import { formatFloat } from "@web/core/utils/numbers";
 import { WoowIcon } from "../icon/WoowIcon";
-import { fetchWorkspaceQuota } from "../../services/workspace_quota";
+import { fetchWorkspaceQuota, QUOTA_FOLLOW_UP_DELAY_MS } from "../../services/workspace_quota";
 
 /**
  * WorkspaceQuotaPanel（#1647）
@@ -23,7 +23,9 @@ import { fetchWorkspaceQuota } from "../../services/workspace_quota";
  *     namespace 沒有 quota）→ 整塊不畫。
  *
  * 不輪詢：掛載時讀一次，之後只在 reloadKey 變了（服務清單或狀態有變）或使用者按
- * 重新整理時重讀。
+ * 重新整理時重讀。這幾種讀取讀到資料後，會在 QUOTA_FOLLOW_UP_DELAY_MS 之後再補讀
+ * **一次**（補讀本身不再排下一次）：刪除服務後 k8s 的用量要等 pod 真的結束才回補，
+ * 回到工作區頁當下讀到的還是舊用量，而之後沒有任何東西會觸發重讀。
  *
  * Props:
  *   - workspaceId (Number)
@@ -41,6 +43,8 @@ export class WorkspaceQuotaPanel extends Component {
     this.state = useState({ loading: false, quota: null, failed: false });
     // 每次 load 遞增；回應回來時序號對不上＝已有更新的請求（或元件已卸載），丟掉。
     this._seq = 0;
+    // 讀到資料後排的那一次延遲補讀（見 scheduleFollowUp）；沒有排時為 null。
+    this._followUpTimer = null;
 
     onMounted(() => this.load());
     onWillUpdateProps((next) => {
@@ -55,17 +59,46 @@ export class WorkspaceQuotaPanel extends Component {
     });
     onWillUnmount(() => {
       this._seq++;
+      this.cancelFollowUp();
     });
   }
 
-  async load(workspaceId = this.props.workspaceId) {
+  /**
+   * @param {number} [workspaceId]
+   * @param {boolean} [isFollowUp] 這一次是不是延遲補讀本身（是的話讀完不再排下一次）
+   */
+  async load(workspaceId = this.props.workspaceId, isFollowUp = false) {
     const seq = ++this._seq;
+    // 新的讀取取代還沒觸發的延遲補讀；這一次若讀到資料，結束時會自己重新排一次。
+    this.cancelFollowUp();
     this.state.loading = true;
     const result = await fetchWorkspaceQuota(workspaceId);
     if (seq !== this._seq) return;
+    this.state.loading = false;
+    const hasData = Boolean(result.success && result.data && result.data.available);
+    if (isFollowUp && !hasData) {
+      // 延遲補讀只為了補上晚到的用量：這一次沒讀到，就留著畫面上那一份（半分鐘前讀到
+      // 的），不把一塊正常的面板換成「暫時無法取得」。
+      return;
+    }
     this.state.quota = result.success ? result.data : null;
     this.state.failed = !result.success;
-    this.state.loading = false;
+    if (hasData && !isFollowUp) this.scheduleFollowUp(workspaceId);
+  }
+
+  /** 排一次延遲補讀（一次性：補讀以 isFollowUp 進 load，讀完不會再回到這裡）。 */
+  scheduleFollowUp(workspaceId) {
+    this.cancelFollowUp();
+    this._followUpTimer = setTimeout(() => {
+      this._followUpTimer = null;
+      this.load(workspaceId, true);
+    }, QUOTA_FOLLOW_UP_DELAY_MS);
+  }
+
+  cancelFollowUp() {
+    if (this._followUpTimer === null) return;
+    clearTimeout(this._followUpTimer);
+    this._followUpTimer = null;
   }
 
   onRefresh() {
@@ -190,6 +223,10 @@ export class WorkspaceQuotaPanel extends Component {
       } else if (resource.level === "warning") {
         className += " o_woow_quota_panel__row--warning";
       }
+      // 超額時 percent 會大於 100：比例條只畫到滿，progressbar 的 aria-valuenow 也夾在
+      // 0–100（aria-valuemax 是 100，超出範圍的值各家螢幕閱讀器處理不一）；實際的
+      // 數字由 percentText 顯示，並放進 aria-valuetext 讓螢幕閱讀器照念。
+      const barPercent = Math.min(Math.max(percent, 0), 100);
       rows.push({
         key: resource.key,
         label,
@@ -197,8 +234,8 @@ export class WorkspaceQuotaPanel extends Component {
         remainingText,
         percent,
         percentText: `${percent}%`,
-        // 超額時 percent 會大於 100；比例條只畫到滿。
-        fillStyle: `width: ${Math.min(Math.max(percent, 0), 100)}%`,
+        fillStyle: `width: ${barPercent}%`,
+        ariaNow: barPercent,
         className,
         levelLabel: this.levelLabel(resource.level),
       });
