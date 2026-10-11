@@ -19,13 +19,18 @@
                 <sheet>
                     <!-- #1647：服務顯示 running，但某個 workload 期望有 Pod、實際一顆都沒有
                          （例：被 namespace quota 擋下）。由背景 cron 寫入、恢復後自動清掉；
-                         不改 state。detail 含叢集原文，只給系統管理員。 -->
+                         不改 state。detail 含叢集原文，只給系統管理員。
+                         第二個時間是 workload_checked_at＝最後一次**寫入**觀測結果的時間
+                         （內容沒變的檢查不更新它），所以文字寫 last change recorded，
+                         不寫 last checked。
+                         ⚠ 這段可見文字會被拆成三個翻譯 term（<strong> 整段連標籤、兩段
+                         <field/> 後面的文字），改字要同步 src/i18n/zh_TW.po。 -->
                     <div class="alert alert-danger" role="alert" groups="base.group_system"
                          invisible="not workload_fault_code">
                         <strong>This service is marked running, but a workload has no pods.</strong>
                         <div>
-                            <field name="workload_fault_code" nolabel="1"/> — since
-                            <field name="workload_fault_since" nolabel="1"/>, last checked
+                            <field name="workload_fault_code" nolabel="1"/> — first seen
+                            <field name="workload_fault_since" nolabel="1"/>, last change recorded
                             <field name="workload_checked_at" nolabel="1"/>
                         </div>
                         <field name="workload_fault_detail" nolabel="1"/>

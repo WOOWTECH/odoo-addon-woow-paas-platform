@@ -14,13 +14,19 @@
 * ``_apply_workload_observation``：有證據的第一次觀測就寫欄位並通知系統管理員（每段異常
   一次、同 summary 未處理前一台一行），沒有證據要持續 5 分鐘；恢復後清空並追加「已恢復」；
   不支援／查詢失敗一格都不動；
+* 🔴 **值真的變了才寫**：健康的穩態、內容沒變的異常，對 cloud_service 列零寫入
+  （``write()`` 次數為 0、``write_date`` 不動）——10 分鐘 cron 每趟 commit 所有 running 列
+  會與每日對帳、生命週期 cron 的長交易互撞（review detect-B1／B2）；
 * 🔴 全程 ``state`` 仍是 ``running``、``error_message`` 不變（repo-lint 第 19 條判準 5 另有
   形態層守衛）；
 * 服務離開 running 時四格由 ``write()`` 集中清掉，非系統使用者寫不進這五格、也不會因為
   改 state 而 AccessError；
-* ``_cron_check_running_workloads``：最久沒查的優先、逐台隔離、預算與連續傳輸錯誤會中止、
-  舊 operator 第一台之後就中止、改 0 筆也印一行 INFO；
-* 每日對帳順帶回寫 workload 觀測，出錯不連累 release 事實，既有那行 log 不變；
+* ``_cron_check_running_workloads``：依 platform_monitor 的游標輪替（從游標之後、依 id 升冪、
+  繞回開頭；成功、失敗、略過都推進，提前中止後下一趟從中止處之後開始——每次都失敗的服務
+  不會把後面的餓死，review detect-B3）、逐台隔離、預算與連續傳輸錯誤會中止、舊 operator
+  第一台之後就中止、operator 回錯只印一行 warning、改 0 筆也印一行 INFO；
+* 每日對帳順帶回寫 workload 觀測（同樣值沒變不寫），出錯不連累 release 事實，既有那行
+  log 不變；
 * /woow payload 只給**已確認**的代碼，不帶叢集原文。
 
 status 一律用 ``status_response()``／``workload_info()`` 組（形狀對帳到 operator 的 pydantic
@@ -28,6 +34,7 @@ status 一律用 ``status_response()``／``workload_info()`` 組（形狀對帳�
 """
 import json
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -38,12 +45,13 @@ from odoo.tests.common import BaseCase, TransactionCase, tagged
 
 from ..models.cloud_service import (
     WORKLOAD_CHECK_BUDGET_SECONDS,
+    WORKLOAD_CHECK_TRANSPORT_ABORT,
     WORKLOAD_FAULT_CONFIRM_MINUTES,
     _OBSERVATION_CONTROL_FIELDS,
     _WORKLOAD_FAULT_FIELDS,
     _internal_provision,
 )
-from ..services.paas_operator import PaaSOperatorTimeoutError
+from ..services.paas_operator import PaaSOperatorAPIError, PaaSOperatorTimeoutError
 from ..services.workload_health import (
     DETAIL_LIMIT,
     FAULT_CREATE_FAILED,
@@ -76,6 +84,8 @@ _QUOTA_MESSAGE = (
 _OTHER_MESSAGE = ('pods "svc-1647-server-7d9c8b6f5-" is forbidden: violates PodSecurity '
                   '"restricted:latest"')
 _NOW = datetime(2026, 10, 10, 23, 40, 0)
+#: 撥回 write_date 用的固定過去時間（與任何一次真的寫入都不會相同）。
+_REWOUND = datetime(2026, 1, 1, 0, 0, 0)
 _FRESH = '2026-10-10T23:31:12Z'
 _STALE = '2026-10-10T22:00:00Z'
 
@@ -316,6 +326,52 @@ class _WorkloadCase(TransactionCase):
     def _fault_values(self, svc):
         return tuple(svc[name] for name in _WORKLOAD_FAULT_FIELDS)
 
+    @contextmanager
+    def _service_writes(self):
+        """記下區塊內每一次對 cloud_service 的 ``write()``：``[(ids, 排序過的 vals key)]``。
+
+        原本的 write 照常執行。spy 掛在 registry class 上（最外層），所以 ``write()`` 內部
+        用 ``super()`` 補寫的那幾次不會另外算——要數的是「有幾個呼叫端對服務列下了 write」。
+        """
+        cls = type(self.Service)
+        original = cls.write
+        calls = []
+
+        def _spy(records, vals):
+            calls.append((tuple(records.ids), sorted(vals)))
+            return original(records, vals)
+
+        with patch.object(cls, 'write', _spy):
+            yield calls
+
+    def _rewind_write_date(self, services):
+        """把 ``write_date`` 撥回固定的過去時間。
+
+        測試交易內 ``cr.now()`` 是交易起點，每一次 ORM 寫入蓋上去的 write_date 都相同——
+        不先撥回，「write_date 沒變」在同一個交易裡恆真、沒有鑑別力。
+        """
+        services.flush_recordset()
+        self.env.cr.execute(
+            'UPDATE %s SET write_date = %%s WHERE id IN %%s' % self.Service._table,
+            (_REWOUND, tuple(services.ids)))
+        services.invalidate_recordset(['write_date'])
+        self.assertEqual(self._write_dates(services), dict.fromkeys(services.ids, _REWOUND),
+                         'fixture 前提：write_date 確實被撥回')
+
+    def _write_dates(self, services):
+        """直接從 DB 讀 write_date（先 flush：還沒落地的 ORM 寫入也要算）。"""
+        self.Service.flush_model()
+        self.env.cr.execute(
+            'SELECT id, write_date FROM %s WHERE id IN %%s' % self.Service._table,
+            (tuple(services.ids),))
+        return dict(self.env.cr.fetchall())
+
+    def _assert_untouched(self, services, calls):
+        """零寫入的兩個獨立證據：沒有任何 ``write()`` 呼叫，DB 裡的 write_date 也沒動。"""
+        self.assertEqual(calls, [], '對 cloud_service 不得有任何 write')
+        self.assertEqual(self._write_dates(services), dict.fromkeys(services.ids, _REWOUND),
+                         'write_date 不得變動')
+
     def _flag(self, svc, code='quota_exceeded', minutes_ago=60):
         """直接寫一段「已通知」的異常（superuser env；等同平台自己寫的）。"""
         since = fields.Datetime.now() - timedelta(minutes=minutes_ago)
@@ -402,6 +458,15 @@ class TestWorkloadObservation1647(_WorkloadCase):
         second._apply_workload_observation(_status(_quota_blocked()))
         self.assertEqual(self._activities().mapped('note'), notes)
 
+    def _age_first_sight(self, svc, minutes):
+        """把「第一次看到」那一趟整個往前挪：since 與那一趟留下的寫入時間一起挪。
+
+        只挪 since 的話，列上會變成「寫入時間 − since ≥ 門檻」，等於替被測程式把確認做完了。
+        """
+        first_seen = fields.Datetime.now() - timedelta(minutes=minutes)
+        svc.write({'workload_fault_since': first_seen, 'workload_checked_at': first_seen})
+        return first_seen
+
     def test_no_pods_without_evidence_waits_before_alerting(self):
         svc = self._service('nopods')
 
@@ -413,16 +478,80 @@ class TestWorkloadObservation1647(_WorkloadCase):
         self.assertFalse(svc.workload_fault_alerted_at)
         self.assertFalse(self._activities())
 
-        # 同一段異常已經持續超過門檻。
-        svc.write({'workload_fault_since': fields.Datetime.now() - timedelta(
-            minutes=WORKLOAD_FAULT_CONFIRM_MINUTES + 1)})
+        # 還沒過門檻就再看到一次：仍不確認，而且內容沒變 ⇒ 不寫。
+        self._age_first_sight(svc, WORKLOAD_FAULT_CONFIRM_MINUTES - 1)
+        self._rewind_write_date(svc)
+        with self._service_writes() as calls:
+            outcome = svc._apply_workload_observation(_status(_blocked()))
+        self.assertEqual(outcome, 'ongoing')
+        self._assert_untouched(svc, calls)
+        self.assertFalse(svc._workload_fault_confirmed())
+        self.assertFalse(self._activities())
+
+        # 同一段異常已經持續超過門檻，而且這一趟又看到了。
+        first_seen = self._age_first_sight(svc, WORKLOAD_FAULT_CONFIRM_MINUTES + 1)
+        self.assertFalse(svc._workload_fault_confirmed(),
+                         'fixture 前提：列上還沒有「過了門檻又看到一次」的紀錄')
         outcome = svc._apply_workload_observation(_status(_blocked()))
 
         self.assertEqual(outcome, 'ongoing')
         self.assertTrue(svc._workload_fault_confirmed())
+        self.assertEqual(svc.workload_fault_since, first_seen, '起點不變')
+        self.assertGreater(svc.workload_checked_at, first_seen,
+                           '確認的那一趟要留下一次寫入——之後的讀取端（/woow payload）靠它')
         self.assertTrue(svc.workload_fault_alerted_at)
         self.assertTrue(self._activities())
         self.assertEqual(svc.state, 'running')
+
+        # 確認之後內容沒變：回到零寫入。
+        self._rewind_write_date(svc)
+        with self._service_writes() as calls:
+            outcome = svc._apply_workload_observation(_status(_blocked()))
+        self.assertEqual(outcome, 'ongoing')
+        self._assert_untouched(svc, calls)
+        self.assertTrue(svc._workload_fault_confirmed())
+
+    def test_confirmation_needs_a_second_sighting_not_just_elapsed_time(self):
+        """只被看到一次的 ``no_pods``，放再久也不算確認（讀取端不拿牆鐘的現在去減 since）。
+
+        /woow 每次組 payload 都會問「確認了沒」。用「現在 − since」當判準的話，換 Pod 那一瞬間
+        的 0 個 Pod 會在 5 分鐘後對租戶顯示成故障，一直到下一趟 cron 才清掉。
+        """
+        svc = self._service('glimpse')
+        svc._apply_workload_observation(_status(_blocked()))
+        self._age_first_sight(svc, WORKLOAD_FAULT_CONFIRM_MINUTES * 3)
+
+        self.assertFalse(svc._workload_fault_confirmed())
+        self.assertIsNone(svc._workload_fault_public())
+
+        # 下一趟看到已經恢復：安靜地清掉，從頭到尾沒有通知、也沒有對租戶顯示過。
+        self.assertEqual(svc._apply_workload_observation(_status(workload_info())), 'cleared')
+        self.assertFalse(self._activities())
+
+    def test_unchanged_fault_writes_nothing_the_second_time(self):
+        """異常持續、代碼與 detail 都沒變 ⇒ 第二趟一格都不寫（review detect-B1）。"""
+        svc = self._service('steady-fault')
+        status = _status(_healthy_statefulset(), _quota_blocked())
+        self.assertEqual(svc._apply_workload_observation(status), 'raised')
+        self.assertTrue(svc.workload_fault_alerted_at, 'fixture 前提：這一段已通知')
+        snapshot = (self._fault_values(svc), svc.workload_checked_at)
+        notes = self._activities().mapped('note')
+        self._rewind_write_date(svc)
+
+        with self._service_writes() as calls:
+            outcome = svc._apply_workload_observation(status)
+
+        self.assertEqual(outcome, 'ongoing')
+        self._assert_untouched(svc, calls)
+        self.assertEqual((self._fault_values(svc), svc.workload_checked_at), snapshot)
+        self.assertEqual(self._activities().mapped('note'), notes)
+
+        # 陽性對照：內容真的變了（多一個被擋的 workload）就會寫，而且只寫變了的那幾格。
+        with self._service_writes() as calls:
+            svc._apply_workload_observation(_status(
+                _quota_blocked(), _blocked(kind='StatefulSet', name='svc-1647-postgresql')))
+        self.assertEqual(calls, [((svc.id,), ['workload_checked_at', 'workload_fault_detail'])])
+        self.assertNotEqual(self._write_dates(svc)[svc.id], _REWOUND)
 
     def test_recovery_clears_the_flag_and_notes_it(self):
         svc = self._service('recover')
@@ -465,16 +594,39 @@ class TestWorkloadObservation1647(_WorkloadCase):
                          '沒通知過的異常恢復時不該留下「已恢復」')
         self.assertFalse(self._activities())
 
-    def test_healthy_observation_only_stamps_the_check_time(self):
+    def test_healthy_observation_writes_nothing(self):
+        """健康、列上也沒有異常值 ⇒ 一格都不寫，連「查過了」的時間都不留（review detect-B1）。"""
         svc = self._service('healthy')
         self.assertFalse(svc.workload_checked_at)
+        self._rewind_write_date(svc)
 
-        outcome = svc._apply_workload_observation(_status(workload_info()))
+        with self._service_writes() as calls:
+            outcomes = [svc._apply_workload_observation(_status(workload_info()))
+                        for _round in range(2)]
 
-        self.assertEqual(outcome, 'healthy')
-        self.assertTrue(svc.workload_checked_at)
+        self.assertEqual(outcomes, ['healthy', 'healthy'])
+        self._assert_untouched(svc, calls)
+        self.assertFalse(svc.workload_checked_at)
         self.assertEqual(self._fault_values(svc), (False, False, False, False))
         self.assertFalse(self._activities())
+
+    def test_recovery_after_a_fault_returns_to_zero_writes(self):
+        """恢復那一趟寫一次（清空），之後又是健康的穩態。"""
+        svc = self._service('recovered')
+        svc._apply_workload_observation(_status(_quota_blocked()))
+        healthy = _status(workload_info())
+
+        with self._service_writes() as calls:
+            self.assertEqual(svc._apply_workload_observation(healthy), 'cleared')
+        self.assertEqual(len(calls), 1, calls)
+        cleared_at = svc.workload_checked_at
+        self.assertTrue(cleared_at, '恢復是一次觀測結果的寫入')
+
+        self._rewind_write_date(svc)
+        with self._service_writes() as calls:
+            self.assertEqual(svc._apply_workload_observation(healthy), 'healthy')
+        self._assert_untouched(svc, calls)
+        self.assertEqual(svc.workload_checked_at, cleared_at)
 
     def test_unsupported_and_unknown_touch_nothing(self):
         clean = self._service('clean')
@@ -493,7 +645,7 @@ class TestWorkloadObservation1647(_WorkloadCase):
             with self.subTest(outcome=expected):
                 self.assertEqual(clean._apply_workload_observation(status), expected)
                 self.assertEqual(flagged._apply_workload_observation(status), expected)
-                self.assertFalse(clean.workload_checked_at, '連 checked_at 都不動')
+                self.assertFalse(clean.workload_checked_at, '寫入時間也不動')
                 self.assertEqual(flagged.workload_checked_at, since)
                 self.assertEqual(self._fault_values(flagged), snapshot,
                                  '查不到不是恢復：既有的旗標不得被清掉')
@@ -565,7 +717,8 @@ class TestWorkloadFaultLifecycle1647(_WorkloadCase):
 
                 self.assertEqual(self._fault_values(svc), (False, False, False, False))
                 self.assertEqual(svc.workload_checked_at, checked,
-                                 'checked_at 說的是「最後一次看過」，不屬於某一段異常')
+                                 'checked_at 說的是「最後一次寫入觀測結果的時間」，'
+                                 '不屬於某一段異常')
 
     def test_same_state_write_keeps_the_fault(self):
         svc = self._service('same')
@@ -626,7 +779,7 @@ class TestWorkloadFaultLifecycle1647(_WorkloadCase):
                         '離開 running 時會被清掉的欄位，每一格都必須擋住非平台身分的寫入')
         self.assertIn('workload_checked_at', _OBSERVATION_CONTROL_FIELDS)
         self.assertNotIn('workload_checked_at', _WORKLOAD_FAULT_FIELDS,
-                         '「最後一次看過」不屬於某一段異常，離開 running 時不清')
+                         '「最後一次寫入觀測結果的時間」不屬於某一段異常，離開 running 時不清')
 
 
 # ====================================================================== #
@@ -641,6 +794,15 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
         # 這個 DB 裡可能已有別的測試建的服務；本 class 的順序／計數類斷言會被鄰居污染
         # （同 test_reconcile_release_facts_627i 的做法）。
         self.Service.search([]).unlink()
+        # 輪替游標記在 monitor 單例上：每條測試都從頭開始。
+        self._set_cursor(0)
+
+    def _set_cursor(self, service_id):
+        self.singleton.write({'workload_check_cursor': service_id})
+
+    def _cursor(self):
+        self.singleton.invalidate_recordset(['workload_check_cursor'])
+        return self.singleton.workload_check_cursor
 
     def _run(self, client):
         """跑 10 分鐘 cron（mock operator；TransactionCase 禁 commit／rollback ⇒ no-op）。"""
@@ -651,9 +813,46 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
         self.Service.invalidate_model()
         return client
 
+    def _run_healthy(self):
+        return self._run(operator_client(get_status=_status(workload_info())))
+
+    def _client_failing_for(self, failing, error):
+        """``failing`` 裡的服務每次都拋 ``error``，其餘回健康。每趟給一個新的 client，
+        呼叫序列才不會跨趟累加。"""
+        names = {svc.helm_release_name for svc in failing}
+        client = operator_client()
+
+        def _answer(namespace, release_name, include_vm=False, include_workloads=False):
+            if release_name in names:
+                raise error
+            return _status(workload_info())
+
+        client.get_status.side_effect = _answer
+        return client
+
+    def _client_answering(self, answers):
+        """``answers``：服務 → 那一台的 status；沒列到的回健康。"""
+        by_name = {svc.helm_release_name: status for svc, status in answers.items()}
+        client = operator_client()
+
+        def _answer(namespace, release_name, include_vm=False, include_workloads=False):
+            return by_name.get(release_name, _status(workload_info()))
+
+        client.get_status.side_effect = _answer
+        return client
+
     @staticmethod
     def _polled(client):
         return [c.kwargs.get('release_name') for c in client.get_status.call_args_list]
+
+    @staticmethod
+    def _names(*services):
+        return [svc.helm_release_name for svc in services]
+
+    @staticmethod
+    def _summary(captured):
+        lines = [line for line in captured.output if 'workload-check: running' in line]
+        return lines[0] if lines else ''
 
     def test_cron_record_is_wired(self):
         cron = self.env.ref('woow_paas_platform.ir_cron_check_running_workloads')
@@ -663,64 +862,191 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
 
     def test_only_running_services_with_release_coordinates_are_checked(self):
         running = self._service('run')
-        deploying = self._service('deploying', state='deploying')
-        suspended = self._service('suspended', state='suspended')
-        no_release = self._service('norelease', helm_release_name=False)
-        no_namespace = self._service('nons', helm_namespace=False)
+        self._service('deploying', state='deploying')
+        self._service('suspended', state='suspended')
+        self._service('norelease', helm_release_name=False)
+        self._service('nons', helm_namespace=False)
 
-        client = self._run(operator_client(get_status=_status(workload_info())))
+        client = self._run_healthy()
 
         self.assertEqual(self._polled(client), [running.helm_release_name])
         kwargs = client.get_status.call_args.kwargs
         self.assertIs(kwargs.get('include_workloads'), True)
         self.assertNotIn('include_vm', kwargs)
         self.assertEqual(kwargs.get('namespace'), running.helm_namespace)
-        self.assertTrue(running.workload_checked_at)
-        for other in (deploying, suspended, no_release, no_namespace):
-            self.assertFalse(other.workload_checked_at)
 
-    def test_least_recently_checked_goes_first(self):
-        now = fields.Datetime.now()
-        # 建立順序刻意與期望順序不同：依 id 排會得到 recent, old, never_a, never_b。
-        recent = self._service('recent')
-        old = self._service('old')
-        never_a = self._service('never-a')
-        never_b = self._service('never-b')
-        recent.write({'workload_checked_at': now - timedelta(hours=1)})
-        old.write({'workload_checked_at': now - timedelta(hours=2)})
+    # ---------------- 健康的穩態不寫服務列（review detect-B1／B2） ---------------- #
 
-        client = self._run(operator_client(get_status=_status(workload_info())))
+    def test_healthy_steady_state_never_writes_a_service_row(self):
+        """連跑兩趟、每一台都健康 ⇒ 對 cloud_service 的 write 次數為 0，write_date 不動。
 
-        self.assertEqual(self._polled(client), [
-            never_a.helm_release_name, never_b.helm_release_name,
-            old.helm_release_name, recent.helm_release_name])
+        這條 cron 每 10 分鐘跑一次、逐台 commit：只要每趟在每台上留一格時間戳，就等於每
+        10 分鐘 commit 一次所有 running 列，每日對帳與生命週期 cron（REPEATABLE READ 的長
+        交易）之後一寫那些列就是 serialization failure。
+        """
+        services = self.Service.browse()
+        for tag in ('a', 'b', 'c'):
+            services |= self._service('steady-%s' % tag)
+        self._rewind_write_date(services)
+
+        with self._service_writes() as calls, \
+                self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            first = self._run_healthy()
+            second = self._run_healthy()
+
+        self.assertEqual(self._polled(first), self._names(*services), '前提：每一台都真的查了')
+        self.assertEqual(self._polled(second), self._names(*services))
+        self._assert_untouched(services, calls)
+        for svc in services:
+            self.assertFalse(svc.workload_checked_at, '健康的服務不留「查過了」的時間')
+        summaries = [line for line in captured.output if 'workload-check: running' in line]
+        self.assertEqual(len(summaries), 2)
+        for line in summaries:
+            self.assertIn('本趟檢查 3 筆', line)
+            self.assertIn('健康 3', line)
+
+    def test_full_passes_do_not_rewrite_the_cursor(self):
+        """每趟都查得完時游標停在同一個 id：monitor 那一列在穩態也是零寫入。"""
+        services = [self._service('pass-%s' % tag) for tag in ('a', 'b', 'c')]
+        self._run_healthy()
+        self.assertEqual(self._cursor(), services[-1].id, '前提：第一趟把游標推到最後一台')
+
+        monitor_cls = type(self.Monitor)
+        original = monitor_cls.write
+        monitor_writes = []
+
+        def _spy(records, vals):
+            monitor_writes.append(sorted(vals))
+            return original(records, vals)
+
+        with patch.object(monitor_cls, 'write', _spy):
+            client = self._run_healthy()
+
+        self.assertEqual(self._polled(client), self._names(*services))
+        self.assertEqual(monitor_writes, [], '游標值沒變就不寫')
+        self.assertEqual(self._cursor(), services[-1].id)
+
+    def test_unchanged_fault_is_not_rewritten_on_the_next_run(self):
+        """異常還在、內容沒變：第二趟對那一台也是零寫入。"""
+        faulty = self._service('still-down')
+        fine = self._service('fine')
+        both = faulty | fine
+        blocked = self._client_answering({faulty: _status(_quota_blocked())})
+        self._run(blocked)
+        self.assertEqual(faulty.workload_fault_code, 'quota_exceeded', '前提：第一趟寫進去了')
+        self.assertTrue(faulty.workload_fault_alerted_at)
+        snapshot = (self._fault_values(faulty), faulty.workload_checked_at)
+        notes = self._activities().mapped('note')
+        self._rewind_write_date(both)
+
+        with self._service_writes() as calls, \
+                self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            self._run(self._client_answering({faulty: _status(_quota_blocked())}))
+
+        self._assert_untouched(both, calls)
+        self.assertEqual((self._fault_values(faulty), faulty.workload_checked_at), snapshot)
+        self.assertEqual(self._activities().mapped('note'), notes, '不重複通知')
+        self.assertIn('持續中 1', self._summary(captured))
+        self.assertIn('健康 1', self._summary(captured))
+
+    # ---------------- 輪替游標（review detect-B3） ---------------- #
+
+    def test_rotation_starts_after_the_cursor_and_wraps_around(self):
+        a, b, c, d = (self._service('rot-%s' % tag) for tag in 'abcd')
+        self.assertLess(a.id, d.id, 'fixture 前提：id 依建立順序遞增')
+
+        # 游標在中間：從它之後開始，繞回開頭，最後才輪到游標指的那一台。
+        self._set_cursor(b.id)
+        self.assertEqual(self._polled(self._run_healthy()), self._names(c, d, a, b))
+        self.assertEqual(self._cursor(), b.id, '查完整輪，游標回到原地')
+
+        # 游標在最後一台：整輪從頭開始。
+        self._set_cursor(d.id)
+        self.assertEqual(self._polled(self._run_healthy()), self._names(a, b, c, d))
+
+        # 游標指到已經不存在、比所有 id 都大的服務：當分界用，一樣從頭開始。
+        self._set_cursor(d.id + 1000)
+        self.assertEqual(self._polled(self._run_healthy()), self._names(a, b, c, d))
+        self.assertEqual(self._cursor(), d.id)
+
+        # 從沒跑過（0）：依 id 升冪。
+        self._set_cursor(0)
+        self.assertEqual(self._polled(self._run_healthy()), self._names(a, b, c, d))
+        self.assertEqual(self._cursor(), d.id)
+
+    def test_persistent_timeouts_do_not_starve_the_other_services(self):
+        """兩台持續逾時：連跑三趟，其餘服務每一趟（第二趟起）都查得到。
+
+        舊做法用「最後一次成功檢查的時間」排序——每次都失敗的服務永遠排最前面，連續 2 次
+        傳輸錯誤的中止讓每一趟都死在同樣那兩台，後面的服務一台都輪不到。
+        """
+        self.assertEqual(WORKLOAD_CHECK_TRANSPORT_ABORT, 2, '本測試的呼叫序列以 2 為前提')
+        down_a, down_b, ok_c, ok_d, ok_e = (self._service('starve-%s' % tag) for tag in 'abcde')
+        down = (down_a, down_b)
+        timeout = PaaSOperatorTimeoutError('timed out')
+
+        with self.assertLogs(_MODEL_LOGGER, level=logging.WARNING):
+            runs = [self._polled(self._run(self._client_failing_for(down, timeout)))
+                    for _round in range(3)]
+
+        self.assertEqual(runs[0], self._names(down_a, down_b), '第一趟：前兩台逾時就中止')
+        self.assertEqual(self._cursor(), down_b.id, '中止時游標停在最後處理的那一台')
+        expected = self._names(ok_c, ok_d, ok_e, down_a, down_b)
+        self.assertEqual(runs[1], expected, '第二趟：從中止處之後開始，其餘三台先查')
+        self.assertEqual(runs[2], expected, '第三趟：仍然查得到其餘三台')
 
     def test_one_failing_service_does_not_stop_the_others(self):
         good_a = self._service('good-a')
         bad = self._service('bad')
         good_b = self._service('good-b')
-        client = operator_client()
 
-        def _status_or_boom(namespace, release_name, include_vm=False, include_workloads=False):
-            if release_name == bad.helm_release_name:
-                raise RuntimeError('operator exploded')
-            return _status(workload_info())
-
-        client.get_status.side_effect = _status_or_boom
         with self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
-            self._run(client)
+            client = self._run(self._client_failing_for(
+                [bad], RuntimeError('operator exploded')))
 
-        self.assertEqual(len(self._polled(client)), 3)
-        self.assertTrue(good_a.workload_checked_at)
-        self.assertTrue(good_b.workload_checked_at, '一台失敗不得中斷整趟')
-        self.assertFalse(bad.workload_checked_at)
-        summary = [line for line in captured.output if 'workload-check: running' in line]
-        self.assertIn('本趟檢查 2 筆', summary[0])
-        self.assertIn('讀取失敗 1 筆', summary[0])
+        self.assertEqual(self._polled(client), self._names(good_a, bad, good_b),
+                         '一台失敗不得中斷整趟')
+        self.assertIn('本趟檢查 2 筆', self._summary(captured))
+        self.assertIn('健康 2', self._summary(captured))
+        self.assertIn('讀取失敗 1 筆', self._summary(captured))
+        self.assertNotIn('提前中止', self._summary(captured))
+        errors = [r for r in captured.records if r.levelno >= logging.ERROR]
+        self.assertEqual(len(errors), 1, '沒預期到的例外要留 traceback')
+        self.assertTrue(errors[0].exc_info)
+        self.assertIn('id=%s' % bad.id, errors[0].getMessage())
+        self.assertEqual(self._cursor(), good_b.id)
 
-    def test_budget_stops_the_run_and_reports_what_is_left(self):
-        for tag in ('a', 'b', 'c'):
-            self._service('budget-%s' % tag)
+    def test_operator_api_error_is_one_warning_line_without_traceback(self):
+        """operator 有回應但對這一台回錯（例：DB 是 running、叢集上 release 已不在 → 404）。
+
+        那種服務每 10 分鐘都會回同樣的錯：一行 warning 就夠，不要每趟一份 traceback；
+        也不算傳輸錯誤（operator 是通的），不得讓「連續傳輸錯誤」的中止提早發生。
+        """
+        gone_a = self._service('gone-a')
+        gone_b = self._service('gone-b')
+        fine = self._service('still-here')
+        not_found = PaaSOperatorAPIError('Release not found', status_code=404)
+
+        with self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            client = self._run(self._client_failing_for([gone_a, gone_b], not_found))
+
+        self.assertEqual(self._polled(client), self._names(gone_a, gone_b, fine),
+                         '連續兩台回 404 不是 operator 掛了：不中止')
+        self.assertNotIn('提前中止', self._summary(captured))
+        self.assertIn('本趟檢查 1 筆', self._summary(captured))
+        self.assertIn('讀取失敗 2 筆', self._summary(captured))
+        for gone in (gone_a, gone_b):
+            lines = [r for r in captured.records if 'id=%s ' % gone.id in r.getMessage()]
+            self.assertEqual(len(lines), 1, [r.getMessage() for r in lines])
+            self.assertEqual(lines[0].levelno, logging.WARNING)
+            self.assertFalse(lines[0].exc_info, '不帶 traceback')
+            self.assertIn('404', lines[0].getMessage())
+            self.assertIn('Release not found', lines[0].getMessage())
+        self.assertFalse([r for r in captured.records if r.levelno >= logging.ERROR])
+        self.assertEqual(self._cursor(), fine.id, '回錯的那兩台也算處理過')
+
+    def test_budget_stops_the_run_and_the_next_run_resumes_after_it(self):
+        a, b, c = (self._service('budget-%s' % tag) for tag in 'abc')
         client = operator_client(get_status=_status(workload_info()))
         # 第一次是起點、第二次是第一台之前；之後每次都已經超過預算。
         ticks = iter([0, 0])
@@ -732,11 +1058,14 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
                 self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
             self._run(client)
 
-        self.assertEqual(client.get_status.call_count, 1, '第二台之前就超過預算')
-        summary = [line for line in captured.output if 'workload-check: running' in line]
-        self.assertIn('running 3 筆', summary[0])
-        self.assertIn('本趟檢查 1 筆', summary[0])
-        self.assertIn('預算用完未檢查 2 筆', summary[0])
+        self.assertEqual(self._polled(client), self._names(a), '第二台之前就超過預算')
+        self.assertIn('running 3 筆', self._summary(captured))
+        self.assertIn('本趟檢查 1 筆', self._summary(captured))
+        self.assertIn('預算用完未檢查 2 筆', self._summary(captured))
+        self.assertEqual(self._cursor(), a.id, '預算用完也要寫回游標')
+
+        # 下一趟（預算夠）：從沒查到的那兩台開始，最後才回到已經查過的那一台。
+        self.assertEqual(self._polled(self._run_healthy()), self._names(b, c, a))
 
     def test_two_consecutive_transport_errors_abort_the_run(self):
         services = [self._service('down-%s' % tag) for tag in ('a', 'b', 'c')]
@@ -746,11 +1075,17 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
         with self.assertLogs(_MODEL_LOGGER, level=logging.WARNING) as captured:
             self._run(client)
 
-        self.assertEqual(client.get_status.call_count, 2, 'operator 掛了就不逐台等 timeout')
+        self.assertEqual(self._polled(client), self._names(*services[:2]),
+                         'operator 掛了就不逐台等 timeout')
         self.assertTrue(any('本趟中止' in line for line in captured.output))
         for svc in services:
-            self.assertFalse(svc.workload_checked_at)
             self.assertEqual(svc.state, 'running')
+            self.assertEqual(self._fault_values(svc), (False, False, False, False))
+        self.assertEqual(self._cursor(), services[1].id, '中止也要寫回游標')
+
+        # operator 恢復後的下一趟：從中止處之後開始。
+        self.assertEqual(self._polled(self._run_healthy()),
+                         self._names(services[2], services[0], services[1]))
 
     def test_a_success_between_transport_errors_resets_the_streak(self):
         services = [self._service('flaky-%s' % tag) for tag in ('a', 'b', 'c', 'd')]
@@ -760,12 +1095,13 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
             PaaSOperatorTimeoutError('timed out'), _status(workload_info()),
         ]
 
-        with self.assertLogs(_MODEL_LOGGER, level=logging.WARNING):
+        with self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
             self._run(client)
 
-        self.assertEqual(client.get_status.call_count, 4, '不連續的傳輸錯誤不中止')
-        self.assertEqual([bool(svc.workload_checked_at) for svc in services],
-                         [False, True, False, True])
+        self.assertEqual(self._polled(client), self._names(*services), '不連續的傳輸錯誤不中止')
+        self.assertIn('本趟檢查 2 筆', self._summary(captured))
+        self.assertIn('讀取失敗 2 筆', self._summary(captured))
+        self.assertNotIn('提前中止', self._summary(captured))
 
     def test_legacy_operator_aborts_after_the_first_service(self):
         """舊 operator 對每一台的回答都一樣：第一台之後就不必再打。"""
@@ -775,22 +1111,82 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
         with self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
             self._run(client)
 
-        self.assertEqual(client.get_status.call_count, 1)
+        self.assertEqual(self._polled(client), self._names(services[0]))
         self.assertTrue(any('operator 尚未回報 workloads' in line for line in captured.output))
         for svc in services:
             self.assertFalse(svc.workload_checked_at)
             self.assertEqual(self._fault_values(svc), (False, False, False, False))
         self.assertFalse(self._activities())
+        self.assertEqual(self._cursor(), services[0].id, '舊 operator 中止也要寫回游標')
+
+        # 之後每一趟各問下一台，問完一輪繞回第一台——不是每趟都問同一台。
+        asked = []
+        for _round in range(3):
+            with self.assertLogs(_MODEL_LOGGER, level=logging.INFO):
+                asked += self._polled(
+                    self._run(operator_client(get_status=_legacy_status())))
+        self.assertEqual(asked, self._names(services[1], services[2], services[0]))
+
+    def test_skipped_service_still_advances_the_cursor(self):
+        """輪到時已經離開 running 的服務被略過——也算處理過，游標照樣推進。"""
+        first = self._service('skip-first')
+        leaving = self._service('skip-leaving')
+        client = operator_client()
+
+        def _answer(namespace, release_name, include_vm=False, include_workloads=False):
+            # 第一台檢查到一半，第二台被別的交易改成 upgrading（例：租戶按了重新啟動）。
+            leaving.write({'state': 'upgrading'})
+            return _status(workload_info())
+
+        client.get_status.side_effect = _answer
+
+        with self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            self._run(client)
+
+        self.assertEqual(self._polled(client), self._names(first), '離開 running 的不打 operator')
+        self.assertIn('本趟檢查 1 筆', self._summary(captured))
+        self.assertEqual(self._cursor(), leaving.id)
+
+    def test_cursor_write_failure_does_not_fail_the_cron(self):
+        """游標只是「下一趟從哪裡開始」的提示：寫不進去只記 warning，cron 不拋錯。"""
+        services = [self._service('cursor-%s' % tag) for tag in ('a', 'b')]
+        monitor_cls = type(self.Monitor)
+        original = monitor_cls.write
+        attempts = []
+
+        def _boom(records, vals):
+            if 'workload_check_cursor' in vals:
+                attempts.append(dict(vals))
+                raise RuntimeError('monitor row is busy')
+            return original(records, vals)
+
+        with patch.object(monitor_cls, 'write', _boom), \
+                self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            client = self._run_healthy()
+
+        self.assertEqual(attempts, [{'workload_check_cursor': services[-1].id}],
+                         '前提：確實試著寫回游標，而且只試一次')
+        self.assertEqual(self._polled(client), self._names(*services))
+        warnings = [r for r in captured.records
+                    if r.levelno == logging.WARNING and '游標寫回失敗' in r.getMessage()]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('本趟檢查 2 筆', self._summary(captured), '結尾那行 INFO 照印')
+        self.assertEqual(self._cursor(), 0, '沒寫進去：下一趟從舊游標接著查')
 
     def test_no_client_or_no_services_is_quiet(self):
-        # 沒有服務：不取 client、不拋錯。
+        # 沒有服務：不取 client、不拋錯、不動游標。
         client = operator_client()
         self._run(client)
         client.get_status.assert_not_called()
         # 有服務但 operator 沒設定：不拋錯、什麼都不寫。
         svc = self._service('noclient')
-        self._run(None)
-        self.assertFalse(svc.workload_checked_at)
+        self._rewind_write_date(svc)
+        with self._service_writes() as calls, \
+                self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            self._run(None)
+        self.assertTrue(any('operator client 未設定' in line for line in captured.output))
+        self._assert_untouched(svc, calls)
+        self.assertEqual(self._cursor(), 0)
 
     def test_fault_is_recorded_but_state_stays_running(self):
         svc = self._service('fault')
@@ -823,7 +1219,7 @@ class TestRunningWorkloadCron1647(_WorkloadCase):
 
         # ⚠ 數值 logging.INFO 而非字串 'INFO'（#492，repo-lint assertlogs-numeric-level）。
         with self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
-            self._run(operator_client(get_status=_status(workload_info())))
+            self._run_healthy()
 
         summary = [line for line in captured.output if 'workload-check: running' in line]
         self.assertTrue(
@@ -853,6 +1249,11 @@ class TestReconcileAppliesWorkloadObservation1647(_WorkloadCase):
         self.Service.invalidate_model()
         return client
 
+    def _workload_writes(self, calls):
+        """spy 記下的 write 裡，動到 workload 觀測欄位的那幾次。"""
+        return [(ids, keys) for ids, keys in calls
+                if any(key.startswith('workload_') for key in keys)]
+
     def test_reconcile_asks_for_workloads(self):
         svc = self._service('ask')
         client = self._reconcile(operator_client(
@@ -861,7 +1262,62 @@ class TestReconcileAppliesWorkloadObservation1647(_WorkloadCase):
         kwargs = client.get_status.call_args.kwargs
         self.assertIs(kwargs.get('include_workloads'), True)
         self.assertEqual(kwargs.get('release_name'), svc.helm_release_name)
-        self.assertTrue(svc.workload_checked_at)
+
+    def test_reconcile_writes_no_workload_field_when_nothing_changed(self):
+        """每日對帳的順帶回寫同樣「值沒變不寫」：健康的服務、內容沒變的異常都不碰 workload 欄位。
+
+        對帳自己每天那一次 release 事實的 write 照常（前提斷言），所以這裡數的是「哪幾次 write
+        帶了 workload 欄位」，不是 write 的總次數。
+        """
+        healthy = self._service('daily-healthy')
+        faulty = self._service('daily-faulty')
+
+        def _client():
+            client = operator_client()
+
+            def _answer(namespace, release_name, include_vm=False, include_workloads=False):
+                if release_name == faulty.helm_release_name:
+                    return _status(_quota_blocked(), release=self._RELEASE)
+                return _status(workload_info(), release=self._RELEASE)
+
+            client.get_status.side_effect = _answer
+            return client
+
+        # 第一輪：異常的那一台第一次被看到 ⇒ 寫；健康的那一台不寫 workload 欄位。
+        with self._service_writes() as calls:
+            self._reconcile(_client())
+        self.assertEqual(faulty.workload_fault_code, 'quota_exceeded')
+        self.assertTrue(faulty.workload_fault_alerted_at)
+        touched = {ids for ids, _keys in self._workload_writes(calls)}
+        self.assertEqual(touched, {(faulty.id,)}, '健康的服務不得被寫 workload 欄位')
+        self.assertFalse(healthy.workload_checked_at)
+        snapshot = (self._fault_values(faulty), faulty.workload_checked_at)
+
+        # 第二輪：兩台的觀測都沒變 ⇒ 一次帶 workload 欄位的 write 都沒有。
+        with self._service_writes() as calls, \
+                self.assertLogs(_MODEL_LOGGER, level=logging.INFO) as captured:
+            self._reconcile(_client())
+        synced = {ids for ids, keys in calls if 'last_release_sync_at' in keys}
+        self.assertEqual(synced, {(healthy.id,), (faulty.id,)},
+                         '前提：release 事實那一次 write 兩台都照常發生')
+        self.assertEqual(self._workload_writes(calls), [])
+        self.assertEqual((self._fault_values(faulty), faulty.workload_checked_at), snapshot)
+        self.assertFalse(healthy.workload_checked_at)
+        observed = [line for line in captured.output
+                    if 'workload-observation (daily reconcile)' in line]
+        self.assertIn('持續中 1', observed[0])
+        self.assertIn('健康 1', observed[0])
+
+    def test_reconcile_does_not_touch_the_rotation_cursor(self):
+        """輪替游標是 10 分鐘 cron 自己的：每日對帳不讀也不寫。"""
+        self._service('daily-cursor')
+        self.singleton.write({'workload_check_cursor': 7})
+
+        self._reconcile(operator_client(
+            get_status=_status(workload_info(), release=self._RELEASE)))
+
+        self.singleton.invalidate_recordset(['workload_check_cursor'])
+        self.assertEqual(self.singleton.workload_check_cursor, 7)
 
     def test_blocked_workload_is_flagged_and_release_facts_still_land(self):
         svc = self._service('blocked')
@@ -991,3 +1447,4 @@ class TestWorkloadFaultPayload1647(_WorkloadCase):
             with self.subTest(include_details=include_details):
                 payload = self._format(as_owner, include_details, user=self.owner)
                 self.assertEqual(payload['workload_fault'], 'quota_exceeded')
+

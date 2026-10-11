@@ -83,6 +83,20 @@ class PlatformMonitor(models.Model):
         copy=False,
         help='Unknown or partial init attempts delivered while still in the monitor window.',
     )
+    # #1647：`CloudService._cron_check_running_workloads` 的輪替游標＝上一趟最後處理的
+    # service id（成功、失敗、略過都算），下一趟從它之後依 id 升冪、繞回開頭。
+    # 記在這裡而不是服務列上：那條 cron 每 10 分鐘跑一次，在每台 running 服務留時間戳
+    # 等於每 10 分鐘 commit 一次所有 running 列，會與每日對帳、生命週期 cron 的長交易互撞。
+    # 本單例這一列沒有長交易在寫（週期性的寫入者只有短 poll 結尾的
+    # `_check_unknown_results`，純 DB），而且每趟都查得完時游標值不變、連這裡也不寫。
+    # 沒有 default：新欄位由 ORM 自動建欄，既有那一列是 NULL，讀起來就是 0（從頭開始）。
+    workload_check_cursor = fields.Integer(
+        string='Workload Check Cursor',
+        copy=False,
+        readonly=True,
+        help='ID of the last cloud service handled by the periodic check of running '
+             'workloads. The next run continues after it and wraps around.',
+    )
 
     # 每個監控項一個 summary ＝ 各自的去重鍵。
     SUMMARY_INIT_CRON = 'PaaS monitor: post-deploy init cron is not running'
