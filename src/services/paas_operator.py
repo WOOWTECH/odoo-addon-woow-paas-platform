@@ -378,6 +378,13 @@ class PaaSOperatorClient:
 
             本方法不吞例外——「沒有」「太舊」「失敗」怎麼對租戶呈現由呼叫端決定。
 
+        Note:
+            平台先於 operator 上線（舊 operator 對這個 GET 回 405／404）、或 operator
+            連不上／逾時時，``_request`` 會在拋出例外之前各記一行 ERROR（例如
+            ``PaaS Operator API error: GET /api/namespaces/<ns>/quota -> 405``），屬預期：
+            工作區頁每讀一次配額就多一行，畫面則由呼叫端安靜降級（面板不出現，或顯示
+            「暫時無法取得」）。其中 405／404 那一種不代表 operator 故障，只是它還沒換到
+            有這個端點的版本。
         """
         return self._request('GET', f'/api/namespaces/{namespace}/quota',
                              timeout=NAMESPACE_QUOTA_TIMEOUT)
