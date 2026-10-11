@@ -5955,16 +5955,22 @@ class CloudService(models.Model):
     def _is_halted(self):
         """這台 VM 是否應該處於停機（``runStrategy: Halted``）狀態。
 
-        🔴 **不可以只看 ``state == 'suspended'``。** reconfigure 路徑
-        （``controllers/paas.py``）**先**把 state 寫成 ``upgrading``、19 行後
-        才組裝 values，屆時守衛讀到的已經不是 ``suspended`` → 組出 ``Always``
-        → 以 ``reset_values=True`` 送出 → **停權中（欠費）的 VM 被喚醒**。
-        （對照組：``action_redeploy`` 與 ``_reset_admin_password`` 都是先組裝
-        再寫 state，只有 reconfigure 順序相反。）
+        🔴 **不可以只看 ``state == 'suspended'``。** 這條守衛的起因（MAJOR-2）：當時的
+        reconfigure 路徑（``controllers/paas.py``）**先**把 state 寫成 ``upgrading``、之後
+        才組裝 values，守衛讀到的已經不是 ``suspended`` → 組出 ``Always`` → 以
+        ``reset_values=True`` 送出 → **停權中（欠費）的 VM 被喚醒**。
 
-        改讀 ``pre_suspend_state`` 作為不受呼叫順序影響的單一事實源：它只在
+        那個時間窗現在已經不存在：#482 起三條 upgrade 路徑對停權中的服務把 state 留在
+        ``suspended``；#1647 起 reconfigure 也改成**先**組裝全量 values（同步預檢與背景
+        upgrade 共用同一組）、**後**寫 state，與 ``action_redeploy``、換方案相同。但守衛
+        仍然不可以依賴呼叫順序或單一欄位——「state 不是 ``suspended``、服務其實還在停權」
+        的資料確實存在：#482 之前被 upgrade 改寫過 state 的存量（suspended → upgrading →
+        poll → running，``pre_suspend_state`` 仍在）、復權失敗而寫成 ``error`` 的服務
+        （``_do_resume`` 刻意保留 ``pre_suspend_state``），以及將來任何又改寫 state 的新路徑。
+
+        所以讀 ``pre_suspend_state`` 作為不受呼叫順序影響的單一事實源：它只在
         :meth:`_do_suspend` 設、:meth:`_do_resume` 清，語意穩定，且在
-        「state 已被中途改寫但服務仍處於停權」的窗口內仍為真。
+        「state 已被改寫但服務仍處於停權」時仍為真。
 
         兩者取聯集而非擇一：``state == 'suspended'`` 涵蓋 pre_suspend_state
         因故為空的情形，``pre_suspend_state`` 涵蓋 state 被中途改寫的情形。

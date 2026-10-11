@@ -155,18 +155,21 @@ class TestRunStrategyIsSourcedFromState(_Base):
 class TestHaltedGuardSurvivesStateRewrite(_Base):
     """🔴 MAJOR-2：守衛不能只看 ``state == 'suspended'``。
 
-    reconfigure 路徑（``controllers/paas.py``）**先**把 state 寫成
-    ``upgrading``、19 行後才組裝 values。若守衛只讀 state，屆時已讀不到
+    起因：當時的 reconfigure 路徑（``controllers/paas.py``）**先**把 state 寫成
+    ``upgrading``、之後才組裝 values。守衛只讀 state 的話，屆時已讀不到
     ``suspended`` → 組出 ``Always`` → 以 ``reset_values=True`` 送出 →
     **停權中（欠費）的 VM 被喚醒**。
 
-    對照組：``action_redeploy`` 與 ``_reset_admin_password`` 都是先組裝再寫
-    state，只有 reconfigure 順序相反——所以這不是「所有路徑都對」的問題，
-    而是「守衛必須不依賴呼叫順序」。
+    那個時間窗現在不存在了：#482 起三條 upgrade 路徑對停權中的服務把 state 留在
+    ``suspended``，#1647 起 reconfigure 也改成先組裝全量 values、後寫 state（同步預檢
+    與背景 upgrade 共用同一組）。仍然成立、本 class 守的不變式是「**守衛不依賴呼叫順序，
+    也不依賴 state 這一個欄位**」——state 不是 ``suspended``、服務卻還在停權的資料確實
+    存在（#482 之前被 upgrade 改寫過 state 的存量、復權失敗寫成 ``error`` 而保留
+    ``pre_suspend_state`` 的服務），將來也可能再出現改寫 state 的新路徑。
     """
 
     def test_halted_guard_holds_after_state_rewritten_to_upgrading(self):
-        """模擬 reconfigure 的時序：state 已被改寫，但服務仍處於停權。"""
+        """state 已被改寫、但服務仍處於停權（MAJOR-2 當時 reconfigure 的時序）。"""
         svc = self._service(state='running')
         patcher, _client = _patch_operator_client()
         with patcher:
@@ -175,7 +178,7 @@ class TestHaltedGuardSurvivesStateRewrite(_Base):
         self.assertEqual(svc.state, 'suspended')
         self.assertEqual(svc.pre_suspend_state, 'running')
 
-        # reconfigure 在組 values 之前先改了 state
+        # 某條路徑在組 values 之前改寫了 state（當年是 reconfigure 自己）。
         svc.write({'state': 'upgrading'})
 
         values = svc._assemble_deploy_values()['values']
@@ -183,7 +186,7 @@ class TestHaltedGuardSurvivesStateRewrite(_Base):
         self.assertEqual(
             values.get('vm', {}).get('runStrategy'), 'Halted',
             "state 被改寫成 upgrading 後，守衛仍須認得這是停權中的 VM——"
-            "否則 reconfigure 會把欠費租戶的機器喚醒",
+            "否則下一次 helm upgrade 會把欠費租戶的機器喚醒",
         )
 
     def test_is_halted_reads_either_signal(self):
@@ -197,35 +200,24 @@ class TestHaltedGuardSurvivesStateRewrite(_Base):
         svc.write({'state': 'running', 'pre_suspend_state': False})
         self.assertFalse(svc._is_halted())
 
-    def test_update_service_full_path_sends_halted_for_suspended_vm(self):
-        """🔴 走 ``_update_service`` **全路徑**，而非只對 helper 斷言。
+    def _reconfigure_and_capture_values(self, svc):
+        """以 controller 入口 ``_update_service`` 跑一次 reconfigure，回傳送給 operator 的 values。
 
-        MAJOR-2 的成因正是「helper 本身沒錯，但呼叫順序讓它讀到錯的 state」——
-        只對 helper 斷言的測試抓不到。這條測試從 controller 入口跑進去，
-        斷言**真正送給 operator 的 values** 是 Halted。
+        ⚠ 不能對 client.upgrade_release 斷言：_update_service 把實際的 upgrade 丟進
+        daemon thread（paas.py:_bg_upgrade），該執行緒用自己的 cursor、也不吃主執行緒的
+        patch。但 **values 是在主執行緒先組好才交給背景執行緒的**（背景執行緒無 ORM，不能
+        自己組），所以 spy 攔到的就是真正送出去的內容。spy 記的是**最後一次**組裝：之後若
+        又有人在寫完 state 才重組一次，攔到的會是那一次。
         """
         from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 
-        svc = self._service(state='running')
-        patcher, _c = _patch_operator_client()
-        with patcher:
-            svc._do_suspend()
-        self.assertEqual(svc.state, 'suspended')
-
         client = MagicMock()
         client.upgrade_release.return_value = {'revision': 2}
-
-        # ⚠ 不能對 client.upgrade_release 斷言：_update_service 把實際的
-        # upgrade 丟進 daemon thread（paas.py:_bg_upgrade），該執行緒用自己的
-        # cursor、也不吃主執行緒的 patch。
-        # 但 **values 是在主執行緒先組好才交給背景執行緒的**（那段有明確註解
-        # 說明背景執行緒無 ORM 不能自己組），所以 spy 攔到的就是真正送出去的
-        # 內容——這仍是「走 _update_service 全路徑」，而非只對 helper 斷言。
         captured = {}
         real_assemble = type(svc)._assemble_deploy_values
 
-        # #1647：reconfigure 改在寫入**之前**以 ``values=`` 組好全量 values（同步預檢與背景
-        # upgrade 共用同一組），所以 spy 要原樣轉發參數；守的不變式不變——送出去的是 Halted。
+        # #1647：reconfigure 在寫入**之前**以 ``values=`` 組好全量 values（同步預檢與背景
+        # upgrade 共用同一組），所以 spy 要原樣轉發參數。
         def _spy(self_svc, *args, **kwargs):
             result = real_assemble(self_svc, *args, **kwargs)
             captured['values'] = result['values']
@@ -237,18 +229,73 @@ class TestHaltedGuardSurvivesStateRewrite(_Base):
         with patch(f'{module}.get_paas_operator_client', return_value=client), \
                 patch(f'{module}.request', new=fake_request), \
                 patch.object(type(svc), '_assemble_deploy_values', _spy):
-            PaasController()._update_service(svc, values={}, version=None)
+            result = PaasController()._update_service(svc, values={}, version=None)
 
+        self.assertTrue(result.get('success'), result)
         self.assertIn(
             'values', captured,
             "_update_service 應在主執行緒組裝 values（若這裡沒攔到，代表組裝"
             "被搬進背景執行緒，本測試需重寫）",
         )
+        # 停權中的服務不做 compute 配額的同步預檢（upgrade 後會被 scale 回 0，#1647）。
+        client.upgrade_preflight.assert_not_called()
+        return captured['values']
+
+    def test_update_service_full_path_sends_halted_for_suspended_vm(self):
+        """🔴 走 ``_update_service`` **全路徑**，而非只對 helper 斷言。
+
+        從 controller 入口跑進去，斷言**真正送給 operator 的 values** 是 Halted，而且
+        reconfigure 之後服務仍然是 ``suspended``（#482）。
+
+        這一條守的是「入口到送出」整段的接線（合併使用者設定、以 ``values=`` 組裝、交給
+        背景 upgrade 的那一組）。它**不**鑑別 ``_is_halted`` 是否只看 state——#1647 起
+        組裝發生在任何 state 寫入之前，此刻 state 本來就是 ``suspended``；那個退化由下一條
+        ``…_when_state_was_rewritten`` 守。
+        """
+        svc = self._service(state='running')
+        patcher, _c = _patch_operator_client()
+        with patcher:
+            svc._do_suspend()
+        self.assertEqual(svc.state, 'suspended')
+
+        values = self._reconfigure_and_capture_values(svc)
+
         self.assertEqual(
-            captured['values'].get('vm', {}).get('runStrategy'), 'Halted',
-            "reconfigure 先寫 state='upgrading' 再組 values——送給 operator 的 "
-            "values 仍必須是 Halted，否則停權中的 VM 會被 helm upgrade 喚醒",
+            values.get('vm', {}).get('runStrategy'), 'Halted',
+            "停權中的 VM 改設定：送給 operator 的 values 必須是 Halted，"
+            "否則 helm upgrade（reset_values）會把它喚醒",
         )
+        self.assertEqual(svc.state, 'suspended', "reconfigure 不得把停權中的服務帶離 suspended")
+
+    def test_update_service_full_path_sends_halted_when_state_was_rewritten(self):
+        """🔴 全路徑版的 MAJOR-2：state 已經不是 ``suspended``，服務其實還在停權。
+
+        這種資料確實存在——#482 之前，停權中的服務被 upgrade 改寫 state
+        （suspended → upgrading → poll → running），``pre_suspend_state`` 還留著：帳面上
+        執行中，VM 其實是停的、訂閱也沒在付費。租戶對它按「儲存設定」時，守衛只看
+        ``state == 'suspended'`` 就會組出 ``Always``、把欠費的 VM 喚醒。
+
+        ``_is_halted`` 退回只看 state 時，這一條會紅（上一條不會）。
+        """
+        for rewritten in ('running', 'upgrading'):
+            with self.subTest(state=rewritten):
+                svc = self._service(state='running')
+                patcher, _c = _patch_operator_client()
+                with patcher:
+                    svc._do_suspend()
+                svc.write({'state': rewritten})
+                self.assertEqual(svc.pre_suspend_state, 'running', '前提：停權訊號還在')
+
+                values = self._reconfigure_and_capture_values(svc)
+
+                self.assertEqual(
+                    values.get('vm', {}).get('runStrategy'), 'Halted',
+                    "state 被改寫成 %s、但 pre_suspend_state 仍在：送給 operator 的 values "
+                    "必須是 Halted，否則停權中的 VM 會被 helm upgrade 喚醒" % rewritten,
+                )
+                self.assertEqual(
+                    svc.state, 'suspended',
+                    "reconfigure 之後不得停在 upgrading（poll 會把它收斂成 running＝帳面復權）")
 
     def test_resumed_service_renders_always_again(self):
         """resume 後 pre_suspend_state 被清空 → 回到 Always。
