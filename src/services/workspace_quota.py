@@ -43,14 +43,19 @@ _VIEW_RESOURCES = (
 #: 等級由輕到重；整體等級取各格最嚴重者。
 _LEVELS = ('ok', 'warning', 'full')
 
-#: 磁碟那一格吃緊（warning／full）時 payload 的 ``hint``。前台據此把告警句換成說明
-#: 「已刪除服務在保留期內的資料仍佔用磁碟配額」的版本，不再建議刪除服務。
+#: 最吃緊的是磁碟那一格（含與別格並列）時 payload 的 ``hint``。前台據此把告警句換成多
+#: 說明「已刪除服務在保留期內的資料仍佔用磁碟配額」的版本。有別格比磁碟更嚴重時不帶：
+#: 那時眼前的問題不是磁碟，告警句不該改講磁碟。
 #:
 #: 為什麼磁碟要另一句：刪除服務時它的 PVC 會保留到保留期滿（#317），保留中的 PVC 仍計入
 #: ``requests.storage``；而上限（``cloud_service._compute_ns_quota``）只按存活的服務算，
 #: 刪完立刻變小。所以「刪掉不需要的服務」對磁碟配額沒有用，還會讓比例更高——三台各
 #: 50GB 的服務刪掉兩台之後是 150／150 GB。要不要換句子由這裡判，前台只讀欄位、不自己
 #: 看哪一格滿了（docs/decisions/patterns/capability-gate-single-source-field.md）。
+#:
+#: ⚠ 一般版的告警句同樣不可以建議刪除／停用／停止服務：CPU／記憶體的上限是存活服務的方案
+#: 規格加總 × 3，刪掉一台剩餘空間通常也是變小。依據寫在前台 ``WorkspaceQuotaPanel.js``
+#: 的 ``alertText`` 旁。
 HINT_STORAGE = 'storage'
 
 #: operator ``namespace_quota`` 的 reason → 這裡的 reason（extra/paas-operator
@@ -171,8 +176,9 @@ def build_view(report):
                             'percent': int, 'level': 'ok'|'warning'|'full'}, ...]}
 
         ``resources`` 順序固定 cpu、memory、storage；報表裡缺鍵或數值不合理的那一格略過。
-        ``hint`` 在磁碟那一格是 warning／full 時為 :data:`HINT_STORAGE`（不論其他格如何），
-        否則是空字串。拿不到（含三格都沒有）回 :func:`unavailable`。
+        ``hint`` 只在磁碟那一格是 warning／full、**而且**它的等級等於整體等級（最嚴重的
+        就是磁碟，含與別格並列）時為 :data:`HINT_STORAGE`；有別格比磁碟更嚴重、或磁碟是
+        ok 時是空字串。拿不到（含三格都沒有）回 :func:`unavailable`。
     """
     if not isinstance(report, dict):
         return unavailable('error')
@@ -193,7 +199,9 @@ def build_view(report):
         return unavailable('quota_not_found')
 
     worst = max(cells, key=lambda cell: _LEVELS.index(cell['level']))['level']
-    storage_is_tight = any(
-        cell['key'] == 'storage' and cell['level'] != 'ok' for cell in cells)
+    # 磁碟那一格吃緊，而且沒有別格比它更嚴重（並列也算）才帶 hint：CPU 已用完、磁碟只是
+    # 快用完時，告警句要講的是整體已用完，不是磁碟的保留資料。
+    storage_is_worst = worst != 'ok' and any(
+        cell['key'] == 'storage' and cell['level'] == worst for cell in cells)
     return {'available': True, 'reason': '', 'level': worst,
-            'hint': HINT_STORAGE if storage_is_tight else '', 'resources': cells}
+            'hint': HINT_STORAGE if storage_is_worst else '', 'resources': cells}

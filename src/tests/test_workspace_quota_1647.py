@@ -253,39 +253,59 @@ class TestWorkspaceQuotaView1647(TransactionCase):
             requests__storage=_cell('100Gi', '100Gi', 100 * GI, 100 * GI, 'bytes'))
         self.assertEqual(workspace_quota.build_view(full)['level'], 'full')
 
-    def test_storage_hint_only_when_the_disk_cell_is_tight(self):
-        """磁碟那一格是 warning／full 才帶 ``hint``——前台據此換掉「刪除不需要的服務」那句。
+    def test_storage_hint_only_when_the_disk_cell_is_the_worst_one(self):
+        """最吃緊的是磁碟那一格（含與別格並列）才帶 ``hint``——前台據此換成磁碟版的告警句。
 
-        CPU／記憶體吃緊而磁碟還有空間時不帶：那種情況刪服務的建議照舊。
+        有別格比磁碟更嚴重時不帶：CPU 已用完、磁碟只是快用完，眼前的問題不是磁碟，告警句
+        不該改講保留中的資料。
         """
         def storage(used_gi):
             return _cell('100Gi', '%dGi' % used_gi, 100 * GI, used_gi * GI, 'bytes')
 
         memory_warning = _cell('24Gi', '23Gi', 24 * GI, 23 * GI, 'bytes')
+        memory_full = _cell('24Gi', '24Gi', 24 * GI, 24 * GI, 'bytes')
+        cpu_warning = _cpu(12.0, 11.0)
+        cpu_full = _cpu(12.0, 12.0)
         cases = (
             # (報表, 整體等級, hint)
             (_report(), 'ok', ''),
             (_report(requests__storage=storage(89)), 'ok', ''),
+            # 只有磁碟吃緊：帶。
             (_report(requests__storage=storage(90)), 'warning', 'storage'),
             (_report(requests__storage=storage(100)), 'full', 'storage'),
             (_report(requests__storage=storage(130)), 'full', 'storage'),
             # 其他格吃緊、磁碟還有空間：不帶。
-            (_report(limits__cpu=_cpu(12.0, 12.0)), 'full', ''),
-            (_report(limits__cpu=_cpu(12.0, 11.0)), 'warning', ''),
+            (_report(limits__cpu=cpu_full), 'full', ''),
+            (_report(limits__cpu=cpu_warning), 'warning', ''),
             (_report(limits__memory=memory_warning), 'warning', ''),
-            # 磁碟吃緊就帶，不論最嚴重的是哪一格。
-            (_report(limits__cpu=_cpu(12.0, 12.0), requests__storage=storage(95)),
+            # 磁碟快用完，但有別格已用完（比磁碟嚴重）：不帶。
+            (_report(limits__cpu=cpu_full, requests__storage=storage(95)), 'full', ''),
+            (_report(limits__memory=memory_full, requests__storage=storage(95)), 'full', ''),
+            (_report(limits__cpu=cpu_warning, limits__memory=memory_full,
+                     requests__storage=storage(90)), 'full', ''),
+            # 磁碟與別格並列最嚴重：帶。
+            (_report(limits__cpu=cpu_warning, requests__storage=storage(95)),
+             'warning', 'storage'),
+            (_report(limits__memory=memory_warning, requests__storage=storage(90)),
+             'warning', 'storage'),
+            (_report(limits__cpu=cpu_full, requests__storage=storage(100)),
              'full', 'storage'),
+            (_report(limits__cpu=cpu_full, limits__memory=memory_full,
+                     requests__storage=storage(130)), 'full', 'storage'),
+            # 磁碟已用完、別格只是快用完（磁碟最嚴重）：帶。
             (_report(limits__memory=memory_warning, requests__storage=storage(100)),
              'full', 'storage'),
+            (_report(limits__cpu=cpu_warning, requests__storage=storage(100)),
+             'full', 'storage'),
             # 報表裡沒有磁碟那一格：沒有東西可提示。
-            (_report(limits__cpu=_cpu(12.0, 12.0), requests__storage=None), 'full', ''),
+            (_report(limits__cpu=cpu_full, requests__storage=None), 'full', ''),
+            (_report(limits__cpu=cpu_warning, requests__storage=None), 'warning', ''),
         )
         self.assertEqual(workspace_quota.HINT_STORAGE, 'storage')
         for report, level, hint in cases:
             view = workspace_quota.build_view(report)
-            self.assertEqual((view['level'], view['hint']), (level, hint),
-                             report['resources'].get('requests.storage'))
+            cells = {cell['key']: cell['level'] for cell in view['resources']}
+            self.assertEqual((view['level'], view['hint']), (level, hint), cells)
 
     def test_storage_hint_after_deleting_services_with_retained_data(self):
         """review display-B2 的情境：三台各 50GB 的服務刪掉兩台。
@@ -906,11 +926,44 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
             self.assertIn('disk quota', sentence)
             self.assertNotIn('Delete a service', sentence, '刪服務釋不出磁碟配額')
         for sentence in generic:
-            self.assertIn('Delete a service', sentence, '陽性對照：一般版仍是原本那句')
+            self.assertNotIn('disk', sentence, '一般版不講磁碟')
         # 說明句也要交代磁碟含保留中的資料，否則數字對不上畫面上的服務。
         intro = [s for s in strings if s.startswith('All services in this workspace share')]
         self.assertEqual(len(intro), 1)
         self.assertIn('retention period', intro[0])
+
+    def test_alerts_never_advise_deleting_or_stopping_services(self):
+        """告警句不可以建議租戶刪除／停用／停止服務來釋出配額。
+
+        CPU／記憶體的上限是工作區內存活服務的方案規格加總 × 3（另有下限，
+        ``cloud_service._compute_ns_quota``）：刪掉一台，上限少 3 份、用量只少約 1 份，剩餘
+        空間通常變小而不是變大；換成較小的方案也一樣。租戶做得到而且有效的只有聯絡客服。
+        """
+        js = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')
+        alerts = [s for s in _T_STRING_RE.findall(js) if s.startswith('This workspace ')]
+        self.assertEqual(len(alerts), 4, alerts)
+        po_path = os.path.join(_SRC, 'i18n', 'zh_TW.po')
+        translated = {entry['src']: entry['value'] for entry in PoFileReader(po_path)
+                      if entry.get('type') == 'code'}
+        # 祈使的動詞才算建議（磁碟版的「deleting a service does not free…」是在說明它沒用）。
+        advice = re.compile(
+            r'\b(delete|remove|stop|disable|suspend|downgrade|shut down|turn off)\b'
+            r'|no longer need', re.I)
+        advice_zh = re.compile(r'請(刪除|移除|停用|停止|關閉|降級)|(刪除|移除|停用|停止|關閉)不需要')
+        for sentence in alerts:
+            self.assertNotRegex(sentence, advice)
+            self.assertTrue(sentence.endswith('Contact support if you need more quota.'), sentence)
+            zh = translated.get(sentence, '')
+            self.assertNotRegex(zh, advice_zh, sentence)
+            self.assertTrue(zh.endswith('需要更多配額請聯絡客服。'), (sentence, zh))
+        # 陽性對照：同一組 regex 對原本那種寫法確實會命中。
+        self.assertRegex('Delete a service you no longer need, or contact support.', advice)
+        self.assertRegex('Stop a service to free up quota.', advice)
+        self.assertRegex('請刪除不需要的服務，或聯絡客服。', advice_zh)
+        # 被換掉的舊句子沒有留在 .po 裡。
+        self.assertEqual(
+            sorted(src for src in translated if 'Delete a service you no longer need' in src),
+            [])
 
     def test_overview_hint_does_not_promise_usage_on_the_workspace_page(self):
         """review display-B6：配額面板在好幾種情況下整塊不畫，服務頁的說明句不能叫人去那裡看。"""

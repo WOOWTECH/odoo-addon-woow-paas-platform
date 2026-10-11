@@ -145,21 +145,26 @@ export class WorkspaceQuotaPanel extends Component {
 
   get alertText() {
     const level = this.state.quota?.level;
-    // 磁碟那一格吃緊時後端會在 payload 帶 hint，告警句換成另一版：已刪除服務的資料在
-    // 保留期內仍佔用磁碟配額，「刪掉不需要的服務」對磁碟沒有用（刪完上限還會變小）。
-    // 哪一格吃緊由後端判，這裡只讀欄位。
+    // 最吃緊的是磁碟那一格（含與別格並列）時，後端會在 payload 帶 hint，告警句換成磁碟版：
+    // 多說明已刪除服務的資料在保留期內仍佔用磁碟配額。哪一格最吃緊由後端判，這裡只讀欄位。
+    //
+    // ⚠ 兩版都不可以建議租戶「刪除／停用／停止不需要的服務」來釋出配額：CPU／記憶體的上限是
+    // 工作區內存活服務的方案規格加總 × 3（另有下限；cloud_service._compute_ns_quota），刪掉
+    // 一台上限少 3 份、用量只少約 1 份，剩餘空間通常變小而不是變大（只有落在下限區間時
+    // 例外），換成較小的方案也一樣。租戶做得到而且有效的只有聯絡客服（管理員調整配額的
+    // 正式入口見 #1648）。
     const diskIsTight = this.state.quota?.hint === "storage";
     if (level === "full") {
       if (diskIsTight) {
         return _t("This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota.");
       }
-      return _t("This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Delete a service you no longer need, or contact support.");
+      return _t("This workspace has reached its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota.");
     }
     if (level === "warning") {
       if (diskIsTight) {
         return _t("This workspace is close to its quota. Deploying, restarting or resizing a service may fail. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota.");
       }
-      return _t("This workspace is close to its quota. Deploying, restarting or resizing a service may fail. Delete a service you no longer need, or contact support.");
+      return _t("This workspace is close to its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota.");
     }
     return "";
   }

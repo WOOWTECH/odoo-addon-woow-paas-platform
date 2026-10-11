@@ -21806,14 +21806,14 @@ msgstr "已用完"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
-msgid "This workspace is close to its quota. Deploying, restarting or resizing a service may fail. Delete a service you no longer need, or contact support."
-msgstr "這個工作區的配額即將用完，部署、重新啟動或調整服務規格可能會失敗。請刪除不需要的服務，或聯絡客服。"
+msgid "This workspace is close to its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota."
+msgstr "這個工作區已接近配額上限，需要更多資源的服務可能無法啟動。需要更多配額請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
-msgid "This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Delete a service you no longer need, or contact support."
-msgstr "這個工作區的配額已用完，釋出配額之前，新的或重新啟動的服務無法啟動。請刪除不需要的服務，或聯絡客服。"
+msgid "This workspace has reached its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota."
+msgstr "這個工作區已達配額上限，需要更多資源的服務可能無法啟動。需要更多配額請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
