@@ -30,12 +30,15 @@ server 與同 namespace 的 PG 被調成各 8。Deployment 是 ``Recreate``—�
   時不擋，回一筆 ``transient_job_usage`` 的 advisory；扣掉它們仍然放不下才擋。代價是 Job 還在
   跑的那段時間 ``Recreate`` 的新 pod 會先被 admission 擋下、等 Job 結束後由 ReplicaSet
   controller 重試建出來——短暫中斷，換來不把「幾分鐘後就會過」的變更判成確定的失敗。
+  這一條是放寬，只放寬到**算得出來**的部分：用量算不出來的 Job pod 不扣（當成 0）。若因為有
+  一顆算不出來就整段放行，namespace 裡只要有這樣一顆 Job pod，其他常駐 workload 就已經佔滿
+  的升級（事故的形狀）也會被放過去。
 * quota 的上限：admission 看 ``status.hard``，它由 quota controller 從 ``spec.hard`` 同步過去。
   平台剛推送新 quota 的那一小段時間兩者不一致——同一個資源取**較大**者（見
   :func:`live_hard`）。
 * 換方案**降級**（平台將推送的上限比現在小）而只有 Tier 2 放不下時照樣擋（那個升級在推送
   之後確實會卡住），但 shortfall 多帶 ``reason: "rolling_on_downgrade"``——這不是「其他服務
-  佔太多」，平台據此換成降級專用的說明，不叫租戶去刪服務或調高配額。
+  佔太多」，平台據此換成降級專用的說明（一般的說明請租戶聯絡客服調整配額，與降級相反）。
 
 刻意**沒有**算進需求的（都只會少擋，不會誤擋）：DaemonSet、Job、CronJob（只回 advisory）、
 bare Pod、KubeVirt VM、helm hook、RuntimeClass 在 admission 才加的 overhead、帶 scope 的
@@ -486,6 +489,13 @@ def _sum(pods: List[Dict[str, Any]], usage: Dict[int, Dict[str, Decimal]], resou
     return total
 
 
+def _known_sum(
+    pods: List[Dict[str, Any]], usage: Dict[int, Dict[str, Decimal]], resource: str,
+) -> Decimal:
+    """這些 pod 在 ``resource`` 上**算得出來**的部分加總；算不出來的那幾顆當成 0。"""
+    return sum((usage[id(pod)].get(resource, _ZERO) for pod in pods), _ZERO)
+
+
 def _owner_label(pod: Dict[str, Any]) -> str:
     owner = _controller_owner(pod)
     if owner is None:
@@ -542,26 +552,26 @@ def _shortfall(resource: str, phase: str, workload: Optional[str], **numbers: De
 
 
 def _fits_without(
-    transient_sum: Optional[Decimal], in_use: Decimal, wanted: Decimal, hard: Decimal,
+    transient_sum: Decimal, in_use: Decimal, wanted: Decimal, hard: Decimal,
 ) -> bool:
     """``in_use``（含 Job pod）＋``wanted`` 已經放不下時：扣掉 Job pod 之後放不放得下。
 
-    ``transient_sum`` 為 ``None``＝有 Job pod 但算不出它們佔多少——不知道＝放行。
+    ``transient_sum`` 只含用量算得出來的 Job pod（:func:`_known_sum`）——算不出來的不扣。
     """
-    return transient_sum is None or max(_ZERO, in_use - transient_sum) + wanted <= hard
+    return max(_ZERO, in_use - transient_sum) + wanted <= hard
 
 
 def _job_advisory(
     resource: str, phase: str, workload: Optional[str], in_use: Decimal, wanted: Decimal,
-    transient_sum: Optional[Decimal], hard: Decimal,
+    transient_sum: Decimal, hard: Decimal,
 ) -> Dict[str, Any]:
-    """只因為正在跑的 Job pod 才放不下時的提醒（不擋）。"""
+    """只因為正在跑的 Job pod 才放不下時的提醒（不擋）。``job_pods``＝實際扣掉的量。"""
     return {
         "type": "transient_job_usage", "resource": resource, "phase": phase,
         "workload": workload,
         "required": format_quantity(resource, wanted),
         "used": format_quantity(resource, in_use),
-        "job_pods": None if transient_sum is None else format_quantity(resource, transient_sum),
+        "job_pods": format_quantity(resource, transient_sum),
         "hard": format_quantity(resource, hard),
     }
 
@@ -703,8 +713,9 @@ def evaluate(
         hard, used = limits[resource]["hard"], limits[resource]["used"]
         leaving_sum = _sum(leaving, usage, resource)
         others_sum = _sum(others, usage, resource)
-        # Job pod 佔了多少；算不出來（``None``）時當成「扣掉它們就放得下」——不知道＝放行。
-        transient_sum = _sum(transient, usage, resource)
+        # Job pod 佔了多少：只加總算得出來的那些，算不出來的當成 0（＝不扣）。⛔ 不要改回「有
+        # 一顆算不出來就當成扣掉它們放得下」——那會讓確定放不下的升級整段被放行（見檔頭）。
+        transient_sum = _known_sum(transient, usage, resource)
         # 其他 workload 的佔用：兩種估法取小（status.used 落後時偏高，見檔頭）。
         estimates = []
         if leaving_sum is not None:

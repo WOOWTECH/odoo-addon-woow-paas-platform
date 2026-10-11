@@ -842,7 +842,7 @@ def test_job_pods_alone_do_not_make_an_upgrade_a_certain_failure():
     """上限 12：pg 4、正在跑的備份 Job 4、本 release 4 → 6（Recreate）。
 
     現在 8＋6＝14 放不下，但 Job 跑完就釋出：4＋6＝10。幾分鐘後就會過的變更不回 409（平台
-    會據此叫租戶刪服務、開管理員 activity），只留一筆 advisory。
+    會據此告訴租戶配額不足、開管理員 activity），只留一筆 advisory。
     """
     result = evaluate(**_incident(new_cpu="6", pg_cpu="4", extra_pods=[_job_pod()]))
     assert result["status"] == "ok"
@@ -865,13 +865,52 @@ def test_upgrade_that_does_not_fit_even_without_the_job_pods_is_still_refused():
     assert {"owner": "Job/backup-28391234", "pods": 1, "value": "4"} in result["consumers"]
 
 
-def test_job_pod_with_unknown_usage_is_given_the_benefit_of_the_doubt():
-    """算不出 Job pod 佔多少 ⇒ 不知道扣掉之後放不放得下 ⇒ 不擋。"""
+def test_job_pod_with_unknown_usage_is_not_subtracted():
+    """算不出 Job pod 佔多少 ⇒ 那一顆不扣（當成 0）⇒ 扣完仍是 8＋6＝14 > 12，照樣擋。
+
+    Job pod 的扣除是放寬，只放寬到算得出來的部分；「有一顆算不出來就整段放行」會把確定放
+    不下的升級放過去（下一條是事故的形狀）。
+    """
     result = evaluate(**_incident(new_cpu="6", pg_cpu="4", extra_pods=[_job_pod(cpu=None)]))
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert (short["phase"], short["other"], short["required"], short["short_by"]) == (
+        "steady", "8", "6", "2")
+    assert result["advisories"] == []
+
+
+def test_incident_is_still_refused_next_to_a_job_pod_with_unknown_usage():
+    """事故的形狀（Recreate 4 → 8、常駐的 pg 8、上限 12）＋一顆用量算不出的 Job pod。
+
+    佔滿配額的是不會自己結束的 pg，跟那顆 Job pod 無關：不可以因為它在就放行。
+    """
+    assert evaluate(**_incident())["status"] == "exceeded", "前提：沒有 Job pod 時就擋"
+    result = evaluate(**_incident(extra_pods=[_job_pod(cpu=None)]))
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert (short["phase"], short["other"], short["required"], short["short_by"]) == (
+        "steady", "8", "8", "4")
+    assert result["advisories"] == []
+
+
+def test_job_pods_with_known_usage_are_still_subtracted_next_to_an_unknown_one():
+    """兩顆 Job pod、一顆算得出（4）一顆算不出：只扣算得出的那一顆。
+
+    上限 12、status.used 12：本 release 4 → 6、pg 2、Job 4＋?。其他佔用只剩 status.used 這
+    一種估法（12−4＝8），8＋6＝14 > 12；扣掉算得出的 4 之後 4＋6＝10 放得下 ⇒ 只提醒，
+    ``job_pods`` 報的是實際扣掉的量。新 pod 改成 9 時扣完 4＋9＝13 仍然放不下 ⇒ 擋。
+    """
+    jobs = [_job_pod(), _job_pod(cpu=None, name="report-28391240-q2m8d", job="report-28391240")]
+    result = evaluate(**_incident(new_cpu="6", pg_cpu="2", extra_pods=jobs))
     assert result["status"] == "ok"
-    [advisory] = result["advisories"]
-    assert advisory["type"] == "transient_job_usage"
-    assert advisory["job_pods"] is None
+    assert result["advisories"] == [{
+        "type": "transient_job_usage", "resource": "limits.cpu", "phase": "steady",
+        "workload": None, "required": "6", "used": "8", "job_pods": "4", "hard": "12"}]
+
+    refused = evaluate(**_incident(new_cpu="9", pg_cpu="2", extra_pods=jobs))
+    assert refused["status"] == "exceeded"
+    assert refused["shortfalls"][0]["short_by"] == "5"
+    assert refused["advisories"] == []
 
 
 def test_other_peoples_long_running_pods_are_not_transient():
@@ -892,6 +931,18 @@ def test_job_pods_do_not_block_a_rolling_update_either():
         "type": "transient_job_usage", "resource": "limits.cpu", "phase": "rolling",
         "workload": "Deployment/svc-app", "required": "3", "used": "10", "job_pods": "4",
         "hard": "12"}]
+
+
+def test_rolling_update_does_not_subtract_a_job_pod_with_unknown_usage_either():
+    """同上一條的數字，但 Job pod 的用量算不出來：不扣，10＋3＝13 > 12 照樣擋。"""
+    case = _incident(new_cpu="3", old_cpu="2", strategy=_ROLLING, used="10", pg_cpu="4",
+                     extra_pods=[_job_pod(cpu=None)])
+    result = evaluate(**case)
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert (short["phase"], short["used"], short["required"], short["short_by"]) == (
+        "rolling", "10", "3", "1")
+    assert result["advisories"] == []
 
 
 def test_rolling_update_without_room_even_after_the_job_is_still_refused():
