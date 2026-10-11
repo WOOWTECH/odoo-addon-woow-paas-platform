@@ -9,7 +9,7 @@
                 <WorkspaceListPage/>
             </t>
             <t t-elif="router.current === 'workspace-detail'">
-                <WorkspaceDetailPage workspaceId="workspaceId"/>
+                <WorkspaceDetailPage t-key="workspaceId" workspaceId="workspaceId"/>
             </t>
             <t t-elif="router.current === 'workspace-team'">
                 <WorkspaceTeamPage workspaceId="workspaceId"/>
@@ -21,7 +21,7 @@
                 <AppConfigurationPage workspaceId="workspaceId" templateId="templateId"/>
             </t>
             <t t-elif="router.current === 'smarthome-detail'">
-                <SmartHomeDetailPage workspaceId="workspaceId" homeId="homeId" initialTab="smartHomeTab"/>
+                <SmartHomeDetailPage t-key="workspaceId + ':' + homeId" workspaceId="workspaceId" homeId="homeId" initialTab="smartHomeTab"/>
             </t>
             <t t-elif="router.current === 'security-access-detail'">
                 <SecurityAccessDetailPage workspaceId="workspaceId" saId="securityAccessId" tab="securityAccessTab"/>

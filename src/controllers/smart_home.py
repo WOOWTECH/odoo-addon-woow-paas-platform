@@ -1049,6 +1049,13 @@ class SmartHomeController(Controller):
                 _logger.exception(
                     "Live tunnel status overlay failed after provision sh=%s",
                     smarthome.id)
+            if data.get("state") != "active":
+                return {
+                    "success": False,
+                    "error": data.get("error_message") or _(
+                        "Smart Home setup did not complete. Please retry."),
+                    "data": data,
+                }
             return {"success": True, "data": data}
         except Exception as e:
             _logger.error("Failed to provision smart home: %s", e)

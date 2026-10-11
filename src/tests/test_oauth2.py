@@ -758,6 +758,9 @@ class TestAuthorizeEndpointPkce(TransactionCase):
         with patch(
             'odoo.addons.woow_paas_platform.controllers.oauth2.request',
             request_mock,
+        ), patch(
+            'odoo.addons.woow_paas_platform.controllers.oauth2.http.request',
+            request_mock,
         ):
             OAuth2Controller().authorize_post(**kwargs)
         return captured
@@ -803,3 +806,67 @@ class TestAuthorizeEndpointPkce(TransactionCase):
             ('client_id', '=', self.public_client.id),
         ])
         self.assertFalse(codes)
+
+    def _approve_with_scope(self, scope):
+        return self._call_authorize_post(
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope=scope,
+            state='scope-state',
+            approve='1',
+            code_challenge='scope-test-challenge',
+            code_challenge_method='S256',
+        )
+
+    def test_authorize_post_rejects_scope_outside_client_allowlist(self):
+        """Direct POST must not bypass the scope check on authorize GET."""
+        result = self._approve_with_scope('smarthome:read ha:provision')
+        self.assertIn('error=invalid_scope', result['redirect_url'])
+        self.assertIn('state=scope-state', result['redirect_url'])
+        self.assertFalse(self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ]))
+
+    def test_authorize_post_rechecks_current_client_scopes(self):
+        """A permission removed after consent GET cannot be issued by POST."""
+        self.public_client.write({'scopes': 'smarthome:read'})
+        result = self._approve_with_scope('smarthome:tunnel')
+        self.assertIn('error=invalid_scope', result['redirect_url'])
+        self.assertFalse(self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ]))
+
+    def test_authorize_post_preserves_requested_scope_subset(self):
+        result = self._approve_with_scope('  workspace:read  smarthome:read  ')
+        self.assertNotIn('error=', result['redirect_url'])
+        codes = self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ])
+        self.assertEqual(len(codes), 1)
+        self.assertEqual(codes.scope, 'workspace:read smarthome:read')
+
+    def test_authorize_post_empty_scope_uses_allowed_defaults(self):
+        result = self._approve_with_scope(' \t ')
+        self.assertNotIn('error=', result['redirect_url'])
+        codes = self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ])
+        self.assertEqual(len(codes), 1)
+        self.assertEqual(
+            codes.scope, ' '.join(sorted(self.public_client.get_allowed_scopes())),
+        )
+
+    def test_authorize_post_denied_unallowed_scope_creates_no_code(self):
+        result = self._call_authorize_post(
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope='ha:provision',
+            state='scope-state',
+            deny='1',
+            code_challenge='scope-test-challenge',
+            code_challenge_method='S256',
+        )
+        self.assertIn('error=access_denied', result['redirect_url'])
+        self.assertFalse(self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ]))

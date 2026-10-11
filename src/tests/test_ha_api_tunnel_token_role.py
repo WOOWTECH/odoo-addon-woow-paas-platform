@@ -96,8 +96,10 @@ class TestHaApiTunnelTokenRole(HttpCase):
 
     def _get(self, user, url):
         token = self._token(user)
-        return self.url_open(
+        response = self.url_open(
             url, headers={'Authorization': f'Bearer {token.access_token}'})
+        self.assertIn('no-store', response.headers.get('Cache-Control', ''))
+        return response
 
     def _sh_url(self):
         return f'/api/smarthome/homes/{self.home.id}/tunnel-token'
