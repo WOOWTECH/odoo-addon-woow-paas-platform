@@ -7,6 +7,7 @@ import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { WorkspaceListPage } from "./pages/workspace/WorkspaceListPage";
 import { WorkspaceDetailPage } from "./pages/workspace/WorkspaceDetailPage";
 import { WorkspaceTeamPage } from "./pages/workspace/WorkspaceTeamPage";
+import { WorkspaceInvitationPage } from "./pages/workspace/WorkspaceInvitationPage";
 import { AppMarketplacePage } from "./pages/marketplace/AppMarketplacePage";
 import { AppConfigurationPage } from "./pages/configure/AppConfigurationPage";
 import { ServiceDetailPage } from "./pages/service/ServiceDetailPage";
@@ -40,6 +41,7 @@ export class Root extends Component {
         WorkspaceListPage,
         WorkspaceDetailPage,
         WorkspaceTeamPage,
+        WorkspaceInvitationPage,
         AppMarketplacePage,
         AppConfigurationPage,
         ServiceDetailPage,

@@ -2,11 +2,13 @@
 import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { showProjects } from "./platform_config";
+import { captureInvitationFragment, clearInvitationToken, getInvitationRevision } from "./invitation_context";
 
 /** @type {Array<{path: string, name: string, routeName?: string, pattern?: RegExp}>} */
 const routes = [
     { path: "dashboard", name: _t("Overview"), routeName: "dashboard" },
     { path: "workspaces", name: _t("Workspaces"), routeName: "workspaces" },
+    { path: "workspace-invitation/accept", name: _t("Accept Workspace Invitation"), routeName: "workspace-invitation-accept" },
     { path: "workspace/:id", name: _t("Workspace Detail"), routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: _t("Workspace Team"), routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
     // #768：Smart Home 也長出頁籤（Overview / Access）。與 CS 逐字同型的**雙路由**：
@@ -78,6 +80,10 @@ export const router = reactive({
     },
 
     parseRoute() {
+        captureInvitationFragment();
+        if (window.location.hash !== "#/workspace-invitation/accept") {
+            clearInvitationToken();
+        }
         // Strip "#/" and split off query string — routing is path-based, but
         // query params (e.g. ?bind_status=ok) are preserved in this.params.query.
         const raw = window.location.hash.slice(2);
@@ -86,6 +92,11 @@ export const router = reactive({
         const queryStr = qIdx === -1 ? "" : raw.slice(qIdx + 1);
 
         this.params = {};
+        if (path === "workspace-invitation/accept") {
+            this.current = "workspace-invitation-accept";
+            this.params.invitationRevision = getInvitationRevision();
+            return;
+        }
         if (queryStr) {
             const usp = new URLSearchParams(queryStr);
             this.params.query = Object.fromEntries(usp.entries());

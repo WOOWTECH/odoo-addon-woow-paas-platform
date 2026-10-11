@@ -6,6 +6,7 @@ only the private context-cleaned capability, never a replacement request.env.
 """
 from __future__ import annotations
 
+from ..services.access_state import access_mutation_result
 import logging
 from typing import Any
 
@@ -650,7 +651,7 @@ class SmartHomeController(Controller):
         try:
             if vals:
                 sh_route.write(vals)
-            return {"success": True, "data": sh_route.to_dict()}
+            return access_mutation_result(sh_route, sh_route.to_dict())
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to update access config route=%s: %s",
@@ -711,7 +712,7 @@ class SmartHomeController(Controller):
             create_vals["rule_ids"] = rule_commands
         try:
             pol = Policy.create(create_vals)
-            return {"success": True, "data": pol.to_dict()}
+            return access_mutation_result(sh_route, pol.to_dict())
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to create access policy sh=%s: %s",
@@ -760,7 +761,7 @@ class SmartHomeController(Controller):
         try:
             if vals:
                 write_pol.write(vals)
-            return {"success": True, "data": pol.to_dict()}
+            return access_mutation_result(pol.smart_home_route_id, pol.to_dict())
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to update access policy %s: %s", policy_id, e)
@@ -770,9 +771,10 @@ class SmartHomeController(Controller):
         pol = self._sh_policy(smarthome, policy_id)
         if not pol:
             return {"success": False, "error": _("Policy not found")}
+        sh_route = pol.smart_home_route_id
         try:
             pol.unlink()
-            return {"success": True, "data": {"message": _("Policy deleted")}}
+            return access_mutation_result(sh_route, {"message": _("Policy deleted")})
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to delete access policy %s: %s", policy_id, e)
@@ -805,7 +807,7 @@ class SmartHomeController(Controller):
                 touched_routes |= pol.smart_home_route_id
             for sh_route in touched_routes:
                 sh_route._sync_access_to_operator()
-            return {"success": True, "data": {"reordered": reordered}}
+            return access_mutation_result(touched_routes, {"reordered": reordered})
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to reorder access policies sh=%s: %s",

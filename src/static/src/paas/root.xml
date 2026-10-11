@@ -8,6 +8,9 @@
             <t t-elif="router.current === 'workspaces'">
                 <WorkspaceListPage/>
             </t>
+            <t t-elif="router.current === 'workspace-invitation-accept'">
+                <WorkspaceInvitationPage t-key="router.params.invitationRevision"/>
+            </t>
             <t t-elif="router.current === 'workspace-detail'">
                 <WorkspaceDetailPage t-key="workspaceId" workspaceId="workspaceId"/>
             </t>

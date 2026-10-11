@@ -39,6 +39,9 @@
                     </WoowButton>
                 </div>
 
+                <p t-if="state.notice" class="o_woow_pending_notice" role="status" t-esc="state.notice"/>
+                <p t-if="state.actionError" class="o_woow_error_message" role="alert" t-esc="state.actionError"/>
+
                 <!-- Members List -->
                 <WoowCard shadow="true" class="'o_woow_team_card'">
                     <div class="o_woow_team_list">
@@ -79,6 +82,38 @@
                         </div>
                     </div>
                 </WoowCard>
+
+                <section t-if="canManageMembers" class="o_woow_pending_section">
+                    <h2 class="o_woow_pending_heading">Pending Invitations</h2>
+                    <p class="o_woow_pending_intro">These accounts have no workspace access until they accept their invitation. Resending replaces the previous link.</p>
+                    <p t-if="state.invitationError" class="o_woow_error_message" role="alert" t-esc="state.invitationError"/>
+                    <WoowCard t-else="" shadow="true" class="'o_woow_team_card o_woow_pending_card'">
+                        <div class="o_woow_team_list">
+                            <t t-foreach="state.invitations" t-as="invitation" t-key="invitation.id">
+                                <div class="o_woow_team_member" t-att-data-invitation-id="invitation.id">
+                                    <div class="o_woow_member_avatar" t-esc="getInitials(invitation.name)"/>
+                                    <div class="o_woow_member_info">
+                                        <div class="o_woow_member_name">
+                                            <span t-esc="invitation.name"/>
+                                            <span class="o_woow_badge" t-esc="getRoleLabel(invitation.role)"/>
+                                            <span class="o_woow_badge">
+                                                <t t-if="invitation.state === 'expired'">Expired</t>
+                                                <t t-else="">Awaiting acceptance</t>
+                                            </span>
+                                        </div>
+                                        <div class="o_woow_member_email" t-esc="invitation.email"/>
+                                        <div class="o_woow_member_meta">Expires: <t t-esc="formatInvitationExpiry(invitation.expires_at)"/></div>
+                                    </div>
+                                    <div class="o_woow_pending_actions">
+                                        <WoowButton size="'sm'" variant="'secondary'" onClick="() => this.resendInvitation(invitation)" disabled="!!state.pendingBusy">Resend Invitation</WoowButton>
+                                        <WoowButton size="'sm'" variant="'ghost'" onClick="() => this.revokeInvitation(invitation)" disabled="!!state.pendingBusy">Revoke Invitation</WoowButton>
+                                    </div>
+                                </div>
+                            </t>
+                            <p t-if="!state.invitations.length" class="o_woow_team_empty">No pending invitations</p>
+                        </div>
+                    </WoowCard>
+                </section>
 
                 <!-- Invite Modal -->
                 <InviteMemberModal

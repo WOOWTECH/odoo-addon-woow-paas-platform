@@ -54,8 +54,10 @@ export async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
     let data;
     try {
         data = await response.json();
-    } catch (parseError) {
-        console.error(`JSON parse failed for ${url}:`, parseError);
+    } catch {
+        // SyntaxError messages may echo response text, including credentials.
+        // Keep diagnostics to the endpoint; never log the parser exception.
+        console.error(`JSON parse failed for ${url}`);
         throw new Error(
             _t("Invalid response from server (%s). The server may be restarting.", url)
         );

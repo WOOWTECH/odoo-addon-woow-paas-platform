@@ -69,6 +69,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_ADMIN, ROLE_OWNER, ROLE_USER,
 )
 from .operator_contract import operator_client  # #1052：受 spec 約束的 client double
+from .publication_receipt_fixture import configure_receipt, routes_receipt
 from .smart_home_fixture import sh_model
 
 _MODEL = 'woow_paas_platform.smart_home'
@@ -211,6 +212,8 @@ class _Sh739Fixture(HttpCase):
             'tunnel_token': self.expected_token,
             'tunnel_name': 'name-739-%s' % uuid.uuid4().hex[:6],
         }
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.get_tunnel_status.return_value = {'connections': []}
         for k, v in extra.items():
             setattr(client, k, v)

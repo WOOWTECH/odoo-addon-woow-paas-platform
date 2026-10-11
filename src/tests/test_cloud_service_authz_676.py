@@ -259,6 +259,8 @@ class _CloudService676Fixture(HttpCase):
 
     def _operator_client(self, **extra):
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.get_status.return_value = self._status()
         client.init_odoo.return_value = {
             'success': True, 'modules_added': 0, 'modules_updated': 0}
@@ -664,3 +666,5 @@ class TestReadEndpointsStayPureForGuests(_CloudService676Fixture):
             {'action': 'get'}, svc)
         self.assertEqual(svc.sudo().state, 'initializing')
         self.assertEqual(result['data']['init_phase'], 'queued')
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

@@ -102,7 +102,9 @@ class TestSecurityAccessCron(TransactionCase):
             sh_end_date=date.today() - timedelta(days=10),
         )
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
@@ -112,7 +114,9 @@ class TestSecurityAccessCron(TransactionCase):
         sa = self._make_sa_with_sub('in_progress')
         sa.write({'state': 'suspended', 'pre_suspend_state': 'active'})
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
@@ -124,7 +128,9 @@ class TestSecurityAccessCron(TransactionCase):
             sh_end_date=date.today() - timedelta(days=3),  # within 7d grace
         )
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
@@ -153,7 +159,9 @@ class TestSecurityAccessCron(TransactionCase):
         )
         self.env.invalidate_all()
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
@@ -168,7 +176,9 @@ class TestSecurityAccessCron(TransactionCase):
         不 cleanup（tunnel 仍在），鎖住門檻計算別把近期取消的也清掉。"""
         sa = self._make_sa_with_sub('cancel')  # write_date = now (recent)
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
@@ -186,10 +196,14 @@ class TestSecurityAccessCron(TransactionCase):
         # 模擬已經跑過 cleanup 的終態：tunnel 已清、state=deleting
         _internal(sa).write({'state': 'deleting', 'tunnel_id': False})
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
         self.assertEqual(sa.state, 'deleting')
         # 不應對 operator 重打 suspend 的 503 sync
         mock_client.sync_tunnel_routes.assert_not_called()
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

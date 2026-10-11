@@ -86,3 +86,4 @@ from . import platform_monitor
 from . import ir_http
 # #1540：停權／刪除後的限時唯讀資料取回入口（帳本＋session）。
 from . import data_retrieval
+from . import workspace_invitation

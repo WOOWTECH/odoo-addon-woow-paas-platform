@@ -301,8 +301,16 @@ class _ShAccessEndpointFixture(HttpCase):
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = (
-            result if result is not None else _sync_result())
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        if result is not None:
+            client.sync_access_app.return_value = result
+        else:
+            client.sync_access_app.side_effect = lambda payload: _sync_result(
+                policy_ids=['policy-%s' % index for index, _policy in
+                            enumerate(payload.get('policies', []), 1)]) | {
+                    'allowed_idps': ['idp-'+kind for kind in
+                                     payload.get('login_idp_types', [])]}
         return client
 
     # ------------------------------------------------------------------ #
@@ -1013,7 +1021,9 @@ class TestShAccessTenantOperatorChain(_ShAccessEndpointFixture):
 
     def test_N1_tenant_write_reaches_the_operator_and_stores_the_app_id(self):
         self.authenticate(self.alice_login, self.alice_login)
-        client = self._mock(_sync_result(app_id='app-n1'))
+        receipt = _sync_result(app_id='app-n1')
+        receipt['allowed_idps'] = ['idp-google']
+        client = self._mock(receipt)
         with patch(MOCK_SH_GET_CLIENT, return_value=client):
             res = self._access_config(
                 {'is_protected': True, 'login_google': True},
@@ -1091,6 +1101,8 @@ class TestShAccessTenantOperatorChain(_ShAccessEndpointFixture):
         """
         self.authenticate(self.alice_login, self.alice_login)
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.sync_access_app.side_effect = RuntimeError('operator down')
         with patch(MOCK_SH_GET_CLIENT, return_value=client):
             res = self._access_config({'is_protected': True},
@@ -1320,3 +1332,5 @@ class TestShAccessQuotaBffSudoCrossUser1053(_ShAccessEndpointFixture):
             '非成員不得從錯誤訊息得知這台 SH 的配額狀態（%r）' % (res,))
         self.assertEqual(self._pool(self.sh), before,
                          '被拒的請求不得建出任何 policy')
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

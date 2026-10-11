@@ -373,10 +373,11 @@ class TestShRouteAnchorHatch(_ShRouteAnchor768Fixture):
         sh = self._smart_home()
         route = sh._ensure_primary_route()
         for field in _SM_ROUTE_IDENTITY_ANCHOR_FIELDS:
+            value = True if route._fields[field].type == 'boolean' else 'server-chosen-%s' % field
             _internal_sm_route_identity(route).write(
-                {field: 'server-chosen-%s' % field})
+                {field: value})
             self.assertEqual(
-                self._db(route.id, field), 'server-chosen-%s' % field,
+                self._db(route.id, field), value,
                 '開閘的伺服器端寫入必須寫得進 %s' % field)
 
     def test_E3_sudo_alone_does_not_open_the_gate(self):

@@ -569,6 +569,13 @@ class OAuth2Controller(Controller):
         Returns:
             JSON response with token data.
         """
+        token_model = request.env['woow_paas_platform.oauth_token'].sudo()
+        if not token_model.is_issuance_identity_valid(client, user):
+            return _json_error(
+                'invalid_grant',
+                _('The token subject or client is not active.'),
+            )
+
         from datetime import datetime
 
         now = datetime.utcnow()
@@ -590,7 +597,7 @@ class OAuth2Controller(Controller):
             token_vals['refresh_token'] = refresh_token_str
             token_vals['refresh_expires_at'] = now + REFRESH_TOKEN_LIFETIME
 
-        request.env['woow_paas_platform.oauth_token'].sudo().create(token_vals)
+        token_model.create(token_vals)
 
         response_data = {
             'access_token': access_token,
@@ -757,10 +764,10 @@ class OAuth2Controller(Controller):
         else:
             scope = client.scopes or ''
 
-        # For client_credentials, use a system/service user.
-        # We use the SUPERUSER to represent the client itself.
-        from odoo import SUPERUSER_ID
-        service_user = request.env['res.users'].sudo().browse(SUPERUSER_ID)
+        # The Odoo superuser row is inactive by design. Use the canonical
+        # active internal administrator as the persisted token owner so the
+        # common issuance boundary remains meaningful for this grant too.
+        service_user = request.env.ref('base.user_admin').sudo()
 
         return self._issue_tokens(
             client=client,
