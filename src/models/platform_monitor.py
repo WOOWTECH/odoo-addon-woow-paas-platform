@@ -21,6 +21,7 @@ partner（ERP 共用）或 workspace（租戶讀得到）。查找一律以 xmli
 | n8n owner 未確認 | 短 poll cron | 首次觀測 ready 後 5 分內沒有可信確認；每 episode 一行 |
 | 叢集儲存額度偏低（#1415） | 獨立 cron（15 分） | 有備援的最大可放單顆 volume ＜ 設定值（預設 80 GiB）或任一節點預訂 ＞ 90% |
 | 開通被叢集儲存額度擋下（#1415） | 事件（``_execute_deploy``） | 發生即追加一行 |
+| running 服務的 workload 沒有 Pod（#1647） | 獨立 cron（10 分）＋每日對帳 cron | 期望 ≥1、實際 0；有 FailedCreate 證據立即告警，沒有則持續 ≥5 分 |
 
 init cron 看 ``active`` 與 ``lastcall``、不看 ``failure_count``：core 停用 cron 時會把
 ``failure_count`` 歸 0，``lastcall`` 也只在正常結束或 FAILED 時更新（被 SIGKILL 的那一趟
@@ -90,6 +91,7 @@ class PlatformMonitor(models.Model):
     SUMMARY_GAVE_UP = 'PaaS monitor: init results unknown or readiness gave up'
     SUMMARY_CAPACITY = 'PaaS monitor: eligible initialization is waiting for capacity'
     SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner not yet confirmed by the platform'
+    SUMMARY_WORKLOAD_FAULT = 'PaaS monitor: running services whose workloads have no pods'
     SUMMARY_STORAGE_LOW = 'PaaS monitor: cluster storage scheduling capacity is running low'
     SUMMARY_STORAGE_REJECTED = 'PaaS monitor: deployments rejected for lack of cluster storage'
     SUMMARY_STORAGE_EXPANSION_REJECTED = 'PaaS monitor: plan changes rejected because a disk cannot be enlarged'
@@ -579,3 +581,79 @@ class PlatformMonitor(models.Model):
         self._safe_alert(self.SUMMARY_GAVE_UP, _(
             'Post-deploy initialization gave up on the following service(s):'),
             append_line=line)
+
+    @api.model
+    def _report_workload_fault(self, service):
+        """#1647：running 的服務有 workload 期望有 Pod、實際一顆都沒有——一台一行。
+
+        回傳「這一台的通知有沒有落地」：新開一張或追加到既有那張都算 True；沒有收件者、
+        或寫入失敗回 False。呼叫端（``CloudService._apply_workload_observation``）只在 True
+        時寫 ``workload_fault_alerted_at``，False 的下一輪重試。
+
+        ⚠ 不用 ``_alert`` 的回傳值：它回的是「有沒有**新開**一張」，追加到既有 activity 時
+        也是 False——拿它當「通知落地了沒」，第二台起的服務會每一輪都重複追加。
+        """
+        service = service.sudo()
+        monitor = self._singleton()
+        existing = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', self._name), ('res_id', '=', monitor.id),
+            ('summary', '=', self.SUMMARY_WORKLOAD_FAULT)])
+        todo, users = self._alert_recipients()
+        if not existing and not (todo and users):
+            # 送不出去就不讓呼叫端記標記，否則這一段異常的告警會永久消失。
+            _logger.warning(
+                "[#1647] cannot raise monitor alert %r for service id=%s (todo=%s users=%s); "
+                "will retry", self.SUMMARY_WORKLOAD_FAULT, service.id, bool(todo), len(users))
+            return False
+        line = _(
+            '%(name)s (id=%(id)s, namespace %(ns)s, release %(release)s), since %(since)s UTC: '
+            '%(detail)s',
+            name=service.name, id=service.id, ns=service.helm_namespace or '?',
+            release=service.helm_release_name or '?', since=service.workload_fault_since,
+            detail=service.workload_fault_detail or '?')
+        note = _(
+            'These services are shown as running, but at least one of their workloads '
+            '(Deployment or StatefulSet) wants pods and has none, so the service is actually '
+            'down. The most common cause is the namespace ResourceQuota rejecting the pods '
+            '(FailedCreate: exceeded quota). Check the quota of the namespace and the events '
+            'of its ReplicaSets and StatefulSets. The platform clears the flag by itself once '
+            'the pods are back. The service state has not been changed:')
+        try:
+            with self.env.cr.savepoint():
+                # 只排 queue（同 `_safe_alert`）：savepoint 回捲時不留下已同步寄出的信。
+                self.with_context(mail_notify_force_send=False)._alert(
+                    self.SUMMARY_WORKLOAD_FAULT, note, append_line=line)
+            return True
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[#1647] monitor alert %r could not be recorded for service id=%s",
+                self.SUMMARY_WORKLOAD_FAULT, service.id)
+            return False
+
+    @api.model
+    def _note_workload_recovered(self, service, since):
+        """#1647：通知過的 workload 異常恢復了——在還沒處理的那張 activity 追加一行。
+
+        不新開 activity（恢復不是要人處理的事）；都處理完了就只留在 monitor 的 chatter。
+        通知失敗只記 log：欄位已經清掉了，恢復本身不因此不成立。
+        """
+        service = service.sudo()
+        line = _(
+            '%(name)s (id=%(id)s): its workloads have pods again (had none since '
+            '%(since)s UTC)', name=service.name, id=service.id, since=since)
+        try:
+            with self.env.cr.savepoint():
+                monitor = self._singleton()
+                activities = self.env['mail.activity'].sudo().search([
+                    ('res_model', '=', self._name), ('res_id', '=', monitor.id),
+                    ('summary', '=', self.SUMMARY_WORKLOAD_FAULT)])
+                for activity in activities:
+                    activity.note = (activity.note or Markup()) + Markup('<p>%s</p>') % line
+                monitor._message_log(body=line)
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[#1647] workload recovery of service id=%s could not be recorded", service.id)

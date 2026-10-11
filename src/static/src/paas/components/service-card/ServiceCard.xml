@@ -38,6 +38,14 @@
                         <span>Public URL is not yet verified as resolvable — it may still be propagating</span>
                     </div>
                 </t>
+                <!-- #1647：服務顯示 running、但平台確認它沒有在執行（Pod 一顆都建不出來）。
+                     狀態徽章仍是 running，這一行是卡片上唯一的訊號；詳細文案在詳情頁。 -->
+                <t t-if="workloadFaultLabel">
+                    <div class="o_woow_cloud_service_error">
+                        <WoowIcon name="'error'" size="14"/>
+                        <span t-esc="workloadFaultLabel"/>
+                    </div>
+                </t>
                 <!-- #1159：init 失敗用與詳情頁相同的固定文案；原始 operator 錯誤
                      可能含 Pod 名稱或內部細節，只有非 init error 保留原行為。 -->
                 <t t-if="initFailureText">

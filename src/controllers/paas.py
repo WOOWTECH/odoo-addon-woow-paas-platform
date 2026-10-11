@@ -5178,6 +5178,18 @@ class PaasController(HiddenChainMixin, Controller):
             # 而且 ServiceDetailPage 的 `t-if="service.error_message"` 不判 state
             # ⇒ 一台健康的服務會冒出紅底錯誤。
             'public_url_dns_unverified': service.public_url_dns_unverified,
+            # #1647：服務顯示 running，但某個 workload 期望有 Pod、實際一顆都沒有
+            # （例：被 namespace quota 擋下）。值是**已確認**的異常代碼
+            # （quota_exceeded／create_failed／no_pods）或 None；判準在 model
+            # （`_workload_fault_public`：running ＋ 已確認），前端只讀這一格
+            # （capability-gate-single-source-field）。
+            #
+            # ⚠ 放在 base dict（理由同上）：列表卡片也要顯示。
+            # ⚠ 只給代碼：含叢集原文的 `workload_fault_detail` 不出後台。
+            # ⚠ 刻意**不**併進 `error_message`：服務的 state 仍是 running，而那個通道的
+            #    內容會被當成「這台服務的錯誤訊息」原文顯示。
+            # 此呼叫只讀已存值，不呼叫 operator、不寫入。
+            'workload_fault': service._workload_fault_public(),
             # observed_at 保留真 poll 證據；新 episode 的 age 從等待邊界起算，
             # 不把舊證據立刻報成新轉移的 stale。consumer 依 pending 旗標分別呈現
             # 「等待更新」與「最後更新」，list/get 仍只讀已存值。

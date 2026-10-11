@@ -4,6 +4,9 @@
 判準 6：`PaasController._list_services`／`_get_service` 本體內不得呼叫
 `_PURE_READ_FORBIDDEN_CALLS`（list/get 純讀）。
 判準 6b：整個 controller 檔不得呼叫 `_CONTROLLER_FORBIDDEN_CALLS`（init 入口、poll、commit）。
+判準 5 的 #1647 擴充（`TestObserversNeverWriteState`）：workload 觀測的兩個函式
+（`_cron_check_running_workloads`／`_apply_workload_observation`）不得寫 `'state'`，
+找不到也要紅。
 
 守的是**這兩條判準自己**的鑑別力，不是被守的那棵樹乾不乾淨。分三半：
 
@@ -61,6 +64,12 @@ _MODEL_SOURCE = textwrap.dedent("""\
         def _cron_reconcile_release_facts(self):
             release_facts = self._release_facts(None)
             self.write({**release_facts})
+
+        def _cron_check_running_workloads(self):
+            pass
+
+        def _apply_workload_observation(self, status):
+            pass
     """)
 
 _CLEAN_LIST_BODY = "return {'services': [s.state for s in workspace.service_ids]}"
@@ -241,6 +250,74 @@ class TestCriterion6bSensitivity(_Case):
         violations = self.run_check()
         self.assertTrue(any(v.startswith(rl.POLL_CONTROLLER_FILE + "：讀不到或 parse 失敗")
                             for v in violations), violations)
+
+
+class TestObserversNeverWriteState(_Case):
+    """判準 5 的 #1647 擴充：workload 觀測的兩個函式不得寫 `'state'`。
+
+    它們看到的是「running 的服務一顆 Pod 都沒有」——最容易讓人想順手把 state 寫成 error
+    的地方；而 error 沒有任何路徑會自己 poll 回來。
+    """
+
+    #: 字面下限（同 `_PURE_READ_FLOOR` 的理由：不迭代被測物自己的 tuple）。
+    _OBSERVERS = ("_cron_check_running_workloads", "_apply_workload_observation")
+
+    def _model_with(self, func_name, body):
+        """把 `_MODEL_SOURCE` 裡 `func_name` 的本體（`pass`）換成 `body`。"""
+        signature = {
+            "_cron_check_running_workloads": "def _cron_check_running_workloads(self):",
+            "_apply_workload_observation": "def _apply_workload_observation(self, status):",
+        }[func_name]
+        old = "    %s\n        pass\n" % signature
+        self.assertEqual(_MODEL_SOURCE.count(old), 1, "mutation 前提不成立：%s" % func_name)
+        return _MODEL_SOURCE.replace(old, "    %s\n        %s\n" % (signature, body))
+
+    def test_floor_folded_in(self):
+        targeted = {name for _, name in rl._NO_STATE_WRITE_FUNCTIONS}
+        missing = set(self._OBSERVERS) - targeted
+        self.assertFalse(missing, "判準 5 的對象少了：%s" % sorted(missing))
+        self.assertIn(rl._RECONCILE_IMPLEMENTATION, rl._NO_STATE_WRITE_FUNCTIONS)
+
+    def test_state_write_in_each_observer_is_flagged(self):
+        for func_name in self._OBSERVERS:
+            with self.subTest(func=func_name):
+                self._write(rl.POLL_MODEL_FILE, self._model_with(
+                    func_name, "self.write({'state': 'error'})"))
+                violations = self.run_check()
+                self.assertEqual(len(violations), 1, violations)
+                self.assertIn("::%s " % func_name, violations[0])
+                self.assertIn("寫了 `'state'`", violations[0])
+
+    def test_missing_observer_is_a_violation_not_clean(self):
+        for func_name in self._OBSERVERS:
+            with self.subTest(func=func_name):
+                renamed = _MODEL_SOURCE.replace(
+                    "def %s(" % func_name, "def %s_v2(" % func_name)
+                self.assertNotEqual(renamed, _MODEL_SOURCE)
+                self._write(rl.POLL_MODEL_FILE, renamed)
+                violations = self.run_check()
+                self.assertEqual(len(violations), 1, violations)
+                self.assertIn("找不到 `%s`" % func_name, violations[0])
+                self.assertIn("_NO_STATE_WRITE_FUNCTIONS", violations[0])
+
+    def test_writing_observation_fields_is_not_flagged(self):
+        for func_name in self._OBSERVERS:
+            with self.subTest(func=func_name):
+                self._write(rl.POLL_MODEL_FILE, self._model_with(
+                    func_name, "self.write({'workload_fault_code': 'no_pods'})"))
+                self.assertEqual(self.run_check(), [])
+
+    def test_missing_reconcile_is_reported_once(self):
+        # 對帳 cron 找不到已由判準 1 點名，判準 5 不重複報。
+        self._write(rl.POLL_MODEL_FILE, _MODEL_SOURCE.replace(
+            "def _cron_reconcile_release_facts(", "def _cron_reconcile_release_facts_v2("))
+        violations = self.run_check()
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("找不到 release 事實寫入者 `_cron_reconcile_release_facts`",
+                      violations[0])
+
+    def test_real_repo_is_clean(self):
+        self.assertEqual(rl.check_poll_release_facts_single_source(_REPO_ROOT), [])
 
 
 class TestRealRepo(unittest.TestCase):

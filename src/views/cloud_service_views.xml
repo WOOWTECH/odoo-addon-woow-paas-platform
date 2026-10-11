@@ -17,6 +17,19 @@
                            statusbar_visible="pending,deploying,running"/>
                 </header>
                 <sheet>
+                    <!-- #1647：服務顯示 running，但某個 workload 期望有 Pod、實際一顆都沒有
+                         （例：被 namespace quota 擋下）。由背景 cron 寫入、恢復後自動清掉；
+                         不改 state。detail 含叢集原文，只給系統管理員。 -->
+                    <div class="alert alert-danger" role="alert" groups="base.group_system"
+                         invisible="not workload_fault_code">
+                        <strong>This service is marked running, but a workload has no pods.</strong>
+                        <div>
+                            <field name="workload_fault_code" nolabel="1"/> — since
+                            <field name="workload_fault_since" nolabel="1"/>, last checked
+                            <field name="workload_checked_at" nolabel="1"/>
+                        </div>
+                        <field name="workload_fault_detail" nolabel="1"/>
+                    </div>
                     <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->
                     <div class="alert alert-warning" role="alert"
                          invisible="not redeploy_check_message">
@@ -114,6 +127,8 @@
                        decoration-info="state in ('pending', 'deploying', 'initializing', 'upgrading')"
                        decoration-danger="state == 'error'"
                        decoration-warning="state == 'deleting'"/>
+                <!-- #1647：running 但 workload 沒有 Pod（空值時不顯示徽章）。 -->
+                <field name="workload_fault_code" optional="show" widget="badge" decoration-danger="workload_fault_code"/>
                 <field name="subdomain"/>
                 <field name="helm_namespace"/>
                 <field name="deployed_at"/>

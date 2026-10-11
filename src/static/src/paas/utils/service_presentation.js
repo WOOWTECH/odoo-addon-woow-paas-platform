@@ -48,6 +48,61 @@ export function getInitFailureText(service) {
 }
 
 /**
+ * 服務顯示 running、但平台確認它其實沒有在執行（workload 期望有 Pod、實際一顆都沒有）時，
+ * 回傳後端確認過的異常代碼；否則回 null。
+ *
+ * 只讀 payload 的 `workload_fault`（後端 `_workload_fault_public`：running ＋ 已確認才給值），
+ * 前端不自己判斷。state 不是 running 時一律不顯示：其他狀態各有自己的說明。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {string|null}
+ */
+function getConfirmedWorkloadFault(service) {
+  if (service?.state !== "running") {
+    return null;
+  }
+  const fault = service.workload_fault;
+  return typeof fault === "string" && fault ? fault : null;
+}
+
+/**
+ * 詳情頁 banner 的固定文案（#1647）。
+ *
+ * 叢集的原始訊息含 Pod、namespace、quota 物件名稱等內部細節，只留在後台；這裡只依代碼挑
+ * 文案。不認得的代碼（後端日後新增）一律用一般文案，不顯示代碼本身。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {string|null}
+ */
+export function getWorkloadFaultText(service) {
+  const fault = getConfirmedWorkloadFault(service);
+  if (!fault) {
+    return null;
+  }
+  if (fault === "quota_exceeded") {
+    return _t(
+      "This service is not running right now: the workspace has no CPU or memory quota left to start it. Stopping another service in this workspace may bring it back. Our operations team has been notified.",
+    );
+  }
+  return _t(
+    "This service is not running right now: the platform could not start it. Our operations team has been notified.",
+  );
+}
+
+/**
+ * 服務卡片上的一行提示（#1647）；判準與 getWorkloadFaultText 相同，詳細文案在詳情頁。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {string|null}
+ */
+export function getWorkloadFaultLabel(service) {
+  if (!getConfirmedWorkloadFault(service)) {
+    return null;
+  }
+  return _t("Not running — the platform could not start this service");
+}
+
+/**
  * 回傳過久未觀測的顯示資料；等待首次真觀測時不可誤稱為「最後觀測」。
  *
  * @param {Object|null|undefined} service

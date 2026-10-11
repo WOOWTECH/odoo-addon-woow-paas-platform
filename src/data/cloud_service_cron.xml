@@ -92,6 +92,26 @@
             <field name="interval_type">days</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: running 服務的 workload 有沒有 Pod（#1647）
+
+             服務顯示 running，但某個 Deployment／StatefulSet 期望有 Pod、實際一顆都沒有
+             （2026-10-10：ReplicaSet FailedCreate exceeded quota，中斷近 6 小時無訊號）。
+             短 poll 只看轉移狀態、每日對帳一天一次——本條每 10 分鐘看一次 running 的服務，
+             發現時寫 workload_fault_*、通知系統管理員、讓 /woow 顯示提示，恢復後自動清掉。
+             **絕不碰 state／error_message**（repo-lint 第 19 條判準 5 機械守）。
+
+             ⚠ 要調頻率或暫時停用：到後台「設定 → 技術 → 排程動作」改這一筆。
+             ⚠ 本檔是 noupdate：這筆 record 在升級時會被建立，但日後改這裡的 interval
+                不會生效（改 DB／後台排程動作）。 -->
+        <record id="ir_cron_check_running_workloads" model="ir.cron">
+            <field name="name">Cloud Service: Check Running Workloads</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_check_running_workloads()</field>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
         <!-- Cron: 清理 post-deploy init 的 attempt 記錄（#1257 Q39）
 
              保留每服務最近 20 筆＋目前這一代的全部；超過 90 天者清掉（當代除外）。
