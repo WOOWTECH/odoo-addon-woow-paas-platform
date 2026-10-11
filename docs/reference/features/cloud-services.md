@@ -239,6 +239,8 @@ Example: paas-ws-123-anythingllm-01
 > 順帶）向 operator 取 `status?include_workloads=true`。任一 Deployment／StatefulSet 期望 ≥1 個 Pod 而實際 0 個
 > （例：ReplicaSet `FailedCreate: exceeded quota`）就寫 `workload_fault_*`、在 PaaS Platform Monitor 通知系統管理員
 > （有 `FailedCreate` 證據立即，沒有則要持續 5 分鐘以上），並在 `/woow` 詳情頁與服務卡片顯示固定文案。
+> 異常對租戶確認期間，`/woow` 其他原本只看 `state` 的訊號一起讓路：詳情頁 Connection Info 的連線狀態顯示 OFFLINE、
+> 工作區頁統計卡把這台算進 Alerts 而不是 Healthy；狀態徽章仍是 Running。
 > **不改 `state`／`error_message`**；Pod 恢復或服務離開 `running` 後自動清除。舊 operator 不回報 workloads 時什麼都不寫。
 > 觀測欄位**值真的變了才寫**：健康的服務、內容沒變的異常都不寫服務列（`write_date` 不動，不與每日對帳／生命週期
 > cron 的長交易互撞），所以 `workload_checked_at` 是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。

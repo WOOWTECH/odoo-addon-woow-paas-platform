@@ -8,6 +8,7 @@ import { formatUserDateTime } from "../../../utils/datetime_helpers";
 import { cloudService } from "../../../services/cloud_service";
 import { copyText } from "../../../utils/clipboard";
 import { formatPoints } from "../../../utils/billing_helpers";
+import { hasConfirmedWorkloadFault } from "../../../utils/service_presentation";
 
 /**
  * OverviewTab Component
@@ -40,6 +41,9 @@ export class OverviewTab extends Component {
      * #1456：連線狀態三態。
      *
      * - running → online
+     * - running，但平台已確認它沒有在執行（payload 的 workload_fault 有值，#1647）→ offline：
+     *   同一頁的 banner 正在說「目前沒有在執行」，這一格不能同時寫 ONLINE（瀏覽器實走 F1）。
+     *   不新增 state；狀態徽章維持 Running 是 #1647 明定的設計，不在這裡改。
      * - upgrading（改設定／改 addon 的 helm upgrade）→ updating：升級期間舊版本照常服務
      *   （R8 實測 HA／Omnigent／OD 全程 200），原本卻顯示 OFFLINE。
      * - deploying／initializing 且曾經升級過（last_upgraded_at 有值＝重新部署、addon 變更
@@ -49,11 +53,14 @@ export class OverviewTab extends Component {
      *
      * ⚠ 這仍是平台「最後一次觀測」的狀態，不是即時探測：running 服務平台不會持續
      * 探測 HTTP，應用程式自己重啟（例 HA 內按重新啟動）時這裡仍顯示 online（#1456 的
-     * 未修部分，需 chart httpGet probe＋平台對 running 服務的低頻觀測）。
+     * 未修部分，需 chart httpGet probe＋平台對 running 服務的低頻觀測）。#1647 的低頻觀測
+     * 只涵蓋「Pod 一顆都沒有」，Pod 在但應用程式不通仍然看不出來。
      */
     get connectionStatus() {
         const { state, last_upgraded_at: lastUpgradedAt } = this.props.service;
-        if (state === "running") return "online";
+        if (state === "running") {
+            return hasConfirmedWorkloadFault(this.props.service) ? "offline" : "online";
+        }
         if (state === "upgrading") return "updating";
         if (["deploying", "initializing"].includes(state) && lastUpgradedAt) return "updating";
         return "offline";

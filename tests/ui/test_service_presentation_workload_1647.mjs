@@ -1,8 +1,12 @@
 // #1647：服務顯示 running、但平台確認它沒有在執行（workload 期望有 Pod、實際一顆都沒有）時，
-// 詳情頁 banner 與服務卡片的固定文案。純邏輯測試——載入手法同
-// test_service_presentation_1159.mjs（把 `_t` 換成恆等函式後以 data: URL import）。
+// 詳情頁 banner 與服務卡片的固定文案，以及其他原本只看 state 的「正常」訊號要讓路——詳情頁
+// Connection Info 的連線狀態、工作區頁統計卡的 Healthy／Alerts（瀏覽器實走 F1）。
+// 純邏輯測試——載入手法同 test_service_presentation_1159.mjs（把 `_t` 換成恆等函式後以
+// data: URL import）。元件的 getter 沒辦法在 node 裡 import（依賴 @odoo/owl），所以把 getter
+// 的本體從原始碼切出來、餵真的 helper 執行。
 //
-// 跑法：node --test tests/ui/*.mjs
+// 跑法：node --test tests/ui/*.mjs（沒有 CI 會跑；元件有沒有接上 helper 另由 Odoo 端的
+// TestWorkloadFaultFrontendSignals1647 靜態守）
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -19,6 +23,68 @@ const testableSource = source.replace(
 const presentation = await import(
   `data:text/javascript;base64,${Buffer.from(testableSource).toString("base64")}`,
 );
+
+/**
+ * 從元件原始碼切出 `get <name>() { … }` 的本體（不含外層大括號）。
+ * 大括號配對時跳過字串與註解；找不到就拋錯，測試不會靜靜地變成什麼都沒驗。
+ */
+function getterBody(componentSource, name) {
+  const head = `get ${name}() {`;
+  const start = componentSource.indexOf(head);
+  assert.notEqual(start, -1, `找不到 getter ${name}`);
+  let depth = 1;
+  let index = start + head.length;
+  while (index < componentSource.length) {
+    const two = componentSource.slice(index, index + 2);
+    const char = componentSource[index];
+    if (two === "//") {
+      index = componentSource.indexOf("\n", index);
+    } else if (two === "/*") {
+      index = componentSource.indexOf("*/", index) + 2;
+    } else if (char === '"' || char === "'" || char === "`") {
+      index += 1;
+      while (componentSource[index] !== char) {
+        index += componentSource[index] === "\\" ? 2 : 1;
+      }
+      index += 1;
+    } else {
+      if (char === "{") depth += 1;
+      if (char === "}") depth -= 1;
+      if (depth === 0) {
+        return componentSource.slice(start + head.length, index);
+      }
+      index += 1;
+    }
+  }
+  throw new Error(`getter ${name} 的大括號沒有配對`);
+}
+
+async function readComponent(relativePath) {
+  return readFile(new URL(`../../src/static/src/paas/${relativePath}`, import.meta.url), "utf8");
+}
+
+const overviewTabSource = await readComponent("pages/service/tabs/OverviewTab.js");
+const workspacePageSource = await readComponent("pages/workspace/WorkspaceDetailPage.js");
+
+/** OverviewTab 的 connectionStatus getter，接上真的 hasConfirmedWorkloadFault。 */
+const connectionStatusOf = (service) =>
+  new Function(
+    "hasConfirmedWorkloadFault",
+    `return function () {${getterBody(overviewTabSource, "connectionStatus")}};`,
+  )(presentation.hasConfirmedWorkloadFault).call({ props: { service } });
+
+/** WorkspaceDetailPage 的 computedStats getter，接上真的 countServiceHealth；回 {Healthy, Alerts}。 */
+const workspaceStatsOf = (services) => {
+  const stats = new Function(
+    "_t",
+    "countServiceHealth",
+    `return function () {${getterBody(workspacePageSource, "computedStats")}};`,
+  )((message) => message, presentation.countServiceHealth).call({
+    state: { services },
+    estimatedMonthlyCost: "0",
+  });
+  return Object.fromEntries(stats.map((stat) => [stat.label, stat.value]));
+};
 
 const QUOTA_TEXT =
   "This service is not running right now: the workspace does not have enough CPU or memory quota left to start it. Please contact support. Our operations team has been notified.";
@@ -132,4 +198,148 @@ test("卡片提示與 banner 用同一個前置條件，文案不分代碼", () 
       code,
     );
   }
+});
+
+// ---- F1：異常已確認時，其他以 state 為準的訊號不可以再說它正常 ----
+
+const FAULTED = { state: "running", workload_fault: "quota_exceeded" };
+
+test("hasConfirmedWorkloadFault：只有 running＋非空字串的 workload_fault 才是 true", () => {
+  for (const code of ["quota_exceeded", "create_failed", "no_pods", "some_future_code"]) {
+    assert.equal(
+      presentation.hasConfirmedWorkloadFault({ state: "running", workload_fault: code }),
+      true,
+      code,
+    );
+  }
+  for (const fault of [null, undefined, "", true, 1, {}, ["quota_exceeded"]]) {
+    assert.equal(
+      presentation.hasConfirmedWorkloadFault({ state: "running", workload_fault: fault }),
+      false,
+      String(fault),
+    );
+  }
+  for (const state of ["error", "upgrading", "deploying", "suspended", "deleting", undefined]) {
+    assert.equal(
+      presentation.hasConfirmedWorkloadFault({ state, workload_fault: "quota_exceeded" }),
+      false,
+      String(state),
+    );
+  }
+  assert.equal(presentation.hasConfirmedWorkloadFault(null), false);
+  assert.equal(presentation.hasConfirmedWorkloadFault(undefined), false);
+});
+
+test("banner、卡片提示與 hasConfirmedWorkloadFault 永遠同進同出", () => {
+  const cases = [
+    FAULTED,
+    { state: "running", workload_fault: "no_pods" },
+    { state: "running", workload_fault: null },
+    { state: "running" },
+    { state: "error", workload_fault: "quota_exceeded" },
+    { state: "upgrading", workload_fault: "quota_exceeded" },
+  ];
+  for (const service of cases) {
+    const flagged = presentation.hasConfirmedWorkloadFault(service);
+    assert.equal(presentation.getWorkloadFaultText(service) !== null, flagged, JSON.stringify(service));
+    assert.equal(presentation.getWorkloadFaultLabel(service) !== null, flagged, JSON.stringify(service));
+  }
+});
+
+test("連線狀態：running 但異常已確認時是 offline，不是 online", () => {
+  for (const code of ["quota_exceeded", "create_failed", "no_pods"]) {
+    assert.equal(connectionStatusOf({ state: "running", workload_fault: code }), "offline", code);
+  }
+});
+
+test("連線狀態：沒有確認的異常時，#1456 的三態不變", () => {
+  assert.equal(connectionStatusOf({ state: "running" }), "online");
+  assert.equal(connectionStatusOf({ state: "running", workload_fault: null }), "online");
+  assert.equal(connectionStatusOf({ state: "upgrading" }), "updating");
+  assert.equal(connectionStatusOf({ state: "deploying", last_upgraded_at: "2026-10-01" }), "updating");
+  assert.equal(connectionStatusOf({ state: "initializing", last_upgraded_at: "2026-10-01" }), "updating");
+  assert.equal(connectionStatusOf({ state: "deploying" }), "offline");
+  assert.equal(connectionStatusOf({ state: "error" }), "offline");
+  assert.equal(connectionStatusOf({ state: "suspended" }), "offline");
+});
+
+test("連線狀態：不是 running 時不看 workload_fault（殘留的值不影響其他狀態）", () => {
+  // 後端只在 running 時給值；這裡證明前端也不會因為一個殘留的值改掉 #1456 的判斷。
+  assert.equal(connectionStatusOf({ state: "upgrading", workload_fault: "quota_exceeded" }), "updating");
+  assert.equal(connectionStatusOf({ state: "error", workload_fault: "quota_exceeded" }), "offline");
+});
+
+test("連線狀態只有既有的三種，沒有新增 state", () => {
+  const seen = new Set();
+  for (const service of [
+    FAULTED,
+    { state: "running" },
+    { state: "upgrading" },
+    { state: "deploying" },
+    { state: "deploying", last_upgraded_at: "2026-10-01" },
+    { state: "error" },
+    { state: "deleting" },
+    { state: "pending" },
+  ]) {
+    seen.add(connectionStatusOf(service));
+  }
+  assert.deepEqual([...seen].sort(), ["offline", "online", "updating"]);
+});
+
+test("countServiceHealth：異常已確認的 running 服務不算 Healthy，算進 Alerts", () => {
+  assert.deepEqual(presentation.countServiceHealth([FAULTED]), { healthy: 0, alerts: 1 });
+  assert.deepEqual(
+    presentation.countServiceHealth([
+      { state: "running" },
+      { state: "running", workload_fault: null },
+      FAULTED,
+      { state: "running", workload_fault: "no_pods" },
+      { state: "error" },
+      { state: "upgrading" },
+      { state: "deploying" },
+      { state: "suspended" },
+    ]),
+    { healthy: 2, alerts: 3 },
+  );
+});
+
+test("countServiceHealth：沒有任何確認的異常時，與原本只數 state 的結果相同", () => {
+  const services = [
+    { state: "running" },
+    { state: "running" },
+    { state: "error" },
+    { state: "upgrading" },
+    { state: "initializing" },
+    { state: "deleting" },
+  ];
+  assert.deepEqual(presentation.countServiceHealth(services), {
+    healthy: services.filter((service) => service.state === "running").length,
+    alerts: services.filter((service) => service.state === "error").length,
+  });
+});
+
+test("countServiceHealth：一台服務最多只算一邊；空清單與缺席不拋錯", () => {
+  // error 的服務就算帶著殘留的 workload_fault 也只算一次 Alert（後端只在 running 時給值）。
+  assert.deepEqual(
+    presentation.countServiceHealth([{ state: "error", workload_fault: "quota_exceeded" }]),
+    { healthy: 0, alerts: 1 },
+  );
+  for (const services of [[], null, undefined]) {
+    assert.deepEqual(presentation.countServiceHealth(services), { healthy: 0, alerts: 0 });
+  }
+  assert.deepEqual(presentation.countServiceHealth([null, undefined, {}]), { healthy: 0, alerts: 0 });
+});
+
+test("工作區統計卡：Healthy／Alerts 兩格用 countServiceHealth 的結果", () => {
+  assert.deepEqual(
+    (({ Healthy, Alerts }) => ({ Healthy, Alerts }))(
+      workspaceStatsOf([{ state: "running" }, FAULTED, { state: "error" }, { state: "upgrading" }]),
+    ),
+    { Healthy: "1", Alerts: "2" },
+  );
+  // 事故當下的畫面：工作區唯一的一台服務被配額擋下。
+  const incident = workspaceStatsOf([FAULTED]);
+  assert.equal(incident.Healthy, "0");
+  assert.equal(incident.Alerts, "1");
+  assert.equal(incident["Total Apps"], "1");
 });

@@ -28,6 +28,9 @@
 * 每日對帳順帶回寫 workload 觀測（同樣值沒變不寫），出錯不連累 release 事實，既有那行
   log 不變；
 * /woow payload 只給**已確認**的代碼，不帶叢集原文；
+* 異常已對租戶確認時，/woow 其他原本只看 state 的訊號不再說它正常：詳情頁 Connection Info
+  的連線狀態不是 ONLINE、工作區頁統計卡把它算進 Alerts 而不是 Healthy；狀態徽章仍跟著
+  state（瀏覽器實走 F1；元件原始碼的靜態檢查，行為另由 ``tests/ui`` 的 node 測試驗）；
 * 後台表單警示的每一段可見文字在 zh_TW.po 都有譯文（review detect-S2）；
 * 後台列表徽章用的三個代碼標籤（英文與 zh_TW）短到放得下，完整的說明在欄位 help 與表單
   警示裡依代碼顯示的那一行，每個代碼都要有（瀏覽器實走 F5）；
@@ -1459,6 +1462,129 @@ class TestWorkloadFaultPayload1647(_WorkloadCase):
             with self.subTest(include_details=include_details):
                 payload = self._format(as_owner, include_details, user=self.owner)
                 self.assertEqual(payload['workload_fault'], 'quota_exceeded')
+
+
+# ====================================================================== #
+#  /woow：其他以 state 為準的訊號                                            #
+# ====================================================================== #
+
+def _read_paas_source(*parts):
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'static', 'src', 'paas', *parts)
+    with open(path, encoding='utf-8') as handle:
+        return handle.read()
+
+
+@tagged('post_install', '-at_install')
+class TestWorkloadFaultFrontendSignals1647(BaseCase):
+    """異常已對租戶確認時，同一個畫面上其他的訊號不可以再說它正常（瀏覽器實走 F1）。
+
+    實走看到的是：banner 說「This service is not running right now」，下面 Connection Info
+    是綠色的 ONLINE，工作區頁統計卡是 Healthy 1／Alerts 0——這兩處原本只看 ``state``。
+
+    這裡是讀原始碼的靜態檢查（基底用 ``BaseCase``，不碰資料庫）：守「元件有接上 helper」與
+    「helper 用的是 banner 那一個判準」。行為（哪些輸入得到哪個結果）由
+    ``tests/ui/test_service_presentation_workload_1647.mjs`` 把 getter 本體切出來執行，但
+    ``tests/ui/*.mjs`` 沒有任何 CI 會跑，所以接線要在這裡守一份。
+
+    🔴 狀態徽章不在此列：它跟著 ``state`` 走、維持 Running 是 #1647 明定的設計。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.presentation = _read_paas_source('utils', 'service_presentation.js')
+        cls.overview_js = _read_paas_source('pages', 'service', 'tabs', 'OverviewTab.js')
+        cls.overview_xml = _read_paas_source('pages', 'service', 'tabs', 'OverviewTab.xml')
+        cls.workspace_js = _read_paas_source('pages', 'workspace', 'WorkspaceDetailPage.js')
+
+    def _getter(self, source, name):
+        match = re.search(r'get %s\(\)\s*\{(.*?)\n    \}' % name, source, re.S)
+        self.assertTrue(match, '找不到 %s getter' % name)
+        return match.group(1)
+
+    def _function(self, name):
+        match = re.search(
+            r'export function %s\(\w+\)\s*\{(.*?)\n\}' % name, self.presentation, re.S)
+        self.assertTrue(match, 'service_presentation.js 找不到 export function %s' % name)
+        return match.group(1)
+
+    def _imported_from_presentation(self, source):
+        match = re.search(
+            r'import\s*\{([^}]*)\}\s*from\s*"[./]*/utils/service_presentation";', source)
+        self.assertTrue(match, '沒有從 utils/service_presentation import 任何東西')
+        return {name.strip() for name in match.group(1).split(',') if name.strip()}
+
+    def test_connection_status_is_not_online_while_a_fault_is_confirmed(self):
+        self.assertIn('hasConfirmedWorkloadFault',
+                      self._imported_from_presentation(self.overview_js))
+        body = self._getter(self.overview_js, 'connectionStatus')
+        self.assertRegex(
+            body,
+            r'if \(state === "running"\) \{\s*'
+            r'return hasConfirmedWorkloadFault\(this\.props\.service\) \? "offline" : "online";',
+            'running 但異常已確認時要回 offline（與 banner 相符的既有狀態）')
+        self.assertNotRegex(body, r'state === "running"\)\s*return "online"',
+                            'running 不可以無條件回 online')
+
+    def test_connection_status_keeps_the_three_existing_kinds(self):
+        """不為了 workload 異常新增 state：getter 回的與模板認得的都還是原本三種。"""
+        body = self._getter(self.overview_js, 'connectionStatus')
+        returned = set(re.findall(r'"([a-z_]+)"\s*[;:]', body))
+        self.assertEqual(returned, {'online', 'updating', 'offline'}, body)
+        self.assertEqual(
+            set(re.findall(r"connectionStatus === '(\w+)'", self.overview_xml)),
+            {'online', 'updating'}, '模板只分 online／updating，其餘一律 OFFLINE')
+        self.assertNotIn('workload_fault', self.overview_xml,
+                         '模板不自己判斷，連線狀態一律走 connectionStatus')
+
+    def test_workspace_stats_count_a_confirmed_fault_as_an_alert(self):
+        self.assertIn('countServiceHealth',
+                      self._imported_from_presentation(self.workspace_js))
+        body = self._getter(self.workspace_js, 'computedStats')
+        self.assertIn(
+            'const { healthy: runningCount, alerts: errorCount } = countServiceHealth(services);',
+            body)
+        self.assertNotIn('.state ===', body, '統計卡不可以自己只數 state')
+        self.assertRegex(body, r'_t\("Healthy"\), value: String\(runningCount\)')
+        self.assertRegex(body, r'_t\("Alerts"\), value: String\(errorCount\)')
+
+    def test_helpers_use_the_same_rule_as_the_banner(self):
+        """只讀 payload 的 ``workload_fault``（後端已確認才給值），前端不另算一份。"""
+        rule = re.search(
+            r'\nfunction getConfirmedWorkloadFault\(service\)\s*\{(.*?)\n\}',
+            self.presentation, re.S)
+        self.assertTrue(rule, '找不到 getConfirmedWorkloadFault')
+        self.assertIn('service?.state !== "running"', rule.group(1))
+        self.assertIn('service.workload_fault', rule.group(1))
+        for name in ('getWorkloadFaultText', 'getWorkloadFaultLabel',
+                     'hasConfirmedWorkloadFault'):
+            with self.subTest(function=name):
+                self.assertIn('getConfirmedWorkloadFault(service)', self._function(name))
+
+        count = self._function('countServiceHealth')
+        fault = count.find('hasConfirmedWorkloadFault(service)')
+        running = count.find('service?.state === "running"')
+        self.assertGreaterEqual(fault, 0, 'countServiceHealth 要用 hasConfirmedWorkloadFault')
+        self.assertGreater(running, fault,
+                           '先看異常、再看 running：否則異常的服務會先被算成 Healthy')
+        self.assertNotIn('workload_fault', count.replace('hasConfirmedWorkloadFault', ''),
+                         'countServiceHealth 不自己讀 workload_fault')
+
+    def test_status_badge_still_follows_state(self):
+        """狀態徽章維持跟著 state（異常時仍是 Running）——本票明定，不因為這次修正而改。"""
+        for parts, expected in (
+                (('pages', 'service', 'ServiceDetailPage.xml'),
+                 '<StatusBadge status="service.state"'),
+                (('components', 'service-card', 'ServiceCard.xml'),
+                 '<StatusBadge status="props.service.state"')):
+            with self.subTest(file=parts[-1]):
+                source = _read_paas_source(*parts)
+                badges = re.findall(r'<StatusBadge\b[^>]*>', source)
+                self.assertEqual(len(badges), 1, badges)
+                self.assertTrue(badges[0].startswith(expected), badges[0])
+                self.assertNotIn('workload', badges[0].lower())
 
 
 # ====================================================================== #

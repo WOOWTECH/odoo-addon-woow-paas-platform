@@ -66,6 +66,50 @@ function getConfirmedWorkloadFault(service) {
 }
 
 /**
+ * 服務是不是「顯示 running、但平台已確認它沒有在執行」（#1647）；判準同上，只是回布林。
+ *
+ * 給 banner／卡片提示以外、原本只看 state 的「正常」訊號用：這些地方在異常已確認時要讓路，
+ * 否則同一個畫面上 banner 說沒有在執行、旁邊卻寫 ONLINE／Healthy（瀏覽器實走 F1）。目前有
+ * 詳情頁 Connection Info 的連線狀態（OverviewTab 的 connectionStatus）與工作區頁統計卡
+ * （countServiceHealth）。
+ *
+ * ⚠ 狀態徽章不在此列：它跟著 state 走、維持 Running 是 #1647 明定的設計（state 不因為
+ * 觀測結果而改）。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {boolean}
+ */
+export function hasConfirmedWorkloadFault(service) {
+  return getConfirmedWorkloadFault(service) !== null;
+}
+
+/**
+ * 工作區頁統計卡的 Healthy／Alerts 計數。
+ *
+ * - healthy：state 是 running，而且沒有已確認的 workload 異常；
+ * - alerts：state 是 error，加上 running 但已確認 workload 異常的（#1647）。
+ *
+ * 兩者互斥；其他狀態（部署中、升級中、停權…）兩邊都不算。
+ *
+ * @param {Array<Object>|null|undefined} services
+ * @returns {{healthy: number, alerts: number}}
+ */
+export function countServiceHealth(services) {
+  let healthy = 0;
+  let alerts = 0;
+  for (const service of services || []) {
+    if (hasConfirmedWorkloadFault(service)) {
+      alerts += 1;
+    } else if (service?.state === "running") {
+      healthy += 1;
+    } else if (service?.state === "error") {
+      alerts += 1;
+    }
+  }
+  return { healthy, alerts };
+}
+
+/**
  * 詳情頁 banner 的固定文案（#1647）。
  *
  * 叢集的原始訊息含 Pod、namespace、quota 物件名稱等內部細節，只留在後台；這裡只依代碼挑
