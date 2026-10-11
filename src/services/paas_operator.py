@@ -800,6 +800,13 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def get_config_projection(self, namespace, release_name, revision, paths, excluded_paths=None):
+        """固定 revision 的公開設定標量；不取得或回傳 raw Helm values。"""
+        return self._request('POST',
+            f'/api/releases/{namespace}/{release_name}/config-projection',
+            data={'revision': revision, 'paths': list(paths),
+                  'excluded_paths': list(excluded_paths or [])}, timeout=DEFAULT_TIMEOUT)
+
     def rollback_release(
         self,
         namespace: str,
