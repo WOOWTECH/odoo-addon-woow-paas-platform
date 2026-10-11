@@ -878,6 +878,36 @@ def _js_code(source):
 _OVERVIEW_HINT_RE = re.compile(
     r'get workspaceQuotaHint\(\)\s*\{\s*return _t\("((?:[^"\\]|\\.)*)"\);')
 
+_JS_STRING = r'"((?:[^"\\]|\\.)*)"'
+_ALERT_LEVELS = ('full', 'warning')
+
+
+def _alert_choices(code):
+    """讀出面板 ``alertText`` 在每個等級、``hint`` 是不是 storage 時各回哪一句。
+
+    ``code`` 是去掉註解的 WorkspaceQuotaPanel.js。回 ``{等級: (磁碟版, 一般版)}``；getter
+    本體的形狀對不上就回 ``None``——判定被取反、分支被反轉、中間多了別的出口都算對不上，
+    因為那些寫法都會讓「哪個條件回哪一句」和這裡讀出來的不一樣。
+    """
+    getter = re.search(r'\n  get alertText\(\) \{\n(.*?)\n  \}\n', code, re.S)
+    if getter is None:
+        return None
+    shape = r'\s*const level = this\.state\.quota\?\.level;'
+    shape += (r'\s*const diskIsTight = this\.state\.quota\?\.hint === "%s";'
+              % re.escape(workspace_quota.HINT_STORAGE))
+    for level in _ALERT_LEVELS:
+        shape += (r'\s*if \(level === "%s"\) \{'
+                  r'\s*if \(diskIsTight\) \{\s*return _t\(%s\);\s*\}'
+                  r'\s*return _t\(%s\);'
+                  r'\s*\}' % (level, _JS_STRING, _JS_STRING))
+    shape += r'\s*return "";\s*'
+    match = re.fullmatch(shape, getter.group(1))
+    if match is None:
+        return None
+    sentences = match.groups()
+    return {level: (sentences[2 * index], sentences[2 * index + 1])
+            for index, level in enumerate(_ALERT_LEVELS)}
+
 
 @tagged('post_install', '-at_install')
 class TestWorkspaceQuotaFrontend1647(TransactionCase):
@@ -931,6 +961,55 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         intro = [s for s in strings if s.startswith('All services in this workspace share')]
         self.assertEqual(len(intro), 1)
         self.assertIn('retention period', intro[0])
+
+    def test_alert_sentence_follows_level_and_hint(self):
+        """告警句怎麼選：等級決定「快用完／已用完」，``hint`` 是 storage 才回磁碟版。
+
+        只數句子、只看 hint 的字面值在不在，鎖不住方向：把 ``if (diskIsTight)`` 反轉成
+        ``if (!diskIsTight)``，平常會顯示磁碟版、磁碟吃緊時反而顯示一般版，而那樣的測試
+        不會紅。這裡把 getter 每個分支回的是哪一句讀出來逐一核對。
+        """
+        code = _js_code(_read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js'))
+        choices = _alert_choices(code)
+        self.assertIsNotNone(
+            choices, 'alertText 的形狀變了：每個等級都要是「if (diskIsTight) 回磁碟版，'
+                     '否則回一般版」，改寫時請一併更新 _alert_choices')
+        self.assertEqual(sorted(choices), sorted(_ALERT_LEVELS))
+        for level, (disk, generic) in choices.items():
+            # hint 是 storage 的那個分支：講保留中的資料；另一個分支：不講磁碟。
+            self.assertIn('retention period', disk, level)
+            self.assertIn('disk quota', disk, level)
+            self.assertNotIn('retention period', generic, level)
+            self.assertNotIn('disk', generic, level)
+        # 等級沒有對調：warning 兩句都是「接近」，full 兩句都是「已用完／已達上限」。
+        for sentence in choices['warning']:
+            self.assertRegex(sentence, r'^This workspace is close to its quota( limit)?\.')
+        for sentence in choices['full']:
+            self.assertRegex(
+                sentence, r'^This workspace has (used up its quota|reached its quota limit)\.')
+        # 讀出來的四句各不相同，而且就是面板全部的告警句（沒有哪一句不在這些分支裡）。
+        picked = [sentence for pair in choices.values() for sentence in pair]
+        self.assertEqual(len(set(picked)), 4, picked)
+        self.assertEqual(
+            sorted(picked),
+            sorted(s for s in _T_STRING_RE.findall(code) if s.startswith('This workspace ')))
+
+        # 陽性對照：方向一反轉就讀不出來（下面每一種改法都真的改到了東西）。
+        def swap(text, first, second):
+            return text.replace(first, '\0').replace(second, first).replace('\0', second)
+
+        reversed_branch = code.replace('if (diskIsTight) {', 'if (!diskIsTight) {')
+        negated_hint = code.replace('?.hint === "storage"', '?.hint !== "storage"')
+        swapped_levels = swap(code, 'level === "full"', 'level === "warning"')
+        for broken in (reversed_branch, negated_hint, swapped_levels):
+            self.assertNotEqual(broken, code)
+            self.assertIsNone(_alert_choices(broken))
+        # 同一等級的兩句對調：形狀還在，但讀出來磁碟版落到了「否則」那一邊——上面
+        # 「retention period 在哪一邊」的斷言就是靠這個分辨。
+        disk, generic = choices['full']
+        swapped = _alert_choices(swap(code, disk, generic))
+        self.assertEqual(swapped['full'], (generic, disk))
+        self.assertEqual(swapped['warning'], choices['warning'])
 
     def test_alerts_never_advise_deleting_or_stopping_services(self):
         """告警句不可以建議租戶刪除／停用／停止服務來釋出配額。
