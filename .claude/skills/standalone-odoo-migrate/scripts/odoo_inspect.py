@@ -371,6 +371,13 @@ def db_stats(params, dbname):
                      "ORDER BY 1")]
             row = _rows(cur, "SELECT count(*) FILTER (WHERE active), count(*) FROM ir_mail_server")[0]
             out["mail_servers"] = {"active": row[0], "total": row[1]}
+            # 寄收信主機（只取主機、埠、是否啟用；帳號密碼不取）：叢集內位址搬進租戶 ns 之後會連不到
+            hosts = [{"kind": "smtp", "host": h, "port": p, "active": bool(a)} for h, p, a in _rows(
+                cur, "SELECT smtp_host, smtp_port, active FROM ir_mail_server ORDER BY id")]
+            if _table_exists(cur, "fetchmail_server"):
+                hosts += [{"kind": k or "incoming", "host": h, "port": p, "active": bool(a)} for k, h, p, a in _rows(
+                    cur, "SELECT server_type, server, port, active FROM fetchmail_server ORDER BY id")]
+            out["mail_hosts"] = hosts
             out["crons_active"] = _rows(cur, "SELECT count(*) FROM ir_cron WHERE active")[0][0]
             if _table_exists(cur, "payment_provider"):
                 out["payment_providers_enabled"] = [
