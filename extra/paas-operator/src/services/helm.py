@@ -3250,13 +3250,20 @@ class KubernetesService:
 
         Raises:
             KubectlException: kubectl 失敗、權限不足、逾時（呼叫端一律當「不知道」放行）。
-            ValueError: namespace 不在允許範圍。
+            ValueError: namespace 不在允許範圍；或 kubectl 的輸出不是預期的 List 形狀
+                （不是 JSON、頂層不是物件、``items`` 不是陣列）——形狀不對就不回一份
+                「什麼都沒有」的 snapshot，那會被解讀成「沒有 quota」。
         """
         validate_namespace(namespace)
         result = self._run_command(
             ["get", "resourcequotas,limitranges,pods", "--namespace", namespace, "-o", "json"],
             timeout=self.COMPUTE_QUOTA_SNAPSHOT_TIMEOUT_SECONDS)
-        items = json.loads(result.stdout or "{}").get("items") or []
+        payload = json.loads(result.stdout or "{}")
+        if not isinstance(payload, dict):
+            raise ValueError("unexpected kubectl output: the top level is not an object")
+        items = payload.get("items") or []
+        if not isinstance(items, list):
+            raise ValueError("unexpected kubectl output: items is not a list")
         by_kind = {"ResourceQuota": [], "LimitRange": [], "Pod": []}
         for item in items:
             if isinstance(item, dict) and item.get("kind") in by_kind:

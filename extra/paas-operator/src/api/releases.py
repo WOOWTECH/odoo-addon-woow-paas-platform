@@ -784,12 +784,23 @@ def _compute_quota_check(
         return {"status": "skipped", "reason": "disabled"}
     try:
         snapshot = k8s_service.get_compute_quota_snapshot(namespace)
-    except (KubectlException, ValueError, json.JSONDecodeError) as exc:
+    except (KubectlException, ValueError) as exc:
+        # 預期內的「讀不到」：kubectl 失敗／權限不足／逾時、輸出看不懂（JSONDecodeError 是
+        # ValueError）、namespace 不在允許範圍。
         logger.warning(
             "Compute quota pre-check skipped for %s/%s: %s", namespace, name,
             str(getattr(exc, "stderr", None) or exc).strip()[:300],
         )
         return {"status": "unknown", "reason": "snapshot_unreadable"}
+    except Exception as exc:  # noqa: BLE001 — 預檢自己的錯不得擋升級
+        # 清單以外的任何例外（例：容器記憶體吃緊時 fork kubectl 失敗的 OSError）一樣是
+        # 「不知道」：放行，不可以穿出去變成 500 而讓真正的 upgrade 不執行。
+        logger.warning(
+            "Compute quota pre-check skipped for %s/%s: unexpected %s while reading the "
+            "snapshot; allowing the upgrade", namespace, name, type(exc).__name__,
+            exc_info=True)
+        return {"status": "unknown", "reason": "snapshot_unreadable"}
+    # 從這裡到組好結果為止的任何例外都放行；只有下面刻意 raise 的 409 會擋升級。
     try:
         pending_hard = None
         if pending_quota is not None:
@@ -804,6 +815,18 @@ def _compute_quota_check(
             snapshot["limitranges"], pending_hard=pending_hard,
             platform_quota_name=f"{namespace}-quota",
         )
+        refusal = (
+            compute_quota.build_error_detail(namespace, name, result)
+            if result["status"] == "exceeded" else None)
+        passed = {
+            "status": "ok",
+            "quota_source": result["quota_source"],
+            "resources": result["resources"],
+            "advisories": result["advisories"],
+        }
+        summary = ", ".join(
+            "%s required=%s available=%s" % (resource, numbers["required"], numbers["available"])
+            for resource, numbers in passed["resources"].items()) or "nothing to check"
     except compute_quota.Unknown as exc:
         logger.warning(
             "Compute quota pre-check for %s/%s inconclusive: %s", namespace, name, exc)
@@ -813,27 +836,17 @@ def _compute_quota_check(
             "Compute quota pre-check for %s/%s failed unexpectedly; allowing the upgrade",
             namespace, name)
         return {"status": "unknown", "reason": "evaluation_error"}
-    if result["status"] == "exceeded":
-        detail = compute_quota.build_error_detail(namespace, name, result)
-        logger.warning("Upgrade preflight refused %s/%s: %s", namespace, name, detail["message"])
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+    if refusal is not None:
+        logger.warning("Upgrade preflight refused %s/%s: %s", namespace, name, refusal["message"])
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
     logger.info(
         "Compute quota pre-check passed for %s/%s (quota source: %s): %s",
-        namespace, name, result["quota_source"],
-        ", ".join(
-            "%s required=%s available=%s" % (resource, numbers["required"], numbers["available"])
-            for resource, numbers in result["resources"].items()) or "nothing to check",
-    )
-    if result["advisories"]:
+        namespace, name, passed["quota_source"], summary)
+    if passed["advisories"]:
         logger.info(
             "Compute quota pre-check advisories for %s/%s: %s",
-            namespace, name, result["advisories"])
-    return {
-        "status": "ok",
-        "quota_source": result["quota_source"],
-        "resources": result["resources"],
-        "advisories": result["advisories"],
-    }
+            namespace, name, passed["advisories"])
+    return passed
 
 
 @router.post(

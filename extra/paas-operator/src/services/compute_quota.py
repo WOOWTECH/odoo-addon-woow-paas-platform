@@ -20,9 +20,22 @@ server 與同 namespace 的 PG 被調成各 8。Deployment 是 ``Recreate``—�
   live 的 template 之間有太多 API server 補的預設值，能可靠比對的只有 resources（解析成數字後）。
   證明不了 pod 會被換時只回一筆 advisory。Tier 2 沒擋到的情況是「新 pod 建不出來、舊 pod
   照跑」，不會中斷服務；``Recreate`` 與 StatefulSet 先刪後建，由 Tier 1 涵蓋。
+  同一次升級把 replicas 調小時，Deployment controller 先把舊 ReplicaSet 縮到新的 replicas
+  才開始換 pod（scaling event 先於 rollout），所以「現在的用量」要先扣掉會被縮掉的那幾顆
+  舊 pod（算不準是哪幾顆，扣最大的＝偏放行）。
 * 其他 workload 的佔用取兩種估法的較小者（quota 的 ``status.used`` 扣掉本 release 與正在
   終止的 pod／直接加總其他 pod），因為 ``status.used`` 由 quota controller 非同步更新，
   落後時會偏高。
+* Job 擁有的 pod（含 CronJob 產生的 Job）是**暫時性**的佔用：跑完就釋出。只因為它們才放不下
+  時不擋，回一筆 ``transient_job_usage`` 的 advisory；扣掉它們仍然放不下才擋。代價是 Job 還在
+  跑的那段時間 ``Recreate`` 的新 pod 會先被 admission 擋下、等 Job 結束後由 ReplicaSet
+  controller 重試建出來——短暫中斷，換來不把「幾分鐘後就會過」的變更判成確定的失敗。
+* quota 的上限：admission 看 ``status.hard``，它由 quota controller 從 ``spec.hard`` 同步過去。
+  平台剛推送新 quota 的那一小段時間兩者不一致——同一個資源取**較大**者（見
+  :func:`live_hard`）。
+* 換方案**降級**（平台將推送的上限比現在小）而只有 Tier 2 放不下時照樣擋（那個升級在推送
+  之後確實會卡住），但 shortfall 多帶 ``reason: "rolling_on_downgrade"``——這不是「其他服務
+  佔太多」，平台據此換成降級專用的說明，不叫租戶去刪服務或調高配額。
 
 刻意**沒有**算進需求的（都只會少擋，不會誤擋）：DaemonSet、Job、CronJob（只回 advisory）、
 bare Pod、KubeVirt VM、helm hook、RuntimeClass 在 admission 才加的 overhead、帶 scope 的
@@ -61,6 +74,11 @@ WORKLOAD_KINDS = ("Deployment", "StatefulSet")
 _HARD_ALIASES = {"cpu": "requests.cpu", "memory": "requests.memory"}
 _RELEASE_ANNOTATION = "meta.helm.sh/release-name"
 _TERMINAL_PHASES = ("Succeeded", "Failed")
+#: controller owner 是這些 kind 的 pod 跑完就釋出配額（CronJob 產生的也是 Job 擁有）。
+_TRANSIENT_OWNER_KINDS = ("Job",)
+#: shortfall 的 ``reason``：換方案降級（將推送的上限比現在小）而新舊 pod 並存時放不下。
+#: 平台 ``cloud_service._compute_quota_error_message`` 認這個字串，改名兩邊一起改。
+REASON_ROLLING_ON_DOWNGRADE = "rolling_on_downgrade"
 _ZERO = Decimal(0)
 _GI = Decimal(1024 ** 3)
 _MI = Decimal(1024 ** 2)
@@ -220,6 +238,64 @@ def pod_resources(
     return out
 
 
+def live_hard(quota_item: Any) -> Dict[str, Any]:
+    """一個 live ResourceQuota 現在的上限（``{hard 的鍵: 原始值}``）。
+
+    admission 看的是 ``status.hard``，它由 quota controller 從 ``spec.hard`` 同步過去。平台剛
+    推送新 quota 的那一小段時間兩者不一致（換方案：扣款 → 推送 quota → 背景 upgrade）；這時
+    拿落後的那一邊去擋，會把已經扣款的升級誤判成放不下。所以：
+
+    * ``status.hard`` 還沒有（quota 剛建立）⇒ 用 ``spec.hard``；反過來也一樣。
+    * 兩邊都有、同一個鍵的值不同 ⇒ 取**較大**者（放行方向）。
+    * 只在其中一邊出現的鍵、或任一邊看不懂 ⇒ 回傳值不含該鍵（那個資源不判）。
+    """
+    item = _mapping(quota_item)
+    spec_hard = _mapping(_mapping(item.get("spec")).get("hard"))
+    status_hard = _mapping(_mapping(item.get("status")).get("hard"))
+    if not spec_hard or not status_hard:
+        return dict(status_hard or spec_hard)
+    merged: Dict[str, Any] = {}
+    for key in spec_hard:
+        if key not in status_hard:
+            continue
+        declared = parse_quantity(spec_hard[key])
+        enforced = parse_quantity(status_hard[key])
+        if declared is None or enforced is None:
+            continue
+        merged[key] = spec_hard[key] if declared >= enforced else status_hard[key]
+    return merged
+
+
+def _is_scoped(quota_item: Dict[str, Any]) -> bool:
+    spec = _mapping(quota_item.get("spec"))
+    return bool(spec.get("scopes") or spec.get("scopeSelector"))
+
+
+def pending_reductions(
+    quota_items: Optional[Iterable[Any]],
+    pending_hard: Optional[Dict[str, Any]],
+    platform_quota_name: Optional[str],
+) -> set:
+    """``pending_hard`` 比平台那個 quota **現在**的上限小的資源（換方案降級）。
+
+    只認兩邊都看得懂、而且確實變小的鍵；live 沒有那個 quota 物件時回空集合。
+    """
+    reduced: set = set()
+    if pending_hard is None or not platform_quota_name:
+        return reduced
+    for item in quota_items or []:
+        if not isinstance(item, dict) or _is_scoped(item):
+            continue
+        if str(_mapping(item.get("metadata")).get("name") or "") != platform_quota_name:
+            continue
+        current = live_hard(item)
+        for key, raw in _mapping(pending_hard).items():
+            new, old = parse_quantity(raw), parse_quantity(current.get(key))
+            if new is not None and old is not None and new < old:
+                reduced.add(_HARD_ALIASES.get(key, key))
+    return reduced
+
+
 def quota_limits(
     quota_items: Optional[Iterable[Any]],
     pending_hard: Optional[Dict[str, Any]] = None,
@@ -231,8 +307,8 @@ def quota_limits(
     * ``pending_hard`` 有值時（換方案：平台會在檢查後立刻推送新的 quota），名稱等於
       ``platform_quota_name`` 的那個 quota 的 hard 以它取代；live 沒有該物件就合成一筆
       used 全為 0 的。
-    * admission 是每個 quota 都要過，所以每個資源取 hard−used 最小的一筆。hard 讀
-      ``status.hard``（admission 看的就是它），沒有才讀 ``spec.hard``。
+    * admission 是每個 quota 都要過，所以每個資源取 hard−used 最小的一筆。hard 的取法見
+      :func:`live_hard`（``status.hard`` 與 ``spec.hard`` 不一致時取較大者）。
 
     Returns:
         ``{resource: {"hard": Decimal, "used": Decimal, "quota": name}}``
@@ -240,14 +316,11 @@ def quota_limits(
     entries: List[Tuple[str, Dict[str, Any], Dict[str, Any]]] = []
     replaced = False
     for item in quota_items or []:
-        if not isinstance(item, dict):
-            continue
-        spec = _mapping(item.get("spec"))
-        if spec.get("scopes") or spec.get("scopeSelector"):
+        if not isinstance(item, dict) or _is_scoped(item):
             continue
         status = _mapping(item.get("status"))
         name = str(_mapping(item.get("metadata")).get("name") or "")
-        hard = _mapping(status.get("hard")) or _mapping(spec.get("hard"))
+        hard = live_hard(item)
         if pending_hard is not None and platform_quota_name and name == platform_quota_name:
             hard = pending_hard
             replaced = True
@@ -468,6 +541,31 @@ def _shortfall(resource: str, phase: str, workload: Optional[str], **numbers: De
     return entry
 
 
+def _fits_without(
+    transient_sum: Optional[Decimal], in_use: Decimal, wanted: Decimal, hard: Decimal,
+) -> bool:
+    """``in_use``（含 Job pod）＋``wanted`` 已經放不下時：扣掉 Job pod 之後放不放得下。
+
+    ``transient_sum`` 為 ``None``＝有 Job pod 但算不出它們佔多少——不知道＝放行。
+    """
+    return transient_sum is None or max(_ZERO, in_use - transient_sum) + wanted <= hard
+
+
+def _job_advisory(
+    resource: str, phase: str, workload: Optional[str], in_use: Decimal, wanted: Decimal,
+    transient_sum: Optional[Decimal], hard: Decimal,
+) -> Dict[str, Any]:
+    """只因為正在跑的 Job pod 才放不下時的提醒（不擋）。"""
+    return {
+        "type": "transient_job_usage", "resource": resource, "phase": phase,
+        "workload": workload,
+        "required": format_quantity(resource, wanted),
+        "used": format_quantity(resource, in_use),
+        "job_pods": None if transient_sum is None else format_quantity(resource, transient_sum),
+        "hard": format_quantity(resource, hard),
+    }
+
+
 def evaluate(
     release: str,
     rendered_docs: Optional[Iterable[Any]],
@@ -491,6 +589,10 @@ def evaluate(
         ``{"status": "ok" | "exceeded", "quota_source": "live" | "pending", "quota": 第一個
         shortfall 的 quota 名或 None, "resources": {...}, "shortfalls": [...],
         "advisories": [...], "workloads": [...], "consumers": [...]}``——數量都是字串。
+        ``rolling`` 的 shortfall 在換方案降級時多一鍵 ``reason``
+        （:data:`REASON_ROLLING_ON_DOWNGRADE`；其餘情況沒有這一鍵）。advisory 的 ``type``：
+        ``rolling_update_headroom``（證明不了 pod 會被換）、``transient_job_usage``（只因為
+        正在跑的 Job pod 才放不下）、``cronjob_headroom``。
 
     Raises:
         Unknown: 資料不足以下判斷（呼叫端放行）。
@@ -581,7 +683,12 @@ def evaluate(
     rest = [pod for pod in live_pods if id(pod) not in own_ids]
     leaving = [pod for pod in rest if _mapping(pod.get("metadata")).get("deletionTimestamp")]
     others = [pod for pod in rest if not _mapping(pod.get("metadata")).get("deletionTimestamp")]
+    # 其他 workload 當中跑完就釋出的那些（Job 的 pod）：只因為它們才放不下時不擋。
+    transient = [
+        pod for pod in others
+        if (_controller_owner(pod) or {}).get("kind") in _TRANSIENT_OWNER_KINDS]
     usage = {id(pod): pod_resources(pod.get("spec"), None) for pod in live_pods}
+    downgraded = pending_reductions(quota_items, pending_hard, platform_quota_name)
 
     judged: Dict[str, Dict[str, Decimal]] = {}
     steady = set()
@@ -596,6 +703,8 @@ def evaluate(
         hard, used = limits[resource]["hard"], limits[resource]["used"]
         leaving_sum = _sum(leaving, usage, resource)
         others_sum = _sum(others, usage, resource)
+        # Job pod 佔了多少；算不出來（``None``）時當成「扣掉它們就放得下」——不知道＝放行。
+        transient_sum = _sum(transient, usage, resource)
         # 其他 workload 的佔用：兩種估法取小（status.used 落後時偏高，見檔頭）。
         estimates = []
         if leaving_sum is not None:
@@ -617,10 +726,16 @@ def evaluate(
         # Tier 1：升級完成後本 release 的 pod 全部存在時放不放得下。需求為 0 的資源
         # admission 不檢查（quota 只驗有要求的資源），不擋。
         if need > 0 and base + need > hard:
-            steady.add(resource)
-            result["shortfalls"].append(_shortfall(
-                resource, "steady", None, short_by=base + need - hard, **numbers))
-            continue
+            if transient and _fits_without(transient_sum, base, need, hard):
+                # 只因為正在跑的 Job pod 才放不下：它們跑完就釋出，不是確定放不下。
+                # 不 continue——換 pod 的過程（Tier 2）照樣要看。
+                result["advisories"].append(_job_advisory(
+                    resource, "steady", None, base, need, transient_sum, hard))
+            else:
+                steady.add(resource)
+                result["shortfalls"].append(_shortfall(
+                    resource, "steady", None, short_by=base + need - hard, **numbers))
+                continue
 
         # Tier 2：新 pod 要先建出來、舊 pod 才會被砍的 Deployment，要多放得下一顆。
         now_estimates = []
@@ -630,27 +745,47 @@ def evaluate(
             now_estimates.append(own_sum + others_sum)
         used_now = min(now_estimates)
         for w in workloads:
+            own_here = own_by_workload.get(("Deployment", w["name"])) or []
             if (w["kind"] != "Deployment" or w["strategy"] != "RollingUpdate"
-                    or w["max_unavailable_abs"] != 0 or w["replicas"] < 1
-                    or not own_by_workload.get(("Deployment", w["name"]))):
+                    or w["max_unavailable_abs"] != 0 or w["replicas"] < 1 or not own_here):
                 continue
             per_pod = w["per_pod"][resource]
-            if per_pod <= 0 or used_now + per_pod <= hard:
+            if per_pod <= 0:
+                continue
+            # 同一次升級把 replicas 調小：controller 先把舊 ReplicaSet 縮到新的 replicas
+            # （scaling event 先於 rollout），之後才多建新 pod。會被縮掉的是哪幾顆算不準，
+            # 扣最大的那幾顆（偏放行）。
+            surplus = len(own_here) - w["replicas"]
+            freed = sum(sorted(
+                (usage[id(pod)].get(resource, _ZERO) for pod in own_here),
+                reverse=True)[:max(surplus, 0)], _ZERO)
+            before_surge = max(_ZERO, used_now - freed)
+            if before_surge + per_pod <= hard:
                 continue
             subject = "Deployment/%s" % w["name"]
-            if _resources_changed(w["rendered"], w["live"]):
-                result["shortfalls"].append(_shortfall(
+            if transient and _fits_without(transient_sum, before_surge, per_pod, hard):
+                result["advisories"].append(_job_advisory(
+                    resource, "rolling", subject, before_surge, per_pod, transient_sum, hard))
+            elif _resources_changed(w["rendered"], w["live"]):
+                entry = _shortfall(
                     resource, "rolling", subject,
-                    hard=hard, used=used_now, release_current=own_sum, other=base,
-                    required=per_pod, available=max(hard - used_now, _ZERO),
-                    short_by=used_now + per_pod - hard))
+                    hard=hard, used=before_surge, release_current=own_sum, other=base,
+                    required=per_pod, available=max(hard - before_surge, _ZERO),
+                    short_by=before_surge + per_pod - hard)
+                if (resource in downgraded
+                        and limits[resource]["quota"] == platform_quota_name):
+                    # 換方案降級：將推送的上限比現在小，新舊 pod 並存時才放不下。照樣擋
+                    # （推送之後那個升級確實會卡住），但原因不是「其他服務佔太多」。只在
+                    # 卡住的就是那個變小的上限時才這樣標（最緊的是別的 quota 就不是）。
+                    entry["reason"] = REASON_ROLLING_ON_DOWNGRADE
+                result["shortfalls"].append(entry)
             else:
                 # 證明不了這次 upgrade 會換 pod（template 沒變就不會），只提醒不擋。
                 result["advisories"].append({
                     "type": "rolling_update_headroom", "resource": resource,
                     "workload": subject,
                     "required": format_quantity(resource, per_pod),
-                    "used": format_quantity(resource, used_now),
+                    "used": format_quantity(resource, before_surge),
                     "hard": format_quantity(resource, hard),
                 })
 
@@ -694,11 +829,14 @@ def build_error_detail(namespace: str, release: str, result: Dict[str, Any]) -> 
     for item in result.get("shortfalls") or []:
         label = _RESOURCE_LABELS.get(item["resource"], item["resource"])
         if item["phase"] == "rolling":
+            # 降級：上限是平台將推送的那個（比現在小），不是「其他 workload 佔太多」。
+            limit = ("換方案後的配額上限（比現在小）"
+                     if item.get("reason") == REASON_ROLLING_ON_DOWNGRADE else "配額上限")
             lines.append(
                 "・%s（%s）：%s 更新時新舊 pod 會同時存在，還需要 %s，目前已佔用 %s，"
-                "配額上限 %s，還差 %s" % (
+                "%s %s，還差 %s" % (
                     label, item["resource"], item["workload"], item["required"],
-                    item["used"], item["hard"], item["short_by"]))
+                    item["used"], limit, item["hard"], item["short_by"]))
         else:
             lines.append(
                 "・%s（%s）：這個服務升級後需要 %s，配額上限 %s，其他 workload 已佔用 %s，"

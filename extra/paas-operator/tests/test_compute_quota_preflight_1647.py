@@ -28,7 +28,9 @@ from src.services.compute_quota import (
     evaluate,
     format_quantity,
     limitrange_defaults,
+    live_hard,
     own_pods,
+    pending_reductions,
     pod_resources,
     quota_limits,
 )
@@ -126,19 +128,19 @@ def _cpu_quota(hard, used):
     return _quota({"limits.cpu": hard}, {"limits.cpu": used})
 
 
-def _incident(new_cpu="8", old_cpu="4", strategy=None, used="12", extra_pods=()):
+def _incident(new_cpu="8", old_cpu="4", strategy=None, used="12", extra_pods=(), pg_cpu="8"):
     """事故的形狀：hard limits.cpu=12、平台外 StatefulSet ``pg`` 佔 8、本 release 的舊 pod。"""
     strategy = strategy or {"type": "Recreate"}
     rendered = [_deploy("svc-app", [_container(cpu=new_cpu, memory="1Gi")], strategy=strategy)]
     live = [
         _deploy("svc-app", [_container(cpu=old_cpu, memory="1Gi")], strategy=strategy,
                 release=RELEASE, status_replicas=1),
-        _sts("pg", [_container("pg", cpu="8", memory="1Gi")], status_replicas=1),
+        _sts("pg", [_container("pg", cpu=pg_cpu, memory="1Gi")], status_replicas=1),
     ]
     pods = [
         _pod("svc-app-7d9c6-x1", ("ReplicaSet", "svc-app-7d9c6"), [_live(cpu=old_cpu)],
              labels={"app": "svc-app"}),
-        _pod("pg-0", ("StatefulSet", "pg"), [_live("pg", cpu="8")], labels={"app": "pg"}),
+        _pod("pg-0", ("StatefulSet", "pg"), [_live("pg", cpu=pg_cpu)], labels={"app": "pg"}),
         *extra_pods,
     ]
     return dict(release=RELEASE, rendered_docs=rendered, live_items=live, pods=pods,
@@ -299,6 +301,67 @@ def test_bare_cpu_and_memory_are_request_aliases():
     assert got["requests.cpu"]["hard"] == 4
     assert got["requests.memory"]["used"] == 2 * GI
     assert "cpu" not in got and "memory" not in got
+
+
+def _split_quota(spec_hard, status_hard, used, name=f"{NS}-quota"):
+    """``spec.hard`` 與 ``status.hard`` 各寫各的（quota controller 還沒同步的那一刻）。"""
+    return {"kind": "ResourceQuota", "metadata": {"name": name},
+            "spec": {"hard": dict(spec_hard)},
+            "status": {"hard": dict(status_hard), "used": dict(used)}}
+
+
+@pytest.mark.parametrize("spec_cpu, status_cpu", [("24", "12"), ("12", "24")])
+def test_disagreeing_spec_and_status_hard_take_the_larger(spec_cpu, status_cpu):
+    """平台剛推送新 quota、controller 還沒把 ``status.hard`` 追上的那一小段時間。
+
+    換方案的順序是扣款 → 推送 quota → 背景 upgrade：拿落後的舊上限去擋，會把已經扣款的升級
+    翻成 error。兩個方向都取較大者（放行方向）——只讀 ``spec.hard`` 或只讀 ``status.hard``
+    的寫法各會在其中一個參數上紅。
+    """
+    quota = _split_quota({"limits.cpu": spec_cpu}, {"limits.cpu": status_cpu},
+                         {"limits.cpu": "12"})
+    assert quota_limits([quota])["limits.cpu"] == {
+        "hard": Decimal(24), "used": Decimal(12), "quota": f"{NS}-quota"}
+    case = _incident()  # 其他 8＋新 pod 8＝16：上限 12 放不下、24 放得下
+    case["quota_items"] = [quota]
+    result = evaluate(**case)
+    assert result["status"] == "ok"
+    assert result["resources"]["limits.cpu"]["hard"] == "24"
+
+
+def test_quota_without_status_hard_uses_spec_hard():
+    """quota 剛建立、controller 還沒寫 ``status``：以宣告的上限為準。"""
+    quota = {"kind": "ResourceQuota", "metadata": {"name": f"{NS}-quota"},
+             "spec": {"hard": {"limits.cpu": "12"}}}
+    assert quota_limits([quota])["limits.cpu"] == {
+        "hard": Decimal(12), "used": Decimal(0), "quota": f"{NS}-quota"}
+    assert live_hard(quota) == {"limits.cpu": "12"}
+
+
+def test_resource_on_only_one_side_of_the_quota_is_not_judged():
+    """controller 同步到一半：只在 ``spec.hard`` 或只在 ``status.hard`` 出現的資源不判。"""
+    quota = _split_quota(
+        {"limits.cpu": "12", "limits.memory": "8Gi"},
+        {"limits.cpu": "12", "requests.cpu": "1"},
+        {"limits.cpu": "12", "requests.cpu": "1"})
+    assert set(quota_limits([quota])) == {"limits.cpu"}
+    assert live_hard(quota) == {"limits.cpu": "12"}
+
+
+def test_unparseable_side_of_the_quota_is_not_judged():
+    quota = _split_quota({"limits.cpu": "plenty"}, {"limits.cpu": "12"}, {"limits.cpu": "12"})
+    assert quota_limits([quota]) == {}
+
+
+def test_pending_reductions_only_lists_resources_that_shrink():
+    live = _quota({"limits.cpu": "12", "limits.memory": "8Gi", "cpu": "12"},
+                  {"limits.cpu": "4", "limits.memory": "1Gi", "cpu": "4"})
+    pending = {"limits.cpu": "6", "limits.memory": "16Gi", "cpu": "6", "pods": "10"}
+    assert pending_reductions([live], pending, f"{NS}-quota") == {"limits.cpu", "requests.cpu"}
+    assert pending_reductions([live], None, f"{NS}-quota") == set()
+    assert pending_reductions([], pending, f"{NS}-quota") == set(), "live 沒有那個 quota"
+    other = _quota({"limits.cpu": "12"}, {"limits.cpu": "4"}, name="ops-extra")
+    assert pending_reductions([other], pending, f"{NS}-quota") == set(), "別的 quota 不算"
 
 
 # --- pod 歸屬 ----------------------------------------------------------------------
@@ -599,6 +662,248 @@ def test_limitrange_defaults_feed_the_demand():
     assert result["shortfalls"][0]["short_by"] == "1"
 
 
+# --- 正在終止的 pod、落後的 quota 狀態（兩種估法各自要對） -------------------------
+
+def test_terminating_pod_is_left_out_of_the_pod_sum_when_the_quota_status_lags():
+    """``status.used`` 落後（還算著早就不在的 pod）時靠的是 pod 加總那一邊——正在終止的別人的
+    pod 必須不在那個加總裡。它若被算成其他佔用：8＋4＋新 pod 4＝16 > 12，誤擋。"""
+    leaving = _pod("old-job-x", ("Job", "old-job"), [_live(cpu="4")], deleting=True)
+    result = evaluate(**_incident(new_cpu="4", used="30", extra_pods=[leaving]))
+    assert result["status"] == "ok"
+    assert result["resources"]["limits.cpu"]["other"] == "8"
+
+
+def test_terminating_pod_with_unknown_usage_does_not_hide_the_other_workloads():
+    """正在終止的 pod 用量算不出來 ⇒ ``status.used`` 那一邊不可算，只剩 pod 加總。
+
+    那顆 pod 不屬於「其他佔用」，所以加總仍然算得出來（pg 的 8），照樣判得出事故那個放不下
+    的升級；把它留在加總裡的話整個資源會變成「不知道」而放行。
+    """
+    leaving = _pod("old-job-x", ("Job", "old-job"), [_container(memory="1Gi")], deleting=True)
+    result = evaluate(**_incident(extra_pods=[leaving]))
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert (short["other"], short["required"], short["short_by"]) == ("8", "8", "4")
+
+
+# --- RollingUpdate 的並存空間（Tier 2）的邊界 ----------------------------------------
+
+_ROLLING = {"type": "RollingUpdate"}
+
+
+def test_rolling_update_that_exactly_fills_the_quota_passes():
+    """新舊並存時剛好等於上限（8＋3＋1＝12）：admission 放行的是 ``<=``，不擋也不提醒。"""
+    result = evaluate(**_incident(new_cpu="1", old_cpu="3", strategy=_ROLLING, used="11"))
+    assert result["status"] == "ok"
+    assert result["shortfalls"] == [] and result["advisories"] == []
+
+
+def test_rolling_update_trusts_the_smaller_estimate_of_current_usage():
+    """「現在的用量」也是兩種估法取小。這裡 ``status.used``（10）比 pod 加總（8＋4＝12）小：
+    10＋2＝12 放得下；取大的那個會算成 14 而誤擋。"""
+    result = evaluate(**_incident(new_cpu="2", old_cpu="4", strategy=_ROLLING, used="10"))
+    assert result["status"] == "ok"
+    assert result["shortfalls"] == [] and result["advisories"] == []
+
+
+def test_rolling_update_is_not_misled_by_a_stale_high_quota_status():
+    """反方向：``status.used`` 偏高（20）時取 pod 加總（12）：12＋3＝15 ≤ 16。"""
+    case = _incident(new_cpu="3", old_cpu="4", strategy=_ROLLING, used="20")
+    case["quota_items"] = [_cpu_quota("16", "20")]
+    result = evaluate(**case)
+    assert result["status"] == "ok"
+    assert result["shortfalls"] == [] and result["advisories"] == []
+
+
+def _scaling_rollout(live_replicas, old_cpu, new_replicas, new_cpu, hard):
+    """單一 RollingUpdate Deployment，同一次升級改 replicas 與 resources；quota 剛好用滿。"""
+    rendered = [_deploy("svc-app", [_container(cpu=new_cpu, memory="1Gi")],
+                        replicas=new_replicas, strategy=_ROLLING)]
+    live = [_deploy("svc-app", [_container(cpu=old_cpu, memory="1Gi")],
+                    replicas=live_replicas, strategy=_ROLLING, release=RELEASE,
+                    status_replicas=live_replicas)]
+    pods = [_pod(f"svc-app-7d9c6-x{i}", ("ReplicaSet", "svc-app-7d9c6"), [_live(cpu=old_cpu)],
+                 labels={"app": "svc-app"}) for i in range(live_replicas)]
+    used = str(Decimal(old_cpu) * live_replicas)
+    return dict(release=RELEASE, rendered_docs=rendered, live_items=live, pods=pods,
+                quota_items=[_cpu_quota(hard, used)], limitrange_items=[])
+
+
+def test_rolling_update_that_also_scales_down_frees_the_surplus_old_pods_first():
+    """3 顆 × 2 核（用滿上限 6）改成 1 顆 × 3 核。
+
+    k8s 的順序：replicas 變了是 scaling event，Deployment controller 先把舊 ReplicaSet 縮到
+    1 顆（剩 2 核），之後才多建一顆新的（2＋3＝5 ≤ 6）——放得下。拿「現在的 6」加新 pod 會
+    算成 9 而誤擋。
+    """
+    result = evaluate(**_scaling_rollout(3, "2", 1, "3", hard="6"))
+    assert result["status"] == "ok"
+    assert result["shortfalls"] == [] and result["advisories"] == []
+
+
+def test_rolling_update_scale_down_still_refused_when_the_survivors_leave_no_room():
+    """3 顆 × 2 核改成 2 顆 × 2.5 核：縮到 2 顆後還佔 4，再多一顆 2.5＝6.5 > 6，確定卡住。"""
+    result = evaluate(**_scaling_rollout(3, "2", 2, "2500m", hard="6"))
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert short["phase"] == "rolling"
+    assert (short["used"], short["required"], short["hard"], short["short_by"]) == (
+        "4", "2.5", "6", "0.5")
+    assert "reason" not in short
+
+
+def test_scale_down_frees_the_largest_old_pods():
+    """會被縮掉的是哪幾顆算不準（上一次 rollout 還沒走完時，舊 pod 的大小不一）：扣最大的，
+    偏放行。兩顆舊 pod 是 2 核與 4 核（用滿上限 6），改成 1 顆 × 3 核。"""
+    case = _scaling_rollout(2, "2", 1, "3", hard="6")
+    case["pods"][1]["spec"]["containers"] = [_live(cpu="4")]
+    case["quota_items"] = [_cpu_quota("6", "6")]
+    result = evaluate(**case)
+    assert result["status"] == "ok", "扣 4 之後 2＋3＝5 ≤ 6；扣 2 的話 4＋3＝7 > 6"
+    assert result["shortfalls"] == [] and result["advisories"] == []
+
+
+# --- 換方案降級：將推送的上限比現在小 -----------------------------------------------
+
+def _downgrade(pending_cpu, live_hard_cpu="32", strategy=None):
+    """舊 pod 8 核、新 pod 2 核、pg 8 核（used 16）；live 上限 ``live_hard_cpu``。"""
+    case = _incident(new_cpu="2", old_cpu="8", strategy=strategy or _ROLLING, used="16")
+    case["quota_items"] = [_cpu_quota(live_hard_cpu, "16")]
+    if pending_cpu is None:
+        return case
+    return dict(case, pending_hard={"limits.cpu": pending_cpu},
+                platform_quota_name=f"{NS}-quota")
+
+
+def test_rolling_shortfall_on_a_smaller_pending_quota_is_marked_as_a_downgrade():
+    """降級到上限 17：升級完成後放得下（8＋2），但換的過程新舊並存 16＋2 > 17。
+
+    平台推送縮小後的 quota 之後那個升級確實會卡住，所以照樣擋；但原因不是「其他服務佔太多」
+    ——帶 ``reason``，平台換成降級專用的說明。
+    """
+    result = evaluate(**_downgrade("17"))
+    assert result["status"] == "exceeded"
+    assert result["quota_source"] == "pending"
+    [short] = result["shortfalls"]
+    assert short["phase"] == "rolling" and short["workload"] == "Deployment/svc-app"
+    assert short["reason"] == "rolling_on_downgrade" == compute_quota.REASON_ROLLING_ON_DOWNGRADE
+    assert (short["used"], short["required"], short["hard"], short["short_by"]) == (
+        "16", "2", "17", "1")
+    line = build_error_detail(NS, RELEASE, result)["message"].splitlines()[1]
+    assert "換方案後的配額上限（比現在小） 17" in line
+
+
+def test_rolling_shortfall_is_not_a_downgrade_without_a_smaller_pending_quota():
+    """同樣是新舊並存放不下，但上限沒有變小：一般的說明（沒有 ``reason`` 這一鍵）。"""
+    live_only = evaluate(**_downgrade(None, live_hard_cpu="17"))
+    assert live_only["shortfalls"][0]["phase"] == "rolling"
+    assert "reason" not in live_only["shortfalls"][0]
+    assert "換方案後" not in build_error_detail(NS, RELEASE, live_only)["message"]
+
+    larger_plan = evaluate(**_downgrade("17", live_hard_cpu="16"))  # 升級，但還是不夠並存
+    assert larger_plan["shortfalls"][0]["phase"] == "rolling"
+    assert "reason" not in larger_plan["shortfalls"][0]
+
+
+def test_downgrade_reason_only_when_the_shrunk_quota_is_the_one_in_the_way():
+    """降級後的上限（20）本身放得下並存；卡住的是另一個沒有變的 quota——不是降級造成的。"""
+    case = _downgrade("20")
+    case["quota_items"].append(
+        _quota({"limits.cpu": "17"}, {"limits.cpu": "16"}, name="ops-extra"))
+    result = evaluate(**case)
+    assert result["status"] == "exceeded"
+    assert result["quota"] == "ops-extra"
+    [short] = result["shortfalls"]
+    assert short["phase"] == "rolling"
+    assert "reason" not in short
+
+
+def test_downgrade_that_does_not_fit_at_all_is_an_ordinary_shortfall():
+    """降級後連升級完成的樣子都放不下（Tier 1）：就是一般的放不下，不帶 ``reason``。"""
+    result = evaluate(**_downgrade("9"))  # 其他 8＋新 pod 2＝10 > 9
+    [short] = result["shortfalls"]
+    assert short["phase"] == "steady"
+    assert "reason" not in short
+
+
+def test_downgrade_with_recreate_has_no_overlap_to_worry_about():
+    assert evaluate(**_downgrade("17", strategy={"type": "Recreate"}))["status"] == "ok"
+
+
+# --- Job 的 pod 是暫時性的佔用 -------------------------------------------------------
+
+def _job_pod(cpu="4", name="backup-28391234-x7k2p", job="backup-28391234"):
+    """Job 擁有的 pod（CronJob 產生的 Job 也是這個 owner kind）。``cpu=None``＝用量算不出來。"""
+    containers = [_live(cpu=cpu)] if cpu is not None else [_container(memory="1Gi")]
+    return _pod(name, ("Job", job), containers)
+
+
+def test_job_pods_alone_do_not_make_an_upgrade_a_certain_failure():
+    """上限 12：pg 4、正在跑的備份 Job 4、本 release 4 → 6（Recreate）。
+
+    現在 8＋6＝14 放不下，但 Job 跑完就釋出：4＋6＝10。幾分鐘後就會過的變更不回 409（平台
+    會據此叫租戶刪服務、開管理員 activity），只留一筆 advisory。
+    """
+    result = evaluate(**_incident(new_cpu="6", pg_cpu="4", extra_pods=[_job_pod()]))
+    assert result["status"] == "ok"
+    assert result["shortfalls"] == [] and result["consumers"] == []
+    assert result["advisories"] == [{
+        "type": "transient_job_usage", "resource": "limits.cpu", "phase": "steady",
+        "workload": None, "required": "6", "used": "8", "job_pods": "4", "hard": "12"}]
+    # 回報的數字是現在的樣子（含 Job pod）。
+    assert result["resources"]["limits.cpu"]["other"] == "8"
+
+
+def test_upgrade_that_does_not_fit_even_without_the_job_pods_is_still_refused():
+    """4 → 10：扣掉 Job pod 之後 4＋10＝14 仍然 > 12，確定放不下。"""
+    result = evaluate(**_incident(new_cpu="10", pg_cpu="4", extra_pods=[_job_pod()]))
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert (short["phase"], short["other"], short["required"], short["short_by"]) == (
+        "steady", "8", "10", "6")
+    assert result["advisories"] == []
+    assert {"owner": "Job/backup-28391234", "pods": 1, "value": "4"} in result["consumers"]
+
+
+def test_job_pod_with_unknown_usage_is_given_the_benefit_of_the_doubt():
+    """算不出 Job pod 佔多少 ⇒ 不知道扣掉之後放不放得下 ⇒ 不擋。"""
+    result = evaluate(**_incident(new_cpu="6", pg_cpu="4", extra_pods=[_job_pod(cpu=None)]))
+    assert result["status"] == "ok"
+    [advisory] = result["advisories"]
+    assert advisory["type"] == "transient_job_usage"
+    assert advisory["job_pods"] is None
+
+
+def test_other_peoples_long_running_pods_are_not_transient():
+    """對照：同樣佔 4 核，但 owner 是 StatefulSet——不會自己結束，照擋。"""
+    steady = _pod("cache-0", ("StatefulSet", "cache"), [_live(cpu="4")])
+    result = evaluate(**_incident(new_cpu="6", pg_cpu="4", extra_pods=[steady]))
+    assert result["status"] == "exceeded"
+    assert result["shortfalls"][0]["short_by"] == "2"
+
+
+def test_job_pods_do_not_block_a_rolling_update_either():
+    """新舊並存只差在 Job pod：pg 4＋Job 4＋舊 2＝10，再多一顆 3＝13 > 12；Job 跑完是 9。"""
+    case = _incident(new_cpu="3", old_cpu="2", strategy=_ROLLING, used="10", pg_cpu="4",
+                     extra_pods=[_job_pod()])
+    result = evaluate(**case)
+    assert result["status"] == "ok"
+    assert result["advisories"] == [{
+        "type": "transient_job_usage", "resource": "limits.cpu", "phase": "rolling",
+        "workload": "Deployment/svc-app", "required": "3", "used": "10", "job_pods": "4",
+        "hard": "12"}]
+
+
+def test_rolling_update_without_room_even_after_the_job_is_still_refused():
+    """舊 6、新 5、pg 4、Job 2（used 12）：Job 跑完後 10＋5＝15 仍然 > 12。"""
+    case = _incident(new_cpu="5", old_cpu="6", strategy=_ROLLING, used="12", pg_cpu="4",
+                     extra_pods=[_job_pod(cpu="2")])
+    result = evaluate(**case)
+    assert result["status"] == "exceeded"
+    [short] = result["shortfalls"]
+    assert (short["phase"], short["used"], short["short_by"]) == ("rolling", "12", "5")
+
+
 # --- 不知道一律放行 ----------------------------------------------------------------
 
 def test_container_without_limits_and_no_limitrange_is_not_judged():
@@ -812,6 +1117,22 @@ def test_snapshot_rejects_a_foreign_namespace():
         KubernetesService().get_compute_quota_snapshot("kube-system")
 
 
+@pytest.mark.parametrize("stdout", ["null", "[]", '"items"', '{"items": {"kind": "Pod"}}'])
+@patch("src.services.helm.subprocess.run")
+def test_snapshot_with_an_unexpected_shape_is_unreadable_not_empty(mock_run, stdout):
+    """kubectl 的輸出不是預期的 List：丟 ``ValueError``（呼叫端當「不知道」放行）。
+
+    不可以回一份空的 snapshot——那會被解讀成「這個 namespace 沒有 quota」；也不可以丟
+    ``AttributeError`` 之類呼叫端沒預期的例外。
+    """
+    from src.services.helm import KubernetesService
+
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = stdout
+    with pytest.raises(ValueError):
+        KubernetesService().get_compute_quota_snapshot(NS)
+
+
 # --- endpoint ----------------------------------------------------------------------
 
 _INFO = ReleaseInfo(name=RELEASE, namespace=NS, revision=3, status=ReleaseStatus.DEPLOYED,
@@ -923,6 +1244,82 @@ def test_a_failing_check_never_blocks_the_upgrade(
     assert r.status_code == 200, r.text
     evaluated.assert_called_once()
     assert _dry_runs(mock_helm) == [True, None]
+
+
+@pytest.mark.parametrize("failure", [
+    OSError(12, "Cannot allocate memory"),   # fork kubectl 失敗（容器記憶體吃緊）
+    AttributeError("'NoneType' object has no attribute 'get'"),
+    ValueError("unexpected kubectl output: the top level is not an object"),
+])
+@patch("src.api.releases.helm_service")
+def test_any_failure_to_read_the_snapshot_lets_the_upgrade_through(
+        mock_helm, failure, client, live_objects_lookup, compute_quota_snapshot, caplog):
+    """讀 snapshot 時不在預期清單內的例外也一樣是「不知道」。
+
+    原本只接 ``KubectlException``／``ValueError``：其餘例外會穿出端點變成 500，helm 只跑過
+    dry-run、真正的 upgrade 沒有執行——預檢自己的意外擋住了升級。
+    """
+    _arrange(mock_helm, live_objects_lookup, compute_quota_snapshot, _incident(new_cpu="4"))
+    compute_quota_snapshot.side_effect = failure
+    with caplog.at_level(logging.WARNING, logger="src.api.releases"):
+        r = client.patch(_URL, json=_CHECKED)
+    assert r.status_code == 200, r.text
+    assert _dry_runs(mock_helm) == [True, None], "真正的 upgrade 必須照樣執行"
+    assert "Compute quota pre-check skipped" in caplog.text
+
+    r = client.post(f"{_URL}/upgrade-preflight", json=_CHECKED)
+    assert r.status_code == 200, r.text
+    assert r.json()["compute_quota"] == {"status": "unknown", "reason": "snapshot_unreadable"}
+
+
+@patch("src.api.releases.helm_service")
+def test_a_failure_while_describing_the_refusal_does_not_block_either(
+        mock_helm, client, live_objects_lookup, compute_quota_snapshot):
+    """算出放不下之後、組 409 的 detail 時出錯：仍然是預檢自己的意外，放行。"""
+    _arrange(mock_helm, live_objects_lookup, compute_quota_snapshot)
+    with patch.object(compute_quota, "build_error_detail",
+                      side_effect=KeyError("phase")) as described:
+        r = client.patch(_URL, json=_CHECKED)
+        assert r.status_code == 200, r.text
+        assert _dry_runs(mock_helm) == [True, None]
+        r = client.post(f"{_URL}/upgrade-preflight", json=_CHECKED)
+    assert r.status_code == 200, r.text
+    assert r.json()["compute_quota"] == {"status": "unknown", "reason": "evaluation_error"}
+    assert described.call_count == 2
+
+
+@patch("src.api.releases.helm_service")
+def test_job_pod_usage_is_reported_as_an_advisory_not_a_refusal(
+        mock_helm, client, live_objects_lookup, compute_quota_snapshot):
+    """只因為正在跑的 Job pod 才放不下：端點放行，``advisories`` 帶著原因。"""
+    job_pod = _pod("backup-28391234-x7k2p", ("Job", "backup-28391234"), [_live(cpu="4")])
+    _arrange(mock_helm, live_objects_lookup, compute_quota_snapshot,
+             _incident(new_cpu="6", pg_cpu="4", extra_pods=[job_pod]))
+    r = client.post(f"{_URL}/upgrade-preflight", json=_CHECKED)
+    assert r.status_code == 200, r.text
+    compute = r.json()["compute_quota"]
+    assert compute["status"] == "ok"
+    assert [a["type"] for a in compute["advisories"]] == ["transient_job_usage"]
+    assert client.patch(_URL, json=_CHECKED).status_code == 200
+    assert _dry_runs(mock_helm) == [True, True, None]
+
+
+@patch("src.api.releases.helm_service")
+def test_preflight_endpoint_marks_a_rolling_shortfall_on_a_downgrade(
+        mock_helm, client, live_objects_lookup, compute_quota_snapshot):
+    """換方案降級：``pending_quota`` 比 live 上限小、只有新舊並存時放不下 ⇒ 409 帶 ``reason``。"""
+    case = _incident(new_cpu="2", old_cpu="8", strategy={"type": "RollingUpdate"}, used="16")
+    case["quota_items"] = [_cpu_quota("32", "16")]
+    _arrange(mock_helm, live_objects_lookup, compute_quota_snapshot, case)
+    pending = {"cpu_limit": "17", "memory_limit": "48Gi", "storage_limit": "100Gi"}
+    r = client.post(f"{_URL}/upgrade-preflight", json={**_CHECKED, "pending_quota": pending})
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["quota_source"] == "pending"
+    by_resource = {s["resource"]: s for s in detail["shortfalls"]}
+    assert by_resource["limits.cpu"]["phase"] == "rolling"
+    assert by_resource["limits.cpu"]["reason"] == "rolling_on_downgrade"
+    assert "換方案後的配額上限（比現在小）" in detail["message"]
 
 
 @patch("src.api.releases.helm_service")
