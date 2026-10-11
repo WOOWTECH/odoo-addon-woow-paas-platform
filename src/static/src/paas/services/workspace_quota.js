@@ -19,7 +19,7 @@ const QUOTA_REQUEST_TIMEOUT_MS = 15000;
 /**
  * @param {number} workspaceId
  * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
- *   `data` 為 `{available, reason, level, resources}`（形狀見後端
+ *   `data` 為 `{available, reason, level, hint, resources}`（形狀見後端
  *   `services/workspace_quota.build_view`）。永不 throw——網路錯誤與逾時都收成
  *   `{success: false}`，呼叫端不必包 try/catch。
  */

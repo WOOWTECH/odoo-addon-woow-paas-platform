@@ -645,7 +645,7 @@ class PaasController(HiddenChainMixin, Controller):
         Returns:
             dict: Response containing:
                 - success (bool): True when the caller may see this workspace
-                - data (dict): `{available, reason, level, resources}`；拿不到用量時
+                - data (dict): `{available, reason, level, hint, resources}`；拿不到用量時
                   `available` 為 False 並帶 `reason`（值域見
                   `services/workspace_quota.unavailable`），仍是 success=True
                 - error (str): 'Workspace not found or access denied'（非成員／不存在）

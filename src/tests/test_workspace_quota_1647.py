@@ -101,9 +101,10 @@ class TestWorkspaceQuotaView1647(TransactionCase):
 
     def test_shape_and_order(self):
         view = workspace_quota.build_view(_report())
-        self.assertEqual(set(view), {'available', 'reason', 'level', 'resources'})
+        self.assertEqual(set(view), {'available', 'reason', 'level', 'hint', 'resources'})
         self.assertIs(view['available'], True)
         self.assertEqual(view['reason'], '')
+        self.assertEqual(view['hint'], '')
         self.assertEqual([c['key'] for c in view['resources']], ['cpu', 'memory', 'storage'])
         for cell in view['resources']:
             self.assertEqual(
@@ -250,6 +251,55 @@ class TestWorkspaceQuotaView1647(TransactionCase):
             requests__storage=_cell('100Gi', '100Gi', 100 * GI, 100 * GI, 'bytes'))
         self.assertEqual(workspace_quota.build_view(full)['level'], 'full')
 
+    def test_storage_hint_only_when_the_disk_cell_is_tight(self):
+        """磁碟那一格是 warning／full 才帶 ``hint``——前台據此換掉「刪除不需要的服務」那句。
+
+        CPU／記憶體吃緊而磁碟還有空間時不帶：那種情況刪服務的建議照舊。
+        """
+        def storage(used_gi):
+            return _cell('100Gi', '%dGi' % used_gi, 100 * GI, used_gi * GI, 'bytes')
+
+        memory_warning = _cell('24Gi', '23Gi', 24 * GI, 23 * GI, 'bytes')
+        cases = (
+            # (報表, 整體等級, hint)
+            (_report(), 'ok', ''),
+            (_report(requests__storage=storage(89)), 'ok', ''),
+            (_report(requests__storage=storage(90)), 'warning', 'storage'),
+            (_report(requests__storage=storage(100)), 'full', 'storage'),
+            (_report(requests__storage=storage(130)), 'full', 'storage'),
+            # 其他格吃緊、磁碟還有空間：不帶。
+            (_report(limits__cpu=_cpu(12.0, 12.0)), 'full', ''),
+            (_report(limits__cpu=_cpu(12.0, 11.0)), 'warning', ''),
+            (_report(limits__memory=memory_warning), 'warning', ''),
+            # 磁碟吃緊就帶，不論最嚴重的是哪一格。
+            (_report(limits__cpu=_cpu(12.0, 12.0), requests__storage=storage(95)),
+             'full', 'storage'),
+            (_report(limits__memory=memory_warning, requests__storage=storage(100)),
+             'full', 'storage'),
+            # 報表裡沒有磁碟那一格：沒有東西可提示。
+            (_report(limits__cpu=_cpu(12.0, 12.0), requests__storage=None), 'full', ''),
+        )
+        self.assertEqual(workspace_quota.HINT_STORAGE, 'storage')
+        for report, level, hint in cases:
+            view = workspace_quota.build_view(report)
+            self.assertEqual((view['level'], view['hint']), (level, hint),
+                             report['resources'].get('requests.storage'))
+
+    def test_storage_hint_after_deleting_services_with_retained_data(self):
+        """review display-B2 的情境：三台各 50GB 的服務刪掉兩台。
+
+        上限只按存活的服務算（50 × 3＝150Gi，``_compute_ns_quota``），兩顆保留中的 PVC
+        仍計入 used（#317）⇒ 150／150 GB、已用完。這時叫租戶「刪掉不需要的服務」沒有用，
+        payload 要帶 hint 讓前台換一句。
+        """
+        report = _report(
+            requests__storage=_cell('150Gi', '150Gi', 150 * GI, 150 * GI, 'bytes'))
+        view = workspace_quota.build_view(report)
+        storage = _by_key(view)['storage']
+        self.assertEqual((storage['used'], storage['hard'], storage['percent'],
+                          storage['level']), (150.0, 150.0, 100, 'full'))
+        self.assertEqual((view['level'], view['hint']), ('full', 'storage'))
+
     def test_missing_cells_are_skipped(self):
         view = workspace_quota.build_view(_report(limits__memory=None))
         self.assertIs(view['available'], True)
@@ -267,7 +317,8 @@ class TestWorkspaceQuotaView1647(TransactionCase):
     def test_unavailable_shape(self):
         self.assertEqual(
             workspace_quota.unavailable('disabled'),
-            {'available': False, 'reason': 'disabled', 'level': 'ok', 'resources': []})
+            {'available': False, 'reason': 'disabled', 'level': 'ok', 'hint': '',
+             'resources': []})
 
     def test_operator_unavailable_reasons_are_mapped(self):
         def unavailable_report(reason):
@@ -481,7 +532,7 @@ class TestWorkspaceQuotaEndpoint1647(_Fixture):
         report = _report(limits__cpu=_cpu(12.0, 11.0, ratio=0.9167))
         result, _client, _factory = self._call(self.user, client=self._client(report))
         self.assertEqual(result, {'success': True, 'data': {
-            'available': True, 'reason': '', 'level': 'warning', 'resources': [
+            'available': True, 'reason': '', 'level': 'warning', 'hint': '', 'resources': [
                 {'key': 'cpu', 'unit': 'vcpu', 'used': 11.0, 'hard': 12.0,
                  'remaining': 1.0, 'percent': 91, 'level': 'warning'},
                 {'key': 'memory', 'unit': 'gb', 'used': 18.0, 'hard': 24.0,
@@ -489,6 +540,14 @@ class TestWorkspaceQuotaEndpoint1647(_Fixture):
                 {'key': 'storage', 'unit': 'gb', 'used': 60.0, 'hard': 100.0,
                  'remaining': 40.0, 'percent': 60, 'level': 'ok'},
             ]}})
+
+    def test_storage_hint_reaches_the_endpoint_payload(self):
+        self._service()
+        report = _report(
+            requests__storage=_cell('100Gi', '100Gi', 100 * GI, 100 * GI, 'bytes'))
+        result, _client, _factory = self._call(self.user, client=self._client(report))
+        self.assertEqual((result['data']['level'], result['data']['hint']),
+                         ('full', 'storage'))
 
     # ⚠ 下面三條用 ``method_calls`` 而不是 ``mock_calls``：端點有一句 ``if not client``，
     # MagicMock 會把那次真值判斷記成 ``call.__bool__()`` 放進 ``mock_calls``；
@@ -728,6 +787,9 @@ class TestWorkspaceQuotaClient1647(TransactionCase):
 
 
 _T_STRING_RE = re.compile(r'_t\("((?:[^"\\]|\\.)*)"')
+# OverviewTab 的 workspaceQuotaHint：getter 本體只有一句單行 _t()。
+_OVERVIEW_HINT_RE = re.compile(
+    r'get workspaceQuotaHint\(\)\s*\{\s*return _t\("((?:[^"\\]|\\.)*)"\);')
 
 
 @tagged('post_install', '-at_install')
@@ -762,6 +824,37 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         self.assertRegex('ratio > 0.9', fraction)
         self.assertRegex('if (resource.used >= resource.hard) {', comparison)
 
+    def test_disk_alert_explains_retained_data_instead_of_deleting_services(self):
+        """磁碟吃緊時的告警句：讀後端的 ``hint``，講保留中的資料，不叫人刪服務。"""
+        js = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')
+        # 判準在後端：前端只拿 payload 的 hint 與後端同一個字面值比。
+        self.assertIn('quota?.hint === "%s"' % workspace_quota.HINT_STORAGE, js)
+        strings = _T_STRING_RE.findall(js)
+        alerts = [s for s in strings if s.startswith('This workspace ')]
+        self.assertEqual(len(alerts), 4, '快用完／已用完 × 一般／磁碟吃緊：%s' % alerts)
+        retained = [s for s in alerts if 'retention period' in s]
+        generic = [s for s in alerts if 'retention period' not in s]
+        self.assertEqual((len(retained), len(generic)), (2, 2), alerts)
+        for sentence in retained:
+            self.assertIn('disk quota', sentence)
+            self.assertNotIn('Delete a service', sentence, '刪服務釋不出磁碟配額')
+        for sentence in generic:
+            self.assertIn('Delete a service', sentence, '陽性對照：一般版仍是原本那句')
+        # 說明句也要交代磁碟含保留中的資料，否則數字對不上畫面上的服務。
+        intro = [s for s in strings if s.startswith('All services in this workspace share')]
+        self.assertEqual(len(intro), 1)
+        self.assertIn('retention period', intro[0])
+
+    def test_overview_hint_does_not_promise_usage_on_the_workspace_page(self):
+        """review display-B6：配額面板在好幾種情況下整塊不畫，服務頁的說明句不能叫人去那裡看。"""
+        overview = _read('pages', 'service', 'tabs', 'OverviewTab.js')
+        hint = _OVERVIEW_HINT_RE.search(overview)
+        self.assertIsNotNone(hint, 'OverviewTab.js 找不到 workspaceQuotaHint 的單行 _t()')
+        sentence = hint.group(1)
+        self.assertIn('share one overall CPU, memory and disk quota', sentence)
+        self.assertNotIn('workspace page', sentence)
+        self.assertNotIn('current usage', sentence)
+
     def test_panel_formats_numbers_with_the_user_locale(self):
         js = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')
         self.assertIn('formatFloat', js)
@@ -784,8 +877,7 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         self.assertGreater(len(strings), 10, '陽性對照：面板的 _t() 字串抓得到')
 
         overview = _read('pages', 'service', 'tabs', 'OverviewTab.js')
-        hint = re.search(
-            r'get workspaceQuotaHint\(\)\s*\{\s*return _t\("((?:[^"\\]|\\.)*)"\);', overview)
+        hint = _OVERVIEW_HINT_RE.search(overview)
         self.assertIsNotNone(hint, 'OverviewTab.js 找不到 workspaceQuotaHint 的單行 _t()')
         strings.add(hint.group(1))
         self.assertIn('t-esc="workspaceQuotaHint"',
