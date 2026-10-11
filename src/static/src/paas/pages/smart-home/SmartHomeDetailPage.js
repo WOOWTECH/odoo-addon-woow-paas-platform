@@ -268,6 +268,8 @@ export class SmartHomeDetailPage extends Component {
      * `active`／`suspended` 後端一律拒絕，顯示按鈕只會換來一句錯誤。
      */
     get canRetrySetup() {
+        if (this.home?.provision_operation &&
+            this.home.provision_operation.retry_allowed !== true) return false;
         return ["pending", "error"].includes(this.home?.state);
     }
 
@@ -379,9 +381,9 @@ export class SmartHomeDetailPage extends Component {
             this.props.workspaceId,
             this.props.homeId
         );
-        if (result.success) {
-            // success now means setup reached active; failures reload their
-            // persisted state below so retry and error details stay available.
+        if (result.success || result.accepted) {
+            // Accepted is pending; only success means active. Both carry the
+            // current home so normal polling follows actual persisted state.
             this.state.home = result.data;
             this.startPollingIfNeeded();
         } else {

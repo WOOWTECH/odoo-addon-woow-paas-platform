@@ -1121,3 +1121,5 @@ from . import test_plan_overlay_resources_1637
 from . import test_oauth_scope_http_20261011
 
 from . import test_workspace_route_identity_20261011
+
+from . import test_shc_durable_provision_prototype

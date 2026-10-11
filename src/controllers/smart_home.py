@@ -1030,7 +1030,7 @@ class SmartHomeController(Controller):
         那個形狀在 #739 上的**觸發源**，沒有動形狀本身（C1 釘住現況）。
         """
         try:
-            smarthome.sudo().action_provision()
+            outcome = smarthome.sudo().action_provision()
             # #768：與 detail 端點同一個形狀。provision 成功當下才剛建出 primary
             # route，前端要拿它把 Access 分頁畫出來；回 detail 以外的形狀會讓
             # 呼叫端在「沒有 routes」與「routes 是空的」之間分不出來。
@@ -1041,6 +1041,9 @@ class SmartHomeController(Controller):
             # 從不寫 tunnel_status／connector_* ⇒ 不疊的話 Tunnel Information 會從
             # 即時值倒退回上一次 Refresh 寫入的舊值，直到整頁重載。
             data = smarthome.to_dict(include_details=True)
+            if isinstance(outcome, dict):
+                # Accepted remains pending until the normal request commit.
+                return dict(outcome, data=data)
             try:
                 data.update(smarthome._live_tunnel_status())
             except Exception:

@@ -1,5 +1,6 @@
 """API endpoints for dedicated Cloudflare Tunnel lifecycle management."""
 import logging
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -7,6 +8,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from src.config import settings
 from src.models.schemas import (
     TunnelConfigUpdateRequest,
+    TunnelBareCreateRequest,
+    TunnelBareCreateResponse,
     TunnelCreateRequest,
     TunnelCreateResponse,
     TunnelRoutesSyncRequest,
@@ -222,6 +225,60 @@ async def _assert_tunnel_ownership(
                 "tunnel_ownership_mismatch", tunnel_id, operation,
                 claimed_name=claim),
         )
+
+
+def _require_durable_prototype():
+    if not settings.shc_durable_provision_prototype_enabled:
+        raise HTTPException(status_code=404, detail="Prototype API disabled")
+
+
+@router.get("/provider-binding", summary="Read experimental provider binding")
+async def get_provider_binding():
+    _require_durable_prototype()
+    if not cloudflare_service.api_token or not cloudflare_service.account_id:
+        raise HTTPException(status_code=400, detail={
+            "error": "provider_unconfigured", "outcome": "not_created",
+        })
+    return {"provider_account_id": cloudflare_service.account_id}
+
+
+@router.post(
+    "/bare",
+    response_model=TunnelBareCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Experimental create-only durable provision boundary",
+)
+async def create_bare_tunnel(request: TunnelBareCreateRequest):
+    _require_durable_prototype()
+    account_id = cloudflare_service.account_id
+    if not cloudflare_service.api_token or not account_id:
+        raise HTTPException(status_code=400, detail={
+            "error": "provider_unconfigured", "stage": "preflight",
+            "outcome": "not_created",
+        })
+    if request.expected_account_id != account_id:
+        raise HTTPException(status_code=409, detail={
+            "error": "provider_binding_changed", "stage": "preflight",
+            "outcome": "not_created",
+        })
+    try:
+        result = await cloudflare_service.create_tunnel(name=request.name)
+        tunnel_id = str(uuid.UUID(result["tunnel_id"]))
+        if result["tunnel_name"] != request.name:
+            raise ValueError("provider identity mismatch")
+    except Exception:
+        # A timeout/error is not evidence that the provider did not create.
+        # Do not expose provider response bodies or perform compensation here.
+        logger.warning("Bare tunnel create outcome unknown")
+        raise HTTPException(status_code=502, detail={
+            "error": "bare_create_outcome_unknown", "stage": "create",
+            "outcome": "unknown",
+        }) from None
+    return TunnelBareCreateResponse(
+        tunnel_id=tunnel_id,
+        tunnel_name=request.name,
+        provider_account_id=account_id,
+    )
 
 
 @router.post(
