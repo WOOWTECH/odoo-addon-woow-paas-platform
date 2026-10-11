@@ -104,6 +104,18 @@
     border-radius: $woow-radius-default;
     background: $woow-card-light;
 
+    // 三格橫排時讓各格的四段（標題列、數字、比例條、底部兩欄）跨格對齊：某一格的等級
+    // 標籤或數字折行時，別格的同一段跟著留出一樣的高度，數字與比例條才落在同一條水平線上
+    // （英文版 769～1024px 寬時標籤會折到標題下方，原本各格自己排、高低不一）。
+    // `span 4`＝模板裡這個元素的四個子元素，兩邊數目要一致：subgrid 不會自己長出新的列，
+    // 多出來的子元素會疊在最後一列上。不支援 subgrid 的瀏覽器維持上面的 flex 直排。
+    @supports (grid-template-rows: subgrid) {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: subgrid;
+      grid-row: span 4;
+    }
+
     &--warning {
       border-color: #fcd34d;
 
@@ -137,6 +149,8 @@
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
+    // 這一列被別格撐高時（見 __row 的 subgrid），內容貼上緣，不被拉開到整列的高度。
+    align-content: flex-start;
     gap: 0.25rem 0.5rem;
   }
 

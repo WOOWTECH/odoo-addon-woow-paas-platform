@@ -1201,6 +1201,28 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         self.assertIn('ariaNow: barPercent,', code)
         self.assertIn('fillStyle: `width: ${barPercent}%`,', code)
 
+    def test_cells_share_their_rows_across_the_grid(self):
+        """瀏覽器實走：英文版中等寬度時等級標籤折行，三格的數字與比例條高低不一。
+
+        每一格是外層三欄 grid 的 subgrid，四段（標題列、數字、比例條、底部兩欄）跨格對齊。
+        subgrid 不會自己長出新的列：模板裡每一格的子元素數目要等於 SCSS 的 ``span``，多出來
+        的子元素會疊在最後一列上。
+        """
+        cells = _template_nodes(
+            _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.xml'),
+            '//div[@class="o_woow_quota_panel__grid"]/div')
+        self.assertEqual(len(cells), 1, '每一格都由 t-foreach 的那一個 div 產生')
+        self.assertEqual(cells[0].get('t-foreach'), 'rows')
+        parts = [child.get('class') for child in cells[0]]
+
+        scss = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.scss')
+        subgrid = re.search(r'@supports \(grid-template-rows: subgrid\) \{([^{}]*)\}', scss)
+        self.assertIsNotNone(subgrid, 'WorkspaceQuotaPanel.scss 找不到 subgrid 那一段')
+        self.assertIn('grid-template-rows: subgrid;', subgrid.group(1))
+        span = re.search(r'grid-row: span (\d+);', subgrid.group(1))
+        self.assertIsNotNone(span)
+        self.assertEqual(int(span.group(1)), len(parts), '模板裡每一格的子元素：%s' % parts)
+
     def test_panel_formats_numbers_with_the_user_locale(self):
         js = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')
         self.assertIn('formatFloat', js)
