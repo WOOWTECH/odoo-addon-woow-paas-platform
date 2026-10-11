@@ -4,7 +4,8 @@
 
 1. 預檢擋下的升級，叢集**真的**會拒絕那顆 pod（陽性對照：同一個升級不帶旗標送出去，
    ReplicaSet 出現 ``FailedCreate … exceeded quota``、剩 0 個 pod——就是 2026-10-10 的事故）；
-2. 預檢放行的升級，叢集**真的**建得出新 pod（``Recreate`` 先砍舊 pod、扣掉它之後放得下）；
+2. 預檢放行的升級，叢集**真的**建得出新 pod（``Recreate`` 先砍舊 pod、扣掉它之後放得下；
+   ``RollingUpdate`` 同時調小 replicas 時，舊 pod 先被縮掉、之後才多建新的）；
 3. 被 409 擋下時 helm 什麼都沒套用（Deployment 的 generation、舊 pod 的 UID 都沒變）；
 4. 沒寫 resources 的容器，預檢算的需求等於 LimitRanger 真的注入 pod 的值；
 5. ``kubectl get resourcequotas,limitranges,pods`` 的真實輸出形狀（``status.used`` 的寫法、
@@ -40,9 +41,9 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}-app
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicas }}
   strategy:
-    type: Recreate
+    type: {{ .Values.strategy }}
   selector:
     matchLabels:
       app: {{ .Release.Name }}-app
@@ -130,6 +131,30 @@ def _quota_rejections(namespace):
             and "exceeded quota" in (e.get("message") or "")]
 
 
+def _rejection_marks(namespace):
+    """目前每一筆 exceeded-quota 拒絕事件的 ``(uid, count, lastTimestamp)``。
+
+    同一個 ReplicaSet 反覆被拒時 k8s 把事件聚合成一筆、遞增 ``count``——只數筆數看不出
+    「還在被拒」。
+    """
+    return sorted(
+        (e["metadata"]["uid"], e.get("count") or 1, e.get("lastTimestamp") or "")
+        for e in _quota_rejections(namespace))
+
+
+def _assert_no_further_rejections(namespace, settle_seconds=8):
+    """新 pod 已經在了：ReplicaSet 不該再去建 pod，所以不該再有**新的** quota 拒絕。
+
+    在這之前的拒絕不算失敗（quota 的 ``status.used`` 回補慢一步時的暫時性事件，之後重試
+    成功）——只印出來，``pytest -rP`` 看得到這一輪有沒有遇到。事件會被聚合，同一筆的
+    ``count``／``lastTimestamp`` 變了也算「新增」。
+    """
+    settled = _rejection_marks(namespace)
+    print(f"exceeded-quota rejections before the new pod was admitted: {len(settled)} {settled}")
+    time.sleep(settle_seconds)
+    assert _rejection_marks(namespace) == settled, "新 pod 建出來之後仍在被 quota 拒絕"
+
+
 def _revisions(namespace):
     from src.services.helm import HelmService
 
@@ -137,9 +162,9 @@ def _revisions(namespace):
     return [r["revision"] for r in json.loads(out.stdout or "[]")]
 
 
-def _body(chart, cpu, marker="v2", **extra):
-    return {"chart": chart, "reset_values": True, "values": {"cpu": cpu, "marker": marker},
-            **extra}
+def _body(chart, cpu, marker="v2", values=None, **extra):
+    return {"chart": chart, "reset_values": True,
+            "values": {"cpu": cpu, "marker": marker, **(values or {})}, **extra}
 
 
 @pytest.fixture
@@ -158,7 +183,8 @@ def chart(tmp_path):
     (chart_dir / "templates").mkdir(parents=True)
     (chart_dir / "Chart.yaml").write_text(
         "apiVersion: v2\nname: quota-probe-1647\nversion: 0.1.0\n")
-    (chart_dir / "values.yaml").write_text('cpu: 250m\nmarker: v1\n')
+    (chart_dir / "values.yaml").write_text(
+        'cpu: 250m\nmarker: v1\nreplicas: 1\nstrategy: Recreate\n')
     (chart_dir / "templates" / "deployment.yaml").write_text(_DEPLOYMENT_TMPL)
     return str(chart_dir)
 
@@ -246,7 +272,15 @@ def test_without_the_flag_the_cluster_really_rejects_the_pod(app_client, quota_n
 
 
 def test_recreate_fits_once_own_old_pod_is_subtracted(app_client, quota_namespace, chart):
-    """used＋new 超過 hard（1.9＋0.5），但舊 pod 會先被砍：used−old＋new＝2.0 放得下。"""
+    """used＋new 超過 hard（1.9＋0.5），但舊 pod 會先被砍：used−old＋new＝2.0 放得下。
+
+    主斷言：預檢放行，而且新 pod **真的建得出來**、limits 是新的值，quota 最後剛好用滿。
+
+    ⚠ 不斷言「整個過程沒有任何 ``FailedCreate … exceeded quota``」。admission 用的是 quota 的
+    ``status.used``，它在舊 pod 刪掉之後由 quota controller **非同步**回補；``Recreate`` 一刪完
+    舊 pod 就建新 pod，回補慢一步時 ReplicaSet 會先記一筆暫時性的拒絕、退避後重試成功。那是
+    叢集的時序，不是預檢誤放。否定面只看「新 pod 建出來之後」：不再出現新的拒絕。
+    """
     ns = quota_namespace
     _external_workload(ns, "1500m")
     old_pod = _install(app_client, ns, chart, "400m")
@@ -260,9 +294,52 @@ def test_recreate_fits_once_own_old_pod_is_subtracted(app_client, quota_namespac
         return [p for p in _pods(ns, DEPLOYMENT)
                 if p["metadata"]["uid"] != old_pod["metadata"]["uid"]]
 
-    [pod] = _wait(_new_pod, "the upgraded pod", timeout=120)
+    [pod] = _wait(_new_pod, "the upgraded pod", timeout=180)
     assert pod["spec"]["containers"][0]["resources"]["limits"]["cpu"] == "500m"
-    assert _quota_rejections(ns) == []
+    # 舊 pod 的 400m 已回補、新 pod 的 500m 已入帳：1.5＋0.5 剛好等於上限 2。
+    _wait_used(ns, "2")
+
+    _assert_no_further_rejections(ns)
+    [still] = _pods(ns, DEPLOYMENT)
+    assert still["metadata"]["uid"] == pod["metadata"]["uid"]
+
+
+def test_rolling_update_that_also_scales_down_gets_its_new_pod(app_client, quota_namespace, chart):
+    """3 顆 × 600m（1.8，上限 2）改成 1 顆 × 900m，``RollingUpdate`` 預設值（先建後砍）。
+
+    拿「現在的 1.8」加一顆新 pod 是 2.7，看起來放不下；但 replicas 變了是 scaling event，
+    Deployment controller 先把舊 ReplicaSet 縮到 1 顆（0.6），之後才多建新 pod：0.6＋0.9＝1.5。
+    預檢必須放行，而且叢集真的建得出那顆新 pod。
+
+    pod 都停在 Pending（不存在的 nodeSelector），新 pod 永遠不會 Ready，所以舊的那 1 顆不會
+    被換掉——最後停在「舊 1＋新 1」，正好是預檢算的那個並存狀態。
+    """
+    ns = quota_namespace
+    rolling = {"strategy": "RollingUpdate"}
+    r = app_client.post("/api/releases", json={
+        "namespace": ns, "name": RELEASE, "chart": chart,
+        "values": {"cpu": "600m", "marker": "v1", "replicas": 3, **rolling}})
+    assert r.status_code == 201, r.text
+    old_pods = _wait(lambda: len(_pods(ns, DEPLOYMENT)) == 3 and _pods(ns, DEPLOYMENT),
+                     "the release's three pods")
+    old_uids = {p["metadata"]["uid"] for p in old_pods}
+    _wait_used(ns, "1800m")
+
+    r = app_client.patch(f"/api/releases/{ns}/{RELEASE}", json=_body(
+        chart, "900m", values={"replicas": 1, **rolling}, check_compute_quota=True))
+    assert r.status_code == 200, r.text
+
+    def _new_pod():
+        return [p for p in _pods(ns, DEPLOYMENT) if p["metadata"]["uid"] not in old_uids]
+
+    [pod] = _wait(_new_pod, "the upgraded pod", timeout=180)
+    assert pod["spec"]["containers"][0]["resources"]["limits"]["cpu"] == "900m"
+    # 並存狀態：舊 ReplicaSet 剩 1 顆（600m）＋新的 1 顆（900m）。
+    _wait_used(ns, "1500m")
+    survivors = [p for p in _pods(ns, DEPLOYMENT) if p["metadata"]["uid"] in old_uids]
+    assert len(survivors) == 1, [p["metadata"]["name"] for p in survivors]
+
+    _assert_no_further_rejections(ns)
 
 
 def test_limitrange_defaults_match_what_the_api_server_injects(app_client, quota_namespace, chart):
