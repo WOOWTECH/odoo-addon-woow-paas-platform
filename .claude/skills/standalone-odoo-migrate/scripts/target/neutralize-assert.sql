@@ -35,7 +35,7 @@ SELECT 'nfail|仍啟用的收信主機|' || count(*) FROM fetchmail_server WHERE
 
 SELECT to_regclass('public.payment_provider') IS NOT NULL AS has_payment \gset
 \if :has_payment
-SELECT 'nfail|仍啟用的金流供應商|' || count(*) FROM payment_provider WHERE state = 'enabled' HAVING count(*) > 0;
+SELECT 'nfail|沒有停用的金流供應商（含測試模式）|' || count(*) FROM payment_provider WHERE state <> 'disabled' HAVING count(*) > 0;
 \endif
 
 SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
