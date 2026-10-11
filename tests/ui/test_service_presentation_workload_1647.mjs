@@ -21,7 +21,7 @@ const presentation = await import(
 );
 
 const QUOTA_TEXT =
-  "This service is not running right now: the workspace has no CPU or memory quota left to start it. Stopping another service in this workspace may bring it back. Our operations team has been notified.";
+  "This service is not running right now: the workspace has no CPU or memory quota left to start it. Deleting a service you no longer need in this workspace may bring it back; otherwise please contact support. Our operations team has been notified.";
 const GENERIC_TEXT =
   "This service is not running right now: the platform could not start it. Our operations team has been notified.";
 const LABEL = "Not running — the platform could not start this service";
@@ -38,6 +38,17 @@ test("running＋quota_exceeded 顯示配額文案", () => {
     presentation.getWorkloadFaultText({ state: "running", workload_fault: "quota_exceeded" }),
     QUOTA_TEXT,
   );
+});
+
+test("配額文案只建議租戶做得到的事：刪除不需要的服務或聯絡客服，不建議停止服務", () => {
+  // /woow 沒有「停止／暫停服務」的操作（服務的動作只有 get／update／delete／restart）。
+  const text = presentation.getWorkloadFaultText({
+    state: "running",
+    workload_fault: "quota_exceeded",
+  });
+  assert.doesNotMatch(text, /\b(stop|stopping|pause|pausing|suspend|suspending)\b/i);
+  assert.match(text, /Deleting a service you no longer need/);
+  assert.match(text, /contact support/);
 });
 
 test("create_failed、no_pods 與不認得的代碼都顯示一般文案", () => {

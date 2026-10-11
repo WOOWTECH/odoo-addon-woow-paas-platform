@@ -71,6 +71,9 @@ function getConfirmedWorkloadFault(service) {
  * 叢集的原始訊息含 Pod、namespace、quota 物件名稱等內部細節，只留在後台；這裡只依代碼挑
  * 文案。不認得的代碼（後端日後新增）一律用一般文案，不顯示代碼本身。
  *
+ * 文案只建議租戶在 /woow 真的做得到的事：刪除不需要的服務，或聯絡客服。/woow 沒有
+ * 「停止服務」這個操作，不要寫成停止／暫停另一台服務。
+ *
  * @param {Object|null|undefined} service
  * @returns {string|null}
  */
@@ -81,7 +84,7 @@ export function getWorkloadFaultText(service) {
   }
   if (fault === "quota_exceeded") {
     return _t(
-      "This service is not running right now: the workspace has no CPU or memory quota left to start it. Stopping another service in this workspace may bring it back. Our operations team has been notified.",
+      "This service is not running right now: the workspace has no CPU or memory quota left to start it. Deleting a service you no longer need in this workspace may bring it back; otherwise please contact support. Our operations team has been notified.",
     );
   }
   return _t(
