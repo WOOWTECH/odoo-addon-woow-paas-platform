@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # API Security
     api_key: str = ""
 
+    # Experimental durable SHC API; deliberately disabled in released settings.
+    shc_durable_provision_prototype_enabled: bool = False
+
     # Service Configuration
     host: str = "0.0.0.0"
     port: int = 8000
