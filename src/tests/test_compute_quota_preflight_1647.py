@@ -29,6 +29,8 @@ import re
 import uuid
 from unittest.mock import MagicMock, patch
 
+from lxml import etree
+
 from odoo.exceptions import AccessError, UserError
 from odoo.tests.common import TransactionCase, tagged
 from odoo.tools import mute_logger
@@ -1244,3 +1246,69 @@ class TestComputeQuotaTranslations1647(TransactionCase):
                 self.assertEqual(
                     sorted(re.findall(r'%\(\w+\)s', entries.get(src) or '')),
                     sorted(re.findall(r'%\(\w+\)s', src)))
+
+
+# ====================================================================== #
+#  換方案對話框：被擋時錯誤訊息要看得到                                      #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestChangePlanErrorVisible1647(TransactionCase):
+    """換方案被擋下時，租戶只靠對話框裡那一則訊息知道沒換成、沒有扣款、該找誰。
+
+    實走（1366×768、1440×900）：訊息排在可捲動的 body 最後，選了有席數變體的方案後 body 的
+    內容比視窗高，按下確認時整塊紅框落在可視範圍之外，畫面像沒有反應。修法是每次失敗都把那
+    一塊捲進可視範圍（``ChangePlanModal.js`` 的 effect）。
+
+    前端沒有 JS 單元測試框架：這裡鎖住 template 與元件之間的那條線——哪一塊是錯誤訊息、
+    元件捲的是不是它、每次失敗會不會捲。真瀏覽器的量測在 #1647 的 E2E 報告。
+    """
+
+    _MODAL_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'static', 'src', 'paas', 'components', 'modal')
+
+    def _template(self):
+        root = etree.parse(os.path.join(self._MODAL_DIR, 'ChangePlanModal.xml')).getroot()
+        [template] = root.xpath("//t[@t-name='woow_paas_platform.ChangePlanModal']")
+        return template
+
+    def _component_code(self):
+        """元件原始碼，去掉註解與空白（註解裡的字不該讓斷言假綠，排版也不該讓它假紅）。"""
+        with open(os.path.join(self._MODAL_DIR, 'ChangePlanModal.js'), encoding='utf-8') as fh:
+            code = fh.read()
+        code = re.sub(r'/\*.*?\*/', '', code, flags=re.S)
+        code = re.sub(r'^\s*//[^\n]*$', '', code, flags=re.M)
+        return re.sub(r'\s+', '', code)
+
+    def test_the_confirm_error_is_one_referenced_block_in_the_scrolling_body(self):
+        template = self._template()
+        blocks = template.xpath(".//*[@t-if='state.error']")
+        self.assertEqual(len(blocks), 1, '確認失敗的訊息只有一塊（元件只捲一個 ref）')
+        [block] = blocks
+        self.assertEqual(block.get('t-ref'), 'errorMessage', '元件靠這個 ref 找到它')
+        self.assertIn('o_woow_error_message', (block.get('class') or '').split())
+        self.assertEqual(len(block.xpath(".//*[@t-esc='state.error']")), 1)
+        self.assertEqual(len(template.xpath(".//*[@t-ref='errorMessage']")), 1)
+        # 它在可捲動的 body 裡——所以才需要捲。搬到 body 之外（不隨內容捲動的位置）也是一種
+        # 修法，但那時下面那條「會捲」的測試要連同元件一起改，不是只改這一行。
+        body = block.getparent()
+        self.assertIn('o_woow_modal_body', (body.get('class') or '').split())
+
+    def test_every_failure_scrolls_the_error_into_view(self):
+        code = self._component_code()
+        owl_import = re.search(r'import\{([^}]*)\}from"@odoo/owl";', code)
+        self.assertTrue(owl_import)
+        self.assertLessEqual({'useRef', 'useEffect'}, set(owl_import.group(1).split(',')))
+        self.assertIn('this.errorRef=useRef("errorMessage");', code)
+        self.assertIn(
+            'useEffect((el)=>{if(el){el.scrollIntoView({block:"nearest"});}},'
+            '()=>[this.errorRef.el,this.failureCount]);', code,
+            '錯誤訊息出現（或同一則再出現一次）時把它捲進可視範圍')
+        # 失敗分支：先記一次失敗、再設訊息——同一則訊息連續出現兩次時 DOM 不變，effect 靠
+        # failureCount 才會再跑一次。
+        failure = code[code.index('}else{', code.index('asynconConfirm()')):]
+        self.assertIn('this.failureCount+=1;', failure)
+        self.assertLess(failure.index('this.failureCount+=1;'),
+                        failure.index('this.state.error=res.error'))
+        self.assertEqual(code.count('this.failureCount+=1;'), 1)
