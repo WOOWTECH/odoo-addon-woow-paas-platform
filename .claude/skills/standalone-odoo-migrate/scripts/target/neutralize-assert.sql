@@ -14,6 +14,9 @@ BEGIN TRANSACTION READ ONLY;
 SELECT 'nfail|database.is_neutralized 未設定|1'
  WHERE NOT EXISTS (SELECT 1 FROM ir_config_parameter WHERE key = 'database.is_neutralized' AND lower(value) = 'true');
 
+SELECT 'nfail|web.base.url 仍被凍結在來源站網址|1'
+ WHERE EXISTS (SELECT 1 FROM ir_config_parameter WHERE key = 'web.base.url.freeze' AND lower(value) = 'true');
+
 SELECT 'nfail|仍啟用的排程（autovacuum 以外）|' || count(*) FROM ir_cron c
  WHERE c.active AND c.id NOT IN (SELECT res_id FROM ir_model_data
                                   WHERE model = 'ir.cron' AND module = 'base' AND name = 'autovacuum_job')

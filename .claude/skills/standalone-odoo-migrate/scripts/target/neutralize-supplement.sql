@@ -38,6 +38,10 @@ SELECT to_regclass('public.fetchmail_server') IS NOT NULL AS has_fetchmail \gset
 UPDATE fetchmail_server SET password = NULL WHERE password IS NOT NULL;
 \endif
 
+-- web.base.url 還是來源站的正式網址：彩排站產生的連結（入口網站、QR code、金流回呼）會指回正式站。
+-- 拿掉凍結旗標，第一個管理員從彩排站網址登入時 Odoo 會自動把它改成彩排站的網址。
+DELETE FROM ir_config_parameter WHERE key = 'web.base.url.freeze';
+
 -- ── 2. 排程的模組資料改成 noupdate：-u all 不會把 active 設回 true ────────────────
 UPDATE ir_model_data SET noupdate = true WHERE model = 'ir.cron' AND noupdate IS NOT TRUE;
 

@@ -72,6 +72,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
    被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。filestore：仍被附件引用的檔不能少、內容不能變；
    模組附件換了內容後被 Odoo 回收的舊檔列為「預期內」。
    完成條件：verify exit 0，「預期內的變動」逐條看過；`--cleanup` 才會刪掉含客戶資料的 incoming PVC。
+   比對要在任何人登入目標站之前跑：管理員登入會改寫 `web.base.url`，之後的比對會多出 `ir_config_parameter` 不一致。
    - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝
      zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。要確認：第一次 verify 先不帶
      `--cleanup`，Redeploy 後再跑一次帶 `--cleanup` 的。
@@ -97,6 +98,9 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
   逐條判斷是不是對外憑證；是的話寫一段 SQL，用 `--extra-neutralize-sql <file>` 重跑還原。完成條件：`nscan` 逐條看過。
 - **登入**：彩排密碼在 Secret `standalone-odoo-rehearsal-login`（key `password`），所有原本有密碼的帳號共用；帳號名稱不變。
   畫面上方會有 Odoo 的中和橫幅。
+- **先比對、再登入**：`verify.sh --stage upgrade`（以及 Redeploy 後的那一次）要在任何人登入之前跑完。管理員一登入，
+  Odoo 就把 `web.base.url` 改成登入用的網址——彩排站需要這個改動（之前產生的連結都指向來源站的正式網址），
+  但之後再跑比對會看到 `ir_config_parameter` 的客戶資料列不同。
 - **限制**：目標站仍有平台給的對外網址；升級帶進來的新排程會是啟用的（`verify.sh --stage upgrade` 的斷言會抓到，
   抓到就先把 web 停掉）；站別自己加的對外整合只能靠 `nscan` 與人工判斷。
 - ⛔ 中和過的資料庫不得用於正式切換。正式切換重新走一次凍結匯出與不帶 `--neutralize` 的還原。
