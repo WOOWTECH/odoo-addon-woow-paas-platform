@@ -933,6 +933,32 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
         self.assertIn('WorkspaceQuotaPanel', components.group(1))
         self.assertIn('get quotaReloadKey()', js)
 
+    def test_workspace_page_is_remounted_when_the_workspace_changes(self):
+        """瀏覽器實走：同一個分頁把網址的工作區 id 換掉，整頁要跟著換，不能只有面板換。
+
+        route 沒變時 OWL 會沿用同一個 WorkspaceDetailPage，而它只在掛載時載入資料；配額
+        面板卻會跟著 ``workspaceId`` 重讀 ⇒ 標題與服務清單是上一個工作區的、面板是新的。
+        root.xml 以 ``workspaceId`` 當 ``t-key``：工作區一變就整頁重新掛載。
+        """
+        pages = _template_nodes(_read('root.xml'), '//WorkspaceDetailPage')
+        self.assertTrue(pages, 'root.xml 找不到 <WorkspaceDetailPage>')
+        for page in pages:
+            self.assertEqual(page.get('workspaceId'), 'workspaceId')
+            # key 與傳進去的 prop 是同一個 expression ⇒ prop 一變 key 就跟著變。
+            self.assertEqual(
+                page.get('t-key'), page.get('workspaceId'),
+                'WorkspaceDetailPage 要以 workspaceId 為 t-key：少了它，換工作區時頁面留著'
+                '上一個工作區的內容，只有配額面板換成新的')
+        # 那個 expression 在 Root 上真的存在（名字對不上時 key 是固定的 undefined，等於沒有）。
+        self.assertIn('get workspaceId() {', _js_code(_read('root.js')))
+        # 陽性對照：同一個讀法讀得出修正前的寫法「沒有 key」。
+        before = _template_nodes(
+            '<templates><t t-name="x"><!-- <WorkspaceDetailPage t-key="workspaceId"/> -->'
+            '<WorkspaceDetailPage workspaceId="workspaceId"/></t></templates>',
+            '//WorkspaceDetailPage')
+        self.assertEqual([(page.get('t-key'), page.get('workspaceId')) for page in before],
+                         [(None, 'workspaceId')])
+
     def test_panel_reads_backend_level_and_has_no_threshold_of_its_own(self):
         js = _read('components', 'workspace-quota', 'WorkspaceQuotaPanel.js')
         self.assertIn('quota?.level', js)
