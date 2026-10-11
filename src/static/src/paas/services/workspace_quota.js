@@ -23,8 +23,9 @@ const QUOTA_REQUEST_TIMEOUT_MS = 15000;
  * ResourceQuota 對還沒結束的 pod 照算——這時讀到的是「已經變小的上限＋還沒回補的用量」，
  * 比例不降反升；之後清單裡沒有進行中的服務，頁面不會再有任何東西觸發重讀。
  *
- * 30 秒與 k8s 預設的 terminationGracePeriodSeconds 同量級，夠一般的 pod 結束、用量
- * 回補；撐滿寬限期才結束的 pod 仍可能趕不上，那時要靠面板上的重新整理鈕。
+ * 30 秒沒有在叢集上實測過回補要多久：取這個數字是因為 k8s 預設的
+ * terminationGracePeriodSeconds 就是 30 秒，pod 通常在那之前結束、用量隨即回補。撐滿
+ * 寬限期（或設了更長寬限期）才結束的 pod 仍可能趕不上，那時要靠面板上的重新整理鈕。
  */
 export const QUOTA_FOLLOW_UP_DELAY_MS = 30000;
 

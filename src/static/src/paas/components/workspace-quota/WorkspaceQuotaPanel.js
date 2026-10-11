@@ -77,7 +77,7 @@ export class WorkspaceQuotaPanel extends Component {
     this.state.loading = false;
     const hasData = Boolean(result.success && result.data && result.data.available);
     if (isFollowUp && !hasData) {
-      // 延遲補讀只為了補上晚到的用量：這一次沒讀到，就留著畫面上那一份（半分鐘前讀到
+      // 延遲補讀只為了補上晚到的用量：這一次沒讀到，就留著畫面上那一份（上一次讀到
       // 的），不把一塊正常的面板換成「暫時無法取得」。
       return;
     }
