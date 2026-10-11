@@ -20732,14 +20732,14 @@ msgstr "這個工作區的 CPU 或記憶體配額不足以套用這次變更。"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "Nothing was changed and the service keeps running with its current settings. Stop or delete services you no longer need in this workspace and try again, or contact support to raise the workspace quota."
-msgstr "沒有套用任何變更，服務仍以原本的設定執行。請停用或刪除這個工作區內不需要的服務後再試一次，或聯絡客服調整工作區配額。"
+msgid "Nothing was changed and the service keeps running with its current settings. Please contact support to adjust the workspace quota."
+msgstr "沒有套用任何變更，服務仍以原本的設定執行。請聯絡客服調整工作區配額。"
 
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "The plan was not changed and nothing was charged. Stop or delete services you no longer need in this workspace and try again, or contact support to raise the workspace quota."
-msgstr "方案沒有變更，也沒有扣款。請停用或刪除這個工作區內不需要的服務後再試一次，或聯絡客服調整工作區配額。"
+msgid "The plan was not changed and nothing was charged. The service keeps running with its current settings. Please contact support to adjust the workspace quota."
+msgstr "方案沒有變更，也沒有扣款。服務仍以原本的設定執行。請聯絡客服調整工作區配額。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -20792,8 +20792,8 @@ msgstr "%(name)s（id=%(id)s，namespace %(ns)s，%(operation)s）：%(shortfall
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
-msgid "Changes were rejected before anything was applied or charged because the CPU / memory quota of the workspace cannot fit the service after the change. Tenants who requested a change were told to free resources or contact support. Raise the quota of that workspace or free resources in its namespace, then ask the tenant to try again (for a queued redeploy: redeploy the service again):"
-msgstr "以下變更在套用與扣款之前就被擋下：變更之後，工作區的 CPU／記憶體配額放不下該服務。提出變更的租戶已被告知可釋放資源或聯絡客服。請調高該工作區的配額，或釋放其 namespace 內的資源後，再請租戶重試（排定的重新部署則請再按一次重新部署）："
+msgid "Changes were rejected before anything was applied or charged because the CPU / memory quota of the workspace cannot fit the service after the change. Tenants who requested a change were told to contact support. Raise the quota of that workspace or free resources in its namespace, then ask the tenant to try again (for a queued redeploy: redeploy the service again):"
+msgstr "以下變更在套用與扣款之前就被擋下：變更之後，工作區的 CPU／記憶體配額放不下該服務。提出變更的租戶已被告知請聯絡客服。請調高該工作區的配額，或釋放其 namespace 內的資源後，再請租戶重試（排定的重新部署則請再按一次重新部署）："
 
 #. module: woow_paas_platform
 #. odoo-python

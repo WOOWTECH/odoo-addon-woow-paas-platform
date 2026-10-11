@@ -3583,13 +3583,15 @@ class CloudService(models.Model):
         ``audience='tenant'``（預設）：寫給租戶——哪一種資源、需要多少、上限多少、同工作區其他
         workload 佔了多少、還差多少，以及他能做什麼。**不出現** namespace、quota 物件名、其他
         pod 的名稱。同一種資源（CPU 的 limits 與 requests）只講一次、最多講兩種。``operation``
-        決定結尾（``change_plan`` 講「方案沒有變更、沒有扣款」，其餘講「沒有套用任何變更」）；
-        ``with_ending=False`` 只回資源那幾句（``_upgrade_failure_message`` 自己有包裝句）。
+        決定結尾（``change_plan`` 講「方案沒有變更、沒有扣款」，其餘講「沒有套用任何變更」；
+        兩種都講服務維持原狀，出口一律是聯絡客服——為什麼不建議租戶停用／刪除服務，見結尾
+        那一段的註解）；``with_ending=False`` 只回資源那幾句（``_upgrade_failure_message``
+        自己有包裝句）。
 
         換方案**降級**：shortfall 帶 ``reason == 'rolling_on_downgrade'``（新方案的上限比現在
-        小，更換服務時新舊並存才放不下）。那不是「其他服務佔太多」，叫租戶去刪服務或調高配額
-        是錯的指引——改講新方案的配額放不下更換中的服務；講到的全是這種時，結尾改成請他聯絡
-        客服（租戶自己沒有出口）。
+        小，更換服務時新舊並存才放不下）。那不是「其他服務佔太多」，請客服調高配額也與降級
+        相反——改講新方案的配額放不下更換中的服務；講到的全是這種時，結尾改成請他聯絡客服
+        協助更換到這個方案（租戶自己沒有出口）。
 
         ``audience='admin'``：寫給按 Redeploy 的管理員——逐項數字、namespace、quota 名稱與佔用
         最多的其他 workload。**只給管理員看**：排隊的 redeploy（``_cron_run_requested_redeploys``）
@@ -3694,20 +3696,24 @@ class CloudService(models.Model):
             parts.append(env._(
                 'This workspace does not have enough CPU or memory quota for this change.'))
         if with_ending:
+            # ⛔ 結尾給租戶的出口只有「聯絡客服」，不要加回「停用／刪除不需要的服務」或「換成
+            # 較小的方案」來釋出 CPU／記憶體配額：工作區的上限由 ``_compute_ns_quota`` 算——存活
+            # 服務的方案規格加總 × 3（另有下限）。刪掉一台，上限少 3 份、用量只少約 1 份，剩餘
+            # 空間通常變小而不是變大（只有落在下限區間時例外）；單台的 limits 被調到超過上限時
+            # （2026-10-10 事故）刪別台反而更糟。調整工作區配額只有管理員做得到（正式入口見 #1648）。
             if operation == 'change_plan' and only_downgrade:
                 parts.append(env._(
                     'The plan was not changed and nothing was charged. Please contact support '
                     'to switch to this plan.'))
             elif operation == 'change_plan':
                 parts.append(env._(
-                    'The plan was not changed and nothing was charged. Stop or delete services '
-                    'you no longer need in this workspace and try again, or contact support to '
-                    'raise the workspace quota.'))
+                    'The plan was not changed and nothing was charged. The service keeps '
+                    'running with its current settings. Please contact support to adjust the '
+                    'workspace quota.'))
             else:
                 parts.append(env._(
                     'Nothing was changed and the service keeps running with its current '
-                    'settings. Stop or delete services you no longer need in this workspace and '
-                    'try again, or contact support to raise the workspace quota.'))
+                    'settings. Please contact support to adjust the workspace quota.'))
         return ' '.join(parts)
 
     def _queued_redeploy_quota_message(self, detail):
@@ -3715,7 +3721,9 @@ class CloudService(models.Model):
 
         ``error_message`` 租戶在服務頁看得到，所以是**租戶版**（不含 namespace、ResourceQuota
         名、其他 workload 名），整句用服務建立者的語言——cron 沒有租戶的語言
-        （同 ``_upgrade_failure_message`` 的取法）。
+        （同 ``_upgrade_failure_message`` 的取法）。出口與租戶版相同：只請他聯絡客服，不建議
+        停用或刪除服務（刪服務會讓工作區上限跟著變小，見 ``_compute_quota_error_message``
+        結尾的註解）。
         """
         self.ensure_one()
         lang = self.sudo().create_uid.lang or self.env.lang

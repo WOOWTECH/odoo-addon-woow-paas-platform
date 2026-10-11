@@ -599,6 +599,9 @@ class TestChangePlanComputeQuotaPreflight1647(_ChangePlanFixture, TransactionCas
         self.assertIn('does not have enough CPU quota', res['error'])
         self.assertIn('short by 4 vCPU', res['error'])
         self.assertIn('The plan was not changed and nothing was charged', res['error'])
+        # 出口只有聯絡客服：刪服務會讓工作區上限跟著變小（``_compute_ns_quota``），不建議。
+        self.assertIn('Please contact support to adjust the workspace quota.', res['error'])
+        self.assertNotIn('delete', res['error'].lower())
         self.assertNotIn(_QUOTA_DETAIL['namespace'], res['error'])
         refund.assert_not_called()
         self._assert_untouched(svc, old_sub, before)
@@ -629,8 +632,8 @@ class TestChangePlanComputeQuotaPreflight1647(_ChangePlanFixture, TransactionCas
         """降到較小方案：新方案的上限放不下更換服務時並存的新舊兩顆 pod。
 
         operator 照樣回 409（平台推送縮小後的 quota 之後那個升級確實會卡住），但 shortfall
-        帶 ``reason: rolling_on_downgrade``。這不是「其他服務佔太多」——一般的結尾（停用或
-        刪除不需要的服務、請客服調高配額）對降級是錯的指引，改成請租戶聯絡客服。
+        帶 ``reason: rolling_on_downgrade``。這不是「其他服務佔太多」——一般的結尾（請客服
+        調整工作區配額）對降級是錯的指引，改成請租戶聯絡客服協助更換到這個方案。
         """
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
 
@@ -656,7 +659,7 @@ class TestChangePlanComputeQuotaPreflight1647(_ChangePlanFixture, TransactionCas
         self.assertIn('short by 2 GiB', res['error'])
         self.assertIn('The plan was not changed and nothing was charged. Please contact '
                       'support to switch to this plan.', res['error'])
-        for wrong in ('Stop or delete services', 'raise the workspace quota',
+        for wrong in ('Stop or delete services', 'adjust the workspace quota',
                       'Deployment/svc-1158x-app', _QUOTA_DETAIL['namespace']):
             self.assertNotIn(wrong, res['error'])
         self._assert_untouched(svc, old_sub, before)

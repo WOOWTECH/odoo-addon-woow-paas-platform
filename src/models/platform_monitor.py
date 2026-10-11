@@ -561,9 +561,9 @@ class PlatformMonitor(models.Model):
         return self._safe_alert(self.SUMMARY_COMPUTE_QUOTA_REJECTED, _(
             'Changes were rejected before anything was applied or charged because the CPU / '
             'memory quota of the workspace cannot fit the service after the change. Tenants who '
-            'requested a change were told to free resources or contact support. Raise the '
-            'quota of that workspace or free resources in its namespace, then ask the tenant to '
-            'try again (for a queued redeploy: redeploy the service again):'), append_line=line)
+            'requested a change were told to contact support. Raise the quota of that '
+            'workspace or free resources in its namespace, then ask the tenant to try again '
+            '(for a queued redeploy: redeploy the service again):'), append_line=line)
 
     @api.model
     def _orphans_text(self, orphans):

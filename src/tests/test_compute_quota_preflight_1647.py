@@ -224,8 +224,45 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         self.assertIn('the workspace limit is 12 vCPU', message)
         self.assertIn('are using 8 vCPU', message)
         self.assertIn('short by 4 vCPU', message)
-        self.assertIn('Nothing was changed and the service keeps running', message)
-        self.assertIn('contact support to raise the workspace quota', message)
+        self.assertTrue(message.endswith(
+            'Nothing was changed and the service keeps running with its current settings. '
+            'Please contact support to adjust the workspace quota.'), message)
+
+    def test_tenant_message_never_suggests_removing_services(self):
+        """租戶訊息的出口只有聯絡客服——不建議停用、刪除服務或換成較小的方案來釋出配額。
+
+        工作區的 CPU／記憶體上限＝存活服務的方案規格加總 × 3（``_compute_ns_quota``，另有
+        下限）：刪掉一台，上限少 3 份、用量只少約 1 份，剩餘空間通常變小；單台的 limits 被調到
+        超過上限時（2026-10-10 事故）刪別台反而更糟。租戶做得到而且有效的只有聯絡客服。
+        """
+        self.env['res.lang']._activate_lang('zh_TW')
+        details = {
+            'steady': _quota_detail(),
+            'rolling': _quota_detail(_shortfall(
+                phase='rolling', workload='Deployment/svc-1647-omnigent', required='2',
+                short_by='2')),
+            'downgrade': self._downgrade_detail(),
+            'no numbers': dict(_quota_detail(), shortfalls=[]),
+        }
+        english = ('stop ', 'delete', 'remove', 'no longer need', 'free ', 'smaller plan')
+        chinese = ('停用', '停止', '刪除', '移除', '不需要的服務', '釋放', '釋出', '較小的方案')
+        for shape, detail in details.items():
+            for operation in ('reconfigure', 'change_plan', 'rollback'):
+                with self.subTest(shape=shape, operation=operation):
+                    message = self.service._compute_quota_error_message(
+                        detail, operation=operation, lang='en_US')
+                    for wrong in english:
+                        self.assertNotIn(wrong, message.lower())
+                    self.assertIn('contact support', message)
+                    translated = self.service._compute_quota_error_message(
+                        detail, operation=operation, lang='zh_TW')
+                    for wrong in chinese:
+                        self.assertNotIn(wrong, translated)
+                    self.assertIn('聯絡客服', translated)
+        queued = self.service._queued_redeploy_quota_message(_quota_detail())
+        for wrong in english:
+            self.assertNotIn(wrong, queued.lower())
+        self.assertIn('Please contact support to adjust the workspace quota.', queued)
 
     def test_tenant_message_hides_cluster_names(self):
         """租戶看不到（也不需要）namespace、quota 物件名與其他 workload 的名字。"""
@@ -241,7 +278,8 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         self.assertIn('工作區上限是 12 vCPU', message)
         self.assertIn('目前佔用 8 vCPU', message)
         self.assertIn('還差 4 vCPU', message)
-        self.assertIn('沒有套用任何變更', message)
+        self.assertTrue(message.endswith(
+            '沒有套用任何變更，服務仍以原本的設定執行。請聯絡客服調整工作區配額。'), message)
         english = self.service._compute_quota_error_message(_quota_detail(), lang='en_US')
         self.assertIn('the service needs 8 vCPU', english)
 
@@ -302,8 +340,8 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
     def test_downgrade_shortfall_does_not_tell_the_tenant_to_delete_services(self):
         """降到較小方案、更換服務時新舊並存才放不下：原因不是「其他服務佔太多」。
 
-        一般的結尾（停用或刪除不需要的服務、請客服調高配額）對降級是錯的指引——單一服務
-        的工作區沒有東西可刪，而調高配額與降級相反。租戶自己沒有出口：請他聯絡客服。
+        一般的結尾（請客服調整工作區配額）對降級是錯的指引——調高配額與降級相反，而刪服務
+        只會讓上限再變小。租戶自己沒有出口：請他聯絡客服協助更換到這個方案。
         """
         message = self.service._compute_quota_error_message(
             self._downgrade_detail(), operation='change_plan')
@@ -314,7 +352,7 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         self.assertIn('short by 2 GiB', message)
         self.assertIn('The plan was not changed and nothing was charged. Please contact '
                       'support to switch to this plan.', message)
-        for wrong in ('Stop or delete services', 'raise the workspace quota',
+        for wrong in ('Stop or delete services', 'adjust the workspace quota',
                       'does not have enough'):
             self.assertNotIn(wrong, message)
         for leaked in (_NAMESPACE, 'ResourceQuota', 'svc-1647-omnigent', 'rolling_on_downgrade'):
@@ -329,15 +367,16 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         self.assertIn('還差 2 GiB', message)
         self.assertIn('方案沒有變更，也沒有扣款。請聯絡客服協助更換到這個方案。', message)
         self.assertNotIn('請停用或刪除', message)
+        self.assertNotIn('調整工作區配額', message)
 
     def test_downgrade_ending_only_when_every_shortfall_is_a_downgrade(self):
-        """同時還有一筆一般的放不下（其他 workload 佔著）：那一筆的出口仍是釋放資源。"""
+        """同時還有一筆一般的放不下（其他 workload 佔著）：結尾用一般的那一句（請客服調整配額）。"""
         detail = self._downgrade_detail()
         detail['shortfalls'].insert(0, _shortfall('limits.cpu'))
         message = self.service._compute_quota_error_message(detail, operation='change_plan')
         self.assertIn('does not have enough CPU quota', message)
         self.assertIn('The memory quota of the new plan cannot hold this service', message)
-        self.assertIn('Stop or delete services you no longer need', message)
+        self.assertIn('Please contact support to adjust the workspace quota.', message)
         self.assertNotIn('contact support to switch to this plan', message)
 
     def test_rolling_shortfall_without_the_reason_keeps_the_ordinary_wording(self):
@@ -346,7 +385,7 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
         del plain['shortfalls'][0]['reason']
         message = self.service._compute_quota_error_message(plain, operation='change_plan')
         self.assertIn('does not have enough memory quota', message)
-        self.assertIn('Stop or delete services you no longer need', message)
+        self.assertIn('Please contact support to adjust the workspace quota.', message)
 
         steady = dict(_quota_detail(_shortfall(reason='rolling_on_downgrade')))
         message = self.service._compute_quota_error_message(steady, operation='change_plan')
@@ -356,7 +395,10 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
     def test_change_plan_ending_talks_about_the_charge(self):
         message = self.service._compute_quota_error_message(
             _quota_detail(), operation='change_plan')
-        self.assertIn('The plan was not changed and nothing was charged.', message)
+        self.assertTrue(message.endswith(
+            'The plan was not changed and nothing was charged. The service keeps running with '
+            'its current settings. Please contact support to adjust the workspace quota.'),
+            message)
         self.assertNotIn('Nothing was changed and the service keeps running', message)
 
     def test_without_ending_only_the_resource_sentences_remain(self):
@@ -525,6 +567,8 @@ class TestRedeployComputeQuotaPreflight1647(_Fixture, TransactionCase):
         self.assertIn('the service needs 8 vCPU', message)
         self.assertIn('short by 4 vCPU', message)
         self.assertIn('Nothing was changed and the service keeps running', message)
+        self.assertIn('Please contact support to adjust the workspace quota.', message)
+        self.assertNotIn('delete', message.lower(), '不建議租戶停用或刪除服務（上限會跟著變小）')
         for leaked in (_NAMESPACE, 'Namespace', 'ResourceQuota', '-quota', 'StatefulSet',
                        'Largest other consumers', 'limits.cpu', 'svc-1647-omnigent',
                        'compute_quota_precheck_enabled', 'The redeploy was stopped'):
@@ -556,6 +600,8 @@ class TestRedeployComputeQuotaPreflight1647(_Fixture, TransactionCase):
         self.assertIn('排定的重新部署沒有執行：', svc.error_message)
         self.assertIn('這個工作區的CPU配額不足以套用這次變更', svc.error_message)
         self.assertIn('還差 4 vCPU', svc.error_message)
+        self.assertIn('請聯絡客服調整工作區配額。', svc.error_message)
+        self.assertNotIn('刪除', svc.error_message)
         self.assertNotIn(_NAMESPACE, svc.error_message)
 
     @_quiet
@@ -1134,12 +1180,10 @@ class TestComputeQuotaTranslations1647(TransactionCase):
         '%(required)s more on top of the %(used)s already in use; the workspace limit is '
         '%(hard)s (short by %(short)s).',
         'This workspace does not have enough CPU or memory quota for this change.',
-        'Nothing was changed and the service keeps running with its current settings. Stop or '
-        'delete services you no longer need in this workspace and try again, or contact '
-        'support to raise the workspace quota.',
-        'The plan was not changed and nothing was charged. Stop or delete services you no '
-        'longer need in this workspace and try again, or contact support to raise the '
-        'workspace quota.',
+        'Nothing was changed and the service keeps running with its current settings. Please '
+        'contact support to adjust the workspace quota.',
+        'The plan was not changed and nothing was charged. The service keeps running with its '
+        'current settings. Please contact support to adjust the workspace quota.',
         'CPU',
         'memory',
         'temporary disk space',
@@ -1153,9 +1197,9 @@ class TestComputeQuotaTranslations1647(TransactionCase):
         'consumers: %(consumers)s.',
         'Changes were rejected before anything was applied or charged because the CPU / '
         'memory quota of the workspace cannot fit the service after the change. Tenants who '
-        'requested a change were told to free resources or contact support. Raise the quota '
-        'of that workspace or free resources in its namespace, then ask the tenant to try '
-        'again (for a queued redeploy: redeploy the service again):',
+        'requested a change were told to contact support. Raise the quota of that workspace '
+        'or free resources in its namespace, then ask the tenant to try again (for a queued '
+        'redeploy: redeploy the service again):',
         # review 之後補的（降級的說明、排隊 redeploy 的租戶版、告警行數上限）。
         'The %(resource)s quota of the new plan cannot hold this service while it is being '
         'replaced: the old and the new instance run side by side for a moment, which needs '
