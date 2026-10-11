@@ -21736,3 +21736,99 @@ msgstr "下載網址開放至 %s"
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Retained data of deleted services"
 msgstr "已刪除服務的保留資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Workspace resource quota"
+msgstr "工作區資源配額"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "All services in this workspace share one CPU, memory and disk quota. The figures show how much of it the services have reserved (their configured resource limits and disk sizes), not live usage. When the quota runs out, new or restarting services cannot start."
+msgstr "這個工作區內的所有服務共用同一份 CPU、記憶體與磁碟配額。這裡顯示的是各服務已佔用的配額（依設定的資源上限與磁碟大小計算），不是即時使用率。配額用完時，新的或重新啟動的服務會無法啟動。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "CPU quota"
+msgstr "CPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Memory quota"
+msgstr "記憶體"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Disk quota"
+msgstr "磁碟"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%(used)s of %(hard)s vCPU"
+msgstr "%(used)s／%(hard)s vCPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%(used)s of %(hard)s GB"
+msgstr "%(used)s／%(hard)s GB"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%s vCPU left"
+msgstr "剩餘 %s vCPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%s GB left"
+msgstr "剩餘 %s GB"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Quota almost used up"
+msgstr "即將用完"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Quota used up"
+msgstr "已用完"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "This workspace is close to its quota. Deploying, restarting or resizing a service may fail. Delete a service you no longer need, or contact support."
+msgstr "這個工作區的配額即將用完，部署、重新啟動或調整服務規格可能會失敗。請刪除不需要的服務，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Delete a service you no longer need, or contact support."
+msgstr "這個工作區的配額已用完，釋出配額之前，新的或重新啟動的服務無法啟動。請刪除不需要的服務，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Usage is temporarily unavailable."
+msgstr "暫時無法取得用量。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Refresh quota usage"
+msgstr "重新整理用量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "This is the plan of this service only. All services in the workspace share one overall CPU, memory and disk quota; see the workspace page for current usage."
+msgstr "這是這台服務自己的方案規格。工作區內所有服務共用一份 CPU、記憶體與磁碟總配額，目前用量請看工作區頁面。"

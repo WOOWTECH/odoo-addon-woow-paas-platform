@@ -628,6 +628,74 @@ class PaasController(HiddenChainMixin, Controller):
             }
         return {'success': True, 'message': _('Workspace archived')}
 
+    # ==================== Workspace Quota API (#1647) ====================
+
+    @route("/api/workspaces/<int:workspace_id>/quota", auth="user", methods=["POST"], type="json")
+    def api_workspace_quota(self, workspace_id: int, **kw: Any) -> dict[str, Any]:
+        """
+        #1647：工作區 namespace 配額（CPU／記憶體／磁碟）的上限與已佔用量，唯讀。
+
+        工作區的任何成員（owner／admin／user／guest）都能看——與服務清單同一組 access
+        檢查、同一句錯誤訊息（`api_workspace_services`）。不走訂閱閘：停權中的工作區
+        一樣要看得到配額。
+
+        Args:
+            workspace_id (int): Workspace ID (from URL path)
+
+        Returns:
+            dict: Response containing:
+                - success (bool): True when the caller may see this workspace
+                - data (dict): `{available, reason, level, resources}`；拿不到用量時
+                  `available` 為 False 並帶 `reason`（值域見
+                  `services/workspace_quota.unavailable`），仍是 success=True
+                - error (str): 'Workspace not found or access denied'（非成員／不存在）
+        """
+        capability = _PaaSCapability(request.env)
+        workspace = capability.workspace(workspace_id)
+        if not workspace.exists() or not capability.access(workspace):
+            return {'success': False, 'error': _('Workspace not found or access denied')}
+        return {'success': True, 'data': self._workspace_quota_view(workspace)}
+
+    def _workspace_quota_view(self, workspace: Any) -> dict[str, Any]:
+        """#1647：向 operator 讀這個工作區 namespace 的 quota，轉成前台形狀。
+
+        純唯讀：一次 operator GET，不動任何 record。這是 list/get 以外另開的端點——
+        `_list_services`／`_get_service` 維持純讀 DB（#1159 Q1），不在那兩支裡呼叫 operator。
+        「沒有」「operator 太舊」「失敗」各回自己的 reason，不共用一個空值
+        （docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md）。
+        """
+        from ..services import workspace_quota
+
+        namespace = workspace_quota.workspace_namespace(request.env, workspace)
+        if not namespace:
+            return workspace_quota.unavailable('no_namespace')
+        # 工作區在這個 namespace 裡要有租戶看得到的服務才問 operator。空工作區（namespace
+        # 還沒建）、只有 conceal_instances 服務的工作區（那條鏈對 /woow 不存在，見
+        # hidden-template-presentation-chain）、服務住在舊 namespace 而與現在的推導值
+        # 不同的工作區，都落在這裡：沒有東西可顯示，也不對 operator 發任何請求。
+        CloudService = workspace.env['woow_paas_platform.cloud_service']
+        if not CloudService.search_count([
+            ('workspace_id', '=', workspace.id),
+            ('helm_namespace', '=', namespace),
+            ('template_id', 'not in', self._hidden_template_ids(request.env)),
+        ], limit=1):
+            return workspace_quota.unavailable('no_namespace')
+
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return workspace_quota.unavailable('disabled')
+        try:
+            report = client.get_namespace_quota(namespace)
+        except PaaSOperatorError as e:
+            # 比這個端點舊的 operator 只替同一路徑註冊了 PUT ⇒ GET 回 405（404 是更舊、
+            # 連路徑都沒有的版本）。那是「還沒有這個功能」，不是故障。
+            reason = 'operator_outdated' if e.status_code in (404, 405) else 'error'
+            _logger.info(
+                "Workspace quota unavailable: workspace=%s namespace=%s reason=%s (%s)",
+                workspace.id, namespace, reason, e)
+            return workspace_quota.unavailable(reason)
+        return workspace_quota.build_view(report)
+
     # ==================== Workspace Members API ====================
 
     @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="json")
