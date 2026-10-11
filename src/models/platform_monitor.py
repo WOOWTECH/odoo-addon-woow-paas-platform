@@ -93,6 +93,7 @@ class PlatformMonitor(models.Model):
     SUMMARY_STORAGE_LOW = 'PaaS monitor: cluster storage scheduling capacity is running low'
     SUMMARY_STORAGE_REJECTED = 'PaaS monitor: deployments rejected for lack of cluster storage'
     SUMMARY_STORAGE_EXPANSION_REJECTED = 'PaaS monitor: plan changes rejected because a disk cannot be enlarged'
+    SUMMARY_COMPUTE_QUOTA_REJECTED = 'PaaS monitor: changes rejected because the workspace quota cannot fit them'
 
     @api.model
     def _singleton(self):
@@ -482,6 +483,33 @@ class PlatformMonitor(models.Model):
             'could not be enlarged (reason "capacity" means the cluster storage (Longhorn) has no '
             'room for the extra size on the disks holding its replicas). Free scheduling capacity '
             'or add storage, then ask the tenant to try again:'), append_line=line)
+
+    @api.model
+    def _report_compute_quota_rejection(self, service, operation, detail):
+        """#1647：租戶的變更在套用（與扣款）前被 operator 的 compute 配額預檢擋下——一台一行。
+
+        ``operation``：``reconfigure``／``change_plan``／``rollback``（管理員自己按的 Redeploy
+        當場在對話框看到數字，不走這裡）。``detail`` 是 operator 409 的 dict。
+        """
+        shortfalls = '; '.join(
+            '%s needs %s / limit %s / other workloads %s / short by %s' % (
+                s.get('resource'), s.get('required'), s.get('hard'), s.get('other'),
+                s.get('short_by'))
+            for s in detail.get('shortfalls') or [] if isinstance(s, dict))
+        consumers = ', '.join(
+            '%s (%s)' % (c.get('owner'), c.get('value'))
+            for c in detail.get('consumers') or [] if isinstance(c, dict))
+        line = _(
+            '%(name)s (id=%(id)s, namespace %(ns)s, %(operation)s): %(shortfalls)s. Largest '
+            'other consumers: %(consumers)s.',
+            name=service.name, id=service.id, ns=detail.get('namespace') or '?',
+            operation=operation, shortfalls=shortfalls or '?', consumers=consumers or '-')
+        return self._safe_alert(self.SUMMARY_COMPUTE_QUOTA_REJECTED, _(
+            'Changes requested by tenants were rejected before anything was applied or charged '
+            'because the CPU / memory quota of their workspace cannot fit the service after the '
+            'change. The tenants were told to free resources or contact support. Raise the '
+            'quota of that workspace or free resources in its namespace, then ask the tenant to '
+            'try again:'), append_line=line)
 
     @api.model
     def _orphans_text(self, orphans):

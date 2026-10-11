@@ -224,8 +224,10 @@ class TestHaltedGuardSurvivesStateRewrite(_Base):
         captured = {}
         real_assemble = type(svc)._assemble_deploy_values
 
-        def _spy(self_svc):
-            result = real_assemble(self_svc)
+        # #1647：reconfigure 改在寫入**之前**以 ``values=`` 組好全量 values（同步預檢與背景
+        # upgrade 共用同一組），所以 spy 要原樣轉發參數；守的不變式不變——送出去的是 Halted。
+        def _spy(self_svc, *args, **kwargs):
+            result = real_assemble(self_svc, *args, **kwargs)
             captured['values'] = result['values']
             return result
 

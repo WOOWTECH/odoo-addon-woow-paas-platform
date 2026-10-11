@@ -169,6 +169,10 @@ _CONFIG_PARAMETERS = [
     # `test_public_url_dns_gate_648.py::TestNewConfigParametersAreRegisteredForUninstall`。
     'woow_paas_platform.dns_grace_seconds',
     'woow_paas_platform.dns_gate_enabled',
+    # #1647：升級前 compute 配額預檢的 prod kill switch（未設＝開；cloud_service.py 的
+    # `_COMPUTE_QUOTA_PRECHECK_PARAM`）。「模組常數＋get_param()」寫法，lint 掃不到 ⇒ 補在
+    # `test_compute_quota_preflight_1647.py::TestComputeQuotaPrecheckSwitch1647`。
+    'woow_paas_platform.compute_quota_precheck_enabled',
     # #1257 Q37：post-deploy init 的 unknown／partial 額度與等待時限（「模組常數＋
     # get_param()」寫法，lint 掃不到 ⇒ 補在
     # `test_init_execution_control_1257.py::TestInitConfigParametersRegisteredForUninstall`）。

@@ -616,6 +616,9 @@ _DNS_GRACE_PARAM = 'woow_paas_platform.dns_grace_seconds'
 # 預設開；只有明確設成假值才關。
 _DNS_GATE_ENABLED_PARAM = 'woow_paas_platform.dns_gate_enabled'
 _FALSEY_PARAM_VALUES = ('0', 'false', 'no', 'off')
+# #1647：升級前的 compute 配額預檢（operator 端判斷）要不要請 operator 做。prod kill switch：
+# 預檢誤判時設成假值，平台就不再送旗標、行為回到加入預檢之前。未設＝開。
+_COMPUTE_QUOTA_PRECHECK_PARAM = 'woow_paas_platform.compute_quota_precheck_enabled'
 
 # age timeout 管轄的狀態。**`initializing` 刻意不在內**，但它**不再是「不計時」**
 # （#1257 Q3 明文取代 #489 的原註解）：post-deploy init 有自己的一組上界，分工是
@@ -2315,8 +2318,22 @@ class CloudService(models.Model):
                     values=values,
                     sensitive_values=sensitive_values or None,
                     reset_values=True,
+                    # #1647：請 operator 在套用前檢查工作區的 compute 配額放不放得下。
+                    check_compute_quota=self._compute_quota_check_requested(),
                 )
             except PaaSOperatorError as e:
+                # #1647：operator 判定配額放不下、什麼都沒套用（helm 之前）。這裡還沒到提交點，
+                # UserError 讓整筆交易回捲（含上面 `_refresh_template_images` 的寫入）是對的；
+                # 管理員當場在對話框看到數字，不另發 activity。
+                quota_message = self._compute_quota_error_message(
+                    e.detail, audience='admin', operation='redeploy')
+                if quota_message:
+                    _logger.warning(
+                        "[#1647] redeploy of service id=%s refused by the operator's compute "
+                        "quota pre-check (nothing applied): %s. If the pre-check is wrong, set "
+                        "the system parameter %s to False to turn it off.",
+                        self.id, e.detail.get('shortfalls'), _COMPUTE_QUOTA_PRECHECK_PARAM)
+                    raise UserError(quota_message) from e
                 # #1552：503 operator_busy 的 detail 是 dict（error_code＋中文 message）。
                 detail = e.detail.get('message') if isinstance(e.detail, dict) else e.detail
                 raise UserError(
@@ -3532,6 +3549,128 @@ class CloudService(models.Model):
         self.ensure_one()
         self.env['woow_paas_platform.platform_monitor'].sudo()._report_storage_expansion_rejection(
             self.sudo(), plan.sudo(), detail)
+
+    def _compute_quota_error_message(self, detail, audience='tenant', operation='reconfigure',
+                                     lang=None, with_ending=True):
+        """#1647：operator 回「工作區 compute 配額放不下這次變更」時的訊息；其他錯誤回 ``None``。
+
+        operator（``extra/paas-operator/src/services/compute_quota.py``）在 helm 套用任何東西
+        之前，用同一份 dry-run manifest 算出這個 release 升級後的 pod 放不放得進 namespace 的
+        ResourceQuota；確定放不下時回 409、``detail.error_code == COMPUTE_QUOTA_ERROR_CODE``，
+        **什麼都沒套用**。2026-10-10 正式站就是這種升級把服務換成 0 個 pod、平台卻顯示 running。
+
+        ``audience='tenant'``（預設）：寫給租戶——哪一種資源、需要多少、上限多少、同工作區其他
+        workload 佔了多少、還差多少，以及他能做什麼。**不出現** namespace、quota 物件名、其他
+        pod 的名稱。同一種資源（CPU 的 limits 與 requests）只講一次、最多講兩種。``operation``
+        決定結尾（``change_plan`` 講「方案沒有變更、沒有扣款」，其餘講「沒有套用任何變更」）；
+        ``with_ending=False`` 只回資源那幾句（``_upgrade_failure_message`` 自己有包裝句）。
+
+        ``audience='admin'``：寫給按 Redeploy 的管理員——逐項數字、namespace、quota 名稱與佔用
+        最多的其他 workload。⛔ 不要把系統參數名稱寫進這則訊息：排隊的 redeploy
+        （``_cron_run_requested_redeploys``）會把它寫進租戶看得到的 ``error_message``；
+        kill switch 的名稱寫在 log 與 operator README。
+
+        ``lang`` 不給＝呼叫端的語言；背景執行緒沒有語言，由 ``_upgrade_failure_message`` 傳
+        服務建立者的語言進來。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import COMPUTE_QUOTA_ERROR_CODE
+        if not isinstance(detail, dict) or detail.get('error_code') != COMPUTE_QUOTA_ERROR_CODE:
+            return None
+        env = self.with_context(lang=lang or self.env.lang).env
+        shortfalls = [s for s in detail.get('shortfalls') or [] if isinstance(s, dict)]
+
+        def amount(shortfall, key):
+            # operator 的數字都是字串：cpu 以核為單位，其餘 "8Gi"／"512Mi" → "8 GiB"／"512 MiB"。
+            text = str(shortfall.get(key) or '?')
+            if shortfall.get('dimension') == 'cpu':
+                return text + ' vCPU'
+            for suffix, unit in (('Gi', ' GiB'), ('Mi', ' MiB')):
+                if text.endswith(suffix):
+                    return text[:-len(suffix)] + unit
+            return text
+
+        if audience == 'admin':
+            lines = [env._(
+                'The redeploy was stopped before anything was applied: the workspace quota '
+                'cannot fit this service after the upgrade.')]
+            for shortfall in shortfalls:
+                lines.append(env._(
+                    '%(key)s: needs %(required)s, limit %(hard)s, in use %(used)s (this service '
+                    '%(own)s, other workloads %(other)s), short by %(short)s',
+                    key=shortfall.get('resource') or '?',
+                    required=amount(shortfall, 'required'), hard=amount(shortfall, 'hard'),
+                    used=amount(shortfall, 'used'), own=amount(shortfall, 'release_current'),
+                    other=amount(shortfall, 'other'), short=amount(shortfall, 'short_by')))
+            consumers = ', '.join(
+                '%s (%s)' % (c.get('owner'), c.get('value'))
+                for c in detail.get('consumers') or [] if isinstance(c, dict))
+            lines.append(env._(
+                'Namespace %(ns)s, ResourceQuota %(quota)s. Largest other consumers: '
+                '%(consumers)s.',
+                ns=detail.get('namespace') or '?', quota=detail.get('quota') or '?',
+                consumers=consumers or '-'))
+            lines.append(env._(
+                'Raise the workspace quota or free resources in the namespace, then redeploy.'))
+            return '\n'.join(lines)
+
+        resource_names = {
+            'cpu': env._('CPU'),
+            'memory': env._('memory'),
+            'ephemeral-storage': env._('temporary disk space'),
+        }
+        parts = []
+        described = set()
+        for shortfall in shortfalls:
+            dimension = shortfall.get('dimension')
+            if dimension in described:
+                continue
+            described.add(dimension)
+            resource = resource_names.get(dimension) or str(shortfall.get('resource') or '?')
+            if shortfall.get('phase') == 'rolling':
+                parts.append(env._(
+                    'This workspace does not have enough %(resource)s quota for this change: '
+                    'while the service is being replaced the old and the new instance run side '
+                    'by side, which needs %(required)s more on top of the %(used)s already in '
+                    'use; the workspace limit is %(hard)s (short by %(short)s).',
+                    resource=resource, required=amount(shortfall, 'required'),
+                    used=amount(shortfall, 'used'), hard=amount(shortfall, 'hard'),
+                    short=amount(shortfall, 'short_by')))
+            else:
+                parts.append(env._(
+                    'This workspace does not have enough %(resource)s quota for this change: '
+                    'the service needs %(required)s, the workspace limit is %(hard)s and other '
+                    'workloads in the workspace are using %(other)s (short by %(short)s).',
+                    resource=resource, required=amount(shortfall, 'required'),
+                    hard=amount(shortfall, 'hard'), other=amount(shortfall, 'other'),
+                    short=amount(shortfall, 'short_by')))
+            if len(parts) == 2:
+                break
+        if not parts:
+            parts.append(env._(
+                'This workspace does not have enough CPU or memory quota for this change.'))
+        if with_ending:
+            if operation == 'change_plan':
+                parts.append(env._(
+                    'The plan was not changed and nothing was charged. Stop or delete services '
+                    'you no longer need in this workspace and try again, or contact support to '
+                    'raise the workspace quota.'))
+            else:
+                parts.append(env._(
+                    'Nothing was changed and the service keeps running with its current '
+                    'settings. Stop or delete services you no longer need in this workspace and '
+                    'try again, or contact support to raise the workspace quota.'))
+        return ' '.join(parts)
+
+    def _alert_compute_quota_rejection(self, operation, detail):
+        """#1647：租戶的變更（儲存設定／換方案／回復版本）被 compute 配額預檢擋下時告警給系統管理員。
+
+        租戶自己調不了工作區配額，出口在管理員手上。租戶身分呼叫 ⇒ 告警寫入要提權
+        （activity 給 base.group_system）；提權只在這裡，controller 不 sudo。
+        """
+        self.ensure_one()
+        self.env['woow_paas_platform.platform_monitor'].sudo()._report_compute_quota_rejection(
+            self.sudo(), operation, detail)
 
     def _alert_cluster_storage_capacity_rejection(self, detail):
         """#1415：開通被叢集儲存額度擋下時，告警給系統管理員（一台一行，同 summary 未處理前追加）。"""
@@ -6286,6 +6425,23 @@ class CloudService(models.Model):
             return True
         return str(raw).strip().lower() not in _FALSEY_PARAM_VALUES
 
+    def _compute_quota_check_enabled(self):
+        """#1647：compute 配額預檢的總開關（prod kill switch）。未設＝開。"""
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            _COMPUTE_QUOTA_PRECHECK_PARAM)
+        if raw in (None, False, ''):
+            return True
+        return str(raw).strip().lower() not in _FALSEY_PARAM_VALUES
+
+    def _compute_quota_check_requested(self):
+        """#1647：這台服務的 upgrade 要不要請 operator 先檢查工作區的 compute 配額。
+
+        停權中的服務不檢查：upgrade 之後會被 scale 回 0（``_rescale_halted_after_upgrade``），
+        rendered manifest 的 replicas 不是它真正的需求——照那個數字算只會誤擋。
+        """
+        self.ensure_one()
+        return self._compute_quota_check_enabled() and not self._is_halted()
+
     def _public_url_hostname(self):
         """對外主機名（不含 scheme）；沒有對外網址回 ``''``。
 
@@ -7623,10 +7779,13 @@ class CloudService(models.Model):
 
         - 連線中斷／逾時：不確定有沒有套用 ⇒ 請重新送出；
         - operator 忙碌（503 ``operator_busy``）：確定沒有套用 ⇒ 請重新送出；
+        - 工作區 compute 配額放不下（409，#1647）：確定沒有套用 ⇒ 講清楚哪種資源差多少。
+          這是後備路徑——同步預檢通過（或沒問到）之後，背景的 PATCH 才被擋；
         - 其他 operator 錯誤：附上 operator 的說明（operator 端已是中文）。
         """
         self.ensure_one()
         from ..services.paas_operator import (
+            COMPUTE_QUOTA_ERROR_CODE,
             OPERATOR_BUSY_ERROR_CODE,
             PaaSOperatorConnectionError,
             PaaSOperatorTimeoutError,
@@ -7646,6 +7805,9 @@ class CloudService(models.Model):
             reason = env._(
                 'The deployment service was busy with other changes, so the new settings '
                 'were not applied.')
+        elif isinstance(detail, dict) and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE:
+            reason = self._compute_quota_error_message(
+                detail, operation='reconfigure', lang=lang, with_ending=False)
         else:
             text = detail.get('message') if isinstance(detail, dict) else detail
             reason = env._(
@@ -9106,22 +9268,33 @@ class CloudService(models.Model):
             self.id, restore_state,
         )
 
-    def _compute_ns_quota(self, workspace):
+    def _compute_ns_quota(self, workspace, allocated_overrides=None):
         """#278 A1 權威值：以 workspace 內『非 deleting』存活 service 加總算 quota。
 
         domain 已排除 state='deleting' → 呼叫時機在 state 翻 deleting /
         super().unlink() 之後即天然反映刪除後存活集。回傳字串 quantity
         （與 operator NamespaceQuotaUpdateRequest 及既有 create_namespace 一致）。
         floor 為 8 vCPU / 8Gi / 100Gi（workspace 清空後 survivor 為空亦不 skip）。
+
+        #1647 ``allocated_overrides``：``{service_id: {'allocated_vcpu': …,
+        'allocated_ram_gb': …, 'allocated_storage_gb': …}}``——加總時以它覆蓋對應服務
+        **有給的**欄位，只在記憶體內、不寫 DB。換方案在扣款前用它預演「換完之後會推送的
+        quota」（``_ns_quota_payload``）。不給＝現行行為；公式與下限不因它而變。
         """
         Svc = self.env['woow_paas_platform.cloud_service'].sudo()
         live = Svc.search([
             ('workspace_id', '=', workspace.id),
             ('state', '!=', 'deleting'),
         ])
-        vcpu = sum(live.mapped('allocated_vcpu'))
-        ram = sum(live.mapped('allocated_ram_gb'))
-        storage = sum(live.mapped('allocated_storage_gb'))
+        overrides = allocated_overrides or {}
+
+        def _total(field):
+            return sum(
+                overrides.get(svc.id, {}).get(field, svc[field]) or 0 for svc in live)
+
+        vcpu = _total('allocated_vcpu')
+        ram = _total('allocated_ram_gb')
+        storage = _total('allocated_storage_gb')
         return (
             str(max(vcpu * 3, 8)),
             f"{max(int(ram * 3), 8)}Gi",
@@ -9148,6 +9321,25 @@ class CloudService(models.Model):
             f"{max(live_count * 2, 4)}Gi",
             f"{max(live_count * 40, 80)}Gi",
         )
+
+    def _ns_quota_payload(self, workspace, allocated_overrides=None):
+        """#1647：``workspace`` 的 ns quota，組成 operator ``NamespaceQuotaUpdateRequest`` 的形狀。
+
+        組合 ``_compute_ns_quota`` 與 ``_compute_ns_ephemeral_quota``（值與 ``_push_ns_quota``
+        會推送的相同），鍵與 operator 那個 model 的欄位一致。純計算、不呼叫 operator。
+        ``allocated_overrides`` 見 ``_compute_ns_quota``——換方案在扣款前把「將推送的 quota」
+        交給升級預檢（``pending_quota``），升到較大方案才不會被還沒擴的舊上限誤擋。
+        """
+        cpu, memory, storage = self._compute_ns_quota(
+            workspace, allocated_overrides=allocated_overrides)
+        eph_request, eph_limit = self._compute_ns_ephemeral_quota(workspace)
+        return {
+            'cpu_limit': cpu,
+            'memory_limit': memory,
+            'storage_limit': storage,
+            'ephemeral_storage_request': eph_request,
+            'ephemeral_storage_limit': eph_limit,
+        }
 
     def _push_ns_quota(self, workspace, helm_namespace):
         """best-effort：重算並 PUT ns quota；operator 未設定 / 失敗只 log，

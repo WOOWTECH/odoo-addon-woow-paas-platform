@@ -1077,6 +1077,8 @@ from . import test_n8n_init_owner_changed_1534
 from . import test_mcp_onetime_credentials_1542
 # #1552：背景 upgrade 失敗不再靜默（poll 先推回 running 也記 error）、中文說明、error 可重新送出修改配置。
 from . import test_upgrade_failure_1552
+# #1647：升級前檢查工作區 compute 配額（Redeploy／儲存設定／換方案／保留憑證的回復），放不下就不套用。
+from . import test_compute_quota_preflight_1647
 # #1535：自訂網域未實作，服務頁按鈕與 CNAME 教學對租戶隱藏。
 from . import test_custom_domain_hidden_1535
 # #1560：服務頁依角色顯示管理按鈕、權限不足訊息、重設密碼確認框、回復版本中文化。

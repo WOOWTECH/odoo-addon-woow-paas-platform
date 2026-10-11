@@ -33,6 +33,8 @@ from ..services.paas_operator import (
     PaaSOperatorError,
     PaaSOperatorConnectionError,
     STORAGE_EXPANSION_ERROR_CODE,
+    COMPUTE_QUOTA_ERROR_CODE,
+    COMPUTE_QUOTA_SYNC_PREFLIGHT_TIMEOUT,
 )
 from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 parser 搬到 template model
 from ..services.chart_version import (
@@ -1332,6 +1334,11 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _(
                 'This plan cannot be applied to the service. Please contact support.')}
         reapply = new_values != old_values
+        # #1158 Q4：帳面 allocated_* 與新方案同步（營運手調過的維度保留）。#1647：在這裡先算
+        # 好——扣款前的預檢要用它推出「換完之後會推送的 ns quota」，扣款後的寫入沿用同一份
+        # （整個流程只算一次，預檢看到的與之後寫入的不會分岔）。純計算、不寫 DB。
+        allocated_vals = service._plan_change_allocated_vals(
+            old_sub.sh_subscription_plan_id, plan, old_values, new_values)
         client = None
         if reapply:
             legacy_error = service._woow_odoo_legacy_release_error()
@@ -1353,7 +1360,15 @@ class PaasController(HiddenChainMixin, Controller):
             upgrade_kwargs = self._upgrade_kwargs(
                 service, resolved_version,
                 service._assemble_deploy_values(values=new_values, plan=plan)['values'])
-            denial = self._change_plan_preflight_denial(service, plan, client, upgrade_kwargs)
+            # #1647：ns quota 在扣款**之後**才推送（下方 `_push_ns_quota`）。預檢若拿叢集上
+            # 現在的上限去比，升到較大方案會被還沒擴的舊上限誤擋 ⇒ 把「將推送的 quota」一起
+            # 交給 operator。allocated_* 沒變就不會推送，也就不帶。
+            pending_quota = (
+                service._ns_quota_payload(
+                    service.workspace_id, allocated_overrides={service.id: allocated_vals})
+                if allocated_vals and upgrade_kwargs.get('check_compute_quota') else None)
+            denial = self._change_plan_preflight_denial(
+                service, plan, client, upgrade_kwargs, pending_quota=pending_quota)
             if denial:
                 return denial
 
@@ -1396,10 +1411,8 @@ class PaasController(HiddenChainMixin, Controller):
             service.subscription_id.id if service.subscription_id else None,
         )
 
-        # #1158 Q4：帳面 allocated_* 與新方案同步（營運手調過的維度保留），同一交易寫入；
+        # #1158 Q4：帳面 allocated_*（上方已算好的 `allocated_vals`）同一交易寫入；
         # ns quota 在 helm upgrade **之前** push——先擴 quota，新 pod 才不會被 admission 擋。
-        allocated_vals = service._plan_change_allocated_vals(
-            old_sub.sh_subscription_plan_id, plan, old_values, new_values)
         if reapply:
             # 停權中的服務照 reconfigure（#482）：values 套上、upgrade 後 scale 回 0、
             # state 留在 suspended。換方案不升 chart、不 refresh image（#1160／#1184）。
@@ -1435,16 +1448,23 @@ class PaasController(HiddenChainMixin, Controller):
             },
         }
 
-    def _change_plan_preflight_denial(self, service, plan, client, upgrade_kwargs):
+    def _change_plan_preflight_denial(self, service, plan, client, upgrade_kwargs,
+                                      pending_quota=None):
         """#1513：換方案扣款前的 operator 升級預檢；要擋就回 endpoint 的失敗回應，放行回 None。
 
         只有一種放行：舊版 operator 沒有這個端點（404／405）——行為與 #1513 之前相同（發版
         順序是 operator 先）。其餘失敗（409 擴容被拒／不可變欄位衝突、5xx 渲染失敗、連不上、
         逾時）真正的 upgrade 也幾乎一定失敗，所以擋在扣款前（#1158 Q5「能預判的失敗全部擋在
         帳務之前」）。
+
+        #1647：``upgrade_kwargs`` 帶 ``check_compute_quota`` 時 operator 另外檢查工作區的
+        compute 配額；``pending_quota`` 是扣款後才會推送的 ns quota（只屬於預檢，不進
+        ``upgrade_kwargs``——那一組還要原樣送給真正的 upgrade）。放不下回 409＋
+        ``COMPUTE_QUOTA_ERROR_CODE``：告警給管理員，回租戶看得懂的訊息。
         """
         try:
-            client.upgrade_preflight(**upgrade_kwargs)
+            client.upgrade_preflight(
+                **upgrade_kwargs, **({'pending_quota': pending_quota} if pending_quota else {}))
             return None
         except PaaSOperatorError as exc:
             detail = exc.detail
@@ -1470,9 +1490,59 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': error,
                     'data': {'code': STORAGE_EXPANSION_ERROR_CODE,
                              'reason': detail.get('reason')}}
+        if (isinstance(detail, dict)
+                and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE):
+            service._alert_compute_quota_rejection('change_plan', detail)
+            return {'success': False,
+                    'error': service._compute_quota_error_message(
+                        detail, operation='change_plan'),
+                    'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
+                             'shortfalls': detail.get('shortfalls') or []}}
         return {'success': False, 'error': _(
             'The service could not be checked for the new plan right now. The plan was not '
             'changed and nothing was charged. Please try again later or contact support.')}
+
+    def _reconfigure_compute_quota_denial(self, service, client, upgrade_kwargs):
+        """#1647：儲存設定在寫入任何東西之前，同步問 operator 工作區的 compute 配額放不放得下。
+
+        要擋就回 endpoint 的失敗回應，放行回 None。背景 upgrade 失敗只會在事後把服務翻成
+        error（#1552）；而配額放不下是送出前就算得出來的——先問一次，租戶當場看到原因，
+        ``helm_values``／state 都還沒動，服務照原本的設定繼續跑。
+
+        **只認明說的拒絕**：HTTP 409 且 ``detail.error_code == COMPUTE_QUOTA_ERROR_CODE``。
+        其餘一切——舊 operator 沒有這個端點（404／405）、別種 409（不可變欄位、磁碟擴容）、
+        5xx、operator 忙碌（503）、逾時、連不上——都**不是**「配額放不下」，照舊進背景
+        upgrade，由 #1552 的失敗路徑處理（那些情況背景的 PATCH 會給出同樣或更準的答案）。
+        與換方案的 ``_change_plan_preflight_denial`` 刻意不同：那裡擋在扣款前，寧可多擋；
+        這裡只是把一種確定的失敗提前，不新增別的拒絕理由。
+
+        ``upgrade_kwargs`` 就是稍後交給背景 upgrade 的那一組（預檢與真正 upgrade 同參數）。
+        停權中的服務與 kill switch 關閉時它不帶 ``check_compute_quota``，這裡直接放行、
+        不多打一次 operator。
+        """
+        if not upgrade_kwargs.get('check_compute_quota'):
+            return None
+        try:
+            client.upgrade_preflight(
+                **upgrade_kwargs, timeout=COMPUTE_QUOTA_SYNC_PREFLIGHT_TIMEOUT)
+            return None
+        except PaaSOperatorError as exc:
+            detail = exc.detail
+            if not (exc.status_code == 409 and isinstance(detail, dict)
+                    and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE):
+                _logger.info(
+                    "[CLOUD_SVC] reconfigure service=%s: compute quota pre-check inconclusive "
+                    "(%s, status=%s); proceeding with the upgrade",
+                    service.id, type(exc).__name__, exc.status_code)
+                return None
+        _logger.warning(
+            "[CLOUD_SVC] reconfigure service=%s refused by the compute quota pre-check "
+            "(nothing applied): %s", service.id, detail.get('shortfalls'))
+        service._alert_compute_quota_rejection('reconfigure', detail)
+        return {'success': False,
+                'error': service._compute_quota_error_message(detail, operation='reconfigure'),
+                'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
+                         'shortfalls': detail.get('shortfalls') or []}}
 
     def _skip_trial_invoice_payability(self, service, sub=None):
         """預演 skip-trial 將建立的 invoice，套用 billing 的 replay-safe SSOT。
@@ -4511,6 +4581,8 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('PaaS Operator not configured')}
 
         try:
+            # #1647：只有下面改 addon 那段會賦值；之後被預檢擋下時據此還原 addon 勾選。
+            old_addon_ids = None
             # Update Odoo addon selection if provided
             addon_changed = False
             if odoo_addon_ids is not None and service.template_id.slug == 'odoo':
@@ -4645,6 +4717,21 @@ class PaasController(HiddenChainMixin, Controller):
             # 這條路真的可達（對照 action_redeploy 的同款收斂）。
             halted = service._is_halted()
 
+            # #1647：全量 values 在這裡（寫入之前）就組好，同步預檢與稍後的背景 upgrade 共用
+            # 同一組 `upgrade_kwargs`。`_assemble_deploy_values(values=…)` 不改輸入、不寫 DB，
+            # 結果與「寫完 helm_values 再從 stored values 組」相同（落庫前後都剝同一組敏感鍵）。
+            upgrade_kwargs = self._upgrade_kwargs(
+                service, resolved_version,
+                service._assemble_deploy_values(values=merged_values)['values'])
+            denial = self._reconfigure_compute_quota_denial(service, client, upgrade_kwargs)
+            if denial:
+                # helm_values、state、last_upgraded_at、init 代數都還沒動；唯一已經寫下去的
+                # 是上面的 addon 勾選，還原它（同移除檢查被拒時的做法）。
+                if old_addon_ids is not None:
+                    service.write({
+                        'odoo_addon_ids': [(6, 0, sorted(old_addon_ids))]})
+                return denial
+
             # Transition to upgrading BEFORE calling operator so the
             # frontend gets an immediate response with state='upgrading'.
             # #559：helm_values 這一格走提權入口，其餘欄位維持使用者身分寫入
@@ -4679,7 +4766,8 @@ class PaasController(HiddenChainMixin, Controller):
             # #1435：停權中的服務 upgrade 後會被 scale 回 0，不重啟（重啟只會白白拉起來）。
             self._start_background_upgrade(
                 service, client, resolved_version, halted,
-                restart_after_upgrade=bool(secrets_changed and not halted))
+                restart_after_upgrade=bool(secrets_changed and not halted),
+                upgrade_kwargs=upgrade_kwargs)
 
             return {
                 'success': True,
@@ -4736,6 +4824,10 @@ class PaasController(HiddenChainMixin, Controller):
             # None 的 `version`，等於把版本決定權交給 registry 的 latest。
             version=resolved_version,
             reset_values=True,
+            # #1647：請 operator 在套用前檢查工作區的 compute 配額放不放得下。放在這裡，
+            # reconfigure／換方案的預檢與背景 upgrade 才會帶同一個值（停權中、或 kill
+            # switch 關閉時是 False——client 只在 True 時把它放進 body）。
+            check_compute_quota=service._compute_quota_check_requested(),
         )
         if odoo_sensitive:
             upgrade_kwargs['sensitive_values'] = odoo_sensitive
@@ -5020,6 +5112,9 @@ class PaasController(HiddenChainMixin, Controller):
                 revision=revision,
                 chart=service.template_id.helm_chart_name if preserve_paths else None,
                 preserve_value_paths=preserve_paths or None,
+                # #1647：保留憑證的回復是一次 helm upgrade，operator 可以在套用前檢查工作區
+                # 的 compute 配額；純 helm rollback（沒有平台憑證的模板）operator 不檢查。
+                check_compute_quota=service._compute_quota_check_requested(),
             )
 
             # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
@@ -5060,7 +5155,19 @@ class PaasController(HiddenChainMixin, Controller):
                     and detail.get('error_code') == ROLLBACK_CHART_DOWNGRADE_ERROR_CODE):
                 return {'success': False,
                         'error': self._rollback_chart_downgrade_error(detail)}
-            return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=e.detail or e.message)}
+            # #1647：operator 判定回復後的 pod 放不進工作區的 compute 配額——什麼都沒套用，
+            # 上面的 state／last_upgraded_at 寫入也還沒發生（例外在 rollback_release 就拋了）。
+            if (e.status_code == 409 and isinstance(detail, dict)
+                    and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE):
+                service._alert_compute_quota_rejection('rollback', detail)
+                return {'success': False,
+                        'error': service._compute_quota_error_message(
+                            detail, operation='rollback'),
+                        'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
+                                 'shortfalls': detail.get('shortfalls') or []}}
+            # dict 形的 detail（例 503 operator_busy）取它的 message，不把整個 dict 印給租戶。
+            reason = detail.get('message') if isinstance(detail, dict) else detail
+            return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=reason or e.message)}
 
     @staticmethod
     def _rollback_chart_downgrade_error(floor: dict) -> str:
