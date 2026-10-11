@@ -69,10 +69,12 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
    判準是客戶資料列（`scripts/fingerprint_business.sql` 檔頭）：還原當時就存在的客戶資料列必須原封不動；模組資料列
-   被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。filestore：仍被附件引用的檔不能少、內容不能變；
+   被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。模組擁有的列（含 noupdate）的可翻譯欄位只比
+   en_US——升級會替它們補上新翻譯。filestore：仍被附件引用的檔不能少、內容不能變；
    模組附件換了內容後被 Odoo 回收的舊檔列為「預期內」。
    完成條件：verify exit 0，「預期內的變動」逐條看過；`--cleanup` 才會刪掉含客戶資料的 incoming PVC。
    比對要在任何人登入目標站之前跑：管理員登入會改寫 `web.base.url`，之後的比對會多出 `ir_config_parameter` 不一致。
+   session 檔不在搬遷範圍：搬過去之後所有人都要重新登入（Odoo 的 autovacuum 會把舊的裝置紀錄標成已撤銷）。
    - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝
      zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。要確認：第一次 verify 先不帶
      `--cleanup`，Redeploy 後再跑一次帶 `--cleanup` 的。
@@ -91,7 +93,8 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 - **官方 SQL**：Job 用 release 的 odoo image 跑 `odoo neutralize --stdout`，依已安裝模組組出——停用排程（autovacuum 除外）、
   寄信主機換成假的、停用收信、金流供應商、webhook、網站網域等。
 - **補充 SQL**（`scripts/target/neutralize-supplement.sql`）：全部使用者的密碼換成彩排密碼、刪 API key 與 2FA；排程的
-  模組資料改 `noupdate`（`-u all` 不會把它開回來）；WoowTech addon 的對外整合（綠界發票換測試商店、綠界金流憑證、
+  模組資料改 `noupdate`（`-u all` 不會把它開回來）；金流供應商全部停用（含測試模式，否則 `payment` 模組升級時會把
+  交易後處理排程開回來）；WoowTech addon 的對外整合（綠界發票換測試商店、綠界金流憑證、
   POS 自助點餐的 Uber Direct 與出單代理）。
 - **斷言**（`scripts/target/neutralize-assert.sql`）：有任何一項沒中和（`nfail` 行）Job 就失敗、不寫 marker，Odoo 開不了機。
 - **要人看的清單**：Job log 與 `neutralize-report.txt` 的 `nscan` 行＝欄名像憑證、仍有值的欄位（只列表.欄與筆數）。
