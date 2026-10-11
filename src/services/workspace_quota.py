@@ -16,6 +16,7 @@ _workspace_quota_view``，經 ``PaaSOperatorClient.get_namespace_quota``），�
   ``reason``，不共用一個空值。
 """
 import math
+from fractions import Fraction
 
 from .naming import make_namespace
 
@@ -92,6 +93,18 @@ def _number(value):
     return value if finite else None
 
 
+def _exact(value):
+    """數字 → 精確有理數。
+
+    float 取的是它**印出來的那個十進位數**（``18.9`` 就是 189/10），不是它在記憶體裡的
+    二進位近似值：operator 給的 cores 是四捨五入到 millicore 的十進位數，經 JSON 傳過來
+    再讀成 float，``repr`` 還原得回原本那個數。int（bytes、顆數）原樣。
+    """
+    if isinstance(value, int):
+        return Fraction(int(value))
+    return Fraction(repr(float(value)))
+
+
 def _view_cell(key, unit, divisor, cell):
     """operator 報表的一格 → 前台的一格；資料不完整或不合理回 ``None``（略過該格）。"""
     if not isinstance(cell, dict):
@@ -100,29 +113,36 @@ def _view_cell(key, unit, divisor, cell):
     used = _number(cell.get('used_value'))
     if hard is None or used is None or hard <= 0 or used < 0:
         return None
-    # 等級與百分比一律由 hard／used 算，**不使用** operator 給的 ``ratio``：那是四捨五入過
-    # 的顯示值（0.89996 會變 0.9），拿它比門檻會提早跳級。
-    if used >= hard:
+    # 百分比用精確有理數算、無條件捨去（89.99% 顯示 89；超額時照實大於 100），等級再由
+    # **同一個**百分比決定 ⇒ 畫面上顯示 90% 的那一格一定是 warning、顯示 100% 以上的一定
+    # 是 full，兩者不會各算各的。
+    #
+    # 不可拿浮點數直接比門檻：``18.9 * 100`` 是 1889.9999999999998，比不過 ``21 * 90``，
+    # 剛好用到 90% 的格會被判成 ok，而百分比卻顯示 90（上限 21／37／42／74／79／84／89
+    # 核都會中）。同理 ``0.29 * 100 / 1`` 是 28.999999999999996，直接捨去會顯示成 28。
+    #
+    # 也**不使用** operator 給的 ``ratio``：那是四捨五入過的顯示值（0.89996 會變 0.9），
+    # 拿它比門檻會提早跳級。
+    percent = math.floor(_exact(used) * 100 / _exact(hard))
+    if _number(percent) is None:
+        # 百分比大到轉不成 float＝used 與 hard 差了三百多個數量級：不是合理的配額數字，
+        # 略過該格。
+        return None
+    if percent >= 100:
         level = 'full'
-    elif used * 100 >= hard * QUOTA_WARN_PERCENT:
+    elif percent >= QUOTA_WARN_PERCENT:
         level = 'warning'
     else:
         level = 'ok'
-    try:
-        return {
-            'key': key,
-            'unit': unit,
-            'used': round(used / divisor, 2),
-            'hard': round(hard / divisor, 2),
-            'remaining': round(max(hard - used, 0) / divisor, 2),
-            # 無條件捨去（89.99% 顯示 89，與 ok 等級一致）；超額時照實大於 100。
-            # 1e-9 抵銷浮點誤差：0.29 * 100 / 1 是 28.999999999999996，不加會顯示成 28。
-            'percent': int(used * 100 / hard + 1e-9),
-            'level': level,
-        }
-    except ArithmeticError:
-        # 相除溢位（used 與 hard 差了三百多個數量級）：不是合理的配額數字，略過該格。
-        return None
+    return {
+        'key': key,
+        'unit': unit,
+        'used': round(used / divisor, 2),
+        'hard': round(hard / divisor, 2),
+        'remaining': round(max(hard - used, 0) / divisor, 2),
+        'percent': percent,
+        'level': level,
+    }
 
 
 def build_view(report):

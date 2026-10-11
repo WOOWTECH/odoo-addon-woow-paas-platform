@@ -164,6 +164,60 @@ class TestWorkspaceQuotaView1647(TransactionCase):
             view = workspace_quota.build_view(_report(limits__cpu=_cpu(100, used)))
             self.assertEqual(_by_key(view)['cpu']['level'], level, used)
 
+    def test_level_thresholds_are_exact_on_fractional_cores(self):
+        """剛好用到 90% 就是 warning：不受浮點誤差影響，而且與同一格顯示的百分比一致。
+
+        這七組上限用浮點相乘去比門檻會判錯——``18.9 * 100`` 是 1889.9999999999998，比不過
+        ``21 * 90``，於是那一格顯示 90% 卻不轉琥珀、也沒有告警句。21／42／84 是
+        ``_compute_ns_quota`` 算得出來的上限（7／14／28 vCPU × 3）。
+        """
+        for hard, used in ((21, 18.9), (37, 33.3), (42, 37.8), (74, 66.6), (79, 71.1),
+                           (84, 75.6), (89, 80.1)):
+            # operator 給的 cores 是 float（``float(round(q, 3))``）；int 上限也一併驗。
+            for hard_value in (hard, float(hard)):
+                cpu = _by_key(workspace_quota.build_view(
+                    _report(limits__cpu=_cpu(hard_value, used))))['cpu']
+                self.assertEqual((cpu['percent'], cpu['level']), (90, 'warning'),
+                                 (hard_value, used))
+        # 反向對照：差一個 millicore 就還沒到門檻；到 100% 才是 full。
+        for hard, used, percent, level in ((21.0, 18.899, 89, 'ok'),
+                                           (21.0, 18.901, 90, 'warning'),
+                                           (21.0, 20.999, 99, 'warning'),
+                                           (21.0, 21.0, 100, 'full'),
+                                           (21.0, 21.001, 100, 'full')):
+            cpu = _by_key(workspace_quota.build_view(
+                _report(limits__cpu=_cpu(hard, used))))['cpu']
+            self.assertEqual((cpu['percent'], cpu['level']), (percent, level), (hard, used))
+
+    def test_level_always_agrees_with_the_displayed_percent(self):
+        """等級由顯示的百分比決定：1–128 核的每個上限，在 90%／100% 門檻的兩側逐一核對。
+
+        used 以 millicore 為步距（operator 的精度）；門檻上的那一點與差一個 millicore 的
+        那一點都要落在對的那一邊。
+        """
+        warn = workspace_quota.QUOTA_WARN_PERCENT
+        checked = 0
+        for hard in range(1, 129):
+            for milli, percent, level in (
+                    (hard * warn * 10 - 1, warn - 1, 'ok'),
+                    (hard * warn * 10, warn, 'warning'),
+                    (hard * 1000 - 1, 99, 'warning'),
+                    (hard * 1000, 100, 'full')):
+                cpu = _by_key(workspace_quota.build_view(
+                    _report(limits__cpu=_cpu(float(hard), milli / 1000))))['cpu']
+                self.assertEqual((cpu['percent'], cpu['level']), (percent, level),
+                                 (hard, milli))
+                checked += 1
+        self.assertEqual(checked, 128 * 4)
+
+    def test_absurd_ratio_is_skipped_not_fatal(self):
+        """used 與 hard 差了三百多個數量級：不是合理的配額數字，略過該格、不 raise。"""
+        for hard, used in ((5e-324, 1e308), (1e-300, 10 ** 300), (1, 10 ** 307)):
+            view = workspace_quota.build_view(_report(limits__cpu=_cpu(hard, used)))
+            self.assertIs(view['available'], True, (hard, used))
+            self.assertEqual([c['key'] for c in view['resources']], ['memory', 'storage'],
+                             (hard, used))
+
     def test_level_thresholds_on_byte_values(self):
         """bytes 是整數：門檻是「恰好達到」才算，差 1 byte 都不提早跳級。"""
         hard = 20 * GI
