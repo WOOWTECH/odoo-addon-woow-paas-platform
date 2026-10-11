@@ -5,8 +5,9 @@
 `_PURE_READ_FORBIDDEN_CALLS`（list/get 純讀）。
 判準 6b：整個 controller 檔不得呼叫 `_CONTROLLER_FORBIDDEN_CALLS`（init 入口、poll、commit）。
 判準 5 的 #1647 擴充（`TestObserversNeverWriteState`）：workload 觀測的兩個函式
-（`_cron_check_running_workloads`／`_apply_workload_observation`）不得寫 `'state'`，
-找不到也要紅。
+（`_cron_check_running_workloads`／`_apply_workload_observation`）不得寫 `'state'`／
+`'error_message'`，找不到也要紅。寫入的形狀不只 `.write({字面 dict})`：先組變數 dict
+再寫、subscript 賦值、keyword 都要紅（那兩個函式實際上就是先組變數再寫）。
 
 守的是**這兩條判準自己**的鑑別力，不是被守的那棵樹乾不乾淨。分三半：
 
@@ -287,6 +288,79 @@ class TestObserversNeverWriteState(_Case):
                 self.assertEqual(len(violations), 1, violations)
                 self.assertIn("::%s " % func_name, violations[0])
                 self.assertIn("寫了 `'state'`", violations[0])
+
+    #: 判準 5 至少要擋的鍵（字面下限，同 `_OBSERVERS` 的理由）。
+    _FORBIDDEN_KEYS = ("state", "error_message")
+
+    #: 判準 5 至少要認得的寫入形狀：名稱 → 以 `{key}` 為佔位的函式本體。
+    #: 第一個是原本唯一認得的形狀；其餘三個在只認 `.write({字面 dict})` 的實作下全綠
+    #: ——而 `_apply_workload_observation` 真正的寫法正是「先組變數 dict 再寫」。
+    _WRITE_SHAPES = {
+        "literal dict passed to write": "self.write({{'{key}': 'error'}})",
+        "dict built in a variable": "vals = {{'{key}': 'error'}}\n        self.write(vals)",
+        "subscript assignment": "vals = {{}}\n        vals['{key}'] = 'error'\n"
+                                "        self.write(vals)",
+        "keyword argument": "self.write(dict({key}='error'))",
+    }
+
+    def test_every_write_shape_of_every_forbidden_key_is_flagged(self):
+        """敏感度：每個觀測函式 × 每個禁寫鍵 × 每種形狀，都恰好 1 筆違規並點名函式與鍵。
+
+        「恰好 1 筆」同時守住不重複報（`self.write({'state': …})` 既是 dict 字面、又是
+        write 的引數，只能算一筆）。
+        """
+        for func_name in self._OBSERVERS:
+            for key in self._FORBIDDEN_KEYS:
+                for shape, template in self._WRITE_SHAPES.items():
+                    with self.subTest(func=func_name, key=key, shape=shape):
+                        self._write(rl.POLL_MODEL_FILE, self._model_with(
+                            func_name, template.format(key=key)))
+                        violations = self.run_check()
+                        self.assertEqual(len(violations), 1, violations)
+                        self.assertIn("::%s " % func_name, violations[0])
+                        self.assertIn("寫了 `'%s'`" % key, violations[0])
+
+    def test_reconcile_cron_is_held_to_the_same_shapes(self):
+        """對帳 cron 也在 `_NO_STATE_WRITE_FUNCTIONS` 裡：變數 dict 帶 state 同樣要紅。"""
+        old = ("        release_facts = self._release_facts(None)\n"
+               "        self.write({**release_facts})\n")
+        self.assertEqual(_MODEL_SOURCE.count(old), 1, "mutation 前提不成立")
+        for key in self._FORBIDDEN_KEYS:
+            with self.subTest(key=key):
+                self._write(rl.POLL_MODEL_FILE, _MODEL_SOURCE.replace(
+                    old,
+                    "        release_facts = self._release_facts(None)\n"
+                    "        vals = {'%s': 'error', **release_facts}\n"
+                    "        self.write(vals)\n" % key))
+                violations = self.run_check()
+                self.assertEqual(len(violations), 1, violations)
+                self.assertIn("::_cron_reconcile_release_facts ", violations[0])
+                self.assertIn("寫了 `'%s'`" % key, violations[0])
+
+    def test_forbidden_key_floor_folded_in(self):
+        missing = set(self._FORBIDDEN_KEYS) - set(rl._NO_STATE_WRITE_KEYS)
+        self.assertFalse(missing, "判準 5 禁寫的鍵少了：%s" % sorted(missing))
+
+    def test_reading_state_and_domains_are_not_flagged(self):
+        """特異性：讀 state、拿它當 search domain、傳給無關的 keyword 都不是寫入。
+
+        這幾個形狀就是真實的 `_cron_check_running_workloads`／
+        `_apply_workload_observation` 裡有的——誤擊的話真實 repo 會恆紅。
+        """
+        bodies = {
+            "search domain": "return self.search([('state', '=', 'running')], order='id')",
+            "attribute read": "return 'unknown' if self.state != 'running' else 'healthy'",
+            "subscript read": "vals = {}\n        return vals['state'] if vals else None",
+            "unrelated keyword": "return self.get_status(include_workloads=True)",
+            "other dict keys": "vals = {'workload_checked_at': 1}\n"
+                               "        vals['workload_fault_code'] = 'no_pods'\n"
+                               "        self.write(vals)",
+        }
+        for func_name in self._OBSERVERS:
+            for label, body in bodies.items():
+                with self.subTest(func=func_name, shape=label):
+                    self._write(rl.POLL_MODEL_FILE, self._model_with(func_name, body))
+                    self.assertEqual(self.run_check(), [])
 
     def test_missing_observer_is_a_violation_not_clean(self):
         for func_name in self._OBSERVERS:

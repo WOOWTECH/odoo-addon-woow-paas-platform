@@ -164,7 +164,9 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      入、不探 DNS——第二份 poll 不得長回來。判準 5（不得寫 `state`）的
                      對象是 `_NO_STATE_WRITE_FUNCTIONS`：每日對帳 cron，以及 #1647 兩個
                      只觀測 running 服務的函式（`_cron_check_running_workloads`／
-                     `_apply_workload_observation`）。
+                     `_apply_workload_observation`）。判準 5 看函式本體內任何 dict
+                     字面鍵、subscript 賦值、呼叫 keyword 是否出現 `state`／
+                     `error_message`（不只 `.write({字面 dict})`；先組變數再寫也抓得到）。
                      ⚠ 只守**結構**（單一 producer 沒被繞過），不驗證回寫的值對不對——
                      那由 src/tests/test_poll_mirror_release_facts_627.py 實跑驗證。
                      形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
@@ -3553,6 +3555,9 @@ _NO_STATE_WRITE_FUNCTIONS = (
     (POLL_MODEL_FILE, "_cron_check_running_workloads"),
     (POLL_MODEL_FILE, "_apply_workload_observation"),
 )
+#: 判準 5 禁寫的欄位。`error_message` 與 `state` 同一個理由：租戶的故障 banner 直接吐它，
+#: 觀測者往裡面寫，等於換一條路把「running 但沒有 Pod」變成看起來像狀態機判定的錯誤。
+_NO_STATE_WRITE_KEYS = ("state", "error_message")
 #: 判準 1／2 的適用範圍＝所有 release 事實寫入者（背景 poll ＋ 對帳 cron；#1159 前 poll 有兩份）。
 #: #627 的教訓就是「N 份實作各寫一次」，所以新增寫入者必須加進這裡。
 _RELEASE_FACT_WRITERS = _POLL_IMPLEMENTATIONS + (_RECONCILE_IMPLEMENTATION,)
@@ -3594,6 +3599,13 @@ def check_poll_release_facts_single_source(root):
        #1647 起適用於 `_NO_STATE_WRITE_FUNCTIONS` 的每一個：workload 觀測
        （`_cron_check_running_workloads`／`_apply_workload_observation`）同樣只看
        running 的服務、同樣只能寫自己的觀測欄位；這兩個函式找不到也當違規。
+       ⚠ 看的是**函式本體內任何地方**出現 `_NO_STATE_WRITE_KEYS`（`state`／
+       `error_message`）的三種形狀，不是只看 `.write({字面 dict})`：(a) dict 字面的
+       常數鍵（先存變數再 `write(vals)` 也抓得到）、(b) `vals['state'] = …` 這種
+       subscript 賦值、(c) 任何呼叫的 keyword（`dict(state=…)`、`vals.update(state=…)`）。
+       第一版只認 `.write({...})`，而 `_apply_workload_observation` 的每一次寫入都是
+       先組變數 dict 再寫——往那些 dict 加 `'state'` 這條 gate 照樣綠（實測確認過），
+       也就是它對自己最主要的目標沒有鑑別力。domain 是 tuple 的 list，不會被誤擊。
     6. **list/get 純讀（#1159 Q1）。** `PaasController._list_services`／`_get_service`
        本體內不得呼叫 `_PURE_READ_FORBIDDEN_CALLS`（取 operator client、poll、DNS 探測、
        write／create／unlink／sudo／raw SQL `execute`）。它們回的是背景 poll 的最近觀測；在 request 裡
@@ -3619,6 +3631,12 @@ def check_poll_release_facts_single_source(root):
 
     - 只看**列名函式本體內**的 `.write()`。若有人把 write 搬進被它們呼叫的 helper，
       AST 走不到 ⇒ 看不見。這是已知邊界。
+    - 判準 5 只認上面列的三種形狀。**看不見**的寫法：屬性賦值（`service.state = …`）、
+      鍵不是字面常數（`vals[key] = …`、`dict.fromkeys(names, …)`、`{name: …}`）、
+      `setattr`、raw SQL，以及搬進 helper 的寫入。行為層由
+      `src/tests/test_workload_fault_1647.py` 的
+      `test_state_and_error_message_are_never_touched` 實跑驗證（但 PR 的 CI 不跑 Odoo
+      測試，那一層要等 merge 後或自己在沙盒跑）。
     - 只守**結構**，不驗證 `_release_facts` 回傳的內容對不對、也不驗證各實作跑出來的
       值相同——那是行為層的事，由
       `src/tests/test_poll_mirror_release_facts_627.py` 的
@@ -3670,6 +3688,31 @@ def check_poll_release_facts_single_source(root):
             if "state" in keys:
                 found.append(node.args[0])
         return found
+
+    def _forbidden_key_writes(func):
+        """該函式本體內所有「可能寫到 `_NO_STATE_WRITE_KEYS`」的位置 → [(行號, 鍵, 形狀)]。
+
+        三種形狀（判準 5 的 docstring 有理由）：dict 字面的常數鍵、subscript 賦值、
+        呼叫的 keyword。同一個 (行號, 鍵) 只報一次——`self.write({'state': …})` 不會因為
+        同時是「dict 字面」又是「write 的引數」而被算兩筆。
+        """
+        found = {}
+        for node in ast.walk(func):
+            if isinstance(node, ast.Dict):
+                for key in node.keys:
+                    if isinstance(key, ast.Constant) and key.value in _NO_STATE_WRITE_KEYS:
+                        found.setdefault((key.lineno, key.value), "dict 字面鍵")
+            elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+                index = node.slice
+                if isinstance(index, ast.Constant) and index.value in _NO_STATE_WRITE_KEYS:
+                    found.setdefault((node.lineno, index.value), "subscript 賦值")
+            elif isinstance(node, ast.Call):
+                for keyword in node.keywords:
+                    if keyword.arg in _NO_STATE_WRITE_KEYS:
+                        found.setdefault(
+                            (getattr(keyword, "lineno", node.lineno), keyword.arg),
+                            "呼叫的 keyword")
+        return [(lineno, key, shape) for (lineno, key), shape in sorted(found.items())]
 
     # 判準 1／2：所有寫入者
     for rel, func_name in _RELEASE_FACT_WRITERS:
@@ -3768,13 +3811,13 @@ def check_poll_release_facts_single_source(root):
                     "失去目標與「沒有違規」的輸出一樣 ⇒ 當違規處理。函式改名或移走請一併"
                     "更新 `_NO_STATE_WRITE_FUNCTIONS`（#1647）" % (rel, func_name))
             continue
-        for dict_node in _state_writes(target):
+        for lineno, key, shape in _forbidden_key_writes(target):
             violations.append(
-                "%s::%s 第 %d 行寫了 `'state'`——對帳 cron 的核心安全性質是**只對帳、"
+                "%s::%s 第 %d 行寫了 `'%s'`（%s）——對帳 cron 的核心安全性質是**只對帳、"
                 "不推狀態機**。對 running 服務做狀態轉移，叢集一時不健康就會把租戶服務"
                 "打成 `error`，而 error 沒有任何路徑會自己 poll 回來（#627 (i)；"
-                "#1647 的 workload 觀測同理：只寫自己的觀測欄位）"
-                % (rel, func_name, getattr(dict_node, "lineno", -1)))
+                "#1647 的 workload 觀測同理：只寫自己的觀測欄位，`error_message` 也不寫）"
+                % (rel, func_name, lineno, key, shape))
 
     if not producer_seen:
         violations.append(
