@@ -157,7 +157,10 @@ export class CreateSmartHomeModal extends Component {
 
         this.state.provisionProgress = 100;
 
-        if (provisionResult.success) {
+        if (provisionResult.accepted) {
+            this.state.provisioning = false;
+            this.props.onCreated(provisionResult.data || createResult.data);
+        } else if (provisionResult.success) {
             this.state.step = "done";
             this.state.provisioning = false;
             // Notify parent after short delay so user sees completion

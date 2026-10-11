@@ -1110,6 +1110,20 @@ class PaaSOperatorClient:
 
     # ==================== Tunnel Operations ====================
 
+    def get_tunnel_provider_binding(self) -> Dict[str, Any]:
+        """Read non-secret provider account binding for the SHC prototype."""
+        return self._request('GET', '/api/tunnels/provider-binding')
+
+    def create_bare_tunnel(
+        self, name: str, expected_account_id: str,
+    ) -> Dict[str, Any]:
+        """Create only. Caller must durably anchor before later mutations."""
+        return self._request(
+            'POST', '/api/tunnels/bare',
+            data={'name': name, 'expected_account_id': expected_account_id},
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
+
     def create_tunnel(
         self,
         name: str,
