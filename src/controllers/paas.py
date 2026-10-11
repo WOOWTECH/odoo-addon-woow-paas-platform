@@ -4869,15 +4869,48 @@ class PaasController(HiddenChainMixin, Controller):
         operator_url = client.base_url
         operator_api_key = client._session.headers.get('X-API-Key', '')
 
+        def _alert_compute_quota_refusal(exc):
+            """#1647：背景的 PATCH 才被 compute 配額預檢擋下時，補上管理員告警。
+
+            後備路徑：同步預檢沒問到（逾時、5xx、舊 operator）就放行，operator 在真正的
+            upgrade 才回 409＋``COMPUTE_QUOTA_ERROR_CODE``。同步被擋的四條路徑都會告警
+            （租戶自己調不了工作區配額），這一條原本沒有。其他失敗原因不發。
+
+            自己開一個 cursor，而且在 ``_record_upgrade_failure`` 的那筆 error **commit 之後**
+            才跑：告警寫不進去（沒有收件者、撞到並行更新）只是少一張告警，不能把「失敗一定
+            落地」（#1552）一起回捲。所以這裡的例外只 log、不外拋。
+            """
+            detail = getattr(exc, 'detail', None)
+            if not (isinstance(detail, dict)
+                    and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE):
+                return
+            import odoo
+            try:
+                with odoo.registry(db_name).cursor() as cr:
+                    env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
+                    svc = env['woow_paas_platform.cloud_service'].browse(service_id)
+                    if svc.exists():
+                        svc._alert_compute_quota_rejection(
+                            'background_change_plan' if plan_change
+                            else 'background_reconfigure', detail)
+            except Exception:
+                _logger.exception(
+                    "[#1647] could not raise the compute quota alert for service %s after "
+                    "its background upgrade was refused", service_id)
+
         def _record_upgrade_failure(exc):
             """#1552：把背景 upgrade 的失敗記到服務上（新 cursor、superuser）。
 
             主執行緒的交易可能還沒 commit（operator 完全連不上時，連線失敗只要幾毫秒）——
             此時讀到的還是升級前的列（``last_upgraded_at`` 比這次舊），等它 commit 再判斷，
             最多 5 秒；否則又是一次「DB 是新值、沒有錯誤、叢集沒套用」。
+
+            #1647：失敗記上去（commit）之後，配額放不下的那一種另外告警給管理員
+            （``_alert_compute_quota_refusal``）。舊的失敗沒有被記上去時也不告警。
             """
             import odoo
             deadline = time.monotonic() + 5
+            recorded = False
             while True:
                 with odoo.registry(db_name).cursor() as cr:
                     env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
@@ -4911,9 +4944,12 @@ class PaasController(HiddenChainMixin, Controller):
                                 # #1552：出口＝重新送出修改配置（_update_service 放行）。
                                 vals['upgrade_failed_at'] = fields.Datetime.now()
                             svc.write(vals)
+                            recorded = True
                 if not uncommitted:
-                    return
+                    break
                 time.sleep(0.5)
+            if recorded:
+                _alert_compute_quota_refusal(exc)
 
         def _bg_upgrade():
             """Run helm upgrade in a background thread with its own cursor."""

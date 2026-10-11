@@ -31,6 +31,7 @@ from unittest.mock import MagicMock, patch
 
 from lxml import etree
 
+from odoo import fields
 from odoo.exceptions import AccessError, UserError
 from odoo.tests.common import TransactionCase, tagged
 from odoo.tools import mute_logger
@@ -47,6 +48,7 @@ from odoo.addons.woow_paas_platform.services.paas_operator import (
     PaaSOperatorTimeoutError,
 )
 from ..models.cloud_service import _internal_provision, _join_sentences
+from ..models.workspace_access import ROLE_ADMIN
 
 _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SERVICES = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -190,11 +192,46 @@ class _Fixture:
             return PaasController()._update_service(
                 service, values=values, version=None, **kwargs)
 
-    def _rollback(self, client):
+    def _rollback(self, client, service=None):
         with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
                 self._tenant_request():
             return PaasController()._rollback_service(
-                self.service.with_user(self.tenant), revision=3)
+                service or self.service.with_user(self.tenant), revision=3)
+
+    def _member(self, lang):
+        """同工作區的另一位成員（admin 角色），語系 ``lang``。"""
+        self.env['res.lang']._activate_lang(lang)
+        login = 'member_1647_%s' % uuid.uuid4().hex[:8]
+        user = self.env['res.users'].sudo().create({
+            'name': '1647 member %s' % lang, 'login': login, 'password': login,
+            'email': '%s@test.example' % login, 'lang': lang,
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].sudo().create({
+            'workspace_id': self.workspace.id, 'user_id': user.id, 'role': ROLE_ADMIN})
+        return user
+
+    def _as(self, user):
+        """這台服務在某位使用者的請求裡的樣子：production 的 ``request.env`` 帶著他的語言。"""
+        return self.service.with_user(user).with_context(lang=user.lang)
+
+    def _background_upgrade(self, client, plan_change=False):
+        """只跑背景 upgrade 那一段（呼叫端已寫好 state／last_upgraded_at），同步執行。"""
+        self.service.sudo().write(
+            {'state': 'upgrading', 'last_upgraded_at': fields.Datetime.now()})
+        fake_registry = MagicMock()
+        fake_registry.cursor.return_value = _NonClosingCursor(self.env.cr)
+        with self._tenant_request(), \
+                patch(_BG_CLIENT, return_value=client), \
+                patch(f'{_CONTROLLER}.threading.Thread', _SyncThread), \
+                patch('odoo.registry', return_value=fake_registry):
+            PaasController()._start_background_upgrade(
+                self.service.with_user(self.tenant), client, '1.0.0', False,
+                plan_change=plan_change, upgrade_kwargs={
+                    'namespace': _NAMESPACE, 'release_name': 'svc-1647',
+                    'chart': 'oci://example.com/compute-quota-1647', 'values': {},
+                    'version': '1.0.0', 'reset_values': True, 'check_compute_quota': True})
+        return self._reload()
 
     def _redeploy(self, client):
         with patch(_MODEL_CLIENT, return_value=client):
@@ -554,16 +591,73 @@ class TestComputeQuotaMessages1647(_Fixture, TransactionCase):
     def test_background_failure_message_uses_the_creators_language(self):
         """背景 PATCH 才被擋的後備路徑：背景執行緒沒有語言，照服務建立者的語言組。"""
         english = self.service._upgrade_failure_message(_refused())
-        self.assertIn('does not have enough CPU quota', english)
-        self.assertIn('short by 4 vCPU', english)
-        self.assertIn('Submit the configuration again to retry', english)
-        self.assertNotIn('Nothing was changed', english, '包裝句已經有出口，不重複結尾')
+        self.assertEqual(
+            english,
+            'This workspace does not have enough CPU quota for this change: the service needs '
+            '8 vCPU, the workspace limit is 12 vCPU and other workloads in the workspace are '
+            'using 8 vCPU (short by 4 vCPU). The new settings were not applied. Please contact '
+            'support to adjust the workspace quota.')
 
         self.env['res.lang']._activate_lang('zh_TW')
         self.service.create_uid.sudo().lang = 'zh_TW'
         chinese = self.service._upgrade_failure_message(_refused())
-        self.assertIn('配額不足以套用這次變更', chinese)
-        self.assertIn('還差 4 vCPU', chinese)
+        self.assertEqual(
+            chinese,
+            '這個工作區的 CPU 配額不足以套用這次變更：這個服務需要 8 vCPU，工作區上限是 12 vCPU，'
+            '工作區內這個服務以外的用量目前是 8 vCPU（還差 4 vCPU）。'
+            '新的設定沒有套用。請聯絡客服調整工作區配額。')
+        self.assertEqual(
+            self.service._upgrade_failure_message(_refused(), plan_change=True),
+            '方案已變更，但服務規格沒有調整完成。'
+            '這個工作區的 CPU 配額不足以套用這次變更：這個服務需要 8 vCPU，工作區上限是 12 vCPU，'
+            '工作區內這個服務以外的用量目前是 8 vCPU（還差 4 vCPU）。'
+            '請聯絡客服調整工作區配額。')
+
+    def test_background_quota_refusal_only_points_to_support(self):
+        """配額放不下時重新送出沒有用、Rollback 也幫不上忙：這個分支的出口只有聯絡客服。
+
+        只換這一個分支的結尾——其他失敗原因（忙碌、連線中斷、別種 operator 錯誤）仍是 #1552 的
+        通用結尾（請重新送出／Rollback）。
+        """
+        for plan_change in (False, True):
+            with self.subTest(plan_change=plan_change):
+                message = self.service._upgrade_failure_message(
+                    _refused(), plan_change=plan_change)
+                self.assertTrue(message.endswith(
+                    'Please contact support to adjust the workspace quota.'), message)
+                for wrong in ('Submit the configuration again', 'Rollback', 'retry',
+                              'Nothing was changed', 'keeps running', 'stop ', 'delete',
+                              'remove', 'smaller plan'):
+                    self.assertNotIn(wrong.lower(), message.lower())
+                self.assertNotIn(_NAMESPACE, message)
+        self.assertIn('The new settings were not applied.',
+                      self.service._upgrade_failure_message(_refused()))
+        self.assertTrue(self.service._upgrade_failure_message(
+            _refused(), plan_change=True).startswith(
+                'The plan was changed, but resizing the service did not complete. This '
+                'workspace does not have enough CPU quota'))
+        # 畸形的 detail 也走這個分支（通用說法＋同一個出口），不丟例外。
+        self.assertEqual(
+            self.service._upgrade_failure_message(_refused(dict(_quota_detail(), shortfalls=5))),
+            'This workspace does not have enough CPU or memory quota for this change. The new '
+            'settings were not applied. Please contact support to adjust the workspace quota.')
+        # 其他失敗原因的通用結尾沒有動。
+        busy = PaaSOperatorAPIError('API error', status_code=503, detail={
+            'error_code': OPERATOR_BUSY_ERROR_CODE, 'message': '部署服務忙碌'})
+        others = {
+            'busy': busy,
+            'timeout': PaaSOperatorTimeoutError('Request to PaaS Operator timed out'),
+            'unreachable': PaaSOperatorConnectionError('Failed to connect to PaaS Operator'),
+            'helm': PaaSOperatorAPIError('API error', status_code=500, detail='Helm 升級失敗'),
+        }
+        for label, exc in others.items():
+            with self.subTest(other=label):
+                self.assertTrue(self.service._upgrade_failure_message(exc).endswith(
+                    'Submit the configuration again to retry. If it keeps failing, use '
+                    'Rollback or contact support.'))
+                self.assertTrue(
+                    self.service._upgrade_failure_message(exc, plan_change=True).endswith(
+                        'Submit the configuration again to retry, or contact support.'))
 
 
 # ====================================================================== #
@@ -934,18 +1028,138 @@ class TestReconfigureComputeQuotaPreflight1647(_Fixture, TransactionCase):
 
     @_quiet
     def test_refusal_that_only_shows_up_in_the_background_is_reported(self):
-        """後備路徑：同步預檢通過（或沒問到），背景的 PATCH 才被 operator 擋下。"""
+        """後備路徑：同步預檢沒問到（例如回 500 而放行），背景的 PATCH 才被 operator 擋下。
+
+        #1552 的既有行為不變：服務翻成 error、``upgrade_failed_at`` 立起來、新的設定已經寫進
+        ``helm_values``。#1647 補的是兩件事——訊息的出口（配額沒調整之前重新送出一定再被擋，
+        只能聯絡客服）與管理員告警（同步被擋的路徑都有，這一條原本沒有）。
+        """
         client = self._client()
+        client.upgrade_preflight.side_effect = PaaSOperatorAPIError(
+            'API error', status_code=500, detail='Helm 升級失敗：…')
         client.upgrade_release.side_effect = _refused()
+
         result = self._update(client, values={})
+
         self.assertTrue(result.get('success'), result)
+        client.upgrade_preflight.assert_called_once()
+        client.upgrade_release.assert_called_once()
         svc = self._reload()
         self.assertEqual(svc.state, 'error')
-        self.assertTrue(svc.upgrade_failed_at, '出口＝重新送出修改配置（#1552）')
-        self.assertIn('does not have enough CPU quota', svc.error_message)
-        self.assertIn('short by 4 vCPU', svc.error_message)
-        self.assertIn('Submit the configuration again to retry', svc.error_message)
-        self.assertNotIn(_NAMESPACE, svc.error_message)
+        self.assertTrue(svc.upgrade_failed_at, '#1552 的出口旗標照舊')
+        self.assertTrue(svc.last_upgraded_at)
+        self.assertEqual(
+            svc.error_message,
+            'This workspace does not have enough CPU quota for this change: the service needs '
+            '8 vCPU, the workspace limit is 12 vCPU and other workloads in the workspace are '
+            'using 8 vCPU (short by 4 vCPU). The new settings were not applied. Please contact '
+            'support to adjust the workspace quota.')
+        for wrong in ('Submit the configuration again', 'Rollback', _NAMESPACE):
+            self.assertNotIn(wrong, svc.error_message)
+
+        activities = self._alerts()
+        self.assertTrue(activities, '背景才被擋也要告警給管理員')
+        marker = 'id=%s' % self.service.id
+        for activity in activities:
+            note = str(activity.note)
+            self.assertEqual(note.count(marker), 1)
+            self.assertIn('background_reconfigure', note)
+            self.assertIn(_NAMESPACE, note)
+            self.assertIn('limits.cpu needs 8 / limit 12 / other workloads 8 / short by 4', note)
+            self.assertIn('StatefulSet/pg (8)', note)
+            self.assertIn(
+                '[refused during the background upgrade, after the pre-check gave no answer: '
+                'the new settings are saved on the service but were not applied, and the '
+                'service shows this failure]', ' '.join(note.split()))
+
+        # 同一台、同一個原因再被擋一次（租戶改了別的值重新送出）：不重複加行。
+        result = self._update(client, values={})
+        self.assertTrue(result.get('success'), result)
+        self.assertEqual(client.upgrade_release.call_count, 2, '前提：第二次也進了背景 upgrade')
+        self.assertEqual(self._reload().state, 'error')
+        for activity in self._alerts():
+            self.assertEqual(str(activity.note).count(marker), 1)
+
+    @_quiet
+    def test_other_background_failures_do_not_raise_the_quota_alert(self):
+        failures = {
+            'helm': PaaSOperatorAPIError('API error', status_code=500, detail='Helm 升級失敗：…'),
+            'busy': PaaSOperatorAPIError('API error', status_code=503, detail={
+                'error_code': OPERATOR_BUSY_ERROR_CODE, 'message': '部署服務忙碌'}),
+            'disk': PaaSOperatorAPIError('API error', status_code=409, detail={
+                'error_code': STORAGE_EXPANSION_ERROR_CODE, 'reason': 'capacity'}),
+            'unreachable': PaaSOperatorConnectionError('Failed to connect to PaaS Operator'),
+        }
+        for label, exc in failures.items():
+            with self.subTest(failure=label):
+                self.service.sudo().write({'state': 'running'})
+                client = self._client()
+                client.upgrade_release.side_effect = exc
+                self._update(client, values={})
+                svc = self._reload()
+                self.assertEqual(svc.state, 'error')
+                self.assertIn('Submit the configuration again to retry', svc.error_message)
+                self.assertFalse(self._alerts())
+
+    @_quiet
+    def test_background_alert_failure_keeps_the_recorded_error(self):
+        """告警寫不進去只是少一張告警：#1552 記下的失敗（error＋訊息）不能跟著不見。"""
+        client = self._client()
+        client.upgrade_release.side_effect = _refused()
+        Monitor = type(self.env['woow_paas_platform.platform_monitor'])
+        with patch.object(Monitor, '_report_compute_quota_rejection',
+                          side_effect=RuntimeError('boom')) as report:
+            result = self._update(client, values={})
+        self.assertTrue(result.get('success'), result)
+        report.assert_called_once()
+        svc = self._reload()
+        self.assertEqual(svc.state, 'error')
+        self.assertTrue(svc.upgrade_failed_at)
+        self.assertIn('Please contact support to adjust the workspace quota.', svc.error_message)
+
+    @_quiet
+    def test_stale_background_refusal_is_neither_recorded_nor_alerted(self):
+        """這次失敗沒有被記到服務上（已經有更新的一次操作）時，也不為它告警。"""
+        client = self._client()
+
+        def _newer_attempt_started(**_kwargs):
+            self.env.flush_all()
+            self.env.cr.execute(
+                'UPDATE woow_paas_platform_cloud_service SET last_upgraded_at = %s, state = %s '
+                'WHERE id = %s',
+                (fields.Datetime.add(fields.Datetime.now(), seconds=30), 'running',
+                 self.service.id))
+            self.env.invalidate_all()
+            raise _refused()
+
+        client.upgrade_release.side_effect = _newer_attempt_started
+        self._update(client, values={})
+        svc = self._reload()
+        self.assertEqual(svc.state, 'running')
+        self.assertFalse(svc.upgrade_failed_at)
+        self.assertFalse(self._alerts())
+
+    @_quiet
+    def test_background_refusal_after_a_plan_change_says_so(self):
+        """換方案的預檢放行、背景 upgrade 才被擋：方案已換已扣款，訊息與告警行都要講清楚。"""
+        client = self._client()
+        client.upgrade_release.side_effect = _refused()
+        svc = self._background_upgrade(client, plan_change=True)
+        self.assertEqual(svc.state, 'error')
+        self.assertEqual(
+            svc.error_message,
+            'The plan was changed, but resizing the service did not complete. This workspace '
+            'does not have enough CPU quota for this change: the service needs 8 vCPU, the '
+            'workspace limit is 12 vCPU and other workloads in the workspace are using 8 vCPU '
+            '(short by 4 vCPU). Please contact support to adjust the workspace quota.')
+        [activity] = self._alerts()[:1]
+        note = ' '.join(str(activity.note).split())
+        self.assertIn('background_change_plan', note)
+        self.assertIn(
+            '[refused during the background upgrade, after the plan change went through: the '
+            'plan was changed and charged but the service was not resized, and the service '
+            'shows this failure]', note)
+        self.assertNotIn('pre-check gave no answer', note)
 
 
 # ====================================================================== #
@@ -1259,6 +1473,111 @@ class TestComputeQuotaAdminAlert1647(_Fixture, TransactionCase):
         self.assertEqual(changed.count(marker), 2)
         self.assertIn('limits.cpu needs 10 / limit 12 / other workloads 8 / short by 6', changed)
 
+    _ALERT_INTRO = (
+        'Changes were rejected before anything was applied or charged because the CPU / memory '
+        'quota of the workspace cannot fit the service after the change. Tenants who requested '
+        'a change were told to contact support. Raise the quota of that workspace or free '
+        'resources in its namespace, then ask the tenant to try again (for a queued redeploy: '
+        'redeploy the service again):')
+    # 中文字、全形標點、CJK 標點：告警裡一個都不該有。
+    _CJK = re.compile('[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]')
+
+    @_quiet
+    def test_members_with_different_languages_share_one_line(self):
+        """同一台、同一個原因，換一位不同語系的成員被擋：還是那一行，整張告警同一種語言。
+
+        告警由租戶的請求觸發。照觸發者的語言組字的話，zh_TW 成員的那一行標點是全形、半句是
+        譯文，與 en_US 成員的那一行文字不同——``_alert`` 以文字去重，會再追加一行；第一段說明
+        文字則是「第一個觸發的人」的語言，管理員看到中英夾雜。固定用 en_US 組（與 cron 產生的
+        告警一致）。
+        """
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        zh_member, en_member = self._member('zh_TW'), self._member('en_US')
+        client = self._client()
+        client.upgrade_preflight.side_effect = _refused()
+
+        # 先由 zh_TW 的成員觸發（開這張告警的人）。
+        result = self._update(client, service=self._as(zh_member), values={})
+        self.assertIn('這個工作區的 CPU 配額不足以套用這次變更', result['error'],
+                      '前提：這位租戶自己看到的訊息是中文')
+        first = [str(activity.note) for activity in self._alerts()]
+        self.assertTrue(first)
+
+        result = self._update(client, service=self._as(en_member), values={})
+        self.assertIn('does not have enough CPU quota', result['error'])
+        self._update(client, service=self._as(zh_member), values={})
+        self._update(client, values={})
+        self.assertEqual(client.upgrade_preflight.call_count, 4, '前提：四次都真的被擋下')
+
+        line = ('svc-1647 (id=%s, namespace %s, reconfigure): limits.cpu needs 8 / limit 12 / '
+                'other workloads 8 / short by 4. Largest other consumers: StatefulSet/pg (8).'
+                % (self.service.id, _NAMESPACE))
+        notes = [str(activity.note) for activity in self._alerts()]
+        self.assertEqual(notes, first, '後面三次沒有改到任何一張告警')
+        for note in notes:
+            self.assertEqual(Monitor._note_paragraphs(note), [self._ALERT_INTRO, line])
+            self.assertNotRegex(note, self._CJK)
+
+        # 同一位 zh_TW 成員換一種操作被擋：多一行，也是同一種語言。
+        client.rollback_release.side_effect = _refused()
+        self._rollback(client, service=self._as(zh_member))
+        for activity in self._alerts():
+            paragraphs = Monitor._note_paragraphs(activity.note)
+            self.assertEqual(paragraphs[:2], [self._ALERT_INTRO, line])
+            self.assertEqual(paragraphs[2:], [line.replace('reconfigure', 'rollback')])
+            self.assertNotRegex(str(activity.note), self._CJK)
+
+    def test_overflow_line_follows_the_alert_language_too(self):
+        """行數滿了之後補的那一行（``_alert`` 裡組的）也跟著固定語言，不是觸發者的。"""
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        service = self._as(self._member('zh_TW'))
+        monitor_module = 'odoo.addons.woow_paas_platform.models.platform_monitor'
+        with patch(f'{monitor_module}.ALERT_MAX_APPENDED_LINES', 2), mute_logger(monitor_module):
+            for short_by in ('1', '2', '3', '4'):
+                service._alert_compute_quota_rejection(
+                    'reconfigure', _quota_detail(_shortfall(short_by=short_by)))
+        [activity] = self._alerts()[:1]
+        paragraphs = Monitor._note_paragraphs(activity.note)
+        self.assertEqual(len(paragraphs), 1 + 2 + 1)
+        self.assertEqual(
+            paragraphs[-1],
+            'More entries were not listed here (the limit of 2 lines was reached); see the '
+            'server log.')
+        self.assertNotRegex(str(activity.note), self._CJK)
+
+    def test_background_operations_are_annotated(self):
+        """後備路徑的行在行尾註明現況（說明文字講的是「套用與扣款之前就被擋下」）。"""
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        for operation in ('reconfigure', 'background_reconfigure', 'background_change_plan'):
+            self.service._alert_compute_quota_rejection(operation, _quota_detail())
+        [activity] = self._alerts()[:1]
+        intro, plain, reconfigure, change_plan = Monitor._note_paragraphs(activity.note)
+        self.assertEqual(intro, self._ALERT_INTRO)
+        self.assertTrue(plain.endswith('Largest other consumers: StatefulSet/pg (8).'), plain)
+        self.assertIn(', background_reconfigure): limits.cpu needs 8', reconfigure)
+        self.assertTrue(reconfigure.endswith(
+            'Largest other consumers: StatefulSet/pg (8). [refused during the background '
+            'upgrade, after the pre-check gave no answer: the new settings are saved on the '
+            'service but were not applied, and the service shows this failure]'), reconfigure)
+        self.assertIn(', background_change_plan): limits.cpu needs 8', change_plan)
+        self.assertTrue(change_plan.endswith(
+            '[refused during the background upgrade, after the plan change went through: the '
+            'plan was changed and charged but the service was not resized, and the service '
+            'shows this failure]'), change_plan)
+
+    def test_malformed_detail_still_opens_an_alert(self):
+        """``shortfalls``／``consumers`` 不是 list 時告警照開（沒有數字可列），不丟例外。"""
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        for value in (5, 'limits.cpu', {'a': 1}, None):
+            self.service._alert_compute_quota_rejection('reconfigure', {
+                'error_code': COMPUTE_QUOTA_ERROR_CODE, 'namespace': _NAMESPACE,
+                'shortfalls': value, 'consumers': value})
+        [activity] = self._alerts()[:1]
+        self.assertEqual(Monitor._note_paragraphs(activity.note), [
+            self._ALERT_INTRO,
+            'svc-1647 (id=%s, namespace %s, reconfigure): ?. Largest other consumers: -.'
+            % (self.service.id, _NAMESPACE)], '四種畸形都是同一行，只記一次')
+
     def _probe_activities(self, summary):
         return self.env['mail.activity'].sudo().search([('summary', '=', summary)])
 
@@ -1367,7 +1686,14 @@ class TestComputeQuotaTranslations1647(TransactionCase):
         'The queued redeploy did not run: %(reason)s',
         'More entries were not listed here (the limit of %(limit)s lines was reached); see '
         'the server log.',
+        # 實走之後補的（背景的 PATCH 才被擋時的結尾：出口只有聯絡客服）。
+        '%(reason)s The new settings were not applied. Please contact support to adjust the '
+        'workspace quota.',
+        'The plan was changed, but resizing the service did not complete. %(reason)s Please '
+        'contact support to adjust the workspace quota.',
     )
+    # 租戶看得到的那幾句（其餘是管理員版）：譯文不留英文術語 workload。
+    TENANT_MESSAGES = NEW_MESSAGES[:5] + NEW_MESSAGES[14:17] + NEW_MESSAGES[18:]
 
     def _entries(self):
         po = os.path.join(
@@ -1401,6 +1727,18 @@ class TestComputeQuotaTranslations1647(TransactionCase):
                 self.assertEqual(
                     sorted(re.findall(r'%\(\w+\)s', entries.get(src) or '')),
                     sorted(re.findall(r'%\(\w+\)s', src)))
+
+    def test_tenant_translations_have_no_english_jargon(self):
+        """租戶版的譯文不留 workload；句子之間也不夾半形空格（「。」後面直接接下一句）。"""
+        entries = self._entries()
+        self.assertEqual(len(self.TENANT_MESSAGES), 10)
+        for src in self.TENANT_MESSAGES:
+            with self.subTest(src=src[:40]):
+                self.assertNotIn('Namespace', src, '前提：這一句是租戶版')
+                translated = entries.get(src) or ''
+                self.assertNotIn('workload', translated.lower())
+                self.assertNotRegex(translated, r'[。：，）] ')
+
 
 # ====================================================================== #
 #  換方案對話框：被擋時錯誤訊息要看得到                                      #

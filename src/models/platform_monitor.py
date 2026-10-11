@@ -70,6 +70,9 @@ _GIB = 1024 ** 3
 #: #1647：一張告警 activity 最多追加幾行（``_alert`` 的 ``append_line``）。事件型的來源有些
 #: 可以被反覆觸發；超過之後只補一行「還有更多」，其餘寫 log。
 ALERT_MAX_APPENDED_LINES = 50
+#: #1647：compute 配額告警（``_report_compute_quota_rejection``）固定用這個語言組，不跟著
+#: 觸發的那位租戶走——與 cron 產生的告警一致（cron 的 env 沒有語言 ⇒ 英文）。
+COMPUTE_QUOTA_ALERT_LANG = 'en_US'
 
 
 class PlatformMonitor(models.Model):
@@ -538,10 +541,20 @@ class PlatformMonitor(models.Model):
 
         ``operation``：租戶的 ``reconfigure``／``change_plan``／``rollback``，與
         ``queued_redeploy``（管理員登記、由 cron 執行的 Redeploy；管理員當場按的 Redeploy 在
-        對話框就看到數字，不走這裡）。``detail`` 是 operator 409 的 dict（``shortfalls``／
-        ``consumers`` 形狀不對時當成沒有）。同一台同一個原因反覆被擋時行的內容相同，``_alert``
-        不會重複追加。
+        對話框就看到數字，不走這裡）。後備路徑另有 ``background_reconfigure``／
+        ``background_change_plan``：同步預檢沒問到、背景的 PATCH 才被擋——服務的狀況與說明文字
+        講的不同，行尾會註明。``detail`` 是 operator 409 的 dict（``shortfalls``／``consumers``
+        形狀不對時當成沒有）。同一台同一個原因反覆被擋時行的內容相同，``_alert`` 不會重複追加。
+
+        **固定用 ``COMPUTE_QUOTA_ALERT_LANG`` 組字，不用呼叫端的語言。** 這個告警大多由租戶的
+        請求觸發，``self.env`` 帶的是那位租戶的語言：照它組的話，同一台、同一個原因換一位不同
+        語系的成員被擋，行的文字就不同（標點與半句譯文），``_alert`` 以文字去重會認不出來、
+        再追加一行；行裡的數字段沒有翻譯，同一行還會中英夾雜。第一段說明文字也會變成「第一個
+        觸發的人」的語言。⛔ 下面的 ``env._`` 不要改回模組層的 ``_``（那會讀呼叫端的語言）。
         """
+        monitor = self.with_context(lang=COMPUTE_QUOTA_ALERT_LANG)
+        env = monitor.env
+
         def describe(shortfall):
             text = '%s needs %s / limit %s / other workloads %s / short by %s' % (
                 shortfall.get('resource'), shortfall.get('required'), shortfall.get('hard'),
@@ -558,12 +571,24 @@ class PlatformMonitor(models.Model):
         consumers = ', '.join(
             '%s (%s)' % (c.get('owner'), c.get('value'))
             for c in _compute_quota_detail_rows(detail, 'consumers'))
-        line = _(
+        line = env._(
             '%(name)s (id=%(id)s, namespace %(ns)s, %(operation)s): %(shortfalls)s. Largest '
             'other consumers: %(consumers)s.',
             name=service.name, id=service.id, ns=detail.get('namespace') or '?',
             operation=operation, shortfalls=shortfalls or '?', consumers=consumers or '-')
-        return self._safe_alert(self.SUMMARY_COMPUTE_QUOTA_REJECTED, _(
+        # 後備路徑的行：說明文字講的是「套用與扣款之前就被擋下」，這兩種的現況不同，在行尾
+        # 講清楚（與上面的降級註記一樣是固定的英文，不進翻譯）。
+        line += {
+            'background_reconfigure': (
+                ' [refused during the background upgrade, after the pre-check gave no '
+                'answer: the new settings are saved on the service but were not applied, and '
+                'the service shows this failure]'),
+            'background_change_plan': (
+                ' [refused during the background upgrade, after the plan change went '
+                'through: the plan was changed and charged but the service was not resized, '
+                'and the service shows this failure]'),
+        }.get(operation, '')
+        return monitor._safe_alert(self.SUMMARY_COMPUTE_QUOTA_REJECTED, env._(
             'Changes were rejected before anything was applied or charged because the CPU / '
             'memory quota of the workspace cannot fit the service after the change. Tenants who '
             'requested a change were told to contact support. Raise the quota of that '

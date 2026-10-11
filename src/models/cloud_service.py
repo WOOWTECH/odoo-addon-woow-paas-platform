@@ -3782,10 +3782,13 @@ class CloudService(models.Model):
     def _alert_compute_quota_rejection(self, operation, detail):
         """#1647：變更被 compute 配額預檢擋下、而當下沒有管理員在看時，告警給系統管理員。
 
-        ``operation``：租戶的 ``reconfigure``（儲存設定）／``change_plan``／``rollback``，以及
+        ``operation``：租戶的 ``reconfigure``（儲存設定）／``change_plan``／``rollback``、
         ``queued_redeploy``（管理員登記、由 cron 執行的 Redeploy；當場按的 Redeploy 在對話框
-        就看到數字，不走這裡）。租戶自己調不了工作區配額，出口在管理員手上。租戶身分呼叫 ⇒
+        就看到數字，不走這裡），以及後備路徑的 ``background_reconfigure``／
+        ``background_change_plan``（同步預檢沒問到、背景的 PATCH 才被擋——服務已被標成 error，
+        告警行會註明）。租戶自己調不了工作區配額，出口在管理員手上。租戶身分呼叫 ⇒
         告警寫入要提權（activity 給 base.group_system）；提權只在這裡，controller 不 sudo。
+        告警一律用固定語言組（見 ``platform_monitor._report_compute_quota_rejection``）。
         """
         self.ensure_one()
         self.env['woow_paas_platform.platform_monitor'].sudo()._report_compute_quota_rejection(
@@ -7904,8 +7907,10 @@ class CloudService(models.Model):
 
         - 連線中斷／逾時：不確定有沒有套用 ⇒ 請重新送出；
         - operator 忙碌（503 ``operator_busy``）：確定沒有套用 ⇒ 請重新送出；
-        - 工作區 compute 配額放不下（409，#1647）：確定沒有套用 ⇒ 講清楚哪種資源差多少。
-          這是後備路徑——同步預檢通過（或沒問到）之後，背景的 PATCH 才被擋；
+        - 工作區 compute 配額放不下（409，#1647）：確定沒有套用 ⇒ 講清楚哪種資源差多少，
+          出口是聯絡客服調整工作區配額（重新送出沒有用，所以這一種**不接**通用結尾）。
+          這是後備路徑——同步預檢通過（或沒問到）之後，背景的 PATCH 才被擋；管理員告警由
+          呼叫端另外發（``paas.py`` 的 ``_record_upgrade_failure``）；
         - 其他 operator 錯誤：附上 operator 的說明（operator 端已是中文）。
         """
         self.ensure_one()
@@ -7933,6 +7938,20 @@ class CloudService(models.Model):
         elif isinstance(detail, dict) and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE:
             reason = self._compute_quota_error_message(
                 detail, operation='reconfigure', lang=lang, with_ending=False)
+            # 這個分支有自己的結尾，不接下面 #1552 的通用結尾：配額沒有調整之前重新送出一定
+            # 再被擋，Rollback 也幫不上忙（operator 什麼都沒套用，release 沒有變）。租戶做得到
+            # 而且有效的只有聯絡客服——與同步被擋時的租戶版同一個出口（為什麼不建議停用或
+            # 刪除服務，見 ``_compute_quota_error_message`` 結尾的註解）。這裡不能說「服務仍以
+            # 原本的設定執行」：新設定已經寫進平台、服務也被標成 error（#1552 的既有行為）。
+            if plan_change:
+                return env._(
+                    'The plan was changed, but resizing the service did not complete. '
+                    '%(reason)s Please contact support to adjust the workspace quota.',
+                    reason=reason)
+            return env._(
+                '%(reason)s The new settings were not applied. Please contact support to '
+                'adjust the workspace quota.',
+                reason=reason)
         else:
             text = detail.get('message') if isinstance(detail, dict) else detail
             reason = env._(

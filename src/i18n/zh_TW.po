@@ -20815,6 +20815,18 @@ msgstr "排定的重新部署沒有執行：%(reason)s"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "%(reason)s The new settings were not applied. Please contact support to adjust the workspace quota."
+msgstr "%(reason)s新的設定沒有套用。請聯絡客服調整工作區配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The plan was changed, but resizing the service did not complete. %(reason)s Please contact support to adjust the workspace quota."
+msgstr "方案已變更，但服務規格沒有調整完成。%(reason)s請聯絡客服調整工作區配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
 msgid "More entries were not listed here (the limit of %(limit)s lines was reached); see the server log."
 msgstr "還有更多項目沒有列在這裡（已達 %(limit)s 行的上限）；請見 server log。"
