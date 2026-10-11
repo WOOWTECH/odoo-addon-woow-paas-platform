@@ -28,7 +28,9 @@
 * 每日對帳順帶回寫 workload 觀測（同樣值沒變不寫），出錯不連累 release 事實，既有那行
   log 不變；
 * /woow payload 只給**已確認**的代碼，不帶叢集原文；
-* 後台表單警示的每一段可見文字在 zh_TW.po 都有譯文（review detect-S2）。
+* 後台表單警示的每一段可見文字在 zh_TW.po 都有譯文（review detect-S2）；
+* /woow 的三句租戶文案在 zh_TW.po 都有譯文，配額那一句（英文與譯文）只請租戶聯絡客服、
+  不建議刪除／停用／停止服務來釋出配額。
 
 status 一律用 ``status_response()``／``workload_info()`` 組（形狀對帳到 operator 的 pydantic
 宣告與打真端點產的 golden，見 ``operator_contract.py``）。
@@ -36,6 +38,7 @@ status 一律用 ``status_response()``／``workload_info()`` 組（形狀對帳�
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -1543,3 +1546,49 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
                     self.assertTrue(
                         self._translations('model', name, imd_name).get(source),
                         'zh_TW.po 缺譯文，或 msgid 與欄位定義的文字不一致：%r' % source)
+
+    def _tenant_fault_strings(self):
+        """/woow 的 workload 異常文案（詳情頁 banner＋服務卡片）在 JS 裡的 `_t()` 原文。"""
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'static', 'src', 'paas', 'utils', 'service_presentation.js')
+        with open(path, encoding='utf-8') as handle:
+            source = handle.read()
+        strings = [text for text in re.findall(r'_t\(\s*"((?:[^"\\]|\\.)*)"', source)
+                   if 'not running' in text.lower()]
+        # 陽性對照：至少抽到配額、一般、卡片提示三句（下限，不釘死句數），且不需要反跳脫。
+        self.assertGreaterEqual(len(strings), 3, strings)
+        self.assertFalse([text for text in strings if '\\' in text], strings)
+        return strings
+
+    def _code_translations(self):
+        return {e['src']: e['value'] for e in self.entries if e['type'] == 'code'}
+
+    def test_tenant_fault_strings_are_translated(self):
+        translated = self._code_translations()
+        for text in self._tenant_fault_strings():
+            with self.subTest(text=text):
+                self.assertTrue(translated.get(text),
+                                'zh_TW.po 缺譯文，或 msgid 與 JS 裡的文字不一致')
+
+    def test_quota_text_only_points_the_tenant_to_support(self):
+        """配額已滿的租戶文案（英文與 zh_TW）只請租戶聯絡客服。
+
+        不得建議刪除／停用／停止服務或改小方案來釋出 CPU 或記憶體配額：工作區的上限是存活
+        服務的方案規格加總 × 3（另有下限，``_compute_ns_quota``），刪掉一台上限少 3 份、用量
+        只少約 1 份，剩餘空間通常變小而不是變大。租戶做得到又有效的只有聯絡客服。
+        """
+        quota = [text for text in self._tenant_fault_strings() if 'quota' in text.lower()]
+        self.assertTrue(quota, 'fixture 前提：找得到配額那一句')
+        translated = self._code_translations()
+        for english in quota:
+            chinese = translated.get(english) or ''
+            with self.subTest(text=english):
+                self.assertIn('contact support', english)
+                self.assertNotRegex(
+                    english,
+                    r'(?i)\b(delet\w*|remov\w*|stop\w*|paus\w*|suspend\w*|disabl\w*'
+                    r'|shut\w* down|turn\w* off|downgrad\w*|smaller|free\w* up)\b')
+                self.assertIn('聯絡客服', chinese)
+                for word in ('刪除', '移除', '停用', '停止', '暫停', '關閉', '降級', '較小'):
+                    self.assertNotIn(word, chinese)

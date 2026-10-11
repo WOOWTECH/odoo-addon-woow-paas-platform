@@ -21,7 +21,7 @@ const presentation = await import(
 );
 
 const QUOTA_TEXT =
-  "This service is not running right now: the workspace has no CPU or memory quota left to start it. Deleting a service you no longer need in this workspace may bring it back; otherwise please contact support. Our operations team has been notified.";
+  "This service is not running right now: it cannot start because the workspace's CPU or memory quota is full. Please contact support. Our operations team has been notified.";
 const GENERIC_TEXT =
   "This service is not running right now: the platform could not start it. Our operations team has been notified.";
 const LABEL = "Not running — the platform could not start this service";
@@ -40,14 +40,19 @@ test("running＋quota_exceeded 顯示配額文案", () => {
   );
 });
 
-test("配額文案只建議租戶做得到的事：刪除不需要的服務或聯絡客服，不建議停止服務", () => {
-  // /woow 沒有「停止／暫停服務」的操作（服務的動作只有 get／update／delete／restart）。
+test("配額文案只請租戶聯絡客服，不建議刪除／停用／停止服務或改小方案來釋出配額", () => {
+  // 工作區的 CPU／記憶體上限＝存活服務的方案規格加總 × 3（另有下限；cloud_service.py 的
+  // _compute_ns_quota）：刪掉一台上限少 3 份、用量只少約 1 份，剩餘空間通常變小而不是變大。
+  // 租戶做得到又有效的只有聯絡客服（管理員調整配額的正式入口在 #1648）。
   const text = presentation.getWorkloadFaultText({
     state: "running",
     workload_fault: "quota_exceeded",
   });
-  assert.doesNotMatch(text, /\b(stop|stopping|pause|pausing|suspend|suspending)\b/i);
-  assert.match(text, /Deleting a service you no longer need/);
+  assert.doesNotMatch(
+    text,
+    /\b(delet\w*|remov\w*|stop\w*|paus\w*|suspend\w*|disabl\w*|shut\w* down|turn\w* off|downgrad\w*|smaller|free\w* up)\b/i,
+  );
+  assert.match(text, /quota/);
   assert.match(text, /contact support/);
 });
 

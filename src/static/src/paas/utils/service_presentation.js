@@ -71,8 +71,11 @@ function getConfirmedWorkloadFault(service) {
  * 叢集的原始訊息含 Pod、namespace、quota 物件名稱等內部細節，只留在後台；這裡只依代碼挑
  * 文案。不認得的代碼（後端日後新增）一律用一般文案，不顯示代碼本身。
  *
- * 文案只建議租戶在 /woow 真的做得到的事：刪除不需要的服務，或聯絡客服。/woow 沒有
- * 「停止服務」這個操作，不要寫成停止／暫停另一台服務。
+ * ⛔ quota_exceeded 的文案只請租戶聯絡客服，不要建議刪除／停用／停止其他服務、或改用較小
+ * 的方案來釋出 CPU 或記憶體配額：工作區的上限是存活服務的方案規格加總 × 3（另有下限；
+ * `cloud_service.py` 的 `_compute_ns_quota`），刪掉一台上限少 3 份、用量只少約 1 份，剩餘
+ * 空間通常變小而不是變大——單台 limits 被調高到超過上限時（2026-10-10 事故）刪別台反而更糟。
+ * 租戶做得到又有效的只有聯絡客服（管理員調整配額的正式入口在 #1648）。
  *
  * @param {Object|null|undefined} service
  * @returns {string|null}
@@ -84,7 +87,7 @@ export function getWorkloadFaultText(service) {
   }
   if (fault === "quota_exceeded") {
     return _t(
-      "This service is not running right now: the workspace has no CPU or memory quota left to start it. Deleting a service you no longer need in this workspace may bring it back; otherwise please contact support. Our operations team has been notified.",
+      "This service is not running right now: it cannot start because the workspace's CPU or memory quota is full. Please contact support. Our operations team has been notified.",
     );
   }
   return _t(
