@@ -36,7 +36,10 @@ from psycopg2 import OperationalError
 
 from odoo import _, api, fields, models
 
-from .cloud_service import OBSERVATION_TRANSITION_STATES
+from .cloud_service import (
+    OBSERVATION_TRANSITION_STATES,
+    _COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -541,7 +544,7 @@ class PlatformMonitor(models.Model):
             text = '%s needs %s / limit %s / other workloads %s / short by %s' % (
                 shortfall.get('resource'), shortfall.get('required'), shortfall.get('hard'),
                 shortfall.get('other'), shortfall.get('short_by'))
-            if shortfall.get('reason') == 'rolling_on_downgrade':
+            if shortfall.get('reason') == _COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE:
                 # 換方案降級：不是別人佔太多，而是新方案的上限放不下新舊並存——調高配額
                 # 不是對的處置（租戶已被告知聯絡客服）。
                 text += (' [plan downgrade: the smaller quota of the new plan cannot hold the '

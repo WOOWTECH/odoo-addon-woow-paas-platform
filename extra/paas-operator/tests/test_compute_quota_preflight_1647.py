@@ -11,7 +11,9 @@ admission 拒絕（ReplicaSet ``FailedCreate: exceeded quota``），剩 0 個 po
 """
 import json
 import logging
+import re
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -828,6 +830,32 @@ def test_downgrade_that_does_not_fit_at_all_is_an_ordinary_shortfall():
 
 def test_downgrade_with_recreate_has_no_overlap_to_worry_about():
     assert evaluate(**_downgrade("17", strategy={"type": "Recreate"}))["status"] == "ok"
+
+
+#: 平台（Odoo addon）認 ``reason`` 的那個常數所在的檔——跨 repo 邊界讀檔，同
+#: ``test_route_contract_golden_648.py`` 讀 ``src/tests/fixtures`` 的寫法。
+_PLATFORM_CLOUD_SERVICE = (Path(__file__).resolve().parents[3]
+                           / "src" / "models" / "cloud_service.py")
+
+
+def test_downgrade_reason_matches_the_platform_constant():
+    """operator 給的 ``reason`` 與平台認的那個字串必須是同一個（字面值共兩份）。
+
+    平台的租戶訊息與管理員告警行都靠 ``_COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE`` 認降級；
+    兩邊各自的測試都用自己的字面值，其中一邊改名時不會一起紅——降級專用的說明會無聲地退回
+    一般文案。Odoo 的測試讀不到 ``extra/``，所以對帳放在這一邊。
+    """
+    source = _PLATFORM_CLOUD_SERVICE.read_text(encoding="utf-8")
+    found = re.findall(
+        r"""^_COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE\s*=\s*(['"])([^'"\n]+)\1\s*$""",
+        source, flags=re.MULTILINE)
+    assert len(found) == 1, (
+        "在 src/models/cloud_service.py 找不到（或找到不只一個）"
+        "_COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE = '<字串>'——常數改名或搬走了？"
+        "這條測試與 compute_quota.REASON_ROLLING_ON_DOWNGRADE 的註解要一起更新。")
+    assert found[0][1] == compute_quota.REASON_ROLLING_ON_DOWNGRADE, (
+        "平台認的 reason 是 %r，operator 給的是 %r——兩份要一起改，否則降級的說明不會出現。"
+        % (found[0][1], compute_quota.REASON_ROLLING_ON_DOWNGRADE))
 
 
 # --- Job 的 pod 是暫時性的佔用 -------------------------------------------------------

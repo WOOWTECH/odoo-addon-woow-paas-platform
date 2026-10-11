@@ -619,8 +619,12 @@ _FALSEY_PARAM_VALUES = ('0', 'false', 'no', 'off')
 # #1647：升級前的 compute 配額預檢（operator 端判斷）要不要請 operator 做。prod kill switch：
 # 預檢誤判時設成假值，平台就不再送旗標、行為回到加入預檢之前。未設＝開。
 _COMPUTE_QUOTA_PRECHECK_PARAM = 'woow_paas_platform.compute_quota_precheck_enabled'
-# operator 在換方案降級時給 rolling shortfall 帶的 ``reason``（extra/paas-operator
-# ``compute_quota.REASON_ROLLING_ON_DOWNGRADE`` 同字串，改名兩邊一起改）。
+# operator 在換方案降級時給 rolling shortfall 帶的 ``reason``。字面值共兩份、改名要一起改：
+# 這裡，與 extra/paas-operator ``compute_quota.REASON_ROLLING_ON_DOWNGRADE``。兩份對不上時
+# operator 的 unit test ``test_downgrade_reason_matches_the_platform_constant`` 會紅（Odoo 測試
+# 讀不到 extra/，對帳放在那一邊；它以 regex 讀下面這一行，所以要維持「常數名 = '字串'」單行）。
+# 平台端的兩個使用點都引用本常數、不另寫字面值：本檔 ``_compute_quota_error_message``（租戶
+# 訊息）與 ``platform_monitor._report_compute_quota_rejection``（管理員告警行）。
 _COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE = 'rolling_on_downgrade'
 
 

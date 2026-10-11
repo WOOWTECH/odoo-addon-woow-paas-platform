@@ -80,7 +80,10 @@ _TERMINAL_PHASES = ("Succeeded", "Failed")
 #: controller owner 是這些 kind 的 pod 跑完就釋出配額（CronJob 產生的也是 Job 擁有）。
 _TRANSIENT_OWNER_KINDS = ("Job",)
 #: shortfall 的 ``reason``：換方案降級（將推送的上限比現在小）而新舊 pod 並存時放不下。
-#: 平台 ``cloud_service._compute_quota_error_message`` 認這個字串，改名兩邊一起改。
+#: 字面值共兩份、改名要一起改：這裡，與平台 ``src/models/cloud_service.py`` 的
+#: ``_COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE``（平台的租戶訊息與 ``platform_monitor`` 的
+#: 管理員告警行都引用那個常數）。兩份對不上時 ``tests/test_compute_quota_preflight_1647.py``
+#: 的 ``test_downgrade_reason_matches_the_platform_constant`` 會紅。
 REASON_ROLLING_ON_DOWNGRADE = "rolling_on_downgrade"
 _ZERO = Decimal(0)
 _GI = Decimal(1024 ** 3)
