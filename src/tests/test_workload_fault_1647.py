@@ -27,21 +27,26 @@
   第一台之後就中止、operator 回錯只印一行 warning、改 0 筆也印一行 INFO；
 * 每日對帳順帶回寫 workload 觀測（同樣值沒變不寫），出錯不連累 release 事實，既有那行
   log 不變；
-* /woow payload 只給**已確認**的代碼，不帶叢集原文。
+* /woow payload 只給**已確認**的代碼，不帶叢集原文；
+* 後台表單警示的每一段可見文字在 zh_TW.po 都有譯文（review detect-S2）。
 
 status 一律用 ``status_response()``／``workload_info()`` 組（形狀對帳到 operator 的 pydantic
 宣告與打真端點產的 golden，見 ``operator_contract.py``）。
 """
 import json
 import logging
+import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from lxml import etree
+
 from odoo import fields
 from odoo.exceptions import AccessError
 from odoo.tests.common import BaseCase, TransactionCase, tagged
+from odoo.tools.translate import PoFileReader, xml_translate
 
 from ..models.cloud_service import (
     WORKLOAD_CHECK_BUDGET_SECONDS,
@@ -1448,3 +1453,93 @@ class TestWorkloadFaultPayload1647(_WorkloadCase):
                 payload = self._format(as_owner, include_details, user=self.owner)
                 self.assertEqual(payload['workload_fault'], 'quota_exceeded')
 
+
+# ====================================================================== #
+#  譯文                                                                    #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestWorkloadFaultTranslations1647(TransactionCase):
+    """新字串的 zh_TW 譯文（review detect-S2）。
+
+    判準用 Odoo 自己的工具：term 由 ``xml_translate`` 從**實際的 view arch** 抽，po 由
+    ``PoFileReader`` 讀——runtime 載入譯文時用的就是這兩樣。手抄 msgid 的話，抽取規則一猜錯
+    （例：``<strong>`` 會連標籤一起成為 term、``<field/>`` 後面的文字各自成為一個 term）
+    測試照樣綠，而畫面上是半中半英。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        po = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'i18n', 'zh_TW.po')
+        cls.entries = list(PoFileReader(po))
+
+    def _translations(self, entry_type, name, imd_name):
+        return {e['src']: e['value'] for e in self.entries
+                if e['type'] == entry_type and e.get('name') == name
+                and e.get('imd_name') == imd_name}
+
+    def _alert_terms(self):
+        """後台表單那塊 workload 警示（含它裡面所有可見文字）被 Odoo 拆成的翻譯 term。"""
+        view = self.env.ref('woow_paas_platform.view_cloud_service_form')
+        arch = etree.fromstring(view.with_context(lang='en_US').arch_db)
+        alerts = arch.xpath(
+            "//div[@role='alert'][.//field[@name='workload_fault_detail']]")
+        self.assertEqual(len(alerts), 1, 'fixture 前提：表單上找得到那一塊 workload 警示')
+        terms = []
+
+        def _collect(term):
+            terms.append(term)
+            return None
+
+        xml_translate(_collect, etree.tostring(alerts[0], encoding='unicode'))
+        return terms
+
+    def test_every_visible_text_of_the_backend_alert_is_translated(self):
+        terms = self._alert_terms()
+        # 陽性對照：抽取真的有抓到東西，而且包含 <field/> 之間的那兩段文字。
+        self.assertGreaterEqual(len(terms), 3, terms)
+        self.assertTrue(any(term.startswith('<strong>') for term in terms), terms)
+        self.assertTrue([term for term in terms if not term.startswith('<')], terms)
+        translated = self._translations(
+            'model_terms', 'ir.ui.view,arch_db', 'view_cloud_service_form')
+        for term in terms:
+            with self.subTest(term=term):
+                self.assertTrue(translated.get(term),
+                                'zh_TW.po 缺這一段的譯文（msgid 必須與抽出的 term 完全相同）')
+
+    def test_backend_alert_renders_fully_in_traditional_chinese(self):
+        """把譯文套回去之後，警示裡不該還剩英文的句子片段。"""
+        view = self.env.ref('woow_paas_platform.view_cloud_service_form')
+        arch = etree.fromstring(view.with_context(lang='en_US').arch_db)
+        alert = arch.xpath("//div[@role='alert'][.//field[@name='workload_fault_detail']]")[0]
+        translated = self._translations(
+            'model_terms', 'ir.ui.view,arch_db', 'view_cloud_service_form')
+
+        rendered = etree.fromstring(xml_translate(
+            translated.get, etree.tostring(alert, encoding='unicode')))
+
+        text = ' '.join(''.join(rendered.itertext()).split())
+        for english in ('This service', 'first seen', 'last change recorded', 'since',
+                        'last checked'):
+            self.assertNotIn(english, text)
+        self.assertIn('首次觀測於', text)
+        self.assertIn('觀測結果最後寫入於', text)
+
+    def test_new_field_labels_and_help_are_translated(self):
+        fields_with_help = (
+            ('cloud_service', 'workload_checked_at'),
+            ('platform_monitor', 'workload_check_cursor'),
+        )
+        for model, field in fields_with_help:
+            record = self.env['woow_paas_platform.%s' % model]
+            imd_name = 'field_woow_paas_platform_%s__%s' % (model, field)
+            definition = record._fields[field]
+            for name, source in (('ir.model.fields,field_description', definition.string),
+                                 ('ir.model.fields,help', definition.help)):
+                with self.subTest(field=field, part=name):
+                    self.assertTrue(source, 'fixture 前提：欄位有 string 與 help')
+                    self.assertTrue(
+                        self._translations('model', name, imd_name).get(source),
+                        'zh_TW.po 缺譯文，或 msgid 與欄位定義的文字不一致：%r' % source)

@@ -12470,8 +12470,18 @@ msgstr "沒有 Pod（原因不明）"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
-msgid "This service is marked running, but a workload has no pods."
-msgstr "這個服務標示為 running，但有 workload 一個 Pod 都沒有。"
+msgid "<strong>This service is marked running, but a workload has no pods.</strong>"
+msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有。</strong>"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "— first seen"
+msgstr "— 首次觀測於"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid ", last change recorded"
+msgstr "，觀測結果最後寫入於"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_platform_monitor__workload_check_cursor
