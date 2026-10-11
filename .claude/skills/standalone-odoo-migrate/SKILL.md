@@ -81,7 +81,47 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
    - 匯入後管理員帳密是來源站的，平台存的那組不再適用；租戶可在服務頁按 Reset 重設（重設 `base.user_admin`、清掉 2FA）。
    ⚠ web 一開回來 cron 就開始跑（寄信、收信、金流、外部整合）。來源沒凍結的彩排（`export.sh --live`）不中和的話，
    兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`。
-9. **cutover**（hostname、外部整合改指、來源下線）：尚未實作，設計與進度在 #1604。
+9. **cutover**（正式切換；prod 每一步人工放行）。前置：彩排通過、目標服務已由人在 prod 租戶買好、下方「切換前檢查」
+   逐項有結論。停機時間＝凍結匯出＋還原＋開機升級＋比對（harumi 的量：約 15 秒＋45 秒＋3 分鐘，另加人工步驟）。
+   1. 目標服務先調好設定（「切換前檢查」的 conf 覆寫），Redeploy 完成、服務 running。
+   2. 凍結來源（WMO）：公告停機 → POS session 全部關帳、沒有 draft 訂單 → 來源 odoo scale 0（postgres 留著）。
+   3. 走步驟 6～8：`export.sh` **不帶** `--live`、`restore.sh` **不帶** `--neutralize`。兩階段 verify 都 exit 0 才往下；
+      不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。
+   4. 對外網址改指（下方「對外網址」）、外部整合改指（MCP、webhook 來源端的設定）。
+   5. 驗收（人）：登入、開一個 POS session、收發各一封信、金流測一筆。
+   6. 回切：新站產生第一筆真實交易之前，把來源 odoo scale 回 1、網址指回來源即可——匯出全程唯讀，來源資料沒被動過。
+      之後就不能回切（兩邊資料分岔）。
+   7. 收尾：`verify.sh --stage upgrade --cleanup` 刪掉含客戶資料的 incoming PVC；來源保留到約定的觀察期滿再下線（WMO）。
+
+## 切換前檢查
+
+每一站在彩排後、排切換日之前逐項確認；`compat_check.py` 的「注意事項」會列出其中幾項。
+
+- **方案與資源**：目標的 `workers` 與記憶體上限由購買的方案決定（`cs_odoo_workers`／`cs_ram_gb`），不能逐台覆寫。
+  來源的 `workers`、`limit_memory_*` 用來選方案；選小了，切過去會變慢或 worker 被記憶體上限中止。
+- **conf 覆寫**：`limit_time_cpu`／`limit_time_real`／`server_wide_modules` 不在方案內，chart 預設是 60／120／`base,web`。
+  平台管理員把 `conf.limitTimeCpu`、`conf.limitTimeReal`、`conf.serverWideModules` 寫進服務的 `helm_values` 後 Redeploy
+  （stg 實測：odoo.conf 生效、`server_wide_modules` 帶 `/all-addons` 的模組可以開機）。
+- **寄收信主機**：盤點的 `db.mail_hosts`。conf 層的 SMTP 不會帶過去（改用 DB 的 `ir.mail_server`）。叢集內位址
+  （`*.svc.cluster.local`）從租戶 ns **連不到**——baseline egress 只放行同 ns、DNS 與對外網路（stg 實測 mailcow 的
+  587／993 被拒）。切換前要有解法：兩端 NetworkPolicy 放行（來源叢集的維運＋平台），或改用對外位址。
+- **對外網址**：要不要沿用來源的 hostname（印在桌上的 QR code、金流回呼、外部系統都指向它）。見下方。
+- **外部整合**：連到來源內部位址的東西（MCP server、其他服務的 webhook）切換後要改指新服務。
+- **登入**：session 不搬，所有人要重新登入；平台開通時給的管理員帳密不適用，帳密是來源站的。
+- **金流與發票**：正式切換不中和，來源的金流供應商、發票憑證原樣帶過去，回呼網址跟著對外網址走。
+
+## 對外網址
+
+平台服務自帶一個 `<subdomain>.<平台網域>` 網址。要讓來源的 hostname 繼續指到新服務，用 operator 的 route API 另加一條：
+
+- `POST /api/routes`，body `{"subdomain": "<來源 hostname 的第一段>", "service_url": "http://<release>.<ns>.svc.cluster.local:80"}`
+  ——在平台 tunnel 加 ingress rule 並建 DNS CNAME。只適用於與平台同一個網域的 hostname。
+- ⚠ 那筆 DNS 記錄還指向一條**活著的** tunnel 時 operator 會拒絕（`_assert_dns_repoint_allowed`）：切換時先由來源 tunnel 的
+  管理者刪掉舊的 DNS 記錄（或整條來源 tunnel），再呼叫。順序＝來源下線 → 刪舊記錄 → 加新 route。
+- stg 實測（額外 hostname 指到彩排站）：加上後可用；Redeploy 後仍在；**停權時它回 502**，不會像服務自己的網址改指
+  停權說明頁；`DELETE /api/routes/<subdomain>` 可移除。
+- 平台不認得這條 route：刪服務時不會一起刪，要手動移除。Odoo 端的 `web.base.url` 是來源帶過來的原值，不必改。
+- prod 的 route 是 prod 寫入，由人放行後執行；回切＝刪掉這條 route、把 DNS 指回來源 tunnel。
 
 ## 彩排與中和
 

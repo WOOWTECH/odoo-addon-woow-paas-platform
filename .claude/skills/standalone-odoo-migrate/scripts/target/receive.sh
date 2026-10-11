@@ -11,7 +11,7 @@
 #   程式＝woow-e2e-fixtures/scripts/prod-clone/receiver.py）、Service、NP（只放行 --source-ns → receiver:8080）。
 #   token 寫到 --token-out（預設 ./upload-token-<set>，權限 600）交給 WMO 的 export.sh；印出 --url。
 # close：刪 receiver pod／Service／NP／token Secret；**保留** incoming PVC（restore.sh 要讀，restore 完自己刪）。
-# exit：0 成功、2 參數錯誤、3 receiver 起不來
+# exit：0 成功、2 參數錯誤、3 incoming PVC 建不出來（例：租戶 ns 儲存配額不足）或 receiver 起不來
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -64,7 +64,12 @@ open() {
   fi
   "${K[@]}" create configmap "$NAME" --from-file=receiver.py="$RECEIVER_PY" --dry-run=client -o yaml \
     | "${K[@]}" apply -f - >/dev/null
-  "${K[@]}" apply -f - >/dev/null <<EOF
+  # PVC 先單獨建：租戶 ns 有儲存配額（一台 Odoo 就佔 48Gi，刪掉的服務在 7 天寬限期內仍然計入），超過時要在這裡
+  # 明確失敗，不要留下一顆永遠 Pending 的 receiver。
+  local err
+  if "${K[@]}" get pvc "$PVC" >/dev/null 2>&1; then
+    echo "incoming PVC $PVC already exists; reusing it (--size ignored)" >&2
+  elif ! err=$("${K[@]}" apply -f - 2>&1 >/dev/null <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -74,7 +79,11 @@ spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn-delete
   resources: {requests: {storage: $SIZE}}
----
+EOF
+  ); then
+    die 3 "cannot create incoming PVC $PVC ($SIZE): ${err##*$'\n'} — 配額不足時用 --size 調小（dump＋filestore 的兩倍就夠）後重跑"
+  fi
+  "${K[@]}" apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Service
 metadata:
