@@ -30,7 +30,8 @@
 * /woow payload 只給**已確認**的代碼，不帶叢集原文；
 * 後台表單警示的每一段可見文字在 zh_TW.po 都有譯文（review detect-S2）；
 * /woow 的三句租戶文案在 zh_TW.po 都有譯文，配額那一句（英文與譯文）只請租戶聯絡客服、
-  不建議刪除／停用／停止服務來釋出配額。
+  不建議刪除／停用／停止服務來釋出配額，而且說的是「剩餘配額不足以啟動」、不說配額已滿
+  （瀏覽器實走 F2）。
 
 status 一律用 ``status_response()``／``workload_info()`` 組（形狀對帳到 operator 的 pydantic
 宣告與打真端點產的 golden，見 ``operator_contract.py``）。
@@ -1572,7 +1573,7 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
                                 'zh_TW.po 缺譯文，或 msgid 與 JS 裡的文字不一致')
 
     def test_quota_text_only_points_the_tenant_to_support(self):
-        """配額已滿的租戶文案（英文與 zh_TW）只請租戶聯絡客服。
+        """配額擋下的租戶文案（英文與 zh_TW）只請租戶聯絡客服。
 
         不得建議刪除／停用／停止服務或改小方案來釋出 CPU 或記憶體配額：工作區的上限是存活
         服務的方案規格加總 × 3（另有下限，``_compute_ns_quota``），刪掉一台上限少 3 份、用量
@@ -1592,3 +1593,23 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
                 self.assertIn('聯絡客服', chinese)
                 for word in ('刪除', '移除', '停用', '停止', '暫停', '關閉', '降級', '較小'):
                     self.assertNotIn(word, chinese)
+
+    def test_quota_text_says_not_enough_left_rather_than_full(self):
+        """配額擋下的租戶文案（英文與 zh_TW）說「剩餘配額不足以啟動」，不說配額已滿。
+
+        被擋下的常見形狀是「還有剩，但不夠這台啟動」（事故：上限 12、其他 workload 佔 8、
+        這台要 8）。寫成已滿／用完的話，同一個租戶在工作區頁的配額面板看到的是「還剩
+        4 vCPU」，兩邊對不起來（瀏覽器實走 F2）。
+        """
+        quota = [text for text in self._tenant_fault_strings() if 'quota' in text.lower()]
+        self.assertTrue(quota, 'fixture 前提：找得到配額那一句')
+        translated = self._code_translations()
+        for english in quota:
+            chinese = translated.get(english) or ''
+            with self.subTest(text=english):
+                self.assertNotRegex(
+                    english, r'(?i)\b(full|used up|exhausted|ran out|run out|no\b.*\bleft)\b')
+                self.assertRegex(english, r'not have enough\b.*\bquota left to start')
+                for word in ('已滿', '滿了', '用完', '用盡', '耗盡'):
+                    self.assertNotIn(word, chinese)
+                self.assertIn('配額不足以啟動', chinese)

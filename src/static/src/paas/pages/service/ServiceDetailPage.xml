@@ -254,9 +254,9 @@
                     <WoowIcon name="'error'" size="20"/>
                     <span class="o_woow_service_error_banner__text" t-esc="service.error_message"/>
                 </div>
-                <!-- #1647：服務顯示 running、但平台確認它沒有在執行（例：工作區配額用完，
-                     Pod 建不出來）。獨立的 t-if，不接在上面的 if／elif 鏈上：那條鏈講的是
-                     error 狀態的訊息，這一則只在 running 時出現。文案固定，由
+                <!-- #1647：服務顯示 running、但平台確認它沒有在執行（例：工作區剩餘的配額
+                     不夠這台啟動，Pod 建不出來）。獨立的 t-if，不接在上面的 if／elif 鏈上：
+                     那條鏈講的是 error 狀態的訊息，這一則只在 running 時出現。文案固定，由
                      getWorkloadFaultText 依後端確認過的代碼挑。 -->
                 <div t-if="workloadFaultText" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>

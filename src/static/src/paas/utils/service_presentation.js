@@ -77,6 +77,10 @@ function getConfirmedWorkloadFault(service) {
  * 空間通常變小而不是變大——單台 limits 被調高到超過上限時（2026-10-10 事故）刪別台反而更糟。
  * 租戶做得到又有效的只有聯絡客服（管理員調整配額的正式入口在 #1648）。
  *
+ * ⛔ 也不要寫成配額「已滿／用完」：被擋下的常見形狀是「還有剩，但不夠這台啟動」（事故：
+ * 上限 12、其他 workload 佔 8、這台要 8）——同一個租戶在工作區頁的配額面板看到的是
+ * 「還剩 4 vCPU」，兩邊對不起來。要說的是「剩餘的配額不足以啟動這台服務」。
+ *
  * @param {Object|null|undefined} service
  * @returns {string|null}
  */
@@ -87,7 +91,7 @@ export function getWorkloadFaultText(service) {
   }
   if (fault === "quota_exceeded") {
     return _t(
-      "This service is not running right now: it cannot start because the workspace's CPU or memory quota is full. Please contact support. Our operations team has been notified.",
+      "This service is not running right now: the workspace does not have enough CPU or memory quota left to start it. Please contact support. Our operations team has been notified.",
     );
   }
   return _t(

@@ -21,7 +21,7 @@ const presentation = await import(
 );
 
 const QUOTA_TEXT =
-  "This service is not running right now: it cannot start because the workspace's CPU or memory quota is full. Please contact support. Our operations team has been notified.";
+  "This service is not running right now: the workspace does not have enough CPU or memory quota left to start it. Please contact support. Our operations team has been notified.";
 const GENERIC_TEXT =
   "This service is not running right now: the platform could not start it. Our operations team has been notified.";
 const LABEL = "Not running — the platform could not start this service";
@@ -54,6 +54,17 @@ test("配額文案只請租戶聯絡客服，不建議刪除／停用／停止�
   );
   assert.match(text, /quota/);
   assert.match(text, /contact support/);
+});
+
+test("配額文案說的是「剩餘配額不足以啟動這台」，不說配額已滿", () => {
+  // 被擋下的常見形狀是「還有剩，但不夠這台啟動」（事故：上限 12、其他 workload 佔 8、這台
+  // 要 8）。寫成「已滿」的話，同一個租戶在工作區頁的配額面板看到的是「還剩 4 vCPU」。
+  const text = presentation.getWorkloadFaultText({
+    state: "running",
+    workload_fault: "quota_exceeded",
+  });
+  assert.doesNotMatch(text, /\b(full|used up|exhausted|ran out|run out|no\b.*\bleft)\b/i);
+  assert.match(text, /not have enough\b.*\bquota left to start/);
 });
 
 test("create_failed、no_pods 與不認得的代碼都顯示一般文案", () => {

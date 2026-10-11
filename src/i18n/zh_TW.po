@@ -12519,8 +12519,8 @@ msgstr "%(name)s（id=%(id)s）：workload 已恢復有 Pod（自 %(since)s UTC 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
-msgid "This service is not running right now: it cannot start because the workspace's CPU or memory quota is full. Please contact support. Our operations team has been notified."
-msgstr "這個服務目前沒有在執行：工作區的 CPU 或記憶體配額已滿，無法啟動這個服務。請聯絡客服。已通知維運人員處理。"
+msgid "This service is not running right now: the workspace does not have enough CPU or memory quota left to start it. Please contact support. Our operations team has been notified."
+msgstr "這個服務目前沒有在執行：工作區剩餘的 CPU 或記憶體配額不足以啟動這個服務。請聯絡客服。已通知維運人員處理。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
