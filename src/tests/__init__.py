@@ -1042,6 +1042,8 @@ from . import test_redeploy_images_1408
 from . import test_deploy_timeout_diagnosis_1417
 # #1416：逾時轉 error 後 release 就緒會自動恢復（背景低頻重查、只碰逾時造成的 error）。
 from . import test_deploy_timeout_recovery_1416
+# #1647：running 的服務有 workload 期望有 Pod、實際一顆都沒有——偵測、通知、顯示，不改 state。
+from . import test_workload_fault_1647
 # #1431：從未 running 過的服務刪除時孤兒 PVC 只留 1 天；first_running_at 的寫入、守衛與保守回填。
 from . import test_never_running_orphan_grace_1431
 # #1424：開通被 operator 拒絕（#1348／#1415）且從未 running ⇒ 自動取消訂閱；一直停在 error、

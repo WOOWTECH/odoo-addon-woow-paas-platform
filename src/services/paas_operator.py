@@ -1105,6 +1105,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         include_vm: bool = False,
+        include_workloads: bool = False,
     ) -> Dict[str, Any]:
         """Get detailed status of a release including pod information.
 
@@ -1118,20 +1119,34 @@ class PaaSOperatorClient:
                 而平台對 VM 的就緒判定是 fail-closed —— 漏帶這個旗標會讓
                 VM 服務永遠停在 ``deploying``。回應的 ``vm_included`` 欄位
                 是 operator 對本旗標的 echo，可用來斷言確實有帶到。
+            include_workloads: 也取回 Deployment／StatefulSet 的副本數與「建不出 Pod」
+                的證據（#1647）。回應多 ``workloads_included``（operator 對本旗標的
+                echo）、``workloads``、``workload_retrieval_error``。
+
+                ⚠ 舊 operator 會**忽略**這個參數（FastAPI 不認得的 query 直接略過），
+                回應裡**沒有**這三個 key。呼叫端必須把缺席當成「不支援」——不是
+                「沒有 workload」，更不是「健康」（判定見
+                ``services/workload_health.py`` 的 ``workload_verdict``）。
 
         Returns:
             Release and pod status（``include_vm=True`` 時另含 ``vm_included`` /
             ``vmis`` / ``datavolumes`` / ``vmi_retrieval_error`` /
-            ``datavolume_retrieval_error``）
+            ``datavolume_retrieval_error``；``include_workloads=True`` 時另含
+            ``workloads_included`` / ``workloads`` / ``workload_retrieval_error``）
 
         Raises:
             PaaSOperatorError: If status retrieval fails
         """
-        params = {'include_vm': 'true'} if include_vm else None
+        # 兩個旗標各自為真才放；都沒有時 params=None，與加旗標之前的 wire 完全相同。
+        params = {}
+        if include_vm:
+            params['include_vm'] = 'true'
+        if include_workloads:
+            params['include_workloads'] = 'true'
         return self._request(
             'GET',
             f'/api/releases/{namespace}/{release_name}/status',
-            params=params,
+            params=params or None,
         )
 
 

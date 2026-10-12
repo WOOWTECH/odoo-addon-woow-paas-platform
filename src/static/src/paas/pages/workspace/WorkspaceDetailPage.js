@@ -19,6 +19,7 @@ import { cloudService, getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, getRoleLabel, formatDate } from "../../services/utils";
+import { countServiceHealth } from "../../utils/service_presentation";
 import { formatPointsPerUnit } from "../../utils/billing_helpers";
 import { formatUserDateTime } from "../../utils/datetime_helpers";
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
@@ -326,8 +327,8 @@ export class WorkspaceDetailPage extends Component {
 
     get computedStats() {
         const services = this.state.services || [];
-        const runningCount = services.filter(s => s.state === "running").length;
-        const errorCount = services.filter(s => s.state === "error").length;
+        // #1647：running 但平台已確認沒有在執行的服務不算 Healthy、算進 Alerts（判準在 helper）。
+        const { healthy: runningCount, alerts: errorCount } = countServiceHealth(services);
 
         return [
             { label: _t("Estimated Cost"), value: this.estimatedMonthlyCost, icon: "payments", color: "purple" },

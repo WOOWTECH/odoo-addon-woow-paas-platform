@@ -235,6 +235,18 @@ Example: paas-ws-123-anythingllm-01
 > `initializing`，否則 `running`），清掉訊息與標記並在 PaaS Platform Monitor 留紀錄。其他來源的 error
 > （operator 回 failed、刪除／停權失敗、init 額度出口…）沒有標記，永遠不會被這條自癒碰到。
 
+> **running 之後 Pod 不見（#1647）**：`running` 的服務每 10 分鐘（`_cron_check_running_workloads`；另每日對帳時
+> 順帶）向 operator 取 `status?include_workloads=true`。任一 Deployment／StatefulSet 期望 ≥1 個 Pod 而實際 0 個
+> （例：ReplicaSet `FailedCreate: exceeded quota`）就寫 `workload_fault_*`、在 PaaS Platform Monitor 通知系統管理員
+> （有 `FailedCreate` 證據立即，沒有則要持續 5 分鐘以上），並在 `/woow` 詳情頁與服務卡片顯示固定文案。
+> 異常對租戶確認期間，`/woow` 其他原本只看 `state` 的訊號一起讓路：詳情頁 Connection Info 的連線狀態顯示 OFFLINE、
+> 工作區頁統計卡把這台算進 Alerts 而不是 Healthy；狀態徽章仍是 Running。
+> **不改 `state`／`error_message`**；Pod 恢復或服務離開 `running` 後自動清除。舊 operator 不回報 workloads 時什麼都不寫。
+> 觀測欄位**值真的變了才寫**：健康的服務、內容沒變的異常都不寫服務列（`write_date` 不動，不與每日對帳／生命週期
+> cron 的長交易互撞），所以 `workload_checked_at` 是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
+> 10 分鐘 cron 的輪替位置記在 PaaS Platform Monitor 單例的 `workload_check_cursor`（最後處理的 service id；成功、
+> 失敗、略過都推進，提前中止後下一趟從中止處之後開始）。
+
 ### Supported Operations
 
 | Operation | Helm Command               | Description                                      |

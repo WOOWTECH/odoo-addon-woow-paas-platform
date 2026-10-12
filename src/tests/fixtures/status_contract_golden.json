@@ -1,5 +1,5 @@
 {
-  "_contract_fingerprint": "9b06b35601a6b4e2695baeaadd1a960e56cbd84786ac15c6a6e22d626a730328",
+  "_contract_fingerprint": "a80521c1ba924c56687f467356e9f5a8889c481afbd91f0e32a898dab7652ba9",
   "pod_retrieval_failed": {
     "datavolume_retrieval_error": null,
     "datavolumes": null,
@@ -21,7 +21,10 @@
     },
     "vm_included": false,
     "vmi_retrieval_error": null,
-    "vmis": null
+    "vmis": null,
+    "workload_retrieval_error": null,
+    "workloads": null,
+    "workloads_included": false
   },
   "unready_pod_diagnostics": {
     "datavolume_retrieval_error": null,
@@ -116,7 +119,10 @@
     },
     "vm_included": false,
     "vmi_retrieval_error": null,
-    "vmis": null
+    "vmis": null,
+    "workload_retrieval_error": null,
+    "workloads": null,
+    "workloads_included": false
   },
   "woow_odoo_chart": {
     "datavolume_retrieval_error": null,
@@ -215,6 +221,83 @@
     },
     "vm_included": false,
     "vmi_retrieval_error": null,
-    "vmis": null
+    "vmis": null,
+    "workload_retrieval_error": null,
+    "workloads": null,
+    "workloads_included": false
+  },
+  "workload_create_blocked": {
+    "datavolume_retrieval_error": null,
+    "datavolumes": null,
+    "pod_identity_included": true,
+    "pod_retrieval_error": null,
+    "pods": [
+      {
+        "age": "5m",
+        "component": "postgresql",
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "images": [],
+        "last_warning": null,
+        "name": "svc-1263-postgresql-0",
+        "owner_kind": "StatefulSet",
+        "phase": "Running",
+        "ready": "1/1",
+        "restarts": 0,
+        "task": null,
+        "waiting": null
+      }
+    ],
+    "release": {
+      "app_version": "18.0",
+      "chart": "woow-odoo",
+      "chart_version": "0.2.2",
+      "description": null,
+      "name": "svc-1263",
+      "namespace": "paas-ws-test-1263",
+      "revision": 3,
+      "route": null,
+      "status": "deployed",
+      "updated": "2026-09-29T01:00:00Z",
+      "values": null
+    },
+    "vm_included": false,
+    "vmi_retrieval_error": null,
+    "vmis": null,
+    "workload_retrieval_error": null,
+    "workloads": [
+      {
+        "desired_replicas": 1,
+        "kind": "Deployment",
+        "last_warning": {
+          "count": 23,
+          "last_seen": "2026-10-10T23:31:12Z",
+          "message": "Error creating: pods \"svc-1263-server-7d9c8b6f5-\" is forbidden: exceeded quota: paas-ws-test-1263-quota, requested: limits.cpu=8, used: limits.cpu=8, limited: limits.cpu=12",
+          "reason": "FailedCreate"
+        },
+        "name": "svc-1263-server",
+        "ready_replicas": 0,
+        "replica_failure": {
+          "last_transition": "2026-10-10T18:07:45Z",
+          "message": "pods \"svc-1263-server-7d9c8b6f5-\" is forbidden: exceeded quota: paas-ws-test-1263-quota, requested: limits.cpu=8, used: limits.cpu=8, limited: limits.cpu=12",
+          "reason": "FailedCreate"
+        },
+        "replicas": 0,
+        "strategy": "Recreate",
+        "updated_replicas": 0
+      },
+      {
+        "desired_replicas": 1,
+        "kind": "StatefulSet",
+        "last_warning": null,
+        "name": "svc-1263-postgresql",
+        "ready_replicas": 1,
+        "replica_failure": null,
+        "replicas": 1,
+        "strategy": "RollingUpdate",
+        "updated_replicas": 1
+      }
+    ],
+    "workloads_included": true
   }
 }
