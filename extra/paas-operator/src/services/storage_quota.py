@@ -17,6 +17,9 @@ cron 過了保留期才刪），但保留中的 PVC **仍計入** 工作區 name
   chart 用的情況，事前檢查只看得到「已滿」，看不到 chart 要幾顆）。
 
 全部是純函式，不呼叫 kubectl——取資料在 ``KubernetesService.get_storage_quota_snapshot``。
+
+:func:`tightest_quota_usage`（「同一資源取最緊的那個 quota」）也供 ``namespace_quota``
+（#1647：工作區頁顯示 CPU／記憶體／磁碟配額的上限與已佔用量）使用。
 """
 from __future__ import annotations
 
@@ -107,6 +110,47 @@ def _orphan_release_epoch(labels: Dict[str, str]) -> Optional[int]:
     return orphaned_at + grace_days * 86400
 
 
+def tightest_quota_usage(
+    quota_items: Iterable[Dict[str, Any]],
+    resources: Optional[Iterable[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """每個資源在 namespace 的 ResourceQuota 裡「最緊」的那一筆用量。
+
+    多個 quota 都宣告同一資源時取剩餘量（hard − used）最小的那一個——admission 是每個
+    quota 都要過，最緊的那個決定擋不擋。``hard`` 看不懂的資源略過（不知道 ≠ 0）；缺
+    ``status.used`` 視為 ``"0"``（quota controller 還沒算過）。
+
+    Args:
+        quota_items: ``kubectl get resourcequota -o json`` 的 ``items``。
+        resources: 只看這些資源；``None`` 表示各 quota ``hard`` 裡宣告的全部鍵。
+
+    Returns:
+        ``{resource: {"used": str, "hard": str, "quota": name, "_headroom": Decimal}}``。
+        ``_headroom`` 是內部欄位（``exhausted_resources`` 讀它），對外輸出前要拿掉。
+    """
+    wanted = None if resources is None else tuple(resources)
+    quotas: Dict[str, Dict[str, Any]] = {}
+    for item in quota_items or []:
+        status = item.get("status") or {}
+        hard = status.get("hard") or (item.get("spec") or {}).get("hard") or {}
+        used = status.get("used") or {}
+        name = (item.get("metadata") or {}).get("name", "")
+        for resource in (wanted if wanted is not None else hard):
+            hard_q = parse_quantity(hard.get(resource))
+            if hard_q is None:
+                continue
+            used_q = parse_quantity(used.get(resource, "0")) or Decimal(0)
+            current = quotas.get(resource)
+            if current is None or hard_q - used_q < current["_headroom"]:
+                quotas[resource] = {
+                    "used": str(used.get(resource, "0")),
+                    "hard": str(hard.get(resource)),
+                    "quota": name,
+                    "_headroom": hard_q - used_q,
+                }
+    return quotas
+
+
 def summarize(
     quota_items: Iterable[Dict[str, Any]], pvc_items: Iterable[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -120,25 +164,7 @@ def summarize(
         "orphaned_pvc_count": int, "orphaned_storage": "95Gi",
         "orphaned_releases": [..], "next_release_epoch": int | None}``
     """
-    quotas: Dict[str, Dict[str, Any]] = {}
-    for item in quota_items or []:
-        status = item.get("status") or {}
-        hard = status.get("hard") or (item.get("spec") or {}).get("hard") or {}
-        used = status.get("used") or {}
-        name = (item.get("metadata") or {}).get("name", "")
-        for resource in STORAGE_QUOTA_RESOURCES:
-            hard_q = parse_quantity(hard.get(resource))
-            if hard_q is None:
-                continue
-            used_q = parse_quantity(used.get(resource, "0")) or Decimal(0)
-            current = quotas.get(resource)
-            if current is None or hard_q - used_q < current["_headroom"]:
-                quotas[resource] = {
-                    "used": str(used.get(resource, "0")),
-                    "hard": str(hard.get(resource)),
-                    "quota": name,
-                    "_headroom": hard_q - used_q,
-                }
+    quotas = tightest_quota_usage(quota_items, STORAGE_QUOTA_RESOURCES)
 
     orphan_count = 0
     orphan_bytes = Decimal(0)

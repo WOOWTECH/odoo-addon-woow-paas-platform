@@ -359,23 +359,33 @@ data:
 
 ### Resource Quotas
 
-每個 Workspace namespace 設定資源配額：
+每個 Workspace namespace 有一個名為 `<namespace>-quota` 的 ResourceQuota。數值不是固定的，由平台依 workspace 內的服務計算後交給 operator 套用：
+
+- CPU／記憶體／磁碟：workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3，下限 8 vCPU／8Gi／100Gi（`src/models/cloud_service.py` 的 `_compute_ns_quota`）。
+- `requests` 與 `limits` 是同一個值（operator `extra/paas-operator/src/services/helm.py` 的 `_build_quota_manifest`）。
+- ephemeral-storage 依服務數計算（`_compute_ns_ephemeral_quota`）；PVC 數量上限固定為 10。
+
+只有一台 4 vCPU／8GB／60GB 服務的 workspace 會得到：
 
 ```yaml
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: workspace-quota
-  namespace: paas-ws-123
+  name: paas-ws-1a2b3c4d-quota
+  namespace: paas-ws-1a2b3c4d
 spec:
   hard:
-    requests.cpu: "8"
-    requests.memory: 16Gi
-    limits.cpu: "16"
-    limits.memory: 32Gi
+    requests.cpu: "12"
+    limits.cpu: "12"
+    requests.memory: 24Gi
+    limits.memory: 24Gi
+    requests.storage: 180Gi
     persistentvolumeclaims: "10"
-    requests.storage: 100Gi
+    requests.ephemeral-storage: 4Gi
+    limits.ephemeral-storage: 80Gi
 ```
+
+平台只在開通、換方案、刪除服務時重算並推送；手動改叢集上的 ResourceQuota 會在下一次推送被蓋回。排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
 
 ---
 

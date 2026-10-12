@@ -450,6 +450,13 @@ $woow-radius-lg: 1.25rem;
     }
 }
 
+// #1647：Resource Allocation 卡在三格下方接一句說明（tabs/OverviewTab.xml）。`p` 的全域
+// reset 是上 0、下 1rem——不補的話文字頂著格子下緣，卡片底部又比同頁其他卡多出一段。
+// 只認「緊接在 .o_woow_resource_grid 後面」的那一句，其他用 .o_woow_hint 的地方不受影響。
+.o_woow_resource_grid + .o_woow_hint {
+    margin: 1rem 0 0;
+}
+
 .o_woow_resource_item {
     display: flex;
     align-items: center;

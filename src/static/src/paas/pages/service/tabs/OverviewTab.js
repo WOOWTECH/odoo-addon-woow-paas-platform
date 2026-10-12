@@ -108,6 +108,14 @@ export class OverviewTab extends Component {
         return _t("Copy address");
     }
 
+    // #1647：Resource Allocation 卡顯示的是「這台服務的方案規格」，容易被讀成工作區的上限。
+    // 補一句說明兩者的差別。刻意**不寫**「目前用量請看工作區頁」：那塊配額面板在 operator
+    // 還沒升級、平台沒接 operator、namespace 沒有 quota、服務住在舊 namespace 時整塊不畫，
+    // 這一句不能承諾那裡一定看得到用量。
+    get workspaceQuotaHint() {
+        return _t("This is the plan of this service only. All services in the workspace share one overall CPU, memory and disk quota.");
+    }
+
     get helmNamespace() {
         return this.props.service.helm_namespace || `paas-ws-${this.props.service.workspace_id}`;
     }
