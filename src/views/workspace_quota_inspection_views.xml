@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_workspace_quota_inspection_list" model="ir.ui.view">
+        <field name="name">workspace.quota.inspection.list</field>
+        <field name="model">woow_paas_platform.workspace</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+        <field name="arch" type="xml">
+            <list string="Workspace Quota Observations" create="false" edit="false" delete="false"
+                  limit="5" decoration-warning="not quota_available">
+                <field name="name"/>
+                <field name="quota_status"/>
+                <field name="quota_available" column_invisible="True"/>
+                <field name="quota_reason" optional="show"/>
+                <field name="quota_observed_at"/>
+                <field name="quota_namespace" optional="hide"/>
+                <field name="quota_name" optional="hide"/>
+                <field name="quota_uid" optional="hide"/>
+                <field name="quota_resource_version" optional="hide"/>
+                <field name="quota_cpu_requests_hard" optional="show"/>
+                <field name="quota_cpu_requests_used" optional="show"/>
+                <field name="quota_cpu_limits_hard" optional="show"/>
+                <field name="quota_cpu_limits_used" optional="show"/>
+                <field name="quota_memory_requests_hard" optional="show"/>
+                <field name="quota_memory_requests_used" optional="show"/>
+                <field name="quota_memory_limits_hard" optional="show"/>
+                <field name="quota_memory_limits_used" optional="show"/>
+                <field name="quota_storage_requests_hard" optional="show"/>
+                <field name="quota_storage_requests_used" optional="show"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_workspace_quota_inspection_form" model="ir.ui.view">
+        <field name="name">workspace.quota.inspection.form</field>
+        <field name="model">woow_paas_platform.workspace</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+        <field name="arch" type="xml">
+            <form string="Workspace Quota Observation" create="false" edit="false" delete="false">
+                <header>
+                    <button name="action_refresh_quota" type="object" string="Refresh Observation"
+                            class="oe_highlight" groups="base.group_system"/>
+                </header>
+                <sheet>
+                    <h1><field name="name" readonly="True"/></h1>
+                    <div class="alert alert-warning" role="alert" invisible="quota_available">
+                        Quota observation is unknown or unavailable. Missing values are unknown, not zero.
+                    </div>
+                    <p>These are declared ResourceQuota allocations, not live resource utilization.
+                        The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity.</p>
+                    <group>
+                        <group string="Observation">
+                            <field name="quota_status"/>
+                            <field name="quota_available" invisible="True"/>
+                            <field name="quota_reason"/>
+                            <field name="quota_observed_at"/>
+                        </group>
+                        <group string="Managed ResourceQuota Identity">
+                            <field name="quota_namespace"/>
+                            <field name="quota_name"/>
+                            <field name="quota_uid"/>
+                            <field name="quota_resource_version"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="CPU (cores; m = millicores)">
+                            <field name="quota_cpu_requests_hard"/>
+                            <field name="quota_cpu_requests_used"/>
+                            <field name="quota_cpu_limits_hard"/>
+                            <field name="quota_cpu_limits_used"/>
+                        </group>
+                        <group string="Memory (Kubernetes quantities)">
+                            <field name="quota_memory_requests_hard"/>
+                            <field name="quota_memory_requests_used"/>
+                            <field name="quota_memory_limits_hard"/>
+                            <field name="quota_memory_limits_used"/>
+                        </group>
+                        <group string="Storage (Kubernetes quantities)">
+                            <field name="quota_storage_requests_hard"/>
+                            <field name="quota_storage_requests_used"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_workspace_quota_inspection" model="ir.actions.act_window">
+        <field name="name">Workspace Quota Observations</field>
+        <field name="res_model">woow_paas_platform.workspace</field>
+        <field name="view_mode">list,form</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+        <field name="context">{}</field>
+    </record>
+    <menuitem id="menu_workspace_quota_inspection" name="Workspace Quotas"
+              parent="menu_woow_paas_platform_root" action="action_workspace_quota_inspection"
+              groups="base.group_system" sequence="20"/>
+</odoo>

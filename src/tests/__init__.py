@@ -1168,3 +1168,7 @@ from . import test_sh_access_revision_ledger
 from .integration import test_sh_access_revision_rollback  # noqa: F401
 from . import test_skip_trial_balance_incl_tax
 from . import test_paas_included_vat
+
+from . import test_workspace_quota_inspection_1678
+
+from . import test_workspace_quota_inspection_live_1678

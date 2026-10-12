@@ -10,7 +10,9 @@ from src.models.schemas import (
     NamespaceQuotaUpdateRequest,
 )
 from src.services.helm import KubectlException, KubernetesService, validate_namespace
-from src.services.namespace_quota import QUOTA_UNREADABLE, quota_report, unavailable_report
+from src.services.namespace_quota import (
+    QUOTA_UNREADABLE, managed_quota_report, quota_report, unavailable_report,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/namespaces", tags=["namespaces"])
@@ -92,7 +94,7 @@ async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest
 # 一般 ``def``（不是 async）：FastAPI 會把它丟進 threadpool 跑，阻塞的 kubectl 不會卡住
 # event loop。同檔其他端點是 async 卻直接呼叫阻塞的 kubectl——那是既有形狀，不要照抄。
 @router.get("/{name}/quota", summary="#1647 — read ns ResourceQuota hard/used (read-only)")
-def get_namespace_quota(name: str) -> Dict[str, Any]:
+def get_namespace_quota(name: str, include_managed: bool = False) -> Dict[str, Any]:
     """#1647：namespace ResourceQuota 的上限與已佔用量（純唯讀）。
 
     一律回 200：拿得到時 ``available`` 為 True、``resources`` 以 k8s 資源鍵為 key；沒有
@@ -113,8 +115,14 @@ def get_namespace_quota(name: str) -> Dict[str, Any]:
     except (KubectlException, ValueError) as exc:
         logger.warning("Namespace quota unreadable for %s: %s", name,
                        getattr(exc, "stderr", None) or exc)
-        return unavailable_report(name, QUOTA_UNREADABLE)
-    return quota_report(name, items)
+        report = unavailable_report(name, QUOTA_UNREADABLE)
+        if include_managed:
+            report["managed_quota"] = managed_quota_report(name, [], reason=QUOTA_UNREADABLE)
+        return report
+    report = quota_report(name, items)
+    if include_managed:
+        report["managed_quota"] = managed_quota_report(name, items)
+    return report
 
 
 @router.post(
