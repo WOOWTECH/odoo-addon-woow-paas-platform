@@ -37,6 +37,7 @@ import {
     getStaleObservation,
     getStaleObservationLabel,
     getSupportProjectAction,
+    getWorkloadFaultText,
 } from "../../utils/service_presentation";
 
 /**
@@ -279,6 +280,14 @@ export class ServiceDetailPage extends Component {
 
     get initFailed() {
         return !!this.initFailureText;
+    }
+
+    /**
+     * #1647：服務顯示 running、但平台確認它沒有在執行時的固定文案（否則 null）。
+     * 只讀 payload 的 workload_fault；叢集的原始訊息不出後台。
+     */
+    get workloadFaultText() {
+        return getWorkloadFaultText(this.service);
     }
 
     /**

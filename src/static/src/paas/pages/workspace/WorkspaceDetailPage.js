@@ -19,14 +19,16 @@ import { cloudService, getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, getRoleLabel, formatDate } from "../../services/utils";
+import { countServiceHealth } from "../../utils/service_presentation";
 import { formatPointsPerUnit } from "../../utils/billing_helpers";
 import { formatUserDateTime } from "../../utils/datetime_helpers";
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
 import { listRetainedData, retainedRetrievalEndpoint } from "../../services/data_retrieval";
+import { WorkspaceQuotaPanel } from "../../components/workspace-quota/WorkspaceQuotaPanel";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, BrandIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge, DataRetrievalModal };
+    static components = { WoowCard, WoowIcon, BrandIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge, DataRetrievalModal, WorkspaceQuotaPanel };
     static props = {
         workspaceId: { type: Number },
     };
@@ -325,8 +327,8 @@ export class WorkspaceDetailPage extends Component {
 
     get computedStats() {
         const services = this.state.services || [];
-        const runningCount = services.filter(s => s.state === "running").length;
-        const errorCount = services.filter(s => s.state === "error").length;
+        // #1647：running 但平台已確認沒有在執行的服務不算 Healthy、算進 Alerts（判準在 helper）。
+        const { healthy: runningCount, alerts: errorCount } = countServiceHealth(services);
 
         return [
             { label: _t("Estimated Cost"), value: this.estimatedMonthlyCost, icon: "payments", color: "purple" },
@@ -334,6 +336,13 @@ export class WorkspaceDetailPage extends Component {
             { label: _t("Healthy"), value: String(runningCount), icon: "check_circle", color: "green" },
             { label: _t("Alerts"), value: String(errorCount), icon: "warning", color: "orange" },
         ];
+    }
+
+    // #1647：配額面板的重讀鍵。服務清單或任一服務的狀態變了（部署完成、刪除、停權…）
+    // 已佔用的配額就可能跟著變 ⇒ 鍵變、面板重讀一次。服務輪詢每 5 秒更新 state.services，
+    // 但只要 id 與狀態沒變鍵就不變，面板不會跟著每 5 秒打一次 operator。
+    get quotaReloadKey() {
+        return (this.state.services || []).map((s) => s.id + ":" + s.state).join(",");
     }
 
     goBack() {

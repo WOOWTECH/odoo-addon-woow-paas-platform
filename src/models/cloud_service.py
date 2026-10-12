@@ -22,6 +22,13 @@ from odoo.tools.sql import column_exists
 from ..services import dns_probe, rollback_config
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
+from ..services.workload_health import (
+    EVIDENCE_CODES,
+    VERDICT_FAULT,
+    VERDICT_HEALTHY,
+    VERDICT_UNSUPPORTED,
+    workload_verdict,
+)
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
     CONTRACT_MISMATCH,
@@ -347,8 +354,12 @@ def _reject_init_control_writes(env, vals):
 
 # observed_at 是 operator 觀測證據，episode 是平台命令建立的等待邊界。
 # 兩者都不是呼叫者輸入，否則可以隱藏 stale poll 或偽造新觀測。
+# #1647：workload 觀測的五格同理——租戶自己寫得進去，就能藏掉「服務其實沒有 Pod」的告警
+# （清掉旗標、把 alerted 標記填上讓平台不再通知），或替別的服務偽造一則。
 _OBSERVATION_CONTROL_FIELDS = frozenset({
     'observed_at', 'observation_episode_started_at',
+    'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
+    'workload_fault_alerted_at', 'workload_checked_at',
 })
 
 
@@ -738,6 +749,23 @@ INIT_CRON_SOFT_CAP = 10
 _INIT_CRON_XMLID = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
 # init cron 的 wall 時鐘（模組層級，測試可替換）。
 _init_cron_clock = time.monotonic
+# #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）。
+# 沒有 FailedCreate 證據的 0 個 Pod（`no_pods`）要持續這麼久才算確認——換 Pod 的瞬間
+# （Recreate 砍舊建新、節點重開）也會短暫是 0，那不是故障。有證據的不必等。
+WORKLOAD_FAULT_CONFIRM_MINUTES = 5
+# 10 分鐘那條 cron 每趟的 wall 預算：超過就停，沒查到的下一趟從輪替游標之後接著查
+# （游標記在 platform_monitor 單例的 `workload_check_cursor`，不記在服務列上）。
+WORKLOAD_CHECK_BUDGET_SECONDS = 60
+# 連續這麼多次連不上／逾時就中止本趟：operator 掛掉時不逐台等 timeout。
+WORKLOAD_CHECK_TRANSPORT_ABORT = 2
+# workload 檢查 cron 的 wall 時鐘（模組層級，測試可替換）。
+_workload_check_clock = time.monotonic
+# 描述「這一段異常」的四格：恢復或離開 running 時一起清。`workload_checked_at` 不在內——
+# 它說的是「最後一次寫入觀測結果的時間」，不屬於任何一段異常。
+_WORKLOAD_FAULT_FIELDS = (
+    'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
+    'workload_fault_alerted_at',
+)
 
 # 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
 # 目的是讓人不必進叢集就知道方向——detail 說「卡在哪」，hint 說「去查什麼」。
@@ -1857,6 +1885,82 @@ class CloudService(models.Model):
         readonly=True,
         help='Platform timestamp for entry into the current transitional state. '
              'It is a wait boundary, never an operator observation.',
+    )
+    # ---- #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）----
+    # 這五格**只描述 running 的服務**：某個 Deployment／StatefulSet 期望 ≥1 個 Pod、實際
+    # 0 個（2026-10-10 事故：ReplicaSet FailedCreate exceeded quota，服務顯示 running 卻
+    # 中斷近 6 小時）。
+    #   * 誰寫：只有 `_apply_workload_observation`（10 分鐘的 `_cron_check_running_workloads`
+    #     ＋每日對帳 cron 順帶呼叫）。非平台身分寫不進去（`_OBSERVATION_CONTROL_FIELDS`）。
+    #   * **值真的變了才寫**：健康而且四格異常欄位本來就是空的 ⇒ 一格都不寫；異常持續、代碼與
+    #     detail 都沒變 ⇒ 也不寫。10 分鐘 cron 在穩態不對服務列下任何 UPDATE——否則它每趟
+    #     commit 所有 running 列，會與每日對帳、生命週期 cron 這類長交易互撞（REPEATABLE
+    #     READ 下對方拿到 serialization failure），`write_date` 也會每 10 分鐘變動。
+    #   * 何時清：觀測到恢復（每個期望有 Pod 的 workload 都有 Pod）時由同一個方法清；
+    #     服務離開 running 時由 `write()` 集中清（重新啟動、停權、刪除……之後這段異常
+    #     不再描述現況）。`workload_checked_at` 不清。
+    #   * **絕不影響 `state`／`error_message`**：它們是獨立的旗標，不是狀態機的一部分
+    #     ——把 running 打成 error 之後沒有任何路徑會自己 poll 回來，quota 一放寬服務
+    #     就恢復了、帳面卻停在 error（repo-lint 第 19 條判準 5 機械守）。
+    # 不帶 groups 的三格（code／since／checked_at）是 `_workload_fault_confirmed` 讀的，
+    # 租戶身分的 /woow payload 會經過它；含叢集原文的 detail 與告警標記只給系統管理員。
+    # ⚠ 三個標籤刻意短：後台列表用 badge 顯示，欄寬由列表自動分配，長標籤會被截斷
+    # （瀏覽器實走 F5：1440px 下「Blocked by the namespace q…」「被 namespace 配…」，
+    # 而且沒有 tooltip）。完整的說明放兩處——這一格的 help，以及表單警示區塊裡依代碼顯示
+    # 的那一行（`cloud_service_views.xml`）。改標籤或加代碼時三處連同 zh_TW.po 一起改，
+    # `TestWorkloadFaultTranslations1647` 守長度、譯文與「每個代碼都有說明」。
+    workload_fault_code = fields.Selection(
+        selection=[
+            ('quota_exceeded', 'Quota blocked'),
+            ('create_failed', 'Create failed'),
+            ('no_pods', 'No pods'),
+        ],
+        string='Workload Fault',
+        copy=False,
+        readonly=True,
+        help='Set while the service is marked running but one of its workloads '
+             '(Deployment or StatefulSet) wants at least one pod and has none (#1647). '
+             'Quota blocked: the namespace ResourceQuota rejected the pods. '
+             'Create failed: the cluster rejected the pods for a reason other than the quota. '
+             'No pods: the pods are missing and the cluster reported no reason. '
+             'Cleared automatically once the pods are back or the service leaves running. '
+             'It never changes the service state.',
+    )
+    workload_fault_detail = fields.Text(
+        string='Workload Fault Detail',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='Which workloads have no pods and what the cluster reported '
+             '(for example the quota rejection message). Administrators only.',
+    )
+    # 有值就是旗標，不另設布林。
+    workload_fault_since = fields.Datetime(
+        string='Workload Fault Since',
+        copy=False,
+        readonly=True,
+        help='When the platform first observed the current workload fault (UTC).',
+    )
+    workload_fault_alerted_at = fields.Datetime(
+        string='Workload Fault Alerted At',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='When the system administrators were notified about the current '
+             'workload fault. One notification per fault.',
+    )
+    # ⚠ 不是「最後一次檢查」的時間：檢查結果沒有變化時這一格不動（見上面「值真的變了才寫」）。
+    # 它記的是 `_apply_workload_observation` 最後一次真的寫入的時間——第一次看到異常、
+    # 代碼或 detail 改變、確認、恢復。`no_pods` 的確認就是靠它留下紀錄
+    # （`_workload_fault_confirmed`）。輪替順序不看它，看 platform_monitor 的游標。
+    workload_checked_at = fields.Datetime(
+        string='Workload Observation Last Recorded',
+        copy=False,
+        readonly=True,
+        help='Last time the platform recorded a change in what it observed about the '
+             'workloads of this running service (UTC): a fault first seen, changed, '
+             'confirmed or cleared. Checks that find nothing new do not update it, so an '
+             'old or empty value does not mean the service is not being checked.',
     )
     # Q4／Q33：短 poll 觀測到 initializing 的 pods ready ＝ 排進 init cron 的佇列。
     # init cron 只 claim 這些服務；not ready 時清掉（等待期間由時限約束）。
@@ -6009,7 +6113,10 @@ class CloudService(models.Model):
         self.env['woow_paas_platform.platform_monitor']._run_init_cron_checks()
 
     def _cron_reconcile_release_facts(self):
-        """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會看 running 的路徑**。
+        """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會回寫 release 事實的 running 路徑**。
+
+        （#1647 起 ``_cron_check_running_workloads`` 每 10 分鐘也會讀 running 的服務，
+        但它只寫 workload 觀測欄位，不碰 release 事實與對外位址。）
 
         ## 為什麼需要獨立一條
 
@@ -6048,6 +6155,18 @@ class CloudService(models.Model):
         某次 helm upgrade 不是 Odoo 發起的、以及證明升版沒有順手回寫）。那個診斷
         能力從本版起消失——要判斷「平台最後一次主動操作」請改看 ``last_upgraded_at``
         ／``deployed_at``。這個取捨是刻意接受的（#627 留言有記）。
+
+        ## #1647：順帶回寫 workload 觀測（仍不碰 state）
+
+        同一次 ``get_status`` 多帶 ``include_workloads``，回應交給
+        ``_apply_workload_observation``——它只寫 ``workload_fault_*``／
+        ``workload_checked_at``，同樣一行 state 都不寫（判準 5 也守它），而且**值沒變就
+        不寫**：健康的服務、內容沒變的異常，這一段對 workload 欄位零寫入（本 cron 自己
+        每天那一次 release 事實的 write 不受影響）。主要的偵測在每 10 分鐘的
+        ``_cron_check_running_workloads``；這裡是那條 cron 被停用或預算不夠時的每日保底，
+        不讀也不寫那條 cron 的輪替游標。workload 欄位**不併進** ``facts``（那是 release
+        事實的單一 producer），而且包在自己的 savepoint 裡：這段出錯不得把 release 事實
+        一起回捲。
         """
         from ..services.paas_operator import get_paas_operator_client
 
@@ -6074,6 +6193,7 @@ class CloudService(models.Model):
             return
 
         changed, failed = [], []
+        workload_counts = {}
         for service in services:
             try:
                 # 逐筆 savepoint：一筆失敗不得中斷整批。用 savepoint 而非裸 try 是
@@ -6088,10 +6208,13 @@ class CloudService(models.Model):
                         namespace=service.helm_namespace,
                         release_name=service.helm_release_name,
                         include_vm=service._needs_vm_status(),
+                        # #1647：順帶取 workload 副本數（舊 operator 會忽略這個參數）。
+                        include_workloads=True,
                     )
-                    # 對外位址也在這裡對帳：本 cron 是**唯一會看 running 的路徑**，
-                    # 而 ngrok 免費方案每次 agent 重連就換 TCP 位址——那種變動發生時
-                    # 服務正是 running（poll 的 domain 只收轉移狀態）。
+                    # 對外位址也在這裡對帳：本 cron 是**唯一會對帳 release 事實／對外位址的
+                    # running 路徑**（#1647 的 10 分鐘 cron 也讀 running，但只寫 workload
+                    # 觀測欄位），而 ngrok 免費方案每次 agent 重連就換 TCP 位址——那種變動
+                    # 發生時服務正是 running（poll 的 domain 只收轉移狀態）。
                     # 無此能力的商品 `_probe_public_tunnel_address` 直接回 None、不打
                     # operator，所以這行對其餘商品零成本。
                     tunnel_address, tunnel_error = service._probe_public_tunnel(client)
@@ -6119,6 +6242,19 @@ class CloudService(models.Model):
                     service.write(facts)
                     if drift:
                         changed.append((service, drift))
+                    # #1647：同一份 status 順帶回寫 workload 觀測。自己的 savepoint：
+                    # 這段出錯只回捲 workload 欄位，上面已寫的 release 事實留著。
+                    # OperationalError 外拋（cursor 已不可用），由外層的逐筆隔離收掉。
+                    try:
+                        with self.env.cr.savepoint():
+                            outcome = service._apply_workload_observation(status)
+                        workload_counts[outcome] = workload_counts.get(outcome, 0) + 1
+                    except OperationalError:
+                        raise
+                    except Exception:
+                        _logger.exception(
+                            "[#1647] workload observation failed for service id=%s",
+                            service.id)
             except Exception as exc:
                 failed.append((service, exc))
 
@@ -6136,6 +6272,211 @@ class CloudService(models.Model):
             _logger.warning(
                 "  id=%s %s 讀取失敗：%s（本筆略過，不影響其餘）",
                 service.id, service.name, exc)
+        # #1647：workload 觀測另起一行、另一個前綴——上面那行的形狀是既有契約
+        # （test_reconcile_release_facts_627i 以它的前綴過濾），不往裡面加東西。
+        _logger.info(
+            "workload-observation (daily reconcile): %s",
+            self._workload_outcome_summary(workload_counts))
+
+    @api.model
+    def _workload_outcome_summary(self, counts):
+        """``_apply_workload_observation`` 回傳值的計數 → 一行 log 文字（兩條 cron 共用）。
+
+        每一格都印（0 也印）：只印非零的會讓「沒有異常」與「根本沒看」長得一樣。
+        """
+        labels = (
+            ('raised', '新異常'), ('ongoing', '持續中'), ('cleared', '恢復'),
+            ('healthy', '健康'), ('unknown', '不知道'),
+            ('unsupported', 'operator 未回報 workloads'),
+        )
+        return '／'.join('%s %d' % (label, counts.get(key, 0)) for key, label in labels)
+
+    @api.model
+    def _cron_check_running_workloads(self):
+        """#1647：每 10 分鐘看一次 running 服務的 workload——期望有 Pod 的是不是真的有。
+
+        ## 為什麼需要獨立一條
+
+        2026-10-10 正式站 svc 201：服務顯示 ``running``，Recreate Deployment 的新 Pod 被
+        namespace quota 拒絕（ReplicaSet ``FailedCreate: exceeded quota``），0 顆 Pod 近
+        6 小時，平台沒有任何訊號。短 poll 只收轉移狀態；每日對帳一天一次、而且只回寫
+        release 事實。本條補上「running 之後才被擋」這一種。
+
+        ## 與短 poll 的根本差異：**絕不碰 state**
+
+        發現異常只做三件事（都在 ``_apply_workload_observation``）：寫
+        ``workload_fault_*``、通知系統管理員（``platform_monitor``）、讓 /woow 顯示固定
+        文案。恢復後自動清掉。``state``／``error_message`` 一個字都不改——理由見該方法的
+        docstring；repo-lint 第 19 條判準 5 機械守本方法與它。
+
+        ## 🔴 健康的穩態不寫服務列
+
+        本 cron 每 10 分鐘跑一次、逐台 commit。要是每趟都在每一台 running 服務上留一個
+        「查過了」的時間戳，就等於每 10 分鐘 commit 一次所有 running 列——每日對帳與
+        生命週期 cron 是 REPEATABLE READ 的單一長交易，快照之後被別人 commit 過的列，
+        它們一寫就是 serialization failure（那台當天的 release 事實不回寫、該停權的不
+        停權）；本 cron 自己則會卡在對方還沒 commit 的列鎖上，預算管不到。所以：
+
+        - ``_apply_workload_observation`` 只在觀測欄位的值真的要變時才寫。健康而且列上
+          沒有異常值、異常持續而內容沒變，都是零寫入（``write_date`` 不動）。
+        - 「下一趟從哪裡開始」不記在服務列上，記在 ``platform_monitor`` 單例的
+          ``workload_check_cursor``（最後處理的 service id）。那一列沒有長交易在寫：
+          唯一的週期性寫入者是短 poll 結尾的 ``_check_unknown_results``，純 DB、毫秒級。
+
+        ## 節奏
+
+        - 依 id 升冪、從游標之後開始、繞回開頭，每台一次
+          ``get_status(include_workloads=True)``，逐台 commit：一台失敗不影響其他台。
+        - 游標對每一台都推進——成功、失敗、被略過（已刪除或已離開 running）都算處理過。
+          每次都失敗的服務不會卡在隊首把後面的餓死。
+        - 每趟 wall 預算 ``WORKLOAD_CHECK_BUDGET_SECONDS``：超過就停，沒查到的下一趟從游標
+          之後接著查。結尾那行 INFO 的「預算用完未檢查」持續大於 0，代表逐台打 status
+          太慢、要換做法。
+        - 連續 ``WORKLOAD_CHECK_TRANSPORT_ABORT`` 次連不上／逾時就中止本趟（operator 掛了）；
+          下一趟從中止處之後開始，不重打同樣那兩台。
+        - operator 還沒有這個能力（回應沒有 ``workloads_included``）時，第一台之後就中止
+          本趟：同一個 operator 對每一台的回答都一樣，不必逐台白打。
+        - 每趟結束寫回游標一次（含上面三種提前結束）；值沒變不寫，寫不進去只記 warning。
+        - 不自我 ``_trigger()``：沒查完的等下一個 10 分鐘。
+
+        ## Log：改 0 筆也印
+
+        同 ``_cron_reconcile_release_facts`` 的理由——只在有異常時才記，會讓「一直沒有異常」
+        與「cron 根本沒跑」的日誌畫面相同。operator 有回應但對某一台回錯（例：DB 是
+        running、叢集上 release 已不存在 → 404）是每 10 分鐘重複一次的常態訊息，只印
+        一行 warning、不帶 traceback。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ], order='id')
+        if not services:
+            return
+
+        from ..services.paas_operator import (
+            PaaSOperatorAPIError,
+            PaaSOperatorConnectionError,
+            PaaSOperatorTimeoutError,
+            get_paas_operator_client,
+        )
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            _logger.info(
+                "workload-check: operator client 未設定，本趟未執行（running %d 筆）",
+                len(services))
+            return
+
+        # 輪替：游標之後的先查，再繞回開頭。游標指到的服務已不存在（或比所有 id 都大）
+        # 也沒關係——只拿它當分界。
+        monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+        cursor = monitor.workload_check_cursor
+        ordered = (services.filtered(lambda s: s.id > cursor)
+                   + services.filtered(lambda s: s.id <= cursor))
+
+        started = _workload_check_clock()
+        counts = {}
+        raised, cleared = [], []
+        checked = failed = transport_streak = over_budget = 0
+        stopped_early = ''
+        last_id = cursor
+        for index, service in enumerate(ordered):
+            if _workload_check_clock() - started > WORKLOAD_CHECK_BUDGET_SECONDS:
+                over_budget = len(ordered) - index
+                break
+            service_id = service.id
+            # 輪到就推進，不管接下來成功、失敗還是略過。
+            last_id = service_id
+            try:
+                # 逐台 commit 之後這一筆可能已被別的交易改掉或刪掉：重讀再決定。
+                service.invalidate_recordset()
+                if not service.exists() or service.state != 'running':
+                    continue
+                previous_code = service.workload_fault_code
+                status = client.get_status(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                    include_workloads=True,
+                )
+                outcome = service._apply_workload_observation(status)
+                label = (service.id, service.name, service.workload_fault_code or previous_code)
+                self.env.cr.commit()
+                checked += 1
+                counts[outcome] = counts.get(outcome, 0) + 1
+                transport_streak = 0
+                if outcome == 'raised':
+                    raised.append(label)
+                elif outcome == 'cleared':
+                    cleared.append(label)
+                elif outcome == 'unsupported':
+                    stopped_early = 'operator 尚未回報 workloads'
+                    _logger.info(
+                        "workload-check: operator 尚未回報 workloads（回應沒有 "
+                        "workloads_included，operator 版本較舊），本趟中止")
+                    break
+            except (PaaSOperatorConnectionError, PaaSOperatorTimeoutError) as exc:
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak += 1
+                _logger.warning(
+                    "workload-check: service id=%s 連不上 operator 或逾時：%s", service_id, exc)
+                if transport_streak >= WORKLOAD_CHECK_TRANSPORT_ABORT:
+                    stopped_early = 'operator 連續 %d 次連不上或逾時' % transport_streak
+                    _logger.warning(
+                        "workload-check: operator 連續 %d 次連不上或逾時，本趟中止",
+                        transport_streak)
+                    break
+            except PaaSOperatorAPIError as exc:
+                # operator 有回應、只是對這一台回 4xx／5xx——最常見的是 DB 還記著 running、
+                # 叢集上 release 已經不在（404）。那種服務每一趟都會回同樣的錯，帶 traceback
+                # 的 ERROR 一天 144 筆只是噪音：一行 warning 就夠（`_request` 自己另有一行）。
+                # 傳輸是通的 ⇒ 連續傳輸錯誤的計數歸零。
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                _logger.warning(
+                    "workload-check: service id=%s operator 回錯（HTTP %s）：%s"
+                    "（本筆略過，不影響其餘）", service_id, exc.status_code, exc)
+            except Exception:
+                # 回捲掉的只有「這一台還沒 commit 的觀測寫入」：本 cron 不對叢集下變更，
+                # 下一趟會重看。不 rollback 的話交易已 aborted 時同一趟後面的服務全部
+                # InFailedSqlTransaction。
+                # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 一併
+                # 收掉，與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同
+                # `_cron_reconcile_release_facts` 的站點）。
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                _logger.exception(
+                    "workload-check: service id=%s 檢查失敗（本筆略過，不影響其餘）", service_id)
+
+        # 每趟結束寫回游標一次（提前中止也走到這裡）。值沒變不寫：每趟都查得完時游標會
+        # 停在同一個 id，monitor 那一列同樣零寫入。
+        # 寫不進去不得讓 cron 拋錯——游標只是「下一趟從哪裡開始」的提示，丟了頂多把同一批
+        # 再看一輪；該記的觀測在上面已經逐台 commit 了。
+        # ⚠ #1052 標記（非裁定）：OperationalError 也一併收掉（同上面逐台隔離的站點）。
+        if last_id != cursor:
+            try:
+                with self.env.cr.savepoint():
+                    monitor.write({'workload_check_cursor': last_id})
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.warning(
+                    "workload-check: 輪替游標寫回失敗（id %s→%s），下一趟從舊游標接著查",
+                    cursor, last_id, exc_info=True)
+
+        _logger.info(
+            "workload-check: running %d 筆，本趟檢查 %d 筆（%s），讀取失敗 %d 筆，"
+            "預算用完未檢查 %d 筆%s；游標 id %s→%s",
+            len(services), checked, self._workload_outcome_summary(counts), failed,
+            over_budget, ("；提前中止：%s" % stopped_early) if stopped_early else "",
+            cursor, last_id)
+        for service_id, name, code in raised:
+            _logger.warning("  新異常 id=%s %s  %s", service_id, name, code)
+        for service_id, name, code in cleared:
+            _logger.info("  恢復 id=%s %s  %s", service_id, name, code)
 
     # ------------------------------------------------------------------ #
     #  就緒判定：兩層共用的單一事實源（#423 W5a）                          #
@@ -7546,6 +7887,147 @@ class CloudService(models.Model):
             vals['public_tunnel_error'] = (
                 False if tunnel_address else (tunnel_error or False))
         return vals
+
+    # ------------------------------------------------------------------ #
+    #  #1647：running 服務的 workload 觀測（期望有 Pod、實際一顆都沒有）   #
+    # ------------------------------------------------------------------ #
+
+    def _workload_fault_confirmed(self):
+        """列上記著的 workload 異常是否「已確認」（才告警、才給前台看）。
+
+        有 ``FailedCreate`` 證據的代碼（``EVIDENCE_CODES``）第一次觀測就算。沒有證據的
+        ``no_pods`` 要在「首次看到」滿 ``WORKLOAD_FAULT_CONFIRM_MINUTES`` 之後**又被觀測到
+        一次**才算——換 Pod 的瞬間也會短暫是 0 個。
+
+        「持續多久」是 ``_apply_workload_observation`` 在觀測當下用**首次看到的時間與當下
+        時間**判的（那一次觀測本身就是「還在」的證據），不靠任何每趟更新的時間戳——
+        穩態不寫列之後已經沒有那種時間戳了。判定成立的那一趟會把 ``workload_checked_at``
+        寫成當下（值真的變了才寫的其中一種），這裡讀的就是那次寫入留下的結果：
+        ``workload_checked_at - workload_fault_since`` 達門檻 ⟺ 門檻之後確實又觀測到一次
+        異常（同一段異常期間的每次寫入，都是在觀測到異常的當下寫的）。
+
+        ⚠ 這裡**不拿牆鐘的現在**去減 since：/woow 每次組 payload 都會經過這裡，那樣只被
+        看到一次的瞬間 0 Pod 會在 5 分鐘後對租戶顯示成故障，一直到下一趟 cron 才清掉。
+
+        只讀不帶 groups 的三格（code／since／checked_at）：租戶身分的 /woow payload 會經過
+        這裡（``_workload_fault_public``），讀到 ``base.group_system`` 的欄位會 AccessError。
+        """
+        self.ensure_one()
+        code = self.workload_fault_code
+        since = self.workload_fault_since
+        if not code or not since:
+            return False
+        if code in EVIDENCE_CODES:
+            return True
+        recorded_at = self.workload_checked_at
+        return bool(recorded_at and recorded_at - since >= timedelta(
+            minutes=WORKLOAD_FAULT_CONFIRM_MINUTES))
+
+    def _workload_fault_public(self):
+        """給 /woow payload 的值：已確認的異常代碼，否則 None。
+
+        只在 ``running`` 時有意義（其他狀態各有自己的說明），而且只給代碼——含叢集原文的
+        ``workload_fault_detail`` 不出後台。
+        """
+        self.ensure_one()
+        if self.state != 'running' or not self._workload_fault_confirmed():
+            return None
+        return self.workload_fault_code
+
+    def _apply_workload_observation(self, status):
+        """把一份 operator status（帶 ``include_workloads``）的 workload 觀測落到欄位上。
+
+        **workload 欄位的唯一寫入者**（另一處只有 ``write()`` 在服務離開 running 時清）。
+        呼叫端是 ``_cron_check_running_workloads``（每 10 分鐘）與
+        ``_cron_reconcile_release_facts``（每日，順帶）。
+
+        🔴 **不寫 ``state``、不寫 ``error_message``。** 這些欄位是獨立的旗標：服務顯示
+        running 而實際沒有 Pod 是要讓人知道、去處理的事實，不是狀態轉移——把它打成
+        ``error`` 之後沒有任何路徑會自己 poll 回來，quota 一放寬服務就恢復了、帳面卻停在
+        error。repo-lint 第 19 條（poll-release-facts-single-source）判準 5 機械守這件事。
+
+        🔴 **值真的變了才寫。** 這個方法每 10 分鐘對每一台 running 服務跑一次；每次都寫
+        等於每 10 分鐘 commit 一次所有 running 列，會與每日對帳、生命週期 cron 這類長交易
+        互撞（理由見 ``_cron_check_running_workloads`` 的 docstring）。所以：
+
+        - 健康、而且列上四格異常欄位本來就是空的 ⇒ 一格都不寫；
+        - 異常還在、代碼與 detail 都沒變、也沒有新的確認或通知要記 ⇒ 一格都不寫；
+        - 其餘（第一次看到、代碼或 detail 變了、``no_pods`` 這一趟才確認、通知剛落地、
+          恢復）才寫，並且只寫變了的那幾格。``workload_checked_at`` 跟著這些寫入更新，
+          所以它的意思是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
+
+        本方法不 commit、不 rollback、不攔例外：回捲單位由呼叫端決定（10 分鐘 cron 逐台
+        commit／rollback；每日對帳包在自己的 savepoint 裡）。
+
+        Returns:
+            ``'unsupported'``（operator 沒回報 workloads——舊版；一格都不動）／
+            ``'unknown'``（服務不是 running，或這一輪查詢失敗；一格都不動）／
+            ``'healthy'``（沒有異常，列上也沒有異常值；一格都不動）／``'cleared'``（原本
+            有異常，已恢復）／``'raised'``（第一次觀測到異常）／``'ongoing'``（同一段
+            異常還在；內容沒變時一格都不動）。
+        """
+        self.ensure_one()
+        service = self.sudo()
+        if service.state != 'running':
+            return 'unknown'
+        now = fields.Datetime.now()
+        verdict, code, detail = workload_verdict(status, now)
+        if verdict == VERDICT_UNSUPPORTED:
+            return 'unsupported'
+        monitor = self.env['woow_paas_platform.platform_monitor']
+        if verdict == VERDICT_HEALTHY:
+            if not any(service[name] for name in _WORKLOAD_FAULT_FIELDS):
+                # 健康的穩態：列上沒有任何異常值 ⇒ 沒有東西要改，不寫。
+                return 'healthy'
+            # 先記下「有沒有通知過」與起點：下面那次寫入會把它們清掉。
+            was_alerted = bool(service.workload_fault_alerted_at)
+            previous_since = service.workload_fault_since
+            previous_code = service.workload_fault_code
+            cleared = {'workload_checked_at': now,
+                       **dict.fromkeys(_WORKLOAD_FAULT_FIELDS, False)}
+            service.write(cleared)
+            _logger.info(
+                "[#1647] workload fault cleared for service id=%s %s (was %s since %s): "
+                "every workload that wants pods has pods again",
+                service.id, service.name, previous_code, previous_since)
+            if was_alerted:
+                # 沒通知過的（未確認就恢復的 no_pods）不必再說「已恢復」。
+                monitor._note_workload_recovered(service, previous_since)
+            return 'cleared'
+        if verdict != VERDICT_FAULT:
+            return 'unknown'
+
+        previous_since = service.workload_fault_since
+        since = previous_since or now
+        # 「持續多久才確認」只看首次看到的時間與當下時間：這一次觀測本身就是「還在」。
+        confirmed = code in EVIDENCE_CODES or (
+            now - since >= timedelta(minutes=WORKLOAD_FAULT_CONFIRM_MINUTES))
+        # 只收值真的要變的那幾格。同一段異常中 code／detail 會跟著最新觀測更新（例：
+        # no_pods 之後才看到 FailedCreate 事件），起點不變。
+        observed = {}
+        if service.workload_fault_code != code:
+            observed['workload_fault_code'] = code
+        if (service.workload_fault_detail or '') != (detail or ''):
+            observed['workload_fault_detail'] = detail
+        if not previous_since:
+            observed['workload_fault_since'] = now
+        # 這一趟才確認的（no_pods 撐過門檻）沒有別的格子會變，仍要寫一次時間：
+        # `_workload_fault_confirmed` 讀的就是這次寫入。每段異常至多多這一次。
+        newly_confirmed = confirmed and not service._workload_fault_confirmed()
+        if observed or newly_confirmed:
+            observed['workload_checked_at'] = now
+            service.write(observed)
+        if not previous_since:
+            _logger.warning(
+                "[#1647] running service id=%s %s (namespace %s, release %s) has a workload "
+                "with no pods: %s", service.id, service.name, service.helm_namespace,
+                service.helm_release_name, detail)
+        # 每段異常只通知一次；通知沒落地（沒有收件者、寫入失敗）就不記標記，下一輪重試。
+        if confirmed and not service.workload_fault_alerted_at:
+            if monitor._report_workload_fault(service):
+                alerted = {'workload_fault_alerted_at': now}
+                service.write(alerted)
+        return 'ongoing' if previous_since else 'raised'
 
     def _poll_and_update_status(self, client):
         """背景短 poll：向 operator 取一次 status，推進單一服務的轉移狀態。
@@ -10207,6 +10689,20 @@ class CloudService(models.Model):
         first_running = self.browse()
         if vals.get('state') == 'running' and 'first_running_at' not in vals:
             first_running = self.filtered(lambda r: not r.first_running_at)
+        # #1647：`workload_fault_*` 只描述「running 的服務沒有 Pod」。服務一離開 running
+        # （重新啟動、Redeploy、停權、刪除、轉 error……）這段異常就不再描述現況——留著的話
+        # 回到 running 時會帶著上一段的起點與「已通知」標記，新的異常不會再告警。
+        # 集中在這裡清而不是逐路徑清（pitfall reaped-since-single-path-stamp-gc-immunity）：
+        # 任何把 state 寫離 running 的路徑自動跟上。
+        #   * 同值的 state 寫入（running → running）不清；
+        #   * `workload_checked_at` 不清（它說的是「最後一次寫入觀測結果的時間」，不屬於
+        #     某一段異常；since 清掉之後，留著它不會讓下一段異常被當成已確認）；
+        #   * vals 自己帶了這四格的呼叫端（`_apply_workload_observation`）優先。
+        leaving_running_fault = self.browse()
+        if ('state' in vals and vals['state'] != 'running'
+                and not set(_WORKLOAD_FAULT_FIELDS).intersection(vals)):
+            leaving_running_fault = self.filtered(
+                lambda r: r.workload_fault_since or r.workload_fault_code)
         # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
         #
         # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
@@ -10279,6 +10775,12 @@ class CloudService(models.Model):
                 super(CloudService, leaving_timeout).write({'transition_timeout_at': False})
             if leaving_upgrade_failure:
                 super(CloudService, leaving_upgrade_failure).write({'upgrade_failed_at': False})
+            if leaving_running_fault:
+                # 一定要 sudo：四格裡有兩格帶 groups='base.group_system'，而走到這裡的
+                # 常常是非系統的 internal 使用者（例：workspace owner 按「重新啟動」）——
+                # 不 sudo 的話他們對自己服務的操作會 AccessError。
+                super(CloudService, leaving_running_fault.sudo()).write(
+                    dict.fromkeys(_WORKLOAD_FAULT_FIELDS, False))
             if first_running:
                 super(CloudService, first_running).write({
                     'first_running_at': fields.Datetime.now(),

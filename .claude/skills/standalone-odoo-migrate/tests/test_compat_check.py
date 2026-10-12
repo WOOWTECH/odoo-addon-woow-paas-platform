@@ -166,6 +166,7 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(blocks, [])
         self.assertIn("mailcow.mailcow.svc.cluster.local:587（smtp）", text)
         self.assertIn("10.43.0.9:993（imap）", text)
+        self.assertIn("shared-mail.sh open", text)
         self.assertNotIn("smtp.gmail.com", text)
         self.assertNotIn("old.svc.cluster.local", text)
         self.assertIn("workers=4、limit_memory_hard=2684354560", text)

@@ -12,6 +12,11 @@
                 <WorkspaceInvitationPage t-key="router.params.invitationRevision"/>
             </t>
             <t t-elif="router.current === 'workspace-detail'">
+                <!-- #1647 t-key：同一個分頁把網址的工作區 id 換掉（貼上另一個工作區的網址、
+                     上一頁／下一頁）時 route 沒變，元件會被沿用，而 WorkspaceDetailPage 只在
+                     掛載時載入資料 ⇒ 標題與服務清單留著上一個工作區的，只有會跟著
+                     workspaceId 重讀的配額面板換成新的。以 workspaceId 為 key，工作區一變就
+                     整頁重新掛載。 -->
                 <WorkspaceDetailPage t-key="workspaceId" workspaceId="workspaceId"/>
             </t>
             <t t-elif="router.current === 'workspace-team'">

@@ -339,6 +339,49 @@ class TestPaaSOperatorClient(TransactionCase):
         self.assertEqual(result['release']['status'], 'deployed')
         self.assertEqual(len(result['pods']), 1)
 
+    @staticmethod
+    def _status_ok_response():
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        body = {'release': {'name': 'test-release', 'status': 'deployed'}, 'pods': []}
+        mock_response.content = json.dumps(body).encode()
+        mock_response.json.return_value = body
+        return mock_response
+
+    @patch('requests.Session.request')
+    def test_get_status_sends_include_workloads(self, mock_request):
+        """#1647：include_workloads 以 query string 送出（operator 端是 FastAPI Query）。"""
+        mock_request.return_value = self._status_ok_response()
+
+        self.client.get_status('paas-ws-a1b2c3d4', 'test-release', include_workloads=True)
+
+        sent = mock_request.call_args.kwargs
+        self.assertEqual(sent['method'], 'GET')
+        self.assertEqual(
+            sent['url'],
+            self.base_url + '/api/releases/paas-ws-a1b2c3d4/test-release/status')
+        self.assertEqual(sent['params'], {'include_workloads': 'true'},
+                         '只帶 include_workloads 時不得順帶送出 include_vm')
+        self.assertIsNone(sent['json'], '旗標不得放進 body')
+
+        # 兩個旗標互不影響。
+        self.client.get_status('paas-ws-a1b2c3d4', 'test-release',
+                               include_vm=True, include_workloads=True)
+        self.assertEqual(mock_request.call_args.kwargs['params'],
+                         {'include_vm': 'true', 'include_workloads': 'true'})
+
+    @patch('requests.Session.request')
+    def test_get_status_omits_params_by_default(self, mock_request):
+        """#1647：不帶旗標時 wire 與以前完全相同（沒有 query string）。"""
+        mock_request.return_value = self._status_ok_response()
+
+        self.client.get_status('paas-ws-a1b2c3d4', 'test-release')
+        self.assertIsNone(mock_request.call_args.kwargs['params'])
+
+        self.client.get_status('paas-ws-a1b2c3d4', 'test-release', include_vm=True)
+        self.assertEqual(mock_request.call_args.kwargs['params'], {'include_vm': 'true'},
+                         '只帶 include_vm 時不得多出 include_workloads')
+
     @patch('requests.Session.request')
     def test_api_error_handling(self, mock_request):
         """Test API error handling."""

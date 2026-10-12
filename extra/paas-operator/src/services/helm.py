@@ -31,6 +31,8 @@ from src.models.schemas import (
     ReleaseRevision,
     ReleaseStatus,
     VmiInfo,
+    WorkloadInfo,
+    WorkloadReplicaFailure,
 )
 
 logger = logging.getLogger(__name__)
@@ -1359,6 +1361,24 @@ def _pod_waiting(status: Dict[str, Any], limit: int) -> Optional[ContainerWaitin
     return first_generic
 
 
+def _replica_failure(status: Dict[str, Any], limit: int) -> Optional[WorkloadReplicaFailure]:
+    """#1647：workload 的 ``ReplicaFailure=True`` condition；沒有回 None。
+
+    Deployment controller 在 ReplicaSet 建 Pod 被 API server 拒絕（quota、admission…）時
+    設這個 condition，``message`` 就是拒絕原文（``… is forbidden: exceeded quota: …``）。
+    """
+    for condition in status.get("conditions") or []:
+        if not isinstance(condition, dict):
+            continue
+        if condition.get("type") == "ReplicaFailure" and condition.get("status") == "True":
+            return WorkloadReplicaFailure(
+                reason=condition.get("reason") or "",
+                message=_truncate(condition.get("message"), limit),
+                last_transition=condition.get("lastTransitionTime"),
+            )
+    return None
+
+
 def _pod_is_unready(phase: str, metadata: Dict[str, Any], ready_count: int, total: int) -> bool:
     """與平台 ``_is_container_ready`` 同一套「有效 Pod」定義：收尾中的 Pod 不算。"""
     if phase in ("Succeeded", "Failed") or metadata.get("deletionTimestamp"):
@@ -1825,6 +1845,154 @@ class KubernetesService:
                 )
 
         return pods
+
+    # #1647：status 端點（``?include_workloads=true``）要看的 workload 種類，以及診斷文字
+    # （ReplicaFailure message、controller 事件訊息）的長度上限。比 Pod 診斷的 300 寬：
+    # quota 的拒絕原文帶 quota 名稱與 requested／used／limited 三組數字，截太短會把
+    # 「是哪一項資源超了」切掉。
+    WORKLOAD_KINDS = "deployments,statefulsets"
+    WORKLOAD_DIAGNOSTIC_TEXT_LIMIT = 500
+
+    def get_workloads(self, namespace: str, label_selector: str) -> List[WorkloadInfo]:
+        """#1647：release 的 Deployment／StatefulSet 副本數與「建不出 Pod」的證據。
+
+        一次 ``kubectl get deployments,statefulsets``（不逐種類查）。只要有任一個 workload
+        副本不足（``replicas < desired_replicas`` 或帶 ``ReplicaFailure``），再查一次
+        namespace 的 Warning 事件、把對得上的填進不足者的 ``last_warning``；全部充足時
+        不查事件。事件查詢失敗只記 log、``last_warning`` 留 None，**不**讓本方法失敗。
+
+        Args:
+            namespace: Namespace name
+            label_selector: Label selector（status 端點傳 ``app.kubernetes.io/instance=<release>``）
+
+        Returns:
+            依 ``(kind, name)`` 排序的 workload 清單；沒有 workload 回 ``[]``。
+
+        Raises:
+            KubectlException: workload 查詢本身失敗或逾時（呼叫端決定怎麼回報）
+        """
+        validate_namespace(namespace)
+
+        result = self._run_command(
+            [
+                "get",
+                self.WORKLOAD_KINDS,
+                "--namespace",
+                namespace,
+                "--selector",
+                label_selector,
+                "--output",
+                "json",
+            ]
+        )
+        items = json.loads(result.stdout or "{}").get("items") or []
+
+        limit = self.WORKLOAD_DIAGNOSTIC_TEXT_LIMIT
+        workloads: List[WorkloadInfo] = []
+        short: List[WorkloadInfo] = []
+        for item in items:
+            kind = item.get("kind")
+            if kind not in ("Deployment", "StatefulSet"):
+                continue
+            metadata = item.get("metadata") or {}
+            spec = item.get("spec") or {}
+            status = item.get("status") or {}
+            # spec.replicas 缺值＝API server 的預設 1；status 的計數在 0 時整個 key 不出現。
+            desired = spec.get("replicas")
+            strategy_key = "strategy" if kind == "Deployment" else "updateStrategy"
+            info = WorkloadInfo(
+                kind=kind,
+                name=metadata.get("name", ""),
+                desired_replicas=1 if desired is None else desired,
+                replicas=status.get("replicas") or 0,
+                ready_replicas=status.get("readyReplicas") or 0,
+                updated_replicas=status.get("updatedReplicas") or 0,
+                strategy=(spec.get(strategy_key) or {}).get("type"),
+                replica_failure=_replica_failure(status, limit),
+            )
+            workloads.append(info)
+            if info.replicas < info.desired_replicas or info.replica_failure:
+                short.append(info)
+
+        if short:
+            # 一次 list namespace 的 Warning 事件，再對到副本不足的 workload；充足的不附
+            # （它們的舊事件只會誤導）。查詢失敗只記 log：status 端點不能因此失敗。
+            try:
+                events = self.get_workload_warning_events(namespace)
+            except Exception as e:  # noqa: BLE001 —— 見上
+                logger.warning(
+                    "Could not list workload warning events in %s (workload status still "
+                    "reported without them): %s", namespace, getattr(e, "message", e),
+                )
+                events = {}
+            for info in short:
+                info.last_warning = events.get((info.kind, info.name))
+
+        return sorted(workloads, key=lambda w: (w.kind, w.name))
+
+    def get_workload_warning_events(
+        self, namespace: str
+    ) -> Dict[Tuple[str, str], PodWarningEvent]:
+        """#1647：namespace 內每個 workload 最近一筆 controller 層 Warning 事件。
+
+        鍵是 ``(kind, name)``，``kind`` 只有 ``Deployment``／``StatefulSet``：
+
+        - ``involvedObject.kind == "Deployment"`` → ``("Deployment", name)``；
+        - ``"ReplicaSet"`` → ``("Deployment", <去掉最後一段 -hash 的名字>)``。quota 的
+          ``FailedCreate`` 掛在 ReplicaSet 上，而 ReplicaSet 的名字是
+          ``<deployment>-<pod-template-hash>``；
+        - ``"StatefulSet"`` → ``("StatefulSet", name)``（StatefulSet controller 直接建 Pod，
+          事件掛在 StatefulSet 自己身上）；
+        - 其他 kind（Pod、PVC…）跳過——Pod 的事件由 ``get_pod_warning_events`` 管。
+
+        field selector 只取 ``type=Warning``，不加 ``involvedObject.kind``：三種 kind 要
+        三次查詢，而 namespace 的 Warning 事件量本來就小。
+
+        Raises:
+            KubectlException: kubectl 失敗或逾時（呼叫端負責吞掉，見 ``get_workloads``）
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            [
+                "get",
+                "events",
+                "--namespace",
+                namespace,
+                "--field-selector",
+                "type=Warning",
+                "--output",
+                "json",
+            ],
+            timeout=self.POD_EVENTS_TIMEOUT_SECONDS,
+        )
+        items = json.loads(result.stdout or "{}").get("items") or []
+        latest: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for event in sorted(items, key=_event_sort_key):
+            if not event.get("reason"):
+                continue
+            obj = event.get("involvedObject") or {}
+            kind, name = obj.get("kind"), obj.get("name") or ""
+            if kind == "Deployment":
+                key = ("Deployment", name)
+            elif kind == "ReplicaSet":
+                key = ("Deployment", name.rpartition("-")[0])
+            elif kind == "StatefulSet":
+                key = ("StatefulSet", name)
+            else:
+                continue
+            # 排序後逐筆覆寫 ⇒ 留下的是每個 workload 最後一筆。
+            latest[key] = event
+        limit = self.WORKLOAD_DIAGNOSTIC_TEXT_LIMIT
+        out: Dict[Tuple[str, str], PodWarningEvent] = {}
+        for key, event in latest.items():
+            count = (event.get("series") or {}).get("count") or event.get("count")
+            out[key] = PodWarningEvent(
+                reason=event["reason"],
+                message=_truncate(event.get("message") or event.get("note"), limit),
+                count=count if isinstance(count, int) else None,
+                last_seen=_event_time(event) or None,
+            )
+        return out
 
     def create_namespace(
         self,
@@ -3142,6 +3310,25 @@ class KubernetesService:
             timeout=self.PVC_RESIZE_DRY_RUN_TIMEOUT_SECONDS,
         )
         return json.loads(result.stdout or "{}")
+
+    #: #1647：工作區頁同步讀 quota 的 kubectl 上限。階梯：前端 15s ＞ 平台 (3, 8)s ＞ 本常數。
+    NS_QUOTA_READ_TIMEOUT_SECONDS = 5
+
+    def get_resource_quotas(self, namespace: str, timeout: int = 30) -> List[Dict[str, Any]]:
+        """#1647：namespace 的 ResourceQuota（原始 JSON items）。純唯讀、一次 kubectl get。
+
+        namespace 還不存在時回空 list（kubectl 對不存在的 ns 做 list 不報錯）。hard／used
+        的解讀在 ``namespace_quota.quota_report``。
+
+        Raises:
+            KubectlException: kubectl 失敗、權限不足、逾時。
+            ValueError: namespace 不在允許範圍，或 kubectl 的輸出不是 JSON
+                （``json.JSONDecodeError`` 是它的子類）。兩者都原樣外拋，呼叫端自己分辨。
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            ["get", "resourcequota", "--namespace", namespace, "-o", "json"], timeout=timeout)
+        return json.loads(result.stdout or "{}").get("items", [])
 
     def get_storage_quota_snapshot(
         self, namespace: str

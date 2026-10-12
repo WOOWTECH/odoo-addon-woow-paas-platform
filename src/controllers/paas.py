@@ -636,6 +636,74 @@ class PaasController(HiddenChainMixin, Controller):
             }
         return {'success': True, 'message': _('Workspace archived')}
 
+    # ==================== Workspace Quota API (#1647) ====================
+
+    @route("/api/workspaces/<int:workspace_id>/quota", auth="user", methods=["POST"], type="json")
+    def api_workspace_quota(self, workspace_id: int, **kw: Any) -> dict[str, Any]:
+        """
+        #1647：工作區 namespace 配額（CPU／記憶體／磁碟）的上限與已佔用量，唯讀。
+
+        工作區的任何成員（owner／admin／user／guest）都能看——與服務清單同一組 access
+        檢查、同一句錯誤訊息（`api_workspace_services`）。不走訂閱閘：停權中的工作區
+        一樣要看得到配額。
+
+        Args:
+            workspace_id (int): Workspace ID (from URL path)
+
+        Returns:
+            dict: Response containing:
+                - success (bool): True when the caller may see this workspace
+                - data (dict): `{available, reason, level, hint, resources}`；拿不到用量時
+                  `available` 為 False 並帶 `reason`（值域見
+                  `services/workspace_quota.unavailable`），仍是 success=True
+                - error (str): 'Workspace not found or access denied'（非成員／不存在）
+        """
+        capability = _PaaSCapability(request.env)
+        workspace = capability.workspace(workspace_id)
+        if not workspace.exists() or not capability.access(workspace):
+            return {'success': False, 'error': _('Workspace not found or access denied')}
+        return {'success': True, 'data': self._workspace_quota_view(workspace)}
+
+    def _workspace_quota_view(self, workspace: Any) -> dict[str, Any]:
+        """#1647：向 operator 讀這個工作區 namespace 的 quota，轉成前台形狀。
+
+        純唯讀：一次 operator GET，不動任何 record。這是 list/get 以外另開的端點——
+        `_list_services`／`_get_service` 維持純讀 DB（#1159 Q1），不在那兩支裡呼叫 operator。
+        「沒有」「operator 太舊」「失敗」各回自己的 reason，不共用一個空值
+        （docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md）。
+        """
+        from ..services import workspace_quota
+
+        namespace = workspace_quota.workspace_namespace(request.env, workspace)
+        if not namespace:
+            return workspace_quota.unavailable('no_namespace')
+        # 工作區在這個 namespace 裡要有租戶看得到的服務才問 operator。空工作區（namespace
+        # 還沒建）、只有 conceal_instances 服務的工作區（那條鏈對 /woow 不存在，見
+        # hidden-template-presentation-chain）、服務住在舊 namespace 而與現在的推導值
+        # 不同的工作區，都落在這裡：沒有東西可顯示，也不對 operator 發任何請求。
+        CloudService = workspace.env['woow_paas_platform.cloud_service']
+        if not CloudService.search_count([
+            ('workspace_id', '=', workspace.id),
+            ('helm_namespace', '=', namespace),
+            ('template_id', 'not in', self._hidden_template_ids(request.env)),
+        ], limit=1):
+            return workspace_quota.unavailable('no_namespace')
+
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return workspace_quota.unavailable('disabled')
+        try:
+            report = client.get_namespace_quota(namespace)
+        except PaaSOperatorError as e:
+            # 比這個端點舊的 operator 只替同一路徑註冊了 PUT ⇒ GET 回 405（404 是更舊、
+            # 連路徑都沒有的版本）。那是「還沒有這個功能」，不是故障。
+            reason = 'operator_outdated' if e.status_code in (404, 405) else 'error'
+            _logger.info(
+                "Workspace quota unavailable: workspace=%s namespace=%s reason=%s (%s)",
+                workspace.id, namespace, reason, e)
+            return workspace_quota.unavailable(reason)
+        return workspace_quota.build_view(report)
+
     # ==================== Workspace Members API ====================
 
     @route("/api/workspaces/<int:workspace_id>/members", auth="user", methods=["POST"], type="json")
@@ -5242,6 +5310,18 @@ class PaasController(HiddenChainMixin, Controller):
             # 而且 ServiceDetailPage 的 `t-if="service.error_message"` 不判 state
             # ⇒ 一台健康的服務會冒出紅底錯誤。
             'public_url_dns_unverified': service.public_url_dns_unverified,
+            # #1647：服務顯示 running，但某個 workload 期望有 Pod、實際一顆都沒有
+            # （例：被 namespace quota 擋下）。值是**已確認**的異常代碼
+            # （quota_exceeded／create_failed／no_pods）或 None；判準在 model
+            # （`_workload_fault_public`：running ＋ 已確認），前端只讀這一格
+            # （capability-gate-single-source-field）。
+            #
+            # ⚠ 放在 base dict（理由同上）：列表卡片也要顯示。
+            # ⚠ 只給代碼：含叢集原文的 `workload_fault_detail` 不出後台。
+            # ⚠ 刻意**不**併進 `error_message`：服務的 state 仍是 running，而那個通道的
+            #    內容會被當成「這台服務的錯誤訊息」原文顯示。
+            # 此呼叫只讀已存值，不呼叫 operator、不寫入。
+            'workload_fault': service._workload_fault_public(),
             # observed_at 保留真 poll 證據；新 episode 的 age 從等待邊界起算，
             # 不把舊證據立刻報成新轉移的 stale。consumer 依 pending 旗標分別呈現
             # 「等待更新」與「最後更新」，list/get 仍只讀已存值。

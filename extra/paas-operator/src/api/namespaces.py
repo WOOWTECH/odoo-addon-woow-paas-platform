@@ -9,7 +9,8 @@ from src.models.schemas import (
     NamespaceCreateRequest,
     NamespaceQuotaUpdateRequest,
 )
-from src.services.helm import KubernetesService
+from src.services.helm import KubectlException, KubernetesService, validate_namespace
+from src.services.namespace_quota import QUOTA_UNREADABLE, quota_report, unavailable_report
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/namespaces", tags=["namespaces"])
@@ -86,6 +87,34 @@ async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update quota: {str(e)}",
         )
+
+
+# 一般 ``def``（不是 async）：FastAPI 會把它丟進 threadpool 跑，阻塞的 kubectl 不會卡住
+# event loop。同檔其他端點是 async 卻直接呼叫阻塞的 kubectl——那是既有形狀，不要照抄。
+@router.get("/{name}/quota", summary="#1647 — read ns ResourceQuota hard/used (read-only)")
+def get_namespace_quota(name: str) -> Dict[str, Any]:
+    """#1647：namespace ResourceQuota 的上限與已佔用量（純唯讀）。
+
+    一律回 200：拿得到時 ``available`` 為 True、``resources`` 以 k8s 資源鍵為 key；沒有
+    quota（含 namespace 不存在）或讀不到時 ``available`` 為 False 並帶 ``reason``——工作區
+    頁開頁時同步呼叫，「讀不到」不該變成一個要呼叫端另外處理的 5xx。只有 namespace 不在
+    允許前綴內才回 400。回應形狀見 ``namespace_quota.quota_report``。
+    """
+    # 兩段 try 不可合併：json.JSONDecodeError 是 ValueError 的子類，混在一起會把「kubectl
+    # 輸出解析失敗」誤回成 400（那是 namespace 前綴不合專用的）。
+    try:
+        validate_namespace(name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        # timeout 常數經 class 取、不經 k8s_service：單元測試會把 k8s_service 整個換成 mock。
+        items = k8s_service.get_resource_quotas(
+            name, timeout=KubernetesService.NS_QUOTA_READ_TIMEOUT_SECONDS)
+    except (KubectlException, ValueError) as exc:
+        logger.warning("Namespace quota unreadable for %s: %s", name,
+                       getattr(exc, "stderr", None) or exc)
+        return unavailable_report(name, QUOTA_UNREADABLE)
+    return quota_report(name, items)
 
 
 @router.post(

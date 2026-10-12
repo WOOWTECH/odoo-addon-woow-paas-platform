@@ -48,6 +48,115 @@ export function getInitFailureText(service) {
 }
 
 /**
+ * 服務顯示 running、但平台確認它其實沒有在執行（workload 期望有 Pod、實際一顆都沒有）時，
+ * 回傳後端確認過的異常代碼；否則回 null。
+ *
+ * 只讀 payload 的 `workload_fault`（後端 `_workload_fault_public`：running ＋ 已確認才給值），
+ * 前端不自己判斷。state 不是 running 時一律不顯示：其他狀態各有自己的說明。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {string|null}
+ */
+function getConfirmedWorkloadFault(service) {
+  if (service?.state !== "running") {
+    return null;
+  }
+  const fault = service.workload_fault;
+  return typeof fault === "string" && fault ? fault : null;
+}
+
+/**
+ * 服務是不是「顯示 running、但平台已確認它沒有在執行」（#1647）；判準同上，只是回布林。
+ *
+ * 給 banner／卡片提示以外、原本只看 state 的「正常」訊號用：這些地方在異常已確認時要讓路，
+ * 否則同一個畫面上 banner 說沒有在執行、旁邊卻寫 ONLINE／Healthy（瀏覽器實走 F1）。目前有
+ * 詳情頁 Connection Info 的連線狀態（OverviewTab 的 connectionStatus）與工作區頁統計卡
+ * （countServiceHealth）。
+ *
+ * ⚠ 狀態徽章不在此列：它跟著 state 走、維持 Running 是 #1647 明定的設計（state 不因為
+ * 觀測結果而改）。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {boolean}
+ */
+export function hasConfirmedWorkloadFault(service) {
+  return getConfirmedWorkloadFault(service) !== null;
+}
+
+/**
+ * 工作區頁統計卡的 Healthy／Alerts 計數。
+ *
+ * - healthy：state 是 running，而且沒有已確認的 workload 異常；
+ * - alerts：state 是 error，加上 running 但已確認 workload 異常的（#1647）。
+ *
+ * 兩者互斥；其他狀態（部署中、升級中、停權…）兩邊都不算。
+ *
+ * @param {Array<Object>|null|undefined} services
+ * @returns {{healthy: number, alerts: number}}
+ */
+export function countServiceHealth(services) {
+  let healthy = 0;
+  let alerts = 0;
+  for (const service of services || []) {
+    if (hasConfirmedWorkloadFault(service)) {
+      alerts += 1;
+    } else if (service?.state === "running") {
+      healthy += 1;
+    } else if (service?.state === "error") {
+      alerts += 1;
+    }
+  }
+  return { healthy, alerts };
+}
+
+/**
+ * 詳情頁 banner 的固定文案（#1647）。
+ *
+ * 叢集的原始訊息含 Pod、namespace、quota 物件名稱等內部細節，只留在後台；這裡只依代碼挑
+ * 文案。不認得的代碼（後端日後新增）一律用一般文案，不顯示代碼本身。
+ *
+ * ⛔ quota_exceeded 的文案只請租戶聯絡客服，不要建議刪除／停用／停止其他服務、或改用較小
+ * 的方案來釋出 CPU 或記憶體配額：工作區的上限是存活服務的方案規格加總 × 3（另有下限；
+ * `cloud_service.py` 的 `_compute_ns_quota`），刪掉一台上限少 3 份、用量只少約 1 份，剩餘
+ * 空間通常變小而不是變大——單台 limits 被調高到超過上限時（2026-10-10 事故）刪別台反而更糟。
+ * 租戶做得到又有效的只有聯絡客服（管理員調整配額的正式入口在 #1648）。
+ *
+ * ⛔ 也不要寫成配額「已滿／用完」：被擋下的常見形狀是「還有剩，但不夠這台啟動」（事故：
+ * 上限 12、其他 workload 佔 8、這台要 8）——同一個租戶在工作區頁的配額面板看到的是
+ * 「還剩 4 vCPU」，兩邊對不起來。要說的是「剩餘的配額不足以啟動這台服務」。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {string|null}
+ */
+export function getWorkloadFaultText(service) {
+  const fault = getConfirmedWorkloadFault(service);
+  if (!fault) {
+    return null;
+  }
+  if (fault === "quota_exceeded") {
+    return _t(
+      "This service is not running right now: the workspace does not have enough CPU or memory quota left to start it. Please contact support. Our operations team has been notified.",
+    );
+  }
+  return _t(
+    "This service is not running right now: the platform could not start it. Our operations team has been notified.",
+  );
+}
+
+/**
+ * 服務卡片上的一行提示（#1647）；判準與 getWorkloadFaultText 相同，詳細文案在詳情頁。
+ *
+ * @param {Object|null|undefined} service
+ * @returns {string|null}
+ */
+export function getWorkloadFaultLabel(service) {
+  if (!getConfirmedWorkloadFault(service)) {
+    return null;
+  }
+  return _t("Not running — the platform could not start this service");
+}
+
+/**
  * 回傳過久未觀測的顯示資料；等待首次真觀測時不可誤稱為「最後觀測」。
  *
  * @param {Object|null|undefined} service
