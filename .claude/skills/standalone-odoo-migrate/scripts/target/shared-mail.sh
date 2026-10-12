@@ -23,11 +23,11 @@
 set -euo pipefail
 
 MARK=standalone-odoo-migrate/shared-mail
-CMD=${1:-}; shift || true
-CTX="" NS="" RELEASE="" MAIL_NS=mailcow MAIL_HOST="" PORTS=587,993 LABEL=odoo-mail-platform/tenant=true
-
 usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { echo "ERROR: $2" >&2; exit "$1"; }
+case ${1:-} in -h|--help) usage; exit 0 ;; esac
+CMD=${1:-}; shift || true
+CTX="" NS="" RELEASE="" MAIL_NS=mailcow MAIL_HOST="" PORTS=587,993 LABEL=odoo-mail-platform/tenant=true
 while [[ $# -gt 0 ]]; do
   case $1 in
     --context) CTX=$2; shift 2 ;;
