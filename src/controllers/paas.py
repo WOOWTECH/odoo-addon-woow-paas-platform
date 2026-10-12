@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..services.access_state import access_mutation_result
 import copy
 import ipaddress
 import json
@@ -21,6 +22,7 @@ from odoo.http import request, route, Controller
 from odoo.tools import escape_psql
 
 from .ha_paas import HiddenChainMixin
+from .workspace_invitation import _invitation_failure
 from .billing import _invoice_payability_fields
 from ..models.workspace_access import (
     ROLE_OWNER, ROLE_ADMIN, ROLE_USER,
@@ -719,7 +721,7 @@ class PaasController(HiddenChainMixin, Controller):
         if action == 'list':
             return self._list_members(workspace_id)
         elif action == 'invite':
-            return self._invite_member(workspace_id, email, role)
+            return self._invite_member(workspace_id, email, role, kwargs.get('invitation_mode'))
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
@@ -798,123 +800,33 @@ class PaasController(HiddenChainMixin, Controller):
             'count': len(members),
         }
 
-    def _invite_member(self, workspace_id: int, email: str | None, role: str | None) -> dict[str, Any]:
+    def _invite_member(self, workspace_id: int, email: str | None, role: str | None, invitation_mode: str | None = None) -> dict[str, Any]:
+        """Queue a mailbox challenge; never create membership at issuance.
+
+        Odoo handles account signup/authentication. The existing-account
+        recipient is selected by one literal login email, and the server
+        fixes UID and role until authenticated, single-use acceptance.
         """
-        Invite a new member to a workspace by email.
-
-        Requires admin or owner role to invite. The target user must
-        already exist as an active authenticated account (including Portal).
-
-        Args:
-            workspace_id (int): Target workspace ID
-            email (str): Email address of user to invite
-            role (str): Role to assign ('admin', 'user', 'guest')
-                        Defaults to 'user' if not specified
-
-        Returns:
-            dict: Response containing:
-                - success (bool): True on success
-                - data (dict): New access record (id, user_id, name, email, role)
-                - error (str): Error message (on failure)
-
-        Errors:
-            - 'Workspace not found or access denied' if not admin/owner or workspace doesn't exist
-            - 'Email is required' if email is empty
-            - 'Invalid role' if role not in allowed values
-            - 'No user found with email: {email}' if user doesn't exist
-            - 'User is already a member of this workspace' if duplicate
-        """
-        user = request.env.user
-
-        workspace = _PaaSCapability(request.env).workspace(workspace_id)
-
-        # Combine existence and access check to prevent information leakage
-        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN) if workspace.exists() else False
-        if not access:
-            return {'success': False, 'error': _('Workspace not found or access denied')}
-
-        email = (email or '').strip().lower()
-        role = role or ROLE_USER
-
-        if not email:
-            return {'success': False, 'error': _('Email is required')}
-
-        if role not in ASSIGNABLE_ROLES:
-            return {'success': False, 'error': _('Invalid role')}
-
-        # Find user by email
-        ResUsers = request.env['res.users'].with_context({}).sudo()
-        # #1261：先取出**所有**同 email 的帳號，再挑第一個 internal（`share=False`）。
-        # 舊寫法 `limit=1` 依 res.users 預設排序（name, login）撿一個——同一個 email
-        # 同時有 internal 與 portal 帳號時，撿到哪個全看名字排序，可能把 internal
-        # 使用者的邀請錯落到他的 portal 分身上。internal 之間的相對順序沿用預設排序，
-        # 與舊行為一致。
-        # =ilike still interprets SQL %/_ wildcards. Bind the literal email:
-        # an underscore must never silently invite a different account.
-        candidates = ResUsers.with_context({}).search([
-            ('email', '=ilike', escape_psql(email)), ('active', '=', True),
-        ]).filtered(lambda u: not u._is_public())
-
-        if not candidates:
-            # 完全沒有帳號：維持既有行為與文案（不自動建帳號、不發邀請信）。
-            return {'success': False, 'error': _('No user found with email: %(email)s', email=email)}
-
-        # Preserve internal-first selection for duplicate emails. Existing
-        # active Portal members are valid invitees; never change their groups.
-        target_user = candidates.filtered(lambda u: not u.share)[:1] or candidates[:1]
-
-        WorkspaceAccess = workspace.env['woow_paas_platform.workspace_access']
-        # Check if already a member
-        existing = WorkspaceAccess.search([
-            ('workspace_id', '=', workspace_id),
-            ('user_id', '=', target_user.id),
-        ], limit=1)
-
-        if existing:
-            return {'success': False, 'error': _('User is already a member of this workspace')}
-
-        # #525 A3：唯一的寫入是這行 create，但例外被下面的 `except` 吃掉後不會傳播
-        # 到框架層 → request 正常結束 → transaction 照常 commit → 那一列授權留下來：
-        # **被邀請者實際已取得成員權限**，API 卻說失敗。加上
-        # `unique_user_workspace` 與上面的「已是成員」前置檢查，使用者會被鎖在
-        # 「第一次說邀請失敗、再邀說已是成員」的矛盾狀態，兩邊都不是真的。
-        #
-        # 殘留視窗在 `models.py` 的 `_create` 尾端：INSERT 已下 →
-        # `records._validate_fields(...)` → `records.check_access('create')`。
-        # #556 之後，這個呼叫者（admin/owner，已通過上面的 required_role 檢查）
-        # 一律經 `workspace_access.py` 的 `create()` model guard
-        # （`_check_assignable_role`，INSERT **之前**）與
-        # `workspace_access_rule_owner_admin_manage`（`perm_create=True`）放行，
-        # 不會撞到 `_check_owner_count`（role 不是 owner）或 create 方向的
-        # ir.rule 拒絕——注入點仍然只能落在 `_validate_fields` 這個真實視窗，
-        # 結構上照 A1／A2 同一形態修掉。
         try:
-            with request.env.cr.savepoint():
-                new_access = WorkspaceAccess.create({
-                    'workspace_id': workspace_id,
-                    'user_id': target_user.id,
-                    'role': role,
-                    'invited_by_id': user.id,
-                })
-        except Exception as e:
-            _logger.error("Error inviting member: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': _('An error occurred while inviting the member. Please try again.')}
-
-        # 回應組裝移出 try，與 `_create_workspace` 對齊。**這一半今天沒有對應的
-        # 測試，因為它造不出可達的失敗**：組裝只讀 `new_access.id`（純記憶體、
-        # 不碰 DB）與上面已 sudo 取得的 `target_user`。移出來是結構防護——savepoint
-        # 在離開 `with` 時就 release，日後若有人在組裝區加入一次 DB 讀取，留在 try
-        # 內就會以「邀請失敗、對方卻已入群」的形式把本次修掉的缺陷原樣帶回來。
-        return {
-            'success': True,
-            'data': {
-                'id': new_access.id,
-                'user_id': target_user.id,
-                'name': target_user.name,
-                'email': target_user.email,
-                'role': role,
+            ledger = request.env['woow_paas_platform.workspace_invitation']
+            ledger._authorized_workspace(workspace_id)
+            # Old clients append this response to active members. A pending
+            # invitation uses a different ID domain and must never reach them.
+            if invitation_mode != 'mailbox_challenge_v1':
+                return {
+                    'success': False, 'code': 'invite_client_update_required',
+                    'error': _('Reload this page to use mailbox-confirmed invitations'),
+                }
+            invitation = ledger._issue(workspace_id, email, role)
+            return {
+                'success': True, 'data': invitation._dto(),
+                'message': _('Invitation pending mailbox acceptance'),
             }
-        }
+        except OperationalError:
+            raise
+        except Exception as error:
+            return _invitation_failure(error)
+
 
     def _update_member_role(self, workspace_id: int, access_id: int, role: str | None) -> dict[str, Any]:
         """
@@ -2755,7 +2667,7 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             if vals:
                 service.write(vals)
-            return {'success': True, 'data': service._access_to_dict()}
+            return access_mutation_result(service, service._access_to_dict())
         except Exception as e:
             _logger.exception(
                 "[CLOUD_SVC] Failed to update access config service=%s: %s",
@@ -2817,7 +2729,7 @@ class PaasController(HiddenChainMixin, Controller):
             create_vals['rule_ids'] = rule_commands
         try:
             pol = Policy.create(create_vals)
-            return {'success': True, 'data': pol.to_dict()}
+            return access_mutation_result(service, pol.to_dict())
         except Exception as e:
             _logger.exception(
                 "[CLOUD_SVC] Failed to create access policy service=%s: %s",
@@ -2872,7 +2784,7 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             if vals:
                 write_pol.write(vals)
-            return {'success': True, 'data': pol.to_dict()}
+            return access_mutation_result(service, pol.to_dict())
         except Exception as e:
             _logger.exception(
                 "[CLOUD_SVC] Failed to update access policy %s: %s",
@@ -2886,7 +2798,7 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Policy not found')}
         try:
             pol.unlink()
-            return {'success': True, 'data': {'message': _('Policy deleted')}}
+            return access_mutation_result(service, {'message': _('Policy deleted')})
         except Exception as e:
             _logger.exception(
                 "[CLOUD_SVC] Failed to delete access policy %s: %s",
@@ -2917,7 +2829,7 @@ class PaasController(HiddenChainMixin, Controller):
                 reordered.append(pol.id)
             if reordered:
                 service._sync_access_to_operator()
-            return {'success': True, 'data': {'reordered': reordered}}
+            return access_mutation_result(service, {'reordered': reordered})
         except Exception as e:
             _logger.exception(
                 "[CLOUD_SVC] Failed to reorder access policies service=%s: %s",
@@ -5071,13 +4983,11 @@ class PaasController(HiddenChainMixin, Controller):
             # release 本身的 Chart.Metadata.Version），這裡先擋是為了給租戶看得懂的
             # 訊息，以及 operator 還沒升到有下限的版本時仍然擋得住。讀不到歷史 ⇒ 不送
             # （fail-closed，回復本來就要讀歷史才選得到 revision）。
-            floor = rollback_floor_violation(
-                client.get_revisions(
+            rollback_history = client.get_revisions(
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
-                ).get('revisions') or [],
-                revision,
-            )
+                ).get('revisions') or []
+            floor = rollback_floor_violation(rollback_history, revision)
             if floor:
                 return {'success': False,
                         'error': self._rollback_chart_downgrade_error(floor)}
@@ -5099,6 +5009,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'last_upgraded_at': fields.Datetime.now(),
             }
             service.write(rollback_vals)
+            # 固定回滾所建立的新 revision；不使用下一輪的任意最新版本。
+            expected_revision = (rollback_result.get('revision') if isinstance(rollback_result, dict) else None)
+            if type(expected_revision) is not int or expected_revision < 1:
+                expected_revision = max((int(row.get('revision') or 0)
+                                         for row in rollback_history), default=0) + 1
+            service._record_rollback_config_sync(expected_revision)
             # #1433：operator 回報回復後實際的 chart 版本（#1526 起兩種模式都回報，且
             # 不會低於回復前）。記下來，帳本才與叢集一致——下一次「修改配置」以
             # `service.helm_chart_version` 釘版（#552 的 resolved_version 以服務自己的版本

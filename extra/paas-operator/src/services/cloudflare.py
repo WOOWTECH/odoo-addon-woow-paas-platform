@@ -1677,15 +1677,10 @@ class CloudflareService:
     ) -> tuple[List[str], List[str]]:
         """Map IdP type strings (google/onetimepin) to account IdP ids.
 
-        Empty input → empty list (= app shows all available IdPs). A requested
-        type with no matching IdP on the account is skipped (logged) — but it
-        is also collected and returned so the caller can surface the silent
-        downgrade. Returns ``(resolved_ids, unresolved_types)``.
-
-        Security note: a requested-but-missing type that is silently dropped to
-        ``[]`` flips the app to "all available IdPs" (login restriction widened,
-        opposite of intent). Reporting ``unresolved_types`` lets Odoo/the BFF
-        warn the user instead of letting the widening go unnoticed.
+        Empty input → empty list (= app shows all available IdPs). Every
+        explicitly requested type must resolve; otherwise reject the request
+        instead of widening the app's login restriction. A successful result
+        is ``(resolved_ids, [])``; keep the tuple for response compatibility.
         """
         if not idp_types:
             return [], []
@@ -1701,11 +1696,13 @@ class CloudflareService:
                 resolved.append(idp_id)
             else:
                 unresolved.append(t)
-                logger.warning(
-                    "Access: login method '%s' has no IdP on the account; "
-                    "skipping (configure it in Zero Trust → Settings → "
-                    "Authentication).", t,
-                )
+        if unresolved:
+            raise CloudflareException(
+                "Requested login methods are not configured in Cloudflare "
+                f"Access: {', '.join(unresolved)}. Configure them in Zero "
+                "Trust → Settings → Authentication before syncing.",
+                status_code=400,
+            )
         return resolved, unresolved
 
     async def _delete_access_app(self, app_id: str) -> None:
@@ -1739,9 +1736,8 @@ class CloudflareService:
     ) -> dict:
         """Declaratively reconcile one SA's Cloudflare Access config.
 
-        Strategy (simple + idempotent): always delete the SA's previous
-        reusable policies (existing_policy_ids) then recreate from the desired
-        list; create-or-update the single per-SA Access App referencing them.
+        Resolve login restrictions, create the desired reusable policies,
+        update the per-SA Access App, then delete its previous policies.
         enabled=False → tear down app + policies, return empty.
 
         Returns {app_id, policy_ids, allowed_idps, unresolved_idp_types}.
@@ -1766,6 +1762,12 @@ class CloudflareService:
                                    "(left as orphan): %s", pid, e)
             return {"app_id": None, "policy_ids": [], "allowed_idps": [],
                     "unresolved_idp_types": [], "orphaned_policy_ids": orphaned}
+
+        # Validate explicit login restrictions before any remote mutation.
+        # A missing IdP or failed lookup must preserve the existing app and
+        # policies; [] is reserved for an intentionally unrestricted request.
+        allowed_idps, unresolved_idps = await self._resolve_idp_ids(
+            login_idp_types)
 
         # Resync strategy (detach-before-delete): create the NEW reusable
         # policies, point the app at them (which detaches the OLD ones), and
@@ -1795,9 +1797,6 @@ class CloudflareService:
                     exclude=exclude,
                 )
                 new_policy_ids.append((pid, p.get("precedence", idx + 1)))
-
-            allowed_idps, unresolved_idps = await self._resolve_idp_ids(
-                login_idp_types)
 
             app_payload = {
                 "name": app_name,

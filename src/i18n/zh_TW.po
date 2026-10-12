@@ -21739,6 +21739,213 @@ msgstr "已刪除服務的保留資料"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "Accept Workspace Invitation"
+msgstr "接受工作區邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "Invitation accepted"
+msgstr "已接受邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "You now have access to the workspace with the role in your invitation."
+msgstr "你已依邀請中的角色取得工作區存取權限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid ""
+"Accept the workspace invitation from your email. You must be signed in to "
+"the account that was invited."
+msgstr "接受電子郵件中的工作區邀請。請確認你已登入收到邀請的帳號。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid ""
+"Access is granted only after you accept. Your invitation sets the role you "
+"will receive."
+msgstr "接受後才會開通存取權限，角色以邀請設定為準。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "Accepting..."
+msgstr "接受中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "Accept Invitation"
+msgstr "接受邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "Reopen your invitation email"
+msgstr "請重新開啟邀請信"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid ""
+"Sign in to the invited account first, then open the acceptance link in your "
+"email again."
+msgstr "請先登入收到邀請的帳號，再重新開啟電子郵件中的接受連結。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid ""
+"The invitation link is kept only while this page is open. If the invitation "
+"expired or was revoked, ask an administrator for a new one."
+msgstr "邀請連結只在本頁開啟期間保留。若邀請已過期或撤銷，請管理員重新寄送。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.xml:0
+msgid "View Workspaces"
+msgstr "查看工作區"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid "Pending Invitations"
+msgstr "待接受邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid ""
+"These accounts have no workspace access until they accept their invitation. "
+"Resending replaces the previous link."
+msgstr "這些帳號必須接受邀請後，才會取得工作區存取權限。重新寄送會讓舊連結失效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid "Awaiting acceptance"
+msgstr "等待接受"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid "Expires:"
+msgstr "到期時間："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid "Resend Invitation"
+msgstr "重新寄送邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid "Revoke Invitation"
+msgstr "撤銷邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
+msgid "No pending invitations"
+msgstr "目前沒有待接受邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.xml:0
+msgid "Account Login Email"
+msgstr "帳號登入電子郵件"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.xml:0
+msgid ""
+"The recipient must already have an account with this login email. They will "
+"receive an acceptance link; workspace access starts only after they accept."
+msgstr "收件者必須已有使用此電子郵件登入的帳號。對方將收到接受連結，接受後才會開通工作區存取權限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceInvitationPage.js:0
+msgid ""
+"The invitation could not be accepted. Sign in to the invited account and "
+"reopen the email link, or ask an administrator for a new invitation."
+msgstr "無法接受邀請。請登入收到邀請的帳號後重新開啟信件連結，或請管理員重新寄送邀請。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Failed to load invitations"
+msgstr "無法載入邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Failed to revoke invitation"
+msgstr "無法撤銷邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Failed to resend invitation"
+msgstr "無法重新寄送邀請"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid ""
+"Invitation queued. The recipient joins only after accepting the email link."
+msgstr "邀請已排入寄送佇列。對方接受信件連結後才會加入工作區。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Invitation revoked. Its email link can no longer grant access."
+msgstr "邀請已撤銷，原信件連結無法再開通存取權限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "New invitation queued. Previous invitation links are no longer valid."
+msgstr "新邀請已排入寄送佇列，先前的邀請連結已失效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Failed to load members"
+msgstr "無法載入成員"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Failed to update member role"
+msgstr "無法更新成員角色"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Failed to remove member"
+msgstr "無法移除成員"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid ""
+"Unexpected invitation response. Reload the page and check the team before "
+"trying again."
+msgstr "邀請回應格式不符。請重新載入頁面，確認成員狀態後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
 msgid "Workspace resource quota"
 msgstr "工作區資源配額"

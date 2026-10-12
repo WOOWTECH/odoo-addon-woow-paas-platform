@@ -6,6 +6,7 @@ only the private context-cleaned capability, never a replacement request.env.
 """
 from __future__ import annotations
 
+from ..services.access_state import access_mutation_result
 import logging
 from typing import Any
 
@@ -650,7 +651,7 @@ class SmartHomeController(Controller):
         try:
             if vals:
                 sh_route.write(vals)
-            return {"success": True, "data": sh_route.to_dict()}
+            return access_mutation_result(sh_route, sh_route.to_dict())
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to update access config route=%s: %s",
@@ -711,7 +712,7 @@ class SmartHomeController(Controller):
             create_vals["rule_ids"] = rule_commands
         try:
             pol = Policy.create(create_vals)
-            return {"success": True, "data": pol.to_dict()}
+            return access_mutation_result(sh_route, pol.to_dict())
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to create access policy sh=%s: %s",
@@ -760,7 +761,7 @@ class SmartHomeController(Controller):
         try:
             if vals:
                 write_pol.write(vals)
-            return {"success": True, "data": pol.to_dict()}
+            return access_mutation_result(pol.smart_home_route_id, pol.to_dict())
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to update access policy %s: %s", policy_id, e)
@@ -770,9 +771,10 @@ class SmartHomeController(Controller):
         pol = self._sh_policy(smarthome, policy_id)
         if not pol:
             return {"success": False, "error": _("Policy not found")}
+        sh_route = pol.smart_home_route_id
         try:
             pol.unlink()
-            return {"success": True, "data": {"message": _("Policy deleted")}}
+            return access_mutation_result(sh_route, {"message": _("Policy deleted")})
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to delete access policy %s: %s", policy_id, e)
@@ -805,7 +807,7 @@ class SmartHomeController(Controller):
                 touched_routes |= pol.smart_home_route_id
             for sh_route in touched_routes:
                 sh_route._sync_access_to_operator()
-            return {"success": True, "data": {"reordered": reordered}}
+            return access_mutation_result(touched_routes, {"reordered": reordered})
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to reorder access policies sh=%s: %s",
@@ -1030,7 +1032,7 @@ class SmartHomeController(Controller):
         那個形狀在 #739 上的**觸發源**，沒有動形狀本身（C1 釘住現況）。
         """
         try:
-            smarthome.sudo().action_provision()
+            outcome = smarthome.sudo().action_provision()
             # #768：與 detail 端點同一個形狀。provision 成功當下才剛建出 primary
             # route，前端要拿它把 Access 分頁畫出來；回 detail 以外的形狀會讓
             # 呼叫端在「沒有 routes」與「routes 是空的」之間分不出來。
@@ -1041,6 +1043,9 @@ class SmartHomeController(Controller):
             # 從不寫 tunnel_status／connector_* ⇒ 不疊的話 Tunnel Information 會從
             # 即時值倒退回上一次 Refresh 寫入的舊值，直到整頁重載。
             data = smarthome.to_dict(include_details=True)
+            if isinstance(outcome, dict):
+                # Accepted remains pending until the normal request commit.
+                return dict(outcome, data=data)
             try:
                 data.update(smarthome._live_tunnel_status())
             except Exception:
@@ -1049,6 +1054,13 @@ class SmartHomeController(Controller):
                 _logger.exception(
                     "Live tunnel status overlay failed after provision sh=%s",
                     smarthome.id)
+            if data.get("state") != "active":
+                return {
+                    "success": False,
+                    "error": data.get("error_message") or _(
+                        "Smart Home setup did not complete. Please retry."),
+                    "data": data,
+                }
             return {"success": True, "data": data}
         except Exception as e:
             _logger.error("Failed to provision smart home: %s", e)

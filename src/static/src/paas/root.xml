@@ -8,6 +8,9 @@
             <t t-elif="router.current === 'workspaces'">
                 <WorkspaceListPage/>
             </t>
+            <t t-elif="router.current === 'workspace-invitation-accept'">
+                <WorkspaceInvitationPage t-key="router.params.invitationRevision"/>
+            </t>
             <t t-elif="router.current === 'workspace-detail'">
                 <!-- #1647 t-key：同一個分頁把網址的工作區 id 換掉（貼上另一個工作區的網址、
                      上一頁／下一頁）時 route 沒變，元件會被沿用，而 WorkspaceDetailPage 只在
@@ -26,7 +29,7 @@
                 <AppConfigurationPage workspaceId="workspaceId" templateId="templateId"/>
             </t>
             <t t-elif="router.current === 'smarthome-detail'">
-                <SmartHomeDetailPage workspaceId="workspaceId" homeId="homeId" initialTab="smartHomeTab"/>
+                <SmartHomeDetailPage t-key="workspaceId + ':' + homeId" workspaceId="workspaceId" homeId="homeId" initialTab="smartHomeTab"/>
             </t>
             <t t-elif="router.current === 'security-access-detail'">
                 <SecurityAccessDetailPage workspaceId="workspaceId" saId="securityAccessId" tab="securityAccessTab"/>

@@ -186,8 +186,16 @@ class _ShAccessSyncFixture(TransactionCase):
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = (
-            _sync_result() if result is None else result)
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        if result is not None:
+            client.sync_access_app.return_value = result
+        else:
+            client.sync_access_app.side_effect = lambda payload: _sync_result(
+                policy_ids=['policy-%s' % index for index, _policy in
+                            enumerate(payload.get('policies', []), 1)]) | {
+                    'allowed_idps': ['idp-'+kind for kind in
+                                     payload.get('login_idp_types', [])]}
         return client
 
     def _route_row(self, route_id):
@@ -523,10 +531,11 @@ class TestShAccessResultPersistence(_ShAccessSyncFixture):
     def test_C3_unresolved_idp_types_are_persisted(self):
         client = self._mock(_sync_result(unresolved=['google']))
         with patch(MOCK_GET_CLIENT, return_value=client):
-            self.route.write({'is_protected': True, 'login_google': True})
-        self.assertEqual(
-            self.route.access_unresolved_idp_types, 'google',
-            '登入限制被靜默放寬的訊號必須落地——它是租戶唯一看得到這件事的地方')
+            with self.assertRaisesRegex(UserError, 'not confirmed'):
+                self.route.write({'is_protected': True, 'login_google': True})
+        self.route.invalidate_recordset()
+        self.assertFalse(self.route.is_protected)
+        self.assertFalse(self.route.access_app_id)
 
     def test_C4_a_none_app_id_clears_the_stored_ids(self):
         """teardown（回傳 app_id=None）之後，DB 這側的 id 全部要清乾淨。
@@ -626,6 +635,8 @@ class TestShAccessTeardown(_ShAccessSyncFixture):
         self._configure(is_protected=True)
         self._app_id(self.route, 'app-live')
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.sync_access_app.side_effect = RuntimeError('cf down')
 
         with patch(MOCK_GET_CLIENT, return_value=client):
@@ -653,6 +664,8 @@ class TestShAccessTeardown(_ShAccessSyncFixture):
         self._app_id(self.route, 'app-live')
         tunnel_id = self.sh.tunnel_id
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.sync_access_app.side_effect = RuntimeError('cf down')
 
         with patch(MOCK_GET_CLIENT, return_value=client):
@@ -715,6 +728,8 @@ class TestShAccessTeardown(_ShAccessSyncFixture):
         self._app_id(route, 'app-secondary')
         route_id = route.id
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.sync_access_app.side_effect = RuntimeError('cf down')
 
         with patch(MOCK_GET_CLIENT, return_value=client):
@@ -842,3 +857,5 @@ class TestShResumeForcedSync(_ShAccessSyncFixture):
         self.assertEqual(payload['existing_app_id'], 'app-live')
         self.assertFalse(self.route.access_app_id,
                          '收斂完成後 DB 這側的 app id 要跟著清掉')
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

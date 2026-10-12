@@ -28,6 +28,7 @@ T2 把欄位與 teardown hook 放好了，但**沒有任何東西會打 operator
 import uuid
 from unittest.mock import MagicMock, patch
 
+from odoo.exceptions import UserError
 from odoo.tests import TransactionCase, tagged
 
 # #787：`cs_skip_access_sync` 只認模組私有 sentinel，不能傳 `True`
@@ -142,7 +143,19 @@ class _CsAccessSyncFixture(TransactionCase):
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = result or _sync_result()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        # AC1011: the origin boundary now consumes the real parking contract.
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
+        if result is not None:
+            client.sync_access_app.return_value = result
+        else:
+            client.sync_access_app.side_effect = lambda payload: _sync_result(
+                policy_ids=['policy-%s' % index for index, _policy in
+                            enumerate(payload.get('policies', []), 1)]) | {
+                    'allowed_idps': ['idp-'+kind for kind in
+                                     payload.get('login_idp_types', [])]}
         return client
 
 
@@ -284,9 +297,11 @@ class TestCsAccessSyncTrigger(_CsAccessSyncFixture):
     def test_B4_unresolved_idp_types_are_persisted(self):
         client = self._mock(_sync_result(unresolved=['google']))
         with patch(MOCK_GET_CLIENT, return_value=client):
-            self.svc.write({'is_protected': True, 'login_google': True})
-        self.assertEqual(self.svc.access_unresolved_idp_types, 'google',
-                         '登入限制被靜默放寬的訊號必須落地，不能丟掉')
+            with self.assertRaisesRegex(UserError, 'not confirmed'):
+                self.svc.write({'is_protected': True, 'login_google': True})
+        self.svc.invalidate_recordset()
+        self.assertFalse(self.svc.is_protected)
+        self.assertFalse(self.svc.access_app_id)
 
     def test_B5_returned_policy_ids_map_back_in_precedence_order(self):
         p1 = self._policy(self.svc, name='p1', sequence=10)
@@ -336,6 +351,11 @@ class TestCsAccessSyncTrigger(_CsAccessSyncFixture):
         什麼都沒有——正是 fail-open 的方向。
         """
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        # AC1011: the origin boundary now consumes the real parking contract.
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         client.sync_access_app.side_effect = RuntimeError('operator down')
         with patch(MOCK_GET_CLIENT, return_value=client):
             with self.assertRaises(RuntimeError):
@@ -387,7 +407,8 @@ class TestPolicyAnchorDispatch(_CsAccessSyncFixture):
     def test_C3_unlinking_reaps_the_doomed_cf_policy_id(self):
         svc = self._protected()
         pol = self._policy(svc, cf_policy_id='cf-doomed')
-        client = self._mock(_sync_result(app_id=None))
+        # Access remains enabled after removing the final policy (deny all).
+        client = self._mock(_sync_result())
         with patch(MOCK_GET_CLIENT, return_value=client):
             pol.unlink()
         self.assertTrue(client.sync_access_app.called)
@@ -460,6 +481,11 @@ class TestCsAccessTeardownPush(_CsAccessSyncFixture):
         清掉 id 而 CF 上的 app 還在＝永久孤兒且沒有任何路徑找得回來。
         """
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        # AC1011: the origin boundary now consumes the real parking contract.
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         client.sync_access_app.side_effect = RuntimeError('cf down')
         _internal_cs_access_identity(self.svc).access_app_id = 'app-live'
         with patch(MOCK_GET_CLIENT, return_value=client):
@@ -498,3 +524,5 @@ class TestReconcilerLeftSetCoversCs(_CsAccessSyncFixture):
         ls = collect_left_set(self.env)
         self.assertNotIn('', ls.access_app_ids)
         self.assertNotIn(False, ls.access_app_ids)
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

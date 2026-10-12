@@ -188,6 +188,29 @@ class TestOAuthToken(TransactionCase):
         vals.update(overrides)
         return self.OAuthToken.create(vals)
 
+    def _create_subject(self, suffix):
+        return self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': f'OAuth Subject {suffix}',
+            'login': f'oauth-subject-{suffix}@invalid.example',
+        })
+
+    def _create_portal_subject(self, suffix):
+        return self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': f'OAuth Portal Subject {suffix}',
+            'login': f'oauth-portal-{suffix}@invalid.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])],
+        })
+
+    def _verify_bearer(self, token):
+        from odoo.addons.woow_paas_platform.controllers.oauth2 import verify_oauth_token
+
+        request_mock = MagicMock()
+        request_mock.env = self.env
+        request_mock.httprequest.headers = {
+            'Authorization': f'Bearer {token.access_token}',
+        }
+        return verify_oauth_token(request_mock, ['smarthome:read'])
+
     def test_create_token(self):
         """Test creating an OAuth token."""
         token = self._create_token()
@@ -199,6 +222,57 @@ class TestOAuthToken(TransactionCase):
         """Test valid access token check."""
         token = self._create_token()
         self.assertTrue(token.is_access_token_valid())
+
+    def test_bearer_accepts_active_non_public_subject_and_client(self):
+        token = self._create_token()
+        user, verified = self._verify_bearer(token)
+        self.assertEqual(user, self.user)
+        self.assertEqual(verified, token)
+
+    def test_bearer_accepts_active_portal_subject(self):
+        subject = self._create_portal_subject('bearer')
+        self.assertTrue(subject.share)
+        self.assertFalse(subject._is_public())
+        token = self._create_token(
+            access_token='portal-subject-access-token',
+            refresh_token='portal-subject-refresh-token',
+            user_id=subject.id,
+        )
+        user, verified = self._verify_bearer(token)
+        self.assertEqual(user, subject)
+        self.assertEqual(verified, token)
+
+    def test_bearer_rejects_disabled_subject(self):
+        from werkzeug.exceptions import Unauthorized
+
+        subject = self._create_subject('disabled')
+        token = self._create_token(
+            access_token='disabled-subject-access-token',
+            refresh_token='disabled-subject-refresh-token',
+            user_id=subject.id,
+        )
+        subject.active = False
+        with self.assertRaises(Unauthorized):
+            self._verify_bearer(token)
+
+    def test_bearer_rejects_public_subject(self):
+        from werkzeug.exceptions import Unauthorized
+
+        token = self._create_token(
+            access_token='public-subject-access-token',
+            refresh_token='public-subject-refresh-token',
+            user_id=self.env.ref('base.public_user').id,
+        )
+        with self.assertRaises(Unauthorized):
+            self._verify_bearer(token)
+
+    def test_bearer_rejects_inactive_client(self):
+        from werkzeug.exceptions import Unauthorized
+
+        token = self._create_token()
+        self.client.is_active = False
+        with self.assertRaises(Unauthorized):
+            self._verify_bearer(token)
 
     def test_access_token_expired(self):
         """Test expired access token."""
@@ -246,6 +320,19 @@ class TestOAuthToken(TransactionCase):
         self.assertFalse(token.is_revoked)
         token.revoke()
         self.assertTrue(token.is_revoked)
+        self.assertFalse(token.is_access_token_valid())
+        self.assertFalse(token.is_refresh_token_valid())
+
+    def test_reenable_does_not_revive_revoked_token(self):
+        subject = self._create_subject('revoked')
+        token = self._create_token(
+            access_token='revoked-reenabled-access-token',
+            refresh_token='revoked-reenabled-refresh-token',
+            user_id=subject.id,
+        )
+        subject.active = False
+        token.revoke()
+        subject.active = True
         self.assertFalse(token.is_access_token_valid())
         self.assertFalse(token.is_refresh_token_valid())
 
@@ -435,7 +522,7 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         super().setUp()
         self.OAuthClient = self.env['woow_paas_platform.oauth_client']
         self.OAuthCode = self.env['woow_paas_platform.oauth_code']
-        self.user = self.env.user
+        self.user = self.env.ref('base.user_admin')
 
         self.public_client = self.OAuthClient.create({
             'name': 'PKCE Test Public Client',
@@ -454,15 +541,16 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         challenge = base64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')
         return verifier, challenge
 
-    def _create_auth_code(self, challenge, method='S256', client=None):
+    def _create_auth_code(self, challenge, method='S256', client=None, user=None):
         client = client or self.public_client
+        user = user or self.user
         code_str = secrets.token_urlsafe(32)
         self.OAuthCode.create({
             'code': code_str,
             'redirect_uri': self.REDIRECT_URI,
             'scope': 'smarthome:read',
             'expires_at': fields.Datetime.now() + timedelta(minutes=10),
-            'user_id': self.user.id,
+            'user_id': user.id,
             'client_id': client.id,
             'code_challenge': challenge,
             'code_challenge_method': method,
@@ -485,6 +573,26 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         body = json.loads(response.get_data(as_text=True))
         return response.status_code, body
 
+    def _create_refresh_token(self, user=None):
+        value = secrets.token_urlsafe(32)
+        self.env['woow_paas_platform.oauth_token'].create({
+            'access_token': secrets.token_urlsafe(32),
+            'refresh_token': value,
+            'scope': 'smarthome:read',
+            'expires_at': fields.Datetime.now() + timedelta(hours=1),
+            'refresh_expires_at': fields.Datetime.now() + timedelta(days=30),
+            'user_id': (user or self.user).id,
+            'client_id': self.public_client.id,
+        })
+        return value
+
+    def _create_portal_subject(self):
+        return self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': 'OAuth Portal Refresh Subject',
+            'login': 'oauth-portal-refresh@invalid.example',
+            'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])],
+        })
+
     def test_authorization_code_with_pkce_no_secret_succeeds(self):
         verifier, challenge = self._pkce_pair()
         code = self._create_auth_code(challenge)
@@ -501,6 +609,76 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         self.assertEqual(body['token_type'], 'bearer')
         self.assertIsInstance(body['expires_in'], int)
         self.assertIn('smarthome:read', body['scope'])
+
+    def test_authorization_code_rejects_subject_disabled_after_issuance(self):
+        subject = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': 'Disabled OAuth Code Subject',
+            'login': 'disabled-oauth-code@invalid.example',
+        })
+        verifier, challenge = self._pkce_pair()
+        code = self._create_auth_code(challenge, user=subject)
+        token_count = self.env['woow_paas_platform.oauth_token'].search_count([])
+        subject.active = False
+        status, body = self._call_token(
+            grant_type='authorization_code',
+            code=code,
+            redirect_uri=self.REDIRECT_URI,
+            client_id=self.public_client.client_id,
+            code_verifier=verifier,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body['error'], 'invalid_grant')
+        self.assertEqual(
+            self.env['woow_paas_platform.oauth_token'].search_count([]),
+            token_count,
+        )
+
+    def test_authorization_code_rejects_public_subject_without_token_row(self):
+        verifier, challenge = self._pkce_pair()
+        code = self._create_auth_code(
+            challenge,
+            user=self.env.ref('base.public_user'),
+        )
+        token_count = self.env['woow_paas_platform.oauth_token'].search_count([])
+        status, body = self._call_token(
+            grant_type='authorization_code',
+            code=code,
+            redirect_uri=self.REDIRECT_URI,
+            client_id=self.public_client.client_id,
+            code_verifier=verifier,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body['error'], 'invalid_grant')
+        self.assertEqual(
+            self.env['woow_paas_platform.oauth_token'].search_count([]),
+            token_count,
+        )
+
+    def test_client_credentials_active_system_owner_succeeds(self):
+        client = self.OAuthClient.create({
+            'name': 'Client Credentials Positive Control',
+            'client_id': 'client-credentials-positive-control',
+            'redirect_uris': self.REDIRECT_URI,
+            'client_type': 'confidential',
+            'scopes': 'smarthome:read',
+            'grant_types': 'client_credentials',
+        })
+        client.set_secret('client-credentials-secret')
+        status, body = self._call_token(
+            grant_type='client_credentials',
+            client_id=client.client_id,
+            client_secret='client-credentials-secret',
+            scope='smarthome:read',
+        )
+        self.assertEqual(status, 200, body)
+        self.assertIn('access_token', body)
+        self.assertNotIn('refresh_token', body)
+        token = self.env['woow_paas_platform.oauth_token'].search([
+            ('access_token', '=', body['access_token']),
+        ])
+        self.assertEqual(token.user_id, self.env.ref('base.user_admin'))
+        self.assertTrue(token.user_id.active)
+        self.assertFalse(token.user_id._is_public())
 
     def test_authorization_code_with_secret_on_public_rejected(self):
         verifier, challenge = self._pkce_pair()
@@ -587,6 +765,20 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         self.assertEqual(status, 400)
         self.assertEqual(body['error'], 'invalid_grant')
 
+    def test_refresh_accepts_active_portal_subject(self):
+        subject = self._create_portal_subject()
+        self.assertTrue(subject.share)
+        self.assertFalse(subject._is_public())
+        refresh_token = self._create_refresh_token(subject)
+        status, body = self._call_token(
+            grant_type='refresh_token',
+            refresh_token=refresh_token,
+            client_id=self.public_client.client_id,
+        )
+        self.assertEqual(status, 200, body)
+        self.assertIn('access_token', body)
+        self.assertIn('refresh_token', body)
+
     def test_refresh_with_secret_on_public_rejected(self):
         verifier, challenge = self._pkce_pair()
         code = self._create_auth_code(challenge)
@@ -603,6 +795,42 @@ class TestPkceOnlyTokenFlow(TransactionCase):
             refresh_token=first['refresh_token'],
             client_id=self.public_client.client_id,
             client_secret='should-not-be-here',
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(body['error'], 'invalid_client')
+
+    def test_refresh_rejects_disabled_subject(self):
+        subject = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': 'Disabled OAuth Refresh Subject',
+            'login': 'disabled-oauth-refresh@invalid.example',
+        })
+        refresh_token = self._create_refresh_token(subject)
+        subject.active = False
+        status, body = self._call_token(
+            grant_type='refresh_token',
+            refresh_token=refresh_token,
+            client_id=self.public_client.client_id,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body['error'], 'invalid_grant')
+
+    def test_refresh_rejects_public_subject(self):
+        refresh_token = self._create_refresh_token(self.env.ref('base.public_user'))
+        status, body = self._call_token(
+            grant_type='refresh_token',
+            refresh_token=refresh_token,
+            client_id=self.public_client.client_id,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body['error'], 'invalid_grant')
+
+    def test_refresh_rejects_inactive_client(self):
+        refresh_token = self._create_refresh_token()
+        self.public_client.is_active = False
+        status, body = self._call_token(
+            grant_type='refresh_token',
+            refresh_token=refresh_token,
+            client_id=self.public_client.client_id,
         )
         self.assertEqual(status, 401)
         self.assertEqual(body['error'], 'invalid_client')
@@ -678,6 +906,7 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         self.public_client.is_active = False
         verifier, challenge = self._pkce_pair()
         code = self._create_auth_code(challenge)
+        token_count = self.env['woow_paas_platform.oauth_token'].search_count([])
         status, body = self._call_token(
             grant_type='authorization_code',
             code=code,
@@ -687,6 +916,10 @@ class TestPkceOnlyTokenFlow(TransactionCase):
         )
         self.assertEqual(status, 401)
         self.assertEqual(body['error'], 'invalid_client')
+        self.assertEqual(
+            self.env['woow_paas_platform.oauth_token'].search_count([]),
+            token_count,
+        )
 
 
 class TestAuthorizeEndpointPkce(TransactionCase):
@@ -758,6 +991,9 @@ class TestAuthorizeEndpointPkce(TransactionCase):
         with patch(
             'odoo.addons.woow_paas_platform.controllers.oauth2.request',
             request_mock,
+        ), patch(
+            'odoo.addons.woow_paas_platform.controllers.oauth2.http.request',
+            request_mock,
         ):
             OAuth2Controller().authorize_post(**kwargs)
         return captured
@@ -803,3 +1039,67 @@ class TestAuthorizeEndpointPkce(TransactionCase):
             ('client_id', '=', self.public_client.id),
         ])
         self.assertFalse(codes)
+
+    def _approve_with_scope(self, scope):
+        return self._call_authorize_post(
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope=scope,
+            state='scope-state',
+            approve='1',
+            code_challenge='scope-test-challenge',
+            code_challenge_method='S256',
+        )
+
+    def test_authorize_post_rejects_scope_outside_client_allowlist(self):
+        """Direct POST must not bypass the scope check on authorize GET."""
+        result = self._approve_with_scope('smarthome:read ha:provision')
+        self.assertIn('error=invalid_scope', result['redirect_url'])
+        self.assertIn('state=scope-state', result['redirect_url'])
+        self.assertFalse(self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ]))
+
+    def test_authorize_post_rechecks_current_client_scopes(self):
+        """A permission removed after consent GET cannot be issued by POST."""
+        self.public_client.write({'scopes': 'smarthome:read'})
+        result = self._approve_with_scope('smarthome:tunnel')
+        self.assertIn('error=invalid_scope', result['redirect_url'])
+        self.assertFalse(self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ]))
+
+    def test_authorize_post_preserves_requested_scope_subset(self):
+        result = self._approve_with_scope('  workspace:read  smarthome:read  ')
+        self.assertNotIn('error=', result['redirect_url'])
+        codes = self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ])
+        self.assertEqual(len(codes), 1)
+        self.assertEqual(codes.scope, 'workspace:read smarthome:read')
+
+    def test_authorize_post_empty_scope_uses_allowed_defaults(self):
+        result = self._approve_with_scope(' \t ')
+        self.assertNotIn('error=', result['redirect_url'])
+        codes = self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ])
+        self.assertEqual(len(codes), 1)
+        self.assertEqual(
+            codes.scope, ' '.join(sorted(self.public_client.get_allowed_scopes())),
+        )
+
+    def test_authorize_post_denied_unallowed_scope_creates_no_code(self):
+        result = self._call_authorize_post(
+            client_id=self.public_client.client_id,
+            redirect_uri=self.REDIRECT_URI,
+            scope='ha:provision',
+            state='scope-state',
+            deny='1',
+            code_challenge='scope-test-challenge',
+            code_challenge_method='S256',
+        )
+        self.assertIn('error=access_denied', result['redirect_url'])
+        self.assertFalse(self.OAuthCode.search([
+            ('client_id', '=', self.public_client.id),
+        ]))

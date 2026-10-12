@@ -98,6 +98,7 @@ controller 的 `except Exception` 又把它吞成 HTTP 200 的 `{"success": fals
 import json
 import uuid
 from unittest.mock import patch
+from .publication_receipt_fixture import routes_receipt
 
 from odoo.tests import HttpCase, tagged
 
@@ -303,7 +304,7 @@ class _Sa805Fixture(HttpCase):
         }
         # 零 route 時 `_sync_routes_to_operator` 仍會呼叫（tunnel_id 已存在），
         # 所以回傳形狀要給全，否則 KeyError／MagicMock 真值會冒充成受測失敗。
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.sync_access_app.return_value = {}
         client.check_route_availability.return_value = {
             'status': 'free', 'available': True}
@@ -446,8 +447,12 @@ class TestSa805TenantProvisionSucceeds(_Sa805Fixture):
             self.alice_login, self.w1, 'configure then provision')
         prefix = 'sa805-%s' % uuid.uuid4().hex[:8]
         client = self._operator_client()
-        client.sync_tunnel_routes.return_value = {
-            'routes': [{'subdomain': prefix, 'dns_record_id': 'rec-805-x'}]}
+        client.sync_tunnel_routes.side_effect = (
+            lambda tunnel_id, routes, **kwargs: routes_receipt(
+                tunnel_id, routes,
+                sample={'routes': [{'subdomain': prefix,
+                                    'dns_record_id': 'rec-805-x'}]},
+                **kwargs))
 
         self.authenticate(self.alice_login, self.alice_login)
         with self._patched_operator(client):

@@ -34,17 +34,17 @@ from .smart_home_fixture import sh_model  # #524：建立閘 ＋ 身分錨點閘
 _SH_CLIENT = (
     'odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
 
+from .publication_receipt_fixture import install_publication_receipts
+
 
 def _client():
     client = MagicMock()
+    install_publication_receipts(client)
     client.create_tunnel.return_value = {
         'tunnel_id': 'tun-new',
         'tunnel_name': 'paas-prod-sm-new',
         'tunnel_token': 'tok-new',
         'dns_failed': False,
-    }
-    client.sync_tunnel_routes.return_value = {
-        'tunnel_id': 'tun-retry', 'routes': [],
     }
     return client
 
@@ -100,8 +100,9 @@ class TestShProvisionRetryConverges(_RetryCase):
             'tun-retry',
             routes=[{
                 'subdomain': home.subdomain,
-                # 與 create_tunnel 當初烙進 ingress 的同一個值（含自訂 port）。
-                'service_url': 'http://localhost:9123',
+                # 先以 fail-closed 503 發佈 route；Access 與 origin receipt
+                # 都確認後才由後續 config publication 放行 origin。
+                'service_url': 'http_status:503',
                 'http_host_header': False,
             }],
             comment='paas-prod-sm-retry',

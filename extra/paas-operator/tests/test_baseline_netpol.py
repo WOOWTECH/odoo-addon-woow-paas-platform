@@ -62,7 +62,7 @@ def test_baseline_bundle_stg_four_nps(mock_settings):
     """stg（有 cloudflared ns）→ 4 條 NP，名稱固定；全 ns-wide + ingress-only + paas-managed。"""
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     names = [x["metadata"]["name"] for x in m]
@@ -86,7 +86,7 @@ def test_default_deny_has_no_ingress(mock_settings):
     """default-deny：無 ingress key = deny-all。"""
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     dd = next(x for x in m if x["metadata"]["name"] == "paas-baseline-default-deny-ingress")
@@ -97,7 +97,7 @@ def test_default_deny_has_no_ingress(mock_settings):
 def test_same_ns_allows_podselector_empty(mock_settings):
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     same = next(x for x in m if x["metadata"]["name"] == "paas-baseline-allow-same-ns")
@@ -109,7 +109,7 @@ def test_cloudflared_selects_connector_ns(mock_settings):
     """NP3：namespaceSelector 指 env-specific connector ns（env-safe by construction）。"""
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture()
     cf = next(x for x in m if x["metadata"]["name"] == "paas-baseline-allow-cloudflared")
@@ -122,7 +122,7 @@ def test_mcp_reach_selector_reach_ws_plus_env(mock_settings):
     """leg-2：reach-ws-<W>=true AND env（cross-env 安全）；value=REACH_WS_LABEL_VALUE；無 ports。"""
     mock_settings.paas_env = "stg"
     mock_settings.cloudflared_namespace = ""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
     m = _capture(wid=3)
     mcp = next(x for x in m if x["metadata"]["name"] == "paas-baseline-allow-mcp-reach")
@@ -138,9 +138,9 @@ def test_dev_no_env_no_cloudflared_three_nps(mock_settings):
     """dev（paas_env=''）→ 無 cloudflared NP（3 條），mcp-reach selector 無 env key。"""
     mock_settings.paas_env = ""
     mock_settings.cloudflared_namespace = ""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "dev-sandbox-netpol-"
     mock_settings.tenant_baseline_egress_enabled = False  # #1441 egress 另測
-    m = _capture()
+    m = _capture(ns="dev-sandbox-netpol-example")
     names = [x["metadata"]["name"] for x in m]
     assert "paas-baseline-allow-cloudflared" not in names
     assert len(m) == 3
@@ -155,7 +155,7 @@ def test_dev_no_env_no_cloudflared_three_nps(mock_settings):
 @patch("src.services.helm.settings")
 @patch("subprocess.run")
 def test_create_namespace_wires_baseline_when_workspace_id(mock_run, mock_settings):
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.paas_env = "stg"
     mock_settings.registry_username = ""
     mock_settings.registry_password = ""
@@ -180,7 +180,7 @@ def test_create_namespace_wires_baseline_when_workspace_id(mock_run, mock_settin
 @patch("subprocess.run")
 def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_settings):
     """無 workspace_id → warn + skip（不 raise，向後相容；tenant-boundary fail-loud 屬 Odoo 層）。"""
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     mock_settings.paas_env = "stg"
     mock_settings.registry_username = ""
     mock_settings.registry_password = ""
@@ -195,7 +195,7 @@ def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_set
     # 這裡 mock 掉，避免 settings 被整顆 MagicMock 化後 json.dumps 炸開。
     k.ensure_default_sa_image_pull_secret = MagicMock()
     k.apply_pod_security = MagicMock()
-    k.create_namespace("paas-ws-dev", cpu_limit="1", memory_limit="1Gi", storage_limit="1Gi")
+    k.create_namespace("paas-ws-stg-dev", cpu_limit="1", memory_limit="1Gi", storage_limit="1Gi")
     k._apply_baseline_netpol.assert_not_called()
     k.apply_pod_security.assert_not_called()  # 非租戶 ns 不加 PSA（與 NP 同一個判準）
 
@@ -207,7 +207,7 @@ def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_set
 def test_stamp_managed_ns_labels_cs_ns(mock_settings):
     """CS-ns backfill：kubectl label --overwrite 帶 build_managed_ns_labels 全集。"""
     mock_settings.paas_env = "stg"
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     k = KubernetesService()
     k._run_command = MagicMock()
     labels = k.stamp_managed_ns_labels("paas-ws-stg-x", workspace_id=7)
@@ -224,10 +224,10 @@ def test_stamp_managed_ns_labels_cs_ns(mock_settings):
 def test_stamp_managed_ns_labels_agent_ns_add_only(mock_settings):
     """agent-ns backfill：加 env + reach-ws，全為 k=v（add-only，無 'key-' delete）。"""
     mock_settings.paas_env = "stg"
-    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.namespace_prefix = "paas-ws-stg-"
     k = KubernetesService()
     k._run_command = MagicMock()
-    k.stamp_managed_ns_labels("paas-ws-pa-abc", reach_workspace_ids=[3, 5])
+    k.stamp_managed_ns_labels("paas-ws-stg-pa-abc", reach_workspace_ids=[3, 5])
     cmd = k._run_command.call_args.args[0]
     assert "woow.tw/reach-ws-3=true" in cmd
     assert "woow.tw/reach-ws-5=true" in cmd

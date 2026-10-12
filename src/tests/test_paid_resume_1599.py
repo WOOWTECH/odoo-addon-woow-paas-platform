@@ -24,6 +24,7 @@
 """
 from datetime import date, timedelta
 from unittest.mock import MagicMock, call, patch
+from .publication_receipt_fixture import install_publication_receipts
 
 from dateutil.relativedelta import relativedelta
 
@@ -50,7 +51,7 @@ class _Boom(Exception):
 
 
 def _client():
-    client = MagicMock()
+    client = install_publication_receipts(MagicMock())
     client.unpark_release_route.return_value = {'status': 'unparked'}
     client.park_release_route.return_value = {'status': 'parked'}
     return client

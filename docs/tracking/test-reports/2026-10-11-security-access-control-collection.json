@@ -1,0 +1,946 @@
+{
+  "expected_count": 645,
+  "classes": 91,
+  "counts": {
+    "test_access_protection_lost_ui_payload.TestCsAccessPayloadCarriesProtectionLost": 2,
+    "test_access_protection_lost_ui_payload.TestSaDetailPayloadCarriesProtectionLost": 2,
+    "test_access_protection_lost_ui_payload.TestShDetailPayloadCarriesProtectionLost": 2,
+    "test_access_publish_pending_ac1011.TestAccessPublishPendingAC1011": 15,
+    "test_access_publish_pending_ac1011.TestAccessPublishPendingHttpAC1011": 3,
+    "test_access_sync_per_identity_ac1011.TestAccessSyncPerIdentityAC1011": 3,
+    "test_access_sync_receipt_ac1011.TestAccessSyncReceiptAC1011": 17,
+    "test_actual_operator_publish_recovery_ac1011.TestActualOperatorPublishRecoveryAC1011": 4,
+    "test_cloud_service_authz_676.TestCloudServiceWriteAuthz676": 13,
+    "test_cloud_service_authz_676.TestInitControlFieldsWriteAuthz1257": 3,
+    "test_cloud_service_authz_676.TestReadEndpointsStayPureForGuests": 3,
+    "test_cs_access_control_model_744.TestCsAccessIdentityAnchor": 7,
+    "test_cs_access_control_model_744.TestCsAccessTeardown": 6,
+    "test_cs_access_control_model_744.TestPolicyAnchorExclusiveArc": 8,
+    "test_cs_access_control_model_744.TestPolicyQuotaFollowsAnchor": 4,
+    "test_cs_access_endpoints_745.TestCsAccessApiPayload": 2,
+    "test_cs_access_endpoints_745.TestCsAccessConfigEndpointAuthz": 8,
+    "test_cs_access_endpoints_745.TestCsAccessPolicyEndpoint": 8,
+    "test_cs_access_endpoints_745.TestCsAccessQuotaBffSudoCrossUser1053": 3,
+    "test_cs_access_endpoints_745.TestCsAccessTenantRpcChain": 4,
+    "test_cs_access_sync_745.TestCsAccessPayload": 5,
+    "test_cs_access_sync_745.TestCsAccessSyncTrigger": 9,
+    "test_cs_access_sync_745.TestCsAccessTeardownPush": 3,
+    "test_cs_access_sync_745.TestPolicyAnchorDispatch": 5,
+    "test_cs_access_sync_745.TestReconcilerLeftSetCoversCs": 3,
+    "test_cs_resume_publication_contract_ac1011.TestCsResumePublicationContractAc1011": 3,
+    "test_cs_sh_fail_closed_ac1011.TestCsShBoundaryHttpAC1011": 3,
+    "test_cs_sh_fail_closed_ac1011.TestCsShFailClosedAC1011": 23,
+    "test_cs_sh_fail_closed_ac1011.TestShMalformedProvisionRecoveryAC1011": 1,
+    "test_ha_api_security_access.TestHaApiSecurityAccess": 10,
+    "test_ha_api_tunnel_token_role.TestHaApiTunnelTokenRole": 6,
+    "test_invite_login_boundary_ac1011.TestInviteLoginBoundaryAc1011": 14,
+    "test_invite_profile_identity_ac1011.TestInviteProfileIdentityAc1011": 3,
+    "test_oauth2.TestAuthorizeEndpointPkce": 8,
+    "test_oauth2.TestHaRedirectModeHealer": 2,
+    "test_oauth2.TestOAuthClient": 16,
+    "test_oauth2.TestOAuthCode": 4,
+    "test_oauth2.TestOAuthToken": 15,
+    "test_oauth2.TestPkceOnlyTokenFlow": 18,
+    "test_oauth2.TestPublicClientConstraints": 8,
+    "test_oauth_scope_http_20261011.TestAuthorizeScopeHttp20261011": 6,
+    "test_oauth_subject_http_ac1011.TestOAuthSubjectHttpAC1011": 5,
+    "test_sa_sh_publication_receipt_ac1011.TestSaShPublicationReceiptAc1011": 6,
+    "test_security_access.TestSecurityAccess": 26,
+    "test_security_access.TestSecurityAccessAcl": 13,
+    "test_security_access.TestSecurityAccessLifecycleHooks": 12,
+    "test_security_access_endpoints.TestSecurityAccessAccessEndpoints": 25,
+    "test_security_access_endpoints.TestSecurityAccessEndpoints": 21,
+    "test_security_access_fail_closed_ac1011.TestSecurityAccessFailClosedAC1011": 12,
+    "test_security_access_fail_closed_ac1011.TestSecurityAccessFailClosedHTTPAC1011": 1,
+    "test_security_access_identity_anchor_522.TestSecurityAccessIdentityAnchors": 14,
+    "test_security_access_lifecycle.TestSecurityAccessCron": 6,
+    "test_sh_access_acl_768.TestOtherAnchorsRegression": 5,
+    "test_sh_access_acl_768.TestShAnchoredPolicyAcl": 7,
+    "test_sh_access_acl_768.TestShAnchoredPolicyRuleAcl": 5,
+    "test_sh_access_acl_768.TestSmartHomeRouteAcl": 7,
+    "test_sh_access_endpoints_768.TestShAccessApiPayloadShape": 2,
+    "test_sh_access_endpoints_768.TestShAccessConfigRoleGate": 2,
+    "test_sh_access_endpoints_768.TestShAccessListBranch": 3,
+    "test_sh_access_endpoints_768.TestShAccessPayloadWhitelist": 4,
+    "test_sh_access_endpoints_768.TestShAccessPolicyRoleGate": 4,
+    "test_sh_access_endpoints_768.TestShAccessProtectionToggle": 3,
+    "test_sh_access_endpoints_768.TestShAccessQuotaBffSudoCrossUser1053": 3,
+    "test_sh_access_endpoints_768.TestShAccessQuotaPreCheck": 3,
+    "test_sh_access_endpoints_768.TestShAccessScopePinning": 6,
+    "test_sh_access_endpoints_768.TestShAccessTenantOperatorChain": 4,
+    "test_sh_access_endpoints_768.TestShChangePlanTemplateGate": 4,
+    "test_sh_access_identity_768.TestShRouteAnchorDeclaration": 2,
+    "test_sh_access_identity_768.TestShRouteAnchorDefaultContext": 4,
+    "test_sh_access_identity_768.TestShRouteAnchorHatch": 4,
+    "test_sh_access_identity_768.TestShRouteAnchorIrDefault": 1,
+    "test_sh_access_identity_768.TestShRouteAnchorOverTenantRpc": 3,
+    "test_sh_access_identity_768.TestShRouteAnchorWriteGuard": 4,
+    "test_sh_access_model_768.TestAnchorDispatchSingleSource": 3,
+    "test_sh_access_model_768.TestPolicyAnchorTernaryArc": 10,
+    "test_sh_access_model_768.TestPolicyQuotaPoolsAreDisjoint": 5,
+    "test_sh_access_model_768.TestSmartHomeRouteModel": 9,
+    "test_sh_access_sync_768.TestReconcilerLeftSetCoversSmartHome": 3,
+    "test_sh_access_sync_768.TestShAccessLivenessGate": 7,
+    "test_sh_access_sync_768.TestShAccessPayload": 6,
+    "test_sh_access_sync_768.TestShAccessResultPersistence": 4,
+    "test_sh_access_sync_768.TestShAccessTeardown": 6,
+    "test_sh_access_sync_768.TestShPolicyUnlinkReapsTheOrphan": 1,
+    "test_sh_access_sync_768.TestShResumeForcedSync": 1,
+    "test_sh_provision_tenant_rpc_739.TestSh739ChecksThatMustSurvive": 8,
+    "test_sh_provision_tenant_rpc_739.TestSh739SwallowedFailureShape": 4,
+    "test_sh_provision_tenant_rpc_739.TestSh739TenantProvisionSucceeds": 4,
+    "test_shc_durable_provision_prototype.TestShcDurableProvisionPrototype": 9,
+    "test_skip_trial_estimate.TestSkipTrialEstimate": 8,
+    "test_smart_home.TestSmartHome": 24,
+    "test_workspace_invitation_ac1011.TestWorkspaceInvitationAc1011": 30
+  },
+  "methods": {
+    "test_access_protection_lost_ui_payload.TestCsAccessPayloadCarriesProtectionLost": [
+      "test_C1_flag_off_is_an_explicit_false",
+      "test_C2_flag_on_reaches_the_access_payload"
+    ],
+    "test_access_protection_lost_ui_payload.TestSaDetailPayloadCarriesProtectionLost": [
+      "test_A1_flag_off_is_an_explicit_false",
+      "test_A2_flag_on_reaches_the_detail_payload"
+    ],
+    "test_access_protection_lost_ui_payload.TestShDetailPayloadCarriesProtectionLost": [
+      "test_B1_flag_off_is_an_explicit_false",
+      "test_B2_flag_on_reaches_the_detail_payload"
+    ],
+    "test_access_publish_pending_ac1011.TestAccessPublishPendingAC1011": [
+      "test_cs_late_permission_error_still_raises_and_rolls_back",
+      "test_cs_pending_deploy_success_recomputes_origin_expose",
+      "test_cs_public_intent_pending_retry",
+      "test_cs_public_pending_deploy_publish_failure_does_not_install",
+      "test_cs_saved_anchor_pending_retry",
+      "test_pending_cs_generic_expose_builder_stays_private_and_retry_parks",
+      "test_pending_default_and_explicit_create_values_are_neutralized",
+      "test_public_cs_resume_failure_retry_does_not_silently_skip_unpark",
+      "test_sa_public_intent_pending_retry",
+      "test_sa_saved_anchor_pending_retry",
+      "test_sh_fresh_permission_error_is_not_absorbed_by_known_protection_catch",
+      "test_sh_late_validation_error_still_raises_and_rolls_back",
+      "test_sh_public_intent_pending_retry",
+      "test_sh_saved_anchor_pending_retry",
+      "test_three_legs_pending_flag_is_server_owned_even_sudo_and_context"
+    ],
+    "test_access_publish_pending_ac1011.TestAccessPublishPendingHttpAC1011": [
+      "test_http_cs_known_publish_failure_saved_but_reports_false",
+      "test_http_sa_known_publish_failure_saved_but_reports_false",
+      "test_http_sh_known_publish_failure_saved_but_reports_false"
+    ],
+    "test_access_sync_per_identity_ac1011.TestAccessSyncPerIdentityAC1011": [
+      "test_park_failure_precedes_every_remote_delete",
+      "test_partial_second_delete_rolls_back_every_identity_without_release",
+      "test_release_failure_marks_exact_group_pending_and_retry_only_releases"
+    ],
+    "test_access_sync_receipt_ac1011.TestAccessSyncReceiptAC1011": [
+      "test_cs_rejects_malformed_access_sync_receipts_before_release",
+      "test_sa_rejects_malformed_access_sync_receipts_before_release",
+      "test_sh_rejects_malformed_access_sync_receipts_before_release",
+      "test_shared_validator_accepts_enabled_zero_and_multiple_policies",
+      "test_shared_validator_rejects_complete_malformed_matrix",
+      "test_shared_validator_rejects_malformed_selected_idp_requests",
+      "test_shared_validator_requires_exact_disabled_wire_and_trusted_orphans",
+      "test_three_batch_release_failure_is_pending_then_retries",
+      "test_three_batch_second_park_failure_prevents_all_access_deletes",
+      "test_three_batch_unprotect_validate_all_before_any_release",
+      "test_three_callers_accept_enabled_zero_policy_receipt",
+      "test_three_callers_map_complete_ordered_policy_receipt",
+      "test_three_callers_reject_dropped_selected_idp_before_release",
+      "test_three_normal_unprotect_park_failure_never_deletes_access",
+      "test_three_normal_unprotect_paths_preserve_real_ids_then_converge",
+      "test_three_normal_unprotect_release_failure_is_pending_and_retries",
+      "test_three_teardown_helpers_validate_before_torn_down_and_retry"
+    ],
+    "test_actual_operator_publish_recovery_ac1011.TestActualOperatorPublishRecoveryAC1011": [
+      "test_cs_late_unpark_failure_retry_reuses_remote_identity_then_cleanup",
+      "test_missing_selected_idp_400_preserves_existing_remote_identity",
+      "test_sa_late_publish_failure_retry_reuses_remote_identity_then_cleanup",
+      "test_sh_late_publish_failure_retry_reuses_remote_identity_then_cleanup"
+    ],
+    "test_cloud_service_authz_676.TestCloudServiceWriteAuthz676": [
+      "test_A10_owner_can_write_and_unlink",
+      "test_A11_non_member_cannot_even_read",
+      "test_A12_cloud_service_layer_blocks_o2m_even_without_workspace_rule",
+      "test_A13_even_owner_and_admin_cannot_create_over_rpc",
+      "test_A1_guest_cannot_write",
+      "test_A2_guest_cannot_create",
+      "test_A3_guest_cannot_unlink",
+      "test_A4_user_cannot_write",
+      "test_A5_user_cannot_create",
+      "test_A6_user_cannot_unlink",
+      "test_A7_guest_can_still_read",
+      "test_A8_user_can_still_read",
+      "test_A9_admin_can_write_and_unlink"
+    ],
+    "test_cloud_service_authz_676.TestInitControlFieldsWriteAuthz1257": [
+      "test_capacity_clock_rejects_owner_context_forgery_but_allows_platform_rpc",
+      "test_owner_cannot_write_init_control_fields_over_rpc",
+      "test_owner_cannot_write_observation_fields_over_rpc"
+    ],
+    "test_cloud_service_authz_676.TestReadEndpointsStayPureForGuests": [
+      "test_B1_guest_get_transitional_service_does_not_poll",
+      "test_B2_guest_list_transitional_service_does_not_poll",
+      "test_B3_guest_get_initializing_service_reports_phase"
+    ],
+    "test_cs_access_control_model_744.TestCsAccessIdentityAnchor": [
+      "test_C1_anchor_list_names_real_fields",
+      "test_C2_create_injection_is_neutralised_under_su",
+      "test_C3_create_injection_via_context_default_is_neutralised",
+      "test_C4_write_is_rejected_under_su",
+      "test_C5_forged_context_does_not_open_the_hatch",
+      "test_C6_real_sentinel_still_writes",
+      "test_C7_ordinary_access_fields_stay_writable"
+    ],
+    "test_cs_access_control_model_744.TestCsAccessTeardown": [
+      "test_D1_unlink_without_access_app_does_not_call_the_seam",
+      "test_D2_unlink_tears_down_and_passes_the_captured_ids",
+      "test_D3_unlink_fails_loud_and_keeps_the_retry_anchor",
+      "test_D4_do_cleanup_lands_in_error_when_teardown_fails",
+      "test_D5_do_cleanup_clears_the_anchor_on_a_clean_teardown",
+      "test_D6_suspend_does_not_touch_the_access_app"
+    ],
+    "test_cs_access_control_model_744.TestPolicyAnchorExclusiveArc": [
+      "test_A1_route_anchor_still_works",
+      "test_A2_cloud_service_anchor_accepted",
+      "test_A3_no_anchor_rejected",
+      "test_A4_both_anchors_rejected",
+      "test_A5_arc_is_also_enforced_by_a_real_sql_check",
+      "test_A6_sequence_is_sparse_per_anchor",
+      "test_A7_to_dict_carries_both_anchors",
+      "test_A8_rule_submodel_mirrors_the_cs_anchor"
+    ],
+    "test_cs_access_control_model_744.TestPolicyQuotaFollowsAnchor": [
+      "test_B1_cs_anchor_hits_its_own_policy_quota",
+      "test_B2_quota_pools_are_per_anchor_not_global",
+      "test_B3_email_quota_applies_under_cs_anchor",
+      "test_B4_bulk_grant_guard_still_fires_under_cs_anchor"
+    ],
+    "test_cs_access_endpoints_745.TestCsAccessApiPayload": [
+      "test_F1_subscription_info_exposes_ac_max_access_seats",
+      "test_F2_service_detail_payload_carries_the_access_block"
+    ],
+    "test_cs_access_endpoints_745.TestCsAccessConfigEndpointAuthz": [
+      "test_G1_owner_can_write_access_config",
+      "test_G2_admin_can_write_access_config",
+      "test_G3_member_user_cannot_write_access_config",
+      "test_G4_guest_cannot_write_access_config",
+      "test_G5_cross_workspace_service_is_not_found",
+      "test_G6_non_member_cannot_reach_the_endpoint",
+      "test_G6b_cannot_protect_a_service_with_no_public_address",
+      "test_G7_server_owned_fields_are_never_client_settable"
+    ],
+    "test_cs_access_endpoints_745.TestCsAccessPolicyEndpoint": [
+      "test_G10_owner_can_create_policy",
+      "test_G11_member_user_cannot_create_policy",
+      "test_G12_client_cannot_smuggle_a_foreign_anchor",
+      "test_G13_update_and_delete_are_owner_admin_only",
+      "test_G14_cannot_touch_another_services_policy",
+      "test_G15_reorder_rewrites_precedence_and_syncs_once",
+      "test_G8_member_can_list_policies",
+      "test_G9_list_never_leaks_another_workspaces_policies"
+    ],
+    "test_cs_access_endpoints_745.TestCsAccessQuotaBffSudoCrossUser1053": [
+      "test_C1_another_tenants_pool_is_not_counted_against_this_service",
+      "test_C2_own_pool_still_hits_the_quota",
+      "test_C3_non_member_denied_at_the_gate_and_learns_nothing"
+    ],
+    "test_cs_access_endpoints_745.TestCsAccessTenantRpcChain": [
+      "test_H1_tenant_write_reaches_the_operator_and_stores_the_app_id",
+      "test_H2_tenant_policy_create_reaches_the_operator",
+      "test_H3_canonical_name_on_the_tenant_path_carries_the_env_token",
+      "test_H4_operator_failure_surfaces_and_does_not_persist"
+    ],
+    "test_cs_access_sync_745.TestCsAccessPayload": [
+      "test_A1_payload_mirrors_the_sa_route_shape",
+      "test_A2_canonical_name_carries_env_token_and_is_not_the_subdomain",
+      "test_A3_prod_keeps_the_no_token_convention",
+      "test_A4_unprotected_payload_is_a_teardown_declaration",
+      "test_A5_existing_policy_ids_include_the_doomed_ones"
+    ],
+    "test_cs_access_sync_745.TestCsAccessSyncTrigger": [
+      "test_B1_enabling_protection_pushes_and_stores_the_app_id",
+      "test_B2_no_subdomain_never_calls_the_operator",
+      "test_B3_unprotected_without_app_is_a_no_op",
+      "test_B4_unresolved_idp_types_are_persisted",
+      "test_B5_returned_policy_ids_map_back_in_precedence_order",
+      "test_B6_disabling_tears_down_and_clears_the_stored_ids",
+      "test_B7_skip_context_suppresses_the_push",
+      "test_B8_deleting_service_is_not_re_pushed",
+      "test_B9_sync_failure_rolls_the_db_write_back"
+    ],
+    "test_cs_access_sync_745.TestCsAccessTeardownPush": [
+      "test_D1_teardown_pushes_a_disabled_payload",
+      "test_D2_teardown_failure_keeps_the_retry_anchor",
+      "test_D3_nothing_to_tear_down_is_true_without_calling_the_operator"
+    ],
+    "test_cs_access_sync_745.TestPolicyAnchorDispatch": [
+      "test_C1_creating_a_cs_anchored_policy_syncs_that_service",
+      "test_C2_writing_a_cs_anchored_policy_syncs_that_service",
+      "test_C3_unlinking_reaps_the_doomed_cf_policy_id",
+      "test_C4_route_anchored_policies_still_sync_their_route_only",
+      "test_C5_rule_edits_on_a_cs_anchored_policy_sync_the_service"
+    ],
+    "test_cs_access_sync_745.TestReconcilerLeftSetCoversCs": [
+      "test_E1_cs_access_app_id_enters_the_left_set",
+      "test_E2_cs_anchored_policy_cf_id_enters_the_left_set",
+      "test_E3_empty_ids_do_not_enter_the_left_set"
+    ],
+    "test_cs_resume_publication_contract_ac1011.TestCsResumePublicationContractAc1011": [
+      "test_protected_pending_resume_rejects_unconfirmed_2xx",
+      "test_public_legacy_resume_keeps_disabled_compatibility",
+      "test_public_pending_resume_rejects_unconfirmed_2xx"
+    ],
+    "test_cs_sh_fail_closed_ac1011.TestCsShBoundaryHttpAC1011": [
+      "test_http_cs_enable_error_rolls_back_and_keeps_origin_parked",
+      "test_http_cs_existing_app_failure_preserves_old_protection",
+      "test_http_sh_retry_error_reports_false_and_stays_blocked"
+    ],
+    "test_cs_sh_fail_closed_ac1011.TestCsShFailClosedAC1011": [
+      "test_cs_cleanup_uninstall_failure_preserves_app",
+      "test_cs_cleanup_uninstalls_before_access_teardown",
+      "test_cs_enable_failure_rolls_back_db_and_keeps_origin_parked",
+      "test_cs_existing_app_failed_login_edit_preserves_db_and_app",
+      "test_cs_malformed_app_result_does_not_unpark",
+      "test_cs_missing_app_direct_repair_error_keeps_origin_parked",
+      "test_cs_park_noop_is_rejected_before_access",
+      "test_cs_protected_deploy_failure_does_not_install",
+      "test_cs_protected_deploy_success_access_precedes_exposure",
+      "test_cs_protected_rename_rejects_before_mutation",
+      "test_cs_resume_preflight_failure_does_not_scale_or_unpark",
+      "test_cs_successful_resume_access_precedes_scale_and_unpark",
+      "test_sh_direct_missing_app_repair_error_parks_before_access",
+      "test_sh_existing_app_failed_edit_preserves_db_and_app",
+      "test_sh_fresh_protected_provision_failure_retains_blocked_tunnel",
+      "test_sh_malformed_app_result_does_not_release",
+      "test_sh_protected_rename_rejects_before_mutation",
+      "test_sh_resume_failure_keeps_503_and_retry_marker",
+      "test_sh_retry_failure_never_publishes_origin",
+      "test_sh_successful_resume_access_before_original_origin",
+      "test_sh_suspended_direct_sync_does_not_restore_origin",
+      "test_sh_teardown_park_failure_preserves_app",
+      "test_sh_teardown_parks_before_access_removal"
+    ],
+    "test_cs_sh_fail_closed_ac1011.TestShMalformedProvisionRecoveryAC1011": [
+      "test_malformed_new_provision_records_error_then_retries_same_tunnel"
+    ],
+    "test_ha_api_security_access.TestHaApiSecurityAccess": [
+      "test_get_access_owner_omits_tunnel_token",
+      "test_ha_client_allows_sa_scopes",
+      "test_list_accesses_with_read_scope",
+      "test_list_workspaces_scopes_to_member",
+      "test_outsider_cannot_get_foreign_sa_detail",
+      "test_outsider_cannot_get_foreign_sa_status",
+      "test_outsider_cannot_list_foreign_workspace_accesses",
+      "test_outsider_cannot_read_foreign_sa",
+      "test_tunnel_token_requires_tunnel_scope",
+      "test_tunnel_token_with_correct_scope"
+    ],
+    "test_ha_api_tunnel_token_role.TestHaApiTunnelTokenRole": [
+      "test_admin_gets_both_tokens",
+      "test_guest_member_denied_both_tokens",
+      "test_outsider_keeps_membership_denial",
+      "test_owner_gets_both_tokens",
+      "test_user_member_denied_both_tokens",
+      "test_user_member_still_reads_non_secret_endpoints"
+    ],
+    "test_invite_login_boundary_ac1011.TestInviteLoginBoundaryAc1011": [
+      "test_billing_email_drift_does_not_move_account_login_authority",
+      "test_casefold_login_collision_refuses_every_candidate",
+      "test_duplicate_profile_email_cannot_steal_intended_login_uid",
+      "test_existing_member_repeat_does_not_change_role",
+      "test_inactive_login_cannot_fall_back_to_active_profile_claimant",
+      "test_internal_profile_claimant_does_not_override_portal_login_identity",
+      "test_invitation_cannot_assign_owner",
+      "test_literal_sql_wildcards_never_select_other_login",
+      "test_matching_account_login_can_use_actual_admin_permission_without_group_change",
+      "test_nonmember_cannot_invite_account_to_foreign_workspace",
+      "test_portal_cannot_rebind_own_login_via_raw_res_users_rpc",
+      "test_profile_claim_of_unregistered_email_never_grants_admin",
+      "test_profile_only_address_cannot_invite_even_existing_active_account",
+      "test_profile_payload_cannot_rebind_login_or_other_uid"
+    ],
+    "test_invite_profile_identity_ac1011.TestInviteProfileIdentityAc1011": [
+      "test_duplicate_portal_email_selects_self_claimed_account_before_intended_portal",
+      "test_existing_internal_recipient_priority_does_not_grant_portal_claimant",
+      "test_unregistered_recipient_self_claim_gets_real_workspace_admin_access"
+    ],
+    "test_oauth2.TestAuthorizeEndpointPkce": [
+      "test_authorize_get_with_plain_method_rejected",
+      "test_authorize_get_without_challenge_renders_pkce_required",
+      "test_authorize_post_denied_unallowed_scope_creates_no_code",
+      "test_authorize_post_empty_scope_uses_allowed_defaults",
+      "test_authorize_post_preserves_requested_scope_subset",
+      "test_authorize_post_rechecks_current_client_scopes",
+      "test_authorize_post_rejects_scope_outside_client_allowlist",
+      "test_authorize_post_without_challenge_redirects_with_error"
+    ],
+    "test_oauth2.TestHaRedirectModeHealer": [
+      "test_healer_flips_legacy_record_to_ha_callback",
+      "test_healer_is_idempotent"
+    ],
+    "test_oauth2.TestOAuthClient": [
+      "test_check_redirect_uri",
+      "test_client_id_unique",
+      "test_create_client",
+      "test_default_grant_types",
+      "test_default_scopes",
+      "test_exact_mode_unaffected_by_relaxation",
+      "test_ha_callback_accepts_loopback_http",
+      "test_ha_callback_accepts_private_and_local_http",
+      "test_ha_callback_accepts_public_https",
+      "test_ha_callback_local_host_classifier_edges",
+      "test_ha_callback_rejects_bad_scheme",
+      "test_ha_callback_rejects_parser_confusion",
+      "test_ha_callback_rejects_public_http",
+      "test_ha_callback_rejects_query_fragment_userinfo",
+      "test_ha_callback_rejects_wrong_path",
+      "test_set_and_verify_secret"
+    ],
+    "test_oauth2.TestOAuthCode": [
+      "test_code_expired",
+      "test_code_used",
+      "test_code_valid",
+      "test_create_code"
+    ],
+    "test_oauth2.TestOAuthToken": [
+      "test_access_token_expired",
+      "test_access_token_revoked",
+      "test_access_token_valid",
+      "test_bearer_accepts_active_non_public_subject_and_client",
+      "test_bearer_accepts_active_portal_subject",
+      "test_bearer_rejects_disabled_subject",
+      "test_bearer_rejects_inactive_client",
+      "test_bearer_rejects_public_subject",
+      "test_create_token",
+      "test_has_all_scopes",
+      "test_has_scope",
+      "test_reenable_does_not_revive_revoked_token",
+      "test_refresh_token_expired",
+      "test_refresh_token_valid",
+      "test_revoke_token"
+    ],
+    "test_oauth2.TestPkceOnlyTokenFlow": [
+      "test_authorization_code_rejects_public_subject_without_token_row",
+      "test_authorization_code_rejects_subject_disabled_after_issuance",
+      "test_authorization_code_with_pkce_no_secret_succeeds",
+      "test_authorization_code_with_plain_method_rejected_for_public",
+      "test_authorization_code_with_secret_on_public_rejected",
+      "test_authorization_code_with_wrong_verifier_rejected",
+      "test_authorization_code_without_verifier_rejected",
+      "test_client_credentials_active_system_owner_succeeds",
+      "test_confidential_client_still_requires_secret",
+      "test_inactive_public_client_cannot_authenticate",
+      "test_refresh_accepts_active_portal_subject",
+      "test_refresh_rejects_disabled_subject",
+      "test_refresh_rejects_inactive_client",
+      "test_refresh_rejects_public_subject",
+      "test_refresh_with_secret_on_public_rejected",
+      "test_refresh_without_secret_succeeds_and_rotates",
+      "test_token_redirect_uri_mismatch_returns_invalid_grant",
+      "test_token_unknown_client_id_returns_invalid_client"
+    ],
+    "test_oauth2.TestPublicClientConstraints": [
+      "test_ha_callback_mode_requires_pkce",
+      "test_ha_callback_mode_with_pkce_allowed",
+      "test_public_cannot_acquire_secret_via_write",
+      "test_public_cannot_have_client_credentials_grant",
+      "test_public_cannot_regenerate_secret",
+      "test_public_cannot_set_secret",
+      "test_public_must_require_pkce",
+      "test_seeded_ha_smart_home_client"
+    ],
+    "test_oauth_scope_http_20261011.TestAuthorizeScopeHttp20261011": [
+      "test_http_denial_keeps_access_denied_contract",
+      "test_http_invalid_csrf_still_rejects_valid_scope",
+      "test_http_post_rechecks_allowlist_after_consent_get",
+      "test_http_tampered_post_scope_is_rejected_without_code_or_token",
+      "test_http_valid_subset_stays_narrow_at_code_and_token",
+      "test_http_whitespace_scope_uses_current_allowed_defaults"
+    ],
+    "test_oauth_subject_http_ac1011.TestOAuthSubjectHttpAC1011": [
+      "test_http_active_pkce_exchange_issues_one_row_and_ha_bearer_works",
+      "test_http_active_portal_refresh_and_ha_bearer_succeed",
+      "test_http_disabled_subject_denies_bearer_and_refresh_without_new_row",
+      "test_http_inactive_client_denies_bearer_and_refresh_without_new_row",
+      "test_http_public_subject_code_exchange_denied_without_token_row"
+    ],
+    "test_sa_sh_publication_receipt_ac1011.TestSaShPublicationReceiptAc1011": [
+      "test_sa_invalid2xx_preserves_anchors_until_exact_receipt",
+      "test_sa_no_tunnel_remains_no_mutation",
+      "test_sa_public_pending_requires_exact_receipt_after_teardown",
+      "test_sh_invalid2xx_preserves_anchors_until_exact_receipt",
+      "test_sh_no_tunnel_remains_no_mutation",
+      "test_sh_public_pending_requires_exact_receipt_after_teardown"
+    ],
+    "test_security_access.TestSecurityAccess": [
+      "test_add_route_syncs_to_operator",
+      "test_canonical_name_immutable_with_token_under_su",
+      "test_canonical_name_injection_stripped_under_su",
+      "test_canonical_name_set_once_on_create",
+      "test_canonical_name_stable_after_nickname_change",
+      "test_canonical_name_uses_deploy_env_config",
+      "test_canonical_name_write_guard_fires_under_su",
+      "test_no_primary_hostname_field",
+      "test_no_sa_level_access_fields",
+      "test_provision_creates_bare_tunnel_no_route",
+      "test_provision_error_sets_error_state",
+      "test_provision_resync_failure_keeps_tunnel_for_retry",
+      "test_provision_retry_after_tunnel_exists_does_not_recreate",
+      "test_provision_stage2_non_operator_error_fails_loud",
+      "test_refresh_status_connected",
+      "test_refresh_status_disconnected",
+      "test_refresh_status_noop_without_tunnel",
+      "test_refresh_status_operator_error_sets_error_status",
+      "test_route_create_sync_failure_rolls_back_db_row",
+      "test_route_prefix_renameable_but_validated",
+      "test_route_prefix_reserved_now_allowed",
+      "test_route_prefix_unique_across_platform",
+      "test_route_prefix_validation",
+      "test_route_unlink_sync_failure_rolls_back_keeps_row",
+      "test_route_write_sync_failure_rolls_back_service_url",
+      "test_state_machine_active_no_route_to_active_and_back"
+    ],
+    "test_security_access.TestSecurityAccessAcl": [
+      "test_canonical_name_injection_stripped_on_create",
+      "test_canonical_name_write_blocked_for_non_system_user",
+      "test_member_can_read",
+      "test_non_member_cannot_read",
+      "test_non_member_cannot_read_routes",
+      "test_owner_can_mutate_sa_and_routes",
+      "test_provision_token_write_fails_closed_for_non_system_owner",
+      "test_provision_writes_token_under_system_context",
+      "test_reference_id_injection_stripped_on_create",
+      "test_tunnel_token_field_masked_for_non_system",
+      "test_user_role_member_can_read_but_not_write_sa",
+      "test_user_role_member_cannot_create_or_unlink_sa",
+      "test_user_role_member_cannot_mutate_routes"
+    ],
+    "test_security_access.TestSecurityAccessLifecycleHooks": [
+      "test_cleanup_deletes_tunnel",
+      "test_cleanup_failure_state_is_error_not_deleting",
+      "test_cleanup_reentrant_on_failure",
+      "test_direct_unlink_triggers_cf_cleanup",
+      "test_resume_converges_disable_done_while_suspended",
+      "test_resume_from_error_heals_to_active",
+      "test_resume_restores_service_urls",
+      "test_resume_without_tunnel_restores_pending_not_active",
+      "test_suspend_early_returns_on_deleting",
+      "test_suspend_failure_sets_error_no_silent_retry",
+      "test_suspend_idempotent",
+      "test_suspend_overrides_all_routes_to_503"
+    ],
+    "test_security_access_endpoints.TestSecurityAccessAccessEndpoints": [
+      "test_member_user_access_config_denied",
+      "test_member_user_policy_create_denied_and_none_made",
+      "test_member_user_policy_create_with_route_id_denied",
+      "test_member_user_policy_delete_denied",
+      "test_member_user_policy_list_allowed",
+      "test_member_user_policy_reorder_denied",
+      "test_member_user_policy_update_denied",
+      "test_member_user_route_access_config_denied",
+      "test_non_member_access_config_denied",
+      "test_non_member_policy_create_denied_and_none_made",
+      "test_non_member_policy_list_denied",
+      "test_non_member_policy_list_with_route_id_denied",
+      "test_non_member_policy_reorder_denied",
+      "test_non_member_route_access_config_denied",
+      "test_owner_access_config_flips_enabled",
+      "test_owner_create_bypass_with_email_rejected",
+      "test_owner_create_email_over_cap_rejected",
+      "test_owner_create_three_group_policy",
+      "test_owner_policy_create_cross_sa_route_id_denied",
+      "test_owner_policy_create_update_delete_through_route",
+      "test_owner_reorder_rewrites_sequence_and_skips_cross_sa",
+      "test_owner_route_access_config_cross_sa_route_denied",
+      "test_owner_route_access_config_flips_per_route",
+      "test_owner_update_replace_without_include_rejected",
+      "test_owner_update_replaces_rule_groups"
+    ],
+    "test_security_access_endpoints.TestSecurityAccessEndpoints": [
+      "test_member_but_not_admin_cannot_mutate",
+      "test_member_can_list",
+      "test_member_get_omits_tunnel_token",
+      "test_member_user_role_change_plan_denied",
+      "test_member_user_role_create_dispatch_denied",
+      "test_member_user_role_provision_denied",
+      "test_member_user_role_refresh_status_denied",
+      "test_member_user_role_update_denied",
+      "test_non_member_change_plan_denied",
+      "test_non_member_delete_denied_and_record_survives",
+      "test_non_member_get_denied",
+      "test_non_member_list_denied",
+      "test_non_member_routes_create_denied_no_route",
+      "test_non_member_routes_delete_denied",
+      "test_non_member_routes_list_denied",
+      "test_non_member_skip_trial_denied",
+      "test_owner_create_dispatch_passes_role_gate",
+      "test_owner_detail_update_renames",
+      "test_owner_refresh_status_passes_role_gate",
+      "test_owner_route_update_writes_service_url_and_is_protected",
+      "test_route_check_endpoint_requires_prefix"
+    ],
+    "test_security_access_fail_closed_ac1011.TestSecurityAccessFailClosedAC1011": [
+      "test_actual_provision_failure_reports_error_and_keeps_origin_parked",
+      "test_actual_resume_failure_keeps_parked",
+      "test_cleanup_park_failure_preserves_existing_app",
+      "test_create_failure_rolls_back_row_and_leaves_remote_new_route_blocked",
+      "test_direct_lost_app_repair_failure_parks_before_access",
+      "test_direct_repair_park_failure_does_not_mutate_access",
+      "test_enable_failure_rolls_back_intent_but_keeps_remote_parked",
+      "test_enable_success_establishes_app_before_release",
+      "test_existing_app_failure_preserves_identity_and_origin",
+      "test_malformed_access_success_cannot_release_origin",
+      "test_protected_rename_rejected_before_remote_or_db_mutation",
+      "test_second_route_failure_does_not_release_first_route"
+    ],
+    "test_security_access_fail_closed_ac1011.TestSecurityAccessFailClosedHTTPAC1011": [
+      "test_owner_provision_remote_failure_returns_truthful_error"
+    ],
+    "test_security_access_identity_anchor_522.TestSecurityAccessIdentityAnchors": [
+      "test_anchor_lists_cover_required_floor",
+      "test_anchor_lists_name_real_fields",
+      "test_create_still_assigns_canonical_name",
+      "test_forged_context_does_not_open_the_hatch",
+      "test_forged_context_does_not_open_the_hatch_at_create",
+      "test_internal_sentinel_still_writes_server_owned_anchors",
+      "test_non_member_cannot_write_plain_field",
+      "test_prefix_is_no_longer_an_immutability_guard",
+      "test_tenant_owner_can_still_write_plain_route_field",
+      "test_tenant_owner_can_still_write_plain_sa_field",
+      "test_tenant_owner_cannot_inject_route_anchors_at_create",
+      "test_tenant_owner_cannot_inject_sa_anchors_at_create",
+      "test_tenant_owner_cannot_write_route_identity_anchors",
+      "test_tenant_owner_cannot_write_sa_identity_anchors"
+    ],
+    "test_security_access_lifecycle.TestSecurityAccessCron": [
+      "test_cron_cleans_up_long_cancelled_sa",
+      "test_cron_does_not_cleanup_recently_cancelled_sa",
+      "test_cron_does_not_flip_deleting_back_to_suspended",
+      "test_cron_resumes_sa_when_subscription_active",
+      "test_cron_skips_grace_period",
+      "test_cron_suspends_sa_past_grace"
+    ],
+    "test_sh_access_acl_768.TestOtherAnchorsRegression": [
+      "test_F1_owner_still_manages_sa_route_anchored_policy",
+      "test_F2_member_user_still_blocked_on_sa_route_anchored_policy",
+      "test_F3_owner_still_manages_cs_anchored_policy",
+      "test_F4_member_user_still_blocked_on_cs_anchored_policy",
+      "test_F5_cross_workspace_isolation_holds_on_the_other_two_anchors"
+    ],
+    "test_sh_access_acl_768.TestShAnchoredPolicyAcl": [
+      "test_E1_owner_can_manage_sh_anchored_policy",
+      "test_E2_admin_can_manage_sh_anchored_policy",
+      "test_E3_member_user_can_read_but_not_write",
+      "test_E4_guest_can_read_but_not_write",
+      "test_E5_cross_workspace_read_is_denied_both_shapes",
+      "test_E6_cross_workspace_write_is_denied",
+      "test_E7_cannot_anchor_a_new_policy_on_someone_elses_sh_route"
+    ],
+    "test_sh_access_acl_768.TestShAnchoredPolicyRuleAcl": [
+      "test_G1_owner_can_create_a_selector_rule_on_sh_anchored_policy",
+      "test_G2_owner_can_write_and_unlink_a_selector_rule",
+      "test_G3_member_user_can_read_rules_but_not_write_them",
+      "test_G4_guest_cannot_add_a_selector_rule",
+      "test_G5_cross_workspace_cannot_read_selector_rules"
+    ],
+    "test_sh_access_acl_768.TestSmartHomeRouteAcl": [
+      "test_R1_workspace_members_can_read_their_own_route",
+      "test_R2_cross_workspace_read_is_denied_both_shapes",
+      "test_R3_owner_and_admin_can_toggle_protection",
+      "test_R4_member_user_and_guest_cannot_toggle_protection",
+      "test_R5_cross_workspace_write_is_denied",
+      "test_R6_tenant_cannot_create_a_route_even_as_owner",
+      "test_R7_tenant_cannot_unlink_a_route_even_as_owner"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessApiPayloadShape": [
+      "test_M1_detail_carries_routes_and_list_does_not",
+      "test_M2_route_payload_never_leaks_the_cf_app_id"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessConfigRoleGate": [
+      "test_G1_access_config_role_matrix",
+      "test_G2_non_member_cannot_reach_access_config"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessListBranch": [
+      "test_H1_every_workspace_member_can_list_policies",
+      "test_H2_list_never_leaks_another_smart_homes_policies",
+      "test_H3_non_member_gets_nothing"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessPayloadWhitelist": [
+      "test_J1_create_policy_ignores_every_smuggled_anchor",
+      "test_J2_rule_commands_are_whitelisted_field_by_field",
+      "test_J3_access_config_server_owned_fields_are_never_settable",
+      "test_J4_access_config_response_never_exposes_the_cf_app_id"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessPolicyRoleGate": [
+      "test_G3_policy_create_role_matrix",
+      "test_G4_policy_update_role_matrix",
+      "test_G5_policy_delete_role_matrix",
+      "test_G6_policy_reorder_role_matrix"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessProtectionToggle": [
+      "test_L1_turning_protection_off_actually_turns_it_off",
+      "test_L2_cannot_protect_a_smart_home_with_no_public_address",
+      "test_L3_closing_direction_is_never_blocked_by_the_hostname_gate"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessQuotaBffSudoCrossUser1053": [
+      "test_C1_another_tenants_pool_is_not_counted_against_this_smarthome",
+      "test_C2_own_pool_still_hits_the_quota",
+      "test_C3_non_member_denied_at_the_gate_and_learns_nothing"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessQuotaPreCheck": [
+      "test_K1_zero_quota_means_unlimited_through_the_endpoint",
+      "test_K2_a_real_quota_still_blocks_the_overflow",
+      "test_K3_quota_pool_is_scoped_to_this_smart_home"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessScopePinning": [
+      "test_I1_smart_home_is_pinned_to_the_url_workspace",
+      "test_I2_cross_workspace_config_write_lands_nowhere",
+      "test_I3_route_id_is_pinned_to_the_url_smart_home",
+      "test_I4_create_policy_route_id_is_pinned_too",
+      "test_I5_policy_id_is_pinned_to_the_url_smart_home",
+      "test_I6_reorder_silently_skips_foreign_policy_ids"
+    ],
+    "test_sh_access_endpoints_768.TestShAccessTenantOperatorChain": [
+      "test_N1_tenant_write_reaches_the_operator_and_stores_the_app_id",
+      "test_N2_canonical_name_on_the_tenant_path_carries_the_env_token",
+      "test_N3_tenant_policy_create_reaches_the_operator",
+      "test_N4_operator_failure_surfaces_and_does_not_persist"
+    ],
+    "test_sh_access_endpoints_768.TestShChangePlanTemplateGate": [
+      "test_O1_plan_outside_any_active_sh_template_is_rejected",
+      "test_O2_inactive_template_does_not_launder_a_plan",
+      "test_O3_plan_inside_an_active_template_still_goes_through",
+      "test_O4_change_plan_is_owner_admin_only"
+    ],
+    "test_sh_access_identity_768.TestShRouteAnchorDeclaration": [
+      "test_A1_anchor_list_is_not_empty_and_covers_the_floor",
+      "test_A2_every_declared_anchor_is_a_real_field"
+    ],
+    "test_sh_access_identity_768.TestShRouteAnchorDefaultContext": [
+      "test_B1_platform_create_path_ignores_caller_supplied_defaults",
+      "test_B2_direct_create_ignores_caller_supplied_defaults",
+      "test_B3_vals_supplied_anchor_is_pressed_too",
+      "test_B4_legit_create_is_not_broken_by_the_guard"
+    ],
+    "test_sh_access_identity_768.TestShRouteAnchorHatch": [
+      "test_E1_sentinel_helper_puts_the_object_itself_in_context",
+      "test_E2_sentinel_still_writes_anchors",
+      "test_E3_sudo_alone_does_not_open_the_gate",
+      "test_E4_smart_home_fixture_gate_does_not_open_the_route_gate"
+    ],
+    "test_sh_access_identity_768.TestShRouteAnchorIrDefault": [
+      "test_C1_ir_default_cannot_seed_route_anchors"
+    ],
+    "test_sh_access_identity_768.TestShRouteAnchorOverTenantRpc": [
+      "test_F1_tenant_cannot_create_a_route_over_rpc_at_all",
+      "test_F2_tenant_cannot_write_the_anchor_over_rpc",
+      "test_F3_forged_context_does_not_open_the_hatch_over_rpc"
+    ],
+    "test_sh_access_identity_768.TestShRouteAnchorWriteGuard": [
+      "test_D1_write_rejects_every_declared_anchor",
+      "test_D2_ordinary_fields_are_still_writable",
+      "test_D3_forged_context_values_do_not_open_the_write_gate",
+      "test_D4_forged_context_values_do_not_open_the_create_gate"
+    ],
+    "test_sh_access_model_768.TestAnchorDispatchSingleSource": [
+      "test_D1_anchor_returns_the_smart_home_for_sh_routed_policies",
+      "test_D2_sync_targets_include_the_sh_route",
+      "test_D3_quota_pool_field_is_declared_per_anchor_model"
+    ],
+    "test_sh_access_model_768.TestPolicyAnchorTernaryArc": [
+      "test_A10_sparse_precedence_is_scoped_to_the_sh_anchor",
+      "test_A1_sh_route_anchor_is_accepted",
+      "test_A2_existing_two_anchors_still_work",
+      "test_A3_no_anchor_is_rejected",
+      "test_A4_any_two_anchors_are_rejected",
+      "test_A5_all_three_anchors_are_rejected",
+      "test_A6_arc_is_a_real_sql_check_over_three_columns",
+      "test_A7_sql_check_rejects_a_raw_three_anchor_row",
+      "test_A8_rule_submodel_mirrors_the_third_anchor_as_stored",
+      "test_A9_to_dict_exposes_the_third_anchor"
+    ],
+    "test_sh_access_model_768.TestPolicyQuotaPoolsAreDisjoint": [
+      "test_B1_sh_anchor_quota_follows_its_own_subscription",
+      "test_B2_pools_are_disjoint_across_the_three_anchors",
+      "test_B3_zero_quota_still_means_unlimited_on_the_sh_anchor",
+      "test_B4_email_quota_follows_the_sh_anchor_plan",
+      "test_B5_bulk_grant_guard_still_applies_on_the_sh_anchor"
+    ],
+    "test_sh_access_model_768.TestSmartHomeRouteModel": [
+      "test_C1_primary_hostname_is_derived_not_copied",
+      "test_C2_hostname_is_empty_before_provisioning",
+      "test_C3_at_most_one_primary_route_per_smart_home",
+      "test_C3b_single_primary_is_backed_by_a_real_partial_unique_index",
+      "test_C3c_raw_sql_cannot_create_a_second_primary",
+      "test_C4_primary_route_cannot_be_unlinked",
+      "test_C5_primary_route_cannot_be_rebound_to_another_smart_home",
+      "test_C6_route_to_dict_shape_matches_the_shared_card_contract",
+      "test_C7_deleting_the_smart_home_removes_its_routes"
+    ],
+    "test_sh_access_sync_768.TestReconcilerLeftSetCoversSmartHome": [
+      "test_F1_route_access_app_id_enters_the_left_set",
+      "test_F2_policy_cf_id_enters_the_left_set",
+      "test_F3_empty_ids_do_not_enter_the_left_set"
+    ],
+    "test_sh_access_sync_768.TestShAccessLivenessGate": [
+      "test_B1_enabling_protection_pushes_and_stores_the_app_id",
+      "test_B2_no_tunnel_never_calls_the_operator",
+      "test_B3_no_hostname_never_calls_the_operator",
+      "test_B4_only_active_and_error_states_push",
+      "test_B5_forced_context_bypasses_the_state_gate",
+      "test_B6_error_state_still_pushes",
+      "test_B7_skip_context_suppresses_the_push_but_not_the_db_write"
+    ],
+    "test_sh_access_sync_768.TestShAccessPayload": [
+      "test_A1_payload_mirrors_the_shared_operator_schema",
+      "test_A2_unprotected_payload_is_a_teardown_declaration",
+      "test_A3_login_idp_types_use_the_cloudflare_vocabulary",
+      "test_A4_canonical_name_carries_env_token_while_subdomain_stays_clean",
+      "test_A5_prod_makes_the_wrong_implementation_indistinguishable",
+      "test_A6_existing_policy_ids_include_the_doomed_ones"
+    ],
+    "test_sh_access_sync_768.TestShAccessResultPersistence": [
+      "test_C1_app_id_is_persisted_through_the_identity_sentinel",
+      "test_C2_policy_ids_map_back_in_precedence_order_not_creation_order",
+      "test_C3_unresolved_idp_types_are_persisted",
+      "test_C4_a_none_app_id_clears_the_stored_ids"
+    ],
+    "test_sh_access_sync_768.TestShAccessTeardown": [
+      "test_D1_nothing_to_tear_down_captures_nothing",
+      "test_D2_smart_home_unlink_tears_access_down_before_the_tunnel",
+      "test_D3_unlink_fails_loud_and_keeps_the_retry_anchor",
+      "test_D4_cron_cleanup_lands_in_error_without_touching_the_tunnel",
+      "test_D5_secondary_route_unlink_pushes_the_ids_it_captured",
+      "test_D6_secondary_route_unlink_rolls_back_when_teardown_fails"
+    ],
+    "test_sh_access_sync_768.TestShPolicyUnlinkReapsTheOrphan": [
+      "test_E1_unlinking_a_policy_reaps_its_doomed_cf_id"
+    ],
+    "test_sh_access_sync_768.TestShResumeForcedSync": [
+      "test_G1_resume_pushes_the_divergence_accumulated_while_suspended"
+    ],
+    "test_sh_provision_tenant_rpc_739.TestSh739ChecksThatMustSurvive": [
+      "test_B1_role_user_is_still_refused",
+      "test_B2_non_member_is_still_refused_at_the_workspace_gate",
+      "test_B3_cross_workspace_pair_is_still_refused",
+      "test_B4_expired_subscription_is_still_refused",
+      "test_B5_tunnel_token_read_is_still_masked_for_the_tenant",
+      "test_B6_provision_response_never_carries_the_token",
+      "test_B7_identity_anchor_guard_is_still_closed",
+      "test_B8_reprovision_guard_still_fires"
+    ],
+    "test_sh_provision_tenant_rpc_739.TestSh739SwallowedFailureShape": [
+      "test_C1_non_operator_error_is_swallowed_and_strands_provisioning",
+      "test_C2_operator_connection_failure_is_not_success",
+      "test_C3_operator_failure_is_not_success",
+      "test_C4_dns_failure_keeps_retry_anchor_but_is_not_success"
+    ],
+    "test_sh_provision_tenant_rpc_739.TestSh739TenantProvisionSucceeds": [
+      "test_A1_owner_can_provision_over_real_http",
+      "test_A2_admin_role_can_provision_over_real_http",
+      "test_A3_tunnel_token_actually_lands_in_postgres",
+      "test_A4_primary_route_is_created_and_visible_to_the_tenant"
+    ],
+    "test_shc_durable_provision_prototype.TestShcDurableProvisionPrototype": [
+      "test_anchored_retry_queues_persisted_home_without_new_create_or_charge",
+      "test_completed_journal_returns_active_without_requeue_or_provider_call",
+      "test_disabled_worker_does_not_accept_or_requeue_anchored_retry",
+      "test_journal_crud_rejects_sudo_and_json_capability_spoofing",
+      "test_journal_home_delete_retains_recovery_record",
+      "test_legacy_error_without_anchor_requires_confirmation",
+      "test_repeated_enqueue_reuses_immutable_nonsecret_operation",
+      "test_reusing_intent_revalidates_current_workspace_permission",
+      "test_user_provision_is_accepted_without_remote_mutation"
+    ],
+    "test_skip_trial_estimate.TestSkipTrialEstimate": [
+      "test_estimate_does_not_advance_subscription",
+      "test_estimate_does_not_create_invoice",
+      "test_estimate_flags_insufficient_balance",
+      "test_estimate_raises_when_not_in_trial",
+      "test_estimate_returns_breakdown_with_tax",
+      "test_tax_included_estimate_keeps_total_and_wallet_sufficiency",
+      "test_tax_included_monthly_estimate_matches_cycle_total",
+      "test_tax_included_product_fallback_keeps_total"
+    ],
+    "test_smart_home.TestSmartHome": [
+      "test_action_delete_keeps_record_and_raises_when_tunnel_delete_fails",
+      "test_cascade_delete_workspace",
+      "test_create_smart_home",
+      "test_create_smart_home_custom_port",
+      "test_delete_with_tunnel",
+      "test_delete_without_tunnel",
+      "test_do_cleanup_keeps_tunnel_and_lands_error_on_failure",
+      "test_generate_subdomain",
+      "test_generate_tunnel_name_carries_env_token_while_subdomain_clean",
+      "test_generate_tunnel_name_clean_when_prod_default",
+      "test_no_operator_raises_error",
+      "test_provision_connection_error",
+      "test_provision_operator_error",
+      "test_provision_prod_tunnel_name_equals_subdomain",
+      "test_provision_stg_passes_token_name_clean_hostname",
+      "test_provision_success",
+      "test_refresh_status_connected",
+      "test_refresh_status_disconnected",
+      "test_state_default_pending",
+      "test_subdomain_has_no_env_token_even_when_deploy_env_stg",
+      "test_to_dict",
+      "test_unique_subdomain_constraint",
+      "test_unlink_keeps_record_and_raises_when_tunnel_still_live",
+      "test_unlink_success_clears_tunnel_and_removes_record"
+    ],
+    "test_workspace_invitation_ac1011.TestWorkspaceInvitationAc1011": [
+      "test_accept_payload_cannot_upgrade_role_or_retarget_workspace_or_uid",
+      "test_archive_revokes_pending_and_reactivation_does_not_restore_it",
+      "test_billing_email_can_change_without_changing_delivery_or_uid",
+      "test_casefold_login_ambiguity_fails_before_queue_or_ledger",
+      "test_consumed_nonce_cannot_regrant_after_membership_removal",
+      "test_duplicate_profile_emails_never_select_claimant_uid",
+      "test_expired_nonce_never_grants_membership",
+      "test_grantor_demotion_revokes_pending_token_even_if_promoted_again",
+      "test_grantor_reactivation_never_reactivates_preexisting_nonce",
+      "test_insert_failure_rolls_back_grant_and_preserves_nonce_for_retry",
+      "test_internal_profile_claimant_does_not_override_portal_login",
+      "test_issue_cannot_assign_owner_or_guest_actor_grant_admin",
+      "test_issue_is_pending_and_does_not_grant_until_authenticated_acceptance",
+      "test_legacy_invite_without_protocol_has_no_membership_or_outbox_side_effect",
+      "test_login_snapshot_change_invalidates_preexisting_nonce",
+      "test_native_outbox_post_insert_failure_rolls_back_resend",
+      "test_nonmember_cannot_list_or_revoke_another_workspace_invitation",
+      "test_outbox_creation_failure_rolls_back_resend_and_preserves_previous_nonce",
+      "test_owner_cannot_read_plaintext_challenge_as_mail_author_or_creator",
+      "test_owner_revocation_invalidates_nonce_without_grant",
+      "test_recipient_cannot_read_nonce_digest_or_outbox_body_via_rpc",
+      "test_recipient_deactivation_refuses_before_a_profile_claimant_fallback",
+      "test_recipient_reactivation_never_reactivates_preexisting_nonce",
+      "test_removed_grantor_cannot_leave_an_active_pending_token",
+      "test_resend_rotates_nonce_and_uses_latest_server_role",
+      "test_restored_login_never_reactivates_preexisting_nonce",
+      "test_unknown_invitation_protocol_preserves_pending_challenge_and_existing_member",
+      "test_unknown_or_malformed_nonce_never_grants_membership",
+      "test_unregistered_profile_email_claim_cannot_get_a_pending_grant",
+      "test_wrong_uid_cannot_consume_nonce_and_intended_uid_can_accept_later"
+    ]
+  },
+  "original_class_count": 72,
+  "extra_modules": [
+    "test_access_sync_per_identity_ac1011",
+    "test_access_sync_receipt_ac1011",
+    "test_ha_api_tunnel_token_role",
+    "test_invite_login_boundary_ac1011",
+    "test_invite_profile_identity_ac1011",
+    "test_oauth2",
+    "test_oauth_scope_http_20261011",
+    "test_oauth_subject_http_ac1011",
+    "test_sh_provision_tenant_rpc_739",
+    "test_shc_durable_provision_prototype",
+    "test_skip_trial_estimate"
+  ],
+  "browser_opt_out": [
+    [
+      "test_workspace_route_identity_20261011.TestWorkspaceRouteIdentity20261011",
+      "\u6709\u6548 tag \uff1d portal_browser_workspace_route\uff0fpost_install\uff0c\u8207 workflow positive selector \uff1d auto_recredit_864\uff0fstandard \u7121\u4ea4\u96c6 \u21d2 CI \u9078\u4e0d\u5230\uff08\u5408\u6cd5 opt-out\uff0c\u898b repo-lint \u7684 (b) \u90a3\u4e00\u683c\uff09"
+    ]
+  ]
+}

@@ -10,12 +10,14 @@ import json
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
+from .invitation_mailbox_fixture import accept_queued_invitation
 
 
 @tagged('post_install', '-at_install', 'portal_paas')
 class TestPortalPaasWorkspaceJourney(HttpCase):
     def setUp(self):
         super().setUp()
+        self.env.company.email = 'isolated-invite-sender@example.invalid'
         self.users = {}
         for label in ('owner', 'other', 'admin', 'member', 'guest'):
             login = 'portal-paas-%s-%s@example.invalid' % (
@@ -202,13 +204,14 @@ class TestPortalPaasWorkspaceJourney(HttpCase):
     def test_member_email_lookup_does_not_expand_sql_wildcards(self):
         login = 'invite-target-%s@example.invalid' % uuid.uuid4().hex
         target = self.env['res.users'].with_context(no_reset_password=True).create({
-            'name': 'Invitation target', 'login': login, 'email': login,
+            'name': 'Invitation target', 'login': login, 'email': login, 'password': login,
             'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
         })
         self._login('owner')
         workspace_id = self._create_workspace()
         result = self._rpc('/api/workspaces/%s/members' % workspace_id, {
             'action': 'invite', 'email': '%@example.invalid', 'role': 'guest',
+            'invitation_mode': 'mailbox_challenge_v1',
         })
         self._assert_denied(result)
         self.assertFalse(self.env['woow_paas_platform.workspace_access'].search([
@@ -217,7 +220,10 @@ class TestPortalPaasWorkspaceJourney(HttpCase):
         # Exact case-insensitive email matching must still work.
         invited = self._success('/api/workspaces/%s/members' % workspace_id, {
             'action': 'invite', 'email': login.upper(), 'role': 'guest',
+            'invitation_mode': 'mailbox_challenge_v1',
         })
+        invited = accept_queued_invitation(self, invited, target, login, self._success)
+        self._login('owner')
         self.assertEqual(invited['data']['user_id'], target.id)
 
     def test_literal_underscore_email_never_invites_a_different_account(self):
@@ -229,12 +235,16 @@ class TestPortalPaasWorkspaceJourney(HttpCase):
         })
         intended = User._create_user_from_template({
             'name': 'Z literal intended', 'login': address, 'email': address,
+            'password': address,
         })
         self._login('owner')
         workspace_id = self._create_workspace()
         invited = self._success('/api/workspaces/%s/members' % workspace_id, {
             'action': 'invite', 'email': address, 'role': 'guest',
+            'invitation_mode': 'mailbox_challenge_v1',
         })
+        invited = accept_queued_invitation(self, invited, intended, address, self._success)
+        self._login('owner')
         self.assertEqual(invited['data']['user_id'], intended.id)
         self.assertFalse(self.env['woow_paas_platform.workspace_access'].search([
             ('workspace_id', '=', workspace_id), ('user_id', '=', decoy.id),

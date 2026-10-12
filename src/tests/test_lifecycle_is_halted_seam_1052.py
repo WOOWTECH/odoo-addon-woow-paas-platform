@@ -45,6 +45,7 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _sa_internal,
 )
 from .smart_home_fixture import open_gates, sh_model
+from .publication_receipt_fixture import install_publication_receipts
 
 
 @tagged('post_install', '-at_install')
@@ -61,7 +62,7 @@ class TestSmartHomeResumeConsultsSeam(TransactionCase):
             'workspace_id': workspace.id,
         })
         open_gates(self.sm).write({'tunnel_id': 'tun-seam-sm'})
-        self.client = MagicMock()
+        self.client = install_publication_receipts(MagicMock())
 
     def _resume(self, state, halted):
         self.sm.write({'state': state, 'pre_suspend_state': 'active'})

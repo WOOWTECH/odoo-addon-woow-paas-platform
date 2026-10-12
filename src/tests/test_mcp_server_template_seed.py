@@ -357,7 +357,11 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # pyproject、odoo_mcp_admin/main.py 都同），LaunchPolicy 仍是 ``odoo-mcp``＋``--transport streamable-http
     # --host 127.0.0.1 --port {port}``；uv.lock 只差 nextcloud 的套件，odoo-mcp（1.1.0）／mcp（1.28.1）未變。
     # 前一個 pin：ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:503d3121cd94cd74087f0ad839521c36207696433e3bd6d3cd47abdbe4cd4181。
-    EXPECT_IMAGE_TAG = '1ec1bb0ba196d1b964005e01c513ce2158fd45c1@sha256:ee5d8f6954866f954f604e24421fb7b0f87f629f11c439138000dedf2133ce40'
+    # 2026-10-12 重釘 1d16391d（#49／#50，main CI18319 job20067）：
+    # 實查發布image之console entrypoint odoo_mcp.__main__:main、odoo-mcp1.1.0／mcp1.28.1、
+    # CLI原生streamable-http與LaunchPolicy完整args；1ec1bb0b..1d16391d的apps/odoo、uv.lock未變。
+    # 實際imageID／CLI／source SHA證據見docs/verification/2026-10-12-mcp-published-pins.json。
+    EXPECT_IMAGE_TAG = '1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

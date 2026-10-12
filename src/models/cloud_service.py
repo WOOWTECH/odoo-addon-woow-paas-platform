@@ -1,3 +1,4 @@
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt
 import contextlib
 import copy
 import json
@@ -18,7 +19,8 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
-from ..services import dns_probe
+from ..services import dns_probe, rollback_config
+from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
@@ -49,6 +51,7 @@ from .security_access import _internal_policy_cf_write
 from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
+_DEFER_ACCESS_RELEASE = object()
 
 # #1159：每次進入這些狀態都開始等待新的真實 operator status；platform_monitor
 # 共用此集合，list/get 只回報已存的 episode，不自行建立。
@@ -232,6 +235,7 @@ def _is_internal_provision(env):
 # payload 多一個 key 就打開了——#522 在 18.0 上實測過並且值真的 commit 進
 # Postgres。見 docs/decisions/patterns/su-env-exempt-guard-false-green.md。
 _CS_ACCESS_IDENTITY_ANCHOR_FIELDS = (
+    'access_publish_pending',  # server-owned publication state
     'access_app_id',    # WHICH CF Access application this service configures
 )
 
@@ -1935,6 +1939,9 @@ class CloudService(models.Model):
              'emptied, the Access app falls back to ALL available IdPs. '
              'Surfaced deliberately, not dropped.',
     )
+    access_publish_pending = fields.Boolean(
+        string='Access Publication Pending', default=False, readonly=True,
+        help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this service has '
@@ -1966,6 +1973,10 @@ class CloudService(models.Model):
         string='Helm Revision',
         default=1,
         help='Current Helm release revision number',
+    )
+    rollback_config_sync = fields.Text(
+        string='Pending Rollback Configuration Sync', groups='base.group_system',
+        copy=False, help='Platform-only revision, operation anchor and ledger digest; no credentials.',
     )
     helm_chart_version = fields.Char(
         string='Chart Version',
@@ -3206,6 +3217,15 @@ class CloudService(models.Model):
                     ),
                 )
 
+            # A protected service must establish Access before install exposes
+            # its hostname. Failed login preflight must not publish a new origin.
+            if self.is_protected or self.access_publish_pending:
+                if not self._sync_access_to_operator():
+                    raise AccessPublicationError(_('Access origin publication is pending. Retry before deployment.'))
+                # Pending deliberately hid expose in the earlier assembly.
+                # Recompute only after known publication convergence succeeded.
+                expose_config = self._build_expose_config()
+
             # Create namespace (409 = already exists, OK)
             cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
                 self.workspace_id,
@@ -3323,6 +3343,10 @@ class CloudService(models.Model):
                     detail=e.detail or e.message),
             })
             self._alert_cluster_storage_capacity_rejection(e.detail)
+
+        except (AccessProtectionError, AccessPublicationError) as error:
+            # Known Access contract failures must preserve saved identities.
+            self.write({'state': 'error', 'error_message': str(error)})
 
     def _storage_quota_error_message(self, detail, rejection=None):
         """#1348：operator 回「工作區儲存配額已滿」時，給租戶看得懂的訊息；其他錯誤回 ``None``。
@@ -3741,7 +3765,7 @@ class CloudService(models.Model):
             'expose_config': self._build_expose_config(),
         }
 
-    def _build_expose_config(self):
+    def _build_expose_config(self, *, allow_pending=False):
         """Cloudflare tunnel ingress expose 設定（fresh install 用）。
 
         Template 開 ingress 且 service 有 subdomain 才 expose；與 service create
@@ -3750,6 +3774,8 @@ class CloudService(models.Model):
         於首裝建立後升級不重設（Cloudflare tunnel 已在），故升級路徑不用此值。
         """
         self.ensure_one()
+        if self.access_publish_pending and not allow_pending:
+            return None
         if self.template_id.ingress_enabled and self.subdomain:
             config = {'enabled': True, 'subdomain': self.subdomain}
             if self.template_id._is_woow_odoo_chart():
@@ -5430,7 +5456,58 @@ class CloudService(models.Model):
         if extra_vals:
             self.write(extra_vals)
         stripped = self._strip_mcp_sensitive_values(values)
-        self.sudo().write({'helm_values': json.dumps(stripped)})
+        self.sudo().write({'helm_values': json.dumps(stripped), 'rollback_config_sync': False})
+
+    def _record_rollback_config_sync(self, revision):
+        """回滾操作持久待辦；只保存 digest，不複製帳本內憑證。"""
+        self.ensure_one()
+        self.sudo().write({'rollback_config_sync': json.dumps({
+            'operation': uuid.uuid4().hex, 'revision': revision,
+            'anchor': fields.Datetime.to_string(self.last_upgraded_at),
+            'ledger_digest': rollback_config.ledger_digest(self._helm_values_dict()),
+        }, sort_keys=True)})
+
+    def _sync_rollback_config(self, client, release):
+        """Ready 前同步固定回滾 revision；失敗可重試，舊結果不能覆蓋新操作。"""
+        self.ensure_one()
+        pending_raw = self.sudo().rollback_config_sync
+        if not pending_raw:
+            return True
+        try:
+            pending = json.loads(pending_raw)
+            if release.get('revision') != pending['revision']:
+                return False
+            preserved = self._rollback_preserved_value_paths()
+            specs = self.template_id._parse_helm_value_specs_or_fail()
+            if specs is SPECS_UNPARSEABLE:
+                return False
+            paths = rollback_config.public_paths(specs, preserved)
+            response = client.get_config_projection(
+                namespace=self.helm_namespace, release_name=self.helm_release_name,
+                revision=pending['revision'], paths=list(paths), excluded_paths=preserved,
+            ) if paths else {'revision': pending['revision'], 'values': {}, 'missing': []}
+            # 鎖在遠端呼叫之後取得；SQL 同時重驗操作與錨點，序列化衝突下輪重試。
+            rows = self._init_guarded(
+                f"SELECT id FROM {self._table} WHERE id = %s AND rollback_config_sync = %s "
+                "AND last_upgraded_at = %s AND state IN ('upgrading', 'error') FOR UPDATE",
+                (self.id, pending_raw, pending['anchor']))
+            if not rows:
+                return False
+            self.invalidate_recordset(['helm_values', 'rollback_config_sync', 'last_upgraded_at'])
+            current = self._helm_values_dict()
+            latest_specs = self.template_id._parse_helm_value_specs_or_fail()
+            if rollback_config.public_paths(latest_specs, self._rollback_preserved_value_paths()) != paths:
+                return False
+            if rollback_config.ledger_digest(current) != pending['ledger_digest']:
+                return False
+            synchronized = rollback_config.apply_projection(current, response, pending['revision'], paths)
+        except (PaaSOperatorError, ValueError, TypeError, KeyError, UserError):
+            _logger.warning('Rollback configuration sync unavailable for service id=%s', self.id)
+            return False
+        # 任一 DB 寫入失敗由 savepoint 回捲，保留原待辦；不要吞 DB 例外。
+        with self.env.cr.savepoint():
+            self._apply_helm_values(synchronized)
+        return True
 
     def _record_chart_version(self, version):
         """以平台身分回寫 chart 版本帳本（#1525）。
@@ -7312,6 +7389,12 @@ class CloudService(models.Model):
                 service._log_not_ready(detail)
                 stuck_detail = detail
 
+            if all_ready and not service._sync_rollback_config(client, release):
+                # 不能以 Ready 偽裝配置帳本已同步；保留待辦供下一輪。
+                all_ready = False
+                stuck_detail = _('Waiting for rollback settings synchronization')
+                service._log_not_ready(stuck_detail)
+
             if all_ready:
                 # #1267：去向只由欠 init 標記決定（與 controller 那份共用同一判準）。
                 next_state = service._next_state_when_ready()
@@ -8432,6 +8515,8 @@ class CloudService(models.Model):
             # #794 fail-open 訊號：宣稱受保護、但 CF 上的 app 已經被拆掉。不吐
             # 的話 UI 只讀得到 is_protected 這個**意圖**欄位。
             'access_protection_lost': self.access_protection_lost,
+            'access_publish_pending': self.access_publish_pending,
+            'access_configuration_ready': access_configuration_ready(self),
             'hostname': self._access_hostname(),
             'access_policies': [p.to_dict() for p in self.access_policy_ids],
         }
@@ -8531,7 +8616,39 @@ class CloudService(models.Model):
             'existing_policy_ids': self._build_existing_policy_ids(),
         }
 
-    def _sync_access_to_operator(self):
+    def _park_access_origin(self, client):
+        """Fail loudly unless the release origin is parked or absent.
+
+        This uses the operator's namespace-owned route parking contract, not the
+        best-effort billing notice helper. API acceptance is not an edge barrier.
+        """
+        expose = self._build_expose_config(allow_pending=True)
+        if not expose:
+            return False
+        result = client.park_release_route(
+            self.helm_namespace, self.helm_release_name, expose['subdomain'])
+        if (result or {}).get('status') not in (
+                'parked', 'already_parked', 'not_found', 'no_service_rule'):
+            raise UserError(_(
+                "The service origin could not be blocked. Access was not changed."))
+        return True
+
+    def _release_access_origin(self, client):
+        """Release only after Access succeeded; never bypass halted billing state."""
+        if self._is_halted():
+            return
+        expose = self._build_expose_config()
+        if not expose:
+            return
+        result = client.unpark_release_route(
+            self.helm_namespace, self.helm_release_name, expose)
+        if (result or {}).get('status') not in (
+                'unparked', 'not_parked', 'not_found'):
+            raise AccessPublicationError(_(
+                "Access was configured but origin publication is not confirmed. Retry "
+                "after checking the route configuration."))
+
+    def _sync_access_to_operator(self, release_control=None):
         """把本服務完整的 Access 狀態推給 operator（冪等宣告式）。
 
         liveness gate 三道，各擋一種「推出去只會製造垃圾」的情形：
@@ -8575,8 +8692,19 @@ class CloudService(models.Model):
                 skip)
             return False
         client = self._get_operator_client()
+        was_pending = self.access_publish_pending
+        parked_for_access = False
+        if self.is_protected and (not self.access_app_id or
+                                  self.access_protection_lost or
+                                  self.access_publish_pending):
+            parked_for_access = self._park_access_origin(client)
         payload = self._build_access_payload()
         result = client.sync_access_app(payload)
+        require_access_sync_receipt(result, payload)
+        if self.is_protected and not result.get('app_id'):
+            raise AccessProtectionError(_(
+                "Access protection was not established. The origin remains "
+                "blocked; fix the login configuration and retry."))
         # operator 重指 app 之後刪不掉的舊 reusable policy＝**永久** CF 孤兒
         # （沒有任何後續 re-sync 會再碰到它們），所以要讓它在 log 裡看得見。
         orphaned = result.get('orphaned_policy_ids') or []
@@ -8625,6 +8753,19 @@ class CloudService(models.Model):
             for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
+        defer_release = release_control is _DEFER_ACCESS_RELEASE
+        _internal_cs_access_identity(self).access_publish_pending = bool(
+            defer_release and (parked_for_access or was_pending))
+        if defer_release:
+            return True
+        if parked_for_access or was_pending:
+            from ..services.paas_operator import PaaSOperatorError
+            try:
+                self._release_access_origin(client)
+            except (PaaSOperatorError, AccessPublicationError) as error:
+                _internal_cs_access_identity(self).access_publish_pending = True
+                _logger.error("[CLOUD_SVC] Access publication pending service=%s: %s", self.id, error)
+                return False
         return True
 
     def _access_sync_skip_reason(self):
@@ -8649,7 +8790,7 @@ class CloudService(models.Model):
             return 'the service has no public subdomain'
         if self.state == 'deleting':
             return "the service state is 'deleting'"
-        return (None if (self.is_protected or self.access_app_id)
+        return (None if (self.is_protected or self.access_app_id or self.access_publish_pending)
                 else 'the service is unprotected and never had an Access app')
 
     def _push_access_teardown(self, app_id, policy_ids, app_name, hostname):
@@ -8666,7 +8807,7 @@ class CloudService(models.Model):
         self.ensure_one()
         client = self._get_operator_client()
         canonical = self._access_canonical_name()
-        result = client.sync_access_app({
+        payload = {
             'enabled': False,
             'canonical_name': canonical,
             'app_name': app_name or canonical,
@@ -8677,7 +8818,9 @@ class CloudService(models.Model):
             'policies': [],
             'existing_app_id': app_id or None,
             'existing_policy_ids': policy_ids or [],
-        })
+        }
+        result = client.sync_access_app(payload)
+        require_access_sync_receipt(result, payload)
         orphaned = result.get('orphaned_policy_ids') or []
         if orphaned:
             _logger.warning(
@@ -8874,7 +9017,7 @@ class CloudService(models.Model):
             "[CLOUD_SVC] park service=%s subdomain=%s status=%s",
             self.id, expose['subdomain'], (result or {}).get('status'))
 
-    def _unpark_public_route(self, client):
+    def _unpark_public_route(self, client, *, require_confirmation=False):
         """復權後把對外 hostname 從停權說明頁改回服務（#1563）。
 
         Returns:
@@ -8886,13 +9029,14 @@ class CloudService(models.Model):
         expose = self._build_expose_config()
         if not expose:
             return None
+        require_confirmation = require_confirmation or self.is_protected
         from ..services.paas_operator import PaaSOperatorError
         try:
             result = client.unpark_release_route(
                 self.helm_namespace, self.helm_release_name, expose,
             )
         except PaaSOperatorError as e:
-            if e.status_code == 404:
+            if e.status_code == 404 and not require_confirmation:
                 _logger.warning(
                     "[CLOUD_SVC] unpark skipped service=%s: operator has no route/unpark "
                     "endpoint (older image, so nothing can have been parked)", self.id)
@@ -8907,6 +9051,9 @@ class CloudService(models.Model):
                 "[CLOUD_SVC] unpark failed service=%s subdomain=%s: %s",
                 self.id, expose['subdomain'], e)
             return str(e)
+        if require_confirmation and (result or {}).get('status') not in (
+                'unparked', 'not_parked', 'not_found'):
+            return _('Origin publication result is not confirmed. Retry.')
         _logger.info(
             "[CLOUD_SVC] unpark service=%s subdomain=%s status=%s",
             self.id, expose['subdomain'], (result or {}).get('status'))
@@ -9033,8 +9180,22 @@ class CloudService(models.Model):
 
         from ..services.paas_operator import get_paas_operator_client
 
+        # Capture before Access convergence clears the pending flag.
+        require_confirmation = self.is_protected or self.access_publish_pending
         client = get_paas_operator_client(self.env)
         if client and self.helm_release_name and self.helm_namespace:
+            # Re-assert protection before scale/unpark. Missing IdP must leave
+            # the suspended origin unavailable and preserve the retry marker.
+            if self.is_protected or self.access_publish_pending:
+                try:
+                    if not self._sync_access_to_operator():
+                        raise AccessPublicationError(_('Access origin publication is pending. Retry before resuming.'))
+                except Exception as e:
+                    self.write({
+                        'state': 'error',
+                        'error_message': _('Resume protection failed: %(error)s', error=e),
+                    })
+                    return
             # #1540：先關掉這台的資料取回入口——入口的 pod 唯讀掛著同一顆 RWO 磁碟，它不走，
             # 服務的 pod 會卡在 Multi-Attach。關不掉只記 log、照樣復權（入口到期也會自己停）。
             self.env['woow_paas_platform.data_retrieval']._close_for_release(
@@ -9061,13 +9222,15 @@ class CloudService(models.Model):
             # 必須 fail-loud：與上面 scale 失敗同形——寫 error＋說明、**保留**
             # pre_suspend_state（_is_halted() 仍為真），生命週期 cron 下一輪會再走一次
             # _do_resume（scale 1 冪等、unpark 冪等）。
-            unpark_error = self._unpark_public_route(client)
+            unpark_error = self._unpark_public_route(
+                client, require_confirmation=require_confirmation)
             if unpark_error:
+                _internal_cs_access_identity(self).access_publish_pending = True
                 self.write({
                     'state': 'error',
                     'error_message': _(
                         'Resume failed: the service was started again, but its public URL '
-                        'still shows the suspension notice (%(error)s). It will be retried '
+                        'publication is not confirmed (%(error)s). It will be retried '
                         'automatically.', error=unpark_error),
                 })
                 return
@@ -9551,6 +9714,13 @@ class CloudService(models.Model):
         # #744：Access 身分錨點是硬不變式，對**所有人**（含 superuser、含
         # sudo'd controller）擋，唯一豁免是模組私有 sentinel。放在方法第一行
         # ——後面每一段都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。
+        if 'subdomain' in vals:
+            for service in self:
+                if (service.is_protected and
+                        vals['subdomain'] != service.subdomain):
+                    raise UserError(_(
+                        "Protected service hostnames cannot be changed. Create "
+                        "and verify a replacement service before deleting this one."))
         _reject_cs_access_identity_anchor_writes(self.env, vals)
         _reject_init_control_writes(self.env, vals)
         _reject_observation_control_writes(self.env, vals)
@@ -9698,10 +9868,28 @@ class CloudService(models.Model):
         access_sync = (
             not _is_cs_sync_control(self.env, _CTX_CS_SKIP_ACCESS_SYNC)
             and any(k in vals for k in _CS_ACCESS_SYNC_FIELDS))
+        # A database savepoint cannot restore an Access app already deleted by
+        # the operator.  Preserve the pre-write true -> false transition and
+        # deny the origin while the old Access identity still exists.  The
+        # pending bit carries that remote fact across super().write() so the
+        # disabled receipt must validate before publication is attempted.
+        unprotecting = self.browse()
+        if access_sync and vals.get('is_protected') is False:
+            unprotecting = self.filtered(
+                lambda service: service.is_protected and service.access_app_id)
         with contextlib.ExitStack() as stack:
             if access_sync:
                 stack.enter_context(self.env.cr.savepoint())
+            for service in unprotecting:
+                client = service._get_operator_client()
+                service._park_access_origin(client)
+                _internal_cs_access_identity(service).access_publish_pending = True
             res = super().write(vals)
+            # 新命令錨點撤銷舊待辦；密碼重設等不一定走 _apply_helm_values。
+            if 'last_upgraded_at' in vals and 'rollback_config_sync' not in vals:
+                stale_rollback = self.sudo().filtered('rollback_config_sync')
+                if stale_rollback:
+                    stale_rollback.write({'rollback_config_sync': False})
             if entering_observation_episode:
                 # 命令時間只作 episode 邊界；observed_at 仍保留真實 status poll 證據。
                 super(CloudService, entering_observation_episode).write({
@@ -9756,8 +9944,25 @@ class CloudService(models.Model):
             if access_sync:
                 # liveness gate 在 `_sync_access_to_operator` 裡（沒有 subdomain
                 # ／deleting／從未保護過都是 no-op），這裡只負責轉發。
+                deferred_release = self.filtered('access_publish_pending')
                 for service in self:
-                    service._sync_access_to_operator()
+                    service._sync_access_to_operator(
+                        _DEFER_ACCESS_RELEASE if deferred_release else None)
+                # Every Access receipt in this recordset has now validated.
+                # Publication is deliberately a separate non-raising phase.
+                for service in deferred_release:
+                    from ..services.paas_operator import PaaSOperatorError
+                    _internal_cs_access_identity(
+                        service).access_publish_pending = False
+                    try:
+                        service._release_access_origin(
+                            service._get_operator_client())
+                    except (PaaSOperatorError, AccessPublicationError) as error:
+                        _internal_cs_access_identity(
+                            service).access_publish_pending = True
+                        _logger.error(
+                            "[CLOUD_SVC] Access batch publication pending service=%s: %s",
+                            service.id, error)
         return res
 
     @api.model

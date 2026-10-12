@@ -52,6 +52,7 @@ issue #803 的四腿表格裡，SmartHome 那腿的錨點就是它底下的 rout
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import routes_receipt
 
 from odoo.tests import TransactionCase, tagged
 
@@ -106,7 +107,13 @@ class _ResyncMixin:
         client = MagicMock()
         client.sync_access_app.return_value = (
             _sync_result() if result is None else result)
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        client.configure_tunnel.side_effect = (
+            lambda tunnel_id, hostname, service_url, **kwargs: {
+                'message': 'Tunnel %s configuration updated' % tunnel_id,
+                'hostname': hostname, 'service_url': service_url})
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         return client
 
     def _run_cron(self, **kw):

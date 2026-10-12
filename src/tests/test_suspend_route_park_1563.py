@@ -20,6 +20,7 @@ from odoo.tests.common import TransactionCase
 
 from ..models.cloud_service import _internal_provision
 from ..services.paas_operator import PaaSOperatorAPIError, PaaSOperatorConnectionError
+from .publication_receipt_fixture import install_publication_receipts
 
 _CLIENT_SEAM = (
     'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
@@ -30,7 +31,7 @@ SUB = 'paas-cs-1563test-abcd'
 
 
 def _patch_client(client=None):
-    client = client or MagicMock()
+    client = install_publication_receipts(client or MagicMock())
     client.upgrade_release.return_value = {'revision': 2}
     client.park_release_route.return_value = {'status': 'parked'}
     client.unpark_release_route.return_value = {'status': 'unparked'}

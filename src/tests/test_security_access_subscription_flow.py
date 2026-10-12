@@ -21,6 +21,10 @@ from odoo.addons.woow_paas_platform.controllers.security_access import (
 from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
+from .publication_receipt_fixture import (
+    install_publication_receipts,
+    routes_receipt,
+)
 
 # 兩條呼叫路徑、兩個 patch target（namespace 不同，缺一不可）：
 # 1. controller._check_route_prefix 用 function-local import
@@ -122,7 +126,7 @@ class TestSecurityAccessControllerFlow(TransactionCase):
         })
         _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-x'})
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.check_route_availability.return_value = {
             'available': True}
         with patch(MOCK_GET_CLIENT, return_value=mock_client), \
@@ -172,7 +176,7 @@ class TestSecurityAccessControllerFlow(TransactionCase):
     def test_route_quota_enforced_at_controller(self):
         """plan sa_max_routes=1：第二條自訂 route 在 controller 層被擋。"""
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.check_route_availability.return_value = {
             'available': True}
         with _patch_request(self.env), \
@@ -796,12 +800,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         return sa
 
     def _mock(self):
-        mc = MagicMock()
-        mc.sync_tunnel_routes.return_value = {'routes': []}
-        mc.sync_access_app.return_value = {'app_id': 'app-1',
-                                           'policy_ids': ['pol-1'],
-                                           'allowed_idps': ['idp-g']}
-        return mc
+        return install_publication_receipts(MagicMock())
 
     def test_update_access_config(self):
         """P2.5 bridge: access-config writes the SA's PRIMARY route's

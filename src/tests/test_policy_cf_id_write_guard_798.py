@@ -578,6 +578,8 @@ class TestPolicyCfIdServerWritebackStillWorks798(TransactionCase):
         """
         sa, route = self._sa_route()
         pol = self._policy_on('route_id', route, 'cf-798c-torn')
+        _skip_route_sync(route).write({'is_protected': False})
+        route = route.with_context(sa_skip_route_sync=False)
 
         client = MagicMock()
         client.sync_access_app.return_value = {
