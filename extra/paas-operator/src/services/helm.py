@@ -3143,6 +3143,25 @@ class KubernetesService:
         )
         return json.loads(result.stdout or "{}")
 
+    #: #1647：工作區頁同步讀 quota 的 kubectl 上限。階梯：前端 15s ＞ 平台 (3, 8)s ＞ 本常數。
+    NS_QUOTA_READ_TIMEOUT_SECONDS = 5
+
+    def get_resource_quotas(self, namespace: str, timeout: int = 30) -> List[Dict[str, Any]]:
+        """#1647：namespace 的 ResourceQuota（原始 JSON items）。純唯讀、一次 kubectl get。
+
+        namespace 還不存在時回空 list（kubectl 對不存在的 ns 做 list 不報錯）。hard／used
+        的解讀在 ``namespace_quota.quota_report``。
+
+        Raises:
+            KubectlException: kubectl 失敗、權限不足、逾時。
+            ValueError: namespace 不在允許範圍，或 kubectl 的輸出不是 JSON
+                （``json.JSONDecodeError`` 是它的子類）。兩者都原樣外拋，呼叫端自己分辨。
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            ["get", "resourcequota", "--namespace", namespace, "-o", "json"], timeout=timeout)
+        return json.loads(result.stdout or "{}").get("items", [])
+
     def get_storage_quota_snapshot(
         self, namespace: str
     ) -> Dict[str, List[Dict[str, Any]]]:

@@ -72,6 +72,27 @@ ROUTE_PARK_TIMEOUT = 150
 #: 開成，呼叫端不寫 session（operator 端的入口有 activeDeadlineSeconds 與 sweep 兜底）。
 DATA_RETRIEVAL_TIMEOUT = 75
 
+#: #1647：工作區頁讀 namespace quota 的 (connect, read) 預算。階梯：
+#:
+#:     前端 QUOTA_REQUEST_TIMEOUT_MS(15_000，``services/workspace_quota.js``)
+#:       > 本常數（connect 3＋read 8＝最多 11s）
+#:         > operator NS_QUOTA_READ_TIMEOUT_SECONDS(5s，一次 kubectl get；
+#:           extra/paas-operator ``KubernetesService``)
+#:
+#: **刻意比 DEFAULT_TIMEOUT 短**：這是租戶開工作區頁時同步呼叫的唯讀查詢，operator 掛掉
+#: 或連不上時不能讓一個 Odoo worker 被卡 30 秒——拿不到就讓面板顯示「暫時無法取得」。
+#:
+#: 階梯的守線分兩處，各守自己讀得到的那一段：
+#:
+#:   * 前端 ＞ 本常數（connect＋read）、本常數 ＜ DEFAULT_TIMEOUT：
+#:     ``src/tests/test_workspace_quota_1647.py``（Odoo 測試讀得到前端的 JS，讀不到
+#:     extra/paas-operator）。
+#:   * 本常數的 read ＞ operator 的 NS_QUOTA_READ_TIMEOUT_SECONDS：
+#:     ``extra/paas-operator/tests/test_namespace_quota_1647.py``。它從 repo 根以 regex 讀
+#:     下面這一行 ⇒ 這一行要維持 ``NAMESPACE_QUOTA_TIMEOUT = (<connect>, <read>)``、兩個
+#:     整數字面值的形狀；改了形狀那支測試會紅（不會靜默失效），屆時連同它的 regex 一起改。
+NAMESPACE_QUOTA_TIMEOUT = (3, 8)
+
 #: #1513：operator ``upgrade-preflight``／upgrade 擴容被拒的 409 ``detail.error_code``
 #: （extra/paas-operator ``upgrade_preflight.STORAGE_EXPANSION_ERROR_CODE``；改名兩邊一起改）。
 STORAGE_EXPANSION_ERROR_CODE = 'storage_expansion_rejected'
@@ -331,6 +352,42 @@ class PaaSOperatorClient:
             },
             timeout=HELM_OPERATION_TIMEOUT,
         )
+
+    def get_namespace_quota(self, namespace: str) -> Dict[str, Any]:
+        """#1647：讀 namespace ResourceQuota 的上限與已佔用量（純唯讀）。
+
+        Args:
+            namespace: 目標命名空間（須以平台設定的 namespace 前綴開頭）
+
+        Returns:
+            operator 一律回 200：
+
+            - 拿得到：``{'namespace', 'available': True, 'reason': None, 'quotas': [name],
+              'resources': {<k8s 資源鍵>: {'hard', 'used', 'hard_value', 'used_value',
+              'unit': 'cores'|'bytes'|'count', 'ratio', 'quota'}}}``
+            - 拿不到：``{'namespace', 'available': False,
+              'reason': 'quota_not_found'|'quota_unreadable', 'quotas': [], 'resources': {}}``
+
+            轉成前台顯示用的形狀在 ``services/workspace_quota.build_view``。
+
+        Raises:
+            PaaSOperatorAPIError: 404／405＝operator 比這個端點舊（舊版只替同一路徑註冊
+                PUT，GET 回 405）；400＝namespace 不在 operator 允許的前綴內。
+            PaaSOperatorConnectionError / PaaSOperatorTimeoutError: 連不上或逾時
+                （預算 ``NAMESPACE_QUOTA_TIMEOUT``）。
+
+            本方法不吞例外——「沒有」「太舊」「失敗」怎麼對租戶呈現由呼叫端決定。
+
+        Note:
+            平台先於 operator 上線（舊 operator 對這個 GET 回 405／404）、或 operator
+            連不上／逾時時，``_request`` 會在拋出例外之前各記一行 ERROR（例如
+            ``PaaS Operator API error: GET /api/namespaces/<ns>/quota -> 405``），屬預期：
+            工作區頁每讀一次配額就多一行，畫面則由呼叫端安靜降級（面板不出現，或顯示
+            「暫時無法取得」）。其中 405／404 那一種不代表 operator 故障，只是它還沒換到
+            有這個端點的版本。
+        """
+        return self._request('GET', f'/api/namespaces/{namespace}/quota',
+                             timeout=NAMESPACE_QUOTA_TIMEOUT)
 
     def backfill_baseline_netpol(
         self, namespace: str, workspace_id: int

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <!--
+    #1647 工作區配額面板。所有文案都在 JS 的 getter（單行 _t），模板裡不放文字節點；
+    component tag（WoowIcon）上不用 t-att-*（prop 本身就是 expression）。
+  -->
+  <t t-name="woow_paas_platform.WorkspaceQuotaPanel">
+    <section t-if="visible" class="o_woow_quota_panel">
+      <div class="o_woow_quota_panel__header">
+        <h2 t-esc="title"/>
+        <button type="button" class="o_woow_quota_panel__refresh" t-on-click="onRefresh" t-att-disabled="state.loading" t-att-title="refreshLabel" t-att-aria-label="refreshLabel">
+          <WoowIcon name="'refresh'" size="18" class="refreshIconClass"/>
+        </button>
+      </div>
+      <p class="o_woow_quota_panel__intro" t-esc="intro"/>
+      <p t-if="unavailable" class="o_woow_quota_panel__unavailable" t-esc="unavailableText"/>
+      <t t-else="">
+        <p t-if="alertText" t-att-class="alertClass" role="alert" t-esc="alertText"/>
+        <div class="o_woow_quota_panel__grid">
+          <div t-foreach="rows" t-as="row" t-key="row.key" t-att-class="row.className">
+            <div class="o_woow_quota_panel__row_head">
+              <span class="o_woow_quota_panel__label" t-esc="row.label"/>
+              <span t-if="row.levelLabel" class="o_woow_quota_panel__level" t-esc="row.levelLabel"/>
+            </div>
+            <div class="o_woow_quota_panel__used" t-esc="row.usedText"/>
+            <div class="o_woow_quota_panel__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" t-att-aria-valuenow="row.ariaNow" t-att-aria-valuetext="row.percentText" t-att-aria-label="row.label">
+              <div class="o_woow_quota_panel__fill" t-att-style="row.fillStyle"/>
+            </div>
+            <div class="o_woow_quota_panel__row_foot">
+              <span class="o_woow_quota_panel__percent" t-esc="row.percentText"/>
+              <span class="o_woow_quota_panel__remaining" t-esc="row.remainingText"/>
+            </div>
+          </div>
+        </div>
+      </t>
+    </section>
+  </t>
+</templates>
