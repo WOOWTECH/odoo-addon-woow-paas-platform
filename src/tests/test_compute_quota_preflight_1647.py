@@ -1197,6 +1197,9 @@ class TestRollbackComputeQuotaPreflight1647(_Fixture, TransactionCase):
         self.assertEqual(svc.state, 'running')
         self.assertFalse(svc.last_upgraded_at)
         self.assertFalse(svc.error_message)
+        # #1663 的「回滾後同步公開設定」只在 operator 真的回復之後才登記；被配額預檢擋下時
+        # 什麼都沒回復，不可以留下待辦（否則下一次短 poll 會拿不存在的回復去同步）。
+        self.assertFalse(svc.sudo().rollback_config_sync)
         [activity] = self._alerts()[:1]
         self.assertIn('rollback', activity.note)
 
