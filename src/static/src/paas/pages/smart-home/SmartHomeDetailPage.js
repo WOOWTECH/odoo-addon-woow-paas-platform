@@ -268,6 +268,8 @@ export class SmartHomeDetailPage extends Component {
      * `active`／`suspended` 後端一律拒絕，顯示按鈕只會換來一句錯誤。
      */
     get canRetrySetup() {
+        if (this.home?.provision_operation &&
+            this.home.provision_operation.retry_allowed !== true) return false;
         return ["pending", "error"].includes(this.home?.state);
     }
 
@@ -379,10 +381,9 @@ export class SmartHomeDetailPage extends Component {
             this.props.workspaceId,
             this.props.homeId
         );
-        if (result.success) {
-            // 端點成功不代表開通成功：operator 失敗時後端把記錄落 `error` ＋
-            // `error_message` 並照樣回 success（controllers/smart_home.py
-            // `_provision_smarthome`）。那一格由常駐錯誤橫幅顯示，這裡只收資料。
+        if (result.success || result.accepted) {
+            // Accepted is pending; only success means active. Both carry the
+            // current home so normal polling follows actual persisted state.
             this.state.home = result.data;
             this.startPollingIfNeeded();
         } else {

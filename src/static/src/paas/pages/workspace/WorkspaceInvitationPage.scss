@@ -1,0 +1,43 @@
+// New invitation surfaces reuse the PaaS card and pill-button components.
+.o_woow_invitation_page {
+  max-width: 680px;
+  margin: 32px auto;
+}
+
+.o_woow_invitation_card {
+  border-radius: 20px;
+  padding: 32px !important;
+
+  h1 { font-size: 1.5rem; margin-bottom: 16px; }
+  p { color: $woow-text-secondary; line-height: 1.6; margin-bottom: 16px; }
+}
+
+.o_woow_invitation_actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.o_woow_pending_section { margin-top: 32px; }
+.o_woow_pending_intro { color: $woow-text-secondary; margin: 8px 0 16px; }
+.o_woow_pending_heading { font-size: 1.25rem; margin: 0; }
+.o_woow_pending_notice {
+  color: $woow-text-primary;
+  background: rgba(97, 131, 252, 0.08);
+  border-radius: 20px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+.o_woow_pending_actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.o_woow_pending_card { border-radius: 20px; }
+
+@media (max-width: $woow-bp-sm) {
+  .o_woow_invitation_page { margin: 16px auto; }
+  .o_woow_invitation_card { padding: 24px !important; }
+  .o_woow_pending_actions { width: 100%; margin-left: 56px; }
+}

@@ -3,7 +3,7 @@
 
 2026-10-01 supersedes the temporary Portal product denial: invitations and
 existing memberships now work via /woow's private capability seam. Preserve
-internal-first duplicate-email selection, no group changes and model-helper
+ login-identity selection with mailbox acceptance, no group changes and model-helper
 deny. 2026-10-07 (#1528): the HA REST API now follows the same capability, so
 a Portal member's HA view matches /woow (full matrix in
 test_ha_api_portal_1528). Real HTTP still catches raw ACL traceback leaks.
@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.tests.common import HttpCase, tagged
+from .invitation_mailbox_fixture import accept_queued_invitation
 
 PASSWORD = 'Portal1261!pw'
 
@@ -25,6 +26,7 @@ class TestPortalUserWorkspace1261(HttpCase):
         super().setUp()
         suffix = uuid.uuid4().hex[:8]
         self.suffix = suffix
+        self.env.company.email = 'isolated-invite-sender@example.invalid'
         Users = self.env['res.users']
         portal_group = self.env.ref('base.group_portal')
         internal_group = self.env.ref('base.group_user')
@@ -41,7 +43,7 @@ class TestPortalUserWorkspace1261(HttpCase):
         self.portal_email = f'portal-1261-{suffix}@test.example'
         self.portal_user = Users.create({
             'name': f'Portal 1261 {suffix}',
-            'login': f'portal_1261_{suffix}',
+            'login': self.portal_email,
             'email': self.portal_email,
             'password': PASSWORD,
             'groups_id': [(6, 0, [portal_group.id])],
@@ -49,7 +51,7 @@ class TestPortalUserWorkspace1261(HttpCase):
         self.internal_email = f'member-1261-{suffix}@test.example'
         self.internal_user = Users.create({
             'name': f'Member 1261 {suffix}',
-            'login': f'member_1261_{suffix}',
+            'login': self.internal_email,
             'email': self.internal_email,
             'password': PASSWORD,
             'groups_id': [(6, 0, [internal_group.id])],
@@ -90,8 +92,17 @@ class TestPortalUserWorkspace1261(HttpCase):
         ])
 
     def _invite(self, email):
-        return self._post('/api/workspaces/%s/members' % self.workspace.id,
-                          {'action': 'invite', 'email': email, 'role': 'user'})
+        issued = self._post('/api/workspaces/%s/members' % self.workspace.id, {
+            'action': 'invite', 'email': email, 'role': 'user',
+            'invitation_mode': 'mailbox_challenge_v1',
+        })
+        if not issued.get('success'):
+            return issued
+        recipient = self.env['res.users'].browse(issued['data']['user_id'])
+        try:
+            return accept_queued_invitation(self, issued, recipient, PASSWORD, self._post)
+        finally:
+            self._as(self.owner)
 
     # ================================================================
     #  入口：邀請
@@ -111,7 +122,7 @@ class TestPortalUserWorkspace1261(HttpCase):
         self.assertIn(self.workspace.id, [row['id'] for row in listed['data']])
 
     def test_invite_email_shared_by_portal_and_internal_picks_internal(self):
-        """同一個 email 同時有 portal 與 internal 帳號時，邀請落到 internal 那個。
+        """共用可修改的 profile email 不得改變帳號 login email 的邀請對象。
 
         portal 分身的名字刻意排在前面（res.users 預設 `_order = 'name, login'`），
         舊寫法 `search(..., limit=1)` 會撿到 portal——這條才有鑑別力。
@@ -134,6 +145,7 @@ class TestPortalUserWorkspace1261(HttpCase):
         self.assertEqual(result['data']['user_id'], self.internal_user.id, result)
         self.assertTrue(self._access_row(self.internal_user))
         self.assertFalse(self._access_row(portal_twin))
+        self.assertEqual(portal_twin.login, f'portal_twin_1261_{self.suffix}')
 
     def test_invite_internal_user_unchanged(self):
         """陽性對照：internal 帳號照舊邀請成功、回應形狀不變。"""
@@ -147,15 +159,20 @@ class TestPortalUserWorkspace1261(HttpCase):
         self.assertTrue(self._access_row(self.internal_user))
 
     def test_invite_unknown_email_keeps_existing_behaviour(self):
-        """完全沒有帳號的 email：維持既有文案，不帶新 code、不建任何東西。"""
+        """沒有 active login email 的帳號：結構化拒絕，不建成員或寄件列。"""
         self._as(self.owner)
         email = f'nobody-1261-{self.suffix}@test.example'
+        invitations = self.env['woow_paas_platform.workspace_invitation'].sudo()
+        before_invitations = invitations.search_count([])
+        before_mail = self.env['mail.mail'].sudo().search_count([])
         result = self._invite(email)
 
         self.assertFalse(result.get('success'), result)
-        self.assertNotIn('code', result)
-        self.assertIn(email, result.get('error') or '')
+        self.assertEqual(result.get('code'), 'invite_identity_not_found')
+        self.assertNotIn(email, result.get('error') or '')
         self.assertEqual(len(self.workspace.access_ids), 1, '只剩 owner 一列')
+        self.assertEqual(invitations.search_count([]), before_invitations)
+        self.assertEqual(self.env['mail.mail'].sudo().search_count([]), before_mail)
 
     # ================================================================
     #  出口：portal 呼叫者

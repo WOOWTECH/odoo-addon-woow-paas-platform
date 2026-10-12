@@ -1,6 +1,7 @@
 """Tests for Subscription Lifecycle Mixin and Cron."""
 from datetime import date, timedelta
 from unittest.mock import patch, MagicMock
+from .publication_receipt_fixture import install_publication_receipts
 
 from dateutil.relativedelta import relativedelta
 
@@ -188,7 +189,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_service_suspend(self, mock_get_client):
         """Suspend should set state to suspended and call scale(0)."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         service = self._create_service(
@@ -207,7 +208,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_service_resume(self, mock_get_client):
         """Resume should restore pre-suspend state and call scale(1)."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         service = self._create_service(
@@ -237,7 +238,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_smarthome_suspend(self, mock_get_client):
         """Suspend should set state to suspended and configure tunnel to 503."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         home = self._create_smarthome(
@@ -257,7 +258,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_smarthome_resume(self, mock_get_client):
         """Resume should restore state and configure tunnel back."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         home = self._create_smarthome(
@@ -410,7 +411,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_cron_suspends_past_grace(self, mock_get_client):
         """Cron should suspend services expired beyond grace period."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         service = _internal_provision(self.CloudService).create({
@@ -440,7 +441,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_cron_does_not_suspend_in_grace(self, mock_get_client):
         """Cron should NOT suspend services within grace period."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         service = _internal_provision(self.CloudService).create({
@@ -468,7 +469,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client')
     def test_cron_resumes_renewed(self, mock_get_client):
         """Cron should resume suspended services when subscription is renewed."""
-        mock_client = MagicMock()
+        mock_client = install_publication_receipts(MagicMock())
         mock_get_client.return_value = mock_client
 
         service = _internal_provision(self.CloudService).create({

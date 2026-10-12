@@ -5,6 +5,8 @@ import subprocess
 
 import pytest
 
+from src.services.helm import KubernetesService
+
 pytestmark = pytest.mark.integration
 
 
@@ -43,7 +45,7 @@ def _pod(namespace, name, *, init=False, finalizer=False):
 
 
 def test_status_keeps_pending_and_terminating_pod_metadata(
-    app_client, test_namespace, tmp_path,
+    app_client, test_namespace, tmp_path, monkeypatch,
 ):
     # 只為 status 的真 Helm 查詢建一筆 release；不依賴任何產品 chart 或外部 repo。
     chart = tmp_path / "status-chart"
@@ -59,6 +61,18 @@ def test_status_keeps_pending_and_terminating_pod_metadata(
         "--namespace", test_namespace,
     ], check=True, capture_output=True)
     old_uid = None
+    pod_snapshots = []
+    run_command = KubernetesService._run_command
+
+    def capture_pod_snapshot(service, args, **kwargs):
+        # Keep the real K8s read. Bind the mapper assertion to the exact list
+        # consumed by this status response, rather than a later resourceVersion.
+        result = run_command(service, args, **kwargs)
+        if args[:2] == ["get", "pods"]:
+            pod_snapshots.append(json.loads(result.stdout))
+        return result
+
+    monkeypatch.setattr(KubernetesService, "_run_command", capture_pod_snapshot)
     try:
         for name, options in (("postgres", {}), ("odoo", {"init": True}),
                               ("old-odoo", {"finalizer": True})):
@@ -86,10 +100,19 @@ def test_status_keeps_pending_and_terminating_pod_metadata(
         assert pods["postgres"]["deletion_timestamp"] is None
         assert pods["odoo"]["phase"] == "Pending"
         assert pods["odoo"]["ready"] in ("0/0", "0/1")
-        live_old = json.loads(_kubectl(
-            "get", "pod", "old-odoo", "-n", test_namespace, "-o", "json",
-        ))
-        assert pods["old-odoo"]["deletion_timestamp"] == live_old["metadata"]["deletionTimestamp"]
+        # Kubelet can complete deletion with grace=0 between two API reads,
+        # changing deletionTimestamp while this test finalizer keeps the Pod.
+        # Assert preservation of the same live response/object, not equality
+        # with a second GET of a potentially different resourceVersion.
+        assert len(pod_snapshots) == 1
+        raw_old = next(
+            pod for pod in pod_snapshots[0]["items"]
+            if pod["metadata"]["name"] == "old-odoo"
+        )
+        assert raw_old["metadata"]["namespace"] == test_namespace
+        assert raw_old["metadata"]["uid"] == old_uid
+        assert raw_old["metadata"]["deletionTimestamp"]
+        assert pods["old-odoo"]["deletion_timestamp"] == raw_old["metadata"]["deletionTimestamp"]
     finally:
         # 只移除本測試加的 finalizer；核對 UID 與清單以免改到替代 Pod／其他
         # finalizer。不鎖整個 resourceVersion，避免 kubelet 終止更新讓清理誤失敗。

@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class OAuthToken(models.Model):
@@ -61,6 +61,21 @@ class OAuthToken(models.Model):
         """Mark this token (and its refresh token) as revoked."""
         self.write({'is_revoked': True})
 
+    @api.model
+    def is_issuance_identity_valid(self, client, user) -> bool:
+        """Return whether a client may issue a token for this subject."""
+        return bool(
+            client
+            and client.is_active
+            and user
+            and user.active
+            and not user._is_public()
+        )
+
+    def _has_valid_issuance_identity(self) -> bool:
+        self.ensure_one()
+        return self.is_issuance_identity_valid(self.client_id, self.user_id)
+
     def is_access_token_valid(self) -> bool:
         """Check if the access token is still valid.
 
@@ -68,7 +83,7 @@ class OAuthToken(models.Model):
             True if the token is not revoked and not expired.
         """
         self.ensure_one()
-        if self.is_revoked:
+        if self.is_revoked or not self._has_valid_issuance_identity():
             return False
         return fields.Datetime.now() < self.expires_at
 
@@ -79,7 +94,7 @@ class OAuthToken(models.Model):
             True if not revoked and not expired.
         """
         self.ensure_one()
-        if self.is_revoked:
+        if self.is_revoked or not self._has_valid_issuance_identity():
             return False
         if not self.refresh_token or not self.refresh_expires_at:
             return False

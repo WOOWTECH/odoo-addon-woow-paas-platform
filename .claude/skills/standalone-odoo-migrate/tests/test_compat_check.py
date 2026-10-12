@@ -150,6 +150,32 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(rows["in_ci_diff"]["status"], "BLOCK_DOWNGRADE")
         self.assertNotIn("accepted_divergence", rows["in_ci_diff"])
 
+    def test_notes_flag_cluster_internal_mail_hosts_and_conf(self):
+        _rows, inv, tgt, _ci = self.run_classify({"base": {"state": "installed", "version": "18.0.1.3"}})
+        inv["db"]["mail_hosts"] = [
+            {"kind": "smtp", "host": "mailcow.mailcow.svc.cluster.local", "port": 587, "active": True},
+            {"kind": "imap", "host": "10.43.0.9", "port": 993, "active": True},
+            {"kind": "smtp", "host": "smtp.gmail.com", "port": 465, "active": True},
+            {"kind": "smtp", "host": "old.svc.cluster.local", "port": 25, "active": False},
+        ]
+        inv["db"]["params"] = {"web.base.url": "https://shop.example.test"}
+        inv["conf"] = {"workers": "4", "limit_memory_hard": "2684354560", "limit_time_cpu": "1200",
+                       "server_wide_modules": "base,web,mail_fetchmail_durable"}
+        out, blocks = compat_check.notes(inv, tgt, None)
+        text = "\n".join(out)
+        self.assertEqual(blocks, [])
+        self.assertIn("mailcow.mailcow.svc.cluster.local:587（smtp）", text)
+        self.assertIn("10.43.0.9:993（imap）", text)
+        self.assertIn("shared-mail.sh open", text)
+        self.assertNotIn("smtp.gmail.com", text)
+        self.assertNotIn("old.svc.cluster.local", text)
+        self.assertIn("workers=4、limit_memory_hard=2684354560", text)
+        self.assertIn("conf.limitTimeCpu、conf.serverWideModules", text)
+        self.assertIn("https://shop.example.test", text)
+        for host, expected in (("smtp.gmail.com", False), ("mailcow", True), ("192.168.1.5", True), ("8.8.8.8", False),
+                               ("100.64.3.2", True), ("", False), (None, False)):
+            self.assertEqual(compat_check.cluster_internal(host), expected, host)
+
     def test_db_newer_than_image_blocks(self):
         rows, *_ = self.run_classify({"in_image": {"state": "installed", "version": "18.0.1.1"}})
         self.assertEqual(rows["in_image"]["status"], "BLOCK_DOWNGRADE")

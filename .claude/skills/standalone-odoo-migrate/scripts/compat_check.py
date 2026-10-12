@@ -162,6 +162,17 @@ def pip_gaps(deps, inv, tgt):
     return missing, source_only
 
 
+def cluster_internal(host):
+    """主機名是不是只在來源叢集內解析得到／連得到（K8s service 名稱或私有位址）。"""
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host):
+        a, b = (int(x) for x in host.split(".")[:2])
+        return a in (10, 127) or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or (a == 100 and 64 <= b <= 127)
+    return "." not in host or host.endswith((".svc", ".cluster.local", ".local", ".internal"))
+
+
 def notes(inv, tgt, k8s):
     out, blocks = [], []
     db = inv["db"]
@@ -198,9 +209,26 @@ def notes(inv, tgt, k8s):
     if conf.get("smtp_server") and (conf.get("smtp_port") == "465" or conf.get("smtp_ssl") == "True"):
         out.append("conf 層 SMTP（port %s／ssl %s）：tenant chart 不支援 465，改 DB ir.mail_server"
                    % (conf.get("smtp_port"), conf.get("smtp_ssl")))
-    for key in ("workers", "limit_time_cpu", "limit_time_real", "limit_memory_hard", "max_cron_threads"):
-        if conf.get(key):
-            out.append("來源 conf %s=%s（目標要用 helm_values conf.* 覆寫才一致）" % (key, conf[key]))
+    plan_keys = [k for k in ("workers", "limit_memory_soft", "limit_memory_hard") if conf.get(k)]
+    if plan_keys:
+        out.append("來源 conf %s：目標的 workers 與記憶體上限由購買的方案決定，不能逐台覆寫 ⇒ 依這組數字選方案"
+                   % "、".join("%s=%s" % (k, conf[k]) for k in plan_keys))
+    admin_keys = [(k, v) for k, v in (("limit_time_cpu", "conf.limitTimeCpu"), ("limit_time_real", "conf.limitTimeReal"),
+                                      ("max_cron_threads", "conf.maxCronThreads")) if conf.get(k)]
+    if conf.get("server_wide_modules") and conf["server_wide_modules"].replace(" ", "") != "base,web":
+        admin_keys.append(("server_wide_modules", "conf.serverWideModules"))
+    if admin_keys:
+        out.append("來源 conf %s：chart 預設不同，要一致就由平台管理員寫進服務的 helm_values（%s）後 Redeploy"
+                   % ("、".join("%s=%s" % (k, conf[k]) for k, _v in admin_keys), "、".join(v for _k, v in admin_keys)))
+    internal = sorted({"%s:%s（%s）" % (m["host"], m["port"], m["kind"]) for m in db.get("mail_hosts", [])
+                       if m.get("active") and cluster_internal(m.get("host"))})
+    if internal:
+        out.append("啟用中的寄收信主機是叢集內位址：%s。租戶 ns 的 egress 只放行同 ns、DNS 與對外網路，搬過去之後連不到 ⇒ "
+                   "叢集共用的 mailcow 用 target/shared-mail.sh open 接上（先取得使用者同意）；其他主機要先與該服務的負責人談"
+                   % "、".join(internal))
+    base_url = (db.get("params") or {}).get("web.base.url")
+    if base_url:
+        out.append("對外網址 %s：切換時要把這個 hostname 改指到新服務（SKILL.md 步驟 9「對外網址」）" % base_url)
     if db.get("pos_sessions_open") or db.get("pos_orders_draft"):
         out.append("POS：開啟中的 session %s、draft 訂單 %s（凍結時必須為 0）"
                    % (db.get("pos_sessions_open"), db.get("pos_orders_draft")))

@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState } from "@odoo/owl";
+import { Component, useState, onWillUnmount } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
@@ -15,6 +15,8 @@ export class InviteMemberModal extends Component {
     };
 
     setup() {
+        this._active = true;
+        onWillUnmount(() => { this._active = false; });
         this.state = useState({
             email: "",
             role: "user",
@@ -39,6 +41,7 @@ export class InviteMemberModal extends Component {
     }
 
     async onSubmit() {
+        if (!this._active || this.state.loading) return;
         const email = this.state.email.trim();
         if (!email) {
             this.state.error = _t("Email is required");
@@ -60,10 +63,16 @@ export class InviteMemberModal extends Component {
             role: this.state.role,
         });
 
+        if (!this._active) return;
+
         this.state.loading = false;
 
         if (result.success) {
-            this.props.onInvited(result.data);
+            if (result.data?.state === "pending") {
+                this.props.onInvited(result.data);
+            } else {
+                this.state.error = _t("Unexpected invitation response. Reload the page and check the team before trying again.");
+            }
         } else {
             this.state.error = result.error || _t("Failed to invite member");
         }

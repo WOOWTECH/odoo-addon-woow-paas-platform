@@ -50,6 +50,7 @@
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import access_receipt, routes_receipt
 
 from odoo.tests import TransactionCase, tagged
 
@@ -115,9 +116,13 @@ class _ReapMixin:
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = (
-            _sync_result() if result is None else result)
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        if result is None:
+            client.sync_access_app.side_effect = access_receipt
+        else:
+            client.sync_access_app.return_value = result
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         return client
 
 
@@ -213,7 +218,7 @@ class TestSaRouteReap(TransactionCase, _ReapMixin):
         self.Policy = self.env[_POLICY]
         self.workspace = self.env['woow_paas_platform.workspace'].sudo(
         ).create({'name': 'WS 528B %s' % uuid.uuid4().hex[:6]})
-        self.client = self._mock(_sync_result(app_id='app-live'))
+        self.client = self._mock()
         with patch(MOCK_SA_CLIENT, return_value=self.client):
             self.sa = self.env['woow_paas_platform.security_access'].sudo(
             ).create({'name': 'SA 528B', 'workspace_id': self.workspace.id})
@@ -437,7 +442,7 @@ class TestCsReap(TransactionCase, _ReapMixin):
         _cs_skip_access_sync(self.svc).write(
             {'is_protected': True})
         _internal_cs_access_identity(self.svc).access_app_id = 'app-live'
-        self.client = self._mock(_sync_result(app_id='app-live'))
+        self.client = self._mock()
 
     def _policy(self, cf_policy_id):
         pol = _skip_route_sync(self.Policy.sudo()).create({
@@ -456,7 +461,9 @@ class TestCsReap(TransactionCase, _ReapMixin):
         出去並消帳。
         """
         pol = self._policy('cf-doomed-c1')
+        _cs_skip_access_sync(self.svc).write({'is_protected': False})
         self.svc.subdomain = False
+        _cs_skip_access_sync(self.svc).write({'is_protected': True})
 
         with patch(MOCK_CS_CLIENT, return_value=self.client):
             pol.unlink()
@@ -464,8 +471,10 @@ class TestCsReap(TransactionCase, _ReapMixin):
         self.assertIn('cf-doomed-c1', self._pending(self.svc))
 
         # 陽性對照 ＋ 回收：subdomain 補回來之後同一支 mock 必須打得出去。
+        _cs_skip_access_sync(self.svc).write({'is_protected': False})
         self.svc.subdomain = make_service_subdomain(
             self.workspace.ws_hash, self.svc.reference_id, self.svc.name)
+        _cs_skip_access_sync(self.svc).write({'is_protected': True})
         with patch(MOCK_CS_CLIENT, return_value=self.client):
             self.svc.write({'session_duration': '8h'})
         self.assertTrue(self.client.sync_access_app.called,
@@ -476,7 +485,9 @@ class TestCsReap(TransactionCase, _ReapMixin):
 
     def test_C2_gate_skip_with_books_is_loud(self):
         self.Reap._record(self.svc, ['cf-doomed-c2'])
+        _cs_skip_access_sync(self.svc).write({'is_protected': False})
         self.svc.subdomain = False
+        _cs_skip_access_sync(self.svc).write({'is_protected': True})
         with patch(MOCK_CS_CLIENT, return_value=self.client):
             with self.assertLogs(LOG_CS, level=logging.WARNING) as captured:
                 self.svc.write({'session_duration': '8h'})
@@ -550,7 +561,7 @@ class TestShRouteReap(TransactionCase, _ReapMixin):
         _sm_skip_access_sync(self.route).write(
             {'is_protected': True})
         _internal_sm_route_identity(self.route).access_app_id = 'app-live'
-        self.client = self._mock(_sync_result(app_id='app-live'))
+        self.client = self._mock()
 
     def _policy(self, cf_policy_id):
         pol = _skip_route_sync(self.Policy.sudo()).create({

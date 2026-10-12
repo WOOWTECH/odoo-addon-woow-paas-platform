@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="mail_template_workspace_invitation" model="mail.template">
+        <field name="name">Workspace invitation mailbox challenge</field>
+        <field name="model_id" ref="model_woow_paas_platform_workspace_invitation"/>
+        <field name="subject">Workspace invitation: {{ object.workspace_id.name }}</field>
+        <field name="email_to">{{ object.recipient_email }}</field>
+        <field name="auto_delete" eval="True"/>
+        <field name="body_html" type="html">
+            <div>
+                <p>You have been invited to <t t-out="object.workspace_id.name"/> with the role <t t-out="object.role"/>.</p>
+                <p>Sign in to the account whose login is <t t-out="object.recipient_email"/> and accept this invitation before <t t-out="object.expires_at"/> (UTC).</p>
+                <p>Sign in first. If the link asks you to sign in, finish signing in and then reopen this link from your email.</p>
+                <p><a t-att-href="ctx.get('workspace_invite_accept_url')">Review and accept the workspace invitation</a></p>
+                <p>This invitation grants access only after that account accepts the single-use link.</p>
+            </div>
+        </field>
+    </record>
+</odoo>

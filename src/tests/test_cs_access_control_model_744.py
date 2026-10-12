@@ -438,8 +438,13 @@ class TestCsAccessIdentityAnchor(_CsAccessFixture):
         它的全部價值就是「一般欄位的 write 從頭到尾走得完」。
         """
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        # AC1011: the origin boundary now consumes the real parking contract.
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         client.sync_access_app.return_value = {
-            'app_id': 'app-c7', 'policy_ids': [], 'allowed_idps': [],
+            'app_id': 'app-c7', 'policy_ids': [], 'allowed_idps': ['idp-google'],
             'unresolved_idp_types': [], 'orphaned_policy_ids': []}
         with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
                    'get_paas_operator_client', return_value=client):
@@ -582,3 +587,5 @@ class TestCsAccessTeardown(_CsAccessFixture):
         seam.assert_not_called()
         self.assertEqual(svc.access_app_id, 'app-td-6')
         self.assertTrue(svc.is_protected)
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

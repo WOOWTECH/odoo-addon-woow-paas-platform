@@ -149,12 +149,14 @@ class TestSecurityAccess(TransactionCase):
         user-added routes ends in 'active_no_route' (D1 distinct state) with an
         empty route list (canonical_name is the tunnel identity, not a route)."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-sa-1',
             'tunnel_token': 'tok-secret',
             'tunnel_name': 'paas-sa-x-y',
         }
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
         sa.action_provision()
@@ -174,10 +176,12 @@ class TestSecurityAccess(TransactionCase):
         application route flips it to 'active'; deleting the last route (now
         freely deletable — no primary guard) drops it back to 'active_no_route'."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-sm', 'tunnel_token': 't', 'tunnel_name': 'n',
         }
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
         sa.action_provision()
@@ -202,6 +206,8 @@ class TestSecurityAccess(TransactionCase):
             PaaSOperatorError,
         )
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.side_effect = PaaSOperatorError('boom')
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
@@ -216,13 +222,15 @@ class TestSecurityAccess(TransactionCase):
         re-sync routes, never call create_tunnel again (else orphan CF tunnel).
         """
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-sa-1',
             'tunnel_token': 'tok-secret',
             'tunnel_name': 'paas-sa-x-y',
             'dns_record_id': 'rec-primary',
         }
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
         # First provision succeeds end-to-end.
@@ -249,6 +257,8 @@ class TestSecurityAccess(TransactionCase):
             PaaSOperatorError,
         )
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-sa-2',
             'tunnel_token': 'tok-secret',
@@ -263,7 +273,7 @@ class TestSecurityAccess(TransactionCase):
         # tunnel was created and its id retained (no orphan, retry-able)
         self.assertEqual(sa.tunnel_id, 'tun-sa-2')
         # retry succeeds without recreating the tunnel
-        mock_client.sync_tunnel_routes.side_effect = None
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.reset_mock()
         sa.action_provision()
         mock_client.create_tunnel.assert_not_called()
@@ -281,6 +291,8 @@ class TestSecurityAccess(TransactionCase):
         broad except 仍 fail-loud。
         """
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-stage2',
             'tunnel_token': 'tok-secret',
@@ -302,6 +314,8 @@ class TestSecurityAccess(TransactionCase):
     def test_refresh_status_connected(self, mock_get_client):
         """connections 非空 → connected + 解析 connector_*/uptime（鏡像 SmartHome）。"""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.return_value = {
             'connections': [
                 {
@@ -329,6 +343,8 @@ class TestSecurityAccess(TransactionCase):
     def test_refresh_status_disconnected(self, mock_get_client):
         """connections 空 → disconnected。"""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.return_value = {'connections': []}
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
@@ -344,6 +360,8 @@ class TestSecurityAccess(TransactionCase):
             PaaSOperatorError,
         )
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.side_effect = PaaSOperatorError('cf down')
         mock_get_client.return_value = mock_client
         sa = self._make_sa()
@@ -367,7 +385,9 @@ class TestSecurityAccess(TransactionCase):
         # route create 會觸發 operator sync（sa 已 active）→ 必須 mock
         with patch(MOCK_GET_CLIENT) as mock_gc:
             mock_client = MagicMock()
-            mock_client.sync_tunnel_routes.return_value = {'routes': []}
+            mock_client.configure_tunnel.side_effect = configure_receipt
+            mock_client.sync_tunnel_routes.side_effect = routes_receipt
+            mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
             mock_gc.return_value = mock_client
             self.Route.create({
                 'security_access_id': sa.id,
@@ -378,12 +398,14 @@ class TestSecurityAccess(TransactionCase):
     @patch(MOCK_GET_CLIENT)
     def test_add_route_syncs_to_operator(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={
             'tunnel_id': 'tun-sa-1',
             'routes': [
                 {'subdomain': 'x', 'hostname': 'x.io', 'dns_record_id': 'r1'},
             ],
-        }
+        })
         mock_get_client.return_value = mock_client
         sa = self._make_active_sa()
         self.Route.create({
@@ -421,6 +443,8 @@ class TestSecurityAccess(TransactionCase):
         sa = self._make_active_sa()
         with patch(MOCK_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = MagicMock()
+            mock_get_client.return_value.configure_tunnel.side_effect = configure_receipt
+            mock_get_client.return_value.sync_tunnel_routes.side_effect = routes_receipt
             for ok in ['paas-evil', 'svc-evil', 'my-app', 'test', 'app2']:
                 route = self.Route.create({
                     'security_access_id': sa.id,
@@ -436,6 +460,8 @@ class TestSecurityAccess(TransactionCase):
         })
         with patch(MOCK_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = MagicMock()
+            mock_get_client.return_value.configure_tunnel.side_effect = configure_receipt
+            mock_get_client.return_value.sync_tunnel_routes.side_effect = routes_receipt
             self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': 'taken-prefix',
@@ -460,6 +486,8 @@ class TestSecurityAccess(TransactionCase):
         sa = self._make_active_sa()
         with patch(MOCK_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = MagicMock()
+            mock_get_client.return_value.configure_tunnel.side_effect = configure_receipt
+            mock_get_client.return_value.sync_tunnel_routes.side_effect = routes_receipt
             route = self.Route.create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': 'fixed-prefix',
@@ -478,6 +506,8 @@ class TestSecurityAccess(TransactionCase):
         )
         sa = self._make_active_sa()
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.sync_tunnel_routes.side_effect = PaaSOperatorError('cf down')
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             with self.assertRaises(PaaSOperatorError):
@@ -496,7 +526,9 @@ class TestSecurityAccess(TransactionCase):
         )
         sa = self._make_active_sa()
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             route = self.Route.create({
                 'security_access_id': sa.id,
@@ -518,7 +550,9 @@ class TestSecurityAccess(TransactionCase):
         )
         sa = self._make_active_sa()
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             route = self.Route.create({
                 'security_access_id': sa.id,
@@ -562,13 +596,24 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
 
     def _sync_mock(self):
         mock_client = MagicMock()
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         # _do_resume now pushes Access unconditionally (both enable+disable
         # convergence directions) when a tunnel exists, so the mock must return
         # a real teardown-shape dict, not a bare MagicMock the writeback chokes
         # on. enabled SAs are exercised in the dedicated convergence test below.
-        mock_client.sync_access_app.return_value = {
-            'app_id': None, 'policy_ids': [], 'allowed_idps': []}
+        def access_receipt(payload):
+            enabled = payload['enabled']
+            return {
+                'app_id': 'app-lifecycle' if enabled else None,
+                'policy_ids': ['policy-%s' % index for index, _policy in
+                               enumerate(payload.get('policies', []), 1)] if enabled else [],
+                'allowed_idps': ['idp-'+kind for kind in
+                                 payload.get('login_idp_types', [])] if enabled else [],
+                'unresolved_idp_types': [], 'orphaned_policy_ids': [],
+            }
+        mock_client.sync_access_app.side_effect = access_receipt
         return mock_client
 
     def test_suspend_overrides_all_routes_to_503(self):
@@ -651,8 +696,10 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
                 'workspace_id': self.workspace.id})
             _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-dws'})
             # A protected route that holds a live CF app id.
+            mock_client.sync_access_app.side_effect = None
             mock_client.sync_access_app.return_value = {
-                'app_id': 'app-dws', 'policy_ids': [], 'allowed_idps': []}
+                'app_id': 'app-dws', 'policy_ids': [], 'allowed_idps': [],
+                'unresolved_idp_types': [], 'orphaned_policy_ids': []}
             route = self.Route.create({'security_access_id': sa.id,
                                        'subdomain_prefix': sa.canonical_name,
                                        'is_protected': True})
@@ -664,7 +711,8 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             # False but access_app_id is retained (no teardown reached operator).
             mock_client.sync_access_app.reset_mock()
             mock_client.sync_access_app.return_value = {
-                'app_id': None, 'policy_ids': [], 'allowed_idps': []}
+                'app_id': None, 'policy_ids': [], 'allowed_idps': [],
+                'unresolved_idp_types': [], 'orphaned_policy_ids': []}
             route.write({'is_protected': False})
             mock_client.sync_access_app.assert_not_called()
             # Resume must converge the disable: push enabled=False teardown.
@@ -934,11 +982,13 @@ class TestSecurityAccessAcl(TransactionCase):
     def test_provision_writes_token_under_system_context(self):
         """system/admin context 下 provision 可寫 group_system 的 tunnel_token。"""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-acl-1', 'tunnel_token': 'tok-acl-secret',
             'tunnel_name': 'paas-sa-x', 'dns_record_id': 'rec-1',
         }
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             self.sa.action_provision()  # default TransactionCase = su/admin
         self.assertEqual(self.sa.state, 'active')
@@ -968,14 +1018,18 @@ class TestSecurityAccessAcl(TransactionCase):
         別把任一側的結論整包搬到另一側。"""
         from odoo.exceptions import AccessError
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-acl-2', 'tunnel_token': 'tok-acl-secret-2',
             'tunnel_name': 'paas-sa-y', 'dns_record_id': 'rec-2',
         }
-        mock_client.sync_tunnel_routes.return_value = {'routes': []}
+        mock_client.sync_tunnel_routes.side_effect = lambda tunnel_id, routes, **kwargs: routes_receipt(tunnel_id, routes, sample={'routes': []})
         sa_as_alice = self.env[
             'woow_paas_platform.security_access'].with_user(self.alice).browse(
                 self.sa.id)
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             with self.assertRaises(AccessError):
                 sa_as_alice.action_provision()
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

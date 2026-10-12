@@ -7,7 +7,8 @@ when_to_use: 使用者要把 standalone／odoo-tenant 站搬進 PaaS、盤點某
 # standalone Odoo → PaaS 租戶搬遷
 
 兩條硬需求（#1604）：**資料與來源逐位元一致**；**addon 由 paas-odoo-ci 烘進 cloud-odoo image**（不放 PVC）。
-租戶帳號、workspace、購買與擁有權不在本 skill：由人照正常購買流程先買好目標服務，本 skill 只接收它的 `cloud_service` id。
+租戶帳號、workspace、購買與擁有權不由本 skill 代辦：動手前先問調用者（下方「開始前先問調用者」），由人照正常購買流程
+買好目標服務，本 skill 只接收它的 `cloud_service` id。
 
 ## 分工
 
@@ -18,6 +19,25 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 | 來源 ns（standalone 站，不在白名單） | woow-machines-operator（WMO） | `scripts/source/` ＋ `scripts/odoo_inspect.py`、`scripts/addons_unpack.py`，連同指令交給 WMO；收回 JSON 與導出的 addon 目錄 |
 | 目標（`dev-sandbox-*`、`paas-ws-stg-*`、`paas-ws-*`） | 本 repo agent | prod 寫入每一步都等人工放行 |
 | paas-odoo-ci PR merge、prod image `/approve` | 人 | agent 只開 PR |
+
+## 開始前先問調用者
+
+搬一個站有幾件事只有調用本 skill 的人能決定。照下表的時機逐項問清楚，答案寫進該站的追蹤 issue；沒有答案的項目
+不要自己假設，也不要拿上一站的答案套用。
+
+| 何時問 | 問什麼 | 為什麼要問 |
+|---|---|---|
+| 步驟 1 之前 | 來源站是哪一個 ns；這次做到哪裡（只盤點／彩排／正式切換） | 決定要請 WMO 做什麼、要不要排停機 |
+| 步驟 1 之前 | 目標放在哪個工作區、由哪個帳號購買、服務名稱；錢包餘額夠不夠付到觀察期之後 | 購買與擁有權由人處理，agent 不代買；欠費會被停權 |
+| 步驟 3 之後 | 方案大小——附上來源的 workers／記憶體與各方案規格，給出建議 | workers 與記憶體由方案決定，不能逐台改 |
+| 步驟 3 之後 | 寄收信主機是叢集內的共用服務（mailcow）時，同不同意把目標 ns 接上 | 准入 label 是整個 ns 的 |
+| 彩排通過後 | 要不要沿用來源的 hostname | 沿用要先請來源 tunnel 的管理者刪舊 DNS 記錄 |
+| 彩排通過後 | 外部整合（MCP、webhook）要不要改指、由誰改 | 它們連的是來源的內部位址 |
+| 彩排通過後 | 切換時段；誰通知使用者、誰確認 POS 已關帳、誰驗收 | 停機與驗收都要有人在場 |
+| 彩排通過後 | 回切期限（幾點前驗收不過就回切）；來源保留多久才下線 | 見下方「備份與失敗還原」 |
+
+排切換日之前，把「備份與失敗還原」整節向調用者說明一次並取得確認：哪些東西有副本、每個階段失敗怎麼回復、哪一刻
+之後不能回切。調用者沒確認就不進步驟 9。
 
 ## 步驟
 
@@ -69,16 +89,103 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
    判準是客戶資料列（`scripts/fingerprint_business.sql` 檔頭）：還原當時就存在的客戶資料列必須原封不動；模組資料列
-   被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。filestore：仍被附件引用的檔不能少、內容不能變；
+   被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。模組擁有的列（含 noupdate）的可翻譯欄位只比
+   en_US——升級會替它們補上新翻譯。filestore：仍被附件引用的檔不能少、內容不能變；
    模組附件換了內容後被 Odoo 回收的舊檔列為「預期內」。
    完成條件：verify exit 0，「預期內的變動」逐條看過；`--cleanup` 才會刪掉含客戶資料的 incoming PVC。
+   比對要在任何人登入目標站之前跑：管理員登入會改寫 `web.base.url`，之後的比對會多出 `ir_config_parameter` 不一致。
+   session 檔不在搬遷範圍：搬過去之後所有人都要重新登入（Odoo 的 autovacuum 會把舊的裝置紀錄標成已撤銷）。
    - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝
      zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。要確認：第一次 verify 先不帶
      `--cleanup`，Redeploy 後再跑一次帶 `--cleanup` 的。
    - 匯入後管理員帳密是來源站的，平台存的那組不再適用；租戶可在服務頁按 Reset 重設（重設 `base.user_admin`、清掉 2FA）。
    ⚠ web 一開回來 cron 就開始跑（寄信、收信、金流、外部整合）。來源沒凍結的彩排（`export.sh --live`）不中和的話，
    兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`。
-9. **cutover**（hostname、外部整合改指、來源下線）：尚未實作，設計與進度在 #1604。
+9. **cutover**（正式切換；prod 每一步人工放行）。前置：彩排通過、目標服務已由人在 prod 租戶買好、下方「切換前檢查」
+   逐項有結論。停機時間＝凍結匯出＋還原＋開機升級＋比對（harumi 的量：約 15 秒＋45 秒＋3 分鐘，另加人工步驟）。
+   1. 目標服務先調好設定（「切換前檢查」的 conf 覆寫、需要時 `shared-mail.sh open`），Redeploy 完成、服務 running。
+   2. 凍結來源（WMO）：公告停機 → POS 全部關帳、沒有 draft 訂單 → 來源 odoo scale 0（postgres 留著）。
+      - 關帳＝每台收銀機在 POS 畫面按 Close Register 做完結班（點現金、過帳），`pos.session` 的 state 都是 `closed`。
+        POS 會把訂單先存在平板的瀏覽器再同步；session 開著就凍結，平板上還沒同步的訂單不會在匯出的資料裡。
+      - scale 0 之前重跑一次 `inventory.sh`（唯讀），摘要的 `pos` 那行是 `open sessions 0, draft orders 0` 才往下。
+   3. 走步驟 6～8：`export.sh` **不帶** `--live`、`restore.sh` **不帶** `--neutralize`。兩階段 verify 都 exit 0 才往下；
+      不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。
+   4. 對外網址改指（下方「對外網址」）、外部整合改指（MCP、webhook 來源端的設定）。
+   5. 驗收（人）：登入、開一個 POS session、收發各一封信、金流測一筆。通過後立刻手動加一份平台備份
+      （「備份與失敗還原」），再開放給使用者。
+   6. 回切：新站產生第一筆真實交易之前可以回切——匯出全程唯讀，來源資料沒被動過；之後就不能回切（兩邊資料分岔）。
+      各階段的回復動作與順序見「備份與失敗還原」。要不要回切由調用者決定，agent 不自行決定。
+   7. 收尾：`verify.sh --stage upgrade --cleanup` 刪掉含客戶資料的 incoming PVC；來源保留到約定的觀察期滿再下線（WMO）。
+
+## 切換前檢查
+
+每一站在彩排後、排切換日之前逐項確認；`compat_check.py` 的「注意事項」會列出其中幾項。
+
+- **方案與資源**：目標的 `workers` 與記憶體上限由購買的方案決定（`cs_odoo_workers`／`cs_ram_gb`），不能逐台覆寫。
+  來源的 `workers`、`limit_memory_*` 用來選方案；選小了，切過去會變慢或 worker 被記憶體上限中止。
+- **conf 覆寫**：`limit_time_cpu`／`limit_time_real`／`server_wide_modules` 不在方案內，chart 預設是 60／120／`base,web`。
+  平台管理員把 `conf.limitTimeCpu`、`conf.limitTimeReal`、`conf.serverWideModules` 寫進服務的 `helm_values` 後 Redeploy
+  （stg 實測：odoo.conf 生效、`server_wide_modules` 帶 `/all-addons` 的模組可以開機）。
+- **寄收信主機**：盤點的 `db.mail_hosts`。conf 層的 SMTP 不會帶過去（改用 DB 的 `ir.mail_server`）。叢集內位址
+  （`*.svc.cluster.local`）從租戶 ns **連不到**——baseline egress 只放行同 ns、DNS 與對外網路。
+  - 指向 **mailcow**（woow-k3s 的共用 mail 服務，不在 PaaS 內，歸 woow-machines-operator 管；只有叢集內位址）：
+    目標服務買好、running 之後跑 `scripts/target/shared-mail.sh open`——目標 ns 加准入 label、加一條只開給這台 Odoo
+    的 egress 規則，並實測連線。每一站接上之前先取得使用者同意（label 是整個 ns 的，同工作區的其他服務在 mailcow
+    那一側也會被放行）。stg 實測：接上後 587／993 連得到、同 ns 其他 pod 仍被擋、Redeploy 後仍在、`close` 可收回。
+  - mailcow 用私有 CA：收信靠 `mail_fetchmail_durable` 內附的 `mail-ca.crt` 驗憑證（stg 實測可驗）⇒ 該模組要在
+    `conf.serverWideModules` 裡。
+  - 其他叢集內主機沒有現成作法，要先與該服務的負責人談。
+- **對外網址**：要不要沿用來源的 hostname（印在桌上的 QR code、金流回呼、外部系統都指向它）。見下方。
+- **外部整合**：連到來源內部位址的東西（MCP server、其他服務的 webhook）切換後要改指新服務。
+- **登入**：session 不搬，所有人要重新登入；平台開通時給的管理員帳密不適用，帳密是來源站的。
+- **金流與發票**：正式切換不中和，來源的金流供應商、發票憑證原樣帶過去，回呼網址跟著對外網址走。
+
+## 備份與失敗還原
+
+排切換日之前向調用者說明本節並取得確認。
+
+**資料的副本在哪裡**
+
+| 副本 | 位置 | 留到什麼時候 |
+|---|---|---|
+| 來源站本身 | 來源 ns 的 PVC。匯出全程唯讀（helper pod 的掛載都是唯讀）；凍結只是把 odoo scale 0，postgres 與資料都留著 | 約定的觀察期滿，WMO 才下線 |
+| 匯出組（DB dump、filestore tar、指紋） | 目標 ns 的 incoming PVC；每個檔的 sha256 記在 `export-<ns>-<UTC>.json` | `verify.sh --stage upgrade --cleanup` 刪除 |
+| 新站的平台備份 | 目標服務自己的 backup PVC（與資料不同 volume、同一座叢集）。`<release>-backup` CronJob 每天一份：DB dump＋filestore＋manifest，保留 7 份每日＋4 份每週 | 隨服務存在 |
+
+- 驗收通過後立刻手動加一份，不等當晚的排程：`kubectl -n <ns> create job <名稱> --from=cronjob/<release>-backup`，
+  Job log 出現 `Verified backup` 才算數（stg 實測可用）。prod 上這是寫入，由人放行。
+- 平台目前沒有給租戶按的備份／還原按鈕。要把新站從平台備份還原，由平台管理員照
+  `docs/guides/deployment/tenant-odoo-restore-runbook.md` 人工處理（該檔的租戶段還沒寫完）。還原只回到備份的時點，
+  之後的資料丟失；已寄出的信、金流與發票序號不會跟著回去。
+- 來源 PVC 可以請 WMO 在凍結後加拍一份 Longhorn snapshot 當還原錨點。它與資料在同一顆 volume，不算備份。
+
+**每個階段失敗怎麼回復**
+
+| 失敗在哪裡 | 來源狀態 | 回復 | 資料損失 |
+|---|---|---|---|
+| 步驟 1～5、彩排 | 照常營運 | 不必回復；彩排站可以整個重來 | 無 |
+| 凍結之後、網址改指之前：匯出失敗、還原或比對不過、升級閘 exit 4／78、升級後比對不過 | odoo scale 0 | 來源 odoo scale 回 1（WMO）就恢復營運，網址沒動過。目標站停權留著查原因，修好後 `restore.sh --replace-db` 可重跑，另排一次切換 | 無 |
+| 網址改指之後、新站還沒有真實交易 | odoo scale 0 | 依序：新站停權（讓排程停下來）→ 刪新 route、DNS 指回來源 tunnel（WMO）→ 來源 odoo scale 回 1 → 外部整合指回來源 | 驗收時在新站做的測試資料 |
+| 新站已有真實交易 | 不再使用 | **不能回切**（兩邊資料已分岔）。在新站修；最壞情況從新站的平台備份還原 | 還原會丟掉備份時點之後的資料 |
+
+- 「真實交易」＝新站上不能重做的事：訂單、付款、開出的發票、收進來或寄出去的信。
+- 回切期限事先講好（例：預定開店前 30 分鐘驗收還沒過就回切）。
+- 回切之後要再切一次，得重新凍結匯出：來源恢復營運後資料又變了，舊的匯出組不能再用。
+- 新站一開機排程就會收信、寄信。依 Odoo 的行為（未實測）：新站收過的信來源不會再收到，凍結當時還在佇列的信回切後
+  來源會再寄一次——回切時把這兩件事告訴調用者。
+
+## 對外網址
+
+平台服務自帶一個 `<subdomain>.<平台網域>` 網址。要讓來源的 hostname 繼續指到新服務，用 operator 的 route API 另加一條：
+
+- `POST /api/routes`，body `{"subdomain": "<來源 hostname 的第一段>", "service_url": "http://<release>.<ns>.svc.cluster.local:80"}`
+  ——在平台 tunnel 加 ingress rule 並建 DNS CNAME。只適用於與平台同一個網域的 hostname。
+- ⚠ 那筆 DNS 記錄還指向一條**活著的** tunnel 時 operator 會拒絕（`_assert_dns_repoint_allowed`）：切換時先由來源 tunnel 的
+  管理者刪掉舊的 DNS 記錄（或整條來源 tunnel），再呼叫。順序＝來源下線 → 刪舊記錄 → 加新 route。
+- stg 實測（額外 hostname 指到彩排站）：加上後可用；Redeploy 後仍在；**停權時它回 502**，不會像服務自己的網址改指
+  停權說明頁；`DELETE /api/routes/<subdomain>` 可移除。
+- 平台不認得這條 route：刪服務時不會一起刪，要手動移除。Odoo 端的 `web.base.url` 是來源帶過來的原值，不必改。
+- prod 的 route 是 prod 寫入，由人放行後執行；回切＝刪掉這條 route、把 DNS 指回來源 tunnel。
 
 ## 彩排與中和
 
@@ -90,13 +197,17 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 - **官方 SQL**：Job 用 release 的 odoo image 跑 `odoo neutralize --stdout`，依已安裝模組組出——停用排程（autovacuum 除外）、
   寄信主機換成假的、停用收信、金流供應商、webhook、網站網域等。
 - **補充 SQL**（`scripts/target/neutralize-supplement.sql`）：全部使用者的密碼換成彩排密碼、刪 API key 與 2FA；排程的
-  模組資料改 `noupdate`（`-u all` 不會把它開回來）；WoowTech addon 的對外整合（綠界發票換測試商店、綠界金流憑證、
+  模組資料改 `noupdate`（`-u all` 不會把它開回來）；金流供應商全部停用（含測試模式，否則 `payment` 模組升級時會把
+  交易後處理排程開回來）；WoowTech addon 的對外整合（綠界發票換測試商店、綠界金流憑證、
   POS 自助點餐的 Uber Direct 與出單代理）。
 - **斷言**（`scripts/target/neutralize-assert.sql`）：有任何一項沒中和（`nfail` 行）Job 就失敗、不寫 marker，Odoo 開不了機。
 - **要人看的清單**：Job log 與 `neutralize-report.txt` 的 `nscan` 行＝欄名像憑證、仍有值的欄位（只列表.欄與筆數）。
   逐條判斷是不是對外憑證；是的話寫一段 SQL，用 `--extra-neutralize-sql <file>` 重跑還原。完成條件：`nscan` 逐條看過。
 - **登入**：彩排密碼在 Secret `standalone-odoo-rehearsal-login`（key `password`），所有原本有密碼的帳號共用；帳號名稱不變。
   畫面上方會有 Odoo 的中和橫幅。
+- **先比對、再登入**：`verify.sh --stage upgrade`（以及 Redeploy 後的那一次）要在任何人登入之前跑完。管理員一登入，
+  Odoo 就把 `web.base.url` 改成登入用的網址——彩排站需要這個改動（之前產生的連結都指向來源站的正式網址），
+  但之後再跑比對會看到 `ir_config_parameter` 的客戶資料列不同。
 - **限制**：目標站仍有平台給的對外網址；升級帶進來的新排程會是啟用的（`verify.sh --stage upgrade` 的斷言會抓到，
   抓到就先把 web 停掉）；站別自己加的對外整合只能靠 `nscan` 與人工判斷。
 - ⛔ 中和過的資料庫不得用於正式切換。正式切換重新走一次凍結匯出與不帶 `--neutralize` 的還原。

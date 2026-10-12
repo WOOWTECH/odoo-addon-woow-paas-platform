@@ -64,6 +64,8 @@ _STALE = {
 
 def _client(**kw):
     client = MagicMock()
+    from .publication_receipt_fixture import install_publication_receipts
+    install_publication_receipts(client)
     client.get_tunnel_status = MagicMock(**kw)
     return client
 
