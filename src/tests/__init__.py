@@ -1144,3 +1144,4 @@ from . import test_sa_sh_publication_receipt_ac1011
 
 from . import test_access_sync_receipt_ac1011
 from . import test_access_sync_per_identity_ac1011
+from . import test_rollback_settings_sync

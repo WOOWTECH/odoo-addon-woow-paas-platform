@@ -4915,13 +4915,11 @@ class PaasController(HiddenChainMixin, Controller):
             # release 本身的 Chart.Metadata.Version），這裡先擋是為了給租戶看得懂的
             # 訊息，以及 operator 還沒升到有下限的版本時仍然擋得住。讀不到歷史 ⇒ 不送
             # （fail-closed，回復本來就要讀歷史才選得到 revision）。
-            floor = rollback_floor_violation(
-                client.get_revisions(
+            rollback_history = client.get_revisions(
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
-                ).get('revisions') or [],
-                revision,
-            )
+                ).get('revisions') or []
+            floor = rollback_floor_violation(rollback_history, revision)
             if floor:
                 return {'success': False,
                         'error': self._rollback_chart_downgrade_error(floor)}
@@ -4943,6 +4941,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'last_upgraded_at': fields.Datetime.now(),
             }
             service.write(rollback_vals)
+            # 固定回滾所建立的新 revision；不使用下一輪的任意最新版本。
+            expected_revision = (rollback_result.get('revision') if isinstance(rollback_result, dict) else None)
+            if type(expected_revision) is not int or expected_revision < 1:
+                expected_revision = max((int(row.get('revision') or 0)
+                                         for row in rollback_history), default=0) + 1
+            service._record_rollback_config_sync(expected_revision)
             # #1433：operator 回報回復後實際的 chart 版本（#1526 起兩種模式都回報，且
             # 不會低於回復前）。記下來，帳本才與叢集一致——下一次「修改配置」以
             # `service.helm_chart_version` 釘版（#552 的 resolved_version 以服務自己的版本

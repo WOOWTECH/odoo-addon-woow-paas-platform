@@ -19,7 +19,8 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
-from ..services import dns_probe
+from ..services import dns_probe, rollback_config
+from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
@@ -1972,6 +1973,10 @@ class CloudService(models.Model):
         string='Helm Revision',
         default=1,
         help='Current Helm release revision number',
+    )
+    rollback_config_sync = fields.Text(
+        string='Pending Rollback Configuration Sync', groups='base.group_system',
+        copy=False, help='Platform-only revision, operation anchor and ledger digest; no credentials.',
     )
     helm_chart_version = fields.Char(
         string='Chart Version',
@@ -5451,7 +5456,58 @@ class CloudService(models.Model):
         if extra_vals:
             self.write(extra_vals)
         stripped = self._strip_mcp_sensitive_values(values)
-        self.sudo().write({'helm_values': json.dumps(stripped)})
+        self.sudo().write({'helm_values': json.dumps(stripped), 'rollback_config_sync': False})
+
+    def _record_rollback_config_sync(self, revision):
+        """回滾操作持久待辦；只保存 digest，不複製帳本內憑證。"""
+        self.ensure_one()
+        self.sudo().write({'rollback_config_sync': json.dumps({
+            'operation': uuid.uuid4().hex, 'revision': revision,
+            'anchor': fields.Datetime.to_string(self.last_upgraded_at),
+            'ledger_digest': rollback_config.ledger_digest(self._helm_values_dict()),
+        }, sort_keys=True)})
+
+    def _sync_rollback_config(self, client, release):
+        """Ready 前同步固定回滾 revision；失敗可重試，舊結果不能覆蓋新操作。"""
+        self.ensure_one()
+        pending_raw = self.sudo().rollback_config_sync
+        if not pending_raw:
+            return True
+        try:
+            pending = json.loads(pending_raw)
+            if release.get('revision') != pending['revision']:
+                return False
+            preserved = self._rollback_preserved_value_paths()
+            specs = self.template_id._parse_helm_value_specs_or_fail()
+            if specs is SPECS_UNPARSEABLE:
+                return False
+            paths = rollback_config.public_paths(specs, preserved)
+            response = client.get_config_projection(
+                namespace=self.helm_namespace, release_name=self.helm_release_name,
+                revision=pending['revision'], paths=list(paths), excluded_paths=preserved,
+            ) if paths else {'revision': pending['revision'], 'values': {}, 'missing': []}
+            # 鎖在遠端呼叫之後取得；SQL 同時重驗操作與錨點，序列化衝突下輪重試。
+            rows = self._init_guarded(
+                f"SELECT id FROM {self._table} WHERE id = %s AND rollback_config_sync = %s "
+                "AND last_upgraded_at = %s AND state IN ('upgrading', 'error') FOR UPDATE",
+                (self.id, pending_raw, pending['anchor']))
+            if not rows:
+                return False
+            self.invalidate_recordset(['helm_values', 'rollback_config_sync', 'last_upgraded_at'])
+            current = self._helm_values_dict()
+            latest_specs = self.template_id._parse_helm_value_specs_or_fail()
+            if rollback_config.public_paths(latest_specs, self._rollback_preserved_value_paths()) != paths:
+                return False
+            if rollback_config.ledger_digest(current) != pending['ledger_digest']:
+                return False
+            synchronized = rollback_config.apply_projection(current, response, pending['revision'], paths)
+        except (PaaSOperatorError, ValueError, TypeError, KeyError, UserError):
+            _logger.warning('Rollback configuration sync unavailable for service id=%s', self.id)
+            return False
+        # 任一 DB 寫入失敗由 savepoint 回捲，保留原待辦；不要吞 DB 例外。
+        with self.env.cr.savepoint():
+            self._apply_helm_values(synchronized)
+        return True
 
     def _record_chart_version(self, version):
         """以平台身分回寫 chart 版本帳本（#1525）。
@@ -7332,6 +7388,12 @@ class CloudService(models.Model):
             if not all_ready:
                 service._log_not_ready(detail)
                 stuck_detail = detail
+
+            if all_ready and not service._sync_rollback_config(client, release):
+                # 不能以 Ready 偽裝配置帳本已同步；保留待辦供下一輪。
+                all_ready = False
+                stuck_detail = _('Waiting for rollback settings synchronization')
+                service._log_not_ready(stuck_detail)
 
             if all_ready:
                 # #1267：去向只由欠 init 標記決定（與 controller 那份共用同一判準）。
@@ -9823,6 +9885,11 @@ class CloudService(models.Model):
                 service._park_access_origin(client)
                 _internal_cs_access_identity(service).access_publish_pending = True
             res = super().write(vals)
+            # 新命令錨點撤銷舊待辦；密碼重設等不一定走 _apply_helm_values。
+            if 'last_upgraded_at' in vals and 'rollback_config_sync' not in vals:
+                stale_rollback = self.sudo().filtered('rollback_config_sync')
+                if stale_rollback:
+                    stale_rollback.write({'rollback_config_sync': False})
             if entering_observation_episode:
                 # 命令時間只作 episode 邊界；observed_at 仍保留真實 status poll 證據。
                 super(CloudService, entering_observation_episode).write({
