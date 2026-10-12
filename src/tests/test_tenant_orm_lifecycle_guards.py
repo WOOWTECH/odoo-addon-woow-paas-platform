@@ -30,6 +30,10 @@ ir.rule 約束，**不經過** /woow controller 的角色閘、訂閱閘
 import json
 import uuid
 from unittest.mock import patch
+from .publication_receipt_fixture import (
+    install_publication_receipts,
+    routes_receipt,
+)
 
 from odoo.tests import HttpCase, tagged
 
@@ -217,14 +221,13 @@ class _TenantOrmFixture(HttpCase):
     #  operator mock                                                      #
     # ------------------------------------------------------------------ #
     def _client(self):
-        client = operator_client()
+        client = install_publication_receipts(operator_client())
         client.create_tunnel.return_value = {
             'tunnel_id': 'tun-tog-%s' % uuid.uuid4().hex[:8],
             'tunnel_token': 'tok-tog-%s' % uuid.uuid4().hex[:12],
             'tunnel_name': 'name-tog-%s' % uuid.uuid4().hex[:6],
         }
-        client.sync_tunnel_routes.return_value = {'routes': []}
-        client.sync_access_app.return_value = {}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.check_route_availability.return_value = {
             'status': 'free', 'available': True}
         client.get_tunnel_status.return_value = {'connections': []}

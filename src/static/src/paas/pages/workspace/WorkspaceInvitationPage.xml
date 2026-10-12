@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.WorkspaceInvitationPage">
+    <main class="o_woow_invitation_page">
+      <WoowCard shadow="true" class="'o_woow_invitation_card'">
+        <t t-if="state.accepted">
+          <h1>Invitation accepted</h1>
+          <p>You now have access to the workspace with the role in your invitation.</p>
+          <WoowButton onClick.bind="openWorkspace">Open Workspace</WoowButton>
+        </t>
+        <t t-elif="state.available">
+          <h1>Accept Workspace Invitation</h1>
+          <p>Accept the workspace invitation from your email. You must be signed in to the account that was invited.</p>
+          <p>Access is granted only after you accept. Your invitation sets the role you will receive.</p>
+          <p t-if="state.error" class="o_woow_error_message" role="alert" t-esc="state.error"/>
+          <div class="o_woow_invitation_actions">
+            <WoowButton onClick.bind="acceptInvitation" disabled="state.loading">
+              <t t-if="state.loading">Accepting...</t>
+              <t t-else="">Accept Invitation</t>
+            </WoowButton>
+            <WoowButton variant="'ghost'" onClick.bind="openWorkspaces" disabled="state.loading">Cancel</WoowButton>
+          </div>
+        </t>
+        <t t-else="">
+          <h1>Reopen your invitation email</h1>
+          <p>Sign in to the invited account first, then open the acceptance link in your email again.</p>
+          <p>The invitation link is kept only while this page is open. If the invitation expired or was revoked, ask an administrator for a new one.</p>
+          <WoowButton variant="'ghost'" onClick.bind="openWorkspaces">View Workspaces</WoowButton>
+        </t>
+      </WoowCard>
+    </main>
+  </t>
+</templates>

@@ -61,6 +61,7 @@
         "views/res_config_settings_views.xml",
         "data/subscription_lifecycle_cron.xml",
         "data/mail_templates.xml",
+        "data/workspace_invitation_mail.xml",
         "data/low_balance_warning_cron.xml",
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",

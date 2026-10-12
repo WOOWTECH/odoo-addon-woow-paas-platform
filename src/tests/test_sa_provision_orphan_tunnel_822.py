@@ -115,6 +115,7 @@ transaction-wide 的 field cache，之後非 sudo recordset 的屬性讀取會�
 實測的完整版）。只有 C2（su env 的 happy path）讀它，那裡沒有租戶身分要保護。
 """
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import routes_receipt
 
 from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import TransactionCase
@@ -192,7 +193,7 @@ class _Sa822Fixture(TransactionCase):
             return rec
 
         client.create_tunnel.side_effect = _create
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.delete_tunnel.return_value = {'status': 'deleted'}
         return client
 

@@ -1,3 +1,4 @@
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt, require_tunnel_routes_receipt
 import logging
 import re
 import uuid
@@ -15,6 +16,7 @@ from ..services.paas_operator import (
 )
 
 _logger = logging.getLogger(__name__)
+_DEFER_ACCESS_RELEASE = object()
 
 #: #528 的待回收帳本。用字串而不是 import 具體 class：三腿都要用它，而
 #: `env[...]` 這條路不受 model 檔的 import 順序影響。
@@ -85,6 +87,7 @@ _IDENTITY_ANCHOR_FIELDS = (
 )
 
 _ROUTE_IDENTITY_ANCHOR_FIELDS = (
+    'access_publish_pending',  # server-owned publication state
     'dns_record_id',    # WHICH CF DNS record this route reconciles/deletes
     'access_app_id',    # WHICH CF Access application this route configures
 )
@@ -1149,7 +1152,7 @@ class SecurityAccess(models.Model):
                 # 軸2: bare tunnel — no primary route to self-heal. Just re-run
                 # the declarative route sync (zero routes -> empty sync, tunnel
                 # keeps catch-all 404) + per-route Access for any user routes.
-                self._sync_routes_to_operator()
+                self._sync_routes_to_operator(park_protected=True)
                 # P2.5: if any route was set is_protected (+ policies) on the SA
                 # while it was still pending, the route Access sync never reached
                 # the operator (no live tunnel then). The tunnel exists now, so
@@ -1261,7 +1264,7 @@ class SecurityAccess(models.Model):
             # on the still-pending SA via the configure-then-provision flow.
             # Zero routes -> empty declarative sync -> tunnel keeps the
             # catch-all 404 only (the operator accepts an empty route list).
-            self._sync_routes_to_operator()
+            self._sync_routes_to_operator(park_protected=True)
 
             # P2.5: push per-route Access too if any route was set protected
             # pre-provision. The configure-then-provision flow lets a user mark
@@ -1590,34 +1593,42 @@ class SecurityAccess(models.Model):
     #  Route sync (declarative)                                          #
     # ------------------------------------------------------------------ #
 
-    def _build_route_payload(self, override_service_url=None):
-        """Desired-state payload for sync_tunnel_routes.
+    def _build_route_payload(self, override_service_url=None,
+                             park_protected=False):
+        """Publish protected origins only after an Access app is established.
 
-        Args:
-            override_service_url: when set (e.g. 'http_status:503'),
-                every route's service is replaced — used by suspend.
+        Provision/resume can temporarily park all protected routes while their
+        desired Access state is being restored. Suspension overrides every route.
         """
         self.ensure_one()
         payload = []
         for route in self.route_ids.sorted(key=lambda r: r.id):
+            blocked = route.access_publish_pending or (route.is_protected and (
+                park_protected or not route.access_app_id
+                or route.access_protection_lost))
+            service_url = (override_service_url or
+                           ('http_status:503' if blocked else route.service_url))
             payload.append({
                 'subdomain': route.subdomain_prefix,
-                'service_url': override_service_url or route.service_url,
+                'service_url': service_url,
                 'http_host_header': (
                     route.http_host_header and not override_service_url
+                    and not blocked
                 ),
             })
         return payload
 
-    def _sync_routes_to_operator(self, override_service_url=None):
+    def _sync_routes_to_operator(self, override_service_url=None,
+                                 park_protected=False):
         """Push the full desired route list to the operator (idempotent)."""
         self.ensure_one()
         if not self.tunnel_id:
             return
         client = self._get_operator_client()
+        routes = self._build_route_payload(override_service_url, park_protected)
         result = client.sync_tunnel_routes(
             self.tunnel_id,
-            routes=self._build_route_payload(override_service_url),
+            routes=routes,
             comment=self.canonical_name,
             # #531 歸屬主張：送**鏡回來的 CF name**（`tunnel_name`），不是
             # `canonical_name`。兩者在 SA 上通常相等，但權威的那一份是 CF 自己回的
@@ -1626,6 +1637,8 @@ class SecurityAccess(models.Model):
             # 怎麼改（env token 注入、hash 換種子）都不會讓這道檢查誤判舊列。
             tunnel_name=self.tunnel_name,
         )
+        require_tunnel_routes_receipt(
+            result, self.tunnel_id, routes, self._get_paas_domain())
         # store DNS record ids back on routes
         dns_by_sub = {
             r['subdomain']: r.get('dns_record_id')
@@ -1655,6 +1668,13 @@ class SecurityAccess(models.Model):
         self.ensure_one()
         for route in self.route_ids:
             _force_access_sync(route)._sync_access_to_operator()
+        # Release origins only after EVERY route's Access update succeeded.
+        try:
+            self._sync_routes_to_operator()
+        except (PaaSOperatorError, AccessPublicationError):
+            for route in self.route_ids:
+                _internal_identity(route).access_publish_pending = True
+            raise
 
     def _teardown_route_access(self, app_id, policy_ids, app_name, hostname,
                                anchor_model=None, anchor_id=None,
@@ -1687,7 +1707,7 @@ class SecurityAccess(models.Model):
             return True
         try:
             client = self._get_operator_client()
-            result = client.sync_access_app({
+            payload = {
                 'enabled': False,
                 'canonical_name': self.canonical_name,
                 'app_name': app_name or self.canonical_name,
@@ -1698,7 +1718,9 @@ class SecurityAccess(models.Model):
                 'policies': [],
                 'existing_app_id': app_id or None,
                 'existing_policy_ids': policy_ids or [],
-            })
+            }
+            result = client.sync_access_app(payload)
+            require_access_sync_receipt(result, payload)
         except Exception as e:
             _logger.warning(
                 "[SA] route access teardown failed sa=%s app=%s: %s",
@@ -1796,7 +1818,7 @@ class SecurityAccess(models.Model):
             )
             return
         try:
-            self._sync_routes_to_operator()
+            self._sync_routes_to_operator(override_service_url='http_status:503')
             # P2.5: re-assert per-route Access on resume too. Suspend only
             # 503-freezes route ingress (it does not tear Access apps down), but
             # resuming is also the convergence point for any per-route Access
@@ -1896,6 +1918,10 @@ class SecurityAccess(models.Model):
         （`_do_cleanup` 那個呼叫端不 raise，寫入照常 commit，所以它不傳累加器。）
         """
         self.ensure_one()
+        # Remote app deletion cannot be rolled back with the DB transaction.
+        # If parking fails, stop before removing any authentication boundary.
+        if self.tunnel_id:
+            self._sync_routes_to_operator(override_service_url='http_status:503')
         # #784 相鄰出口 A：舊判準是 `filtered('access_app_id')` ⇒ 「app_id 已空
         # 但 policy 仍帶著 cf id」的 route 從頭到尾不會被看見（那是**合法的持久
         # 狀態**：teardown 只在成功時才一併清 policy 的 cf id，而 P2.5 migration
@@ -2211,6 +2237,9 @@ class SecurityAccessRoute(models.Model):
              'resolved set, the Access app falls back to ALL available IdPs. '
              'Surfaced so the fail-open widening is visible, not dropped.',
     )
+    access_publish_pending = fields.Boolean(
+        string='Access Publication Pending', default=False, readonly=True,
+        help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this route has been '
@@ -2386,6 +2415,11 @@ class SecurityAccessRoute(models.Model):
             for route in self:
                 if route.subdomain_prefix == new_prefix:
                     continue
+                if route.is_protected:
+                    raise UserError(_(
+                        "Protected routes cannot be renamed. Create a new route "
+                        "with a blocked origin, enable its protection, then "
+                        "replace the old route."))
                 err = self._subdomain_prefix_error(new_prefix)
                 if err:
                     raise UserError(_("%s: %r") % (err, new_prefix or ''))
@@ -2409,7 +2443,19 @@ class SecurityAccessRoute(models.Model):
         # operator endpoint is declarative full-state), not by this savepoint.
         # For a pure service_url update (hostnames unchanged) reconcile is a
         # no-op, so there the lock-step is exact.
+        unprotecting = self.browse()
+        if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
+                and vals.get('is_protected') is False):
+            unprotecting = self.filtered(
+                lambda route: route.is_protected and route.access_app_id)
         with self.env.cr.savepoint():
+            # Park every affected tunnel before any route changes intent or
+            # any remote Access app can be deleted.  pending keeps the normal
+            # post-write route push blocked until the exact disabled receipt.
+            for sa in unprotecting.mapped('security_access_id'):
+                sa._sync_routes_to_operator(park_protected=True)
+            if unprotecting:
+                _internal_identity(unprotecting).access_publish_pending = True
             result = super().write(vals)
             # #1196：`subdomain_prefix` 一併觸發——改名的整個「搬 CF」動作就靠
             # 這一次宣告式全量推送：新 hostname 進 ingress、舊 hostname 因為不在
@@ -2421,7 +2467,8 @@ class SecurityAccessRoute(models.Model):
             # 那條路徑本來就要自己負責顯式 re-sync。
             if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
                     and any(k in vals for k in (
-                        'service_url', 'http_host_header', 'subdomain_prefix'))):
+                        'service_url', 'http_host_header', 'subdomain_prefix',
+                        'is_protected'))):
                 for sa in self.mapped('security_access_id'):
                     if sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
@@ -2455,8 +2502,25 @@ class SecurityAccessRoute(models.Model):
                     and any(k in vals for k in (
                         'is_protected', 'login_google', 'login_email_otp',
                         'session_duration', 'subdomain_prefix'))):
+                deferred_release = self.filtered('access_publish_pending')
                 for route in self:
-                    route._sync_access_to_operator()
+                    route._sync_access_to_operator(
+                        _DEFER_ACCESS_RELEASE if deferred_release else None)
+                # Publish once per gateway only after every changed route's
+                # Access receipt has validated.  Clear the group's pending
+                # bits only for the publication attempt; restore on failure.
+                from ..services.paas_operator import PaaSOperatorError
+                for sa in deferred_release.mapped('security_access_id'):
+                    routes = deferred_release.filtered(
+                        lambda route: route.security_access_id == sa)
+                    _internal_identity(routes).access_publish_pending = False
+                    try:
+                        sa._sync_routes_to_operator()
+                    except (PaaSOperatorError, AccessPublicationError) as error:
+                        _internal_identity(routes).access_publish_pending = True
+                        _logger.error(
+                            "[SA] Access batch publication pending routes=%s: %s",
+                            routes.ids, error)
         return result
 
     def unlink(self):
@@ -2839,7 +2903,7 @@ class SecurityAccessRoute(models.Model):
             'existing_policy_ids': self._build_existing_policy_ids(),
         }
 
-    def _sync_access_to_operator(self):
+    def _sync_access_to_operator(self, release_control=None):
         """Push THIS route's full desired Access state to the operator
         (idempotent). Liveness gate matches the route/SA sync: only fires once
         the SA has a live tunnel and is in ('active', 'active_no_route', 'error') — a stage-2
@@ -2883,9 +2947,22 @@ class SecurityAccessRoute(models.Model):
                     self.id, self.subdomain_prefix, sa.id if sa else None),
                 skip)
             return False
+        # Direct compensation/cron repair must park a missing/lost Access app
+        # before attempting reconstruction. Lifecycle force callers parked the
+        # full tunnel first and release it only after all routes succeed.
+        if (self.is_protected and
+                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
+                not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)):
+            sa._sync_routes_to_operator()
+        needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
         client = sa._get_operator_client()
         payload = self._build_access_payload()
         result = client.sync_access_app(payload)
+        require_access_sync_receipt(result, payload)
+        if self.is_protected and not result.get('app_id'):
+            raise AccessProtectionError(_(
+                "Access protection was not established. Origin publication "
+                "is not confirmed; fix the login configuration and retry."))
         # Surface old reusable policies the operator could not delete after
         # repointing the app — permanent Cloudflare orphans (cost/clutter) that
         # no later re-sync reconciles, so make them observable in the log.
@@ -2940,6 +3017,21 @@ class SecurityAccessRoute(models.Model):
             for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
+        # Direct edits/cron can release this route now. Lifecycle convergence
+        # uses the private force sentinel and releases all routes only once every
+        # Access update succeeded, so a later sibling failure stays fail-closed.
+        defer_release = release_control is _DEFER_ACCESS_RELEASE
+        _internal_identity(self).access_publish_pending = bool(
+            defer_release and needs_release)
+        if defer_release:
+            return True
+        if needs_release and not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC):
+            try:
+                sa._sync_routes_to_operator()
+            except (PaaSOperatorError, AccessPublicationError) as error:
+                _internal_identity(self).access_publish_pending = True
+                _logger.error("[SA] Access publication pending route=%s: %s", self.id, error)
+                return False
         return True
 
     def _access_sync_skip_reason(self):
@@ -2964,7 +3056,7 @@ class SecurityAccessRoute(models.Model):
                                            'error'):
             return "Security Access state is %r" % sa.state
         # Nothing to do for an unprotected route that was never an app.
-        return (None if (self.is_protected or self.access_app_id)
+        return (None if (self.is_protected or self.access_app_id or self.access_publish_pending)
                 else 'the route is unprotected and never had an Access app')
 
     def _access_mark_protection_lost(self):
@@ -3019,5 +3111,7 @@ class SecurityAccessRoute(models.Model):
             # 必須吐——不吐的話 UI 只讀得到 is_protected 這個**意圖**欄位，
             # 「以為受保護、實際完全開放」就沒有任何載體說得出口。
             'access_protection_lost': self.access_protection_lost,
+            'access_publish_pending': self.access_publish_pending,
+            'access_configuration_ready': access_configuration_ready(self),
             'access_policies': [p.to_dict() for p in self.access_policy_ids],
         }

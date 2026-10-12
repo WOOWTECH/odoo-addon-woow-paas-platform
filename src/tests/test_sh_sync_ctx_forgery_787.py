@@ -99,6 +99,7 @@ from ..models.smart_home_route import (
     _sm_skip_access_sync,
 )
 from .smart_home_fixture import sh_model
+from .publication_receipt_fixture import install_publication_receipts
 
 _ROUTE = 'woow_paas_platform.smart_home_route'
 #: 🔴 patch 點寫錯不會讓否定性斷言變紅（`sync_access_app.called` 會恆為 False）。
@@ -244,6 +245,8 @@ class _Sh787Fixture(HttpCase):
 
     def _mock(self, result=None):
         client = MagicMock()
+        install_publication_receipts(client)
+        client.sync_access_app.side_effect = None
         client.sync_access_app.return_value = result or _sync_result()
         return client
 

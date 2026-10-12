@@ -61,6 +61,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_USER,
 )
 from ..models.cloud_service import _internal_provision
+from .invitation_mailbox_fixture import accept_queued_invitation
 
 
 def _new_group_user(env, name):
@@ -336,12 +337,21 @@ class TestWorkspaceAccessPositiveControls(_WorkspaceAccess556Fixture):
     """analysis.md §5.3 P1-P7：防 over-correction——修復不得誤傷既有合法流程。
     """
 
+    def setUp(self):
+        super().setUp()
+        self.env.company.email = 'isolated-invite-sender@example.invalid'
+
     def test_P1_owner_can_invite_user_and_admin(self):
         self.authenticate(self.alice_login, self.alice_login)
         for role in (ROLE_USER, ROLE_ADMIN):
-            invitee, _ = _new_group_user(self.env, 'p1invitee%s556' % role)
+            invitee, password = _new_group_user(self.env, 'p1invitee%s556' % role)
+            invitee.login = invitee.email
             result = self._post_api('/api/workspaces/%s/members' % self.ws1.id, {
-                'action': 'invite', 'email': invitee.email, 'role': role})
+                'action': 'invite', 'email': invitee.login, 'role': role,
+                'invitation_mode': 'mailbox_challenge_v1'})
+            result = accept_queued_invitation(
+                self, result, invitee, password, self._post_api)
+            self.authenticate(self.alice_login, self.alice_login)
             self.assertTrue(
                 result.get('success'),
                 'owner 邀請 role=%s 應成功（回 %r）' % (role, result))
@@ -353,9 +363,14 @@ class TestWorkspaceAccessPositiveControls(_WorkspaceAccess556Fixture):
         project_access』改掉。"""
         self.carol_access.sudo().write({'role': ROLE_ADMIN})
         self.authenticate(self.carol_login, self.carol_login)
-        invitee, _ = _new_group_user(self.env, 'p2invitee556')
+        invitee, password = _new_group_user(self.env, 'p2invitee556')
+        invitee.login = invitee.email
         result = self._post_api('/api/workspaces/%s/members' % self.ws1.id, {
-            'action': 'invite', 'email': invitee.email, 'role': ROLE_ADMIN})
+            'action': 'invite', 'email': invitee.login, 'role': ROLE_ADMIN,
+            'invitation_mode': 'mailbox_challenge_v1'})
+        result = accept_queued_invitation(
+            self, result, invitee, password, self._post_api)
+        self.authenticate(self.carol_login, self.carol_login)
         self.assertTrue(result.get('success'),
                         'admin 邀請 role=admin 應成功（回 %r）' % result)
 

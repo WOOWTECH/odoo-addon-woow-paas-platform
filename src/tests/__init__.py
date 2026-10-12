@@ -18,6 +18,7 @@ from . import test_security_access_subscription_flow
 from . import test_security_access_endpoints
 from . import test_smart_home_subscription_flow
 from . import test_oauth2
+from . import test_oauth_subject_http_ac1011
 from . import test_oauth2_device_flow
 from . import test_ha_api
 from . import test_ha_api_security_access
@@ -1123,4 +1124,24 @@ from . import test_oauth_scope_http_20261011
 from . import test_workspace_route_identity_20261011
 
 from . import test_shc_durable_provision_prototype
+from . import test_security_access_fail_closed_ac1011
+
+from . import test_cs_sh_fail_closed_ac1011
+
+from . import test_actual_operator_publish_recovery_ac1011
+
+from . import test_access_publish_pending_ac1011
+
+from . import test_invite_profile_identity_ac1011
+
+from . import test_invite_login_boundary_ac1011
+
+from . import test_cs_resume_publication_contract_ac1011
+
+from . import test_workspace_invitation_ac1011
+
+from . import test_sa_sh_publication_receipt_ac1011
+
+from . import test_access_sync_receipt_ac1011
+from . import test_access_sync_per_identity_ac1011
 from . import test_rollback_settings_sync

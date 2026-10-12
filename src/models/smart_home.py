@@ -1,3 +1,4 @@
+from ..services.access_state import AccessProtectionError, AccessPublicationError, require_tunnel_config_receipt
 import logging
 import re
 import uuid
@@ -452,6 +453,14 @@ class SmartHome(models.Model):
         推回 localhost（那裡的訂閱檢查對「沒有訂閱」放行），而 cron 從此摸不到
         這一台。理由與豁免見 `subscription_lifecycle_mixin` 模組頂端。
         """
+        if 'subdomain' in vals:
+            for home in self:
+                if (vals['subdomain'] != home.subdomain and
+                        any(route.is_protected for route in
+                            home.sudo().route_ids.filtered('is_primary'))):
+                    raise UserError(_(
+                        "Protected Smart Home hostnames cannot be changed. "
+                        "Create and verify a replacement before deleting this one."))
         _reject_identity_anchor_writes(self.env, vals)
         self._guard_tenant_lifecycle_write(vals)
         return super().write(vals)
@@ -550,6 +559,47 @@ class SmartHome(models.Model):
             return existing
         return Route.create({'smart_home_id': self.id, 'is_primary': True})
 
+    def _sync_access_ingress(self, park=False, service_url=None,
+                             allow_halted=False):
+        """Keep the current single primary hostname blocked until protection exists.
+
+        Smart Home does not yet support non-primary tunnel ingress. Use the
+        authoritative primary route, including when record rules hide the row.
+        API acknowledgement alone does not prove connector propagation.
+        """
+        self.ensure_one()
+        if not self.tunnel_id:
+            return
+        primary = self.sudo().route_ids.filtered('is_primary')
+        blocked = (park or (self._is_halted() and not allow_halted)
+                   or not self._is_subscription_active()) or any(
+            route.access_publish_pending or
+            (route.is_protected and (not route.access_app_id or
+                                    route.access_protection_lost))
+            for route in primary)
+        target = ('http_status:503' if blocked else
+                  service_url or self.original_service_url or
+                  f"http://localhost:{self.ha_port}")
+        hostname = f"{self.subdomain}.{self._get_paas_domain()}"
+        result = self._get_operator_client().configure_tunnel(
+            self.tunnel_id, hostname=hostname,
+            service_url=target, tunnel_name=self.tunnel_name)
+        require_tunnel_config_receipt(result, hostname, target)
+
+    def _sync_all_access_then_publish(self, service_url=None,
+                                      allow_halted=False):
+        """Lifecycle caller has parked ingress; publish only after every sync."""
+        self.ensure_one()
+        for route in self.sudo().route_ids:
+            _sm_forced_access_sync(route)._sync_access_to_operator()
+        try:
+            self._sync_access_ingress(
+                service_url=service_url, allow_halted=allow_halted)
+        except (PaaSOperatorError, AccessPublicationError):
+            for route in self.sudo().route_ids:
+                _internal_sm_route_identity(route).access_publish_pending = True
+            raise
+
     def _teardown_routes_access(self, torn_down=None):
         """拆掉本 SH 所有 route 的 Cloudflare Access。回傳失敗的 route 標籤清單。
 
@@ -566,6 +616,9 @@ class SmartHome(models.Model):
         帶著 `is_protected=True` 與死 app id 復活（#794 的形狀）。
         """
         self.ensure_one()
+        if self.tunnel_id:
+            # Stop before deleting Access if the protected origin cannot park.
+            self._sync_access_ingress(park=True)
         Route = self.env['woow_paas_platform.smart_home_route'].sudo()
         failed = []
         for route in self.sudo().route_ids:
@@ -677,7 +730,7 @@ class SmartHome(models.Model):
             result = client.create_tunnel(
                 name=self._generate_tunnel_name(),
                 hostname=hostname,
-                service_url=f"http://localhost:{self.ha_port}",
+                service_url="http_status:503",
             )
 
             # tunnel 已經誕生且在計費——不論下面判成功或失敗，這些欄位都要落地，
@@ -734,12 +787,15 @@ class SmartHome(models.Model):
 
             anchored.write(dict(
                 tunnel_vals,
-                state='active',
+                state='provisioning',
                 deployed_at=fields.Datetime.now(),
             ))
             # #768：Access 錨點載體。subdomain 必須先落地（route 的 hostname 由
             # 它 compute），所以放在 write 之後。冪等，重跑不會長出第二條。
             self._ensure_primary_route()
+            self._sync_all_access_then_publish(
+                service_url=f"http://localhost:{self.ha_port}")
+            self.write({'state': 'active', 'error_message': False})
 
             _logger.info(
                 "Smart Home '%s' provisioned successfully. Tunnel ID: %s",
@@ -761,6 +817,10 @@ class SmartHome(models.Model):
                     "Tunnel creation failed: %(detail)s", detail=e.message),
             })
             _logger.error("Smart Home provision error: %s", e.message)
+
+        except AccessProtectionError as e:
+            self.write({'state': 'error', 'error_message': str(e)})
+            _logger.error("Smart Home protection configuration error: %s", e)
 
     def _converge_existing_tunnel(self):
         """重試開通、而 tunnel 已經存在：在**同一條** tunnel 上把 ingress／DNS 推回去。
@@ -855,7 +915,7 @@ class SmartHome(models.Model):
                 self.tunnel_id,
                 routes=[{
                     'subdomain': self.subdomain,
-                    'service_url': f"http://localhost:{self.ha_port}",
+                    'service_url': 'http_status:503',
                     'http_host_header': False,
                 }],
                 comment=self.tunnel_name or None,
@@ -867,8 +927,8 @@ class SmartHome(models.Model):
             # 與 `_do_resume` 同一個收斂點：state 此刻是 `provisioning`，route 的
             # liveness gate 會擋掉非 forced 的推送 ⇒ 要帶 forced 旗標。未保護且沒有
             # app id 的 route 是 no-op（`_access_sync_skip_reason`）。
-            for route in self.route_ids:
-                _sm_forced_access_sync(route)._sync_access_to_operator()
+            self._sync_all_access_then_publish(
+                service_url=f"http://localhost:{self.ha_port}")
             vals = {'state': 'active', 'error_message': False}
             if not self.deployed_at:
                 vals['deployed_at'] = fields.Datetime.now()
@@ -1394,9 +1454,11 @@ class SmartHome(models.Model):
                 client.configure_tunnel(
                     self.tunnel_id,
                     hostname=hostname,
-                    service_url=service_url,
+                    service_url="http_status:503",
                     tunnel_name=self.tunnel_name,  # #531 歸屬主張
                 )
+                self._sync_all_access_then_publish(
+                    service_url=service_url, allow_halted=True)
                 _logger.info(
                     "[SH] _do_resume tunnel restored sh=%s tunnel=%s",
                     self.id, self.tunnel_id,
@@ -1406,7 +1468,7 @@ class SmartHome(models.Model):
                     "[SH] _do_resume tunnel failed sh=%s: %s",
                     self.id, e,
                 )
-                self.write({'state': 'error'})
+                self.write({'state': 'error', 'error_message': str(e)})
                 return
 
         restore_state = self.pre_suspend_state or 'active'
@@ -1419,8 +1481,6 @@ class SmartHome(models.Model):
         # Access app 留著無害）。resume 是刻意的收斂點，補一次 forced sync；沒有
         # 它的話「停權期間被關掉保護的 route」永遠不會被推回 Cloudflare，而症狀
         # 與「保護正常運作」完全一樣。
-        for route in self.route_ids:
-            _sm_forced_access_sync(route)._sync_access_to_operator()
         _logger.info(
             "[SH] _do_resume done sh=%s new_state=%s",
             self.id, restore_state,

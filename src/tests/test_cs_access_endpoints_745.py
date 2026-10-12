@@ -166,7 +166,19 @@ class _CsAccessEndpointFixture(HttpCase):
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = result or _sync_result()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        # AC1011: the origin boundary now consumes the real parking contract.
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
+        if result is not None:
+            client.sync_access_app.return_value = result
+        else:
+            client.sync_access_app.side_effect = lambda payload: _sync_result(
+                policy_ids=['policy-%s' % index for index, _policy in
+                            enumerate(payload.get('policies', []), 1)]) | {
+                    'allowed_idps': ['idp-'+kind for kind in
+                                     payload.get('login_idp_types', [])]}
         return client
 
     def _assert_ok(self, result, msg):
@@ -462,6 +474,11 @@ class TestCsAccessTenantRpcChain(_CsAccessEndpointFixture):
         """
         self.authenticate(self.alice_login, self.alice_login)
         client = MagicMock()
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        # AC1011: the origin boundary now consumes the real parking contract.
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         client.sync_access_app.side_effect = RuntimeError('operator down')
         with patch(MOCK_GET_CLIENT, return_value=client):
             res = self._access_config({'is_protected': True})
@@ -646,3 +663,5 @@ class TestCsAccessQuotaBffSudoCrossUser1053(_CsAccessEndpointFixture):
             '非成員不得從錯誤訊息得知這台服務的配額狀態（%r）' % (res,))
         self.assertEqual(self._pool(self.svc), before,
                          '被拒的請求不得建出任何 policy')
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt

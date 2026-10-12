@@ -22,6 +22,10 @@ from odoo.addons.woow_paas_platform.models.security_access import (
 from ..models.security_access import (
     _internal_policy_cf_write as _internal_policy_cf,
 )
+from .publication_receipt_fixture import (
+    access_receipt,
+    install_publication_receipts,
+)
 
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
@@ -439,12 +443,7 @@ class TestRouteAccessSync(TransactionCase):
         return sa, route
 
     def _mock(self):
-        m = MagicMock()
-        m.sync_tunnel_routes.return_value = {'routes': []}
-        m.sync_access_app.return_value = {
-            'app_id': 'app-1', 'policy_ids': ['pol-1'],
-            'allowed_idps': ['idp-g', 'idp-otp']}
-        return m
+        return install_publication_receipts(MagicMock())
 
     def test_build_payload_single_route_scope(self):
         """route._build_access_payload → domain = destinations = 該 route
@@ -746,9 +745,11 @@ class TestRouteAccessSync(TransactionCase):
         """多 policy writeback 順序：zip(route.access_policy_ids.sorted, returned)
         須各自對位（sequence,id 排序）。"""
         mc = self._mock()
-        mc.sync_access_app.return_value = {
-            'app_id': 'app-1', 'policy_ids': ['cf-low', 'cf-high'],
-            'allowed_idps': ['idp-g']}
+        mc.sync_access_app.side_effect = (
+            lambda payload: access_receipt(
+                payload, policy_ids=(['cf-low', 'cf-high']
+                                     if len(payload.get('policies') or []) == 2
+                                     else None)))
         sa, route = self._active_sa(mc, protected=True)
         with patch(MOCK_GET_CLIENT, return_value=mc):
             pol_high = self.Policy.create({
@@ -763,24 +764,25 @@ class TestRouteAccessSync(TransactionCase):
         self.assertEqual(pol_high.cf_policy_id, 'cf-high')
 
     def test_unresolved_idp_types_persisted_per_route(self):
-        """operator 的 unresolved_idp_types（fail-open 訊號）落 route 欄位 +
-        route.to_dict 暴露。"""
+        """A partial IdP resolution is rejected without replacing anchors."""
         mc = self._mock()
+        sa, route = self._active_sa(mc, protected=True)
+        mc.sync_access_app.side_effect = None
         mc.sync_access_app.return_value = {
             'app_id': 'app-1', 'policy_ids': [], 'allowed_idps': ['idp-otp'],
-            'unresolved_idp_types': ['google']}
-        sa, route = self._active_sa(mc, protected=True)
+            'unresolved_idp_types': ['google'], 'orphaned_policy_ids': []}
+        old_app_id = route.access_app_id
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            with self.assertRaises(UserError):
+                route.write({'login_google': True})
+        route.invalidate_recordset()
+        self.assertEqual(route.access_app_id, old_app_id)
+        self.assertFalse(route.login_google)
+
+        mc.sync_access_app.side_effect = access_receipt
         with patch(MOCK_GET_CLIENT, return_value=mc):
             route.write({'login_google': True})
-        self.assertEqual(route.access_unresolved_idp_types, 'google')
-        self.assertEqual(route.to_dict()['access_unresolved_idp_types'],
-                         'google')
-        # 後續乾淨 sync 清除舊警告
-        mc.sync_access_app.return_value = {
-            'app_id': 'app-1', 'policy_ids': [], 'allowed_idps': ['idp-g'],
-            'unresolved_idp_types': []}
-        with patch(MOCK_GET_CLIENT, return_value=mc):
-            route.write({'session_duration': '8h'})
+        self.assertTrue(route.login_google)
         self.assertFalse(route.access_unresolved_idp_types)
 
     def test_error_state_with_live_tunnel_still_syncs(self):
@@ -834,13 +836,12 @@ class TestProvisionPushesRouteAccess(TransactionCase):
             {'name': 'PPA WS'})
 
     def _mock(self):
-        m = MagicMock()
+        m = install_publication_receipts(MagicMock())
         m.create_tunnel.return_value = {
             'tunnel_id': 'tun-ppa', 'tunnel_token': 'tok',
             'tunnel_name': 'paas-sa-x-y', 'dns_record_id': 'rec-1'}
-        m.sync_tunnel_routes.return_value = {'routes': []}
-        m.sync_access_app.return_value = {
-            'app_id': 'app-ppa', 'policy_ids': ['pol-ppa'], 'allowed_idps': []}
+        m.sync_access_app.side_effect = (
+            lambda payload: access_receipt(payload, app_id='app-ppa'))
         return m
 
     def test_first_provision_pushes_preconfigured_route_access(self):
@@ -888,16 +889,12 @@ class TestRouteAccessCleanup(TransactionCase):
             {'name': 'AL WS'})
 
     def _mock(self):
-        m = MagicMock()
-        m.sync_tunnel_routes.return_value = {'routes': []}
-        m.sync_access_app.return_value = {'app_id': None, 'policy_ids': [],
-                                          'allowed_idps': []}
-        return m
+        return install_publication_receipts(MagicMock())
 
     def test_cleanup_tears_down_each_route_access(self):
         mc = self._mock()
-        mc.sync_access_app.return_value = {
-            'app_id': 'app-al', 'policy_ids': [], 'allowed_idps': []}
+        mc.sync_access_app.side_effect = (
+            lambda payload: access_receipt(payload, app_id='app-al'))
         with patch(MOCK_GET_CLIENT, return_value=mc):
             sa = self.SA.create({'name': 'AL GW',
                                  'workspace_id': self.workspace.id})
@@ -909,8 +906,6 @@ class TestRouteAccessCleanup(TransactionCase):
             # route.access_app_id 已回填 app-al
             self.assertEqual(route.access_app_id, 'app-al')
             # cleanup 用 enabled=False teardown
-            mc.sync_access_app.return_value = {
-                'app_id': None, 'policy_ids': [], 'allowed_idps': []}
             mc.sync_access_app.reset_mock()
             sa._do_cleanup()
         self.assertTrue(mc.sync_access_app.called)
@@ -921,8 +916,8 @@ class TestRouteAccessCleanup(TransactionCase):
 
     def test_cleanup_access_teardown_failure_does_not_report_clean(self):
         mc = self._mock()
-        mc.sync_access_app.return_value = {
-            'app_id': 'app-al-err', 'policy_ids': [], 'allowed_idps': []}
+        mc.sync_access_app.side_effect = (
+            lambda payload: access_receipt(payload, app_id='app-al-err'))
         with patch(MOCK_GET_CLIENT, return_value=mc):
             sa = self.SA.create({'name': 'AL GW err',
                                  'workspace_id': self.workspace.id})

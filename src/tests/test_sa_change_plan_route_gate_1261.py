@@ -26,6 +26,7 @@ constraint，換方案不寫 route ⇒ 從來沒被叫醒。#773 的席位 gate 
 import ast
 import pathlib
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import routes_receipt
 
 from odoo.tests.common import TransactionCase
 
@@ -97,7 +98,7 @@ class _RouteGateFixture:
             if journal:
                 company.sh_journal_id = journal.id
         self.mc = MagicMock()
-        self.mc.sync_tunnel_routes.return_value = {'routes': []}
+        self.mc.sync_tunnel_routes.side_effect = routes_receipt
         self.mc.sync_access_app.return_value = {
             'app_id': 'app-1261', 'policy_ids': [], 'allowed_idps': []}
         self.sa = self.SecurityAccess.create({

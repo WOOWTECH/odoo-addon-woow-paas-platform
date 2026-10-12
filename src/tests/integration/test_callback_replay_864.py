@@ -2100,21 +2100,36 @@ class TestCallbackReplayEngine864(BaseCase):
 
         用**真的**故障製造：另一條連線對 incident 表取 ``ACCESS EXCLUSIVE``，
         replay 的候選 query 撞 1 秒 ``lock_timeout`` 而拋。⛔ 沒有 mock 我們
-        自己的任何一段。
+        自己的任何一段。incident 讀取同樣不可用時，沒有交易的未知 topup
+        必須 fail closed 留在 pending；另一筆已有 error 交易的 topup 則不需
+        incident 裁決，必須由 cleanup 安全標成 failed，證明 cleanup 確實有跑。
         """
         hard = self.env_hard_cancel_min()
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
-            partner = self._new_partner(env, 'K3')
-            orphan = env['woow.wallet.topup'].sudo().create({
-                'partner_id': partner.id,
+            unknown_partner = self._new_partner(env, 'K3-unknown')
+            unknown = env['woow.wallet.topup'].sudo().create({
+                'partner_id': unknown_partner.id,
                 'amount': 500.0, 'credits': 500.0, 'bonus': 50.0,
                 'currency_id': self.currency_id,
                 'state': 'pending', 'source': 'manual',
             })
-            orphan_id = orphan.id
+            known_partner = self._new_partner(env, 'K3-known-error')
+            known, known_tx = self._new_topup_and_tx(
+                env, known_partner, '%sK3ERR' % self.marker,
+                topup_state='pending', tx_state='draft')
+            # Set the durable transaction fact before taking the incident-table
+            # lock.  The cleanup path must use this real state, not a mock.
+            cr.execute(
+                'UPDATE payment_transaction SET state = %s WHERE id = %s',
+                ('error', known_tx.id))
+            unknown_id = unknown.id
+            unknown_partner_id = unknown_partner.id
+            known_id = known.id
+            known_partner_id = known_partner.id
             cr.commit()
-        self._age_topup(orphan_id, hard + 5)
+        self._age_topup(unknown_id, hard + 5)
+        self._age_topup(known_id, hard + 5)
 
         with self.registry.cursor() as blocker:
             blocker.execute(
@@ -2122,10 +2137,19 @@ class TestCallbackReplayEngine864(BaseCase):
             self._run_cleanup()
 
         self.assertEqual(
-            self._topup_state(orphan_id), 'cancelled',
-            'replay 段拋例外 ⛔ 不得讓 cleanup 段死掉——兩段是各自的'
-            'failure domain（同 PR-E 的紀律）',
+            self._topup_state(unknown_id), 'pending',
+            'incident read unavailable 時未知、無交易的 topup 必須 fail closed；'
+            '不得猜成使用者取消',
         )
+        self.assertEqual(
+            self._topup_state(known_id), 'failed',
+            'replay 段拋例外仍不得讓 cleanup 段死掉：已有 error 交易的安全'
+            'fixture 必須由真實 cleanup 標成 failed',
+        )
+        self.assertEqual(self._points(unknown_partner_id), 0.0)
+        self.assertEqual(self._points(known_partner_id), 0.0)
+        self.assertEqual(self._wallet_tx_count(unknown_partner_id), 0)
+        self.assertEqual(self._wallet_tx_count(known_partner_id), 0)
 
     def test_cleanup_segment_failure_does_not_roll_back_a_committed_replay(
             self):

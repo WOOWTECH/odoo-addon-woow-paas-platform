@@ -39,7 +39,7 @@ assert.doesNotMatch(tabSource, /from "\.\.?\//, "所有相對 import 都必須�
 globalThis.__addonsTabCloudService = {};
 const { AddonsTab } = await import(toDataUrl(tabSource));
 
-function makeTab(service) {
+function makeTab(service, props = { canManage: true }) {
   const calls = { check: [], update: [] };
   Object.assign(globalThis.__addonsTabCloudService, {
     async checkAddonRemoval(serviceId, removed) {
@@ -52,7 +52,7 @@ function makeTab(service) {
     },
   });
   const tab = Object.create(AddonsTab.prototype);
-  tab.props = { service, workspaceId: 7 };
+  tab.props = { service, workspaceId: 7, ...props };
   tab.state = {
     editing: false, saving: false, checking: false, error: null,
     selectedIds: [], showDialog: false, dialogModules: {},
@@ -90,6 +90,16 @@ test("額度出口 error：取消勾選（removal）本地擋下，零預檢、�
 
 test("helm 失敗的 error（非額度出口）：整個 tab 不可編輯", () => {
   const { tab } = makeTab({ ...quotaError, init_exit: false, init_reconfigure_allowed: false });
+  assert.equal(tab.canEdit, false);
+});
+
+test("後端 capability=false：即使 service state 可編輯仍 fail-closed", () => {
+  const { tab } = makeTab({ ...quotaError, state: "running" }, { canManage: false });
+  assert.equal(tab.canEdit, false);
+});
+
+test("後端 capability 缺欄位：舊快取／不完整 payload 仍 fail-closed", () => {
+  const { tab } = makeTab({ ...quotaError, state: "running" }, {});
   assert.equal(tab.canEdit, false);
 });
 

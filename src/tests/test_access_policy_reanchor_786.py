@@ -55,6 +55,7 @@ write 看起來確實打了 operator，只是打的是新錨點。
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import access_receipt, routes_receipt
 
 from odoo.exceptions import AccessError
 from odoo.tests import TransactionCase, tagged
@@ -106,9 +107,13 @@ class _Fixture:
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = (
-            _sync_result() if result is None else result)
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        if result is None:
+            client.sync_access_app.side_effect = access_receipt
+        else:
+            client.sync_access_app.return_value = result
+        client.sync_tunnel_routes.side_effect = routes_receipt
+        client.park_release_route.return_value = {'status': 'parked'}
+        client.unpark_release_route.return_value = {'status': 'unparked'}
         return client
 
     def _responder(self, client, by_app_id, default=None):
@@ -119,7 +124,16 @@ class _Fixture:
         """
         def _fn(payload):
             key = payload.get('existing_app_id')
-            return by_app_id.get(key, default or _sync_result())
+            template = by_app_id.get(key, default)
+            if template is None:
+                return access_receipt(payload)
+            count = len(payload.get('policies') or [])
+            mapped_ids = list(template.get('policy_ids') or [])
+            return access_receipt(
+                payload, app_id=template.get('app_id'),
+                policy_ids=(mapped_ids if len(mapped_ids) == count else None),
+                allowed_idps=template.get('allowed_idps') or None,
+                orphaned_policy_ids=template.get('orphaned_policy_ids') or [])
         client.sync_access_app.side_effect = _fn
         return client
 

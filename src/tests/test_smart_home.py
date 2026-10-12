@@ -144,6 +144,8 @@ class TestSmartHome(TransactionCase):
     def test_provision_success(self, mock_get_client):
         """Test successful provisioning creates tunnel."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-abc123',
             'tunnel_token': 'tok-secret',
@@ -174,6 +176,8 @@ class TestSmartHome(TransactionCase):
         改動即可讓 stg tunnel 自證 env、對外 URL 零變更。
         """
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-stg-1',
             'tunnel_token': 'tok',
@@ -205,6 +209,8 @@ class TestSmartHome(TransactionCase):
         """prod 預設（regression lock）：傳給 operator 的 name == 對外 hostname base
         == stored subdomain（byte-identical 舊行為，token 路徑零回歸）。"""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.return_value = {
             'tunnel_id': 'tun-prod-1',
             'tunnel_token': 'tok',
@@ -228,6 +234,8 @@ class TestSmartHome(TransactionCase):
         """Test provisioning handles connection error."""
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorConnectionError
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.side_effect = PaaSOperatorConnectionError(
             message='Connection refused'
         )
@@ -247,6 +255,8 @@ class TestSmartHome(TransactionCase):
         """Test provisioning handles operator API error."""
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.create_tunnel.side_effect = PaaSOperatorError(
             message='Tunnel name already exists'
         )
@@ -265,6 +275,8 @@ class TestSmartHome(TransactionCase):
     def test_delete_with_tunnel(self, mock_get_client):
         """Test deleting a smart home with an existing tunnel."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_get_client.return_value = mock_client
 
         home = self.SmartHome.create({
@@ -284,6 +296,8 @@ class TestSmartHome(TransactionCase):
     def test_delete_without_tunnel(self, mock_get_client):
         """Test deleting a smart home without a tunnel."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_get_client.return_value = mock_client
 
         home = self.SmartHome.create({
@@ -307,6 +321,8 @@ class TestSmartHome(TransactionCase):
         """
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='upstream 503')
         mock_get_client.return_value = mock_client
 
@@ -336,6 +352,8 @@ class TestSmartHome(TransactionCase):
         """
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='upstream 503')
         mock_get_client.return_value = mock_client
 
@@ -363,6 +381,8 @@ class TestSmartHome(TransactionCase):
         擋「_cleanup_tunnel 成功路徑被改壞」的回歸（純負向測試不足）。
         """
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_get_client.return_value = mock_client
 
         home = self.SmartHome.create({
@@ -393,6 +413,8 @@ class TestSmartHome(TransactionCase):
         """
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='upstream 503')
         mock_get_client.return_value = mock_client
 
@@ -412,6 +434,8 @@ class TestSmartHome(TransactionCase):
     def test_refresh_status_connected(self, mock_get_client):
         """Test refreshing status with connected tunnel."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.return_value = {
             'connections': [{
                 'connector_id': 'conn-123',
@@ -437,6 +461,8 @@ class TestSmartHome(TransactionCase):
     def test_refresh_status_disconnected(self, mock_get_client):
         """Test refreshing status with no connections."""
         mock_client = MagicMock()
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.return_value = {
             'connections': [],
         }
@@ -474,3 +500,5 @@ class TestSmartHome(TransactionCase):
         home_id = home.id
         self.workspace.unlink()
         self.assertFalse(self.SmartHome.browse(home_id).exists())
+
+from .publication_receipt_fixture import configure_receipt, routes_receipt
