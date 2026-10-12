@@ -8,8 +8,10 @@
 3. 升級被 409 擋下時，同一個 release 的其他資源（Deployment）也沒被改——#1158 實測的
    「Deployment 換新、data PVC 沒擴、release failed」半套狀態不會再出現。
 
-建一顆 1Gi 的 Longhorn PVC（共用叢集上的最小代價）；「放不下」的大小取「目前最大可放的
-volume」再加 1 TiB，任何一顆磁碟都放不下這個增量。叢集沒有 Longhorn 時整檔 skip。
+建一顆 1Gi 的 Longhorn PVC（共用叢集上的最小代價）；「放不下」的大小取
+所有 disk 的最高 over-provision 排程上限再加 1 GiB，任何一顆磁碟都放不下這個增量。
+先以 backend dry-run 確認拒絕，才跑真正的拒絕升級案例，避免負測誤佔排程額度。
+叢集沒有 Longhorn 時整檔 skip。
 """
 import json
 import subprocess
@@ -61,11 +63,32 @@ def _chart(chart_dir, storage_class):
     return str(chart_dir)
 
 
-def _too_big_delta(app_client) -> int:
+def _too_big_delta(app_client, namespace) -> int:
     body = app_client.get("/api/cluster/storage-capacity",
                           params={"storage_class": _longhorn_class()}).json()
     assert body["available"] is True, body
-    return body["largest_placeable_volume_degraded_bytes"] + 1024 * GIB
+    # available/degraded 是目前保守可開通額度，不是 admission 的硬上限。
+    # Longhorn 擴容仍可用 over-provision 額度；加固定 1TiB 不保證放不下。
+    nodes = _kubectl_json("get", "nodes.longhorn.io", "-n", "longhorn-system")
+    setting = _kubectl_json("get", "settings.longhorn.io",
+                           "storage-over-provisioning-percentage", "-n", "longhorn-system")
+    percent = int(setting["value"])
+    maxima = [int(disk["storageMaximum"])
+              for node in nodes["items"]
+              for disk in node.get("status", {}).get("diskStatus", {}).values()
+              if int(disk.get("storageMaximum", 0)) > 0]
+    assert maxima and percent > 0
+    delta = max(maxima) * max(percent, 100) // 100 + GIB
+    requested = str(GIB + delta)
+    dry = subprocess.run([
+        "kubectl", "patch", "pvc", "probe-data", "-n", namespace,
+        "--type=merge", "--dry-run=server", "-p",
+        json.dumps({"spec": {"resources": {"requests": {"storage": requested}}}}),
+    ], capture_output=True, text=True)
+    assert dry.returncode != 0 and "validator.longhorn.io" in dry.stderr, (
+        "negative expansion prerequisite must be rejected by Longhorn admission")
+    assert _pvc_size(namespace) == "1Gi"
+    return delta
 
 
 @pytest.fixture
@@ -74,6 +97,8 @@ def probe_release(app_client, test_namespace, tmp_path):
     r = app_client.post("/api/releases", json={
         "namespace": test_namespace, "name": "probe", "chart": chart})
     assert r.status_code == 201, r.text
+    # PVC Pending 還没有對應的 Longhorn volume，server dry-run 可能跳過 validator。
+    _bound_volume_name(test_namespace)
     return chart
 
 
@@ -124,7 +149,7 @@ def test_preflight_accepts_a_small_expansion_and_changes_nothing(
 
 
 def test_preflight_reports_longhorn_capacity_denial(app_client, test_namespace, probe_release):
-    size = str(GIB + _too_big_delta(app_client))
+    size = str(GIB + _too_big_delta(app_client, test_namespace))
     r = app_client.post(f"/api/releases/{test_namespace}/probe/upgrade-preflight", json={
         "chart": probe_release, "reset_values": True, "values": {"size": size}})
     assert r.status_code == 409, r.text
@@ -136,7 +161,7 @@ def test_preflight_reports_longhorn_capacity_denial(app_client, test_namespace, 
 
 
 def test_upgrade_refused_before_anything_is_applied(app_client, test_namespace, probe_release):
-    size = str(GIB + _too_big_delta(app_client))
+    size = str(GIB + _too_big_delta(app_client, test_namespace))
     r = app_client.patch(f"/api/releases/{test_namespace}/probe", json={
         "chart": probe_release, "reset_values": True,
         "values": {"size": size, "marker": "v2"}})
