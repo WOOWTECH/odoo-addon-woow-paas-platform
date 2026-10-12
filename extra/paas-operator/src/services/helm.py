@@ -358,7 +358,7 @@ def _sanitize_release_values(values: Any) -> Any:
 
 
 def validate_namespace(namespace: str) -> None:
-    """Validate that namespace starts with allowed prefix."""
+    """Validate the tenant prefix without crossing the reserved staging boundary."""
     prefix = settings.namespace_prefix
     if not prefix:
         # #284 W0-hardening: an empty prefix makes startswith('') always true,
@@ -372,6 +372,11 @@ def validate_namespace(namespace: str) -> None:
         raise ValueError(
             f"Namespace must start with '{prefix}'"
         )
+    # prod's broad prefix also matches every staging tenant on the shared cluster.
+    # Keep this in the common guard so Helm reads and Kubernetes writes both stop
+    # before invoking their CLI. Custom isolated test prefixes remain unchanged.
+    if prefix == "paas-ws-" and namespace.startswith("paas-ws-stg-"):
+        raise ValueError("Production operator cannot access staging namespaces")
 
 
 # k8s label VALUE syntax: empty, or <=63 chars of alnum / '-' / '_' / '.' that
