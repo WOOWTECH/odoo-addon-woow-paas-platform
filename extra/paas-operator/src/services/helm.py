@@ -3444,6 +3444,41 @@ class KubernetesService:
                     raise
         return {"pvcs": pvcs, "datavolumes": datavolumes}
 
+    #: #1647：compute 配額預檢的一次讀取上限。逾時＝「不知道」（呼叫端放行）。
+    COMPUTE_QUOTA_SNAPSHOT_TIMEOUT_SECONDS = 10
+
+    def get_compute_quota_snapshot(self, namespace: str) -> Dict[str, List[Dict[str, Any]]]:
+        """#1647：一次讀 namespace 的 ResourceQuota、LimitRange、Pod（原始 JSON items）。純唯讀。
+
+        一次 ``kubectl get`` 讀三種 kind：quota 的 ``status.used`` 與 pod 清單取自同一個時間點
+        附近，兩者的落差越小，預檢越不會被過期的用量誤導。解讀在 ``compute_quota.evaluate``。
+
+        Returns:
+            ``{"quotas": [...], "limitranges": [...], "pods": [...]}``
+
+        Raises:
+            KubectlException: kubectl 失敗、權限不足、逾時（呼叫端一律當「不知道」放行）。
+            ValueError: namespace 不在允許範圍；或 kubectl 的輸出不是預期的 List 形狀
+                （不是 JSON、頂層不是物件、``items`` 不是陣列）——形狀不對就不回一份
+                「什麼都沒有」的 snapshot，那會被解讀成「沒有 quota」。
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            ["get", "resourcequotas,limitranges,pods", "--namespace", namespace, "-o", "json"],
+            timeout=self.COMPUTE_QUOTA_SNAPSHOT_TIMEOUT_SECONDS)
+        payload = json.loads(result.stdout or "{}")
+        if not isinstance(payload, dict):
+            raise ValueError("unexpected kubectl output: the top level is not an object")
+        items = payload.get("items") or []
+        if not isinstance(items, list):
+            raise ValueError("unexpected kubectl output: items is not a list")
+        by_kind = {"ResourceQuota": [], "LimitRange": [], "Pod": []}
+        for item in items:
+            if isinstance(item, dict) and item.get("kind") in by_kind:
+                by_kind[item["kind"]].append(item)
+        return {"quotas": by_kind["ResourceQuota"], "limitranges": by_kind["LimitRange"],
+                "pods": by_kind["Pod"]}
+
     # ── woow_paas_platform #1540：限時唯讀資料取回入口（純規則在 data_retrieval）──────────
 
     RETRIEVAL_KUBECTL_TIMEOUT_SECONDS = 20

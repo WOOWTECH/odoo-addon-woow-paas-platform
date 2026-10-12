@@ -73,6 +73,26 @@ def storage_quota_snapshot(request):
 
 
 @pytest.fixture(autouse=True)
+def compute_quota_snapshot(request):
+    """#1647：帶 ``check_compute_quota`` 的升級預檢會讀 namespace 的 ResourceQuota／LimitRange／
+    Pod——那也是真 kubectl，同樣擋掉。
+
+    預設回「沒有 quota、沒有 LimitRange、沒有 pod」（＝檢查放行）。不帶旗標的請求根本不會
+    讀它（要斷言這件事的測試把本 fixture 收進參數 ``assert_not_called``）；要測放不下的測試
+    把本 fixture 收進參數、改 ``return_value``／``side_effect``。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    with patch(
+        "src.api.releases.k8s_service.get_compute_quota_snapshot",
+        return_value={"quotas": [], "limitranges": [], "pods": []},
+    ) as mock_snapshot:
+        yield mock_snapshot
+
+
+@pytest.fixture(autouse=True)
 def orphaned_release_resources(request):
     """#1157：``create_release`` 開通前會查同名 release 的孤兒 PVC／DataVolume——真 kubectl。
 

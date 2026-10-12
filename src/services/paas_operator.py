@@ -102,6 +102,17 @@ STORAGE_EXPANSION_ERROR_CODE = 'storage_expansion_rejected'
 #: 回這個碼時什麼都沒套用，重送是安全的。
 OPERATOR_BUSY_ERROR_CODE = 'operator_busy'
 
+#: #1647：operator 升級預檢判定「工作區 compute 配額放不下這次變更」的 409 ``detail.error_code``
+#: （extra/paas-operator ``compute_quota.COMPUTE_QUOTA_ERROR_CODE``；改名兩邊一起改）。
+#: 回這個碼時什麼都沒套用。平台只認這個明說的 409——回應缺 ``compute_quota``、或它的
+#: ``status`` 是 ``unknown``／``skipped``，都不是失敗訊號。
+COMPUTE_QUOTA_ERROR_CODE = 'workspace_compute_quota_exceeded'
+
+#: #1647：儲存設定（reconfigure）在請求內**同步**等 ``upgrade-preflight`` 的上限。前端這條 RPC
+#: 的預算是 30 秒（``jsonRpc`` 預設），預檢之後還要寫 DB、回應；operator 端通常幾秒內回來
+#: （一次 helm dry-run＋兩次 kubectl get）。逾時＝不知道＝照舊進背景 upgrade，行為與加入預檢前相同。
+COMPUTE_QUOTA_SYNC_PREFLIGHT_TIMEOUT = 15
+
 
 class PaaSOperatorError(Exception):
     """Base exception for PaaS Operator client errors."""
@@ -506,6 +517,7 @@ class PaaSOperatorClient:
         chart: Optional[str] = None,
         reset_values: bool = False,
         reuse_values: bool = False,
+        check_compute_quota: bool = False,
     ) -> Dict[str, Any]:
         """Upgrade an existing Helm release.
 
@@ -524,6 +536,9 @@ class PaaSOperatorClient:
             chart: New chart reference (if changing)
             reset_values: Reset values to chart defaults（平台升級路徑用 True）
             reuse_values: Reuse last release values（危險預設已翻 False）
+            check_compute_quota: #1647——請 operator 在套用前檢查工作區的 compute 配額放不放
+                得下；確定放不下回 409（``detail.error_code``＝``COMPUTE_QUOTA_ERROR_CODE``）、
+                什麼都沒套用。只在 True 時送這一鍵（舊 operator 會忽略未知欄位）。
 
         Returns:
             Updated release information
@@ -543,6 +558,8 @@ class PaaSOperatorClient:
             data['values'] = values
         if sensitive_values:
             data['sensitive_values'] = sensitive_values
+        if check_compute_quota:
+            data['check_compute_quota'] = True
 
         return self._request(
             'PATCH',
@@ -561,18 +578,29 @@ class PaaSOperatorClient:
         chart: Optional[str] = None,
         reset_values: bool = False,
         reuse_values: bool = False,
+        check_compute_quota: bool = False,
+        pending_quota: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[int, Tuple[int, int]]] = None,
     ) -> Dict[str, Any]:
         """#1513：用與 ``upgrade_release`` **同一組**參數跑 operator 的升級預檢，不套用任何東西。
 
         operator 會 dry-run 渲染、比對不可變欄位（#1407），並對每顆要變大的 PVC 送
         ``kubectl patch --dry-run=server``，由 Longhorn validator 判斷擴得了嗎。
 
+        #1647：``check_compute_quota`` 為 True 時另外檢查工作區的 compute 配額（同
+        ``upgrade_release``）。``pending_quota``（鍵同 ``update_namespace_quota`` 的參數）是
+        平台在這次檢查之後才會推送的 quota——換方案扣款前帶上，operator 以它取代現行上限
+        來判斷。``timeout`` 不給＝``HELM_OPERATION_TIMEOUT``。
+
         Returns:
-            ``{"ok": True, "expansions": [...]}``
+            ``{"ok": True, "expansions": [...]}``；帶 ``check_compute_quota`` 且 operator 夠新時
+            多一鍵 ``compute_quota``（``status``＝``ok``／``skipped``／``unknown``）。⚠ 缺這一鍵、
+            或 ``status`` 不是 ``ok``，都**不是**失敗訊號——放不下只會以 409 表達。
 
         Raises:
             PaaSOperatorAPIError: 409（擴容被拒的 ``detail`` 是 dict，``error_code``＝
-                ``storage_expansion_rejected``；不可變欄位衝突是字串）；舊版 operator 沒有這個
+                ``storage_expansion_rejected``；compute 配額放不下也是 dict，``error_code``＝
+                ``COMPUTE_QUOTA_ERROR_CODE``；不可變欄位衝突是字串）；舊版 operator 沒有這個
                 端點時 404。
         """
         data = {
@@ -587,11 +615,15 @@ class PaaSOperatorClient:
             data['values'] = values
         if sensitive_values:
             data['sensitive_values'] = sensitive_values
+        if check_compute_quota:
+            data['check_compute_quota'] = True
+        if pending_quota:
+            data['pending_quota'] = pending_quota
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/upgrade-preflight',
             data=data,
-            timeout=HELM_OPERATION_TIMEOUT,
+            timeout=HELM_OPERATION_TIMEOUT if timeout is None else timeout,
         )
 
     def reset_release_config(
@@ -871,6 +903,7 @@ class PaaSOperatorClient:
         revision: int = 0,
         chart: Optional[str] = None,
         preserve_value_paths: Optional[List[str]] = None,
+        check_compute_quota: bool = False,
     ) -> Dict[str, Any]:
         """Rollback a Helm release to a previous revision.
 
@@ -885,6 +918,8 @@ class PaaSOperatorClient:
             revision: Target revision (0 = previous)
             chart: Chart reference (required with preserve_value_paths)
             preserve_value_paths: Dot-paths whose current values must survive
+            check_compute_quota: #1647——同 ``upgrade_release``。operator 只在保留憑證的回復
+                （那是一次 helm upgrade，有 dry-run 可算）檢查；純 helm rollback 不檢查。
 
         Returns:
             Rollback confirmation
@@ -896,6 +931,8 @@ class PaaSOperatorClient:
         if preserve_value_paths:
             data['chart'] = chart
             data['preserve_value_paths'] = list(preserve_value_paths)
+        if check_compute_quota:
+            data['check_compute_quota'] = True
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/rollback',

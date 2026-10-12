@@ -35,6 +35,7 @@ from src.models.schemas import (
     SidecarPatchRequest,
     SidecarPatchResponse,
 )
+from src.services import compute_quota
 from src.services.cloudflare import (
     REFUSED_FOREIGN,
     REFUSED_MULTIPLE_TARGETS,
@@ -628,7 +629,9 @@ def upgrade_release(
         # #1552：預檢＋真正 upgrade 共用**一個** helm 名額——通過預檢的請求不會在
         # 第二段又排一次隊（排不到就變成「預檢過了、卻沒套用」）。
         with helm_operation_slot("upgrade"):
-            _upgrade_preflight(upgrade_kwargs)
+            # #1647：`check_compute_quota` 是預檢的參數，不進 `upgrade_kwargs`（那個 dict 會
+            # 原樣展開給 helm）。
+            _upgrade_preflight(upgrade_kwargs, check_compute_quota=request.check_compute_quota)
             release = helm_service.upgrade(**upgrade_kwargs)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
@@ -649,15 +652,27 @@ def upgrade_release(
         )
 
 
-def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _upgrade_preflight(
+    upgrade_kwargs: Dict[str, Any],
+    check_compute_quota: bool = False,
+    pending_quota: Optional[Any] = None,
+) -> Dict[str, Any]:
     """#1407：dry-run 比對不可變欄位；有衝突 raise 409（中文、指出物件與欄位）。
 
     dry-run 本身失敗（chart 拉不到、template 錯）照樣 raise HelmException——真正
     upgrade 也一定會在同一步失敗，提早回報而且什麼都沒套用。live 物件讀不到時
     不擋（log warning），行為退回 #1407 之前。
 
-    #1513：接著檢查要**變大**的 PVC（``_refuse_unplaceable_expansions``）。回傳這次會擴容的
-    PVC 清單（``upgrade-preflight`` 端點回給呼叫端）。
+    #1513：接著檢查要**變大**的 PVC（``_refuse_unplaceable_expansions``）。
+
+    #1647：``check_compute_quota`` 為 True 時最後再檢查工作區的 compute 配額
+    （``_compute_quota_check``）。排在最後：前兩種是確定性的拒絕，先回報；``pending_quota``
+    （``NamespaceQuotaUpdateRequest``）只有 ``upgrade-preflight`` 端點會傳。兩者都**不**在
+    ``upgrade_kwargs`` 裡——那個 dict 會原樣展開給 ``helm_service.upgrade``。
+
+    Returns:
+        ``{"expansions": [...這次會擴容的 PVC], "compute_quota": <dict 或 None>}``
+        （``upgrade-preflight`` 端點回給呼叫端）。``compute_quota`` 為 None＝沒有檢查。
     """
     namespace = upgrade_kwargs["namespace"]
     manifest = helm_service.upgrade(**upgrade_kwargs, dry_run=True)
@@ -667,7 +682,7 @@ def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
             "Upgrade preflight for %s/%s skipped: live objects unavailable",
             namespace, upgrade_kwargs["name"],
         )
-        return []
+        return {"expansions": [], "compute_quota": None}
     docs = [d for d in yaml.safe_load_all(manifest or "") if isinstance(d, dict)]
     conflicts = find_immutable_conflicts(docs, live_items)
     if conflicts:
@@ -680,7 +695,11 @@ def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
     expansions = find_pvc_expansions(docs, live_items)
     _refuse_unplaceable_expansions(namespace, upgrade_kwargs["name"], expansions)
-    return expansions
+    compute = None
+    if check_compute_quota:
+        compute = _compute_quota_check(
+            namespace, upgrade_kwargs["name"], docs, live_items, pending_quota)
+    return {"expansions": expansions, "compute_quota": compute}
 
 
 def _refuse_unplaceable_expansions(
@@ -733,6 +752,104 @@ def _refuse_unplaceable_expansions(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
+def _compute_quota_check(
+    namespace: str,
+    name: str,
+    docs: List[Dict[str, Any]],
+    live_items: List[Dict[str, Any]],
+    pending_quota: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """#1647：這個 release 升級後的 pod 放不放得進 namespace 的 ResourceQuota；確定放不下 raise 409。
+
+    2026-10-10 正式站：``Recreate`` 的 Deployment 舊 pod 先被砍、新 pod 被 quota 拒絕，剩 0 個
+    pod 而平台沒有任何訊號。這裡用升級預檢已經拿到的 dry-run manifest（``docs``）與 live
+    workload（``live_items``），再讀一次 quota／LimitRange／pod，在 helm 套用任何東西之前算
+    一遍（規則在 ``compute_quota.evaluate``）。
+
+    **只有「確定放不下」才擋**（409，``detail.error_code == workspace_compute_quota_exceeded``）。
+    kill switch 關、讀不到資料、資料對不起來、甚至本檢查自己出錯，一律放行並回報
+    ``status``（``skipped``／``unknown``）——預檢自己的意外絕不能變成擋升級。
+
+    ⛔ ``docs`` 是 rendered manifest，可能含 Secret：這裡與 ``compute_quota`` 都不把它寫進 log
+    或回應。
+
+    Args:
+        pending_quota: ``NamespaceQuotaUpdateRequest``——平台在這次檢查之後會立刻推送的 quota
+            （換方案扣款前）；給了就以它取代平台那個 quota 的上限來判斷。
+
+    Returns:
+        ``{"status": "ok", "quota_source", "resources", "advisories"}``，或
+        ``{"status": "skipped" | "unknown", "reason": ...}``。
+    """
+    if not settings.compute_quota_precheck_enabled:
+        return {"status": "skipped", "reason": "disabled"}
+    try:
+        snapshot = k8s_service.get_compute_quota_snapshot(namespace)
+    except (KubectlException, ValueError) as exc:
+        # 預期內的「讀不到」：kubectl 失敗／權限不足／逾時、輸出看不懂（JSONDecodeError 是
+        # ValueError）、namespace 不在允許範圍。
+        logger.warning(
+            "Compute quota pre-check skipped for %s/%s: %s", namespace, name,
+            str(getattr(exc, "stderr", None) or exc).strip()[:300],
+        )
+        return {"status": "unknown", "reason": "snapshot_unreadable"}
+    except Exception as exc:  # noqa: BLE001 — 預檢自己的錯不得擋升級
+        # 清單以外的任何例外（例：容器記憶體吃緊時 fork kubectl 失敗的 OSError）一樣是
+        # 「不知道」：放行，不可以穿出去變成 500 而讓真正的 upgrade 不執行。
+        logger.warning(
+            "Compute quota pre-check skipped for %s/%s: unexpected %s while reading the "
+            "snapshot; allowing the upgrade", namespace, name, type(exc).__name__,
+            exc_info=True)
+        return {"status": "unknown", "reason": "snapshot_unreadable"}
+    # 從這裡到組好結果為止的任何例外都放行；只有下面刻意 raise 的 409 會擋升級。
+    try:
+        pending_hard = None
+        if pending_quota is not None:
+            # pending → hard 一律經 quota 的唯一組裝點，與之後真正推送的物件同一份。
+            pending_hard = KubernetesService._build_quota_manifest(
+                namespace, pending_quota.cpu_limit, pending_quota.memory_limit,
+                pending_quota.storage_limit, pending_quota.ephemeral_storage_request,
+                pending_quota.ephemeral_storage_limit,
+            )["spec"]["hard"]
+        result = compute_quota.evaluate(
+            name, docs, live_items, snapshot["pods"], snapshot["quotas"],
+            snapshot["limitranges"], pending_hard=pending_hard,
+            platform_quota_name=f"{namespace}-quota",
+        )
+        refusal = (
+            compute_quota.build_error_detail(namespace, name, result)
+            if result["status"] == "exceeded" else None)
+        passed = {
+            "status": "ok",
+            "quota_source": result["quota_source"],
+            "resources": result["resources"],
+            "advisories": result["advisories"],
+        }
+        summary = ", ".join(
+            "%s required=%s available=%s" % (resource, numbers["required"], numbers["available"])
+            for resource, numbers in passed["resources"].items()) or "nothing to check"
+    except compute_quota.Unknown as exc:
+        logger.warning(
+            "Compute quota pre-check for %s/%s inconclusive: %s", namespace, name, exc)
+        return {"status": "unknown", "reason": exc.reason}
+    except Exception:  # noqa: BLE001 — 預檢自己的錯不得擋升級
+        logger.exception(
+            "Compute quota pre-check for %s/%s failed unexpectedly; allowing the upgrade",
+            namespace, name)
+        return {"status": "unknown", "reason": "evaluation_error"}
+    if refusal is not None:
+        logger.warning("Upgrade preflight refused %s/%s: %s", namespace, name, refusal["message"])
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=refusal)
+    logger.info(
+        "Compute quota pre-check passed for %s/%s (quota source: %s): %s",
+        namespace, name, passed["quota_source"], summary)
+    if passed["advisories"]:
+        logger.info(
+            "Compute quota pre-check advisories for %s/%s: %s",
+            namespace, name, passed["advisories"])
+    return passed
+
+
 @router.post(
     "/{namespace}/{name}/upgrade-preflight",
     summary="Check an upgrade without applying it (#1407 immutable fields, #1513 PVC expansion)",
@@ -748,11 +865,16 @@ def upgrade_release_preflight(
     與真正的 upgrade 唯一的差別：這裡不收斂 namespace default SA 的 pull secret（那是寫入），
     values 只做純函式的預設 pull secret 補位——兩者送給 helm 的 values 相同。
 
+    #1647：請求帶 ``check_compute_quota: true`` 時另外檢查工作區的 compute 配額；換方案扣款前
+    平台同時帶 ``pending_quota``（它之後會推送的 quota），以免升到較大方案時被舊上限誤擋。
+
     Returns:
-        ``{"ok": True, "expansions": [...]}``（這次會擴容的 PVC）。
+        ``{"ok": True, "expansions": [...]}``（這次會擴容的 PVC）。帶 ``check_compute_quota``
+        時多一鍵 ``compute_quota``（``status``＝``ok``／``skipped``／``unknown``；缺這一鍵或
+        不是 ``ok`` 都不是失敗訊號，確定放不下只會以 409 表達）。
 
     Raises:
-        HTTPException: 409（不可變欄位衝突／擴容被拒）、500（dry-run 渲染失敗）。
+        HTTPException: 409（不可變欄位衝突／擴容被拒／compute 配額放不下）、500（dry-run 渲染失敗）。
     """
     upgrade_kwargs = dict(
         namespace=namespace,
@@ -765,7 +887,11 @@ def upgrade_release_preflight(
         reuse_values=request.reuse_values,
     )
     try:
-        expansions = _upgrade_preflight(upgrade_kwargs)
+        result = _upgrade_preflight(
+            upgrade_kwargs,
+            check_compute_quota=request.check_compute_quota,
+            pending_quota=request.pending_quota,
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except HelmException as e:
@@ -774,7 +900,11 @@ def upgrade_release_preflight(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=describe_helm_failure(e.stderr),
         )
-    return {"ok": True, "expansions": expansions}
+    response: Dict[str, Any] = {"ok": True, "expansions": result["expansions"]}
+    # #1647：不帶旗標的回應必須與加入本檢查前逐字相同（舊平台、既有呼叫端）。
+    if request.check_compute_quota:
+        response["compute_quota"] = result["compute_quota"]
+    return response
 
 
 def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[str, str]:
@@ -1324,7 +1454,7 @@ def _rollback_preserving_values(
             reset_values=True,
             reuse_values=False,
         )
-        _upgrade_preflight(upgrade_kwargs)
+        _upgrade_preflight(upgrade_kwargs, check_compute_quota=request.check_compute_quota)
         release = helm_service.upgrade(
             **upgrade_kwargs,
             description=(

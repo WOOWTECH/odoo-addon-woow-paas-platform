@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     storage_capacity_render_timeout_seconds: int = Field(default=45, gt=0)
     longhorn_namespace: str = "longhorn-system"
 
+    # #1647：升級前的工作區 compute 配額預檢（src/services/compute_quota.py）。請求帶
+    # `check_compute_quota: true` 才檢查；這個開關是 kill switch（env
+    # COMPUTE_QUOTA_PRECHECK_ENABLED=false ⇒ 即使請求帶旗標也不檢查）。只有「確定放不下」
+    # 才回 409，讀不到資料一律放行。
+    # ⚠ paas-operator chart（0.1.25）的 Deployment 逐項寫死 env、沒有這一鍵也沒有通用的 env
+    # 透傳：chart 補上對應的 values 之前，這個 env 設不進去——實際可用的開關是平台的系統參數
+    # woow_paas_platform.compute_quota_precheck_enabled（平台不送旗標）。見 README。
+    compute_quota_precheck_enabled: bool = True
+
     # #1434：租戶 ns LimitRange 的 ephemeral-storage 預設（只補「容器沒宣告」的那一格；
     # chart 自己有設就以 chart 為準）。容器寫 overlay（/、/tmp、/var/tmp）與容器 log 都
     # 算 ephemeral-storage，超過 limit 時 kubelet 只驅逐該 Pod，不會把節點系統碟寫到
