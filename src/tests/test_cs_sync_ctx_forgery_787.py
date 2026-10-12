@@ -65,6 +65,7 @@ in-process（superuser）env 是正確的，而且刻意如此：sentinel 的全
 import json
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import install_publication_receipts
 
 from odoo.tests import HttpCase, tagged
 
@@ -171,10 +172,12 @@ class _Cs787Fixture(HttpCase):
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
             'state': 'running',
-            'is_protected': protected,
+            'is_protected': False,
         })
         svc.subdomain = make_service_subdomain(
             self.workspace.ws_hash, svc.reference_id, name)
+        if protected:
+            _cs_skip_access_sync(svc).write({'is_protected': True})
         return svc
 
     # ------------------------------------------------------------------ #
@@ -182,8 +185,10 @@ class _Cs787Fixture(HttpCase):
     # ------------------------------------------------------------------ #
 
     def _mock(self, result=None):
-        client = MagicMock()
-        client.sync_access_app.return_value = result or _sync_result()
+        client = install_publication_receipts(MagicMock())
+        if result is not None:
+            client.sync_access_app.side_effect = None
+            client.sync_access_app.return_value = result
         return client
 
     def _call_kw(self, model, method, args, kwargs=None):

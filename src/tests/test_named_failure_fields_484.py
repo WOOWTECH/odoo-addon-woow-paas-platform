@@ -41,6 +41,7 @@
 Refs #477 #481 #423
 """
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import install_publication_receipts
 
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
@@ -89,7 +90,7 @@ class _SmartHomeCase(TransactionCase):
 
     @staticmethod
     def _client(**overrides):
-        client = MagicMock()
+        client = install_publication_receipts(MagicMock())
         client.create_tunnel.return_value = _tunnel_result(**overrides)
         return client
 
@@ -215,7 +216,7 @@ class TestHealthyProvisionUnchanged(_SmartHomeCase):
         """
         result = _tunnel_result()
         del result['dns_failed']
-        client = MagicMock()
+        client = install_publication_receipts(MagicMock())
         client.create_tunnel.return_value = result
 
         self._provision(client)

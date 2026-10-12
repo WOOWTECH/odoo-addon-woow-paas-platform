@@ -50,6 +50,7 @@ fixture 用一次性 marker 命名，`addCleanup` 以 raw SQL 清掉自己建的
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
+from ..publication_receipt_fixture import routes_receipt
 
 import odoo
 from odoo import api
@@ -148,7 +149,7 @@ class TestFailOpenCompensationSurvivesRealRollback(BaseCase):
     def _client(self, side_effect):
         client = MagicMock()
         client.sync_access_app.side_effect = side_effect
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         return client
 
     def _run_unlink_then_rollback(self, client, control_write=True):
@@ -333,7 +334,7 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
                                    'policy_ids': [], 'allowed_idps': [],
                                    'unresolved_idp_types': [],
                                    'orphaned_policy_ids': []}))
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         if tunnel_ok:
             client.delete_tunnel.return_value = {'success': True}
         else:

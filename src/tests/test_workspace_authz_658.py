@@ -106,6 +106,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
 # namespace 身分是 `workspace.ws_hash`，不經這支函式。
 from odoo.addons.woow_paas_platform.services.naming import generate_ws_hash
 from ..models.cloud_service import _internal_provision
+from .invitation_mailbox_fixture import accept_queued_invitation
 
 # `workspace.py` 兩道守衛的訊息特徵字串。用它區分「model 層守衛擋的」與「ir.rule
 # 擋的」——兩者在 RPC 上都是 AccessError，不分辨的話會把「其實是 ir.rule 擋的」
@@ -666,6 +667,10 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
 class TestWorkspacePositiveControls658(_Workspace658Fixture):
     """P 系列——證明修復沒有把合法路徑打死（over-correction 對照）。"""
 
+    def setUp(self):
+        super().setUp()
+        self.env.company.email = 'isolated-invite-sender@example.invalid'
+
     def test_P1_admin_updates_name_via_product_endpoint(self):
         """🟢 工單指定的陽性對照：admin 走 `/api/workspaces/<id>`（`_update_workspace`，
         已要求 `required_role=ROLE_ADMIN`）改 name/description 必須**仍然成功**。
@@ -797,12 +802,26 @@ class TestWorkspacePositiveControls658(_Workspace658Fixture):
         影響它——但這是**推論**，這條測試是它的實測對照。
         """
         before = self.w1.sudo().member_count
+        self.mallory.login = self.mallory.email
         self.authenticate(self.dave_login, self.dave_login)
         result = self._post_json(
             '/api/workspaces/%d/members' % self.w1.id,
-            {'action': 'invite', 'email': self.mallory.email, 'role': ROLE_USER})
+            {'action': 'invite', 'email': self.mallory.login, 'role': ROLE_USER,
+             'invitation_mode': 'mailbox_challenge_v1'})
         self._assert_ok(result, 'admin 邀請成員必須成功')
         self.assertTrue(result['result'].get('success'), result)
+        self.assertEqual(self.w1.sudo().member_count, before,
+                         'Pending invitation must not count as membership')
+
+        def accept_post(url, payload):
+            response = self._post_json(url, payload)
+            self._assert_ok(response, 'Recipient acceptance must return a product result')
+            return response['result']
+
+        accepted = accept_queued_invitation(
+            self, result['result'], self.mallory, self.mallory_login, accept_post)
+        self.assertTrue(accepted.get('success'), accepted)
+        self.authenticate(self.dave_login, self.dave_login)
         self.assertEqual(
             self.w1.sudo().member_count, before + 1,
             'member_count 這個 stored compute 必須仍會重算')

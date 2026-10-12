@@ -52,7 +52,9 @@ MagicMock（裸 mock 的 ``orphaned_policy_ids`` 永遠 truthy）。
 import json
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import access_receipt, routes_receipt
 
+from odoo.exceptions import UserError
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.tools import mute_logger
 
@@ -88,10 +90,11 @@ def _client(result=None, side_effect=None):
     client = MagicMock()
     if side_effect is not None:
         client.sync_access_app.side_effect = side_effect
+    elif result is None:
+        client.sync_access_app.side_effect = access_receipt
     else:
-        client.sync_access_app.return_value = (
-            _sync_result() if result is None else result)
-    client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_access_app.return_value = result
+    client.sync_tunnel_routes.side_effect = routes_receipt
     return client
 
 
@@ -242,7 +245,7 @@ class _HttpSaFixture(_SaRouteFixture):
         self.base = '/api/workspaces/%s/security-accesses/%s' % (
             self.workspace.id, self.sa.id)
 
-    def _rpc(self, path, params):
+    def _rpc(self, path, params, expect_success=True):
         # SA ``get`` 會即時問 operator 的 tunnel 狀態（只讀疊加）；本檔不測它，
         # 一律回 {}（＝沿用 DB 值），免得 fixture 的 tunnel_id 引來一次外呼。
         # patch 打在註冊表上的實際 class（odoo-test-registry-patch 的教訓）。
@@ -256,9 +259,9 @@ class _HttpSaFixture(_SaRouteFixture):
         body = resp.json()
         self.assertNotIn('error', body, body.get('error'))
         result = body['result']
-        self.assertTrue(result.get('success'), result)
+        self.assertIs(bool(result.get('success')), expect_success, result)
         self.env.invalidate_all()
-        return result['data']
+        return result.get('data') if expect_success else result
 
     @staticmethod
     def _by_id(items, route):
@@ -356,9 +359,9 @@ class TestSaRouteUnresolvedIdpWarning(TransactionCase, _SaRouteFixture):
         self.route = self._make_route(self.sa, login_google=True, login_email_otp=True)
 
     def _sync(self, unresolved=None, app_id='app-live'):
-        with patch(MOCK_SA_CLIENT,
-                   return_value=_client(_sync_result(app_id, unresolved))):
-            self.assertTrue(self.route._sync_access_to_operator())
+        result = (_sync_result(app_id, unresolved) if unresolved else None)
+        with patch(MOCK_SA_CLIENT, return_value=_client(result)):
+            return self.route._sync_access_to_operator()
 
     def _detail_value(self):
         routes = self.sa.to_dict()['routes']
@@ -366,35 +369,32 @@ class TestSaRouteUnresolvedIdpWarning(TransactionCase, _SaRouteFixture):
             'access_unresolved_idp_types']
 
     def test_I1_unresolved_types_are_persisted_comma_joined(self):
-        """operator 回兩個找不到 IdP 的登入方式 ⇒ 欄位存 ``'google, onetimepin'``，
-        route／SA 詳情 payload 都吐同一個字串；前端 ``split(",")``＋``trim`` 拆得回
-        原本兩個值。"""
-        self._sync(unresolved=['google', 'onetimepin'])
-        self.assertEqual(self.route.access_unresolved_idp_types, 'google, onetimepin')
-        self.assertEqual(self.route.to_dict()['access_unresolved_idp_types'],
-                         'google, onetimepin')
-        self.assertEqual(self._detail_value(), 'google, onetimepin')
-        parts = [t.strip() for t in self._detail_value().split(',') if t.strip()]
-        self.assertEqual(parts, ['google', 'onetimepin'])
+        """Partial IdP resolution is rejected and the old anchor is retained."""
+        old_app = self.route.access_app_id
+        with self.assertRaises(UserError):
+            self._sync(unresolved=['google', 'onetimepin'])
+        self.route.invalidate_recordset()
+        self.assertEqual(self.route.access_app_id, old_app)
+        self.assertFalse(self.route.access_unresolved_idp_types)
 
     def test_I2_resolved_login_methods_leave_no_warning(self):
         """對照：登入方式都有 IdP（``unresolved_idp_types=[]``）⇒ 欄位 False、
         payload 是空字串（型別穩定，前端 ``t-if`` 判假值）。"""
-        self._sync(unresolved=[])
+        self.assertTrue(self._sync(unresolved=[]))
         self.assertFalse(self.route.access_unresolved_idp_types)
         self.assertEqual(self.route.to_dict()['access_unresolved_idp_types'], '')
         self.assertEqual(self._detail_value(), '')
 
     def test_I3_warning_cleared_once_operator_resolves(self):
-        """先缺 google ⇒ 租戶去 CF 補上 IdP 後重存 ⇒ 下一次 sync 回空清單 ⇒ 警告消失。"""
-        self._sync(unresolved=['google'])
-        self.assertEqual(self.route.to_dict()['access_unresolved_idp_types'], 'google')
-        self._sync(unresolved=[])
+        """A rejected partial receipt can be retried with a complete receipt."""
+        with self.assertRaises(UserError):
+            self._sync(unresolved=['google'])
+        self.assertTrue(self._sync(unresolved=[]))
         self.assertEqual(self.route.to_dict()['access_unresolved_idp_types'], '')
 
     def test_I4_gated_or_failed_sync_keeps_previous_warning(self):
         """推不出去時沒有新答案 ⇒ 沿用上一次的警告（不得被清成「沒事」）。"""
-        self._sync(unresolved=['google'])
+        self.route.access_unresolved_idp_types = 'google'
 
         with patch(MOCK_SA_CLIENT,
                    return_value=_client(side_effect=Exception('operator down'))):
@@ -415,7 +415,7 @@ class TestSaRouteUnresolvedIdpWarning(TransactionCase, _SaRouteFixture):
     def test_I5_teardown_sync_clears_warning(self):
         """關掉保護（``enabled=False``）那一趟 operator 回空清單 ⇒ 警告一併清掉，
         不會在公開的 route 上留著「登入限制被放寬」。"""
-        self._sync(unresolved=['google'])
+        self.route.access_unresolved_idp_types = 'google'
         client = _client(_sync_result(app_id=None, unresolved=[]))
         with patch(MOCK_SA_CLIENT, return_value=client):
             self.route.write({'is_protected': False})
@@ -439,16 +439,15 @@ class TestSaRouteUnresolvedIdpEndpoint(HttpCase, _HttpSaFixture):
         path = '/routes/%s/access-config' % self.route.id
         client = _client(_sync_result('app-idp', ['google']))
         with patch(MOCK_SA_CLIENT, return_value=client):
-            data = self._rpc(path, {'login_google': True})
+            data = self._rpc(path, {'login_google': True}, expect_success=False)
         sent = client.sync_access_app.call_args.args[0]
         self.assertEqual(sent['login_idp_types'], ['google'],
                          '前提：payload 要求的正是 operator 回報缺少的那個')
-        self.assertEqual(data['access_unresolved_idp_types'], 'google')
-        detail = self._rpc('', {'action': 'get'})['routes']
-        self.assertEqual(self._by_id(detail, self.route)['access_unresolved_idp_types'],
-                         'google')
+        self.assertFalse(data['success'])
+        self.route.invalidate_recordset()
+        self.assertEqual(self.route.access_app_id, 'app-idp')
 
-        client = _client(_sync_result('app-idp', []))
+        client = _client()
         with patch(MOCK_SA_CLIENT, return_value=client):
             data = self._rpc(path, {'login_google': False, 'login_email_otp': True})
         self.assertEqual(client.sync_access_app.call_args.args[0]['login_idp_types'],
