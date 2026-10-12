@@ -83,7 +83,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
    兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`。
 9. **cutover**（正式切換；prod 每一步人工放行）。前置：彩排通過、目標服務已由人在 prod 租戶買好、下方「切換前檢查」
    逐項有結論。停機時間＝凍結匯出＋還原＋開機升級＋比對（harumi 的量：約 15 秒＋45 秒＋3 分鐘，另加人工步驟）。
-   1. 目標服務先調好設定（「切換前檢查」的 conf 覆寫），Redeploy 完成、服務 running。
+   1. 目標服務先調好設定（「切換前檢查」的 conf 覆寫、需要時 `shared-mail.sh open`），Redeploy 完成、服務 running。
    2. 凍結來源（WMO）：公告停機 → POS session 全部關帳、沒有 draft 訂單 → 來源 odoo scale 0（postgres 留著）。
    3. 走步驟 6～8：`export.sh` **不帶** `--live`、`restore.sh` **不帶** `--neutralize`。兩階段 verify 都 exit 0 才往下；
       不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。
@@ -103,8 +103,14 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
   平台管理員把 `conf.limitTimeCpu`、`conf.limitTimeReal`、`conf.serverWideModules` 寫進服務的 `helm_values` 後 Redeploy
   （stg 實測：odoo.conf 生效、`server_wide_modules` 帶 `/all-addons` 的模組可以開機）。
 - **寄收信主機**：盤點的 `db.mail_hosts`。conf 層的 SMTP 不會帶過去（改用 DB 的 `ir.mail_server`）。叢集內位址
-  （`*.svc.cluster.local`）從租戶 ns **連不到**——baseline egress 只放行同 ns、DNS 與對外網路（stg 實測 mailcow 的
-  587／993 被拒）。切換前要有解法：兩端 NetworkPolicy 放行（來源叢集的維運＋平台），或改用對外位址。
+  （`*.svc.cluster.local`）從租戶 ns **連不到**——baseline egress 只放行同 ns、DNS 與對外網路。
+  - 指向 **mailcow**（woow-k3s 的共用 mail 服務，不在 PaaS 內，歸 woow-machines-operator 管；只有叢集內位址）：
+    目標服務買好、running 之後跑 `scripts/target/shared-mail.sh open`——目標 ns 加准入 label、加一條只開給這台 Odoo
+    的 egress 規則，並實測連線。每一站接上之前先取得使用者同意（label 是整個 ns 的，同工作區的其他服務在 mailcow
+    那一側也會被放行）。stg 實測：接上後 587／993 連得到、同 ns 其他 pod 仍被擋、Redeploy 後仍在、`close` 可收回。
+  - mailcow 用私有 CA：收信靠 `mail_fetchmail_durable` 內附的 `mail-ca.crt` 驗憑證（stg 實測可驗）⇒ 該模組要在
+    `conf.serverWideModules` 裡。
+  - 其他叢集內主機沒有現成作法，要先與該服務的負責人談。
 - **對外網址**：要不要沿用來源的 hostname（印在桌上的 QR code、金流回呼、外部系統都指向它）。見下方。
 - **外部整合**：連到來源內部位址的東西（MCP server、其他服務的 webhook）切換後要改指新服務。
 - **登入**：session 不搬，所有人要重新登入；平台開通時給的管理員帳密不適用，帳密是來源站的。

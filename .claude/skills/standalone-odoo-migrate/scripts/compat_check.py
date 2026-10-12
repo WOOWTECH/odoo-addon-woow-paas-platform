@@ -224,7 +224,8 @@ def notes(inv, tgt, k8s):
                        if m.get("active") and cluster_internal(m.get("host"))})
     if internal:
         out.append("啟用中的寄收信主機是叢集內位址：%s。租戶 ns 的 egress 只放行同 ns、DNS 與對外網路，搬過去之後連不到 ⇒ "
-                   "切換前要先有解法（兩端 NetworkPolicy 放行，或改用對外位址）" % "、".join(internal))
+                   "叢集共用的 mailcow 用 target/shared-mail.sh open 接上（先取得使用者同意）；其他主機要先與該服務的負責人談"
+                   % "、".join(internal))
     base_url = (db.get("params") or {}).get("web.base.url")
     if base_url:
         out.append("對外網址 %s：切換時要把這個 hostname 改指到新服務（SKILL.md 步驟 9「對外網址」）" % base_url)
