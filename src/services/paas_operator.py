@@ -800,6 +800,13 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
+    def get_config_projection(self, namespace, release_name, revision, paths, excluded_paths=None):
+        """固定 revision 的公開設定標量；不取得或回傳 raw Helm values。"""
+        return self._request('POST',
+            f'/api/releases/{namespace}/{release_name}/config-projection',
+            data={'revision': revision, 'paths': list(paths),
+                  'excluded_paths': list(excluded_paths or [])}, timeout=DEFAULT_TIMEOUT)
+
     def rollback_release(
         self,
         namespace: str,
@@ -1124,6 +1131,20 @@ class PaaSOperatorClient:
 
 
     # ==================== Tunnel Operations ====================
+
+    def get_tunnel_provider_binding(self) -> Dict[str, Any]:
+        """Read non-secret provider account binding for the SHC prototype."""
+        return self._request('GET', '/api/tunnels/provider-binding')
+
+    def create_bare_tunnel(
+        self, name: str, expected_account_id: str,
+    ) -> Dict[str, Any]:
+        """Create only. Caller must durably anchor before later mutations."""
+        return self._request(
+            'POST', '/api/tunnels/bare',
+            data={'name': name, 'expected_account_id': expected_account_id},
+            timeout=HELM_OPERATION_TIMEOUT,
+        )
 
     def create_tunnel(
         self,

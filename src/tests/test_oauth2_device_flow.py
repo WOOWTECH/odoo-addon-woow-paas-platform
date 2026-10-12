@@ -4,7 +4,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from odoo import fields
-from odoo.tests.common import TransactionCase
+from odoo.tests.common import TransactionCase, new_test_user
 
 _CTRL = 'odoo.addons.woow_paas_platform.controllers.oauth2'
 DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
@@ -79,7 +79,15 @@ class TestDeviceCodeEndpoints(TransactionCase):
         super().setUp()
         self.OAuthClient = self.env['woow_paas_platform.oauth_client']
         self.DeviceCode = self.env['woow_paas_platform.oauth_device_code']
-        self.user = self.env.user
+        self.user = new_test_user(
+            self.env,
+            login='device_flow_active_subject',
+            groups='base.group_portal',
+            context={'no_reset_password': True, 'mail_create_nosubscribe': True},
+        )
+        self.assertTrue(self.user.active)
+        self.assertTrue(self.user.share)
+        self.assertFalse(self.user._is_public())
         self.client = self.OAuthClient.create({
             'name': 'Device Test Client',
             'client_id': 'test-device-client',
@@ -88,7 +96,9 @@ class TestDeviceCodeEndpoints(TransactionCase):
             'require_pkce': True,
             'scopes': 'smarthome:read smarthome:tunnel workspace:read',
             'grant_types': 'authorization_code,refresh_token,' + DEVICE_GRANT,
+            'is_active': True,
         })
+        self.assertTrue(self.client.is_active)
 
     def _ctrl(self):
         from odoo.addons.woow_paas_platform.controllers.oauth2 import OAuth2Controller
@@ -97,7 +107,9 @@ class TestDeviceCodeEndpoints(TransactionCase):
     def _req(self, session=None):
         from odoo import http
         m = MagicMock()
-        m.env = self.env
+        # Direct controller calls must see the same active subject that approves
+        # the device request, never TransactionCase's inactive ROOT1.
+        m.env = self.env(user=self.user)
         m.session = session if session is not None else {}
         # render() must return a real Response — the route wrapper type-checks
         # the handler's return value (MagicMock would raise TypeError). We only

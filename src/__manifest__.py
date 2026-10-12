@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.225",
+    "version": "18.0.1.0.228",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -38,6 +38,7 @@
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",
+        "data/smart_home_provision_prototype_cron.xml",
         # #1159 Q38：背景健康監控的 mail.activity 掛點（mail.thread 單例）
         "data/platform_monitor_data.xml",
         # #778 配套 3：計費靜默死亡監控 cron
@@ -60,6 +61,7 @@
         "views/res_config_settings_views.xml",
         "data/subscription_lifecycle_cron.xml",
         "data/mail_templates.xml",
+        "data/workspace_invitation_mail.xml",
         "data/low_balance_warning_cron.xml",
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",

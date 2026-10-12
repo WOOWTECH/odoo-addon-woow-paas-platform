@@ -84,6 +84,7 @@ from ..models.smart_home_route import (
     _sm_skip_access_sync,
 )
 from .smart_home_fixture import sh_model
+from .publication_receipt_fixture import install_publication_receipts
 
 # #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
 # fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
@@ -210,6 +211,8 @@ class _ShTeardownFixture(TransactionCase):
 
     def _client(self, result=None, sync_side_effect=None):
         client = MagicMock()
+        install_publication_receipts(client)
+        client.sync_access_app.side_effect = None
         client.sync_access_app.return_value = (
             _sync_result() if result is None else result)
         if sync_side_effect is not None:

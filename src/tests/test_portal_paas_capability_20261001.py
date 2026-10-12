@@ -14,6 +14,7 @@ from ..models.cloud_service import _internal_provision
 from ..models.smart_home import _platform_order
 from ..models.security_access import _skip_route_sync
 from ..services.paas_capability import _PaaSCapability
+from .invitation_mailbox_fixture import accept_queued_invitation
 
 _PREFIX = 'odoo.addons.woow_paas_platform.'
 _OPERATOR_FACTORIES = (
@@ -29,6 +30,7 @@ class TestPortalPaasCapability20261001(HttpCase):
     def setUp(self):
         super().setUp()
         self.suffix = uuid.uuid4().hex[:10]
+        self.env.company.email = 'isolated-invite-sender@example.invalid'
         # Fresh-install tests must not depend on an upgrade or another test
         # having populated the subscription journal configuration.
         if not self.env.company.sh_journal_id:
@@ -194,7 +196,11 @@ class TestPortalPaasCapability20261001(HttpCase):
         self.assertTrue(foreign.exists())
         invited = self._rpc('/api/workspaces/%s/members' % self.ws.id, {
             'action': 'invite', 'email': self.users['invitee'].email, 'role': 'user',
+            'invitation_mode': 'mailbox_challenge_v1',
         })
+        invited = accept_queued_invitation(
+            self, invited, self.users['invitee'], self.users['invitee'].login, self._rpc)
+        self._login('admin')
         member_url = '/api/workspaces/%s/members/%s' % (self.ws.id, invited['data']['id'])
         self._rpc(member_url, {'action': 'update_role', 'role': 'admin'})
         self._rpc(member_url, {'action': 'remove'})
@@ -219,9 +225,13 @@ class TestPortalPaasCapability20261001(HttpCase):
         self.assertEqual(workspace.access_ids.user_id, self.users['owner'])
         result = self._rpc('/api/workspaces/%s/members' % self.ws.id, {
             'action': 'invite', 'email': self.users['invitee'].email, 'role': 'guest',
+            'invitation_mode': 'mailbox_challenge_v1',
             'context': {'default_workspace_id': self.other_ws.id, 'default_role': 'owner',
                         'default_invited_by_id': self.users['other'].id},
         })
+        result = accept_queued_invitation(
+            self, result, self.users['invitee'], self.users['invitee'].login, self._rpc)
+        self._login('owner')
         member = self.env['woow_paas_platform.workspace_access'].browse(result['data']['id'])
         self.assertEqual(member.workspace_id, self.ws)
         self.assertEqual(member.role, 'guest')

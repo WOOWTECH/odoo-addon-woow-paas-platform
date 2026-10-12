@@ -1,0 +1,66 @@
+{
+  "rows": [
+    {
+      "xmlid": "cloud_app_mcp_hermes",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_k8s",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:2e7d3302936be8c2d04d1d3b17e1c759d48121d849a79e7a8b4842b6e1632358",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_litellm",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:1cdd351ddc781170e48e4f9b37e6d60585b81623335b051a62a043512f1a101b",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_n8n",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_nextcloud",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:427a0b994f278ff48457ff3e1fa02a9028674889e21f5cdb2dc7266b1daabb89",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_odoo",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_opendesign",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:ba052cec12fd3926ce85ee3bb6fb5f6b1609790c53ca877efd241d2b83e0d4ef",
+      "noupdate": false,
+      "pass": true
+    },
+    {
+      "xmlid": "cloud_app_mcp_vk",
+      "actual_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:7f6e591aef2ceb743cde1595e95da12ead3297b52605743b997090bd88594105",
+      "noupdate": false,
+      "pass": true
+    }
+  ],
+  "module_version": "18.0.1.0.228",
+  "module_state": "installed",
+  "readonly": true,
+  "scope": "fresh sandbox DB then actual old eight pins -> module upgrade; not prod migration rehearsal",
+  "namespace": "dev-sandbox-ac1012-mcppins-audit",
+  "namespace_uid": "ea064e8b-f887-4d5f-bf5d-4db0d919e54b",
+  "selected_tests": 129,
+  "failed": 0,
+  "errors": 0,
+  "initial_guard_failure": {
+    "test": "TestMcpOdooTemplateSeed.test_image_repin_must_recheck_launch_spec",
+    "expected": "Requires actual image launch recheck before tag update",
+    "disposition": "Actual new image CLI/transport/source confirmed; existing guard retained and expected tag updated"
+  }
+}

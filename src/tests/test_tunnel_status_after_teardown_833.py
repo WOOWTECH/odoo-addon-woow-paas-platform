@@ -25,6 +25,7 @@ from odoo.addons.woow_paas_platform.models.security_access import (
 )
 
 from .smart_home_fixture import sh_model
+from .publication_receipt_fixture import install_publication_receipts
 
 SA_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
@@ -63,7 +64,7 @@ class TestSecurityAccessStatusAfterTeardown(TransactionCase):
         """🔴 判別式：tunnel 被我們自己刪掉之後，不得繼續顯示 connected。"""
         sa = self._sa()
         with patch(SA_CLIENT) as get_client:
-            get_client.return_value = MagicMock()
+            get_client.return_value = install_publication_receipts(MagicMock())
             sa._cleanup_cloudflare()
 
         self.assertFalse(sa.tunnel_id, 'teardown 沒成功，判別式沒走到該走的分支')
@@ -82,7 +83,7 @@ class TestSecurityAccessStatusAfterTeardown(TransactionCase):
         """
         sa = self._sa()
         with patch(SA_CLIENT) as get_client:
-            client = MagicMock()
+            client = install_publication_receipts(MagicMock())
             client.delete_tunnel.side_effect = RuntimeError('cf down')
             get_client.return_value = client
             sa._cleanup_cloudflare()
@@ -119,7 +120,7 @@ class TestSmartHomeStatusAfterTeardown(TransactionCase):
         """🔴 判別式（SmartHome 側）。"""
         sh = self._sh()
         with patch(SH_CLIENT) as get_client:
-            get_client.return_value = MagicMock()
+            get_client.return_value = install_publication_receipts(MagicMock())
             sh._cleanup_tunnel()
 
         self.assertFalse(sh.tunnel_id, 'teardown 沒成功，判別式沒走到該走的分支')
@@ -129,7 +130,7 @@ class TestSmartHomeStatusAfterTeardown(TransactionCase):
         """陽性對照（SmartHome 側）。"""
         sh = self._sh()
         with patch(SH_CLIENT) as get_client:
-            client = MagicMock()
+            client = install_publication_receipts(MagicMock())
             client.delete_tunnel.side_effect = RuntimeError('cf down')
             get_client.return_value = client
             sh._cleanup_tunnel()

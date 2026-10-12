@@ -76,8 +76,10 @@ from odoo.exceptions import ValidationError
 from odoo.tests.common import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.workspace_access import WorkspaceAccess
+from .invitation_mailbox_fixture import accept_queued_invitation
 
 _INVITEE_EMAIL = 'invitee-525-a3@test.example'
+_INVITEE_PASSWORD = 'Invitee525!test'
 
 
 @tagged('post_install', '-at_install')
@@ -89,19 +91,21 @@ class TestInviteMemberLeavesNoAccessRow(HttpCase):
         self.authenticate('admin', 'admin')
         self.admin_user = self.env.ref('base.user_admin')
         self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
+        self.env.company.email = 'isolated-invite-sender@example.invalid'
 
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': 'WS 525 A3', 'owner_id': self.admin_user.id})
         self.invitee = self.env['res.users'].sudo().create({
             'name': 'Invitee 525 A3',
-            'login': 'invitee-525-a3',
+            'login': _INVITEE_EMAIL,
+            'password': _INVITEE_PASSWORD,
             'email': _INVITEE_EMAIL})
 
     # ── 使用者唯一入口（HTTP JSON-RPC）─────────────────────────────────
-    def _post(self, params):
+    def _post(self, params, url=None):
         body = json.dumps({'jsonrpc': '2.0', 'method': 'call', 'params': params})
         resp = self.url_open(
-            '/api/workspaces/%s/members' % self.workspace.id,
+            url or '/api/workspaces/%s/members' % self.workspace.id,
             data=body, headers={'Content-Type': 'application/json'})
         parsed = resp.json()
         self.assertIn('result', parsed, 'resp: %s' % parsed)
@@ -109,8 +113,16 @@ class TestInviteMemberLeavesNoAccessRow(HttpCase):
         return parsed['result']
 
     def _invite(self, role='user'):
-        return self._post({'action': 'invite', 'email': _INVITEE_EMAIL,
-                           'role': role})
+        issued = self._post({'action': 'invite', 'email': _INVITEE_EMAIL,
+                             'role': role, 'invitation_mode': 'mailbox_challenge_v1'})
+        if not issued.get('success'):
+            return issued
+        try:
+            return accept_queued_invitation(
+                self, issued, self.invitee, _INVITEE_PASSWORD,
+                lambda url, params: self._post(params, url=url))
+        finally:
+            self.authenticate('admin', 'admin')
 
     def _listed_member_emails(self):
         result = self._post({'action': 'list'})

@@ -36,11 +36,13 @@ METADATA_PATTERNS = [re.compile(p) for p in (
 )]
 
 
-# 客戶資料列比對時仍會變的表：registry 自己維護（非模組資料列也會被重建）或 Odoo 一啟動就會改寫既有列
+# 客戶資料列比對時仍會變的表：registry 自己維護（非模組資料列也會被重建）或 Odoo 一啟動就會改寫既有列。
+# res_device_log：autovacuum 把「session 檔已不存在」的裝置紀錄標成 revoked——session 檔不在搬遷範圍，所以搬過去
+# 之後全部會被標記（使用者要重新登入）。TransientModel 的表另由 .bfp 的 btransient 行帶進來。
 REGISTRY_PATTERNS = [re.compile(p) for p in (
     r"^ir_model", r"^ir_module_", r"^ir_cron", r"^ir_act_window_view$", r"^ir_logging$", r"^ir_profile$",
-    r"^bus_", r"^res_users_log$", r"^res_groups", r"^rule_group_rel$", r"^module_country$", r"^base_",
-    r"_group_rel$", r"_groups_rel$",
+    r"^bus_", r"^res_users_log$", r"^res_device_log$", r"^res_groups", r"^rule_group_rel$", r"^module_country$",
+    r"^base_", r"_group_rel$", r"_groups_rel$",
 )]
 
 
@@ -70,7 +72,7 @@ def parse_fp(path):
 
 
 def parse_bfp(path):
-    out = {"tables": {}, "maxid": {}, "added": {}, "missing": []}
+    out = {"tables": {}, "maxid": {}, "added": {}, "missing": [], "transient": set()}
     for line in Path(path).read_text().splitlines():
         parts = line.split("|")
         if parts[0] == "btable" and len(parts) == 4:
@@ -81,6 +83,8 @@ def parse_bfp(path):
             out["added"][parts[1]] = int(parts[2])
         elif parts[0] == "bmissing" and len(parts) == 3:
             out["missing"].append((parts[1], parts[2]))
+        elif parts[0] == "btransient" and len(parts) == 2:
+            out["transient"].add(parts[1])
     if not out["tables"]:
         raise ValueError("%s: no btable lines (not fingerprint_business.sql output?)" % path)
     return out
@@ -89,6 +93,7 @@ def parse_bfp(path):
 def diff_business(base, cur):
     """客戶資料列比對。回傳 (problems, expected, 客戶資料列不同的表)。"""
     problems, expected, differing = [], [], set()
+    transient = base["transient"] | cur["transient"]
     for table, col in cur["missing"]:
         problems.append("%s：欄 %s 在升級後不見了" % (table, col))
     for table in sorted(base["tables"]):
@@ -100,13 +105,15 @@ def diff_business(base, cur):
             problems.append("%s：升級後整張表不見了（客戶資料 %d 列）" % (table, a[0]))
         elif is_registry(table):
             expected.append("%s：registry／執行期表，%d → %d 列" % (table, a[0], b[0]))
+        elif table in transient:
+            expected.append("%s：暫存（transient）表，autovacuum 會清，%d → %d 列" % (table, a[0], b[0]))
         elif table not in base["maxid"] and b[0] > a[0]:
             expected.append("%s：%d → %d 列（沒有 id 欄，無法確認舊列是否原封不動）" % (table, a[0], b[0]))
         else:
             problems.append("%s：客戶資料列有變動（%d → %d 列%s）" % (
                 table, a[0], b[0], "，內容不同" if a[0] == b[0] else ""))
     for table in sorted(cur["added"]):
-        if not is_registry(table):
+        if not is_registry(table) and table not in transient:
             expected.append("%s：升級後新增 %d 列" % (table, cur["added"][table]))
     return problems, expected, differing
 

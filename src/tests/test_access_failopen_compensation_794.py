@@ -60,6 +60,10 @@ RPC；租戶從 `/woow` 按刪除走的 `action_delete()` 就是這條）。
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import (
+    install_publication_receipts,
+    routes_receipt,
+)
 
 from psycopg2 import OperationalError
 
@@ -205,7 +209,7 @@ class TestSaRouteFailOpenCompensation(TransactionCase):
     def _client(self, side_effect):
         client = MagicMock()
         client.sync_access_app.side_effect = side_effect
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         return client
 
     @staticmethod
@@ -494,7 +498,7 @@ class TestSecurityAccessUnlinkFailOpen(TransactionCase):
     def _client(self, tunnel_ok):
         client = MagicMock()
         client.sync_access_app.return_value = _teardown_result()
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         if tunnel_ok:
             client.delete_tunnel.return_value = {'success': True}
         else:
@@ -693,7 +697,7 @@ class TestShRouteFailOpenCompensation(TransactionCase):
         本 method 原本沒有 savepoint，是本修法加的。
         """
         route = self._route('app-shu')
-        client = MagicMock()
+        client = install_publication_receipts(MagicMock())
         client.sync_access_app.side_effect = (
             lambda payload: (_teardown_result() if not payload.get('enabled')
                              else _sync_result(app_id='app-shu-rebuilt')))
@@ -891,7 +895,7 @@ class TestTornDownSurvivesLedgerFailure(TransactionCase):
     def _client(self):
         client = MagicMock()
         client.sync_access_app.return_value = _teardown_result()
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        client.sync_tunnel_routes.side_effect = routes_receipt
         return client
 
     @mute_logger(LOG_SA, LOG_REAP)

@@ -147,6 +147,19 @@ class ReleaseRollbackRequest(BaseModel):
         return self
 
 
+class ReleaseConfigProjectionRequest(BaseModel):
+    """僅供平台內部同步；不得要求 credential 或任意子樹。"""
+    revision: int = Field(ge=1)
+    paths: List[str] = Field(default_factory=list, max_length=128)
+    excluded_paths: List[str] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode="after")
+    def _validate_projection(self):
+        from src.services.config_projection import validate_paths
+        validate_paths(self.paths, self.excluded_paths)
+        return self
+
+
 class ReleaseResetConfigRequest(BaseModel):
     """#357：reset admin_password。載體由 ``admin_password_carrier`` 分流（#449）。
 
@@ -260,6 +273,22 @@ class RestampLabelsRequest(BaseModel):
 
     workspace_id: Optional[int] = Field(default=None)
     reach_workspace_ids: List[int] = Field(default_factory=list)
+
+
+class TunnelBareCreateRequest(BaseModel):
+    """Prototype: create only; no token, ingress, DNS or Access mutation."""
+
+    model_config = {"extra": "forbid"}
+    name: str = Field(..., min_length=1, max_length=100)
+    expected_account_id: str = Field(..., min_length=1, max_length=128)
+
+
+class TunnelBareCreateResponse(BaseModel):
+    """Non-secret anchor returned immediately after provider create."""
+
+    tunnel_id: str
+    tunnel_name: str
+    provider_account_id: str
 
 
 class TunnelCreateRequest(BaseModel):

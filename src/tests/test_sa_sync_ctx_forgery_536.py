@@ -65,6 +65,7 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _rule_replace,
     _skip_route_sync,
 )
+from .publication_receipt_fixture import install_publication_receipts
 
 _SA = 'woow_paas_platform.security_access'
 _ROUTE = 'woow_paas_platform.security_access_route'
@@ -148,12 +149,7 @@ class _Sync536Fixture(HttpCase):
     # ------------------------------------------------------------------ #
 
     def _mock(self):
-        m = MagicMock()
-        m.sync_tunnel_routes.return_value = {'routes': []}
-        m.sync_access_app.return_value = {
-            'app_id': 'app-1', 'policy_ids': ['pol-1'],
-            'allowed_idps': ['idp-g', 'idp-otp']}
-        return m
+        return install_publication_receipts(MagicMock())
 
     def _call_kw(self, model, method, args, kwargs=None):
         """`/web/dataset/call_kw` —— context 偽造攻擊的真實路徑。

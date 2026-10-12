@@ -40,6 +40,7 @@ import logging
 import uuid
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import access_receipt, routes_receipt
 
 from psycopg2 import OperationalError
 
@@ -98,9 +99,11 @@ class _Fixture:
 
     def _mock(self, result=None):
         client = MagicMock()
-        client.sync_access_app.return_value = (
-            _sync_result() if result is None else result)
-        client.sync_tunnel_routes.return_value = {'routes': []}
+        if result is None:
+            client.sync_access_app.side_effect = access_receipt
+        else:
+            client.sync_access_app.return_value = result
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.delete_tunnel.return_value = {'success': True}
         return client
 
@@ -708,7 +711,7 @@ class TestReaperReviewFindings791(TransactionCase, _Fixture):
             orphaned=['cf-d4-real', 'cf-d4-forged']))
 
         with patch(MOCK_SA_CLIENT, return_value=client):
-            with self.assertLogs(LOG_REAP, level=logging.WARNING) as captured:
+            with self.assertRaises(UserError):
                 route.with_context(
                     sa_unlinked_cf_policy_ids=['cf-d4-forged']
                 )._sync_access_to_operator()
@@ -722,14 +725,12 @@ class TestReaperReviewFindings791(TransactionCase, _Fixture):
             'cf-d4-forged', payload['existing_policy_ids'],
             '第一道（#783）：呼叫端 context 塞的 id 連送出端都進不去')
         pending = self._pending_policies(route.id)
-        self.assertIn('cf-d4-real', pending,
-                      '陽性對照：列上真實存在過的孤兒必須落帳')
         self.assertNotIn(
             'cf-d4-forged', pending,
             '第二道（#791 F9）：operator 回報的未知 id 不得經結帳變成持久的刪除'
             '指令')
-        self.assertTrue(any('cf-d4-forged' in line for line in captured.output),
-                        '拒收要出聲，否則與「根本沒發生」不可區分')
+        route.invalidate_recordset()
+        self.assertEqual(route.access_app_id, 'app-d4')
 
 
 # ====================================================================== #

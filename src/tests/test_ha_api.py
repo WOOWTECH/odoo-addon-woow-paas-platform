@@ -4,10 +4,12 @@ Uses TransactionCase with direct function calls to test
 the controller logic without requiring a running HTTP server.
 """
 from datetime import timedelta
+import uuid
 from unittest.mock import patch, MagicMock
 
 from odoo import fields
-from odoo.tests.common import TransactionCase
+from odoo.tests.common import TransactionCase, new_test_user
+from .publication_receipt_fixture import configure_receipt, routes_receipt
 from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
@@ -22,12 +24,24 @@ class TestHAApiBase(TransactionCase):
         self.OAuthClient = self.env['woow_paas_platform.oauth_client']
         self.OAuthToken = self.env['woow_paas_platform.oauth_token']
 
-        # Use self.env.user (superuser in TransactionCase) to match
-        # Workspace.create() which sets owner_id = self.env.user
-        self.user = self.env.user
+        # OAuth positive controls need an explicitly active, non-public
+        # subject.  ROOT1 is inactive by design and must not be activated by a
+        # fixture merely to make bearer validation green.
+        suffix = uuid.uuid4().hex[:10]
+        self.user = new_test_user(
+            self.env,
+            login=f'ha_api_active_{suffix}',
+            groups='base.group_user',
+            context={'no_reset_password': True, 'mail_create_nosubscribe': True},
+        )
+        self.assertTrue(self.user.active)
+        self.assertFalse(self.user._is_public())
 
-        # Create workspace (auto-creates owner access for self.env.user)
-        self.workspace = self.Workspace.create({'name': 'HA Test Workspace'})
+        # Create workspace with the same dedicated subject as owner.
+        self.workspace = self.Workspace.create({
+            'name': 'HA Test Workspace',
+            'owner_id': self.user.id,
+        })
 
         # Create smart home
         self.home = self.SmartHome.create({
@@ -43,8 +57,11 @@ class TestHAApiBase(TransactionCase):
         # Create OAuth client + valid token
         self.oauth_client = self.OAuthClient.create({
             'name': 'HA Test Client',
+            'client_id': f'ha-api-active-{suffix}',
             'redirect_uris': 'http://localhost:8123/auth/callback',
+            'is_active': True,
         })
+        self.assertTrue(self.oauth_client.is_active)
         self.token = self.OAuthToken.create({
             'access_token': 'valid-bearer-token-123',
             'refresh_token': 'refresh-token-456',
@@ -198,6 +215,8 @@ class TestHAApiIntegration(TestHAApiBase):
             'tunnel_token': 'tok-flow-secret',
             'tunnel_name': 'smarthome-flow',
         }
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_get_client.return_value = mock_client
 
         # Step 1: Create Smart Home
@@ -239,6 +258,8 @@ class TestHAApiIntegration(TestHAApiBase):
             'tunnel_token': 'tok-lifecycle',
             'tunnel_name': 'smarthome-lifecycle',
         }
+        mock_client.configure_tunnel.side_effect = configure_receipt
+        mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_get_client.return_value = mock_client
 
         # Create and provision

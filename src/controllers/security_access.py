@@ -8,6 +8,7 @@ All results remain explicit DTOs, not raw ORM reads.
 """
 from __future__ import annotations
 
+from ..services.access_state import access_mutation_result
 import logging
 from typing import Any
 
@@ -176,7 +177,11 @@ class SecurityAccessController(Controller):
                 sa.sudo().action_provision()
             except Exception as e:
                 return {"success": False, "error": str(e)}
-            return {"success": True, "data": sa.to_dict()}
+            data = sa.to_dict()
+            if sa.state == "error":
+                return {"success": False, "data": data,
+                        "error": sa.error_message or _("Provisioning failed")}
+            return {"success": True, "data": data}
         elif action == "delete":
             try:
                 sa._check_operation_allowed(operation='write')
@@ -972,7 +977,7 @@ class SecurityAccessController(Controller):
         try:
             if vals:
                 route.write(vals)
-            return {"success": True, "data": sa.to_dict()}
+            return access_mutation_result(route, sa.to_dict())
         except Exception as e:
             _logger.exception("[SA] Failed to update access config: %s", e)
             return {"success": False, "error": str(e)}
@@ -1003,7 +1008,7 @@ class SecurityAccessController(Controller):
         try:
             if vals:
                 route.write(vals)
-            return {"success": True, "data": route.to_dict()}
+            return access_mutation_result(route, route.to_dict())
         except Exception as e:
             _logger.exception("[SA] Failed to update route access: %s", e)
             return {"success": False, "error": str(e)}
@@ -1083,7 +1088,7 @@ class SecurityAccessController(Controller):
             create_vals["rule_value"] = kwargs.get("rule_value", "")
         try:
             pol = Policy.create(create_vals)
-            return {"success": True, "data": pol.to_dict()}
+            return access_mutation_result(route, pol.to_dict())
         except Exception as e:
             _logger.exception("[SA] Failed to create access policy: %s", e)
             return {"success": False, "error": str(e)}
@@ -1138,7 +1143,7 @@ class SecurityAccessController(Controller):
                 routes |= pol.route_id
             for route in routes:
                 route._sync_access_to_operator()
-            return {"success": True, "data": {"reordered": reordered}}
+            return access_mutation_result(routes, {"reordered": reordered})
         except Exception as e:
             _logger.exception("[SA] Failed to reorder policies: %s", e)
             return {"success": False, "error": str(e)}
@@ -1180,7 +1185,7 @@ class SecurityAccessController(Controller):
         try:
             if vals:
                 write_pol.write(vals)
-            return {"success": True, "data": pol.to_dict()}
+            return access_mutation_result(pol.route_id, pol.to_dict())
         except Exception as e:
             _logger.exception("[SA] Failed to update access policy: %s", e)
             return {"success": False, "error": str(e)}
@@ -1189,9 +1194,10 @@ class SecurityAccessController(Controller):
         pol = self._sa_policy(sa, policy_id)
         if not pol:
             return {"success": False, "error": _("Policy not found")}
+        route = pol.route_id
         try:
             pol.unlink()
-            return {"success": True, "data": {"message": _("Policy deleted")}}
+            return access_mutation_result(route, {"message": _("Policy deleted")})
         except Exception as e:
             _logger.exception("[SA] Failed to delete access policy: %s", e)
             return {"success": False, "error": str(e)}

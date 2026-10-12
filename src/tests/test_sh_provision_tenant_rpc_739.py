@@ -69,6 +69,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_ADMIN, ROLE_OWNER, ROLE_USER,
 )
 from .operator_contract import operator_client  # #1052：受 spec 約束的 client double
+from .publication_receipt_fixture import configure_receipt, routes_receipt
 from .smart_home_fixture import sh_model
 
 _MODEL = 'woow_paas_platform.smart_home'
@@ -211,6 +212,8 @@ class _Sh739Fixture(HttpCase):
             'tunnel_token': self.expected_token,
             'tunnel_name': 'name-739-%s' % uuid.uuid4().hex[:6],
         }
+        client.configure_tunnel.side_effect = configure_receipt
+        client.sync_tunnel_routes.side_effect = routes_receipt
         client.get_tunnel_status.return_value = {'connections': []}
         for k, v in extra.items():
             setattr(client, k, v)
@@ -610,3 +613,41 @@ class TestSh739SwallowedFailureShape(_Sh739Fixture):
             self._db(sh.id, 'tunnel_id'),
             '陽性對照：這一次 operator 沒有回任何東西，所以不該有 tunnel_id'
             '（有的話代表我打到的不是我以為的那條分支）')
+
+    def test_C2_operator_connection_failure_is_not_success(self):
+        from ..services.paas_operator import PaaSOperatorConnectionError
+        sh = self._order_smart_home(self.alice_login, self.w1, 'connection failed')
+        client = self._operator_client()
+        client.create_tunnel.side_effect = PaaSOperatorConnectionError('qa-no-operator')
+        result = self._provision(self.alice_login, self.w1.id, sh.id, client)
+        payload = self._assert_no_rpc_error(result, 'connection failure response')
+        self.assertTrue(client.create_tunnel.called)
+        self.assertFalse(payload.get('success'), payload)
+        self.assertEqual(payload['data']['state'], 'error')
+        self.assertIn('qa-no-operator', payload['error'])
+        self.assertNotIn('tunnel_token', payload['data'])
+
+    def test_C3_operator_failure_is_not_success(self):
+        from ..services.paas_operator import PaaSOperatorError
+        sh = self._order_smart_home(self.alice_login, self.w1, 'operator failed')
+        client = self._operator_client()
+        client.create_tunnel.side_effect = PaaSOperatorError('qa-create-rejected')
+        result = self._provision(self.alice_login, self.w1.id, sh.id, client)
+        payload = self._assert_no_rpc_error(result, 'operator failure response')
+        self.assertTrue(client.create_tunnel.called)
+        self.assertFalse(payload.get('success'), payload)
+        self.assertEqual(payload['data']['state'], 'error')
+        self.assertIn('qa-create-rejected', payload['error'])
+
+    def test_C4_dns_failure_keeps_retry_anchor_but_is_not_success(self):
+        sh = self._order_smart_home(self.alice_login, self.w1, 'dns failed')
+        client = self._operator_client()
+        client.create_tunnel.return_value['dns_failed'] = True
+        result = self._provision(self.alice_login, self.w1.id, sh.id, client)
+        payload = self._assert_no_rpc_error(result, 'DNS failure response')
+        self.assertEqual(client.create_tunnel.call_count, 1)
+        self.assertFalse(payload.get('success'), payload)
+        self.assertEqual(payload['data']['state'], 'error')
+        self.assertEqual(payload['data']['tunnel_id'], client.create_tunnel.return_value['tunnel_id'])
+        self.assertTrue(payload['data']['routes'], 'retry must retain its route')
+        self.assertNotIn('tunnel_token', payload['data'])

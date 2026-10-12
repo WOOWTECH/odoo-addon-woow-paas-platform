@@ -360,7 +360,7 @@ def _sanitize_release_values(values: Any) -> Any:
 
 
 def validate_namespace(namespace: str) -> None:
-    """Validate that namespace starts with allowed prefix."""
+    """Validate the tenant prefix without crossing the reserved staging boundary."""
     prefix = settings.namespace_prefix
     if not prefix:
         # #284 W0-hardening: an empty prefix makes startswith('') always true,
@@ -374,6 +374,11 @@ def validate_namespace(namespace: str) -> None:
         raise ValueError(
             f"Namespace must start with '{prefix}'"
         )
+    # prod's broad prefix also matches every staging tenant on the shared cluster.
+    # Keep this in the common guard so Helm reads and Kubernetes writes both stop
+    # before invoking their CLI. Custom isolated test prefixes remain unchanged.
+    if prefix == "paas-ws-" and namespace.startswith("paas-ws-stg-"):
+        raise ValueError("Production operator cannot access staging namespaces")
 
 
 # k8s label VALUE syntax: empty, or <=63 chars of alnum / '-' / '_' / '.' that
@@ -1119,6 +1124,22 @@ class HelmService:
         with helm_operation_slot("rollback"):  # #1552
             result = self._run_command(args)
         return {"message": result.stdout.strip()}
+
+    def get_config_projection(self, namespace, name, revision, paths, excluded_paths=()):
+        """固定 revision + chart computed defaults；raw values 不離開此方法。"""
+        from src.services.config_projection import project_values, validate_paths
+        validate_namespace(namespace)
+        validate_paths(paths, excluded_paths)
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ValueError('configuration revision must be positive')
+        result = self._run_command([
+            'get', 'values', name, '--namespace', namespace, '--all',
+            '--revision', str(revision), '--output', 'json',
+        ])
+        values = json.loads(result.stdout or 'null')
+        if values is not None and not isinstance(values, dict):
+            raise ValueError('configuration values must be an object')
+        return project_values(values or {}, paths, excluded_paths)
 
     def get_values(
         self, namespace: str, name: str, revision: Optional[int] = None
