@@ -89,6 +89,17 @@ class TestFingerprintDiff(unittest.TestCase):
         # 沒有 id 的關聯表：列數沒增加卻內容不同 ⇒ 舊列被動過
         self.assertEqual(self.run_business(SRC_FP, BASE_BFP, BASE_BFP.replace("res_partner_tag_rel|3|r1", "res_partner_tag_rel|3|r2")), 1)
 
+    def test_upgrade_business_tolerates_runtime_and_transient_tables(self):
+        base = BASE_BFP + "btable|res_device_log|658|d1\nbtable|mail_compose_message|4|w1\nbtable|sale_order|9|s1\n"
+        cur = base.replace("res_device_log|658|d1", "res_device_log|658|d2").replace(
+            "mail_compose_message|4|w1", "mail_compose_message|0|-")
+        # res_device_log 是執行期表；mail_compose_message 沒有 btransient 行時仍算客戶資料
+        self.assertEqual(self.run_business(SRC_FP, base, cur), 1)
+        self.assertEqual(self.run_business(SRC_FP, base, cur + "btransient|mail_compose_message\n"), 0)
+        # 一般的表不受影響
+        self.assertEqual(self.run_business(SRC_FP, base, cur.replace("sale_order|9|s1", "sale_order|8|s2")
+                                           + "btransient|mail_compose_message\n"), 1)
+
     def test_upgrade_business_sequences_only_move_forward(self):
         self.assertEqual(self.run_business(SRC_FP.replace("res_partner_id_seq|210", "res_partner_id_seq|211"), BASE_BFP, BASE_BFP), 0)
         self.assertEqual(self.run_business(SRC_FP.replace("res_partner_id_seq|210", "res_partner_id_seq|5"), BASE_BFP, BASE_BFP), 1)

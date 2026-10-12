@@ -28,6 +28,7 @@ import secrets
 import uuid
 from datetime import timedelta
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 from odoo import fields
 from odoo.tests.common import HttpCase, tagged
@@ -128,7 +129,8 @@ class TestHaApiPortalMembership1528(HttpCase):
             self.ws_archived, self.users['portal']['owner'], 'owner')
         self.ws_archived.write({'state': 'archived'})
 
-        # 已停用的 Portal 帳號：成員列還在、token 仍有效。
+        # 已停用的 Portal 帳號：成員列與停用前取得的 token 都還在，但 bearer
+        # validity 必須在 controller/resource lookup 之前 fail closed。
         self._ensure_member(self.ws['portal'], self.p_gone, 'user')
         self._tokens = {}
         self._gone_token = self._token(self.p_gone)
@@ -358,15 +360,35 @@ class TestHaApiPortalMembership1528(HttpCase):
 
     def test_inactive_portal_user_denied_without_500(self):
         token = self._gone_token
-        resp = self._get(token, '/api/smarthome/workspaces')
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertEqual(resp.json()['workspaces'], [])
-        resp = self._get(token, '/api/security-access/workspaces')
-        self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertEqual(resp.json()['workspaces'], [])
-        for key, url in self._urls('portal').items():
-            with self.subTest(url=key):
-                self._assert_forbidden(self._get(token, url), url)
+        from odoo.addons.woow_paas_platform.controllers import ha_api
+
+        def lookup_entered(*args, **kwargs):
+            raise AssertionError('inactive bearer entered HA resource lookup')
+
+        urls = [
+            '/api/smarthome/workspaces',
+            '/api/security-access/workspaces',
+            *self._urls('portal').values(),
+        ]
+        with patch.object(ha_api, '_get_user_workspaces',
+                          side_effect=lookup_entered) as get_workspaces, \
+             patch.object(ha_api, '_check_workspace_access',
+                          side_effect=lookup_entered) as check_workspace, \
+             patch.object(ha_api.HAIntegrationController, '_get_home_with_access',
+                          side_effect=lookup_entered) as get_home, \
+             patch.object(ha_api.HAIntegrationController, '_get_sa_with_access',
+                          side_effect=lookup_entered) as get_access:
+            for url in urls:
+                with self.subTest(url=url):
+                    resp = self._get(token, url)
+                    self.assertEqual(resp.status_code, 401, resp.text)
+                    self.assertNotEqual(resp.status_code, 500, resp.text)
+                    self.assertEqual(resp.json()['error'], 'Unauthorized')
+                    self._assert_no_secret(resp)
+            get_workspaces.assert_not_called()
+            check_workspace.assert_not_called()
+            get_home.assert_not_called()
+            get_access.assert_not_called()
 
     def test_scope_gate_still_applies_to_portal_owner(self):
         owner = self.users['portal']['owner']

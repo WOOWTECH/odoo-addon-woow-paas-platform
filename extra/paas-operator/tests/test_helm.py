@@ -1626,6 +1626,7 @@ class TestManagedNsLabels:
         # 捕捉只認 kind==Namespace，不受影響。
         mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
         monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        monkeypatch.setattr("src.config.settings.namespace_prefix", "paas-ws-stg-")
         captured = self._capture_ns_labels(monkeypatch)
         KubernetesService().create_namespace(
             name="paas-ws-stg-x", cpu_limit="1", memory_limit="1Gi", storage_limit="5Gi")
@@ -1718,6 +1719,7 @@ class TestTenantIsolationLabels:
         # 會 json.loads(stdout)），需合法 JSON；ns-label 捕捉只認 kind==Namespace、不受 NP 影響。
         mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
         monkeypatch.setattr("src.config.settings.paas_env", "stg")
+        monkeypatch.setattr("src.config.settings.namespace_prefix", "paas-ws-stg-")
         captured = TestManagedNsLabels._capture_ns_labels(monkeypatch)
         KubernetesService().create_namespace(
             name="paas-ws-stg-x", cpu_limit="1", memory_limit="1Gi",

@@ -33,6 +33,7 @@ def _json_response(data: dict, status: int = 200) -> Response:
         json.dumps(data),
         status=status,
         content_type='application/json',
+        headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'},
     )
 
 

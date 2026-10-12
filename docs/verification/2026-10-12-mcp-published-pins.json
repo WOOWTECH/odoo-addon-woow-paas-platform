@@ -1,0 +1,75 @@
+{
+  "main_merge": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+  "ci_run": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319",
+  "published_images": {
+    "hermes": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20062",
+      "actual_health200": true
+    },
+    "k8s": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:2e7d3302936be8c2d04d1d3b17e1c759d48121d849a79e7a8b4842b6e1632358",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20063",
+      "actual_health200": true
+    },
+    "litellm": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:1cdd351ddc781170e48e4f9b37e6d60585b81623335b051a62a043512f1a101b",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20064",
+      "actual_health200": true
+    },
+    "n8n": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20065",
+      "actual_health200": true
+    },
+    "nextcloud": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:427a0b994f278ff48457ff3e1fa02a9028674889e21f5cdb2dc7266b1daabb89",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20066",
+      "actual_health200": true
+    },
+    "odoo": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20067",
+      "actual_health200": true
+    },
+    "opendesign": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:ba052cec12fd3926ce85ee3bb6fb5f6b1609790c53ca877efd241d2b83e0d4ef",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20068",
+      "actual_health200": true
+    },
+    "vk": {
+      "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f",
+      "digest": "sha256:7f6e591aef2ceb743cde1595e95da12ead3297b52605743b997090bd88594105",
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18319/jobs/20069",
+      "actual_health200": true
+    }
+  },
+  "odoo_entrypoint_actual_image": {
+    "console_script": "odoo-mcp",
+    "entrypoint": "odoo_mcp.__main__:main",
+    "distribution": "odoo-mcp",
+    "version": "1.1.0",
+    "mcp_sdk_version": "1.28.1",
+    "launch_command": [
+      "odoo-mcp",
+      "--transport",
+      "streamable-http",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "streamable_http_help": true,
+    "main_source_sha256": "c0e4525e57913f654d241d8ddfe47e0f645443ae3360a68b0118f204ecf44030",
+    "actual_image_id": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6",
+    "scope": "actual published image entrypoint/transport; own QA namespace existing pull-secret references only; no credentials copied; no customer Odoo calls"
+  },
+  "scope": "Eight monorepo catalog defaults; legacy independent odoo-manage untouched; source feature, not live catalog deployment"
+}

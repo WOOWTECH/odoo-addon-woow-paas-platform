@@ -18,6 +18,7 @@ from src.models.schemas import (
     MqttAddressResponse,
     PublicAddressResponse,
     ReleaseCreateRequest,
+    ReleaseConfigProjectionRequest,
     ReleaseInfo,
     ReleaseResetConfigRequest,
     ReleaseRevisionsResponse,
@@ -1125,6 +1126,18 @@ async def delete_release(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Helm uninstall failed. Check operator logs for details.",
         )
+
+
+@router.post("/{namespace}/{name}/config-projection", response_model=Dict[str, Any])
+def release_config_projection(namespace: str, name: str, request: ReleaseConfigProjectionRequest):
+    """API key 保護的固定版本公開設定投影，不回傳憑證與其他值。"""
+    _validate_namespace_or_raise(namespace)
+    try:
+        result = helm_service.get_config_projection(
+            namespace, name, request.revision, request.paths, request.excluded_paths)
+    except (ValueError, HelmException):
+        raise HTTPException(status_code=503, detail='Configuration projection unavailable')
+    return {'revision': request.revision, **result}
 
 
 @router.post(

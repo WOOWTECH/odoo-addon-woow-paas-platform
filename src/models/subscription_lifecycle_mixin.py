@@ -111,13 +111,16 @@ def _subscription_total_with_tax(sub):
             partner=sub.sh_partner_id,
             currency=currency,
         )
-        tax_amount = compute['total_included'] - compute['total_excluded']
+        untaxed = compute['total_excluded']
+        total = compute['total_included']
+        tax_amount = total - untaxed
         tax_rate = (tax_amount / untaxed) if untaxed else 0.0
     else:
+        total = untaxed
         tax_amount = 0.0
         tax_rate = 0.0
 
-    return float(untaxed), float(tax_rate), float(tax_amount), float(untaxed + tax_amount)
+    return float(untaxed), float(tax_rate), float(tax_amount), float(total)
 
 
 class SubscriptionLifecycleMixin(models.AbstractModel):

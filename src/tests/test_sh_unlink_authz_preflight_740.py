@@ -97,6 +97,7 @@ from odoo.exceptions import AccessError, UserError
 from odoo.tests import tagged
 
 from .test_smart_home_authz_524 import _SmartHome524Fixture
+from .publication_receipt_fixture import install_publication_receipts
 
 _logger = logging.getLogger(__name__)
 _MARK = '740'
@@ -123,18 +124,13 @@ class _Sh740Fixture(_SmartHome524Fixture):
         """每個回傳值都明寫——`MagicMock` 的自動回傳值是 truthy，會讓
         `result.get('orphaned_policy_ids')` 之類的判斷走進與實際不同的分支。"""
         c = MagicMock()
+        install_publication_receipts(c)
         c.create_tunnel.side_effect = lambda **kw: {
             'tunnel_id': 'tun-%s' % uuid.uuid4().hex[:8],
             'tunnel_token': 'tok-%s' % uuid.uuid4().hex[:6],
             'tunnel_name': kw.get('name') or 'tunnel-name',
         }
         c.delete_tunnel.return_value = None
-        c.sync_access_app.return_value = {
-            'app_id': 'cf-app-%s' % uuid.uuid4().hex[:8],
-            'policy_ids': [],
-            'orphaned_policy_ids': [],
-            'unresolved_idp_types': [],
-        }
         c.get_tunnel_status.return_value = {'connections': []}
         return c
 

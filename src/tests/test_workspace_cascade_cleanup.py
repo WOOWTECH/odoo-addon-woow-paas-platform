@@ -24,6 +24,7 @@ from odoo.addons.woow_paas_platform.models.security_access import (
 )
 from ..models.cloud_service import _internal_provision
 from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
+from .publication_receipt_fixture import install_publication_receipts
 
 
 def _mock_sh():
@@ -52,7 +53,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         """
         ws = self.Workspace.create({'name': 'WS Cascade SH'})
         with _mock_sh() as mock_get:
-            mock_client = MagicMock()
+            mock_client = install_publication_receipts(MagicMock())
             mock_get.return_value = mock_client
             sh = self.SmartHome.create({
                 'name': 'sh', 'workspace_id': ws.id,
@@ -74,7 +75,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         """workspace.unlink 必須走 SecurityAccess.unlink → delete_tunnel 被呼叫（F-ENV-5）。"""
         ws = self.Workspace.create({'name': 'WS Cascade SA'})
         with _mock_sa() as mock_get:
-            mock_client = MagicMock()
+            mock_client = install_publication_receipts(MagicMock())
             mock_get.return_value = mock_client
             sa = self.SA.create({'name': 'sa', 'workspace_id': ws.id})
             _internal(sa).write({'tunnel_id': 'tun-live-2'})
@@ -94,7 +95,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
         ws = self.Workspace.create({'name': 'WS FailLoud'})
         with _mock_sh() as mock_get:
-            mock_client = MagicMock()
+            mock_client = install_publication_receipts(MagicMock())
             mock_client.delete_tunnel.side_effect = PaaSOperatorError(message='boom')
             mock_get.return_value = mock_client
             sh = self.SmartHome.create({
@@ -125,8 +126,8 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         呼叫、兩 row 都刪、互不 skip（F-ENV-5）。"""
         ws = self.Workspace.create({'name': 'WS Both'})
         with _mock_sh() as mock_sh_get, _mock_sa() as mock_sa_get:
-            sh_client = MagicMock()
-            sa_client = MagicMock()
+            sh_client = install_publication_receipts(MagicMock())
+            sa_client = install_publication_receipts(MagicMock())
             mock_sh_get.return_value = sh_client
             mock_sa_get.return_value = sa_client
             sh = self.SmartHome.create({
@@ -151,7 +152,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         ws1 = self.Workspace.create({'name': 'WS B1'})
         ws2 = self.Workspace.create({'name': 'WS B2'})
         with _mock_sh() as mock_get:
-            client = MagicMock()
+            client = install_publication_receipts(MagicMock())
             mock_get.return_value = client
             sh1 = self.SmartHome.create({
                 'name': 'sh1', 'workspace_id': ws1.id,
@@ -197,7 +198,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         ws = self.Workspace.create({'name': 'WS CS Helm'})
         with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
                    'get_paas_operator_client') as mock_get:
-            mock_client = MagicMock()
+            mock_client = install_publication_receipts(MagicMock())
             mock_get.return_value = mock_client
             svc = self._make_cloud_service_with_helm(ws)
             svc_id = svc.id
@@ -219,7 +220,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         ws = self.Workspace.create({'name': 'WS CS FailLoud'})
         with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
                    'get_paas_operator_client') as mock_get:
-            mock_client = MagicMock()
+            mock_client = install_publication_receipts(MagicMock())
             mock_client.uninstall_release.side_effect = PaaSOperatorError(
                 message='helm boom', status_code=500)
             mock_get.return_value = mock_client
@@ -241,7 +242,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         ws = self.Workspace.create({'name': 'WS CS 404'})
         with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
                    'get_paas_operator_client') as mock_get:
-            mock_client = MagicMock()
+            mock_client = install_publication_receipts(MagicMock())
             mock_client.uninstall_release.side_effect = PaaSOperatorError(
                 message='not found', status_code=404)
             mock_get.return_value = mock_client
@@ -276,9 +277,9 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
         with _mock_sh() as msh, _mock_sa() as msa, \
                 patch('odoo.addons.woow_paas_platform.services.paas_operator.'
                       'get_paas_operator_client') as mcs:
-            sh_client = MagicMock()
-            sa_client = MagicMock()
-            cs_client = MagicMock()
+            sh_client = install_publication_receipts(MagicMock())
+            sa_client = install_publication_receipts(MagicMock())
+            cs_client = install_publication_receipts(MagicMock())
             msh.return_value = sh_client
             msa.return_value = sa_client
             mcs.return_value = cs_client

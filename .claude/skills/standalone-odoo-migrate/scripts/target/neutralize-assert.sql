@@ -14,6 +14,9 @@ BEGIN TRANSACTION READ ONLY;
 SELECT 'nfail|database.is_neutralized 未設定|1'
  WHERE NOT EXISTS (SELECT 1 FROM ir_config_parameter WHERE key = 'database.is_neutralized' AND lower(value) = 'true');
 
+SELECT 'nfail|web.base.url 仍被凍結在來源站網址|1'
+ WHERE EXISTS (SELECT 1 FROM ir_config_parameter WHERE key = 'web.base.url.freeze' AND lower(value) = 'true');
+
 SELECT 'nfail|仍啟用的排程（autovacuum 以外）|' || count(*) FROM ir_cron c
  WHERE c.active AND c.id NOT IN (SELECT res_id FROM ir_model_data
                                   WHERE model = 'ir.cron' AND module = 'base' AND name = 'autovacuum_job')
@@ -32,7 +35,7 @@ SELECT 'nfail|仍啟用的收信主機|' || count(*) FROM fetchmail_server WHERE
 
 SELECT to_regclass('public.payment_provider') IS NOT NULL AS has_payment \gset
 \if :has_payment
-SELECT 'nfail|仍啟用的金流供應商|' || count(*) FROM payment_provider WHERE state = 'enabled' HAVING count(*) > 0;
+SELECT 'nfail|沒有停用的金流供應商（含測試模式）|' || count(*) FROM payment_provider WHERE state <> 'disabled' HAVING count(*) > 0;
 \endif
 
 SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'

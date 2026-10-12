@@ -31,6 +31,7 @@ dual-leg 有兩個方向都會壞：
 import json
 import uuid
 from unittest.mock import MagicMock, patch
+from .publication_receipt_fixture import install_publication_receipts
 
 from odoo.tests import HttpCase, tagged
 
@@ -392,7 +393,7 @@ class TestCsAccessAnchorOverTenantRpc(_CsAccessAclFixture):
         尾走得完」，用 skip 會讓它少走 sync 那一段——而 sync 正是 #739 同構缺陷
         最可能落在的位置。
         """
-        client = MagicMock()
+        client = install_publication_receipts(MagicMock())
         client.sync_access_app.return_value = {
             'app_id': 'app-h1-744', 'policy_ids': [], 'allowed_idps': [],
             'unresolved_idp_types': [], 'orphaned_policy_ids': []}

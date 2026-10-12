@@ -233,13 +233,14 @@ export const workspaceService = reactive({
      * @param {Object} payload - Invitation data
      * @param {string} payload.email - User email to invite
      * @param {string} [payload.role='user'] - Role to assign
-     * @returns {Promise<ApiResponse<MemberData>>}
+     * @returns {Promise<ApiResponse<Object>>} Pending invitation; not membership.
      */
     async inviteMember(workspaceId, payload) {
         this.operationLoading.invite = true;
         try {
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/members`, {
                 action: "invite",
+                invitation_mode: "mailbox_challenge_v1",
                 email: payload.email,
                 role: payload.role || "user",
             });
@@ -252,6 +253,49 @@ export const workspaceService = reactive({
             return { success: false, error: err.message };
         } finally {
             this.operationLoading.invite = false;
+        }
+    },
+
+    /** List sanitized pending invitations, for workspace owners/admins only. */
+    async getInvitations(workspaceId) {
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/invitations`, { action: "list" });
+            if (result?.success && Array.isArray(result.data)) {
+                return { success: true, data: result.data };
+            }
+            return { success: false, error: result?.error || _t("Failed to load invitations") };
+        } catch (err) {
+            return { success: false, error: err.message || _t("Failed to load invitations") };
+        }
+    },
+
+    /** Revoke a ledger ID. Member access IDs use the separate members API. */
+    async revokeInvitation(workspaceId, invitationId) {
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}/invitations`, {
+                action: "revoke", invitation_id: invitationId,
+            });
+            if (result?.success) return { success: true, data: result.data };
+            return { success: false, error: result?.error || _t("Failed to revoke invitation") };
+        } catch (err) {
+            return { success: false, error: err.message || _t("Failed to revoke invitation") };
+        }
+    },
+
+    /** The nonce is sent only in the POST body, never a URL or logger. */
+    async acceptInvitation(token) {
+        const failure = _t("The invitation could not be accepted. Sign in to the invited account and reopen the email link, or ask an administrator for a new invitation.");
+        if (typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
+            return { success: false, error: failure };
+        }
+        try {
+            const result = await jsonRpc("/api/workspace-invitations/accept", { token });
+            if (result.success) return { success: true, data: result.data };
+            return { success: false, error: failure };
+        } catch {
+            // RPC exception text may contain request internals. Do not expose
+            // it, or log it, in this credential-carrying operation.
+            return { success: false, error: failure };
         }
     },
 

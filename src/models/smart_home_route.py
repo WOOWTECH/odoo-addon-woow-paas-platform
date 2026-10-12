@@ -37,6 +37,7 @@ ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會�
 所以這裡 primary route 是**不可刪、不可改綁**的。看到「SA 沒有 primary 為什麼 SH
 有」時，答案在上一段，不是漏改。
 """
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt
 import logging
 
 from odoo import _, api, fields, models
@@ -47,6 +48,7 @@ from odoo.exceptions import UserError, ValidationError
 from .security_access import _internal_policy_cf_write
 
 _logger = logging.getLogger(__name__)
+_DEFER_ACCESS_RELEASE = object()
 
 #: #528 的待回收 CF Access policy 帳本（三腿共用）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
@@ -72,6 +74,7 @@ _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 # 字面比對，同名會讓 gate 對本檔吐出一句為假的話，之後真的在本檔開 cloud_service
 # 的閘也不會再紅（見 `models/smart_home.py` 頂端同一段論證）。
 _SM_ROUTE_IDENTITY_ANCHOR_FIELDS = (
+    'access_publish_pending',  # server-owned publication state
     'access_app_id',    # WHICH CF Access application this route configures
 )
 
@@ -331,6 +334,9 @@ class SmartHomeRoute(models.Model):
              'falls back to ALL available IdPs). Surfaced so the fail-open '
              'widening is not silent.',
     )
+    access_publish_pending = fields.Boolean(
+        string='Access Publication Pending', default=False, readonly=True,
+        help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this route has been '
@@ -485,15 +491,44 @@ class SmartHomeRoute(models.Model):
                     raise UserError(
                         _("Field '%s' is immutable on a primary Smart Home "
                           "route.") % field)
+        unprotecting = self.browse()
+        if (not _is_sm_sync_hatch_open(
+                    self.env, _CTX_SM_SKIP_ACCESS_SYNC)
+                and vals.get('is_protected') is False):
+            unprotecting = self.filtered(
+                lambda route: route.is_protected and route.access_app_id)
         with self.env.cr.savepoint():
+            # The operator may delete Access before its response is validated;
+            # park ingress first while the old protected identity is intact.
+            for home in unprotecting.mapped('smart_home_id'):
+                home._sync_access_ingress(park=True)
+            if unprotecting:
+                _internal_sm_route_identity(
+                    unprotecting).access_publish_pending = True
             result = super().write(vals)
             if (not _is_sm_sync_hatch_open(
                         self.env, _CTX_SM_SKIP_ACCESS_SYNC)
                     and any(k in vals for k in (
                         'is_protected', 'login_google', 'login_email_otp',
                         'session_duration'))):
+                deferred_release = self.filtered('access_publish_pending')
                 for route in self:
-                    route._sync_access_to_operator()
+                    route._sync_access_to_operator(
+                        _DEFER_ACCESS_RELEASE if deferred_release else None)
+                from ..services.paas_operator import PaaSOperatorError
+                for home in deferred_release.mapped('smart_home_id'):
+                    routes = deferred_release.filtered(
+                        lambda route: route.smart_home_id == home)
+                    _internal_sm_route_identity(
+                        routes).access_publish_pending = False
+                    try:
+                        home._sync_access_ingress()
+                    except (PaaSOperatorError, AccessPublicationError) as error:
+                        _internal_sm_route_identity(
+                            routes).access_publish_pending = True
+                        _logger.error(
+                            "[SH] Access batch publication pending routes=%s: %s",
+                            routes.ids, error)
         return result
 
     def unlink(self):
@@ -653,7 +688,7 @@ class SmartHomeRoute(models.Model):
                 self.smart_home_id.name or 'smart-home')
         return self.subdomain_prefix or ('route-%s' % self.id)
 
-    def _sync_access_to_operator(self):
+    def _sync_access_to_operator(self, release_control=None):
         """把本 route 的完整 Access desired-state 推給 operator（冪等）。
 
         `is_protected=False` 送 `enabled=False` 的 payload（帶 `existing_app_id`
@@ -681,9 +716,21 @@ class SmartHomeRoute(models.Model):
                 '[SH] route %s (sh=%s)' % (self.id, self.smart_home_id.id),
                 skip)
             return False
-        client = self.smart_home_id._get_operator_client()
+        home = self.smart_home_id
+        forced = _is_sm_sync_hatch_open(self.env, _CTX_SM_FORCE_ACCESS_SYNC)
+        if (self.is_protected and
+                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
+                not forced):
+            home._sync_access_ingress(park=True)
+        needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
+        client = home._get_operator_client()
         payload = self._build_access_payload()
         result = client.sync_access_app(payload)
+        require_access_sync_receipt(result, payload)
+        if self.is_protected and not result.get('app_id'):
+            raise AccessProtectionError(_(
+                "Access protection was not established. Origin publication "
+                "is not confirmed; fix the login configuration and retry."))
         orphaned = result.get('orphaned_policy_ids') or []
         if orphaned:
             # operator 重指 app 之後刪不掉的舊 reusable policy＝永久 CF 孤兒
@@ -726,6 +773,19 @@ class SmartHomeRoute(models.Model):
             for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
+        defer_release = release_control is _DEFER_ACCESS_RELEASE
+        _internal_sm_route_identity(self).access_publish_pending = bool(
+            defer_release and needs_release)
+        if defer_release:
+            return True
+        if needs_release and not forced:
+            from ..services.paas_operator import PaaSOperatorError
+            try:
+                home._sync_access_ingress()
+            except (PaaSOperatorError, AccessPublicationError) as error:
+                _internal_sm_route_identity(self).access_publish_pending = True
+                _logger.error("[SH] Access publication pending route=%s: %s", self.id, error)
+                return False
         return True
 
     def _access_sync_skip_reason(self):
@@ -751,7 +811,7 @@ class SmartHomeRoute(models.Model):
                     sh.state if sh else None, bool(sh and sh.tunnel_id),
                     bool(self.hostname), forced))
         # 從沒建過 app 的未保護 route 沒有任何事要做
-        return (None if (self.is_protected or self.access_app_id)
+        return (None if (self.is_protected or self.access_app_id or self.access_publish_pending)
                 else 'the route is unprotected and never had an Access app')
 
     # ------------------------------------------------------------------ #
@@ -868,7 +928,7 @@ class SmartHomeRoute(models.Model):
         sh = info['smart_home']
         try:
             client = sh._get_operator_client()
-            result = client.sync_access_app({
+            payload = {
                 'enabled': False,
                 'canonical_name': sh._access_canonical_name(),
                 'app_name': info['app_name'],
@@ -879,7 +939,9 @@ class SmartHomeRoute(models.Model):
                 'policies': [],
                 'existing_app_id': info['app_id'],
                 'existing_policy_ids': info['policy_ids'],
-            })
+            }
+            result = client.sync_access_app(payload)
+            require_access_sync_receipt(result, payload)
         except Exception as e:  # noqa: BLE001 — 呼叫端決定嚴重性
             _logger.warning(
                 "[SH] Access teardown failed sh=%s app=%s: %s — kept for retry",
@@ -946,5 +1008,7 @@ class SmartHomeRoute(models.Model):
             # #794 fail-open 訊號：宣稱受保護、但 CF 上的 app 已經被拆掉。不吐
             # 的話 UI 只讀得到 is_protected 這個**意圖**欄位。
             'access_protection_lost': self.access_protection_lost,
+            'access_publish_pending': self.access_publish_pending,
+            'access_configuration_ready': access_configuration_ready(self),
             'access_policies': [p.to_dict() for p in self.access_policy_ids],
         }

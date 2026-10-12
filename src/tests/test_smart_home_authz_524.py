@@ -59,6 +59,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
 )
 from ..models.smart_home import _platform_order
 from .smart_home_fixture import sh_model
+from .publication_receipt_fixture import install_publication_receipts
 
 _MODEL = 'woow_paas_platform.smart_home'
 
@@ -235,6 +236,7 @@ class _SmartHome524Fixture(HttpCase):
 
     def _operator_client(self, **extra):
         client = MagicMock()
+        install_publication_receipts(client)
         client.create_tunnel.return_value = {
             'tunnel_id': 'fresh-tunnel-%s' % uuid.uuid4().hex[:8],
             'tunnel_token': 'fresh-token',

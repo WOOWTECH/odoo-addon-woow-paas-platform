@@ -855,95 +855,173 @@ class TestBuildAccessRule:
 
 
 class TestResolveIdpIds:
-    """_resolve_idp_ids security-relevant branch: a requested login method with
-    no matching account IdP is silently dropped → if that empties the set the
-    app falls back to ALL IdPs (auth surface widened). The caller must learn of
-    it, so the unresolved types are returned, not just logged."""
+    """Explicit login restrictions must resolve before any remote mutation."""
 
-    @pytest.fixture
-    def cf_service(self):
-        svc = CloudflareService()
-        svc.api_token = "test-token"
-        svc.account_id = "test-account"
-        svc.zone_id = "test-zone"
-        svc.domain = "woowtech.io"
-        svc.enabled = True
-        return svc
+    @staticmethod
+    def sync_kwargs(login_idp_types):
+        return {
+            "canonical_name": "paas-sa-x-y",
+            "app_name": "gw",
+            "primary_hostname": "paas-sa-x-y.woowtech.io",
+            "protected_hostnames": ["paas-sa-x-y.woowtech.io"],
+            "session_duration": "8h",
+            "enabled": True,
+            "login_idp_types": login_idp_types,
+            "policies": [{
+                "name": "corp", "decision": "allow", "precedence": 1,
+                "include": [{"rule_type": "email_domain",
+                             "rule_value": "acme.com"}],
+            }],
+            "existing_app_id": "app-old",
+            "existing_policy_ids": ["policy-old"],
+        }
+
+    @pytest.mark.parametrize("idps, requested, missing", [
+        ([{"id": "idp-g", "type": "google"}],
+         ["google", "onetimepin"], "onetimepin"),
+        ([{"id": "idp-otp", "type": "onetimepin"}],
+         ["google"], "google"),
+        ([], ["google", "onetimepin"], "google, onetimepin"),
+        ([{"id": "", "type": "google"}], ["google"], "google"),
+    ], ids=["partial-missing", "all-missing", "no-idps", "missing-id"])
+    @pytest.mark.asyncio
+    async def test_missing_idp_rejects_before_remote_writes(
+            self, cf_service, idps, requested, missing):
+        import httpx
+
+        response = httpx.Response(200, json={"success": True, "result": idps})
+        mutation_response = httpx.Response(
+            201, json={"success": True, "result": {"id": "new-resource"}})
+        delete_response = httpx.Response(202, json={"success": True})
+        with patch("httpx.AsyncClient.get", new=AsyncMock(
+                return_value=response)), \
+             patch("httpx.AsyncClient.post", new=AsyncMock(
+                 return_value=mutation_response)) as post, \
+             patch("httpx.AsyncClient.put", new=AsyncMock(
+                 return_value=mutation_response)) as put, \
+             patch("httpx.AsyncClient.delete", new=AsyncMock(
+                 return_value=delete_response)) as delete:
+            with pytest.raises(CloudflareException, match=missing) as caught:
+                await cf_service.sync_access_app(**self.sync_kwargs(requested))
+            assert caught.value.status_code == 400
+            post.assert_not_awaited()
+            put.assert_not_awaited()
+            delete.assert_not_awaited()
+
+    @pytest.mark.parametrize("failure", ["api-503", "connect-error"])
+    @pytest.mark.asyncio
+    async def test_idp_lookup_failure_leaves_old_app_and_policies_untouched(
+            self, cf_service, failure):
+        import httpx
+
+        if failure == "api-503":
+            get = AsyncMock(return_value=httpx.Response(503, text="Unavailable"))
+            exception = CloudflareException
+        else:
+            get = AsyncMock(side_effect=httpx.ConnectError("Unavailable"))
+            exception = httpx.ConnectError
+        response = httpx.Response(
+            201, json={"success": True, "result": {"id": "new-resource"}})
+        delete_response = httpx.Response(202, json={"success": True})
+        with patch("httpx.AsyncClient.get", new=get), \
+             patch("httpx.AsyncClient.post", new=AsyncMock(
+                 return_value=response)) as post, \
+             patch("httpx.AsyncClient.put", new=AsyncMock(
+                 return_value=response)) as put, \
+             patch("httpx.AsyncClient.delete", new=AsyncMock(
+                 return_value=delete_response)) as delete:
+            with pytest.raises(exception):
+                await cf_service.sync_access_app(
+                    **self.sync_kwargs(["google", "onetimepin"]))
+            post.assert_not_awaited()
+            put.assert_not_awaited()
+            delete.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_missing_type_reported_not_silently_dropped(self, cf_service):
-        # Account only has Google; user requested google + onetimepin.
-        async def fake_list():
-            return [{"id": "idp-g", "name": "Google", "type": "google"}]
-
-        with patch.object(cf_service, "list_identity_providers",
-                          new=AsyncMock(side_effect=fake_list)):
+    async def test_google_and_otp_resolve_without_downgrade(self, cf_service):
+        with patch.object(cf_service, "list_identity_providers", new=AsyncMock(
+                return_value=[
+                    {"id": "idp-g", "type": "google"},
+                    {"id": "idp-otp", "type": "onetimepin"},
+                ])):
             resolved, unresolved = await cf_service._resolve_idp_ids(
                 ["google", "onetimepin"])
-        assert resolved == ["idp-g"]
-        assert unresolved == ["onetimepin"]
-
-    @pytest.mark.asyncio
-    async def test_all_requested_missing_widens_to_all_and_reports(
-            self, cf_service):
-        # User requested ONLY Google but account has no Google IdP →
-        # resolved=[] (= app shows all IdPs). This is the fail-open widening
-        # the reviewer flagged: it must surface in unresolved.
-        async def fake_list():
-            return [{"id": "idp-otp", "name": "OTP", "type": "onetimepin"}]
-
-        with patch.object(cf_service, "list_identity_providers",
-                          new=AsyncMock(side_effect=fake_list)):
-            resolved, unresolved = await cf_service._resolve_idp_ids(["google"])
-        assert resolved == []
-        assert unresolved == ["google"]
-
-    @pytest.mark.asyncio
-    async def test_empty_request_is_not_unresolved(self, cf_service):
-        resolved, unresolved = await cf_service._resolve_idp_ids([])
-        assert resolved == []
+        assert resolved == ["idp-g", "idp-otp"]
         assert unresolved == []
 
     @pytest.mark.asyncio
-    async def test_sync_propagates_unresolved_to_result(self, cf_service):
-        """End-to-end: sync_access_app surfaces unresolved_idp_types in its
-        return so Odoo can persist/warn on the silent login widening."""
-        async def fake_get(url, headers=None, timeout=None, params=None):
-            class R:
-                status_code = 200
-                @staticmethod
-                def json():
-                    if "identity_providers" in url:
-                        return {"success": True, "result": [
-                            {"id": "idp-g", "name": "G", "type": "google"}]}
-                    return {"success": True, "result": []}
-            return R()
+    async def test_empty_request_intentionally_allows_all_idps(self, cf_service):
+        import httpx
 
-        async def fake_post(url, headers=None, json=None, timeout=None):
-            class R:
-                status_code = 201
-                @staticmethod
-                def json():
-                    if "/policies" in url:
-                        return {"success": True, "result": {"id": "pol-x"}}
-                    return {"success": True, "result": {"id": "app-x"}}
-            return R()
+        created = httpx.Response(
+            201, json={"success": True, "result": {"id": "policy-new"}})
+        updated = httpx.Response(
+            200, json={"success": True, "result": {"id": "app-old"}})
+        deleted = httpx.Response(202, json={"success": True})
+        with patch.object(cf_service, "list_identity_providers",
+                          new=AsyncMock()) as lookup, \
+             patch("httpx.AsyncClient.post", new=AsyncMock(
+                 return_value=created)), \
+             patch("httpx.AsyncClient.put", new=AsyncMock(
+                 return_value=updated)) as put, \
+             patch("httpx.AsyncClient.delete", new=AsyncMock(
+                 return_value=deleted)):
+            result = await cf_service.sync_access_app(**self.sync_kwargs([]))
+        lookup.assert_not_awaited()
+        assert result["allowed_idps"] == []
+        assert result["unresolved_idp_types"] == []
+        assert put.call_args.kwargs["json"]["allowed_idps"] == []
 
-        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=fake_get)), \
-             patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)):
-            result = await cf_service.sync_access_app(
-                canonical_name="paas-sa-x-y", app_name="gw",
-                primary_hostname="paas-sa-x-y.woowtech.io",
-                protected_hostnames=["paas-sa-x-y.woowtech.io"],
-                session_duration="8h",
-                login_idp_types=["google", "onetimepin"],
-                policies=[{"name": "corp", "decision": "allow",
-                           "include": [{"rule_type": "email_domain",
-                                        "rule_value": "acme.com"}],
-                           "precedence": 1}],
-                enabled=True, existing_app_id=None, existing_policy_ids=[])
-        assert result["allowed_idps"] == ["idp-g"]
-        assert result["unresolved_idp_types"] == ["onetimepin"]
+    @pytest.mark.parametrize("enabled, protected_hostnames", [
+        (False, ["paas-sa-x-y.woowtech.io"]),
+        (True, []),
+    ], ids=["disabled", "no-protected-hostnames"])
+    @pytest.mark.asyncio
+    async def test_teardown_does_not_require_available_idps(
+            self, cf_service, enabled, protected_hostnames):
+        import httpx
+
+        args = self.sync_kwargs(["google"])
+        args.update(enabled=enabled, protected_hostnames=protected_hostnames)
+        with patch.object(cf_service, "list_identity_providers",
+                          new=AsyncMock()) as lookup, \
+             patch("httpx.AsyncClient.delete", new=AsyncMock(
+                 return_value=httpx.Response(
+                     202, json={"success": True}))) as delete:
+            result = await cf_service.sync_access_app(**args)
+        lookup.assert_not_awaited()
+        assert delete.await_count == 2
+        assert result["app_id"] is None
+        assert result["policy_ids"] == []
+
+    def test_missing_idp_api_returns_400_without_remote_writes(
+            self, cf_service, client):
+        import httpx
+
+        idps = [{"id": "idp-otp", "type": "onetimepin",
+                 "config": {"client_secret": "provider-test-secret"}}]
+        response = httpx.Response(200, json={"success": True, "result": idps})
+        changed = httpx.Response(
+            201, json={"success": True, "result": {"id": "new-resource"}})
+        deleted = httpx.Response(202, json={"success": True})
+        with patch("src.api.access.cloudflare_service", cf_service), \
+             patch("httpx.AsyncClient.get", new=AsyncMock(
+                 return_value=response)), \
+             patch("httpx.AsyncClient.post", new=AsyncMock(
+                 return_value=changed)) as post, \
+             patch("httpx.AsyncClient.put", new=AsyncMock(
+                 return_value=changed)) as put, \
+             patch("httpx.AsyncClient.delete", new=AsyncMock(
+                 return_value=deleted)) as delete:
+            response = client.put("/api/access/sync",
+                                  json=self.sync_kwargs(["google"]))
+        assert response.status_code == 400, response.text
+        assert "google" in response.json()["detail"]
+        assert "provider-test-secret" not in response.text
+        assert cf_service.api_token not in response.text
+        post.assert_not_awaited()
+        put.assert_not_awaited()
+        delete.assert_not_awaited()
 
 
 from unittest.mock import patch as sync_patch

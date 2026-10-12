@@ -38,8 +38,24 @@ SELECT to_regclass('public.fetchmail_server') IS NOT NULL AS has_fetchmail \gset
 UPDATE fetchmail_server SET password = NULL WHERE password IS NOT NULL;
 \endif
 
+-- web.base.url 還是來源站的正式網址：彩排站產生的連結（入口網站、QR code、金流回呼）會指回正式站。
+-- 拿掉凍結旗標，第一個管理員從彩排站網址登入時 Odoo 會自動把它改成彩排站的網址。
+DELETE FROM ir_config_parameter WHERE key = 'web.base.url.freeze';
+
 -- ── 2. 排程的模組資料改成 noupdate：-u all 不會把 active 設回 true ────────────────
 UPDATE ir_model_data SET noupdate = true WHERE model = 'ir.cron' AND noupdate IS NOT TRUE;
+
+-- ── 2b. 金流供應商全部停用 ──────────────────────────────────────────
+-- 官方 SQL 只停用 enabled 的，測試模式（test）的留著。但 payment 模組每次升級都依「有沒有非停用的供應商」重設
+-- 「交易後處理」排程 ⇒ 只要留一個 test 的供應商（harumi 留著 Odoo 內建的示範金流），升級後那顆排程就被開回來。
+-- 彩排站不需要任何金流。color 是 state 的 stored compute，SQL 改 state 不會連動；不一起改的話，升級時 ORM 重算
+-- 會讓這幾列在升級後比對顯示成「被升級動到」（2＝test 的橘色、7＝enabled 的綠色、3＝disabled 的黃色）。
+SELECT count(*) = 2 AS has_payment_provider FROM information_schema.columns
+ WHERE table_schema = 'public' AND table_name = 'payment_provider' AND column_name IN ('state', 'color') \gset
+\if :has_payment_provider
+UPDATE payment_provider SET state = 'disabled' WHERE state <> 'disabled';
+UPDATE payment_provider SET color = 3 WHERE state = 'disabled' AND color IN (2, 7);
+\endif
 
 -- ── 3a. ecpay_invoice_tw：公司層的綠界電子發票憑證 ─────────────────────────────
 -- 換成模組內建的綠界公開測試商店＋測試模式＋手動開立，彩排站不會對真實商店開發票。
@@ -52,7 +68,7 @@ UPDATE res_company
        "ecpay_HashIV" = 'q9jcZX8Ib9LM8wYk', auto_invoice = 'manual';
 \endif
 
--- ── 3b. payment_ecpay：金流供應商的商店憑證（供應商本身已被官方 SQL 停用）──────────────
+-- ── 3b. payment_ecpay：金流供應商的商店憑證（供應商本身已在上面停用）──────────────
 SELECT count(*) = 3 AS has_ecpay_provider FROM information_schema.columns
  WHERE table_schema = 'public' AND table_name = 'payment_provider'
    AND column_name IN ('MerchantID', 'HashKey', 'HashIV') \gset

@@ -12,7 +12,7 @@
 
                 <div class="o_woow_modal_body">
                     <div class="o_woow_form_group">
-                        <label for="member_email">Email Address</label>
+                        <label for="member_email">Account Login Email</label>
                         <input
                             type="email"
                             id="member_email"
@@ -22,6 +22,7 @@
                             t-on-input="onEmailInput"
                             t-att-disabled="state.loading"
                         />
+                        <p class="o_woow_pending_intro">The recipient must already have an account with this login email. They will receive an acceptance link; workspace access starts only after they accept.</p>
                     </div>
 
                     <div class="o_woow_form_group">

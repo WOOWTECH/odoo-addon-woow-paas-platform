@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 from ..models.cloud_service import _internal_provision
+from ..models.subscription_lifecycle_mixin import _monthly_estimate
 
 
 @tagged('post_install', '-at_install')
@@ -189,3 +190,35 @@ class TestSkipTrialEstimate(TransactionCase):
 
         with self.assertRaises(UserError):
             service._skip_trial_estimate()
+
+    def test_tax_included_estimate_keeps_total_and_wallet_sufficiency(self):
+        """A 499 tax-inclusive price must remain 499 before payment."""
+        self.tax_15.write({'price_include_override': 'tax_included'})
+        service, sub = self._make_service_in_trial()
+        self._credit_wallet(499.0)
+
+        result = service._skip_trial_estimate()
+
+        self.assertAlmostEqual(result['untaxed'], 433.91, places=2)
+        self.assertAlmostEqual(result['tax_amount'], 65.09, places=2)
+        self.assertAlmostEqual(result['total'], 499.0, places=2)
+        self.assertTrue(result['sufficient'])
+        self.assertEqual(result['shortage'], 0.0)
+
+    def test_tax_included_monthly_estimate_matches_cycle_total(self):
+        """The workspace estimate must not add included tax a second time."""
+        self.tax_15.write({'price_include_override': 'tax_included'})
+        _, sub = self._make_service_in_trial()
+
+        self.assertAlmostEqual(_monthly_estimate(sub), 499.0, places=2)
+
+    def test_tax_included_product_fallback_keeps_total(self):
+        """A legacy empty tax snapshot uses the product's included tax."""
+        self.tax_15.write({'price_include_override': 'tax_included'})
+        service, sub = self._make_service_in_trial()
+        sub.write({'sh_taxes_ids': [(5, 0, 0)]})
+
+        result = service._skip_trial_estimate()
+
+        self.assertAlmostEqual(result['untaxed'], 433.91, places=2)
+        self.assertAlmostEqual(result['total'], 499.0, places=2)
