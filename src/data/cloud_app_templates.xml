@@ -1953,7 +1953,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261003.1400@sha256:a00d92d8465dd1a4ad2d7c4d4c20d5b6b21073b350cb13ec86d49eadf0996048"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261012.0940@sha256:21bbb8dee24c8e74ea9e3e39fb79032567bfb5327fe6dd9422362034be0db26b"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
