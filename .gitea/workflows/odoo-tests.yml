@@ -148,6 +148,13 @@ jobs:
           docker exec "${ODOO_CT}" mkdir -p "${MODULE_DIR}"
           docker cp src/. "${ODOO_CT}:${MODULE_DIR}/"
           docker exec "${ODOO_CT}" sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          # native_operator_transport 載入同 checkout 的真實 Operator source；
+          # 只複製 addon 會讓四個 publish-recovery 測試在 setUp 找不到此檔。
+          # 測試仍自行驗 exact SHA，且使用隔離 HTTP transport，不碰真 CF。
+          docker exec "${ODOO_CT}" mkdir -p /tmp/ac1011-operator
+          docker cp extra/paas-operator/src/services/cloudflare.py "${ODOO_CT}:/tmp/ac1011-operator/cloudflare.py"
+          sha256sum extra/paas-operator/src/services/cloudflare.py
+          docker exec "${ODOO_CT}" sha256sum /tmp/ac1011-operator/cloudflare.py
           echo "--- 覆蓋驗證：容器內版號應等於本 checkout ---"
           docker exec "${ODOO_CT}" sh -c "grep -m1 version ${MODULE_DIR}/__manifest__.py"
           grep -m1 version src/__manifest__.py
