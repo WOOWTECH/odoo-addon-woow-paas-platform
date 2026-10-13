@@ -125,6 +125,9 @@ class WorkspaceInvitation(models.Model):
                 'author_id': self.env['res.users'].sudo().browse(SUPERUSER_ID).partner_id.id,
                 'message_type': 'user_notification',
             })
+            # The native trigger and outbox commit together; worker wake-up is
+            # post-commit, without SMTP here or edits to the cron's cadence.
+            self.env.ref('mail.ir_cron_mail_scheduler_action')._trigger()
             return invitation
 
     def _dto(self):
