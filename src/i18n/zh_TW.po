@@ -12404,6 +12404,152 @@ msgid "Service observation fields are managed by the platform: %(fields)s"
 msgstr "服務觀測欄位由平台管理：%(fields)s"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_code
+msgid "Workload Fault"
+msgstr "Workload 異常"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_code
+msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647). Quota blocked: the namespace ResourceQuota rejected the pods. Create failed: the cluster rejected the pods for a reason other than the quota. No pods: the pods are missing and the cluster reported no reason. Cleared automatically once the pods are back or the service leaves running. It never changes the service state."
+msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有時設定（#1647）。配額擋下：namespace 的 ResourceQuota 拒絕建立 Pod。建立失敗：叢集因為配額以外的原因拒絕建立 Pod。沒有 Pod：Pod 不存在，而且叢集沒有回報原因。Pod 恢復或服務離開 running 後自動清除。不會改變服務狀態。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
+msgid "Workload Fault Detail"
+msgstr "Workload 異常細節"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
+msgid "Which workloads have no pods and what the cluster reported (for example the quota rejection message). Administrators only."
+msgstr "哪些 workload 沒有 Pod，以及叢集回報的內容（例如配額拒絕訊息）。僅系統管理員可見。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_since
+msgid "Workload Fault Since"
+msgstr "Workload 異常起始時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_since
+msgid "When the platform first observed the current workload fault (UTC)."
+msgstr "平台第一次觀測到目前這段 workload 異常的時間（UTC）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_alerted_at
+msgid "Workload Fault Alerted At"
+msgstr "Workload 異常通知時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_alerted_at
+msgid "When the system administrators were notified about the current workload fault. One notification per fault."
+msgstr "已就目前這段 workload 異常通知系統管理員的時間。每段異常只通知一次。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_checked_at
+msgid "Workload Observation Last Recorded"
+msgstr "Workload 觀測結果最後寫入時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_checked_at
+msgid "Last time the platform recorded a change in what it observed about the workloads of this running service (UTC): a fault first seen, changed, confirmed or cleared. Checks that find nothing new do not update it, so an old or empty value does not mean the service is not being checked."
+msgstr "平台最後一次寫入這台 running 服務 workload 觀測結果的時間（UTC）：第一次看到異常、異常內容改變、確認或恢復時才更新。檢查結果沒有變化時不會更新，所以時間較舊或空白不代表平台沒有在檢查這個服務。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__quota_exceeded
+msgid "Quota blocked"
+msgstr "配額擋下"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__create_failed
+msgid "Create failed"
+msgstr "建立失敗"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__no_pods
+msgid "No pods"
+msgstr "沒有 Pod"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "<strong>This service is marked running, but a workload has no pods.</strong>"
+msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有。</strong>"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "— first seen"
+msgstr "— 首次觀測於"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid ", last change recorded"
+msgstr "，觀測結果最後寫入於"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The namespace ResourceQuota rejected the pods (FailedCreate: exceeded quota)."
+msgstr "namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The cluster rejected the pods for a reason other than the quota (FailedCreate)."
+msgstr "叢集因為配額以外的原因拒絕建立 Pod（FailedCreate）。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods are missing and the cause is unknown: the cluster reported no FailedCreate condition and no recent warning event."
+msgstr "Pod 不存在，原因不明：叢集沒有回報 FailedCreate condition，也沒有近期的 warning 事件。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_platform_monitor__workload_check_cursor
+msgid "Workload Check Cursor"
+msgstr "Workload 檢查游標"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_platform_monitor__workload_check_cursor
+msgid "ID of the last cloud service handled by the periodic check of running workloads. The next run continues after it and wraps around."
+msgstr "定期檢查 running 服務 workload 的排程上一趟最後處理的雲端服務 ID。下一趟從它之後接著查，查到最後再繞回開頭。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_check_running_workloads_ir_actions_server
+msgid "Cloud Service: Check Running Workloads"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "These services are shown as running, but at least one of their workloads (Deployment or StatefulSet) wants pods and has none, so the service is actually down. The most common cause is the namespace ResourceQuota rejecting the pods (FailedCreate: exceeded quota). Check the quota of the namespace and the events of its ReplicaSets and StatefulSets. The platform clears the flag by itself once the pods are back. The service state has not been changed:"
+msgstr "下列服務顯示為 running，但至少有一個 workload（Deployment 或 StatefulSet）期望有 Pod、實際一個都沒有，服務實際上是中斷的。最常見的原因是 namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）。請檢查該 namespace 的配額，以及 ReplicaSet／StatefulSet 的事件。Pod 恢復後平台會自行清除旗標。服務狀態沒有被改動："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s, namespace %(ns)s, release %(release)s), since %(since)s UTC: %(detail)s"
+msgstr "%(name)s（id=%(id)s，namespace %(ns)s，release %(release)s），自 %(since)s UTC 起：%(detail)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s): its workloads have pods again (had none since %(since)s UTC)"
+msgstr "%(name)s（id=%(id)s）：workload 已恢復有 Pod（自 %(since)s UTC 起一個都沒有）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
+msgid "This service is not running right now: the workspace does not have enough CPU or memory quota left to start it. Please contact support. Our operations team has been notified."
+msgstr "這個服務目前沒有在執行：工作區剩餘的 CPU 或記憶體配額不足以啟動這個服務。請聯絡客服。已通知維運人員處理。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
+msgid "This service is not running right now: the platform could not start it. Our operations team has been notified."
+msgstr "這個服務目前沒有在執行：平台無法啟動它。已通知維運人員處理。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
+msgid "Not running — the platform could not start this service"
+msgstr "未在執行：平台無法啟動這個服務"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
 #: model:ir.actions.act_window,name:woow_paas_platform.action_cloud_service
@@ -20712,6 +20858,126 @@ msgid "Plan changes were rejected before anything was charged or applied because
 msgstr "以下換方案在扣款與套用之前就被擋下：磁碟無法擴充（原因為「capacity」表示叢集儲存（Longhorn）在存放該磁碟副本的硬碟上放不下增加的容量）。請釋放排程額度或增加儲存空間後，再請租戶重試："
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This workspace does not have enough %(resource)s quota for this change: the service needs %(required)s, the workspace limit is %(hard)s and other workloads in the workspace are using %(other)s (short by %(short)s)."
+msgstr "這個工作區的%(resource)s配額不足以套用這次變更：這個服務需要 %(required)s，工作區上限是 %(hard)s，工作區內這個服務以外的用量目前是 %(other)s（還差 %(short)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This workspace does not have enough %(resource)s quota for this change: while the service is being replaced the old and the new instance run side by side, which needs %(required)s more on top of the %(used)s already in use; the workspace limit is %(hard)s (short by %(short)s)."
+msgstr "這個工作區的%(resource)s配額不足以套用這次變更：更換服務期間新舊兩個執行個體會同時存在，在目前已佔用的 %(used)s 之外還需要 %(required)s，工作區上限是 %(hard)s（還差 %(short)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This workspace does not have enough CPU or memory quota for this change."
+msgstr "這個工作區的 CPU 或記憶體配額不足以套用這次變更。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Nothing was changed and the service keeps running with its current settings. Please contact support to adjust the workspace quota."
+msgstr "沒有套用任何變更，服務仍以原本的設定執行。請聯絡客服調整工作區配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The plan was not changed and nothing was charged. The service keeps running with its current settings. Please contact support to adjust the workspace quota."
+msgstr "方案沒有變更，也沒有扣款。服務仍以原本的設定執行。請聯絡客服調整工作區配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "CPU"
+msgstr "CPU"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "memory"
+msgstr "記憶體"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "temporary disk space"
+msgstr "暫存磁碟空間"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The redeploy was stopped before anything was applied: the workspace quota cannot fit this service after the upgrade."
+msgstr "重新部署在套用任何變更之前就停止了：升級之後，工作區的配額放不下這個服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "%(key)s: needs %(required)s, limit %(hard)s, in use %(used)s (this service %(own)s, other workloads %(other)s), short by %(short)s"
+msgstr "%(key)s：需要 %(required)s，上限 %(hard)s，目前已佔用 %(used)s（這個服務 %(own)s、其他 workload %(other)s），還差 %(short)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Namespace %(ns)s, ResourceQuota %(quota)s. Largest other consumers: %(consumers)s."
+msgstr "Namespace %(ns)s，ResourceQuota %(quota)s。佔用最多的其他 workload：%(consumers)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Raise the workspace quota or free resources in the namespace, then redeploy."
+msgstr "請調高工作區配額，或釋放這個 namespace 內的資源後，再重新部署。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s, namespace %(ns)s, %(operation)s): %(shortfalls)s. Largest other consumers: %(consumers)s."
+msgstr "%(name)s（id=%(id)s，namespace %(ns)s，%(operation)s）：%(shortfalls)s。佔用最多的其他 workload：%(consumers)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Changes were rejected before anything was applied or charged because the CPU / memory quota of the workspace cannot fit the service after the change. Tenants who requested a change were told to contact support. Raise the quota of that workspace or free resources in its namespace, then ask the tenant to try again (for a queued redeploy: redeploy the service again):"
+msgstr "以下變更在套用與扣款之前就被擋下：變更之後，工作區的 CPU／記憶體配額放不下該服務。提出變更的租戶已被告知請聯絡客服。請調高該工作區的配額，或釋放其 namespace 內的資源後，再請租戶重試（排定的重新部署則請再按一次重新部署）："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The %(resource)s quota of the new plan cannot hold this service while it is being replaced: the old and the new instance run side by side for a moment, which needs %(required)s more on top of the %(used)s already in use, but the workspace limit under the new plan would be %(hard)s (short by %(short)s)."
+msgstr "新方案的%(resource)s配額放不下更換中的這個服務：更換服務期間新舊兩個執行個體會短暫同時存在，在目前已佔用的 %(used)s 之外還需要 %(required)s，但換到新方案後工作區上限會是 %(hard)s（還差 %(short)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The plan was not changed and nothing was charged. Please contact support to switch to this plan."
+msgstr "方案沒有變更，也沒有扣款。請聯絡客服協助更換到這個方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The queued redeploy did not run: %(reason)s"
+msgstr "排定的重新部署沒有執行：%(reason)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "%(reason)s The new settings were not applied. Please contact support to adjust the workspace quota."
+msgstr "%(reason)s新的設定沒有套用。請聯絡客服調整工作區配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The plan was changed, but resizing the service did not complete. %(reason)s Please contact support to adjust the workspace quota."
+msgstr "方案已變更，但服務規格沒有調整完成。%(reason)s請聯絡客服調整工作區配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "More entries were not listed here (the limit of %(limit)s lines was reached); see the server log."
+msgstr "還有更多項目沒有列在這裡（已達 %(limit)s 行的上限）；請見 server log。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
 msgid "Service deleted refund: %(plan)s"
@@ -21511,8 +21777,8 @@ msgstr "找不到這個服務的資料磁碟。"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/data_retrieval.py:0
-msgid "This workspace has no CPU or memory quota left for the download service. Stop another service in this workspace and try again."
-msgstr "這個工作區的 CPU 或記憶體配額已用完，無法啟動下載服務。請先停止工作區內的其他服務再試。"
+msgid "This workspace does not have enough CPU or memory quota left to start the download service. Please contact support."
+msgstr "這個工作區剩餘的 CPU 或記憶體配額不足以啟動下載服務。請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -21943,3 +22209,255 @@ msgid ""
 "Unexpected invitation response. Reload the page and check the team before "
 "trying again."
 msgstr "邀請回應格式不符。請重新載入頁面，確認成員狀態後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Workspace resource quota"
+msgstr "工作區資源配額"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "All services in this workspace share one CPU, memory and disk quota. The figures show how much of it is reserved (the configured resource limits and disk sizes of the services, plus, for disk, data of deleted services that is still within its retention period), not live usage. When the quota runs out, new or restarting services cannot start."
+msgstr "這個工作區內的所有服務共用同一份 CPU、記憶體與磁碟配額。這裡顯示的是已佔用的配額（依各服務設定的資源上限與磁碟大小計算，磁碟另含已刪除服務尚在保留期內的資料），不是即時使用率。配額用完時，新的或重新啟動的服務會無法啟動。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "CPU quota"
+msgstr "CPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Memory quota"
+msgstr "記憶體"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Disk quota"
+msgstr "磁碟"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%(used)s of %(hard)s vCPU"
+msgstr "%(used)s／%(hard)s vCPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%(used)s of %(hard)s GB"
+msgstr "%(used)s／%(hard)s GB"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%s vCPU left"
+msgstr "剩餘 %s vCPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "%s GB left"
+msgstr "剩餘 %s GB"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Quota almost used up"
+msgstr "即將用完"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Quota used up"
+msgstr "已用完"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "This workspace is close to its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota."
+msgstr "這個工作區已接近配額上限，需要更多資源的服務可能無法啟動。需要更多配額請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "This workspace has reached its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota."
+msgstr "這個工作區已達配額上限，需要更多資源的服務可能無法啟動。需要更多配額請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "This workspace is close to its quota. Deploying, restarting or resizing a service may fail. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota."
+msgstr "這個工作區的配額即將用完，部署、重新啟動或調整服務規格可能會失敗。已刪除服務在保留期內的資料仍佔用磁碟配額，刪除服務不會立刻釋出磁碟配額；需要更多配額請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota."
+msgstr "這個工作區的配額已用完，釋出配額之前，新的或重新啟動的服務無法啟動。已刪除服務在保留期內的資料仍佔用磁碟配額，刪除服務不會立刻釋出磁碟配額；需要更多配額請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Usage is temporarily unavailable."
+msgstr "暫時無法取得用量。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
+msgid "Refresh quota usage"
+msgstr "重新整理用量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "This is the plan of this service only. All services in the workspace share one overall CPU, memory and disk quota."
+msgstr "這是這台服務自己的方案規格。工作區內所有服務共用一份 CPU、記憶體與磁碟總配額。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "CPU"
+msgstr "CPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Memory"
+msgstr "記憶體"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Persistent storage"
+msgstr "持久儲存空間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "cores"
+msgstr "核心"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Outdated sample"
+msgstr "資料已過期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Not supported"
+msgstr "暫不支援"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Service stopped"
+msgstr "服務已停止"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Partial data (%s/%s)"
+msgstr "資料不完整（%s/%s）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No usage data"
+msgstr "尚無使用量資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No limit set"
+msgstr "未設定上限"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Limit unavailable"
+msgstr "尚無上限資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Waiting for data"
+msgstr "正在取得資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Data outdated"
+msgstr "資料已過期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Metrics not supported"
+msgstr "暫不支援用量監測"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Partial data"
+msgstr "資料不完整"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Data unavailable"
+msgstr "暫時無法取得資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Updates every 30 seconds"
+msgstr "每 30 秒更新"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Resource usage"
+msgstr "即時資源使用量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Includes this service's replicas, sidecars and databases. CPU is a 2-minute average. Storage counts each persistent volume once."
+msgstr "包含此服務的所有副本、附屬程序與資料庫。CPU 為近 2 分鐘平均；每個持久磁碟僅計算一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Usage / effective limit or capacity"
+msgstr "目前使用量／實際上限或容量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Sampled at %s"
+msgstr "資料時間：%s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Requested configuration"
+msgstr "申請配置"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Virtual machine capacity is shown when available. Live guest usage is not yet supported."
+msgstr "顯示可取得的虛擬機容量；目前尚不支援虛擬機內的即時使用量。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No persistent storage configured"
+msgstr "未配置持久儲存"

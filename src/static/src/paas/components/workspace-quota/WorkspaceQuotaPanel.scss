@@ -1,0 +1,197 @@
+// WorkspaceQuotaPanel（#1647）——工作區頁的 CPU／記憶體／磁碟配額面板。
+//
+// 琥珀（快用完）與紅（已用完）兩組色值沿用 components/access/AccessAppCard.scss 已在用
+// 的那一組（`__idp_warning` 的琥珀、`__lost` 的紅），不另立新色：同一個前台裡「要注意」
+// 與「出事了」各只有一種長相。
+.o_woow_quota_panel {
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+
+    h2 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: $woow-text-primary;
+    }
+  }
+
+  &__refresh {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-full;
+    background: $woow-card-light;
+    color: $woow-text-secondary;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+
+    &:hover:not(:disabled) {
+      color: $woow-primary;
+      border-color: rgba($woow-primary, 0.4);
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+  }
+
+  // 說明文字用自己的 class，不借用其他頁的 .o_woow_hint（那個定義在服務詳情頁的 SCSS）。
+  &__intro {
+    margin: 0 0 1rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: $woow-text-secondary;
+  }
+
+  &__unavailable {
+    margin: 0;
+    padding: 1rem 1.25rem;
+    border: 1px dashed $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+  }
+
+  &__alert {
+    margin: 0 0 1rem;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid #fcd34d;
+    border-radius: $woow-radius-default;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 0.875rem;
+    line-height: 1.45;
+
+    &--full {
+      border-color: #fca5a5;
+      background: #fef2f2;
+      color: #991b1b;
+    }
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+
+    // 窄螢幕三格直排；minmax(0, …) 讓長數字換行而不是把格子撐出畫面。
+    @media (max-width: $woow-bp-md) {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  &__row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 1rem 1.25rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-card-light;
+
+    // 三格橫排時讓各格的四段（標題列、數字、比例條、底部兩欄）跨格對齊：某一格的等級
+    // 標籤或數字折行時，別格的同一段跟著留出一樣的高度，數字與比例條才落在同一條水平線上
+    // （英文版 769～1024px 寬時標籤會折到標題下方，原本各格自己排、高低不一）。
+    // `span 4`＝模板裡這個元素的四個子元素，兩邊數目要一致：subgrid 不會自己長出新的列，
+    // 多出來的子元素會疊在最後一列上。不支援 subgrid 的瀏覽器維持上面的 flex 直排。
+    @supports (grid-template-rows: subgrid) {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: subgrid;
+      grid-row: span 4;
+    }
+
+    &--warning {
+      border-color: #fcd34d;
+
+      .o_woow_quota_panel__fill {
+        background: #d97706;
+      }
+
+      .o_woow_quota_panel__level {
+        background: #fffbeb;
+        color: #92400e;
+      }
+    }
+
+    &--full {
+      border-color: #fca5a5;
+
+      .o_woow_quota_panel__fill {
+        background: #dc2626;
+      }
+
+      .o_woow_quota_panel__level {
+        background: #fef2f2;
+        color: #991b1b;
+      }
+    }
+  }
+
+  &__row_head,
+  &__row_foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    // 這一列被別格撐高時（見 __row 的 subgrid），內容貼上緣，不被拉開到整列的高度。
+    align-content: flex-start;
+    gap: 0.25rem 0.5rem;
+  }
+
+  &__label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $woow-text-secondary;
+  }
+
+  &__level {
+    padding: 0.125rem 0.5rem;
+    border-radius: $woow-radius-full;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  &__used {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    overflow-wrap: anywhere;
+  }
+
+  &__bar {
+    height: 8px;
+    border-radius: $woow-radius-full;
+    background: $woow-border-light;
+    overflow: hidden;
+  }
+
+  &__fill {
+    height: 100%;
+    border-radius: $woow-radius-full;
+    background: $woow-primary;
+    transition: width 0.3s ease;
+  }
+
+  &__percent,
+  &__remaining {
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+    overflow-wrap: anywhere;
+  }
+}

@@ -92,6 +92,17 @@ class ReleaseUpgradeRequest(BaseModel):
     reuse_values: bool = Field(
         default=True, description="Reuse last release values"
     )
+    check_compute_quota: bool = Field(
+        default=False,
+        description="#1647: also refuse (409 workspace_compute_quota_exceeded) when the "
+        "release's pods would certainly not fit the namespace ResourceQuota after the "
+        "upgrade. Opt-in per request; absent (older platform) = no check",
+    )
+    pending_quota: Optional["NamespaceQuotaUpdateRequest"] = Field(
+        default=None,
+        description="#1647: quota the platform will push right after this check (plan change). "
+        "Only honoured by upgrade-preflight; PATCH ignores it.",
+    )
 
 
 #: #1433：``preserve_value_paths`` 每一條的合法形態——點分式、每段是 values 鍵名。
@@ -128,6 +139,12 @@ class ReleaseRollbackRequest(BaseModel):
         description="#1433: dot-paths whose CURRENT values must survive the rollback "
         "(e.g. config.sensitive, auth.username). A path absent from the current values "
         "is removed from the target values as well — current state wins, including absence.",
+    )
+    check_compute_quota: bool = Field(
+        default=False,
+        description="#1647: same opt-in check as ReleaseUpgradeRequest.check_compute_quota. "
+        "Only effective with preserve_value_paths (that rollback is a helm upgrade); a plain "
+        "helm rollback is not checked",
     )
 
     @field_validator("preserve_value_paths")
@@ -255,6 +272,10 @@ class NamespaceQuotaUpdateRequest(BaseModel):
         default=None, description="#1434: limits.ephemeral-storage, e.g. 80Gi")
 
 
+# #1647：``ReleaseUpgradeRequest.pending_quota`` 以字串前向參照上面這個 model。
+ReleaseUpgradeRequest.model_rebuild()
+
+
 class BaselineNetpolBackfillRequest(BaseModel):
     """#279 P5 backfill: re-apply the baseline NP bundle + re-stamp managed labels on
     a PRE-EXISTING CloudService namespace created before O4/O1."""
@@ -360,7 +381,11 @@ class ContainerWaitingInfo(BaseModel):
 
 
 class PodWarningEvent(BaseModel):
-    """#1417：這顆 Pod 最近一筆 Warning 事件（``FailedAttachVolume``、``FailedScheduling``…）。"""
+    """#1417：這顆 Pod 最近一筆 Warning 事件（``FailedAttachVolume``、``FailedScheduling``…）。
+
+    #1647：也用於 workload 的 controller 層事件（Deployment／ReplicaSet／StatefulSet 的
+    ``FailedCreate``），見 ``WorkloadInfo.last_warning``。
+    """
 
     reason: str
     message: Optional[str] = None  # 截短過
@@ -396,6 +421,44 @@ class PodInfo(BaseModel):
     # image。None＝沒有可報的（容器都沒在 waiting／沒有 Warning 事件／事件查詢失敗），
     # 不是錯誤。``last_warning`` 只在 status 端點、且這顆 Pod 未就緒時才查。
     waiting: Optional[ContainerWaitingInfo] = None
+    last_warning: Optional[PodWarningEvent] = None
+
+
+class WorkloadReplicaFailure(BaseModel):
+    """#1647：workload 的 ``ReplicaFailure=True`` condition（controller 建不出 Pod 的原因）。
+
+    Deployment 在 ReplicaSet 建 Pod 被拒（quota、admission…）時會帶這個 condition；
+    ``reason`` 通常是 ``FailedCreate``，``message`` 是 API server 的拒絕原文。
+    """
+
+    reason: str
+    message: Optional[str] = None  # 截短過（見 KubernetesService.WORKLOAD_DIAGNOSTIC_TEXT_LIMIT）
+    last_transition: Optional[str] = None  # RFC 3339（lastTransitionTime 原值）
+
+
+class WorkloadInfo(BaseModel):
+    """#1647：release 的一個 Deployment／StatefulSet 的副本數與「建不出 Pod」的證據。
+
+    存在的理由：Pod 被 quota 擋下時**根本沒有 Pod 物件**（2026-10-10 事故：ReplicaSet
+    ``FailedCreate: exceeded quota``），``pods`` 清單只會少一顆、看不出「本來該有」。
+    平台要發現「期望有 Pod 但一顆都沒有」，就得看 controller 這一層。
+
+    ``desired_replicas`` 是 ``spec.replicas``（缺值當 1，同 API server 的預設）；
+    ``replicas`` 是 controller 目前實際擁有的 Pod 數（``status.replicas``，缺值當 0）。
+    ``replica_failure``／``last_warning`` 為 None＝沒有可報的（或事件查詢失敗），不是錯誤；
+    ``last_warning`` 只在這個 workload 副本不足時才查。
+    """
+
+    kind: str  # Deployment | StatefulSet
+    name: str
+    desired_replicas: int
+    replicas: int = 0
+    ready_replicas: int = 0
+    updated_replicas: int = 0
+    # Deployment 取 spec.strategy.type（Recreate／RollingUpdate），StatefulSet 取
+    # spec.updateStrategy.type；Recreate 被擋時舊 Pod 已經先砍掉，是中斷最徹底的一種。
+    strategy: Optional[str] = None
+    replica_failure: Optional[WorkloadReplicaFailure] = None
     last_warning: Optional[PodWarningEvent] = None
 
 
@@ -733,6 +796,32 @@ class ReleaseStatusResponse(BaseModel):
         description=(
             "Error message if DataVolume retrieval failed. Non-fatal for "
             "readiness — it only costs the import progress indicator."
+        ),
+    )
+    # ---- #1647：workload（Deployment／StatefulSet）副本數（opt-in：?include_workloads=true）
+    # 與 VM 欄位同一套三態：``None``＝沒查（沒帶旗標）或查詢失敗（看
+    # ``workload_retrieval_error``），``[]``＝查了、這個 release 沒有 workload。舊 operator
+    # 沒有這三個 key；平台必須把缺席當成「不支援」，不得當成「沒有 workload」或「健康」。
+    workloads_included: bool = Field(
+        default=False,
+        description=(
+            "Echo of the include_workloads request flag. False means the workloads "
+            "were never queried — do NOT interpret their absence as 'no workloads'."
+        ),
+    )
+    workloads: Optional[List[WorkloadInfo]] = Field(
+        default=None,
+        description=(
+            "Deployments and StatefulSets of this release with their replica counts. "
+            "None = not queried, or the lookup failed (see workload_retrieval_error); "
+            "[] = queried, none exist."
+        ),
+    )
+    workload_retrieval_error: Optional[str] = Field(
+        None,
+        description=(
+            "Error message if the workload lookup failed. The caller MUST NOT read a "
+            "missing workloads list as 'healthy' while this is set."
         ),
     )
 

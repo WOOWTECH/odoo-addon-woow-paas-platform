@@ -1042,6 +1042,8 @@ from . import test_redeploy_images_1408
 from . import test_deploy_timeout_diagnosis_1417
 # #1416：逾時轉 error 後 release 就緒會自動恢復（背景低頻重查、只碰逾時造成的 error）。
 from . import test_deploy_timeout_recovery_1416
+# #1647：running 的服務有 workload 期望有 Pod、實際一顆都沒有——偵測、通知、顯示，不改 state。
+from . import test_workload_fault_1647
 # #1431：從未 running 過的服務刪除時孤兒 PVC 只留 1 天；first_running_at 的寫入、守衛與保守回填。
 from . import test_never_running_orphan_grace_1431
 # #1424：開通被 operator 拒絕（#1348／#1415）且從未 running ⇒ 自動取消訂閱；一直停在 error、
@@ -1078,6 +1080,8 @@ from . import test_n8n_init_owner_changed_1534
 from . import test_mcp_onetime_credentials_1542
 # #1552：背景 upgrade 失敗不再靜默（poll 先推回 running 也記 error）、中文說明、error 可重新送出修改配置。
 from . import test_upgrade_failure_1552
+# #1647：升級前檢查工作區 compute 配額（Redeploy／儲存設定／換方案／保留憑證的回復），放不下就不套用。
+from . import test_compute_quota_preflight_1647
 # #1535：自訂網域未實作，服務頁按鈕與 CNAME 教學對租戶隱藏。
 from . import test_custom_domain_hidden_1535
 # #1560：服務頁依角色顯示管理按鈕、權限不足訊息、重設密碼確認框、回復版本中文化。
@@ -1110,6 +1114,8 @@ from . import test_self_renew_1611
 from . import test_spec_labels_zh_1612
 # #1540：停權／刪除後的限時唯讀資料取回入口（owner／admin、一次性密碼、復權先關、刪除記帳本、cron）。
 from . import test_data_retrieval_1540
+# #1686：資料取回配額不足的租戶訊息只請租戶聯絡客服（不建議停止／刪除服務、不說配額已用完）。
+from . import test_data_retrieval_quota_message_1686
 # #1634：Nextcloud 整台磁碟 20G（四顆 PVC 加總＝方案總量；overlay 扣固定開銷；migration 18.0.1.0.223）。
 from . import test_nextcloud_storage_20g_1634
 # 2026-10-10：「試用中」看實際試用期（sh_trial 試用結束不會被清；略過試用不可對已付費訂閱重複扣款）。
@@ -1145,3 +1151,6 @@ from . import test_sa_sh_publication_receipt_ac1011
 from . import test_access_sync_receipt_ac1011
 from . import test_access_sync_per_identity_ac1011
 from . import test_rollback_settings_sync
+# #1647 顯示：工作區頁的 CPU／記憶體／磁碟配額（上限、已佔用、剩餘、等級；成員可看、非成員不碰 operator；operator 未設定／太舊／失敗各有 reason）。
+from . import test_workspace_quota_1647
+from . import test_service_resource_observations

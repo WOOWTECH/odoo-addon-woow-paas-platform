@@ -209,7 +209,7 @@ class TestReconcilePerServiceIsolation(_Base):
 
         client = self._client()
 
-        def _status(namespace, release_name, include_vm=False):
+        def _status(namespace, release_name, include_vm=False, include_workloads=False):
             if release_name == bad.helm_release_name:
                 raise RuntimeError('operator exploded')
             return {

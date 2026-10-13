@@ -26,6 +26,7 @@ import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswo
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
 import { serviceRetrievalEndpoint } from "../../services/data_retrieval";
 import { cloudService } from "../../services/cloud_service";
+import { useServiceResources } from "../../services/service_resources";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
@@ -37,6 +38,7 @@ import {
     getStaleObservation,
     getStaleObservationLabel,
     getSupportProjectAction,
+    getWorkloadFaultText,
 } from "../../utils/service_presentation";
 
 /**
@@ -113,6 +115,7 @@ export class ServiceDetailPage extends Component {
             showDataRetrievalModal: false,
         });
         this.router = useState(router);
+        this.resources = useServiceResources(this.props.workspaceId, () => [this.props.serviceId]);
         this.pollingInterval = null;
 
         onMounted(() => {
@@ -279,6 +282,14 @@ export class ServiceDetailPage extends Component {
 
     get initFailed() {
         return !!this.initFailureText;
+    }
+
+    /**
+     * #1647：服務顯示 running、但平台確認它沒有在執行時的固定文案（否則 null）。
+     * 只讀 payload 的 workload_fault；叢集的原始訊息不出後台。
+     */
+    get workloadFaultText() {
+        return getWorkloadFaultText(this.service);
     }
 
     /**

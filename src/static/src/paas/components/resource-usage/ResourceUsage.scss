@@ -1,0 +1,36 @@
+.o_woow_resource_usage {
+  min-width: 0;
+  padding: 24px;
+  color: $woow-text-primary;
+  background: $woow-card-light;
+  border: 1px solid $woow-border-light;
+  border-radius: $woow-radius-lg;
+
+  &__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  &__heading h3 { margin: 0; font-size: 17px; font-weight: 600; }
+  &__status { font-size: 12px; color: #26724a; }
+  &__status.is-warning { color: #926011; }
+  &__hint, &__footer { color: $woow-text-secondary; font-size: 12px; }
+  &__hint { margin: 8px 0 20px; }
+  &__rows { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+  &__values { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
+  &__label { font-size: 13px; }
+  &__numbers { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 14px; }
+  &__capacity { color: $woow-text-secondary; font-size: 12px; }
+  &__bar { height: 5px; border-radius: 8px; background: #e9edf5; overflow: hidden; }
+  &__bar > span { display: block; height: 100%; background: $woow-primary; border-radius: inherit; }
+  &__bar.is-warning > span { background: #d29524; }
+  &__bar.is-high > span { background: #d45050; }
+  &__bar.is-stale > span { background: #8790a5; }
+  &__annotation { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; min-height: 16px; color: $woow-text-secondary; font-size: 11px; }
+  &__footer { margin-top: 16px; line-height: 1.6; }
+  &__footer p { margin: 4px 0 0; }
+
+  &--compact { padding: 16px 0 4px; margin-top: 12px; border: 0; border-top: 1px solid $woow-border-light; border-radius: 0; }
+  &--compact &__heading h3 { font-size: 13px; }
+  &--compact &__status { font-size: 10px; }
+  &--compact &__rows { grid-template-columns: 1fr; gap: 12px; margin-top: 14px; }
+  &--compact &__footer { margin-top: 10px; font-size: 10px; }
+
+  @media (max-width: $woow-bp-md) { &__rows { grid-template-columns: 1fr; gap: 16px; } }
+}

@@ -7,7 +7,8 @@ import { BrandIcon } from "../brand-icon/BrandIcon";
 import { templateBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../button/WoowButton";
 import { getDomain } from "../../services/cloud_service";
-import { getInitFailureText } from "../../utils/service_presentation";
+import { getInitFailureText, getWorkloadFaultLabel } from "../../utils/service_presentation";
+import { ResourceUsage } from "../resource-usage/ResourceUsage";
 
 /**
  * ServiceCard Component
@@ -22,9 +23,13 @@ import { getInitFailureText } from "../../utils/service_presentation";
  */
 export class ServiceCard extends Component {
     static template = "woow_paas_platform.ServiceCard";
-    static components = { StatusBadge, SubscriptionBadge, WoowIcon, BrandIcon, WoowButton };
+    static components = { StatusBadge, SubscriptionBadge, WoowIcon, BrandIcon, WoowButton, ResourceUsage };
     static props = {
         service: { type: Object },
+        resourceObservation: { type: Object, optional: true },
+        resourcesLoading: { type: Boolean, optional: true },
+        resourcesRefreshFailed: { type: Boolean, optional: true },
+        resourcesNow: { type: Number, optional: true },
         onOpen: { type: Function, optional: true },
         onSettings: { type: Function, optional: true },
     };
@@ -94,6 +99,11 @@ export class ServiceCard extends Component {
     /** #1159：與詳情頁共用固定 init 失敗文案，不能露出 operator 原始錯誤。 */
     get initFailureText() {
         return getInitFailureText(this.props.service);
+    }
+
+    /** #1647：服務顯示 running、但平台確認它沒有在執行時的一行提示（否則 null）。 */
+    get workloadFaultLabel() {
+        return getWorkloadFaultLabel(this.props.service);
     }
 
     onClick(ev) {

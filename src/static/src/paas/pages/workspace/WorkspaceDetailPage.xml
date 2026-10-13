@@ -86,6 +86,9 @@
                     </t>
                 </div>
 
+                <!-- #1647 工作區配額（CPU／記憶體／磁碟的上限與已佔用量；沒有資料時整塊不畫）-->
+                <WorkspaceQuotaPanel workspaceId="props.workspaceId" reloadKey="quotaReloadKey"/>
+
                 <!-- Cloud Services Section -->
                 <section class="o_woow_services_section">
                     <div class="o_woow_services_section_header">
@@ -129,6 +132,10 @@
                             <t t-foreach="state.services" t-as="service" t-key="service.id">
                                 <ServiceCard
                                     service="service"
+                                    resourceObservation="resources.state.observations[service.id]"
+                                    resourcesLoading="resources.state.loading"
+                                    resourcesRefreshFailed="resources.state.refreshFailed"
+                                    resourcesNow="resources.state.now"
                                     onSettings="() => this.goToService(service.id)"/>
                             </t>
                         </div>

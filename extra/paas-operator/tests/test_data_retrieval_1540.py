@@ -19,6 +19,7 @@ kubectl 一律 mock。
 import base64
 import copy
 import hashlib
+import re
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -554,6 +555,27 @@ class TestOpen:
         assert resp.json()["detail"]["error_code"] == "retrieval_quota_exceeded"
         assert fake.deleted == [(retrieval.RETRIEVAL_KINDS, NS, dr.label_selector(REL))]
         assert cf.puts == []  # route 還沒建
+
+    def test_quota_rejection_detail_does_not_suggest_stopping_services(
+            self, client, cf, env_prod, now):
+        """#1686：detail 不叫人停止／刪除其他服務，也不說配額已用完。
+
+        工作區上限＝存活服務的方案規格加總 × 3：少一台，上限少 3 份、用量只少約 1 份，剩餘
+        空間通常變小。被擋下的常見形狀是「還有剩，但不夠啟動」，所以說的是剩餘配額不足。
+        """
+        fake = FakeK8s()
+        fake.create_error = (4, KubectlException(
+            "failed", "kubectl create", 'Error from server (Forbidden): pods "x" is forbidden: '
+            'exceeded quota: paas-quota, requested: limits.cpu=500m'))
+        with _use(fake):
+            resp = _open(client)
+        message = resp.json()["detail"]["message"]
+        assert "does not have enough CPU or memory quota left to start" in message
+        assert not re.search(
+            r"(?i)\b(delet\w*|remov\w*|stop\w*|paus\w*|suspend\w*|disabl\w*|shut\w* down"
+            r"|turn\w* off|downgrad\w*|smaller|free\w* up|retry|try again)\b", message)
+        assert not re.search(
+            r"(?i)\b(full|used up|exhausted|ran out|run out|no\b.*\bleft)\b", message)
 
     def test_cloudflare_failure_rolls_back_k8s(self, client, cf, env_prod, now):
         cf.fail_put = True

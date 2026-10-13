@@ -451,34 +451,48 @@ kubectl exec -it <paas-operator-pod> -n paas-system -- \
 
 ### Issue: Namespace Quota Exceeded
 
-**Symptoms**: Service deployment fails with "exceeded quota" error
+**Symptoms**：有兩種，第二種平台不會顯示任何錯誤（#1647）。
 
-**Diagnosis**:
+- 開通、Redeploy 或換方案失敗，錯誤訊息含 `exceeded quota`。
+- 服務在平台上是 `running`，實際上沒有 pod。被 quota 拒絕的 pod 根本不會建立，所以 `kubectl get pods` 看不到失敗的 pod，要看 ReplicaSet／StatefulSet 的 `FailedCreate` 事件。
 
-```bash
-# Check namespace resource quota
-kubectl describe resourcequota -n paas-ws-{workspace_id}
-
-# Check current resource usage
-kubectl top pods -n paas-ws-{workspace_id}
-```
-
-**Common Causes**:
-
-- Too many services in one workspace
-- Service requesting more resources than available
-- Default quota too restrictive
-
-**Solution**:
+**Diagnosis**：
 
 ```bash
-# Increase namespace quota
-kubectl patch resourcequota workspace-quota -n paas-ws-{workspace_id} \
-  --type='json' -p='[{"op": "replace", "path": "/spec/hard/requests.cpu", "value":"8"}]'
+# ResourceQuota 的名稱是 <namespace>-quota；hard 是上限，used 是目前用量
+kubectl --context <context> -n <namespace> describe resourcequota <namespace>-quota
 
-# Or delete services to free up resources
-helm uninstall <old-service> -n paas-ws-{workspace_id}
+# 找被 quota 拒絕的 pod 建立事件（訊息會寫出是哪一項資源超過）
+kubectl --context <context> -n <namespace> get events --field-selector reason=FailedCreate
+
+# 找副本數不足的 workload
+kubectl --context <context> -n <namespace> get deploy,sts
 ```
+
+事件訊息的格式是 `exceeded quota: <namespace>-quota, requested: limits.cpu=8, used: limits.cpu=8, limited: limits.cpu=12`：`requested` 是這個 pod 要的量，`used` 是其他 pod 已經佔用的量，兩者相加超過 `limited` 就會被拒。
+
+**Common Causes**：
+
+- 服務的 `resources.limits` 被調高（改 `helm_values` 或在平台外直接 patch），加總超過上限。
+- 同一個 namespace 內有平台不知道的 workload（手動建立的 StatefulSet 等）佔用同一份 quota。
+- 策略是 `Recreate` 的 Deployment：舊 pod 先被刪除，新 pod 才被拒，結果是 0 個 pod。
+
+上限的來源：平台把 workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3（下限 8 vCPU／8Gi／100Gi），見 `src/models/cloud_service.py` 的 `_compute_ns_quota`。operator 把 `requests.cpu` 與 `limits.cpu` 設成同一個值，記憶體也一樣。
+
+**Solution**：
+
+1. 優先把 workload 的 limits 調回上限以內，或移除不需要的服務。
+2. 需要放大上限時，目前沒有正式的後台入口（#1648）。平台只在開通、換方案、刪除服務時重算並推送 quota，所以：
+   - 在後台改服務的 `allocated_*` 不會立即生效，要等同一個 workspace 下一次上述事件。
+   - 直接 `kubectl patch` 會立即生效，但下一次平台推送會整組蓋回計算值，問題會無聲重現（#456）。只能當緊急止血，事後要補上平台紀錄。
+
+```bash
+# 緊急止血：limits.cpu 與 requests.cpu 要一起改
+kubectl --context <context> -n <namespace> patch resourcequota <namespace>-quota \
+  --type merge -p '{"spec":{"hard":{"limits.cpu":"18","requests.cpu":"18"}}}'
+```
+
+放大上限後不需要重啟 workload：ReplicaSet controller 會自己重試，但退避間隔最長約 16 分鐘。
 
 ### Issue: PVC Not Binding
 
