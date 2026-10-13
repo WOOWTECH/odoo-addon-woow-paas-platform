@@ -132,6 +132,10 @@
                             <t t-foreach="state.services" t-as="service" t-key="service.id">
                                 <ServiceCard
                                     service="service"
+                                    resourceObservation="resources.state.observations[service.id]"
+                                    resourcesLoading="resources.state.loading"
+                                    resourcesRefreshFailed="resources.state.refreshFailed"
+                                    resourcesNow="resources.state.now"
                                     onSettings="() => this.goToService(service.id)"/>
                             </t>
                         </div>

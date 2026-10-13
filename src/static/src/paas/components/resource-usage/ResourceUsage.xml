@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.ResourceUsage">
+    <section t-att-class="{'o_woow_resource_usage': true, 'o_woow_resource_usage--compact': props.compact}"
+        t-att-aria-label="title" t-att-aria-busy="props.loading ? 'true' : 'false'">
+      <div class="o_woow_resource_usage__heading">
+        <h3 t-esc="title"/>
+        <span t-att-class="{'o_woow_resource_usage__status': true, 'is-warning': hasWarning}" t-esc="statusLabel"/>
+      </div>
+      <p t-if="!props.compact" class="o_woow_resource_usage__hint" t-esc="valueHint"/>
+      <div class="o_woow_resource_usage__rows">
+        <div t-foreach="rows" t-as="row" t-key="row.key" class="o_woow_resource_usage__row"
+          t-att-data-resource="row.key" t-att-data-status="row.status">
+          <div class="o_woow_resource_usage__values">
+            <span class="o_woow_resource_usage__label" t-esc="row.label"/>
+            <span class="o_woow_resource_usage__numbers">
+              <strong t-esc="row.usage"/>
+              <span class="o_woow_resource_usage__capacity"> / <t t-esc="row.capacity"/> <t t-esc="row.unit"/></span>
+            </span>
+          </div>
+          <div t-att-class="'o_woow_resource_usage__bar is-' + row.tone" t-att-title="row.note || row.label">
+            <span t-if="row.percent !== null" t-att-style="'width: ' + row.width + '%'"
+               role="progressbar" t-att-aria-label="row.label" aria-valuemin="0" aria-valuemax="100"
+               t-att-aria-valuenow="Math.min(row.percent, 100)" t-att-aria-valuetext="row.percent + '%'"/>
+          </div>
+          <div class="o_woow_resource_usage__annotation" t-if="row.note || row.percent !== null">
+            <span t-esc="row.note"/>
+            <span t-if="row.percent !== null"><t t-esc="row.percent"/>%</span>
+          </div>
+        </div>
+      </div>
+      <div class="o_woow_resource_usage__footer">
+        <time t-if="sampledAt" t-esc="observedLabel"/>
+        <p t-if="!props.compact" t-esc="scopeHint"/>
+      </div>
+    </section>
+  </t>
+</templates>

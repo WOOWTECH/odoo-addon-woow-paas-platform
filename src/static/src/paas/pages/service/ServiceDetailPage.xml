@@ -321,7 +321,11 @@
                 <div class="o_woow_tab_content">
                     <OverviewTab
                         t-if="currentTab === 'overview'"
-                        service="service"/>
+                        service="service"
+                        resourceObservation="resources.state.observations[props.serviceId]"
+                        resourcesLoading="resources.state.loading"
+                        resourcesRefreshFailed="resources.state.refreshFailed"
+                        resourcesNow="resources.state.now"/>
                     <ConfigurationTab
                         t-if="currentTab === 'configuration'"
                         service="service"

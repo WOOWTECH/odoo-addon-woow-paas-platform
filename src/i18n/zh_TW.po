@@ -22317,3 +22317,147 @@ msgstr "重新整理用量"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
 msgid "This is the plan of this service only. All services in the workspace share one overall CPU, memory and disk quota."
 msgstr "這是這台服務自己的方案規格。工作區內所有服務共用一份 CPU、記憶體與磁碟總配額。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "CPU"
+msgstr "CPU"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Memory"
+msgstr "記憶體"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Persistent storage"
+msgstr "持久儲存空間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "cores"
+msgstr "核心"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Outdated sample"
+msgstr "資料已過期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Not supported"
+msgstr "暫不支援"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Service stopped"
+msgstr "服務已停止"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Partial data (%s/%s)"
+msgstr "資料不完整（%s/%s）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No usage data"
+msgstr "尚無使用量資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No limit set"
+msgstr "未設定上限"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "Limit unavailable"
+msgstr "尚無上限資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Waiting for data"
+msgstr "正在取得資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Data outdated"
+msgstr "資料已過期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Metrics not supported"
+msgstr "暫不支援用量監測"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Partial data"
+msgstr "資料不完整"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Data unavailable"
+msgstr "暫時無法取得資料"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Updates every 30 seconds"
+msgstr "每 30 秒更新"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Resource usage"
+msgstr "即時資源使用量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Includes this service's replicas, sidecars and databases. CPU is a 2-minute average. Storage counts each persistent volume once."
+msgstr "包含此服務的所有副本、附屬程序與資料庫。CPU 為近 2 分鐘平均；每個持久磁碟僅計算一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Usage / effective limit or capacity"
+msgstr "目前使用量／實際上限或容量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Sampled at %s"
+msgstr "資料時間：%s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Requested configuration"
+msgstr "申請配置"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Virtual machine capacity is shown when available. Live guest usage is not yet supported."
+msgstr "顯示可取得的虛擬機容量；目前尚不支援虛擬機內的即時使用量。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No persistent storage configured"
+msgstr "未配置持久儲存"

@@ -5,11 +5,13 @@ import copy
 import ipaddress
 import json
 import logging
+import math
 import threading
 import time
 import traceback
 import uuid
-from datetime import timezone
+from concurrent.futures import ThreadPoolExecutor, wait
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -34,6 +36,8 @@ from ..services.paas_operator import (
     PaaSOperatorAPIError,
     PaaSOperatorError,
     PaaSOperatorConnectionError,
+    PaaSOperatorClient,
+    RESOURCE_OBSERVATION_TIMEOUT,
     STORAGE_EXPANSION_ERROR_CODE,
     COMPUTE_QUOTA_ERROR_CODE,
     COMPUTE_QUOTA_SYNC_PREFLIGHT_TIMEOUT,
@@ -56,6 +60,120 @@ from ..models.security_access import _rule_replace, _skip_route_sync
 from ..models.workspace import WorkspaceHasServicesError
 
 _logger = logging.getLogger(__name__)
+
+_RESOURCE_STATUSES = frozenset({
+    'ok', 'partial', 'stale', 'unavailable', 'stopped', 'unsupported',
+})
+_RESOURCE_WARNING_CODES = frozenset({
+    'inventory_unavailable', 'vm_guest_metrics_unavailable',
+    'metrics_cpu_unavailable', 'metrics_cpu_time_unavailable',
+    'metrics_memory_unavailable', 'metrics_memory_time_unavailable',
+    'metrics_storage_unavailable', 'metrics_storage_time_unavailable',
+    'metrics_storage_capacity_unavailable', 'metrics_storage_capacity_time_unavailable',
+})
+
+
+def _resource_number(value):
+    """Missing observations remain unknown; never coerce them to zero."""
+    return (value if isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= 1e30 and math.isfinite(value) else None)
+
+
+def _resource_timestamp(value):
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat() if parsed.tzinfo else None
+
+
+def _unavailable_resource_observation(code='operator_unavailable'):
+    def metric(unit):
+        return {'usage': None, 'request': None, 'limit': None,
+                'limit_status': 'unknown', 'unit': unit, 'status': 'unavailable',
+                'sampled_at': None, 'coverage': {'observed': 0, 'expected': None}}
+    return {
+        'status': 'unavailable', 'workload_type': 'unknown',
+        'resource_scope': None, 'observed_at': None,
+        'cpu': metric('cores'), 'memory': metric('bytes'),
+        'ephemeral': metric('bytes'),
+        'storage': {'usage': None, 'capacity': None, 'requested': None,
+                    'unit': 'bytes', 'status': 'unavailable', 'sampled_at': None,
+                    'coverage': {'observed': 0, 'expected': None}, 'volumes': []},
+        'pods': {'total': None, 'running': None, 'ready': None},
+        'warnings': [code],
+    }
+
+
+def _public_resource_observation(raw, observed_at):
+    """Explicit DTO: never forward operator errors, config, or credential keys."""
+    if not isinstance(raw, dict):
+        return _unavailable_resource_observation()
+    result = _unavailable_resource_observation()
+    status = raw.get('status')
+    if not isinstance(status, str) or status not in _RESOURCE_STATUSES:
+        return result
+    result['status'] = status
+    result['observed_at'] = _resource_timestamp(raw.get('observed_at')) or observed_at
+    if raw.get('workload_type') in ('container', 'vm', 'unknown'):
+        result['workload_type'] = raw['workload_type']
+    if raw.get('resource_scope') in ('live_pods', 'workload_templates', 'vm_guest'):
+        result['resource_scope'] = raw['resource_scope']
+    for kind in ('cpu', 'memory', 'storage', 'ephemeral'):
+        source = raw.get(kind)
+        if not isinstance(source, dict):
+            continue
+        target = result[kind]
+        for key in ('usage', 'capacity', 'requested') if kind == 'storage' else ('usage', 'request', 'limit'):
+            target[key] = _resource_number(source.get(key))
+        if isinstance(source.get('status'), str) and source['status'] in _RESOURCE_STATUSES:
+            target['status'] = source['status']
+        target['sampled_at'] = _resource_timestamp(source.get('sampled_at'))
+        if source.get('limit_status') in ('bounded', 'unbounded', 'unknown') and kind != 'storage':
+            target['limit_status'] = source['limit_status']
+        if kind == 'cpu':
+            target['window_seconds'] = _resource_number(source.get('window_seconds'))
+        coverage = source.get('coverage')
+        if isinstance(coverage, dict):
+            target['coverage'] = {key: _resource_number(coverage.get(key))
+                                  for key in ('observed', 'expected')}
+        if kind == 'storage' and isinstance(source.get('volumes'), list):
+            for volume in source['volumes'][:200]:
+                if not isinstance(volume, dict):
+                    continue
+                name = volume.get('name')
+                if (not isinstance(name, str) or not name or len(name) > 253
+                        or any(char not in 'abcdefghijklmnopqrstuvwxyz0123456789-.' for char in name)):
+                    continue
+                target['volumes'].append({
+                    'name': name, **{key: _resource_number(volume.get(key))
+                                    for key in ('usage', 'capacity', 'requested')},
+                    'status': (volume['status'] if isinstance(volume.get('status'), str)
+                               and volume['status'] in _RESOURCE_STATUSES else 'unavailable'),
+                    'sampled_at': _resource_timestamp(volume.get('sampled_at')),
+                })
+                if volume.get('capacity_source') in ('pvc', 'filesystem'):
+                    target['volumes'][-1]['capacity_source'] = volume['capacity_source']
+    pods = raw.get('pods')
+    if isinstance(pods, dict):
+        result['pods'] = {key: _resource_number(pods.get(key))
+                          for key in ('total', 'running', 'ready')}
+    warnings = raw.get('warnings')
+    result['warnings'] = ([code for code in warnings if isinstance(code, str)
+                           and code in _RESOURCE_WARNING_CODES]
+                          if isinstance(warnings, list) else [])
+    return result
+
+
+def _fetch_resource_observations(base_url, api_key, namespace, release_names):
+    """Worker has no ORM/request environment; each worker owns its HTTP session."""
+    client = PaaSOperatorClient(base_url, api_key)
+    try:
+        return client.get_resource_observations(namespace, release_names)
+    finally:
+        client._session.close()
 
 
 class _SkipTrialInvoiceNotPayable(UserError):
@@ -1972,6 +2090,94 @@ class PaasController(HiddenChainMixin, Controller):
             return self._create_service(workspace, template_id, name, values, odoo_addon_ids, plan_id=plan_id)
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
+
+    @route("/api/workspaces/<int:workspace_id>/service-resource-observations",
+           auth="user", methods=["POST"], type="json")
+    def api_service_resource_observations(
+        self, workspace_id: int, service_ids: list[int] | None = None, **kw: Any,
+    ) -> dict[str, Any]:
+        """Read live resources for this viewer's workspace, without DB writes.
+
+        Capacity/accounting fields and the service lifecycle remain untouched.
+        Only IDs cross the public boundary; namespace/release anchors always
+        come from already-authorized records. Reject the entire request before
+        contacting the operator if any requested ID is outside that boundary.
+        """
+        if (kw or not isinstance(service_ids, list) or len(service_ids) > 100
+                or any(type(value) is not int or value <= 0 for value in service_ids)):
+            return {'success': False, 'error': _('Provide at most 100 service IDs.')}
+        try:
+            capability = _PaaSCapability(request.env)
+            workspace = capability.workspace(workspace_id)
+            if not workspace:
+                return {'success': False, 'error': _('Workspace not found or access denied')}
+            ids = set(service_ids)
+            services = []
+            for service_id in ids:
+                # The same service capability as detail/get, including portal
+                # membership and concealed-instance rules. Do not invent a
+                # second authorization path for the batch endpoint.
+                service = capability.cloud_service(service_id, workspace.id)
+                if not service:
+                    return {'success': False, 'error': _('Service not found')}
+                services.append(service)
+        except (AccessDenied, AccessError, MissingError):
+            return {'success': False, 'error': _('Workspace not found or access denied')}
+
+        observations = {str(service.id): _unavailable_resource_observation(
+            'not_deployed' if not service.helm_namespace or not service.helm_release_name
+            else 'operator_unavailable') for service in services}
+        groups = {}
+        for service in services:
+            if service.helm_namespace and service.helm_release_name:
+                groups.setdefault(service.helm_namespace, {}).setdefault(
+                    service.helm_release_name, []).append(str(service.id))
+        response = {'success': True, 'data': {
+            'observed_at': None, 'refresh_seconds': 30, 'services': observations,
+        }}
+        if not groups:
+            return response
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return response
+        base_url, api_key = client.base_url, client.api_key
+        client._session.close()
+        # One bounded wait across namespaces, with no ORM work in the workers.
+        # Normal workspaces have one namespace; old/migrated workspaces can
+        # span more. Each worker has a separate requests Session.
+        executor = ThreadPoolExecutor(max_workers=min(4, len(groups)))
+        futures = {}
+        timestamps = []
+        try:
+            for namespace, releases in groups.items():
+                future = executor.submit(
+                    _fetch_resource_observations, base_url, api_key,
+                    namespace, list(releases),
+                )
+                futures[future] = releases
+            completed, _pending = wait(futures, timeout=RESOURCE_OBSERVATION_TIMEOUT)
+            for future in completed:
+                try:
+                    payload = future.result()
+                except PaaSOperatorError as exc:
+                    # Runtime observations are optional. Log only the exception
+                    # type; HTTP details may contain infrastructure credentials.
+                    _logger.warning('Resource observations unavailable (%s)', type(exc).__name__)
+                    continue
+                if not isinstance(payload, dict) or not isinstance(payload.get('services'), dict):
+                    continue
+                observed_at = _resource_timestamp(payload.get('observed_at'))
+                if observed_at:
+                    timestamps.append(observed_at)
+                for release, service_keys in futures[future].items():
+                    observation = _public_resource_observation(
+                        payload['services'].get(release), observed_at)
+                    for service_key in service_keys:
+                        observations[service_key] = observation
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        response['data']['observed_at'] = min(timestamps) if timestamps else None
+        return response
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None, **kw: Any) -> dict[str, Any]:

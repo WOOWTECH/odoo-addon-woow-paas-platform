@@ -25,6 +25,7 @@ import { formatUserDateTime } from "../../utils/datetime_helpers";
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
 import { listRetainedData, retainedRetrievalEndpoint } from "../../services/data_retrieval";
 import { WorkspaceQuotaPanel } from "../../components/workspace-quota/WorkspaceQuotaPanel";
+import { useServiceResources } from "../../services/service_resources";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
@@ -61,6 +62,7 @@ export class WorkspaceDetailPage extends Component {
             retrievalTarget: null,
         });
         this.router = useState(router);
+        this.resources = useServiceResources(this.props.workspaceId, () => this.state.services.map((service) => service.id));
         this.servicesPollingInterval = null;
         this.smartHomesPollingInterval = null;
         this.securityAccessesPollingInterval = null;
@@ -124,9 +126,13 @@ export class WorkspaceDetailPage extends Component {
 
     async fetchServices() {
         try {
+            const previousIds = this.state.services.map((service) => service.id).join(",");
             await cloudService.fetchServices(this.props.workspaceId);
             this.state.services = cloudService.services;
             this.state.servicesError = cloudService.error;
+            if (!cloudService.error && previousIds !== this.state.services.map((service) => service.id).join(",")) {
+                this.resources.refresh();
+            }
             return { success: !cloudService.error };
         } catch (err) {
             this.state.servicesError = err.message;

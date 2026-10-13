@@ -16,6 +16,7 @@ from src.api import (
     namespaces,
     odoo_modules,
     reconcile,
+    resource_observations,
     releases,
     retrieval,
     routes,
@@ -205,6 +206,7 @@ app.include_router(odoo_modules.router)
 app.include_router(agent_runtimes.router)
 app.include_router(access.router)
 app.include_router(reconcile.router)
+app.include_router(resource_observations.router)
 app.include_router(analytics.router)
 # #1415：叢集層唯讀查詢（Longhorn 排程額度）。
 app.include_router(cluster.router)
