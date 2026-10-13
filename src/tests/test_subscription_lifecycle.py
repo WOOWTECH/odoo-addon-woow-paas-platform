@@ -682,6 +682,24 @@ class TestForceTrialDatesFromPlan(TransactionCase):
 class TestPlanCycleGuards(TransactionCase):
     """#43：兩個日期 helper 拒絕異常計費週期，且不留下壞日期。"""
 
+    def setUp(self):
+        super().setUp()
+        self.plan = self.env['sh.subscription.plan'].create({
+            'name': 'Cycle guard plan',
+            'sh_duration': 1,
+            'sh_unit': 'month',
+            'sh_plan_price': 100.0,
+            'sh_no_of_billing_cycle': -1,
+        })
+        product = self.env['product.template'].create({
+            'name': 'Cycle guard product',
+            'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan.id,
+            'list_price': 100.0,
+        })
+        self.product = product.product_variant_id
+
     def _assert_invalid_cycle_rejected(self, helper_name):
         mixin = self.env['woow_paas_platform.subscription_lifecycle_mixin']
         date_fields = (
@@ -701,8 +719,10 @@ class TestPlanCycleGuards(TransactionCase):
                     name='Cycle guard plan', sh_unit=unit, sh_duration=duration,
                     sh_trial_duration=7, sh_trial_unit='day',
                 )
-                subscription = self.env['sh.subscription.subscription'].new({
-                    'name': 'Cycle guard subscription',
+                subscription = self.env['sh.subscription.subscription'].create({
+                    'sh_partner_id': self.env.user.partner_id.id,
+                    'product_id': self.product.id,
+                    'sh_subscription_plan_id': self.plan.id,
                     'sh_trial': True,
                     'sh_trial_duration': 3,
                     'sh_trial_unit': 'day',
