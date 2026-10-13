@@ -1390,8 +1390,8 @@
 
         <!-- Home Assistant OS（HAOS，#423 W5b）：平台第一個 **VM 型** cloud service
              （KubeVirt VirtualMachine + CDI DataVolume），非容器。走 #380 金樣板上架
-             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.2（本 seed 的鍵名已對
-             `helm show values` 對 registry 上的 0.1.2 逐鍵核對，非轉抄 design 草案）。
+             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.3（guest :80 UI port 修正；
+             tenant-facing Service 維持 :8123）。本 seed 的鍵名逐鍵對 registry chart 核對。
 
              ⚠ 與既有 cloud_app_ha_paas（slug ha-paas、chart home-assistant、image
              woowtech-ha）是**不同產品**：那是容器化的 HA Core（0 元自動開通、隱藏），
@@ -1454,9 +1454,9 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.3</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
-                 （UEFI secureBoot=false、masquerade 僅轉 8123、limits==requests、
+                 （UEFI secureBoot=false、masquerade 僅轉 guest :80、limits==requests、
                  DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
                  vm.kubevirt.io/name、0.1.2 新增的 xffStrip.enabled 預設 true）
                  由 chart 預設＋chart tests 承擔、seed 不重寫。
@@ -1494,7 +1494,9 @@
                    CrashLoop）。
                  - vm.cores 2 / vm.memory 4Gi：賣給租戶的 guest 規格（拍板起點，與 Elmo
                    實測規格一致）。chart 由這兩個值推導 limits==requests，故不可能漂開。
-                 - service.port/targetPort 8123：HAOS 前台埠，＝default_port。
+                 - service.port 8123：平台／tunnel 對外埠，＝default_port；targetPort 80：
+                   HAOS onboarding UI redirect listener。HAOS Core :8123 會 redirect 到
+                   :80，若 targetPort 指向 Core，瀏覽器會離開 Service 路徑而無法載入 UI。
                  - networkPolicy.enabled=true：租戶隔離的第二層（第一層是 operator 的
                    baseline NP，#279/#280）。明寫防 chart 預設漂移把它關掉。
 
@@ -1519,7 +1521,7 @@
                    故 `_inject_apiserver_cidrs` 的 path_map 也刻意不收 'haos'。
                  - ingress.*：本 chart **沒有** ingress 區塊（對外走平台 subdomain +
                    Cloudflare tunnel）。寫了是死鍵，會讓後人以為 chart 支援 Ingress。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 8123}, "networkPolicy": {"enabled": true}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "64Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HAOS 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
