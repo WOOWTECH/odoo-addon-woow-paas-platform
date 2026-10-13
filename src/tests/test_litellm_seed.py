@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 模型閘道（LiteLLM）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/litellm 0.3.0（0.3.0＝LiteLLM 1.104.0，與 HA add-on 同一顆映像；0.2.5＝名稱空白／重複帳號修正；0.2.4＝304 修正；0.2.3＝多個 ChatGPT 帳號；0.1.0＝#123；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt 在 LiteLLM 內；0.2.2＝後台 Add Credential 子畫面）——litellm-non_root 1.104.0（uid 65534）
+契約來源：woow-paas-charts charts/litellm 0.3.1（0.3.1＝停存 prompt 與 PostgreSQL CPU limit 1；0.3.0＝LiteLLM 1.104.0，與 HA add-on 同一顆映像；0.2.5＝名稱空白／重複帳號修正；0.2.4＝304 修正；0.2.3＝多個 ChatGPT 帳號；0.1.0＝#123；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt 在 LiteLLM 內；0.2.2＝後台 Add Credential 子畫面）——litellm-non_root 1.104.0（uid 65534）
 ＋內附 PostgreSQL（平台 paas-postgres 17.11），唯一入口 ``<release>-litellm:4000``、只有一顆 PVC。
 UI 帳號＝``auth.adminUser``（預設 admin，可改）、密碼＝``config.sensitive.admin_password``；master key＝平台 #530 gateway
 key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、不需 ``sk-`` 前綴）。
@@ -75,12 +75,12 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.3.0',
+        self.assertEqual(tpl.helm_chart_version, '0.3.1',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
                          '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt；'
                          '0.2.2＝後台 Add Credential 選 ChatGPT 跳出登入方式子畫面；0.2.3＝多個 ChatGPT 帳號；'
                          '0.2.4＝舊快取後台頁面也載入 bridge；0.2.5＝名稱空白／舊憑證／重複帳號修正；'
-                         '0.3.0＝LiteLLM 1.104.0')
+                         '0.3.0＝LiteLLM 1.104.0；0.3.1＝停存 prompt 與 PostgreSQL CPU limit 1')
 
     def test_chatgpt_login_inside_litellm(self):
         """chart 0.2.1 起 ChatGPT 訂閱登入在 LiteLLM 自己的 /woow/chatgpt（用 LiteLLM 管理員登入）；
