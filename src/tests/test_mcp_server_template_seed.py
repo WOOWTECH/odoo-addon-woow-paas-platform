@@ -361,7 +361,18 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 實查發布image之console entrypoint odoo_mcp.__main__:main、odoo-mcp1.1.0／mcp1.28.1、
     # CLI原生streamable-http與LaunchPolicy完整args；1ec1bb0b..1d16391d的apps/odoo、uv.lock未變。
     # 實際imageID／CLI／source SHA證據見docs/verification/2026-10-12-mcp-published-pins.json。
-    EXPECT_IMAGE_TAG = '1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6'
+    # 2026-10-13 補覆核 0b2cff1f（woow-mcp-server #51，Odoo 寫入閘門；main CI run 18449 job 20226 的 push
+    # digest）：seed 已由 #1672 於 2026-10-12 重釘，當時沒有同步本常數，#1687 補上。原始碼：1d16391d..0b2cff1f
+    # 只動 apps/odoo 的 main.py、seed_defaults.py（新檔）、frontend appConfig.jsx 與一支 core 測試；Dockerfile、
+    # pyproject、uv.lock、mcp_admin_core 原始碼皆未變。LaunchPolicy 的差異只在 env_keys／editable_env_keys／
+    # derived_env（放行 ODOO_MCP_ENABLE_WRITES），command 與 args 兩行沒動。發布 image：離線 probe pod 實際
+    # 拉到的 imageID 即 seed 釘的 digest；console script ``odoo-mcp``＝odoo_mcp.__main__:main、odoo-mcp 1.1.0／
+    # mcp 1.28.1、``--help`` 列 transport {sse,stdio,streamable-http}；core 的 resolve_launch 得 ``odoo-mcp``＋
+    # ``--transport streamable-http --host 127.0.0.1 --port 8000``，照該 argv 實際起子行程後 127.0.0.1:8000 的
+    # ``/mcp`` initialize 回 200＋mcp-session-id。證據見
+    # docs/verification/2026-10-13-mcp-odoo-0b2cff1f-launch-contract.json。
+    # 前一個 pin：1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6。
+    EXPECT_IMAGE_TAG = '0b2cff1fbc905f6285c107d2fd537ade016fd95d@sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

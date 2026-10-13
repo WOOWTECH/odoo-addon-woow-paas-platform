@@ -1,0 +1,177 @@
+{
+  "issue": "https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1687",
+  "verified_at": "2026-10-13",
+  "seed_pin": "0b2cff1fbc905f6285c107d2fd537ade016fd95d@sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7",
+  "previous_pin": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6",
+  "source_review": {
+    "repo": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server",
+    "range": "1d16391d1a62fdda2b8de6bd16491c22330b127f..0b2cff1fbc905f6285c107d2fd537ade016fd95d",
+    "pull_request": 51,
+    "changed_files": [
+      "apps/odoo/frontend/src/appConfig.jsx",
+      "apps/odoo/odoo_mcp_admin/main.py",
+      "apps/odoo/odoo_mcp_admin/seed_defaults.py",
+      "packages/mcp-admin-core/tests/test_odoo_write_gate.py"
+    ],
+    "unchanged_blobs": {
+      "uv.lock": "325c6e606fdf0e226e77a5fa89138e74f1aba5a8",
+      "apps/odoo/Dockerfile": "6655ab95ebfb8687348fec64ea6c8bbef1e78294",
+      "apps/odoo/pyproject.toml": "c6e4ed93244a954f62532673be61b00fd667d0d8",
+      "packages/mcp-admin-core/mcp_admin_core (tree)": "4ffe87c190ff1996aeaee1f3fdb51f864bbd7bf4"
+    },
+    "launch_policy_diff": "env_keys／editable_env_keys 由 {ODOO_MCP_ALLOW_DIRECT_WRITES} 改為 seed_defaults.DEFAULT_ENV 的兩鍵（加 ODOO_MCP_ENABLE_WRITES），新增 derived_env；command 與 args 兩行未變"
+  },
+  "published_image": {
+    "ci_push": {
+      "job_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18449/jobs/20226",
+      "log_line": "0b2cff1fbc905f6285c107d2fd537ade016fd95d: digest: sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7 size: 3881"
+    },
+    "probe_pod": {
+      "namespace": "dev-sandbox-1687-probe",
+      "spec_image": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin:0b2cff1fbc905f6285c107d2fd537ade016fd95d@sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7",
+      "image_pull_policy": "Always",
+      "actual_image_id": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin@sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7",
+      "digest_equals_seed_pin": true,
+      "network": "NetworkPolicy deny-all（ingress／egress 皆空）；未接任何 Odoo，子行程的 ODOO_URL 指向 127.0.0.1:9"
+    },
+    "console_script": {
+      "path": "/app/.venv/bin/odoo-mcp",
+      "entry_point": "odoo_mcp.__main__:main",
+      "distribution": "odoo-mcp",
+      "version": "1.1.0",
+      "mcp_sdk_version": "1.28.1"
+    },
+    "help_transports": [
+      "sse",
+      "stdio",
+      "streamable-http"
+    ],
+    "launch_policy": {
+      "registered_is_app_policy": true,
+      "command": "odoo-mcp",
+      "args_template": [
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "{port}"
+      ],
+      "build_command_8000": [
+        "odoo-mcp",
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "env_prefix": "",
+      "connection_keys": [
+        "odoo_db",
+        "odoo_password",
+        "odoo_url",
+        "odoo_username"
+      ],
+      "env_keys": [
+        "ODOO_MCP_ALLOW_DIRECT_WRITES",
+        "ODOO_MCP_ENABLE_WRITES"
+      ],
+      "editable_env_keys": [
+        "ODOO_MCP_ALLOW_DIRECT_WRITES",
+        "ODOO_MCP_ENABLE_WRITES"
+      ],
+      "has_derived_env": true
+    },
+    "resolve_launch_with_seed_mcp_server": {
+      "command": "odoo-mcp",
+      "args": [
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "port": 8000,
+      "equals_seed_command_args": true
+    },
+    "resolve_launch_ignores_config_command": {
+      "command": "odoo-mcp",
+      "args": [
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ]
+    },
+    "child_env_injected": {
+      "ODOO_DB": "probe",
+      "ODOO_MCP_ALLOW_DIRECT_WRITES": "0",
+      "ODOO_MCP_ENABLE_WRITES": "1",
+      "ODOO_PASSWORD": "<set>",
+      "ODOO_URL": "http://127.0.0.1:9",
+      "ODOO_USERNAME": "probe"
+    },
+    "seed_defaults_on_empty_config_store": {
+      "config_path": "/data/config.json",
+      "env_before": {},
+      "first_run_added": [
+        "ODOO_MCP_ENABLE_WRITES",
+        "ODOO_MCP_ALLOW_DIRECT_WRITES"
+      ],
+      "env_after": {
+        "ODOO_MCP_ENABLE_WRITES": "1",
+        "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"
+      },
+      "second_run_added": [],
+      "command_after": "",
+      "args_after": []
+    },
+    "actual_launch": {
+      "argv": [
+        "odoo-mcp",
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "listen_sockets_hex": [
+        "0100007F:1F40"
+      ],
+      "listen_decoded": "127.0.0.1:8000",
+      "initialize_status": 200,
+      "initialize_content_type": "text/event-stream",
+      "initialize_has_mcp_session_id": true,
+      "alive_after_initialize": true
+    },
+    "image_files_match_source_0b2cff1f": {
+      "apps/odoo/odoo_mcp_admin/main.py": {
+        "image": "fe6b8c67166762f0bdfd0d4679c39e545f54fab4d148eb4346545973fc705cdd",
+        "source_0b2cff1f": "fe6b8c67166762f0bdfd0d4679c39e545f54fab4d148eb4346545973fc705cdd",
+        "match": true
+      },
+      "apps/odoo/odoo_mcp_admin/seed_defaults.py": {
+        "image": "d928b334e3c76a612209aa71a80576c672aaaa48b0544dd0ff019c67c4aa94a9",
+        "source_0b2cff1f": "d928b334e3c76a612209aa71a80576c672aaaa48b0544dd0ff019c67c4aa94a9",
+        "match": true
+      },
+      "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": {
+        "image": "c72c864a4947890928644cbad8f58eeafe3b49fcd84009bbbdc315d28909e556",
+        "source_0b2cff1f": "c72c864a4947890928644cbad8f58eeafe3b49fcd84009bbbdc315d28909e556",
+        "match": true
+      },
+      "packages/mcp-admin-core/mcp_admin_core/process.py": {
+        "image": "6c1c82099a9f8f5d0dcfda4c75e7feb2553a0192b38f5b20f6ead5033ad55aea",
+        "source_0b2cff1f": "6c1c82099a9f8f5d0dcfda4c75e7feb2553a0192b38f5b20f6ead5033ad55aea",
+        "match": true
+      }
+    }
+  },
+  "conclusion": "啟動契約未變：console script odoo-mcp、args --transport streamable-http --host 127.0.0.1 --port 8000；#51 只擴充 LaunchPolicy 的 env 白名單與推導 env。",
+  "scope": "只驗 mcp-odoo 一張範本的啟動契約；未經 admin proxy、未呼叫 tools/list、未接真 Odoo；probe namespace 已於驗後刪除"
+}
