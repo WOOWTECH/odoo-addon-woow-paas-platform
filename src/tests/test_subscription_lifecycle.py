@@ -1,5 +1,6 @@
 """Tests for Subscription Lifecycle Mixin and Cron."""
 from datetime import date, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from .publication_receipt_fixture import install_publication_receipts
 
@@ -676,6 +677,57 @@ class TestForceTrialDatesFromPlan(TransactionCase):
             sub.sh_start_date + cycle_delta,
             'next payment must be plan-driven (#39): start + cycle_delta',
         )
+
+
+class TestPlanCycleGuards(TransactionCase):
+    """#43：兩個日期 helper 拒絕異常計費週期，且不留下壞日期。"""
+
+    def _assert_invalid_cycle_rejected(self, helper_name):
+        mixin = self.env['woow_paas_platform.subscription_lifecycle_mixin']
+        date_fields = (
+            'sh_trial', 'sh_trial_duration', 'sh_trial_unit',
+            'sh_trial_end_date', 'sh_start_date', 'sh_end_date',
+            'sh_date_of_next_payment',
+        )
+        for unit, duration, clue in (
+            ('fortnight', 1, 'fortnight'),
+            ('month', 0, '0'),
+            ('month', -1, '-1'),
+        ):
+            with self.subTest(helper=helper_name, unit=unit, duration=duration):
+                # Selection 欄位不接受 unknown unit；以 plan-shaped 輸入直測
+                # 契約指定的 helper 邊界，不讓 ORM 欄位驗證搶先擋下。
+                plan = SimpleNamespace(
+                    name='Cycle guard plan', sh_unit=unit, sh_duration=duration,
+                    sh_trial_duration=7, sh_trial_unit='day',
+                )
+                subscription = self.env['sh.subscription.subscription'].new({
+                    'name': 'Cycle guard subscription',
+                    'sh_trial': True,
+                    'sh_trial_duration': 3,
+                    'sh_trial_unit': 'day',
+                    'sh_trial_end_date': date(2030, 1, 3),
+                    'sh_start_date': date(2030, 1, 4),
+                    'sh_end_date': date(2030, 2, 3),
+                    'sh_date_of_next_payment': date(2030, 1, 4),
+                })
+                before = tuple(subscription[field] for field in date_fields)
+                with self.assertRaises(UserError) as raised:
+                    getattr(mixin, helper_name)(subscription, plan)
+                self.assertIn(plan.name, str(raised.exception))
+                self.assertIn(clue, str(raised.exception))
+                self.assertEqual(
+                    tuple(subscription[field] for field in date_fields), before,
+                    '異常週期必須在寫入 trial／計費日期之前被拒絕',
+                )
+
+    def test_trial_rejects_invalid_billing_cycle_without_date_write(self):
+        """Trial：unknown unit、零與負 duration 均 raise，原日期不變。"""
+        self._assert_invalid_cycle_rejected('_force_trial_dates_from_plan')
+
+    def test_active_rejects_invalid_billing_cycle_without_date_write(self):
+        """Active：unknown unit、零與負 duration 均 raise，原日期不變。"""
+        self._assert_invalid_cycle_rejected('_force_active_dates_from_plan')
 
 
 class TestForceActiveDatesFromPlan(TransactionCase):
