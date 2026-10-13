@@ -315,4 +315,5 @@ def test_inventory_is_only_namespaced_get_with_bounded_timeout():
     args = run.call_args.args[0]
     assert args[0] == "get" and "paas-ws-test" in args
     assert "--all-namespaces" not in args
+    assert not any(arg.startswith("--request-timeout") for arg in args)
     assert run.call_args.kwargs["timeout"] == 5

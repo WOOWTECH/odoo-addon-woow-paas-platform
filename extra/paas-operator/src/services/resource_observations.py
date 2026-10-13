@@ -213,9 +213,12 @@ class ResourceCollector:
                 event.set()
 
     def _inventory(self, namespace, kinds=KINDS):
+        # In the deployed in-cluster kubectl, --request-timeout disables the
+        # service-account fallback and makes discovery try localhost:8080.
+        # The subprocess timeout still bounds each namespaced read to 5s.
         result = self.k8s._run_command(
-            ["get", kinds, "--namespace", namespace, "--output", "json",
-             "--request-timeout=4s"], timeout=5)
+            ["get", kinds, "--namespace", namespace, "--output", "json"],
+            timeout=5)
         return json.loads(result.stdout).get("items", [])
 
     def _query(self, expression):

@@ -37,9 +37,15 @@ def test_existing_release_live_resource_observations(monkeypatch):
     monkeypatch.setattr(subprocess, "run", readonly_run)
     monkeypatch.setattr(resource_observations, "collector", collector)
     monkeypatch.setattr(settings, "api_key", "local-readonly-integration")
-    client = TestClient(app, headers={"X-API-Key": "local-readonly-integration"})
-    started = time.monotonic()
-    response = client.post(f"/api/namespaces/{namespace}/resource-observations", json={"release_names": names})
+    try:
+        client = TestClient(app, headers={"X-API-Key": "local-readonly-integration"})
+        started = time.monotonic()
+        response = client.post(f"/api/namespaces/{namespace}/resource-observations", json={"release_names": names})
+    finally:
+        # The collector owns a pooled Prometheus client; close it so the
+        # strict warnings-as-errors harness can finish without socket leaks.
+        if collector._http is not None:
+            collector._http.close()
     assert time.monotonic() - started < 10, "Collector exceeded the portal request budget"
     assert response.status_code == 200, response.text
     result = response.json()
