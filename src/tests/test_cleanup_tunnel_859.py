@@ -69,7 +69,9 @@ class TestCleanupTunnel859(TransactionCase):
             injected()
             client.delete_tunnel.assert_called_once_with(
                 'tunnel-859', tunnel_name='name-859')
-            self.assertTrue(records.env.su, '#1296：bookkeeping 必須 sudo')
+            # TransactionCase fixture 本來就是 su；這只是 bookkeeping 的必要前提，
+            # 不證明產品有呼叫 sudo。提權回歸依既有 #1294 的真 tenant HTTP／RPC 測試。
+            self.assertTrue(records.env.su, 'bookkeeping 必要前提：進入時 env.su=True')
             self.assertTrue(_is_internal_identity_write(records.env))
             self.assertEqual(vals, dict(
                 {field: False for field in _IDENTITY_ANCHOR_FIELDS},
@@ -127,6 +129,7 @@ class TestCleanupTunnel859(TransactionCase):
         self._bookkeeping_probe(RuntimeError('partial write 859'), partial=True)
 
     def test_operational_error_keeps_original_exception_for_retrying(self):
+        """只驗合成例外與成功回捲，不模擬真斷線或真 40001。"""
         for error in (OperationalError('DB disconnected 859'),
                       SerializationFailure('concurrent write 859')):
             with self.subTest(error=type(error).__name__):

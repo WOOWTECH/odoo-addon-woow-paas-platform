@@ -1123,15 +1123,17 @@ class SmartHome(models.Model):
             # #1296：這筆是平台自己的帳，維持 sudo ＋ private sentinel 的窄寫入。
             # sudo 打不開身分錨點守衛（無 su 豁免），開閘的仍是 `_internal_identity`；
             # 授權由呼叫鏈上的 `_assert_unlink_authorized()` 負責，本方法是私有方法。
-            # #859：錨點與狀態同一個 flushing savepoint，連離開時的 DB constraint
-            # 失敗都在本段分類；回捲僅撤回本地記帳，不補整筆 cr.rollback()。
+            # #859：錨點與狀態同一個 flushing savepoint；離開時 flush 觸發的
+            # immediate constraint 失敗在本段分類，DEFERRED constraint 到 COMMIT
+            # 才驗，不由 RELEASE SAVEPOINT 觸發。回捲僅撤回本地記帳，不補整筆 rollback。
             with self.env.cr.savepoint():
                 _internal_identity(self.sudo()).write(dict(
                     {field: False for field in _IDENTITY_ANCHOR_FIELDS},
                     tunnel_status='deleted',
                 ))
         except OperationalError:
-            # #518：保留原型別／物件給 Odoo retrying，不查可能已 aborted 的 DB。
+            # #518：回捲成功時保留原型別／物件給 Odoo retrying；真斷線若使
+            # savepoint 回捲另拋例外，原物件可能被蓋過。不查可能已 aborted 的 DB。
             _logger.exception(
                 "[SH] tunnel deleted in Cloudflare sh=%s tunnel=%s; local identity "
                 "anchors could not be cleared (database operational failure)",
