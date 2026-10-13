@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     # Kubernetes
     namespace_prefix: str = "paas-ws-"
+    # Optional read-only telemetry source; no kubelet proxy permissions needed.
+    resource_prometheus_url: str = "http://prometheus-operated.cattle-monitoring-system.svc:9090"
 
     # Helm
     helm_binary: str = "/usr/local/bin/helm"

@@ -35,7 +35,7 @@
                 <SecurityAccessDetailPage workspaceId="workspaceId" saId="securityAccessId" tab="securityAccessTab"/>
             </t>
             <t t-elif="router.current === 'service-detail'">
-                <ServiceDetailPage workspaceId="workspaceId" serviceId="serviceId" initialTab="serviceTab"/>
+                <ServiceDetailPage t-key="workspaceId + ':' + serviceId" workspaceId="workspaceId" serviceId="serviceId" initialTab="serviceTab"/>
             </t>
             <t t-elif="router.current === 'project-detail'">
                 <ProjectDetailPage projectId="projectId"/>

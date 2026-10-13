@@ -9,6 +9,7 @@ import { cloudService } from "../../../services/cloud_service";
 import { copyText } from "../../../utils/clipboard";
 import { formatPoints } from "../../../utils/billing_helpers";
 import { hasConfirmedWorkloadFault } from "../../../utils/service_presentation";
+import { ResourceUsage } from "../../../components/resource-usage/ResourceUsage";
 
 /**
  * OverviewTab Component
@@ -23,9 +24,13 @@ import { hasConfirmedWorkloadFault } from "../../../utils/service_presentation";
  */
 export class OverviewTab extends Component {
     static template = "woow_paas_platform.OverviewTab";
-    static components = { WoowCard, WoowIcon };
+    static components = { WoowCard, WoowIcon, ResourceUsage };
     static props = {
         service: { type: Object },
+        resourceObservation: { type: Object, optional: true },
+        resourcesLoading: { type: Boolean, optional: true },
+        resourcesRefreshFailed: { type: Boolean, optional: true },
+        resourcesNow: { type: Number, optional: true },
     };
 
     setup() {

@@ -38,6 +38,17 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 
 ## API Endpoints
 
+### Resource observations
+
+- `POST /api/namespaces/{namespace}/resource-observations` accepts `{"release_names":["svc-example"]}` (1–100 releases). It reads namespace-scoped Kubernetes inventory and Prometheus; it does not run Helm, execute commands inside tenants, change resource allocations, or update billing.
+- `RESOURCE_PROMETHEUS_URL` selects the Prometheus base URL, defaulting to `http://prometheus-operated.cattle-monitoring-system.svc:9090`. An empty value disables usage queries while preserving readable Kubernetes configuration. No `nodes/proxy` or `metrics.k8s.io` RBAC grant is required.
+- Results include effective CPU/memory requests and limits, CPU usage averaged over two minutes, memory working set, persistent-volume filesystem usage/capacity, sample timestamps and coverage. Active replicas and sidecars are aggregated; each referenced PVC is counted once, including unlabelled `existingClaim` volumes. Longhorn replica sizes are not tenant filesystem capacity.
+- Observations are cached for 30 seconds with bounded concurrent collection. Missing data is `null`, genuine zero remains `0`, and samples older than 120 seconds are stale. Partial coverage must not be rendered as a complete utilization percentage. Limits missing on any container are reported as unbounded.
+- VM guest capacity is read from its domain configuration. Guest utilization and ephemeral-storage usage are currently unavailable from the configured monitoring sources; the API reports this explicitly rather than substituting launcher usage or zero.
+- Production/staging namespace boundaries and the existing API-key authentication apply. The Odoo viewer endpoint resolves authorized service IDs to release/namespace pairs server-side, so browsers never supply Kubernetes scopes or PromQL.
+
+Deploy the operator before the Odoo addon that consumes this endpoint. An older/unreachable operator produces an unavailable reading in the UI without changing the service state. Roll back the UI/addon first if both components must be reverted; this endpoint has no database migration or workload mutation to undo.
+
 ### Health
 
 - `GET /health` - Health check with Helm version

@@ -8,6 +8,7 @@ import { templateBrand } from "../../utils/brand_icons";
 import { WoowButton } from "../button/WoowButton";
 import { getDomain } from "../../services/cloud_service";
 import { getInitFailureText, getWorkloadFaultLabel } from "../../utils/service_presentation";
+import { ResourceUsage } from "../resource-usage/ResourceUsage";
 
 /**
  * ServiceCard Component
@@ -22,9 +23,13 @@ import { getInitFailureText, getWorkloadFaultLabel } from "../../utils/service_p
  */
 export class ServiceCard extends Component {
     static template = "woow_paas_platform.ServiceCard";
-    static components = { StatusBadge, SubscriptionBadge, WoowIcon, BrandIcon, WoowButton };
+    static components = { StatusBadge, SubscriptionBadge, WoowIcon, BrandIcon, WoowButton, ResourceUsage };
     static props = {
         service: { type: Object },
+        resourceObservation: { type: Object, optional: true },
+        resourcesLoading: { type: Boolean, optional: true },
+        resourcesRefreshFailed: { type: Boolean, optional: true },
+        resourcesNow: { type: Number, optional: true },
         onOpen: { type: Function, optional: true },
         onSettings: { type: Function, optional: true },
     };

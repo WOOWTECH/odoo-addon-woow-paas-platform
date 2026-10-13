@@ -60,6 +60,9 @@
                         <span t-esc="props.service.error_message"/>
                     </div>
                 </t>
+                <ResourceUsage observation="props.resourceObservation" compact="true"
+                               loading="props.resourcesLoading" refreshFailed="props.resourcesRefreshFailed"
+                               now="props.resourcesNow"/>
             </div>
 
             <!-- Card Actions -->

@@ -26,6 +26,7 @@ import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswo
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
 import { serviceRetrievalEndpoint } from "../../services/data_retrieval";
 import { cloudService } from "../../services/cloud_service";
+import { useServiceResources } from "../../services/service_resources";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
@@ -114,6 +115,7 @@ export class ServiceDetailPage extends Component {
             showDataRetrievalModal: false,
         });
         this.router = useState(router);
+        this.resources = useServiceResources(this.props.workspaceId, () => [this.props.serviceId]);
         this.pollingInterval = null;
 
         onMounted(() => {

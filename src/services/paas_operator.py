@@ -14,6 +14,8 @@ _logger = logging.getLogger(__name__)
 
 # Default timeout for HTTP requests (seconds)
 DEFAULT_TIMEOUT = 30
+# Resource observations are an interactive, read-only request, not a Helm job.
+RESOURCE_OBSERVATION_TIMEOUT = 10
 # Longer timeout for helm operations that may take time
 HELM_OPERATION_TIMEOUT = 120
 # #1152：init 專屬 connect/read inactivity 預算，不連帶放大其他操作或 connect 等待。
@@ -1135,7 +1137,19 @@ class PaaSOperatorClient:
             timeout=150,
         )
 
+    def get_resource_observations(
+        self, namespace: str, release_names: List[str],
+    ) -> Dict[str, Any]:
+        """Observe a server-resolved namespace batch without changing releases.
 
+        This deliberately does not use the Helm operation budget. The caller
+        also bounds the complete batch wait when a workspace spans namespaces.
+        """
+        return self._request(
+            'POST', f'/api/namespaces/{namespace}/resource-observations',
+            data={'release_names': release_names},
+            timeout=(2, RESOURCE_OBSERVATION_TIMEOUT),
+        )
 
     def get_status(
         self,

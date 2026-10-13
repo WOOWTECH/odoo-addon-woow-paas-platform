@@ -24,6 +24,16 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 
 本文件專注於 **Cloud Services** 的規格設計。
 
+### 共用資源觀測
+
+所有 Cloud Services 的工作區卡片與服務詳情共用資源觀測，顯示 CPU、記憶體與持久磁碟的「使用量／實際生效上限或容量」，每 30 秒批次更新。離開頁面即停止，頁面隱藏時暫停，返回時立即更新。此功能依服務的 Helm namespace/release 與實際 Kubernetes 資源辨識，不需要逐一修改應用範本。
+
+CPU 是最近兩分鐘平均使用的核心數；記憶體是 working set；磁碟是 PVC 的檔案系統用量。多副本、sidecar 與同一 release 的資料庫會合計，共用 PVC 只計一次。數值旁保留採樣時間；監控缺值、資料過期或只有部分容器／磁碟取得資料時會明確標示，不將缺值顯示為零，也不計算不完整的使用率。
+
+「申請配置」仍保留原訂閱的資源規格。即時觀測不改寫配額、計費或服務狀態。VM 可顯示 guest CPU／記憶體及磁碟配置；現有監控未提供的 VM guest 使用量與暫存磁碟使用量會標示不可用。Smart Home Connect 與 Security Access 連到使用者端設備，沒有平台代管的 CPU／記憶體／PVC，因此沿用其連線狀態顯示。
+
+前端呼叫 `POST /api/workspaces/<workspace_id>/service-resource-observations`，只傳工作區內的服務 ID，每批最多 100 筆。後端逐筆套用與服務詳情相同的存取權檢查，再按 namespace 批次呼叫 operator；瀏覽器不能指定 namespace、release 或查詢式。詳細採樣設定及部署順序見 [PaaS Operator 資源觀測](../../../extra/paas-operator/README.md#resource-observations)。
+
 ---
 
 ## Deployment Architecture

@@ -2,6 +2,8 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.OverviewTab">
         <div class="o_woow_overview_tab">
+            <ResourceUsage observation="props.resourceObservation" loading="props.resourcesLoading"
+                           refreshFailed="props.resourcesRefreshFailed" now="props.resourcesNow"/>
             <!-- #1454：方案與帳期。雲端服務詳情頁原本只有「Skip Trial」按鈕，看不到試用
                  到期日與何時開始扣款（Smart Home 詳情頁早就有）。試用中的訂閱 start_date
                  是「試用結束隔天」＝首個計費日（subscription_lifecycle_mixin），所以這裡
@@ -222,11 +224,11 @@
                 </div>
             </WoowCard>
 
-            <!-- Resource Allocation Card -->
+            <!-- Plan allocations remain separate from effective runtime limits. -->
             <WoowCard class="'o_woow_info_card'" t-if="props.service.allocated_vcpu || props.service.allocated_ram_gb || props.service.allocated_storage_gb">
                 <div class="o_woow_card_header">
                     <WoowIcon name="'memory'" size="20"/>
-                    <h3>Resource Allocation</h3>
+                    <h3>Requested configuration</h3>
                 </div>
                 <div class="o_woow_resource_grid">
                     <!-- vCPU -->
