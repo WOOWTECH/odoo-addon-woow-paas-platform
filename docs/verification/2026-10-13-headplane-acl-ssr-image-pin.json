@@ -40,5 +40,6 @@
     "evidence": "docs/verification/2026-10-13-headplane-acl-ssr-qa-canary.json"
   },
   "prior_ghcr_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-odoo-sandbox.json",
+  "jcr_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-jcr-sandbox.json",
   "release_status": "Draft candidate seed pin only; JCR mirror approval #294 and exact destination digest verification required before Ready/merge. Current QA service is restored to previous image and still returns ACL HTTP 500. Requires platform release, own service update and post-release regression verification. No commercial acceptance claimed."
 }
