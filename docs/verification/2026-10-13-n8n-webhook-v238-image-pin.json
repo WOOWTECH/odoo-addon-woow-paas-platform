@@ -56,8 +56,30 @@
   "release_gates": [
     "Human mirror approval and JCR digest readback",
     "Human PR review and merge",
-    "Isolated existing-data SQLite upgrade/restore drill before changing retained QA service",
+    "Retained QA #250 SQLite clone/restore drill before upgrading its existing data",
     "Live QA service image update and webhook HTTP retest",
     "Separate full commercial acceptance"
-  ]
+  ],
+  "synthetic_sqlite_upgrade": {
+    "fixture_scope": "disposable synthetic owner/workflow in owned workspace 58; no existing QA database copied",
+    "from_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+    "to_image": "docker.io/n8nio/n8n:2.38.0@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "same_pod_uid": true,
+    "old_workflow_active_after_upgrade": true,
+    "old_execution_ids_preserved": true,
+    "old_success_http": 200,
+    "old_unhandled_error_http": 200,
+    "new_success_http": 200,
+    "new_unhandled_error_http": 500,
+    "new_execution_statuses": [
+      "error",
+      "error",
+      "success",
+      "success"
+    ],
+    "isolated_pod_removed": true,
+    "first_attempt": "Port-forward exited while the new container was still binding; test Pod was deleted and no upgraded result was claimed.",
+    "first_attempt_evidence": "evidence/n8n238-synthetic-sqlite-upgrade-20261013.json",
+    "successful_followup_evidence": "evidence/n8n238-synthetic-sqlite-upgrade-followup-20261013.json"
+  }
 }
