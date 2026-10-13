@@ -127,7 +127,12 @@
             </t>
           </t>
 
-          <div t-if="state.error" class="o_woow_error_message">
+          <!-- #1647：錯誤訊息排在可捲動的 body 最後（與其他 modal 同一個位置）。body 的
+               內容比視窗高時它會落在可視範圍之外，所以每次失敗都由 ChangePlanModal.js 把
+               這一塊捲進可視範圍（t-ref 就是給它用的；原因與量測見該檔 setup 的說明）。
+               ⛔ 拿掉 t-ref 或把這一塊搬到別處前先看
+               test_compute_quota_preflight_1647.py::TestChangePlanErrorVisible1647。 -->
+          <div t-if="state.error" class="o_woow_error_message" t-ref="errorMessage">
             <WoowIcon name="'error'" size="16"/>
             <span t-esc="state.error"/>
           </div>

@@ -20,7 +20,8 @@ autospec）；``get_status()`` 的回應形狀被手抄成 4 份 ``_status()``�
 
 1. ``status_response()``：``get_status()`` 回應形狀的**唯一定義處**，頂層 key 集合由
    scripts/audit 對帳到 ``ReleaseStatusResponse``；``pods`` 的元素用 ``pod_info()``
-   組（#1263），key 集合對帳到 ``PodInfo``；
+   組（#1263），key 集合對帳到 ``PodInfo``；``workloads`` 的元素用 ``workload_info()``
+   組（#1647），key 集合對帳到 ``WorkloadInfo``；
 2. ``operator_client()``：``create_autospec(PaaSOperatorClient, instance=True)``——測試配了
    一個 client 上不存在的 method 時，是 ``AttributeError`` 而不是 MagicMock 真值假裝通過。
 
@@ -40,6 +41,8 @@ RELEASE_STATUS_KEYS = (
     'release', 'pods', 'pod_retrieval_error', 'pod_identity_included',
     'vm_included', 'vmis', 'datavolumes', 'vmi_retrieval_error',
     'datavolume_retrieval_error',
+    # #1647：``?include_workloads=true`` 才有內容；舊 operator 三個 key 都沒有。
+    'workloads_included', 'workloads', 'workload_retrieval_error',
 )
 
 
@@ -86,6 +89,35 @@ def pod_info(**overrides):
     return pod
 
 
+def workload_info(**overrides):
+    """組一個 operator ``WorkloadInfo`` 形狀的 workload（#1647）。
+
+    預設是一個**健康**的 Deployment（期望 1、實際 1、沒有 ``replica_failure``／
+    ``last_warning``）——被擋的形狀由呼叫端明寫（例：
+    ``workload_info(replicas=0, ready_replicas=0, replica_failure={...})``），不在預設裡
+    偷塞異常。``replica_failure`` 的形狀是 ``{'reason', 'message', 'last_transition'}``，
+    ``last_warning`` 同 ``pod_info()``（``{'reason', 'message', 'count', 'last_seen'}``）。
+    ⚠ 不認得的 key 直接 ``TypeError``：拼錯的 ``replcas=0`` 若被靜默加進去，測試會以為
+    自己造了一個沒有 Pod 的 workload、實際 ``replicas`` 仍是 1。
+    """
+    workload = {
+        'kind': 'Deployment',
+        'name': 'svc-app',
+        'desired_replicas': 1,
+        'replicas': 1,
+        'ready_replicas': 1,
+        'updated_replicas': 1,
+        'strategy': 'RollingUpdate',
+        'replica_failure': None,
+        'last_warning': None,
+    }
+    unknown = set(overrides) - set(workload)
+    if unknown:
+        raise TypeError('workload_info() 不認得的欄位：%s' % sorted(unknown))
+    workload.update(overrides)
+    return workload
+
+
 def status_response(release_status='deployed', pods=None, **overrides):
     """組一份 operator ``get_status`` 形狀的回應。
 
@@ -99,6 +131,10 @@ def status_response(release_status='deployed', pods=None, **overrides):
     對這一層只驗「是子集」）；需要別的欄位（``chart_version`` 等）由呼叫端 ``overrides``。
     ``pods`` 預設空清單；要一顆健康 pod 的呼叫端自己傳（``test_public_url_dns_gate_648``
     的形狀）。
+    #1647：預設模擬「未帶 include_workloads」的**新** operator——``workloads_included:
+    False``、``workloads: None``。帶旗標的回應由呼叫端明寫
+    （``workloads_included=True, workloads=[workload_info(...)]``）；模擬舊 operator 三個
+    key 都用 ``ABSENT``（缺 key）。
     """
     body = {
         'release': {'status': release_status, 'revision': 1},
@@ -110,6 +146,9 @@ def status_response(release_status='deployed', pods=None, **overrides):
         'datavolumes': None,
         'vmi_retrieval_error': None,
         'datavolume_retrieval_error': None,
+        'workloads_included': False,
+        'workloads': None,
+        'workload_retrieval_error': None,
     }
     body.update(overrides)
     return {key: value for key, value in body.items() if value is not ABSENT}

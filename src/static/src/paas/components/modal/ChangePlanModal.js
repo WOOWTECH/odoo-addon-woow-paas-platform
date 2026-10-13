@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState, onMounted } from "@odoo/owl";
+import { Component, useState, onMounted, useRef, useEffect } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
@@ -89,6 +89,23 @@ export class ChangePlanModal extends Component {
     // 畫面毫無回饋（SA/SH 的 loadPlans 是 fetchTemplates→fetchPlans 兩支序列 RPC，
     // 空窗更明顯），且會讓 loadingPlans 的 spinner 分支成為永不可達的死碼。
     onMounted(() => this.loadPlans());
+
+    // #1647：確認失敗時把錯誤訊息捲進可視範圍。訊息排在可捲動的 body 最後，而 body 的
+    // 內容常比視窗高（選了有席數變體的方案會多出幾排席數選項）：1366×768、1440×900 時
+    // 整塊落在可視範圍之外，按下確認像是沒有反應——換方案被擋時（配額放不下、席數／route
+    // 超過新方案）租戶只靠這一則訊息知道沒換成、沒有扣款、該找誰。
+    // 依賴用 `failureCount` 而不只看 ref：同一則訊息再出現一次（使用者捲走之後又按一次
+    // 確認）時 DOM 可能完全沒變，仍然要捲。它不是 reactive state——只是給 effect 比對的值。
+    this.errorRef = useRef("errorMessage");
+    this.failureCount = 0;
+    useEffect(
+      (el) => {
+        if (el) {
+          el.scrollIntoView({ block: "nearest" });
+        }
+      },
+      () => [this.errorRef.el, this.failureCount]
+    );
   }
 
   async loadPlans() {
@@ -201,6 +218,8 @@ export class ChangePlanModal extends Component {
       // 帶 data（refund_amount / new_plan）供父頁運用；目前父頁只關 modal + reload。
       this.props.onChanged(res.data);
     } else {
+      // 先記一次失敗再設訊息：setup 的 effect 據此把訊息捲進可視範圍（#1647）。
+      this.failureCount += 1;
       this.state.error = res.error || _t("Failed to change plan");
       this.state.changing = false;
     }

@@ -415,8 +415,11 @@ class TestChangePlanExpansionPreflight1513(_ChangePlanFixture, TransactionCase):
         client = self._client()
         res = self._change(owner, svc, self.plan_b, client)
         self.assertTrue(res['success'], res.get('error'))
-        pre = client.upgrade_preflight.call_args.kwargs
+        pre = dict(client.upgrade_preflight.call_args.kwargs)
         up = client.upgrade_release.call_args.kwargs
+        # #1647：`pending_quota`（扣款後才推送的 ns quota）只屬於預檢，不會送給真正的 upgrade；
+        # 去掉它之後兩者必須全等。
+        pre.pop('pending_quota', None)
         self.assertEqual(pre, up, '預檢與真正的 upgrade 必須是同一組參數，否則預檢沒有意義')
         self.assertEqual(pre['values']['persistence']['size'], '10Gi')
         self.assertEqual(pre['values']['conf']['workers'], 3)
@@ -497,3 +500,254 @@ class TestChangePlanExpansionPreflight1513(_ChangePlanFixture, TransactionCase):
         self.assertTrue(activities)
         self.assertIn('id=%s' % svc.id, activities[0].note)
         self.assertIn('svc-data 20Gi→30Gi', activities[0].note)
+
+
+_QUOTA_DETAIL = {
+    'error_code': 'workspace_compute_quota_exceeded',
+    'namespace': 'paas-ws-test-1158-x', 'release': 'svc-1158x',
+    'quota': 'paas-ws-test-1158-x-quota', 'quota_source': 'pending',
+    'shortfalls': [{
+        'resource': 'limits.cpu', 'dimension': 'cpu', 'kind': 'limits',
+        'phase': 'steady', 'workload': None,
+        'hard': '12', 'used': '12', 'release_current': '4', 'other': '8',
+        'required': '8', 'available': '4', 'short_by': '4'}],
+    'workloads': [], 'consumers': [{'owner': 'StatefulSet/pg', 'pods': 1, 'value': '8'}],
+    'message': '升級前檢查發現工作區的資源配額放不下這次變更，已停止升級（沒有套用任何變更）：…',
+}
+_QUOTA_SWITCH = 'woow_paas_platform.compute_quota_precheck_enabled'
+
+
+@tagged('post_install', '-at_install')
+class TestChangePlanComputeQuotaPreflight1647(_ChangePlanFixture, TransactionCase):
+    """#1647：扣款前的升級預檢順便問 operator「工作區的 compute 配額放不放得下新方案」。
+
+    2026-10-10 正式站：pod 的 limits 超過 namespace ResourceQuota，``Recreate`` 把服務換成 0 個
+    pod。換方案是租戶最常改到 pod 規格的入口，而 ns quota 要到扣款**之後**才推送——預檢若拿
+    叢集上現在的上限去比，升到較大方案反而會被舊上限誤擋，所以把「將推送的 quota」一起交給
+    operator（``pending_quota``）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # 與 plan A 同樣的 vCPU／RAM／儲存、只有 workers 不同：values 會變（要 upgrade），
+        # allocated_* 不變（不推 quota）。
+        cls.plan_a_more_workers = cls._plan(
+            '1647 A more workers', 120.0, vcpu=2, ram=2.0, storage=20, workers=4)
+        cls.tpl.sudo().write({'subscription_plan_ids': [(4, cls.plan_a_more_workers.id)]})
+
+    @staticmethod
+    def _refused():
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
+        return PaaSOperatorAPIError(message='API error', status_code=409, detail=_QUOTA_DETAIL)
+
+    def test_larger_plan_is_checked_against_the_quota_it_will_get(self):
+        owner, svc = self._service('q-up')
+        before = svc._ns_quota_payload(svc.workspace_id)
+        client = self._client()
+        res = self._change(owner, svc, self.plan_b, client)
+        self.assertTrue(res['success'], res.get('error'))
+
+        pre = client.upgrade_preflight.call_args.kwargs
+        self.assertIs(pre['check_compute_quota'], True)
+        after = svc._ns_quota_payload(svc.workspace_id)
+        self.assertNotEqual(after, before, '前提：這次換方案會改變 ns quota')
+        self.assertEqual(pre['pending_quota'], after,
+                         '預檢拿到的是換完之後會推送的 quota，不是叢集上現在的舊上限')
+        # 之後真正推送的就是同一組值，而且在預檢之後、upgrade 之前。
+        args, kwargs = client.update_namespace_quota.call_args
+        self.assertEqual(
+            args[1:], (after['cpu_limit'], after['memory_limit'], after['storage_limit']))
+        self.assertEqual(kwargs, {
+            'ephemeral_storage_request': after['ephemeral_storage_request'],
+            'ephemeral_storage_limit': after['ephemeral_storage_limit']})
+        names = [c[0] for c in client.method_calls
+                 if c[0] in ('upgrade_preflight', 'update_namespace_quota', 'upgrade_release')]
+        self.assertEqual(
+            names, ['upgrade_preflight', 'update_namespace_quota', 'upgrade_release'])
+        self.assertIs(client.upgrade_release.call_args.kwargs['check_compute_quota'], True)
+        self.assertNotIn('pending_quota', client.upgrade_release.call_args.kwargs)
+
+    def test_unchanged_allocation_sends_no_pending_quota(self):
+        """allocated_* 沒變就不會推送 quota：預檢以叢集上現在的上限判斷。"""
+        owner, svc = self._service('q-same')
+        client = self._client()
+        res = self._change(owner, svc, self.plan_a_more_workers, client)
+        self.assertTrue(res['success'], res.get('error'))
+        client.upgrade_release.assert_called_once()  # 前提：values 有變、這次真的要 upgrade
+        pre = client.upgrade_preflight.call_args.kwargs
+        self.assertIs(pre['check_compute_quota'], True)
+        self.assertNotIn('pending_quota', pre)
+        client.update_namespace_quota.assert_not_called()
+
+    def test_quota_refusal_blocks_before_billing(self):
+        owner, svc = self._service('q-deny')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        allocated = (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb)
+        client = self._client()
+        client.upgrade_preflight.side_effect = self._refused()
+        Monitor = type(self.env['woow_paas_platform.platform_monitor'])
+        Partner = type(self.env['res.partner'])
+        with patch.object(Monitor, '_report_compute_quota_rejection') as alert, \
+                patch.object(Partner, 'refund_wallet_points') as refund, \
+                mute_logger(_CONTROLLER):
+            res = self._change(owner, svc, self.plan_b, client)
+
+        self.assertFalse(res['success'])
+        self.assertEqual(res['data']['code'], 'workspace_compute_quota_exceeded')
+        self.assertEqual(res['data']['shortfalls'], _QUOTA_DETAIL['shortfalls'])
+        self.assertIn('does not have enough CPU quota', res['error'])
+        self.assertIn('short by 4 vCPU', res['error'])
+        self.assertIn('The plan was not changed and nothing was charged', res['error'])
+        # 出口只有聯絡客服：刪服務會讓工作區上限跟著變小（``_compute_ns_quota``），不建議。
+        self.assertIn('Please contact support to adjust the workspace quota.', res['error'])
+        self.assertNotIn('delete', res['error'].lower())
+        self.assertNotIn(_QUOTA_DETAIL['namespace'], res['error'])
+        refund.assert_not_called()
+        self._assert_untouched(svc, old_sub, before)
+        self.assertEqual(
+            (svc.allocated_vcpu, svc.allocated_ram_gb, svc.allocated_storage_gb), allocated)
+        self.assertEqual(svc.state, 'running')
+        client.upgrade_release.assert_not_called()
+        client.update_namespace_quota.assert_not_called()
+        alert.assert_called_once()
+        self.assertEqual(alert.call_args.args[1:], ('change_plan', _QUOTA_DETAIL))
+
+    def test_malformed_quota_refusal_still_blocks_before_billing(self):
+        """409＋正確的 error_code、``shortfalls`` 不是 list：照樣擋在扣款前，訊息是通用說法。
+
+        實走時這種形狀讓儲存設定的請求丟 ``'int' object is not iterable``；換方案走同一個
+        組字函式，一起守。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
+
+        owner, svc = self._service('q-odd')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        client = self._client()
+        client.upgrade_preflight.side_effect = PaaSOperatorAPIError(
+            message='API error', status_code=409, detail={
+                'error_code': 'workspace_compute_quota_exceeded', 'shortfalls': 5,
+                'consumers': 7})
+        with mute_logger(_CONTROLLER):
+            res = self._change(owner, svc, self.plan_b, client)
+
+        self.assertFalse(res['success'])
+        self.assertEqual(
+            res['error'],
+            'This workspace does not have enough CPU or memory quota for this change. The plan '
+            'was not changed and nothing was charged. The service keeps running with its '
+            'current settings. Please contact support to adjust the workspace quota.')
+        self.assertEqual(
+            res['data'], {'code': 'workspace_compute_quota_exceeded', 'shortfalls': []})
+        self._assert_untouched(svc, old_sub, before)
+        self.assertEqual(svc.state, 'running')
+        client.upgrade_release.assert_not_called()
+        client.update_namespace_quota.assert_not_called()
+
+    def test_quota_refusal_records_one_admin_activity(self):
+        """不 mock 告警：租戶調不了工作區配額，真的開 activity 給管理員。"""
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        owner, svc = self._service('q-alert')
+        client = self._client()
+        client.upgrade_preflight.side_effect = self._refused()
+        with mute_logger(_CONTROLLER):
+            self._change(owner, svc, self.plan_b, client)
+        activities = self.env['mail.activity'].sudo().search(
+            [('summary', '=', Monitor.SUMMARY_COMPUTE_QUOTA_REJECTED)])
+        self.assertTrue(activities)
+        self.assertIn('id=%s' % svc.id, activities[0].note)
+        self.assertIn('change_plan', activities[0].note)
+        self.assertIn('limits.cpu needs 8 / limit 12', activities[0].note)
+
+    def test_downgrade_that_cannot_roll_over_is_explained_as_a_downgrade(self):
+        """降到較小方案：新方案的上限放不下更換服務時並存的新舊兩顆 pod。
+
+        operator 照樣回 409（平台推送縮小後的 quota 之後那個升級確實會卡住），但 shortfall
+        帶 ``reason: rolling_on_downgrade``。這不是「其他服務佔太多」——一般的結尾（請客服
+        調整工作區配額）對降級是錯的指引，改成請租戶聯絡客服協助更換到這個方案。
+        """
+        from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorAPIError
+
+        detail = dict(_QUOTA_DETAIL, shortfalls=[{
+            'resource': 'limits.memory', 'dimension': 'memory', 'kind': 'limits',
+            'phase': 'rolling', 'workload': 'Deployment/svc-1158x-app',
+            'reason': 'rolling_on_downgrade',
+            'hard': '8Gi', 'used': '8Gi', 'release_current': '8Gi', 'other': '0Mi',
+            'required': '2Gi', 'available': '0Mi', 'short_by': '2Gi'}], consumers=[])
+        owner, svc = self._service('q-down')
+        old_sub, before = svc.sudo().subscription_id, self._values(svc)
+        client = self._client()
+        client.upgrade_preflight.side_effect = PaaSOperatorAPIError(
+            message='API error', status_code=409, detail=detail)
+        with mute_logger(_CONTROLLER):
+            res = self._change(owner, svc, self.plan_b, client)
+
+        self.assertFalse(res['success'])
+        self.assertEqual(res['data']['code'], 'workspace_compute_quota_exceeded')
+        self.assertEqual(res['data']['shortfalls'][0]['reason'], 'rolling_on_downgrade')
+        self.assertIn('The memory quota of the new plan cannot hold this service while it is '
+                      'being replaced', res['error'])
+        self.assertIn('short by 2 GiB', res['error'])
+        self.assertIn('The plan was not changed and nothing was charged. Please contact '
+                      'support to switch to this plan.', res['error'])
+        for wrong in ('Stop or delete services', 'adjust the workspace quota',
+                      'Deployment/svc-1158x-app', _QUOTA_DETAIL['namespace']):
+            self.assertNotIn(wrong, res['error'])
+        self._assert_untouched(svc, old_sub, before)
+        client.upgrade_release.assert_not_called()
+        client.update_namespace_quota.assert_not_called()
+        # 管理員的告警行註明這是降級（調高配額不是對的處置）。
+        Monitor = self.env['woow_paas_platform.platform_monitor']
+        activities = self.env['mail.activity'].sudo().search(
+            [('summary', '=', Monitor.SUMMARY_COMPUTE_QUOTA_REJECTED)])
+        self.assertTrue(activities)
+        self.assertIn('id=%s' % svc.id, activities[0].note)
+        self.assertIn('[plan downgrade:', activities[0].note)
+
+    def test_allocated_vals_are_computed_once_and_reused(self):
+        """預檢用的 allocated_* 與扣款後寫入的是同一次計算的結果——兩者不會分岔。"""
+        owner, svc = self._service('q-once')
+        client = self._client()
+        real = type(svc)._plan_change_allocated_vals
+        seen = []
+
+        def _spy(record, *args, **kwargs):
+            result = real(record, *args, **kwargs)
+            seen.append(dict(result))
+            return result
+
+        with patch.object(type(svc), '_plan_change_allocated_vals', _spy):
+            res = self._change(owner, svc, self.plan_b, client)
+
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(len(seen), 1, '整個換方案流程只算一次')
+        self.assertTrue(seen[0], '前提：這次換方案會改 allocated_*')
+        for field, value in seen[0].items():
+            self.assertEqual(svc[field], value, '扣款後寫入的 %s 與預檢用的相同' % field)
+        self.assertEqual(
+            client.upgrade_preflight.call_args.kwargs['pending_quota'],
+            svc._ns_quota_payload(svc.workspace_id))
+
+    def test_suspended_service_is_not_checked(self):
+        """停權中的服務 upgrade 後會被 scale 回 0：不檢查，也不必交代將推送的 quota。"""
+        owner, svc = self._service('q-susp')
+        svc.sudo().write({'state': 'suspended', 'pre_suspend_state': 'running'})
+        client = self._client()
+        res = self._change(owner, svc, self.plan_b, client)
+        self.assertTrue(res['success'], res.get('error'))
+        pre = client.upgrade_preflight.call_args.kwargs
+        self.assertIs(pre['check_compute_quota'], False)
+        self.assertNotIn('pending_quota', pre)
+        self.assertIs(client.upgrade_release.call_args.kwargs['check_compute_quota'], False)
+        client.update_namespace_quota.assert_called_once()  # quota 照常推送（#1158 Q4）
+
+    def test_switch_off_sends_neither_flag_nor_pending_quota(self):
+        self.env['ir.config_parameter'].sudo().set_param(_QUOTA_SWITCH, 'False')
+        owner, svc = self._service('q-off')
+        client = self._client()
+        res = self._change(owner, svc, self.plan_b, client)
+        self.assertTrue(res['success'], res.get('error'))
+        pre = client.upgrade_preflight.call_args.kwargs
+        self.assertIs(pre['check_compute_quota'], False)
+        self.assertNotIn('pending_quota', pre)
+        self.assertIs(client.upgrade_release.call_args.kwargs['check_compute_quota'], False)

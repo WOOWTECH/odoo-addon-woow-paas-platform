@@ -22,6 +22,13 @@ from odoo.tools.sql import column_exists
 from ..services import dns_probe, rollback_config
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
+from ..services.workload_health import (
+    EVIDENCE_CODES,
+    VERDICT_FAULT,
+    VERDICT_HEALTHY,
+    VERDICT_UNSUPPORTED,
+    workload_verdict,
+)
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
     CONTRACT_MISMATCH,
@@ -347,8 +354,12 @@ def _reject_init_control_writes(env, vals):
 
 # observed_at 是 operator 觀測證據，episode 是平台命令建立的等待邊界。
 # 兩者都不是呼叫者輸入，否則可以隱藏 stale poll 或偽造新觀測。
+# #1647：workload 觀測的五格同理——租戶自己寫得進去，就能藏掉「服務其實沒有 Pod」的告警
+# （清掉旗標、把 alerted 標記填上讓平台不再通知），或替別的服務偽造一則。
 _OBSERVATION_CONTROL_FIELDS = frozenset({
     'observed_at', 'observation_episode_started_at',
+    'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
+    'workload_fault_alerted_at', 'workload_checked_at',
 })
 
 
@@ -620,6 +631,74 @@ _DNS_GRACE_PARAM = 'woow_paas_platform.dns_grace_seconds'
 # 預設開；只有明確設成假值才關。
 _DNS_GATE_ENABLED_PARAM = 'woow_paas_platform.dns_gate_enabled'
 _FALSEY_PARAM_VALUES = ('0', 'false', 'no', 'off')
+# #1647：升級前的 compute 配額預檢（operator 端判斷）要不要請 operator 做。prod kill switch：
+# 預檢誤判時設成假值，平台就不再送旗標、行為回到加入預檢之前。未設＝開。
+_COMPUTE_QUOTA_PRECHECK_PARAM = 'woow_paas_platform.compute_quota_precheck_enabled'
+# operator 在換方案降級時給 rolling shortfall 帶的 ``reason``。字面值共兩份、改名要一起改：
+# 這裡，與 extra/paas-operator ``compute_quota.REASON_ROLLING_ON_DOWNGRADE``。兩份對不上時
+# operator 的 unit test ``test_downgrade_reason_matches_the_platform_constant`` 會紅（Odoo 測試
+# 讀不到 extra/，對帳放在那一邊；它以 regex 讀下面這一行，所以要維持「常數名 = '字串'」單行）。
+# 平台端的兩個使用點都引用本常數、不另寫字面值：本檔 ``_compute_quota_error_message``（租戶
+# 訊息）與 ``platform_monitor._report_compute_quota_rejection``（管理員告警行）。
+_COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE = 'rolling_on_downgrade'
+
+
+def _compute_quota_refusal(message, detail):
+    """#1647：Redeploy 被 operator 的 compute 配額預檢擋下時要 raise 的 ``UserError``。
+
+    ``message`` 是**管理員版**（含 namespace、ResourceQuota 名與其他 workload 名）——當場按
+    Redeploy 的管理員在對話框看到它。operator 409 的原始 ``detail`` 掛在例外的
+    ``compute_quota_detail`` 上：不該把管理員版給租戶看的呼叫端
+    （``_cron_run_requested_redeploys`` 要寫租戶看得到的 ``error_message``）據此改組租戶版。
+
+    ⚠ 刻意不另開 ``UserError`` 的子類：Odoo 18 的 web client 以例外的**完整類別名稱**挑對話框
+    （``web/static/src/core/errors/error_dialogs.js`` 只登記 ``odoo.exceptions.UserError`` 等
+    幾個名字），子類的名字不在表上，管理員會看到帶 traceback 的「Odoo Server Error」而不是
+    原本的警告對話框。
+    """
+    error = UserError(message)
+    error.compute_quota_detail = detail
+    return error
+
+
+def _compute_quota_detail_rows(detail, key):
+    """#1647：operator 409 ``detail`` 裡的清單欄位（``shortfalls``／``consumers``）→ dict 的 list。
+
+    只收「list 裡的 dict」。欄位缺席、不是 list（數字、字串、dict）或元素不是 dict，一律當成
+    沒有：訊息退成不帶數字的通用說法。⛔ 不要改回 ``detail.get(key) or []`` 直接迭代——值是
+    數字時那會丟 ``TypeError``，租戶在畫面上看到的就是 Python 例外原文
+    （``'int' object is not iterable``）。
+    """
+    rows = detail.get(key) if isinstance(detail, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+# 中文字與相鄰的英數字之間（不分先後）的位置；``_join_sentences`` 在這裡補一個空格。
+_CJK_LATIN_BOUNDARY = re.compile(
+    r'(?<=[\u4e00-\u9fff])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])')
+# 句尾的全形標點：下一句直接接上，中間不夾半形空格。
+_FULLWIDTH_SENTENCE_ENDINGS = ('。', '！', '？', '；', '：', '）', '」')
+
+
+def _join_sentences(sentences):
+    """#1647：把幾句已經翻好的話接成一段（租戶看的配額訊息）。
+
+    * 句與句之間一個半形空格；上一句以全形標點結尾（中文的「。」）時不加。
+    * 中文字與相鄰的英數字之間補一個空格。資源名是代入譯文的（「的%(resource)s配額」），譯文
+      無從得知代入的是「CPU」還是「記憶體」，只能組完之後補——補了才與同一句的「8 vCPU」
+      一致（「這個工作區的 CPU 配額」）。
+
+    英文句子兩條都碰不到，結果與 ``' '.join(sentences)`` 相同。
+    """
+    text = ''
+    for sentence in sentences:
+        if text and not text.endswith(_FULLWIDTH_SENTENCE_ENDINGS):
+            text += ' '
+        text += sentence
+    return _CJK_LATIN_BOUNDARY.sub(' ', text)
+
 
 # age timeout 管轄的狀態。**`initializing` 刻意不在內**，但它**不再是「不計時」**
 # （#1257 Q3 明文取代 #489 的原註解）：post-deploy init 有自己的一組上界，分工是
@@ -670,6 +749,23 @@ INIT_CRON_SOFT_CAP = 10
 _INIT_CRON_XMLID = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
 # init cron 的 wall 時鐘（模組層級，測試可替換）。
 _init_cron_clock = time.monotonic
+# #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）。
+# 沒有 FailedCreate 證據的 0 個 Pod（`no_pods`）要持續這麼久才算確認——換 Pod 的瞬間
+# （Recreate 砍舊建新、節點重開）也會短暫是 0，那不是故障。有證據的不必等。
+WORKLOAD_FAULT_CONFIRM_MINUTES = 5
+# 10 分鐘那條 cron 每趟的 wall 預算：超過就停，沒查到的下一趟從輪替游標之後接著查
+# （游標記在 platform_monitor 單例的 `workload_check_cursor`，不記在服務列上）。
+WORKLOAD_CHECK_BUDGET_SECONDS = 60
+# 連續這麼多次連不上／逾時就中止本趟：operator 掛掉時不逐台等 timeout。
+WORKLOAD_CHECK_TRANSPORT_ABORT = 2
+# workload 檢查 cron 的 wall 時鐘（模組層級，測試可替換）。
+_workload_check_clock = time.monotonic
+# 描述「這一段異常」的四格：恢復或離開 running 時一起清。`workload_checked_at` 不在內——
+# 它說的是「最後一次寫入觀測結果的時間」，不屬於任何一段異常。
+_WORKLOAD_FAULT_FIELDS = (
+    'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
+    'workload_fault_alerted_at',
+)
 
 # 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
 # 目的是讓人不必進叢集就知道方向——detail 說「卡在哪」，hint 說「去查什麼」。
@@ -1790,6 +1886,82 @@ class CloudService(models.Model):
         help='Platform timestamp for entry into the current transitional state. '
              'It is a wait boundary, never an operator observation.',
     )
+    # ---- #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）----
+    # 這五格**只描述 running 的服務**：某個 Deployment／StatefulSet 期望 ≥1 個 Pod、實際
+    # 0 個（2026-10-10 事故：ReplicaSet FailedCreate exceeded quota，服務顯示 running 卻
+    # 中斷近 6 小時）。
+    #   * 誰寫：只有 `_apply_workload_observation`（10 分鐘的 `_cron_check_running_workloads`
+    #     ＋每日對帳 cron 順帶呼叫）。非平台身分寫不進去（`_OBSERVATION_CONTROL_FIELDS`）。
+    #   * **值真的變了才寫**：健康而且四格異常欄位本來就是空的 ⇒ 一格都不寫；異常持續、代碼與
+    #     detail 都沒變 ⇒ 也不寫。10 分鐘 cron 在穩態不對服務列下任何 UPDATE——否則它每趟
+    #     commit 所有 running 列，會與每日對帳、生命週期 cron 這類長交易互撞（REPEATABLE
+    #     READ 下對方拿到 serialization failure），`write_date` 也會每 10 分鐘變動。
+    #   * 何時清：觀測到恢復（每個期望有 Pod 的 workload 都有 Pod）時由同一個方法清；
+    #     服務離開 running 時由 `write()` 集中清（重新啟動、停權、刪除……之後這段異常
+    #     不再描述現況）。`workload_checked_at` 不清。
+    #   * **絕不影響 `state`／`error_message`**：它們是獨立的旗標，不是狀態機的一部分
+    #     ——把 running 打成 error 之後沒有任何路徑會自己 poll 回來，quota 一放寬服務
+    #     就恢復了、帳面卻停在 error（repo-lint 第 19 條判準 5 機械守）。
+    # 不帶 groups 的三格（code／since／checked_at）是 `_workload_fault_confirmed` 讀的，
+    # 租戶身分的 /woow payload 會經過它；含叢集原文的 detail 與告警標記只給系統管理員。
+    # ⚠ 三個標籤刻意短：後台列表用 badge 顯示，欄寬由列表自動分配，長標籤會被截斷
+    # （瀏覽器實走 F5：1440px 下「Blocked by the namespace q…」「被 namespace 配…」，
+    # 而且沒有 tooltip）。完整的說明放兩處——這一格的 help，以及表單警示區塊裡依代碼顯示
+    # 的那一行（`cloud_service_views.xml`）。改標籤或加代碼時三處連同 zh_TW.po 一起改，
+    # `TestWorkloadFaultTranslations1647` 守長度、譯文與「每個代碼都有說明」。
+    workload_fault_code = fields.Selection(
+        selection=[
+            ('quota_exceeded', 'Quota blocked'),
+            ('create_failed', 'Create failed'),
+            ('no_pods', 'No pods'),
+        ],
+        string='Workload Fault',
+        copy=False,
+        readonly=True,
+        help='Set while the service is marked running but one of its workloads '
+             '(Deployment or StatefulSet) wants at least one pod and has none (#1647). '
+             'Quota blocked: the namespace ResourceQuota rejected the pods. '
+             'Create failed: the cluster rejected the pods for a reason other than the quota. '
+             'No pods: the pods are missing and the cluster reported no reason. '
+             'Cleared automatically once the pods are back or the service leaves running. '
+             'It never changes the service state.',
+    )
+    workload_fault_detail = fields.Text(
+        string='Workload Fault Detail',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='Which workloads have no pods and what the cluster reported '
+             '(for example the quota rejection message). Administrators only.',
+    )
+    # 有值就是旗標，不另設布林。
+    workload_fault_since = fields.Datetime(
+        string='Workload Fault Since',
+        copy=False,
+        readonly=True,
+        help='When the platform first observed the current workload fault (UTC).',
+    )
+    workload_fault_alerted_at = fields.Datetime(
+        string='Workload Fault Alerted At',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='When the system administrators were notified about the current '
+             'workload fault. One notification per fault.',
+    )
+    # ⚠ 不是「最後一次檢查」的時間：檢查結果沒有變化時這一格不動（見上面「值真的變了才寫」）。
+    # 它記的是 `_apply_workload_observation` 最後一次真的寫入的時間——第一次看到異常、
+    # 代碼或 detail 改變、確認、恢復。`no_pods` 的確認就是靠它留下紀錄
+    # （`_workload_fault_confirmed`）。輪替順序不看它，看 platform_monitor 的游標。
+    workload_checked_at = fields.Datetime(
+        string='Workload Observation Last Recorded',
+        copy=False,
+        readonly=True,
+        help='Last time the platform recorded a change in what it observed about the '
+             'workloads of this running service (UTC): a fault first seen, changed, '
+             'confirmed or cleared. Checks that find nothing new do not update it, so an '
+             'old or empty value does not mean the service is not being checked.',
+    )
     # Q4／Q33：短 poll 觀測到 initializing 的 pods ready ＝ 排進 init cron 的佇列。
     # init cron 只 claim 這些服務；not ready 時清掉（等待期間由時限約束）。
     init_ready_observed = fields.Boolean(
@@ -2326,8 +2498,22 @@ class CloudService(models.Model):
                     values=values,
                     sensitive_values=sensitive_values or None,
                     reset_values=True,
+                    # #1647：請 operator 在套用前檢查工作區的 compute 配額放不放得下。
+                    check_compute_quota=self._compute_quota_check_requested(),
                 )
             except PaaSOperatorError as e:
+                # #1647：operator 判定配額放不下、什麼都沒套用（helm 之前）。這裡還沒到提交點，
+                # UserError 讓整筆交易回捲（含上面 `_refresh_template_images` 的寫入）是對的；
+                # 管理員當場在對話框看到數字，不另發 activity。
+                quota_message = self._compute_quota_error_message(
+                    e.detail, audience='admin', operation='redeploy')
+                if quota_message:
+                    _logger.warning(
+                        "[#1647] redeploy of service id=%s refused by the operator's compute "
+                        "quota pre-check (nothing applied): %s. If the pre-check is wrong, set "
+                        "the system parameter %s to False to turn it off.",
+                        self.id, e.detail.get('shortfalls'), _COMPUTE_QUOTA_PRECHECK_PARAM)
+                    raise _compute_quota_refusal(quota_message, e.detail) from e
                 # #1552：503 operator_busy 的 detail 是 dict（error_code＋中文 message）。
                 detail = e.detail.get('message') if isinstance(e.detail, dict) else e.detail
                 raise UserError(
@@ -3556,6 +3742,185 @@ class CloudService(models.Model):
         self.ensure_one()
         self.env['woow_paas_platform.platform_monitor'].sudo()._report_storage_expansion_rejection(
             self.sudo(), plan.sudo(), detail)
+
+    def _compute_quota_error_message(self, detail, audience='tenant', operation='reconfigure',
+                                     lang=None, with_ending=True):
+        """#1647：operator 回「工作區 compute 配額放不下這次變更」時的訊息；其他錯誤回 ``None``。
+
+        operator（``extra/paas-operator/src/services/compute_quota.py``）在 helm 套用任何東西
+        之前，用同一份 dry-run manifest 算出這個 release 升級後的 pod 放不放得進 namespace 的
+        ResourceQuota；確定放不下時回 409、``detail.error_code == COMPUTE_QUOTA_ERROR_CODE``，
+        **什麼都沒套用**。2026-10-10 正式站就是這種升級把服務換成 0 個 pod、平台卻顯示 running。
+
+        ``audience='tenant'``（預設）：寫給租戶——哪一種資源、需要多少、上限多少、同工作區其他
+        workload 佔了多少、還差多少，以及他能做什麼。**不出現** namespace、quota 物件名、其他
+        pod 的名稱。同一種資源（CPU 的 limits 與 requests）只講一次、最多講兩種。``operation``
+        決定結尾（``change_plan`` 講「方案沒有變更、沒有扣款」，其餘講「沒有套用任何變更」；
+        兩種都講服務維持原狀，出口一律是聯絡客服——為什麼不建議租戶停用／刪除服務，見結尾
+        那一段的註解）；``with_ending=False`` 只回資源那幾句（``_upgrade_failure_message``
+        自己有包裝句）。
+
+        換方案**降級**：shortfall 帶 ``reason == 'rolling_on_downgrade'``（新方案的上限比現在
+        小，更換服務時新舊並存才放不下）。那不是「其他服務佔太多」，請客服調高配額也與降級
+        相反——改講新方案的配額放不下更換中的服務；講到的全是這種時，結尾改成請他聯絡客服
+        協助更換到這個方案（租戶自己沒有出口）。
+
+        ``audience='admin'``：寫給按 Redeploy 的管理員——逐項數字、namespace、quota 名稱與佔用
+        最多的其他 workload。**只給管理員看**：排隊的 redeploy（``_cron_run_requested_redeploys``）
+        要寫租戶看得到的 ``error_message`` 時改用租戶版（``_queued_redeploy_quota_message``）。
+        ⛔ 仍然不要把系統參數名稱寫進這則訊息（縱深：萬一又有路徑把它帶到租戶面前）；
+        kill switch 的名稱寫在 log 與 operator README。
+
+        ``lang`` 不給＝呼叫端的語言；背景執行緒沒有語言，由 ``_upgrade_failure_message`` 傳
+        服務建立者的語言進來。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import COMPUTE_QUOTA_ERROR_CODE
+        if not isinstance(detail, dict) or detail.get('error_code') != COMPUTE_QUOTA_ERROR_CODE:
+            return None
+        env = self.with_context(lang=lang or self.env.lang).env
+        # 形狀不對的 ``shortfalls``／``consumers``（不是 list、元素不是 dict）當成沒有：訊息退成
+        # 不帶數字的通用說法，不丟例外。
+        shortfalls = _compute_quota_detail_rows(detail, 'shortfalls')
+
+        def amount(shortfall, key):
+            # operator 的數字都是字串：cpu 以核為單位，其餘 "8Gi"／"512Mi" → "8 GiB"／"512 MiB"。
+            text = str(shortfall.get(key) or '?')
+            if shortfall.get('dimension') == 'cpu':
+                return text + ' vCPU'
+            for suffix, unit in (('Gi', ' GiB'), ('Mi', ' MiB')):
+                if text.endswith(suffix):
+                    return text[:-len(suffix)] + unit
+            return text
+
+        if audience == 'admin':
+            lines = [env._(
+                'The redeploy was stopped before anything was applied: the workspace quota '
+                'cannot fit this service after the upgrade.')]
+            for shortfall in shortfalls:
+                lines.append(env._(
+                    '%(key)s: needs %(required)s, limit %(hard)s, in use %(used)s (this service '
+                    '%(own)s, other workloads %(other)s), short by %(short)s',
+                    key=shortfall.get('resource') or '?',
+                    required=amount(shortfall, 'required'), hard=amount(shortfall, 'hard'),
+                    used=amount(shortfall, 'used'), own=amount(shortfall, 'release_current'),
+                    other=amount(shortfall, 'other'), short=amount(shortfall, 'short_by')))
+            consumers = ', '.join(
+                '%s (%s)' % (c.get('owner'), c.get('value'))
+                for c in _compute_quota_detail_rows(detail, 'consumers'))
+            lines.append(env._(
+                'Namespace %(ns)s, ResourceQuota %(quota)s. Largest other consumers: '
+                '%(consumers)s.',
+                ns=detail.get('namespace') or '?', quota=detail.get('quota') or '?',
+                consumers=consumers or '-'))
+            lines.append(env._(
+                'Raise the workspace quota or free resources in the namespace, then redeploy.'))
+            return '\n'.join(lines)
+
+        resource_names = {
+            'cpu': env._('CPU'),
+            'memory': env._('memory'),
+            'ephemeral-storage': env._('temporary disk space'),
+        }
+        parts = []
+        described = set()
+        # 講到的 shortfall 是不是全都是「降級後新舊並存放不下」——是的話結尾換成聯絡客服。
+        only_downgrade = True
+        for shortfall in shortfalls:
+            dimension = shortfall.get('dimension')
+            if dimension in described:
+                continue
+            described.add(dimension)
+            resource = resource_names.get(dimension) or str(shortfall.get('resource') or '?')
+            downgrade = (
+                shortfall.get('phase') == 'rolling'
+                and shortfall.get('reason') == _COMPUTE_QUOTA_REASON_ROLLING_ON_DOWNGRADE)
+            only_downgrade = only_downgrade and downgrade
+            if downgrade:
+                parts.append(env._(
+                    'The %(resource)s quota of the new plan cannot hold this service while it '
+                    'is being replaced: the old and the new instance run side by side for a '
+                    'moment, which needs %(required)s more on top of the %(used)s already in '
+                    'use, but the workspace limit under the new plan would be %(hard)s (short '
+                    'by %(short)s).',
+                    resource=resource, required=amount(shortfall, 'required'),
+                    used=amount(shortfall, 'used'), hard=amount(shortfall, 'hard'),
+                    short=amount(shortfall, 'short_by')))
+            elif shortfall.get('phase') == 'rolling':
+                parts.append(env._(
+                    'This workspace does not have enough %(resource)s quota for this change: '
+                    'while the service is being replaced the old and the new instance run side '
+                    'by side, which needs %(required)s more on top of the %(used)s already in '
+                    'use; the workspace limit is %(hard)s (short by %(short)s).',
+                    resource=resource, required=amount(shortfall, 'required'),
+                    used=amount(shortfall, 'used'), hard=amount(shortfall, 'hard'),
+                    short=amount(shortfall, 'short_by')))
+            else:
+                parts.append(env._(
+                    'This workspace does not have enough %(resource)s quota for this change: '
+                    'the service needs %(required)s, the workspace limit is %(hard)s and other '
+                    'workloads in the workspace are using %(other)s (short by %(short)s).',
+                    resource=resource, required=amount(shortfall, 'required'),
+                    hard=amount(shortfall, 'hard'), other=amount(shortfall, 'other'),
+                    short=amount(shortfall, 'short_by')))
+            if len(parts) == 2:
+                break
+        if not parts:
+            only_downgrade = False
+            parts.append(env._(
+                'This workspace does not have enough CPU or memory quota for this change.'))
+        if with_ending:
+            # ⛔ 結尾給租戶的出口只有「聯絡客服」，不要加回「停用／刪除不需要的服務」或「換成
+            # 較小的方案」來釋出 CPU／記憶體配額：工作區的上限由 ``_compute_ns_quota`` 算——存活
+            # 服務的方案規格加總 × 3（另有下限）。刪掉一台，上限少 3 份、用量只少約 1 份，剩餘
+            # 空間通常變小而不是變大（只有落在下限區間時例外）；單台的 limits 被調到超過上限時
+            # （2026-10-10 事故）刪別台反而更糟。調整工作區配額只有管理員做得到（正式入口見 #1648）。
+            if operation == 'change_plan' and only_downgrade:
+                parts.append(env._(
+                    'The plan was not changed and nothing was charged. Please contact support '
+                    'to switch to this plan.'))
+            elif operation == 'change_plan':
+                parts.append(env._(
+                    'The plan was not changed and nothing was charged. The service keeps '
+                    'running with its current settings. Please contact support to adjust the '
+                    'workspace quota.'))
+            else:
+                parts.append(env._(
+                    'Nothing was changed and the service keeps running with its current '
+                    'settings. Please contact support to adjust the workspace quota.'))
+        # 不是 ``' '.join``：中文的句號後面不夾半形空格、代入的「CPU」前後要有空格。
+        return _join_sentences(parts)
+
+    def _queued_redeploy_quota_message(self, detail):
+        """#1647：排隊的 Redeploy 被 compute 配額預檢擋下時寫進 ``error_message`` 的說明。
+
+        ``error_message`` 租戶在服務頁看得到，所以是**租戶版**（不含 namespace、ResourceQuota
+        名、其他 workload 名），整句用服務建立者的語言——cron 沒有租戶的語言
+        （同 ``_upgrade_failure_message`` 的取法）。出口與租戶版相同：只請他聯絡客服，不建議
+        停用或刪除服務（刪服務會讓工作區上限跟著變小，見 ``_compute_quota_error_message``
+        結尾的註解）。
+        """
+        self.ensure_one()
+        lang = self.sudo().create_uid.lang or self.env.lang
+        return self.with_context(lang=lang).env._(
+            'The queued redeploy did not run: %(reason)s',
+            reason=self._compute_quota_error_message(
+                detail, operation='reconfigure', lang=lang))
+
+    def _alert_compute_quota_rejection(self, operation, detail):
+        """#1647：變更被 compute 配額預檢擋下、而當下沒有管理員在看時，告警給系統管理員。
+
+        ``operation``：租戶的 ``reconfigure``（儲存設定）／``change_plan``／``rollback``、
+        ``queued_redeploy``（管理員登記、由 cron 執行的 Redeploy；當場按的 Redeploy 在對話框
+        就看到數字，不走這裡），以及後備路徑的 ``background_reconfigure``／
+        ``background_change_plan``（同步預檢沒問到、背景的 PATCH 才被擋——服務已被標成 error，
+        告警行會註明）。租戶自己調不了工作區配額，出口在管理員手上。租戶身分呼叫 ⇒
+        告警寫入要提權（activity 給 base.group_system）；提權只在這裡，controller 不 sudo。
+        告警一律用固定語言組（見 ``platform_monitor._report_compute_quota_rejection``）。
+        """
+        self.ensure_one()
+        self.env['woow_paas_platform.platform_monitor'].sudo()._report_compute_quota_rejection(
+            self.sudo(), operation, detail)
 
     def _alert_cluster_storage_capacity_rejection(self, detail):
         """#1415：開通被叢集儲存額度擋下時，告警給系統管理員（一台一行，同 summary 未處理前追加）。"""
@@ -5748,7 +6113,10 @@ class CloudService(models.Model):
         self.env['woow_paas_platform.platform_monitor']._run_init_cron_checks()
 
     def _cron_reconcile_release_facts(self):
-        """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會看 running 的路徑**。
+        """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會回寫 release 事實的 running 路徑**。
+
+        （#1647 起 ``_cron_check_running_workloads`` 每 10 分鐘也會讀 running 的服務，
+        但它只寫 workload 觀測欄位，不碰 release 事實與對外位址。）
 
         ## 為什麼需要獨立一條
 
@@ -5787,6 +6155,18 @@ class CloudService(models.Model):
         某次 helm upgrade 不是 Odoo 發起的、以及證明升版沒有順手回寫）。那個診斷
         能力從本版起消失——要判斷「平台最後一次主動操作」請改看 ``last_upgraded_at``
         ／``deployed_at``。這個取捨是刻意接受的（#627 留言有記）。
+
+        ## #1647：順帶回寫 workload 觀測（仍不碰 state）
+
+        同一次 ``get_status`` 多帶 ``include_workloads``，回應交給
+        ``_apply_workload_observation``——它只寫 ``workload_fault_*``／
+        ``workload_checked_at``，同樣一行 state 都不寫（判準 5 也守它），而且**值沒變就
+        不寫**：健康的服務、內容沒變的異常，這一段對 workload 欄位零寫入（本 cron 自己
+        每天那一次 release 事實的 write 不受影響）。主要的偵測在每 10 分鐘的
+        ``_cron_check_running_workloads``；這裡是那條 cron 被停用或預算不夠時的每日保底，
+        不讀也不寫那條 cron 的輪替游標。workload 欄位**不併進** ``facts``（那是 release
+        事實的單一 producer），而且包在自己的 savepoint 裡：這段出錯不得把 release 事實
+        一起回捲。
         """
         from ..services.paas_operator import get_paas_operator_client
 
@@ -5813,6 +6193,7 @@ class CloudService(models.Model):
             return
 
         changed, failed = [], []
+        workload_counts = {}
         for service in services:
             try:
                 # 逐筆 savepoint：一筆失敗不得中斷整批。用 savepoint 而非裸 try 是
@@ -5827,10 +6208,13 @@ class CloudService(models.Model):
                         namespace=service.helm_namespace,
                         release_name=service.helm_release_name,
                         include_vm=service._needs_vm_status(),
+                        # #1647：順帶取 workload 副本數（舊 operator 會忽略這個參數）。
+                        include_workloads=True,
                     )
-                    # 對外位址也在這裡對帳：本 cron 是**唯一會看 running 的路徑**，
-                    # 而 ngrok 免費方案每次 agent 重連就換 TCP 位址——那種變動發生時
-                    # 服務正是 running（poll 的 domain 只收轉移狀態）。
+                    # 對外位址也在這裡對帳：本 cron 是**唯一會對帳 release 事實／對外位址的
+                    # running 路徑**（#1647 的 10 分鐘 cron 也讀 running，但只寫 workload
+                    # 觀測欄位），而 ngrok 免費方案每次 agent 重連就換 TCP 位址——那種變動
+                    # 發生時服務正是 running（poll 的 domain 只收轉移狀態）。
                     # 無此能力的商品 `_probe_public_tunnel_address` 直接回 None、不打
                     # operator，所以這行對其餘商品零成本。
                     tunnel_address, tunnel_error = service._probe_public_tunnel(client)
@@ -5858,6 +6242,19 @@ class CloudService(models.Model):
                     service.write(facts)
                     if drift:
                         changed.append((service, drift))
+                    # #1647：同一份 status 順帶回寫 workload 觀測。自己的 savepoint：
+                    # 這段出錯只回捲 workload 欄位，上面已寫的 release 事實留著。
+                    # OperationalError 外拋（cursor 已不可用），由外層的逐筆隔離收掉。
+                    try:
+                        with self.env.cr.savepoint():
+                            outcome = service._apply_workload_observation(status)
+                        workload_counts[outcome] = workload_counts.get(outcome, 0) + 1
+                    except OperationalError:
+                        raise
+                    except Exception:
+                        _logger.exception(
+                            "[#1647] workload observation failed for service id=%s",
+                            service.id)
             except Exception as exc:
                 failed.append((service, exc))
 
@@ -5875,6 +6272,211 @@ class CloudService(models.Model):
             _logger.warning(
                 "  id=%s %s 讀取失敗：%s（本筆略過，不影響其餘）",
                 service.id, service.name, exc)
+        # #1647：workload 觀測另起一行、另一個前綴——上面那行的形狀是既有契約
+        # （test_reconcile_release_facts_627i 以它的前綴過濾），不往裡面加東西。
+        _logger.info(
+            "workload-observation (daily reconcile): %s",
+            self._workload_outcome_summary(workload_counts))
+
+    @api.model
+    def _workload_outcome_summary(self, counts):
+        """``_apply_workload_observation`` 回傳值的計數 → 一行 log 文字（兩條 cron 共用）。
+
+        每一格都印（0 也印）：只印非零的會讓「沒有異常」與「根本沒看」長得一樣。
+        """
+        labels = (
+            ('raised', '新異常'), ('ongoing', '持續中'), ('cleared', '恢復'),
+            ('healthy', '健康'), ('unknown', '不知道'),
+            ('unsupported', 'operator 未回報 workloads'),
+        )
+        return '／'.join('%s %d' % (label, counts.get(key, 0)) for key, label in labels)
+
+    @api.model
+    def _cron_check_running_workloads(self):
+        """#1647：每 10 分鐘看一次 running 服務的 workload——期望有 Pod 的是不是真的有。
+
+        ## 為什麼需要獨立一條
+
+        2026-10-10 正式站 svc 201：服務顯示 ``running``，Recreate Deployment 的新 Pod 被
+        namespace quota 拒絕（ReplicaSet ``FailedCreate: exceeded quota``），0 顆 Pod 近
+        6 小時，平台沒有任何訊號。短 poll 只收轉移狀態；每日對帳一天一次、而且只回寫
+        release 事實。本條補上「running 之後才被擋」這一種。
+
+        ## 與短 poll 的根本差異：**絕不碰 state**
+
+        發現異常只做三件事（都在 ``_apply_workload_observation``）：寫
+        ``workload_fault_*``、通知系統管理員（``platform_monitor``）、讓 /woow 顯示固定
+        文案。恢復後自動清掉。``state``／``error_message`` 一個字都不改——理由見該方法的
+        docstring；repo-lint 第 19 條判準 5 機械守本方法與它。
+
+        ## 🔴 健康的穩態不寫服務列
+
+        本 cron 每 10 分鐘跑一次、逐台 commit。要是每趟都在每一台 running 服務上留一個
+        「查過了」的時間戳，就等於每 10 分鐘 commit 一次所有 running 列——每日對帳與
+        生命週期 cron 是 REPEATABLE READ 的單一長交易，快照之後被別人 commit 過的列，
+        它們一寫就是 serialization failure（那台當天的 release 事實不回寫、該停權的不
+        停權）；本 cron 自己則會卡在對方還沒 commit 的列鎖上，預算管不到。所以：
+
+        - ``_apply_workload_observation`` 只在觀測欄位的值真的要變時才寫。健康而且列上
+          沒有異常值、異常持續而內容沒變，都是零寫入（``write_date`` 不動）。
+        - 「下一趟從哪裡開始」不記在服務列上，記在 ``platform_monitor`` 單例的
+          ``workload_check_cursor``（最後處理的 service id）。那一列沒有長交易在寫：
+          唯一的週期性寫入者是短 poll 結尾的 ``_check_unknown_results``，純 DB、毫秒級。
+
+        ## 節奏
+
+        - 依 id 升冪、從游標之後開始、繞回開頭，每台一次
+          ``get_status(include_workloads=True)``，逐台 commit：一台失敗不影響其他台。
+        - 游標對每一台都推進——成功、失敗、被略過（已刪除或已離開 running）都算處理過。
+          每次都失敗的服務不會卡在隊首把後面的餓死。
+        - 每趟 wall 預算 ``WORKLOAD_CHECK_BUDGET_SECONDS``：超過就停，沒查到的下一趟從游標
+          之後接著查。結尾那行 INFO 的「預算用完未檢查」持續大於 0，代表逐台打 status
+          太慢、要換做法。
+        - 連續 ``WORKLOAD_CHECK_TRANSPORT_ABORT`` 次連不上／逾時就中止本趟（operator 掛了）；
+          下一趟從中止處之後開始，不重打同樣那兩台。
+        - operator 還沒有這個能力（回應沒有 ``workloads_included``）時，第一台之後就中止
+          本趟：同一個 operator 對每一台的回答都一樣，不必逐台白打。
+        - 每趟結束寫回游標一次（含上面三種提前結束）；值沒變不寫，寫不進去只記 warning。
+        - 不自我 ``_trigger()``：沒查完的等下一個 10 分鐘。
+
+        ## Log：改 0 筆也印
+
+        同 ``_cron_reconcile_release_facts`` 的理由——只在有異常時才記，會讓「一直沒有異常」
+        與「cron 根本沒跑」的日誌畫面相同。operator 有回應但對某一台回錯（例：DB 是
+        running、叢集上 release 已不存在 → 404）是每 10 分鐘重複一次的常態訊息，只印
+        一行 warning、不帶 traceback。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ], order='id')
+        if not services:
+            return
+
+        from ..services.paas_operator import (
+            PaaSOperatorAPIError,
+            PaaSOperatorConnectionError,
+            PaaSOperatorTimeoutError,
+            get_paas_operator_client,
+        )
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            _logger.info(
+                "workload-check: operator client 未設定，本趟未執行（running %d 筆）",
+                len(services))
+            return
+
+        # 輪替：游標之後的先查，再繞回開頭。游標指到的服務已不存在（或比所有 id 都大）
+        # 也沒關係——只拿它當分界。
+        monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+        cursor = monitor.workload_check_cursor
+        ordered = (services.filtered(lambda s: s.id > cursor)
+                   + services.filtered(lambda s: s.id <= cursor))
+
+        started = _workload_check_clock()
+        counts = {}
+        raised, cleared = [], []
+        checked = failed = transport_streak = over_budget = 0
+        stopped_early = ''
+        last_id = cursor
+        for index, service in enumerate(ordered):
+            if _workload_check_clock() - started > WORKLOAD_CHECK_BUDGET_SECONDS:
+                over_budget = len(ordered) - index
+                break
+            service_id = service.id
+            # 輪到就推進，不管接下來成功、失敗還是略過。
+            last_id = service_id
+            try:
+                # 逐台 commit 之後這一筆可能已被別的交易改掉或刪掉：重讀再決定。
+                service.invalidate_recordset()
+                if not service.exists() or service.state != 'running':
+                    continue
+                previous_code = service.workload_fault_code
+                status = client.get_status(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                    include_workloads=True,
+                )
+                outcome = service._apply_workload_observation(status)
+                label = (service.id, service.name, service.workload_fault_code or previous_code)
+                self.env.cr.commit()
+                checked += 1
+                counts[outcome] = counts.get(outcome, 0) + 1
+                transport_streak = 0
+                if outcome == 'raised':
+                    raised.append(label)
+                elif outcome == 'cleared':
+                    cleared.append(label)
+                elif outcome == 'unsupported':
+                    stopped_early = 'operator 尚未回報 workloads'
+                    _logger.info(
+                        "workload-check: operator 尚未回報 workloads（回應沒有 "
+                        "workloads_included，operator 版本較舊），本趟中止")
+                    break
+            except (PaaSOperatorConnectionError, PaaSOperatorTimeoutError) as exc:
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak += 1
+                _logger.warning(
+                    "workload-check: service id=%s 連不上 operator 或逾時：%s", service_id, exc)
+                if transport_streak >= WORKLOAD_CHECK_TRANSPORT_ABORT:
+                    stopped_early = 'operator 連續 %d 次連不上或逾時' % transport_streak
+                    _logger.warning(
+                        "workload-check: operator 連續 %d 次連不上或逾時，本趟中止",
+                        transport_streak)
+                    break
+            except PaaSOperatorAPIError as exc:
+                # operator 有回應、只是對這一台回 4xx／5xx——最常見的是 DB 還記著 running、
+                # 叢集上 release 已經不在（404）。那種服務每一趟都會回同樣的錯，帶 traceback
+                # 的 ERROR 一天 144 筆只是噪音：一行 warning 就夠（`_request` 自己另有一行）。
+                # 傳輸是通的 ⇒ 連續傳輸錯誤的計數歸零。
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                _logger.warning(
+                    "workload-check: service id=%s operator 回錯（HTTP %s）：%s"
+                    "（本筆略過，不影響其餘）", service_id, exc.status_code, exc)
+            except Exception:
+                # 回捲掉的只有「這一台還沒 commit 的觀測寫入」：本 cron 不對叢集下變更，
+                # 下一趟會重看。不 rollback 的話交易已 aborted 時同一趟後面的服務全部
+                # InFailedSqlTransaction。
+                # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 一併
+                # 收掉，與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同
+                # `_cron_reconcile_release_facts` 的站點）。
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                _logger.exception(
+                    "workload-check: service id=%s 檢查失敗（本筆略過，不影響其餘）", service_id)
+
+        # 每趟結束寫回游標一次（提前中止也走到這裡）。值沒變不寫：每趟都查得完時游標會
+        # 停在同一個 id，monitor 那一列同樣零寫入。
+        # 寫不進去不得讓 cron 拋錯——游標只是「下一趟從哪裡開始」的提示，丟了頂多把同一批
+        # 再看一輪；該記的觀測在上面已經逐台 commit 了。
+        # ⚠ #1052 標記（非裁定）：OperationalError 也一併收掉（同上面逐台隔離的站點）。
+        if last_id != cursor:
+            try:
+                with self.env.cr.savepoint():
+                    monitor.write({'workload_check_cursor': last_id})
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.warning(
+                    "workload-check: 輪替游標寫回失敗（id %s→%s），下一趟從舊游標接著查",
+                    cursor, last_id, exc_info=True)
+
+        _logger.info(
+            "workload-check: running %d 筆，本趟檢查 %d 筆（%s），讀取失敗 %d 筆，"
+            "預算用完未檢查 %d 筆%s；游標 id %s→%s",
+            len(services), checked, self._workload_outcome_summary(counts), failed,
+            over_budget, ("；提前中止：%s" % stopped_early) if stopped_early else "",
+            cursor, last_id)
+        for service_id, name, code in raised:
+            _logger.warning("  新異常 id=%s %s  %s", service_id, name, code)
+        for service_id, name, code in cleared:
+            _logger.info("  恢復 id=%s %s  %s", service_id, name, code)
 
     # ------------------------------------------------------------------ #
     #  就緒判定：兩層共用的單一事實源（#423 W5a）                          #
@@ -5893,16 +6495,22 @@ class CloudService(models.Model):
     def _is_halted(self):
         """這台 VM 是否應該處於停機（``runStrategy: Halted``）狀態。
 
-        🔴 **不可以只看 ``state == 'suspended'``。** reconfigure 路徑
-        （``controllers/paas.py``）**先**把 state 寫成 ``upgrading``、19 行後
-        才組裝 values，屆時守衛讀到的已經不是 ``suspended`` → 組出 ``Always``
-        → 以 ``reset_values=True`` 送出 → **停權中（欠費）的 VM 被喚醒**。
-        （對照組：``action_redeploy`` 與 ``_reset_admin_password`` 都是先組裝
-        再寫 state，只有 reconfigure 順序相反。）
+        🔴 **不可以只看 ``state == 'suspended'``。** 這條守衛的起因（MAJOR-2）：當時的
+        reconfigure 路徑（``controllers/paas.py``）**先**把 state 寫成 ``upgrading``、之後
+        才組裝 values，守衛讀到的已經不是 ``suspended`` → 組出 ``Always`` → 以
+        ``reset_values=True`` 送出 → **停權中（欠費）的 VM 被喚醒**。
 
-        改讀 ``pre_suspend_state`` 作為不受呼叫順序影響的單一事實源：它只在
+        那個時間窗現在已經不存在：#482 起三條 upgrade 路徑對停權中的服務把 state 留在
+        ``suspended``；#1647 起 reconfigure 也改成**先**組裝全量 values（同步預檢與背景
+        upgrade 共用同一組）、**後**寫 state，與 ``action_redeploy``、換方案相同。但守衛
+        仍然不可以依賴呼叫順序或單一欄位——「state 不是 ``suspended``、服務其實還在停權」
+        的資料確實存在：#482 之前被 upgrade 改寫過 state 的存量（suspended → upgrading →
+        poll → running，``pre_suspend_state`` 仍在）、復權失敗而寫成 ``error`` 的服務
+        （``_do_resume`` 刻意保留 ``pre_suspend_state``），以及將來任何又改寫 state 的新路徑。
+
+        所以讀 ``pre_suspend_state`` 作為不受呼叫順序影響的單一事實源：它只在
         :meth:`_do_suspend` 設、:meth:`_do_resume` 清，語意穩定，且在
-        「state 已被中途改寫但服務仍處於停權」的窗口內仍為真。
+        「state 已被改寫但服務仍處於停權」時仍為真。
 
         兩者取聯集而非擇一：``state == 'suspended'`` 涵蓋 pre_suspend_state
         因故為空的情形，``pre_suspend_state`` 涵蓋 state 被中途改寫的情形。
@@ -6362,6 +6970,23 @@ class CloudService(models.Model):
         if raw in (None, False, ''):
             return True
         return str(raw).strip().lower() not in _FALSEY_PARAM_VALUES
+
+    def _compute_quota_check_enabled(self):
+        """#1647：compute 配額預檢的總開關（prod kill switch）。未設＝開。"""
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            _COMPUTE_QUOTA_PRECHECK_PARAM)
+        if raw in (None, False, ''):
+            return True
+        return str(raw).strip().lower() not in _FALSEY_PARAM_VALUES
+
+    def _compute_quota_check_requested(self):
+        """#1647：這台服務的 upgrade 要不要請 operator 先檢查工作區的 compute 配額。
+
+        停權中的服務不檢查：upgrade 之後會被 scale 回 0（``_rescale_halted_after_upgrade``），
+        rendered manifest 的 replicas 不是它真正的需求——照那個數字算只會誤擋。
+        """
+        self.ensure_one()
+        return self._compute_quota_check_enabled() and not self._is_halted()
 
     def _public_url_hostname(self):
         """對外主機名（不含 scheme）；沒有對外網址回 ``''``。
@@ -7263,6 +7888,147 @@ class CloudService(models.Model):
                 False if tunnel_address else (tunnel_error or False))
         return vals
 
+    # ------------------------------------------------------------------ #
+    #  #1647：running 服務的 workload 觀測（期望有 Pod、實際一顆都沒有）   #
+    # ------------------------------------------------------------------ #
+
+    def _workload_fault_confirmed(self):
+        """列上記著的 workload 異常是否「已確認」（才告警、才給前台看）。
+
+        有 ``FailedCreate`` 證據的代碼（``EVIDENCE_CODES``）第一次觀測就算。沒有證據的
+        ``no_pods`` 要在「首次看到」滿 ``WORKLOAD_FAULT_CONFIRM_MINUTES`` 之後**又被觀測到
+        一次**才算——換 Pod 的瞬間也會短暫是 0 個。
+
+        「持續多久」是 ``_apply_workload_observation`` 在觀測當下用**首次看到的時間與當下
+        時間**判的（那一次觀測本身就是「還在」的證據），不靠任何每趟更新的時間戳——
+        穩態不寫列之後已經沒有那種時間戳了。判定成立的那一趟會把 ``workload_checked_at``
+        寫成當下（值真的變了才寫的其中一種），這裡讀的就是那次寫入留下的結果：
+        ``workload_checked_at - workload_fault_since`` 達門檻 ⟺ 門檻之後確實又觀測到一次
+        異常（同一段異常期間的每次寫入，都是在觀測到異常的當下寫的）。
+
+        ⚠ 這裡**不拿牆鐘的現在**去減 since：/woow 每次組 payload 都會經過這裡，那樣只被
+        看到一次的瞬間 0 Pod 會在 5 分鐘後對租戶顯示成故障，一直到下一趟 cron 才清掉。
+
+        只讀不帶 groups 的三格（code／since／checked_at）：租戶身分的 /woow payload 會經過
+        這裡（``_workload_fault_public``），讀到 ``base.group_system`` 的欄位會 AccessError。
+        """
+        self.ensure_one()
+        code = self.workload_fault_code
+        since = self.workload_fault_since
+        if not code or not since:
+            return False
+        if code in EVIDENCE_CODES:
+            return True
+        recorded_at = self.workload_checked_at
+        return bool(recorded_at and recorded_at - since >= timedelta(
+            minutes=WORKLOAD_FAULT_CONFIRM_MINUTES))
+
+    def _workload_fault_public(self):
+        """給 /woow payload 的值：已確認的異常代碼，否則 None。
+
+        只在 ``running`` 時有意義（其他狀態各有自己的說明），而且只給代碼——含叢集原文的
+        ``workload_fault_detail`` 不出後台。
+        """
+        self.ensure_one()
+        if self.state != 'running' or not self._workload_fault_confirmed():
+            return None
+        return self.workload_fault_code
+
+    def _apply_workload_observation(self, status):
+        """把一份 operator status（帶 ``include_workloads``）的 workload 觀測落到欄位上。
+
+        **workload 欄位的唯一寫入者**（另一處只有 ``write()`` 在服務離開 running 時清）。
+        呼叫端是 ``_cron_check_running_workloads``（每 10 分鐘）與
+        ``_cron_reconcile_release_facts``（每日，順帶）。
+
+        🔴 **不寫 ``state``、不寫 ``error_message``。** 這些欄位是獨立的旗標：服務顯示
+        running 而實際沒有 Pod 是要讓人知道、去處理的事實，不是狀態轉移——把它打成
+        ``error`` 之後沒有任何路徑會自己 poll 回來，quota 一放寬服務就恢復了、帳面卻停在
+        error。repo-lint 第 19 條（poll-release-facts-single-source）判準 5 機械守這件事。
+
+        🔴 **值真的變了才寫。** 這個方法每 10 分鐘對每一台 running 服務跑一次；每次都寫
+        等於每 10 分鐘 commit 一次所有 running 列，會與每日對帳、生命週期 cron 這類長交易
+        互撞（理由見 ``_cron_check_running_workloads`` 的 docstring）。所以：
+
+        - 健康、而且列上四格異常欄位本來就是空的 ⇒ 一格都不寫；
+        - 異常還在、代碼與 detail 都沒變、也沒有新的確認或通知要記 ⇒ 一格都不寫；
+        - 其餘（第一次看到、代碼或 detail 變了、``no_pods`` 這一趟才確認、通知剛落地、
+          恢復）才寫，並且只寫變了的那幾格。``workload_checked_at`` 跟著這些寫入更新，
+          所以它的意思是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
+
+        本方法不 commit、不 rollback、不攔例外：回捲單位由呼叫端決定（10 分鐘 cron 逐台
+        commit／rollback；每日對帳包在自己的 savepoint 裡）。
+
+        Returns:
+            ``'unsupported'``（operator 沒回報 workloads——舊版；一格都不動）／
+            ``'unknown'``（服務不是 running，或這一輪查詢失敗；一格都不動）／
+            ``'healthy'``（沒有異常，列上也沒有異常值；一格都不動）／``'cleared'``（原本
+            有異常，已恢復）／``'raised'``（第一次觀測到異常）／``'ongoing'``（同一段
+            異常還在；內容沒變時一格都不動）。
+        """
+        self.ensure_one()
+        service = self.sudo()
+        if service.state != 'running':
+            return 'unknown'
+        now = fields.Datetime.now()
+        verdict, code, detail = workload_verdict(status, now)
+        if verdict == VERDICT_UNSUPPORTED:
+            return 'unsupported'
+        monitor = self.env['woow_paas_platform.platform_monitor']
+        if verdict == VERDICT_HEALTHY:
+            if not any(service[name] for name in _WORKLOAD_FAULT_FIELDS):
+                # 健康的穩態：列上沒有任何異常值 ⇒ 沒有東西要改，不寫。
+                return 'healthy'
+            # 先記下「有沒有通知過」與起點：下面那次寫入會把它們清掉。
+            was_alerted = bool(service.workload_fault_alerted_at)
+            previous_since = service.workload_fault_since
+            previous_code = service.workload_fault_code
+            cleared = {'workload_checked_at': now,
+                       **dict.fromkeys(_WORKLOAD_FAULT_FIELDS, False)}
+            service.write(cleared)
+            _logger.info(
+                "[#1647] workload fault cleared for service id=%s %s (was %s since %s): "
+                "every workload that wants pods has pods again",
+                service.id, service.name, previous_code, previous_since)
+            if was_alerted:
+                # 沒通知過的（未確認就恢復的 no_pods）不必再說「已恢復」。
+                monitor._note_workload_recovered(service, previous_since)
+            return 'cleared'
+        if verdict != VERDICT_FAULT:
+            return 'unknown'
+
+        previous_since = service.workload_fault_since
+        since = previous_since or now
+        # 「持續多久才確認」只看首次看到的時間與當下時間：這一次觀測本身就是「還在」。
+        confirmed = code in EVIDENCE_CODES or (
+            now - since >= timedelta(minutes=WORKLOAD_FAULT_CONFIRM_MINUTES))
+        # 只收值真的要變的那幾格。同一段異常中 code／detail 會跟著最新觀測更新（例：
+        # no_pods 之後才看到 FailedCreate 事件），起點不變。
+        observed = {}
+        if service.workload_fault_code != code:
+            observed['workload_fault_code'] = code
+        if (service.workload_fault_detail or '') != (detail or ''):
+            observed['workload_fault_detail'] = detail
+        if not previous_since:
+            observed['workload_fault_since'] = now
+        # 這一趟才確認的（no_pods 撐過門檻）沒有別的格子會變，仍要寫一次時間：
+        # `_workload_fault_confirmed` 讀的就是這次寫入。每段異常至多多這一次。
+        newly_confirmed = confirmed and not service._workload_fault_confirmed()
+        if observed or newly_confirmed:
+            observed['workload_checked_at'] = now
+            service.write(observed)
+        if not previous_since:
+            _logger.warning(
+                "[#1647] running service id=%s %s (namespace %s, release %s) has a workload "
+                "with no pods: %s", service.id, service.name, service.helm_namespace,
+                service.helm_release_name, detail)
+        # 每段異常只通知一次；通知沒落地（沒有收件者、寫入失敗）就不記標記，下一輪重試。
+        if confirmed and not service.workload_fault_alerted_at:
+            if monitor._report_workload_fault(service):
+                alerted = {'workload_fault_alerted_at': now}
+                service.write(alerted)
+        return 'ongoing' if previous_since else 'raised'
+
     def _poll_and_update_status(self, client):
         """背景短 poll：向 operator 取一次 status，推進單一服務的轉移狀態。
 
@@ -7706,10 +8472,15 @@ class CloudService(models.Model):
 
         - 連線中斷／逾時：不確定有沒有套用 ⇒ 請重新送出；
         - operator 忙碌（503 ``operator_busy``）：確定沒有套用 ⇒ 請重新送出；
+        - 工作區 compute 配額放不下（409，#1647）：確定沒有套用 ⇒ 講清楚哪種資源差多少，
+          出口是聯絡客服調整工作區配額（重新送出沒有用，所以這一種**不接**通用結尾）。
+          這是後備路徑——同步預檢通過（或沒問到）之後，背景的 PATCH 才被擋；管理員告警由
+          呼叫端另外發（``paas.py`` 的 ``_record_upgrade_failure``）；
         - 其他 operator 錯誤：附上 operator 的說明（operator 端已是中文）。
         """
         self.ensure_one()
         from ..services.paas_operator import (
+            COMPUTE_QUOTA_ERROR_CODE,
             OPERATOR_BUSY_ERROR_CODE,
             PaaSOperatorConnectionError,
             PaaSOperatorTimeoutError,
@@ -7729,6 +8500,23 @@ class CloudService(models.Model):
             reason = env._(
                 'The deployment service was busy with other changes, so the new settings '
                 'were not applied.')
+        elif isinstance(detail, dict) and detail.get('error_code') == COMPUTE_QUOTA_ERROR_CODE:
+            reason = self._compute_quota_error_message(
+                detail, operation='reconfigure', lang=lang, with_ending=False)
+            # 這個分支有自己的結尾，不接下面 #1552 的通用結尾：配額沒有調整之前重新送出一定
+            # 再被擋，Rollback 也幫不上忙（operator 什麼都沒套用，release 沒有變）。租戶做得到
+            # 而且有效的只有聯絡客服——與同步被擋時的租戶版同一個出口（為什麼不建議停用或
+            # 刪除服務，見 ``_compute_quota_error_message`` 結尾的註解）。這裡不能說「服務仍以
+            # 原本的設定執行」：新設定已經寫進平台、服務也被標成 error（#1552 的既有行為）。
+            if plan_change:
+                return env._(
+                    'The plan was changed, but resizing the service did not complete. '
+                    '%(reason)s Please contact support to adjust the workspace quota.',
+                    reason=reason)
+            return env._(
+                '%(reason)s The new settings were not applied. Please contact support to '
+                'adjust the workspace quota.',
+                reason=reason)
         else:
             text = detail.get('message') if isinstance(detail, dict) else detail
             reason = env._(
@@ -8439,6 +9227,11 @@ class CloudService(models.Model):
         分鐘重撞同一個錯誤，而是把原因寫進 ``error_message``（admin 在後台與租戶在
         服務頁都看得到），不讓「Redeploy queued」之後靜默消失（Crosswind r1 S3）。
 
+        #1647：被 compute 配額預檢擋下時 ``_redeploy`` 的 UserError 是**管理員版**（namespace、
+        ResourceQuota 名、其他 workload 名）。它不可以原樣進 ``error_message``——那一欄租戶
+        看得到——所以這種拒絕寫租戶版（``_queued_redeploy_quota_message``），管理員版進 log
+        與管理員 activity。
+
         ⚠ #1052 標記（非裁定）：``_redeploy`` 是先 helm upgrade 再寫 DB。``UserError``
         全都發生在提交點之前（operator 未設定、#552 沒釘版、upgrade 被拒），回捲安全；
         其他例外可能落在提交點之後，回捲會讓 DB 與叢集不一致——與 HTTP 路徑（request
@@ -8463,9 +9256,21 @@ class CloudService(models.Model):
                 _logger.error(
                     "[#1257] requested redeploy of service %s (id=%s) was refused: %s",
                     svc.name, svc.id, exc)
-                svc.write({'error_message': _(
-                    'The queued redeploy did not run: %(reason)s', reason=str(exc))})
+                quota_detail = getattr(exc, 'compute_quota_detail', None)
+                if quota_detail is not None:
+                    # #1647：``error_message`` 租戶在服務頁看得到。compute 配額預檢的 UserError
+                    # 是管理員版（namespace、ResourceQuota 名、其他 workload 名）——它只進上面
+                    # 那行 log 與下面的管理員 activity；這裡改寫租戶版（服務建立者的語言）。
+                    message = svc._queued_redeploy_quota_message(quota_detail)
+                else:
+                    message = _('The queued redeploy did not run: %(reason)s', reason=str(exc))
+                svc.write({'error_message': message})
                 self.env.cr.commit()
+                if quota_detail is not None:
+                    # 登記意圖的管理員此刻不在對話框前：數字、namespace 與佔用最多的 workload
+                    # 交給管理員 activity。先 commit 上面的 error_message，告警出錯不連累它。
+                    svc._alert_compute_quota_rejection('queued_redeploy', quota_detail)
+                    self.env.cr.commit()
             except Exception:
                 self.env.cr.rollback()
                 _logger.exception(
@@ -9269,22 +10074,33 @@ class CloudService(models.Model):
             self.id, restore_state,
         )
 
-    def _compute_ns_quota(self, workspace):
+    def _compute_ns_quota(self, workspace, allocated_overrides=None):
         """#278 A1 權威值：以 workspace 內『非 deleting』存活 service 加總算 quota。
 
         domain 已排除 state='deleting' → 呼叫時機在 state 翻 deleting /
         super().unlink() 之後即天然反映刪除後存活集。回傳字串 quantity
         （與 operator NamespaceQuotaUpdateRequest 及既有 create_namespace 一致）。
         floor 為 8 vCPU / 8Gi / 100Gi（workspace 清空後 survivor 為空亦不 skip）。
+
+        #1647 ``allocated_overrides``：``{service_id: {'allocated_vcpu': …,
+        'allocated_ram_gb': …, 'allocated_storage_gb': …}}``——加總時以它覆蓋對應服務
+        **有給的**欄位，只在記憶體內、不寫 DB。換方案在扣款前用它預演「換完之後會推送的
+        quota」（``_ns_quota_payload``）。不給＝現行行為；公式與下限不因它而變。
         """
         Svc = self.env['woow_paas_platform.cloud_service'].sudo()
         live = Svc.search([
             ('workspace_id', '=', workspace.id),
             ('state', '!=', 'deleting'),
         ])
-        vcpu = sum(live.mapped('allocated_vcpu'))
-        ram = sum(live.mapped('allocated_ram_gb'))
-        storage = sum(live.mapped('allocated_storage_gb'))
+        overrides = allocated_overrides or {}
+
+        def _total(field):
+            return sum(
+                overrides.get(svc.id, {}).get(field, svc[field]) or 0 for svc in live)
+
+        vcpu = _total('allocated_vcpu')
+        ram = _total('allocated_ram_gb')
+        storage = _total('allocated_storage_gb')
         return (
             str(max(vcpu * 3, 8)),
             f"{max(int(ram * 3), 8)}Gi",
@@ -9311,6 +10127,25 @@ class CloudService(models.Model):
             f"{max(live_count * 2, 4)}Gi",
             f"{max(live_count * 40, 80)}Gi",
         )
+
+    def _ns_quota_payload(self, workspace, allocated_overrides=None):
+        """#1647：``workspace`` 的 ns quota，組成 operator ``NamespaceQuotaUpdateRequest`` 的形狀。
+
+        組合 ``_compute_ns_quota`` 與 ``_compute_ns_ephemeral_quota``（值與 ``_push_ns_quota``
+        會推送的相同），鍵與 operator 那個 model 的欄位一致。純計算、不呼叫 operator。
+        ``allocated_overrides`` 見 ``_compute_ns_quota``——換方案在扣款前把「將推送的 quota」
+        交給升級預檢（``pending_quota``），升到較大方案才不會被還沒擴的舊上限誤擋。
+        """
+        cpu, memory, storage = self._compute_ns_quota(
+            workspace, allocated_overrides=allocated_overrides)
+        eph_request, eph_limit = self._compute_ns_ephemeral_quota(workspace)
+        return {
+            'cpu_limit': cpu,
+            'memory_limit': memory,
+            'storage_limit': storage,
+            'ephemeral_storage_request': eph_request,
+            'ephemeral_storage_limit': eph_limit,
+        }
 
     def _push_ns_quota(self, workspace, helm_namespace):
         """best-effort：重算並 PUT ns quota；operator 未設定 / 失敗只 log，
@@ -9854,6 +10689,20 @@ class CloudService(models.Model):
         first_running = self.browse()
         if vals.get('state') == 'running' and 'first_running_at' not in vals:
             first_running = self.filtered(lambda r: not r.first_running_at)
+        # #1647：`workload_fault_*` 只描述「running 的服務沒有 Pod」。服務一離開 running
+        # （重新啟動、Redeploy、停權、刪除、轉 error……）這段異常就不再描述現況——留著的話
+        # 回到 running 時會帶著上一段的起點與「已通知」標記，新的異常不會再告警。
+        # 集中在這裡清而不是逐路徑清（pitfall reaped-since-single-path-stamp-gc-immunity）：
+        # 任何把 state 寫離 running 的路徑自動跟上。
+        #   * 同值的 state 寫入（running → running）不清；
+        #   * `workload_checked_at` 不清（它說的是「最後一次寫入觀測結果的時間」，不屬於
+        #     某一段異常；since 清掉之後，留著它不會讓下一段異常被當成已確認）；
+        #   * vals 自己帶了這四格的呼叫端（`_apply_workload_observation`）優先。
+        leaving_running_fault = self.browse()
+        if ('state' in vals and vals['state'] != 'running'
+                and not set(_WORKLOAD_FAULT_FIELDS).intersection(vals)):
+            leaving_running_fault = self.filtered(
+                lambda r: r.workload_fault_since or r.workload_fault_code)
         # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
         #
         # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
@@ -9926,6 +10775,12 @@ class CloudService(models.Model):
                 super(CloudService, leaving_timeout).write({'transition_timeout_at': False})
             if leaving_upgrade_failure:
                 super(CloudService, leaving_upgrade_failure).write({'upgrade_failed_at': False})
+            if leaving_running_fault:
+                # 一定要 sudo：四格裡有兩格帶 groups='base.group_system'，而走到這裡的
+                # 常常是非系統的 internal 使用者（例：workspace owner 按「重新啟動」）——
+                # 不 sudo 的話他們對自己服務的操作會 AccessError。
+                super(CloudService, leaving_running_fault.sudo()).write(
+                    dict.fromkeys(_WORKLOAD_FAULT_FIELDS, False))
             if first_running:
                 super(CloudService, first_running).write({
                     'first_running_at': fields.Datetime.now(),

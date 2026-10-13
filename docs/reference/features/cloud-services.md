@@ -24,6 +24,16 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 
 本文件專注於 **Cloud Services** 的規格設計。
 
+### 共用資源觀測
+
+所有 Cloud Services 的工作區卡片與服務詳情共用資源觀測，顯示 CPU、記憶體與持久磁碟的「使用量／實際生效上限或容量」，每 30 秒批次更新。離開頁面即停止，頁面隱藏時暫停，返回時立即更新。此功能依服務的 Helm namespace/release 與實際 Kubernetes 資源辨識，不需要逐一修改應用範本。
+
+CPU 是最近兩分鐘平均使用的核心數；記憶體是 working set；磁碟是 PVC 的檔案系統用量。多副本、sidecar 與同一 release 的資料庫會合計，共用 PVC 只計一次。數值旁保留採樣時間；監控缺值、資料過期或只有部分容器／磁碟取得資料時會明確標示，不將缺值顯示為零，也不計算不完整的使用率。
+
+「申請配置」仍保留原訂閱的資源規格。即時觀測不改寫配額、計費或服務狀態。VM 可顯示 guest CPU／記憶體及磁碟配置；現有監控未提供的 VM guest 使用量與暫存磁碟使用量會標示不可用。Smart Home Connect 與 Security Access 連到使用者端設備，沒有平台代管的 CPU／記憶體／PVC，因此沿用其連線狀態顯示。
+
+前端呼叫 `POST /api/workspaces/<workspace_id>/service-resource-observations`，只傳工作區內的服務 ID，每批最多 100 筆。後端逐筆套用與服務詳情相同的存取權檢查，再按 namespace 批次呼叫 operator；瀏覽器不能指定 namespace、release 或查詢式。詳細採樣設定及部署順序見 [PaaS Operator 資源觀測](../../../extra/paas-operator/README.md#resource-observations)。
+
 ---
 
 ## Deployment Architecture
@@ -235,6 +245,18 @@ Example: paas-ws-123-anythingllm-01
 > `initializing`，否則 `running`），清掉訊息與標記並在 PaaS Platform Monitor 留紀錄。其他來源的 error
 > （operator 回 failed、刪除／停權失敗、init 額度出口…）沒有標記，永遠不會被這條自癒碰到。
 
+> **running 之後 Pod 不見（#1647）**：`running` 的服務每 10 分鐘（`_cron_check_running_workloads`；另每日對帳時
+> 順帶）向 operator 取 `status?include_workloads=true`。任一 Deployment／StatefulSet 期望 ≥1 個 Pod 而實際 0 個
+> （例：ReplicaSet `FailedCreate: exceeded quota`）就寫 `workload_fault_*`、在 PaaS Platform Monitor 通知系統管理員
+> （有 `FailedCreate` 證據立即，沒有則要持續 5 分鐘以上），並在 `/woow` 詳情頁與服務卡片顯示固定文案。
+> 異常對租戶確認期間，`/woow` 其他原本只看 `state` 的訊號一起讓路：詳情頁 Connection Info 的連線狀態顯示 OFFLINE、
+> 工作區頁統計卡把這台算進 Alerts 而不是 Healthy；狀態徽章仍是 Running。
+> **不改 `state`／`error_message`**；Pod 恢復或服務離開 `running` 後自動清除。舊 operator 不回報 workloads 時什麼都不寫。
+> 觀測欄位**值真的變了才寫**：健康的服務、內容沒變的異常都不寫服務列（`write_date` 不動，不與每日對帳／生命週期
+> cron 的長交易互撞），所以 `workload_checked_at` 是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
+> 10 分鐘 cron 的輪替位置記在 PaaS Platform Monitor 單例的 `workload_check_cursor`（最後處理的 service id；成功、
+> 失敗、略過都推進，提前中止後下一趟從中止處之後開始）。
+
 ### Supported Operations
 
 | Operation | Helm Command               | Description                                      |
@@ -347,23 +369,33 @@ data:
 
 ### Resource Quotas
 
-每個 Workspace namespace 設定資源配額：
+每個 Workspace namespace 有一個名為 `<namespace>-quota` 的 ResourceQuota。數值不是固定的，由平台依 workspace 內的服務計算後交給 operator 套用：
+
+- CPU／記憶體／磁碟：workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3，下限 8 vCPU／8Gi／100Gi（`src/models/cloud_service.py` 的 `_compute_ns_quota`）。
+- `requests` 與 `limits` 是同一個值（operator `extra/paas-operator/src/services/helm.py` 的 `_build_quota_manifest`）。
+- ephemeral-storage 依服務數計算（`_compute_ns_ephemeral_quota`）；PVC 數量上限固定為 10。
+
+只有一台 4 vCPU／8GB／60GB 服務的 workspace 會得到：
 
 ```yaml
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: workspace-quota
-  namespace: paas-ws-123
+  name: paas-ws-1a2b3c4d-quota
+  namespace: paas-ws-1a2b3c4d
 spec:
   hard:
-    requests.cpu: "8"
-    requests.memory: 16Gi
-    limits.cpu: "16"
-    limits.memory: 32Gi
+    requests.cpu: "12"
+    limits.cpu: "12"
+    requests.memory: 24Gi
+    limits.memory: 24Gi
+    requests.storage: 180Gi
     persistentvolumeclaims: "10"
-    requests.storage: 100Gi
+    requests.ephemeral-storage: 4Gi
+    limits.ephemeral-storage: 80Gi
 ```
+
+平台只在開通、換方案、刪除服務時重算並推送；手動改叢集上的 ResourceQuota 會在下一次推送被蓋回。排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
 
 ---
 
