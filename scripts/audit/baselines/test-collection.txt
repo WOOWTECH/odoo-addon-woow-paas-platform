@@ -195,6 +195,7 @@
 1	test_chatter_service_injection.TestBoundNoExtrasRegression
 3	test_chatter_service_injection.TestHelmValuesSanitizer
 3	test_chatter_service_injection.TestPrimaryAndExtrasMerge
+13	test_cleanup_tunnel_859.TestCleanupTunnel859
 16	test_cloud_api.TestCloudAPI
 8	test_cloud_api.TestCloudServiceController
 5	test_cloud_api.TestSeedTemplateHelmValueSpecs
