@@ -1,0 +1,60 @@
+{
+  "scope": "next platform release after develop 18.0.1.0.230; candidate seed pin only",
+  "upstream_pull_request": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/pulls/52",
+  "upstream_merge_commit": "e178c4cef76a43b20abfd6ea0282060d94abf115",
+  "ci_job": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/18774/jobs/20584",
+  "published_digest": "sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8",
+  "previous_pin": "0b2cff1fbc905f6285c107d2fd537ade016fd95d@sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7",
+  "unchanged_since_previous_pin": [
+    "apps/odoo/Dockerfile",
+    "apps/odoo/odoo_mcp_admin/main.py",
+    "apps/odoo/patches",
+    "uv.lock"
+  ],
+  "live_probe": {
+    "namespace": "owned QA workspace 50, ephemeral Pods; both deleted",
+    "image_id_matches_published_digest": true,
+    "odoo_mcp_distribution": "1.1.0",
+    "sdk_registered_tools": 41,
+    "admin_tools_get_total": 41,
+    "admin_disabled_two_extra_tools": true,
+    "proxy_list_after_disable": 39,
+    "proxy_rejected_two_disabled_calls": true,
+    "launch_argv": ["odoo-mcp", "--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"],
+    "mcp_initialize": true,
+    "mcp_session_established": true,
+    "mcp_tools_list": 41,
+    "offline_analyze_upgrade_log_call": true,
+    "direct_write_mode": {
+      "existing_owned_QA240_flag": "ODOO_MCP_ALLOW_DIRECT_WRITES=1",
+      "mcp_tools_list": 38,
+      "admin_manageable_catalog": 41,
+      "intentionally_hidden_approval_tools": [
+        "preview_write",
+        "validate_write",
+        "execute_approved_write"
+      ],
+      "offline_analyze_upgrade_log_call": true,
+      "mode_interpretation": "The Settings UI explicitly states that these three approval tools are removed from the MCP process when direct writes are enabled; catalog 41 versus active MCP 38 is expected."
+    },
+    "odoo_database_connections": 0,
+    "business_writes": 0
+  },
+  "odoo_sandbox_test": {
+    "namespace": "dev-sandbox-ac1013-odoo-mcp41-pin",
+    "fresh_database": true,
+    "runtime_image": "paas-odoo-official:20261012.0303 with candidate 18.0.1.0.230 addon overlay",
+    "addon_xml_sha256": "9a24a06c078c7144e946585bac286b0ae3c36aead553a67ec9d27bd1d51e6996",
+    "test_class": "TestMcpOdooTemplateSeed",
+    "tests": 16,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "orm_seed_pin_matches_published_digest": true,
+    "orm_seed_noupdate": false,
+    "external_tcp_blocked": true,
+    "production_data_cloned": false,
+    "namespace_and_owned_ttl_rbac_deleted": true
+  },
+  "limitations": "Existing QA service240 remains on 1ec1bb0; isolated image and fresh Odoo sandbox checks are not a PaaS rollout, existing-service upgrade, or live Odoo data test."
+}
