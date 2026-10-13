@@ -56,5 +56,19 @@
     "production_data_cloned": false,
     "namespace_and_owned_ttl_rbac_deleted": true
   },
-  "limitations": "Existing QA service240 remains on 1ec1bb0; isolated image and fresh Odoo sandbox checks are not a PaaS rollout, existing-service upgrade, or live Odoo data test."
+  "real_connected_read_canary": {
+    "scope": "Exact candidate image in disposable Pod, owned QA workspace 50, existing Odoo #239 ordinary test user",
+    "image_id_matches_published_digest": true,
+    "mcp_protocol_version": "2025-11-25",
+    "tools_list_count": 41,
+    "search_records_real_res_partner": true,
+    "get_model_fields_real_res_partner": true,
+    "test_mode_direct_writes_disabled": true,
+    "network_egress_only_own_odoo_pod_tcp_8069": true,
+    "business_writes": 0,
+    "temporary_pod_secret_networkpolicy_removed": true,
+    "retained_odoo239_mcp240_pods_unchanged_ready": true,
+    "evidence": "docs/verification/2026-10-13-odoo-mcp41-real-read.json"
+  },
+  "limitations": "Existing QA service240 remains on 1ec1bb0. The new image has performed real read-only tool calls into owned QA Odoo239, but this isolated direct MCP child test is not a PaaS rollout, existing-service upgrade, admin proxy regression, or direct-write-mode business acceptance."
 }

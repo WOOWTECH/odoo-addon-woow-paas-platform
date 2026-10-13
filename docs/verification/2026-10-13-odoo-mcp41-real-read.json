@@ -1,0 +1,30 @@
+{
+  "at": "2026-10-13T21:24:08Z",
+  "workspace_id": 50,
+  "namespace": "paas-ws-4ce0979e",
+  "native_service_id": 239,
+  "mcp_service_id": 240,
+  "candidate_image": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin:e178c4cef76a43b20abfd6ea0282060d94abf115@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8",
+  "own_qa_odoo_read_only": true,
+  "existing_services_modified": false,
+  "network_egress": "only retained own Odoo Pod TCP8069",
+  "public_service_created": false,
+  "business_writes": 0,
+  "pass_selected": true,
+  "native_pod_uid_before": "1c1d0c50-0a7a-4f9c-a21b-35089a6c6c3d",
+  "mcp_pod_uid_before": "6ef707a2-276b-4cc0-8247-a9317332f83b",
+  "candidate_pod_uid": "ed6b1e99-34f3-457c-a614-c8b7e0f07f9b",
+  "candidate_phase": "Succeeded",
+  "candidate_image_id": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8",
+  "private_log_sha256": "5ed818ff821044c617ba5070e8f9a035b81ce36490ecc9cc47278a3eb990bf6e",
+  "result": {
+    "protocol_version": "2025-11-25",
+    "tools_count": 41,
+    "search_records_real_partner": true,
+    "get_model_fields_real_odoo": true,
+    "business_writes": 0
+  },
+  "source_pods_unchanged": true,
+  "cleanup_remaining": [],
+  "finished_at": "2026-10-13T21:24:29Z"
+}
