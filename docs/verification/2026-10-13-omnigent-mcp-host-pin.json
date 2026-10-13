@@ -21,8 +21,10 @@
   },
   "mirror": {
     "candidate": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
-    "preflight_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/18956",
-    "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/295",
+    "preflight_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19039",
+    "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/297",
+    "approval_deadline_utc": "2026-10-14T02:04:40Z",
+    "prior_expired_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/295",
     "status": "PREFLIGHT_PASSED_AWAITING_HUMAN_APPROVAL_NOT_PUBLISHED",
     "require_digest_preservation_check_before_merge": true
   },
