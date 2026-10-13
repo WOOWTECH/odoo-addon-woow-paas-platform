@@ -8,7 +8,7 @@ import json
 import threading
 import uuid
 from concurrent.futures import wait as futures_wait
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from odoo.tests import HttpCase, TransactionCase, tagged
 
@@ -82,9 +82,8 @@ class TestServiceResourceObservations(HttpCase):
         self.service = self._service(self.workspace, 'one', suffix)
         self.second = self._service(self.workspace, 'two', suffix)
         self.foreign = self._service(self.other_workspace, 'foreign', suffix)
-        self.client = MagicMock()
-        self.client.base_url = 'http://operator.test'
-        self.client.api_key = 'test-key-never-forwarded'
+        self.client = PaaSOperatorClient('http://operator.test', 'test-key-never-forwarded')
+        self.addCleanup(self.client._session.close)
         self.route = '/api/workspaces/%s/service-resource-observations' % self.workspace.id
 
     def _service(self, workspace, label, suffix):

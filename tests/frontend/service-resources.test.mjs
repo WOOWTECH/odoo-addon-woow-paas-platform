@@ -80,6 +80,20 @@ test("a telemetry outage retains the last valid zero or value, but a stopped ser
     assert.equal(previous.cpu.status, "ok", "retention must not mutate earlier observations");
 });
 
+test("explicitly absent persistent storage is distinct from unavailable telemetry", () => {
+    const absent = { status: "unavailable", usage: null, capacity: null, requested: null, coverage: { observed: 0, expected: 0 } };
+    const row = resourceRow("storage", absent, { now });
+    assert.equal(row.status, "not_applicable");
+    assert.equal(row.note, "No persistent storage configured");
+    assert.equal(row.usage, "—");
+    assert.equal(row.percent, null);
+    assert.equal(resourceRow("storage", { ...absent, coverage: { expected: null } }, { now }).status, "unavailable");
+    assert.equal(resourceRow("storage", { ...absent, capacity: 50 }, { now }).status, "unavailable");
+    const current = { status: "ok", storage: absent };
+    const retained = retainResourceSamples({ storage: { usage: 10, status: "ok" } }, current);
+    assert.equal(retained.storage, absent, "confirmed removal must not retain old disk usage");
+});
+
 function pollingFixture(load) {
     const listeners = new Set();
     const timers = new Map();

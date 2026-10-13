@@ -22455,3 +22455,9 @@ msgstr "申請配置"
 #: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
 msgid "Virtual machine capacity is shown when available. Live guest usage is not yet supported."
 msgstr "顯示可取得的虛擬機容量；目前尚不支援虛擬機內的即時使用量。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+msgid "No persistent storage configured"
+msgstr "未配置持久儲存"

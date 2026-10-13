@@ -27,7 +27,7 @@ export class ResourceUsage extends Component {
     return _t("Updates every 30 seconds");
   }
   get hasWarning() {
-    return this.props.refreshFailed || this.rows.some((row) => row.status !== "ok");
+    return this.props.refreshFailed || this.rows.some((row) => !["ok", "not_applicable"].includes(row.status));
   }
   get sampledAt() {
     const timestamps = this.rows.map((row) => row.sampledAt).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b));
