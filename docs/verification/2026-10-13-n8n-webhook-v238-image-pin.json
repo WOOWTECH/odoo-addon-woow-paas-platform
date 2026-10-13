@@ -57,8 +57,26 @@
     "Human mirror approval and JCR digest readback",
     "Human PR review and merge",
     "Live QA service image update and webhook HTTP retest",
+    "Paired n8n MCP #251 live tool-call retest after QA rollout",
     "Separate full commercial acceptance"
   ],
+  "paired_mcp_candidate_compatibility": {
+    "scope": "Owned disposable n8n 2.38.0 Pod paired with exact current #251 MCP image in workspace 58; retained #250 and #251 unchanged",
+    "mcp_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin:1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e",
+    "native_api_real_workflow_http": 200,
+    "mcp_pod_native_api_http": 200,
+    "sdk_initialized": true,
+    "tools_list_count": 28,
+    "n8n_list_workflows_real_fixture": true,
+    "n8n_get_workflow_real_fixture": true,
+    "private_pod_ip_strict_ssrf_rejected": true,
+    "test_only_permissive_ssrf_mode": true,
+    "mcp_egress_only_candidate_n8n_pod_tcp_5678": true,
+    "temporary_pods_secret_networkpolicy_removed": true,
+    "retained_services_250_251_ready_unchanged": true,
+    "limit": "Candidate API/tool compatibility is proven with a private Pod IP and test-only permissive SSRF mode. Production strict SSRF and public URL require a paired live retest after rollout.",
+    "evidence": "docs/verification/2026-10-13-n8n238-mcp-compat.json"
+  },
   "synthetic_encrypted_credential_backup_restore": {
     "scope": "Separate disposable owner, workflow, execution and Basic Auth credential in owned workspace 58; no retained QA data modified",
     "source_version": "2.35.3",
