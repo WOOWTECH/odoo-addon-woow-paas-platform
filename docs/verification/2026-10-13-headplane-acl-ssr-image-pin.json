@@ -36,5 +36,6 @@
     "original_image_restored": true,
     "evidence": "docs/verification/2026-10-13-headplane-acl-ssr-qa-canary.json"
   },
+  "odoo_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-odoo-sandbox.json",
   "release_status": "Candidate seed pin only; current QA service is restored to previous image and still returns ACL HTTP 500. Requires human PR merge, platform release, own service update and post-release regression verification. No commercial acceptance claimed."
 }
