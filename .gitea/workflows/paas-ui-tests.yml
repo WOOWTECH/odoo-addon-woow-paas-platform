@@ -1,0 +1,30 @@
+name: paas-ui-tests
+
+on:
+  pull_request:
+    paths:
+      - "src/static/src/paas/**"
+      - "tests/ui/**"
+      - "tests/frontend/service-resources.test.mjs"
+      - ".gitea/workflows/paas-ui-tests.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "src/static/src/paas/**"
+      - "tests/ui/**"
+      - "tests/frontend/service-resources.test.mjs"
+      - ".gitea/workflows/paas-ui-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  ui-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Pure UI contracts: no database, credentials, cluster or browser needed.
+      # Full /woow rendering still requires the isolated Odoo sandbox.
+      - name: Service presentation and resource polling contracts
+        run: node --test tests/ui/*.mjs tests/frontend/service-resources.test.mjs
