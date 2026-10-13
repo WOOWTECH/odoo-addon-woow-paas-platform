@@ -87,15 +87,16 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
 
         ⚠ 不是 charts/home-assistant —— 那是容器化的 HA Core（cloud_app_ha_paas）。
 
-        0.1.0 → 0.1.3：0.1.1 修 CDI registry credential、0.1.2 加 XFF 剝除代理，
-        0.1.3 將 VM guest targetPort 改為 HAOS onboarding listener :80。
+        0.1.0 → 0.1.4：0.1.1 修 CDI registry credential、0.1.2 加 XFF 剝除代理，
+        0.1.3 將 VM guest targetPort 改為 HAOS onboarding listener :80，0.1.4 修正
+        XFF proxy upstream 指向 VM Service :8123。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos')
-        self.assertEqual(tpl.helm_chart_version, '0.1.3')
+        self.assertEqual(tpl.helm_chart_version, '0.1.4')
         self.assertNotIn(
             'home-assistant', tpl.helm_chart_name,
             'HAOS（VM）與 home-assistant（容器）是不同 chart、不同產品')
@@ -160,7 +161,7 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
         values = self._values()
         self.assertEqual(values['vm']['cores'], 2)
         self.assertEqual(values['vm']['memory'], '4Gi')
-        self.assertEqual(values['persistence']['size'], '64Gi')
+        self.assertEqual(values['persistence']['size'], '30Gi')
 
     def test_service_port_matches_default_port(self):
         """Service :8123 ＝ default_port；guest targetPort :80 ＝ HAOS UI listener。

@@ -1390,7 +1390,7 @@
 
         <!-- Home Assistant OS（HAOS，#423 W5b）：平台第一個 **VM 型** cloud service
              （KubeVirt VirtualMachine + CDI DataVolume），非容器。走 #380 金樣板上架
-             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.3（guest :80 UI port 修正；
+             SOP；chart＝woow-paas-charts 的 charts/haos 0.1.4（proxy upstream port 修正；
              tenant-facing Service 維持 :8123）。本 seed 的鍵名逐鍵對 registry chart 核對。
 
              ⚠ 與既有 cloud_app_ha_paas（slug ha-paas、chart home-assistant、image
@@ -1429,12 +1429,12 @@
         <record id="cloud_app_haos" model="woow_paas_platform.cloud_app_template">
             <field name="name">Home Assistant OS</field>
             <field name="slug">haos</field>
-            <field name="description">完整 Home Assistant OS 專屬虛擬機（含 Supervisor 與 Add-on 生態），2 vCPU／4 GB RAM／30 GB 磁碟（備份請存到外部）</field>
+            <field name="description">完整 Home Assistant OS 專屬虛擬機（含 Supervisor 與 Add-on 生態），2 vCPU／4 GB RAM／30 GiB 磁碟（約 32.2 GB；備份請存到外部）</field>
             <field name="full_description">Home Assistant OS（HAOS）雲端專屬虛擬機：跑的是完整的
                 Home Assistant 作業系統本體，而不是容器化的 Home Assistant Core——因此
                 Supervisor、Add-on 商店、HAOS 系統更新與備份快照全部原生可用，與自架
-                在樹莓派／NUC 上的體驗一致。規格為 2 vCPU、4 GB RAM、30 GB 專屬磁碟。
-                **磁碟與備份**：30 GB 是 HAOS 官方最低需求；Supervisor 在剩餘空間不到 2 GB 時會擋住系統與
+                在樹莓派／NUC 上的體驗一致。規格為 2 vCPU、4 GB RAM、30 GiB（約 32.2 GB）專屬磁碟。
+                **磁碟與備份**：30 GiB 約 32.2 GB，符合 HAOS 官方最低磁碟需求；Supervisor 在剩餘空間不到 2 GB 時會擋住系統與
                 Add-on 更新，所以請把備份存到外部（例如網路共享或雲端），不要存在本機，並留意 Add-on 與
                 錄影的用量。
                 首次開通需匯入作業系統磁碟映像，耗時較一般容器服務長（數分鐘至數十分鐘），
@@ -1454,7 +1454,7 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos</field>
-            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_chart_version">0.1.4</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
                  （UEFI secureBoot=false、masquerade 僅轉 guest :80、limits==requests、
                  DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
@@ -1481,10 +1481,9 @@
                    ImportInProgress，原因埋在 importer pod log 裡（不指向根因）。
                  - persistence.size 30Gi：賣給租戶的磁碟大小（⚠ 與 min_storage_gb 不同，
                    見下方 Resource Requirements 註解）。#1637（使用者 2026-10-10「按需分配，
-                   最大給到 30G」）由 64Gi 改成 30Gi：30 GiB＝32.2 GB，仍符合 HAOS 官方最低 32 GB；
-                   64Gi 在 CDI 實建 67.8 GiB、兩副本預留 135.6G，匯入峰值約 271G，以 31zix 的
-                   排程餘量開一台就可能排不進去。⚠ CDI 會加 filesystem overhead（實測 ×1.059），
-                   實建的 PVC 約 31.8 GiB。
+                   最大給到 30G」）：30 GiB 約 32.2 GB，符合 HAOS 官方最低磁碟需求。
+                   CDI 會加 filesystem overhead（實測 ×1.059），實建 PVC 約 31.8 GiB；匯入峰值
+                   另由 min_storage_gb 覆蓋 target、prime 與 scratch 三顆 PVC。
                  - persistence.volumeMode=Filesystem：🔴 **D1 實證**（#423 W1 PoC 受控
                    A/B，唯一變因＝volumeMode）。`Block` 在本叢集必掛：CDI importer 以
                    UID 107／runAsNonRoot 執行且 pod 層無 fsGroup，而 fsGroup 對 raw
@@ -1521,7 +1520,7 @@
                    故 `_inject_apiserver_cidrs` 的 path_map 也刻意不收 'haos'。
                  - ingress.*：本 chart **沒有** ingress 區塊（對外走平台 subdomain +
                    Cloudflare tunnel）。寫了是死鍵，會讓後人以為 chart 支援 Ingress。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "64Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HAOS 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
