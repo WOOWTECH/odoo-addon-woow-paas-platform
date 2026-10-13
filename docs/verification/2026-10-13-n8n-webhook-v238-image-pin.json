@@ -56,10 +56,32 @@
   "release_gates": [
     "Human mirror approval and JCR digest readback",
     "Human PR review and merge",
-    "Retained QA #250 SQLite clone/restore drill before upgrading its existing data",
     "Live QA service image update and webhook HTTP retest",
     "Separate full commercial acceptance"
   ],
+  "real_qa_sqlite_clone_upgrade_restore": {
+    "source_service_id": 250,
+    "source_pod_uid_unchanged": true,
+    "source_pvc_mounted_read_only": true,
+    "online_sqlite_backup_quick_check": "ok",
+    "source_records": {
+      "users": 1,
+      "workflows": 0,
+      "executions": 0,
+      "credentials": 0
+    },
+    "independent_copies_identical_before_start": true,
+    "clones_egress_denied_and_not_public": true,
+    "upgrade_clone_version": "2.38.0",
+    "upgrade_clone_original_owner_login_http": 200,
+    "restore_clone_version": "2.35.3",
+    "restore_clone_original_owner_login_http": 200,
+    "original_owner_id_same_on_both_clones": true,
+    "temporary_pods_pvcs_pvs_networkpolicy_removed": true,
+    "source_ready_and_image_unchanged_after": true,
+    "limit": "The retained QA source has no workflows, executions or credentials. This was a same-cluster backup/restore drill, not off-cluster disaster recovery.",
+    "evidence": "docs/verification/2026-10-13-n8n250-realqa-sqlite-clone-upgrade-restore.json"
+  },
   "synthetic_sqlite_upgrade": {
     "fixture_scope": "disposable synthetic owner/workflow in owned workspace 58; no existing QA database copied",
     "from_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",

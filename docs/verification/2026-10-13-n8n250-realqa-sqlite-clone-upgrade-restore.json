@@ -1,0 +1,66 @@
+{
+  "recorded_at": "2026-10-13T20:47:16Z",
+  "scope": "Owned QA service #250, workspace 58. In-cluster read-only online SQLite backup to two isolated disposable PVCs. No source deployment change.",
+  "source": {
+    "service_id": 250,
+    "namespace": "paas-ws-d0c4dbde",
+    "pod_uid_before_after": "0468fa6b-6c18-4b0b-bf8b-1e94bae7d186",
+    "pod_ready_after": true,
+    "image_before_after": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+    "pvc": "svc-29833548-n8n",
+    "copier_source_mount_read_only": true,
+    "online_backup_method": "Python sqlite3.Connection.backup from read-only live source SQLite file",
+    "source_record_counts": {
+      "user": 1,
+      "workflow_entity": 0,
+      "execution_entity": 0,
+      "credentials_entity": 0
+    }
+  },
+  "copy": {
+    "consistent_sqlite_backup_quick_check": "ok",
+    "upgrade_restore_copy_counts_equal": true,
+    "upgrade_restore_database_hashes_equal_before_start": true,
+    "other_files_copied_per_clone": 7,
+    "other_file_bytes_per_clone": 99488,
+    "encryption_config_copied_in_cluster_only": true,
+    "clone_egress": "Kubernetes NetworkPolicy denies all egress",
+    "clone_public_service": false
+  },
+  "upgrade_clone": {
+    "image": "docker.io/n8nio/n8n:2.38.0@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "cli_version": "2.38.0",
+    "ready_http": 200,
+    "original_owner_login_http": 200,
+    "setup_required": false,
+    "workflow_list_http": 200,
+    "workflow_count": 0,
+    "credential_list_http": 200,
+    "credential_count": 0
+  },
+  "restore_clone": {
+    "image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+    "cli_version": "2.35.3",
+    "ready_http": 200,
+    "original_owner_login_http": 200,
+    "setup_required": false,
+    "same_original_owner_id_as_upgrade_clone": true,
+    "workflow_list_http": 200,
+    "workflow_count": 0,
+    "credential_list_http": 200,
+    "credential_count": 0
+  },
+  "cleanup": {
+    "copier_pod_deleted": true,
+    "clone_pods_deleted": true,
+    "clone_pvcs_deleted": true,
+    "clone_pvs_absent": true,
+    "clone_networkpolicy_deleted": true,
+    "source_pod_unchanged_ready": true
+  },
+  "limits": [
+    "The retained QA source contains no workflows, executions, or credentials. Their preservation was exercised separately in a disposable synthetic SQLite in-place upgrade.",
+    "Both copies and restore ran within the same k3s cluster; this is not independent off-cluster disaster recovery.",
+    "The existing QA #250 service still runs 2.35.3 and still exhibits the webhook HTTP 200 bug until image mirror, review, merge, rollout, and live retest."
+  ]
+}
