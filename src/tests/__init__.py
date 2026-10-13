@@ -1114,6 +1114,8 @@ from . import test_self_renew_1611
 from . import test_spec_labels_zh_1612
 # #1540：停權／刪除後的限時唯讀資料取回入口（owner／admin、一次性密碼、復權先關、刪除記帳本、cron）。
 from . import test_data_retrieval_1540
+# #1686：資料取回配額不足的租戶訊息只請租戶聯絡客服（不建議停止／刪除服務、不說配額已用完）。
+from . import test_data_retrieval_quota_message_1686
 # #1634：Nextcloud 整台磁碟 20G（四顆 PVC 加總＝方案總量；overlay 扣固定開銷；migration 18.0.1.0.223）。
 from . import test_nextcloud_storage_20g_1634
 # 2026-10-10：「試用中」看實際試用期（sh_trial 試用結束不會被清；略過試用不可對已付費訂閱重複扣款）。
