@@ -15,10 +15,13 @@
   },
   "image": {
     "previous": "jcr-prod.woowtech.io/woow-paas-docker-local/headplane:20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22",
-    "candidate": "ghcr.io/woowtech/headplane:20261013.1819@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "candidate": "jcr-prod.woowtech.io/woow-paas-docker-local/headplane:20261013.1924@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "mirror_source": "ghcr.io/woowtech/headplane@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "mirror_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/294",
+    "mirror_status": "PREFLIGHT_PASSED_AWAITING_HUMAN_APPROVAL_NOT_PUBLISHED",
     "immutable_digest": "sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
     "public_ghcr_pull_on_qa_node": "PASS",
-    "registry_change": "Headplane changes from private JFrog to public WOOWTECH GHCR; Headscale, bootstrap, chart and other containers retain their existing pins"
+    "registry_change": "JCR destination matches the current registry; candidate bytes are the QA-tested WOOWTECH GHCR digest and must be mirrored with --preserve-digests before merge"
   },
   "chart_render": {
     "headplane_matches_candidate": true,
@@ -36,6 +39,6 @@
     "original_image_restored": true,
     "evidence": "docs/verification/2026-10-13-headplane-acl-ssr-qa-canary.json"
   },
-  "odoo_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-odoo-sandbox.json",
-  "release_status": "Candidate seed pin only; current QA service is restored to previous image and still returns ACL HTTP 500. Requires human PR merge, platform release, own service update and post-release regression verification. No commercial acceptance claimed."
+  "prior_ghcr_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-odoo-sandbox.json",
+  "release_status": "Draft candidate seed pin only; JCR mirror approval #294 and exact destination digest verification required before Ready/merge. Current QA service is restored to previous image and still returns ACL HTTP 500. Requires platform release, own service update and post-release regression verification. No commercial acceptance claimed."
 }

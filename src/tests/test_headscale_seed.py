@@ -113,7 +113,7 @@ class TestHeadscaleSeed(TransactionCase):
         }
         self.assertEqual(images['image']['repository'], JCR + 'headscale')
         self.assertEqual(images['bootstrap.image']['repository'], JCR + 'headscale-debug')
-        self.assertEqual(images['headplane.image']['repository'], 'ghcr.io/woowtech/headplane')
+        self.assertEqual(images['headplane.image']['repository'], JCR + 'headplane')
         self.assertEqual(
             images['headplane.image']['tag'].split('@', 1)[1],
             'sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5',
