@@ -263,7 +263,7 @@ class TestTemplateDiskCap1637(TransactionCase):
         self.assertEqual(checked, 82, 'odoo 42＋n8n 40 個變體')
 
     def test_descriptions_match_the_new_sizes(self):
-        for slug, now, before in (('haos', '30 GB 磁碟', '64 GB'),
+        for slug, now, before in (('haos', '30 GiB 磁碟（約 32.2 GB', '64 GB'),
                                   ('ha-full', '10 GB 磁碟', '20 GB'),
                                   ('code-server', '20 GB 磁碟', '25 GB'),
                                   ('emqx', '3 GB 磁碟', '12 GB'),
@@ -276,7 +276,7 @@ class TestTemplateDiskCap1637(TransactionCase):
                 self.assertIn(now, tpl.description)
                 self.assertNotIn(before, tpl.description)
                 self.assertNotIn(before, tpl.full_description or '')
-        self.assertIn('30 GB 專屬磁碟', self._tpl('haos').full_description)
+        self.assertIn('30 GiB（約 32.2 GB）專屬磁碟', self._tpl('haos').full_description)
         self.assertIn('服務附 10 GB 資料磁碟', self._tpl('ha-full').full_description)
         self.assertIn('工作區 16 GB＋AI 助手資料 4 GB', self._tpl('code-server').full_description)
         self.assertIn('Supervisor', self._tpl('haos').full_description)
