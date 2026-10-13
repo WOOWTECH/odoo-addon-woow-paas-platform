@@ -49,8 +49,10 @@
       "sandbox_namespace_removed": true,
       "sandbox_roles_removed": true
     },
-    "mirror_preflight": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/18970",
-    "mirror_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/296",
+    "mirror_preflight": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19040",
+    "mirror_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/299",
+    "mirror_approval_deadline_utc": "2026-10-14T02:05:59Z",
+    "prior_superseded_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/296",
     "mirror_published_at_recording": false
   },
   "release_gates": [
