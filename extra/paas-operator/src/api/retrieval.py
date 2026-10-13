@@ -366,8 +366,8 @@ async def open_retrieval(namespace: str, name: str, request: RetrievalOpenReques
         if "exceeded quota" in (e.stderr or "").lower():
             raise _http_error(dr.RetrievalError(
                 409, dr.QUOTA_EXCEEDED,
-                "The workspace has no CPU/memory quota left for the small retrieval container; "
-                "stop another service in this workspace and retry."))
+                "The workspace does not have enough CPU or memory quota left to start the "
+                "small retrieval container."))
         raise _kubectl_error("create", e)
     except CloudflareException as e:
         await _rollback(f"cloudflare: {e.message}")

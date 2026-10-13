@@ -21777,8 +21777,8 @@ msgstr "找不到這個服務的資料磁碟。"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/data_retrieval.py:0
-msgid "This workspace has no CPU or memory quota left for the download service. Stop another service in this workspace and try again."
-msgstr "這個工作區的 CPU 或記憶體配額已用完，無法啟動下載服務。請先停止工作區內的其他服務再試。"
+msgid "This workspace does not have enough CPU or memory quota left to start the download service. Please contact support."
+msgstr "這個工作區剩餘的 CPU 或記憶體配額不足以啟動下載服務。請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python

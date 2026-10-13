@@ -348,9 +348,13 @@ class DataRetrieval(models.Model):
             ERR_PVC_NOT_FOUND: _("The data disk of this service could not be found."),
             ERR_RETENTION_EXPIRED: _("The retention period of this deleted service's data "
                                      "has ended."),
-            ERR_QUOTA_EXCEEDED: _("This workspace has no CPU or memory quota left for the "
-                                  "download service. Stop another service in this workspace "
-                                  "and try again."),
+            # ⛔ 出口只有「聯絡客服」，不要加回「停止／刪除其他服務再試」：/woow 沒有讓租戶
+            # 停止服務的操作，刪除也換不回空間（理由同 ``cloud_service.py`` 的
+            # ``_compute_quota_error_message``）。也不要寫成配額已滿／用完——常見形狀是
+            # 「還有剩，但不夠啟動」，會與工作區頁配額面板的剩餘量對不起來（#1686）。
+            ERR_QUOTA_EXCEEDED: _("This workspace does not have enough CPU or memory quota "
+                                  "left to start the download service. Please contact "
+                                  "support."),
             ERR_PROFILE_UNKNOWN: _("This service does not support data retrieval."),
         }
         return messages.get(code) or _(
