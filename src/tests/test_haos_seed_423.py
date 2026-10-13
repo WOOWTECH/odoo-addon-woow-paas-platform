@@ -9,7 +9,7 @@ TestHaosQuotaModelling 全部由 seed 的 helm values **現算**、不硬編，�
 就紅。
 
 seed values 的鍵名已對真 chart 核對（`helm show values
-oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos --version 0.1.2`），不是轉抄
+oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos --version 0.1.3`），不是轉抄
 design 草案 —— 草案寫的是 `imagePullSecret`（單數）與 `ingress.enabled`，真 chart
 是 `imagePullSecrets`（複數 list）且**沒有** ingress 區塊。
 
@@ -83,20 +83,19 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
             % vm_templates.mapped('slug'))
 
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 的 charts/haos 0.1.2（OCI，helm_repo_url 空）。
+        """chart＝woow-paas-charts 的 charts/haos 0.1.3（OCI，helm_repo_url 空）。
 
         ⚠ 不是 charts/home-assistant —— 那是容器化的 HA Core（cloud_app_ha_paas）。
 
-        0.1.0 → 0.1.2 直上（跳過 0.1.1，不分兩段）：0.1.1 修的是 DataVolume 誤把
-        dockerconfigjson 當 CDI basic-auth `secretRef`（開通直接卡死），0.1.2 再加上
-        XFF 剝除代理（#479，外部一律 400）。兩個都是 v1 阻斷級，沒有只升一半的理由。
+        0.1.0 → 0.1.3：0.1.1 修 CDI registry credential、0.1.2 加 XFF 剝除代理，
+        0.1.3 將 VM guest targetPort 改為 HAOS onboarding listener :80。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos')
-        self.assertEqual(tpl.helm_chart_version, '0.1.2')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3')
         self.assertNotIn(
             'home-assistant', tpl.helm_chart_name,
             'HAOS（VM）與 home-assistant（容器）是不同 chart、不同產品')
@@ -161,10 +160,10 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
         values = self._values()
         self.assertEqual(values['vm']['cores'], 2)
         self.assertEqual(values['vm']['memory'], '4Gi')
-        self.assertEqual(values['persistence']['size'], '30Gi')
+        self.assertEqual(values['persistence']['size'], '64Gi')
 
     def test_service_port_matches_default_port(self):
-        """service.port/targetPort 8123 ＝ default_port（HAOS 前台埠）。
+        """Service :8123 ＝ default_port；guest targetPort :80 ＝ HAOS UI listener。
 
         operator 的 Cloudflare expose 取「名稱排序第一個非 headless Service」＋
         http-like port —— 兩邊對不上就是 CF 502。
@@ -184,7 +183,7 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
         """
         values, tpl = self._values(), self._tpl()
         self.assertEqual(values['service']['port'], 8123)
-        self.assertEqual(values['service']['targetPort'], 8123)
+        self.assertEqual(values['service']['targetPort'], 80)
         self.assertEqual(values['service']['port'], tpl.default_port)
 
         release = 'svc-c7187a7a'
