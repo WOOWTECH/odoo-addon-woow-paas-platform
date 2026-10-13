@@ -38,7 +38,7 @@ export class ResourceUsage extends Component {
     if (this.props.observation?.workload_type === "vm") {
       return _t("Virtual machine capacity is shown when available. Live guest usage is not yet supported.");
     }
-    return _t("Includes this service's replicas, sidecars and databases. CPU is a 2-minute average. Storage counts each persistent volume once.");
+    return _t("Includes this service's replicas, sidecars and databases. CPU is a 5-minute average. Storage counts each persistent volume once.");
   }
   get valueHint() { return _t("Usage / effective limit or capacity"); }
   get observedLabel() { return _t("Sampled at %s", this.sampledAt); }

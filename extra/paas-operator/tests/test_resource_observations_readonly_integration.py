@@ -51,9 +51,11 @@ def test_existing_release_live_resource_observations(monkeypatch):
     result = response.json()
     assert set(result["services"]) == set(names)
     assert result["observed_at"]
+    assert result["refresh_seconds"] == 30
     for observation in result["services"].values():
         assert observation["pods"]["running"] > 0
         assert observation["cpu"]["status"] == "ok", observation
+        assert observation["cpu"]["window_seconds"] == 300
         assert observation["memory"]["status"] == "ok", observation
         assert observation["cpu"]["sampled_at"]
         assert observation["memory"]["usage"] > 0
