@@ -11,6 +11,7 @@ from psycopg2.errors import SerializationFailure
 
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests.common import TransactionCase, tagged
+from odoo.tools import mute_logger
 
 from ..models.smart_home import _IDENTITY_ANCHOR_FIELDS, _is_internal_identity_write
 from ..services.paas_operator import (
@@ -84,11 +85,18 @@ class TestCleanupTunnel859(TransactionCase):
             try:
                 getattr(home, entry)()
             except UserError as caught:
+                injected.assert_called_once_with()
+                client.delete_tunnel.assert_called_once_with(
+                    'tunnel-859', tunnel_name='name-859')
                 self.assertNotIn('still live and billed', str(caught))
                 self.assertIn('deleted in Cloudflare', str(caught))
                 self.assertIn('local identity anchors', str(caught))
                 self.assertNotIn(str(error), str(caught))
                 self.assertIs(caught.__cause__, error)
+                if isinstance(error, AccessError):
+                    self.assertIn('permission error', str(caught))
+                else:
+                    self.assertNotIn('permission error', str(caught))
             else:
                 self.fail('delete 已成功，但 bookkeeping 失敗被吞掉')
             injected.assert_called_once_with()
@@ -141,6 +149,7 @@ class TestCleanupTunnel859(TransactionCase):
                     log.warning.assert_not_called()
                 self._assert_anchors_kept(home)
 
+    @mute_logger('odoo.sql_db')
     def test_sql_failure_recovers_cursor_and_preserves_anchors(self):
         home = self._home()
         client = MagicMock()
@@ -150,7 +159,7 @@ class TestCleanupTunnel859(TransactionCase):
             records.env.cr.execute('SELECT 1 / 0')
 
         with patch(_CLIENT, return_value=client), patch.object(
-                self.Model, 'write', sql_failure):
+                self.Model, 'write', sql_failure), patch(_LOGGER):
             try:
                 home._cleanup_tunnel()
             except UserError as caught:
@@ -186,7 +195,7 @@ class TestCleanupTunnel859(TransactionCase):
     def test_client_acquisition_failure_still_keeps_anchors(self):
         home = self._home()
         with patch(_CLIENT, side_effect=UserError('operator config 859')), patch(
-                self.Model.__module__ + '._logger') as log:
+                _LOGGER) as log:
             home._cleanup_tunnel()
             log.warning.assert_called_once()
             self.assertIn('kept for retry', log.warning.call_args.args[0])
