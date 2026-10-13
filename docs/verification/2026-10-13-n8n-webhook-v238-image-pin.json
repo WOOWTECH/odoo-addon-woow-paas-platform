@@ -1,0 +1,63 @@
+{
+  "recorded_at": "2026-10-13T20:26:13.377708+00:00",
+  "problem": {
+    "own_qa_service_id": 250,
+    "deployed_version": "2.35.3",
+    "webhook_http": 200,
+    "webhook_body_bytes": 0,
+    "native_execution_status": "error",
+    "qa_evidence": "evidence/n8n250-webhook-error-retest-20261013.json"
+  },
+  "upstream": {
+    "fix_pr": "https://github.com/n8n-io/n8n/pull/37006",
+    "release": "https://github.com/n8n-io/n8n/releases/tag/n8n%402.38.0",
+    "source_image": "docker.io/n8nio/n8n@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce"
+  },
+  "isolated_app_probe": {
+    "same_owner_workspace_id": 58,
+    "separate_emptydir_pod": true,
+    "image_id": "docker.io/n8nio/n8n@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "owner_setup_login_api_key_workflow_activation_pass": true,
+    "success_http": 200,
+    "unhandled_error_http": 500,
+    "unhandled_error_body": {
+      "message": "Error in workflow"
+    },
+    "execution_statuses": [
+      "error",
+      "success"
+    ],
+    "pod_removed": true,
+    "existing_service_image_unchanged": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+    "existing_service_ready": true,
+    "evidence": "evidence/n8n238-isolated-webhook-20261013.json"
+  },
+  "platform_candidate": {
+    "chart": "oci://8gears.container-registry.com/library/n8n",
+    "chart_version": "2.0.1",
+    "helm_rendered_objects": 7,
+    "helm_rendered_n8n_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261013.2012@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "odoo_isolated_db": {
+      "module_version": "18.0.1.0.230",
+      "tests_passed": 3,
+      "failed": 0,
+      "errors": 0,
+      "noupdate": false,
+      "seed_image_tag": "20261013.2012@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+      "initial_test_expectation_corrected": true,
+      "corrected_module_upgrade_tests_passed": true,
+      "sandbox_namespace_removed": true,
+      "sandbox_roles_removed": true
+    },
+    "mirror_preflight": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/18970",
+    "mirror_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/296",
+    "mirror_published_at_recording": false
+  },
+  "release_gates": [
+    "Human mirror approval and JCR digest readback",
+    "Human PR review and merge",
+    "Isolated existing-data SQLite upgrade/restore drill before changing retained QA service",
+    "Live QA service image update and webhook HTTP retest",
+    "Separate full commercial acceptance"
+  ]
+}

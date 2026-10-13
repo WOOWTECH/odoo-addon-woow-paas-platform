@@ -105,8 +105,10 @@
                  不可用；Docker Hub 匿名拉取還有次數上限。改成 JCR 鏡像（paas-odoo-ci
                  mirror-image.yml，paas-odoo-ci#250；skopeo 保留原 digest，與來源 docker.io/n8nio/n8n:2.35.3 的 linux/amd64 manifest
                  逐字相同）。
-                 2.35.3＝正式站已在跑的 2.x 版本；operator 的 n8n init（owner/setup、login、
-                 api-keys/scopes、api-keys）已在乾淨的 2.35.3 上逐步實測通過。
+                 2.35.3＝正式站仍在跑的 2.x 版本。上游 n8n#37006 修正 Respond 節點前
+                 工作流失敗卻回 HTTP200 空 body，2.38.0 是含該修補的已發布版本。
+                 隔離 2.38.0 Pod 已實測 owner/setup、login、API key、workflow 與
+                 成功200／提前失敗500；既有 SQLite 資料庫的版本遷移仍須另行驗證。
                  ⚠ 既有沒有自帶 image 的服務（目前只有 stg svc-16e7ac1a，1.122.4、已縮 0）下次
                  redeploy 會跟著升到 2.x（n8n 資料庫遷移是單向的）。 -->
             <!-- main.secret.N8N_API_KEY 預留位置（#1471）：8gears chart 只有 main.secret 有值時才建
@@ -127,7 +129,7 @@
                  _TEMPLATE_POLICY_VALUE_PATHS，既有服務 Redeploy 時也照這裡。min_ram_gb 2.0＝T1。 -->
             <field name="helm_default_values">{
                 "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n",
-                "tag": "20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2"},
+                "tag": "20261013.2012@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce"},
                 "main":
                 {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
                 "N8N_PUBLIC_API_ENABLED": "true"},
