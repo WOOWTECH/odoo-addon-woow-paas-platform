@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AI 模型閘道（LiteLLM）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/litellm 0.3.1（0.3.1＝停存 prompt 與 PostgreSQL CPU limit 1；0.3.0＝LiteLLM 1.104.0，與 HA add-on 同一顆映像；0.2.5＝名稱空白／重複帳號修正；0.2.4＝304 修正；0.2.3＝多個 ChatGPT 帳號；0.1.0＝#123；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt 在 LiteLLM 內；0.2.2＝後台 Add Credential 子畫面）——litellm-non_root 1.104.0（uid 65534）
+契約來源：woow-paas-charts charts/litellm 0.3.2（0.3.2＝改帳密時撤銷後台 session、Router metadata 補齊；0.3.1＝停存 prompt 與 PostgreSQL CPU limit 1；0.3.0＝LiteLLM 1.104.0，與 HA add-on 同一顆映像；0.2.5＝名稱空白／重複帳號修正；0.2.4＝304 修正；0.2.3＝多個 ChatGPT 帳號；0.1.0＝#123；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt 在 LiteLLM 內；0.2.2＝後台 Add Credential 子畫面）——litellm-non_root 1.104.0（uid 65534）
 ＋內附 PostgreSQL（平台 paas-postgres 17.11），唯一入口 ``<release>-litellm:4000``、只有一顆 PVC。
 UI 帳號＝``auth.adminUser``（預設 admin，可改）、密碼＝``config.sensitive.admin_password``；master key＝平台 #530 gateway
 key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、不需 ``sk-`` 前綴）。
@@ -75,12 +75,13 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.3.1',
+        self.assertEqual(tpl.helm_chart_version, '0.3.2',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
                          '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt；'
                          '0.2.2＝後台 Add Credential 選 ChatGPT 跳出登入方式子畫面；0.2.3＝多個 ChatGPT 帳號；'
                          '0.2.4＝舊快取後台頁面也載入 bridge；0.2.5＝名稱空白／舊憑證／重複帳號修正；'
-                         '0.3.0＝LiteLLM 1.104.0；0.3.1＝停存 prompt 與 PostgreSQL CPU limit 1')
+                         '0.3.0＝LiteLLM 1.104.0；0.3.1＝停存 prompt 與 PostgreSQL CPU limit 1；'
+                         '0.3.2＝改帳密時撤銷後台 session、Router metadata 補齊')
 
     def test_chatgpt_login_inside_litellm(self):
         """chart 0.2.1 起 ChatGPT 訂閱登入在 LiteLLM 自己的 /woow/chatgpt（用 LiteLLM 管理員登入）；
@@ -120,9 +121,9 @@ class TestLitellmSeed(TransactionCase):
         self.assertRegex(v['image']['tag'], PINNED_TAG_RE)
         self.assertTrue(
             v['image']['tag'].endswith(
-                '@sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e'),
-            'chart 0.3.0 起 litellm-non_root 1.104.0（上游 index digest）；HA「Woow LiteLLM」add-on 用同一顆，'
-            '兩邊一起升版')
+                '@sha256:f34a2d595aea1e0d8bd1c7a152e18c05cfaea331687ed7710fdb2fcb82fe3e14'),
+            'chart 0.3.2 配 litellm 20261014.0718（paas-odoo-ci 核可 #313；LiteLLM 1.104.0 加 SSE／API／'
+            '安全標頭整合）；0.3.0 起是 1.104.0，HA「Woow LiteLLM」add-on 同版一起升')
         pg = v['postgresql']['image']
         self.assertEqual(pg['repository'], JCR + 'paas-postgres')
         self.assertRegex(pg['tag'], PG_PINNED_TAG_RE,
