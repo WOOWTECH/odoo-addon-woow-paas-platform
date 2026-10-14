@@ -341,7 +341,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.3.4。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.3.6。
 
         版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
         0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
@@ -352,7 +352,8 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         StatefulSet，#1398）→ 0.3.1（charts #138：認得平台注入的 llmGateway.baseUrl，
         網址非空才開 networkPolicy.litellmEgress；見 cloud_service._LITELLM_BASE_URL_VALUE_PATHS）
         → 0.3.2（#1441 工作區＝區網）→ 0.3.3（#1537：去 NET_RAW、/console uid 10000、台北時區）
-        → 0.3.4（#1556：MINIMAX／OPENROUTER 金鑰一律輸出，清除後 agent 不留舊值）。
+        → 0.3.4（#1556：MINIMAX／OPENROUTER 金鑰一律輸出，清除後 agent 不留舊值）
+        → 0.3.6（charts #188：Hermes Agent 0.21.6，image 同步改釘 20261014.0625）。
         這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
         artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
         跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
@@ -368,7 +369,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.3.4')
+        self.assertEqual(tpl.helm_chart_version, '0.3.6')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
