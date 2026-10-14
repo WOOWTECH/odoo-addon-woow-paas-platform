@@ -1,0 +1,38 @@
+{
+  "at": "2026-10-13T19:21:31Z",
+  "service_id": 246,
+  "workspace_id": 55,
+  "namespace_uid": "81994a4d-a4b5-459a-b53b-827bc01ef3a3",
+  "job_uid": "2f373549-c7ca-42fa-8344-bd0e0e9d4bff",
+  "pod_uid": "91d773a4-ec51-41cf-b1b7-98ff91dd7a5e",
+  "original_image": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261007.0720@sha256:51880f0edb7e0357f395f88f4bc3c4e1dfc3df06e46cffb55ae6700c1dfd82b2",
+  "candidate_image": "ghcr.io/woowtech/omnigent-host:0.17.0-mcp-proxy-qa-20261013@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+  "candidate_ready": true,
+  "restored_ready": true,
+  "identical_canary_put_submitted": true,
+  "model_requests": 0,
+  "other_files_read": 0,
+  "before_list_error_code": -32000,
+  "before_list_count": 0,
+  "candidate_image_id": "ghcr.io/woowtech/omnigent-host@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+  "candidate_restart_count": 3,
+  "job_template_image_preserved": true,
+  "candidate_initialize_attempts": [
+    {
+      "result": true,
+      "error_code": null
+    }
+  ],
+  "identical_canary_put_http": 200,
+  "candidate_tool_count": 32,
+  "candidate_sys_os_read_advertised": true,
+  "candidate_unknown_tool_error_code": -32602,
+  "candidate_unknown_tool_result_present": false,
+  "candidate_own_canary_returned": true,
+  "candidate_canary_sha_preserved": true,
+  "restored_image_id": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host@sha256:51880f0edb7e0357f395f88f4bc3c4e1dfc3df06e46cffb55ae6700c1dfd82b2",
+  "server_containers_preserved": true,
+  "watchdog_cancelled_after_restoration": true,
+  "pass": true,
+  "finished_at": "2026-10-13T19:22:04Z"
+}
