@@ -2,8 +2,12 @@
 
 A normal request only enqueues. Private worker stages own independent registry
 cursors; no HTTP cursor is committed here. Unknown first-create results are
-quarantined, never adopted/deleted/recreated automatically. This is a prototype,
-not a provider exactly-once or full commercial recovery implementation.
+quarantined and never deleted/compensated. With the separate, also off-default
+reconcile flag, a quarantined unknown outcome is resolved only from an
+authoritative provider inventory read: exactly one live tunnel carrying the
+intent's unique name is adopted; a twice-confirmed absence is re-queued at most
+once; anything else stays a manual state. This is a prototype, not a provider
+exactly-once or full commercial recovery implementation.
 """
 from datetime import timedelta
 import logging
@@ -12,11 +16,15 @@ import uuid
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
+from ..services.paas_operator import get_paas_operator_client
 from .smart_home import _internal_identity
 
 _logger = logging.getLogger(__name__)
 _MODEL = 'woow_paas_platform.smart_home_provision_operation'
 _FLAG = 'woow_paas_platform.shc_durable_provision_prototype_enabled'
+_RECONCILE_FLAG = 'woow_paas_platform.shc_durable_provision_reconcile_enabled'
+_RETENTION_KEY = 'woow_paas_platform.shc_durable_provision_retention_days'
+_DEFAULT_RETENTION_DAYS = 30
 _CAP_KEY = 'woow_shc_provision_operation_capability'
 _CAPABILITY = object()
 _PHASES = (
@@ -27,6 +35,130 @@ _PHASES = (
     ('recovery_required', 'Confirmation required'),
     ('completed', 'Completed'),
 )
+# Only these quarantines mean "a create POST may have reached the provider".
+# Pre-create refusals and local anchor mismatches stay manual.
+_UNKNOWN_OUTCOME_CODES = (
+    'create_outcome_unknown', 'create_worker_interrupted', 'anchor_commit_failed',
+)
+_CLAIM_LEASE = timedelta(minutes=5)
+# Absence must be observed twice, this far apart. It exceeds every in-flight
+# window of one create: 5 min worker lease, 120 s client connect/read timeout
+# (HELM_OPERATION_TIMEOUT) and the operator's 30 s Cloudflare timeout.
+_ABSENCE_SETTLE = timedelta(minutes=15)
+_RECONCILE_BACKOFF_BASE = timedelta(minutes=5)
+_WORKER_BACKOFF_BASE = timedelta(minutes=1)
+_BACKOFF_CAP = timedelta(hours=6)
+_RECONCILE_MAX_OBSERVATIONS = 8
+_MAX_CREATE_ATTEMPTS = 2
+_PURGE_BATCH = 100
+
+
+def _backoff(base, count):
+    """Exponential delay for the ``count``-th consecutive failure, capped."""
+    return min(base * (2 ** min(max(count - 1, 0), 16)), _BACKOFF_CAP)
+
+
+def _parse_observation(binding_before, inventory, binding_after, operator_url):
+    """Normalize one provider read. Never raises; malformed means not ok.
+
+    The inventory carries no account id, so the provider binding is read
+    before and after it. A changed or malformed binding is never treated as
+    evidence about any intent.
+    """
+    accounts = []
+    for binding in (binding_before, binding_after):
+        account = binding.get('provider_account_id') if isinstance(binding, dict) else None
+        if not isinstance(account, str) or not account:
+            return {'ok': False, 'reason': 'binding_malformed'}
+        accounts.append(account)
+    if not isinstance(inventory, dict):
+        return {'ok': False, 'reason': 'inventory_malformed'}
+    resources = inventory.get('resources')
+    partial = inventory.get('partial')
+    failed_kinds = inventory.get('failed_kinds', [])
+    paas_env = inventory.get('paas_env')
+    if (
+        not isinstance(resources, list) or not isinstance(partial, bool)
+        or not isinstance(failed_kinds, list) or not isinstance(paas_env, str)
+    ):
+        return {'ok': False, 'reason': 'inventory_malformed'}
+    if partial or failed_kinds:
+        # A partial list cannot prove absence or uniqueness.
+        return {'ok': False, 'reason': 'inventory_partial'}
+    tunnels = {}
+    for resource in resources:
+        if not isinstance(resource, dict):
+            return {'ok': False, 'reason': 'inventory_malformed'}
+        if resource.get('kind') != 'tunnel':
+            continue
+        tunnel_id, name = resource.get('id'), resource.get('name')
+        if not isinstance(tunnel_id, str) or not isinstance(name, str):
+            return {'ok': False, 'reason': 'inventory_malformed'}
+        tunnels.setdefault(name, []).append(tunnel_id)
+    return {
+        'ok': True,
+        'binding_stable': accounts[0] == accounts[1],
+        'account': accounts[0],
+        'paas_env': paas_env,
+        'operator_url': operator_url,
+        'tunnels_by_name': tunnels,
+    }
+
+
+def _reconcile_decision(state, observation, now):
+    """Pure decision for one unknown-outcome intent (no I/O, no writes).
+
+    Returns ``{'action': adopt|requeue|absent_wait|backoff|manual, ...}``.
+    Authority is re-validated by the caller before adopt/requeue.
+    """
+    def backoff(reason):
+        count = state['retry_count'] + 1
+        if count >= _RECONCILE_MAX_OBSERVATIONS:
+            return {'action': 'manual', 'code': 'reconcile_exhausted', 'reason': reason}
+        return {
+            'action': 'backoff', 'reason': reason, 'retry_count': count,
+            'next_attempt_at': now + _backoff(_RECONCILE_BACKOFF_BASE, count),
+        }
+
+    def manual(code):
+        return {'action': 'manual', 'code': code}
+
+    if not observation.get('ok'):
+        return backoff(observation.get('reason') or 'observation_failed')
+    if (
+        not observation['binding_stable']
+        or observation['account'] != state['provider_account_id']
+        or observation['operator_url'] != state['operator_url']
+    ):
+        return manual('reconcile_binding_changed')
+    if observation['paas_env'] != (state['deploy_env'] or 'prod'):
+        return backoff('environment_mismatch')
+    matches = observation['tunnels_by_name'].get(state['tunnel_name'], [])
+    known = [value for value in (state['remote_tunnel_id'], state['home_tunnel_id']) if value]
+    if len(matches) > 1:
+        return manual('reconcile_duplicate')
+    if len(matches) == 1:
+        try:
+            tunnel_id = str(uuid.UUID(matches[0]))
+        except (TypeError, ValueError, AttributeError):
+            return manual('reconcile_identity_conflict')
+        if any(value != tunnel_id for value in known):
+            return manual('reconcile_identity_conflict')
+        return {'action': 'adopt', 'tunnel_id': tunnel_id}
+    if known:
+        # A provider id was received once; its disappearance is not absence of
+        # a create and never authorizes another one.
+        return manual('reconcile_anchor_missing')
+    absent_since = state['absent_since']
+    if not absent_since or now < absent_since + _ABSENCE_SETTLE:
+        first = absent_since or now
+        return {
+            'action': 'absent_wait', 'absent_since': first,
+            'next_attempt_at': first + _ABSENCE_SETTLE,
+        }
+    if max(state['create_attempts'], 1) >= _MAX_CREATE_ATTEMPTS:
+        return manual('reconcile_absent_after_retry')
+    return {'action': 'requeue'}
 
 
 def _internal_operation(records):
@@ -67,6 +199,12 @@ class SmartHomeProvisionOperation(models.Model):
     lease_until = fields.Datetime(readonly=True)
     remote_tunnel_id = fields.Char(readonly=True, index=True)
     error_code = fields.Char(readonly=True)
+    # Scheduling/reconcile bookkeeping; never part of the immutable intent.
+    retry_count = fields.Integer(readonly=True, default=0)
+    next_attempt_at = fields.Datetime(readonly=True, index=True)
+    create_attempts = fields.Integer(readonly=True, default=0)
+    reconcile_generation = fields.Char(readonly=True)
+    absent_since = fields.Datetime(readonly=True)
 
     _sql_constraints = [
         ('operation_uuid_unique', 'unique(operation_uuid)', 'Provision operation must be unique.'),
@@ -96,11 +234,31 @@ class SmartHomeProvisionOperation(models.Model):
         return super().write(vals)
 
     def unlink(self):
-        raise AccessError(_('Provision recovery records are retained by the platform.'))
+        # Retention: only the platform may remove, and only terminal completed
+        # rows. Unfinished and manual-review rows are kept indefinitely.
+        if self.env.context.get(_CAP_KEY) is not _CAPABILITY or any(
+            operation.phase != 'completed' for operation in self
+        ):
+            raise AccessError(_('Provision recovery records are retained by the platform.'))
+        return super().unlink()
 
     @api.model
     def _enabled(self):
         return self.env['ir.config_parameter'].sudo().get_param(_FLAG, 'False') == 'True'
+
+    @api.model
+    def _reconcile_enabled(self):
+        return self.env['ir.config_parameter'].sudo().get_param(
+            _RECONCILE_FLAG, 'False') == 'True'
+
+    @api.model
+    def _retention_days(self):
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            _RETENTION_KEY, str(_DEFAULT_RETENTION_DAYS))
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return _DEFAULT_RETENTION_DAYS
 
     @api.model
     def _for_home(self, home):
@@ -158,6 +316,8 @@ class SmartHomeProvisionOperation(models.Model):
             # This ordinary request transaction records the queued retry. No
             # provider call, journal identity change, or manual HTTP commit.
             home.write({'state': 'provisioning', 'error_message': False})
+            # An explicit retry is due immediately, ahead of backed-off rows.
+            _internal_operation(self).write({'next_attempt_at': False})
         return self._accepted()
 
     @api.model
@@ -264,9 +424,17 @@ class SmartHomeProvisionOperation(models.Model):
             op = _internal_operation(env[_MODEL].browse(operation_id))
             if not op.exists() or not op._lock() or op.generation != generation:
                 return
+            if unknown:
+                schedule = {'retry_count': 0, 'next_attempt_at': False, 'absent_since': False}
+            else:
+                count = op.retry_count + 1
+                schedule = {
+                    'retry_count': count,
+                    'next_attempt_at': fields.Datetime.now() + _backoff(_WORKER_BACKOFF_BASE, count),
+                }
             op.write({
                 'phase': 'recovery_required' if unknown else 'anchored',
-                'error_code': code, 'lease_until': False,
+                'error_code': code, 'lease_until': False, **schedule,
             })
             op.home_id.write({
                 'state': 'error',
@@ -294,7 +462,10 @@ class SmartHomeProvisionOperation(models.Model):
             if op.phase == 'create_unknown':
                 if op.lease_until and op.lease_until > now:
                     return 'busy'
-                op.write({'phase': 'recovery_required', 'error_code': 'create_worker_interrupted'})
+                op.write({
+                    'phase': 'recovery_required', 'error_code': 'create_worker_interrupted',
+                    'retry_count': 0, 'next_attempt_at': False, 'absent_since': False,
+                })
                 op.home_id.write({'state': 'error', 'error_message': _('Setup needs confirmation before retry.')})
                 return 'recovery_required'
             if op.phase == 'converging' and op.lease_until and op.lease_until > now:
@@ -326,6 +497,7 @@ class SmartHomeProvisionOperation(models.Model):
                 'phase': 'create_unknown' if create else 'converging',
                 'generation': generation, 'lease_until': now + timedelta(minutes=5),
                 'error_code': False,
+                'create_attempts': op.create_attempts + (1 if create else 0),
             })
             snapshot = {
                 'name': op.tunnel_name, 'account': op.provider_account_id,
@@ -399,10 +571,14 @@ class SmartHomeProvisionOperation(models.Model):
                 op._validate_home(op.home_id, op.requester_id, op)
                 op.home_id._converge_existing_tunnel()
                 done = op.home_id.state == 'active'
+                count = 0 if done else op.retry_count + 1
                 op.write({
                     'phase': 'completed' if done else 'anchored',
                     'error_code': False if done else 'configuration_incomplete',
                     'lease_until': False,
+                    'retry_count': count,
+                    'next_attempt_at': False if done else (
+                        fields.Datetime.now() + _backoff(_WORKER_BACKOFF_BASE, count)),
                 })
                 return 'completed' if done else 'anchored'
         except Exception:
@@ -410,21 +586,221 @@ class SmartHomeProvisionOperation(models.Model):
             return 'anchored'
 
     @api.model
+    def _worker_candidates(self, limit=10):
+        """Due rows, fairest first: never-failed/explicitly retried rows (no
+        ``next_attempt_at``) precede backed-off failures, so a block of
+        permanently failing anchored rows cannot starve new intents."""
+        now = fields.Datetime.now()
+        return self.sudo().search([
+            '|', '|',
+            ('phase', '=', 'queued'),
+            '&', ('phase', '=', 'anchored'),
+            '|', ('next_attempt_at', '=', False), ('next_attempt_at', '<=', now),
+            '&', ('phase', 'in', ['create_unknown', 'converging']),
+            '|', ('lease_until', '=', False), ('lease_until', '<=', now),
+        ], limit=limit, order='next_attempt_at asc nulls first, id')
+
+    @api.model
     def _cron_process(self, limit=10):
         if not self._enabled():
             return
-        now = fields.Datetime.now()
-        operations = self.sudo().search([
-            '|', ('phase', 'in', ['queued', 'anchored']),
-            '&', ('phase', 'in', ['create_unknown', 'converging']),
-            '|', ('lease_until', '=', False), ('lease_until', '<=', now),
-        ], limit=limit, order='id')
-        for operation in operations:
+        if self._reconcile_enabled():
+            try:
+                self._reconcile_batch(limit=limit)
+            except Exception:
+                _logger.warning('SHC provision reconcile pass stopped')
+        for operation in self._worker_candidates(limit):
             try:
                 self._process_one(operation.id)
             except Exception:
                 # Sanitized classification only; known durable markers remain.
                 _logger.warning('SHC provision worker stopped operation=%s', operation.operation_uuid)
+        try:
+            self._purge_completed()
+        except Exception:
+            _logger.warning('SHC provision retention pass stopped')
+
+    # ------------------------------------------------------------------ #
+    #  Retention                                                          #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _purge_completed(self, limit=_PURGE_BATCH):
+        """Drop completed rows older than the retention window (<=0 keeps all)."""
+        days = self._retention_days()
+        if days <= 0:
+            return 0
+        cutoff = fields.Datetime.now() - timedelta(days=days)
+        operations = self.sudo().search([
+            ('phase', '=', 'completed'), ('write_date', '<', cutoff),
+        ], limit=limit, order='write_date, id')
+        count = len(operations)
+        if operations:
+            _internal_operation(operations).unlink()
+        return count
+
+    # ------------------------------------------------------------------ #
+    #  Authoritative reconcile of unknown create outcomes                 #
+    # ------------------------------------------------------------------ #
+
+    def _reconcile_due(self, now):
+        self.ensure_one()
+        return (
+            self.phase == 'recovery_required'
+            and self.error_code in _UNKNOWN_OUTCOME_CODES
+            and (not self.next_attempt_at or self.next_attempt_at <= now)
+        )
+
+    @api.model
+    def _reconcile_candidates(self, limit=10):
+        now = fields.Datetime.now()
+        return self.sudo().search([
+            ('phase', '=', 'recovery_required'),
+            ('error_code', 'in', list(_UNKNOWN_OUTCOME_CODES)),
+            '|', ('next_attempt_at', '=', False), ('next_attempt_at', '<=', now),
+        ], limit=limit, order='next_attempt_at asc nulls first, id')
+
+    def _reconcile_state(self):
+        self.ensure_one()
+        return {
+            'tunnel_name': self.tunnel_name,
+            'provider_account_id': self.provider_account_id,
+            'operator_url': self.operator_url,
+            'deploy_env': self.deploy_env,
+            'remote_tunnel_id': self.remote_tunnel_id or False,
+            'home_tunnel_id': self.home_id.tunnel_id or False,
+            'retry_count': self.retry_count,
+            'create_attempts': self.create_attempts,
+            'absent_since': self.absent_since,
+        }
+
+    @api.model
+    def _reconcile_observe(self):
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return {'ok': False, 'reason': 'operator_unconfigured'}
+        try:
+            before = client.get_tunnel_provider_binding()
+            inventory = client.get_reconcile_inventory()
+            after = client.get_tunnel_provider_binding()
+        except Exception:
+            # Unavailable is never absence; classification only, no body.
+            return {'ok': False, 'reason': 'provider_unavailable'}
+        return _parse_observation(before, inventory, after, client.base_url)
+
+    @api.model
+    def _reconcile_batch(self, limit=10):
+        """Claim due unknown-outcome rows, read the provider once, then apply.
+
+        Claims commit a short lease before any provider read, so a killed
+        reconciler only delays a row and two reconcilers never both observe it.
+        Apply re-locks and requires the same claim token.
+        """
+        if not (self._enabled() and self._reconcile_enabled()):
+            return {}
+        claimed = []
+        for operation_id in self._reconcile_candidates(limit).ids:
+            token = str(uuid.uuid4())
+            with self.env.registry.cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                op = _internal_operation(env[_MODEL].browse(operation_id))
+                now = fields.Datetime.now()
+                if not op.exists() or not op._lock() or not op._reconcile_due(now):
+                    continue
+                op.write({
+                    'reconcile_generation': token,
+                    'next_attempt_at': now + _CLAIM_LEASE,
+                })
+            claimed.append((operation_id, token))
+        if not claimed:
+            return {}
+        observation = self._reconcile_observe()
+        outcomes = {}
+        for operation_id, token in claimed:
+            try:
+                outcomes[operation_id] = self._reconcile_apply(operation_id, token, observation)
+            except Exception:
+                # The claim lease expires; the row is retried later.
+                _logger.warning('SHC provision reconcile stopped operation_id=%s', operation_id)
+                outcomes[operation_id] = 'error'
+        return outcomes
+
+    @api.model
+    def _reconcile_apply(self, operation_id, token, observation):
+        with self.env.registry.cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            op = _internal_operation(env[_MODEL].browse(operation_id))
+            if not op.exists() or not op._lock():
+                return 'busy'
+            if (
+                op.reconcile_generation != token or op.phase != 'recovery_required'
+                or op.error_code not in _UNKNOWN_OUTCOME_CODES
+            ):
+                return 'stale'
+            now = fields.Datetime.now()
+            home = op.home_id
+            decision = _reconcile_decision(op._reconcile_state(), observation, now)
+            action = decision['action']
+            evidence = decision.get('tunnel_id')
+            if action in ('adopt', 'requeue'):
+                try:
+                    op._validate_home(home, op.requester_id, op)
+                except AccessError:
+                    decision = {'action': 'manual', 'code': 'reconcile_authority_invalid'}
+                except UserError:
+                    decision = {'action': 'manual', 'code': 'reconcile_intent_invalid'}
+                action = decision['action']
+            values = {'reconcile_generation': False}
+            if action == 'adopt':
+                _internal_identity(home).write({
+                    'tunnel_id': evidence, 'tunnel_name': op.tunnel_name,
+                    'subdomain': op.subdomain,
+                    'tunnel_route': 'https://' + op.subdomain + '.' + op.paas_domain,
+                    'state': 'provisioning', 'error_message': False,
+                })
+                values.update({
+                    'remote_tunnel_id': evidence, 'phase': 'anchored', 'error_code': False,
+                    'retry_count': 0, 'next_attempt_at': False, 'absent_since': False,
+                })
+                outcome = 'adopted'
+            elif action == 'requeue':
+                home.write({'state': 'provisioning', 'error_message': False})
+                values.update({
+                    'phase': 'queued', 'error_code': False, 'retry_count': 0,
+                    'next_attempt_at': False, 'absent_since': False,
+                })
+                outcome = 'requeued'
+            elif action == 'absent_wait':
+                values.update({
+                    'absent_since': decision['absent_since'],
+                    'next_attempt_at': decision['next_attempt_at'],
+                })
+                outcome = 'absent_wait'
+            elif action == 'backoff':
+                values.update({
+                    'retry_count': decision['retry_count'],
+                    'next_attempt_at': decision['next_attempt_at'],
+                })
+                outcome = 'backoff'
+            else:
+                if evidence and not op.remote_tunnel_id:
+                    # Provider-confirmed id is kept as evidence only; the home
+                    # stays unbound and no token/configuration is requested.
+                    values['remote_tunnel_id'] = evidence
+                values.update({
+                    'error_code': decision['code'], 'next_attempt_at': False,
+                    'absent_since': False,
+                })
+                home.write({
+                    'state': 'error',
+                    'error_message': _(
+                        'Setup needs confirmation. Reference: %(operation)s',
+                        operation=op.operation_uuid,
+                    ),
+                })
+                outcome = decision['code']
+            op.write(values)
+            return outcome
 
 
 class SmartHomeDurableProvisionPrototype(models.Model):
@@ -449,8 +825,15 @@ class SmartHomeDurableProvisionPrototype(models.Model):
         return data
 
     def unlink(self):
-        # Conservative prototype: retain all journal-bearing homes, including
-        # completed ones, until a separate verified cleanup/retention design.
-        if self.env[_MODEL].sudo().search_count([('home_id', 'in', self.ids)]):
+        # Retention: unfinished or manual-review journals block deletion. A
+        # home whose journals are all completed may be deleted; its journal
+        # rows go in the same savepoint, so a failed teardown keeps both.
+        operations = self.env[_MODEL].sudo().search([('home_id', 'in', self.ids)])
+        if not operations:
+            return super().unlink()
+        if any(operation.phase != 'completed' for operation in operations):
             raise UserError(_('Setup recovery history must be reviewed before this home can be deleted.'))
-        return super().unlink()
+        self._assert_unlink_authorized()
+        with self.env.cr.savepoint():
+            _internal_operation(operations).unlink()
+            return super().unlink()
