@@ -2683,6 +2683,9 @@
              上游 429 即時回傳、/routes 需驗證。回滾值：chart 0.3.1＋映像 20261009.1344@sha256:37066242…c01e。
              chart 0.3.3（2026-10-14，charts #190，main 6a6d1f9）：ChatGPT 模型的上下文長度改以帳號清單為準（取代 LiteLLM
              內建表的 API 值，例 chatgpt/gpt-5.5 1050000→272000）；只改外掛、映像不變。回滾值：chart 0.3.2。
+             映像 litellm 20261014.1158（2026-10-14，paas-odoo-ci #319，main cccbfe5，核可 #322）：加入 M4 API 錯誤契約補丁
+             （mock_response 回 400、驗證拒絕不寫 spend log、串流結束後無多餘片段、tool_call_id 檢查、OpenAI 路由錯誤信封）。
+             回滾值：映像 20261014.0718@sha256:f34a2d59…3e14。
              商品說明的 ChatGPT 段落是資料值，直接寫中文、不走 .po。 -->
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
@@ -2712,7 +2715,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
             <field name="helm_chart_version">0.3.3</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261014.0718@sha256:f34a2d595aea1e0d8bd1c7a152e18c05cfaea331687ed7710fdb2fcb82fe3e14"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261014.1158@sha256:ad47a0de4275827b988b8df2f76305bdb2ccfa328588caa48875c61684179530"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
