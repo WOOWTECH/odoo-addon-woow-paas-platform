@@ -186,6 +186,7 @@ class PaaSOperatorClient:
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         timeout: Union[int, Tuple[int, int]] = DEFAULT_TIMEOUT,
+        create_once: bool = False,
     ) -> Dict[str, Any]:
         """Make an HTTP request to the PaaS Operator API.
 
@@ -196,6 +197,7 @@ class PaaSOperatorClient:
             params: URL query string parameters
             timeout: 秒數；scalar 同時套用 connect/read，tuple 為 (connect, read)。
                 requests 的 read timeout 是 inactivity 預算，不是整體 wall-clock 上限。
+            create_once: Bare-create transport guard; no redirect replay, exact 201 only.
 
         Returns:
             Parsed JSON response
@@ -205,6 +207,9 @@ class PaaSOperatorClient:
             PaaSOperatorTimeoutError: If request times out
             PaaSOperatorAPIError: If API returns an error
         """
+        # Bare create may already have happened before a redirect/error arrives.
+        # Keep legacy transport behavior for all other callers.
+        request_options = {"allow_redirects": False} if create_once else {}
         url = f"{self.base_url}{endpoint}"
         _logger.debug("PaaS Operator request: %s %s", method, url)
 
@@ -215,10 +220,20 @@ class PaaSOperatorClient:
                 json=data if data else None,
                 params=params if params else None,
                 timeout=timeout,
+                **request_options,
             )
 
             # Log response status
             _logger.debug("PaaS Operator response: %s %s", response.status_code, endpoint)
+
+            if create_once and response.status_code != 201:
+                # Never infer absence from status, replay a redirect, or retain
+                # a potentially sensitive Location/provider response body.
+                raise PaaSOperatorAPIError(
+                    message="Bare tunnel create outcome is unknown",
+                    status_code=response.status_code,
+                    detail="bare_create_outcome_unknown",
+                )
 
             # Handle error responses
             if response.status_code >= 400:
@@ -1252,6 +1267,7 @@ class PaaSOperatorClient:
             'POST', '/api/tunnels/bare',
             data={'name': name, 'expected_account_id': expected_account_id},
             timeout=HELM_OPERATION_TIMEOUT,
+            create_once=True,
         )
 
     def create_tunnel(
