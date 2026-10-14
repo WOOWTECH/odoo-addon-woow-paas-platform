@@ -1,0 +1,151 @@
+{
+  "recorded_at": "2026-10-13T20:26:13.377708+00:00",
+  "problem": {
+    "own_qa_service_id": 250,
+    "deployed_version": "2.35.3",
+    "webhook_http": 200,
+    "webhook_body_bytes": 0,
+    "native_execution_status": "error",
+    "qa_evidence": "evidence/n8n250-webhook-error-retest-20261013.json"
+  },
+  "upstream": {
+    "fix_pr": "https://github.com/n8n-io/n8n/pull/37006",
+    "release": "https://github.com/n8n-io/n8n/releases/tag/n8n%402.38.0",
+    "source_image": "docker.io/n8nio/n8n@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce"
+  },
+  "isolated_app_probe": {
+    "same_owner_workspace_id": 58,
+    "separate_emptydir_pod": true,
+    "image_id": "docker.io/n8nio/n8n@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "owner_setup_login_api_key_workflow_activation_pass": true,
+    "success_http": 200,
+    "unhandled_error_http": 500,
+    "unhandled_error_body": {
+      "message": "Error in workflow"
+    },
+    "execution_statuses": [
+      "error",
+      "success"
+    ],
+    "pod_removed": true,
+    "existing_service_image_unchanged": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+    "existing_service_ready": true,
+    "evidence": "evidence/n8n238-isolated-webhook-20261013.json"
+  },
+  "platform_candidate": {
+    "chart": "oci://8gears.container-registry.com/library/n8n",
+    "chart_version": "2.0.1",
+    "helm_rendered_objects": 7,
+    "helm_rendered_n8n_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261013.2012@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "odoo_isolated_db": {
+      "module_version": "18.0.1.0.230",
+      "tests_passed": 3,
+      "failed": 0,
+      "errors": 0,
+      "noupdate": false,
+      "seed_image_tag": "20261013.2012@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+      "initial_test_expectation_corrected": true,
+      "corrected_module_upgrade_tests_passed": true,
+      "sandbox_namespace_removed": true,
+      "sandbox_roles_removed": true
+    },
+    "mirror_preflight": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19040",
+    "mirror_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/299",
+    "mirror_approval_deadline_utc": "2026-10-14T02:05:59Z",
+    "prior_superseded_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/296",
+    "mirror_published_at_recording": false
+  },
+  "release_gates": [
+    "Human mirror approval and JCR digest readback",
+    "Human PR review and merge",
+    "Live QA service image update and webhook HTTP retest",
+    "Paired n8n MCP #251 live tool-call retest after QA rollout",
+    "Separate full commercial acceptance"
+  ],
+  "paired_mcp_candidate_compatibility": {
+    "scope": "Owned disposable n8n 2.38.0 Pod paired with exact current #251 MCP image in workspace 58; retained #250 and #251 unchanged",
+    "mcp_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin:1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e",
+    "native_api_real_workflow_http": 200,
+    "mcp_pod_native_api_http": 200,
+    "sdk_initialized": true,
+    "tools_list_count": 28,
+    "n8n_list_workflows_real_fixture": true,
+    "n8n_get_workflow_real_fixture": true,
+    "private_pod_ip_strict_ssrf_rejected": true,
+    "test_only_permissive_ssrf_mode": true,
+    "mcp_egress_only_candidate_n8n_pod_tcp_5678": true,
+    "temporary_pods_secret_networkpolicy_removed": true,
+    "retained_services_250_251_ready_unchanged": true,
+    "limit": "Candidate API/tool compatibility is proven with a private Pod IP and test-only permissive SSRF mode. Production strict SSRF and public URL require a paired live retest after rollout.",
+    "evidence": "docs/verification/2026-10-13-n8n238-mcp-compat.json"
+  },
+  "synthetic_encrypted_credential_backup_restore": {
+    "scope": "Separate disposable owner, workflow, execution and Basic Auth credential in owned workspace 58; no retained QA data modified",
+    "source_version": "2.35.3",
+    "source_credential_backed_workflow_http": 200,
+    "source_auth_verdict": true,
+    "online_sqlite_backup_quick_checks": ["ok", "ok"],
+    "two_copy_database_hashes_equal_before_start": true,
+    "backup_counts": {"user": 1, "workflow_entity": 1, "execution_entity": 1, "credentials_entity": 1},
+    "upgrade_clone_version": "2.38.0",
+    "upgrade_original_owner_login": true,
+    "upgrade_same_credential_and_workflow_id": true,
+    "upgrade_credential_backed_workflow_http": 200,
+    "upgrade_auth_verdict": true,
+    "restore_clone_version": "2.35.3",
+    "restore_original_owner_login": true,
+    "restore_same_credential_and_workflow_id": true,
+    "restore_credential_backed_workflow_http": 200,
+    "restore_auth_verdict": true,
+    "egress_denied_no_public_service": true,
+    "temporary_pods_pvcs_pvs_secret_networkpolicy_removed": true,
+    "retained_service_250_pod_uid_and_image_unchanged": true,
+    "limit": "Both backup copies and restore ran inside one k3s cluster; independent off-cluster DR remains unverified.",
+    "evidence": "docs/verification/2026-10-13-n8n-credential-backup-restore.json"
+  },
+  "real_qa_sqlite_clone_upgrade_restore": {
+    "source_service_id": 250,
+    "source_pod_uid_unchanged": true,
+    "source_pvc_mounted_read_only": true,
+    "online_sqlite_backup_quick_check": "ok",
+    "source_records": {
+      "users": 1,
+      "workflows": 0,
+      "executions": 0,
+      "credentials": 0
+    },
+    "independent_copies_identical_before_start": true,
+    "clones_egress_denied_and_not_public": true,
+    "upgrade_clone_version": "2.38.0",
+    "upgrade_clone_original_owner_login_http": 200,
+    "restore_clone_version": "2.35.3",
+    "restore_clone_original_owner_login_http": 200,
+    "original_owner_id_same_on_both_clones": true,
+    "temporary_pods_pvcs_pvs_networkpolicy_removed": true,
+    "source_ready_and_image_unchanged_after": true,
+    "limit": "The retained QA source has no workflows, executions or credentials. This was a same-cluster backup/restore drill, not off-cluster disaster recovery.",
+    "evidence": "docs/verification/2026-10-13-n8n250-realqa-sqlite-clone-upgrade-restore.json"
+  },
+  "synthetic_sqlite_upgrade": {
+    "fixture_scope": "disposable synthetic owner/workflow in owned workspace 58; no existing QA database copied",
+    "from_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+    "to_image": "docker.io/n8nio/n8n:2.38.0@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+    "same_pod_uid": true,
+    "old_workflow_active_after_upgrade": true,
+    "old_execution_ids_preserved": true,
+    "old_success_http": 200,
+    "old_unhandled_error_http": 200,
+    "new_success_http": 200,
+    "new_unhandled_error_http": 500,
+    "new_execution_statuses": [
+      "error",
+      "error",
+      "success",
+      "success"
+    ],
+    "isolated_pod_removed": true,
+    "first_attempt": "Port-forward exited while the new container was still binding; test Pod was deleted and no upgraded result was claimed.",
+    "first_attempt_evidence": "evidence/n8n238-synthetic-sqlite-upgrade-20261013.json",
+    "successful_followup_evidence": "evidence/n8n238-synthetic-sqlite-upgrade-followup-20261013.json"
+  }
+}

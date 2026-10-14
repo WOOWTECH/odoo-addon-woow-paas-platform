@@ -1,0 +1,53 @@
+{
+  "verified_at": "2026-10-14",
+  "service": "Omnigent",
+  "service_id": 246,
+  "workspace_id": 55,
+  "chart": "omnigent 0.1.7",
+  "defect": "API server drops MCP isError for serialized local-tool execution errors (MCP 2025-06-18 tools error handling); found in post-232 regression",
+  "source": {
+    "deployed_upstream_release": "omnigent-ai/omnigent v0.17.0",
+    "deployed_and_overlay_base_digest": "sha256:31c83f122e2a2c0854997235ea5163596598933bc4faa4c12f619b3d9407cd4b",
+    "fix_commit": "78cebea490e98a44201a8f07c2310ead79874c05",
+    "fix_branch": "https://github.com/WOOWTECH/omnigent/tree/fix/omnigent-v017-mcp-iserror-20261014",
+    "qa_image_build": "https://github.com/WOOWTECH/omnigent/actions/runs/38523257150",
+    "qa_image": "ghcr.io/woowtech/omnigent-server-kubernetes:0.17.0-mcp-iserror-qa-20261014@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40",
+    "overlay_scope": "Only omnigent/server/routes/_sessions/orchestration.py replaces the exact deployed server base; runner image unchanged",
+    "related_tests": "red 5/11 fail before fix; green 40/40 PASS; pre-commit (ruff, pyrefly, project hooks) PASS"
+  },
+  "mirror": {
+    "candidate": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40",
+    "preflight_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19406",
+    "status": "PUBLISHED_AND_DIGEST_VERIFIED",
+    "require_digest_preservation_check_before_merge": true,
+    "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/314",
+    "publish_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19428",
+    "human_approve": "toypark1234 2026-10-14T07:36:45Z",
+    "jcr_digest_readback": "sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40",
+    "digest_exact_match": true
+  },
+  "owned_qa": {
+    "method": "Patch only the server container image of the owned QA Deployment, run read-only omnigent regression, restore original image",
+    "first_attempt": "harness error (system python lacked requests); isError check did not run; original image restored",
+    "canary_window_utc": "2026-10-14T07:23:53Z/2026-10-14T07:26:35Z",
+    "checks_passed": "11/11",
+    "tool_execution_failure_preserves_isError": true,
+    "unknown_tool_jsonrpc_error": -32602,
+    "own_canary_read_and_sha_preserved": true,
+    "service_and_runner_identity_preserved": true,
+    "original_server_image_restored": true,
+    "provider_inference_requests": 0
+  },
+  "release_status": "Seed pin ready for human review/merge: JCR mirror published with exact digest, isolated Odoo seed tests 16/16. Existing services pick up the server image on Redeploy. No commercial acceptance claimed.",
+  "odoo_seed_sandbox": {
+    "namespace": "dev-sandbox-ac1014-omni-iserror",
+    "fresh_db": true,
+    "source_head": "7bc8d4b48eedd68476b14f55a161cc4f993876e7",
+    "odoo_image": "paas-odoo-official:20261014.0547@sha256:bb36e88629f4987827530e818a66fc494d449fed7302767f43cc77a43c0c3598",
+    "tests": "TestOmnigentSeed + TestOmnigentRunnerImageMigration017 = 16/16 PASS, 0 failed/0 errors/0 skipped",
+    "sql_readback_server_tag": "20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40",
+    "noupdate": false,
+    "preexisting_log_noise": "odoo.schema res_company.sh_journal_id NOT NULL ERROR also present in 2026-10-13 baseline run",
+    "cleanup": "namespace and own TTL cluster roles absent"
+  }
+}

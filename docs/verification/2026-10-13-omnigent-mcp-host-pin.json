@@ -1,0 +1,49 @@
+{
+  "verified_at": "2026-10-13",
+  "service": "Omnigent",
+  "service_id": 246,
+  "workspace_id": 55,
+  "chart": "omnigent 0.1.7",
+  "source": {
+    "deployed_upstream_release": "omnigent-ai/omnigent v0.17.0",
+    "deployed_and_overlay_base_digest": "sha256:51880f0edb7e0357f395f88f4bc3c4e1dfc3df06e46cffb55ae6700c1dfd82b2",
+    "fix_commits": [
+      "1d1bedadc5ffe3b55c870cb60b34641b2553f0e5",
+      "304afe0aa"
+    ],
+    "qa_image_commit": "a641dea7e8d9da82bef18468fed49d4b97a115a2",
+    "qa_image_build": "https://github.com/WOOWTECH/omnigent/actions/runs/38452548278",
+    "qa_image": "ghcr.io/woowtech/omnigent-host:0.17.0-mcp-proxy-qa-20261013@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+    "overlay_scope": "Only mcp_routes.py, proxy_mcp_manager.py and tool_dispatch.py replace the exact deployed host base; server image and bundled harness CLIs remain unchanged",
+    "v017_related_tests": "407 PASS, 1 skip; pre-commit PASS",
+    "upstream_main_related_tests": "427 PASS, 1 skip; pre-commit PASS",
+    "upstream_draft_pr": "https://github.com/omnigent-ai/omnigent/pull/9904"
+  },
+  "mirror": {
+    "candidate": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+    "preflight_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19039",
+    "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/297",
+    "approval_deadline_utc": "2026-10-14T02:04:40Z",
+    "prior_expired_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/295",
+    "status": "PREFLIGHT_PASSED_AWAITING_HUMAN_APPROVAL_NOT_PUBLISHED",
+    "require_digest_preservation_check_before_merge": true
+  },
+  "owned_qa": {
+    "exact_ghcr_pull_and_import": "docs/verification/2026-10-13-omnigent-mcp-host-pull.json",
+    "first_canary_harness_timing_failure": "docs/verification/2026-10-13-omnigent-mcp-host-first-canary.json",
+    "followup_canary": "docs/verification/2026-10-13-omnigent-mcp-host-qa-canary.json",
+    "before_tools_list": "JSON-RPC -32000 for idle runner; prior wake had 0 listed tools",
+    "patched_tools_list_count": 32,
+    "patched_sys_os_read_advertised": true,
+    "patched_unknown_local_tool_jsonrpc_error": -32602,
+    "patched_own_canary_read_and_sha_preserved": true,
+    "pod_uid_and_server_containers_preserved": true,
+    "original_host_image_restored": true,
+    "watchdog_cancelled": true,
+    "provider_inference_requests": 0,
+    "cross_user_authorization_tested": false
+  },
+  "chart_render": "Chart 0.1.7 server configuration contains the exact pending JCR runner image; server image remains unchanged",
+  "odoo_seed_and_migration_sandbox_evidence": "docs/verification/2026-10-13-omnigent-mcp-host-jcr-sandbox.json",
+  "release_status": "Draft candidate seed pin only. Mirror image first and verify exact JCR digest; isolated Odoo seed/migration tests passed 16/16. Then human PR review/merge and platform release. Existing runner Job image does not change automatically from the seed. No commercial acceptance claimed."
+}

@@ -22461,3 +22461,9 @@ msgstr "顯示可取得的虛擬機容量；目前尚不支援虛擬機內的即
 #: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
 msgid "No persistent storage configured"
 msgstr "未配置持久儲存"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
+msgid "Includes this service's replicas, sidecars and databases. CPU is a 5-minute average. Storage counts each persistent volume once."
+msgstr "包含此服務的所有副本、附屬程序與資料庫。CPU 為近 5 分鐘平均；每個持久磁碟僅計算一次。"

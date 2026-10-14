@@ -15,6 +15,33 @@ const now = Date.parse("2026-10-13T02:00:00Z");
 const sampled_at = "2026-10-13T01:59:50Z";
 const metric = (extra = {}) => ({ usage: 0, limit: 4, limit_status: "bounded", status: "ok", sampled_at, coverage: { observed: 2, expected: 2 }, ...extra });
 
+const componentSource = (await source("components/resource-usage/ResourceUsage.js"))
+    .replace(/^import .*;\s*$/gm, "").replace(/^export /gm, "");
+const ResourceUsage = new Function("Component", "_t", "resourceRows", "formatUserDateTime",
+    `${componentSource}; return ResourceUsage;`)(class {}, (message) => message, presentation.resourceRows, () => "");
+
+test("resource scope explains the five-minute CPU contract before and after data arrives", () => {
+    const component = new ResourceUsage();
+    for (const observation of [undefined, { workload_type: "container", cpu: metric({ window_seconds: 300 }) }]) {
+        component.props = { observation };
+        assert.equal(component.scopeHint,
+            "Includes this service's replicas, sidecars and databases. CPU is a 5-minute average. Storage counts each persistent volume once.");
+    }
+    component.props = { observation: { workload_type: "vm" } };
+    assert.equal(component.scopeHint,
+        "Virtual machine capacity is shown when available. Live guest usage is not yet supported.");
+});
+
+test("five-minute CPU averaging preserves server stale status and local sample expiry", () => {
+    const serverStale = resourceRow("cpu", metric({ window_seconds: 300, status: "stale",
+        sampled_at: new Date(now - 121000).toISOString() }), { now });
+    assert.equal(serverStale.status, "stale");
+    assert.equal(serverStale.note, "Outdated sample");
+    const locallyExpired = resourceRow("cpu", metric({ window_seconds: 300,
+        sampled_at: new Date(now - 181000).toISOString() }), { now });
+    assert.equal(locallyExpired.status, "stale");
+});
+
 test("real zero is displayed and unknown usage is never converted to zero", () => {
     const zero = resourceRow("cpu", metric(), { now });
     assert.equal(zero.usage, "0");

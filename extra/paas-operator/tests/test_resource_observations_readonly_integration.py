@@ -37,17 +37,25 @@ def test_existing_release_live_resource_observations(monkeypatch):
     monkeypatch.setattr(subprocess, "run", readonly_run)
     monkeypatch.setattr(resource_observations, "collector", collector)
     monkeypatch.setattr(settings, "api_key", "local-readonly-integration")
-    client = TestClient(app, headers={"X-API-Key": "local-readonly-integration"})
-    started = time.monotonic()
-    response = client.post(f"/api/namespaces/{namespace}/resource-observations", json={"release_names": names})
+    try:
+        client = TestClient(app, headers={"X-API-Key": "local-readonly-integration"})
+        started = time.monotonic()
+        response = client.post(f"/api/namespaces/{namespace}/resource-observations", json={"release_names": names})
+    finally:
+        # The collector owns a pooled Prometheus client; close it so the
+        # strict warnings-as-errors harness can finish without socket leaks.
+        if collector._http is not None:
+            collector._http.close()
     assert time.monotonic() - started < 10, "Collector exceeded the portal request budget"
     assert response.status_code == 200, response.text
     result = response.json()
     assert set(result["services"]) == set(names)
     assert result["observed_at"]
+    assert result["refresh_seconds"] == 30
     for observation in result["services"].values():
         assert observation["pods"]["running"] > 0
         assert observation["cpu"]["status"] == "ok", observation
+        assert observation["cpu"]["window_seconds"] == 300
         assert observation["memory"]["status"] == "ok", observation
         assert observation["cpu"]["sampled_at"]
         assert observation["memory"]["usage"] > 0

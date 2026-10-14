@@ -96,6 +96,38 @@ def test_old_samples_are_stale_even_when_query_was_just_made():
     assert got["cpu"]["sampled_at"] == resource.iso(NOW - 121)
 
 
+@pytest.mark.parametrize("age,status", [(60, "ok"), (90, "ok"), (120, "ok"), (121, "stale"), (299, "stale")])
+def test_five_minute_cpu_window_does_not_relax_source_sample_freshness(age, status):
+    got = observe(metric=metrics(stamp=NOW - age))["cpu"]
+    assert got["window_seconds"] == 300
+    assert got["status"] == status
+    assert got["usage"] == 0
+    assert got["sampled_at"] == resource.iso(NOW - age)
+    assert got["coverage"] == {"observed": 1, "expected": 1}
+
+
+@pytest.mark.parametrize("age,status,usage", [(90, "unavailable", None), (10, "ok", 0)])
+def test_restarted_container_only_accepts_samples_after_its_start(age, status, usage):
+    p = pod()
+    p["status"]["containerStatuses"] = [{
+        "name": "web", "state": {"running": {"startedAt": resource.iso(NOW - 30)}}}]
+    got = observe([p], metrics(stamp=NOW - age))["cpu"]
+    assert got["status"] == status
+    assert got["usage"] == usage
+    assert got["coverage"] == {"observed": int(usage is not None), "expected": 1}
+
+
+def test_latest_container_timestamp_without_a_rate_remains_unavailable():
+    # A newly restarted cgroup can have one fresh counter sample but no rate.
+    m = metrics(stamp=NOW - 5)
+    m["cpu"].clear()
+    got = observe(metric=m)["cpu"]
+    assert got["usage"] is None
+    assert got["sampled_at"] is None
+    assert got["status"] == "unavailable"
+    assert got["coverage"] == {"observed": 0, "expected": 1}
+
+
 def test_predecessor_statefulset_samples_are_not_current_usage():
     p = pod()
     p["metadata"]["creationTimestamp"] = resource.iso(NOW - 5)
@@ -188,6 +220,9 @@ def test_scoped_queries_and_response_never_include_other_releases(monkeypatch):
     monkeypatch.setattr(collector, "_query", lambda q: queries.append(q) or [])
     got = collector.collect("paas-ws-test", ["svc-one"])
     assert list(got["services"]) == ["svc-one"]
+    assert got["refresh_seconds"] == 30
+    assert got["services"]["svc-one"]["cpu"]["window_seconds"] == 300
+    assert any("[300s]" in q for q in queries)
     assert len(queries) == 8
     assert all("stranger" not in q and 'namespace="paas-ws-test"' in q for q in queries)
     assert "stranger" not in json.dumps(got)
@@ -228,6 +263,19 @@ def test_cache_singleflight_and_copy_isolation(monkeypatch):
     assert collector.collect("paas-ws-test", ["svc-one"])["services"]["svc-one"]["status"] == "ok"
 
 
+def test_five_minute_cpu_window_keeps_thirty_second_cache_refresh(monkeypatch):
+    now = [NOW]
+    collector = resource.ResourceCollector(clock=lambda: now[0])
+    with patch.object(collector, "_collect", return_value={"services": {}}) as collect:
+        collector.collect("paas-ws-test", ["svc-one"])
+        now[0] += 29
+        collector.collect("paas-ws-test", ["svc-one"])
+        assert collect.call_count == 1
+        now[0] += 1
+        collector.collect("paas-ws-test", ["svc-one"])
+        assert collect.call_count == 2
+
+
 def test_cache_has_hard_size_limit(monkeypatch):
     collector = resource.ResourceCollector(clock=lambda: NOW)
     monkeypatch.setattr(resource, "MAX_CACHE_KEYS", 2)
@@ -251,6 +299,20 @@ def test_cached_data_ages_without_resetting_source_timestamp(monkeypatch):
 
 def test_raw_sample_parser_rejects_nonfinite_values():
     assert resource.samples([{"metric": {"pod": "p", "container": "c"}, "value": [NOW, "NaN"]}], ("pod", "container")) == {}
+
+
+def test_cpu_query_uses_advertised_window_and_matches_full_container_series(monkeypatch):
+    # Changing the advertised window must also change the actual rate range.
+    monkeypatch.setattr(resource, "CPU_WINDOW", 420)
+    queries = resource.ResourceCollector._expressions("paas-ws-test", ["one"], [])
+    counter = 'container_cpu_usage_seconds_total{namespace="paas-ws-test",pod=~"one",container!="",container!="POD"}'
+    # Match all series labels (including cgroup ID) before max drops them: an
+    # old cgroup with a rate must never fill a new cgroup with only one sample.
+    assert queries["cpu"] == (
+        f"max by(pod,container)(rate({counter}[420s]) "
+        f"and topk by(pod,container)(1,timestamp({counter})))")
+    assert queries["cpu_time"] == f"max by(pod,container)(timestamp({counter}))"
+    assert observe()["cpu"]["window_seconds"] == 420
 
 
 def test_values_and_timestamps_select_the_same_latest_series():
@@ -315,4 +377,5 @@ def test_inventory_is_only_namespaced_get_with_bounded_timeout():
     args = run.call_args.args[0]
     assert args[0] == "get" and "paas-ws-test" in args
     assert "--all-namespaces" not in args
+    assert not any(arg.startswith("--request-timeout") for arg in args)
     assert run.call_args.kwargs["timeout"] == 5

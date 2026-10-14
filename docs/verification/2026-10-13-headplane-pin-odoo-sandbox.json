@@ -1,0 +1,29 @@
+{
+  "at": "2026-10-13",
+  "source_commit_tested": "7df90898eb20eb02103d3ed56a6b52dbd5d29ae8",
+  "install_and_readback": {
+    "namespace": "dev-sandbox-ac1013-headplane-pin",
+    "namespace_uid": "e9862421-f941-46df-9264-89950f7c0471",
+    "fresh_db": true,
+    "source_head": "7df90898eb20eb02103d3ed56a6b52dbd5d29ae8",
+    "source_xml_sha256": "e72e0553c1117a093023f75f41516b68a79f87aa9c477b7631963262db96d2d2",
+    "version": "18.0.1.0.230",
+    "odoo_tests": 17,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seed_noupdate": false,
+    "seed_image_tag": "20261013.1819@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "external_provider_requests": 0,
+    "production_data_cloned": false,
+    "shared_deployments": 0
+  },
+  "cleanup": {
+    "namespace": "dev-sandbox-ac1013-headplane-pin",
+    "namespace_uid": "e9862421-f941-46df-9264-89950f7c0471",
+    "namespace_absent": true,
+    "own_ttl_cluster_roles_absent": true,
+    "destroy_exit": 0
+  },
+  "runtime_probe_note": "Initial runner-ready probe returned nonzero with stderr not captured. Retried same owned runner without recreation; fresh empty DB and blocked external TCP passed before addon installation."
+}

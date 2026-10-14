@@ -383,6 +383,7 @@ from . import test_gateway_hint_template
 # image 雙釘與 headscale／bootstrap 同版、對外通道標籤（中文資料值、不走 .po）、ngrok.domain 存檔即擋、
 # LiteLLM master key 走 gateway 通道＋提示、方案定價、租戶旋鈕白名單（不開 exit node／路由）
 from . import test_headscale_seed
+from . import test_n8n_seed
 from . import test_tailscale_seed
 from . import test_litellm_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
@@ -1154,3 +1155,5 @@ from . import test_rollback_settings_sync
 # #1647 顯示：工作區頁的 CPU／記憶體／磁碟配額（上限、已佔用、剩餘、等級；成員可看、非成員不碰 operator；operator 未設定／太舊／失敗各有 reason）。
 from . import test_workspace_quota_1647
 from . import test_service_resource_observations
+
+from . import test_workspace_invitation_mail_dispatch
