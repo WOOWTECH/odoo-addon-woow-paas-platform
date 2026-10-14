@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -305,14 +306,31 @@ def _table_exists(cur, name):
     return cur.fetchone()[0] is not None
 
 
+def connect(dbname, params, attempts=30, delay=2.0):
+    """psycopg2.connect，連不上時重試。
+
+    export.sh 的 helper pod 是新起的：來源 ns 的 NetworkPolicy 要一點時間才放行它的 IP，剛 Ready 就連
+    PG 會被拒（harumi prod 彩排實測連續兩次 Connection refused，#136 同型）。
+    """
+    import psycopg2
+    for attempt in range(1, attempts + 1):
+        try:
+            return psycopg2.connect(dbname=dbname, **params)
+        except psycopg2.OperationalError as e:
+            if attempt == attempts:
+                raise
+            print("connect retry %d/%d: %s" % (attempt, attempts - 1, str(e).strip().splitlines()[0]),
+                  file=sys.stderr)
+            time.sleep(delay)
+
+
 def pick_db(params, explicit, conf):
     if explicit:
         return explicit
     name = _conf_value(conf, "db_name")
     if name and "," not in name:
         return name
-    import psycopg2
-    conn = psycopg2.connect(dbname="postgres", **params)
+    conn = connect("postgres", params)
     try:
         with conn.cursor() as cur:
             names = [r[0] for r in _rows(cur, "SELECT datname FROM pg_database WHERE NOT datistemplate "
@@ -326,7 +344,7 @@ def pick_db(params, explicit, conf):
 
 def db_stats(params, dbname):
     import psycopg2
-    conn = psycopg2.connect(dbname=dbname, **params)
+    conn = connect(dbname, params)
     conn.set_session(readonly=True)
     out = {"name": dbname}
     try:
@@ -545,6 +563,30 @@ class ChunkedPut:
         return self.total, self.digest.hexdigest()
 
 
+def wait_for_receiver(url, attempts=30, delay=2.0):
+    """等 receiver 的 /healthz 回 200。
+
+    helper pod 剛起來時，目標 ns 放行來源 ns 的 NetworkPolicy 也還沒套到它的 IP，第一個 PUT 會被拒
+    （沙盒實測 Connection refused）；先等連得上再開始匯出，免得 DB snapshot 開了才失敗。
+    """
+    parsed = urllib.parse.urlparse(url)
+    for attempt in range(1, attempts + 1):
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=10)
+        try:
+            conn.request("GET", "/healthz")
+            if conn.getresponse().status == 200:
+                return
+            err = "not ready"
+        except OSError as e:
+            err = str(e)
+        finally:
+            conn.close()
+        if attempt == attempts:
+            raise SystemExit("receiver %s unreachable: %s" % (parsed.netloc, err))
+        print("receiver retry %d/%d: %s" % (attempt, attempts - 1, err), file=sys.stderr)
+        time.sleep(delay)
+
+
 def put_bytes(url, name, token, data):
     up = ChunkedPut(url, name, token)
     up.write(data)
@@ -556,6 +598,7 @@ def run_export(args):
     token = os.environ.get("UPLOAD_TOKEN") or ""
     if not token:
         raise SystemExit("UPLOAD_TOKEN env is required")
+    wait_for_receiver(args.url)
     conf = read_conf(find_conf(args.conf))
     params = db_params(conf)
     dbname = pick_db(params, args.db, conf)
@@ -563,7 +606,7 @@ def run_export(args):
     fs_root = Path(data_dir) / "filestore" / dbname
     sums = {}
 
-    conn = psycopg2.connect(dbname=dbname, **params)
+    conn = connect(dbname, params)
     conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
     with conn.cursor() as cur:
         cur.execute("SELECT pg_export_snapshot()")

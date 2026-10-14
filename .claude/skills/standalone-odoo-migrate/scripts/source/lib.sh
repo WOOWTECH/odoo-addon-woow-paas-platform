@@ -32,5 +32,6 @@ inspect_in_pod() {
     || { printf '%s\n' "$raw" | tail -20 >&2; die 3 "exec failed"; }
   json=$(printf '%s\n' "$raw" | sed -n '/^---ODOO-INSPECT-JSON-START---$/,/^---ODOO-INSPECT-JSON-END---$/p' | sed '1d;$d')
   jq -e . >/dev/null <<<"$json" 2>/dev/null || { printf '%s\n' "$raw" | tail -20 >&2; die 3 "cannot parse odoo_inspect output"; }
+  printf '%s\n' "$raw" | grep -E '^(connect|receiver) retry ' >&2 || true   # 成功時也留下重試紀錄
   printf '%s\n' "$json"
 }

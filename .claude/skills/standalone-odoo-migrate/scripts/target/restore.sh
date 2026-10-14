@@ -5,7 +5,7 @@
 #
 # 用法：
 #   restore.sh --context <ctx> --ns <target-ns> --release <R> --set <name> [--replace-db] [--no-marker]
-#              [--neutralize [--extra-neutralize-sql <file>]]
+#              [--neutralize [--extra-neutralize-sql <file>]] [--cron-hold-minutes <N>]
 #
 # 前置：export.sh 已把整組檔送進 incoming PVC；receive.sh close 已關洞（incoming PVC 是 RWO，receiver 還掛著就跑不了）；
 #   release R 的 odoo web 已經 0 副本（升級閘、bootstrap 都在 web pod 的 initContainer，web 停了才能安全換 DB）。
@@ -20,6 +20,8 @@
 #     （站別特有的設定，選配），最後跑 neutralize-assert.sql——有任何一項沒中和就失敗、不寫 marker。
 #     彩排密碼在本機產生、存進 Secret standalone-odoo-rehearsal-login（key password），不印出。
 #     ⛔ 中和過的資料庫不得用於正式切換；正式切換不要帶這個旗標。
+#   --cron-hold-minutes N（預設 120，0＝不暫停）：寫完 marker 後把過期的排程延到 N 分鐘後（cron-hold.sql），
+#     免得 web 一開機排程就改到客戶資料、升級後比對不準；比對通過後 verify.sh --release-crons／--cleanup 放開。
 # incoming PVC 保留（升級後的指紋比對要用 source.fp／source.fs），由 verify.sh --stage upgrade --cleanup 刪除。印出 Job log 尾段。
 # exit：0 成功、2 參數或前置條件不符、3 Job 失敗
 set -euo pipefail
@@ -28,9 +30,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PVC=standalone-odoo-incoming
 RECEIVER=standalone-odoo-receiver
 LOGIN_SECRET=standalone-odoo-rehearsal-login
-CTX="" NS="" RELEASE="" SET="" REPLACE=0 MARKER=1 NEUTRALIZE=0 EXTRA_SQL=""
+CTX="" NS="" RELEASE="" SET="" REPLACE=0 MARKER=1 NEUTRALIZE=0 EXTRA_SQL="" CRON_HOLD=120
 
-usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { echo "ERROR: $2" >&2; exit "$1"; }
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --no-marker) MARKER=0; shift ;;
     --neutralize) NEUTRALIZE=1; shift ;;
     --extra-neutralize-sql) EXTRA_SQL=$2; shift 2 ;;
+    --cron-hold-minutes) CRON_HOLD=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die 2 "unknown argument: $1" ;;
   esac
@@ -53,6 +56,7 @@ if [[ -n $EXTRA_SQL ]]; then
   [[ -r $EXTRA_SQL ]] || die 2 "cannot read $EXTRA_SQL"
 fi
 (( !NEUTRALIZE || MARKER )) || die 2 "--neutralize and --no-marker do not go together"
+[[ $CRON_HOLD =~ ^[0-9]+$ ]] || die 2 "--cron-hold-minutes must be a non-negative integer"
 K=(kubectl --context "$CTX" -n "$NS")
 JOB=standalone-odoo-restore-$(date -u +%H%M%S)
 
@@ -73,7 +77,8 @@ odoo_image=$(jq -r '.spec.template.spec.containers[] | select(.name == "odoo") |
 pull_secrets=$(jq -c --argjson a "$pull_secrets" '($a + (.spec.template.spec.imagePullSecrets // [])) | unique' <<<"$dep")
 cm_files=(--from-file=restore-in-pod.sh="$SCRIPT_DIR/restore-in-pod.sh"
   --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql"
-  --from-file=fingerprint_business.sql="$SCRIPT_DIR/../fingerprint_business.sql")
+  --from-file=fingerprint_business.sql="$SCRIPT_DIR/../fingerprint_business.sql"
+  --from-file=cron-hold.sql="$SCRIPT_DIR/cron-hold.sql")
 if (( NEUTRALIZE )); then
   [[ -n $odoo_image ]] || die 2 "cannot find the odoo container image in deploy/$RELEASE"
   cm_files+=(--from-file=neutralize-in-odoo.sh="$SCRIPT_DIR/neutralize-in-odoo.sh"
@@ -95,6 +100,7 @@ fi
 jq -n --arg job "$JOB" --arg rel "$RELEASE" --arg set "$SET" --arg db "$db" --arg pvc "$PVC" \
   --arg pg "$pg_image" --arg odoo "$odoo_image" --arg replace "$replace_db" --arg marker "$MARKER" \
   --arg login "$LOGIN_SECRET" --argjson ps "$pull_secrets" --argjson neutralize "$NEUTRALIZE" \
+  --arg hold "$CRON_HOLD" \
   --argjson extra "$([[ -n $EXTRA_SQL ]] && echo true || echo false)" '
   def secret($key): {valueFrom: {secretKeyRef: {name: ($rel + "-credentials"), key: $key}}};
   def mounts: [{name: "incoming", mountPath: "/incoming"}, {name: "data", mountPath: "/var/lib/odoo"},
@@ -109,6 +115,7 @@ jq -n --arg job "$JOB" --arg rel "$RELEASE" --arg set "$SET" --arg db "$db" --ar
       {name: "BUSINESS_SQL", value: "/opt/restore/fingerprint_business.sql"},
       {name: "REPLACE_DB", value: $replace}, {name: "WRITE_MARKER", value: $marker},
       {name: "PHASE", value: $phase}, {name: "NEUTRALIZE", value: ($neutralize | tostring)},
+      {name: "CRON_HOLD_MINUTES", value: $hold}, {name: "CRON_HOLD_SQL", value: "/opt/restore/cron-hold.sql"},
       ({name: "PGSUPERUSER_PASSWORD"} + secret("postgres-password")),
       ({name: "ODOO_DB_PASSWORD"} + secret("odoo-password"))
     ] + (if $neutralize == 1 then [
@@ -154,7 +161,7 @@ jq -n --arg job "$JOB" --arg rel "$RELEASE" --arg set "$SET" --arg db "$db" --ar
       }
     }
   }' | "${K[@]}" apply -f - >/dev/null
-echo "restore job $JOB started (db $db, replace=$REPLACE, marker=$MARKER, neutralize=$NEUTRALIZE)" >&2
+echo "restore job $JOB started (db $db, replace=$REPLACE, marker=$MARKER, neutralize=$NEUTRALIZE, cron-hold=${CRON_HOLD}m)" >&2
 status=""
 for _ in $(seq 1 720); do
   status=$("${K[@]}" get job "$JOB" -o jsonpath='{.status.succeeded}/{.status.failed}')
