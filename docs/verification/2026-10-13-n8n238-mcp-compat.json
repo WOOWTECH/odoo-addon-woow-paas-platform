@@ -1,0 +1,41 @@
+{
+  "at": "2026-10-13T21:17:09Z",
+  "namespace": "paas-ws-d0c4dbde",
+  "workspace_id": 58,
+  "n8n_image": "docker.io/n8nio/n8n:2.38.0@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce",
+  "mcp_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin:1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e",
+  "same_mcp_image_as_service_251": true,
+  "own_disposable_pair": true,
+  "existing_services_250_251_modified": false,
+  "external_egress_allowed": false,
+  "public_service_created": false,
+  "mcp_test_only_ssrf_mode": "permissive",
+  "mcp_egress": "Only candidate n8n Pod TCP 5678, enforced by NetworkPolicy",
+  "pass_selected": true,
+  "candidate_pod_uid": "eec0a12a-bfd2-4557-b71c-c748419fbee1",
+  "native_owner_login_http": 200,
+  "native_api_workflow_http": 200,
+  "mcp_pod_native_api_http": 200,
+  "ssrf_candidate_url": {
+    "strict_ok": false,
+    "permissive_ok": true
+  },
+  "mcp_diagnostics": {
+    "initialized": true,
+    "tool_count": 28,
+    "required_tools_present": true,
+    "list_is_error": false,
+    "list_contains_fixture": true,
+    "get_is_error": false,
+    "get_contains_fixture": true
+  },
+  "mcp_sdk_attempts": 1,
+  "mcp": {
+    "sdk_initialized": true,
+    "tool_count": 28,
+    "list_real_workflow_pass": true,
+    "get_real_workflow_pass": true
+  },
+  "cleanup_remaining": [],
+  "finished_at": "2026-10-13T21:18:14Z"
+}

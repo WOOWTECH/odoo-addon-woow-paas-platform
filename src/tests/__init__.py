@@ -383,6 +383,7 @@ from . import test_gateway_hint_template
 # image 雙釘與 headscale／bootstrap 同版、對外通道標籤（中文資料值、不走 .po）、ngrok.domain 存檔即擋、
 # LiteLLM master key 走 gateway 通道＋提示、方案定價、租戶旋鈕白名單（不開 exit node／路由）
 from . import test_headscale_seed
+from . import test_n8n_seed
 from . import test_tailscale_seed
 from . import test_litellm_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道

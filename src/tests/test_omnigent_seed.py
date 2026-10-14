@@ -73,6 +73,10 @@ class TestOmnigentSeed(TransactionCase):
         self.assertEqual(v['image']['repository'], OMNI_IMAGE)
         self.assertRegex(v['image']['tag'], PINNED_TAG_RE)
         self.assertTrue(v['runner']['image'].startswith(OMNI_HOST_IMAGE + ':'))
+        self.assertEqual(
+            v['runner']['image'],
+            OMNI_HOST_IMAGE + ':20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f',
+            'MCP 工具清單修補的自有 QA runner 映像須經 JCR 鏡像後雙釘')
         host_tag = v['runner']['image'][len(OMNI_HOST_IMAGE) + 1:]
         self.assertRegex(host_tag, PINNED_TAG_RE,
                          'runner image 由 launcher 原樣寫進每個 Job，必須釘 digest')

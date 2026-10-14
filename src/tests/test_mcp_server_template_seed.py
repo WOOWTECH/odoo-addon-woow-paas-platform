@@ -372,7 +372,11 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # ``/mcp`` initialize 回 200＋mcp-session-id。證據見
     # docs/verification/2026-10-13-mcp-odoo-0b2cff1f-launch-contract.json。
     # 前一個 pin：1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:39b1e6e933b93f51d1c8a09e23b3764d45c898314fa47c33b6876b4573cba0e6。
-    EXPECT_IMAGE_TAG = '0b2cff1fbc905f6285c107d2fd537ade016fd95d@sha256:7a4bf42ffe7292bf77483e310241fc765c60efcdf036d602f81bab8d546a92f7'
+    # 下一輪 e178c4ce（#52）：相對0b2，Dockerfile／uv.lock／LaunchPolicy／patches均未變。
+    # 真imageID45b88bf4之 CLI args、MCP initialize／預設tools/list41／離線tools/call 已驗；
+    # QA240 direct-write 模式的MCP38／管理目錄41差三支明示隱藏的審批工具，亦已另驗。
+    # 此常數與seed一起改釘；229／230既有tag和正式部署不受這個候選分支影響。
+    EXPECT_IMAGE_TAG = 'e178c4cef76a43b20abfd6ea0282060d94abf115@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
