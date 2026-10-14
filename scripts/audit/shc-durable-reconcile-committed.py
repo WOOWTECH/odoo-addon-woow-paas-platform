@@ -252,6 +252,10 @@ def now():
     return fields.Datetime.now()
 
 
+def in_future(value):
+    return bool(value) and value > now()
+
+
 def due(op_id):
     write_op(op_id, next_attempt_at=now() - timedelta(seconds=1))
 
@@ -301,7 +305,7 @@ def cron(limit, label):
 def assert_not_due(op_id):
     s = snapshot(op_id)
     terminal = s['phase'] == 'completed' or (s['phase'] == 'recovery_required' and s['error_code'] and s['error_code'].startswith('reconcile_'))
-    assert terminal or (s['next_attempt_at'] and s['next_attempt_at'] > now()), ('case left a due row', s)
+    assert terminal or (s['next_attempt_at'] and in_future(s['next_attempt_at'])), ('case left a due row', s)
 
 
 def make_unknown(label, mode):
@@ -360,7 +364,7 @@ def case_r01():
     set_param(RECONCILE_FLAG, 'True')
     cron(10, 'r01-enabled-cron')  # adopt + worker convergence in one pass
     s = snapshot(op)
-    assert s['phase'] == 'completed' and s['home_tunnel_id'] == fake.ids_for(name)[0] and fake.count('CREATE', name) == 1
+    assert s['phase'] == 'completed' and s['home_tunnel_id'] == fake.ids_for(name)[0] and fake.count('CREATE', name) == 1, s
     save('enabled-cron-adopts-and-converges-in-one-pass', remote_creates=1, phase='completed')
 
 
@@ -551,7 +555,7 @@ def case_r15():
     p = spawn(['reconcile', 50], 'r15-killed')
     assert fake.entered.wait(60)
     s = snapshot(op)
-    assert s['claim'] and s['next_attempt_at'] > now() and s['phase'] == 'recovery_required'
+    assert s['claim'] and in_future(s['next_attempt_at']) and s['phase'] == 'recovery_required'
     p.kill(); p.wait(timeout=10); fake.release.set()
     reads = fake.count('INVENTORY')
     assert reconcile('r15-while-claimed') == {} and fake.count('INVENTORY') == reads
@@ -606,7 +610,7 @@ def case_r17():
     worker(failing, 'r17-initial-failures')
     for op in failing:
         s = snapshot(op)
-        assert s['phase'] == 'anchored' and s['retry_count'] == 1 and s['next_attempt_at'] > now(), s
+        assert s['phase'] == 'anchored' and s['retry_count'] == 1 and in_future(s['next_attempt_at']), s
         due(op)
     home, actor = fixture('r17-fresh')
     fresh, _ = enqueue(home, actor)
@@ -615,7 +619,7 @@ def case_r17():
     assert s['phase'] == 'completed' and s['home_state'] == 'active', s
     retried = [op for op in failing if snapshot(op)['retry_count'] == 2]
     assert len(retried) == 9, len(retried)
-    assert all(snapshot(op)['next_attempt_at'] > now() for op in retried)
+    assert all(in_future(snapshot(op)['next_attempt_at']) for op in retried)
     fake.poisoned.clear()
     for op in failing:
         due(op)
@@ -637,7 +641,7 @@ def case_r18():
         cr.execute("UPDATE woow_paas_platform_smart_home_provision_operation SET write_date = now() at time zone 'UTC' - interval '31 days' WHERE id IN %s", [(done, manual)])
     cron(10, 'r18-cron')
     assert snapshot(done) == {'exists': False}
-    assert snapshot(manual)['error_code'] == 'reconcile_duplicate'
+    assert snapshot(manual).get('error_code') == 'reconcile_duplicate'
     with registry.cursor() as cr:
         env = api.Environment(cr, SUPERUSER_ID, {})
         blocked = False
@@ -665,7 +669,12 @@ try:
     set_param(RECONCILE_FLAG, 'True')
     for key in selected:
         print('CASE_START=' + key, flush=True)
-        CASES[key]()
+        try:
+            CASES[key]()
+        except BaseException:
+            # Synthetic loopback ledger only (methods/paths/behaviour, no bodies).
+            print('FAKE_CALLS_TAIL=' + json.dumps(fake.calls[-25:]), flush=True)
+            raise
     assert fake.count('DELETE') == 0
     save('no-automatic-compensation', remote_deletes=0)
     print(json.dumps({'result_path': str(ROOT / 'result.json'), 'passed_cases': len(results)}), flush=True)

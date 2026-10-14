@@ -607,18 +607,23 @@ class SmartHomeProvisionOperation(models.Model):
         if self._reconcile_enabled():
             try:
                 self._reconcile_batch(limit=limit)
-            except Exception:
-                _logger.warning('SHC provision reconcile pass stopped')
-        for operation in self._worker_candidates(limit):
+            except Exception as exc:
+                _logger.warning('SHC provision reconcile pass stopped: %s', type(exc).__name__)
+        # Fresh snapshot: the cron cursor is REPEATABLE READ and would not see
+        # rows the reconcile pass just committed through its own cursors.
+        with self.env.registry.cursor() as cr:
+            Operation = api.Environment(cr, SUPERUSER_ID, {})[_MODEL]
+            due = [(op.id, op.operation_uuid) for op in Operation._worker_candidates(limit)]
+        for operation_id, operation_uuid in due:
             try:
-                self._process_one(operation.id)
+                self._process_one(operation_id)
             except Exception:
                 # Sanitized classification only; known durable markers remain.
-                _logger.warning('SHC provision worker stopped operation=%s', operation.operation_uuid)
+                _logger.warning('SHC provision worker stopped operation=%s', operation_uuid)
         try:
             self._purge_completed()
-        except Exception:
-            _logger.warning('SHC provision retention pass stopped')
+        except Exception as exc:
+            _logger.warning('SHC provision retention pass stopped: %s', type(exc).__name__)
 
     # ------------------------------------------------------------------ #
     #  Retention                                                          #
@@ -719,9 +724,10 @@ class SmartHomeProvisionOperation(models.Model):
         for operation_id, token in claimed:
             try:
                 outcomes[operation_id] = self._reconcile_apply(operation_id, token, observation)
-            except Exception:
+            except Exception as exc:
                 # The claim lease expires; the row is retried later.
-                _logger.warning('SHC provision reconcile stopped operation_id=%s', operation_id)
+                _logger.warning('SHC provision reconcile stopped operation_id=%s: %s',
+                                operation_id, type(exc).__name__)
                 outcomes[operation_id] = 'error'
         return outcomes
 

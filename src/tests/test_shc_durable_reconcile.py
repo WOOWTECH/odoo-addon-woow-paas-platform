@@ -323,7 +323,10 @@ class TestShcDurableReconcileScheduling(TransactionCase):
     def test_unlink_requires_capability_and_completed_phase(self):
         completed = self._operation('completed')
         queued = self._operation('queued')
-        for records in (completed.sudo(), completed.sudo().with_context(
+        # Fixture rows carry the private capability in their context; re-browse
+        # through a plain environment so only the spoofed variants are tested.
+        plain = self.env[_MODEL].browse(completed.id)
+        for records in (plain.sudo(), plain.sudo().with_context(
                 woow_shc_provision_operation_capability=True)):
             try:
                 records.unlink()
