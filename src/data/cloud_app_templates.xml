@@ -1072,11 +1072,18 @@
                  open-design.apiKeysChecksum 多了常數 ⇒ 升到 0.4.5 時 daemon 重啟一次（PVC 資料保留），
                  卡住的舊金鑰也一併離開執行中的程序。publish-charts run 16650（charts main bc970850，OCI
                  sha256:9a4478c0…）。image 與 helm_default_values 不變。只影響新開通與之後 redeploy 的服務
-                 （既有服務要 redeploy 升到 0.4.5 才修好 #1556）。回滾值：0.4.4。 -->
+                 （既有服務要 redeploy 升到 0.4.5 才修好 #1556）。回滾值：0.4.4。
+                 2026-10-14 image 20261005.1409 → 20261014.1127@sha256:10b02850…（paas-odoo-ci #318，核可單 #320，
+                 run 19692）：底層改從 WoowTech fork woow-paas/open-design woow-od-v0.24.1-w2（584a1de0）建；
+                 Claude Code 2.1.296、新增 Codex 0.162.1／Pi 1.1.0、Omnigent SDK 修補、內建 woowtech-brand skill
+                 與 woow-omnigent plugin、移除 brainstorming。chart 0.4.5 與 helm_default_values 不變。沙盒（chart
+                 取自 jcr-prod OCI、values 照本範本）：舊 image→新 image 升級專案與兩顆 PVC 資料保留、四 CLI 版本、
+                 skills；空 PVC 開機（seed-home／agent-defaults）、auth-proxy 401／200、白牌、/console 200 全過。
+                 只影響新開通與之後 redeploy 的服務。回滾值：20261005.1409@sha256:0c257c77…。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
             <field name="helm_chart_version">0.4.5</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261005.1409@sha256:0c257c7715f87c293744252aeb905d66dca87355b93c3293fde52bc2db586c7c"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261014.1127@sha256:10b0285036c3d1029864f378434d95f6ef6caa777dd77894f2a8a43929925d6d"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
