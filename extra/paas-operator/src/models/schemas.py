@@ -143,8 +143,8 @@ class ReleaseRollbackRequest(BaseModel):
     check_compute_quota: bool = Field(
         default=False,
         description="#1647: same opt-in check as ReleaseUpgradeRequest.check_compute_quota. "
-        "Only effective with preserve_value_paths (that rollback is a helm upgrade); a plain "
-        "helm rollback is not checked",
+        "With preserve_value_paths it judges the dry-run of that helm upgrade; a plain helm "
+        "rollback (#1685) judges the target revision's stored manifest (helm get manifest)",
     )
 
     @field_validator("preserve_value_paths")

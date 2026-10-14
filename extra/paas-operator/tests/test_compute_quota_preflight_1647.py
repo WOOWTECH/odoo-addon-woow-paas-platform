@@ -1621,17 +1621,7 @@ def test_preserving_rollback_without_the_flag_is_unchanged(
     compute_quota_snapshot.assert_not_called()
 
 
-@patch("src.api.releases.helm_service")
-def test_plain_rollback_is_not_checked(
-        mock_helm, client, live_objects_lookup, compute_quota_snapshot):
-    """純 helm rollback 重放 stored manifest，沒有 dry-run 可算——旗標在這條路上不生效。"""
-    _arrange_rollback(mock_helm, live_objects_lookup, compute_quota_snapshot, _incident())
-    mock_helm.rollback.return_value = {"message": "rolled back"}
-    r = client.post(f"{_URL}/rollback", json={"revision": 10, "check_compute_quota": True})
-    assert r.status_code == 200, r.text
-    assert r.json()["mode"] == "rollback"
-    compute_quota_snapshot.assert_not_called()
-    mock_helm.upgrade.assert_not_called()
+# 純 helm rollback（沒有 ``preserve_value_paths``）的預檢見 ``test_rollback_compute_quota_1685.py``。
 
 
 @pytest.fixture

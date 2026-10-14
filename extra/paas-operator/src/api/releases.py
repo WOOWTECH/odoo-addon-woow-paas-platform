@@ -1174,7 +1174,14 @@ def rollback_release(
         target_revision = _resolve_rollback_target(history, request.revision, name)
         target_version = _refuse_chart_downgrade(namespace, name, history, target_revision)
 
-        result = helm_service.rollback(namespace, name, target_revision)
+        # #1685：預檢＋真正 rollback 共用**一個** helm 名額（同 PATCH，#1552）——通過預檢的
+        # 請求不會在第二段又排一次隊。名額可重入（per-thread depth），`helm_service.rollback`
+        # 裡那一層 `helm_operation_slot("rollback")` 直接進入，不會自己等自己。不帶旗標時
+        # 這一層只是把原本內層那一次 acquire 提到外面，排隊、逾時與 503 都與之前相同。
+        with helm_operation_slot("rollback"):
+            if request.check_compute_quota:
+                _plain_rollback_compute_quota_check(namespace, name, target_revision)
+            result = helm_service.rollback(namespace, name, target_revision)
         logger.info(f"Rolled back release {name} in {namespace}")
         # #1526：回報回復後的 chart 版本，平台據此更新帳本（同版或升版都可能——例如從
         # 早先被降過版的狀態回到較新的 revision）；不回報的話平台帳本與叢集不一致，
@@ -1193,6 +1200,68 @@ def rollback_release(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Helm rollback failed. Check operator logs for details.",
         )
+
+
+def _plain_rollback_compute_quota_check(
+    namespace: str, name: str, target_revision: int,
+) -> Optional[Dict[str, Any]]:
+    """#1685：純 helm rollback 前的 compute 配額預檢；確定放不下 raise 409（什麼都還沒套用）。
+
+    #1658 只在有 dry-run 的路徑（PATCH、保留憑證的回復）檢查。純 rollback 重放的是目標
+    revision 的 **stored manifest**，所以改讀 ``helm get manifest --revision``，與 live
+    workload 一起交給同一個 ``_compute_quota_check``——判斷規則、409 的形狀、「只擋確定放
+    不下」的原則都與升級預檢相同。
+
+    kill switch 關時直接回，不多打 helm／kubectl。stored manifest 或 live objects 讀不到、
+    manifest 解析失敗、或本函式裡任何意外，一律放行並 log warning（#1647 原則：預檢自己的
+    意外不得擋回復）。
+
+    ⛔ stored manifest 可能含 Secret：不寫進 log 或回應。YAML 的錯誤訊息會引用出錯的那一行，
+    所以解析失敗只 log 例外型別。
+    """
+    if not settings.compute_quota_precheck_enabled:
+        return {"status": "skipped", "reason": "disabled"}
+    try:
+        manifest = helm_service.get_manifest(namespace, name, target_revision)
+    except HelmException as exc:
+        logger.warning(
+            "Compute quota pre-check skipped for rollback of %s/%s to revision %s: stored "
+            "manifest unreadable: %s", namespace, name, target_revision,
+            (exc.stderr or exc.message or "").strip()[:300],
+        )
+        return {"status": "unknown", "reason": "manifest_unreadable"}
+    except Exception as exc:  # noqa: BLE001 — 預檢自己的錯不得擋回復
+        logger.warning(
+            "Compute quota pre-check skipped for rollback of %s/%s to revision %s: unexpected "
+            "%s while reading the stored manifest", namespace, name, target_revision,
+            type(exc).__name__,
+        )
+        return {"status": "unknown", "reason": "manifest_unreadable"}
+    try:
+        docs = [d for d in yaml.safe_load_all(manifest) if isinstance(d, dict)]
+    except Exception as exc:  # noqa: BLE001 — 訊息可能引用 manifest 內容，只記型別
+        logger.warning(
+            "Compute quota pre-check skipped for rollback of %s/%s to revision %s: stored "
+            "manifest unparseable (%s)", namespace, name, target_revision, type(exc).__name__,
+        )
+        return {"status": "unknown", "reason": "manifest_unparseable"}
+    live_items = _live_objects(namespace, "pvc,statefulsets,deployments")
+    if live_items is None:
+        logger.warning(
+            "Compute quota pre-check skipped for rollback of %s/%s to revision %s: live "
+            "objects unavailable", namespace, name, target_revision,
+        )
+        return {"status": "unknown", "reason": "live_objects_unavailable"}
+    try:
+        return _compute_quota_check(namespace, name, docs, live_items)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — `_compute_quota_check` 已自己兜底；這裡再保一層
+        logger.warning(
+            "Compute quota pre-check skipped for rollback of %s/%s to revision %s: unexpected "
+            "%s", namespace, name, target_revision, type(exc).__name__,
+        )
+        return {"status": "unknown", "reason": "evaluation_error"}
 
 
 #: #1526：回復被 chart 版本下限擋下時的錯誤碼（409 的 ``detail.error_code``）。
@@ -1411,7 +1480,9 @@ def _rollback_preserving_values(
       ——但同一個 chart 的平常 reconfigure 也是這樣渲染，不是新的風險面。
     - 會重新拉目標版本的 chart；registry 裡那一版若已被刪，回 500 而**不**退回純
       rollback（退回就是讓舊憑證復活，fail-open 的方向錯了）。
-    - 與 reconfigure 一樣先跑 #1407 不可變欄位 preflight。
+    - 與 reconfigure 一樣先跑 #1407 不可變欄位 preflight（純 rollback 沒有 dry-run，不跑）。
+    - #1647 compute 配額預檢兩條路都有：這裡算 dry-run 的 manifest，純 rollback 算目標
+      revision 的 stored manifest（#1685，``_plain_rollback_compute_quota_check``）。
     """
     _validate_namespace_or_raise(namespace)
     try:
