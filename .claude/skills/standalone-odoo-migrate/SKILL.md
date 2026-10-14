@@ -7,8 +7,8 @@ when_to_use: 使用者要把 standalone／odoo-tenant 站搬進 PaaS、盤點某
 # standalone Odoo → PaaS 租戶搬遷
 
 兩條硬需求（#1604）：**資料與來源逐位元一致**；**addon 由 paas-odoo-ci 烘進 cloud-odoo image**（不放 PVC）。
-租戶帳號、workspace、購買與擁有權不由本 skill 代辦：動手前先問調用者（下方「開始前先問調用者」），由人照正常購買流程
-買好目標服務，本 skill 只接收它的 `cloud_service` id。
+帳號與工作區由人決定、由人建立；服務由 agent 用網頁同一支 API 代購（下方「購買目標服務」），買之前先問清楚
+（「開始前先問調用者」）。
 
 ## 分工
 
@@ -18,6 +18,8 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 |---|---|---|
 | 來源 ns（standalone 站，不在白名單） | woow-machines-operator（WMO） | `scripts/source/` ＋ `scripts/odoo_inspect.py`、`scripts/addons_unpack.py`，連同指令交給 WMO；收回 JSON 與導出的 addon 目錄 |
 | 目標（`dev-sandbox-*`、`paas-ws-stg-*`、`paas-ws-*`） | 本 repo agent | prod 寫入每一步都等人工放行 |
+| 帳號、工作區、邀請操作帳號 | 人 | agent 不代建 |
+| 購買與刪除服務（「購買目標服務」） | 本 repo agent，用工作區 owner／admin 的登入身分打網頁 API | prod 每次下單、刪除由人放行 |
 | paas-odoo-ci PR merge、prod image `/approve` | 人 | agent 只開 PR |
 
 ## 開始前先問調用者
@@ -28,8 +30,10 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 | 何時問 | 問什麼 | 為什麼要問 |
 |---|---|---|
 | 步驟 1 之前 | 來源站是哪一個 ns；這次做到哪裡（只盤點／彩排／正式切換） | 決定要請 WMO 做什麼、要不要排停機 |
-| 步驟 1 之前 | 目標放在哪個工作區、由哪個帳號購買、服務名稱；錢包餘額夠不夠付到觀察期之後 | 購買與擁有權由人處理，agent 不代買；欠費會被停權 |
-| 步驟 3 之後 | 方案大小——附上來源的 workers／記憶體與各方案規格，給出建議 | workers 與記憶體由方案決定，不能逐台改 |
+| 步驟 1 之前 | 最終擁有新站的帳號與它的工作區（工作區由該帳號自己在網頁建）；服務名稱 | 帳單一律算在工作區 owner 名下，買了之後不能移轉（見「購買目標服務」） |
+| 步驟 1 之前 | 彩排站買在哪個工作區（通常是調用者自己的） | 彩排站放的是真實客戶資料；刪掉之後 PVC 仍保留（prod 90 天），那個工作區的 owner／admin 取得到 |
+| 步驟 1 之前 | 兩個工作區各用哪個登入身分下單：工作區 owner 的帳密，或 owner 邀請一個操作帳號當 admin；兩台各自的管理員登入 Email | 下單 API 只認登入 session，沒有 token 可用；帳密私下交接，不經 issue、PR 或 log |
+| 步驟 3 之後 | 方案大小與繳費週期——附上來源的 workers／記憶體與各方案規格，給出建議；彩排站用同一個方案 | workers、記憶體與磁碟大小由方案決定，不能逐台改；試用中換方案會立刻結束試用並扣款，下單前要定案 |
 | 步驟 3 之後 | 寄收信主機是叢集內的共用服務（mailcow）時，同不同意把目標 ns 接上 | 准入 label 是整個 ns 的 |
 | 彩排通過後 | 要不要沿用來源的 hostname | 沿用要請來源 DNS 的管理者（WMO）在切換當下刪舊記錄，要先約好人 |
 | 彩排通過後 | 外部整合（MCP、webhook）要不要改指、由誰改 | 它們連的是來源的內部位址 |
@@ -38,6 +42,72 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 
 排切換日之前，把「備份與失敗還原」整節向調用者說明一次並取得確認：哪些東西有副本、每個階段失敗怎麼回復、哪一刻
 之後不能回切。調用者沒確認就不進步驟 9。
+
+## 購買目標服務
+
+每一站在 prod 買兩台，都由 agent 代購：
+
+| 服務 | 買在誰的工作區 | 何時買 | 何時刪 |
+|---|---|---|---|
+| 彩排站 | 調用者指定的工作區（通常是調用者自己的） | 範本的 image 已換成步驟 5 那顆、步驟 2 重比 `READY`，來源用到的 addon 都已出現在 `/api/cloud/odoo-addons` 之後 | 彩排做完、下次付款日之前 |
+| 正式目標 | 最終擁有帳號的工作區 | 彩排通過、切換日前幾天（留時間做「切換前檢查」的設定） | 不刪 |
+
+- 服務的 image 在下單當下取自範本預設值，租戶不能指定。新 addon 要等平台 image 上線、平台管理員按「Sync Odoo Addons」
+  （`POST /api/cloud/odoo-addons/sync`，限平台管理員）才會出現在清單裡。
+- 彩排拖過試用期：在下次付款日之前刪掉、重買一台（每台新服務各有一次試用）。重買一次就多寄一封確認信、多一組保留中的
+  PVC 吃儲存配額，不要反覆重買。
+- 正式目標下單後就在跑試用：切換改期超過試用期會向 owner 扣第一期；停權不會停止計費。改期時先告訴調用者。
+
+**不要先買在自己名下、驗收後再移轉。** 平台沒有可用的移轉：工作區 owner 的移轉方法沒有接到任何畫面或 API、本身也走不完
+（#735 未裁決）；服務不能換工作區（namespace 與網址由工作區決定）；訂閱的付款人在下單當下就固定成當時的工作區 owner，
+之後換 owner 也不會跟著改。
+
+**怎麼買**：用工作區 owner 或 admin 的登入 session（`POST /web/session/authenticate` 取 cookie；開了 2FA 的帳號先確認
+登得進去）打網頁用的同一組 API（`auth="user"`、JSON-RPC），紀錄才會與網頁相同。admin 要先由 owner 邀請、受邀者接受。
+
+1. `POST /api/workspaces`（`action: list`）找到工作區 id；`POST /api/workspaces/<id>/services`（`action: list`）看有沒有
+   同名的服務。
+2. `POST /api/cloud/templates` 找 slug `odoo` 的範本 id；`POST /api/cloud-services/templates/<範本 id>/plans` 取方案，
+   只選它回傳的（隱藏方案不在裡面；後端不擋，要自己守），看 `has_trial`／`trial_duration`／`trial_unit` 確認有試用。
+   `POST /api/cloud/odoo-addons`（params `template_id: <範本 id>`，與網頁相同）取 addon，用 `technical_name` 對來源
+   的模組；缺任何一個就停，回到步驟 5 的 Sync。
+3. `POST /api/workspaces/<id>/services`，params：`action: create`、`template_id`、`name`（2～100 字，網頁只在前端
+   檢查，代購要自己守）、`plan_id`、`odoo_addon_ids`、`values: {"conf.adminEmail": <Email>, "loadDemoData": false}`。
+   Email 要用收得到信的信箱（`example.com` 之類的保留網域會被拒）。
+4. `POST /api/workspaces/<id>/services/<服務 id>`（`action: get`）確認 `state` 是 `running`、`subscription.is_trial`
+   為 true，記下 `trial_end_date`，結果記進追蹤 issue。下單回 success 只代表紀錄建好；儲存配額或叢集儲存（Longhorn）
+   不夠時，之後開通才被拒：服務轉 `error`、訂閱自動取消、不扣款，服務要自己刪掉。
+
+- 回 `{success: false, error}` 時整筆沒有落地，照錯誤修正後再送。只有逾時或連線中斷、不知道結果時，先回到第 1 步
+  list：平台不擋重複下單，重送一次就多一台服務、多一筆訂閱、多一封信。
+- 不要在平台 pod 用 odoo shell 自己建（就算帶 `_internal_provision` 開閘也一樣）：方案檢查、values 白名單、初始密碼、
+  方案規格 overlay、建訂閱、觸發部署都在 controller 的 `_create_service`，繞過它紀錄就和網頁不同。
+- 用 admin 身分下單時，帳單仍算在 owner 名下；服務與訂閱的 `create_uid` 是操作帳號，服務頁上平台寫的錯誤說明會用它的
+  語言與時區。工作完成後請 owner 移除這個 admin（兩個工作區都要）。
+- 下單當下平台就寄訂閱確認信給 owner，撤不回——先告訴 owner。
+- 初始管理員密碼只在 create 回應的 `data.admin_password` 出現這一次（帳號是 `data.admin_username`）。交給調用者時
+  不經 issue、PR 或 log；還原後帳號換成來源站的，這組就不再適用。
+- prod 上每次下單、刪除都是寫入，逐次由人放行。
+
+**試用與儲值**：每台新服務各有一次試用，長度看 plans 回應的 `trial_duration`（目前 Odoo 方案是 7 天）。下次付款日＝
+下單日＋試用天數，那天的每日排程就會扣款。下單時不檢查錢包，也不預檢 CPU／記憶體配額。
+
+- 付款日從 owner 的錢包扣第一期，不夠時用綁定的卡自動補差額。扣不到就每天重試，服務照常運作；低餘額提醒信每期只寄
+  一封、只寄給 owner。連續失敗 6 次（預設值；約下單後第 12 天）訂閱取消，當天或隔天停權；取消之後補繳舊帳也不會復權，
+  要重新續訂（只能用錢包付）。
+- 所以下單時就提醒 owner：付款日之前錢包至少要有一期的錢（例：1–3 人月繳 1500 點），或先綁卡。付款日前 3 天平台會依
+  錢包餘額寄「請儲值」信，已綁卡也會收到。不要按「略過試用」：它立刻結束試用並扣款，而且只扣錢包。正式目標的觀察期
+  一定超過試用期，這一步不能省。
+- 開通停在 `error`、從沒 running 過的服務不會被扣款，但訂閱仍在進行中，要把服務刪掉。
+
+**刪除彩排站**：順序是 `verify.sh --stage upgrade --cleanup`（刪掉含客戶 dump 的 incoming PVC）→ 用網頁同一支
+`POST /api/workspaces/<id>/services/<服務 id>`（`action: delete`）刪服務 → 刪 ns 裡的 `standalone-odoo-rehearsal-login`
+Secret。彩排站與正式目標在同一個工作區（同一個 ns）時，這三步都要在正式切換的 `receive.sh open` 之前做完——incoming PVC、
+receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用已存在的 incoming PVC。
+
+- 試用期內刪除沒有扣過款，也就沒有退點。
+- 刪服務之後，資料、PostgreSQL、備份三顆 PVC 仍保留（prod 90 天），期間照算那個工作區的儲存配額（每個工作區 ns 最多
+  10 顆 PVC，一台 Odoo 用 3 顆），該工作區的 owner／admin 也能取回裡面的資料。要提早清，請平台管理員處理。
 
 ## 步驟
 
@@ -84,7 +154,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
      restore Job 要連 PG ⇒ 停權後 `kubectl scale sts/<release>-postgresql --replicas=1` 並等它 Ready。
    - restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫兩個標記：`upgrade_done`（來源 image
      digest＋core_date，讓 web 開機時升級閘自動跑 `-u all`）與 `tenant_localized`（擋掉平台的台灣在地化，見步驟 8）。
-   - **彩排**（來源還在營運）一律加 `--neutralize`，見下方「彩排與中和」。正式切換不加。
+   - **彩排**（來源還在營運，目標是彩排站）一律加 `--neutralize`，見下方「彩排與中和」。正式切換不加。
    完成條件：Job 印出 `RESTORE-DONE`，verify exit 0。
 8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
@@ -101,9 +171,9 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
    - 匯入後管理員帳密是來源站的，平台存的那組不再適用；租戶可在服務頁按 Reset 重設（重設 `base.user_admin`、清掉 2FA）。
    ⚠ web 一開回來 cron 就開始跑（寄信、收信、金流、外部整合）。來源沒凍結的彩排（`export.sh --live`）不中和的話，
    兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`。
-9. **cutover**（正式切換；prod 每一步人工放行）。前置：彩排通過、目標服務已由人在 prod 租戶買好、下方「切換前檢查」
-   逐項有結論。停機時間＝凍結匯出＋還原＋開機升級＋比對（harumi 的量：約 15 秒＋45 秒＋3 分鐘，另加人工步驟）。
-   1. 目標服務先調好設定（「切換前檢查」的 conf 覆寫、需要時 `shared-mail.sh open`），Redeploy 完成、服務 running。
+9. **cutover**（正式切換；prod 每一步人工放行）。前置：彩排通過、正式目標已照「購買目標服務」買在最終擁有帳號的
+   工作區、下方「切換前檢查」逐項有結論。停機時間＝凍結匯出＋還原＋開機升級＋比對（harumi 的量：約 15 秒＋45 秒＋3 分鐘，另加人工步驟）。
+   1. 正式目標先調好設定（「切換前檢查」的 conf 覆寫、需要時 `shared-mail.sh open`），Redeploy 完成、服務 running。
    2. 凍結來源（WMO）：公告停機 → POS 全部關帳、沒有 draft 訂單 → 來源 odoo scale 0（postgres 留著）。
       - 關帳＝每台收銀機在 POS 畫面按 Close Register 做完結班（點現金、過帳），`pos.session` 的 state 都是 `closed`。
         POS 會把訂單先存在平板的瀏覽器再同步；session 開著就凍結，平板上還沒同步的訂單不會在匯出的資料裡。
@@ -124,12 +194,12 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 - **方案與資源**：目標的 `workers` 與記憶體上限由購買的方案決定（`cs_odoo_workers`／`cs_ram_gb`），不能逐台覆寫。
   來源的 `workers`、`limit_memory_*` 用來選方案；選小了，切過去會變慢或 worker 被記憶體上限中止。
 - **conf 覆寫**：`limit_time_cpu`／`limit_time_real`／`server_wide_modules` 不在方案內，chart 預設是 60／120／`base,web`。
-  平台管理員把 `conf.limitTimeCpu`、`conf.limitTimeReal`、`conf.serverWideModules` 寫進服務的 `helm_values` 後 Redeploy
+  彩排站與正式目標都要套（彩排才驗得到 `server_wide_modules` 能不能開機）。平台管理員把 `conf.limitTimeCpu`、`conf.limitTimeReal`、`conf.serverWideModules` 寫進服務的 `helm_values` 後 Redeploy
   （stg 實測：odoo.conf 生效、`server_wide_modules` 帶 `/all-addons` 的模組可以開機）。
 - **寄收信主機**：盤點的 `db.mail_hosts`。conf 層的 SMTP 不會帶過去（改用 DB 的 `ir.mail_server`）。叢集內位址
   （`*.svc.cluster.local`）從租戶 ns **連不到**——baseline egress 只放行同 ns、DNS 與對外網路。
   - 指向 **mailcow**（woow-k3s 的共用 mail 服務，不在 PaaS 內，歸 woow-machines-operator 管；只有叢集內位址）：
-    目標服務買好、running 之後跑 `scripts/target/shared-mail.sh open`——目標 ns 加准入 label、加一條只開給這台 Odoo
+    正式目標買好、running 之後跑 `scripts/target/shared-mail.sh open`（彩排站不接）——目標 ns 加准入 label、加一條只開給這台 Odoo
     的 egress 規則，並實測連線。每一站接上之前先取得使用者同意（label 是整個 ns 的，同工作區的其他服務在 mailcow
     那一側也會被放行）。stg 實測：接上後 587／993 連得到、同 ns 其他 pod 仍被擋、Redeploy 後仍在、`close` 可收回。
   - mailcow 用私有 CA：收信靠 `mail_fetchmail_durable` 內附的 `mail-ca.crt` 驗憑證（stg 實測可驗）⇒ 該模組要在
@@ -198,8 +268,9 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 
 ## 彩排與中和
 
-彩排＝來源站照常營運，用 `export.sh --live` 取一份資料到目標站走完步驟 6～8。目標站拿到的是真實資料與真實的對外設定，
-開機前必須中和：`restore.sh --replace-db --neutralize`。
+彩排＝來源站照常營運，用 `export.sh --live` 取一份資料到彩排站走完步驟 6～8。彩排站拿到的是真實資料與真實的對外設定，
+開機前必須中和：`restore.sh --replace-db --neutralize`。彩排站另外買、試用期內刪（「購買目標服務」）；它不接 mailcow、
+不加 route，不要拿正式目標當彩排站。
 
 - **時機**：還原並與來源逐位元比對通過之後、取客戶資料列基準之前。所以 `verify.sh --stage restore` 證明的仍是「搬過來的
   資料與來源相同」，`--stage upgrade` 證明「中和後的資料沒被升級動到」，並重跑一次中和斷言。
@@ -234,6 +305,9 @@ s._do_resume();  env.cr.commit()   # 全部開回 1、網址改回服務、state
 
 呼叫後看 `s.state` 與 `s.error_message`：operator 失敗時 state 會是 `error`。prod 的平台 pod 屬 prod 寫入，每一步人工放行。
 
+⚠ 訂閱正常（含試用中）時，每天一次的訂閱生命週期排程會把停權中的服務 `_do_resume()` 開回來。停權到復權之間不要跨過
+那次排程；還原途中若發現 web 被開回來，先停下來重新停權。
+
 ## 測試環境
 
 `scripts/dev/fake-source.sh up|seed|down <slug> --context woow-k3s` 在 `dev-sandbox-<slug>` 起一個與 harumi-odoo
@@ -249,7 +323,7 @@ s._do_resume();  env.cr.commit()   # 全部開回 1、網址改回服務、state
   讓來源改裝目標 image `/all-addons` 裡現成的 addon，`fake-target.sh up --addons` 勾同一批。不必另建 image。
 
 平台層彩排（stg）：`/woow:deploy-stg --slug <新 slug>` 起一套新的 stg 平台 → `cloud_odoo_addon.sync_from_catalog()` →
-以租戶身分打 `/api/workspaces`、`/api/workspaces/<id>/services`（`odoo_addon_ids` 勾來源用到的 addon）建服務 → 目標就是
+以租戶身分照「購買目標服務」的 1～3 步建服務（`plan_id`、`odoo_addon_ids`、`values.conf.adminEmail` 都要帶）→ 目標就是
 `paas-ws-stg-<hash>` 裡的 `svc-<id>`，步驟 6～8 照跑。2026-10-10 以 `fake-source.sh seed --from-image` 的來源跑通
 （含停權、復權、Redeploy、重設管理員密碼）。
 
