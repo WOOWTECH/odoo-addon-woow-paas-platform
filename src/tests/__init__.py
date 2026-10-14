@@ -9,6 +9,8 @@ from . import test_cloud_service
 from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
+# #859：遠端 tunnel 已刪與本地 bookkeeping 失敗不可混成待重試。
+from . import test_cleanup_tunnel_859
 from . import test_workspace_cascade_cleanup
 from . import test_smart_home_template
 from . import test_security_access_template

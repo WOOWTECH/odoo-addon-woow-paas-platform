@@ -1073,23 +1073,33 @@ class SmartHome(models.Model):
         self.unlink()
 
     def _cleanup_tunnel(self):
-        """Best-effort idempotent Cloudflare tunnel teardown.
+        """冪等刪除 tunnel，將遠端刪除與本地 bookkeeping 分成兩個失敗域。
 
-        Clears tunnel_id on success and KEEPS it on failure, so unlink() / a
-        retry can detect a still-live tunnel and avoid orphaning it (symmetric
-        with SecurityAccess._cleanup_cloudflare).
+        遠端未確認成功時保留錨點供 retry；成功後的記帳失敗必須 fail-loud，
+        不能讓呼叫端從殘留 tunnel_id 推論 Cloudflare 上仍有活著的 tunnel。
         """
+        from psycopg2 import OperationalError
+
         self.ensure_one()
         if not self.tunnel_id:
             return
+        tunnel_id = self.tunnel_id
         try:
             client = self._get_operator_client()
             # #531：claim 取自本列鏡回來的 CF name。⚠ 三個錨點是在 delete **成功
             # 之後**才一起清（見下方註解），所以呼叫當下 `tunnel_name` 一定還在。
-            client.delete_tunnel(self.tunnel_id, tunnel_name=self.tunnel_name)
-            _logger.info(
-                "[SH] tunnel deleted sh=%s tunnel=%s", self.id, self.tunnel_id,
+            client.delete_tunnel(tunnel_id, tunnel_name=self.tunnel_name)
+        except Exception as e:
+            # 連線／timeout／operator 拒絕或設定錯誤：尚無成功回執，保持舊重試語意。
+            _logger.warning(
+                "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",
+                self.id, e,
             )
+            return
+
+        # #859：提交點已跨過；之後任何 DB 回捲都不會讓 Cloudflare tunnel 復活。
+        _logger.info("[SH] tunnel deleted sh=%s tunnel=%s", self.id, tunnel_id)
+        try:
             # #524：清空錨點也是寫錨點 —— 走同一個 sentinel 逃生口。
             #
             # **三個錨點一起清**（PR #738 覆核 round1 LOW）：tunnel 已經不存在了，
@@ -1110,24 +1120,51 @@ class SmartHome(models.Model):
             # ⚠ 只在 delete 成功之後寫：失敗時 tunnel 還活在 CF 上，標成 deleted
             # 會把「待重試」謊報成「已刪除」，比原本的 bug 更糟。
             #
-            # #1294（＝#859 的可達格）：這筆是**平台自己的帳**（記下「我們剛刪掉了那顆
-            # tunnel」），以平台身分寫（`sudo()`）。`tunnel_token` 帶
-            # `groups='base.group_system'`，以租戶身分寫會撞欄位 ACL、被下面的
-            # `except Exception` 吞成「保留待重試」⇒ `tunnel_id` 留著 ⇒ `unlink()`
-            # 的 fail-loud 對一顆**已經刪掉**的 tunnel 宣稱「still live and billed」。
-            # #1294 讓租戶 owner/admin 有了 unlink 權，那一格就從不可達變成每次都中。
+            # #1296：這筆是平台自己的帳，維持 sudo ＋ private sentinel 的窄寫入。
             # sudo 打不開身分錨點守衛（無 su 豁免），開閘的仍是 `_internal_identity`；
-            # 授權由呼叫鏈上的 `_assert_unlink_authorized()` 負責，本方法是私有方法
-            # （RPC 叫不到）。
-            _internal_identity(self.sudo()).write(dict(
-                {field: False for field in _IDENTITY_ANCHOR_FIELDS},
-                tunnel_status='deleted',
-            ))
-        except Exception as e:
-            _logger.warning(
-                "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",
-                self.id, e,
+            # 授權由呼叫鏈上的 `_assert_unlink_authorized()` 負責，本方法是私有方法。
+            # #859：錨點與狀態同一個 flushing savepoint；離開時 flush 觸發的
+            # immediate constraint 失敗在本段分類，DEFERRED constraint 到 COMMIT
+            # 才驗，不由 RELEASE SAVEPOINT 觸發。回捲僅撤回本地記帳，不補整筆 rollback。
+            with self.env.cr.savepoint():
+                _internal_identity(self.sudo()).write(dict(
+                    {field: False for field in _IDENTITY_ANCHOR_FIELDS},
+                    tunnel_status='deleted',
+                ))
+        except OperationalError:
+            # #518：回捲成功時保留原型別／物件給 Odoo retrying；真斷線若使
+            # savepoint 回捲另拋例外，原物件可能被蓋過。不查可能已 aborted 的 DB。
+            _logger.exception(
+                "[SH] tunnel deleted in Cloudflare sh=%s tunnel=%s; local identity "
+                "anchors could not be cleared (database operational failure)",
+                self.id, tunnel_id,
             )
+            raise
+        except AccessError as e:
+            # 記帳權限失敗不是呼叫者無刪除權；安全文案交代既成事實，不回顯 ACL 細節。
+            _logger.exception(
+                "[SH] tunnel deleted in Cloudflare sh=%s tunnel=%s; local identity "
+                "anchors could not be cleared (bookkeeping permission failure)",
+                self.id, tunnel_id,
+            )
+            raise UserError(_(
+                "The tunnel was deleted in Cloudflare, but its local identity anchors "
+                "could not be cleared due to a bookkeeping permission error. "
+                "Contact an administrator to repair the local record."
+            )) from e
+        except Exception as e:
+            # 其他 ORM／SQL／程式錯誤同樣 fail-loud，原例外保留在 log 與 chain，
+            # 不把技術細節交給租戶，也不落回呼叫端的 still-live guard。
+            _logger.exception(
+                "[SH] tunnel deleted in Cloudflare sh=%s tunnel=%s; local identity "
+                "anchors could not be cleared (bookkeeping failure)",
+                self.id, tunnel_id,
+            )
+            raise UserError(_(
+                "The tunnel was deleted in Cloudflare, but its local identity anchors "
+                "could not be cleared due to a bookkeeping error. "
+                "Contact an administrator to repair the local record."
+            )) from e
 
     def unlink(self):
         """Direct-unlink guard: the Cloudflare tunnel must never outlive the
