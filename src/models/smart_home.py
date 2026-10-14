@@ -1420,6 +1420,12 @@ class SmartHome(models.Model):
             'created_at': self.create_date.isoformat() if self.create_date else '',
             'subscription': self._get_subscription_info(),
             'mcp': self._get_mcp_integration(),
+            # 自動撤權 v1：只增不減的不透明版本（撤權帳本最大 id，沒有就 0）。HA 經
+            # `GET /api/smarthome/homes/<id>/status` 讀到它改變就重設 connector；
+            # 數值本身沒有意義，只能比較。帳本租戶零 ACL ⇒ sudo。
+            'access_revision': self.env[
+                'woow_paas_platform.smart_home_access_revision'
+            ].sudo()._revision_for_home(self.id),
         }
         if include_details:
             data['routes'] = [r.to_dict() for r in self.route_ids]

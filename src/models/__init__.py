@@ -54,6 +54,8 @@ from . import oauth_code
 from . import oauth_device_code
 from . import smart_home
 from . import smart_home_provision_operation
+# 自動撤權 v1：只能 insert 的撤權帳本（smart_home_route 成功 sync 後在獨立交易寫入）。
+from . import smart_home_access_revision
 from . import smart_home_route
 from . import ai_assistant
 from . import mcp_server
