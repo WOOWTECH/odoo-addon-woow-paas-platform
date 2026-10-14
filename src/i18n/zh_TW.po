@@ -9952,6 +9952,8 @@ msgstr "PaaS 平台監控"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_list
 msgid "PaaS Workspace"
 msgstr ""
 
@@ -16020,6 +16022,7 @@ msgstr "工作區成員"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace_access
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_form
 msgid "Workspace User Access"
 msgstr ""
 

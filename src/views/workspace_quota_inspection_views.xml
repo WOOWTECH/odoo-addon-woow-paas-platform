@@ -3,6 +3,8 @@
     <record id="view_workspace_quota_inspection_list" model="ir.ui.view">
         <field name="name">workspace.quota.inspection.list</field>
         <field name="model">woow_paas_platform.workspace</field>
+        <!-- 不可成為 Workspace 預設 view（預設 view 見 workspace_views.xml），只由下方 action 綁定。 -->
+        <field name="priority">90</field>
         <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="arch" type="xml">
             <list string="Workspace Quota Observations" create="false" edit="false" delete="false"
@@ -32,6 +34,8 @@
     <record id="view_workspace_quota_inspection_form" model="ir.ui.view">
         <field name="name">workspace.quota.inspection.form</field>
         <field name="model">woow_paas_platform.workspace</field>
+        <!-- 不可成為 Workspace 預設 view（預設 view 見 workspace_views.xml），只由下方 action 綁定。 -->
+        <field name="priority">90</field>
         <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="arch" type="xml">
             <form string="Workspace Quota Observation" create="false" edit="false" delete="false">
@@ -86,10 +90,13 @@
         <field name="name">Workspace Quota Observations</field>
         <field name="res_model">woow_paas_platform.workspace</field>
         <field name="view_mode">list,form</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'list', 'view_id': ref('view_workspace_quota_inspection_list')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('view_workspace_quota_inspection_form')})]"/>
         <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="context">{}</field>
     </record>
     <menuitem id="menu_workspace_quota_inspection" name="Workspace Quotas"
               parent="menu_woow_paas_platform_root" action="action_workspace_quota_inspection"
-              groups="base.group_system" sequence="20"/>
+              groups="base.group_system" sequence="90"/>
 </odoo>

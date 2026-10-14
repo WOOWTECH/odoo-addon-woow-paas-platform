@@ -252,8 +252,10 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
 
     def test_backend_views_expose_readonly_full_quota_and_unknown_state(self):
         from lxml import etree
+        action = self.env.ref('woow_paas_platform.action_workspace_quota_inspection')
+        action_views = [tuple(view) for view in action.read(['views'])[0]['views']]
         self.authenticate('admin', 'admin')
-        result = self._call_kw('get_views', [[(False, 'list'), (False, 'form')]])
+        result = self._call_kw('get_views', [action_views])
         self.assertNotIn('error', result, result)
         for kind in ('list', 'form'):
             arch = etree.fromstring(result['result']['views'][kind]['arch'].encode())
@@ -321,3 +323,44 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
         self.assertNotIn('error', response, response)
         self.assertIs(response['result']['success'], False)
         operator.assert_not_called()
+
+    def test_default_workspace_views_stay_generic_outside_quota_action(self):
+        # #1678 headed smoke：quota view 若成為 Workspace 唯一的 primary view，就是所有人的
+        # 預設 view；非管理員從 Many2one 連結打開 Workspace 時，arch 有欄位但 fields 沒有，
+        # web client 直接崩潰，管理員則每開一次連結就同步讀一次 operator。
+        from lxml import etree
+        # 已安裝 f8b31f8a 再升級的 DB 裡 quota view 的 id 較小，只有 priority 能讓一般 view 勝出。
+        for kind in ('list', 'form'):
+            self.assertGreater(
+                self.env.ref('woow_paas_platform.view_workspace_quota_inspection_%s' % kind).priority,
+                self.env.ref('woow_paas_platform.view_workspace_%s' % kind).priority)
+        self.owner.password = self.owner.login
+        for login, password in ((self.owner.login, self.owner.login), ('admin', 'admin')):
+            self.authenticate(login, password)
+            with patch.object(PaaSOperatorClient, 'get_namespace_quota') as operator:
+                result = self._call_kw('get_views', [[(False, 'list'), (False, 'form')]])
+                self.assertNotIn('error', result, result)
+                fields = result['result']['models']['woow_paas_platform.workspace']['fields']
+                for kind in ('list', 'form'):
+                    arch = etree.fromstring(result['result']['views'][kind]['arch'].encode())
+                    # 只看本 model 的欄位；內嵌 x2many 子 list 的欄位屬於別的 model。
+                    names = {field.get('name')
+                             for field in arch.xpath('//field[not(ancestor::field)]')}
+                    self.assertIn('name', names, login)
+                    self.assertFalse({name for name in names if name.startswith('quota_')},
+                                     (login, kind))
+                    self.assertLessEqual(names, set(fields), (login, kind))
+                    # 照 web client 開啟紀錄的方式讀取 view 上的欄位，不得觸發 operator 讀取。
+                    record = self._call_kw('read', [[self.workspace.id]], {'fields': sorted(names)})
+                    self.assertNotIn('error', record, (login, kind, record))
+            operator.assert_not_called()
+
+    def test_platform_app_landing_is_not_quota_observation(self):
+        # 點 Woow PaaS app 的落點維持原本第一個選單；quota 清單每列都會同步讀 operator。
+        # load_web_menus 是 web client 取得 app 落點（actionID）的同一個來源。
+        admin = self.env.ref('base.user_admin')
+        menus = self.env['ir.ui.menu'].with_user(admin).load_web_menus(False)
+        root = self.env.ref('woow_paas_platform.menu_woow_paas_platform_root')
+        quota_action = self.env.ref('woow_paas_platform.action_workspace_quota_inspection')
+        self.assertTrue(menus[root.id]['actionID'])
+        self.assertNotEqual(menus[root.id]['actionID'], quota_action.id)
