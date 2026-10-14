@@ -111,16 +111,26 @@ class FakeOperator:
                     self.record('POST_PREFLIGHT_REFUSED',self.path);return self.send({'detail':{'error':'provider_binding_changed','outcome':'not_created'}},409)
                 tunnel_id=str(uuid.uuid4());owner.tunnels[tunnel_id]=body['name']
                 self.record('CREATE',self.path,tunnel_id=tunnel_id,name=body['name'])
+                if owner.mode in ('redirect307','redirect308'):
+                    self.send_response(int(owner.mode[-3:]));self.send_header('Location','/api/tunnels/redirect-target');self.send_header('Content-Length','0');self.end_headers();return
+                if owner.mode=='malformed201':return self.send({'unexpected':'synthetic-created-but-unusable-response'},201)
                 if owner.mode=='pause_create':owner.entered.set();owner.release.wait(45)
                 return self.send({'tunnel_id':tunnel_id,'tunnel_name':body['name'],'provider_account_id':owner.account},201)
             def do_PUT(self):
                 body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 self.record('PUT',self.path)
+                if self.path.endswith('/config'):
+                    tunnel_id=self.path.split('/')[-2]
+                    if tunnel_id not in owner.tunnels or body.get('tunnel_name')!=owner.tunnels[tunnel_id]:
+                        return self.send({'detail':'synthetic ownership mismatch'},409)
+                    assert body['hostname'].endswith('.shc-prototype.invalid')
+                    assert body['service_url'] in ('http_status:503','http://localhost:8123')
+                    return self.send({'message':'Synthetic configuration accepted','hostname':body['hostname'],'service_url':body['service_url']})
                 if self.path.endswith('/routes'):
                     tunnel_id=self.path.split('/')[-2]
                     if tunnel_id not in owner.tunnels:return self.send({'detail':'unknown synthetic tunnel'},404)
                     if owner.mode=='routes_error':return self.send({'detail':'synthetic route unavailable'},503)
-                    return self.send({'tunnel_id':tunnel_id,'routes':[],'dns_failed':False})
+                    return self.send({'tunnel_id':tunnel_id,'routes':[{'subdomain':r['subdomain'],'hostname':r['subdomain']+'.shc-prototype.invalid','dns_record_id':'synthetic-dns-id'} for r in body['routes']],'dns_failed':False})
                 if self.path=='/api/access/sync':return self.send({'app_id':str(uuid.uuid4()),'policy_ids':[],'orphaned_policy_ids':[]})
                 return self.send({'detail':'unexpected mutation'},503)
             def do_DELETE(self):
@@ -313,6 +323,19 @@ try:
     assert s['remote_tunnel_id'] and s['home_tunnel_id'] is None
     assert fake.count_create(s['name'])==1
     save('late-response-after-lease-quarantine',received_id_durable=True,home_unbound=True,remote_creates=1)
+
+    for mode in ('redirect307','redirect308','malformed201'):
+        home,actor=fixture(mode);op,_=enqueue(home,actor);fake.mode=mode
+        first=child(op,mode+'-first');finish(first);s=snapshot(op)
+        assert s['phase']=='recovery_required' and s['home_state']=='error'
+        assert s['remote_tunnel_id'] is None and s['home_tunnel_id'] is None
+        assert fake.count_create(s['name'])==1
+        assert not any(c['path']=='/api/tunnels/redirect-target' for c in fake.calls),'redirect was followed'
+        fake.mode='normal';restarted=child(op,mode+'-restarted');finish(restarted)
+        _,outcome=enqueue(home,actor);after=snapshot(op)
+        assert not outcome['accepted'] and after['phase']=='recovery_required'
+        assert fake.count_create(s['name'])==1,'unknown outcome caused a duplicate create'
+        save(mode+'-durable-quarantine',remote_creates=1,phase=after['phase'],redirect_target_requests=0,no_recreate_after_worker_restart=True,no_recreate_after_user_retry=True)
 
     assert not any(c['method']=='DELETE' for c in fake.calls)
     save('no-automatic-adoption-or-compensation',remote_deletes=0)

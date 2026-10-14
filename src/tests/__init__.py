@@ -1155,6 +1155,8 @@ from . import test_rollback_settings_sync
 # #1647 顯示：工作區頁的 CPU／記憶體／磁碟配額（上限、已佔用、剩餘、等級；成員可看、非成員不碰 operator；operator 未設定／太舊／失敗各有 reason）。
 from . import test_workspace_quota_1647
 from . import test_service_resource_observations
+
+from . import test_workspace_invitation_mail_dispatch
 # 自動撤權 v1（2026-10-14 跨 repo 契約）：SH 撤權帳本——何時記版、獨立交易、
 # fail-loud、to_dict 讀取面與租戶零存取。
 from . import test_sh_access_revision_ledger

@@ -77,6 +77,10 @@ class TestOmnigentSeed(TransactionCase):
             v['runner']['image'],
             OMNI_HOST_IMAGE + ':20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f',
             'MCP 工具清單修補的自有 QA runner 映像須經 JCR 鏡像後雙釘')
+        self.assertEqual(
+            v['image']['tag'],
+            '20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40',
+            'MCP 工具執行錯誤保留 isError 的 server 修補映像須經 JCR 鏡像後雙釘')
         host_tag = v['runner']['image'][len(OMNI_HOST_IMAGE) + 1:]
         self.assertRegex(host_tag, PINNED_TAG_RE,
                          'runner image 由 launcher 原樣寫進每個 Job，必須釘 digest')
