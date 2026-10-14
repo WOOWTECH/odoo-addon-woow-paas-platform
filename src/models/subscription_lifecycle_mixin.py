@@ -577,18 +577,25 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             raise UserError(_("Subscription is not in trial period."))
 
         # Check wallet balance before proceeding
+        #
+        # 2026-10-14：門檻必須是**本期發票的含稅總額**，不是未稅 `sh_plan_price`。
+        # 原本比未稅價：訂閱帶稅（例 300 未稅＋5%＝315）且錢包落在 [300, 315) 時
+        # 這裡放行，接著發票 315 > 錢包 ⇒ `_handle_invoice_creation` 退回上游
+        # （`sh_invoice_generated='draft'` 留草稿、`'paid'` 開假付款），而試用已結束、
+        # 下次扣款日已推一期 ⇒ 沒扣點就開始付費週期。用上游與發票同源的
+        # `_sh_get_period_billing_amount()`（單價×數量再套 sh_taxes_ids）。
         partner = sub.sh_partner_id
-        plan_price = sub.sh_plan_price
+        required = sub._sh_get_period_billing_amount()
         _logger.info(
-            "[SUB_MIXIN] _skip_trial balance check sub=%s partner=%s price=%s balance=%s",
-            sub.id, partner.id, plan_price, partner.wallet_balance,
+            "[SUB_MIXIN] _skip_trial balance check sub=%s partner=%s untaxed=%s required=%s balance=%s",
+            sub.id, partner.id, sub.sh_plan_price, required, partner.wallet_balance,
         )
-        if partner.wallet_balance < plan_price:
+        if partner.wallet_balance < required:
             raise UserError(
                 _("Insufficient wallet balance to skip trial. "
                   "Current balance: %.2f, required: %.2f. "
                   "Please top up your wallet first.")
-                % (partner.wallet_balance, plan_price)
+                % (partner.wallet_balance, required)
             )
 
         # #980：controller 的 `/woow` payability guard 由這個 seam 注入。它必須

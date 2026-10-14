@@ -1165,3 +1165,4 @@ from . import test_sh_access_revision_ledger
 # 同上的真交易邊界探針（`-standard`，要 `--test-tags sh_access_revision_rollback`
 # 才會跑）：帳本列必須活過**真正的**主交易 rollback。
 from .integration import test_sh_access_revision_rollback  # noqa: F401
+from . import test_skip_trial_balance_incl_tax
