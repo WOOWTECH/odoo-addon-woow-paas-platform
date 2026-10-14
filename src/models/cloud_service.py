@@ -1291,7 +1291,9 @@ def _refresh_image_refs(service_values, template_values, tenant_keys=()):
     (``tenant_keys``: dotted helm_value_specs keys — the key itself or any ancestor).
     A ref key the service carries but the template no longer does (e.g. a stale
     ``digest`` after the template moved to ``tag@sha256``) is removed, since the chart
-    would otherwise keep rendering it.
+    would otherwise keep rendering it. Omnigent's chart-defined ``runner.image``
+    string is refreshed only at that platform-owned path and only while both pins
+    point at the platform's omnigent-host repository.
     """
     new_values = copy.deepcopy(service_values) if isinstance(service_values, dict) else {}
     tenant = set(tenant_keys or ())
@@ -1318,7 +1320,46 @@ def _refresh_image_refs(service_values, template_values, tenant_keys=()):
             elif key in target:
                 changes.append((dotted, target[key], None))
                 del target[key]
+
+    # runner.image is copied to Jobs created later by the Omnigent host. Keep
+    # string-image handling scoped so unrelated chart strings remain untouched.
+    runner = template_values.get('runner') if isinstance(template_values, dict) else None
+    service_runner = new_values.get('runner')
+    if (isinstance(runner, dict) and isinstance(service_runner, dict)
+            and not tenant_owned('runner.image')
+            and isinstance(runner.get('image'), str)
+            and isinstance(service_runner.get('image'), str)):
+        template_image = runner['image']
+        service_image = service_runner['image']
+        host_prefix = _OMNIGENT_HOST_IMAGE + ':'
+        if (template_image.startswith(host_prefix)
+                and service_image.startswith(host_prefix)
+                and _is_pinned_container_image(service_image)
+                and _is_pinned_container_image(template_image)):
+            if service_image != template_image:
+                changes.append(('runner.image', service_image, template_image))
+                service_runner['image'] = template_image
     return new_values, changes
+
+
+def _is_pinned_container_image(image):
+    """Accept this platform repository's ``tag@sha256:<64 lowercase hex>`` pin."""
+    if not isinstance(image, str) or image.count('@') != 1:
+        return False
+    repository_and_tag, digest_ref = image.split('@', 1)
+    digest_prefix, separator, digest = digest_ref.partition(':')
+    if separator != ':' or digest_prefix != 'sha256' or len(digest) != 64:
+        return False
+    if any(char not in '0123456789abcdef' for char in digest):
+        return False
+    repository_prefix = _OMNIGENT_HOST_IMAGE + ':'
+    if not repository_and_tag.startswith(repository_prefix):
+        return False
+    tag = repository_and_tag[len(repository_prefix):]
+    return (bool(tag) and len(tag) <= 128
+            and tag[0].isascii() and (tag[0].isalnum() or tag[0] == '_')
+            and all(char.isascii() and (char.isalnum() or char in '_.-')
+                    for char in tag))
 
 
 def _split_image(image):

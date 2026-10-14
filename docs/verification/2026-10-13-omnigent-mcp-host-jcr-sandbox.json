@@ -1,0 +1,35 @@
+{
+  "at": "2026-10-13",
+  "source_commit_tested": "a3f78d38e3741de9965d439f279df851681a63d1",
+  "install_and_readback": {
+    "namespace": "dev-sandbox-ac1013-omnigent-jcr",
+    "namespace_uid": "376972b4-f83d-490f-9c1e-2a54614984bc",
+    "fresh_db": true,
+    "source_head": "a3f78d38e3741de9965d439f279df851681a63d1",
+    "source_xml_sha256": "3d48d89208780825a2f61e2107e3f929f7198389a4c54529b27063f510bb5595",
+    "version": "18.0.1.0.230",
+    "odoo_tests": 16,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seed_noupdate": false,
+    "seed_runner_image": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+    "external_provider_requests": 0,
+    "production_data_cloned": false,
+    "shared_deployments": 0
+  },
+  "selected_class_tests": {
+    "TestOmnigentSeed": 11,
+    "TestOmnigentRunnerImageMigration017": 5
+  },
+  "runtime_probe_attempts": 2,
+  "runtime_probe_failures_before_success": 1,
+  "cleanup": {
+    "namespace": "dev-sandbox-ac1013-omnigent-jcr",
+    "namespace_uid": "376972b4-f83d-490f-9c1e-2a54614984bc",
+    "namespace_absent": true,
+    "own_ttl_cluster_roles_absent": true,
+    "destroy_exit": 0
+  },
+  "registry_image_published": false
+}
