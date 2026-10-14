@@ -5336,8 +5336,9 @@ class PaasController(HiddenChainMixin, Controller):
                 revision=revision,
                 chart=service.template_id.helm_chart_name if preserve_paths else None,
                 preserve_value_paths=preserve_paths or None,
-                # #1647：保留憑證的回復是一次 helm upgrade，operator 可以在套用前檢查工作區
-                # 的 compute 配額；純 helm rollback（沒有平台憑證的模板）operator 不檢查。
+                # #1647：operator 在套用前檢查工作區的 compute 配額——保留憑證的回復算 helm
+                # upgrade 的 dry-run，純 helm rollback（沒有平台憑證的模板）算目標 revision 的
+                # stored manifest（#1685）。
                 check_compute_quota=service._compute_quota_check_requested(),
             )
 

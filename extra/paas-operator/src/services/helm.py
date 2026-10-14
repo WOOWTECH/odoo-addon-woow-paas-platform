@@ -1159,6 +1159,23 @@ class HelmService:
         # helm prints `null` for a revision installed without any values.
         return data if isinstance(data, dict) else {}
 
+    def get_manifest(self, namespace: str, name: str, revision: int) -> str:
+        """#1685: stored manifest of a revision (``helm get manifest --revision``).
+
+        This is what a plain ``helm rollback`` to that revision re-applies (hooks excluded),
+        so the compute quota pre-check can judge it without a dry-run.
+
+        ⛔ The manifest may contain Secret objects in plain text: callers must never log or
+        return it. ``_run_command`` itself only logs the command line and, on failure, stderr.
+        """
+        validate_namespace(namespace)
+        args = [
+            "get", "manifest", name,
+            "--namespace", namespace,
+            "--revision", str(int(revision)),
+        ]
+        return self._run_command(args).stdout or ""
+
     def get_revision_chart_version(
         self, namespace: str, name: str, revision: int
     ) -> Optional[str]:

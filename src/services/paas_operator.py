@@ -935,8 +935,9 @@ class PaaSOperatorClient:
             revision: Target revision (0 = previous)
             chart: Chart reference (required with preserve_value_paths)
             preserve_value_paths: Dot-paths whose current values must survive
-            check_compute_quota: #1647——同 ``upgrade_release``。operator 只在保留憑證的回復
-                （那是一次 helm upgrade，有 dry-run 可算）檢查；純 helm rollback 不檢查。
+            check_compute_quota: #1647——同 ``upgrade_release``。兩種回復 operator 都檢查：
+                保留憑證的回復算那次 helm upgrade 的 dry-run，純 helm rollback 算目標 revision
+                的 stored manifest（#1685；更早的 operator 在純 rollback 收到旗標也不檢查）。
 
         Returns:
             Rollback confirmation
