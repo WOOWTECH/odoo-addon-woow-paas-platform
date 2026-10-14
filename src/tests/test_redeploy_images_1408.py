@@ -17,6 +17,7 @@ from ..models.cloud_service import (
     _internal_provision,
     _refresh_image_refs,
     _split_image,
+    _OMNIGENT_HOST_IMAGE,
 )
 from .operator_contract import pod_info, status_response
 
@@ -27,6 +28,8 @@ _CLIENT_PATH = (
 _REPO = 'jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent'
 _OLD = '20261002.2302@sha256:0f33784e'
 _NEW = '20261003.1400@sha256:a00d92d8'
+_OMNI_OLD = _OMNIGENT_HOST_IMAGE + ':v0.16.0@sha256:' + 'a' * 64
+_OMNI_NEW = _OMNIGENT_HOST_IMAGE + ':v0.17.0@sha256:' + 'b' * 64
 
 
 @tagged('post_install', '-at_install')
@@ -72,6 +75,40 @@ class TestImageRefHelpers(TransactionCase):
         service = {'image': {'repository': 'n8nio/n8n', 'tag': '2.35.3'}}
         new, changes = _refresh_image_refs(service, {'main': {'persistence': {}}})
         self.assertEqual((new, changes), (service, []))
+
+    def test_omnigent_runner_platform_pin_refreshes_without_mutating_input(self):
+        service = {'runner': {'image': _OMNI_OLD, 'enabled': True}}
+        original = json.loads(json.dumps(service))
+        template = {'runner': {'image': _OMNI_NEW, 'enabled': True}}
+        new, changes = _refresh_image_refs(service, template)
+        self.assertEqual(new['runner']['image'], _OMNI_NEW)
+        self.assertEqual(service, original)
+        self.assertEqual(changes, [('runner.image', _OMNI_OLD, _OMNI_NEW)])
+        self.assertEqual(_refresh_image_refs(new, template), (new, []))
+
+    def test_omnigent_runner_refresh_is_limited_to_platform_pins(self):
+        cases = [
+            ({'runner': {'image': 'registry.example.com/custom:1'}},
+             {'runner': {'image': _OMNI_NEW}}, set()),
+            ({'runner': {'image': _OMNI_OLD}},
+             {'runner': {'image': 'registry.example.com/custom:2'}}, set()),
+            ({'runner': {'image': _OMNI_OLD}},
+             {'runner': {'image': _OMNIGENT_HOST_IMAGE + ':latest'}}, set()),
+            ({'runner': {'image': _OMNIGENT_HOST_IMAGE + ':broken@sha256:bad'}},
+             {'runner': {'image': _OMNI_NEW}}, set()),
+            ({'runner': {'image': _OMNI_OLD}},
+             {'runner': {'image': _OMNI_NEW}}, {'runner.image'}),
+            ({'custom': {'image': _OMNI_OLD}},
+             {'custom': {'image': _OMNI_NEW}}, set()),
+            ({'runner': 'invalid'}, {'runner': {'image': _OMNI_NEW}}, set()),
+            ({'runner': {'image': 17}}, {'runner': {'image': _OMNI_NEW}}, set()),
+        ]
+        for service, template, tenant_keys in cases:
+            with self.subTest(service=service, template=template, tenant_keys=tenant_keys):
+                original = json.loads(json.dumps(service))
+                new, changes = _refresh_image_refs(service, template, tenant_keys)
+                self.assertEqual(new, original)
+                self.assertEqual(changes, [])
 
     def test_split_image(self):
         self.assertEqual(
@@ -193,6 +230,47 @@ class TestRedeployRefreshesImages(_Base):
         """只有 Redeploy 換 image——儲存設定／重設密碼走 _assemble_deploy_values，不換。"""
         values = self.service._assemble_deploy_values()['values']
         self.assertEqual(values['image']['tag'], _OLD)
+
+    def test_redeploy_refreshes_only_platform_owned_runner_image(self):
+        template = self.env.ref('woow_paas_platform.cloud_app_omnigent')
+        template_values = json.loads(template.helm_default_values or '{}')
+        target = template_values['runner']['image']
+        self.assertNotEqual(target, _OMNI_OLD)
+        workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'Omnigent redeploy refresh',
+        })
+
+        def make_service(name, runner_image):
+            return _internal_provision(
+                self.env['woow_paas_platform.cloud_service']).create({
+                    'name': name,
+                    'workspace_id': workspace.id,
+                    'template_id': template.id,
+                    'state': 'running',
+                    'helm_namespace': 'paas-ws-omni-refresh',
+                    'helm_release_name': name,
+                    'helm_values': json.dumps({'runner': {'image': runner_image}}),
+                })
+
+        platform_service = make_service('omni-refresh-platform', _OMNI_OLD)
+        custom_image = 'registry.example.com/custom-runner:v4'
+        custom_service = make_service('omni-refresh-custom', custom_image)
+        client = MagicMock()
+        client.get_release.return_value = {'name': 'release'}
+        client.upgrade_release.return_value = {'revision': 7, 'chart_version': '0.1.7'}
+        with patch(_CLIENT_PATH, return_value=client):
+            platform_service.action_redeploy()
+        sent = client.upgrade_release.call_args.kwargs['values']['runner']['image']
+        self.assertEqual(sent, target)
+        platform_service.invalidate_recordset()
+        self.assertEqual(json.loads(platform_service.helm_values)['runner']['image'], target)
+
+        with patch(_CLIENT_PATH, return_value=client):
+            custom_service.action_redeploy()
+        sent_custom = client.upgrade_release.call_args.kwargs['values']['runner']['image']
+        self.assertEqual(sent_custom, custom_image)
+        custom_service.invalidate_recordset()
+        self.assertEqual(json.loads(custom_service.helm_values)['runner']['image'], custom_image)
 
 
 class TestRedeployVerification(_Base):
