@@ -122,9 +122,9 @@ class TestLitellmSeed(TransactionCase):
         self.assertRegex(v['image']['tag'], PINNED_TAG_RE)
         self.assertTrue(
             v['image']['tag'].endswith(
-                '@sha256:f34a2d595aea1e0d8bd1c7a152e18c05cfaea331687ed7710fdb2fcb82fe3e14'),
-            'chart 0.3.2 配 litellm 20261014.0718（paas-odoo-ci 核可 #313；LiteLLM 1.104.0 加 SSE／API／'
-            '安全標頭整合）；0.3.0 起是 1.104.0，HA「Woow LiteLLM」add-on 同版一起升')
+                '@sha256:ad47a0de4275827b988b8df2f76305bdb2ccfa328588caa48875c61684179530'),
+            'litellm 20261014.1158（paas-odoo-ci 核可 #322）：0718 的 SSE／API／安全標頭再加 M4 API 錯誤契約'
+            '補丁；0.3.0 起是 LiteLLM 1.104.0，HA「Woow LiteLLM」add-on 用同一份補丁')
         pg = v['postgresql']['image']
         self.assertEqual(pg['repository'], JCR + 'paas-postgres')
         self.assertRegex(pg['tag'], PG_PINNED_TAG_RE,
