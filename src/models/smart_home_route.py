@@ -46,12 +46,15 @@ from odoo.exceptions import UserError, ValidationError
 # #798：policy 列上 `cf_policy_id` 的唯一寫入豁免。sentinel／opener 住在 SA 那支
 # （`security_access` 不 import 任何 sibling model ⇒ 這個方向無循環）。
 from .security_access import _internal_policy_cf_write
+from .smart_home_access_revision import access_security_fingerprint
 
 _logger = logging.getLogger(__name__)
 _DEFER_ACCESS_RELEASE = object()
 
 #: #528 的待回收 CF Access policy 帳本（三腿共用）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+#: 自動撤權 v1 的撤權帳本（只能 insert；見該 model 的 docstring）。
+_ACCESS_REVISION_MODEL = 'woow_paas_platform.smart_home_access_revision'
 
 
 # ------------------------------------------------------------------------- #
@@ -723,6 +726,10 @@ class SmartHomeRoute(models.Model):
                 not forced):
             home._sync_access_ingress(park=True)
         needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
+        # 自動撤權 v1：這一輪之前 CF 上沒有生效中的 app（首次保護／關掉後重開／
+        # protection_lost 後重建）⇒ 那段期間任何人都可能已連上，必須強制記一版。
+        gate_was_open = self.is_protected and (
+            not self.access_app_id or self.access_protection_lost)
         client = home._get_operator_client()
         payload = self._build_access_payload()
         result = client.sync_access_app(payload)
@@ -731,6 +738,15 @@ class SmartHomeRoute(models.Model):
             raise AccessProtectionError(_(
                 "Access protection was not established. Origin publication "
                 "is not confirmed; fix the login configuration and retry."))
+        if payload.get('enabled'):
+            # 自動撤權 v1：CF 已確認新的收緊（或同樣的）desired state ⇒ 指紋有變
+            # 就在**獨立交易**記一版，讓 HA 重設既有連線。只記 `enabled=True`：
+            # 關保護／刪 route 是放寬存取，不需要斷線（契約「刻意不做」）。
+            # 寫不進去會 raise（fail-loud），理由見
+            # `smart_home_access_revision._record_confirmed_state`。
+            self.env[_ACCESS_REVISION_MODEL].sudo()._record_confirmed_state(
+                home.id, self.id, access_security_fingerprint(payload),
+                force=gate_was_open)
         orphaned = result.get('orphaned_policy_ids') or []
         if orphaned:
             # operator 重指 app 之後刪不掉的舊 reusable policy＝永久 CF 孤兒
