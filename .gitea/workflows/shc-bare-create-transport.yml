@@ -4,19 +4,26 @@ name: shc-bare-create-transport
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   loopback-transport:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Install tested HTTP client dependency
-        run: python -m pip install --disable-pip-version-check requests==2.34.2
+        run: |
+          python -m venv .venv-bare-create-ci
+          .venv-bare-create-ci/bin/python -m pip install --disable-pip-version-check requests==2.34.2
       - name: Real loopback redirect and unknown-outcome regression
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           SHC_TRANSPORT_EVIDENCE: "1"
-        run: timeout 60s python tests/test_shc_bare_create_transport.py -v
+        run: timeout 60s .venv-bare-create-ci/bin/python tests/test_shc_bare_create_transport.py -v
