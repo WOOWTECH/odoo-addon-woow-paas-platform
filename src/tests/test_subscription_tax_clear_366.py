@@ -108,7 +108,13 @@ class TestSeedProductCorpusIntact(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestSubscriptionProductsTaxFree(TransactionCase):
-    """全庫訂閱 product 的 taxes_id 皆空（seed Layer B / migration Layer A 終態）。"""
+    """訂閱 product 的稅只能是「無」或 PaaS 專用 5% 內含稅（2026-10-14 政策 A）。
+
+    政策 A 取代 #366「pts 免稅」：標價含稅。公司有 5% 銷項稅時 -u 會把 seed 商品收斂成
+    PaaS 內含稅（models/paas_included_vat.py）；沒有（例如沒裝 l10n_tw 的測試 DB）時維持
+    無稅。兩種終態都滿足 card == charged（見 TestCardEqualsCharged）；任何外加稅或別的稅
+    （例如公司預設 15% 回流）都會讓本測試紅。class 名沿用以保 test-collection baseline。
+    """
 
     def test_all_subscription_products_have_no_tax(self):
         products = _paas_subscription_products(self.env)
@@ -116,11 +122,14 @@ class TestSubscriptionProductsTaxFree(TransactionCase):
         # 這裡只需擋 vacuous——集合為空時下面的 assertFalse(taxed) 會假綠。
         self.assertTrue(
             products, '前置：應有 PaaS 訂閱 product（防 vacuously pass）')
-        taxed = products.filtered(lambda p: p.taxes_id)
+        allowed = self.env['product.template']._woow_paas_included_sale_tax(create=False)
+        taxed = products.filtered(lambda p: p.taxes_id - allowed)
         self.assertFalse(
             taxed,
-            '訂閱 product 不應掛任何銷項稅（pts 免稅）；仍掛稅 %d 個：%s'
+            '訂閱 product 只能無稅或掛 PaaS 內含稅；掛了其他稅 %d 個：%s'
             % (len(taxed), taxed.mapped('name')))
+        self.assertTrue(all(t.price_include for t in products.taxes_id),
+                        '政策 A：訂閱 product 上的稅必須是內含稅')
 
 
 @tagged('post_install', '-at_install')

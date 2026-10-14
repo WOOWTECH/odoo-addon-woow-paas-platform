@@ -5,7 +5,8 @@
 
 * 付費中刪除（剩一半）→ 貸項＝一半的未稅金額、``reversed_entry_id`` 指回原發票、
   以退點的 outbound payment 沖銷（未稅商品：貸項 paid）；
-* 含稅商品 → 貸項依原稅率沖銷，退點只沖未稅那段，稅額那段留著未沖（#1261 待決）；
+* 含稅商品（政策 A，2026-10-14）→ 退點以實付含稅總額按比例計算，貸項總額＝退點、全額沖銷；
+  內含稅全退時貸項不得被夾成未稅額；
 * 全額退 → 原發票若還沒開電子發票，改為 ``not_required``（不能替已全額退款的交易開票）；
 * 原發票已開電子發票 → 不在交易裡打 ECPay，留言＋替帳務管理群組建「需開折讓」待辦；
 * 公司設成自動開票時，貸項過帳不會 inline 打 ECPay 折讓（``run_refund`` override）；
@@ -102,19 +103,34 @@ class TestRefundCreditNote1555(_RefundFixture):
         self.assertEqual(credit_note.woow_invoice_issue_state, 'not_required')
         self.assertEqual(invoice.payment_state, 'paid', '原發票本身仍是客戶付清的那張')
 
-    def test_tax_part_stays_open_pending_1261(self):
-        """含稅商品：貸項沖銷那段銷售＋銷項稅；錢包只退未稅點數 ⇒ 稅額那段留著未沖。"""
+    def test_excluded_tax_invoice_refunds_tax_included_amount(self):
+        """政策 A（2026-10-14，取代 #1261 待決）：外加稅的舊發票（付 105）剩一半 ⇒ 退 52.5
+        （含稅），貸項總額＝退點、全額沖銷，不再留稅額那段未沖。"""
         sub, invoice = self._paid_sub(taxes=self.tax_5)
         self.assertAlmostEqual(invoice.amount_total, 105.0, places=2)
         with _today(_MID_CYCLE):
             credited = sub._settle_on_entity_delete()
-        self.assertEqual(credited, 50.0, '退點金額不變（#1261 尚未裁決退稅）')
+        self.assertAlmostEqual(credited, 52.5, places=2, msg='退點基準＝實付含稅總額')
         credit_note = self._credit_notes(invoice)
         self.assertAlmostEqual(credit_note.amount_untaxed, 50.0, places=2)
         self.assertAlmostEqual(credit_note.amount_tax, 2.5, places=2)
-        self.assertEqual(credit_note.payment_state, 'partial')
-        self.assertAlmostEqual(credit_note.amount_residual, 2.5, places=2,
-                               msg='未沖的就是尚未退給客戶的稅額（#1261）')
+        self.assertAlmostEqual(credit_note.amount_total, credited, places=2)
+        self.assertEqual(credit_note.payment_state, 'paid')
+
+    def test_included_tax_full_refund_credit_note_equals_refund(self):
+        """內含稅（政策 A）：付 100（未稅 95.24＋稅 4.76）立即全退 ⇒ 退 100、貸項總額 100。
+
+        原本第二道 clamp 夾在原發票**未稅額** 95.24、再當含稅單價開立 ⇒ 貸項只記 95.24。"""
+        self.tax_5.write({'price_include_override': 'tax_included'})
+        sub, invoice = self._paid_sub(taxes=self.tax_5)
+        self.assertAlmostEqual(invoice.amount_total, 100.0, places=2)
+        with _today(_CYCLE_START):
+            credited = sub._settle_on_entity_delete()
+        self.assertAlmostEqual(credited, 100.0, places=2)
+        credit_note = self._credit_notes(invoice)
+        self.assertAlmostEqual(credit_note.amount_total, 100.0, places=2)
+        self.assertAlmostEqual(credit_note.amount_untaxed, invoice.amount_untaxed, places=2)
+        self.assertEqual(credit_note.payment_state, 'paid')
 
     def test_full_refund_before_einvoice_stops_issuance(self):
         sub, invoice = self._paid_sub()
@@ -185,11 +201,11 @@ class TestRefundCreditNote1555(_RefundFixture):
             credited = new_sub._settle_on_entity_delete()
         old_cn, new_cn = self._credit_notes(old_invoice), self._credit_notes(new_invoice)
         self.assertEqual((len(old_cn), len(new_cn)), (1, 1))
-        self.assertAlmostEqual(old_cn.amount_untaxed, refund, places=2)
-        self.assertAlmostEqual(new_cn.amount_untaxed, credited, places=2)
+        self.assertAlmostEqual(old_cn.amount_total, refund, places=2)
+        self.assertAlmostEqual(new_cn.amount_total, credited, places=2)
         self.assertIn('Plan change', old_cn.ref)
         self.assertEqual(old_cn.payment_state, 'paid')
-        self.assertEqual(new_cn.payment_state, 'partial', '含稅：稅額那段留著（#1261）')
+        self.assertEqual(new_cn.payment_state, 'paid', '政策 A：退點含稅，貸項全額沖銷')
 
     def test_trial_or_unpaid_creates_nothing(self):
         sub = self.Sub.create({

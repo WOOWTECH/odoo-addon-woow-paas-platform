@@ -162,7 +162,8 @@ class ShSubscriptionFix(models.Model):
 
         視窗 = ``[next_payment − cycle_delta, next_payment)``；剩餘比例
         = ``(next_payment − today) / cycle_days``，clamp 到 ``[0, cycle_days]`` 使
-        單次退點 ∈ ``[0, 一週期 plan 價]``（守則：不跨期回溯多退）。
+        單次退點 ∈ ``[0, 一週期實付含稅總額]``（守則：不跨期回溯多退；基準見
+        ``_woow_refund_cycle_amount``）。
 
         Returns 0 when next_payment / start_date 缺失、``today < sh_start_date``
         （trial / 未開始）、或 cycle_delta 無法解析。``sh_start_date`` 僅作 trial
@@ -183,7 +184,26 @@ class ShSubscriptionFix(models.Model):
         cycle_start = next_payment - cycle_delta
         cycle_days = (next_payment - cycle_start).days or 1
         remaining_days = max(0, min((next_payment - today).days, cycle_days))
-        return round(self.sh_plan_price * remaining_days / cycle_days, 2)
+        base, currency = self._woow_refund_cycle_amount()
+        refund = base * remaining_days / cycle_days
+        # 2026-10-14：以發票幣別進位（TWD＝整數），退回錢包的點數才會等於貸項金額；
+        # 沒有已付發票時維持原本的 2 位小數。
+        return currency.round(refund) if currency else round(refund, 2)
+
+    def _woow_refund_cycle_amount(self):
+        """退點基準：本期客戶**實際付的含稅總額**，回傳 ``(金額, 幣別或 False)``。
+
+        2026-10-14 政策 A（標價含稅）：退點以含稅總額按比例計算，取代 #1261「只退未稅」。
+        有已付的訂閱發票就用它的 ``amount_total``（政策 A 之前以外加稅付 315 的訂閱也照實
+        際付的 315 退，不會被 migration 後的新稅快照少退）；沒有（從沒付過、NewId 純公式
+        路徑）才退回 ``sh_plan_price``——政策 A 下兩者相等。
+        """
+        self.ensure_one()
+        if isinstance(self.id, int):
+            invoice = self._woow_refunded_invoice()
+            if invoice:
+                return invoice.amount_total, invoice.currency_id
+        return self.sh_plan_price or 0.0, False
 
     def _settle_on_entity_delete(self, reason='Service deleted'):
         """Cancel this subscription and prorata-refund the unused paid cycle
