@@ -1304,9 +1304,14 @@
                  checksum/tenant-llm-keys 多了常數 ⇒ 升到 0.3.4 時 agent 重啟一次（PVC 資料保留），卡住的
                  舊金鑰也一併離開執行中的程序。publish-charts run 16650（charts main bc970850，OCI
                  sha256:72929785…）。image 與 helm_default_values 不變。只影響新開通與之後 redeploy 的服務
-                 （既有服務要 redeploy 升到 0.3.4 才修好 #1556）。回滾值：0.3.3。 -->
-            <field name="helm_chart_version">0.3.4</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261003.1400@sha256:7b095a7258e627c156d7c08301b699fda42365548fdb868c94b4d3848823a9a4"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+                 （既有服務要 redeploy 升到 0.3.4 才修好 #1556）。回滾值：0.3.3。
+                 0.3.4 → 0.3.6（2026-10-14，charts #188）：Hermes Agent 0.19.0 → 0.21.6。chart 只改
+                 appVersion／README，template 與 values 行為不變；image 同步改釘 paas-odoo-ci #312 核可的
+                 20261014.0625@sha256:5a7ae1d3…（CI run 19326，與專用候選驗收同一 digest）。chart 版本與 image
+                 必須一起動、一起回滾。既有服務 Redeploy 前先整顆 PVC 冷備份（0.21.6 會升 state.db／config
+                 schema，只換回舊 image 不夠）。回滾值：0.3.4＋20261003.1400@sha256:7b095a72…。 -->
+            <field name="helm_chart_version">0.3.6</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261014.0625@sha256:5a7ae1d3ebea8430ca1f82305c5fc26c92736b4b6966ed5c9add81c2d5b4d7aa"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API 金鑰", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
