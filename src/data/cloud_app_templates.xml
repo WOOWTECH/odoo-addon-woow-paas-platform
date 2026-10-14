@@ -2068,7 +2068,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261007.0720@sha256:31c83f122e2a2c0854997235ea5163596598933bc4faa4c12f619b3d9407cd4b"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},
