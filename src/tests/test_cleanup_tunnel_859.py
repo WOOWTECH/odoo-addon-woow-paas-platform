@@ -36,6 +36,13 @@ class TestCleanupTunnel859(TransactionCase):
             'name': 'Cleanup 859',
         })
         self.Model = type(self.env['woow_paas_platform.smart_home'])
+        # unlink／_do_cleanup 在刪 tunnel 前先 park ingress，要 operator 確認回執；
+        # MagicMock client 給不出回執 ⇒ AccessPublicationError，探針到不了 bookkeeping。
+        # 這裡的 home 沒有 route，park 與本檔要驗的失敗域無關，故 stub 掉
+        # （park 本身的契約見 test_access_publish_pending_ac1011）。
+        park = patch.object(self.Model, '_sync_access_ingress', return_value=None)
+        park.start()
+        self.addCleanup(park.stop)
 
     def _home(self):
         return sh_model(self.env).create({
