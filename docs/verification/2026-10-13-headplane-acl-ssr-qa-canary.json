@@ -1,0 +1,80 @@
+{
+  "at": "2026-10-13T18:27:07Z",
+  "workspace_id": 52,
+  "service_id": 238,
+  "namespace_uid": "b215a17d-8917-453e-862b-cc88df257922",
+  "pod_uid": "d3bfbe80-ebd5-4b01-97ff-4aa2c500c1dd",
+  "node": "ubuntuserver-31zix",
+  "original_image": "jcr-prod.woowtech.io/woow-paas-docker-local/headplane:20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22",
+  "candidate_image": "ghcr.io/woowtech/headplane:0.7.1-acl-ssr-qa-20261013@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+  "before_documents": {
+    "/admin/acls": {
+      "status": 500,
+      "bytes": 37578,
+      "sha256": "eac66fc4fa960035f1345874ed4d06d428d4712653f9b91a309ec7bf5ee41a98",
+      "ssr_element_type_error": true
+    },
+    "/admin/acls.data": {
+      "status": 200,
+      "bytes": 1055,
+      "sha256": "0f63210adc7418073de9a2267adf5edb2b4625ad813efc0d9472a974b053e9da",
+      "ssr_element_type_error": false
+    },
+    "/admin/machines": {
+      "status": 200,
+      "bytes": 54678,
+      "sha256": "7dd7760592c0b39a57fea95bbe8110247630f163c50dbd4fdae8b33090c8942d",
+      "ssr_element_type_error": false
+    }
+  },
+  "candidate_documents": {
+    "/admin/acls": {
+      "status": 200,
+      "bytes": 35894,
+      "sha256": "30e5af238e742bab8bb33002c7ac1f7a016f6adc86ff42236dfdcf78e1830c90",
+      "ssr_element_type_error": false
+    },
+    "/admin/acls.data": {
+      "status": 200,
+      "bytes": 1055,
+      "sha256": "0f63210adc7418073de9a2267adf5edb2b4625ad813efc0d9472a974b053e9da",
+      "ssr_element_type_error": false
+    },
+    "/admin/machines": {
+      "status": 200,
+      "bytes": 54698,
+      "sha256": "2064a985bbca7842c65d0d269701b824670ff147325adbaddad720c592f1e0d1",
+      "ssr_element_type_error": false
+    }
+  },
+  "after_restore_documents": {
+    "/admin/acls": {
+      "status": 500,
+      "bytes": 37489,
+      "sha256": "b1e058bcd2f58948d0d357a0e053586b57e461902fe59d39a9c6c3e9ac6322e9",
+      "ssr_element_type_error": true
+    },
+    "/admin/acls.data": {
+      "status": 200,
+      "bytes": 1055,
+      "sha256": "0f63210adc7418073de9a2267adf5edb2b4625ad813efc0d9472a974b053e9da",
+      "ssr_element_type_error": false
+    },
+    "/admin/machines": {
+      "status": 200,
+      "bytes": 54678,
+      "sha256": "8a6a99862206f846d6a4db93cc5721cbadc102b83439ba0963c428335a95e531",
+      "ssr_element_type_error": false
+    }
+  },
+  "candidate_ready": true,
+  "restored_ready": true,
+  "headscale_and_entrance_container_ids_preserved": true,
+  "candidate_image_id": "ghcr.io/woowtech/headplane@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+  "candidate_http_pass": true,
+  "restored_image_id": "jcr-prod.woowtech.io/woow-paas-docker-local/headplane@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22",
+  "restored_http_pass": true,
+  "watchdog_cancelled_after_restoration": true,
+  "pass": true,
+  "finished_at": "2026-10-13T18:27:25Z"
+}

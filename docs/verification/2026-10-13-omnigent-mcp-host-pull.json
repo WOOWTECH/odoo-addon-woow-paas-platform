@@ -1,0 +1,24 @@
+{
+  "at": "2026-10-13T19:14:19Z",
+  "namespace": "paas-ws-458ed1aa",
+  "namespace_uid": "81994a4d-a4b5-459a-b53b-827bc01ef3a3",
+  "own_host_pod_uid_preserved": true,
+  "probe_pod_uid": "cb769617-88e7-4ec3-952b-d998d251b570",
+  "image": "ghcr.io/woowtech/omnigent-host:0.17.0-mcp-proxy-qa-20261013@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+  "actual_image_id": "ghcr.io/woowtech/omnigent-host@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f",
+  "module_sha256": {
+    "mcp_routes": "9b5c367038b556cee1a9a4beb937f0b3b6af9c6c5f71116057b30cee0ed9f151",
+    "proxy_mcp_manager": "5a48f4edf9976bebfb90a8067233621a8ecf1f46b061123c98fd5a6f0b1964f7",
+    "tool_dispatch": "05d3c85fad3d7596f33ebc3c3234df1e8baec5c34c02c65aa72039672e661fc9"
+  },
+  "source_module_sha256": {
+    "mcp_routes": "9b5c367038b556cee1a9a4beb937f0b3b6af9c6c5f71116057b30cee0ed9f151",
+    "proxy_mcp_manager": "5a48f4edf9976bebfb90a8067233621a8ecf1f46b061123c98fd5a6f0b1964f7",
+    "tool_dispatch": "05d3c85fad3d7596f33ebc3c3234df1e8baec5c34c02c65aa72039672e661fc9"
+  },
+  "imports_and_hashes_match": true,
+  "provider_requests": 0,
+  "model_requests": 0,
+  "host_connection_attempted": false,
+  "probe_pod_deleted": true
+}

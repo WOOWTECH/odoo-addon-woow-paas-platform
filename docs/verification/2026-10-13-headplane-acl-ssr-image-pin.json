@@ -1,0 +1,48 @@
+{
+  "verified_at": "2026-10-13",
+  "service": "VPN 控制台（Headscale） / Headplane",
+  "service_id": 238,
+  "workspace_id": 52,
+  "chart": "headscale 0.1.4",
+  "source": {
+    "upstream_release": "tale/headplane v0.7.1",
+    "upstream_baseline_commit": "30c842ed8dbf011e78596e3a474133ec4069ba79",
+    "woowtech_fix_commit": "45b3f0ed143baa8e7132ef18bad81b42a4b11690",
+    "woowtech_image_build_commit": "a02030c7ee31c1ddea4036e8e6e182640e2bbb50",
+    "ci_run": "https://github.com/WOOWTECH/headplane/actions/runs/38445401465",
+    "ci_result": "SUCCESS",
+    "fix_verification": "Original SSR regressions 3 RED; fixed SSR regressions 3 GREEN, unit tests 223 PASS, typecheck/lint/format/production build PASS"
+  },
+  "image": {
+    "previous": "jcr-prod.woowtech.io/woow-paas-docker-local/headplane:20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22",
+    "candidate": "jcr-prod.woowtech.io/woow-paas-docker-local/headplane:20261013.1924@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "mirror_source": "ghcr.io/woowtech/headplane@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "mirror_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/298",
+    "mirror_preflight_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/19038",
+    "mirror_approval_deadline_utc": "2026-10-14T02:04:41Z",
+    "prior_expired_approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/294",
+    "mirror_status": "PREFLIGHT_PASSED_AWAITING_HUMAN_APPROVAL_NOT_PUBLISHED",
+    "immutable_digest": "sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5",
+    "public_ghcr_pull_on_qa_node": "PASS",
+    "registry_change": "JCR destination matches the current registry; candidate bytes are the QA-tested WOOWTECH GHCR digest and must be mirrored with --preserve-digests before merge"
+  },
+  "chart_render": {
+    "headplane_matches_candidate": true,
+    "headscale_image_unchanged": "jcr-prod.woowtech.io/woow-paas-docker-local/headscale:20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f",
+    "entrance_image_unchanged": true,
+    "rendered_statefulset": "qa1013-headscale"
+  },
+  "live_owned_qa_canary": {
+    "namespace": "paas-ws-5e41efa6",
+    "pod_uid_preserved": true,
+    "acl_document_before_candidate_after_restore": [500, 200, 500],
+    "acl_loader_before_candidate_after_restore": [200, 200, 200],
+    "machines_before_candidate_after_restore": [200, 200, 200],
+    "headscale_and_entrance_container_ids_preserved": true,
+    "original_image_restored": true,
+    "evidence": "docs/verification/2026-10-13-headplane-acl-ssr-qa-canary.json"
+  },
+  "prior_ghcr_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-odoo-sandbox.json",
+  "jcr_seed_sandbox_evidence": "docs/verification/2026-10-13-headplane-pin-jcr-sandbox.json",
+  "release_status": "Draft candidate seed pin only; JCR mirror approval #298 and exact destination digest verification required before Ready/merge. Current QA service is restored to previous image and still returns ACL HTTP 500. Requires platform release, own service update and post-release regression verification. No commercial acceptance claimed."
+}
