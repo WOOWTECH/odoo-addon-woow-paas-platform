@@ -2199,6 +2199,10 @@ class WalletTopup(models.Model):
         self.ensure_one()
         product = self._get_topup_product()
         line_name = f"Wallet Topup: {self.plan_id.name}" if self.plan_id else "Wallet Topup"
+        # 2026-10-14 政策 A：刷卡金額＝發票總額。稅一律明寫成 PaaS 專用 5% 內含稅（50 → 48＋2），
+        # 不吃商品或公司預設稅——預設稅是 5% 外加時，50 元刷卡會開出 53 元發票／電子發票。
+        # 公司沒有 5% 銷項稅可當來源時回空 ⇒ 不課稅（總額仍＝刷卡金額）。
+        vat = self.env['product.template']._woow_paas_included_sale_tax(self.env.company)
         # #864 PR-C（裁決 ④）：開票政策由 res.company.auto_invoice 決定，與訂閱
         # 家族共用同一顆 fail-closed resolver。原本這裡寫死 'pending' ⇒ 平台的
         # async cron（完全不看 auto_invoice，只要看到 pending 就開）會無條件自動
@@ -2216,6 +2220,7 @@ class WalletTopup(models.Model):
                 'name': line_name,
                 'quantity': 1.0,
                 'price_unit': self.amount,
+                'tax_ids': [(6, 0, vat.ids)],
             })],
             'woow_invoice_issue_state': issue_state,
             # 同一 MTN 是 cross-topup invoice idempotency key；Branch-B
@@ -2274,10 +2279,14 @@ class WalletTopup(models.Model):
         Product = self.env['product.product'].sudo()
         product = Product.search([('default_code', '=', 'WALLET_TOPUP')], limit=1)
         if not product:
+            # 政策 A：不吃公司預設稅（見 _create_topup_invoice）；之後每次 -u 由
+            # _woow_sync_paas_included_vat 收斂。
+            vat = self.env['product.template']._woow_paas_included_sale_tax(self.env.company)
             product = Product.create({
                 'name': 'Wallet Topup',
                 'default_code': 'WALLET_TOPUP',
                 'type': 'service',
+                'taxes_id': [(6, 0, vat.ids)],
             })
         return product
 

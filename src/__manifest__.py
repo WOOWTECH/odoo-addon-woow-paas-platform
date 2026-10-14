@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.236",
+    "version": "18.0.1.0.237",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -30,6 +30,7 @@
         "data/subscription_products_variants.xml",
         "data/subscription_template_links_variants.xml",
         "data/subscription_journal_config.xml",
+        "data/paas_included_vat_sync.xml",
         # #778：SSOT 對撞防護的 -u 路徑（<function> 每次升級重跑；
         # fresh-install 路徑在 hooks.post_init_hook）
         "data/billing_ssot_guard.xml",

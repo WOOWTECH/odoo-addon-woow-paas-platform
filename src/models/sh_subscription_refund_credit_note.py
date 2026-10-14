@@ -9,17 +9,15 @@ posted／paid，沒有貸項、沒有折讓——帳上留著已退款的「已�
 1. 找這張訂閱最近一張**已付**的 ``out_invoice``（退點視窗就是它付的那一期，
    ``_prorata_unused_refund``）。
 2. 建 ``out_refund``：``reversed_entry_id`` 指回原發票，一行＝原發票那一行的商品、
-   科目與**稅**，單價＝退的點數（點數就是未稅金額，與 ``_prorata_unused_refund`` 以
-   ``sh_plan_price`` 計算一致）。帶 ``woow_skip_upstream_hook``，上游 ``action_post``
+   科目與**稅**，**貸項總額＝退的點數**（政策 A：點數是含稅金額；內含稅／無稅時單價就是
+   退點，外加稅的舊發票單價取未稅比例）。帶 ``woow_skip_upstream_hook``，上游 ``action_post``
    不會在租戶的請求裡 inline 打 ECPay 折讓（見 ``account.move.run_refund`` override）。
 3. 以退回錢包的點數建一筆 **outbound** customer payment（與 ``_pay_from_wallet`` 同一個
    journal），和貸項的應收沖銷。
 
-⚠ **稅（#1261 待決）**：退點只退未稅金額（#1261 第 3 點「退款不含稅」至今未裁決）。
-貸項依原發票稅率沖銷該比例的銷售與銷項稅（會計上「這部分服務取消了」），錢包退回的
-是未稅點數 ⇒ 含稅商品的貸項會留下**稅額那一段未沖**（``payment_state='partial'``），
-那就是平台尚未退給客戶的稅。#1261 若決定退稅：補退這段點數並沖銷即可；若決定不退：
-改成以含稅價開貸項（或由會計沖轉）。本檔刻意**不替 #1261 做決定**。
+**稅（2026-10-14 政策 A 裁決 #1261）**：標價含稅，退點以本期實付的**含稅**總額按比例計算
+（``_woow_refund_cycle_amount``），貸項依原發票稅率沖銷同一個含稅金額 ⇒ 退點全額沖銷
+（``payment_state='paid'``），不再留下「稅額那一段未沖」。
 
 電子發票（正式站目前人工開立）：
 
@@ -61,7 +59,7 @@ class ShSubscriptionRefundCreditNote(models.Model):
         ], order='invoice_date desc, id desc', limit=1)
 
     def _woow_record_refund_credit_note(self, amount, reason):
-        """退點 ``amount``（未稅點數）之後呼叫：建貸項並以退點沖銷；回傳貸項或 False。
+        """退點 ``amount``（含稅點數，政策 A）之後呼叫：建貸項並以退點沖銷；回傳貸項或 False。
 
         只做記帳，失敗不外拋（見模組 docstring）。``amount <= 0``（試用、從沒付過）時
         什麼都不做。
@@ -101,8 +99,15 @@ class ShSubscriptionRefundCreditNote(models.Model):
             return False
         source = source_lines[0]
         currency = invoice.currency_id
-        # 不得沖超過原發票的未稅金額（退點公式已 clamp 在一期 plan 價內，這是第二道）。
-        untaxed = min(currency.round(amount), invoice.amount_untaxed)
+        # 2026-10-14 政策 A：退的點數＝含稅金額，貸項總額必須等於它。第二道 clamp 對的是原發票
+        # **含稅總額**（原本夾在未稅額：含稅價時 300 被夾成 286 再當含稅單價開立，貸項只記 286）。
+        refund = min(currency.round(amount), invoice.amount_total)
+        if source.tax_ids.filtered(lambda t: not t.price_include) and source.price_total:
+            # 外加稅（政策 A 之前的發票）：單價取未稅比例，讓 單價＋稅＝退點。
+            price_unit = refund * source.price_subtotal / source.price_total
+        else:
+            # 內含稅或無稅：單價本身就是含稅金額。
+            price_unit = refund
         credit_note = self.env['account.move'].with_company(invoice.company_id).create({
             'move_type': 'out_refund',
             'partner_id': invoice.partner_id.id,
@@ -118,12 +123,12 @@ class ShSubscriptionRefundCreditNote(models.Model):
                 'name': _('Refund: %(line)s', line=source.name or self.name),
                 'account_id': source.account_id.id,
                 'quantity': 1,
-                'price_unit': untaxed,
+                'price_unit': price_unit,
                 'tax_ids': [(6, 0, source.tax_ids.ids)],
             })],
         })
         credit_note.action_post()
-        self._woow_settle_refund_credit_note(credit_note, amount)
+        self._woow_settle_refund_credit_note(credit_note, refund)
         self._woow_flag_refund_for_einvoice(invoice, credit_note)
         _logger.info(
             "[#1555] subscription %s (id=%s): credit note %s (id=%s) untaxed=%s total=%s "
@@ -180,7 +185,7 @@ class ShSubscriptionRefundCreditNote(models.Model):
         """電子發票的後續處理標示（見模組 docstring）。"""
         currency = invoice.currency_id
         full = float_compare(
-            credit_note.amount_untaxed, invoice.amount_untaxed,
+            credit_note.amount_total, invoice.amount_total,
             precision_rounding=currency.rounding) >= 0
         amount_label = '%s %s' % (credit_note.amount_total, currency.name or '')
         if invoice._woow_ecpay_issuance_confirmed():
