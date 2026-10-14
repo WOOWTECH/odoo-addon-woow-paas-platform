@@ -31,7 +31,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 | 步驟 1 之前 | 目標放在哪個工作區、由哪個帳號購買、服務名稱；錢包餘額夠不夠付到觀察期之後 | 購買與擁有權由人處理，agent 不代買；欠費會被停權 |
 | 步驟 3 之後 | 方案大小——附上來源的 workers／記憶體與各方案規格，給出建議 | workers 與記憶體由方案決定，不能逐台改 |
 | 步驟 3 之後 | 寄收信主機是叢集內的共用服務（mailcow）時，同不同意把目標 ns 接上 | 准入 label 是整個 ns 的 |
-| 彩排通過後 | 要不要沿用來源的 hostname | 沿用要先請來源 tunnel 的管理者刪舊 DNS 記錄 |
+| 彩排通過後 | 要不要沿用來源的 hostname | 沿用要請來源 DNS 的管理者（WMO）在切換當下刪舊記錄，要先約好人 |
 | 彩排通過後 | 外部整合（MCP、webhook）要不要改指、由誰改 | 它們連的是來源的內部位址 |
 | 彩排通過後 | 切換時段；誰通知使用者、誰確認 POS 已關帳、誰驗收 | 停機與驗收都要有人在場 |
 | 彩排通過後 | 回切期限（幾點前驗收不過就回切）；來源保留多久才下線 | 見下方「備份與失敗還原」 |
@@ -110,7 +110,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
       - scale 0 之前重跑一次 `inventory.sh`（唯讀），摘要的 `pos` 那行是 `open sessions 0, draft orders 0` 才往下。
    3. 走步驟 6～8：`export.sh` **不帶** `--live`、`restore.sh` **不帶** `--neutralize`。兩階段 verify 都 exit 0 才往下；
       不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。
-   4. 對外網址改指（下方「對外網址」）、外部整合改指（MCP、webhook 來源端的設定）。
+   4. 對外網址改指（下方「對外網址」的三步順序；`curl` 回到目標站才算完成）、外部整合改指（MCP、webhook 來源端的設定）。
    5. 驗收（人）：登入、開一個 POS session、收發各一封信、金流測一筆。通過後立刻手動加一份平台備份
       （「備份與失敗還原」），再開放給使用者。
    6. 回切：新站產生第一筆真實交易之前可以回切——匯出全程唯讀，來源資料沒被動過；之後就不能回切（兩邊資料分岔）。
@@ -180,12 +180,21 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 
 - `POST /api/routes`，body `{"subdomain": "<來源 hostname 的第一段>", "service_url": "http://<release>.<ns>.svc.cluster.local:80"}`
   ——在平台 tunnel 加 ingress rule 並建 DNS CNAME。只適用於與平台同一個網域的 hostname。
-- ⚠ 那筆 DNS 記錄還指向一條**活著的** tunnel 時 operator 會拒絕（`_assert_dns_repoint_allowed`）：切換時先由來源 tunnel 的
-  管理者刪掉舊的 DNS 記錄（或整條來源 tunnel），再呼叫。順序＝來源下線 → 刪舊記錄 → 加新 route。
-- stg 實測（額外 hostname 指到彩排站）：加上後可用；Redeploy 後仍在；**停權時它回 502**，不會像服務自己的網址改指
-  停權說明頁；`DELETE /api/routes/<subdomain>` 可移除。
+- ⚠ **API 回 201 不代表網址已經改指**。那筆 DNS 記錄還指向來源那條活著的 tunnel 時，operator 只加 ingress rule、
+  不動 DNS（log 一行 `Refusing to repoint DNS record …`），照樣回 201，流量繼續走來源。完成條件一律是
+  `curl https://<hostname>/web/login` 回到目標站的登入頁，不是 API 的回應。
+- 順序（stg 實測，2026-10-13，測試 hostname 先指向一條 standalone tunnel）：
+  1. 切換前先呼叫一次 `POST /api/routes`：ingress rule 先放好，DNS 被拒，對使用者沒有影響。
+  2. 來源凍結、還原與比對通過後，請來源 DNS 的管理者（WMO）刪掉那筆 CNAME——一個 API 呼叫。此刻起 hostname 解析不到。
+  3. 再呼叫一次 `POST /api/routes`：這次 operator 會建 DNS 記錄。實測約 20 秒後測試網址回到目標站。
+  網址中斷的長度＝第 2 步到第 3 步生效；事先與 WMO 約好，刪完立刻通知。
+- 回切：`DELETE /api/routes/<subdomain>`（移除 ingress rule 與 operator 自己建的 DNS 記錄）→ WMO 把 CNAME 建回來源 tunnel。
+  所以來源 tunnel、它的 ingress rule 與 cloudflared 要留到觀察期滿才清。DNS 記錄不屬於平台 tunnel 時，`DELETE` 只移除
+  ingress rule、不碰那筆記錄（實測）——第 1 步放錯了可以直接撤掉。
+- 每個 standalone 站各有一條 tunnel（WMO 查證；個別站一條 tunnel 掛多個 hostname）。刪 CNAME 只影響那一個 hostname。
+- 額外 hostname 指到彩排站的 stg 實測：加上後可用；Redeploy 後仍在；**停權時它回 502**，不會像服務自己的網址改指停權說明頁。
 - 平台不認得這條 route：刪服務時不會一起刪，要手動移除。Odoo 端的 `web.base.url` 是來源帶過來的原值，不必改。
-- prod 的 route 是 prod 寫入，由人放行後執行；回切＝刪掉這條 route、把 DNS 指回來源 tunnel。
+- prod 的 route 是 prod 寫入，由人放行後執行。
 
 ## 彩排與中和
 

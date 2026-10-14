@@ -1,6 +1,6 @@
 """Bounded read-only Kubernetes/Prometheus collector.
 
-CPU is a two-minute mean in cores; memory is working-set bytes. PVC filesystem
+CPU is a five-minute mean in cores; memory is working-set bytes. PVC filesystem
 usage is never inferred from Longhorn physical allocation or requested storage.
 Missing, old and partially measured data remain distinguishable from real zero.
 """
@@ -24,7 +24,7 @@ CACHE_SECONDS = 30
 MAX_CACHE_KEYS = 64
 MAX_INFLIGHT = 4
 MAX_SAMPLE_AGE = 120
-CPU_WINDOW = 120
+CPU_WINDOW = 300
 KINDS = "pods,deployments,statefulsets,daemonsets,replicasets,persistentvolumeclaims"
 CONTROLLERS = {"Deployment", "StatefulSet", "DaemonSet", "VirtualMachine"}
 
@@ -213,9 +213,12 @@ class ResourceCollector:
                 event.set()
 
     def _inventory(self, namespace, kinds=KINDS):
+        # In the deployed in-cluster kubectl, --request-timeout disables the
+        # service-account fallback and makes discovery try localhost:8080.
+        # The subprocess timeout still bounds each namespaced read to 5s.
         result = self.k8s._run_command(
-            ["get", kinds, "--namespace", namespace, "--output", "json",
-             "--request-timeout=4s"], timeout=5)
+            ["get", kinds, "--namespace", namespace, "--output", "json"],
+            timeout=5)
         return json.loads(result.stdout).get("items", [])
 
     def _query(self, expression):
@@ -325,7 +328,7 @@ class ResourceCollector:
             expressions.update({
                 # Select the newest counter series before reducing labels. A
                 # restarted container's historical rate must not win max().
-                "cpu": "max by(pod,container)(rate(" + cpu + "[2m]) and topk by(pod,container)(1,timestamp(" + cpu + ")))",
+                "cpu": "max by(pod,container)(rate(" + cpu + f"[{CPU_WINDOW}s]) and topk by(pod,container)(1,timestamp(" + cpu + ")))",
                 "cpu_time": "max by(pod,container)(timestamp(" + cpu + "))",
                 "memory": "max by(pod,container)(" + memory + " and topk by(pod,container)(1,timestamp(" + memory + ")))",
                 "memory_time": "max by(pod,container)(timestamp(" + memory + "))",

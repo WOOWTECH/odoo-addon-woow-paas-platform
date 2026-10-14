@@ -3,7 +3,7 @@
 
 契約來源：woow-paas-charts charts/headscale 0.1.4（0.1.3＝#1559 網域上線才當 server_url、0.1.2＝#153
 工作區＝區網、0.1.1＝#131、0.1.0＝#124）——
-一個 Pod：headscale v0.29.4、Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，
+一個 Pod：headscale v0.29.4、Headplane 0.7.1 ACL SSR 修補映像（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，
 平台密碼 Basic auth，固定送 Remote-User: admin）、選配 ngrok sidecar（租戶自己的 token；每 60 秒印
 ``WOOW_PUBLIC_URL=https://…``）。Service 第二個埠 8080＝Headscale（同工作區節點登入）。
 平台側用到 #1412：``has_public_tunnel_address``／``public_tunnel_label``（P1）與 spec
@@ -104,7 +104,7 @@ class TestHeadscaleSeed(TransactionCase):
             self._values()['entrance']['basicAuthUsername'], 'admin',
             '帳號預設值要在範本裡（_admin_username 讀不到時不猜 chart 預設）')
 
-    def test_images_from_jcr_and_double_pinned(self):
+    def test_images_double_pinned_with_headplane_hotfix(self):
         v = self._values()
         images = {
             'image': v['image'],
@@ -114,6 +114,10 @@ class TestHeadscaleSeed(TransactionCase):
         self.assertEqual(images['image']['repository'], JCR + 'headscale')
         self.assertEqual(images['bootstrap.image']['repository'], JCR + 'headscale-debug')
         self.assertEqual(images['headplane.image']['repository'], JCR + 'headplane')
+        self.assertEqual(
+            images['headplane.image']['tag'].split('@', 1)[1],
+            'sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5',
+            'ACL SSR 修補映像須釘在自有 QA 實測的 index digest')
         for path, image in images.items():
             self.assertRegex(image['tag'], PINNED_TAG_RE,
                              '%s 一律 tag@sha256 雙釘（mutable tag 不可重現）' % path)
