@@ -1111,7 +1111,7 @@
                  映像也不再帶 omnigent CLI／omnigent-host-entry／woow-omnigent。同工作區 Omnigent 網址也不再注入本範本
                  （cloud_service._OMNIGENT_SERVER_URL_VALUE_PATHS 拿掉 open-design）。
                  image 內容：內建 MCP runtime（HA add-on 0.2.1 MCP 層 200e8cbb）、core OMNIGENT=off（沒有 omnigent CLI／
-                 omnigent-host-entry）、ENTRYPOINT tini --。digest 以 crane 從 jcr-prod 讀回確認。
+                 omnigent-host-entry）、ENTRYPOINT 直接以 tini 啟動 daemon。digest 以 crane 從 jcr-prod 讀回確認。
                  只影響新開通與之後 redeploy 的服務（redeploy 換 pod 約 1 分鐘，PVC 保留；MCP 金鑰在第一次啟動產生）。
                  回滾值：chart 0.4.5＋20261014.1921@sha256:3ae19d81…，並拿掉 mcp／omnigentHost 兩鍵。 -->
             <field name="helm_repo_url"></field>
