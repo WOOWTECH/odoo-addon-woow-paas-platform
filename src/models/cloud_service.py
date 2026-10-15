@@ -1446,7 +1446,7 @@ def _image_mismatches(values, pod_images):
 #   ``_INJECTOR_VALUE_PATHS``（``test_audit_411_classifier`` 以 AST 對帳本檔所有
 #   ``*_VALUE_PATHS`` 表）。
 
-# Omnigent BYO host：code-server／pi-agent／open-design 在主容器裡內建 omnigent host
+# Omnigent BYO host：code-server／pi-agent（open-design 2026-10-15 起暫停，見下）在主容器裡內建 omnigent host
 # （woow-paas-charts ``shared/omnigent-host`` 共用套件），標準 values 區塊
 # ``omnigentHost.serverUrl``。chart 把它放進 ``<name>-runtime`` ConfigMap（key
 # ``server-url``），以目錄掛進容器，kubelet 約一分鐘內就地換檔，supervisor 與
@@ -1454,10 +1454,13 @@ def _image_mismatches(values, pod_images):
 # supervisor 拿它印 ``omnigent login <url>`` 提示，並在租戶還沒登入過時當備援；host
 # 實際連的永遠是租戶最後一次 ``omnigent login`` 的那個 server（WOOW 預設用 Omnigent
 # 的 admin 帳號登入三台 host）。
+# open-design 不在表內（2026-10-15，od-mcp-merge-20261015）：使用者決定 Open Design 先拿掉 Omnigent 相關
+# 套件與外掛（chart 0.5.0 ``omnigentHost.enabled`` 預設 false、範本明寫 false、映像不再帶 omnigent CLI），
+# 所以不再注入同工作區 Omnigent 網址。恢復時把 open-design 加回這張表（OD egress 的可達性檢查
+# ``_warn_omnigent_egress_reachability`` 也會跟著重新生效）。
 _OMNIGENT_SERVER_URL_VALUE_PATHS = {
     'code-server': [('omnigentHost', 'serverUrl')],
     'pi-agent': [('omnigentHost', 'serverUrl')],
-    'open-design': [('omnigentHost', 'serverUrl')],
 }
 # VPN 節點（woow-paas-charts charts/tailscale ≥ 0.1.2）：``tailscale.controlPlane=workspace``
 # 時登入這個網址（同工作區 Headscale 的控制埠 8080）。chart 把它放進
@@ -4980,7 +4983,10 @@ class CloudService(models.Model):
         if not endpoint:
             return ''
         if provider_slug == _OMNIGENT_TEMPLATE_SLUG:
-            self._warn_omnigent_egress_reachability(endpoint)
+            # 這兩條警告只關於 open-design 的 omnigentEgress；open-design 不收 Omnigent 網址時
+            # （2026-10-15 起暫停）沒有對象，不記。
+            if 'open-design' in _OMNIGENT_SERVER_URL_VALUE_PATHS:
+                self._warn_omnigent_egress_reachability(endpoint)
         elif provider_slug == _LITELLM_TEMPLATE_SLUG:
             self._warn_litellm_egress_reachability(endpoint)
         return 'http://%s.%s.svc.cluster.local:%d' % (

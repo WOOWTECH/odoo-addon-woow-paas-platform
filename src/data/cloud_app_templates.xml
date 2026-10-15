@@ -905,6 +905,12 @@
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
+            <!-- 2026-10-15 下架（od-mcp-merge-20261015，使用者決定：MCP 內建進 Open Design，不再分開賣）。
+                 Open Design（cloud_app_opendesign）自 chart 0.5.0 起內建同一套 OpenDesign MCP（HA add-on 的
+                 runtime；/mcp、/private_<token>/mcp、/mcp-admin/）。比照 Vibe Kanban MCP（#1624）只翻曝光層
+                 is_hidden（商店不列、不能新開）；is_active、方案與實例層不動，既有實例照常可用到租戶自行刪除。
+                 勿設 conceal_instances。重新上架時改回 False 並把 slug 從 test_conceal_instances_split_471 拿掉。 -->
+            <field name="is_hidden" eval="True"/>
         </record>
 
         <!-- HA PaaS（免費雲端 Home Assistant，#336）。**兩層都關**：不出現在
@@ -1018,20 +1024,27 @@
         <record id="cloud_app_opendesign" model="woow_paas_platform.cloud_app_template">
             <field name="name">Open Design</field>
             <field name="slug">open-design</field>
-            <field name="description">AI 設計協作應用（daemon + console，內建 Claude Code／OpenCode），帳號密碼登入、可自行修改</field>
+            <field name="description">AI 設計協作應用（內建 MCP server、CLI 終端機、Claude Code／OpenCode），帳號密碼登入、可自行修改</field>
             <field name="full_description">Open Design 完整雲端應用（上游 nexu-io/open-design
                 v0.24.1，內建 Claude Code 與 OpenCode）：daemon（設計稿 API 服務，對外埠 7457）＋
-                console（ttyd web terminal + Flask dashboard）。存取以帳號密碼登入（預設帳號
-                admin、密碼由平台建立服務時產生並一次性顯示）；帳號與密碼都可在服務頁自行修改，
+                console（ttyd web terminal + Flask dashboard）＋內建 Open Design MCP server。存取以帳號密碼登入
+                （HTTP basic-auth，預設帳號 admin、密碼由平台建立服務時產生並一次性顯示）；帳號與密碼都可在服務頁自行修改，
                 OpenDesign 與 console 共用同一組，修改後約一至兩分鐘生效（OpenDesign 本身不重啟）。nginx auth-proxy
                 閘同時罩住 daemon UI／API 與 console，瀏覽器原生登入、免改上游。console 可互動執行 claude login 完成
                 Claude 登入（登入態與 opencode 設定存 od-home PVC、跨 Pod 重啟保留），亦可於
-                部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP（mcp-opendesign）形成生態
-                閉環：MCP 的必填欄 od_api_base 可指向本服務於同一 workspace 的內部位址
-                （release 命名，例 http://svc-xxxxxxxx:7457；需帶 basic-auth 憑證）。
-                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料（含 Claude 登入態）；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
+                部署時自帶 ANTHROPIC_API_KEY。
+                內建 MCP server（不需另外訂閱 Open Design MCP，與 Woow HA OpenDesign 同一套）：
+                Claude Code、Claude Desktop 等 MCP 用戶端連 https://&lt;服務網址&gt;/mcp，並帶
+                Authorization: Bearer &lt;MCP 金鑰&gt;；Claude.ai 自訂連接器用
+                https://&lt;服務網址&gt;/private_&lt;MCP 金鑰&gt;/mcp；MCP 金鑰在
+                https://&lt;服務網址&gt;/mcp-admin/（同一組帳號密碼登入）查看、輪替、撤銷，個別工具也可在那裡停用。
+                MCP 的 15 支工具預設全部開放，包含會啟動 AI 代理的 create_project／send_message：沒有設定任何
+                AI 金鑰時，經 MCP 指定 opencode 代理的 create_project／send_message 仍可能呼叫外部模型、產生外部用量。
+                注意：若對本服務網址開啟 Cloudflare Access，外部 MCP 用戶端（特別是 Claude.ai）會被擋下；
+                請不要對本服務開 Access，或自行在 Access 為 /mcp 與 /private_*/mcp 兩個路徑設例外（Bypass）。
+                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料（含 Claude 登入態與 MCP 金鑰）；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
-            <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode"]</field>
+            <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode", "mcp"]</field>
 
             <field name="documentation_url">https://github.com/nexu-io/open-design</field>
 
@@ -1084,11 +1097,27 @@
                  run 19926）：修 1127 的 daemon 偶發 abort（better-sqlite3 對 Node 24.21 標頭本地編譯 → GC 時
                  RemoveEnvironmentCleanupHook，nodejs/node#65446）：fork w2.1（ba3a448）改用上游官方預編譯檔。
                  同時拆出 open-design-core（＋LICENSE／NOTICE），PaaS 外殼設定與 1127 相同。沙盒以正式 digest 跑
-                 重現腳本 3/3 撐過 200 萬 statement、二進位＝上游 53f766da。回滾值：20261014.1127@sha256:10b02850…。 -->
+                 重現腳本 3/3 撐過 200 萬 statement、二進位＝上游 53f766da。回滾值：20261014.1127@sha256:10b02850…。
+                 2026-10-15 chart 0.4.5 → 0.5.0＋image 20261014.1921 → 20261015.0617@sha256:c683db73…（paas-odoo-ci #332，
+                 build run 20211、核可單 #334、promote run 20234；core open-design-core:20261015.0617@sha256:c5496453…，
+                 fork w2.2 1c7e697e；od-mcp-merge-20261015，使用者決定）：
+                 (1) 內建 OpenDesign MCP（取代 cloud_app_mcp_opendesign）：chart 的 mcp sidecar（uid 10001，與 daemon
+                 同一個 image 的 /opt/woow＝paas-odoo-ci open-design/mcp-runtime，即 HA add-on 的 MCP runtime，15 支工具
+                 全部預設開），經 auth-proxy 的 /mcp（Bearer）、/private_<token>/mcp（Claude.ai，不記 log）對外，
+                 /mcp-admin/ 在 basic-auth 後（金鑰由 runtime 自管＝方案 A，平台不經手）。"mcp": {"enabled": true}
+                 必須和含 runtime 的 image 同一次變更（舊 image 沒有 /opt/woow，sidecar 會 CrashLoop）。
+                 (2) Omnigent 暫停（使用者 2026-10-15：Open Design 先拿掉 Omnigent 相關套件與外掛）："omnigentHost":
+                 {"enabled": false} 明寫——chart 0.5.0 預設雖已 false，但 helm reuse-values 缺 key 時共用套件視為開啟；
+                 映像也不再帶 omnigent CLI／omnigent-host-entry／woow-omnigent。同工作區 Omnigent 網址也不再注入本範本
+                 （cloud_service._OMNIGENT_SERVER_URL_VALUE_PATHS 拿掉 open-design）。
+                 image 內容：內建 MCP runtime（HA add-on 0.2.1 MCP 層 200e8cbb）、core OMNIGENT=off（沒有 omnigent CLI／
+                 omnigent-host-entry）、ENTRYPOINT 直接以 tini 啟動 daemon。digest 以 crane 從 jcr-prod 讀回確認。
+                 只影響新開通與之後 redeploy 的服務（redeploy 換 pod 約 1 分鐘，PVC 保留；MCP 金鑰在第一次啟動產生）。
+                 回滾值：chart 0.4.5＋20261014.1921@sha256:3ae19d81…，並拿掉 mcp／omnigentHost 兩鍵。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.4.5</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261014.1921@sha256:3ae19d817bfe308db325aee33ff777964104883b70267fbda5df9c2eab4ad97b"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_chart_version">0.5.0</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261015.0617@sha256:c683db73f8a64c7044ff5ffb39a5f216b75fb761b952a01ef4a352402238351d"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
@@ -1108,13 +1137,20 @@
                  容器 limits.memory：daemon 8Gi（見上 helm_default_values.resources）+ authproxy
                  sidecar 128Mi + console 512Mi ≈ 8.63Gi → 需 min_ram_gb ≥ 2.88，取 3.0（3×3=9Gi）。
                  曾為 2.0 → 只給 6Gi 額度 → daemon 8Gi pod FailedCreate、服務永遠連不上（CF 502，
-                 #380 端到端回歸）。根本解（sidecar 記憶體入 quota / chart daemon limit 收斂）另議。 -->
+                 #380 端到端回歸）。根本解（sidecar 記憶體入 quota / chart daemon limit 收斂）另議。
+                 2026-10-15 chart 0.5.0 加 mcp sidecar（limits 320Mi）→ 全容器 9,152Mi；使用者決定升到 3.5。
+                 quota 公式是 int(sum(allocated_ram_gb)×3)Gi（小數捨去）：單台 3.5×3＝10.5 → 10Gi（10,240Mi），
+                 比 3.0／3.25 的 9Gi 多 1Gi，餘裕 1,088Mi（3.25 會被截成 9Gi、只剩 64Mi，故不用）。
+                 守線：test_opendesign_seed_380.test_quota_covers_all_container_limits。 -->
             <field name="min_vcpu">1</field>
-            <field name="min_ram_gb">3.0</field>
+            <field name="min_ram_gb">3.5</field>
             <field name="min_storage_gb">10</field>
 
-            <!-- MCP 能力不在本 template（本體是完整應用，非 MCP server）；MCP 生態由
-                 獨立的 cloud_app_mcp_opendesign 承擔，透過 od_api_base 指向本 daemon。 -->
+            <!-- MCP 自 chart 0.5.0 起內建（od-mcp-merge-20261015）：chart 的 mcp sidecar（HA add-on 同一套 runtime），
+                 經 auth-proxy 的 /mcp、/private_<token>/mcp 對外，/mcp-admin/ 在 basic-auth 後；由 helm_default_values
+                 的 "mcp": {"enabled": true} 開啟。mcp_enabled 仍為 False：該欄位是「operator 事後 patch 一顆 MCP
+                 sidecar」的部署形態（_build_mcp_sidecar_config 寫死 n8n 的 N8N_API_URL／AUTH_TOKEN、patch 對象是
+                 Deployment、另開 {subdomain}-mcp 通道），不適用本 chart。 -->
             <field name="mcp_enabled" eval="False"/>
             <!-- #357 C 案：image（nginx auth-proxy sidecar）以 basic-auth 閘保護，密碼＝
                  config.sensitive.admin_password，由平台 has_admin_gui 供給鏈注入（建立服務時

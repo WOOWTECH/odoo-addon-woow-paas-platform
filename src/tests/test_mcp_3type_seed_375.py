@@ -46,15 +46,18 @@ class TestMcp3TypeTemplateSeed(TransactionCase):
             self.assertEqual(v['config']['requiredFields'], ['admin_password'], xmlid)
             self.assertEqual(v['config']['sensitive'], {}, xmlid)
 
-    def test_k8s_and_vk_delisted_opendesign_listed(self):
-        """2026-10-09 下架 Kubernetes MCP 與 Vibe Kanban MCP（使用者決定不再使用）：
-        只翻曝光層 is_hidden（商店不列、不能新開），is_active 照舊；Open Design MCP 維持上架。"""
-        for xmlid in ('cloud_app_mcp_k8s', 'cloud_app_mcp_vk'):
+    def test_all_three_delisted(self):
+        """2026-10-09 下架 Kubernetes MCP 與 Vibe Kanban MCP（使用者決定不再使用）；2026-10-15
+        下架 Open Design MCP（od-mcp-merge-20261015：MCP 內建進 Open Design chart 0.5.0）。
+        都只翻曝光層 is_hidden（商店不列、不能新開），is_active 照舊、方案保留、不設
+        conceal_instances（既有實例照常可用）。"""
+        for xmlid in ('cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign'):
             tpl = self._tpl(xmlid)
             self.assertTrue(tpl.is_hidden, '%s 已下架（is_hidden=True）' % xmlid)
             self.assertTrue(tpl.is_active, '%s 下架只動曝光層，is_active 不變' % xmlid)
-        self.assertFalse(self._tpl('cloud_app_mcp_opendesign').is_hidden,
-                         'Open Design MCP 不在這次下架範圍')
+            self.assertFalse(tpl.conceal_instances, '%s 既有實例照常可用' % xmlid)
+        self.assertTrue(self._tpl('cloud_app_mcp_opendesign').sudo().subscription_plan_ids,
+                        'Open Design MCP 方案保留（舊訂閱照常續約到租戶刪除）')
 
     def test_image_tag_is_pinned_digest(self):
         """上架必雙釘 git-sha@sha256、不得留 latest 佔位。"""
