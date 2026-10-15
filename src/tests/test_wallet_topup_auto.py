@@ -16,13 +16,14 @@ class TestCreateAutoTopup(TransactionCase):
 
     def test_create_auto_topup_returns_topup_record(self):
         """create_auto_topup creates a draft topup with source=auto, no plan_id."""
+        # 150 ＞ 自動補值下限（預設 100）⇒ 這裡驗的是「照缺口刷」，不碰下限邏輯。
         topup = self.env['woow.wallet.topup'].create_auto_topup(
-            partner=self.partner, amount=50.0,
+            partner=self.partner, amount=150.0,
         )
         self.assertEqual(topup.source, 'auto')
         self.assertEqual(topup.state, 'draft')
-        self.assertEqual(topup.amount, 50.0)
-        self.assertEqual(topup.credits, 50.0)
+        self.assertEqual(topup.amount, 150.0)
+        self.assertEqual(topup.credits, 150.0)
         self.assertEqual(topup.bonus, 0.0)
         self.assertFalse(topup.plan_id, "auto-topup must NOT pin a plan")
         self.assertEqual(topup.partner_id, self.partner)
@@ -68,6 +69,84 @@ class TestCreateAutoTopup(TransactionCase):
                          "amount must be ceil()'d so it matches ECPay charge")
         self.assertEqual(topup.credits, 301.0,
                          "credits must equal amount (1 credit = 1 TWD)")
+
+
+class TestAutoTopupMinimumCharge(TransactionCase):
+    """自動補值的最低扣款金額（ECPay 每筆最低手續費 NT$5）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.partner = self.env['res.partner'].create({
+            'name': 'Min charge',
+            'email': 'min@example.com',
+        })
+        self.Topup = self.env['woow.wallet.topup']
+        self.ICP = self.env['ir.config_parameter'].sudo()
+
+    def _set_minimum(self, value):
+        self.ICP.set_param(self.Topup._AUTO_TOPUP_MIN_PARAM, value)
+
+    def test_default_minimum_is_100(self):
+        """未設定參數時，下限＝預設的 NT$100。"""
+        self.ICP.search([('key', '=', self.Topup._AUTO_TOPUP_MIN_PARAM)]).unlink()
+        self.assertEqual(self.Topup._auto_topup_min_amount(), 100.0)
+
+    def test_shortfall_below_minimum_is_raised(self):
+        """缺口低於下限 ⇒ 刷下限金額，credits 一起抬（差額留在錢包）。"""
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=12.0)
+        self.assertEqual(topup.amount, 100.0,
+                         "小額缺口要抬到下限，否則最低手續費吃掉四成")
+        self.assertEqual(topup.credits, 100.0,
+                         "credits 必須等於實際扣款，三邊才對得起來")
+
+    def test_shortfall_above_minimum_is_untouched(self):
+        """缺口高於下限 ⇒ 照缺口刷，不受下限影響。"""
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=450.0)
+        self.assertEqual(topup.amount, 450.0)
+        self.assertEqual(topup.credits, 450.0)
+
+    def test_shortfall_equal_to_minimum_is_untouched(self):
+        """邊界：等於下限時不應該被再抬一次。"""
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=100.0)
+        self.assertEqual(topup.amount, 100.0)
+
+    def test_fractional_shortfall_below_minimum_uses_minimum(self):
+        """先 ceil 再比下限，兩段不互相吃掉。"""
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=12.4)
+        self.assertEqual(topup.amount, 100.0)
+
+    def test_minimum_is_configurable(self):
+        self._set_minimum('500')
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=120.0)
+        self.assertEqual(topup.amount, 500.0)
+
+    def test_minimum_zero_disables_the_floor(self):
+        """設 0 ＝ 回到「缺多少刷多少」。"""
+        self._set_minimum('0')
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=12.0)
+        self.assertEqual(topup.amount, 12.0)
+
+    def test_non_numeric_minimum_falls_back_to_no_floor(self):
+        """參數被填壞時往「不多刷」倒，不是用猜的數字去刷使用者的卡。"""
+        self._set_minimum('一百')
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=12.0)
+        self.assertEqual(topup.amount, 12.0)
+
+    def test_negative_minimum_is_treated_as_no_floor(self):
+        self._set_minimum('-50')
+        self.assertEqual(self.Topup._auto_topup_min_amount(), 0.0)
+
+    def test_nt50_topup_plan_is_retired(self):
+        """NT$50 方案已下架：前台只拿得到 NT$100 以上的方案。"""
+        plan = self.env.ref('woow_paas_platform.topup_plan_50')
+        self.assertFalse(plan.active, "NT$50 方案應已停用")
+        active = self.env['woow_paas_platform.topup_plan'].search(
+            [('active', '=', True)])
+        self.assertTrue(active, "至少要留一個可用方案")
+        self.assertFalse(
+            active.filtered(lambda p: p.amount < 100),
+            "不應該還有低於 NT$100 的上架方案",
+        )
 
 
 class TestChargeViaToken(TransactionCase):
@@ -157,7 +236,7 @@ class TestChargeViaToken(TransactionCase):
         self.env.company.auto_invoice = 'automatic'
         provider, token = self._setup_ecpg_token('AB12345678')
         topup = self.env['woow.wallet.topup'].create_auto_topup(
-            partner=self.partner, amount=50.0,
+            partner=self.partner, amount=150.0,
         )
 
         # Mock _send_payment_request to (a) flip tx.state to 'done' and
@@ -174,7 +253,7 @@ class TestChargeViaToken(TransactionCase):
         self.assertEqual(topup.state, 'done')
         # Wallet credited
         self.partner.invalidate_recordset(['wallet_balance'])
-        self.assertEqual(self.partner.wallet_balance, 150.0)  # 100 + 50
+        self.assertEqual(self.partner.wallet_balance, 250.0)  # 100 + 150
         # Invoice created with skip flag
         self.assertTrue(topup.invoice_account_move_id)
         self.assertTrue(topup.invoice_account_move_id.woow_skip_upstream_hook)

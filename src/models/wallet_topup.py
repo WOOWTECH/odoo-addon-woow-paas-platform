@@ -139,6 +139,34 @@ class WalletTopup(models.Model):
                 return code
         return 'generic'
 
+    # ── 自動補值的最低扣款金額 ────────────────────────────────────────────
+    # ECPay 每筆信用卡交易收「手續費率」與「最低手續費 NT$5」取大者：缺口 12 元
+    # 就只刷 12 元時，手續費佔 42%。把實際扣款拉到這個下限，多收的部分**留在錢包**
+    # 抵下一期（與下面 ceil 的餘額同一個語意，只是金額大一點）。
+    # ⚠ 這是對使用者的卡片扣款，金額大於當期欠款 ⇒ 產品面要在自動補值的說明與
+    #   同意流程揭露；設成 0 即關閉下限、回到「缺多少刷多少」。
+    _AUTO_TOPUP_MIN_PARAM = 'woow_paas_platform.auto_topup_min_amount'
+    _AUTO_TOPUP_MIN_DEFAULT = '100'
+
+    @api.model
+    def _auto_topup_min_amount(self):
+        """自動補值的最低扣款金額（整數 TWD；0 ＝ 不設下限）。
+
+        🔴 fail-safe 往「不設下限」倒：參數被填成非數字時，寧可回到舊行為
+        （缺多少刷多少）也不要用一個猜的數字去多刷使用者的卡。
+        """
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            self._AUTO_TOPUP_MIN_PARAM, self._AUTO_TOPUP_MIN_DEFAULT)
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            _logger.warning(
+                '[AUTO_TOPUP] %s=%r is not a number; charging the exact '
+                'shortfall (no minimum)', self._AUTO_TOPUP_MIN_PARAM, raw,
+            )
+            return 0.0
+        return float(max(value, 0))
+
     @api.model
     def create_auto_topup(self, partner, amount):
         """Factory: create a draft auto-topup for the given shortfall.
@@ -161,6 +189,10 @@ class WalletTopup(models.Model):
         Odoo invoice price_unit, and the ECPay charge all reconcile to the
         same value. The fractional surplus (max 0.99 TWD) accrues to the
         user's wallet for future use.
+
+        The charge is then raised to ``_auto_topup_min_amount()`` when the
+        shortfall is below it (ECPay's NT$5 minimum fee makes tiny charges
+        uneconomic); that surplus also stays in the wallet.
         """
         if amount <= 0:
             raise ValidationError(
@@ -172,12 +204,22 @@ class WalletTopup(models.Model):
         # to keep the customer's invoice + card statement + wallet ledger
         # reconcilable. Surplus stays in the wallet.
         ceil_amount = float(math.ceil(amount))
+        # 最低扣款金額（見 `_auto_topup_min_amount`）。只抬高、不壓低——缺口大於
+        # 下限時照缺口刷。credits 必須跟著一起抬，三邊（錢包／發票／ECPay 扣款）
+        # 才對得起來。
+        charge_amount = max(ceil_amount, self._auto_topup_min_amount())
+        if charge_amount != ceil_amount:
+            _logger.info(
+                '[AUTO_TOPUP] shortfall %s raised to the minimum charge %s '
+                'partner=%s; the surplus stays in the wallet',
+                ceil_amount, charge_amount, partner.id,
+            )
 
         twd = self.env.ref('base.TWD', raise_if_not_found=True)
         vals = {
             'partner_id': partner.id,
-            'amount': ceil_amount,
-            'credits': ceil_amount,
+            'amount': charge_amount,
+            'credits': charge_amount,
             'bonus': 0.0,
             'currency_id': twd.id,
             'source': 'auto',
