@@ -2691,6 +2691,12 @@
              映像 litellm 20261014.1158（2026-10-14，paas-odoo-ci #319，main cccbfe5，核可 #322）：加入 M4 API 錯誤契約補丁
              （mock_response 回 400、驗證拒絕不寫 spend log、串流結束後無多餘片段、tool_call_id 檢查、OpenAI 路由錯誤信封）。
              回滾值：映像 20261014.0718@sha256:f34a2d59…3e14。
+             chart 0.3.4（2026-10-15，charts #192，main ffcf2cd）：預算拒絕回 429（litellm.budgetExceededStatusCode →
+             litellm_settings.budget_exceeded_status_code；LiteLLM 本身預設 422，錯誤 type 仍是 budget_exceeded）。
+             映像 litellm 20261015.0230（2026-10-15，paas-odoo-ci #329，main 12971ac，核可 #331）：vendor HA 0.1.9 upstream
+             guard（OpenRouter 錯誤清洗、token 上限不合法回 400、預算准入＋x-should-retry: false、OpenRouter 轉送
+             reasoning_effort；API gate 659）。兩者同輪釘（舊映像沒有 x-should-retry: false，單換 429 會被 SDK 重試）。
+             回滾值：chart 0.3.3＋映像 20261014.1158@sha256:ad47a0de…9530。
              商品說明的 ChatGPT 段落是資料值，直接寫中文、不走 .po。 -->
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
@@ -2719,8 +2725,8 @@
             <field name="documentation_url">https://docs.litellm.ai/docs/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
-            <field name="helm_chart_version">0.3.3</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261014.1158@sha256:ad47a0de4275827b988b8df2f76305bdb2ccfa328588caa48875c61684179530"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
+            <field name="helm_chart_version">0.3.4</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261015.0230@sha256:d005edbb6f27d2e1dfb1d81f14979df3284d75615b741e8e6a4236e044075790"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
