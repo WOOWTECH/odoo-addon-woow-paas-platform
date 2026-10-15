@@ -81,6 +81,70 @@ Deploy the operator before the Odoo addon that consumes this endpoint. An older/
 - `PUT /api/namespaces/{name}/quota` - (#278) Overwrite the namespace ResourceQuota as a whole (`cpu_limit` / `memory_limit` / `storage_limit`, optional `ephemeral_storage_*`); the platform recomputes the values from the workspace's live services and pushes them.
 - `GET /api/namespaces/{name}/quota` - (#1647) Read-only: the ResourceQuota `hard` / `used` of the namespace, i.e. how much of the quota is reserved (declared requests / limits and PVC sizes), not live usage. Always `200`: `available: true` with `resources` keyed by the k8s resource name (`limits.cpu`, `limits.memory`, `requests.storage`, `persistentvolumeclaims`, …; each `{hard, used, hard_value, used_value, unit, ratio, quota}`, the tightest quota wins when several declare the same resource), or `available: false` with `reason` `quota_not_found` (no unscoped ResourceQuota — a missing namespace looks the same) / `quota_unreadable` (kubectl failed or timed out). `400` only for a namespace outside the allowed prefix. An operator older than this endpoint answers the GET with `405` (the path exists for `PUT` only).
 
+#### Managed quota observation (#1678)
+
+`GET /api/namespaces/{name}/quota?include_managed=true` adds `managed_quota` to
+**the otherwise unchanged #1647 response**. Both projections use the same bounded
+ResourceQuota list (5 seconds). The default/false query still returns exactly the
+legacy payload; the frontend's tightest-quota summary is not a safety observation.
+
+The managed object must have the existing platform name `{namespace}-quota` and
+matching namespace. Its `namespace`, `name`, `uid`, `resource_version`, raw
+`status.hard` / `status.used` maps (`hard` / `used`), and `spec_hard` belong to that
+one object. `available=true` requires complete identity and valid, nonnegative
+quantities for `requests.cpu`, `limits.cpu`, `requests.memory`, `limits.memory`,
+`requests.storage`; the five status hard values must agree with spec hard values.
+Explicit quantity `0` is known; a missing/invalid value is **never** filled with 0.
+No status hard fallback to spec hard is permitted. Scoped objects are unavailable.
+
+`observed_at` is the UTC time of this read attempt, **not** evidence that the quota
+controller has reconciled at that instant, capacity reserved, or admission and
+observation made atomic. `managed_quota_status_pending` distinguishes spec/status
+lag. Other machine-readable reasons are `managed_quota_not_found`,
+`managed_quota_scoped`, `managed_quota_identity_incomplete`,
+`managed_quota_namespace_mismatch`, `managed_quota_incomplete`,
+`managed_quota_invalid_quantity`, and `quota_unreadable`.
+
+A successful empty quota list does not prove whether the namespace exists.
+`namespace_exists` stays `null`; `managed_quota_not_found` means no unique managed
+object was observed, **not** "not yet deployed" or permission to skip a safety
+check. A forbidden/failed/timed-out read is `quota_unreadable`, not an empty list.
+An old operator omitting `managed_quota` is unsupported/unknown in the backend;
+Odoo never falls back to the frontend summary. Deploy compatible operator first.
+
+The Odoo backend is a system-administrator-only read projection: one observation
+per Workspace per compute batch, at most five HTTP reads per batch, list page size
+five, existing `(3, 8)` connect/read timeout. Larger RPC batches leave additional
+rows unknown (`observation_batch_limit`); opening a form/refresh reads again.
+There is no stored snapshot, cron, quota write, or override introduced here.
+
+The opt-in real-SA read gate is `tests/test_managed_namespace_quota_sa_1678.py`
+(marked `integration`, deliberately outside the broad integration fixture suite).
+Supply an owned namespace beginning `dev-sandbox-quota1678-`, an actual running
+operator using its projected ServiceAccount token, and externally verified quota
+identity. It creates no fixture resources and requires only quota get/list:
+
+```bash
+# Run inside the isolated operator pod with its own in-cluster kubeconfig.
+# Fixtures: managed hard = CPU requests 2 / limits 7; memory 3Gi / 5Gi;
+# storage 11Gi; all used = 0; diagnostic-other quota CPU limits = 1.
+export QUOTA1678_OPERATOR_URL=http://127.0.0.1:8000
+export QUOTA1678_NAMESPACE=dev-sandbox-quota1678-1678cafe
+export QUOTA1678_API_KEY=<isolated-test-key>
+export QUOTA1678_QUOTA_UID=<verified-live-uid>
+export QUOTA1678_QUOTA_VERSION=<verified-live-resource-version>
+python -m pytest -m integration tests/test_managed_namespace_quota_sa_1678.py -v
+```
+
+Odoo `TestWorkspaceQuotaInspectionLive1678` uses those same identity variables and
+an operator URL reachable from its dedicated sandbox pod. Set
+`REQUIRE_QUOTA1678_LIVE=1`; `QUOTA1678_CPU_LIMIT=9` checks a fixture-only update;
+`QUOTA1678_EXPECT_AVAILABLE=false` checks absence of the managed object. Without
+an explicit live fixture the class is skipped, not evidence that this gate passed.
+Both gates supplement, **not replace**, the required headed backend smoke.
+Minimal namespace-local test RBAC does not verify the deployed production chart's
+RBAC or operator image packaging.
+
 #### Workspace = its own LAN (#1441 / #1436 / #514)
 
 Both switches default **off** (behaviour unchanged); they are flipped per environment through the paas-operator chart (`config.tenantBaselineEgress`, `config.tenantPodSecurity`) after the existing namespaces have been backfilled. Manifests come from `src/services/tenant_baseline.py` (pure functions, shared with the backfill script).

@@ -16,9 +16,11 @@ controller 只呼叫一次 `Workspace.create()`，但 model 覆寫（`workspace.
 1. **完全不可見**——`_list_workspaces` 是**從 workspace_access 反查** workspace
    的，而 `ir.rule` `workspace_rule_member_read` 的 domain 是
    `[('access_ids', 'any', [('user_id', '=', user.id)])]`。沒有 access 列的
-   workspace 對每一個非 superuser 都不存在：看不到、進不去、刪不掉。
-   （#658 之前這條叫 `workspace_rule_member_access`、讀寫合一；本段依賴的是
-   **讀**方向的判準，而讀方向沒有被 #658 動到。）
+   workspace 對非系統管理員的非成員不可見。#1678 起 `base.group_system`
+   可在後台透過原始 ORM 讀全部 Workspace；產品 list 仍從成員列反查，
+   不因此向沒有成員列的呼叫者顯示孤兒。
+   （#658 之前這條叫 `workspace_rule_member_access`、讀寫合一；#1678
+   只增加系統管理員的全域 read，不增加 write/unlink。）
 2. **永久佔住原本的 slug**——`unique_slug` 是 DB 層 constraint，**不看 ir.rule**。
    #1516 後 `_generate_slug` 以 sudo 全域查重，包含使用者看不到的孤兒；同名重試
    會成功並取得 6 碼隨機 hex 後綴，但原本的 base slug 仍被孤兒佔住。
@@ -176,8 +178,8 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
         self.assertIn(_WS_NAME, names, 'list 端點應看得到正常 workspace')
         self.assertNotIn(
             'WS 525 A2 orphan', names,
-            '孤兒對使用者完全不可見（list 是從 workspace_access 反查的，'
-            'ir.rule 也要求有 access 列）——看不到就永遠刪不掉')
+            '孤兒在產品 list 不可見（從 workspace_access 反查），'
+            '不因 #1678 的管理員後台全域 read 而出現在產品列表')
 
     def test_orphan_workspace_holds_the_slug_it_is_invisible_in(self):
         orphan = self.Workspace.sudo().create({
@@ -194,11 +196,25 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
         self.assertEqual(
             self.Workspace.sudo().search_count([('slug', '=', _WS_SLUG)]), 1,
             'slug 確實被佔住——unique_slug 是 DB 層約束')
-        # 原始 ORM 查詢仍受 ir.rule 限縮；#1516 的 generator 則用 sudo 查重。
+        # #1678：管理員後台可全域讀；一般非成員仍受 ir.rule 限縮。
+        administrator_workspace = self.Workspace.with_user(self.admin_user)
+        self.assertFalse(administrator_workspace.env.su)
         self.assertEqual(
-            self.Workspace.with_user(self.admin_user).search_count(
-                [('slug', '=', _WS_SLUG)]), 0,
-            '孤兒對使用者不可見，但不代表 sudo 的 slug 產生器看不到它')
+            administrator_workspace.search_count([('slug', '=', _WS_SLUG)]), 1,
+            '系統管理員不必加入工作區即可透過原始 ORM 查看孤兒')
+        nonmember = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '525 nonmember',
+            'login': 'workspace525-slug-nonmember',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.assertTrue(nonmember.has_group('base.group_user'))
+        self.assertFalse(nonmember.has_group('base.group_system'))
+        self.assertFalse(orphan.access_ids.filtered(lambda access: access.user_id == nonmember))
+        nonmember_workspace = self.Workspace.with_user(nonmember)
+        self.assertFalse(nonmember_workspace.env.su)
+        self.assertEqual(
+            nonmember_workspace.search_count([('slug', '=', _WS_SLUG)]), 0,
+            '一般非成員看不到孤兒，不代表 sudo 的 slug 產生器看不到它')
 
         retry = self._create()
         self.assertIn('result', retry, retry)

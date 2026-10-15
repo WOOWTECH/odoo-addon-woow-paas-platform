@@ -1064,16 +1064,26 @@ class TestWorkspaceQuotaFrontend1647(TransactionCase):
             r'\b(delete|remove|stop|disable|suspend|downgrade|shut down|turn off)\b'
             r'|no longer need', re.I)
         advice_zh = re.compile(r'請(刪除|移除|停用|停止|關閉|降級)|(刪除|移除|停用|停止|關閉)不需要')
+        # 也不能暗示租戶自己釋出得了配額：「釋出配額之前，…無法啟動」讀起來像是叫人去釋出。
+        implied = re.compile(r'\buntil (some of )?it is freed\b|\bfree (up )?(some )?quota\b', re.I)
+        implied_zh = re.compile(r'釋出配額之前|釋出部分配額')
         for sentence in alerts:
             self.assertNotRegex(sentence, advice)
+            self.assertNotRegex(sentence, implied)
             self.assertTrue(sentence.endswith('Contact support if you need more quota.'), sentence)
             zh = translated.get(sentence, '')
             self.assertNotRegex(zh, advice_zh, sentence)
+            self.assertNotRegex(zh, implied_zh, sentence)
             self.assertTrue(zh.endswith('需要更多配額請聯絡客服。'), (sentence, zh))
         # 陽性對照：同一組 regex 對原本那種寫法確實會命中。
         self.assertRegex('Delete a service you no longer need, or contact support.', advice)
         self.assertRegex('Stop a service to free up quota.', advice)
         self.assertRegex('請刪除不需要的服務，或聯絡客服。', advice_zh)
+        self.assertRegex('New or restarting services cannot start until some of it is freed.', implied)
+        self.assertRegex('釋出配額之前，新的或重新啟動的服務無法啟動。', implied_zh)
+        # 磁碟版說明「刪除不會立刻釋出磁碟配額」是在講沒用，不算暗示。
+        self.assertNotRegex('deleting a service does not free disk quota right away', implied)
+        self.assertNotRegex('刪除服務不會立刻釋出磁碟配額', implied_zh)
         # 被換掉的舊句子沒有留在 .po 裡。
         self.assertEqual(
             sorted(src for src in translated if 'Delete a service you no longer need' in src),

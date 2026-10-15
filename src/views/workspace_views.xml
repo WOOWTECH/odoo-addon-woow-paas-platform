@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Workspace 的一般預設 view，形狀與 Odoo 自動產生的 view 相同。
+         必須存在：否則 #1678 的管理員 quota view 會成為唯一 primary view，變成所有人的
+         預設 view，非管理員從 Many2one 連結打開 Workspace 時 web client 會崩潰。 -->
+    <record id="view_workspace_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.workspace.list</field>
+        <field name="model">woow_paas_platform.workspace</field>
+        <field name="arch" type="xml">
+            <list string="PaaS Workspace">
+                <field name="name"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_workspace_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.workspace.form</field>
+        <field name="model">woow_paas_platform.workspace</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet string="PaaS Workspace">
+                    <group>
+                        <group>
+                            <field name="name"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="description"/>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="slug"/>
+                            <field name="owner_id"/>
+                        </group>
+                        <group>
+                            <field name="ws_hash"/>
+                            <field name="state"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="access_ids">
+                            <list string="Workspace User Access">
+                                <field name="user_id"/>
+                            </list>
+                        </field>
+                    </group>
+                    <group>
+                        <field name="service_ids"/>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="member_count"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>

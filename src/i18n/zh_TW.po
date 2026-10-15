@@ -9952,6 +9952,8 @@ msgstr "PaaS 平台監控"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_list
 msgid "PaaS Workspace"
 msgstr ""
 
@@ -16020,6 +16022,7 @@ msgstr "工作區成員"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace_access
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_form
 msgid "Workspace User Access"
 msgstr ""
 
@@ -22297,8 +22300,8 @@ msgstr "這個工作區的配額即將用完，部署、重新啟動或調整服
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
-msgid "This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota."
-msgstr "這個工作區的配額已用完，釋出配額之前，新的或重新啟動的服務無法啟動。已刪除服務在保留期內的資料仍佔用磁碟配額，刪除服務不會立刻釋出磁碟配額；需要更多配額請聯絡客服。"
+msgid "This workspace has used up its quota. New or restarting services cannot start right now. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota."
+msgstr "這個工作區的配額已用完，新的或重新啟動的服務目前無法啟動。已刪除服務在保留期內的資料仍佔用磁碟配額，刪除服務不會立刻釋出磁碟配額；需要更多配額請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -22467,3 +22470,178 @@ msgstr "未配置持久儲存"
 #: code:addons/woow_paas_platform/static/src/paas/components/resource-usage/ResourceUsage.js:0
 msgid "Includes this service's replicas, sidecars and databases. CPU is a 5-minute average. Storage counts each persistent volume once."
 msgstr "包含此服務的所有副本、附屬程序與資料庫。CPU 為近 5 分鐘平均；每個持久磁碟僅計算一次。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_namespace
+msgid "Quota Namespace"
+msgstr "配額命名空間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_name
+msgid "ResourceQuota Name"
+msgstr "ResourceQuota 名稱"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_uid
+msgid "ResourceQuota UID"
+msgstr "ResourceQuota UID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_resource_version
+msgid "ResourceQuota Version"
+msgstr "ResourceQuota 版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_reason
+msgid "Quota Availability Reason"
+msgstr "配額可用性原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_status
+msgid "Quota Observation"
+msgstr "配額觀測狀態"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_observed_at
+msgid "Quota Observed At"
+msgstr "配額觀測時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_observed_at
+msgid "Time of the read, not a guarantee of quota controller reconciliation."
+msgstr "讀取時間，不保證配額控制器已完成對帳。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_available
+msgid "Complete Quota Observation"
+msgstr "完整配額觀測"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_cpu_requests_hard
+msgid "CPU Requests Hard"
+msgstr "CPU requests 上限"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_cpu_requests_used
+msgid "CPU Requests Used"
+msgstr "CPU requests 已佔用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_cpu_limits_hard
+msgid "CPU Limits Hard"
+msgstr "CPU limits 上限"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_cpu_limits_used
+msgid "CPU Limits Used"
+msgstr "CPU limits 已佔用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_memory_requests_hard
+msgid "Memory Requests Hard"
+msgstr "記憶體 requests 上限"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_memory_requests_used
+msgid "Memory Requests Used"
+msgstr "記憶體 requests 已佔用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_memory_limits_hard
+msgid "Memory Limits Hard"
+msgstr "記憶體 limits 上限"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_memory_limits_used
+msgid "Memory Limits Used"
+msgstr "記憶體 limits 已佔用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_storage_requests_hard
+msgid "Storage Requests Hard"
+msgstr "儲存空間 requests 上限"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_storage_requests_used
+msgid "Storage Requests Used"
+msgstr "儲存空間 requests 已佔用"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_inspection.py:0
+msgid "Unknown / unavailable"
+msgstr "未知／無法取得"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_inspection.py:0
+msgid "Observed"
+msgstr "已觀測"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_inspection.py:0
+msgid "Only system administrators may inspect Workspace quotas."
+msgstr "僅系統管理員可查看工作區完整配額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_inspection.py:0
+msgid "Quota observations are read-only operator data."
+msgstr "配額觀測為 operator 提供的唯讀資料。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_list
+#: model:ir.actions.act_window,name:woow_paas_platform.action_workspace_quota_inspection
+msgid "Workspace Quota Observations"
+msgstr "工作區配額現況"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Workspace Quota Observation"
+msgstr "工作區配額現況"
+
+#. module: woow_paas_platform
+#: model:ir.ui.menu,name:woow_paas_platform.menu_workspace_quota_inspection
+msgid "Workspace Quotas"
+msgstr "工作區配額"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Refresh Observation"
+msgstr "重新觀測"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Observation"
+msgstr "觀測資訊"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Managed ResourceQuota Identity"
+msgstr "受管 ResourceQuota 身分"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "CPU (cores; m = millicores)"
+msgstr "CPU（cores；m 為 millicores）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Memory (Kubernetes quantities)"
+msgstr "記憶體（Kubernetes 數量單位）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Storage (Kubernetes quantities)"
+msgstr "儲存空間（Kubernetes 數量單位）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Quota observation is unknown or unavailable. Missing values are unknown, not zero."
+msgstr "配額現況未知或無法取得。缺少的數值為未知，不代表零。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "These are declared ResourceQuota allocations, not live resource utilization. The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity."
+msgstr "這些是 ResourceQuota 已宣告的配額佔用量，不是即時資源使用率。觀測時間為讀取時間，不保證配額控制器已完成對帳或有足夠的 rollout 容量。"
