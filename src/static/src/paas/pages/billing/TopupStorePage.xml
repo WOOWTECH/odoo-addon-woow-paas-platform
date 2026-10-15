@@ -2,6 +2,12 @@
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.TopupStorePage">
         <div class="o_woow_topup_store">
+            <t t-if="state.confirming">
+                <div class="o_woow_topup_confirming">
+                    <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
+                    <span>Confirming the payment with your bank…</span>
+                </div>
+            </t>
             <t t-if="state.globalError">
                 <div class="o_woow_topup_global_error">
                     <WoowIcon name="'error'" size="20"/>

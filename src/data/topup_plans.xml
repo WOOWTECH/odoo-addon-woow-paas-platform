@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data noupdate="1">
+        <!-- 2026-10-15：下架。ECPay 每筆最低手續費 NT$5，刷 50 元手續費就佔 10%。
+             記錄保留（不是刪除）以免既有的歷史儲值單指到不存在的方案；既有資料庫
+             由 migrations/18.0.1.0.240 停用。要重新上架就把 active 改回 True。 -->
         <record id="topup_plan_50" model="woow_paas_platform.topup_plan">
             <field name="name">NT$ 50 Credits</field>
             <field name="amount">50</field>
@@ -9,6 +12,7 @@
             <field name="icon">toll</field>
             <field name="category">all</field>
             <field name="sequence">10</field>
+            <field name="active" eval="False"/>
         </record>
         <record id="topup_plan_100" model="woow_paas_platform.topup_plan">
             <field name="name">NT$ 100 Credits</field>

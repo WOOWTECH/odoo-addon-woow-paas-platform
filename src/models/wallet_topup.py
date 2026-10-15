@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 import uuid
 from datetime import timedelta
 
@@ -37,6 +38,32 @@ TOPUP_SDK_ERROR = 'sdk_error'
 TOPUP_WALLET_CREDIT_FAILED = 'wallet_credit_failed'
 # #864 PR-G：付款意圖預登記寫不進去 ⇒ fail-closed，⛔ 不外呼。
 TOPUP_INTENT_NOT_RECORDED = 'intent_not_recorded'
+
+# ECPay V4 上線（2026-10-15 使用者裁決）：
+# 儲值發票的開票模式，只管 woow.wallet.topup 開出來的發票；其他發票仍看公司設定
+# （res.company.auto_invoice，正式站是 manual，ERP／官網依賴它，⛔ 不改）。
+#   automatic（預設）→ 'pending'，平台 cron 自動開電子發票
+#   manual           → 'manual'，等人工按鈕
+#   company          → 沿用 account.move._woow_resolve_invoice_issue_state(company)
+TOPUP_INVOICE_ISSUE_MODE_PARAM = 'woow_paas_platform.topup_invoice_issue_mode'
+TOPUP_INVOICE_ISSUE_MODE_DEFAULT = 'automatic'
+# 自動儲值進位單位（裁決 2：「進位到下一個 NT$100」）：短缺 130 → 扣 200。
+# 最低扣款金額沿用 #1745 的 `woow_paas_platform.auto_topup_min_amount`（預設 100，
+# 同時是上架方案金額的下限，見 topup_plan 的 constraint）。
+TOPUP_CHARGE_STEP = 100
+# 卡片被 ECPay 拒絕後，自動儲值在冷卻期內不再授權這張卡（見 payment_token）。
+TOPUP_CARD_BLOCKED = 'card_blocked_after_decline'
+
+
+def _ecpg_card_level_failure(message):
+    """ECPay 真的處理過這筆授權並拒絕（RtnCode≠1）⇒ True。
+
+    傳輸／設定類錯誤（HTTP 4xx/5xx、TransCode、連線逾時）不算：那些沒有對
+    發卡行授權，重試不違反「勿對同一 BindCardID 反覆授權」。訊息格式來自
+    vendored ``_post`` 的 ``RtnCode=<n> msg=…``（平台送出點沿用同一格式）。
+    """
+    match = re.search(r'RtnCode=(-?\d+)', message or '')
+    return bool(match) and match.group(1) != '1'
 
 
 class WalletTopup(models.Model):
@@ -139,6 +166,34 @@ class WalletTopup(models.Model):
                 return code
         return 'generic'
 
+    # ── 自動補值的最低扣款金額 ────────────────────────────────────────────
+    # ECPay 每筆信用卡交易收「手續費率」與「最低手續費 NT$5」取大者：缺口 12 元
+    # 就只刷 12 元時，手續費佔 42%。把實際扣款拉到這個下限，多收的部分**留在錢包**
+    # 抵下一期（與下面 ceil 的餘額同一個語意，只是金額大一點）。
+    # ⚠ 這是對使用者的卡片扣款，金額大於當期欠款 ⇒ 產品面要在自動補值的說明與
+    #   同意流程揭露；設成 0 即關閉下限、回到「缺多少刷多少」。
+    _AUTO_TOPUP_MIN_PARAM = 'woow_paas_platform.auto_topup_min_amount'
+    _AUTO_TOPUP_MIN_DEFAULT = '100'
+
+    @api.model
+    def _auto_topup_min_amount(self):
+        """自動補值的最低扣款金額（整數 TWD；0 ＝ 不設下限）。
+
+        🔴 fail-safe 往「不設下限」倒：參數被填成非數字時，寧可回到舊行為
+        （缺多少刷多少）也不要用一個猜的數字去多刷使用者的卡。
+        """
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            self._AUTO_TOPUP_MIN_PARAM, self._AUTO_TOPUP_MIN_DEFAULT)
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            _logger.warning(
+                '[AUTO_TOPUP] %s=%r is not a number; charging the exact '
+                'shortfall (no minimum)', self._AUTO_TOPUP_MIN_PARAM, raw,
+            )
+            return 0.0
+        return float(max(value, 0))
+
     @api.model
     def create_auto_topup(self, partner, amount):
         """Factory: create a draft auto-topup for the given shortfall.
@@ -161,6 +216,12 @@ class WalletTopup(models.Model):
         Odoo invoice price_unit, and the ECPay charge all reconcile to the
         same value. The fractional surplus (max 0.99 TWD) accrues to the
         user's wallet for future use.
+
+        The charge is then rounded up to the next NT$100 and raised to
+        ``_auto_topup_min_amount()`` (``_auto_topup_charge_amount``; ECPay's
+        NT$5 minimum fee makes tiny charges uneconomic, and fewer, larger
+        charges mean fewer authorisations on the card); that surplus also
+        stays in the wallet.
         """
         if amount <= 0:
             raise ValidationError(
@@ -172,34 +233,69 @@ class WalletTopup(models.Model):
         # to keep the customer's invoice + card statement + wallet ledger
         # reconcilable. Surplus stays in the wallet.
         ceil_amount = float(math.ceil(amount))
+        # 最低扣款金額（見 `_auto_topup_min_amount`，#1745）。credits 必須跟著
+        # 一起抬，三邊（錢包／發票／ECPay 扣款）才對得起來。
+        # ECPay V4 上線（2026-10-15 使用者裁決 2）：再進位到下一個 NT$100——
+        # 短缺 130 扣 200、短缺 30 扣 100（下限）；多的同樣留在錢包。
+        charge_amount = float(self._auto_topup_charge_amount(amount))
+        if charge_amount != ceil_amount:
+            _logger.info(
+                '[AUTO_TOPUP] shortfall %s raised to %s (minimum / NT$100 '
+                'step) partner=%s; the surplus stays in the wallet',
+                ceil_amount, charge_amount, partner.id,
+            )
 
         twd = self.env.ref('base.TWD', raise_if_not_found=True)
         vals = {
             'partner_id': partner.id,
-            'amount': ceil_amount,
-            'credits': ceil_amount,
+            'amount': charge_amount,
+            'credits': charge_amount,
             'bonus': 0.0,
             'currency_id': twd.id,
             'source': 'auto',
             'state': 'draft',
         }
-        # Inherit partner's invoice preference (mirrors manual topup flow).
-        # Guard on the actual partner-side field we read — both the partner
-        # extension and this topup model ship together, so the gate matches
-        # the real precondition rather than checking for an unrelated method.
-        if 'woow_invoice_carrier_type' in partner._fields:
-            for src, dst in (
-                ('woow_invoice_carrier_type', 'invoice_carrier_type'),
-                ('woow_invoice_carrier', 'invoice_carrier'),
-                ('woow_invoice_tax_id', 'invoice_tax_id'),
-                ('woow_invoice_title', 'invoice_title'),
-                ('woow_invoice_lovecode', 'invoice_lovecode'),
-            ):
-                if src in partner._fields:
-                    val = partner[src]
-                    if val:
-                        vals[dst] = val
+        # Inherit partner's invoice preference (same helper as manual topup).
+        vals.update(self._partner_invoice_preference_vals(partner))
         return self.sudo().create(vals)
+
+    @api.model
+    def _partner_invoice_preference_vals(self, partner):
+        """使用者在設定頁存的發票載具偏好 → topup 的 invoice_* 欄位。
+
+        手動儲值（沒帶 invoice_intent 時）與自動儲值共用這一顆。只讀實際存在、
+        有值的欄位（partner 擴充與本 model 同捆出貨，gate 對準真正讀的欄位）。
+        """
+        vals = {}
+        if 'woow_invoice_carrier_type' not in partner._fields:
+            return vals
+        for src, dst in (
+            ('woow_invoice_carrier_type', 'invoice_carrier_type'),
+            ('woow_invoice_carrier', 'invoice_carrier'),
+            ('woow_invoice_tax_id', 'invoice_tax_id'),
+            ('woow_invoice_title', 'invoice_title'),
+            ('woow_invoice_lovecode', 'invoice_lovecode'),
+        ):
+            if src in partner._fields:
+                val = partner[src]
+                if val:
+                    vals[dst] = val
+        return vals
+
+    @api.model
+    def _auto_topup_charge_amount(self, shortfall):
+        """自動儲值實際扣款金額（整數 TWD）。
+
+        ``ceil`` 成整數 → 進位到下一個 ``TOPUP_CHARGE_STEP``（NT$100）→ 再抬到
+        ``_auto_topup_min_amount()``。下限參數設 0（或填壞）＝ #1745 的關閉開關：
+        回到「缺多少刷多少」，連 NT$100 進位也一起關，不用猜的數字多刷卡。
+        """
+        ceil_amount = math.ceil(shortfall)
+        minimum = int(self._auto_topup_min_amount())
+        if minimum <= 0:
+            return ceil_amount
+        stepped = math.ceil(ceil_amount / TOPUP_CHARGE_STEP) * TOPUP_CHARGE_STEP
+        return max(stepped, minimum)
 
     def charge_via_token(self, token):
         """Synchronously charge `token` for self.amount, credit wallet, create invoice.
@@ -327,12 +423,29 @@ class WalletTopup(models.Model):
             })
             return False, TOPUP_SDK_ERROR
 
-        # 3DS - keep state pending, don't fail. User may complete via web later.
+        # 3DS：自動扣款沒有瀏覽器可以完成驗證 ⇒ 立即判失敗（⛔ 不再停在
+        # pending 等 60 分鐘 cleanup），tx 也收成 error，晚到的 pay_callback
+        # 會被 vendored 的終態冪等擋掉。卡片進冷卻期：這個計費週期內不再對同
+        # 一個 BindCardID 自動授權（ECPay：失敗後勿反覆重新授權）。使用者由
+        # 訂閱 dunning 的低餘額通知（含儲值連結）提醒改手動儲值。
         if isinstance(result, dict) and result.get('redirect_url'):
             _logger.info(
-                '[TOPUP_AUTO] 3DS required topup=%s tx=%s; aborting cron path',
+                '[TOPUP_AUTO] 3DS required topup=%s tx=%s; failing immediately '
+                '(cron cannot complete 3-D Secure)',
                 self.id, tx.id,
             )
+            if tx.state in ('draft', 'pending', 'authorized'):
+                tx._set_error(_(
+                    '3-D Secure required; an automatic charge cannot complete '
+                    'it. The customer must top up manually.'))
+            self.write({
+                'state': 'failed',
+                'failure_code': TOPUP_3DS_REQUIRED,
+                'failure_message': (
+                    '3DS_REQUIRED: automatic charge returned ThreeDURL; '
+                    'not retried automatically'),
+            })
+            token._woow_block_auto_charge(TOPUP_3DS_REQUIRED)
             return False, TOPUP_3DS_REQUIRED
 
         if tx.state != 'done':
@@ -661,6 +774,10 @@ class WalletTopup(models.Model):
             "[TOPUP] _on_payment_done complete topup=%s wallet_tx=%s new_state=done",
             self.id, wtx.id,
         )
+        token = getattr(tx, 'token_id', None)
+        if token:
+            # 這張卡剛剛扣款成功 ⇒ 解除先前因拒絕而設的自動扣款冷卻。
+            token._woow_clear_auto_charge_block()
         # Create the customer invoice so the issuing cron can later call
         # ecpay_invoice_tw. Best-effort: a failure here does not roll back the
         # wallet credit that already happened above.
@@ -690,6 +807,11 @@ class WalletTopup(models.Model):
             'failure_message': message,
             'failure_code': code,
         })
+        token = getattr(tx, 'token_id', None)
+        if token and _ecpg_card_level_failure(message):
+            # 發卡行／ECPay 真的拒絕了這張卡（不論手動或自動）⇒ 自動儲值在
+            # 冷卻期內不再對它授權；使用者手動儲值成功即解除。
+            token._woow_block_auto_charge(code)
         _logger.info(
             "[TOPUP] _on_payment_failed complete topup=%s code=%s",
             self.id, code,
@@ -1068,6 +1190,20 @@ class WalletTopup(models.Model):
         except Exception:
             _logger.exception(
                 '[TOPUP] PR-F auto-recredit failed; pending cleanup still runs',
+            )
+        # ECPay V4：綁卡 NT$5 驗證授權的取消（DoAction）。獨立 failure domain，
+        # 自己一顆 savepoint；掛在這支既有 cron 上而不新增 cron（理由同上：
+        # cron_topup.xml 是 noupdate，改它在既有安裝上不會生效）。
+        try:
+            with self.env.cr.savepoint():
+                self.env['woow_paas_platform.ecpg_bind_auth_void'].sudo() \
+                    ._cron_process_due()
+        except psycopg2.OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                '[TOPUP] bind authorization void segment failed; pending '
+                'cleanup still runs',
             )
         now = fields.Datetime.now()
         grace = now - timedelta(minutes=self._CLEANUP_GRACE_MIN)
@@ -2207,8 +2343,9 @@ class WalletTopup(models.Model):
         # 家族共用同一顆 fail-closed resolver。原本這裡寫死 'pending' ⇒ 平台的
         # async cron（完全不看 auto_invoice，只要看到 pending 就開）會無條件自動
         # 開票，「paas 選 manual」根本不生效。
-        issue_state = self.env['account.move']._woow_resolve_invoice_issue_state(
-            self.env.company)
+        # ECPay V4 上線（2026-10-15 裁決 1）：儲值發票改由平台參數決定（預設
+        # automatic），⛔ 不動 res.company.auto_invoice。
+        issue_state = self._topup_invoice_issue_state()
         move_vals = {
             'move_type': 'out_invoice',
             'partner_id': self.partner_id.id,
@@ -2270,6 +2407,28 @@ class WalletTopup(models.Model):
                     move.id,
                 )
         return move
+
+    @api.model
+    def _topup_invoice_issue_state(self):
+        """儲值發票要 stamp 的開票狀態（只管儲值；訂閱週期發票照舊 not_required）。
+
+        值域見 ``TOPUP_INVOICE_ISSUE_MODE_PARAM``。未知值 ⇒ warning ＋ 退回
+        公司 resolver（fail-closed：公司不是 automatic 就是 manual）。
+        """
+        mode = (self.env['ir.config_parameter'].sudo().get_param(
+            TOPUP_INVOICE_ISSUE_MODE_PARAM, TOPUP_INVOICE_ISSUE_MODE_DEFAULT,
+        ) or TOPUP_INVOICE_ISSUE_MODE_DEFAULT).strip().lower()
+        if mode == 'automatic':
+            return 'pending'
+        if mode == 'manual':
+            return 'manual'
+        if mode != 'company':
+            _logger.warning(
+                '[TOPUP] unknown %s=%r; falling back to the company policy',
+                TOPUP_INVOICE_ISSUE_MODE_PARAM, mode,
+            )
+        return self.env['account.move']._woow_resolve_invoice_issue_state(
+            self.env.company)
 
     @api.model
     def _get_topup_product(self):
