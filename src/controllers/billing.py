@@ -18,6 +18,7 @@ from .ha_paas import HiddenChainMixin
 from odoo.tools import str2bool
 # #864 PR-G：手動與自動兩條儲值路徑共用同一組穩定失敗碼，⛔ 不各寫一份字面值。
 from ..models.wallet_topup import TOPUP_INTENT_NOT_RECORDED
+from ..services.ecpg_v4 import ecpay_consumer_name, ecpay_consumer_phone
 
 _logger = logging.getLogger(__name__)
 
@@ -85,16 +86,12 @@ def _invoice_payability_fields(invoice):
 
 
 def _sanitize_phone_for_ecpay(raw):
-    """Strip non-digits from a phone string for ECPay.
+    """ECPay ConsumerInfo.Phone：只送台灣手機 ``09XXXXXXXX``，其餘送 ``''``。
 
-    ECPay's ConsumerInfo.Phone rejects '+', '-', spaces, parentheses.
-    Returns digits-only string, or '' if the result is too short to be
-    a plausible phone number (ECPay's Phone field is optional).
+    單一實作在 ``services/ecpg_v4.ecpay_consumer_phone``（儲值扣款也用同一顆）；
+    這個名字保留給既有 import 點。
     """
-    if not raw:
-        return ''
-    digits = ''.join(c for c in raw if c.isdigit())
-    return digits if len(digits) >= 7 else ''
+    return ecpay_consumer_phone(raw)
 
 
 class BillingController(HiddenChainMixin, Controller):
@@ -116,6 +113,17 @@ class BillingController(HiddenChainMixin, Controller):
         if token.partner_id != request.env.user.partner_id:
             return None, {'success': False, 'error': _('Not owner'), 'code': ERR_NOT_OWNER}
         return token, None
+
+    @staticmethod
+    def _bind_callback_helper(source):
+        """平台版綁卡結果處理器（unique 撞號＝已存在、登記取消 NT$5 授權）。
+
+        ⛔ 不直接 new vendored ``ECPGCallback()``：那會繞過平台 override。
+        """
+        from .ecpg_callback import WoowECPGCallbackInbox
+        helper = WoowECPGCallbackInbox()
+        helper._woow_bind_source = source
+        return helper
 
     def _get_partner_ecpg_tokens(self, partner):
         """Return active ECPG-bound payment tokens for a partner."""
@@ -316,7 +324,8 @@ class BillingController(HiddenChainMixin, Controller):
             'MerchantMemberID': member_id,
             'Email': partner.email or '',
             'Phone': _sanitize_phone_for_ecpay(partner.phone),
-            'Name': partner.name or '',
+            # 名字含數字／符號會讓 ECPay 整筆拒絕綁卡（stage 實測），不合規送空。
+            'Name': ecpay_consumer_name(partner.name),
             'CountryCode': '158',
         }
         order_info = {
@@ -414,10 +423,8 @@ class BillingController(HiddenChainMixin, Controller):
             trade_no, list(kw.keys()),
         )
         try:
-            from odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback import (
-                ECPGCallback,
-            )
-            callback_result = ECPGCallback()._handle_bind_callback(kw)
+            callback_result = self._bind_callback_helper(
+                'order_result')._handle_bind_callback(kw)
             callback_ok = callback_result[0]
             status = (
                 'ok' if callback_ok is True
@@ -533,13 +540,51 @@ class BillingController(HiddenChainMixin, Controller):
             "[BIND] create_bind ok partner=%s trade_no=%s has_3ds=%s bind_card_id=%s",
             partner.id, trade_no, bool(three_d_url), bind_card_id,
         )
+        data = {
+            'three_d_url': three_d_url,
+            'bind_card_id': bind_card_id,
+        }
+        if not three_d_url:
+            # 不走 3D 時 ECPay **不會**再打 OrderResultURL：同步回應就是綁卡
+            # 結果（BindCardID／CardInfo／OrderInfo）。沿用同一顆 token 持久化
+            # helper（冪等、unique 撞號＝已存在、登記取消 NT$5 授權），讓卡片
+            # 不必等 S2S ReturnURL 才出現。
+            data['bind_status'] = self._persist_sync_bind_result(
+                provider, member_id, result)
         return {
             'success': True,
-            'data': {
-                'three_d_url': three_d_url,
-                'bind_card_id': bind_card_id,
-            },
+            'data': data,
         }
+
+    def _persist_sync_bind_result(self, provider, member_id, result):
+        """CreateBindCard 無 3D 回應 → 交給綁卡結果 helper；回 ok／failed／error。
+
+        helper 吃的是 callback envelope（``ResultData`` 內含加密 Data），所以
+        這裡用 provider 自己的金鑰把同步回應包成同形 envelope——⛔ 不另寫一份
+        token 建立邏輯（會與 vendored 的冪等／partner 對映漂開）。
+        """
+        from odoo.addons.payment_ecpay_ecpg.sdk.aes_crypto import encrypt
+        if result.get('MerchantMemberID') and result['MerchantMemberID'] != member_id:
+            _logger.warning(
+                "[BIND] create_bind sync result member mismatch expected=%s got=%s",
+                member_id, result.get('MerchantMemberID'),
+            )
+            return 'error'
+        payload = dict(result)
+        payload.setdefault('MerchantMemberID', member_id)
+        try:
+            envelope = {
+                'MerchantID': provider.MerchantID,
+                'TransCode': 1,
+                'Data': encrypt(payload, provider.HashKey, provider.HashIV),
+            }
+            ok, _reason = self._bind_callback_helper(
+                'create_bind')._handle_bind_callback(
+                    {'ResultData': json.dumps(envelope)})
+        except Exception:
+            _logger.exception('[BIND] create_bind sync persistence failed')
+            return 'error'
+        return 'ok' if ok is True else 'failed' if ok is False else 'error'
 
     @route("/api/billing/payment-methods/<int:method_id>/delete",
            auth="user", methods=["POST"], type="json")
@@ -668,12 +713,19 @@ class BillingController(HiddenChainMixin, Controller):
                 "[TOPUP] api_topup resume existing topup=%s partner=%s",
                 existing.id, partner.id,
             )
-            return {'success': True, 'data': {
-                'topup_id': existing.id,
-                'redirect_url': self._resume_3ds_url(existing),
-                'resumed': True,
-                'state': existing.state,
-            }}
+            # ⛔ 不回 success：前一筆還在等付款結果，這次**沒有**扣款。前端只在
+            # state=='done' 時顯示成功；這裡回 pending 讓它進「確認中」並輪詢。
+            return {
+                'success': False,
+                'error': _('Your previous top-up is still processing, please wait.'),
+                'code': 'duplicate_pending',
+                'data': {
+                    'topup_id': existing.id,
+                    'redirect_url': self._resume_3ds_url(existing),
+                    'resumed': True,
+                    'state': existing.state,
+                },
+            }
 
         token = self._get_default_ecpg_token(partner)
         if not token:
@@ -684,6 +736,10 @@ class BillingController(HiddenChainMixin, Controller):
                     'code': 'no_card'}
 
         invoice_vals = self._build_invoice_intent_vals(invoice_intent or {})
+        if not invoice_vals:
+            # 沒帶發票意圖（/woow 儲值 modal 目前不送）⇒ 沿用使用者在設定頁存的
+            # 載具偏好，與自動儲值（create_auto_topup）同一顆 helper。
+            invoice_vals = Topup._partner_invoice_preference_vals(partner)
         topup = Topup.create({
             'partner_id': partner.id,
             'plan_id': plan.id,
@@ -783,18 +839,49 @@ class BillingController(HiddenChainMixin, Controller):
             update_vals['state'] = 'pending'
         topup.write(update_vals)
         # Re-read to reflect any state set by the synchronous callback.
-        topup.invalidate_recordset(['state'])
+        topup.invalidate_recordset(['state', 'failure_code', 'failure_message'])
+        if topup.state == 'draft' and result['state'] in ('error', 'cancel'):
+            # 終態但沒有 callback 把 topup 推過去（例如 tx 被 cancel 而非
+            # _set_error）⇒ 這裡補成 failed，⛔ 不能讓它停在 draft 被當成功。
+            topup.write({'state': 'failed',
+                         'failure_code': topup.failure_code or result['state']})
         _logger.info(
             "[TOPUP] charge returned topup=%s tx=%s tx_state=%s topup_state=%s has_redirect=%s",
             topup.id, tx.id, result['state'], topup.state,
             bool(result.get('redirect_url')),
         )
+        return self._topup_result_payload(topup, result.get('redirect_url'))
 
-        return {'success': True, 'data': {
+    def _topup_result_payload(self, topup, redirect_url):
+        """依 topup **實際狀態**組回應——只有 ``done`` 或「要去 3D」才是 success。
+
+        修 false success：ECPay 同步拒絕時 tx 已 error、topup 已 failed，舊碼仍
+        回 ``success: True``，前端就顯示儲值成功。
+        """
+        data = {
             'topup_id': topup.id,
-            'redirect_url': result['redirect_url'],
+            'redirect_url': redirect_url or None,
             'state': topup.state,
-        }}
+        }
+        if topup.state == 'done':
+            return {'success': True, 'data': data}
+        if topup.state == 'pending' and redirect_url:
+            return {'success': True, 'data': data}
+        if topup.state == 'pending':
+            return {
+                'success': False,
+                'error': _('Still confirming payment — please refresh in a moment.'),
+                'code': 'topup_pending',
+                'data': data,
+            }
+        failure_code = topup.failure_code or 'generic'
+        return {
+            'success': False,
+            'error': _('Payment failed. Please retry or contact support.'),
+            'code': failure_code,
+            'failure_code': failure_code,
+            'data': data,
+        }
 
     def _build_invoice_intent_vals(self, intent):
         """Whitelist invoice fields we persist on the topup order."""
@@ -809,6 +896,46 @@ class BillingController(HiddenChainMixin, Controller):
         message. Phase 2 can query ECPay to refresh the 3DS URL if supported.
         """
         return None
+
+    @route(
+        "/api/billing/topup-result/<int:topup_id>",
+        auth="public",
+        type="http",
+        methods=["GET", "POST"],
+        csrf=False,
+        save_session=False,
+    )
+    def api_topup_result(self, topup_id, **kw):
+        """儲值 3D 驗證完的瀏覽器回跳點（CreatePaymentWithCardID 的 OrderResultURL）。
+
+        ⛔ **不改任何狀態**：付款結果只認 S2S ReturnURL（``pay_callback``）與
+        cleanup cron 的查詢；這裡收到的 ``ResultData`` 只是瀏覽器帶回來的副本，
+        不解析、不落庫（PCI：會沾到卡號片段）。只做一件事——用同源 JS 導回
+        ``/woow#/billing/topup?topup_id=N``，由 TopupStorePage 輪詢
+        ``/api/billing/topup/<id>/status``（owner-only）顯示結果。
+
+        cross-site POST → 不用 303、用 JS 導頁、``save_session=False``：理由與
+        ``api_payment_method_bind_result`` 完全相同（SameSite=Lax 會剝掉 cookie，
+        匿名 session 會蓋掉使用者的 session_id）。
+        """
+        _logger.info(
+            "[TOPUP] topup-result landing topup=%s kw_keys=%s",
+            topup_id, sorted(kw.keys()),
+        )
+        base = (request.env['ir.config_parameter'].sudo().get_param('web.base.url')
+                or request.httprequest.url_root).rstrip('/')
+        target = f'{base}/woow#/billing/topup?{urlencode({"topup_id": int(topup_id)})}'
+        title = _('Top-up result')
+        body_text = _('Returning to the top-up page…')
+        html = (
+            f'<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>'
+            f'<meta http-equiv="refresh" content="0;url={target}">'
+            f'<script>window.location.replace({json.dumps(target)});</script>'
+            f'</head><body>{body_text}</body></html>'
+        )
+        return request.make_response(
+            html, headers=[('Content-Type', 'text/html; charset=utf-8')],
+        )
 
     @route("/api/billing/topup/<int:topup_id>/status",
            auth="user", methods=["POST"], type="json")

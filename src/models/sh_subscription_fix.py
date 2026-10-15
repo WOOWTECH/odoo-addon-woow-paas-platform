@@ -1224,6 +1224,8 @@ class ShSubscriptionFix(models.Model):
         - ``'sdk_error'``                   — exception from _send_payment_request
         - ``'wallet_credit_failed'``        — ECPay charged but wallet credit failed
         - ``'invalid_state'``               — topup state guard (concurrent caller)
+        - ``'card_blocked_after_decline'``  — ECPay declined this card (or
+          demanded 3-D Secure) within the block window; no re-authorisation
         - ``'cooldown_active'``             — #864 PR-E: recent unresolved
           charged_not_credited incident for this partner; refusing to
           re-charge
@@ -1242,6 +1244,18 @@ class ShSubscriptionFix(models.Model):
         token = self._resolve_default_token(partner)
         if not token:
             return False, 'no_token'
+
+        # ECPay V4：這張卡最近被 ECPay 拒絕過（或要求 3D）⇒ 本計費週期不再對
+        # 同一個 BindCardID 自動授權（官方：連續失敗可能被暫停授權）。不建
+        # topup、零外呼；dunning（失敗計數＋低餘額通知）照常往下走。
+        if token._woow_auto_charge_blocked():
+            _logger.warning(
+                '[AUTO_TOPUP] token=%s blocked after decline (code=%s at %s); '
+                'not re-authorising partner=%s shortfall=%s',
+                token.id, token.woow_auto_charge_block_code,
+                token.woow_auto_charge_blocked_at, partner.id, shortfall,
+            )
+            return False, 'card_blocked_after_decline'
 
         # #864 PR-E double-charge 冷卻閘：同 partner 若在冷卻窗口內已有一筆
         # 未 resolved 的 charged_not_credited incident，代表上一次很可能已經

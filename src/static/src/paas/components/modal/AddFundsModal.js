@@ -32,6 +32,7 @@ export class AddFundsModal extends Component {
     this.billing = useState(billingService);
     this.state = useState({
       processing: false,
+      pending: false,
       error: null,
     });
 
@@ -96,33 +97,61 @@ export class AddFundsModal extends Component {
     if (this.state.processing || !this.hasCard) return;
     this.state.processing = true;
     this.state.error = null;
+    this.state.pending = false;
 
     const result = await billingService.topup(this.plan.id);
-    if (!result.success) {
+    if (result.success && result.data && result.data.redirect_url) {
+      window.location.href = result.data.redirect_url;
+      return;  // Browser is leaving; no further UI work
+    }
+    const topupId = result.data?.topup_id;
+    const state = result.data?.state;
+    // Success is shown ONLY for a top-up that is actually `done`. A pending
+    // top-up (still waiting for ECPay, or a previous one still in flight) is
+    // polled; anything else is an error.
+    if (topupId && state === "pending") {
+      await this._waitForResult(topupId);
+      return;
+    }
+    if (!result.success || state !== "done" || !topupId) {
       this.state.error = translateTopupError(result.error, result.code);
       this.state.processing = false;
       return;
     }
-    if (result.data && result.data.redirect_url) {
-      window.location.href = result.data.redirect_url;
-      return;  // Browser is leaving; no further UI work
-    }
-    // Synchronous done (non-3DS path). Fetch full topup status so the
-    // success modal receives credits_added / bonus / new_balance.
-    const topupId = result.data?.topup_id;
-    let successPayload = result.data;
-    if (topupId) {
-      const status = await billingService.getTopupStatus(topupId);
-      if (status?.success) {
-        successPayload = {
-          topup_id: status.data.topup_id,
-          credits_added: status.data.credits,
-          bonus: status.data.bonus,
-          new_balance: status.data.new_balance,
-        };
-      }
+    await this._finishWithStatus(topupId);
+  }
+
+  async _finishWithStatus(topupId) {
+    const status = await billingService.getTopupStatus(topupId);
+    if (!status?.success || status.data.state !== "done") {
+      this.state.error = translateTopupError(
+        status?.data?.failure_message, status?.data?.failure_code || status?.code,
+      );
+      this.state.processing = false;
+      return;
     }
     await billingService.fetchWallet();
-    this.props.onSuccess(successPayload);
+    this.props.onSuccess({
+      topup_id: status.data.topup_id,
+      credits_added: status.data.credits,
+      bonus: status.data.bonus,
+      new_balance: status.data.new_balance,
+    });
+  }
+
+  async _waitForResult(topupId) {
+    this.state.pending = true;
+    const final = await billingService.pollTopupStatus(topupId);
+    this.state.pending = false;
+    if (final?.state === "done") {
+      await this._finishWithStatus(topupId);
+      return;
+    }
+    if (final?.state === "failed" || final?.state === "cancelled") {
+      this.state.error = translateTopupError(final.failure_message, final.failure_code);
+    } else {
+      this.state.error = translateTopupError(null, "topup_pending");
+    }
+    this.state.processing = false;
   }
 }

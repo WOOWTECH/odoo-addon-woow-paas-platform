@@ -118,7 +118,11 @@ class TestTopupController(HttpCase):
         second = self._post(
             '/api/billing/wallet/topup', {'plan_id': self.plan.id},
         )['result']
-        self.assertTrue(second['success'])
+        # ECPay V4 go-live: resuming a pending top-up charged nothing, so it is
+        # NOT a success — the frontend polls the pending top-up instead.
+        self.assertFalse(second['success'])
+        self.assertEqual(second['code'], 'duplicate_pending')
+        self.assertEqual(second['data']['state'], 'pending')
         self.assertEqual(second['data']['topup_id'], first['data']['topup_id'])
         self.assertTrue(second['data'].get('resumed'))
 

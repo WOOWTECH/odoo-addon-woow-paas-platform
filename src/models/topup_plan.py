@@ -1,4 +1,5 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
+from odoo.exceptions import ValidationError
 from odoo.tools import float_compare
 
 
@@ -41,3 +42,25 @@ class TopupPlan(models.Model):
                 ratio > 0
                 and float_compare(ratio, best_ratio, precision_digits=6) == 0
             )
+
+    @api.constrains('amount', 'active')
+    def _check_amount_whole_and_minimum(self):
+        """上架中的方案：金額必須是整數 NT$，且 ≥ 最低扣款金額（預設 100）。
+
+        下限沿用 #1745 的 ``woow_paas_platform.auto_topup_min_amount``（設 0 ＝
+        不檢查下限，與自動儲值的關閉語意一致）。只檢查 active 方案——下架的舊
+        方案（NT$50，由 migrations/18.0.1.0.240 停用）留著給歷史 topup 參照；
+        ``@api.constrains`` 只在寫入這兩個欄位時觸發，既有資料不會被回頭驗證。
+        """
+        minimum = self.env['woow.wallet.topup']._auto_topup_min_amount()
+        for plan in self.filtered('active'):
+            if plan.amount != int(plan.amount):
+                raise ValidationError(_(
+                    'Top-up plan "%(name)s": the price must be a whole NT$ '
+                    'amount (got %(amount)s).',
+                    name=plan.name, amount=plan.amount))
+            if minimum and plan.amount < minimum:
+                raise ValidationError(_(
+                    'Top-up plan "%(name)s": the price must be at least '
+                    'NT$%(minimum)s (got %(amount)s).',
+                    name=plan.name, minimum=int(minimum), amount=plan.amount))

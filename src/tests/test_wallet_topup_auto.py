@@ -16,14 +16,14 @@ class TestCreateAutoTopup(TransactionCase):
 
     def test_create_auto_topup_returns_topup_record(self):
         """create_auto_topup creates a draft topup with source=auto, no plan_id."""
-        # 150 ＞ 自動補值下限（預設 100）⇒ 這裡驗的是「照缺口刷」，不碰下限邏輯。
+        # 200 已是 NT$100 的倍數且 ＞ 下限 ⇒ 這裡驗的是「照缺口刷」，不碰下限／進位。
         topup = self.env['woow.wallet.topup'].create_auto_topup(
-            partner=self.partner, amount=150.0,
+            partner=self.partner, amount=200.0,
         )
         self.assertEqual(topup.source, 'auto')
         self.assertEqual(topup.state, 'draft')
-        self.assertEqual(topup.amount, 150.0)
-        self.assertEqual(topup.credits, 150.0)
+        self.assertEqual(topup.amount, 200.0)
+        self.assertEqual(topup.credits, 200.0)
         self.assertEqual(topup.bonus, 0.0)
         self.assertFalse(topup.plan_id, "auto-topup must NOT pin a plan")
         self.assertEqual(topup.partner_id, self.partner)
@@ -61,13 +61,18 @@ class TestCreateAutoTopup(TransactionCase):
             )
 
     def test_create_auto_topup_ceils_fractional_amount(self):
-        """Fractional shortfall must round UP to integer TWD so wallet/invoice/charge reconcile."""
+        """Shortfall rounds UP to a whole multiple of the minimum top-up (NT$100).
+
+        Integer TWD keeps wallet/invoice/charge reconcilable; the NT$100 step
+        (ECPay V4 go-live decision 2026-10-15) keeps auto top-ups from
+        authorising the card for tiny amounts. The surplus stays in the wallet.
+        """
         topup = self.env['woow.wallet.topup'].create_auto_topup(
             partner=self.partner, amount=300.40,
         )
-        self.assertEqual(topup.amount, 301.0,
-                         "amount must be ceil()'d so it matches ECPay charge")
-        self.assertEqual(topup.credits, 301.0,
+        self.assertEqual(topup.amount, 400.0,
+                         "amount must round up to the next NT$100 and match the ECPay charge")
+        self.assertEqual(topup.credits, 400.0,
                          "credits must equal amount (1 credit = 1 TWD)")
 
 
@@ -99,11 +104,17 @@ class TestAutoTopupMinimumCharge(TransactionCase):
         self.assertEqual(topup.credits, 100.0,
                          "credits 必須等於實際扣款，三邊才對得起來")
 
-    def test_shortfall_above_minimum_is_untouched(self):
-        """缺口高於下限 ⇒ 照缺口刷，不受下限影響。"""
+    def test_shortfall_above_minimum_rounds_to_next_hundred(self):
+        """缺口高於下限 ⇒ 進位到下一個 NT$100（ECPay V4 裁決 2，2026-10-15）。
+
+        #1745 原本是「照缺口刷」；裁決 2 改為進位到 NT$100，減少同一張卡的
+        授權次數，多收的留在錢包。已是 100 的倍數就不再多抬。
+        """
         topup = self.Topup.create_auto_topup(partner=self.partner, amount=450.0)
-        self.assertEqual(topup.amount, 450.0)
-        self.assertEqual(topup.credits, 450.0)
+        self.assertEqual(topup.amount, 500.0)
+        self.assertEqual(topup.credits, 500.0)
+        topup = self.Topup.create_auto_topup(partner=self.partner, amount=400.0)
+        self.assertEqual(topup.amount, 400.0)
 
     def test_shortfall_equal_to_minimum_is_untouched(self):
         """邊界：等於下限時不應該被再抬一次。"""
@@ -253,7 +264,8 @@ class TestChargeViaToken(TransactionCase):
         self.assertEqual(topup.state, 'done')
         # Wallet credited
         self.partner.invalidate_recordset(['wallet_balance'])
-        self.assertEqual(self.partner.wallet_balance, 250.0)  # 100 + 150
+        # 100 seed + 200（短缺 150 進位到下一個 NT$100，ECPay V4 裁決 2）
+        self.assertEqual(self.partner.wallet_balance, 300.0)
         # Invoice created with skip flag
         self.assertTrue(topup.invoice_account_move_id)
         self.assertTrue(topup.invoice_account_move_id.woow_skip_upstream_hook)
@@ -261,8 +273,13 @@ class TestChargeViaToken(TransactionCase):
         self.assertEqual(
             topup.invoice_account_move_id.woow_invoice_issue_state, 'pending')
 
-    def test_charge_via_token_3ds_required_keeps_pending_state(self):
-        """3DS redirect: state stays 'pending', not 'done', not 'failed'."""
+    def test_charge_via_token_3ds_required_fails_immediately(self):
+        """3DS redirect on a cron charge: fail now, never park in 'pending'.
+
+        ECPay V4 go-live: a cron has no browser to finish 3-D Secure, so the
+        top-up is failed with ``3ds_required`` at once (no 60-minute pending
+        limbo) and the card is blocked from automatic re-authorisation.
+        """
         provider, token = self._setup_ecpg_token('AB12345678')
         topup = self.env['woow.wallet.topup'].create_auto_topup(
             partner=self.partner, amount=50.0,
@@ -273,7 +290,10 @@ class TestChargeViaToken(TransactionCase):
             ok, msg = topup.charge_via_token(token)
         self.assertFalse(ok)
         self.assertEqual(msg, '3ds_required')
-        self.assertEqual(topup.state, 'pending', "3DS state stays 'pending' (cron cannot complete)")
+        self.assertEqual(topup.state, 'failed')
+        self.assertEqual(topup.failure_code, '3ds_required')
+        self.assertEqual(topup.payment_transaction_id.state, 'error')
+        self.assertTrue(token._woow_auto_charge_blocked())
 
     def test_charge_via_token_tx_failed_marks_topup_failed(self):
         """When tx.state ends as 'error' or similar, topup goes to 'failed'."""
