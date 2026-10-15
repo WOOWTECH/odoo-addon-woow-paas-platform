@@ -9,7 +9,7 @@
 
 故障只在這個邊界注入（``get_error``／``put_error``／``create_error``），不 mock 平台內部。
 """
-from unittest.mock import MagicMock
+from unittest.mock import DEFAULT, MagicMock
 
 PVC_HARD = '10'
 
@@ -30,6 +30,36 @@ def build_hard(cpu_limit, memory_limit, storage_limit,
     if ephemeral_storage_limit:
         hard['limits.ephemeral-storage'] = ephemeral_storage_limit
     return hard
+
+
+def zero_managed_quota(namespace):
+    """各資源皆為 0 的受管 quota（pvc 為固定值）：低於任何目標，不降額同步照送目標值。"""
+    hard = build_hard('0', '0', '0')
+    return {
+        'namespace': namespace, 'name': namespace + '-quota', 'uid': 'uid-' + namespace,
+        'resource_version': '1', 'observed_at': '2026-10-15T00:00:00Z',
+        'namespace_exists': True, 'available': True, 'reason': None,
+        'hard': hard, 'used': {key: '0' for key in hard}, 'spec_hard': dict(hard),
+    }
+
+
+def answer_quota_reads(client):
+    """既有測試的 MagicMock client 補上 #1679「推送前先讀叢集」的讀取。
+
+    ``include_managed=True`` 的讀取回 :func:`zero_managed_quota`，開通與重算推送都照送目標值，
+    既有對 ``create_namespace``／``update_namespace_quota`` 引數的斷言不變；沒帶
+    ``include_managed`` 的既有讀取（#1647 預檢）仍回測試設定的 ``return_value``。
+    """
+    def read(namespace, *args, include_managed=False, **kwargs):
+        if not include_managed:
+            return DEFAULT
+        current = client.get_namespace_quota.return_value
+        report = dict(current) if isinstance(current, dict) else {'namespace': namespace}
+        report['managed_quota'] = zero_managed_quota(namespace)
+        return report
+
+    client.get_namespace_quota.side_effect = read
+    return client
 
 
 class FakeQuotaOperator:

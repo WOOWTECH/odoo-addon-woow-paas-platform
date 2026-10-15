@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import AccessError, ValidationError
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 
 class TestCloudService(TransactionCase):
@@ -514,6 +515,7 @@ class TestCloudService(TransactionCase):
             return_value=MagicMock(),
         ) as gm:
             client = gm.return_value
+            answer_quota_reads(client)
             client.uninstall_release.return_value = True
             ns = self.serviceA.helm_namespace  # unlink 後就取不到，先捕獲
             self.serviceA.unlink()

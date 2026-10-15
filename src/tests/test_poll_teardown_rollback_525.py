@@ -74,6 +74,7 @@ from odoo.addons.woow_paas_platform.services.paas_operator import (
 )
 from ..models.cloud_service import _internal_provision
 from .committed_cron_scope import CommittedCronScope
+from .ns_quota_fixture import answer_quota_reads
 
 _CTRL = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SVC = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -185,6 +186,7 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
 
     def _run_cron(self, injection=None):
         client = MagicMock()
+        answer_quota_reads(client)
         client.get_status.side_effect = PaaSOperatorError(
             'release not found', status_code=404)
         patches = [patch(f'{_SVC}.get_paas_operator_client', return_value=self.scope.operator(client))]

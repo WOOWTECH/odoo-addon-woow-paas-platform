@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -147,6 +148,7 @@ class TestExecuteDeployRecordsActualChartVersion(_Base):
 
     def _deploy(self, service, install_result):
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.return_value = install_result
         with patch(_CLIENT_PATH, return_value=client):
             service._execute_deploy()

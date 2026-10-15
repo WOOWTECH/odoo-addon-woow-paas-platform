@@ -12,6 +12,7 @@ from ..models.smart_home_route import _sm_skip_access_sync,_internal_sm_route_id
 from ..services.naming import make_service_subdomain,make_namespace
 from ..services.paas_operator import PaaSOperatorError
 from .smart_home_fixture import sh_model
+from .ns_quota_fixture import zero_managed_quota
 
 CLIENT_PATHS=(
  'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client',
@@ -70,6 +71,9 @@ class FakeOperator:
         return {'tunnel_id':'fake-native-tunnel','tunnel_name':kwargs['name'],'tunnel_token':'fake-isolated-token'}
     def get_tunnel_status(self,*args,**kwargs):return {'status':'inactive','connections':[]}
     def delete_tunnel(self,*args,**kwargs):self.events.append(('delete-tunnel',None));self.origin=False;return {}
+    def get_namespace_quota(self,namespace,**kwargs):
+        # #1679：開通前先讀叢集 quota；全 0 的受管 quota 讓 create_namespace 照送目標值。
+        return {'managed_quota':zero_managed_quota(namespace)} if kwargs.get('include_managed') else {}
     def create_namespace(self,*args,**kwargs):self.events.append(('namespace',None));return {}
     def install_release(self,*args,**kwargs):
         self.events.append(('install',None))
