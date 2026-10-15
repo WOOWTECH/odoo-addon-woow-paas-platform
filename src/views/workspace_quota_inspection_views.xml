@@ -28,6 +28,10 @@
                 <field name="quota_memory_limits_used" optional="show"/>
                 <field name="quota_storage_requests_hard" optional="show"/>
                 <field name="quota_storage_requests_used" optional="show"/>
+                <field name="quota_floor_cpu_display" optional="hide"/>
+                <field name="quota_floor_memory_display" optional="hide"/>
+                <field name="quota_floor_storage_display" optional="hide"/>
+                <field name="quota_sync_state" optional="show"/>
             </list>
         </field>
     </record>
@@ -42,6 +46,8 @@
                 <header>
                     <button name="action_refresh_quota" type="object" string="Refresh Observation"
                             class="oe_highlight" groups="base.group_system"/>
+                    <button name="action_open_quota_minimum_wizard" type="object"
+                            string="Set Quota Minimums" groups="base.group_system"/>
                 </header>
                 <sheet>
                     <h1><field name="name" readonly="True"/></h1>
@@ -82,7 +88,71 @@
                             <field name="quota_storage_requests_used"/>
                         </group>
                     </group>
+                    <separator string="Quota Policy"/>
+                    <p>The target is what the platform applies: the larger of the plan formula and
+                        the minimum. It is not the live cluster value; see the observation above.</p>
+                    <group>
+                        <group string="CPU (cores)">
+                            <field name="quota_formula_cpu"/>
+                            <field name="quota_floor_cpu_display"/>
+                            <field name="quota_target_cpu"/>
+                        </group>
+                        <group string="Memory">
+                            <field name="quota_formula_memory"/>
+                            <field name="quota_floor_memory_display"/>
+                            <field name="quota_target_memory"/>
+                        </group>
+                        <group string="Storage">
+                            <field name="quota_formula_storage"/>
+                            <field name="quota_floor_storage_display"/>
+                            <field name="quota_target_storage"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Sync">
+                            <field name="quota_sync_state"/>
+                            <field name="quota_sync_reason"/>
+                            <field name="quota_target_version"/>
+                            <field name="quota_synced_version"/>
+                            <field name="quota_synced_at"/>
+                        </group>
+                        <group string="Last Pushed and Pending">
+                            <field name="quota_synced_hard"/>
+                            <field name="quota_pending_decrease"/>
+                        </group>
+                    </group>
+                    <separator string="Quota Change Log"/>
+                    <field name="quota_audit_ids" nolabel="1" readonly="True">
+                        <list create="false" edit="false" delete="false">
+                            <field name="create_date" string="Changed At"/>
+                            <field name="actor_login"/>
+                            <field name="target_version"/>
+                            <field name="old_values"/>
+                            <field name="new_values"/>
+                        </list>
+                    </field>
                 </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="view_workspace_quota_minimum_wizard_form" model="ir.ui.view">
+        <field name="name">workspace.quota.minimum.wizard.form</field>
+        <field name="model">woow_paas_platform.workspace_quota_minimum_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Set Quota Minimums">
+                <p>The applied quota is the larger of the plan formula and the minimum.
+                    0 clears a minimum. Lowering the target is not supported yet.</p>
+                <group>
+                    <field name="workspace_id"/>
+                    <field name="cpu"/>
+                    <field name="memory_gi"/>
+                    <field name="storage_gi"/>
+                </group>
+                <footer>
+                    <button name="action_apply" type="object" string="Save and Apply"
+                            class="oe_highlight"/>
+                    <button string="Cancel" special="cancel"/>
+                </footer>
             </form>
         </field>
     </record>

@@ -110,7 +110,13 @@ class TestWorkspaceQuotaFloorRpc1679(HttpCase):
         self.assertFalse(self.env[_WS].sudo().search([('name', 'like', 'Forged')]))
 
     def test_system_administrator_cannot_bypass_the_quota_action(self):
+        # 管理員同時是工作區 admin 成員：ir.rule 放行一般寫入，擋下 quota 欄位的只剩寫入守衛。
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': self.env.ref('base.user_admin').id,
+            'role': 'admin'})
         self.authenticate('admin', 'admin')
+        renamed = self._call_kw(_WS, 'write', [[self.workspace.id], {'name': 'Admin member rename'}])
+        self.assertNotIn('error', renamed, '前提：成員管理員可以一般寫入')
         for values in ({'quota_floor_cpu': 99}, {'quota_target_version': 9},
                        {'quota_sync_state': 'synced'}, {'quota_pending_decrease': False}):
             with self.subTest(values=values):

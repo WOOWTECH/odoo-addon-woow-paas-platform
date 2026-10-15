@@ -156,6 +156,12 @@ class WorkspaceQuotaPolicy(models.Model):
         string='Target Memory', compute='_compute_quota_policy_view', groups='base.group_system')
     quota_target_storage = fields.Char(
         string='Target Storage', compute='_compute_quota_policy_view', groups='base.group_system')
+    quota_floor_cpu_display = fields.Char(
+        string='CPU Minimum', compute='_compute_quota_policy_view', groups='base.group_system')
+    quota_floor_memory_display = fields.Char(
+        string='Memory Minimum', compute='_compute_quota_policy_view', groups='base.group_system')
+    quota_floor_storage_display = fields.Char(
+        string='Storage Minimum', compute='_compute_quota_policy_view', groups='base.group_system')
     quota_audit_ids = fields.Many2many(
         'woow_paas_platform.workspace_quota_audit', string='Quota Change Log',
         compute='_compute_quota_policy_view', groups='base.group_system')
@@ -193,6 +199,15 @@ class WorkspaceQuotaPolicy(models.Model):
         Service = self.env['woow_paas_platform.cloud_service'].sudo()
         Audit = self.env['woow_paas_platform.workspace_quota_audit'].sudo()
         for workspace in self:
+            not_set = _('Not set (formula applies)')
+            workspace.quota_floor_cpu_display = (
+                '%s cores' % workspace.quota_floor_cpu if workspace.quota_floor_cpu else not_set)
+            workspace.quota_floor_memory_display = (
+                '%sGi' % workspace.quota_floor_memory_gi if workspace.quota_floor_memory_gi
+                else not_set)
+            workspace.quota_floor_storage_display = (
+                '%sGi' % workspace.quota_floor_storage_gi if workspace.quota_floor_storage_gi
+                else not_set)
             if not workspace.id:
                 workspace.update({name: False for name in (
                     'quota_formula_cpu', 'quota_formula_memory', 'quota_formula_storage',
@@ -255,6 +270,22 @@ class WorkspaceQuotaPolicy(models.Model):
             quota_sync_reason=False))
         workspace._log_quota_minimum_change(old, new, version)
         return workspace._quota_sync('admin')
+
+    def action_open_quota_minimum_wizard(self):
+        if not self.env.user.has_group('base.group_system'):
+            raise AccessError(_('Only system administrators may change Workspace quota minimums.'))
+        self.ensure_one()
+        self.check_access('read')
+        workspace = self.sudo()
+        return {
+            'type': 'ir.actions.act_window', 'name': _('Set Quota Minimums'),
+            'res_model': 'woow_paas_platform.workspace_quota_minimum_wizard',
+            'view_mode': 'form', 'target': 'new',
+            'context': {'default_workspace_id': self.id,
+                        'default_cpu': workspace.quota_floor_cpu,
+                        'default_memory_gi': workspace.quota_floor_memory_gi,
+                        'default_storage_gi': workspace.quota_floor_storage_gi},
+        }
 
     def _log_quota_minimum_change(self, old, new, version):
         """稽核：append-only ledger（結構化）＋ admin-only monitor chatter（無通知）。"""

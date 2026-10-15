@@ -277,3 +277,54 @@ class TestWorkspaceQuotaFloorSafety1679(_QuotaFloorFixture):
             audit.write({'new_values': 'forged'})
         with self.assertRaises(AccessError):
             audit.unlink()
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaFloorDeploy1679(_QuotaFloorFixture):
+    """開通路徑（``_execute_deploy`` → ``create_namespace``）套用同一個政策。"""
+
+    def setUp(self):
+        super().setUp()
+        self.template.sudo().write({'helm_chart_version': '1.0.0'})
+        self.pending = self._service('svc-floor-new', vcpu=4, ram=4.0, storage=20)
+        self.pending.sudo().write({'state': 'pending'})
+
+    def _deploy(self):
+        with patch(_CLIENT, return_value=self.client):
+            self.pending._execute_deploy()
+
+    def test_first_deploy_applies_minimum_saved_before_namespace_exists(self):
+        del self.operator.live[self.ns]
+        self.operator.namespace_exists[self.ns] = False
+        self.s1.sudo().write({'state': 'pending'})
+        self._set(cpu=30)
+        self.assertEqual(self._ws().quota_sync_state, 'pending_first_deploy')
+        self._deploy()
+        # 兩台 vcpu 4 → 公式 24；最低保障 30 ⇒ 首次建立就是 30。
+        self.assertEqual(self.operator.creates[-1][:2], (self.ns, '30'))
+        self.client.install_release.assert_called()
+        self.assertEqual(self._ws().quota_sync_state, 'synced')
+
+    def test_deploy_on_existing_namespace_never_lowers_cluster(self):
+        self.operator.live[self.ns] = build_hard('40', '12Gi', '100Gi', '4Gi', '80Gi')
+        self._deploy()
+        # 兩台 → 公式 24，但叢集是 40 ⇒ 保留 40，不能被開通的重套降下來。
+        self.assertEqual(self.operator.creates[-1][:3], (self.ns, '40', '24Gi'))
+        self.assertIn('limits.cpu: cluster 40, target 24', self._ws().quota_pending_decrease)
+
+    def test_deploy_skips_quota_when_cluster_has_more_pvcs_but_still_installs(self):
+        self.operator.live[self.ns]['persistentvolumeclaims'] = '12'
+        self._deploy()
+        self.assertEqual(self.operator.creates, [])
+        self.client.install_release.assert_called()
+        self.assertEqual(self.operator.live[self.ns]['persistentvolumeclaims'], '12')
+        self.assertIn('would_lower: persistentvolumeclaims', self._ws().quota_sync_reason)
+
+    def test_deploy_fails_when_namespace_quota_is_unreadable(self):
+        from ..services.paas_operator import PaaSOperatorConnectionError
+        self.operator.get_error = PaaSOperatorConnectionError('Connection failed')
+        self._deploy()
+        self.assertEqual(self.pending.state, 'error')
+        self.assertIn('could not be verified', self.pending.error_message)
+        self.assertEqual(self.operator.creates, [])
+        self.client.install_release.assert_not_called()

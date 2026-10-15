@@ -94,3 +94,4 @@ from . import workspace_invitation
 from . import workspace_quota_inspection
 from . import workspace_quota_policy
 from . import workspace_quota_audit
+from . import workspace_quota_minimum_wizard
