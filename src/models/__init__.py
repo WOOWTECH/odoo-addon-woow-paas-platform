@@ -92,3 +92,5 @@ from . import data_retrieval
 from . import workspace_invitation
 
 from . import workspace_quota_inspection
+from . import workspace_quota_policy
+from . import workspace_quota_audit

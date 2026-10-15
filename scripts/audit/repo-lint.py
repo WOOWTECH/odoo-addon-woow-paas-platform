@@ -4825,6 +4825,17 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "另走 group_system；裸 sudo 刻意不豁免＝#711 兩層界線不一致的"
                "反面）；偽造 ⇒ 租戶可自我降級製造永久 0-owner、只剩平台救得回。",
     },
+    "woow_ws_quota_policy_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_QUOTA_POLICY_WRITE",
+        "defined_in": "src/models/workspace_quota_policy.py",
+        "reader": "_is_internal_quota_policy_write",
+        "issue": "#1679",
+        "why": "Workspace quota 最低保障與同步控制欄位、異動紀錄的唯一寫入開閘"
+               "（人工入口 set_quota_minimums 先以 uid 判 group_system）；裸 sudo "
+               "刻意不豁免——Portal capability 回的 workspace 本身就是 sudo，偽造 ⇒ "
+               "租戶可間接放大 quota 或竄改同步狀態與稽核紀錄。",
+    },
     # --- #787 A 段：同形態的一批（逐把驗可達性後再修） ------------------- #
     #
     # ⚠ 刻意不寫「還剩幾把」：那個數字每修好一把就腐爛一次，而它腐爛時沒有任何

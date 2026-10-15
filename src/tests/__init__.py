@@ -1172,3 +1172,5 @@ from . import test_paas_included_vat
 from . import test_workspace_quota_inspection_1678
 
 from . import test_workspace_quota_inspection_live_1678
+
+from . import test_workspace_quota_floor_1679

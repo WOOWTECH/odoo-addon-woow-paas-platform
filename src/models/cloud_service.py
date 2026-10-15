@@ -3456,21 +3456,12 @@ class CloudService(models.Model):
                 # Recompute only after known publication convergence succeeded.
                 expose_config = self._build_expose_config()
 
-            # Create namespace (409 = already exists, OK)
-            cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
-                self.workspace_id,
-            )
-            eph_request, eph_limit = self._compute_ns_ephemeral_quota(self.workspace_id)
+            # Create namespace（每次開通都會重套 namespace 基線與 quota）。
+            # #1679：quota 走與其他重算路徑同一個政策——目標含 Workspace 最低保障，且不降低
+            # 叢集任何一項；讀不到現況就無法證明不降額，開通失敗待重試。
             try:
-                client.create_namespace(
-                    namespace=helm_namespace,
-                    cpu_limit=cpu_limit,
-                    memory_limit=memory_limit,
-                    storage_limit=storage_limit,
-                    workspace_id=self.workspace_id.id or None,
-                    ephemeral_storage_request=eph_request,
-                    ephemeral_storage_limit=eph_limit,
-                )
+                quota_ok, quota_reason = self.workspace_id._quota_create_namespace(
+                    client, helm_namespace)
             except PaaSOperatorError as e:
                 if e.status_code != 409:
                     self.write({
@@ -3478,6 +3469,16 @@ class CloudService(models.Model):
                         'error_message': _(
                             'Failed to create namespace: %(detail)s',
                             detail=e.detail or e.message),
+                    })
+                    return
+            else:
+                if not quota_ok:
+                    self.write({
+                        'state': 'error',
+                        'error_message': _(
+                            'Failed to create namespace: the current namespace quota could '
+                            'not be verified (%(reason)s), so it was not changed. Retry the '
+                            'deployment later.', reason=quota_reason),
                     })
                     return
 
@@ -10121,7 +10122,27 @@ class CloudService(models.Model):
             self.id, restore_state,
         )
 
-    def _compute_ns_quota(self, workspace, allocated_overrides=None):
+    def _compute_ns_quota(self, workspace, allocated_overrides=None, floors=None):
+        """#1679 quota 目標：每項 max(既有公式, Workspace 最低保障)。
+
+        首次建 namespace、換方案（含預檢 ``pending_quota``）、刪除／清理與管理員變更都經過
+        這裡，所以最低保障不會被任何重算蓋掉。公式本身見 ``_compute_ns_quota_formula``；
+        最低保障未設定（0／NULL）時結果與公式相同。``floors`` 只給管理員入口預演「改了之後
+        的目標」用（``{欄位名: 值}``），不給＝讀工作區目前的設定。回傳形狀與公式相同。
+        """
+        cpu, memory, storage = self._compute_ns_quota_formula(
+            workspace, allocated_overrides=allocated_overrides)
+        if floors is None:
+            ws = workspace.sudo()
+            floors = {name: ws[name] for name in (
+                'quota_floor_cpu', 'quota_floor_memory_gi', 'quota_floor_storage_gi')}
+        return (
+            str(max(int(cpu), floors.get('quota_floor_cpu') or 0)),
+            f"{max(int(memory[:-2]), floors.get('quota_floor_memory_gi') or 0)}Gi",
+            f"{max(int(storage[:-2]), floors.get('quota_floor_storage_gi') or 0)}Gi",
+        )
+
+    def _compute_ns_quota_formula(self, workspace, allocated_overrides=None):
         """#278 A1 權威值：以 workspace 內『非 deleting』存活 service 加總算 quota。
 
         domain 已排除 state='deleting' → 呼叫時機在 state 翻 deleting /
@@ -10195,25 +10216,22 @@ class CloudService(models.Model):
         }
 
     def _push_ns_quota(self, workspace, helm_namespace):
-        """best-effort：重算並 PUT ns quota；operator 未設定 / 失敗只 log，
-        絕不 abort 刪除。"""
-        if not helm_namespace:
+        """best-effort：以同一個政策（目標含最低保障、不降額）重推 ns quota。
+
+        #1679：先讀叢集現況再決定送什麼——每項取 max(目標, 叢集)，任何一項會下降、讀不到
+        或資料不完整就不送；目標低於叢集的項目標示為待處理降額。工作區正被其他交易同步時
+        直接跳過（不等鎖）。任何失敗只記錄，絕不 abort 刪除；同步狀態寫在 savepoint 內，
+        失敗也不會讓外層交易進入 aborted 狀態。
+        """
+        if not helm_namespace or not workspace:
             return
-        from ..services.paas_operator import get_paas_operator_client
-        client = get_paas_operator_client(self.env)
-        if not client:
-            return
-        cpu, mem, storage = self._compute_ns_quota(workspace)
-        eph_request, eph_limit = self._compute_ns_ephemeral_quota(workspace)
         try:
-            client.update_namespace_quota(
-                helm_namespace, cpu, mem, storage,
-                ephemeral_storage_request=eph_request,
-                ephemeral_storage_limit=eph_limit,
-            )
-        except Exception as e:
+            with self.env.cr.savepoint():
+                workspace.sudo()._quota_sync(
+                    'lifecycle', namespaces=[helm_namespace], nowait=True)
+        except Exception as e:  # noqa: BLE001 —— 見 docstring：絕不阻斷刪除
             _logger.warning(
-                "quota recompute PUT failed for %s: %s", helm_namespace, e,
+                "quota recompute failed for %s: %s", helm_namespace, e,
             )
 
     def _do_cleanup(self):
