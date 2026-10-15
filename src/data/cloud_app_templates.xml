@@ -1038,6 +1038,8 @@
                 Authorization: Bearer &lt;MCP 金鑰&gt;；Claude.ai 自訂連接器用
                 https://&lt;服務網址&gt;/private_&lt;MCP 金鑰&gt;/mcp；MCP 金鑰在
                 https://&lt;服務網址&gt;/mcp-admin/（同一組帳號密碼登入）查看、輪替、撤銷，個別工具也可在那裡停用。
+                MCP 的 15 支工具預設全部開放，包含會啟動 AI 代理的 create_project／send_message：沒有設定任何
+                AI 金鑰時，經 MCP 指定 opencode 代理的 create_project／send_message 仍可能呼叫外部模型、產生外部用量。
                 注意：若對本服務網址開啟 Cloudflare Access，外部 MCP 用戶端（特別是 Claude.ai）會被擋下；
                 請不要對本服務開 Access，或自行在 Access 為 /mcp 與 /private_*/mcp 兩個路徑設例外（Bypass）。
                 刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料（含 Claude 登入態與 MCP 金鑰）；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>

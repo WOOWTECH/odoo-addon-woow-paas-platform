@@ -244,13 +244,14 @@ class TestOpendesignTemplateSeed(TransactionCase):
     def test_description_basic_auth_and_builtin_mcp(self):
         """description／full_description：帳號密碼登入（預設帳號 admin、可自行修改）／上游
         v0.24.1／daemon 埠 7457／內建 MCP 的三個網址（/mcp＋Bearer、Claude.ai 的
-        /private_<金鑰>/mcp、/mcp-admin/）／Cloudflare Access 會擋外部 MCP 的說明。
+        /private_<金鑰>/mcp、/mcp-admin/）／Cloudflare Access 會擋外部 MCP 的說明／沒有 AI 金鑰時經 MCP
+        指定 opencode 仍可能呼叫外部模型（使用者 2026-10-15 決定照現狀全開、只寫明）。
         不再提 mcp-opendesign 的 od_api_base（已下架），也不提 Omnigent（暫停）。"""
         tpl = self._tpl()
         text = (tpl.description or '') + (tpl.full_description or '')
         for needle in ('basic-auth', 'admin', '自行修改', 'v0.24.1', '7457', 'MCP',
                        '/mcp', 'Authorization: Bearer', '/private_', '/mcp-admin/',
-                       'Cloudflare Access', '/private_*/mcp'):
+                       'Cloudflare Access', '/private_*/mcp', 'opencode', '外部模型'):
             self.assertIn(needle, text, needle)
         for gone in ('od_api_base', 'mcp-opendesign', 'Omnigent', 'omnigent'):
             self.assertNotIn(gone, text, gone)
