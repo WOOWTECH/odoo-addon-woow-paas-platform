@@ -10147,7 +10147,9 @@ msgstr "付款失敗"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
 #: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+#: code:addons/woow_paas_platform/controllers/billing.py:0
 msgid "Payment failed. Please retry or contact support."
 msgstr "付款失敗，請重試或聯絡客服。"
 
@@ -13258,7 +13260,9 @@ msgstr "仍為孤兒（刪除前請再確認）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.js:0
+#: code:addons/woow_paas_platform/controllers/billing.py:0
 msgid "Still confirming payment — please refresh in a moment."
 msgstr "付款仍在確認中，請稍後重新整理。"
 
@@ -16204,7 +16208,9 @@ msgstr "預付款項已處理完成，%(points)s 已存入你的帳戶。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
 #: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+#: code:addons/woow_paas_platform/controllers/billing.py:0
 msgid "Your previous top-up is still processing, please wait."
 msgstr "您先前的儲值仍在處理中，請稍候。"
 
@@ -22645,3 +22651,69 @@ msgstr "配額現況未知或無法取得。缺少的數值為未知，不代表
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
 msgid "These are declared ResourceQuota allocations, not live resource utilization. The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity."
 msgstr "這些是 ResourceQuota 已宣告的配額佔用量，不是即時資源使用率。觀測時間為讀取時間，不保證配額控制器已完成對帳或有足夠的 rollout 容量。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Top-up result"
+msgstr "儲值結果"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Returning to the top-up page…"
+msgstr "正在返回儲值頁面…"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/topup_plan.py:0
+msgid "Top-up plan \"%(name)s\": the price must be a whole NT$ amount (got %(amount)s)."
+msgstr "儲值方案「%(name)s」：售價必須是整數新台幣（目前為 %(amount)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/topup_plan.py:0
+msgid "Top-up plan \"%(name)s\": the price must be at least NT$%(minimum)s (got %(amount)s)."
+msgstr "儲值方案「%(name)s」：售價不得低於 NT$%(minimum)s（目前為 %(amount)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "3-D Secure required; an automatic charge cannot complete it. The customer must top up manually."
+msgstr "需要 3-D 驗證，自動扣款無法完成，請客戶改以手動儲值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Payment service is temporarily unavailable. Your card was not charged; please try again later."
+msgstr "付款服務暫時無法使用，您的卡片未被扣款，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Your payment went through but the credits could not be added yet. Our team has been alerted and will fix it — please do not pay again."
+msgstr "您的付款已完成，但點數暫時未能入帳；我們已收到通知並會盡快處理，請勿重複付款。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Your bank requires card verification. Please try again and complete the verification step."
+msgstr "您的發卡銀行要求驗證卡片，請重新操作並完成驗證步驟。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
+msgid "Confirming the payment with your bank…"
+msgstr "正在向發卡銀行確認付款…"
+
+#. module: woow_paas_platform
+#: model:ir.actions.act_window,name:woow_paas_platform.action_ecpg_bind_auth_void
+#: model:ir.ui.menu,name:woow_paas_platform.menu_ecpg_bind_auth_void
+msgid "Card Binding Authorization Voids"
+msgstr "綁卡驗證授權取消"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ecpg_bind_auth_void_list
+msgid "Retry now"
+msgstr "立即重試"

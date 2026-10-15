@@ -33,6 +33,7 @@ export class TopupStorePage extends Component {
       selectedPlan: null,
       successData: null,
       globalError: null,
+      confirming: false,
     });
 
     onMounted(() => {
@@ -43,7 +44,19 @@ export class TopupStorePage extends Component {
     onMounted(async () => {
       const q = this.router.params.query || {};
       if (!q.topup_id) return;
-      const result = await billingService.getTopupStatus(q.topup_id);
+      const cleanHash = window.location.hash.split('?')[0];
+      window.history.replaceState(null, '', cleanHash);
+      let result = await billingService.getTopupStatus(q.topup_id);
+      if (result && result.success && result.data.state === 'pending') {
+        // Back from 3-D Secure: ECPay's server callback may land a few seconds
+        // after the browser. Poll (~30 s) before telling the user to wait.
+        this.state.confirming = true;
+        const final = await billingService.pollTopupStatus(q.topup_id);
+        this.state.confirming = false;
+        if (final) {
+          result = { success: true, data: final };
+        }
+      }
       if (result && result.success) {
         const data = result.data;
         if (data.state === 'done') {
@@ -67,8 +80,6 @@ export class TopupStorePage extends Component {
             _t('Previous top-up was cancelled. You can start a new one.');
         }
       }
-      const cleanHash = window.location.hash.split('?')[0];
-      window.history.replaceState(null, '', cleanHash);
     });
   }
 

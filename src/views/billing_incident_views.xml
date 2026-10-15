@@ -159,4 +159,45 @@
             action="action_billing_incident"
             groups="account.group_account_manager"
             sequence="60"/>
+
+  <!-- ECPay V4：綁卡 NT$5 驗證授權取消帳本（唯讀；system 可按「重排」）。 -->
+  <record id="view_ecpg_bind_auth_void_list" model="ir.ui.view">
+    <field name="name">woow_paas_platform.ecpg_bind_auth_void.list</field>
+    <field name="model">woow_paas_platform.ecpg_bind_auth_void</field>
+    <field name="arch" type="xml">
+      <list create="false" delete="false" edit="false"
+            decoration-danger="state == 'failed'"
+            decoration-muted="state in ('done', 'not_needed')">
+        <field name="create_date"/>
+        <field name="merchant_trade_no"/>
+        <field name="trade_no"/>
+        <field name="amount"/>
+        <field name="partner_id"/>
+        <field name="source"/>
+        <field name="state"/>
+        <field name="attempt_count"/>
+        <field name="next_attempt_at"/>
+        <field name="action_trail"/>
+        <field name="last_error"/>
+        <button name="action_retry_now" type="object" string="Retry now"
+                icon="fa-refresh" groups="base.group_system"
+                invisible="state not in ('pending', 'failed')"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="action_ecpg_bind_auth_void" model="ir.actions.act_window">
+    <field name="name">Card Binding Authorization Voids</field>
+    <field name="res_model">woow_paas_platform.ecpg_bind_auth_void</field>
+    <field name="view_mode">list</field>
+    <field name="groups_id" eval="[(4, ref('account.group_account_manager'))]"/>
+    <field name="context">{'create': False, 'delete': False}</field>
+  </record>
+
+  <menuitem id="menu_ecpg_bind_auth_void"
+            name="Card Binding Authorization Voids"
+            parent="menu_woow_paas_platform_root"
+            action="action_ecpg_bind_auth_void"
+            groups="account.group_account_manager"
+            sequence="61"/>
 </odoo>

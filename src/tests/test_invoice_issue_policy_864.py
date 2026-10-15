@@ -188,12 +188,18 @@ class TestTopupInvoiceStamp864(TransactionCase):
         修法前這裡寫死 `'pending'` ⇒ 平台 async cron（完全不看 auto_invoice）
         照樣自動開票，「paas 選 manual」根本不生效（裁決 ④ 要修的那格）。
         """
+        # ECPay V4 上線（2026-10-15 裁決 1）起儲值發票改看平台參數；`company`
+        # 模式＝沿用本 PR-C 的公司政策 resolver（這條守的就是那條路徑）。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.topup_invoice_issue_mode', 'company')
         self.env.company.auto_invoice = 'manual'
         invoice = self._make_topup()._ensure_topup_invoice()
         self.assertEqual(invoice.woow_invoice_issue_state, 'manual')
 
     def test_topup_invoice_automatic_policy_stamps_pending(self):
         """`automatic` 下維持既有行為（`pending`）。"""
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.topup_invoice_issue_mode', 'company')
         self.env.company.auto_invoice = 'automatic'
         invoice = self._make_topup()._ensure_topup_invoice()
         self.assertEqual(invoice.woow_invoice_issue_state, 'pending')

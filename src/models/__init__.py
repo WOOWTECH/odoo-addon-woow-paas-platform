@@ -92,3 +92,5 @@ from . import data_retrieval
 from . import workspace_invitation
 
 from . import workspace_quota_inspection
+# ECPay 站內付 2.0 V4 上線：綁卡 NT$5 驗證授權的取消帳本（DoAction）。
+from . import ecpg_bind_auth_void
