@@ -20,6 +20,7 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 | 目標（`dev-sandbox-*`、`paas-ws-stg-*`、`paas-ws-*`） | 本 repo agent | prod 寫入每一步都等人工放行 |
 | 帳號、工作區、邀請操作帳號 | 人 | agent 不代建 |
 | 購買與刪除服務（「購買目標服務」） | 本 repo agent，用工作區 owner／admin 的登入身分打網頁 API | prod 每次下單、刪除由人放行 |
+| 平台 pod 的 odoo shell：停權、復權、Redeploy、conf 覆寫 | 人（平台管理員），用 `scripts/platform/cloud-service.sh`；agent 只給整行指令 | prod 平台寫入，agent 在 auto mode 下會被擋，不要繞過 |
 | paas-odoo-ci PR merge、prod image `/approve` | 人 | agent 只開 PR |
 
 ## 開始前先問調用者
@@ -166,7 +167,8 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
      實測它刪了 2 筆已關帳 POS session 的 `ir_sequence`（第一輪也是 autovacuum 刪了同樣 2 筆）。時間到了沒人放開，PG trigger
      自己失效、排程照常恢復。
    完成條件：Job 印出 `RESTORE-DONE`（暫停排程時多一行 `crons held until …`），verify exit 0。
-8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade` → Redeploy →
+8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade` → Redeploy
+   （`cloud-service.sh redeploy`，等 `status` 回到 running）→
    再跑一次 `verify.sh --stage upgrade --release-crons`（彩排直接帶 `--cleanup`，它也會放開排程）。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
    判準是客戶資料列（`scripts/fingerprint_business.sql` 檔頭）：還原當時就存在的客戶資料列必須原封不動；模組資料列
@@ -214,8 +216,11 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 - **方案與資源**：目標的 `workers` 與記憶體上限由購買的方案決定（`cs_odoo_workers`／`cs_ram_gb`），不能逐台覆寫。
   來源的 `workers`、`limit_memory_*` 用來選方案；選小了，切過去會變慢或 worker 被記憶體上限中止。
 - **conf 覆寫**：`limit_time_cpu`／`limit_time_real`／`server_wide_modules` 不在方案內，chart 預設是 60／120／`base,web`。
-  彩排站與正式目標都要套（彩排才驗得到 `server_wide_modules` 能不能開機）。平台管理員把 `conf.limitTimeCpu`、`conf.limitTimeReal`、`conf.serverWideModules` 寫進服務的 `helm_values` 後 Redeploy
-  （stg 實測：odoo.conf 生效、`server_wide_modules` 帶 `/all-addons` 的模組可以開機）。
+  彩排站與正式目標都要套（彩排才驗得到 `server_wide_modules` 能不能開機）。平台管理員跑
+  `scripts/platform/cloud-service.sh conf … --limit-time-cpu <秒> --limit-time-real <秒> --server-wide-modules <csv>`：
+  寫進服務 `helm_values` 的 `conf.*` 後 Redeploy，再用 `status` 等它回到 running、看 `conf` 三個鍵
+  （stg 實測：odoo.conf 生效、`server_wide_modules` 帶 `/all-addons` 的模組可以開機；harumi 用 1200／2400／
+  `base,web,mail_fetchmail_durable`）。
 - **寄收信主機**：盤點的 `db.mail_hosts`。conf 層的 SMTP 不會帶過去（改用 DB 的 `ir.mail_server`）。叢集內位址
   （`*.svc.cluster.local`）從租戶 ns **連不到**——baseline egress 只放行同 ns、DNS 與對外網路。
   - 指向 **mailcow**（woow-k3s 的共用 mail 服務，不在 PaaS 內，歸 woow-machines-operator 管；只有叢集內位址）：
@@ -314,19 +319,26 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 
 ## 平台服務的停權與復權
 
-平台沒有「還原中」狀態，也沒有給人按的停權按鈕（停權由訂閱生命週期觸發）。搬遷時在平台 Odoo pod 以 `odoo shell` 直接呼叫
-同一組方法，交易要自己 commit：
+平台沒有「還原中」狀態，也沒有給人按的停權按鈕（停權由訂閱生命週期觸發）；Redeploy 只開放給平台管理員
+（`action_redeploy` 的 group gate），租戶頁面沒有。搬遷時由平台管理員在平台 Odoo pod 以 `odoo shell` 呼叫同一組方法，
+包成 `scripts/platform/cloud-service.sh`（參數、前置 state、exit code 見檔頭）：
 
-```python
-s = env['woow_paas_platform.cloud_service'].browse(<cloud_service id>)
-s._do_suspend(); env.cr.commit()   # web＋postgres 縮到 0、網址改指停權頁、state=suspended
-s._do_resume();  env.cr.commit()   # 全部開回 1、網址改回服務、state 回到停權前的值
+```bash
+P=(--context woow-k3s --id <cloud_service id> --name <服務名稱> --release <svc-…>)
+scripts/platform/cloud-service.sh status   "${P[@]}"   # 唯讀：state、訂閱狀態、conf、訂閱生命週期排程下次執行時間
+scripts/platform/cloud-service.sh suspend  "${P[@]}"   # _do_suspend：web＋postgres 縮到 0、網址改指停權頁
+scripts/platform/cloud-service.sh resume   "${P[@]}"   # _do_resume：全部開回 1、網址改回服務
+scripts/platform/cloud-service.sh redeploy "${P[@]}"   # action_redeploy（非同步，用 status 等回到 running）
 ```
 
-呼叫後看 `s.state` 與 `s.error_message`：operator 失敗時 state 會是 `error`。prod 的平台 pod 屬 prod 寫入，每一步人工放行。
+- 每次都先比對 id、名稱、release，有一個不符就不動手；動作只接受搬遷流程會遇到的 state（例如 resume 只接受
+  suspended），欠費停權等其他情況要先查清楚。
+- 走 `deploy/paas-odoo-platform-cron`，不寫 pod 名稱：平台升版後 pod 會換名（harumi 彩排第二輪撞過——寫死的 pod 名稱讓
+  指令什麼都沒做，錯誤又被輸出過濾吃掉）。stg 平台加 `--platform-ns dev-sandbox-stg --deploy stg-odoo-dev-sandbox-odoo --db woow_stg`。
+- 回 `ok: false` 或 `state: error`（operator 失敗）時 exit 1，看 JSON 的 `error`／`error_message`。prod 每一步人工放行。
 
-⚠ 訂閱正常（含試用中）時，每天一次的訂閱生命週期排程會把停權中的服務 `_do_resume()` 開回來。停權到復權之間不要跨過
-那次排程；還原途中若發現 web 被開回來，先停下來重新停權。
+⚠ 訂閱正常（含試用中）時，每天一次的訂閱生命週期排程會把停權中的服務 `_do_resume()` 開回來。停權前先跑 `status`
+看 `lifecycle_nextcall_utc`，停權到復權之間不要跨過那次排程；還原途中若發現 web 被開回來，先停下來重新停權。
 
 ## 測試環境
 
@@ -347,7 +359,8 @@ s._do_resume();  env.cr.commit()   # 全部開回 1、網址改回服務、state
 `paas-ws-stg-<hash>` 裡的 `svc-<id>`，步驟 6～8 照跑。2026-10-10 以 `fake-source.sh seed --from-image` 的來源跑通
 （含停權、復權、Redeploy、重設管理員密碼）。
 
-單元測試：`python3 -m unittest discover -s .claude/skills/standalone-odoo-migrate/tests`。
+單元測試：`python3 -m unittest discover -s .claude/skills/standalone-odoo-migrate/tests`（`test_cron_hold_sql.py` 要一顆可丟棄的
+PostgreSQL：設 `STANDALONE_MIGRATE_TEST_PSQL`＝psql 指令前綴，沒設就 skip）。
 
 ## 參考
 
