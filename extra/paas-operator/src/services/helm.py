@@ -16,6 +16,7 @@ from src.services.tenant_baseline import (
     PSA_EXEMPT_ANNOTATION,
     PSA_EXEMPT_REASON,
     build_baseline_egress_netpol,
+    build_cross_ns_ingress_pod_selector,
     build_pod_security_labels,
     is_psa_exempt,
     parse_namespace_list,
@@ -2212,22 +2213,26 @@ class KubernetesService:
         """#279 O4 leg-2: apply the CloudService-namespace baseline NetworkPolicy bundle
         so tenant isolation holds once #280 removes the chart's from-less allows.
 
-        Additive, ingress-only NPs, all ``podSelector: {}`` (every pod in the ns —
+        Additive, ingress-only NPs. 1–2 are ``podSelector: {}`` (every pod in the ns —
         including the n8n app pod that hosts the mcp SIDECAR, which carries no chart NP
         of its own, so an ns-wide rule is the only mechanism that covers both the
-        sidecar and standalone mcp-server shapes):
+        sidecar and standalone mcp-server shapes); 3–4 (the CROSS-ns entries) select
+        every pod EXCEPT data stores (M4 R13, ``build_cross_ns_ingress_pod_selector``):
 
           1. ``default-deny-ingress`` — isolate every pod.
           2. ``allow-same-ns`` — a workspace ns is shared by its CloudServices; intra-ns
-             reach is within-tenant, not a cross-tenant boundary.
+             reach is within-tenant, not a cross-tenant boundary. The ONLY rule that
+             lets anything reach a tenant DB pod (Workspace = LAN, DB only same-ns).
           3. ``allow-cloudflared`` — ingress from THIS env's dedicated CF Tunnel
              connector ns, so the user-facing web path survives the default-deny.
              Env-safe by construction (the connector ns name is env-specific); skipped
-             when no connector ns is configured/derivable (dev/local).
+             when no connector ns is configured/derivable (dev/local). Data-store pods
+             (PostgreSQL／Redis／DB backup jobs) are NOT selected — before R13 this rule
+             let paas-cloudflare-system (unrestricted egress) open DB:5432.
           4. ``allow-mcp-reach`` (the leg-2 crux) — from any agent ns stamped BOTH this
-             workspace's ``reach-ws`` key AND the matching env label. No port filter:
-             the n8n sidecar (:3000) and standalone mcp-server (:8080) diverge, and
-             within-workspace-ns reach is within-tenant.
+             workspace's ``reach-ws`` key AND the matching env label. Same data-store
+             exclusion as 3. No port filter: the n8n sidecar (:3000) and standalone
+             mcp-server (:8080) diverge, and within-workspace-ns reach is within-tenant.
 
         5. ``paas-baseline-egress``（#1441／#1436／#514，``TENANT_BASELINE_EGRESS_ENABLED``
            打開時才套）— 工作區＝自己的區網：egress 只剩同 ns 全部 pod 全部埠、kube-dns
@@ -2240,8 +2245,12 @@ class KubernetesService:
         """
         validate_namespace(namespace)
 
-        def _np(name: str, ingress: Optional[list]) -> dict:
-            spec = {"podSelector": {}, "policyTypes": ["Ingress"]}
+        def _np(name: str, ingress: Optional[list],
+                pod_selector: Optional[dict] = None) -> dict:
+            spec = {
+                "podSelector": pod_selector if pod_selector is not None else {},
+                "policyTypes": ["Ingress"],
+            }
             if ingress is not None:
                 spec["ingress"] = ingress
             return {
@@ -2256,6 +2265,7 @@ class KubernetesService:
             }
 
         env_ml = _env_match_labels()
+        cross_ns_targets = build_cross_ns_ingress_pod_selector()
         manifests = [
             _np("paas-baseline-default-deny-ingress", None),
             _np("paas-baseline-allow-same-ns", [{"from": [{"podSelector": {}}]}]),
@@ -2267,6 +2277,7 @@ class KubernetesService:
                 [{"from": [{"namespaceSelector": {
                     "matchLabels": {"kubernetes.io/metadata.name": cf_ns},
                 }}]}],
+                pod_selector=cross_ns_targets,
             ))
         manifests.append(_np(
             "paas-baseline-allow-mcp-reach",
@@ -2274,6 +2285,7 @@ class KubernetesService:
                 reach_ws_label_key(workspace_id): REACH_WS_LABEL_VALUE,
                 **env_ml,
             }}}]}],
+            pod_selector=cross_ns_targets,
         ))
         if settings.tenant_baseline_egress_enabled:
             manifests.append(build_baseline_egress_netpol(namespace))

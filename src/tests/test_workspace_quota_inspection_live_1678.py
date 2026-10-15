@@ -16,7 +16,9 @@ _OPERATOR_URL = os.environ.get('QUOTA1678_OPERATOR_URL', '').rstrip('/')
 _NAMESPACE = 'dev-sandbox-quota1678-1678cafe'
 
 
-@tagged('post_install', '-at_install', 'quota1678_live')
+# -standard：需要隔離的真 operator fixture，CI 的 `/woow_paas_platform` 不收；
+# 只在明確 `--test-tags quota1678_live` 時才跑（否則 skip 會讓 C4 零 skip 守線變紅）。
+@tagged('-standard', 'post_install', '-at_install', 'quota1678_live')
 class TestWorkspaceQuotaInspectionLive1678(HttpCase):
     @classmethod
     def _request_handler(cls, session, request, **kwargs):

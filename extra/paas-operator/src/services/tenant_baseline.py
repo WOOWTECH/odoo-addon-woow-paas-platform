@@ -105,6 +105,86 @@ def build_baseline_egress_netpol(namespace: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Ingress baseline：跨 ns 入口（cloudflared／agent）不放行資料庫 pod（M4 R13）
+# ---------------------------------------------------------------------------
+#
+# ``paas-baseline-allow-cloudflared`` 與 ``paas-baseline-allow-mcp-reach`` 原本是
+# ``podSelector: {}``＋不限 port ⇒ paas-cloudflare-system（egress 不受限）與被授權的 agent
+# ns 都能直連租戶 DB:5432（2026-10-14 沙盒前後對照：pg_isready 由無回應變 accepting）。
+# 設計是「工作區＝區網、DB 只給同 ns」，所以這兩條跨 ns 入口改成**排除資料庫類 pod**。
+#
+# 用排除（NotIn）而不是列舉 app pod（In）：NotIn 也會選到「沒有這個標籤」的 pod，所以
+# n8n（沒有 component 標籤）、HAOS virt-launcher、各 chart 的 app／proxy pod 全部照舊
+# 可達，不會因為漏列某個 chart 的 app component 而讓公開網址斷線。代價是新加的資料庫
+# 類 component 要補進下面清單（woow-paas-charts 新 chart 的 DB pod 請沿用既有名稱）。
+#
+# 清單來源（woow-paas-charts main ffcf2cd 與正式站 53 個 paas-ws-* 盤點，2026-10-15）：
+#   postgresql — litellm、nextcloud、woow-odoo 的 PostgreSQL
+#   redis      — nextcloud 的 Redis
+#   database／cache — hermes-agent 的 PostgreSQL／Redis
+#   remote-db  — vibe-kanban 的 PostgreSQL
+#   db-backup／db-restore — woow-odoo 的備份／還原 Job（持有 DB 帳密，不需要任何 ingress）
+#   app.kubernetes.io/name=postgresql／redis／mysql／mariadb／mongodb／valkey — Bitnami 式
+#     子 chart 的慣例（目前沒有 chart 用到，先擋）
+#   app=omnigent-pg／omnigent-pg-backup — 管理者 Omnigent（paas-ws-ab6564da）手動搬遷時
+#     建的 PostgreSQL 與備份 CronJob（woow.tw/manual=omnigent-cutover，不屬任何 chart）
+#
+# 刻意**不**限 port：同一個 ns 住多個服務，對外埠各不相同而且常有第二個埠（emqx 18083／
+# 8083／1883、headscale 3000／8080、console 18790／7681、odoo 8080 同時服務 80／8072），
+# baseline 建在 ns 建立當下、看不到之後裝的 release。逐 release 收斂到 route 的
+# targetPort 是後續項（見 PR 待確認）。
+
+DATA_STORE_COMPONENTS: List[str] = [
+    "postgresql",
+    "redis",
+    "database",
+    "cache",
+    "remote-db",
+    "db-backup",
+    "db-restore",
+]
+DATA_STORE_NAMES: List[str] = [
+    "postgresql",
+    "redis",
+    "mysql",
+    "mariadb",
+    "mongodb",
+    "valkey",
+]
+DATA_STORE_LEGACY_APPS: List[str] = [
+    "omnigent-pg",
+    "omnigent-pg-backup",
+]
+
+
+def build_cross_ns_ingress_pod_selector() -> dict:
+    """跨 ns 入口（cloudflared、agent reach）可以進到的 pod：資料庫類以外的全部 pod。
+
+    三個 ``NotIn`` 是 AND：只要任一個標籤落在資料庫清單就不選。沒有該標籤的 pod 視為
+    不在清單內（NotIn 的標準語意），所以沒有標籤的 app pod 照舊被選到。
+    """
+    return {
+        "matchExpressions": [
+            {
+                "key": "app.kubernetes.io/component",
+                "operator": "NotIn",
+                "values": list(DATA_STORE_COMPONENTS),
+            },
+            {
+                "key": "app.kubernetes.io/name",
+                "operator": "NotIn",
+                "values": list(DATA_STORE_NAMES),
+            },
+            {
+                "key": "app",
+                "operator": "NotIn",
+                "values": list(DATA_STORE_LEGACY_APPS),
+            },
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Pod Security Admission
 # ---------------------------------------------------------------------------
 
