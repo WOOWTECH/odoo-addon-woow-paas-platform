@@ -103,8 +103,8 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     def test_image_tag_pinned_digest(self):
         """daemon image 雙釘 tag@sha256、不得留 latest／PENDING。chart 0.5.0 的 mcp sidecar
-        需要含 /opt/woow（內建 MCP runtime）的 image：paas-odoo-ci 建置核可前範本先放
-        PENDING 佔位，這條在補上真值前會紅（發版前必補）。"""
+        需要含 /opt/woow（內建 MCP runtime）的 image（paas-odoo-ci #332 起）；PENDING 佔位
+        不得進 develop。"""
         tag = self._values()['image']['tag']
         self.assertNotEqual(tag, 'latest', '不得留 latest 佔位')
         self.assertNotIn('PENDING', tag, 'open-design image digest 未補（paas-odoo-ci 建置核可後必補真值）')

@@ -1098,7 +1098,9 @@
                  RemoveEnvironmentCleanupHook，nodejs/node#65446）：fork w2.1（ba3a448）改用上游官方預編譯檔。
                  同時拆出 open-design-core（＋LICENSE／NOTICE），PaaS 外殼設定與 1127 相同。沙盒以正式 digest 跑
                  重現腳本 3/3 撐過 200 萬 statement、二進位＝上游 53f766da。回滾值：20261014.1127@sha256:10b02850…。
-                 2026-10-15 chart 0.4.5 → 0.5.0＋image PENDING（od-mcp-merge-20261015，使用者決定）：
+                 2026-10-15 chart 0.4.5 → 0.5.0＋image 20261014.1921 → 20261015.0617@sha256:c683db73…（paas-odoo-ci #332，
+                 build run 20211、核可單 #334、promote run 20234；core open-design-core:20261015.0617@sha256:c5496453…，
+                 fork w2.2 1c7e697e；od-mcp-merge-20261015，使用者決定）：
                  (1) 內建 OpenDesign MCP（取代 cloud_app_mcp_opendesign）：chart 的 mcp sidecar（uid 10001，與 daemon
                  同一個 image 的 /opt/woow＝paas-odoo-ci open-design/mcp-runtime，即 HA add-on 的 MCP runtime，15 支工具
                  全部預設開），經 auth-proxy 的 /mcp（Bearer）、/private_<token>/mcp（Claude.ai，不記 log）對外，
@@ -1108,14 +1110,14 @@
                  {"enabled": false} 明寫——chart 0.5.0 預設雖已 false，但 helm reuse-values 缺 key 時共用套件視為開啟；
                  映像也不再帶 omnigent CLI／omnigent-host-entry／woow-omnigent。同工作區 Omnigent 網址也不再注入本範本
                  （cloud_service._OMNIGENT_SERVER_URL_VALUE_PATHS 拿掉 open-design）。
-                 ⚠ image tag 是 PENDING 佔位：paas-odoo-ci PR（內建 MCP＋core OMNIGENT=off）合併、build、核可後
-                 補上 open-design:&lt;tag&gt;@sha256:…，test_opendesign_seed_380 在佔位未補前會紅。
+                 image 內容：內建 MCP runtime（HA add-on 0.2.1 MCP 層 200e8cbb）、core OMNIGENT=off（沒有 omnigent CLI／
+                 omnigent-host-entry）、ENTRYPOINT tini --。digest 以 crane 從 jcr-prod 讀回確認。
                  只影響新開通與之後 redeploy 的服務（redeploy 換 pod 約 1 分鐘，PVC 保留；MCP 金鑰在第一次啟動產生）。
                  回滾值：chart 0.4.5＋20261014.1921@sha256:3ae19d81…，並拿掉 mcp／omnigentHost 兩鍵。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
             <field name="helm_chart_version">0.5.0</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "PENDING-paas-odoo-ci-open-design-mcp@sha256:PENDING"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261015.0617@sha256:c683db73f8a64c7044ff5ffb39a5f216b75fb761b952a01ef4a352402238351d"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
