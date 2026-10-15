@@ -361,13 +361,16 @@ class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
         with patch.object(quota_policy, 'PROVISION_LOCK_TIMEOUT', '200ms'), \
                 self.registry.cursor() as holder, self.registry.cursor() as contender:
             ws = scope.env(contender)['woow_paas_platform.workspace'].browse(ws_id)
-            # 釘住 contender 的快照（REPEATABLE READ：第一個查詢就決定）。
+            # 釘住 contender 的快照（REPEATABLE READ：第一個查詢就決定）；若實作不顧鎖仍寫這一列，
+            # statement_timeout 讓它報錯而不是和 holder 互等到天荒地老。
             contender.execute(f'SELECT id FROM {table} WHERE id = %s', (ws_id,))
+            contender.execute("SET LOCAL statement_timeout = '10s'")
             holder.execute(f'SELECT id FROM {table} WHERE id = %s FOR NO KEY UPDATE', (ws_id,))
             self.assertEqual(ws._quota_create_namespace(client, namespace),
                              (False, 'quota_sync_busy'), '別人拿著鎖：開通不送、待重試')
-            self.assertEqual(ws._quota_sync('lifecycle', namespaces=[namespace],
-                                            lock_timeout='200ms')['state'], 'busy')
+            with patch(_CLIENT, return_value=client):
+                result = ws._quota_sync('lifecycle', namespaces=[namespace], lock_timeout='200ms')
+            self.assertEqual(result['state'], 'busy', '別人拿著鎖：生命週期不送、不寫')
             self.assertEqual((operator.reads, operator.creates, operator.puts), ([], [], []))
             holder.execute(f'UPDATE {table} SET quota_target_version = 1 WHERE id = %s', (ws_id,))
             holder.commit()
