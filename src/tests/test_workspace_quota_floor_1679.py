@@ -7,6 +7,7 @@ operator 只在 HTTP 邊界以有狀態的假 operator 取代（``ns_quota_fixtu
 from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase, tagged
+from odoo.tools import html2plaintext
 
 from ..models.cloud_service import _internal_provision
 from ..services.workspace_quota import workspace_namespace
@@ -15,8 +16,8 @@ from .ns_quota_fixture import FakeQuotaOperator, build_hard
 _CLIENT = 'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
 
 
-@tagged('post_install', '-at_install')
-class TestWorkspaceQuotaFloor1679(TransactionCase):
+class _QuotaFloorFixture(TransactionCase):
+    """共用 fixture：一個工作區、一台存活服務（公式 12／12Gi／100Gi）、有狀態的假 operator。"""
 
     def setUp(self):
         super().setUp()
@@ -53,6 +54,10 @@ class TestWorkspaceQuotaFloor1679(TransactionCase):
 
     def _ws(self):
         return self.workspace.sudo()
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaFloor1679(_QuotaFloorFixture):
 
     def test_minimum_above_formula_becomes_target_and_is_pushed(self):
         self._set(cpu=18)
@@ -114,3 +119,161 @@ class TestWorkspaceQuotaFloor1679(TransactionCase):
                          before)
         self.assertEqual(self.operator.puts[-1],
                          (self.ns, '30', '40Gi', '500Gi', '4Gi', '80Gi'))
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaFloorSafety1679(_QuotaFloorFixture):
+    """輸入驗證、人工降額拒絕、可見的同步狀態、版本防護與生命週期降額中間態。"""
+
+    def test_invalid_minimums_are_rejected_and_zero_means_unset(self):
+        from odoo.exceptions import ValidationError
+        for value in (-1, '18Gi', 2.5, float('inf'), float('nan'), True, [18]):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                self._set(cpu=value)
+        self.assertEqual(self.operator.puts, [])
+        self.assertFalse(self._ws().quota_floor_cpu)
+        self._set(storage_gi=18.0)  # 整數值的 float 視同整數；低於公式 100Gi，目標不變
+        self.assertEqual(self._ws().quota_floor_storage_gi, 18)
+
+    def test_manual_target_decrease_is_rejected_and_not_saved(self):
+        from odoo.exceptions import UserError
+        self._set(cpu=18)
+        puts = len(self.operator.puts)
+        for values in ({'cpu': 15}, {'cpu': 0}):
+            with self.subTest(values=values), self.assertRaises(UserError):
+                self._set(**values)
+        ws = self._ws()
+        self.assertEqual((ws.quota_floor_cpu, ws.quota_target_version), (18, 1))
+        self.assertEqual(len(self.operator.puts), puts)
+        audit = self.env['woow_paas_platform.workspace_quota_audit'].sudo().search(
+            [('workspace_ref', '=', self.workspace.id)])
+        self.assertEqual(len(audit), 1)
+
+    def test_lowering_minimum_below_formula_keeps_target_and_is_allowed(self):
+        self._service('svc-floor-b', vcpu=4, ram=4.0, storage=20)  # 公式 cpu 24
+        self.operator.live[self.ns] = build_hard('24', '24Gi', '120Gi', '4Gi', '80Gi')
+        self._set(cpu=20)
+        self._set(cpu=0)  # 清除後目標仍是公式 24，沒有下降
+        ws = self._ws()
+        self.assertFalse(ws.quota_floor_cpu)
+        self.assertEqual((ws.quota_target_cpu, ws.quota_target_version), ('24', 2))
+
+    def test_failure_keeps_minimum_and_shows_reason(self):
+        from ..services.paas_operator import PaaSOperatorAPIError
+        self.operator.put_error = PaaSOperatorAPIError('API error: boom', status_code=500)
+        result = self._set(cpu=18)
+        ws = self._ws()
+        self.assertEqual(ws.quota_floor_cpu, 18)
+        self.assertEqual((ws.quota_sync_state, result['state']), ('pending', 'pending'))
+        self.assertIn('operator_error: 500', ws.quota_sync_reason)
+        self.assertFalse(ws.quota_synced_version)
+
+    def test_timeout_is_marked_unconfirmed_not_success(self):
+        from ..services.paas_operator import PaaSOperatorTimeoutError
+        self.operator.put_error = PaaSOperatorTimeoutError('Request timeout')
+        self._set(cpu=18)
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'unconfirmed')
+        self.assertIn('operator_timeout', ws.quota_sync_reason)
+        self.assertFalse(ws.quota_synced_version)
+
+    def test_unreadable_cluster_blocks_push(self):
+        from ..services.paas_operator import PaaSOperatorConnectionError
+        self.operator.get_error = PaaSOperatorConnectionError('Connection failed')
+        self._set(cpu=18)
+        ws = self._ws()
+        self.assertEqual((ws.quota_floor_cpu, ws.quota_sync_state), (18, 'blocked'))
+        self.assertIn('quota_unreadable', ws.quota_sync_reason)
+        self.assertEqual(self.operator.puts, [])
+
+    def test_full_payload_is_checked_including_pvc_and_ephemeral(self):
+        # 叢集的 pvc 被人工調到 12：operator 固定寫 10 會降低它 ⇒ 整筆不送。
+        self.operator.live[self.ns]['persistentvolumeclaims'] = '12'
+        self._set(cpu=18)
+        self.assertEqual(self.operator.puts, [])
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'blocked')
+        self.assertIn('would_lower: persistentvolumeclaims', ws.quota_sync_reason)
+        # ephemeral 叢集值較高：保留叢集值而不是推回公式 80Gi。
+        self.operator.live[self.ns]['persistentvolumeclaims'] = '10'
+        self.operator.live[self.ns]['limits.ephemeral-storage'] = '200Gi'
+        self._set(cpu=19)
+        self.assertEqual(self.operator.puts[-1],
+                         (self.ns, '19', '12Gi', '100Gi', '4Gi', '200Gi'))
+
+    def test_cluster_values_in_other_units_are_compared_numerically(self):
+        self.operator.live[self.ns].update({'requests.cpu': '20000m', 'limits.memory': '13312Mi'})
+        self._set(cpu=18)
+        # 20000m＝20 cores、13312Mi＝13Gi，都高於目標 ⇒ 保留叢集的原字串，不降。
+        self.assertEqual(self.operator.puts[-1][1:3], ('20000m', '13312Mi'))
+
+    def test_old_response_cannot_mark_newer_setting_synced(self):
+        from ..models.workspace_quota_policy import _internal_quota_policy_write
+
+        def newer_setting_arrives(*_call):
+            ws = self._ws()
+            _internal_quota_policy_write(ws).write({'quota_target_version': ws.quota_target_version + 1})
+        self.operator.on_put = newer_setting_arrives
+        self._set(cpu=18)
+        ws = self._ws()
+        self.assertEqual(ws.quota_target_version, 2)
+        self.assertNotEqual(ws.quota_sync_state, 'synced')
+        self.assertIn('superseded', ws.quota_sync_reason)
+        self.assertFalse(ws.quota_synced_version)
+
+    def test_confirmed_missing_namespace_saves_policy_for_first_deploy(self):
+        self.s1.sudo().write({'state': 'pending'})
+        del self.operator.live[self.ns]
+        self.operator.namespace_exists[self.ns] = False
+        self._set(cpu=18)
+        ws = self._ws()
+        self.assertEqual((ws.quota_floor_cpu, ws.quota_sync_state), (18, 'pending_first_deploy'))
+        self.assertEqual((self.operator.puts, self.operator.creates), ([], []))
+
+    def test_unknown_namespace_existence_is_not_treated_as_missing(self):
+        del self.operator.live[self.ns]
+        self.operator.namespace_exists[self.ns] = None
+        self._set(cpu=18)
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'blocked')
+        self.assertIn('managed_quota_not_found', ws.quota_sync_reason)
+        self.assertEqual((self.operator.puts, self.operator.creates), ([], []))
+
+    def test_lifecycle_decrease_is_visible_and_never_blocks_deletion(self):
+        sibling = self._service('svc-floor-b', vcpu=4, ram=4.0, storage=20)
+        self.operator.live[self.ns] = build_hard('24', '24Gi', '120Gi', '4Gi', '80Gi')
+        with patch(_CLIENT, return_value=self.client):
+            sibling.unlink()
+        self.assertFalse(sibling.exists())
+        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '24')
+        ws = self._ws()
+        self.assertIn('limits.cpu: cluster 24, target 12', ws.quota_pending_decrease)
+        # operator 讀不到時刪除仍完成，且不送任何 quota
+        from ..services.paas_operator import PaaSOperatorConnectionError
+        self.operator.get_error = PaaSOperatorConnectionError('Connection failed')
+        puts = len(self.operator.puts)
+        with patch(_CLIENT, return_value=self.client):
+            self.s1.unlink()
+        self.assertFalse(self.s1.exists())
+        self.assertEqual(len(self.operator.puts), puts)
+
+    def test_change_is_audited_with_original_operator(self):
+        self._set(cpu=18, storage_gi=300)
+        audit = self.env['woow_paas_platform.workspace_quota_audit'].sudo().search(
+            [('workspace_ref', '=', self.workspace.id)])
+        self.assertEqual(len(audit), 1)
+        self.assertEqual((audit.actor_uid, audit.actor_login, audit.target_version),
+                         (self.admin.id, self.admin.login, 1))
+        self.assertEqual(audit.old_values, 'cpu=-, memory=-, storage=-')
+        self.assertEqual(audit.new_values, 'cpu=18, memory=-, storage=300Gi')
+        monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+        message = monitor.message_ids[:1]
+        self.assertEqual(message.author_id, self.admin.partner_id)
+        body = html2plaintext(message.body)
+        self.assertIn('cpu=-, memory=-, storage=- -> cpu=18, memory=-, storage=300Gi', body)
+        self.assertIn(self.admin.login, body)
+        from odoo.exceptions import AccessError
+        with self.assertRaises(AccessError):
+            audit.write({'new_values': 'forged'})
+        with self.assertRaises(AccessError):
+            audit.unlink()
