@@ -1079,11 +1079,16 @@
                  與 woow-omnigent plugin、移除 brainstorming。chart 0.4.5 與 helm_default_values 不變。沙盒（chart
                  取自 jcr-prod OCI、values 照本範本）：舊 image→新 image 升級專案與兩顆 PVC 資料保留、四 CLI 版本、
                  skills；空 PVC 開機（seed-home／agent-defaults）、auth-proxy 401／200、白牌、/console 200 全過。
-                 只影響新開通與之後 redeploy 的服務。回滾值：20261005.1409@sha256:0c257c77…。 -->
+                 只影響新開通與之後 redeploy 的服務。回滾值：20261005.1409@sha256:0c257c77…。
+                 2026-10-14 image 20261014.1127 → 20261014.1921@sha256:3ae19d81…（paas-odoo-ci #325，核可單 #328，
+                 run 19926）：修 1127 的 daemon 偶發 abort（better-sqlite3 對 Node 24.21 標頭本地編譯 → GC 時
+                 RemoveEnvironmentCleanupHook，nodejs/node#65446）：fork w2.1（ba3a448）改用上游官方預編譯檔。
+                 同時拆出 open-design-core（＋LICENSE／NOTICE），PaaS 外殼設定與 1127 相同。沙盒以正式 digest 跑
+                 重現腳本 3/3 撐過 200 萬 statement、二進位＝上游 53f766da。回滾值：20261014.1127@sha256:10b02850…。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
             <field name="helm_chart_version">0.4.5</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261014.1127@sha256:10b0285036c3d1029864f378434d95f6ef6caa777dd77894f2a8a43929925d6d"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261014.1921@sha256:3ae19d817bfe308db325aee33ff777964104883b70267fbda5df9c2eab4ad97b"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},

@@ -22300,8 +22300,8 @@ msgstr "這個工作區的配額即將用完，部署、重新啟動或調整服
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/workspace-quota/WorkspaceQuotaPanel.js:0
-msgid "This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota."
-msgstr "這個工作區的配額已用完，釋出配額之前，新的或重新啟動的服務無法啟動。已刪除服務在保留期內的資料仍佔用磁碟配額，刪除服務不會立刻釋出磁碟配額；需要更多配額請聯絡客服。"
+msgid "This workspace has used up its quota. New or restarting services cannot start right now. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota."
+msgstr "這個工作區的配額已用完，新的或重新啟動的服務目前無法啟動。已刪除服務在保留期內的資料仍佔用磁碟配額，刪除服務不會立刻釋出磁碟配額；需要更多配額請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

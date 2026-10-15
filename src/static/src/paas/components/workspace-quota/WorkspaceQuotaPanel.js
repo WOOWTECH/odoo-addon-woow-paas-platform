@@ -156,7 +156,7 @@ export class WorkspaceQuotaPanel extends Component {
     const diskIsTight = this.state.quota?.hint === "storage";
     if (level === "full") {
       if (diskIsTight) {
-        return _t("This workspace has used up its quota. New or restarting services cannot start until some of it is freed. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota.");
+        return _t("This workspace has used up its quota. New or restarting services cannot start right now. Data of deleted services still counts toward the disk quota until its retention period ends, so deleting a service does not free disk quota right away. Contact support if you need more quota.");
       }
       return _t("This workspace has reached its quota limit. Services that need more resources may not be able to start. Contact support if you need more quota.");
     }
