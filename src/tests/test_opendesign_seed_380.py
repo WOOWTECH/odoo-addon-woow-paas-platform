@@ -41,8 +41,23 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertTrue(tpl.ingress_enabled)
 
     def test_not_mcp(self):
-        """完整應用非 MCP server：mcp_enabled=False（MCP 生態由 mcp-opendesign 承擔）。"""
+        """mcp_enabled=False：MCP 自 chart 0.5.0 起內建（chart 的 mcp sidecar，由
+        helm_default_values 的 mcp.enabled 開），不是 operator 事後 patch sidecar 的
+        mcp_enabled 形態（那條寫死 n8n env、只 patch Deployment、另開 -mcp 通道）。"""
         self.assertFalse(self._tpl().mcp_enabled)
+
+    def test_builtin_mcp_enabled(self):
+        """od-mcp-merge-20261015：內建 OpenDesign MCP（HA add-on 同一套 runtime）由
+        chart 0.5.0 的 mcp.enabled 開啟；必須和含 runtime 的 image 同一次變更。"""
+        self.assertEqual(self._values()['mcp'], {'enabled': True})
+
+    def test_omnigent_host_off(self):
+        """2026-10-15 Open Design 暫停 Omnigent：明寫 omnigentHost.enabled=false（chart 0.5.0
+        預設雖已 false，helm reuse-values 缺 key 時共用套件視為開啟），且平台不再注入
+        同工作區 Omnigent 網址。"""
+        from ..models.cloud_service import _OMNIGENT_SERVER_URL_VALUE_PATHS
+        self.assertEqual(self._values()['omnigentHost'], {'enabled': False})
+        self.assertNotIn('open-design', _OMNIGENT_SERVER_URL_VALUE_PATHS)
 
     def test_has_admin_gui_c_option(self):
         """C 案 auth 接線：has_admin_gui=True——nginx auth-proxy 以 basic-auth 閘保護，
@@ -74,8 +89,10 @@ class TestOpendesignTemplateSeed(TransactionCase):
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
         # 0.4.4＝#1538（loopback 路由經 auth-proxy、SSRF 放行同工作區 LiteLLM）；
-        # 0.4.5＝#1556（ANTHROPIC／OPENROUTER 金鑰一律輸出，清除後 daemon 不留舊值）。
-        self.assertEqual(tpl.helm_chart_version, '0.4.5')
+        # 0.4.5＝#1556（ANTHROPIC／OPENROUTER 金鑰一律輸出，清除後 daemon 不留舊值）；
+        # 0.5.0＝內建 OpenDesign MCP（mcp sidecar＋/mcp、/private_<token>/mcp、/mcp-admin/）、
+        #       omnigentHost 預設關（od-mcp-merge-20261015）。
+        self.assertEqual(tpl.helm_chart_version, '0.5.0')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
@@ -85,12 +102,13 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertNotIn('mcp', repo, '完整應用 image 非 MCP image')
 
     def test_image_tag_pinned_digest(self):
-        """daemon image 雙釘 tag@sha256、不得留 latest／PENDING（支線 B 已交付）。"""
+        """daemon image 雙釘 tag@sha256、不得留 latest／PENDING。chart 0.5.0 的 mcp sidecar
+        需要含 /opt/woow（內建 MCP runtime）的 image：paas-odoo-ci 建置核可前範本先放
+        PENDING 佔位，這條在補上真值前會紅（發版前必補）。"""
         tag = self._values()['image']['tag']
         self.assertNotEqual(tag, 'latest', '不得留 latest 佔位')
-        self.assertNotEqual(
-            tag, 'PENDING_BRANCH_B_DIGEST', '支線 B digest 未補（PR 前必補真值）')
-        self.assertIn('@sha256:', tag, 'image tag 必須雙釘 tag@sha256')
+        self.assertNotIn('PENDING', tag, 'open-design image digest 未補（paas-odoo-ci 建置核可後必補真值）')
+        self.assertRegex(tag, r'^[0-9]{8}\.[0-9]{4}@sha256:[0-9a-f]{64}$', 'image tag 必須雙釘 <時戳>@sha256')
 
     def test_console_image_pinned_digest(self):
         """console image 亦雙釘 tag@sha256（不留 latest mutable；ConfigMap 注入 app）。"""
@@ -154,12 +172,12 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     def test_lockstep_min_specs(self):
         """min_vcpu／min_storage 與 chart 一致（vcpu1／storage10＝8Gi data + 2Gi home）。
-        min_ram_gb 例外：不 lockstep chart requests(2Gi)，改為 quota-sized＝3.0——讓
-        cloud_service._compute_ns_quota 的 3× headroom 蓋得住 chart daemon limits.memory(8Gi)
-        ＋sidecar（見 test_min_ram_covers_daemon_quota；#380 端到端回歸）。"""
+        min_ram_gb 例外：不 lockstep chart requests(2Gi)，改為 quota-sized＝3.25（chart 0.5.0
+        加 mcp sidecar 後使用者決定）——讓 cloud_service._compute_ns_quota 的 3× headroom
+        蓋得住全容器 limits.memory（見 test_quota_covers_all_container_limits）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 1)
-        self.assertEqual(tpl.min_ram_gb, 3.0)
+        self.assertEqual(tpl.min_ram_gb, 3.25)
         self.assertEqual(tpl.min_storage_gb, 10)
 
     def test_min_ram_covers_daemon_quota(self):
@@ -176,6 +194,45 @@ class TestOpendesignTemplateSeed(TransactionCase):
             'min_ram_gb×3（workspace quota headroom）必須 ≥ daemon limits.memory %s；'
             '否則 daemon pod 被 ns quota 擋下、服務連不上' % limits_mem)
 
+    # chart 0.5.0（woow-paas-charts charts/open-design values.yaml）各 sidecar 的 limits.memory，
+    # 平台 helm_default_values 不覆寫它們；chart 改了這三個值這裡要跟著改（chart 端
+    # tests/test-mcp.sh 用同一個 9Gi 上限守住）。
+    CHART_SIDECAR_LIMITS_MI = {'authproxy': 128, 'mcp': 320, 'console': 512}
+
+    @staticmethod
+    def _mem_mi(quantity):
+        if quantity.endswith('Gi'):
+            return float(quantity[:-2]) * 1024
+        if quantity.endswith('Mi'):
+            return float(quantity[:-2])
+        raise AssertionError('unexpected memory quantity %r' % quantity)
+
+    def test_quota_covers_all_container_limits(self):
+        """守線（od-mcp-merge-20261015）：單台 Open Design 的工作區 quota（_compute_ns_quota：
+        int(sum(allocated_ram_gb)×3)Gi，本範本 plan 沒設 cs_ram_gb ⇒ 取 min_ram_gb）必須蓋得住
+        daemon＋authproxy＋mcp＋console 全部容器的 limits.memory，否則 pod 被 quota 擋下
+        （#380：服務永遠連不上）。注意 int() 截斷：3.25×3＝9.75 → 9Gi。"""
+        from ..models.cloud_service import _internal_provision
+        tpl = self._tpl()
+        Svc = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo())
+        workspace = self.env['woow_paas_platform.workspace'].create({'name': 'OD quota guard'})
+        # 真的走平台的兩段：方案 → allocated_*（_allocated_vals_from），工作區 → quota（_compute_ns_quota）。
+        plan = self.env.ref('woow_paas_platform.plan_opendesign_monthly')
+        allocated = Svc._allocated_vals_from(tpl, plan)
+        Svc.create({
+            'name': 'svc-odquota1', 'workspace_id': workspace.id, 'template_id': tpl.id,
+            'helm_release_name': 'svc-odquota1', 'helm_namespace': 'paas-ws-odquota1',
+            'helm_values': '{}', **allocated,
+        })
+        _, ram_quota, _ = Svc._compute_ns_quota(workspace)
+        values = self._values()
+        self.assertTrue(values['mcp']['enabled'], '前提：內建 MCP sidecar 有開')
+        total = self._mem_mi(values['resources']['limits']['memory']) + sum(self.CHART_SIDECAR_LIMITS_MI.values())
+        self.assertLessEqual(
+            total, self._mem_mi(ram_quota),
+            '全容器 limits.memory %.0fMi 超過單台工作區 quota %s（min_ram_gb=%s）' % (
+                total, ram_quota, tpl.min_ram_gb))
+
     def test_anthropic_key_optional_spec(self):
         """helm_value_specs：ANTHROPIC_API_KEY 為選填（key 對齊 values.yaml auth.anthropicApiKey）;
         留空則走 console TUI claude login。"""
@@ -184,17 +241,20 @@ class TestOpendesignTemplateSeed(TransactionCase):
         keys = [o['key'] for o in specs['optional']]
         self.assertIn('auth.anthropicApiKey', keys)
 
-    def test_description_basic_auth_and_ecosystem(self):
-        """description／full_description：帳號密碼登入（預設帳號 admin、可自行修改）／
-        上游 v0.24.1／與 mcp-opendesign 的 od_api_base 生態閉環（daemon 埠 7457）。"""
+    def test_description_basic_auth_and_builtin_mcp(self):
+        """description／full_description：帳號密碼登入（預設帳號 admin、可自行修改）／上游
+        v0.24.1／daemon 埠 7457／內建 MCP 的三個網址（/mcp＋Bearer、Claude.ai 的
+        /private_<金鑰>/mcp、/mcp-admin/）／Cloudflare Access 會擋外部 MCP 的說明。
+        不再提 mcp-opendesign 的 od_api_base（已下架），也不提 Omnigent（暫停）。"""
         tpl = self._tpl()
         text = (tpl.description or '') + (tpl.full_description or '')
-        self.assertIn('basic-auth', text)
-        self.assertIn('admin', text)
-        self.assertIn('自行修改', text)
-        self.assertIn('v0.24.1', text)
-        self.assertIn('od_api_base', text)
-        self.assertIn('7457', text)
+        for needle in ('basic-auth', 'admin', '自行修改', 'v0.24.1', '7457', 'MCP',
+                       '/mcp', 'Authorization: Bearer', '/private_', '/mcp-admin/',
+                       'Cloudflare Access', '/private_*/mcp'):
+            self.assertIn(needle, text, needle)
+        for gone in ('od_api_base', 'mcp-opendesign', 'Omnigent', 'omnigent'):
+            self.assertNotIn(gone, text, gone)
+        self.assertIn('mcp', json.loads(tpl.tags))
 
 
 @tagged('post_install', '-at_install')

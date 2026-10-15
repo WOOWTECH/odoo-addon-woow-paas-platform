@@ -121,9 +121,11 @@ class TestConcealInstancesSeed(TransactionCase):
         # mcp-k8s／mcp-vk：hidden-only（曝光層）——2026-10-09 #1624 下架（使用者決定不再使用），
         # 比照 mcp-odoo-manage 只翻 is_hidden、實例層不設（下架時叢集內 0 實例）；重新上架時改回
         # False 並把 slug 從這裡拿掉。
+        # mcp-opendesign：hidden-only（曝光層）——2026-10-15 od-mcp-merge-20261015 下架（MCP 內建進
+        # Open Design chart 0.5.0），比照 mcp-k8s／mcp-vk 只翻 is_hidden、實例層不設（既有實例照常可用）。
         self.assertEqual(
             set(hidden.mapped('slug')),
-            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage', 'mcp-k8s', 'mcp-vk'},
+            {'ha-paas', 'ha-full-apporo', 'mcp-odoo-manage', 'mcp-k8s', 'mcp-vk', 'mcp-opendesign'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(

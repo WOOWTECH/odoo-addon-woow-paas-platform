@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Omnigent BYO host：部署時注入同工作區 Omnigent 的叢集內網址。
 
-code-server／pi-agent／open-design 的 chart 在主容器裡跑 omnigent host（woow-paas-charts
+code-server／pi-agent 的 chart 在主容器裡跑 omnigent host（woow-paas-charts
 ``shared/omnigent-host`` 共用套件，host 跑在同一個主容器裡），標準 values 區塊是
 ``omnigentHost.serverUrl``。平台在 ``_assemble_deploy_values`` 裡把「同工作區、running、
 最早建立的 Omnigent」的叢集內網址填進去（和 ``_inject_allowed_origins`` 同一 family）：
@@ -50,14 +50,15 @@ class TestInjectOmnigentServerUrl(TransactionCase):
         self.CloudService = self.env['woow_paas_platform.cloud_service']
 
     def test_sets_server_url_for_host_charts(self):
-        for slug in ('code-server', 'pi-agent', 'open-design'):
+        for slug in ('code-server', 'pi-agent'):
             out = self.CloudService._inject_omnigent_server_url({}, slug, self.URL)
             self.assertEqual(out, {'omnigentHost': {'serverUrl': self.URL}}, slug)
 
     def test_noop_for_other_slugs(self):
         """Omnigent 自己、hermes-agent（open-design 派生但沒有內建 omnigent host）、n8n
-        都不得長出鍵。"""
-        for slug in ('omnigent', 'hermes-agent', 'n8n', 'odoo'):
+        都不得長出鍵。open-design：2026-10-15 起 Omnigent 暫停（od-mcp-merge-20261015），
+        chart 0.5.0 omnigentHost 預設關、範本明寫關，平台也不再注入網址。"""
+        for slug in ('omnigent', 'hermes-agent', 'n8n', 'odoo', 'open-design'):
             out = self.CloudService._inject_omnigent_server_url(
                 {'existing': 1}, slug, self.URL)
             self.assertEqual(out, {'existing': 1}, slug)
@@ -83,7 +84,7 @@ class TestInjectOmnigentServerUrl(TransactionCase):
     def test_empty_or_blank_value_counts_as_unset(self):
         for blank in ('', '   ', None):
             out = self.CloudService._inject_omnigent_server_url(
-                {'omnigentHost': {'serverUrl': blank}}, 'open-design', self.URL)
+                {'omnigentHost': {'serverUrl': blank}}, 'pi-agent', self.URL)
             self.assertEqual(out['omnigentHost']['serverUrl'], self.URL, repr(blank))
 
     def test_null_block_does_not_crash(self):
@@ -156,10 +157,15 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
     def test_injects_in_cluster_url_for_all_host_charts(self):
         self._omni()
         pi = self._svc(self.tpl_pi, 'svc-pi000001')
-        od = self._svc(self.tpl_od, 'svc-od000001')
         expected = _url('svc-om000001-omnigent')
-        for svc in (self.cs, pi, od):
+        for svc in (self.cs, pi):
             self.assertEqual(self._injected(svc), expected, svc.template_id.slug)
+
+    def test_open_design_gets_no_url_while_omnigent_is_paused(self):
+        """2026-10-15 起 Open Design 暫停 Omnigent：同工作區有 running Omnigent 也不注入。"""
+        self._omni()
+        od = self._svc(self.tpl_od, 'svc-od000001')
+        self.assertNotIn('omnigentHost', od._assemble_deploy_values()['values'])
 
     def test_keeps_other_omnigent_host_values_and_never_adds_secrets(self):
         """只多一個 serverUrl；網址裡沒有 userinfo（user:token@）。"""
@@ -251,20 +257,28 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
 
     # ---- Service name / port mirror charts/omnigent _helpers.tpl -----------
 
-    def _assert_od_selector_warning(self, expected_url):
-        """照常注入，但記「open-design 的 omnigentEgress selector 對不上」warning。"""
-        with self.assertLogs(_LOGGER, level=logging.WARNING) as logs:
+    def _assert_injected_without_od_warning(self, expected_url):
+        """照常注入。open-design 暫停收 Omnigent 網址（2026-10-15），它的 omnigentEgress
+        selector／port 警告沒有對象、不記（selector 判斷本身見
+        test_od_egress_selector_rules）。"""
+        with self.assertNoLogs(_LOGGER, level=logging.WARNING):
             got = self._injected(self.cs)
         self.assertEqual(got, expected_url)
-        self.assertTrue(
-            any('omnigentEgress' in line and 'pod selector' in line
-                for line in logs.output), logs.output)
+
+    def test_od_egress_selector_rules(self):
+        """``_omnigent_matches_od_egress_selector``（open-design 恢復收網址時用）：Service 名
+        ``<X>-omnigent`` 時 X 必須＝release 名；nameOverride 不是 omnigent 就對不上。"""
+        match = self.env['woow_paas_platform.cloud_service']._omnigent_matches_od_egress_selector
+        self.assertFalse(match('my-omnigent', 'my-omnigent', {}))
+        self.assertTrue(match('svc-om000001', 'svc-om000001-omnigent', {}))
+        self.assertTrue(match('svc-om000001', 'og-entry', {}))
+        self.assertFalse(match('svc-om000001', 'other-omnigent', {}))
+        self.assertFalse(match('svc-om000001', 'svc-om000001-og', {'nameOverride': 'og'}))
 
     def test_release_name_containing_chart_name_is_used_verbatim(self):
-        """Service 名＝release 名原樣（chart ``contains`` 規則）。OD 會把
-        ``my-omnigent`` 釘成 instance=my，但 pod 的 instance 是 my-omnigent ⇒ warning。"""
+        """Service 名＝release 名原樣（chart ``contains`` 規則）。"""
         self._omni(release='my-omnigent')
-        self._assert_od_selector_warning(_url('my-omnigent'))
+        self._assert_injected_without_od_warning(_url('my-omnigent'))
 
     def test_standard_name_matches_od_selector_without_warning(self):
         """正式站形態（svc-xxxxxxxx、沒有 override）：OD selector 對得上，不記 warning。"""
@@ -279,9 +293,9 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         with self.assertNoLogs(_LOGGER, level=logging.WARNING):
             self.assertEqual(self._injected(self.cs), _url('og-entry'))
         omni.write({'helm_values': json.dumps({'fullnameOverride': 'other-omnigent'})})
-        self._assert_od_selector_warning(_url('other-omnigent'))
+        self._assert_injected_without_od_warning(_url('other-omnigent'))
         omni.write({'helm_values': json.dumps({'nameOverride': 'og'})})
-        self._assert_od_selector_warning(_url('svc-om000001-og'))
+        self._assert_injected_without_od_warning(_url('svc-om000001-og'))
 
     def test_service_port_override(self):
         self._omni(helm_values={'service': {'port': 18000}})
@@ -350,14 +364,11 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         self.cs.write({'helm_values': json.dumps({'omnigentHost': {'serverUrl': ''}})})
         self.assertEqual(self._injected(self.cs), _url('svc-om000001-omnigent'))
 
-    def test_target_port_mismatch_warns_but_still_injects(self):
+    def test_target_port_mismatch_still_injects(self):
+        """targetPort 不是 8000 只影響 open-design 的 omnigentEgress；open-design 暫停收網址
+        （2026-10-15）⇒ 照常注入、不記警告。"""
         self._omni(helm_values={'service': {'port': 8000, 'targetPort': 9000}})
-        with self.assertLogs(_LOGGER, level=logging.WARNING) as logs:
-            got = self._injected(self.cs)
-        self.assertEqual(got, _url('svc-om000001-omnigent'))
-        self.assertTrue(
-            any('targetPort 9000' in line and 'omnigentEgress' in line
-                for line in logs.output), logs.output)
+        self._assert_injected_without_od_warning(_url('svc-om000001-omnigent'))
 
     # ---- reset path: the URL is runtime config (no pod restart) ------------
 
