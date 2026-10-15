@@ -123,9 +123,9 @@ class TestLitellmSeed(TransactionCase):
         self.assertRegex(v['image']['tag'], PINNED_TAG_RE)
         self.assertTrue(
             v['image']['tag'].endswith(
-                '@sha256:d005edbb6f27d2e1dfb1d81f14979df3284d75615b741e8e6a4236e044075790'),
-            'litellm 20261015.0230（paas-odoo-ci #329，核可 #331）：1158 的 SSE／API／安全標頭／M4 錯誤契約再加 '
-            'HA 0.1.9 upstream guard（錯誤清洗、token 上限、預算准入、reasoning_effort）；0.3.0 起是 LiteLLM 1.104.0，'
+                '@sha256:9d28a5e8d3fea6dfd24df7628dc1df1c69faa9a8421194be5d2c2b075652c105'),
+            'litellm 20261015.0748（paas-odoo-ci #335，核可 #337）：0230 的 HA 0.1.9 upstream guard 再加 '
+            'HA 0.1.10 D1（驗證錯誤不回顯 key hash）；0.3.0 起是 LiteLLM 1.104.0，'
             'HA「Woow LiteLLM」add-on 用同一份補丁')
         pg = v['postgresql']['image']
         self.assertEqual(pg['repository'], JCR + 'paas-postgres')
