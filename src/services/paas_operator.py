@@ -381,7 +381,7 @@ class PaaSOperatorClient:
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
-    def get_namespace_quota(self, namespace: str) -> Dict[str, Any]:
+    def get_namespace_quota(self, namespace: str, *, include_managed: bool = False) -> Dict[str, Any]:
         """#1647：讀 namespace ResourceQuota 的上限與已佔用量（純唯讀）。
 
         Args:
@@ -415,6 +415,7 @@ class PaaSOperatorClient:
             有這個端點的版本。
         """
         return self._request('GET', f'/api/namespaces/{namespace}/quota',
+                             **({'params': {'include_managed': True}} if include_managed else {}),
                              timeout=NAMESPACE_QUOTA_TIMEOUT)
 
     def backfill_baseline_netpol(
