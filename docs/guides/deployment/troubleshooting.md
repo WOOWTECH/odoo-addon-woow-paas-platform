@@ -494,6 +494,12 @@ kubectl --context <context> -n <namespace> patch resourcequota <namespace>-quota
 
 放大上限後不需要重啟 workload：ReplicaSet controller 會自己重試，但退避間隔最長約 16 分鐘。
 
+**開通失敗、訊息為「Failed to create namespace: the current namespace quota could not be verified (<原因>)」時**：平台沒有變更 quota（#1679：無法證明不降額就不送）。依括號內的原因處理：
+
+- `operator_unsupported`：operator 版本太舊，不支援 `include_managed`（#1678）。先發版 operator，再重試部署。
+- `quota_unreadable`、`managed_quota_*`：operator 讀不到或讀到不完整的受管 ResourceQuota。查 operator log 與該 namespace 的 ResourceQuota，修正後重試部署。
+- `quota_sync_busy`：同一個 Workspace 正在推送 quota（例如管理員正在設定最低保障），等了 30 秒仍拿不到鎖。稍後重試部署即可。
+
 ### Issue: PVC Not Binding
 
 **Symptoms**: Pod stuck in "Pending" state, events show "FailedScheduling: persistentvolumeclaim not found"

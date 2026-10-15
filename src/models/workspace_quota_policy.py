@@ -49,6 +49,11 @@ SYNC_STATES = [
 # 多個 namespace 時對外顯示「最需要處理」的那個狀態
 _STATE_RANK = {'synced': 0, 'pending_first_deploy': 1, 'pending': 2, 'unconfirmed': 3, 'blocked': 4}
 
+# 生命週期與開通路徑等 quota 鎖的上限。持鎖者都是短交易（管理員推送、其他生命週期推送、
+# 開通的 quota 步驟到該交易 commit），等幾秒就能序列化；等不到才放棄，不無限期卡住刪除或開通。
+LIFECYCLE_LOCK_TIMEOUT = '10s'
+PROVISION_LOCK_TIMEOUT = '30s'
+
 
 # ------------------------------------------------------------------------- #
 #  寫入開閘：模組私有 sentinel（形狀同 workspace_access 的 #732）             #
@@ -314,24 +319,32 @@ class WorkspaceQuotaPolicy(models.Model):
     # --------------------------------------------------------------------- #
     #  同步（不降額）                                                        #
     # --------------------------------------------------------------------- #
-    def _lock_quota_policy(self, nowait=False):
+    def _lock_quota_policy(self, timeout=None):
         """對 workspace 列取 ``FOR NO KEY UPDATE``，序列化同一工作區的 quota 推送。
 
-        REPEATABLE READ 下，對方已 commit 的更新會讓本交易拿鎖時 40001，請求層會重播，
-        重播後讀到新政策。``nowait=True``（生命週期路徑）拿不到就回 ``False``，不等、不阻斷。
+        ``timeout=None``（管理員入口）：等到拿到為止。REPEATABLE READ 下，對方已 commit 的
+        更新會讓本交易拿鎖時 40001，請求層會重播，重播後讀到新政策。
+
+        ``timeout='10s'`` 等（生命週期、開通路徑）：最多等這麼久；逾時或 40001 回 ``False``，
+        交易仍可用（savepoint 回捲）。呼叫端拿不到鎖就不推送、也不寫這一列——鎖外推送會和
+        持鎖者的推送互相覆蓋（operator 沒有 compare-and-set），寫這一列則會在對方 commit 後
+        40001、在已呼叫 operator 之後整筆回捲。
         """
         self.ensure_one()
         cr = self.env.cr
         query = f"SELECT id FROM {self._table} WHERE id = %s FOR NO KEY UPDATE"
-        if not nowait:
+        if timeout is None:
             cr.execute(query, (self.id,))
             return True
         try:
+            # 同 core ir_cron 取鎖的做法：預期中的衝突不該在 sql_db 印成 ERROR「bad query」。
             with mute_logger('odoo.sql_db'), cr.savepoint(flush=False):
-                cr.execute(query + ' NOWAIT', (self.id,))
+                cr.execute("SET LOCAL lock_timeout = %s", (timeout,))
+                cr.execute(query, (self.id,))
+                cr.execute("SET LOCAL lock_timeout = DEFAULT")
         except (pg_errors.SerializationFailure, pg_errors.LockNotAvailable) as exc:
-            _logger.info("[#1679] quota sync lock busy workspace=%s (%s)",
-                         self.id, type(exc).__name__)
+            _logger.warning("[#1679] quota sync lock busy workspace=%s (%s); quota not pushed",
+                            self.id, type(exc).__name__)
             return False
         return True
 
@@ -347,11 +360,15 @@ class WorkspaceQuotaPolicy(models.Model):
         names.update(ns for ns in services.mapped('helm_namespace') if ns)
         return sorted(names)
 
-    def _quota_sync(self, trigger, namespaces=None, *, nowait=False):
-        """把目前目標推到叢集（每項都不低於叢集現況），記錄結果並回傳摘要。"""
+    def _quota_sync(self, trigger, namespaces=None, *, lock_timeout=None):
+        """把目前目標推到叢集（每項都不低於叢集現況），記錄結果並回傳摘要。
+
+        ``lock_timeout``：生命週期路徑等鎖的上限（見 ``_lock_quota_policy``）；拿不到鎖回
+        ``busy``，不推送、不寫。管理員入口已先拿鎖，不帶這個參數。
+        """
         self.ensure_one()
         workspace = self.sudo()
-        if nowait and not workspace._lock_quota_policy(nowait=True):
+        if lock_timeout and not workspace._lock_quota_policy(timeout=lock_timeout):
             return {'state': 'busy', 'trigger': trigger}
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
@@ -409,14 +426,17 @@ class WorkspaceQuotaPolicy(models.Model):
         - 有受管 quota ⇒ 以「每項 max(目標, 叢集)」呼叫；
         - 套用會降低某一項（例如 pvc 現況大於 10）⇒ 不呼叫（namespace 已存在、基線已在），
           記為 blocked，開通照常繼續；
-        - 讀不到或資料不完整 ⇒ 回 ``(False, reason)``，由呼叫端讓開通失敗（不能證明不降額）。
+        - 讀不到或資料不完整 ⇒ 回 ``(False, reason)``，由呼叫端讓開通失敗（不能證明不降額）；
+        - 工作區正被其他交易同步、等不到鎖 ⇒ 回 ``(False, 'quota_sync_busy')``：不讀、不送、
+          不寫，開通失敗待重試（鎖外推送可能蓋掉對方剛提高的值）。
 
         回傳 ``(ok, reason)``；``create_namespace`` 的 operator 錯誤原樣 raise，維持既有的
-        開通失敗處理。工作區正在被其他交易同步時不等鎖，仍以讀到的現況做不降額判斷。
+        開通失敗處理。
         """
         self.ensure_one()
         workspace = self.sudo()
-        workspace._lock_quota_policy(nowait=True)
+        if not workspace._lock_quota_policy(timeout=PROVISION_LOCK_TIMEOUT):
+            return False, 'quota_sync_busy'
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
         plan = _plan_namespace(client, namespace, target)

@@ -9,8 +9,10 @@ from unittest.mock import patch
 from odoo.tests.common import TransactionCase, tagged
 from odoo.tools import html2plaintext
 
+from ..models import workspace_quota_policy as quota_policy
 from ..models.cloud_service import _internal_provision
 from ..services.workspace_quota import workspace_namespace
+from .committed_cron_scope import CommittedCronScope
 from .ns_quota_fixture import FakeQuotaOperator, build_hard
 
 _CLIENT = 'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
@@ -332,3 +334,53 @@ class TestWorkspaceQuotaFloorDeploy1679(_QuotaFloorFixture):
         self.assertIn('could not be verified', self.pending.error_message)
         self.assertEqual(self.operator.creates, [])
         self.client.install_release.assert_not_called()
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
+    """用真的第二、第三條 DB 連線驗 quota 鎖（不是 mock）。
+
+    另一筆交易拿著工作區這一列（例如管理員正在推送）時，開通與生命週期路徑最多等一下，
+    等不到就不讀、不送、也不寫這一列：鎖外推送可能蓋掉對方剛提高的值，寫這一列則會在對方
+    commit 後 40001、在已呼叫 operator 之後整筆回捲。本交易快照比對方的 commit 舊也一樣。
+    committed 的 fixture 由 ``CommittedCronScope`` 記帳並在結束時精確刪除。
+    """
+
+    def test_busy_workspace_is_neither_pushed_nor_written(self):
+        scope = CommittedCronScope(self)
+        self.addCleanup(scope.purge)
+        with scope.track(), self.registry.cursor() as cr:
+            workspace = scope.env(cr)['woow_paas_platform.workspace'].create(
+                {'name': 'Floor 1679 lock'})
+            ws_id, table = workspace.id, workspace._table
+            cr.commit()
+        namespace = 'dev-sandbox-1679-lock'
+        operator = FakeQuotaOperator({namespace: build_hard('8', '8Gi', '100Gi', '4Gi', '80Gi')})
+        client = operator.bind()
+
+        with patch.object(quota_policy, 'PROVISION_LOCK_TIMEOUT', '200ms'), \
+                self.registry.cursor() as holder, self.registry.cursor() as contender:
+            ws = scope.env(contender)['woow_paas_platform.workspace'].browse(ws_id)
+            # 釘住 contender 的快照（REPEATABLE READ：第一個查詢就決定）。
+            contender.execute(f'SELECT id FROM {table} WHERE id = %s', (ws_id,))
+            holder.execute(f'SELECT id FROM {table} WHERE id = %s FOR NO KEY UPDATE', (ws_id,))
+            self.assertEqual(ws._quota_create_namespace(client, namespace),
+                             (False, 'quota_sync_busy'), '別人拿著鎖：開通不送、待重試')
+            self.assertEqual(ws._quota_sync('lifecycle', namespaces=[namespace],
+                                            lock_timeout='200ms')['state'], 'busy')
+            self.assertEqual((operator.reads, operator.creates, operator.puts), ([], [], []))
+            holder.execute(f'UPDATE {table} SET quota_target_version = 1 WHERE id = %s', (ws_id,))
+            holder.commit()
+            self.assertEqual(ws._quota_create_namespace(client, namespace),
+                             (False, 'quota_sync_busy'), '快照比別人的 commit 舊：40001 也算忙碌')
+            self.assertEqual((operator.reads, operator.creates), ([], []))
+            contender.commit()
+
+        with self.registry.cursor() as fresh:
+            fresh.execute(f'SELECT quota_sync_state, quota_target_version FROM {table} WHERE id = %s',
+                          (ws_id,))
+            self.assertEqual(fresh.fetchone(), (None, 1), '忙碌時沒有寫入同步狀態')
+            ws = scope.env(fresh)['woow_paas_platform.workspace'].browse(ws_id)
+            self.assertEqual(ws._quota_create_namespace(client, namespace), (True, None))
+            self.assertEqual(operator.creates[-1][0], namespace)
+            fresh.rollback()

@@ -13289,6 +13289,7 @@ msgstr "已停止"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
 #: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
@@ -22347,6 +22348,7 @@ msgstr "CPU"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
 #: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
 #: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
