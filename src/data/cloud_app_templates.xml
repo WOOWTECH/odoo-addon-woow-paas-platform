@@ -1519,7 +1519,11 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos</field>
-            <field name="helm_chart_version">0.1.4</field>
+            <!-- 0.1.5（2026-10-15，woow-paas-charts #196，main 9546364）：xff-proxy nginx 回應標頭緩衝加大到
+                 proxy_buffer_size 32k（M4 R10：HA add-on 經 Ingress 回 ~9KB 標頭時，原本 4k/8k 預設在這層回 502）。
+                 只改 xff-proxy ConfigMap；Redeploy 只重建 xff-proxy pod，VM／DataVolume 的 spec 不變（ws97 實測 VMI 未重建）。
+                 HAOS 映像不變，所以這次不需要同步改 helm_default_values.image.*。回滾值：0.1.4。 -->
+            <field name="helm_chart_version">0.1.5</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
                  （UEFI secureBoot=false、masquerade 僅轉 guest :80、limits==requests、
                  DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
