@@ -1136,12 +1136,12 @@
                  sidecar 128Mi + console 512Mi ≈ 8.63Gi → 需 min_ram_gb ≥ 2.88，取 3.0（3×3=9Gi）。
                  曾為 2.0 → 只給 6Gi 額度 → daemon 8Gi pod FailedCreate、服務永遠連不上（CF 502，
                  #380 端到端回歸）。根本解（sidecar 記憶體入 quota / chart daemon limit 收斂）另議。
-                 2026-10-15 chart 0.5.0 加 mcp sidecar（limits 320Mi）→ 全容器 9,152Mi；使用者決定升到 3.25。
-                 ⚠ quota 公式是 int(sum(allocated_ram_gb)×3)Gi：單台 3.25×3＝9.75 → 9Gi（9,216Mi），與 3.0 相同、
-                 只剩 64Mi 餘裕；工作區有其他服務時小數部分才會累加出來。真要單台多 1Gi 需 ≥ 3.34（例 3.5 → 10Gi）。
+                 2026-10-15 chart 0.5.0 加 mcp sidecar（limits 320Mi）→ 全容器 9,152Mi；使用者決定升到 3.5。
+                 quota 公式是 int(sum(allocated_ram_gb)×3)Gi（小數捨去）：單台 3.5×3＝10.5 → 10Gi（10,240Mi），
+                 比 3.0／3.25 的 9Gi 多 1Gi，餘裕 1,088Mi（3.25 會被截成 9Gi、只剩 64Mi，故不用）。
                  守線：test_opendesign_seed_380.test_quota_covers_all_container_limits。 -->
             <field name="min_vcpu">1</field>
-            <field name="min_ram_gb">3.25</field>
+            <field name="min_ram_gb">3.5</field>
             <field name="min_storage_gb">10</field>
 
             <!-- MCP 自 chart 0.5.0 起內建（od-mcp-merge-20261015）：chart 的 mcp sidecar（HA add-on 同一套 runtime），

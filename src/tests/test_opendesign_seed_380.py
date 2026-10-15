@@ -172,12 +172,12 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     def test_lockstep_min_specs(self):
         """min_vcpu／min_storage 與 chart 一致（vcpu1／storage10＝8Gi data + 2Gi home）。
-        min_ram_gb 例外：不 lockstep chart requests(2Gi)，改為 quota-sized＝3.25（chart 0.5.0
+        min_ram_gb 例外：不 lockstep chart requests(2Gi)，改為 quota-sized＝3.5（chart 0.5.0
         加 mcp sidecar 後使用者決定）——讓 cloud_service._compute_ns_quota 的 3× headroom
         蓋得住全容器 limits.memory（見 test_quota_covers_all_container_limits）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.min_vcpu, 1)
-        self.assertEqual(tpl.min_ram_gb, 3.25)
+        self.assertEqual(tpl.min_ram_gb, 3.5)
         self.assertEqual(tpl.min_storage_gb, 10)
 
     def test_min_ram_covers_daemon_quota(self):
@@ -196,7 +196,7 @@ class TestOpendesignTemplateSeed(TransactionCase):
 
     # chart 0.5.0（woow-paas-charts charts/open-design values.yaml）各 sidecar 的 limits.memory，
     # 平台 helm_default_values 不覆寫它們；chart 改了這三個值這裡要跟著改（chart 端
-    # tests/test-mcp.sh 用同一個 9Gi 上限守住）。
+    # tests/test-mcp.sh 用更嚴的 9Gi 上限守住）。
     CHART_SIDECAR_LIMITS_MI = {'authproxy': 128, 'mcp': 320, 'console': 512}
 
     @staticmethod
@@ -211,7 +211,7 @@ class TestOpendesignTemplateSeed(TransactionCase):
         """守線（od-mcp-merge-20261015）：單台 Open Design 的工作區 quota（_compute_ns_quota：
         int(sum(allocated_ram_gb)×3)Gi，本範本 plan 沒設 cs_ram_gb ⇒ 取 min_ram_gb）必須蓋得住
         daemon＋authproxy＋mcp＋console 全部容器的 limits.memory，否則 pod 被 quota 擋下
-        （#380：服務永遠連不上）。注意 int() 截斷：3.25×3＝9.75 → 9Gi。"""
+        （#380：服務永遠連不上）。注意 int() 截斷：3.5×3＝10.5 → 10Gi（3.25 只會得到 9Gi）。"""
         from ..models.cloud_service import _internal_provision
         tpl = self._tpl()
         Svc = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo())
@@ -228,6 +228,9 @@ class TestOpendesignTemplateSeed(TransactionCase):
         values = self._values()
         self.assertTrue(values['mcp']['enabled'], '前提：內建 MCP sidecar 有開')
         total = self._mem_mi(values['resources']['limits']['memory']) + sum(self.CHART_SIDECAR_LIMITS_MI.values())
+        self.assertEqual(ram_quota, '10Gi', '單台 Open Design（min_ram_gb 3.5）的工作區 quota 應為 10Gi')
+        self.assertGreaterEqual(self._mem_mi(ram_quota) - total, 1024,
+                                '全容器 limits 之外至少要留 1Gi 餘裕（使用者 2026-10-15 決定 3.5 的目的）')
         self.assertLessEqual(
             total, self._mem_mi(ram_quota),
             '全容器 limits.memory %.0fMi 超過單台工作區 quota %s（min_ram_gb=%s）' % (
