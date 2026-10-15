@@ -121,7 +121,12 @@ def get_namespace_quota(name: str, include_managed: bool = False) -> Dict[str, A
         return report
     report = quota_report(name, items)
     if include_managed:
-        report["managed_quota"] = managed_quota_report(name, items)
+        managed = managed_quota_report(name, items)
+        if managed["reason"] == "managed_quota_not_found":
+            # #1679：空 list 不能證明 namespace 不存在；另做一次明確探測，
+            # 只有 NotFound 才回 False，其他失敗維持 None（未知）。
+            managed["namespace_exists"] = k8s_service.namespace_exists(name)
+        report["managed_quota"] = managed
     return report
 
 

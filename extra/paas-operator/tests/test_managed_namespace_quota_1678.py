@@ -30,14 +30,14 @@ def client(monkeypatch):
     return TestClient(app, headers={'X-API-Key': 'isolated-test-key'})
 
 
-def get_report(client, items, include_managed=True):
+def get_report(client, items, include_managed=True, kubectl_calls=1):
     with patch('src.services.helm.subprocess.run', return_value=subprocess.CompletedProcess(
             [], 0, stdout=json.dumps({'items': items}), stderr='')) as kubectl:
         response = client.get('/api/namespaces/%s/quota' % NS,
                               params={'include_managed': include_managed})
     assert response.status_code == 200, response.text
-    assert len(kubectl.call_args_list) == 1
-    assert 'resourcequota' in kubectl.call_args.args[0]
+    assert len(kubectl.call_args_list) == kubectl_calls
+    assert 'resourcequota' in kubectl.call_args_list[0].args[0]
     return response.json()
 
 
@@ -98,10 +98,13 @@ def test_incomplete_or_scoped_observation_is_unknown_not_zero(client, change, re
 
 @pytest.mark.parametrize('items', [[], [{'metadata': {'name': 'other'}}]])
 def test_missing_managed_quota_does_not_prove_namespace_is_absent(client, items):
-    observation = get_report(client, items)['managed_quota']
+    # #1679：空 list（或只有別的 quota）本身不下結論；namespace 存在性只由第二次的
+    # 明確探測決定。這裡探測成功 ⇒ namespace 存在，只是沒有受管 quota。
+    # NotFound／Forbidden／逾時的對照見 tests/test_namespace_exists_1679.py。
+    observation = get_report(client, items, kubectl_calls=2)['managed_quota']
     assert observation['available'] is False
     assert observation['reason'] == 'managed_quota_not_found'
-    assert observation['namespace_exists'] is None
+    assert observation['namespace_exists'] is True
     assert observation['hard'] == observation['used'] == {}
 
 

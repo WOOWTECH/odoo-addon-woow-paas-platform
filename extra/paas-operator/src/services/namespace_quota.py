@@ -75,7 +75,8 @@ def managed_quota_report(namespace: str, quota_items: Iterable[Dict[str, Any]],
 
     observed_at is the read time, not quota-controller reconciliation time.
     An empty list cannot distinguish an absent namespace from an absent quota;
-    namespace_exists remains unknown and must not authorize skipping a check.
+    namespace_exists stays unknown here. The API adds an explicit namespace probe
+    for that case (#1679); only a definitive NotFound reports ``False``.
     """
     report = {
         "namespace": namespace, "name": f"{namespace}-quota", "uid": None,
@@ -93,6 +94,8 @@ def managed_quota_report(namespace: str, quota_items: Iterable[Dict[str, Any]],
     metadata = item.get("metadata") or {}
     status = item.get("status") or {}
     report.update({
+        # #1679：受管 quota 物件就在這個 namespace 裡 ⇒ namespace 必然存在。
+        "namespace_exists": True,
         "namespace": metadata.get("namespace"), "uid": metadata.get("uid"),
         "resource_version": metadata.get("resourceVersion"),
         "hard": status.get("hard") or {}, "used": status.get("used") or {},
