@@ -477,14 +477,14 @@ kubectl --context <context> -n <namespace> get deploy,sts
 - 同一個 namespace 內有平台不知道的 workload（手動建立的 StatefulSet 等）佔用同一份 quota。
 - 策略是 `Recreate` 的 Deployment：舊 pod 先被刪除，新 pod 才被拒，結果是 0 個 pod。
 
-上限的來源：平台把 workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3（下限 8 vCPU／8Gi／100Gi），見 `src/models/cloud_service.py` 的 `_compute_ns_quota`。operator 把 `requests.cpu` 與 `limits.cpu` 設成同一個值，記憶體也一樣。
+上限的來源：平台把 workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3（下限 8 vCPU／8Gi／100Gi），再與 Workspace 最低保障取較大者，見 `src/models/cloud_service.py` 的 `_compute_ns_quota`。operator 把 `requests.cpu` 與 `limits.cpu` 設成同一個值，記憶體也一樣。
 
 **Solution**：
 
 1. 優先把 workload 的 limits 調回上限以內，或移除不需要的服務。
-2. 需要放大上限時，目前沒有正式的後台入口（#1648）。平台只在開通、換方案、刪除服務時重算並推送 quota，所以：
-   - 在後台改服務的 `allocated_*` 不會立即生效，要等同一個 workspace 下一次上述事件。
-   - 直接 `kubectl patch` 會立即生效，但下一次平台推送會整組蓋回計算值，問題會無聲重現（#456）。只能當緊急止血，事後要補上平台紀錄。
+2. 需要放大上限時，由系統管理員在後台「Woow PaaS → Workspace Quotas」開啟該 Workspace，按「Set Quota Minimums」設定 CPU／記憶體／磁碟最低保障（#1679）。保存後立即推送，之後開通、換方案、刪除服務的重算也不會把它蓋掉；同步結果與原因顯示在同一頁的 Quota Sync Status。目前不支援調降：會讓目標下降的變更會被拒絕。
+   - 不要改服務的 `allocated_*` 來放大 quota：那會改到方案規格，而且要等下一次開通、換方案或刪除才推送。
+   - 直接 `kubectl patch` 只當緊急止血。平台推送不會降低叢集任何一項，所以手動調高的值不會再被蓋回，但它會一直顯示為 Quota Pending Decrease；事後請用最低保障把它記錄下來（#456）。
 
 ```bash
 # 緊急止血：limits.cpu 與 requests.cpu 要一起改
@@ -493,6 +493,12 @@ kubectl --context <context> -n <namespace> patch resourcequota <namespace>-quota
 ```
 
 放大上限後不需要重啟 workload：ReplicaSet controller 會自己重試，但退避間隔最長約 16 分鐘。
+
+**開通失敗、訊息為「Failed to create namespace: the current namespace quota could not be verified (<原因>)」時**：平台沒有變更 quota（#1679：無法證明不降額就不送）。依括號內的原因處理：
+
+- `operator_unsupported`：operator 版本太舊，不支援 `include_managed`（#1678）。先發版 operator，再重試部署。
+- `quota_unreadable`、`managed_quota_*`：operator 讀不到或讀到不完整的受管 ResourceQuota。查 operator log 與該 namespace 的 ResourceQuota，修正後重試部署。
+- `quota_sync_busy`：同一個 Workspace 正有其他交易在推送 quota（例如管理員正在設定最低保障），開通不等鎖、這次沒有變更 quota。稍後重試部署即可。
 
 ### Issue: PVC Not Binding
 

@@ -3359,6 +3359,26 @@ class KubernetesService:
             ["get", "resourcequota", "--namespace", namespace, "-o", "json"], timeout=timeout)
         return json.loads(result.stdout or "{}").get("items", [])
 
+    #: #1679：找不到受管 quota 時才多做的 namespace 探測上限。與上面的 quota 讀取相加
+    #: （5＋3）不超過平台端的讀取逾時 8s；逾時就回「未知」，不拖垮整個讀取。
+    NS_EXISTS_PROBE_TIMEOUT_SECONDS = 3
+
+    def namespace_exists(self, namespace: str,
+                         timeout: int = NS_EXISTS_PROBE_TIMEOUT_SECONDS) -> Optional[bool]:
+        """#1679：namespace 是否存在。只有明確的 NotFound 回 ``False``。
+
+        Forbidden、逾時、binary 不存在等任何其他失敗都回 ``None``（未知）——平台據此
+        判斷「確認尚無 namespace」，把未知當成不存在會讓呼叫端跳過安全檢查。
+        """
+        validate_namespace(namespace)
+        try:
+            self._run_command(["get", "namespace", namespace, "-o", "name"], timeout=timeout)
+        except KubectlException as exc:
+            if not exc.timed_out and self.is_not_found_error(exc):
+                return False
+            return None
+        return True
+
     def get_storage_quota_snapshot(
         self, namespace: str
     ) -> Dict[str, List[Dict[str, Any]]]:

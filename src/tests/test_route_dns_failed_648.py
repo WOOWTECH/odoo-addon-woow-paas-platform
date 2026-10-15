@@ -33,6 +33,7 @@ from unittest.mock import MagicMock, patch
 from odoo.tests.common import TransactionCase, tagged
 
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 #: `_execute_deploy` 用 **function-local import** 取 client ⇒ patch 的是**來源模組**
 #: （`docs/decisions/patterns/unittest-mock-dual-namespace-patch.md`：頂部 import 才
@@ -101,6 +102,7 @@ class _DeployCase(TransactionCase):
 
     def _deploy(self, install_result):
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.return_value = install_result
         with patch(_CLIENT_PATH, return_value=client):
             self.svc._execute_deploy()

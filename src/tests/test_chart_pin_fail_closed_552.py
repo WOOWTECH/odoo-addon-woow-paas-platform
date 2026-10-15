@@ -40,6 +40,7 @@ from odoo.tests.common import TransactionCase
 from odoo.addons.woow_paas_platform.models.cloud_app_template import SupplyGateError
 from .test_poll_mirror_release_facts_627 import _stale_sync_at
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -191,6 +192,7 @@ class TestExecuteDeployBackstop(_Base):
         service = self._service(template, state='pending')
         template.write({'helm_chart_version': ''})
         client = MagicMock()
+        answer_quota_reads(client)
         with patch(_CLIENT_PATH, return_value=client):
             service._execute_deploy()
         return service, client
@@ -220,6 +222,7 @@ class TestExecuteDeployBackstop(_Base):
         template = self._template('backstop-ok-552c', '1.0.0')
         service = self._service(template, state='pending')
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.return_value = {'revision': 1, 'chart_version': '1.0.0'}
         with patch(_CLIENT_PATH, return_value=client):
             service._execute_deploy()

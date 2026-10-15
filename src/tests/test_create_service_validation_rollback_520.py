@@ -42,6 +42,7 @@ from odoo.tests.common import HttpCase, tagged
 from odoo.addons.woow_paas_platform.models.subscription_lifecycle_mixin import (
     SubscriptionLifecycleMixin,
 )
+from .ns_quota_fixture import answer_quota_reads
 
 _GENERIC_ERROR = 'An error occurred while creating the service.'
 _OPERATOR_CLIENT = (
@@ -183,6 +184,7 @@ class TestCreateServiceRejectionLeavesNoData(HttpCase):
         self._create(self.tpl_limited, 'svc-520-rejected')
 
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.return_value = {'revision': 1}
         with patch(_OPERATOR_CLIENT, return_value=client):
             # cron 一次處理一筆並 re-trigger；掃到沒有 pending 為止。

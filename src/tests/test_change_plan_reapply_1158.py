@@ -33,6 +33,7 @@ from odoo.tools import mute_logger
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SERVICES = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -152,6 +153,7 @@ class _ChangePlanFixture:
     @staticmethod
     def _client():
         client = MagicMock()
+        answer_quota_reads(client)
         client.base_url = 'http://operator.test'
         client._session.headers = {'X-API-Key': 'k'}
         client.upgrade_release.return_value = {'revision': 2, 'chart_version': '0.2.7'}

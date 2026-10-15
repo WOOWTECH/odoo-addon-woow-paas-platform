@@ -106,9 +106,14 @@ lag. Other machine-readable reasons are `managed_quota_not_found`,
 `managed_quota_invalid_quantity`, and `quota_unreadable`.
 
 A successful empty quota list does not prove whether the namespace exists.
-`namespace_exists` stays `null`; `managed_quota_not_found` means no unique managed
-object was observed, **not** "not yet deployed" or permission to skip a safety
-check. A forbidden/failed/timed-out read is `quota_unreadable`, not an empty list.
+`managed_quota_not_found` means no unique managed object was observed, **not**
+"not yet deployed" or permission to skip a safety check. For that reason only,
+the operator runs one extra `kubectl get namespace` (#1679, 3s cap) and reports
+`namespace_exists`: `true` when the namespace is there, `false` **only** for a
+definitive NotFound, and `null` for Forbidden, timeout or any other failure.
+When the managed quota is found, `namespace_exists` is `true`; when the quota
+read itself fails it stays `null`. The platform treats `null` as unknown and
+never as "not created yet". A forbidden/failed/timed-out read is `quota_unreadable`, not an empty list.
 An old operator omitting `managed_quota` is unsupported/unknown in the backend;
 Odoo never falls back to the frontend summary. Deploy compatible operator first.
 

@@ -102,7 +102,8 @@ class CommittedCronScope:
                     namespace = kwargs.get('namespace', args[0] if args else None)
                     release = kwargs.get('release_name', kwargs.get('name', args[1] if len(args) > 1 else None))
                     # quota API 沒有 release 引數，第二個 positional value 是額度，不能誤認為 name。
-                    owned = ((namespace, release) in scope.releases if name != 'update_namespace_quota'
+                    owned = ((namespace, release) in scope.releases
+                             if name not in ('update_namespace_quota', 'get_namespace_quota')
                              else namespace in {pair[0] for pair in scope.releases})
                     if not owned:
                         scope.foreign_calls.append((name, namespace, release))

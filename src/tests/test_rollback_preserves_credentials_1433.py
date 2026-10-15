@@ -20,6 +20,7 @@ from odoo.tests.common import TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 _CONTROLLER_CLIENT = (
     'odoo.addons.woow_paas_platform.controllers.paas.get_paas_operator_client'
@@ -190,6 +191,7 @@ class TestNamespaceEphemeralQuota1434(TransactionCase):
     def test_push_ns_quota_sends_ephemeral(self):
         svc = self._svc('svc-eph-push')
         client = MagicMock()
+        answer_quota_reads(client)
         with patch('odoo.addons.woow_paas_platform.services.paas_operator'
                    '.get_paas_operator_client', return_value=client):
             svc._push_ns_quota(self.workspace, 'paas-ws-eph1434')
