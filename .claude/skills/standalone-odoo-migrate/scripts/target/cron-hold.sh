@@ -38,18 +38,29 @@ PSQL=("${K[@]}" exec -i "$RELEASE-postgresql-0" -c postgresql -- psql -h 127.0.0
 if [[ $CMD == status ]]; then
   out=$("${PSQL[@]}" -c "SELECT coalesce((SELECT value::json->>'until' FROM ir_config_parameter
                                          WHERE key = 'standalone_odoo_migrate.cron_hold'), '')") || die 3 "psql failed"
+  guards=$("${PSQL[@]}" -c "SELECT count(*) FROM pg_trigger WHERE tgname = 'standalone_odoo_migrate_cron_hold'") \
+    || die 3 "psql failed"
   if [[ -z $out ]]; then
     echo "no cron hold on $RELEASE/$db"
   else
     held=$("${PSQL[@]}" -c "SELECT count(*) FROM ir_cron WHERE active AND nextcall = '$out'::timestamp") || die 3 "psql failed"
-    echo "crons held until $out UTC on $RELEASE/$db ($held cron(s) still parked)"
+    parked=$("${PSQL[@]}" -c "SELECT count(*) FROM ir_cron_trigger WHERE call_at = '$out'::timestamp") || die 3 "psql failed"
+    expired=$("${PSQL[@]}" -c "SELECT (now() AT TIME ZONE 'UTC') >= '$out'::timestamp") || die 3 "psql failed"
+    if [[ $expired == t ]]; then
+      echo "cron hold on $RELEASE/$db expired at $out UTC (crons are running again)"
+    else
+      echo "crons held until $out UTC on $RELEASE/$db ($held cron(s), $parked trigger(s) still parked)"
+    fi
   fi
+  # 暫停過期或沒有 hold 時 trigger 已經不起作用，但還掛在客戶 DB 上 ⇒ 提示用 release 清掉
+  (( guards == 0 )) || echo "hold guard triggers present on ir_cron/ir_cron_trigger: $guards (release removes them)"
   exit 0
 fi
 out=$("${PSQL[@]}" -f - < "$SCRIPT_DIR/cron-release.sql") || die 3 "psql failed"
-IFS='|' read -r _ had n_crons n_triggers <<<"$out"
+IFS='|' read -r _ had n_crons n_triggers n_late_crons n_late_triggers <<<"$out"
 if [[ $had == 0 ]]; then
-  echo "no cron hold on $RELEASE/$db"
+  echo "no cron hold on $RELEASE/$db (hold guard triggers removed if any)"
 else
-  echo "released: $n_crons cron(s), $n_triggers trigger(s) restored to their original nextcall on $RELEASE/$db"
+  echo "released on $RELEASE/$db: $n_crons cron(s), $n_triggers trigger(s) restored to their original nextcall;" \
+    "$n_late_crons cron(s), $n_late_triggers trigger(s) parked during the hold set to now"
 fi

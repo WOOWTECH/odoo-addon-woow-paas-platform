@@ -158,10 +158,13 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    - restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫兩個標記：`upgrade_done`（來源 image
      digest＋core_date，讓 web 開機時升級閘自動跑 `-u all`）與 `tenant_localized`（擋掉平台的台灣在地化，見步驟 8）。
    - **彩排**（來源還在營運，目標是彩排站）一律加 `--neutralize`，見下方「彩排與中和」。正式切換不加。
-   - 寫完標記後 restore 會**暫停排程**：啟用中、`nextcall` 早於 N 分鐘後的排程（與 trigger）一律延到那個時點，原值存在
-     `ir_config_parameter` 的 `standalone_odoo_migrate.cron_hold`（`--cron-hold-minutes`，預設 120，0＝不暫停）。理由：
-     還原進來的 `nextcall` 大多早已過期，web 一開機就輪流跑，改到客戶資料，升級後的比對就不準（harumi prod 彩排實測：
-     autovacuum 開機約 3 分鐘後刪了 2 筆 `ir_sequence`）。時間到了沒人放開，排程照常恢復。
+   - 寫完標記後 restore 會**暫停排程**到 N 分鐘後（`--cron-hold-minutes`，預設 120，0＝不暫停）：啟用中、`nextcall` 早於那個
+     時點的排程與 trigger 一律延到那個時點，原值存在 `ir_config_parameter` 的 `standalone_odoo_migrate.cron_hold`；另在
+     `ir_cron`／`ir_cron_trigger` 掛 PG trigger，暫停期間才排的 trigger、被改寫或重新啟用的排程也夾到那個時點。理由：
+     web 一開機，到期的排程就跑、改到客戶資料，升級後的比對就不準。到期的來源除了還原進來的過期 `nextcall`，還有 Odoo core
+     每次更新模組（`-u all` 結束時，`odoo/modules/loading.py`）都會排的 autovacuum trigger（1 分鐘後）——harumi prod 彩排第二輪
+     實測它刪了 2 筆已關帳 POS session 的 `ir_sequence`（第一輪也是 autovacuum 刪了同樣 2 筆）。時間到了沒人放開，PG trigger
+     自己失效、排程照常恢復。
    完成條件：Job 印出 `RESTORE-DONE`（暫停排程時多一行 `crons held until …`），verify exit 0。
 8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade` → Redeploy →
    再跑一次 `verify.sh --stage upgrade --release-crons`（彩排直接帶 `--cleanup`，它也會放開排程）。
@@ -174,8 +177,11 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    incoming PVC。
    - 排程要等最後一次比對通過才放開：放開後過期的排程跑一輪、改到客戶資料，之後再比就不準。比對沒過、但差異查明可以接受
      （或要提早恢復排程）時，用 `scripts/target/cron-hold.sh status|release` 手動處理。
-   - `-u all` 可能依模組 XML 改寫某些排程的 `nextcall`（沙盒實測 Digest Emails），放開時只還原仍停在暫停時點的排程，
-     這類不動；升級途中新建的 trigger 不在暫停範圍內。
+   - 放開（`cron-release.sql`）先移除 PG trigger，再處理仍停在暫停時點的排程與 trigger：暫停當時就有的還原原值，暫停期間
+     才夾住的（開機途中排的 trigger、`-u all` 改寫或重新啟用的排程）改成現在——兩種都在一分鐘內跑一輪。`-u all` 依 XML 把
+     `nextcall` 改到暫停時點之後的（沙盒實測 Digest Emails）不動。
+   - upgrade 階段的 verify 取完指紋後會檢查暫停是否擋住：暫停起點之後有排程跑過（`lastcall`）或正在跑（cron job 對
+     `ir_cron` 持有鎖）就判不通過——指紋之後還可能再跑，比對通過也不可信（彩排第二輪舊版暫停就是這樣「剛好通過」）。
    比對要在任何人登入目標站之前跑：管理員登入會改寫 `web.base.url`，之後的比對會多出 `ir_config_parameter` 不一致。
    session 檔不在搬遷範圍：搬過去之後所有人都要重新登入（Odoo 的 autovacuum 會把舊的裝置紀錄標成已撤銷）。
    - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝

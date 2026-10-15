@@ -113,6 +113,23 @@ if [[ $STAGE == upgrade ]]; then
   hold_until=$("${K[@]}" exec "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 \
     -c "SELECT value::json->>'until' FROM ir_config_parameter WHERE key = 'standalone_odoo_migrate.cron_hold'") \
     || die 3 "cannot read cron hold state"
+  # 取完指紋才查：暫停起點之後有排程跑過（lastcall 晚於暫停起點）或正在跑（cron job 從取件到結束都對 ir_cron 持有
+  # RowShareLock）⇒ 暫停沒擋住，指紋之後還可能再跑一輪改到客戶資料，比對「通過」也不可信。harumi prod 彩排第二輪
+  # （舊版暫停擋不到開機途中排的 trigger）：autovacuum 在取完指紋之後才跑，第一次比對剛好通過，之後才刪掉資料。
+  cron_ran="" cron_busy=0
+  if [[ -n $hold_until ]]; then
+    cron_ran=$("${K[@]}" exec "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 \
+      -c "SELECT coalesce(string_agg(coalesce(d.module || '.' || d.name, 'ir_cron#' || c.id) || ' ' || c.lastcall, ', '), '')
+            FROM ir_cron c LEFT JOIN ir_model_data d ON d.model = 'ir.cron' AND d.res_id = c.id
+           WHERE c.lastcall >= (SELECT (value::json->>'since')::timestamp FROM ir_config_parameter
+                                 WHERE key = 'standalone_odoo_migrate.cron_hold')") \
+      || die 3 "cannot read cron lastcall"
+    cron_busy=$("${K[@]}" exec "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 \
+      -c "SELECT count(*) FROM pg_locks l JOIN pg_class r ON r.oid = l.relation
+           WHERE l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+             AND r.relname = 'ir_cron' AND l.mode = 'RowShareLock' AND l.granted AND l.pid <> pg_backend_pid()") \
+      || die 3 "cannot read cron locks"
+  fi
   tgt=upgraded
 else
   tgt=target
@@ -163,13 +180,22 @@ if (( neutralized )); then
     fi
   fi
 fi
+if [[ $STAGE == upgrade && -n ${hold_until:-} ]] && [[ -n $cron_ran || $cron_busy != 0 ]]; then
+  echo
+  echo "排程暫停失效：暫停起點之後有排程跑過或正在跑（暫停沒擋住，或暫停時間 ${hold_until} UTC 已過），比對結果不可信（之後還可能再跑、改到客戶資料）——不通過："
+  [[ -z $cron_ran ]] || echo "- 跑過（lastcall）：$cron_ran"
+  [[ $cron_busy == 0 ]] || echo "- 正在跑：$cron_busy 個 cron job 持有 ir_cron 鎖"
+  echo "  用 cron-hold.sh status 看暫停狀態，查明是哪裡排的再重跑 restore／verify"
+  (( rc != 0 )) || rc=1
+fi
 if [[ $STAGE == upgrade && -n ${hold_until:-} ]]; then
   echo
   if (( rc == 0 && (RELEASE_CRONS || CLEANUP) )); then
     out=$("${K[@]}" exec -i "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 -f - \
       < "$SCRIPT_DIR/cron-release.sql") || die 3 "releasing held crons failed"
-    IFS='|' read -r _ _ n_crons n_triggers <<<"$out"
-    echo "排程已放開：還原 ${n_crons} 個排程、${n_triggers} 個 trigger 的原 nextcall（過期的會在一分鐘內跑一輪）"
+    IFS='|' read -r _ _ n_crons n_triggers n_late_crons n_late_triggers <<<"$out"
+    echo "排程已放開：還原 ${n_crons} 個排程、${n_triggers} 個 trigger 的原 nextcall，暫停期間才夾住的" \
+      "${n_late_crons} 個排程、${n_late_triggers} 個 trigger 改成現在（到期的會在一分鐘內跑一輪）"
   else
     echo "排程暫停中，到 ${hold_until} UTC 自動恢復；最後一次比對通過時帶 --release-crons（或跑 cron-hold.sh release）放開"
   fi
