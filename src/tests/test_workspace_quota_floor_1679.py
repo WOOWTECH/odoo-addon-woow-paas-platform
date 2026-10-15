@@ -9,7 +9,6 @@ from unittest.mock import patch
 from odoo.tests.common import TransactionCase, tagged
 from odoo.tools import html2plaintext
 
-from ..models import workspace_quota_policy as quota_policy
 from ..models.cloud_service import _internal_provision
 from ..services.workspace_quota import workspace_namespace
 from .committed_cron_scope import CommittedCronScope
@@ -340,8 +339,8 @@ class TestWorkspaceQuotaFloorDeploy1679(_QuotaFloorFixture):
 class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
     """用真的第二、第三條 DB 連線驗 quota 鎖（不是 mock）。
 
-    另一筆交易拿著工作區這一列（例如管理員正在推送）時，開通與生命週期路徑最多等一下，
-    等不到就不讀、不送、也不寫這一列：鎖外推送可能蓋掉對方剛提高的值，寫這一列則會在對方
+    另一筆交易拿著工作區這一列（例如管理員正在推送）時，開通與生命週期路徑不等鎖，
+    直接不讀、不送、也不寫這一列：鎖外推送可能蓋掉對方剛提高的值，寫這一列則會在對方
     commit 後 40001、在已呼叫 operator 之後整筆回捲。本交易快照比對方的 commit 舊也一樣。
     committed 的 fixture 由 ``CommittedCronScope`` 記帳並在結束時精確刪除。
     """
@@ -358,8 +357,7 @@ class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
         operator = FakeQuotaOperator({namespace: build_hard('8', '8Gi', '100Gi', '4Gi', '80Gi')})
         client = operator.bind()
 
-        with patch.object(quota_policy, 'PROVISION_LOCK_TIMEOUT', '200ms'), \
-                self.registry.cursor() as holder, self.registry.cursor() as contender:
+        with self.registry.cursor() as holder, self.registry.cursor() as contender:
             ws = scope.env(contender)['woow_paas_platform.workspace'].browse(ws_id)
             # 釘住 contender 的快照（REPEATABLE READ：第一個查詢就決定）；若實作不顧鎖仍寫這一列，
             # statement_timeout 讓它報錯而不是和 holder 互等到天荒地老。
@@ -369,7 +367,7 @@ class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
             self.assertEqual(ws._quota_create_namespace(client, namespace),
                              (False, 'quota_sync_busy'), '別人拿著鎖：開通不送、待重試')
             with patch(_CLIENT, return_value=client):
-                result = ws._quota_sync('lifecycle', namespaces=[namespace], lock_timeout='200ms')
+                result = ws._quota_sync('lifecycle', namespaces=[namespace], nowait=True)
             self.assertEqual(result['state'], 'busy', '別人拿著鎖：生命週期不送、不寫')
             self.assertEqual((operator.reads, operator.creates, operator.puts), ([], [], []))
             holder.execute(f'UPDATE {table} SET quota_target_version = 1 WHERE id = %s', (ws_id,))

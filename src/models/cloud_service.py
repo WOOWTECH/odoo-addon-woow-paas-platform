@@ -10220,17 +10220,15 @@ class CloudService(models.Model):
 
         #1679：先讀叢集現況再決定送什麼——每項取 max(目標, 叢集)，任何一項會下降、讀不到
         或資料不完整就不送；目標低於叢集的項目標示為待處理降額。工作區正被其他交易同步時
-        最多等 ``LIFECYCLE_LOCK_TIMEOUT``，等不到就跳過（記 warning）。任何失敗只記錄，絕不
-        abort 刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
+        不等鎖、跳過這次推送（記 warning；自動重試屬 #1680）。任何失敗只記錄，絕不 abort
+        刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
         """
-        from .workspace_quota_policy import LIFECYCLE_LOCK_TIMEOUT
         if not helm_namespace or not workspace:
             return
         try:
             with self.env.cr.savepoint():
                 workspace.sudo()._quota_sync(
-                    'lifecycle', namespaces=[helm_namespace],
-                    lock_timeout=LIFECYCLE_LOCK_TIMEOUT)
+                    'lifecycle', namespaces=[helm_namespace], nowait=True)
         except Exception as e:  # noqa: BLE001 —— 見 docstring：絕不阻斷刪除
             _logger.warning(
                 "quota recompute failed for %s: %s", helm_namespace, e,

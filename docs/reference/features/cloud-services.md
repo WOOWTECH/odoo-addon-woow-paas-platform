@@ -401,7 +401,7 @@ spec:
 - 推送前先讀叢集上的受管 quota（operator `GET /api/namespaces/{name}/quota?include_managed=true`），每一項取 max(目標, 叢集現況)，再以 operator 同形的完整 hard（含 `persistentvolumeclaims` 與 ephemeral-storage）逐項檢查，**不會降低叢集任何一項**。
 - 目標低於叢集的項目記為「待處理降額」（後台 Quota Pending Decrease），叢集保留較高的值；安全降額由後續工作（#1681、#1682）處理。
 - 讀不到現況、資料不完整、或某一項非降不可（例如叢集的 pvc 上限大於 10）時不推送並記錄原因。開通路徑：讀不到現況或資料不完整時開通失敗待重試，因為無法證明不降額；某一項非降不可時跳過這次 quota 套用（namespace 與基線已存在），開通照常繼續。刪除服務永遠不會因 quota 推送失敗而被擋下。
-- 同一個工作區同時只有一筆交易推送 quota（工作區列鎖）。生命週期路徑最多等 10 秒、開通路徑最多等 30 秒，等不到就不推送也不寫狀態：生命週期只記 warning、不擋刪除；開通失敗待重試。
+- 同一個工作區同時只有一筆交易推送 quota（工作區列鎖）。管理員入口會等鎖；生命週期與開通路徑不等，拿不到鎖就不推送也不寫狀態：生命週期只記 warning、不擋刪除（例如換方案剛好遇上，增額這次不會推送，要等下一次同步；自動重試屬 #1680）；開通失敗待重試。
 - 管理員在後台「Woow PaaS → Workspace Quotas」查看公式、最低保障、目標、最後成功推送值與時間、同步狀態；目標不是叢集現況，叢集現況看同一頁的觀測（#1678）。尚未建立 namespace 時，最低保障先保存，首次開通時套用。
 
 排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
