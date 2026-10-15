@@ -19,7 +19,7 @@ class TestN8nSeed(TransactionCase):
         self.assertEqual(template.helm_chart_version, '2.0.1')
         self.assertEqual(values['image'], {
             'repository': 'jcr-prod.woowtech.io/woow-paas-docker-local/n8n',
-            'tag': '20261013.2012@sha256:e0e7b603b43adc48d7123716b9eee7394dca675b410f574e4d24830e114564ce',
+            'tag': '20261015.2215@sha256:371dd463f02e8c35a4bc5aaf9855fc4cfec1babab97e5a02a1e31923a2ec8f5a',
         })
 
     def test_init_and_persistent_database_contract(self):
