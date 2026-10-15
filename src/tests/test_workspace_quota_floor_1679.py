@@ -91,6 +91,10 @@ class TestWorkspaceQuotaFloor1679(_QuotaFloorFixture):
         self.assertEqual((ws.quota_target_cpu, ws.quota_target_memory, ws.quota_target_storage),
                          ('18', '12Gi', '300Gi'))
         self.assertFalse(ws.quota_floor_memory_gi)
+        # 未設定要明確顯示，不能顯示成 0
+        self.assertEqual((ws.quota_floor_cpu_display, ws.quota_floor_memory_display,
+                          ws.quota_floor_storage_display),
+                         ('18 cores', 'Not set (formula applies)', '300Gi'))
 
     def test_no_minimum_keeps_formula(self):
         with patch(_CLIENT, return_value=self.client):

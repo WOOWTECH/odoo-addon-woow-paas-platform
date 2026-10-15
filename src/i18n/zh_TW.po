@@ -2477,6 +2477,7 @@ msgstr "可檢視與編輯工作區內容"
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_upload_wizard_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
 msgid "Cancel"
 msgstr "取消"
 
@@ -3867,6 +3868,8 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__create_uid
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__create_uid
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__create_uid
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__create_uid
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__create_uid
 msgid "Created by"
 msgstr ""
 
@@ -3902,6 +3905,8 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__create_date
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__create_date
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__create_date
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__create_date
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__create_date
 msgid "Created on"
 msgstr ""
 
@@ -4735,6 +4740,8 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__display_name
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__display_name
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__display_name
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__display_name
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__display_name
 msgid "Display Name"
 msgstr ""
 
@@ -6657,6 +6664,8 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__id
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__id
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__id
 msgid "ID"
 msgstr ""
 
@@ -7480,6 +7489,8 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__write_uid
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__write_uid
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__write_uid
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__write_uid
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__write_uid
 msgid "Last Updated by"
 msgstr ""
 
@@ -7515,6 +7526,8 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__write_date
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__write_date
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__write_date
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__write_date
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__write_date
 msgid "Last Updated on"
 msgstr ""
 
@@ -13277,6 +13290,8 @@ msgstr "已停止"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
 msgid "Storage"
 msgstr "儲存空間"
 
@@ -15977,6 +15992,8 @@ msgstr "工作負載類型"
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__workspace_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__workspace_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__workspace_id
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__workspace_name
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__workspace_id
 msgid "Workspace"
 msgstr "工作區"
 
@@ -20893,6 +20910,7 @@ msgstr "方案沒有變更，也沒有扣款。服務仍以原本的設定執行
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
 msgid "CPU"
 msgstr "CPU"
 
@@ -22330,6 +22348,8 @@ msgstr "CPU"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
 msgid "Memory"
 msgstr "記憶體"
 
@@ -22643,5 +22663,395 @@ msgstr "配額現況未知或無法取得。缺少的數值為未知，不代表
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
-msgid "These are declared ResourceQuota allocations, not live resource utilization. The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity."
+msgid ""
+"These are declared ResourceQuota allocations, not live resource utilization.\n"
+"                        The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity."
 msgstr "這些是 ResourceQuota 已宣告的配額佔用量，不是即時資源使用率。觀測時間為讀取時間，不保證配額控制器已完成對帳或有足夠的 rollout 容量。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "%(resource)s minimum cannot be negative."
+msgstr "%(resource)s 最低保障不可為負數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "%(resource)s minimum must be a whole number."
+msgstr "%(resource)s 最低保障必須是整數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "%(value)s cores"
+msgstr "%(value)s 核心"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_state__blocked
+msgid "Blocked by safety check"
+msgstr "已被安全檢查擋下"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "CPU (cores)"
+msgstr "CPU（核心）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_cpu_display
+msgid "CPU Minimum"
+msgstr "CPU 最低保障"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_cpu
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__cpu
+msgid "CPU Minimum (cores)"
+msgstr "CPU 最低保障（核心）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Changed At"
+msgstr "異動時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__actor_login
+msgid "Changed By"
+msgstr "異動者"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__actor_uid
+msgid "Changed By (User ID)"
+msgstr "異動者（使用者 ID）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Failed to create namespace: the current namespace quota could not be "
+"verified (%(reason)s), so it was not changed. Retry the deployment later."
+msgstr "建立 namespace 失敗：無法確認 namespace 目前的 quota（%(reason)s），因此沒有變更。請稍後重試部署。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_formula_cpu
+msgid "Formula CPU"
+msgstr "公式 CPU"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_formula_memory
+msgid "Formula Memory"
+msgstr "公式記憶體"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_formula_storage
+msgid "Formula Storage"
+msgstr "公式儲存空間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_synced_hard
+msgid "Last Pushed Quota"
+msgstr "最後推送的 quota"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Last Pushed and Pending"
+msgstr "最後推送與待處理"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_synced_at
+msgid "Last Successful Quota Sync"
+msgstr "最後成功同步時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_synced_version
+msgid "Last Synced Policy Version"
+msgstr "最後同步的政策版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_memory_display
+msgid "Memory Minimum"
+msgstr "記憶體最低保障"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_memory_gi
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__memory_gi
+msgid "Memory Minimum (Gi)"
+msgstr "記憶體最低保障（Gi）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_cpu
+msgid ""
+"Minimum CPU quota for this Workspace. The applied quota is the larger of the"
+" plan formula and this minimum. Empty means the formula applies."
+msgstr "此 Workspace 的 CPU 最低保障。實際套用的 quota 取方案公式與此最低保障的較大者；留空表示沿用公式。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_memory_gi
+msgid ""
+"Minimum memory quota for this Workspace, in Gi. Empty means the formula "
+"applies."
+msgstr "此 Workspace 的記憶體最低保障，單位 Gi；留空表示沿用公式。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_storage_gi
+msgid ""
+"Minimum storage quota for this Workspace, in Gi. Empty means the formula "
+"applies."
+msgstr "此 Workspace 的儲存空間最低保障，單位 Gi；留空表示沿用公式。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__new_values
+msgid "New Minimums"
+msgstr "新的最低保障"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Not set (formula applies)"
+msgstr "未設定（沿用公式）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Only system administrators may change Workspace quota minimums."
+msgstr "只有系統管理員可以變更 Workspace quota 最低保障。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_pending_decrease
+msgid "Pending Quota Decrease"
+msgstr "待處理的 quota 降額"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_state__pending_first_deploy
+msgid "Pending first deployment"
+msgstr "待首次部署"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_state__pending
+msgid "Pending sync"
+msgstr "待同步"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__target_version
+msgid "Policy Version"
+msgstr "政策版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__old_values
+msgid "Previous Minimums"
+msgstr "先前的最低保障"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_audit_ids
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Quota Change Log"
+msgstr "Quota 異動紀錄"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Quota Policy"
+msgstr "Quota 政策"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_target_version
+msgid "Quota Policy Version"
+msgstr "Quota 政策版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_reason
+msgid "Quota Sync Detail"
+msgstr "Quota 同步細節"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_state
+msgid "Quota Sync Status"
+msgstr "Quota 同步狀態"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_audit.py:0
+msgid "Quota change records are written by the platform only."
+msgstr "Quota 異動紀錄只能由平台寫入。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_audit.py:0
+msgid "Quota change records cannot be deleted."
+msgstr "Quota 異動紀錄不可刪除。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_audit.py:0
+msgid "Quota change records cannot be modified."
+msgstr "Quota 異動紀錄不可修改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid "Quota minimums saved and applied to the cluster."
+msgstr "最低保障已儲存並套用到叢集。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid "Quota minimums saved but not applied: %(reason)s"
+msgstr "最低保障已儲存，但尚未套用：%(reason)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid ""
+"Quota minimums saved. The namespace does not exist yet; they apply on the "
+"first deployment."
+msgstr "最低保障已儲存。namespace 尚未建立，將在首次部署時套用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid ""
+"Quota minimums saved. The operator did not answer in time, so the result is "
+"unconfirmed: %(reason)s"
+msgstr "最低保障已儲存。operator 未及時回應，結果待確認：%(reason)s"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_pending_decrease
+msgid ""
+"Resources whose target is below the current cluster quota. The platform "
+"keeps the higher cluster value until a safe decrease is available."
+msgstr "目標低於叢集目前 quota 的資源。在能安全降額之前，平台會保留叢集上較高的值。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_state__unconfirmed
+msgid "Result unconfirmed"
+msgstr "結果待確認"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+msgid "Save and Apply"
+msgstr "儲存並套用"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+msgid "Set Quota Minimums"
+msgstr "設定 Quota 最低保障"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace_quota_minimum_wizard
+msgid "Set Workspace Quota Minimums"
+msgstr "設定 Workspace Quota 最低保障"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_storage_display
+msgid "Storage Minimum"
+msgstr "儲存空間最低保障"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_floor_storage_gi
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__storage_gi
+msgid "Storage Minimum (Gi)"
+msgstr "儲存空間最低保障（Gi）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Sync"
+msgstr "同步"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_state__synced
+msgid "Synced"
+msgstr "已同步"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_target_cpu
+msgid "Target CPU"
+msgstr "目標 CPU"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_target_memory
+msgid "Target Memory"
+msgstr "目標記憶體"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_target_storage
+msgid "Target Storage"
+msgstr "目標儲存空間"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+msgid ""
+"The applied quota is the larger of the plan formula and the minimum.\n"
+"                    0 clears a minimum. Lowering the target is not supported yet."
+msgstr "實際套用的 quota 取方案公式與最低保障的較大者。0 表示清除最低保障。目前不支援調降目標。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_synced_hard
+msgid ""
+"The quota the platform last pushed successfully. It is not a live cluster "
+"observation."
+msgstr "平台最後一次成功推送的 quota，不是叢集的即時觀測值。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid ""
+"The target is what the platform applies: the larger of the plan formula and\n"
+"                        the minimum. It is not the live cluster value; see the observation above."
+msgstr "目標是平台要套用的值：方案公式與最低保障的較大者。它不是叢集的即時值，叢集現況請看上方的觀測。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid ""
+"This change would lower the quota target for %(resources)s. Lowering a "
+"Workspace quota is not supported yet; the minimum was not saved."
+msgstr "這項變更會降低 %(resources)s 的 quota 目標。目前不支援調降 Workspace quota，最低保障未儲存。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__memory_gi
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__storage_gi
+msgid "Whole Gi. 0 clears the minimum (the formula applies)."
+msgstr "整數 Gi。0 表示清除最低保障（沿用公式）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__cpu
+msgid "Whole cores. 0 clears the minimum (the formula applies)."
+msgstr "整數核心。0 表示清除最低保障（沿用公式）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid ""
+"Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota minimums changed by "
+"%(login)s (uid %(uid)s), policy version %(version)s: %(old)s -> %(new)s"
+msgstr ""
+"Workspace %(name)s（id=%(id)s，%(ws_hash)s）的 quota 最低保障由 %(login)s（uid "
+"%(uid)s）變更，政策版本 %(version)s：%(old)s -> %(new)s"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__ws_hash
+msgid "Workspace Hash"
+msgstr "Workspace Hash"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_audit__workspace_ref
+msgid "Workspace ID"
+msgstr "Workspace ID"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace_quota_audit
+msgid "Workspace Quota Minimum Change"
+msgstr "Workspace Quota 最低保障異動"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid "Workspace quota"
+msgstr "Workspace quota"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid ""
+"Workspace quota minimums can only be changed through the administrator quota"
+" action."
+msgstr "Workspace quota 最低保障只能透過管理員的 quota 設定入口變更。"

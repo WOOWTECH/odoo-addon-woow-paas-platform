@@ -201,7 +201,8 @@ class WorkspaceQuotaPolicy(models.Model):
         for workspace in self:
             not_set = _('Not set (formula applies)')
             workspace.quota_floor_cpu_display = (
-                '%s cores' % workspace.quota_floor_cpu if workspace.quota_floor_cpu else not_set)
+                _('%(value)s cores', value=workspace.quota_floor_cpu)
+                if workspace.quota_floor_cpu else not_set)
             workspace.quota_floor_memory_display = (
                 '%sGi' % workspace.quota_floor_memory_gi if workspace.quota_floor_memory_gi
                 else not_set)
@@ -304,8 +305,7 @@ class WorkspaceQuotaPolicy(models.Model):
             'old_values': _summary(old), 'new_values': _summary(new),
         })
         monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
-        # 固定語言：管理紀錄不隨觸發者語系變動（同 monitor 其他告警）。
-        monitor.with_context(lang='en_US')._message_log(body=_(
+        monitor._message_log(body=_(
             'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota minimums changed by %(login)s '
             '(uid %(uid)s), policy version %(version)s: %(old)s -> %(new)s',
             name=self.name, id=self.id, ws_hash=self.ws_hash, login=actor.login, uid=actor.id,
