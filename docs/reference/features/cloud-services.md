@@ -371,7 +371,8 @@ data:
 
 每個 Workspace namespace 有一個名為 `<namespace>-quota` 的 ResourceQuota。數值不是固定的，由平台依 workspace 內的服務計算後交給 operator 套用：
 
-- CPU／記憶體／磁碟：workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3，下限 8 vCPU／8Gi／100Gi（`src/models/cloud_service.py` 的 `_compute_ns_quota`）。
+- CPU／記憶體／磁碟：workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3，下限 8 vCPU／8Gi／100Gi（公式在 `src/models/cloud_service.py` 的 `_compute_ns_quota_formula`）。
+- Workspace 最低保障（#1679）：系統管理員可分別設定 CPU（cores）、記憶體與磁碟（Gi）的最低保障。實際目標是每項 max(公式, 最低保障)，未設定就沿用公式（`_compute_ns_quota`）。最低保障不是固定上限：公式變大時目標跟著變大。它不改服務的 `allocated_*`、方案或計費。
 - `requests` 與 `limits` 是同一個值（operator `extra/paas-operator/src/services/helm.py` 的 `_build_quota_manifest`）。
 - ephemeral-storage 依服務數計算（`_compute_ns_ephemeral_quota`）；PVC 數量上限固定為 10。
 
@@ -395,7 +396,14 @@ spec:
     limits.ephemeral-storage: 80Gi
 ```
 
-平台只在開通、換方案、刪除服務時重算並推送；手動改叢集上的 ResourceQuota 會在下一次推送被蓋回。排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
+平台在開通、換方案、刪除服務，以及管理員變更最低保障時重算並推送。所有路徑共用同一個政策（`src/models/workspace_quota_policy.py`、`src/services/ns_quota_policy.py`）：
+
+- 推送前先讀叢集上的受管 quota（operator `GET /api/namespaces/{name}/quota?include_managed=true`），每一項取 max(目標, 叢集現況)，再以 operator 同形的完整 hard（含 `persistentvolumeclaims` 與 ephemeral-storage）逐項檢查，**不會降低叢集任何一項**。
+- 目標低於叢集的項目記為「待處理降額」（後台 Quota Pending Decrease），叢集保留較高的值；安全降額由後續工作（#1681、#1682）處理。
+- 讀不到現況、資料不完整、或某一項非降不可（例如叢集的 pvc 上限大於 10）時不推送並記錄原因；開通路徑則讓開通失敗待重試，因為無法證明不降額。刪除服務永遠不會因 quota 推送失敗而被擋下。
+- 管理員在後台「Woow PaaS → Workspace Quotas」查看公式、最低保障、目標、最後成功推送值與時間、同步狀態；目標不是叢集現況，叢集現況看同一頁的觀測（#1678）。尚未建立 namespace 時，最低保障先保存，首次開通時套用。
+
+排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
 
 ---
 
