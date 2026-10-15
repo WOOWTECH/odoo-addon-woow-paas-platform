@@ -149,28 +149,47 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 6. **搬運**：目標端 `scripts/target/receive.sh open`（agent）印出 `--url` 並寫出 token 檔 → 兩者交給 WMO 跑
    `scripts/source/export.sh`（預設凍結：來源 odoo 先 scale 0；`--live` 只給彩排）→ `receive.sh close`。
    完成條件：`export-<ns>-<UTC>.json` 每個檔的 sha256 都跟 receiver 回報一致（export.sh 失敗即 exit 3）。
+   - helper pod 剛起來時，來源 ns 與目標 ns 的 NetworkPolicy 還沒放行它的 IP，連 PG、連 receiver 都會被拒（harumi
+     prod 彩排與沙盒實測 Connection refused）。export 會先等 receiver 的 `/healthz`、連 PG 失敗也會重試，各最多約 60 秒；
+     stderr 的 `receiver retry`／`connect retry` 行就是在等這個。
 7. **還原**（agent）：平台停權 → postgres 開回 1 → `scripts/target/restore.sh --replace-db` → `scripts/target/verify.sh --stage restore`。
    - 停權走平台（見下方「平台服務的停權與復權」）：web 與 `<release>-postgresql` 都會縮到 0、對外網址改指停權說明頁。
      restore Job 要連 PG ⇒ 停權後 `kubectl scale sts/<release>-postgresql --replicas=1` 並等它 Ready。
    - restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫兩個標記：`upgrade_done`（來源 image
      digest＋core_date，讓 web 開機時升級閘自動跑 `-u all`）與 `tenant_localized`（擋掉平台的台灣在地化，見步驟 8）。
    - **彩排**（來源還在營運，目標是彩排站）一律加 `--neutralize`，見下方「彩排與中和」。正式切換不加。
-   完成條件：Job 印出 `RESTORE-DONE`，verify exit 0。
-8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade --cleanup`。
+   - 寫完標記後 restore 會**暫停排程**到 N 分鐘後（`--cron-hold-minutes`，預設 120，0＝不暫停）：啟用中、`nextcall` 早於那個
+     時點的排程與 trigger 一律延到那個時點，原值存在 `ir_config_parameter` 的 `standalone_odoo_migrate.cron_hold`；另在
+     `ir_cron`／`ir_cron_trigger` 掛 PG trigger，暫停期間才排的 trigger、被改寫或重新啟用的排程也夾到那個時點。理由：
+     web 一開機，到期的排程就跑、改到客戶資料，升級後的比對就不準。到期的來源除了還原進來的過期 `nextcall`，還有 Odoo core
+     每次更新模組（`-u all` 結束時，`odoo/modules/loading.py`）都會排的 autovacuum trigger（1 分鐘後）——harumi prod 彩排第二輪
+     實測它刪了 2 筆已關帳 POS session 的 `ir_sequence`（第一輪也是 autovacuum 刪了同樣 2 筆）。時間到了沒人放開，PG trigger
+     自己失效、排程照常恢復。
+   完成條件：Job 印出 `RESTORE-DONE`（暫停排程時多一行 `crons held until …`），verify exit 0。
+8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade` → Redeploy →
+   再跑一次 `verify.sh --stage upgrade --release-crons`（彩排直接帶 `--cleanup`，它也會放開排程）。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
    判準是客戶資料列（`scripts/fingerprint_business.sql` 檔頭）：還原當時就存在的客戶資料列必須原封不動；模組資料列
    被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。模組擁有的列（含 noupdate）的可翻譯欄位只比
    en_US——升級會替它們補上新翻譯。filestore：仍被附件引用的檔不能少、內容不能變；
    模組附件換了內容後被 Odoo 回收的舊檔列為「預期內」。
-   完成條件：verify exit 0，「預期內的變動」逐條看過；`--cleanup` 才會刪掉含客戶資料的 incoming PVC。
+   完成條件：兩次 verify 都 exit 0，「預期內的變動」逐條看過；最後一次印出「排程已放開」。`--cleanup` 才會刪掉含客戶資料的
+   incoming PVC。
+   - 排程要等最後一次比對通過才放開：放開後過期的排程跑一輪、改到客戶資料，之後再比就不準。比對沒過、但差異查明可以接受
+     （或要提早恢復排程）時，用 `scripts/target/cron-hold.sh status|release` 手動處理。
+   - 放開（`cron-release.sql`）先移除 PG trigger，再處理仍停在暫停時點的排程與 trigger：暫停當時就有的還原原值，暫停期間
+     才夾住的（開機途中排的 trigger、`-u all` 改寫或重新啟用的排程）改成現在——兩種都在一分鐘內跑一輪。`-u all` 依 XML 把
+     `nextcall` 改到暫停時點之後的（沙盒實測 Digest Emails）不動。
+   - upgrade 階段的 verify 取完指紋後會檢查暫停是否擋住：暫停起點之後有排程跑過（`lastcall`）或正在跑（cron job 對
+     `ir_cron` 持有鎖）就判不通過——指紋之後還可能再跑，比對通過也不可信（彩排第二輪舊版暫停就是這樣「剛好通過」）。
    比對要在任何人登入目標站之前跑：管理員登入會改寫 `web.base.url`，之後的比對會多出 `ir_config_parameter` 不一致。
    session 檔不在搬遷範圍：搬過去之後所有人都要重新登入（Odoo 的 autovacuum 會把舊的裝置紀錄標成已撤銷）。
    - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝
-     zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。要確認：第一次 verify 先不帶
-     `--cleanup`，Redeploy 後再跑一次帶 `--cleanup` 的。
+     zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。所以第一次 verify 在 Redeploy
+     之前跑、不帶旗標，Redeploy 後的那一次才放開排程（或 `--cleanup`）。
    - 匯入後管理員帳密是來源站的，平台存的那組不再適用；租戶可在服務頁按 Reset 重設（重設 `base.user_admin`、清掉 2FA）。
-   ⚠ web 一開回來 cron 就開始跑（寄信、收信、金流、外部整合）。來源沒凍結的彩排（`export.sh --live`）不中和的話，
-   兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`。
+   ⚠ 排程放開（或暫停時間到）之後就開始跑（寄信、收信、金流、外部整合）。來源沒凍結的彩排（`export.sh --live`）不中和的話，
+   兩邊會同時對外動作 ⇒ 彩排的還原一定要 `--neutralize`；暫停排程只是為了比對，不能代替中和。
 9. **cutover**（正式切換；prod 每一步人工放行）。前置：彩排通過、正式目標已照「購買目標服務」買在最終擁有帳號的
    工作區、下方「切換前檢查」逐項有結論。停機時間＝凍結匯出＋還原＋開機升級＋比對（harumi 的量：約 15 秒＋45 秒＋3 分鐘，另加人工步驟）。
    1. 正式目標先調好設定（「切換前檢查」的 conf 覆寫、需要時 `shared-mail.sh open`），Redeploy 完成、服務 running。
@@ -179,7 +198,8 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
         POS 會把訂單先存在平板的瀏覽器再同步；session 開著就凍結，平板上還沒同步的訂單不會在匯出的資料裡。
       - scale 0 之前重跑一次 `inventory.sh`（唯讀），摘要的 `pos` 那行是 `open sessions 0, draft orders 0` 才往下。
    3. 走步驟 6～8：`export.sh` **不帶** `--live`、`restore.sh` **不帶** `--neutralize`。兩階段 verify 都 exit 0 才往下；
-      不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。
+      不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。Redeploy 後那次 verify 帶 `--release-crons`：
+      排程沒放開，第 5 點驗收的收發信不會動（最晚到暫停時間結束才會自己恢復）。
    4. 對外網址改指（下方「對外網址」的三步順序；`curl` 回到目標站才算完成）、外部整合改指（MCP、webhook 來源端的設定）。
    5. 驗收（人）：登入、開一個 POS session、收發各一封信、金流測一筆。通過後立刻手動加一份平台備份
       （「備份與失敗還原」），再開放給使用者。
