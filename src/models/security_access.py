@@ -681,7 +681,11 @@ def _assert_route_anchor_move_authorised(records, vals):
 
 class SecurityAccess(models.Model):
     _name = 'woow_paas_platform.security_access'
-    _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
+    _inherit = [
+        'woow_paas_platform.subscription_lifecycle_mixin',
+        # #1766：一台 HA 一條 tunnel（claim／release／第二台偵測）。
+        'woow_paas_platform.tunnel.binding.mixin',
+    ]
     _description = 'Security Access Instance'
     _order = 'create_date desc'
 
@@ -1411,7 +1415,11 @@ class SecurityAccess(models.Model):
         client = self._get_operator_client()
         try:
             result = client.get_tunnel_status(self.tunnel_id)
-            self.write(self._tunnel_vals_from_status(result))
+            vals = self._tunnel_vals_from_status(result)
+            # 翻旗標的那一刻記一行（不是每次輪詢都記）——#1766 的現場是「平台顯示
+            # 一切正常」，所以第二台接上必須在 log 裡留痕。
+            self._tunnel_binding_log_conflict(vals)
+            self.write(vals)
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
@@ -1440,11 +1448,17 @@ class SecurityAccess(models.Model):
                 'connector_id': '',
                 'connector_type': '',
                 'connector_version': '',
+                'connector_count': 0,
+                'binding_conflict': False,
             }
         vals = {
             'tunnel_status': 'connected' if connections else 'disconnected',
             'edge_connection_count': len(connections),
         }
+        # edge_connection_count 是**連線**數（一個 cloudflared 預設 4 條），不是機器
+        # 數——兩者差一個級距，混用就會把正常的一台看成四台。機器數由 binding
+        # mixin 數 distinct client_id（#1766）。
+        vals.update(self._tunnel_binding_vals_from_connections(connections))
         if connections:
             conn = connections[0]
             vals['connector_id'] = conn.get('connector_id', '')
@@ -2013,6 +2027,14 @@ class SecurityAccess(models.Model):
             'connector_type': self.connector_type or '',
             'connector_version': self.connector_version or '',
             'edge_connection_count': self.edge_connection_count,
+            # #1766：綁在哪一台 HA、以及有幾個 cloudflared 接著。注意
+            # `edge_connection_count` 是連線數（一台預設 4 條），`connector_count`
+            # 才是機器數——UI 不要把前者當機器數顯示。
+            'binding_state': self.binding_state,
+            'bound_instance_label': self.bound_instance_label or '',
+            'bound_at': self.bound_at.isoformat() if self.bound_at else '',
+            'connector_count': self.connector_count,
+            'binding_conflict': self.binding_conflict,
             'error_message': self.error_message or '',
             'deployed_at': self.deployed_at.isoformat() if self.deployed_at else '',
             'created_at': self.create_date.isoformat() if self.create_date else '',

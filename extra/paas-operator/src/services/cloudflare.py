@@ -1460,6 +1460,11 @@ class CloudflareService:
                 connections.append(
                     {
                         "connector_id": conn.get("id", ""),
+                        # 同一個 cloudflared 行程的 4 條連線共用一個 client_id ⇒
+                        # distinct client_id 的數量＝接著這條 tunnel 的機器數。
+                        # 平台端用它偵測「兩台 HA 共用一條 tunnel」，缺了這個欄位
+                        # 就只能用「連線數 > 4」猜（平台 #1766 / 元件 #31）。
+                        "client_id": conn.get("client_id", ""),
                         "type": conn.get("type", ""),
                         "origin_ip": conn.get("origin_ip", ""),
                         "opened_at": conn.get("opened_at", ""),
