@@ -181,6 +181,50 @@ test("router gate：開關關時 pattern 與 exact 兩條路徑都導回總覽�
   assert.equal(go("#/projects", { llm: false, projects: true }).current, "ai-projects");
 });
 
+test("router 離開守衛：守衛回 true 時不換頁、hash 用 replaceState 還原；回 false 或沒有守衛照常換頁", () => {
+  go("#/llm/overview");
+  const replaced = [];
+  window.history = {
+    state: { keep: 1 },
+    replaceState(state, _title, url) {
+      replaced.push([state, url]);
+      window.location.hash = url;
+    },
+  };
+  let asked = 0;
+  const remove = router.setLeaveGuard(() => {
+    asked += 1;
+    return true;
+  });
+  try {
+    window.location.hash = "#/dashboard";
+    router.onHashChange();
+    assert.equal(router.current, "llm");
+    assert.equal(router.params.tab, "overview");
+    assert.deepEqual(replaced, [[{ keep: 1 }, "#/llm/overview"]], "還原成目前的子頁、保留 history.state");
+    assert.equal(asked, 1);
+    // 同一頁內的 hash（例如還原之後）不問守衛。
+    router.onHashChange();
+    assert.equal(asked, 1);
+
+    // 新的守衛登記之後，舊的移除函式不會把新的拿掉。
+    const other = () => false;
+    const removeOther = router.setLeaveGuard(other);
+    remove();
+    window.location.hash = "#/billing";
+    router.onHashChange();
+    assert.equal(router.current, "billing", "守衛回 false：照常換頁");
+    removeOther();
+    window.location.hash = "#/llm/keys";
+    router.onHashChange();
+    assert.equal(router.current, "llm");
+    assert.equal(router.params.tab, "keys");
+  } finally {
+    remove();
+    delete window.history;
+  }
+});
+
 test("router：llm 兩條 route 都在路由表、pattern 在 exact 之前，麵包屑名稱是 AI Models", () => {
   const indexes = router.routes
     .map((route, index) => (route.routeName === "llm" ? index : -1))

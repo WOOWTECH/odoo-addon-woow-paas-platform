@@ -71,16 +71,44 @@ export const router = reactive({
 
     _initialized: false,
 
+    /**
+     * LLM-01c：離開守衛。一次性金鑰對話框在「建立中／顯示中」時登記一個函式；hash 一變（側欄、
+     * Header、程式呼叫 navigate、瀏覽器上一頁跨到別的 hash），守衛回 true 就**不換頁**：hash 用
+     * replaceState 還原（不再觸發 hashchange），由守衛自己提示（對話框顯示關閉確認）。Root 依
+     * router.current 換分支，換頁就會卸載整串元件、明文跟著丟掉，所以要擋在 parseRoute 之前。
+     */
+    _leaveGuard: null,
+    _currentHash: "",
+
     init() {
         if (this._initialized) return;
         this._initialized = true;
         this.parseRoute();
         window.addEventListener("hashchange", () => {
-            this.parseRoute();
+            this.onHashChange();
         });
         if (!window.location.hash) {
             window.location.hash = "#/dashboard";
         }
+    },
+
+    /** 登記離開守衛；回傳移除函式（只移除自己登記的那一個）。 */
+    setLeaveGuard(guard) {
+        this._leaveGuard = guard;
+        return () => {
+            if (this._leaveGuard === guard) {
+                this._leaveGuard = null;
+            }
+        };
+    },
+
+    onHashChange() {
+        const guard = this._leaveGuard;
+        if (guard && window.location.hash !== this._currentHash && guard()) {
+            window.history.replaceState(window.history.state, "", this._currentHash || "#/dashboard");
+            return;
+        }
+        this.parseRoute();
     },
 
     parseRoute() {
@@ -96,6 +124,7 @@ export const router = reactive({
         const queryStr = qIdx === -1 ? "" : raw.slice(qIdx + 1);
 
         this.params = {};
+        this._currentHash = window.location.hash;
         if (path === "workspace-invitation/accept") {
             this.current = "workspace-invitation-accept";
             this.params.invitationRevision = getInvitationRevision();
@@ -173,6 +202,7 @@ export const router = reactive({
             if (window.location.hash !== "#/dashboard") {
                 window.location.hash = "#/dashboard";
             }
+            this._currentHash = "#/dashboard";
         }
     },
 
@@ -186,6 +216,7 @@ export const router = reactive({
             if (window.location.hash !== "#/dashboard") {
                 window.location.hash = "#/dashboard";
             }
+            this._currentHash = "#/dashboard";
         }
     },
 

@@ -182,6 +182,16 @@
     font-weight: 500;
   }
 
+  &__hints {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+
+    &:empty {
+      display: none;
+    }
+  }
+
   // 不確定時間的進度條（開戶是背景 cron，前端只知道「還在跑」）。
   &__bar {
     position: relative;
@@ -324,13 +334,12 @@
       font-size: 1rem;
       font-weight: 600;
       color: $woow-text-primary;
-    }
-  }
 
-  &__subtitle {
-    margin: 0.25rem 0 0;
-    font-size: 0.875rem;
-    color: $woow-text-secondary;
+      // 「免費試用」標題是對話框關閉後的焦點落點（tabindex=-1），不畫焦點框。
+      &:focus {
+        outline: none;
+      }
+    }
   }
 
   &__text {
@@ -357,6 +366,29 @@
   padding: 1rem 0;
   color: $woow-text-secondary;
   font-size: 0.875rem;
+}
+
+// 清單還沒回來時的載入列（.o_woow_loading 的小型版；不先閃「還沒有…」的空狀態）。
+.o_woow_llm_loading_row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+}
+
+// 讀屏專用的播報區（開通完成）：畫面上不佔位置，但仍在無障礙樹裡。
+.o_woow_llm_sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .o_woow_llm_masked {

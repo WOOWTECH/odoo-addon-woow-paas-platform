@@ -96,10 +96,42 @@ export function quotaToPointsText(quota, digits = 2) {
   return unitsToText(Number(units), digits);
 }
 
-/** AI 額度、月花費：2 位小數、捨去、帶「點」。無效值顯示「—」。 */
+/** AI 額度、月花費（點數已換算好的值）：2 位小數、捨去、帶「點」。無效值顯示「—」。 */
 export function formatAiPoints(value) {
   const amount = floorPointsText(value, 2);
   return amount === null ? "—" : _t("%(amount)s pts", { amount });
+}
+
+/**
+ * AI 額度（後端送的**整數 quota**，`/api/llm/state` 的 `account.balance_quota`）：2 位小數、捨去
+ * （負數往負無限大＝不低估透支），帶「點」；不是整數時顯示「—」。`balance_points` 是後端先捨去成
+ * 整數的點數，拿它顯示 2 位小數只會是假的「.00」（12.99 點顯示成 12.00 點）。
+ */
+export function formatAiQuota(quota) {
+  const amount = quotaToPointsText(quota, 2);
+  return amount === null ? "—" : _t("%(amount)s pts", { amount });
+}
+
+/** 只有整數點數可用時（沒有 quota）：不帶小數，不顯示假的「.00」。 */
+export function formatWholePoints(value) {
+  const amount = floorPointsText(value, 0);
+  return amount === null ? "—" : _t("%(amount)s pts", { amount });
+}
+
+/**
+ * 透支了多少點（quota 小於 0 時）：大小無條件**進位**到 0.01 點（不低估透支），不帶負號；
+ * 沒有透支或不是整數時回 `null`。
+ */
+export function overdraftPointsText(quota) {
+  if (typeof quota !== "number" || !Number.isInteger(quota) || quota >= 0) return null;
+  // quotaToPointsText 對負數往負無限大捨去（-1 quota → "-0.01"），去掉負號就是進位後的大小。
+  return quotaToPointsText(quota, 2).replace(/^-/, "");
+}
+
+/** 畫面上的 AI 額度是不是「0.00 點」（零額度橫幅用；與卡片顯示同一個捨去規則）。 */
+export function isZeroCreditQuota(quota) {
+  return typeof quota === "number" && Number.isInteger(quota) && quota >= 0
+    && quotaToPointsText(quota, 2) === "0.00";
 }
 
 /** 單筆花費：4 位小數、捨去；大於 0 但不足 0.0001 點時顯示「<0.0001」。 */

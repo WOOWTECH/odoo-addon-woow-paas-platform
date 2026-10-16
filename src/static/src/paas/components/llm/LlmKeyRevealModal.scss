@@ -74,6 +74,29 @@
     color: #b91c1c;
   }
 
+  // 沒有 Base URL 時取代〔複製為環境變數〕的說明（不給只有金鑰那一行的環境變數）。
+  &__env_missing {
+    margin: 0;
+  }
+
+  // 讀屏專用的播報區（「已複製金鑰」）：畫面上不佔位置，但仍在無障礙樹裡。
+  &__sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  // 打開時焦點先落在對話框本身（tabindex=-1），不畫焦點框。
+  &:focus {
+    outline: none;
+  }
+
   &__saved {
     display: flex;
     align-items: flex-start;

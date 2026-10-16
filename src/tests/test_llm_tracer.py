@@ -50,6 +50,7 @@ from odoo.tools import mute_logger
 
 from ..models import llm_common
 from ..models.llm_account import ACCOUNT_TABLE, PROVISION_CRON_XMLID, _LeaseLost
+from ..models.llm_api_key import _STALE_CREATING_SECONDS, KEY_TABLE
 from ..models.llm_common import LlmError, _llm_internal
 from ..services import llm_crypto
 from ..services import newapi_client as nac
@@ -110,6 +111,21 @@ class TestLlmQuotaInteger(TransactionCase):
         self.assertEqual(self.env.cr.fetchone(), (big, big + 1))
         account.invalidate_recordset()
         self.assertEqual(account.quota_cached, big)
+
+    def test_state_payload_carries_the_integer_quota(self):
+        """LLM-01c review 10：``balance_points`` 是捨去後的整數點數，前端要顯示 2 位小數
+        （12.99 點，不是假的 12.00）就得拿整數 quota；透支時是負的 quota。"""
+        partner = self.env['res.partner'].create({'name': 'llm quota payload'})
+        account = _llm_internal(self.env[ACCOUNT].sudo()).create({'partner_id': partner.id})
+        per_point = llm_common.QUOTA_PER_POINT
+        _llm_internal(account).write({'quota_cached': 12 * per_point + per_point - 1})
+        dto = self.env[ACCOUNT]._llm_state_payload(partner)['account']
+        self.assertEqual((dto['balance_quota'], dto['balance_points'], dto['overdraft_points']),
+                         (13 * per_point - 1, 12, 0))
+        _llm_internal(account).write({'quota_cached': -1})
+        dto = self.env[ACCOUNT]._llm_state_payload(partner)['account']
+        self.assertEqual((dto['balance_quota'], dto['balance_points'], dto['overdraft_points']),
+                         (-1, 0, 1))
 
     def test_plain_integer_is_not_replaced(self):
         """子類別不得取代 ``fields.Integer`` 成為 'integer' 的預設實作。"""
@@ -547,6 +563,7 @@ class TestLlmTracerHttp(HttpCase):
         state = self._rpc('/api/llm/state')['data']
         self.assertEqual(state['account']['state'], 'active')
         self.assertEqual(state['account']['balance_points'], 0)
+        self.assertEqual(state['account']['balance_quota'], 0)
 
         request_id = str(uuid.uuid4())
         created = self._rpc('/api/llm/keys/create',
@@ -611,6 +628,38 @@ class TestLlmTracerHttp(HttpCase):
         mine = self._create_key()
         self.assertTrue(mine['success'])
         self.assertNotEqual(mine['data']['key_id'], created['data']['key_id'])
+
+    def test_stale_creating_trial_key_does_not_hide_the_create_button(self):
+        """LLM-01c review 16：卡在 creating 的試用金鑰（處理它的 worker 在請求途中被殺）超過
+        ``_STALE_CREATING_SECONDS`` 就不再算「已經有一把」——否則前端藏起〔建立免費試用金鑰〕，
+        使用者永遠送不出會替它收尾的那一次 keys/create。"""
+        account = self._activate_and_provision(self.alice)
+        expires = fields.Datetime.now() + timedelta(days=90)
+        key_id, _name = self.env[KEY].sudo()._llm_insert_creating(
+            account, 'free_trial', str(uuid.uuid4()), self.alice, '', expires,
+            ','.join(nac.FREE_TRIAL_MODELS))
+        # 剛建立的 creating：照常算數（另一個分頁正在建）、清單顯示建立中。
+        state = self._rpc('/api/llm/state')['data']
+        self.assertEqual(state['free_trial']['key_id'], key_id)
+        [row] = self._rpc('/api/llm/keys/list')['data']['items']
+        self.assertEqual((row['id'], row['status']), (key_id, 'creating'))
+
+        self.env.cr.execute(
+            'UPDATE %s SET create_date = %%s WHERE id = %%s' % KEY_TABLE,
+            (fields.Datetime.now() - timedelta(seconds=_STALE_CREATING_SECONDS + 60), key_id))
+        self.env[KEY].invalidate_model()
+        state = self._rpc('/api/llm/state')['data']
+        self.assertIsNone(state['free_trial']['key_id'], '過期的 creating 不算已經有一把')
+        [row] = self._rpc('/api/llm/keys/list')['data']['items']
+        self.assertEqual((row['id'], row['status']), (key_id, 'failed_reveal'))
+
+        created = self._create_key()
+        self.assertTrue(created['success'], created)
+        stale = self.env[KEY].sudo().browse(key_id)
+        stale.invalidate_recordset()
+        self.assertEqual(stale.state, 'failed_reveal', 'keys/create 替它收尾')
+        state = self._rpc('/api/llm/state')['data']
+        self.assertEqual(state['free_trial']['key_id'], created['data']['key_id'])
 
     def test_switches(self):
         self.authenticate(self.alice.login, self.password)

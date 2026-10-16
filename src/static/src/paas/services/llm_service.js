@@ -2,7 +2,7 @@
 
 import { reactive } from "@odoo/owl";
 import { jsonRpc } from "./rpc";
-import { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR } from "./llm_errors";
+import { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR, LLM_SESSION_EXPIRED } from "./llm_errors";
 
 /**
  * 「AI 模型」分頁的 API（DESIGN §3.2；照 billing_service.js 的 reactive store）。
@@ -47,12 +47,31 @@ function normalize(result) {
   return failure("llm_internal_error");
 }
 
+/** Odoo 18 的 SessionExpiredException：JSON-RPC error code 100（`odoo/http.py` `serialize_exception`）。 */
+const RPC_SESSION_EXPIRED_CODE = 100;
+
+/**
+ * rpc.js 丟出的例外是不是「登入已逾時」：只看不含文字的欄位（`httpStatus`、`rpcCode`、
+ * `rpcName`），不解析訊息。這種失敗發生在進 handler 之前，**一定沒有**執行。
+ */
+export function isSessionExpired(error) {
+  if (!error || typeof error !== "object") return false;
+  if (error.httpStatus === 401) return true;
+  if (error.rpcCode === RPC_SESSION_EXPIRED_CODE) return true;
+  return typeof error.rpcName === "string" && error.rpcName.endsWith("SessionExpiredException");
+}
+
 async function call(url, params, { timeoutMs = null, transportCode = LLM_NETWORK_ERROR } = {}) {
   let result;
   try {
     result = timeoutMs ? await jsonRpc(url, params, timeoutMs) : await jsonRpc(url, params);
-  } catch {
-    // 逾時、網路、HTTP 錯誤、JSON-RPC 例外：例外訊息不往畫面送（見檔頭）。
+  } catch (error) {
+    // 例外訊息不往畫面送（見檔頭）。登入逾時另給一個碼：重試沒用、要重新整理頁面登入；
+    // 建金鑰遇到它時也是「確定沒建」，不能回 transportCode（「可能已建立」）。
+    if (isSessionExpired(error)) {
+      return failure(LLM_SESSION_EXPIRED);
+    }
+    // 逾時、網路、其他 HTTP 錯誤、JSON-RPC 例外。
     return failure(transportCode);
   }
   return normalize(result);
@@ -130,7 +149,7 @@ export const llmService = reactive({
   /**
    * 建一把免費試用金鑰（付費金鑰在 LLM-07）。回應的 `data.key` 是**唯一一次**看得到的明文：
    * 這裡不存、不記錄，直接交還呼叫端。請求沒拿到回應時回 `llm_key_create_interrupted`
-   * （金鑰可能已建好，見 llm_errors.js）。
+   * （金鑰可能已建好，見 llm_errors.js）；登入逾時回 `llm_session_expired`（確定沒建）。
    */
   async createFreeTrialKey(clientRequestId) {
     return call("/api/llm/keys/create", {

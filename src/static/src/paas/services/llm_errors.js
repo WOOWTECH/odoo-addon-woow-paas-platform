@@ -18,8 +18,18 @@ export const LLM_NETWORK_ERROR = "llm_network_error";
 /**
  * 建金鑰的請求沒有拿到回應：金鑰**可能**已經建好、只是沒顯示（DESIGN §3.5）。不能說「失敗」，
  * 也不能讓使用者以為按重試就會拿回同一把——明文只在那一次回應裡。
+ *
+ * 後端可能已經把鏡像標成 active（回應在途中斷、或 35 秒的最壞情況擦邊碰到前端 40 秒逾時），
+ * 也可能標成 failed_reveal；句子兩種都要走得通：「建立中斷」那把可以重建，「啟用中」那把在
+ * 金鑰管理（LLM-07，含免費試用金鑰的刪除後重建）上線前只能請客服重設。
  */
 export const LLM_KEY_CREATE_INTERRUPTED = "llm_key_create_interrupted";
+/**
+ * 前端自己產生的碼：登入已逾時（Odoo 對 `auth='user'` 的 json 路由回 HTTP 200＋JSON-RPC error
+ * code 100 `SessionExpiredException`；或 HTTP 401）。請求在進 handler 之前就被擋下，**一定沒有**
+ * 執行——建金鑰也是「確定沒建」，不能說成「可能已建立」。重試沒用，要重新整理頁面登入。
+ */
+export const LLM_SESSION_EXPIRED = "llm_session_expired";
 
 function minutesFrom(seconds) {
   const n = Number(seconds);
@@ -31,15 +41,20 @@ function points(value) {
   return Number.isFinite(n) ? String(Math.floor(n)) : null;
 }
 
-const KEY_CANNOT_ENABLE = {
+// 碼表一律 Object.create(null)＋hasOwnProperty 查：後端或網路送來的字串（`reason`、`code`）若是
+// "constructor"、"__proto__" 之類原型鏈上的名字，一般屬性查找會拿到 Object 的東西而顯示錯字或丟例外。
+const lookup = (table, name) =>
+  typeof name === "string" && Object.prototype.hasOwnProperty.call(table, name) ? table[name] : null;
+
+const KEY_CANNOT_ENABLE = Object.assign(Object.create(null), {
   expired: () => _t("This key has expired. Please extend its expiry date first."),
   exhausted: () => _t("This key has used up its total limit. Please raise the limit first."),
   free_capped: () => _t("Today's free trial is used up. It restores automatically at 00:00 Taipei time."),
   suspended: () => _t("The AI models service is suspended, so keys cannot be enabled."),
   overdraft: () => _t("Your AI credit is overdrawn. Please move credit from your points wallet first."),
-};
+});
 
-const CODE_MAP = {
+const CODE_MAP = Object.assign(Object.create(null), {
   llm_disabled: () => _t("This feature is not available yet."),
   llm_not_activated: () => _t("Please activate the AI models service first."),
   llm_tos_required: () => _t("Please accept the AI Models Terms of Service first."),
@@ -69,7 +84,7 @@ const CODE_MAP = {
       : _t("This key has already used %(used)s points; the total limit cannot be lower than that.", { used });
   },
   llm_key_cannot_enable: (params) => {
-    const reason = KEY_CANNOT_ENABLE[params.reason];
+    const reason = lookup(KEY_CANNOT_ENABLE, params.reason);
     return reason ? reason() : _t("This key cannot be enabled right now.");
   },
   llm_reauth_required: () => _t("To protect your account, please verify your identity again before continuing."),
@@ -89,8 +104,9 @@ const CODE_MAP = {
   llm_internal_error: () => _t("Something went wrong. Please try again later."),
   llm_auth_required: () => _t("Authentication required"),
   [LLM_NETWORK_ERROR]: () => _t("The AI models service is temporarily unavailable. Please try again later."),
-  [LLM_KEY_CREATE_INTERRUPTED]: () => _t("The key may have been created without being shown. Refresh the list and create a new one; a key marked Creation interrupted cannot be used."),
-};
+  [LLM_KEY_CREATE_INTERRUPTED]: () => _t("The key may have been created without being shown. After closing, check the key list: a key marked Creation interrupted cannot be used, and you can create a new one; if the key shows Active, it was created but cannot be shown again, so please contact support to reset it."),
+  [LLM_SESSION_EXPIRED]: () => _t("Your session has expired. Please refresh the page and sign in again."),
+});
 
 /** tests/ui/test_llm_errors.mjs 用：碼表涵蓋了哪些 code。 */
 export const LLM_ERROR_CODES = Object.freeze(Object.keys(CODE_MAP));
@@ -100,20 +116,19 @@ export const LLM_ERROR_CODES = Object.freeze(Object.keys(CODE_MAP));
  * 永遠回一句固定的話：不認得的 code、缺 code、或傳進來的根本不是物件，都回「系統發生錯誤」。
  */
 export function llmErrorMessage(result) {
-  const code = result && typeof result.code === "string" ? result.code : null;
-  const entry = code && Object.prototype.hasOwnProperty.call(CODE_MAP, code) ? CODE_MAP[code] : null;
+  const entry = lookup(CODE_MAP, result && result.code);
   return entry ? entry(result) : CODE_MAP.llm_internal_error();
 }
 
 /** 暫停原因（DESIGN §6.2「已暫停」橫幅）。不認得的原因只顯示「已暫停」那半句。 */
-const SUSPEND_REASONS = {
+const SUSPEND_REASONS = Object.assign(Object.create(null), {
   ops: () => _t("Maintenance in progress. Please contact support."),
   account_inactive: () => _t("Your platform account has been deactivated."),
   policy: () => _t("Violation of the AI Models Terms of Service. Please contact support."),
   not_me: () => _t("You reported activity that was not yours. We have suspended the service and will contact you."),
-};
+});
 
 export function llmSuspendReason(reason) {
-  const entry = Object.prototype.hasOwnProperty.call(SUSPEND_REASONS, reason) ? SUSPEND_REASONS[reason] : null;
+  const entry = lookup(SUSPEND_REASONS, reason);
   return entry ? entry() : null;
 }

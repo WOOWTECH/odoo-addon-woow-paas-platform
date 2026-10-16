@@ -48,6 +48,31 @@ test("AI 額度帶單位「點」：zh_TW 是「點」、英文是 pts；未知�
   assert.equal(inLang("en", () => format.formatAiPoints(0)), "0.00 pts");
 });
 
+test("AI 額度用整數 quota 顯示 2 位小數（12.99 點不會變成假的 12.00）；只有整數點數時不帶小數", () => {
+  assert.equal(format.formatAiQuota(12 * 15625 + 15624), "12.99 點");
+  assert.equal(format.formatAiQuota(0), "0.00 點");
+  assert.equal(format.formatAiQuota(-1), "-0.01 點", "透支往負無限大捨去");
+  assert.equal(format.formatAiQuota(12.5), "—", "不是整數 quota");
+  assert.equal(format.formatAiQuota(null), "—");
+  assert.equal(format.formatWholePoints(12), "12 點");
+  assert.equal(format.formatWholePoints(null), "—");
+  assert.equal(inLang("en", () => format.formatAiQuota(15625)), "1.00 pts");
+});
+
+test("透支點數無條件進位（不低估欠款）；零額度與卡片顯示同一個捨去規則", () => {
+  assert.equal(format.overdraftPointsText(-1), "0.01");
+  assert.equal(format.overdraftPointsText(-15625), "1.00");
+  assert.equal(format.overdraftPointsText(-15626), "1.01");
+  assert.equal(format.overdraftPointsText(0), null);
+  assert.equal(format.overdraftPointsText(5), null);
+  assert.equal(format.overdraftPointsText(null), null);
+  assert.equal(format.isZeroCreditQuota(0), true);
+  assert.equal(format.isZeroCreditQuota(156), true, "0.00998 點顯示 0.00");
+  assert.equal(format.isZeroCreditQuota(157), false);
+  assert.equal(format.isZeroCreditQuota(-1), false, "透支不是零額度");
+  assert.equal(format.isZeroCreditQuota(undefined), false);
+});
+
 test("quota → 點：整數運算、捨去；合計先加總 quota 再換算", () => {
   assert.equal(format.QUOTA_PER_POINT, 15625);
   assert.equal(format.quotaToPointsText(15625), "1.00");

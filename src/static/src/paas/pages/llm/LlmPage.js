@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { Component } from "@odoo/owl";
+import { Component, onMounted, onPatched, useRef } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { router } from "../../core/router";
@@ -24,6 +24,10 @@ const TAB_META = {
  * 網址**（`props.tab`，由 Root 從 router.params 帶進來）：切換時只改 hash，重新整理、上一頁／
  * 下一頁都停在同一個子頁；本元件不另存一份 currentTab（那會與網址分岔）。
  * 本票只上線「總覽」，其他子頁顯示「即將推出」。
+ *
+ * 子頁列是「改網址的導覽」，不是 WAI-ARIA tabs（那要 roving tabindex、方向鍵、aria-controls）：
+ * 照 ServiceDetailPage 的 .o_woow_tabs 用一般按鈕，外層 `<nav>` 帶名稱，目前的子頁標 aria-current。
+ * 手機上子頁列可橫捲：載入（例如重新整理 `#/llm/docs`）與切換後把目前的子頁捲進可見範圍。
  */
 export class LlmPage extends Component {
   static template = "woow_paas_platform.LlmPage";
@@ -32,12 +36,38 @@ export class LlmPage extends Component {
     tab: { type: String, optional: true },
   };
 
+  setup() {
+    this.tabsRef = useRef("tabs");
+    this.scrolledTab = null;
+    onMounted(() => this.revealActiveTab());
+    onPatched(() => this.revealActiveTab());
+  }
+
   get currentTab() {
     return normalizeLlmTab(this.props.tab);
   }
 
+  /** 目前的子頁在橫捲範圍外時捲進來（只捲子頁列本身：block 'nearest' 不動整頁的直向位置）。 */
+  revealActiveTab() {
+    if (this.scrolledTab === this.currentTab) return;
+    const bar = this.tabsRef.el;
+    const active = bar ? bar.querySelector(".o_woow_tab.active") : null;
+    if (active && typeof active.scrollIntoView === "function") {
+      active.scrollIntoView({ inline: "nearest", block: "nearest" });
+      this.scrolledTab = this.currentTab;
+    }
+  }
+
   get tabs() {
     return LLM_TABS.map((id) => ({ id, icon: TAB_META[id].icon, label: TAB_META[id].label() }));
+  }
+
+  get currentTabLabel() {
+    return TAB_META[this.currentTab].label();
+  }
+
+  get tabsLabel() {
+    return _t("AI Models sections");
   }
 
   get currentTabLive() {
@@ -49,7 +79,7 @@ export class LlmPage extends Component {
   }
 
   get comingSoonText() {
-    return _t("This section is coming soon.");
+    return _t("This feature is coming soon. Stay tuned.");
   }
 
   setTab(tab) {

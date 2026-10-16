@@ -24,9 +24,12 @@ globalThis.__llmRpc = async () => ({ success: true, data: null });
 const serviceSource = stubImports(await readPaas("services/llm_service.js"), {
   "@odoo/owl": "const reactive = (value) => value;",
   "./rpc": "const jsonRpc = (...args) => globalThis.__llmRpc(...args);",
-  "./llm_errors": `const { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR } = await import("${errorsUrl}");`,
+  "./llm_errors": `const { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR, LLM_SESSION_EXPIRED } = await import("${errorsUrl}");`,
 });
-const { llmService, KEY_CREATE_TIMEOUT_MS, newClientRequestId } = await import(toDataUrl(serviceSource));
+const { llmService, KEY_CREATE_TIMEOUT_MS, newClientRequestId, isSessionExpired } = await import(toDataUrl(serviceSource));
+
+/** rpc.js 丟出的例外（訊息＋不含文字的分類欄位）。 */
+const rpcError = (message, fields) => Object.assign(new Error(message), fields);
 
 const backendCommon = await readFile(
   new URL("../../src/models/llm_common.py", import.meta.url), "utf8");
@@ -65,6 +68,22 @@ test("帶參數的碼：retry_after 換成分鐘（無條件進位）、used、r
   assert.equal(m("llm_key_cannot_enable", { reason: "free_capped" }), "今日免費試用已用完，台北時間 00:00 自動恢復");
   assert.equal(m("llm_key_cannot_enable", { reason: "expired" }), "這把金鑰已過期，請先延長到期日");
   assert.equal(m("llm_key_cannot_enable", { reason: "???" }), "這把金鑰目前無法啟用");
+  // 原型鏈上的名字：一般屬性查找會回 Object（顯示成 [object Object]）或直接丟 TypeError。
+  for (const reason of ["constructor", "__proto__", "toString", "hasOwnProperty", 7, null]) {
+    assert.equal(m("llm_key_cannot_enable", { reason }), "這把金鑰目前無法啟用", String(reason));
+  }
+});
+
+test("llm_suspended 的句子不指向「橫幅」（在沒有橫幅的地方也講得通）", () => {
+  assert.equal(errors.llmErrorMessage({ code: "llm_suspended" }), "AI 模型服務已暫停");
+});
+
+test("「可能已建立」給兩種清單狀態都走得通的下一步；登入逾時另有句子", () => {
+  const interrupted = errors.llmErrorMessage({ code: "llm_key_create_interrupted" });
+  assert.match(interrupted, /^金鑰可能已建立但沒有顯示。/);
+  assert.match(interrupted, /「建立中斷」的金鑰無法使用，可以重新建立一把/);
+  assert.match(interrupted, /「啟用中」，表示金鑰已建立但無法再次顯示，請聯絡客服協助重設/);
+  assert.equal(errors.llmErrorMessage({ code: "llm_session_expired" }), "登入已逾時，請重新整理頁面並重新登入");
 });
 
 test("不認得的 code、缺 code、非物件：一律固定句子，不轉述任何原文", () => {
@@ -120,6 +139,41 @@ test("傳輸錯誤（逾時、網路、JSON-RPC 例外）→ llm_network_error�
   assert.deepEqual(await llmService.fetchUsageRecent(), { success: false, code: "llm_internal_error" });
 });
 
+test("登入逾時（JSON-RPC code 100／SessionExpiredException／HTTP 401）→ llm_session_expired，不是「暫時無法連線」", async () => {
+  const expired = [
+    rpcError("Session expired", { rpcCode: 100, rpcName: "odoo.http.SessionExpiredException" }),
+    rpcError("x", { rpcName: "odoo.http.SessionExpiredException" }),
+    rpcError("Session expired. Please refresh the page.", { httpStatus: 401 }),
+  ];
+  for (const error of expired) {
+    assert.equal(isSessionExpired(error), true);
+    globalThis.__llmRpc = async () => {
+      throw error;
+    };
+    assert.deepEqual(await llmService.fetchState(), { success: false, code: "llm_session_expired" });
+    assert.equal(llmService.overviewError, "llm_session_expired");
+    // 建金鑰：請求在進 handler 之前就被擋下，**確定沒建**——不能回「可能已建立」。
+    assert.deepEqual(await llmService.createFreeTrialKey(newClientRequestId()),
+      { success: false, code: "llm_session_expired" });
+  }
+  // 其他 JSON-RPC 例外、HTTP 500、逾時：照舊是傳輸錯誤（例外訊息不外流）。
+  for (const error of [
+    rpcError("Odoo Server Error", { rpcCode: 200, rpcName: "builtins.KeyError" }),
+    rpcError("Server error. Please try again later.", { httpStatus: 502 }),
+    rpcError("Request timed out. Please try again.", { timedOut: true }),
+    new Error("plain"),
+  ]) {
+    assert.equal(isSessionExpired(error), false);
+    globalThis.__llmRpc = async () => {
+      throw error;
+    };
+    assert.deepEqual(await llmService.fetchKeys(), { success: false, code: "llm_network_error" });
+    assert.deepEqual(await llmService.createFreeTrialKey(newClientRequestId()),
+      { success: false, code: "llm_key_create_interrupted" });
+  }
+  assert.equal(isSessionExpired(null), false);
+});
+
 test("建金鑰：kind=free_trial、40 秒逾時（> 後端 20 秒預算）；沒拿到回應回「可能已建立」", async () => {
   assert.equal(KEY_CREATE_TIMEOUT_MS, 40000);
   const calls = [];
@@ -173,4 +227,52 @@ test("client_request_id 是後端收的小寫 UUID v4 形狀，每次不同", ()
   assert.match(a, backend);
   assert.match(a, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.notEqual(a, b);
+});
+
+// ----------------------------------------------------------------------------- rpc.js
+
+const rpc = await import(toDataUrl(stubImports(await readPaas("services/rpc.js"), {
+  "@web/core/l10n/translation": translateFromGlobal,
+})));
+
+async function rpcFailure(fetchImpl) {
+  const original = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    await rpc.jsonRpc("/api/llm/state", {}, 1000);
+  } catch (error) {
+    return error;
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.fail("jsonRpc 應該丟例外");
+}
+
+test("rpc.js 的例外帶不含文字的分類欄位（session 過期 code 100、HTTP 狀態、逾時），訊息照舊", async () => {
+  const expired = await rpcFailure(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ error: { code: 100, message: "Odoo Session Expired",
+      data: { name: "odoo.http.SessionExpiredException", message: "Session expired" } } }),
+  }));
+  assert.equal(expired.message, "Session expired");
+  assert.equal(expired.rpcCode, 100);
+  assert.equal(expired.rpcName, "odoo.http.SessionExpiredException");
+  assert.equal(isSessionExpired(expired), true);
+
+  const unauthorized = await rpcFailure(async () => ({ ok: false, status: 401 }));
+  assert.equal(unauthorized.httpStatus, 401);
+  assert.equal(isSessionExpired(unauthorized), true);
+
+  const server = await rpcFailure(async () => ({ ok: false, status: 502 }));
+  assert.equal(server.httpStatus, 502);
+  assert.equal(isSessionExpired(server), false);
+
+  const aborted = await rpcFailure(async () => {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  });
+  assert.equal(aborted.timedOut, true);
+  assert.equal(isSessionExpired(aborted), false);
 });

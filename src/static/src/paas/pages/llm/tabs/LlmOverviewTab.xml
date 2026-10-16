@@ -17,15 +17,25 @@
         </WoowCard>
       </t>
 
+      <!-- 登入逾時：重試沒用，只能重新整理整頁（重新登入）。 -->
+      <t t-elif="screen === 'auth'">
+        <WoowCard shadow="true" class="'o_woow_llm_notice'">
+          <WoowIcon name="'lock'" size="28"/>
+          <p role="alert" t-esc="authText"/>
+          <WoowButton variant="'primary'" size="'md'" onClick.bind="reloadPage">Reload page</WoowButton>
+        </WoowCard>
+      </t>
+
       <t t-elif="screen === 'unavailable'">
         <WoowCard shadow="true" class="'o_woow_llm_notice'">
           <WoowIcon name="'cloud_off'" size="28"/>
           <p t-esc="unavailableText"/>
-          <WoowButton variant="'secondary'" size="'md'" onClick.bind="reload">Retry</WoowButton>
+          <WoowButton variant="'secondary'" size="'md'" disabled="state.refreshing" onClick.bind="refresh">Retry</WoowButton>
         </WoowCard>
       </t>
 
-      <!-- 尚未開通（DESIGN §6.2）：主視覺＋副標＋代表模型價格（tracer 沒有價目 API，顯示 fallback 句）＋條款勾選＋〔開通〕 -->
+      <!-- 尚未開通（DESIGN §6.2）：主視覺＋副標＋代表模型價格（tracer 沒有價目 API，顯示 fallback 句）＋條款勾選＋〔開通〕。
+           《AI 模型服務條款》的連結與 LlmTermsModal 在 LLM-04（條款內容在 LLM-05）。 -->
       <t t-elif="screen === 'not_activated'">
         <WoowCard shadow="true" class="'o_woow_llm_intro'">
           <div class="o_woow_llm_intro__icon">
@@ -59,21 +69,33 @@
         <WoowCard shadow="true" class="'o_woow_llm_progress'">
           <WoowIcon name="'progress_activity'" size="32" class="'o_woow_spin'"/>
           <p class="o_woow_llm_progress__text" t-esc="provisioningText"/>
-          <div class="o_woow_llm_progress__bar" role="progressbar" aria-busy="true">
+          <div class="o_woow_llm_progress__bar" role="progressbar" aria-busy="true"
+               t-att-aria-label="provisioningProgressLabel" t-att-aria-valuetext="provisioningElapsedText">
             <span/>
           </div>
           <p class="o_woow_hint" t-esc="provisioningElapsedText"/>
-          <p t-if="provisioningSlow" class="o_woow_hint" t-esc="provisioningSlowText"/>
+          <!-- 只有這兩句放在 live region（「已等待 N 秒」每 3 秒變一次，放進去會一直被播報）。 -->
+          <div class="o_woow_llm_progress__hints" role="status">
+            <p t-if="provisioningSlow" class="o_woow_hint" t-esc="provisioningSlowText"/>
+            <p t-if="state.pollFailing" class="o_woow_hint" t-esc="pollFailingText"/>
+          </div>
         </WoowCard>
       </t>
 
-      <!-- 開通失敗：不顯示 new-api 原文（DESIGN §6.2）。 -->
+      <!-- 開通失敗：不顯示 new-api 原文（DESIGN §6.2）。tracer 的 error 是終態（重新開戶在 LLM-03），
+           所以是〔重新整理〕不是〔重試〕。 -->
       <t t-elif="screen === 'failed'">
         <WoowCard shadow="true" class="'o_woow_llm_notice o_woow_llm_notice--error'">
           <WoowIcon name="'error'" size="28"/>
           <p t-esc="failedText"/>
-          <p t-if="state.actionError" class="o_woow_hint" t-esc="state.actionError"/>
-          <WoowButton variant="'primary'" size="'md'" disabled="state.retrying" onClick.bind="retry">Retry</WoowButton>
+          <WoowButton variant="'secondary'" size="'md'" disabled="state.refreshing" onClick.bind="refresh">Refresh status</WoowButton>
+        </WoowCard>
+      </t>
+
+      <t t-elif="screen === 'closed'">
+        <WoowCard shadow="true" class="'o_woow_llm_notice'">
+          <WoowIcon name="'block'" size="28"/>
+          <p t-esc="closedText"/>
         </WoowCard>
       </t>
 
@@ -82,6 +104,18 @@
         <div t-if="screen === 'suspended'" class="o_woow_llm_banner o_woow_llm_banner--error" role="alert">
           <WoowIcon name="'block'" size="20"/>
           <span t-esc="suspendedText"/>
+        </div>
+        <div t-if="guardTripped" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
+          <WoowIcon name="'construction'" size="20"/>
+          <span class="o_woow_llm_banner__text" t-esc="guardText"/>
+        </div>
+        <div t-if="needsReaccept" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
+          <WoowIcon name="'gavel'" size="20"/>
+          <span class="o_woow_llm_banner__text" t-esc="needsReacceptText"/>
+        </div>
+        <div t-if="overdraftText" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
+          <WoowIcon name="'warning'" size="20"/>
+          <span class="o_woow_llm_banner__text" t-esc="overdraftText"/>
         </div>
         <div t-if="showZeroCreditBanner" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
           <WoowIcon name="'info'" size="20"/>
@@ -115,7 +149,7 @@
             <t t-if="baseUrl">
               <code class="o_woow_llm_card__code" t-esc="baseUrl"/>
               <div class="o_woow_llm_card__actions">
-                <WoowButton variant="'secondary'" size="'sm'" onClick.bind="copyBaseUrl">
+                <WoowButton variant="'secondary'" size="'sm'" ariaLabel="copyBaseUrlLabel" onClick.bind="copyBaseUrl">
                   <WoowIcon name="'content_copy'" size="16"/>
                   <t t-if="state.baseUrlCopied">Copied.</t>
                   <t t-else="">Copy</t>
@@ -129,7 +163,8 @@
 
         <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_section'">
           <div class="o_woow_llm_section__header">
-            <h3>Free trial</h3>
+            <!-- tabindex=-1：金鑰對話框關閉後焦點回到這裡（觸發鈕那時是停用的，建成後也不在了）。 -->
+            <h3 t-ref="freeTrialHeading" tabindex="-1">Free trial</h3>
           </div>
           <p class="o_woow_llm_section__text" t-esc="freeTrialHint"/>
           <WoowButton t-if="!hasFreeTrialKey" variant="'primary'" size="'md'" disabled="!canCreateFreeTrialKey" onClick.bind="openFreeTrialKey">
@@ -146,6 +181,11 @@
           <div t-if="keysErrorText" class="o_woow_error_message" role="alert">
             <WoowIcon name="'error'" size="18"/>
             <span t-esc="keysErrorText"/>
+          </div>
+          <!-- 清單還沒回來時是載入列，不是「還沒有 API 金鑰」（不先閃一下空狀態）。 -->
+          <div t-elif="keysLoading" class="o_woow_llm_loading_row" role="status">
+            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+            <span t-esc="listLoadingText"/>
           </div>
           <p t-elif="!keyRows.length" class="o_woow_llm_empty" t-esc="emptyKeysText"/>
           <!-- 桌面是表格；手機（≤ md）每列改卡片堆疊，欄名由 data-label 帶出（DESIGN §6.7）。 -->
@@ -179,18 +219,19 @@
 
         <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_section'">
           <div class="o_woow_llm_section__header">
-            <div>
-              <h3>Recent free trial calls</h3>
-              <p class="o_woow_llm_section__subtitle" t-esc="freeTrialUsageSentence"/>
-            </div>
+            <h3>Recent free trial calls</h3>
             <WoowButton variant="'ghost'" size="'sm'" disabled="state.refreshingUsage" onClick.bind="refreshUsage">
               <WoowIcon name="'refresh'" size="16" class="state.refreshingUsage ? 'o_woow_spin' : ''"/>
-              Refresh
+              Refresh list
             </WoowButton>
           </div>
           <div t-if="usageErrorText" class="o_woow_error_message" role="alert">
             <WoowIcon name="'error'" size="18"/>
             <span t-esc="usageErrorText"/>
+          </div>
+          <div t-elif="usageLoading" class="o_woow_llm_loading_row" role="status">
+            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+            <span t-esc="listLoadingText"/>
           </div>
           <p t-elif="!usageRows.length" class="o_woow_llm_empty" t-esc="emptyUsageText"/>
           <div t-else="" class="o_woow_llm_list o_woow_llm_list--usage" role="table">
@@ -216,6 +257,9 @@
           <p t-if="usageDataTimeText" class="o_woow_llm_section__footnote" t-esc="usageDataTimeText"/>
         </WoowCard>
       </t>
+
+      <!-- 常駐的播報區：開通完成或失敗時整張開通中卡片會被換掉（被移除的 live region 不會播報）。 -->
+      <div class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
 
       <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" onClose.bind="onRevealClosed"/>
     </div>

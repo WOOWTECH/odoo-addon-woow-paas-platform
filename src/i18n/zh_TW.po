@@ -728,15 +728,21 @@ msgstr "存取席位："
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
-msgid "Activate AI Models"
-msgstr "開通 AI 模型服務"
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js:0
+msgid "AI Models sections"
+msgstr "AI 模型功能選單"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid "Activation did not complete. Please try again later."
-msgstr "開通沒有完成，請稍後再試。"
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "API key copied."
+msgstr "已複製金鑰。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Activate AI Models"
+msgstr "開通 AI 模型服務"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1422,6 +1428,12 @@ msgstr "Base URL"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "Base URL copied."
+msgstr "已複製 Base URL。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "Call 40+ AI models with your credit"
 msgstr "用點數呼叫 40 多個 AI 模型"
@@ -1440,12 +1452,6 @@ msgstr "仍要關閉"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
-msgid "Coming soon"
-msgstr "即將推出"
-
-#. module: woow_paas_platform
-#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
 msgid "Copied."
@@ -1453,7 +1459,21 @@ msgstr "已複製"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "Copy API key"
+msgstr "複製金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Copy Base URL"
+msgstr "複製 Base URL"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid "Copy as environment variables"
 msgstr "複製為環境變數"
 
@@ -1467,6 +1487,12 @@ msgstr "複製失敗，請手動選取文字複製。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "Copy model name"
+msgstr "複製模型名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid "Copy your API key now"
 msgstr "請立即複製您的 API 金鑰"
 
@@ -1475,6 +1501,12 @@ msgstr "請立即複製您的 API 金鑰"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
 msgid "Create free trial key"
 msgstr "建立免費試用金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "Creating your free trial key"
+msgstr "正在建立免費試用金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1525,9 +1557,15 @@ msgstr "單次可轉換 50 到 10,000 點"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "Environment variables copied."
+msgstr "已複製環境變數。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid "Expires on"
-msgstr "到期"
+msgid "Expires on (Taipei time)"
+msgstr "到期（台北時間）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1540,9 +1578,9 @@ msgstr "即將到期"
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid ""
 "For security, the full key is shown only this once. You cannot view it "
-"again after closing this window; if you lose it, create a new key and "
-"disable the old one."
-msgstr "基於安全考量，完整金鑰只會顯示這一次。關閉視窗後無法再查看；遺失時請建立新金鑰並停用舊的。"
+"again after closing this window; if you lose it, please contact support "
+"to reset it."
+msgstr "基於安全考量，完整金鑰只會顯示這一次。關閉視窗後無法再查看；如果遺失，請聯絡客服協助重設。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1564,19 +1602,13 @@ msgstr "免費試用金鑰"
 msgid ""
 "Free trial keys can only call Qwen3-4B: 10 calls per minute and about 200 "
 "calls per day."
-msgstr "免費試用金鑰只能呼叫 Qwen3-4B，每分鐘 10 次、每天約 200 次"
+msgstr "免費試用金鑰只能呼叫 Qwen3-4B，每分鐘 10 次、每天約 200 次。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
 msgid "Free trial today"
 msgstr "今日免費試用"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid "Free trial today: %(usage)s"
-msgstr "今日免費試用 %(usage)s"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1600,12 +1632,6 @@ msgid ""
 msgstr ""
 "新方案的運算規格不同時，服務會重新啟動以套用新規格（約 30 秒無法使用）。儲存空間不會縮小："
 "換到儲存空間較小的方案時，會保留目前的大小。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid "If this keeps happening, please contact support."
-msgstr "如果一直無法完成，請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1634,6 +1660,12 @@ msgstr "耗時"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Loading list…"
+msgstr "載入中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "Lost in a system restore. Please create a new key."
 msgstr "已失效（系統還原），請重建"
 
@@ -1642,6 +1674,12 @@ msgstr "已失效（系統還原），請重建"
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid "Maintenance in progress. Please contact support."
 msgstr "維運處理中，請聯絡客服"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "Model name copied."
+msgstr "已複製模型名稱。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1684,7 +1722,7 @@ msgstr "關閉後就無法再查看這把金鑰。確定要關閉嗎？"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "OpenAI-compatible API, plus a free trial of Qwen3-4B."
-msgstr "OpenAI 相容 API；另有免費試用的 Qwen3-4B"
+msgstr "OpenAI 相容 API；另有免費試用的 Qwen3-4B。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1723,10 +1761,8 @@ msgstr "請先勾選「轉換後的 AI 額度不能退回」"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid ""
-"Prices cannot be shown right now. After activation, see them under Models & "
-"Pricing."
-msgstr "價格暫時無法顯示，開通後可在『模型與價格』查看"
+msgid "Prices cannot be shown yet; the Models & Pricing page is coming soon."
+msgstr "價格暫時無法顯示；「模型與價格」頁面即將推出。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1736,9 +1772,33 @@ msgstr "最近的免費試用呼叫"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Refresh list"
+msgstr "重新整理"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Refresh status"
+msgstr "重新整理"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Reload page"
+msgstr "重新整理頁面"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "Restores automatically at 00:00 Taipei time"
 msgstr "台北時間 00:00 自動恢復"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Setting up your AI models account"
+msgstr "正在建立 AI 模型帳戶"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1761,6 +1821,23 @@ msgstr "正在為您建立 AI 模型帳戶…（通常 1 分鐘內完成）"
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid "Something went wrong. Please try again later."
 msgstr "系統發生錯誤，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid ""
+"System maintenance in progress: keys cannot be created and points cannot "
+"be converted right now. Existing keys keep working."
+msgstr "系統維護中，暫時無法建立金鑰或轉換點數；既有金鑰不受影響。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid ""
+"The AI Models Terms of Service have been updated. Please accept them "
+"again before creating keys or converting points; existing keys are not "
+"affected."
+msgstr "《AI 模型服務條款》已更新，請重新同意才能建立金鑰或轉換點數；既有金鑰不受影響。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1790,13 +1867,19 @@ msgstr "AI 模型服務已暫停，無法啟用金鑰"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid "The AI models service is suspended."
-msgstr "AI 模型服務已暫停（原因見橫幅）"
+msgstr "AI 模型服務已暫停"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "The AI models service is suspended. Please contact support."
+msgstr "AI 模型服務已暫停，請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "The AI models service is suspended: %(reason)s"
-msgstr "AI 模型服務已暫停：%(reason)s"
+msgstr "AI 模型服務已暫停：%(reason)s。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1817,6 +1900,15 @@ msgid ""
 msgstr "條款已更新，請重新同意"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid ""
+"The Base URL is not available yet, so environment variables cannot be "
+"generated. Do not use this key with tools that connect to OpenAI by "
+"default."
+msgstr "Base URL 尚未提供，暫時無法產生環境變數。請勿把這把金鑰用在預設連到 OpenAI 的工具。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/llm_common.py:0
 msgid "The canary partner must be a partner ID."
@@ -1826,9 +1918,11 @@ msgstr "canary partner 必須是一個 partner ID。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid ""
-"The key may have been created without being shown. Refresh the list and "
-"create a new one; a key marked Creation interrupted cannot be used."
-msgstr "金鑰可能已建立但沒有顯示。請重新整理清單後再建立一把；標示「建立中斷」的金鑰無法使用"
+"The key may have been created without being shown. After closing, check "
+"the key list: a key marked Creation interrupted cannot be used, and you "
+"can create a new one; if the key shows Active, it was created but cannot "
+"be shown again, so please contact support to reset it."
+msgstr "金鑰可能已建立但沒有顯示。關閉後請看金鑰清單：標示「建立中斷」的金鑰無法使用，可以重新建立一把；如果顯示「啟用中」，表示金鑰已建立但無法再次顯示，請聯絡客服協助重設"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1837,6 +1931,20 @@ msgstr "金鑰可能已建立但沒有顯示。請重新整理清單後再建立
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid "The key settings are invalid."
 msgstr "金鑰設定不正確"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "The key was not created"
+msgstr "金鑰沒有建立完成"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid ""
+"The latest status cannot be fetched right now. We will keep retrying "
+"automatically."
+msgstr "暫時無法取得最新狀態，系統會自動重試。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1889,6 +1997,12 @@ msgstr "條款目前是草稿，尚未生效。"
 #: code:addons/woow_paas_platform/models/llm_account.py:0
 msgid "This AI account field cannot be changed."
 msgstr "這個 AI 模型帳戶欄位設定後不能修改。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js:0
+msgid "This feature is coming soon. Stay tuned."
+msgstr "此功能即將推出，敬請期待。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -3648,6 +3762,7 @@ msgstr "client 驗證失敗。"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ManagePaymentMethodsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid "Close"
 msgstr "關閉"
 
@@ -5115,12 +5230,6 @@ msgstr "部署失敗：%(detail)s"
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "This plan cannot be applied to the service. Please contact support."
 msgstr "此方案無法套用到這個服務，請聯絡客服。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js:0
-msgid "This section is coming soon."
-msgstr "這個子頁即將推出。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13230,8 +13339,10 @@ msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都�
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid "You already have a free trial key. Each account can have one."
-msgstr "您已經有一把免費試用金鑰（每個帳號一把）。"
+msgid ""
+"You already have a free trial key (one per account). If you did not save "
+"it, please contact support to reset it."
+msgstr "您已經有一把免費試用金鑰（每個帳號一把）。如果沒有保存到金鑰，請聯絡客服協助重設。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13259,9 +13370,17 @@ msgstr "您回報了非本人操作，我們已暫停服務並會與您聯絡"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid ""
-"Your AI credit is 0. You can use the free trial model first, or move credit "
-"from your points wallet to use paid models."
-msgstr "AI 額度為 0。您可以先用免費試用模型，或從點數錢包轉入 AI 額度使用付費模型。"
+"Your AI credit is 0. You can use the free trial model for now; moving "
+"credit from your points wallet is coming soon."
+msgstr "AI 額度為 0。您可以先使用免費試用模型；從點數錢包轉入 AI 額度的功能即將推出。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid ""
+"Your AI credit is overdrawn by %(points)s points; the next conversion "
+"will offset it first."
+msgstr "AI 額度已透支 %(points)s 點，下次轉換會先扣抵。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13278,6 +13397,34 @@ msgstr "AI 額度已透支，請先從點數錢包轉入"
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid "Your AI models account is being set up. Please wait a moment."
 msgstr "正在建立 AI 模型帳戶，請稍候"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid ""
+"Your AI models account is closed. The remaining %(points)s are not "
+"refundable under the terms. To reactivate, please contact support."
+msgstr "AI 模型帳戶已關閉。剩餘額度 %(points)s依條款不予退還。如需重新開通，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Your AI models account is closed. To reactivate, please contact support."
+msgstr "AI 模型帳戶已關閉。如需重新開通，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Your AI models service is now active."
+msgstr "AI 模型服務已開通。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid ""
+"Your free trial key has expired. Until key management is available, "
+"please contact support to reset it."
+msgstr "您的免費試用金鑰已到期。金鑰管理功能上線前，請聯絡客服協助重設。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13298,6 +13445,12 @@ msgid ""
 "Your previous conversion is being reviewed by our team. You can convert "
 "again after it finishes; your points will not be lost."
 msgstr "前一筆轉換正在人工處理，完成後才能再轉換；點數不會遺失"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "Your session has expired. Please refresh the page and sign in again."
+msgstr "登入已逾時，請重新整理頁面並重新登入"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form

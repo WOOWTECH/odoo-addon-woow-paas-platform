@@ -3,6 +3,7 @@
     <t t-name="woow_paas_platform.WoowButton">
         <button t-att-class="buttonClass"
                 t-on-click="handleClick"
+                t-att-aria-label="props.ariaLabel"
                 t-att-disabled="props.disabled">
             <t t-slot="default"/>
         </button>
