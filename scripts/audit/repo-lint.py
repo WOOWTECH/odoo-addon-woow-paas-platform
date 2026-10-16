@@ -4926,6 +4926,17 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "先 `_record_ids()` 落帳才推 sync，而 context 只注入給 `exists()` 的"
                "子集 ⇒ 帳本是它的嚴格超集）。存量收斂改走 `_record_ids()`。",
     },
+    # --- LLM-01b：AI 模型分頁 ---------------------------------------------- #
+    "woow_llm_internal_write": {
+        "status": "enforced",
+        "sentinel": "_LLM_INTERNAL_WRITE",
+        "defined_in": "src/models/llm_common.py",
+        "reader": "_is_llm_internal",
+        "issue": "LLM-01b",
+        "why": "llm_account／llm_api_key 的 create／write 唯一入口（DESIGN §2.1：所有群組 "
+               "ACL 只讀，寫入只經 service method）。偽造 ⇒ 改 newapi_username／"
+               "newapi_user_id 讓 UP 與開戶指向別人的 new-api 使用者，或改 state 跳過開戶。",
+    },
     # --- 非安全決策 -------------------------------------------------------- #
     "skip_ai_reply": {
         "status": "not-security",
