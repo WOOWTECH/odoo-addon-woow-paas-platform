@@ -7,6 +7,10 @@ CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；只需要 reque
 ``tests/test_shc_bare_create_transport.py`` 的做法）。和代理的契約用代理自己的參考實作
 驗：``extra/newapi-proxy/newapi_proxy/{signing,policy,settings}.py`` 只用標準函式庫，
 所以直接 import 來驗章、跑 body 政策——兩邊任一邊改了簽章字串或欄位，這裡就紅。
+``TestClientMatchesProxyRouteTable`` 再拿代理的 ``routetable.py``／``canonical.py`` 逐一比對
+**每一個** client 方法送出的請求：路由存在、身分在路由的集合內、query key 與值過得了路由的
+validator、body／Authorization／proof 的有無、以及 ``WEB_METHODS`` 恰好等於 ``web=True`` 的
+路由——Odoo 測試的 fake 換掉了整個 client，路由錯配只有這裡（和 stg）抓得到。
 
 傳輸錯誤用真的 loopback socket（不是 mock）：連線被拒、送出後斷線、讀取逾時、DNS 失敗
 都由 requests／urllib3 自己丟例外，再看分類對不對（DESIGN §3.4、〔REV〕24）。
@@ -42,7 +46,9 @@ llm_crypto = importlib.import_module(_PKG + '.llm_crypto')
 llm_redact = importlib.import_module(_PKG + '.llm_redact')
 
 sys.path.insert(0, str(PROXY_ROOT))
+from newapi_proxy import canonical as proxy_canonical  # noqa: E402
 from newapi_proxy import policy as proxy_policy  # noqa: E402
+from newapi_proxy import routetable as proxy_routes  # noqa: E402
 from newapi_proxy import settings as proxy_settings  # noqa: E402
 from newapi_proxy import signing as proxy_signing  # noqa: E402
 
@@ -205,6 +211,136 @@ class TestSigningMatchesProxy(_Base):
         for body, rule in zip(bodies, policies):
             self.assertEqual(rule(body, ctx), body, rule.__name__)
         self.assertEqual(self.recorder.requests[3]['headers']['X-Security-Proof'], JWT)
+
+
+# --------------------------------------------------------------------------- #
+#  與代理 routetable 的契約（finding 12）                                          #
+# --------------------------------------------------------------------------- #
+def _representative_calls(now):
+    """每個 client 公開方法一次代表性呼叫（參數合法、形狀與正式程式碼一致）。"""
+    expires = now + nac.UP_LIFETIME_SECONDS
+    return {
+        'status': lambda c: c.status(),
+        'ap_create_user': lambda c: c.ap_create_user('wsab0000000042', 'P' * 64, 'PaaS 42'),
+        'ap_search_user': lambda c: c.ap_search_user('wsab0000000042'),
+        'ap_get_user': lambda c: c.ap_get_user(42),
+        'user_login': lambda c: c.user_login(TENANT_IP, 'wsab0000000042', 'P' * 64),
+        'user_list_access_tokens': lambda c: c.user_list_access_tokens(TENANT_IP, JWT),
+        'user_verify_generate': lambda c: c.user_verify_generate(TENANT_IP, JWT, 'P' * 64,
+                                                                 expires),
+        'user_create_access_token': lambda c: c.user_create_access_token(
+            TENANT_IP, JWT, JWT, nac.up_name(42, now), expires),
+        'user_delete_session': lambda c: c.user_delete_session(TENANT_IP, JWT, 'sid_AB-12'),
+        'user_self': lambda c: c.user_self(TENANT_IP, UP),
+        'user_create_token': lambda c: c.user_create_token(
+            TENANT_IP, UP, nac.free_trial_token_body('wp_17_ab12', expires)),
+        'user_list_tokens': lambda c: c.user_list_tokens(TENANT_IP, UP, 1, 10),
+        'user_get_token': lambda c: c.user_get_token(TENANT_IP, UP, 5),
+        'user_reveal_token': lambda c: c.user_reveal_token(TENANT_IP, UP, 5),
+        # usage/recent 送的 query（llm_account._llm_usage_recent）＋其餘 log 篩選鍵。
+        'user_log_self': lambda c: c.user_log_self(TENANT_IP, UP, {
+            'type': 2, 'group': 'free', 'start_timestamp': now - 60, 'end_timestamp': now,
+            'p': 1, 'page_size': 10, 'model_name': 'qwen3-4b-cluster1',
+            'token_name': 'wp_17_ab12'}),
+    }
+
+
+def _public_client_methods():
+    return {name for name in dir(nac.NewApiClient)
+            if not name.startswith('_') and callable(getattr(nac.NewApiClient, name))}
+
+
+class TestClientMatchesProxyRouteTable(_Base):
+
+    def setUp(self):
+        super().setUp()
+        self.settings, _warnings = proxy_settings.load_settings({
+            'PROXY_AUTH_CRON': '%s:%s' % (KID, SECRET),
+            'PROXY_USERNAME_REGEX': r'^ws[a-z]{2}\d{10}$',
+            'PROXY_TENANT_IP_RANGE': '198.18.17.0-198.19.255.255',
+        }, int(time.time()))
+
+    def test_every_public_method_is_covered(self):
+        self.assertEqual(set(_representative_calls(int(time.time()))), _public_client_methods(),
+                         '新增或改名 client 方法 ⇒ 在 _representative_calls 補一筆、重跑契約')
+        self.assertLessEqual(nac.WEB_METHODS, _public_client_methods())
+
+    def test_every_request_is_on_the_proxy_whitelist(self):
+        now = int(time.time())
+        ctx = proxy_policy.PolicyContext(self.settings, now)
+        client = self.client()
+        for name, call in sorted(_representative_calls(now).items()):
+            before = len(self.recorder.requests)
+            self.assertTrue(call(client).ok, name)
+            self.assertEqual(len(self.recorder.requests), before + 1, name)
+            request = self.recorder.requests[-1]
+            raw_path, _, raw_query = request['path'].partition('?')
+            path = proxy_canonical.check_raw_path(raw_path.encode())
+            pairs = proxy_canonical.parse_query(raw_query.encode())
+            matched = proxy_routes.match(request['method'], path)
+            self.assertIsNotNone(matched, '%s：%s %s 不在代理白名單' % (name, request['method'], path))
+            route = matched.route
+            headers = request['headers']
+            identity = headers['X-Woow-Identity']
+            self.assertIn(identity, route.identities, name)
+            for key, value in pairs:
+                spec = route.query.get(key)
+                self.assertIsNotNone(spec, '%s：query key %s 代理不收' % (name, key))
+                pattern = self.settings.username_re if spec == proxy_routes.USERNAME else spec
+                self.assertTrue(pattern.fullmatch(value), '%s：%s=%s 過不了代理' % (name, key, value))
+            if route.body == 'none':
+                self.assertEqual(request['body'], b'', name)
+            else:
+                body = json.loads(request['body'])
+                self.assertIsInstance(body, dict, name)
+                if route.body_policy is not None:
+                    self.assertEqual(route.body_policy(body, ctx), body, name)
+            if identity == 'user':
+                if route.user_auth == 'forbidden':
+                    self.assertNotIn('Authorization', headers, name)
+                else:
+                    self.assertIn('Authorization', headers, name)
+            else:
+                self.assertNotIn('Authorization', headers, '%s：ap／anon 不帶憑證' % name)
+            self.assertEqual('X-Security-Proof' in headers, route.proof, name)
+            self.assertEqual(name in nac.WEB_METHODS, route.web,
+                             '%s：WEB_METHODS 與代理 routetable 的 web 旗標不一致' % name)
+
+    def test_web_client_refuses_cron_routes_before_sending(self):
+        now = int(time.time())
+        web = nac.NewApiClient(self.base, KID, SECRET.encode(), nac.ROLE_WEB)
+        sent = set()
+        for name, call in sorted(_representative_calls(now).items()):
+            before = len(self.recorder.requests)
+            try:
+                call(web)
+            except nac.NewApiInputError as exc:
+                self.assertEqual(exc.code, 'web_key_scope', name)
+                self.assertEqual(len(self.recorder.requests), before, '%s：擋下的不能送出' % name)
+                continue
+            sent.add(name)
+        self.assertEqual(sent, set(nac.WEB_METHODS))
+
+    def test_signing_key_for_role_never_falls_back(self):
+        environ = {nac.ENV_AUTH_CRON: '%s:%s' % (KID, SECRET)}
+        self.assertEqual(nac.signing_key_for_role(nac.ROLE_CRON, environ), (KID, SECRET.encode()))
+        with self.assertRaises(nac.NewApiConfigError) as caught:
+            nac.signing_key_for_role(nac.ROLE_WEB, environ)
+        self.assertEqual(caught.exception.code, 'signing_key_missing')
+        with self.assertRaises(nac.NewApiConfigError):
+            nac.signing_key_for_role('admin', environ)
+
+    def test_read_timeout_header_is_always_inside_the_proxy_range(self):
+        """X-Woow-Read-Timeout＝read − 餘裕、夾在代理接受的 1–30，而且一定比 Odoo 的 read 短。"""
+        client = self.client()
+        for name in dir(nac):
+            if not name.startswith('TIMEOUT_'):
+                continue
+            connect, read = getattr(nac, name)
+            client.user_self(TENANT_IP, UP, timeout=(connect, read))
+            header = int(self.recorder.requests[-1]['headers']['X-Woow-Read-Timeout'])
+            self.assertTrue(1 <= header <= nac.PROXY_READ_TIMEOUT_MAX, name)
+            self.assertLess(header, read, '%s：代理的期限要比 Odoo 的 read 早到' % name)
 
 
 # --------------------------------------------------------------------------- #

@@ -9,7 +9,11 @@
   ``anon``。``op``／``bg`` 在 LLM-02。
 * **金鑰**：``WOOW_NEWAPI_PROXY_AUTH_WEB``（web 程式路徑）與 ``WOOW_NEWAPI_PROXY_AUTH_CRON``
   （cron）。值一律 strip 後驗證格式；缺或不合 ⇒ :class:`NewApiConfigError`（訊息只有原因
-  碼）。web 路徑沒有 WEB 金鑰就 fail closed，不退回 CRON。
+  碼）。web 路徑沒有 WEB 金鑰就 fail closed，不退回 CRON。WEB 金鑰的 client 只能叫
+  :data:`WEB_METHODS`（代理 routetable 裡 ``web=True`` 的路由）；叫其他方法在送出前就丟
+  :class:`NewApiInputError`——web 路徑誤用 cron 路由會在本機就紅，不必等代理 403。
+  ``tests/test_llm_services.py`` 的契約測試逐一比對每個方法的路由、身分、query 與
+  ``web`` 旗標和代理的 ``routetable.py``。
 * **結果分類**（§3.4）：每次呼叫回傳 :class:`Ok`／:class:`Definite`／:class:`NotExecuted`／
   :class:`Unknown` 其中之一。傳輸錯誤只有「socket 根本沒連上」（``ConnectTimeout``、cause
   是 ``NewConnectionError``／DNS 解析失敗）才算 NotExecuted；request 已寫出才斷線、
@@ -79,10 +83,18 @@ KEY_CREATE_BUDGET_SECONDS = 20
 #: cron 開戶 P1–P9；一個 tick 合計 ``PROVISION_TICK_SECONDS``（N28）。
 TIMEOUT_PROVISION = (5, 15)
 PROVISION_TICK_SECONDS = 60
+#: P8（撤 session）是清理步驟：tick 預算用完時另給這麼多秒讓它還能送出。
+SESSION_REVOKE_GRACE_SECONDS = 5
 #: cron 讀取（對帳、計數、SWR 背景刷新、價目）。
 TIMEOUT_CRON_READ = (5, 20)
 #: 剩下的預算不夠一次呼叫時就不送（送了也只會變成 Unknown）。
 MIN_CALL_SECONDS = 2
+#: ``X-Woow-Read-Timeout``＝本次 read timeout − 這個餘裕，夾在代理接受的 1–``PROXY_READ_TIMEOUT_MAX``
+#: 秒（代理 ``app.py`` ``_READ_TIMEOUT_RE``）：代理的總期限一定比 Odoo 的 read timeout 早到，
+#: 分類由代理給出、不會變成 Odoo 先逾時的 Unknown（DESIGN §1.4.2-7、§3.5）。
+#: repo-lint ``newapi-timeout-ladder`` 守這幾個數字之間的大小關係。
+PROXY_READ_TIMEOUT_MARGIN = 1
+PROXY_READ_TIMEOUT_MAX = 30
 
 # --------------------------------------------------------------------------- #
 #  合成 IP 與使用者名稱（DESIGN §1.4.2-4、N14）                                   #
@@ -107,6 +119,13 @@ FREE_TRIAL_LIFETIME_SECONDS = 90 * 86400
 
 #: new-api 回的英文原句（``message_key``）——依它分類，不受語系影響。
 MSG_LOGIN_FAILED = 'Username or password is incorrect, or user has been banned'
+
+#: WEB 金鑰（Odoo web 程式路徑）能叫的 client 方法＝代理 routetable 裡 ``web=True`` 的路由
+#: （DESIGN §1.4.2-1）。其餘方法（開戶、PAT、session、ap）只給 CRON 金鑰。
+WEB_METHODS = frozenset({
+    'user_self', 'user_create_token', 'user_list_tokens', 'user_get_token',
+    'user_reveal_token', 'user_log_self',
+})
 
 # --------------------------------------------------------------------------- #
 #  格式（與代理 ``app.py`` 的 regex 一致；送出前就先驗，避免 InvalidHeader 帶出值）  #
@@ -548,8 +567,14 @@ class NewApiClient:
 
     def _request(self, method, template, *, identity, write, timeout, deadline=None,
                  path_params=None, query=None, body=None, client_ip='', bearer=None,
-                 proof=None):
-        """送一個簽過章的請求並分類。requests 的例外不會離開本方法。"""
+                 proof=None, web=False):
+        """送一個簽過章的請求並分類。requests 的例外不會離開本方法。
+
+        ``web``：這條路由在代理那邊是否允許 WEB 金鑰（routetable 的 ``web``）。WEB client
+        叫 ``web=False`` 的路由 ⇒ 送出前就丟 :class:`NewApiInputError`。
+        """
+        if self.role == ROLE_WEB and not web:
+            raise NewApiInputError('web_key_scope') from None
         path = self._path(template, path_params)
         query_string = self._query(query)
         if identity == 'user':
@@ -589,7 +614,8 @@ class NewApiClient:
             'X-Woow-Proxy-Nonce': nonce,
             'X-Woow-Proxy-Sig': signature,
             'X-Woow-Identity': identity,
-            'X-Woow-Read-Timeout': str(max(1, min(30, int(read) - 1))),
+            'X-Woow-Read-Timeout': str(max(1, min(PROXY_READ_TIMEOUT_MAX,
+                                                  int(read) - PROXY_READ_TIMEOUT_MARGIN))),
             'Accept': 'application/json',
             'Connection': 'close',
         }
@@ -698,38 +724,38 @@ class NewApiClient:
     def user_self(self, client_ip, up, *, timeout=TIMEOUT_CRON_READ, deadline=None):
         return self._request('GET', '/api/user/self', identity='user', write=False,
                              timeout=timeout, deadline=deadline, client_ip=client_ip,
-                             bearer=up)
+                             bearer=up, web=True)
 
     def user_create_token(self, client_ip, up, body, *, timeout=TIMEOUT_KEY_CREATE,
                           deadline=None):
         return self._request('POST', '/api/token/', identity='user', write=True,
                              timeout=timeout, deadline=deadline, client_ip=client_ip,
-                             bearer=up, body=body)
+                             bearer=up, body=body, web=True)
 
     def user_list_tokens(self, client_ip, up, page=1, page_size=10, *,
                          timeout=TIMEOUT_KEY_CREATE, deadline=None):
         return self._request('GET', '/api/token/', identity='user', write=False,
                              timeout=timeout, deadline=deadline, client_ip=client_ip,
-                             bearer=up, query={'p': page, 'page_size': page_size})
+                             bearer=up, query={'p': page, 'page_size': page_size}, web=True)
 
     def user_get_token(self, client_ip, up, token_id, *, timeout=TIMEOUT_KEY_CREATE,
                        deadline=None):
         return self._request('GET', '/api/token/{id}', identity='user', write=False,
                              timeout=timeout, deadline=deadline, client_ip=client_ip,
-                             bearer=up, path_params={'id': token_id})
+                             bearer=up, path_params={'id': token_id}, web=True)
 
     def user_reveal_token(self, client_ip, up, token_id, *, timeout=TIMEOUT_KEY_CREATE,
                           deadline=None):
         # 唯讀（〔PROV〕§6.2）：重送安全，只是再吃 1 格 CT。回應帶明文金鑰——本檔不 log body。
         return self._request('POST', '/api/token/{id}/key', identity='user', write=False,
                              timeout=timeout, deadline=deadline, client_ip=client_ip,
-                             bearer=up, path_params={'id': token_id})
+                             bearer=up, path_params={'id': token_id}, web=True)
 
     def user_log_self(self, client_ip, up, query, *, timeout=TIMEOUT_INTERACTIVE_READ,
                       deadline=None):
         return self._request('GET', '/api/log/self', identity='user', write=False,
                              timeout=timeout, deadline=deadline, client_ip=client_ip,
-                             bearer=up, query=query)
+                             bearer=up, query=query, web=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -751,6 +777,17 @@ def proxy_url_state(raw):
     return 'invalid', None
 
 
+def signing_key_for_role(role, environ=None):
+    """``role`` 的簽章金鑰：WEB 只讀 ``WOOW_NEWAPI_PROXY_AUTH_WEB``、CRON 只讀 ``…_CRON``，不互相退回。
+
+    回 ``(kid, secret_bytes)``；缺或不合 ⇒ :class:`NewApiConfigError`（只有原因碼）。
+    """
+    if role not in _ROLE_ENV:
+        raise NewApiConfigError('role') from None
+    environ = os.environ if environ is None else environ
+    return parse_signing_key(environ.get(_ROLE_ENV[role]))
+
+
 def get_newapi_client(env, role, environ=None):
     """回傳設定好的 :class:`NewApiClient`；沒設定或 env 金鑰不合 ⇒ :class:`NewApiConfigError`。
 
@@ -762,6 +799,5 @@ def get_newapi_client(env, role, environ=None):
     state, url = proxy_url_state(raw)
     if state != 'usable':
         raise NewApiConfigError('proxy_url_%s' % state) from None
-    environ = os.environ if environ is None else environ
-    kid, secret = parse_signing_key(environ.get(_ROLE_ENV[role]))
+    kid, secret = signing_key_for_role(role, environ)
     return NewApiClient(url, kid, secret, role)
