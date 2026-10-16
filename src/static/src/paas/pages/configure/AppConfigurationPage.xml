@@ -6,7 +6,7 @@
             <t t-if="state.loading">
                 <div class="o_woow_loading">
                     <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
-                    <p>Loading template...</p>
+                    <p>Loading configuration...</p>
                 </div>
             </t>
 
@@ -14,7 +14,7 @@
             <t t-elif="state.error">
                 <div class="o_woow_error_state">
                     <WoowIcon name="'error'" size="48"/>
-                    <h2>Unable to load template</h2>
+                    <h2>Unable to configure service</h2>
                     <p t-esc="state.error"/>
                     <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
                         <WoowIcon name="'arrow_back'" size="18"/>
@@ -23,8 +23,21 @@
                 </div>
             </t>
 
+            <!-- Workspace Role Denial -->
+            <t t-elif="state.accessDenied">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'lock'" size="48"/>
+                    <h2>Permission denied</h2>
+                    <p>Only workspace owners and administrators can create services.</p>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Marketplace
+                    </WoowButton>
+                </div>
+            </t>
+
             <!-- Configuration Form -->
-            <t t-elif="template">
+            <t t-elif="canConfigure">
                 <!-- 麵包屑統一由全域 Header 呈現（見 AppConfigurationPage._publishBreadcrumb）-->
 
                 <!-- Header Section -->

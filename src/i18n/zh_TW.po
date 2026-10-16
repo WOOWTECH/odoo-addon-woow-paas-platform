@@ -5734,6 +5734,30 @@ msgstr "載入應用範本失敗"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Failed to load configuration"
+msgstr "載入設定失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+msgid "Loading configuration..."
+msgstr "正在載入設定..."
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+msgid "Unable to configure service"
+msgstr "無法設定服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+msgid "Only workspace owners and administrators can create services."
+msgstr "只有工作區擁有者與管理員可以建立服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/reconcile_report_service.js:0
 msgid "Failed to load the orphan reconcile report"
 msgstr "載入孤兒報表失敗"
@@ -10241,7 +10265,9 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#. odoo-javascript
 #: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 msgid "Permission denied"
 msgstr "權限不足"
 
