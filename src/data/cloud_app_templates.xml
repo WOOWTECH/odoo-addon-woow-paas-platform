@@ -1161,18 +1161,18 @@
                  config.sensitive.admin_password，由平台 has_admin_gui 供給鏈注入（建立服務時
                  生成、存入 cloud_service_secret、經 Helm sensitive values 注入、一次性顯示＋reset）。 -->
             <field name="has_admin_gui" eval="True"/>
-            <!-- #449 密碼載體＝helm_secret：本 chart 沒有 /data/config.json（PVC 掛
-                 /app/.od 與 /home/opendesign），密碼由 chart Secret 承載、nginx
-                 auth-proxy 的 htpasswd 在 pod 啟動時從 Secret 算出。reset 因此走
-                 helm upgrade ＋ rollout restart（daemon 與 console 兩顆 Deployment
-                 共用同一個 instance label，operator 端用複數版探索一次滾完）；沿用
-                 預設 config_json 會對不存在的檔做 exec patch → 必 500。 -->
+            <!-- #449／#1675 密碼載體＝helm_secret：本 chart 沒有 /data/config.json（PVC 掛
+                 /app/.od 與 /home/opendesign），密碼由 chart Secret 承載。daemon 的 nginx
+                 auth-proxy 經 Secret volume 原地讀取 htpasswd，密碼約一分鐘內生效，daemon
+                 StatefulSet 刻意不重啟；reset 的 helm upgrade ＋ rollout restart 只重啟
+                 console Deployment。沿用預設 config_json 會對不存在的檔做 exec patch → 必 500。 -->
             <field name="admin_password_carrier">helm_secret</field>
+            <field name="credential_change_restart_scope">console_only</field>
             <!-- 租戶可自設帳號密碼：帳號在 chart 的 authProxy.basicAuth.username（0.2.0 起
                  chart 端 open-design.basicAuthUsername 會驗證格式）。nginx auth-proxy 的
                  htpasswd 與 console（ttyd／dashboard）都從這個值與 admin_password 取帳密，
-                 所以 OpenDesign 與 ttyd 永遠同一組。修改走 reset 同一條 helm upgrade ＋
-                 rollout restart（daemon 與 console 都重啟）。 -->
+                 所以 OpenDesign 與 ttyd 永遠同一組。修改走 reset 同一條 helm upgrade，daemon
+                 不重啟、密碼經 Secret volume 原地生效，只有 console Deployment 重啟。 -->
             <field name="admin_username_helm_path">authProxy.basicAuth.username</field>
             <field name="post_deploy_init_type">none</field>
 

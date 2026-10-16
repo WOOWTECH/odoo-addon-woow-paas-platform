@@ -649,6 +649,25 @@ class CloudAppTemplate(models.Model):
                 or (record.app_admin_reset_kind or 'none') != 'none'
             )
 
+    # #1675：自設憑證文案的唯一事實源，只描述既有重啟範圍，不改變 operator 行為。
+    # 前後端皆讀本欄位，不自建 slug 判準；未設定時保守沿用整個服務重啟的提示。
+    credential_change_restart_scope = fields.Selection(
+        selection=[
+            ('service', 'Entire service'),
+            ('console_only', 'Web console only'),
+            ('none', 'No restart'),
+        ],
+        string='Credential Change Restart Scope',
+        default='service',
+        required=True,
+        help='Restart scope shown when changing admin credentials. Only meaningful '
+             'with the Helm Secret (helm_secret) password carrier. Entire service: '
+             'the service restarts; Web console only: the main service keeps running '
+             'and only the console restarts; No restart: nothing restarts. '
+             'Credentials take effect within about a minute. This field describes '
+             'existing behavior; it does not control workload restarts.',
+    )
+
     # 租戶可改的 admin 帳號：**帳號在 chart values 的哪個路徑**（點分式）。空值＝帳號由
     # chart 固定、平台不開放修改（mcp-server 家族的 admin-core GUI 帳號不是 values
     # 決定的）。本欄位同時是「能不能改帳號」的能力事實源（controller 判 400、payload
