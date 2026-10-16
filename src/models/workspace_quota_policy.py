@@ -7,13 +7,30 @@
   寫入。ORM create／write 對 floor 與同步控制欄位一律拒絕——連 system 管理員也只能走入口，
   確保驗證、版本、稽核與立即同步不會被繞過。
 - 同步一律「不降額」（``services/ns_quota_policy``）；目標低於叢集的項目只標示待處理。
+
+#1680 同步可恢復且舊工作不覆蓋新設定：
+
+- **提交序列化**：所有平台 quota 寫入（管理員入口、手動重試、背景重試、生命週期重算、開通
+  建立 namespace）都先對工作區這一列取 ``FOR NO KEY UPDATE``（``_lock_quota_policy``），讀取
+  叢集、推送與記錄結果都在鎖內。背景與生命週期路徑拿不到鎖不等、不寫，交給 cron 下一輪。
+- **遠端版本防護**：每次推送帶新的 ``sync_token`` 與「鎖內 GET 讀到的 resourceVersion」
+  （或 ``expect_absent``），operator 以條件寫入套用；物件之後被任何人改過就 409、不覆寫。
+  所以舊請求晚到只可能落在它規劃時的那一版上，而那一版之後任何一次推送都會讓它落不下。
+- **讀回對帳**：``quota_expected_tokens`` 記每個 namespace「遠端應該帶的 token」（確認成功的，
+  或結果不明的在途 token）。只有遠端 token 與它相符才算已同步；不符（舊請求晚到、交易回捲後
+  遠端留下沒提交的值）就以新 token 重推（圍籬），值仍取 max(目標, 叢集)，不降額。
+- **有限重試**：見 ``RETRY_BACKOFF_MINUTES``；額度以目標指紋（namespace 集合＋payload）計，
+  目標改變、管理員保存或手動重試才重置。永久阻擋（would_lower 等）不自動重試。
 """
+from datetime import timedelta
+import hashlib
 import json
 import logging
+import uuid
 
 from psycopg2 import errors as pg_errors
 
-from odoo import _, api, fields, models
+from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import mute_logger
 
@@ -36,6 +53,10 @@ FLOOR_FIELDS = {
 SYNC_FIELDS = (
     'quota_target_version', 'quota_sync_state', 'quota_sync_reason',
     'quota_synced_version', 'quota_synced_at', 'quota_synced_hard', 'quota_pending_decrease',
+    # #1680
+    'quota_expected_tokens', 'quota_sync_unguarded', 'quota_attempt_fingerprint',
+    'quota_synced_fingerprint', 'quota_retry_count', 'quota_next_retry_at',
+    'quota_last_attempt_at', 'quota_verified_at',
 )
 PROTECTED_FIELDS = tuple(FLOOR_FIELDS) + SYNC_FIELDS
 
@@ -45,9 +66,25 @@ SYNC_STATES = [
     ('synced', 'Synced'),
     ('unconfirmed', 'Result unconfirmed'),
     ('blocked', 'Blocked by safety check'),
+    ('exhausted', 'Retries exhausted'),
 ]
-# 多個 namespace 時對外顯示「最需要處理」的那個狀態
+# 多個 namespace 時對外顯示「最需要處理」的那個狀態（exhausted 只出現在工作區層級）
 _STATE_RANK = {'synced': 0, 'pending_first_deploy': 1, 'pending': 2, 'unconfirmed': 3, 'blocked': 4}
+
+#: #1680 自動重試：第 n 次背景重試排在前一次失敗後 ``RETRY_BACKOFF_MINUTES[n-1]`` 分鐘。
+#: 共 5 次（1、5、15、60、240 分鐘，首次失敗後約 5 小時 21 分內），之後轉 ``exhausted``，
+#: 只剩管理員手動重試或目標改變能再試。
+RETRY_BACKOFF_MINUTES = (1, 5, 15, 60, 240)
+MAX_AUTO_RETRIES = len(RETRY_BACKOFF_MINUTES)
+#: 背景路徑拿不到工作區鎖（別的交易正在同步）時，cron 多久之後再看一次；不消耗重試額度。
+BUSY_RETRY = timedelta(minutes=1)
+#: 已同步的工作區多久讀回驗證一次（遠端 token 或值與平台記錄不符就圍籬重推）。
+VERIFY_INTERVAL = timedelta(hours=6)
+#: 這些觸發來源代表人的明確動作：重置重試額度。
+_RESETTING_TRIGGERS = ('admin', 'manual')
+_RECONCILE_CRON = 'woow_paas_platform.ir_cron_reconcile_workspace_quota'
+#: blocked 之中屬於暫時性、值得自動重試的原因（其餘 blocked 是永久阻擋，等人處理）。
+_TRANSIENT_BLOCKED = ('quota_unreadable', 'managed_quota_status_pending')
 
 
 # ------------------------------------------------------------------------- #
@@ -107,6 +144,12 @@ def _floor_text(value, unit):
     return '%s%s' % (value, unit) if value else '-'
 
 
+def _fingerprint(target, namespaces):
+    """目標指紋：namespace 集合＋目標 payload。重試額度與「已同步是否仍是現在的目標」都以它計。"""
+    raw = json.dumps({'namespaces': sorted(namespaces), 'target': target}, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 class WorkspaceQuotaPolicy(models.Model):
     _inherit = 'woow_paas_platform.workspace'
 
@@ -143,6 +186,37 @@ class WorkspaceQuotaPolicy(models.Model):
         string='Pending Quota Decrease', groups='base.group_system', copy=False, readonly=True,
         help='Resources whose target is below the current cluster quota. The platform keeps '
              'the higher cluster value until a safe decrease is available.')
+    # #1680 同步可恢復
+    quota_expected_tokens = fields.Text(
+        string='Expected Remote Sync Tokens', groups='base.group_system', copy=False,
+        readonly=True,
+        help='Per namespace, the sync token the cluster quota should carry: the last confirmed '
+             'push, or a push whose result is unknown. A different token on the cluster means '
+             'another write landed there, so the next sync pushes again.')
+    quota_sync_unguarded = fields.Boolean(
+        string='Pushed Without Version Protection', groups='base.group_system', copy=False,
+        readonly=True,
+        help='The operator does not support versioned quota writes, so the last push could be '
+             'overwritten by an older request that finishes late. Upgrade the operator.')
+    quota_attempt_fingerprint = fields.Char(
+        string='Last Attempted Target', groups='base.group_system', copy=False, readonly=True)
+    quota_synced_fingerprint = fields.Char(
+        string='Last Synced Target', groups='base.group_system', copy=False, readonly=True)
+    quota_retry_count = fields.Integer(
+        string='Automatic Retries Used', groups='base.group_system', copy=False, readonly=True,
+        help='Automatic retries used for the current target (at most 5). Resets when the target '
+             'changes, an administrator saves the minimums or retries manually, or a sync succeeds.')
+    quota_next_retry_at = fields.Datetime(
+        string='Next Automatic Retry', groups='base.group_system', copy=False, readonly=True)
+    quota_last_attempt_at = fields.Datetime(
+        string='Last Sync Attempt', groups='base.group_system', copy=False, readonly=True)
+    quota_verified_at = fields.Datetime(
+        string='Last Verified Against Cluster', groups='base.group_system', copy=False,
+        readonly=True)
+    quota_sync_status = fields.Selection(
+        SYNC_STATES, string='Current Sync Status', compute='_compute_quota_policy_view',
+        groups='base.group_system',
+        help='The last sync result, except that a sync for an older target is shown as pending.')
 
     quota_formula_cpu = fields.Char(
         string='Formula CPU', compute='_compute_quota_policy_view', groups='base.group_system')
@@ -212,9 +286,15 @@ class WorkspaceQuotaPolicy(models.Model):
             if not workspace.id:
                 workspace.update({name: False for name in (
                     'quota_formula_cpu', 'quota_formula_memory', 'quota_formula_storage',
-                    'quota_target_cpu', 'quota_target_memory', 'quota_target_storage')})
+                    'quota_target_cpu', 'quota_target_memory', 'quota_target_storage',
+                    'quota_sync_status')})
                 workspace.quota_audit_ids = False
                 continue
+            state = workspace.quota_sync_state
+            if state == 'synced' and workspace.quota_synced_fingerprint != _fingerprint(
+                    Service._ns_quota_payload(workspace), workspace._quota_namespaces()):
+                state = 'pending'  # 已同步的是舊目標（服務集合或政策已變），還沒同步到現在的目標
+            workspace.quota_sync_status = state
             formula = Service._compute_ns_quota_formula(workspace)
             target = Service._compute_ns_quota(workspace)
             (workspace.quota_formula_cpu, workspace.quota_formula_memory,
@@ -288,6 +368,39 @@ class WorkspaceQuotaPolicy(models.Model):
                         'default_storage_gi': workspace.quota_floor_storage_gi},
         }
 
+    def action_retry_quota_sync(self):
+        """#1680 管理員手動重試：重置自動重試額度，以最新政策與服務集合立即同步。
+
+        與背景重試走同一個同步（同樣的鎖、讀取、不降額與防護），所以不能用來繞過任何安全
+        檢查——會降低叢集任何一項的推送照樣不送。不改政策，所以不寫異動紀錄（ledger）；只在
+        監控 chatter 留一行誰在何時手動重試。
+        """
+        if not self.env.user.has_group('base.group_system'):
+            raise AccessError(_('Only system administrators may retry Workspace quota sync.'))
+        self.ensure_one()
+        self.check_access('read')
+        workspace = self.sudo()
+        workspace._lock_quota_policy()
+        workspace.invalidate_recordset(list(PROTECTED_FIELDS))
+        actor = self.env.user
+        self.env['woow_paas_platform.platform_monitor']._singleton()._message_log(body=_(
+            'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync retried manually by '
+            '%(login)s (uid %(uid)s)', name=workspace.name, id=workspace.id,
+            ws_hash=workspace.ws_hash, login=actor.login, uid=actor.id))
+        result = workspace._quota_sync('manual')
+        state = result.get('state')
+        if state == 'synced':
+            message, kind = _('Quota synced with the cluster.'), 'success'
+        else:
+            message, kind = _('Quota not synced: %(reason)s',
+                              reason=result.get('reason') or state or ''), 'warning'
+        return {
+            'type': 'ir.actions.client', 'tag': 'display_notification',
+            'params': {'title': _('Workspace quota'), 'message': message, 'type': kind,
+                       'sticky': kind != 'success',
+                       'next': {'type': 'ir.actions.client', 'tag': 'soft_reload'}},
+        }
+
     def _log_quota_minimum_change(self, old, new, version):
         """稽核：append-only ledger（結構化）＋ admin-only monitor chatter（無通知）。"""
         self.ensure_one()
@@ -354,29 +467,51 @@ class WorkspaceQuotaPolicy(models.Model):
         names.update(ns for ns in services.mapped('helm_namespace') if ns)
         return sorted(names)
 
+    def _quota_expected_tokens(self):
+        self.ensure_one()
+        try:
+            tokens = json.loads(self.quota_expected_tokens or '{}')
+        except ValueError:
+            return {}
+        return tokens if isinstance(tokens, dict) else {}
+
+    def _schedule_quota_reconcile(self, at=None):
+        """喚醒背景同步 cron（``ir.cron.trigger`` 是 DB 列，跟著呼叫端交易 commit／回捲）。"""
+        cron = self.env.ref(_RECONCILE_CRON, raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger(at)
+
     def _quota_sync(self, trigger, namespaces=None, *, nowait=False):
         """把目前目標推到叢集（每項都不低於叢集現況），記錄結果並回傳摘要。
 
-        ``nowait=True``（生命週期路徑）：拿不到鎖回 ``busy``，不推送、不寫（記 warning；
-        自動重試屬 #1680）。管理員入口已先拿鎖，不帶這個參數。
+        ``trigger``：admin／manual（人的動作，重置重試額度）、retry（背景重試，消耗額度）、
+        reconcile（背景發現目標已變）、verify（定期讀回）、lifecycle、provision。
+        ``nowait=True``（背景與生命週期路徑）：拿不到鎖回 ``busy``，不推送、不寫這一列，
+        改排 cron 一分鐘後再看（``BUSY_RETRY``）。管理員入口已先拿鎖，不帶這個參數。
         """
         self.ensure_one()
         workspace = self.sudo()
         if nowait and not workspace._lock_quota_policy(nowait=True):
+            workspace._schedule_quota_reconcile(fields.Datetime.now() + BUSY_RETRY)
             return {'state': 'busy', 'trigger': trigger}
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
+        attempted = sorted(set(namespaces)) if namespaces else workspace._quota_namespaces()
         client = paas_operator_service.get_paas_operator_client(self.env(context={}))
+        expected = workspace._quota_expected_tokens()
         results = {}
-        for namespace in (namespaces or workspace._quota_namespaces()):
-            results[namespace] = _sync_namespace(client, namespace, target)
-        workspace._record_quota_sync(version, results)
+        for namespace in attempted:
+            results[namespace] = _sync_namespace(client, namespace, target, expected.get(namespace))
+        workspace._record_quota_sync(version, results, _fingerprint(target, attempted), trigger)
         summary = workspace._quota_status_summary()
         summary['trigger'] = trigger
         return summary
 
-    def _record_quota_sync(self, version, results):
+    def _record_quota_sync(self, version, results, fingerprint=None, trigger=None):
         self.ensure_one()
+        now = fields.Datetime.now()
+        previous_state = self.quota_sync_state
+        retryable = False
         if not results:
             vals = {'quota_sync_state': 'pending_first_deploy',
                     'quota_sync_reason': 'no_namespace'}
@@ -395,20 +530,108 @@ class WorkspaceQuotaPolicy(models.Model):
                        if r.get('reason')]
             if superseded:
                 reasons.append('superseded: policy version %s replaced %s' % (current, version))
+            unguarded = sorted(ns for ns, r in results.items() if r.get('guarded') is False)
+            if unguarded:
+                reasons.append(
+                    'remote_guard_unavailable: %s (the operator does not support versioned '
+                    'quota writes; pushed without protection against late requests)'
+                    % ', '.join(unguarded))
             pending = ['%s %s: cluster %s, target %s' % (ns, key, live, wanted)
                        for ns, r in sorted(results.items())
                        for key, live, wanted in r.get('pending_decrease', ())]
+            tokens = self._quota_expected_tokens()
+            for ns, r in results.items():
+                if r.get('expect_token'):
+                    tokens[ns] = r['expect_token']
             vals = {'quota_sync_state': state, 'quota_sync_reason': '\n'.join(reasons) or False,
-                    'quota_pending_decrease': '\n'.join(pending) or False}
+                    'quota_pending_decrease': '\n'.join(pending) or False,
+                    'quota_sync_unguarded': bool(unguarded),
+                    'quota_expected_tokens': json.dumps(tokens, sort_keys=True) if tokens else False}
             if state == 'synced':
                 vals.update({
                     'quota_synced_version': version,
-                    'quota_synced_at': fields.Datetime.now(),
+                    'quota_synced_at': now,
                     'quota_synced_hard': json.dumps(
                         {ns: r['hard'] for ns, r in sorted(results.items()) if r.get('hard')},
                         sort_keys=True),
+                    'quota_synced_fingerprint': fingerprint or False,
+                    'quota_verified_at': now,
                 })
+            retryable = superseded or any(r.get('retryable') for r in results.values()
+                                          if r['state'] != 'synced')
+        # 重試額度：以目標指紋計；人的動作（保存、手動重試）也重置。背景重試每次消耗一格。
+        reset = fingerprint != self.quota_attempt_fingerprint or trigger in _RESETTING_TRIGGERS
+        count = 0 if reset else (self.quota_retry_count or 0) + (1 if trigger == 'retry' else 0)
+        next_at = False
+        if vals['quota_sync_state'] == 'synced':
+            count = 0
+        elif retryable:
+            if count >= MAX_AUTO_RETRIES:
+                vals['quota_sync_state'] = 'exhausted'
+            else:
+                next_at = now + timedelta(minutes=RETRY_BACKOFF_MINUTES[count])
+        vals.update({'quota_attempt_fingerprint': fingerprint or False,
+                     'quota_last_attempt_at': now, 'quota_retry_count': count,
+                     'quota_next_retry_at': next_at})
         _internal_quota_policy_write(self).write(vals)
+        if next_at:
+            self._schedule_quota_reconcile(next_at)
+        if vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted':
+            self.env['woow_paas_platform.platform_monitor']._singleton()._message_log(body=_(
+                'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync stopped after '
+                '%(count)s automatic retries: %(reason)s. Retry it manually from the Workspace '
+                'quota page.', name=self.name, id=self.id, ws_hash=self.ws_hash,
+                count=MAX_AUTO_RETRIES, reason=vals.get('quota_sync_reason') or ''))
+
+    # --------------------------------------------------------------------- #
+    #  背景同步（ir.cron）                                                   #
+    # --------------------------------------------------------------------- #
+    @api.model
+    def _cron_reconcile_workspace_quotas(self, limit=50):
+        """背景重試／對帳入口：每個工作區各自開一筆交易（新 cursor），處理完就 commit。
+
+        各自交易：快照在拿鎖前才建立（看得到別人剛 commit 的政策與服務集合），而且不會把
+        前面處理過的工作區鎖到整批結束（那會讓開通拿不到鎖而失敗）。
+        """
+        candidates = self.sudo()._quota_reconcile_candidates()
+        for workspace_id in candidates[:limit]:
+            try:
+                with self.env.registry.cursor() as cr:
+                    env = api.Environment(cr, SUPERUSER_ID, {})
+                    env[self._name].browse(workspace_id)._quota_reconcile_one()
+            except Exception:  # noqa: BLE001 —— 一個工作區失敗不影響其他工作區
+                _logger.exception("[#1680] quota reconcile failed workspace=%s", workspace_id)
+        if len(candidates) > limit:
+            self._schedule_quota_reconcile()
+
+    def _quota_reconcile_candidates(self):
+        live = self.env['woow_paas_platform.cloud_service'].sudo().search([
+            ('state', '!=', 'deleting'), ('workspace_id', '!=', False)]).mapped('workspace_id')
+        return self.search([
+            '|', ('id', 'in', live.ids),
+            ('quota_sync_state', 'in', ('pending', 'unconfirmed', 'blocked', 'exhausted')),
+        ], order='id').ids
+
+    def _quota_reconcile_one(self):
+        """單一工作區的背景判斷：目標已變、重試到期、或該讀回驗證才同步；其餘不動。"""
+        self.ensure_one()
+        workspace = self.sudo()
+        if not workspace.exists():
+            return {'state': 'skipped'}
+        now = fields.Datetime.now()
+        target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
+        state = workspace.quota_sync_state
+        if _fingerprint(target, workspace._quota_namespaces()) != workspace.quota_attempt_fingerprint:
+            trigger = 'reconcile'
+        elif (state in ('pending', 'unconfirmed', 'blocked') and workspace.quota_next_retry_at
+              and workspace.quota_next_retry_at <= now):
+            trigger = 'retry'
+        elif state == 'synced' and (not workspace.quota_verified_at
+                                    or workspace.quota_verified_at <= now - VERIFY_INTERVAL):
+            trigger = 'verify'
+        else:
+            return {'state': 'skipped'}
+        return workspace._quota_sync(trigger, nowait=True)
 
     def _quota_create_namespace(self, client, namespace):
         """開通路徑（``create_namespace``）的同一個政策：必要時才降級成不送 quota。
@@ -424,6 +647,10 @@ class WorkspaceQuotaPolicy(models.Model):
         - 工作區正被其他交易同步、拿不到鎖 ⇒ 回 ``(False, 'quota_sync_busy')``：不讀、不送、
           不寫，開通失敗待重試（鎖外推送可能蓋掉對方剛提高的值）。
 
+        #1680：quota 寫入與其他路徑同一套防護——帶新 token 與讀到的 resourceVersion（沒有
+        受管 quota 時是 ``expect_absent``）。前提不成立時 operator 照做基線、不覆寫 quota，
+        這裡記為待同步並排背景重試，開通照常繼續。
+
         回傳 ``(ok, reason)``；``create_namespace`` 的 operator 錯誤原樣 raise，維持既有的
         開通失敗處理。
         """
@@ -433,25 +660,31 @@ class WorkspaceQuotaPolicy(models.Model):
             return False, 'quota_sync_busy'
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
+        fingerprint = _fingerprint(target, [namespace])
         plan = _plan_namespace(client, namespace, target)
+        token = uuid.uuid4().hex if plan.get('guarded') else None
         if plan.get('not_found'):
-            payload, plan = target, dict(plan, state='synced', reason=None,
+            payload, plan = target, dict(plan, state='synced', reason=None, retryable=False,
                                          hard=build_hard(target), pending_decrease=())
+            guard = {'sync_token': token, 'expect_absent': True}
         elif plan['state'] == 'synced':
             payload = plan['payload']
+            guard = {'sync_token': token, 'expected_resource_version': plan['resource_version']}
         elif plan['reason'].startswith('would_lower'):
-            workspace._record_quota_sync(version, {namespace: plan})
+            workspace._record_quota_sync(version, {namespace: plan}, fingerprint, 'provision')
             return True, plan['reason']
         else:
-            workspace._record_quota_sync(version, {namespace: plan})
+            workspace._record_quota_sync(version, {namespace: plan}, fingerprint, 'provision')
             return False, plan['reason']
+        extra = {'quota_guard': guard} if token else {}
         result = _push_result(plan, lambda: client.create_namespace(
             namespace=namespace, cpu_limit=payload['cpu_limit'],
             memory_limit=payload['memory_limit'], storage_limit=payload['storage_limit'],
             workspace_id=self.id or None,
             ephemeral_storage_request=payload.get('ephemeral_storage_request'),
-            ephemeral_storage_limit=payload.get('ephemeral_storage_limit')))
-        workspace._record_quota_sync(version, {namespace: result})
+            ephemeral_storage_limit=payload.get('ephemeral_storage_limit'), **extra),
+            lambda: _read_back(client, namespace, token, payload), token)
+        workspace._record_quota_sync(version, {namespace: result}, fingerprint, 'provision')
         if result.get('error') is not None:
             raise result['error']
         return True, None
@@ -472,65 +705,132 @@ def _plan_namespace(client, namespace, target):
 
     ``push``：可以送出 ``payload``（不會降低任何一項）；``not_found``：叢集上沒有受管
     quota（list 成功、確定沒有這個物件）。其餘情況 ``state`` 已是最終結果。
+    #1680：``retryable`` 標示暫時性失敗（值得自動重試）；``guarded`` 為 operator 是否支援
+    版本防護（GET 有沒有 ``sync_token`` 鍵——舊 operator 會靜默忽略 PUT 的未知欄位，不能
+    用 PUT 有沒有報錯判斷）；``remote_token``／``resource_version`` 是叢集目前的版本。
     """
     if not client:
-        return {'state': 'pending', 'reason': 'operator_not_configured'}
+        return {'state': 'pending', 'reason': 'operator_not_configured', 'retryable': True}
     try:
         report = client.get_namespace_quota(namespace, include_managed=True)
     except PaaSOperatorError as exc:
         unsupported = getattr(exc, 'status_code', None) in (404, 405)
         return {'state': 'blocked',
-                'reason': 'operator_unsupported' if unsupported else 'quota_unreadable'}
+                'reason': 'operator_unsupported' if unsupported else 'quota_unreadable',
+                'retryable': not unsupported}
     managed = report.get('managed_quota') if isinstance(report, dict) else None
     if not isinstance(managed, dict):
-        return {'state': 'blocked', 'reason': 'operator_unsupported'}
+        return {'state': 'blocked', 'reason': 'operator_unsupported', 'retryable': False}
+    guarded = 'sync_token' in managed
     if managed.get('available') is not True:
         reason = managed.get('reason') or 'managed_quota_unavailable'
         if reason == 'managed_quota_not_found':
             if managed.get('namespace_exists') is False:
                 # 確認 namespace 尚不存在：政策已保存，等首次開通套用；不建立空 namespace。
                 return {'state': 'pending_first_deploy', 'reason': 'namespace_not_created',
-                        'not_found': True}
-            return {'state': 'blocked', 'reason': reason, 'not_found': True}
-        return {'state': 'blocked', 'reason': reason}
+                        'not_found': True, 'guarded': guarded, 'retryable': False}
+            return {'state': 'blocked', 'reason': reason, 'not_found': True, 'guarded': guarded,
+                    'retryable': False}
+        return {'state': 'blocked', 'reason': reason, 'retryable': reason in _TRANSIENT_BLOCKED}
     try:
         payload, lowering, pending = merge_never_lower(
             target, managed.get('spec_hard'), managed.get('hard'))
     except QuotaNotProvable as exc:
-        return {'state': 'blocked', 'reason': 'quota_not_provable: %s' % exc}
+        return {'state': 'blocked', 'reason': 'quota_not_provable: %s' % exc, 'retryable': False}
     if lowering:
+        # 永久阻擋：叢集上的值（例如 pvc 12）高於 operator 一定會寫的值；不自動重試。
         return {'state': 'blocked', 'reason': 'would_lower: %s' % ', '.join(sorted(lowering)),
-                'pending_decrease': pending}
+                'pending_decrease': pending, 'retryable': False}
     hard = build_hard(payload)
     spec_hard = managed.get('spec_hard') or {}
     unchanged = all(parse_quantity(spec_hard.get(key)) == parse_quantity(value)
                     for key, value in hard.items())
     return {'state': 'synced', 'hard': hard, 'payload': payload, 'pending_decrease': pending,
-            'push': not unchanged}
+            'push': not unchanged, 'guarded': guarded, 'remote_token': managed.get('sync_token'),
+            'resource_version': managed.get('resource_version')}
 
 
-def _push_result(plan, call):
-    """執行推送（``call()``），把 operator 的結果轉成同步狀態。"""
+def _read_back(client, namespace, token, payload):
+    """推送結果不明時讀回：``True`` 已落地、``False`` 未落地（仍可能在途）、``None`` 讀不到。
+
+    有 token（新 operator）只認 token；舊 operator 只能比值（推送前值不同才會推，所以值相等
+    就是落地了）。
+    """
     try:
-        call()
+        report = client.get_namespace_quota(namespace, include_managed=True)
+    except PaaSOperatorError:
+        return None
+    managed = report.get('managed_quota') if isinstance(report, dict) else None
+    if not isinstance(managed, dict):
+        return None
+    if token:
+        if 'sync_token' not in managed:
+            return None
+        return managed.get('sync_token') == token
+    spec_hard = managed.get('spec_hard')
+    if not isinstance(spec_hard, dict) or not spec_hard:
+        return None
+    return all(parse_quantity(spec_hard.get(key)) == parse_quantity(value)
+               for key, value in build_hard(payload).items())
+
+
+def _push_result(plan, call, readback=None, token=None):
+    """執行推送（``call()``），把 operator 的結果轉成同步狀態。
+
+    結果不明（逾時、5xx、斷線）先讀回：落地就算成功（回應遺失而已）；否則記下在途 token
+    （``expect_token``）——遠端之後帶的若不是它，下一次同步必定以新 token 重推，讓還在途的
+    舊請求因 resourceVersion 已變而再也落不下。409 ``quota_conflict`` 與其他 4xx 是確定沒寫。
+    """
+    base = {'pending_decrease': plan.get('pending_decrease', ()), 'guarded': plan.get('guarded')}
+    try:
+        response = call()
     except PaaSOperatorTimeoutError as exc:
-        # operator 端的 kubectl 可能已套用：結果未知，不是失敗也不是成功。
-        return {'state': 'unconfirmed', 'reason': 'operator_timeout',
-                'pending_decrease': plan.get('pending_decrease', ()), 'error': exc}
+        # operator 端的 kubectl 可能已套用：先讀回，讀不出來就是結果未知，不是失敗也不是成功。
+        landed = readback() if readback else None
+        if landed:
+            return dict(plan, state='synced', expect_token=token, error=exc,
+                        reason='operator_timeout (read back: applied)')
+        return dict(base, state='unconfirmed', retryable=True, expect_token=token, error=exc,
+                    reason='operator_timeout' + (' (read back failed)' if landed is None else ''))
     except PaaSOperatorError as exc:
-        return {'state': 'pending',
-                'reason': 'operator_error: %s' % (exc.status_code or exc.message),
-                'pending_decrease': plan.get('pending_decrease', ()), 'error': exc}
-    return dict(plan, state='synced')
+        code = getattr(exc, 'status_code', None)
+        if code == 409 and plan.get('guarded'):
+            return dict(base, state='pending', reason='quota_conflict', retryable=True, error=exc)
+        if code is not None and 400 <= code < 500:
+            return dict(base, state='pending', reason='operator_error: %s' % code,
+                        retryable=False, error=exc)
+        landed = readback() if readback else None
+        detail = code or exc.message
+        if landed:
+            return dict(plan, state='synced', expect_token=token, error=exc,
+                        reason='operator_error: %s (read back: applied)' % detail)
+        return dict(base, state='pending', reason='operator_error: %s' % detail,
+                    retryable=True, expect_token=token, error=exc)
+    if isinstance(response, dict) and response.get('quota') == 'conflict':
+        # 建立路徑：基線已做、quota 沒覆寫（前提不成立）。
+        return dict(base, state='pending', reason='quota_conflict', retryable=True)
+    return dict(plan, state='synced', expect_token=token)
 
 
-def _sync_namespace(client, namespace, target):
-    """單一 namespace 的不降額同步（PUT）；回傳結果 dict（不 raise）。"""
+def _sync_namespace(client, namespace, target, expected_token=None):
+    """單一 namespace 的不降額同步（PUT）；回傳結果 dict（不 raise）。
+
+    #1680：值不變但遠端 token 不是平台預期的那一個（別的寫入落在那裡）也要重推一次（圍籬）。
+    """
     plan = _plan_namespace(client, namespace, target)
+    if plan['state'] != 'synced':
+        return plan
+    guarded = plan['guarded']
+    if guarded and plan['remote_token'] != expected_token:
+        plan = dict(plan, push=True)
     if not plan.get('push'):
         return plan
     payload = plan['payload']
+    token = uuid.uuid4().hex if guarded else None
+    extra = {'quota_guard': {'sync_token': token,
+                             'expected_resource_version': plan['resource_version']}} if guarded else {}
     return _push_result(plan, lambda: client.update_namespace_quota(
         namespace, payload['cpu_limit'], payload['memory_limit'], payload['storage_limit'],
         ephemeral_storage_request=payload.get('ephemeral_storage_request'),
-        ephemeral_storage_limit=payload.get('ephemeral_storage_limit')))
+        ephemeral_storage_limit=payload.get('ephemeral_storage_limit'), **extra),
+        lambda: _read_back(client, namespace, token, payload), token)

@@ -311,6 +311,7 @@ class PaaSOperatorClient:
         workspace_id: Optional[int] = None,
         ephemeral_storage_request: Optional[str] = None,
         ephemeral_storage_limit: Optional[str] = None,
+        quota_guard: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, str]:
         """Create a Kubernetes namespace with resource quota.
 
@@ -343,6 +344,11 @@ class PaaSOperatorClient:
             data['ephemeral_storage_request'] = ephemeral_storage_request
         if ephemeral_storage_limit:
             data['ephemeral_storage_limit'] = ephemeral_storage_limit
+        # #1680：版本防護寫入（``sync_token`` ＋ ``expected_resource_version``／
+        # ``expect_absent``）。只有確認 operator 支援（GET 回報 ``sync_token`` 鍵）時呼叫端
+        # 才會給；舊 operator 會靜默忽略這些欄位、照樣無條件寫入。
+        if quota_guard:
+            data.update(quota_guard)
         return self._request('POST', '/api/namespaces', data=data)
 
     def update_namespace_quota(
@@ -353,8 +359,12 @@ class PaaSOperatorClient:
         storage_limit: str,
         ephemeral_storage_request: Optional[str] = None,
         ephemeral_storage_limit: Optional[str] = None,
+        quota_guard: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """#278 A1：PUT 整組 ns quota（值 = 存活 service 集重算）。
+
+        #1680 ``quota_guard``：見 ``create_namespace`` 同名參數。前提不成立時 operator 回
+        409 ``quota_conflict``（``PaaSOperatorAPIError``），表示沒有寫入。
 
         Args:
             namespace: 目標命名空間（須以 'paas-ws-' 開頭）
@@ -377,6 +387,7 @@ class PaaSOperatorClient:
                    if ephemeral_storage_request else {}),
                 **({'ephemeral_storage_limit': ephemeral_storage_limit}
                    if ephemeral_storage_limit else {}),
+                **(quota_guard or {}),
             },
             timeout=HELM_OPERATION_TIMEOUT,
         )

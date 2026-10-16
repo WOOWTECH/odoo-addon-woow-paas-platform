@@ -68,6 +68,8 @@
         "data/low_balance_warning_cron.xml",
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",
+        # #1680 Workspace quota 背景重試／對帳
+        "data/workspace_quota_cron.xml",
         "data/agent_session_cron.xml",
         # #1540：限時唯讀資料取回入口的到期關閉 cron
         "data/data_retrieval_cron.xml",

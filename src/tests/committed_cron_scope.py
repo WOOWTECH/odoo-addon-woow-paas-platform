@@ -19,7 +19,8 @@ _CLEANUP_MODELS = (
     ATTEMPT, 'woow_paas_platform.cloud_service_secret', SERVICE,
     'woow_paas_platform.cloud_app_template', 'woow_paas_platform.workspace_access',
     'sh.subscription.subscription', 'product.product', 'product.template', 'sh.subscription.plan',
-    MONITOR, 'woow_paas_platform.workspace', 'res.users', 'res.partner',
+    MONITOR, 'woow_paas_platform.workspace_quota_audit', 'woow_paas_platform.workspace',
+    'res.users', 'res.partner',
 )
 
 

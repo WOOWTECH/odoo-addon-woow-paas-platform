@@ -31,7 +31,12 @@
                 <field name="quota_floor_cpu_display" optional="hide"/>
                 <field name="quota_floor_memory_display" optional="hide"/>
                 <field name="quota_floor_storage_display" optional="hide"/>
-                <field name="quota_sync_state" optional="show"/>
+                <field name="quota_sync_status" optional="show"
+                       decoration-danger="quota_sync_status in ('exhausted', 'blocked')"
+                       decoration-warning="quota_sync_status in ('pending', 'unconfirmed')"
+                       decoration-success="quota_sync_status == 'synced'"/>
+                <field name="quota_sync_unguarded" optional="hide"/>
+                <field name="quota_next_retry_at" optional="hide"/>
             </list>
         </field>
     </record>
@@ -48,11 +53,21 @@
                             class="oe_highlight" groups="base.group_system"/>
                     <button name="action_open_quota_minimum_wizard" type="object"
                             string="Set Quota Minimums" groups="base.group_system"/>
+                    <button name="action_retry_quota_sync" type="object" string="Retry Quota Sync"
+                            groups="base.group_system"
+                            confirm="Retry the quota sync now with the current policy? The push never lowers any cluster value; a blocked push stays blocked."/>
                 </header>
                 <sheet>
                     <h1><field name="name" readonly="True"/></h1>
                     <div class="alert alert-warning" role="alert" invisible="quota_available">
                         Quota observation is unknown or unavailable. Missing values are unknown, not zero.
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="quota_sync_status != 'exhausted'">
+                        Automatic quota sync retries are exhausted. Check the sync detail, then use Retry Quota Sync.
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="not quota_sync_unguarded">
+                        The last push was made without version protection because the operator does not support it.
+                        An older request that finishes late could overwrite it. Upgrade the operator.
                     </div>
                     <p>These are declared ResourceQuota allocations, not live resource utilization.
                         The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity.</p>
@@ -110,11 +125,19 @@
                     </group>
                     <group>
                         <group string="Sync">
-                            <field name="quota_sync_state"/>
+                            <field name="quota_sync_status"/>
+                            <field name="quota_sync_state" string="Last Attempt Result"/>
                             <field name="quota_sync_reason"/>
+                            <field name="quota_sync_unguarded"/>
                             <field name="quota_target_version"/>
                             <field name="quota_synced_version"/>
                             <field name="quota_synced_at"/>
+                            <field name="quota_verified_at"/>
+                        </group>
+                        <group string="Retry">
+                            <field name="quota_last_attempt_at"/>
+                            <field name="quota_retry_count"/>
+                            <field name="quota_next_retry_at"/>
                         </group>
                         <group string="Last Pushed and Pending">
                             <field name="quota_synced_hard"/>
