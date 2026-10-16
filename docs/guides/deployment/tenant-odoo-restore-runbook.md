@@ -3,7 +3,7 @@ title: odoo 還原 runbook（租戶旁路 fallback／restoring 脫困／DR／pla
 category: guides
 status: draft
 created: 2026-10-06T16:40:00Z
-updated: 2026-10-06T16:40:00Z
+updated: 2026-10-16T12:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/prod-clone-neutralization-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -91,8 +91,10 @@ platform release（`paas-odoo-platform`，`paas-system`）預設 `restore.enable
    - 兩支都設 `ttlSecondsAfterFinished`（7 d）。
    - 目標 image 與現役不同時，要**一起改**：initContainer `image-modules` 的 image 與 `WOOW_IMAGE_DIGEST`，以及主容器的 `TARGET_IMAGE_DIGEST`。
    - 跨 ns／release 時，覆寫 `WOOW_RELEASE`／`WOOW_NAMESPACE` 為 manifest 值。不覆寫會 exit 10 `Manifest identity/locale/PG version mismatch; cross-release restore requires support runbook`（演練實測）。
-3. 【agent】建議兩支 Job 都加 `nodeSelector` 釘在 data PVC 目前所在的 node。
+3. 【agent】節點放置（依 chart 版本）：
    - stage 與 switch 都掛 data＋backup 兩顆 RWO PVC。
+   - **chart ≥ 0.2.12**（woow-paas-charts#198）：樣板 pod 自帶 required podAffinity 綁 server pod 同節點；server／cron 已 scale 0（switch、停權中的服務）時自我親和放行、排任意節點。**不必**也**不要**再手動 pin 節點，直接用樣板即可。
+   - **chart ≤ 0.2.11**：樣板沒有 affinity。不 pin 節點會被排到非 server pod 的節點，data／backup PVC 回報 `FailedAttachVolume … Multi-Attach error`，stage Job 卡在 Init 直到 `activeDeadlineSeconds`（商用驗收 DATA-ODOO-005 實測 597 s 後 DeadlineExceeded，沒建 side／stage DB）。**必須**兩支 Job 都加 `nodeSelector` 釘在 data PVC 目前所在的 node（stage 取 server pod 的 node）。
    - 演練時 switch pod 被排到另一台 node，Longhorn 重新 attach，Job 總時長 99 s，腳本本身只跑 2 s。
 
 ### P4 stage（不停機）
