@@ -9,7 +9,9 @@ from src.models.schemas import (
     NamespaceCreateRequest,
     NamespaceQuotaUpdateRequest,
 )
-from src.services.helm import KubectlException, KubernetesService, validate_namespace
+from src.services.helm import (
+    KubectlException, KubernetesService, QuotaWriteConflict, validate_namespace,
+)
 from src.services.namespace_quota import (
     QUOTA_UNREADABLE, managed_quota_report, quota_report, unavailable_report,
 )
@@ -49,6 +51,9 @@ async def create_namespace(request: NamespaceCreateRequest):
             workspace_id=request.workspace_id,
             ephemeral_storage_request=request.ephemeral_storage_request,
             ephemeral_storage_limit=request.ephemeral_storage_limit,
+            sync_token=request.sync_token,
+            expected_resource_version=request.expected_resource_version,
+            expect_absent=request.expect_absent,
         )
         logger.info(f"Created namespace {request.name} with quota")
         return result
@@ -78,9 +83,16 @@ async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest
             name, request.cpu_limit, request.memory_limit, request.storage_limit,
             ephemeral_storage_request=request.ephemeral_storage_request,
             ephemeral_storage_limit=request.ephemeral_storage_limit,
+            sync_token=request.sync_token,
+            expected_resource_version=request.expected_resource_version,
+            expect_absent=request.expect_absent,
         )
         logger.info(f"Updated quota for namespace {name}")
         return result
+    except QuotaWriteConflict:
+        # #1680：前提不成立 ⇒ 沒有寫入；平台重新讀取後再決定要不要推送。
+        logger.warning("Guarded quota write conflicted for %s; quota left unchanged", name)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="quota_conflict")
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
