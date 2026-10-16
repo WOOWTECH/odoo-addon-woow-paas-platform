@@ -19,6 +19,7 @@ from proxy_harness import (
     USER_JWT,
     USER_PAT,
     USERNAME,
+    VALKEY_PASSWORD,
     WEB_SECRET,
     Harness,
     ok,
@@ -104,14 +105,15 @@ def run_everything(h):
             ],
         ),
     ]
-    # the signature value that went over the wire with the first request
-    sigs = [v for k, v in h.sign_headers("GET", "/api/status") if k == "X-Woow-Proxy-Sig"]
 
     def boom(request):
         raise httpx.ReadError(f"reset while sending Authorization: Bearer {USER_PAT}")
 
     h.upstream.on("GET", "/api/token/9", boom)
     results.append(h.user("GET", "/api/token/9"))
+    # every signature value that actually went over the wire
+    sigs = [v for headers in h.sent for k, v in headers if k == "X-Woow-Proxy-Sig"]
+    assert len(sigs) >= 10
     return results, sigs
 
 
@@ -136,6 +138,7 @@ def test_logs_never_contain_secrets_and_audit_every_reveal(stdout_logs):
         PROOF,
         PASSWORD,
         REVEALED_KEY,
+        VALKEY_PASSWORD,
         *sigs,
     ):
         assert secret not in out
@@ -148,13 +151,15 @@ def test_logs_never_contain_secrets_and_audit_every_reveal(stdout_logs):
         assert "/api/token/42" not in json.dumps(line)  # templates, not concrete paths
 
     reveals = [line for line in lines if line.get("event") == "audit" and line["action"] == "reveal"]
-    assert [(r["token_id"], r["result"]) for r in reveals] == [(42, "forwarded"), (43, "denied")]
+    # one line before the call ("sending") and one with the outcome
+    assert [(r["token_id"], r["result"]) for r in reveals] == [(42, "sending"), (42, "forwarded"), (43, "denied")]
     for r in reveals:
         assert r["kid"] == "web-2026a" and r["ip"].startswith("198.18.")
     quota = [line for line in lines if line.get("event") == "audit" and line["action"] == "add_quota"]
     assert [(q.get("target_user_id"), q.get("value"), q["result"], q.get("reason")) for q in quota] == [
+        (123, 15625, "sending", None),
         (123, 15625, "forwarded", None),
-        (None, None, "denied", "manage_mode"),  # the override attempt is audited too
+        (123, 1, "denied", "manage_mode"),  # the override attempt: against whom, for how much
     ]
 
 

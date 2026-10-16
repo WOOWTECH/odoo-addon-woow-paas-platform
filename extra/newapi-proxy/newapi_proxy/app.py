@@ -1,26 +1,34 @@
 """The request pipeline (DESIGN §1.4.2).
 
-Order of checks, each failing closed:
+Order of checks on the proxy port, each failing closed:
 
 1. raw path / query canonical form ............................ 400
-2. body size (signature covers the body) ...................... 413
-3. HMAC: kid, ts ±30 s, signature, replay within 60 s ......... 401
-4. identity, synthetic client IP .............................. 400
-5. key class (WEB → user interactive routes only), break-glass  403
-6. route whitelist, query keys and values ..................... 403 / 400
-7. Authorization / X-Security-Proof handling .................. 400 / 403
-8. JSON body + body policy .................................... 400 / 403
-9. in-flight cap per identity ................................. 503 busy
-10. reveal / add_quota pre-checks, add_quota hourly budget .... 403 / 429
-11. one upstream call, no retry: connect 502 | reset 502 | timeout 504
+2. signature headers present and well-formed, kid known, ts ±30 s  401
+3. X-Woow-Read-Timeout: the whole request's deadline .......... 400
+4. body: size and a 5 s read deadline (signature covers it) ... 413 / 408
+5. HMAC signature ............................................. 401
+6. replay: (kid, nonce) once — this replica, then Valkey ...... 401 / 503 busy
+7. identity, synthetic client IP .............................. 400
+8. key class (WEB → user interactive routes only), break-glass  403
+9. route whitelist, query keys and values ..................... 403 / 400
+10. Authorization / X-Security-Proof handling ................. 400 / 403
+11. JSON body + body policy ................................... 400 / 403
+12. in-flight cap per identity ................................ 503 busy
+13. reveal / add_quota pre-checks, add_quota hourly budget .... 403 denied / 429
+14. one upstream call, no retry: connect 502 | reset 502 | timeout 504
 
 Upstream responses pass through with only Content-Type, X-Oneapi-Request-Id
 and Retry-After kept (Set-Cookie and everything else dropped). Proxy-made
 errors carry ``X-Woow-Proxy-Error: <class>``.
+
+``/healthz``, ``/readyz`` and ``/metrics`` are served by ``AdminApp`` on a
+separate listener (``PROXY_ADMIN_PORT``); on the proxy port they are just
+unsigned requests (401).
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import ipaddress
 import json
@@ -35,12 +43,15 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 
 from . import __version__, canonical, logs, policy, routetable, signing
-from .limits import HourlyBudget, InflightLimiter, ReplayCache
+from .limits import CachedCheck, HourlyBudget, InflightLimiter, ReplayCache
 from .metrics import Metrics
-from .settings import IDENTITIES, SYSTEM_IPS, Settings
-from .upstream import CONNECT, Upstream, UpstreamError
+from .replaystore import ReplayStoreUnavailable, ValkeyReplayStore
+from .settings import IDENTITIES, READINESS_IP, SYSTEM_IPS, Settings
+from .upstream import CONNECT, Upstream, UpstreamError, UpstreamResponse
 
 ERROR_HEADER = "X-Woow-Proxy-Error"
+#: Marks a relayed answer to a pre-check GET (the guarded call was not sent).
+PRECHECK_HEADER = "X-Woow-Proxy-Precheck"
 
 _KID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}", re.ASCII)
 _TS_RE = re.compile(r"[0-9]{1,12}", re.ASCII)
@@ -58,9 +69,17 @@ _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}", re.ASCII)
 _RETRY_AFTER_RE = re.compile(r"[0-9]{1,6}", re.ASCII)
 _CONTENT_TYPE_RE = re.compile(r"[A-Za-z0-9!#$&^_.+/=; -]{1,128}", re.ASCII)
 
-#: Minimum read time left before the main upstream call is attempted.
+#: Minimum time left before an upstream call is attempted at all.
 MIN_SEND_BUDGET = 0.5
-PRECHECK_READ_TIMEOUT = 3.0
+#: Upper bound for one pre-check GET (reveal / add_quota target).
+PRECHECK_BUDGET = 3.0
+#: The request body must arrive within this many seconds of the headers.
+BODY_TIMEOUT = 5.0
+#: Readiness: one upstream /api/status (and Valkey PING) at a time, reused for
+#: READY_OK_TTL seconds (READY_FAIL_TTL after a failure). Total < probe timeout.
+READY_UPSTREAM_BUDGET = 2.5
+READY_OK_TTL = 5.0
+READY_FAIL_TTL = 1.0
 
 
 class ProxyError(Exception):
@@ -70,6 +89,8 @@ class ProxyError(Exception):
         "bad_request": 400,
         "auth": 401,
         "policy": 403,
+        "denied": 403,
+        "body_timeout": 408,
         "too_large": 413,
         "budget": 429,
         "internal": 500,
@@ -90,6 +111,8 @@ class ProxyError(Exception):
 
 @dataclass
 class Ctx:
+    #: Proxy clock (monotonic) at arrival: the request's deadline counts from here.
+    started: float
     method: str = "-"
     route: str = "-"
     identity: str = "-"
@@ -100,7 +123,7 @@ class Ctx:
     proxy_error: str | None = None
     reason: str | None = None
     upstream_status: int | None = None
-    started: float = field(default_factory=time.monotonic)
+    t0: float = field(default_factory=time.monotonic)
 
 
 def _single(request: Request, name: str) -> str | None:
@@ -143,10 +166,49 @@ def _json_or_none(body: bytes) -> Any:
         return None
 
 
+def _nonempty_str(value: Any) -> bool:
+    return type(value) is str and value != ""
+
+
+def _int_field(obj: dict, key: str) -> int | None:
+    value = obj.get(key)
+    return value if type(value) is int else None  # bool excluded on purpose
+
+
+def proves_not_executed(status: int, body: bytes) -> bool:
+    """new-api answered without running the handler's write (DESIGN §3.4, I2 §4.3).
+
+    429 (rate limit, before the handler), 5xx with an empty body (the limiter
+    lost Valkey), any refusal carrying a stable ``code`` (auth / PAT / proof
+    middleware), or HTTP 200 ``success:false`` with a ``message_key`` (the
+    handler refused and rolled back). Everything else — no ``message_key``,
+    ``new_api_panic``, non-JSON — is an unknown outcome.
+    """
+    if status == 429:
+        return True
+    if status >= 500 and body == b"":
+        return True
+    data = _json_or_none(body)
+    if not isinstance(data, dict) or data.get("success") is True:
+        return False
+    if _nonempty_str(data.get("code")):
+        return True
+    return status == 200 and data.get("success") is False and _nonempty_str(data.get("message_key"))
+
+
 def _days_left(expires_at: int | None, now: int) -> int | None:
     if expires_at is None:
         return None
     return (expires_at - now) // 86400
+
+
+def _json_response(body: dict, status: int = 200) -> Response:
+    return Response(
+        json.dumps(body, separators=(",", ":")).encode(),
+        status_code=status,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class Proxy:
@@ -156,6 +218,7 @@ class Proxy:
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
+        replay_store: Any = None,
     ):
         self.settings = settings
         self.clock = clock
@@ -167,9 +230,25 @@ class Proxy:
             transport=transport,
         )
         self.replay = ReplayCache(signing.REPLAY_TTL_SECONDS, settings.replay_cache_max)
+        if replay_store is None and settings.valkey_host is not None:
+            replay_store = ValkeyReplayStore(
+                settings.valkey_host,
+                settings.valkey_port,
+                settings.valkey_user,
+                settings.valkey_password or "",
+            )
+        #: Shared (all replicas) replay record; None only with one replica.
+        self.shared_replay = replay_store
         self.inflight = InflightLimiter(dict(settings.inflight))
         self.budget = HourlyBudget(settings.add_quota_hourly_cap)
         self.metrics = Metrics()
+        self.readiness = CachedCheck(
+            self._readiness_check,
+            self.monotonic,
+            is_ok=lambda result: result["ready"],
+            ok_ttl=READY_OK_TTL,
+            fail_ttl=READY_FAIL_TTL,
+        )
         self.metrics.gauge(
             "newapi_proxy_inflight",
             lambda: {(("identity", k),): v for k, v in self.inflight.current.items()},
@@ -178,6 +257,11 @@ class Proxy:
             "newapi_proxy_add_quota_budget_used",
             lambda: {(): self.budget.used(self.monotonic())},
         )
+
+    async def aclose(self) -> None:
+        await self.upstream.aclose()
+        if self.shared_replay is not None:
+            await self.shared_replay.aclose()
 
     # --- helpers ---------------------------------------------------------------
 
@@ -218,16 +302,12 @@ class Proxy:
     def _remaining(self, deadline: float) -> float:
         return deadline - self.monotonic()
 
-    # --- ASGI endpoint -----------------------------------------------------------
+    # --- proxy port --------------------------------------------------------------
 
     async def endpoint(self, request: Request) -> Response:
-        ctx = Ctx(method=request.method)
-        raw_path = request.scope.get("raw_path")
+        ctx = Ctx(started=self.monotonic(), method=request.method)
         try:
-            if raw_path in (b"/healthz", b"/readyz", b"/metrics"):
-                response = await self._health(request, raw_path)
-            else:
-                response = await self._proxy(request, ctx)
+            response = await self._proxy(request, ctx)
         except ProxyError as err:
             response = self._error(err, ctx)
         except ClientDisconnect:
@@ -235,8 +315,7 @@ class Proxy:
         except Exception as exc:  # noqa: BLE001 - last resort, type name only
             logs.event("internal_error", logging.ERROR, exc_type=type(exc).__name__, route=ctx.route)
             response = self._error(ProxyError("internal", "internal"), ctx)
-        if raw_path not in (b"/healthz", b"/readyz", b"/metrics"):
-            self._log_access(ctx, response.status_code)
+        self._log_access(ctx, response.status_code)
         return response
 
     def _error(self, err: ProxyError, ctx: Ctx) -> Response:
@@ -269,7 +348,7 @@ class Proxy:
             route=ctx.route,
             status=status,
             upstream_status=ctx.upstream_status,
-            ms=round((time.monotonic() - ctx.started) * 1000, 1),
+            ms=round((time.monotonic() - ctx.t0) * 1000, 1),
             request_id=ctx.request_id,
             ip=ctx.ip,
             identity=ctx.identity,
@@ -278,55 +357,6 @@ class Proxy:
             proxy_error=ctx.proxy_error,
             reason=ctx.reason,
         )
-
-    # --- health ----------------------------------------------------------------
-
-    async def _health(self, request: Request, raw_path: bytes) -> Response:
-        if request.method != "GET" or request.scope.get("query_string"):
-            raise ProxyError("policy", "health_method")
-        if raw_path == b"/healthz":
-            return Response(b'{"ok":true}', media_type="application/json")
-        if raw_path == b"/metrics":
-            return Response(self.metrics.render(), media_type="text/plain; version=0.0.4")
-        return await self._readyz()
-
-    async def _readyz(self) -> Response:
-        now = self._now()
-        upstream_state = "ok"
-        try:
-            resp = await self.upstream.send(
-                "GET",
-                "/api/status",
-                self._base_headers(SYSTEM_IPS["anon"], write=False),
-                b"",
-                read_timeout=PRECHECK_READ_TIMEOUT,
-                write=False,
-            )
-            data = _json_or_none(resp.body)
-            ready = resp.status == 200 and isinstance(data, dict) and data.get("success") is True
-            if not ready:
-                upstream_state = f"http_{resp.status}"
-        except UpstreamError as err:
-            ready = False
-            upstream_state = err.kind
-        body = {
-            "ready": ready,
-            "upstream": upstream_state,
-            "ap_configured": self.settings.ap_token is not None,
-            "op_configured": self.settings.op_token is not None,
-            "ap_days_left": _days_left(self.settings.ap_expires_at, now),
-            "op_days_left": _days_left(self.settings.op_expires_at, now),
-            "break_glass": self.break_glass_active(now),
-            "version": __version__,
-        }
-        return Response(
-            json.dumps(body, separators=(",", ":")).encode(),
-            status_code=200 if ready else 503,
-            media_type="application/json",
-            headers={"Cache-Control": "no-store"},
-        )
-
-    # --- proxy -----------------------------------------------------------------
 
     async def _read_body(self, request: Request) -> bytes:
         limit = self.settings.max_body_bytes
@@ -337,11 +367,38 @@ class Proxy:
             if int(length) > limit:
                 raise ProxyError("too_large", "body_too_large")
         body = bytearray()
-        async for chunk in request.stream():
-            body += chunk
-            if len(body) > limit:
-                raise ProxyError("too_large", "body_too_large")
+        try:
+            # Before the body is read only a known kid and a fresh ts have been
+            # checked (neither is secret): a slow sender must not hold a slot.
+            async with asyncio.timeout(BODY_TIMEOUT):
+                async for chunk in request.stream():
+                    body += chunk
+                    if len(body) > limit:
+                        raise ProxyError("too_large", "body_too_large")
+        except TimeoutError:
+            raise ProxyError("body_timeout", "body_timeout") from None
         return bytes(body)
+
+    async def _claim_nonce(self, kid: str, nonce: str) -> None:
+        """Each (kid, nonce) is accepted once, on whichever replica sees it first."""
+        key = f"{kid}:{nonce}"
+        local = self.replay.add(key, self.monotonic())
+        if local == "replay":
+            raise ProxyError("auth", "auth_replay")
+        if local == "full":
+            raise ProxyError("busy", "replay_cache_full")
+        if self.shared_replay is None:
+            return
+        try:
+            fresh = await self.shared_replay.claim(key, signing.REPLAY_TTL_SECONDS)
+        except ReplayStoreUnavailable as err:
+            # No shared record = no replay protection across replicas: refuse
+            # (new-api itself is down when its Valkey is). Not sent: the client
+            # re-sends with a new nonce.
+            self.metrics.inc("newapi_proxy_replay_store_errors_total", kind=err.kind)
+            raise ProxyError("busy", "replay_store") from None
+        if not fresh:
+            raise ProxyError("auth", "auth_replay")
 
     async def _proxy(self, request: Request, ctx: Ctx) -> Response:
         settings = self.settings
@@ -355,10 +412,11 @@ class Proxy:
 
         kid = _single(request, signing.KID_HEADER)
         ts = _single(request, signing.TS_HEADER)
+        nonce = _single(request, signing.NONCE_HEADER)
         sig = _single(request, signing.SIG_HEADER)
         identity = _single(request, signing.IDENTITY_HEADER)
         client_ip = _single(request, signing.CLIENT_IP_HEADER) or ""
-        if not (kid and ts and sig and identity):
+        if not (kid and ts and nonce and sig and identity):
             raise ProxyError("auth", "auth_missing")
         if not _IDENTITY_FORMAT.fullmatch(identity) or not _CLIENT_IP_FORMAT.fullmatch(client_ip):
             raise ProxyError("bad_request", "identity_format")
@@ -372,18 +430,27 @@ class Proxy:
             raise ProxyError("auth", "auth_ts")
         if abs(now - int(ts)) > signing.MAX_SKEW_SECONDS:
             raise ProxyError("auth", "auth_ts_skew")
+        if not signing.NONCE_RE.fullmatch(nonce):
+            raise ProxyError("auth", "auth_nonce_format")
         if not _SIG_RE.fullmatch(sig):
             raise ProxyError("auth", "auth_sig_format")
 
+        read_timeout_raw = _single(request, signing.READ_TIMEOUT_HEADER)
+        if read_timeout_raw is None:
+            read_timeout = settings.default_read_timeout
+        elif _READ_TIMEOUT_RE.fullmatch(read_timeout_raw):
+            read_timeout = float(read_timeout_raw)
+        else:
+            raise ProxyError("bad_request", "read_timeout")
+        # Everything from here on — body, replay record, pre-checks and the
+        # upstream call — ends by the caller's read timeout.
+        deadline = ctx.started + read_timeout
+
         body = await self._read_body(request)
-        message = signing.string_to_sign(method, path, query, body, ts, identity, client_ip)
+        message = signing.string_to_sign(method, path, query, body, ts, nonce, kid, identity, client_ip)
         if not signing.signature_matches(secret, message, sig):
             raise ProxyError("auth", "auth_sig")
-        replay = self.replay.add(sig, self.monotonic())
-        if replay == "replay":
-            raise ProxyError("auth", "auth_replay")
-        if replay == "full":
-            raise ProxyError("busy", "replay_cache_full")
+        await self._claim_nonce(kid, nonce)
 
         # identity and synthetic source address
         if identity not in IDENTITIES:
@@ -458,14 +525,6 @@ class Proxy:
         elif proof is not None:
             raise ProxyError("bad_request", "proof_not_allowed")
 
-        read_timeout_raw = _single(request, signing.READ_TIMEOUT_HEADER)
-        if read_timeout_raw is None:
-            read_timeout = settings.default_read_timeout
-        elif _READ_TIMEOUT_RE.fullmatch(read_timeout_raw):
-            read_timeout = float(read_timeout_raw)
-        else:
-            raise ProxyError("bad_request", "read_timeout")
-
         # body policy
         validated: dict | None = None
         if route.body == "none":
@@ -477,8 +536,16 @@ class Proxy:
             try:
                 validated = route.body_policy(obj, policy.PolicyContext(settings, now))
             except policy.PolicyDenied as err:
-                # e.g. an add_quota "override" attempt: worth an audit line.
-                self._audit(route, {"kid": kid, "ip": ip}, result="denied", reason=err.reason)
+                # e.g. an add_quota "override" attempt: worth an audit line that
+                # says against whom and for how much (only exact int fields).
+                fields: dict[str, Any] = {"kid": kid, "ip": ip}
+                if route.audit == "add_quota":
+                    target, value = _int_field(obj, "id"), _int_field(obj, "value")
+                    if target is not None:
+                        fields["target_user_id"] = target
+                    if value is not None:
+                        fields["value"] = value
+                self._audit(route, fields, result="denied", reason=err.reason)
                 raise ProxyError("policy", err.reason) from None
             upstream_body = json.dumps(validated, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode(
                 "ascii"
@@ -488,7 +555,7 @@ class Proxy:
             raise ProxyError("busy", "inflight")
         try:
             return await self._forward(
-                ctx, matched, method, query, ip, upstream_auth, proof, upstream_body, validated, read_timeout, now
+                ctx, matched, method, query, ip, upstream_auth, proof, upstream_body, validated, deadline
             )
         finally:
             self.inflight.release(identity)
@@ -504,11 +571,9 @@ class Proxy:
         proof: str | None,
         upstream_body: bytes,
         validated: dict | None,
-        read_timeout: float,
-        now: int,
+        deadline: float,
     ) -> Response:
         route = matched.route
-        deadline = self.monotonic() + read_timeout
         write = method != "GET"
         headers = self._base_headers(ip, write)
         if upstream_auth:
@@ -524,33 +589,51 @@ class Proxy:
         if route.special == "reveal":
             token_id = int(matched.params["id"])
             audit_fields["token_id"] = token_id
-            await self._reveal_precheck(route, token_id, ip, upstream_auth, deadline, now, audit_fields)
+            relayed = await self._reveal_precheck(ctx, route, token_id, ip, upstream_auth, deadline, audit_fields)
+            if relayed is not None:
+                return relayed
         elif route.special == "manage":
             assert validated is not None
             audit_fields.update(target_user_id=validated["id"], value=validated["value"])
-            reservation = await self._manage_precheck(route, validated, deadline, audit_fields)
+            reservation, relayed = await self._manage_precheck(ctx, route, validated, deadline, audit_fields)
+            if relayed is not None:
+                return relayed
 
-        remaining = self._remaining(deadline)
-        if remaining < MIN_SEND_BUDGET:
+        budget = self._remaining(deadline)
+        if budget < MIN_SEND_BUDGET:
             if reservation is not None:
                 self.budget.release(reservation)
             self._audit(route, audit_fields, result="not_sent", reason="deadline")
             raise ProxyError("connect", "deadline")
+        # Written *before* the call: if this pod dies mid-call (OOM, SIGKILL,
+        # shutdown timeout) the reveal / add_quota is still on record as
+        # possibly executed — the case reconciliation needs evidence for.
+        self._audit(route, audit_fields, result="sending")
         try:
-            resp = await self.upstream.send(method, url, headers, upstream_body, read_timeout=remaining, write=write)
+            resp = await self.upstream.send(method, url, headers, upstream_body, budget=budget, write=write)
         except UpstreamError as err:
             if reservation is not None and err.kind == CONNECT:
                 self.budget.release(reservation)
             self.metrics.inc("newapi_proxy_upstream_errors_total", kind=err.kind, exc=err.exc_type)
             self._audit(route, audit_fields, result=err.kind)
             raise ProxyError(err.kind, err.detail or f"upstream_{err.kind}") from None
+        except asyncio.CancelledError:
+            self._audit(route, audit_fields, result="cancelled")
+            raise
         ctx.upstream_status = resp.status
         response = self._relay(resp, ctx)
-        self._audit(route, audit_fields, result="forwarded", status=resp.status, request_id=ctx.request_id)
-        if route.special == "manage" and resp.status == 200:
+        outcome: dict[str, Any] = {"result": "forwarded", "status": resp.status, "request_id": ctx.request_id}
+        if reservation is not None:
+            if proves_not_executed(resp.status, resp.body):
+                # new-api's answer shows nothing was credited: give it back.
+                self.budget.release(reservation)
+                outcome["budget"] = "released"
+            else:
+                outcome["budget"] = "kept"
             answer = _json_or_none(resp.body)
-            if isinstance(answer, dict) and answer.get("success") is True:
+            if resp.status == 200 and isinstance(answer, dict) and answer.get("success") is True:
                 self.metrics.inc("newapi_proxy_add_quota_value_total", validated["value"])
+        self._audit(route, audit_fields, **outcome)
         return response
 
     def _audit(self, route: routetable.Route, fields: dict, **outcome: Any) -> None:
@@ -560,46 +643,75 @@ class Proxy:
         self.metrics.inc(metric, result=str(outcome.get("result")))
         logs.audit(route.audit, **fields, **outcome)
 
-    async def _precheck_get(self, url: str, ip: str, auth: str, deadline: float, what: str) -> dict:
-        """GET used to vet a guarded call. Any failure means it was not sent."""
-        timeout = min(PRECHECK_READ_TIMEOUT, self._remaining(deadline))
-        if timeout < MIN_SEND_BUDGET:
+    async def _precheck_get(
+        self, ctx: Ctx, url: str, ip: str, auth: str, deadline: float, what: str
+    ) -> tuple[dict | None, UpstreamResponse | None]:
+        """GET that vets a guarded call; the guarded call is sent only on ``(data, None)``.
+
+        * ``(data, None)``: HTTP 200 ``success:true`` — go on with ``data``.
+        * ``(None, resp)``: new-api gave a definite refusal (a ``code``, or
+          ``success:false`` with a ``message_key``, e.g. the UP / AP is
+          revoked): relay it as the answer, so the client classifies it
+          exactly as it would the guarded call's own refusal.
+        * ``ProxyError("denied", "<what>_not_found")``: ``record not found``.
+        * ``ProxyError("connect", …)``: transport failure, 429, 5xx without a
+          ``code``, or an answer without a definite meaning (a DB error) —
+          nothing was sent, safe to re-send.
+        """
+        budget = min(PRECHECK_BUDGET, self._remaining(deadline) - MIN_SEND_BUDGET)
+        if budget < MIN_SEND_BUDGET:
             raise ProxyError("connect", "deadline")
         headers = self._base_headers(ip, write=False)
         headers["Authorization"] = auth
         try:
-            resp = await self.upstream.send("GET", url, headers, b"", read_timeout=timeout, write=False)
+            resp = await self.upstream.send("GET", url, headers, b"", budget=budget, write=False)
         except UpstreamError as err:
             self.metrics.inc("newapi_proxy_upstream_errors_total", kind=err.kind, exc=err.exc_type)
-            # The guarded call itself was never sent.
             raise ProxyError("connect", f"{what}_precheck_{err.kind}") from None
-        if resp.status != 200:
+        data = _json_or_none(resp.body)
+        refusal = isinstance(data, dict) and data.get("success") is not True
+        has_code = refusal and _nonempty_str(data.get("code"))
+        if resp.status == 429 or (resp.status >= 500 and not has_code):
             extra = {}
             retry_after = resp.headers.get("retry-after")
             if retry_after and _RETRY_AFTER_RE.fullmatch(retry_after):
                 extra["Retry-After"] = retry_after
             raise ProxyError("connect", f"{what}_precheck_http_{resp.status}", headers=extra)
-        data = _json_or_none(resp.body)
+        if has_code or (
+            resp.status == 200 and refusal and data.get("success") is False and _nonempty_str(data.get("message_key"))
+        ):
+            return None, resp
+        if resp.status != 200:
+            raise ProxyError("connect", f"{what}_precheck_http_{resp.status}")
         if not isinstance(data, dict):
             raise ProxyError("connect", f"{what}_precheck_body")
-        return data
+        if data.get("success") is True:
+            return data, None
+        if data.get("message") == "record not found":
+            raise ProxyError("denied", f"{what}_not_found")
+        raise ProxyError("connect", f"{what}_precheck_body")
 
-    async def _reveal_precheck(self, route, token_id, ip, auth, deadline, now, fields) -> None:
+    def _relay_precheck(self, ctx: Ctx, resp: UpstreamResponse, what: str) -> Response:
+        ctx.upstream_status = resp.status
+        return self._relay(resp, ctx, extra={PRECHECK_HEADER: what})
+
+    async def _reveal_precheck(self, ctx, route, token_id, ip, auth, deadline, fields) -> Response | None:
         """Reveal only wp_ keys created within the last 120 s (〔REV〕2)."""
         try:
-            data = await self._precheck_get(f"/api/token/{token_id}", ip, auth, deadline, "reveal")
+            data, relay = await self._precheck_get(ctx, f"/api/token/{token_id}", ip, auth, deadline, "reveal")
         except ProxyError as err:
-            self._audit(route, fields, result="not_sent", reason=err.reason)
+            self._audit(route, fields, result="denied" if err.kind == "denied" else "not_sent", reason=err.reason)
             raise
-        if data.get("success") is not True:
-            self._audit(route, fields, result="denied", reason="reveal_token_unknown")
-            raise ProxyError("policy", "reveal_token_unknown")
-        denial = policy.reveal_denial(data.get("data"), token_id, now)
+        if relay is not None:
+            self._audit(route, fields, result="precheck_relayed", status=relay.status)
+            return self._relay_precheck(ctx, relay, "reveal")
+        denial = policy.reveal_denial(data.get("data"), token_id, self._now())
         if denial is not None:
             self._audit(route, fields, result="denied", reason=denial)
-            raise ProxyError("policy", denial)
+            raise ProxyError("denied", denial)
+        return None
 
-    async def _manage_precheck(self, route, validated: dict, deadline: float, fields: dict):
+    async def _manage_precheck(self, ctx, route, validated: dict, deadline: float, fields: dict):
         """Hourly budget, then the target must be a PaaS user (role 1, default)."""
         reservation = self.budget.reserve(validated["value"], self.monotonic())
         if reservation is None:
@@ -607,7 +719,8 @@ class Proxy:
             logs.event("add_quota_budget_exhausted", logging.WARNING, cap=self.budget.cap)
             raise ProxyError("budget", "hourly_cap")
         try:
-            data = await self._precheck_get(
+            data, relay = await self._precheck_get(
+                ctx,
                 f"/api/user/{validated['id']}",
                 SYSTEM_IPS["ap"],
                 f"Bearer {self.settings.ap_token}",
@@ -616,17 +729,21 @@ class Proxy:
             )
         except ProxyError as err:
             self.budget.release(reservation)
-            self._audit(route, fields, result="not_sent", reason=err.reason)
+            self._audit(route, fields, result="denied" if err.kind == "denied" else "not_sent", reason=err.reason)
             raise
-        ctx = policy.PolicyContext(self.settings, self._now())
-        if data.get("success") is not True or not policy.manage_target_ok(data.get("data"), validated["id"], ctx):
+        if relay is not None:
+            self.budget.release(reservation)
+            self._audit(route, fields, result="precheck_relayed", status=relay.status)
+            return None, self._relay_precheck(ctx, relay, "manage")
+        pctx = policy.PolicyContext(self.settings, self._now())
+        if not policy.manage_target_ok(data.get("data"), validated["id"], pctx):
             self.budget.release(reservation)
             self._audit(route, fields, result="denied", reason="manage_target")
-            raise ProxyError("policy", "manage_target")
-        return reservation
+            raise ProxyError("denied", "manage_target")
+        return reservation, None
 
-    def _relay(self, resp, ctx: Ctx) -> Response:
-        headers = {"Cache-Control": "no-store"}
+    def _relay(self, resp: UpstreamResponse, ctx: Ctx, extra: dict[str, str] | None = None) -> Response:
+        headers = {"Cache-Control": "no-store", **(extra or {})}
         content_type = resp.headers.get("content-type")
         if content_type and _CONTENT_TYPE_RE.fullmatch(content_type):
             headers["Content-Type"] = content_type
@@ -639,9 +756,68 @@ class Proxy:
             headers["Retry-After"] = retry_after
         return Response(resp.body, status_code=resp.status, headers=headers)
 
+    # --- admin port: health, readiness, metrics -------------------------------------
+
+    async def admin(self, request: Request) -> Response:
+        raw_path = request.scope.get("raw_path")
+        if request.method != "GET" or request.scope.get("query_string"):
+            return _json_response({"ok": False, "error": "method"}, 405)
+        if raw_path == b"/healthz":
+            return _json_response({"ok": True})
+        if raw_path == b"/metrics":
+            return Response(self.metrics.render(), media_type="text/plain; version=0.0.4")
+        if raw_path == b"/readyz":
+            return await self._readyz()
+        return _json_response({"ok": False, "error": "not_found"}, 404)
+
+    async def _check_upstream(self) -> str:
+        try:
+            resp = await self.upstream.send(
+                "GET",
+                "/api/status",
+                self._base_headers(READINESS_IP, write=False),
+                b"",
+                budget=READY_UPSTREAM_BUDGET,
+                write=False,
+            )
+        except UpstreamError as err:
+            return err.kind
+        if resp.status == 429:
+            # new-api answered: reachable, only a rate-limit bucket is full.
+            return "rate_limited"
+        data = _json_or_none(resp.body)
+        if resp.status == 200 and isinstance(data, dict) and data.get("success") is True:
+            return "ok"
+        return f"http_{resp.status}"
+
+    async def _check_replay_store(self) -> str:
+        if self.shared_replay is None:
+            return "local"
+        return "ok" if await self.shared_replay.ping() else "unavailable"
+
+    async def _readiness_check(self) -> dict:
+        upstream, store = await asyncio.gather(self._check_upstream(), self._check_replay_store())
+        ready = upstream in ("ok", "rate_limited") and store in ("ok", "local")
+        self.metrics.inc("newapi_proxy_readiness_checks_total", result="ready" if ready else "not_ready")
+        return {"ready": ready, "upstream": upstream, "replay_store": store}
+
+    async def _readyz(self) -> Response:
+        check = await self.readiness.get()
+        now = self._now()
+        body = {
+            **check,
+            "ap_configured": self.settings.ap_token is not None,
+            "op_configured": self.settings.op_token is not None,
+            "ap_days_left": _days_left(self.settings.ap_expires_at, now),
+            "op_days_left": _days_left(self.settings.op_expires_at, now),
+            "break_glass": self.break_glass_active(now),
+            "version": __version__,
+        }
+        return _json_response(body, 200 if check["ready"] else 503)
+
 
 class ProxyApp:
-    """Plain ASGI entry: every HTTP request goes to ``Proxy.endpoint``.
+    """Plain ASGI entry for the proxy port: every HTTP request goes to ``Proxy.endpoint``.
 
     Starlette's router is deliberately not used — it matches on the *decoded*
     path; the proxy decides everything from ``raw_path`` itself.
@@ -660,10 +836,30 @@ class ProxyApp:
                 if message["type"] == "lifespan.startup":
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
-                    await self.proxy.upstream.aclose()
+                    await self.proxy.aclose()
                     await send({"type": "lifespan.shutdown.complete"})
                     return
         # websocket and anything else: refuse by not accepting.
+
+
+class AdminApp:
+    """ASGI entry for the admin port: /healthz, /readyz, /metrics only."""
+
+    def __init__(self, proxy: Proxy):
+        self.proxy = proxy
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            response = await self.proxy.admin(Request(scope, receive))
+            await response(scope, receive, send)
+        elif scope["type"] == "lifespan":
+            while True:
+                message = await receive()
+                if message["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif message["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
 
 
 def create_app(
@@ -671,5 +867,6 @@ def create_app(
     transport: httpx.AsyncBaseTransport | None = None,
     clock: Callable[[], float] = time.time,
     monotonic: Callable[[], float] = time.monotonic,
+    replay_store: Any = None,
 ) -> ProxyApp:
-    return ProxyApp(Proxy(settings, transport=transport, clock=clock, monotonic=monotonic))
+    return ProxyApp(Proxy(settings, transport=transport, clock=clock, monotonic=monotonic, replay_store=replay_store))

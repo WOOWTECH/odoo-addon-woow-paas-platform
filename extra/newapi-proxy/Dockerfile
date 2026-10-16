@@ -24,6 +24,7 @@ WORKDIR /app
 COPY newapi_proxy/ ./newapi_proxy/
 # Same uid as the rest of the newapi chart; root FS is mounted read-only.
 USER 65532:65532
-EXPOSE 8080
-# Probes are the chart's (/healthz liveness, /readyz readiness); no HEALTHCHECK.
+# 8080: the signed proxy port. 8081: admin listener (/healthz, /readyz,
+# /metrics) — the chart's probes use it; no HEALTHCHECK here.
+EXPOSE 8080 8081
 CMD ["python", "-m", "newapi_proxy"]

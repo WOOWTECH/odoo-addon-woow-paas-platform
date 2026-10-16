@@ -31,6 +31,10 @@ SYSTEM_IPS = {
     "bg": "198.18.0.4",
 }
 
+#: Source address of the proxy's own readiness check (/readyz → /api/status).
+#: Not an identity: it keeps readiness out of anon's GA rate-limit bucket.
+READINESS_IP = "198.18.0.5"
+
 IDENTITIES = ("ap", "op", "user", "anon", "bg")
 
 #: Break-glass may be opened for at most 24 hours (DESIGN §7.3).
@@ -44,6 +48,15 @@ _INT_RE = re.compile(r"[0-9]{1,12}", re.ASCII)
 _DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
 _MODEL_RE = re.compile(r"[A-Za-z0-9._:/-]{1,128}", re.ASCII)
 _LOG_LEVELS = ("debug", "info", "warning", "error")
+#: PaaS usernames: a literal "w" + lowercase letter prefix, then only
+#: lowercase letters / digits, simple classes such as [a-z], \\d and counted
+#: repeats {n} / {n,m} — no ".", "*", "+", "?", "|", groups or other escapes,
+#: so the pattern can never widen to unrelated accounts ("^.+$",
+#: "^wp\\d{10}$|^root$"). The chart applies the same rule (proxy.yaml).
+_USERNAME_RE_SHAPE = re.compile(r"\^w[a-z](?:[a-z0-9]|\[[a-z0-9-]+\]|\\d|\{[0-9]{1,3}(?:,[0-9]{1,3})?\})*\$", re.ASCII)
+_VALKEY_ADDR_RE = re.compile(r"([a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})", re.ASCII)
+_VALKEY_USER_RE = re.compile(r"[A-Za-z0-9_-]{1,64}", re.ASCII)
+_VALKEY_PASSWORD_RE = re.compile(r"[A-Za-z0-9_-]{16,256}", re.ASCII)
 
 
 class SettingsError(ValueError):
@@ -71,12 +84,24 @@ class Settings:
     ap_expires_at: int | None
     op_expires_at: int | None
     free_models: frozenset
+    #: Shared replay record (Valkey ACL user); None = this replica only,
+    #: allowed only with PROXY_REPLICAS=1.
+    valkey_host: str | None = None
+    valkey_port: int = 6379
+    valkey_user: str = "newapi-proxy"
+    valkey_password: str | None = field(default=None, repr=False)
+    replicas: int = 1
     default_read_timeout: float = 10.0
     connect_timeout: float = 2.0
     max_body_bytes: int = 256 * 1024
-    max_response_bytes: int = 8 * 1024 * 1024
+    #: Every route answers far less (a 100-item log page is ~100 KB).
+    max_response_bytes: int = 1024 * 1024
     replay_cache_max: int = 200_000
     port: int = 8080
+    #: /healthz, /readyz, /metrics live on their own listener.
+    admin_port: int = 8081
+    #: uvicorn limit_concurrency for the proxy port (connections + tasks).
+    max_connections: int = 128
     log_level: str = "info"
     #: Literal secrets the log redactor masks wherever they might appear.
     secrets: frozenset = field(default=frozenset(), repr=False)
@@ -169,7 +194,33 @@ def _parse_username_re(name: str, raw: str) -> re.Pattern:
         raise SettingsError(name, "is not a valid regular expression") from None
     if pattern.fullmatch(""):
         raise SettingsError(name, "must not match the empty string")
+    if not _USERNAME_RE_SHAPE.fullmatch(raw):
+        raise SettingsError(
+            name, "must be ^w<lowercase letter> then only [a-z0-9], [a-z0-9-] classes, \\d and {n,m}, ending in $"
+        )
     return pattern
+
+
+def _parse_valkey(env: Mapping[str, str], replicas: int) -> tuple[str | None, int, str, str | None]:
+    addr = _get(env, "PROXY_VALKEY_ADDR")
+    if addr == "":
+        if replicas > 1:
+            # A replay sent to another replica must be caught too.
+            raise SettingsError("PROXY_VALKEY_ADDR", "is required when PROXY_REPLICAS > 1")
+        return None, 6379, "newapi-proxy", None
+    match = _VALKEY_ADDR_RE.fullmatch(addr)
+    if not match:
+        raise SettingsError("PROXY_VALKEY_ADDR", "must be <host>:<port>")
+    port = int(match.group(3))
+    if not 1 <= port <= 65535:
+        raise SettingsError("PROXY_VALKEY_ADDR", "port must be 1-65535")
+    user = _get(env, "PROXY_VALKEY_USER", "newapi-proxy")
+    if not _VALKEY_USER_RE.fullmatch(user):
+        raise SettingsError("PROXY_VALKEY_USER", "must be 1-64 of [A-Za-z0-9_-]")
+    password = _get(env, "PROXY_VALKEY_PASSWORD")
+    if not _VALKEY_PASSWORD_RE.fullmatch(password):
+        raise SettingsError("PROXY_VALKEY_PASSWORD", "must be 16-256 of [A-Za-z0-9_-]")
+    return match.group(1), port, user, password
 
 
 def load_settings(env: Mapping[str, str], now: int) -> tuple[Settings, list[str]]:
@@ -237,11 +288,20 @@ def load_settings(env: Mapping[str, str], now: int) -> tuple[Settings, list[str]
 
     read_timeout = _parse_int("PROXY_DEFAULT_READ_TIMEOUT", _get(env, "PROXY_DEFAULT_READ_TIMEOUT", "10"), 1, 30)
     port = _parse_int("PROXY_PORT", _get(env, "PROXY_PORT", "8080"), 1, 65535)
+    admin_port = _parse_int("PROXY_ADMIN_PORT", _get(env, "PROXY_ADMIN_PORT", "8081"), 1, 65535)
+    if admin_port == port:
+        raise SettingsError("PROXY_ADMIN_PORT", "must differ from PROXY_PORT")
+    max_connections = _parse_int("PROXY_MAX_CONNECTIONS", _get(env, "PROXY_MAX_CONNECTIONS", "128"), 16, 4096)
+    valkey_host, valkey_port, valkey_user, valkey_password = _parse_valkey(env, replicas)
     log_level = _get(env, "PROXY_LOG_LEVEL", "info").lower()
     if log_level not in _LOG_LEVELS:
         raise SettingsError("PROXY_LOG_LEVEL", "must be one of " + "/".join(_LOG_LEVELS))
 
-    secrets = frozenset([s.decode("ascii") for s in all_secrets] + [t for t in tokens.values() if t])
+    secrets = frozenset(
+        [s.decode("ascii") for s in all_secrets]
+        + [t for t in tokens.values() if t]
+        + ([valkey_password] if valkey_password else [])
+    )
     settings = Settings(
         upstream_url=upstream,
         web_keys=web,
@@ -257,8 +317,15 @@ def load_settings(env: Mapping[str, str], now: int) -> tuple[Settings, list[str]
         ap_expires_at=_parse_epoch("PROXY_AP_EXPIRES_AT", _get(env, "PROXY_AP_EXPIRES_AT")),
         op_expires_at=_parse_epoch("PROXY_OP_EXPIRES_AT", _get(env, "PROXY_OP_EXPIRES_AT")),
         free_models=free_models,
+        valkey_host=valkey_host,
+        valkey_port=valkey_port,
+        valkey_user=valkey_user,
+        valkey_password=valkey_password,
+        replicas=replicas,
         default_read_timeout=float(read_timeout),
         port=port,
+        admin_port=admin_port,
+        max_connections=max_connections,
         log_level=log_level,
         secrets=secrets,
     )

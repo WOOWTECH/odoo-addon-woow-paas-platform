@@ -4,11 +4,17 @@
 For the LLM-01a stg checks: copy this file into a sandbox Odoo pod and run it
 there (python3 is all it needs). Secrets never go on the command line:
 
-* the signing key comes from an env var holding ``kid:secret[,kid:secret]``
-  (the first entry signs) — default ``WOOW_NEWAPI_PROXY_AUTH_CRON``;
-* a user ``Authorization`` value comes from the env var named by
-  ``--auth-env`` (the value is the bare token; ``Bearer `` is added);
-* a JSON body comes from ``--json`` (no secrets) or stdin (``--body-stdin``).
+* the signing key ``kid:secret[,kid:secret]`` (the first entry signs) comes
+  from the first line of stdin (``--key-stdin``, so it can be piped straight
+  from ``kubectl get secret``) or from an env var — default
+  ``WOOW_NEWAPI_PROXY_AUTH_CRON``;
+* a user ``Authorization`` value (the bare token; ``Bearer `` is added) comes
+  from the next stdin line (``--auth-stdin``) or the env var named by
+  ``--auth-env``;
+* a JSON body comes from ``--json`` (no secrets) or the rest of stdin
+  (``--body-stdin``). stdin order: key line, auth line, body.
+
+Every run signs with a fresh random nonce (``X-Woow-Proxy-Nonce``).
 
 Examples::
 
@@ -16,14 +22,15 @@ Examples::
     signed_request.py --identity ap GET '<proxy>/api/user/search?keyword=wsab0000000001'
     signed_request.py --ts-offset -31 GET <proxy>/api/status          # 401 (expired)
     signed_request.py --repeat 2 GET <proxy>/api/status                # second is 401 (replay)
+    signed_request.py --repeat 2 --resign GET <proxy>/api/status       # both 200 (new nonce each)
     signed_request.py --extra-header 'X-Forwarded-For: 114.32.21.18' ...
 
 Output: status, X-Woow-Proxy-Error, X-Oneapi-Request-Id and the response body
 with every key/token/password-looking value masked (``--show-body`` turns the
 masking off; do not use it where the terminal is logged).
 
-The signing code mirrors newapi_proxy/signing.py; tests/test_proxy_script.py
-keeps the two in lockstep.
+The signing code mirrors newapi_proxy/signing.py;
+tests/test_proxy_script_and_server.py keeps the two in lockstep.
 """
 
 from __future__ import annotations
@@ -31,9 +38,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -51,8 +60,9 @@ def canonical_query(pairs) -> str:
     return "&".join(f"{k}={v}" for k, v in sorted(pairs))
 
 
-def string_to_sign(method, path, query, body, ts, identity, client_ip) -> bytes:
-    return "\n".join([method, path, query, hashlib.sha256(body).hexdigest(), ts, identity, client_ip]).encode("ascii")
+def string_to_sign(method, path, query, body, ts, nonce, kid, identity, client_ip) -> bytes:
+    fields = [method, path, query, hashlib.sha256(body).hexdigest(), ts, nonce, kid, identity, client_ip]
+    return "\n".join(fields).encode("ascii")
 
 
 def sign(secret: bytes, message: bytes) -> str:
@@ -88,13 +98,23 @@ def mask(text: str) -> str:
     return text
 
 
-def build(args, environ, now: int):
+def build(args, environ, now: int, stdin=None):
+    """Return (target, body, headers); ``stdin`` is a binary stream (tests pass one)."""
     url = urllib.parse.urlsplit(args.url)
     path = url.path or "/"
     pairs = split_query(url.query)
     query = canonical_query(pairs)
+    stdin = stdin if stdin is not None else sys.stdin.buffer
+    key_raw = None
+    auth_raw = None
+    if args.key_stdin:
+        key_raw = stdin.readline().decode("ascii", "replace").strip()
+    if getattr(args, "auth_stdin", False):
+        auth_raw = stdin.readline().decode("ascii", "replace").strip()
+        if not auth_raw:
+            raise SystemExit("--auth-stdin: no token line on stdin")
     if args.body_stdin:
-        body = sys.stdin.buffer.read()
+        body = stdin.read()
     elif args.json is not None:
         body = args.json.encode("utf-8")
     else:
@@ -103,22 +123,27 @@ def build(args, environ, now: int):
     ts = str(now + args.ts_offset)
     headers = {"Content-Type": "application/json"} if body else {}
     if not args.unsigned:
-        key_raw = environ.get(args.key_env)
-        if not key_raw:
-            raise SystemExit(f"{args.key_env} is not set")
+        if key_raw is None:
+            key_raw = environ.get(args.key_env)
+            if not key_raw:
+                raise SystemExit(f"{args.key_env} is not set")
         kid, secret = first_key(key_raw)
-        message = string_to_sign(args.method, path, query, body, ts, args.identity, client_ip)
+        nonce = secrets.token_urlsafe(16)
+        message = string_to_sign(args.method, path, query, body, ts, nonce, kid, args.identity, client_ip)
         headers.update(
             {
                 "X-Woow-Proxy-Kid": kid,
                 "X-Woow-Proxy-Ts": ts,
+                "X-Woow-Proxy-Nonce": nonce,
                 "X-Woow-Proxy-Sig": sign(secret, message),
                 "X-Woow-Identity": args.identity,
             }
         )
         if client_ip:
             headers["X-Woow-Client-IP"] = client_ip
-    if args.auth_env:
+    if auth_raw is not None:
+        headers["Authorization"] = f"Bearer {auth_raw}"
+    elif args.auth_env:
         token = environ.get(args.auth_env, "").strip()
         if not token:
             raise SystemExit(f"{args.auth_env} is not set")
@@ -155,12 +180,15 @@ def main(argv=None) -> int:
     parser.add_argument("--identity", default="anon", choices=["anon", "ap", "op", "user", "bg"])
     parser.add_argument("--client-ip", default="")
     parser.add_argument("--key-env", default="WOOW_NEWAPI_PROXY_AUTH_CRON")
+    parser.add_argument("--key-stdin", action="store_true", help="read kid:secret[,…] from the first stdin line")
     parser.add_argument("--auth-env", default="")
+    parser.add_argument("--auth-stdin", action="store_true", help="read the user token from the next stdin line")
     parser.add_argument("--proof-env", default="")
     parser.add_argument("--json", default=None)
     parser.add_argument("--body-stdin", action="store_true")
     parser.add_argument("--ts-offset", type=int, default=0)
-    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--repeat", type=int, default=1, help="send the same signed request N times")
+    parser.add_argument("--resign", action="store_true", help="with --repeat: sign every attempt anew")
     parser.add_argument("--unsigned", action="store_true")
     parser.add_argument("--read-timeout", type=int, default=0)
     parser.add_argument("--timeout", type=float, default=35.0)
@@ -169,9 +197,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     args.method = args.method.upper()
 
-    target, body, headers = build(args, os.environ, int(time.time()))
+    stdin_data = None
+    if args.key_stdin or args.auth_stdin or args.body_stdin:
+        stdin_data = sys.stdin.buffer.read()
     rc = 0
     for attempt in range(1, args.repeat + 1):
+        if attempt == 1 or args.resign:
+            stdin = io.BytesIO(stdin_data) if stdin_data is not None else None
+            target, body, headers = build(args, os.environ, int(time.time()), stdin=stdin)
         status, resp_headers, resp_body = send(args.method, target, body, headers, args.timeout)
         lower = {k.lower(): v for k, v in resp_headers.items()}
         text = resp_body.decode("utf-8", "replace")
@@ -181,6 +214,7 @@ def main(argv=None) -> int:
                     "attempt": attempt,
                     "status": status,
                     "proxy_error": lower.get("x-woow-proxy-error"),
+                    "precheck": lower.get("x-woow-proxy-precheck"),
                     "request_id": lower.get("x-oneapi-request-id"),
                     "body": text if args.show_body else mask(text),
                 },

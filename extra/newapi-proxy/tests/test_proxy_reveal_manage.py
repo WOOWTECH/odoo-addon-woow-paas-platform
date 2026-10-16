@@ -1,5 +1,10 @@
-"""Reveal only within 120 s (〔REV〕2); add_quota add-only, target pre-check, hourly cap (〔REV〕1)."""
+"""Reveal only within 120 s (〔REV〕2); add_quota add-only, target pre-check, hourly cap (〔REV〕1).
 
+Also: how pre-check answers are classified (DESIGN §3.4), when the hourly
+budget is given back, and that the audit line exists *before* the call.
+"""
+
+import asyncio
 import json
 import logging
 
@@ -17,6 +22,14 @@ def audit_lines(caplog, action):
         for r in caplog.records
         if isinstance(r.msg, dict) and r.msg.get("event") == "audit" and r.msg.get("action") == action
     ]
+
+
+def results(caplog, action):
+    return [line["result"] for line in audit_lines(caplog, action)]
+
+
+def refusal(status, **body):
+    return httpx.Response(status, json={"success": False, **body})
 
 
 # --- reveal -------------------------------------------------------------------
@@ -46,9 +59,10 @@ def test_reveal_of_fresh_key_is_forwarded(h, caplog, age):
     for req in (pre, reveal):
         assert req.headers["authorization"] == f"Bearer {USER_PAT}"
         assert req.headers["x-forwarded-for"] == TENANT_IP
-    [line] = audit_lines(caplog, "reveal")
-    assert line["token_id"] == 42 and line["result"] == "forwarded" and line["status"] == 200
-    assert line["kid"] == "web-2026a" and line["ip"] == TENANT_IP
+    sending, done = audit_lines(caplog, "reveal")
+    assert sending["result"] == "sending" and sending["token_id"] == 42
+    assert done["token_id"] == 42 and done["result"] == "forwarded" and done["status"] == 200
+    assert done["kid"] == "web-2026a" and done["ip"] == TENANT_IP
     assert h.proxy.metrics.get("newapi_proxy_reveal_total", result="forwarded") == 1
 
 
@@ -71,21 +85,44 @@ def test_reveal_denied_without_sending_reveal(h, caplog, tok, reason):
     h.upstream.on("GET", "/api/token/42", ok(tok))
     res = h.user("POST", "/api/token/42/key")
     assert res.status == 403
+    # an expected business outcome for this one key, not a PaaS bug: no circuit
+    assert res.proxy_error == "denied"
     assert res.json["reason"] == reason
     assert h.upstream.calls("POST") == []
-    [line] = audit_lines(caplog, "reveal")
-    assert line["result"] == "denied"
+    assert results(caplog, "reveal") == ["denied"]
 
 
-def test_reveal_of_unknown_token_is_403(h):
-    h.upstream.on("GET", "/api/token/42", httpx.Response(200, json={"success": False, "message": "record not found"}))
+def test_reveal_of_unknown_token_is_denied_not_found(h):
+    h.upstream.on("GET", "/api/token/42", refusal(200, message="record not found"))
     res = h.user("POST", "/api/token/42/key")
     assert res.status == 403
-    assert res.json["reason"] == "reveal_token_unknown"
+    assert res.proxy_error == "denied"
+    assert res.json["reason"] == "reveal_not_found"
     assert h.upstream.calls("POST") == []
 
 
-def test_reveal_precheck_failure_means_not_sent(h, caplog):
+@pytest.mark.parametrize(
+    "reply, reason",
+    [
+        (refusal(200, message="database is locked"), "reveal_precheck_body"),  # DB hiccup: retry
+        (httpx.Response(200, content=b"<html>"), "reveal_precheck_body"),
+        (httpx.Response(500, content=b""), "reveal_precheck_http_500"),  # limiter lost Valkey
+        (httpx.Response(500, json={"error": {"type": "new_api_panic"}}), "reveal_precheck_http_500"),
+        (httpx.Response(404, content=b""), "reveal_precheck_http_404"),
+    ],
+)
+def test_reveal_precheck_without_definite_answer_is_connect(h, caplog, reply, reason):
+    caplog.set_level(logging.INFO, logger="newapi_proxy")
+    h.upstream.on("GET", "/api/token/42", reply)
+    res = h.user("POST", "/api/token/42/key")
+    assert res.status == 502
+    assert res.proxy_error == "connect"  # NotExecuted: safe to re-send
+    assert res.json["reason"] == reason
+    assert h.upstream.calls("POST") == []
+    assert results(caplog, "reveal") == ["not_sent"]
+
+
+def test_reveal_precheck_transport_failure_and_429_mean_not_sent(h, caplog):
     caplog.set_level(logging.INFO, logger="newapi_proxy")
 
     def refuse(request):
@@ -100,12 +137,64 @@ def test_reveal_precheck_failure_means_not_sent(h, caplog):
     res = h.user("POST", "/api/token/42/key")
     assert res.proxy_error == "connect"
     assert res.headers["retry-after"] == "40"
-    assert len(audit_lines(caplog, "reveal")) == 2
+    assert results(caplog, "reveal") == ["not_sent", "not_sent"]
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (401, {"message": "unauthorized", "code": "AUTH_UNAUTHORIZED"}),
+        (401, {"message": "expired", "code": "ACCESS_TOKEN_EXPIRED"}),
+        (403, {"message": "scope", "code": "ACCESS_TOKEN_SCOPE_DENIED"}),
+        (500, {"message": "x", "code": "AUTH_INTERNAL_ERROR"}),
+        (200, {"message": "nope", "message_key": "Some definite refusal"}),
+    ],
+)
+def test_reveal_precheck_refusal_with_code_is_relayed(h, caplog, status, body):
+    """A revoked / expired UP answers the pre-check with a stable code: the
+    client must see that code (UP 401 → re-sign; §3.4), not a retryable 502."""
+    caplog.set_level(logging.INFO, logger="newapi_proxy")
+    h.upstream.on("GET", "/api/token/42", refusal(status, **body))
+    res = h.user("POST", "/api/token/42/key")
+    assert res.status == status
+    assert res.json == {"success": False, **body}
+    assert res.proxy_error is None
+    assert res.headers["x-woow-proxy-precheck"] == "reveal"
+    assert h.upstream.calls("POST") == []
+    assert results(caplog, "reveal") == ["precheck_relayed"]
 
 
 def test_reveal_has_no_body(h):
     h.upstream.on("GET", "/api/token/42", ok(token()))
     assert h.user("POST", "/api/token/42/key", body=b'{"x":1}').status == 400
+
+
+def test_reveal_audit_is_written_before_the_call_and_survives_cancellation(h, caplog):
+    """If the task dies mid-call (shutdown timeout), the audit trail still says
+    the reveal may have reached new-api."""
+    caplog.set_level(logging.INFO, logger="newapi_proxy")
+    h.upstream.on("GET", "/api/token/42", ok(token()))
+    entered = asyncio.Event()
+
+    async def hang(request):
+        entered.set()
+        await asyncio.Event().wait()
+
+    h.upstream.on("POST", "/api/token/42/key", hang)
+
+    async def scenario():
+        headers = h.sign_headers("POST", "/api/token/42/key", identity="user", client_ip=TENANT_IP)
+        headers.append(("Authorization", f"Bearer {USER_PAT}"))
+        task = asyncio.create_task(h.acall("POST", b"/api/token/42/key", b"", headers))
+        await asyncio.wait_for(entered.wait(), 2)
+        assert results(caplog, "reveal") == ["sending"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert results(caplog, "reveal") == ["sending", "cancelled"]
+    assert h.proxy.inflight.current["user"] == 0
 
 
 # --- add_quota ----------------------------------------------------------------
@@ -133,9 +222,10 @@ def test_add_quota_happy_path(m, caplog):
     assert post.headers["x-forwarded-for"] == "198.18.0.1"
     assert post.headers["connection"] == "close"  # never a pooled socket for a write
     assert json.loads(post.content) == ADD
-    [line] = audit_lines(caplog, "add_quota")
-    assert line["target_user_id"] == 123 and line["value"] == ADD["value"]
-    assert line["result"] == "forwarded" and line["request_id"] == "req-add-1"
+    sending, done = audit_lines(caplog, "add_quota")
+    assert sending == {**sending, "result": "sending", "target_user_id": 123, "value": ADD["value"]}
+    assert done["target_user_id"] == 123 and done["value"] == ADD["value"]
+    assert done["result"] == "forwarded" and done["request_id"] == "req-add-1" and done["budget"] == "kept"
     assert m.proxy.metrics.get("newapi_proxy_add_quota_value_total") == ADD["value"]
 
 
@@ -164,7 +254,18 @@ def test_add_quota_happy_path(m, caplog):
 def test_add_quota_negative_never_reaches_upstream(m, patch):
     res = m.signed("POST", "/api/user/manage", identity="ap", body={**ADD, **patch})
     assert res.status == 403, patch
+    assert res.proxy_error == "policy"
     assert m.upstream.requests == []
+
+
+def test_policy_denied_add_quota_audit_names_target_and_value(m, caplog):
+    caplog.set_level(logging.INFO, logger="newapi_proxy")
+    m.signed("POST", "/api/user/manage", identity="ap", body={**ADD, "mode": "override", "value": 7})
+    m.signed("POST", "/api/user/manage", identity="ap", body={**ADD, "id": True, "value": "7"})
+    first, second = audit_lines(caplog, "add_quota")
+    assert (first["target_user_id"], first["value"], first["reason"]) == (123, 7, "manage_mode")
+    # only exact ints are recorded (bool / str values are not)
+    assert "target_user_id" not in second and "value" not in second
 
 
 @pytest.mark.parametrize(
@@ -184,16 +285,50 @@ def test_add_quota_target_must_be_paas_user(m, target):
     m.upstream.on("GET", "/api/user/123", ok(target))
     res = m.signed("POST", "/api/user/manage", identity="ap", body=ADD)
     assert res.status == 403
+    assert res.proxy_error == "denied"
     assert res.json["reason"] == "manage_target"
     assert m.upstream.calls("POST") == []
     assert m.proxy.budget.used(m.mono) == 0  # released
 
 
-def test_add_quota_target_missing(m):
-    m.upstream.on("GET", "/api/user/123", httpx.Response(200, json={"success": False, "message": "record not found"}))
+def test_add_quota_target_missing_is_denied_not_found(m):
+    m.upstream.on("GET", "/api/user/123", refusal(200, message="record not found"))
     res = m.signed("POST", "/api/user/manage", identity="ap", body=ADD)
     assert res.status == 403
+    assert res.proxy_error == "denied"
+    assert res.json["reason"] == "manage_not_found"
     assert m.upstream.calls("POST") == []
+    assert m.proxy.budget.used(m.mono) == 0
+
+
+def test_add_quota_precheck_db_error_is_connect_not_policy(m):
+    """A new-api DB hiccup is not a PaaS bug: no needs_review, no circuit."""
+    m.upstream.on("GET", "/api/user/123", refusal(200, message="driver: bad connection"))
+    res = m.signed("POST", "/api/user/manage", identity="ap", body=ADD)
+    assert res.status == 502
+    assert res.proxy_error == "connect"
+    assert res.json["reason"] == "manage_precheck_body"
+    assert m.upstream.calls("POST") == []
+    assert m.proxy.budget.used(m.mono) == 0
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (401, {"message": "x", "code": "AUTH_UNAUTHORIZED"}),  # AP revoked / expired
+        (403, {"message": "x", "code": "ACCESS_TOKEN_SCOPE_DENIED"}),
+        (200, {"message": "x", "message_key": "No permission to access users of same or higher level"}),
+    ],
+)
+def test_add_quota_precheck_refusal_is_relayed(m, status, body):
+    m.upstream.on("GET", "/api/user/123", refusal(status, **body))
+    res = m.signed("POST", "/api/user/manage", identity="ap", body=ADD)
+    assert res.status == status
+    assert res.json == {"success": False, **body}
+    assert res.proxy_error is None
+    assert res.headers["x-woow-proxy-precheck"] == "manage"
+    assert m.upstream.calls("POST") == []
+    assert m.proxy.budget.used(m.mono) == 0
 
 
 def test_add_quota_hourly_cap():
@@ -214,7 +349,56 @@ def test_add_quota_hourly_cap():
     assert h.signed("POST", "/api/user/manage", identity="ap", body=body).status == 200
 
 
-def test_add_quota_budget_released_only_when_certainly_not_sent():
+@pytest.mark.parametrize(
+    "reply",
+    [
+        httpx.Response(429, headers={"Retry-After": "30"}),  # GA bucket: before the handler
+        httpx.Response(500, content=b""),  # limiter lost Valkey
+        httpx.Response(401, json={"success": False, "message": "x", "code": "AUTH_UNAUTHORIZED"}),
+        httpx.Response(403, json={"success": False, "message": "x", "code": "ACCESS_TOKEN_SCOPE_DENIED"}),
+        httpx.Response(500, json={"success": False, "message": "x", "code": "AUTH_INTERNAL_ERROR"}),
+        httpx.Response(200, json={"success": False, "message": "x", "message_key": "User does not exist"}),
+    ],
+)
+def test_add_quota_budget_released_when_new_api_proves_nothing_ran(reply, caplog):
+    """Repeated definite refusals must not eat the hourly budget (they used to,
+    so a few re-sent orders could block every conversion for an hour)."""
+    caplog.set_level(logging.INFO, logger="newapi_proxy")
+    h = Harness(PROXY_ADD_QUOTA_HOURLY_CAP_POINTS="4", PROXY_REPLICAS="2")  # 2 points per replica
+    h.upstream.on("GET", "/api/user/123", ok(TARGET))
+    h.upstream.on("POST", "/api/user/manage", reply)
+    body = {**ADD, "value": 2 * QUOTA_PER_POINT}
+    for _ in range(3):
+        res = h.signed("POST", "/api/user/manage", identity="ap", body=body)
+        assert res.status == reply.status_code
+        assert res.proxy_error is None
+    assert h.proxy.budget.used(h.mono) == 0
+    assert [line.get("budget") for line in audit_lines(caplog, "add_quota") if line["result"] == "forwarded"] == [
+        "released"
+    ] * 3
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        httpx.Response(200, json={"success": False, "message": "pq: could not serialize access"}),  # no message_key
+        httpx.Response(500, json={"error": {"type": "new_api_panic"}}),
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json={"success": True, "message": ""}),
+    ],
+)
+def test_add_quota_budget_kept_when_the_outcome_may_be_credited(reply):
+    h = Harness(PROXY_ADD_QUOTA_HOURLY_CAP_POINTS="4", PROXY_REPLICAS="2")
+    h.upstream.on("GET", "/api/user/123", ok(TARGET))
+    h.upstream.on("POST", "/api/user/manage", reply)
+    body = {**ADD, "value": 2 * QUOTA_PER_POINT}
+    assert h.signed("POST", "/api/user/manage", identity="ap", body=body).status == reply.status_code
+    assert h.proxy.budget.used(h.mono) == 2 * QUOTA_PER_POINT
+    assert h.signed("POST", "/api/user/manage", identity="ap", body=body).proxy_error == "budget"
+
+
+def test_add_quota_budget_released_only_when_certainly_not_sent(caplog):
+    caplog.set_level(logging.INFO, logger="newapi_proxy")
     h = Harness(PROXY_ADD_QUOTA_HOURLY_CAP_POINTS="200", PROXY_REPLICAS="2")
     h.upstream.on("GET", "/api/user/123", ok(TARGET))
     body = {**ADD, "value": 100 * QUOTA_PER_POINT}
@@ -233,6 +417,7 @@ def test_add_quota_budget_released_only_when_certainly_not_sent():
     assert h.signed("POST", "/api/user/manage", identity="ap", body=body).proxy_error == "reset"
     # outcome unknown: the amount stays counted
     assert h.proxy.budget.used(h.mono) == 100 * QUOTA_PER_POINT
+    assert results(caplog, "add_quota") == ["sending", "connect", "sending", "reset"]
 
 
 def test_add_quota_cap_zero_disables_it():

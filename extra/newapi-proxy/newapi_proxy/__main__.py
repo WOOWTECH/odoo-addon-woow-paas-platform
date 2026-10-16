@@ -6,16 +6,16 @@ Settings are validated before the server starts; a bad value exits with code
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
 import sys
 import time
 
-import uvicorn
-
 from . import __version__, logs
-from .app import create_app
+from .app import AdminApp, create_app
+from .server import build_servers, serve
 from .settings import SettingsError, load_settings
 
 
@@ -42,23 +42,14 @@ def main() -> int:
         add_quota_hourly_cap=settings.add_quota_hourly_cap,
         inflight=dict(settings.inflight),
         break_glass_until=settings.break_glass_until,
+        replay_store=f"{settings.valkey_host}:{settings.valkey_port}" if settings.valkey_host else "local",
+        port=settings.port,
+        admin_port=settings.admin_port,
+        max_connections=settings.max_connections,
     )
     app = create_app(settings)
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=settings.port,
-        http="h11",
-        loop="asyncio",
-        lifespan="on",
-        log_config=None,
-        access_log=False,
-        proxy_headers=False,
-        server_header=False,
-        limit_concurrency=512,
-        timeout_keep_alive=5,
-        timeout_graceful_shutdown=30,
-    )
+    main_server, admin_server = build_servers(settings, app, AdminApp(app.proxy))
+    asyncio.run(serve(main_server, admin_server))
     return 0
 
 

@@ -13,9 +13,22 @@ _HELP = {
     "newapi_proxy_add_quota_total": "add_quota attempts by result.",
     "newapi_proxy_add_quota_value_total": "Quota units new-api confirmed added (success:true).",
     "newapi_proxy_break_glass_total": "Break-glass (bg) requests by result.",
+    "newapi_proxy_replay_store_errors_total": "Shared replay store (Valkey) failures by kind (request got 503 busy).",
+    "newapi_proxy_readiness_checks_total": "Readiness checks actually run (cached answers excluded), by result.",
     "newapi_proxy_inflight": "Requests currently in flight per identity.",
     "newapi_proxy_add_quota_budget_used": "add_quota quota units used in the last hour (this replica).",
 }
+
+
+def format_value(value: float) -> str:
+    """Exact text for a sample: quota sums reach 1e8+ and ``:g`` keeps 6 digits."""
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    if float(value).is_integer() and abs(value) < 2**63:
+        return str(int(value))
+    return repr(float(value))
 
 
 class Metrics:
@@ -52,10 +65,10 @@ class Metrics:
                 lines.append(f"# HELP {name} {_HELP.get(name, name)}")
                 lines.append(f"# TYPE {name} counter")
                 names_done.add(name)
-            lines.append(f"{name}{self._labels(labels)} {value:g}")
+            lines.append(f"{name}{self._labels(labels)} {format_value(value)}")
         for name, collect in sorted(self._gauges.items()):
             lines.append(f"# HELP {name} {_HELP.get(name, name)}")
             lines.append(f"# TYPE {name} gauge")
             for labels, value in sorted(collect().items()):
-                lines.append(f"{name}{self._labels(labels)} {value:g}")
+                lines.append(f"{name}{self._labels(labels)} {format_value(value)}")
         return "\n".join(lines) + "\n"
