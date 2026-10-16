@@ -439,8 +439,8 @@ class WorkspaceQuotaPolicy(models.Model):
         生命週期與開通路徑（``nowait=True``）拿不到就回 ``False``，交易仍可用（savepoint
         回捲）。不等鎖：持鎖者最後一定會寫這一列，REPEATABLE READ 下等到對方 commit 只會換來
         40001，等待只是拖慢刪除與開通。呼叫端拿不到鎖就不推送、也不寫這一列——鎖外推送可能
-        蓋掉持鎖者剛提高的值（operator 沒有 compare-and-set），寫這一列則會在對方 commit 後
-        40001、在已呼叫 operator 之後整筆回捲。
+        蓋掉持鎖者剛提高的值（舊 operator 不支援版本防護，沒有 compare-and-set），寫這一列
+        則會在對方 commit 後 40001、在已呼叫 operator 之後整筆回捲。
         """
         self.ensure_one()
         cr = self.env.cr

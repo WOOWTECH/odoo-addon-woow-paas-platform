@@ -399,10 +399,10 @@ spec:
 平台在開通、換方案、刪除服務，以及管理員變更最低保障時重算並推送。所有路徑共用同一個政策（`src/models/workspace_quota_policy.py`、`src/services/ns_quota_policy.py`）：
 
 - 推送前先讀叢集上的受管 quota（operator `GET /api/namespaces/{name}/quota?include_managed=true`），每一項取 max(目標, 叢集現況)，再以 operator 同形的完整 hard（含 `persistentvolumeclaims` 與 ephemeral-storage）逐項檢查，**不會降低叢集任何一項**。
-- 目標低於叢集的項目記為「待處理降額」（後台 Quota Pending Decrease），叢集保留較高的值；安全降額由後續工作（#1681、#1682）處理。
+- 目標低於叢集的項目記為「待處理降額」（後台 Pending Quota Decrease），叢集保留較高的值；安全降額由後續工作（#1681、#1682）處理。
 - 讀不到現況、資料不完整、或某一項非降不可（例如叢集的 pvc 上限大於 10）時不推送並記錄原因。開通路徑：讀不到現況或資料不完整時開通失敗待重試，因為無法證明不降額；某一項非降不可時跳過這次 quota 套用（namespace 與基線已存在），開通照常繼續。刪除服務永遠不會因 quota 推送失敗而被擋下。
 - 同一個工作區同時只有一筆交易推送 quota（工作區列鎖，所有平台 quota 寫入都經過它：管理員設定、手動重試、背景重試、生命週期重算、開通建立 namespace）。管理員入口會等鎖；背景、生命週期與開通路徑不等，拿不到鎖就不推送也不寫工作區狀態：生命週期不擋刪除，改排背景同步一分鐘後重來（#1680，換方案剛好撞上推送時增額不再遺失）；開通失敗待重試。
-- 遠端版本防護（#1680）：每次推送帶新的 sync token 與鎖內讀到的 resourceVersion（受管 quota 尚不存在時改為「只在不存在時建立」），operator 以條件寫入套用，物件被改過就回 409 不覆寫；開通建立 `<ns>-quota` 走同一套。只有叢集上的 token 與平台預期的相符才算已同步：逾時、5xx、斷線先讀回，落地了就算成功，沒落地就記下在途 token，下一次同步以新 token 重推，晚到的舊請求因 resourceVersion 已變而落不下。叢集上出現平台不認得的 token（例如推送成功後 DB 交易回捲）時同樣重推，值仍取 max(目標, 叢集)，不會因此降額，多出來的部分顯示在 Quota Pending Decrease。operator 太舊（GET 沒有 `sync_token`）時退回無防護推送，後台標示「未受版本防護」。
+- 遠端版本防護（#1680）：每次推送帶新的 sync token 與鎖內讀到的 resourceVersion（受管 quota 尚不存在時改為「只在不存在時建立」），operator 以條件寫入套用，物件被改過就回 409 不覆寫；開通建立 `<ns>-quota` 走同一套。只有叢集上的 token 與平台預期的相符才算已同步：逾時、5xx、斷線先讀回，落地了就算成功，沒落地就記下在途 token，下一次同步以新 token 重推，晚到的舊請求因 resourceVersion 已變而落不下。叢集上出現平台不認得的 token（例如推送成功後 DB 交易回捲）時同樣重推，值仍取 max(目標, 叢集)，不會因此降額，多出來的部分顯示在 Pending Quota Decrease。operator 太舊（GET 沒有 `sync_token`）時退回無防護推送，後台標示「Operator 不支援版本防護」。
 - 有限次自動重試（#1680，背景 cron `ir_cron_reconcile_workspace_quota`，每個工作區各自一筆交易）：暫時性失敗（operator 未設定、斷線、5xx、逾時、版本衝突、讀不到叢集）在失敗後 1、5、15、60、240 分鐘各重試一次，共 5 次，之後轉為「重試已用完」，只能由系統管理員按「Retry Quota Sync」手動重試。永久阻擋（會降低某一項，例如叢集 pvc 上限大於 10；operator 不支援；資料看不懂）不自動重試。重試額度以目標（namespace 集合＋目標值）計：目標改變、管理員保存最低保障、手動重試、或同步成功時重置；背景重試與目標不變的生命週期事件不重置。已同步的工作區每 6 小時讀回驗證一次。手動與背景重試都不寫最低保障的異動紀錄；手動重試只在監控 chatter 留下操作者。
 - 管理員在後台「Woow PaaS → Workspace Quotas」查看公式、最低保障、目標、最後成功推送值與時間、同步狀態；目標不是叢集現況，叢集現況看同一頁的觀測（#1678）。尚未建立 namespace 時，最低保障先保存，首次開通時套用。
 
