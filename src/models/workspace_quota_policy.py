@@ -478,6 +478,18 @@ class WorkspaceQuotaPolicy(models.Model):
             return {}
         return tokens if isinstance(tokens, dict) else {}
 
+    def _quota_attempt_fingerprint(self, target, own, attempted):
+        """這次嘗試要記的目標指紋。
+
+        生命週期與開通只同步自己那一個 namespace；工作區若不只這一個，子集的結果不能代表整個
+        工作區（會把其他 namespace 的狀態蓋掉）。這時不記指紋（``False``），並立刻排背景同步：
+        下一輪 cron 看到指紋不符，會把整個工作區重新評估一次。
+        """
+        if set(attempted) == set(own):
+            return _fingerprint(target, own)
+        self._schedule_quota_reconcile()
+        return False
+
     def _schedule_quota_reconcile(self, at=None):
         """喚醒背景同步 cron（``ir.cron.trigger`` 是 DB 列，跟著呼叫端交易 commit／回捲）。"""
         cron = self.env.ref(_RECONCILE_CRON, raise_if_not_found=False)
@@ -499,16 +511,15 @@ class WorkspaceQuotaPolicy(models.Model):
             return {'state': 'busy', 'trigger': trigger}
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
-        # 一律同步整個工作區（加上呼叫端點名、可能已不在存活集合裡的 namespace）：只同步子集
-        # 會把其他 namespace 的狀態（例如 blocked）蓋掉，指紋也會在子集與全集之間來回、重置額度。
         own = workspace._quota_namespaces()
-        attempted = sorted(set(own) | set(namespaces or ()))
+        attempted = sorted(set(namespaces)) if namespaces else own
         client = paas_operator_service.get_paas_operator_client(self.env(context={}))
         expected = workspace._quota_expected_tokens()
         results = {}
         for namespace in attempted:
             results[namespace] = _sync_namespace(client, namespace, target, expected.get(namespace))
-        workspace._record_quota_sync(version, results, _fingerprint(target, own), trigger)
+        workspace._record_quota_sync(
+            version, results, workspace._quota_attempt_fingerprint(target, own, attempted), trigger)
         summary = workspace._quota_status_summary()
         summary['trigger'] = trigger
         return summary
@@ -701,12 +712,8 @@ class WorkspaceQuotaPolicy(models.Model):
             return False, 'quota_sync_busy'
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
-        own = workspace._quota_namespaces()
-        # 開通只處理這一個 namespace：工作區不只這一個時不記全集指紋，下一輪 cron 會把整個工作區
-        # 重新評估一次（只記子集會讓其他 namespace 的狀態被這次結果蓋掉）。
-        fingerprint = _fingerprint(target, own) if own == [namespace] else None
-        if fingerprint is None:
-            workspace._schedule_quota_reconcile()
+        fingerprint = workspace._quota_attempt_fingerprint(
+            target, workspace._quota_namespaces(), [namespace])
         plan = _plan_namespace(client, namespace, target)
         token = uuid.uuid4().hex if plan.get('guarded') else None
         if plan.get('not_found'):

@@ -542,7 +542,7 @@ class TestWorkspaceQuotaOperatorErrors1680(_SyncFixture):
         self.assertIn('operator_error: 422', ws.quota_sync_reason)
         self.assertFalse(ws.quota_next_retry_at)
 
-    def test_lifecycle_sync_covers_every_workspace_namespace(self):
+    def test_lifecycle_subset_sync_is_followed_by_a_full_workspace_reconcile(self):
         other = self.ns + '-legacy'
         self.operator.live[other] = build_hard('12', '12Gi', '100Gi', '4Gi', '80Gi')
         self.operator.live[other]['persistentvolumeclaims'] = '12'  # 這個 namespace 永久阻擋
@@ -551,8 +551,12 @@ class TestWorkspaceQuotaOperatorErrors1680(_SyncFixture):
         sibling = self._service('svc-sibling', vcpu=1, ram=1.0, storage=10)
         self._set(cpu=18)
         self.assertEqual(self._ws().quota_sync_state, 'blocked')
+        triggers = len(self._cron_triggers())
         with patch(_CLIENT, return_value=self.client):
-            sibling.unlink()  # 生命週期只帶自己的 namespace，也不能把另一個 namespace 的阻擋蓋掉
+            sibling.unlink()  # 生命週期只同步自己的 namespace
+        self.assertFalse(self._ws().quota_attempt_fingerprint, '子集結果不記成整個工作區的指紋')
+        self.assertGreater(len(self._cron_triggers()), triggers, '立刻排背景同步重新評估')
+        self._background()  # 下一輪 cron：整個工作區重新評估，另一個 namespace 的阻擋回到畫面上
         ws = self._ws()
         self.assertEqual(ws.quota_sync_state, 'blocked')
         self.assertIn('would_lower: persistentvolumeclaims', ws.quota_sync_reason)
