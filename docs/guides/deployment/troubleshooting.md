@@ -498,7 +498,14 @@ kubectl --context <context> -n <namespace> patch resourcequota <namespace>-quota
 
 - `operator_unsupported`：operator 版本太舊，不支援 `include_managed`（#1678）。先發版 operator，再重試部署。
 - `quota_unreadable`、`managed_quota_*`：operator 讀不到或讀到不完整的受管 ResourceQuota。查 operator log 與該 namespace 的 ResourceQuota，修正後重試部署。
-- `quota_sync_busy`：同一個 Workspace 正有其他交易在推送 quota（例如管理員正在設定最低保障），開通不等鎖、這次沒有變更 quota。稍後重試部署即可。
+- `quota_sync_busy`：同一個 Workspace 正有其他交易在推送 quota（例如管理員正在設定最低保障，或背景重試正在跑），開通不等鎖、這次沒有變更 quota。稍後重試部署即可。
+
+**Workspace Quotas 頁的同步狀態（#1680）**：
+
+- 「待同步」或「結果待確認」且有「下次自動重試」時間：平台會自己重試（失敗後 1、5、15、60、240 分鐘），不需處理。原因 `quota_conflict` 表示叢集上的 quota 在讀取後被改過（含 quota controller 更新 status），下一次重讀再推即可。
+- 「重試已用完」：5 次自動重試都失敗。依 Quota Sync Detail 的原因修正（operator 位址或 API key、operator 是否在跑、namespace 的 ResourceQuota），再按「Retry Quota Sync」。
+- 「已被安全檢查擋下」且原因是 `would_lower: <資源>`：推送會降低叢集上的某一項（常見是有人把 `persistentvolumeclaims` 手動調到大於 10），平台不自動重試，手動重試也一樣會擋下。降額要另行處理（#1681、#1682），不要為了讓同步通過去改 operator 的固定值。
+- 「未受版本防護」：operator 比平台舊，不支援 `sync_token`。推送照舊進行，但晚完成的舊請求可能蓋掉新值；請先升級 operator。
 
 ### Issue: PVC Not Binding
 
