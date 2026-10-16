@@ -1176,5 +1176,6 @@ from . import test_workspace_quota_inspection_live_1678
 from . import test_workspace_quota_floor_1679
 from . import test_workspace_quota_floor_rpc_1679
 from . import test_workspace_quota_sync_1680
+from . import test_workspace_quota_sync_rpc_1680
 from . import test_workspace_quota_floor_live_1679
 from . import test_ecpg_v4_golive

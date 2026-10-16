@@ -438,3 +438,77 @@ class TestWorkspaceQuotaConcurrentSync1680(TransactionCase):
         self.assertIn('limits.cpu: cluster 30, target 18', pending)
         tokens = self._committed('quota_expected_tokens')[0]
         self.assertIn(self.operator.tokens[self.ns], tokens, '遠端 token 已是平台認得的')
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaLifecycleAndDeploy1680(_SyncFixture):
+    """開通建立 namespace 與生命週期重算都經同一套協調；quota 故障不阻斷服務清理。"""
+
+    def setUp(self):
+        super().setUp()
+        self.pending = self._service('svc-1680-new', vcpu=4, ram=4.0, storage=20)
+        self.pending.sudo().write({'state': 'pending'})
+
+    def _deploy(self):
+        with patch(_CLIENT, return_value=self.client):
+            self.pending._execute_deploy()
+
+    def _read_then_version_moves(self):
+        """GET 之後、寫入之前 quota controller 更新了 status（resourceVersion 前進）。"""
+        read = self.operator.get_namespace_quota
+
+        def get_then_touch(namespace, **kwargs):
+            report = read(namespace, **kwargs)
+            self.operator.touch(namespace)
+            return report
+        self.client.get_namespace_quota.side_effect = get_then_touch
+
+    def test_first_deploy_creates_the_quota_only_if_still_absent_with_a_token(self):
+        del self.operator.live[self.ns]
+        self.operator.namespace_exists[self.ns] = False
+        self.s1.sudo().write({'state': 'pending'})
+        self._deploy()
+        guard = self.operator.guards[-1]
+        self.assertEqual(set(guard), {'sync_token', 'expect_absent'})
+        self.assertTrue(guard['expect_absent'])
+        self.assertEqual(self._remote_token(), guard['sync_token'])
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'synced')
+        self.assertIn(guard['sync_token'], ws.quota_expected_tokens)
+
+    def test_deploy_on_an_existing_quota_writes_only_the_version_it_read(self):
+        planned = str(self.operator.rv[self.ns])
+        self._deploy()
+        self.assertEqual(self.operator.guards[-1]['expected_resource_version'], planned)
+        self.assertEqual(self._ws().quota_sync_state, 'synced')
+
+    def test_deploy_quota_conflict_still_installs_and_schedules_a_retry(self):
+        self._read_then_version_moves()
+        self._deploy()
+        self.client.install_release.assert_called()
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'pending')
+        self.assertIn('quota_conflict', ws.quota_sync_reason)
+        self.assertTrue(ws.quota_next_retry_at)
+        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '12', 'quota 沒被覆寫')
+        self.client.get_namespace_quota.side_effect = self.operator.get_namespace_quota
+        with freeze_time(ws.quota_next_retry_at):
+            self._background()
+        # 兩台 vcpu 4 → 公式 24：背景重試以最新服務集合推送。
+        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '24')
+        self.assertEqual(self._ws().quota_sync_state, 'synced')
+
+    def test_cleanup_is_not_blocked_by_exhausted_or_conflicting_sync(self):
+        from ..models.workspace_quota_policy import _internal_quota_policy_write
+        _internal_quota_policy_write(self._ws()).write(
+            {'quota_sync_state': 'exhausted', 'quota_retry_count': 5})
+        self.operator.tokens[self.ns] = 'feedface' * 4  # 逼出一次圍籬推送
+        self._read_then_version_moves()  # …而它會撞上版本衝突
+        triggers = len(self._cron_triggers())
+        with patch(_CLIENT, return_value=self.client):
+            self.pending.unlink()
+        self.assertFalse(self.pending.exists(), '刪除照常完成')
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'pending')
+        self.assertIn('quota_conflict', ws.quota_sync_reason)
+        self.assertGreater(len(self._cron_triggers()), triggers, '排了背景重試')

@@ -24,3 +24,4 @@
 1	src/data/subscription_products.xml
 1	src/data/subscription_products_variants.xml
 1	src/data/topup_plans.xml
+1	src/data/workspace_quota_cron.xml
