@@ -219,6 +219,7 @@ class TestLlmModelGuards(TransactionCase):
             self.env[ACCOUNT].sudo().with_context(woow_llm_internal_write=True).create(
                 {'partner_id': partner.id})
         account = _llm_internal(self.env[ACCOUNT].sudo()).create({'partner_id': partner.id})
+        self.assertFalse(llm_common._is_llm_internal(account.env), 'create 回傳的記錄不帶把手')
         with self.assertRaises(AccessError):
             account.write({'state': 'active'})
         _llm_internal(account).write({'newapi_user_id': 41})
@@ -645,7 +646,8 @@ class TestLlmTracerHttp(HttpCase):
             'client_id': oauth_client.id,
         })
         bearer = {'Authorization': 'Bearer %s' % token.access_token}
-        self.logout()
+        # 本測試從沒 authenticate：沒有登入 session（HttpCase.logout() 只在 authenticate 之後能用）。
+        self.opener.cookies.clear()
         control = self.url_open('/api/smarthome/workspaces', headers=bearer)
         self.assertEqual(control.status_code, 200, '陽性對照：token 本身有效：%s' % control.text)
         response = self.url_open('/api/llm/state', data=json.dumps(

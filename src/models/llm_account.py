@@ -65,6 +65,7 @@ from .llm_common import (
     LlmQuotaInteger,
     _is_llm_internal,
     _llm_internal,
+    _without_llm_internal,
     llm_config,
     llm_unconfigured,
 )
@@ -204,7 +205,7 @@ class LlmAccount(models.Model):
     def create(self, vals_list):
         if not _is_llm_internal(self.env):
             raise AccessError(_('AI accounts can only be created by the platform.'))
-        return super().create(vals_list)
+        return _without_llm_internal(super().create(vals_list))
 
     def write(self, vals):
         if not _is_llm_internal(self.env):

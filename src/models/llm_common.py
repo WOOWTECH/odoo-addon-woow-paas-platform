@@ -127,6 +127,15 @@ def _is_llm_internal(env):
     return env.context.get(_LLM_INTERNAL_CTX_KEY) is _LLM_INTERNAL_WRITE
 
 
+def _without_llm_internal(records):
+    """拿掉內部寫入把手：``create`` 回傳的記錄不帶著它（Odoo 的 ``create`` 回傳的記錄沿用
+    呼叫時的 env，不拿掉的話把手會跟著回傳值流出去；要再寫就再掛一次 ``_llm_internal``）。"""
+    if _LLM_INTERNAL_CTX_KEY not in records.env.context:
+        return records
+    context = {k: v for k, v in records.env.context.items() if k != _LLM_INTERNAL_CTX_KEY}
+    return records.with_env(records.env(context=context))
+
+
 # --------------------------------------------------------------------------- #
 #  int8 的 quota 欄位（〔REV〕30）                                              #
 # --------------------------------------------------------------------------- #
