@@ -125,7 +125,7 @@ class SmartHomeController(Controller):
                     smarthome.id)
             return {"success": True, "data": data}
 
-        if action not in ("delete", "provision", "refresh_status"):
+        if action not in ("delete", "provision", "refresh_status", "release_binding"):
             return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
         # 以下全部是 mutation，一律先過 owner/admin。
@@ -144,6 +144,16 @@ class SmartHomeController(Controller):
 
         if action == "refresh_status":
             return self._refresh_status(smarthome)
+
+        if action == "release_binding":
+            # #1766：忘掉「哪一台 HA 綁著這個家」，讓下一台可以接手（換機器、
+            # 重裝、RMA）。
+            #
+            # ⚠ 解綁**不會**把對方的 cloudflared 踢掉：權杖已經在那台機器上，平台
+            # 無法收回已交出的憑證。真的要斷開對方只能換權杖（刪掉重建這個家）。
+            # 前端文案必須照實說，否則使用者會以為按了就安全了。
+            smarthome.action_release_binding()
+            return {"success": True, "data": smarthome.to_dict()}
 
         if action == "delete":
             try:
