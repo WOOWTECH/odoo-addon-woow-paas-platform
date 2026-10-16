@@ -1177,3 +1177,7 @@ from . import test_workspace_quota_floor_1679
 from . import test_workspace_quota_floor_rpc_1679
 from . import test_workspace_quota_floor_live_1679
 from . import test_ecpg_v4_golive
+
+# LLM-01b：AI 模型分頁的 Odoo 後端最小版（帳戶、開戶 cron、免費試用金鑰、tracer 端點、
+# 未設定零外呼、neutralize、真 cursor 跑 cron 的收斂）。
+from . import test_llm_tracer
