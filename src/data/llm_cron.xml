@@ -3,6 +3,12 @@
     <!-- AI 模型分頁的 cron（DESIGN §1.3、N27、N28；票 LLM-01b）。
 
          noupdate="1"：之後維運改的 interval／active 不被發版的 -u 覆寫。
+         ⚠ 代價（義務）：-u 也不會再改已安裝 DB 裡的 code、model_id、interval。所以
+           `_cron_llm_provision` 的方法名與它所在的 model（llm_account）是**凍結契約**：要改名
+           或搬 model，必須同一個 PR 寫 migration 更新既有 DB 的 ir_act_server.code，否則
+           prod／stg 的 cron 會一直靜默呼叫不存在的方法（pitfall seed-noupdate-sticky-template-links；
+           repo-lint cron-wiring 只對 XML 與 model，驗不到 DB）。test_llm_tracer 的
+           TestLlmCronContract 斷言 DB 裡的 code 等於現行方法名。
          ⚠ 必須 active：ir.cron._trigger() 對停用的 cron 不建立立即觸發。
          「未設定」（newapi_proxy_url 空或黑洞值、或 show_llm／pilot／canary 都沒設）時，
          每個 LLM cron 的第一行就 return——例行發版會在 LLM-17 之前就把這裡的 active cron
@@ -15,6 +21,9 @@
             <field name="model_id" ref="model_woow_paas_platform_llm_account"/>
             <field name="state">code</field>
             <field name="code">model._cron_llm_provision()</field>
+            <!-- 必須是 superuser：llm_account 對所有群組都沒有 write ACL（DESIGN §2.1），而
+                 ir.actions.server.run() 在非 superuser 時會先 check_access('write')。 -->
+            <field name="user_id" ref="base.user_root"/>
             <field name="interval_number">5</field>
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>

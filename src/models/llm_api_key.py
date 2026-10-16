@@ -14,8 +14,10 @@ new-api 的 token 才是本體；PaaS 只存鏡像：token id、名稱、遮罩�
 7. 獨立 cursor 把鏡像改成 ``active``（token id、遮罩、``revealed_at``）。
 
 中途失敗：第 4 步確定沒執行 ⇒ 鏡像標 ``deleted``（從沒存在過）；結果未知 ⇒ 第 5 步依名稱
-找，找不到才用同名重送一次；第 6 步失敗 ⇒ ``failed_reveal``（超過 120 秒的金鑰不能再
-reveal，這是刻意的）。整段吞例外、不讓 ``OperationalError`` 往外拋給 ``retrying()``
+找：**列表成功而且確定沒有**才用同名重送一次（DESIGN §1.3.2）；列表本身失敗（不知道有沒有）
+⇒ 不重送、鏡像標 ``failed_reveal``、回 ``llm_unavailable``——否則第一次 POST 其實已 commit 時，
+new-api 會多一把同名、沒有鏡像的試用金鑰（LLM-10 經鏡像停用「該帳號全部試用金鑰」時漏掉它）。
+第 6 步失敗 ⇒ ``failed_reveal``（超過 120 秒的金鑰不能再 reveal，這是刻意的）。整段吞例外、不讓 ``OperationalError`` 往外拋給 ``retrying()``
 （controller 那一層），以免重播時又建一把。
 """
 import logging
@@ -58,6 +60,18 @@ _COLUMN_RE = re.compile(r'[a-z][a-z0-9_]{0,62}')
 _RAND4_ALPHABET = string.ascii_lowercase + string.digits
 #: 「有效」的試用金鑰（DESIGN §2.3：每帳號最多 1 把）。
 _FREE_TRIAL_LIVE_STATES = ('creating', 'active', 'disabled')
+
+
+class _ListFailed:
+    """``_llm_find_token`` 的「列表本身失敗」：不知道 token 在不在（≠ 確定不在的 ``None``）。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<token list failed>'
+
+
+TOKEN_LIST_FAILED = _ListFailed()
 
 KEY_STATE_SELECTION = [
     ('creating', 'Creating'),
@@ -251,11 +265,12 @@ class LlmApiKey(models.Model):
             self._llm_raise_for(account, created)
         token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None and isinstance(created, nac.Unknown):
-            # 結果未知又找不到：用同名重送一次（〔PROV〕§6.2）。
+            # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
             retried = client.user_create_token(ip, up, body, deadline=deadline)
             if retried.ok or isinstance(retried, nac.Unknown):
                 token = self._llm_find_token(client, ip, up, name, deadline)
-        if token is None:
+        if token is None or token is TOKEN_LIST_FAILED:
+            # 找不到，或列表失敗、不知道有沒有建成：不再送第二次 POST。
             self._llm_finish(key_id, {'state': 'failed_reveal'})
             raise LlmError(ERR_LLM_UNAVAILABLE)
         token_id = token['id']
@@ -312,9 +327,15 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_find_token(self, client, ip, up, name, deadline):
+        """依名稱在 token 列表找剛建的那把。
+
+        回傳三種：token dict（找到）、``None``（列表成功、確定沒有）、:data:`TOKEN_LIST_FAILED`
+        （列表本身失敗：NotExecuted／Unknown／Definite——不知道有沒有）。呼叫端只能在 ``None``
+        時重送建立。
+        """
         listed = client.user_list_tokens(ip, up, 1, 10, deadline=deadline)
         if not listed.ok:
-            return None
+            return TOKEN_LIST_FAILED
         data = listed.data if isinstance(listed.data, dict) else {}
         items = data.get('items') if isinstance(data.get('items'), list) else []
         for item in items:

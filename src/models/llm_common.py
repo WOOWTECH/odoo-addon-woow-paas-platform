@@ -82,6 +82,9 @@ ERR_LLM_KEY_INVALID = 'llm_key_invalid'
 ERR_LLM_ACCOUNT_ERROR = 'llm_account_error'
 #: handler 的 catch-all（程式錯誤）。固定訊息、不帶任何例外文字。
 ERR_LLM_INTERNAL = 'llm_internal_error'
+#: gate 的帳號拒絕（``paas._account_denial``：未登入或帳號停用）。那個 helper 回的 dict 沒有
+#: ``code``；本分頁的回應一律帶小寫 snake code（DESIGN §3.1），所以在 controller 補上這一格。
+ERR_LLM_AUTH_REQUIRED = 'llm_auth_required'
 
 
 class LlmError(Exception):
@@ -127,27 +130,28 @@ def _is_llm_internal(env):
 # --------------------------------------------------------------------------- #
 #  int8 的 quota 欄位（〔REV〕30）                                              #
 # --------------------------------------------------------------------------- #
-_INTEGER_BY_TYPE = fields.MetaField.by_type.get('integer')
-
-
 class LlmQuotaInteger(fields.Integer):
     """quota 單位的欄位一律用 PostgreSQL ``int8``。
 
     Odoo 18 的 ``fields.Integer`` 是 int4，上限 2,147,483,647 quota（約 137,439 點）；
     ``quota + used_quota`` 是累計值，月消費 NT$1 萬多的帳號約一年就會溢位，而 new-api 端是
     64 位元。點數計算一律用 Python int，不經過 float。
+
+    只覆寫 ``_column_type``，其餘交給 Odoo 18 本身（``odoo/fields.py``，18.0-20260926 對過）：
+
+    * ``Field.column_type`` 是 ``lazy_property``：非 company_dependent、非 translate 的欄位
+      直接回 ``self._column_type`` ⇒ 這裡設 ``('int8', 'int8')`` 就是 int8（``Integer`` 自己
+      也只是把 ``_column_type`` 設成 ``('int4', 'int4')``）。不另外蓋 ``column_type``：
+      那會繞過 lazy_property 的 jsonb 分支與 ``Field.setup`` 結尾的 ``reset_all``。
+    * ``MetaField.__init__`` 只在 ``type`` 還沒登記時才寫 ``MetaField.by_type[type]``
+      ⇒ 本子類別（``type='integer'``）不會取代 ``fields.Integer`` 成為手動欄位與
+      ``ir.model.fields`` 用的預設實作，不需要也不應該去改 ``by_type``。
+
+    ``test_llm_tracer.TestLlmQuotaInteger`` 在沙盒驗：欄位真的是 ``bigint``、寫入 2^40 讀回
+    相等、``by_type['integer']`` 仍是 ``fields.Integer``。
     """
 
-    # Odoo 18 的 ``Field.column_type`` 是讀 ``_column_type`` 的 property（company_dependent
-    # 欄位改存 jsonb）；這裡兩個都設，class 屬性直接蓋過那個 property。
     _column_type = ('int8', 'int8')
-    column_type = ('int8', 'int8')
-
-
-# 子類別沿用 type='integer'；別讓它取代 ``fields.Integer`` 成為 'integer' 的預設實作
-# （手動欄位與 ir.model.fields 用 by_type 建欄位）。
-if _INTEGER_BY_TYPE is not None and fields.MetaField.by_type.get('integer') is not _INTEGER_BY_TYPE:
-    fields.MetaField.by_type['integer'] = _INTEGER_BY_TYPE
 
 
 # --------------------------------------------------------------------------- #

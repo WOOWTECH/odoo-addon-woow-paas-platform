@@ -10,6 +10,8 @@
   service method（RPC 叫不到私有方法），由它們在錨定 partner 之後才提權。
 * 回應：成功 ``{'success': True, 'data': …}``；失敗 HTTP 200＋``{'success': False, 'error':
   <fallback 訊息>, 'code': <小寫 snake>, …參數}``。前端 ``llm_errors.js`` 依 code 組句。
+  **每一個**失敗都帶 code：連 gate 沿用的 ``paas._account_denial()``（它的 dict 沒有 code）
+  也補上 ``llm_auth_required``。碼表在 DESIGN §3.4；fallback 訊息的 zh_TW 在 ``i18n/zh_TW.po``。
 * **每個 handler 都有 catch-all**（〔REV〕3）：Odoo ``type='json'`` 遇到未處理的例外會把
   ``str(exception)`` 與 traceback 放進 JSON-RPC ``error.data``，``/woow`` 的 ``rpc.js`` 會直接
   顯示給租戶。所以一律回固定訊息、traceback 經 ``llm_redact`` 才進 log。``OperationalError``
@@ -30,6 +32,7 @@ from odoo.http import Controller, request, route
 
 from ..models.llm_common import (
     ERR_LLM_ACCOUNT_ERROR,
+    ERR_LLM_AUTH_REQUIRED,
     ERR_LLM_CLOSED,
     ERR_LLM_DISABLED,
     ERR_LLM_FREE_KEY_EXISTS,
@@ -90,6 +93,9 @@ def _message(code: str) -> str:
         return _('The key settings are invalid.')
     if code == ERR_LLM_UNAVAILABLE:
         return _('The AI models service is temporarily unavailable. Please try again later.')
+    if code == ERR_LLM_AUTH_REQUIRED:
+        # 與 paas._account_denial() 同一句（zh_TW.po 已有譯文「需要登入」）。
+        return _('Authentication required')
     return _('Something went wrong. Please try again later.')
 
 
@@ -121,9 +127,9 @@ def _peer_ip() -> str:
 class LlmController(HiddenChainMixin, Controller):
 
     def _gate(self) -> dict[str, Any] | None:
-        denial = _account_denial(request.env)
-        if denial:
-            return denial
+        if _account_denial(request.env):
+            # 同一個判準（paas._account_denial），但回應照本分頁的慣例帶穩定的 code。
+            return _fail(ERR_LLM_AUTH_REQUIRED)
         if not llm_visible(request.env, request.env.user.partner_id):
             return _fail(ERR_LLM_DISABLED)
         return None

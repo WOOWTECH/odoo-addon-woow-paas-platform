@@ -22,6 +22,9 @@ new-api 上一個使用者 ``<prefix>%010d``。本檔有三件事：
      密碼登入、確認 id 相同才存；P2 後 → 跳過 P1／P2；P7 回應遺失 → 重做 P4–P7（多一把
      拿不到明文的孤兒 PAT，清理在 LLM-03）；P7 存好、P9 前當掉 → 下次只跑 P9。
    * 退避 1、2、5、15、60 分鐘；第 6 次失敗或不可重試的錯誤 ⇒ ``state=error``。
+   * 帶密文的寫回（P0 密碼、P7 UP）一律 ``log_exceptions=False``：``odoo.sql_db`` 預設會把
+     失敗的 SQL 連同 bound params 寫成 ERROR 的 ``bad query``——等於把 Fernet 密文抄進 pod
+     log（DESIGN §5.5 沒列這個管道）。失敗時只記欄位名與 pgcode。
 """
 import ipaddress
 import logging
@@ -31,6 +34,7 @@ import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import psycopg2
 from psycopg2 import IntegrityError
 
 from odoo import SUPERUSER_ID, _, api, fields, models
@@ -280,20 +284,36 @@ class LlmAccount(models.Model):
             raise LlmError(ERR_LLM_UNAVAILABLE) from None
 
     def _llm_mark_up_invalid(self):
-        """UP 被 new-api 拒絕（401）⇒ ``up_state=invalid``，重簽在 LLM-03。獨立交易寫。"""
+        """UP 被 new-api 拒絕（401）⇒ ``up_state=invalid``，重簽在 LLM-03。獨立交易寫。
+
+        盡力而為：寫不進去（例如 lock_timeout）只記 pgcode，不讓呼叫端的回應變成 500——
+        下一次用到這把 UP 時 new-api 會再回一次 401。
+        """
         self.ensure_one()
-        with self.env.registry.cursor() as cr:
-            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
-            cr.execute(
-                'UPDATE %s SET up_state = %%s, write_uid = %%s, write_date = %%s WHERE id = %%s'
-                % ACCOUNT_TABLE, ('invalid', SUPERUSER_ID, _utcnow(), self.id))
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                cr.execute(
+                    'UPDATE %s SET up_state = %%s, write_uid = %%s, write_date = %%s '
+                    'WHERE id = %%s' % ACCOUNT_TABLE,
+                    ('invalid', SUPERUSER_ID, _utcnow(), self.id), log_exceptions=False)
+        except psycopg2.Error as exc:
+            _logger.warning('[LLM] account=%s: could not mark the UP invalid (pgcode=%s)',
+                            self.id, getattr(exc, 'pgcode', None))
 
     # ------------------------------------------------------------------ #
     #  開通（/api/llm/account/activate）                                    #
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_activate(self, partner, tos_version, user, real_ip):
-        """同意條款並建立 provisioning 帳戶；冪等。回傳帳戶（sudo）。"""
+        """同意條款並建立 provisioning 帳戶；冪等。回傳帳戶（sudo、**不帶**內部寫入把手）。
+
+        同一個 partner 兩個請求同時開通：輸的那筆的 INSERT 會等贏家 commit、然後撞 partial
+        unique index。Odoo 的交易是 REPEATABLE READ，snapshot 在本請求的第一個查詢（session、
+        gate）就建立了——在這個交易裡重新 search **看不到**贏家剛 commit 的那一列。所以輸的
+        那筆回 ``llm_provisioning``：這是**預期結果**，前端照常輪詢 ``/api/llm/state``（下一個
+        請求是新的交易、看得到那一列）。``TestLlmActivateRace`` 用兩條真連線驗。
+        """
         if not isinstance(tos_version, str) or not tos_version.strip():
             raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=TOS_VERSION_CURRENT)
         if tos_version.strip() != TOS_VERSION_CURRENT:
@@ -329,15 +349,15 @@ class LlmAccount(models.Model):
                     raise LlmError(ERR_LLM_UNAVAILABLE) from None
                 _llm_internal(account).write({'newapi_username': username})
         except IntegrityError:
-            # 同一個 partner 兩個請求同時開通：另一筆先 commit 了。
-            existing = Account._llm_account_for_partner(partner)
-            if existing:
-                return existing
+            # 另一個請求先 commit 了同一個 partner 的帳戶（見 docstring：本交易的 snapshot
+            # 看不到它，重新 search 也找不到）⇒ 預期結果 llm_provisioning。
             raise LlmError(ERR_LLM_PROVISIONING) from None
         cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
         if cron:
             cron.sudo()._trigger()
-        return account
+        # 內部寫入把手只掛在上面落地的那幾次呼叫；回給 controller 的是乾淨的 sudo 記錄，
+        # 從它走到的任何東西（api_key_ids…）都過不了兩個 LLM model 的 create／write 守衛。
+        return Account.browse(account.id)
 
     # ------------------------------------------------------------------ #
     #  /api/llm/state                                                      #
@@ -393,6 +413,13 @@ class LlmAccount(models.Model):
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_usage_recent(self, partner):
+        """今天的免費試用呼叫（前 10 筆）。
+
+        ⚠ **刻意偏離 DESIGN §3.2／§3.5／N26**（記在 DESIGN 變更紀錄第 4 版）：DESIGN 的
+        usage/recent 是 SWR、只讀 DB；tracer 期間這裡**同步外呼**（WEB 金鑰、UP、read 3 秒），
+        每次頁面載入吃該租戶合成 IP 1 格 GA。收斂回 SWR（cron 以 CRON 金鑰刷新、端點只讀
+        快取）在 LLM-02。
+        """
         account = self._llm_account_for_partner(partner)
         account._llm_require_active()
         ip = account._llm_tenant_ip()
@@ -445,7 +472,14 @@ class LlmAccount(models.Model):
     # ------------------------------------------------------------------ #
     @api.model
     def _cron_llm_provision(self):
-        """每 tick 開一戶；未設定（N27）時第一行就 return、零外呼。"""
+        """每 tick 開一戶；未設定（N27）時第一行就 return、零外呼。
+
+        ⚠ **凍結契約**：``data/llm_cron.xml`` 是 ``noupdate="1"``，發版的 ``-u`` 不會再改已安裝
+        DB 裡這支 cron 的 ``code``（``model._cron_llm_provision()``）與 ``model_id``。所以本方法
+        的**名字與所在的 model** 不能改；要改名或搬 model，必須同時寫 migration 更新既有 DB 的
+        ``ir_act_server.code``（否則 prod／stg 的 cron 會一直靜默呼叫不存在的方法，見 pitfall
+        ``seed-noupdate-sticky-template-links``）。``TestLlmCronContract`` 斷言 DB 裡的 code。
+        """
         config = llm_config(self.env)
         if llm_unconfigured(self.env, config):
             return
@@ -457,41 +491,50 @@ class LlmAccount(models.Model):
             client = Account._llm_client(nac.ROLE_CRON)
             llm_crypto.load()
         except (nac.NewApiError, llm_crypto.LlmCryptoError) as exc:
-            # fail closed、不搶戶：帳戶留在 provisioning，不吃嘗試次數。
+            # fail closed、不搶戶：帳戶留在 provisioning，不吃嘗試次數。訊息只有原因碼。
             _logger.error('[LLM] provisioning skipped: %s', exc.code)
             return
         deadline = time.monotonic() + nac.PROVISION_TICK_SECONDS
         claim = Account._llm_claim_for_provision()
         if claim:
             account_id, token, attempts = claim
+            stop = None
             try:
                 Account._llm_provision_one(client, config, account_id, token, attempts, deadline)
-            except _ProvisionStop as stop:
+            except _ProvisionStop as exc:
+                stop = exc
                 _logger.warning('[LLM] provisioning account=%s attempt=%s stopped: %s',
                                 account_id, attempts, stop.code)
-                Account._llm_provision_failed(account_id, token, attempts, stop)
             except _LeaseLost:
                 _logger.warning('[LLM] provisioning account=%s: lease lost, tick abandoned',
                                 account_id)
             except Exception:  # noqa: BLE001 - one account must not wedge the cron
                 _logger.error('[LLM] provisioning account=%s crashed: %s', account_id,
                               llm_redact.redact(traceback.format_exc()))
-                try:
-                    Account._llm_provision_failed(
-                        account_id, token, attempts, _ProvisionStop('llm_provision_internal'))
-                except Exception:  # noqa: BLE001
-                    _logger.error('[LLM] provisioning account=%s: could not record the failure',
-                                  account_id)
+                stop = _ProvisionStop('llm_provision_internal')
+            if stop is not None:
+                Account._llm_provision_failed(account_id, token, attempts, stop)
         if Account._llm_provision_pending():
             cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
             if cron:
                 cron._trigger()
 
     @api.model
-    def _llm_claim_for_provision(self):
-        """獨立 cursor 搶一戶並 commit：寫 lease、token、嘗試次數＋1。"""
+    def _llm_claim_for_provision(self, account_ids=None):
+        """獨立 cursor 搶一戶並 commit：寫 lease、token、嘗試次數＋1。
+
+        ``account_ids``：只在這些 id 裡搶（``None``＝全部）。生產的 cron 不傳；測試的 adapter
+        用它把搶戶限縮到自己建的帳戶（照 ``tests/committed_cron_scope.py`` 的 ``isolated()``：
+        保留真的 SQL、排序與鎖，只限縮候選），共用 DB 裡別人的 provisioning 帳戶不會被搶走。
+        """
         token = uuid.uuid4().hex
         now = _utcnow()
+        scope = ''
+        params = {'until': now + timedelta(minutes=PROVISION_LEASE_MINUTES), 'token': token,
+                  'uid': SUPERUSER_ID, 'now': now, 'state': 'provisioning'}
+        if account_ids is not None:
+            scope = 'AND id = ANY(%(ids)s) '
+            params['ids'] = sorted(int(i) for i in account_ids)
         with self.env.registry.cursor() as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
             cr.execute(
@@ -499,28 +542,35 @@ class LlmAccount(models.Model):
                 'provision_lease_token = %(token)s, '
                 'provision_attempts = COALESCE(provision_attempts, 0) + 1, '
                 'write_uid = %(uid)s, write_date = %(now)s '
-                'WHERE id = (SELECT id FROM {t} WHERE state = %(state)s '
+                'WHERE id = (SELECT id FROM {t} WHERE state = %(state)s {scope}'
                 'AND (next_attempt_at IS NULL OR next_attempt_at <= %(now)s) '
                 'AND (provision_lease_until IS NULL OR provision_lease_until < %(now)s) '
                 'ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) '
-                'RETURNING id, provision_attempts'.format(t=ACCOUNT_TABLE),
-                {'until': now + timedelta(minutes=PROVISION_LEASE_MINUTES), 'token': token,
-                 'uid': SUPERUSER_ID, 'now': now, 'state': 'provisioning'})
+                'RETURNING id, provision_attempts'.format(t=ACCOUNT_TABLE, scope=scope),
+                params)
             row = cr.fetchone()
         if not row:
             return None
         return row[0], token, row[1]
 
     @api.model
-    def _llm_provision_pending(self):
-        """還有可以立刻開戶的帳戶嗎（獨立 cursor：主 cursor 的 snapshot 看不到本 tick 的寫回）。"""
+    def _llm_provision_pending(self, account_ids=None):
+        """還有可以立刻開戶的帳戶嗎（獨立 cursor：主 cursor 的 snapshot 看不到本 tick 的寫回）。
+
+        ``account_ids`` 的語意同 :meth:`_llm_claim_for_provision`。
+        """
         now = _utcnow()
+        scope = ''
+        params = [now, now]
+        if account_ids is not None:
+            scope = ' AND id = ANY(%s)'
+            params.append(sorted(int(i) for i in account_ids))
         with self.env.registry.cursor() as cr:
             cr.execute(
                 'SELECT 1 FROM %s WHERE state = %%s '
                 'AND (next_attempt_at IS NULL OR next_attempt_at <= %%s) '
-                'AND (provision_lease_until IS NULL OR provision_lease_until < %%s) LIMIT 1'
-                % ACCOUNT_TABLE, ('provisioning', now, now))
+                'AND (provision_lease_until IS NULL OR provision_lease_until < %%s)%s LIMIT 1'
+                % (ACCOUNT_TABLE, scope), ['provisioning'] + params)
             return cr.fetchone() is not None
 
     @api.model
@@ -535,19 +585,32 @@ class LlmAccount(models.Model):
 
     @api.model
     def _llm_guarded_update(self, account_id, token, values):
-        """以獨立 cursor 帶守衛寫回；守衛不成立（lease 被接手、狀態變了）⇒ ``_LeaseLost``。"""
+        """以獨立 cursor 帶守衛寫回；守衛不成立（lease 被接手、狀態變了）⇒ ``_LeaseLost``。
+
+        DB 錯誤（最常見是故意設的 5 秒 ``lock_timeout``）⇒ ``_ProvisionStop('llm_db_write_failed')``
+        （可重試）。這裡會綁密文（P0 密碼、P7 UP），所以 SQL 一律 ``log_exceptions=False``、
+        例外 ``from None``：log 只有欄位名與 pgcode，不會有 ``bad query`` 帶出 bound params。
+        """
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
         columns = sorted(values)
         if not all(_COLUMN_RE.fullmatch(column) for column in columns):
             raise ValueError('bad column name')
-        with self.env.registry.cursor() as cr:
-            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
-            cr.execute(
-                'UPDATE %s SET %s WHERE id = %%s AND provision_lease_token = %%s AND state = %%s'
-                % (ACCOUNT_TABLE, ', '.join('%s = %%s' % column for column in columns)),
-                [values[column] for column in columns] + [account_id, token, 'provisioning'])
-            if cr.rowcount != 1:
-                raise _LeaseLost()
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,), log_exceptions=False)
+                cr.execute(
+                    'UPDATE %s SET %s WHERE id = %%s AND provision_lease_token = %%s AND state = %%s'
+                    % (ACCOUNT_TABLE, ', '.join('%s = %%s' % column for column in columns)),
+                    [values[column] for column in columns] + [account_id, token, 'provisioning'],
+                    log_exceptions=False)
+                if cr.rowcount != 1:
+                    raise _LeaseLost()
+        except psycopg2.Error as exc:
+            _logger.warning('[LLM] account=%s: guarded write of %s failed (pgcode=%s)',
+                            account_id, ','.join(c for c in columns
+                                                 if c not in ('write_uid', 'write_date')),
+                            getattr(exc, 'pgcode', None))
+            raise _ProvisionStop('llm_db_write_failed') from None
 
     @api.model
     def _llm_provision_failed(self, account_id, token, attempts, stop):
@@ -565,9 +628,19 @@ class LlmAccount(models.Model):
                 if stop.retry_after:
                     next_at = max(next_at, now + timedelta(seconds=int(stop.retry_after)))
             values['next_attempt_at'] = next_at
+        # 本方法**不往外拋**：記不下失敗（lease 已被接手、DB 寫不進去）時只留 log，lease 到期
+        # 後下一個 tick 會重新搶到這一戶。
         try:
             self._llm_guarded_update(account_id, token, values)
         except _LeaseLost:
+            return
+        except _ProvisionStop as failed:
+            _logger.warning('[LLM] provisioning account=%s: could not record %s (%s)',
+                            account_id, stop.code, failed.code)
+            return
+        except Exception:  # noqa: BLE001 - see above
+            _logger.error('[LLM] provisioning account=%s: could not record the failure: %s',
+                          account_id, llm_redact.redact(traceback.format_exc()))
             return
         if terminal:
             # 告警出口在 LLM-02b（llm_event severity=alert＋email）；這裡先留 log。
@@ -621,28 +694,37 @@ class LlmAccount(models.Model):
                                      else 'llm_newapi_login_failed', terminal=True)
             raise _stop_for(login)
         data = login.data if isinstance(login.data, dict) else {}
-        if data.get('require_verification'):
-            raise _ProvisionStop('llm_newapi_2fa_enabled', terminal=True)
         jwt = data.get('access_token')
         session = data.get('session') if isinstance(data.get('session'), dict) else {}
         sid = session.get('sid')
-        login_user = data.get('user') if isinstance(data.get('user'), dict) else {}
         if not (isinstance(jwt, str) and nac.JWT_RE.fullmatch(jwt)):
-            raise _ProvisionStop('llm_newapi_contract_login', terminal=True)
-        expected = user_id or pending_user_id
-        if login_user.get('id') != expected:
-            raise _ProvisionStop('llm_newapi_user_mismatch', terminal=True)
-        if pending_user_id:
-            self._llm_guarded_update(account_id, token, {'newapi_user_id': pending_user_id})
-            user_id = pending_user_id
-
+            jwt = None
+        # 從這裡開始 new-api 可能已經簽發了一個 session：之後**任何**一步失敗（含守衛寫回丟
+        # _LeaseLost／_ProvisionStop），finally 都會撤掉它（P8）。不撤的話它活 30 天、佔 new-api
+        # 每人 50 個同時 session 的名額，而撞名收斂的路徑每次重試都會再多一個。
         try:
+            if data.get('require_verification'):
+                raise _ProvisionStop('llm_newapi_2fa_enabled', terminal=True)
+            if jwt is None:
+                raise _ProvisionStop('llm_newapi_contract_login', terminal=True)
+            login_user = data.get('user') if isinstance(data.get('user'), dict) else {}
+            expected = user_id or pending_user_id
+            if login_user.get('id') != expected:
+                raise _ProvisionStop('llm_newapi_user_mismatch', terminal=True)
+            if pending_user_id:
+                self._llm_guarded_update(account_id, token, {'newapi_user_id': pending_user_id})
+                user_id = pending_user_id
             up = self._llm_p5_to_p7(client, account_id, token, username, ip, jwt, password,
                                     attempts, deadline)
         finally:
             # P8：撤掉這次的 session；失敗不擋開戶（30 天後自然過期）。
-            if isinstance(sid, str) and nac.SID_RE.fullmatch(sid):
-                ended = client.user_delete_session(ip, jwt, sid, deadline=deadline)
+            if jwt is not None and isinstance(sid, str) and nac.SID_RE.fullmatch(sid):
+                try:
+                    # 清理步驟另有一小段寬限：tick 的預算用完（例如前一步就是逾時）也要試著撤。
+                    ended = client.user_delete_session(ip, jwt, sid, deadline=max(
+                        deadline, time.monotonic() + nac.SESSION_REVOKE_GRACE_SECONDS))
+                except Exception:  # noqa: BLE001 - must not mask the error being unwound
+                    ended = nac.Unknown('client_internal')
                 if not ended.ok and not (isinstance(ended, nac.Definite)
                                          and ended.code == 'AUTH_SESSION_NOT_FOUND'):
                     _logger.warning('[LLM] provisioning account=%s: session revoke %s',
