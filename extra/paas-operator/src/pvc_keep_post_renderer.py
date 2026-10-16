@@ -29,6 +29,11 @@ a guaranteed failure. Objects that do not exist yet render untouched. What canno
 reused this way (a claim template added/removed, a selector change) is left alone
 for the operator's upgrade preflight to refuse with a readable message.
 
+Third job (AI-FIX-NET-1, ``tenant_workload_policy``): when the JSON carries a ``tenant``
+object, add the egress-gate init container (#1497) and the node-avoidance nodeAffinity
+(INFRA-XSVC-007) to the rendered pod templates. Strictly opt-in and fail-open: any error
+in that stage leaves the manifest exactly as the earlier stages produced it.
+
 HelmService invokes it as:
     helm install/upgrade ... --post-renderer <python> --post-renderer-args <this>
         [--post-renderer-args <JSON live snapshot, see ``live_snapshot``>]
@@ -192,10 +197,40 @@ def _parse_snapshot(argv):
     return data
 
 
+def _load_policy():
+    """``tenant_workload_policy`` under either import style (package vs. script mode)."""
+    try:
+        from src import tenant_workload_policy as policy
+    except ImportError:
+        import tenant_workload_policy as policy
+    return policy
+
+
+def apply_tenant_stage(docs, snapshot):
+    """AI-FIX-NET-1 stage; returns docs unchanged when not requested or on ANY error.
+
+    A policy bug must never fail a tenant's install/upgrade, so every failure is swallowed
+    after being written to stderr (helm shows it only if the render itself fails).
+    """
+    options = (snapshot or {}).get("tenant")
+    if not options:
+        return docs
+    try:
+        policy = _load_policy()
+        new_docs, log = policy.apply_tenant_policy(docs, options, (snapshot or {}).get("tenant_live"))
+    except Exception as exc:  # noqa: BLE001 — fail open, see docstring
+        sys.stderr.write("tenant-policy: skipped (%s: %s)\n" % (type(exc).__name__, exc))
+        return docs
+    for line in log:
+        sys.stderr.write("tenant-policy: %s\n" % line)
+    return new_docs
+
+
 def main():
     snapshot = _parse_snapshot(sys.argv)
     docs = list(yaml.safe_load_all(sys.stdin))
     out = reuse_live_values(stamp_keep_on_pvcs(docs), snapshot)
+    out = apply_tenant_stage(out, snapshot)
     yaml.safe_dump_all(out, sys.stdout, default_flow_style=False, sort_keys=False)
 
 
