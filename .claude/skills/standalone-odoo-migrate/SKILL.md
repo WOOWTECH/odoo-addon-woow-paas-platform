@@ -23,9 +23,36 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 | 平台 pod 的 odoo shell：停權、復權、Redeploy、conf 覆寫 | 人（平台管理員），用 `scripts/platform/cloud-service.sh`；agent 只給整行指令 | prod 平台寫入，agent 在 auto mode 下會被擋，不要繞過 |
 | paas-odoo-ci PR merge、prod image `/approve` | 人 | agent 只開 PR |
 
+## 追蹤 issue
+
+**一站一張追蹤票，動手之前先開**（或確認已經有）：本 repo 的 Gitea issue，標題 `migrate: <來源 ns> 搬進 PaaS`，
+body 寫 `Refs #1604`。範例：#1760（harumi；它是補開的，10-16 之前的紀錄留在 #1604 的留言、由 #1760 逐條連結）。
+
+- **body＝現況**，每次有進展就改寫：來源（ns、hostname、tunnel）、正式目標（工作區、cloud_service id、release、ns）、
+  方案與試用起始日、addon、conf 覆寫、寄收信、外部整合（MCP 等）、回切方式、證據與離線備份的位置；下面接待辦 checklist
+  與「歷程」連結表。**留言＝歷程**，一個里程碑一則。
+- work-state label 照 `docs/agents/triage-labels.md` 只掛一個：agent 在做 `ready-for-agent`、等人（驗收、WMO、放行）
+  `ready-for-human`、等裁決 `needs-decision`；另掛 `derived`。來源下線、待辦全勾才關票。
+- 什麼時候留言：
+
+  | 時點 | 記什麼 |
+  |---|---|
+  | 「開始前先問調用者」每次有答案 | 已裁決表（項目、答案、日期）；答案改了就另起一則註明取代哪一則，不改舊留言 |
+  | 步驟 1～3 | 盤點摘要（core_date、模組數、非 core addon、filestore、POS）、相容性比對的阻斷與注意事項 |
+  | 步驟 5 | addon PR、image tag／digest、Sync 是否已按 |
+  | 每輪彩排 | 彩排站 cs id、匯出量、restore／兩次 verify 結果、發現的缺口（缺口另開 follow-up 票） |
+  | 購買目標服務 | cs id、release、ns、方案、`trial_end_date`；刪除也記 |
+  | 切換前檢查 | 每一項的結論 |
+  | 步驟 9 切換 | 切換紀錄：UTC 時間線表（時間｜動作｜結果）→ 技術驗收 → 回切方式 → 待辦（範例 #1604 留言 22602） |
+  | 收尾 | 平台備份 id、離線備份位置、刪掉的資源、來源下線日期 |
+
+- **不寫進 issue**：帳密、token、初始管理員密碼、客戶的 addon 原始碼、客戶資料內容（比對結果只列表名與筆數）。
+- 本機證據（盤點 JSON、匯出 JSON、restore／verify log、DNS 備份）放 repo 旁的 `woow-<追蹤票號>-evidence/<set>/`，
+  路徑寫進 body；它與 scratchpad 不同，不會被清掉。
+
 ## 開始前先問調用者
 
-搬一個站有幾件事只有調用本 skill 的人能決定。照下表的時機逐項問清楚，答案寫進該站的追蹤 issue；沒有答案的項目
+搬一個站有幾件事只有調用本 skill 的人能決定。照下表的時機逐項問清楚，答案寫進該站的追蹤 issue（見上一節）；沒有答案的項目
 不要自己假設，也不要拿上一站的答案套用。
 
 | 何時問 | 問什麼 | 為什麼要問 |
@@ -113,6 +140,7 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 ## 步驟
 
 每支腳本的參數與 exit code 寫在檔頭（`sed -n '2,20p' <script>`），這裡不重複。
+開始前先確認這一站有追蹤 issue（上方「追蹤 issue」）；每一步的完成條件達成後，把結果留言到追蹤 issue，並更新 body。
 
 1. **盤點來源**（WMO）：`scripts/source/inventory.sh --context woow-k3s --ns <ns>`。
    完成條件：拿到 `inventory-<ns>-<UTC>.json`，stderr 摘要列出 core_date、模組數、非 core addon、filestore。
