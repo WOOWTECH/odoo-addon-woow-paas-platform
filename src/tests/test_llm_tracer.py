@@ -525,7 +525,9 @@ class TestLlmTracerHttp(HttpCase):
         self.env.flush_all()
         self.env.cr.execute('UPDATE %s SET newapi_password_enc = %%s WHERE id = %%s'
                             % ACCOUNT_TABLE, ('neutralized', account.id))
-        self.env[ACCOUNT]._cron_llm_provision()
+        # 開戶放棄（state=error）會記一行 ERROR：這裡是預期內的，不算測試失敗。
+        with mute_logger('odoo.addons.woow_paas_platform.models.llm_account'):
+            self.env[ACCOUNT]._cron_llm_provision()
         account.invalidate_recordset()
         self.assertEqual((account.state, account.last_error_code),
                          ('error', 'llm_secret_neutralized'))
