@@ -23205,11 +23205,6 @@ msgid ""
 msgstr "每個 namespace 的叢集 quota 應帶的同步 token：最近一次確認成功的推送，或結果未知的推送。叢集上的 token 不同代表有其他寫入落在那裡，下一次同步會重新推送。"
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_unguarded
-msgid "Pushed Without Version Protection"
-msgstr "未受版本防護的推送"
-
-#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
 msgid "Quota not synced: %(reason)s"
@@ -23240,26 +23235,11 @@ msgid ""
 msgstr "要以目前的政策立即重試 quota 同步嗎？推送絕不會調降叢集上的任何值；被擋下的推送仍會被擋下。"
 
 #. module: woow_paas_platform
-#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
-msgid ""
-"The last push was made without version protection because the operator does not support it.\n"
-"                        An older request that finishes late could overwrite it. Upgrade the operator."
-msgstr "最近一次推送因 operator 不支援而沒有版本防護。\n                        晚完成的舊請求可能覆蓋它。請升級 operator。"
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_status
 msgid ""
 "The last sync result, except that a sync for an older target is shown as "
 "pending."
 msgstr "最近一次同步結果；若同步的是較舊的目標，則顯示為待同步。"
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_unguarded
-msgid ""
-"The operator does not support versioned quota writes, so the last push could"
-" be overwritten by an older request that finishes late. Upgrade the "
-"operator."
-msgstr "Operator 不支援版本防護的 quota 寫入，最近一次推送可能被晚完成的舊請求覆蓋。請升級 operator。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -23282,3 +23262,23 @@ msgstr "Workspace %(name)s（id=%(id)s，%(ws_hash)s）的 quota 同步在 %(cou
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_reconcile_workspace_quota_ir_actions_server
 msgid "Workspace Quota: Sync Retry and Reconcile"
 msgstr "Workspace Quota：同步重試與對帳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_unguarded
+msgid ""
+"At the last sync the operator did not support versioned quota writes, so "
+"pushes are made without protection: an older request that finishes late "
+"could overwrite a newer value. Upgrade the operator."
+msgstr "最近一次同步時 operator 不支援版本防護的 quota 寫入，推送沒有防護：晚完成的舊請求可能覆蓋較新的值。請升級 operator。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_unguarded
+msgid "Operator Lacks Version Protection"
+msgstr "Operator 不支援版本防護"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid ""
+"The operator does not support versioned quota writes, so pushes are made without protection.\n"
+"                        An older request that finishes late could overwrite a newer value. Upgrade the operator."
+msgstr "Operator 不支援版本防護的 quota 寫入，推送沒有防護。\n                        晚完成的舊請求可能覆蓋較新的值。請升級 operator。"

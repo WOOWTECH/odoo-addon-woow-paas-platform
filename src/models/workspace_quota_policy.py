@@ -85,6 +85,8 @@ _RESETTING_TRIGGERS = ('admin', 'manual')
 _RECONCILE_CRON = 'woow_paas_platform.ir_cron_reconcile_workspace_quota'
 #: blocked 之中屬於暫時性、值得自動重試的原因（其餘 blocked 是永久阻擋，等人處理）。
 _TRANSIENT_BLOCKED = ('quota_unreadable', 'managed_quota_status_pending')
+#: 確定沒寫入、但值得自動重試的 4xx（其餘 4xx 是請求本身有問題，記為 blocked 等人處理）。
+_TRANSIENT_HTTP = (401, 403, 408, 429)
 
 
 # ------------------------------------------------------------------------- #
@@ -194,10 +196,11 @@ class WorkspaceQuotaPolicy(models.Model):
              'push, or a push whose result is unknown. A different token on the cluster means '
              'another write landed there, so the next sync pushes again.')
     quota_sync_unguarded = fields.Boolean(
-        string='Pushed Without Version Protection', groups='base.group_system', copy=False,
+        string='Operator Lacks Version Protection', groups='base.group_system', copy=False,
         readonly=True,
-        help='The operator does not support versioned quota writes, so the last push could be '
-             'overwritten by an older request that finishes late. Upgrade the operator.')
+        help='At the last sync the operator did not support versioned quota writes, so pushes '
+             'are made without protection: an older request that finishes late could overwrite '
+             'a newer value. Upgrade the operator.')
     quota_attempt_fingerprint = fields.Char(
         string='Last Attempted Target', groups='base.group_system', copy=False, readonly=True)
     quota_synced_fingerprint = fields.Char(
@@ -496,13 +499,16 @@ class WorkspaceQuotaPolicy(models.Model):
             return {'state': 'busy', 'trigger': trigger}
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
-        attempted = sorted(set(namespaces)) if namespaces else workspace._quota_namespaces()
+        # 一律同步整個工作區（加上呼叫端點名、可能已不在存活集合裡的 namespace）：只同步子集
+        # 會把其他 namespace 的狀態（例如 blocked）蓋掉，指紋也會在子集與全集之間來回、重置額度。
+        own = workspace._quota_namespaces()
+        attempted = sorted(set(own) | set(namespaces or ()))
         client = paas_operator_service.get_paas_operator_client(self.env(context={}))
         expected = workspace._quota_expected_tokens()
         results = {}
         for namespace in attempted:
             results[namespace] = _sync_namespace(client, namespace, target, expected.get(namespace))
-        workspace._record_quota_sync(version, results, _fingerprint(target, attempted), trigger)
+        workspace._record_quota_sync(version, results, _fingerprint(target, own), trigger)
         summary = workspace._quota_status_summary()
         summary['trigger'] = trigger
         return summary
@@ -534,7 +540,7 @@ class WorkspaceQuotaPolicy(models.Model):
             if unguarded:
                 reasons.append(
                     'remote_guard_unavailable: %s (the operator does not support versioned '
-                    'quota writes; pushed without protection against late requests)'
+                    'quota writes; pushes are made without protection against late requests)'
                     % ', '.join(unguarded))
             pending = ['%s %s: cluster %s, target %s' % (ns, key, live, wanted)
                        for ns, r in sorted(results.items())
@@ -593,16 +599,44 @@ class WorkspaceQuotaPolicy(models.Model):
         各自交易：快照在拿鎖前才建立（看得到別人剛 commit 的政策與服務集合），而且不會把
         前面處理過的工作區鎖到整批結束（那會讓開通拿不到鎖而失敗）。
         """
-        candidates = self.sudo()._quota_reconcile_candidates()
-        for workspace_id in candidates[:limit]:
+        # 上限只算「需要處理」的工作區：先切片再判斷，會讓 id 較大的工作區永遠輪不到。
+        due = [workspace.id for workspace in self.sudo()._quota_reconcile_candidates()
+               if workspace._quota_reconcile_trigger()]
+        for workspace_id in due[:limit]:
             try:
                 with self.env.registry.cursor() as cr:
                     env = api.Environment(cr, SUPERUSER_ID, {})
                     env[self._name].browse(workspace_id)._quota_reconcile_one()
-            except Exception:  # noqa: BLE001 —— 一個工作區失敗不影響其他工作區
+            except Exception as exc:  # noqa: BLE001 —— 一個工作區失敗不影響其他工作區
                 _logger.exception("[#1680] quota reconcile failed workspace=%s", workspace_id)
-        if len(candidates) > limit:
+                self._record_quota_reconcile_error(workspace_id, exc)
+        if len(due) > limit:
             self._schedule_quota_reconcile()
+
+    @api.model
+    def _record_quota_reconcile_error(self, workspace_id, exc):
+        """逃出同步的例外（整筆交易已回捲）另開一筆交易記成可重試的失敗。
+
+        不記的話，指紋、額度與下次重試時間都跟著回捲，下一輪又當成新目標重來——有限重試就被
+        繞過了。這裡走同一個 ``_record_quota_sync``，所以同樣受 5 次上限約束。
+        """
+        try:
+            with self.env.registry.cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                workspace = env[self._name].browse(workspace_id)
+                if not workspace.exists() or not workspace._lock_quota_policy(nowait=True):
+                    return
+                target = env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
+                own = workspace._quota_namespaces()
+                failure = {'state': 'pending', 'retryable': True,
+                           'reason': 'internal_error: %s' % type(exc).__name__}
+                trigger = 'retry' if workspace._quota_reconcile_trigger() == 'retry' else 'reconcile'
+                workspace._record_quota_sync(
+                    workspace.quota_target_version, {ns: dict(failure) for ns in own} or
+                    {'-': dict(failure)}, _fingerprint(target, own), trigger)
+        except Exception:  # noqa: BLE001 —— 連記錄都失敗：只留 log，兜底 cron 仍會再看
+            _logger.exception("[#1680] could not record quota reconcile error workspace=%s",
+                              workspace_id)
 
     def _quota_reconcile_candidates(self):
         live = self.env['woow_paas_platform.cloud_service'].sudo().search([
@@ -610,7 +644,24 @@ class WorkspaceQuotaPolicy(models.Model):
         return self.search([
             '|', ('id', 'in', live.ids),
             ('quota_sync_state', 'in', ('pending', 'unconfirmed', 'blocked', 'exhausted')),
-        ], order='id').ids
+        ], order='id')
+
+    def _quota_reconcile_trigger(self):
+        """背景要不要同步這個工作區、以哪一種觸發：目標已變、重試到期、該讀回驗證；否則 ``None``。"""
+        self.ensure_one()
+        workspace = self.sudo()
+        now = fields.Datetime.now()
+        target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
+        state = workspace.quota_sync_state
+        if _fingerprint(target, workspace._quota_namespaces()) != workspace.quota_attempt_fingerprint:
+            return 'reconcile'
+        if (state in ('pending', 'unconfirmed', 'blocked') and workspace.quota_next_retry_at
+                and workspace.quota_next_retry_at <= now):
+            return 'retry'
+        if state == 'synced' and (not workspace.quota_verified_at
+                                  or workspace.quota_verified_at <= now - VERIFY_INTERVAL):
+            return 'verify'
+        return None
 
     def _quota_reconcile_one(self):
         """單一工作區的背景判斷：目標已變、重試到期、或該讀回驗證才同步；其餘不動。"""
@@ -618,18 +669,8 @@ class WorkspaceQuotaPolicy(models.Model):
         workspace = self.sudo()
         if not workspace.exists():
             return {'state': 'skipped'}
-        now = fields.Datetime.now()
-        target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
-        state = workspace.quota_sync_state
-        if _fingerprint(target, workspace._quota_namespaces()) != workspace.quota_attempt_fingerprint:
-            trigger = 'reconcile'
-        elif (state in ('pending', 'unconfirmed', 'blocked') and workspace.quota_next_retry_at
-              and workspace.quota_next_retry_at <= now):
-            trigger = 'retry'
-        elif state == 'synced' and (not workspace.quota_verified_at
-                                    or workspace.quota_verified_at <= now - VERIFY_INTERVAL):
-            trigger = 'verify'
-        else:
+        trigger = workspace._quota_reconcile_trigger()
+        if not trigger:
             return {'state': 'skipped'}
         return workspace._quota_sync(trigger, nowait=True)
 
@@ -660,7 +701,12 @@ class WorkspaceQuotaPolicy(models.Model):
             return False, 'quota_sync_busy'
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
-        fingerprint = _fingerprint(target, [namespace])
+        own = workspace._quota_namespaces()
+        # 開通只處理這一個 namespace：工作區不只這一個時不記全集指紋，下一輪 cron 會把整個工作區
+        # 重新評估一次（只記子集會讓其他 namespace 的狀態被這次結果蓋掉）。
+        fingerprint = _fingerprint(target, own) if own == [namespace] else None
+        if fingerprint is None:
+            workspace._schedule_quota_reconcile()
         plan = _plan_namespace(client, namespace, target)
         token = uuid.uuid4().hex if plan.get('guarded') else None
         if plan.get('not_found'):
@@ -796,8 +842,13 @@ def _push_result(plan, call, readback=None, token=None):
         code = getattr(exc, 'status_code', None)
         if code == 409 and plan.get('guarded'):
             return dict(base, state='pending', reason='quota_conflict', retryable=True, error=exc)
-        if code is not None and 400 <= code < 500:
+        if code in _TRANSIENT_HTTP:
+            # 確定沒寫（operator 在寫入前就拒絕），但重試可能就好（限流、逾時、憑證剛修好）。
             return dict(base, state='pending', reason='operator_error: %s' % code,
+                        retryable=True, error=exc)
+        if code is not None and 400 <= code < 500:
+            # 請求本身被拒（形狀、路徑）：重試也不會好，要人處理。
+            return dict(base, state='blocked', reason='operator_error: %s' % code,
                         retryable=False, error=exc)
         landed = readback() if readback else None
         detail = code or exc.message

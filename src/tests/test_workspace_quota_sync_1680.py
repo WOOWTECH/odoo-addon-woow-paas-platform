@@ -296,24 +296,17 @@ class TestWorkspaceQuotaRetryBudget1680(_SyncFixture):
         self.assertEqual(self._ws().quota_sync_state, 'synced')
 
 
-@tagged('post_install', '-at_install')
-class TestWorkspaceQuotaConcurrentSync1680(TransactionCase):
-    """多筆真交易（各自的 DB 連線、真 commit）＋ operator 邊界的可控延遲，驗證收斂。
+class _CommittedFixture(TransactionCase):
+    """committed 的工作區＋一台存活服務；每個 helper 是一筆獨立的真交易。
 
-    不是單線 mock 照順序呼叫：管理員推送在另一條執行緒裡、卡在 operator 回應之前持有工作區
-    鎖；生命週期交易同時進來；遠端請求可以「晚到」。committed 的 fixture 由
-    ``CommittedCronScope`` 記帳並在結束時精確刪除。
+    committed 的 fixture 由 ``CommittedCronScope`` 記帳並在結束時精確刪除。
     """
 
-    def setUp(self):
-        super().setUp()
-        self.scope = CommittedCronScope(self)
-        self.addCleanup(self.scope.purge)
-        self.admin_id = self.env.ref('base.user_admin').id
+    def _committed_workspace(self, name):
         with self.scope.track(), self.registry.cursor() as cr:
             env = self.scope.env(cr)
-            workspace = env['woow_paas_platform.workspace'].create({'name': 'Quota 1680 concurrent'})
-            self.ns = workspace_namespace(env, workspace)
+            workspace = env['woow_paas_platform.workspace'].create({'name': name})
+            namespace = workspace_namespace(env, workspace)
             template = env['woow_paas_platform.cloud_app_template'].create({
                 'name': 'Quota template 1680', 'slug': 'quota-1680-%s' % workspace.id,
                 'helm_repo_url': 'https://charts.example.com', 'helm_chart_name': 'quota',
@@ -321,12 +314,20 @@ class TestWorkspaceQuotaConcurrentSync1680(TransactionCase):
             })
             # 公式：vcpu 4 → 12 cores；ram 4 → 12Gi；storage 20 → 100Gi；1 台 → ephemeral 4Gi／80Gi。
             service = _internal_provision(env['woow_paas_platform.cloud_service']).create({
-                'name': 'svc-1680', 'workspace_id': workspace.id, 'template_id': template.id,
-                'helm_release_name': 'svc-1680', 'helm_namespace': self.ns, 'state': 'running',
+                'name': 'svc-1680-%s' % workspace.id, 'workspace_id': workspace.id,
+                'template_id': template.id, 'helm_release_name': 'svc-1680-%s' % workspace.id,
+                'helm_namespace': namespace, 'state': 'running',
                 'allocated_vcpu': 4, 'allocated_ram_gb': 4.0, 'allocated_storage_gb': 20,
             })
-            self.ws_id, self.service_id = workspace.id, service.id
             cr.commit()
+            return workspace.id, service.id, namespace
+
+    def setUp(self):
+        super().setUp()
+        self.scope = CommittedCronScope(self)
+        self.addCleanup(self.scope.purge)
+        self.admin_id = self.env.ref('base.user_admin').id
+        self.ws_id, self.service_id, self.ns = self._committed_workspace('Quota 1680 concurrent')
         self.operator = FakeQuotaOperator({self.ns: build_hard('12', '12Gi', '100Gi', '4Gi', '80Gi')})
         client = self.operator.bind()
         patcher = patch(_CLIENT, return_value=client)
@@ -357,10 +358,19 @@ class TestWorkspaceQuotaConcurrentSync1680(TransactionCase):
             self.scope.env(cr)['woow_paas_platform.workspace']._cron_reconcile_workspace_quotas()
             cr.commit()
 
-    def _committed(self, *names):
+    def _committed(self, *names, ws_id=None):
         with self.registry.cursor() as cr:
-            ws = self.scope.env(cr)['woow_paas_platform.workspace'].browse(self.ws_id)
+            ws = self.scope.env(cr)['woow_paas_platform.workspace'].browse(ws_id or self.ws_id)
             return tuple(ws[name] for name in names)
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaConcurrentSync1680(_CommittedFixture):
+    """多筆真交易（各自的 DB 連線、真 commit）＋ operator 邊界的可控延遲，驗證收斂。
+
+    不是單線 mock 照順序呼叫：管理員推送在另一條執行緒裡、卡在 operator 回應之前持有工作區
+    鎖；生命週期交易同時進來；遠端請求可以「晚到」。
+    """
 
     def test_lifecycle_push_during_an_in_flight_admin_push_is_not_lost(self):
         """換方案的增額剛好撞上管理員推送：不在鎖外推送、不丟掉，背景同步收斂到兩者的結果。"""
@@ -512,3 +522,69 @@ class TestWorkspaceQuotaLifecycleAndDeploy1680(_SyncFixture):
         self.assertEqual(ws.quota_sync_state, 'pending')
         self.assertIn('quota_conflict', ws.quota_sync_reason)
         self.assertGreater(len(self._cron_triggers()), triggers, '排了背景重試')
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaOperatorErrors1680(_SyncFixture):
+
+    def test_transient_4xx_is_retried_and_request_shape_errors_need_a_human(self):
+        for code in (408, 429, 401, 403):
+            with self.subTest(code=code):
+                self.operator.put_error = PaaSOperatorAPIError('API error', status_code=code)
+                self._retry() if self._ws().quota_floor_cpu else self._set(cpu=18)
+                ws = self._ws()
+                self.assertEqual(ws.quota_sync_state, 'pending')
+                self.assertTrue(ws.quota_next_retry_at, '%s 是暫時性錯誤，要自動重試' % code)
+        self.operator.put_error = PaaSOperatorAPIError('API error', status_code=422)
+        self._retry()
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'blocked', '請求形狀錯誤重試也不會好：要人處理')
+        self.assertIn('operator_error: 422', ws.quota_sync_reason)
+        self.assertFalse(ws.quota_next_retry_at)
+
+    def test_lifecycle_sync_covers_every_workspace_namespace(self):
+        other = self.ns + '-legacy'
+        self.operator.live[other] = build_hard('12', '12Gi', '100Gi', '4Gi', '80Gi')
+        self.operator.live[other]['persistentvolumeclaims'] = '12'  # 這個 namespace 永久阻擋
+        legacy = self._service('svc-legacy-ns', vcpu=1, ram=1.0, storage=10)
+        legacy.sudo().write({'helm_namespace': other})
+        sibling = self._service('svc-sibling', vcpu=1, ram=1.0, storage=10)
+        self._set(cpu=18)
+        self.assertEqual(self._ws().quota_sync_state, 'blocked')
+        with patch(_CLIENT, return_value=self.client):
+            sibling.unlink()  # 生命週期只帶自己的 namespace，也不能把另一個 namespace 的阻擋蓋掉
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'blocked')
+        self.assertIn('would_lower: persistentvolumeclaims', ws.quota_sync_reason)
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaCronFairness1680(_CommittedFixture):
+    """背景同步：只把「需要處理」的工作區算進每輪上限；逃出的例外也受有限重試約束。"""
+
+    def test_due_workspaces_beyond_the_batch_limit_are_not_starved(self):
+        self._admin_set(cpu=18)  # 第一個工作區已同步、剛驗證過 ⇒ 不需要處理
+        other_id, _service, other_ns = self._committed_workspace('Quota 1680 second')
+        self.operator.live[other_ns] = build_hard('8', '8Gi', '100Gi', '4Gi', '80Gi')
+        self.operator.rv[other_ns] = 1
+        with self.registry.cursor() as cr:
+            self.scope.env(cr)['woow_paas_platform.workspace']._cron_reconcile_workspace_quotas(limit=1)
+            cr.commit()
+        self.assertEqual(self.operator.live[other_ns]['limits.cpu'], '12', '第二個工作區有被處理')
+        self.assertEqual(self._committed('quota_sync_state', ws_id=other_id)[0], 'synced')
+
+    def test_an_escaping_error_is_recorded_and_counts_against_the_budget(self):
+        self.operator.get_error = RuntimeError('unexpected operator client bug')
+        self._run_cron()
+        state, reason, due = self._committed('quota_sync_state', 'quota_sync_reason',
+                                             'quota_next_retry_at')
+        self.assertEqual(state, 'pending')
+        self.assertIn('internal_error: RuntimeError', reason)
+        for _attempt in range(5):
+            with freeze_time(self._committed('quota_next_retry_at')[0]):
+                self._run_cron()
+        self.assertEqual(self._committed('quota_sync_state', 'quota_retry_count'), ('exhausted', 5))
+        reads = len(self.operator.reads)
+        with freeze_time(fields.Datetime.now() + timedelta(days=1)):
+            self._run_cron()
+        self.assertEqual(len(self.operator.reads), reads, '耗盡之後不再自動重試')

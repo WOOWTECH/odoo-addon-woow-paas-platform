@@ -66,8 +66,8 @@
                         Automatic quota sync retries are exhausted. Check the sync detail, then use Retry Quota Sync.
                     </div>
                     <div class="alert alert-warning" role="alert" invisible="not quota_sync_unguarded">
-                        The last push was made without version protection because the operator does not support it.
-                        An older request that finishes late could overwrite it. Upgrade the operator.
+                        The operator does not support versioned quota writes, so pushes are made without protection.
+                        An older request that finishes late could overwrite a newer value. Upgrade the operator.
                     </div>
                     <p>These are declared ResourceQuota allocations, not live resource utilization.
                         The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity.</p>
