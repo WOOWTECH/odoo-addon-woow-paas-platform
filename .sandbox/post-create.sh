@@ -47,6 +47,16 @@ case "${SANDBOX_NEUTRALIZE_LOCKDOWN:-}" in
         ;;
 esac
 
+# AI 模型分頁（LLM-01b）的 opt-in：值域與 pre-install 一致，在碰叢集之前就檢查（段落在檔尾）。
+case "${WOOW_LLM_SANDBOX:-}" in
+    1) _llm=1 ;;
+    ""|0) _llm=0 ;;
+    *)
+        echo "ERROR post-create: WOOW_LLM_SANDBOX='${WOOW_LLM_SANDBOX}' 不合法（只收 1／0／未設）。" >&2
+        exit 1
+        ;;
+esac
+
 # --- 探索叢集內 operator（per-environment；docker-desktop: paas-system，stg: paas-stg-system）---
 if [ -z "$OPERATOR_URL" ]; then
     _op_svc=$(kubectl get svc -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)
@@ -130,4 +140,47 @@ then
     echo "WARN: Credential seed had an issue (sandbox still usable; continuing)." >&2
 else
     echo "Sandbox credentials seeded."
+fi
+
+# --- AI 模型分頁（LLM-01b；opt-in WOOW_LLM_SANDBOX=1，DESIGN N14、§2.11）-----------------------
+# pre-install 已把 WEB／CRON 簽章金鑰與本沙盒的加密金鑰經 SBX-01 的 odoo.extraSecretEnv 注入；
+# 這裡設定本沙盒的 new-api 身分（前綴、IP block）、代理位址與分頁開關。只在 env 真的進了
+# Odoo deployment 時才設：否則（chart 不支援 extraSecretEnv、或 pre-install 讀不到金鑰）設了
+# 也只會 fail closed，不如維持「未設定」（N27：LLM cron 一律 no-op）。
+# 不寫進 .sandbox.yml config_params_stg：那會對本 repo 所有 stg 沙盒生效（〔REV〕47）。
+if [ "$_llm" = 1 ] && [ "$MODE" = "stg" ] && [ "${SANDBOX_NEUTRALIZE_LOCKDOWN:-}" != 1 ]; then
+    _llm_env_names=""
+    if [ -n "${ODOO_DEPLOY:-}" ]; then
+        _llm_env_names="$(kubectl get deploy -n "$NAMESPACE" "$ODOO_DEPLOY" \
+            -o jsonpath='{range .spec.template.spec.containers[*]}{range .env[*]}{.name}{"\n"}{end}{end}' 2>/dev/null || true)"
+    fi
+    _llm_missing=""
+    for _name in WOOW_NEWAPI_PROXY_AUTH_WEB WOOW_NEWAPI_PROXY_AUTH_CRON WOOW_LLM_SECRET_KEYS; do
+        grep -qx "$_name" <<<"$_llm_env_names" || _llm_missing="$_llm_missing $_name"
+    done
+    if [ -n "$_llm_missing" ]; then
+        echo "WARN post-create: Odoo deployment 沒有${_llm_missing}（chart 需含 SBX-01 的 odoo.extraSecretEnv，且 pre-install 要讀得到 paas-stg-system/paas-stg-newapi-proxy-client）。" >&2
+        echo "WARN post-create: AI 模型分頁維持未設定（不開分頁、LLM cron 不外呼）。" >&2
+    else
+        read -r _llm_prefix _llm_block < <(bash "$(dirname "${BASH_SOURCE[0]}")/llm-identity.sh" "${SLUG:?post-create 的 LLM 段需要 SLUG}")
+        if ! [[ "$_llm_prefix" =~ ^ws[a-z]{2}$ ]] || ! [[ "$_llm_block" =~ ^([1-9]|[12][0-9]|3[01])$ ]]; then
+            echo "ERROR post-create: llm-identity.sh 的輸出不合格式（prefix='${_llm_prefix}' block='${_llm_block}'）。" >&2
+            exit 1
+        fi
+        if kubectl exec -i -n "$NAMESPACE" "statefulset/${PG_STATEFULSET}" -- \
+            psql -U odoo -d "$DB_NAME" -v ON_ERROR_STOP=1 <<SQL
+INSERT INTO ir_config_parameter (key, value, create_uid, create_date, write_uid, write_date)
+VALUES
+  ('woow_paas_platform.newapi_proxy_url', 'http://newapi-proxy.new-api-stg.svc.cluster.local:8080', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.newapi_username_prefix', '${_llm_prefix}', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.llm_synthetic_ip_block', '${_llm_block}', 1, NOW(), 1, NOW()),
+  ('woow_paas_platform.show_llm', 'True', 1, NOW(), 1, NOW())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, write_date = NOW(), write_uid = 1;
+SQL
+        then
+            echo "AI 模型分頁已開啟：new-api 使用者前綴 ${_llm_prefix}、合成 IP block ${_llm_block}（代理 new-api-stg）。"
+        else
+            echo "WARN post-create: AI 模型分頁的設定寫入失敗（sandbox 仍可用）。" >&2
+        fi
+    fi
 fi

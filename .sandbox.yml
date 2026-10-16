@@ -47,6 +47,7 @@ env_optional:
   - "AGENT_RUNTIME_NAMESPACE_SECRET: agent-runtime 啟用開關＋Odoo 端 namespace hash（僅 stg 模式生效；未設→agent-runtime 整段關閉，legacy AI chat 不受影響）"
   - "JCR_USER: JCR registry pull 帳號（僅 stg 模式生效；cluster 已有 jfrog-registry secret 時可不設）"
   - "JCR_PASS: JCR registry pull 密碼（僅 stg 模式生效；同上）"
+  - "WOOW_LLM_SANDBOX: 設 1 開啟 AI 模型分頁（僅 stg 模式生效；LLM-01b）。pre-install 從 paas-stg-system/paas-stg-newapi-proxy-client 讀代理簽章金鑰、每沙盒隨機產生加密金鑰，經 odoo.extraSecretEnv 注入（chart 需含 SBX-01），egress 放行 new-api-stg；post-create 依 slug 設 new-api 前綴與合成 IP block（.sandbox/llm-identity.sh）並開 show_llm。未設＝分頁關閉、LLM cron 不外呼。⚠ 同一個 slug 重建會撞名，重建請換 slug"
 
 # 宣告式 ir.config_parameter seed（stg only）：
 # - web.base.url / freeze：ECPay 3DS 回呼需 https base url，否則 Chrome Mixed Content

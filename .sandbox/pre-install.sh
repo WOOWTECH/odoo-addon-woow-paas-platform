@@ -41,6 +41,27 @@ if [ "$LOCKDOWN" = 1 ]; then
     echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN=1 不可同時設 AGENT_RUNTIME_NAMESPACE_SECRET（語意衝突，#1162 D7）。" >&2
     exit 1
   fi
+  # AI 模型分頁（LLM-01b；DESIGN §2.9、§2.11，〔REV〕18）：prod clone 彩排不得注入任何 LLM env——
+  # 開了就等於讓一份帶著 prod 密文的 DB 有機會接上 new-api-stg。照上面 AGENT_RUNTIME 的先例 fail-loud。
+  if [ -n "${WOOW_LLM_SANDBOX:-}${WOOW_NEWAPI_PROXY_AUTH_WEB:-}${WOOW_NEWAPI_PROXY_AUTH_CRON:-}${WOOW_LLM_SECRET_KEYS:-}" ]; then
+    echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN=1 不可同時設 WOOW_LLM_SANDBOX 或任何 LLM env（DESIGN §2.9）。" >&2
+    exit 1
+  fi
+fi
+
+# --- AI 模型分頁（LLM-01b）：opt-in WOOW_LLM_SANDBOX=1 ----------------------------------------
+# 只收 1／0／未設（同 SANDBOX_NEUTRALIZE_LOCKDOWN：「以為開了其實沒開」與反過來都要 fail-loud）。
+# 不寫進 .sandbox.yml 的 config_params_stg：那會對本 repo 所有 stg 沙盒生效（〔REV〕47）。
+case "${WOOW_LLM_SANDBOX:-}" in
+  1) LLM_SANDBOX=1 ;;
+  ""|0) LLM_SANDBOX=0 ;;
+  *)
+    echo "ERROR pre-install: WOOW_LLM_SANDBOX='${WOOW_LLM_SANDBOX}' 不合法（只收 1／0／未設）。" >&2
+    exit 1 ;;
+esac
+if [ "$LLM_SANDBOX" = 1 ] && [ "$MODE" != "stg" ]; then
+  echo "WARN pre-install: WOOW_LLM_SANDBOX=1 只在 stg mode 生效（new-api-stg 在 woow-k3s；收到 MODE=${MODE}），略過。" >&2
+  LLM_SANDBOX=0
 fi
 
 # 只有 stg 模式需要這些平台 values；local/ci-local 直接結束（no-op）。
@@ -51,6 +72,37 @@ fi
 yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
 
 # kubectl 沿用 create.sh 已切換的 context（require_kube_context 做過 use-context）。
+
+# --- AI 模型分頁的 env（LLM-01b；SBX-01 的 odoo.extraSecretEnv）---------------------------------
+# 照下面 agent-runtime 段的形狀：從 paas-stg-system 的 Odoo 端簽章金鑰複本讀 web／cron（LLM-01a
+# 建立；值只經 stdin／變數、不印），每個沙盒另外隨機產生自己的 WOOW_LLM_SECRET_KEYS（不共用）。
+# 任一拿不到或格式不合 ⇒ 整段不寫（fail closed）：env 不存在時 Odoo 端 fail closed、
+# post-create 也不會開分頁。值只進 $EXTRA_VALUES_FILE（create.sh 的 0700 暫存目錄，結束即刪）
+# → chart Secret → secretKeyRef，不進 ConfigMap 或 annotation。
+_llm_key_list_re='^[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{32,256}(,[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{32,256})*$'
+LLM_AUTH_WEB=""
+LLM_AUTH_CRON=""
+LLM_SECRET_KEYS=""
+if [ "$LLM_SANDBOX" = 1 ]; then
+  _llm_ns="${PAAS_STG_SYSTEM_NAMESPACE:-paas-stg-system}"
+  _llm_secret="paas-stg-newapi-proxy-client"
+  LLM_AUTH_WEB="$(kubectl get secret -n "$_llm_ns" "$_llm_secret" -o jsonpath='{.data.web}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true)"
+  LLM_AUTH_CRON="$(kubectl get secret -n "$_llm_ns" "$_llm_secret" -o jsonpath='{.data.cron}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true)"
+  # Fernet key＝32 bytes 的 urlsafe base64（44 字元、含一個 =）。
+  LLM_SECRET_KEYS="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '[:space:]' || true)"
+  _llm_fernet_re='^[A-Za-z0-9_-]{43}=$'
+  # [[ =~ ]] 而不是 printf | grep -q：值不經過任何外部行程的 argv，也不吃 pipefail＋SIGPIPE 的坑。
+  if ! [[ "$LLM_AUTH_WEB" =~ $_llm_key_list_re ]] \
+     || ! [[ "$LLM_AUTH_CRON" =~ $_llm_key_list_re ]] \
+     || ! [[ "$LLM_SECRET_KEYS" =~ $_llm_fernet_re ]]; then
+    echo "WARN pre-install: 無法取得 AI 模型分頁的簽章金鑰（${_llm_ns}/${_llm_secret} 缺或格式不合，或 kubectl context 不對）。" >&2
+    echo "WARN pre-install: WOOW_LLM_SANDBOX 段整段不寫（fail closed）；沙盒照常建立，但沒有 AI 模型分頁。" >&2
+    LLM_SANDBOX=0
+    LLM_AUTH_WEB=""
+    LLM_AUTH_CRON=""
+    LLM_SECRET_KEYS=""
+  fi
+fi
 
 # --- stg networkPolicy / storageClass / devMode（cloudflare tunnel ingress + operator egress + agent-runtime pods）---
 {
@@ -69,7 +121,12 @@ yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
   else
     # 平時 stg 無條件放行 agent-runtime pod（paas-managed）的問題另見 #1202。
     echo "  allowIngressFromNamespaces: [paas-stg-cloudflare-system, paas-stg-system]"
-    echo "  allowEgressToNamespaces: [paas-stg-system]"
+    if [ "$LLM_SANDBOX" = 1 ]; then
+      # newapi-proxy（ns new-api-stg）：代理那一側的 NP 只收 dev-sandbox.io/managed 的 Odoo pod。
+      echo "  allowEgressToNamespaces: [paas-stg-system, new-api-stg]"
+    else
+      echo "  allowEgressToNamespaces: [paas-stg-system]"
+    fi
     echo "  allowAgentRuntimePods: true"
   fi
   echo "odoo:"
@@ -82,6 +139,13 @@ yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
   echo "  filestore:"
   echo "    persistence:"
   echo "      storageClass: longhorn-delete"
+  if [ "$LLM_SANDBOX" = 1 ]; then
+    # 沙盒是單一 pod（workers=0、max_cron_threads=1），WEB／CRON 兩組都給（DESIGN §1.4.2-1）。
+    echo "  extraSecretEnv:"
+    echo "    WOOW_NEWAPI_PROXY_AUTH_WEB: $(yaml_sq "$LLM_AUTH_WEB")"
+    echo "    WOOW_NEWAPI_PROXY_AUTH_CRON: $(yaml_sq "$LLM_AUTH_CRON")"
+    echo "    WOOW_LLM_SECRET_KEYS: $(yaml_sq "$LLM_SECRET_KEYS")"
+  fi
   echo "postgres:"
   echo "  storage:"
   echo "    storageClass: longhorn-delete"
