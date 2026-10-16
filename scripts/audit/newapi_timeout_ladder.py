@@ -1,4 +1,4 @@
-"""LLM-01b（DESIGN §1.2、§3.5，〔REV〕63）：Odoo → newapi-proxy 的逾時階梯（後端那一半）。
+"""LLM-01b／01c（DESIGN §1.2、§3.5，〔REV〕63）：前端 → Odoo → newapi-proxy 的逾時階梯。
 
 前端 > 平台 > 代理 > new-api：每一層的期限都要比外面那一層早到，分類才會由內層給出（代理回
 ``connect``／``timeout``），而不是外層先逾時、變成說不清楚的 Unknown。這裡守的是 Odoo 端的具名
@@ -18,8 +18,14 @@
    ——新增方法或改它的逾時類別要人重新對 DESIGN §3.5 的表，再手改那份 json（``--update-baseline``
    **不會**重產它）。``_request`` 算標頭時必須用 ``PROXY_READ_TIMEOUT_MAX``／``_MARGIN`` 兩個名字。
 
-⚠ 不守的格（具名盲區）：前端 ``jsonRpc(…, 40000)`` > 建金鑰 20 秒那一格在 LLM-01c 補；cron 讀取類
-的 tick 30 秒（N28）在 LLM-02b 有常數之後補；呼叫端明確覆寫 ``timeout=`` 的地方（例如 P9 用
+6. **前端那一半**（LLM-01c）：``src/static/src/paas/services/llm_service.js`` 的
+   ``KEY_CREATE_TIMEOUT_MS`` > （``KEY_CREATE_BUDGET_SECONDS``＋一次完整呼叫）× 1000——前端要比後端的
+   建金鑰總預算晚放棄，否則前端先逾時、後端還在建，使用者看不到明文；``rpc.js`` 的預設
+   ``REQUEST_TIMEOUT_MS`` > 互動讀／寫各一次完整呼叫。結構：``llm_service.js`` 裡每個 ``timeoutMs:``
+   都只能是 ``KEY_CREATE_TIMEOUT_MS``（不寫字面值），而且 ``/api/llm/keys/create`` 那一呼叫一定帶它。
+
+⚠ 不守的格（具名盲區）：cron 讀取類的 tick 30 秒（N28）在 LLM-02b 有常數之後補；互動寫入的端點總預算
+15 秒（LLM-07）還沒有常數，第 6 點暫以「一次完整呼叫」比；呼叫端明確覆寫 ``timeout=`` 的地方（例如 P9 用
 ``TIMEOUT_PROVISION``）只要是 ``TIMEOUT_*`` 就過，不驗用對了哪一個；代理到 new-api 的實際上游呼叫
 由代理自己的 deadline 邏輯負責（``upstream.py``，代理的單元測試守）。
 解析失敗、找不到常數一律當違規（否定性判準：探針壞掉時「零違規」與「全部合規」輸出相同）。
@@ -34,7 +40,9 @@ COMMON = 'src/models/llm_common.py'
 KEYS = 'src/models/llm_api_key.py'
 PROXY_APP = 'extra/newapi-proxy/newapi_proxy/app.py'
 BASELINE = 'scripts/audit/baselines/newapi-timeout-ladder.json'
-SOURCES = (CLIENT, COMMON, KEYS, PROXY_APP, BASELINE)
+FRONTEND_SERVICE = 'src/static/src/paas/services/llm_service.js'
+FRONTEND_RPC = 'src/static/src/paas/services/rpc.js'
+SOURCES = (CLIENT, COMMON, KEYS, PROXY_APP, BASELINE, FRONTEND_SERVICE, FRONTEND_RPC)
 PREFIX = 'newapi-timeout-ladder：'
 CLIENT_CLASS = 'NewApiClient'
 
@@ -105,6 +113,15 @@ def _header_uses_named_clamp(tree):
     raise ValueError('%s 找不到 %s._request' % (CLIENT, CLIENT_CLASS))
 
 
+def _js_int(root, rel, name):
+    """``[export] const NAME = <整數>;``（行首）。找不到就丟 ValueError（fail loud）。"""
+    text = (Path(root) / rel).read_text(encoding='utf-8')
+    match = re.search(r'^(?:export\s+)?const\s+%s\s*=\s*(\d+)\s*;' % re.escape(name), text, re.M)
+    if not match:
+        raise ValueError('%s 找不到整數常數 %s' % (rel, name))
+    return int(match.group(1)), text
+
+
 def check(root):
     """回傳違規清單；缺檔、解析失敗、結構漂移皆不得回空清單。"""
     violations = []
@@ -132,6 +149,8 @@ def check(root):
         stale = _int(keys, '_STALE_CREATING_SECONDS', KEYS)
         mapping = method_timeouts(client_tree)
         named_clamp = _header_uses_named_clamp(client_tree)
+        front_key_ms, front_source = _js_int(root, FRONTEND_SERVICE, 'KEY_CREATE_TIMEOUT_MS')
+        rpc_default_ms, _ = _js_int(root, FRONTEND_RPC, 'REQUEST_TIMEOUT_MS')
     except Exception as exc:  # noqa: BLE001 - fail loud, never "zero violations"
         return [PREFIX + '無法載入或解析（%s：%s）；見 DESIGN §3.5' % (type(exc).__name__, exc)]
 
@@ -206,6 +225,31 @@ def check(root):
                          if mapping.get(k) != (expected or {}).get(k))
         fail('client 方法的逾時類別與 %s 不符（%s）：對照 DESIGN §3.5 重新核對後手改那份 json'
              % (BASELINE, ', '.join(changed)))
+
+    # 6. 前端那一半（LLM-01c）
+    if isinstance(key_create, tuple):
+        floor_ms = (budget + sum(key_create)) * 1000
+        if front_key_ms <= floor_ms:
+            fail('%s KEY_CREATE_TIMEOUT_MS=%s 必須 > （KEY_CREATE_BUDGET_SECONDS＋一次完整呼叫）×1000=%s'
+                 '（前端先放棄的話，後端建好的金鑰明文就沒人收）' % (FRONTEND_SERVICE, front_key_ms, floor_ms))
+    for name in ('TIMEOUT_INTERACTIVE_READ', 'TIMEOUT_INTERACTIVE_WRITE'):
+        value = timeouts.get(name)
+        if not isinstance(value, tuple):
+            fail('%s 缺少 %s' % (CLIENT, name))
+            continue
+        if rpc_default_ms <= sum(value) * 1000:
+            fail('%s REQUEST_TIMEOUT_MS=%s 必須 > %s 一次完整呼叫 %s ms'
+                 % (FRONTEND_RPC, rpc_default_ms, name, sum(value) * 1000))
+    used = re.findall(r'\btimeoutMs:\s*([A-Za-z_0-9.]+)', front_source)
+    literal_front = sorted(set(u for u in used if u != 'KEY_CREATE_TIMEOUT_MS'))
+    if literal_front:
+        fail('%s 的 timeoutMs 只能用具名常數 KEY_CREATE_TIMEOUT_MS，收到：%s'
+             % (FRONTEND_SERVICE, ', '.join(literal_front)))
+    if not re.search(r'"/api/llm/keys/create"[^;]*?\btimeoutMs:\s*KEY_CREATE_TIMEOUT_MS\b',
+                     front_source, re.S):
+        fail('%s 建金鑰（"/api/llm/keys/create"）的呼叫必須帶 timeoutMs: KEY_CREATE_TIMEOUT_MS'
+             '（否則用 rpc.js 的預設 30 秒，比 DESIGN §3.5 的 40 秒短）' % FRONTEND_SERVICE)
+
     return violations
 
 
