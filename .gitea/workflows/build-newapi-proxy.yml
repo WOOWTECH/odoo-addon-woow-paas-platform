@@ -1,0 +1,113 @@
+# newapi-proxy image（AI 模型分頁，票 LLM-01a；設計 §1.2、§1.4）
+#
+# 🔴 只推不可變的 `<40 位 commit sha>` tag，**絕不推 `:latest`**。
+#   build-paas-operator.yml 每次 develop push 都把 :latest 覆寫一次——那是本檔刻意
+#   不照抄的反例：可變 tag 讓「部署的是哪一版」無從考證，也讓 pull 到的東西隨時會變。
+#   部署端（Woow_k3s_newapi chart `proxy.image.digest`）一律釘 digest；本 job 最後一步
+#   把 `image@sha256:…` 印出來，照抄進 deploy values 即可。
+#
+# 觸發：
+#   - develop／main 上動到 extra/newapi-proxy/** 或本檔；
+#   - 任何分支手動 workflow_dispatch（Gitea：Actions → build-newapi-proxy → Run workflow →
+#     選分支；或 API POST /repos/{owner}/{repo}/actions/workflows/build-newapi-proxy.yml/dispatches
+#     帶 {"ref":"<branch>"}）。tag 就是該分支 HEAD 的 sha，所以 feature branch 也能先建 image
+#     給 stg 驗收，合併後 develop 上同一個 commit 不會重建（tag 已存在就跳過）。
+#   刻意不掛 pull_request：PR 事件拿不到 JCR 憑證，也不該讓未合併的 fork 推 image；PR 的
+#   單元測試在 newapi-proxy-unit-tests.yml。
+name: build-newapi-proxy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - "extra/newapi-proxy/**"
+      - ".gitea/workflows/build-newapi-proxy.yml"
+
+concurrency:
+  group: build-newapi-proxy-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+  REPOSITORY: woow-paas-docker-local/newapi-proxy
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 不用 `cache: pip`：理由見 paas-operator-unit-tests.yml 同一段（setup-python@v5
+      # 的 post 階段在快取目錄不存在時會把整個 job 判 failure）。
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install locked dependencies (hashes)
+        working-directory: extra/newapi-proxy
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-dev.txt
+
+      - name: Unit tests
+        working-directory: extra/newapi-proxy
+        run: python -m pytest tests/
+
+  build:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag (commit sha only)
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_SHA}"
+          if ! printf '%s' "$tag" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::GITHUB_SHA is not a 40-hex commit sha; refusing to build"
+            exit 1
+          fi
+          echo "IMAGE=${REGISTRY}/${REPOSITORY}:${tag}" >> "$GITHUB_ENV"
+
+      - name: Login to JCR (internal)
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login "$REGISTRY" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      # 不可變：同一個 sha 已經推過就不重建（重建的 digest 可能不同，會讓已釘的 digest
+      # 變成無 tag 的孤兒）。用 docker pull 判斷（走 daemon，與 push 用同一套 registry 設定）。
+      - name: Skip if the tag already exists
+        run: |
+          set -euo pipefail
+          if docker pull -q "$IMAGE" >/dev/null 2>&1; then
+            echo "SKIP_PUSH=1" >> "$GITHUB_ENV"
+            echo "::notice::$IMAGE already exists; not rebuilding or pushing"
+          fi
+
+      - name: Build
+        if: env.SKIP_PUSH != '1'
+        working-directory: extra/newapi-proxy
+        run: docker build --pull -t "$IMAGE" .
+
+      - name: Push (sha tag only, never :latest)
+        if: env.SKIP_PUSH != '1'
+        run: |
+          set -euo pipefail
+          case "$IMAGE" in
+            *:latest|*:latest@*) echo "::error::refusing to push :latest"; exit 1 ;;
+          esac
+          docker push "$IMAGE"
+
+      - name: Digest for Woow_k3s_newapi proxy.image.digest
+        run: |
+          set -euo pipefail
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          echo "pushed: $IMAGE"
+          echo "digest: ${ref#*@}"
+          echo "### newapi-proxy image" >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+          echo "\`${IMAGE}\` → \`${ref#*@}\`" >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
