@@ -306,6 +306,23 @@ def _table_exists(cur, name):
     return cur.fetchone()[0] is not None
 
 
+def classify_pos_sessions(rows):
+    """把未關帳的 POS session 分成「凍結前必須關帳」與「停在開帳步驟、沒開始過」兩類（#1758）。
+
+    rows：(id, name, state, started, orders)，started＝start_at 有值、orders＝該 session 的訂單數。
+    `opening_control` 且沒有 start_at、沒有訂單＝有人打開 POS 但沒按開帳：前端停在開帳視窗不能點單，
+    平板上不會有未同步的訂單，照原狀搬過去、店家在新站接著開帳即可。其餘一律算「開著」。
+    回傳 (open_count, idle)；idle 是 [{"id", "name"}]。
+    """
+    open_count, idle = 0, []
+    for sid, name, state, started, orders in rows:
+        if state == "opening_control" and not started and not orders:
+            idle.append({"id": sid, "name": name})
+        else:
+            open_count += 1
+    return open_count, idle
+
+
 def connect(dbname, params, attempts=30, delay=2.0):
     """psycopg2.connect，連不上時重試。
 
@@ -402,8 +419,11 @@ def db_stats(params, dbname):
                     "%s:%s" % r for r in _rows(cur, "SELECT code, state FROM payment_provider "
                                                     "WHERE state <> 'disabled' ORDER BY 1")]
             if _table_exists(cur, "pos_session"):
-                out["pos_sessions_open"] = _rows(cur, "SELECT count(*) FROM pos_session "
-                                                      "WHERE state <> 'closed'")[0][0]
+                orders = ("(SELECT count(*) FROM pos_order o WHERE o.session_id = s.id)"
+                          if _table_exists(cur, "pos_order") else "0")
+                out["pos_sessions_open"], out["pos_sessions_idle_opening"] = classify_pos_sessions(_rows(
+                    cur, "SELECT s.id, s.name, s.state, s.start_at IS NOT NULL, %s FROM pos_session s "
+                         "WHERE s.state <> 'closed' ORDER BY s.id" % orders))
             if _table_exists(cur, "pos_order"):
                 out["pos_orders_draft"] = _rows(cur, "SELECT count(*) FROM pos_order "
                                                      "WHERE state = 'draft'")[0][0]

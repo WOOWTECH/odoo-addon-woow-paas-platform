@@ -109,7 +109,9 @@ jq -r '.inspect as $i | [
   "  filestore        \($i.filestore.files) files, \(($i.filestore.bytes // 0) / 1048576 | floor) MiB, missing referenced \($i.filestore.missing_referenced)",
   "  extensions       \($i.db.extensions | keys | join(", "))  vector columns \($i.db.vector_columns | length)",
   "  users            internal \($i.db.users.internal_active), portal \($i.db.users.portal_active)",
-  "  pos              open sessions \($i.db.pos_sessions_open // "-"), draft orders \($i.db.pos_orders_draft // "-")",
+  "  pos              open sessions \($i.db.pos_sessions_open // "-"), draft orders \($i.db.pos_orders_draft // "-")\(
+      ($i.db.pos_sessions_idle_opening // []) as $idle
+      | if ($idle | length) > 0 then "; idle opening_control \($idle | length) (\([$idle[] | "\(.id) \(.name)"] | join(", ")); 0 orders, OK to freeze)" else "" end)",
   "  runtime pip      \([.k8s.workloads[].pip_install_commands[] | "\(if .init then "init" else "main" end):\(.container) \(.commands | join("; "))"] | join(" | "))"
 ] | .[]' "$OUT" >&2
 echo "$OUT"
