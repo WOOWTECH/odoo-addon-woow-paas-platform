@@ -6,7 +6,8 @@
     python3 .sandbox/llm-acceptance.py --slug aimodels <子命令> [參數]
 
 ``--context`` 預設 ``woow-k3s``。碰到的範圍：``dev-sandbox-<slug>``（odoo shell／psql／port-forward）、
-``new-api-stg``（唯讀 SQL、代理 log）、``paas-stg-system``（只讀 ConfigMap 登記表）。不碰 prod。
+``new-api-stg``（唯讀 SQL、代理 log；``free-chat`` 另起一顆跑完即刪的 test pod）、``paas-stg-system``
+（只讀 ConfigMap 登記表）。不碰 prod。
 
 **秘密**：本工具不印任何秘密值。測試使用者的密碼只存在 ``--state-dir``（預設
 ``$XDG_RUNTIME_DIR`` 或 ``~/.cache`` 底下、0700 目錄、0600 檔），經 stdin 進 odoo shell；session
@@ -21,7 +22,10 @@ cookie 只在記憶體；``keys/create`` 回的 ``sk-…`` 一律遮成 ``sk-…
 env-names             AC2     Odoo pod 裡三個 LLM env 的**名字**（不印值）
 config                —       DB 裡的 LLM 設定（代理、前綴、block、開關、pilot）與 prefix 登記
 user-create LOGIN     —       建 portal 測試使用者（密碼 0600 存 state 目錄）
-api LOGIN EP [JSON]   AC3/5   以該使用者登入 ``/woow`` 的 session，呼叫 ``/api/llm/<EP>``
+api LOGIN EP [JSON]   AC3/5   以該使用者登入 ``/woow`` 的 session，呼叫 ``/api/llm/<EP>``；
+                              ``keys/create --save-key FILE`` 把只顯示一次的金鑰寫進 0600 檔（不印）
+free-chat --key-file  —       用試用金鑰打一次免費模型（預設 qwen3-4b-cluster1）：new-api-stg 裡一次性的
+                              ``component=test`` pod（NP ``newapi-test``）、金鑰經 stdin、``--rm``
 account LOGIN         AC3/4   該使用者的 AI 帳戶在 Odoo DB 的狀態與合成 IP（不含密文）
 ap-search USERNAME    AC3     Odoo pod 內經代理以 AP 查 new-api 使用者（AP 的 GA 1 格、0 CT）
 newapi USERNAME       AC3/4/8 new-api-stg DB 唯讀：使用者、PAT（名稱、last_used_ip）、session ip（0 CT）
@@ -177,6 +181,14 @@ class Sandbox:
         with os.fdopen(fd, 'w') as handle:
             json.dump({'login': login, 'password': password}, handle)
 
+    @staticmethod
+    def save_secret_file(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as handle:
+            handle.write(value)
+        os.chmod(path, 0o600)
+
     def credentials(self, login):
         path = self._cred_path(login)
         if not path.exists():
@@ -222,11 +234,14 @@ with patch.object(requests.sessions.Session, 'request', counting), \\
         patch.object(cls, '_llm_claim_for_provision', scoped):
     Account._cron_llm_provision()
 env.cr.commit()
+incidents_added = env['woow.billing.incident'].sudo().search_count([]) - before
+# 先讀完再做下一個查詢（search_count 會覆蓋同一個 cursor 的結果集）。
 env.cr.execute("SELECT state, count(*) FROM {table} GROUP BY state")
+accounts_by_state = dict(env.cr.fetchall())
 print('RESULT ' + json.dumps({{
     'outbound_requests': len(calls),
-    'incidents_added': env['woow.billing.incident'].sudo().search_count([]) - before,
-    'accounts_by_state': dict(env.cr.fetchall())}}))
+    'incidents_added': incidents_added,
+    'accounts_by_state': accounts_by_state}}))
 '''
 
 SHELL_CRASH_DRILL = '''
@@ -427,8 +442,17 @@ def cmd_api(sbx, args):
         started = time.monotonic()
         body = _jsonrpc(opener, forward.base + '/api/llm/' + args.endpoint, params)
         elapsed = time.monotonic() - started
-    print(json.dumps({'elapsed_ms': int(elapsed * 1000), 'response': mask(body)},
-                     ensure_ascii=False))
+    out = {'elapsed_ms': int(elapsed * 1000), 'response': mask(body)}
+    if args.save_key:
+        # 金鑰只顯示一次：要接著打模型（free-chat）就得在這裡留下來；只寫 0600 檔、不印。
+        data = ((body.get('result') or {}).get('data') or {}) if args.endpoint == 'keys/create' else {}
+        key = data.get('key') if isinstance(data, dict) else None
+        if isinstance(key, str) and SECRET_PATTERNS['sk-'].fullmatch(key):
+            sbx.save_secret_file(Path(args.save_key), key)
+            out['saved_key_to'] = args.save_key
+        else:
+            out['saved_key_to'] = None
+    print(json.dumps(out, ensure_ascii=False))
     return 0
 
 
@@ -566,7 +590,7 @@ def cmd_expire_lease(sbx, args):
 
 def cmd_ac7(sbx, args):
     env = {'AC7_LOGIN': args.login} if args.login else {}
-    result = sbx.odoo_shell(SHELL_AC7, env)
+    result = sbx.odoo_shell(SHELL_AC7.format(), env)
     print(json.dumps(result))
     ok = (result.get('cron_trailing_newline_claimed') == 1
           and result.get('cron_embedded_newline_claimed') == 0
@@ -577,9 +601,94 @@ def cmd_ac7(sbx, args):
 
 
 def cmd_ac9(sbx, args):
-    result = sbx.odoo_shell(SHELL_AC9)
+    result = sbx.odoo_shell(SHELL_AC9.format())
     print(json.dumps(result))
     return 0 if result.get('http://evil.example') == 'rejected' else 1
+
+
+FREE_CHAT_SCRIPT = r'''
+set -u
+IFS= read -r K
+# 新 pod 的 NetworkPolicy 有幾秒的啟動空窗（放行規則還沒生效），先用不帶金鑰的 /api/status 探到通。
+ok=0
+for i in $(seq 1 20); do
+  if wget -q -T 5 -O /dev/null http://newapi:3000/api/status 2>/dev/null; then ok=1; break; fi
+  sleep 1
+done
+[ "$ok" = 1 ] || { echo "PROBE_FAILED"; exit 3; }
+echo "POD_IP ${POD_IP:-?}"
+# 只送一次（試用限流 10 次／分，失敗也算）。
+if wget -q -T 120 -O - --header "Authorization: Bearer $K" --header "Content-Type: application/json" \
+     --post-data "$BODY" http://newapi:3000/v1/chat/completions; then
+  echo; echo "CHAT_OK"
+else
+  echo; echo "CHAT_FAILED"
+fi
+'''
+
+
+def cmd_free_chat(sbx, args):
+    """用試用金鑰打一次免費模型：在 new-api-stg 起一顆帶 component=test 標籤的一次性 pod。
+
+    new-api-stg 的 NetworkPolicy 只讓 cloudflared／proxy／test 三種 pod 連 newapi:3000（``newapi-test``
+    是給契約測試與 helm test 用的那條），一般 pod（含沙盒 Odoo）連不到。金鑰只經 stdin 進 pod，不進
+    pod spec、argv 或本工具的輸出；pod 結束即刪（``--rm``）。
+    """
+    key = Path(args.key_file).read_text().strip()
+    if not SECRET_PATTERNS['sk-'].fullmatch(key):
+        fail('key file does not hold an sk- key')
+    image = sbx.kubectl('get', 'deploy', 'newapi-master', '-o',
+                        'jsonpath={.spec.template.spec.containers[0].image}', ns=NEWAPI_NS).stdout.strip()
+    if not image:
+        fail('cannot resolve the new-api image')
+    body = json.dumps({'model': args.model, 'max_tokens': args.max_tokens, 'stream': False,
+                       'messages': [{'role': 'user', 'content': args.prompt}]})
+    name = 'llm-acceptance-chat-%s' % uuid.uuid4().hex[:8]
+    labels = {'app.kubernetes.io/component': 'test', 'app.kubernetes.io/instance': 'newapi',
+              'app.kubernetes.io/name': 'newapi', 'woow.io/llm-acceptance': 'free-chat'}
+    restricted = {'allowPrivilegeEscalation': False, 'capabilities': {'drop': ['ALL']},
+                  'readOnlyRootFilesystem': True}
+    overrides = {'apiVersion': 'v1', 'metadata': {'labels': labels}, 'spec': {
+        'restartPolicy': 'Never', 'automountServiceAccountToken': False, 'enableServiceLinks': False,
+        'securityContext': {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532,
+                            'seccompProfile': {'type': 'RuntimeDefault'}},
+        'affinity': {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {
+            'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname',
+                                                         'operator': 'NotIn',
+                                                         'values': ['ubuntuserver-59mqj']}]}]}}},
+        'containers': [{'name': name, 'image': image, 'stdin': True, 'stdinOnce': True,
+                        'command': ['sh', '-c', FREE_CHAT_SCRIPT],
+                        'env': [{'name': 'BODY', 'value': body},
+                                {'name': 'POD_IP', 'valueFrom': {'fieldRef': {'fieldPath': 'status.podIP'}}}],
+                        'resources': {'requests': {'cpu': '10m', 'memory': '16Mi'},
+                                      'limits': {'cpu': '200m', 'memory': '64Mi'}},
+                        'securityContext': restricted}]}}
+    started = time.monotonic()
+    proc = sbx.kubectl('run', name, '--rm', '-i', '--quiet', '--restart=Never', '--image=' + image,
+                       '--overrides=' + json.dumps(overrides), '--pod-running-timeout=120s',
+                       input=key + '\n', check=False, ns=NEWAPI_NS)
+    elapsed = time.monotonic() - started
+    lines = proc.stdout.splitlines()
+    pod_ip = next((l.split(' ', 1)[1] for l in lines if l.startswith('POD_IP ')), None)
+    status = 'ok' if 'CHAT_OK' in lines else ('probe_failed' if 'PROBE_FAILED' in lines else 'failed')
+    reply = None
+    for line in lines:
+        if line.startswith('{'):
+            try:
+                reply = json.loads(line)
+            except ValueError:
+                pass
+    out = {'status': status, 'elapsed_ms': int(elapsed * 1000), 'client_pod_ip': pod_ip,
+           'model': args.model}
+    if isinstance(reply, dict):
+        choice = (reply.get('choices') or [{}])[0]
+        out.update({'response_model': reply.get('model'), 'usage': reply.get('usage'),
+                    'finish_reason': choice.get('finish_reason'),
+                    'content_head': ((choice.get('message') or {}).get('content') or '')[:120]})
+    elif status != 'ok':
+        out['stderr_tail'] = mask(proc.stderr)[-400:]
+    print(json.dumps(out, ensure_ascii=False))
+    return 0 if status == 'ok' else 1
 
 
 def _count_stream(cmd, label, counts):
@@ -626,6 +735,13 @@ def main(argv=None):
     p.add_argument('endpoint', choices=['state', 'account/activate', 'keys/list', 'keys/create',
                                         'usage/recent'])
     p.add_argument('json', nargs='?')
+    p.add_argument('--save-key', metavar='FILE',
+                   help='keys/create：把只顯示一次的 sk- 金鑰寫進 FILE（0600），不印')
+    p = sub.add_parser('free-chat')
+    p.add_argument('--key-file', required=True)
+    p.add_argument('--model', default='qwen3-4b-cluster1')
+    p.add_argument('--prompt', default='用一句話回答：1+1 等於多少？')
+    p.add_argument('--max-tokens', type=int, default=64)
     p = sub.add_parser('account')
     p.add_argument('login')
     p = sub.add_parser('ap-search')
@@ -654,6 +770,7 @@ def main(argv=None):
         'cron-status': cmd_cron, 'cron-pause': cmd_cron, 'cron-resume': cmd_cron,
         'run-cron': cmd_run_cron, 'crash-drill': cmd_crash_drill, 'expire-lease': cmd_expire_lease,
         'ac7': cmd_ac7, 'ac9': cmd_ac9, 'grep-secrets': cmd_grep_secrets,
+        'free-chat': cmd_free_chat,
     }[args.command]
     return handler(sbx, args)
 
