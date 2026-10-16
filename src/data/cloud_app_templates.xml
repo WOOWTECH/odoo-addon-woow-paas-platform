@@ -150,10 +150,15 @@
             <!-- IMPORTANT: 換行只能落在 JSON token 之間，不可切斷字串值。字串值內夾字面換行
                  會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端
                  Application Settings 區塊靜默消失（見 fix/n8n-creation-issue）。 -->
+            <!-- DATA-N8N-008-1：_init.owner_email／_init.owner_password 只在開通時（post-deploy init）生效，
+                 不進 helm_values。標 create_only ⇒ 「儲存設定」若帶了不同的值，reconfigure 整筆拒絕並說明
+                 （比照 Odoo #1561），而不是回 success、靜默丟棄、白跑一次空的 helm upgrade。 -->
             <field name="helm_value_specs">{"required": [
                 {"key": "_init.owner_email", "label": "n8n 管理員 Email", "type": "text",
+                "create_only": true,
                 "placeholder": "you@example.com", "description": "n8n 管理員登入 Email"},
                 {"key": "_init.owner_password", "label": "n8n 管理員密碼", "type": "password",
+                "create_only": true,
                 "description": "至少 8 字元，需含大小寫字母與數字"}
                 ], "optional": [
                 {"key": "main.config.GENERIC_TIMEZONE", "label": "時區", "type": "select",

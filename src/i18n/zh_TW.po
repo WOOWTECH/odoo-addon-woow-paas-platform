@@ -11640,6 +11640,20 @@ msgstr "回復到此版本"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s is the version currently deployed; there is nothing to "
+"roll back."
+msgstr "Revision %(revision)s 就是目前部署中的版本，沒有需要回復的內容。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "There is no previous revision to roll back to."
+msgstr "沒有可回復的上一版。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "Rollback to revision %(revision)s initiated"
 msgstr "已開始回復到 revision %(revision)s"
 

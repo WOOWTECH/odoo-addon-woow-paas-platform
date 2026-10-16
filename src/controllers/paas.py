@@ -47,6 +47,8 @@ from ..services.chart_version import (
     ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
     annotate_rollback_floor,
     rollback_floor_violation,
+    rollback_request_problem,
+    rollback_target_number,
 )
 from ..models.cloud_service import (
     WOOW_ODOO_ADMIN_PASSWORD_PATH,
@@ -4098,13 +4100,29 @@ class PaasController(HiddenChainMixin, Controller):
                 child_path[-len(p):] == p for p in password_paths
             )
 
+        def _mask_secret_subtree(value, child_path: tuple[str, ...]):
+            """``secret`` 子樹：平台注入的鍵維持 legacy 前綴遮罩，租戶填的 password 鍵全遮。
+
+            DATA-N8N-008-2：n8n 的 SMTP 密碼（``main.secret.N8N_SMTP_PASS``，``type: password``）
+            落在 ``main.secret`` 底下。這個分支原本整棵子樹都用 legacy 的 8 字元前綴遮罩，
+            而且排在 spec-driven 判斷之前 ⇒ 18 字元的租戶密碼洩漏了前 8 個字元（與 #535
+            「type: password 一律全遮」的契約不符）。現在逐葉判斷：葉節點的路徑若是 spec 點名的
+            password 鍵 ⇒ 全遮；其餘（平台注入的 ``N8N_API_KEY`` 等，不在 specs 裡）仍保留前綴，
+            n8n 既有 UI 靠它辨識是哪把 key。
+            """
+            if isinstance(value, dict):
+                return {k: _mask_secret_subtree(v, child_path + (k,)) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_mask_secret_subtree(v, child_path) for v in value]
+            return _mask_value_fully(value) if _is_password_path(child_path) else _mask_value(value)
+
         def _mask_secrets(d: dict, path: tuple[str, ...] = (), depth: int = 0) -> dict:
             result = {}
             for key, val in d.items():
                 child_path = path + (key,)
                 if key == 'secret' and isinstance(val, dict):
-                    # legacy N8N_API_KEY / etc under top-level 'secret'
-                    result[key] = _mask_secret_tree(val)
+                    # legacy N8N_API_KEY / etc under top-level 'secret'；租戶 password 鍵全遮（見上）
+                    result[key] = _mask_secret_subtree(val, child_path)
                 elif child_path[-2:] == ('config', 'sensitive') and isinstance(val, dict):
                     # mcp-server chart sensitive channel: mask every leaf under
                     # config.sensitive (admin_password, mcp_auth_token,
@@ -5325,6 +5343,19 @@ class PaasController(HiddenChainMixin, Controller):
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
                 ).get('revisions') or []
+            # DATA-ODOO-010-1：None／0＝上一版（API 既有語意，見 docstring），先解成明確的
+            # revision 號再送——訊息不再寫「revision None」；目標就是目前已部署的版本（或
+            # 沒有上一版）時直接擋下，不讓 helm 白白重建 Pod。
+            problem = rollback_request_problem(rollback_history, revision)
+            if problem:
+                target = rollback_target_number(rollback_history, revision)
+                if problem == 'already_current':
+                    return {'success': False, 'error': _(
+                        'Revision %(revision)s is the version currently deployed; '
+                        'there is nothing to roll back.', revision=target)}
+                return {'success': False, 'error': _(
+                    'There is no previous revision to roll back to.')}
+            revision = rollback_target_number(rollback_history, revision) or revision
             floor = rollback_floor_violation(rollback_history, revision)
             if floor:
                 return {'success': False,
