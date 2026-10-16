@@ -1,0 +1,141 @@
+/** @odoo-module **/
+
+import { reactive } from "@odoo/owl";
+import { jsonRpc } from "./rpc";
+import { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR } from "./llm_errors";
+
+/**
+ * 「AI 模型」分頁的 API（DESIGN §3.2；照 billing_service.js 的 reactive store）。
+ *
+ * 契約：
+ * - 每個方法都回 `{success: true, data}` 或 `{success: false, code, …數字參數}`，**不丟例外**。
+ *   失敗只保留 code 與白名單參數——後端的 `error` 文字、rpc.js 例外訊息（可能是伺服器
+ *   例外原文 `data.error.data.message`）一律丟掉，畫面上的句子只由 llm_errors.js 依 code 組。
+ * - store 只放清單與狀態。**完整金鑰不進 store**（DESIGN §5.4）：`createFreeTrialKey` 的回應只
+ *   回給呼叫端（LlmKeyRevealModal 放進自己的元件 state，關閉即清掉），這裡不留副本、不寫 log。
+ */
+
+/**
+ * 建金鑰的前端逾時（DESIGN §3.5）：後端總預算 KEY_CREATE_BUDGET_SECONDS＝20 秒，前端要比它長，
+ * 分類才會由後端給出。repo-lint 第 42 條 newapi-timeout-ladder 守這個大小關係。
+ */
+export const KEY_CREATE_TIMEOUT_MS = 40000;
+
+/** 失敗回應裡可以帶給 llm_errors.js 組句的參數（與 controllers/llm.py `_SAFE_PARAMS` 對齊、外加 §3.4 的參數）。 */
+const SAFE_PARAMS = ["retry_after", "current_version", "max_keys", "field", "reason", "used",
+  "needed_7d", "short_by"];
+
+function failure(code) {
+  return { success: false, code };
+}
+
+function normalize(result) {
+  if (result && result.success === true) {
+    return { success: true, data: result.data === undefined ? null : result.data };
+  }
+  if (result && typeof result.code === "string" && result.code) {
+    const out = failure(result.code);
+    for (const name of SAFE_PARAMS) {
+      const value = result[name];
+      if (typeof value === "number" || (typeof value === "string" && value.length <= 64)) {
+        out[name] = value;
+      }
+    }
+    return out;
+  }
+  // 沒有 code 的失敗（不該發生：後端每個失敗都帶 code）：當成程式錯誤，不轉述任何文字。
+  return failure("llm_internal_error");
+}
+
+async function call(url, params, { timeoutMs = null, transportCode = LLM_NETWORK_ERROR } = {}) {
+  let result;
+  try {
+    result = timeoutMs ? await jsonRpc(url, params, timeoutMs) : await jsonRpc(url, params);
+  } catch {
+    // 逾時、網路、HTTP 錯誤、JSON-RPC 例外：例外訊息不往畫面送（見檔頭）。
+    return failure(transportCode);
+  }
+  return normalize(result);
+}
+
+/**
+ * 建金鑰的冪等鍵（打開建立流程時產生一次，DESIGN §3.2）。後端只收小寫的 UUID 形狀；
+ * `crypto.randomUUID()` 只在安全來源可用，所以用 `getRandomValues()` 自己排成 v4。
+ */
+export function newClientRequestId(cryptoImpl = globalThis.crypto) {
+  const bytes = new Uint8Array(16);
+  cryptoImpl.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+}
+
+export const llmService = reactive({
+  /** `/api/llm/state` 的 data；還沒讀過時是 null。 */
+  overview: null,
+  /** 最近一次 `/api/llm/state` 的失敗碼（成功時清成 null）。 */
+  overviewError: null,
+  overviewLoaded: false,
+
+  /** `/api/llm/keys/list` 的 items（只有遮罩，沒有明文）。 */
+  keys: [],
+  keysError: null,
+  keysLoaded: false,
+
+  /** `/api/llm/usage/recent` 的 data（今天的免費試用呼叫，前 10 筆）。 */
+  usage: null,
+  usageError: null,
+
+  async fetchState() {
+    const result = await call("/api/llm/state", {});
+    if (result.success) {
+      this.overview = result.data;
+      this.overviewError = null;
+    } else {
+      this.overviewError = result.code;
+    }
+    this.overviewLoaded = true;
+    return result;
+  },
+
+  async activate(tosVersion) {
+    return call("/api/llm/account/activate", { tos_version: tosVersion });
+  },
+
+  async fetchKeys() {
+    const result = await call("/api/llm/keys/list", {});
+    if (result.success) {
+      const items = result.data && Array.isArray(result.data.items) ? result.data.items : [];
+      this.keys = items;
+      this.keysError = null;
+    } else {
+      this.keysError = result.code;
+    }
+    this.keysLoaded = true;
+    return result;
+  },
+
+  async fetchUsageRecent() {
+    const result = await call("/api/llm/usage/recent", {});
+    if (result.success) {
+      this.usage = result.data;
+      this.usageError = null;
+    } else {
+      this.usageError = result.code;
+    }
+    return result;
+  },
+
+  /**
+   * 建一把免費試用金鑰（付費金鑰在 LLM-07）。回應的 `data.key` 是**唯一一次**看得到的明文：
+   * 這裡不存、不記錄，直接交還呼叫端。請求沒拿到回應時回 `llm_key_create_interrupted`
+   * （金鑰可能已建好，見 llm_errors.js）。
+   */
+  async createFreeTrialKey(clientRequestId) {
+    return call("/api/llm/keys/create", {
+      client_request_id: clientRequestId,
+      kind: "free_trial",
+    }, { timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode: LLM_KEY_CREATE_INTERRUPTED });
+  },
+});

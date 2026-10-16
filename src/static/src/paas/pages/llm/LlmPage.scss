@@ -1,0 +1,504 @@
+// =============================================================================
+// 「AI 模型」分頁（DESIGN §6；票 LLM-01c）。一律 .o_woow_llm_* 前綴、斷點用 $woow-bp-*。
+// 子頁列沿用 ServiceDetailPage.scss 的全域 .o_woow_tabs／.o_woow_tab（手機橫捲）。
+// =============================================================================
+
+.o_woow_llm_page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 32px;
+
+  // 手機上 .o_woow_content 已有 1rem 內距（同 settings 頁的 #1310 處理）。
+  @media (max-width: $woow-bp-md) {
+    padding-left: 0;
+    padding-right: 0;
+    padding-top: 0.5rem;
+  }
+
+  &__header {
+    margin-bottom: 1.25rem;
+
+    h1 {
+      font-family: $woow-font-display;
+      font-size: 28px;
+      font-weight: 600;
+      color: $woow-text-primary;
+      margin: 0 0 8px;
+    }
+
+    p {
+      color: $woow-text-secondary;
+      margin: 0;
+    }
+
+    @media (max-width: $woow-bp-md) {
+      h1 {
+        font-size: 22px;
+      }
+    }
+  }
+
+  &__soon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 3rem 1rem;
+    color: $woow-text-secondary;
+    text-align: center;
+
+    h3 {
+      margin: 0;
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: $woow-text-primary;
+    }
+
+    p {
+      margin: 0;
+    }
+  }
+}
+
+.o_woow_llm_overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+
+  .o_woow_error_message {
+    margin-top: 0;
+  }
+}
+
+// ----------------------------------------------------------------------------- 狀態畫面
+
+.o_woow_llm_notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2.5rem 1.5rem !important;
+  text-align: center;
+  color: $woow-text-secondary;
+
+  p {
+    margin: 0;
+    color: $woow-text-primary;
+  }
+
+  &--error > .material-symbols-outlined {
+    color: #ef4444;
+  }
+}
+
+.o_woow_llm_intro {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 2rem !important;
+
+  @media (max-width: $woow-bp-sm) {
+    padding: 1.25rem !important;
+  }
+
+  &__icon {
+    width: 56px;
+    height: 56px;
+    border-radius: $woow-radius-default;
+    background: rgba($woow-primary, 0.1);
+    color: $woow-primary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__title {
+    font-family: $woow-font-display;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    margin: 0;
+  }
+
+  &__subtitle {
+    margin: 0;
+    color: $woow-text-secondary;
+  }
+
+  &__pricing {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border-radius: $woow-radius-default;
+    background: $woow-background-light;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+  }
+
+  &__terms {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    font-size: 0.9375rem;
+    color: $woow-text-primary;
+    cursor: pointer;
+
+    input {
+      margin-top: 0.25rem;
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+    }
+  }
+
+  &__draft {
+    margin: 0;
+  }
+
+  &__actions {
+    margin-top: 0.5rem;
+  }
+}
+
+.o_woow_llm_progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2.5rem 1.5rem !important;
+  text-align: center;
+  color: $woow-primary;
+
+  p {
+    margin: 0;
+  }
+
+  &__text {
+    color: $woow-text-primary;
+    font-weight: 500;
+  }
+
+  // 不確定時間的進度條（開戶是背景 cron，前端只知道「還在跑」）。
+  &__bar {
+    position: relative;
+    // 不用 min()：libsass 會把它當成 Sass 函式，px 與 % 不能比而編譯失敗。
+    width: 320px;
+    max-width: 100%;
+    height: 6px;
+    border-radius: $woow-radius-full;
+    background: rgba($woow-primary, 0.12);
+    overflow: hidden;
+
+    span {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 40%;
+      border-radius: $woow-radius-full;
+      background: $woow-primary;
+      animation: o_woow_llm_progress_slide 1.4s ease-in-out infinite;
+    }
+  }
+}
+
+@keyframes o_woow_llm_progress_slide {
+  from { left: -40%; }
+  to { left: 100%; }
+}
+
+// ----------------------------------------------------------------------------- 橫幅
+
+.o_woow_llm_banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-radius: $woow-radius-default;
+  font-size: 0.875rem;
+  line-height: 1.5;
+
+  > .material-symbols-outlined {
+    flex-shrink: 0;
+  }
+
+  &--warn {
+    background: rgba(245, 158, 11, 0.12);
+    color: #92400e;
+  }
+
+  &--error {
+    background: rgba(239, 68, 68, 0.1);
+    color: #b91c1c;
+  }
+}
+
+// ----------------------------------------------------------------------------- 卡片
+
+.o_woow_llm_cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+
+  @media (max-width: $woow-bp-lg) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (max-width: $woow-bp-sm) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.o_woow_llm_card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem !important;
+  min-width: 0;
+
+  &--wide {
+    grid-column: span 2;
+
+    @media (max-width: $woow-bp-sm) {
+      grid-column: auto;
+    }
+  }
+
+  &__label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  &__value {
+    font-family: $woow-font-display;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: $woow-text-primary;
+    overflow-wrap: anywhere;
+  }
+
+  &__code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.875rem;
+    color: $woow-text-primary;
+    word-break: break-all;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  &__error {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: #b91c1c;
+  }
+}
+
+// ----------------------------------------------------------------------------- 區塊與清單
+
+.o_woow_llm_section {
+  padding: 1.25rem 1.5rem !important;
+
+  @media (max-width: $woow-bp-sm) {
+    padding: 1rem !important;
+  }
+
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+
+    h3 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: $woow-text-primary;
+    }
+  }
+
+  &__subtitle {
+    margin: 0.25rem 0 0;
+    font-size: 0.875rem;
+    color: $woow-text-secondary;
+  }
+
+  &__text {
+    margin: 0 0 1rem;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+  }
+
+  &__note {
+    margin: 0;
+    color: $woow-text-primary;
+    font-size: 0.875rem;
+  }
+
+  &__footnote {
+    margin: 0.75rem 0 0;
+    color: $woow-text-secondary;
+    font-size: 0.75rem;
+  }
+}
+
+.o_woow_llm_empty {
+  margin: 0;
+  padding: 1rem 0;
+  color: $woow-text-secondary;
+  font-size: 0.875rem;
+}
+
+.o_woow_llm_masked {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8125rem;
+  color: $woow-text-primary;
+  word-break: break-all;
+}
+
+.o_woow_llm_list {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.875rem;
+
+  &__head,
+  &__row {
+    display: grid;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.625rem 0;
+  }
+
+  &__head {
+    color: $woow-text-secondary;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-bottom: 1px solid $woow-border-light;
+  }
+
+  &__row {
+    border-bottom: 1px solid $woow-border-light;
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  &__cell {
+    min-width: 0;
+    color: $woow-text-primary;
+    overflow-wrap: anywhere;
+  }
+
+  &__note {
+    display: block;
+    margin-top: 0.25rem;
+    color: $woow-text-secondary;
+    font-size: 0.75rem;
+  }
+
+  // 手機：每列一張卡片，欄名由 data-label 顯示在值前面（DESIGN §6.7）。
+  @media (max-width: $woow-bp-md) {
+    gap: 0.75rem;
+
+    &__head {
+      display: none;
+    }
+
+    &__row {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.375rem;
+      padding: 0.875rem 1rem;
+      border: 1px solid $woow-border-light;
+      border-radius: $woow-radius-default;
+
+      &:last-child {
+        border-bottom: 1px solid $woow-border-light;
+      }
+    }
+
+    &__cell {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.25rem 0.5rem;
+
+      &::before {
+        content: attr(data-label);
+        flex: 0 0 6.5rem;
+        color: $woow-text-secondary;
+        font-size: 0.75rem;
+      }
+
+      &--title {
+        font-weight: 600;
+      }
+    }
+
+    &__note {
+      // 換到下一行、對齊值那一欄（欄名 6.5rem＋間距 0.5rem）。
+      flex-basis: calc(100% - 7rem);
+      margin-top: 0;
+      margin-left: 7rem;
+    }
+  }
+}
+
+// 欄寬（桌面）。不用 `&--keys &__head` 這種一個選擇器兩個 `&` 的寫法：libsass 對帶後綴的
+// 第二個 `&` 支援不一致，寫成完整 class 最保險。
+.o_woow_llm_list--keys .o_woow_llm_list__head,
+.o_woow_llm_list--keys .o_woow_llm_list__row {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.o_woow_llm_list--usage .o_woow_llm_list__head,
+.o_woow_llm_list--usage .o_woow_llm_list__row {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+}
+
+.o_woow_llm_status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.625rem;
+  border-radius: $woow-radius-full;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &--ok {
+    background: rgba(34, 197, 94, 0.12);
+    color: #15803d;
+  }
+
+  &--pending {
+    background: rgba($woow-primary, 0.12);
+    color: $woow-primary;
+  }
+
+  &--warn {
+    background: rgba(245, 158, 11, 0.14);
+    color: #92400e;
+  }
+
+  &--error {
+    background: rgba(239, 68, 68, 0.1);
+    color: #b91c1c;
+  }
+
+  &--off {
+    background: rgba(0, 0, 0, 0.05);
+    color: $woow-text-secondary;
+  }
+}

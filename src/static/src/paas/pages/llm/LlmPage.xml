@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmPage">
+    <div class="o_woow_llm_page">
+      <div class="o_woow_llm_page__header">
+        <h1>AI Models</h1>
+        <p t-esc="subtitle"/>
+      </div>
+
+      <!-- 子頁：平台既有的 .o_woow_tabs（手機可橫捲）；切換只改 hash（見 JS setTab）。 -->
+      <div class="o_woow_tabs o_woow_llm_page__tabs" role="tablist">
+        <t t-foreach="tabs" t-as="tab" t-key="tab.id">
+          <button type="button" role="tab"
+                  t-att-class="{'o_woow_tab': true, 'active': currentTab === tab.id}"
+                  t-att-aria-selected="currentTab === tab.id ? 'true' : 'false'"
+                  t-on-click="() => this.setTab(tab.id)">
+            <WoowIcon name="tab.icon" size="18"/>
+            <t t-esc="tab.label"/>
+          </button>
+        </t>
+      </div>
+
+      <div class="o_woow_llm_page__content" role="tabpanel">
+        <LlmOverviewTab t-if="currentTab === 'overview'"/>
+        <div t-elif="!currentTabLive" class="o_woow_llm_page__soon">
+          <WoowIcon name="'schedule'" size="32"/>
+          <h3>Coming soon</h3>
+          <p t-esc="comingSoonText"/>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

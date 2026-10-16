@@ -1,7 +1,8 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
-import { showProjects } from "./platform_config";
+import { showLlm, showProjects } from "./platform_config";
+import { buildLlmRoutes, llmGateRedirect } from "./llm_routes";
 import { captureInvitationFragment, clearInvitationToken, getInvitationRevision } from "./invitation_context";
 
 /** @type {Array<{path: string, name: string, routeName?: string, pattern?: RegExp}>} */
@@ -39,6 +40,9 @@ const routes = [
     { path: "ai-assistant/tasks/:taskId", name: _t("Task Detail"), routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },
     { path: "ai-assistant/tasks", name: _t("Tasks"), routeName: "ai-tasks" },
     { path: "ai-assistant/chat/:conversationId", name: _t("AI Chat"), routeName: "ai-chat", pattern: /^ai-assistant\/chat\/(\d+)$/ },
+    // LLM-01c：「AI 模型」分頁。單一 routeName `llm` 的雙路由（`llm/<子頁>` 在前、exact `llm`
+    // 在後；子頁白名單與 pattern 在 core/llm_routes.js，node 測試直接驗那一份）。
+    ...buildLlmRoutes(_t("AI Models")),
     { path: "deployments", name: _t("Deployments"), routeName: "deployments" },
     { path: "billing", name: _t("Billing"), routeName: "billing" },
     { path: "billing/topup", name: _t("Top-up Store"), routeName: "billing-topup" },
@@ -139,8 +143,13 @@ export const router = reactive({
                         this.params.conversationId = match[1];
                     } else if (route.routeName === 'ai-project-kanban') {
                         this.params.id = match[1];
+                    } else if (route.routeName === 'llm') {
+                        // 唯一的 capture 是子頁，不是記錄 id。
+                        this.params.tab = match[1];
+                        delete this.params.id;
                     }
                     this._applyProjectGate();
+                    this._applyLlmGate();
                     return;
                 }
             }
@@ -151,6 +160,7 @@ export const router = reactive({
         const route = routes.find(r => r.path === path);
         this.current = route ? route.routeName : "not-found";
         this._applyProjectGate();
+        this._applyLlmGate();
     },
 
     _applyProjectGate() {
@@ -158,6 +168,19 @@ export const router = reactive({
         // hash 載入 /woow#/projects 也不會閃現 project 頁。改 hash 只是同步 URL；
         // this.current 已即時設為 dashboard，hashchange 再跑一次為冪等。
         if (!showProjects() && PROJECT_ROUTE_NAMES.has(this.current)) {
+            this.current = "dashboard";
+            this.params = {};
+            if (window.location.hash !== "#/dashboard") {
+                window.location.hash = "#/dashboard";
+            }
+        }
+    },
+
+    _applyLlmGate() {
+        // LLM-01c：開關關（或不在 pilot 名單）時 `#/llm`、`#/llm/<子頁>` 都導回總覽，
+        // 判準同 _applyProjectGate（同步讀 session，不會閃現分頁）。後端 /api/llm/* 另回
+        // llm_disabled——這裡只是外觀。
+        if (llmGateRedirect(this.current, showLlm())) {
             this.current = "dashboard";
             this.params = {};
             if (window.location.hash !== "#/dashboard") {

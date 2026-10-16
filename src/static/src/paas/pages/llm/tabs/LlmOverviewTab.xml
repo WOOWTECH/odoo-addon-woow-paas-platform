@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <!-- 名稱一律 Llm 前綴：woow_paas_platform.OverviewTab 已經是服務詳情頁的總覽分頁（〔REV〕51）。 -->
+  <t t-name="woow_paas_platform.LlmOverviewTab">
+    <div class="o_woow_llm_overview">
+      <t t-if="screen === 'loading'">
+        <div class="o_woow_loading">
+          <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
+          <p>Loading...</p>
+        </div>
+      </t>
+
+      <t t-elif="screen === 'disabled'">
+        <WoowCard shadow="true" class="'o_woow_llm_notice'">
+          <WoowIcon name="'block'" size="28"/>
+          <p t-esc="disabledText"/>
+        </WoowCard>
+      </t>
+
+      <t t-elif="screen === 'unavailable'">
+        <WoowCard shadow="true" class="'o_woow_llm_notice'">
+          <WoowIcon name="'cloud_off'" size="28"/>
+          <p t-esc="unavailableText"/>
+          <WoowButton variant="'secondary'" size="'md'" onClick.bind="reload">Retry</WoowButton>
+        </WoowCard>
+      </t>
+
+      <!-- 尚未開通（DESIGN §6.2）：主視覺＋副標＋代表模型價格（tracer 沒有價目 API，顯示 fallback 句）＋條款勾選＋〔開通〕 -->
+      <t t-elif="screen === 'not_activated'">
+        <WoowCard shadow="true" class="'o_woow_llm_intro'">
+          <div class="o_woow_llm_intro__icon">
+            <WoowIcon name="'neurology'" size="32"/>
+          </div>
+          <h2 class="o_woow_llm_intro__title" t-esc="heroTitle"/>
+          <p class="o_woow_llm_intro__subtitle" t-esc="heroSubtitle"/>
+          <div class="o_woow_llm_intro__pricing">
+            <WoowIcon name="'sell'" size="18"/>
+            <span t-esc="pricingFallbackText"/>
+          </div>
+          <label class="o_woow_llm_intro__terms">
+            <input type="checkbox" t-att-checked="state.tosAccepted" t-on-change="onTosChange"/>
+            <span>I agree to the AI Models Terms of Service</span>
+          </label>
+          <p t-if="tosIsDraft" class="o_woow_hint o_woow_llm_intro__draft" t-esc="tosDraftText"/>
+          <div t-if="state.actionError" class="o_woow_error_message" role="alert">
+            <WoowIcon name="'error'" size="18"/>
+            <span t-esc="state.actionError"/>
+          </div>
+          <div class="o_woow_llm_intro__actions">
+            <WoowButton variant="'primary'" size="'lg'" disabled="!canActivate" onClick.bind="activate">
+              <WoowIcon t-if="state.activating" name="'progress_activity'" size="18" class="'o_woow_spin'"/>
+              Activate AI Models
+            </WoowButton>
+          </div>
+        </WoowCard>
+      </t>
+
+      <t t-elif="screen === 'provisioning'">
+        <WoowCard shadow="true" class="'o_woow_llm_progress'">
+          <WoowIcon name="'progress_activity'" size="32" class="'o_woow_spin'"/>
+          <p class="o_woow_llm_progress__text" t-esc="provisioningText"/>
+          <div class="o_woow_llm_progress__bar" role="progressbar" aria-busy="true">
+            <span/>
+          </div>
+          <p class="o_woow_hint" t-esc="provisioningElapsedText"/>
+          <p t-if="provisioningSlow" class="o_woow_hint" t-esc="provisioningSlowText"/>
+        </WoowCard>
+      </t>
+
+      <!-- 開通失敗：不顯示 new-api 原文（DESIGN §6.2）。 -->
+      <t t-elif="screen === 'failed'">
+        <WoowCard shadow="true" class="'o_woow_llm_notice o_woow_llm_notice--error'">
+          <WoowIcon name="'error'" size="28"/>
+          <p t-esc="failedText"/>
+          <p t-if="state.actionError" class="o_woow_hint" t-esc="state.actionError"/>
+          <WoowButton variant="'primary'" size="'md'" disabled="state.retrying" onClick.bind="retry">Retry</WoowButton>
+        </WoowCard>
+      </t>
+
+      <!-- 已開通（active）與已暫停（suspended：只能看，寫入按鈕都不出現） -->
+      <t t-else="">
+        <div t-if="screen === 'suspended'" class="o_woow_llm_banner o_woow_llm_banner--error" role="alert">
+          <WoowIcon name="'block'" size="20"/>
+          <span t-esc="suspendedText"/>
+        </div>
+        <div t-if="showZeroCreditBanner" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
+          <WoowIcon name="'info'" size="20"/>
+          <span class="o_woow_llm_banner__text" t-esc="zeroCreditText"/>
+        </div>
+        <div t-if="state.actionError" class="o_woow_error_message" role="alert">
+          <WoowIcon name="'error'" size="18"/>
+          <span t-esc="state.actionError"/>
+        </div>
+
+        <div class="o_woow_llm_cards">
+          <WoowCard shadow="true" class="'o_woow_llm_card'">
+            <div class="o_woow_llm_card__label">
+              <WoowIcon name="'account_balance_wallet'" size="18"/>
+              <span>AI credit balance</span>
+            </div>
+            <div class="o_woow_llm_card__value" t-esc="balanceText"/>
+          </WoowCard>
+          <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_card'">
+            <div class="o_woow_llm_card__label">
+              <WoowIcon name="'science'" size="18"/>
+              <span>Free trial today</span>
+            </div>
+            <div class="o_woow_llm_card__value" t-esc="freeTrialUsageText"/>
+          </WoowCard>
+          <WoowCard shadow="true" class="'o_woow_llm_card o_woow_llm_card--wide'">
+            <div class="o_woow_llm_card__label">
+              <WoowIcon name="'link'" size="18"/>
+              <span>Base URL</span>
+            </div>
+            <t t-if="baseUrl">
+              <code class="o_woow_llm_card__code" t-esc="baseUrl"/>
+              <div class="o_woow_llm_card__actions">
+                <WoowButton variant="'secondary'" size="'sm'" onClick.bind="copyBaseUrl">
+                  <WoowIcon name="'content_copy'" size="16"/>
+                  <t t-if="state.baseUrlCopied">Copied.</t>
+                  <t t-else="">Copy</t>
+                </WoowButton>
+              </div>
+              <p t-if="state.baseUrlCopyFailed" class="o_woow_llm_card__error" role="alert" t-esc="copyFailedText"/>
+            </t>
+            <p t-else="" class="o_woow_hint" t-esc="baseUrlMissingText"/>
+          </WoowCard>
+        </div>
+
+        <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_section'">
+          <div class="o_woow_llm_section__header">
+            <h3>Free trial</h3>
+          </div>
+          <p class="o_woow_llm_section__text" t-esc="freeTrialHint"/>
+          <WoowButton t-if="!hasFreeTrialKey" variant="'primary'" size="'md'" disabled="!canCreateFreeTrialKey" onClick.bind="openFreeTrialKey">
+            <WoowIcon name="'key'" size="18"/>
+            Create free trial key
+          </WoowButton>
+          <p t-else="" class="o_woow_llm_section__note" t-esc="freeTrialExistsText"/>
+        </WoowCard>
+
+        <WoowCard shadow="true" class="'o_woow_llm_section'">
+          <div class="o_woow_llm_section__header">
+            <h3>API keys</h3>
+          </div>
+          <div t-if="keysErrorText" class="o_woow_error_message" role="alert">
+            <WoowIcon name="'error'" size="18"/>
+            <span t-esc="keysErrorText"/>
+          </div>
+          <p t-elif="!keyRows.length" class="o_woow_llm_empty" t-esc="emptyKeysText"/>
+          <!-- 桌面是表格；手機（≤ md）每列改卡片堆疊，欄名由 data-label 帶出（DESIGN §6.7）。 -->
+          <div t-else="" class="o_woow_llm_list o_woow_llm_list--keys" role="table">
+            <div class="o_woow_llm_list__head" role="row">
+              <span role="columnheader" t-esc="labels.name"/>
+              <span role="columnheader" t-esc="labels.kind"/>
+              <span role="columnheader" t-esc="labels.key"/>
+              <span role="columnheader" t-esc="labels.status"/>
+              <span role="columnheader" t-esc="labels.expires"/>
+            </div>
+            <t t-foreach="keyRows" t-as="row" t-key="row.id">
+              <div class="o_woow_llm_list__row" role="row">
+                <div class="o_woow_llm_list__cell o_woow_llm_list__cell--title" role="cell" t-att-data-label="labels.name" t-esc="row.name"/>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.kind" t-esc="row.kind"/>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.key">
+                  <code class="o_woow_llm_masked" t-esc="row.masked"/>
+                </div>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.status">
+                  <span t-att-class="'o_woow_llm_status o_woow_llm_status--' + row.tone" t-esc="row.statusLabel"/>
+                  <small t-if="row.statusNote" class="o_woow_llm_list__note" t-esc="row.statusNote"/>
+                </div>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.expires">
+                  <span t-esc="row.expires"/>
+                  <span t-if="row.expiringSoon" class="o_woow_llm_status o_woow_llm_status--warn" t-esc="expiringSoonText"/>
+                </div>
+              </div>
+            </t>
+          </div>
+        </WoowCard>
+
+        <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_section'">
+          <div class="o_woow_llm_section__header">
+            <div>
+              <h3>Recent free trial calls</h3>
+              <p class="o_woow_llm_section__subtitle" t-esc="freeTrialUsageSentence"/>
+            </div>
+            <WoowButton variant="'ghost'" size="'sm'" disabled="state.refreshingUsage" onClick.bind="refreshUsage">
+              <WoowIcon name="'refresh'" size="16" class="state.refreshingUsage ? 'o_woow_spin' : ''"/>
+              Refresh
+            </WoowButton>
+          </div>
+          <div t-if="usageErrorText" class="o_woow_error_message" role="alert">
+            <WoowIcon name="'error'" size="18"/>
+            <span t-esc="usageErrorText"/>
+          </div>
+          <p t-elif="!usageRows.length" class="o_woow_llm_empty" t-esc="emptyUsageText"/>
+          <div t-else="" class="o_woow_llm_list o_woow_llm_list--usage" role="table">
+            <div class="o_woow_llm_list__head" role="row">
+              <span role="columnheader" t-esc="labels.time"/>
+              <span role="columnheader" t-esc="labels.model"/>
+              <span role="columnheader" t-esc="labels.input"/>
+              <span role="columnheader" t-esc="labels.output"/>
+              <span role="columnheader" t-esc="labels.latency"/>
+            </div>
+            <t t-foreach="usageRows" t-as="row" t-key="row.key">
+              <div class="o_woow_llm_list__row" role="row">
+                <div class="o_woow_llm_list__cell o_woow_llm_list__cell--title" role="cell" t-att-data-label="labels.time" t-esc="row.time"/>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.model">
+                  <code class="o_woow_llm_masked" t-esc="row.model"/>
+                </div>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.input" t-esc="row.input"/>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.output" t-esc="row.output"/>
+                <div class="o_woow_llm_list__cell" role="cell" t-att-data-label="labels.latency" t-esc="row.latency"/>
+              </div>
+            </t>
+          </div>
+          <p t-if="usageDataTimeText" class="o_woow_llm_section__footnote" t-esc="usageDataTimeText"/>
+        </WoowCard>
+      </t>
+
+      <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" onClose.bind="onRevealClosed"/>
+    </div>
+  </t>
+</templates>
