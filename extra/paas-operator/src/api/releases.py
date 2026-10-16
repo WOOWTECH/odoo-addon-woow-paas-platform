@@ -115,6 +115,12 @@ RESET_EXEC_TIMEOUT_SECONDS = 12
 RESET_CLEANUP_EXEC_TIMEOUT_SECONDS = 5
 # Deployment 探索 ＋ rollout restart 下達（各 ~1s 的 kubectl 呼叫）。
 RESET_KUBECTL_SLACK_SECONDS = 3
+# INFRA-FIX-018：helm_secret 路在 upgrade 前讀一次叢集目前的 values（`helm get values`，
+# 純讀、通常 <1s）。這段**不新增**預算：helm_secret 路沒有 config.json exec（
+# RESET_EXEC_TIMEOUT_SECONDS）也沒有備份清理（RESET_CLEANUP_EXEC_TIMEOUT_SECONDS），這 17s
+# 在 RESET_HARD_CAP_SECONDS 裡本來就是空的；config_json 路不讀（忽略 preserve_value_paths）。
+# 所以階梯不變，由 test_reset_pod_template_neutral_infra_fix_018 釘住「借用」的算式。
+RESET_LIVE_VALUES_TIMEOUT_SECONDS = 5
 # #1552：等 helm 名額（helm_limiter）最多幾秒。reset 有自己的階梯，不能用一般的
 # HELM_QUEUE_TIMEOUT_SECONDS（45s）：排隊 45s 再跑完整個 reset 會超過平台的 75s，
 # 平台先斷線、operator 之後才換掉密碼＝租戶不知道的新密碼。排不到就 503、什麼都沒動。
@@ -2558,6 +2564,50 @@ def _reset_release_config_unlocked(
     }
 
 
+def _values_pinned_to_live_release(
+    namespace: str,
+    name: str,
+    request: ReleaseResetConfigRequest,
+) -> Dict[str, Any]:
+    """INFRA-FIX-018：回傳 reset 要送給 helm 的 values——``preserve_value_paths`` 那幾條
+    改用**叢集目前 release** 的值（含「不存在」）。
+
+    為什麼：平台送來的 values 是 DB 裡存的快照，不保證等於叢集現況。方案資源鍵若是舊
+    overlay 寫的（headscale 的頂層 ``resources`` 被 chart deep-merge 進 headplane，現行
+    平台寫的是 ``headscale.resources``），reset 的 upgrade 會把 pod template 換掉 ⇒
+    StatefulSet 滾動 ⇒ RWO 重新 attach 45 秒以上 ⇒ 15 秒 ``--atomic`` 逾時 ⇒ 回「重設
+    失敗」，並留下 2 筆 failed revision（商用驗收 INFRA-HS-002-1：3/3 次必敗）。reset 的
+    契約是「只動憑證、pod template 位元不變」，所以會影響 pod template 的鍵以叢集為準。
+
+    讀不到現況 ⇒ 500，**此刻什麼都還沒動**（密碼、release 都不變）。不退回送快照：
+    退回就是重現上面那個必敗的情境，而且更難查。⛔ live values 含明文憑證，只進
+    ``overlay_preserved_paths`` 的記憶體運算，不 log、不回傳。
+    """
+    values = request.values or {}
+    if not request.preserve_value_paths:
+        return values
+    try:
+        live_values = helm_service.get_values(
+            namespace, name, timeout_seconds=RESET_LIVE_VALUES_TIMEOUT_SECONDS,
+        )
+    except (ValueError, HelmException) as e:
+        logger.error(
+            "reset-config could not read the live values of %s/%s: %s",
+            namespace, name, getattr(e, "message", None) or e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="reset-config: failed to read the live release values; nothing was changed",
+        )
+    pinned = overlay_preserved_paths(values, live_values, request.preserve_value_paths)
+    logger.info(
+        "reset-config pinned %d value path(s) of %s/%s to the live release: %s",
+        len(request.preserve_value_paths), namespace, name,
+        ",".join(request.preserve_value_paths),
+    )
+    return pinned
+
+
 def _reset_via_helm_secret(
     namespace: str,
     name: str,
@@ -2593,6 +2643,9 @@ def _reset_via_helm_secret(
     """
     label_selector = f"app.kubernetes.io/instance={name}"
 
+    # INFRA-FIX-018：在任何寫入之前先把會改 pod template 的鍵釘到叢集現況。
+    reset_values = _values_pinned_to_live_release(namespace, name, request)
+
     try:
         previous_revision = helm_service.get(namespace, name).revision
         release = helm_service.upgrade(
@@ -2601,7 +2654,7 @@ def _reset_via_helm_secret(
             chart=request.chart,
             # #448：全量 reset values 會抹掉 install 時注入的 pull secret，兩條
             # reset 路都必須自己補回來。
-            values=_ensure_image_pull_secrets(namespace, request.values),
+            values=_ensure_image_pull_secrets(namespace, reset_values),
             sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,

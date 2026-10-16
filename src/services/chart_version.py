@@ -126,3 +126,22 @@ def rollback_floor_violation(revisions, requested):
         'target_chart_version': target_version,
         'current_chart_version': current_version,
     }
+
+
+def drop_failed_revisions(revisions):
+    """回復版本清單不列 ``failed`` 的 revision（INFRA-FIX-018／INFRA-HS-002 觀察）。
+
+    helm 的失敗升級（含 ``--atomic`` 自動回滾那一筆）會留下狀態 ``failed`` 的 revision：它從來
+    沒有成功部署過，「回復」到它沒有意義，列在清單裡只會讓租戶選到一個不該選的版本。商用驗收
+    實測：Headscale 238 三次失敗的改密碼各留 2 筆，清單被 6 筆 failed 塞滿（rev 8～13），
+    helm 預設只留最近 10 筆，真正可回復的 rev 7 因此被擠出歷史。
+
+    只用在「給人選」的清單；判斷基準（``rollback_baseline``）與請求檢查
+    （``rollback_request_problem``）仍讀完整歷史，所以放在 ``annotate_rollback_floor`` **之後**
+    才過濾。回傳新的 list（不改呼叫端的物件）。
+    """
+    return [
+        revision for revision in revisions or []
+        if not (isinstance(revision, dict)
+                and str(revision.get('status', '')).lower() == 'failed')
+    ]

@@ -2996,6 +2996,10 @@ class CloudService(models.Model):
                 # 值必 500（#449）。判別器＝template 欄位，不得在此自建 slug／chart
                 # allowlist——與 has_admin_gui 同一紀律（#357 C01）。
                 admin_password_carrier=self.template_id.admin_password_carrier,
+                # INFRA-FIX-018：DB 快照的方案資源鍵可能是舊 overlay 寫的，與叢集現況
+                # 不同；請 operator 在 helm_secret 路先把這些鍵釘到叢集目前的值，
+                # reset 才不會改 pod template（改了就撞 15 秒 --atomic，必敗）。
+                preserve_value_paths=self._reset_pod_template_value_paths(),
             )
         except PaaSOperatorTimeoutError as e:
             # #461 C11′ (commit-on-secret) — this branch survived the async
@@ -5600,6 +5604,39 @@ class CloudService(models.Model):
         if gateway_api_key and self._chart_has_gateway():
             values['auth'] = {'apiServerKey': gateway_api_key}
         return values
+
+    def _reset_pod_template_value_paths(self):
+        """INFRA-FIX-018（商用驗收 INFRA-HS-002-1）：reset 時要以**叢集現況**為準的 values 路徑。
+
+        reset 的契約是「只動憑證，pod template 位元不變」——operator 的 reset 是
+        ``helm upgrade --atomic --timeout 15s``，pod template 一變（StatefulSet 滾動、RWO
+        重新 attach 45 秒以上）就必敗，還各留 2 筆 failed revision。``apply_plan=False`` 已經
+        不疊方案規格，但送出去的仍是 DB 的 ``helm_values`` 快照，而快照的方案資源鍵可能與
+        叢集不同：#1637 把 headscale 的方案 CPU／RAM 從頂層 ``resources`` 搬到
+        ``headscale.resources``，之後的 deploy／redeploy／reconfigure 都寫新鍵，但 DB 快照留著
+        舊的頂層鍵（chart 把它 deep-merge 進 headplane）⇒ reset 把兩個容器的資源對調 ⇒ 必敗
+        （Headscale 238 實測 3/3，helm rev 8～13 全 failed）。
+
+        這裡回傳會左右 pod template 的**方案資源**鍵：方案寫入路徑（``_plan_spec_paths``，chart
+        真正讀的那個）＋舊 overlay 的頂層 ``resources``（路徑搬家的範本才有殘值）。operator 在
+        helm_secret 路 upgrade 前用叢集目前的值（含「不存在」）覆寫它們。
+
+        只列資源：儲存大小不改 pod template（PVC 不可變欄位另有 #1407 preflight 擋）。只有
+        helm_secret 載體會送——config_json 路的 operator 預算沒有空位（見 operator
+        ``RESET_LIVE_VALUES_TIMEOUT_SECONDS``），也不屬於這個缺陷的路徑。
+
+        路徑與供給鏈同源（讀 ``_PLAN_SPEC_VALUE_PATHS``，不自建 slug 名單）。
+        """
+        self.ensure_one()
+        template = self.template_id
+        if template.admin_password_carrier != 'helm_secret':
+            return []
+        resources = tuple(_plan_spec_paths(template).get('resources')
+                          or _PLAN_SPEC_DEFAULT_PATHS['resources'])
+        paths = ['.'.join(resources)]
+        if resources != _PLAN_SPEC_DEFAULT_PATHS['resources']:
+            paths.append('.'.join(_PLAN_SPEC_DEFAULT_PATHS['resources']))
+        return paths
 
     def _rollback_preserved_value_paths(self):
         """#1433：「回復版本」時必須維持**目前值**的 helm values 路徑（平台管的憑證）。

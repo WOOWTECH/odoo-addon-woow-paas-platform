@@ -54,6 +54,7 @@ from ..models.cloud_service import (
     _internal_provision,
 )
 from ..models.cloud_service_renewal import RENEWABLE_SUBSCRIPTION_STATES, RenewalRefused
+from ..services.chart_version import drop_failed_revisions  # INFRA-FIX-018
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
@@ -5431,7 +5432,10 @@ class PaasController(HiddenChainMixin, Controller):
 
             return {
                 'success': True,
-                'data': annotate_rollback_floor(result.get('revisions', [])),
+                # INFRA-FIX-018：failed 的 revision 從沒成功部署過，不列給租戶選；
+                # 先標註（基準讀完整歷史）、後過濾。
+                'data': drop_failed_revisions(
+                    annotate_rollback_floor(result.get('revisions', []))),
             }
 
         except PaaSOperatorConnectionError:
