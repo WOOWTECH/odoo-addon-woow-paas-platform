@@ -111,7 +111,8 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      前端多留舊 slug 的文案無害。
 17. repo-lint-docstring-registry  本檔檔頭與實作互為雙射：上面的編號條目名 ↔
                      `REPO_LINT_RULES` 映射表 ↔ `run_all()` 實際呼叫的 check_*，
-                     編號 1..N 連續遞增，開頭宣告的兩個數字也要對得上。#596 修好了
+                     編號 1..N 連續遞增，所有條目必須位於「用法：」之前的條目區塊
+                     （#835），開頭宣告的兩個數字也要對得上。#596 修好了
                      檔頭三處過期內容（「十五個 check」與實際不符、漏登記一條、11 與
                      12 顛倒），但那是症狀——**沒有任何 gate 會在下次漂移時變紅**，
                      同一個形態會原樣復發且復發時一樣零訊號。檔頭不是裝飾：它是後續
@@ -6448,7 +6449,8 @@ def check_repo_lint_docstring_registry(root):
     1. 數量：檔頭開頭宣告的「N 個 check 函式／M 條規則」要對得上 run_all() 實際
        呼叫的 check_* 個數與檔頭編號條目數。一對多（7. capability-gate 由三個函式
        實作）走 `REPO_LINT_RULES` 這張顯式映射表，**不是**寫死差額。
-    2. 編號 1..M 連續且嚴格遞增（#596 的第三處問題就是 11 與 12 顛倒）。
+    2. 編號 1..M 連續且嚴格遞增（#596 的第三處問題就是 11 與 12 顛倒），且所有
+       編號條目必須位於「用法：」之前的條目區塊，不能只守清單一致（#835）。
     3. 名稱互為雙射：條目名 ↔ `REPO_LINT_RULES` 的鍵 ↔ run_all() 呼叫的函式名。
        只比數字的話，「數量相等但名字錯配」完全抓不到。
     4. 兩條同型不變式：module 層定義了 check_* 卻沒進 run_all()（gate 寫好了沒人
@@ -6464,8 +6466,8 @@ def check_repo_lint_docstring_registry(root):
     「Fail-open」講的是 hook 模式的全域 except：hook 不擋開發，`--all` 必須紅，
     兩者不衝突。）
 
-    ⚠ 覆蓋邊界：只保證名單／編號／數字三者對得上，**不驗證條目的描述文字與該 check
-    的實際行為相符**。描述寫錯、pitfall 指針過期、依據文件被刪，本 gate 一個都抓不到
+    ⚠ 覆蓋邊界：只保證名單／編號／數字對得上與條目區塊位置，**不驗證條目的描述文字
+    與該 check 的實際行為相符**。描述寫錯、pitfall 指針過期、依據文件被刪，本 gate 一個都抓不到
     ——那留給人。把這條綠讀成「檔頭寫的都是真的」就是 #547 的原型錯誤換一個載體。
     """
     ref = REPO_LINT_REGISTRY_REF
@@ -6489,7 +6491,8 @@ def check_repo_lint_docstring_registry(root):
         return ["%s：檔頭抽不到任何 `N. rule-name` 編號條目——探針失去鑑別力（雙射在"
                 "空集合上恆真）。格式是行首 `1. controller-sudo   說明…`、續行縮排"
                 "（%s）" % (self_rel, ref)]
-    entries = [(int(n), name) for n, name in _REPO_LINT_ENTRY_RE.findall(doc)]
+    entry_matches = list(_REPO_LINT_ENTRY_RE.finditer(doc))
+    entries = [(int(m.group(1)), m.group(2)) for m in entry_matches]
     header = doc[:first.start()]
 
     top = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
@@ -6518,7 +6521,21 @@ def check_repo_lint_docstring_registry(root):
     num_of = {name: num for num, name in entries}
     violations = []
 
-    # (1) 編號 1..N 連續且嚴格遞增。
+    # (1a) 條目區塊必須在「用法：」之前；仍掃完整 docstring，避免區塊外條目被漏掉。
+    usage = re.search(r"^用法：[ \t]*$", doc, re.M)
+    if usage is None:
+        violations.append(
+            "%s：檔頭找不到「用法：」區塊邊界，無法確認編號條目是否都在條目區塊內"
+            "——邊界遺失不能當通過（#835；%s）" % (self_rel, ref))
+    else:
+        for match in entry_matches:
+            if match.start() >= usage.start():
+                violations.append(
+                    "%s：檔頭第 %s 條 `%s` 位於「用法：」之後——編號條目必須全部位於"
+                    "「用法：」之前的條目區塊（#835；%s）"
+                    % (self_rel, match.group(1), match.group(2), ref))
+
+    # (1b) 編號 1..N 連續且嚴格遞增。
     nums = [n for n, _ in entries]
     expected = list(range(1, len(entries) + 1))
     if sorted(nums) != expected:
