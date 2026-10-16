@@ -5401,6 +5401,17 @@ class CloudService(models.Model):
         self.ensure_one()
         return bool(self.template_id.has_public_tunnel_address)
 
+    def _chart_has_vpn_node_status(self):
+        """本服務的 chart 有沒有一個要即時回讀給租戶看的 VPN 節點狀態（INFRA-FIX-005）。
+
+        唯一事實源是 `cloud_app_template.has_vpn_node_status`（能力 gate 一律收斂成單一欄位，
+        見該欄位註解與 docs/decisions/patterns/capability-gate-single-source-field.md）。
+        `/node-status` 端點、service payload 與前端卡片都必須讀本方法／本欄位，**不得**任何
+        一端自建 slug 名單。
+        """
+        self.ensure_one()
+        return bool(self.template_id.has_vpn_node_status)
+
     def _probe_public_tunnel_address(self, client):
         """問 operator 一次：ngrok agent 現在廣告的對外位址是什麼。
 

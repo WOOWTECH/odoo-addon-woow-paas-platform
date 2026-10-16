@@ -24220,3 +24220,212 @@ msgstr "AI 帳戶憑證驗證失敗（密文不符）"
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__llm_account_error
 msgid "AI account error"
 msgstr "AI 帳戶異常"
+
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Not connected"
+msgstr "未連線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Waiting for approval"
+msgstr "等待核可"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Starting"
+msgstr "啟動中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Unavailable"
+msgstr "無法取得"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node is running, but its control server shows it as offline. It reconnects on its own; if it stays offline for several minutes, restart the service."
+msgstr "節點在執行，但控制伺服器顯示它離線。它會自己重新連線；若離線超過數分鐘，請重新啟動服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The service is running, but this node is no longer logged in to its control server (its key expired or the node was removed there), so nothing is reachable through the VPN until it logs in again."
+msgstr "服務在執行，但這台節點已不在控制伺服器上登入（金鑰到期，或節點在控制台被移除），重新登入前無法透過 VPN 連到任何東西。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The control server is waiting for an administrator to approve this machine before it joins the VPN."
+msgstr "控制伺服器正在等管理員核可這台機器，核可後才會加入 VPN。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node is starting or logging in. This normally takes less than a minute."
+msgstr "節點正在啟動或登入，通常不到一分鐘。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node is stopped."
+msgstr "節點已停止。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node status cannot be read right now (the service is starting or restarting). It is re-checked automatically."
+msgstr "目前讀不到節點狀態（服務正在啟動或重新啟動），系統會自動重新檢查。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Ask a workspace owner or admin to log this node in again."
+msgstr "請工作區的擁有者或管理員重新登入這台節點。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "To log it in again: create a new pre-auth key in Headplane of this workspace's Headscale, paste it into Configuration > Auth key, and save."
+msgstr "重新登入的方法：到這個工作區 Headscale 的 Headplane 建立新的 pre-auth key，貼到「配置 > Auth key」後儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "To log it in again: create a new pre-auth key on your control server, paste it into Configuration > Auth key, and save."
+msgstr "重新登入的方法：在你的控制伺服器建立新的 pre-auth key，貼到「配置 > Auth key」後儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "To log it in again: create a new auth key in your Tailscale admin console, paste it into Configuration > Auth key, and save."
+msgstr "重新登入的方法：到 Tailscale 管理後台建立新的 auth key，貼到「配置 > Auth key」後儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Or open the login page"
+msgstr "或開啟登入頁面"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The login page of a workspace Headscale uses an internal address that a browser cannot open, so use a pre-auth key."
+msgstr "工作區 Headscale 的登入頁使用內部位址，瀏覽器打不開，請改用 pre-auth key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Registration code waiting for approval on the control server"
+msgstr "控制伺服器上等待核可的註冊碼"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Not active yet"
+msgstr "尚未生效"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Service not found in this workspace"
+msgstr "這個工作區找不到該服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "A different target is active"
+msgstr "生效的是不同的目標"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Active (target not verified)"
+msgstr "生效中（無法確認目標是否存在）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Wrong format. Use tailnet-port=service:port"
+msgstr "格式不正確，請用「tailnet 埠=服務名稱:埠」"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Ports must be between 1 and 65535"
+msgstr "埠必須介於 1 到 65535"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Only Services of this workspace are allowed (no IP addresses, external names or other workspaces)"
+msgstr "只接受這個工作區的服務（不接受 IP、外部名稱或其他工作區）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Not a valid Service name"
+msgstr "不是合法的服務名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "This tailnet port is already used by an earlier entry"
+msgstr "這個 tailnet 埠已被前面的項目使用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "At most 32 forwards are allowed"
+msgstr "最多 32 筆轉發"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The whole list is ignored: the node cannot tell which workspace it belongs to"
+msgstr "整份清單被忽略：節點無法得知自己屬於哪個工作區"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Skipped by the node"
+msgstr "被節點略過"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "VPN node status"
+msgstr "VPN 節點狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Node"
+msgstr "節點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Tailnet address"
+msgstr "Tailnet 位址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Forwards"
+msgstr "轉發"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "No forwards are configured."
+msgstr "尚未設定轉發。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Reading the node status..."
+msgstr "正在讀取節點狀態…"

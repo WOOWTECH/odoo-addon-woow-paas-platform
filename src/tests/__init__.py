@@ -1186,3 +1186,5 @@ from . import test_llm_tracer
 # LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
 # llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
 from . import test_llm_platform_foundation
+# INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
+from . import test_vpn_node_status_fix005

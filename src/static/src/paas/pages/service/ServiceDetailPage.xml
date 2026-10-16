@@ -322,6 +322,7 @@
                     <OverviewTab
                         t-if="currentTab === 'overview'"
                         service="service"
+                        workspaceId="props.workspaceId"
                         resourceObservation="resources.state.observations[props.serviceId]"
                         resourcesLoading="resources.state.loading"
                         resourcesRefreshFailed="resources.state.refreshFailed"

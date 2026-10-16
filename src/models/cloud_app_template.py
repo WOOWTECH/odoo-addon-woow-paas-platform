@@ -513,6 +513,23 @@ class CloudAppTemplate(models.Model):
              'Empty address is a normal state (the tenant has not enabled it, or the '
              'agent has not connected yet).',
     )
+    # INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態回讀——「這個商品有沒有一個平台要現場
+    # 問 pod、並把節點登入狀態／登入入口／serve 轉發結果顯示給租戶的節點」的**唯一事實源**
+    # （能力 gate 收斂成單一欄位，docs/decisions/patterns/capability-gate-single-source-field.md）。
+    # `CloudService._chart_has_vpn_node_status`、`/node-status` 端點、service payload 與前端
+    # 「VPN 節點狀態」那張卡都只讀它，不得自建 slug 名單。
+    #
+    # 為什麼需要：pod Ready ≠ 節點在線。chart 的 readiness 把 NeedsLogin 也當成可用，所以節點被
+    # 控制面到期／刪除後，平台 state 仍是 running、/woow 仍顯示 ONLINE（INFRA-TS-005／TS-007）。
+    # 這個狀態不寫進帳本（沒有欄位、沒有 cron、不碰 state）：租戶打開服務頁時才即時問 operator
+    # （`GET /api/releases/{ns}/{release}/vpn-node-status`），與 service-resource-observations 同款。
+    has_vpn_node_status = fields.Boolean(
+        string='Reports VPN node status',
+        default=False,
+        help='The chart runs a tailscaled node whose login state, login entrance and serve '
+             'forwards the platform reads live from the pod (operator vpn-node-status) and '
+             'shows on the service page.',
+    )
     # 服務頁那一格的標題（例 EMQX「對外 MQTT 位址」、Headscale「對外控制網址」）。
     # 這是範本 record 的**資料值**：seed 直接寫中文原文、**不可翻譯、不進 .po**
     # （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。空值時前端

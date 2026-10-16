@@ -39,6 +39,62 @@
                 </div>
             </WoowCard>
 
+            <!-- INFRA-FIX-005：VPN 節點狀態。pod Ready ≠ 節點在線（節點被控制面到期／刪除後 pod 仍 Ready、
+                 平台 state 仍是 running），所以這張卡即時問 operator（唯讀 exec 進 tailscaled）：登入狀態、
+                 登入說明、每個轉發有沒有生效、被略過的項目與原因。Gate 讀 has_vpn_node_status（能力的唯一
+                 事實源是 cloud_app_template 的同名欄位；前端不得用 slug 判斷，repo-lint capability-gate）。
+                 讀不到（pod 起來中、operator 太舊）時不顯示錯誤，只顯示說明。 -->
+            <WoowCard t-if="props.service.has_vpn_node_status and (vpnReport or vpn.state.loading)" class="'o_woow_info_card o_woow_vpn_node_card'">
+                <div class="o_woow_card_header">
+                    <WoowIcon name="'vpn_lock'" size="20"/>
+                    <h3 t-esc="vpnCardTitle"/>
+                </div>
+                <div class="o_woow_info_grid" t-if="vpnReport">
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label" t-esc="vpnStateRowLabel"/>
+                        <span class="o_woow_info_value">
+                            <span t-att-class="'o_woow_vpn_state o_woow_vpn_state_' + vpnStateTone" t-esc="vpnStateLabel"/>
+                            <small class="o_woow_vpn_hint text-muted d-block" t-if="vpnStateHint" t-esc="vpnStateHint"/>
+                        </span>
+                    </div>
+                    <div class="o_woow_info_row" t-if="vpnLoginGuidance.length">
+                        <span class="o_woow_info_label"/>
+                        <span class="o_woow_info_value o_woow_vpn_login">
+                            <t t-foreach="vpnLoginGuidance" t-as="line" t-key="line_index">
+                                <small t-if="line.kind === 'text'" class="d-block" t-esc="line.text"/>
+                                <small t-elif="line.kind === 'link'" class="d-block">
+                                    <a t-att-href="line.url" target="_blank" rel="noopener noreferrer">
+                                        <t t-esc="line.text"/>
+                                        <WoowIcon name="'open_in_new'" size="14"/>
+                                    </a>
+                                </small>
+                                <small t-else="" class="d-block">
+                                    <t t-esc="line.text"/>: <code t-esc="line.code"/>
+                                </small>
+                            </t>
+                        </span>
+                    </div>
+                    <div class="o_woow_info_row" t-if="vpnTailnetAddress">
+                        <span class="o_woow_info_label" t-esc="vpnAddressRowLabel"/>
+                        <span class="o_woow_info_value"><code t-esc="vpnTailnetAddress"/></span>
+                    </div>
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label" t-esc="vpnForwardsRowLabel"/>
+                        <span class="o_woow_info_value">
+                            <small class="text-muted" t-if="!vpnForwardRows.length" t-esc="vpnNoForwardsText"/>
+                            <ul class="o_woow_vpn_forwards" t-if="vpnForwardRows.length">
+                                <li t-foreach="vpnForwardRows" t-as="row" t-key="row.key"
+                                    t-att-class="'o_woow_vpn_forward o_woow_vpn_forward_' + row.tone">
+                                    <code t-esc="row.label"/>
+                                    <small class="d-block" t-esc="row.status"/>
+                                </li>
+                            </ul>
+                        </span>
+                    </div>
+                </div>
+                <small class="text-muted" t-else="" t-esc="vpnLoadingText"/>
+            </WoowCard>
+
             <!-- Connection Info Card -->
             <WoowCard class="'o_woow_info_card'">
                 <div class="o_woow_card_header">

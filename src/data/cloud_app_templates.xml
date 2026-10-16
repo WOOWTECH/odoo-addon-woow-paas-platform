@@ -2643,7 +2643,7 @@
                 或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。使用同工作區 Headscale 時，標籤（tag）要建在 pre-auth key 上
                 （Headplane 建 key 時指定），「標籤 tags」欄位請留空：Headscale 不接受節點登入時自己要求的標籤，帶了節點會被登出。
                 **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
-                IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
+                IP、外部網址或其他工作區的項目會被略過；被略過的項目與原因、以及每個轉發有沒有生效，都顯示在服務頁的「VPN 節點狀態」。
                 **網頁介面**：帳號預設 admin，帳號與密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
                 重設或改成自己的，重設後節點會重新啟動，約數十秒（節點身分保留，回到 tailnet 仍是同一台）。網頁介面僅供登入與查看狀態；
                 請從瀏覽器開服務網址操作，其他設定一律在服務設定修改；儲存設定時節點會重啟約一分鐘。
@@ -2676,7 +2676,7 @@
                 "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過。控制平面選「同工作區 Headscale」時請留空（新版節點會略過這一欄）：Headscale 不接受節點用 pre-auth key 登入時自己要求的標籤，帶了會被登出；要帶 tag，請在 Headplane 建 pre-auth key 時就指定 tags，節點登入後就帶著 key 的 tag（之後要在 ACL 規則用這個 tag，再把它列進 tagOwners）"},
                 {"key": "tailscale.serve", "label": "轉發清單", "type": "text",
                 "placeholder": "8069=svc-1a2b3c4d:80",
-                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔；只接受同一工作區的服務，不合格的項目（IP、外部網址、其他工作區）會被略過並寫入服務記錄"},
+                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔；只接受同一工作區的服務，不合格的項目（IP、外部網址、其他工作區）會被略過，原因與每個轉發的生效狀態顯示在服務頁的「VPN 節點狀態」"},
                 {"key": "tailscale.noLogs", "label": "不上傳診斷記錄到 Tailscale", "type": "boolean", "default": true,
                 "description": "開啟時節點不把診斷記錄上傳到 Tailscale 公司（--no-logs-no-support）；關閉才能向 Tailscale 官方申請支援"}
                 ]}</field>
@@ -2690,6 +2690,8 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="admin_password_settable" eval="True"/>
             <field name="admin_username_helm_path">entrance.basicAuthUsername</field>
+            <!-- INFRA-FIX-005：服務頁「VPN 節點狀態」卡（登入狀態、登入入口、轉發結果）的唯一事實源。 -->
+            <field name="has_vpn_node_status" eval="True"/>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>

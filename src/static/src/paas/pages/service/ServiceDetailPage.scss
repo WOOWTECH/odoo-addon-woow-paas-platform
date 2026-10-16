@@ -387,6 +387,30 @@ $woow-radius-lg: 1.25rem;
     }
 }
 
+// INFRA-FIX-005：VPN 節點狀態卡
+.o_woow_vpn_state {
+    font-weight: 600;
+
+    &.o_woow_vpn_state_ok { color: #22c55e; }
+    &.o_woow_vpn_state_warn { color: #d97706; }
+    &.o_woow_vpn_state_bad { color: #dc2626; }
+    &.o_woow_vpn_state_muted { color: #6b7280; }
+}
+
+.o_woow_vpn_forwards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+
+    .o_woow_vpn_forward {
+        margin-bottom: 0.4rem;
+
+        &.o_woow_vpn_forward_ok small { color: #16a34a; }
+        &.o_woow_vpn_forward_warn small { color: #d97706; }
+        &.o_woow_vpn_forward_bad small { color: #dc2626; }
+    }
+}
+
 .o_woow_connection_status {
     font-weight: 600;
     text-transform: uppercase;
