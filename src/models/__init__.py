@@ -18,6 +18,8 @@ from . import sh_subscription_plan_visibility
 from . import sh_subscription_plan_cs_spec
 from . import sh_subscription_plan_names_zh_tw
 from . import subscription_lifecycle_mixin
+# #1766：一條 tunnel 只給一台 HA 接。SH／SA 共用，必須在兩者之前 import。
+from . import tunnel_binding_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron
 from . import res_config_settings

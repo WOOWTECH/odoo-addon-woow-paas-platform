@@ -12,6 +12,7 @@ from typing import Any
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
+from ..models.tunnel_binding_mixin import TunnelBindingConflict
 from ..models.workspace_access import ROLE_ADMIN
 from ..services.paas_capability import _PaaSCapability
 from odoo import _
@@ -35,6 +36,41 @@ def _json_response(data: dict, status: int = 200) -> Response:
         content_type='application/json',
         headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'},
     )
+
+
+def _claim_binding(record, kwargs: dict) -> Response | None:
+    """#1766：把這條 tunnel 綁給呼叫端那一台 HA，衝突時回 409。
+
+    `instance_uid` 是呼叫端自報的 Home Assistant instance id（元件 0.4.12 起會
+    帶）。第一台要到權杖的會被記成綁定對象；之後**其他** uid 來要同一筆資源就拿不
+    到權杖。沒帶 uid 的舊元件照發（legacy），但 legacy → claimed 是單向的，見
+    `models/tunnel_binding_mixin.py` 的模組 docstring。
+
+    ⚠ 回 409 而不是 403：這不是權限問題（呼叫端確實是 owner／admin），而是資源
+    狀態衝突，而且對方有明確修法（在後台解綁或改綁別的）。元件端靠這個狀態碼決定
+    「不要退回用快取的權杖」——那正是會長出第二個 connector 的那條路。
+
+    Returns a Response to send back, or None when the claim succeeded.
+    """
+    try:
+        record._tunnel_binding_claim(
+            (kwargs.get('instance_uid') or '').strip()[:64],
+            (kwargs.get('instance_label') or '').strip()[:128],
+        )
+    except TunnelBindingConflict as conflict:
+        _logger.warning(
+            "[tunnel-binding] refused tunnel token: %s id=%s already bound to "
+            "%s (caller uid=%r)",
+            record._name, record.id, conflict.bound_to or '-',
+            (kwargs.get('instance_uid') or '')[:64],
+        )
+        return _json_response({
+            'error': 'already_bound',
+            'detail': str(conflict),
+            'bound_to': conflict.bound_to,
+            'bound_at': conflict.bound_at,
+        }, status=409)
+    return None
 
 
 def _json_error(error: str, detail: str, status: int = 400) -> Response:
@@ -387,6 +423,12 @@ class HAIntegrationController(Controller):
         if denied:
             return denied
 
+        # 綁定閘在**發權杖之前**（#1766）：claim 失敗就不該有權杖出門。claim 成功
+        # 但 HTTP 回應在路上丟掉沒關係——同一個 uid 再問一次是冪等的。
+        conflict = _claim_binding(home, kwargs)
+        if conflict is not None:
+            return conflict
+
         domain = home._get_paas_domain()
         subdomain = home.subdomain or ''
         fqdn = f"{subdomain}.{domain}" if subdomain else ''
@@ -520,6 +562,12 @@ class HAIntegrationController(Controller):
         denied = _require_manage_role(user, sa.workspace_id)
         if denied:
             return denied
+
+        # 與 smart home 同步收緊（#1766）。⚠ 這兩個端點是鏡像：只收一側，攻擊面
+        # 只是搬家到另一側（`two-layer-acl-lockstep` pattern）。
+        conflict = _claim_binding(sa, kwargs)
+        if conflict is not None:
+            return conflict
         # Asymmetry with smart home's tunnel-token (which returns a single
         # `subdomain` FQDN) is intentional: a Security Access is a Cloudflare
         # Tunnel with N application routes and no single hostname, so there is
