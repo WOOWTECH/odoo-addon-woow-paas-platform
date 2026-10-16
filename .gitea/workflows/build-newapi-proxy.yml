@@ -11,7 +11,11 @@
 #   - 任何分支手動 workflow_dispatch（Gitea：Actions → build-newapi-proxy → Run workflow →
 #     選分支；或 API POST /repos/{owner}/{repo}/actions/workflows/build-newapi-proxy.yml/dispatches
 #     帶 {"ref":"<branch>"}）。tag 就是該分支 HEAD 的 sha，所以 feature branch 也能先建 image
-#     給 stg 驗收，合併後 develop 上同一個 commit 不會重建（tag 已存在就跳過）。
+#     給 stg 驗收。
+#   ⚠ develop 一律用 merge commit 合併：合併後 develop 上的 sha 和 feature branch 的不同，
+#     **一定會再建一個新的 sha image**。stg 驗收可以先釘 feature branch 的 sha；合併後 stg 與
+#     prod 都改釘 develop 合併 commit 的 sha＋digest（部署的 image 一律對得到 develop 上的 commit；
+#     extra/newapi-proxy/README.md〈建置與部署〉）。同一個 sha 重跑（re-run、push 兩次）才會跳過。
 #   刻意不掛 pull_request：PR 事件拿不到 JCR 憑證，也不該讓未合併的 fork 推 image；PR 的
 #   單元測試在 newapi-proxy-unit-tests.yml。
 name: build-newapi-proxy
@@ -79,15 +83,31 @@ jobs:
           echo "${{ secrets.JCR_PASSWORD }}" | \
             docker login "$REGISTRY" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
 
-      # 不可變：同一個 sha 已經推過就不重建（重建的 digest 可能不同，會讓已釘的 digest
-      # 變成無 tag 的孤兒）。用 docker pull 判斷（走 daemon，與 push 用同一套 registry 設定）。
-      - name: Skip if the tag already exists
+      # 不可變：同一個 sha 已經推過就不重建（重建不可重現、digest 會變，已釘的舊 digest 會
+      # 變成無 tag 的孤兒，JCR 清理後下次排程就 ImagePullBackOff）。
+      # 用 docker pull 判斷：走 daemon，與 push 同一套 registry 設定（這個 registry 是 http，
+      # kaniko 那邊要 --insecure-registry；CLI 端的 `docker manifest inspect` 要另加 --insecure，
+      # 而且一樣只能靠錯誤文字分辨 404，換它沒有比較準）。
+      # 🔴 fail closed：只有 registry 明確回「沒有這個 manifest」（manifest unknown／
+      #   manifest for … not found）才 build；其他任何失敗（驗證、網路、5xx、看不懂的訊息）
+      #   job 直接紅——寧可這次不建，也不覆寫一個可能已存在、已被部署釘住的 tag。
+      #   不用 `printf | grep -q`：pipefail 下 grep 提早結束會讓 printf 吃 SIGPIPE、判斷反轉。
+      - name: Skip if the tag already exists (fail closed when unsure)
         run: |
           set -euo pipefail
-          if docker pull -q "$IMAGE" >/dev/null 2>&1; then
+          if out=$(docker pull -q "$IMAGE" 2>&1); then
             echo "SKIP_PUSH=1" >> "$GITHUB_ENV"
             echo "::notice::$IMAGE already exists; not rebuilding or pushing"
+            exit 0
           fi
+          lc=${out,,}
+          if [[ "$lc" == *"manifest unknown"* || "$lc" =~ manifest\ for\ [^[:space:]]+\ not\ found ]]; then
+            echo "::notice::$IMAGE does not exist yet; building it"
+            exit 0
+          fi
+          echo "::error::could not tell whether $IMAGE exists (registry / auth / network error); refusing to build over a tag that may already be pinned"
+          printf '%s\n' "${out:0:500}"
+          exit 1
 
       - name: Build
         if: env.SKIP_PUSH != '1'
