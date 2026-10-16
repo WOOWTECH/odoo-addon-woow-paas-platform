@@ -1,75 +1,88 @@
 """LLM-01b：AI 模型分頁的 Odoo 後端最小版（DESIGN §1.3.1–1.3.3、§2、§3、§8.2）。
 
-唯一允許 mock 的邊界是代理後面的 new-api（``llm_fake_newapi.FakeNewApi``，換在
-``llm_account._llm_client``）；model、cron、獨立 cursor 與 commit 一律跑真的。
+**mock 的邊界是 client（``NewApiClient`` 介面），不是代理後面**：``llm_account._llm_client`` 回
+``llm_fake_newapi.FakeNewApi`` 的角色視圖，所以簽章、標頭、query 序列化、§3.4 的分類、deadline
+在這裡都沒有執行（那些在 ``tests/test_llm_services.py``，含與代理 ``routetable.py`` 的契約測試）。
+這裡真的跑的是 model、cron、獨立 cursor 與 commit，以及 WEB／CRON 金鑰的選擇（adapter 先跑真的
+``get_newapi_client``／``signing_key_for_role``，見 ``llm_test_support``）。
 
-* ``TestLlmQuotaInteger``／``TestLlmConfigRegistered``／``TestLlmConfigGuard``：純 DB／設定。
-* ``TestLlmUnconfiguredZeroOutbound``（N27）：未設定的 DB 上手動觸發 LLM cron ⇒ 0 外呼、
-  0 incident、帳戶不動；連 ``requests`` 都換成「被叫到就失敗」。
-* ``TestLlmNeutralize``：``data/neutralize.sql`` 的 LLM 段（密文 sentinel 只改有值的列、
-  設定 upsert），以及 sentinel 下 fail closed。
-* ``TestLlmTracerHttp``（HttpCase）：portal 使用者經 ``/api/llm/*`` 走完開通 → 開戶 →
-  免費試用金鑰 → 用量；他人看不到；冪等；開關；OAuth bearer 進不來；catch-all 不漏字。
-  HttpCase 的 ``registry.cursor()`` 是 TestCursor（同一條交易的 savepoint），所以獨立
-  cursor 的寫回在這裡看得到——但它測不到「跨連線不卡死」，那是下一個 class 的事。
-* ``TestLlmProvisionRealCron``：**真的跑 cron、不 mock commit**——fixture 以真 cursor
-  commit，cron 以 ``ir.cron.method_direct_trigger()`` 在另一條真連線上跑；P2 之後、P7
-  之後各模擬一次行程被殺，重跑收斂成剛好一個 new-api 使用者、存到的 UP 可用、孤兒 PAT
-  最多 1 把。所有列在 cleanup 精確刪掉。
+**共用 DB**：沙盒 DB 不一定乾淨（LLM 沙盒 ``aimodels`` 的 post-create 已設好代理、前綴、block、
+``show_llm``），而且測試行程旁邊有一個正在服務的 Odoo（它的 cron thread 會被 NOTIFY 叫醒）。所以：
+
+* 每個 class 的 setUp 先在測試交易內把 LLM 設定**全部歸零**再設自己要的值；
+* 所有會跑 cron 的測試把搶戶**限縮到自己建的帳戶**（``scope_claims``）；
+* 「真 cursor、真 commit」的兩個 class（``TestLlmProvisionRealCron``、``TestLlmActivateRace``）
+  用 ``CommittedLlmFixture``：先停用 ``ir_cron_llm_provision``（cleanup 還原）、**不 commit 任何
+  LLM 設定**（只在本行程 patch）、前綴用代理一定拒絕的 ``wqa``。**前提：這段期間 live server
+  的這支 cron 是停住的**——測試行程被硬殺時要手動還原（``python3 .sandbox/llm-acceptance.py --slug <slug> cron-resume``）。
+
+Class 一覽：
+
+* ``TestLlmQuotaInteger``／``TestLlmConfigRegistered``／``TestLlmConfigGuard``／
+  ``TestLlmModelGuards``／``TestLlmCronContract``：純 DB／設定／靜態契約。
+* ``TestLlmUnconfiguredZeroOutbound``（N27）：未設定 ⇒ cron 零外呼、**零搶戶**。
+* ``TestLlmSigningKeyFailClosed``（AC7）：尾端空白 strip 後照常；中間夾 ``\\n``／太短 ⇒ cron 在
+  搶戶之前 fail closed、log 只有原因碼。
+* ``TestLlmNeutralize``：``data/neutralize.sql`` 的 LLM 段與 sentinel。
+* ``TestLlmTracerHttp``（HttpCase）：portal 使用者走完開通 → 開戶 → 試用金鑰 → 用量；他人看不到；
+  開關；有效的 OAuth token 也進不來；catch-all 不漏字；WEB 金鑰壞掉；列表失敗不重送；P8 一定撤。
+* ``TestLlmWoowSessionFlag``（HttpCase）：``/woow`` 的 ``woow_show_llm`` 隨設定改變。
+* ``TestLlmProvisionRealCron``：真 cursor 跑 cron；P2／P7 之後當掉會收斂；只搶自己的帳戶；別人
+  拿著列鎖時那一步失敗、不卡死。
+* ``TestLlmActivateRace``：兩條真連線同時開通同一個 partner。
 """
 import json
 import logging
 import os
+import secrets
 import time
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
-from cryptography.fernet import Fernet
 from psycopg2 import IntegrityError
 
-from odoo import SUPERUSER_ID, api
+from odoo import fields
 from odoo.exceptions import AccessError, ValidationError
 from odoo.modules import neutralize
 from odoo.tests.common import HttpCase, TransactionCase, new_test_user, tagged
 from odoo.tools import mute_logger
 
 from ..models import llm_common
-from ..models.llm_account import ACCOUNT_TABLE, PROVISION_CRON_XMLID
-from ..models.llm_api_key import KEY_TABLE
-from ..models.llm_common import _llm_internal
+from ..models.llm_account import ACCOUNT_TABLE, PROVISION_CRON_XMLID, _LeaseLost
+from ..models.llm_common import LlmError, _llm_internal
 from ..services import llm_crypto
 from ..services import newapi_client as nac
 from .llm_fake_newapi import FakeNewApi, SimulatedCrash
+from .llm_test_support import (
+    ACCOUNT,
+    KEY,
+    TEST_BLOCK,
+    TEST_PREFIX,
+    CommittedLlmFixture,
+    LlmClientAdapter,
+    configure,
+    env_for,
+    llm_env,
+    reset_llm_config,
+    scope_claims,
+)
 
-_logger = logging.getLogger(__name__)
-
-ACCOUNT = 'woow_paas_platform.llm_account'
-KEY = 'woow_paas_platform.llm_api_key'
 MODULE = 'woow_paas_platform'
-STG_PREFIX = 'wsqa'
-STG_BLOCK = 7
-_SIGNING = 'k1:' + 'A' * 40
+TOS = llm_common.TOS_VERSION_CURRENT
+ACCOUNT_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_account'
+KEY_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_api_key'
+CONTROLLER_LOGGER = 'odoo.addons.woow_paas_platform.controllers.llm'
+#: cron 路徑（CRON 金鑰）與 web 路徑（WEB 金鑰）各自會叫的 client 方法。
+CRON_ONLY_METHODS = ('ap_create_user', 'ap_search_user', 'user_login', 'user_list_access_tokens',
+                     'user_verify_generate', 'user_create_access_token', 'user_delete_session')
+WEB_PATH_METHODS = ('user_create_token', 'user_list_tokens', 'user_reveal_token', 'user_log_self')
 
 
-def _llm_env():
-    """一組測試用的 env：兩組簽章金鑰＋每次新產生的加密金鑰（值只存在這個行程裡）。"""
-    return {
-        nac.ENV_AUTH_WEB: _SIGNING,
-        nac.ENV_AUTH_CRON: 'k2:' + 'B' * 40,
-        llm_crypto.ENV_SECRET_KEYS: Fernet.generate_key().decode(),
-    }
-
-
-def _configure(env, show=True):
-    icp = env['ir.config_parameter'].sudo()
-    icp.set_param(llm_common.PARAM_PROXY_URL, nac.PROXY_URL_STG)
-    icp.set_param(llm_common.PARAM_USERNAME_PREFIX, STG_PREFIX)
-    icp.set_param(llm_common.PARAM_IP_BLOCK, str(STG_BLOCK))
-    icp.set_param(llm_common.PARAM_SHOW_LLM, 'True' if show else 'False')
-
-
-def _account_class(env):
-    return type(env[ACCOUNT])
+def _broken_signing_value(kid):
+    """strip 之後仍不合格（中間夾 ``\\n``）的簽章金鑰值，與它的兩段秘密（斷言 log／回應不含）。"""
+    first, second = secrets.token_hex(12), secrets.token_hex(12)
+    return '%s:%s\n%s' % (kid, first, second), (first, second)
 
 
 # ====================================================================== #
@@ -100,8 +113,11 @@ class TestLlmQuotaInteger(TransactionCase):
 
     def test_plain_integer_is_not_replaced(self):
         """子類別不得取代 ``fields.Integer`` 成為 'integer' 的預設實作。"""
-        from odoo import fields
-        self.assertIs(fields.MetaField.by_type['integer'], fields.Integer)
+        from odoo import fields as odoo_fields
+        self.assertIs(odoo_fields.MetaField.by_type['integer'], odoo_fields.Integer)
+        self.assertEqual(self.env[ACCOUNT]._fields['quota_cached'].column_type, ('int8', 'int8'))
+        self.assertEqual(self.env[ACCOUNT]._fields['provision_attempts'].column_type,
+                         ('int4', 'int4'))
 
 
 @tagged('post_install', '-at_install', 'llm_tracer')
@@ -122,6 +138,7 @@ class TestLlmConfigGuard(TransactionCase):
     def setUp(self):
         super().setUp()
         self.icp = self.env['ir.config_parameter'].sudo()
+        reset_llm_config(self.env)
 
     def test_proxy_url_rejects_external_hosts(self):
         for bad in ('http://evil.example', 'https://newapi.woowtech.io',
@@ -164,19 +181,22 @@ class TestLlmConfigGuard(TransactionCase):
         self.assertEqual(config['proxy_state'], 'invalid')
         self.assertTrue(llm_common.llm_unconfigured(self.env, config))
         with self.assertRaises(nac.NewApiConfigError):
-            nac.get_newapi_client(self.env, nac.ROLE_CRON, environ=_llm_env())
+            nac.get_newapi_client(self.env, nac.ROLE_CRON, environ=llm_env())
 
     def test_prefix_and_block_must_pair(self):
         """prod 固定 wp＋block 0；沙盒前綴沒配 block（預設 0）⇒ identity 不成立、不開戶。"""
+        self.assertTrue(llm_common.llm_config(self.env)['identity_ok'], '歸零後＝wp＋0')
         self.icp.set_param(llm_common.PARAM_USERNAME_PREFIX, 'wsab')
         self.assertFalse(llm_common.llm_config(self.env)['identity_ok'])
         self.icp.set_param(llm_common.PARAM_IP_BLOCK, '3')
         self.assertTrue(llm_common.llm_config(self.env)['identity_ok'])
+        self.icp.set_param(llm_common.PARAM_USERNAME_PREFIX, False)
+        self.assertFalse(llm_common.llm_config(self.env)['identity_ok'], 'wp 配 block 3 也不行')
 
     def test_visibility_follows_show_pilot_and_configuration(self):
         partner = self.env['res.partner'].create({'name': 'llm visibility'})
         self.assertFalse(llm_common.llm_visible(self.env, partner), '未設定 ⇒ 看不到')
-        _configure(self.env)
+        configure(self.env)
         self.assertTrue(llm_common.llm_visible(self.env, partner))
         self.icp.set_param(llm_common.PARAM_PILOT_PARTNER_IDS, str(partner.id + 100000))
         self.assertFalse(llm_common.llm_visible(self.env, partner), '不在 pilot 名單')
@@ -207,6 +227,17 @@ class TestLlmModelGuards(TransactionCase):
         with self.assertRaises(AccessError):
             account.unlink()
 
+    def test_activate_returns_a_record_without_the_internal_handle(self):
+        """finding 7：``_llm_activate`` 回的帳戶（與從它走到的東西）過不了 create／write 守衛。"""
+        configure(self.env)
+        partner = self.env['res.partner'].create({'name': 'llm handle'})
+        account = self.env[ACCOUNT]._llm_activate(partner, TOS, None, '')
+        self.assertFalse(llm_common._is_llm_internal(account.env))
+        with self.assertRaises(AccessError):
+            account.write({'state': 'active'})
+        with self.assertRaises(AccessError):
+            account.api_key_ids.create({'account_id': account.id, 'kind': 'free_trial'})
+
     def test_portal_and_internal_users_cannot_touch_the_models(self):
         portal = new_test_user(self.env, login='llm_guard_portal_%s' % uuid.uuid4().hex[:6],
                                groups='base.group_portal')
@@ -227,9 +258,36 @@ class TestLlmModelGuards(TransactionCase):
                 self.env.cr.savepoint():
             Account.create({'partner_id': partner.id})
 
+    def test_controller_never_reads_up_or_ciphertext(self):
+        """DESIGN §3.1：UP 一律由 service method 從呼叫者自己的帳戶取；controller 不碰。"""
+        import inspect
+        from ..controllers import llm as controller
+        source = inspect.getsource(controller)
+        for forbidden in ('up_token_enc', 'newapi_password_enc', '_llm_up_token',
+                          'llm_crypto', '.sudo('):
+            self.assertNotIn(forbidden, source)
+
+
+@tagged('post_install', '-at_install', 'llm_tracer')
+class TestLlmCronContract(TransactionCase):
+    """finding 18：``llm_cron.xml`` 是 noupdate，發版的 ``-u`` 不會改 DB 裡的 code。
+
+    方法名與所在 model 是凍結契約；這裡斷言**已安裝 DB** 裡的值（不是 XML）。
+    """
+
+    def test_installed_cron_calls_the_current_method_as_superuser(self):
+        cron = self.env.ref(PROVISION_CRON_XMLID)
+        self.assertEqual(cron.model_id.model, ACCOUNT)
+        self.assertEqual(cron.code.strip(), 'model._cron_llm_provision()')
+        self.assertTrue(callable(getattr(type(self.env[ACCOUNT]), '_cron_llm_provision', None)))
+        # llm_account 沒有任何群組的 write ACL；ir.actions.server.run() 對非 superuser 會先
+        # check_access('write') ⇒ cron 的執行者必須是 superuser。
+        self.assertEqual(cron.user_id.id, 1)
+        self.assertTrue(cron.active, '_trigger() 對停用的 cron 不建立立即觸發（被測試停住沒還原？）')
+
 
 # ====================================================================== #
-#  N27：未設定的 DB 零外呼                                                 #
+#  N27：未設定的 DB 零外呼、零搶戶                                          #
 # ====================================================================== #
 @tagged('post_install', '-at_install', 'llm_tracer')
 class TestLlmUnconfiguredZeroOutbound(TransactionCase):
@@ -237,10 +295,11 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
     def setUp(self):
         super().setUp()
         self.icp = self.env['ir.config_parameter'].sudo()
+        reset_llm_config(self.env)
         partner = self.env['res.partner'].create({'name': 'llm unconfigured'})
         self.account = _llm_internal(self.env[ACCOUNT].sudo()).create({
             'partner_id': partner.id, 'newapi_username': 'wp%010d' % 1})
-        env_patch = patch.dict(os.environ, _llm_env())
+        env_patch = patch.dict(os.environ, llm_env())
         env_patch.start()
         self.addCleanup(env_patch.stop)
 
@@ -248,11 +307,18 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         def forbidden(*args, **kwargs):
             raise AssertionError('outbound HTTP in an unconfigured DB')
         incident_count = self.env['woow.billing.incident'].sudo().search_count([])
+        cron = self.env.ref(PROVISION_CRON_XMLID).sudo()
+        Account = type(self.env[ACCOUNT])
         with patch('requests.sessions.Session.request', side_effect=forbidden) as http, \
-                patch.object(_account_class(self.env), '_llm_client') as client:
-            self.env.ref(PROVISION_CRON_XMLID).sudo().method_direct_trigger()
+                patch.object(Account, '_llm_client') as client, \
+                patch.object(Account, '_llm_claim_for_provision',
+                             side_effect=AssertionError('claimed an account')) as claim:
+            # 「手動觸發」＝跑 cron 的 server action（與 method_direct_trigger 同一段 code、同一
+            # 個執行者），但不經 _try_lock：live server 剛好在跑同一支 cron 時不會 UserError。
+            cron.ir_actions_server_id.with_user(cron.user_id).run()
             self.env[ACCOUNT]._cron_llm_provision()
         self.assertFalse(client.called, 'cron 建了 client')
+        self.assertFalse(claim.called, 'cron 搶了戶')
         self.assertFalse(http.called)
         self.assertEqual(self.env['woow.billing.incident'].sudo().search_count([]),
                          incident_count)
@@ -275,15 +341,67 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         self._run_all_llm_crons()
 
     def test_positive_control_configured_db_does_call_out(self):
-        """陽性對照：設定齊全時同一支 cron 確實會建 client（否則上面三格是假綠）。"""
-        _configure(self.env)
-        self.icp.set_param(llm_common.PARAM_USERNAME_PREFIX, 'wp')
-        self.icp.set_param(llm_common.PARAM_IP_BLOCK, '0')
-        with patch.object(_account_class(self.env), '_llm_client') as client, \
-                patch.object(_account_class(self.env), '_llm_claim_for_provision',
-                             return_value=None):
+        """陽性對照：設定齊全時同一支 cron 確實會建 client、也會去搶戶（否則上面三格是假綠）。"""
+        configure(self.env, prefix='wp', block=0)
+        Account = type(self.env[ACCOUNT])
+        with patch.object(Account, '_llm_client') as client, \
+                patch.object(Account, '_llm_claim_for_provision', return_value=None) as claim:
             self.env[ACCOUNT]._cron_llm_provision()
-        self.assertTrue(client.called)
+        client.assert_called_once_with(nac.ROLE_CRON)
+        claim.assert_called_once()
+
+
+# ====================================================================== #
+#  AC7：簽章金鑰 env 的 strip 與 fail closed                                #
+# ====================================================================== #
+@tagged('post_install', '-at_install', 'llm_tracer')
+class TestLlmSigningKeyFailClosed(TransactionCase):
+    """AC7 的解讀（finding 11）：尾端空白（k8s Secret ``--from-file`` 常多一個 ``\\n``）＝strip
+    後照常可用；strip 後仍不合格（中間夾 ``\\n``、secret 不到 32 字元）＝fail closed——cron 在
+    **搶戶之前**就停、零外呼、帳戶不動，log 只有原因碼。WEB 那一半在 ``TestLlmTracerHttp``。
+    """
+
+    def setUp(self):
+        super().setUp()
+        configure(self.env)
+        env_patch = patch.dict(os.environ, llm_env())
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self.fake = FakeNewApi()
+        self.client = LlmClientAdapter(self, self.fake, full_factory=True)
+        partner = self.env['res.partner'].create({'name': 'llm signing key'})
+        self.account = self.env[ACCOUNT]._llm_activate(partner, TOS, None, '')
+
+    def test_trailing_newline_is_stripped_and_still_signs(self):
+        good = os.environ[nac.ENV_AUTH_CRON]
+        kid, secret = nac.parse_signing_key(good + '\n')
+        self.assertEqual((kid, secret), nac.parse_signing_key(good))
+        with patch.dict(os.environ, {nac.ENV_AUTH_CRON: good + '\n'}), \
+                patch.object(type(self.env[ACCOUNT]), '_llm_claim_for_provision',
+                             return_value=None) as claim:
+            self.env[ACCOUNT]._cron_llm_provision()
+        claim.assert_called_once()
+        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON])
+
+    def test_malformed_cron_key_fails_closed_before_claiming(self):
+        embedded, parts = _broken_signing_value('kcron')
+        short = 'kcron:%s' % secrets.token_hex(8)
+        for bad, secret_parts in ((embedded, parts), (short, (short.split(':', 1)[1],))):
+            with patch.dict(os.environ, {nac.ENV_AUTH_CRON: bad}), \
+                    patch.object(type(self.env[ACCOUNT]), '_llm_claim_for_provision',
+                                 side_effect=AssertionError('claimed an account')) as claim, \
+                    self.assertLogs('odoo.addons.woow_paas_platform', level=logging.DEBUG) as logs:
+                self.env[ACCOUNT]._cron_llm_provision()
+            output = '\n'.join(logs.output)
+            self.assertIn('signing_key_invalid', output)
+            for part in secret_parts:
+                self.assertNotIn(part, output)
+            self.assertFalse(claim.called)
+        self.assertFalse(self.fake.calls)
+        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_CRON])
+        self.account.invalidate_recordset()
+        self.assertEqual((self.account.state, self.account.provision_attempts,
+                          self.account.provision_lease_token), ('provisioning', 0, False))
 
 
 # ====================================================================== #
@@ -292,10 +410,12 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
 @tagged('post_install', '-at_install', 'llm_tracer')
 class TestLlmNeutralize(TransactionCase):
 
+    def setUp(self):
+        super().setUp()
+        reset_llm_config(self.env)
+
     def test_neutralize_sql_llm_section(self):
-        _configure(self.env)
-        self.env['ir.config_parameter'].sudo().set_param(
-            llm_common.PARAM_CANARY_PARTNER_ID, '7')
+        configure(self.env, canary='7')
         Account = _llm_internal(self.env[ACCOUNT].sudo())
         live = Account.create({'partner_id': self.env['res.partner'].create({'name': 'n1'}).id})
         empty = Account.create({'partner_id': self.env['res.partner'].create({'name': 'n2'}).id})
@@ -332,7 +452,7 @@ class TestLlmNeutralize(TransactionCase):
         self.assertEqual(self.env.cr.fetchone()[0], 0)
 
     def test_sentinel_fails_closed(self):
-        with patch.dict(os.environ, _llm_env()):
+        with patch.dict(os.environ, llm_env()):
             with self.assertRaises(llm_crypto.LlmSecretNeutralized):
                 llm_crypto.decrypt('neutralized', 1, 'wp0000000001', llm_crypto.FIELD_UP_TOKEN)
 
@@ -342,6 +462,10 @@ class TestLlmNeutralize(TransactionCase):
 # ====================================================================== #
 @tagged('post_install', '-at_install', 'llm_tracer')
 class TestLlmTracerHttp(HttpCase):
+    """HttpCase 的 ``registry.cursor()`` 是 TestCursor（同一條交易的 savepoint，
+    ``odoo/modules/registry.py`` ``Registry.cursor`` 的 test mode），所以獨立 cursor 的寫回在這裡
+    看得到，也全部跟著測試回捲；它測不到「跨連線不卡死」——那是 ``TestLlmProvisionRealCron``。
+    """
 
     def setUp(self):
         super().setUp()
@@ -355,20 +479,20 @@ class TestLlmTracerHttp(HttpCase):
             self.env, login='llm_bob_%s' % suffix, password=self.password,
             groups='base.group_portal',
             context={'no_reset_password': True, 'mail_create_nosubscribe': True})
-        _configure(self.env)
-        env_patch = patch.dict(os.environ, _llm_env())
+        configure(self.env)
+        env_patch = patch.dict(os.environ, llm_env())
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.fake = FakeNewApi()
-        client_patch = patch.object(_account_class(self.env), '_llm_client',
-                                    return_value=self.fake)
-        self.client_mock = client_patch.start()
-        self.addCleanup(client_patch.stop)
+        self.client = LlmClientAdapter(self, self.fake, full_factory=True)
+        own_partners = [self.alice.partner_id.id, self.bob.partner_id.id]
+        scope_claims(self, lambda env: env[ACCOUNT].sudo().search(
+            [('partner_id', 'in', own_partners)]).ids)
 
-    def _rpc(self, path, params=None):
+    def _rpc(self, path, params=None, headers=None):
         response = self.url_open(path, data=json.dumps({
             'jsonrpc': '2.0', 'method': 'call', 'params': params or {}}),
-            headers={'Content-Type': 'application/json'})
+            headers=dict({'Content-Type': 'application/json'}, **(headers or {})))
         self._raw = response.text
         body = response.json()
         self.assertNotIn('error', body, 'JSON-RPC error 而不是結構化回應：%s' % body.get('error'))
@@ -379,13 +503,17 @@ class TestLlmTracerHttp(HttpCase):
 
     def _activate_and_provision(self, user):
         self.authenticate(user.login, self.password)
-        result = self._rpc('/api/llm/account/activate', {'tos_version': 'draft-0'})
+        result = self._rpc('/api/llm/account/activate', {'tos_version': TOS})
         self.assertEqual(result, {'success': True, 'data': {'state': 'provisioning'}})
         self.env[ACCOUNT]._cron_llm_provision()
         account = self._account(user)
         account.invalidate_recordset()
         self.assertEqual(account.state, 'active', account.last_error_code)
         return account
+
+    def _create_key(self):
+        return self._rpc('/api/llm/keys/create',
+                         {'client_request_id': str(uuid.uuid4()), 'kind': 'free_trial'})
 
     def test_activation_provisioning_and_free_trial_key(self):
         self.authenticate(self.alice.login, self.password)
@@ -397,19 +525,19 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(self._rpc('/api/llm/account/activate', {})['code'], 'llm_tos_required')
         outdated = self._rpc('/api/llm/account/activate', {'tos_version': 'draft-x'})
         self.assertEqual((outdated['code'], outdated['current_version']),
-                         ('llm_tos_outdated', 'draft-0'))
+                         ('llm_tos_outdated', TOS))
         account = self._activate_and_provision(self.alice)
         # 冪等：再按一次不會多一個帳戶
-        again = self._rpc('/api/llm/account/activate', {'tos_version': 'draft-0'})
+        again = self._rpc('/api/llm/account/activate', {'tos_version': TOS})
         self.assertEqual(again['data']['state'], 'active')
         self.assertEqual(len(self._account(self.alice)), 1)
 
-        username = '%s%010d' % (STG_PREFIX, account.id)
+        username = '%s%010d' % (TEST_PREFIX, account.id)
         self.assertEqual(account.newapi_username, username)
         [user] = [u for u in self.fake.users.values() if u['username'] == username]
         self.assertEqual((user['role'], user['group'], user['quota']), (1, 'default', 0))
         self.assertEqual(account.newapi_user_id, user['id'])
-        tenant_ip = nac.tenant_ip(account.id, STG_BLOCK)
+        tenant_ip = nac.tenant_ip(account.id, TEST_BLOCK)
         user_calls = {ip for name, ip in self.fake.calls if name.startswith('user_')}
         self.assertEqual(user_calls, {tenant_ip}, '使用者身分一律帶本帳戶的合成 IP')
         self.assertEqual(len(self.fake.pats_of(user['id'])), 1)
@@ -445,9 +573,7 @@ class TestLlmTracerHttp(HttpCase):
         same = self._rpc('/api/llm/keys/create',
                          {'client_request_id': request_id, 'kind': 'free_trial'})
         self.assertEqual(same['code'], 'llm_key_already_shown')
-        second = self._rpc('/api/llm/keys/create',
-                           {'client_request_id': str(uuid.uuid4()), 'kind': 'free_trial'})
-        self.assertEqual(second['code'], 'llm_free_key_exists')
+        self.assertEqual(self._create_key()['code'], 'llm_free_key_exists')
         self.assertEqual(len(self.fake.tokens), 1)
         paid = self._rpc('/api/llm/keys/create',
                          {'client_request_id': str(uuid.uuid4()), 'kind': 'paid'})
@@ -460,11 +586,17 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(recent['items'][0]['key_id'], mirror.id)
         self.assertNotIn('channel', recent['items'][0])
 
+        # finding 12：web 路徑取 WEB 金鑰、cron 取 CRON 金鑰（取 client 的 role 與實際呼叫都對）
+        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_WEB, nac.ROLE_WEB])
+        self.assertEqual({r for n, r in self.fake.role_calls if n in WEB_PATH_METHODS},
+                         {nac.ROLE_WEB})
+        self.assertEqual({r for n, r in self.fake.role_calls if n in CRON_ONLY_METHODS},
+                         {nac.ROLE_CRON})
+
     def test_other_partner_sees_nothing_of_alice(self):
         self._activate_and_provision(self.alice)
         self.authenticate(self.alice.login, self.password)
-        created = self._rpc('/api/llm/keys/create',
-                            {'client_request_id': str(uuid.uuid4()), 'kind': 'free_trial'})
+        created = self._create_key()
         self.assertTrue(created['success'])
 
         self.authenticate(self.bob.login, self.password)
@@ -475,44 +607,61 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(self._rpc('/api/llm/keys/list')['data']['items'], [])
         self.assertNotEqual(bob_account, self._account(self.alice))
         # Bob 自己的試用金鑰不受 Alice 那把影響
-        mine = self._rpc('/api/llm/keys/create',
-                         {'client_request_id': str(uuid.uuid4()), 'kind': 'free_trial'})
+        mine = self._create_key()
         self.assertTrue(mine['success'])
         self.assertNotEqual(mine['data']['key_id'], created['data']['key_id'])
 
-    def test_switches_and_session_only(self):
+    def test_switches(self):
         self.authenticate(self.alice.login, self.password)
         self.env['ir.config_parameter'].sudo().set_param(llm_common.PARAM_SHOW_LLM, 'False')
         for path, params in (('/api/llm/state', {}),
-                             ('/api/llm/account/activate', {'tos_version': 'draft-0'}),
+                             ('/api/llm/account/activate', {'tos_version': TOS}),
                              ('/api/llm/keys/list', {}),
                              ('/api/llm/keys/create', {'client_request_id': str(uuid.uuid4()),
                                                        'kind': 'free_trial'}),
                              ('/api/llm/usage/recent', {})):
             self.assertEqual(self._rpc(path, params)['code'], 'llm_disabled', path)
-        self.env['ir.config_parameter'].sudo().set_param(
-            llm_common.PARAM_PROXY_URL, nac.PROXY_URL_BLACKHOLE)
-        self.env['ir.config_parameter'].sudo().set_param(llm_common.PARAM_SHOW_LLM, 'True')
+        configure(self.env, proxy=nac.PROXY_URL_BLACKHOLE)
         self.assertEqual(self._rpc('/api/llm/state')['code'], 'llm_disabled', '未設定')
         self.assertFalse(self.fake.calls)
 
-        # OAuth bearer（HA 元件 / device flow）不是 session：進不來
+    def test_valid_oauth_bearer_without_session_gets_nothing(self):
+        """finding 16c：有效的 HA／device-flow token（陽性對照：在 OAuth 端點 200）也進不來。"""
+        suffix = uuid.uuid4().hex[:8]
+        oauth_client = self.env['woow_paas_platform.oauth_client'].sudo().create({
+            'name': 'llm oauth %s' % suffix, 'client_id': 'llm-oauth-%s' % suffix,
+            'client_type': 'public', 'require_pkce': True,
+            'redirect_uris': 'http://localhost:8123/auth/callback',
+            'scopes': 'workspace:read smarthome:read',
+            'grant_types': 'authorization_code,refresh_token',
+        })
+        token = self.env['woow_paas_platform.oauth_token'].sudo().create({
+            'access_token': secrets.token_urlsafe(36),
+            'refresh_token': secrets.token_urlsafe(36),
+            'scope': 'workspace:read smarthome:read',
+            'expires_at': fields.Datetime.now() + timedelta(hours=1),
+            'refresh_expires_at': fields.Datetime.now() + timedelta(days=30),
+            'user_id': self.alice.id,
+            'client_id': oauth_client.id,
+        })
+        bearer = {'Authorization': 'Bearer %s' % token.access_token}
         self.logout()
+        control = self.url_open('/api/smarthome/workspaces', headers=bearer)
+        self.assertEqual(control.status_code, 200, '陽性對照：token 本身有效：%s' % control.text)
         response = self.url_open('/api/llm/state', data=json.dumps(
             {'jsonrpc': '2.0', 'method': 'call', 'params': {}}),
-            headers={'Content-Type': 'application/json',
-                     'Authorization': 'Bearer some-oauth-access-token'})
+            headers=dict({'Content-Type': 'application/json'}, **bearer))
         body = response.json()
         self.assertNotIn('result', body)
         self.assertIn('error', body)
+        self.assertFalse(self.fake.calls)
 
     def test_catch_all_never_leaks_exception_text(self):
         secret = 'nap_' + 'Z' * 43
         self.authenticate(self.alice.login, self.password)
-        with patch.object(_account_class(self.env), '_llm_state_payload',
+        with patch.object(type(self.env[ACCOUNT]), '_llm_state_payload',
                           side_effect=RuntimeError('boom %s Bearer %s' % (secret, secret))), \
-                self.assertLogs('odoo.addons.woow_paas_platform.controllers.llm',
-                                level=logging.ERROR) as logs:
+                self.assertLogs(CONTROLLER_LOGGER, level=logging.ERROR) as logs:
             result = self._rpc('/api/llm/state')
         self.assertEqual(result['code'], 'llm_internal_error')
         self.assertNotIn(secret, self._raw)
@@ -520,13 +669,13 @@ class TestLlmTracerHttp(HttpCase):
 
     def test_neutralized_secret_fails_closed_without_calls(self):
         self.authenticate(self.alice.login, self.password)
-        self._rpc('/api/llm/account/activate', {'tos_version': 'draft-0'})
+        self._rpc('/api/llm/account/activate', {'tos_version': TOS})
         account = self._account(self.alice)
         self.env.flush_all()
         self.env.cr.execute('UPDATE %s SET newapi_password_enc = %%s WHERE id = %%s'
                             % ACCOUNT_TABLE, ('neutralized', account.id))
         # 開戶放棄（state=error）會記一行 ERROR：這裡是預期內的，不算測試失敗。
-        with mute_logger('odoo.addons.woow_paas_platform.models.llm_account'):
+        with mute_logger(ACCOUNT_LOGGER):
             self.env[ACCOUNT]._cron_llm_provision()
         account.invalidate_recordset()
         self.assertEqual((account.state, account.last_error_code),
@@ -534,25 +683,111 @@ class TestLlmTracerHttp(HttpCase):
         self.assertFalse(self.fake.calls, 'sentinel 下不外呼、不重產密碼')
         self.assertFalse(self.fake.users)
 
-    def test_signing_key_with_trailing_newline_still_signs(self):
-        """k8s Secret 用 --from-file 建時常多一個 ``\\n``：strip 後照常可用、錯誤不帶值。"""
-        with patch.dict(os.environ, {nac.ENV_AUTH_CRON: _SIGNING + '\n'}):
-            kid, secret = nac.parse_signing_key(os.environ[nac.ENV_AUTH_CRON])
-        self.assertEqual(kid, 'k1')
-        with patch.dict(os.environ, {nac.ENV_AUTH_CRON: 'k1:short\n'}):
-            with self.assertRaises(nac.NewApiConfigError) as caught:
-                nac.parse_signing_key(os.environ[nac.ENV_AUTH_CRON])
-        self.assertNotIn('short', str(caught.exception))
-        self.assertIsNone(caught.exception.__cause__)
+    def test_broken_web_signing_key_fails_closed_on_keys_create(self):
+        """AC7 的 WEB 那一半（finding 11）：回 llm_unavailable、不建鏡像列、回應與 log 不含值。"""
+        account = self._activate_and_provision(self.alice)
+        bad, parts = _broken_signing_value('kweb')
+        with patch.dict(os.environ, {nac.ENV_AUTH_WEB: bad}), \
+                self.assertLogs('odoo.addons.woow_paas_platform', level=logging.DEBUG) as logs:
+            result = self._create_key()
+        self.assertEqual(result['code'], 'llm_unavailable')
+        output = '\n'.join(logs.output)
+        self.assertIn('signing_key_invalid', output)
+        for part in parts:
+            self.assertNotIn(part, self._raw)
+            self.assertNotIn(part, output)
+        self.assertFalse(self.env[KEY].sudo().search([('account_id', '=', account.id)]))
+        self.assertFalse(self.fake.tokens)
+        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_WEB])
 
-    def test_controller_never_reads_up_or_ciphertext(self):
-        """DESIGN §3.1：UP 一律由 service method 從呼叫者自己的帳戶取；controller 不碰。"""
-        import inspect
-        from ..controllers import llm as controller
-        source = inspect.getsource(controller)
-        for forbidden in ('up_token_enc', 'newapi_password_enc', '_llm_up_token',
-                          'llm_crypto', '.sudo('):
-            self.assertNotIn(forbidden, source)
+    def test_unknown_create_with_failed_list_is_not_sent_twice(self):
+        """finding 4：POST 結果未知、列表本身也失敗 ⇒ 不送第二次 POST、鏡像 failed_reveal。"""
+        account = self._activate_and_provision(self.alice)
+        # 第一次 POST 其實建成了（回應遺失），列表打不到代理。
+        self.fake.fail_next['user_create_token'] = nac.Unknown('proxy_timeout', status=504)
+        self.fake.fail_next['user_list_tokens'] = nac.NotExecuted('proxy_connect', status=502)
+        result = self._create_key()
+        self.assertEqual(result['code'], 'llm_unavailable')
+        self.assertEqual([n for n, _ip in self.fake.calls].count('user_create_token'), 1)
+        self.assertEqual(len(self.fake.tokens), 1, 'new-api 上只有一把')
+        mirror = self.env[KEY].sudo().search([('account_id', '=', account.id)])
+        self.assertEqual(mirror.state, 'failed_reveal')
+
+    def test_unknown_create_with_empty_list_is_sent_again(self):
+        """對照組：POST 結果未知、列表**成功**而且沒有 ⇒ 同名重送一次，成功。"""
+        self._activate_and_provision(self.alice)
+        self.fake.fail_before['user_create_token'] = nac.Unknown('proxy_timeout', status=504)
+        result = self._create_key()
+        self.assertTrue(result['success'], result)
+        self.assertEqual([n for n, _ip in self.fake.calls].count('user_create_token'), 2)
+        self.assertEqual(len(self.fake.tokens), 1)
+
+    def test_session_is_revoked_when_the_pending_id_write_loses_the_lease(self):
+        """finding 5：P4 之後的寫回丟 _LeaseLost，P8 照樣撤掉剛簽發的 session。"""
+        self.authenticate(self.alice.login, self.password)
+        self._rpc('/api/llm/account/activate', {'tos_version': TOS})
+        # P1 建成了但回應遺失 ⇒ P2 找到的是候選 id，P4 登入確認後才寫回（那一步丟 _LeaseLost）。
+        self.fake.fail_next['ap_create_user'] = nac.Unknown('no_message_key', status=200)
+        Account = type(self.env[ACCOUNT])
+        original = Account._llm_guarded_update
+
+        def guarded(records, account_id, token, values):
+            if set(values) == {'newapi_user_id'}:
+                raise _LeaseLost()
+            return original(records, account_id, token, values)
+
+        with patch.object(Account, '_llm_guarded_update', guarded):
+            self.env[ACCOUNT]._cron_llm_provision()
+        names = [n for n, _ip in self.fake.calls]
+        self.assertIn('user_login', names)
+        self.assertIn('user_delete_session', names)
+        self.assertTrue(self.fake.sessions)
+        self.assertFalse(any(s['active'] for s in self.fake.sessions.values()), 'P8 撤 session')
+        account = self._account(self.alice)
+        account.invalidate_recordset()
+        self.assertEqual((account.state, account.newapi_user_id), ('provisioning', 0))
+
+
+@tagged('post_install', '-at_install', 'llm_tracer')
+class TestLlmWoowSessionFlag(HttpCase):
+    """finding 16a：``/woow`` 注入的 ``woow_show_llm`` 與 ``/api/llm/*`` 的 gate 是同一個判準。
+
+    比照 ``test_show_projects_flag.TestWoowSessionInfoShowProjects`` 用 substring 斷言。
+    """
+
+    def setUp(self):
+        super().setUp()
+        suffix = uuid.uuid4().hex[:8]
+        self.password = 'llm-flag-%s' % suffix
+        self.alice = new_test_user(
+            self.env, login='llm_flag_%s' % suffix, password=self.password,
+            groups='base.group_portal',
+            context={'no_reset_password': True, 'mail_create_nosubscribe': True})
+        reset_llm_config(self.env)
+
+    def _flag(self):
+        response = self.url_open('/woow', timeout=30)
+        self.assertEqual(response.status_code, 200, response.text[:200])
+        if '"woow_show_llm": true' in response.text:
+            return True
+        if '"woow_show_llm": false' in response.text:
+            return False
+        self.fail('session_info 沒有 woow_show_llm')
+
+    def test_flag_follows_switch_pilot_and_configuration(self):
+        self.authenticate(self.alice.login, self.password)
+        partner_id = self.alice.partner_id.id
+        self.assertIs(self._flag(), False, '未設定')
+        configure(self.env)
+        self.assertIs(self._flag(), True)
+        configure(self.env, pilot=str(partner_id + 100000))
+        self.assertIs(self._flag(), False, '不在 pilot 名單')
+        configure(self.env, pilot=str(partner_id))
+        self.assertIs(self._flag(), True, '在 pilot 名單')
+        configure(self.env, proxy=nac.PROXY_URL_BLACKHOLE)
+        self.assertIs(self._flag(), False, '黑洞 URL＝未設定')
+        configure(self.env, show=False)
+        self.assertIs(self._flag(), False, 'show_llm 關')
 
 
 # ====================================================================== #
@@ -563,121 +798,75 @@ class TestLlmProvisionRealCron(TransactionCase):
     """〔REV〕25：搶戶與每一步的寫回都在獨立 cursor，主 cursor 不鎖同一列 ⇒ 不會卡住；
     中途當掉重跑會收斂（DESIGN §1.3.1、§8.2）。
 
-    fixture 以 ``registry.cursor()`` 真的 commit（TransactionCase 自己的 cursor 看不到、
-    也不碰這些列），cron 以 ``method_direct_trigger()`` 在另一條真連線上跑。cleanup 只刪
-    本 test 建的列、還原本 test 改的設定。
+    fixture 以 ``CommittedLlmFixture`` 真的 commit（TransactionCase 自己的 cursor 看不到、也不碰
+    這些列）；cron 在另一條真連線上**直接呼叫** ``_cron_llm_provision()``——一樣是真 cursor、真
+    commit，但不經 ``ir.cron._try_lock``，不會和 live server 搶 ir_cron 的列鎖。
+
+    ⚠ 前提（finding 9）：這組測試在 LLM 沙盒裡跑時，**live server 的 ``ir_cron_llm_provision``
+    是停住的**——fixture 先以 committed SQL 設 ``active=False``、cleanup 還原；不 commit 任何 LLM
+    設定（本行程 patch ``llm_account.llm_config``）；前綴 ``wqa`` 代理一定拒絕。cleanup 只刪本
+    test 建的列。
     """
 
     def setUp(self):
         super().setUp()
-        self.tag = uuid.uuid4().hex[:8]
-        env_patch = patch.dict(os.environ, _llm_env())
+        env_patch = patch.dict(os.environ, llm_env())
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.fake = FakeNewApi()
-        client_patch = patch.object(_account_class(self.env), '_llm_client',
-                                    return_value=self.fake)
-        client_patch.start()
-        self.addCleanup(client_patch.stop)
-        self.addCleanup(self._purge)
-        self._saved_params = {}
-        self.partner_id = None
-        self.account_id = None
-        self._trigger_floor = None
-        self._progress_floor = None
-        with self.registry.cursor() as cr:
-            env = self._env(cr)
-            cr.execute('SELECT COALESCE(MAX(id), 0) FROM ir_cron_trigger')
-            self._trigger_floor = cr.fetchone()[0]
-            self._progress_floor = 0
-            cr.execute("SELECT to_regclass('ir_cron_progress')")
-            if cr.fetchone()[0]:
-                cr.execute('SELECT COALESCE(MAX(id), 0) FROM ir_cron_progress')
-                self._progress_floor = cr.fetchone()[0]
-            cr.execute("SELECT count(*) FROM %s WHERE state = 'provisioning'" % ACCOUNT_TABLE)
-            self.assertEqual(cr.fetchone()[0], 0, '前提：DB 裡沒有別的待開戶帳戶')
-            icp = env['ir.config_parameter']
-            for key in llm_common.LLM_CONFIG_PARAMETERS:
-                self._saved_params[key] = icp.get_param(key)
-            _configure(env)
-            partner = env['res.partner'].with_context(
-                mail_create_nolog=True, mail_create_nosubscribe=True, tracking_disable=True,
-            ).create({'name': 'llm real cron %s' % self.tag})
-            self.partner_id = partner.id
-            account = env[ACCOUNT]._llm_activate(partner, 'draft-0', None, '')
-            self.account_id = account.id
-
-    def _env(self, cr):
-        if cr.transaction is None:
-            cr.transaction = api.Transaction(self.registry)
-        return api.Environment(cr, SUPERUSER_ID, {})
-
-    def _purge(self):
-        try:
-            with self.registry.cursor() as cr:
-                env = self._env(cr)
-                if self.account_id:
-                    cr.execute('DELETE FROM %s WHERE account_id = %%s' % KEY_TABLE,
-                               (self.account_id,))
-                    cr.execute('DELETE FROM %s WHERE id = %%s' % ACCOUNT_TABLE,
-                               (self.account_id,))
-                if self.partner_id:
-                    cr.execute('DELETE FROM res_partner WHERE id = %s', (self.partner_id,))
-                cron = env.ref(PROVISION_CRON_XMLID)
-                if self._trigger_floor is not None:
-                    cr.execute('DELETE FROM ir_cron_trigger WHERE cron_id = %s AND id > %s',
-                               (cron.id, self._trigger_floor))
-                cr.execute("SELECT to_regclass('ir_cron_progress')")
-                if cr.fetchone()[0] and self._progress_floor is not None:
-                    cr.execute('DELETE FROM ir_cron_progress WHERE cron_id = %s AND id > %s',
-                               (cron.id, self._progress_floor))
-                for key, value in self._saved_params.items():
-                    cr.execute('DELETE FROM ir_config_parameter WHERE key = %s', (key,))
-                    if value is not False and value is not None:
-                        cr.execute('INSERT INTO ir_config_parameter (key, value) '
-                                   'VALUES (%s, %s)', (key, value))
-            self.registry.clear_cache()
-        except Exception:  # noqa: BLE001 - cleanup must not mask the test result
-            _logger.exception('LLM-01b real-cron fixture cleanup failed (tag=%s)', self.tag)
+        self.client = LlmClientAdapter(self, self.fake, full_factory=False)
+        self.fixture = CommittedLlmFixture(self).start()
+        scope_claims(self, self.fixture.own_ids)
+        self.tag = uuid.uuid4().hex[:8]
+        self.account_id = self.fixture.activate(
+            self.fixture.partner('llm real cron %s' % self.tag))
 
     def _run_cron(self):
         started = time.monotonic()
         with self.registry.cursor() as cr:
-            self._env(cr).ref(PROVISION_CRON_XMLID).method_direct_trigger()
+            env_for(self.registry, cr)[ACCOUNT]._cron_llm_provision()
+        elapsed = time.monotonic() - started
         # 不卡住：獨立 cursor 的 lock_timeout 是 5 秒，一戶的 deadline 60 秒。
-        self.assertLess(time.monotonic() - started, 60)
+        self.assertLess(elapsed, 60)
+        return elapsed
 
-    def _row(self):
+    def _row(self, account_id=None):
         with self.registry.cursor() as cr:
             cr.execute('SELECT state, newapi_user_id, newapi_username, up_token_enc, '
-                       'provision_lease_token, last_error_code, provision_attempts '
-                       'FROM %s WHERE id = %%s' % ACCOUNT_TABLE, (self.account_id,))
+                       "COALESCE(newapi_password_enc, '') <> '' AS has_password, "
+                       'provision_lease_token, provision_lease_until, last_error_code, '
+                       'provision_attempts FROM %s WHERE id = %%s' % ACCOUNT_TABLE,
+                       (account_id or self.account_id,))
             return cr.dictfetchone()
 
-    def _expire_lease(self):
+    def _expire_lease(self, account_id=None):
         """模擬「行程死掉 5 分鐘後」：lease 到期，下一個 tick 可以接手。"""
         with self.registry.cursor() as cr:
             cr.execute("UPDATE %s SET provision_lease_until = (now() at time zone 'UTC') "
                        "- interval '1 minute' WHERE id = %%s" % ACCOUNT_TABLE,
-                       (self.account_id,))
+                       (account_id or self.account_id,))
 
-    def _assert_converged(self, expected_pats):
-        row = self._row()
+    def _assert_converged(self, expected_pats, account_id=None):
+        account_id = account_id or self.account_id
+        row = self._row(account_id)
         self.assertEqual(row['state'], 'active', row['last_error_code'])
         users = [u for u in self.fake.users.values() if u['username'] == row['newapi_username']]
         self.assertEqual(len(users), 1, '剛好一個 new-api 使用者')
         self.assertEqual(row['newapi_user_id'], users[0]['id'])
-        up = llm_crypto.decrypt(row['up_token_enc'], self.account_id, row['newapi_username'],
+        up = llm_crypto.decrypt(row['up_token_enc'], account_id, row['newapi_username'],
                                 llm_crypto.FIELD_UP_TOKEN)
         self.assertEqual(self.fake.user_id_for_up(up), users[0]['id'], '存到的 UP 可用')
         self.assertEqual(len(self.fake.pats_of(users[0]['id'])), expected_pats)
         self.assertIsNone(row['provision_lease_token'])
         self.assertEqual(self.fake.pats[up]['last_used_ip'],
-                         nac.tenant_ip(self.account_id, STG_BLOCK))
+                         nac.tenant_ip(account_id, TEST_BLOCK))
 
     def test_cron_provisions_for_real(self):
         self._run_cron()
         self._assert_converged(expected_pats=1)
+        self.assertTrue(self._row()['newapi_username'].startswith(TEST_PREFIX))
+        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON])
+        self.assertEqual({r for _n, r in self.fake.role_calls}, {nac.ROLE_CRON})
 
     def test_crash_after_p2_converges(self):
         self.fake.crash_before['user_login'] = SimulatedCrash
@@ -715,3 +904,88 @@ class TestLlmProvisionRealCron(TransactionCase):
         self._expire_lease()
         self._run_cron()
         self._assert_converged(expected_pats=1)
+
+    def test_claim_is_limited_to_this_tests_accounts(self):
+        """finding 8：共用 DB 裡 id 比較小的別人的 provisioning 帳戶不會被搶。"""
+        self._run_cron()
+        self._assert_converged(expected_pats=1)
+        foreign_id = self.fixture.activate(self.fixture.partner('llm foreign %s' % self.tag))
+        self.fixture.account_ids.remove(foreign_id)   # 仍由 partner 精確清掉，只是不算「自己的」
+        own_id = self.fixture.activate(self.fixture.partner('llm own2 %s' % self.tag))
+        self.assertLess(foreign_id, own_id, '前提：沒有限縮的話 ORDER BY id 會先搶別人的')
+        self._run_cron()
+        self._assert_converged(expected_pats=1, account_id=own_id)
+        foreign = self._row(foreign_id)
+        self.assertEqual((foreign['state'], foreign['provision_attempts'],
+                          foreign['provision_lease_token'], foreign['has_password']),
+                         ('provisioning', 0, None, False))
+
+    def test_held_row_lock_fails_the_step_not_the_tick(self):
+        """finding 16b：搶到戶之後別人拿著那一列的鎖 ⇒ 寫回在 lock_timeout 後失敗、tick 照常結束。"""
+        holder = self.registry.cursor()
+        self.addCleanup(holder.close)
+        Account = type(self.env[ACCOUNT])
+        claim = Account._llm_claim_for_provision
+
+        def claim_then_hold(records, account_ids=None):
+            claimed = claim(records, account_ids=account_ids)
+            if claimed:
+                holder.execute('SELECT id FROM %s WHERE id = %%s FOR UPDATE' % ACCOUNT_TABLE,
+                               (claimed[0],))
+            return claimed
+
+        with patch.object(Account, '_llm_claim_for_provision', claim_then_hold), \
+                self.assertLogs(ACCOUNT_LOGGER, level=logging.WARNING) as logs:
+            elapsed = self._run_cron()
+        self.assertLess(elapsed, 15, '兩次 5 秒的 lock_timeout，不是卡死')
+        output = '\n'.join(logs.output)
+        self.assertIn('pgcode=55P03', output)
+        self.assertIn('llm_db_write_failed', output)
+        self.assertNotIn('gAAAA', output, 'log 不帶密文（log_exceptions=False）')
+        row = self._row()
+        self.assertEqual(row['state'], 'provisioning')
+        self.assertTrue(row['provision_lease_token'], 'lease 還在（失敗也記不下）')
+        self.assertEqual(row['provision_attempts'], 1)
+        self.assertFalse(row['has_password'], 'P0 寫不進去')
+        self.assertFalse(self.fake.calls, 'P0 沒存好就不外呼')
+        holder.rollback()
+        self._expire_lease()
+        self._run_cron()
+        self._assert_converged(expected_pats=1)
+
+
+@tagged('post_install', '-at_install', 'llm_tracer')
+class TestLlmActivateRace(TransactionCase):
+    """finding 19：同一個 partner 兩條真連線同時開通 ⇒ 只有一列；輸的那筆回 ``llm_provisioning``
+    （預期結果，不是 ``llm_internal_error``），下一個交易冪等回贏家那一列。fixture 同
+    ``TestLlmProvisionRealCron``（cron 停住、設定只在本行程 patch）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        env_patch = patch.dict(os.environ, llm_env())
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self.fixture = CommittedLlmFixture(self).start()
+        self.partner_id = self.fixture.partner('llm activate race %s' % uuid.uuid4().hex[:8])
+
+    def test_two_connections_activating_the_same_partner(self):
+        with self.registry.cursor() as loser_cr:
+            loser = env_for(self.registry, loser_cr)
+            partner = loser['res.partner'].browse(self.partner_id)
+            # 釘住 loser 的 snapshot（REPEATABLE READ：第一個查詢就決定）——就像 HTTP 請求在 gate
+            # 與 llm_visible 已經讀過 DB。
+            self.assertFalse(loser[ACCOUNT]._llm_account_for_partner(partner))
+            winner_id = self.fixture.activate(self.partner_id)   # 另一條連線 commit
+            with mute_logger('odoo.sql_db'), self.assertRaises(LlmError) as caught:
+                loser[ACCOUNT]._llm_activate(partner, TOS, None, '')
+            self.assertEqual(caught.exception.code, llm_common.ERR_LLM_PROVISIONING)
+            loser_cr.rollback()
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT id, state FROM %s WHERE partner_id = %%s' % ACCOUNT_TABLE,
+                       (self.partner_id,))
+            self.assertEqual(cr.fetchall(), [(winner_id, 'provisioning')])
+            env = env_for(self.registry, cr)
+            again = env[ACCOUNT]._llm_activate(env['res.partner'].browse(self.partner_id),
+                                               TOS, None, '')
+            self.assertEqual(again.id, winner_id, '下一個交易看得到贏家：冪等回它')

@@ -1,7 +1,17 @@
-"""測試用的 new-api（經代理）假實作：與 ``services/newapi_client.NewApiClient`` 同介面。
+"""測試用的 client 假實作：與 ``services/newapi_client.NewApiClient`` **同介面**，回 ``Result``。
 
-Odoo 測試唯一允許 mock 的邊界是「代理後面的 new-api」：model、cron、獨立 cursor 與
-commit 一律跑真的。這裡照 rc.44 的行為（〔PROV〕§3、§4）模擬開戶與金鑰需要的部分：
+**mock 的邊界是 client，不是代理後面**：``llm_account._llm_client`` 回的是這裡的物件，所以
+簽章、標頭驗證、query 序列化、§3.4 的回應分類、deadline 截斷在 Odoo 測試裡**都沒有執行**。
+那些由純 Python 的 ``tests/test_llm_services.py`` 驗（含拿代理的 ``routetable.py`` 逐一比對
+每個 client 方法的路由、身分、query、``web`` 旗標的契約測試），stg 實測再驗一次。
+Odoo 測試真的跑的是 model、cron、獨立 cursor 與 commit，以及：
+
+* **WEB／CRON 金鑰的選擇**：測試的 ``_llm_client`` adapter 先跑真的
+  ``newapi_client.get_newapi_client``／``signing_key_for_role``（讀該 role 的 env、驗格式），
+  再回 :meth:`FakeNewApi.client` 的角色視圖；WEB 視圖叫非 :data:`newapi_client.WEB_METHODS`
+  的方法會跟真 client 一樣在送出前丟 ``NewApiInputError``，``role_calls`` 記每次呼叫的 role。
+
+這裡照 rc.44 的行為（〔PROV〕§3、§4）模擬開戶與金鑰需要的部分：
 
 * ``POST /api/user/`` 不回 id、同名回 ``success:false`` 沒有 ``message_key``（unique
   violation 原文）；``GET /api/user/search`` 以 username 子字串比對。
@@ -12,6 +22,10 @@ commit 一律跑真的。這裡照 rc.44 的行為（〔PROV〕§3、§4）模�
 
 另外提供：
 * ``calls``：每次呼叫的 ``(method, client_ip)``——「零外呼」與「用的是合成 IP」的斷言。
+* ``role_calls``：經角色視圖的每次呼叫 ``(method, role)``——web 路徑用 WEB、cron 用 CRON。
+* ``fail_next``：指定方法下一次**照常執行**、但回給定的 ``Result``（例如「建好了但回應遺失」
+  的 ``Unknown``、列表失敗的 ``NotExecuted``）。
+* ``fail_before``：指定方法下一次**不執行**、只回給定的 ``Result``（例如「沒建成、結果未知」）。
 * ``crash_before``／``crash_after``：在指定方法之前／之後丟例外（一次）——模擬 pod 在
   開戶途中被殺。丟 :class:`SimulatedCrash`（``BaseException``）才不會被 cron 的
   catch-all 吃掉，等同行程直接死掉。
@@ -23,6 +37,10 @@ import time
 from ..services import newapi_client as nac
 
 _ALNUM = string.ascii_letters + string.digits
+#: ``NewApiClient`` 的公開方法（角色視圖只管這些；``pats_of`` 等測試 helper 照常穿透）。
+CLIENT_METHODS = frozenset(
+    name for name in dir(nac.NewApiClient)
+    if not name.startswith('_') and callable(getattr(nac.NewApiClient, name)))
 
 
 class SimulatedCrash(BaseException):
@@ -39,13 +57,46 @@ def _rand(n):
     return ''.join(secrets.choice(_ALNUM) for _ in range(n))
 
 
+class _RoleClient:
+    """同一份假狀態的一個角色視圖（像真的：一個 client＝一組 WEB 或 CRON 金鑰）。"""
+
+    def __init__(self, fake, role):
+        self._fake = fake
+        self.role = role
+
+    def __getattr__(self, name):
+        attribute = getattr(self._fake, name)
+        if name not in CLIENT_METHODS:
+            return attribute
+        fake, role = self._fake, self.role
+
+        def call(*args, **kwargs):
+            fake.role_calls.append((name, role))
+            if role == nac.ROLE_WEB and name not in nac.WEB_METHODS:
+                # 與 NewApiClient._request 相同：WEB 金鑰叫 cron 路由，送出前就擋。
+                raise nac.NewApiInputError('web_key_scope')
+            dropped = fake.fail_before.pop(name, None)
+            if dropped is not None:
+                # 請求沒有到 new-api（或到了但沒有任何效果），只回這個結果。
+                fake.calls.append((name, args[0] if name.startswith('user_') and args else ''))
+                return dropped
+            return attribute(*args, **kwargs)
+        return call
+
+    def __repr__(self):
+        return '<FakeNewApi role=%s>' % self.role
+
+
 class FakeNewApi:
-    """一個 new-api（＋代理）的記憶體版。``role`` 只是為了和真 client 同形。"""
+    """一個 new-api（＋代理）的記憶體版；經 :meth:`client` 取得角色視圖。"""
 
     def __init__(self, role=nac.ROLE_CRON, clock=time.time):
         self.role = role
         self.clock = clock
         self.calls = []
+        self.role_calls = []
+        self.fail_next = {}
+        self.fail_before = {}
         self.crash_before = {}
         self.crash_after = {}
         self.users = {}
@@ -59,6 +110,10 @@ class FakeNewApi:
         self.quota_for_new_user = 0
 
     # ---- helpers ------------------------------------------------------- #
+    def client(self, role):
+        """``role``（``nac.ROLE_WEB``／``ROLE_CRON``）的 client 視圖。"""
+        return _RoleClient(self, role)
+
     def _id(self, kind):
         self._next[kind] += 1
         return self._next[kind]
@@ -73,7 +128,8 @@ class FakeNewApi:
         exc = self.crash_after.pop(name, None)
         if exc:
             raise exc()
-        return result
+        forced = self.fail_next.pop(name, None)
+        return forced if forced is not None else result
 
     @staticmethod
     def _ok(data=None):
