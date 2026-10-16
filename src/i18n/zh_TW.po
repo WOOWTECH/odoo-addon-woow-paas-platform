@@ -23282,3 +23282,13 @@ msgid ""
 "The operator does not support versioned quota writes, so pushes are made without protection.\n"
 "                        An older request that finishes late could overwrite a newer value. Upgrade the operator."
 msgstr "Operator 不支援版本防護的 quota 寫入，推送沒有防護。\n                        晚完成的舊請求可能覆蓋較新的值。請升級 operator。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/notification-center/NotificationPanel.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Retry"
+msgstr "重試"
