@@ -1057,6 +1057,8 @@ from . import test_rollback_preserves_credentials_1433
 # R8 平台 UX（#1453 說明網址／documentation_url、#1456 同步時間時區與 helm_revision 回寫、
 # #1457 平台頁面安全標頭）。
 from . import test_platform_ux_r8
+# X-SEC-006-1／X-W-004-1：JSON-RPC 錯誤回應不對非內部使用者外流 traceback（與 #1457 同屬 ir.http 兜底）。
+from . import test_rpc_error_redaction_xsec006
 # #1432 租戶重新啟動、#1435 改金鑰後重啟、#1455 金鑰未設定／清除。
 from . import test_restart_and_secret_keys_1432
 # #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
