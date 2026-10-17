@@ -1216,3 +1216,7 @@ from . import test_vpn_node_status_fix005
 from . import test_vpn_node_followup_ts005
 # 商用驗收 X-SET-007／X-W-002：註冊身分（login 大小寫正規化、email 格式、空欄位中文錯誤）。
 from . import test_signup_identity_x_set_007
+
+# INFRA-FIX-019-1：租戶憑證（ngrok authtoken、Tailscale auth key）不進 helm release 歷史——
+# secret_ref 拿出 values、HMAC revision、版本閘門、Redeploy／reset／修改配置帶 tenant_secret。
+from . import test_tenant_secret_infra_fix_019_1

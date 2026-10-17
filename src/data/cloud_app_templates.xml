@@ -2393,7 +2393,12 @@
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
             <field name="helm_chart_version">0.1.7</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"2Gi"},"log":{"size":"1Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
-            <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "format": "host_port", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址，格式「主機:埠」，例如 1.tcp.ngrok.io:12345，不要加 tcp://）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
+            <!-- INFRA-FIX-019-1：password spec 的 secret_ref＝chart 版本 ≥ since_chart 時，這個值不進 helm
+                 values（helm 把每個 revision 的 values／manifest 都存在 release 歷史裡，清除後舊值仍讀得到），
+                 改由 operator 寫進 <release>-tenant-secret 的 key（chart tenantSecret 契約；見
+                 services/tenant_secret.py）。pin 低於 since_chart 時照舊走 values。⚠ 已寫進舊 revision 的值清不掉：
+                 撤銷後仍要到 ngrok 後台（Authtokens）輪換／撤銷。 -->
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "secret_ref": {"key": "ngrok_authtoken", "since_chart": "0.1.11"}, "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "format": "host_port", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址，格式「主機:埠」，例如 1.tcp.ngrok.io:12345，不要加 tcp://）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
@@ -2578,10 +2583,15 @@
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
             <field name="helm_chart_version">0.1.4</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0502@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261013.1924@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
+            <!-- INFRA-FIX-019-1：password spec 的 secret_ref＝chart 版本 ≥ since_chart 時，這個值不進 helm
+                 values（helm 把每個 revision 的 values／manifest 都存在 release 歷史裡，清除後舊值仍讀得到），
+                 改由 operator 寫進 <release>-tenant-secret 的 key（chart tenantSecret 契約；見
+                 services/tenant_secret.py）。pin 低於 since_chart 時照舊走 values。⚠ 已寫進舊 revision 的值清不掉：
+                 撤銷後仍要到 ngrok 後台（Authtokens）輪換／撤銷。 -->
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
                 "description": "Tailscale 的登入協定無法經過平台的服務網址，外部裝置要登入必須透過你自己的 ngrok 帳號；未開啟時只有同工作區的 VPN 節點能用內部網址登入"},
-                {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password",
+                {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "secret_ref": {"key": "ngrok_authtoken", "since_chart": "0.1.7"},
                 "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外登入網址時要填；清空即撤銷。換成另一個 ngrok 帳號＝登入網址改變，所有裝置都要重新登入。免費帳號每月約 1 GB 流量／2 萬次請求，正式使用建議升級付費方案"},
                 {"key": "ngrok.domain", "label": "ngrok 網域（選填）", "type": "text", "format": "domain",
                 "placeholder": "xxx.ngrok-free.app",
@@ -2708,6 +2718,11 @@
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
             <field name="helm_chart_version">0.1.5</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
+            <!-- INFRA-FIX-019-1：password spec 的 secret_ref＝chart 版本 ≥ since_chart 時，這個值不進 helm
+                 values（helm 把每個 revision 的 values／manifest 都存在 release 歷史裡，清除後舊值仍讀得到），
+                 改由 operator 寫進 <release>-tenant-secret 的 key（chart tenantSecret 契約；見
+                 services/tenant_secret.py）。pin 低於 since_chart 時照舊走 values。⚠ 已寫進舊 revision 的值清不掉：
+                 撤銷後仍要到 Tailscale 管理後台（Keys）或 Headplane（pre-auth keys）輪換／撤銷。 -->
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official", "validate": "tailscale_login",
                 "options": [{"value": "official", "label": "官方 Tailscale"}, {"value": "workspace", "label": "同工作區 Headscale"}, {"value": "custom", "label": "自訂網址"}],
@@ -2715,7 +2730,7 @@
                 {"key": "tailscale.loginServer", "label": "控制伺服器（自訂網址）", "type": "text",
                 "placeholder": "https://headscale.example.com",
                 "description": "只在「控制平面」選「自訂網址」時使用，例如其他地方的 Headscale；同工作區的 VPN 控制台請改選「同工作區 Headscale」，不必自己填。換網址＝這台節點登記成新機器（新的 tailnet IP）；選「自訂網址」時必填，格式要是 https://主機 或 http://主機:埠，否則無法儲存"},
-                {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password",
+                {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password", "secret_ref": {"key": "authkey", "since_chart": "0.1.8"},
                 "description": "Tailscale 的 tskey-auth-…（控制平面選官方 Tailscale）或 Headscale 的 pre-auth key（控制平面選 Headscale），種類不符時無法儲存。只在節點需要登入時使用：已登入的節點不會用新 key（服務頁「VPN 節點狀態」會提示），key 過期／已用過等登入失敗原因也顯示在那裡。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
                 {"key": "tailscale.hostname", "label": "節點名稱（選填）", "type": "text",
                 "placeholder": "woow-office",

@@ -56,6 +56,7 @@ from src.services.helm import (
 )
 from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values, validate_label_value
 from src.services.helm_limiter import helm_operation_slot
+from src.services.tenant_secret import validate_tenant_secret
 from src.services.ngrok_errors import describe_ngrok_error
 from src.services.upgrade_preflight import (
     build_expansion_error_detail,
@@ -213,6 +214,39 @@ def _with_default_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, An
         "imagePullSecrets", [{"name": settings.registry_secret_name}]
     )
     return merged
+
+
+def _write_tenant_secret(namespace: str, name: str, data: Optional[Dict[str, str]]) -> None:
+    """INFRA-FIX-019-1：helm 之前寫 ``<name>-tenant-secret``（``data`` 為 None＝平台沒送，什麼都不做）。
+
+    寫失敗 ⇒ 500、helm 不跑：chart 的 ``tenantSecret.revision`` 已經換了，讓 pod 帶著舊
+    token 重啟沒有意義，而且租戶看不到任何錯誤。訊息不帶任何值（kubectl 的 stderr 只進
+    operator log）。
+    """
+    if data is None:
+        return
+    try:
+        k8s_service.apply_tenant_secret(namespace, name, data)
+    except KubectlException as e:
+        logger.error(
+            "INFRA-FIX-019-1: writing the tenant Secret of %s/%s failed: %s",
+            namespace, name, e.stderr,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to write the service's credential Secret; nothing was changed. "
+            "Check operator logs for details.",
+        )
+
+
+def _tenant_secret_data(name: str, spec) -> Optional[Dict[str, str]]:
+    """INFRA-FIX-019-1：驗 ``tenant_secret``（不合格 ⇒ 400、訊息不含任何值）；沒帶回 None。"""
+    if spec is None:
+        return None
+    try:
+        return validate_tenant_secret(name, spec)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 def _storage_quota_summary(namespace: str) -> Optional[Dict[str, Any]]:
@@ -462,6 +496,8 @@ def _install_release_blocking(request: ReleaseCreateRequest) -> ReleaseInfo:
     #1552：整段佔**一個** helm 名額——容量預檢的 ``helm install --dry-run`` 與真正的
     install 不會各排一次隊（排到一半才被拒＝預檢白做）。
     """
+    # INFRA-FIX-019-1：先驗形狀（400，任何寫入之前）。
+    tenant_data = _tenant_secret_data(request.name, request.tenant_secret)
     with helm_operation_slot("install"):
         # #1157：同名 release 的孤兒資源還在就拒絕（helm 會靜默接回、回收 CronJob 之後
         # 會刪掉活站資料）——放最前面：它是確定性的拒絕，不必先跑容量預檢的 dry-run。
@@ -473,6 +509,9 @@ def _install_release_blocking(request: ReleaseCreateRequest) -> ReleaseInfo:
         # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
         # _ensure_image_pull_secrets docstring）。
         values = _ensure_image_pull_secrets(request.namespace, request.values)
+        # INFRA-FIX-019-1：租戶憑證寫進 release 之外的 Secret（chart 只引用名稱），
+        # 必須在 helm 之前——pod 一起來就要讀得到。
+        _write_tenant_secret(request.namespace, request.name, tenant_data)
         return helm_service.install(
             namespace=request.namespace,
             name=request.name,
@@ -630,10 +669,15 @@ def upgrade_release(
         # 物件比對不可變欄位；有衝突就在這裡擋下（409，什麼都還沒套用）。
         # #1552：預檢＋真正 upgrade 共用**一個** helm 名額——通過預檢的請求不會在
         # 第二段又排一次隊（排不到就變成「預檢過了、卻沒套用」）。
+        # INFRA-FIX-019-1：先驗形狀（400，任何寫入之前）。
+        tenant_data = _tenant_secret_data(name, request.tenant_secret)
         with helm_operation_slot("upgrade"):
             # #1647：`check_compute_quota` 是預檢的參數，不進 `upgrade_kwargs`（那個 dict 會
             # 原樣展開給 helm）。
             _upgrade_preflight(upgrade_kwargs, check_compute_quota=request.check_compute_quota)
+            # INFRA-FIX-019-1：預檢通過才寫（409 時什麼都沒變）；helm 之前寫，新 revision 的
+            # pod 一起來就讀得到。helm 失敗時 Secret 已是新值——與平台 DB 一致，下次重送收斂。
+            _write_tenant_secret(namespace, name, tenant_data)
             release = helm_service.upgrade(**upgrade_kwargs)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
@@ -992,6 +1036,16 @@ async def delete_release(
         # #1552：同 create_release——uninstall 可能排隊，不在 event loop 上等。
         result = await asyncio.to_thread(helm_service.uninstall, namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
+
+        # INFRA-FIX-019-1：租戶憑證 Secret 不屬於 release，helm uninstall 不會刪它。
+        # 失敗只記 log：服務已刪，留下的 Secret 下次同名開通會被覆寫。
+        try:
+            await asyncio.to_thread(k8s_service.delete_tenant_secret, namespace, name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "INFRA-FIX-019-1: could not delete the tenant Secret of %s/%s: %s",
+                namespace, name, getattr(e, "stderr", e),
+            )
 
         # Label orphaned PVCs for deferred cleanup — scoped to THIS release's own
         # PVCs (#281). A per-workspace ns is shared by multiple services; an
@@ -2446,6 +2500,10 @@ def _reset_release_config_unlocked(
                 "bumps the tenant's chart"
             ),
         )
+
+    # INFRA-FIX-019-1：reset 的全量 values 帶 tenantSecret.name／revision；Secret 同步寫一次
+    # （內容沒變＝server-side apply 無變化）。兩條載體都在 helm 之前，所以守在分流之前。
+    _write_tenant_secret(namespace, name, _tenant_secret_data(name, request.tenant_secret))
 
     if request.admin_password_carrier == "helm_secret":
         return _reset_via_helm_secret(namespace, name, request)

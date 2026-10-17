@@ -1515,9 +1515,11 @@ class PaasController(HiddenChainMixin, Controller):
             # 變大時由 Longhorn validator 判斷（server dry-run），放不下就整筆擋下、不扣款。
             # 換方案不升 chart、不 refresh image（#1160／#1184）：釘服務現行 chart 版本。
             resolved_version = self._reconfigure_chart_version(service)
+            assembled = service._assemble_deploy_values(
+                values=new_values, plan=plan, chart_version=resolved_version)
             upgrade_kwargs = self._upgrade_kwargs(
-                service, resolved_version,
-                service._assemble_deploy_values(values=new_values, plan=plan)['values'])
+                service, resolved_version, assembled['values'],
+                tenant_secret=assembled.get('tenant_secret'))
             # #1647：ns quota 在扣款**之後**才推送（下方 `_push_ns_quota`）。預檢若拿叢集上
             # 現在的上限去比，升到較大方案會被還沒擴的舊上限誤擋 ⇒ 把「將推送的 quota」一起
             # 交給 operator。allocated_* 沒變就不會推送，也就不帶。
@@ -5139,9 +5141,11 @@ class PaasController(HiddenChainMixin, Controller):
             # #1647：全量 values 在這裡（寫入之前）就組好，同步預檢與稍後的背景 upgrade 共用
             # 同一組 `upgrade_kwargs`。`_assemble_deploy_values(values=…)` 不改輸入、不寫 DB，
             # 結果與「寫完 helm_values 再從 stored values 組」相同（落庫前後都剝同一組敏感鍵）。
+            assembled = service._assemble_deploy_values(
+                values=merged_values, chart_version=resolved_version)
             upgrade_kwargs = self._upgrade_kwargs(
-                service, resolved_version,
-                service._assemble_deploy_values(values=merged_values)['values'])
+                service, resolved_version, assembled['values'],
+                tenant_secret=assembled.get('tenant_secret'))
             denial = self._reconfigure_compute_quota_denial(service, client, upgrade_kwargs)
             if denial:
                 # helm_values、state、last_upgraded_at、init 代數都還沒動；唯一已經寫下去的
@@ -5228,8 +5232,12 @@ class PaasController(HiddenChainMixin, Controller):
             version=expected or '-')
 
     @staticmethod
-    def _upgrade_kwargs(service, resolved_version, assembled_values):
-        """送 operator ``upgrade_release``／``upgrade_preflight`` 的參數（兩者必須同一組，#1513）。"""
+    def _upgrade_kwargs(service, resolved_version, assembled_values, tenant_secret=None):
+        """送 operator ``upgrade_release``／``upgrade_preflight`` 的參數（兩者必須同一組，#1513）。
+
+        INFRA-FIX-019-1：``tenant_secret``＝``_assemble_deploy_values(chart_version=…)`` 拿出
+        values 的租戶憑證（None＝舊路徑、不帶）。預檢的 client 收下但不送（不寫入）。
+        """
         # #1130：woow-odoo 的 conf.adminPassword 每次全量送（reset_values 下不送就
         # 變空值；chart 對既有 DB 是 no-op）。只補 odoo 這一支——MCP 家族在
         # reconfigure 缺 sensitive 的既有行為不在本票範圍。
@@ -5250,6 +5258,8 @@ class PaasController(HiddenChainMixin, Controller):
         )
         if odoo_sensitive:
             upgrade_kwargs['sensitive_values'] = odoo_sensitive
+        if tenant_secret:
+            upgrade_kwargs['tenant_secret'] = tenant_secret
         return upgrade_kwargs
 
     def _start_background_upgrade(self, service, client, resolved_version, halted,
@@ -5279,8 +5289,10 @@ class PaasController(HiddenChainMixin, Controller):
         # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
         # svc.helm_values 已由呼叫端寫好，helper 讀到的即最新 user config。
         if upgrade_kwargs is None:
+            assembled = service._assemble_deploy_values(chart_version=resolved_version)
             upgrade_kwargs = self._upgrade_kwargs(
-                service, resolved_version, service._assemble_deploy_values()['values'])
+                service, resolved_version, assembled['values'],
+                tenant_secret=assembled.get('tenant_secret'))
         operator_url = client.base_url
         operator_api_key = client._session.headers.get('X-API-Key', '')
 

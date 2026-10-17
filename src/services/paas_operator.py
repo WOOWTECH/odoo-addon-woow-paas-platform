@@ -447,6 +447,7 @@ class PaaSOperatorClient:
         sensitive_values: Optional[Dict[str, Any]] = None,
         create_namespace: bool = False,
         expose: Optional[Dict[str, Any]] = None,
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Install a new Helm release.
 
@@ -461,6 +462,8 @@ class PaaSOperatorClient:
             create_namespace: Whether to create namespace if not exists
             expose: Cloudflare Tunnel expose configuration
                     e.g., {'enabled': True, 'subdomain': 'myapp', 'service_port': 8080}
+            tenant_secret: INFRA-FIX-019-1——``{name, data}``，operator 在 helm 之前寫進
+                ``<release>-tenant-secret``（helm release 之外）。不 log。
 
         Returns:
             Release information
@@ -488,6 +491,8 @@ class PaaSOperatorClient:
             data['values'] = values
         if sensitive_values:
             data['sensitive_values'] = sensitive_values
+        if tenant_secret:
+            data['tenant_secret'] = tenant_secret
         if expose:
             data['expose'] = expose
             _logger.info("install_release: Adding expose config to request: %s", expose)
@@ -539,6 +544,7 @@ class PaaSOperatorClient:
         reset_values: bool = False,
         reuse_values: bool = False,
         check_compute_quota: bool = False,
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Upgrade an existing Helm release.
 
@@ -560,6 +566,9 @@ class PaaSOperatorClient:
             check_compute_quota: #1647——請 operator 在套用前檢查工作區的 compute 配額放不放
                 得下；確定放不下回 409（``detail.error_code``＝``COMPUTE_QUOTA_ERROR_CODE``）、
                 什麼都沒套用。只在 True 時送這一鍵（舊 operator 會忽略未知欄位）。
+            tenant_secret: INFRA-FIX-019-1——``{name, data}``，operator 預檢通過後、helm 之前
+                寫進 ``<release>-tenant-secret``。有值才送。⚠ operator 必須先發版：舊 operator
+                忽略本欄、Secret 不會建立，chart 讀不到 token（sidecar 閒置）。
 
         Returns:
             Updated release information
@@ -581,6 +590,8 @@ class PaaSOperatorClient:
             data['sensitive_values'] = sensitive_values
         if check_compute_quota:
             data['check_compute_quota'] = True
+        if tenant_secret:
+            data['tenant_secret'] = tenant_secret
 
         return self._request(
             'PATCH',
@@ -602,6 +613,7 @@ class PaaSOperatorClient:
         check_compute_quota: bool = False,
         pending_quota: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[int, Tuple[int, int]]] = None,
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """#1513：用與 ``upgrade_release`` **同一組**參數跑 operator 的升級預檢，不套用任何東西。
 
@@ -612,6 +624,9 @@ class PaaSOperatorClient:
         ``upgrade_release``）。``pending_quota``（鍵同 ``update_namespace_quota`` 的參數）是
         平台在這次檢查之後才會推送的 quota——換方案扣款前帶上，operator 以它取代現行上限
         來判斷。``timeout`` 不給＝``HELM_OPERATION_TIMEOUT``。
+
+        INFRA-FIX-019-1：``tenant_secret`` 只是為了與 ``upgrade_release`` 收同一組參數（#1513）；
+        預檢不寫入，所以**不送**——憑證不必多走一趟。
 
         Returns:
             ``{"ok": True, "expansions": [...]}``；帶 ``check_compute_quota`` 且 operator 夠新時
@@ -658,6 +673,7 @@ class PaaSOperatorClient:
         reset_values: bool = False,
         reuse_values: bool = False,
         admin_password_carrier: str = 'config_json',
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """#357/#449 reset admin_password；載體決定 operator 走哪條路。
 
@@ -727,6 +743,9 @@ class PaaSOperatorClient:
             data['chart'] = chart
         if version:
             data['version'] = version
+        # INFRA-FIX-019-1：reset 的 values 帶 tenantSecret 參照；Secret 同步寫一次（內容不變＝無變化）。
+        if tenant_secret:
+            data['tenant_secret'] = tenant_secret
 
         return self._request(
             'POST',

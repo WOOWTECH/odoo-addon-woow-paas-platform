@@ -21,6 +21,7 @@ from odoo.tools.sql import column_exists
 
 from ..services import dns_probe, rollback_config
 from ..services.chart_version import reported_helm_revision
+from ..services.tenant_secret import has_secret_refs, secret_refs, split_tenant_secret
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
 from ..services.workload_health import (
@@ -2581,7 +2582,9 @@ class CloudService(models.Model):
             # #1408：範本改釘的 image 寫回服務自己的 helm_values（之後租戶儲存設定
             # 也沿用同一組）。upgrade 失敗時 UserError 讓整筆交易回捲，這次寫入一起撤銷。
             image_changes = self._refresh_template_images()
-            values = self._assemble_deploy_values()['values']
+            # INFRA-FIX-019-1：Redeploy 部署的是範本 pin 的 chart。
+            assembled = self._assemble_deploy_values(chart_version=template.helm_chart_version)
+            values = assembled['values']
             # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
             sensitive_values = self._build_deploy_sensitive_values()
             try:
@@ -2592,6 +2595,7 @@ class CloudService(models.Model):
                     version=template.helm_chart_version,
                     values=values,
                     sensitive_values=sensitive_values or None,
+                    tenant_secret=assembled.get('tenant_secret'),
                     reset_values=True,
                     # #1647：請 operator 在套用前檢查工作區的 compute 配額放不放得下。
                     check_compute_quota=self._compute_quota_check_requested(),
@@ -2991,7 +2995,12 @@ class CloudService(models.Model):
         # 沿用舊 coalesced values（同一 bug class，見 #411）。chart 版本見下方
         # `pinned_chart_version`：reset **不**升版。
         # #1158：不疊方案規格——那會改 pod template，15 秒等不到新 pod（F-461-2）。
-        values = self._assemble_deploy_values(apply_plan=False)['values']
+        # INFRA-FIX-019-1：組裝要知道這次部署的 chart 版本（reset 釘服務現行版本，見下方
+        # `pinned_chart_version`；同一條 fallback 在這裡先算一次）。
+        assembled = self._assemble_deploy_values(
+            apply_plan=False,
+            chart_version=self.helm_chart_version or self.template_id.helm_chart_version)
+        values = assembled['values']
         if new_username is not None:
             # 只改送給 operator 的這份；helm_values 等 2xx 之後才落庫（2xx 前失敗
             # 叢集仍是舊帳號，DB 也必須還是舊帳號）。
@@ -3049,6 +3058,7 @@ class CloudService(models.Model):
                 # 值必 500（#449）。判別器＝template 欄位，不得在此自建 slug／chart
                 # allowlist——與 has_admin_gui 同一紀律（#357 C01）。
                 admin_password_carrier=self.template_id.admin_password_carrier,
+                tenant_secret=assembled.get('tenant_secret'),
             )
         except PaaSOperatorTimeoutError as e:
             # #461 C11′ (commit-on-secret) — this branch survived the async
@@ -3474,7 +3484,8 @@ class CloudService(models.Model):
         # #411: values 組裝走單一真相源 helper（與 redeploy / reconfigure /
         # reset admin password 共用同一條全量管線）。expose_config 亦由 helper
         # 重算，取代 create 時存在 deploy_params 的等價值（收斂雙寫）。
-        assembled = self._assemble_deploy_values()
+        # INFRA-FIX-019-1：開通部署的是範本 pin 的 chart。
+        assembled = self._assemble_deploy_values(chart_version=template.helm_chart_version)
         merged_values = assembled['values']
         expose_config = assembled['expose_config']
 
@@ -3576,6 +3587,7 @@ class CloudService(models.Model):
                 sensitive_values=sensitive_values or None,
                 create_namespace=True,
                 expose=expose_config,
+                tenant_secret=assembled.get('tenant_secret'),
             )
 
             # Patch MCP sidecar if enabled
@@ -4061,7 +4073,7 @@ class CloudService(models.Model):
     #  #411 — 全量 values 組裝（單一真相源）                              #
     # ------------------------------------------------------------------ #
 
-    def _assemble_deploy_values(self, apply_plan=True, values=None, plan=None):
+    def _assemble_deploy_values(self, apply_plan=True, values=None, plan=None, chart_version=None):
         """組裝部署用的全量「非敏感」helm values ＋ expose_config（單一真相源）。
 
         Fresh install 與既存 release 升級**共用這一條**組裝管線，讓 helm 在
@@ -4116,12 +4128,23 @@ class CloudService(models.Model):
         ``sensitive_values``（admin_password）不在此組：它是敏感值、且 stored
         release values 本就不含它，由各呼叫點自組（reset 路徑帶新密碼）。
 
+        INFRA-FIX-019-1：``chart_version``＝這次**實際要部署**的 chart 版本（Redeploy／開通＝
+        範本 pin；reset／修改配置／換方案＝服務現行版本）。範本 password spec 標了
+        ``secret_ref`` 且 chart 版本 ≥ 其 ``since_chart`` 時，租戶憑證（ngrok token、Tailscale
+        auth key）拿出 values：原路徑寫 ``""``、加 ``tenantSecret.{name, revision,
+        nonEmptyKeys}``，值放進回傳的 ``tenant_secret`` 交給 operator 寫進
+        ``<release>-tenant-secret``（helm release 之外）——helm 把每個 revision 的 values 與
+        manifest 都存在 release 歷史裡，清除後舊 token 仍讀得到。不給（盤點腳本、舊呼叫端）
+        或 chart 較舊＝舊路徑（token 照舊在 values），``tenant_secret`` 為 None。見
+        ``services/tenant_secret.py``。
+
         Returns:
             dict: {
                 'values': 全量非敏感 helm values（dict）,
                 'expose_config': ingress expose dict 或 None（Cloudflare tunnel；
                                 僅 fresh install 用，upgrade endpoint 無 expose
                                 參數，升級路徑忽略此鍵）,
+                'tenant_secret': INFRA-FIX-019-1 送 operator 的 ``{name, data}`` 或 None,
             }
         """
         self.ensure_one()
@@ -4251,10 +4274,36 @@ class CloudService(models.Model):
                 else:
                     values[key] = val
 
+        # INFRA-FIX-019-1：最後一步——前面的 injector 不會再把值寫回 values。
+        values, tenant_secret = split_tenant_secret(
+            values, self._tenant_secret_refs(chart_version), self.helm_release_name,
+            self._tenant_secret_revision_key())
         return {
             'values': values,
             'expose_config': self._build_expose_config(),
+            'tenant_secret': tenant_secret,
         }
+
+    def _tenant_secret_refs(self, chart_version):
+        """INFRA-FIX-019-1：這次部署要拿出 values 的 ``(helm 路徑, Secret 鍵)``。
+
+        沒給版本、specs 讀不懂 ⇒ 空（舊路徑：token 至少送得到 chart，不會被清成空）。
+        """
+        self.ensure_one()
+        if not chart_version:
+            return []
+        specs = self.template_id._parse_helm_value_specs_or_fail()
+        if specs is SPECS_UNPARSEABLE:
+            return []
+        return secret_refs(specs, chart_version)
+
+    def _tenant_secret_revision_key(self):
+        """INFRA-FIX-019-1：``tenantSecret.revision`` 的 HMAC 密鑰（平台自己的 database.secret）。
+
+        revision 存在 release 歷史裡（values 與 manifest 都有），用純雜湊就是一枚可以比對的
+        token 指紋；用平台密鑰做 HMAC 則只看得出「變了沒」。
+        """
+        return self.env['ir.config_parameter'].sudo().get_param('database.secret')
 
     def _build_expose_config(self, *, allow_pending=False):
         """Cloudflare tunnel ingress expose 設定（fresh install 用）。
@@ -5733,6 +5782,10 @@ class CloudService(models.Model):
         for key in self._rollback_password_spec_paths():
             if key not in paths:
                 paths.append(key)
+        # INFRA-FIX-019-1：values 裡的 ``tenantSecret``（名稱＋revision）指向目前那把憑證；
+        # 回復到別的 revision 也要指向目前的（Secret 本身不跟著回復——同上「憑證不跟著回復」）。
+        if has_secret_refs(template._parse_helm_value_specs()) and 'tenantSecret' not in paths:
+            paths.append('tenantSecret')
         return paths
 
     def _rollback_password_spec_paths(self):
