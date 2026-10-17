@@ -16,6 +16,8 @@ on:
       - "src/services/newapi_client.py"
       - "src/services/llm_crypto.py"
       - "src/services/llm_redact.py"
+      - "src/services/mcp_url_guard.py"
+      - "src/tests/fixtures/newapi/**"
       - "tests/test_llm_services.py"
       # 測試拿代理的參考實作驗章、body 政策與路由白名單（每個 client 方法的路由、身分、
       # query、web 旗標）：它們一改，這裡要重新證明兩邊一致。
