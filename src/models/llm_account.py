@@ -25,6 +25,15 @@ new-api 上一個使用者 ``<prefix>%010d``。本檔有三件事：
    * 帶密文的寫回（P0 密碼、P7 UP）一律 ``log_exceptions=False``：``odoo.sql_db`` 預設會把
      失敗的 SQL 連同 bound params 寫成 ERROR 的 ``bad query``——等於把 Fernet 密文抄進 pod
      log（DESIGN §5.5 沒列這個管道）。失敗時只記欄位名與 pgcode。
+   * 放棄（``state=error``）⇒ 告警 ``provision_failed``（LLM-02b 的出口；錯誤碼＝``last_error_code``）；
+     密文被拒（綁定不符、解不開、內容不合）⇒ incident ``llm_secret_mismatch``＋告警 ``secret_rejected``。
+4. **餘額刷新 cron**（``_cron_llm_balance_refresh``，DESIGN §1.3.6；LLM-02b）：每 10 分鐘以 AP 分頁讀
+   new-api 的全部使用者（``GET /api/user/``、id 由小到大、每頁 100），只看符合本環境前綴
+   ``<prefix>`` 加 10 位數字的，以獨立 cursor 每頁一次寫回 ``quota_cached``／``used_quota_cached``／
+   ``request_count_cached``／``balance_synced_at``（只寫 active／suspended、``newapi_user_id`` 對得上、
+   而且比現有的 ``balance_synced_at`` 新的列）。每 tick ≤ 30 秒、最多 :data:`BALANCE_PAGES_PER_TICK`
+   頁，讀到哪一頁記在 ``llm_runtime_state.balance_refresh_page``，剩下的 ``_trigger()`` 接著跑（N28）。
+   低額度提醒在 LLM-11、透支（I5）的動作在 LLM-12b。
 """
 import ipaddress
 import logging
@@ -67,13 +76,23 @@ from .llm_common import (
     _llm_internal,
     _without_llm_internal,
     llm_config,
-    llm_unconfigured,
+    run_llm_cron,
 )
+from .llm_event import LlmAlert, LlmIncident, safe_code
 
 _logger = logging.getLogger(__name__)
 
+ACCOUNT_MODEL = 'woow_paas_platform.llm_account'
 ACCOUNT_TABLE = 'woow_paas_platform_llm_account'
+EVENT_MODEL = 'woow_paas_platform.llm_event'
 PROVISION_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_provision'
+BALANCE_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_balance_refresh'
+#: 餘額刷新：每頁幾個使用者（new-api 上限 100）、一個 tick 最多幾頁（N28）。
+BALANCE_PAGE_SIZE = 100
+BALANCE_PAGES_PER_TICK = 20
+#: 會寫回餘額快取的帳戶狀態（provisioning 由 P9 寫第一次；error／closed 不顯示餘額）。
+BALANCE_STATES = ('active', 'suspended')
+_INT8_MAX = 2 ** 63 - 1
 #: 獨立 cursor 等列鎖的上限：等不到就讓那一步失敗，不卡死整個 cron。
 _LOCK_TIMEOUT = '5s'
 #: 開戶時 P5 才看的孤兒 PAT 門檻（new-api 每人 20 把，含已過期 7 天內；〔PROV〕§3.2）。
@@ -282,7 +301,25 @@ class LlmAccount(models.Model):
                                       llm_crypto.FIELD_UP_TOKEN)
         except llm_crypto.LlmCryptoError as exc:
             _logger.error('[LLM] account=%s UP unusable: %s', record.id, exc.code)
+            self._llm_report_secret_rejected(record.id, exc)
             raise LlmError(ERR_LLM_UNAVAILABLE) from None
+
+    @api.model
+    def _llm_report_secret_rejected(self, account_id, exc):
+        """密文被拒 ⇒ incident ``llm_secret_mismatch``＋告警（DESIGN §2.9）。sentinel 與加密金鑰
+        沒設不算（前者是 neutralize 的預期結果，後者由設定類的告警處理）。盡力而為、不往外丟。"""
+        if isinstance(exc, (llm_crypto.LlmSecretNeutralized, llm_crypto.LlmCryptoUnavailable)):
+            return
+        code = safe_code(getattr(exc, 'code', None))
+        try:
+            Event = self.env[EVENT_MODEL]
+            Event._llm_incident(LlmIncident.SECRET_MISMATCH, account_id=account_id,
+                                error_code=code)
+            Event._llm_alert(LlmAlert.SECRET_REJECTED, account_id=account_id,
+                             target_model=ACCOUNT_MODEL, target_id=account_id, error_code=code)
+        except Exception:  # noqa: BLE001 - reporting must not change the fail-closed result
+            _logger.error('[LLM] account=%s: secret rejection not reported: %s', account_id,
+                          llm_redact.redact(traceback.format_exc()))
 
     def _llm_mark_up_invalid(self):
         """UP 被 new-api 拒絕（401）⇒ ``up_state=invalid``，重簽在 LLM-03。獨立交易寫。
@@ -487,21 +524,26 @@ class LlmAccount(models.Model):
         ``ir_act_server.code``（否則 prod／stg 的 cron 會一直靜默呼叫不存在的方法，見 pitfall
         ``seed-noupdate-sticky-template-links``）。``TestLlmCronContract`` 斷言 DB 裡的 code。
         """
-        config = llm_config(self.env)
-        if llm_unconfigured(self.env, config):
-            return
+        # N28 的唯一例外：開戶一個 tick 只做一戶、總預算 60 秒（DESIGN §3.5）。
+        run_llm_cron(self.env, PROVISION_CRON_XMLID, self._llm_provision_tick,
+                     seconds=nac.PROVISION_TICK_SECONDS, items=1, config=llm_config(self.env))
+
+    @api.model
+    def _llm_provision_tick(self, config, tick):
+        """一個開戶 tick（:func:`llm_common.run_llm_cron` 已排除「未設定」）。回傳「還有待開戶」。"""
         Account = self.sudo()
         if not config['identity_ok']:
             _logger.warning('[LLM] provisioning skipped: username prefix / IP block misconfigured')
-            return
+            return False
         try:
             client = Account._llm_client(nac.ROLE_CRON)
             llm_crypto.load()
         except (nac.NewApiError, llm_crypto.LlmCryptoError) as exc:
             # fail closed、不搶戶：帳戶留在 provisioning，不吃嘗試次數。訊息只有原因碼。
             _logger.error('[LLM] provisioning skipped: %s', exc.code)
-            return
-        deadline = time.monotonic() + nac.PROVISION_TICK_SECONDS
+            return False
+        deadline = tick.deadline
+        tick.took()
         claim = Account._llm_claim_for_provision()
         if claim:
             account_id, token, attempts = claim
@@ -521,10 +563,7 @@ class LlmAccount(models.Model):
                 stop = _ProvisionStop('llm_provision_internal')
             if stop is not None:
                 Account._llm_provision_failed(account_id, token, attempts, stop)
-        if Account._llm_provision_pending():
-            cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
-            if cron:
-                cron._trigger()
+        return Account._llm_provision_pending()
 
     @api.model
     def _llm_claim_for_provision(self, account_ids=None):
@@ -650,8 +689,15 @@ class LlmAccount(models.Model):
                           account_id, llm_redact.redact(traceback.format_exc()))
             return
         if terminal:
-            # 告警出口在 LLM-02b（llm_event severity=alert＋email）；這裡先留 log。
             _logger.error('[LLM] provisioning account=%s gave up: %s', account_id, stop.code)
+            try:
+                self.env[EVENT_MODEL]._llm_alert(
+                    LlmAlert.PROVISION_FAILED, account_id=account_id,
+                    target_model=ACCOUNT_MODEL, target_id=account_id,
+                    error_code=safe_code(stop.code), numbers={'attempts': int(attempts)})
+            except Exception:  # noqa: BLE001 - the failure itself is already recorded
+                _logger.error('[LLM] provisioning account=%s: alert not raised: %s', account_id,
+                              llm_redact.redact(traceback.format_exc()))
         cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
         if cron and not terminal:
             if next_at:
@@ -748,9 +794,10 @@ class LlmAccount(models.Model):
         except llm_crypto.LlmCryptoUnavailable:
             raise _ProvisionStop('llm_crypto_unavailable') from None
         except llm_crypto.LlmCryptoError as exc:
-            # 綁定不符或內容不合：有人動過密文（incident 出口在 LLM-02b）。
+            # 綁定不符、解不開或內容不合：有人動過密文，或加密金鑰換掉了（DESIGN §2.9）。
             _logger.critical('[LLM] account=%s %s ciphertext rejected: %s',
                              row['id'], field, exc.code)
+            self._llm_report_secret_rejected(row['id'], exc)
             raise _ProvisionStop(exc.code, terminal=True) from None
 
     @api.model
@@ -882,3 +929,133 @@ class LlmAccount(models.Model):
         })
         _logger.info('[LLM] provisioning account=%s active', account_id)
         return True
+
+    # ------------------------------------------------------------------ #
+    #  餘額刷新 cron（DESIGN §1.3.6；LLM-02b）                              #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _cron_llm_balance_refresh(self):
+        """每 10 分鐘以 AP 分頁刷新餘額快取；未設定（N27）時第一行就 return、零外呼。
+
+        ⚠ **凍結契約**（同 ``_cron_llm_provision``）：``data/llm_cron.xml`` 是 noupdate，本方法的名字
+        與所在的 model 不能改（``llm_common.LLM_CRONS``；``TestLlmCronContract`` 斷言 DB 裡的 code）。
+        """
+        run_llm_cron(self.env, BALANCE_CRON_XMLID, self._llm_balance_refresh_tick,
+                     items=BALANCE_PAGES_PER_TICK, config=llm_config(self.env))
+
+    @api.model
+    def _llm_balance_refresh_tick(self, config, tick):
+        """一個 tick：從 ``balance_refresh_page`` 接著讀，最多 ``tick.items`` 頁。回傳「還有剩」。"""
+        if not config['identity_ok']:
+            _logger.warning('[LLM] balance refresh skipped: username prefix / IP block misconfigured')
+            return False
+        Account = self.sudo()
+        if not Account.search_count([('state', 'in', BALANCE_STATES),
+                                     ('newapi_user_id', '>', 0)], limit=1):
+            # 沒有任何要刷新的帳戶：不外呼（也不必翻 new-api 上別的環境的使用者）。
+            return False
+        try:
+            client = Account._llm_client(nac.ROLE_CRON)
+        except nac.NewApiError as exc:
+            _logger.error('[LLM] balance refresh skipped: %s', exc.code)
+            return False
+        State = self.env['woow_paas_platform.llm_runtime_state']
+        page = max(1, int(State._llm_read()['balance_refresh_page'] or 1))
+        if page == 1:
+            State._llm_write(balance_refresh_started_at=_utcnow())
+        pattern = re.compile(re.escape(config['prefix']) + '[0-9]{10}', re.ASCII)
+        matched = updated = 0
+        while tick.can_take(nac.MIN_CALL_SECONDS):
+            read_at = _utcnow()
+            result = client.ap_list_users(page, BALANCE_PAGE_SIZE, deadline=tick.deadline)
+            tick.took()
+            if not result.ok:
+                if isinstance(result, nac.NotExecuted) and result.reason == 'deadline':
+                    tick.more = True
+                    break
+                # 停在這一頁：下一次排程（10 分鐘後）從同一頁再試，不在這裡連續重送。
+                _logger.warning('[LLM] balance refresh page=%s: %s/%s', page, result.kind,
+                                result.label())
+                return False
+            data = result.data if isinstance(result.data, dict) else {}
+            items = _items(data)
+            rows = self._llm_balance_rows(items, pattern)
+            matched += len(rows)
+            updated += self._llm_store_balances(rows, read_at)
+            total = data.get('total')
+            if len(items) < BALANCE_PAGE_SIZE or (
+                    type(total) is int and page * BALANCE_PAGE_SIZE >= total):
+                State._llm_write(balance_refresh_page=1, balance_refresh_started_at=None,
+                                 balance_refresh_finished_at=_utcnow())
+                _logger.info('[LLM] balance refresh finished at page=%s (this tick: matched=%s '
+                             'updated=%s)', page, matched, updated)
+                return False
+            page += 1
+            State._llm_write(balance_refresh_page=page)
+        _logger.info('[LLM] balance refresh continues at page=%s (this tick: matched=%s '
+                     'updated=%s)', page, matched, updated)
+        return True
+
+    @staticmethod
+    def _llm_balance_rows(items, pattern):
+        """new-api 使用者列表 → ``(username, user_id, quota, used_quota, request_count)``。
+
+        只留本環境前綴、沒被軟刪除、數字都是整數的；其他（別的環境、管理員、形狀不對）一律略過。
+        ``quota`` 可以是負的（透支，DESIGN §4.9）。
+        """
+        rows = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            username = item.get('username')
+            user_id = item.get('id')
+            quota = item.get('quota')
+            used = item.get('used_quota')
+            count = item.get('request_count')
+            if not (isinstance(username, str) and pattern.fullmatch(username)):
+                continue
+            if type(user_id) is not int or not 0 < user_id <= nac.INT32_MAX \
+                    or item.get('DeletedAt'):
+                continue
+            if not all(type(v) is int for v in (quota, used, count)):
+                continue
+            if not (-_INT8_MAX <= quota <= _INT8_MAX and 0 <= used <= _INT8_MAX
+                    and 0 <= count <= _INT8_MAX):
+                continue
+            rows.append((username, user_id, quota, used, count))
+        return rows
+
+    @api.model
+    def _llm_store_balances(self, rows, read_at):
+        """一頁的餘額以獨立 cursor 一次寫回並 commit，回傳更新了幾戶。
+
+        守衛：使用者名稱與 ``newapi_user_id`` 都要對得上、帳戶是 active／suspended、而且現有的
+        ``balance_synced_at`` 不比這次讀取還新（P9 或日後轉換剛寫的較新值不會被舊頁蓋掉）。
+        """
+        if not rows:
+            return 0
+        values = ', '.join(['(%s::varchar, %s::integer, %s::bigint, %s::bigint, %s::bigint)']
+                           * len(rows))
+        # 參數依 SQL 裡出現的順序：SET、VALUES、WHERE。
+        params = [read_at, SUPERUSER_ID, _utcnow()]
+        for row in rows:
+            params.extend(row)
+        params.extend([BALANCE_STATES, read_at])
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                cr.execute(
+                    'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
+                    'request_count_cached = v.cnt, balance_synced_at = %s, write_uid = %s, '
+                    'write_date = %s '
+                    'FROM (VALUES {values}) AS v(username, user_id, quota, used, cnt) '
+                    'WHERE a.newapi_username = v.username AND a.newapi_user_id = v.user_id '
+                    'AND a.state IN %s '
+                    'AND (a.balance_synced_at IS NULL OR a.balance_synced_at <= %s)'.format(
+                        t=ACCOUNT_TABLE, values=values),
+                    params)
+                return cr.rowcount
+        except psycopg2.Error as exc:
+            _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',
+                            getattr(exc, 'pgcode', None))
+            return 0
