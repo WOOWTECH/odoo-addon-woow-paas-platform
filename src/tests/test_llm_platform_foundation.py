@@ -1424,7 +1424,7 @@ class TestLlmConcurrency(TransactionCase):
                     outcome['value'] = call(env_for(self.registry, cr))
             except BaseException as exc:  # noqa: BLE001 - reported to the main thread
                 outcome['error'] = exc
-        thread = threading.Thread(target=run, name='llm-race-%s' % self.tag)
+        thread = threading.Thread(target=run, name='llm-race-%s' % self.tag, daemon=True)
         thread.start()
         return thread, outcome
 

@@ -297,6 +297,19 @@ def _begin(env, cr, read_committed=False):
         cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
 
 
+def _env_on(registry, cr):
+    """獨立 cursor 上的 superuser env，transaction 直接綁 ``registry``。
+
+    ``api.Environment(cr, …)`` 遇到 ``cr.transaction is None`` 會去 ``Registry(cr.dbname)`` 查——那要拿
+    全域的 ``Registry._lock``。告警這時正拿著 advisory lock 與剛插入的列：別的 thread 正在載入 registry
+    （例如 ``-u``、post-install 測試）就會讓告警卡在 Python 鎖上、DB 鎖不放（審查 LLM-02b 的突變測試
+    實測過：等鎖的一方整個卡住、清理也跟著卡死）。直接用手上的 registry 建 transaction，不經全域查表。
+    """
+    if cr.transaction is None:
+        cr.transaction = api.Transaction(registry)
+    return api.Environment(cr, SUPERUSER_ID, {})
+
+
 def _webhook_session():
     session = requests.Session()
     session.trust_env = False
@@ -692,7 +705,7 @@ class LlmEvent(models.Model):
                        '<td><code>%s</code></td></tr>') % (escape(label), escape(str(value)))
                 for label, value in lines)
             body = Markup('<table>%s</table><p>%s</p>') % (rows, escape(note))
-            env = api.Environment(cr, SUPERUSER_ID, {})
+            env = _env_on(self.env.registry, cr)
             with cr.savepoint():
                 env['mail.mail'].sudo().create({
                     'subject': subject,
@@ -714,7 +727,7 @@ class LlmEvent(models.Model):
         """有 webhook ⇒ ``pending``＋在告警的交易裡 ``_trigger()`` delivery cron；沒有 ⇒ ``not_configured``。"""
         if not url:
             return 'not_configured'
-        env = api.Environment(cr, SUPERUSER_ID, {})
+        env = _env_on(self.env.registry, cr)
         cron = env.ref(DELIVERY_CRON_XMLID, raise_if_not_found=False)
         if cron:
             cron._trigger()
