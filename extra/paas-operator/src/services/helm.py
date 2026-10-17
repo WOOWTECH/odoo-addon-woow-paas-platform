@@ -3204,6 +3204,42 @@ class KubernetesService:
         finally:
             Path(manifest_file).unlink(missing_ok=True)
 
+    def apply_tenant_secret(self, namespace: str, release: str, data: Dict[str, str]) -> None:
+        """INFRA-FIX-019-1：寫 ``<release>-tenant-secret``（helm release 之外）。
+
+        server-side apply＋stdin：不留 last-applied annotation（明文副本）、不落暫存檔、
+        不上 argv。理由見 ``services/tenant_secret.py``。輸出只要名稱（``-o name``），
+        不把物件（含 data）讀回 operator 的記憶體或 log。
+        """
+        from src.services.tenant_secret import (
+            TENANT_SECRET_FIELD_MANAGER,
+            build_tenant_secret_manifest,
+        )
+
+        validate_namespace(namespace)
+        manifest = build_tenant_secret_manifest(namespace, release, data)
+        self._run_command(
+            [
+                "apply", "--server-side",
+                f"--field-manager={TENANT_SECRET_FIELD_MANAGER}",
+                "--force-conflicts",
+                "-f", "-",
+                "--output", "name",
+            ],
+            input_data=json.dumps(manifest),
+        )
+
+    def delete_tenant_secret(self, namespace: str, release: str) -> None:
+        """INFRA-FIX-019-1：刪 ``<release>-tenant-secret``（不存在不算錯）。"""
+        from src.services.tenant_secret import tenant_secret_name
+
+        validate_namespace(namespace)
+        self._run_command([
+            "delete", "secret", tenant_secret_name(release),
+            "--namespace", namespace,
+            "--ignore-not-found",
+        ])
+
     def delete_service(self, namespace: str, service_name: str) -> bool:
         """Delete a Kubernetes Service.
 

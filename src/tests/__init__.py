@@ -1186,3 +1186,7 @@ from . import test_llm_tracer
 # LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
 # llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
 from . import test_llm_platform_foundation
+
+# INFRA-FIX-019-1：租戶憑證（ngrok authtoken、Tailscale auth key）不進 helm release 歷史——
+# secret_ref 拿出 values、HMAC revision、版本閘門、Redeploy／reset／修改配置帶 tenant_secret。
+from . import test_tenant_secret_infra_fix_019_1

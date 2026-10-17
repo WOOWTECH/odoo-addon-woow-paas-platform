@@ -51,6 +51,26 @@ class ExposeConfig(BaseModel):
     )
 
 
+class TenantSecretSpec(BaseModel):
+    """INFRA-FIX-019-1：租戶自己的憑證（ngrok authtoken、Tailscale auth key），寫進一個
+    **不屬於 helm release** 的 Secret（``<release>-tenant-secret``）。
+
+    helm 把每個 revision 的 user values 與渲染後的 manifest 存在
+    ``sh.helm.release.v1.<release>.v<N>`` Secret：token 只要經過 values 一次，租戶清除後
+    舊值仍留在歷史裡。改走本欄後 values 只帶 Secret 名稱（chart 的 ``tenantSecret.name``）。
+
+    ⚠ 形狀刻意**不**在這裡驗（``data`` 收任何值）：pydantic 驗證失敗時 FastAPI 的 422 會把
+    ``input`` 原樣回給呼叫端＝把 token 寫進平台的錯誤 log。檢查在
+    ``services.tenant_secret.validate_tenant_secret``（→ 400、通用訊息）。``data`` 也不進 repr。
+    """
+
+    name: str = Field(..., description="Must be <release>-tenant-secret")
+    data: Dict[str, Any] = Field(
+        default_factory=dict, repr=False,
+        description="Secret key → value (\"\" = cleared). Never logged, never echoed.",
+    )
+
+
 class ReleaseCreateRequest(BaseModel):
     """Request to create a new Helm release."""
 
@@ -67,6 +87,11 @@ class ReleaseCreateRequest(BaseModel):
     )
     create_namespace: bool = Field(
         default=False, description="Create namespace if not exists"
+    )
+    tenant_secret: Optional[TenantSecretSpec] = Field(
+        default=None,
+        description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
+        "(outside the helm release) BEFORE helm runs. Absent (older platform) = nothing written.",
     )
     expose: Optional[ExposeConfig] = Field(
         default=None,
@@ -91,6 +116,12 @@ class ReleaseUpgradeRequest(BaseModel):
     )
     reuse_values: bool = Field(
         default=True, description="Reuse last release values"
+    )
+    tenant_secret: Optional[TenantSecretSpec] = Field(
+        default=None,
+        description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
+        "(outside the helm release) after the preflight, before helm upgrade. The "
+        "upgrade-preflight endpoint never writes it.",
     )
     check_compute_quota: bool = Field(
         default=False,
@@ -234,6 +265,13 @@ class ReleaseResetConfigRequest(BaseModel):
             "既有 saga）；helm_secret＝chart Secret（hermes-agent / open-design，"
             "純 helm upgrade + rollout restart）。未帶＝config_json。"
         ),
+    )
+    # INFRA-FIX-019-1：reset 的 values 帶著 tenantSecret.name／revision（同一份全量組裝），
+    # 這裡同步寫一次（內容沒變＝server-side apply 無變化，pod template 不動）。
+    tenant_secret: Optional[TenantSecretSpec] = Field(
+        default=None,
+        description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
+        "before the reset's helm upgrade (unchanged content = no-op).",
     )
 
 
