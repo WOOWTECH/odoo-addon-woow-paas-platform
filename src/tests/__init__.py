@@ -1180,3 +1180,9 @@ from . import test_workspace_quota_sync_rpc_1680
 from . import test_workspace_quota_sync_live_1680
 from . import test_workspace_quota_floor_live_1679
 from . import test_ecpg_v4_golive
+# #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
+from . import test_tunnel_binding_1766
+
+# LLM-01b：AI 模型分頁的 Odoo 後端最小版（帳戶、開戶 cron、免費試用金鑰、tracer 端點、
+# 未設定零外呼、neutralize、真 cursor 跑 cron 的收斂）。
+from . import test_llm_tracer

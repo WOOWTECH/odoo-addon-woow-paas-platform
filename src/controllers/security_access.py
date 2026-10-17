@@ -107,6 +107,12 @@ class SecurityAccessController(Controller):
                 return {"success": False,
                         "error": _("Failed to refresh status. Please try again.")}
             return {"success": True, "data": sa.to_dict()}
+        elif action == "release_binding":
+            # #1766：鏡像 smart_home 的同名 action（兩側必須同步，見
+            # `two-layer-acl-lockstep`）。解綁只是讓下一台能接手；對方手上的權杖
+            # 仍然有效，要斷開只能換權杖。
+            sa.action_release_binding()
+            return {"success": True, "data": sa.to_dict()}
         elif action == "update":
             vals = {}
             if kwargs.get("name"):

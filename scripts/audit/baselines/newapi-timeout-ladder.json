@@ -1,0 +1,20 @@
+{
+  "_comment": "newapi-timeout-ladder（repo-lint 第 42 條）的結構基準：NewApiClient 每個方法的預設逾時類別。新增方法或改類別要先對 DESIGN §3.5 的表，再手改這份檔（--update-baseline 不會重產它）。",
+  "methods": {
+    "ap_create_user": "TIMEOUT_PROVISION",
+    "ap_get_user": "TIMEOUT_PROVISION",
+    "ap_search_user": "TIMEOUT_PROVISION",
+    "status": "TIMEOUT_CRON_READ",
+    "user_create_access_token": "TIMEOUT_PROVISION",
+    "user_create_token": "TIMEOUT_KEY_CREATE",
+    "user_delete_session": "TIMEOUT_PROVISION",
+    "user_get_token": "TIMEOUT_KEY_CREATE",
+    "user_list_access_tokens": "TIMEOUT_PROVISION",
+    "user_list_tokens": "TIMEOUT_KEY_CREATE",
+    "user_log_self": "TIMEOUT_INTERACTIVE_READ",
+    "user_login": "TIMEOUT_PROVISION",
+    "user_reveal_token": "TIMEOUT_KEY_CREATE",
+    "user_self": "TIMEOUT_CRON_READ",
+    "user_verify_generate": "TIMEOUT_PROVISION"
+  }
+}

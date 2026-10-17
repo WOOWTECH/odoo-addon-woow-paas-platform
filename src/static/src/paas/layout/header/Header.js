@@ -16,7 +16,8 @@ const AI_ROUTES = [
     "ai-projects", "ai-tasks", "ai-task-detail", "ai-chat", "ai-project-kanban",
 ];
 // Bottom-nav destinations: the mobile back button is not shown on these.
-const TOP_LEVEL_ROUTES = ["dashboard", "workspaces", "ai-projects", "billing", "settings"];
+// LLM-01c：`llm` 的子頁共用同一個 routeName，所以子頁也不會出現「返回首頁」。
+const TOP_LEVEL_ROUTES = ["dashboard", "workspaces", "ai-projects", "llm", "billing", "settings"];
 // #1310：財務／設定子頁補上層麵包屑，手機版「返回」才有目的地。
 const BILLING_SUB_ROUTES = [
     "billing-topup", "billing-invoices", "billing-subscriptions", "billing-transactions",
