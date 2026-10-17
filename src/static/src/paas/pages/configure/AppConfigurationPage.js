@@ -20,6 +20,7 @@ import { settingsErrors } from "../../utils/tailscale_settings";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
+import { useFormErrorReveal } from "../../utils/form_feedback";
 
 /**
  * AppConfigurationPage Component
@@ -53,6 +54,8 @@ export class AppConfigurationPage extends Component {
             plansError: null,
             // Validation errors
             errors: {},
+            // X-LC-006-3：前端驗證每失敗一次 +1，觸發捲到第一個錯誤並聚焦。
+            errorRevealToken: 0,
             // Launch state
             launching: false,
             launchError: null,
@@ -61,6 +64,12 @@ export class AppConfigurationPage extends Component {
             oneTimeCredentials: null,
             createdServiceId: null,
         });
+        // X-LC-002-3／X-LC-006-3：送出失敗時把使用者帶到錯誤（欄位或頁尾的後端錯誤橫幅）。
+        useFormErrorReveal(
+            "configureRoot",
+            () => this.state.errorRevealToken,
+            () => this.state.launchError,
+        );
         this.router = useState(router);
 
         onMounted(() => {
@@ -344,7 +353,11 @@ export class AppConfigurationPage extends Component {
         }
 
         this.state.errors = errors;
-        return Object.keys(errors).length === 0;
+        const valid = Object.keys(errors).length === 0;
+        if (!valid) {
+            this.state.errorRevealToken++;
+        }
+        return valid;
     }
 
     /**

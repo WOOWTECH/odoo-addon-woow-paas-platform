@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.AppConfigurationPage">
-        <div class="o_woow_configure_page">
+        <div class="o_woow_configure_page" t-ref="configureRoot">
             <!-- Loading State -->
             <t t-if="state.loading">
                 <div class="o_woow_loading">
@@ -229,7 +229,8 @@
 
                 <!-- Launch Error -->
                 <t t-if="state.launchError">
-                    <div class="o_woow_error_message">
+                    <!-- X-LC-002-3：後端拒絕時捲到這裡並聚焦（useFormErrorReveal），讀屏立即播報。 -->
+                    <div class="o_woow_error_message o_woow_launch_error" role="alert" tabindex="-1">
                         <WoowIcon name="'error'" size="18"/>
                         <t t-esc="state.launchError"/>
                     </div>

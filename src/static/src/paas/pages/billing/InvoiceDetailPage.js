@@ -70,6 +70,16 @@ export class InvoiceDetailPage extends Component {
     );
   }
 
+  /**
+   * X-LC-006-6：麵包屑最後一段。原本在樣板裡寫字面值 'Detail'（運算式裡的字串不會被翻譯
+   * 抽取），發票不存在時中文介面露出英文；改走與路由標題相同的 msgid。
+   * @returns {string}
+   */
+  get breadcrumbLabel() {
+    const invoice = this.invoice;
+    return (invoice && (invoice.name || invoice.number)) || _t("Invoice Detail");
+  }
+
   get dueLabel() {
     if (!this.invoice) return "";
     const status = this.invoice.status_label || "draft";

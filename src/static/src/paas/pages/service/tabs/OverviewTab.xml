@@ -128,6 +128,8 @@
                             <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(publicUrl, 'url')" title="Copy URL">
                                 <WoowIcon name="copyIcon('url')" size="16"/>
                             </button>
+                            <!-- X-LC-006-4：看得到的文字回饋＋讀屏可播報（圖示換成 check 只有 16px，手機上幾乎看不出來）。 -->
+                            <span class="o_woow_copy_feedback" role="status" aria-live="polite"><t t-if="copyState.copied === 'url'">Copied.</t><t t-elif="copyState.failed === 'url'">Copy failed. Please select the text and copy it manually.</t></span>
                             <!-- #648 (b)：服務已就緒、但寬限期內都沒能解析到這個
                                  網址的 DNS record ⇒ 帶著保留放行。用與上面
                                  last_release_sync_at 同一個灰字 hint 形狀，**不**走
@@ -166,6 +168,8 @@
                                 <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.public_tunnel_url, 'tunnel')" t-att-title="publicTunnelCopyTitle">
                                     <WoowIcon name="copyIcon('tunnel')" size="16"/>
                                 </button>
+                                <!-- X-LC-006-4：看得到的文字回饋＋讀屏可播報（圖示換成 check 只有 16px，手機上幾乎看不出來）。 -->
+                                <span class="o_woow_copy_feedback" role="status" aria-live="polite"><t t-if="copyState.copied === 'tunnel'">Copied.</t><t t-elif="copyState.failed === 'tunnel'">Copy failed. Please select the text and copy it manually.</t></span>
                             </t>
                             <t t-elif="props.service.public_tunnel_error">
                                 <!-- #1559：ngrok 說得出原因（authtoken 錯、沒填、網域被占用、要重啟）時
@@ -189,6 +193,8 @@
                             <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.custom_domain, 'domain')" title="Copy domain">
                                 <WoowIcon name="copyIcon('domain')" size="16"/>
                             </button>
+                            <!-- X-LC-006-4：看得到的文字回饋＋讀屏可播報（圖示換成 check 只有 16px，手機上幾乎看不出來）。 -->
+                            <span class="o_woow_copy_feedback" role="status" aria-live="polite"><t t-if="copyState.copied === 'domain'">Copied.</t><t t-elif="copyState.failed === 'domain'">Copy failed. Please select the text and copy it manually.</t></span>
                         </span>
                     </div>
 

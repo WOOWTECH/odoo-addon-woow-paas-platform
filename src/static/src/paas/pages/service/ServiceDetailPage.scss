@@ -372,6 +372,17 @@ $woow-radius-lg: 1.25rem;
     gap: 0.5rem;
 }
 
+// X-LC-006-4：複製後的文字回饋（role=status，讀屏也會播報）；平常是空的、不佔位。
+.o_woow_copy_feedback {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: $woow-primary;
+
+    &:empty {
+        display: none;
+    }
+}
+
 .o_woow_copy_btn {
     background: transparent;
     border: none;
