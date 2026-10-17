@@ -910,9 +910,21 @@ class TestSecretsDoNotLeak(_Base):
             def get_param(self, key):
                 return self.value
 
-        env = {'ir.config_parameter': Icp(nac.PROXY_URL_STG)}
+        class RuntimeState:
+            guards = []
+
+            def _llm_call_guard(self, role):
+                guard = nac.CallGuard()
+                self.guards.append((role, guard))
+                return guard
+
+        state = RuntimeState()
+        env = {'ir.config_parameter': Icp(nac.PROXY_URL_STG), nac.RUNTIME_STATE_MODEL: state}
         environ = {nac.ENV_AUTH_CRON: '%s:%s' % (KID, SECRET)}
-        self.assertEqual(nac.get_newapi_client(env, nac.ROLE_CRON, environ=environ).role, 'cron')
+        client = nac.get_newapi_client(env, nac.ROLE_CRON, environ=environ)
+        self.assertEqual(client.role, 'cron')
+        self.assertEqual(state.guards[-1][0], 'cron')
+        self.assertIs(client._guard, state.guards[-1][1], '工廠一律掛上 DB 的 circuit／限速鉤子')
         with self.assertRaises(nac.NewApiConfigError) as caught:
             nac.get_newapi_client(env, nac.ROLE_WEB, environ=environ)
         self.assertEqual(caught.exception.code, 'signing_key_missing')

@@ -22,7 +22,7 @@ import logging
 import re
 import time
 import traceback
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from odoo import _, fields
 from odoo.exceptions import ValidationError
@@ -45,6 +45,12 @@ PARAM_CANARY_PARTNER_ID = 'woow_paas_platform.llm_canary_partner_id'
 PARAM_ALERT_EMAIL = 'woow_paas_platform.llm_alert_email'
 #: N13（選配）：告警 webhook，只收 ``https://``；沒設＝不送。
 PARAM_ALERT_WEBHOOK_URL = 'woow_paas_platform.llm_alert_webhook_url'
+#: 給使用者的 API base URL（DESIGN §2.11；LLM-02）：只收 :data:`ALLOWED_PUBLIC_BASE_URLS`。
+PARAM_PUBLIC_BASE_URL = 'woow_paas_platform.llm_public_base_url'
+ALLOWED_PUBLIC_BASE_URLS = frozenset({
+    'https://newapi.woowtech.io/v1',
+    'https://newapi-stg.woowtech.io/v1',
+})
 
 #: AI 模型分頁的全部 key；``hooks._CONFIG_PARAMETERS`` 必須涵蓋（登記測試守）。
 LLM_CONFIG_PARAMETERS = (
@@ -56,7 +62,15 @@ LLM_CONFIG_PARAMETERS = (
     PARAM_CANARY_PARTNER_ID,
     PARAM_ALERT_EMAIL,
     PARAM_ALERT_WEBHOOK_URL,
+    PARAM_PUBLIC_BASE_URL,
 )
+#: 一改就寫 ``llm_event(config_change)``、更新設定指紋並告警的 key（DESIGN §2.11）→ 錯誤碼。
+#: I8（LLM-12b）每次比對 ``llm_runtime_state.last_config_fingerprint``，SQL 直改也會被發現。
+CONFIG_CHANGE_CODES = {
+    PARAM_PROXY_URL: 'llm_config_proxy_url',
+    PARAM_PUBLIC_BASE_URL: 'llm_config_public_base_url',
+    PARAM_USERNAME_PREFIX: 'llm_config_username_prefix',
+}
 
 # --------------------------------------------------------------------------- #
 #  常數（不可設定；DESIGN §2.11 末、§4.1）                                       #
@@ -189,6 +203,14 @@ CONFIG_PROXY_AUTH_UNAVAILABLE_WEB = 'llm_proxy_auth_unavailable_web'
 CONFIG_ERROR_CODES = frozenset({
     CONFIG_CRYPTO_UNAVAILABLE, CONFIG_PROXY_AUTH_UNAVAILABLE, CONFIG_IDENTITY_MISMATCH,
     CONFIG_CRYPTO_UNAVAILABLE_WEB, CONFIG_PROXY_AUTH_UNAVAILABLE_WEB})
+#: circuit breaker 與 break-glass 的告警碼（LLM-02；DESIGN §3.6、§1.4.2-2）。circuit 被代理 401／403 或
+#: AP／OP 被拒打開時，碼是 ``llm_proxy_<class>``／``newapi_<code>``（上面兩個登記表裡已有）。
+CIRCUIT_FAILURES = nac.CIRCUIT_FAILURES_CODE
+BREAK_GLASS_USED = 'llm_break_glass_used'
+BREAK_GLASS_FAILED = 'llm_break_glass_failed'
+CIRCUIT_ERROR_CODES = frozenset({CIRCUIT_FAILURES, BREAK_GLASS_USED, BREAK_GLASS_FAILED})
+#: 設定變更（``config_change`` 事件與 ``config_changed`` 告警）的碼。
+CONFIG_CHANGE_ERROR_CODES = frozenset(CONFIG_CHANGE_CODES.values())
 #: :func:`safe_code`（``llm_event``）在值不在登記表時給的預設碼。
 UNKNOWN_CODE = 'llm_unknown_code'
 #: ``llm_event.result``：節流的 started → ok／failed／not_executed（LLM-02b）。之後的票新增結果碼加在這。
@@ -289,6 +311,12 @@ _PILOT_RE = re.compile(r'[0-9]{1,12}')
 _PILOT_INVALID = frozenset({-1})
 
 
+def taipei_day(now=None):
+    """台北日期（``YYYY-MM-DD``）：免費試用的「今天」、每日性質的工作以它當 key（N28）。"""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+
+
 def _truthy(value):
     return (value or '').strip().lower() in ('true', '1')
 
@@ -335,6 +363,11 @@ def llm_config(env):
     except nac.NewApiConfigError:
         identity_ok = False
     canary = (icp.get_param(PARAM_CANARY_PARTNER_ID) or '').strip()
+    public_base_url = (icp.get_param(PARAM_PUBLIC_BASE_URL) or '').strip()
+    if public_base_url and public_base_url not in ALLOWED_PUBLIC_BASE_URLS:
+        _logger.warning('[LLM] %s holds a value outside the allow-list; not shown',
+                        PARAM_PUBLIC_BASE_URL)
+        public_base_url = ''
     return {
         'proxy_state': proxy_state,
         'proxy_url': proxy_url,
@@ -344,7 +377,20 @@ def llm_config(env):
         'prefix': prefix,
         'block': block,
         'identity_ok': identity_ok,
+        'public_base_url': public_base_url or None,
     }
+
+
+def config_fingerprint(env):
+    """``newapi_proxy_url``／``llm_public_base_url``／``newapi_username_prefix`` 的指紋（DESIGN §2.11）。
+
+    sha256 的前 32 個 hex；值本身不進 ``llm_runtime_state``。I8（LLM-12b）拿它比對上一次記下的值。
+    """
+    import hashlib
+    icp = env['ir.config_parameter'].sudo()
+    text = '\n'.join('%s=%s' % (key, (icp.get_param(key) or '').strip())
+                     for key in sorted(CONFIG_CHANGE_CODES))
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:32]
 
 
 def llm_unconfigured(env, config=None):
@@ -379,6 +425,10 @@ def validate_llm_param(key, value):
     if key == PARAM_PROXY_URL and text not in nac.ALLOWED_PROXY_URLS:
         raise ValidationError(_(
             'The AI models proxy URL must be one of the in-cluster proxy addresses.'))
+    if key == PARAM_PUBLIC_BASE_URL and text not in ALLOWED_PUBLIC_BASE_URLS:
+        raise ValidationError(_(
+            'The AI models public base URL must be https://newapi.woowtech.io/v1 or '
+            'https://newapi-stg.woowtech.io/v1.'))
     if key == PARAM_USERNAME_PREFIX and not nac.USERNAME_PREFIX_RE.fullmatch(text):
         raise ValidationError(_(
             'The new-api username prefix must be "w" followed by one to three lowercase letters.'))
@@ -452,6 +502,11 @@ LLM_CRONS = {
         'woow_paas_platform.llm_event', '_cron_llm_event_cleanup'),
     'woow_paas_platform.ir_cron_llm_alert_delivery': (
         'woow_paas_platform.llm_event', '_cron_llm_alert_delivery'),
+    # LLM-02：互動讀取快取的背景刷新（SWR）與後台〔測試連線〕。
+    'woow_paas_platform.ir_cron_llm_swr_refresh': (
+        'woow_paas_platform.llm_swr_cache', '_cron_llm_swr_refresh'),
+    'woow_paas_platform.ir_cron_llm_connection_test': (
+        'woow_paas_platform.llm_runtime_state', '_cron_llm_connection_test'),
 }
 #: cron 當掉時告警（``LlmAlert.CRON_FAILED``）用的錯誤碼：每支 LLM cron 一個固定碼（封閉對照，
 #: 不從例外取任何字）。``TestLlmCronFramework`` 斷言鍵＝:data:`LLM_CRONS`。
@@ -462,7 +517,7 @@ LLM_CRON_ERROR_CODES = {
 ERROR_CODES = (
     API_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
-    | {UNKNOWN_CODE})
+    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
 
 
 def report_cron_failed(env, xmlid):
@@ -484,6 +539,17 @@ def report_config_unavailable(env, code):
     _report(env, 'CONFIG_UNAVAILABLE', code if code in CONFIG_ERROR_CODES else UNKNOWN_CODE)
 
 
+def report_circuit_open(env, code):
+    """circuit 剛打開（DESIGN §3.6）⇒ 告警 ``circuit_open``（錯誤碼＝原因；30 分鐘去重、全平台寄信預算）。"""
+    _report(env, 'CIRCUIT_OPEN', code if code in ERROR_CODES else UNKNOWN_CODE)
+
+
+def report_break_glass_used(env, result):
+    """每一次 break-glass（``bg``）呼叫都告警（DESIGN §1.4.2-2）：成功 ``llm_break_glass_used``，其他
+    ``llm_break_glass_failed``（例如代理回 ``break_glass_off``）。"""
+    _report(env, 'BREAK_GLASS_USED', BREAK_GLASS_USED if result.ok else BREAK_GLASS_FAILED)
+
+
 def _report(env, alert_name, code):
     # llm_event import llm_common：在這裡才 import（避免循環）。
     from .llm_event import LlmAlert
@@ -492,6 +558,26 @@ def _report(env, alert_name, code):
     except Exception:  # noqa: BLE001 - alerting must not break the cron framework
         _logger.error('[LLM] alert %s (%s) not raised: %s', alert_name, code,
                       llm_redact.redact(traceback.format_exc()))
+
+
+def circuit_allows(env, config):
+    """外呼類 cron 這一輪能不能跑（DESIGN §3.6）：關著 ⇒ True；開著 ⇒ False；半開 ⇒ 搶到的人做一次
+    AP 健康檢查（``NewApiClient.ap_health``，會碰 DB），通過才 True。
+
+    client 一律經 ``llm_account._llm_client``（測試換成 fake 的同一個點）。狀態讀不到（DB 錯誤）
+    ⇒ False（寧可少跑一輪）。
+    """
+    State = env['woow_paas_platform.llm_runtime_state'].sudo()
+
+    def probe():
+        client = env['woow_paas_platform.llm_account'].sudo()._llm_client(nac.ROLE_CRON)
+        return client.ap_health(config['prefix'], timeout=nac.TIMEOUT_CRON_READ)
+
+    try:
+        return State._llm_circuit_gate(probe)
+    except Exception:  # noqa: BLE001 - the gate must never crash the cron framework
+        _logger.error('[LLM] circuit gate failed: %s', llm_redact.redact(traceback.format_exc()))
+        return False
 
 
 class LlmCronTick:
@@ -527,13 +613,17 @@ class LlmCronTick:
         self.done += count
 
 
-def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, config=None):
+def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, config=None,
+                 outbound=True):
     """每支 LLM cron 的唯一入口（N27、N28）。
 
     * ``config``：呼叫端已經讀好的 :func:`llm_config`（沒給就在這裡讀）。model 檔各自以自己
       import 的 ``llm_config`` 讀好再傳進來——committed 測試只在本行程 patch 那個名字、不 commit
       任何設定（``tests/llm_test_support.py``）。
     * **未設定 ⇒ 直接 return**：不呼叫 ``work``——不建 client、不外呼、不寫 incident、不告警。
+    * ``outbound``（預設 True：這支 cron 會打 new-api）：**circuit 開著 ⇒ 跳過這一輪**（DESIGN §3.6）；
+      半開時先做健康檢查（:func:`circuit_allows`），通過才跑。不碰 new-api 的 cron（稽核清理、告警
+      webhook）傳 ``False``，circuit 開著照跑。
     * ``work(config, tick)`` 回 truthy（或 ``tick.more``）⇒ ``_trigger()`` 同一支 cron（``tick.delay``
       秒之後；0＝立刻）。
     * ``work`` 丟的例外在這裡收掉：traceback 經 :func:`llm_redact.redact` 才進 log，主 cursor
@@ -544,6 +634,9 @@ def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, conf
     """
     config = config or llm_config(env)
     if llm_unconfigured(env, config):
+        return False
+    if outbound and not circuit_allows(env, config):
+        _logger.info('[LLM] cron %s skipped this tick: the circuit breaker is open', xmlid)
         return False
     tick = LlmCronTick(seconds, items)
     try:

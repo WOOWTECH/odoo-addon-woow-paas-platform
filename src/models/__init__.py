@@ -110,6 +110,7 @@ from . import llm_api_key
 from . import llm_event
 from . import llm_terms
 from . import llm_runtime_state
+from . import llm_swr
 # 商用驗收 X-SET-007-1／X-SEC-007：自助設定密碼的強度下限、忘記密碼請求排隊（不洩露帳號是否存在）。
 from . import res_users_password_policy
 from . import password_reset_request

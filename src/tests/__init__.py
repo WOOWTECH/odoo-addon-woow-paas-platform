@@ -1220,6 +1220,9 @@ from . import test_llm_tracer
 from . import test_llm_platform_foundation
 # LLM-04：《AI 模型服務條款》的版本、發佈、同意與重新同意的 gate（llm_terms）。
 from . import test_llm_terms
+# LLM-02：newapi_client／代理完整化的 Odoo 端（circuit breaker、AP 限速、SWR 快取、設定變更稽核、
+# MCP 跳板、後台〔測試連線〕）。
+from . import test_llm_client_hardening
 # INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
 from . import test_vpn_node_status_fix005
 # INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。

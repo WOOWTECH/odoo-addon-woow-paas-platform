@@ -1272,10 +1272,14 @@ def signing_key_for_role(role, environ=None):
     return parse_signing_key(environ.get(_ROLE_ENV[role]))
 
 
+RUNTIME_STATE_MODEL = 'woow_paas_platform.llm_runtime_state'
+
+
 def get_newapi_client(env, role, environ=None):
     """回傳設定好的 :class:`NewApiClient`；沒設定或 env 金鑰不合 ⇒ :class:`NewApiConfigError`。
 
     ``role`` 決定用哪一組簽章金鑰：web 程式路徑一律 ``ROLE_WEB``、cron 一律 ``ROLE_CRON``。
+    一律掛上 DB 的 :class:`CallGuard`（circuit breaker＋AP 限速，``llm_runtime_state``）。
     """
     if role not in _ROLE_ENV:
         raise NewApiConfigError('role') from None
@@ -1284,4 +1288,5 @@ def get_newapi_client(env, role, environ=None):
     if state != 'usable':
         raise NewApiConfigError('proxy_url_%s' % state) from None
     kid, secret = signing_key_for_role(role, environ)
-    return NewApiClient(url, kid, secret, role)
+    guard = env[RUNTIME_STATE_MODEL]._llm_call_guard(role)
+    return NewApiClient(url, kid, secret, role, guard=guard)

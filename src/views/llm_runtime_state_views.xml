@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- LLM-02：AI 模型的連線狀態（llm_runtime_state 單例；system 的後台）。circuit breaker、AP 限速、
+         guard 與〔測試連線〕（DESIGN §3.6、§1.5；代理 :8081/readyz、AP 健康檢查、匿名 /api/status
+         不變量）。表單只讀：這張表只經 service method 寫。 -->
+    <record id="view_llm_runtime_state_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_runtime_state.form</field>
+        <field name="model">woow_paas_platform.llm_runtime_state</field>
+        <field name="arch" type="xml">
+            <form string="AI Models Connection" create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_llm_test_connection" type="object" string="Test connection"
+                            class="btn-primary" groups="base.group_system"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Circuit breaker">
+                            <field name="circuit_open_until"/>
+                            <field name="circuit_failures"/>
+                            <field name="circuit_reason"/>
+                            <field name="circuit_opened_at"/>
+                        </group>
+                        <group string="Guard">
+                            <field name="guard_tripped"/>
+                            <field name="guard_reasons"/>
+                            <field name="guard_since"/>
+                            <field name="dr_mode"/>
+                        </group>
+                        <group string="Service account rate limit">
+                            <field name="ap_rate_window"/>
+                            <field name="ap_rate_count"/>
+                        </group>
+                        <group string="Balance refresh">
+                            <field name="balance_refresh_page"/>
+                            <field name="balance_refresh_started_at"/>
+                            <field name="balance_refresh_finished_at"/>
+                        </group>
+                    </group>
+                    <group string="Connection test">
+                        <field name="connection_test_requested_at"/>
+                        <field name="connection_test_at"/>
+                        <field name="connection_test_result" widget="text" class="font-monospace"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_llm_runtime_state" model="ir.actions.server">
+        <field name="name">AI Models Connection</field>
+        <field name="model_id" ref="model_woow_paas_platform_llm_runtime_state"/>
+        <field name="state">code</field>
+        <field name="code">action = model._llm_action_open()</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+    </record>
+
+    <menuitem
+        id="menu_llm_runtime_state"
+        name="Connection status"
+        parent="menu_llm"
+        action="action_llm_runtime_state"
+        groups="base.group_system"
+        sequence="20"/>
+</odoo>
