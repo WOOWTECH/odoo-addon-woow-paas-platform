@@ -19,7 +19,9 @@ def on(monkeypatch):
     monkeypatch.setattr(settings, "tenant_egress_gate_enabled", True)
     monkeypatch.setattr(settings, "tenant_baseline_egress_enabled", True)
     monkeypatch.setattr(settings, "psa_exempt_namespaces", "paas-ws-ab6564da")
-    with patch.object(helm_module, "_has_baseline_egress", return_value=True):
+    # 預設「讀不到叢集現況」：非 hook Job／Pod 的查詢不影響既有斷言（各測試自己 patch 覆寫）。
+    with patch.object(helm_module, "_has_baseline_egress", return_value=True), \
+            patch.object(helm_module, "_live_objects", return_value=None):
         yield
 
 
@@ -88,6 +90,26 @@ class TestTenantPolicy:
         assert lo.call_args[0][1] == "deployments,statefulsets,daemonsets,cronjobs"
         assert options["mirror_live"] is True
         assert live == {"Deployment/web": {"gate": True, "avoid": False}}
+
+    def test_immutable_workloads_are_read_on_every_install_and_upgrade(self, on):
+        """netpol-startup-window：非 hook Job／bare Pod 要知道叢集上有沒有同名物件才能插 gate。"""
+        job = {"kind": "Job", "metadata": {"name": "init-db"},
+               "spec": {"template": {"spec": {"containers": []}}}}
+        with patch.object(helm_module, "_live_objects", return_value=[job]) as lo:
+            options, live = _tenant_policy(NS)
+        assert lo.call_args_list[0][0] == (NS, "jobs,pods")
+        assert options["immutable_live"] == {"Job/init-db": {"gate_container": None, "affinity": None, "avoid": False}}
+        assert "mirror_live" not in options and live == {}
+
+    def test_immutable_lookup_failure_leaves_key_out(self, on):
+        """讀不到＝未知：不帶 immutable_live，post-renderer 退回「不動非 hook Job／Pod」。"""
+        options, _ = _tenant_policy(NS)
+        assert "immutable_live" not in options
+
+    def test_immutable_lookup_skipped_when_policy_off(self, monkeypatch):
+        with patch.object(helm_module, "_live_objects") as lo:
+            assert _tenant_policy(NS) == ({}, {})
+        lo.assert_not_called()
 
     def test_mirror_with_unreadable_cluster_skips_policy(self, on):
         with patch.object(helm_module, "_live_objects", return_value=None):

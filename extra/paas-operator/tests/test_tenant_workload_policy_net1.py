@@ -273,11 +273,98 @@ class TestImmutableTemplates:
             meta["annotations"] = {"helm.sh/hook": "post-install"}
         return {"kind": "Job", "metadata": meta, "spec": {"template": {"spec": {"containers": [{"name": "c", "image": "x"}]}}}}
 
-    def test_plain_job_is_never_touched(self):
-        """非 hook 的 Job 改 template 會讓 helm upgrade 整個 immutable 失敗。"""
+    def test_plain_job_untouched_when_live_state_unknown(self):
+        """非 hook 的 Job 改 template 會讓 helm upgrade 整個 immutable 失敗——叢集現況未知就不動。"""
         out, log = pol.apply_tenant_policy([self.job()], {"avoid_nodes": AVOID, "egress_gate": GATE_CFG})
         assert out[0] == self.job()
         assert "immutable" in log[0]
+
+    # --- netpol-startup-window 補洞：叢集上還沒有的非 hook Job／bare Pod 一樣插 gate ---------
+
+    @staticmethod
+    def bare_pod(name="p", spec_extra=None):
+        spec = {"containers": [{"name": "c", "image": "x"}]}
+        spec.update(spec_extra or {})
+        return {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": name}, "spec": spec}
+
+    def test_new_plain_job_gets_the_policy(self):
+        """叢集上沒有同名 Job（新安裝、或 Job 已被 TTL 清掉）：create 不受 immutable 限制，照常插。"""
+        opts = {"avoid_nodes": AVOID, "egress_gate": GATE_CFG, "immutable_live": {}}
+        out, log = pol.apply_tenant_policy([self.job()], opts)
+        spec = out[0]["spec"]["template"]["spec"]
+        assert spec["initContainers"][0]["name"] == pol.GATE_CONTAINER_NAME
+        assert terms_of(spec)
+        assert any("Job/j: egress-gate added" in line for line in log)
+
+    def test_new_bare_pod_gets_the_policy(self):
+        opts = {"avoid_nodes": AVOID, "egress_gate": GATE_CFG, "immutable_live": {"Pod/other": {}}}
+        out, _ = pol.apply_tenant_policy([self.bare_pod()], opts)
+        assert out[0]["spec"]["initContainers"][0]["name"] == pol.GATE_CONTAINER_NAME
+        assert terms_of(out[0]["spec"])
+
+    def test_new_host_network_bare_pod_still_skipped(self):
+        opts = {"egress_gate": GATE_CFG, "immutable_live": {}}
+        out, log = pol.apply_tenant_policy([self.bare_pod(spec_extra={"hostNetwork": True})], opts)
+        assert "initContainers" not in out[0]["spec"]
+        assert any("skip-host-network" in line for line in log)
+
+    def test_existing_job_without_policy_is_left_exactly_as_rendered(self):
+        """已存在、當初沒插 gate 的 Job：再插就是 immutable 失敗——保持原樣。"""
+        live = {"Job/j": {"gate_container": None, "affinity": None, "avoid": False}}
+        opts = {"avoid_nodes": AVOID, "egress_gate": GATE_CFG, "immutable_live": live}
+        out, log = pol.apply_tenant_policy([self.job()], opts)
+        assert out[0] == self.job()
+        assert any("kept as live" in line for line in log)
+
+    def test_existing_job_with_gate_gets_the_live_gate_verbatim(self):
+        """設定之後改過（例如逾時 60→30）也要渲染成叢集上那一份，否則 template 不同＝immutable 失敗。"""
+        live_gate = pol.build_egress_gate_container(timeout_seconds=30)
+        live_gate["terminationMessagePath"] = "/dev/termination-log"   # API server 補的預設值
+        live_aff = {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
+            {"matchExpressions": [{"key": pol.HOSTNAME_LABEL, "operator": "NotIn", "values": ["old-node"]}]}]}}}
+        live = {"Job/j": {"gate_container": live_gate, "affinity": live_aff, "avoid": True}}
+        opts = {"avoid_nodes": AVOID, "egress_gate": GATE_CFG, "immutable_live": live}
+        out, _ = pol.apply_tenant_policy([self.job()], opts)
+        spec = out[0]["spec"]["template"]["spec"]
+        assert spec["initContainers"] == [live_gate]
+        assert spec["affinity"] == live_aff
+
+    def test_existing_job_gate_only_mirrors_gate_only(self):
+        live = {"Job/j": {"gate_container": pol.build_egress_gate_container(), "affinity": None, "avoid": False}}
+        out, _ = pol.apply_tenant_policy([self.job()], {"avoid_nodes": AVOID, "egress_gate": GATE_CFG,
+                                                        "immutable_live": live})
+        spec = out[0]["spec"]["template"]["spec"]
+        assert spec["initContainers"][0]["name"] == pol.GATE_CONTAINER_NAME
+        assert "affinity" not in spec
+
+    def test_hook_job_ignores_immutable_live(self):
+        """hook 每次刪掉重建，不必看叢集現況（沿用原本行為）。"""
+        live = {"Job/j": {"gate_container": None, "affinity": None, "avoid": False}}
+        out, _ = pol.apply_tenant_policy([self.job(hook=True)], {"egress_gate": GATE_CFG, "immutable_live": live})
+        assert out[0]["spec"]["template"]["spec"]["initContainers"][0]["name"] == pol.GATE_CONTAINER_NAME
+
+    def test_skip_annotation_respected_for_new_plain_job(self):
+        job = self.job()
+        job["spec"]["template"]["metadata"] = {"annotations": {pol.GATE_SKIP_ANNOTATION: "skip"}}
+        out, _ = pol.apply_tenant_policy([job], {"egress_gate": GATE_CFG, "immutable_live": {}})
+        assert "initContainers" not in out[0]["spec"]["template"]["spec"]
+
+    def test_immutable_live_facts_reads_jobs_and_bare_pods_only(self):
+        gated, _ = pol.apply_tenant_policy([self.job(), self.bare_pod()],
+                                           {"avoid_nodes": AVOID, "egress_gate": GATE_CFG, "immutable_live": {}})
+        owned = self.bare_pod("web-7c9-abcde")
+        owned["metadata"]["ownerReferences"] = [{"kind": "ReplicaSet", "name": "web-7c9"}]
+        plain_job = dict(self.job(), metadata={"name": "plain"})
+        items = [gated[0], gated[1], owned, plain_job, deployment()]
+        facts = pol.immutable_live_facts(items, AVOID)
+        assert set(facts) == {"Job/j", "Pod/p", "Job/plain"}
+        assert facts["Job/j"]["gate_container"]["name"] == pol.GATE_CONTAINER_NAME
+        assert facts["Job/j"]["avoid"] is True and facts["Job/j"]["affinity"]
+        assert facts["Job/plain"] == {"gate_container": None, "affinity": None, "avoid": False}
+
+    def test_immutable_live_facts_handles_garbage(self):
+        assert pol.immutable_live_facts(None, AVOID) == {}
+        assert pol.immutable_live_facts([None, {"kind": "Job"}, {"kind": "Pod", "metadata": {"name": "x"}}], AVOID) == {}
 
     def test_hook_job_is_patched(self):
         out, _ = pol.apply_tenant_policy([self.job(hook=True)], {"avoid_nodes": AVOID, "egress_gate": GATE_CFG})
@@ -357,6 +444,17 @@ class TestPostRendererProcess:
         assert spec["initContainers"][0]["name"] == pol.GATE_CONTAINER_NAME
         assert terms_of(spec)
         assert "tenant-policy: Deployment/web: egress-gate added" in err
+
+    def test_new_plain_job_is_gated_in_script_mode(self):
+        """netpol-startup-window：helm 實際呼叫方式下，叢集上沒有的非 hook Job 也拿到 gate。"""
+        job = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": "init"},
+               "spec": {"template": {"spec": {"restartPolicy": "Never", "containers": [{"name": "c", "image": "x"}]}}}}
+        out, err = run_renderer([job], {"tenant": {"egress_gate": GATE_CFG, "immutable_live": {}}})
+        assert out[0]["spec"]["template"]["spec"]["initContainers"][0]["name"] == pol.GATE_CONTAINER_NAME
+        assert "tenant-policy: Job/init: egress-gate added" in err
+        kept, _ = run_renderer([job], {"tenant": {"egress_gate": GATE_CFG, "immutable_live": {
+            "Job/init": {"gate_container": None, "affinity": None, "avoid": False}}}})
+        assert kept == [job]
 
     def test_pvc_stage_still_runs_alongside(self):
         out, _ = run_renderer([{"kind": "PersistentVolumeClaim", "metadata": {"name": "d"}}, deployment()],

@@ -46,8 +46,11 @@ source: 商用驗收 AI-FIX-NET-1（缺陷 X-SEC-003-1／AI-PI-004-5／AI-LLM-01
   * chart 自己的 NetworkPolicy 若放行 k8s API（open-design console 明確放 `10.43.0.1/32`），改探測 `status.hostIP:10250`
     （節點 kubelet，空窗期間實測連得到、baseline 的 `192.168.0.0/16` 擋它）；兩個都被放行就略過。pod template 加
     annotation `paas.woowtech.io/egress-gate: skip` 可逐一退出。
-  * 不插：`hostNetwork`、KubeVirt VM（virt-launcher 由 KubeVirt 建）、非 helm hook 的 `Job`／bare `Pod`（template 不可變，改了
-    `helm upgrade` 會整個 immutable 失敗）、PSA 例外 ns（管理者用的 Omnigent）。
+  * 不插：`hostNetwork`、KubeVirt VM（virt-launcher 由 KubeVirt 建）、PSA 例外 ns（管理者用的 Omnigent）。
+  * 非 helm hook 的 `Job`／bare `Pod`（template 不可變，已存在的物件被改 `helm upgrade` 會整個 immutable 失敗；
+    2026-10-17 netpol-startup-window 補洞）：operator 每次 install／upgrade 讀一次 `kubectl get jobs,pods`，
+    叢集上**還沒有**同名物件（新安裝、Job 已被 TTL 清掉）就照常插；**已存在**就照叢集上那份渲染——有 gate 原樣帶回
+    （設定之後改過也帶回舊的那份）、有節點迴避就帶回叢集上的 affinity、沒有就不加；讀不到叢集現況＝沿用舊行為不動。
   * 只在 `TENANT_BASELINE_EGRESS_ENABLED` 也開、且該 ns 真的有 `paas-baseline-egress` 時才插（否則 gate 永遠等不到）。
 * **節點迴避**：`TENANT_AVOID_NODES`（逗號分隔）→ 每個 pod template 加 required `nodeAffinity` `hostname NotIn [...]`。
   `nodeSelectorTerms` 之間是 OR，所以條件要 AND 進**每一個**既有 term；`nodeName` 釘死或 `nodeSelector` hostname 與清單矛盾的 pod 不動。
@@ -75,7 +78,10 @@ source: 商用驗收 AI-FIX-NET-1（缺陷 X-SEC-003-1／AI-PI-004-5／AI-LLM-01
 
 ## 已知限制（沒有被這個變更涵蓋）
 
-* 不是 helm 建立的租戶 pod（operator 以 kubectl 建的 Job、KubeVirt 的 virt-launcher）。
+* 不是 helm 建立的租戶 pod：KubeVirt 的 virt-launcher；operator 在執行期建立的資料取回 Pod（`services/data_retrieval.py`，
+  平台自己的 nginx、自帶 egress 全擋的 NetworkPolicy，不跑租戶程式碼）；chart 內程式在執行期建立的 pod——Omnigent managed
+  runner 由 omnigent chart 0.1.9 自己插同一個 gate（woow-paas-charts #226）。叢集層通用解（所有 `paas-ws-*` 新 pod 由
+  MutatingAdmissionPolicy 或自建 webhook 注入）需要 k3s feature gate 或新元件，另案決策。
 * 既有 pod：政策只在之後的 install／upgrade 生效，要等該服務下一次 Redeploy（會重啟一次）。
 * gate 容器本身在空窗內執行——它是我們的程式碼，不是租戶的。
 * 上線順序與驗收：見 PR 描述；上線後由各 QA 實例所屬 lane 以 RETEST 重跑原測項。
