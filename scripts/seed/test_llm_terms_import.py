@@ -11,9 +11,15 @@ CI:   ``.gitea/workflows/repo-lint.yml`` 的「scripts/ 自我測試」（script
    外部連結都開新分頁。
 2. 不支援的寫法一律報錯（不悄悄掉內容），而且每一條規則都證明會觸發。
 3. ``--format shell`` 產生的程式是合法的 Python。
+4. D20：條款本體還寫著「0 點模型」就拒絕匯入（published 不能改，鎖進去就只能再發一版）。本鏈還不含
+   #1815，repo 裡的草稿是第一輪的文字：:meth:`TestRealDraft.test_real_draft_follows_d20_or_is_refused`
+   在兩種狀態下都有斷言（還有舊字句 ⇒ 預設匯入失敗；#1815 rebase 進來之後 ⇒ 預設匯入成功）。
 """
+import contextlib
+import io
 import json
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -38,14 +44,25 @@ class TestRealDraft(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = m.DEFAULT_DOC.read_text(encoding='utf-8')
-        cls.record = m.build_record(cls.text)
-        cls.html = cls.record['content_html']
         cls.body = m.strip_notes(m.extract_body(cls.text))
+        # 轉換本身（結構、標籤、連結）不受 D20 守線影響：直接轉，D20 另外驗。
+        cls.html = m.body_to_html(cls.body)
+        cls.record = {'version': m.DEFAULT_VERSION, 'title': m.DEFAULT_TITLE,
+                      'content_html': cls.html, 'requires_reaccept': True}
 
     def test_defaults_follow_the_import_section(self):
-        self.assertEqual((self.record['version'], self.record['title'],
-                          self.record['requires_reaccept']),
+        record = m.build_record(_doc('x'))
+        self.assertEqual((record['version'], record['title'], record['requires_reaccept']),
                          ('2026-10-draft-1', 'AI 模型服務條款（草稿，尚未生效）', True))
+
+    def test_real_draft_follows_d20_or_is_refused(self):
+        if m.UNSOLD_MODELS_RE.search(self.html):
+            # 第一輪的文字（本鏈 rebase 到 #1815 之前）：預設匯入一定失敗，不會把舊字句鎖進 published。
+            with self.assertRaises(m.TermsFormatError) as caught:
+                m.build_record(self.text)
+            self.assertIn('D20', str(caught.exception))
+        else:
+            self.assertEqual(m.build_record(self.text), self.record)
 
     def test_review_notes_are_gone_and_draft_markers_stay(self):
         self.assertIn(m.NOTE_PREFIX, m.extract_body(self.text), '陽性對照：原文有註記')
@@ -156,6 +173,34 @@ class TestConverter(unittest.TestCase):
         with self.assertRaises(m.TermsFormatError):
             m.build_record(_doc('> 審閱註記｜只有註記'))
         self.assertFalse(m.build_record(_doc('x'), requires_reaccept=False)['requires_reaccept'])
+
+    def test_unsold_zero_point_models_are_refused(self):
+        for body in ('包括付費模型、0 點模型與免費試用模型', '- **0點模型**：說明', '０點模型',
+                     '零點模型由上游供應商免費提供', '### 第 2 條 0 點模型'):
+            with self.subTest(body=body), self.assertRaises(m.TermsFormatError) as caught:
+                self.convert(body)
+            self.assertIn('D20', str(caught.exception))
+        for body in ('單次轉換 50 點模型不限', '透支 10 點', '付費模型與免費試用模型'):
+            with self.subTest(allowed=body):
+                self.convert(body)
+        # 只出現在審閱註記裡（匯入時會去掉）不算。
+        self.convert('段落\n\n> 審閱註記｜所以條款不另設「0 點模型」類別')
+
+    def test_cli_refuses_without_writing_anything(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = Path(tmp) / 'terms.md'
+            doc.write_text(_doc('付費模型與 0 點模型'), encoding='utf-8')
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = m.main(['--doc', str(doc), '--format', 'shell'])
+            self.assertEqual((rc, out.getvalue()), (2, ''))
+            self.assertIn('D20', err.getvalue())
+            doc.write_text(_doc('付費模型與免費試用模型'), encoding='utf-8')
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = m.main(['--doc', str(doc), '--format', 'shell'])
+            self.assertEqual(rc, 0)
+            compile(out.getvalue(), 'terms.py', 'exec')
 
 
 if __name__ == '__main__':

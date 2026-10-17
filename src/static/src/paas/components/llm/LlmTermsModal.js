@@ -35,6 +35,9 @@ export function termsLinkAction(href) {
  * - `mode="accept"`：總覽「條款已更新」橫幅的〔查看並同意〕。〔我已閱讀並同意〕送
  *   `/api/llm/account/accept_terms`，帶的是**對話框裡顯示的那一版**：送出前又改版了，後端回
  *   `llm_tos_outdated`，這裡重新讀條款、顯示新版，使用者要再按一次。
+ *   `blocking`（頁面的 `tosBlocking`＝`/api/llm/state` 的 `tos.blocking`）決定底部的提示：會擋才說
+ *   「同意後即可再建立金鑰…」；`requires_reaccept=false` 的改版什麼都沒擋，提示也不能暗示有東西被擋
+ *   （畫面與 gate 要一致；LLM-05 審查）。
  * - 關閉：`onClose({ accepted, version })`（`version`＝對話框讀到的版本，頁面據此判斷畫面上的版本
  *   是否已經過期）。Esc、背景、右上角都能關（同意送出中除外）；Tab 只在對話框裡循環、背景 inert。
  *   這裡沒有一次性金鑰對話框的 history 哨兵：關掉條款不會遺失任何東西。
@@ -44,6 +47,8 @@ export class LlmTermsModal extends Component {
   static components = { WoowButton, WoowIcon };
   static props = {
     mode: { type: String, validate: (mode) => mode === "read" || mode === "accept" },
+    /** accept 模式：條款 gate 目前會不會擋（建金鑰、轉換、啟用金鑰）。沒給＝不擋。 */
+    blocking: { type: Boolean, optional: true },
     onClose: { type: Function },
   };
 
@@ -134,7 +139,9 @@ export class LlmTermsModal extends Component {
   }
 
   get acceptHint() {
-    return _t("Accepting lets you create keys, convert points and re-enable keys again. Existing keys keep working either way.");
+    return this.props.blocking === true
+      ? _t("Accepting lets you create keys, convert points and re-enable keys again. Existing keys keep working either way.")
+      : _t("This update does not affect anything you can do now. Existing keys keep working.");
   }
 
   get closeLabel() {

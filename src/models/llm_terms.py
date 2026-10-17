@@ -17,7 +17,8 @@
   時分不出先後。
 * **草稿文字**（D15）：內容或標題含「草稿，尚未生效」或【待…】標記＝草稿文字（``is_draft_text``）。
   stg 可以發佈草稿文字（畫面會標「草稿，尚未生效」）；**正式站不能**——判準是 new-api 使用者名稱前綴：
-  ``newapi_username_prefix`` 是正式站的 ``wp``（沒設也是 ``wp``）＝正式站（DESIGN N14）。
+  ``newapi_username_prefix`` 是正式站的 ``wp``（沒設也是 ``wp``）＝正式站（DESIGN N14）。發佈時直接
+  檢查標題與內容（不信存下來的旗標）；``is_draft_text`` 只有 compute 能寫（create／write 都擋）。
 
 條款內容是資料值，不進 ``.po``（``docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md``）：
 ``title``／``content_html`` 都不是 ``translate=True``。``content_html`` 是 ``fields.Html``（寫入時伺服器端
@@ -53,6 +54,9 @@ DRAFT_MARKERS = ('草稿，尚未生效', '【待')
 _STATE_FIELDS = frozenset({'state', 'published_at', 'retired_at', 'publish_seq'})
 #: published／retired 之後就不能改的欄位（使用者同意的是這些內容）。
 _CONTENT_FIELDS = frozenset({'version', 'title', 'content_html', 'requires_reaccept'})
+#: 由標題與內容算出來的欄位：ORM 的 create／write 不會替 stored compute 欄位擋 readonly，直接寫入就能讓
+#: 草稿文字躲過 D15、或拿掉已發佈版本的「草稿，尚未生效」標示（審查 LLM-04 第 4 點）。
+_COMPUTED_FIELDS = frozenset({'is_draft_text'})
 #: 使用者查得到的狀態（草稿不對外）。
 _PUBLIC_STATES = ('published', 'retired')
 
@@ -153,12 +157,16 @@ class LlmTerms(models.Model):
             for vals in vals_list:
                 if set(vals) & (_STATE_FIELDS - {'state'}) or vals.get('state', 'draft') != 'draft':
                     raise AccessError(_('A terms version is always created as a draft.'))
+                if set(vals) & _COMPUTED_FIELDS:
+                    raise AccessError(_('Draft text is computed from the title and the content.'))
         return _without_llm_internal(super().create(vals_list))
 
     def write(self, vals):
         if not _is_llm_internal(self.env):
             if set(vals) & _STATE_FIELDS:
                 raise AccessError(_('Use Publish to change the state of a terms version.'))
+            if set(vals) & _COMPUTED_FIELDS:
+                raise AccessError(_('Draft text is computed from the title and the content.'))
             if set(vals) & _CONTENT_FIELDS and any(r.state != 'draft' for r in self):
                 raise UserError(_(
                     'A published or retired terms version cannot be changed. '
@@ -198,7 +206,8 @@ class LlmTerms(models.Model):
             raise UserError(_('Only a draft terms version can be published.'))
         if not (self.content_html and re.sub(r'<[^>]*>|\s|&nbsp;', '', str(self.content_html))):
             raise UserError(_('The terms content is empty.'))
-        if self.is_draft_text and _is_production(self.env):
+        # 直接看標題與內容，不信存下來的 is_draft_text（D15 的判準不能靠一個可以被寫掉的旗標）。
+        if _has_draft_markers(self.title, self.content_html) and _is_production(self.env):
             raise UserError(_(
                 'Draft terms (marked 草稿，尚未生效 or 【待…】) can only be published on staging. '
                 'Production can only publish the finalized text (D15).'))

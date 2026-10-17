@@ -76,7 +76,7 @@ const TERMS = Object.freeze({
 });
 
 /** 建一個對話框：`terms` 是 fetchTerms 依序回的結果，`accept` 是 acceptTerms 的實作。 */
-function open({ mode = "read", terms = [{ success: true, data: TERMS }], accept } = {}) {
+function open({ mode = "read", blocking, terms = [{ success: true, data: TERMS }], accept } = {}) {
   globalThis.__llmHooks = { mounted: [], unmount: [] };
   globalThis.__llmRefs = {};
   globalThis.__llmSanitized = [];
@@ -97,6 +97,7 @@ function open({ mode = "read", terms = [{ success: true, data: TERMS }], accept 
   const closes = [];
   const modal = new LlmTermsModal();
   modal.props = { mode, onClose: (arg) => closes.push(arg) };
+  if (blocking !== undefined) modal.props.blocking = blocking;
   modal.setup();
   return { modal, closes, calls };
 }
@@ -162,6 +163,7 @@ test("accept 模式：送顯示中的那一版；成功就關閉並回報 accept
   let resolve;
   const { modal, closes, calls } = open({
     mode: "accept",
+    blocking: true,
     accept: () => new Promise((r) => { resolve = r; }),
   });
   await mount(modal);
@@ -177,6 +179,17 @@ test("accept 模式：送顯示中的那一版；成功就關閉並回報 accept
   await pending;
   assert.deepEqual(calls.accept, [TERMS.version]);
   assert.deepEqual(closes, [{ accepted: true, version: TERMS.version }]);
+});
+
+test("accept 模式的提示跟著 gate：會擋才說「同意後即可再建立金鑰…」，不擋的改版不暗示有東西被擋", async () => {
+  const blocking = "同意後即可再建立金鑰、轉換點數與重新啟用金鑰；不論是否同意，既有金鑰都照常可用。";
+  const notBlocking = "這次改版不影響目前的操作；既有金鑰都照常可用。";
+  for (const [value, hint] of [[true, blocking], [false, notBlocking], [undefined, notBlocking]]) {
+    const { modal } = open({ mode: "accept", blocking: value });
+    await mount(modal);
+    assert.equal(modal.canAccept, true, String(value));
+    assert.equal(modal.acceptHint, hint, `blocking=${value}`);
+  }
 });
 
 test("accept 模式：送出前又改版（llm_tos_outdated）⇒ 顯示新版、不關閉，要再按一次", async () => {

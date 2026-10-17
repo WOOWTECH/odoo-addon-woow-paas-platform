@@ -19,6 +19,15 @@ Run:
   （``h1``／``h2``、表格、原始 HTML、圖片、引用區塊、清單項目的續行…）：轉換器寧可失敗，也不能
   悄悄掉內容——使用者同意的是畫面上那一份。輸出的標籤都在 ``html_sanitize.js`` 的 ``ALLOWED_TAGS`` 內。
 * 所有文字先 HTML escape，再套行內格式。
+* **D20 守線**：條款本體（去掉審閱註記之後）還寫著「0 點模型」（或「０點模型」「零點模型」）⇒ 報錯、
+  不產生任何輸出。D20 定案成本 0 的 13 個 OpenRouter 免費端點不賣，條款不設這個模型類別；published 的
+  版本不能改，用舊文字發佈了就只能再發一版、讓所有人重新同意。規則與
+  ``scripts/audit/test_ai_models_terms_draft.py`` 的 ``unsold-zero-point-models``（LLM-05 第二輪，#1815）
+  同一個 regex。本鏈（從 ``fix/llm-02b-review-2`` 疊上來）還不含 #1815，repo 裡的草稿是第一輪的文字，
+  所以**在 #1815 合併、本鏈 rebase 之前，沙盒與展示站一律用 ``--doc`` 匯入 #1815 的文字**::
+
+      git show origin/docs/llm-05-terms-draft:docs/reference/features/ai-models-terms-draft.md > /tmp/terms.md
+      python3 scripts/seed/llm_terms_import.py --doc /tmp/terms.md --format shell > /tmp/terms.py
 
 預設值照〈給 LLM-04：匯入 stg〉的建議：``version``＝``2026-10-draft-1``、``title``＝
 「AI 模型服務條款（草稿，尚未生效）」、``requires_reaccept``＝true（既有帳戶同意的是 LLM-01b 的
@@ -51,6 +60,9 @@ _CODE_RE = re.compile(r'`([^`]+)`')
 _LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)\s]+)\)')
 _BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
 _LINK_SCHEMES = ('https://', 'http://', 'mailto:')
+#: D20：不賣的「0 點模型」類別（同 test_ai_models_terms_draft 的 unsold-zero-point-models；
+#: 「50 點模型不限」這種數字接著「點」的句子不算）。
+UNSOLD_MODELS_RE = re.compile(r'(?<![0-9０-９])(?:0|０|零)\s*點模型')
 
 
 class TermsFormatError(ValueError):
@@ -206,6 +218,12 @@ def build_record(doc_text, version=DEFAULT_VERSION, title=DEFAULT_TITLE, require
     content = body_to_html(strip_notes(extract_body(doc_text)))
     if not content:
         raise TermsFormatError('the terms body is empty')
+    unsold = UNSOLD_MODELS_RE.search(content)
+    if unsold:
+        raise TermsFormatError(
+            'the terms body still mentions %r, a model category D20 removed (the zero-cost '
+            'models are not sold); import the reviewed text (LLM-05 round 2, #1815) with --doc'
+            % unsold.group(0))
     return {
         'version': version,
         'title': title.strip(),

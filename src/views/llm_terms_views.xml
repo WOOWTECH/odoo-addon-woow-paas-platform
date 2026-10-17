@@ -29,7 +29,7 @@
                 <header>
                     <button name="action_publish" type="object" string="Publish"
                             class="btn-primary" invisible="state != 'draft'"
-                            confirm="Publish this version? The current published version will be retired. If Requires re-acceptance is set, existing accounts must accept this version before creating keys or converting points. A published version can no longer be changed or deleted."/>
+                            confirm="Publish this version? The current published version will be retired. If Requires re-acceptance is set, existing accounts must accept this version before creating keys, converting points or re-enabling keys. A published version can no longer be changed or deleted."/>
                     <field name="state" widget="statusbar"/>
                 </header>
                 <sheet>

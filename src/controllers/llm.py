@@ -117,7 +117,10 @@ def _peer_ip() -> str:
     """直接對端的位址；**不讀** client 自帶的 ``X-Forwarded-For``（〔REV〕22）。
 
     Odoo 開 ``proxy_mode`` 時 werkzeug ``ProxyFix`` 會改寫 ``REMOTE_ADDR``，原值留在
-    ``werkzeug.proxy_fix.orig``。``CF-Connecting-IP`` 的採用條件由 LLM-03 定案。
+    ``werkzeug.proxy_fix.orig``。``CF-Connecting-IP`` 的採用條件由 LLM-03 定案（DESIGN §2.2：直接對端
+    是平台 cloudflared 時才用）；在那之前，stg／沙盒在 cloudflared 後面記到的是叢集內的 pod 位址，
+    不是使用者的 IP——``tos_accepted_ip`` 與 ``tos_accept`` 事件的 ``real_ip`` 都一樣（LLM-04 驗收 3
+    的「真實 IP」部分依賴 LLM-03）。
     """
     environ = request.httprequest.environ
     original = environ.get('werkzeug.proxy_fix.orig') or {}

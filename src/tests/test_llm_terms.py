@@ -6,8 +6,10 @@
    ``tests/ui/test_llm_terms.mjs``。
 2. 發佈 ``requires_reaccept=True`` 的新版 ⇒ 建金鑰 ``llm_tos_outdated``、``/api/llm/state`` 的
    ``tos.blocking``；同意後恢復；既有金鑰與 new-api 上的 token 原封不動（:class:`TestLlmTermsHttp`）。
-3. 每一次同意都有一筆 ``llm_event``（``tos_accept``：版本＝對象 ``llm_terms``、時間、uid、真實 IP；
-   偽造 ``X-Forwarded-For`` 不影響）。
+3. 每一次同意都有一筆 ``llm_event``（``tos_accept``：版本＝對象 ``llm_terms``、時間、uid、IP）。
+   IP 是**直接對端**：開 ``proxy_mode``＋``X-Forwarded-Host`` 讓 Odoo 真的跑 ProxyFix（把 ``REMOTE_ADDR``
+   改成偽造的 ``X-Forwarded-For``），記下來的仍是原本的對端（:class:`TestLlmTermsHttp`）。「直接對端是
+   平台 cloudflared 時改用 ``CF-Connecting-IP``」（DESIGN §2.2 的真實 IP）是 LLM-03 的規則，不在本票。
 4. ``content_html`` 的 ``<script>``／事件屬性在寫入時就被伺服器端清掉（前端另有 DOMPurify）。
 
 全部是 HttpCase：test mode 下 ``registry.cursor()`` 是同一條交易的 TestCursor，``cr.postcommit.run()``
@@ -19,13 +21,16 @@ import json
 import os
 import uuid
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from psycopg2 import IntegrityError
 
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.http import request
 from odoo.tests.common import HttpCase, new_test_user, tagged
-from odoo.tools import mute_logger
+from odoo.tools import config, mute_logger
 
+from ..controllers import llm as llm_controller
 from ..models import llm_common
 from ..models.llm_common import LlmError, _llm_internal
 from ..models.llm_terms import TERMS_TABLE
@@ -206,6 +211,31 @@ class TestLlmTermsModel(_TermsCase):
         state = self.env[ACCOUNT]._llm_state_payload(self.alice.partner_id)
         self.assertEqual((state['tos_current_version'], state['tos_current_draft']),
                          (TOS_V2, True))
+
+    def test_draft_text_flag_is_computed_only(self):
+        """``is_draft_text`` 不能直接寫（ORM 不替 stored compute 欄位擋 readonly）；D15 也不信它。"""
+        marked = '<p><strong>草稿，尚未生效。</strong></p>'
+        with self.assertRaises(AccessError):
+            self.Terms.create({'version': 'qa-flag', 'title': 'x', 'content_html': marked,
+                               'is_draft_text': False})
+        draft = self._draft(TOS_V2, content=marked)
+        with self.assertRaises(AccessError):
+            draft.write({'is_draft_text': False})
+        self.assertTrue(draft.is_draft_text)
+        # 就算旗標被內部寫入把手改掉了，正式站的發佈仍看標題與內容本身。
+        _llm_internal(draft).write({'is_draft_text': False})
+        self.env.invalidate_all()
+        self.assertFalse(draft.is_draft_text, '陽性對照：存下來的旗標確實是 False')
+        configure(self.env, prefix=False, block=0)
+        with self.assertRaises(UserError):
+            draft.action_publish()
+        self.assertEqual(draft.state, 'draft')
+        # 已發佈的版本：一樣不能靠寫旗標拿掉「草稿，尚未生效」的標示。
+        configure(self.env)
+        published = publish_test_terms(self.env, TOS_V3, content=marked)
+        with self.assertRaises(AccessError):
+            published.write({'is_draft_text': False})
+        self.assertTrue(self.env[TERMS]._llm_terms_payload()['is_draft'])
 
     def test_empty_content_cannot_be_published(self):
         draft = self._draft(TOS_V2, content='<p><br></p>')
@@ -409,8 +439,25 @@ class TestLlmTermsHttp(_TermsCase):
         self.assertEqual(self._rpc('/api/llm/terms')['code'], 'llm_tos_unavailable')
 
     def test_consent_flow_over_http_records_the_peer_not_forwarded_for(self):
+        # Odoo 只在 proxy_mode 開著、而且請求帶 X-Forwarded-Host 時跑 ProxyFix（odoo/http.py
+        # Application.__call__）：兩個都給，REMOTE_ADDR 才真的被改成偽造值——讀 REMOTE_ADDR／
+        # request.httprequest.remote_addr 的寫法在這裡會記到 198.51.100.66，測得出差別。
+        config_patch = patch.dict(config.options, {'proxy_mode': True})
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
         forged = {'X-Forwarded-For': '198.51.100.66', 'X-Real-IP': '198.51.100.67',
-                  'CF-Connecting-IP': '198.51.100.68'}
+                  'CF-Connecting-IP': '198.51.100.68',
+                  'X-Forwarded-Host': urlsplit(self.base_url()).netloc}
+        seen_remote_addr = []
+        real_peer_ip = llm_controller._peer_ip
+
+        def spy_peer_ip():
+            seen_remote_addr.append(request.httprequest.remote_addr)
+            return real_peer_ip()
+
+        peer_patch = patch.object(llm_controller, '_peer_ip', spy_peer_ip)
+        peer_patch.start()
+        self.addCleanup(peer_patch.stop)
         self.authenticate(self.alice.login, self.password)
         missing = self._rpc('/api/llm/account/activate', {}, headers=forged)
         self.assertEqual((missing['code'], missing['current_version']),
@@ -423,6 +470,8 @@ class TestLlmTermsHttp(_TermsCase):
         account = self._account(self.alice)
         self.assertEqual((account.tos_version, account.tos_accepted_uid, account.tos_accepted_ip),
                          (TEST_TOS, self.alice, '127.0.0.1'), '記直接對端，不讀 client 自帶的標頭')
+        self.assertEqual(seen_remote_addr[-1], '198.51.100.66',
+                         '陽性對照：ProxyFix 真的跑了（REMOTE_ADDR 已被改成偽造的 X-Forwarded-For）')
         self.env[ACCOUNT]._cron_llm_provision()
         publish_test_terms(self.env, TOS_V2, requires_reaccept=True)
 
@@ -446,6 +495,7 @@ class TestLlmTermsHttp(_TermsCase):
             'needs_reaccept': False, 'blocking': False}}})
         account = self._account(self.alice)
         self.assertEqual((account.tos_version, account.tos_accepted_ip), (TOS_V2, '127.0.0.1'))
+        self.assertEqual(seen_remote_addr[-1], '198.51.100.66')
         created = self._rpc('/api/llm/keys/create',
                             {'client_request_id': str(uuid.uuid4()), 'kind': 'free_trial'})
         self.assertTrue(created['success'], created)

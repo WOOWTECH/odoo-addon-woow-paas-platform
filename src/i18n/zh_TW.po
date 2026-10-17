@@ -925,6 +925,7 @@ msgstr "AI 模型金鑰不能刪除，只會標記為已刪除。"
 #: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm
 msgid "AI Models"
 msgstr "AI 模型"
 
@@ -1982,6 +1983,9 @@ msgstr "條款目前是草稿，尚未生效。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+#: model:ir.actions.act_window,name:woow_paas_platform.action_llm_terms
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_list
 msgid "AI Models Terms of Service"
 msgstr "《AI 模型服務條款》"
 
@@ -5804,6 +5808,7 @@ msgstr "在你的 Home Assistant 裝置上下載並安裝 Woow Connector。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_agent_template__state__draft
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_terms__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__draft
@@ -11940,22 +11945,25 @@ msgid "Public · anyone can reach it"
 msgstr "公開 · 任何人都能連入"
 
 #. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_form
 msgid "Publish"
-msgstr ""
+msgstr "發佈"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_agent_template__state__published
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_terms__state__published
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill__state__published
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
 msgid "Published"
-msgstr ""
+msgstr "已發佈"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__published_at
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__published_at
 msgid "Published At"
-msgstr ""
+msgstr "發佈時間"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -14289,6 +14297,7 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__state
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_server__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__state
@@ -16609,10 +16618,11 @@ msgid "Verifying…"
 msgstr "驗證中…"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__version
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__version
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill_upload_wizard__version
 msgid "Version"
-msgstr ""
+msgstr "版本"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__helm_chart_version
@@ -24351,3 +24361,125 @@ msgstr "AI 帳戶憑證驗證失敗（密文不符）"
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__llm_account_error
 msgid "AI account error"
 msgstr "AI 帳戶異常"
+
+#. module: woow_paas_platform
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_terms
+msgid "Terms of Service"
+msgstr "服務條款"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_terms
+msgid "AI Models Terms of Service Version"
+msgstr "AI 模型服務條款版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_terms_version_uniq
+msgid "Each terms version must be unique."
+msgstr "條款版本代號不能重複。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
+msgid "Publish this version? The current published version will be retired. If Requires re-acceptance is set, existing accounts must accept this version before creating keys, converting points or re-enabling keys. A published version can no longer be changed or deleted."
+msgstr "確定要發佈這個版本嗎？目前已發佈的版本會轉為「已停用」。若勾選「需重新同意」，既有帳戶要先同意這一版，才能建立金鑰、轉換點數或重新啟用金鑰。發佈後就不能再修改或刪除。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.actions.act_window,help:woow_paas_platform.action_llm_terms
+msgid "Create the first terms version"
+msgstr "建立第一個條款版本"
+
+#. module: woow_paas_platform
+#: model_terms:ir.actions.act_window,help:woow_paas_platform.action_llm_terms
+msgid ""
+"Users must accept the published version to activate AI Models.\n"
+"                Draft text can only be published on staging."
+msgstr ""
+"使用者要同意已發佈的版本，才能開通 AI 模型。\n"
+"                草稿文字只能在測試環境（stg）發佈。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__title
+msgid "Title"
+msgstr "標題"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__content_html
+msgid "Content"
+msgstr "內容"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__requires_reaccept
+msgid "Requires re-acceptance"
+msgstr "需重新同意"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__retired_at
+msgid "Retired At"
+msgstr "停用時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__publish_seq
+msgid "Publish order"
+msgstr "發佈順序"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__is_draft_text
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
+msgid "Draft text"
+msgstr "草稿文字"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__version
+msgid "Unique version label sent back by the client when accepting, e.g. 2026-10-draft-1."
+msgstr "唯一的版本代號，使用者同意時會送回這個值，例如 2026-10-draft-1。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__title
+msgid "Shown as the heading of the terms dialog (data value)."
+msgstr "條款對話框的標題（資料值，不翻譯）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__content_html
+msgid "The terms text (data value, not translated). Sanitized on write; sanitized again in the browser before it is shown."
+msgstr "條款全文（資料值，不翻譯）。寫入時伺服器端會先清理，顯示前瀏覽器會再清理一次。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__requires_reaccept
+msgid "When published, accounts that accepted an earlier version cannot create keys, convert points or re-enable keys until they accept this version. Existing keys keep working."
+msgstr "發佈後，同意過舊版的帳戶要先同意這一版，才能建立金鑰、轉換點數或重新啟用金鑰；既有金鑰照常可用。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__publish_seq
+msgid "1 for the first version ever published, then +1 for each publication."
+msgstr "第一個發佈的版本是 1，之後每發佈一次加 1。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__is_draft_text
+msgid "The title or content still carries a draft marker (草稿，尚未生效 or 【待…】). Draft text can be published on staging only."
+msgstr "標題或內容還有草稿標記（「草稿，尚未生效」或【待…】）。草稿文字只能在測試環境（stg）發佈。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_terms__state__retired
+msgid "Retired"
+msgstr "已停用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_event__action__tos_accept
+msgid "Terms accepted"
+msgstr "同意條款"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_event__action__tos_publish
+msgid "Terms published"
+msgstr "發佈條款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "This update does not affect anything you can do now. Existing keys keep working."
+msgstr "這次改版不影響目前的操作；既有金鑰都照常可用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Draft text is computed from the title and the content."
+msgstr "「草稿文字」由標題與內容自動判斷，不能直接修改。"

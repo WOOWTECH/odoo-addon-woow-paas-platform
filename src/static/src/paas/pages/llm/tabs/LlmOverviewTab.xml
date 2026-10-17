@@ -271,7 +271,7 @@
       <div class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
 
       <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" onClose.bind="onRevealClosed"/>
-      <LlmTermsModal t-if="state.showTerms" mode="state.showTerms" onClose.bind="onTermsClosed"/>
+      <LlmTermsModal t-if="state.showTerms" mode="state.showTerms" blocking="tosBlocking" onClose.bind="onTermsClosed"/>
     </div>
   </t>
 </templates>
