@@ -695,6 +695,45 @@ class TestRedact(unittest.TestCase):
             def __str__(self):
                 raise ValueError('no')
         self.assertEqual(llm_redact.redact(Bad()), llm_redact.MASK)
+        self.assertEqual(llm_redact.redact(Bad(), mask='***'), '***')
+
+    def test_ticket_ac5_shapes(self):
+        """LLM-02b AC5：Bearer、JWT、sk-…、nap_…、proof_token=…、password=… 都被遮。"""
+        samples = {
+            'Bearer': ('Authorization: Bearer opaque.Value-123', 'opaque.Value-123'),
+            'JWT': ('jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI0MiJ9.c2lnbmF0dXJlLXZhbHVl',
+                    'eyJzdWIiOiI0MiJ9'),
+            'sk-': ('key in text sk-%s here' % ('Z9' * 24), 'Z9' * 24),
+            'nap_': ('pat nap_%s end' % ('Q1w2' * 11), 'Q1w2' * 11),
+            'proof_token': ('proof_token=abc.def-ghi&next=1', 'abc.def-ghi'),
+            'password': ('password=hunter2hunter2 tail', 'hunter2hunter2'),
+        }
+        for label, (text, secret) in samples.items():
+            with self.subTest(label=label):
+                masked = llm_redact.redact(text)
+                self.assertNotIn(secret, masked)
+                self.assertIn(llm_redact.MASK, masked)
+
+    def test_authorization_header_masks_the_bearer_value_not_the_word(self):
+        # Bearer 必須先於 key=value：否則「Authorization: <redacted> 真值」。
+        masked = llm_redact.redact('Authorization: Bearer abc.def-123')
+        self.assertNotIn('abc.def-123', masked)
+
+    def test_init_attempt_shapes_still_masked(self):
+        """``cloud_service_init_attempt.mask_init_error`` 原本自己的三條 regex 涵蓋的形狀（LLM-02b 收斂）。"""
+        for text, secret in (
+                ('password: "two words"', 'two words'),
+                ('Authorization: Bearer abc.def-123', 'abc.def-123'),
+                ('url?password%3Dhunter2&x=1', 'hunter2'),
+                ("api_key='k k'", 'k k'),
+                ("{'password': 'p y'}", 'p y'),
+                ('"secret": "s3"', 's3'),
+                ('access_token=tok123', 'tok123'),
+                ('key eyJabcde.eyJfghij.klmnopq', 'eyJfghij')):
+            with self.subTest(text=text):
+                masked = llm_redact.redact(text, mask='***')
+                self.assertNotIn(secret, masked)
+                self.assertIn('***', masked)
 
 
 if __name__ == '__main__':
