@@ -25266,6 +25266,8 @@ msgstr "連續備份失敗次數"
 msgid "Backup Failure Alerted At"
 msgstr "備份失敗通知時間"
 
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
 msgid "Your password must be at least %(min)s characters long."
 msgstr "密碼至少需要 %(min)s 個字元。"
