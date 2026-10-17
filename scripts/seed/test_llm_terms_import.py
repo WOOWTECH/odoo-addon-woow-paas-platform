@@ -11,9 +11,8 @@ CI:   ``.gitea/workflows/repo-lint.yml`` 的「scripts/ 自我測試」（script
    外部連結都開新分頁。
 2. 不支援的寫法一律報錯（不悄悄掉內容），而且每一條規則都證明會觸發。
 3. ``--format shell`` 產生的程式是合法的 Python。
-4. D20：條款本體還寫著「0 點模型」就拒絕匯入（published 不能改，鎖進去就只能再發一版）。本鏈還不含
-   #1815，repo 裡的草稿是第一輪的文字：:meth:`TestRealDraft.test_real_draft_follows_d20_or_is_refused`
-   在兩種狀態下都有斷言（還有舊字句 ⇒ 預設匯入失敗；#1815 rebase 進來之後 ⇒ 預設匯入成功）。
+4. D20：條款本體還寫著「0 點模型」就拒絕匯入（published 不能改，鎖進去就只能再發一版）。repo 裡的
+   草稿（#1815 第二輪）沒有這個字句、預設匯入成功；拒收的規則由合成文字的測試證明。
 """
 import contextlib
 import io
@@ -55,14 +54,9 @@ class TestRealDraft(unittest.TestCase):
         self.assertEqual((record['version'], record['title'], record['requires_reaccept']),
                          ('2026-10-draft-1', 'AI 模型服務條款（草稿，尚未生效）', True))
 
-    def test_real_draft_follows_d20_or_is_refused(self):
-        if m.UNSOLD_MODELS_RE.search(self.html):
-            # 第一輪的文字（本鏈 rebase 到 #1815 之前）：預設匯入一定失敗，不會把舊字句鎖進 published。
-            with self.assertRaises(m.TermsFormatError) as caught:
-                m.build_record(self.text)
-            self.assertIn('D20', str(caught.exception))
-        else:
-            self.assertEqual(m.build_record(self.text), self.record)
+    def test_real_draft_follows_d20(self):
+        self.assertIsNone(m.UNSOLD_MODELS_RE.search(self.html))
+        self.assertEqual(m.build_record(self.text), self.record)
 
     def test_review_notes_are_gone_and_draft_markers_stay(self):
         self.assertIn(m.NOTE_PREFIX, m.extract_body(self.text), '陽性對照：原文有註記')

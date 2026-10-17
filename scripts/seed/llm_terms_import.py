@@ -23,11 +23,8 @@ Run:
   不產生任何輸出。D20 定案成本 0 的 13 個 OpenRouter 免費端點不賣，條款不設這個模型類別；published 的
   版本不能改，用舊文字發佈了就只能再發一版、讓所有人重新同意。規則與
   ``scripts/audit/test_ai_models_terms_draft.py`` 的 ``unsold-zero-point-models``（LLM-05 第二輪，#1815）
-  同一個 regex。本鏈（從 ``fix/llm-02b-review-2`` 疊上來）還不含 #1815，repo 裡的草稿是第一輪的文字，
-  所以**在 #1815 合併、本鏈 rebase 之前，沙盒與展示站一律用 ``--doc`` 匯入 #1815 的文字**::
-
-      git show origin/docs/llm-05-terms-draft:docs/reference/features/ai-models-terms-draft.md > /tmp/terms.md
-      python3 scripts/seed/llm_terms_import.py --doc /tmp/terms.md --format shell > /tmp/terms.py
+  同一個 regex。#1815 已合併進 develop、本分支已 rebase，repo 裡的草稿就是第二輪的文字，預設匯入即可
+  （第一輪的文字會被這條守線拒收）。
 
 預設值照〈給 LLM-04：匯入 stg〉的建議：``version``＝``2026-10-draft-1``、``title``＝
 「AI 模型服務條款（草稿，尚未生效）」、``requires_reaccept``＝true（既有帳戶同意的是 LLM-01b 的
