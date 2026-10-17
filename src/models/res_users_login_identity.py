@@ -14,8 +14,9 @@ Odoo 原生 ``res.users.login`` 的唯一性是 SQL ``UNIQUE(login)``——**區
    模組升級——那批資料要由管理員封存（X-SET-007 待人工清單）。
    刻意**不加** ``lower(login)`` unique index：正式站目前就有重複列，建 index 會讓
    ``-u`` 失敗、整次發版中斷。
-3. ``_get_login_domain``：輸入值與其正規化值任一相符即可登入，讓舊的大小寫混合
-   帳號照舊能登入，新帳號則不論使用者怎麼打大小寫都登得進去。
+3. ``_get_login_domain``：輸入值有完全相符的帳號就用它（舊的大小寫混合帳號、
+   甚至修補前留下的大小寫重複帳號都照舊各自登入）；沒有才改用正規化值查找，
+   新帳號不論使用者怎麼打大小寫都登得進去。
 
 所有「註冊新建帳號」路徑（``/web/signup``、邀請 token、OAuth）都經過
 ``_signup_create_user``：這裡把必填欄位缺漏與重複信箱轉成中文 ``UserError``——
@@ -28,7 +29,6 @@ X-SET-007-4（要不要強制 email 驗證）屬產品決策，本檔不處理�
 """
 from odoo import _, api, models
 from odoo.exceptions import UserError, ValidationError
-from odoo.osv import expression
 
 
 def normalize_login(login):
@@ -97,7 +97,11 @@ class ResUsersLoginIdentity(models.Model):
         normalized = normalize_login(login)
         if not normalized or normalized == login:
             return domain
-        return expression.OR([domain, super()._get_login_domain(normalized)])
+        # 完全相符優先：不用 OR，否則修補前的大小寫重複帳號（uid 227／236）在
+        # _login 的 limit=1 下會互相搶走對方的登入。
+        if self.sudo().search_count(domain, limit=1):
+            return domain
+        return super()._get_login_domain(normalized)
 
     # ------------------------------------------------------------------
     # 4. 自助註冊新建帳號的伺服器端驗證

@@ -113,6 +113,21 @@ class TestSignupIdentityXSet007(TransactionCase):
         found = self.Users.search(self.Users._get_login_domain(legacy))
         self.assertEqual(found, user)
 
+    def test_legacy_case_duplicates_each_keep_their_own_login(self):
+        # 修補前留下的重複對（正式站 uid 227 小寫／236 大寫）：各自用自己的寫法
+        # 必須解析到自己，不能被另一個帳號搶走。
+        lower_user = _make_user(self.env, _addr('pair'))
+        upper_user, _legacy = self._legacy_mixed_case_user('pairup')
+        upper_login = lower_user.login.upper()
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE res_users SET login = %s WHERE id = %s", [upper_login, upper_user.id])
+        self.env.invalidate_all()
+        self.assertEqual(
+            self.Users.search(self.Users._get_login_domain(upper_login)), upper_user)
+        self.assertEqual(
+            self.Users.search(self.Users._get_login_domain(lower_user.login)), lower_user)
+
     # --- 自助註冊（model 層） -------------------------------------------
     def _signup_expect_user_error(self, values, needle):
         try:
