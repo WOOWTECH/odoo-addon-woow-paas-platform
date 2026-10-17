@@ -1183,3 +1183,6 @@ from . import test_tunnel_binding_1766
 # LLM-01b：AI 模型分頁的 Odoo 後端最小版（帳戶、開戶 cron、免費試用金鑰、tracer 端點、
 # 未設定零外呼、neutralize、真 cursor 跑 cron 的收斂）。
 from . import test_llm_tracer
+# LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
+# llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
+from . import test_llm_platform_foundation
