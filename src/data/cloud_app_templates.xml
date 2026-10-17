@@ -1791,12 +1791,21 @@
                 即可使用；平台不持有你的 Home Assistant 帳密。
                 服務附 10 GB 資料磁碟：設定、歷史紀錄，以及你在「媒體」（我的媒體，/media）
                 上傳或錄製的檔案都保存在這顆磁碟上，重新啟動、暫停後恢復都不會遺失。
-                **本版沒有下列三項功能，購買前請務必確認**（這是 Home Assistant 官方對
+                **本版沒有下列兩項功能，購買前請務必確認**（這是 Home Assistant 官方對
                 Container 安裝方式的既有限制，非平台刪減）：**① 沒有 Add-on 商店**
-                （官方新稱「Apps」）；**② 沒有內建備份**；**③ 沒有一鍵更新**。
+                （官方新稱「Apps」）；**② 沒有一鍵更新**。
                 因此倚賴 Add-on 的整合（如 Thread、Z-Wave）在本版沒有現成支援。
-                若你需要 Add-on 商店、備份快照與系統一鍵更新，請改選「Home Assistant OS」
+                **備份**：有 Home Assistant 內建備份（設定 → 系統 → 備份），可自行建立、下載與
+                還原；但備份檔存在同一顆資料磁碟上，沒有異地副本，請定期下載另存——磁碟故障或
+                刪除服務時，留在磁碟上的備份會一起消失。
+                若你需要 Add-on 商店與系統一鍵更新，請改選「Home Assistant OS」
                 方案——那是跑完整 HAOS 作業系統的專屬虛擬機。
+                **連接需要 OAuth 授權的雲端整合**（例如 Google、Spotify、Withings、Nest）時，
+                在原廠開發者後台登錄的「授權重新導向 URI（redirect URI）」請填
+                「你的服務網址＋/auth/external/callback」，例如
+                https://你的服務網址/auth/external/callback；不要填整合畫面或原廠文件提到的
+                https://my.home-assistant.io/redirect/oauth——本版不含 My Home Assistant
+                轉址服務，填了會在授權完成後被導到找不到的頁面。
                 **本版不含 Home Assistant 內建的 AI 對話與語音助理（Assist）**：對話、AI 任務、
                 語音辨識／語音合成／喚醒詞與 Home Assistant Cloud 元件都已停用，因此 OpenAI、
                 OpenRouter、Anthropic、Google Gemini、Ollama 等 AI 對話整合即使能在「新增整合」
@@ -1808,8 +1817,9 @@
                 原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">container</field>
             <!-- 與 cloud_app_haos／cloud_app_ha_paas 同為 container 分類，讓 Home Assistant
-                 系列產品在前台同一格；租戶靠上面 full_description 的「沒有這三項」與
-                 HAOS 文案的「三項原生可用」一眼分辨。 -->
+                 系列產品在前台同一格；租戶靠上面 full_description 的「沒有這兩項」（Add-on 商店、
+                 一鍵更新；內建備份本版也有，只是存在同一顆磁碟，X-BK-005-2）與 HAOS 文案的
+                 「三項原生可用」一眼分辨。 -->
             <field name="tags">["home-assistant", "smart-home", "container", "ha-full"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
@@ -1991,7 +2001,7 @@
             <field name="slug">ha-full-apporo</field>
             <field name="description">APPORO 品牌的容器版 Home Assistant 完整版：與「Home Assistant 完整版」同一套整合集與內建元件，僅品牌外觀不同。1 vCPU／1 GB RAM／10 GB 磁碟</field>
             <field name="full_description">APPORO 品牌的 Home Assistant 完整版雲端服務。功能、整合集、內建元件、
-                限制（無 Add-on 商店、無內建備份、無一鍵更新）與資料保留政策皆與
+                限制（無 Add-on 商店、無一鍵更新；內建備份存在同一顆磁碟、請下載另存）與資料保留政策皆與
                 「Home Assistant 完整版」完全相同，差別只在品牌外觀（APPORO 標誌、色彩與
                 文件連結）。對外僅曝露 Home Assistant 網頁介面（8123 埠）。</field>
             <field name="category">container</field>
