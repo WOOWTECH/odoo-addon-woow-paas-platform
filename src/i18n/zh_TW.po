@@ -24091,3 +24091,15 @@ msgstr "綁卡驗證授權取消"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ecpg_bind_auth_void_list
 msgid "Retry now"
 msgstr "立即重試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "The AI models runtime state is maintained by the platform."
+msgstr "AI 模型的執行狀態由平台維護。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "The AI models runtime state cannot be deleted."
+msgstr "AI 模型的執行狀態不能刪除。"
