@@ -119,6 +119,35 @@ msgstr ""
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_app_template.py:0
 msgid ""
+"\"Secret Change Restart Component\" must be a Kubernetes label value such as "
+"daemon (template: %s)."
+msgstr ""
+"「改金鑰後重啟的元件」必須是 Kubernetes label 值，例如 daemon（範本：%s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"\"Rollback Feature Switches\" must be a JSON object such as "
+"{\"mcp.enabled\": [\"image\"]} (template: %s)."
+msgstr ""
+"「回復版本保留的功能開關」必須是 JSON 物件，例如 "
+"{\"mcp.enabled\": [\"image\"]}（範本：%s）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__secret_change_restart_component
+msgid "Secret Change Restart Component"
+msgstr "改金鑰後重啟的元件"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__rollback_feature_switches
+msgid "Rollback Feature Switches"
+msgstr "回復版本保留的功能開關"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
 "\"Conceal Existing Instances\" must be enabled together with \"Hidden\" "
 "(template: %s). Hiding existing instances while the template stays listed on "
 "the marketplace lets a tenant buy a service they can neither see nor manage. "

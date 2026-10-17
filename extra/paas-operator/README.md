@@ -74,6 +74,24 @@ Deploy the operator before the Odoo addon that consumes this endpoint. An older/
 - `GET /api/releases/{namespace}/{name}/public-address` - Get the public address the release's ngrok sidecar advertises on its container log: `tcp://host:port` (charts/emqx, native MQTT) or `https://host[:port]` (charts/headscale, control URL). Contract: the sidecar container is named `ngrok` and prints `WOOW_PUBLIC_URL=<url>` (legacy `WOOW_MQTT_PUBLIC_URL=` is still honoured) at the **start of a line**; the last valid line wins and an empty value retracts the address. `public_url: null` is a normal state (not enabled / agent not connected yet / retracted), not an error. #1559: when there is no address and the sidecar log says why, the response also carries `error_code` (closed set: `ERR_NGROK_<n>` — only a whole line `ERROR:  ERR_NGROK_<n>` counts — `NO_AUTHTOKEN`, `SERVER_URL_MISMATCH`) and `error` (fixed Chinese text). Raw log lines are never returned (ngrok echoes the authtoken on auth failures).
 - `GET /api/releases/{namespace}/{name}/mqtt-address` - **Legacy** (called by platform ≤ 18.0.1.0.205): same contract, `tcp://` addresses only. Keep until no deployed platform calls it.
 
+#### Restart scope and rollback feature switches (AI-OD-004-2／AI-OD-006-1)
+
+- `POST /api/releases/{namespace}/{name}/restart?component=<label value>` narrows the
+  restart to workloads labelled `app.kubernetes.io/component=<value>` (DNS-1123 label,
+  422 otherwise; 404 when none matches). The platform uses it after an API-key change
+  (#1435) to roll only the workload that consumes the key env (open-design: `daemon`), and
+  retries without it on 404. The response echoes `component`. Without the parameter the
+  endpoint restarts every Deployment and StatefulSet as before (tenant restart, #1432).
+- `POST /api/releases/{namespace}/{name}/rollback` accepts `preserve_when_equal`
+  (`{switch path: [guard paths]}`, e.g. `{"mcp.enabled": ["image"]}`, max 16 switches ×
+  8 guards; requires `chart`, selects the preserving rollback like `preserve_value_paths`).
+  A switch keeps its current state (absence included) only when every guard path is
+  identical in the target and the current values; otherwise it follows the target revision
+  together with its guards. The response lists the paths (never values) in
+  `feature_paths_preserved`／`feature_paths_reverted`.
+- Older operators ignore both (FastAPI drops undeclared query parameters, pydantic ignores
+  unknown body fields): the restart covers everything and switches follow the target.
+
 ### Namespaces
 
 - `POST /api/namespaces` - Create namespace with resource quota

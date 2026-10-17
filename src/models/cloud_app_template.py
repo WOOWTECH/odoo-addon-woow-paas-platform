@@ -12,6 +12,8 @@ _logger = logging.getLogger(__name__)
 
 # `admin_username_helm_path` 的合法形態：點分式、每段是 values 鍵名。
 ADMIN_USERNAME_HELM_PATH_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$')
+# AI-OD-004-2：與 operator restart 端點 ``component`` 參數同一個 pattern（DNS-1123 label）。
+SECRET_RESTART_COMPONENT_RE = re.compile(r'^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
 
 # #535：`helm_value_specs` 解析失敗的哨兵。與「template 本來就沒有 specs」必須分得開
 # ——後者是正常狀態（例 `cloud_app_ha_paas`），前者代表無從得知哪些鍵是租戶填的憑證，
@@ -355,6 +357,28 @@ class CloudAppTemplate(models.Model):
     helm_value_specs = fields.Text(
         string='Helm Value Specs',
         help='JSON schema defining configurable values for users',
+    )
+    # AI-OD-004-2：修改配置改了 ``type: password`` 設定（金鑰）之後，#1435 的補重啟只滾
+    # 這個 ``app.kubernetes.io/component`` 的工作負載。空白＝release 下全部（原行為）。
+    # open-design：金鑰只以 secretKeyRef env 進 daemon StatefulSet，console Deployment
+    # 不吃金鑰——全部重啟會讓進行中的 console 終端機斷線。
+    secret_change_restart_component = fields.Char(
+        string='Secret Change Restart Component',
+        help='After a tenant changes a password-type setting (API key), restart only the '
+             'workloads labelled app.kubernetes.io/component=<this value>. Empty: restart '
+             'every Deployment and StatefulSet of the release. The platform falls back to '
+             'restarting everything when no workload carries the label.',
+    )
+    # AI-OD-006-1：「回復版本」時維持目前狀態的平台功能開關（JSON 物件：開關路徑 →
+    # 守衛路徑清單）。守衛在目標 revision 與目前完全相同時才保留開關；不同時開關跟著
+    # 目標 revision 回復（例如 mcp.enabled 必須搭配帶 MCP runtime 的 image）。
+    rollback_feature_switches = fields.Text(
+        string='Rollback Feature Switches',
+        help='JSON object mapping a platform-managed feature switch (Helm values path, '
+             'e.g. "mcp.enabled") to guard paths (e.g. ["image"]). Rolling back keeps the '
+             'current value of the switch when every guard path is identical in the target '
+             'revision; otherwise the switch follows the target revision. Empty: switches '
+             'follow the target revision.',
     )
 
     # Service Configuration
@@ -909,6 +933,58 @@ class CloudAppTemplate(models.Model):
                       'and the Helm Secret password carrier (template: %s).')
                     % (record.name or record.slug or record.id)
                 )
+
+    @api.constrains('secret_change_restart_component')
+    def _check_secret_change_restart_component(self):
+        """AI-OD-004-2：值會拼進 operator 的 label selector，只收 DNS-1123 label。"""
+        for record in self:
+            value = record.secret_change_restart_component
+            if value and not SECRET_RESTART_COMPONENT_RE.match(value):
+                raise ValidationError(
+                    _('"Secret Change Restart Component" must be a Kubernetes label value '
+                      'such as daemon (template: %s).')
+                    % (record.name or record.slug or record.id)
+                )
+
+    @api.constrains('rollback_feature_switches')
+    def _check_rollback_feature_switches(self):
+        """AI-OD-006-1：寫入當下就驗格式，執行期不必再猜。"""
+        for record in self:
+            if record.rollback_feature_switches and \
+                    record._parse_rollback_feature_switches() is None:
+                raise ValidationError(
+                    _('"Rollback Feature Switches" must be a JSON object such as '
+                      '{"mcp.enabled": ["image"]} (template: %s).')
+                    % (record.name or record.slug or record.id)
+                )
+
+    def _parse_rollback_feature_switches(self):
+        """``rollback_feature_switches`` → ``{開關路徑: [守衛路徑…]}``；格式不對回 ``None``。
+
+        上限與 operator ``ReleaseRollbackRequest.preserve_when_equal`` 一致（16 個開關、
+        每個 8 條守衛），路徑格式同 ``admin_username_helm_path``。
+        """
+        self.ensure_one()
+        raw = self.rollback_feature_switches
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(parsed, dict) or len(parsed) > 16:
+            return None
+        result = {}
+        for path, guards in parsed.items():
+            if not isinstance(path, str) or not ADMIN_USERNAME_HELM_PATH_RE.match(path):
+                return None
+            if not isinstance(guards, list) or len(guards) > 8:
+                return None
+            if not all(isinstance(g, str) and ADMIN_USERNAME_HELM_PATH_RE.match(g)
+                       for g in guards):
+                return None
+            result[path] = list(guards)
+        return result
 
     # ------------------------------------------------------------------ #
     #  #501：供給閘門（全域實例上限 ＋ 營運停售）                          #
