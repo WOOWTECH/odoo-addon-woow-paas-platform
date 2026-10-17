@@ -10,21 +10,24 @@
    incident、不告警），``/api/llm/*`` 回 ``llm_disabled``。例行發版會在 LLM-17 之前就把表與
    ``active=True`` 的 cron 帶上 prod，這個狀態保證它們在 prod 什麼都不做。
 3. **錯誤碼**（DESIGN §3.4）：常數名 ``ERR_*``、值小寫 snake；前端 ``llm_errors.js``
-   依 code 組句，後端 ``error`` 只是 fallback。
+   依 code 組句，後端 ``error`` 只是 fallback。告警、incident、``llm_event`` 能帶的錯誤碼與
+   結果碼是**封閉集合**（:data:`ERROR_CODES`、:data:`RESULT_CODES`；N24、LLM-02b）。
 4. **cron 框架**（N27、N28；LLM-02b）：:data:`LLM_CRONS` 是全部 LLM cron 的登記表（測試以它
    跑「未設定零外呼」與 noupdate 凍結契約）；:func:`run_llm_cron` 是每支 LLM cron 的唯一入口：
    未設定 ⇒ 不呼叫工作函式；有設定 ⇒ 給一個 :class:`LlmCronTick`（牆鐘秒數＋件數上限），
-   工作函式回「還有剩」就 ``_trigger()`` 同一支 cron 接著跑。
+   工作函式回「還有剩」就 ``_trigger()`` 同一支 cron 接著跑；工作函式當掉 ⇒ 告警
+   ``cron_failed``；設定類的 fail closed ⇒ 工作函式呼叫 :func:`report_config_unavailable`。
 """
 import logging
 import re
 import time
 import traceback
+from datetime import timedelta
 
 from odoo import _, fields
 from odoo.exceptions import ValidationError
 
-from ..services import llm_redact
+from ..services import llm_crypto, llm_redact
 from ..services import newapi_client as nac
 
 _logger = logging.getLogger(__name__)
@@ -117,6 +120,50 @@ class LlmError(Exception):
         super().__init__(code)
         self.code = code
         self.params = params
+
+
+#: 上面全部的 ``ERR_*``（新增一個常數就自動進登記表）。
+API_ERROR_CODES = frozenset(
+    value for name, value in list(globals().items()) if name.startswith('ERR_'))
+
+
+# --------------------------------------------------------------------------- #
+#  錯誤碼與結果碼的封閉登記表（N24；LLM-02b）                                    #
+# --------------------------------------------------------------------------- #
+# 告警、incident、``llm_event`` 的 ``error_code``／``result``／``details`` 只收這裡列的值：
+# 型別上就不接受自由文字——連「長得像 snake 的指令」（``grant_1000_points_to_account_5``）也進
+# 不來（審查 LLM-02b findings 4、13）。新增一個碼＝加在對應的集合裡；``test_llm_platform_foundation``
+# 以原始碼比對守住「``_ProvisionStop('…')`` 的字面值都在這裡」。
+
+#: 開戶停下來的原因（``llm_account._ProvisionStop``，記進 ``last_error_code``）：字面值，加上
+#: ``llm_account._stop_for`` 依 client 結果組出來的那幾個（前綴固定 ``llm_newapi``）。
+PROVISION_STOP_CODES = frozenset({
+    'llm_db_write_failed', 'llm_identity_mismatch', 'llm_newapi_2fa_enabled',
+    'llm_newapi_contract_login', 'llm_newapi_contract_pat', 'llm_newapi_contract_verify',
+    'llm_newapi_invariant', 'llm_newapi_login_failed', 'llm_newapi_name_taken',
+    'llm_newapi_pat_limit', 'llm_newapi_user_conflict', 'llm_newapi_user_create_rejected',
+    'llm_newapi_user_create_unknown', 'llm_newapi_user_mismatch', 'llm_newapi_user_missing',
+    'llm_password_missing', 'llm_provision_internal', 'llm_synthetic_ip_exhausted',
+    'llm_tick_deadline',
+    # _stop_for（prefix 'llm_newapi'）：
+    'llm_newapi_not_executed', 'llm_newapi_unknown', 'llm_newapi_rejected',
+    'llm_newapi_unexpected',
+})
+#: 代理判定的確定拒絕（``Definite.proxy_error``）→ ``llm_proxy_<class>``。
+PROXY_ERROR_CODES = frozenset('llm_proxy_%s' % name for name in nac.PROXY_DEFINITE_ERRORS)
+#: new-api 的已知 ``code`` → ``newapi_<小寫>``；其他一律 ``llm_newapi_other``（:func:`nac.newapi_error_code`）。
+NEWAPI_ERROR_CODES = frozenset(
+    {nac.newapi_error_code(code) for code in nac.KNOWN_NEWAPI_CODES} | {nac.NEWAPI_OTHER_CODE})
+#: 設定類告警（``LlmAlert.CONFIG_UNAVAILABLE``）的錯誤碼：加密金鑰、代理簽章金鑰、前綴／block。
+CONFIG_CRYPTO_UNAVAILABLE = 'llm_crypto_unavailable'
+CONFIG_PROXY_AUTH_UNAVAILABLE = 'llm_proxy_auth_unavailable'
+CONFIG_IDENTITY_MISMATCH = 'llm_identity_mismatch'
+CONFIG_ERROR_CODES = frozenset({
+    CONFIG_CRYPTO_UNAVAILABLE, CONFIG_PROXY_AUTH_UNAVAILABLE, CONFIG_IDENTITY_MISMATCH})
+#: :func:`safe_code`（``llm_event``）在值不在登記表時給的預設碼。
+UNKNOWN_CODE = 'llm_unknown_code'
+#: ``llm_event.result``：節流的 started → ok／failed（LLM-02b）。之後的票新增結果碼加在這。
+RESULT_CODES = frozenset({'started', 'ok', 'failed'})
 
 
 # --------------------------------------------------------------------------- #
@@ -298,7 +345,8 @@ def validate_llm_param(key, value):
             'The AI models alert email must be one to five comma-separated email addresses.'))
     if key == PARAM_ALERT_WEBHOOK_URL and not valid_alert_webhook_url(text):
         raise ValidationError(_(
-            'The AI models alert webhook must be an https:// URL without credentials.'))
+            'The AI models alert webhook must be an https:// URL without credentials, '
+            'a query string (?) or a # fragment.'))
 
 
 _EMAIL_RE = re.compile(
@@ -354,7 +402,46 @@ LLM_CRONS = {
         'woow_paas_platform.llm_account', '_cron_llm_balance_refresh'),
     'woow_paas_platform.ir_cron_llm_event_cleanup': (
         'woow_paas_platform.llm_event', '_cron_llm_event_cleanup'),
+    'woow_paas_platform.ir_cron_llm_alert_delivery': (
+        'woow_paas_platform.llm_event', '_cron_llm_alert_delivery'),
 }
+#: cron 當掉時告警（``LlmAlert.CRON_FAILED``）用的錯誤碼：每支 LLM cron 一個固定碼（封閉對照，
+#: 不從例外取任何字）。``TestLlmCronFramework`` 斷言鍵＝:data:`LLM_CRONS`。
+LLM_CRON_ERROR_CODES = {
+    xmlid: 'llm_cron_%s' % xmlid.rpartition('.ir_cron_llm_')[2] for xmlid in LLM_CRONS}
+
+#: 告警／incident／``llm_event.error_code`` 只收的錯誤碼（見上方「封閉登記表」）。
+ERROR_CODES = (
+    API_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
+    | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
+    | {UNKNOWN_CODE})
+
+
+def report_cron_failed(env, xmlid):
+    """``run_llm_cron`` 收掉例外之後告警（``cron_failed``＋該 cron 的固定碼；30 分鐘去重）。
+
+    盡力而為、不往外丟：告警本身失敗（例如 DB 掛了）只記 log。
+    """
+    _report(env, 'CRON_FAILED', LLM_CRON_ERROR_CODES.get(xmlid, UNKNOWN_CODE))
+
+
+def report_config_unavailable(env, code):
+    """設定類的 fail closed（加密金鑰、代理簽章金鑰、前綴／block 不合）⇒ 告警（DESIGN §2.9）。
+
+    ``code`` 是 :data:`CONFIG_ERROR_CODES` 之一。每支 LLM cron 每個 tick 都會檢查一次，所以 prod
+    少了 env 的時候負責人在下一個 tick 就收得到（30 分鐘去重擋洪水；N27 未設定時不發）。
+    """
+    _report(env, 'CONFIG_UNAVAILABLE', code if code in CONFIG_ERROR_CODES else UNKNOWN_CODE)
+
+
+def _report(env, alert_name, code):
+    # llm_event import llm_common：在這裡才 import（避免循環）。
+    from .llm_event import LlmAlert
+    try:
+        env['woow_paas_platform.llm_event']._llm_alert(LlmAlert[alert_name], error_code=code)
+    except Exception:  # noqa: BLE001 - alerting must not break the cron framework
+        _logger.error('[LLM] alert %s (%s) not raised: %s', alert_name, code,
+                      llm_redact.redact(traceback.format_exc()))
 
 
 class LlmCronTick:
@@ -362,10 +449,11 @@ class LlmCronTick:
 
     工作函式每做一件之前問 :meth:`can_take`（需要的秒數給 ``need_seconds``）；答否時
     ``more`` 會被設成 True，:func:`run_llm_cron` 就 ``_trigger()`` 下一個 tick。外呼一律帶
-    ``deadline=tick.deadline``，讓 client 依剩餘預算截斷 timeout。
+    ``deadline=tick.deadline``，讓 client 依剩餘預算截斷 timeout。``delay``（秒）：要接續時，
+    下一個 tick 至少隔這麼久（外呼類 cron 用來分攤節奏；0＝立刻）。
     """
 
-    __slots__ = ('deadline', 'items', 'done', 'more', '_monotonic')
+    __slots__ = ('deadline', 'items', 'done', 'more', 'delay', '_monotonic')
 
     def __init__(self, seconds, items, monotonic=time.monotonic):
         self._monotonic = monotonic
@@ -373,6 +461,7 @@ class LlmCronTick:
         self.items = items
         self.done = 0
         self.more = False
+        self.delay = 0
 
     def remaining(self):
         return self.deadline - self._monotonic()
@@ -395,11 +484,13 @@ def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, conf
       import 的 ``llm_config`` 讀好再傳進來——committed 測試只在本行程 patch 那個名字、不 commit
       任何設定（``tests/llm_test_support.py``）。
     * **未設定 ⇒ 直接 return**：不呼叫 ``work``——不建 client、不外呼、不寫 incident、不告警。
-    * ``work(config, tick)`` 回 truthy（或 ``tick.more``）⇒ ``_trigger()`` 同一支 cron。
+    * ``work(config, tick)`` 回 truthy（或 ``tick.more``）⇒ ``_trigger()`` 同一支 cron（``tick.delay``
+      秒之後；0＝立刻）。
     * ``work`` 丟的例外在這裡收掉：traceback 經 :func:`llm_redact.redact` 才進 log，主 cursor
-      回到 savepoint（工作函式的寫入都走獨立 cursor，已 commit 的不受影響）。不往外丟是刻意的：
-      Odoo 18 對連續失敗的 cron 會自動停用（``ir_cron._update_failure_count``），而 LLM cron
-      被靜默停用＝對帳、刷新全停。下一個排程照常再跑。
+      回到 savepoint（工作函式的寫入都走獨立 cursor，已 commit 的不受影響），然後**告警**
+      （``cron_failed``＋:data:`LLM_CRON_ERROR_CODES` 的固定碼；同一支 cron 30 分鐘內只寄一次）。
+      不往外丟是刻意的：Odoo 18 對連續失敗的 cron 會自動停用（``ir_cron._update_failure_count``），
+      而 LLM cron 被靜默停用＝對帳、刷新全停。下一個排程照常再跑。
     """
     config = config or llm_config(env)
     if llm_unconfigured(env, config):
@@ -411,10 +502,15 @@ def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, conf
     except Exception:  # noqa: BLE001 - see docstring
         _logger.error('[LLM] cron %s crashed: %s', xmlid,
                       llm_redact.redact(traceback.format_exc()))
+        report_cron_failed(env, xmlid)
         return False
     more = bool(more) or tick.more
     if more:
         cron = env.ref(xmlid, raise_if_not_found=False)
         if cron:
-            cron.sudo()._trigger()
+            if tick.delay:
+                cron.sudo()._trigger(
+                    at=fields.Datetime.now() + timedelta(seconds=tick.delay))
+            else:
+                cron.sudo()._trigger()
     return more

@@ -742,11 +742,62 @@ class TestRedact(unittest.TestCase):
                 ("{'password': 'p y'}", 'p y'),
                 ('"secret": "s3"', 's3'),
                 ('access_token=tok123', 'tok123'),
-                ('key eyJabcde.eyJfghij.klmnopq', 'eyJfghij')):
+                ('key eyJabcde.eyJfghij.klmnopq', 'eyJfghij'),
+                # 原本的 init regex 對 token 是後綴比對（ngrok 的 authtoken）：收斂後不能少遮。
+                ('authtoken=2abcDEF345ghi', '2abcDEF345ghi'),
+                ('apitoken: zz99', 'zz99')):
             with self.subTest(text=text):
                 masked = llm_redact.redact(text, mask='***')
                 self.assertNotIn(secret, masked)
                 self.assertIn('***', masked)
+
+    def test_ordinary_words_are_not_mangled(self):
+        """審查 LLM-02b finding 12：``sk-``／``nap_``／裸的 ``key`` 要有左邊界（init attempt 的錯誤
+        訊息常有這些字；舊的 init regex 從來不遮它們）。"""
+        for text in ('node had condition: disk-pressure', 'task-runner failed', 'monkey=1',
+                     'snap_shot_42 restored', 'whisk-it-all-together-please-now-ok',
+                     'publickey=ssh-ed25519'):
+            with self.subTest(text=text):
+                self.assertEqual(llm_redact.redact(text), text)
+                self.assertEqual(llm_redact.redact(text, mask='***'), text)
+
+    def test_real_keys_still_masked_at_a_boundary(self):
+        key = 'sk-' + 'Ab9' * 16
+        for text in (key, '"%s"' % key, 'x=%s' % key, '(%s)' % key, 'nap_%s' % ('Q1w2' * 11),
+                     '{"key": "%s"}' % ('K' * 48), 'key=%s' % ('K' * 48)):
+            with self.subTest(text=text):
+                masked = llm_redact.redact(text)
+                self.assertIn(llm_redact.MASK, masked)
+                self.assertNotIn('Ab9' * 16, masked)
+                self.assertNotIn('Q1w2' * 11, masked)
+                self.assertNotIn('K' * 48, masked)
+
+
+class TestClosedErrorCodes(unittest.TestCase):
+    """N24（審查 LLM-02b findings 4、13）：PaaS 的錯誤碼是封閉集合。"""
+
+    def test_newapi_codes_go_through_the_allow_list(self):
+        self.assertEqual(nac.newapi_error_code('AUTH_SESSION_LIMIT'), 'newapi_auth_session_limit')
+        for code in ('UNRECOGNISED', 'GRANT_1000_POINTS_TO_ACCOUNT_5', 'auth_session_limit',
+                     '', None, 42):
+            with self.subTest(code=code):
+                self.assertEqual(nac.newapi_error_code(code), nac.NEWAPI_OTHER_CODE)
+        for code in nac.KNOWN_NEWAPI_CODES:
+            self.assertRegex(code, r'^[A-Z][A-Z0-9_]{0,63}$')
+
+    def test_crypto_error_codes_cover_every_code_in_the_module(self):
+        source = (SERVICES / 'llm_crypto.py').read_text(encoding='utf-8')
+        import re
+        literals = set(re.findall(r"code = '([a-z_]+)'", source))
+        literals |= set(re.findall(r"(?:LlmCryptoError|LlmCryptoUnavailable|LlmSecretNeutralized|"
+                                   r"LlmSecretBindingMismatch|LlmSecretMalformed)\('([a-z_]+)'\)",
+                                   source))
+        self.assertTrue(literals)
+        self.assertLessEqual(literals, llm_crypto.ERROR_CODES)
+
+    def test_definite_proxy_errors_match_the_classifier(self):
+        self.assertEqual(nac.PROXY_DEFINITE_ERRORS, {'auth', 'policy', 'bad_request', 'too_large',
+                                                     'denied'})
 
 
 if __name__ == '__main__':

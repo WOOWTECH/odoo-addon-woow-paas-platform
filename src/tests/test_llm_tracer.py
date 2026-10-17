@@ -349,7 +349,9 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
                 patch.object(Account, '_llm_balance_refresh_tick',
                              side_effect=AssertionError('balance refresh ran')) as refresh, \
                 patch.object(Event, '_llm_event_cleanup_tick',
-                             side_effect=AssertionError('event cleanup ran')) as cleanup:
+                             side_effect=AssertionError('event cleanup ran')) as cleanup, \
+                patch.object(Event, '_llm_alert_delivery_tick',
+                             side_effect=AssertionError('alert delivery ran')) as delivery:
             # 「手動觸發」＝跑 cron 的 server action（與 method_direct_trigger 同一段 code、同一
             # 個執行者），但不經 _try_lock：live server 剛好在跑同一支 cron 時不會 UserError。
             for xmlid, (model, method) in sorted(llm_common.LLM_CRONS.items()):
@@ -359,11 +361,13 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
             # 告警與 incident helper 本身也是第二道（N27）：未設定時什麼都不寫。
             self.assertFalse(self.env[EVENT]._llm_alert(LlmAlert.TEST))
             self.assertFalse(self.env[EVENT]._llm_incident(
-                LlmIncident.ACCOUNT_ERROR, account_id=self.account.id, error_code='llm_test'))
+                LlmIncident.ACCOUNT_ERROR, account_id=self.account.id,
+                error_code=llm_common.ERR_LLM_INTERNAL))
         self.assertFalse(client.called, 'cron 建了 client')
         self.assertFalse(claim.called, 'cron 搶了戶')
         self.assertFalse(refresh.called, '未設定時餘額刷新不能跑')
         self.assertFalse(cleanup.called, '未設定時清理也不跑（所有 LLM cron 一致）')
+        self.assertFalse(delivery.called, '未設定時 webhook 也不送')
         self.assertFalse(http.called)
         self.assertEqual(self.env['woow.billing.incident'].sudo().search_count([]),
                          incident_count)
@@ -395,14 +399,17 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         with patch.object(Account, '_llm_client') as client, \
                 patch.object(Account, '_llm_claim_for_provision', return_value=None) as claim, \
                 patch.object(Account, '_llm_balance_refresh_tick', return_value=False) as refresh, \
-                patch.object(Event, '_llm_event_cleanup_tick', return_value=False) as cleanup:
+                patch.object(Event, '_llm_event_cleanup_tick', return_value=False) as cleanup, \
+                patch.object(Event, '_llm_alert_delivery_tick', return_value=False) as delivery:
             self.env[ACCOUNT]._cron_llm_provision()
             self.env[ACCOUNT]._cron_llm_balance_refresh()
             self.env[EVENT]._cron_llm_event_cleanup()
+            self.env[EVENT]._cron_llm_alert_delivery()
         client.assert_called_once_with(nac.ROLE_CRON)
         claim.assert_called_once()
         refresh.assert_called_once()
         cleanup.assert_called_once()
+        delivery.assert_called_once()
 
 
 # ====================================================================== #
@@ -425,6 +432,11 @@ class TestLlmSigningKeyFailClosed(TransactionCase):
         self.client = LlmClientAdapter(self, self.fake, full_factory=True)
         partner = self.env['res.partner'].create({'name': 'llm signing key'})
         self.account = self.env[ACCOUNT]._llm_activate(partner, TOS, None, '')
+        # TransactionCase：告警 helper 的獨立 cursor 是真的第二條連線，會真的 commit 進共用 DB。
+        # 這裡只斷言「有告警、碼對」（告警本身在 test_llm_platform_foundation 驗）。
+        alert = patch.object(type(self.env[EVENT]), '_llm_alert', return_value=False)
+        self.alert = alert.start()
+        self.addCleanup(alert.stop)
 
     def test_trailing_newline_is_stripped_and_still_signs(self):
         good = os.environ[nac.ENV_AUTH_CRON]
@@ -436,6 +448,7 @@ class TestLlmSigningKeyFailClosed(TransactionCase):
             self.env[ACCOUNT]._cron_llm_provision()
         claim.assert_called_once()
         self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON])
+        self.assertFalse(self.alert.called)
 
     def test_malformed_cron_key_fails_closed_before_claiming(self):
         embedded, parts = _broken_signing_value('kcron')
@@ -453,6 +466,11 @@ class TestLlmSigningKeyFailClosed(TransactionCase):
             self.assertFalse(claim.called)
         self.assertFalse(self.fake.calls)
         self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_CRON])
+        # 設定類的 fail closed 一律告警（審查 LLM-02b finding 2）；碼是封閉的，不帶值。
+        self.assertEqual(
+            [(c.args, c.kwargs) for c in self.alert.call_args_list],
+            [((LlmAlert.CONFIG_UNAVAILABLE,),
+              {'error_code': llm_common.CONFIG_PROXY_AUTH_UNAVAILABLE})] * 2)
         self.account.invalidate_recordset()
         self.assertEqual((self.account.state, self.account.provision_attempts,
                           self.account.provision_lease_token), ('provisioning', 0, False))

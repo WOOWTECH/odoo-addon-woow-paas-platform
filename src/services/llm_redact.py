@@ -30,11 +30,17 @@ MASK = '<redacted>'
 _JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}')
 _GENERIC_JWT_RE = re.compile(r'\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b')
 _BEARER_RE = re.compile(r'(?i)(bearer\s+)[^\s"\',;}]+')
-_NAP_RE = re.compile(r'nap_[A-Za-z0-9_-]{4,}')
-_SK_RE = re.compile(r'sk-[A-Za-z0-9_-]{4,}')
+# 左邊界（審查 LLM-02b finding 12）：``disk-pressure``、``task-runner``、``snap_…`` 這種一般的字不能被
+# 遮成 ``di***``。真的金鑰是 ``sk-`` 加 48 字元（DESIGN §5.5 的掃描式是 ``sk-[A-Za-z0-9]{20,}``）。
+_NAP_RE = re.compile(r'(?<![A-Za-z0-9])nap_[A-Za-z0-9_-]{4,}')
+_SK_RE = re.compile(r'(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}')
+# key=value：名稱前面不能緊接英數（``monkey=1`` 不是 ``key=1``）——只限裸的 ``key``。``token``、
+# ``secret``、``password`` 刻意維持「後綴也算」：post-deploy init 原本的 regex 就是這樣遮
+# ``authtoken=…``（ngrok）、``apitoken=…`` 的，收斂到這裡不能少遮。
 _SECRET_KV_RE = re.compile(
     r'(?i)(["\']?(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|'
-    r'proof[_-]?token|token|key|x-security-proof|x-woow-proxy-sig|authorization)["\']?)'
+    r'proof[_-]?token|token|(?<![A-Za-z0-9])key|x-security-proof|x-woow-proxy-sig|'
+    r'authorization)["\']?)'
     r'(\s*(?::|=|%3D)\s*)'
     r'("[^"]*"|\'[^\']*\'|[^\s"\',}&]+)')
 

@@ -159,7 +159,7 @@ class TestBillingIncidentSchema864(TransactionCase):
                 ('llm_external_credit', 'AI credit added outside the platform'),
                 ('llm_void_failed', 'AI credit void failed'),
                 ('llm_not_me', 'AI account reported as not me'),
-                ('llm_secret_mismatch', 'AI account secret rejected'),
+                ('llm_secret_mismatch', 'AI account credential check failed (ciphertext mismatch)'),
                 ('llm_account_error', 'AI account error'),
             ),
             'state': (

@@ -32,8 +32,8 @@
         </record>
 
         <!-- 餘額刷新（DESIGN §1.3.6；LLM-02b）：AP 分頁讀本環境前綴的使用者、寫回餘額快取。
-             每 tick ≤ 30 秒、最多 20 頁，剩下的 _trigger() 接著跑；讀到哪一頁記在
-             llm_runtime_state。 -->
+             每 tick ≤ 30 秒、最多 10 頁，剩下的 60 秒後 _trigger() 接著跑（分攤 AP 的 GA 桶）；
+             讀到哪一頁記在 llm_runtime_state。 -->
         <record id="ir_cron_llm_balance_refresh" model="ir.cron">
             <field name="name">PaaS: AI Models Balance Refresh</field>
             <field name="model_id" ref="model_woow_paas_platform_llm_account"/>
@@ -45,15 +45,30 @@
             <field name="active" eval="True"/>
         </record>
 
-        <!-- llm_event 保留 400 天（DESIGN §2.6；LLM-02b）：每批 5,000 筆、每 tick ≤ 30 秒。 -->
+        <!-- llm_event 保留 400 天（DESIGN §2.6；LLM-02b）：每批 5,000 筆、每 tick ≤ 30 秒。
+             N28：每日性質的工作改成每 10 分鐘跑一次的冪等 cron（repo 沒有 cron 設 nextcall、
+             prod 只有 2 條 cron thread）；多數時候 create_date 索引上撈不到任何列。 -->
         <record id="ir_cron_llm_event_cleanup" model="ir.cron">
             <field name="name">PaaS: AI Models Audit Event Cleanup</field>
             <field name="model_id" ref="model_woow_paas_platform_llm_event"/>
             <field name="state">code</field>
             <field name="code">model._cron_llm_event_cleanup()</field>
             <field name="user_id" ref="base.user_root"/>
-            <field name="interval_number">1</field>
-            <field name="interval_type">days</field>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <!-- 告警 webhook（選配）的送出（N13、N26；LLM-02b）：告警 helper 只把事件標成
+             webhook_state=pending 並 _trigger() 這支，HTTP 請求裡不送；10 分鐘只是保險。 -->
+        <record id="ir_cron_llm_alert_delivery" model="ir.cron">
+            <field name="name">PaaS: AI Models Alert Webhook Delivery</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_event"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_alert_delivery()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
     </data>

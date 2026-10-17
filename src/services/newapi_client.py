@@ -124,6 +124,33 @@ FREE_TRIAL_LIFETIME_SECONDS = 90 * 86400
 #: new-api 回的英文原句（``message_key``）——依它分類，不受語系影響。
 MSG_LOGIN_FAILED = 'Username or password is incorrect, or user has been banned'
 
+#: new-api rc.44 已知的穩定錯誤碼（``code``；〔PROV〕§6.1、DESIGN §3.4、notes/newapi-api-surface）。
+#: PaaS 這邊的錯誤碼一律是封閉集合（N24；LLM-02b）：new-api 回的 ``code`` 只有在這張表裡才變成
+#: ``newapi_<小寫>``，其他（含 :func:`classify_response` 的 ``UNRECOGNISED``）一律
+#: :data:`NEWAPI_OTHER_CODE`——new-api 端可控的字不會原樣流進 ``last_error_code``、告警與 incident。
+#: 新增一個要分流的 code＝加在這裡（``llm_common.ERROR_CODES`` 由它導出）。
+KNOWN_NEWAPI_CODES = frozenset({
+    'ACCESS_TOKEN_EXPIRED', 'ACCESS_TOKEN_EXPIRY_INVALID', 'ACCESS_TOKEN_LIMIT',
+    'ACCESS_TOKEN_NAME_INVALID', 'ACCESS_TOKEN_ROUTE_UNDECLARED', 'ACCESS_TOKEN_SCOPE_DENIED',
+    'ACCESS_TOKEN_SCOPE_FORBIDDEN', 'ACCESS_TOKEN_SCOPE_INVALID',
+    'AUTH_INSUFFICIENT_PRIVILEGE', 'AUTH_INTERNAL_ERROR', 'AUTH_SESSION_ISSUANCE_LIMIT',
+    'AUTH_SESSION_LIMIT', 'AUTH_SESSION_NOT_FOUND', 'AUTH_SESSION_REQUIRED',
+    'AUTH_SESSION_REVOKED', 'AUTH_TOKEN_EXPIRED', 'AUTH_UNAUTHORIZED', 'AUTH_USER_DISABLED',
+    'INVALID_REQUEST',
+    'SECURITY_ACTION_FORBIDDEN', 'SECURITY_CONTEXT_INVALID', 'SECURITY_METHOD_UNAVAILABLE',
+    'SECURITY_PROOF_CONTEXT_MISMATCH', 'SECURITY_PROOF_EXPIRED', 'SECURITY_PROOF_INVALID',
+    'SECURITY_PROOF_METHOD_MISMATCH', 'SECURITY_PROOF_REQUIRED', 'SECURITY_PROOF_SCOPE_MISMATCH',
+    'SECURITY_VERIFICATION_FAILED',
+})
+NEWAPI_OTHER_CODE = 'llm_newapi_other'
+
+
+def newapi_error_code(code):
+    """new-api 的 ``code`` → PaaS 錯誤碼（封閉集合）：已知 ⇒ ``newapi_<小寫>``，其他 ⇒ ``llm_newapi_other``。"""
+    if isinstance(code, str) and code in KNOWN_NEWAPI_CODES:
+        return 'newapi_%s' % code.lower()
+    return NEWAPI_OTHER_CODE
+
 #: WEB 金鑰（Odoo web 程式路徑）能叫的 client 方法＝代理 routetable 裡 ``web=True`` 的路由
 #: （DESIGN §1.4.2-1）。其餘方法（開戶、PAT、session、ap）只給 CRON 金鑰。
 WEB_METHODS = frozenset({
@@ -154,6 +181,8 @@ _PROXY_NOT_EXECUTED = frozenset({'connect', 'busy', 'budget', 'body_timeout', 'c
 _PROXY_UNKNOWN = frozenset({'reset', 'timeout', 'internal'})
 #: 代理判定 PaaS 送錯了（簽章、白名單、body 政策）：確定沒執行，而且要開 circuit（LLM-02）。
 _PROXY_BUG = frozenset({'auth', 'policy', 'bad_request', 'too_large'})
+#: 會成為 ``Definite.proxy_error`` 的值（其他代理錯誤是 NotExecuted／Unknown，沒有 proxy_error）。
+PROXY_DEFINITE_ERRORS = _PROXY_BUG | {'denied'}
 
 
 # --------------------------------------------------------------------------- #

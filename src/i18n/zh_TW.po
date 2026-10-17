@@ -24103,8 +24103,10 @@ msgstr "AI 模型告警信箱必須是 1 到 5 個以逗號分隔的電子郵件
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/llm_common.py:0
-msgid "The AI models alert webhook must be an https:// URL without credentials."
-msgstr "AI 模型告警 webhook 必須是不含帳號密碼的 https:// 網址。"
+msgid ""
+"The AI models alert webhook must be an https:// URL without credentials, a "
+"query string (?) or a # fragment."
+msgstr "AI 模型告警 webhook 必須是 https:// 網址，且不含帳號密碼、查詢參數（?）或 # 片段。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -24211,8 +24213,8 @@ msgstr "AI 帳戶被回報「不是我操作」"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__llm_secret_mismatch
-msgid "AI account secret rejected"
-msgstr "AI 帳戶密文被拒"
+msgid "AI account credential check failed (ciphertext mismatch)"
+msgstr "AI 帳戶憑證驗證失敗（密文不符）"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__llm_account_error
