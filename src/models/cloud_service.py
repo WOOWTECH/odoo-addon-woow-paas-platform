@@ -361,6 +361,9 @@ def _reject_init_control_writes(env, vals):
 # （清掉旗標、把 alerted 標記填上讓平台不再通知），或替別的服務偽造一則。
 _OBSERVATION_CONTROL_FIELDS = frozenset({
     'observed_at', 'observation_episode_started_at',
+    # 商用驗收 HS-013-2：對外位址的「最後檢查時間」與重探窗口。租戶寫得進窗口，就能讓平台每分鐘
+    # 替它打一次 operator；寫得進檢查時間，就能讓一個過期的位址看起來剛驗過。
+    'public_tunnel_checked_at', 'public_tunnel_recheck_until',
     'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
     'workload_fault_alerted_at', 'workload_checked_at',
     # X-BK-006-1：備份事實同理——租戶能寫就能把「備份失敗」改成 ok、或把告警標記填上。
@@ -780,6 +783,11 @@ INIT_CRON_SOFT_CAP = 10
 _INIT_CRON_XMLID = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
 # init cron 的 wall 時鐘（模組層級，測試可替換）。
 _init_cron_clock = time.monotonic
+# 商用驗收 HS-013-2：服務**進入** running 後，對外位址（ngrok sidecar）要在這段時間內每分鐘重探一次
+# （`_cron_recheck_public_tunnels`）。轉回 running 的那一輪 poll 常常早於 agent 連上（Pod 換新約 80 秒、
+# agent 再 20 秒），之後 running 服務只有每日對帳會再探 ⇒ 服務頁「尚未取得」或過期的錯誤原因會掛到
+# 下一次動作（實測 1–9 分鐘）。10 分鐘涵蓋 Headscale 設了網域時 bootstrap 等 agent 的 90 秒＋重試。
+PUBLIC_TUNNEL_RECHECK_MINUTES = 10
 # #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）。
 # 沒有 FailedCreate 證據的 0 個 Pod（`no_pods`）要持續這麼久才算確認——換 Pod 的瞬間
 # （Recreate 砍舊建新、節點重開）也會短暫是 0，那不是故障。有證據的不必等。
@@ -2182,6 +2190,25 @@ class CloudService(models.Model):
         copy=False,
         help='Why the ngrok sidecar has no public address, when its log says so '
              '(wrong or missing authtoken, domain already in use, restart needed).',
+    )
+    # 商用驗收 HS-013-2：最後一次「探過、有結論」的時間（有位址或確定沒有）。與上面兩格同一個咽喉
+    # 寫入（`_tunnel_facts`）；operator 掛了＝沒探，不更新。服務頁顯示它，讓租戶知道那一格多新。
+    public_tunnel_checked_at = fields.Datetime(
+        string='Public Tunnel Last Checked',
+        readonly=True,
+        copy=False,
+        help='Last time the platform asked the ngrok sidecar for the public address and got an '
+             'answer (an address, or none with or without a reason), in UTC.',
+    )
+    # 商用驗收 HS-013-2：重探窗口的終點。服務**進入** running 時由 write() 集中 stamp（與
+    # first_running_at 同一個咽喉，任何寫回 running 的路徑自動跟上），`_cron_recheck_public_tunnels`
+    # 只看窗口內的服務。只有平台寫得進來（`_OBSERVATION_CONTROL_FIELDS`）。
+    public_tunnel_recheck_until = fields.Datetime(
+        string='Re-check Public Tunnel Until',
+        readonly=True,
+        copy=False,
+        help='Until when the platform re-reads the public tunnel address every minute after '
+             'the service (re)entered the running state, in UTC.',
     )
     subdomain = fields.Char(
         string='Subdomain',
@@ -5694,6 +5721,16 @@ class CloudService(models.Model):
             return env._(
                 'ngrok needs a verified account and authtoken (ERR_NGROK_4018). Verify your '
                 'ngrok account and enter its authtoken in Configuration.')
+        if code == 'ERR_NGROK_9014':
+            # 商用驗收 EMQX-020-1：legacy／免費帳號被拒的是 PROXY protocol（EMQX chart 0.1.6 起預設
+            # `ngrok.proxyProtocol=true`），token 其實有效——通用句「請檢查 authtoken 與網域」會讓
+            # 租戶永遠查不到問題。⚠ 不寫成「不支援 TCP」（更正版缺陷）。
+            return env._(
+                'Your ngrok account plan does not allow a feature this service uses '
+                '(ERR_NGROK_9014) — usually the PROXY protocol that passes the real client '
+                'address. The authtoken itself is fine. Upgrade the ngrok account to a paid plan '
+                '(Pay-as-you-go), or turn off the PROXY protocol option in Configuration if this '
+                'service offers one.')
         if re.fullmatch(r'ERR_NGROK_[0-9]{1,5}', code):
             return env._(
                 'The ngrok agent could not connect (%(code)s, see '
@@ -6519,7 +6556,8 @@ class CloudService(models.Model):
                     drift = {
                         field: (service[field], value)
                         for field, value in facts.items()
-                        if field != 'last_release_sync_at'
+                        # 兩個「問過的時間」每次都會變，不是漂移。
+                        if field not in ('last_release_sync_at', 'public_tunnel_checked_at')
                         and service[field] != value
                     }
                     # 有沒有漂移都寫同一個 dict：`drift` 只用於 log。
@@ -7421,6 +7459,44 @@ class CloudService(models.Model):
                 _logger.exception(
                     "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)
 
+    def _cron_recheck_public_tunnels(self):
+        """商用驗收 HS-013-2：剛進入 running 的服務，每分鐘重讀一次 ngrok sidecar 廣告的對外位址。
+
+        頻率（每分鐘）寫在 ``cloud_service_cron.xml``；範圍＝``public_tunnel_recheck_until`` 還沒過的
+        running 服務（窗口由 write() 在服務進入 running 時 stamp，見 ``PUBLIC_TUNNEL_RECHECK_MINUTES``）。
+        之後的新鮮度照舊由每日對帳 ``_cron_reconcile_release_facts`` 維持。
+
+        只讀 → 回寫對外位址三格（``_tunnel_facts``，與 poll／對帳同一個 producer），**一行 state／
+        error_message 都不寫**：這是觀測，不是狀態機。operator 失敗＝這一輪沒探（``_probe_public_tunnel``
+        回 None）⇒ 不寫，也不更新「最後檢查時間」。逐台 savepoint（同每日對帳）：一台失敗不中斷整批，
+        整批由 cron 框架在結束時 commit——本方法不自己 commit（窗口內通常只有個位數台、每台一次 HTTP）。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('public_tunnel_recheck_until', '>=', fields.Datetime.now()),
+        ])
+        if not services:
+            return
+        from ..services.paas_operator import get_paas_operator_client
+        client = get_paas_operator_client(self.env)
+        if not client:
+            _logger.warning(
+                "recheck-public-tunnels: operator client 未設定，本輪未執行（%d 台在窗口內）",
+                len(services))
+            return
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                # ⚠ #1052 標記（非裁定）：逐筆 batch isolation，同每日對帳 cron 的站點形狀。
+                with self.env.cr.savepoint():
+                    address, error = service._probe_public_tunnel(client)
+                    vals = service._tunnel_facts(address, error)
+                    if vals:
+                        service.sudo().write(vals)
+            except Exception:
+                _logger.exception(
+                    "recheck-public-tunnels failed for service %s (id=%s)", *service_label)
+
     def _timeout_classify(self, detail):
         """detail → ``(原因分型, hint key)``（#1417）；hint key 為 None＝沒有方向可給。
 
@@ -8173,12 +8249,27 @@ class CloudService(models.Model):
         # 對外位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
         # `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 帳本原值不動；
         # `''` ＝ 探過而且現在沒有位址 ⇒ 清掉（留著一個連不上的舊位址比空值更糟）。
-        if tunnel_address is not None:
-            vals['public_tunnel_url'] = tunnel_address or False
-            # #1559：原因只描述「現在沒有位址」——有位址就清掉；同一個「探過才寫」的閘門。
-            vals['public_tunnel_error'] = (
-                False if tunnel_address else (tunnel_error or False))
+        vals.update(self._tunnel_facts(tunnel_address, tunnel_error))
         return vals
+
+    def _tunnel_facts(self, tunnel_address, tunnel_error):
+        """對外位址探測結果 → 帳本欄位。**對外位址三格的單一 producer。**
+
+        `_release_facts`（背景 poll／每日對帳）與 `_cron_recheck_public_tunnels`（進入 running 後的
+        重探窗口）都從這裡拿 vals——三格一起寫、一起不寫，不會出現「位址更新了、錯誤原因還是舊的」。
+
+        `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 回空 dict，帳本原值不動；
+        `''` ＝ 探過而且現在沒有位址 ⇒ 清掉位址（留著一個連不上的舊位址比空值更糟）。
+        """
+        if tunnel_address is None:
+            return {}
+        return {
+            'public_tunnel_url': tunnel_address or False,
+            # #1559：原因只描述「現在沒有位址」——有位址就清掉；同一個「探過才寫」的閘門。
+            'public_tunnel_error': False if tunnel_address else (tunnel_error or False),
+            # 商用驗收 HS-013-2：服務頁的「最後檢查」。
+            'public_tunnel_checked_at': fields.Datetime.now(),
+        }
 
     # ------------------------------------------------------------------ #
     #  #1647：running 服務的 workload 觀測（期望有 Pod、實際一顆都沒有）   #
@@ -11210,6 +11301,14 @@ class CloudService(models.Model):
         first_running = self.browse()
         if vals.get('state') == 'running' and 'first_running_at' not in vals:
             first_running = self.filtered(lambda r: not r.first_running_at)
+        # 商用驗收 HS-013-2：**進入** running（從任何其他狀態）就開一段對外位址重探窗口——設定變更、
+        # 重新啟動、Redeploy、復權之後 ngrok agent 要等新 Pod 起來才連得上，而轉回 running 的那一輪
+        # poll 往往更早。集中在這裡（同 first_running_at），任何寫回 running 的路徑自動跟上。
+        # 只對有這個能力的商品（`has_public_tunnel_address` 唯一事實源），running → running 不重開。
+        entering_running_tunnel = self.browse()
+        if vals.get('state') == 'running' and 'public_tunnel_recheck_until' not in vals:
+            entering_running_tunnel = self.filtered(
+                lambda r: r.state != 'running' and r._chart_has_public_tunnel_address())
         # #1647：`workload_fault_*` 只描述「running 的服務沒有 Pod」。服務一離開 running
         # （重新啟動、Redeploy、停權、刪除、轉 error……）這段異常就不再描述現況——留著的話
         # 回到 running 時會帶著上一段的起點與「已通知」標記，新的異常不會再告警。
@@ -11305,6 +11404,11 @@ class CloudService(models.Model):
             if first_running:
                 super(CloudService, first_running).write({
                     'first_running_at': fields.Datetime.now(),
+                })
+            if entering_running_tunnel:
+                super(CloudService, entering_running_tunnel.sudo()).write({
+                    'public_tunnel_recheck_until': fields.Datetime.now() + timedelta(
+                        minutes=PUBLIC_TUNNEL_RECHECK_MINUTES),
                 })
             if rebinding:
                 rebinding._assert_subscription_binding()

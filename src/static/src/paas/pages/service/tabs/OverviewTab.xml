@@ -179,6 +179,13 @@
                             <t t-else="">
                                 <small class="text-muted" t-esc="publicTunnelPendingHint"/>
                             </t>
+                            <!-- 商用驗收 EMQX-020-3／HS-013-3：範本的兩則提示（資料值）。有位址時的提示（例 EMQX
+                                 「明文 TCP、經第三方」）；沒有位址而有原因時，服務在這段期間退回什麼（例 Headscale
+                                 「登入網址已暫時改為叢集內網址、外部裝置暫時離線」）。 -->
+                            <small class="o_woow_tunnel_note text-warning d-block" t-if="props.service.public_tunnel_url and props.service.public_tunnel_address_note" t-esc="props.service.public_tunnel_address_note"/>
+                            <small class="o_woow_tunnel_note text-muted d-block" t-if="!props.service.public_tunnel_url and props.service.public_tunnel_error and props.service.public_tunnel_error_note" t-esc="props.service.public_tunnel_error_note"/>
+                            <!-- 商用驗收 HS-013-2：這一格是背景回讀的結果，講出多新（同 Last synced 的理由）。 -->
+                            <small class="o_woow_sync_hint text-muted d-block" t-if="publicTunnelCheckedText" t-esc="publicTunnelCheckedText"/>
                         </span>
                     </div>
 
