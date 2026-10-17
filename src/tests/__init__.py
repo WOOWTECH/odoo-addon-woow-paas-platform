@@ -1223,6 +1223,8 @@ from . import test_llm_terms
 # LLM-02：newapi_client／代理完整化的 Odoo 端（circuit breaker、AP 限速、SWR 快取、設定變更稽核、
 # MCP 跳板、後台〔測試連線〕）。
 from . import test_llm_client_hardening
+# LLM-02 AC5：MCP URL 不能拿 PaaS 當打 new-api／代理的跳板。
+from . import test_llm_mcp_jump_guard
 # INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
 from . import test_vpn_node_status_fix005
 # INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
