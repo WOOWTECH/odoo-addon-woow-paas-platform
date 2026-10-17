@@ -1188,3 +1188,5 @@ from . import test_llm_tracer
 from . import test_llm_platform_foundation
 # INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
 from . import test_vpn_node_status_fix005
+# INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
+from . import test_vpn_node_followup_ts005

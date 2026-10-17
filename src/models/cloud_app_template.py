@@ -7,6 +7,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 from ..services.woow_odoo_readiness import WOOW_ODOO_CHART, chart_name_of
+from ..services import tailscale_settings
 
 _logger = logging.getLogger(__name__)
 
@@ -225,6 +226,29 @@ SPEC_FORMAT_PARSERS = {
     SPEC_FORMAT_GIT_NAME: parse_git_name,
     SPEC_FORMAT_EMAIL: parse_email,
     SPEC_FORMAT_DOMAIN: parse_domain,
+}
+
+# INFRA-TS-005-5／TS-007-1：helm_value_specs 的 ``validate``——**只在存檔時**跑的檢查。
+#
+# 與 ``format`` 的差別：``format`` 也在部署組裝（``_apply_spec_formats``）正規化、不合法就整欄丟掉；
+# ``validate`` 不碰部署——既有服務已存的值（舊版允許存進去的）重新部署時照舊交給 chart，chart 自己
+# 只略過壞的那一筆。所以收緊 ``validate`` 不會讓既有服務在下一次 Redeploy 少掉設定。
+#
+# 每個 validator：``fn(get, namespace) -> (code, params) | None``；``get(dot_key)`` 讀「這次送出的值，
+# 沒送就讀既有值」。``triggers``：這次送出的鍵碰到其中之一才驗（只改別的欄位時不重驗已存的組合）。
+SPEC_VALIDATE_TAILSCALE_SERVE = 'tailscale_serve'
+SPEC_VALIDATE_TAILSCALE_LOGIN = 'tailscale_login'
+_TS_LOGIN_KEYS = ('tailscale.controlPlane', 'tailscale.loginServer', 'tailscale.authKey')
+SPEC_SAVE_VALIDATORS = {
+    SPEC_VALIDATE_TAILSCALE_SERVE: (
+        ('tailscale.serve',),
+        lambda get, ns: tailscale_settings.check_serve(get('tailscale.serve'), ns),
+    ),
+    SPEC_VALIDATE_TAILSCALE_LOGIN: (
+        _TS_LOGIN_KEYS,
+        lambda get, ns: tailscale_settings.check_login(
+            get('tailscale.controlPlane'), get('tailscale.loginServer'), get('tailscale.authKey')),
+    ),
 }
 
 # #501：限量商品的**內建**全域實例上限（slug → 台數）。
@@ -1331,8 +1355,58 @@ class CloudAppTemplate(models.Model):
                     out[key] = fmt
         return out
 
+    def _save_validated_value_specs(self):
+        """這個 template 帶 ``validate`` 的 spec：``{validate 名: spec key}``（未知名略過）。"""
+        specs = self._parse_helm_value_specs()
+        if not isinstance(specs, dict):
+            return {}
+        out = {}
+        for section in ('required', 'optional'):
+            fields_list = specs.get(section)
+            if not isinstance(fields_list, list):
+                continue
+            for field in fields_list:
+                if not isinstance(field, dict):
+                    continue
+                name = field.get('validate')
+                if isinstance(name, str) and name in SPEC_SAVE_VALIDATORS:
+                    out[name] = field.get('key')
+        return out
+
     def _spec_format_message(self, code, params):
-        """把 ``parse_*`` 的錯誤碼翻成租戶語言（``_()`` 需要這個 frame 的 ``self.env``）。"""
+        """把 ``parse_*``／``validate`` 的錯誤碼翻成租戶語言（``_()`` 需要這個 frame 的 ``self.env``）。"""
+        # INFRA-TS-007-1：轉發清單（與映像 entrypoint parse_serve 同一套規則）。
+        if code == 'serve_bad_format':
+            return _('Forwards: "%(entry)s" is not in the format tailnet-port=service:port '
+                     '(example: 8069=svc-1a2b3c4d:80).', **params)
+        if code == 'serve_port_range':
+            return _('Forwards: "%(entry)s" has a port outside 1-65535.', **params)
+        if code == 'serve_other_namespace':
+            return _('Forwards: "%(entry)s" is not a service of this workspace. Only services of '
+                     'this workspace are allowed (no IP addresses, external names or other '
+                     'workspaces).', **params)
+        if code == 'serve_not_service_name':
+            return _('Forwards: "%(entry)s" does not name a service.', **params)
+        if code == 'serve_duplicate_port':
+            return _('Forwards: tailnet port %(port)s is used more than once ("%(entry)s").',
+                     **params)
+        if code == 'serve_too_many':
+            return _('Forwards: at most %(max)s entries.', **params)
+        # INFRA-TS-005-5：控制平面／控制伺服器／auth key 的組合（不回顯 key）。
+        if code == 'login_server_required':
+            return _('Control server: required when the control plane is "Custom URL".')
+        if code == 'login_server_invalid':
+            return _('Control server: "%(entry)s" is not a valid URL; use '
+                     'https://headscale.example.com or http://host:port.', **params)
+        if code == 'auth_key_whitespace':
+            return _('Auth key: the key contains a space or line break; paste it again as one line.')
+        if code == 'auth_key_not_tailscale':
+            return _('Auth key: the control plane is official Tailscale, so the key must be a '
+                     'Tailscale key starting with tskey-. A Headscale pre-auth key only works with '
+                     '"Same workspace Headscale" or "Custom URL".')
+        if code == 'auth_key_is_tailscale':
+            return _('Auth key: a tskey- key only works with official Tailscale. For a Headscale '
+                     'control plane, create a pre-auth key in Headplane and paste that instead.')
         if code == 'hosts_not_https':
             return _('Git token hosts only accept https; "%(entry)s" is not allowed.',
                      **params)
@@ -1373,11 +1447,16 @@ class CloudAppTemplate(models.Model):
                      **params)
         return _('Invalid setting value.')
 
-    def _validate_spec_formats(self, flat_values):
-        """存檔前（create／reconfigure）：帶 ``format`` 的鍵不合法就回錯誤訊息。
+    def _validate_spec_formats(self, flat_values, existing_values=None, namespace=None,
+                               cleared_keys=()):
+        """存檔前（create／reconfigure）：帶 ``format``／``validate`` 的鍵不合法就回錯誤訊息。
 
         Args:
             flat_values: 已過白名單的 dot-path 扁平 dict（controller 送進來的形態）
+            existing_values: 服務既有的巢狀 helm values（reconfigure；``validate`` 的跨欄位檢查
+                沒送的欄位讀這裡）；create 時為 None
+            namespace: 服務的 namespace（``validate`` 的同工作區檢查用）
+            cleared_keys: 同一請求要清除的鍵（#1455），視為空值
 
         Returns:
             str | None: 第一個錯誤的租戶語言訊息；全部合法回 None
@@ -1388,6 +1467,26 @@ class CloudAppTemplate(models.Model):
             if key not in flat_values:
                 continue
             _value, error = SPEC_FORMAT_PARSERS[fmt](flat_values[key])
+            if error:
+                return self._spec_format_message(*error)
+
+        cleared = set(cleared_keys or ())
+
+        def get(dot_key):
+            if dot_key in cleared:
+                return None
+            if dot_key in flat_values:
+                return flat_values[dot_key]
+            node = existing_values
+            for part in dot_key.split('.'):
+                node = node.get(part) if isinstance(node, dict) else None
+            return node
+
+        for name in self._save_validated_value_specs():
+            triggers, check = SPEC_SAVE_VALIDATORS[name]
+            if not any(key in flat_values or key in cleared for key in triggers):
+                continue
+            error = check(get, namespace)
             if error:
                 return self._spec_format_message(*error)
         return None

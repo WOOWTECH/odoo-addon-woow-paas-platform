@@ -6,6 +6,7 @@ import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { HelmValueForm } from "../../../components/config/HelmValueForm";
 import { cloudService } from "../../../services/cloud_service";
+import { settingsErrors } from "../../../utils/tailscale_settings";
 
 /**
  * ConfigurationTab Component
@@ -269,6 +270,25 @@ export class ConfigurationTab extends Component {
             if (value === undefined || value === null || value === "") {
                 errors[spec.key] = _t("%s is required", spec.label || spec.key);
             }
+        }
+        // INFRA-TS-005-5／TS-007-1：spec 帶 `validate` 的欄位（VPN 節點的轉發清單、控制平面＋key）
+        // 在送出前就擋下節點一定會略過／登入一定失敗的值（後端存檔時同一套規則再驗一次）。
+        const edited = this.state.editedValues;
+        const checked = settingsErrors(this.allSpecs, edited, {
+            namespace: this.props.service.helm_namespace ?? null,
+            changed: (key) => {
+                const spec = this.allSpecs.find((s) => s.key === key);
+                if (!spec || !(key in edited)) return false;
+                if (this.isPasswordSpec(spec)) return !!edited[key];
+                return String(edited[key] ?? "") !== String(this.getSpecValue(spec) ?? "");
+            },
+        });
+        for (const [key, message] of Object.entries(checked)) {
+            if (!errors[key]) errors[key] = message;
+        }
+        // 錯在「進階」區的欄位時把進階區打開，否則看不到紅字。
+        if (this.configurableSpecs.optional.some((spec) => errors[spec.key])) {
+            this.state.showAdvanced = true;
         }
         this.state.errors = errors;
         return Object.keys(errors).length === 0;

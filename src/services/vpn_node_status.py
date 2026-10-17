@@ -49,6 +49,10 @@ _SKIP_REASONS = frozenset({
     'duplicate_port', 'too_many', 'namespace_unknown', 'other',
 })
 _CONTROL_PLANES = frozenset({'official', 'workspace', 'custom'})
+#: INFRA-TS-005-5：節點上一次登入失敗的原因（operator 從 tailscaled Health 對應的封閉代碼）。
+_LOGIN_ERRORS = frozenset({
+    'authkey_expired', 'authkey_used', 'authkey_invalid', 'control_unreachable', 'other',
+})
 
 _ENTRY_RE = re.compile(r'^[A-Za-z0-9=:.,_-]{1,100}$')
 _SERVICE_RE = re.compile(r'^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$')
@@ -164,13 +168,21 @@ def public_report(payload, *, can_manage, control_plane='official'):
     dns = payload.get('dns_name')
 
     serve = payload.get('serve') if isinstance(payload.get('serve'), dict) else {}
+    state = _state_of(probe, backend, online)
+    login_error = payload.get('login_error')
     return {
-        'state': _state_of(probe, backend, online),
+        'state': state,
         'probe': probe,
         'control_plane': control_plane if control_plane in _CONTROL_PLANES else 'official',
         'tailnet_ips': ips[:4],
         'dns_name': dns if isinstance(dns, str) and _DNS_RE.fullmatch(dns) else None,
         'login': _clean_login(payload.get('login'), can_manage),
+        # INFRA-TS-005-5：登入失敗原因只在節點「沒登入」時有意義（Running 後 tailscaled 會清掉）。
+        'login_error': (login_error if isinstance(login_error, str) and login_error in _LOGIN_ERRORS
+                        and probe == 'ok' and backend != 'Running' else None),
+        # INFRA-TS-005-5：已登入的節點會靜默忽略設定裡的 auth key（entrypoint 只寫日誌）。
+        'authkey_ignored': (payload.get('authkey_configured') is True
+                            and state in (STATE_ONLINE, STATE_OFFLINE)),
         'serve': {
             'wanted_known': serve.get('wanted_known') is True,
             'forwards': _clean_forwards(serve.get('forwards')),

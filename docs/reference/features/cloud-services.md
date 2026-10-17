@@ -870,6 +870,17 @@ entrypoint 略過的項目只印在容器 stderr，Service 不存在的項目不
 - **UI**（Overview「VPN 節點狀態」卡）：節點狀態（已連線／需要重新登入／等待核可／未連線…）、需要登入時的說明（工作區 Headscale 用 Headplane 的 pre-auth key，
   因為它的登入頁是瀏覽器打不開的內部位址）、每個轉發有沒有生效，以及被略過的項目與原因。節點需要登入／等待核可／離線／停止時，Connection Info 的
   狀態也不再寫 ONLINE。
+- **登入失敗原因與被忽略的 key（INFRA-TS-005-5）**：operator 另回 `login_error`（authkey_expired／authkey_used／authkey_invalid／
+  control_unreachable／other；從 `tailscale status --json` 的 `Health` 裡「The last login error was: …」對應，原文不回；節點 Running 時一律 null）
+  與 `authkey_configured`（腳本只判斷 `TS_AUTHKEY_FILE` 有沒有非空白內容，回 set／unset，不讀出 key）。平台轉成 `login_error` 與
+  `authkey_ignored`（已登入＋設定裡有 key ⇒ 提示「這把 key 不會被使用」，對應 entrypoint 的 "not using it"）。
+- **節流**：`/node-status` 同一台服務 10 秒內共用上一份 operator 回應（每個 worker 一份表；operator 失敗不快取；角色過濾逐次重做）。
+- **存檔前驗證（INFRA-TS-005-5／TS-007-1）**：helm_value_specs 的 `validate`（只在存檔時跑、不碰部署組裝，所以收緊規則不會讓既有服務
+  Redeploy 時少掉設定；與 `format` 不同）。`tailscale_serve`：與 entrypoint `parse_serve` 同一套規則（格式、埠 1–65535、只接受同工作區
+  namespace 的 Service、DNS label、tailnet 埠不重複、最多 32 筆）；`tailscale_login`：控制平面與 key 種類（`tskey-` 只配官方 Tailscale）、
+  「自訂網址」必填且是 http(s) URL、key 不得含空白。登入三欄都沒動時不重驗已存的組合。權威在 `services/tailscale_settings.py`，
+  前端 `utils/tailscale_settings.js` 是即時提示的鏡像。Service 是否存在不在存檔時判斷（租戶可能先設轉發再開服務），由卡片的
+  `service_missing` 回報。
 - **部署順序**：operator 先上（新端點），平台後上；舊 operator 回 404 → 卡片不顯示內容（`available:false`），其餘不受影響。
 - **範圍外**：「填新 key 後 tailscaled 進入 crash loop」（INFRA-TS-005-1）與「升級中鎖住所有動作」（-2）是 chart／entrypoint 與 operator rollout 逾時的問題，
   不在這裡。

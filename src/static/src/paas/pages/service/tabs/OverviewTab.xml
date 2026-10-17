@@ -55,6 +55,8 @@
                         <span class="o_woow_info_value">
                             <span t-att-class="'o_woow_vpn_state o_woow_vpn_state_' + vpnStateTone" t-esc="vpnStateLabel"/>
                             <small class="o_woow_vpn_hint text-muted d-block" t-if="vpnStateHint" t-esc="vpnStateHint"/>
+                            <small class="o_woow_vpn_hint o_woow_vpn_login_error d-block" t-if="vpnLoginError" t-esc="vpnLoginError"/>
+                            <small class="o_woow_vpn_hint text-muted d-block" t-if="vpnAuthKeyNotice" t-esc="vpnAuthKeyNotice"/>
                         </span>
                     </div>
                     <div class="o_woow_info_row" t-if="vpnLoginGuidance.length">

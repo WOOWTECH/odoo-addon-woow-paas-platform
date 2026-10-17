@@ -397,6 +397,11 @@ $woow-radius-lg: 1.25rem;
     &.o_woow_vpn_state_muted { color: #6b7280; }
 }
 
+// INFRA-TS-005-5：上一次登入失敗的原因
+.o_woow_vpn_login_error {
+    color: #dc2626;
+}
+
 .o_woow_vpn_forwards {
     list-style: none;
     margin: 0;

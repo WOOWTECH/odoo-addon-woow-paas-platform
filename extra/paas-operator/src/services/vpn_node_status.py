@@ -62,6 +62,7 @@ SERVICES_TIMEOUT_SECONDS = 8
 SENTINEL_STATUS = "@@woow-status"
 SENTINEL_SERVE = "@@woow-serve"
 SENTINEL_WANTED = "@@woow-wanted"
+SENTINEL_AUTHKEY = "@@woow-authkey"
 NO_PARSER_MARK = "@@woow-noparser"
 
 #: 固定腳本——**沒有任何插值**。socket 與 namespace 都從 pod 自己的 env 讀。
@@ -79,6 +80,12 @@ if [ -r /entrypoint.sh ] && command -v bash >/dev/null 2>&1 && grep -q WOOW_TS_S
 'WOOW_TS_SOURCE_ONLY=1; . /entrypoint.sh; parse_serve "${{TS_SERVE:-}}" "$TS_SERVE_NS" "${{TS_CLUSTER_DOMAIN:-cluster.local}}"' 2>&1
 else
   echo '{NO_PARSER_MARK}'
+fi
+echo '{SENTINEL_AUTHKEY}'
+if [ -n "${{TS_AUTHKEY_FILE:-}}" ] && grep -q '[^[:space:]]' "$TS_AUTHKEY_FILE" 2>/dev/null; then
+  echo set
+else
+  echo unset
 fi
 """
 
@@ -137,6 +144,28 @@ _REGISTER_PATH_RE = re.compile(r"^/register/(?P<key>[A-Za-z0-9_-]{4,128})/?$")
 
 MAX_ITEMS = 40  # 與 entrypoint 的 max=32 對齊並留餘裕；避免畸形輸出撐大回應
 
+# ---- 上一次登入失敗的原因（INFRA-TS-005-5）-------------------------------------------------
+# tailscaled 把它放在 ``tailscale status --json`` 的 ``Health``（日誌的
+# ``health(warnable=login-state): error: You are logged out. The last login error was: …`` 同一句）。
+# 對應成封閉代碼，原文永不回傳（裡面有叢集內部位址）。
+LOGIN_ERR_AUTHKEY_EXPIRED = "authkey_expired"
+LOGIN_ERR_AUTHKEY_USED = "authkey_used"
+LOGIN_ERR_AUTHKEY_INVALID = "authkey_invalid"
+LOGIN_ERR_CONTROL_UNREACHABLE = "control_unreachable"
+LOGIN_ERR_OTHER = "other"
+
+_LAST_LOGIN_ERROR_RE = re.compile(r"last login error was:\s*(?P<why>.+)$", re.IGNORECASE | re.DOTALL)
+#: 順序有意義：先認 key 本身的問題，再認連線問題（連線錯誤的原文也可能含 "key" 字樣，例 fetch control key）。
+_LOGIN_ERROR_PATTERNS: Tuple[Tuple[re.Pattern, str], ...] = (
+    (re.compile(r"auth\s*key\b.*\bexpired|\bkey expired\b", re.I), LOGIN_ERR_AUTHKEY_EXPIRED),
+    (re.compile(r"already (been )?used", re.I), LOGIN_ERR_AUTHKEY_USED),
+    (re.compile(r"auth\s*key\b.*not found|invalid (auth\s*)?key|unable to validate|user mismatch"
+                r"|auth\s*key\b.*(tag )?is invalid", re.I), LOGIN_ERR_AUTHKEY_INVALID),
+    (re.compile(r"connection refused|no such host|all connection attempts failed|i/o timeout"
+                r"|context deadline exceeded|network is unreachable|connection reset|fetch control key"
+                r"|no route to host|tls handshake", re.I), LOGIN_ERR_CONTROL_UNREACHABLE),
+)
+
 
 def _safe_entry(raw: str) -> str:
     """租戶自己填的那一段：限長限字元，不合就以 ``?`` 取代（不回任何其他內容）。"""
@@ -155,10 +184,11 @@ def _skip_code(why: str) -> str:
 
 
 def split_probe_output(text: str) -> Dict[str, str]:
-    """把腳本輸出切成 ``status`` ／ ``serve`` ／ ``wanted`` 三段（缺哪段就沒有那個 key）。"""
+    """把腳本輸出切成 ``status`` ／ ``serve`` ／ ``wanted`` ／ ``authkey`` 四段（缺哪段就沒有那個 key）。"""
     sections: Dict[str, List[str]] = {}
     current: Optional[str] = None
-    names = {SENTINEL_STATUS: "status", SENTINEL_SERVE: "serve", SENTINEL_WANTED: "wanted"}
+    names = {SENTINEL_STATUS: "status", SENTINEL_SERVE: "serve", SENTINEL_WANTED: "wanted",
+             SENTINEL_AUTHKEY: "authkey"}
     for line in (text or "").split("\n"):
         stripped = line.rstrip("\r")
         if stripped in names:
@@ -276,6 +306,42 @@ def parse_node(status: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def parse_login_error(status: Optional[Dict[str, Any]]) -> Optional[str]:
+    """``Health`` 裡「上一次登入錯誤」→ 封閉代碼；沒有、或節點已 Running → None。
+
+    INFRA-TS-005-5：key 過期／用過／不對，原本只在容器日誌（``Received error: authkey expired``）。
+    """
+    if not status:
+        return None
+    if status.get("BackendState") == "Running":
+        return None  # 綠燈節點不顯示殘留的登入失敗
+    health = status.get("Health")
+    if not isinstance(health, list):
+        return None
+    for item in health[:MAX_ITEMS]:
+        if not isinstance(item, str):
+            continue
+        match = _LAST_LOGIN_ERROR_RE.search(item[:2048])
+        if not match:
+            continue
+        why = match.group("why")
+        for pattern, code in _LOGIN_ERROR_PATTERNS:
+            if pattern.search(why):
+                return code
+        return LOGIN_ERR_OTHER
+    return None
+
+
+def parse_authkey_configured(text: Optional[str]) -> Optional[bool]:
+    """探測腳本的 ``set``／``unset`` → True／False；其他（舊 operator 腳本、畸形輸出）→ None。"""
+    value = (text or "").strip()
+    if value == "set":
+        return True
+    if value == "unset":
+        return False
+    return None
+
+
 def parse_serve_status(serve: Optional[Dict[str, Any]]) -> Tuple[Dict[int, str], bool]:
     """``tailscale serve status --json`` → ``({tailnet 埠: 轉發目標}, 有沒有 TCP 以外的設定)``。"""
     applied: Dict[int, str] = {}
@@ -385,6 +451,9 @@ def build_report(
         "probe": probe,
         "pod": pod,
         **node,
+        "login_error": parse_login_error(status_json) if probe == PROBE_OK else None,
+        "authkey_configured": (parse_authkey_configured(sections.get("authkey"))
+                               if probe == PROBE_OK else None),
         "serve": {
             "wanted_known": valid is not None,
             "forwards": forwards,

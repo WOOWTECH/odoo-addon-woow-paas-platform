@@ -16,6 +16,7 @@ import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../componen
 import { formatTemplatePrice } from "../../utils/pricing_label";
 import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 import { cloudService } from "../../services/cloud_service";
+import { settingsErrors } from "../../utils/tailscale_settings";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
@@ -324,6 +325,17 @@ export class AppConfigurationPage extends Component {
                     errors[spec.key] = _t("%s is required", spec.label);
                 }
             }
+        }
+
+        // INFRA-TS-005-5／TS-007-1：spec 帶 `validate` 的欄位（VPN 節點的轉發清單、控制平面＋key）。
+        // 開通頁還不知道 namespace（null）⇒ 同工作區檢查交給後端。
+        const specs = [...(this.helmValueSpecs.required || []), ...(this.helmValueSpecs.optional || [])];
+        const checked = settingsErrors(specs, this.state.helmValues, { namespace: null });
+        for (const [key, message] of Object.entries(checked)) {
+            if (!errors[key]) errors[key] = message;
+        }
+        if ((this.helmValueSpecs.optional || []).some((spec) => checked[spec.key])) {
+            this.state.showAdvanced = true;
         }
 
         // Validate plan selection
