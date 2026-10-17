@@ -275,6 +275,26 @@ class TestLitellmSeed(TransactionCase):
         ):
             self.assertIn(needle, desc, why)
 
+    def test_description_long_request_limits_match_measurement(self):
+        """AI-LLM-013-3／FU3-AI-LLM-013-R-1：公開網址的長連線上限要寫實測值，且說清楚串流靠什麼撐住。
+
+        實測（svc262，chart 0.3.5）：非串流 140 s 在 125.7 s 回 524；串流首 chunk 後靜默 150 s 在約 127 s
+        被切；首位元組 140 s 在 125.5 s 回 524。舊文案寫「約 100 秒、用串流即可」——數字不對，也沒說串流
+        中途靜默同樣會被切。chart 0.3.10 起閘道在串流靜默時每 15 秒送 SSE 註解（: ping）撐住連線。
+        """
+        desc = self._tpl().full_description
+        self.assertNotIn('約 100 秒', desc, '實測約 120–125 秒，不是 100 秒')
+        for needle, why in (
+                ('約 120 秒', '入口靜默上限（實測 120–125 秒）'),
+                ('524', '非串流超時時用戶端看到的狀態碼'),
+                ('stream: true', '長回應改用串流'),
+                (': ping', '串流靜默時閘道送 SSE 註解維持連線（SDK 會忽略）'),
+                ('中途', '串流中途靜默也會被切——閘道的 keepalive 就是為此'),
+                ('錯誤會以串流', '送出 keepalive 後才發生的錯誤以 SSE 錯誤事件送達（HTTP 仍是 200）'),
+                ('可能仍會跑完', '入口中斷後上游可能照樣計費（AI-LLM-013-1）'),
+        ):
+            self.assertIn(needle, desc, why)
+
     def test_no_public_url_injection(self):
         """chart 的 litellm.publicUrl 選配：UI redirect 由請求推導，平台不注入（不加 injector）。"""
         CloudService = self.env['woow_paas_platform.cloud_service']
