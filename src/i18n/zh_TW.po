@@ -24221,6 +24221,7 @@ msgstr "AI 帳戶憑證驗證失敗（密文不符）"
 msgid "AI account error"
 msgstr "AI 帳戶異常"
 
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
 msgid "Not connected"
