@@ -1612,12 +1612,6 @@ msgstr "今日免費試用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
-msgid "I agree to the AI Models Terms of Service"
-msgstr "我同意《AI 模型服務條款》"
-
-#. module: woow_paas_platform
-#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 msgid "I have saved this key somewhere safe"
 msgstr "我已妥善保存此金鑰"
@@ -1831,15 +1825,6 @@ msgid ""
 msgstr "系統維護中，暫時無法建立金鑰或轉換點數；既有金鑰不受影響。"
 
 #. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid ""
-"The AI Models Terms of Service have been updated. Please accept them "
-"again before creating keys or converting points; existing keys are not "
-"affected."
-msgstr "《AI 模型服務條款》已更新，請重新同意才能建立金鑰或轉換點數；既有金鑰不受影響。"
-
-#. module: woow_paas_platform
 #. odoo-python
 #. odoo-javascript
 #: code:addons/woow_paas_platform/controllers/llm.py:0
@@ -1989,8 +1974,52 @@ msgstr "總額上限不能低於這把金鑰的已用量"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
 msgid "These terms are a draft and have not taken effect yet."
 msgstr "條款目前是草稿，尚未生效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "AI Models Terms of Service"
+msgstr "《AI 模型服務條款》"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "I have read and agree to the"
+msgstr "我已閱讀並同意"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.xml:0
+msgid "I have read and agree"
+msgstr "我已閱讀並同意"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Review and accept"
+msgstr "查看並同意"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "Version: %(version)s"
+msgstr "版本：%(version)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "Loading the terms…"
+msgstr "正在載入條款…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "Accepting lets you create keys, convert points and re-enable keys again. Existing keys keep working either way."
+msgstr "同意後即可再建立金鑰、轉換點數與重新啟用金鑰；不論是否同意，既有金鑰都照常可用。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1999,6 +2028,24 @@ msgstr "條款目前是草稿，尚未生效。"
 #: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
 msgid "The AI Models Terms of Service cannot be shown right now. Please try again later."
 msgstr "《AI 模型服務條款》暫時無法顯示，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "The AI Models Terms of Service have been updated. Please accept them again before creating keys, converting points or re-enabling keys; existing keys are not affected."
+msgstr "《AI 模型服務條款》已更新，請重新同意才能建立金鑰、轉換點數或重新啟用金鑰；既有金鑰不受影響。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "The AI Models Terms of Service have been updated. Please review the new version; nothing you can do now is affected."
+msgstr "《AI 模型服務條款》已更新，請查看新版條款；目前的操作不受影響。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "You have accepted the updated AI Models Terms of Service."
+msgstr "已同意新版《AI 模型服務條款》。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -3819,6 +3866,8 @@ msgstr "client 驗證失敗。"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.xml:0
 msgid "Close"
 msgstr "關閉"
 

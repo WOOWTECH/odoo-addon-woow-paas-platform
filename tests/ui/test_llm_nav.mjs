@@ -309,6 +309,7 @@ test("OWL template 名稱全域唯一；AI 模型的 template 一律 woow_paas_p
     "woow_paas_platform.LlmKeyRevealModal",
     "woow_paas_platform.LlmOverviewTab",
     "woow_paas_platform.LlmPage",
+    "woow_paas_platform.LlmTermsModal",
   ]);
 });
 

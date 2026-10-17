@@ -122,6 +122,20 @@ export const llmService = reactive({
     return call("/api/llm/account/activate", { tos_version: tosVersion });
   },
 
+  /**
+   * 《AI 模型服務條款》的 published 版（LLM-04）：`{version, title, content_html, is_draft, …}`。
+   * `content_html` 是 HTML：畫面一律經 html_sanitize.js 的 `safeHtml()` 才顯示（LlmTermsModal）。
+   * 不進 store：每次打開對話框都重新讀（條款可能在頁面打開之後改版）。
+   */
+  async fetchTerms() {
+    return call("/api/llm/terms", {});
+  },
+
+  /** 改版後重新同意（DESIGN §6.4-3）：帶對話框裡顯示的那一版；成功回 `{tos}`。 */
+  async acceptTerms(tosVersion) {
+    return call("/api/llm/account/accept_terms", { tos_version: tosVersion });
+  },
+
   async fetchKeys() {
     const result = await call("/api/llm/keys/list", {});
     if (result.success) {
