@@ -18,3 +18,5 @@ from . import workspace_invitation
 # X-SET-007-5：/web/signup 伺服器端必填檢查（中文欄位錯誤，不再 500）。
 from . import signup
 from . import llm
+# 商用驗收 X-SEC-007：原生忘記密碼／註冊頁的帳號枚舉修補（不新增頁面）。
+from . import auth_hardening
