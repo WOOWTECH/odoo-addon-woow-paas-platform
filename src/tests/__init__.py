@@ -1186,3 +1186,7 @@ from . import test_llm_tracer
 # LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
 # llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
 from . import test_llm_platform_foundation
+
+# 商用驗收 X-BK-006-1／DATA-ODOO-005-2／AI-LLM-009-1（#1190／#1265）：備份狀態事實、每小時
+# backup-status cron、服務頁唯讀備份卡、通知中心與系統管理員告警。
+from . import test_backup_status_visibility

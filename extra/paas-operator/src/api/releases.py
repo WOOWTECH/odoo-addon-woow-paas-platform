@@ -35,6 +35,7 @@ from src.models.schemas import (
     SidecarPatchRequest,
     SidecarPatchResponse,
 )
+from src.services import backup_status as backup_status_service
 from src.services import compute_quota
 from src.services.cloudflare import (
     REFUSED_FOREIGN,
@@ -53,6 +54,7 @@ from src.services.helm import (
     KubernetesService,
 )
 from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values
+from src.services.helm import validate_label_value
 from src.services.helm_limiter import helm_operation_slot
 from src.services.ngrok_errors import describe_ngrok_error
 from src.services.upgrade_preflight import (
@@ -1820,6 +1822,39 @@ def get_release_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get release status. Check operator logs for details.",
+        )
+
+
+@router.get(
+    "/{namespace}/{name}/backup-status",
+    response_model=Dict[str, Any],
+    summary="#1190: read-only backup status (last success / last failure and reason)",
+)
+def get_backup_status(namespace: str, name: str):
+    """#1190／商用驗收 X-BK-006-1、DATA-ODOO-005-2、AI-LLM-009-1：備份狀態（唯讀）。
+
+    woow-odoo 讀 ``<release>-backup`` CronJob 的 Job 與 terminationMessage；litellm 讀
+    db-agent 寫進 ``woow_platform.settings`` 的 ``backup_last_*``；其他 chart 回
+    ``supported: false``。只回事實（最近成功／失敗時間、失敗原因代碼、連續失敗次數），
+    多久算過期由平台決定。規則與欄位見 ``src/services/backup_status.py``。
+
+    獨立端點而不是加進 ``/status``：``/status`` 只在轉移狀態被 poll，``running`` 的服務
+    沒有人呼叫（#1190 對 #1145 D8 的修訂）。
+    """
+    _validate_namespace_or_raise(namespace)
+    try:
+        validate_label_value("name", name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        return backup_status_service.read_backup_status(k8s_service, namespace, name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except KubectlException as e:
+        logger.error(f"Backup status failed for {namespace}/{name}: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to read backup status. Check operator logs for details.",
         )
 
 

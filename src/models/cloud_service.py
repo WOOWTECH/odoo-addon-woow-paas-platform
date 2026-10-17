@@ -19,7 +19,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
-from ..services import dns_probe, rollback_config
+from ..services import backup_health, dns_probe, rollback_config
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
 from ..services.workload_health import (
@@ -33,6 +33,7 @@ from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
     CONTRACT_MISMATCH,
     chart_mismatch_detail,
+    chart_name_of,
     woow_odoo_contract,
     woow_odoo_ready,
 )
@@ -360,6 +361,9 @@ _OBSERVATION_CONTROL_FIELDS = frozenset({
     'observed_at', 'observation_episode_started_at',
     'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
     'workload_fault_alerted_at', 'workload_checked_at',
+    # X-BK-006-1：備份事實同理——租戶能寫就能把「備份失敗」改成 ok、或把告警標記填上。
+    'backup_health', 'last_backup_success_at', 'last_backup_failure_at',
+    'backup_failure_reason', 'backup_consecutive_failures', 'backup_failure_alerted_at',
 })
 
 
@@ -765,6 +769,16 @@ _workload_check_clock = time.monotonic
 _WORKLOAD_FAULT_FIELDS = (
     'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
     'workload_fault_alerted_at',
+)
+
+# X-BK-006-1／#1190：備份狀態檢查 cron（`_cron_refresh_backup_status`）每趟的 wall 預算與
+# 連續傳輸錯誤中止門檻（同 workload 檢查的形狀；游標記在 platform_monitor 單例）。
+BACKUP_CHECK_BUDGET_SECONDS = 120
+BACKUP_CHECK_TRANSPORT_ABORT = 2
+_backup_check_clock = time.monotonic
+_BACKUP_FACT_FIELDS = (
+    'backup_health', 'last_backup_success_at', 'last_backup_failure_at',
+    'backup_failure_reason', 'backup_consecutive_failures',
 )
 
 # 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
@@ -2005,6 +2019,64 @@ class CloudService(models.Model):
              'workloads of this running service (UTC): a fault first seen, changed, '
              'confirmed or cleared. Checks that find nothing new do not update it, so an '
              'old or empty value does not mean the service is not being checked.',
+    )
+    # ── 備份狀態（#1190／#1265；商用驗收 X-BK-006-1、DATA-ODOO-005-2、AI-LLM-009-1）──
+    # 由 `_cron_refresh_backup_status`（每小時）經 operator backup-status 寫入；判定規則在
+    # `services/backup_health.py`。🔴 不影響 state（#1251 Q6：例行備份 Job 不參與
+    # readiness）；值真的變了才寫（理由同 workload 觀測，見 `_apply_backup_observation`）。
+    # 只有 woow-odoo／litellm 範本有值（`_backup_supported`），其他範本恆為 unknown。
+    backup_health = fields.Selection(
+        selection=[
+            ('ok', 'Healthy'),
+            ('failed', 'Failed'),
+            ('stale', 'Overdue'),
+            ('unknown', 'Unknown'),
+        ],
+        string='Backup Health',
+        default='unknown',
+        copy=False,
+        readonly=True,
+        help='Result of the hourly backup check (only for templates whose chart takes '
+             'backups: Odoo and LiteLLM). Failed: the latest backup attempt failed after '
+             'the latest successful one. Overdue: no successful backup for more than 27 hours. '
+             'Unknown: not checked yet, never backed up yet, backups disabled, or the '
+             'template has no backup. It never changes the service state.',
+    )
+    last_backup_success_at = fields.Datetime(
+        string='Last Successful Backup',
+        copy=False,
+        readonly=True,
+        help='Start time (UTC) of the newest backup known to have succeeded. Only moves '
+             'forward: it is kept when the cluster no longer has the record.',
+    )
+    last_backup_failure_at = fields.Datetime(
+        string='Last Failed Backup',
+        copy=False,
+        readonly=True,
+        help='When (UTC) the newest known failed backup attempt ended.',
+    )
+    backup_failure_reason = fields.Char(
+        string='Backup Failure Reason',
+        copy=False,
+        readonly=True,
+        help='Reason code of the newest failed backup attempt reported by the cluster, '
+             'for example no_space (the backup volume is full), postgres_unavailable, '
+             'lock_busy, dump_failed, oom_killed, deadline_exceeded or job_failed.',
+    )
+    backup_consecutive_failures = fields.Integer(
+        string='Consecutive Backup Failures',
+        copy=False,
+        readonly=True,
+        help='How many backup attempts in a row have failed, as far as the cluster still '
+             'keeps the records (failed attempts are kept for 3 days).',
+    )
+    backup_failure_alerted_at = fields.Datetime(
+        string='Backup Failure Alerted At',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='When the system administrators were notified about the current backup '
+             'failure. One notification per failure; cleared once a backup succeeds.',
     )
     # Q4／Q33：短 poll 觀測到 initializing 的 pods ready ＝ 排進 init cron 的佇列。
     # init cron 只 claim 這些服務；not ready 時清掉（等待期間由時限約束）。
@@ -7981,6 +8053,217 @@ class CloudService(models.Model):
         if self.state != 'running' or not self._workload_fault_confirmed():
             return None
         return self.workload_fault_code
+
+    # ------------------------------------------------------------------ #
+    #  備份狀態（#1190／#1265；商用驗收 X-BK-006-1、DATA-ODOO-005-2、AI-LLM-009-1）#
+    # ------------------------------------------------------------------ #
+
+    def _backup_supported(self):
+        """這台服務的範本有沒有由 operator backup-status 回報的備份機制。
+
+        依範本 ``helm_chart_name`` 最後一段（woow-odoo／litellm），與
+        ``woow_odoo_readiness.chart_name_of`` 同一個拆法。operator 端另依 release 實際物件
+        再判一次（沒有 CronJob／db-agent 就回 ``supported: false``），所以這裡只是「值得問」。
+        """
+        self.ensure_one()
+        return chart_name_of(self.template_id.helm_chart_name) in backup_health.BACKUP_CHARTS
+
+    def _backup_status_public(self):
+        """給 /woow 服務詳情的唯讀備份卡（DATA-ODOO-005-2）。只讀已存值，不呼叫 operator。
+
+        - ``supported``：卡片畫不畫的唯一判準（capability-gate-single-source-field）。
+        - ``paused``：停權中（scale 0）不會有新備份（由 state 推導，不讀 ``backup_health``；
+          #1265 Q22）。
+        - 原因只給代碼；文案由前端依代碼對照，不轉送叢集原文。
+        """
+        self.ensure_one()
+        if not self._backup_supported():
+            return {'supported': False}
+        service = self.sudo()
+
+        def iso(value):
+            return value.replace(tzinfo=pytz.UTC).isoformat() if value else None
+
+        return {
+            'supported': True,
+            'health': service.backup_health or 'unknown',
+            'paused': service.state == 'suspended',
+            'last_success_at': iso(service.last_backup_success_at),
+            'last_failure_at': iso(service.last_backup_failure_at),
+            'failure_reason': service.backup_failure_reason or None,
+            'consecutive_failures': service.backup_consecutive_failures or 0,
+            'stale_hours': backup_health.BACKUP_STALE_HOURS,
+        }
+
+    def _apply_backup_observation(self, payload, now=None):
+        """把一份 operator backup-status 回應落到備份欄位上（**唯一寫入者**）。
+
+        🔴 不寫 ``state``／``error_message``：備份失敗是要讓人知道的事實，不是服務沒起來。
+        🔴 值真的變了才寫：本方法每小時對每台 running 的 woow-odoo／litellm 服務跑一次，
+        每次都寫會與每日對帳、生命週期 cron 的 REPEATABLE READ 長交易互撞（同
+        ``_apply_workload_observation`` 的理由）。
+
+        轉成 ``failed`` 時通知系統管理員一次（``platform_monitor._report_backup_failure``，
+        送不出去就不記標記、下一輪重試）；租戶端由 /api/notifications 依 ``backup_health``
+        直接列出（不另存標記）。恢復（不再是 failed）時清掉告警標記。
+
+        本方法不 commit、不 rollback、不攔例外：回捲單位由呼叫端決定。
+
+        Args:
+            payload: operator 回應 dict；``None`` ＝ 這一輪讀取失敗（只依時間重算 health）。
+
+        Returns:
+            ``'unchanged'``／``'raised'``（新轉成 failed）／``'stale'``（新轉成 stale）／
+            ``'cleared'``（離開 failed／stale）／``'updated'``（其他欄位變動）。
+        """
+        self.ensure_one()
+        service = self.sudo()
+        now = now or fields.Datetime.now()
+        current = {name: service[name] for name in _BACKUP_FACT_FIELDS}
+        facts = backup_health.next_backup_facts(current, payload, service.deployed_at, now)
+        changed = {name: value for name, value in facts.items()
+                   if (current[name] or False) != (value or False)}
+        previous = current['backup_health'] or 'unknown'
+        health = facts['backup_health']
+        if health != 'failed' and service.backup_failure_alerted_at:
+            changed['backup_failure_alerted_at'] = False
+        if changed:
+            service.write(changed)
+        if health == previous:
+            outcome = 'updated' if changed else 'unchanged'
+        elif health == 'failed':
+            outcome = 'raised'
+            _logger.warning(
+                "[X-BK-006] backup failed for service id=%s %s (namespace %s, release %s): "
+                "reason=%s consecutive=%s last_success=%s", service.id, service.name,
+                service.helm_namespace, service.helm_release_name, service.backup_failure_reason,
+                service.backup_consecutive_failures, service.last_backup_success_at)
+        elif health == 'stale':
+            outcome = 'stale'
+            _logger.warning(
+                "[X-BK-006] no successful backup for more than %sh: service id=%s %s "
+                "(last success %s)", backup_health.BACKUP_STALE_HOURS, service.id,
+                service.name, service.last_backup_success_at)
+        elif previous in ('failed', 'stale'):
+            outcome = 'cleared'
+        else:
+            outcome = 'updated'
+        if health == 'failed' and not service.backup_failure_alerted_at:
+            monitor = self.env['woow_paas_platform.platform_monitor']
+            if monitor._report_backup_failure(service):
+                service.write({'backup_failure_alerted_at': now})
+        return outcome
+
+    @api.model
+    def _cron_refresh_backup_status(self):
+        """X-BK-006-1／#1190：每小時讀一次 running 的 woow-odoo／litellm 服務的備份狀態。
+
+        2026-10-16 商用驗收：備份卷滿時 Odoo 備份 Job 3 次重試後 BackoffLimitExceeded，
+        唯一的訊號是叢集通用 KubeJobFailed 寄 ops 信箱（約 20 分延遲、與 28 筆舊告警混在
+        一起）；平台 readiness 刻意豁免備份 Job、服務 API 沒有任何備份欄位，客戶看到的服務
+        永遠 running。LiteLLM 空間不足時只在 sidecar log 印 WARNING。本條補上平台這一側：
+        讀 operator ``backup-status``、寫備份事實、轉 failed 時通知系統管理員；租戶在服務頁
+        備份卡與通知中心看得到。
+
+        節奏同 ``_cron_check_running_workloads``：游標記在 ``platform_monitor`` 單例
+        （``backup_check_cursor``），依 id 升冪輪替、逐台 commit、wall 預算
+        ``BACKUP_CHECK_BUDGET_SECONDS``、連續 ``BACKUP_CHECK_TRANSPORT_ABORT`` 次連不上就中止；
+        operator 太舊（端點 404）時第一台之後就中止本趟。**絕不碰 state**。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ], order='id').filtered(lambda s: s._backup_supported())
+        if not services:
+            return
+
+        from ..services.paas_operator import (
+            PaaSOperatorAPIError,
+            PaaSOperatorConnectionError,
+            PaaSOperatorTimeoutError,
+            get_paas_operator_client,
+        )
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            _logger.info("backup-check: operator client 未設定，本趟未執行（%d 筆）", len(services))
+            return
+
+        monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+        cursor = monitor.backup_check_cursor
+        ordered = (services.filtered(lambda s: s.id > cursor)
+                   + services.filtered(lambda s: s.id <= cursor))
+        started = _backup_check_clock()
+        counts = {}
+        raised = []
+        failed = transport_streak = over_budget = 0
+        stopped_early = ''
+        last_id = cursor
+        for index, service in enumerate(ordered):
+            if _backup_check_clock() - started > BACKUP_CHECK_BUDGET_SECONDS:
+                over_budget = len(ordered) - index
+                break
+            service_id = service.id
+            last_id = service_id
+            try:
+                service.invalidate_recordset()
+                if not service.exists() or service.state != 'running':
+                    continue
+                payload = client.get_backup_status(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                )
+                outcome = service._apply_backup_observation(payload)
+                self.env.cr.commit()
+                counts[outcome] = counts.get(outcome, 0) + 1
+                transport_streak = 0
+                if outcome == 'raised':
+                    raised.append((service.id, service.name, service.backup_failure_reason))
+            except (PaaSOperatorConnectionError, PaaSOperatorTimeoutError) as exc:
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak += 1
+                _logger.warning("backup-check: service id=%s 連不上 operator 或逾時：%s",
+                                service_id, exc)
+                if transport_streak >= BACKUP_CHECK_TRANSPORT_ABORT:
+                    stopped_early = 'operator 連續 %d 次連不上或逾時' % transport_streak
+                    break
+            except PaaSOperatorAPIError as exc:
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                if exc.status_code == 404 and not counts:
+                    # 舊 operator 沒有這個端點：對每一台的回答都一樣，不逐台白打。
+                    stopped_early = 'operator 尚未提供 backup-status（HTTP 404）'
+                    break
+                _logger.warning("backup-check: service id=%s operator 回錯（HTTP %s）：%s",
+                                service_id, exc.status_code, exc)
+            except Exception:
+                # ⚠ #1052 標記（非裁定）：逐筆 batch isolation，同 workload 檢查的站點。
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                _logger.exception("backup-check: service id=%s 檢查失敗（本筆略過）", service_id)
+
+        if last_id != cursor:
+            try:
+                with self.env.cr.savepoint():
+                    monitor.write({'backup_check_cursor': last_id})
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.warning("backup-check: 輪替游標寫回失敗（id %s→%s）", cursor, last_id,
+                                exc_info=True)
+
+        _logger.info(
+            "backup-check: 有備份機制的 running 服務 %d 筆，結果 %s，讀取失敗 %d 筆，"
+            "預算用完未檢查 %d 筆%s；游標 id %s→%s",
+            len(services), ', '.join('%s %d' % kv for kv in sorted(counts.items())) or '無',
+            failed, over_budget, ("；提前中止：%s" % stopped_early) if stopped_early else "",
+            cursor, last_id)
+        for service_id, name, reason in raised:
+            _logger.warning("  備份失敗 id=%s %s  %s", service_id, name, reason)
 
     def _apply_workload_observation(self, status):
         """把一份 operator status（帶 ``include_workloads``）的 workload 觀測落到欄位上。

@@ -121,6 +121,80 @@ export class OverviewTab extends Component {
         return _t("This is the plan of this service only. All services in the workspace share one overall CPU, memory and disk quota.");
     }
 
+    // ── DATA-ODOO-005-2／X-BK-006-1：唯讀備份卡 ───────────────────────────────
+    // payload.backup 由後端 `_backup_status_public` 組（只讀已存值）；supported＝畫不畫。
+    get backup() {
+        return this.props.service.backup || { supported: false };
+    }
+
+    get backupTitle() {
+        return _t("Backups");
+    }
+
+    get backupStatusLabel() {
+        if (this.backup.paused) return _t("Paused");
+        switch (this.backup.health) {
+            case "ok":
+                return _t("Healthy");
+            case "failed":
+                return _t("Failed");
+            case "stale":
+                return _t("Overdue");
+            default:
+                return _t("Not checked yet");
+        }
+    }
+
+    get backupBadgeClass() {
+        if (this.backup.paused) return "o_woow_badge_gray";
+        return {
+            ok: "o_woow_badge_green",
+            failed: "o_woow_badge_red",
+            stale: "o_woow_badge_amber",
+        }[this.backup.health] || "o_woow_badge_gray";
+    }
+
+    get backupLastSuccessLabel() {
+        return _t("Last successful backup");
+    }
+
+    get backupLastFailureLabel() {
+        return _t("Last failed backup");
+    }
+
+    get backupLastSuccessText() {
+        return this.backup.last_success_at
+            ? this.formatSyncedAt(this.backup.last_success_at)
+            : _t("None yet");
+    }
+
+    /** 原因代碼 → 租戶看得懂的一句話（代碼定義：chart backup-common.sh／db-agent.sh、operator backup_status.py）。 */
+    get backupReasonText() {
+        const reason = this.backup.failure_reason;
+        const texts = {
+            no_space: _t("The backup storage is full."),
+            postgres_unavailable: _t("The database could not be reached during the backup."),
+            lock_busy: _t("Another backup or restore was still running."),
+            oom_killed: _t("The backup ran out of memory."),
+            deadline_exceeded: _t("The backup took too long and was stopped."),
+            terminated: _t("The backup took too long and was stopped."),
+        };
+        return texts[reason] || _t("The backup could not be completed.");
+    }
+
+    get backupHint() {
+        if (this.backup.paused) {
+            return _t("No backups are taken while the service is suspended.");
+        }
+        if (this.backup.health === "failed") {
+            return _t("Your service keeps running and earlier backups are kept. Our team has been notified and will fix it; contact support if you need help.");
+        }
+        if (this.backup.health === "stale") {
+            return _t("No successful backup in the last day. Our team has been notified.");
+        }
+        return _t("A backup is taken automatically every day. Contact support to restore data from a backup.");
+    }
+
     get helmNamespace() {
         return this.props.service.helm_namespace || `paas-ws-${this.props.service.workspace_id}`;
     }
