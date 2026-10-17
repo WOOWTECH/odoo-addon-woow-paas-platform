@@ -224,6 +224,8 @@ def _representative_calls(now):
         'ap_create_user': lambda c: c.ap_create_user('wsab0000000042', 'P' * 64, 'PaaS 42'),
         'ap_search_user': lambda c: c.ap_search_user('wsab0000000042'),
         'ap_get_user': lambda c: c.ap_get_user(42),
+        # 餘額刷新（llm_account._cron_llm_balance_refresh，LLM-02b）。
+        'ap_list_users': lambda c: c.ap_list_users(3, 100),
         'user_login': lambda c: c.user_login(TENANT_IP, 'wsab0000000042', 'P' * 64),
         'user_list_access_tokens': lambda c: c.user_list_access_tokens(TENANT_IP, JWT),
         'user_verify_generate': lambda c: c.user_verify_generate(TENANT_IP, JWT, 'P' * 64,
@@ -320,6 +322,17 @@ class TestClientMatchesProxyRouteTable(_Base):
                 continue
             sent.add(name)
         self.assertEqual(sent, set(nac.WEB_METHODS))
+
+    def test_list_users_rejects_bad_paging_before_sending(self):
+        client = self.client()
+        for page, size in ((0, 100), (1, 0), (1, 101), ('1', 100), (True, 100), (1, 1.5)):
+            with self.subTest(page=page, size=size):
+                with self.assertRaises(nac.NewApiInputError):
+                    client.ap_list_users(page, size)
+        self.assertEqual(self.recorder.requests, [])
+        self.assertTrue(client.ap_list_users(1).ok)
+        raw_query = self.recorder.requests[-1]['path'].partition('?')[2]
+        self.assertEqual(raw_query, 'p=1&page_size=100&sort_by=id&sort_order=asc')
 
     def test_signing_key_for_role_never_falls_back(self):
         environ = {nac.ENV_AUTH_CRON: '%s:%s' % (KID, SECRET)}
@@ -695,6 +708,123 @@ class TestRedact(unittest.TestCase):
             def __str__(self):
                 raise ValueError('no')
         self.assertEqual(llm_redact.redact(Bad()), llm_redact.MASK)
+        self.assertEqual(llm_redact.redact(Bad(), mask='***'), '***')
+
+    def test_ticket_ac5_shapes(self):
+        """LLM-02b AC5：Bearer、JWT、sk-…、nap_…、proof_token=…、password=… 都被遮。"""
+        samples = {
+            'Bearer': ('Authorization: Bearer opaque.Value-123', 'opaque.Value-123'),
+            'JWT': ('jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI0MiJ9.c2lnbmF0dXJlLXZhbHVl',
+                    'eyJzdWIiOiI0MiJ9'),
+            'sk-': ('key in text sk-%s here' % ('Z9' * 24), 'Z9' * 24),
+            'nap_': ('pat nap_%s end' % ('Q1w2' * 11), 'Q1w2' * 11),
+            'proof_token': ('proof_token=abc.def-ghi&next=1', 'abc.def-ghi'),
+            'password': ('password=hunter2hunter2 tail', 'hunter2hunter2'),
+        }
+        for label, (text, secret) in samples.items():
+            with self.subTest(label=label):
+                masked = llm_redact.redact(text)
+                self.assertNotIn(secret, masked)
+                self.assertIn(llm_redact.MASK, masked)
+
+    def test_authorization_header_masks_the_bearer_value_not_the_word(self):
+        # Bearer 必須先於 key=value：否則「Authorization: <redacted> 真值」。
+        masked = llm_redact.redact('Authorization: Bearer abc.def-123')
+        self.assertNotIn('abc.def-123', masked)
+
+    def test_authorization_masks_the_credential_for_every_scheme(self):
+        """審查 LLM-02b 第 2 輪：值遇到空白就停的話，``Basic``／``Token`` 只遮到 scheme 那個字。"""
+        digest = ('Digest username="admin", realm="woow", nonce="dcd98b7102dd2f0e", uri="/", '
+                  'response="6629fae49393a05397450978507c4ef1", opaque="5ccc069c403ebaf9"')
+        samples = {
+            'Basic': ('Authorization: Basic dXNlcjpwYXNzd29yZA==', ['dXNlcjpwYXNzd29yZA']),
+            'Token': ('Authorization: Token abcdef123456 next', ['abcdef123456']),
+            'Digest': ('Authorization: %s' % digest,
+                       ['6629fae49393a05397450978507c4ef1', 'dcd98b7102dd2f0e', 'admin']),
+            'quoted': ('{"Authorization": "Basic dXNlcjpw", "Host": "x"}', ['dXNlcjpw']),
+            'escaped': ('{"authorization": "Digest response=\\"z9z9z9\\"", "a": 1}', ['z9z9z9']),
+            'proxy': ("{'Proxy-Authorization': 'Basic cHJveHk6cHc='}", ['cHJveHk6cHc']),
+            'no scheme': ('Authorization: opaqueValue123', ['opaqueValue123']),
+            'url form': ('authorization=Basic%20abc&x=1', ['abc&']),
+        }
+        for label, (text, secrets) in samples.items():
+            for mask in (llm_redact.MASK, '***'):
+                with self.subTest(label=label, mask=mask):
+                    masked = llm_redact.redact(text, mask=mask)
+                    for secret in secrets:
+                        self.assertNotIn(secret, masked)
+                    self.assertIn(mask, masked)
+        self.assertEqual(llm_redact.redact('Authorization: Token abcdef123456 next'),
+                         'Authorization: <redacted> next')
+        self.assertEqual(llm_redact.redact('{"Authorization": "Basic x", "Host": "h"}'),
+                         '{"Authorization": <redacted>, "Host": "h"}', '後面的欄位不被吃掉')
+
+    def test_init_attempt_shapes_still_masked(self):
+        """``cloud_service_init_attempt.mask_init_error`` 原本自己的三條 regex 涵蓋的形狀（LLM-02b 收斂）。"""
+        for text, secret in (
+                ('password: "two words"', 'two words'),
+                ('Authorization: Bearer abc.def-123', 'abc.def-123'),
+                ('url?password%3Dhunter2&x=1', 'hunter2'),
+                ("api_key='k k'", 'k k'),
+                ("{'password': 'p y'}", 'p y'),
+                ('"secret": "s3"', 's3'),
+                ('access_token=tok123', 'tok123'),
+                ('key eyJabcde.eyJfghij.klmnopq', 'eyJfghij'),
+                # 原本的 init regex 對 token 是後綴比對（ngrok 的 authtoken）：收斂後不能少遮。
+                ('authtoken=2abcDEF345ghi', '2abcDEF345ghi'),
+                ('apitoken: zz99', 'zz99')):
+            with self.subTest(text=text):
+                masked = llm_redact.redact(text, mask='***')
+                self.assertNotIn(secret, masked)
+                self.assertIn('***', masked)
+
+    def test_ordinary_words_are_not_mangled(self):
+        """審查 LLM-02b finding 12：``sk-``／``nap_``／裸的 ``key`` 要有左邊界（init attempt 的錯誤
+        訊息常有這些字；舊的 init regex 從來不遮它們）。"""
+        for text in ('node had condition: disk-pressure', 'task-runner failed', 'monkey=1',
+                     'snap_shot_42 restored', 'whisk-it-all-together-please-now-ok',
+                     'publickey=ssh-ed25519'):
+            with self.subTest(text=text):
+                self.assertEqual(llm_redact.redact(text), text)
+                self.assertEqual(llm_redact.redact(text, mask='***'), text)
+
+    def test_real_keys_still_masked_at_a_boundary(self):
+        key = 'sk-' + 'Ab9' * 16
+        for text in (key, '"%s"' % key, 'x=%s' % key, '(%s)' % key, 'nap_%s' % ('Q1w2' * 11),
+                     '{"key": "%s"}' % ('K' * 48), 'key=%s' % ('K' * 48)):
+            with self.subTest(text=text):
+                masked = llm_redact.redact(text)
+                self.assertIn(llm_redact.MASK, masked)
+                self.assertNotIn('Ab9' * 16, masked)
+                self.assertNotIn('Q1w2' * 11, masked)
+                self.assertNotIn('K' * 48, masked)
+
+
+class TestClosedErrorCodes(unittest.TestCase):
+    """N24（審查 LLM-02b findings 4、13）：PaaS 的錯誤碼是封閉集合。"""
+
+    def test_newapi_codes_go_through_the_allow_list(self):
+        self.assertEqual(nac.newapi_error_code('AUTH_SESSION_LIMIT'), 'newapi_auth_session_limit')
+        for code in ('UNRECOGNISED', 'GRANT_1000_POINTS_TO_ACCOUNT_5', 'auth_session_limit',
+                     '', None, 42):
+            with self.subTest(code=code):
+                self.assertEqual(nac.newapi_error_code(code), nac.NEWAPI_OTHER_CODE)
+        for code in nac.KNOWN_NEWAPI_CODES:
+            self.assertRegex(code, r'^[A-Z][A-Z0-9_]{0,63}$')
+
+    def test_crypto_error_codes_cover_every_code_in_the_module(self):
+        source = (SERVICES / 'llm_crypto.py').read_text(encoding='utf-8')
+        import re
+        literals = set(re.findall(r"code = '([a-z_]+)'", source))
+        literals |= set(re.findall(r"(?:LlmCryptoError|LlmCryptoUnavailable|LlmSecretNeutralized|"
+                                   r"LlmSecretBindingMismatch|LlmSecretMalformed)\('([a-z_]+)'\)",
+                                   source))
+        self.assertTrue(literals)
+        self.assertLessEqual(literals, llm_crypto.ERROR_CODES)
+
+    def test_definite_proxy_errors_match_the_classifier(self):
+        self.assertEqual(nac.PROXY_DEFINITE_ERRORS, {'auth', 'policy', 'bad_request', 'too_large',
+                                                     'denied'})
 
 
 if __name__ == '__main__':

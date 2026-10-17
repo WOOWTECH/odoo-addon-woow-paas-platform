@@ -6,7 +6,10 @@ its body policy. Anything not listed is 403 ``policy`` — in particular
 ``/v1/*``, ``/pg/*``, ``/api/option/*`` (except op's GET), ``/api/channel/*``,
 ``/api/redemption/*``, ``/api/user/topup*`` and ``/api/user/auth/*``.
 
-LLM-01a ships the routes the tracer needs; LLM-02 completes the table.
+LLM-01a ships the routes the tracer needs; LLM-02b adds ``GET /api/user/`` (ap) for the
+balance refresh — the one route whose answer the proxy rebuilds (``responses.user_list``:
+new-api lists every user, root and admins included, with e-mail and settings); LLM-02
+completes the table.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
 
-from . import policy
+from . import policy, responses
 
 #: Path parameter formats. ``{id}``: positive int32 without leading zeros.
 PARAM_RE = {
@@ -34,6 +37,8 @@ _LOG_TYPE = re.compile(r"[0-9]{1,2}", re.ASCII)
 _MODEL = re.compile(r"[A-Za-z0-9._:/-]{1,128}", re.ASCII)
 _GROUP = re.compile(r"default|free", re.ASCII)
 _REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}", re.ASCII)
+_SORT_BY_ID = re.compile(r"id", re.ASCII)
+_SORT_ORDER = re.compile(r"asc|desc", re.ASCII)
 
 PAGING = {"p": _P, "page_size": _PAGE_SIZE}
 LOG_SELF_QUERY = {
@@ -70,6 +75,9 @@ class Route:
     special: str | None = None
     #: write an audit line for every attempt.
     audit: str | None = None
+    #: rebuild the upstream answer from an allow-list instead of relaying it
+    #: (``responses``); ``None``: relayed as is.
+    response: responses.ResponseFilter | None = None
 
     @property
     def segments(self) -> list[str]:
@@ -87,6 +95,18 @@ ROUTES: tuple[Route, ...] = (
     _r("op.options", "GET", "/api/option/", {"op"}),
     # ap: admin service account
     _r("ap.user.create", "POST", "/api/user/", {"ap"}, body="json", body_policy=policy.user_create),
+    # LLM-02b: the 10-minute balance refresh reads every user page by page (DESIGN §1.3.6);
+    # PaaS filters its own environment's usernames. Sorting only by id keeps pages stable.
+    # new-api answers with every row of ``users`` (root, admins, e-mail, settings): the proxy
+    # keeps only id / username / quota / used / count / status / DeletedAt of PaaS users.
+    _r(
+        "ap.user.list",
+        "GET",
+        "/api/user/",
+        {"ap"},
+        query={**PAGING, "sort_by": _SORT_BY_ID, "sort_order": _SORT_ORDER},
+        response=responses.user_list,
+    ),
     _r(
         "ap.user.search",
         "GET",

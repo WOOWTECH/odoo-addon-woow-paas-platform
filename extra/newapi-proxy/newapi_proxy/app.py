@@ -18,8 +18,10 @@ Order of checks on the proxy port, each failing closed:
 14. one upstream call, no retry: connect 502 | reset 502 | timeout 504
 
 Upstream responses pass through with only Content-Type, X-Oneapi-Request-Id
-and Retry-After kept (Set-Cookie and everything else dropped). Proxy-made
-errors carry ``X-Woow-Proxy-Error: <class>``.
+and Retry-After kept (Set-Cookie and everything else dropped); a route with a
+``response`` filter (``GET /api/user/``) has its body rebuilt from an
+allow-list first, and an answer of the wrong shape is ``500 internal``.
+Proxy-made errors carry ``X-Woow-Proxy-Error: <class>``.
 
 ``/healthz``, ``/readyz`` and ``/metrics`` are served by ``AdminApp`` on a
 separate listener (``PROXY_ADMIN_PORT``); on the proxy port they are just
@@ -42,7 +44,7 @@ import httpx
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 
-from . import __version__, canonical, logs, policy, routetable, signing
+from . import __version__, canonical, logs, policy, responses, routetable, signing
 from .limits import CachedCheck, HourlyBudget, InflightLimiter, ReplayCache
 from .metrics import Metrics
 from .replaystore import ReplayStoreUnavailable, ValkeyReplayStore
@@ -621,6 +623,13 @@ class Proxy:
             self._audit(route, audit_fields, result="cancelled")
             raise
         ctx.upstream_status = resp.status
+        if route.response is not None:
+            try:
+                resp = UpstreamResponse(resp.status, resp.headers, route.response(resp.status, resp.body, self.settings))
+            except responses.ResponseShapeError as err:
+                # Fail closed: not one byte of an answer we cannot vet goes back.
+                logs.event("response_shape", logging.WARNING, route=route.name, reason=err.reason, status=resp.status)
+                raise ProxyError("internal", err.reason) from None
         response = self._relay(resp, ctx)
         outcome: dict[str, Any] = {"result": "forwarded", "status": resp.status, "request_id": ctx.request_id}
         if reservation is not None:

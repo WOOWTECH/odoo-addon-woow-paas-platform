@@ -187,6 +187,25 @@ class FakeNewApi:
             return self._leave('ap_get_user', nac.Definite(reason='no_message_key', status=200))
         return self._leave('ap_get_user', self._ok(dict(user, password=None)))
 
+    def ap_list_users(self, page, page_size=100, **kw):
+        """``GET /api/user/?sort_by=id&sort_order=asc``：全部使用者（含別的環境與軟刪除的）。"""
+        self._enter('ap_list_users')
+        ordered = sorted(self.users.values(), key=lambda u: u['id'])
+        chunk = ordered[(page - 1) * page_size:page * page_size]
+        items = [dict(u, password=None) for u in chunk]
+        return self._leave('ap_list_users', self._ok({
+            'page': page, 'page_size': page_size, 'total': len(ordered), 'items': items}))
+
+    def add_user(self, username, quota=0, used_quota=0, request_count=0, deleted=False):
+        """直接放一個使用者（測試用：別的環境、管理員、軟刪除的）；回 id。"""
+        uid = self._id('user')
+        self.users[uid] = {'id': uid, 'username': username, 'password': 'x' * 40,
+                           'display_name': 'other', 'role': 1, 'status': 1, 'group': 'default',
+                           'quota': quota, 'used_quota': used_quota,
+                           'request_count': request_count,
+                           'DeletedAt': '2026-10-01T00:00:00Z' if deleted else None}
+        return uid
+
     # ---- user: session / PAT ------------------------------------------- #
     def user_login(self, client_ip, username, password, **kw):
         self._enter('user_login', client_ip)

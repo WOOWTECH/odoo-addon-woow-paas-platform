@@ -10,13 +10,13 @@ resolution Q2／Q3／Q8／Q11／Q32／Q39）。本檔只放三樣東西：
   是否可能已發生」，**不看** ``success`` 布林（Q3）。
 """
 import logging
-import re
 
 import requests
 from urllib3.exceptions import NewConnectionError
 
 from odoo import api, fields, models
 
+from ..services import llm_redact
 from ..services.paas_operator import (
     INIT_N8N_CONNECT_TIMEOUT,
     INIT_N8N_READ_TIMEOUT,
@@ -71,12 +71,9 @@ _WIRE_KINDS = (OUTCOME_NOT_EXECUTED, OUTCOME_FAILED, OUTCOME_PARTIAL, OUTCOME_UN
 _ERROR_MAX_CHARS = 2000
 # attempt 記錄不得留下可用憑證：JWT（n8n API key 的形狀）、Bearer token、以及
 # key=value／key: "value"／URL-encoded（`%3D`）形式的密鑰；引號內含空白也整段遮。
-_JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}')
-_BEARER_RE = re.compile(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+')
-_SECRET_KV_RE = re.compile(
-    r'(?i)(password|passwd|api[_-]?key|token|secret)'
-    r'(["\']?\s*(?::|=|%3D)\s*)'
-    r'("[^"]*"|\'[^\']*\'|[^\s"\',}&]+)')
+# 遮罩規則與 AI 模型分頁共用 `services/llm_redact.py`（LLM-02b 收斂；那邊另外遮 `sk-`、
+# `nap_`、`proof_token`），本檔只保留自己的遮罩字樣 `***`、明文替換與截斷。
+_MASK = '***'
 
 
 class InitOutcome:
@@ -178,10 +175,8 @@ def mask_init_error(text, secrets=()):
     text = str(text)
     for secret in secrets:
         if secret:
-            text = text.replace(secret, '***')
-    text = _JWT_RE.sub('***', text)
-    text = _BEARER_RE.sub(lambda m: m.group(1) + '***', text)
-    text = _SECRET_KV_RE.sub(lambda m: m.group(1) + m.group(2) + '***', text)
+            text = text.replace(secret, _MASK)
+    text = llm_redact.redact(text, mask=_MASK)
     if len(text) > _ERROR_MAX_CHARS:
         text = text[:_ERROR_MAX_CHARS] + '…[truncated]'
     return text

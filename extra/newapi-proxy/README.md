@@ -82,13 +82,14 @@ env 格式 `kid:secret[,kid:secret]`：第一把是現用、後面是下一把�
 - 轉送的 URL 一律由樣板＋驗證過的參數**重組**，不轉送 client 原始路徑。
 - query：只收 `[A-Za-z0-9_.-=&:/]`（沒有 `%`、`+`、`;`）、每段剛好一個 `=`、值不能空、key 不能重複；每條路由宣告允許的 key 與值格式，多一個 key（例如 new-api 的別名 `ps`）就 400。
 
-### 路由白名單（本票：tracer 用得到的；其餘 LLM-02 補）
+### 路由白名單（LLM-01a：tracer 用得到的；LLM-02b 加 `GET /api/user/`；其餘 LLM-02 補）
 
 | 身分 | 方法與路徑 | WEB | query | body 政策 |
 |---|---|---|---|---|
 | anon | `GET /api/status` | | | |
 | op | `GET /api/option/` | | | |
 | ap | `POST /api/user/` | | | 建使用者 |
+| ap | `GET /api/user/` | | `p`、`page_size`（1–100）、`sort_by`（只收 `id`）、`sort_order`（`asc`／`desc`） | 全部使用者分頁（餘額刷新，LLM-02b；PaaS 自己以前綴過濾）。**回應由代理重組**（見〈回應與錯誤〉） |
 | ap | `GET /api/user/search` | | `keyword`（必須符合 `PROXY_USERNAME_REGEX`）、`p`、`page_size` | |
 | ap | `GET /api/user/{id}` | | | |
 | ap | `POST /api/user/manage` | | | add_quota（含目標預檢與每小時總量） |
@@ -137,7 +138,13 @@ UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`�
 
 ### 回應與錯誤（§1.4.2-6、-7）
 
-上游的狀態碼與 body 原樣回傳，標頭只留 `Content-Type`、`X-Oneapi-Request-Id`、`Retry-After`（`Set-Cookie` 等一律丟掉），另加 `Cache-Control: no-store`。代理自己產生的錯誤一定帶 `X-Woow-Proxy-Error`，body 是 `{"success":false,"message":"newapi-proxy: <class>","proxy_error":"<class>","reason":"<code>"}`（401 的 reason 一律只寫 `auth`，細節只進 log）。
+上游的狀態碼與 body 原樣回傳，標頭只留 `Content-Type`、`X-Oneapi-Request-Id`、`Retry-After`（`Set-Cookie` 等一律丟掉），另加 `Cache-Control: no-store`。
+
+**例外：`GET /api/user/`（`ap.user.list`）的 body 由代理重組**（`newapi_proxy/responses.py`）。rc.44 的 `GetAllUsers` 用 `Unscoped()` 列出整張 `users` 表、只拿掉 `password` 與 `access_token`，也不像 `GET /api/user/{id}` 會檢查 `canManageTargetRole`——原樣轉回的話，CRON 金鑰讀得到 root 與管理員的 email、`setting`（webhook secret、Gotify token、Bark 網址）、`aff_code`、Stripe 與 OAuth id；stg 還看得到其他沙盒的使用者。所以：
+
+- HTTP 200 `success:true`：只回 `{success, message, data: {page, page_size, total, items}}`；每個 item 投影成 `{id, username, quota, used_quota, request_count, status, DeletedAt}`，**只限** `username` 符合 `PROXY_USERNAME_REGEX`、而且這幾個值的型別都對（整數；`DeletedAt` 是 null 或 RFC 3339）；其他使用者（root、管理員、別的前綴、型別不對的）只剩 `{"id": <id 或 null>, "username": null}`。**item 數量不變**：Odoo 以「這頁比 page_size 短」判斷一輪讀完，少回幾筆會讓它提早收尾。
+- 其他 JSON object（`success:false`、錯誤狀態碼）：只留 client 分類用得到的 `success`、`message`、`message_key`、`code`、`error.type`。空 body 照轉。
+- 形狀不對（不是 JSON、重複 key、`data`／`items`／某個 item 不是預期型別、分頁欄位不是非負整數）：**fail closed**，回 500 `internal`（reason `response_*`），上游的 body 一個 byte 都不轉。代理自己產生的錯誤一定帶 `X-Woow-Proxy-Error`，body 是 `{"success":false,"message":"newapi-proxy: <class>","proxy_error":"<class>","reason":"<code>"}`（401 的 reason 一律只寫 `auth`，細節只進 log）。
 
 | `X-Woow-Proxy-Error` | HTTP | 什麼時候 | client 分類建議（§3.4） |
 |---|---|---|---|
@@ -153,7 +160,7 @@ UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`�
 | `connect` | 502 | 沒連上 new-api、期限不夠送出（`deadline`）、或預檢沒有明確回答（受保護的請求**沒送出**），預檢遇到 429 會帶回 `Retry-After` | NotExecuted（可重送） |
 | `reset` | 502 | 送出後斷線、回應超過 1 MiB | Unknown（寫入不重送） |
 | `timeout` | 504 | 請求已送出、期限內沒收完回應 | Unknown（寫入不重送） |
-| `internal` | 500 | 代理本身的未預期例外 | Unknown |
+| `internal` | 500 | 代理本身的未預期例外；`GET /api/user/` 的回應形狀不對（reason `response_*`） | Unknown |
 
 代理**不重試**（httpx `retries=0`、不跟 redirect、不讀 proxy env）；寫入用一次性連線（`Connection: close`），不會因為連線池裡過期的 socket 把寫入變成「結果未知」。httpx／h11 的例外只轉成分類，例外文字不進 log 也不進回應。
 

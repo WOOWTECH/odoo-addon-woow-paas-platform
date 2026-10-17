@@ -7,7 +7,7 @@ that can stop it is canonicalisation or the route table.
 import pytest
 
 from newapi_proxy import canonical, signing
-from proxy_harness import Harness, TENANT_IP, USER_PAT
+from proxy_harness import TENANT_IP, USER_PAT, Harness, ok
 
 
 @pytest.fixture
@@ -150,6 +150,27 @@ def test_search_keyword_must_be_a_paas_username(h):
     for bad in ("root", "wsab000000004", "wpsvc-stg", "ws"):
         res = h.signed("GET", "/api/user/search", [("keyword", bad)], identity="ap")
         assert res.status == 400, bad
+
+
+def test_user_list_query_values(h):
+    """LLM-02b balance refresh: ``GET /api/user/`` takes paging and an id-only sort, nothing else."""
+    good = [("p", "3"), ("page_size", "100"), ("sort_by", "id"), ("sort_order", "asc")]
+    h.upstream.on("GET", "/api/user/", ok({"items": [], "page": 3, "page_size": 100, "total": 0}))
+    res = h.signed("GET", "/api/user/", good, identity="ap")
+    assert res.status == 200, res.body
+    assert h.upstream.requests[0].url.query == b"p=3&page_size=100&sort_by=id&sort_order=asc"
+    for bad in (
+        [("sort_by", "quota")],
+        [("sort_by", "id;drop")],
+        [("sort_order", "ASC")],
+        [("page_size", "101")],
+        [("keyword", "wsab0000000042")],
+        [("group", "default")],
+        [("ps", "100")],
+    ):
+        res = h.signed("GET", "/api/user/", bad, identity="ap")
+        assert res.status == 400, (bad, res.body)
+    assert len(h.upstream.requests) == 1
 
 
 def test_log_self_query_values(h):

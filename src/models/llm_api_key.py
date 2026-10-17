@@ -9,6 +9,11 @@ new-api 的 token 才是本體；PaaS 只存鏡像：token id、名稱、遮罩�
 1. 前端在打開建立表單時產生 ``client_request_id``；同一個 id 再送 ⇒ ``llm_key_already_shown``。
 2. 檢查帳戶 active、20 把上限（D10）、免費試用每帳號最多 1 把有效（DB partial unique index
    也擋並發）。每日上限與「每天最多建 3 把」在 LLM-10。
+   2′. **每帳號每小時最多 10 次建金鑰**（N6；LLM-02b）：本地檢查都過了、第一次外呼之前，
+   ``llm_event._llm_throttle_reserve`` 以獨立交易數＋記一筆 ``key_create``；到上限回
+   ``llm_rate_limited``＋``retry_after``，零外呼。做完以 ``_llm_event_finish`` 補結果（ok／錯誤碼）；
+   確定沒打到 new-api 的（第 4 步 NotExecuted 或被代理擋下、第 3 步就失敗）記 ``not_executed``，
+   不算進 10 次（N6 保護的是 new-api 的 CT 桶；所有嘗試另有每小時 30 次的上限）。
 3. **獨立 cursor** INSERT 鏡像 ``state=creating``、``newapi_name=wp_<id>_<rand4>`` 並 commit。
 4. UP ``POST /api/token/`` → 5. ``GET /api/token/`` 依名稱找 id → 6. ``POST /api/token/:id/key``。
 7. 獨立 cursor 把鏡像改成 ``active``（token id、遮罩、``revealed_at``）。
@@ -36,21 +41,26 @@ from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
     ERR_LLM_FREE_KEY_EXISTS,
+    ERR_LLM_INTERNAL,
     ERR_LLM_KEY_ALREADY_SHOWN,
     ERR_LLM_KEY_INVALID,
     ERR_LLM_KEY_LIMIT,
     ERR_LLM_RATE_LIMITED,
     ERR_LLM_UNAVAILABLE,
     MAX_KEYS_PER_ACCOUNT,
+    RESULT_NOT_EXECUTED,
     LlmError,
     LlmQuotaInteger,
     _is_llm_internal,
     _without_llm_internal,
 )
+from .llm_event import safe_code
 
 _logger = logging.getLogger(__name__)
 
+KEY_MODEL = 'woow_paas_platform.llm_api_key'
 KEY_TABLE = 'woow_paas_platform_llm_api_key'
+EVENT_MODEL = 'woow_paas_platform.llm_event'
 _LOCK_TIMEOUT = '5s'
 _CLIENT_REQUEST_ID_RE = re.compile(
     r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.ASCII)
@@ -248,26 +258,39 @@ class LlmApiKey(models.Model):
 
         ip = account._llm_tenant_ip()
         up = account._llm_up_token()
-        try:
-            client = Account._llm_client(nac.ROLE_WEB)
-        except nac.NewApiError as exc:
-            _logger.error('[LLM] keys/create: client unavailable: %s', exc.code)
-            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        client = Account._llm_web_client('keys/create')
 
+        Event = self.env[EVENT_MODEL]
+        event_id = Event._llm_throttle_reserve(account, 'key_create',
+                                               uid=user.id if user else None, real_ip=real_ip)
         deadline = time.monotonic() + nac.KEY_CREATE_BUDGET_SECONDS
         expires = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
             seconds=nac.FREE_TRIAL_LIFETIME_SECONDS)
-        key_id, name = self._llm_insert_creating(
-            account, 'free_trial', client_request_id, user, real_ip,
-            expires.replace(tzinfo=None), ','.join(nac.FREE_TRIAL_MODELS))
+        key_id = None
         try:
-            return self._llm_create_remote(account, client, ip, up, key_id, name, expires,
-                                           deadline)
+            key_id, name = self._llm_insert_creating(
+                account, 'free_trial', client_request_id, user, real_ip,
+                expires.replace(tzinfo=None), ','.join(nac.FREE_TRIAL_MODELS))
+            created = self._llm_create_remote(account, client, ip, up, key_id, name, expires,
+                                              deadline)
+        except LlmError as exc:
+            Event._llm_event_finish(event_id,
+                                    RESULT_NOT_EXECUTED if exc.not_executed else 'failed',
+                                    error_code=safe_code(exc.code),
+                                    target_model=KEY_MODEL if key_id else None,
+                                    target_id=key_id)
+            raise
         except Exception:
             # 程式錯誤（例如 client 自己的例外）：鏡像不能卡在 creating。已經收尾的列不受影響
             # （``_llm_finish`` 只改 creating）。
-            self._llm_finish(key_id, {'state': 'failed_reveal'})
+            if key_id:
+                self._llm_finish(key_id, {'state': 'failed_reveal'})
+            Event._llm_event_finish(event_id, 'failed', error_code=ERR_LLM_INTERNAL,
+                                    target_model=KEY_MODEL if key_id else None,
+                                    target_id=key_id)
             raise
+        Event._llm_event_finish(event_id, 'ok', target_model=KEY_MODEL, target_id=key_id)
+        return created
 
     @api.model
     def _llm_create_remote(self, account, client, ip, up, key_id, name, expires, deadline):
@@ -277,7 +300,13 @@ class LlmApiKey(models.Model):
         if isinstance(created, (nac.NotExecuted, nac.Definite)):
             # 確定沒建：鏡像標 deleted（使用者可以直接重建）。
             self._llm_finish(key_id, {'state': 'deleted'})
-            self._llm_raise_for(account, created)
+            try:
+                self._llm_raise_for(account, created)
+            except LlmError as exc:
+                # 沒送出（NotExecuted）或代理就擋下了（proxy_error）：這次沒打到 new-api，節流不算它。
+                exc.not_executed = isinstance(created, nac.NotExecuted) or bool(
+                    getattr(created, 'proxy_error', None))
+                raise
         token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None and isinstance(created, nac.Unknown):
             # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
@@ -383,9 +412,10 @@ class LlmApiKey(models.Model):
                            (name, key_id))
         except IntegrityError as exc:
             constraint = getattr(getattr(exc, 'diag', None), 'constraint_name', '') or ''
-            if 'free_trial' in constraint:
-                raise LlmError(ERR_LLM_FREE_KEY_EXISTS) from None
-            raise LlmError(ERR_LLM_KEY_ALREADY_SHOWN) from None
+            error = LlmError(ERR_LLM_FREE_KEY_EXISTS if 'free_trial' in constraint
+                             else ERR_LLM_KEY_ALREADY_SHOWN)
+            error.not_executed = True   # 還沒外呼
+            raise error from None
         return key_id, name
 
     @api.model

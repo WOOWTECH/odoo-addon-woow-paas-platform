@@ -85,8 +85,12 @@ TIMEOUT_PROVISION = (5, 15)
 PROVISION_TICK_SECONDS = 60
 #: P8（撤 session）是清理步驟：tick 預算用完時另給這麼多秒讓它還能送出。
 SESSION_REVOKE_GRACE_SECONDS = 5
-#: cron 讀取（對帳、計數、SWR 背景刷新、價目）。
+#: cron 讀取（對帳、計數、餘額刷新、SWR 背景刷新、價目）。
 TIMEOUT_CRON_READ = (5, 20)
+#: 開戶以外的 LLM cron 每個 tick 的總預算（N28，DESIGN §3.5「tick ≤ 30 秒」）：剩下的工作
+#: ``_trigger()`` 給下一個 tick。必須容得下一次完整的 cron 讀取（repo-lint
+#: ``newapi-timeout-ladder``）；超過就截斷本次呼叫（``deadline``）。
+CRON_TICK_SECONDS = 30
 #: 剩下的預算不夠一次呼叫時就不送（送了也只會變成 Unknown）。
 MIN_CALL_SECONDS = 2
 #: ``X-Woow-Read-Timeout``＝本次 read timeout − 這個餘裕，夾在代理接受的 1–``PROXY_READ_TIMEOUT_MAX``
@@ -120,6 +124,33 @@ FREE_TRIAL_LIFETIME_SECONDS = 90 * 86400
 #: new-api 回的英文原句（``message_key``）——依它分類，不受語系影響。
 MSG_LOGIN_FAILED = 'Username or password is incorrect, or user has been banned'
 
+#: new-api rc.44 已知的穩定錯誤碼（``code``；〔PROV〕§6.1、DESIGN §3.4、notes/newapi-api-surface）。
+#: PaaS 這邊的錯誤碼一律是封閉集合（N24；LLM-02b）：new-api 回的 ``code`` 只有在這張表裡才變成
+#: ``newapi_<小寫>``，其他（含 :func:`classify_response` 的 ``UNRECOGNISED``）一律
+#: :data:`NEWAPI_OTHER_CODE`——new-api 端可控的字不會原樣流進 ``last_error_code``、告警與 incident。
+#: 新增一個要分流的 code＝加在這裡（``llm_common.ERROR_CODES`` 由它導出）。
+KNOWN_NEWAPI_CODES = frozenset({
+    'ACCESS_TOKEN_EXPIRED', 'ACCESS_TOKEN_EXPIRY_INVALID', 'ACCESS_TOKEN_LIMIT',
+    'ACCESS_TOKEN_NAME_INVALID', 'ACCESS_TOKEN_ROUTE_UNDECLARED', 'ACCESS_TOKEN_SCOPE_DENIED',
+    'ACCESS_TOKEN_SCOPE_FORBIDDEN', 'ACCESS_TOKEN_SCOPE_INVALID',
+    'AUTH_INSUFFICIENT_PRIVILEGE', 'AUTH_INTERNAL_ERROR', 'AUTH_SESSION_ISSUANCE_LIMIT',
+    'AUTH_SESSION_LIMIT', 'AUTH_SESSION_NOT_FOUND', 'AUTH_SESSION_REQUIRED',
+    'AUTH_SESSION_REVOKED', 'AUTH_TOKEN_EXPIRED', 'AUTH_UNAUTHORIZED', 'AUTH_USER_DISABLED',
+    'INVALID_REQUEST',
+    'SECURITY_ACTION_FORBIDDEN', 'SECURITY_CONTEXT_INVALID', 'SECURITY_METHOD_UNAVAILABLE',
+    'SECURITY_PROOF_CONTEXT_MISMATCH', 'SECURITY_PROOF_EXPIRED', 'SECURITY_PROOF_INVALID',
+    'SECURITY_PROOF_METHOD_MISMATCH', 'SECURITY_PROOF_REQUIRED', 'SECURITY_PROOF_SCOPE_MISMATCH',
+    'SECURITY_VERIFICATION_FAILED',
+})
+NEWAPI_OTHER_CODE = 'llm_newapi_other'
+
+
+def newapi_error_code(code):
+    """new-api 的 ``code`` → PaaS 錯誤碼（封閉集合）：已知 ⇒ ``newapi_<小寫>``，其他 ⇒ ``llm_newapi_other``。"""
+    if isinstance(code, str) and code in KNOWN_NEWAPI_CODES:
+        return 'newapi_%s' % code.lower()
+    return NEWAPI_OTHER_CODE
+
 #: WEB 金鑰（Odoo web 程式路徑）能叫的 client 方法＝代理 routetable 裡 ``web=True`` 的路由
 #: （DESIGN §1.4.2-1）。其餘方法（開戶、PAT、session、ap）只給 CRON 金鑰。
 WEB_METHODS = frozenset({
@@ -150,6 +181,8 @@ _PROXY_NOT_EXECUTED = frozenset({'connect', 'busy', 'budget', 'body_timeout', 'c
 _PROXY_UNKNOWN = frozenset({'reset', 'timeout', 'internal'})
 #: 代理判定 PaaS 送錯了（簽章、白名單、body 政策）：確定沒執行，而且要開 circuit（LLM-02）。
 _PROXY_BUG = frozenset({'auth', 'policy', 'bad_request', 'too_large'})
+#: 會成為 ``Definite.proxy_error`` 的值（其他代理錯誤是 NotExecuted／Unknown，沒有 proxy_error）。
+PROXY_DEFINITE_ERRORS = _PROXY_BUG | {'denied'}
 
 
 # --------------------------------------------------------------------------- #
@@ -684,6 +717,22 @@ class NewApiClient:
     def ap_get_user(self, user_id, *, timeout=TIMEOUT_PROVISION, deadline=None):
         return self._request('GET', '/api/user/{id}', identity='ap', write=False,
                              timeout=timeout, deadline=deadline, path_params={'id': user_id})
+
+    def ap_list_users(self, page, page_size=100, *, timeout=TIMEOUT_CRON_READ, deadline=None):
+        """``GET /api/user/``（全部使用者，依 id **由小到大**分頁；LLM-02b 餘額刷新）。
+
+        由小到大：分頁途中有人新建帳號只會加在最後一頁之後，不會把還沒讀到的使用者往後擠；
+        new-api 預設是 id 由大到小（``model.NewUserSortOptions``）。回應含其他非 PaaS 使用者，
+        呼叫端自己以本環境的使用者名稱 regex 過濾。
+        """
+        if type(page) is not int or not 1 <= page <= 999999:
+            raise NewApiInputError('page') from None
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise NewApiInputError('page_size') from None
+        return self._request('GET', '/api/user/', identity='ap', write=False,
+                             timeout=timeout, deadline=deadline,
+                             query={'p': page, 'page_size': page_size,
+                                    'sort_by': 'id', 'sort_order': 'asc'})
 
     # ---- user：session 與 PAT 管理（只給 CRON 金鑰） ------------------------ #
     def user_login(self, client_ip, username, password, *, timeout=TIMEOUT_PROVISION,
