@@ -165,7 +165,8 @@
                 "placeholder": "smtp.example.com",
                 "description": "寄信伺服器（選填）。設定後 n8n 才能寄忘記密碼、邀請成員等信件；未設定時這些信不會寄出"},
                 {"key": "main.config.N8N_SMTP_PORT", "label": "SMTP 連接埠", "type": "number",
-                "default": 465, "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
+                "default": 465, "min": 1, "max": 65535, "integer": true,
+                "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
                 {"key": "main.config.N8N_SMTP_SSL", "label": "SMTP 使用 SSL", "type": "select",
                 "default": "true", "options": ["true", "false"]},
                 {"key": "main.config.N8N_SMTP_USER", "label": "SMTP 帳號", "type": "text"},
@@ -2350,7 +2351,7 @@
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
             <field name="helm_chart_version">0.1.7</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"2Gi"},"log":{"size":"1Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
-            <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "format": "host_port", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址，格式「主機:埠」，例如 1.tcp.ngrok.io:12345，不要加 tcp://）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
@@ -2541,7 +2542,8 @@
                 "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外登入網址時要填；清空即撤銷。換成另一個 ngrok 帳號＝登入網址改變，所有裝置都要重新登入。免費帳號每月約 1 GB 流量／2 萬次請求，正式使用建議升級付費方案"},
                 {"key": "ngrok.domain", "label": "ngrok 網域（選填）", "type": "text", "format": "domain",
                 "placeholder": "xxx.ngrok-free.app",
-                "description": "只填網域、不要加 https://；留空＝自動使用這個 ngrok 帳號的免費固定網域。改網域＝所有裝置都要重新登入。同一個網域同時只能給一台使用：已在別處上線（ERR_NGROK_334）時，本服務改為只有內部網址可登入"},
+                "description": "只填網域、不要加 https://；留空＝自動使用這個 ngrok 帳號的免費固定網域。請照抄 ngrok 後台 Domains 頁列出的網域：平台無法核對網域是否屬於你的帳號，打錯字或填了不屬於你帳號的網域，ngrok 仍可能讓它上線並成為登入網址，之後登入的裝置都會指向那個網址。改網域＝所有裝置都要重新登入。同一個網域同時只能給一台使用：已在別處上線（ERR_NGROK_334）時，本服務改為只有內部網址可登入",
+                "confirm_change": "改 ngrok 網域會改變 VPN 登入網址：已登入的裝置會離線且不會自動搬到新網址，每台都要重新登入。請確認新網域是你 ngrok 後台 Domains 頁列出的網域（平台無法核對網域是否屬於你的帳號）。"},
                 {"key": "headscale.dns.magicDns", "label": "MagicDNS", "type": "boolean", "default": true,
                 "description": "開啟時 tailnet 內的裝置可以用名稱互連（例如 my-laptop.tailnet.internal）"},
                 {"key": "headscale.dns.baseDomain", "label": "MagicDNS 網域", "type": "text", "default": "tailnet.internal",

@@ -49,6 +49,22 @@
                 <span t-esc="state.error"/>
             </div>
 
+            <!-- service-update-api-validation（INFRA-HS-013-4）：spec confirm_change 的二次確認 -->
+            <div t-if="state.editing and state.pendingConfirm.length" class="o_woow_config_confirm" role="alertdialog">
+                <WoowIcon name="'warning'" size="18"/>
+                <div class="o_woow_config_confirm__body">
+                    <p t-foreach="state.pendingConfirm" t-as="message" t-key="message_index" t-esc="message"/>
+                    <div class="o_woow_config_confirm__actions">
+                        <WoowButton variant="'secondary'" size="'sm'" onClick.bind="dismissConfirm">
+                            Back to editing
+                        </WoowButton>
+                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="confirmSave">
+                            Confirm and save
+                        </WoowButton>
+                    </div>
+                </div>
+            </div>
+
             <!-- Upgrading Notice -->
             <div t-if="props.service.state === 'upgrading'" class="o_woow_upgrade_notice">
                 <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>

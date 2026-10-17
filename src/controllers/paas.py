@@ -2222,6 +2222,12 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
+            # service-update-api-validation（AI-LLM-017-3）：update 只認 values／version／
+            # odoo_addon_ids／clear_keys。其他頂層參數（例 chart_version、helm_chart_version）
+            # 原本被 **kw 吞掉、回 success 並白跑一次 helm upgrade——租戶以為指定了版本。
+            if kw:
+                return {'success': False, 'error': _(
+                    'Unknown parameters: %(params)s', params=', '.join(sorted(kw)))}
             try:
                 service._check_operation_allowed(operation='write')
             except OperationalError:
@@ -4185,6 +4191,18 @@ class PaasController(HiddenChainMixin, Controller):
         return kept
 
     @staticmethod
+    def _refuse_after_addon_write(service: Any, old_addon_ids: set | None, error: str) -> dict[str, Any]:
+        """reconfigure 在改過 addon 勾選之後才被擋下：還原勾選再回錯誤。
+
+        `_update_service` 改 addon 那段會先寫 odoo_addon_ids；之後的值驗證（白名單、format、
+        spec type）被拒時，json route 不丟例外 ⇒ transaction 照樣 commit，不還原就留下半套
+        變更（同 #1647 預檢被擋時的做法）。``old_addon_ids`` 為 None＝這次沒有動 addon。
+        """
+        if old_addon_ids is not None:
+            service.write({'odoo_addon_ids': [(6, 0, sorted(old_addon_ids))]})
+        return {'success': False, 'error': error}
+
+    @staticmethod
     def _drop_create_only_values(
         service: Any, values: dict[str, Any] | None,
     ) -> tuple[dict[str, Any] | None, str | None]:
@@ -4418,6 +4436,10 @@ class PaasController(HiddenChainMixin, Controller):
         except (json.JSONDecodeError, TypeError):
             _logger.error("Invalid helm_default_values for template %s; blocking create", template.name)
             return {'success': False, 'error': _('Template misconfigured (invalid default values). Please contact support.')}
+        # service-update-api-validation（X-LC-002-4）：values 必須是物件；spec 宣告的鍵依
+        # type 驗證（與 reconfigure 同一套），不合法就在收錢前擋下。
+        if values is not None and not isinstance(values, dict):
+            return {'success': False, 'error': _('Invalid request')}
         filtered_user_values, rejected = template._filter_allowed_helm_values(values)
         if rejected:
             # #1160：create 對 spec 以外的鍵靜默丟棄（前端可能夾帶舊表單的鍵，例如
@@ -4426,6 +4448,9 @@ class PaasController(HiddenChainMixin, Controller):
                 "Dropped helm value keys not declared by template %s on create: %s",
                 template.name, sorted(rejected),
             )
+        filtered_user_values, value_error = template._validate_spec_values(filtered_user_values)
+        if value_error:
+            return {'success': False, 'error': value_error}
 
         # Extract _init.* keys (not Helm values, used for post-deploy init)
         init_params = {}
@@ -4750,6 +4775,13 @@ class PaasController(HiddenChainMixin, Controller):
         if version_error:
             return {'success': False, 'error': version_error}
 
+        # service-update-api-validation（INFRA-EMQX-011-1）：values 不是物件時，原本一路
+        # 走到 `_filter_allowed_helm_values` 的 `.items()` 才炸，回 Python 例外原文。
+        if values is not None and not isinstance(values, dict):
+            return {'success': False, 'error': _('Invalid request')}
+        # 下面的「沒有變更就不升級」只用在租戶真的送了設定值的請求；空請求維持既有的
+        # 「以目前設定重新套用」語意（見該處註解）。
+        requested_values = bool(values)
         # #1455：清除清單在任何寫入**之前**驗證（下方 addon 那段會先寫 odoo_addon_ids）。
         if clear_keys is not None and not isinstance(clear_keys, list):
             return {'success': False, 'error': _('Invalid request')}
@@ -4822,7 +4854,8 @@ class PaasController(HiddenChainMixin, Controller):
             existing_values = service._helm_values_dict()  # #559：唯一入口
             filtered_user_values, rejected_keys = service.template_id._filter_allowed_helm_values(values)
             if rejected_keys:
-                return {'success': False, 'error': _('Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys))}
+                return self._refuse_after_addon_write(service, old_addon_ids, _(
+                    'Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys)))
             # _init.* are one-time provisioning params consumed at creation (stored on
             # the service record, e.g. n8n_owner_password). They are NOT Helm values and
             # must never be merged into helm_values on reconfigure — doing so would
@@ -4838,7 +4871,18 @@ class PaasController(HiddenChainMixin, Controller):
             # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）。
             format_error = service.template_id._validate_spec_formats(filtered_user_values)
             if format_error:
-                return {'success': False, 'error': format_error}
+                return self._refuse_after_addon_write(service, old_addon_ids, format_error)
+            # service-update-api-validation：依 spec type 驗證值（select 選項、真布林、數字、
+            # 單行文字），null＝還原 spec 預設。送回目前的值一律放行。
+            current_values = {}
+            for key in filtered_user_values:
+                current = _lookup_helm_value(existing_values, key)
+                if current is not _HELM_VALUE_MISSING:
+                    current_values[key] = current
+            filtered_user_values, value_error = service.template_id._validate_spec_values(
+                filtered_user_values, current_values=current_values)
+            if value_error:
+                return self._refuse_after_addon_write(service, old_addon_ids, value_error)
             # #1455：清除優先於同一請求裡對同一格的輸入。
             if clear_keys:
                 filtered_user_values = {
@@ -4880,6 +4924,25 @@ class PaasController(HiddenChainMixin, Controller):
                 else:
                     # All addons deselected — remove addon-specific helm values
                     service._remove_addon_helm_values(merged_values)
+
+            # service-update-api-validation（AI-LLM-017-3）：送來的設定值正規化後與目前完全
+            # 相同、addon 沒變、也沒有要清除的憑證 ⇒ 不呼叫 operator、不產生 helm revision，
+            # 直接回「沒有變更」。舊分頁整包送回、或 API 重送同一組值時，原本每次都白跑一次
+            # helm upgrade（服務進「升級中」、回復版本清單被灌水；helm 只留 10 筆歷史）。
+            # 從 error 的兩個出口（init 額度用完、背景 upgrade 失敗）出發的請求不短路——那時
+            # 重送同一組值就是租戶唯一的重試方式。
+            # 空請求（values 空、沒有 addon、沒有 clear_keys）刻意不在這裡短路：它是既有的
+            # 「以目前設定重新套用」（會重算平台注入的值），是否也改成 no-op 屬產品決定
+            # （#1456／noop-save-triggers-upgrade）。前端 ConfigurationTab 本來就不送空請求。
+            if (requested_values and not addon_changed
+                    and not (init_exhausted_error or upgrade_failed_error)
+                    and merged_values == existing_snapshot):
+                return {
+                    'success': True,
+                    'no_changes': True,
+                    'message': _('No changes to apply.'),
+                    'data': self._format_service(service),
+                }
 
             # #552: reconfigure 的 chart version fallback。**主執行緒**解析，兩個
             # 消費端（下面的 write ＋ upgrade_kwargs）共用同一個值。
