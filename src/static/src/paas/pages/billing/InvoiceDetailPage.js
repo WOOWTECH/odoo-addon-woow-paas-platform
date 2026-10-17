@@ -104,7 +104,9 @@ export class InvoiceDetailPage extends Component {
 
   get downloadUrl() {
     if (!this.invoice) return "#";
-    return `/report/pdf/account.account_invoices/${this.invoice.id}`;
+    // AUDITFIX tax-invoice-pdf-403：原生 /report/pdf 以租戶身分渲染，含稅發票讀不到
+    // account.tax 會 403；平台端點先驗擁有權再以平台身分渲染。
+    return `/api/billing/invoices/${this.invoice.id}/pdf`;
   }
 
   get lines() {

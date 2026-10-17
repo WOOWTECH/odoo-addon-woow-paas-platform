@@ -70,6 +70,8 @@ from . import test_topup_plan_best_value
 from . import test_skip_trial_estimate
 from . import test_wallet_transaction_bonus
 from . import test_dashboard_summary
+# AUDITFIX tax-invoice-pdf-403／dashboard-next-bill-wrong
+from . import test_invoice_pdf_dashboard_auditfix
 from . import test_ecpay_invoice_carrier_mapping
 from . import test_ecpay_invoice_cron_force_issue
 from . import test_ecpay_invoice_topup
