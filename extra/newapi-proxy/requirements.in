@@ -1,0 +1,6 @@
+# Runtime dependencies of newapi-proxy. Lock with:
+#   uv pip compile --python-version 3.12 --generate-hashes --exclude-newer <today-14d> \
+#     requirements.in -o requirements.txt
+starlette==1.7.0
+httpx==0.28.1
+uvicorn==0.54.0

@@ -216,6 +216,18 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.ecpg_topup_order_result_url_enabled',
     'woow_paas_platform.auto_topup_min_amount',
     'woow_paas_platform.migration_18_0_1_0_240_topup_plan_50_retired',
+    # LLM-01b：AI 模型分頁（DESIGN §2.11）。全部是「模組常數＋get_param()」寫法、不 seed
+    # 預設值，lint 掃不到 ⇒ 補在 `test_llm_tracer.py::TestLlmConfigRegistered`
+    # （它比對的是 models/llm_common.py 的 LLM_CONFIG_PARAMETERS）。
+    'woow_paas_platform.show_llm',
+    'woow_paas_platform.llm_pilot_partner_ids',
+    'woow_paas_platform.newapi_proxy_url',
+    'woow_paas_platform.newapi_username_prefix',
+    'woow_paas_platform.llm_synthetic_ip_block',
+    'woow_paas_platform.llm_canary_partner_id',
+    # LLM-02b：告警出口（N13）。
+    'woow_paas_platform.llm_alert_email',
+    'woow_paas_platform.llm_alert_webhook_url',
 ]
 
 

@@ -41,6 +41,35 @@ if [ "$LOCKDOWN" = 1 ]; then
     echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN=1 不可同時設 AGENT_RUNTIME_NAMESPACE_SECRET（語意衝突，#1162 D7）。" >&2
     exit 1
   fi
+  # AI 模型分頁（LLM-01b；DESIGN §2.9、§2.11，〔REV〕18）：prod clone 彩排不得注入任何 LLM env——
+  # 開了就等於讓一份帶著 prod 密文的 DB 有機會接上 new-api-stg。照上面 AGENT_RUNTIME 的先例 fail-loud。
+  if [ -n "${WOOW_LLM_SANDBOX:-}${WOOW_LLM_ROTATE_SECRET_KEYS:-}${WOOW_NEWAPI_PROXY_AUTH_WEB:-}${WOOW_NEWAPI_PROXY_AUTH_CRON:-}${WOOW_LLM_SECRET_KEYS:-}" ]; then
+    echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN=1 不可同時設 WOOW_LLM_SANDBOX 或任何 LLM env（DESIGN §2.9）。" >&2
+    exit 1
+  fi
+fi
+
+# --- AI 模型分頁（LLM-01b）：opt-in WOOW_LLM_SANDBOX=1 ----------------------------------------
+# 只收 1／0／未設（同 SANDBOX_NEUTRALIZE_LOCKDOWN：「以為開了其實沒開」與反過來都要 fail-loud）。
+# 不寫進 .sandbox.yml 的 config_params_stg：那會對本 repo 所有 stg 沙盒生效（〔REV〕47）。
+case "${WOOW_LLM_SANDBOX:-}" in
+  1) LLM_SANDBOX=1 ;;
+  ""|0) LLM_SANDBOX=0 ;;
+  *)
+    echo "ERROR pre-install: WOOW_LLM_SANDBOX='${WOOW_LLM_SANDBOX}' 不合法（只收 1／0／未設）。" >&2
+    exit 1 ;;
+esac
+# 加密金鑰輪替（只對既有的 LLM 沙盒有意義）：同一個值域。
+case "${WOOW_LLM_ROTATE_SECRET_KEYS:-}" in
+  1) LLM_ROTATE=1 ;;
+  ""|0) LLM_ROTATE=0 ;;
+  *)
+    echo "ERROR pre-install: WOOW_LLM_ROTATE_SECRET_KEYS='${WOOW_LLM_ROTATE_SECRET_KEYS}' 不合法（只收 1／0／未設）。" >&2
+    exit 1 ;;
+esac
+if [ "$LLM_SANDBOX" = 1 ] && [ "$MODE" != "stg" ]; then
+  echo "WARN pre-install: WOOW_LLM_SANDBOX=1 只在 stg mode 生效（new-api-stg 在 woow-k3s；收到 MODE=${MODE}），略過。" >&2
+  LLM_SANDBOX=0
 fi
 
 # 只有 stg 模式需要這些平台 values；local/ci-local 直接結束（no-op）。
@@ -51,6 +80,147 @@ fi
 yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
 
 # kubectl 沿用 create.sh 已切換的 context（require_kube_context 做過 use-context）。
+
+# --- AI 模型分頁的 env（LLM-01b；SBX-01 的 odoo.extraSecretEnv）---------------------------------
+# 照下面 agent-runtime 段的形狀：從 paas-stg-system 的 Odoo 端簽章金鑰複本讀 web／cron（LLM-01a
+# 建立；值只經 stdin／變數、不印），每個沙盒另外有自己的 WOOW_LLM_SECRET_KEYS（不共用）。
+# 簽章金鑰任一拿不到或格式不合 ⇒ 整段不寫（fail closed）：env 不存在時 Odoo 端 fail closed、
+# post-create 也不會開分頁。值只進 $EXTRA_VALUES_FILE（create.sh 的 0700 暫存目錄，結束即刪）
+# → chart Secret → secretKeyRef，不進 ConfigMap 或 annotation。
+#
+# 🔴 加密金鑰的壽命＝這個沙盒 namespace 的壽命（LLM-01b finding 1）。create.sh 在既有 slug 上走
+# helm upgrade（--yes／deploy-stg 換 image）時也會跑本 hook，而 chart Secret 的
+# extra-env-woow-llm-secret-keys 是整個覆寫、不是累加：每次重產新金鑰 ⇒ 下一次 pod 重啟後所有
+# newapi_password_enc／up_token_enc 都解不開（llm_secret_undecryptable），開戶中的帳戶變 error、
+# active 的帳戶 keys/create 與 usage 都 llm_unavailable；new-api 的使用者刪不掉、密碼又沒了，那些
+# 名字永遠拿不回來。所以：
+#   * 先讀 chart Secret 的現值（跟 create.sh 沿用隨機 admin 密碼同一個作法）；**只有沒有時才產生**。
+#   * 輪替：WOOW_LLM_ROTATE_SECRET_KEYS=1 ⇒ 在前面加一把新的、舊的全部保留（MultiFernet：第一把
+#     加密、全部可解密；DESIGN §2.9）。
+#   * 已是 LLM 沙盒（Secret 裡有這個 key）卻沒帶 WOOW_LLM_SANDBOX=1：照樣沿用（sticky）＋WARN——
+#     不帶的話 helm upgrade 會把 extraSecretEnv 整段拿掉，金鑰就此消失。明確帶 WOOW_LLM_SANDBOX=0
+#     想關掉：拒絕（照樣沿用）並以非 0 結束；要關請 destroy 沙盒。
+#   * 讀不到現值（kubectl 失敗、Secret 不只一份、值格式不合）：有 opt-in ⇒ 不產生新的（可能蓋掉
+#     舊的），整段不寫並以非 0 結束；沒 opt-in ⇒ 只 WARN（不讓一般沙盒因為 kubectl 一時失敗就報
+#     hook 失敗），訊息提醒 LLM 沙盒的主人帶 WOOW_LLM_SANDBOX=1 重跑。
+#   * 現值在、但這次讀不到簽章金鑰：只保留加密金鑰（不放行 new-api-stg；Odoo 端簽章 fail closed、
+#     不外呼），密文不會因此變成解不開。
+_llm_key_list_re='^[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{32,256}(,[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{32,256})*$'
+# Fernet key＝32 bytes 的 urlsafe base64（44 字元、含一個 =）；清單以逗號分隔、第一把加密。
+_llm_fernet_list_re='^[A-Za-z0-9_-]{43}=(,[A-Za-z0-9_-]{43}=)*$'
+_llm_fernet_re='^[A-Za-z0-9_-]{43}=$'
+_llm_new_fernet_key() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '[:space:]' || true; }
+LLM_AUTH_WEB=""
+LLM_AUTH_CRON=""
+LLM_SECRET_KEYS=""
+LLM_WRITE_AUTH=0
+LLM_WRITE_KEYS=0
+_llm_rc=0
+
+# 現值：chart Secret（odoo-dev-sandbox.extraSecretEnvKey：extra-env-<env 名小寫、_ 換 ->）。
+# 用 release label 找（跟 create.sh 的 sandbox_admin_secret_name 同一個找法，不必算 fullname）；
+# 只印這一個 key 的 base64（jsonpath），不 dump 整個 Secret。四態：absent／present／error／
+# skipped（沒有 NAMESPACE／SLUG 可查；create.sh 一定會給）。
+_llm_lookup=skipped
+LLM_EXISTING_KEYS=""
+if [ "$LOCKDOWN" != 1 ] && [ -n "${NAMESPACE:-}" ] && [ -n "${SLUG:-}" ]; then
+  _llm_lookup=error
+  if _llm_raw="$(kubectl get secret -n "$NAMESPACE" -l "app.kubernetes.io/instance=${SLUG}" \
+        -o jsonpath='{range .items[*]}{.data.extra-env-woow-llm-secret-keys}{"\n"}{end}' 2>/dev/null)"; then
+    _llm_found=0
+    _llm_b64=""
+    while IFS= read -r _llm_line; do
+      [ -n "$_llm_line" ] || continue
+      _llm_found=$((_llm_found + 1))
+      _llm_b64="$_llm_line"
+    done <<<"$_llm_raw"
+    if [ "$_llm_found" = 0 ]; then
+      _llm_lookup=absent
+    elif [ "$_llm_found" = 1 ]; then
+      LLM_EXISTING_KEYS="$(printf '%s' "$_llm_b64" | base64 -d 2>/dev/null | tr -d '[:space:]' || true)"
+      if [[ "$LLM_EXISTING_KEYS" =~ $_llm_fernet_list_re ]]; then
+        _llm_lookup=present
+      else
+        LLM_EXISTING_KEYS=""
+      fi
+    fi
+    unset _llm_raw _llm_b64 _llm_line
+  fi
+fi
+
+if [ "$LOCKDOWN" != 1 ]; then
+  case "$_llm_lookup" in
+    present)
+      if [ "$LLM_SANDBOX" != 1 ]; then
+        if [ "${WOOW_LLM_SANDBOX:-}" = 0 ]; then
+          echo "ERROR pre-install: ${NAMESPACE} 已是 AI 模型沙盒（chart Secret 有 WOOW_LLM_SECRET_KEYS）；WOOW_LLM_SANDBOX=0 關不掉它——拿掉 extraSecretEnv 會讓 DB 裡的密文永遠解不開。這次照樣沿用既有設定；要關請 destroy 沙盒。" >&2
+          _llm_rc=1
+        else
+          echo "WARN pre-install: ${NAMESPACE} 已是 AI 模型沙盒：沿用既有的 AI 模型設定與加密金鑰（重跑時請一律帶 WOOW_LLM_SANDBOX=1）。" >&2
+        fi
+        LLM_SANDBOX=1
+      fi
+      ;;
+    error|skipped)
+      if [ "$LLM_SANDBOX" = 1 ]; then
+        echo "ERROR pre-install: 讀不到 ${NAMESPACE:-<NAMESPACE 未設>} 既有的 AI 模型加密金鑰（kubectl 失敗、Secret 不只一份、值格式不合或沒有 NAMESPACE／SLUG）——不產生新金鑰（可能蓋掉舊的），AI 模型段整段不寫。修好後帶 WOOW_LLM_SANDBOX=1 重跑。" >&2
+        LLM_SANDBOX=0
+        _llm_rc=1
+      elif [ "$_llm_lookup" = error ]; then
+        echo "WARN pre-install: 無法確認 ${NAMESPACE} 是不是 AI 模型沙盒（讀 chart Secret 失敗）；這次不寫 AI 模型段。若它是，修好 kubectl 後帶 WOOW_LLM_SANDBOX=1 重跑，否則加密金鑰會被這次的 helm upgrade 拿掉。" >&2
+      fi
+      ;;
+  esac
+fi
+
+if [ "$LLM_SANDBOX" = 1 ]; then
+  _llm_ns="${PAAS_STG_SYSTEM_NAMESPACE:-paas-stg-system}"
+  _llm_secret="paas-stg-newapi-proxy-client"
+  LLM_AUTH_WEB="$(kubectl get secret -n "$_llm_ns" "$_llm_secret" -o jsonpath='{.data.web}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true)"
+  LLM_AUTH_CRON="$(kubectl get secret -n "$_llm_ns" "$_llm_secret" -o jsonpath='{.data.cron}' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ "$_llm_lookup" = present ]; then
+    LLM_SECRET_KEYS="$LLM_EXISTING_KEYS"
+    if [ "$LLM_ROTATE" = 1 ]; then
+      _llm_new="$(_llm_new_fernet_key)"
+      if [[ "$_llm_new" =~ $_llm_fernet_re ]]; then
+        LLM_SECRET_KEYS="${_llm_new},${LLM_EXISTING_KEYS}"
+        echo "pre-install: 加密金鑰輪替：前面加一把新的，舊的保留（Odoo 端重新加密在 LLM-03；確認全部改寫後才移除舊金鑰）。" >&2
+      else
+        echo "ERROR pre-install: 產生新的加密金鑰失敗，這次不輪替（沿用現值）。" >&2
+        _llm_rc=1
+      fi
+      unset _llm_new
+    fi
+  else
+    LLM_SECRET_KEYS="$(_llm_new_fernet_key)"
+    if [ "$LLM_ROTATE" = 1 ]; then
+      echo "WARN pre-install: 這是新的 AI 模型沙盒，WOOW_LLM_ROTATE_SECRET_KEYS=1 沒有東西可輪替（只產生一把）。" >&2
+    fi
+  fi
+  # [[ =~ ]] 而不是 printf | grep -q：值不經過任何外部行程的 argv，也不吃 pipefail＋SIGPIPE 的坑。
+  if [[ "$LLM_SECRET_KEYS" =~ $_llm_fernet_list_re ]]; then
+    LLM_WRITE_KEYS=1
+  fi
+  if [ "$LLM_WRITE_KEYS" = 1 ] && [[ "$LLM_AUTH_WEB" =~ $_llm_key_list_re ]] \
+     && [[ "$LLM_AUTH_CRON" =~ $_llm_key_list_re ]]; then
+    LLM_WRITE_AUTH=1
+  else
+    echo "WARN pre-install: 無法取得 AI 模型分頁的簽章金鑰（${_llm_ns}/${_llm_secret} 缺或格式不合，或 kubectl context 不對）。" >&2
+    LLM_AUTH_WEB=""
+    LLM_AUTH_CRON=""
+    if [ "$_llm_lookup" = present ] && [ "$LLM_WRITE_KEYS" = 1 ]; then
+      # 既有沙盒：簽章金鑰這次讀不到，但加密金鑰一定要留著（不然密文永遠解不開）。
+      echo "WARN pre-install: 只保留既有的加密金鑰；這次不放行 new-api-stg、Odoo 端簽章 fail closed（不外呼）。" >&2
+      _llm_rc=1
+    else
+      echo "WARN pre-install: WOOW_LLM_SANDBOX 段整段不寫（fail closed）；沙盒照常建立，但沒有 AI 模型分頁。" >&2
+      LLM_SANDBOX=0
+      LLM_WRITE_KEYS=0
+      LLM_SECRET_KEYS=""
+    fi
+  fi
+fi
+unset LLM_EXISTING_KEYS
 
 # --- stg networkPolicy / storageClass / devMode（cloudflare tunnel ingress + operator egress + agent-runtime pods）---
 {
@@ -69,7 +239,12 @@ yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
   else
     # 平時 stg 無條件放行 agent-runtime pod（paas-managed）的問題另見 #1202。
     echo "  allowIngressFromNamespaces: [paas-stg-cloudflare-system, paas-stg-system]"
-    echo "  allowEgressToNamespaces: [paas-stg-system]"
+    if [ "$LLM_WRITE_AUTH" = 1 ]; then
+      # newapi-proxy（ns new-api-stg）：代理那一側的 NP 只收 dev-sandbox.io/managed 的 Odoo pod。
+      echo "  allowEgressToNamespaces: [paas-stg-system, new-api-stg]"
+    else
+      echo "  allowEgressToNamespaces: [paas-stg-system]"
+    fi
     echo "  allowAgentRuntimePods: true"
   fi
   echo "odoo:"
@@ -82,6 +257,15 @@ yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
   echo "  filestore:"
   echo "    persistence:"
   echo "      storageClass: longhorn-delete"
+  if [ "$LLM_WRITE_KEYS" = 1 ]; then
+    # 沙盒是單一 pod（workers=0、max_cron_threads=1），WEB／CRON 兩組都給（DESIGN §1.4.2-1）。
+    echo "  extraSecretEnv:"
+    if [ "$LLM_WRITE_AUTH" = 1 ]; then
+      echo "    WOOW_NEWAPI_PROXY_AUTH_WEB: $(yaml_sq "$LLM_AUTH_WEB")"
+      echo "    WOOW_NEWAPI_PROXY_AUTH_CRON: $(yaml_sq "$LLM_AUTH_CRON")"
+    fi
+    echo "    WOOW_LLM_SECRET_KEYS: $(yaml_sq "$LLM_SECRET_KEYS")"
+  fi
   echo "postgres:"
   echo "  storage:"
   echo "    storageClass: longhorn-delete"
@@ -135,3 +319,7 @@ if [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
     } >> "$EXTRA_VALUES_FILE"
   fi
 fi
+
+# AI 模型段的「非 0 但已寫好 values」（例：明確要求關掉既有 LLM 沙盒、讀不到現值）：create.sh 在
+# 非 lockdown 時會印「hook 失敗（繼續）」並照樣套用已寫好的 values——要的就是這個大聲但安全的結果。
+exit "$_llm_rc"

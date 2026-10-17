@@ -1,0 +1,5 @@
+# Only newapi_proxy/ and requirements.txt go into the image.
+*
+!newapi_proxy/
+!requirements.txt
+**/__pycache__

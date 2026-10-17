@@ -30,6 +30,8 @@ import { ProfilePage } from "./pages/settings/ProfilePage";
 import { PaymentMethodsListPage } from "./pages/settings/PaymentMethodsListPage";
 import { AddPaymentMethodPage } from "./pages/settings/AddPaymentMethodPage";
 import { ReconcileReportPage } from "./pages/reconcile-report/ReconcileReportPage";
+import { LlmPage } from "./pages/llm/LlmPage";
+import { normalizeLlmTab } from "./core/llm_routes";
 import { EmptyState } from "./pages/empty/EmptyState";
 import { NotFoundPage } from "./pages/not-found/NotFoundPage";
 
@@ -64,6 +66,7 @@ export class Root extends Component {
         PaymentMethodsListPage,
         AddPaymentMethodPage,
         ReconcileReportPage,
+        LlmPage,
         EmptyState,
         NotFoundPage,
     };
@@ -122,6 +125,11 @@ export class Root extends Component {
 
     get securityAccessTab() {
         return this.router.params.tab || 'overview';
+    }
+
+    // LLM-01c：「AI 模型」的子頁。exact `#/llm` 沒有 params.tab ⇒ 總覽；白名單在 core/llm_routes.js。
+    get llmTab() {
+        return normalizeLlmTab(this.router.params.tab);
     }
 
     get invoiceId() {

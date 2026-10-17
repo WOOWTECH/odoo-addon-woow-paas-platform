@@ -54,6 +54,10 @@ on:
       #   而 repo-lint 的檔頭對帳 gate 管不到 .gitea/ 底下的散文。
       - "scripts/seed/**"
       - "extra/paas-operator/**"
+      # LLM-01a：newapi-proxy 是 extra/ 底下第二個住著 .py 的目錄——provision-sentinel
+      # 掃整個 extra/、doc-symbol-anchor 的候選索引收 repo 內所有 .py（同 basename 會讓
+      # 原本唯一的錨點變歧義），只動這個目錄的 PR 也要觸發 repo-lint（#461／#626 同型）。
+      - "extra/newapi-proxy/**"
       - "docs/decisions/patterns/**"
       - "docs/tracking/pitfalls/**"
       - ".claude/hooks/**"
@@ -100,6 +104,12 @@ on:
       # ⚠ 2026-09-04 這個目錄由 `k8s-dev-sandbox` 改名為 `woow-e2e-fixtures`（與
       #   woow-dev plugin 的同名 skill 區隔）；上面 PR #843 那段講的是改名前的路徑。
       - ".claude/skills/woow-e2e-fixtures/**"
+      # LLM-05 `scripts/audit/test_ai_models_terms_draft.py`（下方自我測試步驟跑它）的**主要**
+      # 輸入：這份條款草稿會被負責人與法務改寫，而改寫的 PR 多半只動這一個檔。少了這一行，
+      # 「只改條款」的 PR 不觸發 repo-lint ⇒ 那支守線（12 條、依據、禁語、和程式常數一致）
+      # 對它最該守的改動完全休眠（#461／#547 同型）。另外兩個輸入 src/models/llm_common.py、
+      # src/static/src/paas/services/html_sanitize.js 已在 src/** 裡。
+      - "docs/reference/features/ai-models-terms-draft.md"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest

@@ -18,6 +18,8 @@ from . import sh_subscription_plan_visibility
 from . import sh_subscription_plan_cs_spec
 from . import sh_subscription_plan_names_zh_tw
 from . import subscription_lifecycle_mixin
+# #1766：一條 tunnel 只給一台 HA 接。SH／SA 共用，必須在兩者之前 import。
+from . import tunnel_binding_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron
 from . import res_config_settings
@@ -97,3 +99,9 @@ from . import workspace_quota_audit
 from . import workspace_quota_minimum_wizard
 # ECPay 站內付 2.0 V4 上線：綁卡 NT$5 驗證授權的取消帳本（DoAction）。
 from . import ecpg_bind_auth_void
+# LLM-01b：AI 模型分頁的帳戶、金鑰鏡像與設定寫入守衛（DESIGN §2）。
+from . import llm_config_guard
+from . import llm_account
+from . import llm_api_key
+from . import llm_event
+from . import llm_runtime_state

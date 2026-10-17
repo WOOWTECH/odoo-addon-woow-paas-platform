@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- AI 模型分頁的 cron（DESIGN §1.3、N27、N28；票 LLM-01b）。
+
+         noupdate="1"：之後維運改的 interval／active 不被發版的 -u 覆寫。
+         ⚠ 代價（義務）：-u 也不會再改已安裝 DB 裡的 code、model_id、interval。所以
+           `_cron_llm_provision` 的方法名與它所在的 model（llm_account）是**凍結契約**：要改名
+           或搬 model，必須同一個 PR 寫 migration 更新既有 DB 的 ir_act_server.code，否則
+           prod／stg 的 cron 會一直靜默呼叫不存在的方法（pitfall seed-noupdate-sticky-template-links；
+           repo-lint cron-wiring 只對 XML 與 model，驗不到 DB）。test_llm_tracer 的
+           TestLlmCronContract 斷言 DB 裡的 code 等於現行方法名。
+         ⚠ 必須 active：ir.cron._trigger() 對停用的 cron 不建立立即觸發。
+         「未設定」（newapi_proxy_url 空或黑洞值、或 show_llm／pilot／canary 都沒設）時，
+         每個 LLM cron 的第一行就 return——例行發版會在 LLM-17 之前就把這裡的 active cron
+         帶上 prod，那時它們什麼都不做（零外呼、不寫 incident、不告警）。
+         LLM-02b：每支 cron 都經 llm_common.run_llm_cron（未設定 no-op、tick 預算、_trigger() 接續），
+         而且登記在 llm_common.LLM_CRONS（凍結契約與「未設定零外呼」的測試以它為準）。 -->
+    <data noupdate="1">
+        <!-- 開戶 P0–P9：每 tick 只做一戶、總 deadline 60 秒；activate 與退避會 _trigger()，
+             這裡的 5 分鐘只是保險（例如 pod 在開戶途中被殺、lease 5 分鐘後到期）。 -->
+        <record id="ir_cron_llm_provision" model="ir.cron">
+            <field name="name">PaaS: AI Models Account Provisioning</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_account"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_provision()</field>
+            <!-- 必須是 superuser：llm_account 對所有群組都沒有 write ACL（DESIGN §2.1），而
+                 ir.actions.server.run() 在非 superuser 時會先 check_access('write')。 -->
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <!-- 餘額刷新（DESIGN §1.3.6；LLM-02b）：AP 分頁讀本環境前綴的使用者、寫回餘額快取。
+             每 tick ≤ 30 秒、最多 10 頁，剩下的 60 秒後 _trigger() 接著跑（分攤 AP 的 GA 桶）；
+             讀到哪一頁記在 llm_runtime_state。 -->
+        <record id="ir_cron_llm_balance_refresh" model="ir.cron">
+            <field name="name">PaaS: AI Models Balance Refresh</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_account"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_balance_refresh()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <!-- llm_event 保留 400 天（DESIGN §2.6；LLM-02b）：每批 5,000 筆、每 tick ≤ 30 秒。
+             N28：每日性質的工作改成每 10 分鐘跑一次的冪等 cron（repo 沒有 cron 設 nextcall、
+             prod 只有 2 條 cron thread）；多數時候 create_date 索引上撈不到任何列。 -->
+        <record id="ir_cron_llm_event_cleanup" model="ir.cron">
+            <field name="name">PaaS: AI Models Audit Event Cleanup</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_event"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_event_cleanup()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <!-- 告警 webhook（選配）的送出（N13、N26；LLM-02b）：告警 helper 只把事件標成
+             webhook_state=pending 並 _trigger() 這支，HTTP 請求裡不送；10 分鐘只是保險。 -->
+        <record id="ir_cron_llm_alert_delivery" model="ir.cron">
+            <field name="name">PaaS: AI Models Alert Webhook Delivery</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_event"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_alert_delivery()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>
