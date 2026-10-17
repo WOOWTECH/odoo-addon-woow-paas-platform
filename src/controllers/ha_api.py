@@ -38,6 +38,30 @@ def _json_response(data: dict, status: int = 200) -> Response:
     )
 
 
+def _release_binding(record, kwargs: dict) -> Response:
+    """#1766：HA 端移除整合時呼叫，把綁定讓出來給下一台。
+
+    只有持有者自己放得掉（`instance_uid` 要對得上），否則 409——不然 B 機器可以先
+    放掉 A 的綁定再自己搶，整個閘就白做了。已經 unbound 回 200（冪等：HA 可能重試、
+    平台可能先被後台解綁過）。
+
+    ⚠ 這個端點**不會**讓對方的 cloudflared 斷線，平台收不回已交出的權杖；它只決定
+    「下一台能不能接手」。
+    """
+    released, holder = record._tunnel_binding_release(
+        (kwargs.get('instance_uid') or '').strip()[:64])
+    if not released:
+        return _json_response({
+            'error': 'not_the_holder',
+            'detail': _("This tunnel is held by another Home Assistant "
+                        "installation (%(label)s); only that installation can "
+                        "release it. A workspace owner or admin can release it "
+                        "from the portal.", label=holder),
+            'bound_to': holder,
+        }, status=409)
+    return _json_response({'binding_state': record.binding_state})
+
+
 def _claim_binding(record, kwargs: dict) -> Response | None:
     """#1766：把這條 tunnel 綁給呼叫端那一台 HA，衝突時回 409。
 
@@ -440,6 +464,32 @@ class HAIntegrationController(Controller):
             'mcp': home._get_mcp_integration(),
         })
 
+    @route(
+        '/api/smarthome/homes/<int:smarthome_id>/tunnel-binding',
+        type='http', auth='none', methods=['DELETE'], csrf=False,
+    )
+    def release_tunnel_binding(self, smarthome_id: int, **kwargs: Any) -> Response:
+        """Release this smart home's Home Assistant binding (#1766).
+
+        HA 的 `async_remove_entry` 會打這裡：使用者在 HA 移除整合 ⇒ 這個家要能馬上
+        給下一台接。沒有這一支的話，綁定只能靠人去後台按「解除綁定」，換機器就卡住。
+
+        Required scope: ``smarthome:tunnel``（跟拿權杖同一級——放掉綁定是它的反向
+        動作）；呼叫者須為 owner／admin。只有持有者本人放得掉，見 `_release_binding`。
+        """
+        result = _authenticate(required_scopes=['smarthome:tunnel'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+
+        home = self._get_home_with_access(user, smarthome_id)
+        if isinstance(home, Response):
+            return home
+        denied = _require_manage_role(user, home.workspace_id)
+        if denied:
+            return denied
+        return _release_binding(home, kwargs)
+
     # ==================== Live Status ====================
 
     @route(
@@ -578,6 +628,28 @@ class HAIntegrationController(Controller):
             'tunnel_token': sa.tunnel_token or '',
             'tunnel_id': sa.tunnel_id or '',
         })
+
+    @route(
+        '/api/security-access/accesses/<int:sa_id>/tunnel-binding',
+        type='http', auth='none', methods=['DELETE'], csrf=False,
+    )
+    def sa_release_tunnel_binding(self, sa_id: int, **kwargs: Any) -> Response:
+        """Mirror of ``release_tunnel_binding``. Scope: security-access:tunnel.
+
+        ⚠ 兩個端點是鏡像：claim 收緊時兩邊一起收，release 也必須兩邊一起開——只開
+        一側的話，SA 那邊換機器照樣卡死（`two-layer-acl-lockstep`）。
+        """
+        result = _authenticate(required_scopes=['security-access:tunnel'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        sa = self._get_sa_with_access(user, sa_id)
+        if isinstance(sa, Response):
+            return sa
+        denied = _require_manage_role(user, sa.workspace_id)
+        if denied:
+            return denied
+        return _release_binding(sa, kwargs)
 
     @route(
         '/api/security-access/accesses/<int:sa_id>/status',

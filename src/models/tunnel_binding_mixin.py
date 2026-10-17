@@ -187,6 +187,46 @@ class TunnelBindingMixin(models.AbstractModel):
         self.write(vals)
         return vals['binding_state']
 
+    def _tunnel_binding_release(self, instance_uid=''):
+        """放掉綁定，讓下一台 HA 可以接手。回傳 (released, holder_label)。
+
+        **誰可以放**：只有**當前持有者自己**（`instance_uid` 對得上），或者這筆綁定
+        是 `legacy`（沒有 uid 可對，只能靠人判斷）。擋掉「B 機器把 A 的綁定放掉再自己
+        搶走」——那會讓整個 #1766 的閘變成裝飾。owner／admin 仍然可以用後台的
+        `action_release_binding()` 強制放（那是刻意保留的逃生口：機器死掉、重灌、RMA
+        時沒有任何一台能自報身分）。
+
+        **冪等**：已經是 unbound 就回 (True, '')，不是錯誤——HA 端在「使用者移除整合」
+        時呼叫，重試、重複送、平台先前已經放過，都應該安靜成功。
+
+        ⚠ 放掉綁定**不會**讓對方的 cloudflared 斷線（權杖已經交出去了，收不回來）。
+        它只處理「下一台能不能接手」這件事。對方真的還在跑的話，`connector_count`
+        會在下一次 refresh 把衝突標出來。
+        """
+        self.ensure_one()
+        caller_uid = (instance_uid or '').strip()
+        holder_uid = self.bound_instance_uid or ''
+        holder_label = self.bound_instance_label or holder_uid
+
+        if self.binding_state == 'unbound':
+            return True, ''
+        if self.binding_state == 'claimed' and holder_uid and caller_uid != holder_uid:
+            _logger.warning(
+                "[tunnel-binding] %s id=%s release refused: held by %s, caller %r",
+                self._name, self.id, holder_label or '-', caller_uid[:12])
+            return False, holder_label
+
+        _logger.info(
+            "[tunnel-binding] %s id=%s released by the holder itself (%s)",
+            self._name, self.id, holder_label or 'legacy caller')
+        self.write({
+            'bound_instance_uid': False,
+            'bound_instance_label': False,
+            'bound_at': False,
+            'binding_state': 'unbound',
+        })
+        return True, ''
+
     def action_release_binding(self):
         """Forget which installation holds this tunnel (換機器、重裝、RMA）。
 

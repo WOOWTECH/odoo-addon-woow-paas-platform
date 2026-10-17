@@ -167,6 +167,42 @@ class TestTunnelBindingModel(_BindingFixture, TransactionCase):
         self.assertEqual(self.home._tunnel_binding_claim(UID_B, '展示機 (sho)'),
                          'claimed')
 
+    # ---- 放掉綁定（HA 移除整合時自己打的那一槍）---------------------------
+    def test_holder_can_release_its_own_binding(self):
+        self.home._tunnel_binding_claim(UID_A, '家 (pi)')
+        self.assertEqual(self.home._tunnel_binding_release(UID_A), (True, ''))
+        self.assertEqual(self.home.binding_state, 'unbound')
+        # 放掉之後下一台才接得了——這就是這個機制存在的理由
+        self.assertEqual(self.home._tunnel_binding_claim(UID_B, '展示機'), 'claimed')
+
+    def test_another_machine_cannot_release_someone_elses_binding(self):
+        """⚠ 沒有這一條，B 可以先放掉 A 的綁定再自己搶，整個 #1766 的閘變裝飾。"""
+        self.home._tunnel_binding_claim(UID_A, '家 (pi)')
+        released, holder = self.home._tunnel_binding_release(UID_B)
+        self.assertFalse(released)
+        self.assertEqual(holder, '家 (pi)')
+        self.assertEqual(self.home.bound_instance_uid, UID_A)  # 綁定沒被動到
+
+    def test_release_is_idempotent(self):
+        """HA 會重試、後台可能先放過了——重複放要安靜成功，不是錯誤。"""
+        self.assertEqual(self.home._tunnel_binding_release(UID_A), (True, ''))
+        self.home._tunnel_binding_claim(UID_A, '家 (pi)')
+        self.assertEqual(self.home._tunnel_binding_release(UID_A), (True, ''))
+        self.assertEqual(self.home._tunnel_binding_release(UID_A), (True, ''))
+
+    def test_legacy_binding_can_be_released_without_a_uid(self):
+        """legacy 沒有 uid 可比對；不讓放的話舊元件的使用者永遠換不了機器。"""
+        self.home._tunnel_binding_claim('', '')
+        self.assertEqual(self.home.binding_state, 'legacy')
+        self.assertEqual(self.home._tunnel_binding_release(''), (True, ''))
+        self.assertEqual(self.home.binding_state, 'unbound')
+
+    def test_portal_release_still_forces_through(self):
+        """機器死掉／重灌時沒有任何一台能自報身分 ⇒ owner/admin 的強制解綁是逃生口。"""
+        self.home._tunnel_binding_claim(UID_A, '家 (pi)')
+        self.home.action_release_binding()
+        self.assertEqual(self.home.binding_state, 'unbound')
+
     def test_security_access_has_the_same_state_machine(self):
         """鏡像端點不可只收一側（two-layer-acl-lockstep）。"""
         self.assertEqual(self.sa._tunnel_binding_claim(UID_A, 'sa-host'), 'claimed')
@@ -319,6 +355,56 @@ class TestTunnelTokenEndpointBinding(_BindingFixture, HttpCase):
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.json()['error'], 'already_bound')
         self.assertNotIn('tok-binding-sa', resp.text)
+
+    def _sh_binding_url(self, uid=None):
+        url = f'/api/smarthome/homes/{self.home.id}/tunnel-binding'
+        return url + (f'?instance_uid={uid}' if uid is not None else '')
+
+    def _delete(self, url):
+        token = self.env['woow_paas_platform.oauth_token'].sudo().create({
+            'access_token': f'ha-rel-{self.owner.id}-{len(url)}',
+            'scope': _SCOPES,
+            'expires_at': fields.Datetime.now() + timedelta(hours=1),
+            'refresh_expires_at': fields.Datetime.now() + timedelta(days=30),
+            'client_id': self.client_rec.id,
+            'user_id': self.owner.id,
+        })
+        # ⚠ `url_open()` 只做 GET／POST／HEAD（Odoo 18），沒有 method 參數——
+        # DELETE 要直接用 HttpCase 自己的 session（它帶著測試游標的 cookie）。
+        return self.opener.delete(
+            self.base_url() + url, timeout=12,
+            headers={'Authorization': f'Bearer {token.access_token}'})
+
+    def test_removing_the_integration_frees_the_home_for_the_next_machine(self):
+        """端到端：A 綁 → A 放（HA 移除整合）→ B 綁得起來。"""
+        self.assertEqual(self._get(self._sh_url(UID_A, 'pi')).status_code, 200)
+        self.assertEqual(self._get(self._sh_url(UID_B, 'sho')).status_code, 409)
+
+        released = self._delete(self._sh_binding_url(UID_A))
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(released.json()['binding_state'], 'unbound')
+
+        self.assertEqual(self._get(self._sh_url(UID_B, 'sho')).status_code, 200)
+
+    def test_a_different_machine_cannot_release_the_binding_over_http(self):
+        self.assertEqual(self._get(self._sh_url(UID_A, 'pi')).status_code, 200)
+        resp = self._delete(self._sh_binding_url(UID_B))
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()['error'], 'not_the_holder')
+        self.assertEqual(resp.json()['bound_to'], 'pi')
+        self.home.invalidate_recordset()
+        self.assertEqual(self.home.binding_state, 'claimed')
+
+    def test_release_of_an_unbound_home_is_a_quiet_success(self):
+        resp = self._delete(self._sh_binding_url(UID_A))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_security_access_release_endpoint_mirrors_it(self):
+        self.assertEqual(self._get(self._sa_url(UID_A)).status_code, 200)
+        url = f'/api/security-access/accesses/{self.sa.id}/tunnel-binding'
+        self.assertEqual(self._delete(f'{url}?instance_uid={UID_B}').status_code, 409)
+        self.assertEqual(self._delete(f'{url}?instance_uid={UID_A}').status_code, 200)
+        self.assertEqual(self._get(self._sa_url(UID_B)).status_code, 200)
 
     def test_release_then_the_other_machine_can_bind(self):
         self.assertEqual(self._get(self._sh_url(UID_A, 'pi')).status_code, 200)
