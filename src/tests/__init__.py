@@ -380,6 +380,8 @@ from . import test_public_tunnel_address
 # 部署組裝正規化
 from . import test_spec_format_domain
 from . import test_service_update_value_validation
+# AUDITFIX noop-save-triggers-upgrade（X-ODOO-001-1）Odoo 迴歸
+from . import test_odoo_noop_save_auditfix
 # feat: P3 一次性憑證視窗的 gateway 提示依範本（LiteLLM 前置）
 from . import test_gateway_hint_template
 # feat: Headscale／Tailscale／LiteLLM 上架 seed（範本先隱藏）—— 憑證形態（helm_secret 可自設）、
