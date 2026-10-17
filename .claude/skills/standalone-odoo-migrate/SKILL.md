@@ -169,6 +169,17 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
      - `DIVERGED`：同名模組不能同時在 `addons/` 與 `addons-cloud/`，只能「用 paas-odoo-ci／目標那份」或「把那份換成
        來源的」。逐檔 diff（先 `--strip-trailing-cr`，差異常常只是 CRLF）後寫進 PR 描述給人裁決；裁決用現有那份的，
        之後的比對加 `--accept-diverged <模組,…>`。
+     - **多站共用、各站程式碼不同的模組**（例：LINE 三件組在 9～10 站有 3～5 種程式碼）：一顆 image 同名模組只放一份，
+       上面「原樣複製」只適用於只有一站有原始碼的模組。這類模組先合併成一份再進 paas-odoo-ci，搬遷前先確認：
+       - 版本號要 ≥ 所有要搬的站的 DB 版本，否則那一站比對會判 `BLOCK_DOWNGRADE`。合併版在每一站都會是 `DIVERGED`；
+         裁決用合併版之後，每一站的比對都要帶 `--accept-diverged`，列了哪些模組記進該站的追蹤 issue。
+       - 合併版的升級（migration script、改了 stored compute 欄位的算法）若會改到既有的客戶資料列，步驟 8 的 upgrade 比對
+         一定不通過，現在也沒有放行機制。合併時避開；避不開就先改比對（`fingerprint_business.sql`／`fingerprint_diff.py`），
+         不要帶著差異上線。每一站都要先在彩排把 `-u all` 走過一次。
+       - 平台 Odoo 自己也裝的模組放在 `addons/`，平台 image 也帶。合併版放進去，平台 image 跟著換版，平台要另排一次
+         `-u <模組>` 與測試（#1820）；PR 描述要列出受影響的平台模組。只給租戶用的才放 `addons-cloud/`。
+       - 已在 PaaS 的租戶（含先前搬進來的站）不會馬上換：服務的 image 釘在自己的 `helm_values`，下次 Redeploy 才換成
+         範本的新 image、跑 `-u all`。範本換 digest 時列出受影響的服務，事先通知。
      - pip：`requirements-cloud.txt` 由 CI 從清單內模組 manifest 的 `external_dependencies` 產生。manifest 寫的是
        import 名而 pip 裝不了時（例 `PIL`），在 paas-odoo-ci 的 `generate-requirements.sh` 對照表補一筆，不改 manifest。
      - 匯入前掃一次寫死的密碼／金鑰；`addons-export.json` 裡 `symlinks_outside` 非空的模組先處理連結。
