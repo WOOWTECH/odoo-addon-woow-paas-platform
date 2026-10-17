@@ -131,7 +131,17 @@
                  迴圈時會被殺。8gears 2.0.1 沒有 startupProbe 欄位 ⇒ liveness 加 initialDelaySeconds 180
                  （＋6×20 秒＝開機寬限 300 秒，等同 startupProbe 10s×30）、period 20、timeout 5、failure 6；
                  readiness 改打 /healthz/readiness（含 DB 檢查）、timeout 3。兩個探針列在
-                 _TEMPLATE_POLICY_VALUE_PATHS，既有服務 Redeploy 時也照這裡。min_ram_gb 2.0＝T1。 -->
+                 _TEMPLATE_POLICY_VALUE_PATHS，既有服務 Redeploy 時也照這裡。min_ram_gb 2.0＝T1。
+                 商用驗收 X-SEC-004-2／X-SEC-005-7（2026-10-17）容器加固：8gears 2.0.1 預設
+                 main.securityContext={}、pod 沒有 seccomp ⇒ n8n 容器帶著預設 capability（含 NET_RAW）、
+                 可提權、沒有 seccomp；chart 自建的 SA 與 pod 都沒有 automountServiceAccountToken 欄位
+                 （2.1.1 也沒有），每個 n8n 容器都拿到一顆用不到的 token。這裡補：
+                 main.securityContext（禁提權、drop ALL、runAsNonRoot、RuntimeDefault）、
+                 main.podSecurityContext 只寫 seccompProfile（helm 與 chart 預設的 uid/gid 1000 合併，不蓋掉），
+                 main.extraVolumes／extraVolumeMounts 在 SA token 路徑唯讀掛一個空 emptyDir——k8s 的
+                 ServiceAccount admission 看到該路徑已有掛載就不注入 token（上游行為；values 唯一可行做法）。
+                 沙盒實測 2.43.6：uid 1000、CapEff 0、NoNewPrivs 1、Seccomp 2、沒有 kube-api-access volume、
+                 token 目錄空且唯讀、/healthz/readiness 200。四個鍵列在 _TEMPLATE_POLICY_VALUE_PATHS。 -->
             <field name="helm_default_values">{
                 "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n",
                 "tag": "20261015.2215@sha256:371dd463f02e8c35a4bc5aaf9855fc4cfec1babab97e5a02a1e31923a2ec8f5a"},
@@ -145,7 +155,13 @@
                 "initialDelaySeconds": 180, "periodSeconds": 20, "timeoutSeconds": 5, "failureThreshold": 6},
                 "readinessProbe": {"httpGet": {"path": "/healthz/readiness", "port": "http"},
                 "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 3},
-                "secret": {"N8N_API_KEY": "set-by-platform-init"}},
+                "secret": {"N8N_API_KEY": "set-by-platform-init"},
+                "podSecurityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
+                "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]},
+                "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}},
+                "extraVolumes": [{"name": "no-sa-token", "emptyDir": {"sizeLimit": "1Mi"}}],
+                "extraVolumeMounts": [{"name": "no-sa-token",
+                "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount", "readOnly": true}]},
                 "updateStrategy": {"type": "Recreate"}}</field>
             <!-- IMPORTANT: 換行只能落在 JSON token 之間，不可切斷字串值。字串值內夾字面換行
                  會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端

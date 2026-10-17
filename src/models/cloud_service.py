@@ -1238,12 +1238,18 @@ _N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
 #   - hermes-agent agent 容器的 requests（閒置就 1.06G）；
 #   - mcp-server 家族的記憶體 requests（128Mi 低於實測）。
 #   都不是租戶可設的鍵；pi-agent 刻意不列（pi1–pi5 不動）。
+# 商用驗收 X-SEC-004-2／X-SEC-005-7（2026-10-17）——容器加固也是平台政策：
+#   - n8n ``main.securityContext``／``main.podSecurityContext``（PSA restricted）與
+#     ``main.extraVolumes``／``main.extraVolumeMounts``（遮住 SA token 路徑；8gears chart 沒有
+#     automount 欄位）。既有服務 Redeploy 時跟著範本走；租戶不能設（不在 helm_value_specs）。
 #   ⚠ 每一條都要寫成字面量：scripts/audit/audit_411_reset_values.py 的 _INJECTOR_VALUE_PATHS
 #   以 AST 對帳這張表（test_audit_411_classifier），推導式它讀不到。
 _TEMPLATE_POLICY_VALUE_PATHS = {
     'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig'),
                 ('terminationGracePeriodSeconds',)],
-    'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe')],
+    'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe'),
+            ('main', 'securityContext'), ('main', 'podSecurityContext'),
+            ('main', 'extraVolumes'), ('main', 'extraVolumeMounts')],
     'litellm': [('postgresql', 'resources', 'limits', 'cpu')],
     'hermes-agent': [('agent', 'resources', 'requests')],
     'mcp-hermes': [('resources', 'requests', 'memory')],
