@@ -47,6 +47,7 @@ from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 p
 from ..services.chart_version import (
     ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
     annotate_rollback_floor,
+    reported_helm_revision,
     rollback_floor_violation,
 )
 from ..models.cloud_service import (
@@ -5181,6 +5182,28 @@ class PaasController(HiddenChainMixin, Controller):
                             "change — new keys take effect on the next restart",
                             service_id,
                         )
+                # #1414：只認 operator 回報的正整數 revision。舊 operator 讀錯欄位、upgrade
+                # 一律回報 0；鍵存在 ⇒ 舊碼的 `.get('revision', …)` 把帳本寫成 0（AI-OD-004-3
+                # 「更新中短暫回 0」），單調分支則永遠不寫，帳本要等 poll／每日對帳才追上。
+                # 讀不到就立刻向 operator 讀一次 release（helm list 的 revision 一直是對的）；
+                # 仍讀不到就不碰帳本，交給 poll／對帳——不猜 +1。
+                reported = reported_helm_revision(release_info.get('revision'))
+                synced_chart_version = None
+                if reported is None:
+                    try:
+                        current = bg_client.get_release(
+                            upgrade_kwargs['namespace'], upgrade_kwargs['release_name'])
+                    except Exception:
+                        _logger.warning(
+                            "Could not read the release of service %s after upgrade; "
+                            "helm_revision is left to the next release sync",
+                            service_id, exc_info=True)
+                    else:
+                        if isinstance(current, dict):
+                            reported = reported_helm_revision(current.get('revision'))
+                            synced_chart_version = current.get('chart_version')
+                reported_chart_version = (
+                    release_info.get('chart_version') or synced_chart_version)
                 with odoo.registry(db_name).cursor() as cr:
                     env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                     svc = env['woow_paas_platform.cloud_service'].browse(service_id)
@@ -5188,7 +5211,7 @@ class PaasController(HiddenChainMixin, Controller):
                     # 少了它 helm_revision 就永遠停在升級前的版本。
                     if svc.exists() and svc.state in ('upgrading', 'suspended'):
                         svc.write({
-                            'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                            'helm_revision': reported or svc.helm_revision,
                             # #552: 第四條回寫路徑。upgrade 成功後才拿得到
                             # helm 真正解析出來的 chart 版本（fallback 都空
                             # 時仍是 registry latest，此時這行是唯一知道裝了
@@ -5197,7 +5220,7 @@ class PaasController(HiddenChainMixin, Controller):
                             # 不把帳本洗成空。回寫對象是 per-service 欄位，
                             # 不是 template（seed noupdate=0＋healer 會還原）。
                             'helm_chart_version': (
-                                release_info.get('chart_version')
+                                reported_chart_version
                                 or svc.helm_chart_version
                             ),
                         })
@@ -5208,12 +5231,11 @@ class PaasController(HiddenChainMixin, Controller):
                         # 回寫，於是帳本停在升級前的 revision，直到每日對帳才追上
                         # （R8：OD 平台 9／實際 10、Code Server 5／6）。這裡只做**單調**
                         # 回寫：operator 明確回報、且比帳本新才寫，不碰 state。
-                        reported = release_info.get('revision')
-                        if isinstance(reported, int) and reported > (svc.helm_revision or 0):
+                        if reported and reported > (svc.helm_revision or 0):
                             svc.write({
                                 'helm_revision': reported,
                                 'helm_chart_version': (
-                                    release_info.get('chart_version')
+                                    reported_chart_version
                                     or svc.helm_chart_version
                                 ),
                             })
@@ -5349,17 +5371,21 @@ class PaasController(HiddenChainMixin, Controller):
             # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
             # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
             # （`fields.Datetime.now()` 的 UTC 基準要求見 `_update_service`。）
+            # 固定回滾所建立的新 revision；不使用下一輪的任意最新版本。
+            expected_revision = reported_helm_revision(
+                rollback_result.get('revision') if isinstance(rollback_result, dict) else None)
+            if expected_revision is None:
+                expected_revision = max((int(row.get('revision') or 0)
+                                         for row in rollback_history), default=0) + 1
             rollback_vals = {
                 'state': 'upgrading',
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
+                # #1414／#1456：回復建立了新 revision——帳本當場記下，不等 poll／每日對帳
+                # （INFRA-TS-003-1、AI-HER-007-1：回復後對話框仍把舊版標成「目前」）。
+                'helm_revision': expected_revision,
             }
             service.write(rollback_vals)
-            # 固定回滾所建立的新 revision；不使用下一輪的任意最新版本。
-            expected_revision = (rollback_result.get('revision') if isinstance(rollback_result, dict) else None)
-            if type(expected_revision) is not int or expected_revision < 1:
-                expected_revision = max((int(row.get('revision') or 0)
-                                         for row in rollback_history), default=0) + 1
             service._record_rollback_config_sync(expected_revision)
             # #1433：operator 回報回復後實際的 chart 版本（#1526 起兩種模式都回報，且
             # 不會低於回復前）。記下來，帳本才與叢集一致——下一次「修改配置」以

@@ -20,6 +20,7 @@ from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
 from ..services import dns_probe, rollback_config
+from ..services.chart_version import reported_helm_revision
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
 from ..services.workload_health import (
@@ -2581,7 +2582,9 @@ class CloudService(models.Model):
                 'state': 'suspended' if halted else 'deploying',
                 'error_message': False,
                 'init_redeploy_requested': False,
-                'helm_revision': release_info.get('revision', self.helm_revision),
+                # #1414：0／缺值＝operator 不知道版次（舊版讀錯欄位），不覆蓋帳本。
+                'helm_revision': (reported_helm_revision(release_info.get('revision'))
+                                  or self.helm_revision),
                 # #552: redeploy runs a real helm upgrade carrying
                 # `template.helm_chart_version` (possibly empty ⇒ registry latest),
                 # so it can move the deployed chart version. Record what the
@@ -3519,7 +3522,9 @@ class CloudService(models.Model):
 
             # Helm install done — update release info and clean up deploy params
             self.write({
-                'helm_revision': release_info.get('revision', 1),
+                # #1414：0／缺值＝operator 不知道版次；首裝記 1，不記 0。
+                'helm_revision': (reported_helm_revision(release_info.get('revision'))
+                                  or self.helm_revision or 1),
                 # #552: record the chart version helm ACTUALLY resolved. With an
                 # empty `template.helm_chart_version` no `--version` is sent and
                 # helm picks the registry's latest — the ledger used to keep the
@@ -7902,7 +7907,9 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         vals = {
-            'helm_revision': release.get('revision', self.helm_revision),
+            # #1414：0／缺值＝不知道，保留帳本原值（與 chart_version 的「未知不覆蓋」同語意）。
+            'helm_revision': (reported_helm_revision(release.get('revision'))
+                              or self.helm_revision),
             'helm_chart_version': (
                 release.get('chart_version') or self.helm_chart_version
             ),

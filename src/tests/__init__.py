@@ -1075,6 +1075,8 @@ from . import test_plan_names_zh_tw_migration
 from . import test_tenant_chart_version_1525
 # #1526：回復版本不降 chart、password 型設定不跟著回復。
 from . import test_rollback_chart_floor_1526
+# #1414／#1456：帳本 helm_revision 只收正整數、回復當場記下新 revision、對話框「目前」看部署中版本。
+from . import test_helm_revision_ledger_1414
 # #1559：ngrok 連不上的原因（authtoken 錯、沒填、網域被占用、要重啟）顯示在服務頁。
 from . import test_public_tunnel_error_1559
 # #1534：n8n init 在 owner 已存在時不用密碼登入；舊 operator 401／998 對已確認的服務不計額度。

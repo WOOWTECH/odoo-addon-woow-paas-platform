@@ -335,6 +335,26 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
     return result
 
 
+def _release_json_revision(data: Dict[str, Any]) -> int:
+    """#1414：`helm install|upgrade --output json` 的版次在**頂層 `version`**。
+
+    Helm 的 release 物件：`info` 只有 first_deployed／last_deployed／deleted／
+    description／status／notes，沒有 `revision`。原本讀 `info.revision` ⇒ 每次
+    install／upgrade 都回報 0，平台帳本 `helm_revision` 要等 poll／每日對帳才追上
+    （#1456）。`info.revision` 留作後備（舊測試替身的形狀）；讀不到正整數回 0，
+    語意是「不知道」，平台端不會拿 0 覆蓋帳本。
+    """
+    info = data.get("info") or {}
+    for candidate in (data.get("version"), info.get("revision")):
+        if isinstance(candidate, bool):
+            continue
+        if isinstance(candidate, int) and candidate > 0:
+            return candidate
+        if isinstance(candidate, str) and candidate.isdigit() and int(candidate) > 0:
+            return int(candidate)
+    return 0
+
+
 def _sanitize_release_values(values: Any) -> Any:
     def _mask_tree(node: Any) -> Any:
         if isinstance(node, dict):
@@ -1258,7 +1278,7 @@ class HelmService:
         return ReleaseInfo(
             name=data.get("name", ""),
             namespace=data.get("namespace", ""),
-            revision=info.get("revision", 0),
+            revision=_release_json_revision(data),
             status=ReleaseStatus(info.get("status", "unknown").lower()),
             chart=chart_metadata.get("name", ""),
             # #552: the resolved chart version sits right next to the name in the

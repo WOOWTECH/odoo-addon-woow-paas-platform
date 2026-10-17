@@ -42,7 +42,17 @@ export class RollbackModal extends Component {
         });
     }
 
+    /**
+     * #1414／#1456：「目前」＝helm history 裡部署中的那一版（後端 `annotate_rollback_floor`
+     * 標的 `is_current`）。平台帳本 `helm_revision` 在更新／回復後會落後，拿它標「目前」
+     * 會把舊版標成目前、真正部署中的那一版反而能被選來回復。舊後端沒有這個欄位、或
+     * history 裡沒有部署中的版本時，才退回帳本值。
+     */
     get currentRevision() {
+        const deployed = this.state.revisions.find((r) => r.is_current === true);
+        if (deployed) {
+            return deployed.revision;
+        }
         return this.props.service.helm_revision || 1;
     }
 

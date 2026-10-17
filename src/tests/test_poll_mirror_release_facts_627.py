@@ -279,6 +279,18 @@ class TestCronPollMirrorBackwardCompat(_Base):
         self.assertEqual(service.helm_chart_version, '0.1.0')
 
 
+    def test_zero_revision_keeps_the_ledger(self):
+        """#1414：0＝operator 不知道版次，不得把帳本洗成 0。"""
+        template = self._template('poll-zero-1414')
+        service = self._service(template, state='deploying')
+        service.write({'helm_chart_version': '0.1.0', 'helm_revision': 2})
+
+        self._poll(service, self._status(revision=0))
+
+        self.assertEqual(service.helm_chart_version, '0.1.1', '前提：這條 poll 真的寫了')
+        self.assertEqual(service.helm_revision, 2)
+
+
 class TestPollWritesEveryReleaseFact(_Base):
     """🔑 #627 的根因不是「漏了一個欄位」，是「兩份實作各寫一次」。
 
