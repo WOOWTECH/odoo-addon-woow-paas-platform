@@ -784,6 +784,23 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             '租戶照舊字串會拿到 404')
 
 
+    def test_description_states_gateway_long_request_limit(self):
+        """AI-HER-006-3：經公開網址的非串流 /gateway 請求約 120 秒被入口中斷（524）。
+
+        Hermes 247 實測：上游延遲 140／220／330／450 秒全都在約 120 秒收到 Cloudflare 524；
+        stream=true 每 10 秒送 keepalive，110 秒以上也能正常收到 [DONE]。客戶要知道長任務改用
+        串流或 /v1/runs，否則結果拿不到。
+        """
+        desc = self._tpl().full_description or ''
+        for needle, why in (
+                ('約 120 秒', '入口靜默上限（實測）'),
+                ('524', '非串流超時時用戶端看到的狀態碼'),
+                ('stream', '長任務改用串流（每 10 秒 keepalive）'),
+                ('/v1/runs', '或用非同步的 runs API 查結果'),
+        ):
+            self.assertIn(needle, desc, why)
+
+
 @tagged('post_install', '-at_install')
 class TestHermesAgentPlansSeed(TransactionCase):
     """#494 定價拍板（Eugene 2026-07-31）：月 4,500／年 36,000（×8）＋7 天 trial。"""
