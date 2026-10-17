@@ -15,4 +15,6 @@ from . import portal
 from . import reconcile_report
 from . import ecpg_callback
 from . import workspace_invitation
+# X-SET-007-5：/web/signup 伺服器端必填檢查（中文欄位錯誤，不再 500）。
+from . import signup
 from . import llm
