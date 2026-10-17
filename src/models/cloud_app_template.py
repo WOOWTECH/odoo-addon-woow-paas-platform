@@ -1296,6 +1296,111 @@ class CloudAppTemplate(models.Model):
                     out[field['key']] = field
         return out
 
+    # ------------------------------------------------------------------ #
+    #  spec ``ignored_when``：某個條件下 chart 會略過的欄位（INFRA-TS-004-1） #
+    # ------------------------------------------------------------------ #
+    # 形態：``"ignored_when": {"key": "<同一份 specs 裡的條件欄位>", "values": ["<值>", …]}``。
+    # 例：VPN 節點控制平面選「同工作區 Headscale」（tailscale.controlPlane=workspace）時，
+    # chart 0.1.4（#1554）忽略 tailscale.tags——之前設定頁照樣接受、回 success、白白升級一次。
+    # 前端 utils/ignored_when.js 讀同一個宣告（欄位下說明、空白時停用、有值時送出前標錯）。
+
+    def _ignored_when_value_specs(self):
+        """``{key: (spec, condition_key, frozenset(values))}``；宣告寫錯的一律略過（fail-open）。
+
+        只認：``ignored_when`` 是 dict、``key`` 是同一份 specs 裡另一個租戶欄位、
+        ``values`` 是非空的字串清單。seed 打錯字不得讓一格設定突然存不了。
+        """
+        specs = self._parse_helm_value_specs()
+        if not isinstance(specs, dict):
+            return {}
+        fields_list = [
+            field for section in ('required', 'optional')
+            for field in (specs.get(section) if isinstance(specs.get(section), list) else [])
+            if isinstance(field, dict) and isinstance(field.get('key'), str) and field['key']
+        ]
+        by_key = {field['key']: field for field in fields_list}
+        out = {}
+        for field in fields_list:
+            rule = field.get('ignored_when')
+            if not isinstance(rule, dict):
+                continue
+            cond_key, values = rule.get('key'), rule.get('values')
+            if (not isinstance(cond_key, str) or cond_key == field['key']
+                    or cond_key not in by_key):
+                continue
+            if (not isinstance(values, list) or not values
+                    or not all(isinstance(v, str) for v in values)):
+                continue
+            out[field['key']] = (field, cond_key, frozenset(v.strip() for v in values))
+        return out
+
+    def _ignored_when_violation(self, submitted, base_values):
+        """存檔前（create／reconfigure）：會被 chart 略過的欄位有值就回錯誤訊息。
+
+        有效值＝本次送來的值 → 既有（或範本預設）helm values → spec ``default``。
+        只在本次請求**碰到**欄位或條件欄位時才擋：沒碰到這兩格的請求照舊放行，
+        不讓 ignored_when 上線前就存了值的既有服務被鎖死（設定頁整包送出，會碰到）。
+
+        Args:
+            submitted: 已過白名單的 dot-path 扁平 dict
+            base_values: 巢狀 helm values（reconfigure＝服務現值；create＝範本預設）
+
+        Returns:
+            str | None: 租戶語言的錯誤訊息；沒有違反回 None
+        """
+        rules = self._ignored_when_value_specs()
+        if not rules:
+            return None
+        submitted = submitted if isinstance(submitted, dict) else {}
+        all_specs = self._parse_helm_value_specs()
+        specs_by_key = {
+            field['key']: field for section in ('required', 'optional')
+            for field in (all_specs.get(section) or [])
+            if isinstance(field, dict) and isinstance(field.get('key'), str)
+        }
+
+        def _effective(key):
+            if key in submitted:
+                return submitted[key]
+            node = base_values if isinstance(base_values, dict) else {}
+            if key in node:
+                return node[key]
+            for part in key.split('.'):
+                if not isinstance(node, dict) or part not in node:
+                    return specs_by_key.get(key, {}).get('default')
+                node = node[part]
+            return node
+
+        def _blank(value):
+            if value is None or value is False:
+                return True
+            if isinstance(value, str):
+                return not value.strip()
+            if isinstance(value, (list, dict)):
+                return not value
+            return False
+
+        for key, (spec, cond_key, values) in rules.items():
+            if key not in submitted and cond_key not in submitted:
+                continue
+            condition = _effective(cond_key)
+            if condition is None or str(condition).strip() not in values:
+                continue
+            if _blank(_effective(key)):
+                continue
+            cond_spec = specs_by_key.get(cond_key, {})
+            choice = str(condition).strip()
+            for opt in cond_spec.get('options') or []:
+                if isinstance(opt, dict) and opt.get('value') == choice:
+                    choice = opt.get('label') or choice
+                    break
+            return _('"%(label)s" is not applied when "%(condition)s" is "%(choice)s"; '
+                     'clear it before saving.',
+                     label=spec.get('label') or key,
+                     condition=cond_spec.get('label') or cond_key,
+                     choice=choice)
+        return None
+
     def _formatted_value_specs(self):
         """這個 template 帶 ``format`` 的 spec：``{key: format}``（未知 format 略過）。"""
         specs = self._parse_helm_value_specs()

@@ -4453,6 +4453,10 @@ class PaasController(HiddenChainMixin, Controller):
         format_error = template._validate_spec_formats(helm_only_values)
         if format_error:
             return {'success': False, 'error': format_error}
+        # INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec ``ignored_when``）有值就擋。
+        ignored_error = template._ignored_when_violation(helm_only_values, default_values)
+        if ignored_error:
+            return {'success': False, 'error': ignored_error}
 
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
@@ -4843,6 +4847,14 @@ class PaasController(HiddenChainMixin, Controller):
             if clear_keys:
                 filtered_user_values = {
                     k: v for k, v in filtered_user_values.items() if k not in clear_keys}
+            # INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec ``ignored_when``，例 VPN 節點
+            # 「同工作區 Headscale」模式的 tags）有值 ⇒ 擋在 helm upgrade 之前，不白白升級一次。
+            ignored_error = service.template_id._ignored_when_violation(
+                filtered_user_values, existing_values)
+            if ignored_error:
+                if old_addon_ids is not None:
+                    service.write({'odoo_addon_ids': [(6, 0, sorted(old_addon_ids))]})
+                return {'success': False, 'error': ignored_error}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             # `_deep_merge` 只淺拷貝被覆寫的那幾層，沒被碰到的子樹與 existing 共用
             # 同一個物件 ⇒ 下面清除前先整份 deepcopy，否則刪 merged 會連 existing 一起刪，

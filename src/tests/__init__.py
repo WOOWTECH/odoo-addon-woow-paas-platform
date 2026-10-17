@@ -1103,6 +1103,8 @@ from . import test_n8n_plan_spec_paths_1532
 from . import test_n8n_python_disabled_1533
 # #1561：只在開通時生效的設定（Odoo 管理員 Email／示範資料）開通後唯讀。
 from . import test_create_only_settings_1561
+# INFRA-TS-004-1：條件下會被 chart 略過的設定（spec ignored_when，VPN 節點工作區模式的 tags）存檔擋下。
+from . import test_spec_ignored_when_ts004
 # #1563：欠費停權時對外網址指到共用停權說明頁（park），復權改回服務（unpark，失敗 fail-loud）。
 from . import test_suspend_route_park_1563
 # 服務品牌圖示：訂閱 API 帶模板代碼與服務類型（前台 brand_icons.js 挑圖示用）。

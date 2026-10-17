@@ -5,6 +5,11 @@ import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { HelmValueForm } from "../../../components/config/HelmValueForm";
+import {
+    ignoredWhenMessage,
+    ignoredWhenViewNote,
+    isBlankSpecValue,
+} from "../../../utils/ignored_when";
 import { cloudService } from "../../../services/cloud_service";
 
 /**
@@ -169,6 +174,14 @@ export class ConfigurationTab extends Component {
         return value !== undefined && value !== null && value !== "";
     }
 
+    /**
+     * INFRA-TS-004-1：檢視模式在值旁標「未套用」——條件下會被 chart 略過、卻存了值的欄位
+     * （例：ignored_when 上線前、在「同工作區 Headscale」模式存的 tags）。
+     */
+    ignoredWhenViewNote(spec) {
+        return ignoredWhenViewNote(spec, this.helmValueSpecs, this.currentValues);
+    }
+
     formatSpecValue(spec) {
         const value = this.getSpecValue(spec);
         // #1455：從沒設定過的金鑰原本也顯示成 ********，租戶以為已設定。
@@ -268,6 +281,15 @@ export class ConfigurationTab extends Component {
             const value = this.state.editedValues[spec.key];
             if (value === undefined || value === null || value === "") {
                 errors[spec.key] = _t("%s is required", spec.label || spec.key);
+            }
+        }
+        // INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec `ignored_when`，例 VPN 節點
+        // 「同工作區 Headscale」模式的 tags）有值 ⇒ 送出前就標錯（後端同一判準也會擋）。
+        for (const spec of this.allSpecs) {
+            if (errors[spec.key] || isBlankSpecValue(this.state.editedValues[spec.key])) continue;
+            const message = ignoredWhenMessage(spec, this.configurableSpecs, this.state.editedValues);
+            if (message) {
+                errors[spec.key] = message;
             }
         }
         this.state.errors = errors;
