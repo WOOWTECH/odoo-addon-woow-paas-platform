@@ -1485,6 +1485,34 @@ def _pod_waiting(status: Dict[str, Any], limit: int) -> Optional[ContainerWaitin
     return first_generic
 
 
+#: #1456：主要容器上一次結束的原因裡，最值得先報的那一個（記憶體不足要調方案或 limits，
+#: 與一般的程式錯誤處理方式不同）。
+_OOM_KILLED = "OOMKilled"
+
+
+def _pod_last_terminated_reason(status: Dict[str, Any]) -> Optional[str]:
+    """#1456：主要容器（``containerStatuses``）的 ``lastState.terminated.reason``。
+
+    任一容器是 ``OOMKilled`` 就回它；否則回第一個有值的 reason；都沒有回 None。init 容器
+    不看：它們跑完都是 ``Completed``，不是主要容器死掉的線索。形狀不對的元素略過，不讓
+    status 端點失敗。
+    """
+    first = None
+    for cs in status.get("containerStatuses") or []:
+        if not isinstance(cs, dict):
+            continue
+        last_state = cs.get("lastState")
+        terminated = last_state.get("terminated") if isinstance(last_state, dict) else None
+        reason = terminated.get("reason") if isinstance(terminated, dict) else None
+        if not reason or not isinstance(reason, str):
+            continue
+        if reason == _OOM_KILLED:
+            return reason
+        if first is None:
+            first = reason
+    return first
+
+
 def _replica_failure(status: Dict[str, Any], limit: int) -> Optional[WorkloadReplicaFailure]:
     """#1647：workload 的 ``ReplicaFailure=True`` condition；沒有回 None。
 
@@ -1945,6 +1973,9 @@ class KubernetesService:
                     ],
                     # #1417：卡住的容器（就緒的 Pod 自然沒有 waiting 容器）。
                     waiting=_pod_waiting(status, self.DIAGNOSTIC_TEXT_LIMIT),
+                    # #1456：上一次為什麼死掉（OOMKilled 優先）——平台判「跑著卻沒有
+                    # 一顆 Pod 就緒」時拿來說明原因。
+                    last_terminated_reason=_pod_last_terminated_reason(status),
                 )
             )
 

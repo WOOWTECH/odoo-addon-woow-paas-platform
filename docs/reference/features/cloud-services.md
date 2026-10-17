@@ -257,6 +257,10 @@ Example: paas-ws-123-anythingllm-01
 > cron 的長交易互撞），所以 `workload_checked_at` 是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
 > 10 分鐘 cron 的輪替位置記在 PaaS Platform Monitor 單例的 `workload_check_cursor`（最後處理的 service id；成功、
 > 失敗、略過都推進，提前中止後下一趟從中止處之後開始）。
+> **#1456 起也看「Pod 都在、卻沒有一顆就緒」**：期望 ≥1、Pod ≥1、就緒 0 的 workload 寫 `oom_killed`（沒就緒的
+> workload Pod 上一次是 `OOMKilled`，operator `PodInfo.last_terminated_reason`）／`crash_loop`（容器卡在
+> `CrashLoopBackOff`）／`not_ready`（都沒有）。三者都要「首次看到滿 5 分鐘後又看到一次」才確認（不是第一次就確認，
+> 見 `services/workload_health.py` 檔頭）；「一顆都沒有」同時存在時沿用 #1647 的代碼。租戶文案沿用一般文案。
 
 ### Supported Operations
 

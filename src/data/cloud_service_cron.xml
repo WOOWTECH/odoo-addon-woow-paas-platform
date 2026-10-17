@@ -95,7 +95,8 @@
         <!-- Cron: running 服務的 workload 有沒有 Pod（#1647）
 
              服務顯示 running，但某個 Deployment／StatefulSet 期望有 Pod、實際一顆都沒有
-             （2026-10-10：ReplicaSet FailedCreate exceeded quota，中斷近 6 小時無訊號）。
+             （2026-10-10：ReplicaSet FailedCreate exceeded quota，中斷近 6 小時無訊號），
+             或 Pod 都在、卻沒有一顆就緒（#1456：CrashLoopBackOff／OOMKilled／未就緒）。
              短 poll 只看轉移狀態、每日對帳一天一次——本條每 10 分鐘看一次 running 的服務，
              發現時寫 workload_fault_*、通知系統管理員、讓 /woow 顯示提示，恢復後自動清掉。
              **絕不碰 state／error_message**（repo-lint 第 19 條判準 5 機械守）。

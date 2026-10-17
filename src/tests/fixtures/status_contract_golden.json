@@ -1,5 +1,5 @@
 {
-  "_contract_fingerprint": "a80521c1ba924c56687f467356e9f5a8889c481afbd91f0e32a898dab7652ba9",
+  "_contract_fingerprint": "7f679ae89045a4d652d420c1c0611555305810422336e0e366badd6cb3cab5ef",
   "pod_retrieval_failed": {
     "datavolume_retrieval_error": null,
     "datavolumes": null,
@@ -40,6 +40,7 @@
         "images": [
           "example/app:1"
         ],
+        "last_terminated_reason": null,
         "last_warning": {
           "count": 12,
           "last_seen": "2026-10-04T01:46:02Z",
@@ -67,6 +68,7 @@
         "images": [
           "example/app:1"
         ],
+        "last_terminated_reason": "OOMKilled",
         "last_warning": {
           "count": 30,
           "last_seen": "2026-10-04T01:40:00Z",
@@ -94,6 +96,7 @@
         "images": [
           "example/app:1"
         ],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-ok-0",
         "owner_kind": "StatefulSet",
@@ -136,6 +139,7 @@
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
         "images": [],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-6d8f7c9b5-server",
         "owner_kind": "ReplicaSet",
@@ -151,6 +155,7 @@
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": "2026-09-29T01:05:00Z",
         "images": [],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-5c7e6b8a4-old",
         "owner_kind": "ReplicaSet",
@@ -166,6 +171,7 @@
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
         "images": [],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-cron-7f9d8c6b5-x",
         "owner_kind": "ReplicaSet",
@@ -181,6 +187,7 @@
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
         "images": [],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-postgresql-0",
         "owner_kind": "StatefulSet",
@@ -196,6 +203,7 @@
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
         "images": [],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-backup-29000000-abcde",
         "owner_kind": "Job",
@@ -238,6 +246,7 @@
         "creation_timestamp": "2026-09-29T01:00:00Z",
         "deletion_timestamp": null,
         "images": [],
+        "last_terminated_reason": null,
         "last_warning": null,
         "name": "svc-1263-postgresql-0",
         "owner_kind": "StatefulSet",

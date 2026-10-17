@@ -778,6 +778,8 @@ _init_cron_clock = time.monotonic
 # #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）。
 # 沒有 FailedCreate 證據的 0 個 Pod（`no_pods`）要持續這麼久才算確認——換 Pod 的瞬間
 # （Recreate 砍舊建新、節點重開）也會短暫是 0，那不是故障。有證據的不必等。
+# #1456 的三個代碼（Pod 在、沒有一顆就緒：oom_killed／crash_loop／not_ready）也走這個門檻：
+# 單次 OOM 或一次 back-off 幾十秒就自己好了（見 `services/workload_health.py` 檔頭）。
 WORKLOAD_FAULT_CONFIRM_MINUTES = 5
 # 10 分鐘那條 cron 每趟的 wall 預算：超過就停，沒查到的下一趟從輪替游標之後接著查
 # （游標記在 platform_monitor 單例的 `workload_check_cursor`，不記在服務列上）。
@@ -1969,7 +1971,8 @@ class CloudService(models.Model):
     # ---- #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）----
     # 這五格**只描述 running 的服務**：某個 Deployment／StatefulSet 期望 ≥1 個 Pod、實際
     # 0 個（2026-10-10 事故：ReplicaSet FailedCreate exceeded quota，服務顯示 running 卻
-    # 中斷近 6 小時）。
+    # 中斷近 6 小時）；#1456 起也描述「Pod 都在、卻沒有一顆就緒」（CrashLoopBackOff／
+    # OOMKilled／未就緒，2026-10-16 商用驗收 DATA-N8N-009-1／010-1）。
     #   * 誰寫：只有 `_apply_workload_observation`（10 分鐘的 `_cron_check_running_workloads`
     #     ＋每日對帳 cron 順帶呼叫）。非平台身分寫不進去（`_OBSERVATION_CONTROL_FIELDS`）。
     #   * **值真的變了才寫**：健康而且四格異常欄位本來就是空的 ⇒ 一格都不寫；異常持續、代碼與
@@ -1989,30 +1992,42 @@ class CloudService(models.Model):
     # 而且沒有 tooltip）。完整的說明放兩處——這一格的 help，以及表單警示區塊裡依代碼顯示
     # 的那一行（`cloud_service_views.xml`）。改標籤或加代碼時三處連同 zh_TW.po 一起改，
     # `TestWorkloadFaultTranslations1647` 守長度、譯文與「每個代碼都有說明」。
+    # #1456 起多三個代碼：Pod 都在、卻沒有一顆就緒（代碼定義與判定見
+    # `services/workload_health.py`；selection 必須正好是 `FAULT_CODES`，測試守）。
     workload_fault_code = fields.Selection(
         selection=[
             ('quota_exceeded', 'Quota blocked'),
             ('create_failed', 'Create failed'),
             ('no_pods', 'No pods'),
+            ('oom_killed', 'OOM killed'),
+            ('crash_loop', 'Crash loop'),
+            ('not_ready', 'Not ready'),
         ],
         string='Workload Fault',
         copy=False,
         readonly=True,
         help='Set while the service is marked running but one of its workloads '
-             '(Deployment or StatefulSet) wants at least one pod and has none (#1647). '
+             '(Deployment or StatefulSet) wants at least one pod and has none (#1647), '
+             'or has pods but none of them is ready (#1456). '
              'Quota blocked: the namespace ResourceQuota rejected the pods. '
              'Create failed: the cluster rejected the pods for a reason other than the quota. '
              'No pods: the pods are missing and the cluster reported no reason. '
-             'Cleared automatically once the pods are back or the service leaves running. '
-             'It never changes the service state.',
+             'OOM killed: no pod is ready and a container was last killed for running out '
+             'of memory. '
+             'Crash loop: no pod is ready and a container keeps crashing (CrashLoopBackOff). '
+             'Not ready: the pods exist but none of them is ready, and the cluster reported '
+             'no crash. '
+             'Cleared automatically once the workloads are back to normal or the service '
+             'leaves running. It never changes the service state.',
     )
     workload_fault_detail = fields.Text(
         string='Workload Fault Detail',
         copy=False,
         readonly=True,
         groups='base.group_system',
-        help='Which workloads have no pods and what the cluster reported '
-             '(for example the quota rejection message). Administrators only.',
+        help='Which workloads have no pods or no ready pod and what the cluster reported '
+             '(for example the quota rejection message or the last termination reason). '
+             'Administrators only.',
     )
     # 有值就是旗標，不另設布林。
     workload_fault_since = fields.Datetime(
@@ -8114,7 +8129,7 @@ class CloudService(models.Model):
             service.write(cleared)
             _logger.info(
                 "[#1647] workload fault cleared for service id=%s %s (was %s since %s): "
-                "every workload that wants pods has pods again",
+                "every workload that wants pods has pods again, at least one of them ready",
                 service.id, service.name, previous_code, previous_since)
             if was_alerted:
                 # 沒通知過的（未確認就恢復的 no_pods）不必再說「已恢復」。
@@ -8146,8 +8161,8 @@ class CloudService(models.Model):
         if not previous_since:
             _logger.warning(
                 "[#1647] running service id=%s %s (namespace %s, release %s) has a workload "
-                "with no pods: %s", service.id, service.name, service.helm_namespace,
-                service.helm_release_name, detail)
+                "fault (%s): %s", service.id, service.name, service.helm_namespace,
+                service.helm_release_name, code, detail)
         # 每段異常只通知一次；通知沒落地（沒有收件者、寫入失敗）就不記標記，下一輪重試。
         if confirmed and not service.workload_fault_alerted_at:
             if monitor._report_workload_fault(service):
