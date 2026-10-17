@@ -2467,6 +2467,9 @@ def _reset_release_config_unlocked(
             # to finish its rollback instead of being SIGKILLed halfway.
             timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
             subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
+            # AI-FIX-NET-1：reset 不得改 pod template（RWO 重新 attach 撞 atomic 15s，
+            # INFRA-HS-002-1）——egress gate／節點迴避只在叢集上已經有的 workload 沿用。
+            tenant_policy_mirror=True,
         )
     except (ValueError, HelmException) as e:
         logger.error("reset-config Helm upgrade failed for %s/%s: %s", namespace, name, e)
@@ -2650,6 +2653,9 @@ def _reset_via_helm_secret(
             # `2n + overhead`，否則 atomic 失敗時的自動 rollback 會被腰斬。
             timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
             subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
+            # AI-FIX-NET-1：reset 不得改 pod template（RWO 重新 attach 撞 atomic 15s，
+            # INFRA-HS-002-1）——egress gate／節點迴避只在叢集上已經有的 workload 沿用。
+            tenant_policy_mirror=True,
         )
     except (ValueError, HelmException) as e:
         logger.error(

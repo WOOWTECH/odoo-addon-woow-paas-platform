@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.config import settings
 from src.services.helm_limiter import helm_operation_slot
 from src.services.tenant_baseline import (
+    BASELINE_EGRESS_NP_NAME,
     PSA_EXEMPT_ANNOTATION,
     PSA_EXEMPT_REASON,
     build_baseline_egress_netpol,
@@ -60,24 +61,95 @@ _PVC_KEEP_POST_RENDERER = str(
 )
 
 
-def _pvc_keep_post_renderer_args(live_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
+def _pvc_keep_post_renderer_args(
+    live_snapshot: Optional[Dict[str, Any]] = None,
+    tenant: Optional[Dict[str, Any]] = None,
+    tenant_live: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade).
 
     #1407: ``live_snapshot`` (``pvc_keep_post_renderer.live_snapshot`` shape) is handed
     to the renderer as a second arg so objects that already exist render with the live
     values of their immutable fields (PVC storageClassName/accessModes/volumeMode/size,
     StatefulSet volumeClaimTemplates). Omitted when there is nothing live to reuse.
+
+    AI-FIX-NET-1: ``tenant`` (``_tenant_policy`` shape) switches on the egress gate /
+    node-avoidance stage of the same renderer; ``tenant_live`` is the mirror-live facts.
+    Both ride in the same JSON arg, so with the policy off the argv is byte-identical to
+    before.
     """
     args = [
         "--post-renderer", sys.executable,
         "--post-renderer-args", _PVC_KEEP_POST_RENDERER,
     ]
+    payload: Dict[str, Any] = {}
     if live_snapshot and (live_snapshot.get("pvc") or live_snapshot.get("sts")):
+        payload.update(live_snapshot)
+    if tenant:
+        payload["tenant"] = tenant
+        if tenant_live:
+            payload["tenant_live"] = tenant_live
+    if payload:
         args.extend([
             "--post-renderer-args",
-            json.dumps(live_snapshot, sort_keys=True, separators=(",", ":")),
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
         ])
     return args
+
+
+def _has_baseline_egress(namespace: str) -> bool:
+    """該 ns 是否真的有 ``paas-baseline-egress``（gate 等的就是它）；查不到一律 False。"""
+    try:
+        KubernetesService()._run_command([
+            "get", "networkpolicy", BASELINE_EGRESS_NP_NAME,
+            "--namespace", namespace, "--output", "name",
+        ])
+        return True
+    except Exception as e:  # noqa: BLE001 — NotFound 與查詢失敗都不插 gate
+        logger.info("no %s in %s (%s); egress gate not injected", BASELINE_EGRESS_NP_NAME, namespace, e)
+        return False
+
+
+def _tenant_policy(namespace: str, mirror_live: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """AI-FIX-NET-1：這個 ns 的 install／upgrade 要套的 render 期政策 ``(options, live_facts)``。
+
+    兩個開關都關、或 ns 不是租戶 ns、或在 PSA 例外清單（管理者用的 Omnigent）→ ``({}, {})``。
+    ``mirror_live``（reset-config 這類「不得改 pod template」的路徑）：只有叢集上已經有的項目
+    才套，避免一次密碼重設變成整個服務滾動重啟；讀不到叢集現況時整個略過（寧可不套）。
+    """
+    from src.tenant_workload_policy import live_facts
+
+    raw_avoid = settings.tenant_avoid_nodes
+    avoid = parse_namespace_list(raw_avoid) if isinstance(raw_avoid, str) else []
+    # `is True`：只有明確的布林 True 才開（測試用的 mock settings、未設定都視為關）。
+    gate_on = (settings.tenant_egress_gate_enabled is True
+               and settings.tenant_baseline_egress_enabled is True)
+    if not avoid and not gate_on:
+        return {}, {}
+    if not namespace.startswith(settings.namespace_prefix):
+        return {}, {}
+    if is_psa_exempt(namespace, parse_namespace_list(settings.psa_exempt_namespaces)):
+        return {}, {}
+    options: Dict[str, Any] = {}
+    if avoid:
+        options["avoid_nodes"] = avoid
+    if gate_on and _has_baseline_egress(namespace):
+        options["egress_gate"] = {
+            "image": settings.tenant_egress_gate_image,
+            "timeout_seconds": settings.tenant_egress_gate_timeout_seconds,
+            "on_timeout": settings.tenant_egress_gate_on_timeout,
+            "target": settings.tenant_egress_gate_target,
+        }
+    if not options:
+        return {}, {}
+    if not mirror_live:
+        return options, {}
+    items = _live_objects(namespace, "deployments,statefulsets,daemonsets,cronjobs")
+    if items is None:
+        logger.warning("tenant policy skipped for %s: live workloads unreadable (mirror mode)", namespace)
+        return {}, {}
+    options["mirror_live"] = True
+    return options, live_facts(items, avoid)
 
 
 def _openapi_validation_args() -> List[str]:
@@ -814,7 +886,8 @@ class HelmService:
         # #317: PVC-keep post-renderer — before ALL conditional flags.
         # #1407: a retried install can meet PVCs a failed attempt left behind
         # (keep-annotated, same names) — reuse their live immutable fields too.
-        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
+        tenant, tenant_live = _tenant_policy(namespace)
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace), tenant, tenant_live))
         args.extend(_openapi_validation_args())
 
         if create_namespace and not dry_run:
@@ -914,6 +987,7 @@ class HelmService:
         subprocess_timeout_seconds: Optional[int] = None,
         dry_run: bool = False,
         description: Optional[str] = None,
+        tenant_policy_mirror: bool = False,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -938,6 +1012,9 @@ class HelmService:
                 (helm's own 5m default) ＝ pre-#461 behaviour.
             subprocess_timeout_seconds: Per-call subprocess ceiling. ``None`` keeps
                 ``settings.helm_timeout``.
+            tenant_policy_mirror: AI-FIX-NET-1 — render the tenant egress-gate / node-avoidance
+                policy only where the live workload already has it (reset-config and other
+                pod-template-neutral paths); the default adopts it, which restarts pods once.
 
         Returns:
             Updated release information
@@ -977,6 +1054,7 @@ class HelmService:
                 timeout_seconds=timeout_seconds,
                 subprocess_timeout_seconds=subprocess_timeout_seconds,
                 dry_run=dry_run, description=description,
+                tenant_policy_mirror=tenant_policy_mirror,
             )
 
     def _upgrade_locked(
@@ -997,6 +1075,7 @@ class HelmService:
         subprocess_timeout_seconds: Optional[int] = None,
         dry_run: bool = False,
         description: Optional[str] = None,
+        tenant_policy_mirror: bool = False,
     ) -> ReleaseInfo:
         """``upgrade`` 的本體；呼叫端已持有 helm 名額（#1552）。"""
         # Private OCI charts need `helm registry login` before pull (GA blocker
@@ -1017,7 +1096,9 @@ class HelmService:
         # branches) so every upgrade variant rewrites the stored manifest WITH
         # keep; otherwise the next uninstall would delete the PVC.
         # #1407: existing PVCs/StatefulSets render with their live immutable fields.
-        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
+        # AI-FIX-NET-1: egress gate / node avoidance (off unless the operator switches are on).
+        tenant, tenant_live = _tenant_policy(namespace, mirror_live=tenant_policy_mirror)
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace), tenant, tenant_live))
         args.extend(_openapi_validation_args())
 
         if version:
