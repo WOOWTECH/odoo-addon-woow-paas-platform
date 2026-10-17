@@ -417,6 +417,8 @@ from . import test_workspace_ns_hash_677
 # B 系列＝收窄引入的回歸守線（poll 只被 list/get 兩個無 role gate 的讀取端點呼叫，
 # 其寫入改走系統身分）（HttpCase，group_user-only）
 from . import test_cloud_service_authz_676
+# AUDITFIX template-id-write-guard（#1216 的 template_id 那一格）
+from . import test_template_id_write_guard_auditfix
 
 # fix: #698 project/task ↔ cloud_service 關聯層的授權守線。Odoo 的 M2M
 # (3)/(4)/(6) 只改 relation 表、零 comodel 權限檢查 ⇒ #676 對 cloud_service 收窄
