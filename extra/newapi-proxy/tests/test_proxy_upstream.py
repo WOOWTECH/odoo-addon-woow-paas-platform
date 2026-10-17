@@ -353,7 +353,7 @@ def test_metrics_exposed():
     h.signed("GET", "/api/status")
     h.signed("GET", "/v1/models", identity="anon")
     text = h.admin(b"/metrics").body.decode()
-    assert 'newapi_proxy_requests_total{code="2xx",identity="anon",route="anon.status"} 1' in text
+    assert 'newapi_proxy_requests_total{code="2xx",identity="anon",route="status"} 1' in text
     assert 'newapi_proxy_rejections_total{kind="policy",reason="route"} 1' in text
     assert 'newapi_proxy_inflight{identity="user"} 0' in text
 

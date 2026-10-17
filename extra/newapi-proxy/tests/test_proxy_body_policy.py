@@ -177,6 +177,104 @@ def test_token_create_missing_field(h, missing):
     assert h.user("POST", "/api/token/", body=body).status == 403
 
 
+# --- PUT /api/token/ (full update and status_only), POST /api/token/batch -------------
+
+STATUS_ONLY = [("status_only", "true")]
+
+
+@pytest.mark.parametrize("body", [{**PAID, "id": 9}, {**FREE, "id": 9}])
+def test_token_full_update_is_the_create_rules_plus_id(h, body):
+    res = h.user("PUT", "/api/token/", body=dict(reversed(list(body.items()))), key="web")
+    assert res.status == 200, res.body
+    assert sent_json(h) == body
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {},  # no id
+        {"id": 0},
+        {"id": "9"},
+        {"id": 9, "status": 1},  # a full update never carries status
+        {"id": 9, "group": "internal"},
+        {"id": 9, "allow_ips": "0.0.0.0/0"},
+        {"id": 9, "name": "renamed"},
+        {"id": 9, "cross_group_retry": True},
+        {"id": 9, "user_id": 1},
+    ],
+)
+def test_token_full_update_negative(h, patch):
+    res = h.user("PUT", "/api/token/", body={**PAID, **patch})
+    assert res.status == 403, patch
+    assert h.upstream.requests == []
+
+
+def test_token_full_update_keeps_the_free_fuse(h):
+    res = h.user("PUT", "/api/token/", body={**FREE, "id": 9, "remain_quota": 100})
+    assert res.status == 403 and res.json["reason"] == "token_free_quota"
+    res = h.user("PUT", "/api/token/", body={**FREE, "id": 9, "model_limits": "openai/gpt-5.1"})
+    assert res.status == 403 and res.json["reason"] == "token_free_models"
+
+
+@pytest.mark.parametrize("status", [1, 2])
+def test_token_status_only(h, status):
+    res = h.user("PUT", "/api/token/", query_pairs=STATUS_ONLY, body={"status": status, "id": 9}, key="web")
+    assert res.status == 200, res.body
+    assert sent_json(h) == {"id": 9, "status": status}
+    assert h.upstream.requests[0].url.query == b"status_only=true"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"id": 9, "status": 3},  # expired / exhausted are new-api's own states
+        {"id": 9, "status": 4},
+        {"id": 9, "status": "1"},
+        {"id": 9, "status": True},
+        {"id": 9},
+        {"id": 9, "status": 1, "name": "wp_17_k7q2"},  # extra field
+        {**PAID, "id": 9, "status": 1},  # a full body under status_only
+    ],
+)
+def test_token_status_only_negative(h, body):
+    res = h.user("PUT", "/api/token/", query_pairs=STATUS_ONLY, body=body)
+    assert res.status == 403, body
+    assert h.upstream.requests == []
+
+
+@pytest.mark.parametrize("value", ["1", "false", "TRUE", "yes"])
+def test_token_status_only_flag_value(h, value):
+    res = h.user("PUT", "/api/token/", query_pairs=[("status_only", value)], body={"id": 9, "status": 2})
+    assert res.status == 400 and res.json["reason"] == "query_value"
+
+
+def test_token_batch_delete(h):
+    res = h.user("POST", "/api/token/batch", body={"ids": [3, 4, 5]}, key="web")
+    assert res.status == 200
+    assert sent_json(h) == {"ids": [3, 4, 5]}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"ids": []},
+        {"ids": [3, 3]},
+        {"ids": [0]},
+        {"ids": ["3"]},
+        {"ids": [True]},
+        {"ids": [3.0]},
+        {"ids": list(range(1, 102))},
+        {"ids": 3},
+        {"ids": [3], "user_id": 1},
+        {"Ids": [3]},
+    ],
+)
+def test_token_batch_delete_negative(h, body):
+    res = h.user("POST", "/api/token/batch", body=body)
+    assert res.status == 403, body
+    assert h.upstream.requests == []
+
+
 # --- login / verify / access_tokens (CRON only) -----------------------------------
 
 
