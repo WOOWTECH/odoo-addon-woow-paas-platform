@@ -1186,3 +1186,5 @@ from . import test_llm_tracer
 # LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
 # llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
 from . import test_llm_platform_foundation
+# 商用驗收 n8n-credential-key-backup（DATA-N8N-013-1）：n8n 加密金鑰由平台產生並保存。
+from . import test_n8n_encryption_key_backup

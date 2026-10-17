@@ -1213,6 +1213,18 @@ _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 # 個別服務可改成 'true'）。
 _N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
 
+# 商用驗收 n8n-credential-key-backup（DATA-N8N-013-1）：n8n 的加密金鑰由平台在**開通時**產生，
+# 存進服務自己的 ``main.secret``（8gears chart 2.0.1 放進 ``<release>-n8n-app-secret``、以 envFrom
+# 變成容器環境變數，與 N8N_API_KEY／N8N_SMTP_PASS 同一顆 Secret）。以前沒設 ⇒ n8n 第一次開機
+# 自己亂數產生、只寫在 PVC 的 /home/node/.n8n/config；只備份 SQLite 還原到新實例時 credential
+# 全部解不開。現在金鑰同時在平台 DB（helm_values）與 K8s Secret，n8n 開機時 config 不存在就用這個
+# 環境變數寫出 config ⇒ PVC 與平台保存的是同一把。
+# ⚠ 只在開通時產生（``_mint_n8n_encryption_key`` 由 controller ``_create_service`` 呼叫），部署組裝
+# 不補：存量服務 PVC 上已有 n8n 自己的金鑰，送一把不同的 n8n 會報「Mismatching encryption keys」
+# 起不來。存量服務要納管，只能把 PVC config 裡那把原樣寫進 helm_values（人工、逐台核對）。
+# 服務詳情 API 對這一格全遮（``PaasController._sanitize_helm_values``），不沿用 secret 子樹的前綴遮罩。
+N8N_ENCRYPTION_KEY_PATH = ('main', 'secret', 'N8N_ENCRYPTION_KEY')
+
 
 # 範本的「平台政策鍵」：每次部署都以範本 ``helm_default_values`` 的值為準，不吃服務
 # 自己 ``helm_values`` 快照裡的值、也不讓 chart 預設補位。
@@ -4519,6 +4531,28 @@ class CloudService(models.Model):
         for key, value in _N8N_RUNTIME_DEFAULT_CONFIG.items():
             if not str(config.get(key) or '').strip():
                 config[key] = value
+        return values
+
+    @classmethod
+    def _mint_n8n_encryption_key(cls, values, template_slug):
+        """開通 n8n 時產生加密金鑰，寫進 ``main.secret.N8N_ENCRYPTION_KEY``（就地修改並回傳）。
+
+        見 ``N8N_ENCRYPTION_KEY_PATH`` 上方註解（DATA-N8N-013-1）。只給開通呼叫——部署組裝
+        不得呼叫，否則存量服務會拿到一把與 PVC config 不同的金鑰而起不來。已有非空值（重跑、
+        管理員搬遷時寫入的舊金鑰）不覆寫。金鑰走平台唯一的憑證生成點
+        ``_generate_admin_password``（``token_urlsafe(24)``，32 字元，不弱於 n8n 自己的
+        ``randomBytes(24)``）。其他範本 no-op。
+        """
+        if template_slug != 'n8n':
+            return values
+        node = values
+        for key in N8N_ENCRYPTION_KEY_PATH[:-1]:
+            if not isinstance(node.get(key), dict):
+                node[key] = {}
+            node = node[key]
+        leaf = N8N_ENCRYPTION_KEY_PATH[-1]
+        if not str(node.get(leaf) or '').strip():
+            node[leaf] = cls._generate_admin_password()
         return values
 
     @staticmethod
