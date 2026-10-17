@@ -16,11 +16,12 @@ from src.services.tenant_baseline import (
     BASELINE_EGRESS_NP_NAME,
     PSA_EXEMPT_ANNOTATION,
     PSA_EXEMPT_REASON,
-    build_baseline_egress_netpol,
+    build_baseline_egress_netpols,
     build_cross_ns_ingress_pod_selector,
     build_pod_security_labels,
     is_psa_exempt,
     parse_namespace_list,
+    parse_port_list,
     psa_label_keys,
 )
 from src.models.schemas import (
@@ -2389,6 +2390,10 @@ class KubernetesService:
            內容見 ``tenant_baseline.build_baseline_egress_netpol``。開關關著時**不刪**已
            存在的這條（關開關＝不再新增，不是回滾；回滾用 scripts/ws_lan_backfill.py
            --rollback）。
+           公網埠收斂（商用驗收 egress-all-ports-open）：``TENANT_BASELINE_EGRESS_BLOCKED_PORTS``
+           封掉指定埠；``TENANT_BASELINE_EGRESS_WEB_PROFILE`` 另加 ``paas-baseline-egress-web``
+           （帶 ``paas.woowtech.io/egress-profile=web`` 的 pod 只到公網 TCP 80/443），先 apply
+           web 再收窄一般 baseline。兩者預設關＝manifest 與之前逐字相同。
 
         Idempotent via ``kubectl apply``.
         """
@@ -2437,7 +2442,11 @@ class KubernetesService:
             pod_selector=cross_ns_targets,
         ))
         if settings.tenant_baseline_egress_enabled:
-            manifests.append(build_baseline_egress_netpol(namespace))
+            manifests.extend(build_baseline_egress_netpols(
+                namespace,
+                blocked_ports=parse_port_list(settings.tenant_baseline_egress_blocked_ports),
+                web_profile=bool(settings.tenant_baseline_egress_web_profile),
+            ))
         for manifest in manifests:
             self.apply_manifest(manifest)
 
