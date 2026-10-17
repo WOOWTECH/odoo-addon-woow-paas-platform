@@ -280,6 +280,8 @@ from . import test_marketplace_price_label_478
 from . import test_subscription_mixin_cascade_sudo_29
 # fix: #389 低餘額通知 dedup marker 改跟著投遞下場走（排入失敗／exception 要重送）
 from . import test_low_balance_dedup_retry_389
+# AUDITFIX dunning-mail-english／payment-mail-wrong-date／dunning-lost-on-smtp-failure
+from . import test_billing_mail_auditfix
 # fix: #520 generic create 吞掉業務例外 → 被拒絕的服務仍留在 DB 並被 cron 部署
 from . import test_create_service_validation_rollback_520
 # fix: #567 Phase A PaaS controller technical exception 原文外洩

@@ -69,7 +69,31 @@ class ShSubscriptionExtensionFields(models.Model):
         default=False,
         copy=False,
         help='Set when the auto-cancellation email has been queued, so a '
-             'state-transition retrigger does not double-send.',
+             'state-transition retrigger does not double-send. A queued mail that '
+             'later fails delivery (state=exception) is re-sent by the daily '
+             'auto-invoice cron (see woow_cancellation_mail_id).',
+    )
+    woow_cancellation_mail_id = fields.Many2one(
+        'mail.mail',
+        string='Cancellation Mail',
+        ondelete='set null',
+        copy=False,
+        help='AUDITFIX dunning-lost-on-smtp-failure: the queued auto-cancellation '
+             'mail. "Queued" is not "delivered": a mail that fails delivery (e.g. '
+             'SMTP 421) parks at state=exception and Odoo never retries it, and a '
+             'cancelled subscription no longer enters the billing loop. Keeping the '
+             'carrier (created with auto_delete=False) lets the daily auto-invoice '
+             'cron re-send it within a few days of the cancellation. Empty on legacy '
+             'data, which is conservatively treated as delivered.',
+    )
+    woow_auto_cancelled_at = fields.Datetime(
+        string='Auto-Cancelled At',
+        copy=False,
+        readonly=True,
+        help='AUDITFIX dunning-lost-on-smtp-failure: when the dunning cron '
+             'auto-cancelled this subscription after repeated payment failures. '
+             'Only these subscriptions get the cancellation-notice retry (a manual '
+             'or tenant cancellation never receives the auto-cancel email).',
     )
 
     # --- #1424 billing hold ------------------------------------------------ #

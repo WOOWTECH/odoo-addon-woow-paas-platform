@@ -691,6 +691,30 @@ msgid ""
 "                </div>\n"
 "            "
 msgstr ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p><t t-out=\"object.name\"/> 您好：</p>\n"
+"                    <p>\n"
+"                        您的訂閱\n"
+"                        <strong t-out=\"ctx.get('plan_name', '')\"/>\n"
+"                        （<t t-out=\"ctx.get('subscription_name', '')\"/>）\n"
+"                        因未付帳單\n"
+"                        <strong t-out=\"ctx.get('invoice_name', '')\"/>\n"
+"                        （<t t-out=\"ctx.get('amount_text', '')\"/>）連續\n"
+"                        <t t-out=\"ctx.get('failures', '')\"/> 次扣款失敗，已被<strong>自動取消</strong>。\n"
+"                    </p>\n"
+"                    <p>\n"
+"                        相關服務已暫停。您的資料會保留\n"
+"                        <strong><t t-out=\"ctx.get('preservation_months', 6)\"/> 個月</strong>；\n"
+"                        在這段期間內重新訂閱，可能可以接回原本的儲存空間。\n"
+"                    </p>\n"
+"                    <p>\n"
+"                        如要恢復服務，請到 Woow PaaS 應用市集重新訂閱。\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        如果這次取消不在您的預期之中，請與客服聯絡。\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
 
 #. module: woow_paas_platform
 #: model:mail.template,body_html:woow_paas_platform.mail_template_low_balance
@@ -726,6 +750,30 @@ msgid ""
 "                </div>\n"
 "            "
 msgstr ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p><t t-out=\"object.name\"/> 您好：</p>\n"
+"                    <p>\n"
+"                        您的訂閱帳單\n"
+"                        <strong t-out=\"ctx.get('invoice_name', '')\"/>\n"
+"                        （金額\n"
+"                        <strong t-out=\"ctx.get('amount_text', '')\"/>）\n"
+"                        因錢包餘額不足，無法完成扣款。\n"
+"                    </p>\n"
+"                    <p>目前錢包餘額：<strong t-out=\"ctx.get('balance_text', '')\"/></p>\n"
+"                    <p>\n"
+"                        請盡快為錢包儲值，以維持服務正常運作。\n"
+"                        服務在暫停前會有一段寬限期。\n"
+"                    </p>\n"
+"                    <p>\n"
+"                        <a t-att-href=\"ctx.get('topup_url', '#')\" style=\"display:inline-block;background:#6366f1;color:#ffffff;padding:10px 16px;text-decoration:none;border-radius:6px;font-weight:600;\">\n"
+"                            立即儲值\n"
+"                        </a>\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        感謝您使用 WoowTech PaaS。\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
@@ -1269,7 +1317,7 @@ msgstr "動作"
 #. module: woow_paas_platform
 #: model:mail.template,subject:woow_paas_platform.mail_template_low_balance
 msgid "Action needed: Please top up your wallet"
-msgstr ""
+msgstr "需要處理：請為錢包儲值"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10937,7 +10985,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:mail.template,name:woow_paas_platform.mail_template_low_balance
 msgid "PaaS: Low Wallet Balance Notification"
-msgstr ""
+msgstr "PaaS：錢包餘額不足通知"
 
 #. module: woow_paas_platform
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_low_balance_warning_ir_actions_server
@@ -10957,7 +11005,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:mail.template,name:woow_paas_platform.mail_template_subscription_cancelled
 msgid "PaaS: Subscription Auto-Cancelled (Repeated Payment Failures)"
-msgstr ""
+msgstr "PaaS：訂閱自動取消（連續扣款失敗）"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_access_resync_cron
@@ -17395,7 +17443,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:mail.template,subject:woow_paas_platform.mail_template_subscription_cancelled
 msgid "[Woow PaaS] Your subscription has been cancelled"
-msgstr ""
+msgstr "[Woow PaaS] 您的訂閱已取消"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -21794,6 +21842,116 @@ msgstr "PaaS：從未正常運作的服務暫停扣款"
 #: model:mail.template,subject:woow_paas_platform.mail_template_billing_hold_never_running
 msgid "[Woow PaaS] A service that never started will not be charged"
 msgstr "[Woow PaaS] 從未正常運作的服務不會扣款"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription has ended"
+msgstr "您的訂閱已結束"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription has been cancelled"
+msgstr "您的訂閱已取消"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription is active"
+msgstr "您的訂閱已啟用"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription has been renewed"
+msgstr "您的訂閱已續訂"
+
+#. module: woow_paas_platform
+#: model:mail.template,name:woow_paas_platform.mail_template_subscription_status
+msgid "PaaS: Subscription Status (Activated / Paid / Cancelled)"
+msgstr "PaaS：訂閱狀態通知（啟用／付款／取消）"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_subscription_status
+msgid ""
+"[Woow PaaS] {{ ctx.get('status_title') or object.name }} ({{ object.name }})"
+msgstr ""
+"[Woow PaaS] {{ ctx.get('status_title') or object.name }}（{{ object.name }}）"
+
+#. module: woow_paas_platform
+#: model:mail.template,body_html:woow_paas_platform.mail_template_subscription_status
+msgid ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p>Hi <t t-out=\"object.sh_partner_id.name\"/>,</p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and object.sh_renewed\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) has been renewed.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress'\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) is active.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'cancel'\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) has been cancelled.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state in ('close', 'expire', 'renewed')\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) has ended.\n"
+"                    </p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and ctx.get('trial_end_date')\">\n"
+"                        Your free trial runs until <strong t-out=\"format_date(ctx.get('trial_end_date'))\"/>.\n"
+"                        The first charge is on <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress' and object.sh_date_of_next_payment\">\n"
+"                        Your next charge is on <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>.\n"
+"                        The subscription renews automatically until you cancel it.\n"
+"                    </p>\n"
+"                    <p t-if=\"ctx.get('has_invoice')\">\n"
+"                        The invoice for this payment is attached.\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        If you have any questions, please contact support. Thank you for using\n"
+"                        WoowTech PaaS.\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
+msgstr ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p><t t-out=\"object.sh_partner_id.name\"/> 您好：</p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and object.sh_renewed\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已續訂。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress'\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已啟用。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'cancel'\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已取消。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state in ('close', 'expire', 'renewed')\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已結束。\n"
+"                    </p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and ctx.get('trial_end_date')\">\n"
+"                        免費試用到 <strong t-out=\"format_date(ctx.get('trial_end_date'))\"/> 為止，\n"
+"                        第一次扣款日是 <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress' and object.sh_date_of_next_payment\">\n"
+"                        下次扣款日是 <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>。\n"
+"                        訂閱會自動續期，直到您取消為止。\n"
+"                    </p>\n"
+"                    <p t-if=\"ctx.get('has_invoice')\">\n"
+"                        本次付款的發票附在這封信中。\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        如有任何問題，請與客服聯絡。感謝您使用 WoowTech PaaS。\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
 
 #. module: woow_paas_platform
 #. odoo-javascript

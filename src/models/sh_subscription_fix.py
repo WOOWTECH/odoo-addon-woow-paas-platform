@@ -22,6 +22,15 @@ _logger = logging.getLogger(__name__)
 #: 也改變不了什麼。刻意寫成模組常數而不是 config parameter——它是這條重試機制
 #: 自己的安全閥，不該跟著營運參數一起被關掉。
 _LOW_BALANCE_RETRY_WINDOW_DAYS = 7
+#: AUDITFIX dunning-lost-on-smtp-failure：自動取消通知投遞失敗（mail 停在 exception）時，
+#: 每日扣款排程在取消後這幾天內補送。取消之後訂閱不再進 ``_sh_create_auto_invoice`` 的
+#: 主迴圈（只撈 in_progress），所以補送是另外一段（``_retry_cancellation_notices``）。
+_CANCELLATION_NOTICE_RETRY_WINDOW_DAYS = 7
+#: AUDITFIX dunning-mail-english：補 ``lang`` 的兩筆 noupdate 模板（見 billing_mail_lang_sync.xml）。
+_BILLING_MAIL_LANG_TEMPLATES = (
+    'woow_paas_platform.mail_template_low_balance',
+    'woow_paas_platform.mail_template_subscription_cancelled',
+)
 
 #: #778：上游 sh_subscription_wallet SSOT（upstream PR #14）對撞防護的兩個錨點。
 #: 上游會在 wallet 自己的 post_init_hook／migration 停用 base auto-invoice cron
@@ -598,6 +607,8 @@ class ShSubscriptionFix(models.Model):
                 self._hold_billing_for_never_running_service(subscription, service)
                 continue
             self._process_subscription_billing(subscription, threshold)
+        # AUDITFIX dunning-lost-on-smtp-failure：已自動取消、但取消通知沒送到的訂閱補送。
+        self._retry_cancellation_notices()
 
     @api.model
     def _woow_billing_hold_services(self, subscriptions):
@@ -919,10 +930,15 @@ class ShSubscriptionFix(models.Model):
                         "[SUB_FIX] auto_cancel sub=%s after %s consecutive failures",
                         subscription.id, new_count,
                     )
-                    subscription.write({'state': 'cancel'})
+                    subscription.write({
+                        'state': 'cancel',
+                        'woow_auto_cancelled_at': fields.Datetime.now(),
+                    })
                     if not subscription.woow_cancellation_notified:
-                        self._notify_subscription_cancelled(subscription, invoice)
-                        subscription.write({'woow_cancellation_notified': True})
+                        # AUDITFIX dunning-lost-on-smtp-failure：只有信真的排進佇列才算「已通知」；
+                        # 投遞失敗由 `_retry_cancellation_notices` 補送。
+                        mail = self._notify_subscription_cancelled(subscription, invoice)
+                        self._stamp_cancellation_notice(subscription, mail)
                 else:
                     _logger.info(
                         "[SUB_FIX] auto_invoice failure recorded sub=%s failures=%s/%s",
@@ -1116,12 +1132,19 @@ class ShSubscriptionFix(models.Model):
 
     @api.model
     def _notify_subscription_cancelled(self, subscription, invoice):
-        """Send a one-shot "subscription auto-cancelled" email to the partner.
+        """Queue the one-shot "subscription auto-cancelled" email; return its ``mail.mail``.
 
         Called once when ``woow_consecutive_payment_failures`` crosses the
-        configured threshold and the sub flips to ``state='cancel'``. Dedup
-        is the caller's responsibility via ``woow_cancellation_notified``.
+        configured threshold and the sub flips to ``state='cancel'``, and again by
+        ``_retry_cancellation_notices`` when that mail failed delivery.
+
+        AUDITFIX dunning-lost-on-smtp-failure：原本不回傳任何東西，呼叫端無條件蓋
+        ``woow_cancellation_notified=True``——SMTP 故障（421）時信停在 ``exception``、
+        Odoo 的 mail queue 不會重試、訂閱已取消也不再進扣款迴圈，通知就永久遺失。比照
+        低餘額信（#389）：回傳載體（排入失敗回空集），並關掉 ``auto_delete`` 讓載體
+        留下來，`_cancellation_notice_needs_send` 才分得出「送到了」與「投遞失敗」。
         """
+        Mail = self.env['mail.mail'].sudo()
         template = self.env.ref(
             'woow_paas_platform.mail_template_subscription_cancelled',
             raise_if_not_found=False,
@@ -1130,40 +1153,175 @@ class ShSubscriptionFix(models.Model):
             _logger.warning(
                 "mail_template_subscription_cancelled not found; skip notification"
             )
-            return
+            return Mail
 
         partner = subscription.sh_partner_id
         cleanup_months = int(self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.cleanup_after_months', '6'))
         amount_text = formatLang(
             self.env, invoice.amount_total, currency_obj=invoice.currency_id,
-        )
+        ) if invoice else ''
         ctx = {
             'subscription_name': subscription.name or '',
             'plan_name': (
                 subscription.sh_subscription_plan_id.name
                 if subscription.sh_subscription_plan_id else ''
             ),
-            'invoice_name': invoice.name or '',
+            'invoice_name': (invoice.name or '') if invoice else '',
             'amount_text': amount_text,
             'failures': subscription.woow_consecutive_payment_failures,
             'preservation_months': cleanup_months,
         }
         try:
-            template.with_context(**ctx).send_mail(
+            mail_id = template.with_context(**ctx).send_mail(
                 partner.id,
                 force_send=False,
                 email_layout_xmlid='mail.mail_notification_light',
-            )
-            _logger.info(
-                "[SUB_FIX] cancellation email queued partner=%s sub=%s",
-                partner.id, subscription.id,
             )
         except Exception:
             _logger.exception(
                 "Failed to queue cancellation email for partner %s sub=%s",
                 partner.id, subscription.id,
             )
+            return Mail
+        mail = Mail.browse(mail_id) if mail_id else Mail
+        if mail:
+            mail.write({'auto_delete': False})
+        _logger.info(
+            "[SUB_FIX] cancellation email queued partner=%s sub=%s mail=%s",
+            partner.id, subscription.id, mail.id or None,
+        )
+        return mail
+
+    @api.model
+    def _stamp_cancellation_notice(self, subscription, mail):
+        """記下「取消通知已排進佇列」與它的載體；``mail`` 為空（沒排進去）時什麼都不寫。"""
+        if not mail:
+            return
+        subscription.write({
+            'woow_cancellation_notified': True,
+            'woow_cancellation_mail_id': mail.id,
+        })
+
+    @api.model
+    def _cancellation_notice_needs_send(self, subscription):
+        """這筆自動取消的訂閱還需不需要（再）送取消通知？（判準同 #389 的低餘額信）
+
+        * 還沒有排進佇列過（``woow_cancellation_notified`` 為 False）→ 要送。
+        * 有排過但查不到載體 → 不送（升級前的既有資料、人工清掉的信；保守視為已送）。
+        * 載體停在 ``exception``（例如 SMTP 421）→ 要送（重試）。
+        * 載體是 ``cancel`` → 不送（明確的「不要送」），留 warning。
+        * 其他（outgoing／sent／received）→ 不送。
+        """
+        if not subscription.woow_cancellation_notified:
+            return True
+        mail = subscription.sudo().woow_cancellation_mail_id
+        if not mail or not mail.exists():
+            return False
+        if mail.state == 'cancel':
+            _logger.warning(
+                "[SUB_FIX] sub=%s 的取消通知被取消（mail=%s），不重送。",
+                subscription.id, mail.id,
+            )
+            return False
+        return mail.state == 'exception'
+
+    @api.model
+    def _retry_cancellation_notices(self):
+        """AUDITFIX dunning-lost-on-smtp-failure：補送沒送到的自動取消通知。
+
+        對象：dunning 自動取消（``woow_auto_cancelled_at`` 有值，人工或租戶取消不算）、
+        取消時間在 ``_CANCELLATION_NOTICE_RETRY_WINDOW_DAYS`` 天內、
+        ``_cancellation_notice_needs_send`` 為真。每筆各自一個 savepoint；一般例外只記
+        log，不影響扣款排程（``OperationalError`` 外拋，同 ``_on_payment_failure``）。
+        """
+        cutoff = fields.Datetime.now() - timedelta(days=_CANCELLATION_NOTICE_RETRY_WINDOW_DAYS)
+        subscriptions = self.env['sh.subscription.subscription'].sudo().search([
+            ('state', '=', 'cancel'),
+            ('woow_auto_cancelled_at', '>=', cutoff),
+        ])
+        for subscription in subscriptions:
+            if not self._cancellation_notice_needs_send(subscription):
+                continue
+            try:
+                with self.env.cr.savepoint():
+                    invoice = self.env['account.move'].sudo().search([
+                        ('sh_subscription_id', '=', subscription.id),
+                        ('move_type', '=', 'out_invoice'),
+                        ('state', '!=', 'cancel'),
+                        ('payment_state', 'not in', ('paid', 'in_payment')),
+                    ], order='invoice_date desc, id desc', limit=1)
+                    mail = self._notify_subscription_cancelled(subscription, invoice)
+                    self._stamp_cancellation_notice(subscription, mail)
+                    _logger.info(
+                        "[SUB_FIX] cancellation notice re-queued sub=%s mail=%s",
+                        subscription.id, mail.id or None,
+                    )
+            except OperationalError:
+                raise
+            except Exception:
+                _logger.exception(
+                    "[SUB_FIX] cancellation notice retry failed for subscription %s; "
+                    "it will be retried on the next run", subscription.id,
+                )
+
+    @api.model
+    def _woow_ensure_billing_mail_lang(self):
+        """AUDITFIX dunning-mail-english：低餘額／自動取消通知依收件人語言渲染。
+
+        兩筆模板在 noupdate 區塊，既有 DB 升級時吃不到 XML 新加的 ``lang``；由
+        ``billing_mail_lang_sync.xml`` 每次 -u 呼叫。只補空值（營運手改過的設定不動）。
+        """
+        for xmlid in _BILLING_MAIL_LANG_TEMPLATES:
+            template = self.env.ref(xmlid, raise_if_not_found=False)
+            if template and not template.lang:
+                template.sudo().write({'lang': '{{ object.lang }}'})
+
+    def _woow_subscription_status_context(self, has_invoice=False):
+        """平台訂閱狀態信（``mail_template_subscription_status``）的 render context。
+
+        主旨的狀態句依收件人語言產生（模板的 ``lang`` 只管模板本身的譯文，Python 端的
+        字串要自己切語言）。
+        """
+        self.ensure_one()
+        lang = self.sh_partner_id.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        if self.state == 'in_progress' and self.sh_renewed:
+            title = env._('Your subscription has been renewed')
+        elif self.state == 'in_progress':
+            title = env._('Your subscription is active')
+        elif self.state == 'cancel':
+            title = env._('Your subscription has been cancelled')
+        else:
+            title = env._('Your subscription has ended')
+        return {
+            'status_title': title,
+            'has_invoice': has_invoice,
+            'trial_end_date': self.sh_trial_end_date if self._woow_in_trial() else False,
+        }
+
+    def _sh_send_subscription_email(self, attachment_id):
+        """平台訂閱改寄平台自己的狀態信；其他訂閱（ERP／官網）照上游。
+
+        AUDITFIX payment-mail-wrong-date／dunning-mail-english：上游
+        ``sh_subscription_customer_email`` 沒有 ``lang``（zh_TW 租戶收到英文），而且寫
+        「Your plan will expire on <sh_end_date>」——平台訂閱的 ``sh_end_date`` 是第一期最後
+        一天、續期不推進（#1574），付款成功信因此寫著過去的日期。平台訂閱（方案
+        ``sh_never_expire``，與 #1574 同一個判準）改寄 ``mail_template_subscription_status``：
+        依收件人語言、寫下次扣款日、不提到期日。附件（付款發票）照上游的方式帶。
+        """
+        self.ensure_one()
+        template = self.env.ref(
+            'woow_paas_platform.mail_template_subscription_status',
+            raise_if_not_found=False,
+        )
+        if not template or not self.sh_subscription_plan_id.sh_never_expire:
+            return super()._sh_send_subscription_email(attachment_id)
+        email_values = (
+            {'attachment_ids': [(6, 0, attachment_id.ids)]} if attachment_id else {})
+        ctx = self._woow_subscription_status_context(has_invoice=bool(attachment_id))
+        template.sudo().with_context(**ctx).send_mail(
+            self.id, force_send=True, email_values=email_values)
 
     def _handle_invoice_creation(self, invoice_id):
         """Override upstream: when wallet can cover, post + pay from wallet.
