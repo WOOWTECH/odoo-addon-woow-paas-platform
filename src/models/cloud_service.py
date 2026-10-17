@@ -5880,6 +5880,30 @@ class CloudService(models.Model):
             'ledger_digest': rollback_config.ledger_digest(self._helm_values_dict()),
         }, sort_keys=True)})
 
+    def _rollback_sync_paths(self, specs, preserved, values):
+        """回復後要從目標 revision 投影回帳本的路徑 → kind。
+
+        兩組：spec 的公開設定（421faf23）＋帳本裡範本管理的 image 參照（AI-OMN-005-2）。
+        後者與 #1408 Redeploy 刷新同一範圍：``_iter_image_refs`` 找到的參照的
+        ``_IMAGE_REF_KEYS``，加上 Omnigent 平台擁有的字串 ``runner.image``。不同步
+        image 的話，回復後叢集跑舊 image、帳本卻還是新的，租戶下一次儲存設定（沿用
+        帳本 image）就把服務悄悄前滾，與回復對話框「應用設定會回到該版本當時儲存的值」
+        矛盾。管理員 Redeploy 仍套用範本當下的 pin（#1408 的既定語意），不受影響。
+        """
+        self.ensure_one()
+        public = rollback_config.public_paths(specs, preserved)
+        candidates = [
+            '.'.join(path + (key,))
+            for path, _ref in _iter_image_refs(values) for key in _IMAGE_REF_KEYS
+        ]
+        runner = values.get('runner') if isinstance(values, dict) else None
+        if (isinstance(runner, dict) and isinstance(runner.get('image'), str)
+                and runner['image'].startswith(_OMNIGENT_HOST_IMAGE + ':')):
+            candidates.append('runner.image')
+        images = rollback_config.image_paths(
+            candidates, self.template_id._tenant_value_keys(), preserved, taken=public)
+        return {**images, **public}
+
     def _sync_rollback_config(self, client, release):
         """Ready 前同步固定回滾 revision；失敗可重試，舊結果不能覆蓋新操作。"""
         self.ensure_one()
@@ -5894,7 +5918,7 @@ class CloudService(models.Model):
             specs = self.template_id._parse_helm_value_specs_or_fail()
             if specs is SPECS_UNPARSEABLE:
                 return False
-            paths = rollback_config.public_paths(specs, preserved)
+            paths = self._rollback_sync_paths(specs, preserved, self._helm_values_dict())
             response = client.get_config_projection(
                 namespace=self.helm_namespace, release_name=self.helm_release_name,
                 revision=pending['revision'], paths=list(paths), excluded_paths=preserved,
@@ -5909,7 +5933,8 @@ class CloudService(models.Model):
             self.invalidate_recordset(['helm_values', 'rollback_config_sync', 'last_upgraded_at'])
             current = self._helm_values_dict()
             latest_specs = self.template_id._parse_helm_value_specs_or_fail()
-            if rollback_config.public_paths(latest_specs, self._rollback_preserved_value_paths()) != paths:
+            if self._rollback_sync_paths(
+                    latest_specs, self._rollback_preserved_value_paths(), current) != paths:
                 return False
             if rollback_config.ledger_digest(current) != pending['ledger_digest']:
                 return False
