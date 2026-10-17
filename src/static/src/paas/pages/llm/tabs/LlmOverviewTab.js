@@ -34,11 +34,26 @@ export const PROVISION_FAILURE_HINT_AFTER = 3;
 /** 開通超過 3 分鐘：多一句「比平常久」（DESIGN §3.5 的 SLO 是「通常 1 分鐘內」）。 */
 const PROVISION_SLOW_HINT_MS = 3 * 60 * 1000;
 /**
- * 「最近 10 筆」每 30 秒重新整理一次。tracer 期間 `/api/llm/usage/recent` 是同步外呼，每次吃
- * 租戶合成 IP 1 格 GA（360 次／180 秒，DESIGN §1.5），所以這也是**最短間隔**：分頁在背景時
- * 計時器到了也不刷，等回到前景才補一次；回到前景時計時器還沒到就不刷（反覆切分頁不會多打）。
+ * 「最近 10 筆」每 30 秒重新整理一次。`/api/llm/usage/recent` 只讀後端快取（SWR，N26；LLM-02）：
+ * 快取超過 60 秒時後端排一次背景刷新，這次先回舊資料與 `data_as_of`。分頁在背景時計時器到了也不刷，
+ * 等回到前景才補一次；回到前景時計時器還沒到就不刷（反覆切分頁不會多打）。
  */
 export const USAGE_REFRESH_MS = 30000;
+/**
+ * 還沒有今天的快取（`data_as_of: null`，背景刷新剛排下去）：先每 3 秒再問一次、最多 5 次，
+ * 之後回到 30 秒的節奏（new-api 連不上時不會一直狂問）。
+ */
+export const USAGE_FIRST_FILL_MS = 3000;
+export const USAGE_FIRST_FILL_POLLS = 5;
+
+/** 下一次「最近 10 筆」的間隔（純函式，tests/ui/test_llm_overview.mjs 直接驗）。 */
+export function usageRefreshDelay(result, firstFillPolls) {
+  const data = result && result.success ? result.data : null;
+  if (data && data.data_as_of == null && firstFillPolls < USAGE_FIRST_FILL_POLLS) {
+    return USAGE_FIRST_FILL_MS;
+  }
+  return USAGE_REFRESH_MS;
+}
 /** 建立中的試用金鑰超過這麼久（與後端 `_STALE_CREATING_SECONDS` 相同），處理它的 worker 已經不在了。 */
 export const STALE_CREATING_MS = 300 * 1000;
 
@@ -144,6 +159,8 @@ export class LlmOverviewTab extends Component {
       baseUrlCopied: false,
       baseUrlCopyFailed: false,
       refreshingUsage: false,
+      /** 後端還沒有今天的快取、正在快問（「讀取中」而不是「今天還沒有呼叫紀錄」）。 */
+      usageWaiting: false,
       provisionSince: null,
       pollFailing: false,
       announcement: "",
@@ -163,6 +180,8 @@ export class LlmOverviewTab extends Component {
     this.usageTimer = null;
     /** 「最近 10 筆」的計時器在背景分頁到期（已滿最短間隔）：回到前景再補一次。 */
     this.usagePaused = false;
+    /** 還沒有快取時已經快問了幾次（見 USAGE_FIRST_FILL_POLLS）。 */
+    this.usageFirstFillPolls = 0;
     this.onVisibilityChange = () => {
       if (document.hidden || !this.alive) return;
       if (this.pollPaused) {
@@ -255,7 +274,10 @@ export class LlmOverviewTab extends Component {
       // 登入逾時：再打也一樣，等使用者重新整理頁面。
       return;
     }
-    this.usageTimer = setTimeout(() => this.onUsageTimer(), USAGE_REFRESH_MS);
+    const delay = usageRefreshDelay(result, this.usageFirstFillPolls);
+    this.usageFirstFillPolls = delay === USAGE_FIRST_FILL_MS ? this.usageFirstFillPolls + 1 : 0;
+    this.state.usageWaiting = delay === USAGE_FIRST_FILL_MS;
+    this.usageTimer = setTimeout(() => this.onUsageTimer(), delay);
   }
 
   onUsageTimer() {
@@ -559,9 +581,12 @@ export class LlmOverviewTab extends Component {
     return this.llm.usageError ? llmErrorMessage({ code: this.llm.usageError }) : null;
   }
 
-  /** usage 還沒回來（null）就不能說「今天還沒有呼叫紀錄」。 */
+  /**
+   * usage 還沒回來（null）、或後端還沒有今天的快取而且還在快問，都不能說「今天還沒有呼叫紀錄」。
+   */
   get usageLoading() {
-    return !this.llm.usage && !this.llm.usageError;
+    if (this.llm.usageError) return false;
+    return !this.llm.usage || (this.llm.usage.data_as_of == null && this.state.usageWaiting);
   }
 
   get usageDataTimeText() {
@@ -570,6 +595,10 @@ export class LlmOverviewTab extends Component {
   }
 
   get emptyUsageText() {
+    if (this.llm.usage && this.llm.usage.data_as_of == null) {
+      // 快問了幾次還是沒有快取（new-api 暫時連不上）：不能假裝「今天沒有呼叫」。
+      return _t("Usage data is not available yet. Please check back later.");
+    }
     return _t("No free trial calls today yet.");
   }
 
