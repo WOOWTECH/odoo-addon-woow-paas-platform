@@ -32,6 +32,7 @@ from ..models.workspace_access import (
 )
 from ..services.paas_capability import _PaaSCapability
 from ..models.llm_common import llm_visible
+from ..services import vpn_node_status as _vpn_node_status
 from ..services.paas_operator import (
     get_paas_operator_client,
     PaaSOperatorAPIError,
@@ -2184,6 +2185,60 @@ class PaasController(HiddenChainMixin, Controller):
             executor.shutdown(wait=False, cancel_futures=True)
         response['data']['observed_at'] = min(timestamps) if timestamps else None
         return response
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/node-status",
+           auth="user", methods=["POST"], type="json")
+    def api_service_node_status(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
+        """INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態，**純讀、不寫 DB、不碰 state**。
+
+        pod Ready ≠ 節點在線：chart 的 readiness 把 NeedsLogin 也當可用，節點被控制面到期／刪除
+        後平台 state 仍是 running、/woow 仍顯示 ONLINE（INFRA-TS-005／TS-007）。這支現場問
+        operator（它對 pod 的 tailscaled 唯讀 exec），把登入狀態、登入入口、serve 轉發結果與
+        被略過的原因（封閉代碼）給服務頁。
+
+        * 授權＝與 detail 同一條（工作區成員、service 釘在 workspace 上、concealed 當不存在）；
+        * gate＝``template.has_vpn_node_status``，沒有這個能力的服務一律「Service not found」；
+        * 登入入口（外部登入網址、註冊碼）只給 owner／admin（``_can_manage_service``）；
+        * 回 ``{available: False, reason}`` 是正常降級（不是 running、operator 沒設定／沒回應／太舊），
+          前端不顯示錯誤，只是不畫這張卡的內容。
+        """
+        if kw:
+            return {'success': False, 'error': _('Invalid request')}
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        if not service._chart_has_vpn_node_status():
+            return {'success': False, 'error': _('Service not found')}
+
+        def unavailable(reason):
+            return {'success': True, 'data': {'available': False, 'reason': reason, 'report': None}}
+
+        if service.state not in ('running', 'upgrading') or not (
+                service.helm_namespace and service.helm_release_name):
+            return unavailable('not_running')
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return unavailable('operator_unavailable')
+        try:
+            payload = client.get_vpn_node_status(service.helm_namespace, service.helm_release_name)
+        except PaaSOperatorError as exc:
+            # 舊 operator 沒有這個端點（404）也走這裡；只記類型，不把 operator 的訊息放到租戶畫面。
+            _logger.warning(
+                'VPN node status unavailable for service %s (%s, HTTP %s)',
+                service.id, type(exc).__name__, getattr(exc, 'status_code', None))
+            return unavailable('operator_unavailable')
+        finally:
+            client._session.close()
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        report = _vpn_node_status.public_report(
+            payload,
+            can_manage=self._can_manage_service(access),
+            control_plane=_vpn_node_status.control_plane_of(service._helm_values_dict()),
+        )
+        if report is None:
+            return unavailable('operator_unavailable')
+        return {'success': True, 'data': {'available': True, 'reason': None, 'report': report}}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None, **kw: Any) -> dict[str, Any]:
@@ -5712,6 +5767,9 @@ class PaasController(HiddenChainMixin, Controller):
                 # ⚠ 前端的 gate 必須讀 `has_public_tunnel_address`，不得用 slug 判
                 # （repo-lint 第 7 條；見 cloud_app_template 同名欄位註解）。
                 'has_public_tunnel_address': service._chart_has_public_tunnel_address(),
+                # INFRA-FIX-005：「VPN 節點狀態」卡的 gate。⚠ 同上，前端只讀這個旗標、不得用 slug 判；
+                # 狀態本身不在 payload 裡，卡片打開時才即時問 `/node-status`（見該端點）。
+                'has_vpn_node_status': service._chart_has_vpn_node_status(),
                 'public_tunnel_label': service.template_id.public_tunnel_label or None,
                 'public_tunnel_url': service.public_tunnel_url or None,
                 # #1559：沒有位址時 ngrok 說得出的原因（已是建立者語言的一句話）。

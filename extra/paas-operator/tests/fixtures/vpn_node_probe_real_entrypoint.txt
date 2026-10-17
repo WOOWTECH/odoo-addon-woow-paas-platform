@@ -1,0 +1,14 @@
+@@woow-status
+{"BackendState":"NeedsLogin","AuthURL":"","TailscaleIPs":["100.64.0.3"],"Self":{"Online":true}}
+
+@@woow-serve
+{"TCP":{"9004":{"TCPForward":"svc-0b4a8def-headscale.paas-ws-5e41efa6.svc.cluster.local:8080"}}}
+
+@@woow-wanted
+9101 no-such-svc.paas-ws-5e41efa6.svc.cluster.local:8080
+[woow-tailscale] serve: skipping '9102=svc-x.other-ns.svc.cluster.local:80': only Services of this namespace (paas-ws-5e41efa6) are allowed
+[woow-tailscale] serve: skipping '9103=10.0.0.5:80': only Services of this namespace (paas-ws-5e41efa6) are allowed
+[woow-tailscale] serve: skipping '70000=a:1': ports must be 1-65535
+9004 svc-0b4a8def-headscale.paas-ws-5e41efa6.svc.cluster.local:8080
+[woow-tailscale] serve: skipping '9004=x:1': tailnet port 9004 is already forwarded
+[woow-tailscale] serve: skipping 'bad': expected <tailnet port>=<service>:<port>

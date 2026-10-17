@@ -10,6 +10,15 @@ import { copyText } from "../../../utils/clipboard";
 import { formatPoints } from "../../../utils/billing_helpers";
 import { hasConfirmedWorkloadFault } from "../../../utils/service_presentation";
 import { ResourceUsage } from "../../../components/resource-usage/ResourceUsage";
+import { useVpnNodeStatus } from "../../../services/vpn_node_status";
+import {
+    forwardRows,
+    hasNodeProblem,
+    loginGuidance,
+    nodeStateHint,
+    nodeStateLabel,
+    nodeStateTone,
+} from "../../../utils/vpn_node_status";
 
 /**
  * OverviewTab Component
@@ -31,11 +40,21 @@ export class OverviewTab extends Component {
         resourcesLoading: { type: Boolean, optional: true },
         resourcesRefreshFailed: { type: Boolean, optional: true },
         resourcesNow: { type: Number, optional: true },
+        workspaceId: { type: [Number, String], optional: true },
     };
 
     setup() {
         // #1310：複製按鈕原本無論成敗都沒有回饋，不支援 Clipboard API 時直接沒反應。
         this.copyState = useState({ copied: null, failed: null });
+        // INFRA-FIX-005：VPN 節點狀態（登入狀態／登入入口／轉發結果）。gate 讀後端的
+        // `has_vpn_node_status`（capability-gate-single-source-field）；沒有這個能力或服務不在
+        // running／upgrading 時 poller 不打任何請求。
+        this.vpn = useVpnNodeStatus(
+            () => this.props.workspaceId ?? this.props.service.workspace_id,
+            () => this.props.service.id,
+            () => this.props.service.has_vpn_node_status === true
+                && ["running", "upgrading"].includes(this.props.service.state),
+        );
     }
 
     get isOnline() {
@@ -64,11 +83,74 @@ export class OverviewTab extends Component {
     get connectionStatus() {
         const { state, last_upgraded_at: lastUpgradedAt } = this.props.service;
         if (state === "running") {
-            return hasConfirmedWorkloadFault(this.props.service) ? "offline" : "online";
+            // INFRA-FIX-005：pod Ready ≠ 節點在線（NeedsLogin 時 pod 仍 Ready）。節點狀態卡讀到
+            // 「需要登入／等待核可／離線／停止」時，這一格不能同時寫 ONLINE。
+            if (hasConfirmedWorkloadFault(this.props.service) || hasNodeProblem(this.vpn.state.report)) {
+                return "offline";
+            }
+            return "online";
         }
         if (state === "upgrading") return "updating";
         if (["deploying", "initializing"].includes(state) && lastUpgradedAt) return "updating";
         return "offline";
+    }
+
+    // ---- INFRA-FIX-005：VPN 節點狀態卡 ------------------------------------------------
+    get vpnReport() {
+        return this.props.service.has_vpn_node_status ? this.vpn.state.report : null;
+    }
+
+    get vpnCanManage() {
+        return this.props.service.viewer_can_manage === true;
+    }
+
+    get vpnStateLabel() {
+        return nodeStateLabel(this.vpnReport?.state);
+    }
+
+    get vpnStateTone() {
+        return nodeStateTone(this.vpnReport?.state);
+    }
+
+    get vpnStateHint() {
+        return nodeStateHint(this.vpnReport);
+    }
+
+    get vpnLoginGuidance() {
+        return loginGuidance(this.vpnReport, this.vpnCanManage);
+    }
+
+    get vpnForwardRows() {
+        return forwardRows(this.vpnReport);
+    }
+
+    get vpnTailnetAddress() {
+        const report = this.vpnReport;
+        return report && report.tailnet_ips && report.tailnet_ips.length ? report.tailnet_ips.join(", ") : "";
+    }
+
+    get vpnCardTitle() {
+        return _t("VPN node status");
+    }
+
+    get vpnStateRowLabel() {
+        return _t("Node");
+    }
+
+    get vpnAddressRowLabel() {
+        return _t("Tailnet address");
+    }
+
+    get vpnForwardsRowLabel() {
+        return _t("Forwards");
+    }
+
+    get vpnNoForwardsText() {
+        return _t("No forwards are configured.");
+    }
+
+    get vpnLoadingText() {
+        return _t("Reading the node status...");
     }
 
     get subscription() {

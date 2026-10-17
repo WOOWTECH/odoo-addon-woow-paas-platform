@@ -66,12 +66,29 @@ async function readComponent(relativePath) {
 const overviewTabSource = await readComponent("pages/service/tabs/OverviewTab.js");
 const workspacePageSource = await readComponent("pages/workspace/WorkspaceDetailPage.js");
 
+// INFRA-FIX-005：connectionStatus 另外讀 VPN 節點狀態（hasNodeProblem、this.vpn.state.report）。
+// 這支測試的對象是 #1647 的 workload 訊號，節點狀態一律「沒有報告」（report: null）；
+// 節點狀態讓路的行為由 test_vpn_node_status_fix005.mjs 驗。
+const vpnHelperUrl = new URL("../../src/static/src/paas/utils/vpn_node_status.js", import.meta.url);
+const vpnHelper = await import(
+  `data:text/javascript;base64,${Buffer.from(
+    (await readFile(vpnHelperUrl, "utf8")).replace(
+      'import { _t } from "@web/core/l10n/translation";',
+      "const _t = (message) => message;",
+    ),
+  ).toString("base64")}`
+);
+
 /** OverviewTab 的 connectionStatus getter，接上真的 hasConfirmedWorkloadFault。 */
 const connectionStatusOf = (service) =>
   new Function(
     "hasConfirmedWorkloadFault",
+    "hasNodeProblem",
     `return function () {${getterBody(overviewTabSource, "connectionStatus")}};`,
-  )(presentation.hasConfirmedWorkloadFault).call({ props: { service } });
+  )(presentation.hasConfirmedWorkloadFault, vpnHelper.hasNodeProblem).call({
+    props: { service },
+    vpn: { state: { report: null } },
+  });
 
 /** WorkspaceDetailPage 的 computedStats getter，接上真的 countServiceHealth；回 {Healthy, Alerts}。 */
 const workspaceStatsOf = (services) => {

@@ -16,6 +16,9 @@ _logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
 # Resource observations are an interactive, read-only request, not a Helm job.
 RESOURCE_OBSERVATION_TIMEOUT = 10
+# INFRA-FIX-005：VPN 節點狀態是 operator 對 pod 的一次 exec＋一次 get services（各自 ≤15／8 秒上限），
+# 服務頁每 30 秒問一次；比 DEFAULT_TIMEOUT 短，卡住就降級成「讀不到」而不是拖住頁面。
+VPN_NODE_STATUS_TIMEOUT = 20
 # Longer timeout for helm operations that may take time
 HELM_OPERATION_TIMEOUT = 120
 # #1152：init 專屬 connect/read inactivity 預算，不連帶放大其他操作或 connect 等待。
@@ -1166,6 +1169,22 @@ class PaaSOperatorClient:
             'POST', f'/api/namespaces/{namespace}/resource-observations',
             data={'release_names': release_names},
             timeout=(2, RESOURCE_OBSERVATION_TIMEOUT),
+        )
+
+    def get_vpn_node_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態——唯讀，不碰 Helm 操作預算。
+
+        閘門是 ``CloudService._chart_has_vpn_node_status``（``cloud_app_template.has_vpn_node_status``），
+        呼叫端不要在這裡自建判準。回應是 operator 的封閉集合代碼（``probe``、``backend_state``、
+        ``login.kind``…），形狀由 ``services/vpn_node_status.public_report`` 再驗一次才給前端。
+        ``probe != 'ok'`` 是正常降級（pod 還沒起來、容器重啟中），不是錯誤。
+
+        Raises:
+            PaaSOperatorError: operator 本身失敗（舊 operator 沒有這個端點會是 404）
+        """
+        return self._request(
+            'GET', f'/api/releases/{namespace}/{release_name}/vpn-node-status',
+            timeout=(2, VPN_NODE_STATUS_TIMEOUT),
         )
 
     def get_status(

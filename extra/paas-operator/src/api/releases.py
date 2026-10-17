@@ -34,8 +34,10 @@ from src.models.schemas import (
     RouteUnparkRequest,
     SidecarPatchRequest,
     SidecarPatchResponse,
+    VpnNodeStatusResponse,
 )
 from src.services import compute_quota
+from src.services import vpn_node_status
 from src.services.cloudflare import (
     REFUSED_FOREIGN,
     REFUSED_MULTIPLE_TARGETS,
@@ -52,7 +54,7 @@ from src.services.helm import (
     KubectlException,
     KubernetesService,
 )
-from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values
+from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values, validate_label_value
 from src.services.helm_limiter import helm_operation_slot
 from src.services.ngrok_errors import describe_ngrok_error
 from src.services.upgrade_preflight import (
@@ -1692,6 +1694,33 @@ def get_mqtt_address(namespace: str, name: str):
     return MqttAddressResponse(
         public_url=_read_advertised_address(namespace, name, ("tcp",))[0]
     )
+
+
+@router.get(
+    "/{namespace}/{name}/vpn-node-status",
+    response_model=VpnNodeStatusResponse,
+    summary="[INFRA-FIX-005] Live status of a VPN node (charts/tailscale): login state, login entrance, serve forwards",
+)
+def get_vpn_node_status(namespace: str, name: str):
+    """VPN 節點的即時狀態（唯讀；見 ``src/services/vpn_node_status.py``）。
+
+    平台的 ``state`` 只看 pod Ready，而 chart 把 NeedsLogin 也當 Ready，所以節點被控制面到期／
+    刪除後平台仍顯示 running。這支現場問 pod 的 ``tailscaled``：BackendState、登入入口、實際生效的
+    serve 轉發，以及 entrypoint 略過的轉發與原因（封閉代碼）。
+
+    ``probe != "ok"``（pod 還沒起來、容器重啟中…）是正常降級，仍回 200；只有 namespace 越界是 403。
+    永不回原始 log／stderr，也不回叢集內部的登入網址（只回註冊碼）。
+
+    Raises:
+        HTTPException: 403 namespace 越界、422 release 名不是合法的 label 值
+    """
+    _validate_namespace_or_raise(namespace)
+    try:
+        # release 名會進 label selector：先驗語法，不合法的名字不送進 kubectl。
+        validate_label_value("app.kubernetes.io/instance", name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    return VpnNodeStatusResponse(**vpn_node_status.collect(k8s_service, namespace, name))
 
 
 @router.get(

@@ -1153,6 +1153,72 @@ class MqttAddressResponse(BaseModel):
     )
 
 
+class VpnNodeLogin(BaseModel):
+    """INFRA-FIX-005：節點需要登入時的登入入口（見 ``src/services/vpn_node_status.py``）。"""
+
+    kind: Literal["none", "external_url", "cluster_internal"] = "none"
+    url: Optional[str] = Field(
+        default=None,
+        description="只在 kind=external_url 時有值（瀏覽器打得開的登入網址）；叢集內部網址一律不回",
+    )
+    register_key: Optional[str] = Field(
+        default=None,
+        description="kind=cluster_internal 且網址是 /register/<id> 時的註冊碼（待核可節點的識別，不是憑證）",
+    )
+
+
+class VpnNodeForward(BaseModel):
+    """一個 ``tailscale.serve`` 轉發項目的現況。"""
+
+    port: int
+    service: Optional[str] = None
+    target_port: Optional[int] = None
+    status: Literal[
+        "applied", "not_applied", "service_missing", "mismatch", "unverified",
+    ]
+
+
+class VpnNodeSkippedForward(BaseModel):
+    """被 entrypoint 略過的轉發項目（entry 是租戶自己填的那一段，限長限字元）。"""
+
+    entry: str
+    reason: Literal[
+        "bad_format", "port_range", "other_namespace", "not_service_name",
+        "duplicate_port", "too_many", "namespace_unknown", "other",
+    ]
+
+
+class VpnNodeServe(BaseModel):
+    wanted_known: bool = Field(
+        description="False＝映像沒有 /entrypoint.sh 的 parse_serve，只能列出實際生效的轉發")
+    forwards: List[VpnNodeForward] = Field(default_factory=list)
+    skipped: List[VpnNodeSkippedForward] = Field(default_factory=list)
+    ignored_all: Optional[Literal["namespace_unknown"]] = None
+    extra_config: bool = Field(
+        default=False, description="node 的 serve 設定含 TCP 轉發以外的項目（Web／Funnel…）")
+
+
+class VpnNodeStatusResponse(BaseModel):
+    """INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態，全部是封閉集合的代碼與限長欄位。
+
+    ``probe != "ok"`` 是**正常的降級**（pod 還沒起來、容器正在重啟、tailscaled 還沒開），
+    HTTP 仍是 200；呼叫端不得把它當成 5xx。永不回原始 log／stderr。
+    """
+
+    probe: Literal["ok", "no_pod", "pod_not_running", "exec_failed", "no_output"]
+    pod: Optional[str] = None
+    backend_state: Literal[
+        "NoState", "NeedsLogin", "NeedsMachineAuth", "Stopped", "Starting", "Running", "Unknown",
+    ] = "Unknown"
+    online: Optional[bool] = None
+    tailnet_ips: List[str] = Field(default_factory=list)
+    dns_name: Optional[str] = None
+    login: VpnNodeLogin = Field(default_factory=VpnNodeLogin)
+    health_warnings: int = 0
+    serve: VpnNodeServe = Field(
+        default_factory=lambda: VpnNodeServe(wanted_known=False))
+
+
 class ErrorResponse(BaseModel):
     """Error response.
 
