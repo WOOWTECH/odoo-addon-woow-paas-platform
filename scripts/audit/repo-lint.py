@@ -666,10 +666,11 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      實作見 scripts/audit/newapi_timeout_ladder.py：每個 TIMEOUT_* 送出的
                      X-Woow-Read-Timeout（read − 餘裕）落在代理 _READ_TIMEOUT_RE 的範圍且嚴格
                      小於 read、client 夾值＝代理上限、建金鑰預算與開戶 tick 各容得下一次完整呼叫、
-                     lease 長於最壞的 tick、client 方法 → 逾時類別對 baseline json；前端那一半
+                     lease 長於最壞的 tick、其他 LLM cron 的 tick（CRON_TICK_SECONDS，LLM-02b）容得下
+                     一次 cron 讀取且不超過開戶 tick、client 方法 → 逾時類別對 baseline json；前端那一半
                      （LLM-01c）：llm_service.js 的 KEY_CREATE_TIMEOUT_MS 大於後端建金鑰預算＋一次
                      呼叫、rpc.js 預設逾時大於互動讀／寫一次呼叫、建金鑰的呼叫一定帶那個具名常數。
-                     依據 DESIGN §1.2、§3.5（〔REV〕63）；票 LLM-01b、LLM-01c。
+                     依據 DESIGN §1.2、§3.5（〔REV〕63）；票 LLM-01b、LLM-01c、LLM-02b。
 
 用法：
 

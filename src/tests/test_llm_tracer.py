@@ -52,11 +52,13 @@ from ..models import llm_common
 from ..models.llm_account import ACCOUNT_TABLE, PROVISION_CRON_XMLID, _LeaseLost
 from ..models.llm_api_key import _STALE_CREATING_SECONDS, KEY_TABLE
 from ..models.llm_common import LlmError, _llm_internal
+from ..models.llm_event import LlmAlert, LlmIncident
 from ..services import llm_crypto
 from ..services import newapi_client as nac
 from .llm_fake_newapi import FakeNewApi, SimulatedCrash
 from .llm_test_support import (
     ACCOUNT,
+    EVENT,
     KEY,
     TEST_BLOCK,
     TEST_PREFIX,
@@ -289,18 +291,30 @@ class TestLlmModelGuards(TransactionCase):
 class TestLlmCronContract(TransactionCase):
     """finding 18：``llm_cron.xml`` 是 noupdate，發版的 ``-u`` 不會改 DB 裡的 code。
 
-    方法名與所在 model 是凍結契約；這裡斷言**已安裝 DB** 裡的值（不是 XML）。
+    方法名與所在 model 是凍結契約；這裡斷言**已安裝 DB** 裡的值（不是 XML）。LLM-02b 起逐支看
+    ``llm_common.LLM_CRONS``，另外反查：DB 裡掛在 LLM model 上的 cron 都要在登記表裡。
     """
 
     def test_installed_cron_calls_the_current_method_as_superuser(self):
-        cron = self.env.ref(PROVISION_CRON_XMLID)
-        self.assertEqual(cron.model_id.model, ACCOUNT)
-        self.assertEqual(cron.code.strip(), 'model._cron_llm_provision()')
-        self.assertTrue(callable(getattr(type(self.env[ACCOUNT]), '_cron_llm_provision', None)))
-        # llm_account 沒有任何群組的 write ACL；ir.actions.server.run() 對非 superuser 會先
-        # check_access('write') ⇒ cron 的執行者必須是 superuser。
-        self.assertEqual(cron.user_id.id, 1)
-        self.assertTrue(cron.active, '_trigger() 對停用的 cron 不建立立即觸發（被測試停住沒還原？）')
+        self.assertIn(PROVISION_CRON_XMLID, llm_common.LLM_CRONS)
+        for xmlid, (model, method) in sorted(llm_common.LLM_CRONS.items()):
+            with self.subTest(cron=xmlid):
+                cron = self.env.ref(xmlid)
+                self.assertEqual(cron.model_id.model, model)
+                self.assertEqual(cron.code.strip(), 'model.%s()' % method)
+                self.assertTrue(callable(getattr(type(self.env[model]), method, None)))
+                # LLM model 沒有任何群組的 write ACL；ir.actions.server.run() 對非 superuser 會先
+                # check_access('write') ⇒ cron 的執行者必須是 superuser。
+                self.assertEqual(cron.user_id.id, 1)
+                self.assertTrue(cron.active,
+                                '_trigger() 對停用的 cron 不建立立即觸發（被測試停住沒還原？）')
+
+    def test_every_llm_cron_is_registered(self):
+        registered = {self.env.ref(xmlid).id for xmlid in llm_common.LLM_CRONS}
+        on_llm_models = self.env['ir.cron'].with_context(active_test=False).sudo().search(
+            [('model_id.model', '=like', 'woow_paas_platform.llm_%')])
+        self.assertEqual(set(on_llm_models.ids), registered,
+                         '新的 LLM cron 要登記在 llm_common.LLM_CRONS（凍結契約與零外呼的測試以它為準）')
 
 
 # ====================================================================== #
@@ -324,21 +338,41 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         def forbidden(*args, **kwargs):
             raise AssertionError('outbound HTTP in an unconfigured DB')
         incident_count = self.env['woow.billing.incident'].sudo().search_count([])
-        cron = self.env.ref(PROVISION_CRON_XMLID).sudo()
+        event_count = self.env[EVENT].sudo().search_count([])
+        mail_count = self.env['mail.mail'].sudo().search_count([])
         Account = type(self.env[ACCOUNT])
+        Event = type(self.env[EVENT])
         with patch('requests.sessions.Session.request', side_effect=forbidden) as http, \
                 patch.object(Account, '_llm_client') as client, \
                 patch.object(Account, '_llm_claim_for_provision',
-                             side_effect=AssertionError('claimed an account')) as claim:
+                             side_effect=AssertionError('claimed an account')) as claim, \
+                patch.object(Account, '_llm_balance_refresh_tick',
+                             side_effect=AssertionError('balance refresh ran')) as refresh, \
+                patch.object(Event, '_llm_event_cleanup_tick',
+                             side_effect=AssertionError('event cleanup ran')) as cleanup, \
+                patch.object(Event, '_llm_alert_delivery_tick',
+                             side_effect=AssertionError('alert delivery ran')) as delivery:
             # 「手動觸發」＝跑 cron 的 server action（與 method_direct_trigger 同一段 code、同一
             # 個執行者），但不經 _try_lock：live server 剛好在跑同一支 cron 時不會 UserError。
-            cron.ir_actions_server_id.with_user(cron.user_id).run()
-            self.env[ACCOUNT]._cron_llm_provision()
+            for xmlid, (model, method) in sorted(llm_common.LLM_CRONS.items()):
+                cron = self.env.ref(xmlid).sudo()
+                cron.ir_actions_server_id.with_user(cron.user_id).run()
+                getattr(self.env[model], method)()
+            # 告警與 incident helper 本身也是第二道（N27）：未設定時什麼都不寫。
+            self.assertFalse(self.env[EVENT]._llm_alert(LlmAlert.TEST))
+            self.assertFalse(self.env[EVENT]._llm_incident(
+                LlmIncident.ACCOUNT_ERROR, account_id=self.account.id,
+                error_code=llm_common.ERR_LLM_INTERNAL))
         self.assertFalse(client.called, 'cron 建了 client')
         self.assertFalse(claim.called, 'cron 搶了戶')
+        self.assertFalse(refresh.called, '未設定時餘額刷新不能跑')
+        self.assertFalse(cleanup.called, '未設定時清理也不跑（所有 LLM cron 一致）')
+        self.assertFalse(delivery.called, '未設定時 webhook 也不送')
         self.assertFalse(http.called)
         self.assertEqual(self.env['woow.billing.incident'].sudo().search_count([]),
                          incident_count)
+        self.assertEqual(self.env[EVENT].sudo().search_count([]), event_count, '0 筆 llm_event')
+        self.assertEqual(self.env['mail.mail'].sudo().search_count([]), mail_count, '0 封信')
         self.account.invalidate_recordset()
         self.assertEqual((self.account.state, self.account.provision_attempts,
                           self.account.provision_lease_token),
@@ -361,11 +395,21 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         """陽性對照：設定齊全時同一支 cron 確實會建 client、也會去搶戶（否則上面三格是假綠）。"""
         configure(self.env, prefix='wp', block=0)
         Account = type(self.env[ACCOUNT])
+        Event = type(self.env[EVENT])
         with patch.object(Account, '_llm_client') as client, \
-                patch.object(Account, '_llm_claim_for_provision', return_value=None) as claim:
+                patch.object(Account, '_llm_claim_for_provision', return_value=None) as claim, \
+                patch.object(Account, '_llm_balance_refresh_tick', return_value=False) as refresh, \
+                patch.object(Event, '_llm_event_cleanup_tick', return_value=False) as cleanup, \
+                patch.object(Event, '_llm_alert_delivery_tick', return_value=False) as delivery:
             self.env[ACCOUNT]._cron_llm_provision()
+            self.env[ACCOUNT]._cron_llm_balance_refresh()
+            self.env[EVENT]._cron_llm_event_cleanup()
+            self.env[EVENT]._cron_llm_alert_delivery()
         client.assert_called_once_with(nac.ROLE_CRON)
         claim.assert_called_once()
+        refresh.assert_called_once()
+        cleanup.assert_called_once()
+        delivery.assert_called_once()
 
 
 # ====================================================================== #
@@ -388,6 +432,11 @@ class TestLlmSigningKeyFailClosed(TransactionCase):
         self.client = LlmClientAdapter(self, self.fake, full_factory=True)
         partner = self.env['res.partner'].create({'name': 'llm signing key'})
         self.account = self.env[ACCOUNT]._llm_activate(partner, TOS, None, '')
+        # TransactionCase：告警 helper 的獨立 cursor 是真的第二條連線，會真的 commit 進共用 DB。
+        # 這裡只斷言「有告警、碼對」（告警本身在 test_llm_platform_foundation 驗）。
+        alert = patch.object(type(self.env[EVENT]), '_llm_alert', return_value=False)
+        self.alert = alert.start()
+        self.addCleanup(alert.stop)
 
     def test_trailing_newline_is_stripped_and_still_signs(self):
         good = os.environ[nac.ENV_AUTH_CRON]
@@ -399,6 +448,7 @@ class TestLlmSigningKeyFailClosed(TransactionCase):
             self.env[ACCOUNT]._cron_llm_provision()
         claim.assert_called_once()
         self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON])
+        self.assertFalse(self.alert.called)
 
     def test_malformed_cron_key_fails_closed_before_claiming(self):
         embedded, parts = _broken_signing_value('kcron')
@@ -416,6 +466,11 @@ class TestLlmSigningKeyFailClosed(TransactionCase):
             self.assertFalse(claim.called)
         self.assertFalse(self.fake.calls)
         self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_CRON])
+        # 設定類的 fail closed 一律告警（審查 LLM-02b finding 2）；碼是封閉的，不帶值。
+        self.assertEqual(
+            [(c.args, c.kwargs) for c in self.alert.call_args_list],
+            [((LlmAlert.CONFIG_UNAVAILABLE,),
+              {'error_code': llm_common.CONFIG_PROXY_AUTH_UNAVAILABLE})] * 2)
         self.account.invalidate_recordset()
         self.assertEqual((self.account.state, self.account.provision_attempts,
                           self.account.provision_lease_token), ('provisioning', 0, False))
@@ -433,6 +488,9 @@ class TestLlmNeutralize(TransactionCase):
 
     def test_neutralize_sql_llm_section(self):
         configure(self.env, canary='7')
+        icp = self.env['ir.config_parameter'].sudo()
+        icp.set_param(llm_common.PARAM_ALERT_EMAIL, 'owner@example.com')
+        icp.set_param(llm_common.PARAM_ALERT_WEBHOOK_URL, 'https://hooks.example.com/llm')
         Account = _llm_internal(self.env[ACCOUNT].sudo())
         live = Account.create({'partner_id': self.env['res.partner'].create({'name': 'n1'}).id})
         empty = Account.create({'partner_id': self.env['res.partner'].create({'name': 'n2'}).id})
@@ -453,11 +511,14 @@ class TestLlmNeutralize(TransactionCase):
         self.env.cr.execute(
             'SELECT key, value FROM ir_config_parameter WHERE key IN %s',
             ((llm_common.PARAM_PROXY_URL, llm_common.PARAM_SHOW_LLM,
-              llm_common.PARAM_CANARY_PARTNER_ID),))
+              llm_common.PARAM_CANARY_PARTNER_ID, llm_common.PARAM_ALERT_EMAIL,
+              llm_common.PARAM_ALERT_WEBHOOK_URL),))
         self.assertEqual(dict(self.env.cr.fetchall()), {
             llm_common.PARAM_PROXY_URL: nac.PROXY_URL_BLACKHOLE,
             llm_common.PARAM_SHOW_LLM: 'False',
-            llm_common.PARAM_CANARY_PARTNER_ID: ''})
+            llm_common.PARAM_CANARY_PARTNER_ID: '',
+            llm_common.PARAM_ALERT_EMAIL: '',
+            llm_common.PARAM_ALERT_WEBHOOK_URL: ''})
         self.env.registry.clear_cache()
         self.assertTrue(llm_common.llm_unconfigured(self.env))
         # prod-clone 斷言（assertions.toml E05）的同一條 SQL

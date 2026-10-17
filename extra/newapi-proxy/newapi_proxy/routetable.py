@@ -6,7 +6,8 @@ its body policy. Anything not listed is 403 ``policy`` — in particular
 ``/v1/*``, ``/pg/*``, ``/api/option/*`` (except op's GET), ``/api/channel/*``,
 ``/api/redemption/*``, ``/api/user/topup*`` and ``/api/user/auth/*``.
 
-LLM-01a ships the routes the tracer needs; LLM-02 completes the table.
+LLM-01a ships the routes the tracer needs; LLM-02b adds ``GET /api/user/`` (ap) for the
+balance refresh; LLM-02 completes the table.
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ _LOG_TYPE = re.compile(r"[0-9]{1,2}", re.ASCII)
 _MODEL = re.compile(r"[A-Za-z0-9._:/-]{1,128}", re.ASCII)
 _GROUP = re.compile(r"default|free", re.ASCII)
 _REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}", re.ASCII)
+_SORT_BY_ID = re.compile(r"id", re.ASCII)
+_SORT_ORDER = re.compile(r"asc|desc", re.ASCII)
 
 PAGING = {"p": _P, "page_size": _PAGE_SIZE}
 LOG_SELF_QUERY = {
@@ -87,6 +90,15 @@ ROUTES: tuple[Route, ...] = (
     _r("op.options", "GET", "/api/option/", {"op"}),
     # ap: admin service account
     _r("ap.user.create", "POST", "/api/user/", {"ap"}, body="json", body_policy=policy.user_create),
+    # LLM-02b: the 10-minute balance refresh reads every user page by page (DESIGN §1.3.6);
+    # PaaS filters its own environment's usernames. Sorting only by id keeps pages stable.
+    _r(
+        "ap.user.list",
+        "GET",
+        "/api/user/",
+        {"ap"},
+        query={**PAGING, "sort_by": _SORT_BY_ID, "sort_order": _SORT_ORDER},
+    ),
     _r(
         "ap.user.search",
         "GET",
