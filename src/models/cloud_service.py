@@ -2844,9 +2844,9 @@ class CloudService(models.Model):
         # 欄位，這裡是第二道防線（本 method 還有別的 caller 時也守得住）。
         # 只擋「有供給、但不能重設」：has_admin_gui=False 的授權一直由 controller
         # 負責（model 端既有行為不變，縱深測試直接呼叫本 method 驗 state 守衛）。
-        # #1370 後續：omnigent 現在 admin_reset_supported=True，但那是 omnigent_exec
-        # （_reset_app_admin_password）的能力；helm 這條對 app_managed 仍然是假裝成功，
-        # 所以載體本身也要擋。
+        # #1370 後續：omnigent（#1774 起還有 EMQX）現在 admin_reset_supported=True，但那是
+        # omnigent_exec／emqx_exec（_reset_app_admin_password）的能力；helm 這條對
+        # app_managed 仍然是假裝成功，所以載體本身也要擋。
         if self.template_id.has_admin_gui and (
                 not self.template_id.admin_reset_supported
                 or self.template_id.admin_password_carrier == 'app_managed'):
@@ -3179,9 +3179,27 @@ class CloudService(models.Model):
             "Reset failed and the password was not changed. Check the service status "
             "and try again.")
 
+    @staticmethod
+    def _emqx_password_is_legal(password):
+        """EMQX 5.8 emqx_dashboard_admin:legal_password 的規則：8–64 個可見 ASCII 字元，且
+        字母／數字／符號至少兩類（#1774；沙盒以平台釘的 5.8.9 實測）。
+
+        ``_generate_admin_password`` 的 token_urlsafe(24) 約有 0.1% 全是字母——那一把送去
+        EMQX 會被拒（``Error: Bad password``），租戶就撞到一次莫名的「重設失敗」。
+        """
+        if not isinstance(password, str) or not 8 <= len(password) <= 64:
+            return False
+        if any(not 33 <= ord(ch) <= 126 for ch in password):
+            return False
+        kinds = {
+            'alpha' if ch.isalpha() else 'digit' if ch.isdigit() else 'symbol'
+            for ch in password
+        }
+        return len(kinds) >= 2
+
     def _reset_app_admin_password(self):
         """#1370／#1186：重設 app 自管的管理員密碼（Odoo base.user_admin／n8n owner／
-        Omnigent admin）。
+        Omnigent admin／EMQX Dashboard admin（#1774））。
 
         與 ``_reset_admin_password``（helm Secret／config.json）是兩條不同的契約：這兩個
         app 的密碼權威在 app 自己的 DB，operator exec 一支腳本直接改，**不 helm
@@ -3211,7 +3229,7 @@ class CloudService(models.Model):
         )
 
         kind = self.template_id.app_admin_reset_kind or 'none'
-        if kind not in ('odoo_exec', 'n8n_exec', 'omnigent_exec'):
+        if kind not in ('odoo_exec', 'n8n_exec', 'omnigent_exec', 'emqx_exec'):
             raise UserError(_("This service does not support resetting its admin password."))
 
         # 同 _reset_admin_password：列鎖序列化同一台服務的並發 Reset。
@@ -3244,10 +3262,17 @@ class CloudService(models.Model):
             raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         new_password = self._generate_admin_password()
+        if kind == 'emqx_exec':
+            # EMQX 自己會擋「只有一類字元」的密碼：重鑄到合規為止（仍走唯一生成點）。
+            for _attempt in range(20):
+                if self._emqx_password_is_legal(new_password):
+                    break
+                new_password = self._generate_admin_password()
         reset = {
             'odoo_exec': client.reset_odoo_admin_password,
             'n8n_exec': client.reset_n8n_owner_password,
             'omnigent_exec': client.reset_omnigent_admin_password,
+            'emqx_exec': client.reset_emqx_admin_password,
         }[kind]
         unknown_message = _(
             "Reset status unknown — the request timed out before the service confirmed "
@@ -3304,9 +3329,10 @@ class CloudService(models.Model):
         # ================= 提交點之後：只剩記帳（#525 B3） =================
         try:
             with self.env.cr.savepoint():
-                if kind in ('odoo_exec', 'omnigent_exec'):
-                    # omnigent：chart Secret 的 admin_password 只在首次開機用；存回憑證記錄
-                    # 讓平台與 app 一致（redeploy 重送也是 no-op）。
+                if kind in ('odoo_exec', 'omnigent_exec', 'emqx_exec'):
+                    # omnigent／EMQX：chart Secret 的 admin_password 只在首次開機用；存回憑證
+                    # 記錄讓平台與 app 一致（下次 redeploy 把同一組值帶進 chart Secret，對已
+                    # 開機的 app 是 no-op；資料磁碟重建時首次開機也會用這組新值）。
                     self._set_admin_password_secret(new_password)
                 else:
                     vals = {'n8n_owner_password': new_password}

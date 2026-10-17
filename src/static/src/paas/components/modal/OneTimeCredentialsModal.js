@@ -26,7 +26,8 @@ export class OneTimeCredentialsModal extends Component {
         // "in_place"（#1370：Odoo／n8n 的 Reset 直接改 app DB，不重啟、立刻生效）。
         mode: { type: String, optional: true, validate: (m) => ["provision", "reset", "in_place"].includes(m) },
         // in_place 的後果依 app 而異（鏡射 template.app_admin_reset_kind）：Odoo／n8n 會登出
-        // 舊 session 並關 2FA；Omnigent（omnigent_exec）與上游 Members → Reset 一樣，不登出。
+        // 舊 session 並關 2FA；Omnigent（omnigent_exec）與上游 Members → Reset 一樣，不登出；
+        // EMQX（emqx_exec，#1774）登出已登入的 Dashboard，但開源版沒有 2FA 可關。
         appResetKind: { type: String, optional: true },
     };
     static defaultProps = { mode: "reset" };
@@ -55,6 +56,9 @@ export class OneTimeCredentialsModal extends Component {
     get statusHint() {
         if (this.props.mode === "in_place" && this.props.appResetKind === "omnigent_exec") {
             return _t("The new password works right away; the service does not restart. Devices that are already signed in stay signed in.");
+        }
+        if (this.props.mode === "in_place" && this.props.appResetKind === "emqx_exec") {
+            return _t("The new password works right away; the service does not restart. Anyone signed in to the dashboard with the old password is signed out.");
         }
         if (this.props.mode === "in_place") {
             return _t("The new password works right away; the service does not restart. Devices signed in with the old password are signed out, and two-factor sign-in has been turned off — turn it on again after you sign in.");
@@ -107,9 +111,9 @@ export function buildOneTimeCredentials(data) {
     if (data && data.admin_password && data.template
             && data.template.app_admin_reset_kind
             && data.template.app_admin_reset_kind !== "none") {
-        // Omnigent 的帳號由 chart 固定（admin）；後端沒帶時沿用 app_managed 分支的同一個預設。
-        const username = data.admin_username
-            || (data.template.app_admin_reset_kind === "omnigent_exec" ? "admin" : null);
+        // Omnigent／EMQX 的帳號由 chart 固定（admin）；後端沒帶時沿用 app_managed 分支的同一個預設。
+        const chartFixedAdmin = ["omnigent_exec", "emqx_exec"].includes(data.template.app_admin_reset_kind);
+        const username = data.admin_username || (chartFixedAdmin ? "admin" : null);
         if (username) {
             credentials.push({
                 label: _t("Username"),

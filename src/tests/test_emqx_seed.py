@@ -10,9 +10,10 @@ authtoken 的過濾器、ngrok.remoteAddr 不再 render 進 shell（#1613））�
 
 核心守線：
 1. **app_managed**：EMQX 的 ``dashboard.default_password`` 依官方文件「只在第一次開機生效、
-   之後變更一律忽略」，首次登入還會強制改密碼 ⇒ 平台只供給初始值、**不得**宣稱可重設。
+   之後變更一律忽略」⇒ 平台只透過 chart 供給初始值，helm 那條**不得**宣稱可重設。
    carrier 選錯的代價不對稱（helm_secret 誤標＝helm upgrade 成功但密碼沒變＝假裝成功），
-   所以這條用三個欄位一起釘：carrier / settable / reset_supported。
+   所以這條用多個欄位一起釘：carrier / settable / reset kind。#1774 起 Reset 走 operator
+   exec ``emqx ctl admins passwd``（app_admin_reset_kind=emqx_exec），不經 helm。
 2. **上架前提**：image 雙釘 ``tag@sha256``（emqx 與 ngrok 兩顆都要）。2026-10-02 鏡像落地後已公開上架，
    ``test_hidden_until_mirror_lands`` 從此是實際生效的守線（``is_hidden=False`` ⟹ 兩顆都要釘）。
 3. **規格對帳**：1 vCPU / 2 Gi / 3 Gi ——template min_*、plan cs_*、chart 兩顆 PVC 加總三處一致。
@@ -103,15 +104,32 @@ class TestEmqxSeed(TransactionCase):
         self.assertIn('不會被覆蓋', desc, 'chart 走 base.hocon 預設值：租戶改的設定要保證留著')
 
 
-    def test_platform_cannot_reset_credentials(self):
-        """EMQX 首開之後密碼活在它自己的資料庫，平台重設只會「假裝成功」。"""
+    def test_platform_resets_via_emqx_ctl_not_helm(self):
+        """EMQX 首開之後密碼活在它自己的資料庫：helm 那條重設只會「假裝成功」，所以 carrier
+        維持 app_managed；#1774 起 Reset 改由 operator exec ``emqx ctl admins passwd``
+        （app_admin_reset_kind=emqx_exec），擁有者忘記密碼時在服務頁就能救回。"""
         tpl = self._tpl()
         self.assertTrue(tpl.has_admin_gui, '平台要供給初始 dashboard 密碼')
         self.assertEqual(tpl.admin_password_carrier, 'app_managed')
-        self.assertFalse(tpl.admin_reset_supported)
+        self.assertEqual(tpl.app_admin_reset_kind, 'emqx_exec')
+        self.assertTrue(tpl.admin_reset_supported, '服務頁要有 Reset Admin Password')
         self.assertFalse(tpl.admin_password_settable)
-        self.assertFalse(tpl.admin_credentials_settable)
+        self.assertFalse(tpl.admin_credentials_settable, '只有 Reset，不開放租戶自設')
         self.assertFalse(tpl.admin_username_helm_path)
+
+    def test_description_explains_reset_and_single_admin_level(self):
+        """#1774（INFRA-EMQX-007-1／-3）：說明要講出忘記密碼怎麼救、以及 CE 沒有唯讀角色。
+
+        EMQX 開源版沒有 RBAC：Dashboard 使用者與 API 金鑰的 role=viewer 會被接受，但實際擁有
+        完整寫入權限（實測 viewer 帳號 POST /rules 回 201）。上游行為、chart 修不了，只能明講，
+        免得租戶以為建了「唯讀」帳號或金鑰。
+        """
+        desc = self._tpl().full_description
+        self.assertNotIn('平台事後無法代為重設', desc, '#1774 起平台可以重設')
+        self.assertIn('重設管理員密碼', desc, '要指到服務頁的 Reset 按鈕')
+        self.assertIn('唯讀', desc)
+        self.assertIn('viewer', desc)
+        self.assertIn('完整管理權限', desc)
 
     def test_images_from_jcr_and_double_pinned(self):
         v = self._values()

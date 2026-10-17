@@ -606,12 +606,16 @@ class CloudAppTemplate(models.Model):
     # （admin_password_carrier=app_managed，chart 只在首次開機建 admin），之後的 Reset 由
     # operator exec 改 omnigent 自己的 DB——所以它是唯一允許與 has_admin_gui 並存的 kind，
     # 且只限 app_managed（見 _check_app_admin_reset_kind）。
+    # emqx_exec（#1774）：同 omnigent——EMQX 的 dashboard.default_password 只在首次開機
+    # 生效（app_managed 供給初始值），之後由 operator exec ``emqx ctl admins passwd`` 重設。
+    _APP_MANAGED_EXEC_RESET_KINDS = ('omnigent_exec', 'emqx_exec')
     app_admin_reset_kind = fields.Selection(
         selection=[
             ('none', 'None'),
             ('odoo_exec', 'Odoo administrator (operator exec)'),
             ('n8n_exec', 'n8n owner (operator exec)'),
             ('omnigent_exec', 'Omnigent administrator (operator exec)'),
+            ('emqx_exec', 'EMQX Dashboard administrator (operator exec)'),
         ],
         string='App Admin Password Reset',
         default='none',
@@ -620,8 +624,9 @@ class CloudAppTemplate(models.Model):
              'platform can still reset it by running a script inside the app container '
              '(no helm upgrade, no restart): Odoo resets base.user_admin and clears its '
              'TOTP; n8n resets the owner account and turns off its MFA; Omnigent resets '
-             'its admin account (signed-in sessions are kept). Mutually exclusive with '
-             '"Built-in Admin GUI", except Omnigent with the "Initial only" carrier.',
+             'its admin account (signed-in sessions are kept); EMQX resets its Dashboard '
+             'admin (signed-in Dashboard sessions are signed out). Mutually exclusive with '
+             '"Built-in Admin GUI", except Omnigent and EMQX with the "Initial only" carrier.',
     )
 
     # 「平台能不能重設／改這台服務的 admin 憑證」的唯一事實源：reset endpoint 的能力
@@ -852,13 +857,13 @@ class CloudAppTemplate(models.Model):
         兩者同時開著時 controller 只會走其中一條，另一條的承諾（例如 config.json
         的外科式 reset）就靜默失效——寧可在 seed／後台存檔時就擋下。
 
-        唯一例外：omnigent_exec ＋ admin_password_carrier=app_managed。app_managed 的
-        has_admin_gui 只負責**初始**密碼供給、本來就沒有 reset 路可以被遮蔽；Reset 只有
-        exec 這一條。
+        唯一例外：omnigent_exec／emqx_exec ＋ admin_password_carrier=app_managed。
+        app_managed 的 has_admin_gui 只負責**初始**密碼供給、本來就沒有 reset 路可以被
+        遮蔽；Reset 只有 exec 這一條。
         """
         for record in self:
             kind = record.app_admin_reset_kind or 'none'
-            if (kind == 'omnigent_exec' and record.has_admin_gui
+            if (kind in self._APP_MANAGED_EXEC_RESET_KINDS and record.has_admin_gui
                     and record.admin_password_carrier == 'app_managed'):
                 continue
             if kind != 'none' and record.has_admin_gui:
