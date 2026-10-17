@@ -3069,6 +3069,17 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False,
                         'error': _('This service has no public address to '
                                    'protect yet.')}
+            # AI-HMCP-002-4：0 席方案只擋「關 → 開」（前端 0 席本來就沒有 Access 頁籤）。已受保護時
+            # 重送 True（連同其他欄位存檔）與關閉方向（#1261 復原通道）都不經過這裡。判準收在 model。
+            if vals['is_protected'] and not service.is_protected:
+                denial = request.env[
+                    'woow_paas_platform.security_access_access_policy'
+                ]._protection_enable_denial(service)
+                if denial:
+                    return {'success': False,
+                            'error': denial['error'],
+                            'data': {k: v for k, v in denial.items()
+                                     if k != 'error'}}
         for f in ('login_google', 'login_email_otp'):
             if f in kwargs:
                 vals[f] = bool(kwargs[f])
