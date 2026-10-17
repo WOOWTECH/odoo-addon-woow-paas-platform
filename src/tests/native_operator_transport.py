@@ -80,7 +80,14 @@ class Account:
 def load_cloudflare():
     path = Path(os.environ.get(
         'AC1011_OPERATOR_SOURCE', '/tmp/ac1011-operator/cloudflare.py'))
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == '540ac39e661c5037c6faf5221c86d84c772bd45d0af7b08e36034219d3d35501', 'Unexpected operator source'
+    # ⚠ 這個指紋釘住的是 CI 複製進來的真 operator 原始碼
+    # （`extra/paas-operator/src/services/cloudflare.py`，見
+    # `.gitea/workflows/odoo-tests.yml` 的 docker cp）——這個 fixture 直接 exec 它，
+    # 所以上游一改，這裡載到的行為就跟著改，指紋強迫改的人回來看一眼。
+    # **改了那個檔就要同步更新這一行**（`sha256sum` 取新值），否則 full-suite 會以
+    # 「Unexpected operator source」整組紅掉——#1766 給 connections 補 client_id
+    # 時就是這樣紅的（PR CI 不含 Odoo 測試，只在 merge 進 develop 後才跑）。
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == 'd77762697b3c1a0c75763ba2c1dfff387fb45821983f157f52fe56b288cc15af', 'Unexpected operator source'
     config = types.ModuleType('src.config')
     config.settings = types.SimpleNamespace(
         cloudflare_account_id='native-isolated-account',
