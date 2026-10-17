@@ -87,12 +87,13 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
 
         ⚠ 不是 charts/home-assistant —— 那是容器化的 HA Core（cloud_app_ha_paas）。
 
-        0.1.0 → 0.1.6：0.1.1 修 CDI registry credential、0.1.2 加 XFF 剝除代理，
+        0.1.0 → 0.1.7：0.1.1 修 CDI registry credential、0.1.2 加 XFF 剝除代理，
         0.1.3 將 VM guest targetPort 改為 HAOS onboarding listener :80，0.1.4 修正
         XFF proxy upstream 指向 VM Service :8123，0.1.5 加大 XFF proxy 回應標頭緩衝（M4 R10），
         0.1.6 VM 關機寬限 terminationGracePeriodSeconds 300（INFRA-HAOS-004-1，
         woow-paas-charts #211；0.1.5 以前沒設＝KubeVirt 預設 30 秒，停機時 HA Core 來不及
-        寫回 sqlite／restore_state）。
+        寫回 sqlite／restore_state），0.1.7 xff-proxy pod 不掛 ServiceAccount token（X-SEC-005-7，
+        woow-paas-charts 整合包 #254）。0.1.6 只是整合包裡的中間版號、不會發佈，所以直接釘 0.1.7。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
@@ -100,9 +101,10 @@ class TestHaosTemplateSeed(_HaosSeedMixin, TransactionCase):
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/haos')
         self.assertEqual(
-            tpl.helm_chart_version, '0.1.6',
-            '0.1.6 起 chart 才有 VM 關機寬限 300 秒（INFRA-HAOS-004-1）；釘回 0.1.5 以前'
-            '＝每次停機／重啟又只剩 KubeVirt 預設 30 秒')
+            tpl.helm_chart_version, '0.1.7',
+            '0.1.6 起 chart 才有 VM 關機寬限 300 秒（INFRA-HAOS-004-1），但 0.1.6 不會發佈'
+            '（registry 404，HAOS 開通／Redeploy 會失敗）；0.1.7 另加 xff-proxy 不掛 SA token'
+            '（X-SEC-005-7）。釘回 0.1.5 以前＝每次停機／重啟又只剩 KubeVirt 預設 30 秒')
         self.assertNotIn(
             'home-assistant', tpl.helm_chart_name,
             'HAOS（VM）與 home-assistant（容器）是不同 chart、不同產品')

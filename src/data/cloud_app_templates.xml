@@ -1582,7 +1582,12 @@
                  仍是 30 秒——要先讓 guest 自己關機（HA 設定 → 系統 → 關機，runStrategy Always 會用新 spec 重開 VMI），
                  之後的停機／重啟才是 300 秒。HAOS 映像不變，不需要同步改 helm_default_values.image.*。
                  回滾值：0.1.5（回滾後下一次 VMI 啟動又退回 30 秒）。 -->
-            <field name="helm_chart_version">0.1.6</field>
+            <!-- 0.1.7（2026-10-18，woow-paas-charts 整合包 #254，X-SEC-005-7）：xff-proxy pod 設
+                 automountServiceAccountToken: false（它在 namespace default SA 下拿到一顆用不到的 token）。
+                 0.1.6 不會發佈（charts 整合包裡 0.1.6 只是中間版號，registry 查 haos 0.1.6 回 404），所以範本直接
+                 釘 0.1.7：同時帶 0.1.6 的 VM 關機寬限 300 秒。只改 xff-proxy pod template，升版時 proxy 重啟一次
+                 （數秒），VM 不動。HAOS 映像不變，不需要同步改 helm_default_values.image.*。回滾值：0.1.5。 -->
+            <field name="helm_chart_version">0.1.7</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
                  （UEFI secureBoot=false、masquerade 僅轉 guest :80、limits==requests、
                  DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
