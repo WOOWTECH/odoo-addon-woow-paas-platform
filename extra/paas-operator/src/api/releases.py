@@ -1553,9 +1553,9 @@ def _rollback_preserving_values(
             "message": f"Rolled back to revision {target_revision} (credentials preserved)",
             "mode": "upgrade_preserving",
             "target_revision": target_revision,
-            # `helm upgrade -o json` 把 revision 放在頂層 `version`，`_parse_release_info`
-            # 讀 `info.revision` 恆為 0（既有缺陷，與 helm_revision=0 同源）；這裡以歷史
-            # 推算的新 revision 兜底，不把 0 回給平台。
+            # `helm upgrade -o json` 把 revision 放在頂層 `version`；#1414 起
+            # `_parse_release_info` 讀得到它。讀不到（回 0＝不知道）時仍以歷史推算的
+            # 新 revision 兜底，不把 0 回給平台。
             "revision": release.revision or (current_revision + 1),
             "chart_version": release.chart_version or target_version,
         }

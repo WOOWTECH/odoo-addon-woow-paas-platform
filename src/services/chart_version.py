@@ -60,6 +60,18 @@ def chart_version_from_history(chart_field):
     return match.group(1) if match else None
 
 
+def reported_helm_revision(value):
+    """#1414：operator 回報的 helm revision ⇒ 可寫進帳本的正整數；不能用回 ``None``。
+
+    operator 舊版讀錯欄位（``info.revision``；helm 的版次在頂層 ``version``），install／
+    upgrade 一律回報 0。0、缺值、bool、非整數都代表「不知道」——呼叫端不得拿它覆蓋帳本
+    ``helm_revision``，改保留原值或另讀一次 release。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
 def _revision_number(revision):
     try:
         return int(revision.get('revision'))
@@ -127,18 +139,27 @@ def rollback_request_problem(revisions, requested):
 
 
 def annotate_rollback_floor(revisions):
-    """替每個 revision 加上 ``chart_version`` 與 ``rollback_allowed``（對話框用）。
+    """替每個 revision 加上 ``chart_version``、``rollback_allowed`` 與 ``is_current``（對話框用）。
 
     回傳新的 list（不改呼叫端的物件）。部署中那一版本身標成可回復（它就是現況；前端
     另外以「目前版本」擋住）。
     """
     _number, current_version = rollback_baseline(revisions)
+    # #1414／#1456：「目前」＝部署中的那一版（最新的 deployed），由 history 決定。帳本
+    # `helm_revision` 在更新／回復後會落後，對話框原本拿它標「目前」⇒ 舊版被標成目前。
+    # 沒有任何 deployed 時不標（前端退回帳本值）。
+    deployed = [n for r in revisions or [] if isinstance(r, dict)
+                and str(r.get('status', '')).lower() == 'deployed'
+                and (n := _revision_number(r)) is not None]
+    current_number = max(deployed) if deployed else None
     annotated = []
     for revision in revisions or []:
         item = dict(revision) if isinstance(revision, dict) else {'revision': revision}
         version = chart_version_from_history(item.get('chart'))
         item['chart_version'] = version
         item['rollback_allowed'] = chart_version_not_lower(version, current_version)
+        item['is_current'] = (current_number is not None
+                              and _revision_number(item) == current_number)
         annotated.append(item)
     return annotated
 
