@@ -59,6 +59,8 @@ from ..models.cloud_service_renewal import RENEWABLE_SUBSCRIPTION_STATES, Renewa
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
 from ..models.workspace import WorkspaceHasServicesError
+# X-LC-001：市集搜尋字面比對與有範本的分類。
+from ..services.marketplace_search import ordered_categories, parse_tags, template_matches_search
 
 _logger = logging.getLogger(__name__)
 
@@ -1078,17 +1080,17 @@ class PaasController(HiddenChainMixin, Controller):
         # #471 B 組：曝光層判準**留 is_hidden**（不經 HiddenChainMixin）。這裡改成
         # conceal_instances 會讓「定價未拍板／暫時下架」的商品重新出現在 marketplace。
         domain = [('is_active', '=', True), ('is_hidden', '=', False)]
+        public_templates = CloudAppTemplate.search(domain)
 
+        templates = public_templates
         if category:
-            domain.append(('category', '=', category))
+            templates = templates.filtered(lambda t: t.category == category)
 
-        if search:
-            search = search.strip()
-            domain.append('|')
-            domain.append(('name', 'ilike', search))
-            domain.append(('description', 'ilike', search))
-
-        templates = CloudAppTemplate.search(domain)
+        # X-LC-001-1／-2：字面比對名稱、說明與每個標籤（% _ 不再是萬用字元；
+        # tags 是 JSON 字串，不能在 DB 層 ilike）。判準見 services/marketplace_search.py。
+        if search and search.strip():
+            templates = templates.filtered(lambda t: template_matches_search(
+                t.name, t.description, parse_tags(t.tags), search))
 
         data = []
         for tmpl in templates:
@@ -1098,6 +1100,8 @@ class PaasController(HiddenChainMixin, Controller):
             'success': True,
             'data': data,
             'count': len(data),
+            # X-LC-001-5：前端只為有公開範本的分類產生頁籤（不受 category／search 影響）。
+            'categories': ordered_categories(public_templates.mapped('category')),
         }
 
     @route("/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")

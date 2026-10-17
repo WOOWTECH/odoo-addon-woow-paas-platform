@@ -276,6 +276,8 @@ from . import test_suspended_redeploy_state_482
 from . import test_stuck_suspended_converge_497
 # fix: #478 marketplace 卡片／configure header 價格標籤（起價摘要，移除硬編 Free）
 from . import test_marketplace_price_label_478
+# X-LC-001-1／-2／-5：應用市集搜尋字面比對（% _ 不是萬用字元、比對標籤）與有範本的分類。
+from . import test_marketplace_search_x_lc_001
 # fix: #29 subscription_lifecycle_mixin 內部 subscription traversal 的 cascade sudo
 from . import test_subscription_mixin_cascade_sudo_29
 # fix: #389 低餘額通知 dedup marker 改跟著投遞下場走（排入失敗／exception 要重送）

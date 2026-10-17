@@ -89,6 +89,8 @@ export async function getDomain() {
 export const cloudService = reactive({
     /** @type {TemplateData[]} */
     templates: [],
+    /** @type {string[]|null} 有公開範本的分類代碼（null＝後端未提供，頁籤全列） */
+    templateCategories: null,
     /** @type {ServiceData[]} */
     services: [],
     /** @type {boolean} */
@@ -289,7 +291,7 @@ export const cloudService = reactive({
     /**
      * Fetch all available templates
      * @param {string|null} category - Filter by category
-     * @param {string|null} search - Search in name/description
+     * @param {string|null} search - Search in name/description/tags
      * @returns {Promise<void>}
      */
     async fetchTemplates(category = null, search = null) {
@@ -302,6 +304,8 @@ export const cloudService = reactive({
             });
             if (result.success) {
                 this.templates = result.data;
+                // X-LC-001-5：有公開範本的分類（舊後端沒有這個欄位 ⇒ null ＝ 全部頁籤照舊顯示）。
+                this.templateCategories = Array.isArray(result.categories) ? result.categories : null;
             } else {
                 this.error = result.error || _t("Failed to fetch templates");
             }
