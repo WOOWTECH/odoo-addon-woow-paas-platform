@@ -92,6 +92,10 @@ from . import ir_http
 # #1540：停權／刪除後的限時唯讀資料取回入口（帳本＋session）。
 from . import data_retrieval
 from . import workspace_invitation
+# X-SET-007／X-W-002：login 一律 strip＋lower、不分大小寫唯一、自助註冊驗 email。
+# 排在 billing_incident／workspace_invitation 的 res.users 擴充之後 ⇒ MRO 最外層，
+# 它們的 write() 看到的已是正規化後的 login。
+from . import res_users_login_identity
 
 from . import workspace_quota_inspection
 from . import workspace_quota_policy

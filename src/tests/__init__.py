@@ -1214,3 +1214,5 @@ from . import test_llm_platform_foundation
 from . import test_vpn_node_status_fix005
 # INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
 from . import test_vpn_node_followup_ts005
+# 商用驗收 X-SET-007／X-W-002：註冊身分（login 大小寫正規化、email 格式、空欄位中文錯誤）。
+from . import test_signup_identity_x_set_007

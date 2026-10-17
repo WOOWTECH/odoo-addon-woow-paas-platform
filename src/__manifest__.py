@@ -11,6 +11,10 @@
     "website": "",
     "depends": [
         "base", "web", "project", "mail", "bus",
+        # X-SET-007：覆寫 /web/signup 必填檢查與 res.users 註冊／登入身分正規化
+        # （src/controllers/signup.py、src/models/res_users_login_identity.py）。
+        # 原本就經 portal 傳遞安裝，這裡明列以固定 MRO／controller 繼承順序。
+        "auth_signup",
         "ai_base_gt", "odoo_ai_assistant_chatgpt_connector",
         "sh_subscription",
         "sh_subscription_wallet",
