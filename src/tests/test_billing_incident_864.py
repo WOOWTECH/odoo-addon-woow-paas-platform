@@ -154,6 +154,13 @@ class TestBillingIncidentSchema864(TransactionCase):
                 ('bind_failed', 'Card binding failed'),
                 ('stuck_pending', 'Stuck pending payment'),
                 ('manual_invoice_stale', 'Manual invoice stale'),
+                ('llm_credit_unknown', 'AI credit result unknown'),
+                ('llm_reconcile_mismatch', 'AI credit reconciliation mismatch'),
+                ('llm_external_credit', 'AI credit added outside the platform'),
+                ('llm_void_failed', 'AI credit void failed'),
+                ('llm_not_me', 'AI account reported as not me'),
+                ('llm_secret_mismatch', 'AI account credential check failed (ciphertext mismatch)'),
+                ('llm_account_error', 'AI account error'),
             ),
             'state': (
                 ('open', 'Open'),

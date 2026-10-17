@@ -3,6 +3,7 @@
   "methods": {
     "ap_create_user": "TIMEOUT_PROVISION",
     "ap_get_user": "TIMEOUT_PROVISION",
+    "ap_list_users": "TIMEOUT_CRON_READ",
     "ap_search_user": "TIMEOUT_PROVISION",
     "status": "TIMEOUT_CRON_READ",
     "user_create_access_token": "TIMEOUT_PROVISION",

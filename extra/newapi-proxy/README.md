@@ -82,13 +82,14 @@ env 格式 `kid:secret[,kid:secret]`：第一把是現用、後面是下一把�
 - 轉送的 URL 一律由樣板＋驗證過的參數**重組**，不轉送 client 原始路徑。
 - query：只收 `[A-Za-z0-9_.-=&:/]`（沒有 `%`、`+`、`;`）、每段剛好一個 `=`、值不能空、key 不能重複；每條路由宣告允許的 key 與值格式，多一個 key（例如 new-api 的別名 `ps`）就 400。
 
-### 路由白名單（本票：tracer 用得到的；其餘 LLM-02 補）
+### 路由白名單（LLM-01a：tracer 用得到的；LLM-02b 加 `GET /api/user/`；其餘 LLM-02 補）
 
 | 身分 | 方法與路徑 | WEB | query | body 政策 |
 |---|---|---|---|---|
 | anon | `GET /api/status` | | | |
 | op | `GET /api/option/` | | | |
 | ap | `POST /api/user/` | | | 建使用者 |
+| ap | `GET /api/user/` | | `p`、`page_size`（1–100）、`sort_by`（只收 `id`）、`sort_order`（`asc`／`desc`） | 全部使用者分頁（餘額刷新，LLM-02b；PaaS 自己以前綴過濾） |
 | ap | `GET /api/user/search` | | `keyword`（必須符合 `PROXY_USERNAME_REGEX`）、`p`、`page_size` | |
 | ap | `GET /api/user/{id}` | | | |
 | ap | `POST /api/user/manage` | | | add_quota（含目標預檢與每小時總量） |
