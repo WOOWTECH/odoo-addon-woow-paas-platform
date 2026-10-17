@@ -1,0 +1,878 @@
+"""AI 模型帳戶（DESIGN §2.2、§1.3.1、§2.9、§2.10；票 LLM-01b）。
+
+每個 PaaS 帳號（``res.partner``，與點數錢包同層，D1）最多一個未關閉的 AI 帳戶，對應
+new-api 上一個使用者 ``<prefix>%010d``。本檔有三件事：
+
+1. **model 與守衛**：所有群組 ACL 都只有讀（``ir.model.access.csv``）；create／write 另要
+   ``llm_common._llm_internal`` 的把手（sudo 也擋）；``newapi_username``、``partner_id``、
+   ``newapi_user_id`` 設定後不能改；unlink 只在模組卸載時允許。
+2. **開通**（``_llm_activate``）：同意條款 → 建 ``state=provisioning`` 的列 → ``_trigger()``
+   開戶 cron。冪等：已有未關閉的帳戶就回它。
+3. **開戶 cron**（``_cron_llm_provision``，P0–P9，〔PROV〕§3.2）：
+
+   * 第一行就檢查「未設定」（N27）：未設定 ⇒ 直接 return，不外呼。
+   * **一個 tick 只做一戶**、總 deadline 60 秒（N28）；還有待開戶的就 ``_trigger()``。
+   * **鎖與 cursor**（〔REV〕25）：主 cursor 不對 ``llm_account`` 下列鎖。搶戶用獨立 cursor
+     一次完成並 commit（``UPDATE … WHERE id=(SELECT … FOR UPDATE SKIP LOCKED LIMIT 1)
+     RETURNING``，同時寫 lease 與嘗試次數）；之後每一步要存的東西（密碼密文、
+     ``newapi_user_id``、UP 密文、狀態）都以獨立 cursor 帶守衛寫回（``WHERE id=%s AND
+     provision_lease_token=%s``），rowcount ≠ 1 就放棄本 tick。每個獨立交易都設
+     ``lock_timeout``：萬一哪天有人在主 cursor 鎖了同一列，結果是那一步失敗、不是卡死。
+   * 中途當掉重跑會收斂：P0 後 → 從 P1；P1 回應遺失 → P1 撞名 → P2 找到 → P4 用存好的
+     密碼登入、確認 id 相同才存；P2 後 → 跳過 P1／P2；P7 回應遺失 → 重做 P4–P7（多一把
+     拿不到明文的孤兒 PAT，清理在 LLM-03）；P7 存好、P9 前當掉 → 下次只跑 P9。
+   * 退避 1、2、5、15、60 分鐘；第 6 次失敗或不可重試的錯誤 ⇒ ``state=error``。
+   * 帶密文的寫回（P0 密碼、P7 UP）一律 ``log_exceptions=False``：``odoo.sql_db`` 預設會把
+     失敗的 SQL 連同 bound params 寫成 ERROR 的 ``bad query``——等於把 Fernet 密文抄進 pod
+     log（DESIGN §5.5 沒列這個管道）。失敗時只記欄位名與 pgcode。
+"""
+import ipaddress
+import logging
+import re
+import time
+import traceback
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import psycopg2
+from psycopg2 import IntegrityError
+
+from odoo import SUPERUSER_ID, _, api, fields, models
+from odoo.exceptions import AccessError
+
+from ..services import llm_crypto, llm_redact
+from ..services import newapi_client as nac
+from .billing_incident import _is_odoo_module_uninstall
+from .llm_common import (
+    ERR_LLM_ACCOUNT_ERROR,
+    ERR_LLM_CLOSED,
+    ERR_LLM_NOT_ACTIVATED,
+    ERR_LLM_PROVISIONING,
+    ERR_LLM_SUSPENDED,
+    ERR_LLM_TOS_OUTDATED,
+    ERR_LLM_TOS_REQUIRED,
+    ERR_LLM_UNAVAILABLE,
+    FREE_DAILY_LIMIT,
+    CONVERT_MAX_POINTS,
+    CONVERT_MIN_POINTS,
+    MAX_KEYS_PER_ACCOUNT,
+    PROVISION_BACKOFF_MINUTES,
+    PROVISION_LEASE_MINUTES,
+    PROVISION_MAX_ATTEMPTS,
+    QUOTA_PER_POINT,
+    TOS_VERSION_CURRENT,
+    LlmError,
+    LlmQuotaInteger,
+    _is_llm_internal,
+    _llm_internal,
+    _without_llm_internal,
+    llm_config,
+    llm_unconfigured,
+)
+
+_logger = logging.getLogger(__name__)
+
+ACCOUNT_TABLE = 'woow_paas_platform_llm_account'
+PROVISION_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_provision'
+#: 獨立 cursor 等列鎖的上限：等不到就讓那一步失敗，不卡死整個 cron。
+_LOCK_TIMEOUT = '5s'
+#: 開戶時 P5 才看的孤兒 PAT 門檻（new-api 每人 20 把，含已過期 7 天內；〔PROV〕§3.2）。
+_PAT_LIMIT_THRESHOLD = 18
+#: 一經設定就不能再改的欄位（DR 模式的人工確認方法在 LLM-19）。
+_IMMUTABLE_ONCE_SET = ('partner_id', 'newapi_username', 'newapi_user_id')
+#: 帶守衛寫回的欄位名一律是程式裡的字面值；這個檢查只是讓拼字錯誤不會變成 SQL。
+_COLUMN_RE = re.compile(r'[a-z][a-z0-9_]{0,62}')
+
+STATE_SELECTION = [
+    ('provisioning', 'Provisioning'),
+    ('active', 'Active'),
+    ('suspended', 'Suspended'),
+    ('error', 'Error'),
+    ('closed', 'Closed'),
+]
+
+
+class _ProvisionStop(Exception):
+    """本 tick 的開戶停下來：``code`` 記進 ``last_error_code``（固定字串，不帶值）。"""
+
+    def __init__(self, code, *, terminal=False, retry_after=None, backoff=True):
+        super().__init__(code)
+        self.code = code
+        self.terminal = terminal
+        self.retry_after = retry_after
+        self.backoff = backoff
+
+
+class _LeaseLost(Exception):
+    """帶守衛的寫回影響 0 列：別的 worker 已接手（或帳戶狀態變了），放棄本 tick。"""
+
+
+def _stop_for(result, prefix='llm_newapi'):
+    """把非 Ok 的 client 結果轉成 ``_ProvisionStop``（DESIGN §3.4 的「主要錯誤」）。"""
+    if isinstance(result, nac.NotExecuted):
+        if result.reason == 'deadline':
+            return _ProvisionStop('llm_tick_deadline', backoff=False)
+        return _ProvisionStop('%s_not_executed' % prefix, retry_after=result.retry_after)
+    if isinstance(result, nac.Unknown):
+        return _ProvisionStop('%s_unknown' % prefix)
+    if isinstance(result, nac.Definite):
+        if result.proxy_error:
+            return _ProvisionStop('llm_proxy_%s' % result.proxy_error,
+                                  retry_after=result.retry_after)
+        if result.code:
+            return _ProvisionStop('newapi_%s' % result.code.lower(),
+                                  retry_after=result.retry_after)
+        return _ProvisionStop('%s_rejected' % prefix)
+    return _ProvisionStop('%s_unexpected' % prefix)
+
+
+def _utcnow():
+    return fields.Datetime.now()
+
+
+def _iso(value):
+    return value.replace(tzinfo=timezone.utc).isoformat() if value else None
+
+
+def _items(data):
+    """new-api 的列表回應：``data.items`` 或直接是 list。"""
+    if isinstance(data, dict):
+        items = data.get('items')
+        return items if isinstance(items, list) else []
+    return data if isinstance(data, list) else []
+
+
+class LlmAccount(models.Model):
+    _name = 'woow_paas_platform.llm_account'
+    _description = 'AI Models Account'
+    _order = 'id desc'
+    _rec_name = 'newapi_username'
+
+    partner_id = fields.Many2one(
+        'res.partner', required=True, ondelete='restrict', index=True, readonly=True,
+        help='The PaaS account (D1). One non-closed AI account per partner.')
+    state = fields.Selection(
+        STATE_SELECTION, required=True, default='provisioning', readonly=True, index=True)
+    newapi_username = fields.Char(
+        readonly=True, copy=False, index=True,
+        help='<prefix>%010d, computed at creation; never changes.')
+    newapi_user_id = fields.Integer(
+        readonly=True, copy=False,
+        help='new-api user id; stored-id guard: never changes once set (DR in LLM-19).')
+    newapi_password_enc = fields.Text(
+        groups='base.group_system', readonly=True, copy=False,
+        help='MultiFernet ciphertext bound to this row and field (DESIGN §2.9).')
+    up_token_enc = fields.Text(groups='base.group_system', readonly=True, copy=False)
+    up_token_newapi_id = fields.Integer(readonly=True, copy=False)
+    up_token_hint = fields.Char(readonly=True, copy=False)
+    up_created_at = fields.Datetime(readonly=True, copy=False)
+    up_expires_at = fields.Datetime(readonly=True, copy=False)
+    up_state = fields.Selection(
+        [('valid', 'Valid'), ('invalid', 'Invalid'), ('resigning', 'Re-signing')],
+        readonly=True, copy=False)
+    provision_lease_until = fields.Datetime(readonly=True, copy=False)
+    provision_lease_token = fields.Char(readonly=True, copy=False)
+    provision_attempts = fields.Integer(readonly=True, default=0, copy=False)
+    next_attempt_at = fields.Datetime(readonly=True, copy=False)
+    last_error_code = fields.Char(readonly=True, copy=False)
+    tos_version = fields.Char(readonly=True, copy=False)
+    tos_accepted_at = fields.Datetime(readonly=True, copy=False)
+    tos_accepted_uid = fields.Many2one('res.users', readonly=True, copy=False,
+                                       ondelete='set null')
+    tos_accepted_ip = fields.Char(readonly=True, copy=False)
+    quota_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
+    used_quota_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
+    request_count_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
+    balance_synced_at = fields.Datetime(readonly=True, copy=False)
+    low_balance_threshold = fields.Integer(readonly=True, default=50)
+    suspend_reason = fields.Selection(
+        [('ops', 'Operations'), ('account_inactive', 'Account inactive'),
+         ('policy', 'Policy'), ('not_me', 'Reported by the account owner')],
+        readonly=True, copy=False)
+    api_key_ids = fields.One2many(
+        'woow_paas_platform.llm_api_key', 'account_id', readonly=True)
+
+    def init(self):
+        # D1：一個 partner 同時只有一個未關閉的 AI 帳戶；關閉後可由維運重新開通（§2.10）。
+        self.env.cr.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS woow_llm_account_partner_open_uniq '
+            "ON %s (partner_id) WHERE state <> 'closed'" % ACCOUNT_TABLE)
+
+    # ------------------------------------------------------------------ #
+    #  守衛                                                                #
+    # ------------------------------------------------------------------ #
+    @api.model_create_multi
+    def create(self, vals_list):
+        if not _is_llm_internal(self.env):
+            raise AccessError(_('AI accounts can only be created by the platform.'))
+        return _without_llm_internal(super().create(vals_list))
+
+    def write(self, vals):
+        if not _is_llm_internal(self.env):
+            raise AccessError(_('AI accounts can only be changed by the platform.'))
+        for name in _IMMUTABLE_ONCE_SET:
+            if name not in vals:
+                continue
+            for record in self:
+                current = record[name]
+                current = current.id if hasattr(current, 'id') else current
+                if current and vals[name] != current:
+                    raise AccessError(_('This AI account field cannot be changed.'))
+        return super().write(vals)
+
+    def unlink(self):
+        if _is_odoo_module_uninstall(self.env):
+            return super().unlink()
+        raise AccessError(_('AI accounts cannot be deleted.'))
+
+    # ------------------------------------------------------------------ #
+    #  共用 helper                                                          #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _llm_client(self, role):
+        """唯一的 client 取得點（測試在這裡換成 mock）。"""
+        return nac.get_newapi_client(self.env, role)
+
+    @api.model
+    def _llm_account_for_partner(self, partner):
+        """partner 的未關閉 AI 帳戶（sudo；呼叫端傳入的 partner 一律是 request.env.user 的）。"""
+        if not partner:
+            return self.sudo().browse()
+        return self.sudo().search(
+            [('partner_id', '=', partner.id), ('state', '!=', 'closed')], limit=1)
+
+    def _llm_require_active(self):
+        """非 active 的帳戶 ⇒ 對應的 ``LlmError``。"""
+        if not self:
+            raise LlmError(ERR_LLM_NOT_ACTIVATED)
+        self.ensure_one()
+        if self.state == 'active':
+            return
+        raise LlmError({
+            'provisioning': ERR_LLM_PROVISIONING,
+            'suspended': ERR_LLM_SUSPENDED,
+            'closed': ERR_LLM_CLOSED,
+            'error': ERR_LLM_ACCOUNT_ERROR,
+        }.get(self.state, ERR_LLM_UNAVAILABLE))
+
+    def _llm_require_listable(self):
+        """唯讀清單：active 與 suspended 都能看（暫停中的帳戶仍要看得到自己的金鑰）。"""
+        if self and self.state == 'suspended':
+            return
+        self._llm_require_active()
+
+    def _llm_tenant_ip(self, config=None):
+        self.ensure_one()
+        config = config or llm_config(self.env)
+        if not config['identity_ok']:
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        try:
+            return nac.tenant_ip(self.id, config['block'])
+        except nac.NewApiError:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+
+    def _llm_up_token(self):
+        """解出本帳戶的 UP。**只**從帳戶取（DESIGN §3.1：絕不從資源記錄反推）。"""
+        self.ensure_one()
+        record = self.sudo()
+        if record.up_state == 'invalid' or not record.up_token_enc:
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        try:
+            return llm_crypto.decrypt(record.up_token_enc, record.id, record.newapi_username,
+                                      llm_crypto.FIELD_UP_TOKEN)
+        except llm_crypto.LlmCryptoError as exc:
+            _logger.error('[LLM] account=%s UP unusable: %s', record.id, exc.code)
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+
+    def _llm_mark_up_invalid(self):
+        """UP 被 new-api 拒絕（401）⇒ ``up_state=invalid``，重簽在 LLM-03。獨立交易寫。
+
+        盡力而為：寫不進去（例如 lock_timeout）只記 pgcode，不讓呼叫端的回應變成 500——
+        下一次用到這把 UP 時 new-api 會再回一次 401。
+        """
+        self.ensure_one()
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                cr.execute(
+                    'UPDATE %s SET up_state = %%s, write_uid = %%s, write_date = %%s '
+                    'WHERE id = %%s' % ACCOUNT_TABLE,
+                    ('invalid', SUPERUSER_ID, _utcnow(), self.id), log_exceptions=False)
+        except psycopg2.Error as exc:
+            _logger.warning('[LLM] account=%s: could not mark the UP invalid (pgcode=%s)',
+                            self.id, getattr(exc, 'pgcode', None))
+
+    # ------------------------------------------------------------------ #
+    #  開通（/api/llm/account/activate）                                    #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _llm_activate(self, partner, tos_version, user, real_ip):
+        """同意條款並建立 provisioning 帳戶；冪等。回傳帳戶（sudo、**不帶**內部寫入把手）。
+
+        同一個 partner 兩個請求同時開通：輸的那筆的 INSERT 會等贏家 commit、然後撞 partial
+        unique index。Odoo 的交易是 REPEATABLE READ，snapshot 在本請求的第一個查詢（session、
+        gate）就建立了——在這個交易裡重新 search **看不到**贏家剛 commit 的那一列。所以輸的
+        那筆回 ``llm_provisioning``：這是**預期結果**，前端照常輪詢 ``/api/llm/state``（下一個
+        請求是新的交易、看得到那一列）。``TestLlmActivateRace`` 用兩條真連線驗。
+        """
+        if not isinstance(tos_version, str) or not tos_version.strip():
+            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=TOS_VERSION_CURRENT)
+        if tos_version.strip() != TOS_VERSION_CURRENT:
+            raise LlmError(ERR_LLM_TOS_OUTDATED, current_version=TOS_VERSION_CURRENT)
+        Account = self.sudo()
+        existing = Account._llm_account_for_partner(partner)
+        if existing:
+            return existing
+        config = llm_config(self.env)
+        if not config['identity_ok']:
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        try:
+            ip_text = str(ipaddress.ip_address(real_ip)) if real_ip else False
+        except ValueError:
+            ip_text = False
+        try:
+            with self.env.cr.savepoint():
+                account = _llm_internal(Account).create({
+                    'partner_id': partner.id,
+                    'state': 'provisioning',
+                    'tos_version': TOS_VERSION_CURRENT,
+                    'tos_accepted_at': _utcnow(),
+                    'tos_accepted_uid': user.id if user else False,
+                    'tos_accepted_ip': ip_text,
+                })
+                try:
+                    username = nac.newapi_username(config['prefix'], account.id)
+                    nac.tenant_ip(account.id, config['block'])
+                except nac.NewApiError:
+                    # 合成 IP 用完（prod 130,815 戶、stg 每 block 4,095 戶）：fail closed。
+                    _logger.error('[LLM] account id %s does not fit the synthetic IP block',
+                                  account.id)
+                    raise LlmError(ERR_LLM_UNAVAILABLE) from None
+                _llm_internal(account).write({'newapi_username': username})
+        except IntegrityError:
+            # 另一個請求先 commit 了同一個 partner 的帳戶（見 docstring：本交易的 snapshot
+            # 看不到它，重新 search 也找不到）⇒ 預期結果 llm_provisioning。
+            raise LlmError(ERR_LLM_PROVISIONING) from None
+        cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger()
+        # 內部寫入把手只掛在上面落地的那幾次呼叫；回給 controller 的是乾淨的 sudo 記錄，
+        # 從它走到的任何東西（api_key_ids…）都過不了兩個 LLM model 的 create／write 守衛。
+        return Account.browse(account.id)
+
+    # ------------------------------------------------------------------ #
+    #  /api/llm/state                                                      #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _llm_state_payload(self, partner):
+        account = self._llm_account_for_partner(partner)
+        keys = account.api_key_ids.filtered(lambda k: k.state not in ('deleted', 'lost'))
+        free_key = keys.filtered(
+            lambda k: k.kind == 'free_trial' and k.state in ('creating', 'active', 'disabled'))[:1]
+        account_dto = None
+        if account:
+            quota = int(account.quota_cached or 0)
+            balance_points = quota // QUOTA_PER_POINT if quota > 0 else 0
+            overdraft_points = (-quota + QUOTA_PER_POINT - 1) // QUOTA_PER_POINT if quota < 0 else 0
+            account_dto = {
+                'state': account.state,
+                'balance_points': balance_points,
+                'overdraft_points': overdraft_points,
+                'suspend_reason': account.suspend_reason or None,
+                'low_balance_threshold': account.low_balance_threshold,
+                'tos': {
+                    'accepted_version': account.tos_version or None,
+                    'current_version': TOS_VERSION_CURRENT,
+                    'needs_reaccept': (account.tos_version or '') != TOS_VERSION_CURRENT,
+                },
+            }
+        return {
+            'account': account_dto,
+            'tos_current_version': TOS_VERSION_CURRENT,
+            'free_trial': {
+                'key_id': free_key.id or None,
+                # 每日計數在 LLM-10（llm_free_usage）；tracer 用 /api/llm/usage/recent。
+                'today_count': None,
+                'daily_limit': FREE_DAILY_LIMIT,
+                'capped': False,
+                'keys_created_today': None,
+            },
+            'limits': {
+                'max_keys': MAX_KEYS_PER_ACCOUNT,
+                'keys_used': len(keys),
+                'convert_min': CONVERT_MIN_POINTS,
+                'convert_max': CONVERT_MAX_POINTS,
+            },
+            'pending_review': False,
+            'public_base_url': None,
+            'guard': {'tripped': False},
+            'data_as_of': _iso(account.balance_synced_at) if account else None,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  /api/llm/usage/recent（tracer；LLM-02 改 SWR、LLM-09／10 取代）       #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _llm_usage_recent(self, partner):
+        """今天的免費試用呼叫（前 10 筆）。
+
+        ⚠ **刻意偏離 DESIGN §3.2／§3.5／N26**（記在 DESIGN 變更紀錄第 4 版）：DESIGN 的
+        usage/recent 是 SWR、只讀 DB；tracer 期間這裡**同步外呼**（WEB 金鑰、UP、read 3 秒），
+        每次頁面載入吃該租戶合成 IP 1 格 GA。收斂回 SWR（cron 以 CRON 金鑰刷新、端點只讀
+        快取）在 LLM-02。
+        """
+        account = self._llm_account_for_partner(partner)
+        account._llm_require_active()
+        ip = account._llm_tenant_ip()
+        up = account._llm_up_token()
+        try:
+            client = self._llm_client(nac.ROLE_WEB)
+        except nac.NewApiError as exc:
+            _logger.error('[LLM] usage/recent: client unavailable: %s', exc.code)
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        now = datetime.now(timezone(timedelta(hours=8)))
+        start = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        result = client.user_log_self(ip, up, {
+            'type': 2, 'group': 'free', 'start_timestamp': start, 'p': 1, 'page_size': 10,
+        }, timeout=nac.TIMEOUT_INTERACTIVE_READ)
+        if not result.ok:
+            if isinstance(result, nac.Definite) and result.code in (
+                    'AUTH_UNAUTHORIZED', 'ACCESS_TOKEN_EXPIRED'):
+                account._llm_mark_up_invalid()
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        data = result.data if isinstance(result.data, dict) else {}
+        names = {k.newapi_name: k for k in account.api_key_ids if k.newapi_name}
+        items = []
+        for row in _items(data)[:10]:
+            if not isinstance(row, dict):
+                continue
+            key = names.get(row.get('token_name'))
+            created = row.get('created_at')
+            items.append({
+                'time': (datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+                         if type(created) is int else None),
+                'model': row.get('model_name') if isinstance(row.get('model_name'), str) else None,
+                'input_tokens': row.get('prompt_tokens') if type(row.get('prompt_tokens')) is int else None,
+                'output_tokens': (row.get('completion_tokens')
+                                  if type(row.get('completion_tokens')) is int else None),
+                'duration_ms': row.get('use_time') * 1000 if type(row.get('use_time')) is int else None,
+                'request_id': row.get('request_id') if isinstance(row.get('request_id'), str) else None,
+                'key_id': key.id if key else None,
+                'key_kind': key.kind if key else None,
+            })
+        total = data.get('total')
+        return {
+            'today_count': total if type(total) is int else len(items),
+            'daily_limit': FREE_DAILY_LIMIT,
+            'items': items,
+            'data_as_of': datetime.now(timezone.utc).isoformat(),
+        }
+
+    # ------------------------------------------------------------------ #
+    #  開戶 cron（P0–P9）                                                   #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _cron_llm_provision(self):
+        """每 tick 開一戶；未設定（N27）時第一行就 return、零外呼。
+
+        ⚠ **凍結契約**：``data/llm_cron.xml`` 是 ``noupdate="1"``，發版的 ``-u`` 不會再改已安裝
+        DB 裡這支 cron 的 ``code``（``model._cron_llm_provision()``）與 ``model_id``。所以本方法
+        的**名字與所在的 model** 不能改；要改名或搬 model，必須同時寫 migration 更新既有 DB 的
+        ``ir_act_server.code``（否則 prod／stg 的 cron 會一直靜默呼叫不存在的方法，見 pitfall
+        ``seed-noupdate-sticky-template-links``）。``TestLlmCronContract`` 斷言 DB 裡的 code。
+        """
+        config = llm_config(self.env)
+        if llm_unconfigured(self.env, config):
+            return
+        Account = self.sudo()
+        if not config['identity_ok']:
+            _logger.warning('[LLM] provisioning skipped: username prefix / IP block misconfigured')
+            return
+        try:
+            client = Account._llm_client(nac.ROLE_CRON)
+            llm_crypto.load()
+        except (nac.NewApiError, llm_crypto.LlmCryptoError) as exc:
+            # fail closed、不搶戶：帳戶留在 provisioning，不吃嘗試次數。訊息只有原因碼。
+            _logger.error('[LLM] provisioning skipped: %s', exc.code)
+            return
+        deadline = time.monotonic() + nac.PROVISION_TICK_SECONDS
+        claim = Account._llm_claim_for_provision()
+        if claim:
+            account_id, token, attempts = claim
+            stop = None
+            try:
+                Account._llm_provision_one(client, config, account_id, token, attempts, deadline)
+            except _ProvisionStop as exc:
+                stop = exc
+                _logger.warning('[LLM] provisioning account=%s attempt=%s stopped: %s',
+                                account_id, attempts, stop.code)
+            except _LeaseLost:
+                _logger.warning('[LLM] provisioning account=%s: lease lost, tick abandoned',
+                                account_id)
+            except Exception:  # noqa: BLE001 - one account must not wedge the cron
+                _logger.error('[LLM] provisioning account=%s crashed: %s', account_id,
+                              llm_redact.redact(traceback.format_exc()))
+                stop = _ProvisionStop('llm_provision_internal')
+            if stop is not None:
+                Account._llm_provision_failed(account_id, token, attempts, stop)
+        if Account._llm_provision_pending():
+            cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
+            if cron:
+                cron._trigger()
+
+    @api.model
+    def _llm_claim_for_provision(self, account_ids=None):
+        """獨立 cursor 搶一戶並 commit：寫 lease、token、嘗試次數＋1。
+
+        ``account_ids``：只在這些 id 裡搶（``None``＝全部）。生產的 cron 不傳；測試的 adapter
+        用它把搶戶限縮到自己建的帳戶（照 ``tests/committed_cron_scope.py`` 的 ``isolated()``：
+        保留真的 SQL、排序與鎖，只限縮候選），共用 DB 裡別人的 provisioning 帳戶不會被搶走。
+        """
+        token = uuid.uuid4().hex
+        now = _utcnow()
+        scope = ''
+        params = {'until': now + timedelta(minutes=PROVISION_LEASE_MINUTES), 'token': token,
+                  'uid': SUPERUSER_ID, 'now': now, 'state': 'provisioning'}
+        if account_ids is not None:
+            scope = 'AND id = ANY(%(ids)s) '
+            params['ids'] = sorted(int(i) for i in account_ids)
+        with self.env.registry.cursor() as cr:
+            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+            cr.execute(
+                'UPDATE {t} SET provision_lease_until = %(until)s, '
+                'provision_lease_token = %(token)s, '
+                'provision_attempts = COALESCE(provision_attempts, 0) + 1, '
+                'write_uid = %(uid)s, write_date = %(now)s '
+                'WHERE id = (SELECT id FROM {t} WHERE state = %(state)s {scope}'
+                'AND (next_attempt_at IS NULL OR next_attempt_at <= %(now)s) '
+                'AND (provision_lease_until IS NULL OR provision_lease_until < %(now)s) '
+                'ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) '
+                'RETURNING id, provision_attempts'.format(t=ACCOUNT_TABLE, scope=scope),
+                params)
+            row = cr.fetchone()
+        if not row:
+            return None
+        return row[0], token, row[1]
+
+    @api.model
+    def _llm_provision_pending(self, account_ids=None):
+        """還有可以立刻開戶的帳戶嗎（獨立 cursor：主 cursor 的 snapshot 看不到本 tick 的寫回）。
+
+        ``account_ids`` 的語意同 :meth:`_llm_claim_for_provision`。
+        """
+        now = _utcnow()
+        scope = ''
+        params = [now, now]
+        if account_ids is not None:
+            scope = ' AND id = ANY(%s)'
+            params.append(sorted(int(i) for i in account_ids))
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'SELECT 1 FROM %s WHERE state = %%s '
+                'AND (next_attempt_at IS NULL OR next_attempt_at <= %%s) '
+                'AND (provision_lease_until IS NULL OR provision_lease_until < %%s)%s LIMIT 1'
+                % (ACCOUNT_TABLE, scope), ['provisioning'] + params)
+            return cr.fetchone() is not None
+
+    @api.model
+    def _llm_read_row(self, account_id):
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'SELECT id, state, newapi_username, newapi_user_id, newapi_password_enc, '
+                'up_token_enc, up_state, provision_lease_token FROM %s WHERE id = %%s'
+                % ACCOUNT_TABLE, (account_id,))
+            row = cr.dictfetchone()
+        return row
+
+    @api.model
+    def _llm_guarded_update(self, account_id, token, values):
+        """以獨立 cursor 帶守衛寫回；守衛不成立（lease 被接手、狀態變了）⇒ ``_LeaseLost``。
+
+        DB 錯誤（最常見是故意設的 5 秒 ``lock_timeout``）⇒ ``_ProvisionStop('llm_db_write_failed')``
+        （可重試）。這裡會綁密文（P0 密碼、P7 UP），所以 SQL 一律 ``log_exceptions=False``、
+        例外 ``from None``：log 只有欄位名與 pgcode，不會有 ``bad query`` 帶出 bound params。
+        """
+        values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
+        columns = sorted(values)
+        if not all(_COLUMN_RE.fullmatch(column) for column in columns):
+            raise ValueError('bad column name')
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,), log_exceptions=False)
+                cr.execute(
+                    'UPDATE %s SET %s WHERE id = %%s AND provision_lease_token = %%s AND state = %%s'
+                    % (ACCOUNT_TABLE, ', '.join('%s = %%s' % column for column in columns)),
+                    [values[column] for column in columns] + [account_id, token, 'provisioning'],
+                    log_exceptions=False)
+                if cr.rowcount != 1:
+                    raise _LeaseLost()
+        except psycopg2.Error as exc:
+            _logger.warning('[LLM] account=%s: guarded write of %s failed (pgcode=%s)',
+                            account_id, ','.join(c for c in columns
+                                                 if c not in ('write_uid', 'write_date')),
+                            getattr(exc, 'pgcode', None))
+            raise _ProvisionStop('llm_db_write_failed') from None
+
+    @api.model
+    def _llm_provision_failed(self, account_id, token, attempts, stop):
+        now = _utcnow()
+        terminal = stop.terminal or attempts >= PROVISION_MAX_ATTEMPTS
+        values = {'last_error_code': stop.code[:64], 'provision_lease_until': None,
+                  'provision_lease_token': None}
+        next_at = None
+        if terminal:
+            values.update(state='error', next_attempt_at=None)
+        else:
+            if stop.backoff:
+                index = min(max(attempts, 1), len(PROVISION_BACKOFF_MINUTES)) - 1
+                next_at = now + timedelta(minutes=PROVISION_BACKOFF_MINUTES[index])
+                if stop.retry_after:
+                    next_at = max(next_at, now + timedelta(seconds=int(stop.retry_after)))
+            values['next_attempt_at'] = next_at
+        # 本方法**不往外拋**：記不下失敗（lease 已被接手、DB 寫不進去）時只留 log，lease 到期
+        # 後下一個 tick 會重新搶到這一戶。
+        try:
+            self._llm_guarded_update(account_id, token, values)
+        except _LeaseLost:
+            return
+        except _ProvisionStop as failed:
+            _logger.warning('[LLM] provisioning account=%s: could not record %s (%s)',
+                            account_id, stop.code, failed.code)
+            return
+        except Exception:  # noqa: BLE001 - see above
+            _logger.error('[LLM] provisioning account=%s: could not record the failure: %s',
+                          account_id, llm_redact.redact(traceback.format_exc()))
+            return
+        if terminal:
+            # 告警出口在 LLM-02b（llm_event severity=alert＋email）；這裡先留 log。
+            _logger.error('[LLM] provisioning account=%s gave up: %s', account_id, stop.code)
+        cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
+        if cron and not terminal:
+            if next_at:
+                cron._trigger(at=next_at)
+            else:
+                cron._trigger()
+
+    @api.model
+    def _llm_provision_one(self, client, config, account_id, token, attempts, deadline):
+        """對一戶跑 P0–P9（DESIGN §1.3.1）。失敗以 ``_ProvisionStop`` 表示。"""
+        row = self._llm_read_row(account_id)
+        if not row or row['state'] != 'provisioning' or row['provision_lease_token'] != token:
+            raise _LeaseLost()
+        username = row['newapi_username'] or ''
+        prefix = config['prefix']
+        if not (nac.USERNAME_RE.fullmatch(username) and username.startswith(prefix)
+                and len(username) == len(prefix) + 10):
+            raise _ProvisionStop('llm_identity_mismatch', terminal=True)
+        try:
+            ip = nac.tenant_ip(account_id, config['block'])
+        except nac.NewApiError:
+            raise _ProvisionStop('llm_synthetic_ip_exhausted', terminal=True) from None
+
+        password = self._llm_p0_password(row, token)
+        user_id = row['newapi_user_id'] or 0
+
+        # 已存好 UP（P7 之後、P9 之前當掉）⇒ 只跑 P9。
+        if row['up_token_enc'] and row['up_state'] != 'invalid':
+            up = self._llm_decrypt(row, llm_crypto.FIELD_UP_TOKEN, row['up_token_enc'])
+            me = client.user_self(ip, up, timeout=nac.TIMEOUT_PROVISION, deadline=deadline)
+            if me.ok or not (isinstance(me, nac.Definite) and me.code in (
+                    'AUTH_UNAUTHORIZED', 'ACCESS_TOKEN_EXPIRED')):
+                return self._llm_p9_finish(account_id, token, user_id, me)
+            self._llm_guarded_update(account_id, token, {'up_state': 'invalid'})
+
+        pending_user_id = None
+        if not user_id:
+            user_id, pending_user_id = self._llm_p1_p2(
+                client, account_id, token, username, password, deadline)
+
+        # P4：以消費者密碼登入（租戶合成 IP）。
+        login = client.user_login(ip, username, password, deadline=deadline)
+        if not login.ok:
+            if isinstance(login, nac.Definite) and login.message_key == nac.MSG_LOGIN_FAILED:
+                # 撞名而登入失敗 ⇒ 不是我們上次建的；自己的帳號登入失敗 ⇒ 密碼漂移。
+                raise _ProvisionStop('llm_newapi_name_taken' if pending_user_id
+                                     else 'llm_newapi_login_failed', terminal=True)
+            raise _stop_for(login)
+        data = login.data if isinstance(login.data, dict) else {}
+        jwt = data.get('access_token')
+        session = data.get('session') if isinstance(data.get('session'), dict) else {}
+        sid = session.get('sid')
+        if not (isinstance(jwt, str) and nac.JWT_RE.fullmatch(jwt)):
+            jwt = None
+        # 從這裡開始 new-api 可能已經簽發了一個 session：之後**任何**一步失敗（含守衛寫回丟
+        # _LeaseLost／_ProvisionStop），finally 都會撤掉它（P8）。不撤的話它活 30 天、佔 new-api
+        # 每人 50 個同時 session 的名額，而撞名收斂的路徑每次重試都會再多一個。
+        try:
+            if data.get('require_verification'):
+                raise _ProvisionStop('llm_newapi_2fa_enabled', terminal=True)
+            if jwt is None:
+                raise _ProvisionStop('llm_newapi_contract_login', terminal=True)
+            login_user = data.get('user') if isinstance(data.get('user'), dict) else {}
+            expected = user_id or pending_user_id
+            if login_user.get('id') != expected:
+                raise _ProvisionStop('llm_newapi_user_mismatch', terminal=True)
+            if pending_user_id:
+                self._llm_guarded_update(account_id, token, {'newapi_user_id': pending_user_id})
+                user_id = pending_user_id
+            up = self._llm_p5_to_p7(client, account_id, token, username, ip, jwt, password,
+                                    attempts, deadline)
+        finally:
+            # P8：撤掉這次的 session；失敗不擋開戶（30 天後自然過期）。
+            if jwt is not None and isinstance(sid, str) and nac.SID_RE.fullmatch(sid):
+                try:
+                    # 清理步驟另有一小段寬限：tick 的預算用完（例如前一步就是逾時）也要試著撤。
+                    ended = client.user_delete_session(ip, jwt, sid, deadline=max(
+                        deadline, time.monotonic() + nac.SESSION_REVOKE_GRACE_SECONDS))
+                except Exception:  # noqa: BLE001 - must not mask the error being unwound
+                    ended = nac.Unknown('client_internal')
+                if not ended.ok and not (isinstance(ended, nac.Definite)
+                                         and ended.code == 'AUTH_SESSION_NOT_FOUND'):
+                    _logger.warning('[LLM] provisioning account=%s: session revoke %s',
+                                    account_id, ended.label())
+
+        me = client.user_self(ip, up, timeout=nac.TIMEOUT_PROVISION, deadline=deadline)
+        return self._llm_p9_finish(account_id, token, user_id, me)
+
+    def _llm_decrypt(self, row, field, ciphertext):
+        try:
+            return llm_crypto.decrypt(ciphertext, row['id'], row['newapi_username'], field)
+        except llm_crypto.LlmSecretNeutralized:
+            raise _ProvisionStop('llm_secret_neutralized', terminal=True) from None
+        except llm_crypto.LlmCryptoUnavailable:
+            raise _ProvisionStop('llm_crypto_unavailable') from None
+        except llm_crypto.LlmCryptoError as exc:
+            # 綁定不符或內容不合：有人動過密文（incident 出口在 LLM-02b）。
+            _logger.critical('[LLM] account=%s %s ciphertext rejected: %s',
+                             row['id'], field, exc.code)
+            raise _ProvisionStop(exc.code, terminal=True) from None
+
+    @api.model
+    def _llm_p0_password(self, row, token):
+        """P0：沒有密碼才產生（只限 provisioning＋沒有 newapi_user_id），先加密存好再外呼。"""
+        ciphertext = row['newapi_password_enc']
+        if ciphertext:
+            return self._llm_decrypt(row, llm_crypto.FIELD_PASSWORD, ciphertext)
+        if row['newapi_user_id']:
+            # 已有 new-api 使用者卻沒有密碼：不能重產（那會變成另一組帳密）。
+            raise _ProvisionStop('llm_password_missing', terminal=True)
+        password = llm_crypto.generate_password()
+        try:
+            encrypted = llm_crypto.encrypt(row['id'], row['newapi_username'],
+                                           llm_crypto.FIELD_PASSWORD, password)
+        except llm_crypto.LlmCryptoError as exc:
+            raise _ProvisionStop(exc.code) from None
+        self._llm_guarded_update(row['id'], token, {'newapi_password_enc': encrypted})
+        return password
+
+    @api.model
+    def _llm_p1_p2(self, client, account_id, token, username, password, deadline):
+        """P1 建使用者、P2 search 取 id。回傳 ``(stored_user_id, pending_user_id)``。
+
+        P1 成功 ⇒ P2 的 id 立刻存（stored）；P1 撞名或結果未知 ⇒ P2 找到的 id 只是候選
+        （pending），要等 P4 用存好的密碼登入、``data.user.id`` 相同才存。
+        """
+        created = client.ap_create_user(username, password, 'PaaS %d' % account_id,
+                                        deadline=deadline)
+        if isinstance(created, nac.NotExecuted):
+            raise _stop_for(created)
+        if isinstance(created, nac.Definite):
+            if created.proxy_error or created.code:
+                raise _stop_for(created)
+            if created.message_key:
+                # Invalid parameters／權限不足：PaaS 這邊送錯了，重試沒有用。
+                raise _ProvisionStop('llm_newapi_user_create_rejected', terminal=True)
+        # Ok；或 success:false 沒有 message_key／結果未知（寫入 ⇒ Unknown）：可能撞名。
+        found = client.ap_search_user(username, deadline=deadline)
+        if not found.ok:
+            raise _stop_for(found)
+        matches = [item for item in _items(found.data)
+                   if isinstance(item, dict) and item.get('username') == username]
+        if not matches:
+            raise _ProvisionStop('llm_newapi_user_missing' if created.ok
+                                 else 'llm_newapi_user_create_unknown')
+        if len(matches) > 1:
+            raise _ProvisionStop('llm_newapi_user_conflict', terminal=True)
+        match = matches[0]
+        user_id = match.get('id')
+        if (type(user_id) is not int or user_id <= 0 or match.get('DeletedAt')
+                or match.get('status') != 1 or match.get('group') != 'default'
+                or match.get('role') != 1):
+            raise _ProvisionStop('llm_newapi_user_conflict', terminal=True)
+        if created.ok:
+            self._llm_guarded_update(account_id, token, {'newapi_user_id': user_id})
+            return user_id, None
+        return 0, user_id
+
+    @api.model
+    def _llm_p5_to_p7(self, client, account_id, token, username, ip, jwt, password,
+                      attempts, deadline):
+        """P5（只在重試時）數 PAT、P6 換 proof、P7 建 UP 並立刻加密存好。回傳 UP。"""
+        if attempts > 1:
+            listed = client.user_list_access_tokens(ip, jwt, deadline=deadline)
+            if not listed.ok:
+                raise _stop_for(listed)
+            if len(_items(listed.data)) >= _PAT_LIMIT_THRESHOLD:
+                # 孤兒 PAT 太多：清理（撤銷要 proof＋DELETE 路由）在 LLM-03。
+                raise _ProvisionStop('llm_newapi_pat_limit', terminal=True)
+        now = int(time.time())
+        expires_at = now + nac.UP_LIFETIME_SECONDS
+        verified = client.user_verify_generate(ip, jwt, password, expires_at, deadline=deadline)
+        if not verified.ok:
+            raise _stop_for(verified)
+        vdata = verified.data if isinstance(verified.data, dict) else {}
+        proof = vdata.get('proof_token')
+        if not (isinstance(proof, str) and nac.JWT_RE.fullmatch(proof)):
+            raise _ProvisionStop('llm_newapi_contract_verify', terminal=True)
+        created = client.user_create_access_token(
+            ip, jwt, proof, nac.up_name(account_id, now), expires_at, deadline=deadline)
+        if not created.ok:
+            # Unknown ⇒ new-api 可能多了一把孤兒 PAT；下次重試由 P5 數。
+            raise _stop_for(created)
+        cdata = created.data if isinstance(created.data, dict) else {}
+        item = cdata.get('item') if isinstance(cdata.get('item'), dict) else {}
+        up = cdata.get('token')
+        up_id = item.get('id')
+        hint = item.get('token_hint')
+        if not (isinstance(up, str) and nac.UP_RE.fullmatch(up)) or type(up_id) is not int:
+            raise _ProvisionStop('llm_newapi_contract_pat', terminal=True)
+        try:
+            encrypted = llm_crypto.encrypt(account_id, username, llm_crypto.FIELD_UP_TOKEN, up)
+        except llm_crypto.LlmCryptoError as exc:
+            raise _ProvisionStop(exc.code) from None
+        self._llm_guarded_update(account_id, token, {
+            'up_token_enc': encrypted,
+            'up_token_newapi_id': up_id,
+            'up_token_hint': hint[:16] if isinstance(hint, str) else None,
+            'up_created_at': datetime.fromtimestamp(now, tz=timezone.utc).replace(tzinfo=None),
+            'up_expires_at': datetime.fromtimestamp(expires_at, tz=timezone.utc).replace(tzinfo=None),
+            'up_state': 'valid',
+        })
+        return up
+
+    @api.model
+    def _llm_p9_finish(self, account_id, token, user_id, me):
+        """P9：以 UP 讀 ``/api/user/self``，id、分組、額度都對才 ``state=active``。"""
+        if not me.ok:
+            raise _stop_for(me)
+        data = me.data if isinstance(me.data, dict) else {}
+        quota = data.get('quota')
+        if (data.get('id') != user_id or data.get('group') != 'default'
+                or type(quota) is not int or quota != 0):
+            raise _ProvisionStop('llm_newapi_invariant', terminal=True)
+        used = data.get('used_quota')
+        count = data.get('request_count')
+        self._llm_guarded_update(account_id, token, {
+            'state': 'active',
+            'quota_cached': quota,
+            'used_quota_cached': used if type(used) is int else 0,
+            'request_count_cached': count if type(count) is int else 0,
+            'balance_synced_at': _utcnow(),
+            'provision_attempts': 0,
+            'next_attempt_at': None,
+            'last_error_code': None,
+            'provision_lease_until': None,
+            'provision_lease_token': None,
+        })
+        _logger.info('[LLM] provisioning account=%s active', account_id)
+        return True

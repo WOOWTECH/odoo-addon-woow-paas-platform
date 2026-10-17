@@ -1,0 +1,52 @@
+# AI 模型分頁 Odoo 端 service 的純 Python 單元測試（票 LLM-01b；DESIGN §8.1）
+#
+# `src/services/{newapi_client,llm_crypto,llm_redact}.py` 刻意不 import odoo，所以 PR 時就能
+# 驗：簽章與代理參考實作（extra/newapi-proxy/newapi_proxy/signing.py）一致、request body
+# 過得了代理的 body 政策（policy.py）、每個 client 方法都在代理的路由白名單內（routetable.py、
+# canonical.py；含 WEB／CRON 金鑰的分權）、§3.4 的每一種分類、例外 `raise … from None`、log 不落
+# 秘密、MultiFernet 與密文綁定。傳輸錯誤用 127.0.0.1 上的真 socket，不連外網。
+# Odoo 整合測試（src/tests/test_llm_tracer.py）不在這裡：PR CI 不跑 Odoo 測試，見 CLAUDE.md。
+#
+# 🔴 這支要進 required 清單之前，**必須先刪掉下面的 paths**（判準見 repo-lint.yml 同一段，#538）。
+name: llm-services-unit-tests
+
+on:
+  pull_request:
+    paths:
+      - "src/services/newapi_client.py"
+      - "src/services/llm_crypto.py"
+      - "src/services/llm_redact.py"
+      - "tests/test_llm_services.py"
+      # 測試拿代理的參考實作驗章、body 政策與路由白名單（每個 client 方法的路由、身分、
+      # query、web 旗標）：它們一改，這裡要重新證明兩邊一致。
+      - "extra/newapi-proxy/newapi_proxy/signing.py"
+      - "extra/newapi-proxy/newapi_proxy/policy.py"
+      - "extra/newapi-proxy/newapi_proxy/settings.py"
+      - "extra/newapi-proxy/newapi_proxy/routetable.py"
+      - "extra/newapi-proxy/newapi_proxy/canonical.py"
+      - ".gitea/workflows/llm-services-unit-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the two runtime dependencies (same packages as src/requirements.txt)
+        run: |
+          python -m venv .venv-llm-services-ci
+          .venv-llm-services-ci/bin/python -m pip install --disable-pip-version-check \
+            requests==2.34.2 cryptography==50.0.2
+      - name: Unit tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: timeout 120s .venv-llm-services-ci/bin/python tests/test_llm_services.py -v

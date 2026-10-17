@@ -34,6 +34,9 @@
         # #778：SSOT 對撞防護的 -u 路徑（<function> 每次升級重跑；
         # fresh-install 路徑在 hooks.post_init_hook）
         "data/billing_ssot_guard.xml",
+        # LLM-01b：AI 模型分頁的 cron（DESIGN §1.2 的順序：ACL → seed → cron → mail →
+        # views → wizard；目前只有 cron）。
+        "data/llm_cron.xml",
         "views/menu.xml",
         "views/workspace_views.xml",
         "views/workspace_quota_inspection_views.xml",

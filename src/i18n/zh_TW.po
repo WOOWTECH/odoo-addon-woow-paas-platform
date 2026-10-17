@@ -723,6 +723,24 @@ msgid "AI & LLM"
 msgstr "AI 與 LLM"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_account.py:0
+msgid "AI accounts can only be changed by the platform."
+msgstr "AI 模型帳戶只能由平台修改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_account.py:0
+msgid "AI accounts can only be created by the platform."
+msgstr "AI 模型帳戶只能由平台建立。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_account.py:0
+msgid "AI accounts cannot be deleted."
+msgstr "AI 模型帳戶不能刪除。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/portal/portal_agent_status.xml:0
 msgid "AI Agent"
@@ -820,6 +838,24 @@ msgstr "連線錯誤"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/llm_api_key.py:0
+msgid "AI model keys can only be changed by the platform."
+msgstr "AI 模型金鑰只能由平台修改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_api_key.py:0
+msgid "AI model keys can only be created by the platform."
+msgstr "AI 模型金鑰只能由平台建立。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_api_key.py:0
+msgid "AI model keys cannot be deleted; they are marked deleted."
+msgstr "AI 模型金鑰不能刪除，只會標記為已刪除。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
 msgid "AI provider not configured"
 msgstr "AI 供應商尚未設定"
@@ -840,6 +876,12 @@ msgstr "AI 助理尚未就緒"
 #: code:addons/woow_paas_platform/static/src/portal/portal_task_chat.xml:0
 msgid "AI 啟動中，請稍候…"
 msgstr "AI 啟動中，請稍候…"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_api_key.py:0
+msgid "An AI model key cannot move to another account."
+msgstr "AI 模型金鑰不能移到其他帳戶。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_ai_config__api_base_url
@@ -1290,6 +1332,19 @@ msgid ""
 msgstr "管理員 Email 必須是收得到信的信箱（%(domain)s 是保留給範例用的網域，密碼重設信永遠寄不到）"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid ""
+"Each account can have at most 20 keys. Please delete unused keys first."
+msgstr "每個帳號最多 20 把金鑰，請先刪除不用的金鑰"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Each account can have only one free trial key."
+msgstr "每個帳號只能有一把免費試用金鑰"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
 msgid ""
@@ -1302,9 +1357,118 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Please accept the AI Models Terms of Service first."
+msgstr "請先同意《AI 模型服務條款》"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Please activate the AI models service first."
+msgstr "請先開通 AI 模型服務"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Setting up your AI models account failed. Please contact support."
+msgstr "AI 模型帳戶建立失敗，請聯絡客服"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Something went wrong. Please try again later."
+msgstr "系統發生錯誤，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid ""
+"The AI models account is closed. Please contact support to reactivate it."
+msgstr "AI 模型帳戶已關閉，如需重新開通請聯絡客服"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid "The AI models proxy URL must be one of the in-cluster proxy addresses."
+msgstr "AI 模型代理位址只能是叢集內的代理位址。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "The AI models service is suspended."
+msgstr "AI 模型服務已暫停（原因見橫幅）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid ""
+"The AI models service is temporarily unavailable. Please try again later."
+msgstr "AI 模型服務暫時無法連線，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid ""
+"The AI Models Terms of Service have been updated. Please accept them again."
+msgstr "條款已更新，請重新同意"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid "The canary partner must be a partner ID."
+msgstr "canary partner 必須是一個 partner ID。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "The key settings are invalid."
+msgstr "金鑰設定不正確"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid ""
+"The new-api username prefix must be \"w\" followed by one to three lowercase "
+"letters."
+msgstr "new-api 使用者名稱前綴必須是「w」加上一到三個小寫英文字母。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid "The pilot list must be comma-separated partner IDs."
+msgstr "試營運名單必須是以逗號分隔的 partner ID。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "The plan can only be changed while the service is running (current state: %(state)s)."
 msgstr "服務執行中才能變更方案（目前狀態：%(state)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid "The synthetic IP block must be an integer from 0 to 31."
+msgstr "合成 IP 區塊必須是 0 到 31 的整數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_account.py:0
+msgid "This AI account field cannot be changed."
+msgstr "這個 AI 模型帳戶欄位設定後不能修改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "This feature is not available yet."
+msgstr "此功能尚未開放"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid ""
+"This key has already been shown and cannot be shown again. Please delete it "
+"and create a new one."
+msgstr "這把金鑰已經顯示過，無法再次顯示；請刪除後重新建立"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -1923,6 +2087,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "Authentication required"
 msgstr "需要登入"
@@ -4470,6 +4635,12 @@ msgstr "部署失敗：%(detail)s"
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "This plan cannot be applied to the service. Please contact support."
 msgstr "此方案無法套用到這個服務，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Too many requests. Please try again later."
+msgstr "操作太頻繁，請稍後再試"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -12489,6 +12660,12 @@ msgstr "沒有 Pod"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
 msgid "<strong>This service is marked running, but a workload has no pods.</strong>"
 msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有。</strong>"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Your AI models account is being set up. Please wait a moment."
+msgstr "正在建立 AI 模型帳戶，請稍候"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form

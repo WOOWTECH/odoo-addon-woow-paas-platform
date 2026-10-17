@@ -114,6 +114,35 @@ DELETE FROM woow_paas_platform_oauth_code;
 DELETE FROM woow_paas_platform_oauth_device_code;
 
 -- ---------------------------------------------------------------------------
+-- AI 模型分頁（LLM-01b；DESIGN §2.9）。
+-- 設定：代理改黑洞值（＝「未設定」，所有 LLM cron 第一行就 return）、分頁關閉、
+-- canary 清空。key 可能不存在（show_llm 本來就不 seed）⇒ upsert。
+-- 密文：每位消費者的 new-api 密碼與 UP 只改「有值」的列為 sentinel；程式讀到
+-- 'neutralized' 一律 fail closed（不重簽、不重新開戶）。用 NULL 反而會讓 clone 接上
+-- 任何 new-api 時對既有帳戶重產密碼、觸發撞名流程，也看不出 DB 是否已中和。
+-- 表可能還不存在（clone 來源早於 LLM-01b、模組尚未 -u）⇒ to_regclass() guard。
+-- ---------------------------------------------------------------------------
+INSERT INTO ir_config_parameter (key, value)
+VALUES ('woow_paas_platform.newapi_proxy_url', 'http://127.0.0.1:9'),
+       ('woow_paas_platform.show_llm', 'False'),
+       ('woow_paas_platform.llm_canary_partner_id', '')
+    ON CONFLICT (key) DO
+       UPDATE SET value = EXCLUDED.value;
+
+DO $$
+BEGIN
+    IF to_regclass('woow_paas_platform_llm_account') IS NOT NULL THEN
+        UPDATE woow_paas_platform_llm_account
+           SET newapi_password_enc = 'neutralized'
+         WHERE newapi_password_enc IS NOT NULL AND newapi_password_enc <> '';
+        UPDATE woow_paas_platform_llm_account
+           SET up_token_enc = 'neutralized'
+         WHERE up_token_enc IS NOT NULL AND up_token_enc <> '';
+    END IF;
+END
+$$;
+
+-- ---------------------------------------------------------------------------
 -- D3-A 排程（第二保險）：官方 SQL 已停掉 autovacuum 以外的全部 cron；這裡再把
 -- nextcall 推到 100 年後，萬一有 cron 被開回來也不會跑。寫成 GREATEST(…) 而
 -- 不是 `nextcall + 100 years`：重複執行不會一直往後疊，且結果恆 ≥ 現在＋100 年

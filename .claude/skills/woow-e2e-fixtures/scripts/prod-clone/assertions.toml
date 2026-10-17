@@ -421,6 +421,17 @@ query = """SELECT count(*) FROM woow_paas_platform_cloud_service
     OR (n8n_owner_password IS NOT NULL AND n8n_owner_password <> 'neutralized')"""
 expected = "0"
 
+[[check]]
+check_id = "E05_llm_account_secrets"
+table = "woow_paas_platform_llm_account"
+columns = ["newapi_password_enc", "up_token_enc"]
+query = """SELECT count(*) FROM woow_paas_platform_llm_account
+ WHERE (newapi_password_enc IS NOT NULL AND newapi_password_enc <> '' AND newapi_password_enc <> 'neutralized')
+    OR (up_token_enc IS NOT NULL AND up_token_enc <> '' AND up_token_enc <> 'neutralized')"""
+expected = "0"
+when_absent = "pass"
+note = "LLM-01b（DESIGN §2.9）：每位消費者的 new-api 密碼與 UP 密文；prod 在 LLM-17 之前沒有這張表"
+
 # ───── PII ─────
 [[check]]
 check_id = "P01_partner_email"

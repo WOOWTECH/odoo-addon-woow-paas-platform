@@ -99,3 +99,7 @@ from . import workspace_quota_audit
 from . import workspace_quota_minimum_wizard
 # ECPay 站內付 2.0 V4 上線：綁卡 NT$5 驗證授權的取消帳本（DoAction）。
 from . import ecpg_bind_auth_void
+# LLM-01b：AI 模型分頁的帳戶、金鑰鏡像與設定寫入守衛（DESIGN §2）。
+from . import llm_config_guard
+from . import llm_account
+from . import llm_api_key
