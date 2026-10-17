@@ -99,10 +99,19 @@ class DashboardController(HiddenChainMixin, Controller):
         directly so the original Issue #9 root cause (independent sources)
         cannot recur.
 
-        `current_cycle_*` and `next_bill_*` come from the most-recently-started
-        in_progress subscription. Users with zero active subscriptions get
-        sensible calendar-month fallbacks for the cycle and `null` for the
-        next-bill fields (frontend renders "—").
+        AUDITFIX dashboard-next-bill-wrong（FU2-U-plat-ux-3／-5）：原本拿「最近開始」的那一筆
+        訂閱當 primary——``next_bill_date`` 與帳期來自它，``next_bill_estimate`` 卻是全部訂閱合計
+        （實測：日期 10-21 對上 40,400；實際 10-18 就先扣 30,650）；試用中的訂閱起日（試用結束
+        次日）還會晚於迄日（next_payment − 1）。現在：
+
+        * ``next_bill_date``＝所有有效訂閱裡**最早**的 ``sh_date_of_next_payment``；
+        * ``next_bill_estimate``＝**那一天到期**的訂閱含稅合計（就是那天會扣的金額）；
+        * ``recurring_total_estimate``＝全部有效訂閱每期含稅合計（原本 ``next_bill_estimate``
+          的意思，另給一個名字）；
+        * ``current_cycle_*``＝最早到期那一筆的**目前這一期**：試用中＝試用期（迄日＝試用最後
+          一天），付費中＝[next_payment − 一期, next_payment − 1]；保證起日不晚於迄日。
+
+        沒有有效訂閱時：帳期退回本月，``next_bill_*`` 為 ``null``（前端顯示「—」）。
         """
         # #336：先濾掉 hidden（0 元 HA PaaS）sub 再取 primary，避免 0 元 sub
         # 搶 primary 綁架 cycle/next_bill 估算。
@@ -113,19 +122,13 @@ class DashboardController(HiddenChainMixin, Controller):
         )
 
         today = date.today()
-        # Prefer the most-recently-started sub for cycle dates; fall back to
-        # the calendar month when there's no active sub.
-        primary = active_subs[:1] if active_subs else None
-        if primary and primary.sh_start_date:
-            cycle_start = primary.sh_start_date
-            # cycle end = next payment date - 1 day (last full day of cycle).
-            if primary.sh_date_of_next_payment:
-                cycle_end = primary.sh_date_of_next_payment - _ONE_DAY
-            else:
-                cycle_end = _last_of_month(cycle_start)
-        else:
-            cycle_start = today.replace(day=1)
-            cycle_end = _last_of_month(cycle_start)
+        scheduled = active_subs.filtered('sh_date_of_next_payment')
+        next_bill_date = (
+            min(scheduled.mapped('sh_date_of_next_payment')) if scheduled else None)
+        due_first = scheduled.filtered(
+            lambda sub: sub.sh_date_of_next_payment == next_bill_date)
+        primary = due_first[:1] or active_subs[:1]
+        cycle_start, cycle_end = _current_cycle(primary, today)
 
         # Cycle usage = sum of ABSOLUTE deduct amounts since cycle_start.
         # `wallet.transaction.amount` is negative for deducts; we negate the
@@ -145,23 +148,31 @@ class DashboardController(HiddenChainMixin, Controller):
         if cycle_usage < 0:
             cycle_usage = 0.0
 
-        # Next-bill estimate sums tax-included totals across all active subs.
-        next_bill_estimate = 0.0 if not active_subs else round(
-            sum(_subscription_total_with_tax(sub)[3] for sub in active_subs), 2
-        )
+        def _total(subs):
+            return round(sum(_subscription_total_with_tax(sub)[3] for sub in subs), 2)
 
         return {
             'credits_left': round(partner.wallet_balance or 0.0, 2),
             'current_cycle_start': cycle_start.isoformat() if cycle_start else None,
             'current_cycle_end': cycle_end.isoformat() if cycle_end else None,
             'current_cycle_usage': cycle_usage,
-            'next_bill_date': (
-                primary.sh_date_of_next_payment.isoformat()
-                if primary and primary.sh_date_of_next_payment else None
-            ),
-            'next_bill_estimate': next_bill_estimate if active_subs else None,
+            'next_bill_date': next_bill_date.isoformat() if next_bill_date else None,
+            'next_bill_estimate': _total(due_first) if next_bill_date else None,
+            'recurring_total_estimate': _total(active_subs) if active_subs else None,
             'currency': 'pts',
         }
+
+    def _dashboard_workspace_ids(self, user) -> list[int]:
+        """儀表板要算的工作區：使用者有權限、沒有封存、不是 HA PaaS 專屬隱藏工作區。
+
+        AUDITFIX（FU2-U-plat-ux-4）：原本直接拿 ``workspace_access`` 的列，已封存的工作區也
+        算進去（uid 205：列表 16 個、儀表板 107）。工作區與成員兩個區塊共用這一份。
+        """
+        workspace_ids = self._accessible_workspace_ids(user)
+        # #336：剔除 HA PaaS 專屬 hidden workspace（D2 不變式：hidden service 住
+        # 自建專屬 workspace），讓 workspace 計數不含隱藏 workspace。
+        hidden_ws = set(self._hidden_workspace_ids(request.env))
+        return [wid for wid in workspace_ids if wid not in hidden_ws]
 
     def _accessible_workspace_ids(self, user) -> list[int]:
         """Return distinct workspace IDs the given user can access.
@@ -169,8 +180,9 @@ class DashboardController(HiddenChainMixin, Controller):
         Source: `workspace_access.user_id`. We filter by user (not partner)
         because workspace_access links to res.users.
         """
+        # AUDITFIX（FU2-U-plat-ux-4）：已封存的工作區不算（/woow 的工作區列表也不列）。
         access_rows = request.env['woow_paas_platform.workspace_access'].sudo().search_read(
-            [('user_id', '=', user.id)],
+            [('user_id', '=', user.id), ('workspace_id.state', '!=', 'archived')],
             ['workspace_id'],
         )
         # workspace_id comes back as [id, "Display Name"] tuples.
@@ -187,11 +199,7 @@ class DashboardController(HiddenChainMixin, Controller):
         verified against the model file, where the `state` field has 'running'
         as one of the selection values.
         """
-        workspace_ids = self._accessible_workspace_ids(user)
-        # #336：剔除 HA PaaS 專屬 hidden workspace（D2 不變式：hidden service 住
-        # 自建專屬 workspace），讓 workspace 計數不含隱藏 workspace。
-        hidden_ws = set(self._hidden_workspace_ids(request.env))
-        workspace_ids = [wid for wid in workspace_ids if wid not in hidden_ws]
+        workspace_ids = self._dashboard_workspace_ids(user)
         if not workspace_ids:
             return {
                 'total': 0,
@@ -224,12 +232,14 @@ class DashboardController(HiddenChainMixin, Controller):
         state — users either have access or don't (plan documents this as
         a placeholder for future invite flow).
         """
-        workspace_ids = self._accessible_workspace_ids(user)
+        workspace_ids = self._dashboard_workspace_ids(user)
         if not workspace_ids:
             return {'total': 0, 'active': 0, 'pending': 0}
-        total = request.env['woow_paas_platform.workspace_access'].sudo().search_count(
-            [('workspace_id', 'in', workspace_ids)],
+        # AUDITFIX（FU2-U-plat-ux-4）：不重複的人數——同一個人在 N 個工作區原本算 N 次。
+        rows = request.env['woow_paas_platform.workspace_access'].sudo().search_read(
+            [('workspace_id', 'in', workspace_ids)], ['user_id'],
         )
+        total = len({row['user_id'][0] for row in rows if row['user_id']})
         return {'total': total, 'active': total, 'pending': 0}
 
     def _recent_activity(self, partner) -> list[dict[str, Any]]:
@@ -285,6 +295,36 @@ class DashboardController(HiddenChainMixin, Controller):
 # ----------------------------------------------------------------------
 # Date helpers (module-private)
 # ----------------------------------------------------------------------
+
+
+def _current_cycle(sub, today: date) -> tuple[date, date]:
+    """``sub`` 目前這一期的 (起, 迄)；沒有訂閱時是本月。保證起日不晚於迄日。
+
+    * 試用中：迄＝試用最後一天（``sh_trial_end_date``，缺值時 next_payment − 1），起＝開通日。
+    * 有下次扣款日：迄＝next_payment − 1，起＝next_payment − 一期（``_cycle_delta``）；
+      不早於 ``sh_start_date``。
+    * 其他：起＝``sh_start_date``，迄＝當月最後一天（舊行為）。
+    """
+    month_start = today.replace(day=1)
+    if not sub:
+        return month_start, _last_of_month(month_start)
+    next_payment = sub.sh_date_of_next_payment
+    if sub._woow_in_trial():
+        end = sub.sh_trial_end_date or (next_payment - _ONE_DAY if next_payment else today)
+        opened = sub.create_date.date() if sub.create_date else today
+        start = min(opened, end)
+    elif next_payment:
+        end = next_payment - _ONE_DAY
+        delta = sub._cycle_delta()
+        start = next_payment - delta if delta else (sub.sh_start_date or month_start)
+        if sub.sh_start_date and sub.sh_start_date <= end:
+            start = max(start, sub.sh_start_date)
+    else:
+        start = sub.sh_start_date or month_start
+        end = _last_of_month(start)
+    if start > end:
+        start = end
+    return start, end
 
 
 def _last_of_month(d: date) -> date:
