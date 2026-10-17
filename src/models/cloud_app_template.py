@@ -1,5 +1,7 @@
+import copy
 import json
 import logging
+import math
 import re
 import unicodedata
 
@@ -221,7 +223,136 @@ def parse_domain(raw):
     return low, None
 
 
+_HOST_PORT_RE = re.compile(
+    r'^(?P<host>%s(?:\.%s)+):(?P<port>[0-9]{1,5})\Z' % (_HOST_LABEL, _HOST_LABEL))
+
+
+def parse_host_port(raw):
+    """``host_port``：``主機:埠``（EMQX 的 ``ngrok.remoteAddr``，例 ``1.tcp.ngrok.io:12345``）。
+
+    service-update-api-validation（INFRA-EMQX-024-3）：這格原本只是一般文字，
+    ``tcp://bad host;touch /tmp/x`` 也照存進 helm values——chart 的 ngrok sidecar 執行時
+    驗證後忽略（``woow_remote_addr``，不會被注入），但服務頁不會說保留位址被忽略了。存檔時
+    就用與 chart 相同的規則擋下：主機至少兩段（字母數字與 ``-``；IP 也是這個形態）、總長
+    ≤ 253、埠 1–65535；不收 scheme、路徑、空白。大小寫不分，正規化成小寫。空 → 不設。
+
+    Returns:
+        (str | None, (error code, params) | None)
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, ('not_text', {})
+    value = raw.strip()
+    if not value:
+        return None, None
+    if '://' in value:
+        return None, ('host_port_scheme', {'entry': value})
+    low = value.lower() if value.isascii() else value
+    match = _HOST_PORT_RE.match(low)
+    if (not match or len(match.group('host')) > _DOMAIN_MAX
+            or not 0 < int(match.group('port')) < 65536):
+        return None, ('host_port_invalid', {'entry': value})
+    return low, None
+
+
+SPEC_FORMAT_HOST_PORT = 'host_port'
+
+# ---------------------------------------------------------------------------
+# service-update-api-validation：helm_value_specs 的值依 ``type`` 驗證。
+#
+# 白名單（``_filter_allowed_helm_values``）只管「鍵」，``format`` 只管少數文字欄位；值本身
+# 原本完全不檢查（AI-LLM-017 實測）：select 選項外的 ``'1d'``、boolean 填 ``'maybe'``、
+# 帶換行的 ``'90d\nevil_setting: true'`` 都原樣進 helm values（只靠 chart 的 regex 兜底），
+# 送 ``null`` 會讓 helm 刪掉 chart 預設（apiDocs 預設 true → /docs 被關）。
+#
+# 規則（``check_spec_value``）：
+# - boolean：只收真正的 true／false；
+# - number：數字（不收布林與字串；空字串＝留空，與前端 HelmValueForm 相同），有
+#   ``min``／``max``／``integer`` 就照檢查；
+# - select：必須是 ``options`` 裡的值（選項可以是字串或 ``{"value", "label"}``）；
+# - text／password（以及沒有 type 的舊 spec）：必須是字串，不得有換行與控制字元——表單
+#   都是單行輸入框，換行只可能來自直接打 API，而那正是 YAML 注入的形態。
+# - 任何型別都不收物件／陣列（會被 unflatten 成整棵子樹）。
+#
+# ``null`` 的語意（``CloudAppTemplate._validate_spec_values``）：有 ``default`` ⇒ 還原成
+# spec 預設；沒有預設的 text／number ⇒ 空字串（等於表單清空）；其餘（boolean／select／
+# password）拒絕——password 要清除請用 ``clear_keys``（#1455）。
+#
+# 「送回目前的值」一律放行（舊資料可能是這次之前存進去、不合新規則的值；表單整包送出
+# 時不能因為別格的舊值而存不了檔）。
+SPEC_VALUE_TYPES = ('text', 'password', 'number', 'boolean', 'select')
+# Cc＝C0／C1 控制字元（含 \n \r \t 與 YAML 當換行的 U+0085），Zl／Zp＝U+2028／U+2029。
+_SPEC_TEXT_FORBIDDEN_CATEGORIES = frozenset(('Cc', 'Zl', 'Zp'))
+
+
+def _spec_select_values(spec):
+    values = []
+    for option in spec.get('options') or []:
+        if isinstance(option, dict):
+            if 'value' in option:
+                values.append(option['value'])
+        else:
+            values.append(option)
+    return values
+
+
+def check_spec_value(spec, value):
+    """依 spec 的 ``type`` 檢查一個租戶值（``None`` 由呼叫端先處理）。
+
+    Returns:
+        (value, (error code, params) | None)——合法時回原值。
+    """
+    spec_type = spec.get('type') or 'text'
+    if isinstance(value, (dict, list, tuple, set)):
+        code = {'boolean': 'not_boolean', 'number': 'not_number'}.get(spec_type, 'not_text')
+        return value, (code, {})
+    if spec_type == 'boolean':
+        if not isinstance(value, bool):
+            return value, ('not_boolean', {})
+        return value, None
+    if spec_type == 'number':
+        if value == '':
+            return value, None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return value, ('not_number', {})
+        if spec.get('integer') is True and value != int(value):
+            return value, ('not_integer', {})
+        low, high = spec.get('min'), spec.get('max')
+        if isinstance(low, (int, float)) and value < low:
+            return value, ('below_min', {'min': low})
+        if isinstance(high, (int, float)) and value > high:
+            return value, ('above_max', {'max': high})
+        return value, None
+    if spec_type == 'select':
+        allowed = _spec_select_values(spec)
+        if allowed:
+            matched = any(
+                type(value) is type(opt) and value == opt for opt in allowed
+            ) or (isinstance(value, str) and value in [str(opt) for opt in allowed])
+            if not matched:
+                return value, ('not_option', {'options': ', '.join(str(o) for o in allowed)})
+            return value, None
+        # 沒有選項可比對（spec 寫壞）⇒ 至少照文字規則檢查。
+    if spec_type in ('text', 'password', 'select') and not isinstance(value, str):
+        return value, ('not_text', {})
+    if isinstance(value, str) and any(
+            unicodedata.category(ch) in _SPEC_TEXT_FORBIDDEN_CATEGORIES for ch in value):
+        return value, ('control_chars', {})
+    return value, None
+
+
+def _same_spec_value(a, b):
+    """「送回目前的值」的比對：同型別同值（``True`` 不等於 ``1``）；整數與浮點數視為同型。"""
+    numbers = (int, float)
+    if (isinstance(a, numbers) and isinstance(b, numbers)
+            and not isinstance(a, bool) and not isinstance(b, bool)):
+        return a == b
+    return type(a) is type(b) and a == b
+
+
 SPEC_FORMAT_PARSERS = {
+    SPEC_FORMAT_HOST_PORT: parse_host_port,
     SPEC_FORMAT_GIT_HOSTS: parse_git_hosts,
     SPEC_FORMAT_GIT_NAME: parse_git_name,
     SPEC_FORMAT_EMAIL: parse_email,
@@ -1422,6 +1553,12 @@ class CloudAppTemplate(models.Model):
                      'name such as github.com or git.example.com.', **params)
         if code == 'hosts_too_many':
             return _('Git token hosts: at most %(max)s hosts.', **params)
+        if code == 'host_port_scheme':
+            return _('Reserved address: enter host:port only, without tcp:// (for example '
+                     '1.tcp.ngrok.io:12345 instead of "%(entry)s").', **params)
+        if code == 'host_port_invalid':
+            return _('Reserved address: "%(entry)s" is not a host:port address such as '
+                     '1.tcp.ngrok.io:12345.', **params)
         if code == 'name_invalid':
             return _('Git author name must be one line of at most %(max)s characters, '
                      'without " \\ ; # < > or invisible control characters.', **params)
@@ -1490,6 +1627,92 @@ class CloudAppTemplate(models.Model):
             if error:
                 return self._spec_format_message(*error)
         return None
+
+    def _value_specs_by_key(self):
+        """``{key: spec dict}``（required＋optional）；舊式純字串 spec 視為沒有 type 的文字欄位。"""
+        specs = self._parse_helm_value_specs()
+        out = {}
+        if not isinstance(specs, dict):
+            return out
+        for section in ('required', 'optional'):
+            fields_list = specs.get(section)
+            if not isinstance(fields_list, list):
+                continue
+            for field in fields_list:
+                if isinstance(field, dict) and isinstance(field.get('key'), str) and field['key']:
+                    out.setdefault(field['key'], field)
+                elif isinstance(field, str) and field:
+                    out.setdefault(field, {'key': field})
+        return out
+
+    def _spec_value_message(self, spec, code, params):
+        """把 ``check_spec_value`` 的錯誤碼翻成租戶語言（欄位名稱用 spec label）。"""
+        params = dict(params, label=spec.get('label') or spec.get('key') or '')
+        if code == 'not_boolean':
+            return _('%(label)s must be on or off (true or false).', **params)
+        if code == 'not_number':
+            return _('%(label)s must be a number.', **params)
+        if code == 'not_integer':
+            return _('%(label)s must be a whole number.', **params)
+        if code == 'below_min':
+            return _('%(label)s must be at least %(min)s.', **params)
+        if code == 'above_max':
+            return _('%(label)s must be at most %(max)s.', **params)
+        if code == 'not_option':
+            return _('%(label)s must be one of: %(options)s.', **params)
+        if code == 'control_chars':
+            return _('%(label)s must be a single line without line breaks or control '
+                     'characters.', **params)
+        if code == 'null':
+            return _('%(label)s cannot be set to an empty (null) value.', **params)
+        return _('%(label)s must be text.', **params)
+
+    def _validate_spec_values(self, flat_values, current_values=None):
+        """存檔前（create／reconfigure）：依 spec ``type`` 驗證並正規化租戶送來的值。
+
+        service-update-api-validation（規則見檔頭 ``check_spec_value`` 上方的說明）。
+
+        Args:
+            flat_values: 已過白名單的 dot-path 扁平 dict
+            current_values: ``{key: 目前存的值}``（reconfigure 傳；只放存在的鍵）。
+                送回目前的值或 spec 預設值一律放行。
+
+        Returns:
+            (dict, str | None)：正規化後的值（``null`` 已換成預設／空字串）與第一個錯誤的
+            租戶語言訊息；有錯時回原 dict。
+        """
+        if not flat_values:
+            return flat_values, None
+        specs = self._value_specs_by_key()
+        current_values = current_values or {}
+        out = {}
+        for key, value in flat_values.items():
+            spec = specs.get(key)
+            if spec is None:
+                out[key] = value
+                continue
+            spec_type = spec.get('type') or 'text'
+            if value is None:
+                if 'default' in spec:
+                    out[key] = copy.deepcopy(spec['default'])
+                elif spec_type in ('text', 'number'):
+                    out[key] = ''
+                else:
+                    return flat_values, self._spec_value_message(spec, 'null', {})
+                continue
+            baselines = []
+            if key in current_values:
+                baselines.append(current_values[key])
+            if 'default' in spec:
+                baselines.append(spec['default'])
+            if any(_same_spec_value(value, base) for base in baselines):
+                out[key] = value
+                continue
+            _value, error = check_spec_value(spec, value)
+            if error:
+                return flat_values, self._spec_value_message(spec, *error)
+            out[key] = value
+        return out, None
 
     def _apply_spec_formats(self, values):
         """部署組裝：把 helm_values 裡帶 ``format`` 的鍵轉成 chart 要的形態（就地）。

@@ -666,6 +666,35 @@ $woow-radius-lg: 1.25rem;
     font-size: 0.8rem;
 }
 
+// service-update-api-validation：spec confirm_change 的二次確認
+.o_woow_config_confirm {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: $woow-radius-default;
+    color: $woow-text-primary;
+    font-size: 0.875rem;
+
+    &__body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+
+        p {
+            margin: 0;
+        }
+    }
+
+    &__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+}
+
 // #1455：清除已設定的金鑰
 .o_woow_config_clear_secrets {
     display: flex;

@@ -40,6 +40,9 @@ export class ConfigurationTab extends Component {
             errors: {},
             // #1455：勾選要清除的憑證欄位（spec key 陣列）。
             clearKeys: [],
+            // service-update-api-validation（INFRA-HS-013-4）：存檔前要租戶再確認一次的
+            // 說明（spec `confirm_change`，例 Headscale 改 ngrok 網域＝所有裝置要重新登入）。
+            pendingConfirm: [],
         });
     }
 
@@ -244,10 +247,13 @@ export class ConfigurationTab extends Component {
         this.state.errors = {};
         this.state.showAdvanced = false;
         this.state.clearKeys = [];
+        this.state.pendingConfirm = [];
     }
 
     onHelmValueUpdate(key, value) {
         this.state.editedValues = { ...this.state.editedValues, [key]: value };
+        // 值又改了 ⇒ 之前的確認不算數，下次存檔重新判斷。
+        this.state.pendingConfirm = [];
         if (this.state.errors[key]) {
             const newErrors = { ...this.state.errors };
             delete newErrors[key];
@@ -335,7 +341,37 @@ export class ConfigurationTab extends Component {
         return false;
     }
 
-    async saveChanges() {
+    /**
+     * service-update-api-validation（INFRA-HS-013-4）：這次會改到、而且 spec 帶
+     * `confirm_change` 說明的欄位 ⇒ 回那些說明（存檔前要租戶再確認一次）。
+     * 「有沒有改」與 `hasChanges` 同一個比對基準（進入編輯時的回填值）。
+     */
+    confirmMessages(payload) {
+        const messages = [];
+        for (const spec of this.allSpecs) {
+            const message = spec.confirm_change;
+            if (typeof message !== "string" || !message || !(spec.key in payload)) continue;
+            if (String(payload[spec.key] ?? "") !== String(this.getSpecValue(spec) ?? "")) {
+                messages.push(message);
+            }
+        }
+        return messages;
+    }
+
+    confirmSave() {
+        this.state.pendingConfirm = [];
+        return this.saveChanges(true);
+    }
+
+    dismissConfirm() {
+        this.state.pendingConfirm = [];
+    }
+
+    /**
+     * @param {boolean} [confirmed] 只有「確認儲存」按鈕會傳 `true`；Save 按鈕經
+     *   `onClick.bind` 呼叫時第一個參數是事件物件，所以要嚴格比對 `=== true`。
+     */
+    async saveChanges(confirmed) {
         if (this.state.saving) return;
         if (!this.validateForm()) return;
 
@@ -344,6 +380,13 @@ export class ConfigurationTab extends Component {
         if (!this.hasChanges(payload) && !this.state.clearKeys.length) {
             this.cancelEditing();
             return;
+        }
+        if (confirmed !== true) {
+            const messages = this.confirmMessages(payload);
+            if (messages.length) {
+                this.state.pendingConfirm = messages;
+                return;
+            }
         }
 
         this.state.saving = true;

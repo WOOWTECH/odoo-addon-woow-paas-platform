@@ -66,6 +66,101 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s cannot be set to an empty (null) value."
+msgstr "「%(label)s」不能設為空值（null）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be a number."
+msgstr "「%(label)s」必須是數字。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"%(label)s must be a single line without line breaks or control characters."
+msgstr "「%(label)s」必須是單行文字，不能有換行或控制字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be a whole number."
+msgstr "「%(label)s」必須是整數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be at least %(min)s."
+msgstr "「%(label)s」不得小於 %(min)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be at most %(max)s."
+msgstr "「%(label)s」不得大於 %(max)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be on or off (true or false)."
+msgstr "「%(label)s」只能是開啟或關閉（true 或 false）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be one of: %(options)s."
+msgstr "「%(label)s」只能是下列其中一個：%(options)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be text."
+msgstr "「%(label)s」必須是文字。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Back to editing"
+msgstr "返回修改"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Confirm and save"
+msgstr "確認並儲存"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "No changes to apply."
+msgstr "設定沒有變更，不需要套用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"Reserved address: \"%(entry)s\" is not a host:port address such as "
+"1.tcp.ngrok.io:12345."
+msgstr "保留位址：「%(entry)s」不是「主機:埠」格式（例如 1.tcp.ngrok.io:12345）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"Reserved address: enter host:port only, without tcp:// (for example "
+"1.tcp.ngrok.io:12345 instead of \"%(entry)s\")."
+msgstr "保留位址：只填「主機:埠」，不要加 tcp://（例如填 1.tcp.ngrok.io:12345，而不是「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Unknown parameters: %(params)s"
+msgstr "不支援的參數：%(params)s"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
 "\"%(tpl)s\" cannot be provisioned right now: the platform has not pinned a "
