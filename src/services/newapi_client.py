@@ -85,8 +85,12 @@ TIMEOUT_PROVISION = (5, 15)
 PROVISION_TICK_SECONDS = 60
 #: P8（撤 session）是清理步驟：tick 預算用完時另給這麼多秒讓它還能送出。
 SESSION_REVOKE_GRACE_SECONDS = 5
-#: cron 讀取（對帳、計數、SWR 背景刷新、價目）。
+#: cron 讀取（對帳、計數、餘額刷新、SWR 背景刷新、價目）。
 TIMEOUT_CRON_READ = (5, 20)
+#: 開戶以外的 LLM cron 每個 tick 的總預算（N28，DESIGN §3.5「tick ≤ 30 秒」）：剩下的工作
+#: ``_trigger()`` 給下一個 tick。必須容得下一次完整的 cron 讀取（repo-lint
+#: ``newapi-timeout-ladder``）；超過就截斷本次呼叫（``deadline``）。
+CRON_TICK_SECONDS = 30
 #: 剩下的預算不夠一次呼叫時就不送（送了也只會變成 Unknown）。
 MIN_CALL_SECONDS = 2
 #: ``X-Woow-Read-Timeout``＝本次 read timeout − 這個餘裕，夾在代理接受的 1–``PROXY_READ_TIMEOUT_MAX``
@@ -684,6 +688,22 @@ class NewApiClient:
     def ap_get_user(self, user_id, *, timeout=TIMEOUT_PROVISION, deadline=None):
         return self._request('GET', '/api/user/{id}', identity='ap', write=False,
                              timeout=timeout, deadline=deadline, path_params={'id': user_id})
+
+    def ap_list_users(self, page, page_size=100, *, timeout=TIMEOUT_CRON_READ, deadline=None):
+        """``GET /api/user/``（全部使用者，依 id **由小到大**分頁；LLM-02b 餘額刷新）。
+
+        由小到大：分頁途中有人新建帳號只會加在最後一頁之後，不會把還沒讀到的使用者往後擠；
+        new-api 預設是 id 由大到小（``model.NewUserSortOptions``）。回應含其他非 PaaS 使用者，
+        呼叫端自己以本環境的使用者名稱 regex 過濾。
+        """
+        if type(page) is not int or not 1 <= page <= 999999:
+            raise NewApiInputError('page') from None
+        if type(page_size) is not int or not 1 <= page_size <= 100:
+            raise NewApiInputError('page_size') from None
+        return self._request('GET', '/api/user/', identity='ap', write=False,
+                             timeout=timeout, deadline=deadline,
+                             query={'p': page, 'page_size': page_size,
+                                    'sort_by': 'id', 'sort_order': 'asc'})
 
     # ---- user：session 與 PAT 管理（只給 CRON 金鑰） ------------------------ #
     def user_login(self, client_ip, username, password, *, timeout=TIMEOUT_PROVISION,

@@ -224,6 +224,8 @@ def _representative_calls(now):
         'ap_create_user': lambda c: c.ap_create_user('wsab0000000042', 'P' * 64, 'PaaS 42'),
         'ap_search_user': lambda c: c.ap_search_user('wsab0000000042'),
         'ap_get_user': lambda c: c.ap_get_user(42),
+        # 餘額刷新（llm_account._cron_llm_balance_refresh，LLM-02b）。
+        'ap_list_users': lambda c: c.ap_list_users(3, 100),
         'user_login': lambda c: c.user_login(TENANT_IP, 'wsab0000000042', 'P' * 64),
         'user_list_access_tokens': lambda c: c.user_list_access_tokens(TENANT_IP, JWT),
         'user_verify_generate': lambda c: c.user_verify_generate(TENANT_IP, JWT, 'P' * 64,
@@ -320,6 +322,17 @@ class TestClientMatchesProxyRouteTable(_Base):
                 continue
             sent.add(name)
         self.assertEqual(sent, set(nac.WEB_METHODS))
+
+    def test_list_users_rejects_bad_paging_before_sending(self):
+        client = self.client()
+        for page, size in ((0, 100), (1, 0), (1, 101), ('1', 100), (True, 100), (1, 1.5)):
+            with self.subTest(page=page, size=size):
+                with self.assertRaises(nac.NewApiInputError):
+                    client.ap_list_users(page, size)
+        self.assertEqual(self.recorder.requests, [])
+        self.assertTrue(client.ap_list_users(1).ok)
+        raw_query = self.recorder.requests[-1]['path'].partition('?')[2]
+        self.assertEqual(raw_query, 'p=1&page_size=100&sort_by=id&sort_order=asc')
 
     def test_signing_key_for_role_never_falls_back(self):
         environ = {nac.ENV_AUTH_CRON: '%s:%s' % (KID, SECRET)}

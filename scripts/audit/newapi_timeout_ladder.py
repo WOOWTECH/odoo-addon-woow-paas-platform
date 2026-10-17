@@ -13,6 +13,8 @@
    ``llm_api_key._STALE_CREATING_SECONDS`` > 預算＋一次完整呼叫（不會把還在跑的請求判成殭屍）。
 4. 開戶：``PROVISION_TICK_SECONDS`` ≥ 一次完整呼叫；``llm_common.PROVISION_LEASE_MINUTES`` 的 lease
    > tick＋一次完整呼叫＋``SESSION_REVOKE_GRACE_SECONDS``（lease 一定比最壞的一個 tick 長）。
+   其他 LLM cron（LLM-02b）：``CRON_TICK_SECONDS`` ≥ 一次完整的 cron 讀取（``TIMEOUT_CRON_READ``），
+   而且 ≤ 開戶 tick（N28：開戶是唯一允許到 60 秒的 tick）。
 5. **結構**：``NewApiClient`` 每個帶 ``timeout=`` 預設值的公開方法，預設值都必須是某個 ``TIMEOUT_*``
    常數（不能寫字面值），而且「方法 → 常數」的對照必須等於 ``baselines/newapi-timeout-ladder.json``
    ——新增方法或改它的逾時類別要人重新對 DESIGN §3.5 的表，再手改那份 json（``--update-baseline``
@@ -24,7 +26,7 @@
    ``REQUEST_TIMEOUT_MS`` > 互動讀／寫各一次完整呼叫。結構：``llm_service.js`` 裡每個 ``timeoutMs:``
    都只能是 ``KEY_CREATE_TIMEOUT_MS``（不寫字面值），而且 ``/api/llm/keys/create`` 那一呼叫一定帶它。
 
-⚠ 不守的格（具名盲區）：cron 讀取類的 tick 30 秒（N28）在 LLM-02b 有常數之後補；互動寫入的端點總預算
+⚠ 不守的格（具名盲區）：互動寫入的端點總預算
 15 秒（LLM-07）還沒有常數，第 6 點暫以「一次完整呼叫」比；呼叫端明確覆寫 ``timeout=`` 的地方（例如 P9 用
 ``TIMEOUT_PROVISION``）只要是 ``TIMEOUT_*`` 就過，不驗用對了哪一個；代理到 new-api 的實際上游呼叫
 由代理自己的 deadline 邏輯負責（``upstream.py``，代理的單元測試守）。
@@ -144,6 +146,7 @@ def check(root):
         min_call = _int(client, 'MIN_CALL_SECONDS', CLIENT)
         budget = _int(client, 'KEY_CREATE_BUDGET_SECONDS', CLIENT)
         tick = _int(client, 'PROVISION_TICK_SECONDS', CLIENT)
+        cron_tick = _int(client, 'CRON_TICK_SECONDS', CLIENT)
         grace = _int(client, 'SESSION_REVOKE_GRACE_SECONDS', CLIENT)
         lease = _int(common, 'PROVISION_LEASE_MINUTES', COMMON) * 60
         stale = _int(keys, '_STALE_CREATING_SECONDS', KEYS)
@@ -210,6 +213,19 @@ def check(root):
         if lease <= tick + one + grace:
             fail('lease（PROVISION_LEASE_MINUTES）=%ss 必須 > tick＋一次呼叫＋P8 寬限=%ss'
                  '（否則還在跑的 tick 會被另一個 worker 接手）' % (lease, tick + one + grace))
+
+    # 4b. 其他 LLM cron 的 tick（N28）
+    cron_read = timeouts.get('TIMEOUT_CRON_READ')
+    if not isinstance(cron_read, tuple):
+        fail('%s 缺少 TIMEOUT_CRON_READ' % CLIENT)
+    else:
+        one = sum(cron_read)
+        if cron_tick < one:
+            fail('CRON_TICK_SECONDS=%s 必須 ≥ 一次完整的 cron 讀取 %s（TIMEOUT_CRON_READ）'
+                 % (cron_tick, one))
+        if cron_tick > tick:
+            fail('CRON_TICK_SECONDS=%s 不得大於開戶 tick PROVISION_TICK_SECONDS=%s（N28）'
+                 % (cron_tick, tick))
 
     # 5. 結構：方法 → 逾時類別
     literal = sorted(m for m, const in mapping.items() if not const.startswith('TIMEOUT_'))
