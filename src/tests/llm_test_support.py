@@ -26,7 +26,10 @@
    * 帳戶前綴用 :data:`TEST_PREFIX`（``wqa``）：ICP 守衛收、代理的 ``^ws[a-z]{2}\\d{10}$`` 一定
      拒絕——萬一真的有東西外呼，代理 403 ``policy`` 是第二道保險；live server 若撿到這種帳戶，
      也會因為前綴和它自己的設定不符直接 ``llm_identity_mismatch``（零外呼）；
-   * ``ir.cron._notifydb`` 在本行程裡換成 no-op（第三道保險：不叫醒 live server）。
+   * ``ir.cron._notifydb`` 在本行程裡換成 no-op（第三道保險：不叫醒 live server）；
+   * 告警與 incident helper（``llm_event``，LLM-02b）在本行程裡視同「未設定」：committed 測試走到
+     開戶放棄之類的分支時，不會在共用 DB 留下真的告警、寄出真的信、或開帳務群組的 incident；
+   * cleanup 連同本 test 帳戶的 ``llm_event`` 一起刪（``account_id`` 是 ``ondelete='restrict'``）。
 
    測試行程被硬殺時 cleanup 不會跑：cron 會留在停用狀態。手動還原見
    ``python3 .sandbox/llm-acceptance.py --slug <slug> cron-status``／``cron-resume``。
@@ -41,8 +44,10 @@ from odoo import SUPERUSER_ID, api
 
 from ..models import llm_account as llm_account_module
 from ..models import llm_common
+from ..models import llm_event as llm_event_module
 from ..models.llm_account import ACCOUNT_TABLE, PROVISION_CRON_XMLID
 from ..models.llm_api_key import KEY_TABLE
+from ..models.llm_event import EVENT_TABLE
 from ..services import llm_crypto
 from ..services import newapi_client as nac
 
@@ -50,6 +55,8 @@ _logger = logging.getLogger(__name__)
 
 ACCOUNT = 'woow_paas_platform.llm_account'
 KEY = 'woow_paas_platform.llm_api_key'
+EVENT = 'woow_paas_platform.llm_event'
+RUNTIME = 'woow_paas_platform.llm_runtime_state'
 #: ICP 守衛（``w[a-z]{1,3}``）收、代理（``^ws[a-z]{2}\d{10}$``）一定拒絕的前綴。
 TEST_PREFIX = 'wqa'
 TEST_BLOCK = 7
@@ -185,6 +192,8 @@ class CommittedLlmFixture:
                                          return_value=dict(TEST_CONFIG)))
         stack.enter_context(patch.object(type(self.case.env['ir.cron']), '_notifydb',
                                          lambda records: None))
+        stack.enter_context(patch.object(llm_event_module, 'llm_unconfigured',
+                                         return_value=True))
         self.case.addCleanup(stack.close)
         with self.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s', (CRON_PAUSE_LOCK_TIMEOUT,))
@@ -230,9 +239,12 @@ class CommittedLlmFixture:
                 else:
                     ids = sorted(set(self.account_ids))
                 if ids:
+                    cr.execute('DELETE FROM %s WHERE account_id = ANY(%%s)' % EVENT_TABLE, (ids,))
                     cr.execute('DELETE FROM %s WHERE account_id = ANY(%%s)' % KEY_TABLE, (ids,))
                     cr.execute('DELETE FROM %s WHERE id = ANY(%%s)' % ACCOUNT_TABLE, (ids,))
                 if self.partner_ids:
+                    cr.execute('DELETE FROM %s WHERE partner_id = ANY(%%s)' % EVENT_TABLE,
+                               (self.partner_ids,))
                     cr.execute('DELETE FROM res_partner WHERE id = ANY(%s)', (self.partner_ids,))
                 if self._trigger_floor is not None:
                     cr.execute('DELETE FROM ir_cron_trigger WHERE cron_id = %s AND id > %s',

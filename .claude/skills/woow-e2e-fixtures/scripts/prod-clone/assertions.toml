@@ -432,6 +432,15 @@ expected = "0"
 when_absent = "pass"
 note = "LLM-01b（DESIGN §2.9）：每位消費者的 new-api 密碼與 UP 密文；prod 在 LLM-17 之前沒有這張表"
 
+[[check]]
+check_id = "E06_llm_alert_outlets"
+table = "ir_config_parameter"
+query = """SELECT count(*) FROM ir_config_parameter
+ WHERE key IN ('woow_paas_platform.llm_alert_email', 'woow_paas_platform.llm_alert_webhook_url')
+   AND coalesce(value, '') <> ''"""
+expected = "0"
+note = "LLM-02b（N13）：AI 模型告警的收件人與 webhook；clone 不得寄信或打 webhook 給負責人"
+
 # ───── PII ─────
 [[check]]
 check_id = "P01_partner_email"

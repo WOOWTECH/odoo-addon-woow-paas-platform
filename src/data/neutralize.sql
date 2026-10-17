@@ -116,7 +116,8 @@ DELETE FROM woow_paas_platform_oauth_device_code;
 -- ---------------------------------------------------------------------------
 -- AI 模型分頁（LLM-01b；DESIGN §2.9）。
 -- 設定：代理改黑洞值（＝「未設定」，所有 LLM cron 第一行就 return）、分頁關閉、
--- canary 清空。key 可能不存在（show_llm 本來就不 seed）⇒ upsert。
+-- canary 清空；告警出口（LLM-02b）的收件人與 webhook 清空（clone 不得寄信給負責人）。
+-- key 可能不存在（show_llm 本來就不 seed）⇒ upsert。
 -- 密文：每位消費者的 new-api 密碼與 UP 只改「有值」的列為 sentinel；程式讀到
 -- 'neutralized' 一律 fail closed（不重簽、不重新開戶）。用 NULL 反而會讓 clone 接上
 -- 任何 new-api 時對既有帳戶重產密碼、觸發撞名流程，也看不出 DB 是否已中和。
@@ -125,7 +126,9 @@ DELETE FROM woow_paas_platform_oauth_device_code;
 INSERT INTO ir_config_parameter (key, value)
 VALUES ('woow_paas_platform.newapi_proxy_url', 'http://127.0.0.1:9'),
        ('woow_paas_platform.show_llm', 'False'),
-       ('woow_paas_platform.llm_canary_partner_id', '')
+       ('woow_paas_platform.llm_canary_partner_id', ''),
+       ('woow_paas_platform.llm_alert_email', ''),
+       ('woow_paas_platform.llm_alert_webhook_url', '')
     ON CONFLICT (key) DO
        UPDATE SET value = EXCLUDED.value;
 
