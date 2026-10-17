@@ -318,6 +318,7 @@
                 currentPlanId="home.subscription?.plan_id ?? undefined"
                 loadPlans="loadSmartHomePlans"
                 confirmChange="confirmSmartHomeChangePlan"
+                estimateChange="estimateSmartHomeChangePlan"
                 onClose.bind="hideChangePlan"
                 onChanged.bind="onPlanChanged"/>
 

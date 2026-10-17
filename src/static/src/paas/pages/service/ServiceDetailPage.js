@@ -739,6 +739,11 @@ export class ServiceDetailPage extends Component {
         return cloudService.changePlan(this.props.serviceId, planId);
     };
 
+    // AUDITFIX（#1677 A1）：選到方案時問後端換不換得起（不寫 DB）。
+    estimateCloudServiceChangePlan = (planId) => {
+        return cloudService.changePlan(this.props.serviceId, planId, { dryRun: true });
+    };
+
     // Domain Modal
     /**
      * #1535：「自訂網域」從未實作——平台沒有任何寫入 `custom_domain` 的路徑，operator

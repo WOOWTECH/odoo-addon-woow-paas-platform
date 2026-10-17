@@ -601,6 +601,20 @@ class ShSubscriptionFix(models.Model):
             "[SUB_FIX] _sh_create_auto_invoice scan due_or_overdue=%s held=%s threshold=%s",
             len(subscriptions), len(held), threshold,
         )
+        # AUDITFIX change-plan-insufficient-balance（dunning 缺口）：下次扣款日還沒到、但名下
+        # 有已過帳未付發票的進行中訂閱，也要追款——例如錢包不足時開通／換方案留下的首期發票。
+        # 上面的 `next_payment <= today` 撈不到它們（新訂閱的下次扣款日已經是一期之後，年繳＝
+        # 一年後），那張發票原本一整年都不會被追。結清時不推進下次扣款日（見
+        # `_process_subscription_billing` 的 `advance_on_success`）。
+        unpaid = self._woow_subscriptions_with_unpaid_invoice(today) - subscriptions
+        unpaid_held = self._woow_billing_hold_services(unpaid)
+        for subscription in unpaid:
+            service = unpaid_held.get(subscription.id)
+            if service:
+                self._hold_billing_for_never_running_service(subscription, service)
+                continue
+            self._process_subscription_billing(
+                subscription, threshold, advance_on_success=False)
         for subscription in subscriptions:
             service = held.get(subscription.id)
             if service:
@@ -713,8 +727,28 @@ class ShSubscriptionFix(models.Model):
         )
         return mail
 
-    def _process_subscription_billing(self, subscription, threshold):
-        """Per-subscription billing for one cron tick. Isolated for testability."""
+    @api.model
+    def _woow_subscriptions_with_unpaid_invoice(self, today):
+        """進行中、下次扣款日在 ``today`` 之後、名下有已過帳未付（或部分付款）發票的訂閱。
+
+        AUDITFIX：給 ``_sh_create_auto_invoice`` 追「提早開出、沒付清」的發票用（主迴圈只撈
+        ``next_payment <= today``）。草稿、已取消、已付清的發票不算。只讀。
+        """
+        moves = self.env['account.move'].sudo().search([
+            ('move_type', '=', 'out_invoice'),
+            ('state', '=', 'posted'),
+            ('payment_state', 'in', ('not_paid', 'partial')),
+            ('sh_subscription_id.state', '=', 'in_progress'),
+            ('sh_subscription_id.sh_date_of_next_payment', '>', today),
+        ])
+        return moves.mapped('sh_subscription_id')
+
+    def _process_subscription_billing(self, subscription, threshold, advance_on_success=True):
+        """Per-subscription billing for one cron tick. Isolated for testability.
+
+        ``advance_on_success=False``（AUDITFIX）：結清的是「已經開始的這一期」提早開出的發票
+        （下次扣款日還沒到），付清只重置失敗計數，不推進 ``sh_date_of_next_payment``。
+        """
         today = fields.Date.today()
         partner = subscription.sh_partner_id
         _logger.info(
@@ -729,7 +763,15 @@ class ShSubscriptionFix(models.Model):
                 invoice, is_new = self._get_or_create_cycle_invoice(subscription)
                 paid = self._try_settle_invoice(subscription, invoice)
 
-                if paid:
+                if paid and not advance_on_success:
+                    if subscription.woow_consecutive_payment_failures:
+                        subscription.write({'woow_consecutive_payment_failures': 0})
+                    _logger.info(
+                        "[SUB_FIX] unpaid invoice settled sub=%s invoice=%s next_payment=%s "
+                        "(not advanced)", subscription.id, invoice.name,
+                        subscription.sh_date_of_next_payment,
+                    )
+                elif paid:
                     self._on_payment_success(subscription, invoice, today)
                     if is_new:
                         self._send_invoice_pdf(subscription, invoice)

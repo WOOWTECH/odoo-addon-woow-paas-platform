@@ -822,6 +822,8 @@ from . import test_access_resync_cron_803
 # 🔴 不共用 mixin 放 `test_*`（loader 走 `__dict__`，mixin 上的不會被執行）；
 # 共用的只有 module-level helper function。
 from . import test_change_plan_ends_trial_36
+# AUDITFIX change-plan-insufficient-balance（#1677 A1）＋未付首期發票進 dunning
+from . import test_change_plan_balance_gate_auditfix
 
 # #750 第 2 項：SA 卡片規格 sa_max_access_policies 的 0=unlimited 顯示。
 # 🔴 routes 側（0=none allowed，語意相反）的顯示繫於 #770，本檔把「維持印

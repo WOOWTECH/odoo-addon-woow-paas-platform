@@ -15885,6 +15885,14 @@ msgstr "為錢包儲值"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.js:0
+msgid ""
+"Insufficient balance. You need %(shortfall)s more to change to this plan "
+"(first payment %(required)s; available %(available)s including the refund)."
+msgstr "餘額不足：換成這個方案還需要 %(shortfall)s（首期應付 %(required)s；含退點可用 %(available)s）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid "Top-up"
 msgstr "儲值"

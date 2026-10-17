@@ -351,15 +351,15 @@ export const securityAccessService = {
   // picker / refund-preview modal is a deliberate follow-up (the tenant-facing
   // self-serve plan-change UX is not in P1 scope; until then change-plan is
   // driven from backend/admin only).
-  async changePlan(workspaceId, saId, planId) {
+  async changePlan(workspaceId, saId, planId, { dryRun = false } = {}) {
     try {
       const result = await jsonRpc(
         `/api/workspaces/${workspaceId}/security-accesses/${saId}/change-plan`,
-        { plan_id: planId },
+        { plan_id: planId, ...(dryRun ? { dry_run: true } : {}) },
       );
       return result.success
         ? { success: true, data: result.data }
-        : { success: false, error: result.error };
+        : { success: false, error: result.error, data: result.data };
     } catch (err) {
       return { success: false, error: err.message };
     }

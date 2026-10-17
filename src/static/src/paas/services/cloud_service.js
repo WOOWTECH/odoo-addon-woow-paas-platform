@@ -147,20 +147,26 @@ export const cloudService = reactive({
      * @param {number} planId - New plan ID
      * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
      */
-    async changePlan(serviceId, planId) {
-        this.operationLoading.changePlan = true;
+    async changePlan(serviceId, planId, { dryRun = false } = {}) {
+        // AUDITFIX（#1677 A1）：dryRun＝只問「換得起嗎」（首期應付／錢包／差額），後端什麼都不寫。
+        if (!dryRun) {
+            this.operationLoading.changePlan = true;
+        }
         try {
             const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/change-plan`, {
                 plan_id: planId,
+                ...(dryRun ? { dry_run: true } : {}),
             });
             if (result.success) {
                 return { success: true, data: result.data };
             }
-            return { success: false, error: result.error };
+            return { success: false, error: result.error, data: result.data };
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.changePlan = false;
+            if (!dryRun) {
+                this.operationLoading.changePlan = false;
+            }
         }
     },
 
