@@ -29,6 +29,7 @@ import { cloudService } from "../../services/cloud_service";
 import { useServiceResources } from "../../services/service_resources";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
+import { workspaceService } from "../../services/workspace_service";
 import { router } from "../../core/router";
 import { formatUserDate } from "../../utils/datetime_helpers";
 import { showProjects } from "../../core/platform_config";
@@ -170,11 +171,18 @@ export class ServiceDetailPage extends Component {
     _publishBreadcrumb() {
         const service = this.state.service;
         if (!service) return;
+        const wsId = this.props.workspaceId;
+        const known = service.workspace_name || workspaceService.cachedWorkspaceName(wsId);
         breadcrumbService.set("service-detail", [
             { label: _t("Workspaces"), path: "workspaces" },
-            { label: service.workspace_name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
+            { label: known || _t("Workspace"), path: `workspace/${wsId}` },
             { label: service.name, path: null },
         ]);
+        // X-LC-001-4／FU2 r139：服務序列化不帶工作區名稱，deep-link 時補讀一次。
+        if (!known) {
+            workspaceService.resolveWorkspaceName(wsId).then(
+                (name) => breadcrumbService.relabelWorkspace("service-detail", wsId, name));
+        }
     }
 
     /**
