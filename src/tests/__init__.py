@@ -370,6 +370,8 @@ from . import test_ha_full_apporo_seed
 # ha-full 換 chart 0.1.6：使用者 2026-10-07 的決定（#1446／#1447／#1442 不做、磁碟 20G）
 # ＋既有服務 Redeploy 不擴容、政策鍵跟著範本走。
 from . import test_ha_full_016_user_decisions
+# 商用驗收 X-BK-005-2／INFRA-DOC-002-1（#1787）：ha-full 說明寫實內建備份與 OAuth 回呼網址。
+from . import test_ha_full_copy_backup_oauth
 from . import test_pi_agent_seed
 from . import test_omnigent_seed
 from . import test_code_server_seed
