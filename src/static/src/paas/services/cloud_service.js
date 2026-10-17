@@ -613,7 +613,8 @@ export const cloudService = reactive({
         try {
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/revisions`, {});
             if (result.success) {
-                return { success: true, data: result.data };
+                // INFRA-FIX-018-1：historyMax＝operator 每個 release 保留幾筆 revision（舊後端沒有 ⇒ null）。
+                return { success: true, data: result.data, historyMax: result.history_max ?? null };
             } else {
                 return { success: false, error: result.error };
             }

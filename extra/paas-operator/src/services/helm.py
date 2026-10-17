@@ -90,6 +90,16 @@ def _openapi_validation_args() -> List[str]:
     return ["--disable-openapi-validation"] if settings.helm_disable_openapi_validation else []
 
 
+def _history_max_args() -> List[str]:
+    """INFRA-FIX-018-1／AI-HER-003-1：upgrade／rollback 明確帶 ``--history-max``。
+
+    不帶就是 helm 預設 10，失敗與值不變的 upgrade 都佔名額，可回復的好版本很快被擠掉。
+    rollback 也要帶：它同樣寫一筆新 revision、並照**自己的**上限修剪。install 沒有這個
+    旗標（第一筆也沒有東西可修剪），不要加。值與取捨見 ``settings.helm_history_max``。
+    """
+    return ["--history-max", str(settings.helm_history_max)]
+
+
 def _live_objects(namespace: str, kinds: str = "pvc,statefulsets") -> Optional[List[Dict[str, Any]]]:
     """Live objects of ``kinds`` in ``namespace`` (kubectl ``items``); None on failure.
 
@@ -1019,6 +1029,7 @@ class HelmService:
         # #1407: existing PVCs/StatefulSets render with their live immutable fields.
         args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
         args.extend(_openapi_validation_args())
+        args.extend(_history_max_args())
 
         if version:
             args.extend(["--version", version])
@@ -1121,6 +1132,7 @@ class HelmService:
 
         if revision is not None:
             args.append(str(revision))
+        args.extend(_history_max_args())
 
         with helm_operation_slot("rollback"):  # #1552
             result = self._run_command(args)

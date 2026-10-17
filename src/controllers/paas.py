@@ -5422,6 +5422,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         #1526：每個 revision 另帶 ``chart_version`` 與 ``rollback_allowed``——chart 比
         目前部署中舊的 revision 不能回復，對話框據此把它們標成不可選。
+        INFRA-FIX-018-1：另回 ``history_max``（operator 每個 release 保留幾筆 revision）。
         """
         client = get_paas_operator_client(request.env)
         if not client:
@@ -5436,6 +5437,9 @@ class PaasController(HiddenChainMixin, Controller):
             return {
                 'success': True,
                 'data': annotate_rollback_floor(result.get('revisions', [])),
+                # INFRA-FIX-018-1／AI-HER-003-1：operator 的 helm --history-max；對話框寫
+                # 「最多保留最近 N 個版本」。舊 operator 沒有這個欄位 ⇒ None（不顯示）。
+                'history_max': result.get('history_max'),
             }
 
         except PaaSOperatorConnectionError:
