@@ -10,7 +10,7 @@
                 <header>
                     <button name="action_redeploy" type="object"
                             string="Redeploy" icon="fa-refresh"
-                            confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. Continue?"
+                            confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. Each redeploy records a new revision even when nothing changed, and only the most recent revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). Continue?"
                             class="oe_highlight"
                             invisible="state in ('pending', 'deploying', 'deleting')"/>
                     <field name="state" widget="statusbar"
@@ -148,7 +148,7 @@
                 <field name="deployed_at"/>
                 <button name="action_redeploy" type="object"
                         string="Redeploy" icon="fa-refresh"
-                        confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. Continue?"/>
+                        confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. Each redeploy records a new revision even when nothing changed, and only the most recent revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). Continue?"/>
             </list>
         </field>
     </record>

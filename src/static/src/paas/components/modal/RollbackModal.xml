@@ -86,6 +86,12 @@
                             </span>
                         </div>
 
+                        <!-- INFRA-FIX-018-1／AI-HER-003-1：helm 只保留最近 N 筆 revision。 -->
+                        <div t-if="historyHint" class="o_woow_rollback_info o_woow_rollback_history_hint">
+                            <WoowIcon name="'history'" size="18"/>
+                            <span t-esc="historyHint"/>
+                        </div>
+
                         <div t-if="hasBlockedRevisions" class="o_woow_rollback_info o_woow_rollback_floor_hint">
                             <WoowIcon name="'lock'" size="18"/>
                             <span>

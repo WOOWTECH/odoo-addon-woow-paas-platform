@@ -840,6 +840,9 @@ class ReleaseRevisionsResponse(BaseModel):
     """List of release revisions."""
 
     revisions: List[ReleaseRevision]
+    # INFRA-FIX-018-1／AI-HER-003-1：operator 的 helm --history-max（每個 release 最多保留
+    # 幾筆 revision，含 failed）。更舊的 revision 已被 helm 清掉，無法回復。
+    history_max: Optional[int] = None
 
 
 class NamespaceInfo(BaseModel):

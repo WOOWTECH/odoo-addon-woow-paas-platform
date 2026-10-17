@@ -35,6 +35,9 @@ export class RollbackModal extends Component {
             // #1433：選好版本後先進確認步驟（說明會回復什麼、不會回復什麼），
             // 再按一次才真的送出。原本單擊即執行、對話框也沒提帳密。
             confirming: false,
+            // INFRA-FIX-018-1／AI-HER-003-1：operator 每個 release 只保留最近 N 筆 revision
+            // （helm --history-max），更舊的已被清掉、無法回復；對話框要講明。
+            historyMax: null,
         });
 
         onMounted(() => {
@@ -75,6 +78,7 @@ export class RollbackModal extends Component {
 
         if (result.success) {
             this.state.revisions = result.data || [];
+            this.state.historyMax = result.historyMax ?? null;
         } else {
             this.state.error = result.error || _t("Failed to load revision history");
         }
@@ -98,6 +102,21 @@ export class RollbackModal extends Component {
      */
     isBlocked(revision) {
         return revision.rollback_allowed === false && !this.isCurrent(revision);
+    }
+
+    /**
+     * INFRA-FIX-018-1：「最多保留最近 N 個版本」。N 由 operator 回報（HELM_HISTORY_MAX），
+     * 前端不寫死；舊後端沒有回報時不顯示這一行。
+     */
+    get historyHint() {
+        const max = this.state.historyMax;
+        if (!Number.isInteger(max) || max < 1) {
+            return "";
+        }
+        return _t(
+            "Only the most recent %s revisions are kept (failed updates included); older revisions can no longer be restored.",
+            max
+        );
     }
 
     get hasBlockedRevisions() {

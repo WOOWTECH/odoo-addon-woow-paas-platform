@@ -1596,7 +1596,10 @@ def get_release_revisions(namespace: str, name: str):
     """
     try:
         revisions = helm_service.history(namespace, name)
-        return ReleaseRevisionsResponse(revisions=revisions)
+        # INFRA-FIX-018-1／AI-HER-003-1：回報保留上限，平台對話框寫「最多保留最近 N 版」。
+        return ReleaseRevisionsResponse(
+            revisions=revisions, history_max=settings.helm_history_max,
+        )
 
     except ValueError as e:
         raise HTTPException(

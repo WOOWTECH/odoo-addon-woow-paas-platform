@@ -12726,6 +12726,14 @@ msgstr "已回復到版本 %s"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid ""
+"Only the most recent %s revisions are kept (failed updates included); older "
+"revisions can no longer be restored."
+msgstr "只保留最近 %s 個版本（含更新失敗的版本），更早的版本已無法回復。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
 msgid "Reset the admin password of this service?"
 msgstr "要重設這個服務的管理員密碼嗎？"
@@ -15796,10 +15804,13 @@ msgstr "這會移除通道設定與所有相關資料。此操作無法復原。
 msgid ""
 "Re-apply this product's current chart version to the service (in-place helm "
 "upgrade; data volumes are kept). If the release no longer exists, the service "
-"is installed again. Continue?"
+"is installed again. Each redeploy records a new revision even when nothing "
+"changed, and only the most recent revisions are kept for rollback (operator "
+"HELM_HISTORY_MAX, default 20). Continue?"
 msgstr ""
 "將此商品目前釘選的 chart 版本重新套用到這個服務（原地 helm upgrade，資料磁碟會保留）。"
-"若 release 已不存在，則重新安裝。確定要繼續？"
+"若 release 已不存在，則重新安裝。即使設定與版本都沒變，每次重新部署也會新增一個版本；"
+"回復只保留最近的幾個版本（operator 的 HELM_HISTORY_MAX，預設 20）。確定要繼續？"
 
 #. module: woow_paas_platform
 #. odoo-javascript

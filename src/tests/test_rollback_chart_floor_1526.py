@@ -355,6 +355,28 @@ class TestRollbackChartFloorAndKeys1526(TransactionCase):
         self.assertTrue(result['success'], result)
         self.assertEqual([r['rollback_allowed'] for r in result['data']], [False, True, True])
 
+    def _listing(self, operator_result):
+        service = self._service(self._od_template('rb1526-hmax'), 'svc-rb1526-hmax')
+        client = self._client()
+        client.get_revisions.return_value = operator_result
+        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
+                patch(f'{_CONTROLLER}.request',
+                      new=MagicMock(env=self.env(user=self.admin_user))):
+            return self.controller._get_service_revisions(service)
+
+    def test_revisions_listing_reports_the_history_limit(self):
+        """INFRA-FIX-018-1／AI-HER-003-1：operator 回報的 helm --history-max 原樣交給對話框。"""
+        result = self._listing({'revisions': AUDIT_HISTORY, 'history_max': 20})
+        self.assertTrue(result['success'], result)
+        self.assertEqual(result['history_max'], 20)
+
+    def test_revisions_listing_from_an_older_operator_has_no_limit(self):
+        """舊 operator 沒有 history_max ⇒ None（對話框不顯示那一行），清單照舊。"""
+        result = self._listing({'revisions': AUDIT_HISTORY})
+        self.assertTrue(result['success'], result)
+        self.assertIsNone(result['history_max'])
+        self.assertEqual(len(result['data']), 3)
+
     # ---- 2. password 型設定不跟著回復 ---------------------------------------
 
     def test_password_specs_join_the_preserved_paths(self):

@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     # operator_busy，什麼都沒套用，可以直接重送）。平台 helm 類請求的 HTTP 預算是 120s
     # （HELM_OPERATION_TIMEOUT），這裡要留給真正的 helm 作業。
     helm_queue_timeout_seconds: int = Field(default=45, gt=0)
+    # HELM_HISTORY_MAX：每個 release 最多保留幾筆 revision（`helm upgrade`／`helm rollback`
+    # 的 --history-max；install 沒有這個旗標）。商用驗收 INFRA-FIX-018-1／AI-HER-003-1：
+    # 原本吃 helm 預設 10，連續失敗的 upgrade（failed revision 也佔名額）、設定修改、回復、
+    # 值不變的 Redeploy 加起來超過 10 筆，就把最後一個可回復的好版本擠出歷史。
+    # ⚠ 取捨：每筆 revision 是一個 release Secret，含當時的完整 values（也就是當時的
+    # 明文憑證）；上限越高，換掉的舊密碼在叢集裡留得越久、etcd 也越大。不接受 0
+    # （helm 的 0＝不限＝舊憑證永遠不會被清掉）。平台回復對話框的「最多保留最近 N 版」
+    # 讀的是 revisions API 回報的這個值。
+    helm_history_max: int = Field(default=20, ge=1)
 
     # CORS
     cors_origins: str = ""  # Comma-separated list of allowed origins, empty = block all external
