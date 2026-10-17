@@ -83,12 +83,13 @@ class TestCheckSpecValue(TransactionCase):
         spec = {'type': 'number', 'min': 1, 'max': 65535, 'integer': True}
         for value in (1, 465, 65535, 587.0, ''):
             self.assertIsNone(check_spec_value(spec, value)[1], repr(value))
-        cases = {
-            '587': 'not_number', True: 'not_number', float('nan'): 'not_number',
-            float('inf'): 'not_number', [1]: 'not_number',
-            465.5: 'not_integer', 0: 'below_min', 70000: 'above_max',
-        }
-        for value, code in cases.items():
+        # 用 tuple 清單而不是 dict：[1] 不能當 dict 鍵，而且 True 與 1 會被 dict 合併成同一鍵。
+        cases = [
+            ('587', 'not_number'), (True, 'not_number'), (float('nan'), 'not_number'),
+            (float('inf'), 'not_number'), ([1], 'not_number'),
+            (465.5, 'not_integer'), (0, 'below_min'), (70000, 'above_max'),
+        ]
+        for value, code in cases:
             self.assertEqual(check_spec_value(spec, value)[1][0], code, repr(value))
         self.assertIsNone(check_spec_value({'type': 'number'}, 1.5)[1], '沒有 integer 時收小數')
 
