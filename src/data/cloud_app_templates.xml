@@ -1547,7 +1547,16 @@
                  proxy_buffer_size 32k（M4 R10：HA add-on 經 Ingress 回 ~9KB 標頭時，原本 4k/8k 預設在這層回 502）。
                  只改 xff-proxy ConfigMap；Redeploy 只重建 xff-proxy pod，VM／DataVolume 的 spec 不變（ws97 實測 VMI 未重建）。
                  HAOS 映像不變，所以這次不需要同步改 helm_default_values.image.*。回滾值：0.1.4。 -->
-            <field name="helm_chart_version">0.1.5</field>
+            <!-- 0.1.6（2026-10-17，woow-paas-charts #211，INFRA-HAOS-004-1）：VirtualMachine 的
+                 spec.template.spec 加 terminationGracePeriodSeconds（vm.terminationGracePeriodSeconds，預設 300，
+                 只收 30..3600）。0.1.5 以前沒設＝KubeVirt 預設 30 秒：平台停機／重啟時 Supervisor 還在逐一停 add-on，
+                 HA Core 就被強制終止（sqlite 未乾淨關閉、restore_state 遺失；ws97 實測）。seed 刻意不設這個鍵，交給
+                 chart 預設（守線 test_vm_termination_grace_left_to_chart_default）。
+                 ⚠ 寬限值在 VMI 啟動時才複製進去：Redeploy 只改 VM spec、不重建正在跑的 VMI，升版後的「第一次」停機
+                 仍是 30 秒——要先讓 guest 自己關機（HA 設定 → 系統 → 關機，runStrategy Always 會用新 spec 重開 VMI），
+                 之後的停機／重啟才是 300 秒。HAOS 映像不變，不需要同步改 helm_default_values.image.*。
+                 回滾值：0.1.5（回滾後下一次 VMI 啟動又退回 30 秒）。 -->
+            <field name="helm_chart_version">0.1.6</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
                  （UEFI secureBoot=false、masquerade 僅轉 guest :80、limits==requests、
                  DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
