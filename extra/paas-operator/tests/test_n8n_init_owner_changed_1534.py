@@ -98,7 +98,9 @@ def test_parameters_go_through_stdin_never_argv():
     call = fake.ensure_calls[0]
     assert call["command"] == ["node", "-e", ENSURE_API_KEY_SCRIPT]
     stdin = json.loads(call["stdin"])
-    assert stdin == {"label": "mcp-sidecar", "expected_email": None, "expires_at": 4102444800}
+    # DATA-N8N-006-1：期限改成「現在＋TTL」、多帶輪替窗口（細節見 test_n8n_sidecar_key_ttl_dn006.py）
+    assert set(stdin) == {"label", "expected_email", "expires_at", "rotate_before_seconds"}
+    assert stdin["label"] == "mcp-sidecar" and stdin["expected_email"] is None
     assert _PASSWORD not in call["stdin"], "owner 密碼完全用不到，也不該送進容器"
     assert call["timeout"] == 40
 

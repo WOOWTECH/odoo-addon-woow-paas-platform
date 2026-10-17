@@ -13,7 +13,8 @@
 // init 在 owner 已存在時真正需要的只有「一把可用的 API key」，所以：
 //   1. 找 owner（必須恰好一個、已完成 setup）；平台還沒確認過 owner（expected_email 有值）時，
 //      owner 的 Email 必須是開通時設定的那一個——否則可能是別人搶先完成了 setup，不發 key。
-//   2. owner 名下已有同名（label）的 key，且用它打公開 API 回 200 ⇒ 沿用。
+//   2. owner 名下已有同名（label）的 key，scope 在 sidecar policy 內、期限沒到輪替窗口（stdin 的
+//      expires_at／rotate_before_seconds，見下方 expiry policy），且用它打公開 API 回 200 ⇒ 沿用。
 //   3. 否則以 n8n 自己的方式簽一把新的 JWT key（HS256；iss=n8n、aud=public-api、sub=owner id，
 //      與 PublicApiKeyService.generateApiKey 相同），刪掉同名舊 key 後寫入，再用公開 API 驗一次；
 //      驗不過就把剛寫的那列刪掉、回報失敗——簽章密鑰的來源判斷錯了也不會留下壞 key。
@@ -68,6 +69,33 @@ function hasOnlySidecarScopes(stored) {
   return Array.isArray(list) && list.length > 0 && list.every(isSidecarScope);
 }
 // ---- end sidecar scope policy ----
+
+// ---- sidecar key expiry policy（DATA-N8N-006-1 期限；期限與窗口由 n8n_init.py 經 stdin 傳入）----
+// 以前簽的 key 期限是 2100-01-01（等於永不過期）。現在 init 每次都把「現在＋期限」與輪替窗口送進來；
+// 既有 key 只在「有期限、不比政策上限遠、剩下的時間超過窗口」時沿用，其餘都換新——init 重跑
+// （Redeploy／重試開通）就是輪替點。
+const CLOCK_SKEW_SECONDS = 86400; // operator 與 pod 的時鐘差容忍：剛簽的 key 不會被當成「比上限遠」
+
+// n8n 的 API key 是 JWT，期限在 payload 的 exp（n8n 自己的 GET /rest/api-keys 也是這樣算 expiresAt）。
+function apiKeyExpiry(apiKey) {
+  if (typeof apiKey !== "string") return null;
+  const parts = apiKey.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    return typeof payload.exp === "number" && Number.isFinite(payload.exp) ? payload.exp : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function isFreshEnough(apiKey, now, expiresAt, rotateBefore) {
+  const exp = apiKeyExpiry(apiKey);
+  if (exp === null) return false; // 沒有期限（永不過期）或看不懂 ⇒ 換
+  if (expiresAt && exp > expiresAt + CLOCK_SKEW_SECONDS) return false; // 比政策上限還遠（2100 的舊 key）⇒ 換
+  return exp - now > (rotateBefore || 0); // 快到期（含已過期）⇒ 換
+}
+// ---- end sidecar key expiry policy ----
 
 class EnsureFailure extends Error {
   constructor(code, message) {
@@ -329,7 +357,13 @@ async function main() {
     throw new EnsureFailure("invalid_input", "label is required");
   }
   const expectedEmail = input.expected_email || null;
-  const expiresAt = Number(input.expires_at) || null;
+  const now = Math.floor(Date.now() / 1000);
+  // DATA-N8N-006-1：期限必填且必須在未來——缺漏時拒絕，不要退回「不帶 exp＝永不過期」。
+  const expiresAt = Number(input.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+    throw new EnsureFailure("invalid_input", "expires_at must be a future unix timestamp");
+  }
+  const rotateBefore = Math.max(0, Number(input.rotate_before_seconds) || 0);
 
   const req = n8nRequire();
   if (!req) throw new EnsureFailure("module_unavailable", "n8n installation not found on PATH");
@@ -349,21 +383,21 @@ async function main() {
     const keys = db.q("user_api_keys");
 
     // 2. 沿用：owner 名下同名的 key 仍可用就不換（不必每次 Redeploy 都換 key）。
-    // DATA-N8N-006-1：scope 超出 sidecar policy 的舊 key（全權限）不沿用——Redeploy 時順便換成最小權限。
+    // DATA-N8N-006-1：scope 超出 sidecar policy 的舊 key（全權限）不沿用——Redeploy 時順便換成最小權限；
+    // 沒有期限／期限比政策上限遠（2100 的舊 key）／快到期的也不沿用——init 重跑就是輪替點。
     const existing = await db.all(
       `SELECT "apiKey", "scopes" FROM ${keys} WHERE "userId" = ? AND "label" = ? AND "audience" = ?`,
       [owner.id, label, API_KEY_AUDIENCE]);
     for (const row of existing) {
-      if (row.apiKey && hasOnlySidecarScopes(row.scopes) && (await apiCheck(row.apiKey)) === 200) {
-        return { api_key: row.apiKey, reused: true };
+      if (row.apiKey && hasOnlySidecarScopes(row.scopes) && isFreshEnough(row.apiKey, now, expiresAt, rotateBefore) && (await apiCheck(row.apiKey)) === 200) {
+        return { api_key: row.apiKey, reused: true, expires_at: apiKeyExpiry(row.apiKey) };
       }
     }
 
-    // 3. 新簽一把；同名舊 key（已失效）先刪，(userId, label) 有唯一限制。
+    // 3. 新簽一把；同名舊 key（已失效、或要輪替）先刪，(userId, label) 有唯一限制。
     const secret = await jwtSecret(db, req);
-    const now = Math.floor(Date.now() / 1000);
     const payload = { sub: owner.id, iss: API_KEY_ISSUER, aud: API_KEY_AUDIENCE, jti: crypto.randomUUID(), iat: now };
-    if (expiresAt && expiresAt > now) payload.exp = expiresAt;
+    payload.exp = expiresAt;
     const apiKey = signJwt(payload, secret);
     const id = newId();
     await db.begin();
@@ -382,14 +416,14 @@ async function main() {
       await db.run(`DELETE FROM ${keys} WHERE "id" = ?`, [id]).catch(() => {});
       throw new EnsureFailure("key_unverified", `n8n rejected the new API key (HTTP ${status})`);
     }
-    return { api_key: apiKey, reused: false };
+    return { api_key: apiKey, reused: false, expires_at: apiKeyExpiry(apiKey) };
   } finally {
     await db.close();
   }
 }
 
 main()
-  .then((result) => report({ success: true, api_key: result.api_key, reused: result.reused }))
+  .then((result) => report({ success: true, api_key: result.api_key, reused: result.reused, expires_at: result.expires_at }))
   .catch((e) => {
     if (e instanceof EnsureFailure) report({ success: false, code: e.code, error: e.message });
     // 非預期例外只回報類別：DB driver 的訊息可能帶連線字串，不往外送。
