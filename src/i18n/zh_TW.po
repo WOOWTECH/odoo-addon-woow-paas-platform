@@ -6057,32 +6057,44 @@ msgstr "請輸入工作區名稱以確認"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Enter this in the Dashboard REST API section of the MCP connection settings "
-"(username: admin, password: the Admin Password above). This is the service "
-"root URL, with no sub-path."
+"The address of this service's dashboard. If you use the Hermes MCP "
+"server, enter it in the Dashboard REST API section of that server's "
+"connection settings (username: admin, password: the Admin Password "
+"above). This is the service root URL, with no sub-path."
 msgstr ""
-"填進 MCP 連線設定的 Dashboard REST API 區（帳號 admin，密碼用上面的 Admin "
-"Password）。這是服務根網址，不帶任何子路徑。"
+"這是此服務 dashboard 的位址。若你使用 Hermes MC"
+"P 服務，請填進該服務連線設定的 Dashboard REST AP"
+"I 區（帳號 admin，密碼用上面的 Admin Password"
+"）。這是服務根網址，不帶任何子路徑。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Enter this in the Gateway API Server section of the MCP connection settings."
-msgstr "填進 MCP 連線設定的 Gateway API Server 區。"
+"The API key of this service's Gateway API. If you use the Hermes MCP "
+"server, enter it in the Gateway API Server section of that server's "
+"connection settings."
+msgstr ""
+"這是此服務 Gateway API 的金鑰。若你使用 Hermes "
+"MCP 服務，請填進該服務連線設定的 Gateway API Ser"
+"ver 區。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Enter this in the Gateway API Server section of the MCP connection settings. "
-"This is the full address including its sub-path; the service root URL on its "
-"own will not connect. This applies to this field only — the Dashboard API "
-"URL below is the opposite and needs the root URL with no sub-path."
+"The address of this service's Gateway API. If you use the Hermes MCP "
+"server, enter it in the Gateway API Server section of that server's "
+"connection settings. This is the full address including its sub-path; "
+"the service root URL on its own will not connect. This applies to "
+"this field only — the Dashboard API URL below is the opposite and "
+"needs the root URL with no sub-path."
 msgstr ""
-"填進 MCP 連線設定的 Gateway API Server 區。這是完整位址（含子路徑）；只填服務"
-"根網址會連不上。⚠ 僅限這一格——下面的 Dashboard API URL 相反，要填不帶子路徑的"
-"根網址。"
+"這是此服務 Gateway API 的位址。若你使用 Hermes "
+"MCP 服務，請填進該服務連線設定的 Gateway API Ser"
+"ver 區。這是完整位址（含子路徑）；只填服務根網址會連不上。⚠ 僅"
+"限這一格——下面的 Dashboard API URL 相反，要填不"
+"帶子路徑的根網址。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13687,12 +13699,15 @@ msgstr "共用任務"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Shared by the console and the dashboard (username: admin). Also enter it in "
-"the Dashboard REST API section of the MCP connection settings, together with "
-"the Dashboard API URL below."
+"Shared by the console and the dashboard (username: admin). If you "
+"also use the Hermes MCP server, enter it in the Dashboard REST API "
+"section of that server's connection settings, together with the "
+"Dashboard API URL below."
 msgstr ""
-"console 與 dashboard 共用這一組（帳號 admin）。也要填進 MCP 連線設定的 "
-"Dashboard REST API 區（搭配下方的 Dashboard API URL）。"
+"console 與 dashboard 共用這一組（帳號 admin"
+"）。若你也使用 Hermes MCP 服務，請填進該服務連線設定的 "
+"Dashboard REST API 區（搭配下方的 Dashboa"
+"rd API URL）。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form

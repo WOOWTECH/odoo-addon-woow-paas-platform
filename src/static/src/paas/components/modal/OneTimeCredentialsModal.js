@@ -185,7 +185,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Admin Password"),
             value: data.admin_password,
             hint: _t(
-                "Shared by the console and the dashboard (username: admin). Also enter it in the Dashboard REST API section of the MCP connection settings, together with the Dashboard API URL below."
+                "Shared by the console and the dashboard (username: admin). If you also use the Hermes MCP server, enter it in the Dashboard REST API section of that server's connection settings, together with the Dashboard API URL below."
             ),
         });
     } else if (data && data.gateway_api_key && data.admin_username) {
@@ -206,7 +206,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Gateway API Key"),
             value: data.gateway_api_key,
             hint: data.gateway_api_key_hint
-                || _t("Enter this in the Gateway API Server section of the MCP connection settings."),
+                || _t("The API key of this service's Gateway API. If you use the Hermes MCP server, enter it in the Gateway API Server section of that server's connection settings."),
         });
     }
     if (data && data.gateway_url) {
@@ -214,7 +214,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Gateway API URL"),
             value: data.gateway_url,
             hint: data.gateway_url_hint || _t(
-                "Enter this in the Gateway API Server section of the MCP connection settings. This is the full address including its sub-path; the service root URL on its own will not connect. This applies to this field only — the Dashboard API URL below is the opposite and needs the root URL with no sub-path."
+                "The address of this service's Gateway API. If you use the Hermes MCP server, enter it in the Gateway API Server section of that server's connection settings. This is the full address including its sub-path; the service root URL on its own will not connect. This applies to this field only — the Dashboard API URL below is the opposite and needs the root URL with no sub-path."
             ),
         });
     }
@@ -223,7 +223,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Dashboard API URL"),
             value: data.dashboard_url,
             hint: _t(
-                "Enter this in the Dashboard REST API section of the MCP connection settings (username: admin, password: the Admin Password above). This is the service root URL, with no sub-path."
+                "The address of this service's dashboard. If you use the Hermes MCP server, enter it in the Dashboard REST API section of that server's connection settings (username: admin, password: the Admin Password above). This is the service root URL, with no sub-path."
             ),
         });
     }
