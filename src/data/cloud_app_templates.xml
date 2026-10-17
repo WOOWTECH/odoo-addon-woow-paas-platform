@@ -1164,6 +1164,14 @@
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "容器內 OpenCode 使用的伺服器端 OpenRouter Key（選填）；填了就預設用 OpenCode，修改後服務會自動重啟（約 1–2 分鐘）；網頁介面自行輸入的 BYOK Key 不受影響"}
                 ]}</field>
+            <!-- AI-OD-004-2：金鑰只以 secretKeyRef env 進 daemon StatefulSet（component=daemon），
+                 console Deployment 不吃金鑰。改金鑰後的補重啟（#1435）只滾 daemon，進行中的
+                 console 終端機不再斷線。chart 0.4.0 起 daemon 另有 checksum/api-keys，本來就會滾。 -->
+            <field name="secret_change_restart_component">daemon</field>
+            <!-- AI-OD-006-1：回復版本時，內建 MCP（mcp.enabled）與 Omnigent 暫停（omnigentHost.enabled）
+                 這兩個平台開關，在目標 revision 的 image 與目前相同時維持目前值；image 不同時跟著
+                 目標 revision（mcp.enabled 必須搭配帶 /opt/woow MCP runtime 的 image，硬開會 CrashLoop）。 -->
+            <field name="rollback_feature_switches">{"mcp.enabled": ["image"], "omnigentHost.enabled": ["image"]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">7457</field>

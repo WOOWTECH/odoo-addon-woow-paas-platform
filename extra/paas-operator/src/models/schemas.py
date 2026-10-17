@@ -177,6 +177,16 @@ class ReleaseRollbackRequest(BaseModel):
         "With preserve_value_paths it judges the dry-run of that helm upgrade; a plain helm "
         "rollback (#1685) judges the target revision's stored manifest (helm get manifest)",
     )
+    preserve_when_equal: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        max_length=16,
+        description="AI-OD-006-1: platform feature switches (e.g. mcp.enabled) mapped to "
+        "guard paths (e.g. image). A switch keeps its CURRENT state (absence included) "
+        "only when every guard path is identical in the target and the current values; "
+        "otherwise it follows the target revision together with its guards (the target "
+        "image may not ship the newer feature). Non-empty selects the preserving rollback "
+        "like preserve_value_paths (requires chart).",
+    )
 
     @field_validator("preserve_value_paths")
     @classmethod
@@ -188,10 +198,29 @@ class ReleaseRollbackRequest(BaseModel):
                 raise ValueError(f"invalid value path: {path!r}")
         return paths
 
+    @field_validator("preserve_when_equal")
+    @classmethod
+    def _validate_preserve_when_equal(
+        cls, mapping: Dict[str, List[str]],
+    ) -> Dict[str, List[str]]:
+        import re
+
+        for path, guards in mapping.items():
+            if not re.match(_VALUE_PATH_RE, path):
+                raise ValueError(f"invalid value path: {path!r}")
+            if len(guards) > 8:
+                raise ValueError(f"too many guard paths for {path!r}")
+            for guard in guards:
+                if not isinstance(guard, str) or not re.match(_VALUE_PATH_RE, guard):
+                    raise ValueError(f"invalid guard path: {guard!r}")
+        return mapping
+
     @model_validator(mode="after")
     def _preserve_requires_chart(self) -> "ReleaseRollbackRequest":
         if self.preserve_value_paths and not self.chart:
             raise ValueError("preserve_value_paths requires chart")
+        if self.preserve_when_equal and not self.chart:
+            raise ValueError("preserve_when_equal requires chart")
         return self
 
 

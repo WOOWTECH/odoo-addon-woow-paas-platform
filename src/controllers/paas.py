@@ -5276,6 +5276,28 @@ class PaasController(HiddenChainMixin, Controller):
             upgrade_kwargs['tenant_secret'] = tenant_secret
         return upgrade_kwargs
 
+    @staticmethod
+    def _restart_after_secret_change(bg_client, namespace, release_name, component):
+        """#1435／AI-OD-004-2：改金鑰後補的 rollout restart（背景執行緒，無 ORM）。
+
+        範本宣告了 ``secret_change_restart_component`` 就只滾那個 component（open-design：
+        吃金鑰 env 的 daemon），console 等不吃金鑰的工作負載不再被連帶重建、進行中的終端機
+        不斷線。operator 回 404（沒有任何 workload 帶這個 label，例如舊 chart）就退回不帶
+        component 的全部重啟——寧可多滾，也不要讓新金鑰沒生效。其他錯誤照原樣往外拋，由
+        呼叫端記 log（設定已套用，不翻 error）。
+        """
+        if component:
+            try:
+                return bg_client.restart_release(
+                    namespace=namespace, release_name=release_name, component=component)
+            except PaaSOperatorError as e:
+                if e.status_code != 404:
+                    raise
+                _logger.warning(
+                    "No %s workload of %s/%s to restart after a credential change; "
+                    "restarting every workload instead", component, namespace, release_name)
+        return bg_client.restart_release(namespace=namespace, release_name=release_name)
+
     def _start_background_upgrade(self, service, client, resolved_version, halted,
                                   restart_after_upgrade=False, plan_change=False,
                                   upgrade_kwargs=None):
@@ -5309,6 +5331,10 @@ class PaasController(HiddenChainMixin, Controller):
                 tenant_secret=assembled.get('tenant_secret'))
         operator_url = client.base_url
         operator_api_key = client._session.headers.get('X-API-Key', '')
+        # AI-OD-004-2：補重啟的範圍在主執行緒讀好（背景執行緒沒有 ORM）。空＝全部。
+        restart_component = (
+            service.template_id.secret_change_restart_component or ''
+            if restart_after_upgrade else '')
 
         def _alert_compute_quota_refusal(exc):
             """#1647：背景的 PATCH 才被 compute 配額預檢擋下時，補上管理員告警。
@@ -5422,10 +5448,9 @@ class PaasController(HiddenChainMixin, Controller):
                 # 失敗不翻 error：設定已套用，租戶可用「重新啟動」（#1432）補上。
                 if restart_after_upgrade:
                     try:
-                        bg_client.restart_release(
-                            namespace=upgrade_kwargs['namespace'],
-                            release_name=upgrade_kwargs['release_name'],
-                        )
+                        self._restart_after_secret_change(
+                            bg_client, upgrade_kwargs['namespace'],
+                            upgrade_kwargs['release_name'], restart_component)
                     except Exception:
                         _logger.exception(
                             "Failed to restart service %s after a credential "
@@ -5603,6 +5628,10 @@ class PaasController(HiddenChainMixin, Controller):
             preserve_paths = service._rollback_preserved_value_paths()
         except UserError as e:
             return {'success': False, 'error': str(e)}
+        # AI-OD-006-1：範本宣告的平台功能開關（open-design 的 mcp.enabled 等）——守衛
+        # （image）與目標 revision 相同時維持目前值，不因回復到功能上線前的 revision 而
+        # 被關掉；守衛不同時跟著目標 revision（operator 判定，見 preserve_when_equal）。
+        feature_switches = service._rollback_feature_switches()
 
         try:
             # #1526：chart 版本不得低於目前部署中的版本。operator 是權威的那一道（讀
@@ -5636,8 +5665,10 @@ class PaasController(HiddenChainMixin, Controller):
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 revision=revision,
-                chart=service.template_id.helm_chart_name if preserve_paths else None,
+                chart=(service.template_id.helm_chart_name
+                       if preserve_paths or feature_switches else None),
                 preserve_value_paths=preserve_paths or None,
+                preserve_when_equal=feature_switches or None,
                 # #1647：operator 在套用前檢查工作區的 compute 配額——保留憑證的回復算 helm
                 # upgrade 的 dry-run，純 helm rollback（沒有平台憑證的模板）算目標 revision 的
                 # stored manifest（#1685）。

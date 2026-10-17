@@ -916,16 +916,22 @@ class PaaSOperatorClient:
         self,
         namespace: str,
         release_name: str,
+        component: Optional[str] = None,
     ) -> Dict[str, Any]:
         """#1432：rollout restart release 下所有 Deployment 與 StatefulSet。
 
         operator 只「下達」不等待（回應 ``rollout_awaited: False``）；收斂交給平台
         狀態機（呼叫端把服務轉 ``upgrading``，poll 轉回 ``running``）。PVC、Secret、
         values 都不動。沒有任何 workload 時 operator 回 404。
+
+        AI-OD-004-2：``component`` 只重啟 ``app.kubernetes.io/component`` 相符的
+        workload（沒有相符的也是 404）。不認得這個參數的舊 operator 會忽略它、照舊
+        全部重啟。
         """
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/restart',
+            params={'component': component} if component else None,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
@@ -944,6 +950,7 @@ class PaaSOperatorClient:
         chart: Optional[str] = None,
         preserve_value_paths: Optional[List[str]] = None,
         check_compute_quota: bool = False,
+        preserve_when_equal: Optional[Dict[str, List[str]]] = None,
     ) -> Dict[str, Any]:
         """Rollback a Helm release to a previous revision.
 
@@ -961,6 +968,9 @@ class PaaSOperatorClient:
             check_compute_quota: #1647——同 ``upgrade_release``。兩種回復 operator 都檢查：
                 保留憑證的回復算那次 helm upgrade 的 dry-run，純 helm rollback 算目標 revision
                 的 stored manifest（#1685；更早的 operator 在純 rollback 收到旗標也不檢查）。
+            preserve_when_equal: AI-OD-006-1——範本宣告的平台功能開關 → 守衛路徑；守衛在
+                目標與目前相同時開關維持目前值。非空時同樣走保留模式（必須帶 ``chart``）。
+                不認得這個欄位的舊 operator 會忽略它（開關照舊跟著目標 revision）。
 
         Returns:
             Rollback confirmation
@@ -972,6 +982,10 @@ class PaaSOperatorClient:
         if preserve_value_paths:
             data['chart'] = chart
             data['preserve_value_paths'] = list(preserve_value_paths)
+        if preserve_when_equal:
+            data['chart'] = chart
+            data['preserve_when_equal'] = {
+                path: list(guards) for path, guards in preserve_when_equal.items()}
         if check_compute_quota:
             data['check_compute_quota'] = True
         return self._request(

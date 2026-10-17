@@ -1220,7 +1220,7 @@ def rollback_release(
     Raises:
         HTTPException: If rollback fails
     """
-    if request.preserve_value_paths:
+    if request.preserve_value_paths or request.preserve_when_equal:
         return _rollback_preserving_values(namespace, name, request)
 
     try:
@@ -1523,6 +1523,37 @@ def overlay_preserved_paths(
     return merged
 
 
+def overlay_preserved_when_equal(
+    target_values: Dict[str, Any],
+    current_values: Dict[str, Any],
+    guarded_paths: Dict[str, List[str]],
+) -> Tuple[Dict[str, Any], List[str], List[str]]:
+    """AI-OD-006-1：平台功能開關（``mcp.enabled`` 等）在守衛路徑相同時維持目前狀態。
+
+    回傳 ``(merged, preserved, reverted)``，純函式、不改呼叫端的物件。
+
+    開關與 image 是一組：open-design 的 ``mcp.enabled`` 必須搭配帶 MCP runtime
+    （``/opt/woow``）的 image，否則 sidecar CrashLoop、整個 pod 不 Ready。所以只有守衛
+    路徑（例如 ``image``）在目標與目前**完全相同**時才保留目前的開關（含「不存在」）；
+    守衛不同時開關跟著目標 revision 回復（與當時的 image 一致，結果與舊行為相同）。
+    守衛清單為空＝無條件保留。
+    """
+    merged = overlay_preserved_paths(target_values, current_values, [])
+    preserved: List[str] = []
+    reverted: List[str] = []
+    for path, guards in guarded_paths.items():
+        same = all(
+            _get_path(target_values or {}, guard) == _get_path(current_values or {}, guard)
+            for guard in guards
+        )
+        if same:
+            merged = overlay_preserved_paths(merged, current_values, [path])
+            preserved.append(path)
+        else:
+            reverted.append(path)
+    return merged, preserved, reverted
+
+
 def _rollback_preserving_values(
     namespace: str,
     name: str,
@@ -1582,6 +1613,14 @@ def _rollback_preserving_values(
         merged_values = overlay_preserved_paths(
             target_values, current_values, request.preserve_value_paths,
         )
+        # AI-OD-006-1：範本宣告的平台功能開關（守衛＝image 等）。守衛比對用兩份**原始**
+        # values（不受上面憑證 overlay 影響），再把判定要保留的開關蓋到 merged 上。
+        _, features_preserved, features_reverted = overlay_preserved_when_equal(
+            target_values, current_values, request.preserve_when_equal,
+        )
+        merged_values = overlay_preserved_paths(
+            merged_values, current_values, features_preserved,
+        )
 
         upgrade_kwargs = dict(
             namespace=namespace,
@@ -1601,8 +1640,9 @@ def _rollback_preserving_values(
         )
         logger.info(
             "Rolled back release %s in %s to revision %s via upgrade "
-            "(preserved %d value path(s))",
+            "(preserved %d value path(s); feature switches kept %s, reverted %s)",
             name, namespace, target_revision, len(request.preserve_value_paths),
+            features_preserved, features_reverted,
         )
         return {
             "message": f"Rolled back to revision {target_revision} (credentials preserved)",
@@ -1613,6 +1653,9 @@ def _rollback_preserving_values(
             # 新 revision 兜底，不把 0 回給平台。
             "revision": release.revision or (current_revision + 1),
             "chart_version": release.chart_version or target_version,
+            # AI-OD-006-1：只回路徑名，不回值。
+            "feature_paths_preserved": features_preserved,
+            "feature_paths_reverted": features_reverted,
         }
 
     except ValueError as e:
@@ -2373,10 +2416,26 @@ async def unpark_release_route(namespace: str, name: str, request: RouteUnparkRe
     response_model=Dict[str, Any],
     summary="#1432: rollout-restart every Deployment and StatefulSet of a release",
 )
-def restart_release(namespace: str, name: str):
+def restart_release(
+    namespace: str,
+    name: str,
+    component: Optional[str] = Query(
+        default=None,
+        pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+        description="AI-OD-004-2: only workloads labelled "
+        "app.kubernetes.io/component=<component> (e.g. the daemon that consumes API-key "
+        "env); omitted = every Deployment and StatefulSet of the release",
+    ),
+):
     """#1432：租戶的「重新啟動」——對 release 下**所有** Deployment 與 StatefulSet
     下 ``kubectl rollout restart``（改 pod template annotation，由 controller 依各自
     的更新策略重建 Pod；PVC、Secret、values 都不動）。
+
+    AI-OD-004-2：帶 ``component`` 時只重啟 ``app.kubernetes.io/component`` 相符的
+    workload。平台在「改金鑰後補重啟」（#1435）用它只滾吃金鑰 env 的 daemon，不再連帶
+    重建 console（進行中的終端機會斷線）。值只收 DNS-1123 label（直接拼進 label
+    selector，擋注入）；一個都沒有＝404，平台據此退回不帶 component 的全部重啟（舊
+    chart 沒有 component label 時不會變成什麼都沒重啟）。租戶的「重新啟動」不帶。
 
     - 只「下達」不等待，與 reset-config（#461）同一個理由：收斂交給平台狀態機
       （``upgrading`` → poll → ``running``），等 Pod 會讓回應時間綁在 image pull 與
@@ -2391,6 +2450,8 @@ def restart_release(namespace: str, name: str):
     """
     _validate_namespace_or_raise(namespace)
     selector = f"app.kubernetes.io/instance={name}"
+    if component:
+        selector += f",app.kubernetes.io/component={component}"
     try:
         deployments = k8s_service.get_deployments(namespace=namespace, label_selector=selector)
         statefulsets = k8s_service.get_statefulsets(namespace=namespace, label_selector=selector)
@@ -2400,6 +2461,7 @@ def restart_release(namespace: str, name: str):
                 detail=(
                     f"No deployments or statefulsets found for release {name} "
                     f"in namespace {namespace}"
+                    + (f" with component {component}" if component else "")
                 ),
             )
         restarted_deps = []
@@ -2418,6 +2480,7 @@ def restart_release(namespace: str, name: str):
             "action": "restart",
             "namespace": namespace,
             "release": name,
+            "component": component,
             "deployments": restarted_deps,
             "statefulsets": restarted_sts,
             "rollout_awaited": False,

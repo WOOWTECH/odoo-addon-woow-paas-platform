@@ -1078,6 +1078,8 @@ from . import test_platform_ux_r8
 from . import test_rpc_error_redaction_xsec006
 # #1432 租戶重新啟動、#1435 改金鑰後重啟、#1455 金鑰未設定／清除。
 from . import test_restart_and_secret_keys_1432
+# AI-OD-004-2 改金鑰只重啟範本宣告的 component；AI-OD-006-1 回復版本時平台功能開關跟著 image。
+from . import test_od_restart_scope_rollback_features
 # #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
 from . import test_neutralize_1201
 # #1488：helm values 白名單 fail-closed（specs 沒有任何鍵＝租戶值全部拒絕，不再全部放行）。

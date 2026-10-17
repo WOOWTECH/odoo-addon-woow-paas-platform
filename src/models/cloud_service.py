@@ -5964,6 +5964,27 @@ class CloudService(models.Model):
                     keys.append(key)
         return keys
 
+    def _rollback_feature_switches(self):
+        """AI-OD-006-1：「回復版本」時跟著守衛維持目前值的平台功能開關（``{路徑: [守衛]}``）。
+
+        open-design 244 回復到 MCP 上線前的 revision（values 沒有 ``mcp.enabled``）⇒ 內建
+        MCP 容器消失、``/mcp`` 401，要管理員 Redeploy 才回來。開關由範本決定、不是租戶設定，
+        不該被「回復一般設定」帶走——但它與 image 是一組（舊 image 沒有 MCP runtime，硬開會
+        CrashLoop），所以由範本宣告守衛，operator 只在守衛相同時保留（``preserve_when_equal``）。
+
+        與 ``_rollback_preserved_value_paths``（憑證，無條件保留）分開：這裡的路徑不是憑證，
+        不進回復後的公開設定同步（``_sync_rollback_config``）的排除清單。範本欄位已由
+        constraint 驗過格式；萬一讀不懂就回空（＝原本的回復行為），不擋回復。
+        """
+        self.ensure_one()
+        parsed = self.template_id._parse_rollback_feature_switches()
+        if parsed is None:
+            _logger.warning(
+                'Template %s has unreadable rollback_feature_switches; rolling back '
+                'without feature switches', self.template_id.id)
+            return {}
+        return parsed
+
     def _build_odoo_sensitive_values(self):
         """#1130：woow-odoo 的初始管理員密碼 sensitive value（odoo 專屬 helper）。
 
