@@ -2660,23 +2660,23 @@
             <field name="helm_chart_version">0.1.5</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official",
+                {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official", "validate": "tailscale_login",
                 "options": [{"value": "official", "label": "官方 Tailscale"}, {"value": "workspace", "label": "同工作區 Headscale"}, {"value": "custom", "label": "自訂網址"}],
                 "description": "選「同工作區 Headscale」時平台自動帶入同工作區 VPN 控制台的內部網址（有好幾台時用最早建立、執行中的那台），只帶網址：pre-auth key 仍要你在它的網頁後台 Headplane 建好、貼到 auth key 欄位；工作區還沒有執行中的 Headscale 時節點不登入並寫入服務記錄。選「自訂網址」時用下方「控制伺服器」欄位。換控制平面＝這台節點登記成新機器（新的 tailnet IP）"},
                 {"key": "tailscale.loginServer", "label": "控制伺服器（自訂網址）", "type": "text",
                 "placeholder": "https://headscale.example.com",
-                "description": "只在「控制平面」選「自訂網址」時使用，例如其他地方的 Headscale；同工作區的 VPN 控制台請改選「同工作區 Headscale」，不必自己填。換網址＝這台節點登記成新機器（新的 tailnet IP）；網址格式不正確或留空時維持目前的登入並寫入服務記錄"},
+                "description": "只在「控制平面」選「自訂網址」時使用，例如其他地方的 Headscale；同工作區的 VPN 控制台請改選「同工作區 Headscale」，不必自己填。換網址＝這台節點登記成新機器（新的 tailnet IP）；選「自訂網址」時必填，格式要是 https://主機 或 http://主機:埠，否則無法儲存"},
                 {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password",
-                "description": "Tailscale 的 tskey-auth-… 或 Headscale 的 pre-auth key，只在節點尚未登入時使用。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
+                "description": "Tailscale 的 tskey-auth-…（控制平面選官方 Tailscale）或 Headscale 的 pre-auth key（控制平面選 Headscale），種類不符時無法儲存。只在節點需要登入時使用：已登入的節點不會用新 key（服務頁「VPN 節點狀態」會提示），key 過期／已用過等登入失敗原因也顯示在那裡。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
                 {"key": "tailscale.hostname", "label": "節點名稱（選填）", "type": "text",
                 "placeholder": "woow-office",
                 "description": "tailnet 上顯示的名稱（英文字母、數字與連字號）；留空或格式不合時用 woow-&lt;Helm Release&gt;"},
                 {"key": "tailscale.tags", "label": "標籤 tags（選填）", "type": "text",
                 "placeholder": "tag:server",
                 "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過。控制平面選「同工作區 Headscale」時請留空（新版節點會略過這一欄）：Headscale 不接受節點用 pre-auth key 登入時自己要求的標籤，帶了會被登出；要帶 tag，請在 Headplane 建 pre-auth key 時就指定 tags，節點登入後就帶著 key 的 tag（之後要在 ACL 規則用這個 tag，再把它列進 tagOwners）"},
-                {"key": "tailscale.serve", "label": "轉發清單", "type": "text",
+                {"key": "tailscale.serve", "label": "轉發清單", "type": "text", "validate": "tailscale_serve",
                 "placeholder": "8069=svc-1a2b3c4d:80",
-                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔；只接受同一工作區的服務，不合格的項目（IP、外部網址、其他工作區）會被略過，原因與每個轉發的生效狀態顯示在服務頁的「VPN 節點狀態」"},
+                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔，最多 32 筆；只接受同一工作區的服務，格式不對、埠超出 1–65535、IP、外部網址、其他工作區或重複的 tailnet 埠都無法儲存。每個轉發的生效狀態（含服務不存在）顯示在服務頁的「VPN 節點狀態」"},
                 {"key": "tailscale.noLogs", "label": "不上傳診斷記錄到 Tailscale", "type": "boolean", "default": true,
                 "description": "開啟時節點不把診斷記錄上傳到 Tailscale 公司（--no-logs-no-support）；關閉才能向 Tailscale 官方申請支援"}
                 ]}</field>

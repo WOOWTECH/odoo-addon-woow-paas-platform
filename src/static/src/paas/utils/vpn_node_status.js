@@ -79,6 +79,36 @@ export function nodeStateHint(report) {
 }
 
 /**
+ * INFRA-TS-005-5：節點上一次登入失敗的原因（operator 從 tailscaled 的 Health 對應的封閉代碼）。
+ * 原本只在容器日誌（`Received error: authkey expired`），租戶分不出是 key 錯、網址錯還是連不到。
+ * 節點已登入（online／offline）時一律不顯示。
+ */
+export function loginErrorHint(report) {
+  if (!report || !report.login_error) return "";
+  if (report.state === "online" || report.state === "offline") return "";
+  switch (report.login_error) {
+    case "authkey_expired":
+      return _t("Last login attempt failed: the auth key has expired. Create a new key and save it in Configuration > Auth key.");
+    case "authkey_used":
+      return _t("Last login attempt failed: the auth key was already used (single-use key). Create a new key, or a reusable one.");
+    case "authkey_invalid":
+      return _t("Last login attempt failed: the control server rejected the auth key (unknown key, or a key for another control server or user).");
+    case "control_unreachable":
+      return _t("Last login attempt failed: the node could not reach its control server. Check the control plane setting, and that the server is running.");
+    default:
+      return _t("Last login attempt failed. Check the control plane setting and the auth key.");
+  }
+}
+
+/**
+ * INFRA-TS-005-5：已登入的節點會靜默忽略設定裡的 auth key（entrypoint 只在日誌寫 "not using it"）。
+ */
+export function authKeyNotice(report) {
+  if (!report || report.authkey_ignored !== true) return "";
+  return _t("This node is already logged in, so the auth key in Configuration is not used. It is only used when the node needs to log in again; you can clear it.");
+}
+
+/**
  * 登入說明（只有 needs_login；needs_approval 的處理在控制台，狀態說明已夠）。回 `[{ kind, text, url?, code? }]`：
  * kind = "text" | "link" | "code"。外部登入網址與註冊碼只有 owner／admin 的 report 才有值。
  */

@@ -173,7 +173,8 @@ class TestPublicReportFix005(BaseCase):
         """operator 多送的欄位（原始 log、stderr、token…）不得透傳。"""
         r = self._report(_payload(raw_log='tskey-auth-kSECRET', stderr='boom', **{'pod': 'p'}))
         self.assertNotIn('SECRET', json.dumps(r))
-        self.assertEqual(set(r), {'state', 'probe', 'control_plane', 'tailnet_ips', 'dns_name', 'login', 'serve'})
+        self.assertEqual(set(r), {'state', 'probe', 'control_plane', 'tailnet_ips', 'dns_name', 'login',
+                                  'login_error', 'authkey_ignored', 'serve'})
 
     def test_control_plane_of(self):
         f = vns.control_plane_of

@@ -199,6 +199,39 @@ _SSRF_BLOCKED_IPV6 = frozenset({
 })
 _SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
 
+# INFRA-FIX-005 覆核：``/node-status`` 每次都讓 operator 對 pod kubectl exec。前端每 30 秒輪詢一次，
+# 但同一台服務開好幾個分頁、好幾個成員同時看、或有人連打這支端點，都會變成連續 exec。
+# 同一台服務 ``_NODE_STATUS_MIN_INTERVAL`` 秒內共用上一份 **operator 回應**（每個 worker 一份表）；
+# 角色過濾（登入入口只給 owner／admin）每次重做，所以快取不會讓 guest 看到 owner 的東西。
+# operator 失敗不快取（下一次照常重問）。
+_NODE_STATUS_MIN_INTERVAL = 10.0
+_NODE_STATUS_CACHE_MAX = 512
+_NODE_STATUS_CACHE: dict = {}
+_NODE_STATUS_LOCK = threading.Lock()
+
+
+def _node_status_cached(key):
+    """節流表裡還在時間窗內的 operator 回應；沒有回 None。"""
+    now = time.monotonic()
+    with _NODE_STATUS_LOCK:
+        entry = _NODE_STATUS_CACHE.get(key)
+        if entry and now - entry[0] < _NODE_STATUS_MIN_INTERVAL:
+            return entry[1]
+    return None
+
+
+def _node_status_store(key, payload):
+    now = time.monotonic()
+    with _NODE_STATUS_LOCK:
+        if len(_NODE_STATUS_CACHE) >= _NODE_STATUS_CACHE_MAX:
+            stale = [k for k, (ts, _p) in _NODE_STATUS_CACHE.items()
+                     if now - ts >= _NODE_STATUS_MIN_INTERVAL]
+            for k in stale:
+                del _NODE_STATUS_CACHE[k]
+            if len(_NODE_STATUS_CACHE) >= _NODE_STATUS_CACHE_MAX:
+                _NODE_STATUS_CACHE.clear()
+        _NODE_STATUS_CACHE[key] = (now, copy.deepcopy(payload))
+
 
 # `ir.module.module.state` 值代表「模組不在租戶 DB 裡」，把對應 addon 從選擇裡拿掉是
 # 安全的。其餘一律擋——Odoo 還會有 to install / to upgrade / to remove，那些同樣不能
@@ -2215,19 +2248,28 @@ class PaasController(HiddenChainMixin, Controller):
         if service.state not in ('running', 'upgrading') or not (
                 service.helm_namespace and service.helm_release_name):
             return unavailable('not_running')
-        client = get_paas_operator_client(request.env)
-        if not client:
-            return unavailable('operator_unavailable')
-        try:
-            payload = client.get_vpn_node_status(service.helm_namespace, service.helm_release_name)
-        except PaaSOperatorError as exc:
-            # 舊 operator 沒有這個端點（404）也走這裡；只記類型，不把 operator 的訊息放到租戶畫面。
-            _logger.warning(
-                'VPN node status unavailable for service %s (%s, HTTP %s)',
-                service.id, type(exc).__name__, getattr(exc, 'status_code', None))
-            return unavailable('operator_unavailable')
-        finally:
-            client._session.close()
+        cache_key = (request.env.cr.dbname, service.id,
+                     service.helm_namespace, service.helm_release_name)
+        payload = _node_status_cached(cache_key)
+        if payload is None:
+            client = get_paas_operator_client(request.env)
+            if not client:
+                return unavailable('operator_unavailable')
+            try:
+                payload = client.get_vpn_node_status(
+                    service.helm_namespace, service.helm_release_name)
+            except PaaSOperatorError as exc:
+                # 舊 operator 沒有這個端點（404）也走這裡；只記類型，不把 operator 的訊息放到租戶畫面。
+                _logger.warning(
+                    'VPN node status unavailable for service %s (%s, HTTP %s)',
+                    service.id, type(exc).__name__, getattr(exc, 'status_code', None))
+                return unavailable('operator_unavailable')
+            finally:
+                client._session.close()
+            if isinstance(payload, dict):
+                _node_status_store(cache_key, payload)
+        else:
+            payload = copy.deepcopy(payload)
         access = _PaaSCapability(request.env).access(service.workspace_id)
         report = _vpn_node_status.public_report(
             payload,
@@ -4505,7 +4547,8 @@ class PaasController(HiddenChainMixin, Controller):
 
         # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）：
         # 不合法就在收錢前擋下，別讓一行字串到部署時才把 chart／gitconfig 弄壞。
-        format_error = template._validate_spec_formats(helm_only_values)
+        format_error = template._validate_spec_formats(
+            helm_only_values, namespace=helm_namespace)
         if format_error:
             return {'success': False, 'error': format_error}
 
@@ -4891,7 +4934,9 @@ class PaasController(HiddenChainMixin, Controller):
                 filtered_user_values, existing_values, service.template_id,
             )
             # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）。
-            format_error = service.template_id._validate_spec_formats(filtered_user_values)
+            format_error = service.template_id._validate_spec_formats(
+                filtered_user_values, existing_values=existing_values,
+                namespace=service.helm_namespace, cleared_keys=clear_keys or ())
             if format_error:
                 return {'success': False, 'error': format_error}
             # #1455：清除優先於同一請求裡對同一格的輸入。

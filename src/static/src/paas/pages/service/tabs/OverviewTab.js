@@ -12,8 +12,10 @@ import { hasConfirmedWorkloadFault } from "../../../utils/service_presentation";
 import { ResourceUsage } from "../../../components/resource-usage/ResourceUsage";
 import { useVpnNodeStatus } from "../../../services/vpn_node_status";
 import {
+    authKeyNotice,
     forwardRows,
     hasNodeProblem,
+    loginErrorHint,
     loginGuidance,
     nodeStateHint,
     nodeStateLabel,
@@ -114,6 +116,16 @@ export class OverviewTab extends Component {
 
     get vpnStateHint() {
         return nodeStateHint(this.vpnReport);
+    }
+
+    /** INFRA-TS-005-5：上一次登入失敗的原因（key 過期／已用過／不對／連不到控制伺服器）。 */
+    get vpnLoginError() {
+        return loginErrorHint(this.vpnReport);
+    }
+
+    /** INFRA-TS-005-5：已登入的節點不會使用設定裡的 auth key。 */
+    get vpnAuthKeyNotice() {
+        return authKeyNotice(this.vpnReport);
     }
 
     get vpnLoginGuidance() {

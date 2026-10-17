@@ -1215,6 +1215,18 @@ class VpnNodeStatusResponse(BaseModel):
     dns_name: Optional[str] = None
     login: VpnNodeLogin = Field(default_factory=VpnNodeLogin)
     health_warnings: int = 0
+    login_error: Optional[Literal[
+        "authkey_expired", "authkey_used", "authkey_invalid", "control_unreachable", "other",
+    ]] = Field(
+        default=None,
+        description="INFRA-TS-005-5：節點上一次登入失敗的原因（tailscaled Health 對應的封閉代碼；"
+                    "節點 Running 時一律 None）",
+    )
+    authkey_configured: Optional[bool] = Field(
+        default=None,
+        description="INFRA-TS-005-5：設定裡有沒有 auth key（只回有／沒有，不讀出 key）；"
+                    "None＝讀不到。已登入的節點不會使用它",
+    )
     serve: VpnNodeServe = Field(
         default_factory=lambda: VpnNodeServe(wanted_known=False))
 

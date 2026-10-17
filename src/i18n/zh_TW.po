@@ -24430,3 +24430,171 @@ msgstr "尚未設定轉發。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
 msgid "Reading the node status..."
 msgstr "正在讀取節點狀態…"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" is not in the format tailnet-port=service:port (example: 8069=svc-1a2b3c4d:80)."
+msgstr "轉發清單：「%(entry)s」格式不對，應為「tailnet 埠=服務名稱:埠」（例如 8069=svc-1a2b3c4d:80）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" has a port outside 1-65535."
+msgstr "轉發清單：「%(entry)s」的埠超出 1–65535。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" is not a service of this workspace. Only services of this workspace are allowed (no IP addresses, external names or other workspaces)."
+msgstr "轉發清單：「%(entry)s」不是這個工作區的服務。只接受同一工作區的服務（不能用 IP、外部網址或其他工作區）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" does not name a service."
+msgstr "轉發清單：「%(entry)s」不是有效的服務名稱。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: tailnet port %(port)s is used more than once (\"%(entry)s\")."
+msgstr "轉發清單：tailnet 埠 %(port)s 重複使用（「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: at most %(max)s entries."
+msgstr "轉發清單：最多 %(max)s 筆。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Control server: required when the control plane is \"Custom URL\"."
+msgstr "控制伺服器：控制平面選「自訂網址」時必填。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Control server: \"%(entry)s\" is not a valid URL; use https://headscale.example.com or http://host:port."
+msgstr "控制伺服器：「%(entry)s」不是有效的網址，請填 https://headscale.example.com 或 http://主機:埠。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Auth key: the key contains a space or line break; paste it again as one line."
+msgstr "Auth key：key 裡有空白或換行，請重新貼上成一行。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Auth key: the control plane is official Tailscale, so the key must be a Tailscale key starting with tskey-. A Headscale pre-auth key only works with \"Same workspace Headscale\" or \"Custom URL\"."
+msgstr "Auth key：控制平面是官方 Tailscale，key 必須是 tskey- 開頭的 Tailscale key。Headscale 的 pre-auth key 只能搭配「同工作區 Headscale」或「自訂網址」。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Auth key: a tskey- key only works with official Tailscale. For a Headscale control plane, create a pre-auth key in Headplane and paste that instead."
+msgstr "Auth key：tskey- 開頭的 key 只能用在官方 Tailscale。控制平面是 Headscale 時，請在 Headplane 建立 pre-auth key 再貼上。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" is not in the format tailnet-port=service:port (example: 8069=svc-1a2b3c4d:80)."
+msgstr "「%s」格式不對，應為「tailnet 埠=服務名稱:埠」（例如 8069=svc-1a2b3c4d:80）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" has a port outside 1-65535."
+msgstr "「%s」的埠超出 1–65535。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" is not a service of this workspace (no IP addresses, external names or other workspaces)."
+msgstr "「%s」不是這個工作區的服務（不能用 IP、外部網址或其他工作區）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" does not name a service."
+msgstr "「%s」不是有效的服務名稱。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Tailnet port %s is used more than once."
+msgstr "tailnet 埠 %s 重複使用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "At most %s forwards are allowed."
+msgstr "最多 %s 筆轉發。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Required when the control plane is \"Custom URL\"."
+msgstr "控制平面選「自訂網址」時必填。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Not a valid URL; use https://headscale.example.com or http://host:port."
+msgstr "不是有效的網址，請填 https://headscale.example.com 或 http://主機:埠。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "The key contains a space or line break; paste it again as one line."
+msgstr "key 裡有空白或換行，請重新貼上成一行。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Official Tailscale needs a key starting with tskey-. A Headscale pre-auth key only works with a Headscale control plane."
+msgstr "官方 Tailscale 要用 tskey- 開頭的 key；Headscale 的 pre-auth key 只能搭配 Headscale 控制平面。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "A tskey- key only works with official Tailscale. Create a pre-auth key in Headplane instead."
+msgstr "tskey- 開頭的 key 只能用在官方 Tailscale，請改在 Headplane 建立 pre-auth key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the auth key has expired. Create a new key and save it in Configuration > Auth key."
+msgstr "上一次登入失敗：auth key 已過期。請建立新的 key，貼到「配置 > Auth key」並儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the auth key was already used (single-use key). Create a new key, or a reusable one."
+msgstr "上一次登入失敗：auth key 已經用過（一次性 key）。請建立新的 key，或改用可重複使用的 key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the control server rejected the auth key (unknown key, or a key for another control server or user)."
+msgstr "上一次登入失敗：控制伺服器不接受這把 auth key（key 不存在，或屬於其他控制伺服器／使用者）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the node could not reach its control server. Check the control plane setting, and that the server is running."
+msgstr "上一次登入失敗：節點連不到控制伺服器。請檢查控制平面設定，以及控制伺服器是否在執行中。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed. Check the control plane setting and the auth key."
+msgstr "上一次登入失敗。請檢查控制平面設定與 auth key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "This node is already logged in, so the auth key in Configuration is not used. It is only used when the node needs to log in again; you can clear it."
+msgstr "這台節點已經登入，配置裡的 auth key 不會被使用（只在節點需要重新登入時才會用），可以清空。"
