@@ -88,6 +88,8 @@
                                         <t t-esc="spec.label || spec.key"/>
                                         <!-- #1561：只在開通時生效的設定，唯讀並說明原因。 -->
                                         <small t-if="isCreateOnlySpec(spec)" class="o_woow_config_create_only">Set when the service was created; it cannot be changed afterwards.</small>
+                                        <!-- INFRA-TS-004-1：條件下會被 chart 略過、卻存了值的欄位。 -->
+                                        <small t-if="ignoredWhenViewNote(spec)" class="o_woow_config_create_only"><t t-esc="ignoredWhenViewNote(spec)"/></small>
                                     </span>
                                     <span t-att-class="'o_woow_config_value' + (spec.type === 'password' ? ' o_woow_secret' : '')">
                                         <t t-esc="formatSpecValue(spec)"/>

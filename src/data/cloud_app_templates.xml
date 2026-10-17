@@ -2632,7 +2632,11 @@
              爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本）；redeploy
              時 StatefulSet 重啟一次（節點身分在 PVC，回來仍是同一台）。workspace 模式填了 tags 的節點，換版後
              tags 被略過（沙盒：被舊版登出的節點升級後由 liveness 重啟一次、約 40 秒救回），節點的 tag 改由
-             pre-auth key 決定。回滾值：0.1.2。 -->
+             pre-auth key 決定。回滾值：0.1.2。
+             INFRA-TS-004-1（2026-10-16 商用驗收）：tailscale.tags 帶 spec ``ignored_when``
+             （controlPlane=workspace）——chart 會略過這一欄，所以開通／儲存設定時有值就擋下（不再白白
+             helm upgrade 一次），設定頁在欄位下說明原因、空白時停用輸入、檢視模式標「未套用」。
+             判準在 CloudAppTemplate._ignored_when_violation 與 static/src/paas/utils/ignored_when.js。 -->
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 節點（相容 Tailscale）</field>
             <field name="slug">tailscale</field>
@@ -2680,6 +2684,7 @@
                 "description": "tailnet 上顯示的名稱（英文字母、數字與連字號）；留空或格式不合時用 woow-&lt;Helm Release&gt;"},
                 {"key": "tailscale.tags", "label": "標籤 tags（選填）", "type": "text",
                 "placeholder": "tag:server",
+                "ignored_when": {"key": "tailscale.controlPlane", "values": ["workspace"]},
                 "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過。控制平面選「同工作區 Headscale」時請留空（新版節點會略過這一欄）：Headscale 不接受節點用 pre-auth key 登入時自己要求的標籤，帶了會被登出；要帶 tag，請在 Headplane 建 pre-auth key 時就指定 tags，節點登入後就帶著 key 的 tag（之後要在 ACL 規則用這個 tag，再把它列進 tagOwners）"},
                 {"key": "tailscale.serve", "label": "轉發清單", "type": "text", "validate": "tailscale_serve",
                 "placeholder": "8069=svc-1a2b3c4d:80",

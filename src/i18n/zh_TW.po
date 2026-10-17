@@ -272,6 +272,12 @@ msgstr ""
 "這個 migration 不搬動任何資料，因此這裡失敗代表升級過程中有某個步驟靜默失敗了。請先排除問題，再重跑升級。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "\"%(label)s\" is not applied when \"%(condition)s\" is \"%(choice)s\"; clear it before saving."
+msgstr "「%(label)s」在「%(condition)s」選「%(choice)s」時不會套用，請清空這一欄再儲存。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy_rule__cloud_service_id
 msgid "#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。"
 msgstr ""
@@ -1847,6 +1853,18 @@ msgstr "還沒有 API 金鑰。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "No free trial calls today yet."
 msgstr "今天還沒有免費試用呼叫紀錄。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/ignored_when.js:0
+msgid "Not applied when \"%(condition)s\" is \"%(choice)s\"; leave this field empty."
+msgstr "「%(condition)s」選「%(choice)s」時不會套用這一欄，請留空。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/ignored_when.js:0
+msgid "Not applied: \"%(condition)s\" is \"%(choice)s\"."
+msgstr "未套用：「%(condition)s」選了「%(choice)s」。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
