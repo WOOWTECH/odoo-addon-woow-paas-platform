@@ -732,6 +732,33 @@ class TestRedact(unittest.TestCase):
         masked = llm_redact.redact('Authorization: Bearer abc.def-123')
         self.assertNotIn('abc.def-123', masked)
 
+    def test_authorization_masks_the_credential_for_every_scheme(self):
+        """審查 LLM-02b 第 2 輪：值遇到空白就停的話，``Basic``／``Token`` 只遮到 scheme 那個字。"""
+        digest = ('Digest username="admin", realm="woow", nonce="dcd98b7102dd2f0e", uri="/", '
+                  'response="6629fae49393a05397450978507c4ef1", opaque="5ccc069c403ebaf9"')
+        samples = {
+            'Basic': ('Authorization: Basic dXNlcjpwYXNzd29yZA==', ['dXNlcjpwYXNzd29yZA']),
+            'Token': ('Authorization: Token abcdef123456 next', ['abcdef123456']),
+            'Digest': ('Authorization: %s' % digest,
+                       ['6629fae49393a05397450978507c4ef1', 'dcd98b7102dd2f0e', 'admin']),
+            'quoted': ('{"Authorization": "Basic dXNlcjpw", "Host": "x"}', ['dXNlcjpw']),
+            'escaped': ('{"authorization": "Digest response=\\"z9z9z9\\"", "a": 1}', ['z9z9z9']),
+            'proxy': ("{'Proxy-Authorization': 'Basic cHJveHk6cHc='}", ['cHJveHk6cHc']),
+            'no scheme': ('Authorization: opaqueValue123', ['opaqueValue123']),
+            'url form': ('authorization=Basic%20abc&x=1', ['abc&']),
+        }
+        for label, (text, secrets) in samples.items():
+            for mask in (llm_redact.MASK, '***'):
+                with self.subTest(label=label, mask=mask):
+                    masked = llm_redact.redact(text, mask=mask)
+                    for secret in secrets:
+                        self.assertNotIn(secret, masked)
+                    self.assertIn(mask, masked)
+        self.assertEqual(llm_redact.redact('Authorization: Token abcdef123456 next'),
+                         'Authorization: <redacted> next')
+        self.assertEqual(llm_redact.redact('{"Authorization": "Basic x", "Host": "h"}'),
+                         '{"Authorization": <redacted>, "Host": "h"}', '後面的欄位不被吃掉')
+
     def test_init_attempt_shapes_still_masked(self):
         """``cloud_service_init_attempt.mask_init_error`` 原本自己的三條 regex 涵蓋的形狀（LLM-02b 收斂）。"""
         for text, secret in (

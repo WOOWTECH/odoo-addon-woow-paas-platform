@@ -3,7 +3,7 @@
 import pytest
 
 from newapi_proxy import routetable
-from proxy_harness import NOW, Harness
+from proxy_harness import NOW, Harness, ok
 
 
 @pytest.fixture
@@ -109,6 +109,7 @@ def test_web_key_can_use_interactive_user_routes(h, method, path, query):
 def test_cron_key_can_use_everything_listed(h):
     assert h.signed("GET", "/api/status").status == 200
     assert h.signed("GET", "/api/user/7", identity="ap").status == 200
+    h.upstream.on("GET", "/api/user/", ok({"items": [], "page": 1, "page_size": 100, "total": 0}))
     listed = h.signed("GET", "/api/user/", [("p", "1"), ("page_size", "100")], identity="ap")
     assert listed.status == 200
     assert h.upstream.requests[-1].headers["authorization"].startswith("Bearer nap_")

@@ -7,7 +7,7 @@ that can stop it is canonicalisation or the route table.
 import pytest
 
 from newapi_proxy import canonical, signing
-from proxy_harness import Harness, TENANT_IP, USER_PAT
+from proxy_harness import TENANT_IP, USER_PAT, Harness, ok
 
 
 @pytest.fixture
@@ -155,6 +155,7 @@ def test_search_keyword_must_be_a_paas_username(h):
 def test_user_list_query_values(h):
     """LLM-02b balance refresh: ``GET /api/user/`` takes paging and an id-only sort, nothing else."""
     good = [("p", "3"), ("page_size", "100"), ("sort_by", "id"), ("sort_order", "asc")]
+    h.upstream.on("GET", "/api/user/", ok({"items": [], "page": 3, "page_size": 100, "total": 0}))
     res = h.signed("GET", "/api/user/", good, identity="ap")
     assert res.status == 200, res.body
     assert h.upstream.requests[0].url.query == b"p=3&page_size=100&sort_by=id&sort_order=asc"

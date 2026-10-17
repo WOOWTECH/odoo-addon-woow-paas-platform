@@ -55,8 +55,10 @@ from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
     CONFIG_CRYPTO_UNAVAILABLE,
+    CONFIG_CRYPTO_UNAVAILABLE_WEB,
     CONFIG_IDENTITY_MISMATCH,
     CONFIG_PROXY_AUTH_UNAVAILABLE,
+    CONFIG_PROXY_AUTH_UNAVAILABLE_WEB,
     ERR_LLM_ACCOUNT_ERROR,
     ERR_LLM_CLOSED,
     ERR_LLM_NOT_ACTIVATED,
@@ -83,7 +85,7 @@ from .llm_common import (
     report_config_unavailable,
     run_llm_cron,
 )
-from .llm_event import LlmAlert, LlmIncident, safe_code
+from .llm_event import LlmAlert, LlmIncident, _begin, safe_code
 
 _logger = logging.getLogger(__name__)
 
@@ -283,6 +285,21 @@ class LlmAccount(models.Model):
         return nac.get_newapi_client(self.env, role)
 
     @api.model
+    def _llm_web_client(self, what):
+        """HTTP 路徑（web pod）的 client；簽章金鑰缺或不合 ⇒ 告警＋``llm_unavailable``。
+
+        prod 的 web 與 cron 是兩個 pod、env 各自獨立（DESIGN §2.11）：``WOOW_NEWAPI_PROXY_AUTH_WEB`` 只在
+        web pod，cron 的 tick 驗不到它。所以 fail closed 的同時在這裡報 ``config_unavailable``／
+        ``llm_proxy_auth_unavailable_web``（30 分鐘去重、不外呼；N27 未設定時不發）。``what`` 只進 log。
+        """
+        try:
+            return self._llm_client(nac.ROLE_WEB)
+        except nac.NewApiError as exc:
+            _logger.error('[LLM] %s: client unavailable: %s', what, exc.code)
+            report_config_unavailable(self.env, CONFIG_PROXY_AUTH_UNAVAILABLE_WEB)
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+
+    @api.model
     def _llm_account_for_partner(self, partner):
         """partner 的未關閉 AI 帳戶（sudo；呼叫端傳入的 partner 一律是 request.env.user 的）。"""
         if not partner:
@@ -320,8 +337,13 @@ class LlmAccount(models.Model):
         except nac.NewApiError:
             raise LlmError(ERR_LLM_UNAVAILABLE) from None
 
-    def _llm_up_token(self):
-        """解出本帳戶的 UP。**只**從帳戶取（DESIGN §3.1：絕不從資源記錄反推）。"""
+    def _llm_up_token(self, role=nac.ROLE_WEB):
+        """解出本帳戶的 UP。**只**從帳戶取（DESIGN §3.1：絕不從資源記錄反推）。
+
+        ``role``：呼叫端在哪個 pod（現在只有 HTTP 路徑＝web）。加密金鑰沒設或不合
+        （``LlmCryptoUnavailable``）是那個 pod 的設定問題：報 ``config_unavailable``（web ⇒
+        ``llm_crypto_unavailable_web``）——cron 的 tick 只驗得到 cron pod 自己的 env。
+        """
         self.ensure_one()
         record = self.sudo()
         if record.up_state == 'invalid' or not record.up_token_enc:
@@ -329,6 +351,11 @@ class LlmAccount(models.Model):
         try:
             return llm_crypto.decrypt(record.up_token_enc, record.id, record.newapi_username,
                                       llm_crypto.FIELD_UP_TOKEN)
+        except llm_crypto.LlmCryptoUnavailable as exc:
+            _logger.error('[LLM] account=%s UP unusable: %s', record.id, exc.code)
+            report_config_unavailable(self.env, CONFIG_CRYPTO_UNAVAILABLE_WEB
+                                      if role == nac.ROLE_WEB else CONFIG_CRYPTO_UNAVAILABLE)
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
         except llm_crypto.LlmCryptoError as exc:
             _logger.error('[LLM] account=%s UP unusable: %s', record.id, exc.code)
             self._llm_report_secret_rejected(record.id, exc)
@@ -339,8 +366,10 @@ class LlmAccount(models.Model):
         """密文被拒 ⇒ 告警 ``secret_rejected``＋incident ``llm_secret_mismatch``（DESIGN §2.9）。
 
         不在這裡報的兩種：sentinel（neutralize 的預期結果）與加密金鑰沒設或不合
-        （``LlmCryptoUnavailable``）——後者是設定問題，由 cron 每個 tick 的 ``llm_crypto.load()`` 報
-        ``config_unavailable``／``llm_crypto_unavailable``（:meth:`_llm_provision_tick`）。
+        （``LlmCryptoUnavailable``）——後者是**那個 pod** 的設定問題，報的是 ``config_unavailable``：
+        cron pod 由每個 tick 的 ``llm_crypto.load()``（:meth:`_llm_provision_tick`）、web pod 由
+        :meth:`_llm_up_token`。兩種告警都受全平台寄信預算限制（``llm_event`` 模組 docstring 第 3 點）：
+        金鑰被「換掉」時每戶都是 ``llm_secret_undecryptable``，也只會是每 30 分鐘 1–2 封。
         先告警、incident 另外包：incident 那邊任何失敗都不能把告警吃掉。盡力而為、不往外丟。
         """
         if isinstance(exc, (llm_crypto.LlmSecretNeutralized, llm_crypto.LlmCryptoUnavailable)):
@@ -507,11 +536,7 @@ class LlmAccount(models.Model):
         account._llm_require_active()
         ip = account._llm_tenant_ip()
         up = account._llm_up_token()
-        try:
-            client = self._llm_client(nac.ROLE_WEB)
-        except nac.NewApiError as exc:
-            _logger.error('[LLM] usage/recent: client unavailable: %s', exc.code)
-            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        client = self._llm_web_client('usage/recent')
         now = datetime.now(timezone(timedelta(hours=8)))
         start = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
         result = client.user_log_self(ip, up, {
@@ -1035,7 +1060,11 @@ class LlmAccount(models.Model):
                 return False
             rows = self._llm_balance_rows(items, pattern)
             matched += len(rows)
-            updated += self._llm_store_balances(rows, read_at)
+            stored = self._llm_store_balances(rows, read_at)
+            if stored is None:
+                # 寫不回去（DB 錯誤）：停在這一頁，下一次排程從這一頁重讀（不跳過這 100 戶）。
+                return False
+            updated += stored
             total = data.get('total')
             if len(items) < BALANCE_PAGE_SIZE or (
                     type(total) is int and page * BALANCE_PAGE_SIZE >= total):
@@ -1081,11 +1110,15 @@ class LlmAccount(models.Model):
 
     @api.model
     def _llm_store_balances(self, rows, read_at):
-        """一頁的餘額以獨立 cursor 一次寫回並 commit，回傳更新了幾戶。
+        """一頁的餘額以獨立 cursor 一次寫回並 commit，回傳更新了幾戶；DB 錯誤回 ``None``。
 
         守衛：使用者名稱與 ``newapi_user_id`` 都要對得上、帳戶是 active／suspended、而且現有的
         ``balance_synced_at`` **嚴格早於**這次讀取（``read_at``，:func:`balance_stamp`，在 GET 之前取）：
         P9 或日後轉換在讀取之後寫的值不會被這頁的舊值蓋掉；同一微秒也不蓋（寧可等下一輪）。
+
+        交易是 **READ COMMITTED**（審查 LLM-02b 第 2 輪）：別的交易（P9、LLM-08 的轉換入帳）改了這一頁
+        某一戶、而且 commit 了，REPEATABLE READ 會整句 40001（整頁 100 戶都丟掉）；READ COMMITTED
+        等對方 commit 之後逐列重新檢查守衛（EvalPlanQual），對方寫的較新值留著、其他戶照寫。
         """
         if not rows:
             return 0
@@ -1098,7 +1131,7 @@ class LlmAccount(models.Model):
         params.extend([BALANCE_STATES, read_at])
         try:
             with self.env.registry.cursor() as cr:
-                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                _begin(self.env, cr, read_committed=True)
                 cr.execute(
                     'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
                     'request_count_cached = v.cnt, balance_synced_at = %s, write_uid = %s, '
@@ -1113,4 +1146,4 @@ class LlmAccount(models.Model):
         except psycopg2.Error as exc:
             _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',
                             getattr(exc, 'pgcode', None))
-            return 0
+            return None
