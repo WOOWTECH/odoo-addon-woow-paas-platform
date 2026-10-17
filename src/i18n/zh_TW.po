@@ -22148,6 +22148,14 @@ msgstr "服務的 chart 版本由平台管理：%(fields)s"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The product of a cloud service is fixed when it is created and cannot be "
+"changed."
+msgstr "雲端服務的產品在開通時就已決定，之後無法更換。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid ""
 "Revision %(revision)s uses chart version %(target)s, which is older than "

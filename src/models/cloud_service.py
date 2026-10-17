@@ -452,6 +452,31 @@ def _reject_chart_version_writes(env, vals):
 
 
 # ------------------------------------------------------------------------- #
+#  AUDITFIX template-id-write-guard：服務綁的範本只有平台改得動（#1216 第一格）  #
+# ------------------------------------------------------------------------- #
+#
+# `template_id` 決定 chart、方案白名單、計費、`conceal_instances` 等一切；沒有 `groups=`、
+# ACL 給 `base.group_user` 1,1,1,1、`cloud_service_rule_owner_admin_manage` 給 owner／admin
+# 寫入，而 owner 資格可自我滿足（自建 workspace）⇒ 沒有這道閘時 `group_user` 的 owner 一筆
+# `/web/dataset/call_kw` 就能把服務改綁到別的範本（商用驗收沙盒實測 `result: True`）。
+# 租戶沒有任何合法的改綁路徑（開通時決定、之後不變；換方案只換訂閱）；平台的寫入走 sudo／
+# cron ⇒ 判準同 #1525：`env.is_system()`。寫回相同的值不擋（整包回存）。#1216 其餘平台控制
+# 欄位（state、helm_namespace、allocated_*…）要先把 controller 以租戶身分寫 state 的路徑改走
+# sudo，不在這一格。
+
+
+def _reject_template_binding_writes(records, vals):
+    """write() 側：非平台身分不得把服務改綁到**不同**的範本。"""
+    if 'template_id' not in vals or records.env.is_system():
+        return
+    target = vals['template_id']
+    target_id = (target.id if hasattr(target, 'id') else target) or False
+    if any(record.template_id.id != target_id for record in records):
+        raise AccessError(_(
+            'The product of a cloud service is fixed when it is created and cannot be changed.'))
+
+
+# ------------------------------------------------------------------------- #
 #  #787：CS Access sync 的抑制鑰匙（private sentinel，形狀抄 #536）           #
 # ------------------------------------------------------------------------- #
 #
@@ -10628,6 +10653,7 @@ class CloudService(models.Model):
         _reject_upgrade_failure_control_writes(self.env, vals)
         _reject_service_history_writes(self.env, vals)
         _reject_chart_version_writes(self.env, vals)
+        _reject_template_binding_writes(self, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
