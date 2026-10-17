@@ -73,6 +73,23 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: 剛進入 running 的服務重讀對外位址（商用驗收 HS-013-2）
+
+             設定變更、重新啟動、Redeploy 之後，ngrok agent 要等新 Pod 起來才連得上，轉回 running 的
+             那一輪 poll 常常更早；之後 running 服務只有每日對帳會再探 ⇒ 服務頁「尚未取得」或過期的
+             錯誤原因掛 1–9 分鐘。本條只看「進入 running 後 10 分鐘內」的服務（窗口由 write() stamp），
+             每分鐘重探一次，只寫對外位址三格，**絕不碰 state**。窗口外一台都不打 operator。
+             ⚠ 本檔是 noupdate：這筆 record 在升級時會被建立，但日後改這裡的 interval 不會生效
+                （改 DB／後台排程動作）。 -->
+        <record id="ir_cron_recheck_public_tunnels" model="ir.cron">
+            <field name="name">Cloud Service: Re-check Public Tunnel Address</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_recheck_public_tunnels()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
         <!-- Cron: 對帳 running 服務的 release 事實（#627 (i)）
 
              上面那條 cron 只掃轉移狀態，抓不到「非由 Odoo 發起的 chart 變動」——

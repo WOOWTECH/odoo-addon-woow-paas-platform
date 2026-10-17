@@ -5664,6 +5664,16 @@ class PaasController(HiddenChainMixin, Controller):
                 'public_tunnel_url': service.public_tunnel_url or None,
                 # #1559：沒有位址時 ngrok 說得出的原因（已是建立者語言的一句話）。
                 'public_tunnel_error': service.public_tunnel_error or None,
+                # 商用驗收 EMQX-020-3／HS-013-3：範本的兩則提示（資料值）——有位址時的
+                # address_note（EMQX 明文 TCP）、有原因時的 error_note（Headscale 退回內網址）。
+                'public_tunnel_address_note': service.template_id.public_tunnel_address_note or None,
+                'public_tunnel_error_note': service.template_id.public_tunnel_error_note or None,
+                # 商用驗收 HS-013-2：那一格最後一次「探過、有結論」的時間（帶 UTC offset，理由同
+                # last_release_sync_at 的 #1456 註解）。
+                'public_tunnel_checked_at': (
+                    service.public_tunnel_checked_at.replace(tzinfo=timezone.utc).isoformat()
+                    if service.public_tunnel_checked_at else None
+                ),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,

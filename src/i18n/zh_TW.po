@@ -22207,6 +22207,72 @@ msgid "The ngrok agent could not connect (%(code)s, see https://ngrok.com/docs/e
 msgstr "ngrok agent 無法連線（%(code)s，說明見 https://ngrok.com/docs/errors/%(slug)s）。請檢查「配置」裡的 ngrok authtoken 與網域。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Your ngrok account plan does not allow a feature this service uses (ERR_NGROK_9014) — usually the PROXY protocol that passes the real client address. The authtoken itself is fine. Upgrade the ngrok account to a paid plan (Pay-as-you-go), or turn off the PROXY protocol option in Configuration if this service offers one."
+msgstr "你的 ngrok 帳號方案不允許本服務使用的功能（ERR_NGROK_9014），通常是用來傳遞真實來源位址的 PROXY protocol；authtoken 本身沒有問題。請把 ngrok 帳號升級為付費方案（Pay-as-you-go），或在「配置」關閉 PROXY protocol 選項（如果此服務有提供）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Last checked: %s"
+msgstr "最後檢查：%s"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_recheck_public_tunnels_ir_actions_server
+msgid "Cloud Service: Re-check Public Tunnel Address"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_checked_at
+msgid "Public Tunnel Last Checked"
+msgstr "對外位址最後檢查時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_checked_at
+msgid ""
+"Last time the platform asked the ngrok sidecar for the public address and "
+"got an answer (an address, or none with or without a reason), in UTC."
+msgstr "平台最後一次向 ngrok sidecar 讀取對外位址並得到結果（有位址，或確定沒有、不論有無原因）的時間（UTC）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_recheck_until
+msgid "Re-check Public Tunnel Until"
+msgstr "對外位址重新檢查至"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_recheck_until
+msgid ""
+"Until when the platform re-reads the public tunnel address every minute "
+"after the service (re)entered the running state, in UTC."
+msgstr "服務（重新）進入執行中之後，平台每分鐘重新讀取對外位址的截止時間（UTC）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_address_note
+msgid "Public Tunnel Address Note"
+msgstr "對外位址提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_address_note
+msgid ""
+"Shown under the public tunnel address when there is one, e.g. a plain-text "
+"transport warning. A data value written in the seed as-is (not translated)."
+msgstr "有對外位址時顯示在位址下方的提示，例如明文傳輸警告。是 seed 直接寫入的資料值（不翻譯）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_error_note
+msgid "Public Tunnel Error Note"
+msgstr "對外位址錯誤提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_error_note
+msgid ""
+"Shown under the reason when the public tunnel has no address, e.g. what the "
+"service falls back to meanwhile. A data value written in the seed as-is (not"
+" translated)."
+msgstr "對外位址沒有取得、顯示原因時接在原因下方的提示，例如服務在這段期間改用什麼。是 seed 直接寫入的資料值（不翻譯）。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_error
 msgid "Public Tunnel Error"
 msgstr "對外位址錯誤原因"

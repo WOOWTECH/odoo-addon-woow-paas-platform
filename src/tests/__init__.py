@@ -1077,6 +1077,9 @@ from . import test_tenant_chart_version_1525
 from . import test_rollback_chart_floor_1526
 # #1559：ngrok 連不上的原因（authtoken 錯、沒填、網域被占用、要重啟）顯示在服務頁。
 from . import test_public_tunnel_error_1559
+# 商用驗收 ngrok-ux-copy（INFRA-EMQX-020-1/2/3、INFRA-HS-013-2/3/5）：ERR_NGROK_9014 專屬文案、
+# 撤銷說明、明文提示、Headscale 退回內網址提示、進入 running 後的對外位址重探窗口與最後檢查時間。
+from . import test_ngrok_ux_copy_auditfix
 # #1534：n8n init 在 owner 已存在時不用密碼登入；舊 operator 401／998 對已確認的服務不計額度。
 from . import test_n8n_init_owner_changed_1534
 # #1542：mcp-server 家族的一次性帳密視窗（MCP 專用文案、admin_url、carrier 鏡射）。

@@ -18,7 +18,7 @@ authtoken 的過濾器、ngrok.remoteAddr 不再 render 進 shell（#1613））�
 3. **規格對帳**：1 vCPU / 2 Gi / 3 Gi ——template min_*、plan cs_*、chart 兩顆 PVC 加總三處一致。
    #1637 起 plan 的 ``cs_storage_gb`` 是**整台總量**（data 2＋log 1）：overlay 寫進
    ``persistence.size`` 的是總量 − log（``_PLAN_STORAGE_SPLIT``），故 min_storage_gb = cs_storage_gb。
-4. **可調參數白名單**：只有應用層旋鈕（ngrok 三項 + ws listener），CPU/RAM/磁碟一律不開
+4. **可調參數白名單**：只有應用層旋鈕（ngrok 四項 + ws listener），CPU/RAM/磁碟一律不開
    ——那三個維度由訂閱方案決定，開放等於讓租戶改自己買的規格。
 5. **授權（⛔ 最重要）**：EMQX 自 5.9.0 起為 BSL 1.1，明文禁止當託管 MQTT 服務提供給第三方
    ——平台正是這個用途。只能釘 5.8.x（Apache-2.0）。digest 是唯一不會說謊的識別，所以用
@@ -186,6 +186,9 @@ class TestEmqxSeed(TransactionCase):
         self.assertEqual(sorted(keys), sorted([
             'ngrok.enabled',
             'ngrok.authtoken',
+            # 商用驗收 charts#222：legacy／免費 ngrok 帳號不允許 PROXY protocol（ERR_NGROK_9014），
+            # chart 0.1.6 起就有的開關開放給租戶，預設維持開啟。
+            'ngrok.proxyProtocol',
             'ngrok.remoteAddr',
             'emqx.listeners.ws.enabled',
         ]))

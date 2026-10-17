@@ -113,6 +113,16 @@ export class OverviewTab extends Component {
         return _t("Copy address");
     }
 
+    /**
+     * 商用驗收 HS-013-2：對外位址那一格最後一次「探過、有結論」的時間（背景回讀；剛進入 running 的
+     * 10 分鐘內每分鐘一次，之後每日對帳）。沒有時回 ""（不畫）。
+     */
+    get publicTunnelCheckedText() {
+        const checkedAt = this.props.service.public_tunnel_checked_at;
+        if (!checkedAt) return "";
+        return _t("Last checked: %s", formatUserDateTime(checkedAt, { showSeconds: false }, ""));
+    }
+
     // #1647：Resource Allocation 卡顯示的是「這台服務的方案規格」，容易被讀成工作區的上限。
     // 補一句說明兩者的差別。刻意**不寫**「目前用量請看工作區頁」：那塊配額面板在 operator
     // 還沒升級、平台沒接 operator、namespace 沒有 quota、服務住在舊 namespace 時整塊不畫，

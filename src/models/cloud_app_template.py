@@ -525,6 +525,22 @@ class CloudAppTemplate(models.Model):
              'shows the generic "Public address". Display only; whether the row '
              'exists is decided by "Advertises a public tunnel address".',
     )
+    # 商用驗收 EMQX-020-3／HS-013-3：服務頁那一格的兩則提示，範本 record 的**資料值**（seed 寫中文原文、
+    # 不可翻譯、不進 .po，同上面的標籤）。只是顯示字，不是能力判準——那一格畫不畫仍只看旗標。
+    # - address_note：有位址時顯示（EMQX：原生 MQTT 是明文 TCP、經 ngrok 第三方，能用就改 wss）。
+    # - error_note：沒有位址而且有原因時顯示（Headscale：ngrok 失敗時登入網址已退回叢集內網址，
+    #   外部裝置暫時離線——chart 的 internal-fallback 設計，#1559）。
+    public_tunnel_address_note = fields.Char(
+        string='Public Tunnel Address Note',
+        help='Shown under the public tunnel address when there is one, e.g. a plain-text '
+             'transport warning. A data value written in the seed as-is (not translated).',
+    )
+    public_tunnel_error_note = fields.Char(
+        string='Public Tunnel Error Note',
+        help='Shown under the reason when the public tunnel has no address, e.g. what the '
+             'service falls back to meanwhile. A data value written in the seed as-is (not '
+             'translated).',
+    )
 
     # #530 一次性憑證視窗的 gateway 兩格提示（P3）。空值＝沿用前端內建的 hermes-agent
     # 文案（「填進 MCP 連線設定的 Gateway API Server 區」）；其他有 gateway 的模板
