@@ -47,8 +47,8 @@ from ..services.chart_version import (
     ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
     annotate_rollback_floor,
     rollback_floor_violation,
+    is_valid_rollback_revision,
     rollback_request_problem,
-    rollback_target_number,
 )
 from ..models.cloud_service import (
     WOOW_ODOO_ADMIN_PASSWORD_PATH,
@@ -2374,8 +2374,9 @@ class PaasController(HiddenChainMixin, Controller):
         Args:
             workspace_id (int): Workspace ID
             service_id (int): Service ID
-            revision (int, optional): Target revision number. If not provided or 0,
-                rolls back to the previous revision.
+            revision (int): Target revision number (>= 1, must exist in the service's
+                revision history). AUDITFIX rollback-api-input-validation: a missing
+                revision or 0 is refused — it no longer means "the previous revision".
 
         Returns:
             dict: Response containing:
@@ -2383,14 +2384,13 @@ class PaasController(HiddenChainMixin, Controller):
                 - message (str): Rollback confirmation
                 - error (str): Error message (on failure)
         """
-        # Validate revision parameter
-        if revision is not None:
-            try:
-                revision = int(revision)
-                if revision < 0:
-                    return {'success': False, 'error': _('Revision must be a non-negative integer')}
-            except (TypeError, ValueError):
-                return {'success': False, 'error': _('Invalid revision number')}
+        # Validate revision parameter（AUDITFIX：缺值／0 不再是「上一版」，見 _rollback_service）
+        try:
+            revision = int(revision)
+        except (TypeError, ValueError):
+            return self._invalid_rollback_revision_response()
+        if not is_valid_rollback_revision(revision):
+            return self._invalid_rollback_revision_response()
 
         # Validate workspace and service access
         workspace = _PaaSCapability(request.env).workspace(workspace_id)
@@ -5303,8 +5303,20 @@ class PaasController(HiddenChainMixin, Controller):
             })
             return {'success': False, 'error': _('Deletion failed: %(reason)s', reason=e.detail or e.message)}
 
+    @staticmethod
+    def _invalid_rollback_revision_response() -> dict[str, Any]:
+        """AUDITFIX rollback-api-input-validation：revision 缺值／0／負數／非整數的統一回應。"""
+        return {'success': False,
+                'error': _('Choose the revision to roll back to (a whole number, 1 or higher).'),
+                'data': {'code': 'invalid_revision'}}
+
     def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
-        """Rollback service to a previous revision."""
+        """Rollback service to an explicit earlier revision (``revision`` >= 1)."""
+        # AUDITFIX rollback-api-input-validation：helm 把 0 解讀成「上一版」，原本 None／0
+        # 也照這個語意送出——誤送 0 真的回復並重啟（INFRA-EMQX-013-1、AI-PI-004-4）。
+        # 回復一律要明確的 revision 號（對話框本來就只送明確的號碼）。
+        if not is_valid_rollback_revision(revision):
+            return self._invalid_rollback_revision_response()
         # #423 W5a MAJOR-1：suspended 必須擋下。
         #
         # 語意上：停權中的服務本來就不該允許改版本。
@@ -5343,19 +5355,20 @@ class PaasController(HiddenChainMixin, Controller):
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
                 ).get('revisions') or []
-            # DATA-ODOO-010-1：None／0＝上一版（API 既有語意，見 docstring），先解成明確的
-            # revision 號再送——訊息不再寫「revision None」；目標就是目前已部署的版本（或
-            # 沒有上一版）時直接擋下，不讓 helm 白白重建 Pod。
+            # DATA-ODOO-010-1／AUDITFIX：目標就是目前已部署的版本時直接擋下，不讓 helm 白白
+            # 重建 Pod；目標不在歷史裡也在這裡擋（AI-LLM-007-2：原本交給 operator，租戶看到
+            # helm 的英文原文）。
             problem = rollback_request_problem(rollback_history, revision)
-            if problem:
-                target = rollback_target_number(rollback_history, revision)
-                if problem == 'already_current':
-                    return {'success': False, 'error': _(
-                        'Revision %(revision)s is the version currently deployed; '
-                        'there is nothing to roll back.', revision=target)}
+            if problem == 'already_current':
                 return {'success': False, 'error': _(
-                    'There is no previous revision to roll back to.')}
-            revision = rollback_target_number(rollback_history, revision) or revision
+                    'Revision %(revision)s is the version currently deployed; '
+                    'there is nothing to roll back.', revision=revision),
+                    'data': {'code': 'already_current'}}
+            if problem == 'not_found':
+                return {'success': False, 'error': _(
+                    'Revision %(revision)s was not found in this service\'s version history. '
+                    'Refresh the list and choose another revision.', revision=revision),
+                    'data': {'code': 'revision_not_found'}}
             floor = rollback_floor_violation(rollback_history, revision)
             if floor:
                 return {'success': False,
@@ -5428,6 +5441,14 @@ class PaasController(HiddenChainMixin, Controller):
                         'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
                                  'shortfalls': _compute_quota_detail_rows(
                                      detail, 'shortfalls')}}
+            # AUDITFIX：operator 的 400／404 是「這個 revision 不能回復」（不在歷史裡、就是目前
+            # 版本、release 沒有歷史）——detail 是 operator／helm 的英文原文，不轉給租戶。
+            # 平台預檢已擋掉常見情況；走到這裡代表歷史在兩次呼叫之間變了。
+            if e.status_code in (400, 404):
+                return {'success': False, 'error': _(
+                    'Revision %(revision)s cannot be restored. Refresh the version list '
+                    'and try again.', revision=revision),
+                    'data': {'code': 'revision_not_restorable'}}
             # dict 形的 detail（例 503 operator_busy）取它的 message，不把整個 dict 印給租戶。
             reason = detail.get('message') if isinstance(detail, dict) else detail
             return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=reason or e.message)}

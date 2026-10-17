@@ -89,27 +89,39 @@ def rollback_target_number(revisions, requested):
     return (max(numbers) - 1) if numbers else None
 
 
-def rollback_request_problem(revisions, requested):
-    """回復請求本身不成立時回問題代碼；可以送出回 ``None``（DATA-ODOO-010-1）。
+def is_valid_rollback_revision(requested):
+    """回復目標必須是 ≥ 1 的整數（``bool`` 不算）。
 
-    - ``'no_previous'``：``None``／0 要回「上一版」，但歷史裡沒有上一版（只有 revision 1，或
-      算出來的目標 < 1）。
+    AUDITFIX rollback-api-input-validation：``None``／0 **不再**是「上一版」。helm 把 0
+    解讀成上一版，誤送 0 會真的回復並重啟（INFRA-EMQX-013-1、AI-PI-004-4 把 pi 映像退回
+    舊版）；對話框一律送明確的 revision 號，API 也照同一個契約。
+    """
+    return isinstance(requested, int) and not isinstance(requested, bool) and requested >= 1
+
+
+def rollback_request_problem(revisions, requested):
+    """回復請求本身不成立時回問題代碼；可以送出回 ``None``（DATA-ODOO-010-1／AUDITFIX）。
+
+    - ``'invalid_revision'``：``requested`` 不是 ≥ 1 的整數（含 ``None``／0）。
+    - ``'not_found'``：明確的 revision 不在歷史裡（AI-LLM-007-2：原本交給 operator，租戶看到
+      helm 的英文原文「Revision 9999 not found in release history」）。
     - ``'already_current'``：目標就是**目前已部署的最新** revision。helm 照樣會「回復」到自己
       並產生新 revision、換掉 Pod（實測三個請求把一個沒變動的服務連續 helm 回復三次、Pod 重建
       三次），沒有任何效果卻有中斷。最新 revision 不是 deployed（升級失敗）時不算——回復到前一個
       deployed 版本是合法的修復動作。
 
-    歷史讀不到（空）時不判斷（回 ``None``），交給 operator 回 400。
+    歷史讀不到（空）時只驗型別（其餘回 ``None``），交給 operator 回 400。
     """
+    if not is_valid_rollback_revision(requested):
+        return 'invalid_revision'
     numbers = [n for r in revisions or [] if (n := _revision_number(r)) is not None]
     if not numbers:
         return None
-    target = rollback_target_number(revisions, requested)
-    if target is None or target < 1:
-        return 'no_previous'
+    if requested not in numbers:
+        return 'not_found'
     latest = max(numbers)
     latest_row = next(r for r in revisions if _revision_number(r) == latest)
-    if target == latest and str(latest_row.get('status', '')).lower() == 'deployed':
+    if requested == latest and str(latest_row.get('status', '')).lower() == 'deployed':
         return 'already_current'
     return None
 
