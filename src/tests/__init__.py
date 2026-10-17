@@ -1183,3 +1183,5 @@ from . import test_tunnel_binding_1766
 # LLM-01b：AI 模型分頁的 Odoo 後端最小版（帳戶、開戶 cron、免費試用金鑰、tracer 端點、
 # 未設定零外呼、neutralize、真 cursor 跑 cron 的收斂）。
 from . import test_llm_tracer
+# 商用驗收 X-SET-007-1／X-SEC-007-1／-2：密碼強度、忘記密碼不洩露帳號、重設請求節流。
+from . import test_password_hardening_xsec007

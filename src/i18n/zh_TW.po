@@ -24091,3 +24091,41 @@ msgstr "綁卡驗證授權取消"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ecpg_bind_auth_void_list
 msgid "Retry now"
 msgstr "立即重試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
+msgid "Your password must be at least %(min)s characters long."
+msgstr "密碼至少需要 %(min)s 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
+msgid "This password is too easy to guess. Please choose a different one."
+msgstr "這個密碼太容易被猜到，請換一個。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
+msgid "Your password must not be the same as your login or email."
+msgstr "密碼不可與登入帳號或電郵相同。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/auth_hardening.py:0
+msgid "Please enter your login email."
+msgstr "請輸入登入用的電郵。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/auth_hardening.py:0
+msgid ""
+"If an account exists for this login, password reset instructions will be "
+"sent to its email address."
+msgstr "若此帳號存在，我們會把重設密碼說明寄到該帳號的電郵。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/auth_hardening.py:0
+msgid "Suspicious activity detected by Google reCaptcha."
+msgstr "Google reCaptcha 檢測到的可疑活動."

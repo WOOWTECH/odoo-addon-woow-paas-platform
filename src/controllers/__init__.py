@@ -16,3 +16,5 @@ from . import reconcile_report
 from . import ecpg_callback
 from . import workspace_invitation
 from . import llm
+# 商用驗收 X-SEC-007：原生忘記密碼／註冊頁的帳號枚舉修補（不新增頁面）。
+from . import auth_hardening
