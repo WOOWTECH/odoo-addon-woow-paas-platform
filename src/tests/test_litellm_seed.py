@@ -75,7 +75,7 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.3.5',
+        self.assertEqual(tpl.helm_chart_version, '0.3.10',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
                          '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt；'
                          '0.2.2＝後台 Add Credential 選 ChatGPT 跳出登入方式子畫面；0.2.3＝多個 ChatGPT 帳號；'
@@ -84,7 +84,9 @@ class TestLitellmSeed(TransactionCase):
                          '0.3.2＝改帳密時撤銷後台 session、Router metadata 補齊；'
                          '0.3.3＝ChatGPT 上下文長度以帳號清單為準；'
                          '0.3.4＝預算拒絕回 429（litellm.budgetExceededStatusCode）；'
-                         '0.3.5＝M4 第一批（帳號綁定不可被請求覆寫、restore 寫檔失敗、升版前 dump）')
+                         '0.3.5＝M4 第一批（帳號綁定不可被請求覆寫、restore 寫檔失敗、升版前 dump）；'
+                         '0.3.6–0.3.10＝charts 整合包 #254（num_retries 0、推理模型 max_tokens 下限、未定價警告、'
+                         '備份結果與補跑、SSE keepalive、requestTimeoutSeconds 600→90、請求上限 32 MB、preStop 75 秒）')
 
     def test_chatgpt_login_inside_litellm(self):
         """chart 0.2.1 起 ChatGPT 訂閱登入在 LiteLLM 自己的 /woow/chatgpt（用 LiteLLM 管理員登入）；

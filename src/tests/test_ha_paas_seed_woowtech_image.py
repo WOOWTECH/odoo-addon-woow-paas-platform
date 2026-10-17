@@ -66,7 +66,8 @@ class TestHAPaaSWoowtechImageSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant')
-        self.assertEqual(tpl.helm_chart_version, '0.2.2')
+        # 0.2.3（charts 整合包 #254，X-SEC-004-2）：容器 drop NET_RAW 等能力、seccomp RuntimeDefault；seed 與 image 不變。
+        self.assertEqual(tpl.helm_chart_version, '0.2.3')
 
     # ── image pin ────────────────────────────────────────────────────────────
     def test_image_repository_is_woowtech_ha(self):

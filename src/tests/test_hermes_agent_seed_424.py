@@ -369,7 +369,9 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.3.6')
+        # 0.3.7–0.3.12＝charts 整合包 #254：登入失敗鎖 IP、gateway liveness、apiServerKey ≥ 16 字元、
+        # 容器加固、ttyd 改 loopback＋Basic 前門、cookie Secure、egress-profile=web；seed 不需改。
+        self.assertEqual(tpl.helm_chart_version, '0.3.12')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。

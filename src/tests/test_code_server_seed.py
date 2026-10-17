@@ -53,7 +53,8 @@ class TestCodeServerSeed(TransactionCase):
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
         # 0.1.6＝charts #153（工作區＝區網）；0.1.7＝#1556（選填金鑰一律輸出，清除後 Secret／Pod 不留舊值）。
-        self.assertEqual(tpl.helm_chart_version, '0.1.7')
+        # 0.1.8＝#1637 startupProbe timeout 5 秒；0.1.9＝登入頁繁中、不提示 $PASSWORD（charts 整合包 #254）。
+        self.assertEqual(tpl.helm_chart_version, '0.1.9')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()

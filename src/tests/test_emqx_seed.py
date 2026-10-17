@@ -71,11 +71,12 @@ class TestEmqxSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, EMQX_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.7',
+        self.assertEqual(tpl.helm_chart_version, '0.1.11',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；'
                          '0.1.4 起後台 WebSocket 客户端預設連頁面本身的埠（#1418）；'
                          '0.1.6 起 MQTT 授權預設拒絕、公開網址不給 Prometheus／API 文件（#1529）；'
-                         '0.1.7 起 ngrok authtoken 不再出現在容器 log（#1613）')
+                         '0.1.7 起 ngrok authtoken 不再出現在容器 log（#1613）；'
+                         '0.1.8–0.1.11＝charts 整合包 #254（status 前綴拒絕、登入限速、tenantSecret）')
 
     def test_description_matches_chart_013(self):
         """#1361／#1362／#1366：說明要跟 chart 0.1.3 的實際行為一致。"""
