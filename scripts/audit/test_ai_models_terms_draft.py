@@ -27,6 +27,9 @@ CI:   ``.gitea/workflows/repo-lint.yml`` 的「scripts/ 自我測試」步驟（
    ``src/static/src/paas/services/html_sanitize.js`` 的 ``ALLOWED_TAGS`` 內（h1／h2 不在，經
    ``safeHtml()`` 後只剩純文字），不能有原始 HTML 或圖片；開頭要有「草稿，尚未生效」。
    審閱註記匯入 stg 時會去掉，但萬一漏了，裡面也不能有內部資安細節（``_NOTE_FORBIDDEN``）。
+6. **重要條款醒目**（問題清單 Q26；消保法施行細則第 12 條）：草稿橫幅之後、〈前言與用詞〉之前要有
+   〈重點提醒〉，每一點整行粗體，涵蓋 ``_KEY_POINT_FACTS``；第 4 條第 1 項的第一句（D6 的不退款）
+   要粗體。法務改寫條文時最容易把摘要漏改或拿掉，而這一節不見了，其他守線都不會紅。
 
 ## 法務改寫時
 
@@ -53,6 +56,15 @@ NOTE_PREFIX = '> 審閱註記'
 BASIS_PREFIX = '> 審閱註記｜依據：'
 QUESTION_SECTION = '## 給法務與負責人的問題清單'
 SUMMARY_SECTION = '## 決定摘要'
+KEY_POINTS_TITLE = '重點提醒'
+FIRST_SECTION_TITLE = '前言與用詞'
+# 〈重點提醒〉合起來要涵蓋的字句：不退款（D6）、境外與大陸地區（DECISIONS 預設、Q3）、
+# 金鑰外洩的用量（D17）、漲價預告與不保價（DECISIONS 預設）、不保證不中斷（票面第 10 項）。
+_KEY_POINT_FACTS = ('不能退回點數或現金', '境外', '大陸地區', '金鑰外洩', '7 天', '不保價',
+                    '不保證不中斷')
+_BOLD_LINE_RE = re.compile(r'^- \*\*[^*]+\*\*$')
+# 第 4 條第 1 項的第一句（D6；與轉換對話框的必勾文字相同）要粗體。
+_REFUND_LEAD_BOLD = '1. **轉換後的 AI 額度不能退回點數或現金'
 
 # 票面 12 條的標題關鍵字（LLM-05「範圍 In」第 1–12 項）。
 _CLAUSE_TITLES = {
@@ -149,6 +161,15 @@ def _regex_rule(pattern, flags=0, negation_aware=False):
     return find
 
 
+def _any_rule(*finders):
+    def find(text):
+        hits = []
+        for finder in finders:
+            hits.extend(finder(text))
+        return hits
+    return find
+
+
 _NUM = r'[0-9０-９一二兩三四五六七八九十]+'
 
 # (名稱, 找違規的函式, 為什麼不能寫)
@@ -186,9 +207,17 @@ _CONFLICT_RULES = (
                  r'|GroupRatio', re.I),
      '使用者介面一律用「點」（DESIGN §6.6）；條文不揭露內部元件'),
     ('undefined-terms',
-     _phrase_rule(('通知中心', '上游服務'), negation_aware=False),
+     _any_rule(_phrase_rule(('通知中心',), negation_aware=False),
+               _regex_rule(r'上游(?!供應商)')),
      '/woow 的鈴鐺叫「通知」（zh_TW.po 沒有「通知中心」），條文用已定義的「平台通知」；'
-     '「上游服務」沒有定義，用「上游供應商」'),
+     '「上游」只有「上游供應商」有定義（「上游服務」「由上游決定」都要改）'),
+    ('unsold-zero-point-models',
+     _regex_rule(r'(?<![0-9０-９])(?:0|０|零)\s*點模型'),
+     'DESIGN §7.2、U22：成本 0 的 13 個 OpenRouter 免費端點預設不賣；要賣就先給非 0 倍率、'
+     '當一般付費模型，不另設「0 點模型」類別（Q18）'),
+    ('overspend-understated',
+     _phrase_rule(('小幅',), negation_aware=False),
+     '付費並發不受限，最壞情況可透支數千點（DESIGN §4.9）；第 9 條第 5 項不能寫「小幅」超過'),
 )
 
 
@@ -312,6 +341,24 @@ class TestAiModelsTermsDraft(unittest.TestCase):
         first = next(line for line in self.body.splitlines() if line.strip())
         self.assertIn(DRAFT_BANNER, first)
 
+    def test_key_points_summary_is_prominent(self):
+        # Q26：對消費者不利的重要條款要醒目；摘要放在最前面，每一點整行粗體。
+        sections = _sections(self.body)
+        titles = [title.strip() for title, _ in sections]
+        self.assertGreaterEqual(len(titles), 2)
+        self.assertEqual(titles[:2], [KEY_POINTS_TITLE, FIRST_SECTION_TITLE],
+                         '〈重點提醒〉要緊接在草稿橫幅之後、〈前言與用詞〉之前')
+        bullets = [line for line in sections[0][1].splitlines() if line.startswith('- ')]
+        self.assertGreaterEqual(len(bullets), 4)
+        for line in bullets:
+            with self.subTest(bullet=line[:30]):
+                self.assertRegex(line, _BOLD_LINE_RE, '〈重點提醒〉的每一點要整行粗體')
+        joined = '\n'.join(bullets)
+        for fact in _KEY_POINT_FACTS:
+            with self.subTest(fact=fact):
+                self.assertIn(fact, joined)
+        self.assertIn(_REFUND_LEAD_BOLD, self.clause_text(4), '第 4 條第 1 項的第一句要粗體')
+
     def test_all_twelve_ticket_clauses_present_in_order(self):
         numbers = sorted(self.clauses)
         self.assertEqual(numbers[:12], list(range(1, 13)), numbers)
@@ -378,7 +425,11 @@ class TestAiModelsTermsDraft(unittest.TestCase):
             'free-daily-without-approx': ('每天 200 次', '每日200次', '每天最多 200 次',
                                           '每日上限 200 次'),
             'internal-units-or-components': ('額度以 USD 計', '經 LiteLLM 轉送', 'Quota'),
-            'undefined-terms': ('在通知中心通知您', '上游服務可能依其政策記錄'),
+            'undefined-terms': ('在通知中心通知您', '上游服務可能依其政策記錄',
+                                '可用性由上游決定'),
+            'unsold-zero-point-models': ('包括付費模型、0 點模型與免費試用模型', '0點模型',
+                                         '零點模型由上游供應商免費提供'),
+            'overspend-understated': ('實際花費可能小幅超過上限',),
         }
         self.assertEqual(set(planted), {name for name, _, _ in _CONFLICT_RULES})
         for name, samples in planted.items():
@@ -397,6 +448,7 @@ class TestAiModelsTermsDraft(unittest.TestCase):
             '關閉視窗後平台不會再次顯示', 'WoowTech 不保證本服務不中斷',
             '每天約 200 次', '每天可以建立的免費試用金鑰數量有限（目前為 3 把）',
             '1 點＝NT$1（新臺幣 1 元，含稅）', '`qwen3-4b-cluster1`',
+            '上游供應商停止提供或變更某個模型時', '單次轉換 50 點模型不限',
         )
         for sample in allowed:
             with self.subTest(allowed=sample):
