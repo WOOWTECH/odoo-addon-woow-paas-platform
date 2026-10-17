@@ -7,6 +7,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { PayInvoiceModal } from "../../components/modal/PayInvoiceModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
+import { calendarDaysFromToday } from "../../utils/datetime_helpers";
 import {
   formatDate,
   formatPoints,
@@ -75,16 +76,12 @@ export class InvoiceDetailPage extends Component {
     if (status === "paid") return _t("Paid");
     if (status === "overdue") return _t("Overdue");
     if (!this.invoice.invoice_date_due) return "";
-    try {
-      const due = new Date(this.invoice.invoice_date_due);
-      const now = new Date();
-      const diff = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
-      if (diff < 0) return _t("Overdue");
-      if (diff === 0) return _t("Due today");
-      return diff > 1 ? _t("Due in %s days", diff) : _t("Due in %s day", diff);
-    } catch {
-      return "";
-    }
+    // 到期日是日曆日：以當地日曆日相減（#914／X-LC-006-2，不經 UTC 午夜）。
+    const diff = calendarDaysFromToday(this.invoice.invoice_date_due);
+    if (diff === null) return "";
+    if (diff < 0) return _t("Overdue");
+    if (diff === 0) return _t("Due today");
+    return diff > 1 ? _t("Due in %s days", diff) : _t("Due in %s day", diff);
   }
 
   get dueLabelClass() {

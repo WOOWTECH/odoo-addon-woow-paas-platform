@@ -8,6 +8,7 @@ import { supportService } from "../../services/support_service";
 import { aiService } from "../../services/ai_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatDate } from "../../services/utils";
+import { calendarDaysFromToday } from "../../utils/datetime_helpers";
 import { podStateLabel } from "../../services/agent_pod_state";
 
 export class ProjectKanbanPage extends Component {
@@ -195,14 +196,11 @@ export class ProjectKanbanPage extends Component {
         if (!dateStr) {
             return "";
         }
-        const deadline = new Date(dateStr);
-        const now = new Date();
-        now.setHours(0, 0, 0, 0);
-        deadline.setHours(0, 0, 0, 0);
-
-        const diffMs = deadline.getTime() - now.getTime();
-        const diffDays = diffMs / (1000 * 60 * 60 * 24);
-
+        // 截止日是日曆日：以當地日曆日相減（#914，不經 UTC 午夜）。
+        const diffDays = calendarDaysFromToday(dateStr);
+        if (diffDays === null) {
+            return "";
+        }
         if (diffDays < 0) {
             return "o_woow_kanban__card_deadline--overdue";
         }
