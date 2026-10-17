@@ -5,11 +5,7 @@ import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { HelmValueForm } from "../../../components/config/HelmValueForm";
-import {
-    ignoredWhenMessage,
-    ignoredWhenViewNote,
-    isBlankSpecValue,
-} from "../../../utils/ignored_when";
+import { ignoredWhenMessage, ignoredWhenViewNote, isBlankSpecValue } from "../../../utils/ignored_when";
 import { cloudService } from "../../../services/cloud_service";
 
 /**
