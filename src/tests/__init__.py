@@ -1092,6 +1092,7 @@ from . import test_compute_quota_preflight_1647
 from . import test_custom_domain_hidden_1535
 # #1560：服務頁依角色顯示管理按鈕、權限不足訊息、重設密碼確認框、回復版本中文化。
 from . import test_service_role_ux_1560
+from . import test_hermes_copy_her3
 # #1557：LiteLLM 改管理員帳密預設保留 Gateway API Key（master key），換 key 改為明確勾選。
 from . import test_litellm_master_key_1557
 # #1555：退點時同步建立貸項並以退點沖銷原發票。

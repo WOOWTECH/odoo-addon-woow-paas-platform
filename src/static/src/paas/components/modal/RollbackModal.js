@@ -198,7 +198,9 @@ export class RollbackModal extends Component {
         if (text === "Upgrade complete") {
             return _t("Updated");
         }
-        const rollback = /^Rollback to (\d+)$/.exec(text);
+        // 平台回復（#1433／#1526）寫入的說明帶「(credentials preserved)」尾註，
+        // 一併吃掉，否則整句會以英文原文顯示（AI-HER-007-2）。
+        const rollback = /^Rollback to (\d+)(?: \(credentials preserved\))?$/.exec(text);
         if (rollback) {
             return _t("Rolled back to revision %s", rollback[1]);
         }
