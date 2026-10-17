@@ -455,6 +455,8 @@ from . import test_cs_access_arc_migration_744
 # 斷言 operator 真的被呼叫且 `access_app_id` 真的落地（#739 同構）。
 from . import test_cs_access_sync_745
 from . import test_cs_access_endpoints_745
+# AI-HMCP-002-4：0 席方案不能經 access-config 開啟保護（MCP client 會被鎖在門外）。
+from . import test_cs_access_zero_seat_protect_hmcp
 
 # fix: #753 SA／route 的 create 側錨點守衛用 `vals.pop()`，擋不掉
 # `default_<field>` context 與 `ir.default` 兩個**預設值載體**（值是在
