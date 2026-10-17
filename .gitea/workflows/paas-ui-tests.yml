@@ -6,6 +6,9 @@ on:
       - "src/static/src/paas/**"
       - "tests/ui/**"
       - "tests/frontend/service-resources.test.mjs"
+      # LLM-01c：tests/ui/test_llm_* 也讀繁中譯文與後端錯誤碼表（對帳），兩邊一改就要重跑。
+      - "src/i18n/zh_TW.po"
+      - "src/models/llm_common.py"
       - ".gitea/workflows/paas-ui-tests.yml"
   push:
     branches: [develop, main]
@@ -13,6 +16,9 @@ on:
       - "src/static/src/paas/**"
       - "tests/ui/**"
       - "tests/frontend/service-resources.test.mjs"
+      # LLM-01c：tests/ui/test_llm_* 也讀繁中譯文與後端錯誤碼表（對帳），兩邊一改就要重跑。
+      - "src/i18n/zh_TW.po"
+      - "src/models/llm_common.py"
       - ".gitea/workflows/paas-ui-tests.yml"
   workflow_dispatch:
 

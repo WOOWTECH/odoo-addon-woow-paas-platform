@@ -166,9 +166,23 @@ class LlmApiKey(models.Model):
     # ------------------------------------------------------------------ #
     #  DTO                                                                 #
     # ------------------------------------------------------------------ #
+    def _llm_is_stale_creating(self):
+        """卡在 ``creating`` 超過 ``_STALE_CREATING_SECONDS``：處理它的 worker 已經不在了。
+
+        這種列（換版重啟 pod 等，worker 在請求途中被殺）本來只有下一次 ``keys/create`` 才會由
+        ``_llm_settle_stale_creating`` 收尾；但 ``/api/llm/state`` 若照樣把它算成「已經有一把試用
+        金鑰」，前端就把〔建立免費試用金鑰〕藏起來、永遠不會送出那一次。所以讀取端（state、清單）
+        用同一條規則把它當成 ``failed_reveal``——只看不寫，真正的收尾仍在 ``keys/create``。
+        """
+        self.ensure_one()
+        return self.state == 'creating' and bool(self.create_date) and self.create_date < (
+            _utcnow() - timedelta(seconds=_STALE_CREATING_SECONDS))
+
     def _llm_status(self):
         """顯示狀態由 PaaS 計算（new-api 有 Redis 時 status 3／4 不寫回 DB）。"""
         self.ensure_one()
+        if self._llm_is_stale_creating():
+            return 'failed_reveal'
         if self.state in ('active', 'disabled') and self.expires_at \
                 and self.expires_at < _utcnow():
             return 'expired'

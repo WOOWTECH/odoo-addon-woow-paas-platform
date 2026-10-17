@@ -1,0 +1,156 @@
+// =============================================================================
+// LlmKeyRevealModal：一次性金鑰對話框（DESIGN §5.4、§6.3.2、§6.7）
+// 手機版（≤ $woow-bp-md）改全螢幕 sheet；金鑰欄等寬字、可換行。
+// =============================================================================
+
+.o_woow_llm_reveal {
+  &__intro {
+    color: $woow-text-primary;
+    margin: 0 0 1.25rem;
+    line-height: 1.6;
+  }
+
+  &__creating {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 2rem 0;
+    color: $woow-text-secondary;
+    text-align: center;
+
+    p {
+      margin: 0;
+    }
+  }
+
+  &__error {
+    margin-top: 0;
+  }
+
+  &__field {
+    margin-bottom: 1.25rem;
+  }
+
+  &__label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $woow-text-primary;
+    margin-bottom: 0.5rem;
+  }
+
+  &__key,
+  &__value {
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: $woow-text-primary;
+    background: $woow-background-light;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    padding: 0.75rem 1rem;
+    // 金鑰很長：手機上要能換行，不能把對話框撐寬。
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  &__key {
+    // 方便手動全選（複製失敗時的退路）。
+    user-select: all;
+    border-color: rgba($woow-primary, 0.35);
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  &__copy_failed {
+    margin: 0.5rem 0 0;
+    font-size: 0.8125rem;
+    color: #b91c1c;
+  }
+
+  // 沒有 Base URL 時取代〔複製為環境變數〕的說明（不給只有金鑰那一行的環境變數）。
+  &__env_missing {
+    margin: 0;
+  }
+
+  // 讀屏專用的播報區（「已複製金鑰」）：畫面上不佔位置，但仍在無障礙樹裡。
+  &__sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  // 打開時焦點先落在對話框本身（tabindex=-1），不畫焦點框。
+  &:focus {
+    outline: none;
+  }
+
+  &__saved {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: $woow-text-primary;
+    cursor: pointer;
+
+    input {
+      margin-top: 0.2rem;
+      width: 1rem;
+      height: 1rem;
+      flex-shrink: 0;
+    }
+  }
+
+  &__confirm {
+    // 在 footer（flex、靠右）裡佔滿一整行。
+    flex: 1 1 100%;
+    padding: 0.75rem 1rem;
+    border-radius: $woow-radius-default;
+    background: rgba(245, 158, 11, 0.12);
+    color: #92400e;
+
+    p {
+      margin: 0 0 0.75rem;
+      font-size: 0.875rem;
+    }
+  }
+
+  &__confirm_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+}
+
+// 全螢幕 sheet：沿用 .o_woow_modal 的 flex 欄＋body 自捲，footer 常駐貼底。
+// 兩個 class 的選擇器：要壓過 30_components.scss 的 `.o_woow_modal.o_woow_modal_md`（同權重、較晚載入）。
+.o_woow_modal.o_woow_llm_reveal {
+  @media (max-width: $woow-bp-md) {
+    max-width: none;
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+  }
+}
+
+.o_woow_llm_reveal_backdrop {
+  @media (max-width: $woow-bp-md) {
+    align-items: stretch;
+  }
+}

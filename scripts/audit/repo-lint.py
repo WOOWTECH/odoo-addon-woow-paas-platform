@@ -662,12 +662,14 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      當硬上限。依據 #1257 Q31：n8n 原本共用 HELM_OPERATION_TIMEOUT=120，
                      比 operator 子步 envelope 短，client 先斷線、server 照跑。
 
-42. newapi-timeout-ladder  AI 模型分頁 Odoo → newapi-proxy 的逾時階梯（後端那一半）。
+42. newapi-timeout-ladder  AI 模型分頁 前端 → Odoo → newapi-proxy 的逾時階梯。
                      實作見 scripts/audit/newapi_timeout_ladder.py：每個 TIMEOUT_* 送出的
                      X-Woow-Read-Timeout（read − 餘裕）落在代理 _READ_TIMEOUT_RE 的範圍且嚴格
                      小於 read、client 夾值＝代理上限、建金鑰預算與開戶 tick 各容得下一次完整呼叫、
-                     lease 長於最壞的 tick、client 方法 → 逾時類別對 baseline json。前端 40 秒那格
-                     在 LLM-01c 擴充。依據 DESIGN §1.2、§3.5（〔REV〕63）；票 LLM-01b。
+                     lease 長於最壞的 tick、client 方法 → 逾時類別對 baseline json；前端那一半
+                     （LLM-01c）：llm_service.js 的 KEY_CREATE_TIMEOUT_MS 大於後端建金鑰預算＋一次
+                     呼叫、rpc.js 預設逾時大於互動讀／寫一次呼叫、建金鑰的呼叫一定帶那個具名常數。
+                     依據 DESIGN §1.2、§3.5（〔REV〕63）；票 LLM-01b、LLM-01c。
 
 用法：
 
@@ -1376,6 +1378,9 @@ NEWAPI_LADDER_FILES = (
     'extra/newapi-proxy/newapi_proxy/app.py',
     'scripts/audit/newapi_timeout_ladder.py',
     'scripts/audit/baselines/newapi-timeout-ladder.json',
+    # LLM-01c：前端那一半（建金鑰 40 秒、rpc.js 預設 30 秒）。
+    'src/static/src/paas/services/llm_service.js',
+    'src/static/src/paas/services/rpc.js',
 )
 
 
@@ -7109,7 +7114,7 @@ def run_hook():
                        if rel in INIT_ODOO_LADDER_FILES else [])
         init_n8n_ladder = (check_init_n8n_budget_ladder(root)
                            if rel in INIT_N8N_LADDER_FILES else [])
-        # LLM-01b 第 42 條：逾時階梯跨 client／model／代理三端（同 init ladders，不做切片）。
+        # LLM-01b／01c 第 42 條：逾時階梯跨前端／client／model／代理四端（同 init ladders，不做切片）。
         newapi_ladder = (check_newapi_timeout_ladder(root)
                          if rel in NEWAPI_LADDER_FILES else [])
         # #552／#596：availability reason 的涵蓋同樣是**跨檔**不變式（後端 judge ／

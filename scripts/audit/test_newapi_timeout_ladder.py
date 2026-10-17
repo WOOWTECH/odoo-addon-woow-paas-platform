@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """repo-lint 第 42 條 newapi-timeout-ladder：透過真 repo-lint CLI 驗 source mutation（不 mock guard）。
 
+LLM-01c 起也涵蓋前端那一半（``llm_service.js`` 建金鑰 40 秒、``rpc.js`` 預設 30 秒）。
+
 形狀比照 ``test_init_n8n_budget_ladder.py``：``--all`` 驗整合與 exit code；其餘 mutation 用
 ``--hook`` 的 block JSON（同時驗 hook 分派接得到這幾個檔）。每次只改一個來源，最後還原。
 """
@@ -20,6 +22,8 @@ COMMON = 'src/models/llm_common.py'
 KEYS = 'src/models/llm_api_key.py'
 PROXY_APP = 'extra/newapi-proxy/newapi_proxy/app.py'
 BASELINE = 'scripts/audit/baselines/newapi-timeout-ladder.json'
+FRONTEND_SERVICE = 'src/static/src/paas/services/llm_service.js'
+FRONTEND_RPC = 'src/static/src/paas/services/rpc.js'
 RULE = 'newapi-timeout-ladder'
 
 
@@ -105,10 +109,31 @@ class NewapiTimeoutLadderCLITests(unittest.TestCase):
                       "def ap_get_user(self, user_id, *, timeout=(5, 15), deadline=None):",
                       '不是 TIMEOUT_* 常數：ap_get_user')
 
+    def test_frontend_key_create_timeout_outlasts_the_backend_budget(self):
+        # LLM-01c：前端 40 秒 > 後端建金鑰預算 20 秒＋一次完整呼叫 11 秒。
+        self.mutation(FRONTEND_SERVICE, 'export const KEY_CREATE_TIMEOUT_MS = 40000;',
+                      'export const KEY_CREATE_TIMEOUT_MS = 30000;',
+                      'KEY_CREATE_TIMEOUT_MS=30000 必須 >', full=True)
+        self.mutation(CLIENT, 'KEY_CREATE_BUDGET_SECONDS = 20', 'KEY_CREATE_BUDGET_SECONDS = 30',
+                      'KEY_CREATE_TIMEOUT_MS=40000 必須 >')
+
+    def test_frontend_key_create_call_must_use_the_named_timeout(self):
+        self.mutation(FRONTEND_SERVICE, '{ timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode',
+                      '{ transportCode', '必須帶 timeoutMs: KEY_CREATE_TIMEOUT_MS')
+        self.mutation(FRONTEND_SERVICE, '{ timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode',
+                      '{ timeoutMs: 40000, transportCode', 'timeoutMs 只能用具名常數')
+
+    def test_rpc_default_timeout_outlasts_interactive_calls(self):
+        self.mutation(FRONTEND_RPC, 'const REQUEST_TIMEOUT_MS = 30000;',
+                      'const REQUEST_TIMEOUT_MS = 9000;',
+                      'REQUEST_TIMEOUT_MS=9000 必須 > TIMEOUT_INTERACTIVE_WRITE')
+
     def test_missing_constant_fails_loud(self):
         self.mutation(CLIENT, 'SESSION_REVOKE_GRACE_SECONDS = 5', 'SESSION_REVOKE_GRACE = 5',
                       '無法載入或解析')
         self.mutation(BASELINE, '"methods"', '"method"', '與 scripts/audit/baselines/newapi-timeout-ladder.json 不符')
+        self.mutation(FRONTEND_SERVICE, 'export const KEY_CREATE_TIMEOUT_MS = 40000;',
+                      'export const KEY_CREATE_TIMEOUT = 40000;', '找不到整數常數 KEY_CREATE_TIMEOUT_MS')
 
 
 if __name__ == '__main__':

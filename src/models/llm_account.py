@@ -367,8 +367,11 @@ class LlmAccount(models.Model):
     def _llm_state_payload(self, partner):
         account = self._llm_account_for_partner(partner)
         keys = account.api_key_ids.filtered(lambda k: k.state not in ('deleted', 'lost'))
+        # 卡在 creating 太久的那把不算（見 llm_api_key._llm_is_stale_creating）：否則前端藏起
+        # 〔建立免費試用金鑰〕，使用者永遠送不出會替它收尾的那一次 keys/create。
         free_key = keys.filtered(
-            lambda k: k.kind == 'free_trial' and k.state in ('creating', 'active', 'disabled'))[:1]
+            lambda k: k.kind == 'free_trial' and k.state in ('creating', 'active', 'disabled')
+            and not k._llm_is_stale_creating())[:1]
         account_dto = None
         if account:
             quota = int(account.quota_cached or 0)
@@ -376,6 +379,9 @@ class LlmAccount(models.Model):
             overdraft_points = (-quota + QUOTA_PER_POINT - 1) // QUOTA_PER_POINT if quota < 0 else 0
             account_dto = {
                 'state': account.state,
+                # 整數 quota（DESIGN §6.6：換成點只在顯示時做）。balance_points／overdraft_points
+                # 是捨去／進位後的整數點數，前端要顯示 2 位小數（12.99 點）就得用這個。
+                'balance_quota': quota,
                 'balance_points': balance_points,
                 'overdraft_points': overdraft_points,
                 'suspend_reason': account.suspend_reason or None,

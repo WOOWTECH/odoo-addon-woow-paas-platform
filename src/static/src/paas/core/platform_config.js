@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { session } from "@web/session";
+import { llmVisibleFromSession } from "./llm_routes";
 
 /**
  * #275 cosmetic feature gate — 同步讀 bootstrap 注入的 woow_show_projects。
@@ -18,6 +19,15 @@ import { session } from "@web/session";
  */
 export function showProjects() {
     return session.woow_show_projects === true;
+}
+
+/**
+ * LLM-01c：「AI 模型」分頁的外觀開關，同 showProjects 的同步讀法（判準在
+ * core/llm_routes.js 的 llmVisibleFromSession，node 測試直接驗那一份）。後端注入
+ * `session.woow_show_llm`＝`llm_visible()`，與 /api/llm/* 的 gate 同一個判準。
+ */
+export function showLlm() {
+    return llmVisibleFromSession(session);
 }
 
 /**

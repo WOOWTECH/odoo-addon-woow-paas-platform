@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmKeyRevealModal">
+    <div class="o_woow_modal_backdrop o_woow_llm_reveal_backdrop" t-ref="backdrop" t-on-click="onBackdropClick">
+      <!-- tabindex=-1：打開時焦點先移到對話框本身（見 JS focusForPhase）；Tab 只在這裡面循環。 -->
+      <div class="o_woow_modal o_woow_modal_md o_woow_llm_reveal" t-ref="dialog" role="dialog" aria-modal="true"
+           aria-labelledby="o_woow_llm_reveal_title" tabindex="-1" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2 id="o_woow_llm_reveal_title" t-esc="title"/>
+          <!-- 建立中沒有關閉鈕：中途關掉就再也拿不到明文（見 JS 的 requestClose）。 -->
+          <button t-if="state.phase !== 'creating'" type="button" class="o_woow_modal_close"
+                  t-att-aria-label="closeLabel" t-on-click="requestClose">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <t t-if="state.phase === 'creating'">
+            <div class="o_woow_llm_reveal__creating" role="status">
+              <WoowIcon name="'progress_activity'" size="28" class="'o_woow_spin'"/>
+              <p t-esc="creatingText"/>
+            </div>
+          </t>
+          <t t-elif="state.phase === 'error'">
+            <div class="o_woow_error_message o_woow_llm_reveal__error" role="alert">
+              <WoowIcon name="'error'" size="20"/>
+              <span t-esc="state.errorMessage"/>
+            </div>
+          </t>
+          <t t-else="">
+            <p class="o_woow_llm_reveal__intro" t-esc="intro"/>
+
+            <div class="o_woow_llm_reveal__field">
+              <div class="o_woow_llm_reveal__label">API key</div>
+              <!-- e2e 截圖一律遮住這一格（o_woow_llm_reveal__key）；明文只在這裡出現一次。 -->
+              <code class="o_woow_llm_reveal__key" t-esc="state.key"/>
+              <div class="o_woow_llm_reveal__actions o_woow_llm_reveal__actions--key">
+                <WoowButton variant="'primary'" size="'sm'" ariaLabel="copyLabels.key" onClick="() => this.copy('key')">
+                  <WoowIcon name="'content_copy'" size="16"/>
+                  <t t-if="state.copied === 'key'">Copied.</t>
+                  <t t-else="">Copy</t>
+                </WoowButton>
+              </div>
+            </div>
+
+            <div class="o_woow_llm_reveal__field">
+              <div class="o_woow_llm_reveal__label">Base URL</div>
+              <t t-if="state.baseUrl">
+                <code class="o_woow_llm_reveal__value" t-esc="state.baseUrl"/>
+                <div class="o_woow_llm_reveal__actions">
+                  <WoowButton variant="'secondary'" size="'sm'" ariaLabel="copyLabels.base" onClick="() => this.copy('base')">
+                    <WoowIcon name="'content_copy'" size="16"/>
+                    <t t-if="state.copied === 'base'">Copied.</t>
+                    <t t-else="">Copy</t>
+                  </WoowButton>
+                </div>
+              </t>
+              <p t-else="" class="o_woow_hint" t-esc="baseUrlMissingText"/>
+            </div>
+
+            <div class="o_woow_llm_reveal__field">
+              <div class="o_woow_llm_reveal__label">Model</div>
+              <code class="o_woow_llm_reveal__value" t-esc="exampleModel"/>
+              <div class="o_woow_llm_reveal__actions">
+                <WoowButton variant="'secondary'" size="'sm'" ariaLabel="copyLabels.model" onClick="() => this.copy('model')">
+                  <WoowIcon name="'content_copy'" size="16"/>
+                  <t t-if="state.copied === 'model'">Copied.</t>
+                  <t t-else="">Copy</t>
+                </WoowButton>
+              </div>
+              <p class="o_woow_hint" t-esc="freeTrialHint"/>
+            </div>
+
+            <!-- 沒有 Base URL 就不給〔複製為環境變數〕：只有金鑰那行的話，工具會連到預設的 OpenAI。 -->
+            <div t-if="envVarsAvailable" class="o_woow_llm_reveal__actions">
+              <WoowButton variant="'secondary'" size="'sm'" ariaLabel="copyLabels.env" onClick="() => this.copy('env')">
+                <WoowIcon name="'terminal'" size="16"/>
+                <t t-if="state.copied === 'env'">Copied.</t>
+                <t t-else="">Copy as environment variables</t>
+              </WoowButton>
+            </div>
+            <p t-else="" class="o_woow_hint o_woow_llm_reveal__env_missing" t-esc="envUnavailableText"/>
+            <p t-if="state.copyFailed" class="o_woow_llm_reveal__copy_failed" role="alert" t-esc="copyFailedText"/>
+            <span class="o_woow_llm_reveal__sr" role="status" t-esc="copiedAnnouncement"/>
+
+            <label class="o_woow_llm_reveal__saved">
+              <input type="checkbox" t-att-checked="state.saved" t-on-change="onSavedChange"/>
+              <span>I have saved this key somewhere safe</span>
+            </label>
+
+          </t>
+        </div>
+
+        <!-- 關閉確認放在常駐的 footer：放在 body 尾端的話，金鑰欄較長時會落在捲動區外看不到。 -->
+        <div t-if="state.phase !== 'creating'" class="o_woow_modal_footer">
+          <WoowButton t-if="state.phase === 'error'" variant="'primary'" size="'md'" onClick.bind="close">Close</WoowButton>
+          <div t-elif="state.confirmClose" class="o_woow_llm_reveal__confirm" role="alert">
+            <p t-esc="closeConfirmText"/>
+            <div class="o_woow_llm_reveal__confirm_actions">
+              <WoowButton variant="'secondary'" size="'sm'" onClick.bind="cancelClose">Keep open</WoowButton>
+              <WoowButton variant="'ghost'" size="'sm'" onClick.bind="close">Close anyway</WoowButton>
+            </div>
+          </div>
+          <WoowButton t-else="" variant="'primary'" size="'md'" disabled="!canFinish" onClick.bind="finish">Done</WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

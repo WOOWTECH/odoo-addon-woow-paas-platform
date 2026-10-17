@@ -455,9 +455,9 @@
 5	test_llm_tracer.TestLlmModelGuards
 2	test_llm_tracer.TestLlmNeutralize
 6	test_llm_tracer.TestLlmProvisionRealCron
-2	test_llm_tracer.TestLlmQuotaInteger
+3	test_llm_tracer.TestLlmQuotaInteger
 2	test_llm_tracer.TestLlmSigningKeyFailClosed
-10	test_llm_tracer.TestLlmTracerHttp
+11	test_llm_tracer.TestLlmTracerHttp
 4	test_llm_tracer.TestLlmUnconfiguredZeroOutbound
 1	test_llm_tracer.TestLlmWoowSessionFlag
 5	test_locale_formatting_guard_107.TestLocaleFormattingGuard107
