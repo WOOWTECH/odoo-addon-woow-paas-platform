@@ -80,6 +80,17 @@ class LlmSecretMalformed(LlmCryptoError):
     code = 'llm_secret_malformed'
 
 
+#: 本模組會丟出的全部 ``code``（類別預設值＋建構時給的固定字串）。PaaS 的錯誤碼是封閉集合
+#: （``llm_common.ERROR_CODES``，N24）；這裡新增一個碼要同時加進來（``test_llm_services`` 以
+#: 原始碼比對守住）。
+ERROR_CODES = frozenset({
+    'llm_crypto_error', 'llm_crypto_unavailable', 'llm_crypto_key_missing',
+    'llm_crypto_key_invalid', 'llm_crypto_encrypt_failed', 'llm_secret_neutralized',
+    'llm_secret_binding', 'llm_secret_malformed', 'llm_secret_missing',
+    'llm_secret_undecryptable',
+})
+
+
 def generate_password() -> str:
     """64 字元 base62 隨機密碼（DESIGN §1.3.1 P0；代理要求 32–128 個可見 ASCII）。"""
     return ''.join(secrets.choice(_BASE62) for _ in range(PASSWORD_LENGTH))
