@@ -848,9 +848,20 @@ class NamespaceInfo(BaseModel):
 
 
 class TunnelConnectionInfo(BaseModel):
-    """Connection details for a Cloudflare Tunnel connector."""
+    """Connection details for a Cloudflare Tunnel connector.
 
-    connector_id: str = Field(..., description="Connector ID")
+    ⚠ ``connector_id`` 是**單一條連線**的 id（CF 的 ``connections[].id``），不是
+    「一個 cloudflared 行程」——cloudflared 預設開 4 條連線到不同 edge，每條都有
+    自己的 id。要數「有幾台機器接著這條 tunnel」只能看 ``client_id``（CF 的
+    ``connections[].client_id``，同一個行程的 4 條連線共用一個）。平台端靠這個欄位
+    偵測「同一條 tunnel 被兩台 HA 同時接上」（平台 #1766 / 元件 #31）。
+    """
+
+    connector_id: str = Field(..., description="Connection ID (one per edge connection)")
+    client_id: str = Field(
+        default="",
+        description="cloudflared process ID (shared by that process's connections)",
+    )
     type: str = Field(default="", description="Connection type")
     origin_ip: str = Field(default="", description="Origin IP address")
     opened_at: str = Field(default="", description="Connection opened timestamp")

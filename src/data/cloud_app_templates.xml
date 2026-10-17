@@ -448,10 +448,23 @@
                  回滾值（chart 不變，只把 image.tag 改回）：本筆
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:44f4a19a77a6c78ebe1ba9eac57aa5f1079d5317e7401cd18ceb3d7ce8573917；
                  其餘見各筆註解。 -->
+            <!-- 2026-10-17 只改釘本筆 image（woow-mcp-server #59，issue #58）：合併 commit
+                 8c942d648276974aa4d5def5bbb7cea6dcf4ea51（main CI run 21331 job 23320 的 push digest，單一 manifest.v2，
+                 已用 jcr-prod 的 registry API 讀回同一 digest）。其他 7 筆 MCP 範本不動。
+                 版本內容（#59）：hermes_config get（整份或指定 key）與 hermes_inspect 的 config_summary 不再原文回傳
+                 Hermes 設定裡的憑證（custom_providers[].api_key、*_TOKEN、secrets.* 等），值換成 [REDACTED]、欄位名稱
+                 保留；set 不變。HA 測試機 2026-10-16 實測發現 api_key 原文外洩，HA Woow Hermes MCP Server 0.2.2 已同法修正。
+                 爆炸半徑（相對 1d16391d）：1d16391d..8c942d64 之間 apps/hermes 只改 hermes_mcp_server/server.py
+                 （遮罩）並新增測試；mcp-admin-core 只多測試檔、執行期程式碼未變；中間的 #51／#52 只動 apps/odoo。
+                 Dockerfile、pyproject、uv.lock、LaunchPolicy 皆未變。只影響新開通與之後被 Redeploy 的服務（#1408）；
+                 Redeploy 時 Recreate 重啟 pod 一次，MCP 既有 session 失效、用戶端要重新 initialize。已被讀走的 key
+                 不會因此失效，現有服務要不要輪替 Hermes 設定裡的 key 另案決定。
+                 回滾值（chart 不變，只把 image.tag 改回）：本筆
+                 1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "8c942d648276974aa4d5def5bbb7cea6dcf4ea51@sha256:ffd39d8bf9aabf00cc1681613f1e88c36f4c374692442a2a242f919189bd322a"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->

@@ -1,0 +1,51 @@
+# newapi-proxy unit suite（AI 模型分頁，票 LLM-01a）
+#
+# 純 Python、不連網、不需要叢集：測試直接對 ASGI app 送手工組的 scope，上游是
+# httpx.MockTransport；唯一的 socket 是 127.0.0.1 上自己起的 uvicorn。
+#
+# 用 `paths`（不是 paas-operator-unit-tests.yml 的 paths-ignore）：這個套件自成一體，
+# 只有 extra/newapi-proxy/** 與本檔會影響結果。
+# 🔴 這支要進 required 清單之前，**必須先刪掉下面兩份 paths**——被過濾掉時 context
+#   根本不存在，required 判準湊不齊，只動別處的 PR 會永遠卡住。判準的權威出處是
+#   .gitea/workflows/repo-lint.yml 的同一段（#538）。
+name: newapi-proxy-unit-tests
+
+on:
+  pull_request:
+    paths:
+      - "extra/newapi-proxy/**"
+      - ".gitea/workflows/newapi-proxy-unit-tests.yml"
+  push:
+    branches:
+      - develop
+    paths:
+      - "extra/newapi-proxy/**"
+      - ".gitea/workflows/newapi-proxy-unit-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 不用 `cache: pip`：理由見 paas-operator-unit-tests.yml 同一段。
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install locked dependencies (hashes)
+        working-directory: extra/newapi-proxy
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-dev.txt
+
+      - name: Run unit tests
+        working-directory: extra/newapi-proxy
+        run: python -m pytest tests/
+
+      # scripts/signed_request.py 要能在只有 python3 的沙盒 Odoo pod 裡跑：不得 import
+      # 標準函式庫以外的東西。
+      - name: signed_request.py is stdlib-only
+        working-directory: extra/newapi-proxy
+        run: python -I -S -c "import runpy, sys; sys.argv=['x','--help']; runpy.run_path('scripts/signed_request.py', run_name='__main__')" >/dev/null

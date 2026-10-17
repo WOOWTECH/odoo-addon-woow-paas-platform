@@ -531,5 +531,8 @@
         font-size: 0.625rem;
         font-weight: 500;
         letter-spacing: 0.02em;
+        // LLM-01c：show_projects 開時 6 格（400px 寬每格約 66px）；「AI 模型」中間有空白，
+        // 不加 nowrap 的話窄一點的機型會折成兩行、把圖示往上推。
+        white-space: nowrap;
     }
 }

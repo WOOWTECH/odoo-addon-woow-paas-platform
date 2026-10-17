@@ -31,6 +31,7 @@ from ..models.workspace_access import (
     ASSIGNABLE_ROLES,
 )
 from ..services.paas_capability import _PaaSCapability
+from ..models.llm_common import llm_visible
 from ..services.paas_operator import (
     get_paas_operator_client,
     PaaSOperatorAPIError,
@@ -361,6 +362,9 @@ class PaasController(HiddenChainMixin, Controller):
         session_info = dict(request.env['ir.http'].session_info())
         session_info['woow_show_projects'] = _show_projects(request.env)
         session_info['woow_help_url'] = _help_url(request.env)
+        # LLM-01b：AI 模型分頁的外觀開關，與 /api/llm/* 的後端 gate 是同一個判準
+        # （show_llm＋pilot 名單＋未設定狀態，models/llm_common.py `llm_visible`）。
+        session_info['woow_show_llm'] = llm_visible(request.env, request.env.user.partner_id)
         return request.render(
             'woow_paas_platform.paas_app',
             {'session_info': session_info}
