@@ -2220,7 +2220,11 @@
                bc970850，OCI sha256:29328050…）。
              爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本，既有服務
              要 redeploy 升到 0.1.7 才修好 #1556）；升到 0.1.7 時 checksum/optional-auth 多了常數，pod 重啟一次
-             （約一分鐘、磁碟保留），卡住的舊金鑰也一併離開執行中的程序。回滾值：0.1.5。 -->
+             （約一分鐘、磁碟保留），卡住的舊金鑰也一併離開執行中的程序。回滾值：0.1.5。
+             2026-10-17 商用驗收 INFRA-DOC-007-2（charts#221）：full_description 與三個金鑰欄位說明揭露「IDE
+             內的擴充與 AI 助手讀得到密碼與金鑰」（密碼經 /proc/1/environ，沙盒以哨兵值實證），建議 LiteLLM
+             虛擬金鑰；頁籤名稱改用中文介面實際顯示的「管理員帳密」。chart 端的揭露與繁中登入頁在 charts
+             code-server 0.1.9（charts #245）；本 PR 不動 chart pin。 -->
         <record id="cloud_app_code_server" model="woow_paas_platform.cloud_app_template">
             <field name="name">Code Server</field>
             <field name="slug">code-server</field>
@@ -2233,7 +2237,11 @@
                 也改走 OpenRouter）。可選填 Git Token（預設給 github.com，可另加 GitLab、Gitea 等主機）與 commit
                 作者名稱／Email，推送免再輸入帳密。另內建 omnigent 指令，
                 可把這台接成同工作區 Omnigent 的工作機。**密碼登入**：沒有帳號，密碼於開通時一次性顯示；
-                可在服務頁「Admin Credentials」重設或改成自己的密碼，修改後服務重啟約一分鐘生效。
+                可在服務頁「管理員帳密」重設或改成自己的密碼，修改後服務重啟約一分鐘生效。
+                **金鑰與密碼的可見範圍**：登入密碼與上述金鑰都是 IDE 容器的環境變數，IDE 裡的擴充與
+                AI 助手（pi、Claude Code、Omnigent 工作階段）都讀得到。請使用設有額度上限的專用金鑰——
+                建議用同工作區 LiteLLM 虛擬金鑰（可設預算、限定模型、隨時撤銷），不要貼主帳號金鑰；
+                Git Token 請限定 repo 並設到期日；只安裝信任的擴充。懷疑外洩時重設密碼（所有登入同時失效）並撤換金鑰。
                 自行安裝的擴充會保留在磁碟上。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
                 刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
@@ -2245,11 +2253,11 @@
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}}},"persistence":{"workspace":{"size":"16Gi"},"piData":{"size":"4Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
-                "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},
+                "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）。IDE 內的擴充與 AI 助手讀得到此金鑰，請用設有額度上限的專用金鑰"},
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
-                "description": "pi 使用的 OpenRouter Key（選填）；未填 Anthropic API Key 時，Claude Code 也改經 OpenRouter 連線"},
+                "description": "pi 使用的 OpenRouter Key（選填）；未填 Anthropic API Key 時，Claude Code 也改經 OpenRouter 連線。IDE 內的擴充與 AI 助手讀得到此金鑰，請用設有額度上限的金鑰"},
                 {"key": "auth.gitToken", "label": "Git Token", "type": "password",
-                "description": "Git 個人存取權杖（選填，GitHub／GitLab／Gitea 皆可）；git 推送／拉取「Git Token 適用主機」時自動帶入，不寫入磁碟"},
+                "description": "Git 個人存取權杖（選填，GitHub／GitLab／Gitea 皆可）；git 推送／拉取「Git Token 適用主機」時自動帶入，不寫入磁碟。IDE 內的擴充與 AI 助手讀得到此權杖，請限定 repo 並設到期日"},
                 {"key": "git.tokenHosts", "label": "Git Token 適用主機", "type": "text", "format": "git_hosts",
                 "default": "github.com", "placeholder": "github.com, git.example.com",
                 "description": "Git Token 只會交給這些主機（只限 https；多個請用逗號分隔、不能用空白；要填含網域的完整主機名，例 git.example.com；最多 10 個，可帶 :port）；留空＝只有 github.com。修改後服務重啟約一分鐘"},
