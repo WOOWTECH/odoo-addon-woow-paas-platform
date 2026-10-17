@@ -54,6 +54,7 @@ from ..services.chart_version import (
     rollback_request_problem,
 )
 from ..models.cloud_service import (
+    N8N_ENCRYPTION_KEY_PATH,
     WOOW_ODOO_ADMIN_PASSWORD_PATH,
     _compute_quota_detail_rows,
     _internal_provision,
@@ -4293,7 +4294,15 @@ class PaasController(HiddenChainMixin, Controller):
                     result[key] = val
             return result
 
-        return _mask_secrets(values)
+        masked = _mask_secrets(values)
+        # DATA-N8N-013-1：n8n 加密金鑰落在 ``main.secret`` 底下，上面的 secret 分支會留 8 字元前綴；
+        # 這把金鑰能解開服務裡所有 credential，前綴也不給，這一格改成全遮。
+        node = masked
+        for key in N8N_ENCRYPTION_KEY_PATH[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and N8N_ENCRYPTION_KEY_PATH[-1] in node:
+            node[N8N_ENCRYPTION_KEY_PATH[-1]] = _mask_value_fully(node[N8N_ENCRYPTION_KEY_PATH[-1]])
+        return masked
 
     # _build_mcp_sidecar_config moved to CloudService model
 
@@ -4658,6 +4667,11 @@ class PaasController(HiddenChainMixin, Controller):
                 {template.mcp_api_key_helm_path: mcp_api_key}
             )
             merged_values = self._deep_merge(merged_values, api_key_nested)
+
+        # DATA-N8N-013-1：n8n 的加密金鑰由平台在開通時產生，跟著 helm_values 保存、經 chart 的
+        # app-secret 變成環境變數（見 cloud_service ``N8N_ENCRYPTION_KEY_PATH``）。只在這裡產生：
+        # 部署組裝不補，存量服務才不會拿到一把與 PVC 不同的金鑰。租戶送的同名鍵已被白名單丟掉。
+        merged_values = CloudService._mint_n8n_encryption_key(merged_values, template.slug)
 
         # #357: 對 admin GUI 內建的 template 生成 admin_password。密碼只放進
         # cloud_service_secret + 一次性 response，不寫回 helm_values。

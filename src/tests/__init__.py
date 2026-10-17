@@ -1230,3 +1230,5 @@ from . import test_backup_status_visibility
 # 商用驗收 X-SET-007-1／X-SEC-007-1／-2：密碼強度、忘記密碼不洩露帳號、重設請求節流。
 from . import test_password_hardening_xsec007
 from . import test_n8n_podsec_hardening
+# 商用驗收 n8n-credential-key-backup（DATA-N8N-013-1）：n8n 加密金鑰由平台產生並保存。
+from . import test_n8n_encryption_key_backup
