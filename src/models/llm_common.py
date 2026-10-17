@@ -11,13 +11,20 @@
    ``active=True`` 的 cron 帶上 prod，這個狀態保證它們在 prod 什麼都不做。
 3. **錯誤碼**（DESIGN §3.4）：常數名 ``ERR_*``、值小寫 snake；前端 ``llm_errors.js``
    依 code 組句，後端 ``error`` 只是 fallback。
+4. **cron 框架**（N27、N28；LLM-02b）：:data:`LLM_CRONS` 是全部 LLM cron 的登記表（測試以它
+   跑「未設定零外呼」與 noupdate 凍結契約）；:func:`run_llm_cron` 是每支 LLM cron 的唯一入口：
+   未設定 ⇒ 不呼叫工作函式；有設定 ⇒ 給一個 :class:`LlmCronTick`（牆鐘秒數＋件數上限），
+   工作函式回「還有剩」就 ``_trigger()`` 同一支 cron 接著跑。
 """
 import logging
 import re
+import time
+import traceback
 
 from odoo import _, fields
 from odoo.exceptions import ValidationError
 
+from ..services import llm_redact
 from ..services import newapi_client as nac
 
 _logger = logging.getLogger(__name__)
@@ -31,8 +38,12 @@ PARAM_PROXY_URL = nac.PARAM_PROXY_URL
 PARAM_USERNAME_PREFIX = 'woow_paas_platform.newapi_username_prefix'
 PARAM_IP_BLOCK = 'woow_paas_platform.llm_synthetic_ip_block'
 PARAM_CANARY_PARTNER_ID = 'woow_paas_platform.llm_canary_partner_id'
+#: N13：告警信的收件人（負責人；逗號分隔最多 5 個）。沒設＝告警只寫 ``llm_event``、不寄信。
+PARAM_ALERT_EMAIL = 'woow_paas_platform.llm_alert_email'
+#: N13（選配）：告警 webhook，只收 ``https://``；沒設＝不送。
+PARAM_ALERT_WEBHOOK_URL = 'woow_paas_platform.llm_alert_webhook_url'
 
-#: 本票引入的全部 key；``hooks._CONFIG_PARAMETERS`` 必須涵蓋（登記測試守）。
+#: AI 模型分頁的全部 key；``hooks._CONFIG_PARAMETERS`` 必須涵蓋（登記測試守）。
 LLM_CONFIG_PARAMETERS = (
     PARAM_SHOW_LLM,
     PARAM_PILOT_PARTNER_IDS,
@@ -40,6 +51,8 @@ LLM_CONFIG_PARAMETERS = (
     PARAM_USERNAME_PREFIX,
     PARAM_IP_BLOCK,
     PARAM_CANARY_PARTNER_ID,
+    PARAM_ALERT_EMAIL,
+    PARAM_ALERT_WEBHOOK_URL,
 )
 
 # --------------------------------------------------------------------------- #
@@ -60,6 +73,16 @@ CONVERT_MAX_POINTS = 10000
 PROVISION_BACKOFF_MINUTES = (1, 2, 5, 15, 60)
 PROVISION_MAX_ATTEMPTS = 6
 PROVISION_LEASE_MINUTES = 5
+#: N6：每帳號每小時的次數上限（以 ``llm_event`` 近一小時的筆數計）。轉換在 LLM-08 用。
+THROTTLE_WINDOW_SECONDS = 3600
+THROTTLE_LIMITS = {
+    'key_create': 10,
+    'convert': 10,
+}
+#: N13：同一個告警（代碼＋帳戶＋對象＋錯誤碼）30 分鐘內只寄一次。
+ALERT_DEDUPE_MINUTES = 30
+#: DESIGN §2.6：``llm_event`` 保留 400 天。
+LLM_EVENT_RETENTION_DAYS = 400
 
 # --------------------------------------------------------------------------- #
 #  錯誤碼（DESIGN §3.4）                                                        #
@@ -270,3 +293,128 @@ def validate_llm_param(key, value):
         raise ValidationError(_('The pilot list must be comma-separated partner IDs.'))
     if key == PARAM_CANARY_PARTNER_ID and not _PILOT_RE.fullmatch(text):
         raise ValidationError(_('The canary partner must be a partner ID.'))
+    if key == PARAM_ALERT_EMAIL and parse_alert_emails(text) is None:
+        raise ValidationError(_(
+            'The AI models alert email must be one to five comma-separated email addresses.'))
+    if key == PARAM_ALERT_WEBHOOK_URL and not valid_alert_webhook_url(text):
+        raise ValidationError(_(
+            'The AI models alert webhook must be an https:// URL without credentials.'))
+
+
+_EMAIL_RE = re.compile(
+    r"[A-Za-z0-9.!#$%&*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+", re.ASCII)
+_WEBHOOK_RE = re.compile(r'https://[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/%-]*)?',
+                         re.ASCII)
+_MAX_ALERT_EMAILS = 5
+
+
+def parse_alert_emails(raw):
+    """``llm_alert_email`` → 收件人 tuple；空值 → ``()``；格式不合 → ``None``（讀取端當成沒設）。"""
+    text = (raw or '').strip()
+    if not text:
+        return ()
+    parts = [part.strip() for part in text.split(',')]
+    if not parts or len(parts) > _MAX_ALERT_EMAILS or not all(
+            _EMAIL_RE.fullmatch(part) for part in parts):
+        return None
+    return tuple(parts)
+
+
+def valid_alert_webhook_url(raw):
+    """只收 ``https://host[:port][/path]``（不收帳密、query、fragment；≤ 512 字元）。"""
+    text = (raw or '').strip()
+    return bool(text) and len(text) <= 512 and bool(_WEBHOOK_RE.fullmatch(text))
+
+
+def alert_targets(env):
+    """告警出口的設定（讀取時再驗一次；SQL 直改成不合法的值＝當成沒設）。"""
+    icp = env['ir.config_parameter'].sudo()
+    emails = parse_alert_emails(icp.get_param(PARAM_ALERT_EMAIL))
+    if emails is None:
+        _logger.warning('[LLM] %s is malformed; alert emails are not sent', PARAM_ALERT_EMAIL)
+        emails = ()
+    webhook = (icp.get_param(PARAM_ALERT_WEBHOOK_URL) or '').strip()
+    if webhook and not valid_alert_webhook_url(webhook):
+        _logger.warning('[LLM] %s is malformed; the alert webhook is not called',
+                        PARAM_ALERT_WEBHOOK_URL)
+        webhook = ''
+    return {'emails': emails, 'webhook': webhook or None}
+
+
+# --------------------------------------------------------------------------- #
+#  cron 框架（N27、N28；LLM-02b）                                               #
+# --------------------------------------------------------------------------- #
+#: 全部 LLM cron：xmlid → (model, 方法名)。``data/llm_cron.xml`` 是 noupdate，方法名與 model 是
+#: 凍結契約（改名要同 PR 寫 migration 改 ``ir_act_server.code``）；``TestLlmCronContract`` 對已
+#: 安裝 DB 逐支斷言，``TestLlmUnconfiguredZeroOutbound`` 逐支手動觸發。新增 LLM cron 一律登記在這。
+LLM_CRONS = {
+    'woow_paas_platform.ir_cron_llm_provision': (
+        'woow_paas_platform.llm_account', '_cron_llm_provision'),
+    'woow_paas_platform.ir_cron_llm_balance_refresh': (
+        'woow_paas_platform.llm_account', '_cron_llm_balance_refresh'),
+    'woow_paas_platform.ir_cron_llm_event_cleanup': (
+        'woow_paas_platform.llm_event', '_cron_llm_event_cleanup'),
+}
+
+
+class LlmCronTick:
+    """一個 cron tick 的預算（N28）：牆鐘 ``seconds`` 秒、最多 ``items`` 件。
+
+    工作函式每做一件之前問 :meth:`can_take`（需要的秒數給 ``need_seconds``）；答否時
+    ``more`` 會被設成 True，:func:`run_llm_cron` 就 ``_trigger()`` 下一個 tick。外呼一律帶
+    ``deadline=tick.deadline``，讓 client 依剩餘預算截斷 timeout。
+    """
+
+    __slots__ = ('deadline', 'items', 'done', 'more', '_monotonic')
+
+    def __init__(self, seconds, items, monotonic=time.monotonic):
+        self._monotonic = monotonic
+        self.deadline = monotonic() + seconds
+        self.items = items
+        self.done = 0
+        self.more = False
+
+    def remaining(self):
+        return self.deadline - self._monotonic()
+
+    def can_take(self, need_seconds=0):
+        """還能再做一件嗎（件數沒滿、剩下的秒數 ≥ ``need_seconds``）；不能就標 ``more``。"""
+        if self.done >= self.items or self.remaining() < need_seconds:
+            self.more = True
+            return False
+        return True
+
+    def took(self, count=1):
+        self.done += count
+
+
+def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, config=None):
+    """每支 LLM cron 的唯一入口（N27、N28）。
+
+    * ``config``：呼叫端已經讀好的 :func:`llm_config`（沒給就在這裡讀）。model 檔各自以自己
+      import 的 ``llm_config`` 讀好再傳進來——committed 測試只在本行程 patch 那個名字、不 commit
+      任何設定（``tests/llm_test_support.py``）。
+    * **未設定 ⇒ 直接 return**：不呼叫 ``work``——不建 client、不外呼、不寫 incident、不告警。
+    * ``work(config, tick)`` 回 truthy（或 ``tick.more``）⇒ ``_trigger()`` 同一支 cron。
+    * ``work`` 丟的例外在這裡收掉：traceback 經 :func:`llm_redact.redact` 才進 log，主 cursor
+      回到 savepoint（工作函式的寫入都走獨立 cursor，已 commit 的不受影響）。不往外丟是刻意的：
+      Odoo 18 對連續失敗的 cron 會自動停用（``ir_cron._update_failure_count``），而 LLM cron
+      被靜默停用＝對帳、刷新全停。下一個排程照常再跑。
+    """
+    config = config or llm_config(env)
+    if llm_unconfigured(env, config):
+        return False
+    tick = LlmCronTick(seconds, items)
+    try:
+        with env.cr.savepoint():
+            more = work(config, tick)
+    except Exception:  # noqa: BLE001 - see docstring
+        _logger.error('[LLM] cron %s crashed: %s', xmlid,
+                      llm_redact.redact(traceback.format_exc()))
+        return False
+    more = bool(more) or tick.more
+    if more:
+        cron = env.ref(xmlid, raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger()
+    return more

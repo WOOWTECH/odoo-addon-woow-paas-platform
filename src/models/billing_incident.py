@@ -363,6 +363,16 @@ class BillingIncident(models.Model):
         ('bind_failed', 'Card binding failed'),
         ('stuck_pending', 'Stuck pending payment'),
         ('manual_invoice_stale', 'Manual invoice stale'),
+        # AI 模型分頁（DESIGN §2.8–§2.10；LLM-02b 的 incident helper
+        # `llm_event._llm_incident` 是唯一寫入者，external_ref 一律 `llm:<種類>/…`）。
+        # 這幾種不碰 ECPay 處置欄；處置在 llm_credit_order／llm_account 上做。
+        ('llm_credit_unknown', 'AI credit result unknown'),
+        ('llm_reconcile_mismatch', 'AI credit reconciliation mismatch'),
+        ('llm_external_credit', 'AI credit added outside the platform'),
+        ('llm_void_failed', 'AI credit void failed'),
+        ('llm_not_me', 'AI account reported as not me'),
+        ('llm_secret_mismatch', 'AI account secret rejected'),
+        ('llm_account_error', 'AI account error'),
     )
     _STATE_SELECTION = (
         ('open', 'Open'),

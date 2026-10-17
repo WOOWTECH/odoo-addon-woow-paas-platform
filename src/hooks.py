@@ -225,6 +225,9 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.newapi_username_prefix',
     'woow_paas_platform.llm_synthetic_ip_block',
     'woow_paas_platform.llm_canary_partner_id',
+    # LLM-02b：告警出口（N13）。
+    'woow_paas_platform.llm_alert_email',
+    'woow_paas_platform.llm_alert_webhook_url',
 ]
 
 

@@ -12,7 +12,9 @@
          ⚠ 必須 active：ir.cron._trigger() 對停用的 cron 不建立立即觸發。
          「未設定」（newapi_proxy_url 空或黑洞值、或 show_llm／pilot／canary 都沒設）時，
          每個 LLM cron 的第一行就 return——例行發版會在 LLM-17 之前就把這裡的 active cron
-         帶上 prod，那時它們什麼都不做（零外呼、不寫 incident、不告警）。 -->
+         帶上 prod，那時它們什麼都不做（零外呼、不寫 incident、不告警）。
+         LLM-02b：每支 cron 都經 llm_common.run_llm_cron（未設定 no-op、tick 預算、_trigger() 接續），
+         而且登記在 llm_common.LLM_CRONS（凍結契約與「未設定零外呼」的測試以它為準）。 -->
     <data noupdate="1">
         <!-- 開戶 P0–P9：每 tick 只做一戶、總 deadline 60 秒；activate 與退避會 _trigger()，
              這裡的 5 分鐘只是保險（例如 pod 在開戶途中被殺、lease 5 分鐘後到期）。 -->
@@ -26,6 +28,18 @@
             <field name="user_id" ref="base.user_root"/>
             <field name="interval_number">5</field>
             <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <!-- llm_event 保留 400 天（DESIGN §2.6；LLM-02b）：每批 5,000 筆、每 tick ≤ 30 秒。 -->
+        <record id="ir_cron_llm_event_cleanup" model="ir.cron">
+            <field name="name">PaaS: AI Models Audit Event Cleanup</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_event"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_event_cleanup()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
             <field name="active" eval="True"/>
         </record>
     </data>
