@@ -7,7 +7,11 @@ new-api 上一個使用者 ``<prefix>%010d``。本檔有三件事：
    ``llm_common._llm_internal`` 的把手（sudo 也擋）；``newapi_username``、``partner_id``、
    ``newapi_user_id`` 設定後不能改；unlink 只在模組卸載時允許。
 2. **開通**（``_llm_activate``）：同意條款 → 建 ``state=provisioning`` 的列 → ``_trigger()``
-   開戶 cron。冪等：已有未關閉的帳戶就回它。
+   開戶 cron。冪等：已有未關閉的帳戶就回它。條款版本由 ``llm_terms`` 的 published 版提供
+   （LLM-04）：沒帶或不是目前的版本 ⇒ ``llm_tos_required``。改版後的重新同意是
+   ``_llm_accept_terms``；建金鑰、轉換、啟用金鑰前呼叫 ``_llm_require_current_terms``（gate）。
+   每一次同意都寫一筆 ``llm_event``（``tos_accept``：版本＝對象 ``llm_terms``、時間、uid、
+   controller 取得的真實 IP），等這個交易 commit 之後才寫。
 3. **開戶 cron**（``_cron_llm_provision``，P0–P9，〔PROV〕§3.2）：
 
    * 第一行就檢查「未設定」（N27）：未設定 ⇒ 直接 return，不外呼。
@@ -66,6 +70,7 @@ from .llm_common import (
     ERR_LLM_SUSPENDED,
     ERR_LLM_TOS_OUTDATED,
     ERR_LLM_TOS_REQUIRED,
+    ERR_LLM_TOS_UNAVAILABLE,
     ERR_LLM_UNAVAILABLE,
     FREE_DAILY_LIMIT,
     CONVERT_MAX_POINTS,
@@ -75,7 +80,6 @@ from .llm_common import (
     PROVISION_LEASE_MINUTES,
     PROVISION_MAX_ATTEMPTS,
     QUOTA_PER_POINT,
-    TOS_VERSION_CURRENT,
     LlmError,
     LlmQuotaInteger,
     _is_llm_internal,
@@ -86,6 +90,7 @@ from .llm_common import (
     run_llm_cron,
 )
 from .llm_event import LlmAlert, LlmIncident, _begin, safe_code
+from .llm_terms import TERMS_MODEL, clean_version
 
 _logger = logging.getLogger(__name__)
 
@@ -165,6 +170,14 @@ def _utcnow():
 
 def _iso(value):
     return value.replace(tzinfo=timezone.utc).isoformat() if value else None
+
+
+def _clean_ip(real_ip):
+    """controller 取得的對端位址 → 正規化的字串；空值或不合格 ⇒ ``False``（不存）。"""
+    try:
+        return str(ipaddress.ip_address(real_ip)) if real_ip else False
+    except ValueError:
+        return False
 
 
 def _items(data):
@@ -420,10 +433,12 @@ class LlmAccount(models.Model):
         那筆回 ``llm_provisioning``：這是**預期結果**，前端照常輪詢 ``/api/llm/state``（下一個
         請求是新的交易、看得到那一列）。``TestLlmActivateRace`` 用兩條真連線驗。
         """
-        if not isinstance(tos_version, str) or not tos_version.strip():
-            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=TOS_VERSION_CURRENT)
-        if tos_version.strip() != TOS_VERSION_CURRENT:
-            raise LlmError(ERR_LLM_TOS_OUTDATED, current_version=TOS_VERSION_CURRENT)
+        current = self.env[TERMS_MODEL]._llm_current()
+        if current is None:
+            raise LlmError(ERR_LLM_TOS_UNAVAILABLE)
+        # 沒帶、或帶的不是目前 published 的版本（舊版、亂填）：都是「還沒同意目前的條款」（LLM-04 AC1）。
+        if clean_version(tos_version) != current.version:
+            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=current.version)
         Account = self.sudo()
         existing = Account._llm_account_for_partner(partner)
         if existing:
@@ -431,16 +446,13 @@ class LlmAccount(models.Model):
         config = llm_config(self.env)
         if not config['identity_ok']:
             raise LlmError(ERR_LLM_UNAVAILABLE)
-        try:
-            ip_text = str(ipaddress.ip_address(real_ip)) if real_ip else False
-        except ValueError:
-            ip_text = False
+        ip_text = _clean_ip(real_ip)
         try:
             with self.env.cr.savepoint():
                 account = _llm_internal(Account).create({
                     'partner_id': partner.id,
                     'state': 'provisioning',
-                    'tos_version': TOS_VERSION_CURRENT,
+                    'tos_version': current.version,
                     'tos_accepted_at': _utcnow(),
                     'tos_accepted_uid': user.id if user else False,
                     'tos_accepted_ip': ip_text,
@@ -458,6 +470,11 @@ class LlmAccount(models.Model):
             # 另一個請求先 commit 了同一個 partner 的帳戶（見 docstring：本交易的 snapshot
             # 看不到它，重新 search 也找不到）⇒ 預期結果 llm_provisioning。
             raise LlmError(ERR_LLM_PROVISIONING) from None
+        # 帳戶是這個交易剛建的：稽核等 commit 之後才寫（llm_event 模組 docstring 第 1 點的前提一）。
+        self.env[EVENT_MODEL]._llm_record_after_commit(
+            'tos_accept', account_id=account.id, partner_id=partner.id,
+            uid=user.id if user else None, real_ip=ip_text or None,
+            target_model=TERMS_MODEL, target_id=current.id)
         cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
         if cron:
             cron.sudo()._trigger()
@@ -466,10 +483,80 @@ class LlmAccount(models.Model):
         return Account.browse(account.id)
 
     # ------------------------------------------------------------------ #
+    #  條款：改版後重新同意（/api/llm/account/accept_terms）與 gate（LLM-04）   #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _llm_accept_terms(self, partner, tos_version, user, real_ip):
+        """同意目前 published 的條款版本（DESIGN §6.4-3）。回 ``{'tos': …}``（同 ``/api/llm/state``）。
+
+        * 沒有未關閉的帳戶 ⇒ ``llm_not_activated``（還沒開通的人走 ``activate``，它本身就記同意）。
+        * 沒帶版本 ⇒ ``llm_tos_required``；帶的不是目前的版本（對話框開著的時候又改版了）⇒
+          ``llm_tos_outdated``＋``current_version``，前端重新讀條款。
+        * 已經同意的就是目前的版本 ⇒ 什麼都不寫（不是新的同意）。
+        * 暫停中、開戶失敗的帳戶也可以同意（同意本身不會建立或恢復任何東西）。
+
+        帳戶列以 ORM 寫（``FOR NO KEY UPDATE``）；兩個請求同時同意 ⇒ 後到的那筆在 REPEATABLE READ 下撞
+        serialization failure，``retrying()`` 重播時看到已經同意、不再寫。稽核在 commit 之後才寫：交易回捲
+        （或被重播）的那一次不會留下「同意了」的紀錄。
+        """
+        account = self._llm_account_for_partner(partner)
+        if not account:
+            raise LlmError(ERR_LLM_NOT_ACTIVATED)
+        current = self.env[TERMS_MODEL]._llm_current()
+        if current is None:
+            raise LlmError(ERR_LLM_TOS_UNAVAILABLE)
+        version = clean_version(tos_version)
+        if version is None:
+            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=current.version)
+        if version != current.version:
+            raise LlmError(ERR_LLM_TOS_OUTDATED, current_version=current.version)
+        if account.tos_version != current.version:
+            ip_text = _clean_ip(real_ip)
+            _llm_internal(account).write({
+                'tos_version': current.version,
+                'tos_accepted_at': _utcnow(),
+                'tos_accepted_uid': user.id if user else False,
+                'tos_accepted_ip': ip_text,
+            })
+            self.env[EVENT_MODEL]._llm_record_after_commit(
+                'tos_accept', account_id=account.id, partner_id=account.partner_id.id,
+                uid=user.id if user else None, real_ip=ip_text or None,
+                target_model=TERMS_MODEL, target_id=current.id)
+        return {'tos': account._llm_tos_dto(current)}
+
+    def _llm_require_current_terms(self):
+        """gate（DESIGN §6.4-3）：條款改版且要求重新同意 ⇒ ``llm_tos_outdated``。
+
+        **建金鑰、轉換、啟用金鑰都要在第一次外呼之前呼叫**（LLM-07 的付費金鑰與啟用、LLM-08 的轉換
+        照用）；既有金鑰不受影響——這裡只擋 PaaS 端的寫入，不碰 new-api 上的 token。判準見
+        ``llm_terms.LlmTerms._llm_reaccept_required``。
+        """
+        self.ensure_one()
+        Terms = self.env[TERMS_MODEL]
+        current = Terms._llm_current()
+        if Terms._llm_reaccept_required(self.tos_version or None, current=current):
+            raise LlmError(ERR_LLM_TOS_OUTDATED,
+                           current_version=current.version if current else None)
+
+    def _llm_tos_dto(self, current):
+        """``/api/llm/state`` 的 ``account.tos``：``needs_reaccept``＝版本不同（顯示「條款已更新」橫幅）；
+        ``blocking``＝gate 會擋（橫幅改說「同意前不能建立金鑰、轉換點數或重新啟用金鑰」）。
+        ``requires_reaccept=False`` 的改版只有前者（LLM-05 審查：畫面與 gate 要一致）。"""
+        self.ensure_one()
+        accepted = self.tos_version or None
+        return {
+            'accepted_version': accepted,
+            'current_version': current.version if current else None,
+            'needs_reaccept': current is not None and accepted != current.version,
+            'blocking': self.env[TERMS_MODEL]._llm_reaccept_required(accepted, current=current),
+        }
+
+    # ------------------------------------------------------------------ #
     #  /api/llm/state                                                      #
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_state_payload(self, partner):
+        current = self.env[TERMS_MODEL]._llm_current()
         account = self._llm_account_for_partner(partner)
         keys = account.api_key_ids.filtered(lambda k: k.state not in ('deleted', 'lost'))
         # 卡在 creating 太久的那把不算（見 llm_api_key._llm_is_stale_creating）：否則前端藏起
@@ -491,15 +578,14 @@ class LlmAccount(models.Model):
                 'overdraft_points': overdraft_points,
                 'suspend_reason': account.suspend_reason or None,
                 'low_balance_threshold': account.low_balance_threshold,
-                'tos': {
-                    'accepted_version': account.tos_version or None,
-                    'current_version': TOS_VERSION_CURRENT,
-                    'needs_reaccept': (account.tos_version or '') != TOS_VERSION_CURRENT,
-                },
+                'tos': account._llm_tos_dto(current),
             }
         return {
             'account': account_dto,
-            'tos_current_version': TOS_VERSION_CURRENT,
+            # 目前 published 的條款（沒有＝null：「尚未開通」畫面不能開通，見前端 tosUnavailable）。
+            'tos_current_version': current.version if current else None,
+            # 草稿文字（D15）：「尚未開通」畫面在勾選框下標「草稿，尚未生效」。
+            'tos_current_draft': bool(current and current.is_draft),
             'free_trial': {
                 'key_id': free_key.id or None,
                 # 每日計數在 LLM-10（llm_free_usage）；tracer 用 /api/llm/usage/recent。

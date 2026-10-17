@@ -1994,6 +1994,62 @@ msgstr "條款目前是草稿，尚未生效。"
 
 #. module: woow_paas_platform
 #. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "The AI Models Terms of Service cannot be shown right now. Please try again later."
+msgstr "《AI 模型服務條款》暫時無法顯示，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "The terms version must start with a letter or digit and contain only letters, digits, \".\", \"_\" or \"-\" (at most 64 characters)."
+msgstr "條款版本號必須以英文字母或數字開頭，只能包含英文字母、數字、「.」「_」「-」，最多 64 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "A terms version is always created as a draft."
+msgstr "條款版本一律以草稿建立。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Use Publish to change the state of a terms version."
+msgstr "條款版本的狀態只能透過「Publish」（發佈）改變。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "A published or retired terms version cannot be changed. Duplicate it as a new draft instead."
+msgstr "已發佈的版本與舊版都不能修改，請複製成新的草稿再改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Published or retired terms versions cannot be deleted: users must be able to look up the version they accepted."
+msgstr "已發佈的版本與舊版都不能刪除：使用者要能查到自己同意過的版本。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Only a draft terms version can be published."
+msgstr "只有草稿可以發佈。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "The terms content is empty."
+msgstr "條款內容是空的。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Draft terms (marked 草稿，尚未生效 or 【待…】) can only be published on staging. Production can only publish the finalized text (D15)."
+msgstr "草稿文字（含「草稿，尚未生效」或【待…】標記）只能在測試環境發佈；正式站只能發佈定稿（D15）。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/llm_account.py:0
 msgid "This AI account field cannot be changed."
 msgstr "這個 AI 模型帳戶欄位設定後不能修改。"

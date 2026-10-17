@@ -59,6 +59,7 @@ const CODE_MAP = Object.assign(Object.create(null), {
   llm_not_activated: () => _t("Please activate the AI models service first."),
   llm_tos_required: () => _t("Please accept the AI Models Terms of Service first."),
   llm_tos_outdated: () => _t("The AI Models Terms of Service have been updated. Please accept them again."),
+  llm_tos_unavailable: () => _t("The AI Models Terms of Service cannot be shown right now. Please try again later."),
   llm_provisioning: () => _t("Your AI models account is being set up. Please wait a moment."),
   llm_suspended: () => _t("The AI models service is suspended."),
   llm_closed: () => _t("The AI models account is closed. Please contact support to reactivate it."),

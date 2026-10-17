@@ -139,6 +139,10 @@ WEBHOOK_DELIVERED = ('pending', 'sent', 'not_configured', 'batched', 'digested')
 
 ACTION_SELECTION = [
     ('activate', 'Activate'),
+    # LLM-04：每一次同意條款（開通時與改版後重新同意）各一筆；對象＝那一版的 llm_terms。
+    ('tos_accept', 'Terms accepted'),
+    # LLM-04：後台發佈一個條款版本（原本的 published 同時轉 retired）。
+    ('tos_publish', 'Terms published'),
     ('provision_step', 'Provisioning step'),
     ('key_create', 'Key created'),
     ('key_reveal', 'Key revealed'),

@@ -63,8 +63,6 @@ LLM_CONFIG_PARAMETERS = (
 # --------------------------------------------------------------------------- #
 #: D5：1 點＝15,625 quota（R＝32 永不改）。
 QUOTA_PER_POINT = 15625
-#: 條款版本：LLM-04 之前先用常數；之後改由 ``llm_terms`` 的 published 版提供。
-TOS_VERSION_CURRENT = 'draft-0'
 #: D10：每帳號最多 20 把金鑰。
 MAX_KEYS_PER_ACCOUNT = 20
 #: D11：免費試用每天約 200 次（每日上限在 LLM-10）。
@@ -111,6 +109,9 @@ ERR_LLM_DISABLED = 'llm_disabled'
 ERR_LLM_NOT_ACTIVATED = 'llm_not_activated'
 ERR_LLM_TOS_REQUIRED = 'llm_tos_required'
 ERR_LLM_TOS_OUTDATED = 'llm_tos_outdated'
+#: 沒有 published 的條款（或依版本號查不到）：開通與重新同意都做不了（LLM-04；DESIGN 碼表沒有這一格——
+#: 「請先同意」在沒有條款可以讀的時候講不通）。
+ERR_LLM_TOS_UNAVAILABLE = 'llm_tos_unavailable'
 ERR_LLM_PROVISIONING = 'llm_provisioning'
 ERR_LLM_SUSPENDED = 'llm_suspended'
 ERR_LLM_CLOSED = 'llm_closed'
@@ -209,6 +210,7 @@ DETAIL_KEYS = frozenset({
     'count',              # 筆數
     'reason',             # 原因碼（值必須是 ERROR_CODES／RESULT_CODES 裡的碼）
     'retried',            # 是否重送過（布林）
+    'requires_reaccept',  # tos_publish：這一版是否要求既有帳戶重新同意（布林；LLM-04）
 })
 
 

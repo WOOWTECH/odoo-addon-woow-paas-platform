@@ -7,8 +7,9 @@ new-api 的 token 才是本體；PaaS 只存鏡像：token id、名稱、遮罩�
 建立流程（同步，HTTP 請求內完成，總預算 20 秒）：
 
 1. 前端在打開建立表單時產生 ``client_request_id``；同一個 id 再送 ⇒ ``llm_key_already_shown``。
-2. 檢查帳戶 active、20 把上限（D10）、免費試用每帳號最多 1 把有效（DB partial unique index
-   也擋並發）。每日上限與「每天最多建 3 把」在 LLM-10。
+2. 檢查帳戶 active、條款（改版且要求重新同意 ⇒ ``llm_tos_outdated``，LLM-04）、20 把上限（D10）、
+   免費試用每帳號最多 1 把有效（DB partial unique index 也擋並發）。每日上限與「每天最多建 3 把」
+   在 LLM-10。
    2′. **每帳號每小時最多 10 次建金鑰**（N6；LLM-02b）：本地檢查都過了、第一次外呼之前，
    ``llm_event._llm_throttle_reserve`` 以獨立交易數＋記一筆 ``key_create``；到上限回
    ``llm_rate_limited``＋``retry_after``，零外呼。做完以 ``_llm_event_finish`` 補結果（ok／錯誤碼）；
@@ -235,6 +236,8 @@ class LlmApiKey(models.Model):
         Account = self.env['woow_paas_platform.llm_account']
         account = Account._llm_account_for_partner(partner)
         account._llm_require_active()
+        # LLM-04：條款改版且要求重新同意 ⇒ llm_tos_outdated（零外呼；既有金鑰不受影響）。
+        account._llm_require_current_terms()
         if not isinstance(client_request_id, str) \
                 or not _CLIENT_REQUEST_ID_RE.fullmatch(client_request_id.strip().lower()):
             raise LlmError(ERR_LLM_KEY_INVALID, field='client_request_id')

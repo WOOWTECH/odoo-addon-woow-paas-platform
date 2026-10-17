@@ -62,6 +62,7 @@ from .llm_test_support import (
     KEY,
     TEST_BLOCK,
     TEST_PREFIX,
+    TEST_TOS,
     CommittedLlmFixture,
     LlmClientAdapter,
     configure,
@@ -72,7 +73,7 @@ from .llm_test_support import (
 )
 
 MODULE = 'woow_paas_platform'
-TOS = llm_common.TOS_VERSION_CURRENT
+TOS = TEST_TOS
 ACCOUNT_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_account'
 KEY_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_api_key'
 CONTROLLER_LOGGER = 'odoo.addons.woow_paas_platform.controllers.llm'
@@ -601,9 +602,10 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(self._rpc('/api/llm/keys/list')['code'], 'llm_not_activated')
 
         self.assertEqual(self._rpc('/api/llm/account/activate', {})['code'], 'llm_tos_required')
+        # LLM-04 AC1：帶舊版（或亂填）的版本號也是「還沒同意目前的條款」。
         outdated = self._rpc('/api/llm/account/activate', {'tos_version': 'draft-x'})
         self.assertEqual((outdated['code'], outdated['current_version']),
-                         ('llm_tos_outdated', TOS))
+                         ('llm_tos_required', TOS))
         account = self._activate_and_provision(self.alice)
         # 冪等：再按一次不會多一個帳戶
         again = self._rpc('/api/llm/account/activate', {'tos_version': TOS})
@@ -727,6 +729,8 @@ class TestLlmTracerHttp(HttpCase):
         self.env['ir.config_parameter'].sudo().set_param(llm_common.PARAM_SHOW_LLM, 'False')
         for path, params in (('/api/llm/state', {}),
                              ('/api/llm/account/activate', {'tos_version': TOS}),
+                             ('/api/llm/terms', {}),
+                             ('/api/llm/account/accept_terms', {'tos_version': TOS}),
                              ('/api/llm/keys/list', {}),
                              ('/api/llm/keys/create', {'client_request_id': str(uuid.uuid4()),
                                                        'kind': 'free_trial'}),
