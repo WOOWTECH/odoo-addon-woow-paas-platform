@@ -398,7 +398,8 @@ def apply_tenant_policy(
 
     ``options``（post-renderer 的第二個 JSON 引數 ``tenant``）：
       ``avoid_nodes`` list[str]、``egress_gate`` dict|None（image／timeout_seconds／on_timeout／
-      target）、``mirror_live`` bool。
+      target）、``mirror_live`` bool、``immutable_live`` dict|None（``immutable_live_facts`` 的結果；
+      給了才會處理非 hook 的 Job／bare Pod）。
     ``mirror_live`` 為真時（reset-config 等「不得改 pod template」的路徑）：已存在於叢集的
     workload 只在**叢集上已經有**該項時才套，沒有就保持現狀，避免一次密碼重設變成整個服務
     滾動重啟（INFRA-HS-002-1：RWO 重新 attach 撞 atomic 15 秒）；叢集上還沒有的新物件照常套。
@@ -413,6 +414,10 @@ def apply_tenant_policy(
         return docs, log
     mirror = bool(options.get("mirror_live"))
     live = live or {}
+    # ``immutable_live``：叢集上非 hook Job／bare Pod 的現況（``immutable_live_facts``）；None＝未知。
+    immutable_live = options.get("immutable_live")
+    if immutable_live is not None and not isinstance(immutable_live, dict):
+        immutable_live = None
     out = copy.deepcopy(docs)
     nps = [d for d in out if isinstance(d, dict) and d.get("kind") == "NetworkPolicy"]
     gate = None
@@ -431,8 +436,18 @@ def apply_tenant_policy(
         name = (doc.get("metadata") or {}).get("name", "?")
         key = "%s/%s" % (kind, name)
         if not template_is_mutable(doc):
-            log.append("%s: skip (pod template is immutable and not a helm hook)" % key)
-            continue
+            # netpol-startup-window：非 hook Job／bare Pod 只有「叢集上已存在」時改 template 才會
+            # immutable 失敗。叢集上沒有（新安裝、Job 被 TTL 清掉）就照常套；已存在就照叢集上那份
+            # 渲染（有 gate 原樣帶回、沒有就不加）；叢集現況未知＝沿用舊行為不動。
+            if immutable_live is None:
+                log.append("%s: skip (pod template is immutable and not a helm hook; live state unknown)" % key)
+                continue
+            if key in immutable_live:
+                for pod_spec, _labels, _annotations in templates:
+                    log.extend("%s: %s" % (key, line)
+                               for line in mirror_immutable(pod_spec, immutable_live[key] or {}))
+                continue
+            log.append("%s: immutable template not live yet; policy applied on create" % key)
         facts = live.get(key)
         for pod_spec, labels, annotations in templates:
             if avoid:
@@ -460,6 +475,61 @@ def apply_tenant_policy(
                 else:
                     log.append("%s: egress-gate %s" % (key, inject_egress_gate(pod_spec, gate)))
     return out, log
+
+
+def mirror_immutable(pod_spec: Dict[str, Any], facts: Dict[str, Any]) -> List[str]:
+    """已存在的非 hook Job／bare Pod：把叢集上那份 gate／affinity 原樣帶回 render 結果。
+
+    template 不可變，render 結果必須跟叢集上一樣（helm 的三方 patch 才不會改到它）：叢集上有 gate
+    就放回**同一份** container（設定之後改過也一樣），有節點迴避就放回叢集上的 affinity；
+    沒有就什麼都不加。
+    """
+    log: List[str] = []
+    gate = facts.get("gate_container")
+    if isinstance(gate, dict) and not has_egress_gate(pod_spec):
+        inits = pod_spec.get("initContainers")
+        if not isinstance(inits, list):
+            inits = []
+        pod_spec["initContainers"] = [copy.deepcopy(gate)] + inits
+        log.append("egress-gate kept as live (immutable)")
+    elif not gate:
+        log.append("egress-gate kept as live (immutable, none)")
+    affinity = facts.get("affinity")
+    if facts.get("avoid") and isinstance(affinity, dict):
+        pod_spec["affinity"] = copy.deepcopy(affinity)
+        log.append("node-avoid kept as live (immutable)")
+    return log
+
+
+def immutable_live_facts(items: Optional[List[Dict[str, Any]]], avoid_nodes: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    """kubectl ``get jobs,pods`` 的 ``items`` → ``{"Job/x": {"gate_container", "affinity", "avoid"}}``。
+
+    只收 Job 與**沒有 ownerReferences** 的 Pod（helm 直接建立的 bare Pod；Deployment／Job 產生的
+    pod 不是 render 出來的物件）。``gate_container`` 是叢集上那份 gate（沒有就 None），
+    ``affinity`` 是叢集上的 pod affinity（沒有就 None）。
+    """
+    facts: Dict[str, Dict[str, Any]] = {}
+    nodes = [n for n in avoid_nodes if n]
+    for item in items or []:
+        if not isinstance(item, dict) or item.get("kind") not in ("Job", "Pod"):
+            continue
+        meta = item.get("metadata") or {}
+        name = meta.get("name")
+        if not name or (item["kind"] == "Pod" and meta.get("ownerReferences")):
+            continue
+        templates = pod_templates(copy.deepcopy(item))
+        if not templates:
+            continue
+        pod_spec = templates[0][0]
+        gate = next((c for c in (pod_spec.get("initContainers") or [])
+                     if isinstance(c, dict) and c.get("name") == GATE_CONTAINER_NAME), None)
+        affinity = pod_spec.get("affinity") if isinstance(pod_spec.get("affinity"), dict) else None
+        facts["%s/%s" % (item["kind"], name)] = {
+            "gate_container": gate,
+            "affinity": affinity,
+            "avoid": bool(nodes) and has_node_avoidance(pod_spec, nodes),
+        }
+    return facts
 
 
 def live_facts(items: Optional[List[Dict[str, Any]]], avoid_nodes: Iterable[str]) -> Dict[str, Dict[str, bool]]:

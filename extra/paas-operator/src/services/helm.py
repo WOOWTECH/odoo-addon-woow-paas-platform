@@ -117,7 +117,7 @@ def _tenant_policy(namespace: str, mirror_live: bool = False) -> Tuple[Dict[str,
     ``mirror_live``（reset-config 這類「不得改 pod template」的路徑）：只有叢集上已經有的項目
     才套，避免一次密碼重設變成整個服務滾動重啟；讀不到叢集現況時整個略過（寧可不套）。
     """
-    from src.tenant_workload_policy import live_facts
+    from src.tenant_workload_policy import immutable_live_facts, live_facts
 
     raw_avoid = settings.tenant_avoid_nodes
     avoid = parse_namespace_list(raw_avoid) if isinstance(raw_avoid, str) else []
@@ -142,6 +142,11 @@ def _tenant_policy(namespace: str, mirror_live: bool = False) -> Tuple[Dict[str,
         }
     if not options:
         return {}, {}
+    # netpol-startup-window：非 hook Job／bare Pod 的 template 不可變——叢集上還沒有同名物件時
+    # （新安裝、Job 已被 TTL 清掉）才能套政策，所以每次都讀一次現況；讀不到＝不帶（renderer 不動它們）。
+    immutable_items = _live_objects(namespace, "jobs,pods")
+    if immutable_items is not None:
+        options["immutable_live"] = immutable_live_facts(immutable_items, avoid)
     if not mirror_live:
         return options, {}
     items = _live_objects(namespace, "deployments,statefulsets,daemonsets,cronjobs")
