@@ -159,7 +159,9 @@ def test_script_requires_only_builtins_or_the_n8n_installation():
     direct = set(re.findall(r'\brequire\("([^"]+)"\)', ENSURE_API_KEY_SCRIPT))
     assert direct <= {"crypto", "fs", "http", "path", "module"}, direct
     via_n8n = set(re.findall(r'requireFromN8n\(req, "([^"]+)"\)', ENSURE_API_KEY_SCRIPT))
-    assert via_n8n <= {"sqlite3", "pg"}, via_n8n
+    # n8n-core：n8n 2.43.x 起簽章密鑰在 DB 裡以 AES-256-GCM 包起來，解包要用 n8n 自己的 Cipher
+    # （DATA-N8N-006-1 附帶發現；n8n-core 就是 n8n 安裝目錄裡的套件，不是額外相依）。
+    assert via_n8n <= {"sqlite3", "pg", "n8n-core"}, via_n8n
 
 
 def _code_lines():

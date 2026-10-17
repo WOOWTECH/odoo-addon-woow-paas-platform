@@ -50,6 +50,36 @@ _KEY_PRUNE_REQUEST_TIMEOUT = 10
 #: 與上面 POST /rest/api-keys 的 expiresAt 相同（2100-01-01），exec 路徑簽出的 key 一樣不實際過期。
 _API_KEY_EXPIRES_AT = 4102444800
 
+#: DATA-N8N-006-1：mcp-sidecar 的 API key 只授與 MCP 工具實際用得到的 scope（allowlist）。
+#: 以前一律帶 ``GET /rest/api-keys/scopes`` 的全部 88 個，含 user:create／delete／changeRole、
+#: role:manage、ldap／saml／oidc:manage、securitySettings:manage、communityPackage:install、
+#: sourceControl:pull、eventBusDestination:*——sidecar 一旦被攻破（或 MCP 的工具被誘導）就等於
+#: n8n 實例管理權。allowlist 而不是 denylist：n8n 將來新增的管理類 scope 預設不會被授與，
+#: 需要時再明確加進來。
+#:
+#: 對應 MCP 工具（n8n-mcp 的 28 支）：workflow（含 activate／export／import／move）、execution、
+#: credential、tag／workflowTags／executionTags、folder、variable、dataTable*、testRun（evaluations）、
+#: securityAudit:generate（n8n_audit_instance）、insights:read、project:list（挑專案）。
+#: ⚠ 與 ``n8n_scripts/ensure_api_key.js`` 的 ``SIDECAR_SCOPE_PREFIXES``／``SIDECAR_SCOPE_EXACT``
+#: 必須相同（tests/test_n8n_sidecar_scopes_dn006.py 對帳）。
+_SIDECAR_SCOPE_PREFIXES = (
+    "workflow:", "workflowTags:", "execution:", "executionTags:", "credential:", "tag:",
+    "folder:", "variable:", "dataTable", "testRun:", "insights:", "securityAudit:",
+)
+_SIDECAR_SCOPE_EXACT = frozenset({"project:list"})
+
+
+def sidecar_scopes(available) -> list:
+    """從 n8n 提供的 scope 清單挑出 mcp-sidecar 該有的（保留 n8n 的順序、去重）。"""
+    seen, kept = set(), []
+    for scope in available or []:
+        if not isinstance(scope, str) or scope in seen:
+            continue
+        if scope in _SIDECAR_SCOPE_EXACT or scope.startswith(_SIDECAR_SCOPE_PREFIXES):
+            seen.add(scope)
+            kept.append(scope)
+    return kept
+
 #: #1534：owner 已存在時沿用／簽發 API key 的腳本。import 時就讀——檔案不見要在 operator 啟動
 #: 當下就炸，不要等到 Redeploy 才發現。
 ENSURE_API_KEY_SCRIPT = (
@@ -578,8 +608,16 @@ class N8nInitService:
 
         try:
             # First, discover available scopes
-            scopes = self._get_api_key_scopes(namespace, pod_name, container, cookie)
-            logger.info("Available API key scopes: %s", scopes)
+            available = self._get_api_key_scopes(namespace, pod_name, container, cookie)
+            # DATA-N8N-006-1：只授與 sidecar 用得到的 scope（見 _SIDECAR_SCOPE_PREFIXES）。
+            scopes = sidecar_scopes(available)
+            logger.info("API key scopes: granting %d of %d available", len(scopes), len(available))
+            if not scopes:
+                raise N8nInitError(
+                    "none of the scopes n8n offers are usable by the MCP sidecar",
+                    step="create_api_key",
+                    kind="failed",
+                )
 
             resp = self._node_request(
                 namespace, pod_name, container,

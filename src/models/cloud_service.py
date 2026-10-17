@@ -1211,7 +1211,17 @@ _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 # （``_inject_n8n_runtime_defaults``）而不是寫在範本預設：存量服務的 helm_values 是開通時凍結
 # 的，寫在範本只會影響新服務。服務自己的 helm_values 有明確值就不覆寫（將來加 runner 時，
 # 個別服務可改成 'true'）。
-_N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
+#
+# DATA-N8N-007-2：``N8N_PROXY_HOPS=1``。n8n 在 Cloudflare Tunnel（cloudflared）後面，沒設時 Express
+# 的 trust proxy 是 false：每個請求都帶 ``X-Forwarded-For``，n8n 卻拿 socket 位址（cloudflared 的
+# 位址）當 IP ⇒ ``/rest/login`` 的 IP 限流（1000 次／5 分鐘）整個服務共用一個桶，任何匿名者送
+# 1000 個請求就讓所有人（含 owner）登入拿 429；日誌每個請求噴一次 express-rate-limit 的
+# ERR_ERL_UNEXPECTED_X_FORWARDED_FOR。設 1 ＝ 只信任最靠近的一跳（cloudflared），req.ip 取
+# 其後 ``X-Forwarded-For`` 最右一段（Cloudflare 邊緣追加的真實用戶端位址；用戶端自己塞的左段
+# 不被採信）。實測（n8n 2.43.6、NODE_ENV=production）：沒設時一個來源的 1010 次失敗登入讓另一個
+# 來源的正確登入也回 429；設 1 後後者回 200。上游的「同一 email 每分鐘 5 次」限流是另一層
+# （body keyed），不受此設定影響。
+_N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false', 'N8N_PROXY_HOPS': '1'}
 
 
 # 範本的「平台政策鍵」：每次部署都以範本 ``helm_default_values`` 的值為準，不吃服務

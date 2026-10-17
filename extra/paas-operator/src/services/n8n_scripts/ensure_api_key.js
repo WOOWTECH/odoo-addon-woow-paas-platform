@@ -41,6 +41,34 @@ const FALLBACK_SCOPES = [
   "workflow:activate", "workflow:deactivate", "execution:read", "execution:list",
 ];
 
+// ---- sidecar scope policy（DATA-N8N-006-1；與 n8n_init.py 的 _SIDECAR_SCOPE_* 必須相同）----
+// mcp-sidecar 的 API key 只授與 MCP 工具用得到的 scope（allowlist）。以前簽 OWNER_API_KEY_SCOPES
+// 全部 88 個（含 user:*、role:manage、securitySettings:manage、communityPackage:*…）。
+const SIDECAR_SCOPE_PREFIXES = [
+  "workflow:", "workflowTags:", "execution:", "executionTags:", "credential:", "tag:",
+  "folder:", "variable:", "dataTable", "testRun:", "insights:", "securityAudit:",
+];
+const SIDECAR_SCOPE_EXACT = ["project:list"];
+
+function isSidecarScope(scope) {
+  return typeof scope === "string" &&
+    (SIDECAR_SCOPE_EXACT.includes(scope) || SIDECAR_SCOPE_PREFIXES.some((p) => scope.startsWith(p)));
+}
+
+function sidecarScopes(available) {
+  return [...new Set((available || []).filter(isSidecarScope))];
+}
+
+// 沿用判斷用：既有 key 帶了 policy 以外的 scope（過去簽的全權限 key）⇒ 不沿用，換新的。
+function hasOnlySidecarScopes(stored) {
+  let list = stored;
+  if (typeof list === "string") {
+    try { list = JSON.parse(list); } catch (e) { return false; }
+  }
+  return Array.isArray(list) && list.length > 0 && list.every(isSidecarScope);
+}
+// ---- end sidecar scope policy ----
+
 class EnsureFailure extends Error {
   constructor(code, message) {
     super(message);
@@ -130,8 +158,8 @@ function signJwt(payload, secret) {
   return `${head}.${body}.${sig}`;
 }
 
-// n8n JwtService 的推導：encryptionKey 取偶數位字元再 sha256。
-function derivedJwtSecret() {
+// 租戶 n8n 的 encryptionKey：環境變數優先，其次 ~/.n8n/config（與 n8n 相同讀法）。
+function instanceEncryptionKey() {
   let key = envOrFile("N8N_ENCRYPTION_KEY");
   if (!key) {
     const home = process.env.N8N_USER_FOLDER || process.env.HOME || process.cwd();
@@ -141,10 +169,34 @@ function derivedJwtSecret() {
       key = undefined;
     }
   }
+  return key || null;
+}
+
+// n8n JwtService 的推導：encryptionKey 取偶數位字元再 sha256。
+function derivedJwtSecret() {
+  const key = instanceEncryptionKey();
   if (!key) return null;
   let base = "";
   for (let i = 0; i < key.length; i += 2) base += key[i];
   return crypto.createHash("sha256").update(base).digest("hex");
+}
+
+// DATA-N8N-006-1（附帶發現的前提修復）：n8n 2.43.x 起 deployment_key 的簽章密鑰以 AES-256-GCM 包起來
+// （algorithm = 'aes-256-gcm'，值像 'AZFL…'），用 n8n-core 的 Cipher.decryptDEKWithInstanceKey 解包——
+// 包裝金鑰＝sha256(encryptionKey) 的 hex。舊碼直接把包過的字串當 HMAC 密鑰簽 JWT ⇒ 簽出來的 key
+// 被 n8n 以 500 拒絕（lab：n8n 2.43.6 的 ensure_api_key 一律 key_unverified），#1534 的情境
+// （租戶改了 owner 密碼、沒有可沿用的 key）在 2.43.6 上等於壞掉。algorithm 為 NULL 的是舊版明文。
+function unwrapSigningSecret(req, wrapped) {
+  const encryptionKey = instanceEncryptionKey();
+  if (!encryptionKey) {
+    throw new EnsureFailure("signing_secret_unavailable", "cannot read the instance encryption key");
+  }
+  const { Cipher } = requireFromN8n(req, "n8n-core");
+  try {
+    return new Cipher({ encryptionKey }).decryptDEKWithInstanceKey(wrapped);
+  } catch (e) {
+    throw new EnsureFailure("signing_secret_unavailable", "cannot unwrap the signing secret with this instance key");
+  }
 }
 
 function apiCheck(apiKey) {
@@ -234,14 +286,21 @@ async function openPostgres(req) {
   };
 }
 
-async function jwtSecret(db) {
+async function jwtSecret(db, req) {
   // 順序與 n8n 2.x JwtService 相同：環境變數 → DB 的 active signing.jwt → encryptionKey 推導。
   const fromEnv = envOrFile("N8N_USER_MANAGEMENT_JWT_SECRET");
   if (fromEnv) return fromEnv;
   if (await db.hasTable("deployment_key")) {
+    const hasAlgorithm = (await db.columns("deployment_key")).includes("algorithm");
     const rows = await db.all(
-      `SELECT "value" FROM ${db.q("deployment_key")} WHERE "type" = ? AND "status" = ?`, ["signing.jwt", "active"]);
-    if (rows.length === 1 && rows[0].value) return rows[0].value;
+      `SELECT "value"${hasAlgorithm ? ', "algorithm"' : ""} FROM ${db.q("deployment_key")} WHERE "type" = ? AND "status" = ?`,
+      ["signing.jwt", "active"]);
+    if (rows.length === 1 && rows[0].value) {
+      const algorithm = rows[0].algorithm || null;
+      if (algorithm === null) return rows[0].value; // 舊版：明文
+      if (algorithm === "aes-256-gcm") return unwrapSigningSecret(req, rows[0].value);
+      throw new EnsureFailure("signing_secret_unavailable", `unsupported signing key storage format ${algorithm}`);
+    }
   }
   const derived = derivedJwtSecret();
   if (derived) return derived;
@@ -250,8 +309,8 @@ async function jwtSecret(db) {
 
 function ownerScopes(req) {
   try {
-    const scopes = req("@n8n/permissions").OWNER_API_KEY_SCOPES;
-    if (Array.isArray(scopes) && scopes.length) return scopes;
+    const scopes = sidecarScopes(req("@n8n/permissions").OWNER_API_KEY_SCOPES);
+    if (scopes.length) return scopes;
   } catch (e) {
     // 退回固定清單
   }
@@ -290,17 +349,18 @@ async function main() {
     const keys = db.q("user_api_keys");
 
     // 2. 沿用：owner 名下同名的 key 仍可用就不換（不必每次 Redeploy 都換 key）。
+    // DATA-N8N-006-1：scope 超出 sidecar policy 的舊 key（全權限）不沿用——Redeploy 時順便換成最小權限。
     const existing = await db.all(
-      `SELECT "apiKey" FROM ${keys} WHERE "userId" = ? AND "label" = ? AND "audience" = ?`,
+      `SELECT "apiKey", "scopes" FROM ${keys} WHERE "userId" = ? AND "label" = ? AND "audience" = ?`,
       [owner.id, label, API_KEY_AUDIENCE]);
     for (const row of existing) {
-      if (row.apiKey && (await apiCheck(row.apiKey)) === 200) {
+      if (row.apiKey && hasOnlySidecarScopes(row.scopes) && (await apiCheck(row.apiKey)) === 200) {
         return { api_key: row.apiKey, reused: true };
       }
     }
 
     // 3. 新簽一把；同名舊 key（已失效）先刪，(userId, label) 有唯一限制。
-    const secret = await jwtSecret(db);
+    const secret = await jwtSecret(db, req);
     const now = Math.floor(Date.now() / 1000);
     const payload = { sub: owner.id, iss: API_KEY_ISSUER, aud: API_KEY_AUDIENCE, jti: crypto.randomUUID(), iat: now };
     if (expiresAt && expiresAt > now) payload.exp = expiresAt;
