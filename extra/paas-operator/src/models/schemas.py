@@ -422,6 +422,10 @@ class PodInfo(BaseModel):
     # 不是錯誤。``last_warning`` 只在 status 端點、且這顆 Pod 未就緒時才查。
     waiting: Optional[ContainerWaitingInfo] = None
     last_warning: Optional[PodWarningEvent] = None
+    # ---- #1456：主要容器上一次結束的原因（``lastState.terminated.reason``）-----------
+    # 任一容器是 ``OOMKilled`` 就是它，否則第一個有值的 reason；None＝沒有容器結束過（或
+    # 舊 operator 不帶這個 key——平台看到 None／缺 key 都只當「沒有線索」）。
+    last_terminated_reason: Optional[str] = None
 
 
 class WorkloadReplicaFailure(BaseModel):

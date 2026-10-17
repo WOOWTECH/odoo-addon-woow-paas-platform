@@ -69,8 +69,13 @@ from ..models.cloud_service import (
 from ..services.paas_operator import PaaSOperatorAPIError, PaaSOperatorTimeoutError
 from ..services.workload_health import (
     DETAIL_LIMIT,
+    EVIDENCE_CODES,
+    FAULT_CODES,
+    FAULT_CRASH_LOOP,
     FAULT_CREATE_FAILED,
     FAULT_NO_PODS,
+    FAULT_NOT_READY,
+    FAULT_OOM_KILLED,
     FAULT_QUOTA,
     VERDICT_FAULT,
     VERDICT_HEALTHY,
@@ -79,7 +84,13 @@ from ..services.workload_health import (
     WARNING_FRESH_SECONDS,
     workload_verdict,
 )
-from .operator_contract import ABSENT, operator_client, status_response, workload_info
+from .operator_contract import (
+    ABSENT,
+    operator_client,
+    pod_info,
+    status_response,
+    workload_info,
+)
 
 _MODEL_MODULE = 'odoo.addons.woow_paas_platform.models.cloud_service'
 _MODEL_LOGGER = _MODEL_MODULE
@@ -185,9 +196,10 @@ class TestWorkloadVerdict1647(BaseCase):
             'old pod still serving': _status(workload_info(
                 replicas=1, ready_replicas=1, updated_replicas=0,
                 replica_failure=_replica_failure())),
-            # Pod 存在但不 ready 是 readiness 的事，不是「建不出來」。
-            'pod exists but is not ready': _status(workload_info(
-                replicas=1, ready_replicas=0)),
+            # #1456 起「Pod 都在、卻沒有一顆就緒」另判 not_ready（見
+            # TestWorkloadNotReadyVerdict1456）；這裡只留「有一顆以上就緒」的對照。
+            'one of two pods is ready': _status(workload_info(
+                desired_replicas=2, replicas=2, ready_replicas=1)),
         }
         for label, status in cases.items():
             with self.subTest(case=label):
@@ -1697,9 +1709,9 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
     def _fault_code_labels(self):
         """``[(代碼, 英文標籤, zh_TW 標籤)]``；譯文缺席時第三格是 None。"""
         field = self.env['woow_paas_platform.cloud_service']._fields['workload_fault_code']
-        self.assertEqual({value for value, _label in field.selection},
-                         {FAULT_QUOTA, FAULT_CREATE_FAILED, FAULT_NO_PODS},
-                         'fixture 前提：selection 就是 workload_health 的三個代碼')
+        self.assertEqual({value for value, _label in field.selection}, set(FAULT_CODES),
+                         'selection 必須正好是 workload_health 的全部代碼（#1647 三個＋#1456 三個）')
+        self.assertEqual(len(FAULT_CODES), 6, 'fixture 前提：代碼數')
         labels = []
         for value, label in field.selection:
             imd_name = ('selection__woow_paas_platform_cloud_service__workload_fault_code__%s'
@@ -1820,3 +1832,229 @@ class TestWorkloadFaultTranslations1647(TransactionCase):
                 for word in ('已滿', '滿了', '用完', '用盡', '耗盡'):
                     self.assertNotIn(word, chinese)
                 self.assertIn('配額不足以啟動', chinese)
+
+
+# ====================================================================== #
+#  #1456：Pod 都在、卻沒有一顆就緒（CrashLoopBackOff／OOMKilled／未就緒）      #
+# ====================================================================== #
+#
+# 商用驗收 2026-10-16：n8n 250 連續被殺進 CrashLoopBackOff（80–110 秒無法就緒）、Code 節點
+# 配 3000 MB 被 OOMKilled，平台 ``state`` 全程 running、/woow 一直「線上」
+# （DATA-N8N-009-1／010-1）。#1647 只認「期望 ≥1、實際 0」，Pod 在但沒有一顆 ready 不算。
+
+_CRASH_WAITING = {'container': 'n8n', 'init_container': False, 'reason': 'CrashLoopBackOff',
+                  'message': 'back-off 1m20s restarting failed container=n8n'}
+
+
+def _unready(**overrides):
+    """期望 1、Pod 1 顆、就緒 0 顆的 Recreate Deployment。"""
+    return workload_info(**{
+        'name': 'svc-1456-n8n', 'replicas': 1, 'ready_replicas': 0, 'updated_replicas': 1,
+        'strategy': 'Recreate', **overrides})
+
+
+def _unready_pod(**overrides):
+    """那顆沒有就緒的 Pod（ReplicaSet 建的，平台認得它是 workload 的 Pod）。"""
+    return pod_info(**{
+        'name': 'svc-1456-n8n-7c9d8b6f5-x2k4q', 'ready': '0/1', 'restarts': 5,
+        'owner_kind': 'ReplicaSet', **overrides})
+
+
+@tagged('post_install', '-at_install')
+class TestWorkloadNotReadyVerdict1456(BaseCase):
+    """純函式：``workload_verdict`` 的第二類異常（Pod 在、沒有一顆就緒）。"""
+
+    def _verdict(self, status, now=_NOW):
+        return workload_verdict(status, now)
+
+    def test_pods_exist_but_none_is_ready(self):
+        verdict, code, detail = self._verdict(_status(_healthy_statefulset(), _unready()))
+        self.assertEqual((verdict, code), (VERDICT_FAULT, FAULT_NOT_READY))
+        self.assertIn('Deployment svc-1456-n8n: 0 of 1 pods ready, 1 exist (Recreate)', detail)
+        self.assertNotIn('svc-1647-postgresql', detail, '健康的 workload 不點名')
+
+    def test_crash_loop_from_the_pod_waiting_reason(self):
+        status = _status(_unready(), pods=[_unready_pod(waiting=_CRASH_WAITING)])
+        verdict, code, detail = self._verdict(status)
+        self.assertEqual((verdict, code), (VERDICT_FAULT, FAULT_CRASH_LOOP))
+        self.assertIn('svc-1456-n8n-7c9d8b6f5-x2k4q', detail)
+        self.assertIn('CrashLoopBackOff', detail)
+        self.assertIn('restarts 5', detail)
+
+    def test_oom_killed_wins_over_crash_loop(self):
+        """記憶體不足造成的反覆重啟：報 OOMKilled（處理方式是調方案／limits，不是查程式）。"""
+        status = _status(_unready(), pods=[_unready_pod(
+            waiting=_CRASH_WAITING, last_terminated_reason='OOMKilled')])
+        verdict, code, detail = self._verdict(status)
+        self.assertEqual((verdict, code), (VERDICT_FAULT, FAULT_OOM_KILLED))
+        self.assertIn('last terminated: OOMKilled', detail)
+        self.assertIn('CrashLoopBackOff', detail)
+
+    def test_only_unready_workload_pods_are_evidence(self):
+        """證據只從「沒就緒、沒在收尾、由 ReplicaSet／StatefulSet 建的 Pod」來。"""
+        not_evidence = [
+            # 就緒的 Pod（另一個 workload 的）帶著舊的 OOMKilled。
+            _unready_pod(name='svc-1456-db-0', ready='1/1', owner_kind='StatefulSet',
+                         last_terminated_reason='OOMKilled'),
+            # 收尾中的舊 Pod。
+            _unready_pod(name='svc-1456-old', waiting=_CRASH_WAITING,
+                         deletion_timestamp='2026-10-16T01:00:00Z'),
+            # Job 的 Pod（備份、init）：不是服務本身。
+            _unready_pod(name='svc-1456-backup-x', owner_kind='Job',
+                         waiting=_CRASH_WAITING, last_terminated_reason='OOMKilled'),
+            # 認不出 owner 的 Pod（舊 operator 沒有身分欄位）：不猜。
+            _unready_pod(name='svc-1456-bare', owner_kind=None, waiting=_CRASH_WAITING),
+            # 形狀不對的元素略過。
+            'not-a-pod', None, _unready_pod(name='svc-1456-weird', ready=None,
+                                            waiting='CrashLoopBackOff'),
+        ]
+        verdict, code, detail = self._verdict(_status(_unready(), pods=not_evidence))
+        self.assertEqual((verdict, code), (VERDICT_FAULT, FAULT_NOT_READY))
+        for name in ('svc-1456-db-0', 'svc-1456-old', 'svc-1456-backup-x', 'svc-1456-bare'):
+            self.assertNotIn(name, detail)
+
+    def test_legacy_operator_without_the_new_pod_key(self):
+        """舊 operator 的 Pod 沒有 ``last_terminated_reason``：CrashLoopBackOff 仍看得到。"""
+        crash = _unready_pod(waiting=_CRASH_WAITING, last_terminated_reason=ABSENT)
+        self.assertNotIn('last_terminated_reason', crash, 'fixture 前提：key 缺席')
+        self.assertEqual(self._verdict(_status(_unready(), pods=[crash]))[1], FAULT_CRASH_LOOP)
+        quiet = _unready_pod(last_terminated_reason=ABSENT)
+        self.assertEqual(self._verdict(_status(_unready(), pods=[quiet]))[1], FAULT_NOT_READY)
+
+    def test_healthy_when_at_least_one_pod_is_ready_or_none_is_wanted(self):
+        cases = {
+            'one of two ready': _unready(desired_replicas=2, replicas=2, ready_replicas=1),
+            'scaled to zero': _unready(desired_replicas=0, replicas=0),
+            'ready': workload_info(),
+            # 縮到 0 的途中：期望 0、舊 Pod 還在收尾。
+            'scaling down': _unready(desired_replicas=0, replicas=1),
+        }
+        for label, workload in cases.items():
+            with self.subTest(case=label):
+                status = _status(workload, pods=[_unready_pod(waiting=_CRASH_WAITING)])
+                self.assertEqual(self._verdict(status), (VERDICT_HEALTHY, None, ''))
+
+    def test_no_pods_takes_precedence(self):
+        """同時有「一顆都沒有」與「沒有一顆就緒」：沿用 #1647 的代碼（中斷最徹底的那一種）。"""
+        status = _status(_quota_blocked(), _unready(),
+                         pods=[_unready_pod(waiting=_CRASH_WAITING)])
+        self.assertEqual(self._verdict(status)[1], FAULT_QUOTA)
+        self.assertEqual(self._verdict(_status(_blocked(), _unready()))[1], FAULT_NO_PODS)
+
+    def test_malformed_ready_counts_are_skipped(self):
+        garbage = [_unready(ready_replicas=None), _unready(ready_replicas='zero')]
+        self.assertEqual(self._verdict(_status(*garbage)), (VERDICT_HEALTHY, None, ''))
+
+    def test_new_codes_need_a_second_sighting(self):
+        """門檻：三個新代碼都要「首次看到滿 5 分鐘後又看到一次」才確認（不是第一次就確認）。
+
+        running 服務每 10 分鐘才看一次；第一次就確認的話，一次剛好撞上的重啟（單次 OOM 約
+        35 秒、CrashLoopBackOff 的一次 back-off）會對租戶顯示「沒有在執行」直到下一趟——
+        最多 10 分鐘。要改成第一次就確認，把代碼加進 ``EVIDENCE_CODES`` 即可。
+        """
+        for code in (FAULT_CRASH_LOOP, FAULT_OOM_KILLED, FAULT_NOT_READY):
+            with self.subTest(code=code):
+                self.assertIn(code, FAULT_CODES)
+                self.assertNotIn(code, EVIDENCE_CODES)
+
+    def test_detail_is_truncated(self):
+        pods = [_unready_pod(name='svc-1456-p%02d' % i, waiting=_CRASH_WAITING)
+                for i in range(40)]
+        verdict, _code, detail = self._verdict(_status(_unready(), pods=pods))
+        self.assertEqual(verdict, VERDICT_FAULT)
+        self.assertLessEqual(len(detail), DETAIL_LIMIT)
+
+
+@tagged('post_install', '-at_install')
+class TestWorkloadNotReadyObservation1456(_WorkloadCase):
+    """model 層：新代碼走 #1647 同一條寫欄位／確認／通知／恢復的路，不改 state。"""
+
+    def setUp(self):
+        super().setUp()
+        self.assertTrue(self.Monitor._alert_recipients()[1],
+                        'fixture 前提：至少一位 active 的系統管理員')
+
+    def _crash_status(self):
+        return _status(_unready(), pods=[_unready_pod(
+            waiting=_CRASH_WAITING, last_terminated_reason='OOMKilled')])
+
+    def _age_first_sight(self, svc, minutes):
+        first_seen = fields.Datetime.now() - timedelta(minutes=minutes)
+        svc.write({'workload_fault_since': first_seen, 'workload_checked_at': first_seen})
+        return first_seen
+
+    def test_confirmed_on_a_later_sighting_then_alerted_and_shown(self):
+        svc = self._service('oom')
+
+        self.assertEqual(svc._apply_workload_observation(self._crash_status()), 'raised')
+        self.assertEqual(svc.workload_fault_code, FAULT_OOM_KILLED)
+        self.assertIn('OOMKilled', svc.workload_fault_detail)
+        self.assertFalse(svc._workload_fault_confirmed(), '第一次看到先不確認')
+        self.assertIsNone(svc._workload_fault_public())
+        self.assertFalse(svc.workload_fault_alerted_at)
+        self.assertFalse(self._activities())
+
+        self._age_first_sight(svc, WORKLOAD_FAULT_CONFIRM_MINUTES + 1)
+        self.assertEqual(svc._apply_workload_observation(self._crash_status()), 'ongoing')
+
+        self.assertTrue(svc._workload_fault_confirmed())
+        self.assertEqual(svc._workload_fault_public(), FAULT_OOM_KILLED)
+        self.assertTrue(svc.workload_fault_alerted_at)
+        activities = self._activities()
+        self.assertTrue(activities)
+        for activity in activities:
+            self.assertIn('id=%s' % svc.id, activity.note)
+            self.assertIn('OOMKilled', activity.note)
+        self.assertEqual(svc.state, 'running', '不改 state')
+        self.assertFalse(svc.error_message)
+
+    def test_a_single_glimpse_recovers_silently(self):
+        """一次剛好撞上的重啟：下一趟已恢復 ⇒ 安靜清掉，沒有通知、沒有對租戶顯示。"""
+        svc = self._service('glimpse-1456')
+        svc._apply_workload_observation(_status(_unready(), pods=[
+            _unready_pod(waiting=_CRASH_WAITING)]))
+        self.assertEqual(svc.workload_fault_code, FAULT_CRASH_LOOP, 'fixture 前提')
+
+        self.assertEqual(svc._apply_workload_observation(_status(workload_info())), 'cleared')
+        self.assertEqual(self._fault_values(svc), (False, False, False, False))
+        self.assertFalse(self._activities())
+
+    def test_recovery_after_an_alert_is_noted(self):
+        svc = self._service('recover-1456')
+        svc._apply_workload_observation(_status(_unready()))
+        self._age_first_sight(svc, WORKLOAD_FAULT_CONFIRM_MINUTES + 1)
+        svc._apply_workload_observation(_status(_unready()))
+        self.assertTrue(svc.workload_fault_alerted_at, 'fixture 前提：通知過')
+        marker = 'id=%s' % svc.id
+
+        self.assertEqual(svc._apply_workload_observation(_status(workload_info())), 'cleared')
+        recovered = [b for b in self._monitor_bodies() if marker in b]
+        self.assertTrue(recovered, 'monitor 的 chatter 要留下恢復紀錄')
+        self.assertNotIn('have pods again', ' '.join(recovered),
+                         '恢復那一行不能只講「Pod 回來了」：not_ready 的 Pod 一直都在')
+
+    def test_monitor_texts_cover_both_kinds_and_are_translated(self):
+        """通知與恢復的文字要同時說得通「沒有 Pod」與「沒有一顆就緒」，而且有 zh_TW 譯文。"""
+        po = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'i18n', 'zh_TW.po')
+        translated = {e['src']: e['value'] for e in PoFileReader(po) if e['type'] == 'code'}
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'models', 'platform_monitor.py')
+        with open(path, encoding='utf-8') as handle:
+            source = handle.read()
+        start = source.index('def _report_workload_fault')
+        end = source.index('def _note_workload_recovered')
+        tail = source[end:end + 3000]
+        texts = []
+        for chunk in (source[start:end], tail):
+            for match in re.finditer(r"_\(\s*((?:'[^']*'\s*)+)", chunk):
+                texts.append(''.join(re.findall(r"'([^']*)'", match.group(1))))
+        note = [t for t in texts if t.startswith('These services are shown as running')]
+        recovered = [t for t in texts if 'id=%(id)s): ' in t]
+        self.assertEqual(len(note), 1, texts)
+        self.assertEqual(len(recovered), 1, texts)
+        self.assertIn('none of their pods is ready', note[0])
+        self.assertIn('has none', note[0])
+        for text in note + recovered:
+            with self.subTest(text=text[:40]):
+                self.assertTrue(translated.get(text), 'zh_TW.po 缺譯文或 msgid 不一致')

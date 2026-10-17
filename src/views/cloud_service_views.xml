@@ -30,7 +30,7 @@
                          src/i18n/zh_TW.po。 -->
                     <div class="alert alert-danger" role="alert" groups="base.group_system"
                          invisible="not workload_fault_code">
-                        <strong>This service is marked running, but a workload has no pods.</strong>
+                        <strong>This service is marked running, but a workload has no pods or none of its pods is ready.</strong>
                         <div>
                             <field name="workload_fault_code" nolabel="1"/> — first seen
                             <field name="workload_fault_since" nolabel="1"/>, last change recorded
@@ -39,6 +39,9 @@
                         <div invisible="workload_fault_code != 'quota_exceeded'">The namespace ResourceQuota rejected the pods (FailedCreate: exceeded quota).</div>
                         <div invisible="workload_fault_code != 'create_failed'">The cluster rejected the pods for a reason other than the quota (FailedCreate).</div>
                         <div invisible="workload_fault_code != 'no_pods'">The pods are missing and the cause is unknown: the cluster reported no FailedCreate condition and no recent warning event.</div>
+                        <div invisible="workload_fault_code != 'oom_killed'">The pods exist but none of them is ready, and a container was last killed for running out of memory (OOMKilled): the memory limit is too small for the workload.</div>
+                        <div invisible="workload_fault_code != 'crash_loop'">The pods exist but none of them is ready, and a container keeps crashing and restarting (CrashLoopBackOff): check the container logs.</div>
+                        <div invisible="workload_fault_code != 'not_ready'">The pods exist but none of them is ready, and the cluster reported no crash: check the readiness probe and the container logs.</div>
                         <field name="workload_fault_detail" nolabel="1"/>
                     </div>
                     <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->

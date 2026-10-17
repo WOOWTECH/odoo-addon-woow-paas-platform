@@ -13275,8 +13275,8 @@ msgstr "Workload 異常"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_code
-msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647). Quota blocked: the namespace ResourceQuota rejected the pods. Create failed: the cluster rejected the pods for a reason other than the quota. No pods: the pods are missing and the cluster reported no reason. Cleared automatically once the pods are back or the service leaves running. It never changes the service state."
-msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有時設定（#1647）。配額擋下：namespace 的 ResourceQuota 拒絕建立 Pod。建立失敗：叢集因為配額以外的原因拒絕建立 Pod。沒有 Pod：Pod 不存在，而且叢集沒有回報原因。Pod 恢復或服務離開 running 後自動清除。不會改變服務狀態。"
+msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647), or has pods but none of them is ready (#1456). Quota blocked: the namespace ResourceQuota rejected the pods. Create failed: the cluster rejected the pods for a reason other than the quota. No pods: the pods are missing and the cluster reported no reason. OOM killed: no pod is ready and a container was last killed for running out of memory. Crash loop: no pod is ready and a container keeps crashing (CrashLoopBackOff). Not ready: the pods exist but none of them is ready, and the cluster reported no crash. Cleared automatically once the workloads are back to normal or the service leaves running. It never changes the service state."
+msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有（#1647），或 Pod 都在、卻沒有一個就緒（#1456）時設定。配額擋下：namespace 的 ResourceQuota 拒絕建立 Pod。建立失敗：叢集因為配額以外的原因拒絕建立 Pod。沒有 Pod：Pod 不存在，而且叢集沒有回報原因。記憶體不足：沒有任何 Pod 就緒，而且容器上一次因為記憶體用盡被終止。反覆崩潰：沒有任何 Pod 就緒，而且容器一直崩潰重啟（CrashLoopBackOff）。未就緒：Pod 都在、卻沒有一個就緒，叢集也沒有回報崩潰。workload 恢復正常或服務離開 running 後自動清除。不會改變服務狀態。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
@@ -13285,8 +13285,8 @@ msgstr "Workload 異常細節"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
-msgid "Which workloads have no pods and what the cluster reported (for example the quota rejection message). Administrators only."
-msgstr "哪些 workload 沒有 Pod，以及叢集回報的內容（例如配額拒絕訊息）。僅系統管理員可見。"
+msgid "Which workloads have no pods or no ready pod and what the cluster reported (for example the quota rejection message or the last termination reason). Administrators only."
+msgstr "哪些 workload 沒有 Pod 或沒有任何就緒的 Pod，以及叢集回報的內容（例如配額拒絕訊息或上一次終止的原因）。僅系統管理員可見。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_since
@@ -13334,9 +13334,24 @@ msgid "No pods"
 msgstr "沒有 Pod"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__oom_killed
+msgid "OOM killed"
+msgstr "記憶體不足"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__crash_loop
+msgid "Crash loop"
+msgstr "反覆崩潰"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__not_ready
+msgid "Not ready"
+msgstr "未就緒"
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
-msgid "<strong>This service is marked running, but a workload has no pods.</strong>"
-msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有。</strong>"
+msgid "<strong>This service is marked running, but a workload has no pods or none of its pods is ready.</strong>"
+msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有，或沒有任何 Pod 就緒。</strong>"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13480,6 +13495,21 @@ msgid "The pods are missing and the cause is unknown: the cluster reported no Fa
 msgstr "Pod 不存在，原因不明：叢集沒有回報 FailedCreate condition，也沒有近期的 warning 事件。"
 
 #. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods exist but none of them is ready, and a container was last killed for running out of memory (OOMKilled): the memory limit is too small for the workload."
+msgstr "Pod 都在、卻沒有一個就緒，而且容器上一次因為記憶體用盡被終止（OOMKilled）：記憶體上限不夠這個 workload 用。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods exist but none of them is ready, and a container keeps crashing and restarting (CrashLoopBackOff): check the container logs."
+msgstr "Pod 都在、卻沒有一個就緒，而且容器一直崩潰重啟（CrashLoopBackOff）：請查看容器日誌。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods exist but none of them is ready, and the cluster reported no crash: check the readiness probe and the container logs."
+msgstr "Pod 都在、卻沒有一個就緒，叢集也沒有回報崩潰：請檢查 readiness probe 與容器日誌。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_platform_monitor__workload_check_cursor
 msgid "Workload Check Cursor"
 msgstr "Workload 檢查游標"
@@ -13497,8 +13527,8 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
-msgid "These services are shown as running, but at least one of their workloads (Deployment or StatefulSet) wants pods and has none, so the service is actually down. The most common cause is the namespace ResourceQuota rejecting the pods (FailedCreate: exceeded quota). Check the quota of the namespace and the events of its ReplicaSets and StatefulSets. The platform clears the flag by itself once the pods are back. The service state has not been changed:"
-msgstr "下列服務顯示為 running，但至少有一個 workload（Deployment 或 StatefulSet）期望有 Pod、實際一個都沒有，服務實際上是中斷的。最常見的原因是 namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）。請檢查該 namespace 的配額，以及 ReplicaSet／StatefulSet 的事件。Pod 恢復後平台會自行清除旗標。服務狀態沒有被改動："
+msgid "These services are shown as running, but at least one of their workloads (Deployment or StatefulSet) wants pods and has none, or has pods but none of their pods is ready, so the service is actually down. With no pods, the most common cause is the namespace ResourceQuota rejecting the pods (FailedCreate: exceeded quota): check the quota of the namespace and the events of its ReplicaSets and StatefulSets. With pods that are not ready, check the container logs and the last termination reason (OOMKilled means the memory limit is too small). The platform clears the flag by itself once the workloads are back to normal. The service state has not been changed:"
+msgstr "下列服務顯示為 running，但至少有一個 workload（Deployment 或 StatefulSet）期望有 Pod、實際一個都沒有，或 Pod 都在、卻沒有一個就緒，服務實際上是中斷的。沒有 Pod 時，最常見的原因是 namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）：請檢查該 namespace 的配額，以及 ReplicaSet／StatefulSet 的事件。Pod 在但沒有就緒時，請查看容器日誌與上一次終止的原因（OOMKilled 表示記憶體上限太小）。workload 恢復正常後平台會自行清除旗標。服務狀態沒有被改動："
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13509,8 +13539,8 @@ msgstr "%(name)s（id=%(id)s，namespace %(ns)s，release %(release)s），自 %
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
-msgid "%(name)s (id=%(id)s): its workloads have pods again (had none since %(since)s UTC)"
-msgstr "%(name)s（id=%(id)s）：workload 已恢復有 Pod（自 %(since)s UTC 起一個都沒有）"
+msgid "%(name)s (id=%(id)s): its workloads are back to normal (faulty since %(since)s UTC)"
+msgstr "%(name)s（id=%(id)s）：workload 已恢復正常（自 %(since)s UTC 起異常）"
 
 #. module: woow_paas_platform
 #. odoo-javascript

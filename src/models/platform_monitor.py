@@ -710,7 +710,8 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _report_workload_fault(self, service):
-        """#1647：running 的服務有 workload 期望有 Pod、實際一顆都沒有——一台一行。
+        """#1647／#1456：running 的服務有 workload 期望有 Pod、實際一顆都沒有（或 Pod 在、
+        沒有一顆就緒）——一台一行。
 
         回傳「這一台的通知有沒有落地」：新開一張或追加到既有那張都算 True；沒有收件者、
         或寫入失敗回 False。呼叫端（``CloudService._apply_workload_observation``）只在 True
@@ -739,11 +740,14 @@ class PlatformMonitor(models.Model):
             detail=service.workload_fault_detail or '?')
         note = _(
             'These services are shown as running, but at least one of their workloads '
-            '(Deployment or StatefulSet) wants pods and has none, so the service is actually '
-            'down. The most common cause is the namespace ResourceQuota rejecting the pods '
-            '(FailedCreate: exceeded quota). Check the quota of the namespace and the events '
-            'of its ReplicaSets and StatefulSets. The platform clears the flag by itself once '
-            'the pods are back. The service state has not been changed:')
+            '(Deployment or StatefulSet) wants pods and has none, or has pods but none of '
+            'their pods is ready, so the service is actually down. With no pods, the most '
+            'common cause is the namespace ResourceQuota rejecting the pods (FailedCreate: '
+            'exceeded quota): check the quota of the namespace and the events of its '
+            'ReplicaSets and StatefulSets. With pods that are not ready, check the container '
+            'logs and the last termination reason (OOMKilled means the memory limit is too '
+            'small). The platform clears the flag by itself once the workloads are back to '
+            'normal. The service state has not been changed:')
         try:
             with self.env.cr.savepoint():
                 # 只排 queue（同 `_safe_alert`）：savepoint 回捲時不留下已同步寄出的信。
@@ -767,7 +771,7 @@ class PlatformMonitor(models.Model):
         """
         service = service.sudo()
         line = _(
-            '%(name)s (id=%(id)s): its workloads have pods again (had none since '
+            '%(name)s (id=%(id)s): its workloads are back to normal (faulty since '
             '%(since)s UTC)', name=service.name, id=service.id, since=since)
         try:
             with self.env.cr.savepoint():

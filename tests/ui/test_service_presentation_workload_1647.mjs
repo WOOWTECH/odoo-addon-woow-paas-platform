@@ -343,3 +343,15 @@ test("工作區統計卡：Healthy／Alerts 兩格用 countServiceHealth 的結�
   assert.equal(incident.Alerts, "1");
   assert.equal(incident["Total Apps"], "1");
 });
+
+test("#1456：Pod 在、沒有一顆就緒的三個代碼走一般文案，連線狀態不是 online、統計算 Alerts", () => {
+  // 後端只在「首次看到滿 5 分鐘後又看到一次」才把這三個代碼放進 payload；前端不必認得它們，
+  // 一律用一般文案（不顯示代碼本身）。
+  for (const code of ["oom_killed", "crash_loop", "not_ready"]) {
+    const service = { state: "running", workload_fault: code };
+    assert.equal(presentation.getWorkloadFaultText(service), GENERIC_TEXT, code);
+    assert.ok(presentation.getWorkloadFaultLabel(service), code);
+    assert.notEqual(connectionStatusOf(service), "online", code);
+    assert.deepEqual(presentation.countServiceHealth([service]), { healthy: 0, alerts: 1 }, code);
+  }
+});
