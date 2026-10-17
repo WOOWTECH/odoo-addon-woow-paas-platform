@@ -92,21 +92,29 @@ class TestShTunnelValsFromStatus(TransactionCase):
             'tunnel_id': 'tun-sh-vals', 'state': 'active',
         })
 
+    # #1766：判讀多了「有幾台機器接著」兩格（`connector_count` 機器數、
+    # `binding_conflict` 兩台以上）。下面是**逐格全等**比對，所以新增欄位必須
+    # 一起寫進期望值——這三條就是 #1766 讓 develop 紅掉的那三條（PR CI 不含
+    # Odoo 測試，只跑自己的 test class 看不到）。`_CONNECTED` 的兩條連線都沒有
+    # `client_id`（舊 operator 形狀）⇒ 走 ceil(2/4)=1 台的近似退路。
     def test_connected(self):
         self.assertEqual(self.SH._tunnel_vals_from_status(_CONNECTED), {
             'tunnel_status': 'connected', 'connector_id': 'c-live',
             'connector_type': 'cloudflared',
             'tunnel_uptime': '2026-09-29T11:29:42Z',
+            'connector_count': 1, 'binding_conflict': False,
         })
 
     def test_disconnected_keeps_connector_bookkeeping_untouched(self):
         # SH 原本在 disconnected 時從不清 connector_id／uptime——重構不改行為。
         self.assertEqual(self.SH._tunnel_vals_from_status(_DOWN),
-                         {'tunnel_status': 'disconnected'})
+                         {'tunnel_status': 'disconnected',
+                          'connector_count': 0, 'binding_conflict': False})
 
     def test_deleted_clears_connector_bookkeeping(self):
         self.assertEqual(self.SH._tunnel_vals_from_status(_DELETED), {
             'tunnel_status': 'deleted', 'connector_id': '', 'connector_type': '',
+            'connector_count': 0, 'binding_conflict': False,
         })
 
     def test_missing_deleted_at_is_not_a_signal(self):
