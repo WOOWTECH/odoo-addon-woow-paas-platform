@@ -88,6 +88,31 @@ class Settings(BaseSettings):
     # TENANT_BASELINE_EGRESS_ENABLED：租戶 ns 加 NetworkPolicy paas-baseline-egress
     # （同 ns 全通＋kube-dns 53＋公網排除私網／metadata／CGNAT／多播／240/4）。
     tenant_baseline_egress_enabled: bool = False
+    # 商用驗收 egress-all-ports-open：上面那條的公網規則原本是任意埠，chart 的 80/443 因 NP
+    # 聯集無效。兩個開關都只在 TENANT_BASELINE_EGRESS_ENABLED 開著時有作用，預設關＝不變。
+    # TENANT_BASELINE_EGRESS_BLOCKED_PORTS：逗號分隔埠號（例 "22,25"），公網 TCP／UDP 封掉這些埠。
+    tenant_baseline_egress_blocked_ports: str = ""
+    # TENANT_BASELINE_EGRESS_WEB_PROFILE：帶 paas.woowtech.io/egress-profile=web 的 pod 改由
+    # paas-baseline-egress-web 管（同 ns＋DNS＋公網 TCP 80/443）。label 由各 chart 加。
+    tenant_baseline_egress_web_profile: bool = False
+
+    @field_validator("tenant_baseline_egress_blocked_ports")
+    @classmethod
+    def _validate_blocked_ports(cls, v: str) -> str:
+        # 不 import tenant_baseline.parse_port_list：src.services 的 __init__ 會 import helm →
+        # config，循環。規則相同（1–65535 整數、逗號分隔），由測試對照兩邊一致。
+        ports = set()
+        for part in (v or "").split(","):
+            token = part.strip()
+            if not token:
+                continue
+            if not token.isdigit() or not 1 <= int(token) <= 65535:
+                raise ValueError(
+                    "TENANT_BASELINE_EGRESS_BLOCKED_PORTS must be comma-separated ports "
+                    f"1-65535; got {token!r}")
+            ports.add(int(token))
+        return ",".join(str(p) for p in sorted(ports))
+
     # TENANT_POD_SECURITY_ENABLED：租戶 ns 加 pod-security.kubernetes.io/enforce=<level>
     # （＋warn／audit），例外清單內的 ns 不加、並移除殘留的 PSA 標籤。
     tenant_pod_security_enabled: bool = False

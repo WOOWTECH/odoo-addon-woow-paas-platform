@@ -120,6 +120,8 @@ def _capture(flag: bool):
         s.cloudflared_namespace = ""
         s.namespace_prefix = "paas-ws-"
         s.tenant_baseline_egress_enabled = flag
+        s.tenant_baseline_egress_blocked_ports = ""
+        s.tenant_baseline_egress_web_profile = False
         k._apply_baseline_netpol(NS, 7)
     return [c.args[0] for c in k.apply_manifest.call_args_list]
 
