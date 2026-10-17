@@ -31,6 +31,7 @@ from ..services.chart_version import (
     chart_version_from_history,
     chart_version_not_lower,
     rollback_floor_violation,
+    rollback_request_problem,
 )
 from ..services.paas_operator import PaaSOperatorAPIError
 
@@ -103,6 +104,34 @@ class TestChartVersionFloorHelpers1526(TransactionCase):
 
     def test_unknown_revision_is_left_to_the_operator(self):
         self.assertIsNone(rollback_floor_violation(AUDIT_HISTORY, 9))
+
+    # ---- DATA-ODOO-010-1：回復請求本身不成立 ----------------------------------
+
+    def test_rollback_to_the_currently_deployed_revision_is_refused(self):
+        """實測：revision＝目前版，helm 照樣回復到自己、產生新 revision、換掉 Pod。"""
+        self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 3), 'already_current')
+
+    def test_previous_revision_semantics_for_none_and_zero(self):
+        """None／0＝上一版（既有 API 語意）：有上一版就放行，只有 revision 1 時擋下。"""
+        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, None))
+        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 0))
+        only_one = [_rev(1, '0.1.6', 'deployed')]
+        self.assertEqual(rollback_request_problem(only_one, None), 'no_previous')
+        self.assertEqual(rollback_request_problem(only_one, 0), 'no_previous')
+
+    def test_explicit_older_revision_is_allowed(self):
+        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 2))
+        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 1))
+
+    def test_failed_latest_revision_can_roll_back_to_the_deployed_one(self):
+        """升級失敗的 revision 狀態是 failed：回復到前一個 deployed 版本是合法的修復動作。"""
+        history = [_rev(1, '0.1.6', 'deployed'), _rev(2, '0.1.7', 'failed')]
+        self.assertIsNone(rollback_request_problem(history, 1))
+        self.assertIsNone(rollback_request_problem(history, None))
+
+    def test_unreadable_history_is_left_to_the_operator(self):
+        self.assertIsNone(rollback_request_problem([], 3))
+        self.assertIsNone(rollback_request_problem(None, None))
 
 
 @tagged('post_install', '-at_install')
@@ -208,6 +237,30 @@ class TestRollbackChartFloorAndKeys1526(TransactionCase):
 
         self.assertFalse(response.get('success'), response)
         client.rollback_release.assert_not_called()
+
+    def test_rollback_to_current_revision_is_refused_without_touching_helm(self):
+        """DATA-ODOO-010-1：回復到目前版不得送給 operator（否則白白 helm 一輪、重建 Pod）。"""
+        service = self._service(self._od_template('rb1526-cur'), 'svc-rb1526-cur')
+        client = self._client()
+
+        response = self._rollback(service, client, 3)
+
+        self.assertFalse(response.get('success'), response)
+        self.assertIn('currently deployed', response['error'])
+        client.rollback_release.assert_not_called()
+        self.assertEqual(service.state, 'running', '被擋下的回復不得推進 state')
+
+    def test_previous_revision_request_is_sent_as_an_explicit_number(self):
+        """None／0 解成明確的上一版號再送，成功訊息不再寫「revision None」。"""
+        service = self._service(self._od_template('rb1526-prev'), 'svc-rb1526-prev')
+        client = self._client()
+
+        response = self._rollback(service, client, None)
+
+        self.assertTrue(response.get('success'), response)
+        self.assertEqual(client.rollback_release.call_args.kwargs['revision'], 2)
+        self.assertNotIn('None', response['message'])
+        self.assertIn('2', response['message'])
 
     def test_same_chart_rollback_goes_through_and_records_the_version(self):
         service = self._service(self._od_template('rb1526-same'), 'svc-rb1526-same')

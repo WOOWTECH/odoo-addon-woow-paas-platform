@@ -89,6 +89,31 @@ def rollback_target_number(revisions, requested):
     return (max(numbers) - 1) if numbers else None
 
 
+def rollback_request_problem(revisions, requested):
+    """回復請求本身不成立時回問題代碼；可以送出回 ``None``（DATA-ODOO-010-1）。
+
+    - ``'no_previous'``：``None``／0 要回「上一版」，但歷史裡沒有上一版（只有 revision 1，或
+      算出來的目標 < 1）。
+    - ``'already_current'``：目標就是**目前已部署的最新** revision。helm 照樣會「回復」到自己
+      並產生新 revision、換掉 Pod（實測三個請求把一個沒變動的服務連續 helm 回復三次、Pod 重建
+      三次），沒有任何效果卻有中斷。最新 revision 不是 deployed（升級失敗）時不算——回復到前一個
+      deployed 版本是合法的修復動作。
+
+    歷史讀不到（空）時不判斷（回 ``None``），交給 operator 回 400。
+    """
+    numbers = [n for r in revisions or [] if (n := _revision_number(r)) is not None]
+    if not numbers:
+        return None
+    target = rollback_target_number(revisions, requested)
+    if target is None or target < 1:
+        return 'no_previous'
+    latest = max(numbers)
+    latest_row = next(r for r in revisions if _revision_number(r) == latest)
+    if target == latest and str(latest_row.get('status', '')).lower() == 'deployed':
+        return 'already_current'
+    return None
+
+
 def annotate_rollback_floor(revisions):
     """替每個 revision 加上 ``chart_version`` 與 ``rollback_allowed``（對話框用）。
 
