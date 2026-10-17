@@ -77,13 +77,30 @@ PROVISION_BACKOFF_MINUTES = (1, 2, 5, 15, 60)
 PROVISION_MAX_ATTEMPTS = 6
 PROVISION_LEASE_MINUTES = 5
 #: N6：每帳號每小時的次數上限（以 ``llm_event`` 近一小時的筆數計）。轉換在 LLM-08 用。
+#: 只算**真的打到 new-api** 的嘗試（N6 與 §1.5 保護的是 new-api 的 CT 桶）：確定沒送出的
+#: （代理或 new-api 中斷、本地檢查在外呼前失敗）記成 ``result='not_executed'``、不算進 10 次，
+#: 但所有嘗試另有 :data:`THROTTLE_ATTEMPT_LIMITS` 的上限，代理斷線時也不能無限寫列（審查 LLM-02b 第 2 輪）。
 THROTTLE_WINDOW_SECONDS = 3600
 THROTTLE_LIMITS = {
     'key_create': 10,
     'convert': 10,
 }
+THROTTLE_ATTEMPT_LIMITS = {
+    'key_create': 30,
+    'convert': 30,
+}
 #: N13：同一個告警（代碼＋帳戶＋對象＋錯誤碼）30 分鐘內只寄一次。
 ALERT_DEDUPE_MINUTES = 30
+#: N13（審查 LLM-02b 第 2 輪）：全平台的寄信預算。同一個告警代碼＋錯誤碼在 30 分鐘內只有第一則
+#: 自己寄信；之後別的帳戶的同一種告警只寫 ``llm_event``、併進一封摘要信（窗口結束時由 delivery
+#: cron 寄，帶受影響帳戶數）。加密金鑰被換掉這類系統性故障，幾百戶也只會是每 30 分鐘 1–2 封。
+ALERT_BURST_MINUTES = ALERT_DEDUPE_MINUTES
+#: 告警信送不出去（``mail.mail`` 變 exception／cancel）時最多重排幾次（含第一次）。
+ALERT_EMAIL_MAX_ATTEMPTS = 5
+#: incident 的全平台預算：10 分鐘內已有這麼多個帳戶開了同一種 incident，之後的帳戶併進一筆
+#: 平台層級的 incident（``llm:<種類>/platform/<日期>``），不再一戶一筆。
+INCIDENT_BURST_MINUTES = 10
+INCIDENT_BURST_ACCOUNTS = 5
 #: DESIGN §2.6：``llm_event`` 保留 400 天。
 LLM_EVENT_RETENTION_DAYS = 400
 
@@ -114,7 +131,13 @@ ERR_LLM_AUTH_REQUIRED = 'llm_auth_required'
 
 
 class LlmError(Exception):
-    """service 層的業務錯誤：``code`` 是上面的 ``ERR_*``，``params`` 只放數字等安全參數。"""
+    """service 層的業務錯誤：``code`` 是上面的 ``ERR_*``，``params`` 只放數字等安全參數。
+
+    ``not_executed``：這次確定沒有打到 new-api（節流不算它，見 :data:`THROTTLE_LIMITS`）。
+    不在 ``params`` 裡——``params`` 會原樣進 API 回應。
+    """
+
+    not_executed = False
 
     def __init__(self, code, **params):
         super().__init__(code)
@@ -158,12 +181,35 @@ NEWAPI_ERROR_CODES = frozenset(
 CONFIG_CRYPTO_UNAVAILABLE = 'llm_crypto_unavailable'
 CONFIG_PROXY_AUTH_UNAVAILABLE = 'llm_proxy_auth_unavailable'
 CONFIG_IDENTITY_MISMATCH = 'llm_identity_mismatch'
+#: 同上，但發生在 HTTP 路徑（web pod）：prod 的 web 與 cron 是兩個 pod、env 各自獨立（DESIGN
+#: §2.11），cron 的 tick 只驗得到 cron pod 自己的金鑰。碼分開，負責人看得出是哪個 pod。
+CONFIG_CRYPTO_UNAVAILABLE_WEB = 'llm_crypto_unavailable_web'
+CONFIG_PROXY_AUTH_UNAVAILABLE_WEB = 'llm_proxy_auth_unavailable_web'
 CONFIG_ERROR_CODES = frozenset({
-    CONFIG_CRYPTO_UNAVAILABLE, CONFIG_PROXY_AUTH_UNAVAILABLE, CONFIG_IDENTITY_MISMATCH})
+    CONFIG_CRYPTO_UNAVAILABLE, CONFIG_PROXY_AUTH_UNAVAILABLE, CONFIG_IDENTITY_MISMATCH,
+    CONFIG_CRYPTO_UNAVAILABLE_WEB, CONFIG_PROXY_AUTH_UNAVAILABLE_WEB})
 #: :func:`safe_code`（``llm_event``）在值不在登記表時給的預設碼。
 UNKNOWN_CODE = 'llm_unknown_code'
-#: ``llm_event.result``：節流的 started → ok／failed（LLM-02b）。之後的票新增結果碼加在這。
-RESULT_CODES = frozenset({'started', 'ok', 'failed'})
+#: ``llm_event.result``：節流的 started → ok／failed／not_executed（LLM-02b）。之後的票新增結果碼加在這。
+RESULT_NOT_EXECUTED = 'not_executed'
+RESULT_CODES = frozenset({'started', 'ok', 'failed', RESULT_NOT_EXECUTED})
+
+#: ``numbers``（告警）與 ``details``（稽核事件）的 key 也是封閉登記表（N24；審查 LLM-02b 第 2 輪）：
+#: key 會原樣成為告警信的列標題與 webhook 的欄位名，所以 ≤ 32 字元的 snake 指令
+#: （``credit_1000_to_account_5``）也不能進來。新增一個 key＝加在這裡（``TestLlmClosedCodes`` 以原始碼
+#: 比對守住每個呼叫端的字面 key 都在表內）。
+NUMBER_KEYS = frozenset({
+    'attempts',           # provision_failed：開戶嘗試次數
+    'probe',              # alert_test：驗證告警出口用的隨機數（LLM-02b AC2）
+    'affected_accounts',  # 摘要信：這一波影響幾個帳戶
+    'batched_events',     # 摘要信：併進摘要的告警數
+    'burst_event_id',     # 摘要信：這一波第一則告警的事件 id
+})
+DETAIL_KEYS = frozenset({
+    'count',              # 筆數
+    'reason',             # 原因碼（值必須是 ERROR_CODES／RESULT_CODES 裡的碼）
+    'retried',            # 是否重送過（布林）
+})
 
 
 # --------------------------------------------------------------------------- #
@@ -429,7 +475,9 @@ def report_config_unavailable(env, code):
     """設定類的 fail closed（加密金鑰、代理簽章金鑰、前綴／block 不合）⇒ 告警（DESIGN §2.9）。
 
     ``code`` 是 :data:`CONFIG_ERROR_CODES` 之一。每支 LLM cron 每個 tick 都會檢查一次，所以 prod
-    少了 env 的時候負責人在下一個 tick 就收得到（30 分鐘去重擋洪水；N27 未設定時不發）。
+    的 cron pod 少了 env 的時候負責人在下一個 tick 就收得到；web pod 的金鑰只有 HTTP 路徑碰得到，
+    由那裡報 ``*_web`` 的碼（``llm_account._llm_web_client``／``_llm_up_token``）。30 分鐘去重擋洪水、
+    不外呼，放在請求裡成本很低；N27 未設定時不發。
     """
     _report(env, 'CONFIG_UNAVAILABLE', code if code in CONFIG_ERROR_CODES else UNKNOWN_CODE)
 
