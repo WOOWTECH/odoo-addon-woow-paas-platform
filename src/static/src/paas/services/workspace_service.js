@@ -482,21 +482,25 @@ export const workspaceService = reactive({
      * @param {number} planId - 目標方案 id（base 或席數變體）
      * @returns {Promise<ApiResponse<Object>>}
      */
-    async changeSmartHomePlan(workspaceId, homeId, planId) {
-        this.operationLoading.changeSmartHomePlan = true;
+    async changeSmartHomePlan(workspaceId, homeId, planId, { dryRun = false } = {}) {
+        if (!dryRun) {
+            this.operationLoading.changeSmartHomePlan = true;
+        }
         try {
             const result = await jsonRpc(
                 `/api/workspaces/${workspaceId}/smarthomes/${homeId}/change-plan`,
-                { plan_id: planId },
+                { plan_id: planId, ...(dryRun ? { dry_run: true } : {}) },
             );
             if (result.success) {
                 return { success: true, data: result.data };
             }
-            return { success: false, error: result.error };
+            return { success: false, error: result.error, data: result.data };
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.changeSmartHomePlan = false;
+            if (!dryRun) {
+                this.operationLoading.changeSmartHomePlan = false;
+            }
         }
     },
 

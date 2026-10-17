@@ -433,7 +433,7 @@ class SecurityAccessController(Controller):
         auth="user", methods=["POST"], type="json",
     )
     def api_sa_change_plan(self, workspace_id: int, sa_id: int,
-                           plan_id: int | None = None,
+                           plan_id: int | None = None, dry_run: bool = False,
                            **kwargs: Any) -> dict[str, Any]:
         """完全鏡像 smart_home.api_smarthome_change_plan 的流程與 sudo 理由：
         refund 計算 → 退 wallet → close 舊訂閱 → 開新訂閱。"""
@@ -551,6 +551,14 @@ class SecurityAccessController(Controller):
                              'target_routes': _route_denial['target_routes']}}
 
         refund = old_sub._compute_unused_refund()
+        # AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋這次退點付不起新方案
+        # 首期（含稅）就擋下——什麼都不寫（不退點、不關舊訂閱、不建新訂閱、不開發票）。
+        # `dry_run=True`：通過同一組閘之後只回估算（前端停用「確認變更」並顯示差額）。
+        # 判準收在 mixin 的 `_change_plan_balance_gate`，三個入口共用、這裡不另寫。
+        _balance = sa._change_plan_balance_gate(plan, refund, dry_run=dry_run is True)
+        if _balance:
+            return _balance
+
         partner = old_sub.sh_partner_id
         if refund > 0:
             # sudo: crediting wallet points writes loyalty.card.points which

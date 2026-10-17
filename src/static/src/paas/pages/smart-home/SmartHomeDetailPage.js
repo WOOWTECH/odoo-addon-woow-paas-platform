@@ -540,6 +540,11 @@ export class SmartHomeDetailPage extends Component {
         return workspaceService.fetchSmartHomePlans(t.data[0].id);
     };
 
+    estimateSmartHomeChangePlan = (planId) => {
+        return workspaceService.changeSmartHomePlan(
+            this.props.workspaceId, this.props.homeId, planId, { dryRun: true });
+    };
+
     confirmSmartHomeChangePlan = (planId) => {
         return workspaceService.changeSmartHomePlan(
             this.props.workspaceId, this.props.homeId, planId,

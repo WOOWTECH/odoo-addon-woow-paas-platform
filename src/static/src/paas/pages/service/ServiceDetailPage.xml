@@ -402,6 +402,7 @@
                 currentPlanId="serviceForModal.subscription?.plan_id ?? undefined"
                 loadPlans="loadCloudServicePlans"
                 confirmChange="confirmCloudServiceChangePlan"
+                estimateChange="estimateCloudServiceChangePlan"
                 resizesResources="true"
                 onClose.bind="hideChangePlan"
                 onChanged.bind="onPlanChanged"/>

@@ -60,6 +60,7 @@ from ..models.smart_home_route import (
 from ..models.security_access import _skip_route_sync
 from ..models.workspace_access import ROLE_ADMIN, ROLE_GUEST, ROLE_USER
 from .smart_home_fixture import sh_model
+from .wallet_fixture import fund_wallet
 
 #: ⚠ SH 的 patch 點與 CS 不同：`models/smart_home.py` 把
 #: `get_paas_operator_client` import 進**自己的**模組命名空間，patch
@@ -1146,6 +1147,15 @@ class TestShChangePlanTemplateGate(_ShAccessEndpointFixture):
             'ac_max_access_seats': 50,
         })
         self.plan_now, self.sub = self._subscribe(self.sh)
+        # 換方案餘額閘（#1677 A1）：本 class 測 template 閘與角色閘（見 wallet_fixture）。
+        # 餘額閘要估新方案首期（用 plan 的訂閱產品），所以 plan_in 補一個訂閱產品；
+        # 下游真正開訂閱那一步照舊由各測試 stub。
+        self.env['product.template'].sudo().create({
+            'name': 'SH O Plan In 768 P', 'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': self.plan_in.id, 'list_price': 100,
+        })
+        fund_wallet(self.sub.sh_partner_id)
 
     def test_O1_plan_outside_any_active_sh_template_is_rejected(self):
         self.authenticate(self.alice_login, self.alice_login)

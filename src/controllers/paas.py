@@ -1329,7 +1329,8 @@ class PaasController(HiddenChainMixin, Controller):
         return {'success': True, 'data': plans}
 
     @route("/api/cloud-services/services/<int:service_id>/change-plan", auth="user", methods=["POST"], type="json")
-    def api_service_change_plan(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
+    def api_service_change_plan(self, service_id: int, plan_id: int | None = None,
+                                dry_run: bool = False, **kw: Any) -> dict[str, Any]:
         """Change subscription plan for a cloud service."""
         if not plan_id:
             return {'success': False, 'error': _('plan_id is required')}
@@ -1426,6 +1427,16 @@ class PaasController(HiddenChainMixin, Controller):
                     'error': _denial['error'],
                     'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
+        refund = old_sub._compute_unused_refund()
+        # AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋這次退點付不起新方案
+        # 首期（含稅）就擋下——什麼都不寫（不退點、不關舊訂閱、不建新訂閱、不開發票）。
+        # `dry_run=True`：通過同一組閘之後只回估算（前端停用「確認變更」並顯示差額）。
+        # 判準收在 mixin 的 `_change_plan_balance_gate`，三個入口共用、這裡不另寫。
+        # 排在 #1158 的 operator 升級預檢之前：估算不需要問 operator，錢不夠也不用。
+        _balance = service._change_plan_balance_gate(plan, refund, dry_run=dry_run is True)
+        if _balance:
+            return _balance
+
         # #1158：新方案的規格要套到已部署的服務（helm upgrade）。能預判的失敗全部擋在
         # 第一個寫入（退點）之前——背景 upgrade 失敗**不回捲帳務**（Q5），所以這裡放行的
         # 必須是「照理會成功」的。values 沒變（月繳↔年繳同規格、非 odoo 的全 0 方案）就
@@ -1477,8 +1488,6 @@ class PaasController(HiddenChainMixin, Controller):
                 service, plan, client, upgrade_kwargs, pending_quota=pending_quota)
             if denial:
                 return denial
-
-        refund = old_sub._compute_unused_refund()
 
         partner = old_sub.sh_partner_id
         _logger.info(
