@@ -216,8 +216,12 @@ class TestTailscaleTagsSaveTs004(TransactionCase):
     def test_tags_still_accepted_for_other_control_planes(self):
         for plane in ('official', 'custom'):
             with self.subTest(plane=plane):
-                result, _client = self._update({
-                    'tailscale.controlPlane': plane, 'tailscale.tags': 'tag:server'})
+                values = {'tailscale.controlPlane': plane, 'tailscale.tags': 'tag:server'}
+                if plane == 'custom':
+                    # #1799（INFRA-TS-005-5）：「自訂網址」必須同時給控制伺服器網址，
+                    # 否則在 tags 檢查之前就被 tailscale_login 驗證擋下。
+                    values['tailscale.loginServer'] = 'https://headscale.example.com'
+                result, _client = self._update(values)
                 self.assertEqual(result.get('error'), PASSED_CHECKS)
 
     def test_unrelated_save_on_a_legacy_service_is_not_locked(self):
