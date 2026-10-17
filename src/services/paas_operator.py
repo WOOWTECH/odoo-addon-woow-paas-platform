@@ -1134,6 +1134,25 @@ class PaaSOperatorClient:
             timeout=APP_ADMIN_RESET_TIMEOUT,
         )
 
+    def reset_emqx_admin_password(
+        self,
+        namespace: str,
+        release_name: str,
+        new_password: str,
+    ) -> Dict[str, Any]:
+        """#1774：重設租戶 EMQX 的 Dashboard admin 密碼（帳號不變）。
+
+        operator exec 進 emqx 容器跑 ``emqx ctl admins passwd``（與 Dashboard「修改密碼」同一個
+        change_password）；不重啟。EMQX 會撤銷該帳號的 Dashboard token ⇒ 已登入的 Dashboard
+        被登出；CE 沒有 2FA。語意與錯誤分類同 ``reset_odoo_admin_password``。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/emqx/admin-password',
+            data={'new_password': new_password},
+            timeout=APP_ADMIN_RESET_TIMEOUT,
+        )
+
     def get_odoo_module_states(
         self,
         namespace: str,

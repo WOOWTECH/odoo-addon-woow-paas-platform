@@ -2838,6 +2838,13 @@ class PaasController(HiddenChainMixin, Controller):
                 'shown again. It works right away; devices that are already signed in '
                 'stay signed in.'
             )
+        elif app_reset_kind == 'emqx_exec':
+            # #1774：EMQX 改密碼會撤銷該帳號的 Dashboard token；開源版沒有 2FA 可關。
+            message = (
+                'Admin password reset. Save the new password now — it will not be '
+                'shown again. It works right away; anyone signed in to the dashboard '
+                'with the old password is signed out.'
+            )
         elif app_reset_kind != 'none':
             # #1370：不重啟、立刻生效；舊 session 失效、兩步驟驗證已關。
             message = (

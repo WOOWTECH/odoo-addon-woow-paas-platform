@@ -22159,6 +22159,32 @@ msgid "Omnigent administrator (operator exec)"
 msgstr "Omnigent 管理員（operator exec）"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__app_admin_reset_kind__emqx_exec
+msgid "EMQX Dashboard administrator (operator exec)"
+msgstr "EMQX 後台管理員（operator exec）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"The new password works right away; the service does not restart. Anyone signed in to the dashboard with the old password is signed out."
+msgstr "新密碼立即生效，服務不會重啟。用舊密碼登入後台的人會被登出。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+msgid ""
+"Reset Admin Password issues a new password that works right away. Anyone signed in to the dashboard with the old password is signed out."
+msgstr "重設管理員密碼會產生立即生效的新密碼，用舊密碼登入後台的人會被登出。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid ""
+"The service does not restart. Anyone signed in to the dashboard with the current password is signed out."
+msgstr "服務不會重新啟動，用目前密碼登入後台的人會被登出。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""

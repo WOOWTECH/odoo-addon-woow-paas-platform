@@ -401,6 +401,14 @@ export class ServiceDetailPage extends Component {
         return this.service?.template?.app_admin_reset_kind === "omnigent_exec";
     }
 
+    /**
+     * #1774：EMQX（emqx_exec）的 Reset 會登出已登入的 Dashboard，但開源版沒有 2FA——
+     * 不能沿用 Odoo／n8n 的「兩步驟驗證已關閉」。
+     */
+    get appResetHasNoSecondFactor() {
+        return this.service?.template?.app_admin_reset_kind === "emqx_exec";
+    }
+
     get credentialsModalMode() {
         return this.isAppAdminReset ? "in_place" : "reset";
     }
