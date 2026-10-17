@@ -1327,14 +1327,24 @@ def _baseline_revision(history) -> int:
 
 
 def _resolve_rollback_target(history, requested: Optional[int], name: str) -> int:
-    """回復的目標 revision（``None``／0＝上一版），並驗證它在歷史裡、不是目前那一版。"""
+    """回復的目標 revision（不帶＝上一版），並驗證它在歷史裡、不是目前那一版。
+
+    AUDITFIX rollback-api-input-validation：明確送 0（或負數）一律 400。helm 把 0 解讀成
+    「上一版」，原本 ``requested or (current - 1)`` 也照這樣解 ⇒ 平台誤送 0 會真的回復並重啟
+    （INFRA-EMQX-013-1）。平台已改成只送 ≥ 1 的明確號碼，這裡是第二道。
+    """
+    if requested is not None and requested < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Revision must be a positive integer",
+        )
     if not history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Release {name} has no revision history",
         )
     current_revision = max(rev.revision for rev in history)
-    target_revision = requested or (current_revision - 1)
+    target_revision = requested if requested is not None else (current_revision - 1)
     known = {rev.revision for rev in history}
     if target_revision < 1 or target_revision not in known:
         raise HTTPException(

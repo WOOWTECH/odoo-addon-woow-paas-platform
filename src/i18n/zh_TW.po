@@ -7869,12 +7869,6 @@ msgstr "伺服器回應無效。"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "Invalid revision number"
-msgstr "revision 編號無效"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "Invalid role"
 msgstr "角色無效"
 
@@ -12437,12 +12431,6 @@ msgid "Revision"
 msgstr "版本"
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "Revision must be a non-negative integer"
-msgstr "revision 必須是非負整數"
-
-#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Revisions are created when the service is deployed or updated."
@@ -12480,6 +12468,28 @@ msgid "Rollback failed: %(reason)s"
 msgstr "回復版本失敗：%(reason)s"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s cannot be restored. Refresh the version list and try "
+"again."
+msgstr "revision %(revision)s 目前無法回復，請重新整理版本列表後再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s was not found in this service's version history. "
+"Refresh the list and choose another revision."
+msgstr "這個服務的版本紀錄裡沒有 revision %(revision)s，請重新整理列表後選擇其他版本。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Choose the revision to roll back to (a whole number, 1 or higher)."
+msgstr "請選擇要回復到哪一個版本（revision 必須是 1 以上的整數）。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Rollback to Revision"
@@ -12492,12 +12502,6 @@ msgid ""
 "Revision %(revision)s is the version currently deployed; there is nothing to "
 "roll back."
 msgstr "Revision %(revision)s 就是目前部署中的版本，沒有需要回復的內容。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "There is no previous revision to roll back to."
-msgstr "沒有可回復的上一版。"
 
 #. module: woow_paas_platform
 #. odoo-python

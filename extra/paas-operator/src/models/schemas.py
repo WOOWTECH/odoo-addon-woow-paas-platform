@@ -126,7 +126,7 @@ class ReleaseRollbackRequest(BaseModel):
     版本 ⇒ 409（``detail.error_code == "rollback_chart_downgrade"``）。
     """
 
-    revision: Optional[int] = Field(None, description="Target revision number. If not provided, rolls back to the previous revision.")
+    revision: Optional[int] = Field(None, description="Target revision number (>= 1). If not provided, rolls back to the previous revision; 0 or a negative number is rejected with 400.")
     chart: Optional[str] = Field(
         default=None,
         description="#1433: chart reference — required when preserve_value_paths is "

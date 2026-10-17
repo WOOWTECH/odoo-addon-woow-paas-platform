@@ -111,13 +111,23 @@ class TestChartVersionFloorHelpers1526(TransactionCase):
         """實測：revision＝目前版，helm 照樣回復到自己、產生新 revision、換掉 Pod。"""
         self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 3), 'already_current')
 
-    def test_previous_revision_semantics_for_none_and_zero(self):
-        """None／0＝上一版（既有 API 語意）：有上一版就放行，只有 revision 1 時擋下。"""
-        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, None))
-        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 0))
+    def test_zero_missing_and_negative_revisions_are_invalid(self):
+        """AUDITFIX rollback-api-input-validation：0／缺值不再解讀成「上一版」。
+
+        實測（DATA-ODOO-010-1、AI-PI-004-4、INFRA-EMQX-013-1）：誤送 0 會真的回復並重啟，
+        pi 映像就這樣被退回舊版。API 語意改為「revision 必須是 ≥ 1 的整數」。
+        """
+        for requested in (None, 0, -1, True, '2'):
+            with self.subTest(requested=requested):
+                self.assertEqual(
+                    rollback_request_problem(AUDIT_HISTORY, requested), 'invalid_revision')
         only_one = [_rev(1, '0.1.6', 'deployed')]
-        self.assertEqual(rollback_request_problem(only_one, None), 'no_previous')
-        self.assertEqual(rollback_request_problem(only_one, 0), 'no_previous')
+        self.assertEqual(rollback_request_problem(only_one, None), 'invalid_revision')
+
+    def test_revision_missing_from_history_is_not_found(self):
+        """AI-LLM-007-2：9999 不在歷史裡——平台先擋，不讓 helm 的英文原文透出。"""
+        self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 9999), 'not_found')
+        self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 9), 'not_found')
 
     def test_explicit_older_revision_is_allowed(self):
         self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 2))
@@ -127,11 +137,10 @@ class TestChartVersionFloorHelpers1526(TransactionCase):
         """升級失敗的 revision 狀態是 failed：回復到前一個 deployed 版本是合法的修復動作。"""
         history = [_rev(1, '0.1.6', 'deployed'), _rev(2, '0.1.7', 'failed')]
         self.assertIsNone(rollback_request_problem(history, 1))
-        self.assertIsNone(rollback_request_problem(history, None))
 
     def test_unreadable_history_is_left_to_the_operator(self):
         self.assertIsNone(rollback_request_problem([], 3))
-        self.assertIsNone(rollback_request_problem(None, None))
+        self.assertIsNone(rollback_request_problem(None, 2))
 
 
 @tagged('post_install', '-at_install')
@@ -250,17 +259,65 @@ class TestRollbackChartFloorAndKeys1526(TransactionCase):
         client.rollback_release.assert_not_called()
         self.assertEqual(service.state, 'running', '被擋下的回復不得推進 state')
 
-    def test_previous_revision_request_is_sent_as_an_explicit_number(self):
-        """None／0 解成明確的上一版號再送，成功訊息不再寫「revision None」。"""
-        service = self._service(self._od_template('rb1526-prev'), 'svc-rb1526-prev')
+    def test_zero_or_missing_revision_is_refused_without_touching_helm(self):
+        """AUDITFIX：0／None 回結構化錯誤、不送 operator、state 不動（#1786 驗收）。"""
+        service = self._service(self._od_template('rb1526-zero'), 'svc-rb1526-zero')
+        for requested in (0, None, -3):
+            with self.subTest(requested=requested):
+                client = self._client()
+
+                response = self._rollback(service, client, requested)
+
+                self.assertFalse(response.get('success'), response)
+                self.assertEqual(response.get('data', {}).get('code'), 'invalid_revision')
+                self.assertNotIn('None', response['error'])
+                client.get_revisions.assert_not_called()
+                client.rollback_release.assert_not_called()
+                self.assertEqual(service.state, 'running', '被擋下的回復不得推進 state')
+
+    def test_unknown_revision_is_refused_with_a_localized_message(self):
+        """AI-LLM-007-2：9999 → 平台自己的訊息（有 zh_TW 譯文），不是 helm 的英文原文。"""
+        service = self._service(self._od_template('rb1526-9999'), 'svc-rb1526-9999')
         client = self._client()
 
-        response = self._rollback(service, client, None)
+        response = self._rollback(service, client, 9999)
 
-        self.assertTrue(response.get('success'), response)
-        self.assertEqual(client.rollback_release.call_args.kwargs['revision'], 2)
-        self.assertNotIn('None', response['message'])
-        self.assertIn('2', response['message'])
+        self.assertFalse(response.get('success'), response)
+        self.assertEqual(response.get('data', {}).get('code'), 'revision_not_found')
+        self.assertIn('9999', response['error'])
+        self.assertNotIn('release history', response['error'])
+        client.rollback_release.assert_not_called()
+        self.assertEqual(service.state, 'running')
+
+    def test_operator_400_detail_is_not_shown_verbatim(self):
+        """歷史在兩次呼叫之間變了，operator 回 400：不把 operator／helm 的英文原文丟給租戶。"""
+        service = self._service(self._od_template('rb1526-400'), 'svc-rb1526-400')
+        client = self._client()
+        client.rollback_release.side_effect = PaaSOperatorAPIError(
+            'API error', status_code=400,
+            detail='Revision 2 not found in release history')
+
+        response = self._rollback(service, client, 2)
+
+        self.assertFalse(response.get('success'), response)
+        self.assertNotIn('release history', response['error'])
+        self.assertEqual(response.get('data', {}).get('code'), 'revision_not_restorable')
+        self.assertEqual(service.state, 'running')
+
+    def test_api_refuses_zero_and_missing_revision_before_access_checks(self):
+        """路由層：0／None／非數字一律回 invalid_revision，不進 _rollback_service。"""
+        service = self._service(self._od_template('rb1526-api'), 'svc-rb1526-api')
+        with patch.object(PaasController, '_rollback_service') as downstream, \
+                patch(f'{_CONTROLLER}.request',
+                      new=MagicMock(env=self.env(user=self.admin_user))):
+            for requested in (0, None, -1, 'abc'):
+                with self.subTest(requested=requested):
+                    response = self.controller.api_service_rollback(
+                        self.workspace.id, service.id, revision=requested)
+                    self.assertFalse(response.get('success'), response)
+                    self.assertEqual(
+                        response.get('data', {}).get('code'), 'invalid_revision')
+            downstream.assert_not_called()
 
     def test_same_chart_rollback_goes_through_and_records_the_version(self):
         service = self._service(self._od_template('rb1526-same'), 'svc-rb1526-same')
