@@ -1520,10 +1520,15 @@ class TestWorkloadFaultFrontendSignals1647(BaseCase):
         self.assertIn('hasConfirmedWorkloadFault',
                       self._imported_from_presentation(self.overview_js))
         body = self._getter(self.overview_js, 'connectionStatus')
+        # INFRA-FIX-005（#1771）：running 分支另外讓路給 VPN 節點問題（`|| hasNodeProblem(...)`），
+        # 所以接受「if (hasConfirmedWorkloadFault(...) [|| 其他條件]) { return "offline"; } return "online";」
+        # 這個形狀；不變式仍是「異常已確認 ⇒ offline」。
         self.assertRegex(
             body,
-            r'if \(state === "running"\) \{\s*'
-            r'return hasConfirmedWorkloadFault\(this\.props\.service\) \? "offline" : "online";',
+            r'if \(state === "running"\) \{(?:\s*//[^\n]*)*\s*'
+            r'(?:return hasConfirmedWorkloadFault\(this\.props\.service\) \? "offline" : "online";'
+            r'|if \(hasConfirmedWorkloadFault\(this\.props\.service\)(?: \|\| [\w.]+\([\w.]*\))*\) \{\s*'
+            r'return "offline";\s*\}\s*return "online";)',
             'running 但異常已確認時要回 offline（與 banner 相符的既有狀態）')
         self.assertNotRegex(body, r'state === "running"\)\s*return "online"',
                             'running 不可以無條件回 online')
