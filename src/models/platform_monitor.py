@@ -22,6 +22,7 @@ partner（ERP 共用）或 workspace（租戶讀得到）。查找一律以 xmli
 | 叢集儲存額度偏低（#1415） | 獨立 cron（15 分） | 有備援的最大可放單顆 volume ＜ 設定值（預設 80 GiB）或任一節點預訂 ＞ 90% |
 | 開通被叢集儲存額度擋下（#1415） | 事件（``_execute_deploy``） | 發生即追加一行 |
 | running 服務的 workload 沒有 Pod（#1647） | 獨立 cron（10 分）＋每日對帳 cron | 期望 ≥1、實際 0；有 FailedCreate 證據立即告警，沒有則持續 ≥5 分 |
+| 備份失敗（X-BK-006-1／#1190） | 獨立 cron（每小時） | 最近一次備份失敗晚於最近一次成功；每段失敗一行，成功後重新計算 |
 
 init cron 看 ``active`` 與 ``lastcall``、不看 ``failure_count``：core 停用 cron 時會把
 ``failure_count`` 歸 0，``lastcall`` 也只在正常結束或 FAILED 時更新（被 SIGKILL 的那一趟
@@ -110,6 +111,15 @@ class PlatformMonitor(models.Model):
              'workloads. The next run continues after it and wraps around.',
     )
 
+    # X-BK-006-1：`CloudService._cron_refresh_backup_status` 的輪替游標（同上一格的理由與形狀）。
+    backup_check_cursor = fields.Integer(
+        string='Backup Check Cursor',
+        copy=False,
+        readonly=True,
+        help='ID of the last cloud service handled by the hourly backup status check. '
+             'The next run continues after it and wraps around.',
+    )
+
     # 每個監控項一個 summary ＝ 各自的去重鍵。
     SUMMARY_INIT_CRON = 'PaaS monitor: post-deploy init cron is not running'
     SUMMARY_POLL_CRON = 'PaaS monitor: service status poll cron is not running'
@@ -118,6 +128,7 @@ class PlatformMonitor(models.Model):
     SUMMARY_CAPACITY = 'PaaS monitor: eligible initialization is waiting for capacity'
     SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner not yet confirmed by the platform'
     SUMMARY_WORKLOAD_FAULT = 'PaaS monitor: running services whose workloads have no pods'
+    SUMMARY_BACKUP_FAILED = 'PaaS monitor: service backups are failing'
     SUMMARY_STORAGE_LOW = 'PaaS monitor: cluster storage scheduling capacity is running low'
     SUMMARY_STORAGE_REJECTED = 'PaaS monitor: deployments rejected for lack of cluster storage'
     SUMMARY_STORAGE_EXPANSION_REJECTED = 'PaaS monitor: plan changes rejected because a disk cannot be enlarged'
@@ -760,6 +771,53 @@ class PlatformMonitor(models.Model):
             _logger.exception(
                 "[#1647] monitor alert %r could not be recorded for service id=%s",
                 self.SUMMARY_WORKLOAD_FAULT, service.id)
+            return False
+
+    @api.model
+    def _report_backup_failure(self, service):
+        """X-BK-006-1：服務的最近一次備份失敗——一台一行（形狀同 ``_report_workload_fault``）。
+
+        回傳「這一台的通知有沒有落地」；呼叫端（``CloudService._apply_backup_observation``）
+        只在 True 時寫 ``backup_failure_alerted_at``，False 的下一輪重試。
+        """
+        service = service.sudo()
+        monitor = self._singleton()
+        existing = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', self._name), ('res_id', '=', monitor.id),
+            ('summary', '=', self.SUMMARY_BACKUP_FAILED)])
+        todo, users = self._alert_recipients()
+        if not existing and not (todo and users):
+            _logger.warning(
+                "[X-BK-006] cannot raise monitor alert %r for service id=%s (todo=%s users=%s); "
+                "will retry", self.SUMMARY_BACKUP_FAILED, service.id, bool(todo), len(users))
+            return False
+        line = _(
+            '%(name)s (id=%(id)s, namespace %(ns)s, release %(release)s): backup failed at '
+            '%(failed)s UTC, reason %(reason)s, %(count)s failure(s) in a row; last successful '
+            'backup %(success)s UTC',
+            name=service.name, id=service.id, ns=service.helm_namespace or '?',
+            release=service.helm_release_name or '?', failed=service.last_backup_failure_at or '?',
+            reason=service.backup_failure_reason or '?',
+            count=service.backup_consecutive_failures or 1,
+            success=service.last_backup_success_at or _('never'))
+        note = _(
+            'The latest backup of these services failed. The most common cause is a full backup '
+            'volume (reason no_space): check the size of the backup PVC (Odoo) or of the database '
+            'volume (LiteLLM, backups share it with the database). The job log or the '
+            'termination message of the failed backup pod has the details. The tenant sees the '
+            'failure on the service page and in the notification center. The service state has '
+            'not been changed:')
+        try:
+            with self.env.cr.savepoint():
+                self.with_context(mail_notify_force_send=False)._alert(
+                    self.SUMMARY_BACKUP_FAILED, note, append_line=line)
+            return True
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[X-BK-006] monitor alert %r could not be recorded for service id=%s",
+                self.SUMMARY_BACKUP_FAILED, service.id)
             return False
 
     @api.model

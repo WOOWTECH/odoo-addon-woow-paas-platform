@@ -115,6 +115,24 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: 備份狀態（商用驗收 X-BK-006-1／DATA-ODOO-005-2／AI-LLM-009-1；#1190）
+
+             備份失敗以前只有叢集通用 KubeJobFailed 寄 ops 信箱；平台 readiness 刻意豁免
+             備份 Job、服務頁沒有備份資訊、LiteLLM 空間不足只印 sidecar log。本條每小時
+             讀 running 的 woow-odoo／litellm 服務的 operator backup-status，寫備份事實
+             （backup_health 等），轉 failed 時通知系統管理員；租戶在服務頁備份卡與通知
+             中心看得到。**絕不碰 state**；值真的變了才寫；游標記在 Platform Monitor 的
+             backup_check_cursor。
+             ⚠ 本檔是 noupdate：這筆 record 在升級時會被建立，日後改 interval 不會生效。 -->
+        <record id="ir_cron_refresh_backup_status" model="ir.cron">
+            <field name="name">Cloud Service: Refresh Backup Status</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_refresh_backup_status()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">hours</field>
+            <field name="active" eval="True"/>
+        </record>
         <!-- Cron: 清理 post-deploy init 的 attempt 記錄（#1257 Q39）
 
              保留每服務最近 20 筆＋目前這一代的全部；超過 90 天者清掉（當代除外）。

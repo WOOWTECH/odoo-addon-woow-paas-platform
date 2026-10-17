@@ -220,6 +220,31 @@
                 </div>
             </WoowCard>
 
+            <!-- DATA-ODOO-005-2／X-BK-006-1：唯讀備份卡。只有範本有備份機制（Odoo、LiteLLM）時
+                 畫——判準是後端的 backup.supported，前端不自建 slug 名單。文案全部走 JS 的 _t
+                 （單行 msgid），原因代碼對照在 backupReasonText。 -->
+            <WoowCard t-if="backup.supported" class="'o_woow_info_card o_woow_backup_card'">
+                <div class="o_woow_card_header">
+                    <WoowIcon name="'backup'" size="20"/>
+                    <h3 t-esc="backupTitle"/>
+                    <span t-att-class="'o_woow_badge ' + backupBadgeClass" t-esc="backupStatusLabel"/>
+                </div>
+                <div class="o_woow_info_grid">
+                    <div class="o_woow_info_row">
+                        <span class="o_woow_info_label" t-esc="backupLastSuccessLabel"/>
+                        <span class="o_woow_info_value" t-esc="backupLastSuccessText"/>
+                    </div>
+                    <div class="o_woow_info_row" t-if="backup.health === 'failed'">
+                        <span class="o_woow_info_label" t-esc="backupLastFailureLabel"/>
+                        <span class="o_woow_info_value">
+                            <t t-esc="formatSyncedAt(backup.last_failure_at)"/>
+                            <small class="text-danger d-block" t-esc="backupReasonText"/>
+                        </span>
+                    </div>
+                </div>
+                <p class="o_woow_hint" t-esc="backupHint"/>
+            </WoowCard>
+
             <!-- Resources Card -->
             <WoowCard class="'o_woow_info_card'">
                 <div class="o_woow_card_header">

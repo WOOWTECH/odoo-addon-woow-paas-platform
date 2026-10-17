@@ -1220,3 +1220,7 @@ from . import test_signup_identity_x_set_007
 # INFRA-FIX-019-1：租戶憑證（ngrok authtoken、Tailscale auth key）不進 helm release 歷史——
 # secret_ref 拿出 values、HMAC revision、版本閘門、Redeploy／reset／修改配置帶 tenant_secret。
 from . import test_tenant_secret_infra_fix_019_1
+
+# 商用驗收 X-BK-006-1／DATA-ODOO-005-2／AI-LLM-009-1（#1190／#1265）：備份狀態事實、每小時
+# backup-status cron、服務頁唯讀備份卡、通知中心與系統管理員告警。
+from . import test_backup_status_visibility

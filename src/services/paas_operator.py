@@ -1225,6 +1225,19 @@ class PaaSOperatorClient:
             timeout=(2, VPN_NODE_STATUS_TIMEOUT),
         )
 
+    def get_backup_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """唯讀備份狀態（#1190；商用驗收 X-BK-006-1／AI-LLM-009-1）。
+
+        operator ``GET /api/releases/{ns}/{name}/backup-status``：woow-odoo 讀備份 Job 與
+        terminationMessage，litellm 讀 db-agent 的 ``backup_last_*``，其他 chart 回
+        ``supported: false``。舊 operator 沒有這個端點會回 404（呼叫端當成「不支援」）。
+        per-call timeout (connect 5, read 15)：#1265 Q42 的預算。
+        """
+        return self._request(
+            'GET', f'/api/releases/{namespace}/{release_name}/backup-status',
+            timeout=(5, 15),
+        )
+
     def get_status(
         self,
         namespace: str,

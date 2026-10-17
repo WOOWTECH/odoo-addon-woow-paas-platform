@@ -6446,9 +6446,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__failed
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__failed
 msgid "Failed"
-msgstr ""
+msgstr "失敗"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__account_move__woow_invoice_issue_state__failed
@@ -7176,6 +7179,8 @@ msgstr "有禮品卡代碼嗎？兌換後點數會加入你的錢包餘額。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__ok
 msgid "Healthy"
 msgstr "健康"
 
@@ -10859,6 +10864,8 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__stale
 msgid "Overdue"
 msgstr "逾期"
 
@@ -16397,6 +16404,7 @@ msgstr "單價"
 #: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__unknown
 msgid "Unknown"
 msgstr "未知"
 
@@ -22281,6 +22289,7 @@ msgstr "方案沒有變更，也沒有扣款。服務仍以原本的設定執行
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 #: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
 msgid "CPU"
 msgstr "CPU"
 
@@ -25011,3 +25020,153 @@ msgstr "上一次登入失敗。請檢查控制平面設定與 auth key。"
 #: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
 msgid "This node is already logged in, so the auth key in Configuration is not used. It is only used when the node needs to log in again; you can clear it."
 msgstr "這台節點已經登入，配置裡的 auth key 不會被使用（只在節點需要重新登入時才會用），可以清空。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Backups"
+msgstr "備份"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Paused"
+msgstr "已暫停"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Not checked yet"
+msgstr "尚未檢查"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Last successful backup"
+msgstr "最近一次成功備份"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Last failed backup"
+msgstr "最近一次備份失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "None yet"
+msgstr "尚無"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup storage is full."
+msgstr "備份空間已滿。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The database could not be reached during the backup."
+msgstr "備份時無法連上資料庫。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Another backup or restore was still running."
+msgstr "當時另一個備份或還原仍在進行中。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup ran out of memory."
+msgstr "備份時記憶體不足。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup took too long and was stopped."
+msgstr "備份執行過久，已被中止。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup could not be completed."
+msgstr "備份未能完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "No backups are taken while the service is suspended."
+msgstr "服務停權期間不會進行備份。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Your service keeps running and earlier backups are kept. Our team has been notified and will fix it; contact support if you need help."
+msgstr "服務仍正常運作，先前的備份也都保留。我們已收到通知並會處理；如需協助請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "No successful backup in the last day. Our team has been notified."
+msgstr "最近一天沒有成功的備份，我們已收到通知。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "A backup is taken automatically every day. Contact support to restore data from a backup."
+msgstr "系統每天自動備份。需要從備份還原資料時請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Backup failed"
+msgstr "備份失敗"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "The latest backup of %(name)s in workspace %(workspace)s failed. We have been notified; your service keeps running."
+msgstr "工作區 %(workspace)s 的 %(name)s 最近一次備份失敗。我們已收到通知；服務仍正常運作。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "No recent backup"
+msgstr "近期沒有成功備份"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(name)s in workspace %(workspace)s has had no successful backup for more than %(hours)s hours."
+msgstr "工作區 %(workspace)s 的 %(name)s 已超過 %(hours)s 小時沒有成功的備份。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_health
+msgid "Backup Health"
+msgstr "備份狀態"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__last_backup_success_at
+msgid "Last Successful Backup"
+msgstr "最近一次成功備份"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__last_backup_failure_at
+msgid "Last Failed Backup"
+msgstr "最近一次失敗備份"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_failure_reason
+msgid "Backup Failure Reason"
+msgstr "備份失敗原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_consecutive_failures
+msgid "Consecutive Backup Failures"
+msgstr "連續備份失敗次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_failure_alerted_at
+msgid "Backup Failure Alerted At"
+msgstr "備份失敗通知時間"

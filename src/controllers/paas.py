@@ -5917,6 +5917,10 @@ class PaasController(HiddenChainMixin, Controller):
 
         if include_details:
             data.update({
+                # DATA-ODOO-005-2／X-BK-006-1：服務頁唯讀備份卡。只讀已存值（由每小時的
+                # `_cron_refresh_backup_status` 寫入），不呼叫 operator；`supported` 是卡片
+                # 畫不畫的唯一判準。
+                'backup': service._backup_status_public(),
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
