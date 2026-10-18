@@ -256,7 +256,7 @@ class TestTopupChargeSendV4(_EcpgFixture, TransactionCase):
 
 
 # ====================================================================== #
-#  自動儲值：3D 立即失敗、拒絕後本週期不再授權同一張卡（P1）                 #
+#  自動儲值：3D 立即失敗、拒絕後 7 天內不再授權同一張卡（P1）                #
 # ====================================================================== #
 
 class TestAutoTopupDeclineBlock(_EcpgFixture, TransactionCase):
@@ -272,10 +272,15 @@ class TestAutoTopupDeclineBlock(_EcpgFixture, TransactionCase):
         self.Sub = self.env['sh.subscription.subscription']
 
     def test_blocked_card_is_not_reauthorised(self):
-        self.token._woow_block_auto_charge('card_declined')
+        now = fields.Datetime.to_datetime('2026-10-18 12:00:00')
+        self.token.sudo().write({
+            'woow_auto_charge_blocked_at': now - timedelta(days=7, seconds=-1),
+            'woow_auto_charge_block_code': 'card_declined',
+        })
         Topup = self.env['woow.wallet.topup'].sudo()
         before = Topup.search_count([('partner_id', '=', self.partner.id)])
-        with patch.object(EcpgV4Client, '_post', autospec=True) as ours:
+        with patch.object(fields.Datetime, 'now', return_value=now), \
+                patch.object(EcpgV4Client, '_post', autospec=True) as ours:
             ok, msg = self.Sub._attempt_auto_topup(self.partner, 120.0)
         self.assertFalse(ok)
         self.assertEqual(msg, 'card_blocked_after_decline')
@@ -299,21 +304,85 @@ class TestAutoTopupDeclineBlock(_EcpgFixture, TransactionCase):
         self.assertEqual(topup.amount, 200.0, '120 rounds up to NT$200')
 
     def test_block_expires_after_window(self):
-        self.token._woow_block_auto_charge('card_declined')
-        self.token.sudo().write({
-            'woow_auto_charge_blocked_at':
-                fields.Datetime.now() - timedelta(days=31)})
+        now = fields.Datetime.to_datetime('2026-10-18 12:00:00')
+        with patch.object(fields.Datetime, 'now', return_value=now):
+            for age, blocked in ((timedelta(days=7, seconds=-1), True),
+                                 (timedelta(days=7), False),
+                                 (timedelta(days=8), False),
+                                 (timedelta(days=30), False)):
+                with self.subTest(age=age):
+                    self.token.sudo().write({
+                        'woow_auto_charge_blocked_at': now - age})
+                    self.assertEqual(
+                        self.token._woow_auto_charge_blocked(), blocked)
+
+    def test_card_without_decline_can_auto_topup(self):
+        self.assertFalse(self.token.woow_auto_charge_blocked_at)
+        with patch.object(EcpgV4Client, '_post', autospec=True,
+                          return_value={'RtnCode': 1, 'OrderInfo': {}}) as ours:
+            ok, msg = self.Sub._attempt_auto_topup(self.partner, 120.0)
+        self.assertTrue(ok, msg)
+        ours.assert_called_once()
         self.assertFalse(self.token._woow_auto_charge_blocked())
+
+    def test_auto_topup_resumes_at_exactly_seven_days(self):
+        now = fields.Datetime.to_datetime('2026-10-18 12:00:00')
+        self.token.sudo().write({
+            'woow_auto_charge_blocked_at': now - timedelta(days=7),
+            'woow_auto_charge_block_code': 'card_declined',
+        })
+        balance_before = self.partner.wallet_balance
+        with patch.object(fields.Datetime, 'now', return_value=now), \
+                patch.object(EcpgV4Client, '_post', autospec=True,
+                             return_value={'RtnCode': 1, 'OrderInfo': {}}) as ours:
+            ok, msg = self.Sub._attempt_auto_topup(self.partner, 120.0)
+        self.assertTrue(ok, msg)
+        ours.assert_called_once()
+        self.partner.invalidate_recordset(['wallet_balance'])
+        self.assertEqual(self.partner.wallet_balance, balance_before + 200.0)
+        self.assertFalse(self.token.woow_auto_charge_blocked_at)
+        self.assertFalse(self.token.woow_auto_charge_block_code)
+
+    def test_new_decline_restarts_seven_day_block(self):
+        now = fields.Datetime.to_datetime('2026-10-18 12:00:00')
+        self.token.sudo().write({
+            'woow_auto_charge_blocked_at': now - timedelta(days=7),
+            'woow_auto_charge_block_code': 'card_declined',
+        })
+        with patch.object(fields.Datetime, 'now', return_value=now), \
+                patch.object(EcpgV4Client, '_post', autospec=True,
+                             side_effect=ECPGError(
+                                 'RtnCode=10100248 msg=declined')) as ours, \
+                mute_logger('odoo.addons.woow_paas_platform.models.payment_transaction'):
+            ok, _msg = self.Sub._attempt_auto_topup(self.partner, 120.0)
+            self.assertFalse(ok)
+            self.assertEqual(self.token.woow_auto_charge_blocked_at, now)
+            self.assertTrue(self.token._woow_auto_charge_blocked())
+            self.assertEqual(
+                self.Sub._attempt_auto_topup(self.partner, 120.0),
+                (False, 'card_blocked_after_decline'))
+        ours.assert_called_once()
 
     def test_successful_charge_clears_block(self):
         self.token._woow_block_auto_charge('card_declined')
-        topup = self.env['woow.wallet.topup'].create_auto_topup(
-            partner=self.partner, amount=10.0)
+        topup = self.env['woow.wallet.topup'].sudo().create({
+            'partner_id': self.partner.id,
+            'amount': 100.0, 'credits': 100.0, 'bonus': 0.0,
+            'currency_id': self.env.ref('base.TWD').id,
+            'source': 'manual', 'state': 'draft',
+        })
         with patch.object(EcpgV4Client, '_post', autospec=True,
-                          return_value={'RtnCode': 1, 'OrderInfo': {}}):
-            ok, _msg = topup.charge_via_token(self.token)
-        self.assertTrue(ok)
+                          return_value={'RtnCode': 1, 'OrderInfo': {}}) as ours:
+            result = self.token._charge(
+                amount=topup.amount, reference='UNBLOCKV4%04d' % topup.id,
+                currency_id=topup.currency_id.id,
+                purpose_field='woow_topup_id', purpose_id=topup.id,
+            )
+        self.assertEqual(result['tx'].state, 'done')
+        self.assertEqual(topup.state, 'done')
+        ours.assert_called_once()
         self.assertFalse(self.token.woow_auto_charge_blocked_at)
+        self.assertFalse(self.token.woow_auto_charge_block_code)
 
 
 # ====================================================================== #

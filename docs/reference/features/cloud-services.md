@@ -1203,6 +1203,46 @@ helm_value_specs: |
 
 ---
 
+## 服務資訊與日誌分頁
+
+服務詳情的共通分頁順序為「總覽／配置／資訊／日誌」。原有依能力顯示的
+Addons、MCP Servers、Access 分頁接在後面，既有深連結維持有效；新增
+`/woow#/workspace/:workspaceId/services/:serviceId/information` 與 `/logs`。
+
+### 資訊（相關文件）
+
+比照 Home Assistant App 的 `DOCS.md`，模板新增 `documentation` Markdown 欄位，
+存放服務使用、設定及疑難排解指南；管理員在模板的 Service Documentation 頁維護。
+尚未填寫時依序使用既有 `full_description`、`description`，皆空則顯示空狀態。
+不從任意遠端網址抓取內容。`documentation_url` 僅接受 HTTP(S) 連結。
+
+`POST /api/workspaces/:workspaceId/services/:serviceId/documentation` 使用既有工作區
+成員及服務可見性檢查，回傳 `{title, content, documentation_url}`。前端使用現有
+Markdown + DOMPurify renderer，並在頁內呈現卡片。
+
+### 日誌
+
+`POST /api/workspaces/:workspaceId/services/:serviceId/logs` 僅供工作區 owner/admin。
+前端送 `pod`、`container`、`tail_lines`、`previous`；namespace/release 一律由已授權的
+服務記錄決定。錯工作區、隱藏服務及非管理成員在呼叫 Operator 前即拒絕。
+讀取不修改服務／訂閱，也不套用只適合寫入的訂閱狀態閘，因此失敗服務仍可診斷。
+
+Operator 的 `GET /api/releases/:namespace/:release/logs` 每次重新查核 exact
+`app.kubernetes.io/instance` 標籤、namespace 及容器歸屬，再呼叫 `kubectl logs`。
+回傳 Pod／一般與 init container 選項、帶時間戳的文字與狀態碼；不需要 exec 或增加
+租戶 Kubernetes 權限。VM 服務回覆不支援，避免將虛擬機基礎設施日誌誤當訪客 OS 日誌。
+
+每次預設 500 行、最多 2000 行及 256 KiB；不是永久日誌儲存或全量下載。
+前端每次請求結束後等 5 秒更新，暫停、切到背景或離開分頁即停止後續排程。
+搜尋只過濾已載入的行；下載包含完整的已載入快照，不受搜尋條件影響。
+支援換行切換、上次容器日誌，以及只在讀者原本位於底部時自動捲動。
+
+部署順序：先發布含 logs API 的 Operator，再升級平台 addon（新增資料庫欄位）。
+舊 Operator 或尚未部署的服務會顯示不可用／等待狀態，不回傳底層錯誤或憑證。
+
+參考：[HA App 文件檔案](https://contributors.home-assistant.io/apps/reference/files/)、
+[Supervisor App API](https://contributors.home-assistant.io/apps/supervisor-api/apps/)。
+
 ## Technical Decisions
 
 | 項目                      | 決定                      | 說明                                                    |

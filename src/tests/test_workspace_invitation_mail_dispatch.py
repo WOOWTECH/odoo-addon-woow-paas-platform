@@ -6,6 +6,7 @@ The owner/outsider exercise the issue guard with normal non-superuser envs;
 only the trusted fixture inspects outbox/trigger metadata.
 """
 from datetime import timedelta
+from email.utils import parseaddr
 from unittest.mock import patch
 import uuid
 
@@ -101,6 +102,25 @@ class TestWorkspaceInvitationMailDispatch(TransactionCase):
         self.assertEqual(len(set(after['trigger_ids']) - set(before['trigger_ids'])), 1)
         self.assertEqual(len(set(after['mail_ids']) - set(before['mail_ids'])), 1)
         self.assertEqual(self._cron_config(), config)
+
+    def test_invitation_sender_excludes_vat_without_renaming_company(self):
+        company = self.env.company
+        original_name = '渥屋科技股份有限公司  84006751'
+        company.with_context(no_vat_validation=True).write({
+            'name': original_name, 'vat': '84006751',
+        })
+        invitation = self._issue()
+        self._assert_queued(invitation)
+        mail = self.env['mail.mail'].search([
+            ('model', '=', self.issuer._name), ('res_id', '=', invitation.id),
+        ])
+        self.assertEqual(parseaddr(mail.email_from), (
+            '渥屋科技股份有限公司', company.email,
+        ))
+        self.assertEqual(company.name, original_name)
+        self.assertEqual(company.partner_id.name, original_name)
+        self.assertEqual(company.vat, '84006751')
+        self.assertIn('84006751', company.email_formatted)
 
     def test_unauthorized_issue_has_no_queue_or_trigger(self):
         before = self._snapshot()
