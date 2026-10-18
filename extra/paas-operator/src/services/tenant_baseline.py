@@ -57,7 +57,116 @@ KUBE_DNS_NAMESPACE = "kube-system"
 KUBE_DNS_POD_LABELS: Dict[str, str] = {"k8s-app": "kube-dns"}
 
 
-def build_baseline_egress_netpol(namespace: str) -> dict:
+# ---------------------------------------------------------------------------
+# 公網埠收斂（商用驗收 egress-all-ports-open；AI-HER-008-2、AI-OD-007-9）
+# ---------------------------------------------------------------------------
+#
+# 原始設計（2026-10-07）是公網**任意埠**，所以 chart 自己寫的 80/443 限制（hermes-agent-allow、
+# open-design-allow …）因為 NP 聯集而無效。要收到多緊是產品／資安決策，這裡只提供兩個機制，
+# 由 operator 設定打開（預設關＝manifest 與修補前逐字相同）：
+#
+# 1. 封埠（TENANT_BASELINE_EGRESS_BLOCKED_PORTS，例 "22,25"）：公網規則改成 1–65535 扣掉
+#    這些埠的 TCP／UDP 範圍（``endPort``，k8s 1.25 GA；woow-k3s v1.34 的 kube-router 支援）。
+#    其他合法用途（SMTP submission 587／465、IMAPS 993、DoT 853、MQTT bridge …）照通。
+#    SCTP 到公網在封埠模式下不放（目前沒有任何 chart 用到）。
+# 2. web profile（TENANT_BASELINE_EGRESS_WEB_PROFILE）：帶 ``EGRESS_PROFILE_LABEL=web`` 的
+#    pod 不再被一般 baseline 選到，改由 ``paas-baseline-egress-web`` 管——同 ns＋DNS＋公網
+#    TCP 80/443。chart 在 agent 類 pod（pi／OD／Hermes／code-server …）加上這個 label，
+#    chart 自己的 80/443 限制才真的生效。哪些 SKU 要加是產品決策，由 woow-paas-charts 決定。
+
+BASELINE_EGRESS_WEB_NP_NAME = "paas-baseline-egress-web"
+EGRESS_PROFILE_LABEL = "paas.woowtech.io/egress-profile"
+EGRESS_PROFILE_WEB = "web"
+WEB_PROFILE_TCP_PORTS = (80, 443)
+
+_MIN_PORT, _MAX_PORT = 1, 65535
+
+
+def parse_port_list(raw: Optional[str]) -> List[int]:
+    """逗號分隔的埠號 → 排序、去重的 int 清單。None／空字串 → []。
+
+    只接受 1–65535 的十進位整數；範圍寫法（"22-25"）、服務名（"smtp"）一律 ValueError，
+    避免設定打錯被默默忽略（那等於沒封）。
+    """
+    ports = set()
+    for part in (raw or "").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if not token.isdigit():
+            raise ValueError(f"port must be an integer 1-65535; got {token!r}")
+        port = int(token)
+        if not _MIN_PORT <= port <= _MAX_PORT:
+            raise ValueError(f"port must be within 1-65535; got {port}")
+        ports.add(port)
+    return sorted(ports)
+
+
+def _allowed_port_entries(blocked: Iterable[int], protocols=("TCP", "UDP")) -> List[dict]:
+    """1–65535 扣掉 ``blocked`` 的連續區段 → NetworkPolicy ``ports`` 條目（每個 protocol 一組）。"""
+    blocked_set = sorted(set(blocked))
+    ranges = []
+    start = _MIN_PORT
+    for port in blocked_set:
+        if port > start:
+            ranges.append((start, port - 1))
+        start = port + 1
+    if start <= _MAX_PORT:
+        ranges.append((start, _MAX_PORT))
+    entries = []
+    for protocol in protocols:
+        for lo, hi in ranges:
+            entry = {"protocol": protocol, "port": lo}
+            if hi != lo:
+                entry["endPort"] = hi
+            entries.append(entry)
+    return entries
+
+
+def _internet_peer() -> dict:
+    return {"ipBlock": {
+        "cidr": "0.0.0.0/0",
+        "except": list(BASELINE_EGRESS_BLOCKED_CIDRS),
+    }}
+
+
+def _same_ns_and_dns_rules() -> List[dict]:
+    return [
+        {"to": [{"podSelector": {}}]},
+        {
+            "to": [{
+                "namespaceSelector": {"matchLabels": {
+                    "kubernetes.io/metadata.name": KUBE_DNS_NAMESPACE,
+                }},
+                "podSelector": {"matchLabels": dict(KUBE_DNS_POD_LABELS)},
+            }],
+            "ports": [
+                {"protocol": "UDP", "port": 53},
+                {"protocol": "TCP", "port": 53},
+            ],
+        },
+    ]
+
+
+def _egress_np(namespace: str, name: str, pod_selector: dict, internet_rule: dict) -> dict:
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {"paas-managed": "true"},
+        },
+        "spec": {
+            "podSelector": pod_selector,
+            "policyTypes": ["Egress"],
+            "egress": _same_ns_and_dns_rules() + [internet_rule],
+        },
+    }
+
+
+def build_baseline_egress_netpol(namespace: str, blocked_ports: Iterable[int] = (),
+                                 web_profile: bool = False) -> dict:
     """單一一條 Egress NetworkPolicy，選到 ns 內**每一個** pod（``podSelector: {}``）。
 
     刻意做成一條（而不是 default-deny ＋ 三條 allow）：NetworkPolicy 一旦有一條 Egress
@@ -68,39 +177,126 @@ def build_baseline_egress_netpol(namespace: str) -> dict:
       1. 同 ns 全部 pod、全部埠（同工作區＝區網）。``podSelector: {}`` 不帶
          namespaceSelector ＝只限本 ns。經由同 ns 的 ClusterIP 也通（DNAT 後是本 ns pod）。
       2. kube-dns pod 的 UDP/TCP 53。
-      3. 公網任意埠：``0.0.0.0/0`` 排除 ``BASELINE_EGRESS_BLOCKED_CIDRS``。
+      3. 公網：``0.0.0.0/0`` 排除 ``BASELINE_EGRESS_BLOCKED_CIDRS``；``blocked_ports`` 空＝任意埠，
+         否則 TCP／UDP 1–65535 扣掉這些埠。
+
+    ``web_profile=True``：``podSelector`` 改成排除 ``EGRESS_PROFILE_LABEL=web`` 的 pod（它們由
+    ``build_baseline_egress_web_netpol`` 管）。沒有這個 label 的 pod 照舊被選到（NotIn 語意）。
+    """
+    blocked = list(blocked_ports)
+    internet_rule: dict = {"to": [_internet_peer()]}
+    if blocked:
+        internet_rule["ports"] = _allowed_port_entries(blocked)
+    pod_selector: dict = {}
+    if web_profile:
+        pod_selector = {"matchExpressions": [{
+            "key": EGRESS_PROFILE_LABEL, "operator": "NotIn", "values": [EGRESS_PROFILE_WEB],
+        }]}
+    return _egress_np(namespace, BASELINE_EGRESS_NP_NAME, pod_selector, internet_rule)
+
+
+def build_baseline_egress_web_netpol(namespace: str) -> dict:
+    """agent 類 pod（``EGRESS_PROFILE_LABEL=web``）的 egress baseline：同 ns＋DNS＋公網 TCP 80/443。"""
+    internet_rule = {
+        "to": [_internet_peer()],
+        "ports": [{"protocol": "TCP", "port": p} for p in WEB_PROFILE_TCP_PORTS],
+    }
+    return _egress_np(namespace, BASELINE_EGRESS_WEB_NP_NAME,
+                      {"matchLabels": {EGRESS_PROFILE_LABEL: EGRESS_PROFILE_WEB}},
+                      internet_rule)
+
+
+def build_baseline_egress_netpols(namespace: str, blocked_ports: Iterable[int] = (),
+                                  web_profile: bool = False) -> List[dict]:
+    """要 apply 的 egress baseline（依序）。
+
+    web profile 開時**先** web 政策、**後**收窄一般 baseline：任何時刻帶 web label 的 pod 都
+    至少被一條 egress 政策選到——反過來的順序會有「一般 baseline 已排除它、web 政策還沒到」
+    的空窗，那段時間它完全沒有 egress 政策＝全開。
+    """
+    general = build_baseline_egress_netpol(namespace, blocked_ports, web_profile)
+    if not web_profile:
+        return [general]
+    return [build_baseline_egress_web_netpol(namespace), general]
+
+
+# ---------------------------------------------------------------------------
+# Ingress baseline：跨 ns 入口（cloudflared／agent）不放行資料庫 pod（M4 R13）
+# ---------------------------------------------------------------------------
+#
+# ``paas-baseline-allow-cloudflared`` 與 ``paas-baseline-allow-mcp-reach`` 原本是
+# ``podSelector: {}``＋不限 port ⇒ paas-cloudflare-system（egress 不受限）與被授權的 agent
+# ns 都能直連租戶 DB:5432（2026-10-14 沙盒前後對照：pg_isready 由無回應變 accepting）。
+# 設計是「工作區＝區網、DB 只給同 ns」，所以這兩條跨 ns 入口改成**排除資料庫類 pod**。
+#
+# 用排除（NotIn）而不是列舉 app pod（In）：NotIn 也會選到「沒有這個標籤」的 pod，所以
+# n8n（沒有 component 標籤）、HAOS virt-launcher、各 chart 的 app／proxy pod 全部照舊
+# 可達，不會因為漏列某個 chart 的 app component 而讓公開網址斷線。代價是新加的資料庫
+# 類 component 要補進下面清單（woow-paas-charts 新 chart 的 DB pod 請沿用既有名稱）。
+#
+# 清單來源（woow-paas-charts main ffcf2cd 與正式站 53 個 paas-ws-* 盤點，2026-10-15）：
+#   postgresql — litellm、nextcloud、woow-odoo 的 PostgreSQL
+#   redis      — nextcloud 的 Redis
+#   database／cache — hermes-agent 的 PostgreSQL／Redis
+#   remote-db  — vibe-kanban 的 PostgreSQL
+#   db-backup／db-restore — woow-odoo 的備份／還原 Job（持有 DB 帳密，不需要任何 ingress）
+#   app.kubernetes.io/name=postgresql／redis／mysql／mariadb／mongodb／valkey — Bitnami 式
+#     子 chart 的慣例（目前沒有 chart 用到，先擋）
+#   app=omnigent-pg／omnigent-pg-backup — 管理者 Omnigent（paas-ws-ab6564da）手動搬遷時
+#     建的 PostgreSQL 與備份 CronJob（woow.tw/manual=omnigent-cutover，不屬任何 chart）
+#
+# 刻意**不**限 port：同一個 ns 住多個服務，對外埠各不相同而且常有第二個埠（emqx 18083／
+# 8083／1883、headscale 3000／8080、console 18790／7681、odoo 8080 同時服務 80／8072），
+# baseline 建在 ns 建立當下、看不到之後裝的 release。逐 release 收斂到 route 的
+# targetPort 是後續項（見 PR 待確認）。
+
+DATA_STORE_COMPONENTS: List[str] = [
+    "postgresql",
+    "redis",
+    "database",
+    "cache",
+    "remote-db",
+    "db-backup",
+    "db-restore",
+]
+DATA_STORE_NAMES: List[str] = [
+    "postgresql",
+    "redis",
+    "mysql",
+    "mariadb",
+    "mongodb",
+    "valkey",
+]
+DATA_STORE_LEGACY_APPS: List[str] = [
+    "omnigent-pg",
+    "omnigent-pg-backup",
+]
+
+
+def build_cross_ns_ingress_pod_selector() -> dict:
+    """跨 ns 入口（cloudflared、agent reach）可以進到的 pod：資料庫類以外的全部 pod。
+
+    三個 ``NotIn`` 是 AND：只要任一個標籤落在資料庫清單就不選。沒有該標籤的 pod 視為
+    不在清單內（NotIn 的標準語意），所以沒有標籤的 app pod 照舊被選到。
     """
     return {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-            "name": BASELINE_EGRESS_NP_NAME,
-            "namespace": namespace,
-            "labels": {"paas-managed": "true"},
-        },
-        "spec": {
-            "podSelector": {},
-            "policyTypes": ["Egress"],
-            "egress": [
-                {"to": [{"podSelector": {}}]},
-                {
-                    "to": [{
-                        "namespaceSelector": {"matchLabels": {
-                            "kubernetes.io/metadata.name": KUBE_DNS_NAMESPACE,
-                        }},
-                        "podSelector": {"matchLabels": dict(KUBE_DNS_POD_LABELS)},
-                    }],
-                    "ports": [
-                        {"protocol": "UDP", "port": 53},
-                        {"protocol": "TCP", "port": 53},
-                    ],
-                },
-                {"to": [{"ipBlock": {
-                    "cidr": "0.0.0.0/0",
-                    "except": list(BASELINE_EGRESS_BLOCKED_CIDRS),
-                }}]},
-            ],
-        },
+        "matchExpressions": [
+            {
+                "key": "app.kubernetes.io/component",
+                "operator": "NotIn",
+                "values": list(DATA_STORE_COMPONENTS),
+            },
+            {
+                "key": "app.kubernetes.io/name",
+                "operator": "NotIn",
+                "values": list(DATA_STORE_NAMES),
+            },
+            {
+                "key": "app",
+                "operator": "NotIn",
+                "values": list(DATA_STORE_LEGACY_APPS),
+            },
+        ],
     }
 
 

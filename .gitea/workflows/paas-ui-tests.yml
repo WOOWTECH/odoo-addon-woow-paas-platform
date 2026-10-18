@@ -6,6 +6,9 @@ on:
       - "src/static/src/paas/**"
       - "tests/ui/**"
       - "tests/frontend/service-resources.test.mjs"
+      # LLM-01c：tests/ui/test_llm_* 也讀繁中譯文與後端錯誤碼表（對帳），兩邊一改就要重跑。
+      - "src/i18n/zh_TW.po"
+      - "src/models/llm_common.py"
       - ".gitea/workflows/paas-ui-tests.yml"
   push:
     branches: [develop, main]
@@ -13,6 +16,9 @@ on:
       - "src/static/src/paas/**"
       - "tests/ui/**"
       - "tests/frontend/service-resources.test.mjs"
+      # LLM-01c：tests/ui/test_llm_* 也讀繁中譯文與後端錯誤碼表（對帳），兩邊一改就要重跑。
+      - "src/i18n/zh_TW.po"
+      - "src/models/llm_common.py"
       - ".gitea/workflows/paas-ui-tests.yml"
   workflow_dispatch:
 
@@ -24,7 +30,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # #914：tests/ui/test_datetime_tz_914.mjs 用真的 luxon 在五個時區驗日期解析；
+      # 版本對齊 Odoo 18 內附的 web/static/lib/luxon（3.4.4），裝在暫存目錄、不進 repo。
+      - name: Install luxon (Odoo 18 bundled version)
+        run: npm install --prefix "${RUNNER_TEMP:-/tmp}/luxon" --no-audit --no-fund luxon@3.4.4
       # Pure UI contracts: no database, credentials, cluster or browser needed.
       # Full /woow rendering still requires the isolated Odoo sandbox.
       - name: Service presentation and resource polling contracts
-        run: node --test tests/ui/*.mjs tests/frontend/service-resources.test.mjs
+        env:
+          WOOW_REQUIRE_LUXON: "1"
+        run: LUXON_PATH="${RUNNER_TEMP:-/tmp}/luxon/node_modules/luxon" node --test tests/ui/*.mjs tests/frontend/service-resources.test.mjs

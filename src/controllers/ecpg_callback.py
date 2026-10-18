@@ -29,10 +29,14 @@
 
 import logging
 
+import psycopg2
+
 from odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback import (
     ECPGCallback,
 )
 from odoo.http import request, route
+
+from ..models.payment_token import ECPG_BINDCARD_UNIQUE_INDEX
 
 _logger = logging.getLogger(__name__)
 
@@ -48,13 +52,76 @@ _CALLBACK_DETAIL = (
 
 
 class WoowECPGCallbackInbox(ECPGCallback):
-    """把 pay_callback 的事實落進 billing incident inbox（#864 PR-G）。"""
+    """把 pay_callback 的事實落進 billing incident inbox（#864 PR-G）。
+
+    另外接手綁卡結果的平台側補強（ECPay V4 上線）：``_handle_bind_callback``
+    同時被 S2S ``/payment/ecpg/bind_callback``（父類 route，leaf class 合成後
+    走到這裡）、瀏覽器 OrderResultURL bouncer 與 create-bind 無 3D 同步回應
+    （``billing.py``）呼叫：
+
+    1. token 的 partial unique index 撞號（S2S 與瀏覽器兩條同時到）⇒ 視為
+       ``ALREADY_EXISTS``，不讓第二條變成 500／``failed``。
+    2. 綁卡成功 ⇒ 把那筆 NT$5 授權登記進
+       ``woow_paas_platform.ecpg_bind_auth_void``（cron 去 DoAction 取消）。
+       best-effort：登記失敗只 log，⛔ 不改綁卡結果。
+    """
+
+    # 登記取消授權帳本時的來源標記（只影響帳本上的 source 欄位）。
+    _woow_bind_source = 'return_url'
 
     @route()
     def pay_callback(self, **kw):
         # 先落 facts、再交回父類：父類若拋例外，事實仍留得下來（獨立交易）。
         self._woow_record_callback_evidence(kw)
         return super().pay_callback(**kw)
+
+    def _handle_bind_callback(self, post_params):
+        source = getattr(self, '_woow_bind_source', 'return_url')
+        try:
+            with request.env.cr.savepoint():
+                result = super()._handle_bind_callback(post_params)
+        except psycopg2.errors.UniqueViolation as e:
+            if getattr(e.diag, 'constraint_name', None) != ECPG_BINDCARD_UNIQUE_INDEX:
+                raise
+            _logger.info(
+                '[BIND] concurrent bind delivery hit the BindCardID unique '
+                'index (source=%s); treating as ALREADY_EXISTS', source,
+            )
+            result = (True, 'ALREADY_EXISTS')
+        self._woow_enqueue_bind_auth_void(post_params, source)
+        return result
+
+    def _woow_enqueue_bind_auth_void(self, post_params, source):
+        """Best-effort：綁卡成功就登記取消 NT$5 授權。⛔ 永不影響綁卡結果。"""
+        try:
+            envelope = self._parse_result_data(post_params)
+            if envelope is None:
+                return
+            provider = request.env['payment.provider'].sudo().search([
+                ('code', '=', 'ECPay'),
+                ('enable_ecpg', '=', True),
+                ('MerchantID', '=', envelope.get('MerchantID')),
+            ], limit=1)
+            if not provider:
+                return
+            data = self._decrypt_envelope(envelope, provider)
+            if not data or data.get('RtnCode') != 1:
+                return
+            partner = None
+            member_id = data.get('MerchantMemberID')
+            if member_id:
+                partner = self._lookup_partner_by_member_id(provider, member_id)
+            with request.env.cr.savepoint():
+                request.env['woow_paas_platform.ecpg_bind_auth_void'].sudo() \
+                    ._enqueue_from_bind_data(provider, data, source,
+                                             partner=partner)
+        except psycopg2.OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                '[BIND_VOID] could not enqueue the bind authorization void '
+                '(source=%s); binding result is unaffected', source,
+            )
 
     def _woow_record_callback_evidence(self, post_params):
         """Best-effort：把 callback 事實寫進 inbox，⛔ 永不影響回應。

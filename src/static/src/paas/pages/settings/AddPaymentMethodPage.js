@@ -118,8 +118,12 @@ export class AddPaymentMethodPage extends Component {
                 window.location.href = result.data.three_d_url;
                 return; // page unloads
             }
-            // No 3DS (unusual as of 2025-08 when 3DS 2.0 is mandatory)
-            this.router.navigate("settings/payment-methods?bind_status=ok");
+            // No 3DS: the server already persisted the card from the synchronous
+            // CreateBindCard response and reports the outcome in bind_status.
+            const bindStatus = ["ok", "failed", "error"].includes(result.data.bind_status)
+                ? result.data.bind_status
+                : "ok";
+            this.router.navigate(`settings/payment-methods?bind_status=${bindStatus}`);
         } catch (err) {
             console.error("AddPaymentMethodPage confirm error:", err);
             this.state.phase = "ready";

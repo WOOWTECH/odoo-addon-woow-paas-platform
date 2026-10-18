@@ -341,7 +341,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.3.4。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.3.6。
 
         版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
         0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
@@ -352,7 +352,8 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         StatefulSet，#1398）→ 0.3.1（charts #138：認得平台注入的 llmGateway.baseUrl，
         網址非空才開 networkPolicy.litellmEgress；見 cloud_service._LITELLM_BASE_URL_VALUE_PATHS）
         → 0.3.2（#1441 工作區＝區網）→ 0.3.3（#1537：去 NET_RAW、/console uid 10000、台北時區）
-        → 0.3.4（#1556：MINIMAX／OPENROUTER 金鑰一律輸出，清除後 agent 不留舊值）。
+        → 0.3.4（#1556：MINIMAX／OPENROUTER 金鑰一律輸出，清除後 agent 不留舊值）
+        → 0.3.6（charts #188：Hermes Agent 0.21.6，image 同步改釘 20261014.0625）。
         這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
         artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
         跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
@@ -368,7 +369,9 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.3.4')
+        # 0.3.7–0.3.12＝charts 整合包 #254：登入失敗鎖 IP、gateway liveness、apiServerKey ≥ 16 字元、
+        # 容器加固、ttyd 改 loopback＋Basic 前門、cookie Secure、egress-profile=web；seed 不需改。
+        self.assertEqual(tpl.helm_chart_version, '0.3.12')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
@@ -781,6 +784,23 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             '/dashboard', text,
             'description 仍寫 /dashboard subpath：與 0.1.3 root URL 合約不一致，'
             '租戶照舊字串會拿到 404')
+
+
+    def test_description_states_gateway_long_request_limit(self):
+        """AI-HER-006-3：經公開網址的非串流 /gateway 請求約 120 秒被入口中斷（524）。
+
+        Hermes 247 實測：上游延遲 140／220／330／450 秒全都在約 120 秒收到 Cloudflare 524；
+        stream=true 每 10 秒送 keepalive，110 秒以上也能正常收到 [DONE]。客戶要知道長任務改用
+        串流或 /v1/runs，否則結果拿不到。
+        """
+        desc = self._tpl().full_description or ''
+        for needle, why in (
+                ('約 120 秒', '入口靜默上限（實測）'),
+                ('524', '非串流超時時用戶端看到的狀態碼'),
+                ('stream', '長任務改用串流（每 10 秒 keepalive）'),
+                ('/v1/runs', '或用非同步的 runs API 查結果'),
+        ):
+            self.assertIn(needle, desc, why)
 
 
 @tagged('post_install', '-at_install')

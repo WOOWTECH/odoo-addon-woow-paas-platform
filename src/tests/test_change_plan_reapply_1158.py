@@ -33,6 +33,8 @@ from odoo.tools import mute_logger
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
+from .wallet_fixture import fund_wallet
 
 _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SERVICES = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -136,6 +138,8 @@ class _ChangePlanFixture:
         })
         svc._apply_helm_values(values)
         svc._create_and_confirm_subscription(ws.owner_id.partner_id, plan)
+        # 換方案餘額閘（#1677 A1）：本檔測規格重套，不測錢包不足（見 wallet_fixture）。
+        fund_wallet(ws.owner_id.partner_id)
         return owner, svc
 
     def _change(self, owner, svc, plan, client=None):
@@ -152,6 +156,7 @@ class _ChangePlanFixture:
     @staticmethod
     def _client():
         client = MagicMock()
+        answer_quota_reads(client)
         client.base_url = 'http://operator.test'
         client._session.headers = {'X-API-Key': 'k'}
         client.upgrade_release.return_value = {'revision': 2, 'chart_version': '0.2.7'}

@@ -74,6 +74,12 @@
                         </span>
                     </div>
 
+                    <!-- Pending: waiting for ECPay's final answer (polling) -->
+                    <div t-if="state.pending" class="o_woow_addfunds_pending">
+                        <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
+                        <span>Confirming the payment with your bank…</span>
+                    </div>
+
                     <!-- Error -->
                     <div t-if="state.error" class="o_woow_error_message">
                         <WoowIcon name="'error'" size="16"/>

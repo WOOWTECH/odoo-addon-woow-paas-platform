@@ -18,10 +18,14 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List
 
 from src.services.storage_quota import parse_quantity, tightest_quota_usage
+
+#: 與 ``helm.QUOTA_SYNC_TOKEN_ANNOTATION`` 同值；本模組是純函式，不 import helm。
+QUOTA_SYNC_TOKEN_ANNOTATION = "woow.tw/quota-sync-token"
 
 #: 平台（woow_paas_platform ``src/services/workspace_quota.py``）認這兩個字串，改名要兩邊
 #: 一起改。
@@ -66,6 +70,76 @@ def unavailable_report(namespace: str, reason: str) -> Dict[str, Any]:
         "quotas": [],
         "resources": {},
     }
+
+
+def managed_quota_report(namespace: str, quota_items: Iterable[Dict[str, Any]],
+                         reason: str | None = None) -> Dict[str, Any]:
+    """#1678: one managed object, independent of the legacy tightest summary.
+
+    observed_at is the read time, not quota-controller reconciliation time.
+    An empty list cannot distinguish an absent namespace from an absent quota;
+    namespace_exists stays unknown here. The API adds an explicit namespace probe
+    for that case (#1679); only a definitive NotFound reports ``False``.
+    """
+    report = {
+        "namespace": namespace, "name": f"{namespace}-quota", "uid": None,
+        "resource_version": None, "sync_token": None,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "namespace_exists": None, "available": False,
+        "reason": reason or "managed_quota_not_found", "hard": {}, "used": {},
+    }
+    if reason:
+        return report
+    matches = [item for item in quota_items
+               if (item.get("metadata") or {}).get("name") == report["name"]]
+    if len(matches) != 1:
+        return report
+    item = matches[0]
+    metadata = item.get("metadata") or {}
+    status = item.get("status") or {}
+    report.update({
+        # #1679：受管 quota 物件就在這個 namespace 裡 ⇒ namespace 必然存在。
+        "namespace_exists": True,
+        "namespace": metadata.get("namespace"), "uid": metadata.get("uid"),
+        "resource_version": metadata.get("resourceVersion"),
+        # #1680：鍵一定存在（舊 operator 沒有這個鍵，平台據此判斷支不支援版本防護），
+        # 而且不受下方可用性判斷影響——推送後 status 還沒追上 spec 時，平台也要讀得到 token。
+        "sync_token": (metadata.get("annotations") or {}).get(QUOTA_SYNC_TOKEN_ANNOTATION),
+        "hard": status.get("hard") or {}, "used": status.get("used") or {},
+        "spec_hard": (item.get("spec") or {}).get("hard") or {},
+    })
+    resources = ("requests.cpu", "limits.cpu", "requests.memory", "limits.memory",
+                 "requests.storage")
+    if not all(isinstance(metadata.get(key), str) and metadata[key]
+               for key in ("namespace", "name", "uid", "resourceVersion")):
+        report["reason"] = "managed_quota_identity_incomplete"
+    elif metadata["namespace"] != namespace:
+        report["reason"] = "managed_quota_namespace_mismatch"
+    elif _is_scoped(item):
+        report["reason"] = "managed_quota_scoped"
+    elif not all(isinstance(report[key], dict) and
+                 all(resource in report[key] for resource in resources)
+                 for key in ("hard", "used", "spec_hard")):
+        report["reason"] = "managed_quota_incomplete"
+    elif not all(_valid_quantity(report[key][resource])
+                 for key in ("hard", "used", "spec_hard") for resource in resources):
+        report["reason"] = "managed_quota_invalid_quantity"
+    elif any(parse_quantity(report["hard"][resource]) !=
+             parse_quantity(report["spec_hard"][resource]) for resource in resources):
+        report["reason"] = "managed_quota_status_pending"
+    else:
+        report.update(available=True, reason=None)
+    return report
+
+
+def _valid_quantity(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        quantity = parse_quantity(value)
+        return quantity is not None and quantity.is_finite() and quantity >= 0
+    except ArithmeticError:
+        return False
 
 
 def _is_scoped(item: Dict[str, Any]) -> bool:

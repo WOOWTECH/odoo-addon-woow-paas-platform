@@ -35,6 +35,9 @@ export class RollbackModal extends Component {
             // #1433：選好版本後先進確認步驟（說明會回復什麼、不會回復什麼），
             // 再按一次才真的送出。原本單擊即執行、對話框也沒提帳密。
             confirming: false,
+            // INFRA-FIX-018-1／AI-HER-003-1：operator 每個 release 只保留最近 N 筆 revision
+            // （helm --history-max），更舊的已被清掉、無法回復；對話框要講明。
+            historyMax: null,
         });
 
         onMounted(() => {
@@ -42,7 +45,17 @@ export class RollbackModal extends Component {
         });
     }
 
+    /**
+     * #1414／#1456：「目前」＝helm history 裡部署中的那一版（後端 `annotate_rollback_floor`
+     * 標的 `is_current`）。平台帳本 `helm_revision` 在更新／回復後會落後，拿它標「目前」
+     * 會把舊版標成目前、真正部署中的那一版反而能被選來回復。舊後端沒有這個欄位、或
+     * history 裡沒有部署中的版本時，才退回帳本值。
+     */
     get currentRevision() {
+        const deployed = this.state.revisions.find((r) => r.is_current === true);
+        if (deployed) {
+            return deployed.revision;
+        }
         return this.props.service.helm_revision || 1;
     }
 
@@ -65,6 +78,7 @@ export class RollbackModal extends Component {
 
         if (result.success) {
             this.state.revisions = result.data || [];
+            this.state.historyMax = result.historyMax ?? null;
         } else {
             this.state.error = result.error || _t("Failed to load revision history");
         }
@@ -88,6 +102,21 @@ export class RollbackModal extends Component {
      */
     isBlocked(revision) {
         return revision.rollback_allowed === false && !this.isCurrent(revision);
+    }
+
+    /**
+     * INFRA-FIX-018-1：「最多保留最近 N 個版本」。N 由 operator 回報（HELM_HISTORY_MAX），
+     * 前端不寫死；舊後端沒有回報時不顯示這一行。
+     */
+    get historyHint() {
+        const max = this.state.historyMax;
+        if (!Number.isInteger(max) || max < 1) {
+            return "";
+        }
+        return _t(
+            "Only the most recent %s revisions are kept (failed updates included); older revisions can no longer be restored.",
+            max
+        );
     }
 
     get hasBlockedRevisions() {
@@ -198,7 +227,9 @@ export class RollbackModal extends Component {
         if (text === "Upgrade complete") {
             return _t("Updated");
         }
-        const rollback = /^Rollback to (\d+)$/.exec(text);
+        // 平台回復（#1433／#1526）寫入的說明帶「(credentials preserved)」尾註，
+        // 一併吃掉，否則整句會以英文原文顯示（AI-HER-007-2）。
+        const rollback = /^Rollback to (\d+)(?: \(credentials preserved\))?$/.exec(text);
         if (rollback) {
             return _t("Rolled back to revision %s", rollback[1]);
         }

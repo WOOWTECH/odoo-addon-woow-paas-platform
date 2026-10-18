@@ -9,8 +9,12 @@ from src.models.schemas import (
     NamespaceCreateRequest,
     NamespaceQuotaUpdateRequest,
 )
-from src.services.helm import KubectlException, KubernetesService, validate_namespace
-from src.services.namespace_quota import QUOTA_UNREADABLE, quota_report, unavailable_report
+from src.services.helm import (
+    KubectlException, KubernetesService, QuotaWriteConflict, validate_namespace,
+)
+from src.services.namespace_quota import (
+    QUOTA_UNREADABLE, managed_quota_report, quota_report, unavailable_report,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/namespaces", tags=["namespaces"])
@@ -47,6 +51,9 @@ async def create_namespace(request: NamespaceCreateRequest):
             workspace_id=request.workspace_id,
             ephemeral_storage_request=request.ephemeral_storage_request,
             ephemeral_storage_limit=request.ephemeral_storage_limit,
+            sync_token=request.sync_token,
+            expected_resource_version=request.expected_resource_version,
+            expect_absent=request.expect_absent,
         )
         logger.info(f"Created namespace {request.name} with quota")
         return result
@@ -76,9 +83,16 @@ async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest
             name, request.cpu_limit, request.memory_limit, request.storage_limit,
             ephemeral_storage_request=request.ephemeral_storage_request,
             ephemeral_storage_limit=request.ephemeral_storage_limit,
+            sync_token=request.sync_token,
+            expected_resource_version=request.expected_resource_version,
+            expect_absent=request.expect_absent,
         )
         logger.info(f"Updated quota for namespace {name}")
         return result
+    except QuotaWriteConflict:
+        # #1680：前提不成立 ⇒ 沒有寫入；平台重新讀取後再決定要不要推送。
+        logger.warning("Guarded quota write conflicted for %s; quota left unchanged", name)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="quota_conflict")
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -92,7 +106,7 @@ async def update_namespace_quota(name: str, request: NamespaceQuotaUpdateRequest
 # 一般 ``def``（不是 async）：FastAPI 會把它丟進 threadpool 跑，阻塞的 kubectl 不會卡住
 # event loop。同檔其他端點是 async 卻直接呼叫阻塞的 kubectl——那是既有形狀，不要照抄。
 @router.get("/{name}/quota", summary="#1647 — read ns ResourceQuota hard/used (read-only)")
-def get_namespace_quota(name: str) -> Dict[str, Any]:
+def get_namespace_quota(name: str, include_managed: bool = False) -> Dict[str, Any]:
     """#1647：namespace ResourceQuota 的上限與已佔用量（純唯讀）。
 
     一律回 200：拿得到時 ``available`` 為 True、``resources`` 以 k8s 資源鍵為 key；沒有
@@ -113,8 +127,19 @@ def get_namespace_quota(name: str) -> Dict[str, Any]:
     except (KubectlException, ValueError) as exc:
         logger.warning("Namespace quota unreadable for %s: %s", name,
                        getattr(exc, "stderr", None) or exc)
-        return unavailable_report(name, QUOTA_UNREADABLE)
-    return quota_report(name, items)
+        report = unavailable_report(name, QUOTA_UNREADABLE)
+        if include_managed:
+            report["managed_quota"] = managed_quota_report(name, [], reason=QUOTA_UNREADABLE)
+        return report
+    report = quota_report(name, items)
+    if include_managed:
+        managed = managed_quota_report(name, items)
+        if managed["reason"] == "managed_quota_not_found":
+            # #1679：空 list 不能證明 namespace 不存在；另做一次明確探測，
+            # 只有 NotFound 才回 False，其他失敗維持 None（未知）。
+            managed["namespace_exists"] = k8s_service.namespace_exists(name)
+        report["managed_quota"] = managed
+    return report
 
 
 @router.post(

@@ -125,7 +125,7 @@ class SmartHomeController(Controller):
                     smarthome.id)
             return {"success": True, "data": data}
 
-        if action not in ("delete", "provision", "refresh_status"):
+        if action not in ("delete", "provision", "refresh_status", "release_binding"):
             return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
         # 以下全部是 mutation，一律先過 owner/admin。
@@ -144,6 +144,16 @@ class SmartHomeController(Controller):
 
         if action == "refresh_status":
             return self._refresh_status(smarthome)
+
+        if action == "release_binding":
+            # #1766：忘掉「哪一台 HA 綁著這個家」，讓下一台可以接手（換機器、
+            # 重裝、RMA）。
+            #
+            # ⚠ 解綁**不會**把對方的 cloudflared 踢掉：權杖已經在那台機器上，平台
+            # 無法收回已交出的憑證。真的要斷開對方只能換權杖（刪掉重建這個家）。
+            # 前端文案必須照實說，否則使用者會以為按了就安全了。
+            smarthome.action_release_binding()
+            return {"success": True, "data": smarthome.to_dict()}
 
         if action == "delete":
             try:
@@ -183,6 +193,7 @@ class SmartHomeController(Controller):
         workspace_id: int,
         smarthome_id: int,
         plan_id: int | None = None,
+        dry_run: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Change subscription plan for a smart home."""
@@ -287,6 +298,13 @@ class SmartHomeController(Controller):
                     'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
         refund = old_sub._compute_unused_refund()
+        # AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋這次退點付不起新方案
+        # 首期（含稅）就擋下——什麼都不寫（不退點、不關舊訂閱、不建新訂閱、不開發票）。
+        # `dry_run=True`：通過同一組閘之後只回估算（前端停用「確認變更」並顯示差額）。
+        # 判準收在 mixin 的 `_change_plan_balance_gate`，三個入口共用、這裡不另寫。
+        _balance = smarthome._change_plan_balance_gate(plan, refund, dry_run=dry_run is True)
+        if _balance:
+            return _balance
 
         partner = old_sub.sh_partner_id
         _logger.info(

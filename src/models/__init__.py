@@ -18,6 +18,8 @@ from . import sh_subscription_plan_visibility
 from . import sh_subscription_plan_cs_spec
 from . import sh_subscription_plan_names_zh_tw
 from . import subscription_lifecycle_mixin
+# #1766：一條 tunnel 只給一台 HA 接。SH／SA 共用，必須在兩者之前 import。
+from . import tunnel_binding_mixin
 from . import subscription_lifecycle_cron
 from . import low_balance_warning_cron
 from . import res_config_settings
@@ -54,6 +56,8 @@ from . import oauth_code
 from . import oauth_device_code
 from . import smart_home
 from . import smart_home_provision_operation
+# 自動撤權 v1：只能 insert 的撤權帳本（smart_home_route 成功 sync 後在獨立交易寫入）。
+from . import smart_home_access_revision
 from . import smart_home_route
 from . import ai_assistant
 from . import mcp_server
@@ -73,6 +77,7 @@ from . import reconcile_report
 from . import sh_subscription_plan_reseed_b
 # fix: #366 訂閱 product 一律無稅 delegate（migration force-write + 供單元測試直驅）
 from . import product_template_subscription_tax
+from . import paas_included_vat
 
 # feat: #803 `access_protection_lost` 的週期性收斂者（三腿掃旗標、逐列重推）
 from . import access_resync_cron
@@ -87,3 +92,23 @@ from . import ir_http
 # #1540：停權／刪除後的限時唯讀資料取回入口（帳本＋session）。
 from . import data_retrieval
 from . import workspace_invitation
+# X-SET-007／X-W-002：login 一律 strip＋lower、不分大小寫唯一、自助註冊驗 email。
+# 排在 billing_incident／workspace_invitation 的 res.users 擴充之後 ⇒ MRO 最外層，
+# 它們的 write() 看到的已是正規化後的 login。
+from . import res_users_login_identity
+
+from . import workspace_quota_inspection
+from . import workspace_quota_policy
+from . import workspace_quota_audit
+from . import workspace_quota_minimum_wizard
+# ECPay 站內付 2.0 V4 上線：綁卡 NT$5 驗證授權的取消帳本（DoAction）。
+from . import ecpg_bind_auth_void
+# LLM-01b：AI 模型分頁的帳戶、金鑰鏡像與設定寫入守衛（DESIGN §2）。
+from . import llm_config_guard
+from . import llm_account
+from . import llm_api_key
+from . import llm_event
+from . import llm_runtime_state
+# 商用驗收 X-SET-007-1／X-SEC-007：自助設定密碼的強度下限、忘記密碼請求排隊（不洩露帳號是否存在）。
+from . import res_users_password_policy
+from . import password_reset_request

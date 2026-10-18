@@ -305,6 +305,83 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         )
         return subscription
 
+    def _change_plan_balance_quote(self, plan, refund):
+        """換到 ``plan`` 的首期應付與錢包是否付得起（不寫 DB）。
+
+        AUDITFIX change-plan-insufficient-balance（#1677 A1）：三個 change-plan 入口原本沒有
+        任何餘額檢查——錢包不足時照樣退點、關舊訂閱、建新訂閱，新訂閱 confirm 開出首期發票、
+        錢包扣不到就留成未付。換方案時新訂閱一律不給試用（``entity_has_prior_sub`` 在這條路徑
+        上恆為 True，見 ``_create_and_confirm_subscription``），confirm 當下就開首期發票。
+
+        * ``required``：新方案首期應付（含稅）。用上游與發票同源的
+          ``_sh_get_period_billing_amount``，套在一筆與 ``_create_and_confirm_subscription``
+          同樣方式組出來的暫存訂閱上（skip-trial、自助續訂同一把尺）。
+        * ``available``：錢包餘額＋這次換方案會先退的點（``refund``，呼叫端以舊訂閱的
+          ``_compute_unused_refund`` 算好傳入——退點在建新訂閱之前入帳）。
+        * ``shortfall``：還差多少（付得起時為 0）。
+
+        Raises:
+            UserError: 方案沒有訂閱產品（``_subscription_product_for``）。
+        """
+        self.ensure_one()
+        old = self._sub()
+        partner = old.sh_partner_id
+        product = self._subscription_product_for(plan)
+        draft = self.env['sh.subscription.subscription'].sudo().new({
+            'sh_partner_id': partner.id,
+            'product_id': product.id,
+            'sh_subscription_plan_id': plan.id,
+            'sh_source': 'manual',
+        })
+        draft._onchange_sh_subscription_plan_id()
+        draft._onchange_sh_product_id()
+        currency = draft.currency_id or self.env.company.currency_id
+        required = currency.round(draft._sh_get_period_billing_amount() or 0.0)
+        balance = currency.round(partner.sudo().wallet_balance or 0.0)
+        refund = currency.round(refund or 0.0)
+        available = currency.round(balance + refund)
+        shortfall = currency.round(max(required - available, 0.0))
+        return {
+            'plan_id': plan.id,
+            'required': float(required),
+            'balance': float(balance),
+            'refund': float(refund),
+            'available': float(available),
+            'sufficient': currency.compare_amounts(available, required) >= 0,
+            'shortfall': float(shortfall),
+        }
+
+    def _change_plan_balance_gate(self, plan, refund, dry_run=False):
+        """三個 change-plan 入口共用：錢包付不起就回 endpoint 的失敗回應；``dry_run`` 回估算。
+
+        放在每個入口「所有既有閘之後、第一個寫入（退點）之前」——與 #773 席數閘同一個相對
+        位置。錯誤碼與 ``/api/billing/invoices/<id>/pay`` 一致（頂層 ``code`` 與
+        ``data.code`` 都是 ``insufficient_balance``）。
+
+        Returns:
+            ``None``＝放行（繼續換方案）；否則是 endpoint 要直接回傳的 dict。
+        """
+        try:
+            quote = self._change_plan_balance_quote(plan, refund)
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
+        if dry_run:
+            return {'success': True, 'data': dict(quote, dry_run=True)}
+        if quote['sufficient']:
+            return None
+        _logger.info(
+            "[SUB_MIXIN] change_plan refused (insufficient balance) entity=%s:%s plan=%s "
+            "required=%s available=%s", self._name, self.id, plan.id,
+            quote['required'], quote['available'],
+        )
+        return {
+            'success': False,
+            'error': _('Insufficient wallet balance. %(shortage)s more points are needed.',
+                       shortage=f"{quote['shortfall']:,.2f}"),
+            'code': 'insufficient_balance',
+            'data': dict(quote, code='insufficient_balance'),
+        }
+
     def _subscription_product_for(self, plan):
         """``plan`` 的訂閱產品（第一個 variant）；沒有就 raise UserError。
 
@@ -577,18 +654,25 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             raise UserError(_("Subscription is not in trial period."))
 
         # Check wallet balance before proceeding
+        #
+        # 2026-10-14：門檻必須是**本期發票的含稅總額**，不是未稅 `sh_plan_price`。
+        # 原本比未稅價：訂閱帶稅（例 300 未稅＋5%＝315）且錢包落在 [300, 315) 時
+        # 這裡放行，接著發票 315 > 錢包 ⇒ `_handle_invoice_creation` 退回上游
+        # （`sh_invoice_generated='draft'` 留草稿、`'paid'` 開假付款），而試用已結束、
+        # 下次扣款日已推一期 ⇒ 沒扣點就開始付費週期。用上游與發票同源的
+        # `_sh_get_period_billing_amount()`（單價×數量再套 sh_taxes_ids）。
         partner = sub.sh_partner_id
-        plan_price = sub.sh_plan_price
+        required = sub._sh_get_period_billing_amount()
         _logger.info(
-            "[SUB_MIXIN] _skip_trial balance check sub=%s partner=%s price=%s balance=%s",
-            sub.id, partner.id, plan_price, partner.wallet_balance,
+            "[SUB_MIXIN] _skip_trial balance check sub=%s partner=%s untaxed=%s required=%s balance=%s",
+            sub.id, partner.id, sub.sh_plan_price, required, partner.wallet_balance,
         )
-        if partner.wallet_balance < plan_price:
+        if partner.wallet_balance < required:
             raise UserError(
                 _("Insufficient wallet balance to skip trial. "
                   "Current balance: %.2f, required: %.2f. "
                   "Please top up your wallet first.")
-                % (partner.wallet_balance, plan_price)
+                % (partner.wallet_balance, required)
             )
 
         # #980：controller 的 `/woow` payability guard 由這個 seam 注入。它必須

@@ -10,6 +10,7 @@
 #      PHASE：all（預設）／restore（步驟 1～7）／finalize（步驟 7a～8）。彩排中和時 restore.sh 把一個 Job 拆成
 #        restore →（release 的 odoo image 產官方中和 SQL）→ finalize 三個容器，所以要能分段跑。
 #      NEUTRALIZE（1／0）、NEUTRALIZE_SQL、NEUTRALIZE_ASSERT_SQL、NEUTRALIZE_EXTRA_SQL（選配）：見步驟 7a
+#      CRON_HOLD_MINUTES（0＝不暫停）、CRON_HOLD_SQL：見步驟 8c
 # 輸入（export.sh 經 receiver 送進來）：db.dump、filestore.tar、manifest.json、source.fp、source.fs、SHA256SUMS
 # 輸出：SET_DIR/target.fp、SET_DIR/target.fs、SET_DIR/baseline.bfp（客戶資料列基準，verify.sh --stage upgrade 用）、
 #      中和時另有 SET_DIR/neutralize-report.txt 與空檔 SET_DIR/neutralized（標記這組是彩排）、
@@ -21,6 +22,8 @@ die() { echo "RESTORE-FAIL: $*" >&2; exit 1; }
 : "${SET_DIR:?}" "${ODOO_DB_NAME:?}" "${PGHOST:?}" "${PGSUPERUSER_PASSWORD:?}" "${ODOO_DB_PASSWORD:?}" "${DATA_ROOT:?}" "${FINGERPRINT_SQL:?}" "${BUSINESS_SQL:?}"
 export PGPORT="${PGPORT:-5432}" LC_ALL=C
 REPLACE_DB=${REPLACE_DB:-} WRITE_MARKER=${WRITE_MARKER:-1} PHASE=${PHASE:-all} NEUTRALIZE=${NEUTRALIZE:-0}
+CRON_HOLD_MINUTES=${CRON_HOLD_MINUTES:-0}
+[[ "$CRON_HOLD_MINUTES" =~ ^[0-9]+$ ]] || die "CRON_HOLD_MINUTES='${CRON_HOLD_MINUTES}' 不是整數"
 case "$PHASE" in all|restore|finalize) ;; *) die "PHASE='${PHASE}' 不合法" ;; esac
 sup() { PGPASSWORD="$PGSUPERUSER_PASSWORD" psql -h "$PGHOST" -U postgres -X -q -v ON_ERROR_STOP=1 -tA "$@"; }
 odoo_sql() { PGPASSWORD="$ODOO_DB_PASSWORD" psql -h "$PGHOST" -U odoo -d "$ODOO_DB_NAME" -X -q -v ON_ERROR_STOP=1 -tA "$@"; }
@@ -178,6 +181,15 @@ VALUES ('woow_paas_platform.tenant_localized', 'skipped-imported', 1, (now() AT 
 ON CONFLICT (key) DO NOTHING;
 SQL
     echo "RESTORE localization marker written: woow_paas_platform.tenant_localized"
+    # 8c. 暫停排程到比對做完：web 開機後過期的排程會立刻跑、改到客戶資料列，升級後的比對就不準了。
+    #     原值存在 ir_config_parameter，verify.sh --release-crons／--cleanup（或 cron-hold.sh release）還原；
+    #     時間到了沒人放開，排程照常恢復。細節見 cron-hold.sql 檔頭。
+    if (( CRON_HOLD_MINUTES > 0 )); then
+        : "${CRON_HOLD_SQL:?}"
+        hold=$(odoo_sql -v minutes="$CRON_HOLD_MINUTES" -f "$CRON_HOLD_SQL") || die "暫停排程失敗"
+        IFS='|' read -r _ HOLD_UNTIL HOLD_CRONS HOLD_TRIGGERS <<<"$hold"
+        echo "RESTORE crons held until ${HOLD_UNTIL} UTC: ${HOLD_CRONS} 個排程、${HOLD_TRIGGERS} 個 trigger（verify.sh --release-crons 放開）"
+    fi
 else
     echo "RESTORE marker skipped (WRITE_MARKER=0)：odoo 開機時升級閘會 exit 3"
 fi

@@ -76,7 +76,8 @@ class TestParseReleaseInfo:
         return HelmService()._parse_release_info({
             "name": "svc-abc",
             "namespace": "paas-ws-test",
-            "info": {"status": "deployed", "revision": 2, "last_deployed": "x"},
+            "version": 2,
+            "info": {"status": "deployed", "last_deployed": "x"},
             "chart": {"metadata": metadata},
         })
 

@@ -59,3 +59,25 @@ class TestN8nSmtpFields1370(TransactionCase):
         self.assertNotIn('smtp-secret-1370', json.dumps(sanitized))
         self.assertEqual(sanitized['main']['config']['N8N_SMTP_HOST'], 'smtp.example.com')
         self.assertEqual(sanitized['main']['config']['N8N_SMTP_USER'], 'bot')
+
+    def test_password_prefix_not_leaked_in_api(self):
+        """DATA-N8N-008-2：租戶 SMTP 密碼不得洩漏任何字元（舊行為回傳前 8 字元 + '...'）。
+
+        平台注入、不在 specs 裡的 ``main.secret.N8N_API_KEY`` 仍維持 legacy 前綴遮罩
+        （n8n 既有 UI 靠前綴辨識），所以這裡同時鎖兩邊。
+        """
+        template = self.env.ref('woow_paas_platform.cloud_app_n8n')
+        password = 'S3cretPassw0rd-18'
+        sanitized = PaasController._sanitize_helm_values({
+            'main': {
+                'config': {'N8N_SMTP_HOST': 'smtp.example.com'},
+                'secret': {
+                    'N8N_SMTP_PASS': password,
+                    'N8N_API_KEY': 'eyJhbGciOiJIUzI1NiJ9.payload.sig',
+                },
+            },
+        }, template)
+        self.assertEqual(sanitized['main']['secret']['N8N_SMTP_PASS'], '***')
+        self.assertNotIn(password[:4], json.dumps(sanitized['main']['secret']['N8N_SMTP_PASS']))
+        self.assertEqual(sanitized['main']['secret']['N8N_API_KEY'], 'eyJhbGci...')
+        self.assertEqual(sanitized['main']['config']['N8N_SMTP_HOST'], 'smtp.example.com')

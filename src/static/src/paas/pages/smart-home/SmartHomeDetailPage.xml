@@ -220,6 +220,16 @@
                         <WoowIcon name="'vpn_key'" size="24"/>
                         <h2>Tunnel Information</h2>
                     </div>
+                    <!-- #1766：兩台機器接同一條 tunnel。放在 tunnel 資訊最上面，
+                         因為此時下面的 Status 仍然顯示「已連線」，看起來一切正常。 -->
+                    <div t-if="bindingConflict" class="alert alert-danger" role="alert">
+                        <strong>Two machines are connected to this tunnel
+                        (<t t-esc="connectorCount"/>).</strong>
+                        The public address reaches whichever answers first, so about
+                        half of all requests land on the wrong machine. Stop the Woow
+                        PaaS integration on the machine that should not have this
+                        smart home, then refresh the status.
+                    </div>
                     <div class="o_woow_tunnel_info_grid">
                         <t t-foreach="tunnelInfo" t-as="item" t-key="item.label">
                             <div class="o_woow_tunnel_info_item">
@@ -308,6 +318,7 @@
                 currentPlanId="home.subscription?.plan_id ?? undefined"
                 loadPlans="loadSmartHomePlans"
                 confirmChange="confirmSmartHomeChangePlan"
+                estimateChange="estimateSmartHomeChangePlan"
                 onClose.bind="hideChangePlan"
                 onChanged.bind="onPlanChanged"/>
 

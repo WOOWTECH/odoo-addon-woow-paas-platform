@@ -9,6 +9,8 @@ from . import test_cloud_service
 from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
+# #859：遠端 tunnel 已刪與本地 bookkeeping 失敗不可混成待重試。
+from . import test_cleanup_tunnel_859
 from . import test_workspace_cascade_cleanup
 from . import test_smart_home_template
 from . import test_security_access_template
@@ -68,6 +70,8 @@ from . import test_topup_plan_best_value
 from . import test_skip_trial_estimate
 from . import test_wallet_transaction_bonus
 from . import test_dashboard_summary
+# AUDITFIX tax-invoice-pdf-403／dashboard-next-bill-wrong
+from . import test_invoice_pdf_dashboard_auditfix
 from . import test_ecpay_invoice_carrier_mapping
 from . import test_ecpay_invoice_cron_force_issue
 from . import test_ecpay_invoice_topup
@@ -274,10 +278,14 @@ from . import test_suspended_redeploy_state_482
 from . import test_stuck_suspended_converge_497
 # fix: #478 marketplace 卡片／configure header 價格標籤（起價摘要，移除硬編 Free）
 from . import test_marketplace_price_label_478
+# X-LC-001-1／-2／-5：應用市集搜尋字面比對（% _ 不是萬用字元、比對標籤）與有範本的分類。
+from . import test_marketplace_search_x_lc_001
 # fix: #29 subscription_lifecycle_mixin 內部 subscription traversal 的 cascade sudo
 from . import test_subscription_mixin_cascade_sudo_29
 # fix: #389 低餘額通知 dedup marker 改跟著投遞下場走（排入失敗／exception 要重送）
 from . import test_low_balance_dedup_retry_389
+# AUDITFIX dunning-mail-english／payment-mail-wrong-date／dunning-lost-on-smtp-failure
+from . import test_billing_mail_auditfix
 # fix: #520 generic create 吞掉業務例外 → 被拒絕的服務仍留在 DB 並被 cron 部署
 from . import test_create_service_validation_rollback_520
 # fix: #567 Phase A PaaS controller technical exception 原文外洩
@@ -362,6 +370,8 @@ from . import test_ha_full_apporo_seed
 # ha-full 換 chart 0.1.6：使用者 2026-10-07 的決定（#1446／#1447／#1442 不做、磁碟 20G）
 # ＋既有服務 Redeploy 不擴容、政策鍵跟著範本走。
 from . import test_ha_full_016_user_decisions
+# 商用驗收 X-BK-005-2／INFRA-DOC-002-1（#1787）：ha-full 說明寫實內建備份與 OAuth 回呼網址。
+from . import test_ha_full_copy_backup_oauth
 from . import test_pi_agent_seed
 from . import test_omnigent_seed
 from . import test_code_server_seed
@@ -377,12 +387,16 @@ from . import test_public_tunnel_address
 # feat: P2 helm_value_specs format=domain（Headscale ngrok.domain）—— 存檔即擋＋中文訊息、
 # 部署組裝正規化
 from . import test_spec_format_domain
+from . import test_service_update_value_validation
+# AUDITFIX noop-save-triggers-upgrade（X-ODOO-001-1）Odoo 迴歸
+from . import test_odoo_noop_save_auditfix
 # feat: P3 一次性憑證視窗的 gateway 提示依範本（LiteLLM 前置）
 from . import test_gateway_hint_template
 # feat: Headscale／Tailscale／LiteLLM 上架 seed（範本先隱藏）—— 憑證形態（helm_secret 可自設）、
 # image 雙釘與 headscale／bootstrap 同版、對外通道標籤（中文資料值、不走 .po）、ngrok.domain 存檔即擋、
 # LiteLLM master key 走 gateway 通道＋提示、方案定價、租戶旋鈕白名單（不開 exit node／路由）
 from . import test_headscale_seed
+from . import test_n8n_seed
 from . import test_tailscale_seed
 from . import test_litellm_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
@@ -405,6 +419,8 @@ from . import test_workspace_ns_hash_677
 # B 系列＝收窄引入的回歸守線（poll 只被 list/get 兩個無 role gate 的讀取端點呼叫，
 # 其寫入改走系統身分）（HttpCase，group_user-only）
 from . import test_cloud_service_authz_676
+# AUDITFIX template-id-write-guard（#1216 的 template_id 那一格）
+from . import test_template_id_write_guard_auditfix
 
 # fix: #698 project/task ↔ cloud_service 關聯層的授權守線。Odoo 的 M2M
 # (3)/(4)/(6) 只改 relation 表、零 comodel 權限檢查 ⇒ #676 對 cloud_service 收窄
@@ -452,6 +468,8 @@ from . import test_cs_access_arc_migration_744
 # 斷言 operator 真的被呼叫且 `access_app_id` 真的落地（#739 同構）。
 from . import test_cs_access_sync_745
 from . import test_cs_access_endpoints_745
+# AI-HMCP-002-4：0 席方案不能經 access-config 開啟保護（MCP client 會被鎖在門外）。
+from . import test_cs_access_zero_seat_protect_hmcp
 
 # fix: #753 SA／route 的 create 側錨點守衛用 `vals.pop()`，擋不掉
 # `default_<field>` context 與 `ir.default` 兩個**預設值載體**（值是在
@@ -810,6 +828,8 @@ from . import test_access_resync_cron_803
 # 🔴 不共用 mixin 放 `test_*`（loader 走 `__dict__`，mixin 上的不會被執行）；
 # 共用的只有 module-level helper function。
 from . import test_change_plan_ends_trial_36
+# AUDITFIX change-plan-insufficient-balance（#1677 A1）＋未付首期發票進 dunning
+from . import test_change_plan_balance_gate_auditfix
 
 # #750 第 2 項：SA 卡片規格 sa_max_access_policies 的 0=unlimited 顯示。
 # 🔴 routes 側（0=none allowed，語意相反）的顯示繫於 #770，本檔把「維持印
@@ -1054,8 +1074,12 @@ from . import test_rollback_preserves_credentials_1433
 # R8 平台 UX（#1453 說明網址／documentation_url、#1456 同步時間時區與 helm_revision 回寫、
 # #1457 平台頁面安全標頭）。
 from . import test_platform_ux_r8
+# X-SEC-006-1／X-W-004-1：JSON-RPC 錯誤回應不對非內部使用者外流 traceback（與 #1457 同屬 ir.http 兜底）。
+from . import test_rpc_error_redaction_xsec006
 # #1432 租戶重新啟動、#1435 改金鑰後重啟、#1455 金鑰未設定／清除。
 from . import test_restart_and_secret_keys_1432
+# AI-OD-004-2 改金鑰只重啟範本宣告的 component；AI-OD-006-1 回復版本時平台功能開關跟著 image。
+from . import test_od_restart_scope_rollback_features
 # #1201：平台 addon 的 data/neutralize.sql 與計費 cron 的 database.is_neutralized guard。
 from . import test_neutralize_1201
 # #1488：helm values 白名單 fail-closed（specs 沒有任何鍵＝租戶值全部拒絕，不再全部放行）。
@@ -1072,8 +1096,13 @@ from . import test_plan_names_zh_tw_migration
 from . import test_tenant_chart_version_1525
 # #1526：回復版本不降 chart、password 型設定不跟著回復。
 from . import test_rollback_chart_floor_1526
+# #1414／#1456：帳本 helm_revision 只收正整數、回復當場記下新 revision、對話框「目前」看部署中版本。
+from . import test_helm_revision_ledger_1414
 # #1559：ngrok 連不上的原因（authtoken 錯、沒填、網域被占用、要重啟）顯示在服務頁。
 from . import test_public_tunnel_error_1559
+# 商用驗收 ngrok-ux-copy（INFRA-EMQX-020-1/2/3、INFRA-HS-013-2/3/5）：ERR_NGROK_9014 專屬文案、
+# 撤銷說明、明文提示、Headscale 退回內網址提示、進入 running 後的對外位址重探窗口與最後檢查時間。
+from . import test_ngrok_ux_copy_auditfix
 # #1534：n8n init 在 owner 已存在時不用密碼登入；舊 operator 401／998 對已確認的服務不計額度。
 from . import test_n8n_init_owner_changed_1534
 # #1542：mcp-server 家族的一次性帳密視窗（MCP 專用文案、admin_url、carrier 鏡射）。
@@ -1086,6 +1115,7 @@ from . import test_compute_quota_preflight_1647
 from . import test_custom_domain_hidden_1535
 # #1560：服務頁依角色顯示管理按鈕、權限不足訊息、重設密碼確認框、回復版本中文化。
 from . import test_service_role_ux_1560
+from . import test_hermes_copy_her3
 # #1557：LiteLLM 改管理員帳密預設保留 Gateway API Key（master key），換 key 改為明確勾選。
 from . import test_litellm_master_key_1557
 # #1555：退點時同步建立貸項並以退點沖銷原發票。
@@ -1100,6 +1130,8 @@ from . import test_n8n_plan_spec_paths_1532
 from . import test_n8n_python_disabled_1533
 # #1561：只在開通時生效的設定（Odoo 管理員 Email／示範資料）開通後唯讀。
 from . import test_create_only_settings_1561
+# INFRA-TS-004-1：條件下會被 chart 略過的設定（spec ignored_when，VPN 節點工作區模式的 tags）存檔擋下。
+from . import test_spec_ignored_when_ts004
 # #1563：欠費停權時對外網址指到共用停權說明頁（park），復權改回服務（unpark，失敗 fail-loud）。
 from . import test_suspend_route_park_1563
 # 服務品牌圖示：訂閱 API 帶模板代碼與服務類型（前台 brand_icons.js 挑圖示用）。
@@ -1130,6 +1162,7 @@ from . import test_oauth_scope_http_20261011
 from . import test_workspace_route_identity_20261011
 
 from . import test_shc_durable_provision_prototype
+from . import test_shc_durable_reconcile
 from . import test_security_access_fail_closed_ac1011
 
 from . import test_cs_sh_fail_closed_ac1011
@@ -1154,3 +1187,57 @@ from . import test_rollback_settings_sync
 # #1647 顯示：工作區頁的 CPU／記憶體／磁碟配額（上限、已佔用、剩餘、等級；成員可看、非成員不碰 operator；operator 未設定／太舊／失敗各有 reason）。
 from . import test_workspace_quota_1647
 from . import test_service_resource_observations
+
+from . import test_workspace_invitation_mail_dispatch
+# 自動撤權 v1（2026-10-14 跨 repo 契約）：SH 撤權帳本——何時記版、獨立交易、
+# fail-loud、to_dict 讀取面與租戶零存取。
+from . import test_sh_access_revision_ledger
+# 同上的真交易邊界探針（`-standard`，要 `--test-tags sh_access_revision_rollback`
+# 才會跑）：帳本列必須活過**真正的**主交易 rollback。
+from .integration import test_sh_access_revision_rollback  # noqa: F401
+from . import test_skip_trial_balance_incl_tax
+from . import test_paas_included_vat
+
+from . import test_workspace_quota_inspection_1678
+
+from . import test_workspace_quota_inspection_live_1678
+
+from . import test_workspace_quota_floor_1679
+from . import test_workspace_quota_floor_rpc_1679
+from . import test_workspace_quota_sync_1680
+from . import test_workspace_quota_sync_rpc_1680
+from . import test_workspace_quota_sync_live_1680
+from . import test_workspace_quota_floor_live_1679
+from . import test_ecpg_v4_golive
+# #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
+from . import test_tunnel_binding_1766
+
+# LLM-01b：AI 模型分頁的 Odoo 後端最小版（帳戶、開戶 cron、免費試用金鑰、tracer 端點、
+# 未設定零外呼、neutralize、真 cursor 跑 cron 的收斂）。
+from . import test_llm_tracer
+# LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
+# llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
+from . import test_llm_platform_foundation
+# INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
+from . import test_vpn_node_status_fix005
+# INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
+from . import test_vpn_node_followup_ts005
+# 商用驗收 X-SET-007／X-W-002：註冊身分（login 大小寫正規化、email 格式、空欄位中文錯誤）。
+from . import test_signup_identity_x_set_007
+
+# INFRA-FIX-019-1：租戶憑證（ngrok authtoken、Tailscale auth key）不進 helm release 歷史——
+# secret_ref 拿出 values、HMAC revision、版本閘門、Redeploy／reset／修改配置帶 tenant_secret。
+from . import test_tenant_secret_infra_fix_019_1
+
+# 商用驗收 X-BK-006-1／DATA-ODOO-005-2／AI-LLM-009-1（#1190／#1265）：備份狀態事實、每小時
+# backup-status cron、服務頁唯讀備份卡、通知中心與系統管理員告警。
+from . import test_backup_status_visibility
+# 商用驗收 X-SET-007-1／X-SEC-007-1／-2：密碼強度、忘記密碼不洩露帳號、重設請求節流。
+from . import test_password_hardening_xsec007
+from . import test_n8n_podsec_hardening
+# 商用驗收 n8n-credential-key-backup（DATA-N8N-013-1）：n8n 加密金鑰由平台產生並保存。
+from . import test_n8n_encryption_key_backup
+# INFRA-FIX-018（INFRA-HS-002-1）：重設管理員帳密不改 pod template（helm_secret 路把方案資源鍵釘到叢集現況）。
+from . import test_reset_pod_template_neutral_infra_fix_018
+from . import test_paas_mail_sender
+from . import test_service_documentation_logs

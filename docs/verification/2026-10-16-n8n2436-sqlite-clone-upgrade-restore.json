@@ -1,0 +1,235 @@
+{
+  "recorded_at": "2026-10-15T22:39:28Z",
+  "scope": "Image-only upgrade rehearsal 2.35.3 -> 2.43.6 on online SQLite backups of production services #94 and #113, in a disposable sandbox namespace (deleted). Production deployments untouched (read-only exec for the backup).",
+  "target_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261015.2215@sha256:371dd463f02e8c35a4bc5aaf9855fc4cfec1babab97e5a02a1e31923a2ec8f5a",
+  "target_image_source": "docker.io/n8nio/n8n:2.43.6 linux/amd64 manifest (index sha256:dd580fe1...), mirrored by paas-odoo-ci mirror-image.yml (approval paas-odoo-ci#344, run 20600), bytes identical",
+  "services": [
+    {
+      "service": "#94",
+      "source_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+      "online_backup": {
+        "method": "better-sqlite3 backup() inside the live pod to /tmp, chunked copy with sha256 on both ends",
+        "seconds": 6.68,
+        "bytes": 274350080,
+        "db_sha256": "50675117fd5f3c16dcf67f29f17d75dc89d1ee5f8e03b8281e925312e0dc4ffa"
+      },
+      "sandbox_safety": {
+        "namespace_deleted": true,
+        "egress": "NetworkPolicy deny-all (created before pods)",
+        "workflows_deactivated_before_start": {
+          "active_before": 14,
+          "active_after": 0,
+          "sql": "UPDATE workflow_entity SET active=0, activeVersionId=NULL",
+          "journal_mode": "wal"
+        },
+        "public_exposure": false,
+        "avoid_node": "ubuntuserver-59mqj"
+      },
+      "baseline_counts": {
+        "integrity_check": "ok",
+        "workflows_total": 29,
+        "workflows_active": 14,
+        "count_credentials_entity": 16,
+        "count_user": 1,
+        "count_execution_entity": 220,
+        "count_user_api_keys": 6,
+        "installed_packages": [
+          [
+            "n8n-nodes-browserless-api",
+            "1.2.1"
+          ]
+        ],
+        "migrations_count": 234,
+        "migrations_last": [
+          234,
+          "AddReasonToWorkflowPublicationOutbox1786519946974"
+        ]
+      },
+      "upgrade": {
+        "image_id": "docker.io/n8nio/n8n@sha256:371dd463f02e8c35a4bc5aaf9855fc4cfec1babab97e5a02a1e31923a2ec8f5a",
+        "migrations": {
+          "count": 57,
+          "first": "CreateWorkflowReviewActivityTablesAndBaseline1785843640527",
+          "last": "CreateAgentBudgetSpendTables1791209478293",
+          "duration_s": 1.27
+        },
+        "healthz_200_after_s": 9.5,
+        "readiness_200_after_s": 17.7,
+        "downtime_set_image_to_readiness_s": 32.9,
+        "image_cached_on_node": true,
+        "memory_peak_bytes": 558092288,
+        "memory_limit_bytes": 1073741824,
+        "restarts": 0
+      },
+      "post_upgrade_counts": {
+        "integrity_check": "ok",
+        "workflows_total": 30,
+        "workflows_active": 0,
+        "count_credentials_entity": 16,
+        "count_user": 1,
+        "count_execution_entity": 222,
+        "count_user_api_keys": 7,
+        "installed_packages": [
+          [
+            "n8n-nodes-browserless-api",
+            "1.2.1"
+          ]
+        ],
+        "migrations_count": 291,
+        "migrations_last": [
+          291,
+          "CreateAgentBudgetSpendTables1791209478293"
+        ]
+      },
+      "post_upgrade_counts_note": "workflow/execution/API-key deltas are sandbox test artifacts (test workflow, runs, mcp-sidecar key)",
+      "checks_2_43_6": {
+        "owner_login_http": 200,
+        "credentials_decrypt": {
+          "2.43.6": {
+            "count": 16,
+            "undecryptable": 0,
+            "decrypted_sha256": "6367ee8ede0e8f3cc6e244623a01f6c47e7cde8419e5d2271eab33d78c133138",
+            "export_file_deleted": true
+          },
+          "restore_2.35.3": {
+            "count": 16,
+            "undecryptable": 0,
+            "decrypted_sha256": "6367ee8ede0e8f3cc6e244623a01f6c47e7cde8419e5d2271eab33d78c133138",
+            "export_file_deleted": true
+          },
+          "key_names_identical": true,
+          "decrypted_data_identical": true
+        },
+        "community_nodes_loaded": "browserless, browserlessTool",
+        "mcp_sidecar_key_recreated_after_two_restarts": true,
+        "mcp_server_n8n_mcp_2_92_1": "tools/list 28 tools; health/list/get workflow, executions, credentials, datatable, versions OK; folders = license-gated",
+        "forgot_password": "500 Email sending must be set up (same on 2.35.3; no SMTP)"
+      },
+      "restore_drill_2_35_3": {
+        "pvc_and_loader_s": 16.5,
+        "push_and_extract_s": 90.0,
+        "start_to_ready_s": 28.3,
+        "total_s": 134.8,
+        "counts_match_baseline": true,
+        "owner_login_http": 200
+      }
+    },
+    {
+      "service": "#113",
+      "source_image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n:20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2",
+      "online_backup": {
+        "method": "better-sqlite3 backup() inside the live pod to /tmp, chunked copy with sha256 on both ends",
+        "seconds": 4.47,
+        "bytes": 162476032,
+        "db_sha256": "2b4720fab9feb3bbf694157a8207c4d0816923c0b12d15032701535ec6c054ba"
+      },
+      "sandbox_safety": {
+        "namespace_deleted": true,
+        "egress": "NetworkPolicy deny-all (created before pods)",
+        "workflows_deactivated_before_start": {
+          "active_before": 11,
+          "active_after": 0,
+          "sql": "UPDATE workflow_entity SET active=0, activeVersionId=NULL",
+          "journal_mode": "wal"
+        },
+        "public_exposure": false,
+        "avoid_node": "ubuntuserver-59mqj"
+      },
+      "baseline_counts": {
+        "integrity_check": "ok",
+        "workflows_total": 11,
+        "workflows_active": 11,
+        "count_credentials_entity": 6,
+        "count_user": 1,
+        "count_execution_entity": 3254,
+        "count_user_api_keys": 4,
+        "installed_packages": [
+          [
+            "n8n-nodes-browserless-api",
+            "1.2.1"
+          ]
+        ],
+        "migrations_count": 234,
+        "migrations_last": [
+          234,
+          "AddReasonToWorkflowPublicationOutbox1786519946974"
+        ]
+      },
+      "upgrade": {
+        "image_id": "docker.io/n8nio/n8n@sha256:371dd463f02e8c35a4bc5aaf9855fc4cfec1babab97e5a02a1e31923a2ec8f5a",
+        "migrations": {
+          "count": 57,
+          "first": "CreateWorkflowReviewActivityTablesAndBaseline1785843640527",
+          "last": "CreateAgentBudgetSpendTables1791209478293",
+          "duration_s": 1.31
+        },
+        "healthz_200_after_s": 7.7,
+        "readiness_200_after_s": 15.8,
+        "downtime_set_image_to_readiness_s": 27.6,
+        "image_cached_on_node": true,
+        "memory_peak_bytes": 556167168,
+        "memory_limit_bytes": 1073741824,
+        "restarts": 0
+      },
+      "post_upgrade_counts": {
+        "integrity_check": "ok",
+        "workflows_total": 12,
+        "workflows_active": 0,
+        "count_credentials_entity": 6,
+        "count_user": 1,
+        "count_execution_entity": 3255,
+        "count_user_api_keys": 5,
+        "installed_packages": [
+          [
+            "n8n-nodes-browserless-api",
+            "1.2.1"
+          ]
+        ],
+        "migrations_count": 291,
+        "migrations_last": [
+          291,
+          "CreateAgentBudgetSpendTables1791209478293"
+        ]
+      },
+      "post_upgrade_counts_note": "workflow/execution/API-key deltas are sandbox test artifacts (test workflow, runs, mcp-sidecar key)",
+      "checks_2_43_6": {
+        "owner_login_http": 200,
+        "credentials_decrypt": {
+          "2.43.6": {
+            "count": 6,
+            "undecryptable": 0,
+            "decrypted_sha256": "abe92d97ebf95b204887a8dd1f479bb2affa021af57c5c2237dce035a726aa72",
+            "export_file_deleted": true
+          },
+          "restore_2.35.3": {
+            "count": 6,
+            "undecryptable": 0,
+            "decrypted_sha256": "abe92d97ebf95b204887a8dd1f479bb2affa021af57c5c2237dce035a726aa72",
+            "export_file_deleted": true
+          },
+          "key_names_identical": true,
+          "decrypted_data_identical": true
+        },
+        "community_nodes_loaded": "browserless, browserlessTool",
+        "mcp_sidecar_key_recreated_after_two_restarts": true,
+        "mcp_server_n8n_mcp_2_92_1": "tools/list 28 tools; health/list/get workflow, executions, credentials, datatable, versions OK; folders = license-gated",
+        "forgot_password": "500 Email sending must be set up (same on 2.35.3; no SMTP)"
+      },
+      "restore_drill_2_35_3": {
+        "pvc_and_loader_s": 15.7,
+        "push_and_extract_s": 66.8,
+        "start_to_ready_s": 29.2,
+        "total_s": 111.7,
+        "counts_match_baseline": true,
+        "owner_login_http": 200
+      }
+    }
+  ],
+  "qa_250_insights_error": "Cause: QA workflows deleted within 30 s of running; insights flush retries every 30 s forever on 2.35.3/2.38.0. Reproduced on 2.35.3; 2.43.6 drops the orphaned insights once and stops.",
+  "findings": [
+    "2.43.6 memory peak ~25% lower than 2.35.3 in sandbox (no active workflows); #113 production already reaches ~907 MB of its 1Gi limit on 2.35.3",
+    "Deleting the pod (instead of Recreate rollout) briefly overlaps two n8n pods on the same SQLite",
+    "2.43.6 logs a deprecation warning for N8N_RUNNERS_MODE=internal"
+  ],
+  "not_changed": "No N8N_PROXY_HOPS / N8N_WEBHOOK_URL added (owner decision 2026-10-16: image swap only)"
+}

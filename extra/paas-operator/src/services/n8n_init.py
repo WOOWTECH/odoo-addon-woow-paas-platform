@@ -47,8 +47,53 @@ _API_KEY_LABEL = "mcp-sidecar"
 #: （scripts/audit/init_n8n_budget.py 會把 1 次列出＋本上限次刪除計入 envelope）。
 _MAX_KEY_DELETES = 3
 _KEY_PRUNE_REQUEST_TIMEOUT = 10
-#: 與上面 POST /rest/api-keys 的 expiresAt 相同（2100-01-01），exec 路徑簽出的 key 一樣不實際過期。
-_API_KEY_EXPIRES_AT = 4102444800
+#: DATA-N8N-006-1（期限）：sidecar key 的有效期（秒）。兩條簽發路徑（首次開通的
+#: ``POST /rest/api-keys``、owner 已存在時的 ``ensure_api_key.js``）都用「現在＋本值」當期限。
+#: 以前寫死 2100-01-01（unix 秒常數）＝永不過期：key 的明文在 Secret（也可能被租戶複製到別處），
+#: 外洩一次就永久有效。
+#:
+#: 為什麼是 365 天、不是 90 天：目前只有 init 重跑（Redeploy／重試開通）會輪替，平台沒有定期
+#: 輪替的排程——sidecar 從 secretKeyRef 讀 key，換 key 就要重啟 n8n pod，要不要定期重啟租戶服務
+#: 是產品決定（另案）。期限太短，一季沒 Redeploy 的服務 sidecar 就會 401。有了定期輪替之後再縮短。
+_API_KEY_TTL_SECONDS = 365 * 86400
+#: init 重跑時，既有 key 剩不到這麼久就換新（``ensure_api_key.js`` 的沿用判斷）。半年：期限的
+#: 後半段任何一次 Redeploy 都會續期，前半段的 Redeploy 不換 key（減少不必要的輪替）。
+_API_KEY_ROTATE_BEFORE_SECONDS = 180 * 86400
+
+
+def api_key_expires_at(now: Optional[float] = None) -> int:
+    """新簽 sidecar key 的期限（unix 秒）：現在＋``_API_KEY_TTL_SECONDS``。"""
+    return int(time.time() if now is None else now) + _API_KEY_TTL_SECONDS
+
+#: DATA-N8N-006-1：mcp-sidecar 的 API key 只授與 MCP 工具實際用得到的 scope（allowlist）。
+#: 以前一律帶 ``GET /rest/api-keys/scopes`` 的全部 88 個，含 user:create／delete／changeRole、
+#: role:manage、ldap／saml／oidc:manage、securitySettings:manage、communityPackage:install、
+#: sourceControl:pull、eventBusDestination:*——sidecar 一旦被攻破（或 MCP 的工具被誘導）就等於
+#: n8n 實例管理權。allowlist 而不是 denylist：n8n 將來新增的管理類 scope 預設不會被授與，
+#: 需要時再明確加進來。
+#:
+#: 對應 MCP 工具（n8n-mcp 的 28 支）：workflow（含 activate／export／import／move）、execution、
+#: credential、tag／workflowTags／executionTags、folder、variable、dataTable*、testRun（evaluations）、
+#: securityAudit:generate（n8n_audit_instance）、insights:read、project:list（挑專案）。
+#: ⚠ 與 ``n8n_scripts/ensure_api_key.js`` 的 ``SIDECAR_SCOPE_PREFIXES``／``SIDECAR_SCOPE_EXACT``
+#: 必須相同（tests/test_n8n_sidecar_scopes_dn006.py 對帳）。
+_SIDECAR_SCOPE_PREFIXES = (
+    "workflow:", "workflowTags:", "execution:", "executionTags:", "credential:", "tag:",
+    "folder:", "variable:", "dataTable", "testRun:", "insights:", "securityAudit:",
+)
+_SIDECAR_SCOPE_EXACT = frozenset({"project:list"})
+
+
+def sidecar_scopes(available) -> list:
+    """從 n8n 提供的 scope 清單挑出 mcp-sidecar 該有的（保留 n8n 的順序、去重）。"""
+    seen, kept = set(), []
+    for scope in available or []:
+        if not isinstance(scope, str) or scope in seen:
+            continue
+        if scope in _SIDECAR_SCOPE_EXACT or scope.startswith(_SIDECAR_SCOPE_PREFIXES):
+            seen.add(scope)
+            kept.append(scope)
+    return kept
 
 #: #1534：owner 已存在時沿用／簽發 API key 的腳本。import 時就讀——檔案不見要在 operator 啟動
 #: 當下就炸，不要等到 Redeploy 才發現。
@@ -578,14 +623,23 @@ class N8nInitService:
 
         try:
             # First, discover available scopes
-            scopes = self._get_api_key_scopes(namespace, pod_name, container, cookie)
-            logger.info("Available API key scopes: %s", scopes)
+            available = self._get_api_key_scopes(namespace, pod_name, container, cookie)
+            # DATA-N8N-006-1：只授與 sidecar 用得到的 scope（見 _SIDECAR_SCOPE_PREFIXES）。
+            scopes = sidecar_scopes(available)
+            logger.info("API key scopes: granting %d of %d available", len(scopes), len(available))
+            if not scopes:
+                raise N8nInitError(
+                    "none of the scopes n8n offers are usable by the MCP sidecar",
+                    step="create_api_key",
+                    kind="failed",
+                )
 
+            expires_at = api_key_expires_at()
             resp = self._node_request(
                 namespace, pod_name, container,
                 "POST", "/rest/api-keys",
-                # expiresAt=null means no expiration; use far-future timestamp if null not accepted
-                body={"label": _API_KEY_LABEL, "scopes": scopes, "expiresAt": 4102444800},
+                # DATA-N8N-006-1：有限期限（unix 秒），不再用 2100-01-01。
+                body={"label": _API_KEY_LABEL, "scopes": scopes, "expiresAt": expires_at},
                 headers={"Cookie": cookie},
             )
 
@@ -607,7 +661,7 @@ class N8nInitService:
                     step="create_api_key",
                 )
 
-            logger.info("API key created successfully")
+            logger.info("API key created successfully (expires at %s)", expires_at)
             return api_key
 
         except KubectlException as e:
@@ -633,7 +687,8 @@ class N8nInitService:
         payload = json.dumps({
             "label": _API_KEY_LABEL,
             "expected_email": expected_email,
-            "expires_at": _API_KEY_EXPIRES_AT,
+            "expires_at": api_key_expires_at(),
+            "rotate_before_seconds": _API_KEY_ROTATE_BEFORE_SECONDS,
         })
         try:
             result = self.k8s.exec_in_pod(
@@ -659,8 +714,9 @@ class N8nInitService:
             raise N8nInitError(
                 "API key script returned no parsable result", step="ensure_api_key", kind="unknown")
         if reported.get("success") is True and reported.get("api_key"):
-            logger.info("n8n API key %s without the owner password",
-                        "reused" if reported.get("reused") else "issued")
+            logger.info("n8n API key %s without the owner password (expires at %s)",
+                        "reused" if reported.get("reused") else "issued",
+                        reported.get("expires_at") or "unknown")
             return reported["api_key"]
         code = reported.get("code")
         error = str(reported.get("error") or "API key script reported a failure")

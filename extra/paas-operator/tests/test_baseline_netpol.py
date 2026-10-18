@@ -3,6 +3,10 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from src.services.tenant_baseline import (
+    DATA_STORE_COMPONENTS,
+    build_cross_ns_ingress_pod_selector,
+)
 from src.services.helm import (
     REACH_WS_LABEL_VALUE,
     KubernetesService,
@@ -75,10 +79,16 @@ def test_baseline_bundle_stg_four_nps(mock_settings):
     for x in m:
         assert x["apiVersion"] == "networking.k8s.io/v1"
         assert x["kind"] == "NetworkPolicy"
-        assert x["spec"]["podSelector"] == {}          # 蓋 n8n sidecar app pod
         assert x["spec"]["policyTypes"] == ["Ingress"]  # egress 不由 baseline 管（leg-1 管）
         assert x["metadata"]["labels"] == {"paas-managed": "true"}
         assert x["metadata"]["namespace"] == "paas-ws-stg-abc123"
+    by_name = {x["metadata"]["name"]: x for x in m}
+    # 同 ns 兩條仍是整個 ns（蓋 n8n sidecar app pod）
+    assert by_name["paas-baseline-default-deny-ingress"]["spec"]["podSelector"] == {}
+    assert by_name["paas-baseline-allow-same-ns"]["spec"]["podSelector"] == {}
+    # R13：跨 ns 兩條排除資料庫 pod
+    for name in ("paas-baseline-allow-cloudflared", "paas-baseline-allow-mcp-reach"):
+        assert by_name[name]["spec"]["podSelector"] == build_cross_ns_ingress_pod_selector()
 
 
 @patch("src.services.helm.settings")
@@ -233,3 +243,109 @@ def test_stamp_managed_ns_labels_agent_ns_add_only(mock_settings):
     assert "woow.tw/reach-ws-5=true" in cmd
     assert "paas.woowtech.io/env=stg" in cmd
     assert all("=" in a for a in cmd[4:])   # 全 add-only、無 delete syntax
+
+
+# --- R13：跨 ns 入口不放行資料庫 pod ------------------------------------------------
+
+
+def _selects(selector: dict, labels: dict) -> bool:
+    """最小的 LabelSelector 求值（matchLabels＋In／NotIn／Exists／DoesNotExist），語意同 k8s。"""
+    for k, v in (selector.get("matchLabels") or {}).items():
+        if labels.get(k) != v:
+            return False
+    for expr in selector.get("matchExpressions") or []:
+        key, op, values = expr["key"], expr["operator"], expr.get("values") or []
+        if op == "In" and labels.get(key) not in values:
+            return False
+        if op == "NotIn" and key in labels and labels[key] in values:
+            return False
+        if op == "Exists" and key not in labels:
+            return False
+        if op == "DoesNotExist" and key in labels:
+            return False
+    return True
+
+
+# 2026-10-15 正式站 53 個 paas-ws-* 的實際 pod 標籤（只取 selector 會看的三個鍵）＋
+# woow-paas-charts main ffcf2cd 裡還沒部署的資料庫 component。
+_REACHABLE_POD_LABELS = [
+    # (說明, labels)
+    ("litellm app :4000", {"app.kubernetes.io/name": "litellm", "app.kubernetes.io/component": "app"}),
+    ("n8n（無 component 標籤）", {"app.kubernetes.io/name": "n8n"}),
+    ("odoo server（nginx :8080）", {"app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "server"}),
+    ("haos virt-launcher", {"app.kubernetes.io/name": "haos", "app.kubernetes.io/component": "haos"}),
+    ("haos xff-proxy", {"app.kubernetes.io/name": "haos", "app.kubernetes.io/component": "xff-proxy"}),
+    ("home-assistant", {"app.kubernetes.io/name": "home-assistant", "app.kubernetes.io/component": "home-assistant"}),
+    ("home-assistant-full", {"app.kubernetes.io/name": "home-assistant-full", "app.kubernetes.io/component": "home-assistant-full"}),
+    ("mcp-server", {"app.kubernetes.io/name": "mcp-server", "app.kubernetes.io/component": "mcp-server"}),
+    ("emqx broker", {"app.kubernetes.io/name": "emqx", "app.kubernetes.io/component": "broker"}),
+    ("headscale", {"app.kubernetes.io/name": "headscale", "app.kubernetes.io/component": "vpn-control"}),
+    ("tailscale", {"app.kubernetes.io/name": "tailscale", "app.kubernetes.io/component": "vpn-node"}),
+    ("code-server", {"app.kubernetes.io/name": "code-server", "app.kubernetes.io/component": "code-server"}),
+    ("pi-agent", {"app.kubernetes.io/name": "pi-agent", "app.kubernetes.io/component": "pi-agent"}),
+    ("omnigent server", {"app.kubernetes.io/name": "omnigent", "app.kubernetes.io/component": "server"}),
+    ("omnigent llm-proxy", {"app.kubernetes.io/name": "omnigent-llm-proxy", "app.kubernetes.io/component": "llm-proxy"}),
+    ("open-design daemon", {"app.kubernetes.io/name": "open-design", "app.kubernetes.io/component": "daemon"}),
+    ("open-design console", {"app.kubernetes.io/name": "open-design-console", "app.kubernetes.io/component": "console"}),
+    ("hermes-agent daemon", {"app.kubernetes.io/name": "hermes-agent", "app.kubernetes.io/component": "daemon"}),
+    ("nextcloud app", {"app.kubernetes.io/name": "nextcloud", "app.kubernetes.io/component": "app"}),
+    ("vibe-kanban electric", {"app.kubernetes.io/name": "vibe-kanban", "app.kubernetes.io/component": "electric"}),
+    ("omnigent sandbox host（無 app.kubernetes.io 標籤）", {"app.kubernetes.io/managed-by": "omnigent"}),
+    ("完全沒有標籤的 pod", {}),
+]
+
+_DATA_STORE_POD_LABELS = [
+    ("litellm postgresql", {"app.kubernetes.io/name": "litellm", "app.kubernetes.io/component": "postgresql"}),
+    ("woow-odoo postgresql", {"app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "postgresql"}),
+    ("woow-odoo db-backup Job", {"app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "db-backup"}),
+    ("woow-odoo db-restore Job", {"app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "db-restore"}),
+    ("nextcloud postgresql", {"app.kubernetes.io/name": "nextcloud", "app.kubernetes.io/component": "postgresql"}),
+    ("nextcloud redis", {"app.kubernetes.io/name": "nextcloud", "app.kubernetes.io/component": "redis"}),
+    ("hermes-agent database", {"app.kubernetes.io/name": "hermes-agent", "app.kubernetes.io/component": "database"}),
+    ("hermes-agent cache", {"app.kubernetes.io/name": "hermes-agent", "app.kubernetes.io/component": "cache"}),
+    ("vibe-kanban remote-db", {"app.kubernetes.io/name": "vibe-kanban", "app.kubernetes.io/component": "remote-db"}),
+    ("Bitnami 式 postgresql 子 chart", {"app.kubernetes.io/name": "postgresql", "app.kubernetes.io/component": "primary"}),
+    ("Bitnami 式 redis 子 chart", {"app.kubernetes.io/name": "redis", "app.kubernetes.io/component": "master"}),
+    ("管理者 Omnigent 手動 PostgreSQL", {"app": "omnigent-pg", "woow.tw/manual": "omnigent-cutover"}),
+    ("管理者 Omnigent 手動備份 Job", {"app": "omnigent-pg-backup", "woow.tw/manual": "omnigent-cutover"}),
+]
+
+
+@pytest.mark.parametrize("desc,labels", _REACHABLE_POD_LABELS, ids=[d for d, _ in _REACHABLE_POD_LABELS])
+def test_cross_ns_selector_keeps_every_app_pod(desc, labels):
+    """R13 不可讓任何現有服務的公開網址斷線：所有 app／proxy pod（含沒標籤的）仍被選到。"""
+    assert _selects(build_cross_ns_ingress_pod_selector(), labels), desc
+
+
+@pytest.mark.parametrize("desc,labels", _DATA_STORE_POD_LABELS, ids=[d for d, _ in _DATA_STORE_POD_LABELS])
+def test_cross_ns_selector_excludes_data_stores(desc, labels):
+    """R13：cloudflared／agent ns 進不到任何資料庫 pod（只剩 allow-same-ns 放行）。"""
+    assert not _selects(build_cross_ns_ingress_pod_selector(), labels), desc
+
+
+def test_cross_ns_selector_only_notin():
+    """只用 NotIn：沒有該標籤的 pod 一律照舊放行（不可改成 In 列舉，會漏 chart 而斷線）。"""
+    sel = build_cross_ns_ingress_pod_selector()
+    assert "matchLabels" not in sel
+    assert {e["operator"] for e in sel["matchExpressions"]} == {"NotIn"}
+    assert all(e["values"] for e in sel["matchExpressions"])  # 空 values 的 NotIn 會被 API 拒絕
+
+
+def test_cross_ns_selector_returns_fresh_lists():
+    """呼叫端改回傳值不會污染模組常數（manifest 之後會被 yaml dump／比對）。"""
+    sel = build_cross_ns_ingress_pod_selector()
+    sel["matchExpressions"][0]["values"].append("x")
+    assert "x" not in DATA_STORE_COMPONENTS
+
+
+@patch("src.services.helm.settings")
+def test_ports_not_restricted_on_cross_ns_rules(mock_settings):
+    """不限 port（同 ns 多服務、對外埠各異；逐 release 收斂是後續項）——鎖住目前行為，改的人要看 PR 說明。"""
+    mock_settings.paas_env = "prod"
+    mock_settings.cloudflared_namespace = ""
+    mock_settings.namespace_prefix = "paas-ws-"
+    mock_settings.tenant_baseline_egress_enabled = False
+    m = _capture(ns="paas-ws-abc123")
+    for x in m:
+        for rule in x["spec"].get("ingress") or []:
+            assert "ports" not in rule

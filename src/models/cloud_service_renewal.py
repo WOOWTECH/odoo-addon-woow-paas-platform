@@ -244,7 +244,13 @@ class CloudServiceRenewal(models.Model):
         draft._onchange_sh_product_id()
         currency = draft.currency_id or self.env.company.currency_id
         total = draft._sh_get_period_billing_amount()
-        untaxed = currency.round(draft._sh_get_invoice_price_unit() * draft.sh_qty)
+        price = draft._sh_get_invoice_price_unit() * draft.sh_qty
+        # 2026-10-14 政策 A（內含稅）：未稅額取 compute_all 的 total_excluded；原本直接拿單價
+        # 當未稅，內含稅時會顯示「未稅 300、稅 0」。
+        untaxed = currency.round(draft.sh_taxes_ids.compute_all(
+            draft._sh_get_invoice_price_unit(), currency=currency, quantity=draft.sh_qty,
+            product=draft.product_id, partner=draft.sh_partner_id,
+        )['total_excluded'] if draft.sh_taxes_ids else price)
         tax_amount = currency.round(total - untaxed)
         delta = _CYCLE_DELTAS.get(plan.sh_unit, _CYCLE_DELTAS['month'])(plan.sh_duration or 1)
         return {

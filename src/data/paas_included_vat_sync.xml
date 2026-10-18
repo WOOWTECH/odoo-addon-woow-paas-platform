@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- 2026-10-14 政策 A（PaaS 標價含 5% 營業稅）。
+         noupdate="0"（預設）：每次 module upgrade (-u) 都重跑，把模組 seed 的訂閱商品與
+         WALLET_TOPUP 的（該公司）稅收斂成 PaaS 專用內含稅。seed XML 是 noupdate=1 且明寫
+         空 taxes_id，日後新增的訂閱商品靠這裡收斂。公司沒有 5% 銷項稅可當來源時 no-op
+         （見 models/paas_included_vat.py）。進行中訂閱的稅快照只由 migration 18.0.1.0.237
+         一次性轉換，不在這裡做。 -->
+    <function
+        model="product.template"
+        name="_woow_sync_paas_included_vat"/>
+</odoo>

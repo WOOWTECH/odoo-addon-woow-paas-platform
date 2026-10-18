@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +145,9 @@ def scan_addons(dirs, digest_filter=None):
                 "installable": data.get("installable", True),
                 "auto_install": bool(data.get("auto_install", False)),
             }
+            if module_dir.is_symlink():
+                # 模組根目錄本身是連結：dir_digest 會沿著它列舉內容，導出時也要打包連結指向的內容（#1844）
+                entry["root_symlink"] = os.readlink(module_dir)
             if digest_filter and digest_filter(str(base_path)):
                 entry["digest"] = dir_digest(module_dir)
                 entry["git"] = git_info(module_dir, base_path)
@@ -305,14 +309,48 @@ def _table_exists(cur, name):
     return cur.fetchone()[0] is not None
 
 
+def classify_pos_sessions(rows):
+    """把未關帳的 POS session 分成「凍結前必須關帳」與「停在開帳步驟、沒開始過」兩類（#1758）。
+
+    rows：(id, name, state, started, orders)，started＝start_at 有值、orders＝該 session 的訂單數。
+    `opening_control` 且沒有 start_at、沒有訂單＝有人打開 POS 但沒按開帳：前端停在開帳視窗不能點單，
+    平板上不會有未同步的訂單，照原狀搬過去、店家在新站接著開帳即可。其餘一律算「開著」。
+    回傳 (open_count, idle)；idle 是 [{"id", "name"}]。
+    """
+    open_count, idle = 0, []
+    for sid, name, state, started, orders in rows:
+        if state == "opening_control" and not started and not orders:
+            idle.append({"id": sid, "name": name})
+        else:
+            open_count += 1
+    return open_count, idle
+
+
+def connect(dbname, params, attempts=30, delay=2.0):
+    """psycopg2.connect，連不上時重試。
+
+    export.sh 的 helper pod 是新起的：來源 ns 的 NetworkPolicy 要一點時間才放行它的 IP，剛 Ready 就連
+    PG 會被拒（harumi prod 彩排實測連續兩次 Connection refused，#136 同型）。
+    """
+    import psycopg2
+    for attempt in range(1, attempts + 1):
+        try:
+            return psycopg2.connect(dbname=dbname, **params)
+        except psycopg2.OperationalError as e:
+            if attempt == attempts:
+                raise
+            print("connect retry %d/%d: %s" % (attempt, attempts - 1, str(e).strip().splitlines()[0]),
+                  file=sys.stderr)
+            time.sleep(delay)
+
+
 def pick_db(params, explicit, conf):
     if explicit:
         return explicit
     name = _conf_value(conf, "db_name")
     if name and "," not in name:
         return name
-    import psycopg2
-    conn = psycopg2.connect(dbname="postgres", **params)
+    conn = connect("postgres", params)
     try:
         with conn.cursor() as cur:
             names = [r[0] for r in _rows(cur, "SELECT datname FROM pg_database WHERE NOT datistemplate "
@@ -326,7 +364,7 @@ def pick_db(params, explicit, conf):
 
 def db_stats(params, dbname):
     import psycopg2
-    conn = psycopg2.connect(dbname=dbname, **params)
+    conn = connect(dbname, params)
     conn.set_session(readonly=True)
     out = {"name": dbname}
     try:
@@ -384,8 +422,11 @@ def db_stats(params, dbname):
                     "%s:%s" % r for r in _rows(cur, "SELECT code, state FROM payment_provider "
                                                     "WHERE state <> 'disabled' ORDER BY 1")]
             if _table_exists(cur, "pos_session"):
-                out["pos_sessions_open"] = _rows(cur, "SELECT count(*) FROM pos_session "
-                                                      "WHERE state <> 'closed'")[0][0]
+                orders = ("(SELECT count(*) FROM pos_order o WHERE o.session_id = s.id)"
+                          if _table_exists(cur, "pos_order") else "0")
+                out["pos_sessions_open"], out["pos_sessions_idle_opening"] = classify_pos_sessions(_rows(
+                    cur, "SELECT s.id, s.name, s.state, s.start_at IS NOT NULL, %s FROM pos_session s "
+                         "WHERE s.state <> 'closed' ORDER BY s.id" % orders))
             if _table_exists(cur, "pos_order"):
                 out["pos_orders_draft"] = _rows(cur, "SELECT count(*) FROM pos_order "
                                                      "WHERE state = 'draft'")[0][0]
@@ -545,6 +586,30 @@ class ChunkedPut:
         return self.total, self.digest.hexdigest()
 
 
+def wait_for_receiver(url, attempts=30, delay=2.0):
+    """等 receiver 的 /healthz 回 200。
+
+    helper pod 剛起來時，目標 ns 放行來源 ns 的 NetworkPolicy 也還沒套到它的 IP，第一個 PUT 會被拒
+    （沙盒實測 Connection refused）；先等連得上再開始匯出，免得 DB snapshot 開了才失敗。
+    """
+    parsed = urllib.parse.urlparse(url)
+    for attempt in range(1, attempts + 1):
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=10)
+        try:
+            conn.request("GET", "/healthz")
+            if conn.getresponse().status == 200:
+                return
+            err = "not ready"
+        except OSError as e:
+            err = str(e)
+        finally:
+            conn.close()
+        if attempt == attempts:
+            raise SystemExit("receiver %s unreachable: %s" % (parsed.netloc, err))
+        print("receiver retry %d/%d: %s" % (attempt, attempts - 1, err), file=sys.stderr)
+        time.sleep(delay)
+
+
 def put_bytes(url, name, token, data):
     up = ChunkedPut(url, name, token)
     up.write(data)
@@ -556,6 +621,7 @@ def run_export(args):
     token = os.environ.get("UPLOAD_TOKEN") or ""
     if not token:
         raise SystemExit("UPLOAD_TOKEN env is required")
+    wait_for_receiver(args.url)
     conf = read_conf(find_conf(args.conf))
     params = db_params(conf)
     dbname = pick_db(params, args.db, conf)
@@ -563,7 +629,7 @@ def run_export(args):
     fs_root = Path(data_dir) / "filestore" / dbname
     sums = {}
 
-    conn = psycopg2.connect(dbname=dbname, **params)
+    conn = connect(dbname, params)
     conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
     with conn.cursor() as cur:
         cur.execute("SELECT pg_export_snapshot()")

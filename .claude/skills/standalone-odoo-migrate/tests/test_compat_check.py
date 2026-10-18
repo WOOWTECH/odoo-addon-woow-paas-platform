@@ -176,6 +176,21 @@ class TestClassify(unittest.TestCase):
                                ("100.64.3.2", True), ("", False), (None, False)):
             self.assertEqual(compat_check.cluster_internal(host), expected, host)
 
+    def test_notes_split_open_and_idle_pos_sessions(self):
+        # #1758：harumi 的 session 185 停在 opening_control、0 訂單——不算「開著」，另列一行說明可以凍結
+        _rows, inv, tgt, _ci = self.run_classify({"base": {"state": "installed", "version": "18.0.1.3"}})
+        inv["db"]["pos_sessions_open"] = 0
+        inv["db"]["pos_orders_draft"] = 0
+        inv["db"]["pos_sessions_idle_opening"] = [{"id": 185, "name": "餐廳/00005"}]
+        out, _blocks = compat_check.notes(inv, tgt, None)
+        text = "\n".join(out)
+        self.assertNotIn("凍結時必須為 0", text)
+        self.assertIn("1 個 session 停在開帳步驟", text)
+        self.assertIn("餐廳/00005", text)
+        inv["db"]["pos_sessions_open"] = 1
+        out, _blocks = compat_check.notes(inv, tgt, None)
+        self.assertIn("開啟中的 session 1", "\n".join(out))
+
     def test_db_newer_than_image_blocks(self):
         rows, *_ = self.run_classify({"in_image": {"state": "installed", "version": "18.0.1.1"}})
         self.assertEqual(rows["in_image"]["status"], "BLOCK_DOWNGRADE")

@@ -25,6 +25,8 @@ const SECTION_BY_ROUTE = {
   "ai-tasks": "projects",
   "ai-task-detail": "projects",
   "ai-chat": "projects",
+  // LLM-01c：只有一個 routeName（子頁共用），側欄與底欄都亮「AI 模型」。
+  llm: "llm",
   billing: "billing",
   "billing-subscriptions": "billing",
   "billing-transactions": "billing",
@@ -43,7 +45,7 @@ export function sidebarSection(routeName) {
   return SECTION_BY_ROUTE[routeName] || null;
 }
 
-/** Bottom-nav granularity: only five tabs, so finance sub-pages fold into Billing. */
+/** Bottom-nav granularity: only five or six tabs, so finance sub-pages fold into Billing. */
 export function bottomNavSection(routeName) {
   const section = SECTION_BY_ROUTE[routeName] || null;
   if (section === "invoices" || section === "topup") return "billing";

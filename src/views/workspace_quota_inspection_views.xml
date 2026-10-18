@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <record id="view_workspace_quota_inspection_list" model="ir.ui.view">
+        <field name="name">workspace.quota.inspection.list</field>
+        <field name="model">woow_paas_platform.workspace</field>
+        <!-- 不可成為 Workspace 預設 view（預設 view 見 workspace_views.xml），只由下方 action 綁定。 -->
+        <field name="priority">90</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+        <field name="arch" type="xml">
+            <list string="Workspace Quota Observations" create="false" edit="false" delete="false"
+                  limit="5" decoration-warning="not quota_available">
+                <field name="name"/>
+                <field name="quota_status"/>
+                <field name="quota_available" column_invisible="True"/>
+                <field name="quota_reason" optional="show"/>
+                <field name="quota_observed_at"/>
+                <field name="quota_namespace" optional="hide"/>
+                <field name="quota_name" optional="hide"/>
+                <field name="quota_uid" optional="hide"/>
+                <field name="quota_resource_version" optional="hide"/>
+                <field name="quota_cpu_requests_hard" optional="show"/>
+                <field name="quota_cpu_requests_used" optional="show"/>
+                <field name="quota_cpu_limits_hard" optional="show"/>
+                <field name="quota_cpu_limits_used" optional="show"/>
+                <field name="quota_memory_requests_hard" optional="show"/>
+                <field name="quota_memory_requests_used" optional="show"/>
+                <field name="quota_memory_limits_hard" optional="show"/>
+                <field name="quota_memory_limits_used" optional="show"/>
+                <field name="quota_storage_requests_hard" optional="show"/>
+                <field name="quota_storage_requests_used" optional="show"/>
+                <field name="quota_floor_cpu_display" optional="hide"/>
+                <field name="quota_floor_memory_display" optional="hide"/>
+                <field name="quota_floor_storage_display" optional="hide"/>
+                <field name="quota_sync_status" optional="show"
+                       decoration-danger="quota_sync_status in ('exhausted', 'blocked')"
+                       decoration-warning="quota_sync_status in ('pending', 'unconfirmed')"
+                       decoration-success="quota_sync_status == 'synced'"/>
+                <field name="quota_sync_unguarded" optional="hide"/>
+                <field name="quota_next_retry_at" optional="hide"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_workspace_quota_inspection_form" model="ir.ui.view">
+        <field name="name">workspace.quota.inspection.form</field>
+        <field name="model">woow_paas_platform.workspace</field>
+        <!-- 不可成為 Workspace 預設 view（預設 view 見 workspace_views.xml），只由下方 action 綁定。 -->
+        <field name="priority">90</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+        <field name="arch" type="xml">
+            <form string="Workspace Quota Observation" create="false" edit="false" delete="false">
+                <header>
+                    <button name="action_refresh_quota" type="object" string="Refresh Observation"
+                            class="oe_highlight" groups="base.group_system"/>
+                    <button name="action_open_quota_minimum_wizard" type="object"
+                            string="Set Quota Minimums" groups="base.group_system"/>
+                    <button name="action_retry_quota_sync" type="object" string="Retry Quota Sync"
+                            groups="base.group_system"
+                            confirm="Retry the quota sync now with the current policy? The push never lowers any cluster value; a blocked push stays blocked."/>
+                </header>
+                <sheet>
+                    <h1><field name="name" readonly="True"/></h1>
+                    <div class="alert alert-warning" role="alert" invisible="quota_available">
+                        Quota observation is unknown or unavailable. Missing values are unknown, not zero.
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="quota_sync_status != 'exhausted'">
+                        Automatic quota sync retries are exhausted. Check the sync detail, then use Retry Quota Sync.
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="not quota_sync_unguarded">
+                        The operator does not support versioned quota writes, so pushes are made without protection.
+                        An older request that finishes late could overwrite a newer value. Upgrade the operator.
+                    </div>
+                    <p>These are declared ResourceQuota allocations, not live resource utilization.
+                        The observation time is the read time, not a guarantee of quota controller reconciliation or rollout capacity.</p>
+                    <group>
+                        <group string="Observation">
+                            <field name="quota_status"/>
+                            <field name="quota_available" invisible="True"/>
+                            <field name="quota_reason"/>
+                            <field name="quota_observed_at"/>
+                        </group>
+                        <group string="Managed ResourceQuota Identity">
+                            <field name="quota_namespace"/>
+                            <field name="quota_name"/>
+                            <field name="quota_uid"/>
+                            <field name="quota_resource_version"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="CPU (cores; m = millicores)">
+                            <field name="quota_cpu_requests_hard"/>
+                            <field name="quota_cpu_requests_used"/>
+                            <field name="quota_cpu_limits_hard"/>
+                            <field name="quota_cpu_limits_used"/>
+                        </group>
+                        <group string="Memory (Kubernetes quantities)">
+                            <field name="quota_memory_requests_hard"/>
+                            <field name="quota_memory_requests_used"/>
+                            <field name="quota_memory_limits_hard"/>
+                            <field name="quota_memory_limits_used"/>
+                        </group>
+                        <group string="Storage (Kubernetes quantities)">
+                            <field name="quota_storage_requests_hard"/>
+                            <field name="quota_storage_requests_used"/>
+                        </group>
+                    </group>
+                    <separator string="Quota Policy"/>
+                    <p>The target is what the platform applies: the larger of the plan formula and
+                        the minimum. It is not the live cluster value; see the observation above.</p>
+                    <group>
+                        <group string="CPU (cores)">
+                            <field name="quota_formula_cpu"/>
+                            <field name="quota_floor_cpu_display"/>
+                            <field name="quota_target_cpu"/>
+                        </group>
+                        <group string="Memory">
+                            <field name="quota_formula_memory"/>
+                            <field name="quota_floor_memory_display"/>
+                            <field name="quota_target_memory"/>
+                        </group>
+                        <group string="Storage">
+                            <field name="quota_formula_storage"/>
+                            <field name="quota_floor_storage_display"/>
+                            <field name="quota_target_storage"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Sync">
+                            <field name="quota_sync_status"/>
+                            <field name="quota_sync_state" string="Last Attempt Result"/>
+                            <field name="quota_sync_reason"/>
+                            <field name="quota_sync_unguarded"/>
+                            <field name="quota_target_version"/>
+                            <field name="quota_synced_version"/>
+                            <field name="quota_synced_at"/>
+                            <field name="quota_verified_at"/>
+                        </group>
+                        <group string="Retry">
+                            <field name="quota_last_attempt_at"/>
+                            <field name="quota_retry_count"/>
+                            <field name="quota_next_retry_at"/>
+                        </group>
+                        <group string="Last Pushed and Pending">
+                            <field name="quota_synced_hard"/>
+                            <field name="quota_pending_decrease"/>
+                        </group>
+                    </group>
+                    <separator string="Quota Change Log"/>
+                    <field name="quota_audit_ids" nolabel="1" readonly="True">
+                        <list create="false" edit="false" delete="false">
+                            <field name="create_date" string="Changed At"/>
+                            <field name="actor_login"/>
+                            <field name="target_version"/>
+                            <field name="old_values"/>
+                            <field name="new_values"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+    <record id="view_workspace_quota_minimum_wizard_form" model="ir.ui.view">
+        <field name="name">workspace.quota.minimum.wizard.form</field>
+        <field name="model">woow_paas_platform.workspace_quota_minimum_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Set Quota Minimums">
+                <p>The applied quota is the larger of the plan formula and the minimum.
+                    0 clears a minimum. Lowering the target is not supported yet.</p>
+                <group>
+                    <field name="workspace_id"/>
+                    <field name="cpu"/>
+                    <field name="memory_gi"/>
+                    <field name="storage_gi"/>
+                </group>
+                <footer>
+                    <button name="action_apply" type="object" string="Save and Apply"
+                            class="oe_highlight"/>
+                    <button string="Cancel" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+    <record id="action_workspace_quota_inspection" model="ir.actions.act_window">
+        <field name="name">Workspace Quota Observations</field>
+        <field name="res_model">woow_paas_platform.workspace</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'list', 'view_id': ref('view_workspace_quota_inspection_list')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('view_workspace_quota_inspection_form')})]"/>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+        <field name="context">{}</field>
+    </record>
+    <menuitem id="menu_workspace_quota_inspection" name="Workspace Quotas"
+              parent="menu_woow_paas_platform_root" action="action_workspace_quota_inspection"
+              groups="base.group_system" sequence="90"/>
+</odoo>

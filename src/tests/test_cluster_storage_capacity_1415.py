@@ -31,6 +31,7 @@ from ..models.cloud_service import (
 )
 from ..models.platform_monitor import CLUSTER_STORAGE_MIN_VOLUME_PARAM
 from ..services.paas_operator import PaaSOperatorAPIError, PaaSOperatorConnectionError
+from .ns_quota_fixture import answer_quota_reads
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -133,6 +134,7 @@ class TestClusterStorageDeployMessage1415(_Base):
 
     def _deploy_failing_with(self, service, detail, status=409):
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.side_effect = PaaSOperatorAPIError(
             message='API error: %s' % detail, status_code=status, detail=detail)
         with patch(_CLIENT_PATH, return_value=client):

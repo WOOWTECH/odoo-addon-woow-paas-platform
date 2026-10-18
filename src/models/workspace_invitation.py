@@ -89,7 +89,7 @@ class WorkspaceInvitation(models.Model):
                     ('workspace_id', '=', workspace.id), ('user_id', '=', recipient.id)]):
                 raise InvitationRejected('invite_already_member', _('User is already a member of this workspace'))
 
-            sender = self.env.user.company_id.email_formatted
+            sender = self.env.user.company_id._woow_paas_mail_sender()
             if not sender:
                 raise InvitationRejected('invite_sender_unconfigured', _('The platform mail sender is not configured'))
             base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
@@ -125,6 +125,9 @@ class WorkspaceInvitation(models.Model):
                 'author_id': self.env['res.users'].sudo().browse(SUPERUSER_ID).partner_id.id,
                 'message_type': 'user_notification',
             })
+            # The native trigger and outbox commit together; worker wake-up is
+            # post-commit, without SMTP here or edits to the cron's cadence.
+            self.env.ref('mail.ir_cron_mail_scheduler_action')._trigger()
             return invitation
 
     def _dto(self):

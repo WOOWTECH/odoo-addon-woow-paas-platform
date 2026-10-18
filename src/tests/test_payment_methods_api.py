@@ -17,11 +17,20 @@ from odoo.addons.woow_paas_platform.controllers.billing import (
 
 
 class TestSanitizePhoneForEcpay(TransactionCase):
-    """Unit tests for the phone sanitization helper."""
+    """Unit tests for the phone sanitization helper.
+
+    ECPay V4 go-live: only a Taiwan mobile ``09XXXXXXXX`` is sent; anything
+    else (foreign numbers, landlines) becomes '' — Email is always sent, and
+    ECPay accepts an empty Phone but rejects a malformed one.
+    """
 
     def test_strips_plus_dash_space_parens(self):
-        self.assertEqual(_sanitize_phone_for_ecpay('+1 555-555-5555'), '15555555555')
-        self.assertEqual(_sanitize_phone_for_ecpay('(02) 2655-1775'), '0226551775')
+        self.assertEqual(_sanitize_phone_for_ecpay('+886 912-345-678'), '0912345678')
+        self.assertEqual(_sanitize_phone_for_ecpay('(0912) 345 678'), '0912345678')
+
+    def test_non_mobile_numbers_are_dropped(self):
+        self.assertEqual(_sanitize_phone_for_ecpay('+1 555-555-5555'), '')
+        self.assertEqual(_sanitize_phone_for_ecpay('(02) 2655-1775'), '')
 
     def test_returns_empty_for_none_or_blank(self):
         self.assertEqual(_sanitize_phone_for_ecpay(None), '')

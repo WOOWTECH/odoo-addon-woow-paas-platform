@@ -49,6 +49,7 @@ from odoo.addons.woow_paas_platform.services.paas_operator import (
 )
 from ..models.cloud_service import _internal_provision, _join_sentences
 from ..models.workspace_access import ROLE_ADMIN
+from .ns_quota_fixture import answer_quota_reads
 
 _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SERVICES = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -166,6 +167,7 @@ class _Fixture:
     @staticmethod
     def _client():
         client = MagicMock()
+        answer_quota_reads(client)
         client.base_url = 'http://operator.test'
         client._session.headers = {'X-API-Key': 'k'}
         client.get_release.return_value = {'name': 'svc-1647', 'revision': 4}

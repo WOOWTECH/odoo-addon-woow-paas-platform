@@ -20,6 +20,7 @@ from odoo.tests.common import TransactionCase, tagged
 
 from ..models.cloud_service import STORAGE_QUOTA_ERROR_CODE, _internal_provision
 from ..services.paas_operator import PaaSOperatorAPIError
+from .ns_quota_fixture import answer_quota_reads
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -78,6 +79,7 @@ class TestStorageQuotaDeployMessage1348(TransactionCase):
 
     def _deploy_failing_with(self, service, detail, status=409):
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.side_effect = PaaSOperatorAPIError(
             message='API error: %s' % detail, status_code=status, detail=detail)
         with patch(_CLIENT_PATH, return_value=client):

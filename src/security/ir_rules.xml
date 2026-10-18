@@ -910,14 +910,21 @@
              點鏈：點鏈在一個 workspace 有多列 access 時是**跨列**匹配（A 列滿足
              user_id、B 列滿足 role），等於沒有 role 條件。這是 #556 的根因之一。
 
-             刻意**沒有** workspace_rule_admin_full（本檔 13 個自有 model 的 ir.rule
-             裡有 11 個配了一條；另一個沒有的是 cloud_service——實際數過，不要寫成
-             「其他每個 model 都有」）：
-             那會把 base.group_system 從「只看得到自己是成員的 workspace」放寬成
-             全部可見，而本次是收窄授權的安全修復，同一個 PR 裡混入擴權會讓覆核
-             無法分辨兩者。今天也沒有任何流程需要它——平台管理員若真要接手某個
-             workspace，已可經 workspace_access_rule_admin_full 建立自己的成員列
-             （那條規則本來就給 group_system 全 CRUD），或直接走 sudo。 -->
+             #658 刻意沒有 workspace_rule_admin_full，不在安全修復中混入全域擴權。
+             #1678 的管理員唯讀 quota 投影另加下方 system_read；只放寬 read，
+             不放寬 write/create/unlink，也不改前台受控 PaaS 的成員判準。 -->
+
+        <!-- #1678: backend inspection only; no cross-workspace write/unlink. -->
+        <record id="workspace_rule_system_read" model="ir.rule">
+            <field name="name">Workspace: system administrator read</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
 
         <record id="workspace_rule_member_read" model="ir.rule">
             <field name="name">Workspace: workspace member read</field>

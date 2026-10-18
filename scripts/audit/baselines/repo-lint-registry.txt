@@ -25,6 +25,7 @@
 1	fn:check_js_i18n_template_literal
 1	fn:check_kubectl_ns_whitelist_sync
 1	fn:check_mixin_subscription_sudo
+1	fn:check_newapi_timeout_ladder
 1	fn:check_one_time_credential_render
 1	fn:check_owl_component_translatable_attr
 1	fn:check_owl_relative_import
@@ -70,6 +71,7 @@
 1	rule:js-i18n-template-literal
 1	rule:kubectl-ns-whitelist-sync
 1	rule:mixin-subscription-sudo
+1	rule:newapi-timeout-ladder
 1	rule:one-time-credential-render
 1	rule:owl-relative-import
 1	rule:owl-template

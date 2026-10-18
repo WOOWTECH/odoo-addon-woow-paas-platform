@@ -423,6 +423,30 @@ export const billingService = reactive({
     },
 
     /**
+     * Poll the top-up status until it leaves `pending` (or ~30 s pass).
+     * Resolves with the last status `data`, or null if the status endpoint
+     * never answered. Shared by AddFundsModal (synchronous pending) and
+     * TopupStorePage (return from 3-D Secure).
+     */
+    async pollTopupStatus(topupId, { timeoutMs = 30000, intervalMs = 3000 } = {}) {
+        const deadline = Date.now() + timeoutMs;
+        let last = null;
+        while (true) {
+            const result = await this.getTopupStatus(topupId);
+            if (result && result.success) {
+                last = result.data;
+                if (last.state !== "pending" && last.state !== "draft") {
+                    return last;
+                }
+            }
+            if (Date.now() + intervalMs > deadline) {
+                return last;
+            }
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        }
+    },
+
+    /**
      * Redeem a gift card code into wallet points.
      * Backend grants points to the caller's own wallet (partner is bound
      * server-side to request.env.user — the code param is the only input).

@@ -17,6 +17,7 @@ from datetime import date, timedelta
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .wallet_fixture import fund_wallet
 
 
 class TestChangePlanRefund(TransactionCase):
@@ -227,6 +228,8 @@ class TestChangePlanRefundIsRefundTyped(TransactionCase):
             'amount': -sub.sh_plan_price, 'subscription_id': sub.id,
             'state': 'done',
         })
+        # 換方案餘額閘（#1677 A1）：本 class 測退點型別（見 wallet_fixture）。
+        fund_wallet(partner)
 
     def _make_plan(self, name, price):
         plan = self.Plan.create({

@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .ns_quota_fixture import answer_quota_reads
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -147,6 +148,7 @@ class TestExecuteDeployRecordsActualChartVersion(_Base):
 
     def _deploy(self, service, install_result):
         client = MagicMock()
+        answer_quota_reads(client)
         client.install_release.return_value = install_result
         with patch(_CLIENT_PATH, return_value=client):
             service._execute_deploy()
@@ -193,6 +195,18 @@ class TestExecuteDeployRecordsActualChartVersion(_Base):
             '（兩邊都要有值才算漂移）從此永遠看不到這台服務')
 
 
+    def test_zero_revision_records_the_first_revision(self):
+        """#1414：首裝回報 0（舊 operator）時記 1，不記 0。"""
+        template = self._template('zero-1414', '0.2.1')
+        service = self._service(template, state='pending', chart_version='0.2.1')
+
+        self._deploy(service, {'revision': 0, 'chart_version': '0.2.1'})
+
+        service.invalidate_recordset()
+        self.assertTrue(service.deployed_at, '前提：這條 write 真的跑了')
+        self.assertEqual(service.helm_revision, 1)
+
+
 class TestRedeployRecordsActualChartVersion(_Base):
     """路徑 2／4：``action_redeploy``（既有 release ⇒ helm upgrade）。"""
 
@@ -223,6 +237,19 @@ class TestRedeployRecordsActualChartVersion(_Base):
         service.invalidate_recordset()
         self.assertEqual(service.helm_revision, 4, '前提：這條 write 真的跑了')
         self.assertEqual(service.helm_chart_version, '0.1.0')
+
+
+    def test_zero_revision_keeps_the_ledger(self):
+        """#1414：舊 operator 的 upgrade 回報 revision 0——帳本不得被寫成 0。"""
+        template = self._template('redeploy-zero-1414', '0.2.1')
+        service = self._service(template, chart_version='0.1.0')
+        service.sudo().write({'helm_revision': 3})
+
+        self._redeploy(service, {'revision': 0, 'chart_version': '0.2.1'})
+
+        service.invalidate_recordset()
+        self.assertEqual(service.helm_chart_version, '0.2.1', '前提：這條 write 真的跑了')
+        self.assertEqual(service.helm_revision, 3)
 
 
 class TestResetAdminPasswordRecordsActualChartVersion(_Base):

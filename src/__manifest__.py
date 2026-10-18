@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.229",
+    "version": "18.0.1.0.247",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -11,6 +11,10 @@
     "website": "",
     "depends": [
         "base", "web", "project", "mail", "bus",
+        # X-SET-007：覆寫 /web/signup 必填檢查與 res.users 註冊／登入身分正規化
+        # （src/controllers/signup.py、src/models/res_users_login_identity.py）。
+        # 原本就經 portal 傳遞安裝，這裡明列以固定 MRO／controller 繼承順序。
+        "auth_signup",
         "ai_base_gt", "odoo_ai_assistant_chatgpt_connector",
         "sh_subscription",
         "sh_subscription_wallet",
@@ -30,10 +34,16 @@
         "data/subscription_products_variants.xml",
         "data/subscription_template_links_variants.xml",
         "data/subscription_journal_config.xml",
+        "data/paas_included_vat_sync.xml",
         # #778：SSOT 對撞防護的 -u 路徑（<function> 每次升級重跑；
         # fresh-install 路徑在 hooks.post_init_hook）
         "data/billing_ssot_guard.xml",
+        # LLM-01b：AI 模型分頁的 cron（DESIGN §1.2 的順序：ACL → seed → cron → mail →
+        # views → wizard；目前只有 cron）。
+        "data/llm_cron.xml",
         "views/menu.xml",
+        "views/workspace_views.xml",
+        "views/workspace_quota_inspection_views.xml",
         "views/billing_incident_views.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
@@ -61,13 +71,18 @@
         "views/res_config_settings_views.xml",
         "data/subscription_lifecycle_cron.xml",
         "data/mail_templates.xml",
+        "data/billing_mail_lang_sync.xml",
         "data/workspace_invitation_mail.xml",
         "data/low_balance_warning_cron.xml",
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",
+        # #1680 Workspace quota 背景重試／對帳
+        "data/workspace_quota_cron.xml",
         "data/agent_session_cron.xml",
         # #1540：限時唯讀資料取回入口的到期關閉 cron
         "data/data_retrieval_cron.xml",
+        # 商用驗收 X-SEC-007：忘記密碼請求的非同步處理 cron
+        "data/password_reset_request_cron.xml",
         "data/reach_reconciler_cron.xml",
         "data/reconcile_report_cron.xml",
         # #784：待回收 CF Access 物件帳本的 dead-anchor 回收 cron

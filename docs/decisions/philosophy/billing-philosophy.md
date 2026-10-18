@@ -59,8 +59,17 @@ skip-trial 尚未傳入同一個 `before_mutation` guard，因此未受保護；
 > `reversed_entry_id` 指回原發票）並以退回錢包的點數沖銷；`run_refund` 已加上對帶
 > skip 旗標貸項的平行 override——平台不在租戶請求裡 inline 打 ECPay 折讓。原發票已開
 > 電子發票時改為留言＋替帳務管理群組建待辦、由人工在綠界開立折讓（尚無 async 折讓
-> cron）；原發票未開且被全額沖銷時改標 `not_required`。退點只退未稅金額（#1261 待決），
-> 含稅商品的貸項會留下稅額那段未沖。細節見 `src/models/sh_subscription_refund_credit_note.py`。
+> cron）；原發票未開且被全額沖銷時改標 `not_required`。細節見
+> `src/models/sh_subscription_refund_credit_note.py`。
+>
+> **政策 A（2026-10-14，使用者裁決；取代 #366「點數訂閱免稅」與 #1261 待決）：PaaS 標價含 5%
+> 營業稅。** 目錄價＝預估＝發票總額＝扣點＝刷卡金額（300 點方案：發票未稅 286＋稅 14；儲值
+> NT$50：48＋2）。平台以公司既有的 5% 銷項稅複製一顆 PaaS 專用**內含稅**（xmlid
+> `woow_paas_platform.paas_sale_tax_5_included_company_<id>`），只套在模組 seed 的訂閱商品與
+> `WALLET_TOPUP` 上（每次 -u 由 `data/paas_included_vat_sync.xml` 收斂）；公司預設稅與 l10n
+> 紀錄不動（原則 5）。公司沒有 5% 銷項稅時不憑空建稅、商品維持無稅。退點以本期**實付含稅**
+> 總額按比例計算，貸項總額＝退點、全額沖銷。進行中訂閱的稅快照由 migration 18.0.1.0.237
+> 一次性轉換；已過帳發票不動。實作見 `src/models/paas_included_vat.py`。
 
 ---
 

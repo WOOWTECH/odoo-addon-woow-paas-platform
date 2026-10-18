@@ -122,6 +122,8 @@ def pre_init_hook(env):
 
 _CONFIG_PARAMETERS = [
     'woow_paas_platform.shc_durable_provision_prototype_enabled',
+    'woow_paas_platform.shc_durable_provision_reconcile_enabled',
+    'woow_paas_platform.shc_durable_provision_retention_days',
     'woow_paas_platform.operator_url',
     'woow_paas_platform.operator_api_key',
     'woow_paas_platform.paas_domain',
@@ -206,6 +208,26 @@ _CONFIG_PARAMETERS = [
     # key 屬上游 namespace 但由平台設值；平台卸載時清掉＝上游回復自身預設
     # （未設視同啟用 SSOT）。
     'sh_subscription_wallet.billing_ssot',
+    # ECPay 站內付 2.0 V4 上線（2026-10-15）：儲值發票開票模式、手動儲值是否帶
+    # OrderResultURL 的 kill switch；以及 #1745 新增但當時漏登記的自動儲值下限與
+    # migration 240 的完成標記。「模組常數＋get_param()」寫法 ⇒ 補在
+    # `test_ecpg_v4_golive.py::TestEcpgV4ParamsRegisteredForUninstall`。
+    'woow_paas_platform.topup_invoice_issue_mode',
+    'woow_paas_platform.ecpg_topup_order_result_url_enabled',
+    'woow_paas_platform.auto_topup_min_amount',
+    'woow_paas_platform.migration_18_0_1_0_240_topup_plan_50_retired',
+    # LLM-01b：AI 模型分頁（DESIGN §2.11）。全部是「模組常數＋get_param()」寫法、不 seed
+    # 預設值，lint 掃不到 ⇒ 補在 `test_llm_tracer.py::TestLlmConfigRegistered`
+    # （它比對的是 models/llm_common.py 的 LLM_CONFIG_PARAMETERS）。
+    'woow_paas_platform.show_llm',
+    'woow_paas_platform.llm_pilot_partner_ids',
+    'woow_paas_platform.newapi_proxy_url',
+    'woow_paas_platform.newapi_username_prefix',
+    'woow_paas_platform.llm_synthetic_ip_block',
+    'woow_paas_platform.llm_canary_partner_id',
+    # LLM-02b：告警出口（N13）。
+    'woow_paas_platform.llm_alert_email',
+    'woow_paas_platform.llm_alert_webhook_url',
 ]
 
 

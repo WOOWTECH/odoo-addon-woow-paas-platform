@@ -284,3 +284,15 @@
     }
   }
 }
+
+// Back from 3-D Secure: confirming the payment (polling)
+.o_woow_topup_confirming {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: $woow-radius-default;
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-size: 0.875rem;
+}

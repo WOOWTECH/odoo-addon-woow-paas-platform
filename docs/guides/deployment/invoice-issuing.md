@@ -20,6 +20,12 @@ PaaS 的開票流程刻意與上游 `ecpay_invoice_tw` 的 inline `action_post()
    skip flag、可證明不會 inline 外呼的發票可由 `/woow` 付款；flagless 發票仍列出，
    但付款與目前會建立 flagless 發票的 **Cloud Service skip-trial** 會先行拒絕並要求
    聯絡客服（#980 A）。
+4. **儲值發票的開票模式只看平台參數**（ECPay V4 上線，2026-10-15 裁決）：
+   `woow_paas_platform.topup_invoice_issue_mode` ＝ `automatic`（預設，stamp
+   `pending`，cron 自動開）／`manual`（stamp `manual`，等人工按鈕）／`company`
+   （沿用 `company.auto_invoice` 的 fail-closed resolver）；未知值退回 `company`。
+   只影響 `wallet.topup._create_topup_invoice`（手動與自動儲值）；訂閱 cycle 仍是
+   `not_required`，其他發票仍看 `company.auto_invoice`，**不改** company 設定。
 
 ## Architecture
 
@@ -172,7 +178,7 @@ def create_ecpay_invoice(self):
 | Cron | 模型/方法 | 間隔 | XML |
 |------|-----------|------|-----|
 | Issue pending ECPay e-invoices | `woow_paas_platform.ecpay_invoice_cron._cron_issue_pending_invoices` | 5 min | `src/data/ecpay_invoice_cron.xml` |
-| Cleanup stale pending topups | `woow.wallet.topup._cron_cleanup_pending_topups` | 10 min | `src/data/cron_topup.xml` |
+| Cleanup stale pending topups | `woow.wallet.topup._cron_cleanup_pending_topups`（同一支也跑綁卡 NT$5 驗證授權取消：`woow_paas_platform.ecpg_bind_auth_void._cron_process_due`，獨立 failure domain） | 10 min | `src/data/cron_topup.xml` |
 
 ### Monitoring
 

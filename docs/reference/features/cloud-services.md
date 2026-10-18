@@ -28,7 +28,7 @@ Cloud Services 是 WoowTech PaaS 平台的核心功能之一，讓用戶能夠�
 
 所有 Cloud Services 的工作區卡片與服務詳情共用資源觀測，顯示 CPU、記憶體與持久磁碟的「使用量／實際生效上限或容量」，每 30 秒批次更新。離開頁面即停止，頁面隱藏時暫停，返回時立即更新。此功能依服務的 Helm namespace/release 與實際 Kubernetes 資源辨識，不需要逐一修改應用範本。
 
-CPU 是最近兩分鐘平均使用的核心數；記憶體是 working set；磁碟是 PVC 的檔案系統用量。多副本、sidecar 與同一 release 的資料庫會合計，共用 PVC 只計一次。數值旁保留採樣時間；監控缺值、資料過期或只有部分容器／磁碟取得資料時會明確標示，不將缺值顯示為零，也不計算不完整的使用率。
+CPU 是最近五分鐘平均使用的核心數（`window_seconds: 300`）；記憶體是 working set；磁碟是 PVC 的檔案系統用量。多副本、sidecar 與同一 release 的資料庫會合計，共用 PVC 只計一次。畫面仍每 30 秒更新，來源樣本超過 120 秒即標示過期；延長 CPU 平均窗口不放寬新鮮度判斷，也不以舊 container／cgroup 的數據補新容器。數值旁保留採樣時間；監控缺值、資料過期或只有部分容器／磁碟取得資料時會明確標示，不將缺值顯示為零，也不計算不完整的使用率。
 
 「申請配置」仍保留原訂閱的資源規格。即時觀測不改寫配額、計費或服務狀態。VM 可顯示 guest CPU／記憶體及磁碟配置；現有監控未提供的 VM guest 使用量與暫存磁碟使用量會標示不可用。Smart Home Connect 與 Security Access 連到使用者端設備，沒有平台代管的 CPU／記憶體／PVC，因此沿用其連線狀態顯示。
 
@@ -136,6 +136,7 @@ rules:
 | GET    | `/api/releases/{namespace}/{name}/status`    | Get pod/deployment status   |
 | GET    | `/api/releases/{namespace}/{name}/public-address` | 對外通道位址回讀（ngrok sidecar：`tcp://` 或 `https://`，見下方「對外通道位址回讀」） |
 | GET    | `/api/releases/{namespace}/{name}/mqtt-address` | 舊端點（平台 ≤ 18.0.1.0.205 呼叫）：同一份契約、只回 `tcp://` |
+| GET    | `/api/releases/{namespace}/{name}/vpn-node-status` | VPN 節點（charts/tailscale）即時狀態：BackendState、登入入口、serve 轉發結果（見下方「VPN 節點即時狀態」） |
 | POST   | `/api/namespaces`                            | Create namespace with quota |
 
 **Request/Response Example**：
@@ -256,6 +257,10 @@ Example: paas-ws-123-anythingllm-01
 > cron 的長交易互撞），所以 `workload_checked_at` 是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
 > 10 分鐘 cron 的輪替位置記在 PaaS Platform Monitor 單例的 `workload_check_cursor`（最後處理的 service id；成功、
 > 失敗、略過都推進，提前中止後下一趟從中止處之後開始）。
+> **#1456 起也看「Pod 都在、卻沒有一顆就緒」**：期望 ≥1、Pod ≥1、就緒 0 的 workload 寫 `oom_killed`（沒就緒的
+> workload Pod 上一次是 `OOMKilled`，operator `PodInfo.last_terminated_reason`）／`crash_loop`（容器卡在
+> `CrashLoopBackOff`）／`not_ready`（都沒有）。三者都要「首次看到滿 5 分鐘後又看到一次」才確認（不是第一次就確認，
+> 見 `services/workload_health.py` 檔頭）；「一顆都沒有」同時存在時沿用 #1647 的代碼。租戶文案沿用一般文案。
 
 ### Supported Operations
 
@@ -371,7 +376,8 @@ data:
 
 每個 Workspace namespace 有一個名為 `<namespace>-quota` 的 ResourceQuota。數值不是固定的，由平台依 workspace 內的服務計算後交給 operator 套用：
 
-- CPU／記憶體／磁碟：workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3，下限 8 vCPU／8Gi／100Gi（`src/models/cloud_service.py` 的 `_compute_ns_quota`）。
+- CPU／記憶體／磁碟：workspace 內所有未刪除服務的 `allocated_vcpu`／`allocated_ram_gb`／`allocated_storage_gb` 加總後乘 3，下限 8 vCPU／8Gi／100Gi（公式在 `src/models/cloud_service.py` 的 `_compute_ns_quota_formula`）。
+- Workspace 最低保障（#1679）：系統管理員可分別設定 CPU（cores）、記憶體與磁碟（Gi）的最低保障。實際目標是每項 max(公式, 最低保障)，未設定就沿用公式（`_compute_ns_quota`）。最低保障不是固定上限：公式變大時目標跟著變大。它不改服務的 `allocated_*`、方案或計費。
 - `requests` 與 `limits` 是同一個值（operator `extra/paas-operator/src/services/helm.py` 的 `_build_quota_manifest`）。
 - ephemeral-storage 依服務數計算（`_compute_ns_ephemeral_quota`）；PVC 數量上限固定為 10。
 
@@ -395,7 +401,17 @@ spec:
     limits.ephemeral-storage: 80Gi
 ```
 
-平台只在開通、換方案、刪除服務時重算並推送；手動改叢集上的 ResourceQuota 會在下一次推送被蓋回。排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
+平台在開通、換方案、刪除服務，以及管理員變更最低保障時重算並推送。所有路徑共用同一個政策（`src/models/workspace_quota_policy.py`、`src/services/ns_quota_policy.py`）：
+
+- 推送前先讀叢集上的受管 quota（operator `GET /api/namespaces/{name}/quota?include_managed=true`），每一項取 max(目標, 叢集現況)，再以 operator 同形的完整 hard（含 `persistentvolumeclaims` 與 ephemeral-storage）逐項檢查，**不會降低叢集任何一項**。
+- 目標低於叢集的項目記為「待處理降額」（後台 Pending Quota Decrease），叢集保留較高的值；安全降額由後續工作（#1681、#1682）處理。
+- 讀不到現況、資料不完整、或某一項非降不可（例如叢集的 pvc 上限大於 10）時不推送並記錄原因。開通路徑：讀不到現況或資料不完整時開通失敗待重試，因為無法證明不降額；某一項非降不可時跳過這次 quota 套用（namespace 與基線已存在），開通照常繼續。刪除服務永遠不會因 quota 推送失敗而被擋下。
+- 同一個工作區同時只有一筆交易推送 quota（工作區列鎖，所有平台 quota 寫入都經過它：管理員設定、手動重試、背景重試、生命週期重算、開通建立 namespace）。管理員入口會等鎖；背景、生命週期與開通路徑不等，拿不到鎖就不推送也不寫工作區狀態：生命週期不擋刪除，改排背景同步一分鐘後重來（#1680，換方案剛好撞上推送時增額不再遺失）；開通失敗待重試。
+- 遠端版本防護（#1680）：每次推送帶新的 sync token 與鎖內讀到的 resourceVersion（受管 quota 尚不存在時改為「只在不存在時建立」），operator 以條件寫入套用，物件被改過就回 409 不覆寫；開通建立 `<ns>-quota` 走同一套。只有叢集上的 token 與平台預期的相符才算已同步：逾時、5xx、斷線先讀回，落地了就算成功，沒落地就記下在途 token，下一次同步以新 token 重推，晚到的舊請求因 resourceVersion 已變而落不下。叢集上出現平台不認得的 token（例如推送成功後 DB 交易回捲）時同樣重推，值仍取 max(目標, 叢集)，不會因此降額，多出來的部分顯示在 Pending Quota Decrease。operator 太舊（GET 沒有 `sync_token`）時退回無防護推送，後台標示「Operator 不支援版本防護」。
+- 有限次自動重試（#1680，背景 cron `ir_cron_reconcile_workspace_quota`，每個工作區各自一筆交易）：暫時性失敗（operator 未設定、斷線、5xx、逾時、版本衝突、讀不到叢集）在失敗後 1、5、15、60、240 分鐘各重試一次，共 5 次，之後轉為「重試已用完」，只能由系統管理員按「Retry Quota Sync」手動重試。永久阻擋（會降低某一項，例如叢集 pvc 上限大於 10；operator 不支援；資料看不懂）不自動重試。重試額度以目標（namespace 集合＋目標值）計：目標改變、管理員保存最低保障、手動重試、或同步成功時重置；背景重試與目標不變的生命週期事件不重置。已同步的工作區每 6 小時讀回驗證一次。手動與背景重試都不寫最低保障的異動紀錄；手動重試只在監控 chatter 留下操作者。
+- 管理員在後台「Woow PaaS → Workspace Quotas」查看公式、最低保障、目標、最後成功推送值與時間、同步狀態；目標不是叢集現況，叢集現況看同一頁的觀測（#1678）。尚未建立 namespace 時，最低保障先保存，首次開通時套用。
+
+排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
 
 ---
 
@@ -839,6 +855,42 @@ container log 讀回來顯示在服務頁。
 - **部署順序**：operator 先上（新端點），平台後上；平台遇到舊 operator 的 404 會退回
   `/mqtt-address`（只有 `tcp://`）。
 
+#### VPN 節點即時狀態（INFRA-FIX-005）
+
+pod Ready ≠ 節點在線：charts/tailscale 的 readiness 把 `NeedsLogin` 也當可用（讓「用 auth key 登入中」的第二次滾動等得到登入完成），
+所以節點被控制面到期／刪除後，平台 `state` 仍是 `running`、/woow 仍顯示 ONLINE（INFRA-TS-005／TS-007）。另外 `tailscale.serve` 被
+entrypoint 略過的項目只印在容器 stderr，Service 不存在的項目不會被略過（建成指向 NXDOMAIN 的轉發）。
+
+- **能力 gate**：`cloud_app_template.has_vpn_node_status`（唯一事實源；seed 只有 tailscale 為 True）→ `CloudService._chart_has_vpn_node_status()`
+  → service detail payload 的 `has_vpn_node_status` → 前端卡片。前端不得用 slug 判斷。
+- **不進帳本**：沒有欄位、沒有 cron、不碰 `state`。租戶打開服務頁（Overview，running／upgrading）時，前端每 30 秒（頁面可見才輪詢）
+  `POST /api/workspaces/<ws>/services/<id>/node-status`，後端 → operator `GET /api/releases/{ns}/{release}/vpn-node-status`（唯讀）。
+  授權與 detail 同一條；`available:false` 是正常降級（不是 running、operator 沒設定／太舊／沒回應），不顯示錯誤。
+- **operator 做什麼**：對 `tailscale` 容器 exec 一支**固定**的 sh 腳本（沒有任何插值）：`tailscale status --json`、`tailscale serve status --json`，
+  以及 **entrypoint 自己的 `parse_serve`**（`WOOW_TS_SOURCE_ONLY=1` source `/entrypoint.sh`；source 前先 `grep` 確認該旗標存在，舊映像的 entrypoint
+  沒有它就退回「不知道期望清單」，不會整支跑起來）。再 `kubectl get services` 對帳轉發目標是否存在。
+- **回應是封閉集合**：`probe`（ok／no_pod／pod_not_running／exec_failed／no_output）、`backend_state`、`login.kind`（none／external_url／cluster_internal）、
+  轉發 `status`（applied／not_applied／service_missing／mismatch／unverified）、略過原因代碼（bad_format／port_range／other_namespace／not_service_name／
+  duplicate_port／too_many／namespace_unknown／other）。**永不回原始 log／stderr**；叢集內部的登入網址不回，只回 `/register/<id>` 的註冊碼。
+  平台 `services/vpn_node_status.public_report` 再驗一次（不信任形狀），並把登入入口（外部登入網址、註冊碼）只給 owner／admin。
+- **UI**（Overview「VPN 節點狀態」卡）：節點狀態（已連線／需要重新登入／等待核可／未連線…）、需要登入時的說明（工作區 Headscale 用 Headplane 的 pre-auth key，
+  因為它的登入頁是瀏覽器打不開的內部位址）、每個轉發有沒有生效，以及被略過的項目與原因。節點需要登入／等待核可／離線／停止時，Connection Info 的
+  狀態也不再寫 ONLINE。
+- **登入失敗原因與被忽略的 key（INFRA-TS-005-5）**：operator 另回 `login_error`（authkey_expired／authkey_used／authkey_invalid／
+  control_unreachable／other；從 `tailscale status --json` 的 `Health` 裡「The last login error was: …」對應，原文不回；節點 Running 時一律 null）
+  與 `authkey_configured`（腳本只判斷 `TS_AUTHKEY_FILE` 有沒有非空白內容，回 set／unset，不讀出 key）。平台轉成 `login_error` 與
+  `authkey_ignored`（已登入＋設定裡有 key ⇒ 提示「這把 key 不會被使用」，對應 entrypoint 的 "not using it"）。
+- **節流**：`/node-status` 同一台服務 10 秒內共用上一份 operator 回應（每個 worker 一份表；operator 失敗不快取；角色過濾逐次重做）。
+- **存檔前驗證（INFRA-TS-005-5／TS-007-1）**：helm_value_specs 的 `validate`（只在存檔時跑、不碰部署組裝，所以收緊規則不會讓既有服務
+  Redeploy 時少掉設定；與 `format` 不同）。`tailscale_serve`：與 entrypoint `parse_serve` 同一套規則（格式、埠 1–65535、只接受同工作區
+  namespace 的 Service、DNS label、tailnet 埠不重複、最多 32 筆）；`tailscale_login`：控制平面與 key 種類（`tskey-` 只配官方 Tailscale）、
+  「自訂網址」必填且是 http(s) URL、key 不得含空白。登入三欄都沒動時不重驗已存的組合。權威在 `services/tailscale_settings.py`，
+  前端 `utils/tailscale_settings.js` 是即時提示的鏡像。Service 是否存在不在存檔時判斷（租戶可能先設轉發再開服務），由卡片的
+  `service_missing` 回報。
+- **部署順序**：operator 先上（新端點），平台後上；舊 operator 回 404 → 卡片不顯示內容（`available:false`），其餘不受影響。
+- **範圍外**：「填新 key 後 tailscaled 進入 crash loop」（INFRA-TS-005-1）與「升級中鎖住所有動作」（-2）是 chart／entrypoint 與 operator rollout 逾時的問題，
+  不在這裡。
+
 #### 一次性憑證視窗的 gateway 提示（P3）
 
 有 gateway 的模板（`helm_default_values.gateway.externalPath`，#530）在建立與 Reset
@@ -1152,6 +1204,46 @@ helm_value_specs: |
 ```
 
 ---
+
+## 服務資訊與日誌分頁
+
+服務詳情的共通分頁順序為「總覽／配置／資訊／日誌」。原有依能力顯示的
+Addons、MCP Servers、Access 分頁接在後面，既有深連結維持有效；新增
+`/woow#/workspace/:workspaceId/services/:serviceId/information` 與 `/logs`。
+
+### 資訊（相關文件）
+
+比照 Home Assistant App 的 `DOCS.md`，模板新增 `documentation` Markdown 欄位，
+存放服務使用、設定及疑難排解指南；管理員在模板的 Service Documentation 頁維護。
+尚未填寫時依序使用既有 `full_description`、`description`，皆空則顯示空狀態。
+不從任意遠端網址抓取內容。`documentation_url` 僅接受 HTTP(S) 連結。
+
+`POST /api/workspaces/:workspaceId/services/:serviceId/documentation` 使用既有工作區
+成員及服務可見性檢查，回傳 `{title, content, documentation_url}`。前端使用現有
+Markdown + DOMPurify renderer，並在頁內呈現卡片。
+
+### 日誌
+
+`POST /api/workspaces/:workspaceId/services/:serviceId/logs` 僅供工作區 owner/admin。
+前端送 `pod`、`container`、`tail_lines`、`previous`；namespace/release 一律由已授權的
+服務記錄決定。錯工作區、隱藏服務及非管理成員在呼叫 Operator 前即拒絕。
+讀取不修改服務／訂閱，也不套用只適合寫入的訂閱狀態閘，因此失敗服務仍可診斷。
+
+Operator 的 `GET /api/releases/:namespace/:release/logs` 每次重新查核 exact
+`app.kubernetes.io/instance` 標籤、namespace 及容器歸屬，再呼叫 `kubectl logs`。
+回傳 Pod／一般與 init container 選項、帶時間戳的文字與狀態碼；不需要 exec 或增加
+租戶 Kubernetes 權限。VM 服務回覆不支援，避免將虛擬機基礎設施日誌誤當訪客 OS 日誌。
+
+每次預設 500 行、最多 2000 行及 256 KiB；不是永久日誌儲存或全量下載。
+前端每次請求結束後等 5 秒更新，暫停、切到背景或離開分頁即停止後續排程。
+搜尋只過濾已載入的行；下載包含完整的已載入快照，不受搜尋條件影響。
+支援換行切換、上次容器日誌，以及只在讀者原本位於底部時自動捲動。
+
+部署順序：先發布含 logs API 的 Operator，再升級平台 addon（新增資料庫欄位）。
+舊 Operator 或尚未部署的服務會顯示不可用／等待狀態，不回傳底層錯誤或憑證。
+
+參考：[HA App 文件檔案](https://contributors.home-assistant.io/apps/reference/files/)、
+[Supervisor App API](https://contributors.home-assistant.io/apps/supervisor-api/apps/)。
 
 ## Technical Decisions
 

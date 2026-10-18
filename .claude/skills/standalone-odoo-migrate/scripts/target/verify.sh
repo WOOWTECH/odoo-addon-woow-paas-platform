@@ -4,7 +4,8 @@
 # 執行者＝本 repo agent（目標 ns 必須在白名單）。
 #
 # 用法：
-#   verify.sh --context <ctx> --ns <target-ns> --release <R> --set <name> --stage restore|upgrade [--cleanup] [--workdir <dir>]
+#   verify.sh --context <ctx> --ns <target-ns> --release <R> --set <name> --stage restore|upgrade [--release-crons] [--cleanup]
+#             [--workdir <dir>]
 #
 # restore：restore Job 已在 incoming PVC 留下 target.fp／target.fs；取回 source.*／target.* 在本機跑
 #   fingerprint_diff.py --stage restore（逐位元）。web 可以還是 0 副本。
@@ -16,7 +17,9 @@
 #   來源檔（模組附件換了內容）列為預期內。
 #   彩排（restore.sh --neutralize，set 裡有 neutralized 標記）：restore 階段比的仍是中和**之前**取的指紋；
 #   upgrade 階段另外重跑 neutralize-assert.sql——-u all 或新版模組若把排程、寄信、金流等開回來，這裡不通過。
-# --cleanup：比對通過後刪跑完的 restore Job 與 incoming PVC（含客戶資料的 dump）。
+# --release-crons（upgrade）：比對通過後放開 restore.sh 暫停的排程（cron-release.sql）。要在最後一次比對才帶：
+#   放開之後過期的排程會跑一輪、改到客戶資料，之後再比就不準了。
+# --cleanup：比對通過後刪跑完的 restore Job 與 incoming PVC（含客戶資料的 dump）；upgrade 階段同時放開排程。
 # 取回的檔案放 --workdir（預設 ./verify-<set>）；檔案都小（指紋與清單），用 kubectl exec cat 取回不會撞截斷。
 # exit：0 通過、1 不通過、2 參數或前置條件不符、3 pod 失敗
 set -euo pipefail
@@ -24,9 +27,9 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PVC=standalone-odoo-incoming
 POD=standalone-odoo-verify
-CTX="" NS="" RELEASE="" SET="" STAGE="" CLEANUP=0 WORKDIR=""
+CTX="" NS="" RELEASE="" SET="" STAGE="" CLEANUP=0 RELEASE_CRONS=0 WORKDIR=""
 
-usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { echo "ERROR: $2" >&2; exit "$1"; }
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -36,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --set) SET=$2; shift 2 ;;
     --stage) STAGE=$2; shift 2 ;;
     --cleanup) CLEANUP=1; shift ;;
+    --release-crons) RELEASE_CRONS=1; shift ;;
     --workdir) WORKDIR=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die 2 "unknown argument: $1" ;;
@@ -106,6 +110,26 @@ if [[ $STAGE == upgrade ]]; then
     fi
     cd /var/lib/odoo/filestore/'$db' && find . -type f -printf '%P\0' | sort -z | xargs -0 -r sha256sum > $S/upgraded.fs" \
     || die 3 "fingerprint in verify pod failed"
+  hold_until=$("${K[@]}" exec "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 \
+    -c "SELECT value::json->>'until' FROM ir_config_parameter WHERE key = 'standalone_odoo_migrate.cron_hold'") \
+    || die 3 "cannot read cron hold state"
+  # 取完指紋才查：暫停起點之後有排程跑過（lastcall 晚於暫停起點）或正在跑（cron job 從取件到結束都對 ir_cron 持有
+  # RowShareLock）⇒ 暫停沒擋住，指紋之後還可能再跑一輪改到客戶資料，比對「通過」也不可信。harumi prod 彩排第二輪
+  # （舊版暫停擋不到開機途中排的 trigger）：autovacuum 在取完指紋之後才跑，第一次比對剛好通過，之後才刪掉資料。
+  cron_ran="" cron_busy=0
+  if [[ -n $hold_until ]]; then
+    cron_ran=$("${K[@]}" exec "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 \
+      -c "SELECT coalesce(string_agg(coalesce(d.module || '.' || d.name, 'ir_cron#' || c.id) || ' ' || c.lastcall, ', '), '')
+            FROM ir_cron c LEFT JOIN ir_model_data d ON d.model = 'ir.cron' AND d.res_id = c.id
+           WHERE c.lastcall >= (SELECT (value::json->>'since')::timestamp FROM ir_config_parameter
+                                 WHERE key = 'standalone_odoo_migrate.cron_hold')") \
+      || die 3 "cannot read cron lastcall"
+    cron_busy=$("${K[@]}" exec "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 \
+      -c "SELECT count(*) FROM pg_locks l JOIN pg_class r ON r.oid = l.relation
+           WHERE l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+             AND r.relname = 'ir_cron' AND l.mode = 'RowShareLock' AND l.granted AND l.pid <> pg_backend_pid()") \
+      || die 3 "cannot read cron locks"
+  fi
   tgt=upgraded
 else
   tgt=target
@@ -154,6 +178,26 @@ if (( neutralized )); then
     else
       echo "彩排中和斷言：通過（升級與開機後仍然是中和狀態）"
     fi
+  fi
+fi
+if [[ $STAGE == upgrade && -n ${hold_until:-} ]] && [[ -n $cron_ran || $cron_busy != 0 ]]; then
+  echo
+  echo "排程暫停失效：暫停起點之後有排程跑過或正在跑（暫停沒擋住，或暫停時間 ${hold_until} UTC 已過），比對結果不可信（之後還可能再跑、改到客戶資料）——不通過："
+  [[ -z $cron_ran ]] || echo "- 跑過（lastcall）：$cron_ran"
+  [[ $cron_busy == 0 ]] || echo "- 正在跑：$cron_busy 個 cron job 持有 ir_cron 鎖"
+  echo "  用 cron-hold.sh status 看暫停狀態，查明是哪裡排的再重跑 restore／verify"
+  (( rc != 0 )) || rc=1
+fi
+if [[ $STAGE == upgrade && -n ${hold_until:-} ]]; then
+  echo
+  if (( rc == 0 && (RELEASE_CRONS || CLEANUP) )); then
+    out=$("${K[@]}" exec -i "$POD" -- psql -h "$RELEASE-postgresql" -U postgres -d "$db" -X -q -tA -v ON_ERROR_STOP=1 -f - \
+      < "$SCRIPT_DIR/cron-release.sql") || die 3 "releasing held crons failed"
+    IFS='|' read -r _ _ n_crons n_triggers n_late_crons n_late_triggers <<<"$out"
+    echo "排程已放開：還原 ${n_crons} 個排程、${n_triggers} 個 trigger 的原 nextcall，暫停期間才夾住的" \
+      "${n_late_crons} 個排程、${n_late_triggers} 個 trigger 改成現在（到期的會在一分鐘內跑一輪）"
+  else
+    echo "排程暫停中，到 ${hold_until} UTC 自動恢復；最後一次比對通過時帶 --release-crons（或跑 cron-hold.sh release）放開"
   fi
 fi
 if (( rc == 0 && CLEANUP )); then
