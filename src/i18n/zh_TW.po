@@ -26227,8 +26227,8 @@ msgstr "價格以點／百萬 tokens 計，1 點＝NT$1（含稅）。漲價會�
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
-msgid "A dash means no separate price is published. Cache write prices shown apply to the standard cache duration; longer storage may cost more."
-msgstr "「—」代表未提供獨立價格。快取寫入價格適用於標準保存時間，較長的保存時間可能另計費。"
+msgid "A dash means no separate price is published. For Claude usage, when the upstream reports 1-hour cache-creation tokens, cache writes are billed at 1.6× the displayed cache-write rate."
+msgstr "「—」代表未提供獨立價格。Claude 用量若由上游回報 1 小時快取寫入 tokens，該寫入費率為畫面所列快取寫入價格的 1.6 倍。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

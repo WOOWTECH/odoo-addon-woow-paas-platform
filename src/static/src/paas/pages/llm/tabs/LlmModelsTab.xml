@@ -47,7 +47,7 @@
         </div>
       </div>
       <footer class="o_woow_llm_models__footer">
-        <p t-esc="footerText"/><p t-esc="cacheNote"/><p t-if="dataTime" t-esc="dataTime"/>
+        <p t-esc="footerText"/><p class="o_woow_llm_models__cache_note" t-esc="cacheNote"/><p t-if="dataTime" t-esc="dataTime"/>
       </footer>
       <p class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
     </section>

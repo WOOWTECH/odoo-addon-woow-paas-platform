@@ -37,6 +37,13 @@ test("rates preserve tiny decimals; fixed and tiered never look like token price
   assert.equal(modelRow({ ...items[0], pricing_mode: "tiered", price: null }).note, "依用量計價");
 });
 
+test("cache-write footnote limits the 1-hour premium to reported Claude usage", async () => {
+  const tab = new LlmModelsTab(); tab.setup();
+  assert.equal(tab.cacheNote, "「—」代表未提供獨立價格。Claude 用量若由上游回報 1 小時快取寫入 tokens，該寫入費率為畫面所列快取寫入價格的 1.6 倍。");
+  const template = await readPaas("pages/llm/tabs/LlmModelsTab.xml");
+  assert.match(template, /class="o_woow_llm_models__cache_note" t-esc="cacheNote"/);
+});
+
 test("maintenance never renders stale rows; unavailable and search-empty differ", () => {
   const tab = new LlmModelsTab(); tab.setup();
   globalThis.__catalogue.models = { state: "ok", items };

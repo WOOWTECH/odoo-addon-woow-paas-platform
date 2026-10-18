@@ -90,7 +90,7 @@ export class LlmModelsTab extends Component {
   get freeText() { return _t("Free trial"); }
   get freeNote() { return _t("10 requests per minute, about 200 per day (resets at 00:00 Taipei time). Free trial keys only; capacity may change."); }
   get footerText() { return _t("Prices are in points per million tokens. 1 point = NT$1 (tax included). Price increases will be announced 7 days in advance."); }
-  get cacheNote() { return _t("A dash means no separate price is published. Cache write prices shown apply to the standard cache duration; longer storage may cost more."); }
+  get cacheNote() { return _t("A dash means no separate price is published. For Claude usage, when the upstream reports 1-hour cache-creation tokens, cache writes are billed at 1.6× the displayed cache-write rate."); }
   get dataTime() { return this.llm.models && this.llm.models.data_as_of ? _t("Data as of %(time)s", { time: formatTaipeiTime(this.llm.models.data_as_of) }) : ""; }
   get copyLabel() { return _t("Copy model ID"); }
 
