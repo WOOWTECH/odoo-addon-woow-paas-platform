@@ -106,6 +106,7 @@ class TestServiceDocumentationLogs(HttpCase):
         before = self.service.read(['state', 'helm_values', 'write_date'])[0]
         for user in (self.owner, self.admin):
             self._login(user)
+            self.client._session.close.reset_mock()
             with patch(_CONTROLLER + '.get_paas_operator_client', return_value=self.client):
                 result = self._post('logs', pod='svc-own-pod', container='app',
                                     tail_lines=100, previous=True)
@@ -114,6 +115,7 @@ class TestServiceDocumentationLogs(HttpCase):
             self.client.get_release_logs.assert_called_with(
                 namespace=self.service.helm_namespace, release_name=self.service.helm_release_name,
                 pod='svc-own-pod', container='app', tail_lines=100, previous=True)
+            self.client._session.close.assert_called_once_with()
         self.assertEqual(self.service.read(['state', 'helm_values', 'write_date'])[0], before)
         for user in (self.member, self.guest):
             self._login(user)
@@ -156,6 +158,7 @@ class TestServiceDocumentationLogs(HttpCase):
         self.assertEqual(result['data']['reason'], 'operator_unavailable')
         self.assertNotIn('secret-key', json.dumps(result))
         self.assertNotIn('private-url', json.dumps(result))
+        self.client._session.close.assert_called_once_with()
 
     def test_error_state_remains_readable_and_undeployed_is_explicit(self):
         self._login(self.owner)

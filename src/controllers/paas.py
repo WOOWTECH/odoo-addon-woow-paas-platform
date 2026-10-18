@@ -3080,6 +3080,9 @@ class PaasController(HiddenChainMixin, Controller):
             # Do not return transport errors, raw kubectl stderr or credentials.
             _logger.warning('Service log read unavailable for service id=%s', service.id)
             return unavailable('operator_unavailable')
+        finally:
+            # Every poll owns a fresh client; release its pooled sockets promptly.
+            client._session.close()
         return {'success': True, 'data': payload}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/access-config",
