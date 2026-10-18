@@ -249,7 +249,15 @@ class TestServicePageRoleContract1560(TransactionCase):
                 head = source[start:start + 400]
                 self.assertIn('this.props.canManage !== true', head,
                               'role 判斷要排在 canEdit 最前面')
-        self.assertEqual(self.page_xml.count('canManage="canManageService"'), 2)
+        for tab in ('ConfigurationTab', 'LogsTab', 'AddonsTab'):
+            with self.subTest(tab=tab):
+                match = re.search(r'<%s\b(?:(?!/>).)*?/>' % tab, self.page_xml, re.S)
+                self.assertIsNotNone(match, '找不到 %s 元件' % tab)
+                self.assertIn('canManage="canManageService"', match.group(0))
+
+        logs_js = _read('pages', 'service', 'tabs', 'LogsTab.js')
+        self.assertIn('onMounted(() => { if (this.props.canManage) this.poller.start(); });',
+                      logs_js, 'viewer 不得啟動容器日誌輪詢')
 
     def test_rollback_dialog_translates_helm_status(self):
         js = _read('components', 'modal', 'RollbackModal.js')
