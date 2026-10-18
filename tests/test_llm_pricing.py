@@ -67,6 +67,11 @@ class TestPricing(unittest.TestCase):
             with self.assertRaises(pricing.PricingInvalid):
                 pricing.normalize_pricing(data)
 
+    def test_cross_listed_paid_or_free_model_fails_closed(self):
+        for name in ('provider/model', 'qwen3-4b-cluster1'):
+            with self.subTest(name=name), self.assertRaisesRegex(pricing.PricingInvalid, 'pricing_groups'):
+                pricing.normalize_pricing(envelope(row(model_name=name, enable_groups=['default', 'free'])))
+
     def test_bad_and_nonfinite_numbers_do_not_publish_partial_catalogue(self):
         for value in (True, None, '', 'NaN', float('inf'), '-0.1', {}, '1e100', Decimal('NaN')):
             with self.subTest(value=value), self.assertRaises(pricing.PricingInvalid):

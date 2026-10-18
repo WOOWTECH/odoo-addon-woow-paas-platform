@@ -102,6 +102,10 @@ def normalize_pricing(payload):
         allowed = set(g for g in row['enable_groups'] if isinstance(g, str)) & ALLOWED_GROUPS
         if not allowed:
             continue
+        # A model exposed to both key groups cannot have one truthful public price:
+        # the same request may be paid or free depending on the caller's key.
+        if allowed == ALLOWED_GROUPS:
+            raise PricingInvalid('pricing_groups')
         name = row.get('model_name')
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_.:/+-]{1,200}', name):
             raise PricingInvalid('pricing_model')
