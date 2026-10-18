@@ -6,7 +6,8 @@
 
 輸入：
   --inventory  source/inventory.sh 的輸出；`inspect.addons.modules` 內有 digest 的就是非 core 模組
-  <根目錄>=<tar>  在來源容器內 `tar -cf - -C <根目錄> <模組…>` 的輸出（一個 addon 根目錄一顆）
+  <根目錄>=<tar>  在來源容器內 `tar -cf - -C <根目錄> <模組…>` 的輸出；同一個根目錄可以有多顆
+                 （根目錄本身是 symlink 的模組各自一顆，#1844），同一個模組只能出現在其中一顆
 輸出：
   <dir>/addons/<模組>/…        原始碼（不含 .git／__pycache__／*.pyc，與內容 hash 的範圍相同）
   <dir>/addons-export.json     每個模組的來源目錄、版本、sha256、檔數、bytes、git 出處
@@ -111,7 +112,10 @@ def main(argv=None):
         inventory = json.loads(Path(args.inventory).read_text())
         only = [m.strip() for m in args.modules.split(",") if m.strip()] if args.modules else None
         modules = wanted_modules(inventory, only)
-        tars = dict(item.split("=", 1) for item in args.tars)
+        tars = {}
+        for item in args.tars:
+            base_dir, tar_path = item.split("=", 1)
+            tars.setdefault(base_dir, []).append(tar_path)
     except (OSError, ValueError, KeyError) as exc:
         print("ERROR: %s" % exc, file=sys.stderr)
         return 2
@@ -130,11 +134,18 @@ def main(argv=None):
     outside = {}
     try:
         for base_dir, names in sorted(by_dir.items()):
-            seen, links = unpack(tars[base_dir], base_dir, names, dest)
-            for name, target in links:
-                outside.setdefault(name.split("/", 1)[0], []).append({"path": name, "target": target})
-            if seen != names:
-                raise UnpackError("%s: missing modules %s" % (tars[base_dir], ", ".join(sorted(names - seen))))
+            seen_all = set()
+            for tar_path in tars[base_dir]:
+                seen, links = unpack(tar_path, base_dir, names, dest)
+                if seen & seen_all:
+                    raise UnpackError("%s: modules %s already came from another tar of %s" % (
+                        tar_path, ", ".join(sorted(seen & seen_all)), base_dir))
+                seen_all |= seen
+                for name, target in links:
+                    outside.setdefault(name.split("/", 1)[0], []).append({"path": name, "target": target})
+            if seen_all != names:
+                raise UnpackError("%s: missing modules %s" % (
+                    ", ".join(tars[base_dir]), ", ".join(sorted(names - seen_all))))
     except UnpackError as exc:
         print("ERROR: %s" % exc, file=sys.stderr)
         return 3
@@ -146,7 +157,8 @@ def main(argv=None):
                 name, meta["digest"]["sha256"][:12], meta["digest"]["files"], got["sha256"][:12], got["files"]))
         report[name] = {"dir": meta["dir"], "version": meta.get("version"), "sha256": got["sha256"],
                         "files": got["files"], "bytes": got["bytes"], "git": meta.get("git"),
-                        "symlinks_outside": outside.get(name, [])}
+                        "symlinks_outside": outside.get(name, []),
+                        "root_symlink": meta.get("root_symlink")}
     if mismatched:
         print("ERROR: content hash differs from the inventory (stream truncated, or source changed since the "
               "inventory — rerun inventory.sh):\n  " + "\n  ".join(mismatched), file=sys.stderr)
