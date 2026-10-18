@@ -19,6 +19,8 @@ RESOURCE_OBSERVATION_TIMEOUT = 10
 # INFRA-FIX-005：VPN 節點狀態是 operator 對 pod 的一次 exec＋一次 get services（各自 ≤15／8 秒上限），
 # 服務頁每 30 秒問一次；比 DEFAULT_TIMEOUT 短，卡住就降級成「讀不到」而不是拖住頁面。
 VPN_NODE_STATUS_TIMEOUT = 20
+# Two kubectl reads at <=4s each; avoid occupying an Odoo worker on a stream.
+RELEASE_LOGS_TIMEOUT = (3, 10)
 # Longer timeout for helm operations that may take time
 HELM_OPERATION_TIMEOUT = 120
 # #1152：init 專屬 connect/read inactivity 預算，不連帶放大其他操作或 connect 等待。
@@ -531,6 +533,22 @@ class PaaSOperatorClient:
         return self._request(
             'GET',
             f'/api/releases/{namespace}/{release_name}',
+        )
+
+    def get_release_logs(
+        self, namespace: str, release_name: str, pod: Optional[str] = None,
+        container: Optional[str] = None, tail_lines: int = 500,
+        previous: bool = False,
+    ) -> Dict[str, Any]:
+        """Read one bounded log snapshot; the operator rechecks source ownership."""
+        params = {'tail_lines': tail_lines, 'previous': previous}
+        if pod:
+            params['pod'] = pod
+        if container:
+            params['container'] = container
+        return self._request(
+            'GET', f'/api/releases/{namespace}/{release_name}/logs',
+            params=params, timeout=RELEASE_LOGS_TIMEOUT,
         )
 
     def upgrade_release(
