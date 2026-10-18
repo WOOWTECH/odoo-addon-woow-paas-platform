@@ -12,7 +12,7 @@ from psycopg2 import OperationalError
 
 from odoo import _, fields
 from odoo.exceptions import UserError, ValidationError
-from odoo.http import request, route, Controller
+from odoo.http import content_disposition, request, route, Controller
 
 from .ha_paas import HiddenChainMixin
 from odoo.tools import str2bool
@@ -1337,11 +1337,8 @@ class BillingController(HiddenChainMixin, Controller):
         Returns invoice header, line items, partner/company info,
         and optional subscription reference.
         """
-        partner = request.env.user.partner_id
-        invoice = request.env['account.move'].sudo().browse(invoice_id)
-
-        if (not invoice.exists() or invoice.partner_id != partner
-                or invoice.sh_subscription_id.id in self._hidden_subscription_ids(request.env)):
+        invoice = self._tenant_invoice(invoice_id)
+        if not invoice:
             return {'success': False, 'error': _('Invoice not found')}
 
         # Line items (skip section/note display lines)
@@ -1403,6 +1400,38 @@ class BillingController(HiddenChainMixin, Controller):
                 **_invoice_payability_fields(invoice),
             },
         }
+
+    def _tenant_invoice(self, invoice_id: int):
+        """目前使用者可以看的那張發票（sudo 記錄）；不存在、不是他的、或屬於隱藏訂閱回空集。
+
+        發票明細與 PDF 下載共用同一把尺（AUDITFIX tax-invoice-pdf-403）。
+        """
+        partner = request.env.user.partner_id
+        invoice = request.env['account.move'].sudo().browse(invoice_id)
+        if (not invoice.exists() or invoice.partner_id != partner
+                or invoice.sh_subscription_id.id in self._hidden_subscription_ids(request.env)):
+            return invoice.browse()
+        return invoice
+
+    @route("/api/billing/invoices/<int:invoice_id>/pdf", auth="user", methods=["GET"], type="http")
+    def api_invoice_pdf(self, invoice_id: int, **kw):
+        """下載發票 PDF（AUDITFIX tax-invoice-pdf-403）。
+
+        原本前端連原生 ``/report/pdf/account.account_invoices/<id>``：以租戶身分渲染，含稅
+        發票讀不到 ``account.tax`` ⇒ 403。這裡先用 ``_tenant_invoice`` 驗擁有權（與發票
+        明細同一把尺），再由 ``account.move._woow_render_tenant_invoice_pdf`` 以平台身分渲染；
+        不是自己的發票一律 404（不透露是否存在）。
+        """
+        invoice = self._tenant_invoice(invoice_id)
+        if not invoice:
+            return request.not_found()
+        content, filename = invoice._woow_render_tenant_invoice_pdf()
+        mimetype = 'application/pdf' if content[:5] == b'%PDF-' else 'text/html'
+        return request.make_response(content, headers=[
+            ('Content-Type', mimetype),
+            ('Content-Length', len(content)),
+            ('Content-Disposition', content_disposition(filename)),
+        ])
 
     @route("/api/billing/invoices/<int:invoice_id>/pay", auth="user", methods=["POST"], type="json")
     def api_invoice_pay(self, invoice_id: int, **kw) -> dict[str, Any]:

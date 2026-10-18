@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import threading
 import time
 import traceback
@@ -32,6 +33,7 @@ from ..models.workspace_access import (
 )
 from ..services.paas_capability import _PaaSCapability
 from ..models.llm_common import llm_visible
+from ..services import vpn_node_status as _vpn_node_status
 from ..services.paas_operator import (
     get_paas_operator_client,
     PaaSOperatorAPIError,
@@ -47,18 +49,25 @@ from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 p
 from ..services.chart_version import (
     ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
     annotate_rollback_floor,
+    reported_helm_revision,
     rollback_floor_violation,
+    is_valid_rollback_revision,
+    rollback_request_problem,
 )
 from ..models.cloud_service import (
+    N8N_ENCRYPTION_KEY_PATH,
     WOOW_ODOO_ADMIN_PASSWORD_PATH,
     _compute_quota_detail_rows,
     _internal_provision,
 )
 from ..models.cloud_service_renewal import RENEWABLE_SUBSCRIPTION_STATES, RenewalRefused
+from ..services.chart_version import drop_failed_revisions  # INFRA-FIX-018
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
 from ..models.workspace import WorkspaceHasServicesError
+# X-LC-001：市集搜尋字面比對與有範本的分類。
+from ..services.marketplace_search import ordered_categories, parse_tags, template_matches_search
 
 _logger = logging.getLogger(__name__)
 
@@ -197,6 +206,39 @@ _SSRF_BLOCKED_IPV6 = frozenset({
     'fd00:ec2::254',  # AWS IMDSv2 IPv6
 })
 _SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
+
+# INFRA-FIX-005 覆核：``/node-status`` 每次都讓 operator 對 pod kubectl exec。前端每 30 秒輪詢一次，
+# 但同一台服務開好幾個分頁、好幾個成員同時看、或有人連打這支端點，都會變成連續 exec。
+# 同一台服務 ``_NODE_STATUS_MIN_INTERVAL`` 秒內共用上一份 **operator 回應**（每個 worker 一份表）；
+# 角色過濾（登入入口只給 owner／admin）每次重做，所以快取不會讓 guest 看到 owner 的東西。
+# operator 失敗不快取（下一次照常重問）。
+_NODE_STATUS_MIN_INTERVAL = 10.0
+_NODE_STATUS_CACHE_MAX = 512
+_NODE_STATUS_CACHE: dict = {}
+_NODE_STATUS_LOCK = threading.Lock()
+
+
+def _node_status_cached(key):
+    """節流表裡還在時間窗內的 operator 回應；沒有回 None。"""
+    now = time.monotonic()
+    with _NODE_STATUS_LOCK:
+        entry = _NODE_STATUS_CACHE.get(key)
+        if entry and now - entry[0] < _NODE_STATUS_MIN_INTERVAL:
+            return entry[1]
+    return None
+
+
+def _node_status_store(key, payload):
+    now = time.monotonic()
+    with _NODE_STATUS_LOCK:
+        if len(_NODE_STATUS_CACHE) >= _NODE_STATUS_CACHE_MAX:
+            stale = [k for k, (ts, _p) in _NODE_STATUS_CACHE.items()
+                     if now - ts >= _NODE_STATUS_MIN_INTERVAL]
+            for k in stale:
+                del _NODE_STATUS_CACHE[k]
+            if len(_NODE_STATUS_CACHE) >= _NODE_STATUS_CACHE_MAX:
+                _NODE_STATUS_CACHE.clear()
+        _NODE_STATUS_CACHE[key] = (now, copy.deepcopy(payload))
 
 
 # `ir.module.module.state` 值代表「模組不在租戶 DB 裡」，把對應 addon 從選擇裡拿掉是
@@ -1078,17 +1120,17 @@ class PaasController(HiddenChainMixin, Controller):
         # #471 B 組：曝光層判準**留 is_hidden**（不經 HiddenChainMixin）。這裡改成
         # conceal_instances 會讓「定價未拍板／暫時下架」的商品重新出現在 marketplace。
         domain = [('is_active', '=', True), ('is_hidden', '=', False)]
+        public_templates = CloudAppTemplate.search(domain)
 
+        templates = public_templates
         if category:
-            domain.append(('category', '=', category))
+            templates = templates.filtered(lambda t: t.category == category)
 
-        if search:
-            search = search.strip()
-            domain.append('|')
-            domain.append(('name', 'ilike', search))
-            domain.append(('description', 'ilike', search))
-
-        templates = CloudAppTemplate.search(domain)
+        # X-LC-001-1／-2：字面比對名稱、說明與每個標籤（% _ 不再是萬用字元；
+        # tags 是 JSON 字串，不能在 DB 層 ilike）。判準見 services/marketplace_search.py。
+        if search and search.strip():
+            templates = templates.filtered(lambda t: template_matches_search(
+                t.name, t.description, parse_tags(t.tags), search))
 
         data = []
         for tmpl in templates:
@@ -1098,6 +1140,8 @@ class PaasController(HiddenChainMixin, Controller):
             'success': True,
             'data': data,
             'count': len(data),
+            # X-LC-001-5：前端只為有公開範本的分類產生頁籤（不受 category／search 影響）。
+            'categories': ordered_categories(public_templates.mapped('category')),
         }
 
     @route("/api/cloud/templates/<int:template_id>", auth="user", methods=["POST"], type="json")
@@ -1329,7 +1373,8 @@ class PaasController(HiddenChainMixin, Controller):
         return {'success': True, 'data': plans}
 
     @route("/api/cloud-services/services/<int:service_id>/change-plan", auth="user", methods=["POST"], type="json")
-    def api_service_change_plan(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
+    def api_service_change_plan(self, service_id: int, plan_id: int | None = None,
+                                dry_run: bool = False, **kw: Any) -> dict[str, Any]:
         """Change subscription plan for a cloud service."""
         if not plan_id:
             return {'success': False, 'error': _('plan_id is required')}
@@ -1426,6 +1471,16 @@ class PaasController(HiddenChainMixin, Controller):
                     'error': _denial['error'],
                     'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
+        refund = old_sub._compute_unused_refund()
+        # AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋這次退點付不起新方案
+        # 首期（含稅）就擋下——什麼都不寫（不退點、不關舊訂閱、不建新訂閱、不開發票）。
+        # `dry_run=True`：通過同一組閘之後只回估算（前端停用「確認變更」並顯示差額）。
+        # 判準收在 mixin 的 `_change_plan_balance_gate`，三個入口共用、這裡不另寫。
+        # 排在 #1158 的 operator 升級預檢之前：估算不需要問 operator，錢不夠也不用。
+        _balance = service._change_plan_balance_gate(plan, refund, dry_run=dry_run is True)
+        if _balance:
+            return _balance
+
         # #1158：新方案的規格要套到已部署的服務（helm upgrade）。能預判的失敗全部擋在
         # 第一個寫入（退點）之前——背景 upgrade 失敗**不回捲帳務**（Q5），所以這裡放行的
         # 必須是「照理會成功」的。values 沒變（月繳↔年繳同規格、非 odoo 的全 0 方案）就
@@ -1463,9 +1518,11 @@ class PaasController(HiddenChainMixin, Controller):
             # 變大時由 Longhorn validator 判斷（server dry-run），放不下就整筆擋下、不扣款。
             # 換方案不升 chart、不 refresh image（#1160／#1184）：釘服務現行 chart 版本。
             resolved_version = self._reconfigure_chart_version(service)
+            assembled = service._assemble_deploy_values(
+                values=new_values, plan=plan, chart_version=resolved_version)
             upgrade_kwargs = self._upgrade_kwargs(
-                service, resolved_version,
-                service._assemble_deploy_values(values=new_values, plan=plan)['values'])
+                service, resolved_version, assembled['values'],
+                tenant_secret=assembled.get('tenant_secret'))
             # #1647：ns quota 在扣款**之後**才推送（下方 `_push_ns_quota`）。預檢若拿叢集上
             # 現在的上限去比，升到較大方案會被還沒擴的舊上限誤擋 ⇒ 把「將推送的 quota」一起
             # 交給 operator。allocated_* 沒變就不會推送，也就不帶。
@@ -1477,8 +1534,6 @@ class PaasController(HiddenChainMixin, Controller):
                 service, plan, client, upgrade_kwargs, pending_quota=pending_quota)
             if denial:
                 return denial
-
-        refund = old_sub._compute_unused_refund()
 
         partner = old_sub.sh_partner_id
         _logger.info(
@@ -2183,6 +2238,69 @@ class PaasController(HiddenChainMixin, Controller):
         response['data']['observed_at'] = min(timestamps) if timestamps else None
         return response
 
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/node-status",
+           auth="user", methods=["POST"], type="json")
+    def api_service_node_status(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
+        """INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態，**純讀、不寫 DB、不碰 state**。
+
+        pod Ready ≠ 節點在線：chart 的 readiness 把 NeedsLogin 也當可用，節點被控制面到期／刪除
+        後平台 state 仍是 running、/woow 仍顯示 ONLINE（INFRA-TS-005／TS-007）。這支現場問
+        operator（它對 pod 的 tailscaled 唯讀 exec），把登入狀態、登入入口、serve 轉發結果與
+        被略過的原因（封閉代碼）給服務頁。
+
+        * 授權＝與 detail 同一條（工作區成員、service 釘在 workspace 上、concealed 當不存在）；
+        * gate＝``template.has_vpn_node_status``，沒有這個能力的服務一律「Service not found」；
+        * 登入入口（外部登入網址、註冊碼）只給 owner／admin（``_can_manage_service``）；
+        * 回 ``{available: False, reason}`` 是正常降級（不是 running、operator 沒設定／沒回應／太舊），
+          前端不顯示錯誤，只是不畫這張卡的內容。
+        """
+        if kw:
+            return {'success': False, 'error': _('Invalid request')}
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        if not service._chart_has_vpn_node_status():
+            return {'success': False, 'error': _('Service not found')}
+
+        def unavailable(reason):
+            return {'success': True, 'data': {'available': False, 'reason': reason, 'report': None}}
+
+        if service.state not in ('running', 'upgrading') or not (
+                service.helm_namespace and service.helm_release_name):
+            return unavailable('not_running')
+        cache_key = (request.env.cr.dbname, service.id,
+                     service.helm_namespace, service.helm_release_name)
+        payload = _node_status_cached(cache_key)
+        if payload is None:
+            client = get_paas_operator_client(request.env)
+            if not client:
+                return unavailable('operator_unavailable')
+            try:
+                payload = client.get_vpn_node_status(
+                    service.helm_namespace, service.helm_release_name)
+            except PaaSOperatorError as exc:
+                # 舊 operator 沒有這個端點（404）也走這裡；只記類型，不把 operator 的訊息放到租戶畫面。
+                _logger.warning(
+                    'VPN node status unavailable for service %s (%s, HTTP %s)',
+                    service.id, type(exc).__name__, getattr(exc, 'status_code', None))
+                return unavailable('operator_unavailable')
+            finally:
+                client._session.close()
+            if isinstance(payload, dict):
+                _node_status_store(cache_key, payload)
+        else:
+            payload = copy.deepcopy(payload)
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        report = _vpn_node_status.public_report(
+            payload,
+            can_manage=self._can_manage_service(access),
+            control_plane=_vpn_node_status.control_plane_of(service._helm_values_dict()),
+        )
+        if report is None:
+            return unavailable('operator_unavailable')
+        return {'success': True, 'data': {'available': True, 'reason': None, 'report': report}}
+
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None, **kw: Any) -> dict[str, Any]:
         """
@@ -2222,6 +2340,12 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
+            # service-update-api-validation（AI-LLM-017-3）：update 只認 values／version／
+            # odoo_addon_ids／clear_keys。其他頂層參數（例 chart_version、helm_chart_version）
+            # 原本被 **kw 吞掉、回 success 並白跑一次 helm upgrade——租戶以為指定了版本。
+            if kw:
+                return {'success': False, 'error': _(
+                    'Unknown parameters: %(params)s', params=', '.join(sorted(kw)))}
             try:
                 service._check_operation_allowed(operation='write')
             except OperationalError:
@@ -2376,8 +2500,9 @@ class PaasController(HiddenChainMixin, Controller):
         Args:
             workspace_id (int): Workspace ID
             service_id (int): Service ID
-            revision (int, optional): Target revision number. If not provided or 0,
-                rolls back to the previous revision.
+            revision (int): Target revision number (>= 1, must exist in the service's
+                revision history). AUDITFIX rollback-api-input-validation: a missing
+                revision or 0 is refused — it no longer means "the previous revision".
 
         Returns:
             dict: Response containing:
@@ -2385,14 +2510,13 @@ class PaasController(HiddenChainMixin, Controller):
                 - message (str): Rollback confirmation
                 - error (str): Error message (on failure)
         """
-        # Validate revision parameter
-        if revision is not None:
-            try:
-                revision = int(revision)
-                if revision < 0:
-                    return {'success': False, 'error': _('Revision must be a non-negative integer')}
-            except (TypeError, ValueError):
-                return {'success': False, 'error': _('Invalid revision number')}
+        # Validate revision parameter（AUDITFIX：缺值／0 不再是「上一版」，見 _rollback_service）
+        try:
+            revision = int(revision)
+        except (TypeError, ValueError):
+            return self._invalid_rollback_revision_response()
+        if not is_valid_rollback_revision(revision):
+            return self._invalid_rollback_revision_response()
 
         # Validate workspace and service access
         workspace = _PaaSCapability(request.env).workspace(workspace_id)
@@ -2719,6 +2843,13 @@ class PaasController(HiddenChainMixin, Controller):
                 'shown again. It works right away; devices that are already signed in '
                 'stay signed in.'
             )
+        elif app_reset_kind == 'emqx_exec':
+            # #1774：EMQX 改密碼會撤銷該帳號的 Dashboard token；開源版沒有 2FA 可關。
+            message = (
+                'Admin password reset. Save the new password now — it will not be '
+                'shown again. It works right away; anyone signed in to the dashboard '
+                'with the old password is signed out.'
+            )
         elif app_reset_kind != 'none':
             # #1370：不重啟、立刻生效；舊 session 失效、兩步驟驗證已關。
             message = (
@@ -2872,6 +3003,88 @@ class PaasController(HiddenChainMixin, Controller):
             }
         return service, None
 
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/documentation",
+           type='json', auth='user', methods=['POST'])
+    def api_service_documentation(self, workspace_id, service_id, **kwargs):
+        """Template-authored Markdown, scoped to an existing visible service.
+
+        Like HA's DOCS.md, this is distinct from the marketplace introduction.
+        Never fetch caller-supplied URLs on the server; existing templates fall
+        back to their introduction until an operator provides a dedicated guide.
+        """
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        template = service.template_id
+        documentation_url = (template.documentation_url or '').strip()
+        try:
+            parsed = urlparse(documentation_url)
+            safe_url = (parsed.scheme in ('https', 'http') and parsed.hostname
+                        and not parsed.username and not parsed.password
+                        and not any(ord(char) < 32 for char in documentation_url))
+        except ValueError:
+            safe_url = False
+        return {'success': True, 'data': {
+            'title': template.name,
+            'content': template.documentation or template.full_description or template.description or '',
+            'documentation_url': documentation_url if safe_url else '',
+        }}
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/logs",
+           type='json', auth='user', methods=['POST'])
+    def api_service_logs(self, workspace_id, service_id, pod=None, container=None,
+                         tail_lines=500, previous=False, **kwargs):
+        """Read bounded application logs through the Operator, never via exec.
+
+        Namespace/release come exclusively from the authorized service record.
+        Logs can contain application secrets, so only workspace owner/admin may
+        read them. This is a read: failed or suspended services remain diagnosable
+        without invoking write/subscription guards or changing service state.
+        """
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        if not access or access.role not in (ROLE_OWNER, ROLE_ADMIN):
+            return {'success': False, 'error': _('Insufficient permissions')}
+        if (kwargs or type(tail_lines) is not int or not 1 <= tail_lines <= 2000
+                or type(previous) is not bool
+                or any(value is not None and (
+                    not isinstance(value, str) or len(value) > 253
+                    or not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?', value)
+                ) for value in (pod, container))):
+            return {'success': False, 'error': _('Invalid log request')}
+
+        def unavailable(reason):
+            return {'success': True, 'data': {
+                'available': False, 'reason': reason, 'pod': None,
+                'container': None, 'sources': [], 'text': '', 'truncated': False,
+            }}
+
+        if service.template_id.workload_type != 'container':
+            return unavailable('unsupported_workload')
+        if not service.helm_namespace or not service.helm_release_name:
+            return unavailable('not_deployed')
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return unavailable('operator_unavailable')
+        try:
+            payload = client.get_release_logs(
+                namespace=service.helm_namespace,
+                release_name=service.helm_release_name,
+                pod=pod, container=container, tail_lines=tail_lines, previous=previous,
+            )
+        except PaaSOperatorError:
+            # Do not return transport errors, raw kubectl stderr or credentials.
+            _logger.warning('Service log read unavailable for service id=%s', service.id)
+            return unavailable('operator_unavailable')
+        finally:
+            # Every poll owns a fresh client; release its pooled sockets promptly.
+            client._session.close()
+        return {'success': True, 'data': payload}
+
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/access-config",
            auth="user", methods=["POST"], type="json")
     def api_service_access_config(self, workspace_id: int, service_id: int,
@@ -2943,6 +3156,17 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False,
                         'error': _('This service has no public address to '
                                    'protect yet.')}
+            # AI-HMCP-002-4：0 席方案只擋「關 → 開」（前端 0 席本來就沒有 Access 頁籤）。已受保護時
+            # 重送 True（連同其他欄位存檔）與關閉方向（#1261 復原通道）都不經過這裡。判準收在 model。
+            if vals['is_protected'] and not service.is_protected:
+                denial = request.env[
+                    'woow_paas_platform.security_access_access_policy'
+                ]._protection_enable_denial(service)
+                if denial:
+                    return {'success': False,
+                            'error': denial['error'],
+                            'data': {k: v for k, v in denial.items()
+                                     if k != 'error'}}
         for f in ('login_google', 'login_email_otp'):
             if f in kwargs:
                 vals[f] = bool(kwargs[f])
@@ -4102,13 +4326,29 @@ class PaasController(HiddenChainMixin, Controller):
                 child_path[-len(p):] == p for p in password_paths
             )
 
+        def _mask_secret_subtree(value, child_path: tuple[str, ...]):
+            """``secret`` 子樹：平台注入的鍵維持 legacy 前綴遮罩，租戶填的 password 鍵全遮。
+
+            DATA-N8N-008-2：n8n 的 SMTP 密碼（``main.secret.N8N_SMTP_PASS``，``type: password``）
+            落在 ``main.secret`` 底下。這個分支原本整棵子樹都用 legacy 的 8 字元前綴遮罩，
+            而且排在 spec-driven 判斷之前 ⇒ 18 字元的租戶密碼洩漏了前 8 個字元（與 #535
+            「type: password 一律全遮」的契約不符）。現在逐葉判斷：葉節點的路徑若是 spec 點名的
+            password 鍵 ⇒ 全遮；其餘（平台注入的 ``N8N_API_KEY`` 等，不在 specs 裡）仍保留前綴，
+            n8n 既有 UI 靠它辨識是哪把 key。
+            """
+            if isinstance(value, dict):
+                return {k: _mask_secret_subtree(v, child_path + (k,)) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_mask_secret_subtree(v, child_path) for v in value]
+            return _mask_value_fully(value) if _is_password_path(child_path) else _mask_value(value)
+
         def _mask_secrets(d: dict, path: tuple[str, ...] = (), depth: int = 0) -> dict:
             result = {}
             for key, val in d.items():
                 child_path = path + (key,)
                 if key == 'secret' and isinstance(val, dict):
-                    # legacy N8N_API_KEY / etc under top-level 'secret'
-                    result[key] = _mask_secret_tree(val)
+                    # legacy N8N_API_KEY / etc under top-level 'secret'；租戶 password 鍵全遮（見上）
+                    result[key] = _mask_secret_subtree(val, child_path)
                 elif child_path[-2:] == ('config', 'sensitive') and isinstance(val, dict):
                     # mcp-server chart sensitive channel: mask every leaf under
                     # config.sensitive (admin_password, mcp_auth_token,
@@ -4138,7 +4378,15 @@ class PaasController(HiddenChainMixin, Controller):
                     result[key] = val
             return result
 
-        return _mask_secrets(values)
+        masked = _mask_secrets(values)
+        # DATA-N8N-013-1：n8n 加密金鑰落在 ``main.secret`` 底下，上面的 secret 分支會留 8 字元前綴；
+        # 這把金鑰能解開服務裡所有 credential，前綴也不給，這一格改成全遮。
+        node = masked
+        for key in N8N_ENCRYPTION_KEY_PATH[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and N8N_ENCRYPTION_KEY_PATH[-1] in node:
+            node[N8N_ENCRYPTION_KEY_PATH[-1]] = _mask_value_fully(node[N8N_ENCRYPTION_KEY_PATH[-1]])
+        return masked
 
     # _build_mcp_sidecar_config moved to CloudService model
 
@@ -4183,6 +4431,18 @@ class PaasController(HiddenChainMixin, Controller):
                 continue
             kept[key] = value
         return kept
+
+    @staticmethod
+    def _refuse_after_addon_write(service: Any, old_addon_ids: set | None, error: str) -> dict[str, Any]:
+        """reconfigure 在改過 addon 勾選之後才被擋下：還原勾選再回錯誤。
+
+        `_update_service` 改 addon 那段會先寫 odoo_addon_ids；之後的值驗證（白名單、format、
+        spec type）被拒時，json route 不丟例外 ⇒ transaction 照樣 commit，不還原就留下半套
+        變更（同 #1647 預檢被擋時的做法）。``old_addon_ids`` 為 None＝這次沒有動 addon。
+        """
+        if old_addon_ids is not None:
+            service.write({'odoo_addon_ids': [(6, 0, sorted(old_addon_ids))]})
+        return {'success': False, 'error': error}
 
     @staticmethod
     def _drop_create_only_values(
@@ -4418,6 +4678,10 @@ class PaasController(HiddenChainMixin, Controller):
         except (json.JSONDecodeError, TypeError):
             _logger.error("Invalid helm_default_values for template %s; blocking create", template.name)
             return {'success': False, 'error': _('Template misconfigured (invalid default values). Please contact support.')}
+        # service-update-api-validation（X-LC-002-4）：values 必須是物件；spec 宣告的鍵依
+        # type 驗證（與 reconfigure 同一套），不合法就在收錢前擋下。
+        if values is not None and not isinstance(values, dict):
+            return {'success': False, 'error': _('Invalid request')}
         filtered_user_values, rejected = template._filter_allowed_helm_values(values)
         if rejected:
             # #1160：create 對 spec 以外的鍵靜默丟棄（前端可能夾帶舊表單的鍵，例如
@@ -4426,6 +4690,9 @@ class PaasController(HiddenChainMixin, Controller):
                 "Dropped helm value keys not declared by template %s on create: %s",
                 template.name, sorted(rejected),
             )
+        filtered_user_values, value_error = template._validate_spec_values(filtered_user_values)
+        if value_error:
+            return {'success': False, 'error': value_error}
 
         # Extract _init.* keys (not Helm values, used for post-deploy init)
         init_params = {}
@@ -4450,9 +4717,14 @@ class PaasController(HiddenChainMixin, Controller):
 
         # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）：
         # 不合法就在收錢前擋下，別讓一行字串到部署時才把 chart／gitconfig 弄壞。
-        format_error = template._validate_spec_formats(helm_only_values)
+        format_error = template._validate_spec_formats(
+            helm_only_values, namespace=helm_namespace)
         if format_error:
             return {'success': False, 'error': format_error}
+        # INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec ``ignored_when``）有值就擋。
+        ignored_error = template._ignored_when_violation(helm_only_values, default_values)
+        if ignored_error:
+            return {'success': False, 'error': ignored_error}
 
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
@@ -4479,6 +4751,11 @@ class PaasController(HiddenChainMixin, Controller):
                 {template.mcp_api_key_helm_path: mcp_api_key}
             )
             merged_values = self._deep_merge(merged_values, api_key_nested)
+
+        # DATA-N8N-013-1：n8n 的加密金鑰由平台在開通時產生，跟著 helm_values 保存、經 chart 的
+        # app-secret 變成環境變數（見 cloud_service ``N8N_ENCRYPTION_KEY_PATH``）。只在這裡產生：
+        # 部署組裝不補，存量服務才不會拿到一把與 PVC 不同的金鑰。租戶送的同名鍵已被白名單丟掉。
+        merged_values = CloudService._mint_n8n_encryption_key(merged_values, template.slug)
 
         # #357: 對 admin GUI 內建的 template 生成 admin_password。密碼只放進
         # cloud_service_secret + 一次性 response，不寫回 helm_values。
@@ -4750,6 +5027,13 @@ class PaasController(HiddenChainMixin, Controller):
         if version_error:
             return {'success': False, 'error': version_error}
 
+        # service-update-api-validation（INFRA-EMQX-011-1）：values 不是物件時，原本一路
+        # 走到 `_filter_allowed_helm_values` 的 `.items()` 才炸，回 Python 例外原文。
+        if values is not None and not isinstance(values, dict):
+            return {'success': False, 'error': _('Invalid request')}
+        # 下面的「沒有變更就不升級」只用在租戶真的送了設定值的請求；空請求維持既有的
+        # 「以目前設定重新套用」語意（見該處註解）。
+        requested_values = bool(values)
         # #1455：清除清單在任何寫入**之前**驗證（下方 addon 那段會先寫 odoo_addon_ids）。
         if clear_keys is not None and not isinstance(clear_keys, list):
             return {'success': False, 'error': _('Invalid request')}
@@ -4822,7 +5106,8 @@ class PaasController(HiddenChainMixin, Controller):
             existing_values = service._helm_values_dict()  # #559：唯一入口
             filtered_user_values, rejected_keys = service.template_id._filter_allowed_helm_values(values)
             if rejected_keys:
-                return {'success': False, 'error': _('Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys))}
+                return self._refuse_after_addon_write(service, old_addon_ids, _(
+                    'Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys)))
             # _init.* are one-time provisioning params consumed at creation (stored on
             # the service record, e.g. n8n_owner_password). They are NOT Helm values and
             # must never be merged into helm_values on reconfigure — doing so would
@@ -4836,13 +5121,34 @@ class PaasController(HiddenChainMixin, Controller):
                 filtered_user_values, existing_values, service.template_id,
             )
             # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）。
-            format_error = service.template_id._validate_spec_formats(filtered_user_values)
+            format_error = service.template_id._validate_spec_formats(
+                filtered_user_values, existing_values=existing_values,
+                namespace=service.helm_namespace, cleared_keys=clear_keys or ())
             if format_error:
-                return {'success': False, 'error': format_error}
+                return self._refuse_after_addon_write(service, old_addon_ids, format_error)
+            # service-update-api-validation：依 spec type 驗證值（select 選項、真布林、數字、
+            # 單行文字），null＝還原 spec 預設。送回目前的值一律放行。
+            current_values = {}
+            for key in filtered_user_values:
+                current = _lookup_helm_value(existing_values, key)
+                if current is not _HELM_VALUE_MISSING:
+                    current_values[key] = current
+            filtered_user_values, value_error = service.template_id._validate_spec_values(
+                filtered_user_values, current_values=current_values)
+            if value_error:
+                return self._refuse_after_addon_write(service, old_addon_ids, value_error)
             # #1455：清除優先於同一請求裡對同一格的輸入。
             if clear_keys:
                 filtered_user_values = {
                     k: v for k, v in filtered_user_values.items() if k not in clear_keys}
+            # INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec ``ignored_when``，例 VPN 節點
+            # 「同工作區 Headscale」模式的 tags）有值 ⇒ 擋在 helm upgrade 之前，不白白升級一次。
+            ignored_error = service.template_id._ignored_when_violation(
+                filtered_user_values, existing_values)
+            if ignored_error:
+                if old_addon_ids is not None:
+                    service.write({'odoo_addon_ids': [(6, 0, sorted(old_addon_ids))]})
+                return {'success': False, 'error': ignored_error}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             # `_deep_merge` 只淺拷貝被覆寫的那幾層，沒被碰到的子樹與 existing 共用
             # 同一個物件 ⇒ 下面清除前先整份 deepcopy，否則刪 merged 會連 existing 一起刪，
@@ -4881,6 +5187,25 @@ class PaasController(HiddenChainMixin, Controller):
                     # All addons deselected — remove addon-specific helm values
                     service._remove_addon_helm_values(merged_values)
 
+            # service-update-api-validation（AI-LLM-017-3）：送來的設定值正規化後與目前完全
+            # 相同、addon 沒變、也沒有要清除的憑證 ⇒ 不呼叫 operator、不產生 helm revision，
+            # 直接回「沒有變更」。舊分頁整包送回、或 API 重送同一組值時，原本每次都白跑一次
+            # helm upgrade（服務進「升級中」、回復版本清單被灌水；helm 只留 10 筆歷史）。
+            # 從 error 的兩個出口（init 額度用完、背景 upgrade 失敗）出發的請求不短路——那時
+            # 重送同一組值就是租戶唯一的重試方式。
+            # 空請求（values 空、沒有 addon、沒有 clear_keys）刻意不在這裡短路：它是既有的
+            # 「以目前設定重新套用」（會重算平台注入的值），是否也改成 no-op 屬產品決定
+            # （#1456／noop-save-triggers-upgrade）。前端 ConfigurationTab 本來就不送空請求。
+            if (requested_values and not addon_changed
+                    and not (init_exhausted_error or upgrade_failed_error)
+                    and merged_values == existing_snapshot):
+                return {
+                    'success': True,
+                    'no_changes': True,
+                    'message': _('No changes to apply.'),
+                    'data': self._format_service(service),
+                }
+
             # #552: reconfigure 的 chart version fallback。**主執行緒**解析，兩個
             # 消費端（下面的 write ＋ upgrade_kwargs）共用同一個值。
             #
@@ -4914,9 +5239,11 @@ class PaasController(HiddenChainMixin, Controller):
             # #1647：全量 values 在這裡（寫入之前）就組好，同步預檢與稍後的背景 upgrade 共用
             # 同一組 `upgrade_kwargs`。`_assemble_deploy_values(values=…)` 不改輸入、不寫 DB，
             # 結果與「寫完 helm_values 再從 stored values 組」相同（落庫前後都剝同一組敏感鍵）。
+            assembled = service._assemble_deploy_values(
+                values=merged_values, chart_version=resolved_version)
             upgrade_kwargs = self._upgrade_kwargs(
-                service, resolved_version,
-                service._assemble_deploy_values(values=merged_values)['values'])
+                service, resolved_version, assembled['values'],
+                tenant_secret=assembled.get('tenant_secret'))
             denial = self._reconfigure_compute_quota_denial(service, client, upgrade_kwargs)
             if denial:
                 # helm_values、state、last_upgraded_at、init 代數都還沒動；唯一已經寫下去的
@@ -5003,8 +5330,12 @@ class PaasController(HiddenChainMixin, Controller):
             version=expected or '-')
 
     @staticmethod
-    def _upgrade_kwargs(service, resolved_version, assembled_values):
-        """送 operator ``upgrade_release``／``upgrade_preflight`` 的參數（兩者必須同一組，#1513）。"""
+    def _upgrade_kwargs(service, resolved_version, assembled_values, tenant_secret=None):
+        """送 operator ``upgrade_release``／``upgrade_preflight`` 的參數（兩者必須同一組，#1513）。
+
+        INFRA-FIX-019-1：``tenant_secret``＝``_assemble_deploy_values(chart_version=…)`` 拿出
+        values 的租戶憑證（None＝舊路徑、不帶）。預檢的 client 收下但不送（不寫入）。
+        """
         # #1130：woow-odoo 的 conf.adminPassword 每次全量送（reset_values 下不送就
         # 變空值；chart 對既有 DB 是 no-op）。只補 odoo 這一支——MCP 家族在
         # reconfigure 缺 sensitive 的既有行為不在本票範圍。
@@ -5025,7 +5356,31 @@ class PaasController(HiddenChainMixin, Controller):
         )
         if odoo_sensitive:
             upgrade_kwargs['sensitive_values'] = odoo_sensitive
+        if tenant_secret:
+            upgrade_kwargs['tenant_secret'] = tenant_secret
         return upgrade_kwargs
+
+    @staticmethod
+    def _restart_after_secret_change(bg_client, namespace, release_name, component):
+        """#1435／AI-OD-004-2：改金鑰後補的 rollout restart（背景執行緒，無 ORM）。
+
+        範本宣告了 ``secret_change_restart_component`` 就只滾那個 component（open-design：
+        吃金鑰 env 的 daemon），console 等不吃金鑰的工作負載不再被連帶重建、進行中的終端機
+        不斷線。operator 回 404（沒有任何 workload 帶這個 label，例如舊 chart）就退回不帶
+        component 的全部重啟——寧可多滾，也不要讓新金鑰沒生效。其他錯誤照原樣往外拋，由
+        呼叫端記 log（設定已套用，不翻 error）。
+        """
+        if component:
+            try:
+                return bg_client.restart_release(
+                    namespace=namespace, release_name=release_name, component=component)
+            except PaaSOperatorError as e:
+                if e.status_code != 404:
+                    raise
+                _logger.warning(
+                    "No %s workload of %s/%s to restart after a credential change; "
+                    "restarting every workload instead", component, namespace, release_name)
+        return bg_client.restart_release(namespace=namespace, release_name=release_name)
 
     def _start_background_upgrade(self, service, client, resolved_version, halted,
                                   restart_after_upgrade=False, plan_change=False,
@@ -5054,10 +5409,16 @@ class PaasController(HiddenChainMixin, Controller):
         # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
         # svc.helm_values 已由呼叫端寫好，helper 讀到的即最新 user config。
         if upgrade_kwargs is None:
+            assembled = service._assemble_deploy_values(chart_version=resolved_version)
             upgrade_kwargs = self._upgrade_kwargs(
-                service, resolved_version, service._assemble_deploy_values()['values'])
+                service, resolved_version, assembled['values'],
+                tenant_secret=assembled.get('tenant_secret'))
         operator_url = client.base_url
         operator_api_key = client._session.headers.get('X-API-Key', '')
+        # AI-OD-004-2：補重啟的範圍在主執行緒讀好（背景執行緒沒有 ORM）。空＝全部。
+        restart_component = (
+            service.template_id.secret_change_restart_component or ''
+            if restart_after_upgrade else '')
 
         def _alert_compute_quota_refusal(exc):
             """#1647：背景的 PATCH 才被 compute 配額預檢擋下時，補上管理員告警。
@@ -5171,16 +5532,37 @@ class PaasController(HiddenChainMixin, Controller):
                 # 失敗不翻 error：設定已套用，租戶可用「重新啟動」（#1432）補上。
                 if restart_after_upgrade:
                     try:
-                        bg_client.restart_release(
-                            namespace=upgrade_kwargs['namespace'],
-                            release_name=upgrade_kwargs['release_name'],
-                        )
+                        self._restart_after_secret_change(
+                            bg_client, upgrade_kwargs['namespace'],
+                            upgrade_kwargs['release_name'], restart_component)
                     except Exception:
                         _logger.exception(
                             "Failed to restart service %s after a credential "
                             "change — new keys take effect on the next restart",
                             service_id,
                         )
+                # #1414：只認 operator 回報的正整數 revision。舊 operator 讀錯欄位、upgrade
+                # 一律回報 0；鍵存在 ⇒ 舊碼的 `.get('revision', …)` 把帳本寫成 0（AI-OD-004-3
+                # 「更新中短暫回 0」），單調分支則永遠不寫，帳本要等 poll／每日對帳才追上。
+                # 讀不到就立刻向 operator 讀一次 release（helm list 的 revision 一直是對的）；
+                # 仍讀不到就不碰帳本，交給 poll／對帳——不猜 +1。
+                reported = reported_helm_revision(release_info.get('revision'))
+                synced_chart_version = None
+                if reported is None:
+                    try:
+                        current = bg_client.get_release(
+                            upgrade_kwargs['namespace'], upgrade_kwargs['release_name'])
+                    except Exception:
+                        _logger.warning(
+                            "Could not read the release of service %s after upgrade; "
+                            "helm_revision is left to the next release sync",
+                            service_id, exc_info=True)
+                    else:
+                        if isinstance(current, dict):
+                            reported = reported_helm_revision(current.get('revision'))
+                            synced_chart_version = current.get('chart_version')
+                reported_chart_version = (
+                    release_info.get('chart_version') or synced_chart_version)
                 with odoo.registry(db_name).cursor() as cr:
                     env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})
                     svc = env['woow_paas_platform.cloud_service'].browse(service_id)
@@ -5188,7 +5570,7 @@ class PaasController(HiddenChainMixin, Controller):
                     # 少了它 helm_revision 就永遠停在升級前的版本。
                     if svc.exists() and svc.state in ('upgrading', 'suspended'):
                         svc.write({
-                            'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                            'helm_revision': reported or svc.helm_revision,
                             # #552: 第四條回寫路徑。upgrade 成功後才拿得到
                             # helm 真正解析出來的 chart 版本（fallback 都空
                             # 時仍是 registry latest，此時這行是唯一知道裝了
@@ -5197,7 +5579,7 @@ class PaasController(HiddenChainMixin, Controller):
                             # 不把帳本洗成空。回寫對象是 per-service 欄位，
                             # 不是 template（seed noupdate=0＋healer 會還原）。
                             'helm_chart_version': (
-                                release_info.get('chart_version')
+                                reported_chart_version
                                 or svc.helm_chart_version
                             ),
                         })
@@ -5208,12 +5590,11 @@ class PaasController(HiddenChainMixin, Controller):
                         # 回寫，於是帳本停在升級前的 revision，直到每日對帳才追上
                         # （R8：OD 平台 9／實際 10、Code Server 5／6）。這裡只做**單調**
                         # 回寫：operator 明確回報、且比帳本新才寫，不碰 state。
-                        reported = release_info.get('revision')
-                        if isinstance(reported, int) and reported > (svc.helm_revision or 0):
+                        if reported and reported > (svc.helm_revision or 0):
                             svc.write({
                                 'helm_revision': reported,
                                 'helm_chart_version': (
-                                    release_info.get('chart_version')
+                                    reported_chart_version
                                     or svc.helm_chart_version
                                 ),
                             })
@@ -5289,8 +5670,20 @@ class PaasController(HiddenChainMixin, Controller):
             })
             return {'success': False, 'error': _('Deletion failed: %(reason)s', reason=e.detail or e.message)}
 
+    @staticmethod
+    def _invalid_rollback_revision_response() -> dict[str, Any]:
+        """AUDITFIX rollback-api-input-validation：revision 缺值／0／負數／非整數的統一回應。"""
+        return {'success': False,
+                'error': _('Choose the revision to roll back to (a whole number, 1 or higher).'),
+                'data': {'code': 'invalid_revision'}}
+
     def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
-        """Rollback service to a previous revision."""
+        """Rollback service to an explicit earlier revision (``revision`` >= 1)."""
+        # AUDITFIX rollback-api-input-validation：helm 把 0 解讀成「上一版」，原本 None／0
+        # 也照這個語意送出——誤送 0 真的回復並重啟（INFRA-EMQX-013-1、AI-PI-004-4）。
+        # 回復一律要明確的 revision 號（對話框本來就只送明確的號碼）。
+        if not is_valid_rollback_revision(revision):
+            return self._invalid_rollback_revision_response()
         # #423 W5a MAJOR-1：suspended 必須擋下。
         #
         # 語意上：停權中的服務本來就不該允許改版本。
@@ -5319,6 +5712,10 @@ class PaasController(HiddenChainMixin, Controller):
             preserve_paths = service._rollback_preserved_value_paths()
         except UserError as e:
             return {'success': False, 'error': str(e)}
+        # AI-OD-006-1：範本宣告的平台功能開關（open-design 的 mcp.enabled 等）——守衛
+        # （image）與目標 revision 相同時維持目前值，不因回復到功能上線前的 revision 而
+        # 被關掉；守衛不同時跟著目標 revision（operator 判定，見 preserve_when_equal）。
+        feature_switches = service._rollback_feature_switches()
 
         try:
             # #1526：chart 版本不得低於目前部署中的版本。operator 是權威的那一道（讀
@@ -5329,6 +5726,20 @@ class PaasController(HiddenChainMixin, Controller):
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
                 ).get('revisions') or []
+            # DATA-ODOO-010-1／AUDITFIX：目標就是目前已部署的版本時直接擋下，不讓 helm 白白
+            # 重建 Pod；目標不在歷史裡也在這裡擋（AI-LLM-007-2：原本交給 operator，租戶看到
+            # helm 的英文原文）。
+            problem = rollback_request_problem(rollback_history, revision)
+            if problem == 'already_current':
+                return {'success': False, 'error': _(
+                    'Revision %(revision)s is the version currently deployed; '
+                    'there is nothing to roll back.', revision=revision),
+                    'data': {'code': 'already_current'}}
+            if problem == 'not_found':
+                return {'success': False, 'error': _(
+                    'Revision %(revision)s was not found in this service\'s version history. '
+                    'Refresh the list and choose another revision.', revision=revision),
+                    'data': {'code': 'revision_not_found'}}
             floor = rollback_floor_violation(rollback_history, revision)
             if floor:
                 return {'success': False,
@@ -5338,8 +5749,10 @@ class PaasController(HiddenChainMixin, Controller):
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
                 revision=revision,
-                chart=service.template_id.helm_chart_name if preserve_paths else None,
+                chart=(service.template_id.helm_chart_name
+                       if preserve_paths or feature_switches else None),
                 preserve_value_paths=preserve_paths or None,
+                preserve_when_equal=feature_switches or None,
                 # #1647：operator 在套用前檢查工作區的 compute 配額——保留憑證的回復算 helm
                 # upgrade 的 dry-run，純 helm rollback（沒有平台憑證的模板）算目標 revision 的
                 # stored manifest（#1685）。
@@ -5349,17 +5762,21 @@ class PaasController(HiddenChainMixin, Controller):
             # #489：rollback 也是一次 helm 寫入，`last_upgraded_at` 是它的時間
             # 錨。不記的話 age timeout 會退回首裝時間，rollback 一發出就被判逾時。
             # （`fields.Datetime.now()` 的 UTC 基準要求見 `_update_service`。）
+            # 固定回滾所建立的新 revision；不使用下一輪的任意最新版本。
+            expected_revision = reported_helm_revision(
+                rollback_result.get('revision') if isinstance(rollback_result, dict) else None)
+            if expected_revision is None:
+                expected_revision = max((int(row.get('revision') or 0)
+                                         for row in rollback_history), default=0) + 1
             rollback_vals = {
                 'state': 'upgrading',
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
+                # #1414／#1456：回復建立了新 revision——帳本當場記下，不等 poll／每日對帳
+                # （INFRA-TS-003-1、AI-HER-007-1：回復後對話框仍把舊版標成「目前」）。
+                'helm_revision': expected_revision,
             }
             service.write(rollback_vals)
-            # 固定回滾所建立的新 revision；不使用下一輪的任意最新版本。
-            expected_revision = (rollback_result.get('revision') if isinstance(rollback_result, dict) else None)
-            if type(expected_revision) is not int or expected_revision < 1:
-                expected_revision = max((int(row.get('revision') or 0)
-                                         for row in rollback_history), default=0) + 1
             service._record_rollback_config_sync(expected_revision)
             # #1433：operator 回報回復後實際的 chart 版本（#1526 起兩種模式都回報，且
             # 不會低於回復前）。記下來，帳本才與叢集一致——下一次「修改配置」以
@@ -5401,6 +5818,14 @@ class PaasController(HiddenChainMixin, Controller):
                         'data': {'code': COMPUTE_QUOTA_ERROR_CODE,
                                  'shortfalls': _compute_quota_detail_rows(
                                      detail, 'shortfalls')}}
+            # AUDITFIX：operator 的 400／404 是「這個 revision 不能回復」（不在歷史裡、就是目前
+            # 版本、release 沒有歷史）——detail 是 operator／helm 的英文原文，不轉給租戶。
+            # 平台預檢已擋掉常見情況；走到這裡代表歷史在兩次呼叫之間變了。
+            if e.status_code in (400, 404):
+                return {'success': False, 'error': _(
+                    'Revision %(revision)s cannot be restored. Refresh the version list '
+                    'and try again.', revision=revision),
+                    'data': {'code': 'revision_not_restorable'}}
             # dict 形的 detail（例 503 operator_busy）取它的 message，不把整個 dict 印給租戶。
             reason = detail.get('message') if isinstance(detail, dict) else detail
             return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=reason or e.message)}
@@ -5422,6 +5847,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         #1526：每個 revision 另帶 ``chart_version`` 與 ``rollback_allowed``——chart 比
         目前部署中舊的 revision 不能回復，對話框據此把它們標成不可選。
+        INFRA-FIX-018-1：另回 ``history_max``（operator 每個 release 保留幾筆 revision）。
         """
         client = get_paas_operator_client(request.env)
         if not client:
@@ -5435,7 +5861,13 @@ class PaasController(HiddenChainMixin, Controller):
 
             return {
                 'success': True,
-                'data': annotate_rollback_floor(result.get('revisions', [])),
+                # INFRA-FIX-018：failed 的 revision 從沒成功部署過，不列給租戶選；
+                # 先標註（基準讀完整歷史）、後過濾。
+                'data': drop_failed_revisions(
+                    annotate_rollback_floor(result.get('revisions', []))),
+                # INFRA-FIX-018-1／AI-HER-003-1：operator 的 helm --history-max；對話框寫
+                # 「最多保留最近 N 個版本」。舊 operator 沒有這個欄位 ⇒ None（不顯示）。
+                'history_max': result.get('history_max'),
             }
 
         except PaaSOperatorConnectionError:
@@ -5617,6 +6049,10 @@ class PaasController(HiddenChainMixin, Controller):
 
         if include_details:
             data.update({
+                # DATA-ODOO-005-2／X-BK-006-1：服務頁唯讀備份卡。只讀已存值（由每小時的
+                # `_cron_refresh_backup_status` 寫入），不呼叫 operator；`supported` 是卡片
+                # 畫不畫的唯一判準。
+                'backup': service._backup_status_public(),
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
@@ -5660,10 +6096,23 @@ class PaasController(HiddenChainMixin, Controller):
                 # ⚠ 前端的 gate 必須讀 `has_public_tunnel_address`，不得用 slug 判
                 # （repo-lint 第 7 條；見 cloud_app_template 同名欄位註解）。
                 'has_public_tunnel_address': service._chart_has_public_tunnel_address(),
+                # INFRA-FIX-005：「VPN 節點狀態」卡的 gate。⚠ 同上，前端只讀這個旗標、不得用 slug 判；
+                # 狀態本身不在 payload 裡，卡片打開時才即時問 `/node-status`（見該端點）。
+                'has_vpn_node_status': service._chart_has_vpn_node_status(),
                 'public_tunnel_label': service.template_id.public_tunnel_label or None,
                 'public_tunnel_url': service.public_tunnel_url or None,
                 # #1559：沒有位址時 ngrok 說得出的原因（已是建立者語言的一句話）。
                 'public_tunnel_error': service.public_tunnel_error or None,
+                # 商用驗收 EMQX-020-3／HS-013-3：範本的兩則提示（資料值）——有位址時的
+                # address_note（EMQX 明文 TCP）、有原因時的 error_note（Headscale 退回內網址）。
+                'public_tunnel_address_note': service.template_id.public_tunnel_address_note or None,
+                'public_tunnel_error_note': service.template_id.public_tunnel_error_note or None,
+                # 商用驗收 HS-013-2：那一格最後一次「探過、有結論」的時間（帶 UTC offset，理由同
+                # last_release_sync_at 的 #1456 註解）。
+                'public_tunnel_checked_at': (
+                    service.public_tunnel_checked_at.replace(tzinfo=timezone.utc).isoformat()
+                    if service.public_tunnel_checked_at else None
+                ),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,

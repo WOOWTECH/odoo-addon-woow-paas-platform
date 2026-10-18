@@ -18,6 +18,7 @@ from odoo.addons.woow_paas_platform.controllers.smart_home import (
     SmartHomeController,
 )
 from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
+from .wallet_fixture import fund_wallet
 
 
 def _patch_request(env):
@@ -714,6 +715,8 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
         """
         partner = self.workspace.owner_id.partner_id
         self.smart_home._create_and_confirm_subscription(partner, plan)
+        # 換方案餘額閘（#1677 A1）：本 class 測試用模式（見 wallet_fixture）。
+        fund_wallet(partner)
         sub = self.smart_home.sudo().subscription_id
         if sub.sh_trial:
             sub.write({'sh_end_date': False})

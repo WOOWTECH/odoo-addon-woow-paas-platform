@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     # operator_busy，什麼都沒套用，可以直接重送）。平台 helm 類請求的 HTTP 預算是 120s
     # （HELM_OPERATION_TIMEOUT），這裡要留給真正的 helm 作業。
     helm_queue_timeout_seconds: int = Field(default=45, gt=0)
+    # HELM_HISTORY_MAX：每個 release 最多保留幾筆 revision（`helm upgrade`／`helm rollback`
+    # 的 --history-max；install 沒有這個旗標）。商用驗收 INFRA-FIX-018-1／AI-HER-003-1：
+    # 原本吃 helm 預設 10，連續失敗的 upgrade（failed revision 也佔名額）、設定修改、回復、
+    # 值不變的 Redeploy 加起來超過 10 筆，就把最後一個可回復的好版本擠出歷史。
+    # ⚠ 取捨：每筆 revision 是一個 release Secret，含當時的完整 values（也就是當時的
+    # 明文憑證）；上限越高，換掉的舊密碼在叢集裡留得越久、etcd 也越大。不接受 0
+    # （helm 的 0＝不限＝舊憑證永遠不會被清掉）。平台回復對話框的「最多保留最近 N 版」
+    # 讀的是 revisions API 回報的這個值。
+    helm_history_max: int = Field(default=20, ge=1)
 
     # CORS
     cors_origins: str = ""  # Comma-separated list of allowed origins, empty = block all external
@@ -88,6 +97,31 @@ class Settings(BaseSettings):
     # TENANT_BASELINE_EGRESS_ENABLED：租戶 ns 加 NetworkPolicy paas-baseline-egress
     # （同 ns 全通＋kube-dns 53＋公網排除私網／metadata／CGNAT／多播／240/4）。
     tenant_baseline_egress_enabled: bool = False
+    # 商用驗收 egress-all-ports-open：上面那條的公網規則原本是任意埠，chart 的 80/443 因 NP
+    # 聯集無效。兩個開關都只在 TENANT_BASELINE_EGRESS_ENABLED 開著時有作用，預設關＝不變。
+    # TENANT_BASELINE_EGRESS_BLOCKED_PORTS：逗號分隔埠號（例 "22,25"），公網 TCP／UDP 封掉這些埠。
+    tenant_baseline_egress_blocked_ports: str = ""
+    # TENANT_BASELINE_EGRESS_WEB_PROFILE：帶 paas.woowtech.io/egress-profile=web 的 pod 改由
+    # paas-baseline-egress-web 管（同 ns＋DNS＋公網 TCP 80/443）。label 由各 chart 加。
+    tenant_baseline_egress_web_profile: bool = False
+
+    @field_validator("tenant_baseline_egress_blocked_ports")
+    @classmethod
+    def _validate_blocked_ports(cls, v: str) -> str:
+        # 不 import tenant_baseline.parse_port_list：src.services 的 __init__ 會 import helm →
+        # config，循環。規則相同（1–65535 整數、逗號分隔），由測試對照兩邊一致。
+        ports = set()
+        for part in (v or "").split(","):
+            token = part.strip()
+            if not token:
+                continue
+            if not token.isdigit() or not 1 <= int(token) <= 65535:
+                raise ValueError(
+                    "TENANT_BASELINE_EGRESS_BLOCKED_PORTS must be comma-separated ports "
+                    f"1-65535; got {token!r}")
+            ports.add(int(token))
+        return ",".join(str(p) for p in sorted(ports))
+
     # TENANT_POD_SECURITY_ENABLED：租戶 ns 加 pod-security.kubernetes.io/enforce=<level>
     # （＋warn／audit），例外清單內的 ns 不加、並移除殘留的 PSA 標籤。
     tenant_pod_security_enabled: bool = False
@@ -99,6 +133,41 @@ class Settings(BaseSettings):
     tenant_psa_version: str = "v1.34"            # env TENANT_PSA_VERSION
     # 逗號分隔。只能放管理者自己的 ns，每加一個都要寫理由（見 tenant_baseline 的註解）。
     psa_exempt_namespaces: str = "paas-ws-ab6564da"  # env PSA_EXEMPT_NAMESPACES
+
+    # AI-FIX-NET-1（商用驗收；#1497、INFRA-XSVC-007）——租戶 workload 的兩條 render 期政策，
+    # 由 helm post-renderer 套用（src/tenant_workload_policy.py），例外清單同 PSA_EXEMPT_NAMESPACES
+    # （管理者用的 Omnigent 不套）。都是 kill switch，預設關＝行為與本變更之前完全相同。
+    #
+    # TENANT_AVOID_NODES：逗號分隔的節點名（kubernetes.io/hostname）。非空時每個租戶 pod
+    # template 加 required nodeAffinity ``hostname NotIn [...]``（與 chart 既有 affinity 相 AND）。
+    # 目的：ubuntuserver-59mqj 是正式站＋Artifactory 所在、10-07 曾停擺的節點。
+    tenant_avoid_nodes: str = ""
+    # TENANT_EGRESS_GATE_ENABLED：每個租戶 pod template 最前面插 init container，等到
+    # paas-baseline-egress 對這個 pod 生效（連不到 k8s API）才放行主容器——補 kube-router 在
+    # pod 啟動後 0.1–2.6 秒才套規則的空窗（#1497）。只在 TENANT_BASELINE_EGRESS_ENABLED 也開、
+    # 且該 ns 真的有 paas-baseline-egress 時才插（否則 gate 永遠等不到）。
+    tenant_egress_gate_enabled: bool = False
+    tenant_egress_gate_image: str = "busybox:1.36"          # 與現有 chart 的 init container 同一個
+    tenant_egress_gate_timeout_seconds: int = 60
+    # 逾時行為：proceed（預設；規則 60 秒都沒生效＝CNI 故障，退回修補前的行為，不讓服務起不來）
+    # 或 fail（init container 失敗、pod 不啟動；較嚴格，CNI 故障時租戶服務起不來）。
+    tenant_egress_gate_on_timeout: str = "proceed"
+    # 探測目標 host:port；空＝pod 內的 KUBERNETES_SERVICE_HOST:PORT（每個 pod 都有）。
+    tenant_egress_gate_target: str = ""
+
+    @field_validator("tenant_egress_gate_on_timeout")
+    @classmethod
+    def _validate_gate_on_timeout(cls, v: str) -> str:
+        if v not in ("proceed", "fail"):
+            raise ValueError("TENANT_EGRESS_GATE_ON_TIMEOUT must be 'proceed' or 'fail'; got %r" % v)
+        return v
+
+    @field_validator("tenant_egress_gate_timeout_seconds")
+    @classmethod
+    def _validate_gate_timeout(cls, v: int) -> int:
+        if not 5 <= v <= 600:
+            raise ValueError("TENANT_EGRESS_GATE_TIMEOUT_SECONDS must be within 5..600; got %r" % v)
+        return v
 
     @field_validator("tenant_psa_enforce_level", "tenant_psa_warn_level",
                      "tenant_psa_audit_level")

@@ -81,12 +81,15 @@ def pod_info(**overrides):
         # 一筆 Warning 事件（``{'reason', 'message', 'count', 'last_seen'}``）；None＝沒有可報的。
         'waiting': None,
         'last_warning': None,
+        # #1456：主要容器上一次結束的原因（``'OOMKilled'``、``'Error'``…）；None＝沒有容器
+        # 結束過。舊 operator 不送這個 key，要模擬時用 ``last_terminated_reason=ABSENT``。
+        'last_terminated_reason': None,
     }
     unknown = set(overrides) - set(pod)
     if unknown:
         raise TypeError('pod_info() 不認得的欄位：%s' % sorted(unknown))
     pod.update(overrides)
-    return pod
+    return {key: value for key, value in pod.items() if value is not ABSENT}
 
 
 def workload_info(**overrides):

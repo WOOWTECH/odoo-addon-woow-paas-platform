@@ -66,12 +66,29 @@ async function readComponent(relativePath) {
 const overviewTabSource = await readComponent("pages/service/tabs/OverviewTab.js");
 const workspacePageSource = await readComponent("pages/workspace/WorkspaceDetailPage.js");
 
+// INFRA-FIX-005：connectionStatus 另外讀 VPN 節點狀態（hasNodeProblem、this.vpn.state.report）。
+// 這支測試的對象是 #1647 的 workload 訊號，節點狀態一律「沒有報告」（report: null）；
+// 節點狀態讓路的行為由 test_vpn_node_status_fix005.mjs 驗。
+const vpnHelperUrl = new URL("../../src/static/src/paas/utils/vpn_node_status.js", import.meta.url);
+const vpnHelper = await import(
+  `data:text/javascript;base64,${Buffer.from(
+    (await readFile(vpnHelperUrl, "utf8")).replace(
+      'import { _t } from "@web/core/l10n/translation";',
+      "const _t = (message) => message;",
+    ),
+  ).toString("base64")}`
+);
+
 /** OverviewTab 的 connectionStatus getter，接上真的 hasConfirmedWorkloadFault。 */
 const connectionStatusOf = (service) =>
   new Function(
     "hasConfirmedWorkloadFault",
+    "hasNodeProblem",
     `return function () {${getterBody(overviewTabSource, "connectionStatus")}};`,
-  )(presentation.hasConfirmedWorkloadFault).call({ props: { service } });
+  )(presentation.hasConfirmedWorkloadFault, vpnHelper.hasNodeProblem).call({
+    props: { service },
+    vpn: { state: { report: null } },
+  });
 
 /** WorkspaceDetailPage 的 computedStats getter，接上真的 countServiceHealth；回 {Healthy, Alerts}。 */
 const workspaceStatsOf = (services) => {
@@ -342,4 +359,16 @@ test("工作區統計卡：Healthy／Alerts 兩格用 countServiceHealth 的結�
   assert.equal(incident.Healthy, "0");
   assert.equal(incident.Alerts, "1");
   assert.equal(incident["Total Apps"], "1");
+});
+
+test("#1456：Pod 在、沒有一顆就緒的三個代碼走一般文案，連線狀態不是 online、統計算 Alerts", () => {
+  // 後端只在「首次看到滿 5 分鐘後又看到一次」才把這三個代碼放進 payload；前端不必認得它們，
+  // 一律用一般文案（不顯示代碼本身）。
+  for (const code of ["oom_killed", "crash_loop", "not_ready"]) {
+    const service = { state: "running", workload_fault: code };
+    assert.equal(presentation.getWorkloadFaultText(service), GENERIC_TEXT, code);
+    assert.ok(presentation.getWorkloadFaultLabel(service), code);
+    assert.notEqual(connectionStatusOf(service), "online", code);
+    assert.deepEqual(presentation.countServiceHealth([service]), { healthy: 0, alerts: 1 }, code);
+  }
 });

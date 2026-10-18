@@ -44,17 +44,21 @@ export class AppMarketplacePage extends Component {
 
     /**
      * 麵包屑軌跡：Workspaces → {所屬工作區}(連回工作區) → App Marketplace。
-     * Marketplace 頁本身只抓模板、不載入工作區，工作區名從 workspaceService
-     * 的清單快取取得（經工作區頁進來時通常已有）；deep-link 缺快取時退守
-     * 泛用標籤「Workspace」，連結仍正確指向該工作區。
+     * Marketplace 頁本身只抓模板、不載入工作區，工作區名先用 workspaceService
+     * 的快取；deep-link 缺快取時先顯示泛用標籤「Workspace」，再讀一次工作區把
+     * 名稱補上（X-LC-001-4）。
      */
     _publishBreadcrumb() {
-        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+        const wsId = this.props.workspaceId;
         breadcrumbService.set("marketplace", [
             { label: _t("Workspaces"), path: "workspaces" },
-            { label: ws?.name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
+            { label: workspaceService.cachedWorkspaceName(wsId) || _t("Workspace"), path: `workspace/${wsId}` },
             { label: _t("App Marketplace"), path: null },
         ]);
+        if (!workspaceService.cachedWorkspaceName(wsId)) {
+            workspaceService.resolveWorkspaceName(wsId).then(
+                (name) => breadcrumbService.relabelWorkspace("marketplace", wsId, name));
+        }
     }
 
     /**

@@ -61,7 +61,9 @@ class TestN8nPythonDisabled1533(TransactionCase):
     def test_handles_missing_or_null_blocks(self):
         for values in ({}, {'main': None}, {'main': {'config': None}}):
             out = self.Service._inject_n8n_runtime_defaults(values, 'n8n')
-            self.assertEqual(out['main']['config'], {'N8N_PYTHON_ENABLED': 'false'}, values)
+            self.assertEqual(
+                out['main']['config'],
+                {'N8N_PYTHON_ENABLED': 'false', 'N8N_PROXY_HOPS': '1'}, values)
 
     def test_other_templates_are_untouched(self):
         for slug in ('odoo', 'mcp-n8n', 'hermes-agent'):
@@ -79,3 +81,20 @@ class TestN8nPythonDisabled1533(TransactionCase):
     def test_product_description_says_python_is_not_offered(self):
         self.assertIn('不提供 Python', self.seed.full_description)
         self.assertIn('JavaScript', self.seed.full_description)
+
+    def test_proxy_hops_is_injected_for_new_and_existing_services(self):
+        """DATA-N8N-007-2：cloudflared 後面要信任一跳 proxy，否則登入 IP 限流整個服務共用一個桶。"""
+        svc = self._svc('svc-n8nhops01', {'main': {'config': {'GENERIC_TIMEZONE': 'Asia/Taipei'}}})
+        config = svc._assemble_deploy_values()['values']['main']['config']
+        self.assertEqual(config['N8N_PROXY_HOPS'], '1')
+        explicit = self._svc('svc-n8nhops02', {'main': {'config': {'N8N_PROXY_HOPS': '2'}}})
+        self.assertEqual(
+            explicit._assemble_deploy_values()['values']['main']['config']['N8N_PROXY_HOPS'], '2',
+            '服務自己有明確值就不覆寫')
+
+    def test_tenant_cannot_change_proxy_hops(self):
+        keys = self.seed._tenant_value_keys()
+        self.assertFalse([k for k in keys if 'PROXY' in k.upper()], keys)
+        _filtered, rejected = self.seed._filter_allowed_helm_values(
+            {'main.config.N8N_PROXY_HOPS': '0'})
+        self.assertEqual(rejected, ['main.config.N8N_PROXY_HOPS'])

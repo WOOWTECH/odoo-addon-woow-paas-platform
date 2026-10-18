@@ -37,7 +37,7 @@ class TestHAPaaSSeed(TransactionCase):
         self.assertTrue(tpl.is_active, 'template 可 deployable')
         self.assertFalse((tpl.helm_chart_name or '').startswith('TBD'),
                          'helm_chart_name 應 pin 到 OCI、非 TBD 佔位')
-        self.assertEqual(tpl.helm_chart_version, '0.2.2')
+        self.assertEqual(tpl.helm_chart_version, '0.2.3')
 
     def test_ha_paas_plan_zero_price_cloud_service(self):
         plan = self.env.ref('woow_paas_platform.plan_ha_paas_monthly')

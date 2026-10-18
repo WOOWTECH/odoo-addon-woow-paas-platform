@@ -27,7 +27,7 @@ const routes = [
     // `access`（#746）：CS Access Control 頁籤。白名單沒有它的話，深連結
     // .../services/:id/access 會掉到 NotFoundPage——頁籤自己 setTab 改的 hash
     // 也一樣，換頁後重新整理就進不去。
-    { path: "workspace/:id/services/:serviceId/:tab", name: _t("Service Detail Tab"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers|access)$/ },
+    { path: "workspace/:id/services/:serviceId/:tab", name: _t("Service Detail Tab"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|information|logs|addons|mcp-servers|access)$/ },
     { path: "workspace/:id/services/:serviceId", name: _t("Service Detail"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     // D4=C: `/woow#/projects` is the new entry for the Projects list page; the
     //        legacy `/woow#/ai-assistant/projects` route below stays active and

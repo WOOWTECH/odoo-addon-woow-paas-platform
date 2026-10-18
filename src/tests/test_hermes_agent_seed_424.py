@@ -369,7 +369,9 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.3.6')
+        # 0.3.7–0.3.12＝charts 整合包 #254：登入失敗鎖 IP、gateway liveness、apiServerKey ≥ 16 字元、
+        # 容器加固、ttyd 改 loopback＋Basic 前門、cookie Secure、egress-profile=web；seed 不需改。
+        self.assertEqual(tpl.helm_chart_version, '0.3.12')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
@@ -782,6 +784,23 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             '/dashboard', text,
             'description 仍寫 /dashboard subpath：與 0.1.3 root URL 合約不一致，'
             '租戶照舊字串會拿到 404')
+
+
+    def test_description_states_gateway_long_request_limit(self):
+        """AI-HER-006-3：經公開網址的非串流 /gateway 請求約 120 秒被入口中斷（524）。
+
+        Hermes 247 實測：上游延遲 140／220／330／450 秒全都在約 120 秒收到 Cloudflare 524；
+        stream=true 每 10 秒送 keepalive，110 秒以上也能正常收到 [DONE]。客戶要知道長任務改用
+        串流或 /v1/runs，否則結果拿不到。
+        """
+        desc = self._tpl().full_description or ''
+        for needle, why in (
+                ('約 120 秒', '入口靜默上限（實測）'),
+                ('524', '非串流超時時用戶端看到的狀態碼'),
+                ('stream', '長任務改用串流（每 10 秒 keepalive）'),
+                ('/v1/runs', '或用非同步的 runs API 查結果'),
+        ):
+            self.assertIn(needle, desc, why)
 
 
 @tagged('post_install', '-at_install')

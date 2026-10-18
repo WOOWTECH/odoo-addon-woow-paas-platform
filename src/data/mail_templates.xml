@@ -7,6 +7,9 @@
             <field name="subject">Action needed: Please top up your wallet</field>
             <field name="email_from">{{ object.company_id.email_formatted or user.company_id.email_formatted }}</field>
             <field name="email_to">{{ object.email }}</field>
+            <!-- AUDITFIX dunning-mail-english：依收件人語言渲染（zh_TW 譯文在 i18n/zh_TW.po）。
+                 本檔是 noupdate，既有 DB 由 billing_mail_lang_sync.xml 補上這個欄位。 -->
+            <field name="lang">{{ object.lang }}</field>
             <field name="body_html" type="html">
                 <div style="font-family: Arial, sans-serif; max-width: 600px;">
                     <p>Hi <t t-out="object.name"/>,</p>
@@ -42,6 +45,7 @@
             <field name="subject">[Woow PaaS] Your subscription has been cancelled</field>
             <field name="email_from">{{ object.company_id.email_formatted or user.company_id.email_formatted }}</field>
             <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
             <field name="body_html" type="html">
                 <div style="font-family: Arial, sans-serif; max-width: 600px;">
                     <p>Hi <t t-out="object.name"/>,</p>
@@ -112,6 +116,60 @@
                     </p>
                     <p style="color:#6b7280;font-size:12px;">
                         This notice is sent only once for this service.
+                    </p>
+                </div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
+
+        <!-- AUDITFIX payment-mail-wrong-date／dunning-mail-english：平台訂閱（never-expire 方案）的
+             狀態通知（開通、付款成功、續訂、取消、結束）。取代上游
+             sh_subscription.sh_subscription_customer_email 在平台訂閱上的用途
+             （sh_subscription_fix._sh_send_subscription_email 依 sh_never_expire 分流）：
+             上游那封沒有 lang（zh_TW 租戶收到英文），而且寫「Your plan will expire on
+             sh_end_date」——平台訂閱的 sh_end_date 是第一期最後一天、續期不推進（#1574），
+             付款成功信因此寫著過去的日期。這封改寫「下次扣款日」（sh_date_of_next_payment），
+             不提到期日。主旨的狀態句由 Python 依收件人語言產生（ctx status_title）。 -->
+        <record id="mail_template_subscription_status" model="mail.template">
+            <field name="name">PaaS: Subscription Status (Activated / Paid / Cancelled)</field>
+            <field name="model_id" ref="sh_subscription.model_sh_subscription_subscription"/>
+            <field name="subject">[Woow PaaS] {{ ctx.get('status_title') or object.name }} ({{ object.name }})</field>
+            <field name="email_from">{{ object.sh_company_id.partner_id.email_formatted or user.company_id.email_formatted }}</field>
+            <field name="partner_to">{{ object.sh_partner_id.id }}</field>
+            <field name="lang">{{ object.sh_partner_id.lang }}</field>
+            <field name="body_html" type="html">
+                <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                    <p>Hi <t t-out="object.sh_partner_id.name"/>,</p>
+                    <p t-if="object.state == 'in_progress' and object.sh_renewed">
+                        Your subscription <strong t-out="object.name"/>
+                        (<t t-out="object.sh_subscription_plan_id.name or ''"/>) has been renewed.
+                    </p>
+                    <p t-elif="object.state == 'in_progress'">
+                        Your subscription <strong t-out="object.name"/>
+                        (<t t-out="object.sh_subscription_plan_id.name or ''"/>) is active.
+                    </p>
+                    <p t-elif="object.state == 'cancel'">
+                        Your subscription <strong t-out="object.name"/>
+                        (<t t-out="object.sh_subscription_plan_id.name or ''"/>) has been cancelled.
+                    </p>
+                    <p t-elif="object.state in ('close', 'expire', 'renewed')">
+                        Your subscription <strong t-out="object.name"/>
+                        (<t t-out="object.sh_subscription_plan_id.name or ''"/>) has ended.
+                    </p>
+                    <p t-if="object.state == 'in_progress' and ctx.get('trial_end_date')">
+                        Your free trial runs until <strong t-out="format_date(ctx.get('trial_end_date'))"/>.
+                        The first charge is on <strong t-out="format_date(object.sh_date_of_next_payment)"/>.
+                    </p>
+                    <p t-elif="object.state == 'in_progress' and object.sh_date_of_next_payment">
+                        Your next charge is on <strong t-out="format_date(object.sh_date_of_next_payment)"/>.
+                        The subscription renews automatically until you cancel it.
+                    </p>
+                    <p t-if="ctx.get('has_invoice')">
+                        The invoice for this payment is attached.
+                    </p>
+                    <p style="color:#6b7280;font-size:12px;">
+                        If you have any questions, please contact support. Thank you for using
+                        WoowTech PaaS.
                     </p>
                 </div>
             </field>

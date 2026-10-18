@@ -120,6 +120,7 @@ class TestResetConfigEndpoint:
             # 時的自動 rollback 會被 SIGKILL 腰斬（見 T7 的算式守線）。
             timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
             subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
+            tenant_policy_mirror=True,
         )
         patch_call = mock_exec.call_args_list[0].kwargs
         assert patch_call["command"][:3] == ["python3", "-c", patch_call["command"][2]]

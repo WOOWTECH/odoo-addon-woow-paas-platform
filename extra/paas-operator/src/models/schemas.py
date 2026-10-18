@@ -30,6 +30,28 @@ class PodPhase(str, Enum):
     UNKNOWN = "Unknown"
 
 
+class ReleaseLogSource(BaseModel):
+    """A selectable regular or init container belonging to this release."""
+
+    pod: str
+    containers: List[str] = Field(default_factory=list)
+
+
+class ReleaseLogsResponse(BaseModel):
+    """One bounded log snapshot; reasons never contain kubectl stderr."""
+
+    available: bool = False
+    reason: Optional[Literal[
+        "lookup_failed", "timeout", "no_pods", "source_not_found",
+        "container_not_found", "logs_unavailable",
+    ]] = None
+    pod: Optional[str] = None
+    container: Optional[str] = None
+    sources: List[ReleaseLogSource] = Field(default_factory=list)
+    text: str = ""
+    truncated: bool = False
+
+
 # Request Models
 
 
@@ -51,6 +73,26 @@ class ExposeConfig(BaseModel):
     )
 
 
+class TenantSecretSpec(BaseModel):
+    """INFRA-FIX-019-1：租戶自己的憑證（ngrok authtoken、Tailscale auth key），寫進一個
+    **不屬於 helm release** 的 Secret（``<release>-tenant-secret``）。
+
+    helm 把每個 revision 的 user values 與渲染後的 manifest 存在
+    ``sh.helm.release.v1.<release>.v<N>`` Secret：token 只要經過 values 一次，租戶清除後
+    舊值仍留在歷史裡。改走本欄後 values 只帶 Secret 名稱（chart 的 ``tenantSecret.name``）。
+
+    ⚠ 形狀刻意**不**在這裡驗（``data`` 收任何值）：pydantic 驗證失敗時 FastAPI 的 422 會把
+    ``input`` 原樣回給呼叫端＝把 token 寫進平台的錯誤 log。檢查在
+    ``services.tenant_secret.validate_tenant_secret``（→ 400、通用訊息）。``data`` 也不進 repr。
+    """
+
+    name: str = Field(..., description="Must be <release>-tenant-secret")
+    data: Dict[str, Any] = Field(
+        default_factory=dict, repr=False,
+        description="Secret key → value (\"\" = cleared). Never logged, never echoed.",
+    )
+
+
 class ReleaseCreateRequest(BaseModel):
     """Request to create a new Helm release."""
 
@@ -67,6 +109,11 @@ class ReleaseCreateRequest(BaseModel):
     )
     create_namespace: bool = Field(
         default=False, description="Create namespace if not exists"
+    )
+    tenant_secret: Optional[TenantSecretSpec] = Field(
+        default=None,
+        description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
+        "(outside the helm release) BEFORE helm runs. Absent (older platform) = nothing written.",
     )
     expose: Optional[ExposeConfig] = Field(
         default=None,
@@ -92,6 +139,12 @@ class ReleaseUpgradeRequest(BaseModel):
     reuse_values: bool = Field(
         default=True, description="Reuse last release values"
     )
+    tenant_secret: Optional[TenantSecretSpec] = Field(
+        default=None,
+        description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
+        "(outside the helm release) after the preflight, before helm upgrade. The "
+        "upgrade-preflight endpoint never writes it.",
+    )
     check_compute_quota: bool = Field(
         default=False,
         description="#1647: also refuse (409 workspace_compute_quota_exceeded) when the "
@@ -111,6 +164,16 @@ class ReleaseUpgradeRequest(BaseModel):
 _VALUE_PATH_RE = r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$"
 
 
+def _validate_value_paths(paths: List[str]) -> List[str]:
+    """``preserve_value_paths`` 的共用驗證（回復版本與 reset-config 同一套形態）。"""
+    import re
+
+    for path in paths:
+        if not isinstance(path, str) or not re.match(_VALUE_PATH_RE, path):
+            raise ValueError(f"invalid value path: {path!r}")
+    return paths
+
+
 class ReleaseRollbackRequest(BaseModel):
     """Request to rollback a Helm release.
 
@@ -126,7 +189,7 @@ class ReleaseRollbackRequest(BaseModel):
     版本 ⇒ 409（``detail.error_code == "rollback_chart_downgrade"``）。
     """
 
-    revision: Optional[int] = Field(None, description="Target revision number. If not provided, rolls back to the previous revision.")
+    revision: Optional[int] = Field(None, description="Target revision number (>= 1). If not provided, rolls back to the previous revision; 0 or a negative number is rejected with 400.")
     chart: Optional[str] = Field(
         default=None,
         description="#1433: chart reference — required when preserve_value_paths is "
@@ -146,21 +209,45 @@ class ReleaseRollbackRequest(BaseModel):
         "With preserve_value_paths it judges the dry-run of that helm upgrade; a plain helm "
         "rollback (#1685) judges the target revision's stored manifest (helm get manifest)",
     )
+    preserve_when_equal: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        max_length=16,
+        description="AI-OD-006-1: platform feature switches (e.g. mcp.enabled) mapped to "
+        "guard paths (e.g. image). A switch keeps its CURRENT state (absence included) "
+        "only when every guard path is identical in the target and the current values; "
+        "otherwise it follows the target revision together with its guards (the target "
+        "image may not ship the newer feature). Non-empty selects the preserving rollback "
+        "like preserve_value_paths (requires chart).",
+    )
 
     @field_validator("preserve_value_paths")
     @classmethod
     def _validate_preserve_paths(cls, paths: List[str]) -> List[str]:
+        return _validate_value_paths(paths)
+
+    @field_validator("preserve_when_equal")
+    @classmethod
+    def _validate_preserve_when_equal(
+        cls, mapping: Dict[str, List[str]],
+    ) -> Dict[str, List[str]]:
         import re
 
-        for path in paths:
-            if not isinstance(path, str) or not re.match(_VALUE_PATH_RE, path):
+        for path, guards in mapping.items():
+            if not re.match(_VALUE_PATH_RE, path):
                 raise ValueError(f"invalid value path: {path!r}")
-        return paths
+            if len(guards) > 8:
+                raise ValueError(f"too many guard paths for {path!r}")
+            for guard in guards:
+                if not isinstance(guard, str) or not re.match(_VALUE_PATH_RE, guard):
+                    raise ValueError(f"invalid guard path: {guard!r}")
+        return mapping
 
     @model_validator(mode="after")
     def _preserve_requires_chart(self) -> "ReleaseRollbackRequest":
         if self.preserve_value_paths and not self.chart:
             raise ValueError("preserve_value_paths requires chart")
+        if self.preserve_when_equal and not self.chart:
+            raise ValueError("preserve_when_equal requires chart")
         return self
 
 
@@ -235,6 +322,36 @@ class ReleaseResetConfigRequest(BaseModel):
             "純 helm upgrade + rollout restart）。未帶＝config_json。"
         ),
     )
+    # INFRA-FIX-019-1：reset 的 values 帶著 tenantSecret.name／revision（同一份全量組裝），
+    # 這裡同步寫一次（內容沒變＝server-side apply 無變化，pod template 不動）。
+    tenant_secret: Optional[TenantSecretSpec] = Field(
+        default=None,
+        description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
+        "before the reset's helm upgrade (unchanged content = no-op).",
+    )
+    # INFRA-FIX-018（商用驗收 INFRA-HS-002-1）：reset 的 values 是平台**存的快照**，
+    # 不一定等於叢集現在跑的值。快照裡的方案資源鍵若是舊 overlay 寫的（headscale 的頂層
+    # ``resources`` 會被 chart deep-merge 進 headplane），reset 的 helm upgrade 就會改掉
+    # pod template ⇒ StatefulSet 滾動 ⇒ RWO 重新 attach 45 秒以上 ⇒ 撞 15 秒 ``--atomic``
+    # 預算，每次必敗（失敗還各留 2 筆 failed revision）。這裡列出的點分路徑，operator 在
+    # upgrade 前改以**叢集目前 release 的值**（含「不存在」）覆寫，reset 因此只動憑證。
+    # 只有 helm_secret 載體採用（該路徑沒有 exec／cleanup，讀 values 的耗時從這兩段預算借，
+    # 預算階梯不變）；config_json 載體忽略本欄。不帶＝與舊行為完全相同（operator 可先發版）。
+    preserve_value_paths: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "INFRA-FIX-018: dot-paths whose LIVE release values replace the ones in "
+            "`values` before the (atomic, 15 s) helm upgrade, so a reset cannot change "
+            "the pod template. A path absent from the live release is removed from "
+            "`values` too. Honoured on the helm_secret carrier only."
+        ),
+    )
+
+    @field_validator("preserve_value_paths")
+    @classmethod
+    def _validate_preserve_paths(cls, paths: List[str]) -> List[str]:
+        return _validate_value_paths(paths)
 
 
 class QuotaWriteGuard(BaseModel):
@@ -453,6 +570,10 @@ class PodInfo(BaseModel):
     # 不是錯誤。``last_warning`` 只在 status 端點、且這顆 Pod 未就緒時才查。
     waiting: Optional[ContainerWaitingInfo] = None
     last_warning: Optional[PodWarningEvent] = None
+    # ---- #1456：主要容器上一次結束的原因（``lastState.terminated.reason``）-----------
+    # 任一容器是 ``OOMKilled`` 就是它，否則第一個有值的 reason；None＝沒有容器結束過（或
+    # 舊 operator 不帶這個 key——平台看到 None／缺 key 都只當「沒有線索」）。
+    last_terminated_reason: Optional[str] = None
 
 
 class WorkloadReplicaFailure(BaseModel):
@@ -867,6 +988,9 @@ class ReleaseRevisionsResponse(BaseModel):
     """List of release revisions."""
 
     revisions: List[ReleaseRevision]
+    # INFRA-FIX-018-1／AI-HER-003-1：operator 的 helm --history-max（每個 release 最多保留
+    # 幾筆 revision，含 failed）。更舊的 revision 已被 helm 清掉，無法回復。
+    history_max: Optional[int] = None
 
 
 class NamespaceInfo(BaseModel):
@@ -1084,12 +1208,13 @@ class OdooInitResponse(BaseModel):
 # 腳本回報的原因碼（``success: false`` 時）。平台據此轉成租戶看得懂的可行動訊息。
 AppAdminResetCode = Literal[
     "admin_missing",      # Odoo：找不到 base.user_admin／n8n：沒有 owner 或 owner 從未 setup／
-                          # Omnigent：找不到 admin 帳號
+                          # Omnigent：找不到 admin 帳號／EMQX：Dashboard 沒有 admin 帳號
     "admin_inactive",     # Odoo：base.user_admin 已封存／Omnigent：admin 已被拿掉管理員角色
     "owner_ambiguous",    # n8n：owner 不只一列，或 UPDATE 影響列數 != 1
     "hash_unavailable",   # n8n：n8n 安裝目錄裡找不到 bcryptjs／DB driver
-    "db_unsupported",     # n8n：DB_TYPE／schema 不在支援範圍／Omnigent：沒有 DATABASE_URL 或非 accounts 模式
-    "invalid_password",   # 新密碼長度不在 12–128
+    "db_unsupported",     # n8n：DB_TYPE／schema 不在支援範圍／Omnigent：沒有 DATABASE_URL 或非 accounts 模式／
+                          # EMQX：emqx ctl 連不上 broker 節點（開機中、已停止）
+    "invalid_password",   # 新密碼長度不在 12–128／EMQX：不合它的密碼規則（8–64、至少兩類字元）
 ]
 
 
@@ -1182,6 +1307,84 @@ class MqttAddressResponse(BaseModel):
             "ngrok agent 當前持有的 tcp://host:port；沒有可報告的位址時為 None"
         ),
     )
+
+
+class VpnNodeLogin(BaseModel):
+    """INFRA-FIX-005：節點需要登入時的登入入口（見 ``src/services/vpn_node_status.py``）。"""
+
+    kind: Literal["none", "external_url", "cluster_internal"] = "none"
+    url: Optional[str] = Field(
+        default=None,
+        description="只在 kind=external_url 時有值（瀏覽器打得開的登入網址）；叢集內部網址一律不回",
+    )
+    register_key: Optional[str] = Field(
+        default=None,
+        description="kind=cluster_internal 且網址是 /register/<id> 時的註冊碼（待核可節點的識別，不是憑證）",
+    )
+
+
+class VpnNodeForward(BaseModel):
+    """一個 ``tailscale.serve`` 轉發項目的現況。"""
+
+    port: int
+    service: Optional[str] = None
+    target_port: Optional[int] = None
+    status: Literal[
+        "applied", "not_applied", "service_missing", "mismatch", "unverified",
+    ]
+
+
+class VpnNodeSkippedForward(BaseModel):
+    """被 entrypoint 略過的轉發項目（entry 是租戶自己填的那一段，限長限字元）。"""
+
+    entry: str
+    reason: Literal[
+        "bad_format", "port_range", "other_namespace", "not_service_name",
+        "duplicate_port", "too_many", "namespace_unknown", "other",
+    ]
+
+
+class VpnNodeServe(BaseModel):
+    wanted_known: bool = Field(
+        description="False＝映像沒有 /entrypoint.sh 的 parse_serve，只能列出實際生效的轉發")
+    forwards: List[VpnNodeForward] = Field(default_factory=list)
+    skipped: List[VpnNodeSkippedForward] = Field(default_factory=list)
+    ignored_all: Optional[Literal["namespace_unknown"]] = None
+    extra_config: bool = Field(
+        default=False, description="node 的 serve 設定含 TCP 轉發以外的項目（Web／Funnel…）")
+
+
+class VpnNodeStatusResponse(BaseModel):
+    """INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態，全部是封閉集合的代碼與限長欄位。
+
+    ``probe != "ok"`` 是**正常的降級**（pod 還沒起來、容器正在重啟、tailscaled 還沒開），
+    HTTP 仍是 200；呼叫端不得把它當成 5xx。永不回原始 log／stderr。
+    """
+
+    probe: Literal["ok", "no_pod", "pod_not_running", "exec_failed", "no_output"]
+    pod: Optional[str] = None
+    backend_state: Literal[
+        "NoState", "NeedsLogin", "NeedsMachineAuth", "Stopped", "Starting", "Running", "Unknown",
+    ] = "Unknown"
+    online: Optional[bool] = None
+    tailnet_ips: List[str] = Field(default_factory=list)
+    dns_name: Optional[str] = None
+    login: VpnNodeLogin = Field(default_factory=VpnNodeLogin)
+    health_warnings: int = 0
+    login_error: Optional[Literal[
+        "authkey_expired", "authkey_used", "authkey_invalid", "control_unreachable", "other",
+    ]] = Field(
+        default=None,
+        description="INFRA-TS-005-5：節點上一次登入失敗的原因（tailscaled Health 對應的封閉代碼；"
+                    "節點 Running 時一律 None）",
+    )
+    authkey_configured: Optional[bool] = Field(
+        default=None,
+        description="INFRA-TS-005-5：設定裡有沒有 auth key（只回有／沒有，不讀出 key）；"
+                    "None＝讀不到。已登入的節點不會使用它",
+    )
+    serve: VpnNodeServe = Field(
+        default_factory=lambda: VpnNodeServe(wanted_known=False))
 
 
 class ErrorResponse(BaseModel):

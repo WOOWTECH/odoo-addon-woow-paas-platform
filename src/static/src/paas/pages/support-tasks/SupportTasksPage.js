@@ -8,6 +8,7 @@ import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
 import { supportService } from "../../services/support_service";
 import { formatDate, getInitials, getPriorityStars } from "../../services/utils";
+import { calendarDaysFromToday } from "../../utils/datetime_helpers";
 
 export class SupportTasksPage extends Component {
     static template = "woow_paas_platform.SupportTasksPage";
@@ -126,10 +127,10 @@ export class SupportTasksPage extends Component {
 
     isOverdue(task) {
         if (!task.date_deadline) return false;
-        const deadline = new Date(task.date_deadline);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        return deadline < today && task.stage_name !== "Done" && task.stage_name !== "Cancelled";
+        // 截止日是日曆日：以當地日曆日相減（#914，不經 UTC 午夜）。
+        const diffDays = calendarDaysFromToday(task.date_deadline);
+        return diffDays !== null && diffDays < 0
+            && task.stage_name !== "Done" && task.stage_name !== "Cancelled";
     }
 
     getCompletion(task) {

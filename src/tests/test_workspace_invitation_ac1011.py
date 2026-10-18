@@ -285,7 +285,13 @@ class TestWorkspaceInvitationAc1011(HttpCase):
     def test_casefold_login_ambiguity_fails_before_queue_or_ledger(self):
         workspace_id = self._workspace()
         victim = self.synthetic_users['victim']
-        self.synthetic_users['attacker'].write({'login': victim.login.upper()})
+        # X-SET-007 起 ORM 拒絕只差大小寫的重複 login；這種碰撞只剩修補前的資料
+        # （正式站 uid 227／236），直接改表模擬，邀請端仍必須 fail-closed。
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE res_users SET login = %s WHERE id = %s",
+            [victim.login.upper(), self.synthetic_users['attacker'].id])
+        self.env.invalidate_all()
         result = self._invite(workspace_id, victim.login)
         self.assertFalse(result.get('success'), result)
         self.assertEqual(result.get('code'), 'invite_identity_ambiguous')

@@ -222,6 +222,37 @@ if [ "$LLM_SANDBOX" = 1 ]; then
 fi
 unset LLM_EXISTING_KEYS
 
+# --- agent-runtime 共享 secret（先解析；networkPolicy 段要用同一個「是否啟用」判斷，#1202）---
+# AUTH(current) + WEBHOOK(webhook-current) 必須 byte-match operator 的 secret，否則
+# skill-bundle / state-update webhook 401 → agent_session.state 卡 'absent'。
+# NAMESPACE secret 是 Odoo-side only、兼作「啟用 agent-runtime」訊號。
+# 未設 AGENT_RUNTIME_NAMESPACE_SECRET → 整段不寫（agent-runtime 不啟用）。
+# AR_ENABLED=1 只在三個值都到位時成立；它同時決定 networkPolicy.allowAgentRuntimePods——
+# 沒啟用 agent-runtime 的沙盒不需要、也不可以對 paas-managed ns 開網路（#1202：舊版無條件 true，
+# 讓每個 stg 沙盒雙向可達所有 prod 租戶 ns）。
+AR_ENABLED=0
+if [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
+  _ar_op_ns="${PAAS_OPERATOR_NAMESPACE:-paas-stg-system}"
+  _ar_op_secret="paas-operator-stg-agent-runtime-auth"
+  if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ]; then
+    AGENT_RUNTIME_AUTH_SECRET_CURRENT="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  fi
+  if [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
+    AGENT_RUNTIME_WEBHOOK_SECRET="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.webhook-current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  fi
+  if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
+    # fail-closed：auth 或 webhook 任一解析不到，就整段不寫（含 namespaceSecret），網路也不放行。
+    # 半開（只寫 namespaceSecret 啟用 agent-runtime、卻缺 auth/webhook）會讓
+    # skill-bundle / state-update webhook 401 → agent_session.state 卡 'absent'。
+    # 寧可 agent-runtime 整個關閉（legacy AI chat 不受影響），不要半開漂移。
+    # 比照舊 in-repo create.sh stg 段的 fail-fast 語義（不留半套設定）。
+    echo "WARN pre-install: 無法解析 agent-runtime auth/webhook secret（operator secret ${_ar_op_ns}/${_ar_op_secret} 缺，或 kubectl context 不對）。" >&2
+    echo "WARN pre-install: agent-runtime 維持關閉（fail-closed），不寫任何 agentRuntime values。" >&2
+  else
+    AR_ENABLED=1
+  fi
+fi
+
 # --- stg networkPolicy / storageClass / devMode（cloudflare tunnel ingress + operator egress + agent-runtime pods）---
 {
   echo "networkPolicy:"
@@ -237,7 +268,6 @@ unset LLM_EXISTING_KEYS
     echo "  allowEgressToNamespaces: []"
     echo "  allowAgentRuntimePods: false"
   else
-    # 平時 stg 無條件放行 agent-runtime pod（paas-managed）的問題另見 #1202。
     echo "  allowIngressFromNamespaces: [paas-stg-cloudflare-system, paas-stg-system]"
     if [ "$LLM_WRITE_AUTH" = 1 ]; then
       # newapi-proxy（ns new-api-stg）：代理那一側的 NP 只收 dev-sandbox.io/managed 的 Odoo pod。
@@ -245,7 +275,16 @@ unset LLM_EXISTING_KEYS
     else
       echo "  allowEgressToNamespaces: [paas-stg-system]"
     fi
-    echo "  allowAgentRuntimePods: true"
+    # agent-runtime pod（paas-managed ns）只在 agent-runtime 真的啟用時放行，而且只放行 env=stg 的
+    # ns（plugin chart 的 networkPolicy.agentRuntimePodsEnv：selector 變成 paas-managed=true AND
+    # paas.woowtech.io/env=stg）。prod／stg 共用 woow-k3s，只比對 paas-managed 會連到 prod 租戶（#1202）。
+    # 明確寫 false（不是省略）：helm upgrade 既有沙盒時也會把舊的 true 蓋掉。
+    if [ "$AR_ENABLED" = 1 ]; then
+      echo "  allowAgentRuntimePods: true"
+      echo "  agentRuntimePodsEnv: stg"
+    else
+      echo "  allowAgentRuntimePods: false"
+    fi
   fi
   echo "odoo:"
   # stg 是類正式驗證環境：釘 devMode=false。plugin chart 的 default devMode=true 只對本機
@@ -282,42 +321,20 @@ if [ -n "${JCR_USER:-}" ] && [ -n "${JCR_PASS:-}" ]; then
   } >> "$EXTRA_VALUES_FILE"
 fi
 
-# --- agent-runtime 共享 secret ---
-# AUTH(current) + WEBHOOK(webhook-current) 必須 byte-match operator 的 secret，否則
-# skill-bundle / state-update webhook 401 → agent_session.state 卡 'absent'。
-# NAMESPACE secret 是 Odoo-side only、兼作「啟用 agent-runtime」訊號。
-# 未設 AGENT_RUNTIME_NAMESPACE_SECRET → 整段不寫（agent-runtime 不啟用）。
-if [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
-  _ar_op_ns="${PAAS_OPERATOR_NAMESPACE:-paas-stg-system}"
-  _ar_op_secret="paas-operator-stg-agent-runtime-auth"
-  if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ]; then
-    AGENT_RUNTIME_AUTH_SECRET_CURRENT="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  fi
-  if [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
-    AGENT_RUNTIME_WEBHOOK_SECRET="$(kubectl get secret -n "$_ar_op_ns" "$_ar_op_secret" -o jsonpath='{.data.webhook-current}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  fi
-  if [ -z "${AGENT_RUNTIME_AUTH_SECRET_CURRENT:-}" ] || [ -z "${AGENT_RUNTIME_WEBHOOK_SECRET:-}" ]; then
-    # fail-closed：auth 或 webhook 任一解析不到，就整段不寫（含 namespaceSecret）。
-    # 半開（只寫 namespaceSecret 啟用 agent-runtime、卻缺 auth/webhook）會讓
-    # skill-bundle / state-update webhook 401 → agent_session.state 卡 'absent'。
-    # 寧可 agent-runtime 整個關閉（legacy AI chat 不受影響），不要半開漂移。
-    # 比照舊 in-repo create.sh stg 段的 fail-fast 語義（不留半套設定）。
-    echo "WARN pre-install: 無法解析 agent-runtime auth/webhook secret（operator secret ${_ar_op_ns}/${_ar_op_secret} 缺，或 kubectl context 不對）。" >&2
-    echo "WARN pre-install: agent-runtime 維持關閉（fail-closed），不寫任何 agentRuntime values。" >&2
-  else
-    {
-      echo "agentRuntime:"
-      echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
-      echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
-      echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
-      # 注意：不可寫成 `[ -n ... ] && echo`——PREVIOUS 未設（常態）時該行短路回 1，
-      # 作為 group 最後一行會讓整個 script 以非零退出 → create.sh 誤報 hook 失敗
-      # （values 其實已寫完；2026-06-12 stg 部署實證的假性失敗）。
-      if [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ]; then
-        echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
-      fi
-    } >> "$EXTRA_VALUES_FILE"
-  fi
+# --- agent-runtime 共享 secret（值在上面 networkPolicy 段之前已解析，AR_ENABLED）---
+if [ "$AR_ENABLED" = 1 ]; then
+  {
+    echo "agentRuntime:"
+    echo "  authSecretCurrent: $(yaml_sq "$AGENT_RUNTIME_AUTH_SECRET_CURRENT")"
+    echo "  namespaceSecret: $(yaml_sq "$AGENT_RUNTIME_NAMESPACE_SECRET")"
+    echo "  webhookSecret: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET")"
+    # 注意：不可寫成 `[ -n ... ] && echo`——PREVIOUS 未設（常態）時該行短路回 1，
+    # 作為 group 最後一行會讓整個 script 以非零退出 → create.sh 誤報 hook 失敗
+    # （values 其實已寫完；2026-06-12 stg 部署實證的假性失敗）。
+    if [ -n "${AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS:-}" ]; then
+      echo "  webhookSecretPrevious: $(yaml_sq "$AGENT_RUNTIME_WEBHOOK_SECRET_PREVIOUS")"
+    fi
+  } >> "$EXTRA_VALUES_FILE"
 fi
 
 # AI 模型段的「非 0 但已寫好 values」（例：明確要求關掉既有 LLM 沙盒、讀不到現值）：create.sh 在

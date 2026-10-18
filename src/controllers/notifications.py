@@ -6,6 +6,8 @@ Header 鈴鐺過去沒有任何資料來源（按鈕無 handler、紅點寫死�
 - ``trial_ending``：試用將在 3 天內結束、即將開始扣點的訂閱
 - ``renewal_low_balance``：3 天內續約、但錢包點數不足（含稅）的訂閱
 - ``service_error``：使用者可存取工作區內處於 error 的雲端服務／智慧家庭／遠端安全連結
+- ``backup_failed``：使用者可存取工作區內 running 服務的備份失敗（error）或超過 27 小時沒有
+  成功備份（warning）；事實由每小時的 ``_cron_refresh_backup_status`` 寫入（X-BK-006-1）
 - ``invoice_unpaid``：已過帳、尚未付清的發票
 - ``wallet_activity``：近 7 天錢包異動（僅資訊，不算待處理）
 
@@ -26,6 +28,7 @@ from odoo.http import request, route, Controller
 from odoo.tools.misc import format_date
 
 from ..models.subscription_lifecycle_mixin import _subscription_total_with_tax
+from ..services.backup_health import BACKUP_STALE_HOURS
 from .ha_paas import HiddenChainMixin
 
 _logger = logging.getLogger(__name__)
@@ -59,6 +62,7 @@ class NotificationsController(HiddenChainMixin, Controller):
             items = []
             items += self._subscription_items(env, partner)
             items += self._service_error_items(env, user)
+            items += self._backup_items(env, user)
             items += self._unpaid_invoice_items(env, partner)
             items += self._wallet_activity_items(env, partner)
             items.sort(key=lambda i: (_SEVERITY_ORDER.get(i['severity'], 9), -(_ts_key(i['ts']))))
@@ -143,6 +147,55 @@ class NotificationsController(HiddenChainMixin, Controller):
                                  name=rec.name or '', workspace=rec.workspace_id.name or ''),
                     'ts': _iso_utc(rec.write_date),
                     'route': 'workspace/%s/%s/%s' % (rec.workspace_id.id, segment, rec.id),
+                })
+        return items
+
+    def _backup_items(self, env, user) -> list[dict[str, Any]]:
+        """X-BK-006-1：備份失敗／過期的 running 服務。
+
+        ``id`` 綁「最近一次失敗時間」（failed）或「最近一次成功時間」（stale）：同一段失敗
+        重抓時不變；之後又失敗一次（時間更新）就是一則新通知，已讀狀態不會吞掉它。
+        """
+        workspace_ids = self._accessible_workspace_ids(env, user)
+        if not workspace_ids:
+            return []
+        services = env['woow_paas_platform.cloud_service'].sudo().search([
+            ('workspace_id', 'in', workspace_ids),
+            ('state', '=', 'running'),
+            ('backup_health', 'in', ('failed', 'stale')),
+            ('template_id', 'not in', self._hidden_template_ids(env)),
+        ], order='write_date desc', limit=_ITEM_LIMIT)
+        items = []
+        for service in services:
+            route = 'workspace/%s/services/%s' % (service.workspace_id.id, service.id)
+            if service.backup_health == 'failed':
+                items.append({
+                    'id': 'backup_failed:%s:%s' % (
+                        service.id, fields.Datetime.to_string(service.last_backup_failure_at) or ''),
+                    'type': 'backup_failed',
+                    'severity': 'error',
+                    'title': _("Backup failed"),
+                    'message': _(
+                        "The latest backup of %(name)s in workspace %(workspace)s failed. "
+                        "We have been notified; your service keeps running.",
+                        name=service.name or '', workspace=service.workspace_id.name or ''),
+                    'ts': _iso_utc(service.last_backup_failure_at),
+                    'route': route,
+                })
+            else:
+                items.append({
+                    'id': 'backup_stale:%s:%s' % (
+                        service.id, fields.Datetime.to_string(service.last_backup_success_at) or ''),
+                    'type': 'backup_failed',
+                    'severity': 'warning',
+                    'title': _("No recent backup"),
+                    'message': _(
+                        "%(name)s in workspace %(workspace)s has had no successful backup for "
+                        "more than %(hours)s hours.",
+                        name=service.name or '', workspace=service.workspace_id.name or '',
+                        hours=BACKUP_STALE_HOURS),
+                    'ts': _iso_utc(service.last_backup_success_at),
+                    'route': route,
                 })
         return items
 

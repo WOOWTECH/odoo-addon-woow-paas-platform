@@ -222,3 +222,40 @@ class TestCreateOnlyHints1479(TransactionCase):
         for src in (self.HELM_FORM_HINT, self.CREDENTIALS_HINT, self.RESET_HINT):
             with self.subTest(src=src):
                 self.assertTrue(code.get(src), 'zh_TW.po 缺中文：%r' % src)
+
+
+@tagged('post_install', '-at_install')
+class TestN8nOwnerFieldsCreateOnly(TransactionCase):
+    """DATA-N8N-008-1：n8n 的 _init.owner_* 只在開通時生效，reconfigure 不得靜默吞掉。
+
+    實測（n8n 250）：POST update values={'_init.owner_email': ...} 回 success=true、值沒生效，
+    還各多一次 revision 內容完全相同的 helm upgrade。
+    """
+
+    def _n8n(self):
+        tpl = self.env['woow_paas_platform.cloud_app_template'].search(
+            [('slug', '=', 'n8n')], limit=1)
+        self.assertTrue(tpl, 'n8n 範本 seed 未載入')
+        return tpl
+
+    def test_n8n_init_specs_are_create_only(self):
+        self.assertEqual(
+            set(self._n8n()._create_only_value_specs()),
+            {'_init.owner_email', '_init.owner_password'})
+
+    def test_changed_init_values_are_refused_and_unchanged_dropped(self):
+        service = MagicMock()
+        service.template_id = self._n8n()
+        service._helm_values_dict.return_value = {}
+        kept, error = PaasController._drop_create_only_values(
+            service, {'_init.owner_email': 'x@example.com'})
+        self.assertIn(REFUSED, error)
+        self.assertIn('n8n 管理員 Email', error)
+        _kept, error = PaasController._drop_create_only_values(
+            service, {'_init.owner_password': 'NewPassw0rd'})
+        self.assertIn(REFUSED, error)
+        # 空值＝沒送（舊分頁整包送出時不得白白觸發 upgrade）
+        kept, error = PaasController._drop_create_only_values(
+            service, {'_init.owner_email': '', 'main.config.N8N_LOG_LEVEL': 'debug'})
+        self.assertIsNone(error)
+        self.assertEqual(kept, {'main.config.N8N_LOG_LEVEL': 'debug'})

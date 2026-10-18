@@ -10,15 +10,16 @@ authtoken 的過濾器、ngrok.remoteAddr 不再 render 進 shell（#1613））�
 
 核心守線：
 1. **app_managed**：EMQX 的 ``dashboard.default_password`` 依官方文件「只在第一次開機生效、
-   之後變更一律忽略」，首次登入還會強制改密碼 ⇒ 平台只供給初始值、**不得**宣稱可重設。
+   之後變更一律忽略」⇒ 平台只透過 chart 供給初始值，helm 那條**不得**宣稱可重設。
    carrier 選錯的代價不對稱（helm_secret 誤標＝helm upgrade 成功但密碼沒變＝假裝成功），
-   所以這條用三個欄位一起釘：carrier / settable / reset_supported。
+   所以這條用多個欄位一起釘：carrier / settable / reset kind。#1774 起 Reset 走 operator
+   exec ``emqx ctl admins passwd``（app_admin_reset_kind=emqx_exec），不經 helm。
 2. **上架前提**：image 雙釘 ``tag@sha256``（emqx 與 ngrok 兩顆都要）。2026-10-02 鏡像落地後已公開上架，
    ``test_hidden_until_mirror_lands`` 從此是實際生效的守線（``is_hidden=False`` ⟹ 兩顆都要釘）。
 3. **規格對帳**：1 vCPU / 2 Gi / 3 Gi ——template min_*、plan cs_*、chart 兩顆 PVC 加總三處一致。
    #1637 起 plan 的 ``cs_storage_gb`` 是**整台總量**（data 2＋log 1）：overlay 寫進
    ``persistence.size`` 的是總量 − log（``_PLAN_STORAGE_SPLIT``），故 min_storage_gb = cs_storage_gb。
-4. **可調參數白名單**：只有應用層旋鈕（ngrok 三項 + ws listener），CPU/RAM/磁碟一律不開
+4. **可調參數白名單**：只有應用層旋鈕（ngrok 四項 + ws listener），CPU/RAM/磁碟一律不開
    ——那三個維度由訂閱方案決定，開放等於讓租戶改自己買的規格。
 5. **授權（⛔ 最重要）**：EMQX 自 5.9.0 起為 BSL 1.1，明文禁止當託管 MQTT 服務提供給第三方
    ——平台正是這個用途。只能釘 5.8.x（Apache-2.0）。digest 是唯一不會說謊的識別，所以用
@@ -70,11 +71,12 @@ class TestEmqxSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, EMQX_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.7',
+        self.assertEqual(tpl.helm_chart_version, '0.1.11',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；'
                          '0.1.4 起後台 WebSocket 客户端預設連頁面本身的埠（#1418）；'
                          '0.1.6 起 MQTT 授權預設拒絕、公開網址不給 Prometheus／API 文件（#1529）；'
-                         '0.1.7 起 ngrok authtoken 不再出現在容器 log（#1613）')
+                         '0.1.7 起 ngrok authtoken 不再出現在容器 log（#1613）；'
+                         '0.1.8–0.1.11＝charts 整合包 #254（status 前綴拒絕、登入限速、tenantSecret）')
 
     def test_description_matches_chart_013(self):
         """#1361／#1362／#1366：說明要跟 chart 0.1.3 的實際行為一致。"""
@@ -103,15 +105,32 @@ class TestEmqxSeed(TransactionCase):
         self.assertIn('不會被覆蓋', desc, 'chart 走 base.hocon 預設值：租戶改的設定要保證留著')
 
 
-    def test_platform_cannot_reset_credentials(self):
-        """EMQX 首開之後密碼活在它自己的資料庫，平台重設只會「假裝成功」。"""
+    def test_platform_resets_via_emqx_ctl_not_helm(self):
+        """EMQX 首開之後密碼活在它自己的資料庫：helm 那條重設只會「假裝成功」，所以 carrier
+        維持 app_managed；#1774 起 Reset 改由 operator exec ``emqx ctl admins passwd``
+        （app_admin_reset_kind=emqx_exec），擁有者忘記密碼時在服務頁就能救回。"""
         tpl = self._tpl()
         self.assertTrue(tpl.has_admin_gui, '平台要供給初始 dashboard 密碼')
         self.assertEqual(tpl.admin_password_carrier, 'app_managed')
-        self.assertFalse(tpl.admin_reset_supported)
+        self.assertEqual(tpl.app_admin_reset_kind, 'emqx_exec')
+        self.assertTrue(tpl.admin_reset_supported, '服務頁要有 Reset Admin Password')
         self.assertFalse(tpl.admin_password_settable)
-        self.assertFalse(tpl.admin_credentials_settable)
+        self.assertFalse(tpl.admin_credentials_settable, '只有 Reset，不開放租戶自設')
         self.assertFalse(tpl.admin_username_helm_path)
+
+    def test_description_explains_reset_and_single_admin_level(self):
+        """#1774（INFRA-EMQX-007-1／-3）：說明要講出忘記密碼怎麼救、以及 CE 沒有唯讀角色。
+
+        EMQX 開源版沒有 RBAC：Dashboard 使用者與 API 金鑰的 role=viewer 會被接受，但實際擁有
+        完整寫入權限（實測 viewer 帳號 POST /rules 回 201）。上游行為、chart 修不了，只能明講，
+        免得租戶以為建了「唯讀」帳號或金鑰。
+        """
+        desc = self._tpl().full_description
+        self.assertNotIn('平台事後無法代為重設', desc, '#1774 起平台可以重設')
+        self.assertIn('重設管理員密碼', desc, '要指到服務頁的 Reset 按鈕')
+        self.assertIn('唯讀', desc)
+        self.assertIn('viewer', desc)
+        self.assertIn('完整管理權限', desc)
 
     def test_images_from_jcr_and_double_pinned(self):
         v = self._values()
@@ -186,6 +205,9 @@ class TestEmqxSeed(TransactionCase):
         self.assertEqual(sorted(keys), sorted([
             'ngrok.enabled',
             'ngrok.authtoken',
+            # 商用驗收 charts#222：legacy／免費 ngrok 帳號不允許 PROXY protocol（ERR_NGROK_9014），
+            # chart 0.1.6 起就有的開關開放給租戶，預設維持開啟。
+            'ngrok.proxyProtocol',
             'ngrok.remoteAddr',
             'emqx.listeners.ws.enabled',
         ]))

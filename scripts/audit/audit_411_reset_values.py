@@ -230,6 +230,9 @@ _INJECTOR_VALUE_PATHS = frozenset({
     ("terminationGracePeriodSeconds",),   # ha-full
     ("postgresql", "resources", "limits", "cpu"),  # litellm 內附 PG
     ("resources", "requests", "memory"),  # mcp-server 家族
+    # X-SEC-005-7 template_policy_keys（n8n：遮住 SA token 路徑；list 整體比對＝leaf）
+    ("main", "extraVolumes"),
+    ("main", "extraVolumeMounts"),
 })
 
 # 同上，但值是整棵子樹（dict）：stored／computed 攤平成葉子後，這些前綴底下的葉子都算
@@ -238,6 +241,9 @@ _INJECTOR_SUBTREE_PATHS = frozenset({
     ("main", "livenessProbe"),
     ("main", "readinessProbe"),
     ("agent", "resources", "requests"),
+    # X-SEC-004-2 template_policy_keys（n8n 容器／pod 的 securityContext）
+    ("main", "securityContext"),
+    ("main", "podSecurityContext"),
 })
 
 

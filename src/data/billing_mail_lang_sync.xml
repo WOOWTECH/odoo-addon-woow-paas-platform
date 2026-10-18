@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- AUDITFIX dunning-mail-english：低餘額與自動取消通知要依收件人語言渲染。
+         mail_templates.xml 是 noupdate="1"，既有 DB 的這兩筆模板在 -u 時不會吃到新加的
+         `lang` 欄位 ⇒ 這裡（noupdate="0"，每次 -u 重跑）補上；只補空值，不覆蓋營運手改過的
+         設定。全新安裝時 XML 本身已帶 lang，這一步是 no-op。 -->
+    <function
+        model="sh.subscription.subscription"
+        name="_woow_ensure_billing_mail_lang"/>
+</odoo>

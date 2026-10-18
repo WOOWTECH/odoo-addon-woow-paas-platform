@@ -16,6 +16,11 @@ _logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
 # Resource observations are an interactive, read-only request, not a Helm job.
 RESOURCE_OBSERVATION_TIMEOUT = 10
+# INFRA-FIX-005：VPN 節點狀態是 operator 對 pod 的一次 exec＋一次 get services（各自 ≤15／8 秒上限），
+# 服務頁每 30 秒問一次；比 DEFAULT_TIMEOUT 短，卡住就降級成「讀不到」而不是拖住頁面。
+VPN_NODE_STATUS_TIMEOUT = 20
+# Two kubectl reads at <=4s each; avoid occupying an Odoo worker on a stream.
+RELEASE_LOGS_TIMEOUT = (3, 10)
 # Longer timeout for helm operations that may take time
 HELM_OPERATION_TIMEOUT = 120
 # #1152：init 專屬 connect/read inactivity 預算，不連帶放大其他操作或 connect 等待。
@@ -455,6 +460,7 @@ class PaaSOperatorClient:
         sensitive_values: Optional[Dict[str, Any]] = None,
         create_namespace: bool = False,
         expose: Optional[Dict[str, Any]] = None,
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Install a new Helm release.
 
@@ -469,6 +475,8 @@ class PaaSOperatorClient:
             create_namespace: Whether to create namespace if not exists
             expose: Cloudflare Tunnel expose configuration
                     e.g., {'enabled': True, 'subdomain': 'myapp', 'service_port': 8080}
+            tenant_secret: INFRA-FIX-019-1——``{name, data}``，operator 在 helm 之前寫進
+                ``<release>-tenant-secret``（helm release 之外）。不 log。
 
         Returns:
             Release information
@@ -496,6 +504,8 @@ class PaaSOperatorClient:
             data['values'] = values
         if sensitive_values:
             data['sensitive_values'] = sensitive_values
+        if tenant_secret:
+            data['tenant_secret'] = tenant_secret
         if expose:
             data['expose'] = expose
             _logger.info("install_release: Adding expose config to request: %s", expose)
@@ -536,6 +546,22 @@ class PaaSOperatorClient:
             f'/api/releases/{namespace}/{release_name}',
         )
 
+    def get_release_logs(
+        self, namespace: str, release_name: str, pod: Optional[str] = None,
+        container: Optional[str] = None, tail_lines: int = 500,
+        previous: bool = False,
+    ) -> Dict[str, Any]:
+        """Read one bounded log snapshot; the operator rechecks source ownership."""
+        params = {'tail_lines': tail_lines, 'previous': previous}
+        if pod:
+            params['pod'] = pod
+        if container:
+            params['container'] = container
+        return self._request(
+            'GET', f'/api/releases/{namespace}/{release_name}/logs',
+            params=params, timeout=RELEASE_LOGS_TIMEOUT,
+        )
+
     def upgrade_release(
         self,
         namespace: str,
@@ -547,6 +573,7 @@ class PaaSOperatorClient:
         reset_values: bool = False,
         reuse_values: bool = False,
         check_compute_quota: bool = False,
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Upgrade an existing Helm release.
 
@@ -568,6 +595,9 @@ class PaaSOperatorClient:
             check_compute_quota: #1647——請 operator 在套用前檢查工作區的 compute 配額放不放
                 得下；確定放不下回 409（``detail.error_code``＝``COMPUTE_QUOTA_ERROR_CODE``）、
                 什麼都沒套用。只在 True 時送這一鍵（舊 operator 會忽略未知欄位）。
+            tenant_secret: INFRA-FIX-019-1——``{name, data}``，operator 預檢通過後、helm 之前
+                寫進 ``<release>-tenant-secret``。有值才送。⚠ operator 必須先發版：舊 operator
+                忽略本欄、Secret 不會建立，chart 讀不到 token（sidecar 閒置）。
 
         Returns:
             Updated release information
@@ -589,6 +619,8 @@ class PaaSOperatorClient:
             data['sensitive_values'] = sensitive_values
         if check_compute_quota:
             data['check_compute_quota'] = True
+        if tenant_secret:
+            data['tenant_secret'] = tenant_secret
 
         return self._request(
             'PATCH',
@@ -610,6 +642,7 @@ class PaaSOperatorClient:
         check_compute_quota: bool = False,
         pending_quota: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[int, Tuple[int, int]]] = None,
+        tenant_secret: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """#1513：用與 ``upgrade_release`` **同一組**參數跑 operator 的升級預檢，不套用任何東西。
 
@@ -620,6 +653,9 @@ class PaaSOperatorClient:
         ``upgrade_release``）。``pending_quota``（鍵同 ``update_namespace_quota`` 的參數）是
         平台在這次檢查之後才會推送的 quota——換方案扣款前帶上，operator 以它取代現行上限
         來判斷。``timeout`` 不給＝``HELM_OPERATION_TIMEOUT``。
+
+        INFRA-FIX-019-1：``tenant_secret`` 只是為了與 ``upgrade_release`` 收同一組參數（#1513）；
+        預檢不寫入，所以**不送**——憑證不必多走一趟。
 
         Returns:
             ``{"ok": True, "expansions": [...]}``；帶 ``check_compute_quota`` 且 operator 夠新時
@@ -666,6 +702,8 @@ class PaaSOperatorClient:
         reset_values: bool = False,
         reuse_values: bool = False,
         admin_password_carrier: str = 'config_json',
+        tenant_secret: Optional[Dict[str, Any]] = None,
+        preserve_value_paths: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """#357/#449 reset admin_password；載體決定 operator 走哪條路。
 
@@ -707,6 +745,12 @@ class PaaSOperatorClient:
             admin_password_carrier: ``config_json`` | ``helm_secret``。舊 operator
                 不認得本欄會靜默忽略（＝退回 config_json 既有行為），故
                 **operator 必須先發版、平台後發版**。
+            preserve_value_paths: INFRA-FIX-018——點分路徑清單；operator 在 helm_secret
+                路 upgrade 前，把這些路徑改用**叢集目前 release** 的值（含「不存在」）覆寫
+                ``values``，讓 reset 只動憑證、不改 pod template（見
+                ``CloudService._reset_pod_template_value_paths``）。不帶／空＝與舊行為
+                相同；舊 operator 不認得會忽略（reset 退回修前行為，不會更糟），所以
+                operator 與平台的發版順序不拘，但 operator 先上才有效果。
 
         #461：operator 兩條路都只「下達」rollout restart、**不等它完成**（回應含
         ``rollout_awaited: False``）。所以 2xx 的語意由「密碼已生效」收斂成
@@ -735,6 +779,11 @@ class PaaSOperatorClient:
             data['chart'] = chart
         if version:
             data['version'] = version
+        # INFRA-FIX-019-1：reset 的 values 帶 tenantSecret 參照；Secret 同步寫一次（內容不變＝無變化）。
+        if tenant_secret:
+            data['tenant_secret'] = tenant_secret
+        if preserve_value_paths:
+            data['preserve_value_paths'] = list(preserve_value_paths)
 
         return self._request(
             'POST',
@@ -905,16 +954,22 @@ class PaaSOperatorClient:
         self,
         namespace: str,
         release_name: str,
+        component: Optional[str] = None,
     ) -> Dict[str, Any]:
         """#1432：rollout restart release 下所有 Deployment 與 StatefulSet。
 
         operator 只「下達」不等待（回應 ``rollout_awaited: False``）；收斂交給平台
         狀態機（呼叫端把服務轉 ``upgrading``，poll 轉回 ``running``）。PVC、Secret、
         values 都不動。沒有任何 workload 時 operator 回 404。
+
+        AI-OD-004-2：``component`` 只重啟 ``app.kubernetes.io/component`` 相符的
+        workload（沒有相符的也是 404）。不認得這個參數的舊 operator 會忽略它、照舊
+        全部重啟。
         """
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/restart',
+            params={'component': component} if component else None,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
@@ -933,6 +988,7 @@ class PaaSOperatorClient:
         chart: Optional[str] = None,
         preserve_value_paths: Optional[List[str]] = None,
         check_compute_quota: bool = False,
+        preserve_when_equal: Optional[Dict[str, List[str]]] = None,
     ) -> Dict[str, Any]:
         """Rollback a Helm release to a previous revision.
 
@@ -950,6 +1006,9 @@ class PaaSOperatorClient:
             check_compute_quota: #1647——同 ``upgrade_release``。兩種回復 operator 都檢查：
                 保留憑證的回復算那次 helm upgrade 的 dry-run，純 helm rollback 算目標 revision
                 的 stored manifest（#1685；更早的 operator 在純 rollback 收到旗標也不檢查）。
+            preserve_when_equal: AI-OD-006-1——範本宣告的平台功能開關 → 守衛路徑；守衛在
+                目標與目前相同時開關維持目前值。非空時同樣走保留模式（必須帶 ``chart``）。
+                不認得這個欄位的舊 operator 會忽略它（開關照舊跟著目標 revision）。
 
         Returns:
             Rollback confirmation
@@ -961,6 +1020,10 @@ class PaaSOperatorClient:
         if preserve_value_paths:
             data['chart'] = chart
             data['preserve_value_paths'] = list(preserve_value_paths)
+        if preserve_when_equal:
+            data['chart'] = chart
+            data['preserve_when_equal'] = {
+                path: list(guards) for path, guards in preserve_when_equal.items()}
         if check_compute_quota:
             data['check_compute_quota'] = True
         return self._request(
@@ -1142,6 +1205,25 @@ class PaaSOperatorClient:
             timeout=APP_ADMIN_RESET_TIMEOUT,
         )
 
+    def reset_emqx_admin_password(
+        self,
+        namespace: str,
+        release_name: str,
+        new_password: str,
+    ) -> Dict[str, Any]:
+        """#1774：重設租戶 EMQX 的 Dashboard admin 密碼（帳號不變）。
+
+        operator exec 進 emqx 容器跑 ``emqx ctl admins passwd``（與 Dashboard「修改密碼」同一個
+        change_password）；不重啟。EMQX 會撤銷該帳號的 Dashboard token ⇒ 已登入的 Dashboard
+        被登出；CE 沒有 2FA。語意與錯誤分類同 ``reset_odoo_admin_password``。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/emqx/admin-password',
+            data={'new_password': new_password},
+            timeout=APP_ADMIN_RESET_TIMEOUT,
+        )
+
     def get_odoo_module_states(
         self,
         namespace: str,
@@ -1177,6 +1259,35 @@ class PaaSOperatorClient:
             'POST', f'/api/namespaces/{namespace}/resource-observations',
             data={'release_names': release_names},
             timeout=(2, RESOURCE_OBSERVATION_TIMEOUT),
+        )
+
+    def get_vpn_node_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態——唯讀，不碰 Helm 操作預算。
+
+        閘門是 ``CloudService._chart_has_vpn_node_status``（``cloud_app_template.has_vpn_node_status``），
+        呼叫端不要在這裡自建判準。回應是 operator 的封閉集合代碼（``probe``、``backend_state``、
+        ``login.kind``…），形狀由 ``services/vpn_node_status.public_report`` 再驗一次才給前端。
+        ``probe != 'ok'`` 是正常降級（pod 還沒起來、容器重啟中），不是錯誤。
+
+        Raises:
+            PaaSOperatorError: operator 本身失敗（舊 operator 沒有這個端點會是 404）
+        """
+        return self._request(
+            'GET', f'/api/releases/{namespace}/{release_name}/vpn-node-status',
+            timeout=(2, VPN_NODE_STATUS_TIMEOUT),
+        )
+
+    def get_backup_status(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """唯讀備份狀態（#1190；商用驗收 X-BK-006-1／AI-LLM-009-1）。
+
+        operator ``GET /api/releases/{ns}/{name}/backup-status``：woow-odoo 讀備份 Job 與
+        terminationMessage，litellm 讀 db-agent 的 ``backup_last_*``，其他 chart 回
+        ``supported: false``。舊 operator 沒有這個端點會回 404（呼叫端當成「不支援」）。
+        per-call timeout (connect 5, read 15)：#1265 Q42 的預算。
+        """
+        return self._request(
+            'GET', f'/api/releases/{namespace}/{release_name}/backup-status',
+            timeout=(5, 15),
         )
 
     def get_status(

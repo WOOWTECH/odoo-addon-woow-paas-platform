@@ -425,7 +425,7 @@ class WalletTopup(models.Model):
 
         # 3DS：自動扣款沒有瀏覽器可以完成驗證 ⇒ 立即判失敗（⛔ 不再停在
         # pending 等 60 分鐘 cleanup），tx 也收成 error，晚到的 pay_callback
-        # 會被 vendored 的終態冪等擋掉。卡片進冷卻期：這個計費週期內不再對同
+        # 會被 vendored 的終態冪等擋掉。卡片進冷卻期：接下來 7 天內不再對同
         # 一個 BindCardID 自動授權（ECPay：失敗後勿反覆重新授權）。使用者由
         # 訂閱 dunning 的低餘額通知（含儲值連結）提醒改手動儲值。
         if isinstance(result, dict) and result.get('redirect_url'):
