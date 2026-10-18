@@ -77,10 +77,14 @@ class TestPricing(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(pricing.PricingInvalid):
                 pricing.normalize_pricing(envelope(row(), row(model_name='bad', model_ratio=value)))
 
-    def test_missing_optional_cache_rate_is_not_misrepresented_as_free(self):
+    def test_missing_cache_write_uses_rc44_runtime_default_and_cache_read_stays_unknown(self):
         item = pricing.normalize_pricing(envelope(row(cache_ratio=None, create_cache_ratio=None)))['items'][0]
-        self.assertIsNone(item['price']['cache_write'])
+        self.assertEqual(item['price']['cache_write'], '52')
         self.assertIsNone(item['price']['cache_read'])
+
+    def test_explicit_cache_write_override_takes_precedence_over_rc44_default(self):
+        item = pricing.normalize_pricing(envelope(row(create_cache_ratio='0.75')))['items'][0]
+        self.assertEqual(item['price']['cache_write'], '31.2')
 
     def test_duplicate_unknown_mode_or_raw_list_is_rejected(self):
         for data in (envelope(row(), row()), envelope(row(billing_mode='future')), [row()]):

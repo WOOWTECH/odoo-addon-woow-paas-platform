@@ -8,6 +8,11 @@ from decimal import Decimal, InvalidOperation, localcontext
 import re
 
 POINTS_PER_USD = 32
+# Staging source contract: docker.io/calciumion/new-api:v1.0.0-rc.44
+# GetCreateCacheRatio in relay/helper/price.go defaults to 1.25; model/pricing.go
+# omits create_cache_ratio from GET /api/pricing unless explicitly overridden.
+# Keep this fallback scoped to that deployed source version and verify drift in acceptance audit.
+CREATE_CACHE_RATIO_DEFAULT = Decimal('1.25')
 ALLOWED_GROUPS = frozenset({'default', 'free'})
 FREE_MODELS = frozenset({'qwen3-4b-aicoder', 'qwen3-4b-cluster1'})
 FREE_LIMITS = {'per_minute': 10, 'per_day': 200, 'reset_timezone': 'Asia/Taipei'}
@@ -67,9 +72,14 @@ def model_price(row, group, group_ratio):
         input_price = 2 * _number(row.get('model_ratio')) * ratio * POINTS_PER_USD
         price['input'] = _decimal_text(input_price)
         price['output'] = _decimal_text(input_price * _number(row.get('completion_ratio')))
-        for output, source in (('cache_read', 'cache_ratio'), ('cache_write', 'create_cache_ratio')):
-            if row.get(source) is not None:
-                price[output] = _decimal_text(input_price * _number(row[source]))
+        if row.get('cache_ratio') is not None:
+            price['cache_read'] = _decimal_text(input_price * _number(row['cache_ratio']))
+        # rc.44's pricing endpoint hides the runtime 1.25 default when there is no
+        # per-model override. Preserve an explicit row value, otherwise disclose it.
+        create_cache_ratio = row.get('create_cache_ratio')
+        if create_cache_ratio is None:
+            create_cache_ratio = CREATE_CACHE_RATIO_DEFAULT
+        price['cache_write'] = _decimal_text(input_price * _number(create_cache_ratio))
         return 'ratio', price
 
 

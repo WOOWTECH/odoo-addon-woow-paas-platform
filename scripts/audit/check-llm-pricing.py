@@ -3,7 +3,9 @@
 
 Usage: python scripts/audit/check-llm-pricing.py --pricing pricing.json --models models.json
            --options pricing-options.json --expected-paid 27
-The options file needs ModelRatio, CompletionRatio and CacheRatio (the get-options projection).
+The options file needs ModelRatio, CompletionRatio, CacheRatio and CreateCacheRatio.
+CreateCacheRatio falls back to 1.25 only for staging source image
+docker.io/calciumion/new-api:v1.0.0-rc.44 (relay/helper/price.go).
 Do not export credentials. Output contains counts and public model IDs, never option values.
 """
 import argparse
@@ -39,8 +41,10 @@ def main():
     completions = json.loads(completions) if isinstance(completions, str) else completions
     cache = options.get('CacheRatio')
     cache = json.loads(cache) if isinstance(cache, str) else cache
-    if not isinstance(ratios, dict) or not isinstance(completions, dict) or not isinstance(cache, dict):
-        parser.error('options must contain ModelRatio, CompletionRatio and CacheRatio objects')
+    create_cache = options.get('CreateCacheRatio')
+    create_cache = json.loads(create_cache) if isinstance(create_cache, str) else create_cache
+    if not all(isinstance(values, dict) for values in (ratios, completions, cache, create_cache)):
+        parser.error('options must contain ModelRatio, CompletionRatio, CacheRatio and CreateCacheRatio objects')
     expected = pricing.normalize_pricing(upstream)
     failures = []
     if public.get('state') != 'ok' or public.get('items') != expected['items']:
@@ -51,7 +55,8 @@ def main():
         failures.append('catalogue model count/set differs from the approved plan')
     for item in paid:
         name = item['model']
-        if item['pricing_mode'] != 'ratio' or name not in ratios or name not in completions or name not in cache:
+        if (item['pricing_mode'] != 'ratio' or name not in ratios or name not in completions
+                or name not in cache):
             failures.append('missing ratio tariff/options: ' + name)
             continue
         expected_input = Decimal('83.2') * Decimal(str(ratios[name]))
@@ -61,9 +66,15 @@ def main():
                 or Decimal(item['price']['cache_read']) != expected_input * Decimal(str(cache[name]))):
             failures.append('option tariff mismatch: ' + name)
         upstream_row = next(row for row in upstream['data'] if row.get('model_name') == name)
-        write_ratio = upstream_row.get('create_cache_ratio')
-        if write_ratio is not None and (item['price']['cache_write'] is None
-                or Decimal(item['price']['cache_write']) != expected_input * Decimal(str(write_ratio))):
+        row_write_ratio = upstream_row.get('create_cache_ratio')
+        option_write_ratio = create_cache.get(name)
+        effective_write_ratio = (option_write_ratio if option_write_ratio is not None
+                                 else pricing.CREATE_CACHE_RATIO_DEFAULT)
+        if (row_write_ratio is not None
+                and Decimal(str(row_write_ratio)) != Decimal(str(effective_write_ratio))):
+            failures.append('CreateCacheRatio option/row disagreement: ' + name)
+        if (item['price']['cache_write'] is None
+                or Decimal(item['price']['cache_write']) != expected_input * Decimal(str(effective_write_ratio))):
             failures.append('cache write tariff mismatch: ' + name)
     for failure in failures:
         print('FAIL:', failure)
