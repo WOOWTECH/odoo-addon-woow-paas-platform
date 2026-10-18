@@ -530,7 +530,9 @@ test("已開通：額度用整數 quota 捨去、今日免費試用 X／200、�
   assert.equal(tab.showZeroCreditBanner, true);
   assert.equal(tab.zeroCreditText, "AI 額度為 0。您可以先使用免費試用模型；從點數錢包轉入 AI 額度的功能即將推出。");
   assert.equal(tab.freeTrialUsageText, "—／200 次");
-  fake.usage = { today_count: 1, daily_limit: 200, items: [] };
+  fake.usage = { today_count: 99, daily_limit: 200, items: [] };
+  assert.equal(tab.freeTrialUsageText, "—／200 次", "recent log page count cannot override the meter");
+  fake.usage.free_trial = { today_count: 1, daily_limit: 200 };
   assert.equal(tab.freeTrialUsageText, "1／200 次");
   assert.equal(tab.baseUrl, null);
   assert.equal(tab.revealBaseUrl, undefined);
@@ -922,4 +924,19 @@ test("沒建成：顯示碼表句子、可直接關閉（created=false）；成�
   assert.match(odd.modal.state.errorMessage, /建立中斷.*重新建立/);
   assert.match(odd.modal.state.errorMessage, /啟用中.*請聯絡客服/);
   odd.modal.close();
+});
+
+
+test("LLM-10: capped and daily creation limit disable free trial with an explanation", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: { today_count: 200, daily_limit: 200, capped: true, keys_created_today: 1 } };
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.equal(tab.freeTrialCreateDisabledText, "今日免費試用已用完，台北時間 00:00 自動恢復。");
+  fake.usage = { free_trial: { today_count: 0, daily_limit: 200, capped: false, keys_created_today: 3 } };
+  assert.equal(tab.freeTrialUsageText, "0／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCreateDisabledText, /明天/);
+  fake.usage.free_trial.keys_created_today = 0;
+  assert.equal(tab.canCreateFreeTrialKey, true, "next Taipei day refreshes the daily gate");
 });

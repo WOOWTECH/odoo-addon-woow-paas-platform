@@ -9,7 +9,7 @@ new-api 的 token 才是本體；PaaS 只存鏡像：token id、名稱、遮罩�
 1. 前端在打開建立表單時產生 ``client_request_id``；同一個 id 再送 ⇒ ``llm_key_already_shown``。
 2. 檢查帳戶 active、條款（改版且要求重新同意 ⇒ ``llm_tos_outdated``，LLM-04）、20 把上限（D10）、
    免費試用每帳號最多 1 把有效（DB partial unique index 也擋並發）。每日上限與「每天最多建 3 把」
-   在 LLM-10。
+   由 llm_free_usage 的台北日計數守住。
    2′. **每帳號每小時最多 10 次建金鑰**（N6；LLM-02b）：本地檢查都過了、第一次外呼之前，
    ``llm_event._llm_throttle_reserve`` 以獨立交易數＋記一筆 ``key_create``；到上限回
    ``llm_rate_limited``＋``retry_after``，零外呼。做完以 ``_llm_event_finish`` 補結果（ok／錯誤碼）；
@@ -55,7 +55,7 @@ from .llm_common import (
     _is_llm_internal,
     _without_llm_internal,
 )
-from .llm_event import safe_code
+from .llm_event import _begin, safe_code
 
 _logger = logging.getLogger(__name__)
 
@@ -129,6 +129,7 @@ class LlmApiKey(models.Model):
         [('user', 'User'), ('suspend', 'Suspended'), ('free_daily_cap', 'Free daily cap'),
          ('overdraft', 'Overdraft'), ('ops', 'Operations'), ('dr_reconcile', 'DR reconcile')],
         readonly=True, copy=False)
+    free_capped_day = fields.Date(readonly=True, copy=False)
     masked_key = fields.Char(readonly=True, copy=False, help='sk- plus first 4 and last 4.')
     quota_limit_points = fields.Integer(readonly=True)
     expires_at = fields.Datetime(readonly=True)
@@ -255,6 +256,7 @@ class LlmApiKey(models.Model):
         keys = account.api_key_ids
         if keys.filtered(lambda k: k.client_request_id == client_request_id):
             raise LlmError(ERR_LLM_KEY_ALREADY_SHOWN)
+        self.env['woow_paas_platform.llm_free_usage']._llm_assert_can_create(account.id)
         # 卡在 creating 的列（處理它的 worker 在請求途中被殺）會一直佔住「1 把試用金鑰」的名額：
         # 超過預算很久的那些先標成 failed_reveal（獨立交易），這次的判斷也一起排除。
         stale_before = _utcnow() - timedelta(seconds=_STALE_CREATING_SECONDS)
@@ -409,7 +411,11 @@ class LlmApiKey(models.Model):
         rand4 = ''.join(secrets.choice(_RAND4_ALPHABET) for _ in range(4))
         try:
             with self.env.registry.cursor() as cr:
-                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                _begin(self.env, cr, read_committed=True)
+                if kind == 'free_trial':
+                    from .llm_free_usage import taipei_day
+                    self.env['woow_paas_platform.llm_free_usage']._llm_reserve_key_cr(
+                        cr, account.id, taipei_day(now.replace(tzinfo=timezone.utc).timestamp()))
                 cr.execute(
                     'INSERT INTO %s (account_id, partner_id, kind, client_request_id, state, '
                     'expires_at, model_allowlist, created_uid, created_ip, '
@@ -423,6 +429,9 @@ class LlmApiKey(models.Model):
                 name = 'wp_%d_%s' % (key_id, rand4)
                 cr.execute('UPDATE %s SET newapi_name = %%s WHERE id = %%s' % KEY_TABLE,
                            (name, key_id))
+        except LlmError as exc:
+            exc.not_executed = True
+            raise
         except IntegrityError as exc:
             constraint = getattr(getattr(exc, 'diag', None), 'constraint_name', '') or ''
             error = LlmError(ERR_LLM_FREE_KEY_EXISTS if 'free_trial' in constraint
@@ -449,6 +458,14 @@ class LlmApiKey(models.Model):
         with self.env.registry.cursor() as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
             cr.execute(
-                'UPDATE %s SET %s WHERE id = %%s AND state = %%s'
+                'UPDATE %s SET %s WHERE id = %%s AND state = %%s '
+                'RETURNING account_id, kind, create_date'
                 % (KEY_TABLE, ', '.join('%s = %%s' % column for column in columns)),
                 [values[column] for column in columns] + [key_id, 'creating'])
+            changed = cr.fetchone()
+            if changed and changed[1] == 'free_trial' and values.get('state') == 'deleted':
+                # Definite non-creation gives back the reserved daily slot once.
+                from .llm_free_usage import USAGE_TABLE, taipei_day
+                cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
+                           'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
+                           (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))

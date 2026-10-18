@@ -26295,3 +26295,9 @@ msgstr "價格暫時無法顯示，開通後可在「模型與價格」查看。
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
 msgid "Data as of %(time)s"
 msgstr "資料時間 %(time)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Today's free trial is used up. Restores automatically at 00:00 Taipei time."
+msgstr "今日免費試用已用完，台北時間 00:00 自動恢復。"

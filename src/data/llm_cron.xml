@@ -109,5 +109,45 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <record id="ir_cron_llm_free_tier_meter" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Tier Meter</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_tier_meter()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_tier_reset" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Tier Reset</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_tier_reset()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_usage_cleanup" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Usage Cleanup</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_usage_cleanup()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_group_action" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Group Action</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_group_action()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

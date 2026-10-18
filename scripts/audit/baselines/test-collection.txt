@@ -474,6 +474,8 @@
 3	test_llm_client_hardening.TestLlmConfigChange
 3	test_llm_client_hardening.TestLlmConnectionTest
 10	test_llm_client_hardening.TestLlmSwr
+12	test_llm_free_usage.TestLlmFreeUsage
+2	test_llm_free_usage.TestLlmFreeUsageSecurity
 5	test_llm_mcp_jump_guard.TestLlmMcpJumpGuard
 17	test_llm_platform_foundation.TestLlmAlert
 2	test_llm_platform_foundation.TestLlmAlertBurst

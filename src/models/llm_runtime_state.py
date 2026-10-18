@@ -66,6 +66,10 @@ STATE_FIELDS = (
     # 免費試用計數的游標（LLM-10；DESIGN §1.3.3）。new-api 的 log id 與 unix 秒都用 int8。
     'free_meter_last_log_id',
     'free_meter_last_ts',
+    'free_meter_scan_start',
+    'free_meter_scan_end',
+    'free_meter_scan_page',
+    'free_meter_scan_max_id',
     # I3 的「外部入帳」水位線（LLM-12b）。
     'external_credit_watermark_ts',
     # 不變量 guard（N17；LLM-12b／LLM-14）。
@@ -111,6 +115,10 @@ class LlmRuntimeState(models.Model):
     free_meter_last_log_id = LlmQuotaInteger(readonly=True, default=0)
     free_meter_last_ts = LlmQuotaInteger(readonly=True, default=0,
                                          help='Unix seconds of the last free-usage log read.')
+    free_meter_scan_start = LlmQuotaInteger(readonly=True, default=0)
+    free_meter_scan_end = LlmQuotaInteger(readonly=True, default=0)
+    free_meter_scan_page = fields.Integer(readonly=True, default=0)
+    free_meter_scan_max_id = LlmQuotaInteger(readonly=True, default=0)
     external_credit_watermark_ts = LlmQuotaInteger(readonly=True, default=0,
                                                    help='Unix seconds (invariant I3).')
     guard_tripped = fields.Boolean(readonly=True, default=False)

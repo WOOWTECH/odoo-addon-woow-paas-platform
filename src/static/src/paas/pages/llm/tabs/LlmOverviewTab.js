@@ -502,16 +502,24 @@ export class LlmOverviewTab extends Component {
   }
 
   get freeTrial() {
-    return (this.llm.overview && this.llm.overview.free_trial) || {};
+    // Both endpoint payloads read llm_free_usage; recent-call pagination is not a counter.
+    return { ...((this.llm.overview && this.llm.overview.free_trial) || {}),
+      ...((this.llm.usage && this.llm.usage.free_trial) || {}) };
   }
 
-  /** 今日次數：tracer 期間由 usage/recent 提供（state 的 today_count 在 LLM-10 之前是 null）。 */
   get freeTrialUsageText() {
-    const usage = this.llm.usage;
-    const count = usage && typeof usage.today_count === "number"
-      ? usage.today_count : this.freeTrial.today_count;
-    const limit = (usage && usage.daily_limit) || this.freeTrial.daily_limit || 200;
-    return formatFreeTrialUsage(count, limit);
+    return formatFreeTrialUsage(this.freeTrial.today_count, this.freeTrial.daily_limit || 200);
+  }
+
+  get freeTrialCappedText() {
+    return this.freeTrial.capped
+      ? _t("Today's free trial is used up. Restores automatically at 00:00 Taipei time.") : null;
+  }
+
+  get freeTrialCreateDisabledText() {
+    if (this.freeTrial.capped) return this.freeTrialCappedText;
+    return this.freeTrial.keys_created_today >= 3
+      ? llmErrorMessage({ code: "llm_free_key_daily_limit" }) : null;
   }
 
   get baseUrl() {
@@ -553,7 +561,7 @@ export class LlmOverviewTab extends Component {
 
   get canCreateFreeTrialKey() {
     return this.screen === "active" && !this.hasFreeTrialKey && !this.state.showReveal
-      && !this.guardTripped && !this.tosBlocking;
+      && !this.guardTripped && !this.tosBlocking && !this.freeTrialCreateDisabledText;
   }
 
   get freeTrialHint() {

@@ -61,4 +61,47 @@
         action="action_llm_runtime_state"
         groups="base.group_system"
         sequence="20"/>
+    <!-- Object buttons call guarded methods directly; ir.actions.server would
+         require write ACL on the account model, which is intentionally read-only. -->
+    <record id="view_llm_free_fallback_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_account.free.fallback.list</field>
+        <field name="model">woow_paas_platform.llm_account</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="partner_id"/>
+                <field name="newapi_username"/>
+                <field name="state"/>
+                <field name="free_group_requested"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_free_fallback_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_account.free.fallback.form</field>
+        <field name="model">woow_paas_platform.llm_account</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_llm_block_free_trial" type="object" string="Block free trial (break-glass)"
+                            groups="base.group_system" confirm="Queue a free trial group block? The proxy owner must enable break-glass first."/>
+                    <button name="action_llm_restore_free_group" type="object" string="Restore default group (break-glass)"
+                            groups="base.group_system" confirm="Queue restoration of the default group?"/>
+                </header>
+                <sheet><group>
+                    <field name="partner_id"/>
+                    <field name="newapi_username"/>
+                    <field name="state"/>
+                    <field name="free_group_requested"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_free_fallback" model="ir.actions.act_window">
+        <field name="name">Free trial fallback</field>
+        <field name="res_model">woow_paas_platform.llm_account</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="view_llm_free_fallback_list"/>
+        <field name="domain">[("newapi_user_id", "&gt;", 0)]</field>
+    </record>
+    <menuitem id="menu_llm_free_fallback" name="Free trial fallback" parent="menu_llm"
+              action="action_llm_free_fallback" groups="base.group_system" sequence="25"/>
 </odoo>
