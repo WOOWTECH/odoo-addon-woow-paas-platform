@@ -181,14 +181,11 @@ def _connection_addresses(host, resolver):
 
 
 def _http_modules():
-    # MCP 2.x (including deployed 2.3.0) uses httpx2/httpcore2. Legacy MCP uses
-    # httpx/httpcore. Keep these optional: the save-time guard needs only stdlib.
-    try:
-        import httpx2 as httpx
-        import httpcore2 as httpcore
-    except ImportError:
-        import httpx
-        import httpcore
+    # Match the pinned MCP 1.x / adapter 0.2 HTTP client contract. Other
+    # addons may install httpx2 too; its presence must not select our stack.
+    # Keep imports lazy: save-time URL validation needs only the stdlib.
+    import httpx
+    import httpcore
     return httpx, httpcore
 
 

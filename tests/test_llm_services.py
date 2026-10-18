@@ -1,7 +1,7 @@
 """LLM-01b 的純 Python 單元測試：``src/services/{newapi_client,llm_crypto,llm_redact}.py``。
 
 Run:  python3 tests/test_llm_services.py -v
-CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；使用 requests、cryptography 與 httpx2）。
+CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；使用 requests、cryptography 與 MCP 1.x HTTP stack）。
 
 這三支模組刻意不 import odoo，所以這裡在沒有 Odoo 的環境直接載入（照
 ``tests/test_shc_bare_create_transport.py`` 的做法）。和代理的契約用代理自己的參考實作
