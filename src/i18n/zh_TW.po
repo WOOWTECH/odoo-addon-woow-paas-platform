@@ -26105,6 +26105,7 @@ msgid "Connection status"
 msgstr "連線狀態"
 
 #. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
 msgid "Text"
 msgstr "文字"
