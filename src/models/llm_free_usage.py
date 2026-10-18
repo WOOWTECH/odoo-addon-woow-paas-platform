@@ -17,7 +17,7 @@ from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
     ERR_LLM_FREE_CAPPED_TODAY, ERR_LLM_FREE_KEY_DAILY_LIMIT, FREE_DAILY_LIMIT,
-    LlmError, LlmQuotaInteger, _is_llm_internal, _without_llm_internal,
+    LlmCronTick, LlmError, LlmQuotaInteger, _is_llm_internal, _without_llm_internal,
     llm_config, llm_unconfigured, run_llm_cron,
 )
 from .llm_event import LlmAlert, _begin
@@ -155,7 +155,11 @@ class LlmFreeUsage(models.Model):
             if not lock_cr.fetchone()[0]:
                 return False
             try:
-                self._llm_enforce_caps(tick, enabled=False)
+                # Reserve most of the tick for log progress. Invalid UPs rotate
+                # by last attempt instead of starving every subsequent account.
+                cap_tick = LlmCronTick(min(10, max(0, tick.remaining())), 5)
+                self._llm_enforce_caps(cap_tick, enabled=False)
+                tick.took(cap_tick.done)
                 client = self.env['woow_paas_platform.llm_account']._llm_client(nac.ROLE_CRON)
                 while tick.can_take(1):
                     state = self.env['woow_paas_platform.llm_runtime_state']._llm_read()
@@ -247,20 +251,31 @@ class LlmFreeUsage(models.Model):
 
     @api.model
     def _llm_cap_candidates(self, enabled):
+        day = taipei_day()
         with self.env.registry.cursor() as cr:
             cr.execute(
-                'SELECT k.id, k.account_id, k.newapi_token_id, k.newapi_name, k.state '
+                'SELECT k.id, k.account_id, k.newapi_token_id, k.newapi_name, k.state, k.disabled_by '
                 'FROM {keys} k JOIN {accounts} a ON a.id=k.account_id '
                 'WHERE k.kind=\'free_trial\' AND '.format(keys=KEY_TABLE, accounts=ACCOUNT_TABLE)
-                + ("k.state='disabled' AND k.disabled_by='free_daily_cap' AND a.state='active' "
+                + ("(k.state='disabled' OR (k.state='active' AND k.free_cap_pending)) "
+                   "AND k.disabled_by='free_daily_cap' AND a.state='active' "
                    "AND k.free_capped_day < %s AND (k.expires_at IS NULL OR k.expires_at > %s) "
                    "AND NOT EXISTS (SELECT 1 FROM {usage} u WHERE u.account_id=a.id "
                    "AND u.day_tpe=%s AND u.capped_at IS NOT NULL) " if enabled else
-                   "k.state IN ('active','failed_reveal') AND EXISTS (SELECT 1 FROM {usage} u "
+                   "k.state IN ('active','failed_reveal','disabled') "
+                   "AND (k.state!='disabled' OR k.disabled_by='free_daily_cap') "
+                   "AND (k.free_cap_pending OR NOT (COALESCE(k.disabled_by,'')='free_daily_cap' "
+                   "AND COALESCE(k.free_capped_day, DATE '1970-01-01')=%s)) "
+                   "AND EXISTS (SELECT 1 FROM {usage} u "
                    "WHERE u.account_id=a.id AND u.day_tpe=%s AND u.capped_at IS NOT NULL) ")
-                .format(usage=USAGE_TABLE) + 'ORDER BY k.id LIMIT 100',
-                (taipei_day(), fields.Datetime.now(), taipei_day()) if enabled else (taipei_day(),))
-            return cr.dictfetchall()
+                .format(usage=USAGE_TABLE) + 'ORDER BY k.free_cap_attempted_at NULLS FIRST, k.id LIMIT 100',
+                (day, fields.Datetime.now(), day) if enabled else (day, day))
+            rows = cr.dictfetchall()
+        for row in rows:
+            # The request can finish after midnight. Keep the day that triggered
+            # this operation, so tomorrow's reset never treats it as a new cap.
+            row['cap_day'] = day
+        return rows
 
     @api.model
     def _llm_enforce_caps(self, tick, enabled):
@@ -269,10 +284,15 @@ class LlmFreeUsage(models.Model):
         for row in rows:
             if not tick.can_take(1):
                 return
+            tick.took()
+            with self.env.registry.cursor() as cr:
+                _begin(self.env, cr, read_committed=True)
+                cr.execute('UPDATE %s SET free_cap_attempted_at=%%s WHERE id=%%s' % KEY_TABLE,
+                           (fields.Datetime.now(), row['id']))
             account = self.env['woow_paas_platform.llm_account'].sudo().browse(row['account_id'])
             account.invalidate_recordset()
             try:
-                ip, up = account._llm_tenant_ip(), account._llm_up_token()
+                ip, up = account._llm_tenant_ip(), account._llm_up_token(role=nac.ROLE_CRON)
                 client = client or account._llm_client(nac.ROLE_CRON)
                 token_id = row['newapi_token_id']
                 if not token_id:
@@ -289,6 +309,18 @@ class LlmFreeUsage(models.Model):
                     token_id = matches[0]['id']
                 if not tick.can_take(1):
                     return
+                if not enabled:
+                    # Persist intent before the remote side effect. A lost disable
+                    # response near midnight must still be recoverable by reset.
+                    with self.env.registry.cursor() as cr:
+                        _begin(self.env, cr, read_committed=True)
+                        cr.execute(
+                            'UPDATE %s SET free_cap_pending=true, free_capped_day=%%s, '
+                            "disabled_by='free_daily_cap' WHERE id=%%s AND state=%%s "
+                            'AND disabled_by IS NOT DISTINCT FROM %%s' % KEY_TABLE,
+                            (row['cap_day'], row['id'], row['state'], row['disabled_by']))
+                        if not cr.rowcount:
+                            continue
                 with self.env.registry.cursor() as cr:
                     _begin(self.env, cr, read_committed=True)
                     if enabled:
@@ -296,16 +328,18 @@ class LlmFreeUsage(models.Model):
                         # disable changes serialize with this last eligibility check.
                         # Credentials are decrypted before locking (error handlers
                         # may need a separate cursor to mark UP invalid).
+                        reset_day = taipei_day()
                         cr.execute(
                             'SELECT k.id FROM {keys} k JOIN {accounts} a ON a.id=k.account_id '
-                            "WHERE k.id=%s AND a.state='active' AND k.state='disabled' "
+                            "WHERE k.id=%s AND a.state='active' "
+                            "AND (k.state='disabled' OR (k.state='active' AND k.free_cap_pending)) "
                             "AND k.disabled_by='free_daily_cap' AND k.free_capped_day < %s "
                             'AND (k.expires_at IS NULL OR k.expires_at > %s) '
                             'AND NOT EXISTS (SELECT 1 FROM {usage} u WHERE u.account_id=a.id '
                             'AND u.day_tpe=%s AND u.capped_at IS NOT NULL) '
                             'FOR UPDATE OF a,k'.format(keys=KEY_TABLE, accounts=ACCOUNT_TABLE,
                                                       usage=USAGE_TABLE),
-                            (row['id'], taipei_day(), fields.Datetime.now(), taipei_day()))
+                            (row['id'], reset_day, fields.Datetime.now(), reset_day))
                         if not cr.fetchone():
                             continue
                     result = client.user_set_token_status(ip, up, token_id, enabled,
@@ -315,9 +349,11 @@ class LlmFreeUsage(models.Model):
                     if not result.ok:
                         raise LlmError('llm_free_up_failed')
                     cr.execute('UPDATE %s SET state=%%s, disabled_by=%%s, newapi_token_id=%%s, free_capped_day=%%s, '
-                               'write_uid=%%s, write_date=%%s WHERE id=%%s AND state=%%s' % KEY_TABLE,
-                               ('active' if enabled else 'disabled', None if enabled else
-                                'free_daily_cap', token_id, None if enabled else taipei_day(),
+                               'free_cap_pending=false, '
+                               "write_uid=%%s, write_date=%%s WHERE id=%%s AND state=%%s AND disabled_by='free_daily_cap'" % KEY_TABLE,
+                               ('active' if enabled else ('failed_reveal' if row['state'] == 'failed_reveal'
+                                                         else 'disabled'), None if enabled else
+                                'free_daily_cap', token_id, None if enabled else row['cap_day'],
                                 SUPERUSER_ID, fields.Datetime.now(),
                                 row['id'], row['state']))
             except LlmError:
@@ -418,23 +454,29 @@ class LlmAccountFreeGroup(models.Model):
 
     @api.model
     def _llm_free_group_tick(self, config, tick):
-        # Never derives requests from counters or failed UP calls: operator-only queue.
-        with self.env.registry.cursor() as cr:
-            cr.execute('SELECT id, newapi_user_id, free_group_requested FROM %s '
-                       'WHERE free_group_requested IS NOT NULL ORDER BY id LIMIT 11' % ACCOUNT_TABLE)
-            rows = cr.dictfetchall()
-        for row in rows:
-            if not tick.can_take(1):
-                return True
-            result = self._llm_client(nac.ROLE_CRON).bg_set_user_group(
-                row['newapi_user_id'], row['free_group_requested'], deadline=tick.deadline)
-            tick.took()
-            # Consume one explicit request even on failure: never activate a stale
-            # request unexpectedly when an owner enables bg hours or days later.
+        # Claim and consume atomically before outbound: multiple workers cannot
+        # duplicate a request, and an unavailable client cannot replay stale
+        # intent when an owner enables bg later. Any failure needs manual requeue.
+        while tick.can_take(1):
             with self.env.registry.cursor() as cr:
-                cr.execute('UPDATE %s SET free_group_requested=NULL WHERE id=%%s '
-                           'AND free_group_requested=%%s' % ACCOUNT_TABLE,
-                           (row['id'], row['free_group_requested']))
-            if not result.ok:
+                _begin(self.env, cr, read_committed=True)
+                cr.execute(
+                    'WITH request AS (SELECT id, newapi_user_id, free_group_requested '
+                    'FROM {t} WHERE free_group_requested IS NOT NULL '
+                    'ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) '
+                    'UPDATE {t} a SET free_group_requested=NULL FROM request r '
+                    'WHERE a.id=r.id RETURNING r.id, r.newapi_user_id, '
+                    'r.free_group_requested'.format(t=ACCOUNT_TABLE))
+                row = cr.dictfetchone()
+            if not row:
+                return False
+            tick.took()
+            try:
+                result = self._llm_client(nac.ROLE_CRON).bg_set_user_group(
+                    row['newapi_user_id'], row['free_group_requested'], deadline=tick.deadline)
+                failed = not result.ok
+            except Exception:  # Client/config failures also consume the explicit request.
+                failed = True
+            if failed:
                 self.env[USAGE_MODEL]._llm_alert(
-                    LlmAlert.FREE_UP_FAILED, 'llm_break_glass_failed', row['id'])
+                    LlmAlert.BREAK_GLASS_USED, 'llm_break_glass_failed', row['id'])

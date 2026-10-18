@@ -136,6 +136,34 @@ class TestLlmFreeUsage(_ConfiguredCase):
         self.assertEqual((bypass.state, bypass.disabled_by), ('disabled', 'free_daily_cap'))
         self.assertEqual(self.client.user_set_token_status.call_count, 2)
 
+    def test_interrupted_trial_is_disabled_without_conflicting_with_replacement(self):
+        failed = self._key(state='failed_reveal', token_id=789)
+        replacement = self._key(token_id=790)
+        self._usage()
+        self.env.flush_all()
+        self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+        failed.invalidate_recordset()
+        replacement.invalidate_recordset()
+        self.assertEqual((failed.state, failed.disabled_by), ('failed_reveal', 'free_daily_cap'))
+        self.assertEqual(replacement.state, 'disabled')
+        self.assertEqual(self.client.user_set_token_status.call_count, 2)
+        self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+        self.assertEqual(self.client.user_set_token_status.call_count, 2)
+
+    def test_failed_up_rotates_so_other_capped_accounts_are_processed(self):
+        self._usage()
+        self._key()
+        other = _new_account(self.env, 'Next cap account')
+        self._usage(account=other)
+        self._key(account=other, token_id=456)
+        self.env.flush_all()
+        self.client.user_set_token_status.return_value = nac.NotExecuted('connect')
+        with patch.object(type(self.Usage), '_llm_alert'):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 2), enabled=False)
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 2), enabled=False)
+        self.assertEqual([call.args[2] for call in self.client.user_set_token_status.call_args_list],
+                         [123, 456])
+
     def test_daily_create_budget_is_atomic_and_definite_non_creation_releases_slot(self):
         keys = self.env[KEY]
         for i in range(3):
@@ -184,6 +212,69 @@ class TestLlmFreeUsage(_ConfiguredCase):
         self.client.user_set_token_status.assert_called_once()
         self.assertTrue(self.client.user_set_token_status.call_args.args[3])
 
+    def test_unknown_disable_can_be_reset_after_midnight(self):
+        key = self._key()
+        self._usage()
+        self.env.flush_all()
+        self.client.user_set_token_status.return_value = nac.Unknown('read')
+        with patch.object(type(self.Usage), '_llm_alert'):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+        key.invalidate_recordset()
+        self.assertEqual(key.state, 'active')
+        self.assertTrue(key.free_cap_pending)
+        self.assertEqual(key.free_capped_day, DAY)
+        self.client.user_set_token_status.return_value = nac.Ok({})
+        with patch.object(free_module, 'taipei_day', return_value=DAY + timedelta(days=1)):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=True)
+        key.invalidate_recordset()
+        self.assertEqual(key.state, 'active')
+        self.assertFalse(key.free_cap_pending)
+        self.assertFalse(key.disabled_by)
+        self.assertEqual([call.args[3] for call in self.client.user_set_token_status.call_args_list],
+                         [False, True])
+
+    def test_disable_finishing_after_midnight_keeps_original_cap_day(self):
+        key = self._key()
+        self._usage()
+        self.env.flush_all()
+        clock = [DAY]
+        def completed(*args, **kwargs):
+            clock[0] = DAY + timedelta(days=1)
+            return nac.Ok({})
+        self.client.user_set_token_status.side_effect = completed
+        with patch.object(free_module, 'taipei_day', side_effect=lambda *args: clock[0]):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+        key.invalidate_recordset()
+        self.assertEqual(key.free_capped_day, DAY)
+
+    def test_unknown_reset_is_disabled_again_when_new_day_reaches_cap(self):
+        key = self._key(state='disabled', reason='free_daily_cap')
+        # Upstream may have enabled the token even though its response was lost.
+        self.client.user_set_token_status.return_value = nac.Unknown('read')
+        with patch.object(type(self.Usage), '_llm_alert'):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=True)
+        key.invalidate_recordset()
+        self.assertEqual(key.free_capped_day, DAY - timedelta(days=1))
+        self._usage()
+        self.env.flush_all()
+        self.client.user_set_token_status.return_value = nac.Ok({})
+        self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+        key.invalidate_recordset()
+        self.assertEqual(key.free_capped_day, DAY)
+        self.assertEqual([call.args[3] for call in self.client.user_set_token_status.call_args_list],
+                         [True, False])
+
+    def test_reset_rechecks_suspension_after_selecting_candidates(self):
+        key = self._key(state='disabled', reason='free_daily_cap')
+        rows = self.Usage._llm_cap_candidates(enabled=True)
+        _llm_internal(self.account).write({'state': 'suspended'})
+        self.env.flush_all()
+        with patch.object(type(self.Usage), '_llm_cap_candidates', return_value=rows):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=True)
+        self.client.user_set_token_status.assert_not_called()
+        key.invalidate_recordset()
+        self.assertEqual(key.state, 'disabled')
+
     def test_failed_up_keeps_cap_for_retry_and_alerts(self):
         self._usage()
         key = self._key()
@@ -226,6 +317,18 @@ class TestLlmFreeUsage(_ConfiguredCase):
             self.Usage._cron_llm_free_group_action()
         self.assertFalse(self.client.mock_calls)
         alert.assert_not_called()
+
+    def test_bg_client_exception_consumes_request_without_delayed_replay(self):
+        with patch.object(type(self.env['ir.cron']), '_trigger'):
+            self.account.action_llm_block_free_trial()
+        with patch.object(type(self.env[ACCOUNT]), '_llm_client', side_effect=RuntimeError('test')), \
+                patch.object(type(self.Usage), '_llm_alert') as alert:
+            self.env[ACCOUNT]._llm_free_group_tick({}, LlmCronTick(30, 10))
+        alert.assert_called_once()
+        self.account.invalidate_recordset()
+        self.assertFalse(self.account.free_group_requested)
+        self.env[ACCOUNT]._llm_free_group_tick({}, LlmCronTick(30, 10))
+        self.client.bg_set_user_group.assert_not_called()
 
     def test_bg_is_explicit_queue_and_changes_only_group(self):
         self.client.bg_set_user_group.return_value = nac.Ok({})

@@ -130,6 +130,8 @@ class LlmApiKey(models.Model):
          ('overdraft', 'Overdraft'), ('ops', 'Operations'), ('dr_reconcile', 'DR reconcile')],
         readonly=True, copy=False)
     free_capped_day = fields.Date(readonly=True, copy=False)
+    free_cap_attempted_at = fields.Datetime(readonly=True, copy=False)
+    free_cap_pending = fields.Boolean(readonly=True, copy=False, default=False)
     masked_key = fields.Char(readonly=True, copy=False, help='sk- plus first 4 and last 4.')
     quota_limit_points = fields.Integer(readonly=True)
     expires_at = fields.Datetime(readonly=True)

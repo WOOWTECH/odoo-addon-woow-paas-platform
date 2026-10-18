@@ -135,9 +135,6 @@ ERR_LLM_KEY_LIMIT = 'llm_key_limit'
 ERR_LLM_FREE_KEY_EXISTS = 'llm_free_key_exists'
 ERR_LLM_FREE_CAPPED_TODAY = 'llm_free_capped_today'
 ERR_LLM_FREE_KEY_DAILY_LIMIT = 'llm_free_key_daily_limit'
-ERR_LLM_FREE_METER_LAG = 'llm_free_meter_lag'
-ERR_LLM_FREE_METER_GAP = 'llm_free_meter_gap'
-ERR_LLM_FREE_UP_FAILED = 'llm_free_up_failed'
 ERR_LLM_KEY_ALREADY_SHOWN = 'llm_key_already_shown'
 ERR_LLM_KEY_INVALID = 'llm_key_invalid'
 #: 開戶失敗（``state=error``）的帳戶操作建金鑰時。DESIGN 的碼表沒有這一格：error 狀態在
@@ -529,8 +526,11 @@ LLM_CRON_ERROR_CODES = {
     xmlid: 'llm_cron_%s' % xmlid.rpartition('.ir_cron_llm_')[2] for xmlid in LLM_CRONS}
 
 #: 告警／incident／``llm_event.error_code`` 只收的錯誤碼（見上方「封閉登記表」）。
+FREE_METER_ERROR_CODES = frozenset({
+    'llm_free_meter_lag', 'llm_free_meter_gap', 'llm_free_up_failed',
+})
 ERROR_CODES = (
-    API_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
+    API_ERROR_CODES | FREE_METER_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
     | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
 
