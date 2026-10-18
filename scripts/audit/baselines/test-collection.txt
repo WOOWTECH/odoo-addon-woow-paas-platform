@@ -483,6 +483,9 @@
 3	test_llm_platform_foundation.TestLlmRedactShared
 4	test_llm_platform_foundation.TestLlmRuntimeState
 6	test_llm_platform_foundation.TestLlmThrottle
+9	test_llm_terms.TestLlmTermsConsent
+3	test_llm_terms.TestLlmTermsHttp
+10	test_llm_terms.TestLlmTermsModel
 1	test_llm_tracer.TestLlmActivateRace
 6	test_llm_tracer.TestLlmConfigGuard
 1	test_llm_tracer.TestLlmConfigRegistered

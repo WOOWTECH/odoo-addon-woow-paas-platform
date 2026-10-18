@@ -35,7 +35,8 @@
       </t>
 
       <!-- 尚未開通（DESIGN §6.2）：主視覺＋副標＋代表模型價格（tracer 沒有價目 API，顯示 fallback 句）＋條款勾選＋〔開通〕。
-           《AI 模型服務條款》的連結與 LlmTermsModal 在 LLM-04（條款內容在 LLM-05）。 -->
+           勾選框旁是《AI 模型服務條款》的連結（LlmTermsModal，DESIGN §6.4-1）：連結不能放在 label 裡
+           （點連結會順便勾選），所以 label 只包「我已閱讀並同意」，勾選框的可讀名稱由 aria-labelledby 串起兩段。 -->
       <t t-elif="screen === 'not_activated'">
         <WoowCard shadow="true" class="'o_woow_llm_intro'">
           <div class="o_woow_llm_intro__icon">
@@ -47,11 +48,18 @@
             <WoowIcon name="'sell'" size="18"/>
             <span t-esc="pricingFallbackText"/>
           </div>
-          <label class="o_woow_llm_intro__terms">
-            <input type="checkbox" t-att-checked="state.tosAccepted" t-on-change="onTosChange"/>
-            <span>I agree to the AI Models Terms of Service</span>
-          </label>
-          <p t-if="tosIsDraft" class="o_woow_hint o_woow_llm_intro__draft" t-esc="tosDraftText"/>
+          <div class="o_woow_llm_intro__terms">
+            <input id="o_woow_llm_tos_check" type="checkbox" t-att-checked="state.tosAccepted"
+                   t-att-disabled="tosUnavailable" t-on-change="onTosChange"
+                   aria-labelledby="o_woow_llm_tos_label o_woow_llm_tos_link"/>
+            <span class="o_woow_llm_intro__terms_text">
+              <label id="o_woow_llm_tos_label" for="o_woow_llm_tos_check">I have read and agree to the</label>
+              <button id="o_woow_llm_tos_link" type="button" class="o_woow_llm_link"
+                      t-on-click="(ev) => this.openTerms('read', ev)">AI Models Terms of Service</button>
+            </span>
+          </div>
+          <p t-if="tosUnavailable" class="o_woow_hint o_woow_llm_intro__draft" role="status" t-esc="tosUnavailableText"/>
+          <p t-elif="tosIsDraft" class="o_woow_hint o_woow_llm_intro__draft" t-esc="tosDraftText"/>
           <div t-if="state.actionError" class="o_woow_error_message" role="alert">
             <WoowIcon name="'error'" size="18"/>
             <span t-esc="state.actionError"/>
@@ -109,9 +117,10 @@
           <WoowIcon name="'construction'" size="20"/>
           <span class="o_woow_llm_banner__text" t-esc="guardText"/>
         </div>
-        <div t-if="needsReaccept" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
+        <div t-if="needsReaccept" class="o_woow_llm_banner o_woow_llm_banner--warn o_woow_llm_banner--terms" role="status">
           <WoowIcon name="'gavel'" size="20"/>
           <span class="o_woow_llm_banner__text" t-esc="needsReacceptText"/>
+          <WoowButton variant="'primary'" size="'sm'" disabled="!!state.showTerms" onClick="(ev) => this.openTerms('accept', ev)">Review and accept</WoowButton>
         </div>
         <div t-if="overdraftText" class="o_woow_llm_banner o_woow_llm_banner--warn" role="status">
           <WoowIcon name="'warning'" size="20"/>
@@ -262,6 +271,7 @@
       <div class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
 
       <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" onClose.bind="onRevealClosed"/>
+      <LlmTermsModal t-if="state.showTerms" mode="state.showTerms" blocking="tosBlocking" onClose.bind="onTermsClosed"/>
     </div>
   </t>
 </templates>

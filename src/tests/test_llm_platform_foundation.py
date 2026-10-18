@@ -85,6 +85,7 @@ from .llm_test_support import (
     EVENT,
     RUNTIME,
     TEST_PREFIX,
+    TEST_TOS,
     CommittedLlmFixture,
     LlmClientAdapter,
     configure,
@@ -94,7 +95,7 @@ from .llm_test_support import (
     scope_claims,
 )
 
-TOS = llm_common.TOS_VERSION_CURRENT
+TOS = TEST_TOS
 EVENT_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_event'
 COMMON_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_common'
 ACCOUNT_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_account'

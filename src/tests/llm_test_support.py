@@ -1,6 +1,7 @@
 """``test_llm_tracer`` 的共用 fixture（只供 tests；不新增任何 production context 閘門）。
 
-四件事，都是審查（LLM-01b findings 8、9、11、12）抓到「在共用沙盒 DB 會紅或會寫壞資料」之後補的：
+四件事，都是審查（LLM-01b findings 8、9、11、12）抓到「在共用沙盒 DB 會紅或會寫壞資料」之後補的
+（第五件是 LLM-04 的條款版本）：
 
 1. **設定歸零**（:func:`reset_llm_config`）：沙盒 DB 不一定是乾淨的——LLM 沙盒（例
    ``aimodels``）的 post-create 已經設好 ``newapi_proxy_url``／``show_llm``／前綴／block。
@@ -33,6 +34,10 @@
 
    測試行程被硬殺時 cleanup 不會跑：cron 會留在停用狀態。手動還原見
    ``python3 .sandbox/llm-acceptance.py --slug <slug> cron-status``／``cron-resume``。
+5. **條款版本**（LLM-04）：開通要帶 published 版的 ``version``。:func:`configure` 在**測試交易內**發佈
+   :data:`TEST_TOS`（沙盒 DB 已經有 published 的條款時，同一個交易裡先把它轉 retired——測試結束整個回捲）；
+   committed fixture 不能在共用 DB 發佈任何東西，改在本行程裡把 ``llm_terms._llm_current`` 換成
+   :data:`TEST_TERMS_REF`（同第 4 點的設定 patch）。
 """
 import logging
 from contextlib import ExitStack
@@ -48,6 +53,7 @@ from ..models import llm_event as llm_event_module
 from ..models.llm_account import ACCOUNT_TABLE, PROVISION_CRON_XMLID
 from ..models.llm_api_key import KEY_TABLE
 from ..models.llm_event import EVENT_TABLE
+from ..models.llm_terms import TERMS_MODEL, TermsRef
 from ..services import llm_crypto
 from ..services import newapi_client as nac
 
@@ -62,6 +68,11 @@ TEST_PREFIX = 'wqa'
 TEST_BLOCK = 7
 #: 停用 cron 時等 live server 正在跑的那一次（一戶的 deadline 60 秒＋寫回）。
 CRON_PAUSE_LOCK_TIMEOUT = '75s'
+TERMS = TERMS_MODEL
+#: 測試用的條款版本（見模組 docstring 第 5 點）。
+TEST_TOS = 'qa-terms-1'
+#: committed fixture 在本行程裡回的「目前 published 版」（id 不存在於 DB：只拿來當稽核的對象 id）。
+TEST_TERMS_REF = TermsRef(2147483646, TEST_TOS, 'QA terms', None, 1, True, False)
 
 
 def signing_value(kid):
@@ -87,7 +98,7 @@ def reset_llm_config(env):
 
 def configure(env, show=True, proxy=nac.PROXY_URL_STG, prefix=TEST_PREFIX, block=TEST_BLOCK,
               pilot=False, canary=False):
-    """歸零後設本測試要的值；每一個 key 都明確給（含 pilot 與 canary）。"""
+    """歸零後設本測試要的值；每一個 key 都明確給（含 pilot 與 canary）。並發佈 :data:`TEST_TOS`。"""
     reset_llm_config(env)
     icp = env['ir.config_parameter'].sudo()
     icp.set_param(llm_common.PARAM_PROXY_URL, proxy or False)
@@ -96,6 +107,24 @@ def configure(env, show=True, proxy=nac.PROXY_URL_STG, prefix=TEST_PREFIX, block
     icp.set_param(llm_common.PARAM_SHOW_LLM, 'True' if show else 'False')
     icp.set_param(llm_common.PARAM_PILOT_PARTNER_IDS, pilot or False)
     icp.set_param(llm_common.PARAM_CANARY_PARTNER_ID, canary or False)
+    publish_test_terms(env)
+
+
+def publish_test_terms(env, version=TEST_TOS, requires_reaccept=True, content='<p>QA terms</p>'):
+    """在 ``env`` 的交易內發佈一個條款版本（已經是目前的 published 就直接回它）。回傳記錄（sudo）。"""
+    Terms = env[TERMS].sudo()
+    current = Terms.search([('state', '=', 'published')], limit=1)
+    if current.version == version:
+        return current
+    record = Terms.search([('version', '=', version)], limit=1) or Terms.create({
+        'version': version,
+        'title': 'QA terms %s' % version,
+        'content_html': content,
+        'requires_reaccept': requires_reaccept,
+    })
+    record.action_publish()
+    record.invalidate_recordset()
+    return record
 
 
 #: committed 測試在本行程裡用的設定（不寫進 DB；見模組 docstring 第 4 點）。
@@ -194,6 +223,8 @@ class CommittedLlmFixture:
                                          lambda records: None))
         stack.enter_context(patch.object(llm_event_module, 'llm_unconfigured',
                                          return_value=True))
+        stack.enter_context(patch.object(type(self.case.env[TERMS]), '_llm_current',
+                                         lambda records: TEST_TERMS_REF))
         self.case.addCleanup(stack.close)
         with self.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s', (CRON_PAUSE_LOCK_TIMEOUT,))
@@ -222,7 +253,7 @@ class CommittedLlmFixture:
         with self.registry.cursor() as cr:
             env = self.env(cr)
             account = env[ACCOUNT]._llm_activate(
-                env['res.partner'].browse(partner_id), llm_common.TOS_VERSION_CURRENT, None, '')
+                env['res.partner'].browse(partner_id), TEST_TOS, None, '')
             self.account_ids.append(account.id)
         return self.account_ids[-1]
 

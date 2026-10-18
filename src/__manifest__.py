@@ -45,6 +45,7 @@
         "views/workspace_views.xml",
         "views/workspace_quota_inspection_views.xml",
         "views/billing_incident_views.xml",
+        "views/llm_terms_views.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",

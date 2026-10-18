@@ -1,4 +1,4 @@
-"""AI 模型分頁的 BFF：``/api/llm/*``（DESIGN §3；票 LLM-01b 的 tracer 端點）。
+"""AI 模型分頁的 BFF：``/api/llm/*``（DESIGN §3；票 LLM-01b 的 tracer 端點、LLM-04 的條款端點）。
 
 慣例（DESIGN §3.1）：
 
@@ -46,6 +46,7 @@ from ..models.llm_common import (
     ERR_LLM_SUSPENDED,
     ERR_LLM_TOS_OUTDATED,
     ERR_LLM_TOS_REQUIRED,
+    ERR_LLM_TOS_UNAVAILABLE,
     ERR_LLM_UNAVAILABLE,
     LlmError,
     llm_visible,
@@ -58,6 +59,7 @@ _logger = logging.getLogger(__name__)
 
 ACCOUNT_MODEL = 'woow_paas_platform.llm_account'
 KEY_MODEL = 'woow_paas_platform.llm_api_key'
+TERMS_MODEL = 'woow_paas_platform.llm_terms'
 #: 錯誤回應可以帶的參數欄位（只放數字與固定字串，前端用來組句）。
 _SAFE_PARAMS = frozenset({'retry_after', 'current_version', 'max_keys', 'field'})
 
@@ -72,6 +74,8 @@ def _message(code: str) -> str:
         return _('Please accept the AI Models Terms of Service first.')
     if code == ERR_LLM_TOS_OUTDATED:
         return _('The AI Models Terms of Service have been updated. Please accept them again.')
+    if code == ERR_LLM_TOS_UNAVAILABLE:
+        return _('The AI Models Terms of Service cannot be shown right now. Please try again later.')
     if code == ERR_LLM_PROVISIONING:
         return _('Your AI models account is being set up. Please wait a moment.')
     if code == ERR_LLM_SUSPENDED:
@@ -113,7 +117,10 @@ def _peer_ip() -> str:
     """直接對端的位址；**不讀** client 自帶的 ``X-Forwarded-For``（〔REV〕22）。
 
     Odoo 開 ``proxy_mode`` 時 werkzeug ``ProxyFix`` 會改寫 ``REMOTE_ADDR``，原值留在
-    ``werkzeug.proxy_fix.orig``。``CF-Connecting-IP`` 的採用條件由 LLM-03 定案。
+    ``werkzeug.proxy_fix.orig``。``CF-Connecting-IP`` 的採用條件由 LLM-03 定案（DESIGN §2.2：直接對端
+    是平台 cloudflared 時才用）；在那之前，stg／沙盒在 cloudflared 後面記到的是叢集內的 pod 位址，
+    不是使用者的 IP——``tos_accepted_ip`` 與 ``tos_accept`` 事件的 ``real_ip`` 都一樣（LLM-04 驗收 3
+    的「真實 IP」部分依賴 LLM-03）。
     """
     environ = request.httprequest.environ
     original = environ.get('werkzeug.proxy_fix.orig') or {}
@@ -165,6 +172,19 @@ class LlmController(HiddenChainMixin, Controller):
                 partner, tos_version, request.env.user, _peer_ip())
             return {'state': account.state}
         return self._run('account/activate', handler)
+
+    @route('/api/llm/terms', auth='user', methods=['POST'], type='json')
+    def llm_terms(self, version=None, **kw) -> dict[str, Any]:
+        """published 版的條款；帶 ``version`` 時依版本號查 published／retired 版（草稿不對外）。"""
+        return self._run('terms', lambda partner: request.env[TERMS_MODEL]
+                         ._llm_terms_payload(version))
+
+    @route('/api/llm/account/accept_terms', auth='user', methods=['POST'], type='json')
+    def llm_account_accept_terms(self, tos_version=None, **kw) -> dict[str, Any]:
+        def handler(partner):
+            return request.env[ACCOUNT_MODEL]._llm_accept_terms(
+                partner, tos_version, request.env.user, _peer_ip())
+        return self._run('account/accept_terms', handler)
 
     @route('/api/llm/keys/list', auth='user', methods=['POST'], type='json')
     def llm_keys_list(self) -> dict[str, Any]:

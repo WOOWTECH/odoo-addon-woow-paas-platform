@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmTermsModal">
+    <div class="o_woow_modal_backdrop o_woow_llm_terms_backdrop" t-ref="backdrop" t-on-click="onBackdropClick">
+      <!-- tabindex=-1：打開時焦點先移到對話框本身；Tab 只在這裡面循環（見 JS）。 -->
+      <div class="o_woow_modal o_woow_modal_lg o_woow_llm_terms" t-ref="dialog" role="dialog" aria-modal="true"
+           aria-labelledby="o_woow_llm_terms_title" tabindex="-1" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <div class="o_woow_llm_terms__heading">
+            <!-- 標題是資料值（後台的 title），不翻譯。 -->
+            <h2 id="o_woow_llm_terms_title" t-esc="heading"/>
+            <p t-if="versionText" class="o_woow_llm_terms__version" t-esc="versionText"/>
+          </div>
+          <button t-if="!state.accepting" type="button" class="o_woow_modal_close"
+                  t-att-aria-label="closeLabel" t-on-click="requestClose">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <t t-if="state.phase === 'loading'">
+            <div class="o_woow_llm_terms__loading" role="status">
+              <WoowIcon name="'progress_activity'" size="28" class="'o_woow_spin'"/>
+              <p t-esc="loadingText"/>
+            </div>
+          </t>
+          <t t-elif="state.phase === 'error'">
+            <div class="o_woow_error_message" role="alert">
+              <WoowIcon name="'error'" size="20"/>
+              <span t-esc="state.loadError"/>
+            </div>
+          </t>
+          <t t-else="">
+            <p t-if="state.isDraft" class="o_woow_llm_terms__draft" role="note">
+              <WoowIcon name="'edit_note'" size="18"/>
+              <span t-esc="draftText"/>
+            </p>
+            <!-- 條文：伺服器端寫入時 sanitize＋這裡再經 safeHtml()（DOMPurify）。連結一律開新分頁（JS onContentClick）。 -->
+            <div class="o_woow_llm_terms__content" t-ref="content" t-on-click="onContentClick" t-out="state.content"/>
+          </t>
+        </div>
+
+        <div class="o_woow_modal_footer">
+          <div t-if="state.actionError" class="o_woow_error_message o_woow_llm_terms__action_error" role="alert">
+            <WoowIcon name="'error'" size="18"/>
+            <span t-esc="state.actionError"/>
+          </div>
+          <p t-if="isAcceptMode and state.phase === 'shown'" class="o_woow_hint o_woow_llm_terms__hint" t-esc="acceptHint"/>
+          <t t-if="isAcceptMode">
+            <WoowButton variant="'secondary'" size="'md'" disabled="state.accepting" onClick.bind="requestClose">Close</WoowButton>
+            <WoowButton variant="'primary'" size="'md'" disabled="!canAccept" onClick.bind="accept">
+              <WoowIcon t-if="state.accepting" name="'progress_activity'" size="18" class="'o_woow_spin'"/>
+              I have read and agree
+            </WoowButton>
+          </t>
+          <WoowButton t-else="" variant="'primary'" size="'md'" onClick.bind="requestClose">Close</WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>
