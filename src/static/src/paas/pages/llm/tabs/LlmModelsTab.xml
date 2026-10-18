@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmModelsTab">
+    <section class="o_woow_llm_models">
+      <div class="o_woow_llm_models__toolbar">
+        <label class="o_woow_llm_models__search">
+          <span>Search models</span>
+          <input type="search" t-model="state.query" placeholder="Model ID or provider"/>
+        </label>
+        <label class="o_woow_llm_models__filter">
+          <span>Capabilities</span>
+          <select t-model="state.tag">
+            <option value="">All capabilities</option>
+            <option t-foreach="tags" t-as="tag" t-key="tag.id" t-att-value="tag.id" t-esc="tag.label"/>
+          </select>
+        </label>
+        <button type="button" class="o_woow_llm_models__refresh" t-att-disabled="state.loading" t-on-click="load">Refresh</button>
+      </div>
+      <p t-if="state.loading" role="status" t-esc="loadingText"/>
+      <p t-elif="unavailable" class="o_woow_llm_models__notice" role="status" t-esc="unavailableText"/>
+      <p t-elif="!rows.length" class="o_woow_llm_models__notice" role="status" t-esc="emptyText"/>
+      <div t-else="" class="o_woow_llm_models__table" role="table" aria-label="Models and prices">
+        <div class="o_woow_llm_models__head" role="row">
+          <span role="columnheader" t-esc="labels.model"/><span role="columnheader" t-esc="labels.vendor"/>
+          <span role="columnheader" t-esc="labels.tags"/><span role="columnheader" t-esc="labels.input"/>
+          <span role="columnheader" t-esc="labels.output"/><span role="columnheader" t-esc="labels.cacheRead"/>
+          <span role="columnheader" t-esc="labels.cacheWrite"/>
+        </div>
+        <div t-foreach="rows" t-as="row" t-key="row.model" class="o_woow_llm_models__row" role="row">
+          <div class="o_woow_llm_models__model" role="cell" t-att-data-label="labels.model">
+            <button type="button" t-att-title="copyLabel" t-on-click="() => this.copyModel(row.model)"><code t-esc="row.model"/></button>
+            <details t-if="row.group === 'free'" class="o_woow_llm_models__free">
+              <summary t-att-title="freeNote" t-esc="freeText"/>
+              <p t-esc="freeNote"/>
+            </details>
+            <p t-if="row.note" class="o_woow_llm_models__rate_note" t-esc="row.note"/>
+          </div>
+          <span role="cell" t-att-data-label="labels.vendor" t-esc="row.vendor"/>
+          <div role="cell" t-att-data-label="labels.tags" class="o_woow_llm_models__tags">
+            <span t-foreach="row.tags" t-as="tag" t-key="tag.id" t-esc="tag.label"/>
+            <span t-if="!row.tags.length">—</span>
+          </div>
+          <span role="cell" t-att-data-label="labels.input" t-esc="row.input"/>
+          <span role="cell" t-att-data-label="labels.output" t-esc="row.output"/>
+          <span role="cell" t-att-data-label="labels.cacheRead" t-esc="row.cacheRead"/>
+          <span role="cell" t-att-data-label="labels.cacheWrite" t-esc="row.cacheWrite"/>
+        </div>
+      </div>
+      <footer class="o_woow_llm_models__footer">
+        <p t-esc="footerText"/><p t-esc="cacheNote"/><p t-if="dataTime" t-esc="dataTime"/>
+      </footer>
+      <p class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
+    </section>
+  </t>
+</templates>

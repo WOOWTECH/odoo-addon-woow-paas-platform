@@ -1,0 +1,59 @@
+.o_woow_llm_models {
+  color: #212121;
+  font-family: $woow-font-body;
+  font-size: 16px;
+  line-height: 1.6;
+  min-width: 0;
+
+  &__toolbar { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 24px; }
+  &__search { flex: 1 1 240px; }
+  &__filter { flex: 0 1 220px; }
+  label { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  input, select, &__refresh {
+    min-height: 44px; max-width: 100%; border: 1px solid #dce0e8;
+    border-radius: 999px; padding: 8px 16px; background: #fff; color: #212121; font: inherit;
+  }
+  button, summary { cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  :focus-visible { outline: 2px solid #6183FC; outline-offset: 4px; }
+  &__refresh { color: #3f63e8; }
+  &__notice { padding: 32px 24px; border-radius: 20px; background: #fff; }
+  &__table { border-radius: 20px; background: #fff; box-shadow: 0 2px 8px rgba(33, 33, 33, .06); overflow: hidden; }
+  &__head, &__row { display: grid; grid-template-columns: minmax(180px, 2.5fr) minmax(80px, 1fr) minmax(80px, 1fr) repeat(4, minmax(65px, .8fr)); gap: 12px; padding: 16px; align-items: start; }
+  &__head { background: #eff1f5; font-weight: 500; }
+  &__row + &__row { border-top: 1px solid #eff1f5; }
+  [role="cell"] { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  &__model > button { border: 0; padding: 0; background: none; text-align: left; min-height: 44px; color: #3f63e8; width: 100%; }
+  code { font-size: 14px; overflow-wrap: anywhere; white-space: normal; }
+  &__tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  &__tags span { padding: 0 8px; border-radius: 12px; background: #eff1f5; font-size: 14px; }
+  &__free summary { color: #3f63e8; min-height: 44px; padding: 8px; border-radius: 12px; background: #eef2ff; width: fit-content; }
+  &__free p, &__rate_note { margin: 8px 0 0; font-size: 14px; }
+  &__footer { margin-top: 24px; color: #646262; }
+  &__footer p { margin: 8px 0; }
+
+  @media (max-width: $woow-bp-lg) {
+    &__head { display: none; }
+    &__table { display: grid; gap: 16px; background: none; box-shadow: none; overflow: visible; }
+    &__row { display: flex; flex-direction: column; gap: 12px; background: #fff; border: 0; border-radius: 20px; padding: 20px; }
+    &__row + &__row { border: 0; }
+    [role="cell"] { width: 100%; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+    [role="cell"]::before { content: attr(data-label); color: #646262; flex: 0 0 auto; }
+    &__model[role="cell"] { display: block; }
+    &__model::before { display: none; }
+    &__model > button { width: 100%; }
+    &__tags::before { margin-right: auto; }
+  }
+  @media (max-width: $woow-bp-sm) {
+    &__search, &__filter { flex: 1 1 100%; }
+    &__refresh { width: 100%; }
+  }
+}
+
+.o_woow_llm_price_preview {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px; margin: 24px 0; font-size: 16px;
+  &__item { min-width: 0; padding: 16px; border: 1px solid #eff1f5; border-radius: 20px; }
+  code { overflow-wrap: anywhere; white-space: normal; }
+  p { margin: 8px 0 0; }
+}

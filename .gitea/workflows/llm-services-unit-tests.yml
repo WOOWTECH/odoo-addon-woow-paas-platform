@@ -15,6 +15,8 @@ on:
     paths:
       - "src/services/newapi_client.py"
       - "src/services/llm_crypto.py"
+      - "src/services/llm_pricing.py"
+      - "tests/test_llm_pricing.py"
       - "src/services/llm_redact.py"
       - "src/services/mcp_url_guard.py"
       - "src/tests/fixtures/newapi/**"
@@ -58,7 +60,9 @@ jobs:
       - name: Unit tests
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: timeout 120s .venv-llm-services-ci/bin/python tests/test_llm_services.py -v
+        run: |
+          timeout 120s .venv-llm-services-ci/bin/python tests/test_llm_services.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_pricing.py -v
       - name: Real MCP adapter transport smoke
         env:
           PYTHONDONTWRITEBYTECODE: "1"

@@ -9,6 +9,7 @@ import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
 import { LlmTermsModal } from "../../../components/llm/LlmTermsModal";
 import { llmService } from "../../../services/llm_service";
 import { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } from "../../../services/llm_errors";
+import { representativeModels } from "./LlmModelsTab";
 import { copyText } from "../../../utils/clipboard";
 import {
   formatAiQuota,
@@ -198,6 +199,7 @@ export class LlmOverviewTab extends Component {
     onMounted(() => {
       document.addEventListener("visibilitychange", this.onVisibilityChange);
       this.load();
+      llmService.fetchModels();
     });
     onWillUnmount(() => {
       this.alive = false;
@@ -350,16 +352,22 @@ export class LlmOverviewTab extends Component {
 
   // 文案放在 JS（單行 _t）：模板的多行文字節點會把換行與縮排一起抽進 msgid。
   get heroTitle() {
-    return _t("Call 40+ AI models with your credit");
+    return _t("Call AI models with your credit");
   }
 
   get heroSubtitle() {
     return _t("OpenAI-compatible API, plus a free trial of Qwen3-4B.");
   }
 
-  /** tracer 沒有價目 API，「模型與價格」子頁也還沒上線（LLM-06）：不叫使用者去那裡查。 */
+  get representativePrices() {
+    return this.llm.models && this.llm.models.state === "ok" ? representativeModels(this.llm.models.items) : [];
+  }
+
+  get previewUnit() { return _t("Input / output points per million tokens"); }
+
+  /** 價目與開通各自載入：讀不到價格仍可同意條款並開通。 */
   get pricingFallbackText() {
-    return _t("Prices cannot be shown yet; the Models & Pricing page is coming soon.");
+    return _t("Prices are temporarily unavailable. You can view Models & Pricing after activation.");
   }
 
   get tosDraftText() {

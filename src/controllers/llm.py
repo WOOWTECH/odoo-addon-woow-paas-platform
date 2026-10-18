@@ -201,6 +201,11 @@ class LlmController(HiddenChainMixin, Controller):
                 partner, client_request_id, request.env.user, _peer_ip())
         return self._run('keys/create', handler, swallow_operational=True)
 
+    @route('/api/llm/models', auth='user', methods=['POST'], type='json')
+    def llm_models(self) -> dict[str, Any]:
+        return self._run('models', lambda partner: request.env['woow_paas_platform.llm_swr_cache']
+                         ._llm_models_payload())
+
     @route('/api/llm/usage/recent', auth='user', methods=['POST'], type='json')
     def llm_usage_recent(self) -> dict[str, Any]:
         return self._run('usage/recent', lambda partner: request.env[ACCOUNT_MODEL]

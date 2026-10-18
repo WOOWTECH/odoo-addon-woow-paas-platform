@@ -13,7 +13,7 @@
   ``self``                10 分鐘    UP ``GET /api/user/self`` → 帳戶的餘額快取（同餘額刷新的守衛）  ``state``
   ``tokens``              30 秒      UP ``GET /api/token/`` → 金鑰鏡像的用量、最後使用時間          ``keys/list``
   ``usage_recent``        60 秒      UP ``GET /api/log/self``（今天的免費試用）→ 快取的 DTO          ``usage/recent``
-  ``pricing``             10 分鐘    AP ``GET /api/pricing`` → 快取（全平台一份；DTO 在 LLM-06）       ``models``
+  ``pricing``             10 分鐘    AP ``GET /api/pricing`` → 公開 DTO（全平台一份；獨立 10 分鐘 cron）       ``models``
   ======================  =========  ======================================================  ==========
 
   ``usage/summary``、``usage/daily``（LLM-09）在這張表加一種 kind、寫一個 handler 就好。
@@ -24,7 +24,7 @@
 * **刷新 cron**（:meth:`LlmSwrCache._cron_llm_swr_refresh`，每 5 分鐘保險＋被 ``_trigger()``）：外呼類 cron，
   circuit 開著就跳過（DESIGN §3.6；半開時由它做健康檢查——web 在半開時也是叫醒它）；每 tick ≤ 30 秒、
   最多 :data:`SWR_PER_TICK` 筆（N28），以 ``FOR UPDATE SKIP LOCKED`` 搶列（兩條 cron thread 不會做同一筆）；
-  全平台的 kind（``pricing``）在排程到的時候順便看要不要刷新。失敗不覆蓋舊資料，只記 ``last_result``。
+  價目由獨立 10 分鐘 cron 刷新；價目失敗清空，其他種類失敗只記 ``last_result``。
 * **快取裡沒有秘密**：只有餘額數字、金鑰的用量與時間、用量 DTO（模型、token 數、request id）與價目。
   ACL 同其他 LLM model：system／帳務群組只讀；寫入一律走本檔的獨立 cursor SQL。
 """
@@ -40,6 +40,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_crypto, llm_redact
+from ..services.llm_pricing import PricingInvalid, normalize_pricing
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_account import balance_stamp
@@ -58,6 +59,7 @@ CACHE_TABLE = 'woow_paas_platform_llm_swr_cache'
 ACCOUNT_MODEL = 'woow_paas_platform.llm_account'
 KEY_TABLE = 'woow_paas_platform_llm_api_key'
 SWR_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_swr_refresh'
+PRICING_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_pricing_refresh'
 _LOCK_TIMEOUT = '5s'
 TPE = timezone(timedelta(hours=8))
 
@@ -199,6 +201,25 @@ class LlmSwrCache(models.Model):
                 'last_result': row.last_result}
 
     @api.model
+    def _llm_models_payload(self):
+        """Public catalogue, available before activation; DB reads only, never AP or UP.
+
+        Unlike usage history, expired/failed pricing must not advertise obsolete tariffs.
+        This also rejects pre-LLM-06 raw cache rows until the next scheduled refresh.
+        """
+        empty = {'items': [], 'state': 'maintenance', 'data_as_of': None}
+        state = self.env['woow_paas_platform.llm_runtime_state'].sudo().search([], limit=1)
+        if not state or state.guard_tripped:
+            return empty
+        row = self._llm_swr_get(None, KIND_PRICING)
+        if not row or row['last_result'] != 'ok' or is_stale(row['fetched_at'], KIND_PRICING):
+            return empty
+        payload = row['payload']
+        if not isinstance(payload, dict) or payload.get('state') != 'ok' or not isinstance(payload.get('items'), list):
+            return empty
+        return {**payload, 'data_as_of': iso(row['fetched_at'])}
+
+    @api.model
     def _llm_swr_touch(self, account, kind, fetched_at):
         """``fetched_at`` 過期就排一次背景刷新（見模組 docstring）；回傳「這一次有排」。
 
@@ -249,12 +270,37 @@ class LlmSwrCache(models.Model):
                             items=SWR_PER_TICK, config=llm_config(self.env))
 
     @api.model
+    def _cron_llm_pricing_refresh(self):
+        """Every ten minutes, including before the first customer activates (N20/N27)."""
+        return run_llm_cron(self.env, PRICING_CRON_XMLID, self._llm_pricing_refresh_tick,
+                            items=1, config=llm_config(self.env))
+
+    def _llm_pricing_refresh_tick(self, config, tick):
+        # A dedicated schedule avoids the five-minute SWR sweep drifting to a fifteen-minute
+        # price interval when its TTL comparison misses the exact ten-minute boundary.
+        now = _utcnow()
+        with self.env.registry.cursor() as cr:
+            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+            cr.execute(
+                'INSERT INTO {t} (kind, attempted_at, create_uid, create_date, write_uid, write_date) '
+                'VALUES (%s, %s, %s, %s, %s, %s) '
+                'ON CONFLICT ((COALESCE(account_id, 0)), kind) DO UPDATE '
+                'SET attempted_at = EXCLUDED.attempted_at, requested_at = NULL RETURNING id'
+                .format(t=CACHE_TABLE), (KIND_PRICING, now, SUPERUSER_ID, now, SUPERUSER_ID, now))
+            row_id = cr.fetchone()[0]
+        try:
+            client = self.env[ACCOUNT_MODEL].sudo()._llm_client(nac.ROLE_CRON)
+            payload, label = self._llm_swr_refresh_one(
+                client, config, None, KIND_PRICING, tick.deadline)
+        except Exception:  # noqa: BLE001 - clear stale rates before cron framework alerts
+            self._llm_swr_finish(row_id, None, 'internal')
+            raise
+        self._llm_swr_finish(row_id, payload, label)
+        return False
+
+    @api.model
     def _llm_swr_refresh_tick(self, config, tick):
-        """一個 tick：排全平台 kind（過期的話）→ 搶待刷新的列 → 一筆一筆讀 new-api 寫回。回傳「還有剩」。"""
-        for kind, (_ttl, scope) in SWR_KINDS.items():
-            if scope == 'global':
-                current = self._llm_swr_get(None, kind)
-                self._llm_swr_touch(None, kind, current and current['fetched_at'])
+        """一個 tick：搶待刷新的列 → 一筆一筆讀 new-api 寫回。回傳「還有剩」。"""
         client = None
         while tick.can_take(nac.MIN_CALL_SECONDS):
             claimed = self._llm_swr_claim(1)
@@ -309,7 +355,7 @@ class LlmSwrCache(models.Model):
             return cr.fetchone() is not None
 
     def _llm_swr_finish(self, row_id, payload, label):
-        """寫回結果：``label == 'ok'`` 才換 payload 與 ``fetched_at``；失敗只記 ``last_result``。"""
+        """成功才發布新 payload；價目失敗清空，其他種類失敗只記 ``last_result``。"""
         label = (label or 'unknown')[:64]
         now = _utcnow()
         try:
@@ -327,8 +373,13 @@ class LlmSwrCache(models.Model):
                         'last_result = %%s, write_date = %%s WHERE id = %%s' % CACHE_TABLE,
                         (text, now, 'ok', now, row_id))
                 else:
-                    cr.execute('UPDATE %s SET last_result = %%s, write_date = %%s WHERE id = %%s'
-                               % CACHE_TABLE, (label, now, row_id))
+                    # Fail closed for pricing: never retain privileged or obsolete tariffs
+                    # after a failed refresh (usage/self/token SWR semantics stay unchanged).
+                    cr.execute('UPDATE %s SET last_result = %%s, write_date = %%s, '
+                               'payload = CASE WHEN kind = %%s THEN NULL ELSE payload END, '
+                               'fetched_at = CASE WHEN kind = %%s THEN NULL ELSE fetched_at END '
+                               'WHERE id = %%s' % CACHE_TABLE,
+                               (label, now, KIND_PRICING, KIND_PRICING, row_id))
         except psycopg2.Error as exc:
             _logger.warning('[LLM] swr row=%s: result not written (pgcode=%s)', row_id,
                             getattr(exc, 'pgcode', None))
@@ -342,9 +393,17 @@ class LlmSwrCache(models.Model):
             result = client.ap_pricing(deadline=deadline, priority=nac.AP_PRIORITY_OTHER)
             if not result.ok:
                 return None, self._label(result)
-            if not isinstance(result.data, (dict, list)):
-                return None, 'shape'
-            return {'data': result.data}, 'ok'
+            try:
+                return normalize_pricing(result.data), 'ok'
+            except PricingInvalid:
+                # A fixed error code only; raw upstream groups/models never enter alerts.
+                from .llm_event import EVENT_MODEL, LlmAlert
+                try:
+                    self.env[EVENT_MODEL]._llm_alert(
+                        LlmAlert.PRICING_INVALID, error_code='llm_newapi_invariant')
+                except Exception:  # noqa: BLE001 - alert failure must not keep unsafe pricing
+                    _logger.error('[LLM] pricing invariant alert could not be queued')
+                return None, 'pricing_invalid'
         account = self.env[ACCOUNT_MODEL].sudo().browse(account_id).exists()
         if not account or account.state not in SWR_ACCOUNT_STATES or not account.newapi_user_id:
             return None, 'skipped'
