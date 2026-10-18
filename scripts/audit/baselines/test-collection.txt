@@ -348,7 +348,7 @@
 5	test_ecpay_invoice_subscription.TestEcpayInvoiceSubscription
 5	test_ecpay_invoice_topup.TestEcpayInvoiceTopup
 11	test_ecpg_callback_inbox_864.TestEcpgCallbackInbox864
-4	test_ecpg_v4_golive.TestAutoTopupDeclineBlock
+7	test_ecpg_v4_golive.TestAutoTopupDeclineBlock
 11	test_ecpg_v4_golive.TestBindAuthVoid
 1	test_ecpg_v4_golive.TestBindCardUniqueIndex
 3	test_ecpg_v4_golive.TestEcpayConsumerName
