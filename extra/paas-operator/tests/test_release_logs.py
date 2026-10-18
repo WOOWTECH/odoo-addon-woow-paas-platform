@@ -1,9 +1,13 @@
 """Tenant ownership, bounded snapshots, and safe failures for service logs."""
 import json
+import os
+import stat
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from src.api import releases
@@ -42,6 +46,8 @@ def reader(items=None, text=b"2026-10-18T00:00:00Z started\n"):
 @pytest.fixture(autouse=True)
 def namespace_boundary(monkeypatch):
     monkeypatch.setattr(settings, "namespace_prefix", "paas-ws-")
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    monkeypatch.delenv("KUBERNETES_SERVICE_PORT", raising=False)
 
 
 def test_snapshot_ownership_discovery_and_read_are_bounded():
@@ -144,6 +150,59 @@ def test_command_discards_stderr_and_uses_short_subprocess_timeout(monkeypatch):
     assert run.call_args.kwargs["stderr"] == subprocess.DEVNULL
     assert run.call_args.kwargs["timeout"] == LOG_COMMAND_TIMEOUT_SECONDS
     assert run.call_args.kwargs["stdout"] == subprocess.PIPE
+
+
+def test_in_cluster_command_uses_projected_token_file_without_exposing_token(monkeypatch, tmp_path):
+    from src.services import release_logs
+
+    service_account = tmp_path / "serviceaccount"
+    service_account.mkdir()
+    token_file = service_account / "token"
+    ca_file = service_account / "ca.crt"
+    token_file.write_text("private-service-account-token")
+    ca_file.write_text("test-ca")
+    monkeypatch.setattr(release_logs, "_SERVICE_ACCOUNT_DIR", str(service_account))
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT", "443")
+
+    observed = {}
+
+    def run(command, **kwargs):
+        config_path = command[command.index("--kubeconfig") + 1]
+        observed["command"] = command
+        observed["config"] = yaml.safe_load(Path(config_path).read_text())
+        observed["path"] = config_path
+        observed["mode"] = stat.S_IMODE(Path(config_path).stat().st_mode)
+        observed["kwargs"] = kwargs
+        return completed(b"{}")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ReleaseLogReader()._run(["get", "pods"])
+
+    config = observed["config"]
+    assert observed["command"][:3] == ["kubectl", "--kubeconfig", observed["path"]]
+    assert "private-service-account-token" not in observed["command"]
+    assert config["clusters"][0]["cluster"] == {
+        "server": "https://10.43.0.1:443",
+        "certificate-authority": str(ca_file),
+    }
+    assert config["users"][0]["user"] == {"tokenFile": str(token_file)}
+    assert "private-service-account-token" not in str(config)
+    assert observed["mode"] == 0o600
+    assert not os.path.exists(observed["path"])
+    assert observed["kwargs"]["timeout"] == LOG_COMMAND_TIMEOUT_SECONDS
+    assert observed["kwargs"]["stderr"] == subprocess.DEVNULL
+    assert observed["kwargs"]["stdout"] == subprocess.PIPE
+
+
+def test_invalid_in_cluster_port_fails_without_running_kubectl(monkeypatch):
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+    monkeypatch.setenv("KUBERNETES_SERVICE_PORT", "443;echo bad")
+    run = Mock()
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(ValueError):
+        ReleaseLogReader()._run(["get", "pods"])
+    run.assert_not_called()
 
 
 @pytest.mark.parametrize("failure,reason", [

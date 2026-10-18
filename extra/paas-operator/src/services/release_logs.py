@@ -4,9 +4,13 @@ Logs are tenant-controlled text and can contain credentials. Never log stdout or
 stderr, and never allow a caller-supplied pod/container to bypass discovery.
 """
 import json
+import os
 import re
 import subprocess
+import tempfile
 from typing import Optional
+
+import yaml
 
 from src.models.schemas import ReleaseLogSource, ReleaseLogsResponse
 from src.services.helm import KubectlException, KubernetesService, validate_namespace
@@ -19,6 +23,7 @@ _INSTANCE_LABEL = "app.kubernetes.io/instance"
 _RELEASE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,51}[a-z0-9])?")
 _RESOURCE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 _CONTAINER_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
+_SERVICE_ACCOUNT_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 
 class ReleaseLogReader:
@@ -32,9 +37,69 @@ class ReleaseLogReader:
         # Bytes tolerate a byte limit that cuts a UTF-8 character. Discard stderr
         # at the subprocess boundary, so failures cannot leak kubeconfig details
         # or application credentials through exception messages / access logs.
-        return self.k8s._run_command(
-            args, timeout=LOG_COMMAND_TIMEOUT_SECONDS, sensitive_output=True,
-        )
+        kubeconfig_path = self._in_cluster_kubeconfig()
+        command = args
+        if kubeconfig_path:
+            command = ["--kubeconfig", kubeconfig_path, *args]
+        try:
+            return self.k8s._run_command(
+                command, timeout=LOG_COMMAND_TIMEOUT_SECONDS, sensitive_output=True,
+            )
+        finally:
+            if kubeconfig_path:
+                try:
+                    os.unlink(kubeconfig_path)
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
+    def _in_cluster_kubeconfig() -> Optional[str]:
+        """Build a short-lived config for kubectl using the projected SA token.
+
+        kubectl has no in-cluster mode of its own. Keep local kubeconfig behavior
+        intact, but in an Operator pod point it at the API service and reference
+        the rotating token file so token contents never enter argv or this
+        process's generated config.
+        """
+        host = os.environ.get("KUBERNETES_SERVICE_HOST")
+        if not host:
+            return None
+        port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise ValueError("Invalid Kubernetes service port")
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        service_account = _SERVICE_ACCOUNT_DIR
+        token_file = os.path.join(service_account, "token")
+        ca_file = os.path.join(service_account, "ca.crt")
+        if not os.path.isfile(token_file) or not os.path.isfile(ca_file):
+            raise FileNotFoundError("Projected Kubernetes service-account credentials unavailable")
+        config = {
+            "apiVersion": "v1",
+            "kind": "Config",
+            "clusters": [{
+                "name": "in-cluster",
+                "cluster": {
+                    "server": f"https://{host}:{port}",
+                    "certificate-authority": ca_file,
+                },
+            }],
+            "users": [{
+                "name": "operator",
+                "user": {"tokenFile": token_file},
+            }],
+            "contexts": [{
+                "name": "operator",
+                "context": {"cluster": "in-cluster", "user": "operator"},
+            }],
+            "current-context": "operator",
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix="paas-operator-kubeconfig-",
+            suffix=".yaml", delete=False,
+        ) as kubeconfig:
+            yaml.safe_dump(config, kubeconfig, sort_keys=False)
+            return kubeconfig.name
 
     def read(
         self, namespace: str, release_name: str, pod: Optional[str] = None,
