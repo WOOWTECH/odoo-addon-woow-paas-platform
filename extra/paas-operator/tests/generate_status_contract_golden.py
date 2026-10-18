@@ -110,9 +110,13 @@ def _diag_pod(name, uid, phase, init_statuses, statuses):
     }
 
 
-def _cs(name, ready=False, waiting=None, running=False, restarts=0):
+def _cs(name, ready=False, waiting=None, running=False, restarts=0, last_terminated=None):
     state = {"waiting": waiting} if waiting else ({"running": {}} if running else {})
-    return {"name": name, "ready": ready, "restartCount": restarts, "state": state}
+    cs = {"name": name, "ready": ready, "restartCount": restarts, "state": state}
+    if last_terminated:
+        # #1456：上一次結束的原因（kubelet 寫在 lastState.terminated）。
+        cs["lastState"] = {"terminated": {"reason": last_terminated, "exitCode": 137}}
+    return cs
 
 
 _DIAG_PODS = [
@@ -125,7 +129,7 @@ _DIAG_PODS = [
               [_cs("sidecar", waiting={"reason": "ContainerCreating"}),
                _cs("app", waiting={"reason": "CrashLoopBackOff",
                                    "message": "back-off 5m0s restarting failed container=app"},
-                   restarts=7)]),
+                   restarts=7, last_terminated="OOMKilled")]),
     _diag_pod("svc-1263-ok-0", _DIAG_NS_EVENTS_UID["ok"], "Running", [],
               [_cs("app", ready=True, running=True)]),
 ]

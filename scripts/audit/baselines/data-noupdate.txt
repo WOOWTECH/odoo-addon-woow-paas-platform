@@ -18,6 +18,7 @@
 1	src/data/mcp_server_cron.xml
 1	src/data/oauth_clients.xml
 1	src/data/oauth_device_code_cron.xml
+1	src/data/password_reset_request_cron.xml
 1	src/data/platform_monitor_data.xml
 1	src/data/reach_reconciler_cron.xml
 1	src/data/reconcile_report_cron.xml

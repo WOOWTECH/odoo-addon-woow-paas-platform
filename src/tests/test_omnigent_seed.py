@@ -52,8 +52,11 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.7',
-                         '0.1.7：上游 omnigent v0.17.0（server／runner image pin，模板同 0.1.6）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.12',
+                         '0.1.7：上游 omnigent v0.17.0（server／runner image pin，模板同 0.1.6）；'
+                         '0.1.8–0.1.12＝charts 整合包 #254（runner nodeSelector tenant-schedulable——'
+                         '節點 label 要先加、runner egress gate、/data 可寫 readiness、token Secret 回收、'
+                         'egress-profile=web）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；

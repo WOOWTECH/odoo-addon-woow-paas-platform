@@ -3,7 +3,7 @@ title: odoo 還原 runbook（租戶旁路 fallback／restoring 脫困／DR／pla
 category: guides
 status: draft
 created: 2026-10-06T16:40:00Z
-updated: 2026-10-06T16:40:00Z
+updated: 2026-10-18T03:00:00Z
 related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, docs/guides/deployment/prod-clone-neutralization-runbook.md, docs/guides/deployment/prod-release-sop.md]
 ---
 
@@ -24,6 +24,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | DR 段 | 部分：platform 空 PG 的做法見 P 段「DR」 |
 | **platform profile 人工還原** | ✅ 本檔 P 段（2026-10-06 演練實跑） |
 | result.json 怎麼讀 | 部分：P6 列了演練看到的欄位 |
+| 時間回捲放行閘（還原後重寄郵件、補跑 cron；商用驗收 X-BK-006-2） | ✅ P4 第 3 步、P6a、P7 前置、[對客戶的還原說明](#對客戶的還原說明)（2026-10-18；P6a 的 SQL 在本機 PostgreSQL 以 Odoo 形狀的 fixture 驗過，尚未在沙盒對真 Odoo 實跑） |
 
 ## 術語
 
@@ -91,8 +92,10 @@ platform release（`paas-odoo-platform`，`paas-system`）預設 `restore.enable
    - 兩支都設 `ttlSecondsAfterFinished`（7 d）。
    - 目標 image 與現役不同時，要**一起改**：initContainer `image-modules` 的 image 與 `WOOW_IMAGE_DIGEST`，以及主容器的 `TARGET_IMAGE_DIGEST`。
    - 跨 ns／release 時，覆寫 `WOOW_RELEASE`／`WOOW_NAMESPACE` 為 manifest 值。不覆寫會 exit 10 `Manifest identity/locale/PG version mismatch; cross-release restore requires support runbook`（演練實測）。
-3. 【agent】建議兩支 Job 都加 `nodeSelector` 釘在 data PVC 目前所在的 node。
+3. 【agent】節點放置（依 chart 版本）：
    - stage 與 switch 都掛 data＋backup 兩顆 RWO PVC。
+   - **chart ≥ 0.2.12**（woow-paas-charts#198）：樣板 pod 自帶 required podAffinity 綁 server pod 同節點；server／cron 已 scale 0（switch、停權中的服務）時自我親和放行、排任意節點。**不必**也**不要**再手動 pin 節點，直接用樣板即可。
+   - **chart ≤ 0.2.11**：樣板沒有 affinity。不 pin 節點會被排到非 server pod 的節點，data／backup PVC 回報 `FailedAttachVolume … Multi-Attach error`，stage Job 卡在 Init 直到 `activeDeadlineSeconds`（商用驗收 DATA-ODOO-005 實測 597 s 後 DeadlineExceeded，沒建 side／stage DB）。**必須**兩支 Job 都加 `nodeSelector` 釘在 data PVC 目前所在的 node（stage 取 server pod 的 node）。
    - 演練時 switch pod 被排到另一台 node，Longhorn 重新 attach，Job 總時長 99 s，腳本本身只跑 2 s。
 
 ### P4 stage（不停機）
@@ -103,6 +106,10 @@ platform release（`paas-odoo-platform`，`paas-system`）預設 `restore.enable
    - exit 10：前置不符、什麼都沒建。
    - exit 20：stage 失敗、live 未動。
    - 兩者的處置見 chart README。
+3. 【agent】讀 `restore/<id>/result.json` 的 `rewind`，**停機前**先決定時間回捲怎麼處理：
+   - `outgoing_mail_count` 為 0 且 `overdue_cron` 為空 ⇒ P6a 可直接放行。
+   - 任一項非空 ⇒ 照 P6a 準備，並在停機前把[對客戶的還原說明](#對客戶的還原說明)交給客戶（平台還原則通知內部）。chart 不會中和這些郵件與 cron，見 chart README〈還原後會重寄佇列郵件、補跑逾時 cron〉。
+   - stage 算的是「stage 當下」逾時的 cron；到 switch 時清單只會更長，P6a 會重查一次。
 
 **P4-DR（空 PG 才需要）**：chart stage 要求 live DB 存在（`Live DB missing; use DR runbook`，exit 10）；platform bootstrap 在 DB 不存在時又 exit 3「先 restore」。兩邊互卡，所以 stage 前先由 superuser 做三件事：
 
@@ -128,11 +135,110 @@ platform release（`paas-odoo-platform`，`paas-system`）預設 `restore.enable
 2. 【agent】讀 `restore/<id>/result.json`（在 backup PVC 上）。演練看到的欄位：
    - 稽核欄位：`status`、`live_oid`、`stage_oid`、`old_db`、`expires_at`（`__old` 保留期限，+24 h）、`target_image_digest`、`release`／`namespace`。
    - `rewind`：`outgoing_mail_count`、`overdue_cron`（逾時 cron 清單）、`latest_payment_reference`。⚠ 最後這項是交易 reference，屬敏感資料，不要貼進票或留言。
+     - 前兩項任一非空 ⇒ **先走 P6a，不可直接 P7**。
    - `security_diff`：`users_added_or_changed`、`users_removed_or_changed`、`api_keys_added`、`api_keys_removed`。
      - 演練是從佔位庫切換，所以 51 位使用者、10 把 API key 全部列為「新增」。原地還原時要逐筆看：備份時點之後新增或撤銷的帳號與 API key 會被回捲。
 3. switch 會清掉 `data/sessions/` ⇒ 所有使用者都要重新登入（與 cutover 相同）。
 
+### P6a 時間回捲放行閘（switch 後、P7 前；server／cron 仍為 0）
+
+還原等於把資料庫的時鐘撥回備份當下。備份時還在佇列裡的郵件（`mail_mail.state='outgoing'`）會跟著回來，Odoo 一啟動，郵件佇列 cron（`mail.ir_cron_mail_scheduler_action`）很快就把它們寄出；已逾時的 cron，以及備份時已排定、時間已過的 cron 觸發（`ir_cron_trigger`），也會各補跑一次。若這些信在「備份之後、還原之前」已經寄過，客戶會收到第二份（商用驗收 X-BK-006-2：沙盒還原同一份備份，已寄出的信再寄一次、逾時 cron 再跑）。
+
+chart 的 switch 只把數量寫進 `rewind`，**不會**中和、延後或暫停。要不要讓 chart 預設暫停是待決的產品決策（暫停也會擋掉備份時點還沒寄出、客戶真的需要的信，例如密碼重設、報價單）。決定之前，由本閘人工把關：
+
+1. 【agent】在還原後的 live DB 重新盤點（唯讀；只出數量、id 與 cron 名稱，不出收件人與主旨）。live DB 名稱即 `ODOO_DB_NAME`，以 `odoo` 角色連線（連線方式同 P4-DR）：
+
+   ```sql
+   SELECT count(*) AS outgoing FROM mail_mail WHERE state = 'outgoing';
+   SELECT id, cron_name, nextcall, interval_number, interval_type
+   FROM ir_cron
+   WHERE active AND nextcall < (now() AT TIME ZONE 'UTC')
+   ORDER BY nextcall;
+   ```
+
+   - 兩項都是 0 筆 ⇒ 在工單記「P6a：無回捲項目」，直接 P7。
+2. 【人類】決定郵件與 cron 各自怎麼處理，並記在工單：
+
+   | 項目 | 建議 | 何時改變建議 |
+   |---|---|---|
+   | 郵件 | **取消「原時間線已經處理過」的那幾封**（第 3、4 步），其餘照寄 | 舊庫不可用（DR、佔位庫）⇒ 只能全寄或全取消，由客戶決定 |
+   | cron | **預設放行**（讓它補跑一次）：被回捲掉的工作（例如備份後才產生的帳單、排程動作）要靠補跑重做 | 只有「效果全在外部、而且原時間線已經做過」的 cron（寄提醒、發簡訊、打 webhook）才用第 5 步跳過這一輪 |
+
+3. 【agent 執行・人類逐步放行】從舊庫匯出「原時間線仍在待寄」的 Message-Id。舊庫是 `<ODOO_DB_NAME>__old_<id>`（result.json 的 `old_db`），switch 時已關閉連線，要以 superuser 暫時打開、用完立刻關回：
+
+   ```sql
+   -- superuser，連 postgres 庫
+   ALTER DATABASE "<old_db>" ALLOW_CONNECTIONS true;
+   ```
+
+   ```sql
+   -- 連 <old_db>（唯讀查詢）
+   \copy (SELECT msg.message_id FROM mail_mail mm JOIN mail_message msg ON msg.id = mm.mail_message_id WHERE mm.state IN ('outgoing', 'exception') AND msg.message_id IS NOT NULL) TO '/tmp/old-pending.txt'
+   ```
+
+   ```sql
+   -- superuser，連 postgres 庫
+   ALTER DATABASE "<old_db>" ALLOW_CONNECTIONS false;
+   ```
+
+   - 判斷依據：還原後仍是 `outgoing` 的信，如果在舊庫裡**已經不是待寄**（寄出後被自動刪除，或還留著但狀態是 `sent`），代表原時間線已經寄過，還原後再寄就是重複。
+   - 不能只看舊庫「有沒有這封」：Odoo 寄出非通知類郵件（密碼重設、邀請）後會連同 `mail_message` 一起刪掉，舊庫查不到正是「已寄出」。
+   - 檔案只放在執行的 pod 內 `/tmp`，用完刪除；Message-Id 不貼進工單。
+4. 【agent 執行・人類逐步放行】在還原後的 live DB 取消那幾封（同一個交易，筆數跟第 1 步、第 3 步對得上才 `COMMIT`，否則 `ROLLBACK`）：
+
+   ```sql
+   BEGIN;
+   CREATE TEMP TABLE old_pending (message_id varchar) ON COMMIT DROP;
+   \copy old_pending FROM '/tmp/old-pending.txt'
+   UPDATE mail_mail mm
+   SET state = 'cancel',
+       failure_reason = '還原 <request_id>：原時間線已寄出或已處理，還原後不重寄'
+   FROM mail_message msg
+   WHERE msg.id = mm.mail_message_id
+     AND mm.state = 'outgoing'
+     AND msg.message_id IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM old_pending p WHERE p.message_id = msg.message_id)
+   RETURNING mm.id;
+   -- 核對筆數後：
+   COMMIT;
+   ```
+
+   - 舊庫仍在待寄的信（原時間線也還沒寄出）不會被取消，照常寄出。
+   - `message_id` 為空的信無從比對，保留不動，在工單列出筆數交給人類判斷。
+   - 取消是可逆的：Odoo 後台「設定 › 技術 › 電子郵件」篩選「已取消」，按「重試」就回到待寄。工單記取消的筆數與 id 範圍。
+5. 【agent 執行・人類逐步放行】（只對第 2 步決定要跳過的 cron）把 `nextcall` 推到下一個未來的週期，保留原本的對齊時間（例如每天 02:00 的 cron 仍在 02:00），並刪掉這些 cron 已到期的觸發，效果等於跳過這一輪補跑：
+
+   ```sql
+   BEGIN;
+   UPDATE ir_cron c
+   SET nextcall = (
+     SELECT min(c.nextcall + k * i.iv)
+     FROM (SELECT (c.interval_number || ' ' || c.interval_type)::interval AS iv) i,
+          LATERAL (SELECT floor(extract(epoch FROM (now() AT TIME ZONE 'UTC') - c.nextcall)
+                                / extract(epoch FROM i.iv))::int AS k0) e,
+          generate_series(greatest(e.k0 - 1, 1), e.k0 + 2) AS k
+     WHERE c.nextcall + k * i.iv > (now() AT TIME ZONE 'UTC'))
+   WHERE c.id = ANY ('{<要跳過的 cron id，逗號分隔>}'::int[])
+     AND c.active
+     AND c.nextcall < (now() AT TIME ZONE 'UTC')
+   RETURNING c.id, c.cron_name, c.nextcall;
+   DELETE FROM ir_cron_trigger
+   WHERE cron_id = ANY ('{<同上>}'::int[])
+     AND call_at <= (now() AT TIME ZONE 'UTC')
+   RETURNING id, cron_id;
+   -- 核對每一筆的新 nextcall 都在未來、而且對齊原本的時間後：
+   COMMIT;
+   ```
+
+   - `ir_cron.nextcall` 是不帶時區的 UTC 時間，所以一律跟 `now() AT TIME ZONE 'UTC'` 比。
+   - 月週期以 30 天估算後再從前後幾個候選裡挑最早的未來時間，結果仍落在原本的日期與時刻。
+   - 只推 `nextcall` 不夠：Odoo 會照 `ir_cron_trigger` 裡已到期的觸發立刻執行該 cron，所以同一個交易裡一起刪。`rewind` 不含觸發，第 1 步也沒列，跳過 cron 時一律照這段做。
+   - 不要跳過郵件佇列 cron（`mail.ir_cron_mail_scheduler_action`）：它也負責寄還原後新產生的信。要擋重寄靠第 4 步，不是停它。
+6. 【人類】確認第 4、5 步的結果與工單記錄一致後，才放行 P7。
+
 ### P7 finalize（恢復服務）
+
+前置：P6a 已放行（無回捲項目，或第 2 步的決定已執行並記進工單）。
 
 1. 【agent 執行・人類逐步放行】server 先拉回 1；確認 `upgrade-gate` log：
    - marker 相等：`skip: woow_paas_platform.upgrade_done.digest == current image digest`（演練實測：web Ready 24 s）。
@@ -162,6 +268,24 @@ platform release（`paas-odoo-platform`，`paas-system`）預設 `restore.enable
 
 1. 【agent】`__old_<id>` 與它的 filestore 保留到 `expires_at`（24 h）後，由下一次 housekeeping 回收；這是這次還原唯一的 undo。
 2. 【agent】`restore/<id>/result.json` 留在 backup PVC 作稽核；result.json 的 `rewind` 與 `security_diff` 摘要（不含 reference 原文）寫進工單。
+3. 【agent】工單同時記 P6a 的決定：取消了幾封郵件（id 範圍）、跳過了哪些 cron（id、名稱、新 `nextcall`）、通知客戶的時間。
+
+## 對客戶的還原說明
+
+替租戶還原（或平台還原會影響到客戶）時，**停機前**要讓客戶知道以下事項，並取得同意。可直接使用下面的範本，把 `<…>` 換成實際值：
+
+> 我們將把您的 Odoo 還原到 `<備份時間，台北時間>` 的備份。還原期間服務會暫停約 `<分鐘>` 分鐘，完成後所有使用者需要重新登入。
+>
+> 還原會把資料回到備份當下，請留意：
+> 1. 備份時間之後新增或修改的資料（訂單、發票、聯絡人、附件、帳號與 API 金鑰）都會消失，需要重新輸入。
+> 2. 備份當下還在寄送佇列裡的郵件會回到佇列。我們會比對還原前的資料，取消原本已經寄出的那幾封；比對不到的郵件可能**再寄一次**，收件人可能收到重複的信。
+> 3. 排程動作（例如自動寄提醒、定期產生帳單）在服務恢復後可能會**補跑一次**，把備份之後被回捲的工作重做。
+> 4. 備份之後才在外部完成的動作（例如線上付款、已寄出的電子發票）不會被撤回；還原後 Odoo 裡可能看不到這些紀錄，需要人工對帳。
+>
+> 若您希望某些郵件或排程動作不要重寄、不要補跑，請在 `<期限>` 前告訴我們。
+
+- 第 2 點的「取消原本已經寄出的那幾封」只在 P6a 第 3、4 步實際執行時才能這樣寫；舊庫不可用（DR）時改成「郵件會全部重寄」或「郵件會全部取消」，依客戶的決定。
+- 第 4 點對應 `rewind.latest_payment_reference`：還原後最新的交易編號早於實際最後一筆時，代表有付款要人工對帳。交易編號本身不要寫進給客戶的訊息或工單。
 
 ## 演練紀錄（2026-10-06，跨 ns＋中和）
 

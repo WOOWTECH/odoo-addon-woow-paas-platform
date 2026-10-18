@@ -10,7 +10,7 @@
                 <WoowIcon name="'chevron_right'" size="16"/>
                 <a href="#/billing/invoices" class="o_woow_breadcrumb_link">Invoices</a>
                 <WoowIcon name="'chevron_right'" size="16"/>
-                <span class="o_woow_breadcrumb_current" t-esc="invoice ? (invoice.name || invoice.number || 'Detail') : 'Detail'"/>
+                <span class="o_woow_breadcrumb_current" t-esc="breadcrumbLabel"/>
             </div>
 
             <!-- Loading State -->

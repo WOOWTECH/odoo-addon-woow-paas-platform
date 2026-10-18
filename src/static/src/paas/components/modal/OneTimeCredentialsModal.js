@@ -26,7 +26,8 @@ export class OneTimeCredentialsModal extends Component {
         // "in_place"（#1370：Odoo／n8n 的 Reset 直接改 app DB，不重啟、立刻生效）。
         mode: { type: String, optional: true, validate: (m) => ["provision", "reset", "in_place"].includes(m) },
         // in_place 的後果依 app 而異（鏡射 template.app_admin_reset_kind）：Odoo／n8n 會登出
-        // 舊 session 並關 2FA；Omnigent（omnigent_exec）與上游 Members → Reset 一樣，不登出。
+        // 舊 session 並關 2FA；Omnigent（omnigent_exec）與上游 Members → Reset 一樣，不登出；
+        // EMQX（emqx_exec，#1774）登出已登入的 Dashboard，但開源版沒有 2FA 可關。
         appResetKind: { type: String, optional: true },
     };
     static defaultProps = { mode: "reset" };
@@ -55,6 +56,9 @@ export class OneTimeCredentialsModal extends Component {
     get statusHint() {
         if (this.props.mode === "in_place" && this.props.appResetKind === "omnigent_exec") {
             return _t("The new password works right away; the service does not restart. Devices that are already signed in stay signed in.");
+        }
+        if (this.props.mode === "in_place" && this.props.appResetKind === "emqx_exec") {
+            return _t("The new password works right away; the service does not restart. Anyone signed in to the dashboard with the old password is signed out.");
         }
         if (this.props.mode === "in_place") {
             return _t("The new password works right away; the service does not restart. Devices signed in with the old password are signed out, and two-factor sign-in has been turned off — turn it on again after you sign in.");
@@ -107,9 +111,9 @@ export function buildOneTimeCredentials(data) {
     if (data && data.admin_password && data.template
             && data.template.app_admin_reset_kind
             && data.template.app_admin_reset_kind !== "none") {
-        // Omnigent 的帳號由 chart 固定（admin）；後端沒帶時沿用 app_managed 分支的同一個預設。
-        const username = data.admin_username
-            || (data.template.app_admin_reset_kind === "omnigent_exec" ? "admin" : null);
+        // Omnigent／EMQX 的帳號由 chart 固定（admin）；後端沒帶時沿用 app_managed 分支的同一個預設。
+        const chartFixedAdmin = ["omnigent_exec", "emqx_exec"].includes(data.template.app_admin_reset_kind);
+        const username = data.admin_username || (chartFixedAdmin ? "admin" : null);
         if (username) {
             credentials.push({
                 label: _t("Username"),
@@ -185,7 +189,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Admin Password"),
             value: data.admin_password,
             hint: _t(
-                "Shared by the console and the dashboard (username: admin). Also enter it in the Dashboard REST API section of the MCP connection settings, together with the Dashboard API URL below."
+                "Shared by the console and the dashboard (username: admin). If you also use the Hermes MCP server, enter it in the Dashboard REST API section of that server's connection settings, together with the Dashboard API URL below."
             ),
         });
     } else if (data && data.gateway_api_key && data.admin_username) {
@@ -206,7 +210,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Gateway API Key"),
             value: data.gateway_api_key,
             hint: data.gateway_api_key_hint
-                || _t("Enter this in the Gateway API Server section of the MCP connection settings."),
+                || _t("The API key of this service's Gateway API. If you use the Hermes MCP server, enter it in the Gateway API Server section of that server's connection settings."),
         });
     }
     if (data && data.gateway_url) {
@@ -214,7 +218,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Gateway API URL"),
             value: data.gateway_url,
             hint: data.gateway_url_hint || _t(
-                "Enter this in the Gateway API Server section of the MCP connection settings. This is the full address including its sub-path; the service root URL on its own will not connect. This applies to this field only — the Dashboard API URL below is the opposite and needs the root URL with no sub-path."
+                "The address of this service's Gateway API. If you use the Hermes MCP server, enter it in the Gateway API Server section of that server's connection settings. This is the full address including its sub-path; the service root URL on its own will not connect. This applies to this field only — the Dashboard API URL below is the opposite and needs the root URL with no sub-path."
             ),
         });
     }
@@ -223,7 +227,7 @@ export function buildOneTimeCredentials(data) {
             label: _t("Dashboard API URL"),
             value: data.dashboard_url,
             hint: _t(
-                "Enter this in the Dashboard REST API section of the MCP connection settings (username: admin, password: the Admin Password above). This is the service root URL, with no sub-path."
+                "The address of this service's dashboard. If you use the Hermes MCP server, enter it in the Dashboard REST API section of that server's connection settings (username: admin, password: the Admin Password above). This is the service root URL, with no sub-path."
             ),
         });
     }

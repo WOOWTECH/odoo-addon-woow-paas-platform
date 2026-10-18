@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.AppConfigurationPage">
-        <div class="o_woow_configure_page">
+        <div class="o_woow_configure_page" t-ref="configureRoot">
             <!-- Loading State -->
             <t t-if="state.loading">
                 <div class="o_woow_loading">
                     <WoowIcon name="'sync'" size="32" class="'o_woow_spin'"/>
-                    <p>Loading template...</p>
+                    <p>Loading configuration...</p>
                 </div>
             </t>
 
@@ -14,7 +14,7 @@
             <t t-elif="state.error">
                 <div class="o_woow_error_state">
                     <WoowIcon name="'error'" size="48"/>
-                    <h2>Unable to load template</h2>
+                    <h2>Unable to configure service</h2>
                     <p t-esc="state.error"/>
                     <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
                         <WoowIcon name="'arrow_back'" size="18"/>
@@ -23,8 +23,21 @@
                 </div>
             </t>
 
+            <!-- Workspace Role Denial -->
+            <t t-elif="state.accessDenied">
+                <div class="o_woow_error_state">
+                    <WoowIcon name="'lock'" size="48"/>
+                    <h2>Permission denied</h2>
+                    <p>Only workspace owners and administrators can create services.</p>
+                    <WoowButton variant="'primary'" size="'md'" onClick.bind="goBack">
+                        <WoowIcon name="'arrow_back'" size="18"/>
+                        Back to Marketplace
+                    </WoowButton>
+                </div>
+            </t>
+
             <!-- Configuration Form -->
-            <t t-elif="template">
+            <t t-elif="canConfigure">
                 <!-- 麵包屑統一由全域 Header 呈現（見 AppConfigurationPage._publishBreadcrumb）-->
 
                 <!-- Header Section -->
@@ -229,7 +242,8 @@
 
                 <!-- Launch Error -->
                 <t t-if="state.launchError">
-                    <div class="o_woow_error_message">
+                    <!-- X-LC-002-3：後端拒絕時捲到這裡並聚焦（useFormErrorReveal），讀屏立即播報。 -->
+                    <div class="o_woow_error_message o_woow_launch_error" role="alert" tabindex="-1">
                         <WoowIcon name="'error'" size="18"/>
                         <t t-esc="state.launchError"/>
                     </div>

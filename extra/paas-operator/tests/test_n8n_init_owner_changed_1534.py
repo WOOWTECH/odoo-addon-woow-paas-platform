@@ -98,7 +98,9 @@ def test_parameters_go_through_stdin_never_argv():
     call = fake.ensure_calls[0]
     assert call["command"] == ["node", "-e", ENSURE_API_KEY_SCRIPT]
     stdin = json.loads(call["stdin"])
-    assert stdin == {"label": "mcp-sidecar", "expected_email": None, "expires_at": 4102444800}
+    # DATA-N8N-006-1：期限改成「現在＋TTL」、多帶輪替窗口（細節見 test_n8n_sidecar_key_ttl_dn006.py）
+    assert set(stdin) == {"label", "expected_email", "expires_at", "rotate_before_seconds"}
+    assert stdin["label"] == "mcp-sidecar" and stdin["expected_email"] is None
     assert _PASSWORD not in call["stdin"], "owner 密碼完全用不到，也不該送進容器"
     assert call["timeout"] == 40
 
@@ -159,7 +161,9 @@ def test_script_requires_only_builtins_or_the_n8n_installation():
     direct = set(re.findall(r'\brequire\("([^"]+)"\)', ENSURE_API_KEY_SCRIPT))
     assert direct <= {"crypto", "fs", "http", "path", "module"}, direct
     via_n8n = set(re.findall(r'requireFromN8n\(req, "([^"]+)"\)', ENSURE_API_KEY_SCRIPT))
-    assert via_n8n <= {"sqlite3", "pg"}, via_n8n
+    # n8n-core：n8n 2.43.x 起簽章密鑰在 DB 裡以 AES-256-GCM 包起來，解包要用 n8n 自己的 Cipher
+    # （DATA-N8N-006-1 附帶發現；n8n-core 就是 n8n 安裝目錄裡的套件，不是額外相依）。
+    assert via_n8n <= {"sqlite3", "pg", "n8n-core"}, via_n8n
 
 
 def _code_lines():

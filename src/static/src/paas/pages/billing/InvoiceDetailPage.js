@@ -7,6 +7,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { PayInvoiceModal } from "../../components/modal/PayInvoiceModal";
 import { billingService } from "../../services/billing_service";
 import { router } from "../../core/router";
+import { calendarDaysFromToday } from "../../utils/datetime_helpers";
 import {
   formatDate,
   formatPoints,
@@ -69,22 +70,28 @@ export class InvoiceDetailPage extends Component {
     );
   }
 
+  /**
+   * X-LC-006-6：麵包屑最後一段。原本在樣板裡寫字面值 'Detail'（運算式裡的字串不會被翻譯
+   * 抽取），發票不存在時中文介面露出英文；改走與路由標題相同的 msgid。
+   * @returns {string}
+   */
+  get breadcrumbLabel() {
+    const invoice = this.invoice;
+    return (invoice && (invoice.name || invoice.number)) || _t("Invoice Detail");
+  }
+
   get dueLabel() {
     if (!this.invoice) return "";
     const status = this.invoice.status_label || "draft";
     if (status === "paid") return _t("Paid");
     if (status === "overdue") return _t("Overdue");
     if (!this.invoice.invoice_date_due) return "";
-    try {
-      const due = new Date(this.invoice.invoice_date_due);
-      const now = new Date();
-      const diff = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
-      if (diff < 0) return _t("Overdue");
-      if (diff === 0) return _t("Due today");
-      return diff > 1 ? _t("Due in %s days", diff) : _t("Due in %s day", diff);
-    } catch {
-      return "";
-    }
+    // 到期日是日曆日：以當地日曆日相減（#914／X-LC-006-2，不經 UTC 午夜）。
+    const diff = calendarDaysFromToday(this.invoice.invoice_date_due);
+    if (diff === null) return "";
+    if (diff < 0) return _t("Overdue");
+    if (diff === 0) return _t("Due today");
+    return diff > 1 ? _t("Due in %s days", diff) : _t("Due in %s day", diff);
   }
 
   get dueLabelClass() {
@@ -97,7 +104,9 @@ export class InvoiceDetailPage extends Component {
 
   get downloadUrl() {
     if (!this.invoice) return "#";
-    return `/report/pdf/account.account_invoices/${this.invoice.id}`;
+    // AUDITFIX tax-invoice-pdf-403：原生 /report/pdf 以租戶身分渲染，含稅發票讀不到
+    // account.tax 會 403；平台端點先驗擁有權再以平台身分渲染。
+    return `/api/billing/invoices/${this.invoice.id}/pdf`;
   }
 
   get lines() {

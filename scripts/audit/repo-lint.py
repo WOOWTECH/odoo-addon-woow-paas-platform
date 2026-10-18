@@ -1300,7 +1300,7 @@ def check_reset_budget_ladder(root):
     app_src = _read_repo_file(root, RESET_LADDER_APP_OPERATOR)
     app = _fold_int_constants(app_src or "")
     exec_app = ("ODOO_RESET_EXEC_TIMEOUT_SECONDS", "N8N_RESET_EXEC_TIMEOUT_SECONDS",
-                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS")
+                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS", "EMQX_RESET_EXEC_TIMEOUT_SECONDS")
     needed_app = exec_app + ("APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS",)
     missing_app = [k for k in needed_app if k not in app]
     if app_src is None or missing_app:
@@ -1318,7 +1318,7 @@ def check_reset_budget_ladder(root):
                  % (app_platform, name, worst))
     if not frontend_seconds > app_platform:
         fail("前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 APP_ADMIN_RESET_TIMEOUT=%ss"
-             "（Odoo／n8n／Omnigent 的 Reset 與 reset-config 共用同一條前端 route）"
+             "（Odoo／n8n／Omnigent／EMQX 的 Reset 與 reset-config 共用同一條前端 route）"
              % (frontend_seconds, app_platform))
     return violations
 

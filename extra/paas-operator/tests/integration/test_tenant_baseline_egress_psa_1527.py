@@ -31,8 +31,12 @@ from src.config import settings
 from src.services.helm import KubernetesService
 from src.services.tenant_baseline import (
     BASELINE_EGRESS_NP_NAME,
+    BASELINE_EGRESS_WEB_NP_NAME,
+    EGRESS_PROFILE_LABEL,
+    EGRESS_PROFILE_WEB,
     PSA_EXEMPT_ANNOTATION,
     build_baseline_egress_netpol,
+    build_baseline_egress_web_netpol,
     build_pod_security_labels,
 )
 from tests.namespace_scope import integration_namespace_prefix
@@ -124,9 +128,9 @@ def _pod_ip(namespace: str, pod: str) -> str:
                     "-o", "jsonpath={.status.podIP}").stdout.strip()
 
 
-def _connect(namespace: str, host: str, port: int) -> bool:
+def _connect(namespace: str, host: str, port: int, pod: str = "cli") -> bool:
     """在 cli pod 裡 TCP connect（3 秒逾時）。True＝連上。"""
-    proc = _kubectl("exec", "cli", "-n", namespace, "--", "nc", "-z", "-w", "3",
+    proc = _kubectl("exec", pod, "-n", namespace, "--", "nc", "-z", "-w", "3",
                     host, str(port), check=False)
     return proc.returncode == 0
 
@@ -227,6 +231,61 @@ def test_baseline_egress_behaviour_on_real_cni(test_namespace, control_namespace
         pytest.skip("cluster has no internet egress (control ns cannot reach 1.1.1.1:443); "
                     "public-internet assertion not applicable")
     assert _connect(test_namespace, *public)
+
+
+def test_baseline_egress_port_controls_on_real_cni(test_namespace, control_namespace,
+                                                   baseline_on, monkeypatch):
+    """商用驗收 egress-all-ports-open：封埠（endPort 範圍）與 web profile 在 kube-router 上真的生效。
+
+    一般 pod：公網 443、853 通，22 不通（封 22,25）。帶 egress-profile=web 的 pod：公網只剩 443，
+    853、22 都不通；同 ns 與 DNS 照通。每個公網目標先在對照組確認連得到才斷言。
+    """
+    monkeypatch.setattr(settings, "tenant_baseline_egress_blocked_ports", "22,25")
+    monkeypatch.setattr(settings, "tenant_baseline_egress_web_profile", True)
+    svc = baseline_on
+    svc._apply_baseline_netpol(test_namespace, _WORKSPACE_ID)
+
+    live = {n: json.loads(_kubectl("get", "networkpolicy", n, "-n", test_namespace,
+                                   "-o", "json").stdout)["spec"]
+            for n in (BASELINE_EGRESS_NP_NAME, BASELINE_EGRESS_WEB_NP_NAME)}
+    # API server 接受 endPort 且原樣存回（沒有被靜默丟掉）。
+    assert live[BASELINE_EGRESS_NP_NAME] == build_baseline_egress_netpol(
+        test_namespace, blocked_ports=[22, 25], web_profile=True)["spec"]
+    assert live[BASELINE_EGRESS_WEB_NP_NAME] == build_baseline_egress_web_netpol(
+        test_namespace)["spec"]
+
+    _server(test_namespace)
+    _client(test_namespace)
+    _client(control_namespace)
+    _apply(_pod(test_namespace, "cli-web", ["sleep", "3600"],
+                {"app": "egpsa-cli-web", EGRESS_PROFILE_LABEL: EGRESS_PROFILE_WEB}))
+    _wait_ready(test_namespace, "srv", "cli", "cli-web")
+    _wait_ready(control_namespace, "cli")
+
+    web_ok, dot, ssh = ("1.1.1.1", 443), ("1.1.1.1", 853), ("github.com", 22)
+    for target in (web_ok, dot, ssh):
+        if not _connect(control_namespace, *target):
+            pytest.skip(f"control ns cannot reach {target}; port assertions not applicable")
+
+    # 等 kube-router 套上規則（#1497 空窗）：一般 pod 的 22 斷掉才算生效。
+    assert _wait_until(lambda: not _connect(test_namespace, *ssh)), (
+        "blocked port 22 never took effect for a plain pod")
+    assert _wait_until(lambda: not _connect(test_namespace, *dot, pod="cli-web")), (
+        "web profile never took effect: web pod still reaches 1.1.1.1:853")
+
+    # 一般 pod：封掉的埠不通，其他埠照通（endPort 範圍被正確執行，不是只放 port 起點）。
+    assert _connect(test_namespace, *web_ok)
+    assert _connect(test_namespace, *dot)
+    assert not _connect(test_namespace, *ssh)
+    # web pod：公網只剩 80/443；同 ns 與 DNS 照通。
+    assert _connect(test_namespace, *web_ok, pod="cli-web")
+    assert not _connect(test_namespace, *dot, pod="cli-web")
+    assert not _connect(test_namespace, *ssh, pod="cli-web")
+    assert _connect(test_namespace, f"srv.{test_namespace}.svc.cluster.local", _PORT,
+                    pod="cli-web")
+    proc = _kubectl("exec", "cli-web", "-n", test_namespace, "--", "nslookup",
+                    "github.com", check=False)
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_pod_security_enforced_by_admission(test_namespace, baseline_on):
