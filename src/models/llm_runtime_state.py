@@ -286,6 +286,8 @@ class LlmRuntimeState(models.Model):
                 params)
             row = cr.fetchone()
         opened = bool(row and row[0])
+        if opened or effect == nac.CIRCUIT_TRIP:
+            self._llm_trigger_probe(at=params['open_until'])
         if opened:
             _logger.warning('[LLM] circuit opened for %ss: %s', nac.CIRCUIT_OPEN_SECONDS, code)
             report_circuit_open(self.env, code)
@@ -331,17 +333,26 @@ class LlmRuntimeState(models.Model):
         reopen = fields.Datetime.now() + timedelta(seconds=nac.CIRCUIT_OPEN_SECONDS)
         self._llm_update('circuit_open_until = %s, circuit_reason = COALESCE(%s, circuit_reason)',
                          (reopen, code))
+        self._llm_trigger_probe(at=reopen)
         _logger.warning('[LLM] circuit stays open: health check %s/%s', result.kind,
                         result.label())
         return False
 
     @api.model
-    def _llm_trigger_probe(self):
-        """web 在半開時叫醒一支外呼類 cron 去做健康檢查（盡力而為）。"""
+    def _llm_trigger_probe(self, at=None):
+        """排健康探測；開啟／再次開啟時排在到期時間，web 半開時立即叫醒。
+
+        circuit 狀態已經獨立 commit，探測也要獨立 commit，不能被呼叫端之後的 rollback 取消。
+        否則待刷新的 SWR 列不會再觸發 cron，只能等 5 分鐘保險排程。
+        """
+        from .llm_event import _env_on
         try:
-            cron = self.env.ref(CIRCUIT_PROBE_CRON_XMLID, raise_if_not_found=False)
-            if cron:
-                cron.sudo()._trigger()
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                env = _env_on(self.env.registry, cr)
+                cron = env.ref(CIRCUIT_PROBE_CRON_XMLID, raise_if_not_found=False)
+                if cron:
+                    cron._trigger(at=at)
         except Exception:  # noqa: BLE001 - never break the caller
             _logger.warning('[LLM] could not trigger the circuit health check')
 

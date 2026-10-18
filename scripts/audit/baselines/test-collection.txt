@@ -469,8 +469,8 @@
 2	test_litellm_master_key_1557.TestLitellmKeyChoiceFrontend1557
 18	test_litellm_seed.TestLitellmSeed
 2	test_llm_client_hardening.TestLlmApRateLimit
-8	test_llm_client_hardening.TestLlmCircuitBreaker
-1	test_llm_client_hardening.TestLlmCircuitCronGate
+9	test_llm_client_hardening.TestLlmCircuitBreaker
+3	test_llm_client_hardening.TestLlmCircuitCronGate
 3	test_llm_client_hardening.TestLlmConfigChange
 3	test_llm_client_hardening.TestLlmConnectionTest
 7	test_llm_client_hardening.TestLlmSwr

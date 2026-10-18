@@ -275,7 +275,12 @@ export class LlmOverviewTab extends Component {
       return;
     }
     const delay = usageRefreshDelay(result, this.usageFirstFillPolls);
-    this.usageFirstFillPolls = delay === USAGE_FIRST_FILL_MS ? this.usageFirstFillPolls + 1 : 0;
+    if (delay === USAGE_FIRST_FILL_MS) {
+      this.usageFirstFillPolls += 1;
+    } else if (result && result.success && result.data && result.data.data_as_of != null) {
+      // 第一次快問已用完時保持慢速；只有拿到新快取，才重設下一次缺資料的預算。
+      this.usageFirstFillPolls = 0;
+    }
     this.state.usageWaiting = delay === USAGE_FIRST_FILL_MS;
     this.usageTimer = setTimeout(() => this.onUsageTimer(), delay);
   }

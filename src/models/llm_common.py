@@ -560,7 +560,7 @@ def _report(env, alert_name, code):
                       llm_redact.redact(traceback.format_exc()))
 
 
-def circuit_allows(env, config):
+def circuit_allows(env, config, deadline=None):
     """外呼類 cron 這一輪能不能跑（DESIGN §3.6）：關著 ⇒ True；開著 ⇒ False；半開 ⇒ 搶到的人做一次
     AP 健康檢查（``NewApiClient.ap_health``，會碰 DB），通過才 True。
 
@@ -571,7 +571,7 @@ def circuit_allows(env, config):
 
     def probe():
         client = env['woow_paas_platform.llm_account'].sudo()._llm_client(nac.ROLE_CRON)
-        return client.ap_health(config['prefix'], timeout=nac.TIMEOUT_CRON_READ)
+        return client.ap_health(config['prefix'], timeout=nac.TIMEOUT_CRON_READ, deadline=deadline)
 
     try:
         return State._llm_circuit_gate(probe)
@@ -635,10 +635,11 @@ def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, conf
     config = config or llm_config(env)
     if llm_unconfigured(env, config):
         return False
-    if outbound and not circuit_allows(env, config):
+    # 健康探測也是外呼，與工作共用同一個 tick 預算（不能先探 25 秒、再給工作 30 秒）。
+    tick = LlmCronTick(seconds, items)
+    if outbound and not circuit_allows(env, config, deadline=tick.deadline):
         _logger.info('[LLM] cron %s skipped this tick: the circuit breaker is open', xmlid)
         return False
-    tick = LlmCronTick(seconds, items)
     try:
         with env.cr.savepoint():
             more = work(config, tick)

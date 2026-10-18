@@ -681,7 +681,9 @@ class NewApiClient:
         remaining = deadline - self._monotonic()
         if remaining < MIN_CALL_SECONDS:
             return None
-        return min(connect, remaining), min(read, remaining)
+        # requests 的兩段逾時依序發生；不能讓每一段各用完整的剩餘預算。
+        connect = min(connect, remaining / 3)
+        return connect, min(read, remaining - connect)
 
     @staticmethod
     def _path(template, path_params):
@@ -761,6 +763,12 @@ class NewApiClient:
             if blocked is not None:
                 self._log(method, template, identity, blocked, 0)
                 return blocked
+        # DB circuit／限速守衛可能等鎖，送出前必須重新算剩餘時間。
+        effective = self._timeout(timeout, deadline)
+        if effective is None:
+            result = NotExecuted('deadline')
+            self._log(method, template, identity, result, 0)
+            return result
         connect, read = effective
         ts = str(int(self._clock()))
         nonce = secrets.token_urlsafe(16)

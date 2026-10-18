@@ -91,6 +91,8 @@ def test_group_back_to_default(bg):
 @pytest.mark.parametrize(
     "body",
     [
+        {"id": 123, "group": []},
+        {"id": 123, "group": {}},
         {"id": 123, "group": "internal"},
         {"id": 123, "group": "free"},
         {"id": 123, "group": "default", "role": 10},
@@ -117,6 +119,8 @@ def test_group_change_body_policy(bg, body):
         {**USER, "username": "root"},
         {**USER, "username": "wp0000000123"},  # another environment
         {**USER, "role": 10},
+        {**USER, "group": []},
+        {**USER, "group": {}},
         {**USER, "group": "internal"},
         {**USER, "id": 124},
         {**USER, "display_name": 5},

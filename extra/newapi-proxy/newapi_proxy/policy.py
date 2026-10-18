@@ -191,7 +191,8 @@ def manage_target_ok(
         and bool(ctx.settings.username_re.fullmatch(user["username"]))
         and _is_int(user.get("role"))
         and user["role"] == 1
-        and user.get("group") in groups
+        and _is_str(user.get("group"))
+        and user["group"] in groups
     )
 
 
@@ -208,7 +209,7 @@ def bg_user_group(body: dict, ctx: PolicyContext) -> dict:
     """
     _exact_keys(body, {"id", "group"}, "bg_group_fields")
     target = _int_in(body["id"], 1, 2_147_483_647, "bg_group_id")
-    if body["group"] not in PAAS_USER_GROUPS:
+    if not _is_str(body["group"]) or body["group"] not in PAAS_USER_GROUPS:
         raise PolicyDenied("bg_group_value")
     return {"id": target, "group": body["group"]}
 

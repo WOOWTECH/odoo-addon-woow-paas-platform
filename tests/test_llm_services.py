@@ -30,6 +30,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
+from requests.structures import CaseInsensitiveDict
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICES = ROOT / 'src' / 'services'
@@ -85,7 +86,7 @@ def _serve(recorder):
             body = self.rfile.read(length) if length else b''
             recorder.requests.append({
                 'method': self.command, 'path': self.path,
-                'headers': {k: v for k, v in self.headers.items()}, 'body': body})
+                'headers': CaseInsensitiveDict(self.headers.items()), 'body': body})
             if recorder.mode == 'disconnect':
                 self.connection.shutdown(socket.SHUT_RDWR)
                 self.connection.close()
@@ -164,7 +165,7 @@ class TestSigningMatchesProxy(_Base):
         self.assertEqual(len(set(nonces)), 3)
         for request in self.recorder.requests:
             self.assertRegex(request['headers']['X-Woow-Proxy-Nonce'], r'^[A-Za-z0-9_-]{22,64}$')
-            self.assertNotIn(SECRET, json.dumps(request['headers']))
+            self.assertNotIn(SECRET, json.dumps(dict(request['headers'])))
             self.assertEqual(request['headers']['Connection'], 'close')
 
     def test_read_timeout_header_and_deadline(self):
@@ -727,6 +728,29 @@ class TestCallGuard(_Base):
         self.assertEqual(self.recorder.requests, [])
         client = self.client(guard=_RecordingGuard(raise_after=True))
         self.assertTrue(client.status().ok)
+
+    def test_expired_deadline_after_guard_never_sends(self):
+        now = [100.0]
+        guard = _RecordingGuard()
+
+        def before(identity, priority):
+            now[0] += 3
+        guard.before = before
+        client = self.client(guard=guard, monotonic=lambda: now[0])
+        result = client.ap_add_quota(42, 15625, deadline=102.5)
+        self.assertEqual((result.kind, result.reason), ('not_executed', 'deadline'))
+        self.assertEqual(self.recorder.requests, [], 'DB 守衛耗完預算就不能再送寫入')
+        self.assertEqual(guard.after_calls, [])
+
+    def test_connect_and_read_share_the_remaining_deadline(self):
+        client = self.client(monotonic=lambda: 100.0)
+        for remaining in (2, 3, 10, 20, 30):
+            with self.subTest(remaining=remaining):
+                connect, read = client._timeout(nac.TIMEOUT_CRON_READ, 100 + remaining)
+                self.assertGreater(connect, 0)
+                self.assertGreater(read, 1, '代理至少等 1 秒，client 必須留餘裕')
+                self.assertLessEqual(connect + read, remaining,
+                                     '連線與讀取依序發生，不能各自用掉完整剩餘時間')
 
     def test_ap_calls_need_a_known_priority(self):
         client = self.client()

@@ -146,6 +146,23 @@ class TestLlmCircuitBreaker(_LlmCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts.occurrences, 1, '只有打開的那一次告警')
 
+    def test_open_and_failed_probe_schedule_the_next_recovery(self):
+        cron = self.env.ref(SWR_CRON_XMLID)
+        triggers = self.env['ir.cron.trigger'].sudo()
+        before = set(triggers.search([('cron_id', '=', cron.id)]).ids)
+        self.State._llm_circuit_record(nac.CIRCUIT_TRIP, 'llm_proxy_policy')
+        opened_until = self._state()['circuit_open_until']
+        queued = triggers.search([('cron_id', '=', cron.id), ('id', 'not in', list(before))])
+        self.assertEqual(queued.mapped('call_at'), [opened_until],
+                         '開啟時就要排到期探測，不等 5 分鐘保險排程或使用者重整')
+        before.update(queued.ids)
+        self._set_circuit(fields.Datetime.now() - timedelta(seconds=1))
+        self.assertFalse(self.State._llm_circuit_gate(lambda: nac.NotExecuted('connect')))
+        reopened_until = self._state()['circuit_open_until']
+        queued = triggers.search([('cron_id', '=', cron.id), ('id', 'not in', list(before))])
+        self.assertEqual(queued.mapped('call_at'), [reopened_until],
+                         '探測失敗也必須排下一次，不能失去自動恢復')
+
     def test_success_resets_the_count_and_business_answers_count_as_reachable(self):
         failing, _session = self._client(nac_connect_error())
         for _ in range(nac.CIRCUIT_FAILURE_THRESHOLD - 1):
@@ -289,6 +306,36 @@ class TestLlmCircuitCronGate(_LlmCase):
         self.assertEqual(ran, [1, 1])
         self.assertEqual([name for name, _ip in self.fake.calls], ['ap_health'])
         self.assertFalse(self._state()['circuit_open_until'])
+
+
+    def test_health_probe_consumes_the_same_tick_budget_as_work(self):
+        now = [100.0]
+        real_tick = llm_common.LlmCronTick
+        observed = []
+
+        def tick_factory(seconds, items):
+            return real_tick(seconds, items, monotonic=lambda: now[0])
+
+        def gate(env, config, deadline=None):
+            observed.append(('probe_deadline', deadline))
+            now[0] += 25
+            return True
+
+        def work(config, tick):
+            observed.append(('work_remaining', tick.remaining()))
+            return False
+
+        with patch.object(llm_common, 'LlmCronTick', side_effect=tick_factory), \
+                patch.object(llm_common, 'circuit_allows', side_effect=gate):
+            run_llm_cron(self.env, SWR_CRON_XMLID, work, seconds=30, items=1)
+        self.assertEqual(observed, [('probe_deadline', 130.0), ('work_remaining', 5.0)])
+
+    def test_half_open_probe_receives_the_cron_deadline(self):
+        self._set_circuit(fields.Datetime.now() - timedelta(seconds=1))
+        with patch.object(self.fake, 'ap_health', wraps=self.fake.ap_health) as health:
+            self.assertTrue(llm_common.circuit_allows(
+                self.env, llm_common.llm_config(self.env), deadline=1234.0))
+        self.assertEqual(health.call_args.kwargs['deadline'], 1234.0)
 
 
 # ====================================================================== #

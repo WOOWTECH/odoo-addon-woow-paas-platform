@@ -4,7 +4,7 @@
 // 點背景／Esc／返回鍵／換頁先問一次；建立中不能關（關了就再也拿不到明文）；關閉時清掉明文、
 // 回呼不帶金鑰；卸載之後才回來的回應直接丟掉。
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import {
   loadPo, readPaas, stubImports, toDataUrl, translateFromGlobal, translator,
 } from "./lib/llm_test_support.mjs";
@@ -191,6 +191,9 @@ async function mount(modal) {
 function unmount() {
   for (const fn of globalThis.__llmHooks.unmount) fn();
 }
+
+// 每個 fixture 都走與 OWL 相同的卸載生命週期；非同步 load 尚未回來時也會被 alive 擋下。
+afterEach(() => unmount());
 
 // ----------------------------------------------------------------------------- 總覽畫面
 
@@ -496,12 +499,12 @@ test("最近 10 筆：還沒有快取時每 3 秒快問、最多 5 次，之後�
   const { tab, fake } = makeTab(ACTIVE);
   await withTimers(async (timers) => {
     fake.usageResult = empty;
-    for (let i = 0; i < overview.USAGE_FIRST_FILL_POLLS + 1; i += 1) {
+    for (let i = 0; i < overview.USAGE_FIRST_FILL_POLLS + 3; i += 1) {
       await tab.refreshUsage();
     }
     assert.deepEqual(timers.map((t) => t.ms), [
       ...Array(overview.USAGE_FIRST_FILL_POLLS).fill(overview.USAGE_FIRST_FILL_MS),
-      overview.USAGE_REFRESH_MS,
+      ...Array(3).fill(overview.USAGE_REFRESH_MS),
     ]);
     assert.equal(tab.state.usageWaiting, false, "快問完了就不再顯示載入中");
     fake.usageResult = { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } };
