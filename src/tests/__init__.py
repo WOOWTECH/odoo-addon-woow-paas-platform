@@ -1234,3 +1234,5 @@ from . import test_password_hardening_xsec007
 from . import test_n8n_podsec_hardening
 # 商用驗收 n8n-credential-key-backup（DATA-N8N-013-1）：n8n 加密金鑰由平台產生並保存。
 from . import test_n8n_encryption_key_backup
+# INFRA-FIX-018（INFRA-HS-002-1）：重設管理員帳密不改 pod template（helm_secret 路把方案資源鍵釘到叢集現況）。
+from . import test_reset_pod_template_neutral_infra_fix_018

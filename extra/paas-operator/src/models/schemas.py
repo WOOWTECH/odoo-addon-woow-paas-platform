@@ -142,6 +142,16 @@ class ReleaseUpgradeRequest(BaseModel):
 _VALUE_PATH_RE = r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$"
 
 
+def _validate_value_paths(paths: List[str]) -> List[str]:
+    """``preserve_value_paths`` 的共用驗證（回復版本與 reset-config 同一套形態）。"""
+    import re
+
+    for path in paths:
+        if not isinstance(path, str) or not re.match(_VALUE_PATH_RE, path):
+            raise ValueError(f"invalid value path: {path!r}")
+    return paths
+
+
 class ReleaseRollbackRequest(BaseModel):
     """Request to rollback a Helm release.
 
@@ -191,12 +201,7 @@ class ReleaseRollbackRequest(BaseModel):
     @field_validator("preserve_value_paths")
     @classmethod
     def _validate_preserve_paths(cls, paths: List[str]) -> List[str]:
-        import re
-
-        for path in paths:
-            if not isinstance(path, str) or not re.match(_VALUE_PATH_RE, path):
-                raise ValueError(f"invalid value path: {path!r}")
-        return paths
+        return _validate_value_paths(paths)
 
     @field_validator("preserve_when_equal")
     @classmethod
@@ -302,6 +307,29 @@ class ReleaseResetConfigRequest(BaseModel):
         description="INFRA-FIX-019-1: tenant credentials written to <release>-tenant-secret "
         "before the reset's helm upgrade (unchanged content = no-op).",
     )
+    # INFRA-FIX-018（商用驗收 INFRA-HS-002-1）：reset 的 values 是平台**存的快照**，
+    # 不一定等於叢集現在跑的值。快照裡的方案資源鍵若是舊 overlay 寫的（headscale 的頂層
+    # ``resources`` 會被 chart deep-merge 進 headplane），reset 的 helm upgrade 就會改掉
+    # pod template ⇒ StatefulSet 滾動 ⇒ RWO 重新 attach 45 秒以上 ⇒ 撞 15 秒 ``--atomic``
+    # 預算，每次必敗（失敗還各留 2 筆 failed revision）。這裡列出的點分路徑，operator 在
+    # upgrade 前改以**叢集目前 release 的值**（含「不存在」）覆寫，reset 因此只動憑證。
+    # 只有 helm_secret 載體採用（該路徑沒有 exec／cleanup，讀 values 的耗時從這兩段預算借，
+    # 預算階梯不變）；config_json 載體忽略本欄。不帶＝與舊行為完全相同（operator 可先發版）。
+    preserve_value_paths: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description=(
+            "INFRA-FIX-018: dot-paths whose LIVE release values replace the ones in "
+            "`values` before the (atomic, 15 s) helm upgrade, so a reset cannot change "
+            "the pod template. A path absent from the live release is removed from "
+            "`values` too. Honoured on the helm_secret carrier only."
+        ),
+    )
+
+    @field_validator("preserve_value_paths")
+    @classmethod
+    def _validate_preserve_paths(cls, paths: List[str]) -> List[str]:
+        return _validate_value_paths(paths)
 
 
 class NamespaceCreateRequest(BaseModel):

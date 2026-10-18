@@ -674,6 +674,7 @@ class PaaSOperatorClient:
         reuse_values: bool = False,
         admin_password_carrier: str = 'config_json',
         tenant_secret: Optional[Dict[str, Any]] = None,
+        preserve_value_paths: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """#357/#449 reset admin_password；載體決定 operator 走哪條路。
 
@@ -715,6 +716,12 @@ class PaaSOperatorClient:
             admin_password_carrier: ``config_json`` | ``helm_secret``。舊 operator
                 不認得本欄會靜默忽略（＝退回 config_json 既有行為），故
                 **operator 必須先發版、平台後發版**。
+            preserve_value_paths: INFRA-FIX-018——點分路徑清單；operator 在 helm_secret
+                路 upgrade 前，把這些路徑改用**叢集目前 release** 的值（含「不存在」）覆寫
+                ``values``，讓 reset 只動憑證、不改 pod template（見
+                ``CloudService._reset_pod_template_value_paths``）。不帶／空＝與舊行為
+                相同；舊 operator 不認得會忽略（reset 退回修前行為，不會更糟），所以
+                operator 與平台的發版順序不拘，但 operator 先上才有效果。
 
         #461：operator 兩條路都只「下達」rollout restart、**不等它完成**（回應含
         ``rollout_awaited: False``）。所以 2xx 的語意由「密碼已生效」收斂成
@@ -746,6 +753,8 @@ class PaaSOperatorClient:
         # INFRA-FIX-019-1：reset 的 values 帶 tenantSecret 參照；Secret 同步寫一次（內容不變＝無變化）。
         if tenant_secret:
             data['tenant_secret'] = tenant_secret
+        if preserve_value_paths:
+            data['preserve_value_paths'] = list(preserve_value_paths)
 
         return self._request(
             'POST',

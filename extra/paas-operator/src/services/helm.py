@@ -1262,19 +1262,30 @@ class HelmService:
         return project_values(values or {}, paths, excluded_paths)
 
     def get_values(
-        self, namespace: str, name: str, revision: Optional[int] = None
+        self,
+        namespace: str,
+        name: str,
+        revision: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
         """#1433: user-supplied values of a release revision (``helm get values``).
 
         Returns the **raw** values — including ``config.sensitive.*``. Callers must
         never log or return them; the preserving rollback only feeds them back into
         ``helm upgrade --values <tempfile>``. ``revision=None`` ＝ the current one.
+
+        ``timeout_seconds`` bounds the helm subprocess (``None`` keeps
+        ``settings.helm_timeout``). INFRA-FIX-018: reset-config passes its own small
+        budget so the #461 timeout ladder still holds.
         """
         validate_namespace(namespace)
         args = ["get", "values", name, "--namespace", namespace, "--output", "json"]
         if revision is not None:
             args.extend(["--revision", str(int(revision))])
-        result = self._run_command(args)
+        if timeout_seconds is None:
+            result = self._run_command(args)
+        else:
+            result = self._run_command(args, timeout=timeout_seconds)
         data = json.loads(result.stdout or "null")
         # helm prints `null` for a revision installed without any values.
         return data if isinstance(data, dict) else {}
