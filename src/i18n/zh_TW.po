@@ -25921,6 +25921,7 @@ msgstr "暫時無法取得日誌，請稍後重試。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/LogsTab.js:0
 msgid "Auto-refresh is paused. Resume or refresh to load logs."
 msgstr "已暫停自動更新，請繼續或手動更新以載入日誌。"
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/mcp_server.py:0
 msgid "This URL points to an internal platform service and cannot be used as an MCP server."
