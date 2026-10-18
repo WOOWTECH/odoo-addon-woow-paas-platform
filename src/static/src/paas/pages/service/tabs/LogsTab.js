@@ -3,6 +3,7 @@ import { Component, useState, useRef, onMounted, onPatched, onWillDestroy } from
 import { _t } from "@web/core/l10n/translation";
 import { cloudService } from "../../../services/cloud_service";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
+import { formatUserTime } from "../../../utils/datetime_helpers";
 import { createLogPoller, filterLogLines, downloadLogSnapshot, logDownloadFilename } from "./service_logs";
 
 export class LogsTab extends Component {
@@ -57,7 +58,7 @@ export class LogsTab extends Component {
     this.state.reason = data.reason || "";
     this.state.text = typeof data.text === "string" ? data.text : "";
     this.state.truncated = data.truncated === true;
-    this.state.updatedAt = new Date().toLocaleTimeString();
+    this.state.updatedAt = formatUserTime(new Date());
   }
 
   get containers() {
