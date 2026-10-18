@@ -1597,11 +1597,14 @@ class KubernetesService:
         args: List[str],
         input_data: Optional[str] = None,
         timeout: int = 30,
+        sensitive_output: bool = False,
     ) -> subprocess.CompletedProcess:
         """Execute a kubectl command.
 
         Args:
             args: Command arguments (without 'kubectl' prefix)
+            sensitive_output: Return raw stdout bytes and discard stderr / error
+                stdout. For application logs, whose contents can hold credentials.
 
         Returns:
             CompletedProcess object
@@ -1616,21 +1619,27 @@ class KubernetesService:
         logger.info(f"Executing: {safe_cmd}")
 
         try:
+            # Log snapshots opt into byte output only; initializer callers keep
+            # the same single subprocess, timeout forwarding, and text options.
+            # The Odoo/n8n budget fingerprints were re-audited for that invariant.
+            output_options = (
+                {"stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL, "text": False}
+                if sensitive_output else {"capture_output": True, "text": True}
+            )
             result = subprocess.run(
                 cmd,
-                capture_output=True,
-                text=True,
                 input=input_data,
                 timeout=timeout,
                 check=False,
+                **output_options,
             )
 
             if result.returncode != 0:
                 raise KubectlException(
                     message=f"kubectl command failed with code {result.returncode}",
                     command=safe_cmd,
-                    stderr=result.stderr,
-                    stdout=result.stdout or "",
+                    stderr="" if sensitive_output else result.stderr,
+                    stdout="" if sensitive_output else result.stdout or "",
                 )
 
             return result

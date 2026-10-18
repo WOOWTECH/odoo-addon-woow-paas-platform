@@ -30,6 +30,28 @@ class PodPhase(str, Enum):
     UNKNOWN = "Unknown"
 
 
+class ReleaseLogSource(BaseModel):
+    """A selectable regular or init container belonging to this release."""
+
+    pod: str
+    containers: List[str] = Field(default_factory=list)
+
+
+class ReleaseLogsResponse(BaseModel):
+    """One bounded log snapshot; reasons never contain kubectl stderr."""
+
+    available: bool = False
+    reason: Optional[Literal[
+        "lookup_failed", "timeout", "no_pods", "source_not_found",
+        "container_not_found", "logs_unavailable",
+    ]] = None
+    pod: Optional[str] = None
+    container: Optional[str] = None
+    sources: List[ReleaseLogSource] = Field(default_factory=list)
+    text: str = ""
+    truncated: bool = False
+
+
 # Request Models
 
 

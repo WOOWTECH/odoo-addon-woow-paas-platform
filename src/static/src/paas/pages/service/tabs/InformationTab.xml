@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.InformationTab">
+    <section class="o_woow_service_information o_woow_card">
+      <p t-if="state.loading" role="status">Loading documentation...</p>
+      <div t-elif="state.error" role="alert">
+        <p t-esc="errorText"/>
+        <button type="button" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm" t-on-click="load">Retry</button>
+      </div>
+      <t t-else="">
+        <div class="o_woow_service_information__header">
+          <div>
+            <span class="o_woow_hint">Related Documentation</span>
+            <h2 t-esc="state.title"/>
+          </div>
+          <a t-if="state.url" t-att-href="state.url" target="_blank" rel="noopener noreferrer" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm">
+            <WoowIcon name="'open_in_new'" size="18"/>
+            Official documentation
+          </a>
+        </div>
+        <article t-if="state.content" class="o_woow_service_information__body" t-out="state.content"/>
+        <p t-else="" class="o_woow_hint">No documentation is available for this service yet.</p>
+      </t>
+    </section>
+  </t>
+</templates>
