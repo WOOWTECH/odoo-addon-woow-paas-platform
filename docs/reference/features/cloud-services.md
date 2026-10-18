@@ -136,6 +136,7 @@ rules:
 | GET    | `/api/releases/{namespace}/{name}/status`    | Get pod/deployment status   |
 | GET    | `/api/releases/{namespace}/{name}/public-address` | 對外通道位址回讀（ngrok sidecar：`tcp://` 或 `https://`，見下方「對外通道位址回讀」） |
 | GET    | `/api/releases/{namespace}/{name}/mqtt-address` | 舊端點（平台 ≤ 18.0.1.0.205 呼叫）：同一份契約、只回 `tcp://` |
+| GET    | `/api/releases/{namespace}/{name}/vpn-node-status` | VPN 節點（charts/tailscale）即時狀態：BackendState、登入入口、serve 轉發結果（見下方「VPN 節點即時狀態」） |
 | POST   | `/api/namespaces`                            | Create namespace with quota |
 
 **Request/Response Example**：
@@ -256,6 +257,10 @@ Example: paas-ws-123-anythingllm-01
 > cron 的長交易互撞），所以 `workload_checked_at` 是「最後一次寫入觀測結果的時間」，不是「最後一次檢查的時間」。
 > 10 分鐘 cron 的輪替位置記在 PaaS Platform Monitor 單例的 `workload_check_cursor`（最後處理的 service id；成功、
 > 失敗、略過都推進，提前中止後下一趟從中止處之後開始）。
+> **#1456 起也看「Pod 都在、卻沒有一顆就緒」**：期望 ≥1、Pod ≥1、就緒 0 的 workload 寫 `oom_killed`（沒就緒的
+> workload Pod 上一次是 `OOMKilled`，operator `PodInfo.last_terminated_reason`）／`crash_loop`（容器卡在
+> `CrashLoopBackOff`）／`not_ready`（都沒有）。三者都要「首次看到滿 5 分鐘後又看到一次」才確認（不是第一次就確認，
+> 見 `services/workload_health.py` 檔頭）；「一顆都沒有」同時存在時沿用 #1647 的代碼。租戶文案沿用一般文案。
 
 ### Supported Operations
 
@@ -847,6 +852,42 @@ container log 讀回來顯示在服務頁。
   marker 不在行首不認（ngrok 自己的 log 可能帶訪客可控字串）。
 - **部署順序**：operator 先上（新端點），平台後上；平台遇到舊 operator 的 404 會退回
   `/mqtt-address`（只有 `tcp://`）。
+
+#### VPN 節點即時狀態（INFRA-FIX-005）
+
+pod Ready ≠ 節點在線：charts/tailscale 的 readiness 把 `NeedsLogin` 也當可用（讓「用 auth key 登入中」的第二次滾動等得到登入完成），
+所以節點被控制面到期／刪除後，平台 `state` 仍是 `running`、/woow 仍顯示 ONLINE（INFRA-TS-005／TS-007）。另外 `tailscale.serve` 被
+entrypoint 略過的項目只印在容器 stderr，Service 不存在的項目不會被略過（建成指向 NXDOMAIN 的轉發）。
+
+- **能力 gate**：`cloud_app_template.has_vpn_node_status`（唯一事實源；seed 只有 tailscale 為 True）→ `CloudService._chart_has_vpn_node_status()`
+  → service detail payload 的 `has_vpn_node_status` → 前端卡片。前端不得用 slug 判斷。
+- **不進帳本**：沒有欄位、沒有 cron、不碰 `state`。租戶打開服務頁（Overview，running／upgrading）時，前端每 30 秒（頁面可見才輪詢）
+  `POST /api/workspaces/<ws>/services/<id>/node-status`，後端 → operator `GET /api/releases/{ns}/{release}/vpn-node-status`（唯讀）。
+  授權與 detail 同一條；`available:false` 是正常降級（不是 running、operator 沒設定／太舊／沒回應），不顯示錯誤。
+- **operator 做什麼**：對 `tailscale` 容器 exec 一支**固定**的 sh 腳本（沒有任何插值）：`tailscale status --json`、`tailscale serve status --json`，
+  以及 **entrypoint 自己的 `parse_serve`**（`WOOW_TS_SOURCE_ONLY=1` source `/entrypoint.sh`；source 前先 `grep` 確認該旗標存在，舊映像的 entrypoint
+  沒有它就退回「不知道期望清單」，不會整支跑起來）。再 `kubectl get services` 對帳轉發目標是否存在。
+- **回應是封閉集合**：`probe`（ok／no_pod／pod_not_running／exec_failed／no_output）、`backend_state`、`login.kind`（none／external_url／cluster_internal）、
+  轉發 `status`（applied／not_applied／service_missing／mismatch／unverified）、略過原因代碼（bad_format／port_range／other_namespace／not_service_name／
+  duplicate_port／too_many／namespace_unknown／other）。**永不回原始 log／stderr**；叢集內部的登入網址不回，只回 `/register/<id>` 的註冊碼。
+  平台 `services/vpn_node_status.public_report` 再驗一次（不信任形狀），並把登入入口（外部登入網址、註冊碼）只給 owner／admin。
+- **UI**（Overview「VPN 節點狀態」卡）：節點狀態（已連線／需要重新登入／等待核可／未連線…）、需要登入時的說明（工作區 Headscale 用 Headplane 的 pre-auth key，
+  因為它的登入頁是瀏覽器打不開的內部位址）、每個轉發有沒有生效，以及被略過的項目與原因。節點需要登入／等待核可／離線／停止時，Connection Info 的
+  狀態也不再寫 ONLINE。
+- **登入失敗原因與被忽略的 key（INFRA-TS-005-5）**：operator 另回 `login_error`（authkey_expired／authkey_used／authkey_invalid／
+  control_unreachable／other；從 `tailscale status --json` 的 `Health` 裡「The last login error was: …」對應，原文不回；節點 Running 時一律 null）
+  與 `authkey_configured`（腳本只判斷 `TS_AUTHKEY_FILE` 有沒有非空白內容，回 set／unset，不讀出 key）。平台轉成 `login_error` 與
+  `authkey_ignored`（已登入＋設定裡有 key ⇒ 提示「這把 key 不會被使用」，對應 entrypoint 的 "not using it"）。
+- **節流**：`/node-status` 同一台服務 10 秒內共用上一份 operator 回應（每個 worker 一份表；operator 失敗不快取；角色過濾逐次重做）。
+- **存檔前驗證（INFRA-TS-005-5／TS-007-1）**：helm_value_specs 的 `validate`（只在存檔時跑、不碰部署組裝，所以收緊規則不會讓既有服務
+  Redeploy 時少掉設定；與 `format` 不同）。`tailscale_serve`：與 entrypoint `parse_serve` 同一套規則（格式、埠 1–65535、只接受同工作區
+  namespace 的 Service、DNS label、tailnet 埠不重複、最多 32 筆）；`tailscale_login`：控制平面與 key 種類（`tskey-` 只配官方 Tailscale）、
+  「自訂網址」必填且是 http(s) URL、key 不得含空白。登入三欄都沒動時不重驗已存的組合。權威在 `services/tailscale_settings.py`，
+  前端 `utils/tailscale_settings.js` 是即時提示的鏡像。Service 是否存在不在存檔時判斷（租戶可能先設轉發再開服務），由卡片的
+  `service_missing` 回報。
+- **部署順序**：operator 先上（新端點），平台後上；舊 operator 回 404 → 卡片不顯示內容（`available:false`），其餘不受影響。
+- **範圍外**：「填新 key 後 tailscaled 進入 crash loop」（INFRA-TS-005-1）與「升級中鎖住所有動作」（-2）是 chart／entrypoint 與 operator rollout 逾時的問題，
+  不在這裡。
 
 #### 一次性憑證視窗的 gateway 提示（P3）
 

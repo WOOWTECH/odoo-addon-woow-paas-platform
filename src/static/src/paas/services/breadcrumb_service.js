@@ -36,6 +36,29 @@ export const breadcrumbService = reactive({
     },
 
     /**
+     * X-LC-001-4：工作區名稱晚到時（deep-link 進來、清單快取是空的）把軌跡裡
+     * 連到 `workspace/<id>` 那一段的文字換成真名。只在目前的 trail 仍是同一個
+     * route、而且確實有那一段時才改——使用者已經切到別頁（別頁已 publish）或
+     * 切到別的工作區時，晚到的結果不會蓋掉別人的麵包屑。
+     * @param {string} routeName
+     * @param {number} workspaceId
+     * @param {string|null} name
+     * @returns {boolean} 有沒有改
+     */
+    relabelWorkspace(routeName, workspaceId, name) {
+        if (!name || this.routeName !== routeName) {
+            return false;
+        }
+        const path = `workspace/${workspaceId}`;
+        const index = this.trail.findIndex((item) => item.path === path);
+        if (index < 0 || this.trail[index].label === name) {
+            return false;
+        }
+        this.trail = this.trail.map((item, i) => (i === index ? { ...item, label: name } : item));
+        return true;
+    },
+
+    /**
      * 取得為 `routeName` publish 的 trail；route 不相符或尚未 publish 時回 null，
      * 讓 Header 改用泛用 fallback。
      * @param {string} routeName

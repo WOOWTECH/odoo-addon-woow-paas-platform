@@ -49,6 +49,22 @@
                 <span t-esc="state.error"/>
             </div>
 
+            <!-- service-update-api-validation（INFRA-HS-013-4）：spec confirm_change 的二次確認 -->
+            <div t-if="state.editing and state.pendingConfirm.length" class="o_woow_config_confirm" role="alertdialog">
+                <WoowIcon name="'warning'" size="18"/>
+                <div class="o_woow_config_confirm__body">
+                    <p t-foreach="state.pendingConfirm" t-as="message" t-key="message_index" t-esc="message"/>
+                    <div class="o_woow_config_confirm__actions">
+                        <WoowButton variant="'secondary'" size="'sm'" onClick.bind="dismissConfirm">
+                            Back to editing
+                        </WoowButton>
+                        <WoowButton variant="'primary'" size="'sm'" onClick.bind="confirmSave">
+                            Confirm and save
+                        </WoowButton>
+                    </div>
+                </div>
+            </div>
+
             <!-- Upgrading Notice -->
             <div t-if="props.service.state === 'upgrading'" class="o_woow_upgrade_notice">
                 <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
@@ -72,6 +88,8 @@
                                         <t t-esc="spec.label || spec.key"/>
                                         <!-- #1561：只在開通時生效的設定，唯讀並說明原因。 -->
                                         <small t-if="isCreateOnlySpec(spec)" class="o_woow_config_create_only">Set when the service was created; it cannot be changed afterwards.</small>
+                                        <!-- INFRA-TS-004-1：條件下會被 chart 略過、卻存了值的欄位。 -->
+                                        <small t-if="ignoredWhenViewNote(spec)" class="o_woow_config_create_only"><t t-esc="ignoredWhenViewNote(spec)"/></small>
                                     </span>
                                     <span t-att-class="'o_woow_config_value' + (spec.type === 'password' ? ' o_woow_secret' : '')">
                                         <t t-esc="formatSpecValue(spec)"/>

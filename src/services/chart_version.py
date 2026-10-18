@@ -60,6 +60,18 @@ def chart_version_from_history(chart_field):
     return match.group(1) if match else None
 
 
+def reported_helm_revision(value):
+    """#1414：operator 回報的 helm revision ⇒ 可寫進帳本的正整數；不能用回 ``None``。
+
+    operator 舊版讀錯欄位（``info.revision``；helm 的版次在頂層 ``version``），install／
+    upgrade 一律回報 0。0、缺值、bool、非整數都代表「不知道」——呼叫端不得拿它覆蓋帳本
+    ``helm_revision``，改保留原值或另讀一次 release。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
 def _revision_number(revision):
     try:
         return int(revision.get('revision'))
@@ -89,19 +101,65 @@ def rollback_target_number(revisions, requested):
     return (max(numbers) - 1) if numbers else None
 
 
+def is_valid_rollback_revision(requested):
+    """回復目標必須是 ≥ 1 的整數（``bool`` 不算）。
+
+    AUDITFIX rollback-api-input-validation：``None``／0 **不再**是「上一版」。helm 把 0
+    解讀成上一版，誤送 0 會真的回復並重啟（INFRA-EMQX-013-1、AI-PI-004-4 把 pi 映像退回
+    舊版）；對話框一律送明確的 revision 號，API 也照同一個契約。
+    """
+    return isinstance(requested, int) and not isinstance(requested, bool) and requested >= 1
+
+
+def rollback_request_problem(revisions, requested):
+    """回復請求本身不成立時回問題代碼；可以送出回 ``None``（DATA-ODOO-010-1／AUDITFIX）。
+
+    - ``'invalid_revision'``：``requested`` 不是 ≥ 1 的整數（含 ``None``／0）。
+    - ``'not_found'``：明確的 revision 不在歷史裡（AI-LLM-007-2：原本交給 operator，租戶看到
+      helm 的英文原文「Revision 9999 not found in release history」）。
+    - ``'already_current'``：目標就是**目前已部署的最新** revision。helm 照樣會「回復」到自己
+      並產生新 revision、換掉 Pod（實測三個請求把一個沒變動的服務連續 helm 回復三次、Pod 重建
+      三次），沒有任何效果卻有中斷。最新 revision 不是 deployed（升級失敗）時不算——回復到前一個
+      deployed 版本是合法的修復動作。
+
+    歷史讀不到（空）時只驗型別（其餘回 ``None``），交給 operator 回 400。
+    """
+    if not is_valid_rollback_revision(requested):
+        return 'invalid_revision'
+    numbers = [n for r in revisions or [] if (n := _revision_number(r)) is not None]
+    if not numbers:
+        return None
+    if requested not in numbers:
+        return 'not_found'
+    latest = max(numbers)
+    latest_row = next(r for r in revisions if _revision_number(r) == latest)
+    if requested == latest and str(latest_row.get('status', '')).lower() == 'deployed':
+        return 'already_current'
+    return None
+
+
 def annotate_rollback_floor(revisions):
-    """替每個 revision 加上 ``chart_version`` 與 ``rollback_allowed``（對話框用）。
+    """替每個 revision 加上 ``chart_version``、``rollback_allowed`` 與 ``is_current``（對話框用）。
 
     回傳新的 list（不改呼叫端的物件）。部署中那一版本身標成可回復（它就是現況；前端
     另外以「目前版本」擋住）。
     """
     _number, current_version = rollback_baseline(revisions)
+    # #1414／#1456：「目前」＝部署中的那一版（最新的 deployed），由 history 決定。帳本
+    # `helm_revision` 在更新／回復後會落後，對話框原本拿它標「目前」⇒ 舊版被標成目前。
+    # 沒有任何 deployed 時不標（前端退回帳本值）。
+    deployed = [n for r in revisions or [] if isinstance(r, dict)
+                and str(r.get('status', '')).lower() == 'deployed'
+                and (n := _revision_number(r)) is not None]
+    current_number = max(deployed) if deployed else None
     annotated = []
     for revision in revisions or []:
         item = dict(revision) if isinstance(revision, dict) else {'revision': revision}
         version = chart_version_from_history(item.get('chart'))
         item['chart_version'] = version
         item['rollback_allowed'] = chart_version_not_lower(version, current_version)
+        item['is_current'] = (current_number is not None
+                              and _revision_number(item) == current_number)
         annotated.append(item)
     return annotated
 
@@ -126,3 +184,22 @@ def rollback_floor_violation(revisions, requested):
         'target_chart_version': target_version,
         'current_chart_version': current_version,
     }
+
+
+def drop_failed_revisions(revisions):
+    """回復版本清單不列 ``failed`` 的 revision（INFRA-FIX-018／INFRA-HS-002 觀察）。
+
+    helm 的失敗升級（含 ``--atomic`` 自動回滾那一筆）會留下狀態 ``failed`` 的 revision：它從來
+    沒有成功部署過，「回復」到它沒有意義，列在清單裡只會讓租戶選到一個不該選的版本。商用驗收
+    實測：Headscale 238 三次失敗的改密碼各留 2 筆，清單被 6 筆 failed 塞滿（rev 8～13），
+    helm 預設只留最近 10 筆，真正可回復的 rev 7 因此被擠出歷史。
+
+    只用在「給人選」的清單；判斷基準（``rollback_baseline``）與請求檢查
+    （``rollback_request_problem``）仍讀完整歷史，所以放在 ``annotate_rollback_floor`` **之後**
+    才過濾。回傳新的 list（不改呼叫端的物件）。
+    """
+    return [
+        revision for revision in revisions or []
+        if not (isinstance(revision, dict)
+                and str(revision.get('status', '')).lower() == 'failed')
+    ]

@@ -13,13 +13,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.config import settings
 from src.services.helm_limiter import helm_operation_slot
 from src.services.tenant_baseline import (
+    BASELINE_EGRESS_NP_NAME,
     PSA_EXEMPT_ANNOTATION,
     PSA_EXEMPT_REASON,
-    build_baseline_egress_netpol,
+    build_baseline_egress_netpols,
     build_cross_ns_ingress_pod_selector,
     build_pod_security_labels,
     is_psa_exempt,
     parse_namespace_list,
+    parse_port_list,
     psa_label_keys,
 )
 from src.models.schemas import (
@@ -60,24 +62,100 @@ _PVC_KEEP_POST_RENDERER = str(
 )
 
 
-def _pvc_keep_post_renderer_args(live_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
+def _pvc_keep_post_renderer_args(
+    live_snapshot: Optional[Dict[str, Any]] = None,
+    tenant: Optional[Dict[str, Any]] = None,
+    tenant_live: Optional[Dict[str, Any]] = None,
+) -> List[str]:
     """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade).
 
     #1407: ``live_snapshot`` (``pvc_keep_post_renderer.live_snapshot`` shape) is handed
     to the renderer as a second arg so objects that already exist render with the live
     values of their immutable fields (PVC storageClassName/accessModes/volumeMode/size,
     StatefulSet volumeClaimTemplates). Omitted when there is nothing live to reuse.
+
+    AI-FIX-NET-1: ``tenant`` (``_tenant_policy`` shape) switches on the egress gate /
+    node-avoidance stage of the same renderer; ``tenant_live`` is the mirror-live facts.
+    Both ride in the same JSON arg, so with the policy off the argv is byte-identical to
+    before.
     """
     args = [
         "--post-renderer", sys.executable,
         "--post-renderer-args", _PVC_KEEP_POST_RENDERER,
     ]
+    payload: Dict[str, Any] = {}
     if live_snapshot and (live_snapshot.get("pvc") or live_snapshot.get("sts")):
+        payload.update(live_snapshot)
+    if tenant:
+        payload["tenant"] = tenant
+        if tenant_live:
+            payload["tenant_live"] = tenant_live
+    if payload:
         args.extend([
             "--post-renderer-args",
-            json.dumps(live_snapshot, sort_keys=True, separators=(",", ":")),
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
         ])
     return args
+
+
+def _has_baseline_egress(namespace: str) -> bool:
+    """該 ns 是否真的有 ``paas-baseline-egress``（gate 等的就是它）；查不到一律 False。"""
+    try:
+        KubernetesService()._run_command([
+            "get", "networkpolicy", BASELINE_EGRESS_NP_NAME,
+            "--namespace", namespace, "--output", "name",
+        ])
+        return True
+    except Exception as e:  # noqa: BLE001 — NotFound 與查詢失敗都不插 gate
+        logger.info("no %s in %s (%s); egress gate not injected", BASELINE_EGRESS_NP_NAME, namespace, e)
+        return False
+
+
+def _tenant_policy(namespace: str, mirror_live: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """AI-FIX-NET-1：這個 ns 的 install／upgrade 要套的 render 期政策 ``(options, live_facts)``。
+
+    兩個開關都關、或 ns 不是租戶 ns、或在 PSA 例外清單（管理者用的 Omnigent）→ ``({}, {})``。
+    ``mirror_live``（reset-config 這類「不得改 pod template」的路徑）：只有叢集上已經有的項目
+    才套，避免一次密碼重設變成整個服務滾動重啟；讀不到叢集現況時整個略過（寧可不套）。
+    """
+    from src.tenant_workload_policy import immutable_live_facts, live_facts
+
+    raw_avoid = settings.tenant_avoid_nodes
+    avoid = parse_namespace_list(raw_avoid) if isinstance(raw_avoid, str) else []
+    # `is True`：只有明確的布林 True 才開（測試用的 mock settings、未設定都視為關）。
+    gate_on = (settings.tenant_egress_gate_enabled is True
+               and settings.tenant_baseline_egress_enabled is True)
+    if not avoid and not gate_on:
+        return {}, {}
+    if not namespace.startswith(settings.namespace_prefix):
+        return {}, {}
+    if is_psa_exempt(namespace, parse_namespace_list(settings.psa_exempt_namespaces)):
+        return {}, {}
+    options: Dict[str, Any] = {}
+    if avoid:
+        options["avoid_nodes"] = avoid
+    if gate_on and _has_baseline_egress(namespace):
+        options["egress_gate"] = {
+            "image": settings.tenant_egress_gate_image,
+            "timeout_seconds": settings.tenant_egress_gate_timeout_seconds,
+            "on_timeout": settings.tenant_egress_gate_on_timeout,
+            "target": settings.tenant_egress_gate_target,
+        }
+    if not options:
+        return {}, {}
+    # netpol-startup-window：非 hook Job／bare Pod 的 template 不可變——叢集上還沒有同名物件時
+    # （新安裝、Job 已被 TTL 清掉）才能套政策，所以每次都讀一次現況；讀不到＝不帶（renderer 不動它們）。
+    immutable_items = _live_objects(namespace, "jobs,pods")
+    if immutable_items is not None:
+        options["immutable_live"] = immutable_live_facts(immutable_items, avoid)
+    if not mirror_live:
+        return options, {}
+    items = _live_objects(namespace, "deployments,statefulsets,daemonsets,cronjobs")
+    if items is None:
+        logger.warning("tenant policy skipped for %s: live workloads unreadable (mirror mode)", namespace)
+        return {}, {}
+    options["mirror_live"] = True
+    return options, live_facts(items, avoid)
 
 
 def _openapi_validation_args() -> List[str]:
@@ -88,6 +166,16 @@ def _openapi_validation_args() -> List[str]:
     回到舊行為。
     """
     return ["--disable-openapi-validation"] if settings.helm_disable_openapi_validation else []
+
+
+def _history_max_args() -> List[str]:
+    """INFRA-FIX-018-1／AI-HER-003-1：upgrade／rollback 明確帶 ``--history-max``。
+
+    不帶就是 helm 預設 10，失敗與值不變的 upgrade 都佔名額，可回復的好版本很快被擠掉。
+    rollback 也要帶：它同樣寫一筆新 revision、並照**自己的**上限修剪。install 沒有這個
+    旗標（第一筆也沒有東西可修剪），不要加。值與取捨見 ``settings.helm_history_max``。
+    """
+    return ["--history-max", str(settings.helm_history_max)]
 
 
 def _live_objects(namespace: str, kinds: str = "pvc,statefulsets") -> Optional[List[Dict[str, Any]]]:
@@ -333,6 +421,26 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
         else:
             result[key] = value
     return result
+
+
+def _release_json_revision(data: Dict[str, Any]) -> int:
+    """#1414：`helm install|upgrade --output json` 的版次在**頂層 `version`**。
+
+    Helm 的 release 物件：`info` 只有 first_deployed／last_deployed／deleted／
+    description／status／notes，沒有 `revision`。原本讀 `info.revision` ⇒ 每次
+    install／upgrade 都回報 0，平台帳本 `helm_revision` 要等 poll／每日對帳才追上
+    （#1456）。`info.revision` 留作後備（舊測試替身的形狀）；讀不到正整數回 0，
+    語意是「不知道」，平台端不會拿 0 覆蓋帳本。
+    """
+    info = data.get("info") or {}
+    for candidate in (data.get("version"), info.get("revision")):
+        if isinstance(candidate, bool):
+            continue
+        if isinstance(candidate, int) and candidate > 0:
+            return candidate
+        if isinstance(candidate, str) and candidate.isdigit() and int(candidate) > 0:
+            return int(candidate)
+    return 0
 
 
 def _sanitize_release_values(values: Any) -> Any:
@@ -814,7 +922,8 @@ class HelmService:
         # #317: PVC-keep post-renderer — before ALL conditional flags.
         # #1407: a retried install can meet PVCs a failed attempt left behind
         # (keep-annotated, same names) — reuse their live immutable fields too.
-        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
+        tenant, tenant_live = _tenant_policy(namespace)
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace), tenant, tenant_live))
         args.extend(_openapi_validation_args())
 
         if create_namespace and not dry_run:
@@ -914,6 +1023,7 @@ class HelmService:
         subprocess_timeout_seconds: Optional[int] = None,
         dry_run: bool = False,
         description: Optional[str] = None,
+        tenant_policy_mirror: bool = False,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -938,6 +1048,9 @@ class HelmService:
                 (helm's own 5m default) ＝ pre-#461 behaviour.
             subprocess_timeout_seconds: Per-call subprocess ceiling. ``None`` keeps
                 ``settings.helm_timeout``.
+            tenant_policy_mirror: AI-FIX-NET-1 — render the tenant egress-gate / node-avoidance
+                policy only where the live workload already has it (reset-config and other
+                pod-template-neutral paths); the default adopts it, which restarts pods once.
 
         Returns:
             Updated release information
@@ -977,6 +1090,7 @@ class HelmService:
                 timeout_seconds=timeout_seconds,
                 subprocess_timeout_seconds=subprocess_timeout_seconds,
                 dry_run=dry_run, description=description,
+                tenant_policy_mirror=tenant_policy_mirror,
             )
 
     def _upgrade_locked(
@@ -997,6 +1111,7 @@ class HelmService:
         subprocess_timeout_seconds: Optional[int] = None,
         dry_run: bool = False,
         description: Optional[str] = None,
+        tenant_policy_mirror: bool = False,
     ) -> ReleaseInfo:
         """``upgrade`` 的本體；呼叫端已持有 helm 名額（#1552）。"""
         # Private OCI charts need `helm registry login` before pull (GA blocker
@@ -1017,8 +1132,11 @@ class HelmService:
         # branches) so every upgrade variant rewrites the stored manifest WITH
         # keep; otherwise the next uninstall would delete the PVC.
         # #1407: existing PVCs/StatefulSets render with their live immutable fields.
-        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
+        # AI-FIX-NET-1: egress gate / node avoidance (off unless the operator switches are on).
+        tenant, tenant_live = _tenant_policy(namespace, mirror_live=tenant_policy_mirror)
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace), tenant, tenant_live))
         args.extend(_openapi_validation_args())
+        args.extend(_history_max_args())
 
         if version:
             args.extend(["--version", version])
@@ -1121,6 +1239,7 @@ class HelmService:
 
         if revision is not None:
             args.append(str(revision))
+        args.extend(_history_max_args())
 
         with helm_operation_slot("rollback"):  # #1552
             result = self._run_command(args)
@@ -1143,19 +1262,30 @@ class HelmService:
         return project_values(values or {}, paths, excluded_paths)
 
     def get_values(
-        self, namespace: str, name: str, revision: Optional[int] = None
+        self,
+        namespace: str,
+        name: str,
+        revision: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
         """#1433: user-supplied values of a release revision (``helm get values``).
 
         Returns the **raw** values — including ``config.sensitive.*``. Callers must
         never log or return them; the preserving rollback only feeds them back into
         ``helm upgrade --values <tempfile>``. ``revision=None`` ＝ the current one.
+
+        ``timeout_seconds`` bounds the helm subprocess (``None`` keeps
+        ``settings.helm_timeout``). INFRA-FIX-018: reset-config passes its own small
+        budget so the #461 timeout ladder still holds.
         """
         validate_namespace(namespace)
         args = ["get", "values", name, "--namespace", namespace, "--output", "json"]
         if revision is not None:
             args.extend(["--revision", str(int(revision))])
-        result = self._run_command(args)
+        if timeout_seconds is None:
+            result = self._run_command(args)
+        else:
+            result = self._run_command(args, timeout=timeout_seconds)
         data = json.loads(result.stdout or "null")
         # helm prints `null` for a revision installed without any values.
         return data if isinstance(data, dict) else {}
@@ -1258,7 +1388,7 @@ class HelmService:
         return ReleaseInfo(
             name=data.get("name", ""),
             namespace=data.get("namespace", ""),
-            revision=info.get("revision", 0),
+            revision=_release_json_revision(data),
             status=ReleaseStatus(info.get("status", "unknown").lower()),
             chart=chart_metadata.get("name", ""),
             # #552: the resolved chart version sits right next to the name in the
@@ -1377,6 +1507,34 @@ def _pod_waiting(status: Dict[str, Any], limit: int) -> Optional[ContainerWaitin
             if first_generic is None:
                 first_generic = info
     return first_generic
+
+
+#: #1456：主要容器上一次結束的原因裡，最值得先報的那一個（記憶體不足要調方案或 limits，
+#: 與一般的程式錯誤處理方式不同）。
+_OOM_KILLED = "OOMKilled"
+
+
+def _pod_last_terminated_reason(status: Dict[str, Any]) -> Optional[str]:
+    """#1456：主要容器（``containerStatuses``）的 ``lastState.terminated.reason``。
+
+    任一容器是 ``OOMKilled`` 就回它；否則回第一個有值的 reason；都沒有回 None。init 容器
+    不看：它們跑完都是 ``Completed``，不是主要容器死掉的線索。形狀不對的元素略過，不讓
+    status 端點失敗。
+    """
+    first = None
+    for cs in status.get("containerStatuses") or []:
+        if not isinstance(cs, dict):
+            continue
+        last_state = cs.get("lastState")
+        terminated = last_state.get("terminated") if isinstance(last_state, dict) else None
+        reason = terminated.get("reason") if isinstance(terminated, dict) else None
+        if not reason or not isinstance(reason, str):
+            continue
+        if reason == _OOM_KILLED:
+            return reason
+        if first is None:
+            first = reason
+    return first
 
 
 def _replica_failure(status: Dict[str, Any], limit: int) -> Optional[WorkloadReplicaFailure]:
@@ -1839,6 +1997,9 @@ class KubernetesService:
                     ],
                     # #1417：卡住的容器（就緒的 Pod 自然沒有 waiting 容器）。
                     waiting=_pod_waiting(status, self.DIAGNOSTIC_TEXT_LIMIT),
+                    # #1456：上一次為什麼死掉（OOMKilled 優先）——平台判「跑著卻沒有
+                    # 一顆 Pod 就緒」時拿來說明原因。
+                    last_terminated_reason=_pod_last_terminated_reason(status),
                 )
             )
 
@@ -2240,6 +2401,10 @@ class KubernetesService:
            內容見 ``tenant_baseline.build_baseline_egress_netpol``。開關關著時**不刪**已
            存在的這條（關開關＝不再新增，不是回滾；回滾用 scripts/ws_lan_backfill.py
            --rollback）。
+           公網埠收斂（商用驗收 egress-all-ports-open）：``TENANT_BASELINE_EGRESS_BLOCKED_PORTS``
+           封掉指定埠；``TENANT_BASELINE_EGRESS_WEB_PROFILE`` 另加 ``paas-baseline-egress-web``
+           （帶 ``paas.woowtech.io/egress-profile=web`` 的 pod 只到公網 TCP 80/443），先 apply
+           web 再收窄一般 baseline。兩者預設關＝manifest 與之前逐字相同。
 
         Idempotent via ``kubectl apply``.
         """
@@ -2288,7 +2453,11 @@ class KubernetesService:
             pod_selector=cross_ns_targets,
         ))
         if settings.tenant_baseline_egress_enabled:
-            manifests.append(build_baseline_egress_netpol(namespace))
+            manifests.extend(build_baseline_egress_netpols(
+                namespace,
+                blocked_ports=parse_port_list(settings.tenant_baseline_egress_blocked_ports),
+                web_profile=bool(settings.tenant_baseline_egress_web_profile),
+            ))
         for manifest in manifests:
             self.apply_manifest(manifest)
 
@@ -3203,6 +3372,42 @@ class KubernetesService:
             return json.loads(result.stdout)
         finally:
             Path(manifest_file).unlink(missing_ok=True)
+
+    def apply_tenant_secret(self, namespace: str, release: str, data: Dict[str, str]) -> None:
+        """INFRA-FIX-019-1：寫 ``<release>-tenant-secret``（helm release 之外）。
+
+        server-side apply＋stdin：不留 last-applied annotation（明文副本）、不落暫存檔、
+        不上 argv。理由見 ``services/tenant_secret.py``。輸出只要名稱（``-o name``），
+        不把物件（含 data）讀回 operator 的記憶體或 log。
+        """
+        from src.services.tenant_secret import (
+            TENANT_SECRET_FIELD_MANAGER,
+            build_tenant_secret_manifest,
+        )
+
+        validate_namespace(namespace)
+        manifest = build_tenant_secret_manifest(namespace, release, data)
+        self._run_command(
+            [
+                "apply", "--server-side",
+                f"--field-manager={TENANT_SECRET_FIELD_MANAGER}",
+                "--force-conflicts",
+                "-f", "-",
+                "--output", "name",
+            ],
+            input_data=json.dumps(manifest),
+        )
+
+    def delete_tenant_secret(self, namespace: str, release: str) -> None:
+        """INFRA-FIX-019-1：刪 ``<release>-tenant-secret``（不存在不算錯）。"""
+        from src.services.tenant_secret import tenant_secret_name
+
+        validate_namespace(namespace)
+        self._run_command([
+            "delete", "secret", tenant_secret_name(release),
+            "--namespace", namespace,
+            "--ignore-not-found",
+        ])
 
     def delete_service(self, namespace: str, service_name: str) -> bool:
         """Delete a Kubernetes Service.

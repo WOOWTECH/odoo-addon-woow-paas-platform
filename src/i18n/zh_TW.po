@@ -66,6 +66,101 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s cannot be set to an empty (null) value."
+msgstr "「%(label)s」不能設為空值（null）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be a number."
+msgstr "「%(label)s」必須是數字。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"%(label)s must be a single line without line breaks or control characters."
+msgstr "「%(label)s」必須是單行文字，不能有換行或控制字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be a whole number."
+msgstr "「%(label)s」必須是整數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be at least %(min)s."
+msgstr "「%(label)s」不得小於 %(min)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be at most %(max)s."
+msgstr "「%(label)s」不得大於 %(max)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be on or off (true or false)."
+msgstr "「%(label)s」只能是開啟或關閉（true 或 false）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be one of: %(options)s."
+msgstr "「%(label)s」只能是下列其中一個：%(options)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "%(label)s must be text."
+msgstr "「%(label)s」必須是文字。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Back to editing"
+msgstr "返回修改"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+msgid "Confirm and save"
+msgstr "確認並儲存"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "No changes to apply."
+msgstr "設定沒有變更，不需要套用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"Reserved address: \"%(entry)s\" is not a host:port address such as "
+"1.tcp.ngrok.io:12345."
+msgstr "保留位址：「%(entry)s」不是「主機:埠」格式（例如 1.tcp.ngrok.io:12345）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"Reserved address: enter host:port only, without tcp:// (for example "
+"1.tcp.ngrok.io:12345 instead of \"%(entry)s\")."
+msgstr "保留位址：只填「主機:埠」，不要加 tcp://（例如填 1.tcp.ngrok.io:12345，而不是「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Unknown parameters: %(params)s"
+msgstr "不支援的參數：%(params)s"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
 "\"%(tpl)s\" cannot be provisioned right now: the platform has not pinned a "
@@ -114,6 +209,35 @@ msgid ""
 msgstr ""
 "「Admin Username Values Path」需要同時啟用「Built-in Admin GUI」與 Helm "
 "Secret 密碼載體（範本：%s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"\"Secret Change Restart Component\" must be a Kubernetes label value such as "
+"daemon (template: %s)."
+msgstr ""
+"「改金鑰後重啟的元件」必須是 Kubernetes label 值，例如 daemon（範本：%s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"\"Rollback Feature Switches\" must be a JSON object such as "
+"{\"mcp.enabled\": [\"image\"]} (template: %s)."
+msgstr ""
+"「回復版本保留的功能開關」必須是 JSON 物件，例如 "
+"{\"mcp.enabled\": [\"image\"]}（範本：%s）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__secret_change_restart_component
+msgid "Secret Change Restart Component"
+msgstr "改金鑰後重啟的元件"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__rollback_feature_switches
+msgid "Rollback Feature Switches"
+msgstr "回復版本保留的功能開關"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -175,6 +299,12 @@ msgstr ""
 "%(detail)s\n"
 "\n"
 "這個 migration 不搬動任何資料，因此這裡失敗代表升級過程中有某個步驟靜默失敗了。請先排除問題，再重跑升級。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "\"%(label)s\" is not applied when \"%(condition)s\" is \"%(choice)s\"; clear it before saving."
+msgstr "「%(label)s」在「%(condition)s」選「%(choice)s」時不會套用，請清空這一欄再儲存。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy_rule__cloud_service_id
@@ -596,6 +726,30 @@ msgid ""
 "                </div>\n"
 "            "
 msgstr ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p><t t-out=\"object.name\"/> 您好：</p>\n"
+"                    <p>\n"
+"                        您的訂閱\n"
+"                        <strong t-out=\"ctx.get('plan_name', '')\"/>\n"
+"                        （<t t-out=\"ctx.get('subscription_name', '')\"/>）\n"
+"                        因未付帳單\n"
+"                        <strong t-out=\"ctx.get('invoice_name', '')\"/>\n"
+"                        （<t t-out=\"ctx.get('amount_text', '')\"/>）連續\n"
+"                        <t t-out=\"ctx.get('failures', '')\"/> 次扣款失敗，已被<strong>自動取消</strong>。\n"
+"                    </p>\n"
+"                    <p>\n"
+"                        相關服務已暫停。您的資料會保留\n"
+"                        <strong><t t-out=\"ctx.get('preservation_months', 6)\"/> 個月</strong>；\n"
+"                        在這段期間內重新訂閱，可能可以接回原本的儲存空間。\n"
+"                    </p>\n"
+"                    <p>\n"
+"                        如要恢復服務，請到 Woow PaaS 應用市集重新訂閱。\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        如果這次取消不在您的預期之中，請與客服聯絡。\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
 
 #. module: woow_paas_platform
 #: model:mail.template,body_html:woow_paas_platform.mail_template_low_balance
@@ -631,6 +785,30 @@ msgid ""
 "                </div>\n"
 "            "
 msgstr ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p><t t-out=\"object.name\"/> 您好：</p>\n"
+"                    <p>\n"
+"                        您的訂閱帳單\n"
+"                        <strong t-out=\"ctx.get('invoice_name', '')\"/>\n"
+"                        （金額\n"
+"                        <strong t-out=\"ctx.get('amount_text', '')\"/>）\n"
+"                        因錢包餘額不足，無法完成扣款。\n"
+"                    </p>\n"
+"                    <p>目前錢包餘額：<strong t-out=\"ctx.get('balance_text', '')\"/></p>\n"
+"                    <p>\n"
+"                        請盡快為錢包儲值，以維持服務正常運作。\n"
+"                        服務在暫停前會有一段寬限期。\n"
+"                    </p>\n"
+"                    <p>\n"
+"                        <a t-att-href=\"ctx.get('topup_url', '#')\" style=\"display:inline-block;background:#6366f1;color:#ffffff;padding:10px 16px;text-decoration:none;border-radius:6px;font-weight:600;\">\n"
+"                            立即儲值\n"
+"                        </a>\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        感謝您使用 WoowTech PaaS。\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
@@ -1174,7 +1352,7 @@ msgstr "動作"
 #. module: woow_paas_platform
 #: model:mail.template,subject:woow_paas_platform.mail_template_low_balance
 msgid "Action needed: Please top up your wallet"
-msgstr ""
+msgstr "需要處理：請為錢包儲值"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1704,6 +1882,18 @@ msgstr "還沒有 API 金鑰。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "No free trial calls today yet."
 msgstr "今天還沒有免費試用呼叫紀錄。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/ignored_when.js:0
+msgid "Not applied when \"%(condition)s\" is \"%(choice)s\"; leave this field empty."
+msgstr "「%(condition)s」選「%(choice)s」時不會套用這一欄，請留空。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/ignored_when.js:0
+msgid "Not applied: \"%(condition)s\" is \"%(choice)s\"."
+msgstr "未套用：「%(condition)s」選了「%(choice)s」。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6059,32 +6249,44 @@ msgstr "請輸入工作區名稱以確認"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Enter this in the Dashboard REST API section of the MCP connection settings "
-"(username: admin, password: the Admin Password above). This is the service "
-"root URL, with no sub-path."
+"The address of this service's dashboard. If you use the Hermes MCP "
+"server, enter it in the Dashboard REST API section of that server's "
+"connection settings (username: admin, password: the Admin Password "
+"above). This is the service root URL, with no sub-path."
 msgstr ""
-"填進 MCP 連線設定的 Dashboard REST API 區（帳號 admin，密碼用上面的 Admin "
-"Password）。這是服務根網址，不帶任何子路徑。"
+"這是此服務 dashboard 的位址。若你使用 Hermes MC"
+"P 服務，請填進該服務連線設定的 Dashboard REST AP"
+"I 區（帳號 admin，密碼用上面的 Admin Password"
+"）。這是服務根網址，不帶任何子路徑。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Enter this in the Gateway API Server section of the MCP connection settings."
-msgstr "填進 MCP 連線設定的 Gateway API Server 區。"
+"The API key of this service's Gateway API. If you use the Hermes MCP "
+"server, enter it in the Gateway API Server section of that server's "
+"connection settings."
+msgstr ""
+"這是此服務 Gateway API 的金鑰。若你使用 Hermes "
+"MCP 服務，請填進該服務連線設定的 Gateway API Ser"
+"ver 區。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Enter this in the Gateway API Server section of the MCP connection settings. "
-"This is the full address including its sub-path; the service root URL on its "
-"own will not connect. This applies to this field only — the Dashboard API "
-"URL below is the opposite and needs the root URL with no sub-path."
+"The address of this service's Gateway API. If you use the Hermes MCP "
+"server, enter it in the Gateway API Server section of that server's "
+"connection settings. This is the full address including its sub-path; "
+"the service root URL on its own will not connect. This applies to "
+"this field only — the Dashboard API URL below is the opposite and "
+"needs the root URL with no sub-path."
 msgstr ""
-"填進 MCP 連線設定的 Gateway API Server 區。這是完整位址（含子路徑）；只填服務"
-"根網址會連不上。⚠ 僅限這一格——下面的 Dashboard API URL 相反，要填不帶子路徑的"
-"根網址。"
+"這是此服務 Gateway API 的位址。若你使用 Hermes "
+"MCP 服務，請填進該服務連線設定的 Gateway API Ser"
+"ver 區。這是完整位址（含子路徑）；只填服務根網址會連不上。⚠ 僅"
+"限這一格——下面的 Dashboard API URL 相反，要填不"
+"帶子路徑的根網址。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6273,9 +6475,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__failed
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__failed
 msgid "Failed"
-msgstr ""
+msgstr "失敗"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__account_move__woow_invoice_issue_state__failed
@@ -6579,6 +6784,30 @@ msgstr "載入任務失敗"
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
 msgid "Failed to load template"
 msgstr "載入應用範本失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Failed to load configuration"
+msgstr "載入設定失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+msgid "Loading configuration..."
+msgstr "正在載入設定..."
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+msgid "Unable to configure service"
+msgstr "無法設定服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+msgid "Only workspace owners and administrators can create services."
+msgstr "只有工作區擁有者與管理員可以建立服務。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7003,6 +7232,8 @@ msgstr "有禮品卡代碼嗎？兌換後點數會加入你的錢包餘額。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__ok
 msgid "Healthy"
 msgstr "健康"
 
@@ -7865,12 +8096,6 @@ msgstr "伺服器回應無效（%s），伺服器可能正在重新啟動。"
 #: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
 msgid "Invalid response from server."
 msgstr "伺服器回應無效。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "Invalid revision number"
-msgstr "revision 編號無效"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -10692,6 +10917,8 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__stale
 msgid "Overdue"
 msgstr "逾期"
 
@@ -10836,7 +11063,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:mail.template,name:woow_paas_platform.mail_template_low_balance
 msgid "PaaS: Low Wallet Balance Notification"
-msgstr ""
+msgstr "PaaS：錢包餘額不足通知"
 
 #. module: woow_paas_platform
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_low_balance_warning_ir_actions_server
@@ -10856,7 +11083,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:mail.template,name:woow_paas_platform.mail_template_subscription_cancelled
 msgid "PaaS: Subscription Auto-Cancelled (Repeated Payment Failures)"
-msgstr ""
+msgstr "PaaS：訂閱自動取消（連續扣款失敗）"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_access_resync_cron
@@ -11089,7 +11316,9 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#. odoo-javascript
 #: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 msgid "Permission denied"
 msgstr "權限不足"
 
@@ -12437,12 +12666,6 @@ msgid "Revision"
 msgstr "版本"
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "Revision must be a non-negative integer"
-msgstr "revision 必須是非負整數"
-
-#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Revisions are created when the service is deployed or updated."
@@ -12480,10 +12703,40 @@ msgid "Rollback failed: %(reason)s"
 msgstr "回復版本失敗：%(reason)s"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s cannot be restored. Refresh the version list and try "
+"again."
+msgstr "revision %(revision)s 目前無法回復，請重新整理版本列表後再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s was not found in this service's version history. "
+"Refresh the list and choose another revision."
+msgstr "這個服務的版本紀錄裡沒有 revision %(revision)s，請重新整理列表後選擇其他版本。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Choose the revision to roll back to (a whole number, 1 or higher)."
+msgstr "請選擇要回復到哪一個版本（revision 必須是 1 以上的整數）。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Rollback to Revision"
 msgstr "回復到此版本"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Revision %(revision)s is the version currently deployed; there is nothing to "
+"roll back."
+msgstr "Revision %(revision)s 就是目前部署中的版本，沒有需要回復的內容。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -12532,6 +12785,14 @@ msgstr "已更新"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
 msgid "Rolled back to revision %s"
 msgstr "已回復到版本 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid ""
+"Only the most recent %s revisions are kept (failed updates included); older "
+"revisions can no longer be restored."
+msgstr "只保留最近 %s 個版本（含更新失敗的版本），更早的版本已無法回復。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13275,8 +13536,8 @@ msgstr "Workload 異常"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_code
-msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647). Quota blocked: the namespace ResourceQuota rejected the pods. Create failed: the cluster rejected the pods for a reason other than the quota. No pods: the pods are missing and the cluster reported no reason. Cleared automatically once the pods are back or the service leaves running. It never changes the service state."
-msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有時設定（#1647）。配額擋下：namespace 的 ResourceQuota 拒絕建立 Pod。建立失敗：叢集因為配額以外的原因拒絕建立 Pod。沒有 Pod：Pod 不存在，而且叢集沒有回報原因。Pod 恢復或服務離開 running 後自動清除。不會改變服務狀態。"
+msgid "Set while the service is marked running but one of its workloads (Deployment or StatefulSet) wants at least one pod and has none (#1647), or has pods but none of them is ready (#1456). Quota blocked: the namespace ResourceQuota rejected the pods. Create failed: the cluster rejected the pods for a reason other than the quota. No pods: the pods are missing and the cluster reported no reason. OOM killed: no pod is ready and a container was last killed for running out of memory. Crash loop: no pod is ready and a container keeps crashing (CrashLoopBackOff). Not ready: the pods exist but none of them is ready, and the cluster reported no crash. Cleared automatically once the workloads are back to normal or the service leaves running. It never changes the service state."
+msgstr "服務標示為 running，但其中一個 workload（Deployment 或 StatefulSet）期望至少一個 Pod、實際一個都沒有（#1647），或 Pod 都在、卻沒有一個就緒（#1456）時設定。配額擋下：namespace 的 ResourceQuota 拒絕建立 Pod。建立失敗：叢集因為配額以外的原因拒絕建立 Pod。沒有 Pod：Pod 不存在，而且叢集沒有回報原因。記憶體不足：沒有任何 Pod 就緒，而且容器上一次因為記憶體用盡被終止。反覆崩潰：沒有任何 Pod 就緒，而且容器一直崩潰重啟（CrashLoopBackOff）。未就緒：Pod 都在、卻沒有一個就緒，叢集也沒有回報崩潰。workload 恢復正常或服務離開 running 後自動清除。不會改變服務狀態。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
@@ -13285,8 +13546,8 @@ msgstr "Workload 異常細節"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_detail
-msgid "Which workloads have no pods and what the cluster reported (for example the quota rejection message). Administrators only."
-msgstr "哪些 workload 沒有 Pod，以及叢集回報的內容（例如配額拒絕訊息）。僅系統管理員可見。"
+msgid "Which workloads have no pods or no ready pod and what the cluster reported (for example the quota rejection message or the last termination reason). Administrators only."
+msgstr "哪些 workload 沒有 Pod 或沒有任何就緒的 Pod，以及叢集回報的內容（例如配額拒絕訊息或上一次終止的原因）。僅系統管理員可見。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workload_fault_since
@@ -13334,9 +13595,24 @@ msgid "No pods"
 msgstr "沒有 Pod"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__oom_killed
+msgid "OOM killed"
+msgstr "記憶體不足"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__crash_loop
+msgid "Crash loop"
+msgstr "反覆崩潰"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__workload_fault_code__not_ready
+msgid "Not ready"
+msgstr "未就緒"
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
-msgid "<strong>This service is marked running, but a workload has no pods.</strong>"
-msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有。</strong>"
+msgid "<strong>This service is marked running, but a workload has no pods or none of its pods is ready.</strong>"
+msgstr "<strong>這個服務標示為 running，但有 workload 一個 Pod 都沒有，或沒有任何 Pod 就緒。</strong>"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13480,6 +13756,21 @@ msgid "The pods are missing and the cause is unknown: the cluster reported no Fa
 msgstr "Pod 不存在，原因不明：叢集沒有回報 FailedCreate condition，也沒有近期的 warning 事件。"
 
 #. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods exist but none of them is ready, and a container was last killed for running out of memory (OOMKilled): the memory limit is too small for the workload."
+msgstr "Pod 都在、卻沒有一個就緒，而且容器上一次因為記憶體用盡被終止（OOMKilled）：記憶體上限不夠這個 workload 用。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods exist but none of them is ready, and a container keeps crashing and restarting (CrashLoopBackOff): check the container logs."
+msgstr "Pod 都在、卻沒有一個就緒，而且容器一直崩潰重啟（CrashLoopBackOff）：請查看容器日誌。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "The pods exist but none of them is ready, and the cluster reported no crash: check the readiness probe and the container logs."
+msgstr "Pod 都在、卻沒有一個就緒，叢集也沒有回報崩潰：請檢查 readiness probe 與容器日誌。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_platform_monitor__workload_check_cursor
 msgid "Workload Check Cursor"
 msgstr "Workload 檢查游標"
@@ -13497,8 +13788,8 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
-msgid "These services are shown as running, but at least one of their workloads (Deployment or StatefulSet) wants pods and has none, so the service is actually down. The most common cause is the namespace ResourceQuota rejecting the pods (FailedCreate: exceeded quota). Check the quota of the namespace and the events of its ReplicaSets and StatefulSets. The platform clears the flag by itself once the pods are back. The service state has not been changed:"
-msgstr "下列服務顯示為 running，但至少有一個 workload（Deployment 或 StatefulSet）期望有 Pod、實際一個都沒有，服務實際上是中斷的。最常見的原因是 namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）。請檢查該 namespace 的配額，以及 ReplicaSet／StatefulSet 的事件。Pod 恢復後平台會自行清除旗標。服務狀態沒有被改動："
+msgid "These services are shown as running, but at least one of their workloads (Deployment or StatefulSet) wants pods and has none, or has pods but none of their pods is ready, so the service is actually down. With no pods, the most common cause is the namespace ResourceQuota rejecting the pods (FailedCreate: exceeded quota): check the quota of the namespace and the events of its ReplicaSets and StatefulSets. With pods that are not ready, check the container logs and the last termination reason (OOMKilled means the memory limit is too small). The platform clears the flag by itself once the workloads are back to normal. The service state has not been changed:"
+msgstr "下列服務顯示為 running，但至少有一個 workload（Deployment 或 StatefulSet）期望有 Pod、實際一個都沒有，或 Pod 都在、卻沒有一個就緒，服務實際上是中斷的。沒有 Pod 時，最常見的原因是 namespace 的 ResourceQuota 拒絕建立 Pod（FailedCreate: exceeded quota）：請檢查該 namespace 的配額，以及 ReplicaSet／StatefulSet 的事件。Pod 在但沒有就緒時，請查看容器日誌與上一次終止的原因（OOMKilled 表示記憶體上限太小）。workload 恢復正常後平台會自行清除旗標。服務狀態沒有被改動："
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13509,8 +13800,8 @@ msgstr "%(name)s（id=%(id)s，namespace %(ns)s，release %(release)s），自 %
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
-msgid "%(name)s (id=%(id)s): its workloads have pods again (had none since %(since)s UTC)"
-msgstr "%(name)s（id=%(id)s）：workload 已恢復有 Pod（自 %(since)s UTC 起一個都沒有）"
+msgid "%(name)s (id=%(id)s): its workloads are back to normal (faulty since %(since)s UTC)"
+msgstr "%(name)s（id=%(id)s）：workload 已恢復正常（自 %(since)s UTC 起異常）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13689,12 +13980,15 @@ msgstr "共用任務"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
-"Shared by the console and the dashboard (username: admin). Also enter it in "
-"the Dashboard REST API section of the MCP connection settings, together with "
-"the Dashboard API URL below."
+"Shared by the console and the dashboard (username: admin). If you "
+"also use the Hermes MCP server, enter it in the Dashboard REST API "
+"section of that server's connection settings, together with the "
+"Dashboard API URL below."
 msgstr ""
-"console 與 dashboard 共用這一組（帳號 admin）。也要填進 MCP 連線設定的 "
-"Dashboard REST API 區（搭配下方的 Dashboard API URL）。"
+"console 與 dashboard 共用這一組（帳號 admin"
+"）。若你也使用 Hermes MCP 服務，請填進該服務連線設定的 "
+"Dashboard REST API 區（搭配下方的 Dashboa"
+"rd API URL）。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
@@ -15572,10 +15866,13 @@ msgstr "這會移除通道設定與所有相關資料。此操作無法復原。
 msgid ""
 "Re-apply this product's current chart version to the service (in-place helm "
 "upgrade; data volumes are kept). If the release no longer exists, the service "
-"is installed again. Continue?"
+"is installed again. Each redeploy records a new revision even when nothing "
+"changed, and only the most recent revisions are kept for rollback (operator "
+"HELM_HISTORY_MAX, default 20). Continue?"
 msgstr ""
 "將此商品目前釘選的 chart 版本重新套用到這個服務（原地 helm upgrade，資料磁碟會保留）。"
-"若 release 已不存在，則重新安裝。確定要繼續？"
+"若 release 已不存在，則重新安裝。即使設定與版本都沒變，每次重新部署也會新增一個版本；"
+"回復只保留最近的幾個版本（operator 的 HELM_HISTORY_MAX，預設 20）。確定要繼續？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15688,6 +15985,14 @@ msgstr "立即儲值"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Top up your wallet"
 msgstr "為錢包儲值"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.js:0
+msgid ""
+"Insufficient balance. You need %(shortfall)s more to change to this plan "
+"(first payment %(required)s; available %(available)s including the refund)."
+msgstr "餘額不足：換成這個方案還需要 %(shortfall)s（首期應付 %(required)s；含退點可用 %(available)s）。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -16154,6 +16459,7 @@ msgstr "單價"
 #: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__unknown
 msgid "Unknown"
 msgstr "未知"
 
@@ -17267,7 +17573,7 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:mail.template,subject:woow_paas_platform.mail_template_subscription_cancelled
 msgid "[Woow PaaS] Your subscription has been cancelled"
-msgstr ""
+msgstr "[Woow PaaS] 您的訂閱已取消"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -21668,6 +21974,116 @@ msgid "[Woow PaaS] A service that never started will not be charged"
 msgstr "[Woow PaaS] 從未正常運作的服務不會扣款"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription has ended"
+msgstr "您的訂閱已結束"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription has been cancelled"
+msgstr "您的訂閱已取消"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription is active"
+msgstr "您的訂閱已啟用"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid "Your subscription has been renewed"
+msgstr "您的訂閱已續訂"
+
+#. module: woow_paas_platform
+#: model:mail.template,name:woow_paas_platform.mail_template_subscription_status
+msgid "PaaS: Subscription Status (Activated / Paid / Cancelled)"
+msgstr "PaaS：訂閱狀態通知（啟用／付款／取消）"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_subscription_status
+msgid ""
+"[Woow PaaS] {{ ctx.get('status_title') or object.name }} ({{ object.name }})"
+msgstr ""
+"[Woow PaaS] {{ ctx.get('status_title') or object.name }}（{{ object.name }}）"
+
+#. module: woow_paas_platform
+#: model:mail.template,body_html:woow_paas_platform.mail_template_subscription_status
+msgid ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p>Hi <t t-out=\"object.sh_partner_id.name\"/>,</p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and object.sh_renewed\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) has been renewed.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress'\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) is active.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'cancel'\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) has been cancelled.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state in ('close', 'expire', 'renewed')\">\n"
+"                        Your subscription <strong t-out=\"object.name\"/>\n"
+"                        (<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>) has ended.\n"
+"                    </p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and ctx.get('trial_end_date')\">\n"
+"                        Your free trial runs until <strong t-out=\"format_date(ctx.get('trial_end_date'))\"/>.\n"
+"                        The first charge is on <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>.\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress' and object.sh_date_of_next_payment\">\n"
+"                        Your next charge is on <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>.\n"
+"                        The subscription renews automatically until you cancel it.\n"
+"                    </p>\n"
+"                    <p t-if=\"ctx.get('has_invoice')\">\n"
+"                        The invoice for this payment is attached.\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        If you have any questions, please contact support. Thank you for using\n"
+"                        WoowTech PaaS.\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
+msgstr ""
+"<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n"
+"                    <p><t t-out=\"object.sh_partner_id.name\"/> 您好：</p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and object.sh_renewed\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已續訂。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress'\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已啟用。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'cancel'\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已取消。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state in ('close', 'expire', 'renewed')\">\n"
+"                        您的訂閱 <strong t-out=\"object.name\"/>\n"
+"                        （<t t-out=\"object.sh_subscription_plan_id.name or ''\"/>）已結束。\n"
+"                    </p>\n"
+"                    <p t-if=\"object.state == 'in_progress' and ctx.get('trial_end_date')\">\n"
+"                        免費試用到 <strong t-out=\"format_date(ctx.get('trial_end_date'))\"/> 為止，\n"
+"                        第一次扣款日是 <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>。\n"
+"                    </p>\n"
+"                    <p t-elif=\"object.state == 'in_progress' and object.sh_date_of_next_payment\">\n"
+"                        下次扣款日是 <strong t-out=\"format_date(object.sh_date_of_next_payment)\"/>。\n"
+"                        訂閱會自動續期，直到您取消為止。\n"
+"                    </p>\n"
+"                    <p t-if=\"ctx.get('has_invoice')\">\n"
+"                        本次付款的發票附在這封信中。\n"
+"                    </p>\n"
+"                    <p style=\"color:#6b7280;font-size:12px;\">\n"
+"                        如有任何問題，請與客服聯絡。感謝您使用 WoowTech PaaS。\n"
+"                    </p>\n"
+"                </div>\n"
+"            "
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Roll back to revision"
@@ -21817,6 +22233,32 @@ msgid "Omnigent administrator (operator exec)"
 msgstr "Omnigent 管理員（operator exec）"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__app_admin_reset_kind__emqx_exec
+msgid "EMQX Dashboard administrator (operator exec)"
+msgstr "EMQX 後台管理員（operator exec）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"The new password works right away; the service does not restart. Anyone signed in to the dashboard with the old password is signed out."
+msgstr "新密碼立即生效，服務不會重啟。用舊密碼登入後台的人會被登出。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+msgid ""
+"Reset Admin Password issues a new password that works right away. Anyone signed in to the dashboard with the old password is signed out."
+msgstr "重設管理員密碼會產生立即生效的新密碼，用舊密碼登入後台的人會被登出。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ResetAdminPasswordModal.xml:0
+msgid ""
+"The service does not restart. Anyone signed in to the dashboard with the current password is signed out."
+msgstr "服務不會重新啟動，用目前密碼登入後台的人會被登出。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
@@ -21902,6 +22344,7 @@ msgstr "方案沒有變更，也沒有扣款。服務仍以原本的設定執行
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 #: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/resource_observations.js:0
 msgid "CPU"
 msgstr "CPU"
 
@@ -22168,6 +22611,14 @@ msgstr "服務的 chart 版本由平台管理：%(fields)s"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The product of a cloud service is fixed when it is created and cannot be "
+"changed."
+msgstr "雲端服務的產品在開通時就已決定，之後無法更換。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid ""
 "Revision %(revision)s uses chart version %(target)s, which is older than "
@@ -22225,6 +22676,72 @@ msgstr "ngrok 需要已驗證的帳號與 authtoken（ERR_NGROK_4018）。請完
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "The ngrok agent could not connect (%(code)s, see https://ngrok.com/docs/errors/%(slug)s). Check the ngrok authtoken and domain in Configuration."
 msgstr "ngrok agent 無法連線（%(code)s，說明見 https://ngrok.com/docs/errors/%(slug)s）。請檢查「配置」裡的 ngrok authtoken 與網域。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Your ngrok account plan does not allow a feature this service uses (ERR_NGROK_9014) — usually the PROXY protocol that passes the real client address. The authtoken itself is fine. Upgrade the ngrok account to a paid plan (Pay-as-you-go), or turn off the PROXY protocol option in Configuration if this service offers one."
+msgstr "你的 ngrok 帳號方案不允許本服務使用的功能（ERR_NGROK_9014），通常是用來傳遞真實來源位址的 PROXY protocol；authtoken 本身沒有問題。請把 ngrok 帳號升級為付費方案（Pay-as-you-go），或在「配置」關閉 PROXY protocol 選項（如果此服務有提供）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Last checked: %s"
+msgstr "最後檢查：%s"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_recheck_public_tunnels_ir_actions_server
+msgid "Cloud Service: Re-check Public Tunnel Address"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_checked_at
+msgid "Public Tunnel Last Checked"
+msgstr "對外位址最後檢查時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_checked_at
+msgid ""
+"Last time the platform asked the ngrok sidecar for the public address and "
+"got an answer (an address, or none with or without a reason), in UTC."
+msgstr "平台最後一次向 ngrok sidecar 讀取對外位址並得到結果（有位址，或確定沒有、不論有無原因）的時間（UTC）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_recheck_until
+msgid "Re-check Public Tunnel Until"
+msgstr "對外位址重新檢查至"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_recheck_until
+msgid ""
+"Until when the platform re-reads the public tunnel address every minute "
+"after the service (re)entered the running state, in UTC."
+msgstr "服務（重新）進入執行中之後，平台每分鐘重新讀取對外位址的截止時間（UTC）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_address_note
+msgid "Public Tunnel Address Note"
+msgstr "對外位址提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_address_note
+msgid ""
+"Shown under the public tunnel address when there is one, e.g. a plain-text "
+"transport warning. A data value written in the seed as-is (not translated)."
+msgstr "有對外位址時顯示在位址下方的提示，例如明文傳輸警告。是 seed 直接寫入的資料值（不翻譯）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_error_note
+msgid "Public Tunnel Error Note"
+msgstr "對外位址錯誤提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_error_note
+msgid ""
+"Shown under the reason when the public tunnel has no address, e.g. what the "
+"service falls back to meanwhile. A data value written in the seed as-is (not"
+" translated)."
+msgstr "對外位址沒有取得、顯示原因時接在原因下方的提示，例如服務在這段期間改用什麼。是 seed 直接寫入的資料值（不翻譯）。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_error
@@ -24246,3 +24763,569 @@ msgstr "AI 帳戶憑證驗證失敗（密文不符）"
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__llm_account_error
 msgid "AI account error"
 msgstr "AI 帳戶異常"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Not connected"
+msgstr "未連線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Waiting for approval"
+msgstr "等待核可"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Starting"
+msgstr "啟動中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Unavailable"
+msgstr "無法取得"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node is running, but its control server shows it as offline. It reconnects on its own; if it stays offline for several minutes, restart the service."
+msgstr "節點在執行，但控制伺服器顯示它離線。它會自己重新連線；若離線超過數分鐘，請重新啟動服務。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The service is running, but this node is no longer logged in to its control server (its key expired or the node was removed there), so nothing is reachable through the VPN until it logs in again."
+msgstr "服務在執行，但這台節點已不在控制伺服器上登入（金鑰到期，或節點在控制台被移除），重新登入前無法透過 VPN 連到任何東西。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The control server is waiting for an administrator to approve this machine before it joins the VPN."
+msgstr "控制伺服器正在等管理員核可這台機器，核可後才會加入 VPN。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node is starting or logging in. This normally takes less than a minute."
+msgstr "節點正在啟動或登入，通常不到一分鐘。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node is stopped."
+msgstr "節點已停止。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The node status cannot be read right now (the service is starting or restarting). It is re-checked automatically."
+msgstr "目前讀不到節點狀態（服務正在啟動或重新啟動），系統會自動重新檢查。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Ask a workspace owner or admin to log this node in again."
+msgstr "請工作區的擁有者或管理員重新登入這台節點。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "To log it in again: create a new pre-auth key in Headplane of this workspace's Headscale, paste it into Configuration > Auth key, and save."
+msgstr "重新登入的方法：到這個工作區 Headscale 的 Headplane 建立新的 pre-auth key，貼到「配置 > Auth key」後儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "To log it in again: create a new pre-auth key on your control server, paste it into Configuration > Auth key, and save."
+msgstr "重新登入的方法：在你的控制伺服器建立新的 pre-auth key，貼到「配置 > Auth key」後儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "To log it in again: create a new auth key in your Tailscale admin console, paste it into Configuration > Auth key, and save."
+msgstr "重新登入的方法：到 Tailscale 管理後台建立新的 auth key，貼到「配置 > Auth key」後儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Or open the login page"
+msgstr "或開啟登入頁面"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The login page of a workspace Headscale uses an internal address that a browser cannot open, so use a pre-auth key."
+msgstr "工作區 Headscale 的登入頁使用內部位址，瀏覽器打不開，請改用 pre-auth key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Registration code waiting for approval on the control server"
+msgstr "控制伺服器上等待核可的註冊碼"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Not active yet"
+msgstr "尚未生效"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Service not found in this workspace"
+msgstr "這個工作區找不到該服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "A different target is active"
+msgstr "生效的是不同的目標"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Active (target not verified)"
+msgstr "生效中（無法確認目標是否存在）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Wrong format. Use tailnet-port=service:port"
+msgstr "格式不正確，請用「tailnet 埠=服務名稱:埠」"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Ports must be between 1 and 65535"
+msgstr "埠必須介於 1 到 65535"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Only Services of this workspace are allowed (no IP addresses, external names or other workspaces)"
+msgstr "只接受這個工作區的服務（不接受 IP、外部名稱或其他工作區）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Not a valid Service name"
+msgstr "不是合法的服務名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "This tailnet port is already used by an earlier entry"
+msgstr "這個 tailnet 埠已被前面的項目使用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "At most 32 forwards are allowed"
+msgstr "最多 32 筆轉發"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "The whole list is ignored: the node cannot tell which workspace it belongs to"
+msgstr "整份清單被忽略：節點無法得知自己屬於哪個工作區"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Skipped by the node"
+msgstr "被節點略過"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "VPN node status"
+msgstr "VPN 節點狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Node"
+msgstr "節點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Tailnet address"
+msgstr "Tailnet 位址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Forwards"
+msgstr "轉發"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "No forwards are configured."
+msgstr "尚未設定轉發。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Reading the node status..."
+msgstr "正在讀取節點狀態…"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" is not in the format tailnet-port=service:port (example: 8069=svc-1a2b3c4d:80)."
+msgstr "轉發清單：「%(entry)s」格式不對，應為「tailnet 埠=服務名稱:埠」（例如 8069=svc-1a2b3c4d:80）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" has a port outside 1-65535."
+msgstr "轉發清單：「%(entry)s」的埠超出 1–65535。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" is not a service of this workspace. Only services of this workspace are allowed (no IP addresses, external names or other workspaces)."
+msgstr "轉發清單：「%(entry)s」不是這個工作區的服務。只接受同一工作區的服務（不能用 IP、外部網址或其他工作區）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: \"%(entry)s\" does not name a service."
+msgstr "轉發清單：「%(entry)s」不是有效的服務名稱。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: tailnet port %(port)s is used more than once (\"%(entry)s\")."
+msgstr "轉發清單：tailnet 埠 %(port)s 重複使用（「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Forwards: at most %(max)s entries."
+msgstr "轉發清單：最多 %(max)s 筆。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Control server: required when the control plane is \"Custom URL\"."
+msgstr "控制伺服器：控制平面選「自訂網址」時必填。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Control server: \"%(entry)s\" is not a valid URL; use https://headscale.example.com or http://host:port."
+msgstr "控制伺服器：「%(entry)s」不是有效的網址，請填 https://headscale.example.com 或 http://主機:埠。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Auth key: the key contains a space or line break; paste it again as one line."
+msgstr "Auth key：key 裡有空白或換行，請重新貼上成一行。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Auth key: the control plane is official Tailscale, so the key must be a Tailscale key starting with tskey-. A Headscale pre-auth key only works with \"Same workspace Headscale\" or \"Custom URL\"."
+msgstr "Auth key：控制平面是官方 Tailscale，key 必須是 tskey- 開頭的 Tailscale key。Headscale 的 pre-auth key 只能搭配「同工作區 Headscale」或「自訂網址」。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Auth key: a tskey- key only works with official Tailscale. For a Headscale control plane, create a pre-auth key in Headplane and paste that instead."
+msgstr "Auth key：tskey- 開頭的 key 只能用在官方 Tailscale。控制平面是 Headscale 時，請在 Headplane 建立 pre-auth key 再貼上。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" is not in the format tailnet-port=service:port (example: 8069=svc-1a2b3c4d:80)."
+msgstr "「%s」格式不對，應為「tailnet 埠=服務名稱:埠」（例如 8069=svc-1a2b3c4d:80）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" has a port outside 1-65535."
+msgstr "「%s」的埠超出 1–65535。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" is not a service of this workspace (no IP addresses, external names or other workspaces)."
+msgstr "「%s」不是這個工作區的服務（不能用 IP、外部網址或其他工作區）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "\"%s\" does not name a service."
+msgstr "「%s」不是有效的服務名稱。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Tailnet port %s is used more than once."
+msgstr "tailnet 埠 %s 重複使用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "At most %s forwards are allowed."
+msgstr "最多 %s 筆轉發。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Required when the control plane is \"Custom URL\"."
+msgstr "控制平面選「自訂網址」時必填。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Not a valid URL; use https://headscale.example.com or http://host:port."
+msgstr "不是有效的網址，請填 https://headscale.example.com 或 http://主機:埠。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "The key contains a space or line break; paste it again as one line."
+msgstr "key 裡有空白或換行，請重新貼上成一行。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "Official Tailscale needs a key starting with tskey-. A Headscale pre-auth key only works with a Headscale control plane."
+msgstr "官方 Tailscale 要用 tskey- 開頭的 key；Headscale 的 pre-auth key 只能搭配 Headscale 控制平面。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/tailscale_settings.js:0
+msgid "A tskey- key only works with official Tailscale. Create a pre-auth key in Headplane instead."
+msgstr "tskey- 開頭的 key 只能用在官方 Tailscale，請改在 Headplane 建立 pre-auth key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the auth key has expired. Create a new key and save it in Configuration > Auth key."
+msgstr "上一次登入失敗：auth key 已過期。請建立新的 key，貼到「配置 > Auth key」並儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the auth key was already used (single-use key). Create a new key, or a reusable one."
+msgstr "上一次登入失敗：auth key 已經用過（一次性 key）。請建立新的 key，或改用可重複使用的 key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the control server rejected the auth key (unknown key, or a key for another control server or user)."
+msgstr "上一次登入失敗：控制伺服器不接受這把 auth key（key 不存在，或屬於其他控制伺服器／使用者）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed: the node could not reach its control server. Check the control plane setting, and that the server is running."
+msgstr "上一次登入失敗：節點連不到控制伺服器。請檢查控制平面設定，以及控制伺服器是否在執行中。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "Last login attempt failed. Check the control plane setting and the auth key."
+msgstr "上一次登入失敗。請檢查控制平面設定與 auth key。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
+msgid "This node is already logged in, so the auth key in Configuration is not used. It is only used when the node needs to log in again; you can clear it."
+msgstr "這台節點已經登入，配置裡的 auth key 不會被使用（只在節點需要重新登入時才會用），可以清空。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Backups"
+msgstr "備份"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Paused"
+msgstr "已暫停"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Not checked yet"
+msgstr "尚未檢查"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Last successful backup"
+msgstr "最近一次成功備份"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Last failed backup"
+msgstr "最近一次備份失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "None yet"
+msgstr "尚無"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup storage is full."
+msgstr "備份空間已滿。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The database could not be reached during the backup."
+msgstr "備份時無法連上資料庫。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Another backup or restore was still running."
+msgstr "當時另一個備份或還原仍在進行中。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup ran out of memory."
+msgstr "備份時記憶體不足。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup took too long and was stopped."
+msgstr "備份執行過久，已被中止。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "The backup could not be completed."
+msgstr "備份未能完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "No backups are taken while the service is suspended."
+msgstr "服務停權期間不會進行備份。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Your service keeps running and earlier backups are kept. Our team has been notified and will fix it; contact support if you need help."
+msgstr "服務仍正常運作，先前的備份也都保留。我們已收到通知並會處理；如需協助請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "No successful backup in the last day. Our team has been notified."
+msgstr "最近一天沒有成功的備份，我們已收到通知。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "A backup is taken automatically every day. Contact support to restore data from a backup."
+msgstr "系統每天自動備份。需要從備份還原資料時請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Backup failed"
+msgstr "備份失敗"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "The latest backup of %(name)s in workspace %(workspace)s failed. We have been notified; your service keeps running."
+msgstr "工作區 %(workspace)s 的 %(name)s 最近一次備份失敗。我們已收到通知；服務仍正常運作。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "No recent backup"
+msgstr "近期沒有成功備份"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(name)s in workspace %(workspace)s has had no successful backup for more than %(hours)s hours."
+msgstr "工作區 %(workspace)s 的 %(name)s 已超過 %(hours)s 小時沒有成功的備份。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_health
+msgid "Backup Health"
+msgstr "備份狀態"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__last_backup_success_at
+msgid "Last Successful Backup"
+msgstr "最近一次成功備份"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__last_backup_failure_at
+msgid "Last Failed Backup"
+msgstr "最近一次失敗備份"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_failure_reason
+msgid "Backup Failure Reason"
+msgstr "備份失敗原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_consecutive_failures
+msgid "Consecutive Backup Failures"
+msgstr "連續備份失敗次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__backup_failure_alerted_at
+msgid "Backup Failure Alerted At"
+msgstr "備份失敗通知時間"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
+msgid "Your password must be at least %(min)s characters long."
+msgstr "密碼至少需要 %(min)s 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
+msgid "This password is too easy to guess. Please choose a different one."
+msgstr "這個密碼太容易被猜到，請換一個。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_users_password_policy.py:0
+msgid "Your password must not be the same as your login or email."
+msgstr "密碼不可與登入帳號或電郵相同。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/auth_hardening.py:0
+msgid "Please enter your login email."
+msgstr "請輸入登入用的電郵。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/auth_hardening.py:0
+msgid ""
+"If an account exists for this login, password reset instructions will be "
+"sent to its email address."
+msgstr "若此帳號存在，我們會把重設密碼說明寄到該帳號的電郵。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/auth_hardening.py:0
+msgid "Suspicious activity detected by Google reCaptcha."
+msgstr "Google reCaptcha 檢測到的可疑活動."

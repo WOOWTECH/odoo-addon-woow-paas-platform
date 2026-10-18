@@ -34,8 +34,11 @@ from src.models.schemas import (
     RouteUnparkRequest,
     SidecarPatchRequest,
     SidecarPatchResponse,
+    VpnNodeStatusResponse,
 )
+from src.services import backup_status as backup_status_service
 from src.services import compute_quota
+from src.services import vpn_node_status
 from src.services.cloudflare import (
     REFUSED_FOREIGN,
     REFUSED_MULTIPLE_TARGETS,
@@ -52,8 +55,9 @@ from src.services.helm import (
     KubectlException,
     KubernetesService,
 )
-from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values
+from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_release_values, validate_label_value
 from src.services.helm_limiter import helm_operation_slot
+from src.services.tenant_secret import validate_tenant_secret
 from src.services.ngrok_errors import describe_ngrok_error
 from src.services.upgrade_preflight import (
     build_expansion_error_detail,
@@ -115,6 +119,12 @@ RESET_EXEC_TIMEOUT_SECONDS = 12
 RESET_CLEANUP_EXEC_TIMEOUT_SECONDS = 5
 # Deployment 探索 ＋ rollout restart 下達（各 ~1s 的 kubectl 呼叫）。
 RESET_KUBECTL_SLACK_SECONDS = 3
+# INFRA-FIX-018：helm_secret 路在 upgrade 前讀一次叢集目前的 values（`helm get values`，
+# 純讀、通常 <1s）。這段**不新增**預算：helm_secret 路沒有 config.json exec（
+# RESET_EXEC_TIMEOUT_SECONDS）也沒有備份清理（RESET_CLEANUP_EXEC_TIMEOUT_SECONDS），這 17s
+# 在 RESET_HARD_CAP_SECONDS 裡本來就是空的；config_json 路不讀（忽略 preserve_value_paths）。
+# 所以階梯不變，由 test_reset_pod_template_neutral_infra_fix_018 釘住「借用」的算式。
+RESET_LIVE_VALUES_TIMEOUT_SECONDS = 5
 # #1552：等 helm 名額（helm_limiter）最多幾秒。reset 有自己的階梯，不能用一般的
 # HELM_QUEUE_TIMEOUT_SECONDS（45s）：排隊 45s 再跑完整個 reset 會超過平台的 75s，
 # 平台先斷線、operator 之後才換掉密碼＝租戶不知道的新密碼。排不到就 503、什麼都沒動。
@@ -211,6 +221,39 @@ def _with_default_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, An
         "imagePullSecrets", [{"name": settings.registry_secret_name}]
     )
     return merged
+
+
+def _write_tenant_secret(namespace: str, name: str, data: Optional[Dict[str, str]]) -> None:
+    """INFRA-FIX-019-1：helm 之前寫 ``<name>-tenant-secret``（``data`` 為 None＝平台沒送，什麼都不做）。
+
+    寫失敗 ⇒ 500、helm 不跑：chart 的 ``tenantSecret.revision`` 已經換了，讓 pod 帶著舊
+    token 重啟沒有意義，而且租戶看不到任何錯誤。訊息不帶任何值（kubectl 的 stderr 只進
+    operator log）。
+    """
+    if data is None:
+        return
+    try:
+        k8s_service.apply_tenant_secret(namespace, name, data)
+    except KubectlException as e:
+        logger.error(
+            "INFRA-FIX-019-1: writing the tenant Secret of %s/%s failed: %s",
+            namespace, name, e.stderr,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to write the service's credential Secret; nothing was changed. "
+            "Check operator logs for details.",
+        )
+
+
+def _tenant_secret_data(name: str, spec) -> Optional[Dict[str, str]]:
+    """INFRA-FIX-019-1：驗 ``tenant_secret``（不合格 ⇒ 400、訊息不含任何值）；沒帶回 None。"""
+    if spec is None:
+        return None
+    try:
+        return validate_tenant_secret(name, spec)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 def _storage_quota_summary(namespace: str) -> Optional[Dict[str, Any]]:
@@ -460,6 +503,8 @@ def _install_release_blocking(request: ReleaseCreateRequest) -> ReleaseInfo:
     #1552：整段佔**一個** helm 名額——容量預檢的 ``helm install --dry-run`` 與真正的
     install 不會各排一次隊（排到一半才被拒＝預檢白做）。
     """
+    # INFRA-FIX-019-1：先驗形狀（400，任何寫入之前）。
+    tenant_data = _tenant_secret_data(request.name, request.tenant_secret)
     with helm_operation_slot("install"):
         # #1157：同名 release 的孤兒資源還在就拒絕（helm 會靜默接回、回收 CronJob 之後
         # 會刪掉活站資料）——放最前面：它是確定性的拒絕，不必先跑容量預檢的 dry-run。
@@ -471,6 +516,9 @@ def _install_release_blocking(request: ReleaseCreateRequest) -> ReleaseInfo:
         # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
         # _ensure_image_pull_secrets docstring）。
         values = _ensure_image_pull_secrets(request.namespace, request.values)
+        # INFRA-FIX-019-1：租戶憑證寫進 release 之外的 Secret（chart 只引用名稱），
+        # 必須在 helm 之前——pod 一起來就要讀得到。
+        _write_tenant_secret(request.namespace, request.name, tenant_data)
         return helm_service.install(
             namespace=request.namespace,
             name=request.name,
@@ -628,10 +676,15 @@ def upgrade_release(
         # 物件比對不可變欄位；有衝突就在這裡擋下（409，什麼都還沒套用）。
         # #1552：預檢＋真正 upgrade 共用**一個** helm 名額——通過預檢的請求不會在
         # 第二段又排一次隊（排不到就變成「預檢過了、卻沒套用」）。
+        # INFRA-FIX-019-1：先驗形狀（400，任何寫入之前）。
+        tenant_data = _tenant_secret_data(name, request.tenant_secret)
         with helm_operation_slot("upgrade"):
             # #1647：`check_compute_quota` 是預檢的參數，不進 `upgrade_kwargs`（那個 dict 會
             # 原樣展開給 helm）。
             _upgrade_preflight(upgrade_kwargs, check_compute_quota=request.check_compute_quota)
+            # INFRA-FIX-019-1：預檢通過才寫（409 時什麼都沒變）；helm 之前寫，新 revision 的
+            # pod 一起來就讀得到。helm 失敗時 Secret 已是新值——與平台 DB 一致，下次重送收斂。
+            _write_tenant_secret(namespace, name, tenant_data)
             release = helm_service.upgrade(**upgrade_kwargs)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
@@ -991,6 +1044,16 @@ async def delete_release(
         result = await asyncio.to_thread(helm_service.uninstall, namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
 
+        # INFRA-FIX-019-1：租戶憑證 Secret 不屬於 release，helm uninstall 不會刪它。
+        # 失敗只記 log：服務已刪，留下的 Secret 下次同名開通會被覆寫。
+        try:
+            await asyncio.to_thread(k8s_service.delete_tenant_secret, namespace, name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "INFRA-FIX-019-1: could not delete the tenant Secret of %s/%s: %s",
+                namespace, name, getattr(e, "stderr", e),
+            )
+
         # Label orphaned PVCs for deferred cleanup — scoped to THIS release's own
         # PVCs (#281). A per-workspace ns is shared by multiple services; an
         # unscoped list would stamp orphaned-at on other live services' data PVCs
@@ -1163,7 +1226,7 @@ def rollback_release(
     Raises:
         HTTPException: If rollback fails
     """
-    if request.preserve_value_paths:
+    if request.preserve_value_paths or request.preserve_when_equal:
         return _rollback_preserving_values(namespace, name, request)
 
     try:
@@ -1327,14 +1390,24 @@ def _baseline_revision(history) -> int:
 
 
 def _resolve_rollback_target(history, requested: Optional[int], name: str) -> int:
-    """回復的目標 revision（``None``／0＝上一版），並驗證它在歷史裡、不是目前那一版。"""
+    """回復的目標 revision（不帶＝上一版），並驗證它在歷史裡、不是目前那一版。
+
+    AUDITFIX rollback-api-input-validation：明確送 0（或負數）一律 400。helm 把 0 解讀成
+    「上一版」，原本 ``requested or (current - 1)`` 也照這樣解 ⇒ 平台誤送 0 會真的回復並重啟
+    （INFRA-EMQX-013-1）。平台已改成只送 ≥ 1 的明確號碼，這裡是第二道。
+    """
+    if requested is not None and requested < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Revision must be a positive integer",
+        )
     if not history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Release {name} has no revision history",
         )
     current_revision = max(rev.revision for rev in history)
-    target_revision = requested or (current_revision - 1)
+    target_revision = requested if requested is not None else (current_revision - 1)
     known = {rev.revision for rev in history}
     if target_revision < 1 or target_revision not in known:
         raise HTTPException(
@@ -1456,6 +1529,37 @@ def overlay_preserved_paths(
     return merged
 
 
+def overlay_preserved_when_equal(
+    target_values: Dict[str, Any],
+    current_values: Dict[str, Any],
+    guarded_paths: Dict[str, List[str]],
+) -> Tuple[Dict[str, Any], List[str], List[str]]:
+    """AI-OD-006-1：平台功能開關（``mcp.enabled`` 等）在守衛路徑相同時維持目前狀態。
+
+    回傳 ``(merged, preserved, reverted)``，純函式、不改呼叫端的物件。
+
+    開關與 image 是一組：open-design 的 ``mcp.enabled`` 必須搭配帶 MCP runtime
+    （``/opt/woow``）的 image，否則 sidecar CrashLoop、整個 pod 不 Ready。所以只有守衛
+    路徑（例如 ``image``）在目標與目前**完全相同**時才保留目前的開關（含「不存在」）；
+    守衛不同時開關跟著目標 revision 回復（與當時的 image 一致，結果與舊行為相同）。
+    守衛清單為空＝無條件保留。
+    """
+    merged = overlay_preserved_paths(target_values, current_values, [])
+    preserved: List[str] = []
+    reverted: List[str] = []
+    for path, guards in guarded_paths.items():
+        same = all(
+            _get_path(target_values or {}, guard) == _get_path(current_values or {}, guard)
+            for guard in guards
+        )
+        if same:
+            merged = overlay_preserved_paths(merged, current_values, [path])
+            preserved.append(path)
+        else:
+            reverted.append(path)
+    return merged, preserved, reverted
+
+
 def _rollback_preserving_values(
     namespace: str,
     name: str,
@@ -1515,6 +1619,14 @@ def _rollback_preserving_values(
         merged_values = overlay_preserved_paths(
             target_values, current_values, request.preserve_value_paths,
         )
+        # AI-OD-006-1：範本宣告的平台功能開關（守衛＝image 等）。守衛比對用兩份**原始**
+        # values（不受上面憑證 overlay 影響），再把判定要保留的開關蓋到 merged 上。
+        _, features_preserved, features_reverted = overlay_preserved_when_equal(
+            target_values, current_values, request.preserve_when_equal,
+        )
+        merged_values = overlay_preserved_paths(
+            merged_values, current_values, features_preserved,
+        )
 
         upgrade_kwargs = dict(
             namespace=namespace,
@@ -1534,18 +1646,22 @@ def _rollback_preserving_values(
         )
         logger.info(
             "Rolled back release %s in %s to revision %s via upgrade "
-            "(preserved %d value path(s))",
+            "(preserved %d value path(s); feature switches kept %s, reverted %s)",
             name, namespace, target_revision, len(request.preserve_value_paths),
+            features_preserved, features_reverted,
         )
         return {
             "message": f"Rolled back to revision {target_revision} (credentials preserved)",
             "mode": "upgrade_preserving",
             "target_revision": target_revision,
-            # `helm upgrade -o json` 把 revision 放在頂層 `version`，`_parse_release_info`
-            # 讀 `info.revision` 恆為 0（既有缺陷，與 helm_revision=0 同源）；這裡以歷史
-            # 推算的新 revision 兜底，不把 0 回給平台。
+            # `helm upgrade -o json` 把 revision 放在頂層 `version`；#1414 起
+            # `_parse_release_info` 讀得到它。讀不到（回 0＝不知道）時仍以歷史推算的
+            # 新 revision 兜底，不把 0 回給平台。
             "revision": release.revision or (current_revision + 1),
             "chart_version": release.chart_version or target_version,
+            # AI-OD-006-1：只回路徑名，不回值。
+            "feature_paths_preserved": features_preserved,
+            "feature_paths_reverted": features_reverted,
         }
 
     except ValueError as e:
@@ -1584,7 +1700,10 @@ def get_release_revisions(namespace: str, name: str):
     """
     try:
         revisions = helm_service.history(namespace, name)
-        return ReleaseRevisionsResponse(revisions=revisions)
+        # INFRA-FIX-018-1／AI-HER-003-1：回報保留上限，平台對話框寫「最多保留最近 N 版」。
+        return ReleaseRevisionsResponse(
+            revisions=revisions, history_max=settings.helm_history_max,
+        )
 
     except ValueError as e:
         raise HTTPException(
@@ -1682,6 +1801,33 @@ def get_mqtt_address(namespace: str, name: str):
     return MqttAddressResponse(
         public_url=_read_advertised_address(namespace, name, ("tcp",))[0]
     )
+
+
+@router.get(
+    "/{namespace}/{name}/vpn-node-status",
+    response_model=VpnNodeStatusResponse,
+    summary="[INFRA-FIX-005] Live status of a VPN node (charts/tailscale): login state, login entrance, serve forwards",
+)
+def get_vpn_node_status(namespace: str, name: str):
+    """VPN 節點的即時狀態（唯讀；見 ``src/services/vpn_node_status.py``）。
+
+    平台的 ``state`` 只看 pod Ready，而 chart 把 NeedsLogin 也當 Ready，所以節點被控制面到期／
+    刪除後平台仍顯示 running。這支現場問 pod 的 ``tailscaled``：BackendState、登入入口、實際生效的
+    serve 轉發，以及 entrypoint 略過的轉發與原因（封閉代碼）。
+
+    ``probe != "ok"``（pod 還沒起來、容器重啟中…）是正常降級，仍回 200；只有 namespace 越界是 403。
+    永不回原始 log／stderr，也不回叢集內部的登入網址（只回註冊碼）。
+
+    Raises:
+        HTTPException: 403 namespace 越界、422 release 名不是合法的 label 值
+    """
+    _validate_namespace_or_raise(namespace)
+    try:
+        # release 名會進 label selector：先驗語法，不合法的名字不送進 kubectl。
+        validate_label_value("app.kubernetes.io/instance", name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    return VpnNodeStatusResponse(**vpn_node_status.collect(k8s_service, namespace, name))
 
 
 @router.get(
@@ -1820,6 +1966,39 @@ def get_release_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get release status. Check operator logs for details.",
+        )
+
+
+@router.get(
+    "/{namespace}/{name}/backup-status",
+    response_model=Dict[str, Any],
+    summary="#1190: read-only backup status (last success / last failure and reason)",
+)
+def get_backup_status(namespace: str, name: str):
+    """#1190／商用驗收 X-BK-006-1、DATA-ODOO-005-2、AI-LLM-009-1：備份狀態（唯讀）。
+
+    woow-odoo 讀 ``<release>-backup`` CronJob 的 Job 與 terminationMessage；litellm 讀
+    db-agent 寫進 ``woow_platform.settings`` 的 ``backup_last_*``；其他 chart 回
+    ``supported: false``。只回事實（最近成功／失敗時間、失敗原因代碼、連續失敗次數），
+    多久算過期由平台決定。規則與欄位見 ``src/services/backup_status.py``。
+
+    獨立端點而不是加進 ``/status``：``/status`` 只在轉移狀態被 poll，``running`` 的服務
+    沒有人呼叫（#1190 對 #1145 D8 的修訂）。
+    """
+    _validate_namespace_or_raise(namespace)
+    try:
+        validate_label_value("name", name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    try:
+        return backup_status_service.read_backup_status(k8s_service, namespace, name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except KubectlException as e:
+        logger.error(f"Backup status failed for {namespace}/{name}: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to read backup status. Check operator logs for details.",
         )
 
 
@@ -2243,10 +2422,26 @@ async def unpark_release_route(namespace: str, name: str, request: RouteUnparkRe
     response_model=Dict[str, Any],
     summary="#1432: rollout-restart every Deployment and StatefulSet of a release",
 )
-def restart_release(namespace: str, name: str):
+def restart_release(
+    namespace: str,
+    name: str,
+    component: Optional[str] = Query(
+        default=None,
+        pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+        description="AI-OD-004-2: only workloads labelled "
+        "app.kubernetes.io/component=<component> (e.g. the daemon that consumes API-key "
+        "env); omitted = every Deployment and StatefulSet of the release",
+    ),
+):
     """#1432：租戶的「重新啟動」——對 release 下**所有** Deployment 與 StatefulSet
     下 ``kubectl rollout restart``（改 pod template annotation，由 controller 依各自
     的更新策略重建 Pod；PVC、Secret、values 都不動）。
+
+    AI-OD-004-2：帶 ``component`` 時只重啟 ``app.kubernetes.io/component`` 相符的
+    workload。平台在「改金鑰後補重啟」（#1435）用它只滾吃金鑰 env 的 daemon，不再連帶
+    重建 console（進行中的終端機會斷線）。值只收 DNS-1123 label（直接拼進 label
+    selector，擋注入）；一個都沒有＝404，平台據此退回不帶 component 的全部重啟（舊
+    chart 沒有 component label 時不會變成什麼都沒重啟）。租戶的「重新啟動」不帶。
 
     - 只「下達」不等待，與 reset-config（#461）同一個理由：收斂交給平台狀態機
       （``upgrading`` → poll → ``running``），等 Pod 會讓回應時間綁在 image pull 與
@@ -2261,6 +2456,8 @@ def restart_release(namespace: str, name: str):
     """
     _validate_namespace_or_raise(namespace)
     selector = f"app.kubernetes.io/instance={name}"
+    if component:
+        selector += f",app.kubernetes.io/component={component}"
     try:
         deployments = k8s_service.get_deployments(namespace=namespace, label_selector=selector)
         statefulsets = k8s_service.get_statefulsets(namespace=namespace, label_selector=selector)
@@ -2270,6 +2467,7 @@ def restart_release(namespace: str, name: str):
                 detail=(
                     f"No deployments or statefulsets found for release {name} "
                     f"in namespace {namespace}"
+                    + (f" with component {component}" if component else "")
                 ),
             )
         restarted_deps = []
@@ -2288,6 +2486,7 @@ def restart_release(namespace: str, name: str):
             "action": "restart",
             "namespace": namespace,
             "release": name,
+            "component": component,
             "deployments": restarted_deps,
             "statefulsets": restarted_sts,
             "rollout_awaited": False,
@@ -2405,6 +2604,10 @@ def _reset_release_config_unlocked(
             ),
         )
 
+    # INFRA-FIX-019-1：reset 的全量 values 帶 tenantSecret.name／revision；Secret 同步寫一次
+    # （內容沒變＝server-side apply 無變化）。兩條載體都在 helm 之前，所以守在分流之前。
+    _write_tenant_secret(namespace, name, _tenant_secret_data(name, request.tenant_secret))
+
     if request.admin_password_carrier == "helm_secret":
         return _reset_via_helm_secret(namespace, name, request)
 
@@ -2428,6 +2631,9 @@ def _reset_release_config_unlocked(
             # to finish its rollback instead of being SIGKILLed halfway.
             timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
             subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
+            # AI-FIX-NET-1：reset 不得改 pod template（RWO 重新 attach 撞 atomic 15s，
+            # INFRA-HS-002-1）——egress gate／節點迴避只在叢集上已經有的 workload 沿用。
+            tenant_policy_mirror=True,
         )
     except (ValueError, HelmException) as e:
         logger.error("reset-config Helm upgrade failed for %s/%s: %s", namespace, name, e)
@@ -2558,6 +2764,50 @@ def _reset_release_config_unlocked(
     }
 
 
+def _values_pinned_to_live_release(
+    namespace: str,
+    name: str,
+    request: ReleaseResetConfigRequest,
+) -> Dict[str, Any]:
+    """INFRA-FIX-018：回傳 reset 要送給 helm 的 values——``preserve_value_paths`` 那幾條
+    改用**叢集目前 release** 的值（含「不存在」）。
+
+    為什麼：平台送來的 values 是 DB 裡存的快照，不保證等於叢集現況。方案資源鍵若是舊
+    overlay 寫的（headscale 的頂層 ``resources`` 被 chart deep-merge 進 headplane，現行
+    平台寫的是 ``headscale.resources``），reset 的 upgrade 會把 pod template 換掉 ⇒
+    StatefulSet 滾動 ⇒ RWO 重新 attach 45 秒以上 ⇒ 15 秒 ``--atomic`` 逾時 ⇒ 回「重設
+    失敗」，並留下 2 筆 failed revision（商用驗收 INFRA-HS-002-1：3/3 次必敗）。reset 的
+    契約是「只動憑證、pod template 位元不變」，所以會影響 pod template 的鍵以叢集為準。
+
+    讀不到現況 ⇒ 500，**此刻什麼都還沒動**（密碼、release 都不變）。不退回送快照：
+    退回就是重現上面那個必敗的情境，而且更難查。⛔ live values 含明文憑證，只進
+    ``overlay_preserved_paths`` 的記憶體運算，不 log、不回傳。
+    """
+    values = request.values or {}
+    if not request.preserve_value_paths:
+        return values
+    try:
+        live_values = helm_service.get_values(
+            namespace, name, timeout_seconds=RESET_LIVE_VALUES_TIMEOUT_SECONDS,
+        )
+    except (ValueError, HelmException) as e:
+        logger.error(
+            "reset-config could not read the live values of %s/%s: %s",
+            namespace, name, getattr(e, "message", None) or e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="reset-config: failed to read the live release values; nothing was changed",
+        )
+    pinned = overlay_preserved_paths(values, live_values, request.preserve_value_paths)
+    logger.info(
+        "reset-config pinned %d value path(s) of %s/%s to the live release: %s",
+        len(request.preserve_value_paths), namespace, name,
+        ",".join(request.preserve_value_paths),
+    )
+    return pinned
+
+
 def _reset_via_helm_secret(
     namespace: str,
     name: str,
@@ -2593,6 +2843,9 @@ def _reset_via_helm_secret(
     """
     label_selector = f"app.kubernetes.io/instance={name}"
 
+    # INFRA-FIX-018：在任何寫入之前先把會改 pod template 的鍵釘到叢集現況。
+    reset_values = _values_pinned_to_live_release(namespace, name, request)
+
     try:
         previous_revision = helm_service.get(namespace, name).revision
         release = helm_service.upgrade(
@@ -2601,7 +2854,7 @@ def _reset_via_helm_secret(
             chart=request.chart,
             # #448：全量 reset values 會抹掉 install 時注入的 pull secret，兩條
             # reset 路都必須自己補回來。
-            values=_ensure_image_pull_secrets(namespace, request.values),
+            values=_ensure_image_pull_secrets(namespace, reset_values),
             sensitive_values=request.sensitive_values,
             version=request.version,
             reset_values=request.reset_values,
@@ -2611,6 +2864,9 @@ def _reset_via_helm_secret(
             # `2n + overhead`，否則 atomic 失敗時的自動 rollback 會被腰斬。
             timeout_seconds=RESET_HELM_TIMEOUT_SECONDS,
             subprocess_timeout_seconds=RESET_HELM_SUBPROCESS_TIMEOUT_SECONDS,
+            # AI-FIX-NET-1：reset 不得改 pod template（RWO 重新 attach 撞 atomic 15s，
+            # INFRA-HS-002-1）——egress gate／節點迴避只在叢集上已經有的 workload 沿用。
+            tenant_policy_mirror=True,
         )
     except (ValueError, HelmException) as e:
         logger.error(

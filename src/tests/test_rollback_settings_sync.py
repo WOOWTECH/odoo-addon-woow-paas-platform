@@ -110,3 +110,87 @@ class TestRollbackSettingsSync(TransactionCase):
         self.assertEqual(member_service.read(['name'])[0]['name'], self.service.name)
         with self.assertRaises(AccessError):
             member_service.read(['rollback_config_sync'])
+
+
+@tagged('post_install', '-at_install')
+class TestRollbackImageLedgerSync(TransactionCase):
+    """AI-OMN-005-2：回復後範本管理的 image 值也要回到目標 revision。
+
+    Omnigent 246 實測：rev5→rev2 回復後叢集跑 20261007.0720，但帳本仍是
+    20261014.0731——之後租戶儲存設定（沿用帳本 image，#1408）會悄悄前滾。
+    Omnigent 的 spec 只有 password 型鍵，舊版 public_paths 是空集合，連 operator
+    都不問就宣告同步完成。
+    """
+
+    OLD = '20261007.0720@sha256:' + 'a' * 64
+    NEW = '20261014.0731@sha256:' + 'b' * 64
+    HOST = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host'
+    REPO = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes'
+
+    def setUp(self):
+        super().setUp()
+        workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': 'Rollback image QA', 'owner_id': self.env.ref('base.user_admin').id})
+        self.template = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Rollback image QA', 'slug': 'qa-rb-image', 'category': 'ai_llm',
+            'helm_repo_url': '', 'helm_chart_name': 'oci://qa/omnigent', 'helm_chart_version': '0.1.7',
+            'helm_value_specs': json.dumps({'required': [], 'optional': [
+                {'key': 'auth.openrouterApiKey', 'type': 'password'},
+            ]}), 'mcp_enabled': False, 'helm_default_values': '{}'})
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
+            'name': 'Rollback image QA', 'workspace_id': workspace.id, 'template_id': self.template.id,
+            'state': 'upgrading', 'helm_namespace': 'paas-ws-qa', 'helm_release_name': 'svc-qa-img',
+            'helm_chart_version': '0.1.7', 'last_upgraded_at': fields.Datetime.now(),
+            'helm_values': json.dumps({
+                'image': {'repository': self.REPO, 'tag': self.NEW},
+                'runner': {'image': self.HOST + ':' + self.NEW},
+                'auth': {'openrouterApiKey': 'current-synthetic-key'},
+                'persistence': {'size': '5Gi'},
+            })})
+        self.service._record_rollback_config_sync(7)
+        self.client = Mock()
+        self.client.get_config_projection.return_value = {
+            'revision': 7,
+            'values': {'image.repository': self.REPO, 'image.tag': self.OLD,
+                       'runner.image': self.HOST + ':' + self.OLD},
+            'missing': ['image.registry', 'image.digest'],
+        }
+
+    def test_rollback_writes_target_revision_images_back_to_ledger(self):
+        self.assertTrue(self.service._sync_rollback_config(self.client, {'revision': 7}))
+        kwargs = self.client.get_config_projection.call_args.kwargs
+        self.assertEqual(kwargs['revision'], 7)
+        self.assertEqual(set(kwargs['paths']), {
+            'image.registry', 'image.repository', 'image.tag', 'image.digest', 'runner.image'})
+        values = self.service._helm_values_dict()
+        self.assertEqual(values['image'], {'repository': self.REPO, 'tag': self.OLD})
+        self.assertEqual(values['runner']['image'], self.HOST + ':' + self.OLD)
+        # 憑證與非 image 的範本值不動。
+        self.assertEqual(values['auth']['openrouterApiKey'], 'current-synthetic-key')
+        self.assertEqual(values['persistence'], {'size': '5Gi'})
+        self.assertFalse(self.service.rollback_config_sync)
+
+    def test_tenant_owned_image_key_is_not_projected_as_template_image(self):
+        self.template.write({'helm_value_specs': json.dumps({'optional': [
+            {'key': 'auth.openrouterApiKey', 'type': 'password'},
+            {'key': 'image.tag', 'type': 'password'},
+        ]})})
+        self.service._record_rollback_config_sync(7)
+        self.client.get_config_projection.return_value = {
+            'revision': 7, 'values': {'image.repository': self.REPO,
+                                      'runner.image': self.HOST + ':' + self.OLD},
+            'missing': ['image.registry', 'image.digest']}
+        self.assertTrue(self.service._sync_rollback_config(self.client, {'revision': 7}))
+        self.assertNotIn('image.tag', self.client.get_config_projection.call_args.kwargs['paths'])
+        self.assertEqual(self.service._helm_values_dict()['image']['tag'], self.NEW)
+
+    def test_non_string_image_value_keeps_pending(self):
+        pending = self.service.rollback_config_sync
+        self.client.get_config_projection.return_value = {
+            'revision': 7,
+            'values': {'image.repository': self.REPO, 'image.tag': True,
+                       'runner.image': self.HOST + ':' + self.OLD},
+            'missing': ['image.registry', 'image.digest']}
+        self.assertFalse(self.service._sync_rollback_config(self.client, {'revision': 7}))
+        self.assertEqual(self.service.rollback_config_sync, pending)
+        self.assertEqual(self.service._helm_values_dict()['image']['tag'], self.NEW)

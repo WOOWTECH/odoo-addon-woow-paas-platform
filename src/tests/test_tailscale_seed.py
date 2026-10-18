@@ -68,8 +68,10 @@ class TestTailscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, TAILSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.5',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.4＝'
+        self.assertEqual(tpl.helm_chart_version, '0.1.10',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.6–0.1.10＝'
+                         'charts 整合包 #254（GOMEMLIMIT、入口安全標頭＋限速、tenantSecret、serve 套用後才 Ready、'
+                         '關 Taildrop）；0.1.4＝'
                          '#1553 Headscale 重啟後約 1 分鐘內回線、#1554 workspace 模式略過 tags、'
                          '#1539 金鑰登入中不回報 Ready（0.1.1＝restart-on-credential-reset label）；'
                          '0.1.5＝#1441 workspace 模式開機前先等同工作區 Headscale /health（NetworkPolicy 啟動空窗）')

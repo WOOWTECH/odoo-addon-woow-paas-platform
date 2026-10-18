@@ -51,22 +51,20 @@ const { DateTime } = luxon;
 /**
  * 後端送來、**不帶時區資訊**的時間字串要採用哪一種讀法。
  *
- * - `"ecmascript-date"`（目前值）：交給 JS 引擎的 `new Date()` 依 ECMA-262 判讀。
- *   規格對兩種形狀的規定並不對稱：只有日期（SHAPE-1）當 **UTC**，
- *   帶 `T` 但不帶 offset（SHAPE-2）當 **local time**。
- * - `"utc-wire-format"`：把不帶 offset 的值一律視為 UTC 的線上格式（Odoo ORM 的實際語意），
- *   再轉成顯示時區。
+ * - `"utc-wire-format"`（目前值，#914 起）：把不帶 offset 的值一律視為 UTC 的線上格式
+ *   （Odoo ORM 的實際語意：`fields.Datetime` 在 DB 與 `.isoformat()` 都是 naive UTC），
+ *   再轉成顯示時區；只有日期（SHAPE-1）視為**日曆日**，不做任何時區位移。
+ * - `"ecmascript-date"`（#914 之前）：交給 JS 引擎的 `new Date()` 依 ECMA-262 判讀。
+ *   規格對兩種形狀的規定並不對稱：只有日期當 **UTC 午夜**（UTC 以西少一天），
+ *   帶 `T` 但不帶 offset 當 **local time**（台北差 8 小時）——X-LC-006-1／-2 的根因。
+ *   保留這個分支只為了必要時能一行回退。
  *
- * ⚠ **目前值刻意維持 `"ecmascript-date"`，這是一個尚未切換的行為決定，不是瑕疵。**
- * 切換會同時改變**每一個顯示時間的地方**的值（台北下相差 8 小時），而且 SHAPE-1
- * 與 SHAPE-2 的位移方向相反 ⇒ 需要跨時區、跨粒度的獨立驗證，
- * 混進本批（純顯示格式）的話，一旦出事將無法分辨是語系造成的還是時區造成的。
- *
- * **切換與驗證見 #914。** 切換時只需要改這個常數，其餘程式碼不動。
+ * 跨時區、跨粒度的驗證在 `tests/ui/test_datetime_tz_914.mjs`（Taipei／UTC／Los_Angeles／
+ * Pago_Pago／Kiritimati 各跑一次真的 luxon）。
  *
  * @type {"ecmascript-date"|"utc-wire-format"}
  */
-export const BACKEND_NAIVE_DATETIME_READING = "ecmascript-date";
+export const BACKEND_NAIVE_DATETIME_READING = "utc-wire-format";
 
 const HAS_EXPLICIT_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -119,8 +117,6 @@ export function parseBackendDate(value) {
 /**
  * `"utc-wire-format"` 讀法：不帶 offset 的值視為 UTC，帶 offset 的照其 offset 解讀，
  * 兩者都轉成顯示時區。只有日期的值視為日曆日（不做時區位移）。
- *
- * ⚠ 目前沒有 call site 走到這裡——它是 #914 的切換目標，先寫好讓那張單只需改一個常數。
  *
  * @param {string} raw
  * @returns {DateTime|null}
@@ -196,4 +192,27 @@ export function formatUserTime(value, fallback = "") {
   // ⚠ `localization` 是 Proxy，service 尚未 start 完成時存取會 throw
   // ⇒ 只能在呼叫當下取值，⛔ 不可在 module 頂層先取出來存成常數。
   return odooFormatDateTime(dt, { format: localization.shortTimeFormat });
+}
+
+/**
+ * 值所在的**當地日曆日**距離今天幾天（今天＝0、明天＝1、昨天＝-1）。
+ *
+ * 給「到期日／截止日」判斷用（發票到期、任務逾期）：只有日期的欄位是日曆日，
+ * ⛔ 不可用 `new Date("YYYY-MM-DD")`（那是 UTC 午夜，UTC 以西會提早一天判成逾期，X-LC-006-2）。
+ *
+ * @param {string|Date|null|undefined} value
+ * @param {{today?: string}} [options] `today`：測試用的「今天」（`YYYY-MM-DD`，當地日曆日）
+ * @returns {number|null} 無法解析時回 `null`
+ */
+export function calendarDaysFromToday(value, options = {}) {
+  const dt = parseBackendDate(value);
+  if (!dt) {
+    return null;
+  }
+  const today = options.today
+    ? DateTime.fromISO(options.today, { numberingSystem: "latn" })
+    : DateTime.local();
+  const target = DateTime.fromObject({ year: dt.year, month: dt.month, day: dt.day });
+  const base = DateTime.fromObject({ year: today.year, month: today.month, day: today.day });
+  return Math.round(target.diff(base, "days").days);
 }

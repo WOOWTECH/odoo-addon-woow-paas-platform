@@ -53,7 +53,8 @@ class TestCodeServerSeed(TransactionCase):
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
         # 0.1.6＝charts #153（工作區＝區網）；0.1.7＝#1556（選填金鑰一律輸出，清除後 Secret／Pod 不留舊值）。
-        self.assertEqual(tpl.helm_chart_version, '0.1.7')
+        # 0.1.8＝#1637 startupProbe timeout 5 秒；0.1.9＝登入頁繁中、不提示 $PASSWORD（charts 整合包 #254）。
+        self.assertEqual(tpl.helm_chart_version, '0.1.9')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()
@@ -113,6 +114,23 @@ class TestCodeServerSeed(TransactionCase):
             self.assertEqual(optional[key]['type'], 'password', key)
         for key in git_settings:
             self.assertEqual(optional[key]['type'], 'text', key)
+
+    def test_description_discloses_secret_visibility(self):
+        """INFRA-DOC-007-2（charts#221）：登入密碼與選填金鑰都是 IDE 容器的環境變數，容器裡的
+        程序全是同一個 uid ⇒ 擴充、AI 助手（pi、Claude Code、Omnigent session）都讀得到
+        （密碼經 /proc/1/environ；chart 0.1.9 前的沙盒已實證）。商品說明與每個金鑰欄位都要
+        先講清楚，並建議額度受限的專用金鑰／LiteLLM 虛擬金鑰。說明裡的平台頁籤用中文介面的
+        實際名稱「管理員帳密」（zh_TW.po：Admin Credentials → 管理員帳密）。"""
+        tpl = self._tpl()
+        desc = tpl.full_description
+        for needle in ('擴充', 'AI 助手', '讀得到', '密碼', 'LiteLLM 虛擬金鑰', '額度'):
+            self.assertIn(needle, desc, '商品說明要揭露容器內讀得到密碼與金鑰（缺「%s」）' % needle)
+        self.assertIn('管理員帳密', desc)
+        self.assertNotIn('Admin Credentials', desc, '繁中介面上的頁籤名稱是「管理員帳密」')
+        optional = {s['key']: s for s in tpl._parse_helm_value_specs().get('optional', [])}
+        for key in ('auth.anthropicApiKey', 'auth.openrouterApiKey', 'auth.gitToken'):
+            self.assertIn('讀得到', optional[key]['description'],
+                          '%s 欄位說明要提醒 IDE 內的擴充與 AI 助手讀得到' % key)
 
     def test_plans_linked_and_priced(self):
         plans = self._tpl().sudo().subscription_plan_ids

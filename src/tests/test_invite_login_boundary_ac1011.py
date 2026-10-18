@@ -165,7 +165,14 @@ class TestInviteLoginBoundaryAc1011(HttpCase):
         workspace_id = self._workspace()
         victim = self.synthetic_users['victim']
         attacker = self.synthetic_users['attacker']
-        attacker.write({'login': victim.login.upper()})
+        # X-SET-007 起 ORM 會正規化 login 並拒絕只差大小寫的重複帳號，所以這種
+        # 碰撞只剩「修補前就存在的資料」（正式站 uid 227／236）會出現——直接改表
+        # 模擬它；邀請端對既有碰撞仍必須 fail-closed。
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE res_users SET login = %s WHERE id = %s",
+            [victim.login.upper(), attacker.id])
+        self.env.invalidate_all()
         self.assertNotEqual(attacker.login, victim.login)
         self._claim('attacker', victim.login)
         result = self._invite(workspace_id, victim.login)

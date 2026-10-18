@@ -127,6 +127,20 @@
             </t>
           </t>
 
+          <!-- AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋退點付不起新方案首期
+               （含稅）時停用確認鈕並顯示差額與儲值連結。金額全部來自後端 dry_run 估算，前端
+               不自己算；後端換方案時同一把尺會再擋一次。 -->
+          <div t-if="balanceBlocked and !state.confirmingTrialEnd" class="o_woow_pay_warning o_woow_change_plan__balance">
+            <WoowIcon name="'warning'" size="20"/>
+            <div>
+              <p t-esc="balanceShortfallMessage"/>
+              <a href="#/billing/topup" class="o_woow_pay_topup_link" t-on-click="props.onClose">
+                <WoowIcon name="'add'" size="16"/>
+                Top up your wallet
+              </a>
+            </div>
+          </div>
+
           <!-- #1647：錯誤訊息排在可捲動的 body 最後（與其他 modal 同一個位置）。body 的
                內容比視窗高時它會落在可視範圍之外，所以每次失敗都由 ChangePlanModal.js 把
                這一塊捲進可視範圍（t-ref 就是給它用的；原因與量測見該檔 setup 的說明）。

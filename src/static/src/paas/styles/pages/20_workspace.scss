@@ -183,6 +183,13 @@
         text-overflow: ellipsis;
         min-width: 0; // #1310：讓 ellipsis 真的生效，badge 不被推出卡片
     }
+
+    // X-LC-006-5：390px 時「擁有者」徽章被名稱擠成逐字直排。徽章不縮、不換行，
+    // 縮的只有名稱（上面的 ellipsis）。
+    .o_woow_badge {
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
 }
 
 .o_woow_workspace_item_desc {
