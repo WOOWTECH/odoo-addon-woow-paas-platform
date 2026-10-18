@@ -49,13 +49,18 @@ const invitationContext = {
   clearInvitationToken: () => {},
   getInvitationRevision: () => 0,
 };
+// core/llm_routes.js is a pure module (no owl / session / _t): use the real one, as test_llm_nav.mjs does.
+const llmRoutes = await loadModule("core/llm_routes.js");
 const { router } = await loadModule("core/router.js", {
-  "./platform_config": { showProjects: () => false },
+  "./platform_config": { showProjects: () => false, showLlm: () => false },
+  "./llm_routes": llmRoutes,
   "./invitation_context": invitationContext,
 });
 const plans = await loadModule("components/subscription/plan_selector_utils.js");
 const availability = await loadModule("utils/availability_label.js");
 const credentials = await loadModule("components/modal/OneTimeCredentialsModal.js");
+// INFRA-TS-005-5 (#1834): real cross-field validation of the tailscale settings (only _t imported).
+const tailscaleSettings = await loadModule("utils/tailscale_settings.js");
 const breadcrumbs = [];
 const { AppConfigurationPage } = await loadModule("pages/configure/AppConfigurationPage.js", {
   "../../services/workspace_service": { workspaceService },
@@ -67,6 +72,9 @@ const { AppConfigurationPage } = await loadModule("pages/configure/AppConfigurat
   "../../components/subscription/plan_selector_utils": plans,
   "../../utils/availability_label": availability,
   "../../components/modal/OneTimeCredentialsModal": credentials,
+  // X-LC-002-3 (#1807): scroll/focus-on-error hook (owl useRef/useEffect); no DOM here.
+  "../../utils/form_feedback": { useFormErrorReveal: () => ({ el: null }) },
+  "../../utils/tailscale_settings": tailscaleSettings,
 });
 const { Root } = await loadModule("root.js", {
   "./core/router": { router }, "./services/cloud_service": { cloudService },
