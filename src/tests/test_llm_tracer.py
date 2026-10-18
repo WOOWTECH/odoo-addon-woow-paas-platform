@@ -695,6 +695,8 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(len(self.fake.calls), calls, '端點不外呼（N26）')
         scope_swr_queue(self.env, [account.id])
         self.env.invalidate_all()
+        # SWR cron 也會讀 token 清單；同一方法在兩個階段應各用自己的金鑰。
+        web_role_calls = list(self.fake.role_calls)
         self.env['woow_paas_platform.llm_swr_cache']._cron_llm_swr_refresh()
         recent = self._rpc('/api/llm/usage/recent')['data']
         self.assertEqual(recent['today_count'], 1)
@@ -703,8 +705,13 @@ class TestLlmTracerHttp(HttpCase):
 
         # finding 12：web 路徑取 WEB 金鑰、cron 取 CRON 金鑰（取 client 的 role 與實際呼叫都對）
         self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_WEB, nac.ROLE_CRON])
-        self.assertEqual({r for n, r in self.fake.role_calls if n in WEB_PATH_METHODS},
+        self.assertEqual({r for n, r in web_role_calls if n in WEB_PATH_METHODS},
                          {nac.ROLE_WEB})
+        swr_role_calls = self.fake.role_calls[len(web_role_calls):]
+        self.assertEqual({r for _, r in swr_role_calls}, {nac.ROLE_CRON})
+        self.assertEqual({(n, r) for n, r in swr_role_calls
+                          if n in WEB_PATH_METHODS},
+                         {('user_list_tokens', nac.ROLE_CRON)})
         self.assertEqual({r for n, r in self.fake.role_calls if n in CRON_ONLY_METHODS},
                          {nac.ROLE_CRON})
 
