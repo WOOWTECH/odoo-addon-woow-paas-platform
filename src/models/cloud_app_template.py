@@ -488,6 +488,11 @@ class CloudAppTemplate(models.Model):
         string='Documentation URL',
         help='Link to official documentation',
     )
+    documentation = fields.Text(
+        string='Service Documentation',
+        help='Markdown usage and configuration guide shown in the service Information tab. '
+             'When empty, the existing full description is shown instead.',
+    )
 
     # Helm Chart Configuration
     helm_repo_url = fields.Char(

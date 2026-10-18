@@ -1237,3 +1237,4 @@ from . import test_n8n_encryption_key_backup
 # INFRA-FIX-018（INFRA-HS-002-1）：重設管理員帳密不改 pod template（helm_secret 路把方案資源鍵釘到叢集現況）。
 from . import test_reset_pod_template_neutral_infra_fix_018
 from . import test_paas_mail_sender
+from . import test_service_documentation_logs

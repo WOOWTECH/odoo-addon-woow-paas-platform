@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LogsTab">
+    <section class="o_woow_service_logs">
+      <div t-if="!props.canManage" class="o_woow_card o_woow_service_logs__permission" role="status">
+        <WoowIcon name="'lock'" size="28"/>
+        <p>Only workspace owners and administrators can view service logs.</p>
+      </div>
+      <t t-else="">
+        <label class="o_woow_service_logs__search">
+          <WoowIcon name="'search'" size="22"/>
+          <input type="search" t-model="state.query" placeholder="Search logs" aria-label="Search logs"/>
+        </label>
+        <div class="o_woow_service_logs__card o_woow_card">
+          <div class="o_woow_service_logs__header">
+            <h2 t-esc="props.service.name"/>
+            <div class="o_woow_service_logs__actions">
+              <button type="button" class="o_woow_btn o_woow_btn_ghost o_woow_btn_sm" title="Download loaded logs" aria-label="Download loaded logs" t-att-disabled="!state.text" t-on-click="download">
+                <WoowIcon name="'download'" size="22"/>
+              </button>
+              <button type="button" class="o_woow_btn o_woow_btn_ghost o_woow_btn_sm" title="Wrap lines" aria-label="Wrap lines" t-att-aria-pressed="state.wrap ? 'true' : 'false'" t-on-click="() => { this.state.wrap = !this.state.wrap; }">
+                <WoowIcon name="'wrap_text'" size="22"/>
+              </button>
+            </div>
+          </div>
+          <div class="o_woow_service_logs__controls">
+            <div t-if="state.sources.length" class="o_woow_service_logs__sources">
+              <label>
+                <span>Instance</span>
+                <select t-att-value="state.pod" t-on-change="changePod" aria-label="Instance">
+                  <option t-foreach="state.sources" t-as="source" t-key="source.pod" t-att-value="source.pod" t-esc="source.pod"/>
+                </select>
+              </label>
+              <label>
+                <span>Container</span>
+                <select t-att-value="state.container" t-on-change="changeContainer" aria-label="Container">
+                  <option t-foreach="containers" t-as="container" t-key="container" t-att-value="container" t-esc="container"/>
+                </select>
+              </label>
+            </div>
+            <div class="o_woow_service_logs__refresh">
+              <span class="o_woow_hint" t-esc="updateLabel"/>
+              <button type="button" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm" t-on-click="togglePause">
+                <t t-if="state.paused">Resume</t><t t-else="">Pause</t>
+              </button>
+              <button type="button" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm" t-on-click="refresh">Refresh</button>
+              <label class="o_woow_service_logs__previous">
+                <input type="checkbox" t-att-checked="state.previous" t-on-change="changePrevious"/>
+                Previous container
+              </label>
+            </div>
+            <p class="o_woow_hint">Shows up to 500 recent lines. Downloads contain the loaded snapshot, including lines hidden by search.</p>
+            <p t-if="state.truncated" class="o_woow_hint">Some log output was omitted because the size limit was reached.</p>
+            <span t-if="state.updatedAt" class="o_woow_hint" t-esc="lastUpdatedLabel"/>
+          </div>
+          <div t-if="state.error" class="o_woow_service_logs__error" role="alert">
+            <span>Could not refresh logs. Any logs shown are from the last successful update.</span>
+            <button type="button" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm" t-on-click="refresh">Retry</button>
+          </div>
+          <div class="o_woow_service_logs__viewport" t-ref="viewport" t-on-scroll="onScroll" tabindex="0" aria-label="Service log output" t-att-aria-busy="state.loading ? 'true' : 'false'">
+            <p t-if="state.loading" class="o_woow_service_logs__empty" role="status">Loading logs...</p>
+            <pre t-elif="filteredText" t-att-class="{'o_woow_service_logs__text': true, 'o_woow_service_logs__text--wrap': state.wrap}" t-esc="filteredText"/>
+            <p t-else="" class="o_woow_service_logs__empty" role="status" t-esc="emptyMessage"/>
+          </div>
+          <div t-if="!state.atBottom" class="o_woow_service_logs__latest">
+            <button type="button" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm" t-on-click="scrollToLatest">
+              <WoowIcon name="'south'" size="18"/>
+              Scroll to latest
+            </button>
+          </div>
+        </div>
+      </t>
+    </section>
+  </t>
+</templates>

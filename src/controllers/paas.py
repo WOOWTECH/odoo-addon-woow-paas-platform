@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import threading
 import time
 import traceback
@@ -3001,6 +3002,88 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('An error occurred while accessing the service.'),
             }
         return service, None
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/documentation",
+           type='json', auth='user', methods=['POST'])
+    def api_service_documentation(self, workspace_id, service_id, **kwargs):
+        """Template-authored Markdown, scoped to an existing visible service.
+
+        Like HA's DOCS.md, this is distinct from the marketplace introduction.
+        Never fetch caller-supplied URLs on the server; existing templates fall
+        back to their introduction until an operator provides a dedicated guide.
+        """
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        template = service.template_id
+        documentation_url = (template.documentation_url or '').strip()
+        try:
+            parsed = urlparse(documentation_url)
+            safe_url = (parsed.scheme in ('https', 'http') and parsed.hostname
+                        and not parsed.username and not parsed.password
+                        and not any(ord(char) < 32 for char in documentation_url))
+        except ValueError:
+            safe_url = False
+        return {'success': True, 'data': {
+            'title': template.name,
+            'content': template.documentation or template.full_description or template.description or '',
+            'documentation_url': documentation_url if safe_url else '',
+        }}
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/logs",
+           type='json', auth='user', methods=['POST'])
+    def api_service_logs(self, workspace_id, service_id, pod=None, container=None,
+                         tail_lines=500, previous=False, **kwargs):
+        """Read bounded application logs through the Operator, never via exec.
+
+        Namespace/release come exclusively from the authorized service record.
+        Logs can contain application secrets, so only workspace owner/admin may
+        read them. This is a read: failed or suspended services remain diagnosable
+        without invoking write/subscription guards or changing service state.
+        """
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        if not access or access.role not in (ROLE_OWNER, ROLE_ADMIN):
+            return {'success': False, 'error': _('Insufficient permissions')}
+        if (kwargs or type(tail_lines) is not int or not 1 <= tail_lines <= 2000
+                or type(previous) is not bool
+                or any(value is not None and (
+                    not isinstance(value, str) or len(value) > 253
+                    or not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?', value)
+                ) for value in (pod, container))):
+            return {'success': False, 'error': _('Invalid log request')}
+
+        def unavailable(reason):
+            return {'success': True, 'data': {
+                'available': False, 'reason': reason, 'pod': None,
+                'container': None, 'sources': [], 'text': '', 'truncated': False,
+            }}
+
+        if service.template_id.workload_type != 'container':
+            return unavailable('unsupported_workload')
+        if not service.helm_namespace or not service.helm_release_name:
+            return unavailable('not_deployed')
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return unavailable('operator_unavailable')
+        try:
+            payload = client.get_release_logs(
+                namespace=service.helm_namespace,
+                release_name=service.helm_release_name,
+                pod=pod, container=container, tail_lines=tail_lines, previous=previous,
+            )
+        except PaaSOperatorError:
+            # Do not return transport errors, raw kubectl stderr or credentials.
+            _logger.warning('Service log read unavailable for service id=%s', service.id)
+            return unavailable('operator_unavailable')
+        finally:
+            # Every poll owns a fresh client; release its pooled sockets promptly.
+            client._session.close()
+        return {'success': True, 'data': payload}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/access-config",
            auth="user", methods=["POST"], type="json")

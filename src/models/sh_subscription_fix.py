@@ -1461,7 +1461,7 @@ class ShSubscriptionFix(models.Model):
         if not token:
             return False, 'no_token'
 
-        # ECPay V4：這張卡最近被 ECPay 拒絕過（或要求 3D）⇒ 本計費週期不再對
+        # ECPay V4：這張卡最近 7 天被 ECPay 拒絕過（或要求 3D）⇒ 冷卻期內不再對
         # 同一個 BindCardID 自動授權（官方：連續失敗可能被暫停授權）。不建
         # topup、零外呼；dunning（失敗計數＋低餘額通知）照常往下走。
         if token._woow_auto_charge_blocked():

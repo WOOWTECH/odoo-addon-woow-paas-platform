@@ -9,6 +9,8 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
+import { InformationTab } from "./tabs/InformationTab";
+import { LogsTab } from "./tabs/LogsTab";
 import { AddonsTab } from "./tabs/AddonsTab";
 import { McpServersTab } from "./tabs/McpServersTab";
 import { AccessTab } from "./tabs/AccessTab";
@@ -48,14 +50,14 @@ import {
  * Displays detailed information about a cloud service with tabbed navigation.
  * Features:
  * - Service header with icon, name, and status
- * - Tab navigation (Overview, Configuration)
+ * - Tab navigation (Overview, Configuration, Information, Logs, capability-specific tabs)
  * - Action buttons (Open Web UI, Rollback, Delete)
  * - Status polling for deploying/upgrading states
  *
  * Props:
  *   - workspaceId (number): Parent workspace ID
  *   - serviceId (number): Service ID to display
- *   - initialTab (string, optional): Initial tab to show ('overview' | 'configuration')
+ *   - initialTab (string, optional): Initial tab from the service detail route
  */
 export class ServiceDetailPage extends Component {
     static template = "woow_paas_platform.ServiceDetailPage";
@@ -66,6 +68,8 @@ export class ServiceDetailPage extends Component {
         StatusBadge,
         OverviewTab,
         ConfigurationTab,
+        InformationTab,
+        LogsTab,
         AddonsTab,
         McpServersTab,
         AccessTab,
