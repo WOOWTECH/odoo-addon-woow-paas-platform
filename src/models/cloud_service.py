@@ -10864,8 +10864,8 @@ class CloudService(models.Model):
 
         #1679：先讀叢集現況再決定送什麼——每項取 max(目標, 叢集)，任何一項會下降、讀不到
         或資料不完整就不送；目標低於叢集的項目標示為待處理降額。工作區正被其他交易同步時
-        不等鎖、跳過這次推送（記 warning；自動重試屬 #1680）。任何失敗只記錄，絕不 abort
-        刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
+        不等鎖、不推送，改排背景同步一分鐘後重來（#1680：換方案剛好撞上推送時增額不會遺失）；
+        失敗另排有限次自動重試。任何失敗只記錄，絕不 abort 刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
         """
         if not helm_namespace or not workspace:
             return
@@ -10877,6 +10877,12 @@ class CloudService(models.Model):
             _logger.warning(
                 "quota recompute failed for %s: %s", helm_namespace, e,
             )
+            # #1680：savepoint 回捲了同步紀錄，改由背景同步收斂（trigger 跟著本交易 commit）。
+            try:
+                with self.env.cr.savepoint():
+                    workspace.sudo()._schedule_quota_reconcile()
+            except Exception:  # noqa: BLE001 —— 排程失敗也不阻斷刪除；兜底 cron 每 5 分鐘仍會看
+                _logger.warning("quota reconcile scheduling failed for %s", helm_namespace)
 
     def _do_cleanup(self):
         """Helm uninstall — permanently remove the service.

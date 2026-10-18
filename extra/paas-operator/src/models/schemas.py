@@ -354,7 +354,38 @@ class ReleaseResetConfigRequest(BaseModel):
         return _validate_value_paths(paths)
 
 
-class NamespaceCreateRequest(BaseModel):
+class QuotaWriteGuard(BaseModel):
+    """#1680：ResourceQuota 的版本防護寫入（PUT quota 與 POST namespace 共用）。
+
+    三個欄位都不帶 ＝ 既有的無條件 ``kubectl apply``（舊平台相容）。帶 ``sync_token`` 時必須
+    剛好指定一個前提：``expected_resource_version``（物件仍是平台 GET 讀到的那一版才寫）或
+    ``expect_absent``（物件尚不存在才建立）。前提不成立回 409 ``quota_conflict``，不覆寫。
+    ⚠ 新平台不能用「PUT 有沒有報錯」判斷 operator 支不支援：舊 operator 會靜默忽略這些未知
+    欄位、照樣無條件寫入。支援與否看 GET ``managed_quota`` 有沒有 ``sync_token`` 鍵。
+    """
+
+    sync_token: Optional[str] = Field(
+        default=None, pattern=r"^[a-z0-9]{8,64}$",
+        description="#1680: this push's id, stamped as the woow.tw/quota-sync-token annotation")
+    expected_resource_version: Optional[str] = Field(
+        default=None, pattern=r"^[0-9A-Za-z._-]{1,64}$",
+        description="#1680: write only if the managed quota still has this resourceVersion")
+    expect_absent: bool = Field(
+        default=False, description="#1680: create the managed quota only if it does not exist")
+
+    @model_validator(mode="after")
+    def _guard_is_complete(self):
+        preconditions = int(self.expected_resource_version is not None) + int(self.expect_absent)
+        if self.sync_token is None and preconditions == 0:
+            return self
+        if self.sync_token is None or preconditions != 1:
+            raise ValueError(
+                "a guarded quota write needs sync_token and exactly one of "
+                "expected_resource_version / expect_absent")
+        return self
+
+
+class NamespaceCreateRequest(QuotaWriteGuard):
     """Request to create a namespace with resource quota."""
 
     name: str = Field(..., description="Namespace name (must start with paas-ws-)")
@@ -377,7 +408,7 @@ class NamespaceCreateRequest(BaseModel):
     )
 
 
-class NamespaceQuotaUpdateRequest(BaseModel):
+class NamespaceQuotaUpdateRequest(QuotaWriteGuard):
     """#278 A1：整組覆寫 ns ResourceQuota（值由 Odoo 依存活 service 集算好傳入）。"""
 
     cpu_limit: str = Field(..., description="requests.cpu / limits.cpu")

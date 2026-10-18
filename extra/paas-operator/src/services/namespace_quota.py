@@ -24,6 +24,9 @@ from typing import Any, Dict, Iterable, List
 
 from src.services.storage_quota import parse_quantity, tightest_quota_usage
 
+#: 與 ``helm.QUOTA_SYNC_TOKEN_ANNOTATION`` 同值；本模組是純函式，不 import helm。
+QUOTA_SYNC_TOKEN_ANNOTATION = "woow.tw/quota-sync-token"
+
 #: 平台（woow_paas_platform ``src/services/workspace_quota.py``）認這兩個字串，改名要兩邊
 #: 一起改。
 #: namespace 內沒有可用的 ResourceQuota（namespace 還不存在也落在這裡，見 quota_report）。
@@ -80,7 +83,8 @@ def managed_quota_report(namespace: str, quota_items: Iterable[Dict[str, Any]],
     """
     report = {
         "namespace": namespace, "name": f"{namespace}-quota", "uid": None,
-        "resource_version": None, "observed_at": datetime.now(timezone.utc).isoformat(),
+        "resource_version": None, "sync_token": None,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
         "namespace_exists": None, "available": False,
         "reason": reason or "managed_quota_not_found", "hard": {}, "used": {},
     }
@@ -98,6 +102,9 @@ def managed_quota_report(namespace: str, quota_items: Iterable[Dict[str, Any]],
         "namespace_exists": True,
         "namespace": metadata.get("namespace"), "uid": metadata.get("uid"),
         "resource_version": metadata.get("resourceVersion"),
+        # #1680：鍵一定存在（舊 operator 沒有這個鍵，平台據此判斷支不支援版本防護），
+        # 而且不受下方可用性判斷影響——推送後 status 還沒追上 spec 時，平台也要讀得到 token。
+        "sync_token": (metadata.get("annotations") or {}).get(QUOTA_SYNC_TOKEN_ANNOTATION),
         "hard": status.get("hard") or {}, "used": status.get("used") or {},
         "spec_hard": (item.get("spec") or {}).get("hard") or {},
     })

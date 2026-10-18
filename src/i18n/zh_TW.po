@@ -12643,7 +12643,9 @@ msgstr "恢復失敗：服務已重新啟動，但對外網址仍顯示停權說
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/notification-center/NotificationPanel.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
 msgid "Retry"
 msgstr "重試"
 
@@ -24630,6 +24632,159 @@ msgstr "綁卡驗證授權取消"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ecpg_bind_auth_void_list
 msgid "Retry now"
 msgstr "立即重試"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_retry_count
+msgid "Automatic Retries Used"
+msgstr "已用自動重試次數"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid ""
+"Automatic quota sync retries are exhausted. Check the sync detail, then use "
+"Retry Quota Sync."
+msgstr "Quota 自動同步重試已用完。請先查看同步詳情，再按「重試 Quota 同步」。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_retry_count
+msgid ""
+"Automatic retries used for the current target (at most 5). Resets when the "
+"target changes, an administrator saves the minimums or retries manually, or "
+"a sync succeeds."
+msgstr "目前目標已用的自動重試次數（最多 5 次）。目標改變、管理員保存最低保障或手動重試，或同步成功時重置。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_status
+msgid "Current Sync Status"
+msgstr "目前同步狀態"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_expected_tokens
+msgid "Expected Remote Sync Tokens"
+msgstr "叢集應帶的同步 Token"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Last Attempt Result"
+msgstr "最近一次嘗試結果"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_attempt_fingerprint
+msgid "Last Attempted Target"
+msgstr "最近一次嘗試的目標"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_last_attempt_at
+msgid "Last Sync Attempt"
+msgstr "最近一次同步嘗試"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_synced_fingerprint
+msgid "Last Synced Target"
+msgstr "最近一次同步成功的目標"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_verified_at
+msgid "Last Verified Against Cluster"
+msgstr "最近一次與叢集核對"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_next_retry_at
+msgid "Next Automatic Retry"
+msgstr "下次自動重試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Only system administrators may retry Workspace quota sync."
+msgstr "只有系統管理員可以重試 Workspace quota 同步。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_expected_tokens
+msgid ""
+"Per namespace, the sync token the cluster quota should carry: the last "
+"confirmed push, or a push whose result is unknown. A different token on the "
+"cluster means another write landed there, so the next sync pushes again."
+msgstr "每個 namespace 的叢集 quota 應帶的同步 token：最近一次確認成功的推送，或結果未知的推送。叢集上的 token 不同代表有其他寫入落在那裡，下一次同步會重新推送。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Quota not synced: %(reason)s"
+msgstr "Quota 尚未同步：%(reason)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Quota synced with the cluster."
+msgstr "Quota 已與叢集同步。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_state__exhausted
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__quota_sync_status__exhausted
+msgid "Retries exhausted"
+msgstr "重試已用完"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid "Retry Quota Sync"
+msgstr "重試 Quota 同步"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid ""
+"Retry the quota sync now with the current policy? The push never lowers any "
+"cluster value; a blocked push stays blocked."
+msgstr "要以目前的政策立即重試 quota 同步嗎？推送絕不會調降叢集上的任何值；被擋下的推送仍會被擋下。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_status
+msgid ""
+"The last sync result, except that a sync for an older target is shown as "
+"pending."
+msgstr "最近一次同步結果；若同步的是較舊的目標，則顯示為待同步。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid ""
+"Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync retried manually by "
+"%(login)s (uid %(uid)s)"
+msgstr "Workspace %(name)s（id=%(id)s，%(ws_hash)s）的 quota 同步由 %(login)s（uid %(uid)s）手動重試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid ""
+"Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync stopped after "
+"%(count)s automatic retries: %(reason)s. Retry it manually from the "
+"Workspace quota page."
+msgstr "Workspace %(name)s（id=%(id)s，%(ws_hash)s）的 quota 同步在 %(count)s 次自動重試後停止：%(reason)s。請到 Workspace quota 頁面手動重試。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_reconcile_workspace_quota_ir_actions_server
+msgid "Workspace Quota: Sync Retry and Reconcile"
+msgstr "Workspace Quota：同步重試與對帳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_unguarded
+msgid ""
+"At the last sync the operator did not support versioned quota writes, so "
+"pushes are made without protection: an older request that finishes late "
+"could overwrite a newer value. Upgrade the operator."
+msgstr "最近一次同步時 operator 不支援版本防護的 quota 寫入，推送沒有防護：晚完成的舊請求可能覆蓋較新的值。請升級 operator。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_unguarded
+msgid "Operator Lacks Version Protection"
+msgstr "Operator 不支援版本防護"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+msgid ""
+"The operator does not support versioned quota writes, so pushes are made without protection.\n"
+"                        An older request that finishes late could overwrite a newer value. Upgrade the operator."
+msgstr "Operator 不支援版本防護的 quota 寫入，推送沒有防護。\n                        晚完成的舊請求可能覆蓋較新的值。請升級 operator。"
 
 #. module: woow_paas_platform
 #. odoo-python

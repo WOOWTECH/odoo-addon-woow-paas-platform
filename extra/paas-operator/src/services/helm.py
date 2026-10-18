@@ -710,6 +710,17 @@ class KubectlException(Exception):
         super().__init__(self.message)
 
 
+#: #1680：平台每次 quota 推送的 id；GET ``managed_quota.sync_token`` 原樣回報。
+QUOTA_SYNC_TOKEN_ANNOTATION = "woow.tw/quota-sync-token"
+
+#: 條件寫入的前提不成立時 kubectl 的錯誤分類（``Error from server (<Reason>)``）。
+_QUOTA_PRECONDITION_FAILURES = ("(Conflict)", "(AlreadyExists)", "(NotFound)")
+
+
+class QuotaWriteConflict(Exception):
+    """#1680：版本防護寫入的前提不成立（物件已被改過、已存在或不存在），沒有寫入。"""
+
+
 class HelmService:
     """Service for executing Helm CLI operations."""
 
@@ -2191,6 +2202,9 @@ class KubernetesService:
         workspace_id: Optional[int] = None,
         ephemeral_storage_request: Optional[str] = None,
         ephemeral_storage_limit: Optional[str] = None,
+        sync_token: Optional[str] = None,
+        expected_resource_version: Optional[str] = None,
+        expect_absent: bool = False,
     ) -> Dict[str, str]:
         """Create namespace with resource quota.
 
@@ -2227,6 +2241,7 @@ class KubernetesService:
         quota_manifest = self._build_quota_manifest(
             name, cpu_limit, memory_limit, storage_limit,
             ephemeral_storage_request, ephemeral_storage_limit,
+            sync_token=sync_token, resource_version=expected_resource_version,
         )
 
         # Apply namespace
@@ -2245,15 +2260,16 @@ class KubernetesService:
         # Pod 會被拒。先補預設、再收緊額度，任何時刻都不會出現「額度要求、預設缺席」。
         self._apply_limitrange(name)
 
-        # Apply quota
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(quota_manifest, f)
-            quota_file = f.name
-
+        # Apply quota。#1680：版本防護寫入的前提不成立時不覆寫 quota，但 namespace 基線
+        # （pull secret、SA、PSA、NetworkPolicy）照做——平台會在下一次同步重新讀取再推送。
+        quota_status = None
         try:
-            self._run_command(["apply", "-f", quota_file])
-        finally:
-            Path(quota_file).unlink(missing_ok=True)
+            self._write_quota_manifest(quota_manifest, sync_token, expect_absent)
+            quota_status = "applied"
+        except QuotaWriteConflict:
+            quota_status = "conflict"
+            logger.warning("create_namespace(%s): guarded quota write conflicted; "
+                           "namespace baseline continues, quota left unchanged", name)
 
         self.ensure_registry_secret(name)
 
@@ -2280,7 +2296,10 @@ class KubernetesService:
                 "NetworkPolicy (no leg-2 isolation applied to this namespace).", name
             )
 
-        return {"message": f"Namespace {name} created with quota"}
+        result = {"message": f"Namespace {name} created with quota"}
+        if sync_token:
+            result["quota"] = quota_status
+        return result
 
     def _build_limitrange_manifest(self, name: str) -> dict:
         """CS ns LimitRange（#278 A2）：ns quota hard-宣告 limits.cpu/memory 後，
@@ -2327,11 +2346,16 @@ class KubernetesService:
         storage_limit: str,
         ephemeral_storage_request: Optional[str] = None,
         ephemeral_storage_limit: Optional[str] = None,
+        sync_token: Optional[str] = None,
+        resource_version: Optional[str] = None,
     ) -> dict:
         """ns ResourceQuota 的唯一組裝點（create 與 update 共用，避免兩份 hard map 漂移）。
 
         #1434：``ephemeral_storage_*`` 為 None（舊平台沒送）時**不加**這兩個鍵——
-        行為與 #1434 之前完全相同，operator 可以先於平台發版。"""
+        行為與 #1434 之前完全相同，operator 可以先於平台發版。
+
+        #1680：``sync_token`` 寫成 annotation；``resource_version`` 寫進 metadata，配合
+        ``kubectl replace`` 成為條件寫入的前提。兩者都沒給時 manifest 與之前相同。"""
         hard = {
             "requests.cpu": cpu_limit,
             "requests.memory": memory_limit,
@@ -2344,17 +2368,53 @@ class KubernetesService:
             hard["requests.ephemeral-storage"] = ephemeral_storage_request
         if ephemeral_storage_limit:
             hard["limits.ephemeral-storage"] = ephemeral_storage_limit
+        metadata = {"name": f"{name}-quota", "namespace": name}
+        if sync_token:
+            metadata["annotations"] = {QUOTA_SYNC_TOKEN_ANNOTATION: sync_token}
+        if resource_version:
+            metadata["resourceVersion"] = resource_version
         return {
             "apiVersion": "v1",
             "kind": "ResourceQuota",
-            "metadata": {"name": f"{name}-quota", "namespace": name},
+            "metadata": metadata,
             "spec": {"hard": hard},
         }
+
+    def _write_quota_manifest(self, manifest: dict, sync_token: Optional[str] = None,
+                              expect_absent: bool = False) -> None:
+        """寫入 ns ResourceQuota。
+
+        沒有 ``sync_token`` ＝ 既有的無條件 ``kubectl apply``。有 token 時是 #1680 的條件寫入：
+        ``expect_absent`` 用 ``kubectl create``（已存在就失敗）；否則 manifest 已帶
+        ``metadata.resourceVersion``，用 ``kubectl replace``——apiserver 以它當 optimistic
+        concurrency 前提，物件在平台讀取之後被改過（含 quota controller 更新 status）就拒絕。
+        前提不成立 raise ``QuotaWriteConflict``；其他 kubectl 失敗原樣往外拋。
+        """
+        import yaml
+        if not sync_token:
+            verb = "apply"
+        else:
+            verb = "create" if expect_absent else "replace"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(manifest, f)
+            quota_file = f.name
+        try:
+            self._run_command([verb, "-f", quota_file])
+        except KubectlException as exc:
+            if sync_token and not exc.timed_out and any(
+                    marker in (exc.stderr or "") for marker in _QUOTA_PRECONDITION_FAILURES):
+                raise QuotaWriteConflict(exc.stderr) from exc
+            raise
+        finally:
+            Path(quota_file).unlink(missing_ok=True)
 
     def update_namespace_quota(self, name: str, cpu_limit: str,
                                memory_limit: str, storage_limit: str,
                                ephemeral_storage_request: Optional[str] = None,
                                ephemeral_storage_limit: Optional[str] = None,
+                               sync_token: Optional[str] = None,
+                               expected_resource_version: Optional[str] = None,
+                               expect_absent: bool = False,
                                ) -> Dict[str, str]:
         """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
         apply 完整 hard map（含 pvc=10），無 stale key。
@@ -2369,15 +2429,14 @@ class KubernetesService:
         quota_manifest = self._build_quota_manifest(
             name, cpu_limit, memory_limit, storage_limit,
             ephemeral_storage_request, ephemeral_storage_limit,
+            sync_token=sync_token, resource_version=expected_resource_version,
         )
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(quota_manifest, f)
-            quota_file = f.name
-        try:
-            self._run_command(["apply", "-f", quota_file])
-        finally:
-            Path(quota_file).unlink(missing_ok=True)
-        return {"message": f"Namespace {name} quota updated"}
+        # #1680：條件寫入的前提不成立時 raise ``QuotaWriteConflict``（API 層轉 409）。
+        self._write_quota_manifest(quota_manifest, sync_token, expect_absent)
+        result = {"message": f"Namespace {name} quota updated"}
+        if sync_token:
+            result["quota"] = "applied"
+        return result
 
     def _apply_baseline_netpol(self, namespace: str, workspace_id: int) -> None:
         """#279 O4 leg-2: apply the CloudService-namespace baseline NetworkPolicy bundle

@@ -16,8 +16,8 @@ _WS = 'woow_paas_platform.workspace'
 _AUDIT = 'woow_paas_platform.workspace_quota_audit'
 
 
-@tagged('post_install', '-at_install')
-class TestWorkspaceQuotaFloorRpc1679(HttpCase):
+class _QuotaRpcFixture(HttpCase):
+    """共用 fixture：設定 operator 參數、工作區擁有者、假 operator（#1680 也用）。"""
 
     def setUp(self):
         super().setUp()
@@ -58,6 +58,10 @@ class TestWorkspaceQuotaFloorRpc1679(HttpCase):
         ws.invalidate_recordset()
         return (ws.quota_floor_cpu, ws.quota_floor_memory_gi, ws.quota_floor_storage_gi,
                 ws.quota_target_version, ws.quota_sync_state)
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaFloorRpc1679(_QuotaRpcFixture):
 
     def test_system_administrator_sets_minimum_through_rpc(self):
         self.authenticate('admin', 'admin')

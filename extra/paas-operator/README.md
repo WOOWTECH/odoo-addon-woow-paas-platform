@@ -135,6 +135,19 @@ definitive NotFound, and `null` for Forbidden, timeout or any other failure.
 When the managed quota is found, `namespace_exists` is `true`; when the quota
 read itself fails it stays `null`. The platform treats `null` as unknown and
 never as "not created yet". A forbidden/failed/timed-out read is `quota_unreadable`, not an empty list.
+
+`managed_quota.sync_token` (#1680) is the `woow.tw/quota-sync-token` annotation of the
+managed quota (`null` when absent). The key is always present on operators that
+support guarded writes, also while `status.hard` still lags `spec.hard`; the
+platform uses its presence to detect support. `PUT /api/namespaces/{name}/quota` and
+`POST /api/namespaces` accept an optional guard: `sync_token` plus exactly one of
+`expected_resource_version` (written with `kubectl replace`, so the apiserver rejects
+it if the object changed since that version) or `expect_absent` (written with
+`kubectl create`). A failed precondition writes nothing: PUT answers 409
+`{"detail": "quota_conflict"}`; POST still applies the namespace baseline and answers
+201 with `"quota": "conflict"`. Guarded writes report `"quota": "applied"`. Without a
+guard both endpoints keep the unconditional `kubectl apply`. Older operators ignore
+these fields silently, so callers must not infer support from the PUT response.
 An old operator omitting `managed_quota` is unsupported/unknown in the backend;
 Odoo never falls back to the frontend summary. Deploy compatible operator first.
 

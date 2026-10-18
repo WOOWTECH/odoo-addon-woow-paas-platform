@@ -357,7 +357,7 @@ class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
         operator = FakeQuotaOperator({namespace: build_hard('8', '8Gi', '100Gi', '4Gi', '80Gi')})
         client = operator.bind()
 
-        with self.registry.cursor() as holder, self.registry.cursor() as contender:
+        with scope.track(), self.registry.cursor() as holder, self.registry.cursor() as contender:
             ws = scope.env(contender)['woow_paas_platform.workspace'].browse(ws_id)
             # 釘住 contender 的快照（REPEATABLE READ：第一個查詢就決定）；若實作不顧鎖仍寫這一列，
             # statement_timeout 讓它報錯而不是和 holder 互等到天荒地老。
@@ -370,6 +370,8 @@ class TestWorkspaceQuotaFloorLocking1679(TransactionCase):
                 result = ws._quota_sync('lifecycle', namespaces=[namespace], nowait=True)
             self.assertEqual(result['state'], 'busy', '別人拿著鎖：生命週期不送、不寫')
             self.assertEqual((operator.reads, operator.creates, operator.puts), ([], [], []))
+            # #1680：忙碌不再丟掉這次推送——改排背景同步（trigger 是另一張表，不寫工作區這一列）。
+            self.assertTrue(scope.ids['ir.cron.trigger'], '忙碌時排了背景同步')
             holder.execute(f'UPDATE {table} SET quota_target_version = 1 WHERE id = %s', (ws_id,))
             holder.commit()
             self.assertEqual(ws._quota_create_namespace(client, namespace),
