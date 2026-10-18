@@ -130,6 +130,9 @@ class TestLlmFreeUsage(_ConfiguredCase):
         self.assertEqual(exc.code, 'llm_free_capped_today')
         # Remove the disabled mirror and deliberately bypass creation guard.
         _llm_internal(trial).write({'state': 'deleted'})
+        # Release the partial unique index before the replacement INSERT; ORM
+        # writes are deferred, while _key() only flushes after creating its row.
+        trial.flush_recordset(['state'])
         bypass = self._key(token_id=789)
         self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
         bypass.invalidate_recordset()
