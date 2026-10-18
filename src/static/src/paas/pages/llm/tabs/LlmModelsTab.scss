@@ -51,10 +51,10 @@
 }
 
 .o_woow_llm_price_preview {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  // libsass cannot compare % with px; leave min() for the browser to evaluate.
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(unquote("min(100%, 220px)"), 1fr));
   gap: 16px; margin: 24px 0; font-size: 16px;
   &__item { min-width: 0; padding: 16px; border: 1px solid #eff1f5; border-radius: 20px; }
   code { overflow-wrap: anywhere; white-space: normal; }
   p { margin: 8px 0 0; }
-  @media (max-width: $woow-bp-sm) { grid-template-columns: minmax(0, 1fr); }
 }
