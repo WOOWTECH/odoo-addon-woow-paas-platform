@@ -1,7 +1,7 @@
 """LLM-01b 的純 Python 單元測試：``src/services/{newapi_client,llm_crypto,llm_redact}.py``。
 
 Run:  python3 tests/test_llm_services.py -v
-CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；只需要 requests 與 cryptography）。
+CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；使用 requests、cryptography 與 httpx2）。
 
 這三支模組刻意不 import odoo，所以這裡在沒有 Odoo 的環境直接載入（照
 ``tests/test_shc_bare_create_transport.py`` 的做法）。和代理的契約用代理自己的參考實作
@@ -15,11 +15,15 @@ validator、body／Authorization／proof 的有無、以及 ``WEB_METHODS`` 恰�
 傳輸錯誤用真的 loopback socket（不是 mock）：連線被拒、送出後斷線、讀取逾時、DNS 失敗
 都由 requests／urllib3 自己丟例外，再看分類對不對（DESIGN §3.4、〔REV〕24）。
 """
+import asyncio
+import concurrent.futures
 import importlib
 import io
 import json
 import logging
 import socket
+import ssl
+import tempfile
 import sys
 import threading
 import time
@@ -851,6 +855,198 @@ class TestMcpUrlGuard(unittest.TestCase):
         with patch.object(mcp_url_guard, 'RESOLVE_TIMEOUT_SECONDS', 0.05), \
                 patch.object(mcp_url_guard, '_getaddrinfo', side_effect=lambda h: time.sleep(0.5)):
             self.assertEqual(mcp_url_guard.resolve('slow.example'), set())
+
+    def test_resolution_capacity_stays_bounded_after_timeouts(self):
+        # Timed-out libc lookups keep running. They must retain their slots, including
+        # jobs waiting behind the blocked workers, until the actual futures finish.
+        release = threading.Event()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        slots = threading.BoundedSemaphore(2)
+        submitted = []
+        original_submit = executor.submit
+
+        def submit(*args):
+            submitted.append(args)
+            return original_submit(*args)
+
+        def blocked(host):
+            release.wait(2)
+            return {'203.0.113.7'}
+
+        try:
+            with patch.object(mcp_url_guard, '_EXECUTOR', executor), \
+                    patch.object(mcp_url_guard, '_RESOLVE_SLOTS', slots, create=True), \
+                    patch.object(mcp_url_guard, 'RESOLVE_TIMEOUT_SECONDS', 0.005), \
+                    patch.object(mcp_url_guard, '_getaddrinfo', side_effect=blocked), \
+                    patch.object(executor, 'submit', side_effect=submit):
+                for _ in range(20):
+                    self.assertEqual(mcp_url_guard.resolve('slow.example'), set())
+                self.assertEqual(len(submitted), 2, 'running + queued lookups must stay bounded')
+                _, httpcore = mcp_url_guard._http_modules()
+                backend = httpcore.AsyncMockBackend([])
+
+                async def connect_when_full():
+                    with patch.object(mcp_url_guard, '_network_backend', return_value=backend), \
+                            patch.object(backend, 'connect_tcp', wraps=backend.connect_tcp) as connect:
+                        async with mcp_url_guard.guarded_http_client_factory()() as client:
+                            with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
+                                await client.get('http://slow.example/mcp')
+                            self.assertEqual(caught.exception.reason, 'dns_unavailable')
+                        connect.assert_not_called()
+
+                asyncio.run(connect_when_full())
+                self.assertEqual(len(submitted), 2, 'exhausted connections must not enqueue more DNS')
+                release.set()
+                executor.shutdown(wait=True)
+                self.assertTrue(slots.acquire(blocking=False))
+                self.assertTrue(slots.acquire(blocking=False))
+                self.assertFalse(slots.acquire(blocking=False))
+        finally:
+            release.set()
+            executor.shutdown(wait=True)
+
+    def test_actual_connect_pins_one_dns_answer_and_preserves_https_origin(self):
+        _, httpcore = mcp_url_guard._http_modules()
+
+        class Stream(httpcore.AsyncMockStream):
+            async def write(self, buffer, timeout=None):
+                self.writes = getattr(self, 'writes', []) + [buffer]
+
+            async def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+                self.tls = (ssl_context.check_hostname, ssl_context.verify_mode, server_hostname)
+                return self
+
+        class Backend(httpcore.AsyncMockBackend):
+            async def connect_tcp(self, host, port, **kwargs):
+                self.target = (host, port)
+                self.stream = Stream([b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}'])
+                return self.stream
+
+        answers = []
+
+        def alternating(host):
+            if host == 'mcp.example.com':
+                answers.append(host)
+                return {'203.0.113.7'} if len(answers) == 1 else {'10.43.88.10'}
+            return self.resolver(host)
+
+        async def run():
+            backend = Backend([])
+            with patch.object(mcp_url_guard, '_network_backend', return_value=backend, create=True), \
+                    patch.object(httpcore.AnyIOBackend, 'connect_tcp', side_effect=backend.connect_tcp):
+                async with mcp_url_guard.guarded_http_client_factory(resolver=alternating)() as client:
+                    response = await client.get('https://mcp.example.com/mcp')
+                    self.assertEqual(response.json(), {})
+            self.assertEqual(answers, ['mcp.example.com'])
+            self.assertEqual(backend.target, ('203.0.113.7', 443))
+            self.assertEqual(backend.stream.tls, (True, 2, 'mcp.example.com'))
+            self.assertIn(b'Host: mcp.example.com\r\n', b''.join(backend.stream.writes))
+
+        asyncio.run(run())
+
+    def test_connect_fails_closed_on_empty_or_mixed_dns_answers(self):
+        _, httpcore = mcp_url_guard._http_modules()
+
+        async def run():
+            for addresses, reason in ((set(), 'dns_unavailable'),
+                                      ({'203.0.113.7', '10.43.88.10'}, 'newapi_address'),
+                                      ({'203.0.113.7', '10.42.1.2'}, 'cluster_address')):
+                def resolver(host):
+                    return addresses if host == 'mcp.example.com' else self.resolver(host)
+
+                backend = httpcore.AsyncMockBackend([])
+                with patch.object(mcp_url_guard, '_network_backend', return_value=backend, create=True), \
+                        patch.object(backend, 'connect_tcp', wraps=backend.connect_tcp) as connect:
+                    async with mcp_url_guard.guarded_http_client_factory(resolver=resolver)() as client:
+                        with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
+                            await client.get('https://mcp.example.com/mcp')
+                        self.assertEqual(caught.exception.reason, reason)
+                    connect.assert_not_called()
+
+        asyncio.run(run())
+
+    def test_real_tls_verifies_hostname_and_keeps_original_sni(self):
+        # A real handshake locks down certificate identity; replacing the URL with
+        # its numeric IP or disabling verification would make this test fail.
+        from datetime import datetime, timedelta, timezone
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.x509.oid import NameOID
+
+        httpx, httpcore = mcp_url_guard._http_modules()
+        key = ed25519.Ed25519PrivateKey.generate()
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'mcp.example.com')])
+        now = datetime.now(timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=1))
+                .not_valid_after(now + timedelta(minutes=5))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName('mcp.example.com')]),
+                               critical=False).sign(key, None))
+
+        with tempfile.TemporaryDirectory() as folder:
+            cert_path, key_path = Path(folder) / 'cert.pem', Path(folder) / 'key.pem'
+            cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                                   serialization.PrivateFormat.PKCS8,
+                                                   serialization.NoEncryption()))
+            server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_context.load_cert_chain(cert_path, key_path)
+            sni = []
+            server_context.set_servername_callback(lambda sock, name, context: sni.append(name))
+            client_context = ssl.create_default_context(cafile=str(cert_path))
+            requests_seen = []
+
+            async def respond(reader, writer):
+                try:
+                    requests_seen.append(await reader.readuntil(b'\r\n\r\n'))
+                    writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}')
+                    await writer.drain()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            def resolver(host):
+                return {'127.0.0.1'} if host in ('mcp.example.com', 'wrong.example.com') else set()
+
+            async def run():
+                server = await asyncio.start_server(respond, '127.0.0.1', 0, ssl=server_context)
+                port = server.sockets[0].getsockname()[1]
+                async with server:
+                    with patch.object(httpcore, 'default_ssl_context', return_value=client_context):
+                        async with mcp_url_guard.guarded_http_client_factory(resolver=resolver)() as client:
+                            response = await client.get('https://mcp.example.com:%s/mcp' % port)
+                            self.assertEqual(response.status_code, 200)
+                            with self.assertRaises(httpx.ConnectError):
+                                await client.get('https://wrong.example.com:%s/mcp' % port)
+                self.assertEqual(sni, ['mcp.example.com', 'wrong.example.com'])
+                self.assertEqual(len(requests_seen), 1, 'bad hostname must fail before HTTP')
+                self.assertIn(('Host: mcp.example.com:%s\r\n' % port).encode(), requests_seen[0])
+
+            asyncio.run(run())
+
+    def test_factory_uses_mcp_compatible_defaults_and_disables_all_redirects(self):
+        httpx, httpcore = mcp_url_guard._http_modules()
+
+        async def run():
+            for location in ('/same-host', 'http://10.43.88.10/'):
+                backend = httpcore.AsyncMockBackend([
+                    b'HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: '
+                    + location.encode() + b'\r\n\r\n'])
+                with patch.object(mcp_url_guard, '_network_backend', return_value=backend):
+                    async with mcp_url_guard.guarded_http_client_factory(resolver=self.resolver)(
+                            headers={'X-Mcp-Test': 'configured'}) as client:
+                        self.assertIsInstance(client, httpx.AsyncClient)
+                        self.assertEqual(client.timeout.connect, 30)
+                        self.assertEqual(client.timeout.read, 300)
+                        self.assertEqual(client.headers['X-Mcp-Test'], 'configured')
+                        self.assertFalse(client.follow_redirects)
+                        with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
+                            await client.get('http://mcp.example.com/redirect')
+                        self.assertEqual(caught.exception.reason, 'redirect')
+
+        asyncio.run(run())
 
     def test_protected_names_cover_both_environments(self):
         self.assertEqual(set(mcp_url_guard.PROTECTED_HOSTS), {

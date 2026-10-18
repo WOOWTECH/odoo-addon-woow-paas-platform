@@ -151,31 +151,31 @@ class TestLlmMcpJumpGuard(HttpCase):
         self.assertIn('internal platform service', server.state_message)
 
     def test_client_factory_rechecks_every_request_and_refuses_redirects(self):
-        import httpx
-
         config = self.McpServer.create({'name': 'f', 'url': 'https://mcp.example.com/sse',
                                         'transport': 'sse'})._get_mcp_client_config()
         self.assertIn('httpx_client_factory', config)
 
-        def transport(request):
-            if request.url.path == '/redirect':
-                return httpx.Response(302, headers={'location': 'http://%s:8080/' % PROXY_CLUSTER_IP})
-            return httpx.Response(200, json={})
-
-        def base_factory(headers=None, timeout=None, auth=None):
-            return httpx.AsyncClient(transport=httpx.MockTransport(transport))
+        # Keep the real guarded httpx/core transport. Fake only socket I/O, so this
+        # test cannot accidentally bypass the connection-time guard via MockTransport.
+        def backend(core):
+            return core.AsyncMockBackend([
+                b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}',
+                (b'HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: http://'
+                 + PROXY_CLUSTER_IP.encode() + b':8080/\r\n\r\n'),
+            ])
 
         async def run(resolver):
-            factory = mcp_url_guard.guarded_http_client_factory(base_factory, resolver=resolver)
+            factory = mcp_url_guard.guarded_http_client_factory(resolver=resolver)
             async with factory() as client:
                 self.assertFalse(client.follow_redirects)
-                ok = await client.get('https://mcp.example.com/ok')
+                ok = await client.get('http://mcp.example.com/ok')
                 self.assertEqual(ok.status_code, 200)
                 with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
-                    await client.get('https://mcp.example.com/redirect')
+                    await client.get('http://mcp.example.com/redirect')
                 self.assertEqual(caught.exception.reason, mcp_url_guard.REASON_REDIRECT)
             async with factory() as client:
                 with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
                     await client.get('http://newapi-proxy.new-api-stg:8080/')
                 self.assertEqual(caught.exception.reason, mcp_url_guard.REASON_NAMESPACE)
-        asyncio.run(run(_resolver()))
+        with patch.object(mcp_url_guard, '_network_backend', side_effect=backend):
+            asyncio.run(run(_resolver()))
