@@ -92,14 +92,15 @@ class LlmFreeUsage(models.Model):
 
     @api.model
     def _llm_today(self, account_id):
+        day = taipei_day()
         row = {}
         if account_id:
             with self.env.registry.cursor() as cr:
                 cr.execute('SELECT success_count, trial_keys_created, capped_at FROM %s '
                            'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
-                           (account_id, taipei_day()))
+                           (account_id, day))
                 row = cr.dictfetchone() or {}
-        return {'today_count': row.get('success_count') or 0,
+        return {'day_tpe': day.isoformat(), 'today_count': row.get('success_count') or 0,
                 'daily_limit': self._llm_daily_limit(), 'capped': bool(row.get('capped_at')),
                 'keys_created_today': row.get('trial_keys_created') or 0}
 
@@ -443,7 +444,9 @@ class LlmAccountFreeGroup(models.Model):
                        'AND newapi_user_id > 0' % ACCOUNT_TABLE, (group, self.id))
         self.env.ref(BG_CRON).sudo()._trigger()
         return {'type': 'ir.actions.client', 'tag': 'display_notification', 'params': {
-            'type': 'info', 'message': _('Free trial fallback queued. The proxy owner must enable break-glass.'),
+            'type': 'info', 'message': _(
+                'Break-glass request queued for one attempt. If it fails, confirm break-glass '
+                'is enabled and press the button again.'),
             'sticky': False}}
 
     def action_llm_block_free_trial(self):

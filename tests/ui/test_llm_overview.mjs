@@ -940,3 +940,53 @@ test("LLM-10: capped and daily creation limit disable free trial with an explana
   fake.usage.free_trial.keys_created_today = 0;
   assert.equal(tab.canCreateFreeTrialKey, true, "next Taipei day refreshes the daily gate");
 });
+
+test("LLM-10: yesterday's usage cannot override a fresh Taipei-day state", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: {
+    day_tpe: "2026-10-19", today_count: 0, daily_limit: 200,
+    capped: false, keys_created_today: 0,
+  } };
+  fake.usage = { free_trial: {
+    day_tpe: "2026-10-18", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 3,
+  } };
+  assert.equal(tab.freeTrialUsageText, "0／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, true);
+  assert.equal(tab.freeTrialCappedText, null);
+
+  fake.overview.free_trial = {
+    day_tpe: "2026-10-19", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  };
+  fake.usage.free_trial = {
+    day_tpe: "2026-10-18", today_count: 0, daily_limit: 200,
+    capped: false, keys_created_today: 0,
+  };
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCappedText, /已用完/);
+});
+
+test("LLM-10: failed usage refresh leaves the fresh state authoritative", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: {
+    day_tpe: "2026-10-19", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  } };
+  fake.usage = { free_trial: {
+    day_tpe: "2026-10-19", today_count: 199, daily_limit: 200,
+    capped: false, keys_created_today: 1,
+  } };
+  fake.usageError = "llm_network_error";
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCappedText, /已用完/);
+
+  fake.usageError = null;
+  fake.usage.free_trial = {
+    day_tpe: "2026-10-19", today_count: 201, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  };
+  assert.equal(tab.freeTrialUsageText, "201／200 次");
+});

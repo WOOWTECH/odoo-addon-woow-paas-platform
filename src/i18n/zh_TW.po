@@ -14603,6 +14603,7 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_account__state
 msgid "State"
 msgstr "狀態"
 
@@ -21317,6 +21318,7 @@ msgstr "通知（%(count)s 則未讀）"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__account_id
 msgid "Account"
 msgstr "帳號"
 
@@ -26301,3 +26303,163 @@ msgstr "資料時間 %(time)s"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "Today's free trial is used up. Restores automatically at 00:00 Taipei time."
 msgstr "今日免費試用已用完，台北時間 00:00 自動恢復。"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_free_usage
+msgid "AI Models Free Trial Daily Usage"
+msgstr "AI 模型免費試用每日用量"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_free_log_receipt
+msgid "AI Models Free Trial Log Receipt"
+msgstr "AI 模型免費試用日誌收據"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_usage_account_day_uniq
+msgid "One free trial counter per day."
+msgstr "每天只能有一筆免費試用計數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_usage_counts_nonnegative
+msgid "Free trial counters cannot be negative."
+msgstr "免費試用計數不能為負數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_log_receipt_log_uniq
+msgid "Log already metered."
+msgstr "這筆日誌已計入用量。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Free trial usage is maintained by the platform."
+msgstr "免費試用用量由平台維護。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Only administrators can request the free trial fallback."
+msgstr "只有系統管理員可以要求免費試用備援操作。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Break-glass request queued for one attempt. If it fails, confirm break-glass is enabled and press the button again."
+msgstr "已排入一次 break-glass 操作。若失敗，請確認 break-glass 已啟用後再按一次按鈕。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__day_tpe
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_log_receipt__day_tpe
+msgid "Day Tpe"
+msgstr "台北日期"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__success_count
+msgid "Success Count"
+msgstr "成功呼叫次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__trial_keys_created
+msgid "Trial Keys Created"
+msgstr "已建立試用金鑰數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__capped_at
+msgid "Capped At"
+msgstr "達上限時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_log_receipt__newapi_log_id
+msgid "Newapi Log"
+msgstr "new-api 日誌 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_capped_day
+msgid "Free Capped Day"
+msgstr "免費試用封鎖日期"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_cap_attempted_at
+msgid "Free Cap Attempted At"
+msgstr "免費試用封鎖嘗試時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_cap_pending
+msgid "Free Cap Pending"
+msgstr "免費試用封鎖待確認"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_log_id
+msgid "Free Meter Last Log"
+msgstr "免費試用計量最後日誌 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_ts
+msgid "Free Meter Last Ts"
+msgstr "免費試用計量最後時間戳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_ts
+msgid "Unix seconds of the last free-usage log read."
+msgstr "上次讀取免費試用日誌的 Unix 秒數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_start
+msgid "Free Meter Scan Start"
+msgstr "免費試用計量掃描起點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_end
+msgid "Free Meter Scan End"
+msgstr "免費試用計量掃描終點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_page
+msgid "Free Meter Scan Page"
+msgstr "免費試用計量掃描頁數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_max_id
+msgid "Free Meter Scan Max"
+msgstr "免費試用計量掃描最大 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_account__free_group_requested
+msgid "Free Group Requested"
+msgstr "待執行群組操作"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_account__free_group_requested__free_blocked
+msgid "Block free trial"
+msgstr "封鎖免費試用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_account__free_group_requested__default
+msgid "Restore default group"
+msgstr "還原預設群組"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Block free trial (break-glass)"
+msgstr "封鎖免費試用（break-glass）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Restore default group (break-glass)"
+msgstr "還原預設群組（break-glass）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Have the proxy owner enable break-glass before continuing. This makes one attempt to block the free trial group; if it fails, check the alert and press this button again."
+msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試封鎖免費試用群組一次；若失敗，請查看告警並再按此按鈕。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Have the proxy owner enable break-glass before continuing. This makes one attempt to restore the default group; if it fails, check the alert and press this button again."
+msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試還原預設群組一次；若失敗，請查看告警並再按此按鈕。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.act_window,name:woow_paas_platform.action_llm_free_fallback
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_free_fallback
+msgid "Free trial fallback"
+msgstr "免費試用備援"

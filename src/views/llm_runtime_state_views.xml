@@ -82,9 +82,9 @@
             <form create="0" edit="0" delete="0">
                 <header>
                     <button name="action_llm_block_free_trial" type="object" string="Block free trial (break-glass)"
-                            groups="base.group_system" confirm="Queue a free trial group block? The proxy owner must enable break-glass first."/>
+                            groups="base.group_system" confirm="Have the proxy owner enable break-glass before continuing. This makes one attempt to block the free trial group; if it fails, check the alert and press this button again."/>
                     <button name="action_llm_restore_free_group" type="object" string="Restore default group (break-glass)"
-                            groups="base.group_system" confirm="Queue restoration of the default group?"/>
+                            groups="base.group_system" confirm="Have the proxy owner enable break-glass before continuing. This makes one attempt to restore the default group; if it fails, check the alert and press this button again."/>
                 </header>
                 <sheet><group>
                     <field name="partner_id"/>

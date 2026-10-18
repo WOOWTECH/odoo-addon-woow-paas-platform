@@ -502,9 +502,15 @@ export class LlmOverviewTab extends Component {
   }
 
   get freeTrial() {
-    // Both endpoint payloads read llm_free_usage; recent-call pagination is not a counter.
-    return { ...((this.llm.overview && this.llm.overview.free_trial) || {}),
-      ...((this.llm.usage && this.llm.usage.free_trial) || {}) };
+    // Both endpoints read llm_free_usage. Keep a fresh state response authoritative
+    // when the usage refresh fails or still belongs to the previous Taipei day.
+    const state = (this.llm.overview && this.llm.overview.free_trial) || {};
+    const usage = this.llm.usage && this.llm.usage.free_trial;
+    if (!usage || this.llm.usageError ||
+        (state.day_tpe && (!usage.day_tpe || usage.day_tpe < state.day_tpe))) {
+      return state;
+    }
+    return { ...state, ...usage };
   }
 
   get freeTrialUsageText() {

@@ -79,6 +79,7 @@ class TestLlmFreeUsage(_ConfiguredCase):
         })
 
     def test_overlap_catches_ten_minute_gap_and_caps_recovery_at_one_day(self):
+        self.assertEqual(self.Usage._llm_today(self.account.id)['day_tpe'], DAY.isoformat())
         self.assertEqual(meter_window(STAMP, STAMP - 600), STAMP - 660)
         self.assertEqual(meter_window(STAMP, STAMP - 60), STAMP - 300)
         self.assertEqual(meter_window(STAMP, STAMP - 172800), STAMP - 86400)
@@ -332,6 +333,31 @@ class TestLlmFreeUsage(_ConfiguredCase):
         self.assertFalse(self.account.free_group_requested)
         self.env[ACCOUNT]._llm_free_group_tick({}, LlmCronTick(30, 10))
         self.client.bg_set_user_group.assert_not_called()
+
+    def test_bg_disabled_consumes_request_and_requires_manual_retry(self):
+        with patch.object(type(self.env['ir.cron']), '_trigger'):
+            self.account.action_llm_block_free_trial()
+        self.client.bg_set_user_group.return_value = nac.Definite(
+            proxy_error='policy', reason='break_glass_off')
+        with patch.object(type(self.Usage), '_llm_alert') as alert:
+            self.env[ACCOUNT]._llm_free_group_tick({}, LlmCronTick(30, 10))
+        alert.assert_called_once_with(
+            free_module.LlmAlert.BREAK_GLASS_USED, 'llm_break_glass_failed', self.account.id)
+        self.account.invalidate_recordset()
+        self.assertFalse(self.account.free_group_requested)
+        self.assertEqual(self.client.bg_set_user_group.call_count, 1)
+
+        # Enabling bg later cannot replay the consumed request.
+        self.client.bg_set_user_group.return_value = nac.Ok({})
+        self.env[ACCOUNT]._llm_free_group_tick({}, LlmCronTick(30, 10))
+        self.assertEqual(self.client.bg_set_user_group.call_count, 1)
+
+        with patch.object(type(self.env['ir.cron']), '_trigger'):
+            self.account.action_llm_block_free_trial()
+        self.env[ACCOUNT]._llm_free_group_tick({}, LlmCronTick(30, 10))
+        self.assertEqual(self.client.bg_set_user_group.call_count, 2)
+        self.account.invalidate_recordset()
+        self.assertFalse(self.account.free_group_requested)
 
     def test_bg_is_explicit_queue_and_changes_only_group(self):
         self.client.bg_set_user_group.return_value = nac.Ok({})
