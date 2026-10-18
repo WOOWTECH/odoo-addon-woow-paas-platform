@@ -441,4 +441,3 @@ class LlmSwrCache(models.Model):
                             getattr(exc, 'pgcode', None))
             return False
         return True
-
