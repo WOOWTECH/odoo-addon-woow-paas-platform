@@ -1,12 +1,36 @@
 import logging
 
 from odoo import api, models
+from odoo.tools import formataddr
+from odoo.tools.mail import email_split_tuples
 
 _logger = logging.getLogger(__name__)
 
 
 class ResCompany(models.Model):
     _inherit = 'res.company'
+
+    def _woow_paas_mail_sender(self, original_sender=None):
+        """Format PaaS mail without a duplicated trailing company VAT number.
+
+        Company/partner names are shared with ERP documents. Keep those fields
+        and the native ``email_formatted`` unchanged; only PaaS senders opt in.
+        A VAT embedded in a name or attached without whitespace is not a suffix.
+        When given a rendered sender, retain any intentional template override.
+        """
+        self.ensure_one()
+        if original_sender is not None and email_split_tuples(
+                original_sender or '') != email_split_tuples(self.email_formatted or ''):
+            return original_sender
+        if not self.email:
+            return False
+        name = (self.name or '').strip()
+        vat = (self.vat or '').strip()
+        if vat and name.endswith(vat):
+            prefix = name[:-len(vat)]
+            if prefix and prefix[-1].isspace() and prefix.strip():
+                name = prefix.rstrip()
+        return formataddr((name, self.email))
 
     @api.model
     def _ensure_subscription_journal(self):
