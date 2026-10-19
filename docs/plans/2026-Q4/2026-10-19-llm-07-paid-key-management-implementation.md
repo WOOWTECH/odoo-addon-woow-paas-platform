@@ -25,7 +25,7 @@ related:
 
 - Base this work on the latest `origin/develop` containing #1839 (LLM-04), #1847 (LLM-02), #1848 (LLM-06), and #1849 (LLM-10). At drafting time that is `9650d6fd`.
 - LLM-08's N25 password reauthentication currently exists only in the local LLM-08 integration branch, not in develop. Do **not** copy a second implementation into LLM-07. Tasks 2–3 may proceed independently; before Task 4 or any endpoint that relies on reauth, rebase this branch only after the LLM-08 reauth change is merged (or after an explicitly approved, reviewed stack base is supplied). Verify that `llm_account._llm_require_reauth()` and `/api/llm/account/reauth` exist first.
-- Do not push, open a PR, alter stg/prod, import terms, or reveal/use a real new-api key while executing this plan. All backend tests use `FakeNewApi`.
+- Do not push, open a PR, alter shared stg/prod, import terms, or reveal/use a real new-api key without explicit authorization. All backend tests use `FakeNewApi`.
 - LLM-11 owns actual expiry/create notification delivery. This ticket only adds the durable expiry-notice dedupe fields and UI “expiring soon” state.
 - LLM-09, LLM-12a, and LLM-15 own usage charts, hardening/invariants, and later cross-feature work. Do not pull their scope into this branch.
 
@@ -342,5 +342,5 @@ related:
 - [x] Task 1: `llm_reauth` focused run in `dev-sandbox-llmdev` selected 16 tests and exited 0 (no `-u`, no shared-demo deployment).
 - [x] Task 4 implementation: added closed paid-create validation, cache-only default-model allowlists, terms/N25 ordering, one-time reveal reuse, and an independent-cursor 20-key race guard; free and paid creation now share the durable create/reveal transaction.
 - [x] Task 4 static evidence: `py_compile`, `git diff --check`, C2 collection audit (1,242 entries), and pure new-api transport tests (86 tests) passed.
-- [ ] Task 4 focused Odoo class remains pending a branch candidate image for the already-authorized isolated `llmdev` sandbox; no branch push or deployment has been performed.
+- [x] Task 4 focused Odoo class: CI run `23615` built `sha256:85095cee7bf9c0284819c6d8f45262a0973441cc1ce568e273de011f1983611d` from `addon_ref=feat/llm-07-paid-key-management-1019` (remote branch head verified as `60824659`); after the explicitly approved isolated `llmdev` bootstrap `-u web` completed, the no-`-u` `llm_key_management` run passed 19 tests (0 failed, 0 errors).
 - [ ] Tasks 2–11 complete with recorded verification evidence.
