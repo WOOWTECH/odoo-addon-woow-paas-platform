@@ -63,6 +63,7 @@ from ..models.llm_common import (
     LlmError,
     llm_visible,
 )
+from ..models.llm_api_key import _OMITTED
 from ..services import llm_redact
 from .ha_paas import HiddenChainMixin
 from .paas import _account_denial
@@ -257,6 +258,36 @@ class LlmController(HiddenChainMixin, Controller):
                     expires=expires, models=models)
             raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
         return self._run('keys/create', handler, swallow_operational=True)
+
+    @route('/api/llm/keys/update', auth='user', methods=['POST'], type='json')
+    def llm_keys_update(self, key_id=None, **kw) -> dict[str, Any]:
+        """Keep omitted JSON fields distinct from explicit ``null`` for the service."""
+        def handler(partner):
+            return request.env[KEY_MODEL]._llm_update_key(
+                partner, key_id, user=request.env.user, real_ip=_peer_ip(),
+                name=kw.get('name', _OMITTED),
+                limit_points=kw.get('limit_points', _OMITTED),
+                expires=kw.get('expires', _OMITTED),
+                models=kw.get('models', _OMITTED))
+        return self._run('keys/update', handler)
+
+    @route('/api/llm/keys/extend', auth='user', methods=['POST'], type='json')
+    def llm_keys_extend(self, key_id=None, **kw) -> dict[str, Any]:
+        return self._run('keys/extend', lambda partner: request.env[KEY_MODEL]
+                         ._llm_extend_key(partner, key_id, user=request.env.user,
+                                          real_ip=_peer_ip()))
+
+    @route('/api/llm/keys/set_status', auth='user', methods=['POST'], type='json')
+    def llm_keys_set_status(self, key_id=None, enabled=None, **kw) -> dict[str, Any]:
+        return self._run('keys/set_status', lambda partner: request.env[KEY_MODEL]
+                         ._llm_set_key_status(partner, key_id, enabled, user=request.env.user,
+                                              real_ip=_peer_ip(), session=request.session))
+
+    @route('/api/llm/keys/delete', auth='user', methods=['POST'], type='json')
+    def llm_keys_delete(self, key_id=None, confirm_name=None, **kw) -> dict[str, Any]:
+        return self._run('keys/delete', lambda partner: request.env[KEY_MODEL]
+                         ._llm_delete_key(partner, key_id, confirm_name, user=request.env.user,
+                                          real_ip=_peer_ip()))
 
     @route('/api/llm/models', auth='user', methods=['POST'], type='json')
     def llm_models(self) -> dict[str, Any]:

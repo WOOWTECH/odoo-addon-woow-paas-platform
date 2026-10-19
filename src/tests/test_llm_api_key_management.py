@@ -1,9 +1,9 @@
 """LLM-07 paid API-key mirror contract (DESIGN §2.3, D4, D9, D10).
 
-These tests deliberately stay below the HTTP boundary.  They lock down the
-PaaS-owned mirror semantics first: durable expiry-notice fields, calculated display
-status, integer total-limit DTO values, the per-account 20-key invariant, and the
-fake-backed one-time paid-key creation transaction.
+These tests lock down PaaS-owned mirror semantics and the JSON-RPC boundary:
+durable expiry-notice fields, calculated display status, integer total-limit DTO
+values, the per-account 20-key invariant, and fake-backed paid-key flows that
+never reach a real new-api service.
 """
 import json
 import logging
@@ -21,6 +21,7 @@ from ..models.llm_account import REAUTH_SESSION_KEY
 from ..services import newapi_client as nac
 from ..models.llm_common import (
     API_ERROR_CODES,
+    ERR_LLM_INTERNAL,
     ERR_LLM_KEY_CANNOT_ENABLE,
     ERR_LLM_KEY_LIMIT_BELOW_USED,
     ERR_LLM_KEY_NOT_FOUND,
@@ -583,24 +584,27 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
             return self.service._llm_create_paid_key(
                 self.user.partner_id, request_id, self.user, self.real_ip, session, **values)
 
-    def _http_create(self, **params):
-        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
-        with patch.object(Cache, '_llm_models_payload', return_value=self._catalogue()):
-            response = self.url_open(
-                '/api/llm/keys/create',
-                data=json.dumps({'jsonrpc': '2.0', 'method': 'call', 'params': params}),
-                headers={'Content-Type': 'application/json'},
-            )
+    def _http(self, path, **params):
+        response = self.url_open(
+            path,
+            data=json.dumps({'jsonrpc': '2.0', 'method': 'call', 'params': params}),
+            headers={'Content-Type': 'application/json'},
+        )
         self.assertEqual(
             response.status_code, 200,
-            'LLM key create endpoint returned unexpected HTTP status %s' % response.status_code,
+            'LLM key endpoint returned unexpected HTTP status %s' % response.status_code,
         )
         body = response.json()
         self.assertNotIn(
             'error', body,
-            'LLM key create endpoint returned a JSON-RPC error',
+            'LLM key endpoint returned a JSON-RPC error',
         )
         return body['result']
+
+    def _http_create(self, **params):
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        with patch.object(Cache, '_llm_models_payload', return_value=self._catalogue()):
+            return self._http('/api/llm/keys/create', **params)
 
     def _error(self, call):
         try:
@@ -1211,7 +1215,7 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         client_output = json.dumps(result)
         log_output = '\n'.join(logs.output)
         self.assertFalse(result['success'], 'paid service exception must fail closed')
-        self.assertEqual(result['code'], 'llm_internal')
+        self.assertEqual(result['code'], ERR_LLM_INTERNAL)
         self.assertFalse(secret in client_output, 'client response contained exception text')
         self.assertFalse(secret in log_output, 'controller log contained exception text')
         self.assertFalse('Traceback' in log_output, 'controller log contained a traceback')
@@ -1228,6 +1232,199 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         self.assertFalse(result['success'], result)
         self.assertEqual(result['code'], 'llm_key_invalid')
         self.assertEqual(self.fake.calls, before_calls)
+
+    def test_http_paid_key_management_success_paths(self):
+        """list/update/extend/status/delete use the session user's owned mirror only."""
+        self.authenticate(self.user.login, self.password)
+        key = self._management_key(
+            key_label='HTTP initial', expires_at=fields.Datetime.now() + timedelta(days=30))
+        self._management_remote()
+        before_calls = len(self.fake.calls)
+
+        listed = self._http('/api/llm/keys/list')
+        self.assertTrue(listed['success'], listed)
+        self.assertEqual([item['id'] for item in listed['data']['items']], [key.id])
+
+        updated = self._http(
+            '/api/llm/keys/update', key_id=key.id, name='HTTP managed', limit_points=120)
+        self.assertTrue(updated['success'], updated)
+        self.assertEqual((updated['data']['display_name'], updated['data']['remain_after_points']),
+                         ('HTTP managed', 90))
+        self.assertEqual(self.fake.tokens[501]['expired_time'], 1_900_000_000)
+        self.assertEqual((self.fake.tokens[501]['model_limits_enabled'],
+                          self.fake.tokens[501]['model_limits']), (True, 'paid-a,paid-b'))
+
+        extended = self._http('/api/llm/keys/extend', key_id=key.id)
+        self.assertTrue(extended['success'], extended)
+        self.assertEqual(extended['data']['id'], key.id)
+
+        disabled = self._http('/api/llm/keys/set_status', key_id=key.id, enabled=False)
+        self.assertTrue(disabled['success'], disabled)
+        self.assertEqual(disabled['data']['status'], 'disabled')
+
+        deleted = self._http(
+            '/api/llm/keys/delete', key_id=key.id, confirm_name='HTTP managed')
+        self.assertTrue(deleted['success'], deleted)
+        self.assertEqual(deleted['data'], {'deleted': True})
+        self.assertEqual(
+            [name for name, _ip in self.fake.calls[before_calls:]],
+            ['user_get_token', 'user_update_token', 'user_get_token', 'user_update_token',
+             'user_set_token_status', 'user_delete_token'],
+        )
+
+    def test_http_update_keeps_shared_omitted_sentinel_distinct_from_json_null(self):
+        self.authenticate(self.user.login, self.password)
+        injected_ip = '192.0.2.200'
+        untrusted = {
+            'partner_id': 1, 'account_id': self.account.id + 1, 'user': 'untrusted',
+            'session': 'untrusted', 'upstream': {'token': 'untrusted'},
+            'body': 'untrusted', 'error': 'untrusted', 'real_ip': injected_ip,
+        }
+        with patch.object(type(self.env[KEY]), '_llm_update_key',
+                          return_value={'id': 71}) as update:
+            omitted = self._http('/api/llm/keys/update', key_id=71, **untrusted)
+            explicit_null = self._http(
+                '/api/llm/keys/update', key_id=72, limit_points=None,
+                expires=None, models=None, **untrusted)
+
+        self.assertTrue(omitted['success'], omitted)
+        self.assertTrue(explicit_null['success'], explicit_null)
+        self.assertEqual(update.call_count, 2)
+        omitted_args, omitted_kwargs = update.call_args_list[0]
+        self.assertEqual(omitted_args, (self.user.partner_id, 71))
+        self.assertEqual(
+            set(omitted_kwargs),
+            {'user', 'real_ip', 'name', 'limit_points', 'expires', 'models'},
+        )
+        self.assertEqual(omitted_kwargs['user'], self.user)
+        self.assertNotEqual(omitted_kwargs['real_ip'], injected_ip)
+        for field in ('name', 'limit_points', 'expires', 'models'):
+            self.assertIs(omitted_kwargs[field], llm_api_key._OMITTED)
+
+        null_args, null_kwargs = update.call_args_list[1]
+        self.assertEqual(null_args, (self.user.partner_id, 72))
+        self.assertIs(null_kwargs['name'], llm_api_key._OMITTED)
+        for field in ('limit_points', 'expires', 'models'):
+            self.assertIsNone(null_kwargs[field])
+
+    def test_http_management_routes_bind_trusted_context_only(self):
+        self.authenticate(self.user.login, self.password)
+        injected_ip = '192.0.2.201'
+        untrusted = {
+            'partner_id': 1, 'account_id': self.account.id + 1, 'user': 'untrusted',
+            'session': 'untrusted', 'upstream': {'token': 'untrusted'},
+            'body': 'untrusted', 'error': 'untrusted', 'real_ip': injected_ip,
+        }
+        Key = type(self.env[KEY])
+        with patch.object(Key, '_llm_extend_key', return_value={'id': 81}) as extend, \
+                patch.object(Key, '_llm_set_key_status', return_value={'id': 82}) as status, \
+                patch.object(Key, '_llm_delete_key', return_value={'deleted': True}) as delete:
+            extended = self._http('/api/llm/keys/extend', key_id=81, **untrusted)
+            changed = self._http(
+                '/api/llm/keys/set_status', key_id=82, enabled=False, **untrusted)
+            deleted = self._http(
+                '/api/llm/keys/delete', key_id=83, confirm_name='confirm', **untrusted)
+
+        self.assertTrue(extended['success'], extended)
+        self.assertTrue(changed['success'], changed)
+        self.assertTrue(deleted['success'], deleted)
+        extend_args, extend_kwargs = extend.call_args
+        self.assertEqual(extend_args, (self.user.partner_id, 81))
+        self.assertEqual(set(extend_kwargs), {'user', 'real_ip'})
+        self.assertEqual(extend_kwargs['user'], self.user)
+        self.assertNotEqual(extend_kwargs['real_ip'], injected_ip)
+
+        status_args, status_kwargs = status.call_args
+        self.assertEqual(status_args, (self.user.partner_id, 82, False))
+        self.assertEqual(set(status_kwargs), {'user', 'real_ip', 'session'})
+        self.assertEqual(status_kwargs['user'], self.user)
+        self.assertNotEqual(status_kwargs['real_ip'], injected_ip)
+        self.assertIsInstance(status_kwargs['session'], dict)
+        self.assertNotEqual(status_kwargs['session'], 'untrusted')
+
+        delete_args, delete_kwargs = delete.call_args
+        self.assertEqual(delete_args, (self.user.partner_id, 83, 'confirm'))
+        self.assertEqual(set(delete_kwargs), {'user', 'real_ip'})
+        self.assertEqual(delete_kwargs['user'], self.user)
+        self.assertNotEqual(delete_kwargs['real_ip'], injected_ip)
+
+    def test_http_other_portal_cannot_read_or_manage_foreign_key_without_io(self):
+        key = self._management_key(
+            key_label='owner only', expires_at=fields.Datetime.now() + timedelta(days=30))
+        self._management_remote()
+        suffix = uuid.uuid4().hex[:8]
+        other_password = 'llm-paid-other-%s' % suffix
+        other = new_test_user(
+            self.env, login='llm_paid_other_%s' % suffix, password=other_password,
+            groups='base.group_portal',
+            context={'no_reset_password': True, 'mail_create_nosubscribe': True})
+        other_account = _llm_internal(self.env[ACCOUNT].sudo()).create({
+            'partner_id': other.partner_id.id,
+        })
+        _llm_internal(other_account).write({
+            'state': 'active',
+            'newapi_username': nac.newapi_username('wqa', other_account.id),
+        })
+        self.authenticate(other.login, other_password)
+        before_calls = list(self.fake.calls)
+
+        listed = self._http('/api/llm/keys/list')
+        self.assertTrue(listed['success'], listed)
+        self.assertNotIn(key.id, [item['id'] for item in listed['data']['items']])
+        for path, params in (
+            ('/api/llm/keys/update', {'key_id': key.id, 'name': 'steal'}),
+            ('/api/llm/keys/extend', {'key_id': key.id}),
+            ('/api/llm/keys/set_status', {'key_id': key.id, 'enabled': False}),
+            ('/api/llm/keys/delete', {'key_id': key.id, 'confirm_name': 'owner only'}),
+        ):
+            with self.subTest(path=path):
+                denied = self._http(path, **params)
+                self.assertFalse(denied['success'], denied)
+                self.assertEqual(denied['code'], ERR_LLM_KEY_NOT_FOUND)
+        self.assertEqual(self.fake.calls, before_calls)
+
+    def test_http_enable_terms_gate_precedes_io_but_other_management_actions_continue(self):
+        self.authenticate(self.user.login, self.password)
+        key = self._management_key(
+            state='disabled', disabled_by='user', key_label='terms key',
+            expires_at=fields.Datetime.now() + timedelta(days=30))
+        self._management_remote()
+        self.fake.tokens[501]['status'] = 2
+        publish_test_terms(self.env, 'qa-http-enable-terms-block', requires_reaccept=True)
+        self.account.invalidate_recordset()
+        before_calls = list(self.fake.calls)
+
+        blocked = self._http('/api/llm/keys/set_status', key_id=key.id, enabled=True)
+        self.assertFalse(blocked['success'], blocked)
+        self.assertEqual(blocked['code'], 'llm_tos_outdated')
+        self.assertEqual(self.fake.calls, before_calls)
+
+        for path, params in (
+            ('/api/llm/keys/update', {'key_id': key.id, 'limit_points': 120}),
+            ('/api/llm/keys/extend', {'key_id': key.id}),
+            ('/api/llm/keys/set_status', {'key_id': key.id, 'enabled': False}),
+            ('/api/llm/keys/delete', {'key_id': key.id, 'confirm_name': 'terms key'}),
+        ):
+            with self.subTest(path=path):
+                result = self._http(path, **params)
+                self.assertTrue(result['success'], result)
+
+    def test_http_management_catch_all_never_returns_or_logs_token_shaped_exception(self):
+        self.authenticate(self.user.login, self.password)
+        secret = 'sk-' + 'A' * 48
+        with patch.object(type(self.env[KEY]), '_llm_update_key',
+                          side_effect=RuntimeError('upstream_body=%s' % secret)):
+            with self.assertLogs(CONTROLLER_LOGGER, level=logging.ERROR) as logs:
+                result = self._http('/api/llm/keys/update', key_id=91)
+
+        client_output = json.dumps(result)
+        log_output = '\n'.join(logs.output)
+        self.assertFalse(result['success'], result)
+        self.assertEqual(result['code'], ERR_LLM_INTERNAL)
+        self.assertNotIn(secret, client_output)
+        self.assertNotIn(secret, log_output)
+        self.assertIn('keys/update failed', log_output)
+        self.assertIn('uid=', log_output)
 
     def _key_events(self):
         return self.env[EVENT].sudo().search([

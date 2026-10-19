@@ -471,7 +471,7 @@
 2	test_litellm_master_key_1557.TestLitellmKeyChoiceFrontend1557
 18	test_litellm_seed.TestLitellmSeed
 19	test_llm_api_key_management.TestLlmApiKeyMirror
-41	test_llm_api_key_management.TestLlmPaidKeyCreate
+47	test_llm_api_key_management.TestLlmPaidKeyCreate
 2	test_llm_client_hardening.TestLlmApRateLimit
 9	test_llm_client_hardening.TestLlmCircuitBreaker
 3	test_llm_client_hardening.TestLlmCircuitCronGate
