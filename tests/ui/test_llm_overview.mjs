@@ -131,9 +131,18 @@ const modalSource = stubImports(await readPaas("components/llm/LlmKeyRevealModal
 const modalUrl = toDataUrl(modalSource);
 const { LlmKeyRevealModal, buildEnvVarsText, FREE_TRIAL_EXAMPLE_MODEL } = await import(modalUrl);
 
+const modelsSource = stubImports(await readPaas("pages/llm/tabs/LlmModelsTab.js"), {
+  "@odoo/owl": owlStub,
+  "@web/core/l10n/translation": translateFromGlobal,
+  "../../../services/llm_service": "const llmService = {};",
+  "../../../utils/clipboard": "const copyText = async () => true;",
+  "../../../utils/llm_format": `const { formatTaipeiTime } = await import("${formatUrl}");`,
+});
+const modelsUrl = toDataUrl(modelsSource);
 const overviewSource = stubImports(await readPaas("pages/llm/tabs/LlmOverviewTab.js"), {
   "@odoo/owl": owlStub,
   "@web/core/l10n/translation": translateFromGlobal,
+  "./LlmModelsTab": `const { representativeModels } = await import("${modelsUrl}");`,
   "../../../components/button/WoowButton": "const WoowButton = {};",
   "../../../components/card/WoowCard": "const WoowCard = {};",
   "../../../components/icon/WoowIcon": "const WoowIcon = {};",
@@ -275,6 +284,7 @@ function makeTab(state, extra = {}) {
     usage: null,
     usageError: null,
     stateResults: [],
+    async fetchModels() { return { success: false }; },
     async fetchState() {
       calls.fetchState += 1;
       const next = fake.stateResults.shift();
@@ -324,7 +334,7 @@ test("開通：沒勾條款不送；勾了送 state 給的條款版本；llm_pro
   const { tab, calls, fake } = makeTab(notActivated);
   assert.equal(tab.screen, "not_activated");
   assert.equal(tab.tosIsDraft, true);
-  assert.equal(tab.pricingFallbackText, "價格暫時無法顯示；「模型與價格」頁面即將推出。");
+  assert.equal(tab.pricingFallbackText, "價格暫時無法顯示，開通後可在「模型與價格」查看。");
   await tab.activate();
   assert.deepEqual(calls.activate, []);
   tab.onTosChange({ target: { checked: true } });

@@ -522,13 +522,55 @@ class TestLlmSwr(_LlmCase):
 
     def test_pricing_is_one_platform_row_refreshed_by_the_schedule(self):
         self.env.cr.execute("DELETE FROM %s WHERE account_id IS NULL" % CACHE_TABLE)
-        self._refresh()
-        self._refresh()
+        self.Cache._cron_llm_pricing_refresh()
+        self.Cache._cron_llm_pricing_refresh()
         row = self.Cache.search([('account_id', '=', False), ('kind', '=', 'pricing')])
         self.assertEqual(len(row), 1)
         self.assertEqual(row.last_result, 'ok')
-        self.assertEqual(json.loads(row.payload)['data'][0]['model_name'], 'qwen3-4b-cluster1')
+        self.assertEqual(json.loads(row.payload)['items'][0]['model'], 'qwen3-4b-cluster1')
         self.assertIn(('ap_pricing', nac.ROLE_CRON), self.fake.role_calls)
+
+
+    def test_models_before_activation_reads_only_cache(self):
+        self.Cache._cron_llm_pricing_refresh()
+        calls = len(self.fake.calls)
+        # The route depends on the platform session, never an LLM account or UP.
+        with patch.object(type(self.env[ACCOUNT]), '_llm_account_for_partner',
+                          side_effect=AssertionError('models must not look up an account')):
+            response = self._rpc('/api/llm/models')
+        self.assertTrue(response['success'], response)
+        self.assertEqual(response['data']['state'], 'ok')
+        self.assertEqual(len(self.fake.calls), calls)
+        self.assertNotIn('group_ratio', response['data'])
+
+    def test_invalid_pricing_clears_old_catalogue_alerts_and_recovers(self):
+        self.Cache._cron_llm_pricing_refresh()
+        bad = nac.Ok(data={'data': [], 'group_ratio': {'default': 1.3, 'internal': 1}})
+        with patch.object(self.fake, 'ap_pricing', return_value=bad):
+            self.Cache._cron_llm_pricing_refresh()
+        self.env.invalidate_all()
+        row = self.Cache.search([('kind', '=', 'pricing'), ('account_id', '=', False)], limit=1)
+        self.assertFalse(row.payload)
+        self.assertFalse(row.fetched_at)
+        self.assertEqual(self._rpc('/api/llm/models')['data']['items'], [])
+        self.assertEqual(self._rpc('/api/llm/models')['data']['state'], 'maintenance')
+        self.assertTrue(self._alerts('pricing_invalid', 'llm_newapi_invariant'))
+        self.Cache._cron_llm_pricing_refresh()
+        self.assertEqual(self._rpc('/api/llm/models')['data']['state'], 'ok')
+
+    def test_pricing_expiry_outage_and_global_guard_never_serve_old_rates(self):
+        self.Cache._cron_llm_pricing_refresh()
+        self.State._llm_write(guard_tripped=True)
+        self.assertEqual(self._rpc('/api/llm/models')['data']['items'], [])
+        self.State._llm_write(guard_tripped=False)
+        self.env.cr.execute("UPDATE %s SET fetched_at = fetched_at - interval '11 minutes' "
+                            "WHERE kind = 'pricing'" % CACHE_TABLE)
+        self.env.invalidate_all()
+        self.assertEqual(self._rpc('/api/llm/models')['data']['state'], 'maintenance')
+        self.Cache._cron_llm_pricing_refresh()
+        with patch.object(self.fake, 'ap_pricing', return_value=nac.NotExecuted('connect')):
+            self.Cache._cron_llm_pricing_refresh()
+        self.assertEqual(self._rpc('/api/llm/models')['data']['items'], [])
 
 
 # ====================================================================== #

@@ -559,7 +559,7 @@ def _parse_retry_after(value):
     return None
 
 
-def classify_response(status, headers, body, write):
+def classify_response(status, headers, body, write, *, pricing=False):
     """HTTP 回應 → 分類（DESIGN §3.4；代理錯誤見 README〈回應與錯誤〉）。
 
     ``headers`` 是大小寫不敏感的 mapping；``body`` 是 bytes。
@@ -615,7 +615,10 @@ def classify_response(status, headers, body, write):
     success = parsed.get('success')
     if status == 200 and success is True:
         message = parsed.get('message')
-        return Ok(data=parsed.get('data'), message=message if isinstance(message, str) else None,
+        # Pricing has public metadata next to data[], unlike ordinary API responses.
+        data = ({key: parsed.get(key) for key in ('data', 'group_ratio', 'vendors')}
+                if pricing else parsed.get('data'))
+        return Ok(data=data, message=message if isinstance(message, str) else None,
                   **common)
     if success is False:
         message_key = parsed.get('message_key')
@@ -814,7 +817,8 @@ class NewApiClient:
             self._log(method, template, identity, result, self._monotonic() - started)
             raise NewApiTransportError('client_internal') from None
         else:
-            result = classify_response(status, response_headers, content, write)
+            result = classify_response(status, response_headers, content, write,
+                                       pricing=template == '/api/pricing')
         self._log(method, template, identity, result, self._monotonic() - started)
         if self._guard is not None:
             try:

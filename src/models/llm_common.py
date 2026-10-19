@@ -503,6 +503,8 @@ LLM_CRONS = {
     'woow_paas_platform.ir_cron_llm_alert_delivery': (
         'woow_paas_platform.llm_event', '_cron_llm_alert_delivery'),
     # LLM-02：互動讀取快取的背景刷新（SWR）與後台〔測試連線〕。
+    'woow_paas_platform.ir_cron_llm_pricing_refresh': (
+        'woow_paas_platform.llm_swr_cache', '_cron_llm_pricing_refresh'),
     'woow_paas_platform.ir_cron_llm_swr_refresh': (
         'woow_paas_platform.llm_swr_cache', '_cron_llm_swr_refresh'),
     'woow_paas_platform.ir_cron_llm_connection_test': (

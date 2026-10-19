@@ -132,6 +132,15 @@ class _Base(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 class TestSigningMatchesProxy(_Base):
 
+    def test_pricing_preserves_only_public_envelope_metadata(self):
+        body = {'success': True, 'data': [{'model_name': 'paid'}],
+                'group_ratio': {'default': 1.3, 'free': 0}, 'vendors': [{'id': 1, 'name': 'Provider'}],
+                'usable_group': {'internal': 'private'}, 'unrelated': 'not-cached'}
+        self.recorder.body = json.dumps(body).encode()
+        result = self.client().ap_pricing()
+        self.assertEqual(result.data, {key: body[key] for key in ('data', 'group_ratio', 'vendors')})
+        self.assertEqual(self.client().status().data, body['data'], 'ordinary routes retain their data contract')
+
     def _verify(self, request, identity, client_ip=''):
         path, _, query = request['path'].partition('?')
         h = request['headers']
