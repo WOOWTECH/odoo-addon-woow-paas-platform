@@ -107,6 +107,27 @@ def is_stale(fetched_at, kind, now=None):
     return (now - fetched_at).total_seconds() > SWR_KINDS[kind][0]
 
 
+def _token_list_is_complete(data):
+    """Whether a one-page token response proves the entire bounded account list."""
+    if not isinstance(data, dict):
+        return False
+    items, total = data.get('items'), data.get('total')
+    if not isinstance(items, list) or type(total) is not int or not 0 <= total <= 100:
+        return False
+    if len(items) != total:
+        return False
+    ids, names = set(), set()
+    for item in items:
+        if (not isinstance(item, dict) or type(item.get('id')) is not int or item['id'] <= 0
+                or not isinstance(item.get('name'), str) or not item['name']):
+            return False
+        if item['id'] in ids or item['name'] in names:
+            return False
+        ids.add(item['id'])
+        names.add(item['name'])
+    return True
+
+
 def usage_recent_dto(data, names):
     """``GET /api/log/self`` 的回應 → ``usage/recent`` 的 DTO（只留白名單欄位，**剝掉 channel**）。
 
@@ -436,9 +457,11 @@ class LlmSwrCache(models.Model):
                 return None, self._label(result, account)
             data = result.data if isinstance(result.data, dict) else {}
             items = data.get('items')
-            if not isinstance(items, list):
+            total = data.get('total')
+            if (not isinstance(items, list) or type(total) is not int or total < 0):
                 return None, 'shape'
-            if not self._llm_store_token_usage(account, items):
+            complete = _token_list_is_complete(data)
+            if not self._llm_store_token_usage(account, items, complete=complete):
                 return None, 'db'
             return None, 'ok'
         if kind == KIND_USAGE_RECENT:
@@ -464,37 +487,125 @@ class LlmSwrCache(models.Model):
             account._llm_mark_up_invalid()
         return ('%s:%s' % (result.kind, result.label()))[:64]
 
-    def _llm_store_token_usage(self, account, items):
+    def _llm_store_token_usage(self, account, items, complete=False):
         """金鑰清單 → 鏡像的 ``remain_quota_cached``／``used_quota_cached``／``accessed_at``／``synced_at``。
 
         只寫本帳戶、``newapi_token_id`` 與名稱都對得上的列（UP 只看得到本人的 token；鏡像歸屬是第二道）。
-        狀態（停用、刪除）的對回在 LLM-07。
+        Only a complete, unambiguous list may mark absent stable mirrors deleted.
         """
-        mirrors = {(k.newapi_token_id, k.newapi_name): k.id for k in account.api_key_ids
-                   if k.newapi_token_id and k.newapi_name}
-        now = _utcnow()
-        rows = []
+        local_keys = account.api_key_ids.filtered(lambda k: k.newapi_token_id and k.newapi_name)
+        mirrors = {(k.newapi_token_id, k.newapi_name): k for k in local_keys}
+        by_remote_id = {}
+        by_remote_name = {}
+        local_identity_counts = {}
+        protected_absence = set()
+        for key in local_keys:
+            by_remote_id.setdefault(key.newapi_token_id, set()).add(key.newapi_name)
+            by_remote_name.setdefault(key.newapi_name, set()).add(key.newapi_token_id)
+            local_identity_counts[key.newapi_token_id, key.newapi_name] = (
+                local_identity_counts.get((key.newapi_token_id, key.newapi_name), 0) + 1)
+        for key in local_keys:
+            if (len(by_remote_id[key.newapi_token_id]) > 1
+                    or len(by_remote_name[key.newapi_name]) > 1
+                    or local_identity_counts[key.newapi_token_id, key.newapi_name] > 1):
+                protected_absence.add(key.id)
+        remote_id_names, remote_name_ids, remote_pair_counts = {}, {}, {}
+        valid_items = []
         for item in items:
             if not isinstance(item, dict):
                 continue
-            key_id = mirrors.get((item.get('id'), item.get('name')))
+            remote_id, remote_name = item.get('id'), item.get('name')
+            if (type(remote_id) is not int or remote_id <= 0
+                    or not isinstance(remote_name, str) or not remote_name):
+                continue
+            pair = (remote_id, remote_name)
+            remote_id_names.setdefault(remote_id, set()).add(remote_name)
+            remote_name_ids.setdefault(remote_name, set()).add(remote_id)
+            remote_pair_counts[pair] = remote_pair_counts.get(pair, 0) + 1
+            valid_items.append((item, pair))
+        ambiguous_ids = {remote_id for remote_id, names in remote_id_names.items()
+                         if len(names) > 1}
+        ambiguous_names = {name for name, ids in remote_name_ids.items() if len(ids) > 1}
+        ambiguous_pairs = {pair for pair, count in remote_pair_counts.items() if count > 1}
+        for key in local_keys:
+            if (key.newapi_token_id in ambiguous_ids or key.newapi_name in ambiguous_names
+                    or (key.newapi_token_id, key.newapi_name) in ambiguous_pairs):
+                protected_absence.add(key.id)
+        now = _utcnow()
+        rows = []
+        seen = set()
+        for item, (remote_id, remote_name) in valid_items:
+            if (remote_id in ambiguous_ids or remote_name in ambiguous_names
+                    or (remote_id, remote_name) in ambiguous_pairs):
+                seen.update(key.id for key in local_keys
+                            if key.newapi_token_id == remote_id or key.newapi_name == remote_name)
+                continue
+            if local_identity_counts.get((remote_id, remote_name), 0) > 1:
+                implicated = [key for key in local_keys
+                              if (key.newapi_token_id, key.newapi_name) == (remote_id, remote_name)]
+                seen.update(key.id for key in implicated)
+                protected_absence.update(key.id for key in implicated)
+                continue
+            # Conflicting identities make absence unsafe for every mirror implicated.
+            conflict = ((remote_id, remote_name) not in mirrors
+                        and ((type(remote_id) is int and remote_id in by_remote_id)
+                             or (isinstance(remote_name, str) and remote_name in by_remote_name)))
+            if conflict:
+                seen.update(key.id for key in local_keys
+                            if ((type(remote_id) is int and key.newapi_token_id == remote_id)
+                                or (isinstance(remote_name, str) and key.newapi_name == remote_name)))
+                continue
+            key = mirrors.get((remote_id, remote_name))
             remain, used, accessed = (item.get('remain_quota'), item.get('used_quota'),
                                       item.get('accessed_time'))
-            if key_id is None or not all(type(v) is int for v in (remain, used)):
+            if key is None:
                 continue
-            accessed_at = (datetime.fromtimestamp(accessed, tz=timezone.utc).replace(tzinfo=None)
-                           if type(accessed) is int and accessed > 0 else None)
-            rows.append((key_id, remain, used, accessed_at))
+            seen.add(key.id)
+            status = item.get('status')
+            valid_usage = all(type(v) is int and v >= 0 for v in (remain, used))
+            valid_status = type(status) is int and status in (1, 2)
+            accessed_at = None
+            if type(accessed) is int and accessed > 0:
+                try:
+                    accessed_at = datetime.fromtimestamp(accessed, tz=timezone.utc).replace(tzinfo=None)
+                except (OverflowError, OSError, ValueError):
+                    pass
+            managed = key.state in ('active', 'disabled') and key.disabled_by in (False, None, 'user')
+            desired = ('active', None) if status == 1 else ('disabled', 'user')
+            transition = (managed and valid_usage and valid_status
+                          and (key.state, key.disabled_by or None) != desired)
+            if valid_usage or transition or accessed_at is not None:
+                rows.append((key.id, remain if valid_usage else None, used if valid_usage else None,
+                             accessed_at, desired[0] if transition else None,
+                             desired[1] if transition else None,
+                             key.state if transition else None,
+                             (key.disabled_by or None) if transition else None))
+        if complete:
+            for key in local_keys:
+                if (key.state in ('active', 'disabled') and key.id not in seen
+                        and key.id not in protected_absence):
+                    rows.append((key.id, None, None, None, 'deleted', None,
+                                 key.state, key.disabled_by or None))
         try:
             with self.env.registry.cursor() as cr:
                 cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
-                for key_id, remain, used, accessed_at in rows:
+                for (key_id, remain, used, accessed_at, state, disabled_by,
+                     expected_state, expected_disabled_by) in rows:
                     cr.execute(
-                        'UPDATE %s SET remain_quota_cached = %%s, used_quota_cached = %%s, '
-                        'accessed_at = COALESCE(%%s, accessed_at), synced_at = %%s, '
+                        'UPDATE %s SET remain_quota_cached = COALESCE(%%s, remain_quota_cached), '
+                        'used_quota_cached = COALESCE(%%s, used_quota_cached), '
+                        'accessed_at = COALESCE(%%s, accessed_at), '
+                        'state = CASE WHEN %%s IS NOT NULL AND state = %%s '
+                        'AND disabled_by IS NOT DISTINCT FROM %%s THEN %%s ELSE state END, '
+                        'disabled_by = CASE WHEN %%s IS NOT NULL AND state = %%s '
+                        'AND disabled_by IS NOT DISTINCT FROM %%s THEN %%s ELSE disabled_by END, '
+                        'synced_at = %%s, '
                         'write_uid = %%s, write_date = %%s WHERE id = %%s AND account_id = %%s'
                         % KEY_TABLE,
-                        (remain, used, accessed_at, now, SUPERUSER_ID, now, key_id, account.id))
+                        (remain, used, accessed_at,
+                         state, expected_state, expected_disabled_by, state,
+                         state, expected_state, expected_disabled_by, disabled_by,
+                         now, SUPERUSER_ID, now, key_id, account.id))
         except psycopg2.Error as exc:
             _logger.warning('[LLM] swr tokens account=%s: write failed (pgcode=%s)', account.id,
                             getattr(exc, 'pgcode', None))

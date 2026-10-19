@@ -16,6 +16,7 @@ from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase, new_test_user, tagged
 
 from ..models import llm_api_key
+from ..models import llm_swr
 from ..models.llm_account import REAUTH_SESSION_KEY
 from ..services import newapi_client as nac
 from ..models.llm_common import (
@@ -109,6 +110,262 @@ class TestLlmApiKeyMirror(TransactionCase):
         self.assertEqual(dto['used_points'], 30)
         self.assertEqual(dto['remain_points'], 70)
         self.assertEqual(dto['last_used_at'], now.replace(tzinfo=timezone.utc).isoformat())
+
+    def test_swr_token_sync_updates_usage_reconciles_managed_status_and_deletes_only_absent(self):
+        active = self._key(label='remote active', newapi_token_id=801,
+                           newapi_name='wp_801_abcd', used_quota_cached=1,
+                           accessed_at=datetime(2025, 1, 1))
+        disabled = self._key(state='disabled', disabled_by='user', label='remote disabled',
+                             newapi_token_id=802, newapi_name='wp_802_abcd')
+        active_to_disabled = self._key(label='remote disabled by upstream', newapi_token_id=806,
+                                       newapi_name='wp_806_abcd')
+        protected = self._key(state='disabled', disabled_by='suspend', label='protected',
+                              newapi_token_id=803, newapi_name='wp_803_abcd')
+        absent = self._key(label='absent', newapi_token_id=804, newapi_name='wp_804_abcd')
+        creating = self._key(state='creating', label='creating', newapi_token_id=805,
+                             newapi_name='wp_805_abcd')
+        items = [
+            {'id': 801, 'name': active.newapi_name, 'remain_quota': 7, 'used_quota': 9,
+             'accessed_time': 1_800_000_000, 'status': 1},
+            {'id': 802, 'name': disabled.newapi_name, 'remain_quota': 3, 'used_quota': 5,
+             'accessed_time': 0, 'status': 1},
+            {'id': 803, 'name': protected.newapi_name, 'remain_quota': 1, 'used_quota': 2,
+             'status': 2},
+            {'id': 806, 'name': active_to_disabled.newapi_name, 'remain_quota': 1,
+             'used_quota': 2, 'status': 2},
+            {'id': 999, 'name': 'remote only', 'remain_quota': 0, 'used_quota': 0,
+             'status': 2},
+        ]
+
+        self.assertTrue(self.env['woow_paas_platform.llm_swr_cache']._llm_store_token_usage(
+            self.account, items, complete=True))
+        self.env.invalidate_all()
+        active.invalidate_recordset()
+        disabled.invalidate_recordset()
+        protected.invalidate_recordset()
+        absent.invalidate_recordset()
+        creating.invalidate_recordset()
+        self.assertEqual((active.used_quota_cached, active.remain_quota_cached), (9, 7))
+        self.assertEqual((active.state, active.disabled_by), ('active', False))
+        self.assertEqual(active.accessed_at, datetime.fromtimestamp(
+            1_800_000_000, tz=timezone.utc).replace(tzinfo=None))
+        self.assertEqual((disabled.state, disabled.disabled_by), ('active', False))
+        self.assertEqual((active_to_disabled.state, active_to_disabled.disabled_by),
+                         ('disabled', 'user'))
+        self.assertEqual((protected.state, protected.disabled_by), ('disabled', 'suspend'))
+        self.assertEqual(absent.state, 'deleted')
+        self.assertEqual(creating.state, 'creating')
+
+    def test_swr_list_completeness_validation_guards_absent_mirror_deletion(self):
+        key = self._key(label='guarded', newapi_token_id=811, newapi_name='wp_811_abcd')
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        incomplete_responses = [
+            {'items': [], 'total': 1},
+            {'items': [], 'total': None},
+            {'items': [], 'total': '0'},
+            {'items': [], 'total': True},
+            {'items': [{'id': 1, 'name': ''}], 'total': 1},
+            {'items': [{'id': 1, 'name': 'dup'}, {'id': 1, 'name': 'dup'}], 'total': 2},
+            {'items': [{'id': 1, 'name': 'first'}, {'id': 1, 'name': 'second'}], 'total': 2},
+            {'items': [{'id': 1, 'name': 'same'}, {'id': 2, 'name': 'same'}], 'total': 2},
+        ]
+        for data in incomplete_responses:
+            with self.subTest(data=data):
+                self.assertFalse(llm_swr._token_list_is_complete(data))
+                self.assertTrue(Cache._llm_store_token_usage(
+                    self.account, data['items'], complete=llm_swr._token_list_is_complete(data)))
+                self.env.invalidate_all()
+                key.invalidate_recordset()
+                self.assertEqual(key.state, 'active')
+        # Exact total and unique valid identities prove completeness; absence is now actionable.
+        self.assertTrue(llm_swr._token_list_is_complete({'items': [], 'total': 0}))
+        self.assertTrue(Cache._llm_store_token_usage(self.account, [], complete=True))
+        self.env.invalidate_all()
+        key.invalidate_recordset()
+        self.assertEqual(key.state, 'deleted')
+
+    def test_swr_malformed_match_and_identity_conflict_do_not_transition_or_delete(self):
+        key = self._key(label='guarded', newapi_token_id=812, newapi_name='wp_812_abcd')
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        invalid = {'id': 812, 'name': key.newapi_name, 'remain_quota': -1,
+                   'used_quota': 10, 'status': 2}
+        self.assertTrue(Cache._llm_store_token_usage(self.account, [invalid], complete=True))
+        self.env.invalidate_all()
+        key.invalidate_recordset()
+        self.assertEqual(key.state, 'active')
+        self.assertEqual(key.used_quota_cached, 0)
+        other = self._key(label='other guarded', newapi_token_id=813, newapi_name='wp_813_abcd')
+        # Each conflict direction protects every implicated local mirror from absence deletion.
+        for items in (
+            [
+                {'id': 812, 'name': 'foreign-name', 'remain_quota': 0, 'used_quota': 0,
+                 'status': 2},
+                {'id': 813, 'name': other.newapi_name, 'remain_quota': 0, 'used_quota': 0,
+                 'status': 1},
+            ],
+            [
+                {'id': 812, 'name': key.newapi_name, 'remain_quota': 0, 'used_quota': 0,
+                 'status': 1},
+                {'id': 999, 'name': other.newapi_name, 'remain_quota': 0, 'used_quota': 0,
+                 'status': 2},
+            ],
+        ):
+            self.assertTrue(Cache._llm_store_token_usage(self.account, items, complete=True))
+            self.env.invalidate_all()
+            key.invalidate_recordset()
+            other.invalidate_recordset()
+            self.assertEqual(key.state, 'active')
+            self.assertEqual(other.state, 'active')
+
+    def test_swr_rejects_bool_and_float_remote_ids_without_touching_mirror(self):
+        key = self._key(label='numeric identity guard', newapi_token_id=1,
+                        newapi_name='wp_1_abcd', used_quota_cached=4,
+                        remain_quota_cached=6, accessed_at=datetime(2025, 1, 1))
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        for bad_id in (True, 1.0):
+            item = {'id': bad_id, 'name': key.newapi_name, 'remain_quota': 0,
+                    'used_quota': 99, 'accessed_time': 1_800_000_000, 'status': 2}
+            self.assertTrue(Cache._llm_store_token_usage(self.account, [item], complete=False))
+            self.env.invalidate_all()
+            key.invalidate_recordset()
+            self.assertEqual((key.used_quota_cached, key.remain_quota_cached), (4, 6))
+            self.assertEqual((key.state, key.accessed_at), ('active', datetime(2025, 1, 1)))
+
+    def test_swr_valid_access_time_updates_with_invalid_usage_and_status(self):
+        previous = datetime(2025, 1, 1)
+        key = self._key(label='access time guard', newapi_token_id=817,
+                        newapi_name='wp_817_abcd', used_quota_cached=4,
+                        remain_quota_cached=6, accessed_at=previous)
+        item = {'id': 817, 'name': key.newapi_name, 'remain_quota': -1,
+                'used_quota': 99, 'accessed_time': 1_800_000_000, 'status': 7}
+
+        self.assertTrue(self.env['woow_paas_platform.llm_swr_cache']._llm_store_token_usage(
+            self.account, [item], complete=False))
+        self.env.invalidate_all()
+        key.invalidate_recordset()
+        self.assertEqual(key.accessed_at, datetime.fromtimestamp(
+            1_800_000_000, tz=timezone.utc).replace(tzinfo=None))
+        self.assertEqual((key.used_quota_cached, key.remain_quota_cached), (4, 6))
+        self.assertEqual((key.state, key.disabled_by), ('active', False))
+
+    def test_swr_local_identity_ambiguity_protects_unmatched_mirrors_from_deletion(self):
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        shared_id = 818
+        id_first = self._key(label='shared id first', newapi_token_id=shared_id,
+                             newapi_name='wp_818_first')
+        id_second = self._key(label='shared id second', newapi_token_id=shared_id,
+                              newapi_name='wp_818_second')
+        self.assertTrue(Cache._llm_store_token_usage(self.account, [
+            {'id': shared_id, 'name': id_first.newapi_name, 'remain_quota': 10,
+             'used_quota': 2, 'accessed_time': 1_800_000_000, 'status': 1},
+        ], complete=True))
+        self.env.invalidate_all()
+        id_first.invalidate_recordset()
+        id_second.invalidate_recordset()
+        self.assertEqual(id_first.state, 'active')
+        self.assertEqual(id_second.state, 'active')
+        self.assertEqual(id_first.used_quota_cached, 2)
+
+        shared_name = 'wp_819_shared'
+        name_first = self._key(label='shared name first', newapi_token_id=819,
+                               newapi_name=shared_name)
+        name_second = self._key(label='shared name second', newapi_token_id=820,
+                                newapi_name=shared_name)
+        self.assertTrue(Cache._llm_store_token_usage(self.account, [
+            {'id': 819, 'name': shared_name, 'remain_quota': 12, 'used_quota': 3,
+             'accessed_time': 1_800_000_001, 'status': 1},
+        ], complete=True))
+        self.env.invalidate_all()
+        name_first.invalidate_recordset()
+        name_second.invalidate_recordset()
+        self.assertEqual(name_first.state, 'active')
+        self.assertEqual(name_second.state, 'active')
+        self.assertEqual(name_first.used_quota_cached, 3)
+
+    def test_swr_remote_and_local_exact_identity_ambiguity_never_updates_mirror(self):
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        remote_duplicate = self._key(label='remote duplicate', newapi_token_id=822,
+                                     newapi_name='wp_822_abcd', used_quota_cached=4,
+                                     remain_quota_cached=6)
+        duplicate_item = {'id': 822, 'name': remote_duplicate.newapi_name,
+                          'remain_quota': 0, 'used_quota': 99, 'status': 2}
+        self.assertTrue(Cache._llm_store_token_usage(self.account,
+                                                    [duplicate_item, dict(duplicate_item)],
+                                                    complete=True))
+        self.env.invalidate_all()
+        remote_duplicate.invalidate_recordset()
+        self.assertEqual((remote_duplicate.used_quota_cached, remote_duplicate.remain_quota_cached,
+                          remote_duplicate.state), (4, 6, 'active'))
+
+        remote_conflict = self._key(label='remote conflicting identity', newapi_token_id=823,
+                                    newapi_name='wp_823_abcd', used_quota_cached=5,
+                                    remain_quota_cached=7)
+        self.assertTrue(Cache._llm_store_token_usage(self.account, [
+            {'id': 823, 'name': remote_conflict.newapi_name, 'remain_quota': 0,
+             'used_quota': 99, 'status': 2},
+            {'id': 823, 'name': 'wp_823_other', 'remain_quota': 0,
+             'used_quota': 99, 'status': 2},
+        ], complete=True))
+        self.env.invalidate_all()
+        remote_conflict.invalidate_recordset()
+        self.assertEqual((remote_conflict.used_quota_cached, remote_conflict.remain_quota_cached,
+                          remote_conflict.state), (5, 7, 'active'))
+
+        local_first = self._key(label='local exact duplicate first', newapi_token_id=824,
+                                newapi_name='wp_824_same', used_quota_cached=3,
+                                remain_quota_cached=8)
+        local_second = self._key(label='local exact duplicate second', newapi_token_id=824,
+                                 newapi_name='wp_824_same', used_quota_cached=4,
+                                 remain_quota_cached=9)
+        self.assertTrue(Cache._llm_store_token_usage(self.account, [
+            {'id': 824, 'name': 'wp_824_same', 'remain_quota': 0, 'used_quota': 99,
+             'accessed_time': 1_800_000_000, 'status': 2},
+        ], complete=True))
+        self.env.invalidate_all()
+        local_first.invalidate_recordset()
+        local_second.invalidate_recordset()
+        self.assertEqual((local_first.used_quota_cached, local_first.remain_quota_cached,
+                          local_first.state), (3, 8, 'active'))
+        self.assertEqual((local_second.used_quota_cached, local_second.remain_quota_cached,
+                          local_second.state), (4, 9, 'active'))
+
+    def test_swr_full_list_deletes_absent_system_disabled_but_preserves_present_reason(self):
+        absent = self._key(state='disabled', disabled_by='suspend', label='absent suspended',
+                           newapi_token_id=814, newapi_name='wp_814_abcd')
+        present = self._key(state='disabled', disabled_by='suspend', label='present suspended',
+                            newapi_token_id=815, newapi_name='wp_815_abcd')
+        self.assertTrue(self.env['woow_paas_platform.llm_swr_cache']._llm_store_token_usage(self.account, [
+            {'id': 815, 'name': present.newapi_name, 'remain_quota': 1, 'used_quota': 2,
+             'status': 1}], complete=True))
+        self.env.invalidate_all()
+        absent.invalidate_recordset()
+        present.invalidate_recordset()
+        self.assertEqual(absent.state, 'deleted')
+        self.assertEqual((present.state, present.disabled_by), ('disabled', 'suspend'))
+
+    def test_keys_list_is_db_only_and_carries_total_progress_and_data_as_of(self):
+        from ..models.llm_swr import KIND_TOKENS
+
+        key = self._key(label='progress', quota_limit_points=20,
+                        used_quota_cached=7 * QUOTA_PER_POINT,
+                        remain_quota_cached=13 * QUOTA_PER_POINT,
+                        newapi_token_id=821, newapi_name='wp_821_abcd')
+        fetched = fields.Datetime.now() - timedelta(seconds=31)
+        self.env.cr.execute(
+            'INSERT INTO woow_paas_platform_llm_swr_cache '
+            '(account_id, kind, payload, fetched_at, create_date, write_date) '
+            'VALUES (%s, %s, %s, %s, now(), now())',
+            (self.account.id, KIND_TOKENS, '{}', fetched))
+        Account = type(self.env[ACCOUNT])
+        with patch.object(Account, '_llm_client',
+                          side_effect=AssertionError('keys/list performed synchronous new-api I/O')) as client_factory:
+            payload = self.Key._llm_keys_payload(self.account.partner_id)
+        client_factory.assert_not_called()
+        row = self.env['woow_paas_platform.llm_swr_cache']._llm_swr_get(self.account, KIND_TOKENS)
+        self.assertTrue(row['requested_at'])
+        self.assertEqual(payload['data_as_of'], fetched.replace(tzinfo=timezone.utc).isoformat())
+        dto = next(item for item in payload['items'] if item['id'] == key.id)
+        self.assertEqual((dto['limit_points'], dto['used_points'], dto['remain_points']), (20, 7, 13))
 
     def test_quota_point_conversion_never_uses_a_false_or_float_cache_value(self):
         convert = self.Key._llm_points_from_quota
@@ -1225,3 +1482,38 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
                          ('llm_tos_outdated', {'current_version': 'qa-terms-paid-banner'}))
         self.assertEqual(len(self.fake.calls), calls_before)
         self.assertEqual(len(self._key_events()), events_before)
+
+    def test_swr_refresh_rejects_malformed_total_before_store_and_keeps_partial_non_deleting(self):
+        from ..models.llm_swr import KIND_TOKENS
+
+        key = _llm_internal(self.env[KEY].sudo()).create({
+            'account_id': self.account.id, 'kind': 'paid', 'state': 'active',
+            'key_label': 'refresh guard', 'newapi_token_id': 816, 'newapi_name': 'wp_816_abcd',
+        })
+
+        class Client:
+            data = None
+
+            def user_list_tokens(self, *_args, **_kwargs):
+                return nac.Ok(data=self.data, message='', status=200)
+
+        client = Client()
+        cache = self.env['woow_paas_platform.llm_swr_cache']
+        for bad_total in (None, '1', True, -1):
+            client.data = {'items': [], 'total': bad_total}
+            with patch.object(type(cache), '_llm_store_token_usage', autospec=True,
+                              side_effect=AssertionError('malformed envelope reached store')) as store:
+                result = cache._llm_swr_refresh_one(
+                    client, {'identity_ok': True, 'block': 1}, self.account.id, KIND_TOKENS, None)
+            self.assertEqual(result, (None, 'shape'))
+            store.assert_not_called()
+        client.data = {'items': [], 'total': 101}
+        with patch.object(type(cache), '_llm_store_token_usage', autospec=True,
+                          return_value=True) as store:
+            result = cache._llm_swr_refresh_one(
+                client, {'identity_ok': True, 'block': 1}, self.account.id, KIND_TOKENS, None)
+        self.assertEqual(result, (None, 'ok'))
+        store.assert_called_once_with(cache, self.account, [], complete=False)
+        self.env.invalidate_all()
+        key.invalidate_recordset()
+        self.assertEqual(key.state, 'active')
