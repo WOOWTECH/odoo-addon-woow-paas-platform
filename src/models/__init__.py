@@ -115,3 +115,4 @@ from . import llm_swr
 from . import res_users_password_policy
 from . import password_reset_request
 from . import llm_free_usage
+from . import smart_home_onboarding

@@ -215,7 +215,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     # Subscription creation
     # ----------------------------------------------------------------
 
-    def _create_and_confirm_subscription(self, partner, plan):
+    def _create_and_confirm_subscription(self, partner, plan, *, trial_only=False):
         """Create a subscription linked to this entity and confirm it.
 
         Args:
@@ -245,6 +245,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         # Read here, before the create + the trailing self.write() that replaces
         # it at the end of this method, so it reflects the entity's PRIOR state.
         entity_has_prior_sub = bool(self._sub())
+        if trial_only and (entity_has_prior_sub or not plan.sh_trial
+                           or plan.sh_trial_unit != 'day'
+                           or plan.sh_trial_duration != 7):
+            raise UserError(_('此服務無法開通七天試用，請聯絡支援。'))
         _logger.info(
             "[SUB_MIXIN] _create_and_confirm_subscription entry entity=%s:%s partner=%s plan=%s prior_sub=%s",
             self._name, self.id, partner.id, plan.id, entity_has_prior_sub,
@@ -269,6 +273,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'product_id': product.id,
             'sh_subscription_plan_id': plan.id,
             'sh_source': 'manual',
+            'woow_trial_only': trial_only,
         }
         subscription = Subscription.sudo().create(sub_vals)
 
@@ -296,6 +301,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
 
         # Confirm → in_progress (starts trial if configured)
         subscription.sh_subscription_confirm()
+        if trial_only:
+            # No payment is scheduled until the user selects a paid plan.
+            subscription.write({'sh_date_of_next_payment': False})
 
         self.write({'subscription_id': subscription.id})
         _logger.info(

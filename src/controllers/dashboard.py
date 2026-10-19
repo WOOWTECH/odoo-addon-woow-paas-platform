@@ -117,6 +117,7 @@ class DashboardController(HiddenChainMixin, Controller):
         # 搶 primary 綁架 cycle/next_bill 估算。
         active_subs = request.env['sh.subscription.subscription'].sudo().search(
             [('sh_partner_id', '=', partner.id), ('state', '=', 'in_progress'),
+             ('woow_trial_only', '=', False),
              ('id', 'not in', self._hidden_subscription_ids(request.env))],
             order='sh_start_date desc, id desc',
         )

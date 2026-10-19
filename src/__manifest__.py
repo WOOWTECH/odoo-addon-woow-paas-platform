@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.248",
+    "version": "18.0.1.0.249",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -101,6 +101,8 @@
         "views/paas_app.xml",
         "views/portal_templates.xml",
         "views/oauth2_templates.xml",
+        "views/connect_login.xml",
+        "data/smart_home_onboarding.xml",
         "views/oauth_client_views.xml",
         "data/oauth_clients.xml",
         "data/oauth_scope_updates.xml",

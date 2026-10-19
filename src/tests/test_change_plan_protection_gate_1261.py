@@ -80,6 +80,9 @@ class _ProtectionGateFixture:
 
     def setUp(self):
         super().setUp()
+        # These tests assert English message markers as well as stable codes.
+        # The suite must not inherit the sandbox administrator's locale.
+        self.env = self.env(context=dict(self.env.context, lang='en_US'))
         self.env['ir.config_parameter'].sudo().set_param(
             'woow_paas_platform.paas_domain', 'woowtech.io')
         self.Plan = self.env['sh.subscription.plan']
