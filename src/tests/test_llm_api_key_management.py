@@ -470,7 +470,13 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         self.assertEqual(stale.state, 'failed_reveal')
         self.assertTrue(created['key'])
 
-    def test_terms_reacceptance_blocks_before_throttle_and_nonblocking_revision_does_not(self):
+    def test_nonblocking_terms_revision_allows_paid_creation(self):
+        publish_test_terms(self.env, 'qa-terms-paid-banner', requires_reaccept=False)
+        self.account.invalidate_recordset()
+
+        self.assertTrue(self._create()['key'])
+
+    def test_terms_reacceptance_blocks_before_throttle_and_later_banner_does_not_clear_block(self):
         publish_test_terms(self.env, 'qa-terms-paid-block', requires_reaccept=True)
         self.account.invalidate_recordset()
         calls_before = len(self.fake.calls)
@@ -483,4 +489,8 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         self.assertEqual(len(self._key_events()), events_before)
         publish_test_terms(self.env, 'qa-terms-paid-banner', requires_reaccept=False)
         self.account.invalidate_recordset()
-        self.assertTrue(self._create()['key'])
+        blocked_again = self._error(self._create)
+        self.assertEqual(blocked_again,
+                         ('llm_tos_outdated', {'current_version': 'qa-terms-paid-banner'}))
+        self.assertEqual(len(self.fake.calls), calls_before)
+        self.assertEqual(len(self._key_events()), events_before)
