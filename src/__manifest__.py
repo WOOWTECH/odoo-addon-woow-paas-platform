@@ -15,6 +15,8 @@
         # （src/controllers/signup.py、src/models/res_users_login_identity.py）。
         # 原本就經 portal 傳遞安裝，這裡明列以固定 MRO／controller 繼承順序。
         "auth_signup",
+        # D19 extends the final native invoice/payment controllers.
+        "account_payment",
         "ai_base_gt", "odoo_ai_assistant_chatgpt_connector",
         "sh_subscription",
         "sh_subscription_wallet",
@@ -39,8 +41,8 @@
         # #778：SSOT 對撞防護的 -u 路徑（<function> 每次升級重跑；
         # fresh-install 路徑在 hooks.post_init_hook）
         "data/billing_ssot_guard.xml",
-        # LLM-01b：AI 模型分頁的 cron（DESIGN §1.2 的順序：ACL → seed → cron → mail →
-        # views → wizard；目前只有 cron）。
+        # LLM：內部額度轉換商品／sequence 先於背景 cron（DESIGN §1.2）。
+        "data/llm_credit_data.xml",
         "data/llm_cron.xml",
         "views/menu.xml",
         "views/workspace_views.xml",

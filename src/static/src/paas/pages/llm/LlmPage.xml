@@ -24,6 +24,7 @@
       <div class="o_woow_llm_page__content">
         <LlmOverviewTab t-if="currentTab === 'overview'"/>
         <LlmModelsTab t-elif="currentTab === 'models'"/>
+        <LlmCreditTab t-elif="currentTab === 'credit'"/>
         <div t-elif="!currentTabLive" class="o_woow_llm_page__soon">
           <WoowIcon name="'schedule'" size="32"/>
           <h3 t-esc="currentTabLabel"/>

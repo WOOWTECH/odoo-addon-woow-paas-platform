@@ -110,6 +110,31 @@ export const llmService = reactive({
   modelsLoaded: false,
   modelsRequest: 0,
 
+  // Conversion responses and passwords stay with the caller, never in the global store.
+  async previewCredit(points) {
+    return call("/api/llm/credit/preview", { points });
+  },
+
+  async convertCredit(params) {
+    return call("/api/llm/credit/convert", params);
+  },
+
+  async fetchCreditOrders(page = 1, limit = 20) {
+    return call("/api/llm/credit/orders", { page, limit });
+  },
+
+  async findCreditOrder(clientRequestId) {
+    return call("/api/llm/credit/orders", { client_request_id: clientRequestId, page: 1, limit: 1 });
+  },
+
+  async fetchCreditOrder(id) {
+    return call("/api/llm/credit/orders/" + id, {});
+  },
+
+  async reauth(password) {
+    return call("/api/llm/account/reauth", { password });
+  },
+
   async fetchModels() {
     const request = ++this.modelsRequest;
     const result = await call("/api/llm/models", {});

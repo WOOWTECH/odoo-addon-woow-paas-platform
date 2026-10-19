@@ -56,7 +56,7 @@
    獨立 cursor、fail-soft）寫一筆 incident；snapshot 只有 kind（封閉的 :class:`LlmIncident`）、
    partner／來源列的 id、錯誤碼與點數，**不用** ``detail`` 這個自由文字欄（N24）。``state=open`` 的
    incident **只是紀錄**（不建待辦、不通知；通知靠上面的告警）；``needs_human``（會對帳務群組建
-   review 待辦）暫不開放，等 LLM-08 把結案流程依 kind 分流（現在的結案要求 ECPay 查證）。10 分鐘內
+   review 待辦）只接受真正的 bool；結案依 incident kind 分流。10 分鐘內
    已有 ``INCIDENT_BURST_ACCOUNTS`` 個帳戶開了同一種 incident ⇒ 之後的帳戶併進一筆平台層級的
    incident（``llm:<種類>/platform/<日期>``），不再一戶一筆。
 
@@ -98,6 +98,9 @@ from .llm_common import (
     NUMBER_KEYS,
     RESULT_CODES,
     RESULT_NOT_EXECUTED,
+    REAUTH_ATTEMPT_LIMIT,
+    REAUTH_WINDOW_SECONDS,
+    ERR_LLM_REAUTH_REQUIRED,
     THROTTLE_ATTEMPT_LIMITS,
     THROTTLE_LIMITS,
     THROTTLE_WINDOW_SECONDS,
@@ -212,6 +215,9 @@ class LlmAlert(enum.Enum):
     PRICING_INVALID = 'pricing_invalid'
     FREE_METER_LAG = 'free_meter_lag'
     FREE_UP_FAILED = 'free_up_failed'
+    #: A conversion needs human review; no refund or credit is asserted.
+    CREDIT_REVIEW = 'credit_review'
+    CREDIT_BUDGET = 'credit_budget'
 
 
 class LlmIncident(enum.Enum):
@@ -369,6 +375,50 @@ def _begin(env, cr, read_committed=False):
         cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
 
 
+def _throttle_reserve_cr(cr, account_id, action, *, partner_id, uid=None, real_ip=None,
+                         target_model=None, target_id=None, credit_t1_pending=False):
+    """Reserve N6 on the caller's READ COMMITTED cursor, never open another.
+
+    Both T1 and worker retries use this exact advisory key and count logic. The
+    lock stays held through the caller's commit; target ownership, if supplied,
+    is inserted atomically with the started event. A limit inserts nothing.
+    """
+    if action not in THROTTLE_LIMITS:
+        raise LlmAlertInputError('action')
+    if type(credit_t1_pending) is not bool or (credit_t1_pending and action != 'convert'):
+        raise LlmAlertInputError('credit_t1_pending')
+    account_id = _check_id('account_id', account_id)
+    target_model, target_id = _check_target(target_model, target_id)
+    cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+               ('woow_llm_throttle:%d:%s' % (account_id, action),), log_exceptions=False)
+    # Take the clock and count AFTER the lock, in a fresh RC statement snapshot.
+    now = _utcnow()
+    since = now - timedelta(seconds=THROTTLE_WINDOW_SECONDS)
+    cr.execute('SELECT create_date, result FROM %s WHERE account_id = %%s AND action = %%s '
+               'AND create_date > %%s ORDER BY create_date' % EVENT_TABLE,
+               (account_id, action, since), log_exceptions=False)
+    rows = cr.fetchall()
+    counted = [stamp for stamp, result in rows if result != RESULT_NOT_EXECUTED]
+    attempts = [stamp for stamp, _result in rows]
+    retry_after = None
+    for stamps, cap in ((counted, THROTTLE_LIMITS[action]),
+                        (attempts, THROTTLE_ATTEMPT_LIMITS[action])):
+        if len(stamps) >= cap:
+            leaves = stamps[len(stamps) - cap] + timedelta(seconds=THROTTLE_WINDOW_SECONDS)
+            retry_after = max(retry_after or 1, math.ceil((leaves - now).total_seconds()))
+    if retry_after is not None:
+        raise LlmError(ERR_LLM_RATE_LIMITED, retry_after=retry_after)
+    cr.execute(
+        'INSERT INTO %s (action, account_id, partner_id, uid, real_ip, result, severity, '
+        'target_model, target_id, credit_t1_pending, occurrences, '
+        'create_uid, create_date, write_uid, write_date) '
+        'VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, 1, %%s, %%s, %%s, %%s) '
+        'RETURNING id' % EVENT_TABLE,
+        (action, account_id, partner_id, uid, real_ip, 'started', 'info', target_model, target_id,
+         credit_t1_pending, SUPERUSER_ID, now, SUPERUSER_ID, now), log_exceptions=False)
+    return cr.fetchone()[0]
+
+
 def _env_on(registry, cr):
     """獨立 cursor 上的 superuser env，transaction 直接綁 ``registry``。
 
@@ -407,6 +457,9 @@ class LlmEvent(models.Model):
     target_model = fields.Char(readonly=True)
     target_id = fields.Integer(readonly=True)
     result = fields.Char(readonly=True, help='Result code (lower snake).')
+    credit_t1_pending = fields.Boolean(
+        readonly=True, default=False, index=True,
+        help='Local conversion reservation not yet bound to a committed order.')
     error_code = fields.Char(readonly=True)
     severity = fields.Selection(SEVERITY_SELECTION, required=True, default='info',
                                 readonly=True, index=True)
@@ -599,68 +652,97 @@ class LlmEvent(models.Model):
     #  節流（N6）                                                           #
     # ------------------------------------------------------------------ #
     @api.model
-    def _llm_throttle_reserve(self, account, action, *, uid=None, real_ip=None):
-        """數「本帳號近一小時的 ``action``」並在同一個獨立交易裡記一筆 ``result='started'``。
+    def _llm_throttle_reserve(self, account, action, *, uid=None, real_ip=None,
+                              credit_t1_pending=False):
+        """Reserve N6 on an independent RC cursor using the shared private helper.
 
-        到上限 ⇒ ``LlmError(llm_rate_limited, retry_after=<秒>)``（這一次不記）。上限有兩個：
-        ``THROTTLE_LIMITS``（不算 ``not_executed``）與 ``THROTTLE_ATTEMPT_LIMITS``（全部嘗試）。DB 記不下來
-        （例如 lock_timeout）⇒ ``llm_unavailable``——fail closed：數不到就不放行。回傳事件 id，呼叫端做完
-        以 :meth:`_llm_event_finish` 補結果（確定沒打到 new-api ⇒ ``not_executed``）。並發：advisory lock＋
-        READ COMMITTED（模組 docstring 第 2 點）。⚠ 呼叫端不得對 ``account`` 的列持有 ``FOR UPDATE``
-        （模組 docstring 第 1 點的前提二）：那樣這裡一定等到 lock_timeout、回 ``llm_unavailable``。
+        Caller must not hold account FOR UPDATE: event FK needs KEY SHARE.
+        The worker already holds its order lock, so it calls the same-cursor
+        helper directly rather than opening a second transaction here.
         """
         if action not in THROTTLE_LIMITS:
             raise LlmAlertInputError('action')
+        if type(credit_t1_pending) is not bool or (credit_t1_pending and action != 'convert'):
+            raise LlmAlertInputError('credit_t1_pending')
         account.ensure_one()
+        if credit_t1_pending:
+            # Held by the caller until its OUTER transaction ends. The orphan
+            # reaper needs the exclusive form, so it cannot race a live T1.
+            # Shared locks allow concurrent requests to reach Odoo's normal
+            # account row serialization/retry path without an advisory queue.
+            self.env.cr.execute('SELECT pg_advisory_xact_lock_shared(hashtextextended(%s, 0))',
+                                ('woow_llm_credit_t1:%d' % account.id,))
         uid = _check_id('uid', uid)
         real_ip = self._llm_ip(real_ip)
-        limit = THROTTLE_LIMITS[action]
-        attempt_limit = THROTTLE_ATTEMPT_LIMITS[action]
-        now = _utcnow()
-        since = now - timedelta(seconds=THROTTLE_WINDOW_SECONDS)
-        retry_after = None
         try:
             with self.env.registry.cursor() as cr:
                 _begin(self.env, cr, read_committed=True)
-                # log_exceptions=False：lock_timeout 這類失敗只記下面那一行（pgcode），不要
-                # odoo.sql_db 的「bad query」把整句連參數印成 ERROR。
-                cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
-                           ('woow_llm_throttle:%d:%s' % (account.id, action),),
-                           log_exceptions=False)
-                cr.execute(
-                    'SELECT create_date, result FROM %s WHERE account_id = %%s AND action = %%s '
-                    'AND create_date > %%s ORDER BY create_date' % EVENT_TABLE,
-                    (account.id, action, since), log_exceptions=False)
-                rows = cr.fetchall()
-                # 確定沒打到 new-api 的嘗試不吃上限（N6 保護的是 new-api 的 CT 桶），但仍算進
-                # 「所有嘗試」的上限：代理斷線時一直重試也不會無限寫列。
-                counted = [stamp for stamp, result in rows if result != RESULT_NOT_EXECUTED]
-                attempts = [stamp for stamp, _result in rows]
-                for stamps, cap in ((counted, limit), (attempts, attempt_limit)):
-                    if len(stamps) >= cap:
-                        # 要再空出一格，得等「第 len−cap+1 舊」的那一筆離開視窗。
-                        leaves = stamps[len(stamps) - cap] + timedelta(
-                            seconds=THROTTLE_WINDOW_SECONDS)
-                        retry_after = max(retry_after or 1,
-                                          math.ceil((leaves - now).total_seconds()))
-                if retry_after is None:
-                    cr.execute(
-                        'INSERT INTO %s (action, account_id, partner_id, uid, real_ip, result, '
-                        'severity, occurrences, create_uid, create_date, write_uid, write_date) '
-                        'VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, 1, %%s, %%s, %%s, %%s) '
-                        'RETURNING id' % EVENT_TABLE,
-                        (action, account.id, account.partner_id.id, uid, real_ip, 'started',
-                         'info', SUPERUSER_ID, now, SUPERUSER_ID, now), log_exceptions=False)
-                    event_id = cr.fetchone()[0]
+                return _throttle_reserve_cr(
+                    cr, account.id, action, partner_id=account.partner_id.id, uid=uid,
+                    real_ip=real_ip, credit_t1_pending=credit_t1_pending)
         except psycopg2.Error as exc:
             _logger.warning('[LLM] account=%s %s throttle unavailable (pgcode=%s)',
                             account.id, action, getattr(exc, 'pgcode', None))
             raise LlmError(ERR_LLM_UNAVAILABLE) from None
-        if retry_after is not None:
-            _logger.info('[LLM] account=%s %s rate limited (retry_after=%s)',
-                         account.id, action, retry_after)
-            raise LlmError(ERR_LLM_RATE_LIMITED, retry_after=retry_after)
-        return event_id
+
+    @api.model
+    def _llm_reauth_reserve(self, account, *, uid, real_ip=None):
+        """Reserve one of five attempts/hour, including failures, in a durable audit row.
+
+        Separate from N6: no not_executed exemption, all sessions share the account
+        budget. The account must be committed and not locked FOR UPDATE by caller.
+        """
+        account.ensure_one()
+        values = self._llm_record_values(
+            'reauth', account_id=account.id, partner_id=account.partner_id.id,
+            uid=uid, real_ip=real_ip, result='started')
+        try:
+            with self.env.registry.cursor() as cr:
+                _begin(self.env, cr, read_committed=True)
+                cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+                           ('woow_llm_reauth:%d' % account.id,), log_exceptions=False)
+                # Time is sampled after the lock; concurrent requests observe committed rows.
+                now = _utcnow()
+                cr.execute(
+                    'SELECT create_date FROM %s WHERE account_id = %%s '
+                    "AND action = 'reauth' AND create_date > %%s ORDER BY create_date" % EVENT_TABLE,
+                    (account.id, now - timedelta(seconds=REAUTH_WINDOW_SECONDS)),
+                    log_exceptions=False)
+                rows = cr.fetchall()
+                if len(rows) >= REAUTH_ATTEMPT_LIMIT:
+                    until = rows[len(rows) - REAUTH_ATTEMPT_LIMIT][0] + timedelta(
+                        seconds=REAUTH_WINDOW_SECONDS)
+                    raise LlmError(ERR_LLM_RATE_LIMITED,
+                                   retry_after=max(1, math.ceil((until - now).total_seconds())))
+                return self._llm_insert_event_cr(cr, values, now)
+        except LlmError:
+            raise
+        except Exception:  # noqa: BLE001 - fixed failure, no exception/credential logging
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+
+    @api.model
+    def _llm_reauth_finish(self, event_id, account_id, uid, verified):
+        """Complete only this reserved audit row; a DB failure never issues a grant."""
+        now = _utcnow()
+        try:
+            with self.env.registry.cursor() as cr:
+                _begin(self.env, cr)
+                cr.execute(
+                    'UPDATE %s SET result = %%s, error_code = %%s, write_date = %%s '
+                    "WHERE id = %%s AND account_id = %%s AND uid = %%s AND action = 'reauth' "
+                    "AND result = 'started'" % EVENT_TABLE,
+                    ('ok' if verified else 'failed', None if verified else ERR_LLM_REAUTH_REQUIRED,
+                     now, event_id, account_id, uid), log_exceptions=False)
+                if cr.rowcount != 1:
+                    raise LlmError(ERR_LLM_UNAVAILABLE)
+                if verified:
+                    cr.execute('UPDATE %s SET reauth_at = %%s WHERE id = %%s' % ACCOUNT_TABLE,
+                               (now, account_id), log_exceptions=False)
+                    if cr.rowcount != 1:
+                        raise LlmError(ERR_LLM_UNAVAILABLE)
+        except Exception:  # noqa: BLE001 - the started row still counts if completion fails
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        return now
 
     # ------------------------------------------------------------------ #
     #  告警出口（N13、N24）                                                 #
@@ -1162,9 +1244,8 @@ class LlmEvent(models.Model):
           同一種、而這個帳戶今天還沒有 ⇒ 改寫一筆平台層級的 ``llm:<種類>/platform/<日期>``（來源是
           ``llm_runtime_state``、沒有 partner），之後的帳戶都累加在它上面（模組 docstring 第 4 點）。
         * snapshot 只有 kind、partner／來源列的 id、錯誤碼、點數；不寫 ``detail``（自由文字欄）。
-        * ``state`` 一律 ``open``＝紀錄（不建待辦、不通知）。``needs_human=True`` 暫不開放
-          （:class:`LlmAlertInputError`）：它會對帳務群組建 review 待辦，而現在的結案動作
-          （``action_mark_manually_resolved``）要求 ECPay 查證——LLM-08 把結案流程依 kind 分流之後才開。
+        * ``needs_human=False`` 記 ``open``（不建待辦）；True 記 ``needs_human``，
+          由 incident ledger 對帳務群組建立 AI 專用 review 待辦。
         * ⚠ ``account_id`` 必須已經 commit，呼叫端也不得對它持有 ``FOR UPDATE``（模組 docstring 第 1 點）。
 
         回傳 incident id；被拒（未設定、DB 錯誤、``_log`` 的 fail-soft）回 ``False``。
@@ -1178,7 +1259,7 @@ class LlmEvent(models.Model):
             raise LlmAlertInputError('points')
         if not account_id and not order_id:
             raise LlmAlertInputError('account_id')
-        if needs_human is not False:
+        if type(needs_human) is not bool:
             raise LlmAlertInputError('needs_human')
         if llm_unconfigured(self.env):
             _logger.info('[LLM] incident %s suppressed: AI models are not configured (N27)',
@@ -1223,6 +1304,7 @@ class LlmEvent(models.Model):
             'source_ref': source[1],
             'failure_code': error_code,
             'credits': float(points) if points is not None else None,
+            'state': 'needs_human' if needs_human else 'open',
         }
         incident_id = self.env['woow.billing.incident'].sudo()._log(snapshot)
         if incident_id:
@@ -1265,7 +1347,53 @@ class LlmEvent(models.Model):
                             items=CLEANUP_BATCHES_PER_TICK, outbound=False)
 
     @api.model
+    def _llm_credit_reservation_candidates(self):
+        """Bounded discovery; committed fixtures override this to their own ids."""
+        with self.env.registry.cursor() as cr:
+            _begin(self.env, cr, read_committed=True)
+            cr.execute(
+                'SELECT DISTINCT account_id FROM ' + EVENT_TABLE + ' e' +
+                " WHERE action = 'convert' AND result = 'started' AND credit_t1_pending "
+                'AND account_id IS NOT NULL AND target_model IS NULL AND target_id IS NULL '
+                'AND NOT EXISTS (SELECT 1 FROM woow_paas_platform_llm_credit_order o '
+                'WHERE o.convert_event_id = e.id) '
+                'ORDER BY account_id LIMIT 100')
+            return [row[0] for row in cr.fetchall()]
+
+    @api.model
+    def _llm_reap_credit_reservations(self, tick):
+        """Recover only abandoned local T1 reservations, never upstream attempts.
+
+        A process kill drops its shared transaction lock without running Odoo
+        callbacks. After acquiring the exclusive lock, READ COMMITTED gives
+        us a fresh view of any just-committed order. Both its permanent event
+        target and current event link prevent releasing a paid/in-flight
+        attempt. Age alone is never evidence that an add_quota did not run.
+        """
+        recovered = 0
+        for account_id in self._llm_credit_reservation_candidates():
+            if tick.remaining() < 1:
+                break
+            with self.env.registry.cursor() as cr:
+                _begin(self.env, cr, read_committed=True)
+                cr.execute('SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))',
+                           ('woow_llm_credit_t1:%d' % account_id,))
+                if not cr.fetchone()[0]:
+                    continue
+                cr.execute(
+                    'UPDATE ' + EVENT_TABLE + ' e SET result = %s, credit_t1_pending = false, '
+                    'write_date = %s, write_uid = %s WHERE account_id = %s '
+                    "AND action = 'convert' AND result = 'started' AND credit_t1_pending "
+                    'AND target_model IS NULL AND target_id IS NULL AND NOT EXISTS '
+                    '(SELECT 1 FROM woow_paas_platform_llm_credit_order o '
+                    'WHERE o.convert_event_id = e.id)',
+                    (RESULT_NOT_EXECUTED, _utcnow(), SUPERUSER_ID, account_id))
+                recovered += cr.rowcount
+        return recovered
+
+    @api.model
     def _llm_event_cleanup_tick(self, config, tick):
+        self._llm_reap_credit_reservations(tick)
         cutoff = _utcnow() - timedelta(days=LLM_EVENT_RETENTION_DAYS)
         deleted = 0
         while tick.can_take(1):

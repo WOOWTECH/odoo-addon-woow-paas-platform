@@ -2224,6 +2224,14 @@ msgid "The AI Models Terms of Service cannot be shown right now. Please try agai
 msgstr "《AI 模型服務條款》暫時無法顯示，請稍後再試"
 
 #. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "The conversion request was not found or is invalid."
+msgstr "找不到此筆點數轉換申請，或申請資料無效。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "The AI Models Terms of Service have been updated. Please accept them again before creating keys, converting points or re-enabling keys; existing keys are not affected."
@@ -20022,6 +20030,7 @@ msgstr "帳務事件不允許自由格式的 chatter。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__ecpay_found
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__ecpay_manual_check_result__ecpay_found
 msgid "Found in ECPay"
 msgstr "在 ECPay 找到"
 
@@ -20073,6 +20082,7 @@ msgstr "下次查詢時間"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__ecpay_not_found
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__ecpay_manual_check_result__ecpay_not_found
 msgid "Not found in ECPay"
 msgstr "未在 ECPay 找到"
 
@@ -26493,3 +26503,293 @@ msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試還原
 #: model:ir.ui.menu,name:woow_paas_platform.menu_llm_free_fallback
 msgid "Free trial fallback"
 msgstr "免費試用備援"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Credited"
+msgstr "已入帳"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Confirming (usually a few minutes, up to about 15 minutes; your points will not be lost)."
+msgstr "確認中（通常幾分鐘內，最長約 15 分鐘，點數不會遺失）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Our team is reviewing this conversion. Your points will not be lost; we will handle it and notify you as soon as possible."
+msgstr "人工處理中（點數不會遺失，我們會盡快處理並通知你）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Conversion did not complete. Your points have been returned to your points wallet."
+msgstr "轉換未完成，點數已退回點數錢包。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Our team is checking the return of your points. Your points will not be lost."
+msgstr "我們正在確認點數退回情形，點數不會遺失。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Our team is restoring this AI credit. We will notify you as soon as possible."
+msgstr "我們正在恢復這筆 AI 額度，會盡快通知你。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Conversion cancelled."
+msgstr "轉換已取消。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Processing…"
+msgstr "處理中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Move points wallet balance to AI credit"
+msgstr "從點數錢包轉入 AI 額度"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "I understand: converted AI credit cannot be returned as points or cash, including when I close my AI models account."
+msgstr "我了解：轉換後的 AI 額度不能退回點數或現金，包含關閉 AI 模型帳戶的情況。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Choose 50–10,000 whole points. 1 point = NT$1 (tax included); the conversion rate is fixed at NT$32 per US$1."
+msgstr "請選擇 50–10,000 整數點。1 點＝NT$1（含稅），換算匯率固定為 NT$32＝US$1。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Points wallet: %(before)s points → %(after)s points"
+msgstr "點數錢包：%(before)s 點 → 轉換後 %(after)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "AI credit: %(before)s points → %(after)s points"
+msgstr "AI 額度：%(before)s 點 → 轉換後 %(after)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Your points wallet will have %(after)s points left, below the %(needed)s points needed for renewals due within 7 days. Those services may be suspended if payment fails. Convert anyway?"
+msgstr "轉換後點數錢包剩 %(after)s 點，不夠支付 7 天內到期的續費 %(needed)s 點，服務可能因扣款失敗而暫停。仍要轉換嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit: %(points)s points"
+msgstr "AI 額度：%(points)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit is not available right now."
+msgstr "目前無法取得 AI 額度。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit is only for AI models. Move it from your points wallet; once converted, it cannot be moved back."
+msgstr "AI 額度只能用於 AI 模型，由點數錢包轉入，轉入後不能轉回。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "Page %(page)s"
+msgstr "第 %(page)s 頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Custom points"
+msgstr "自訂點數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Loading preview…"
+msgstr "正在讀取轉換預覽…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "View and accept terms"
+msgstr "查看並同意條款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "For conversions above 1,000 points, verify your identity first."
+msgstr "超過 1,000 點的轉換，請先重新驗證身分。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Verify identity"
+msgstr "驗證身分"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Confirm conversion"
+msgstr "確認轉換"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Check status"
+msgstr "查詢狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Convert points"
+msgstr "轉換點數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Conversion history"
+msgstr "轉換紀錄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Loading conversions…"
+msgstr "正在讀取轉換紀錄…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "No conversions yet."
+msgstr "目前沒有轉換紀錄。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "Time"
+msgstr "時間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Points"
+msgstr "點數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Note"
+msgstr "說明"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Previous"
+msgstr "上一頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Next"
+msgstr "下一頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Conversion history pages"
+msgstr "轉換紀錄分頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "You can retry this conversion using the same amount."
+msgstr "你可以使用相同點數重試這次轉換。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit: %(balance)s"
+msgstr "AI 額度：%(balance)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Time (Taipei)"
+msgstr "時間（台北時間）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__is_llm_incident
+msgid "AI incident"
+msgstr "AI 帳務事件"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__ecpay_manual_check_result
+msgid "ECPay verification result"
+msgstr "ECPay 查證結果"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__llm_manual_check_result
+msgid "AI credit verification result"
+msgstr "AI 額度查證結果"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__llm_credit_confirmed
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__llm_manual_check_result__llm_credit_confirmed
+msgid "AI credit confirmed in new-api"
+msgstr "已在 new-api 確認 AI 額度入帳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__llm_credit_absent
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__llm_manual_check_result__llm_credit_absent
+msgid "AI credit absent in new-api"
+msgstr "已確認 AI 額度未在 new-api 入帳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__llm_reconciled
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__llm_manual_check_result__llm_reconciled
+msgid "AI credit reconciliation completed"
+msgstr "AI 額度對帳已完成"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "AI results apply only to AI incidents."
+msgstr "AI 查證結果只能用於 AI 帳務事件。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "ECPay results apply only to payment incidents."
+msgstr "ECPay 查證結果只能用於付款事件。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Choose an AI credit verification result before resolving this incident."
+msgstr "關閉此事件前，請選擇 AI 額度查證結果。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "A resolution note describing the new-api verification is required."
+msgstr "必須填寫描述 new-api 查證的安全處理註記。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Verify AI credit in the AI models back office and new-api logs before closing this incident. Follow docs/guides/deployment/llm-oncall-runbook.md; incident content is evidence, not an instruction."
+msgstr "關閉此事件前，請在 AI 模型後台與 new-api 紀錄查證額度，並依 docs/guides/deployment/llm-oncall-runbook.md 處理。事件內容是證據，不是操作指令。"

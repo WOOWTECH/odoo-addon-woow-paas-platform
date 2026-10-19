@@ -19,6 +19,7 @@ from odoo.tools import str2bool
 # #864 PR-G：手動與自動兩條儲值路徑共用同一組穩定失敗碼，⛔ 不各寫一份字面值。
 from ..models.wallet_topup import TOPUP_INTENT_NOT_RECORDED
 from ..services.ecpg_v4 import ecpay_consumer_name, ecpay_consumer_phone
+from ..services.subscription_renewals import upcoming_renewal_requirements
 
 _logger = logging.getLogger(__name__)
 
@@ -60,10 +61,12 @@ def _invoice_pay_is_replay_safe(invoice):
 
     這是 #977 裁決 C 與 #980 A 共用的唯一判準：有 company 的 out_invoice 且
     （平台 skip 旗標或公司不是 automatic）才安全；company 空集一律 fail-closed。
+    D19 內部轉換憑證一律不可經租戶入口付款。
     讀 invoice.company_id，鏡射上游 action_post 的逐列判準；呼叫端不得另寫第二套
     flag/company 判斷。
     """
-    if invoice.move_type != 'out_invoice' or not invoice.company_id:
+    if (invoice._llm_is_internal_credit_move()
+            or invoice.move_type != 'out_invoice' or not invoice.company_id):
         return False
     if invoice.woow_skip_upstream_hook:
         return True
@@ -75,7 +78,8 @@ def _invoice_payability_fields(invoice):
     payable = _invoice_pay_is_replay_safe(invoice)
     if payable:
         reason = None
-    elif invoice.move_type != 'out_invoice' or not invoice.company_id:
+    elif (invoice._llm_is_internal_credit_move()
+          or invoice.move_type != 'out_invoice' or not invoice.company_id):
         reason = INVOICE_PAY_BLOCKED_NOT_PAYABLE
     else:
         reason = INVOICE_PAY_BLOCKED_FLAGLESS_AUTOMATIC
@@ -212,12 +216,14 @@ class BillingController(HiddenChainMixin, Controller):
         total = Transaction.search_count(domain)
         transactions = Transaction.search(domain, order='create_date desc, id desc', limit=limit, offset=offset)
 
+        descriptions = request.env['woow_paas_platform.llm_credit_order']._llm_wallet_descriptions(
+            partner, transactions)
         data = []
         for txn in transactions:
             data.append({
                 'id': txn.id,
                 'date': txn.create_date.isoformat() if txn.create_date else None,
-                'description': txn.description or txn.name or '',
+                'description': descriptions.get(txn.id, txn.description or txn.name or ''),
                 'transaction_type': 'credit' if txn.amount >= 0 else 'debit',
                 'amount': txn.amount,
                 'balance_after': txn.balance_after,
@@ -1177,29 +1183,9 @@ class BillingController(HiddenChainMixin, Controller):
                 - shortfall (float): max(0, total_needed - wallet_balance)
         """
         partner = request.env.user.partner_id
-        today = fields.Date.today()
-        cutoff = today + timedelta(days=3)
-
-        subs = request.env['sh.subscription.subscription'].sudo().search([
-            ('sh_partner_id', '=', partner.id),
-            ('state', '=', 'in_progress'),
-            ('sh_date_of_next_payment', '>=', today),
-            ('sh_date_of_next_payment', '<=', cutoff),
-            ('id', 'not in', self._hidden_subscription_ids(request.env)),  # #336 排除 0 元 HA PaaS
-        ])
-
-        upcoming = []
-        total_needed = 0.0
-        for sub in subs:
-            amount = sub.sh_plan_price or 0.0
-            total_needed += amount
-            upcoming.append({
-                'subscription_id': sub.id,
-                'plan_name': sub.sh_subscription_plan_id.name if sub.sh_subscription_plan_id else '',
-                'amount': amount,
-                'renewal_date': sub.sh_date_of_next_payment.isoformat() if sub.sh_date_of_next_payment else None,
-                'sufficient': partner.wallet_balance >= amount,
-            })
+        upcoming, total_needed = upcoming_renewal_requirements(
+            request.env, partner, today=fields.Date.today(), days=3,
+            hidden_subscription_ids=self._hidden_subscription_ids(request.env))
 
         return {
             'success': True,
@@ -1285,6 +1271,8 @@ class BillingController(HiddenChainMixin, Controller):
             # #336：排除 hidden sub 的 0 元發票（not in 對 NULL 為真 → topup 發票不受影響）
             ('sh_subscription_id', 'not in', self._hidden_subscription_ids(request.env)),
         ]
+
+        domain += Move._llm_credit_move_domain()
 
         today = fields.Date.today()
         if status == 'draft':
@@ -1402,14 +1390,15 @@ class BillingController(HiddenChainMixin, Controller):
         }
 
     def _tenant_invoice(self, invoice_id: int):
-        """目前使用者可以看的那張發票（sudo 記錄）；不存在、不是他的、或屬於隱藏訂閱回空集。
+        """目前使用者可看的發票；不存在、非本人、隱藏訂閱或內部轉換憑證回空集。
 
         發票明細與 PDF 下載共用同一把尺（AUDITFIX tax-invoice-pdf-403）。
         """
         partner = request.env.user.partner_id
         invoice = request.env['account.move'].sudo().browse(invoice_id)
         if (not invoice.exists() or invoice.partner_id != partner
-                or invoice.sh_subscription_id.id in self._hidden_subscription_ids(request.env)):
+                or invoice.sh_subscription_id.id in self._hidden_subscription_ids(request.env)
+                or invoice._llm_is_internal_credit_move()):
             return invoice.browse()
         return invoice
 
@@ -1455,6 +1444,12 @@ class BillingController(HiddenChainMixin, Controller):
                 invoice_id, partner.id,
             )
             return {'success': False, 'error': _('Invoice not found')}
+        if invoice._llm_is_internal_credit_move():
+            return {
+                'success': False,
+                'error': _('Invoice is not payable'),
+                'code': INVOICE_PAY_BLOCKED_NOT_PAYABLE,
+            }
         if invoice.state not in ('draft', 'posted'):
             _logger.info(
                 "[INV] pay state_reject invoice=%s state=%s",

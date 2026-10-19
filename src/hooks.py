@@ -220,6 +220,7 @@ _CONFIG_PARAMETERS = [
     # 預設值，lint 掃不到 ⇒ 補在 `test_llm_tracer.py::TestLlmConfigRegistered`
     # （它比對的是 models/llm_common.py 的 LLM_CONFIG_PARAMETERS）。
     'woow_paas_platform.show_llm',
+    'woow_paas_platform.llm_orders_enabled',
     'woow_paas_platform.llm_pilot_partner_ids',
     'woow_paas_platform.newapi_proxy_url',
     'woow_paas_platform.newapi_username_prefix',
@@ -230,6 +231,8 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.llm_alert_webhook_url',
     # LLM-02：給使用者的 API base URL（DESIGN §2.11，只收白名單值）。
     'woow_paas_platform.llm_public_base_url',
+    # LLM-08：unknown credit verifier 的受信任 new-api service-admin id。
+    'woow_paas_platform.llm_service_admin_id',
 ]
 
 

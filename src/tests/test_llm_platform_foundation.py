@@ -26,7 +26,7 @@ Class 一覽（對到票的驗收）：
   信件送達確認（exception 重排、cancel 不重排、用完次數 ⇒ failed）、自由文字（含 snake 形狀的指令，
   連 ``numbers`` 的 key 也是）被型別拒絕、webhook 只在 delivery cron 送。
 * ``TestLlmAlertBurst``：50 戶同一個原因 ⇒ 50 列、1 封信＋窗口結束時 1 封摘要；incident 併成平台層級。
-* ``TestLlmIncidentHelper``：incident 只有 id、錯誤碼、點數；``needs_human`` 暫不開放；LLM 待辦文案不提 ECPay。
+* ``TestLlmIncidentHelper``：incident 只有 id、錯誤碼、點數；``needs_human`` 僅接受 bool；LLM 待辦文案不提 ECPay。
 * ``TestLlmRuntimeState``：單例與 DESIGN §2.5 的全部欄位。
 * ``TestLlmBalanceRefresh``（AC4）：快取＝new-api 的值、只看本環境前綴、tick 用完隔 60 秒 ``_trigger()``
   接續、形狀不對的回應不算跑完、同一秒內的入帳不會被舊頁蓋掉。
@@ -1026,9 +1026,48 @@ class TestLlmIncidentHelper(_ConfiguredCase):
         self.assertEqual(first, second)
         self.assertEqual(self.Incident.browse(first).occurrences, 2)
 
-    def test_order_incident_is_a_record_and_needs_human_is_closed(self):
-        """審查第 2 輪 finding 13：``needs_human`` 會對帳務群組建 review 待辦，而結案動作要求 ECPay
-        查證——在 LLM-08 把結案流程依 kind 分流之前不開放。``open`` 只是紀錄（不建待辦）。"""
+    def test_same_key_open_escalates_once_and_resolved_stays_closed(self):
+        manager = new_test_user(self.env, login='llm_escalation_%s' % uuid.uuid4().hex[:8],
+                                groups='account.group_account_manager')
+        order_id = 987657
+        incident_id = self.Event._llm_incident(
+            LlmIncident.CREDIT_UNKNOWN, order_id=order_id,
+            account_id=self.account.id, needs_human=False)
+        incident = self.Incident.browse(incident_id)
+        domain = [('res_model', '=', 'woow.billing.incident'),
+                  ('res_id', '=', incident_id), ('user_id', '=', manager.id)]
+        Activity = self.env['mail.activity'].sudo()
+        self.assertEqual(Activity.search_count(domain), 0)
+        self.assertEqual(incident.state, 'open')
+
+        self.assertEqual(self.Event._llm_incident(
+            LlmIncident.CREDIT_UNKNOWN, order_id=order_id,
+            account_id=self.account.id, needs_human=True), incident_id)
+        incident.invalidate_recordset(['state', 'occurrences'])
+        self.assertEqual((incident.state, incident.occurrences), ('needs_human', 2))
+        self.assertEqual(Activity.search_count(domain), 1)
+        for needs_human in (True, False):
+            self.assertEqual(self.Event._llm_incident(
+                LlmIncident.CREDIT_UNKNOWN, order_id=order_id,
+                account_id=self.account.id, needs_human=needs_human), incident_id)
+        incident.invalidate_recordset(['state', 'occurrences'])
+        self.assertEqual((incident.state, incident.occurrences), ('needs_human', 4))
+        self.assertEqual(Activity.search_count(domain), 1)
+
+        record = incident.with_user(manager)
+        record.write({'llm_manual_check_result': 'llm_reconciled',
+                      'resolution_note': 'Verified in new-api logs'})
+        self.assertTrue(record.action_mark_manually_resolved())
+        self.assertEqual(Activity.search_count(domain), 0)
+        self.assertEqual(self.Event._llm_incident(
+            LlmIncident.CREDIT_UNKNOWN, order_id=order_id,
+            account_id=self.account.id, needs_human=True), incident_id)
+        incident.invalidate_recordset(['state', 'occurrences'])
+        self.assertEqual((incident.state, incident.occurrences), ('resolved', 4))
+        self.assertEqual(Activity.search_count(domain), 0)
+
+    def test_order_incident_open_and_needs_human_requires_strict_bool(self):
+        """AI review state schedules the AI-specific activity; open only records."""
         activities = self.env['mail.activity'].sudo().search_count(
             [('res_model', '=', 'woow.billing.incident')])
         incident_id = self.Event._llm_incident(
@@ -1040,11 +1079,25 @@ class TestLlmIncidentHelper(_ConfiguredCase):
                           987654, 'open'))
         self.assertEqual(self.env['mail.activity'].sudo().search_count(
             [('res_model', '=', 'woow.billing.incident')]), activities, 'open 不建待辦')
+        manager = new_test_user(self.env, login='llm_incident_review_%s' % uuid.uuid4().hex[:8],
+                                groups='account.group_account_manager')
+        review_id = self.Event._llm_incident(
+            LlmIncident.CREDIT_UNKNOWN, order_id=987655,
+            account_id=self.account.id, needs_human=True)
+        review = self.Incident.browse(review_id)
+        self.assertEqual(review.state, 'needs_human')
+        activity = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', review_id), ('user_id', '=', manager.id),
+        ])
+        self.assertEqual(len(activity), 1)
+        self.assertIn('new-api', activity.note)
         before = self.Incident.search_count([])
-        for value in (True, 1, 'yes'):
+        for value in (1, 0, 'yes', None):
             with self.subTest(needs_human=value):
                 caught = _raises(self, LlmAlertInputError, lambda: self.Event._llm_incident(
-                    LlmIncident.CREDIT_UNKNOWN, order_id=987655, needs_human=value))
+                    LlmIncident.CREDIT_UNKNOWN, order_id=987656,
+                    account_id=self.account.id, needs_human=value))
                 self.assertEqual(caught.field, 'needs_human')
         self.assertEqual(self.Incident.search_count([]), before)
 

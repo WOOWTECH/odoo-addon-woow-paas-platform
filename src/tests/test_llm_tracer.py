@@ -162,6 +162,60 @@ class TestLlmConfigGuard(TransactionCase):
         self.icp = self.env['ir.config_parameter'].sudo()
         reset_llm_config(self.env)
 
+    def test_orders_switch_default_validation_and_fingerprint(self):
+        from ..hooks import _CONFIG_PARAMETERS
+        key = llm_common.PARAM_ORDERS_ENABLED
+        self.assertIn(key, llm_common.LLM_CONFIG_PARAMETERS)
+        self.assertIn(key, _CONFIG_PARAMETERS)
+        self.assertNotIn(key, llm_common.CONFIG_CHANGE_CODES)
+        self.assertTrue(llm_common.llm_config(self.env)['orders_enabled'])
+        configure(self.env)
+        fingerprint = llm_common.config_fingerprint(self.env)
+        for value, enabled in (('False', False), ('0', False), ('True', True), ('1', True)):
+            self.icp.set_param(key, value)
+            config = llm_common.llm_config(self.env)
+            self.assertIs(config['orders_enabled'], enabled)
+            self.assertFalse(llm_common.llm_unconfigured(self.env, config),
+                             'Paid orders must continue when new operations stop')
+            self.assertEqual(llm_common.config_fingerprint(self.env), fingerprint)
+        self.icp.set_param(key, False)
+        self.assertTrue(llm_common.llm_config(self.env)['orders_enabled'])
+        with self.assertRaises(ValidationError):
+            self.icp.set_param(key, 'maybe')
+
+    def test_service_admin_id_is_optional_validated_and_fingerprinted(self):
+        """LLM-08 never trusts a log's actor as its own proof anchor."""
+        from ..hooks import _CONFIG_PARAMETERS
+        key = llm_common.PARAM_SERVICE_ADMIN_ID
+        self.assertIn(key, llm_common.LLM_CONFIG_PARAMETERS)
+        self.assertIn(key, _CONFIG_PARAMETERS)
+        self.assertIn(key, llm_common.CONFIG_CHANGE_CODES)
+        self.assertIsNone(llm_common.llm_config(self.env)['service_admin_id'])
+        before = llm_common.config_fingerprint(self.env)
+        self.icp.set_param(key, '7')
+        self.assertEqual(llm_common.llm_config(self.env)['service_admin_id'], 7)
+        self.assertNotEqual(llm_common.config_fingerprint(self.env), before)
+        self.icp.set_param(key, str(nac.INT32_MAX))
+        self.assertEqual(llm_common.llm_config(self.env)['service_admin_id'], nac.INT32_MAX)
+        for bad in ('0', '-1', '1.5', 'True', str(nac.INT32_MAX + 1)):
+            with self.assertRaises(ValidationError, msg=bad):
+                self.icp.set_param(key, bad)
+        # Direct SQL must not turn a malformed trust anchor into usable evidence.
+        self.env.cr.execute(
+            "INSERT INTO ir_config_parameter (key, value) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (key, str(nac.INT32_MAX + 1)))
+        self.env.registry.clear_cache()
+        self.assertIsNone(llm_common.llm_config(self.env)['service_admin_id'])
+
+    def test_sql_written_invalid_orders_switch_fails_closed(self):
+        self.env.cr.execute(
+            "INSERT INTO ir_config_parameter (key, value) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (llm_common.PARAM_ORDERS_ENABLED, 'maybe'))
+        self.env.registry.clear_cache()
+        self.assertFalse(llm_common.llm_config(self.env)['orders_enabled'])
+
     def test_proxy_url_rejects_external_hosts(self):
         for bad in ('http://evil.example', 'https://newapi.woowtech.io',
                     'http://newapi-proxy.new-api.svc.cluster.local:8081',

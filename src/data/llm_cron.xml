@@ -149,5 +149,30 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Conversion T1 triggers this stable cron. A tick claims at most one
+             paid order before any non-idempotent add_quota request. -->
+        <record id="ir_cron_llm_credit" model="ir.cron">
+            <field name="name">PaaS: AI Credit Conversion</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_credit_order"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_credit()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <!-- Unknown/non-responsive conversion results are never retried. This
+             separate read-only verifier proves a type-1 audit record or uses
+             two durable, quiescent balance samples before it releases a retry. -->
+        <record id="ir_cron_llm_credit_verify" model="ir.cron">
+            <field name="name">PaaS: AI Credit Conversion Verification</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_credit_order"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_credit_verify()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>
