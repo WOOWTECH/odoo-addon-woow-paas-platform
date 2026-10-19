@@ -222,11 +222,13 @@ class TestDeviceCodeEndpoints(TransactionCase):
         qweb = self.env['ir.qweb']
         denied = str(qweb._render('woow_paas_platform.device_result',
                                   {'approved': False, 'message': None}))
-        self.assertIn('<title>Request Denied - Woow PaaS</title>', denied)
-        self.assertNotIn('Device Authorized', denied)
+        self.assertIn('<title>已取消授權｜woowtech</title>', denied)
+        self.assertNotIn('授權已完成', denied)
         approved = str(qweb._render('woow_paas_platform.device_result',
                                     {'approved': True}))
-        self.assertIn('<title>Device Connected - Woow PaaS</title>', approved)
+        self.assertIn('<title>授權已完成｜woowtech</title>', approved)
+        self.assertNotIn('已取消授權', approved)
+        self.assertIn('繼續選擇工作區與服務', approved)
 
     def test_device_verify_invalid_code_increments_session(self):
         session = {}

@@ -12,7 +12,8 @@ class TestSmartHome(TransactionCase):
     def setUp(self):
         """Set up test fixtures."""
         super().setUp()
-        self.SmartHome = sh_model(self.env)
+        # Provider error assertions below intentionally use the English catalog.
+        self.SmartHome = sh_model(self.env).with_context(lang='en_US')
         self.Workspace = self.env['woow_paas_platform.workspace']
 
         self.workspace = self.Workspace.create({'name': 'Test Workspace'})

@@ -20,3 +20,5 @@ from . import signup
 from . import llm
 # 商用驗收 X-SEC-007：原生忘記密碼／註冊頁的帳號枚舉修補（不新增頁面）。
 from . import auth_hardening
+from . import ha_onboarding
+from . import connect_login

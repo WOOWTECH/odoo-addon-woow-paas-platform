@@ -14,7 +14,7 @@ from odoo.http import request, route, Controller
 from odoo.exceptions import (
     AccessDenied, AccessError, MissingError, UserError, ValidationError,
 )
-from psycopg2 import OperationalError
+from psycopg2 import IntegrityError, OperationalError
 
 from ..models.smart_home import _platform_order
 from ..services.paas_capability import _PaaSCapability
@@ -253,8 +253,17 @@ class SmartHomeController(Controller):
             workspace_id, smarthome_id, plan_id,
             old_sub.id if old_sub else None,
         )
-        if not old_sub or old_sub.state != "in_progress":
+        activating_trial = bool(old_sub and old_sub.woow_trial_only)
+        if not old_sub or (old_sub.state != "in_progress" and not (
+                activating_trial and old_sub.state in ("close", "expire"))):
             return {"success": False, "error": _("No active subscription")}
+        if activating_trial:
+            smarthome.sudo()._lock_trial_transition()
+            old_sub = smarthome.sudo().subscription_id
+            if not old_sub.woow_trial_only:
+                return {'success': False, 'error': _('付費方案已啟用，請重新整理。')}
+            if old_sub.state not in ('in_progress', 'close', 'expire'):
+                return {'success': False, 'error': _('此試用已取消，無法啟用付費。')}
 
         # During trial, sh_end_date is legitimately NULL (billing period
         # hasn't started yet — mixin sets sh_start_date = trial_end + 1 but
@@ -297,7 +306,7 @@ class SmartHomeController(Controller):
                     'error': _denial['error'],
                     'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
-        refund = old_sub._compute_unused_refund()
+        refund = 0.0 if activating_trial else old_sub._compute_unused_refund()
         # AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋這次退點付不起新方案
         # 首期（含稅）就擋下——什麼都不寫（不退點、不關舊訂閱、不建新訂閱、不開發票）。
         # `dry_run=True`：通過同一組閘之後只回估算（前端停用「確認變更」並顯示差額）。
@@ -334,6 +343,12 @@ class SmartHomeController(Controller):
         })
 
         smarthome._create_and_confirm_subscription(partner, plan)
+        if activating_trial and smarthome.state == 'suspended':
+            # Payment and subscription are committed independently of external
+            # tunnel work. The trial cron retries resume after this transaction.
+            cron = request.env.ref(
+                'woow_paas_platform.ir_cron_smart_home_trial_lifecycle')
+            cron.sudo()._trigger()
         # sudo: same rationale as the old_sub read above — Odoo's prefetch
         # cache *usually* lets the post-create traversal succeed, but the
         # intervening `.sudo().write()` on old_sub invalidates portions of
@@ -856,6 +871,7 @@ class SmartHomeController(Controller):
         self, workspace, name: str | None, ha_port: int | None,
         plan_id: int | None = None,
         template_id: int | None = None,
+        *, trial_only: bool = False, onboarding_key: str | None = None,
     ) -> dict[str, Any]:
         """Create a new smart home in the workspace.
 
@@ -911,6 +927,8 @@ class SmartHomeController(Controller):
             "name": name,
             "workspace_id": workspace.id,
         }
+        if onboarding_key:
+            vals['ha_onboarding_key'] = onboarding_key
         if ha_port:
             vals["ha_port"] = ha_port
 
@@ -927,8 +945,10 @@ class SmartHomeController(Controller):
                 "[SH] create_smarthome sh=%s workspace=%s partner=%s plan=%s template=%s",
                 smarthome.id, workspace.id, partner.id, plan.id, template.id,
             )
-            smarthome._create_and_confirm_subscription(partner, plan)
+            smarthome._create_and_confirm_subscription(partner, plan, trial_only=trial_only)
             return {"success": True, "data": smarthome.to_dict()}
+        except (IntegrityError, OperationalError):
+            raise
         except Exception as e:
             _logger.exception("[SH] Failed to create smart home: %s", e)
             return {"success": False, "error": _("Failed to create smart home. Please try again.")}

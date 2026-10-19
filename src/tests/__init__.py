@@ -1254,3 +1254,4 @@ from . import test_paas_mail_sender
 from . import test_service_documentation_logs
 from . import test_cloud_app_documentation_seed
 from . import test_llm_free_usage
+from . import test_ha_onboarding
