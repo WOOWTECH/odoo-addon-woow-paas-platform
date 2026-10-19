@@ -25761,8 +25761,8 @@ msgstr "無法載入相關文件，請重試。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
-msgid "Official documentation"
-msgstr "官方文件"
+msgid "Open related documentation"
+msgstr "開啟相關文件"
 
 #. module: woow_paas_platform
 #. odoo-javascript

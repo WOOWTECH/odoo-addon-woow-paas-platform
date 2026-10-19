@@ -15,7 +15,7 @@
           </div>
           <a t-if="state.url" t-att-href="state.url" target="_blank" rel="noopener noreferrer" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm">
             <WoowIcon name="'open_in_new'" size="18"/>
-            Official documentation
+            Open related documentation
           </a>
         </div>
         <article t-if="state.content" class="o_woow_service_information__body" t-out="state.content"/>
