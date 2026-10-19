@@ -157,6 +157,7 @@
               <span>Free trial today</span>
             </div>
             <div class="o_woow_llm_card__value" t-esc="freeTrialUsageText"/>
+            <p t-if="freeTrialCappedText" class="o_woow_hint" role="status" t-esc="freeTrialCappedText"/>
           </WoowCard>
           <WoowCard shadow="true" class="'o_woow_llm_card o_woow_llm_card--wide'">
             <div class="o_woow_llm_card__label">
@@ -189,6 +190,7 @@
             Create free trial key
           </WoowButton>
           <p t-else="" class="o_woow_llm_section__note" t-esc="freeTrialExistsText"/>
+          <p t-if="freeTrialCreateDisabledText" class="o_woow_llm_section__note" role="status" t-esc="freeTrialCreateDisabledText"/>
         </WoowCard>
 
         <WoowCard shadow="true" class="'o_woow_llm_section'">

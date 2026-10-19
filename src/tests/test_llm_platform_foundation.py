@@ -447,11 +447,18 @@ class TestLlmKeyCreateThrottle(_ConfiguredCase):
             self.partner, str(uuid.uuid4()), self.env.user, '198.51.100.7')
 
     def test_eleventh_key_create_is_blocked_without_calling_new_api(self):
-        for _ in range(10):
-            created = self._create()
-            # 試用金鑰每帳號只能有 1 把有效的：標成 deleted 再建下一把（刪除端點在 LLM-07）。
-            self.env.cr.execute('UPDATE %s SET state = %%s WHERE id = %%s' % KEY_TABLE,
-                                ('deleted', created['key_id']))
+        created = self._create()
+        self.env.cr.execute('UPDATE %s SET state = %%s WHERE id = %%s' % KEY_TABLE,
+                            ('deleted', created['key_id']))
+        # LLM-10 limits free keys to three per Taipei day. Fill nine more
+        # successful attempts at the shared throttle layer (also used by paid
+        # keys), then exercise the real create entry point's eleventh attempt.
+        for _ in range(9):
+            event_id = self.env[EVENT]._llm_throttle_reserve(
+                self.account, 'key_create', real_ip='198.51.100.7')
+            self.env[EVENT]._llm_event_finish(
+                event_id, 'ok', target_model='woow_paas_platform.llm_api_key',
+                target_id=created['key_id'])
         calls = len(self.fake.calls)
         caught = _raises(self, LlmError, self._create)
         self.assertEqual(caught.code, llm_common.ERR_LLM_RATE_LIMITED)

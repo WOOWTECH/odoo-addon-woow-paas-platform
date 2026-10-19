@@ -591,11 +591,7 @@ class LlmAccount(models.Model):
             'tos_current_draft': bool(current and current.is_draft),
             'free_trial': {
                 'key_id': free_key.id or None,
-                # 每日計數在 LLM-10（llm_free_usage）；tracer 用 /api/llm/usage/recent。
-                'today_count': None,
-                'daily_limit': FREE_DAILY_LIMIT,
-                'capped': False,
-                'keys_created_today': None,
+                **self.env['woow_paas_platform.llm_free_usage']._llm_today(account.id),
             },
             'limits': {
                 'max_keys': MAX_KEYS_PER_ACCOUNT,
@@ -638,6 +634,7 @@ class LlmAccount(models.Model):
         items = payload.get('items') if payload else None
         count = payload.get('today_count') if payload else None
         return {
+            'free_trial': self.env['woow_paas_platform.llm_free_usage']._llm_today(account.id),
             'today_count': count if type(count) is int else None,
             'daily_limit': FREE_DAILY_LIMIT,
             'items': items if isinstance(items, list) else [],

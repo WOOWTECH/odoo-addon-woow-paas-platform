@@ -36,6 +36,8 @@ from ..models.llm_common import (
     ERR_LLM_CLOSED,
     ERR_LLM_DISABLED,
     ERR_LLM_FREE_KEY_EXISTS,
+    ERR_LLM_FREE_CAPPED_TODAY,
+    ERR_LLM_FREE_KEY_DAILY_LIMIT,
     ERR_LLM_INTERNAL,
     ERR_LLM_KEY_ALREADY_SHOWN,
     ERR_LLM_KEY_INVALID,
@@ -88,6 +90,10 @@ def _message(code: str) -> str:
         return _('Too many requests. Please try again later.')
     if code == ERR_LLM_KEY_LIMIT:
         return _('Each account can have at most 20 keys. Please delete unused keys first.')
+    if code == ERR_LLM_FREE_CAPPED_TODAY:
+        return _("Today's free trial is used up. You can create a free trial key again after 00:00 Taipei time.")
+    if code == ERR_LLM_FREE_KEY_DAILY_LIMIT:
+        return _("You have reached today's limit for creating free trial keys. Please try again tomorrow.")
     if code == ERR_LLM_FREE_KEY_EXISTS:
         return _('Each account can have only one free trial key.')
     if code == ERR_LLM_KEY_ALREADY_SHOWN:

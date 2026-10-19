@@ -312,6 +312,8 @@ class CommittedLlmFixture:
                 if ids:
                     cr.execute('DELETE FROM %s WHERE account_id = ANY(%%s)' % EVENT_TABLE, (ids,))
                     cr.execute('DELETE FROM %s WHERE account_id = ANY(%%s)' % KEY_TABLE, (ids,))
+                    cr.execute('DELETE FROM woow_paas_platform_llm_free_usage '
+                               'WHERE account_id = ANY(%s)', (ids,))
                     cr.execute('DELETE FROM %s WHERE id = ANY(%%s)' % ACCOUNT_TABLE, (ids,))
                 if self.partner_ids:
                     cr.execute('DELETE FROM %s WHERE partner_id = ANY(%%s)' % EVENT_TABLE,
