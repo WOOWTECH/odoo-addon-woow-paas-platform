@@ -580,18 +580,23 @@ class LlmApiKey(models.Model):
     def _llm_find_token(self, client, ip, up, name, deadline):
         """依名稱在 token 列表找剛建的那把。
 
-        回傳三種：token dict（找到）、``None``（列表成功、確定沒有）、:data:`TOKEN_LIST_FAILED`
-        （列表本身失敗：NotExecuted／Unknown／Definite——不知道有沒有）。呼叫端只能在 ``None``
-        時重送建立。
+        回傳三種：token dict（找到）、``None``（完整列表成功、確定沒有）、
+        :data:`TOKEN_LIST_FAILED`（列表失敗或無法確認首頁完整——不知道有沒有）。呼叫端只能在
+        ``None`` 時重送建立。
         """
         listed = client.user_list_tokens(ip, up, 1, 10, deadline=deadline)
-        if not listed.ok:
+        if not listed.ok or not isinstance(listed.data, dict):
             return TOKEN_LIST_FAILED
-        data = listed.data if isinstance(listed.data, dict) else {}
-        items = data.get('items') if isinstance(data.get('items'), list) else []
+        items = listed.data.get('items')
+        total = listed.data.get('total')
+        if not isinstance(items, list) or type(total) is not int or total < 0 \
+                or len(items) != total:
+            return TOKEN_LIST_FAILED
         for item in items:
-            if isinstance(item, dict) and item.get('name') == name \
-                    and type(item.get('id')) is int and item['id'] > 0:
+            if not isinstance(item, dict) or not isinstance(item.get('name'), str) \
+                    or type(item.get('id')) is not int or item['id'] <= 0:
+                return TOKEN_LIST_FAILED
+            if item['name'] == name:
                 return item
         return None
 

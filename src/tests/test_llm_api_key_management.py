@@ -6,6 +6,7 @@ status, integer total-limit DTO values, the per-account 20-key invariant, and th
 fake-backed one-time paid-key creation transaction.
 """
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -39,6 +40,9 @@ from .llm_test_support import (
     scope_claims,
 )
 from .test_llm_platform_foundation import _ConfiguredCase
+
+
+CONTROLLER_LOGGER = 'odoo.addons.woow_paas_platform.controllers.llm'
 
 
 class _TestSession(dict):
@@ -309,12 +313,176 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
             return self.service._llm_create_paid_key(
                 self.user.partner_id, request_id, self.user, self.real_ip, session, **values)
 
+    def _http_create(self, **params):
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        with patch.object(Cache, '_llm_models_payload', return_value=self._catalogue()):
+            response = self.url_open(
+                '/api/llm/keys/create',
+                data=json.dumps({'jsonrpc': '2.0', 'method': 'call', 'params': params}),
+                headers={'Content-Type': 'application/json'},
+            )
+        self.assertEqual(
+            response.status_code, 200,
+            'LLM key create endpoint returned unexpected HTTP status %s' % response.status_code,
+        )
+        body = response.json()
+        self.assertNotIn(
+            'error', body,
+            'LLM key create endpoint returned a JSON-RPC error',
+        )
+        return body['result']
+
     def _error(self, call):
         try:
             call()
         except LlmError as exc:
             return exc.code, exc.params
         self.fail('Expected a fixed LlmError')
+
+    def test_http_paid_create_reveals_once_and_ignores_untrusted_context_fields(self):
+        self.authenticate(self.user.login, self.password)
+        other_partner = self.env['res.partner'].create({'name': 'Untrusted create partner'})
+        request_id = str(uuid.uuid4())
+        before_calls = len(self.fake.calls)
+
+        result = self._http_create(
+            kind='paid', client_request_id=request_id, name='HTTP paid key',
+            limit_points=100, expires='90d', models=['paid-a'],
+            partner_id=other_partner.id, account_id=self.account.id + 1,
+            user_id=1, session={'uid': 1}, real_ip='198.51.100.99',
+            up_token='must-not-be-forwarded', arbitrary='ignored',
+        )
+
+        self.assertTrue(result['success'], result)
+        self.assertRegex(result['data']['key'], r'^sk-[A-Za-z0-9]{48}$')
+        mirror = self.env[KEY].sudo().browse(result['data']['key_id'])
+        self.assertEqual(mirror.account_id.partner_id, self.user.partner_id)
+        self.assertEqual(mirror.key_label, 'HTTP paid key')
+        self.assertGreater(len(self.fake.calls), before_calls)
+
+    def test_http_paid_create_replay_never_reveals_or_calls_upstream_again(self):
+        self.authenticate(self.user.login, self.password)
+        params = {
+            'kind': 'paid', 'client_request_id': str(uuid.uuid4()),
+            'name': 'HTTP replay key', 'limit_points': 25,
+            'expires': '30d', 'models': ['paid-a'],
+        }
+
+        first = self._http_create(**params)
+        calls_after_first = list(self.fake.calls)
+        replay = self._http_create(**params)
+
+        self.assertTrue(first['success'], first)
+        self.assertFalse(replay['success'], replay)
+        self.assertEqual(replay['code'], 'llm_key_already_shown')
+        self.assertNotIn('key', replay.get('data', {}))
+        self.assertEqual(self.fake.calls, calls_after_first)
+        self.assertEqual(len(self.fake.tokens), 1)
+
+    def test_http_paid_terms_gate_rejects_before_throttle_and_upstream(self):
+        self.authenticate(self.user.login, self.password)
+        publish_test_terms(self.env, 'qa-http-paid-terms-block', requires_reaccept=True)
+        self.account.invalidate_recordset()
+        before_calls = list(self.fake.calls)
+        before_events = len(self._key_events())
+
+        result = self._http_create(
+            kind='paid', client_request_id=str(uuid.uuid4()), name='Blocked key',
+            limit_points=10, expires='30d', models=['paid-a'],
+        )
+
+        self.assertFalse(result['success'], result)
+        self.assertEqual(result['code'], 'llm_tos_outdated')
+        self.assertEqual(self.fake.calls, before_calls)
+        self.assertEqual(len(self._key_events()), before_events)
+
+    def test_http_paid_reauth_gate_rejects_unlimited_never_expiring_key_before_upstream(self):
+        self.authenticate(self.user.login, self.password)
+        before_calls = list(self.fake.calls)
+        before_events = len(self._key_events())
+
+        result = self._http_create(
+            kind='paid', client_request_id=str(uuid.uuid4()), name='HTTP permanent key',
+            limit_points=None, expires='never', models=None,
+        )
+
+        self.assertFalse(result['success'], result)
+        self.assertEqual(result['code'], 'llm_reauth_required')
+        self.assertEqual(self.fake.calls, before_calls)
+        self.assertEqual(len(self._key_events()), before_events)
+
+    def test_http_free_trial_create_regression(self):
+        self.authenticate(self.user.login, self.password)
+
+        result = self._http_create(
+            kind='free_trial', client_request_id=str(uuid.uuid4()),
+            arbitrary='ignored', partner_id=self.account.id + 100,
+        )
+
+        self.assertTrue(result['success'], result)
+        mirror = self.env[KEY].sudo().browse(result['data']['key_id'])
+        self.assertEqual((mirror.kind, mirror.account_id.partner_id),
+                         ('free_trial', self.user.partner_id))
+        self.assertRegex(result['data']['key'], r'^sk-[A-Za-z0-9]{48}$')
+
+    def test_http_paid_route_forwards_only_named_fields_and_trusted_context(self):
+        self.authenticate(self.user.login, self.password)
+        request_id = str(uuid.uuid4())
+        with patch.object(type(self.env[KEY]), '_llm_create_paid_key',
+                          return_value={'key': 'sk-' + 'A' * 48}) as create:
+            result = self._http_create(
+                kind='paid', client_request_id=request_id, name='Allowlist key',
+                limit_points=40, expires='90d', models=['paid-a'],
+                partner_id=1, user_id=1, session='untrusted', real_ip='192.0.2.200',
+                arbitrary='untrusted',
+            )
+
+        self.assertTrue(result['success'], result)
+        create.assert_called_once()
+        args, kwargs = create.call_args
+        self.assertEqual(args[0], self.user.partner_id)
+        self.assertEqual(args[1], request_id)
+        self.assertEqual(args[2], self.user)
+        self.assertNotEqual(args[3], '192.0.2.200')
+        self.assertIsInstance(args[4], dict)
+        self.assertNotEqual(args[4], 'untrusted')
+        self.assertEqual(set(kwargs), {'name', 'limit_points', 'expires', 'models'})
+        self.assertEqual(kwargs, {
+            'name': 'Allowlist key', 'limit_points': 40,
+            'expires': '90d', 'models': ['paid-a'],
+        })
+
+    def test_http_paid_service_exception_is_not_returned_to_client(self):
+        self.authenticate(self.user.login, self.password)
+        secret = 'upstream secret response body'
+        with patch.object(type(self.env[KEY]), '_llm_create_paid_key',
+                          side_effect=RuntimeError(secret)):
+            with self.assertLogs(CONTROLLER_LOGGER, level=logging.ERROR) as logs:
+                result = self._http_create(
+                    kind='paid', client_request_id=str(uuid.uuid4()), name='Error key',
+                    limit_points=10, expires='30d', models=['paid-a'],
+                )
+
+        client_output = json.dumps(result)
+        log_output = '\n'.join(logs.output)
+        self.assertFalse(result['success'], 'paid service exception must fail closed')
+        self.assertEqual(result['code'], 'llm_internal')
+        self.assertFalse(secret in client_output, 'client response contained exception text')
+        self.assertFalse(secret in log_output, 'controller log contained exception text')
+        self.assertFalse('Traceback' in log_output, 'controller log contained a traceback')
+        self.assertTrue('endpoint=keys/create' in log_output,
+                        'controller log lacked endpoint context')
+        self.assertTrue('uid=' in log_output, 'controller log lacked uid context')
+
+    def test_http_unknown_kind_is_stably_rejected_without_upstream_call(self):
+        self.authenticate(self.user.login, self.password)
+        before_calls = list(self.fake.calls)
+
+        result = self._http_create(kind='future-kind', client_request_id=str(uuid.uuid4()))
+
+        self.assertFalse(result['success'], result)
+        self.assertEqual(result['code'], 'llm_key_invalid')
+        self.assertEqual(self.fake.calls, before_calls)
 
     def _key_events(self):
         return self.env[EVENT].sudo().search([
@@ -420,6 +588,81 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         self.assertEqual(len(self._key_events()), events)
         self.assertEqual(len(self.fake.tokens), 1)
         self.assertTrue(first['key'])
+
+    def test_unknown_create_with_incomplete_token_list_never_retries_post(self):
+        incomplete_responses = (
+            ('items_missing', {'total': 0}),
+            ('items_not_list', {'items': {}, 'total': 0}),
+            ('total_missing', {'items': []}),
+            ('total_not_int', {'items': [], 'total': '0'}),
+            ('total_bool', {'items': [], 'total': True}),
+            ('total_negative', {'items': [], 'total': -1}),
+            ('total_mismatch', {
+                'items': [
+                    {'id': index + 1, 'name': 'unrelated-%s' % index}
+                    for index in range(10)
+                ],
+                'total': 11,
+            }),
+            ('invalid_item', {'items': [{'id': '1', 'name': 'unrelated'}], 'total': 1}),
+        )
+        for response_shape, response_data in incomplete_responses:
+            with self.subTest(response_shape=response_shape):
+                before_calls = len(self.fake.calls)
+                before_tokens = len(self.fake.tokens)
+                request_id = str(uuid.uuid4())
+                self.fake.fail_next['user_create_token'] = nac.Unknown(
+                    'proxy_timeout', status=504)
+                self.fake.fail_next['user_list_tokens'] = nac.Ok(
+                    data=response_data, message='', status=200)
+
+                failed = self._error(lambda: self._create(client_request_id=request_id))
+
+                calls = self.fake.calls[before_calls:]
+                self.assertEqual(failed, ('llm_unavailable', {}))
+                self.assertEqual(
+                    sum(name == 'user_create_token' for name, _ip in calls), 1)
+                self.assertEqual(
+                    sum(name == 'user_list_tokens' for name, _ip in calls), 1)
+                self.assertEqual(
+                    sum(name == 'user_reveal_token' for name, _ip in calls), 0)
+                self.assertEqual(len(self.fake.tokens), before_tokens + 1)
+                self.env.invalidate_all()
+                mirror = self.env[KEY].sudo().search([
+                    ('account_id', '=', self.account.id),
+                    ('client_request_id', '=', request_id),
+                ])
+                self.assertEqual(len(mirror), 1)
+                self.assertEqual(mirror.state, 'failed_reveal')
+
+    def test_unknown_reveal_fails_closed_without_retry_or_plaintext(self):
+        before_calls = len(self.fake.calls)
+        request_id = str(uuid.uuid4())
+        self.fake.fail_next['user_reveal_token'] = nac.Unknown('proxy_timeout', status=504)
+
+        failed = self._error(lambda: self._create(client_request_id=request_id))
+
+        calls = self.fake.calls[before_calls:]
+        self.assertEqual(failed, ('llm_unavailable', {}))
+        self.assertEqual(sum(name == 'user_create_token' for name, _ip in calls), 1)
+        self.assertEqual(sum(name == 'user_list_tokens' for name, _ip in calls), 1)
+        self.assertEqual(sum(name == 'user_reveal_token' for name, _ip in calls), 1)
+        self.env.invalidate_all()
+        mirror = self.env[KEY].sudo().search([
+            ('account_id', '=', self.account.id),
+            ('client_request_id', '=', request_id),
+        ])
+        self.assertEqual(len(mirror), 1)
+        self.assertEqual(mirror.state, 'failed_reveal')
+        self.assertGreater(mirror.newapi_token_id, 0)
+        [token] = self.fake.tokens.values()
+        plaintext = token['key']
+        for output in (
+                json.dumps(failed, default=str),
+                json.dumps(mirror.read(), default=str),
+                json.dumps(self._key_events().read(), default=str)):
+            self.assertFalse(plaintext in output,
+                             'plaintext must not be returned or persisted')
 
     def test_twenty_live_keys_rejects_the_twenty_first_before_throttle_or_external_call(self):
         for index in range(MAX_KEYS_PER_ACCOUNT):

@@ -192,12 +192,18 @@ class LlmController(HiddenChainMixin, Controller):
         except OperationalError:
             if not swallow_operational:
                 raise
-            _logger.error('[LLM] %s: database error after the external call (uid=%s): %s',
-                          endpoint, request.env.uid, llm_redact.redact(traceback.format_exc()))
+            if endpoint == 'keys/create':
+                _logger.error('[LLM] internal error endpoint=keys/create uid=%s', request.env.uid)
+            else:
+                _logger.error('[LLM] %s: database error after the external call (uid=%s): %s',
+                              endpoint, request.env.uid, llm_redact.redact(traceback.format_exc()))
             return _fail(ERR_LLM_UNAVAILABLE)
         except Exception:  # noqa: BLE001 - see module docstring (catch-all)
-            _logger.error('[LLM] %s failed (uid=%s): %s', endpoint, request.env.uid,
-                          llm_redact.redact(traceback.format_exc()))
+            if endpoint == 'keys/create':
+                _logger.error('[LLM] internal error endpoint=keys/create uid=%s', request.env.uid)
+            else:
+                _logger.error('[LLM] %s failed (uid=%s): %s', endpoint, request.env.uid,
+                              llm_redact.redact(traceback.format_exc()))
             return _fail(ERR_LLM_INTERNAL)
 
     @route('/api/llm/state', auth='user', methods=['POST'], type='json')
@@ -237,13 +243,19 @@ class LlmController(HiddenChainMixin, Controller):
                          ._llm_keys_payload(partner))
 
     @route('/api/llm/keys/create', auth='user', methods=['POST'], type='json')
-    def llm_keys_create(self, client_request_id=None, kind=None, **kw) -> dict[str, Any]:
+    def llm_keys_create(self, client_request_id=None, kind=None, name=None,
+                        limit_points=None, expires=None, models=None,
+                        **kw) -> dict[str, Any]:
         def handler(partner):
-            if kind != 'free_trial':
-                # 付費金鑰在 LLM-07。
-                raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
-            return request.env[KEY_MODEL]._llm_create_free_trial_key(
-                partner, client_request_id, request.env.user, _peer_ip())
+            if kind == 'free_trial':
+                return request.env[KEY_MODEL]._llm_create_free_trial_key(
+                    partner, client_request_id, request.env.user, _peer_ip())
+            if kind == 'paid':
+                return request.env[KEY_MODEL]._llm_create_paid_key(
+                    partner, client_request_id, request.env.user, _peer_ip(),
+                    request.session, name=name, limit_points=limit_points,
+                    expires=expires, models=models)
+            raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
         return self._run('keys/create', handler, swallow_operational=True)
 
     @route('/api/llm/models', auth='user', methods=['POST'], type='json')
