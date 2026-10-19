@@ -73,6 +73,6 @@ class TestHAProvisionDeviceConsentScope(TransactionCase):
         ha = next(s for s in scopes if s['name'] == 'ha:provision')
         self.assertEqual(
             ha['description'],
-            'Create and manage your cloud Home Assistant instance')
+            '建立與管理你的雲端 Home Assistant')
         self.assertNotEqual(ha['description'], 'ha:provision',
                             'device 同意頁不得只印 raw scope 字串')
