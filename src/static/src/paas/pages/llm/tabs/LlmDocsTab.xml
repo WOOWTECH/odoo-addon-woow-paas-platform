@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmDocsTab">
+    <main class="o_woow_llm_docs">
+      <header class="o_woow_llm_docs__header">
+        <h1 t-esc="pageTitle"/>
+        <p t-esc="pageIntro"/>
+      </header>
+
+      <WoowCard shadow="true" class="'o_woow_llm_docs__card'">
+        <div class="o_woow_llm_docs__row">
+          <h2>Base URL</h2>
+          <button type="button" class="o_woow_button o_woow_button--secondary" t-att-aria-label="copyBaseLabel" t-att-disabled="!endpointAvailable" t-on-click="copyBase">
+            <WoowIcon name="'content_copy'" size="16"/>
+            <t t-if="state.copied === 'base'" t-esc="copiedLabel"/>
+            <t t-else="" t-esc="copyLabel"/>
+          </button>
+        </div>
+        <code t-esc="endpoint"/>
+        <p t-if="!endpointAvailable" class="o_woow_hint" role="status" t-esc="unavailableText"/>
+        <p t-if="state.copyFailed" role="alert" class="o_woow_llm_docs__error" t-esc="copyFailedText"/>
+      </WoowCard>
+
+      <WoowCard shadow="true" class="'o_woow_llm_docs__card'">
+        <h2 t-esc="keyTitle"/>
+        <code t-esc="apiKey"/>
+        <p t-if="endpointAvailable &amp;&amp; state.key" class="o_woow_hint" t-esc="_t('This key is held only by this guide instance and disappears when you leave it.')"/>
+        <p t-else="" class="o_woow_hint" t-esc="_t('Replace YOUR_API_KEY with your own key. This example value is not a real credential.')"/>
+        <p t-esc="pointsText"/>
+      </WoowCard>
+
+      <section class="o_woow_llm_docs__limits" aria-labelledby="o_woow_llm_docs_limits">
+        <h2 id="o_woow_llm_docs_limits" t-esc="limitsTitle"/>
+        <p t-esc="paidLimit"/>
+        <p t-esc="freeLimit"/>
+        <p t-esc="sharedLimitText"/>
+        <p t-esc="freeBucketText"/>
+        <p t-esc="freeDailyText"/>
+        <p t-esc="keyRateLimit"/>
+        <p t-esc="guardRateLimit"/>
+      </section>
+
+      <section class="o_woow_llm_docs__examples" aria-labelledby="o_woow_llm_docs_examples">
+        <h2 id="o_woow_llm_docs_examples" t-esc="examplesTitle"/>
+        <p t-if="!endpointAvailable" class="o_woow_hint" role="status" t-esc="examplesPlaceholderText"/>
+        <t t-foreach="examples" t-as="example" t-key="example.id">
+          <WoowCard shadow="true" class="'o_woow_llm_docs__card o_woow_llm_docs__example'">
+            <div class="o_woow_llm_docs__row">
+              <h3 t-esc="example.title"/>
+              <WoowButton variant="'secondary'" size="'sm'" disabled="!endpointAvailable" t-att-aria-label="copyNames[example.id]" onClick="() => this.copy(example.text, example.id)">
+                <WoowIcon name="'content_copy'" size="16"/>
+                <t t-if="state.copied === example.id" t-esc="copiedLabel"/>
+                <t t-else="" t-esc="copyLabel"/>
+              </WoowButton>
+            </div>
+            <pre><code t-esc="example.text"/></pre>
+          </WoowCard>
+        </t>
+        <p t-if="state.copyFailed" role="alert" class="o_woow_llm_docs__error" t-esc="copyFailedText"/>
+      </section>
+
+      <section class="o_woow_llm_docs__faq" aria-labelledby="o_woow_llm_docs_faq">
+        <h2 id="o_woow_llm_docs_faq" t-esc="faqTitle"/>
+        <article><h3>401</h3><p t-esc="faq401"/></article>
+        <article><h3>403</h3><p t-esc="faq403"/></article>
+        <article><h3>429</h3><p t-esc="faq429"/></article>
+        <article><h3>503</h3><p t-esc="faq503"/></article>
+        <article><h3>524</h3><p t-esc="faq524"/></article>
+      </section>
+
+      <footer class="o_woow_llm_docs__attribution">
+        <p t-esc="sourceText"/>
+        <a href="https://github.com/QuantumNous/new-api/tree/v1.0.0-rc.44" target="_blank" rel="noopener noreferrer">new-api v1.0.0-rc.44</a>
+      </footer>
+    </main>
+  </t>
+</templates>

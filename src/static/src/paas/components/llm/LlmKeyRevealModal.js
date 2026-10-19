@@ -73,6 +73,7 @@ export class LlmKeyRevealModal extends Component {
     baseUrl: { type: String, optional: true },
     // 關閉後通知頁面：{ created: boolean }（頁面據此重新整理清單；不帶任何金鑰內容）。
     onClose: { type: Function },
+    onOpenDocs: { type: Function, optional: true },
   };
 
   setup() {
@@ -216,6 +217,9 @@ export class LlmKeyRevealModal extends Component {
   }
 
   /** Both key types recover by creating a replacement and disabling or deleting the old key. */
+  get openDocsLabel() {
+    return _t("View usage guide");
+  }
   get intro() {
     return _t("For security, the full key is shown only this once. You cannot view it again after closing this window; if you lose it, create a new key and disable or delete the old one.");
   }
@@ -345,6 +349,13 @@ export class LlmKeyRevealModal extends Component {
     if (this.canFinish) {
       this.close();
     }
+  }
+
+  openDocs() {
+    if (this.props.onOpenDocs) {
+      this.props.onOpenDocs(this.state.key);
+    }
+    this.close();
   }
 
   close() {

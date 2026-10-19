@@ -1,0 +1,102 @@
+.o_woow_llm_docs {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--woow-text, #27313f);
+
+  &__header,
+  &__limits,
+  &__faq,
+  &__attribution {
+    padding: 20px;
+    background: #fff;
+    border: 1px solid #e7ebf0;
+    border-radius: 20px;
+    box-shadow: 0 4px 16px rgba(27, 43, 65, 0.06);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  &__card {
+    padding: 20px;
+    border-radius: 20px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    min-width: 0;
+
+    > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+  }
+
+  &__row > code {
+    flex: 1 1 14rem;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  &__limits,
+  &__faq,
+  &__examples {
+    display: grid;
+    gap: 12px;
+  }
+
+  &__example pre,
+  &__card > code {
+    display: block;
+    max-width: 100%;
+    margin: 12px 0 0;
+    padding: 16px;
+    overflow-x: auto;
+    box-sizing: border-box;
+    border: 1px solid #e7ebf0;
+    border-radius: 12px;
+    background: #f7f8fa;
+    white-space: pre;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  &__example code,
+  &__card > code {
+    color: #27313f;
+  }
+
+  &__faq article {
+    padding: 16px;
+    border: 1px solid #e7ebf0;
+    border-radius: 12px;
+    background: #f8f9fb;
+  }
+
+  &__error { color: #a52c35; }
+
+  button,
+  a {
+    min-height: 44px;
+  }
+
+  @media (max-width: 400px) {
+    &__header,
+    &__limits,
+    &__faq,
+    &__attribution,
+    &__card {
+      padding: 16px;
+    }
+
+    &__row {
+      align-items: flex-start;
+    }
+  }
+}
