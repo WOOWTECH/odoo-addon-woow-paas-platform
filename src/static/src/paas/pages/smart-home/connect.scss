@@ -1,33 +1,33 @@
 .o_woow_smart_home_detail {
-    .o_woow_connection_guide, .o_woow_trial_activation {
-        color: #212121;
-        font: 15px/1.6 "Outfit", "Noto Sans TC", sans-serif;
-        border: 1px solid rgba(33, 33, 33, .08);
-        border-radius: 20px;
-        box-shadow: 0 4px 16px rgba(33, 33, 33, .06);
+  .o_woow_connection_guide, .o_woow_trial_activation {
+    color: #212121;
+    font: 15px/1.6 "Outfit", "Noto Sans TC", sans-serif;
+    border: 1px solid rgba(33, 33, 33, .08);
+    border-radius: 20px;
+    box-shadow: 0 4px 16px rgba(33, 33, 33, .06);
+  }
+  .o_woow_connection_guide {
+    background: #fff;
+    h2 { font: 600 24px/1.4 "Poppins", "Noto Sans TC", sans-serif; }
+    h4 { font: 600 18px/1.5 "Poppins", "Noto Sans TC", sans-serif; }
+    p { color: #646262; font-size: 15px; line-height: 1.6; }
+    .mdi { color: #6183fc; }
+    .o_woow_guide_intro { margin: 0 0 24px; }
+    .o_woow_guide_step_number { background: #eef2ff; flex: 0 0 40px; }
+    .o_woow_guide_trial_note {
+      display: flex; align-items: flex-start; gap: 12px;
+      background: #eff1f5; border-radius: 12px; padding: 16px; margin: 24px 0 0;
+      .mdi { flex-shrink: 0; }
     }
-    .o_woow_connection_guide {
-        background: #fff;
-        h2 { font: 600 24px/1.4 "Poppins", "Noto Sans TC", sans-serif; }
-        h4 { font: 600 18px/1.5 "Poppins", "Noto Sans TC", sans-serif; }
-        p { color: #646262; font-size: 15px; line-height: 1.6; }
-        .mdi { color: #6183fc; }
-        .o_woow_guide_intro { margin: 0 0 24px; }
-        .o_woow_guide_step_number { background: #eef2ff; flex: 0 0 40px; }
-        .o_woow_guide_trial_note {
-            display: flex; align-items: flex-start; gap: 12px;
-            background: #eff1f5; border-radius: 12px; padding: 16px; margin: 24px 0 0;
-            .mdi { flex-shrink: 0; }
-        }
-    }
-    .o_woow_trial_activation {
-        display: flex; align-items: flex-start; gap: 16px;
-        background: #eef2ff; padding: 20px 24px; margin-bottom: 24px;
-        .mdi { color: #6183fc; flex-shrink: 0; }
-        p { margin: 4px 0 0; color: #646262; }
-    }
-    @media (max-width: 480px) {
-        .o_woow_connection_guide h2 { font-size: 22px; }
-        .o_woow_trial_activation { padding: 16px; }
-    }
+  }
+  .o_woow_trial_activation {
+    display: flex; align-items: flex-start; gap: 16px;
+    background: #eef2ff; padding: 20px 24px; margin-bottom: 24px;
+    .mdi { color: #6183fc; flex-shrink: 0; }
+    p { margin: 4px 0 0; color: #646262; }
+  }
+  @media (max-width: 480px) {
+    .o_woow_connection_guide h2 { font-size: 22px; }
+    .o_woow_trial_activation { padding: 16px; }
+  }
 }

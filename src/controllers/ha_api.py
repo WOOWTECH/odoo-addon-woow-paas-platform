@@ -447,7 +447,9 @@ class HAIntegrationController(Controller):
         if denied:
             return denied
 
-        sub = home.sudo().subscription_id
+        # `_get_home_with_access` returns a sudoed record only after the
+        # workspace and owner/admin gates above have accepted the caller.
+        sub = home.subscription_id
         if sub and sub._woow_trial_expired():
             return _json_error('trial_expired',
                                '七天試用已結束，請到 woowtech 選擇付費方案。', 409)

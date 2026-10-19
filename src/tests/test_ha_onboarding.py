@@ -22,18 +22,25 @@ class TestHAOnboarding(HttpCase):
             'password': 'Acceptance-only-7day!',
             'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])],
         })
+        self.outsider = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': 'HA onboarding outsider', 'login': 'ha-outsider-' + suffix,
+            'email': 'ha-outsider-' + suffix + '@example.test',
+            'password': 'Outsider-only-7day!',
+            'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])],
+        })
         self.client = self.env.ref('woow_paas_platform.oauth_client_ha_smart_home')
         self.scope = 'workspace:read smarthome:read smarthome:tunnel smarthome:provision'
         self.token = self._token(self.scope)
         self.Home = self.env['woow_paas_platform.smart_home'].sudo()
         self.Workspace = self.env['woow_paas_platform.workspace'].sudo()
 
-    def _token(self, scope):
+    def _token(self, scope, user=None):
+        user = user or self.user
         return self.env['woow_paas_platform.oauth_token'].sudo().create({
             'access_token': uuid.uuid4().hex, 'scope': scope,
             'expires_at': fields.Datetime.now() + timedelta(hours=1),
             'refresh_expires_at': fields.Datetime.now() + timedelta(days=1),
-            'client_id': self.client.id, 'user_id': self.user.id,
+            'client_id': self.client.id, 'user_id': user.id,
         }).access_token
 
     def _post(self, payload, path='/api/smarthome/onboarding', token=None):
@@ -150,6 +157,45 @@ class TestHAOnboarding(HttpCase):
         self.assertEqual(response.status_code, 403)
         self.assertFalse(self.Home.search([('workspace_id', '=', foreign.id)]))
 
+    def test_non_member_cannot_reach_onboarding_or_trial_activation_paths(self):
+        """Every sudoed onboarding path must reject before operating on its record."""
+        home = self._create()
+        outsider_token = self._token(self.scope, self.outsider)
+        headers = {'Authorization': 'Bearer ' + outsider_token}
+
+        response = self._post(
+            {}, f'/api/smarthome/onboarding/homes/{home.id}/prepare', outsider_token,
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+
+        response = self.url_open(
+            '/api/smarthome/onboarding/options?service_kind=remote_access'
+            f'&workspace_id={home.workspace_id.id}', headers=headers,
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+
+        response = self.url_open(
+            f'/api/smarthome/homes/{home.id}/tunnel-token', headers=headers,
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+
+        self.authenticate(self.outsider.login, 'Outsider-only-7day!')
+        response = self.url_open(
+            f'/api/workspaces/{home.workspace_id.id}/smarthomes/{home.id}/change-plan',
+            data=json.dumps({
+                'jsonrpc': '2.0', 'method': 'call', 'id': 1,
+                'params': {
+                    'plan_id': home.subscription_id.sh_subscription_plan_id.id,
+                    'dry_run': True,
+                },
+            }),
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertNotIn('error', response.json(), response.text)
+        self.assertFalse(response.json()['result']['success'], response.text)
+        home.invalidate_recordset()
+        self.assertTrue(home.subscription_id.woow_trial_only)
+
     def test_invalid_payloads_leave_no_workspace(self):
         for payload in [[], None, {'service_kind': []}, {'service_kind': 'security_access'},
                         {'service_kind': 'remote_access', 'workspace_id': True},
@@ -184,6 +230,18 @@ class TestHAOnboarding(HttpCase):
         self.assertEqual(home.state, 'suspended')
         response = self._post({}, f'/api/smarthome/onboarding/homes/{home.id}/prepare')
         self.assertEqual(response.status_code, 409, response.text)
+
+    def test_expired_trial_cannot_get_a_tunnel_token(self):
+        home = self._create()
+        home.subscription_id.sh_trial_end_date = fields.Date.today() - timedelta(days=1)
+        self.env['woow_paas_platform.subscription_lifecycle_cron']._enforce_single(
+            home, 14, 6, fields.Date.today())
+        response = self.url_open(
+            f'/api/smarthome/homes/{home.id}/tunnel-token',
+            headers={'Authorization': 'Bearer ' + self.token},
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()['error'], 'trial_expired')
 
     def test_trial_setup_failure_rolls_back_workspace(self):
         # Factory failure must roll back the workspace written in the same request.
