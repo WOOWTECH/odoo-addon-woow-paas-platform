@@ -6,7 +6,7 @@
         <div class="o_woow_modal_header"><h2 id="o_woow_llm_key_form_title">Create paid API key</h2><button type="button" t-on-click="requestClose" aria-label="Close">×</button></div>
         <div class="o_woow_modal_body">
           <label>Key name<input type="text" maxlength="64" t-model="state.name" autocomplete="off"/></label>
-          <label>Total limit (points)<input type="number" min="0" step="1" inputmode="numeric" t-model="state.limitPoints"/><small>Leave blank for unlimited.</small></label>
+          <label>Total limit (points)<input type="number" min="1" step="1" inputmode="numeric" t-model="state.limitPoints"/><small>Leave blank for unlimited.</small></label>
           <p t-if="hasUsedPoints" t-esc="usedText"/>
           <p t-if="validation.error === 'below_used'" role="alert">Total limit cannot be below points already used.</p>
           <label>Expiry<select t-model="state.expires"><option value="30d">30 days</option><option value="90d">90 days</option><option value="180d">180 days</option><option value="never">Never expires</option></select></label>

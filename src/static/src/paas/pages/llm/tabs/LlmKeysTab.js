@@ -15,24 +15,6 @@ export function paidKeyModels(items) {
     && typeof item.model === "string" && item.model) : [];
 }
 
-/** Closed, safe request draft: ignore unknown and free model IDs. */
-export function normalizePaidDraft(draft, allowedModels) {
-  const allowed = new Set(allowedModels);
-  const rawLimit = draft.limitPoints;
-  const limitPoints = rawLimit === "" || rawLimit === null || rawLimit === undefined
-    ? null : (/^\d+$/.test(String(rawLimit)) && Number.isSafeInteger(Number(rawLimit)) ? Number(rawLimit) : null);
-  return {
-    name: typeof draft.name === "string" ? draft.name.trim() : "",
-    limitPoints,
-    expires: ["30d", "90d", "180d", "never"].includes(draft.expires) ? draft.expires : "90d",
-    models: Array.isArray(draft.models)
-      ? (() => {
-        const selected = [...new Set(draft.models.filter((model) => allowed.has(model)))];
-        return selected.length === allowed.size && selected.every((model) => allowed.has(model)) ? null : selected;
-      })() : null,
-  };
-}
-
 export function parseExtendId(value) {
   if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
   const id = Number(value);

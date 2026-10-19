@@ -26,9 +26,11 @@ export function normalizePaidDraft(draft, allowedModels) {
 
 export function validatePaidDraft(draft, { paidModels, usedPoints = null }) {
   const normalized = normalizePaidDraft(draft, paidModels);
-  if (!normalized.name || (normalized.models !== null && normalized.models.length === 0)) return { valid: false, error: "invalid", remaining: null };
+  if (!normalized.name || !Array.isArray(paidModels) || paidModels.length === 0
+      || (normalized.models !== null && normalized.models.length === 0)) return { valid: false, error: "invalid", remaining: null };
   if (draft.limitPoints !== "" && draft.limitPoints !== null && draft.limitPoints !== undefined
       && normalized.limitPoints === null) return { valid: false, error: "invalid", remaining: null };
+  if (normalized.limitPoints === 0) return { valid: false, error: "limit_must_be_positive", remaining: null };
   if (normalized.limitPoints !== null && Number.isInteger(usedPoints) && normalized.limitPoints < usedPoints) {
     return { valid: false, error: "below_used", remaining: null };
   }

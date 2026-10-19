@@ -38,7 +38,7 @@ const keyTabSource = stubImports(await readPaas("pages/llm/tabs/LlmKeysTab.js"),
   "../../../components/llm/LlmKeyFormModal": "const LlmKeyFormModal = {};",
 });
 const keyTabUrl = toDataUrl(keyTabSource);
-const { LlmKeysTab, normalizePaidDraft, parseExtendId, applyExtendQueryOnce, extendQueryFromHash, stripExtendFromHash, paidKeyModels, keyRow } = await import(keyTabUrl);
+const { LlmKeysTab, parseExtendId, applyExtendQueryOnce, extendQueryFromHash, stripExtendFromHash, paidKeyModels, keyRow } = await import(keyTabUrl);
 const formSource = stubImports(await readPaas("components/llm/LlmKeyFormModal.js"), {
   "@odoo/owl": "class Component {} const useRef = () => ({ el: null }); const useState = (value) => value; const onMounted = () => {}; const onWillUnmount = () => {};",
   "@web/core/l10n/translation": "const _t = (message, values) => values ? message.replace(/%\\((\\w+)\\)s/g, (_, k) => String(values[k])) : message;",
@@ -47,7 +47,7 @@ const formSource = stubImports(await readPaas("components/llm/LlmKeyFormModal.js
   "../../services/llm_service": `const llmService = (await import("${serviceUrl}")).llmService;`,
   "../../utils/modal_focus": "const inertOutside = () => () => {}; const trapTab = () => {};",
 });
-const { LlmKeyFormModal, validatePaidDraft } = await import(toDataUrl(formSource));
+const { LlmKeyFormModal, validatePaidDraft, normalizePaidDraft } = await import(toDataUrl(formSource));
 
 test("createPaidKey sends the closed paid payload through sanitized call with create deadline", async () => {
   globalThis.__llmKeyCalls.length = 0;
@@ -102,6 +102,15 @@ test("limited edit rejects total limits below used and reports remaining after c
   assert.deepEqual(validatePaidDraft({ name: "Key", limitPoints: "100", expires: "90d", models: ["m"] }, {
     paidModels: ["m"], usedPoints: 30,
   }), { valid: true, error: null, remaining: 70 });
+  assert.deepEqual(validatePaidDraft({ name: "Key", limitPoints: "0", expires: "90d", models: ["m"] }, {
+    paidModels: ["m"], usedPoints: 0,
+  }), { valid: false, error: "limit_must_be_positive", remaining: null });
+  assert.equal(validatePaidDraft({ name: "Key", limitPoints: "", expires: "90d", models: null }, {
+    paidModels: ["m"], usedPoints: 0,
+  }).valid, true, "blank total limit remains unlimited");
+  assert.deepEqual(validatePaidDraft({ name: "Key", limitPoints: "", expires: "90d", models: null }, {
+    paidModels: [], usedPoints: 0,
+  }), { valid: false, error: "invalid", remaining: null });
 });
 
 test("extend query accepts current integer IDs once and ignores malformed or unmatched IDs", () => {
