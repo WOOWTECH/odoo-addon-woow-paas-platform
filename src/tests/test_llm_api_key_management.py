@@ -9,7 +9,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from odoo import fields
 from odoo.exceptions import ValidationError
@@ -204,9 +204,21 @@ class TestLlmApiKeyMirror(TransactionCase):
             self.assertEqual(fake.tokens[token_id][field], before[field], field)
 
         foreign_update = dict(update, remain_quota=60 * QUOTA_PER_POINT)
-        self.assertFalse(client.user_update_token(ip, other_up, foreign_update).ok)
-        self.assertFalse(client.user_set_token_status(ip, other_up, token_id, False).ok)
-        self.assertFalse(client.user_delete_token(ip, other_up, token_id).ok)
+        foreign_update_result = client.user_update_token(ip, other_up, foreign_update)
+        foreign_status_result = client.user_set_token_status(ip, other_up, token_id, False)
+        foreign_delete_result = client.user_delete_token(ip, other_up, token_id)
+        self.assertIsInstance(foreign_update_result, nac.Unknown)
+        self.assertIsInstance(foreign_status_result, nac.Unknown)
+        self.assertIsInstance(foreign_delete_result, nac.Unknown)
+        self.assertIsInstance(client.user_get_token(ip, other_up, token_id), nac.Definite)
+        missing_get = client.user_get_token(ip, owner_up, token_id + 1000)
+        self.assertIsInstance(missing_get, nac.Definite)
+        self.assertEqual(missing_get.reason, 'no_message_key')
+        missing_update = dict(update, id=token_id + 1000)
+        self.assertIsInstance(client.user_update_token(ip, owner_up, missing_update), nac.Unknown)
+        self.assertIsInstance(client.user_set_token_status(ip, owner_up, token_id + 1000, False),
+                              nac.Unknown)
+        self.assertIsInstance(client.user_delete_token(ip, owner_up, token_id + 1000), nac.Unknown)
         self.assertEqual(fake.tokens[token_id]['remain_quota'], 70 * QUOTA_PER_POINT)
 
         self.assertTrue(client.user_set_token_status(ip, owner_up, token_id, False).ok)
@@ -215,8 +227,9 @@ class TestLlmApiKeyMirror(TransactionCase):
         self.assertNotIn(token_id, fake.tokens)
         self.assertEqual([name for name, _client_ip in fake.calls], [
             'user_create_token', 'user_update_token', 'user_update_token',
-            'user_set_token_status', 'user_delete_token', 'user_set_token_status',
-            'user_delete_token',
+            'user_set_token_status', 'user_delete_token', 'user_get_token', 'user_get_token',
+            'user_update_token', 'user_set_token_status', 'user_delete_token',
+            'user_set_token_status', 'user_delete_token',
         ])
 
     def test_fake_management_write_failure_injection_keeps_ambiguous_remote_side_effect(self):
@@ -338,6 +351,481 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         except LlmError as exc:
             return exc.code, exc.params
         self.fail('Expected a fixed LlmError')
+
+    def _management_key(self, *, kind='paid', expires_at=None, state='active', **values):
+        defaults = {
+            'account_id': self.account.id, 'kind': kind, 'state': state,
+            'key_label': 'private label', 'newapi_name': 'wp_501_abcd',
+            'newapi_token_id': 501, 'quota_limit_points': 100,
+            'expires_at': expires_at, 'model_allowlist': 'paid-a,paid-b',
+            'remain_quota_cached': 100 * QUOTA_PER_POINT,
+            'used_quota_cached': 0,
+        }
+        defaults.update(values)
+        return _llm_internal(self.env[KEY].sudo()).create(defaults)
+
+    def _management_remote(self, *, expiry=1_900_000_000):
+        fake = self.fake
+        token = nac.paid_token_body('wp_501_abcd', expiry, 100 * QUOTA_PER_POINT,
+                                    False, True, 'paid-a,paid-b')
+        token.update({'id': 501, 'user_id': 101, 'key': 'never-read-plaintext',
+                      'created_time': 1_800_000_000, 'used_quota': 30 * QUOTA_PER_POINT,
+                      'status': 1, 'allow_ips': '', 'group': 'default',
+                      'cross_group_retry': False, 'allow_user_quota_query': False})
+        fake.tokens[501] = token
+
+    def _management_call(self, key, method, *args, **kwargs):
+        return getattr(self.service, method)(self.user.partner_id, key.id,
+                                             user=self.user, real_ip=self.real_ip,
+                                             **kwargs) if not args else getattr(
+                                                 self.service, method)(self.user.partner_id,
+                                                                       key.id, *args,
+                                                                       user=self.user,
+                                                                       real_ip=self.real_ip,
+                                                                       **kwargs)
+
+    def test_management_update_total_limit_safe_put_and_unknown_mirror(self):
+        key = self._management_key()
+        self._management_remote()
+        result = self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            limit_points=100)
+        self.assertEqual(result['remain_after_points'], 70)
+        self.assertEqual(self.fake.tokens[501]['remain_quota'], 70 * QUOTA_PER_POINT)
+        self.assertEqual(self.fake.tokens[501]['allow_ips'], '')
+        self.assertEqual(key.newapi_name, 'wp_501_abcd')
+        unlimited = self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            limit_points=None)
+        self.assertEqual(self.fake.tokens[501]['remain_quota'], 0)
+        self.assertTrue(self.fake.tokens[501]['unlimited_quota'])
+        self.assertFalse(key.quota_limit_points)
+        self.assertIsNone(unlimited['limit_points'])
+        before = (key.quota_limit_points, key.remain_quota_cached)
+        self.fake.fail_next['user_update_token'] = nac.Unknown('proxy_timeout', status=504)
+        self._error(lambda: self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            limit_points=90))
+        self.assertEqual((key.quota_limit_points, key.remain_quota_cached), before)
+
+    def test_management_models_null_means_all_defaults_and_lists_are_canonical(self):
+        key = self._management_key()
+        self._management_remote()
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        catalogue = {'state': 'ok', 'items': [
+            {'model': 'paid-b', 'group': 'default'},
+            {'model': 'paid-a', 'group': 'default'},
+            {'model': 'free-only', 'group': 'free'},
+        ]}
+        with patch.object(Cache, '_llm_models_payload', return_value=catalogue):
+            self.service._llm_update_key(
+                self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+                models=None)
+        self.assertFalse(self.fake.tokens[501]['model_limits_enabled'])
+        self.assertEqual(self.fake.tokens[501]['model_limits'], '')
+        self.assertFalse(key.model_allowlist)
+
+        with patch.object(Cache, '_llm_models_payload', return_value=catalogue):
+            self.service._llm_update_key(
+                self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+                models=['paid-a', 'paid-b'])
+        self.assertTrue(self.fake.tokens[501]['model_limits_enabled'])
+        self.assertEqual(self.fake.tokens[501]['model_limits'], 'paid-b,paid-a')
+        self.assertEqual(key.model_allowlist, 'paid-b,paid-a')
+
+    def test_management_model_catalogue_invalidity_fails_before_external_calls(self):
+        key = self._management_key()
+        before = (key.model_allowlist, key.key_label, key.state)
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        invalid_payloads = (
+            {'state': 'stale', 'items': []},
+            {'state': 'ok', 'items': ()},
+            {'state': 'ok', 'items': [{'model': 'bad name', 'group': 'default'}]},
+            {'state': 'ok', 'items': [
+                {'model': 'paid-a', 'group': 'default'},
+                {'model': 'paid-a', 'group': 'default'},
+            ]},
+            {'state': 'ok', 'items': [{'model': 'free-only', 'group': 'free'}]},
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), patch.object(
+                    Cache, '_llm_models_payload', return_value=payload):
+                self.assertEqual(self._error(lambda: self.service._llm_update_key(
+                    self.user.partner_id, key.id, user=self.user,
+                    real_ip=self.real_ip, models=None))[0], 'llm_unavailable')
+                self.assertEqual(self.fake.calls, [])
+                self.assertEqual((key.model_allowlist, key.key_label, key.state), before)
+
+    def test_management_update_explicit_null_expiry_and_cached_false_limit(self):
+        key = self._management_key(quota_limit_points=False)
+        self._management_remote()
+        self.fake.tokens[501]['unlimited_quota'] = True
+        self.fake.tokens[501]['remain_quota'] = 0
+        result = self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            expires=None)
+        self.assertEqual(self.fake.tokens[501]['expired_time'], -1)
+        self.assertIsNone(key.expires_at)
+        self.assertFalse(key.quota_limit_points)
+        self.assertIsNone(result['limit_points'])
+        self.assertTrue(self.fake.tokens[501]['unlimited_quota'])
+        self.assertEqual(self.fake.tokens[501]['remain_quota'], 0)
+
+    def test_management_total_limit_rejects_malformed_remote_used_quota(self):
+        key = self._management_key()
+        self._management_remote()
+        before = (key.quota_limit_points, key.remain_quota_cached,
+                  key.used_quota_cached, key.expires_at, key.model_allowlist,
+                  key.key_label, key.state)
+        for malformed in (True, None, -1):
+            for requested_limit in (50, None):
+                self.fake.calls[:] = []
+                self.fake.tokens[501].pop('used_quota', None)
+                if malformed is not None:
+                    self.fake.tokens[501]['used_quota'] = malformed
+                with self.subTest(used_quota=malformed, limit_points=requested_limit):
+                    self.assertEqual(self._error(lambda: self.service._llm_update_key(
+                        self.user.partner_id, key.id, user=self.user,
+                        real_ip=self.real_ip, limit_points=requested_limit))[0],
+                        'llm_unavailable')
+                    self.assertEqual([call[0] for call in self.fake.calls], ['user_get_token'])
+                    self.assertEqual((key.quota_limit_points, key.remain_quota_cached,
+                                      key.used_quota_cached, key.expires_at, key.model_allowlist,
+                                      key.key_label, key.state), before)
+
+    def test_management_update_rejects_corrupt_local_integer_limits_before_external_calls(self):
+        for invalid_limit in (0, -1):
+            key = self._management_key(quota_limit_points=invalid_limit)
+            before = (key.quota_limit_points, key.expires_at, key.model_allowlist)
+            with self.subTest(limit_points=invalid_limit):
+                self.assertEqual(self._error(lambda: self.service._llm_update_key(
+                    self.user.partner_id, key.id, user=self.user,
+                    real_ip=self.real_ip, expires='90d'))[0], 'llm_key_invalid')
+                self.assertEqual(self.fake.calls, [])
+                self.assertEqual((key.quota_limit_points, key.expires_at,
+                                  key.model_allowlist), before)
+
+    def test_management_untrusted_remote_shapes_fail_unavailable_without_mutation(self):
+        key = self._management_key()
+        self._management_remote()
+        before = (key.state, key.key_label, key.quota_limit_points, key.expires_at,
+                  key.model_allowlist, key.remain_quota_cached, key.used_quota_cached,
+                  key.expiry_notice_7d_at, key.expiry_notice_1d_at)
+        for operation in ('update', 'extend'):
+            self.fake.calls[:] = []
+            self.fake.tokens[501]['allow_ips'] = '198.51.100.8'
+            with self.subTest(operation=operation):
+                call = (lambda: self.service._llm_update_key(
+                    self.user.partner_id, key.id, user=self.user,
+                    real_ip=self.real_ip, expires='90d')) if operation == 'update' else (
+                    lambda: self.service._llm_extend_key(
+                        self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip))
+                self.assertEqual(self._error(call)[0], 'llm_unavailable')
+                self.assertEqual([call[0] for call in self.fake.calls], ['user_get_token'])
+                self.assertEqual((key.state, key.key_label, key.quota_limit_points,
+                                  key.expires_at, key.model_allowlist, key.remain_quota_cached,
+                                  key.used_quota_cached, key.expiry_notice_7d_at,
+                                  key.expiry_notice_1d_at), before)
+            self.fake.tokens[501]['allow_ips'] = ''
+
+    def test_management_extend_never_exact_expiry_and_unknown_mirror(self):
+        never = self._management_key(expires_at=None)
+        dto = self.service._llm_extend_key(
+            self.user.partner_id, never.id, user=self.user, real_ip=self.real_ip)
+        self.assertEqual(dto['id'], never.id)
+        self.assertEqual(self.fake.calls, [])
+
+        now = datetime(2026, 10, 19, 12, 0, 0)
+        now_epoch = int(now.replace(tzinfo=timezone.utc).timestamp())
+        for remote_expiry in (1_700_000_000, 1_900_000_000):
+            key = self._management_key(
+                expires_at=now - timedelta(days=5),
+                expiry_notice_7d_at=now - timedelta(days=1),
+                expiry_notice_1d_at=now - timedelta(hours=1))
+            self._management_remote(expiry=remote_expiry)
+            with patch.object(llm_api_key, '_utcnow', return_value=now):
+                self.service._llm_extend_key(
+                    self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip)
+            self.assertEqual(self.fake.tokens[501]['expired_time'],
+                             max(now_epoch, remote_expiry) + 90 * 86400)
+            self.assertFalse(key.expiry_notice_7d_at)
+            self.assertFalse(key.expiry_notice_1d_at)
+
+        key = self._management_key(
+            expires_at=now - timedelta(days=5), expiry_notice_7d_at=now,
+            expiry_notice_1d_at=now)
+        self._management_remote(expiry=1_900_000_000)
+        before = (key.expires_at, key.expiry_notice_7d_at, key.expiry_notice_1d_at)
+        self.fake.fail_before['user_update_token'] = nac.Unknown('proxy_timeout', status=504)
+        self._error(lambda: self.service._llm_extend_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip))
+        self.assertEqual((key.expires_at, key.expiry_notice_7d_at,
+                          key.expiry_notice_1d_at), before)
+
+    def test_management_status_successful_enable_and_actual_boolean_validation(self):
+        key = self._management_key(state='disabled', disabled_by='user')
+        self._management_remote()
+        self.fake.tokens[501]['status'] = 2
+        for enabled in (1, 0, None):
+            self.assertEqual(self._error(lambda: self.service._llm_set_key_status(
+                self.user.partner_id, key.id, enabled, user=self.user,
+                real_ip=self.real_ip))[0], 'llm_key_invalid')
+        self.assertEqual(self.fake.calls, [])
+        result = self.service._llm_set_key_status(
+            self.user.partner_id, key.id, True, user=self.user, real_ip=self.real_ip)
+        self.assertEqual(self.fake.tokens[501]['status'], 1)
+        self.assertEqual((key.state, key.disabled_by), ('active', False))
+        self.assertEqual(result['status'], 'active')
+
+    def test_management_delete_requires_remote_id_except_failed_reveal_and_absence_converges(self):
+        self.fake.tokens.pop(501, None)
+        for operation in ('update', 'extend'):
+            key = self._management_key(
+                expires_at=fields.Datetime.now() + timedelta(days=30))
+            self.fake.calls[:] = []
+            with self.subTest(missing_remote_operation=operation):
+                if operation == 'update':
+                    call = lambda: self.service._llm_update_key(
+                        self.user.partner_id, key.id, user=self.user,
+                        real_ip=self.real_ip, expires='90d')
+                else:
+                    call = lambda: self.service._llm_extend_key(
+                        self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip)
+                self.assertEqual(self._error(call)[0], ERR_LLM_KEY_NOT_FOUND)
+                self.assertEqual(key.state, 'deleted')
+                self.assertEqual([call[0] for call in self.fake.calls], ['user_get_token'])
+
+        for state, token_id in (('active', False), ('disabled', 0)):
+            self.fake.calls[:] = []
+            key = self._management_key(state=state, newapi_token_id=token_id)
+            with self.subTest(state=state):
+                self.assertEqual(self._error(lambda: self.service._llm_delete_key(
+                    self.user.partner_id, key.id, 'private label', user=self.user,
+                    real_ip=self.real_ip))[0], 'llm_unavailable')
+                self.assertEqual(self.fake.calls, [])
+                self.assertEqual(key.state, state)
+
+        key = self._management_key()
+        self.fake.tokens.pop(501, None)
+        self.fake.calls[:] = []
+        self.assertEqual(self._error(lambda: self.service._llm_delete_key(
+            self.user.partner_id, key.id, 'private label', user=self.user,
+            real_ip=self.real_ip))[0], 'llm_unavailable')
+        self.assertEqual(key.state, 'active')
+        self.assertNotIn(501, self.fake.tokens)
+        self.assertEqual([call[0] for call in self.fake.calls], ['user_delete_token'])
+
+    def test_management_own_unavailable_states_are_zero_external_calls(self):
+        for state in ('deleted', 'lost', 'creating', 'failed_reveal'):
+            key = self._management_key(state=state)
+            with self.subTest(state=state):
+                self.assertEqual(self._error(lambda: self.service._llm_update_key(
+                    self.user.partner_id, key.id, user=self.user,
+                    real_ip=self.real_ip, name='changed'))[0], ERR_LLM_KEY_NOT_FOUND)
+                self.assertEqual(self.fake.calls, [])
+
+    def test_management_remote_operations_reject_invalid_mirror_token_ids_pre_io(self):
+        invalid_ids = (False, 0, -1, nac.INT32_MAX + 1)
+        for state in ('active', 'disabled'):
+            for invalid_id in invalid_ids:
+                key = self._management_key(
+                    state=state, newapi_token_id=(501 if invalid_id == nac.INT32_MAX + 1
+                                                  else invalid_id),
+                    expires_at=fields.Datetime.now() + timedelta(days=30))
+                before_state = key.state
+                before_label = key.key_label
+                before_expiry = key.expires_at
+                for operation in ('update', 'extend', 'status', 'delete'):
+                    self.fake.calls[:] = []
+                    with self.subTest(state=state, token_id=invalid_id, operation=operation):
+                        token_patch = patch.object(
+                            type(key), 'newapi_token_id', new_callable=PropertyMock,
+                            return_value=invalid_id)
+                        with token_patch:
+                            if operation == 'update':
+                                call = lambda: self.service._llm_update_key(
+                                    self.user.partner_id, key.id, user=self.user,
+                                    real_ip=self.real_ip, expires='90d')
+                            elif operation == 'extend':
+                                call = lambda: self.service._llm_extend_key(
+                                    self.user.partner_id, key.id, user=self.user,
+                                    real_ip=self.real_ip)
+                            elif operation == 'status':
+                                call = lambda: self.service._llm_set_key_status(
+                                    self.user.partner_id, key.id, False, user=self.user,
+                                    real_ip=self.real_ip)
+                            else:
+                                call = lambda: self.service._llm_delete_key(
+                                    self.user.partner_id, key.id, 'private label',
+                                    user=self.user, real_ip=self.real_ip)
+                            self.assertEqual(self._error(call)[0], 'llm_unavailable')
+                        self.assertEqual(self.fake.calls, [])
+                        self.assertEqual((key.state, key.key_label, key.expires_at),
+                                         (before_state, before_label, before_expiry))
+
+        local_key = self._management_key(
+            state='active', newapi_token_id=False, expires_at=None)
+        self.service._llm_update_key(
+            self.user.partner_id, local_key.id, user=self.user, real_ip=self.real_ip,
+            name='local label only')
+        self.service._llm_extend_key(
+            self.user.partner_id, local_key.id, user=self.user, real_ip=self.real_ip)
+        self.assertEqual(local_key.key_label, 'local label only')
+        self.assertEqual(self.fake.calls, [])
+
+    def test_management_update_omitted_false_limit_remains_unlimited(self):
+        key = self._management_key(quota_limit_points=False)
+        self._management_remote()
+        self.fake.tokens[501]['unlimited_quota'] = True
+        self.fake.tokens[501]['remain_quota'] = 0
+        self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            expires='90d')
+        self.assertTrue(self.fake.tokens[501]['unlimited_quota'])
+        self.assertEqual(self.fake.tokens[501]['remain_quota'], 0)
+        self.assertFalse(key.quota_limit_points)
+
+    def test_management_update_rejects_total_below_remote_used_before_write(self):
+        key = self._management_key()
+        self._management_remote()
+        error = self._error(lambda: self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            limit_points=20))
+        self.assertEqual(error[0], ERR_LLM_KEY_LIMIT_BELOW_USED)
+        self.assertEqual(error[1].get('used'), 30)
+        self.assertEqual([c[0] for c in self.fake.calls], ['user_get_token'])
+
+    def test_management_extend_paid_expired_and_never_and_status_delete(self):
+        key = self._management_key(expires_at=fields.Datetime.now() - timedelta(days=2),
+                                   expiry_notice_7d_at=fields.Datetime.now(),
+                                   expiry_notice_1d_at=fields.Datetime.now())
+        self._management_remote(expiry=1_700_000_000)
+        result = self.service._llm_extend_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip)
+        self.assertEqual(result['id'], key.id)
+        self.assertFalse(key.expiry_notice_7d_at)
+        self.assertFalse(key.expiry_notice_1d_at)
+
+        self.service._llm_set_key_status(
+            self.user.partner_id, key.id, False, user=self.user, real_ip=self.real_ip,
+            session=self._session())
+        self.assertEqual((key.state, key.disabled_by), ('disabled', 'user'))
+        result = self.service._llm_delete_key(
+            self.user.partner_id, key.id, 'private label', user=self.user,
+            real_ip=self.real_ip)
+        self.assertEqual(result, {'deleted': True})
+        self.assertEqual(key.state, 'deleted')
+        self.assertNotIn(501, self.fake.tokens)
+
+    def test_management_foreign_key_is_never_looked_up_or_called(self):
+        other = self.env['res.partner'].create({'name': 'other management owner'})
+        key = self._management_key()
+        calls = (
+            lambda: self.service._llm_update_key(other, key.id, user=self.user,
+                                                 real_ip=self.real_ip, name='changed'),
+            lambda: self.service._llm_extend_key(other, key.id, user=self.user,
+                                                 real_ip=self.real_ip),
+            lambda: self.service._llm_set_key_status(other, key.id, True, user=self.user,
+                                                      real_ip=self.real_ip),
+            lambda: self.service._llm_set_key_status(other, key.id, False, user=self.user,
+                                                      real_ip=self.real_ip),
+            lambda: self.service._llm_delete_key(other, key.id, 'private label', user=self.user,
+                                                  real_ip=self.real_ip),
+        )
+        for call in calls:
+            self.assertEqual(self._error(call)[0], ERR_LLM_KEY_NOT_FOUND)
+        self.assertEqual(self.fake.calls, [])
+
+    def test_management_enable_local_blocks_terms_and_unknown_are_fail_closed(self):
+        blocked = ('expired', 'exhausted', 'free_capped', 'suspended', 'overdraft')
+        for status in blocked:
+            if status == 'expired':
+                key = self._management_key(expires_at=fields.Datetime.now() - timedelta(days=1))
+            elif status == 'exhausted':
+                key = self._management_key(quota_limit_points=1,
+                                           used_quota_cached=QUOTA_PER_POINT)
+            elif status == 'free_capped':
+                key = self._management_key(kind='free_trial', state='disabled',
+                                           disabled_by='free_daily_cap')
+            else:
+                reason = 'suspend' if status == 'suspended' else 'overdraft'
+                key = self._management_key(state='disabled', disabled_by=reason)
+            with self.subTest(status=status):
+                self.assertEqual(self._error(lambda: self.service._llm_set_key_status(
+                    self.user.partner_id, key.id, True, user=self.user,
+                    real_ip=self.real_ip))[0], 'llm_key_cannot_enable')
+        key = self._management_key()
+        with patch.object(type(self.account), '_llm_require_current_terms',
+                          side_effect=LlmError('llm_tos_outdated')):
+            self.assertEqual(self._error(lambda: self.service._llm_set_key_status(
+                self.user.partner_id, key.id, True, user=self.user,
+                real_ip=self.real_ip))[0], 'llm_tos_outdated')
+        self.assertEqual(self.fake.calls, [])
+        self._management_remote()
+        self.fake.fail_before['user_set_token_status'] = nac.Unknown('proxy_timeout', status=504)
+        self._error(lambda: self.service._llm_set_key_status(
+            self.user.partner_id, key.id, False, user=self.user, real_ip=self.real_ip))
+        self.assertEqual((key.state, key.disabled_by), ('active', False))
+
+    def test_management_delete_confirmation_unknown_and_failed_reveal_local_cleanup(self):
+        key = self._management_key()
+        self._management_remote()
+        self.assertEqual(self._error(lambda: self.service._llm_delete_key(
+            self.user.partner_id, key.id, 'wrong', user=self.user,
+            real_ip=self.real_ip))[0], 'llm_key_invalid')
+        self.assertEqual(self.fake.calls, [])
+        self.fake.fail_before['user_delete_token'] = nac.Unknown('proxy_timeout', status=504)
+        self._error(lambda: self.service._llm_delete_key(
+            self.user.partner_id, key.id, 'private label', user=self.user,
+            real_ip=self.real_ip))
+        self.assertEqual(key.state, 'active')
+        failed = self._management_key(state='failed_reveal', key_label='interrupted',
+                                      newapi_token_id=False, newapi_name=False)
+        self.service._llm_delete_key(self.user.partner_id, failed.id, 'interrupted',
+                                     user=self.user, real_ip=self.real_ip)
+        self.assertEqual(failed.state, 'deleted')
+        self.assertEqual([c[0] for c in self.fake.calls], ['user_delete_token'])
+
+    def test_management_delete_expired_trial_releases_unique_slot(self):
+        trial = self._management_key(kind='free_trial', expires_at=fields.Datetime.now() -
+                                     timedelta(days=1), key_label='trial')
+        self.service._llm_delete_key(self.user.partner_id, trial.id, 'trial', user=self.user,
+                                     real_ip=self.real_ip)
+        replacement = self._management_key(kind='free_trial', key_label='replacement')
+        self.assertEqual(replacement.state, 'active')
+        self.assertEqual(self.fake.calls, [])
+
+    def test_management_success_events_use_closed_actions_and_safe_targets(self):
+        key = self._management_key()
+        self._management_remote()
+        self.service._llm_update_key(self.user.partner_id, key.id, user=self.user,
+                                     real_ip=self.real_ip, name='renamed locally')
+        self.service._llm_set_key_status(self.user.partner_id, key.id, False, user=self.user,
+                                         real_ip=self.real_ip)
+        self.service._llm_delete_key(self.user.partner_id, key.id, 'renamed locally',
+                                     user=self.user, real_ip=self.real_ip)
+        rows = self.env[EVENT].sudo().search([
+            ('account_id', '=', self.account.id), ('target_model', '=', 'woow_paas_platform.llm_api_key'),
+            ('target_id', '=', key.id), ('action', 'in', ('key_update', 'key_status', 'key_delete')),
+        ])
+        self.assertEqual(set(rows.mapped('action')), {'key_update', 'key_status', 'key_delete'})
+        for row in rows:
+            self.assertEqual(row.partner_id.id, self.account.partner_id.id)
+            self.assertEqual(row.uid.id, self.user.id)
+            self.assertEqual(row.real_ip, self.real_ip)
+            self.assertFalse(row.details_json)
+            self.assertNotIn('renamed locally', row.details_json or '')
+            self.assertNotIn('wp_501_abcd', row.details_json or '')
+
+    def test_management_free_trial_edit_and_extend_reject_without_io(self):
+        key = self._management_key(kind='free_trial')
+        self.assertEqual(self._error(lambda: self.service._llm_update_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip,
+            limit_points=20))[0], 'llm_key_invalid')
+        self.assertEqual(self._error(lambda: self.service._llm_extend_key(
+            self.user.partner_id, key.id, user=self.user, real_ip=self.real_ip))[0],
+            'llm_key_invalid')
+        self.assertEqual(self.fake.calls, [])
 
     def test_http_paid_create_reveals_once_and_ignores_untrusted_context_fields(self):
         self.authenticate(self.user.login, self.password)

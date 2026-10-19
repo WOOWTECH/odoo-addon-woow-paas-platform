@@ -435,7 +435,7 @@ class FakeNewApi:
         token = self.tokens.get(body['id'])
         if not token or token['user_id'] != user['id']:
             return self._leave('user_update_token',
-                               nac.Definite(reason='no_message_key', status=200))
+                               nac.Unknown('no_message_key', status=200))
         token.update({field: body[field] for field in _TOKEN_BODY_FIELDS})
         return self._leave('user_update_token', self._ok())
 
@@ -449,7 +449,7 @@ class FakeNewApi:
         token = self.tokens.get(token_id) if type(token_id) is int else None
         if not token or token['user_id'] != user['id']:
             return self._leave('user_set_token_status',
-                               nac.Definite(reason='no_message_key', status=200))
+                               nac.Unknown('no_message_key', status=200))
         token['status'] = 1 if enabled else 2
         return self._leave('user_set_token_status', self._ok())
 
@@ -461,7 +461,7 @@ class FakeNewApi:
         token = self.tokens.get(token_id) if type(token_id) is int else None
         if not token or token['user_id'] != user['id']:
             return self._leave('user_delete_token',
-                               nac.Definite(reason='no_message_key', status=200))
+                               nac.Unknown('no_message_key', status=200))
         self.tokens.pop(token_id)
         return self._leave('user_delete_token', self._ok())
 

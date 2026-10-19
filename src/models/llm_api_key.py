@@ -46,6 +46,9 @@ from .llm_common import (
     ERR_LLM_KEY_ALREADY_SHOWN,
     ERR_LLM_KEY_INVALID,
     ERR_LLM_KEY_LIMIT,
+    ERR_LLM_KEY_NOT_FOUND,
+    ERR_LLM_KEY_LIMIT_BELOW_USED,
+    ERR_LLM_KEY_CANNOT_ENABLE,
     ERR_LLM_RATE_LIMITED,
     ERR_LLM_UNAVAILABLE,
     MAX_KEYS_PER_ACCOUNT,
@@ -78,6 +81,7 @@ _MODEL_ID_RE = re.compile(r'[A-Za-z0-9._:/-]{1,128}', re.ASCII)
 _PAID_EXPIRY_DAYS = {'30d': 30, '90d': 90, '180d': 180}
 _MAX_KEY_LABEL_LENGTH = 64
 _MAX_PAID_LIMIT_POINTS = nac.TOKEN_MAX_REMAIN_QUOTA // QUOTA_PER_POINT
+_OMITTED = object()
 #: 「有效」的試用金鑰（DESIGN §2.3：每帳號最多 1 把）。
 _FREE_TRIAL_LIVE_STATES = ('creating', 'active', 'disabled')
 _DISABLED_STATUS_BY_REASON = {
@@ -339,6 +343,30 @@ class LlmApiKey(models.Model):
             expires_at = _utcnow().replace(microsecond=0) + timedelta(
                 days=_PAID_EXPIRY_DAYS[expires])
 
+        default_models = self._llm_default_models()
+        selected = None
+        if models is not None:
+            if type(models) is not list or not models \
+                    or any(not isinstance(model, str) for model in models) \
+                    or len(set(models)) != len(models) \
+                    or not set(models) <= set(default_models):
+                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
+            requested = set(models)
+            # Use cached catalogue order, never client ordering.
+            selected = [model for model in default_models if model in requested]
+        return {
+            'kind': 'paid',
+            'key_label': name,
+            'limit_points': limit_points,
+            'expires_at': expires_at,
+            'model_allowlist': ','.join(selected) if selected else None,
+            'models': tuple(selected) if selected else None,
+            'model_limits_enabled': selected is not None,
+        }
+
+    @api.model
+    def _llm_default_models(self):
+        """Return validated cached default model IDs or fail closed before any external call."""
         payload = self.env['woow_paas_platform.llm_swr_cache']._llm_models_payload()
         if not isinstance(payload, dict) or payload.get('state') != 'ok' \
                 or not isinstance(payload.get('items'), list):
@@ -354,26 +382,7 @@ class LlmApiKey(models.Model):
             default_models.append(model)
         if not default_models:
             raise LlmError(ERR_LLM_UNAVAILABLE)
-
-        selected = None
-        if models is not None:
-            if type(models) is not list or not models \
-                    or any(not isinstance(model, str) for model in models) \
-                    or len(set(models)) != len(models) \
-                    or not set(models) <= set(default_models):
-                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
-            requested = set(models)
-            # The LLM-06 catalogue, rather than client ordering, is the canonical allowlist.
-            selected = [model for model in default_models if model in requested]
-        return {
-            'kind': 'paid',
-            'key_label': name,
-            'limit_points': limit_points,
-            'expires_at': expires_at,
-            'model_allowlist': ','.join(selected) if selected else None,
-            'models': tuple(selected) if selected else None,
-            'model_limits_enabled': selected is not None,
-        }
+        return default_models
 
     @staticmethod
     def _llm_expired_time(expires_at):
@@ -695,3 +704,212 @@ class LlmApiKey(models.Model):
                 cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
                            'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
                            (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))
+
+    @api.model
+    def _llm_management_key(self, partner, key_id, *, allow_failed_reveal=False):
+        """Anchor an exposed mirror id to the caller's account before any upstream access."""
+        account = self.env['woow_paas_platform.llm_account']._llm_account_for_partner(partner)
+        if not account:
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        account._llm_require_active()
+        key = self.sudo().search([('id', '=', key_id), ('account_id', '=', account.id)], limit=1)
+        if not key or key.state in ('deleted', 'lost', 'creating') or \
+                (key.state == 'failed_reveal' and not allow_failed_reveal):
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        return account, key
+
+    @api.model
+    def _llm_management_token_id(self, key, *, allow_missing=False):
+        """Return an exact valid upstream id, or fail closed before client construction."""
+        token_id = key.newapi_token_id
+        if type(token_id) is int and 1 <= token_id <= nac.INT32_MAX:
+            return token_id
+        if allow_missing:
+            return None
+        raise LlmError(ERR_LLM_UNAVAILABLE)
+
+    @api.model
+    def _llm_management_remote(self, account):
+        return (account._llm_tenant_ip(), account._llm_up_token(),
+                account._llm_web_client('keys/manage'))
+
+    @api.model
+    def _llm_management_missing(self, result):
+        return isinstance(result, nac.Definite) and result.reason == 'no_message_key'
+
+    @api.model
+    def _llm_management_raise(self, account, result):
+        self._llm_raise_for(account, result)
+
+    @api.model
+    def _llm_management_audit(self, action, account, key, user, real_ip):
+        self.env[EVENT_MODEL]._llm_record(
+            action, account_id=account.id, partner_id=account.partner_id.id,
+            uid=user.id if user else None, real_ip=real_ip or None,
+            target_model=KEY_MODEL, target_id=key.id)
+
+    @api.model
+    def _llm_update_key(self, partner, key_id, *, user=None, real_ip=None, name=_OMITTED,
+                        limit_points=_OMITTED, expires=_OMITTED, models=_OMITTED):
+        account, key = self._llm_management_key(partner, key_id)
+        changes = any(value is not _OMITTED for value in (limit_points, expires, models))
+        if name is not _OMITTED and (not isinstance(name, str) or not name.strip()
+                                     or len(name) > _MAX_KEY_LABEL_LENGTH):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='name')
+        if key.kind == 'free_trial' and changes:
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        if not changes:
+            if name is not _OMITTED and name != key.key_label:
+                _llm_internal(key).write({'key_label': name})
+                self._llm_management_audit('key_update', account, key, user, real_ip)
+            dto = key._llm_dto()
+            dto['remain_after_points'] = dto['remain_points']
+            return dto
+        if limit_points is _OMITTED:
+            local_limit = key.quota_limit_points
+            if local_limit is False or local_limit is None:
+                requested_limit = None
+            elif type(local_limit) is int and 1 <= local_limit <= _MAX_PAID_LIMIT_POINTS:
+                requested_limit = local_limit
+            else:
+                raise LlmError(ERR_LLM_KEY_INVALID, field='limit_points')
+        else:
+            requested_limit = limit_points
+        if requested_limit is not None and (type(requested_limit) is not int or
+                not 1 <= requested_limit <= _MAX_PAID_LIMIT_POINTS):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='limit_points')
+        expiry = key.expires_at if expires is _OMITTED else expires
+        if expires is not _OMITTED and expires not in (*_PAID_EXPIRY_DAYS, 'never', None):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='expires')
+        expires_at = (None if expiry in ('never', None) else
+                      _utcnow().replace(microsecond=0) + timedelta(days=_PAID_EXPIRY_DAYS[expiry])
+                      if expires is not _OMITTED else expiry)
+        model_value = key.model_allowlist if models is _OMITTED else models
+        if models is not _OMITTED:
+            defaults = self._llm_default_models()
+            if models is not None and (type(models) is not list or not models or
+                    any(not isinstance(m, str) for m in models) or len(set(models)) != len(models)
+                    or not set(models) <= set(defaults)):
+                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
+            selected = [m for m in defaults if m in set(models)] if models is not None else None
+            model_value = ','.join(selected) if selected else None
+        token_id = self._llm_management_token_id(key)
+        ip, up, client = self._llm_management_remote(account)
+        got = client.user_get_token(ip, up, token_id)
+        if not got.ok or not isinstance(got.data, dict):
+            if self._llm_management_missing(got):
+                _llm_internal(key).write({'state': 'deleted'})
+                raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+            self._llm_management_raise(account, got)
+        remote = got.data
+        used = remote.get('used_quota')
+        if limit_points is not _OMITTED:
+            if type(used) is not int or used < 0:
+                raise LlmError(ERR_LLM_UNAVAILABLE)
+            if requested_limit is not None and used > requested_limit * QUOTA_PER_POINT:
+                raise LlmError(ERR_LLM_KEY_LIMIT_BELOW_USED,
+                               used=self._llm_points_from_quota(used))
+        remaining = (0 if requested_limit is None else
+                     max(0, requested_limit * QUOTA_PER_POINT -
+                         (used if type(used) is int else 0))) \
+            if limit_points is not _OMITTED else None
+        try:
+            body = nac.paid_token_update_body(
+                remote, token_id, key.newapi_name,
+                remain_quota=remaining,
+                unlimited_quota=(requested_limit is None if limit_points is not _OMITTED else None),
+                expired_time=(self._llm_expired_time(expires_at) if expires is not _OMITTED else None),
+                model_limits_enabled=(bool(model_value) if models is not _OMITTED else None),
+                model_limits=(model_value or '' if models is not _OMITTED else None))
+        except nac.NewApiInputError:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        written = client.user_update_token(ip, up, body)
+        if not written.ok:
+            self._llm_management_raise(account, written)
+        vals = {}
+        if limit_points is not _OMITTED:
+            vals['quota_limit_points'] = requested_limit if requested_limit is not None else False
+            vals['remain_quota_cached'] = remaining
+            vals['used_quota_cached'] = used
+        if expires is not _OMITTED:
+            vals['expires_at'] = expires_at
+        if models is not _OMITTED:
+            vals['model_allowlist'] = model_value
+        if name is not _OMITTED:
+            vals['key_label'] = name
+        _llm_internal(key).write(vals)
+        self._llm_management_audit('key_update', account, key, user, real_ip)
+        dto = key._llm_dto()
+        dto['remain_after_points'] = (self._llm_points_from_quota(remaining)
+                                      if limit_points is not _OMITTED else dto['remain_points'])
+        return dto
+
+    @api.model
+    def _llm_extend_key(self, partner, key_id, user=None, real_ip=None):
+        account, key = self._llm_management_key(partner, key_id)
+        if key.kind != 'paid':
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        if not key.expires_at:
+            return key._llm_dto()
+        token_id = self._llm_management_token_id(key)
+        ip, up, client = self._llm_management_remote(account)
+        got = client.user_get_token(ip, up, token_id)
+        if not got.ok or not isinstance(got.data, dict):
+            if self._llm_management_missing(got):
+                _llm_internal(key).write({'state': 'deleted'})
+                raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+            self._llm_management_raise(account, got)
+        try:
+            current = got.data.get('expired_time')
+            if type(current) is not int or current <= 0:
+                raise nac.NewApiInputError('token_response')
+            base = max(int(_utcnow().replace(tzinfo=timezone.utc).timestamp()), current)
+            expiry = base + 90 * 86400
+            body = nac.paid_token_update_body(got.data, token_id, key.newapi_name,
+                                              expired_time=expiry)
+        except nac.NewApiInputError:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        result = client.user_update_token(ip, up, body)
+        if not result.ok:
+            self._llm_management_raise(account, result)
+        expiry_dt = datetime.fromtimestamp(expiry, timezone.utc).replace(tzinfo=None)
+        _llm_internal(key).write({'expires_at': expiry_dt, 'expiry_notice_7d_at': False,
+                                  'expiry_notice_1d_at': False})
+        self._llm_management_audit('key_update', account, key, user, real_ip)
+        return key._llm_dto()
+
+    @api.model
+    def _llm_set_key_status(self, partner, key_id, enabled, user=None, real_ip=None, session=None):
+        if type(enabled) is not bool:
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        account, key = self._llm_management_key(partner, key_id)
+        if enabled:
+            reason = key._llm_status()
+            if reason in ('expired', 'exhausted', 'free_capped', 'suspended', 'overdraft'):
+                raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason=reason)
+            account._llm_require_current_terms()
+        token_id = self._llm_management_token_id(key)
+        ip, up, client = self._llm_management_remote(account)
+        result = client.user_set_token_status(ip, up, token_id, enabled)
+        if not result.ok:
+            self._llm_management_raise(account, result)
+        _llm_internal(key).write({'state': 'active' if enabled else 'disabled',
+                                  'disabled_by': False if enabled else 'user'})
+        self._llm_management_audit('key_status', account, key, user, real_ip)
+        return key._llm_dto()
+
+    @api.model
+    def _llm_delete_key(self, partner, key_id, confirm_name, user=None, real_ip=None):
+        account, key = self._llm_management_key(partner, key_id, allow_failed_reveal=True)
+        if not isinstance(confirm_name, str) or confirm_name != (key.key_label or ''):
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        token_id = self._llm_management_token_id(
+            key, allow_missing=(key.state == 'failed_reveal'))
+        if token_id is not None:
+            ip, up, client = self._llm_management_remote(account)
+            result = client.user_delete_token(ip, up, token_id)
+            if not result.ok:
+                self._llm_management_raise(account, result)
+        _llm_internal(key).write({'state': 'deleted'})
+        self._llm_management_audit('key_delete', account, key, user, real_ip)
+        return {'deleted': True}
