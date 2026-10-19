@@ -77,6 +77,7 @@
             <field name="tags">["n8n", "automation", "workflow", "integration", "no-code"]</field>
 
             <field name="documentation_url">https://docs.n8n.io/</field>
+            <field name="tutorial_url">https://n8n-guide.woowtech.io/ch3_workspace_tour.html</field>
 
             <!-- Helm Configuration (OCI registry format) -->
             <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
@@ -1098,6 +1099,7 @@
             <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode", "mcp"]</field>
 
             <field name="documentation_url">https://github.com/nexu-io/open-design</field>
+            <field name="tutorial_url">https://opendesign-guide.woowtech.io/tutorial.html</field>
 
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈，支線 A PR #41）。
                  helm_default_values 鍵名對齊 charts/open-design/values.yaml；只放平台 pin/覆寫
@@ -1590,6 +1592,7 @@
             <field name="tags">["home-assistant", "haos", "smart-home", "vm", "kubevirt"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+            <field name="tutorial_url">https://woowtech.github.io/Woow_ha_tutorial_site/tutorial.html</field>
 
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
@@ -1894,6 +1897,7 @@
             <field name="tags">["home-assistant", "smart-home", "container", "ha-full"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+            <field name="tutorial_url">https://woowtech.github.io/Woow_ha_tutorial_site/ch8_first_automation.html</field>
 
             <!-- 2026-10-03 換 chart 0.1.5（woow-paas-charts #115＋#118）：0.1.4 新實例預設座標台北
                  （.storage/core.config，缺才寫，#1374）；0.1.5 平台注入的公開網址寫入
@@ -2225,7 +2229,8 @@
                 資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["omnigent", "coding-agent", "ai", "agent"]</field>
-            <field name="documentation_url">https://omnigent-guide.woowtech.io</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_omnigent_tutorial_site</field>
+            <field name="tutorial_url">https://omnigent-guide.woowtech.io/tutorial.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
             <!-- 0.1.12（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 runner Job 預設 nodeSelector paas.woowtech.io/tenant-schedulable=true
@@ -2343,6 +2348,7 @@
             <field name="category">ai_llm</field>
             <field name="tags">["code-server", "vscode", "ide", "pi-agent", "claude-code", "ai"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
+            <field name="tutorial_url">https://code-server-guide.woowtech.io/tutorial.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
             <!-- 0.1.9（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 startupProbe timeoutSeconds 5（#1637）；0.1.9 登入頁繁中、不再提示
@@ -2464,6 +2470,7 @@
             <field name="category">automation</field>
             <field name="tags">["emqx", "mqtt", "iot", "broker", "messaging"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
+            <field name="tutorial_url">https://emqx-guide.woowtech.io/ch5_first_connection.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
             <!-- 0.1.11（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 startupProbe timeoutSeconds 3（#1637）；0.1.9 /status/、/api/v5/status/
@@ -2550,6 +2557,7 @@
             <field name="category">web</field>
             <field name="tags">["nextcloud", "files", "storage", "collaboration", "calendar"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_nextcloud#readme</field>
+            <field name="tutorial_url">https://nextcloud-guide.woowtech.io/ch6_files_basics.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
             <field name="helm_chart_version">0.1.7</field>
@@ -2661,6 +2669,7 @@
             <field name="category">devops</field>
             <field name="tags">["headscale", "headplane", "vpn", "tailscale", "wireguard"]</field>
             <field name="documentation_url">https://headscale.net/stable/</field>
+            <field name="tutorial_url">https://headscale-guide.woowtech.io/ch4_user_preauth.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
             <!-- 0.1.8（2026-10-18，woow-paas-charts 整合包 #254）：0.1.5 GOMEMLIMIT＋方案資源改落在 headscale 容器（#1637）；0.1.6 入口安全標頭＋

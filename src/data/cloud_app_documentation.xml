@@ -12,11 +12,19 @@
 2. 在瀏覽器 IDE 建立或複製專案。程式碼、設定與自行安裝的擴充會保存在服務磁碟。
 3. 要使用內建的 pi 或 Claude Code，先在服務「配置」填入對應的模型金鑰，或在終端機執行 `claude` 登入。需要 Git 推送時，再填入限定儲存庫權限的 Git Token。
 
+## 跟著做：第一個專案
+1. 建立一個測試資料夾和 README，從左側檔案樹打開並修改，確認重新整理頁面後仍在。
+2. 開終端機執行 git status；需要版本控制時先設定 Git 作者，再提交並推送到你有權限的儲存庫。
+3. 設定模型金鑰後請 AI 助手解釋剛建立的檔案，再檢查實際修改內容。AI 可讀取工作區，提交前仍要自行審閱差異。
+
 ## 帳密與資料
 忘記密碼可在服務頁「管理員帳密」重設。修改會讓服務短暫重啟。IDE 內的擴充與 AI 助手能讀到容器環境變數中的登入密碼與模型、Git 金鑰；請使用可撤銷、設有額度或權限上限的專用金鑰，只安裝信任的擴充。重要程式碼仍應推送到 Git 或自行下載備份。
 
 ## 排查
-無法登入時先確認服務狀態與最近日誌，再檢查是否剛修改密碼而仍在重啟。模型不可用時核對模型供應商金鑰；Git 推送失敗時核對 Token 權限與目標主機。]]></field>
+無法登入時先確認服務狀態與最近日誌，再檢查是否剛修改密碼而仍在重啟。模型不可用時核對模型供應商金鑰；Git 推送失敗時核對 Token 權限與目標主機。
+
+## 延伸學習
+[WOOWTECH code-server 圖解教學](https://code-server-guide.woowtech.io/tutorial.html)：先看檔案、終端機、Git 與 AI 章節；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_code_server_tutorial_site)。教學提到的部署方式或認證版本可能不同，請以本服務「配置」為準。]]></field>
         </record>
 
         <record id="cloud_app_emqx" model="woow_paas_platform.cloud_app_template">
@@ -27,11 +35,19 @@
 2. 到「Access Control → Authentication」為每台裝置建立 MQTT 帳號；預設拒絕匿名連線。
 3. 裝置僅能發布、訂閱以帳號名稱開頭的主題，例如 `sensor01/temp`。需要跨帳號收發的中控，可為該 MQTT 帳號設定 Superuser，或到「Authorization → File」編輯授權規則。
 
+## 跟著做：讓一台感測器傳訊
+1. 建立 MQTT 帳號 sensor01，並以該帳號在後台 WebSocket 客戶端連到服務的 /mqtt。
+2. 訂閱 sensor01/#，向 sensor01/temp 發送測試訊息；確認訂閱端收到，再嘗試別人的主題，理解預設拒絕的權限範圍。
+3. 若裝置需要原生 MQTT，先在配置完成 ngrok，再依服務總覽目前顯示的外部位址連線。換位址後要同步更新裝置。
+
 ## 連線與權限
 支援經服務網址的 `wss://你的服務網址/mqtt`。外部原生 MQTT 1883 需要在「配置」填入自己的 ngrok authtoken；該路徑是明文 TCP，能用 WSS 的裝置優先使用 WSS。管理後台的使用者和 API 金鑰具有完整管理權限，即使標成 viewer 也不應當成唯讀帳號；裝置請使用 MQTT 帳號。
 
 ## 資料與排查
-保留訊息會寫入服務磁碟；離線佇列不保證在重啟後保留。訂閱失敗先核對主題前綴與授權規則；外部 TCP 無法連線則核對 ngrok 狀態、目前位址與方案限制。]]></field>
+保留訊息會寫入服務磁碟；離線佇列不保證在重啟後保留。訂閱失敗先核對主題前綴與授權規則；外部 TCP 無法連線則核對 ngrok 狀態、目前位址與方案限制。
+
+## 延伸學習
+[WOOWTECH EMQX 首次連線教學](https://emqx-guide.woowtech.io/ch5_first_connection.html)：接著可學認證與授權；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_emqx_tutorial_site)。教學站的 Home Assistant add-on 安裝、連接埠與密碼步驟不適用此 PaaS 服務，請依本頁的服務網址、WSS 與 ngrok 設定操作。]]></field>
         </record>
 
         <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
@@ -42,11 +58,19 @@
 2. 到「設定 → 裝置與服務 → 新增整合」挑選需要的整合。開通時不會替你自動啟用整合或建立自動化。
 3. 要連接需要 OAuth 的外部服務，請在該服務的開發者設定填入 `https://你的服務網址/auth/external/callback` 作為重新導向 URI。
 
+## 跟著做：第一個自動化
+1. 完成 Home Assistant 首次設定，到「設定 → 裝置與服務」加入你實際持有的整合。
+2. 確認裝置出現在介面，建立一個簡單自動化並用「執行動作」測試，再觀察歷史紀錄。
+3. 在「設定 → 系統 → 備份」建立備份，立即下載到自己的電腦；確認下載檔可找到。教學站若提到 Add-on、Apps 或 Assist，請略過，這些功能不屬於此 Container 方案。
+
 ## 功能範圍
 本服務採 Home Assistant Container 安裝方式，沒有 Add-on／Apps 商店與介面一鍵更新。此方案亦未提供 Assist 對話、AI 任務、語音與 Home Assistant Cloud 元件。依賴這些元件的整合無法在此方案使用。
 
 ## 備份與排查
-在「設定 → 系統 → 備份」建立並**下載**備份，另存於服務磁碟以外的位置；服務內備份與原資料在同一顆磁碟。整合連線異常時，先查看 Home Assistant 自身的「設定 → 系統 → 日誌」，再看本服務「日誌」；確認外部服務憑證和回呼網址。]]></field>
+在「設定 → 系統 → 備份」建立並**下載**備份，另存於服務磁碟以外的位置；服務內備份與原資料在同一顆磁碟。整合連線異常時，先查看 Home Assistant 自身的「設定 → 系統 → 日誌」，再看本服務「日誌」；確認外部服務憑證和回呼網址。
+
+## 延伸學習
+[WOOWTECH Home Assistant 自動化教學](https://woowtech.github.io/Woow_ha_tutorial_site/ch8_first_automation.html)：登入、自動化、備份與整合章節適用；Add-on、系統更新及語音章節不適用此 Container 服務。[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_ha_tutorial_site)。]]></field>
         </record>
 
         <record id="cloud_app_haos" model="woow_paas_platform.cloud_app_template">
@@ -57,11 +81,19 @@
 2. 開啟服務網址，依 Home Assistant 畫面建立自己的管理者帳號；平台不持有這組帳密。
 3. 從 Home Assistant 的設定畫面新增整合，需要擴充功能時可使用 Supervisor 的 Add-on／Apps 商店。
 
+## 跟著做：第一個整合與備份
+1. 虛擬機部署完成後建立管理者，新增一個你需要的整合並確認裝置狀態。
+2. 如需擴充功能，可從 Add-on／Apps 商店安裝；先確認磁碟剩餘空間，再執行更新。
+3. 在「設定 → 系統 → 備份」建立備份，下載或搬到外部儲存位置，不能只把備份留在同一顆虛擬機磁碟。
+
 ## 更新與備份
 此方案提供 HAOS 系統與 Add-on 更新。更新前請透過 Home Assistant 建立備份，並把備份另存到服務磁碟以外的位置；磁碟也會存放系統、Add-on 與資料，空間不足時會阻止更新。刪除服務再開通是新的虛擬機與磁碟，原有資料不會自動回來。
 
 ## 連線與排查
-公開網址只提供 Home Assistant 網頁介面；需要 MQTT 等其他埠的 Add-on 時，先確認本方案是否有相應的對外連線方式。若首次部署久未完成，查看服務總覽狀態及本服務「日誌」；若是 HA 內部整合異常，也查看 Home Assistant 自身的系統日誌。]]></field>
+公開網址只提供 Home Assistant 網頁介面；需要 MQTT 等其他埠的 Add-on 時，先確認本方案是否有相應的對外連線方式。若首次部署久未完成，查看服務總覽狀態及本服務「日誌」；若是 HA 內部整合異常，也查看 Home Assistant 自身的系統日誌。
+
+## 延伸學習
+[WOOWTECH Home Assistant 教學](https://woowtech.github.io/Woow_ha_tutorial_site/tutorial.html)：可從登入、自動化、備份與 Add-on 章節開始；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_ha_tutorial_site)。]]></field>
         </record>
 
         <record id="cloud_app_headscale" model="woow_paas_platform.cloud_app_template">
@@ -72,11 +104,19 @@
 2. 外部 Tailscale 裝置需使用服務頁顯示的「VPN 登入網址」。先在服務「配置」開啟 ngrok 並填入自己的 authtoken；一般服務網址無法完成這種裝置登入。
 3. 在裝置的 Tailscale 用戶端指定該登入網址並完成授權。同工作區 VPN 節點可使用 Headscale 的內部網址。
 
+## 跟著做：加入第一台裝置
+1. 先在服務配置啟用 ngrok，等總覽出現 VPN 登入網址；不要把一般網頁服務網址當作裝置登入網址。
+2. 在 Headplane 建使用者與有效的 pre-auth key，於 Tailscale App 指定 VPN 登入網址並完成登入。
+3. 回 Headplane 檢查新裝置是否在線，再用第二台裝置測試 tailnet 互連。需要限制存取時先規劃 ACL，套用後再次測試。
+
 ## 變更與資料
 換 ngrok 帳號或網域會改變登入網址，已加入的裝置須重新登入。使用者、裝置與金鑰存在持久磁碟；刪除服務後重新開通是新的控制台。請在變更前記錄 ACL 與裝置清單。
 
 ## 排查
-外部裝置無法加入時，先核對服務頁是否顯示 VPN 登入網址及 ngrok 狀態，再核對 pre-auth key 是否有效。若出現網域被佔用，查看同一 ngrok 網域是否已由其他服務使用。]]></field>
+外部裝置無法加入時，先核對服務頁是否顯示 VPN 登入網址及 ngrok 狀態，再核對 pre-auth key 是否有效。若出現網域被佔用，查看同一 ngrok 網域是否已由其他服務使用。
+
+## 延伸學習
+[WOOWTECH Headscale 裝置金鑰教學](https://headscale-guide.woowtech.io/ch4_user_preauth.html)：再看裝置加入與 ACL；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_headscale_tutorial_site)。教學站的 Home Assistant add-on 安裝方式不適用本服務，外部登入網址請以 PaaS 總覽為準。]]></field>
         </record>
 
         <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
@@ -87,11 +127,19 @@
 2. 在服務「配置」填入自己選用的模型供應商金鑰，然後從 dashboard 或 console 建立任務。
 3. 外部程式需使用 gateway 時，從服務頁取得一次性顯示的 Gateway API Key，以 Bearer 憑證呼叫服務網址的 `/gateway` 路徑。
 
+## 跟著做：第一個 Agent 任務
+1. 在配置填入有額度限制的模型供應商金鑰，開啟 dashboard 送一則簡單測試訊息，確認能收到回答。
+2. 要讓外部 MCP 或程式呼叫 gateway，使用專用 Gateway API Key，不要把 dashboard 密碼當成 Bearer Key。
+3. 若任務耗時較長，改用串流或非同步 runs；確認用戶端能取得完整結果，再交給正式流程使用。
+
 ## 長時間任務與憑證
 公開入口約 120 秒沒有任何回傳資料時會中斷連線。長任務使用串流 `stream: true`，或透過 `/v1/runs` 提交後再查詢結果。重設管理員密碼會更新 Gateway API Key；請同步更新用戶端，勿把金鑰放在公開程式碼或日誌中。
 
 ## 排查
-登入失敗時核對 dashboard 與 console 的共用帳密。gateway 回傳 401 時核對 Bearer Key；長任務回傳 524 時改用串流或非同步任務。再查看本服務「日誌」中的近期訊息。]]></field>
+登入失敗時核對 dashboard 與 console 的共用帳密。gateway 回傳 401 時核對 Bearer Key；長任務回傳 524 時改用串流或非同步任務。再查看本服務「日誌」中的近期訊息。
+
+## 延伸學習
+[WOOWTECH Hermes k3s 套件說明](https://github.com/WOOWTECH/Woow_k3s_hermes)偏部署與維運；本頁登入、模型與 gateway 步驟以 PaaS 服務頁為準。]]></field>
         </record>
 
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
@@ -102,11 +150,19 @@
 2. 為應用程式建立虛擬金鑰，設定可用模型、預算及速率限制。API Base URL 為 `https://你的服務網址/v1`；應用程式請使用虛擬金鑰。
 3. master key 僅供管理操作。重設管理員帳密時 master key 也會換新，舊 key 立即失效；既有虛擬金鑰不受影響。
 
+## 跟著做：讓一個應用使用模型
+1. 在後台新增一個模型，填入供應商金鑰與該供應商實際提供的模型 ID。
+2. 建立只允許該模型的虛擬金鑰，設定預算與速率上限。把應用程式的 API Base URL 設為本服務的 /v1，憑證填虛擬金鑰。
+3. 從應用程式送一則簡短測試請求，在 LiteLLM 後台核對模型、用量和費用。確認成功後再接長任務；長回應請啟用串流。
+
 ## 網路與資料
 公開入口長時間沒有回傳資料會中斷連線；長回應啟用串流。不要為此 API 服務網址開啟 Cloudflare Access，否則一般 API 用戶端無法通過。供應商金鑰與用量資料在服務的資料庫中；內建自動備份仍在同一顆磁碟，重要資料須另行保管。
 
 ## 排查
-收到驗證錯誤時先確認虛擬金鑰、模型與預算限制。模型呼叫失敗時核對供應商金鑰和後台模型設定。非串流長請求收到 524 時改用串流，再檢查本服務「日誌」。]]></field>
+收到驗證錯誤時先確認虛擬金鑰、模型與預算限制。模型呼叫失敗時核對供應商金鑰和後台模型設定。非串流長請求收到 524 時改用串流，再檢查本服務「日誌」。
+
+## 延伸學習
+[LiteLLM 官方文件](https://docs.litellm.ai/docs/)說明模型、虛擬金鑰與 API；[WOOWTECH k3s 套件說明](https://github.com/WOOWTECH/Woow_k3s_litellm)偏部署。]]></field>
         </record>
 
         <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
@@ -117,8 +173,16 @@
 2. 在「Connection」設定 Hermes Agent 的 gateway／dashboard 網址與所需憑證；gateway 金鑰可從對應的 Hermes Agent 服務頁取得。連線對象應是你有權使用的服務。
 3. 在「Tokens」產生 MCP token，將介面顯示的端點交給支援 Streamable HTTP 的 MCP 用戶端；使用帶 `/private_<token>/mcp` 的服務網址時，結尾不要加斜線。
 
+## 跟著做：接上第一個 MCP 用戶端
+1. 在 Connection 分別核對 Hermes gateway 與 dashboard 位址，以及對應的憑證；先確認連線狀態正常。
+2. 在 Tokens 新建一把僅供這個用戶端使用的 token，以 Streamable HTTP 加到用戶端。
+3. 從 Tools 挑一支不會修改資料的工具先試跑，確認結果來自正確的 Hermes 服務。完成後檢查日誌；不再使用的 token 立即撤銷。
+
 ## 權限與排查
-MCP token 或包含 token 的完整 URL 都視為密碼；外洩時在 Tokens 撤銷並重建。要限制 AI 能做的事，檢查管理介面的 Tools 設定與 Hermes Agent 的授權。連不上時依序核對上游 gateway、金鑰、MCP token 和本服務「日誌」。本服務設定保存在專屬磁碟。]]></field>
+MCP token 或包含 token 的完整 URL 都視為密碼；外洩時在 Tokens 撤銷並重建。要限制 AI 能做的事，檢查管理介面的 Tools 設定與 Hermes Agent 的授權。連不上時依序核對上游 gateway、金鑰、MCP token 和本服務「日誌」。本服務設定保存在專屬磁碟。
+
+## 延伸學習
+[WOOWTECH Hermes MCP 管理介面說明](https://github.com/WOOWTECH/woow_hermes_mcp_server#readme)可查看 Connection、Tools 與 Tokens 的概念；以本服務實際顯示的工具與權限為準。]]></field>
         </record>
 
         <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
@@ -129,8 +193,16 @@ MCP token 或包含 token 的完整 URL 都視為密碼；外洩時在 Tokens �
 2. 首次開通可能已預填同工作區 LiteLLM 的內部網址；之後新建或更換的 LiteLLM 不會自動更新，請重新檢查。
 3. 在「Tokens」建立 MCP token，讓用戶端以 Streamable HTTP 連到 `https://你的服務網址/private_<token>/mcp`；網址結尾不要加斜線。
 
+## 跟著做：先查模型，再決定是否開放寫入
+1. 在 Connection 連好 LiteLLM 後，用 Tokens 為一個 AI 用戶端建立專用 token。
+2. 從用戶端呼叫查詢模型或用量的工具，核對返回的 LiteLLM 實例。出廠唯讀，先確認這已滿足需求。
+3. 只有真的要建立金鑰、修改團隊或模型時，才換有寫入權限的 LiteLLM 金鑰並解除唯讀；完成後再次縮小權限。
+
 ## 權限與排查
-預設 Read-only Mode 只提供查詢工具。需要修改模型、金鑰或團隊時，先換成具有相應權限的 LiteLLM 金鑰，再於 Settings 關閉唯讀；也可於 Tools 逐支停用不需要的工具。MCP URL 含有憑證，外洩時撤銷 token。連線失敗先核對 LiteLLM 網址、金鑰權限及本服務「日誌」。]]></field>
+預設 Read-only Mode 只提供查詢工具。需要修改模型、金鑰或團隊時，先換成具有相應權限的 LiteLLM 金鑰，再於 Settings 關閉唯讀；也可於 Tools 逐支停用不需要的工具。MCP URL 含有憑證，外洩時撤銷 token。連線失敗先核對 LiteLLM 網址、金鑰權限及本服務「日誌」。
+
+## 延伸學習
+[WOOWTECH LiteLLM MCP 套件說明](https://github.com/WOOWTECH/Woow_litellm_mcp_server#readme)包含工具與權限；是否能寫入以本服務的 Read-only Mode 和上游 LiteLLM 金鑰為準。]]></field>
         </record>
 
         <record id="cloud_app_mcp_n8n" model="woow_paas_platform.cloud_app_template">
@@ -141,8 +213,16 @@ MCP token 或包含 token 的完整 URL 都視為密碼；外洩時在 Tokens �
 2. 開啟本服務的 MCP 管理介面，在「Connection」填入 n8n 網址與 API key，儲存後確認連線狀態。
 3. 在「Tokens」建立 MCP token；將管理介面提供的端點交給支援 Streamable HTTP 的 MCP 用戶端。使用 `https://你的服務網址/private_<token>/mcp` 格式時，結尾不要加斜線。
 
+## 跟著做：從 AI 查看一個工作流程
+1. 在 n8n 建專用 API key，於 MCP 的 Connection 填入 n8n 網址和這把 key，確認連線正常。
+2. 在 Tokens 產生一把 MCP token，於支援 Streamable HTTP 的用戶端填入完整端點。
+3. 先從 Tools 選一支讀取類工具，查看你預期的工作流程；若之後要開放變更流程，先核對 n8n 帳號和 Tools 權限。
+
 ## 權限與排查
-API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開放的操作。MCP token 和完整端點網址皆視為密碼，外洩時撤銷並重建。連線失敗先核對 n8n URL、API key 與 n8n 的運作狀態，再看本服務「日誌」。設定保存在本服務的專屬磁碟。]]></field>
+API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開放的操作。MCP token 和完整端點網址皆視為密碼，外洩時撤銷並重建。連線失敗先核對 n8n URL、API key 與 n8n 的運作狀態，再看本服務「日誌」。設定保存在本服務的專屬磁碟。
+
+## 延伸學習
+[WOOWTECH n8n MCP 管理介面說明](https://github.com/WOOWTECH/woow_n8n_mcp_server#readme)可查看 Connection、Tools 與 Tokens；[WOOWTECH n8n 工作區教學](https://n8n-guide.woowtech.io/ch3_workspace_tour.html)介紹上游工作流程，該站的登入網址與此 PaaS 服務不同。]]></field>
         </record>
 
         <record id="cloud_app_mcp_nextcloud" model="woow_paas_platform.cloud_app_template">
@@ -153,8 +233,16 @@ API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開
 2. 在本服務管理介面的「Connection」填入 Nextcloud 網址、帳號及應用程式密碼。若同工作區的 Nextcloud 網址曾自動預填，換服務後仍要手動核對。
 3. 在「Tokens」產生 MCP token，用戶端以 Streamable HTTP 連到 `https://你的服務網址/private_<token>/mcp`；網址結尾不要加斜線。
 
+## 跟著做：只讓 AI 看測試資料夾
+1. 在 Nextcloud 用專用帳號建立一個測試資料夾，放一個不含敏感資料的文字檔，並產生應用程式密碼。
+2. 在 Connection 填入網址、帳號與應用程式密碼；用 Tokens 產生 MCP 連結。
+3. 從用戶端列出資料夾並讀取測試檔。確認只看得到該帳號有權限的資料，再視需要逐支啟用寫入工具。
+
 ## 權限與排查
-出廠只開放讀取工具；建立、改寫、上傳與刪除需在 Tools 逐支啟用。應用程式密碼可存取該帳號看得到的資料，MCP token 也視為密碼。若 Nextcloud 憑證錯誤，本服務會停止重試；在 Connection 存入新的應用程式密碼後再檢查狀態與「日誌」。]]></field>
+出廠只開放讀取工具；建立、改寫、上傳與刪除需在 Tools 逐支啟用。應用程式密碼可存取該帳號看得到的資料，MCP token 也視為密碼。若 Nextcloud 憑證錯誤，本服務會停止重試；在 Connection 存入新的應用程式密碼後再檢查狀態與「日誌」。
+
+## 延伸學習
+[WOOWTECH Nextcloud MCP 繁體中文說明](https://github.com/WOOWTECH/Woow_nextcloud_mcp_server/blob/main/README.zh-TW.md)介紹專用帳號與應用程式密碼；[WOOWTECH Nextcloud 檔案教學](https://nextcloud-guide.woowtech.io/ch6_files_basics.html)介紹上游檔案與分享，略過該站的 Home Assistant add-on 安裝章節。]]></field>
         </record>
 
         <record id="cloud_app_mcp_odoo" model="woow_paas_platform.cloud_app_template">
@@ -165,8 +253,16 @@ API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開
 2. 開啟本服務網址，以服務頁的管理員密碼登入 MCP 管理介面；在「Connection」填入 Odoo 連線資訊並確認狀態。
 3. 在「Tokens」建立 MCP token，將管理介面提供的端點交給支援 Streamable HTTP 的 AI 用戶端。使用 `https://你的服務網址/private_<token>/mcp` 格式時，結尾不要加斜線。
 
+## 跟著做：以最小權限查一筆資料
+1. 在 Odoo 建專用使用者，僅給它需要的公司、模組及資料存取權；在 Connection 填入該 Odoo 的連線資訊。
+2. 用 Tokens 建立一把測試用 MCP token，從用戶端選一支讀取類工具，確認能查到預期資料。
+3. 先檢查工具列表與帳號權限，再讓 AI 執行建立、修改或刪除。測試完撤銷不用的 token。
+
 ## 權限與排查
-AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先以最小權限測試需要的操作。MCP token 和完整端點 URL 都視為密碼，外洩時撤銷並重建。若連線失敗，核對 Odoo 網址、帳號權限、憑證與本服務「日誌」。服務設定保存在專屬磁碟。]]></field>
+AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先以最小權限測試需要的操作。MCP token 和完整端點 URL 都視為密碼，外洩時撤銷並重建。若連線失敗，核對 Odoo 網址、帳號權限、憑證與本服務「日誌」。服務設定保存在專屬磁碟。
+
+## 延伸學習
+[WOOWTECH Odoo MCP 管理介面說明](https://github.com/WOOWTECH/woow_odoo_mcp_server#readme)可查看 Connection、Tools 與 Tokens；操作範圍仍以你所填的 Odoo 帳號權限為準。]]></field>
         </record>
 
         <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
@@ -177,11 +273,19 @@ AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先�
 2. 建立工作流程，加入觸發器與節點，先用測試執行確認結果，再啟用需要持續運作的流程。
 3. 若要從外部程式管理流程，在 n8n 建立 API key，並只交給有權操作的人。
 
+## 跟著做：做一個可觀察的流程
+1. 新建工作流程，加入 Manual Trigger 與 Edit Fields（Set）節點，放入一筆測試資料後執行。
+2. 在執行紀錄確認每個節點的輸入與輸出，再加入真正需要的應用程式節點與專用憑證。
+3. 有排程或 Webhook 的流程必須啟用才會持續運作；上線後從執行紀錄檢查失敗情況，並匯出重要流程。
+
 ## 執行限制與資料
 此服務的 Code 節點支援 JavaScript；未部署 Python task runner，因此選 Python 會被拒絕。工作流程與憑證保存在服務磁碟；刪除前請匯出需要的工作流程，並另行備份服務資料與憑證所需的加密設定。
 
 ## 排查
-流程未觸發時，先確認工作流程已啟用，再查看 n8n 的執行紀錄與本服務「日誌」。Code 節點出現 Python execution 錯誤時改用 JavaScript 或其他已支援的節點。]]></field>
+流程未觸發時，先確認工作流程已啟用，再查看 n8n 的執行紀錄與本服務「日誌」。Code 節點出現 Python execution 錯誤時改用 JavaScript 或其他已支援的節點。
+
+## 延伸學習
+[WOOWTECH n8n 工作區教學](https://n8n-guide.woowtech.io/ch3_workspace_tour.html)：再看第一個 workflow、憑證、執行錯誤與 Webhook；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_n8n_tutorial_site)。該站的登入網址與本服務不同；若提到 Python Code node，本 PaaS 服務沒有對應 runner。]]></field>
         </record>
 
         <record id="cloud_app_nextcloud" model="woow_paas_platform.cloud_app_template">
@@ -192,8 +296,16 @@ AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先�
 2. 建立一般使用者，使用「檔案」上傳與分享；Calendar、Contacts 可透過 CalDAV／CardDAV 與裝置同步。
 3. 需要通知信時，到「管理設定 → 基本設定 → 電子郵件伺服器」填入自己的 SMTP，並發送測試信。線上共同編輯 Office 檔案另需 Collabora Online 或 ONLYOFFICE。
 
+## 跟著做：檔案分享與同步
+1. 建一個測試資料夾，上傳檔案後重新整理，確認檔案仍在。
+2. 用分享功能給另一名使用者唯讀權限，從對方帳號核對只能讀取需要的內容；不要用公開連結代替精確權限。
+3. 需要桌面或手機同步時安裝 Nextcloud 用戶端，使用專用應用程式密碼登入。大檔失敗先查分段上傳設定。
+
 ## 上傳、備份與排查
-入口單次請求上限 100 MB；瀏覽器會分段上傳，大檔若透過 WebDAV 一次送出會失敗。桌面同步程式有問題時設定較小的 chunk size。刪除服務前，各使用者應下載自己的檔案或用「帳號遷移」匯出；管理員無法代下載其他人的資料。停權或刪除後的保留期內，工作區管理者可從平台的「取回資料」取得唯讀下載網址，但不含行事曆與聯絡人。]]></field>
+入口單次請求上限 100 MB；瀏覽器會分段上傳，大檔若透過 WebDAV 一次送出會失敗。桌面同步程式有問題時設定較小的 chunk size。刪除服務前，各使用者應下載自己的檔案或用「帳號遷移」匯出；管理員無法代下載其他人的資料。停權或刪除後的保留期內，工作區管理者可從平台的「取回資料」取得唯讀下載網址，但不含行事曆與聯絡人。
+
+## 延伸學習
+[WOOWTECH Nextcloud 檔案教學](https://nextcloud-guide.woowtech.io/ch6_files_basics.html)：再看分享、桌面同步與管理；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_nextcloud_tutorial_site)。教學站的 Home Assistant add-on 安裝方式與本 PaaS 服務不同，從服務總覽開啟自己的網址。]]></field>
         </record>
 
         <record id="cloud_app_odoo" model="woow_paas_platform.cloud_app_template">
@@ -204,8 +316,16 @@ AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先�
 2. 從 Odoo 應用程式清單啟用需要的模組，例如 CRM、銷售、庫存或專案；先用少量測試資料確認流程與權限。
 3. 為同事建立個別帳號，按職務設定存取權。整合其他系統前，確認該帳號在 Odoo 中只擁有所需資料權限。
 
+## 跟著做：從模組到第一筆紀錄
+1. 先選一個實際要用的模組，例如 CRM，啟用後建立一筆測試商機。
+2. 建立一般使用者並給最小必要權限，以該帳號登入，確認能看到或編輯的紀錄符合預期。
+3. 正式匯入資料前先從測試紀錄試一次匯出和備份；不要把管理員帳號交給每位同事共用。
+
 ## 資料與排查
-重要資料請透過 Odoo 支援的匯出或備份機制另存，並在停用服務前確認可還原。登入或資料權限異常時，先檢查 Odoo 使用者、公司與存取設定，再查看本服務「日誌」。]]></field>
+重要資料請透過 Odoo 支援的匯出或備份機制另存，並在停用服務前確認可還原。登入或資料權限異常時，先檢查 Odoo 使用者、公司與存取設定，再查看本服務「日誌」。
+
+## 延伸學習
+[Odoo 官方文件](https://www.odoo.com/documentation/)可按實際啟用的模組查操作。]]></field>
         </record>
 
         <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
@@ -216,11 +336,19 @@ AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先�
 2. 要使用雲端工作機上的 AI 代理，先在服務設定填入 OpenRouter 或 Anthropic API Key，再建立新的工作階段並選擇模型。請使用可設額度上限的專用金鑰。
 3. 要接上自己的機器，在該電腦執行 `omnigent login` 與 `omnigent host`；開新工作階段時從電腦圖示選取它。
 
+## 跟著做：完成第一個工作階段
+1. 填入可設預算的模型金鑰，開新 Session 並選擇可用模型；請代理建立一個測試檔案並確認內容。
+2. 查看 Session 中的對話與檔案位置，理解對話記錄會保存，但雲端工作機內的檔案可能隨換機消失。
+3. 把測試專案推到 Git 或下載，然後才開始正式工作。若想使用自己電腦的檔案，依教學站完成 login 與 host，再從 Session 選那台電腦。
+
 ## 資料保存
 對話、設定與上傳檔案保存在服務磁碟；雲端工作機是暫時的，最長存活 7 天，維護或重新喚醒時也可能換機。請將工作機內的重要程式碼推到 Git 或下載。舊版服務升級後，建議更換曾交給工作機的模型金鑰。
 
 ## 排查
-模型選單空白時核對供應商金鑰並建立新工作階段。雲端工作機無法啟動時檢查工作區資源額度與本服務「日誌」；自己的機器不在清單時核對是否以同一帳號登入。]]></field>
+模型選單空白時核對供應商金鑰並建立新工作階段。雲端工作機無法啟動時檢查工作區資源額度與本服務「日誌」；自己的機器不在清單時核對是否以同一帳號登入。
+
+## 延伸學習
+[WOOWTECH Omnigent 完整教學](https://omnigent-guide.woowtech.io/tutorial.html)：先看首次登入、第一個 Session、模型與自有工作機；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_omnigent_tutorial_site)。自行部署章節與本 PaaS 服務的開通方式不同。]]></field>
         </record>
 
         <record id="cloud_app_opendesign" model="woow_paas_platform.cloud_app_template">
@@ -231,11 +359,19 @@ AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先�
 2. 要使用內建 AI 代理，可在 console 執行 `claude login`，或在服務設定提供所需模型金鑰。
 3. 需要 MCP 時，在 `https://你的服務網址/mcp-admin/` 管理金鑰與工具。一般用戶端連 `/mcp` 並附 `Authorization: Bearer <金鑰>`；Claude.ai 可用 `/private_<金鑰>/mcp`。
 
+## 跟著做：完成第一份設計
+1. 登入後設定模型金鑰，建立測試專案，描述畫面用途、受眾與尺寸，讓代理產生第一版。
+2. 逐項提出修改要求，確認每一版的差異；完成後從匯出功能取得交付檔案。
+3. 需要把設計流程接給 AI 用戶端時才到 /mcp-admin/ 產生專用金鑰，測完即檢查工具權限與用量。
+
 ## 權限與資料
 MCP 內有可建立專案、呼叫 AI 代理的工具，啟用前確認模型額度；在管理頁停用不需要的工具並定期輪替金鑰。若對服務網址啟用 Cloudflare Access，外部 MCP 用戶端需要為 `/mcp` 與 `/private_*/mcp` 設定例外。console 的登入態與設定保存在服務磁碟；刪除服務後重新開通不會沿用它們。
 
 ## 排查
-MCP 連不上時先檢查金鑰、端點、Access 規則與本服務「日誌」。模型無法啟動時核對 console 登入態或模型金鑰。]]></field>
+MCP 連不上時先檢查金鑰、端點、Access 規則與本服務「日誌」。模型無法啟動時核對 console 登入態或模型金鑰。
+
+## 延伸學習
+[WOOWTECH Open Design 完整教學](https://opendesign-guide.woowtech.io/tutorial.html)：先看模型金鑰、第一份設計、迭代與 MCP；[GitHub 教學原始碼](https://github.com/WOOWTECH/Woow_opendesign_tutorial_site)。自行部署章節與本 PaaS 服務不同。]]></field>
         </record>
 
         <record id="cloud_app_pi_agent" model="woow_paas_platform.cloud_app_template">
@@ -246,11 +382,19 @@ MCP 連不上時先檢查金鑰、端點、Access 規則與本服務「日誌」
 2. 在 pi-web 的 Models 頁新增模型供應商並填入自己的 API Key；未設定金鑰時無法使用對應模型。
 3. 在對話介面處理專案，或使用內建終端機執行 `pi`、安裝套件及管理 Skills。需要自訂 Skill 時，在適當目錄放入 `SKILL.md`。
 
+## 跟著做：完成一個小任務
+1. 在 Models 頁填入有額度限制的供應商金鑰，選一個可用模型。
+2. 請 pi 建立一個測試文字檔，再從檔案介面或終端機確認結果；必要時要求它修正，自己審閱差異。
+3. 要重複同一套做法時才新增 Skill，先用最小範圍測試。重要檔案推到 Git 或自行下載；此 PaaS 版本未包含影片工具鏈。
+
 ## 帳密與資料
 帳號與密碼可從服務頁「Admin Credentials」修改，修改後服務短暫重啟。專案檔案與模型設定在持久磁碟上；重要程式碼仍應推到 Git 或另行下載。API Key 由服務保存，請使用可撤銷、設有額度上限的專用金鑰。
 
 ## 排查
-登入失敗時確認是否剛重設帳密、服務是否已恢復。模型無法使用時核對 Models 頁的供應商設定與額度，再看本服務「日誌」。]]></field>
+登入失敗時確認是否剛重設帳密、服務是否已恢復。模型無法使用時核對 Models 頁的供應商設定與額度，再看本服務「日誌」。
+
+## 延伸學習
+[WOOWTECH PaaS pi-agent 套件說明](https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme)偏技術實作；[HA Pi Agent 教學的 Skill 章節](https://pi-agent-guide.woowtech.io/ch14_skill_concept.html)只可作概念參考，安裝畫面和影片功能與此 PaaS 版本不同。]]></field>
         </record>
 
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
@@ -261,11 +405,19 @@ MCP 連不上時先檢查金鑰、端點、Access 規則與本服務「日誌」
 2. 以 auth key 登入 tailnet，或開啟節點網頁介面完成互動登入。登入成功後可清空配置中的 auth key；若選同工作區 Headscale，tag 應設定在 pre-auth key，節點的「標籤 tags」欄位留空。
 3. 在轉發清單填 `tailnet 埠=服務名稱:埠`，例如 `8069=svc-1a2b3c4d:80`；僅支援同工作區服務。到「VPN 節點狀態」檢查每條轉發是否生效。
 
+## 跟著做：從 tailnet 存取同工作區服務
+1. 選定控制平面並讓節點登入；到「VPN 節點狀態」確認在線及 tailnet 位址。
+2. 填入一條轉發，例如 8069=svc-1a2b3c4d:80，服務名稱要換成同工作區目標服務的 Helm Release。
+3. 從另一台已加入同一 tailnet 的裝置連線到節點位址與該埠，並在「VPN 節點狀態」確認轉發生效。若不通，先查略過原因、控制台 ACL 與目標服務狀態。
+
 ## 變更與限制
 更換控制平面或網址會讓節點以新身分加入，新舊節點需在控制台分別管理。本服務不提供出口節點、子網路由、Tailscale SSH 或 Funnel；連線可能經 DERP 中繼。節點身分保存在持久磁碟，刪除服務後重新開通須重新登入。
 
 ## 排查
-登入失敗時檢查控制平面網址、auth key 與 Headscale 服務狀態。轉發失敗時確認目標服務屬於同一工作區，並查看「VPN 節點狀態」與本服務「日誌」。]]></field>
+登入失敗時檢查控制平面網址、auth key 與 Headscale 服務狀態。轉發失敗時確認目標服務屬於同一工作區，並查看「VPN 節點狀態」與本服務「日誌」。
+
+## 延伸學習
+[WOOWTECH PaaS Tailscale 節點繁體中文說明](https://github.com/WOOWTECH/Woow_k3s_vpn_tailscale_package/blob/main/README_zh-TW.md)對應此服務的控制平面與轉發方式；Home Assistant Tailscale add-on 教學不適用此 PaaS 節點。]]></field>
         </record>
     </data>
 </odoo>
