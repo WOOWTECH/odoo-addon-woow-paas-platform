@@ -338,5 +338,9 @@ related:
 
 - [x] 2026-10-19: audited latest develop (#1839/#1847/#1848/#1849), existing free-key foundation, UI skeleton, fake client, and LLM-08 reauth dependency.
 - [x] 2026-10-19: created isolated local worktree `feat/llm-07-paid-key-management-1019` from `9650d6fd`.
-- [ ] LLM-08 reauth is merged/rebased into this branch base.
+- [x] 2026-10-19: rebased onto `origin/develop` `87695e58`, including #1871 / `7d422d8f` and the N25 reauth model, route, and registered tests.
+- [x] Task 1: `llm_reauth` focused run in `dev-sandbox-llmdev` selected 16 tests and exited 0 (no `-u`, no shared-demo deployment).
+- [x] Task 4 implementation: added closed paid-create validation, cache-only default-model allowlists, terms/N25 ordering, one-time reveal reuse, and an independent-cursor 20-key race guard; free and paid creation now share the durable create/reveal transaction.
+- [x] Task 4 static evidence: `py_compile`, `git diff --check`, C2 collection audit (1,242 entries), and pure new-api transport tests (86 tests) passed.
+- [ ] Task 4 focused Odoo class remains pending a branch candidate image for the already-authorized isolated `llmdev` sandbox; no branch push or deployment has been performed.
 - [ ] Tasks 2–11 complete with recorded verification evidence.

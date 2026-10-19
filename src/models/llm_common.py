@@ -148,6 +148,10 @@ ERR_LLM_FREE_CAPPED_TODAY = 'llm_free_capped_today'
 ERR_LLM_FREE_KEY_DAILY_LIMIT = 'llm_free_key_daily_limit'
 ERR_LLM_KEY_ALREADY_SHOWN = 'llm_key_already_shown'
 ERR_LLM_KEY_INVALID = 'llm_key_invalid'
+#: LLM-07 management operations only expose a PaaS mirror id, never an upstream token id/name.
+ERR_LLM_KEY_NOT_FOUND = 'llm_key_not_found'
+ERR_LLM_KEY_LIMIT_BELOW_USED = 'llm_key_limit_below_used'
+ERR_LLM_KEY_CANNOT_ENABLE = 'llm_key_cannot_enable'
 #: 開戶失敗（``state=error``）的帳戶操作建金鑰時。DESIGN 的碼表沒有這一格：error 狀態在
 #: §6.2 只有畫面，沒有 API 錯誤碼；沿用 ``llm_unavailable`` 會讓前端以為只是暫時連不上。
 ERR_LLM_ACCOUNT_ERROR = 'llm_account_error'

@@ -41,8 +41,11 @@ from ..models.llm_common import (
     ERR_LLM_INTERNAL,
     ERR_LLM_INVALID_REQUEST,
     ERR_LLM_KEY_ALREADY_SHOWN,
+    ERR_LLM_KEY_CANNOT_ENABLE,
     ERR_LLM_KEY_INVALID,
     ERR_LLM_KEY_LIMIT,
+    ERR_LLM_KEY_LIMIT_BELOW_USED,
+    ERR_LLM_KEY_NOT_FOUND,
     ERR_LLM_NOT_ACTIVATED,
     ERR_LLM_NO_REFUND_ACK_REQUIRED,
     ERR_LLM_ORDER_NOT_FOUND,
@@ -71,8 +74,12 @@ KEY_MODEL = 'woow_paas_platform.llm_api_key'
 ORDER_MODEL = 'woow_paas_platform.llm_credit_order'
 TERMS_MODEL = 'woow_paas_platform.llm_terms'
 #: 錯誤回應可以帶的參數欄位（只放數字與固定字串，前端用來組句）。
-_SAFE_PARAMS = frozenset({'retry_after', 'current_version', 'max_keys', 'field',
-                          'needed_7d', 'short_by'})
+_SAFE_PARAMS = frozenset({
+    'retry_after', 'current_version', 'max_keys', 'field',
+    'needed_7d', 'short_by',
+    # LLM-07：都是 closed code／integer；不可把 key label、model list 或 upstream body 帶出來。
+    'reason', 'used',
+})
 
 
 def _message(code: str) -> str:
@@ -112,6 +119,12 @@ def _message(code: str) -> str:
                  'Please delete it and create a new one.')
     if code == ERR_LLM_KEY_INVALID:
         return _('The key settings are invalid.')
+    if code == ERR_LLM_KEY_NOT_FOUND:
+        return _('This key could not be found.')
+    if code == ERR_LLM_KEY_LIMIT_BELOW_USED:
+        return _('The total limit cannot be lower than what this key has already used.')
+    if code == ERR_LLM_KEY_CANNOT_ENABLE:
+        return _('This key cannot be enabled right now.')
     if code == ERR_LLM_UNAVAILABLE:
         return _('The AI models service is temporarily unavailable. Please try again later.')
     if code == ERR_LLM_AUTH_REQUIRED:
