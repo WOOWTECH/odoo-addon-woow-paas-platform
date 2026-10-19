@@ -447,6 +447,11 @@ class HAIntegrationController(Controller):
         if denied:
             return denied
 
+        sub = home.sudo().subscription_id
+        if sub and sub._woow_trial_expired():
+            return _json_error('trial_expired',
+                               '七天試用已結束，請到 woowtech 選擇付費方案。', 409)
+
         # 綁定閘在**發權杖之前**（#1766）：claim 失敗就不該有權杖出門。claim 成功
         # 但 HTTP 回應在路上丟掉沒關係——同一個 uid 再問一次是冪等的。
         conflict = _claim_binding(home, kwargs)

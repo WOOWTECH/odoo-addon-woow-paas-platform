@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="ir_cron_ha_onboarding_setup" model="ir.cron">
+            <field name="name">woowtech：Home Assistant 連線開通</field>
+            <field name="model_id" ref="model_woow_paas_platform_smart_home"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_ha_setup()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_smart_home_trial_lifecycle" model="ir.cron">
+            <field name="name">woowtech：智慧家庭試用到期與付費復權</field>
+            <field name="model_id" ref="model_woow_paas_platform_smart_home"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_ha_trial_lifecycle()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

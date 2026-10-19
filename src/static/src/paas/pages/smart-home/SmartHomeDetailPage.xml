@@ -82,7 +82,7 @@
                             <span t-esc="state.provisionError"/>
                         </div>
                         <WoowButton
-                            t-if="isTrialActive"
+                            t-if="isTrialActive and !requiresPaidActivation"
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showSkipTrial">
@@ -113,8 +113,9 @@
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showChangePlan">
-                            <WoowIcon name="'swap_horiz'" size="18"/>
-                            Change Plan
+                            <WoowIcon name="'mdi-swap-horizontal'" size="18"/>
+                            <t t-if="requiresPaidActivation">選擇付費方案</t>
+                            <t t-else="">變更方案</t>
                         </WoowButton>
                         <WoowButton
                             variant="'danger'"
@@ -139,6 +140,15 @@
                      骨架抄 ServiceDetailPage：header／modal 留在頁籤外（切到
                      Access 仍看得到自己在哪一台、仍按得到那幾顆動作），只有分頁
                      內容跟著切。 -->
+                <div t-if="requiresPaidActivation" class="o_woow_trial_activation" role="status">
+                    <WoowIcon name="'mdi-calendar-clock-outline'" size="24"/>
+                    <div>
+                        <strong t-if="subscription.trial_expired">七天試用已結束</strong>
+                        <strong t-else="">七天免費試用</strong>
+                        <p t-if="subscription.trial_expired">服務已到期暫停。選擇付費方案並完成付款後，即可繼續使用。</p>
+                        <p t-else="">試用至 <t t-esc="formatDate(subscription.trial_end_date)"/>。到期後暫停服務，不會自動收費；你可以隨時選擇付費方案。</p>
+                    </div>
+                </div>
                 <div class="o_woow_tabs">
                     <button
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'overview'}"
@@ -208,7 +218,8 @@
                                 <span>Next Payment</span>
                             </div>
                             <div class="o_woow_tunnel_info_value">
-                                <span t-esc="formatDate(subscription.next_payment)"/>
+                                <span t-if="requiresPaidActivation">選擇付費方案後才開始計費</span>
+                                <span t-else="" t-esc="formatDate(subscription.next_payment)"/>
                             </div>
                         </div>
                     </div>
@@ -256,32 +267,43 @@
                 <!-- Connection Guide Section -->
                 <WoowCard shadow="true" class="'o_woow_connection_guide'">
                     <div class="o_woow_connection_guide_header">
-                        <WoowIcon name="'help'" size="24"/>
-                        <h2>Connection Guide</h2>
+                        <WoowIcon name="'mdi-home-assistant'" size="24"/>
+                        <h2>連結 Home Assistant</h2>
                     </div>
+                    <p class="o_woow_guide_intro">從 Home Assistant 完成授權與服務選擇，woowtech 會自動設定連線。</p>
                     <div class="o_woow_connection_guide_content">
                         <div class="o_woow_guide_step">
-                            <div class="o_woow_guide_step_number">1</div>
+                            <div class="o_woow_guide_step_number"><WoowIcon name="'mdi-puzzle-outline'" size="22"/></div>
                             <div class="o_woow_guide_step_content">
-                                <h4>Install the Connector</h4>
-                                <p>Download and install the Woow Connector on your Home Assistant device.</p>
+                                <h4>1. 安裝整合並選擇服務</h4>
+                                <p>在 Home Assistant 安裝 PaaS Smart Home 整合，再到「設定 → 裝置與服務 → 新增整合」。選擇「遠端存取」或「遠端存取＋MCP」。</p>
                             </div>
                         </div>
                         <div class="o_woow_guide_step">
-                            <div class="o_woow_guide_step_number">2</div>
+                            <div class="o_woow_guide_step_number"><WoowIcon name="'mdi-account-check-outline'" size="22"/></div>
                             <div class="o_woow_guide_step_content">
-                                <h4>Configure the Tunnel</h4>
-                                <p>Enter the Tunnel ID and credentials from above into the connector settings.</p>
+                                <h4>2. 登入 woowtech 並允許連結</h4>
+                                <p>在授權頁登入你的帳號，閱讀權限後按「允許」。若使用 Home Assistant App，依畫面指示開啟授權網址並輸入代碼，完成後回到 App。</p>
                             </div>
                         </div>
                         <div class="o_woow_guide_step">
-                            <div class="o_woow_guide_step_number">3</div>
+                            <div class="o_woow_guide_step_number"><WoowIcon name="'mdi-home-group'" size="22"/></div>
                             <div class="o_woow_guide_step_content">
-                                <h4>Access Remotely</h4>
-                                <p>Once connected, access your Home Assistant from anywhere via the route URL above.</p>
+                                <h4>3. 選擇工作區與對應服務</h4>
+                                <p>有多個工作區時先選工作區，再從相應類型的服務中選擇。只有一個選項時會自動帶入。沒有工作區會建立「我的智慧家庭」；選定工作區中缺少服務時會自動建立，開啟七天試用。</p>
+                                <p>若要連結這個服務，請選擇「<t t-esc="home.name"/>」。已綁定其他 HA 的服務需要先解除原本的綁定。</p>
+                            </div>
+                        </div>
+                        <div class="o_woow_guide_step">
+                            <div class="o_woow_guide_step_number"><WoowIcon name="'mdi-cloud-check-outline'" size="22"/></div>
+                            <div class="o_woow_guide_step_content">
+                                <h4>4. 等待開通並確認連線</h4>
+                                <p>保留 HA 的設定畫面，等待服務準備完成，再完成裝置名稱與分區設定。回到這一頁重新整理連線狀態，確認已連線後，開啟上方的遠端網址。</p>
+                                <p>「遠端存取＋MCP」還需要在 HA 安裝並啟用 ha_mcp_tools，才能提供 MCP 工具。</p>
                             </div>
                         </div>
                     </div>
+                    <p class="o_woow_guide_trial_note"><WoowIcon name="'mdi-calendar-check-outline'" size="20"/>新建服務有七天試用；到期暫停，主動選擇付費方案後才續用。既有服務沿用原本的訂閱狀態。</p>
                 </WoowCard>
                 </t>
 
@@ -316,6 +338,7 @@
                 t-if="state.showChangePlanModal and home"
                 service="home"
                 currentPlanId="home.subscription?.plan_id ?? undefined"
+                activatingTrial="requiresPaidActivation"
                 loadPlans="loadSmartHomePlans"
                 confirmChange="confirmSmartHomeChangePlan"
                 estimateChange="estimateSmartHomeChangePlan"

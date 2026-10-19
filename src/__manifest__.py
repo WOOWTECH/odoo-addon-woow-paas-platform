@@ -101,6 +101,8 @@
         "views/paas_app.xml",
         "views/portal_templates.xml",
         "views/oauth2_templates.xml",
+        "views/connect_login.xml",
+        "data/smart_home_onboarding.xml",
         "views/oauth_client_views.xml",
         "data/oauth_clients.xml",
         "data/oauth_scope_updates.xml",

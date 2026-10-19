@@ -268,6 +268,7 @@ export class SmartHomeDetailPage extends Component {
      * `active`／`suspended` 後端一律拒絕，顯示按鈕只會換來一句錯誤。
      */
     get canRetrySetup() {
+        if (this.subscription?.trial_expired || this.home?.setup_requested) return false;
         if (this.home?.provision_operation &&
             this.home.provision_operation.retry_allowed !== true) return false;
         return ["pending", "error"].includes(this.home?.state);
@@ -475,6 +476,10 @@ export class SmartHomeDetailPage extends Component {
 
     get isTrialActive() {
         return !!(this.subscription && this.subscription.is_trial);
+    }
+
+    get requiresPaidActivation() {
+        return !!this.subscription?.requires_paid_activation;
     }
 
     get formattedPlanPrice() {

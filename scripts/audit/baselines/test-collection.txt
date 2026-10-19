@@ -384,6 +384,7 @@
 6	test_ha_full_seed_661.TestHaFullPlansSeed
 3	test_ha_full_seed_661.TestHaFullQuotaLockstep
 15	test_ha_full_seed_661.TestHaFullSeed661
+17	test_ha_onboarding.TestHAOnboarding
 16	test_ha_paas_provision.TestHAPaaSProvisionEndpoint
 3	test_ha_paas_provision.TestProvisionUniqueIndex
 10	test_ha_paas_seed_woowtech_image.TestHAPaaSWoowtechImageSeed
