@@ -5652,6 +5652,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('PaaS Operator not configured. Cannot safely delete service without cleaning up Kubernetes resources. Contact administrator.'),
             }
 
+        # RACE-09: take the row lock before any external helm side effect so a
+        # concurrent deploy cron cannot install while this delete uninstalls.
+        if not service._try_lock_lifecycle_rows():
+            return {'success': False, 'error': _(
+                'Another operation on this service is in progress. '
+                'Please retry shortly.')}
         try:
             service.write({'state': 'deleting'})
 

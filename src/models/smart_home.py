@@ -3,6 +3,8 @@ import logging
 import re
 import uuid
 
+import psycopg2.errors
+
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
@@ -647,6 +649,37 @@ class SmartHome(models.Model):
                 failed.append(info['label'])
         return failed
 
+    def _try_lock_lifecycle_rows(self):
+        """RACE-09: NOWAIT row lock before any external lifecycle side effect.
+
+        ORM writes stay buffered while an external request is in flight, so
+        ``state='provisioning'`` alone does not serialize a concurrent delete.
+        """
+        ids = tuple(sorted(set(self.ids)))
+        if not ids:
+            return True
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    'SELECT id FROM %s WHERE id IN %%s '
+                    'ORDER BY id FOR UPDATE NOWAIT' % self._table, [ids])
+                locked = {row[0] for row in self.env.cr.fetchall()}
+        except (psycopg2.errors.LockNotAvailable,
+                psycopg2.errors.SerializationFailure):
+            return False
+        if locked != set(ids):
+            raise UserError(_('One or more Smart Home records no longer exist.'))
+        fields_ = ['state', 'error_message', 'tunnel_id', 'tunnel_name']
+        self.flush_recordset(fields_)
+        self.invalidate_recordset(fields_)
+        return True
+
+    def _lock_lifecycle_or_raise(self):
+        if not self._try_lock_lifecycle_rows():
+            raise UserError(_(
+                'Another Smart Home lifecycle operation is in progress. '
+                'Please retry when it finishes.'))
+
     def action_provision(self):
         """Provision the smart home by creating a dedicated Cloudflare Tunnel.
 
@@ -692,6 +725,7 @@ class SmartHome(models.Model):
         provision，修前同樣會建第二條 tunnel 並蓋掉 ``tunnel_id``。同一道 guard 一併關掉。
         """
         self.ensure_one()
+        self._lock_lifecycle_or_raise()
 
         # stored-id guard —— 必須在任何 write 之前（含 state='provisioning'），
         # 否則被拒的重試會把記錄推離原本的 state 卻什麼也沒做成。
@@ -1072,6 +1106,7 @@ class SmartHome(models.Model):
         """
         self.ensure_one()
         self._assert_unlink_authorized()
+        self._lock_lifecycle_or_raise()
         if self.tunnel_id:
             self.write({'state': 'deleting'})
         self.unlink()
