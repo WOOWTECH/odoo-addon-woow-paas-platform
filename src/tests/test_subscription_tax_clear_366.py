@@ -23,6 +23,13 @@ from odoo.tests.common import TransactionCase, tagged
 
 MOD = 'woow_paas_platform'
 
+# D13: this is an internal accounting line for wallet-to-credit conversion,
+# rather than a tenant-purchasable subscription plan.  Keep the exception
+# explicit so a future subscription seed cannot silently evade the tax guard.
+_NON_SUBSCRIPTION_SEED_PRODUCT_XMLIDS = frozenset((
+    'product_llm_credit',
+))
+
 
 def _paas_subscription_products(env):
     """PaaS seed 出的訂閱 product（xmlid 定位，module=woow_paas_platform、
@@ -90,10 +97,16 @@ class TestSeedProductCorpusIntact(TransactionCase):
             'ir.model.data 指向已不存在的 product（seed 被刪）：%s' % dangling)
 
         products = alive.filtered('sh_product_subscribe')
+        non_subscription = alive - products
+        non_subscription_xmlids = set(imd.filtered(
+            lambda row: row.res_id in non_subscription.ids).mapped('name'))
         self.assertEqual(
-            len(products), len(alive),
-            '每個 seed product 都應是訂閱 product，否則會靜默退出全庫稅務檢查；'
-            '漏網 %s' % (alive - products).mapped('name'))
+            non_subscription_xmlids,
+            _NON_SUBSCRIPTION_SEED_PRODUCT_XMLIDS,
+            '除明列內部商品外，每個 seed product 都應是訂閱 product，否則會靜默'
+            '退出全庫稅務檢查；實際非訂閱 xmlid=%s，預期=%s' % (
+                sorted(non_subscription_xmlids),
+                sorted(_NON_SUBSCRIPTION_SEED_PRODUCT_XMLIDS)))
 
         self.assertEqual(
             set(products.ids), set(_paas_subscription_products(self.env).ids),
