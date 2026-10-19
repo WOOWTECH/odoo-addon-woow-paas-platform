@@ -90,6 +90,9 @@ class HAOnboardingController(Controller):
         if workspace_id is not None and (
                 type(workspace_id) is not int or not 0 < workspace_id <= 2147483647):
             return _json_error('invalid_workspace', '工作區無效。')
+        ha_port = payload.get('ha_port', 8123)
+        if type(ha_port) is not int or not 1 <= ha_port <= 65535:
+            return _json_error('invalid_ha_port', 'Home Assistant 連接埠無效。')
         # auth='none' must acquire the token principal before creating records.
         request.update_env(user=user.id, context={'lang': 'zh_TW'})
         capability = _capability(user)
@@ -139,7 +142,7 @@ class HAOnboardingController(Controller):
                 # gate; factory keeps the existing template, plan, order and
                 # subscription guards. No caller context/plan/name is forwarded.
                 made = SmartHomeController()._create_smarthome(
-                    workspace.sudo(), f'我的智慧家庭・{label}', 8123,
+                    workspace.sudo(), f'我的智慧家庭・{label}', ha_port,
                     plan.id, template.id, trial_only=True, onboarding_key=key)
                 if not made.get('success'):
                     raise UserError(made.get('error') or '無法建立試用服務。')

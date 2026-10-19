@@ -68,6 +68,7 @@ class TestHAOnboarding(HttpCase):
         home = self._create()
         self.assertEqual(home.workspace_id.owner_id, self.user)
         self.assertEqual(home.workspace_id.name, '我的智慧家庭')
+        self.assertEqual(home.ha_port, 8123)
         sub = home.subscription_id
         self.assertTrue(sub.woow_trial_only)
         self.assertTrue(sub.sh_trial)
@@ -85,6 +86,25 @@ class TestHAOnboarding(HttpCase):
         self.assertTrue(home.subscription_id.sh_subscription_plan_id.mcp_integration)
         self.assertEqual(self._options('remote_access', home.workspace_id).json()['homes'], [])
         self.assertEqual(self._options('remote_access_mcp', home.workspace_id).json()['homes'][0]['id'], home.id)
+
+    def test_new_service_uses_ha_port_without_reconfiguring_existing_service(self):
+        response = self._post({'service_kind': 'remote_access', 'ha_port': 18243})
+        self.assertEqual(response.status_code, 202, response.text)
+        home = self.Home.browse(response.json()['homes'][0]['id'])
+        self.assertEqual(home.ha_port, 18243)
+        response = self._post({'service_kind': 'remote_access',
+                               'workspace_id': home.workspace_id.id, 'ha_port': 80})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()['created'])
+        home.invalidate_recordset()
+        self.assertEqual(home.ha_port, 18243)
+
+    def test_invalid_ha_ports_leave_no_workspace(self):
+        for port in [None, False, 0, -1, 65536, '8123', 3.2, []]:
+            response = self._post({'service_kind': 'remote_access', 'ha_port': port})
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(response.json()['error'], 'invalid_ha_port')
+        self.assertFalse(self.Workspace.search([('owner_id', '=', self.user.id)]))
 
     def test_existing_workspace_gets_only_missing_service(self):
         ws = self.Workspace.create({'name': 'existing', 'owner_id': self.user.id})
