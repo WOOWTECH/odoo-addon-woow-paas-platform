@@ -14603,6 +14603,7 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_account__state
 msgid "State"
 msgstr "狀態"
 
@@ -21317,6 +21318,7 @@ msgstr "通知（%(count)s 則未讀）"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__account_id
 msgid "Account"
 msgstr "帳號"
 
@@ -26133,3 +26135,361 @@ msgstr "上次連線測試結果"
 #: model:ir.ui.menu,name:woow_paas_platform.menu_llm_runtime_state
 msgid "Connection status"
 msgstr "連線狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Text"
+msgstr "文字"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Vision"
+msgstr "視覺"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Reasoning"
+msgstr "推理"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Tool use"
+msgstr "工具呼叫"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Embeddings"
+msgstr "向量嵌入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Images"
+msgstr "圖片"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Audio"
+msgstr "語音"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Not specified"
+msgstr "未提供"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Usage-based pricing"
+msgstr "依用量計價"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "%(points)s points per call"
+msgstr "每次 %(points)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Model ID"
+msgstr "模型 ID"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Capabilities"
+msgstr "能力"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Output"
+msgstr "輸出"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Cache read"
+msgstr "快取讀取"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Cache write"
+msgstr "快取寫入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Loading model prices…"
+msgstr "正在讀取模型價格…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Models and prices are unavailable right now. Please try again later."
+msgstr "目前無法取得模型與價格，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "No models match your search or capability filter."
+msgstr "沒有符合搜尋或能力篩選的模型。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "10 requests per minute, about 200 per day (resets at 00:00 Taipei time). Free trial keys only; capacity may change."
+msgstr "每分鐘 10 次、每天約 200 次（台北時間 00:00 重置），僅限免費試用金鑰；容量可能調整。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Prices are in points per million tokens. 1 point = NT$1 (tax included). Price increases will be announced 7 days in advance."
+msgstr "價格以點／百萬 tokens 計，1 點＝NT$1（含稅）。漲價會在 7 天前公告。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "A dash means no separate price is published. For Claude usage, when the upstream reports 1-hour cache-creation tokens, cache writes are billed at 1.6× the displayed cache-write rate."
+msgstr "「—」代表未提供獨立價格。Claude 用量若由上游回報 1 小時快取寫入 tokens，該寫入費率為畫面所列快取寫入價格的 1.6 倍。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Copy model ID"
+msgstr "複製模型 ID"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Copied model ID: %(model)s"
+msgstr "已複製模型 ID：%(model)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Copy failed. Please select and copy the model ID."
+msgstr "複製失敗，請選取並複製模型 ID。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Search models"
+msgstr "搜尋模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Model ID or provider"
+msgstr "模型 ID 或供應商"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "All capabilities"
+msgstr "全部能力"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Models and prices"
+msgstr "模型與價格"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Call AI models with your credit"
+msgstr "用點數呼叫 AI 模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Input / output points per million tokens"
+msgstr "輸入／輸出價格（點／百萬 tokens）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Prices are temporarily unavailable. You can view Models & Pricing after activation."
+msgstr "價格暫時無法顯示，開通後可在「模型與價格」查看。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Data as of %(time)s"
+msgstr "資料時間 %(time)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Today's free trial is used up. Restores automatically at 00:00 Taipei time."
+msgstr "今日免費試用已用完，台北時間 00:00 自動恢復。"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_free_usage
+msgid "AI Models Free Trial Daily Usage"
+msgstr "AI 模型免費試用每日用量"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_free_log_receipt
+msgid "AI Models Free Trial Log Receipt"
+msgstr "AI 模型免費試用日誌收據"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_usage_account_day_uniq
+msgid "One free trial counter per day."
+msgstr "每天只能有一筆免費試用計數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_usage_counts_nonnegative
+msgid "Free trial counters cannot be negative."
+msgstr "免費試用計數不能為負數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_log_receipt_log_uniq
+msgid "Log already metered."
+msgstr "這筆日誌已計入用量。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Free trial usage is maintained by the platform."
+msgstr "免費試用用量由平台維護。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Only administrators can request the free trial fallback."
+msgstr "只有系統管理員可以要求免費試用備援操作。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Break-glass request queued for one attempt. If it fails, confirm break-glass is enabled and press the button again."
+msgstr "已排入一次 break-glass 操作。若失敗，請確認 break-glass 已啟用後再按一次按鈕。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__day_tpe
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_log_receipt__day_tpe
+msgid "Day Tpe"
+msgstr "台北日期"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__success_count
+msgid "Success Count"
+msgstr "成功呼叫次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__trial_keys_created
+msgid "Trial Keys Created"
+msgstr "已建立試用金鑰數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__capped_at
+msgid "Capped At"
+msgstr "達上限時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_log_receipt__newapi_log_id
+msgid "Newapi Log"
+msgstr "new-api 日誌 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_capped_day
+msgid "Free Capped Day"
+msgstr "免費試用封鎖日期"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_cap_attempted_at
+msgid "Free Cap Attempted At"
+msgstr "免費試用封鎖嘗試時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_cap_pending
+msgid "Free Cap Pending"
+msgstr "免費試用封鎖待確認"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_log_id
+msgid "Free Meter Last Log"
+msgstr "免費試用計量最後日誌 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_ts
+msgid "Free Meter Last Ts"
+msgstr "免費試用計量最後時間戳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_ts
+msgid "Unix seconds of the last free-usage log read."
+msgstr "上次讀取免費試用日誌的 Unix 秒數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_start
+msgid "Free Meter Scan Start"
+msgstr "免費試用計量掃描起點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_end
+msgid "Free Meter Scan End"
+msgstr "免費試用計量掃描終點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_page
+msgid "Free Meter Scan Page"
+msgstr "免費試用計量掃描頁數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_max_id
+msgid "Free Meter Scan Max"
+msgstr "免費試用計量掃描最大 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_account__free_group_requested
+msgid "Free Group Requested"
+msgstr "待執行群組操作"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_account__free_group_requested__free_blocked
+msgid "Block free trial"
+msgstr "封鎖免費試用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_account__free_group_requested__default
+msgid "Restore default group"
+msgstr "還原預設群組"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Block free trial (break-glass)"
+msgstr "封鎖免費試用（break-glass）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Restore default group (break-glass)"
+msgstr "還原預設群組（break-glass）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Have the proxy owner enable break-glass before continuing. This makes one attempt to block the free trial group; if it fails, check the alert and press this button again."
+msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試封鎖免費試用群組一次；若失敗，請查看告警並再按此按鈕。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Have the proxy owner enable break-glass before continuing. This makes one attempt to restore the default group; if it fails, check the alert and press this button again."
+msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試還原預設群組一次；若失敗，請查看告警並再按此按鈕。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.act_window,name:woow_paas_platform.action_llm_free_fallback
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_free_fallback
+msgid "Free trial fallback"
+msgstr "免費試用備援"

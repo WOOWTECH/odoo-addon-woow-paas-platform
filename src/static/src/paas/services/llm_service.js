@@ -106,6 +106,21 @@ export const llmService = reactive({
   usage: null,
   usageError: null,
 
+  models: null,
+  modelsLoaded: false,
+  modelsRequest: 0,
+
+  async fetchModels() {
+    const request = ++this.modelsRequest;
+    const result = await call("/api/llm/models", {});
+    if (request !== this.modelsRequest) return result;
+    // Pricing failure clears old rates; history's SWR policy does not apply to tariffs.
+    this.models = result.success && result.data && result.data.state === "ok"
+      && Array.isArray(result.data.items) ? result.data : { items: [], state: "maintenance" };
+    this.modelsLoaded = true;
+    return result;
+  },
+
   async fetchState() {
     const result = await call("/api/llm/state", {});
     if (result.success) {

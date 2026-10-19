@@ -186,11 +186,12 @@ class FakeNewApi:
         return self._leave('ap_health', self._ok({'items': [], 'total': 0}))
 
     def ap_pricing(self, **kw):
-        """``GET /api/pricing``（SWR 的價目快取，LLM-02；DTO 在 LLM-06）。"""
+        """``GET /api/pricing``: preserve public envelope metadata (LLM-06)."""
         self._enter('ap_pricing')
-        return self._leave('ap_pricing', self._ok([
-            {'model_name': 'qwen3-4b-cluster1', 'enable_groups': ['free'], 'model_ratio': 0},
-        ]))
+        return self._leave('ap_pricing', self._ok({
+            'data': [{'model_name': 'qwen3-4b-cluster1', 'enable_groups': ['free'], 'model_ratio': 0}],
+            'group_ratio': {'default': 1.3, 'free': 0}, 'vendors': [],
+        }))
 
     def ap_get_user(self, user_id, **kw):
         self._enter('ap_get_user')

@@ -9,6 +9,7 @@ import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
 import { LlmTermsModal } from "../../../components/llm/LlmTermsModal";
 import { llmService } from "../../../services/llm_service";
 import { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } from "../../../services/llm_errors";
+import { representativeModels } from "./LlmModelsTab";
 import { copyText } from "../../../utils/clipboard";
 import {
   formatAiQuota,
@@ -198,6 +199,7 @@ export class LlmOverviewTab extends Component {
     onMounted(() => {
       document.addEventListener("visibilitychange", this.onVisibilityChange);
       this.load();
+      llmService.fetchModels();
     });
     onWillUnmount(() => {
       this.alive = false;
@@ -350,16 +352,22 @@ export class LlmOverviewTab extends Component {
 
   // 文案放在 JS（單行 _t）：模板的多行文字節點會把換行與縮排一起抽進 msgid。
   get heroTitle() {
-    return _t("Call 40+ AI models with your credit");
+    return _t("Call AI models with your credit");
   }
 
   get heroSubtitle() {
     return _t("OpenAI-compatible API, plus a free trial of Qwen3-4B.");
   }
 
-  /** tracer 沒有價目 API，「模型與價格」子頁也還沒上線（LLM-06）：不叫使用者去那裡查。 */
+  get representativePrices() {
+    return this.llm.models && this.llm.models.state === "ok" ? representativeModels(this.llm.models.items) : [];
+  }
+
+  get previewUnit() { return _t("Input / output points per million tokens"); }
+
+  /** 價目與開通各自載入：讀不到價格仍可同意條款並開通。 */
   get pricingFallbackText() {
-    return _t("Prices cannot be shown yet; the Models & Pricing page is coming soon.");
+    return _t("Prices are temporarily unavailable. You can view Models & Pricing after activation.");
   }
 
   get tosDraftText() {
@@ -494,16 +502,30 @@ export class LlmOverviewTab extends Component {
   }
 
   get freeTrial() {
-    return (this.llm.overview && this.llm.overview.free_trial) || {};
+    // Both endpoints read llm_free_usage. Keep a fresh state response authoritative
+    // when the usage refresh fails or still belongs to the previous Taipei day.
+    const state = (this.llm.overview && this.llm.overview.free_trial) || {};
+    const usage = this.llm.usage && this.llm.usage.free_trial;
+    if (!usage || this.llm.usageError ||
+        (state.day_tpe && (!usage.day_tpe || usage.day_tpe < state.day_tpe))) {
+      return state;
+    }
+    return { ...state, ...usage };
   }
 
-  /** 今日次數：tracer 期間由 usage/recent 提供（state 的 today_count 在 LLM-10 之前是 null）。 */
   get freeTrialUsageText() {
-    const usage = this.llm.usage;
-    const count = usage && typeof usage.today_count === "number"
-      ? usage.today_count : this.freeTrial.today_count;
-    const limit = (usage && usage.daily_limit) || this.freeTrial.daily_limit || 200;
-    return formatFreeTrialUsage(count, limit);
+    return formatFreeTrialUsage(this.freeTrial.today_count, this.freeTrial.daily_limit || 200);
+  }
+
+  get freeTrialCappedText() {
+    return this.freeTrial.capped
+      ? _t("Today's free trial is used up. Restores automatically at 00:00 Taipei time.") : null;
+  }
+
+  get freeTrialCreateDisabledText() {
+    if (this.freeTrial.capped) return this.freeTrialCappedText;
+    return this.freeTrial.keys_created_today >= 3
+      ? llmErrorMessage({ code: "llm_free_key_daily_limit" }) : null;
   }
 
   get baseUrl() {
@@ -545,7 +567,7 @@ export class LlmOverviewTab extends Component {
 
   get canCreateFreeTrialKey() {
     return this.screen === "active" && !this.hasFreeTrialKey && !this.state.showReveal
-      && !this.guardTripped && !this.tosBlocking;
+      && !this.guardTripped && !this.tosBlocking && !this.freeTrialCreateDisabledText;
   }
 
   get freeTrialHint() {

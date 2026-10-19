@@ -34,7 +34,7 @@
         </WoowCard>
       </t>
 
-      <!-- 尚未開通（DESIGN §6.2）：主視覺＋副標＋代表模型價格（tracer 沒有價目 API，顯示 fallback 句）＋條款勾選＋〔開通〕。
+      <!-- 尚未開通（DESIGN §6.2）：主視覺＋副標＋代表模型價格（獨立讀價目快取，失敗不擋開通）＋條款勾選＋〔開通〕。
            勾選框旁是《AI 模型服務條款》的連結（LlmTermsModal，DESIGN §6.4-1）：連結不能放在 label 裡
            （點連結會順便勾選），所以 label 只包「我已閱讀並同意」，勾選框的可讀名稱由 aria-labelledby 串起兩段。 -->
       <t t-elif="screen === 'not_activated'">
@@ -44,7 +44,15 @@
           </div>
           <h2 class="o_woow_llm_intro__title" t-esc="heroTitle"/>
           <p class="o_woow_llm_intro__subtitle" t-esc="heroSubtitle"/>
-          <div class="o_woow_llm_intro__pricing">
+          <div t-if="representativePrices.length" class="o_woow_llm_price_preview">
+            <div t-foreach="representativePrices" t-as="price" t-key="price.model" class="o_woow_llm_price_preview__item">
+              <code t-esc="price.model"/>
+              <p t-if="price.group === 'free'">Free trial</p>
+              <p t-elif="price.note" t-esc="price.note"/>
+              <t t-else=""><p t-esc="price.input + ' / ' + price.output"/><p t-esc="previewUnit"/></t>
+            </div>
+          </div>
+          <div t-else="" class="o_woow_llm_intro__pricing">
             <WoowIcon name="'sell'" size="18"/>
             <span t-esc="pricingFallbackText"/>
           </div>
@@ -149,6 +157,7 @@
               <span>Free trial today</span>
             </div>
             <div class="o_woow_llm_card__value" t-esc="freeTrialUsageText"/>
+            <p t-if="freeTrialCappedText" class="o_woow_hint" role="status" t-esc="freeTrialCappedText"/>
           </WoowCard>
           <WoowCard shadow="true" class="'o_woow_llm_card o_woow_llm_card--wide'">
             <div class="o_woow_llm_card__label">
@@ -181,6 +190,7 @@
             Create free trial key
           </WoowButton>
           <p t-else="" class="o_woow_llm_section__note" t-esc="freeTrialExistsText"/>
+          <p t-if="freeTrialCreateDisabledText" class="o_woow_llm_section__note" role="status" t-esc="freeTrialCreateDisabledText"/>
         </WoowCard>
 
         <WoowCard shadow="true" class="'o_woow_llm_section'">

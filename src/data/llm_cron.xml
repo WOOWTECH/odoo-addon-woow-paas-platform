@@ -75,7 +75,7 @@
         <!-- 互動讀取的背景刷新（N26、DESIGN §3.2；LLM-02）：state／keys/list／usage/recent 只讀快取，
              過期時由端點 _trigger() 這支，以 CRON 金鑰、該帳戶的 UP 讀 new-api 寫回快取。外呼類：
              circuit 開著跳過這一輪；半開時由它做健康檢查（web 在半開時也是叫醒它）。5 分鐘的排程
-             是保險，也順便刷新全平台一份的價目快取（10 分鐘 TTL）。 -->
+             是保險；全平台價目另由每 10 分鐘的 pricing cron 刷新。 -->
         <record id="ir_cron_llm_swr_refresh" model="ir.cron">
             <field name="name">PaaS: AI Models Read Cache Refresh</field>
             <field name="model_id" ref="model_woow_paas_platform_llm_swr_cache"/>
@@ -97,6 +97,56 @@
             <field name="user_id" ref="base.user_root"/>
             <field name="interval_number">1</field>
             <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_pricing_refresh" model="ir.cron">
+            <field name="name">PaaS: AI Models Pricing Refresh</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_swr_cache"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_pricing_refresh()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_tier_meter" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Tier Meter</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_tier_meter()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_tier_reset" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Tier Reset</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_tier_reset()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_usage_cleanup" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Usage Cleanup</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_usage_cleanup()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <record id="ir_cron_llm_free_group_action" model="ir.cron">
+            <field name="name">PaaS: AI Models Free Group Action</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_free_usage"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_free_group_action()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
     </data>

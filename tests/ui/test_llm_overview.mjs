@@ -131,9 +131,18 @@ const modalSource = stubImports(await readPaas("components/llm/LlmKeyRevealModal
 const modalUrl = toDataUrl(modalSource);
 const { LlmKeyRevealModal, buildEnvVarsText, FREE_TRIAL_EXAMPLE_MODEL } = await import(modalUrl);
 
+const modelsSource = stubImports(await readPaas("pages/llm/tabs/LlmModelsTab.js"), {
+  "@odoo/owl": owlStub,
+  "@web/core/l10n/translation": translateFromGlobal,
+  "../../../services/llm_service": "const llmService = {};",
+  "../../../utils/clipboard": "const copyText = async () => true;",
+  "../../../utils/llm_format": `const { formatTaipeiTime } = await import("${formatUrl}");`,
+});
+const modelsUrl = toDataUrl(modelsSource);
 const overviewSource = stubImports(await readPaas("pages/llm/tabs/LlmOverviewTab.js"), {
   "@odoo/owl": owlStub,
   "@web/core/l10n/translation": translateFromGlobal,
+  "./LlmModelsTab": `const { representativeModels } = await import("${modelsUrl}");`,
   "../../../components/button/WoowButton": "const WoowButton = {};",
   "../../../components/card/WoowCard": "const WoowCard = {};",
   "../../../components/icon/WoowIcon": "const WoowIcon = {};",
@@ -275,6 +284,7 @@ function makeTab(state, extra = {}) {
     usage: null,
     usageError: null,
     stateResults: [],
+    async fetchModels() { return { success: false }; },
     async fetchState() {
       calls.fetchState += 1;
       const next = fake.stateResults.shift();
@@ -324,7 +334,7 @@ test("開通：沒勾條款不送；勾了送 state 給的條款版本；llm_pro
   const { tab, calls, fake } = makeTab(notActivated);
   assert.equal(tab.screen, "not_activated");
   assert.equal(tab.tosIsDraft, true);
-  assert.equal(tab.pricingFallbackText, "價格暫時無法顯示；「模型與價格」頁面即將推出。");
+  assert.equal(tab.pricingFallbackText, "價格暫時無法顯示，開通後可在「模型與價格」查看。");
   await tab.activate();
   assert.deepEqual(calls.activate, []);
   tab.onTosChange({ target: { checked: true } });
@@ -520,7 +530,9 @@ test("已開通：額度用整數 quota 捨去、今日免費試用 X／200、�
   assert.equal(tab.showZeroCreditBanner, true);
   assert.equal(tab.zeroCreditText, "AI 額度為 0。您可以先使用免費試用模型；從點數錢包轉入 AI 額度的功能即將推出。");
   assert.equal(tab.freeTrialUsageText, "—／200 次");
-  fake.usage = { today_count: 1, daily_limit: 200, items: [] };
+  fake.usage = { today_count: 99, daily_limit: 200, items: [] };
+  assert.equal(tab.freeTrialUsageText, "—／200 次", "recent log page count cannot override the meter");
+  fake.usage.free_trial = { today_count: 1, daily_limit: 200 };
   assert.equal(tab.freeTrialUsageText, "1／200 次");
   assert.equal(tab.baseUrl, null);
   assert.equal(tab.revealBaseUrl, undefined);
@@ -912,4 +924,69 @@ test("沒建成：顯示碼表句子、可直接關閉（created=false）；成�
   assert.match(odd.modal.state.errorMessage, /建立中斷.*重新建立/);
   assert.match(odd.modal.state.errorMessage, /啟用中.*請聯絡客服/);
   odd.modal.close();
+});
+
+
+test("LLM-10: capped and daily creation limit disable free trial with an explanation", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: { today_count: 200, daily_limit: 200, capped: true, keys_created_today: 1 } };
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.equal(tab.freeTrialCreateDisabledText, "今日免費試用已用完，台北時間 00:00 自動恢復。");
+  fake.usage = { free_trial: { today_count: 0, daily_limit: 200, capped: false, keys_created_today: 3 } };
+  assert.equal(tab.freeTrialUsageText, "0／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCreateDisabledText, /明天/);
+  fake.usage.free_trial.keys_created_today = 0;
+  assert.equal(tab.canCreateFreeTrialKey, true, "next Taipei day refreshes the daily gate");
+});
+
+test("LLM-10: yesterday's usage cannot override a fresh Taipei-day state", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: {
+    day_tpe: "2026-10-19", today_count: 0, daily_limit: 200,
+    capped: false, keys_created_today: 0,
+  } };
+  fake.usage = { free_trial: {
+    day_tpe: "2026-10-18", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 3,
+  } };
+  assert.equal(tab.freeTrialUsageText, "0／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, true);
+  assert.equal(tab.freeTrialCappedText, null);
+
+  fake.overview.free_trial = {
+    day_tpe: "2026-10-19", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  };
+  fake.usage.free_trial = {
+    day_tpe: "2026-10-18", today_count: 0, daily_limit: 200,
+    capped: false, keys_created_today: 0,
+  };
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCappedText, /已用完/);
+});
+
+test("LLM-10: failed usage refresh leaves the fresh state authoritative", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: {
+    day_tpe: "2026-10-19", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  } };
+  fake.usage = { free_trial: {
+    day_tpe: "2026-10-19", today_count: 199, daily_limit: 200,
+    capped: false, keys_created_today: 1,
+  } };
+  fake.usageError = "llm_network_error";
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCappedText, /已用完/);
+
+  fake.usageError = null;
+  fake.usage.free_trial = {
+    day_tpe: "2026-10-19", today_count: 201, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  };
+  assert.equal(tab.freeTrialUsageText, "201／200 次");
 });

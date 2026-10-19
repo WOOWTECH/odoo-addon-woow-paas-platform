@@ -208,6 +208,10 @@ class LlmAlert(enum.Enum):
     BREAK_GLASS_USED = 'break_glass_used'
     #: ``newapi_proxy_url``／``llm_public_base_url``／``newapi_username_prefix`` 被改（LLM-02，DESIGN §2.11）。
     CONFIG_CHANGED = 'config_changed'
+    #: Public pricing crossed its group/price boundary (LLM-06).
+    PRICING_INVALID = 'pricing_invalid'
+    FREE_METER_LAG = 'free_meter_lag'
+    FREE_UP_FAILED = 'free_up_failed'
 
 
 class LlmIncident(enum.Enum):

@@ -133,6 +133,8 @@ ERR_LLM_UNAVAILABLE = 'llm_unavailable'
 ERR_LLM_RATE_LIMITED = 'llm_rate_limited'
 ERR_LLM_KEY_LIMIT = 'llm_key_limit'
 ERR_LLM_FREE_KEY_EXISTS = 'llm_free_key_exists'
+ERR_LLM_FREE_CAPPED_TODAY = 'llm_free_capped_today'
+ERR_LLM_FREE_KEY_DAILY_LIMIT = 'llm_free_key_daily_limit'
 ERR_LLM_KEY_ALREADY_SHOWN = 'llm_key_already_shown'
 ERR_LLM_KEY_INVALID = 'llm_key_invalid'
 #: 開戶失敗（``state=error``）的帳戶操作建金鑰時。DESIGN 的碼表沒有這一格：error 狀態在
@@ -494,6 +496,14 @@ def alert_targets(env):
 #: 凍結契約（改名要同 PR 寫 migration 改 ``ir_act_server.code``）；``TestLlmCronContract`` 對已
 #: 安裝 DB 逐支斷言，``TestLlmUnconfiguredZeroOutbound`` 逐支手動觸發。新增 LLM cron 一律登記在這。
 LLM_CRONS = {
+    'woow_paas_platform.ir_cron_llm_free_tier_meter': (
+        'woow_paas_platform.llm_free_usage', '_cron_llm_free_tier_meter'),
+    'woow_paas_platform.ir_cron_llm_free_tier_reset': (
+        'woow_paas_platform.llm_free_usage', '_cron_llm_free_tier_reset'),
+    'woow_paas_platform.ir_cron_llm_free_usage_cleanup': (
+        'woow_paas_platform.llm_free_usage', '_cron_llm_free_usage_cleanup'),
+    'woow_paas_platform.ir_cron_llm_free_group_action': (
+        'woow_paas_platform.llm_free_usage', '_cron_llm_free_group_action'),
     'woow_paas_platform.ir_cron_llm_provision': (
         'woow_paas_platform.llm_account', '_cron_llm_provision'),
     'woow_paas_platform.ir_cron_llm_balance_refresh': (
@@ -503,6 +513,8 @@ LLM_CRONS = {
     'woow_paas_platform.ir_cron_llm_alert_delivery': (
         'woow_paas_platform.llm_event', '_cron_llm_alert_delivery'),
     # LLM-02：互動讀取快取的背景刷新（SWR）與後台〔測試連線〕。
+    'woow_paas_platform.ir_cron_llm_pricing_refresh': (
+        'woow_paas_platform.llm_swr_cache', '_cron_llm_pricing_refresh'),
     'woow_paas_platform.ir_cron_llm_swr_refresh': (
         'woow_paas_platform.llm_swr_cache', '_cron_llm_swr_refresh'),
     'woow_paas_platform.ir_cron_llm_connection_test': (
@@ -514,8 +526,11 @@ LLM_CRON_ERROR_CODES = {
     xmlid: 'llm_cron_%s' % xmlid.rpartition('.ir_cron_llm_')[2] for xmlid in LLM_CRONS}
 
 #: 告警／incident／``llm_event.error_code`` 只收的錯誤碼（見上方「封閉登記表」）。
+FREE_METER_ERROR_CODES = frozenset({
+    'llm_free_meter_lag', 'llm_free_meter_gap', 'llm_free_up_failed',
+})
 ERROR_CODES = (
-    API_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
+    API_ERROR_CODES | FREE_METER_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
     | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
 
