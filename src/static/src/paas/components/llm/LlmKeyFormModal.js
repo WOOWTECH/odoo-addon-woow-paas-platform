@@ -15,14 +15,18 @@ export function normalizePaidDraft(draft, allowedModels) {
   return {
     name: typeof draft.name === "string" ? draft.name.trim() : "",
     limitPoints: parsed,
-    expires: draft.expires === "never" ? "never" : "90d",
-    models: Array.isArray(draft.models) ? [...new Set(draft.models.filter((model) => allowed.has(model)))] : [],
+    expires: ["30d", "90d", "180d", "never"].includes(draft.expires) ? draft.expires : "90d",
+    models: Array.isArray(draft.models)
+      ? (() => {
+        const selected = [...new Set(draft.models.filter((model) => allowed.has(model)))];
+        return selected.length === allowed.size && selected.every((model) => allowed.has(model)) ? null : selected;
+      })() : null,
   };
 }
 
 export function validatePaidDraft(draft, { paidModels, usedPoints = null }) {
   const normalized = normalizePaidDraft(draft, paidModels);
-  if (!normalized.name || normalized.models.length === 0) return { valid: false, error: "invalid", remaining: null };
+  if (!normalized.name || (normalized.models !== null && normalized.models.length === 0)) return { valid: false, error: "invalid", remaining: null };
   if (draft.limitPoints !== "" && draft.limitPoints !== null && draft.limitPoints !== undefined
       && normalized.limitPoints === null) return { valid: false, error: "invalid", remaining: null };
   if (normalized.limitPoints !== null && Number.isInteger(usedPoints) && normalized.limitPoints < usedPoints) {
@@ -42,7 +46,7 @@ export class LlmKeyFormModal extends Component {
   };
 
   setup() {
-    this.state = useState({ name: "", limitPoints: "", expires: "90d", models: [], confirmingClose: false, error: null });
+    this.state = useState({ name: "", limitPoints: "", expires: "90d", models: null, confirmingClose: false, error: null });
     this.backdropRef = useRef("backdrop");
     this.dialogRef = useRef("dialog");
     this.passwordRef = useRef("password");
@@ -70,8 +74,9 @@ export class LlmKeyFormModal extends Component {
   }
   get validation() { return validatePaidDraft(this.state, { paidModels: this.paidModels.map((item) => item.model), usedPoints: this.props.keyItem?.used_points }); }
   get remainingAfterChange() { return this.validation.remaining; }
+  get hasUsedPoints() { return Number.isInteger(this.props.keyItem?.used_points); }
   get usedText() {
-    return Number.isInteger(this.props.keyItem?.used_points)
+    return this.hasUsedPoints
       ? _t("Used %(used)s points; %(remaining)s points remain after this change.", {
         used: this.props.keyItem.used_points, remaining: this.remainingAfterChange,
       }) : "";
@@ -83,13 +88,14 @@ export class LlmKeyFormModal extends Component {
   async loadModels() {
     if (!llmService.modelsLoaded) await llmService.fetchModels();
     if (this.destroyed) return;
-    if (!this.state.models.length) this.state.models = this.paidModels.map((item) => item.model);
+    if (this.state.models === null) return;
   }
   toggleModel(model) {
     const allowed = new Set(this.paidModels.map((item) => item.model));
     if (!allowed.has(model)) return;
-    this.state.models = this.state.models.includes(model)
-      ? this.state.models.filter((item) => item !== model) : [...this.state.models, model];
+    const selected = this.state.models === null ? [...allowed] : [...this.state.models];
+    this.state.models = selected.includes(model)
+      ? selected.filter((item) => item !== model) : [...selected, model];
   }
   safeDraft() {
     return normalizePaidDraft(this.state, this.paidModels.map((item) => item.model));
@@ -110,7 +116,7 @@ export class LlmKeyFormModal extends Component {
   }
   requestClose() {
     if (this.state.confirmingClose) { this.state.confirmingClose = false; return; }
-    const hasDraft = !!this.state.name.trim() || !!this.state.limitPoints || this.state.models.length > 0;
+    const hasDraft = !!this.state.name.trim() || !!this.state.limitPoints || this.state.models !== null;
     if (hasDraft) this.state.confirmingClose = true;
     else this.confirmClose();
   }

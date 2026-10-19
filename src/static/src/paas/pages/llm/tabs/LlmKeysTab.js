@@ -24,8 +24,12 @@ export function normalizePaidDraft(draft, allowedModels) {
   return {
     name: typeof draft.name === "string" ? draft.name.trim() : "",
     limitPoints,
-    expires: draft.expires === "never" ? "never" : "90d",
-    models: Array.isArray(draft.models) ? [...new Set(draft.models.filter((model) => allowed.has(model)))] : [],
+    expires: ["30d", "90d", "180d", "never"].includes(draft.expires) ? draft.expires : "90d",
+    models: Array.isArray(draft.models)
+      ? (() => {
+        const selected = [...new Set(draft.models.filter((model) => allowed.has(model)))];
+        return selected.length === allowed.size && selected.every((model) => allowed.has(model)) ? null : selected;
+      })() : null,
   };
 }
 
@@ -36,6 +40,23 @@ export function parseExtendId(value) {
 }
 
 /** A consumed token is never retried by later patches; malformed/unmatched values result in no I/O. */
+export function extendQueryFromHash(hash) {
+  if (typeof hash !== "string") return "";
+  const queryAt = hash.indexOf("?");
+  return queryAt < 0 ? "" : hash.slice(queryAt + 1);
+}
+
+export function stripExtendFromHash(hash) {
+  if (typeof hash !== "string") return hash;
+  const queryAt = hash.indexOf("?");
+  if (queryAt < 0) return hash;
+  const route = hash.slice(0, queryAt);
+  const params = new URLSearchParams(hash.slice(queryAt + 1));
+  params.delete("extend");
+  const query = params.toString();
+  return route + (query ? "?" + query : "");
+}
+
 export function applyExtendQueryOnce(search, items, consumed) {
   let value = null;
   try {
@@ -53,6 +74,9 @@ export function applyExtendQueryOnce(search, items, consumed) {
 export function keyRow(item) {
   const kind = item.kind === "paid" ? _t("Paid") : _t("Free trial");
   const total = Number.isInteger(item.limit_points) ? String(item.limit_points) : _t("Unlimited");
+  const limited = Number.isInteger(item.limit_points) && item.limit_points > 0;
+  const usedPoints = Number.isInteger(item.used_points) ? item.used_points : null;
+  const totalPoints = limited ? item.limit_points : null;
   return {
     id: item.id,
     name: item.display_name || _t("API key"),
@@ -60,8 +84,12 @@ export function keyRow(item) {
     kind,
     status: item.status || "unknown",
     statusLabel: statusLabel(item.status),
-    used: Number.isInteger(item.used_points) ? String(item.used_points) : "—",
+    used: usedPoints === null ? "—" : String(usedPoints),
     total,
+    limited,
+    progressMax: limited ? totalPoints : null,
+    progressValue: limited && usedPoints !== null ? Math.min(Math.max(usedPoints, 0), totalPoints) : 0,
+    progressLabel: limited ? _t("Used %(used)s of %(total)s points", { used: usedPoints ?? 0, total: totalPoints }) : "",
     lastUse: formatTaipeiDateTime(item.last_used_at),
     expires: item.expires_at ? formatTaipeiDateTime(item.expires_at) : _t("Never expires"),
     created: formatTaipeiDateTime(item.created_at),
@@ -105,12 +133,13 @@ export class LlmKeysTab extends Component {
 
   consumeExtendQuery() {
     const location = globalThis.location;
-    const result = applyExtendQueryOnce(location?.search || "", this.service.keys, this.extendConsumed);
-    if (location?.search && result.consumed && globalThis.history?.replaceState) {
-      const params = new URLSearchParams(location.search);
-      params.delete("extend");
-      const query = params.toString();
-      globalThis.history.replaceState(globalThis.history.state, "", location.pathname + (query ? "?" + query : "") + location.hash);
+    const hash = location?.hash || "";
+    const query = extendQueryFromHash(hash);
+    const result = applyExtendQueryOnce(query, this.service.keys, this.extendConsumed);
+    if (query && result.consumed && globalThis.history?.replaceState) {
+      const nextHash = stripExtendFromHash(hash);
+      const base = location.href ? location.href.replace(/#.*$/, "") : "";
+      globalThis.history.replaceState(globalThis.history.state, "", base + nextHash);
     }
     if (result.id !== null) {
       this.state.extendConfirmation = result.id;

@@ -23,7 +23,7 @@
           <tbody><tr t-foreach="rows" t-as="row" t-key="row.id">
             <td><strong t-esc="row.name"/><code t-esc="row.masked"/></td><td><span class="o_woow_llm_keys__chip" t-esc="row.kind"/></td>
             <td><span class="o_woow_llm_keys__chip" t-esc="row.statusLabel"/></td>
-            <td><t t-esc="row.used"/> / <t t-esc="row.total"/></td><td t-esc="row.lastUse"/>
+            <td><div t-if="row.limited" class="o_woow_llm_keys__usage"><progress t-att-max="row.progressMax" t-att-value="row.progressValue" t-att-aria-label="row.progressLabel"/><span><t t-esc="row.used"/> / <t t-esc="row.total"/></span></div><span t-else=""><t t-esc="row.used"/> used</span></td><td t-esc="row.lastUse"/>
             <td><t t-esc="row.expires"/><span t-if="row.expiring" class="o_woow_llm_keys__soon">Expiring soon</span></td>
             <td t-esc="row.created"/><td><button type="button" t-att-aria-label="'Actions for ' + row.name" disabled="true">Actions</button></td>
           </tr></tbody>
@@ -33,7 +33,7 @@
         <article t-foreach="rows" t-as="row" t-key="row.id" class="o_woow_llm_keys__card">
           <div class="o_woow_llm_keys__cardhead"><strong t-esc="row.name"/><span class="o_woow_llm_keys__chip" t-esc="row.statusLabel"/></div>
           <code t-esc="row.masked"/><p><span class="o_woow_llm_keys__chip" t-esc="row.kind"/><span t-if="row.expiring" class="o_woow_llm_keys__soon">Expiring soon</span></p>
-          <dl><div><dt>Used / total</dt><dd><t t-esc="row.used"/> / <t t-esc="row.total"/></dd></div>
+          <dl><div><dt>Used / total</dt><dd><div t-if="row.limited" class="o_woow_llm_keys__usage"><progress t-att-max="row.progressMax" t-att-value="row.progressValue" t-att-aria-label="row.progressLabel"/><span><t t-esc="row.used"/> / <t t-esc="row.total"/></span></div><span t-else=""><t t-esc="row.used"/> used</span></dd></div>
             <div><dt>Last use</dt><dd t-esc="row.lastUse"/></div><div><dt>Expiry</dt><dd t-esc="row.expires"/></div><div><dt>Created</dt><dd t-esc="row.created"/></div></dl>
           <button type="button" t-att-aria-label="'Actions for ' + row.name" disabled="true">Actions</button>
         </article>
