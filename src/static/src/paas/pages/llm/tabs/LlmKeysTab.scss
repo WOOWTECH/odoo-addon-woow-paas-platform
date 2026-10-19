@@ -1,0 +1,38 @@
+.o_woow_llm_keys {
+  min-width: 0; color: #212121; font: 16px/1.6 $woow-font-body;
+  h2 { margin: 0; font: 600 24px/1.2 $woow-font-display; }
+  &__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+  &__heading p, &__empty, &__error p { margin: 4px 0 0; }
+  &__desktop { overflow-x: auto; background: #fff; border-radius: 20px; box-shadow: 0 2px 8px rgba(33, 33, 33, .06); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 12px; text-align: left; vertical-align: top; border-bottom: 1px solid #edf0f4; }
+  th { color: #646262; font-weight: 500; white-space: nowrap; }
+  td:first-child { min-width: 150px; }
+  code { display: block; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  button { min-height: 44px; padding: 8px 16px; border: 1px solid #dce0e8; border-radius: 999px; background: #fff; color: #212121; font: inherit; }
+  button:disabled { opacity: .55; }
+  &__chip, &__soon { display: inline-flex; align-items: center; min-height: 28px; padding: 2px 10px; border-radius: 999px; background: #eff1f5; white-space: nowrap; }
+  &__soon { margin-left: 6px; background: #fff4dc; color: #805600; font-size: 13px; }
+  &__mobile { display: none; }
+  &__card { min-width: 0; padding: 20px; background: #fff; border-radius: 20px; box-shadow: 0 2px 8px rgba(33, 33, 33, .06); }
+  &__cardhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  &__card p { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  dl { display: grid; gap: 8px; margin: 16px 0; }
+  dl > div { display: grid; grid-template-columns: minmax(85px, 1fr) 2fr; gap: 12px; }
+  dt { color: #646262; } dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+  &__error, &__confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; border-radius: 20px; background: #fff4dc; }
+  &__error p { flex: 1 1 240px; }
+  :focus-visible { outline: 2px solid #6183fc; outline-offset: 3px; }
+  @media (max-width: 760px) {
+    &__heading { align-items: flex-start; flex-direction: column; }
+    &__heading button { width: 100%; }
+    &__desktop { display: none; }
+    &__mobile { display: grid; gap: 12px; }
+    &__card > button { width: 100%; }
+  }
+  @media (max-width: 360px) {
+    font-size: 15px;
+    &__card { padding: 16px; }
+    dl > div { grid-template-columns: 1fr; gap: 0; }
+  }
+}

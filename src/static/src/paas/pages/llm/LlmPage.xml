@@ -23,6 +23,7 @@
 
       <div class="o_woow_llm_page__content">
         <LlmOverviewTab t-if="currentTab === 'overview'"/>
+        <LlmKeysTab t-elif="currentTab === 'keys'"/>
         <LlmModelsTab t-elif="currentTab === 'models'"/>
         <LlmCreditTab t-elif="currentTab === 'credit'"/>
         <div t-elif="!currentTabLive" class="o_woow_llm_page__soon">

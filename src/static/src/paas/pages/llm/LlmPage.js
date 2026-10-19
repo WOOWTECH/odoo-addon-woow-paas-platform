@@ -8,6 +8,7 @@ import { LLM_TABS, isLlmTabLive, llmTabPath, normalizeLlmTab } from "../../core/
 import { LlmCreditTab } from "./tabs/LlmCreditTab";
 import { LlmModelsTab } from "./tabs/LlmModelsTab";
 import { LlmOverviewTab } from "./tabs/LlmOverviewTab";
+import { LlmKeysTab } from "./tabs/LlmKeysTab";
 
 /** 子頁的名稱與圖示（順序取 llm_routes.LLM_TABS）。名稱在呼叫時才 `_t()`。 */
 const TAB_META = {
@@ -33,7 +34,7 @@ const TAB_META = {
  */
 export class LlmPage extends Component {
   static template = "woow_paas_platform.LlmPage";
-  static components = { WoowIcon, LlmOverviewTab, LlmModelsTab, LlmCreditTab };
+  static components = { WoowIcon, LlmOverviewTab, LlmModelsTab, LlmCreditTab, LlmKeysTab };
   static props = {
     tab: { type: String, optional: true },
   };

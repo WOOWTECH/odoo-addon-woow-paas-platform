@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmKeysTab">
+    <section class="o_woow_llm_keys">
+      <header class="o_woow_llm_keys__heading">
+        <div><h2 t-esc="title"/><p>Manage paid API keys and review masked key details.</p></div>
+        <WoowButton variant="'primary'" size="'md'" onClick.bind="openCreate">Create paid key</WoowButton>
+      </header>
+      <p t-if="state.loading" role="status">Loading API keys…</p>
+      <div t-if="errorText" role="alert" class="o_woow_llm_keys__error">
+        <p t-esc="errorText"/><WoowButton variant="'secondary'" onClick.bind="refresh">Retry</WoowButton>
+      </div>
+      <p t-if="state.notice" role="status" t-esc="state.notice"/>
+      <p t-if="state.extendConfirmation !== null" class="o_woow_llm_keys__confirm" role="status">
+        Extend this key by 90 days? This is a confirmation preview; no request has been sent.
+        <button type="button" t-on-click="confirmExtend">Continue</button>
+        <button type="button" t-on-click="cancelExtend">Cancel</button>
+      </p>
+      <p t-if="!state.loading &amp;&amp; !errorText &amp;&amp; !rows.length" class="o_woow_llm_keys__empty" t-esc="emptyText"/>
+      <div t-if="rows.length" class="o_woow_llm_keys__desktop">
+        <table>
+          <thead><tr><th>Key</th><th>Type</th><th>Status</th><th>Used / total</th><th>Last use</th><th>Expiry</th><th>Created</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody><tr t-foreach="rows" t-as="row" t-key="row.id">
+            <td><strong t-esc="row.name"/><code t-esc="row.masked"/></td><td><span class="o_woow_llm_keys__chip" t-esc="row.kind"/></td>
+            <td><span class="o_woow_llm_keys__chip" t-esc="row.statusLabel"/></td>
+            <td><t t-esc="row.used"/> / <t t-esc="row.total"/></td><td t-esc="row.lastUse"/>
+            <td><t t-esc="row.expires"/><span t-if="row.expiring" class="o_woow_llm_keys__soon">Expiring soon</span></td>
+            <td t-esc="row.created"/><td><button type="button" t-att-aria-label="'Actions for ' + row.name" disabled="true">Actions</button></td>
+          </tr></tbody>
+        </table>
+      </div>
+      <div t-if="rows.length" class="o_woow_llm_keys__mobile">
+        <article t-foreach="rows" t-as="row" t-key="row.id" class="o_woow_llm_keys__card">
+          <div class="o_woow_llm_keys__cardhead"><strong t-esc="row.name"/><span class="o_woow_llm_keys__chip" t-esc="row.statusLabel"/></div>
+          <code t-esc="row.masked"/><p><span class="o_woow_llm_keys__chip" t-esc="row.kind"/><span t-if="row.expiring" class="o_woow_llm_keys__soon">Expiring soon</span></p>
+          <dl><div><dt>Used / total</dt><dd><t t-esc="row.used"/> / <t t-esc="row.total"/></dd></div>
+            <div><dt>Last use</dt><dd t-esc="row.lastUse"/></div><div><dt>Expiry</dt><dd t-esc="row.expires"/></div><div><dt>Created</dt><dd t-esc="row.created"/></div></dl>
+          <button type="button" t-att-aria-label="'Actions for ' + row.name" disabled="true">Actions</button>
+        </article>
+      </div>
+      <LlmKeyFormModal t-if="state.showForm" onClose.bind="closeForm" onDraft.bind="onDraft"/>
+    </section>
+  </t>
+</templates>

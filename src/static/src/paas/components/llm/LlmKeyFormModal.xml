@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmKeyFormModal">
+    <div class="o_woow_modal_backdrop o_woow_llm_key_form_backdrop" t-ref="backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_llm_key_form" t-ref="dialog" role="dialog" aria-modal="true" aria-labelledby="o_woow_llm_key_form_title" tabindex="-1" t-on-click.stop="">
+        <div class="o_woow_modal_header"><h2 id="o_woow_llm_key_form_title">Create paid API key</h2><button type="button" t-on-click="requestClose" aria-label="Close">×</button></div>
+        <div class="o_woow_modal_body">
+          <label>Key name<input type="text" maxlength="64" t-model="state.name" autocomplete="off"/></label>
+          <label>Total limit (points)<input type="number" min="0" step="1" inputmode="numeric" t-model="state.limitPoints"/><small>Leave blank for unlimited.</small></label>
+          <p t-if="props.keyItem &amp;&amp; Number.isInteger(props.keyItem.used_points)" t-esc="usedText"/>
+          <p t-if="validation.error === 'below_used'" role="alert">Total limit cannot be below points already used.</p>
+          <label>Expiry<select t-model="state.expires"><option value="90d">90 days</option><option value="never">Never expires</option></select></label>
+          <div t-if="needsReauth" class="o_woow_llm_key_form__handoff"><p>Identity verification is required for a never-expiring unlimited key.</p><label>Password<input type="password" autocomplete="current-password" t-ref="password"/></label><button type="button" t-on-click="verifyIdentity">Verify identity</button></div>
+          <fieldset><legend>Paid models</legend><label t-foreach="paidModels" t-as="item" t-key="item.model"><input type="checkbox" t-att-value="item.model" t-att-checked="state.models.includes(item.model)" t-on-change="() => this.toggleModel(item.model)"/><span t-esc="item.model"/></label></fieldset>
+          <p t-if="!paidModels.length" role="status">Paid models are unavailable right now.</p>
+          <p class="o_woow_llm_key_form__handoff" role="note">Secure key creation and one-time display will be connected in the next implementation step.</p>
+          <div class="o_woow_llm_key_form__actions"><WoowButton variant="'secondary'" size="'md'" onClick.bind="requestClose">Cancel</WoowButton><WoowButton variant="'primary'" size="'md'" disabled="submitDisabled" onClick.bind="submitDraft">Continue</WoowButton></div>
+          <div t-if="state.confirmingClose" class="o_woow_llm_key_form__confirm" role="alertdialog" aria-modal="true"><p>Close this form and discard the draft?</p><button type="button" t-on-click="cancelClose">Keep editing</button><button type="button" t-on-click="confirmClose">Close form</button></div>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

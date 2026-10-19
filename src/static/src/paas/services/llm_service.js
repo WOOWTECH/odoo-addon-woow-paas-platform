@@ -211,4 +211,16 @@ export const llmService = reactive({
       kind: "free_trial",
     }, { timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode: LLM_KEY_CREATE_INTERRUPTED });
   },
+
+  /** Paid creation handoff for LLM-07. Task 9 must route this response directly to reveal local state. */
+  async createPaidKey(clientRequestId, values) {
+    return call("/api/llm/keys/create", {
+      client_request_id: clientRequestId,
+      kind: "paid",
+      name: values.name,
+      limit_points: values.limitPoints,
+      expires: values.expires,
+      models: values.models,
+    }, { timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode: LLM_KEY_CREATE_INTERRUPTED });
+  },
 });
