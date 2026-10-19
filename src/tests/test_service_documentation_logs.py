@@ -48,6 +48,7 @@ class TestServiceDocumentationLogs(HttpCase):
             'description': 'Short introduction', 'full_description': 'Marketplace introduction',
             'documentation': '# Getting started\n\nService usage guide.',
             'documentation_url': 'https://example.com/guide',
+            'tutorial_url': 'https://guide.example.com/tutorial',
         })
 
         def service(workspace, name):
@@ -59,6 +60,7 @@ class TestServiceDocumentationLogs(HttpCase):
             })
 
         self.service = service(self.workspace, 'own')
+        self.service.sudo().write({'helm_chart_version': '0.9.0'})
         self.foreign_service = service(self.foreign_workspace, 'foreign')
         self.client = Mock()
         self.client.get_release_logs.return_value = {
@@ -90,13 +92,18 @@ class TestServiceDocumentationLogs(HttpCase):
             self.assertTrue(result['success'])
             self.assertEqual(result['data']['content'], self.template.documentation)
             self.assertEqual(result['data']['documentation_url'], 'https://example.com/guide')
+            self.assertEqual(result['data']['tutorial_url'], 'https://guide.example.com/tutorial')
+            self.assertEqual(result['data']['deployed_chart_version'], '0.9.0')
+            self.assertEqual(result['data']['current_template_chart_version'], '1.0.0')
 
     def test_documentation_fallback_and_unsafe_external_url(self):
         self._login(self.owner)
-        self.template.write({'documentation': False, 'documentation_url': 'javascript:alert(1)'})
+        self.template.write({'documentation': False, 'documentation_url': 'javascript:alert(1)',
+                             'tutorial_url': 'javascript:alert(1)'})
         result = self._post('documentation')
         self.assertEqual(result['data']['content'], 'Marketplace introduction')
         self.assertEqual(result['data']['documentation_url'], '')
+        self.assertEqual(result['data']['tutorial_url'], '')
         self.template.write({'full_description': False})
         self.assertEqual(self._post('documentation')['data']['content'], 'Short introduction')
         self.template.write({'description': False})

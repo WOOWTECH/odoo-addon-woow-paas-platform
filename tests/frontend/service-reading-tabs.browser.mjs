@@ -20,6 +20,9 @@ const paths = {
   informationXml: "pages/service/tabs/InformationTab.xml", logsXml: "pages/service/tabs/LogsTab.xml",
 };
 const sources = Object.fromEntries(await Promise.all(Object.entries(paths).map(async ([key, path]) => [key, await asset(path)])));
+const guideXml = await read("src/data/cloud_app_documentation.xml");
+const openDesignGuide = guideXml.match(/<record id="cloud_app_opendesign"[\s\S]*?<field name="documentation"><!\[CDATA\[([\s\S]*?)\]\]><\/field>/)?.[1];
+assert.ok(openDesignGuide, "the seeded Open Design guide must be present");
 const messages = {};
 let key = "", value = "", field = null;
 const flush = () => { if (key && value) messages[key] = value; key = value = ""; field = null; };
@@ -29,7 +32,7 @@ for (const line of (await read("src/i18n/zh_TW.po")).split("\n")) {
   else if (line.startsWith('"')) { if (field === "key") key += JSON.parse(line); else if (field === "value") value += JSON.parse(line); }
 }
 flush();
-const browser = await chromium.launch({ headless: false,
+const browser = await chromium.launch({ headless: process.env.HEADLESS !== "false",
   ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}) });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 }, locale: "zh-TW" });
@@ -48,7 +51,7 @@ try {
     .preview-tabs{display:flex;gap:8px;margin:16px 0}.preview-tabs button{flex:1;padding:12px;border:0;background:#edf0ff;border-radius:8px}
     @media(max-width:640px){main{padding:16px}}
   ` });
-  await page.evaluate(({ sources, messages }) => {
+  await page.evaluate(({ sources, messages, openDesignGuide }) => {
     const { Component, useState, useRef, onMounted, onPatched, onWillDestroy, mount, markup } = owl;
     const _t = (message, ...args) => { let i = 0; return (messages[message] || message).replace(/%s/g, () => args[i++]); };
     const clean = (text) => text.replace(/^import .*;\s*$/gm, "").replace(/^export /gm, "");
@@ -70,14 +73,17 @@ try {
         return { success: true, data: { ...window.logFixture, pod: options.pod || window.logFixture.pod, container: options.container || "app" } };
       },
       async fetchDocumentation() {
-        return { success: true, data: { title: "Open Design", documentation_url: "https://example.com/docs", content:
-          '# 使用 Open Design\n\n## 開始使用\n\n1. 開啟網頁介面。\n2. 使用管理員帳密登入。\n\n## 設定說明\n\n檢查 **配置** 分頁中的設定，再開始建立專案。\n\n```bash\necho "hello"\n```\n\n<script>window.xss = true</script><img src=x onerror="window.xss = true">\n\n[Unsafe](javascript:alert(1))\n\n| 欄位 | 說明 |\n| --- | --- |\n| Name | 專案名稱 |' } };
+        return { success: true, data: { title: "Open Design", documentation_url: "https://example.com/docs",
+          tutorial_url: "https://opendesign-guide.woowtech.io/tutorial.html", deployed_chart_version: "0.5.0",
+          current_template_chart_version: "0.5.6",
+          content: openDesignGuide + '\n\n<script>window.xss = true</script><img src=x onerror="window.xss = true">\n\n[Unsafe](javascript:alert(1))',
+        } };
       },
     };
-    const LogsTab = new Function("Component", "useState", "useRef", "onMounted", "onPatched", "onWillDestroy", "_t", "cloudService", "WoowIcon",
+    const LogsTab = new Function("Component", "useState", "useRef", "onMounted", "onPatched", "onWillDestroy", "_t", "cloudService", "WoowIcon", "formatUserTime",
       "createLogPoller", "filterLogLines", "downloadLogSnapshot", "logDownloadFilename", `${clean(sources.logs)};return LogsTab;`)(
       Component, useState, useRef, onMounted, onPatched, onWillDestroy, _t, cloudService, WoowIcon,
-      helpers.createLogPoller, helpers.filterLogLines, helpers.downloadLogSnapshot, helpers.logDownloadFilename,
+      (date) => date.toISOString(), helpers.createLogPoller, helpers.filterLogLines, helpers.downloadLogSnapshot, helpers.logDownloadFilename,
     );
     const InformationTab = new Function("Component", "useState", "onMounted", "onWillDestroy", "_t", "cloudService", "parseMarkdown", "WoowIcon",
       `${clean(sources.information)};return InformationTab;`)(Component, useState, onMounted, onWillDestroy, _t, cloudService, parseMarkdown, WoowIcon);
@@ -97,9 +103,16 @@ try {
       templates: `<templates>${unwrap(sources.iconXml)}${unwrap(sources.informationXml)}${unwrap(sources.logsXml)}${previewXml}</templates>`,
       translateFn: _t, dev: true,
     });
-  }, { sources, messages });
+  }, { sources, messages, openDesignGuide });
   await page.waitForSelector(".o_woow_service_information__body");
   assert.match(await page.locator(".o_woow_service_information").innerText(), /相關文件/);
+  assert.match(await page.locator(".o_woow_service_information__body").innerText(), /跟著做：完成第一份設計/);
+  assert.equal(await page.locator('.o_woow_service_information__body a[href="https://github.com/WOOWTECH/Woow_opendesign_tutorial_site"]').count(), 1);
+  const tutorialLink = page.getByRole("link", { name: /WOOWTECH 教學網站/ });
+  assert.equal(await tutorialLink.getAttribute("href"), "https://opendesign-guide.woowtech.io/tutorial.html");
+  assert.equal(await tutorialLink.getAttribute("target"), "_blank");
+  assert.match(await tutorialLink.getAttribute("rel"), /noopener noreferrer/);
+  assert.match(await page.locator(".o_woow_service_information__version_note").innerText(), /0\.5\.0.*0\.5\.6/s);
   assert.equal(await page.locator(".o_woow_service_information script, .o_woow_service_information img, .o_woow_service_information a[href^='javascript:']").count(), 0);
   assert.equal(await page.evaluate(() => window.xss), undefined);
   await page.screenshot({ path: join(artifactDir, "information-desktop.png"), fullPage: true });
