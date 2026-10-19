@@ -1,5 +1,6 @@
 from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt, require_tunnel_routes_receipt
 import logging
+import psycopg2
 import re
 import uuid
 
@@ -751,6 +752,16 @@ class SecurityAccess(models.Model):
         string='Error Message',
         help='Error details if provisioning failed',
     )
+    provision_outcome_unknown = fields.Boolean(
+        string='Provision Outcome Unknown',
+        default=False,
+        copy=False,
+        groups='base.group_system',
+        help=(
+            'The operator may have created a tunnel but its identity was not '
+            'returned. Reconcile the exact remote object before retrying or deleting.'
+        ),
+    )
 
     # Tunnel info
     tunnel_id = fields.Char(string='Tunnel ID')
@@ -854,6 +865,50 @@ class SecurityAccess(models.Model):
             )
         return client
 
+    def _try_lock_lifecycle_rows(self):
+        """Acquire a NOWAIT row lock before any external lifecycle side effect.
+
+        ORM writes can remain buffered while an external request is in flight,
+        so state='provisioning' by itself does not serialize another transaction.
+        """
+        ids = tuple(sorted(set(self.ids)))
+        if not ids:
+            return True
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    'SELECT id FROM %s WHERE id IN %%s '
+                    'ORDER BY id FOR UPDATE NOWAIT' % self._table,
+                    [ids],
+                )
+                locked_ids = {row[0] for row in self.env.cr.fetchall()}
+        except (psycopg2.errors.LockNotAvailable,
+                psycopg2.errors.SerializationFailure):
+            return False
+        if not locked_ids:
+            return True
+        if locked_ids != set(ids):
+            raise UserError(_(
+                'One or more Security Access records no longer exist.'
+            ))
+        # Flush our own pending updates only after NOWAIT acquired the row, then
+        # discard any pre-lock field cache before checking lifecycle state.
+        lifecycle_fields = [
+            'state', 'error_message', 'tunnel_id', 'tunnel_name',
+        ]
+        self.flush_recordset(lifecycle_fields)
+        self.invalidate_recordset(lifecycle_fields)
+        self.sudo().invalidate_recordset(['provision_outcome_unknown'])
+        return True
+
+    def _reject_unresolved_tunnel_outcome(self):
+        """Keep the SA row as a reconciliation anchor while tunnel identity is unknown."""
+        if self.sudo().filtered('provision_outcome_unknown'):
+            raise UserError(_(
+                'The tunnel creation outcome is unknown. Reconcile the exact '
+                'remote tunnel before retrying provision or deleting this record.'
+            ))
+
     def _get_paas_domain(self):
         return self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.paas_domain', 'woowtech.io'
@@ -928,6 +983,10 @@ class SecurityAccess(models.Model):
         return records
 
     def write(self, vals):
+        if 'provision_outcome_unknown' in vals and not self.env.su:
+            raise AccessError(_(
+                'The unresolved tunnel outcome is managed by the platform.'
+            ))
         # Identity anchors (_IDENTITY_ANCHOR_FIELDS): subdomain & tunnel naming
         # derive from canonical_name/reference_id and drift would break
         # routing, while tunnel_id/tunnel_name/tunnel_token decide WHICH
@@ -1127,6 +1186,12 @@ class SecurityAccess(models.Model):
         # unauthorized caller before reading state or constructing the operator
         # client; authorized callers still pass the upstream lifecycle gates.
         self.check_access('write')
+        if not self._try_lock_lifecycle_rows():
+            raise UserError(_(
+                'Another Security Access lifecycle operation is in progress. '
+                'Please retry when it finishes.'
+            ))
+        self._reject_unresolved_tunnel_outcome()
         # 停權／刪除中一律拒絕，在任何 write 與 operator 呼叫之前（形狀同
         # smart_home.action_provision 的 stored-id guard）。re-sync 分支會把每條
         # route 的真 service_url 推回去 ⇒ 對 `suspended` 放行＝繞過停權的 503
@@ -1293,22 +1358,26 @@ class SecurityAccess(models.Model):
         except PaaSOperatorConnectionError as e:
             outcome = self._reclaim_unreferenced_tunnel(
                 client, created, identity_stored, create_attempted)
-            self.write({
+            self.sudo().write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
                     _("Cannot connect to PaaS Operator: %(detail)s",
                       detail=e.message),
                     outcome, created),
+                'provision_outcome_unknown': outcome in (
+                    _RECLAIM_INDETERMINATE, _RECLAIM_FAILED),
             })
             _logger.error("[SA] provision connection error: %s", e.message)
         except PaaSOperatorError as e:
             outcome = self._reclaim_unreferenced_tunnel(
                 client, created, identity_stored, create_attempted)
-            self.write({
+            self.sudo().write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
                     _("Tunnel creation failed: %(detail)s", detail=e.message),
                     outcome, created),
+                'provision_outcome_unknown': outcome in (
+                    _RECLAIM_INDETERMINATE, _RECLAIM_FAILED),
             })
             _logger.error("[SA] provision error: %s", e.message)
         except AccessError:
@@ -1351,12 +1420,13 @@ class SecurityAccess(models.Model):
                 elif outcome in (_RECLAIM_FAILED, _RECLAIM_INDETERMINATE):
                     # 收不回來／不確定 ⇒ **不**寫回 'pending'：那等於邀請下一次重試
                     # 再開一顆，而前一顆還在 CF 上。只留記錄，狀態維持 'provisioning'。
-                    self.write({
+                    self.sudo().write({
                         'error_message': self._provision_failure_message(
                             _("Provisioning denied: this caller may not write "
                               "the tunnel credential (tunnel_token is a "
                               "base.group_system field)."),
                             outcome, created),
+                        'provision_outcome_unknown': True,
                     })
                 # _RECLAIM_REFERENCED（identity write 之後才丟的 AccessError，例如
                 # _sync_all_routes_access）：tunnel 有參照、state 交給重試路徑，
@@ -1387,11 +1457,13 @@ class SecurityAccess(models.Model):
             # 維持原本「留著 tunnel_id 讓重試收斂」的設計。
             outcome = self._reclaim_unreferenced_tunnel(
                 client, created, identity_stored, create_attempted)
-            self.write({
+            self.sudo().write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
                     _("Provisioning failed: %(error)s", error=e),
                     outcome, created),
+                'provision_outcome_unknown': outcome in (
+                    _RECLAIM_INDETERMINATE, _RECLAIM_FAILED),
             })
             _logger.exception("[SA] provision unexpected error sa=%s", self.id)
 
@@ -1526,7 +1598,13 @@ class SecurityAccess(models.Model):
         torn_down = []
         Reap = self.env[_CF_REAP_MODEL]
         try:
-            with self.env.cr.savepoint():
+            with self.env.cr.savepoint(flush=False):
+                if not self._try_lock_lifecycle_rows():
+                    raise UserError(_(
+                        'Another Security Access lifecycle operation is in progress. '
+                        'Please retry when it finishes.'
+                    ))
+                self._reject_unresolved_tunnel_outcome()
                 self.write({'state': 'deleting'})
                 self._cleanup_cloudflare(torn_down=torn_down)
                 self.unlink()
@@ -1557,6 +1635,12 @@ class SecurityAccess(models.Model):
         舊寫法會整段跳過 cleanup，把該 route 的 app ＋ 全部 policy cf id 靜默
         丟掉。``_cleanup_cloudflare`` 自己已經是冪等的（沒東西要拆就直接
         return），所以無條件呼叫是純加法。"""
+        if not self._try_lock_lifecycle_rows():
+            raise UserError(_(
+                'Another Security Access lifecycle operation is in progress. '
+                'Please retry when it finishes.'
+            ))
+        self._reject_unresolved_tunnel_outcome()
         # #322: 比照 CloudService（#318）— super().unlink() 前捕獲 in_progress
         # 訂閱，刪除成功後結算（取消＋按比例退點）。共用 _settle_on_entity_delete。
         subs_to_settle = self.sudo().mapped('subscription_id').filtered(
@@ -1878,6 +1962,17 @@ class SecurityAccess(models.Model):
         "clean failed". Land in 'error' + error_message instead, fail-loud and
         observable like _do_suspend / _do_resume."""
         self.ensure_one()
+        if not self._try_lock_lifecycle_rows():
+            _logger.info(
+                '[SA] _do_cleanup skipped sa=%s; lifecycle row is busy', self.id,
+            )
+            return
+        if self.sudo().provision_outcome_unknown:
+            _logger.warning(
+                '[SA] _do_cleanup skipped sa=%s; tunnel creation outcome needs exact reconciliation',
+                self.id,
+            )
+            return
         _logger.info("[SA] _do_cleanup sa=%s tunnel=%s",
                      self.id, self.tunnel_id)
         self._cleanup_cloudflare()

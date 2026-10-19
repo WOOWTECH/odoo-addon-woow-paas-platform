@@ -1,4 +1,5 @@
 from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt
+import psycopg2.errors
 import contextlib
 import copy
 import json
@@ -3572,6 +3573,32 @@ class CloudService(models.Model):
         if remaining:
             self.env.ref('woow_paas_platform.ir_cron_deploy_cloud_services')._trigger()
 
+    def _try_lock_lifecycle_rows(self):
+        """RACE-09: NOWAIT row lock before any external helm side effect.
+
+        ORM writes stay buffered while an operator request is in flight, so
+        ``state='deleting'`` / ``'deploying'`` alone does not serialize a
+        concurrent deploy cron against a tenant delete.
+        """
+        ids = tuple(sorted(set(self.ids)))
+        if not ids:
+            return True
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    'SELECT id FROM %s WHERE id IN %%s '
+                    'ORDER BY id FOR UPDATE NOWAIT' % self._table, [ids])
+                locked = {row[0] for row in self.env.cr.fetchall()}
+        except (psycopg2.errors.LockNotAvailable,
+                psycopg2.errors.SerializationFailure):
+            return False
+        if locked != set(ids):
+            raise UserError(_('One or more services no longer exist.'))
+        fields_ = ['state', 'helm_release_name', 'helm_namespace']
+        self.flush_recordset(fields_)
+        self.invalidate_recordset(fields_)
+        return True
+
     def _execute_deploy(self):
         """Execute the actual deployment for a single pending service."""
         self.ensure_one()
@@ -3580,6 +3607,17 @@ class CloudService(models.Model):
             PaaSOperatorError,
             PaaSOperatorConnectionError,
         )
+
+        # RACE-09: serialize against a concurrent tenant delete / cleanup.
+        # A busy row means another lifecycle operation owns it: leave the
+        # service untouched so the next cron pass re-evaluates it.
+        if not self._try_lock_lifecycle_rows():
+            _logger.warning(
+                "Deploy skipped service=%s: another lifecycle operation "
+                "holds the row", self.id)
+            return
+        if self.state in ('deleting',):
+            return
 
         _logger.info("Deploying service %s (id=%s)", self.name, self.id)
         self.write({'state': 'deploying'})
