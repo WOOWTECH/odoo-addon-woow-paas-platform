@@ -249,20 +249,20 @@ API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開
             <field name="documentation"><![CDATA[# Odoo MCP Server 使用指南
 
 ## 開始使用
-1. 準備你有權使用的 Odoo 網址及具備所需資料權限的專用帳號／憑證。
-2. 開啟本服務網址，以服務頁的管理員密碼登入 MCP 管理介面；在「Connection」填入 Odoo 連線資訊並確認狀態。
+1. 在目標 Odoo 建立最小權限的專用使用者，查明資料庫名稱，為該使用者準備密碼或 API 金鑰；不要共用 Odoo 管理員帳號。
+2. 開啟本服務網址，以服務頁的管理員密碼登入 MCP 管理介面。在「Connection」填入 Odoo 網址、資料庫名稱、使用者及密碼／API 金鑰，按「Test Connection」確認連到正確實例。
 3. 在「Tokens」建立 MCP token，將管理介面提供的端點交給支援 Streamable HTTP 的 AI 用戶端。使用 `https://你的服務網址/private_<token>/mcp` 格式時，結尾不要加斜線。
 
 ## 跟著做：以最小權限查一筆資料
-1. 在 Odoo 建專用使用者，僅給它需要的公司、模組及資料存取權；在 Connection 填入該 Odoo 的連線資訊。
-2. 用 Tokens 建立一把測試用 MCP token，從用戶端選一支讀取類工具，確認能查到預期資料。
-3. 先檢查工具列表與帳號權限，再讓 AI 執行建立、修改或刪除。測試完撤銷不用的 token。
+1. 在 Odoo 建一筆不含敏感內容的測試資料，記下名稱；用專用使用者登入確認能看到這筆資料。
+2. 用 Tokens 建立一把測試用 MCP token，從用戶端選一支讀取類工具，依名稱查詢，核對回傳的是預期資料庫與紀錄。
+3. 先檢查 Tools、Settings 的寫入與審批設定，再讓 AI 執行建立、修改或刪除。測試完撤銷不用的 token。
 
 ## 權限與排查
-AI 可讀寫的資料受 Odoo 帳號權限和本服務 Tools 設定影響；先以最小權限測試需要的操作。MCP token 和完整端點 URL 都視為密碼，外洩時撤銷並重建。若連線失敗，核對 Odoo 網址、帳號權限、憑證與本服務「日誌」。服務設定保存在專屬磁碟。
+AI 可讀寫的資料受 Odoo 帳號權限、Tools 與當前實例的寫入／審批設定影響。先在 Settings 和 Tools 核對是否允許直接寫入；既有服務可能保留舊設定，不能只按目前模板推斷。MCP token 和完整端點 URL 都視為密碼，外洩時撤銷並重建。若連線失敗，核對網址、資料庫名稱、帳號權限、憑證與本服務「日誌」。設定保存在專屬磁碟。
 
 ## 延伸學習
-[WOOWTECH Odoo MCP 管理介面說明](https://github.com/WOOWTECH/woow_odoo_mcp_server#readme)可查看 Connection、Tools 與 Tokens；操作範圍仍以你所填的 Odoo 帳號權限為準。]]></field>
+[WOOWTECH Odoo MCP 管理介面說明](https://github.com/WOOWTECH/woow_odoo_mcp_server#readme)可查看 Connection、Tools 與 Tokens；套件庫中的自行部署 SSE 範例不適用本 PaaS 入口，請使用本頁顯示的 Streamable HTTP 端點。]]></field>
         </record>
 
         <record id="cloud_app_n8n" model="woow_paas_platform.cloud_app_template">
