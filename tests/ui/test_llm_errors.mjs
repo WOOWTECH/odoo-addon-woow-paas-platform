@@ -52,6 +52,8 @@ test("DESIGN §3.4 的繁中句子（與後端 fallback 同一條譯文）", () 
   assert.equal(m("llm_unavailable"), "AI 模型服務暫時無法連線，請稍後再試");
   assert.equal(m("llm_free_key_exists"), "每個帳號只能有一把免費試用金鑰");
   assert.equal(m("llm_key_limit"), "每個帳號最多 20 把金鑰，請先刪除不用的金鑰");
+  assert.equal(m("llm_invalid_request"), "找不到此筆點數轉換申請，或申請資料無效。");
+  assert.equal(m("llm_order_not_found"), "找不到此筆點數轉換申請，或申請資料無效。");
   assert.equal(m("llm_account_error"), "AI 模型帳戶建立失敗，請聯絡客服");
   assert.equal(m("llm_internal_error"), "系統發生錯誤，請稍後再試");
   assert.equal(m("llm_auth_required"), "需要登入");

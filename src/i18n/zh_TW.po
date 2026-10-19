@@ -2224,6 +2224,14 @@ msgid "The AI Models Terms of Service cannot be shown right now. Please try agai
 msgstr "《AI 模型服務條款》暫時無法顯示，請稍後再試"
 
 #. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "The conversion request was not found or is invalid."
+msgstr "找不到此筆點數轉換申請，或申請資料無效。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "The AI Models Terms of Service have been updated. Please accept them again before creating keys, converting points or re-enabling keys; existing keys are not affected."
