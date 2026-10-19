@@ -11,7 +11,10 @@ export class InformationTab extends Component {
   static props = { service: Object, workspaceId: Number };
 
   setup() {
-    this.state = useState({ loading: true, error: false, title: "", content: "", url: "" });
+    this.state = useState({
+      loading: true, error: false, title: "", content: "", url: "", tutorialUrl: "",
+      deployedChartVersion: "", currentTemplateChartVersion: "",
+    });
     this._disposed = false;
     onMounted(() => this.load());
     onWillDestroy(() => { this._disposed = true; });
@@ -28,6 +31,10 @@ export class InformationTab extends Component {
       this.state.content = parseMarkdown(result.data.content || "");
       const url = result.data.documentation_url || "";
       this.state.url = /^https?:\/\//i.test(url) ? url : "";
+      const tutorialUrl = result.data.tutorial_url || "";
+      this.state.tutorialUrl = /^https?:\/\//i.test(tutorialUrl) ? tutorialUrl : "";
+      this.state.deployedChartVersion = result.data.deployed_chart_version || "";
+      this.state.currentTemplateChartVersion = result.data.current_template_chart_version || "";
     } catch {
       if (!this._disposed) this.state.error = true;
     } finally {
@@ -37,5 +44,10 @@ export class InformationTab extends Component {
 
   get errorText() {
     return _t("Documentation could not be loaded. Please try again.");
+  }
+
+  get hasVersionDifference() {
+    return !!this.state.deployedChartVersion && !!this.state.currentTemplateChartVersion
+      && this.state.deployedChartVersion !== this.state.currentTemplateChartVersion;
   }
 }

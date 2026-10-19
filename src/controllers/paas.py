@@ -3022,18 +3022,26 @@ class PaasController(HiddenChainMixin, Controller):
         if error:
             return error
         template = service.template_id
-        documentation_url = (template.documentation_url or '').strip()
-        try:
-            parsed = urlparse(documentation_url)
-            safe_url = (parsed.scheme in ('https', 'http') and parsed.hostname
+        def safe_external_url(value):
+            url = (value or '').strip()
+            try:
+                parsed = urlparse(url)
+                safe = (parsed.scheme in ('https', 'http') and parsed.hostname
                         and not parsed.username and not parsed.password
-                        and not any(ord(char) < 32 for char in documentation_url))
-        except ValueError:
-            safe_url = False
+                        and not any(ord(char) < 32 for char in url))
+            except ValueError:
+                safe = False
+            return url if safe else ''
+
         return {'success': True, 'data': {
             'title': template.name,
             'content': template.documentation or template.full_description or template.description or '',
-            'documentation_url': documentation_url if safe_url else '',
+            'documentation_url': safe_external_url(template.documentation_url),
+            'tutorial_url': safe_external_url(template.tutorial_url),
+            # The service ledger may lag live Helm until its next sync; the
+            # Overview tab already shows when that ledger was last refreshed.
+            'deployed_chart_version': service.helm_chart_version or '',
+            'current_template_chart_version': template.helm_chart_version or '',
         }}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/logs",

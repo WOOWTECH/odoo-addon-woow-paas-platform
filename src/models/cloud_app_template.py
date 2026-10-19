@@ -486,7 +486,13 @@ class CloudAppTemplate(models.Model):
 
     documentation_url = fields.Char(
         string='Documentation URL',
-        help='Link to official documentation',
+        help='External reference for this service, such as upstream documentation '
+             'or the WOOWTECH package README.',
+    )
+    tutorial_url = fields.Char(
+        string='WOOWTECH Tutorial URL',
+        help='Service-matched WOOWTECH learning site. Leave empty when no '
+             'tutorial for this PaaS edition has been verified.',
     )
     documentation = fields.Text(
         string='Service Documentation',

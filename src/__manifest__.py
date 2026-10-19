@@ -25,6 +25,7 @@
         "security/ir.model.access.csv",
         "security/ir_rules.xml",
         "data/cloud_app_templates.xml",
+        "data/cloud_app_documentation.xml",
         "data/smart_home_templates.xml",
         "data/security_access_templates.xml",
         "data/topup_plans.xml",

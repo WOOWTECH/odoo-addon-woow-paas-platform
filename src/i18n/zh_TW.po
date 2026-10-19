@@ -25763,8 +25763,38 @@ msgstr "無法載入相關文件，請重試。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
-msgid "Official documentation"
-msgstr "官方文件"
+msgid "Open related documentation"
+msgstr "開啟相關文件"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "WOOWTECH tutorial site"
+msgstr "WOOWTECH 教學網站"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "Version notice"
+msgstr "版本提醒"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "Deployed chart"
+msgstr "已部署 Chart"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "Current template chart"
+msgstr "目前模板 Chart"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "This guide describes the current template. Check the Overview tab and verify a feature on your deployed service before following its steps."
+msgstr "本指南依目前模板撰寫。請先到「總覽」核對已部署版本，並確認服務中有對應功能，再依步驟操作。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

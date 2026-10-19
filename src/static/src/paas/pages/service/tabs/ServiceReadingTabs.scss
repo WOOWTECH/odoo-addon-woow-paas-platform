@@ -14,6 +14,23 @@
     h2 { margin: 0.35rem 0 0; font-size: 1.5rem; }
   }
 
+  &__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  &__version_note {
+    margin-bottom: 1.25rem;
+    padding: 0.75rem 1rem;
+    border-left: 3px solid #e3a738;
+    border-radius: 0.4rem;
+    background: #fff8e9;
+    line-height: 1.5;
+
+    p { margin: 0.35rem 0 0; }
+  }
+
   &__body {
     line-height: 1.7;
 

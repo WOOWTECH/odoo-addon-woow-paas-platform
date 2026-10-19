@@ -1248,4 +1248,5 @@ from . import test_n8n_encryption_key_backup
 from . import test_reset_pod_template_neutral_infra_fix_018
 from . import test_paas_mail_sender
 from . import test_service_documentation_logs
+from . import test_cloud_app_documentation_seed
 from . import test_llm_free_usage
