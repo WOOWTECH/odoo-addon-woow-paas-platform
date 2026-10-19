@@ -7,10 +7,10 @@
 #   export-addons.sh --context <ctx> --ns <ns> --inventory <inventory-<ns>-….json> --out-dir <新目錄>
 #                    [--modules a,b] [--odoo-workload <deploy/name|sts/name>]
 #
-# 前置：inventory.sh 剛跑過（盤點檔列出非 core 模組與各自的內容 hash）。
+# 前置：inventory.sh 剛跑過（列出非 core 模組、內容 hash、root_symlink；#1844 以前的盤點檔遇 symlink 模組會 exit 4）。
 # 做什麼（全部唯讀，來源 ns 不建立任何資源）：
 #   1. 從盤點檔取非 core 模組（預設全部；--modules 只取指定的），依 addon 根目錄分組。
-#   2. 每個根目錄一次 exec：odoo 容器內 `tar -cf - -C <根目錄> <模組…>`（不含 .git／__pycache__／*.pyc）串流到本機。
+#   2. 每個根目錄一次 exec 串流 tar 到本機（不含 .git／__pycache__／*.pyc）；根目錄本身是 symlink 的模組各自一次 exec（lib.sh）。
 #   3. 本機解開（../addons_unpack.py：拒收不安全路徑），用與盤點同一支函式重算每個模組的內容 hash 並逐一比對。
 #      不一致＝串流被截斷或盤點後原始碼被改 ⇒ 失敗，不留半套結果。
 # 輸出：<out-dir>/addons/<模組>/…、<out-dir>/addons-export.json；stdout 最後一行印 <out-dir>。
@@ -50,25 +50,35 @@ K=(kubectl --context "$CTX" -n "$NS")
 
 discover_odoo "$("${K[@]}" get deploy,sts -o json)" "$WORKLOAD"
 
-# 模組清單：盤點檔內有 digest 的（非 core）；每行 <根目錄>\t<模組>
+# 模組清單：盤點檔內有 digest 的（非 core）；每行 <根目錄>\t<模組>\t<root_symlink 或空字串>
 mapfile -t rows < <(jq -r --arg only "$MODULES" '
   ($only | split(",") | map(select(length > 0))) as $want
   | .inspect.addons.modules | to_entries[] | select(.value.digest)
   | select(($want | length) == 0 or (.key as $k | $want | index($k)))
-  | "\(.value.dir)\t\(.key)"' "$INVENTORY" | sort)
+  | "\(.value.dir)\t\(.key)\t\(.value.root_symlink // "")"' "$INVENTORY" | sort)
 (( ${#rows[@]} > 0 )) || die 2 "no non-core module to export (check --modules against the inventory)"
 mapfile -t dirs < <(printf '%s\n' "${rows[@]}" | cut -f1 | sort -u)
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 pairs=()
-for i in "${!dirs[@]}"; do
-  dir=${dirs[$i]}
-  mapfile -t names < <(printf '%s\n' "${rows[@]}" | awk -F'\t' -v d="$dir" '$1 == d {print $2}')
-  echo "exec: $WORKLOAD -c $CONTAINER — tar ${#names[@]} module(s) under $dir (read-only)" >&2
-  "${K[@]}" exec "$WORKLOAD" -c "$CONTAINER" -- tar -cf - --exclude=.git --exclude=__pycache__ \
-    --exclude='*.pyc' --exclude='*.pyo' --exclude=.DS_Store -C "$dir" -- "${names[@]}" > "$TMP/$i.tar" \
-    || die 3 "tar in $WORKLOAD failed for $dir"
-  pairs+=("$dir=$TMP/$i.tar")
+n=0
+for dir in "${dirs[@]}"; do
+  # 根目錄是實體目錄的模組：一個 addon 根目錄一次 exec
+  mapfile -t names < <(printf '%s\n' "${rows[@]}" | awk -F'\t' -v d="$dir" '$1 == d && $3 == "" {print $2}')
+  if (( ${#names[@]} > 0 )); then
+    echo "exec: $WORKLOAD -c $CONTAINER — tar ${#names[@]} module(s) under $dir (read-only)" >&2
+    mapfile -t cmd < <(addon_tar_cmd "$dir" "${names[@]}")
+    "${K[@]}" exec "$WORKLOAD" -c "$CONTAINER" -- "${cmd[@]}" > "$TMP/$n.tar" || die 3 "tar in $WORKLOAD failed for $dir"
+    pairs+=("$dir=$TMP/$n.tar"); n=$((n + 1))
+  fi
+  # 根目錄本身是 symlink 的模組（#1844）：各自一次 exec，打包連結指向的內容
+  while IFS=$'\t' read -r _ name target; do
+    echo "exec: $WORKLOAD -c $CONTAINER — tar $dir/$name (symlink -> $target, read-only)" >&2
+    mapfile -t cmd < <(addon_tar_linked_cmd "$dir" "$name")
+    "${K[@]}" exec "$WORKLOAD" -c "$CONTAINER" -- "${cmd[@]}" > "$TMP/$n.tar" \
+      || die 3 "tar in $WORKLOAD failed for $dir/$name (needs GNU tar for --transform)"
+    pairs+=("$dir=$TMP/$n.tar"); n=$((n + 1))
+  done < <(printf '%s\n' "${rows[@]}" | awk -F'\t' -v d="$dir" '$1 == d && $3 != ""')
 done
 
 mkdir -p "$OUT_DIR"

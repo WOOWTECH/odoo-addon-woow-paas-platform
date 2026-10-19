@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.244",
+    "version": "18.0.1.0.248",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -25,6 +25,7 @@
         "security/ir.model.access.csv",
         "security/ir_rules.xml",
         "data/cloud_app_templates.xml",
+        "data/cloud_app_documentation.xml",
         "data/smart_home_templates.xml",
         "data/security_access_templates.xml",
         "data/topup_plans.xml",
@@ -45,6 +46,8 @@
         "views/workspace_views.xml",
         "views/workspace_quota_inspection_views.xml",
         "views/billing_incident_views.xml",
+        "views/llm_terms_views.xml",
+        "views/llm_runtime_state_views.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",
@@ -76,6 +79,8 @@
         "data/low_balance_warning_cron.xml",
         "data/cron_topup.xml",
         "data/ecpay_invoice_cron.xml",
+        # #1680 Workspace quota 背景重試／對帳
+        "data/workspace_quota_cron.xml",
         "data/agent_session_cron.xml",
         # #1540：限時唯讀資料取回入口的到期關閉 cron
         "data/data_retrieval_cron.xml",

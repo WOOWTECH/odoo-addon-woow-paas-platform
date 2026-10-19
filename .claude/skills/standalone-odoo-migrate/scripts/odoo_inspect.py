@@ -145,6 +145,9 @@ def scan_addons(dirs, digest_filter=None):
                 "installable": data.get("installable", True),
                 "auto_install": bool(data.get("auto_install", False)),
             }
+            if module_dir.is_symlink():
+                # 模組根目錄本身是連結：dir_digest 會沿著它列舉內容，導出時也要打包連結指向的內容（#1844）
+                entry["root_symlink"] = os.readlink(module_dir)
             if digest_filter and digest_filter(str(base_path)):
                 entry["digest"] = dir_digest(module_dir)
                 entry["git"] = git_info(module_dir, base_path)

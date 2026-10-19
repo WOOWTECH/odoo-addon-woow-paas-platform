@@ -139,6 +139,10 @@ WEBHOOK_DELIVERED = ('pending', 'sent', 'not_configured', 'batched', 'digested')
 
 ACTION_SELECTION = [
     ('activate', 'Activate'),
+    # LLM-04：每一次同意條款（開通時與改版後重新同意）各一筆；對象＝那一版的 llm_terms。
+    ('tos_accept', 'Terms accepted'),
+    # LLM-04：後台發佈一個條款版本（原本的 published 同時轉 retired）。
+    ('tos_publish', 'Terms published'),
     ('provision_step', 'Provisioning step'),
     ('key_create', 'Key created'),
     ('key_reveal', 'Key revealed'),
@@ -198,6 +202,16 @@ class LlmAlert(enum.Enum):
     CRON_FAILED = 'cron_failed'
     #: 設定類的 fail closed：加密金鑰、代理簽章金鑰、前綴／block（``llm_common.CONFIG_ERROR_CODES``）。
     CONFIG_UNAVAILABLE = 'config_unavailable'
+    #: circuit breaker 打開（LLM-02，DESIGN §3.6）；錯誤碼＝原因（連續失敗、代理 401／403、AP／OP 被拒）。
+    CIRCUIT_OPEN = 'circuit_open'
+    #: 每一次 break-glass（``bg``）呼叫（LLM-02，DESIGN §1.4.2-2）。
+    BREAK_GLASS_USED = 'break_glass_used'
+    #: ``newapi_proxy_url``／``llm_public_base_url``／``newapi_username_prefix`` 被改（LLM-02，DESIGN §2.11）。
+    CONFIG_CHANGED = 'config_changed'
+    #: Public pricing crossed its group/price boundary (LLM-06).
+    PRICING_INVALID = 'pricing_invalid'
+    FREE_METER_LAG = 'free_meter_lag'
+    FREE_UP_FAILED = 'free_up_failed'
 
 
 class LlmIncident(enum.Enum):
@@ -965,8 +979,9 @@ class LlmEvent(models.Model):
         第一個跟隨者把它排在窗口結束時；排程的 10 分鐘是信件確認的節奏，也是保險。同一支 cron 同時只會
         跑一份（``ir.cron`` 的列鎖），送出與記狀態之間行程死掉＝下一次再送一次（至少一次）。
         """
+        # 不碰 new-api（只送 webhook）：circuit 開著也照送（告警正是那時候最需要）。
         return run_llm_cron(self.env, DELIVERY_CRON_XMLID, self._llm_alert_delivery_tick,
-                            items=DELIVERY_PER_TICK)
+                            items=DELIVERY_PER_TICK, outbound=False)
 
     @api.model
     def _llm_alert_delivery_tick(self, config, tick):
@@ -1247,7 +1262,7 @@ class LlmEvent(models.Model):
         「未設定」（N27）時同樣什麼都不做（所有 LLM cron 一致）。
         """
         return run_llm_cron(self.env, CLEANUP_CRON_XMLID, self._llm_event_cleanup_tick,
-                            items=CLEANUP_BATCHES_PER_TICK)
+                            items=CLEANUP_BATCHES_PER_TICK, outbound=False)
 
     @api.model
     def _llm_event_cleanup_tick(self, config, tick):

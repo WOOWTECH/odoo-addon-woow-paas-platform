@@ -285,6 +285,18 @@
                         Configuration
                     </button>
                     <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'information'}"
+                        t-on-click="() => this.setTab('information')">
+                        <WoowIcon name="'description'" size="18"/>
+                        Information
+                    </button>
+                    <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'logs'}"
+                        t-on-click="() => this.setTab('logs')">
+                        <WoowIcon name="'article'" size="18"/>
+                        Logs
+                    </button>
+                    <button
                         t-if="isOdooService"
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'addons'}"
                         t-on-click="() => this.setTab('addons')">
@@ -336,6 +348,17 @@
                         workspaceId="props.workspaceId"
                         canManage="canManageService"
                         onSave.bind="handleConfigSave"/>
+                    <InformationTab
+                        t-if="currentTab === 'information'"
+                        t-key="service.id"
+                        service="service"
+                        workspaceId="props.workspaceId"/>
+                    <LogsTab
+                        t-if="currentTab === 'logs'"
+                        t-key="service.id + '-' + canManageService"
+                        service="service"
+                        workspaceId="props.workspaceId"
+                        canManage="canManageService"/>
                     <AddonsTab
                         t-if="currentTab === 'addons'"
                         service="service"

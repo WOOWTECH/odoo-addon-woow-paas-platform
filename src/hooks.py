@@ -228,6 +228,8 @@ _CONFIG_PARAMETERS = [
     # LLM-02b：告警出口（N13）。
     'woow_paas_platform.llm_alert_email',
     'woow_paas_platform.llm_alert_webhook_url',
+    # LLM-02：給使用者的 API base URL（DESIGN §2.11，只收白名單值）。
+    'woow_paas_platform.llm_public_base_url',
 ]
 
 

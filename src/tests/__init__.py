@@ -1204,6 +1204,9 @@ from . import test_workspace_quota_inspection_live_1678
 
 from . import test_workspace_quota_floor_1679
 from . import test_workspace_quota_floor_rpc_1679
+from . import test_workspace_quota_sync_1680
+from . import test_workspace_quota_sync_rpc_1680
+from . import test_workspace_quota_sync_live_1680
 from . import test_workspace_quota_floor_live_1679
 from . import test_ecpg_v4_golive
 # #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
@@ -1215,6 +1218,13 @@ from . import test_llm_tracer
 # LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
 # llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
 from . import test_llm_platform_foundation
+# LLM-04：《AI 模型服務條款》的版本、發佈、同意與重新同意的 gate（llm_terms）。
+from . import test_llm_terms
+# LLM-02：newapi_client／代理完整化的 Odoo 端（circuit breaker、AP 限速、SWR 快取、設定變更稽核、
+# MCP 跳板、後台〔測試連線〕）。
+from . import test_llm_client_hardening
+# LLM-02 AC5：MCP URL 不能拿 PaaS 當打 new-api／代理的跳板。
+from . import test_llm_mcp_jump_guard
 # INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
 from . import test_vpn_node_status_fix005
 # INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
@@ -1240,3 +1250,7 @@ from . import test_security_access_provision_delete_race_09
 from . import test_sh_provision_delete_race_09
 from . import test_cs_provision_delete_race_09
 from . import test_race10_independent_rows
+from . import test_paas_mail_sender
+from . import test_service_documentation_logs
+from . import test_cloud_app_documentation_seed
+from . import test_llm_free_usage

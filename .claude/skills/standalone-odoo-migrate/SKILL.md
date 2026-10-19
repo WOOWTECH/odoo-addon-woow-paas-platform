@@ -160,7 +160,9 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 5. **addon 進 image**（WMO 導出、agent 開 PR、人 merge 與 `/approve`）：
    - 導出原始碼（WMO）：`scripts/source/export-addons.sh --inventory <步驟 1 的盤點檔> --out-dir <新目錄>`。唯讀 exec，
      逐模組對盤點檔驗內容 hash；完成條件：exit 0，拿到 `<out-dir>/addons/` 與 `addons-export.json`。原始碼是客戶的
-     程式碼，留在本機交接，不貼進 issue／PR 留言。
+     程式碼，留在本機交接，不貼進 issue／PR 留言。模組根目錄本身是 symlink（例：`woow_odoo_line_liff -> _repo_line_bridge`）
+     時另外一次 exec 打包連結指向的內容；這要靠盤點檔的 `root_symlink`，#1844 以前產生的盤點檔遇到這種模組會 exit 4
+     ——重跑 `inventory.sh` 再導出。
    - paas-odoo-ci PR（agent）：以步驟 3 的報告為準——`NEED_IMPORT` 的模組從 `<out-dir>/addons/` 原樣複製進
      **`addons-cloud/`**（只進 cloud-odoo、不進平台 image；不要放 `addons/`，也不要列進 `config/paas-addons.list`），
      `NEED_IMPORT`＋`NEED_LIST` 加進 `config/cloud-addons.list`，重跑 `generate-catalog.sh`／`generate-requirements.sh`

@@ -1,7 +1,7 @@
 """LLM-01b 的純 Python 單元測試：``src/services/{newapi_client,llm_crypto,llm_redact}.py``。
 
 Run:  python3 tests/test_llm_services.py -v
-CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；只需要 requests 與 cryptography）。
+CI:   .gitea/workflows/llm-services-unit-tests.yml（PR 時跑；使用 requests、cryptography 與 MCP 1.x HTTP stack）。
 
 這三支模組刻意不 import odoo，所以這裡在沒有 Odoo 的環境直接載入（照
 ``tests/test_shc_bare_create_transport.py`` 的做法）。和代理的契約用代理自己的參考實作
@@ -15,11 +15,15 @@ validator、body／Authorization／proof 的有無、以及 ``WEB_METHODS`` 恰�
 傳輸錯誤用真的 loopback socket（不是 mock）：連線被拒、送出後斷線、讀取逾時、DNS 失敗
 都由 requests／urllib3 自己丟例外，再看分類對不對（DESIGN §3.4、〔REV〕24）。
 """
+import asyncio
+import concurrent.futures
 import importlib
 import io
 import json
 import logging
 import socket
+import ssl
+import tempfile
 import sys
 import threading
 import time
@@ -30,6 +34,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
+from requests.structures import CaseInsensitiveDict
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICES = ROOT / 'src' / 'services'
@@ -44,6 +49,7 @@ sys.modules[_PKG] = _package
 nac = importlib.import_module(_PKG + '.newapi_client')
 llm_crypto = importlib.import_module(_PKG + '.llm_crypto')
 llm_redact = importlib.import_module(_PKG + '.llm_redact')
+mcp_url_guard = importlib.import_module(_PKG + '.mcp_url_guard')
 
 sys.path.insert(0, str(PROXY_ROOT))
 from newapi_proxy import canonical as proxy_canonical  # noqa: E402
@@ -84,7 +90,7 @@ def _serve(recorder):
             body = self.rfile.read(length) if length else b''
             recorder.requests.append({
                 'method': self.command, 'path': self.path,
-                'headers': {k: v for k, v in self.headers.items()}, 'body': body})
+                'headers': CaseInsensitiveDict(self.headers.items()), 'body': body})
             if recorder.mode == 'disconnect':
                 self.connection.shutdown(socket.SHUT_RDWR)
                 self.connection.close()
@@ -99,7 +105,7 @@ def _serve(recorder):
             self.end_headers()
             self.wfile.write(recorder.body)
 
-        do_GET = do_POST = do_DELETE = _handle
+        do_GET = do_POST = do_DELETE = do_PUT = _handle
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     server.daemon_threads = True
@@ -125,6 +131,15 @@ class _Base(unittest.TestCase):
 #  簽章與標頭                                                                    #
 # --------------------------------------------------------------------------- #
 class TestSigningMatchesProxy(_Base):
+
+    def test_pricing_preserves_only_public_envelope_metadata(self):
+        body = {'success': True, 'data': [{'model_name': 'paid'}],
+                'group_ratio': {'default': 1.3, 'free': 0}, 'vendors': [{'id': 1, 'name': 'Provider'}],
+                'usable_group': {'internal': 'private'}, 'unrelated': 'not-cached'}
+        self.recorder.body = json.dumps(body).encode()
+        result = self.client().ap_pricing()
+        self.assertEqual(result.data, {key: body[key] for key in ('data', 'group_ratio', 'vendors')})
+        self.assertEqual(self.client().status().data, body['data'], 'ordinary routes retain their data contract')
 
     def _verify(self, request, identity, client_ip=''):
         path, _, query = request['path'].partition('?')
@@ -163,7 +178,7 @@ class TestSigningMatchesProxy(_Base):
         self.assertEqual(len(set(nonces)), 3)
         for request in self.recorder.requests:
             self.assertRegex(request['headers']['X-Woow-Proxy-Nonce'], r'^[A-Za-z0-9_-]{22,64}$')
-            self.assertNotIn(SECRET, json.dumps(request['headers']))
+            self.assertNotIn(SECRET, json.dumps(dict(request['headers'])))
             self.assertEqual(request['headers']['Connection'], 'close')
 
     def test_read_timeout_header_and_deadline(self):
@@ -244,6 +259,41 @@ def _representative_calls(now):
             'type': 2, 'group': 'free', 'start_timestamp': now - 60, 'end_timestamp': now,
             'p': 1, 'page_size': 10, 'model_name': 'qwen3-4b-cluster1',
             'token_name': 'wp_17_ab12'}),
+        # LLM-02：白名單的其餘路由。
+        'op_options': lambda c: c.op_options(),
+        'ap_add_quota': lambda c: c.ap_add_quota(42, 50 * nac.QUOTA_PER_POINT),
+        # 免費試用計數（LLM-10）與對帳（LLM-12b）的 admin log 查詢。
+        'ap_log': lambda c: c.ap_log({'type': 2, 'group': 'free', 'start_timestamp': now - 300,
+                                      'end_timestamp': now, 'p': 1, 'page_size': 100,
+                                      'username': 'wsab0000000042'}),
+        'ap_log_stat': lambda c: c.ap_log_stat({'type': 2, 'start_timestamp': now - 3600,
+                                                'end_timestamp': now,
+                                                'model_name': 'qwen3-4b-cluster1'}),
+        'ap_data': lambda c: c.ap_data(now - 3600, now, 'wsab0000000042'),
+        'ap_data_users': lambda c: c.ap_data_users(now - 3600, now),
+        'ap_data_flow': lambda c: c.ap_data_flow(now - 3600, now),
+        'ap_verify_methods': lambda c: c.ap_verify_methods('access_token.generate'),
+        'ap_status': lambda c: c.ap_status(),
+        'ap_pricing': lambda c: c.ap_pricing(),
+        'ap_health': lambda c: c.ap_health('wsab'),
+        'bg_set_user_group': lambda c: c.bg_set_user_group(42, 'free_blocked'),
+        'bg_subtract_quota': lambda c: c.bg_subtract_quota(42, 3 * nac.QUOTA_PER_POINT),
+        'user_verify_revoke': lambda c: c.user_verify_revoke(TENANT_IP, JWT, 'P' * 64, 9),
+        'user_delete_access_token': lambda c: c.user_delete_access_token(TENANT_IP, JWT, JWT, 9),
+        'user_audit_self': lambda c: c.user_audit_self(TENANT_IP, UP),
+        'user_pricing': lambda c: c.user_pricing(TENANT_IP, UP),
+        'user_status': lambda c: c.user_status(TENANT_IP, UP),
+        'user_models': lambda c: c.user_models(TENANT_IP, UP),
+        'user_groups': lambda c: c.user_groups(TENANT_IP, UP),
+        'user_update_token': lambda c: c.user_update_token(
+            TENANT_IP, UP, {**nac.free_trial_token_body('wp_17_ab12', expires), 'id': 5}),
+        'user_set_token_status': lambda c: c.user_set_token_status(TENANT_IP, UP, 5, False),
+        'user_delete_token': lambda c: c.user_delete_token(TENANT_IP, UP, 5),
+        'user_delete_tokens': lambda c: c.user_delete_tokens(TENANT_IP, UP, [5, 6]),
+        'user_log_self_stat': lambda c: c.user_log_self_stat(TENANT_IP, UP, {
+            'type': 2, 'start_timestamp': now - 86400, 'end_timestamp': now}),
+        'user_data_self': lambda c: c.user_data_self(TENANT_IP, UP, now - 86400, now),
+        'user_data_flow_self': lambda c: c.user_data_flow_self(TENANT_IP, UP, now - 86400, now),
     }
 
 
@@ -269,7 +319,6 @@ class TestClientMatchesProxyRouteTable(_Base):
 
     def test_every_request_is_on_the_proxy_whitelist(self):
         now = int(time.time())
-        ctx = proxy_policy.PolicyContext(self.settings, now)
         client = self.client()
         for name, call in sorted(_representative_calls(now).items()):
             before = len(self.recorder.requests)
@@ -285,6 +334,8 @@ class TestClientMatchesProxyRouteTable(_Base):
             headers = request['headers']
             identity = headers['X-Woow-Identity']
             self.assertIn(identity, route.identities, name)
+            ctx = proxy_policy.PolicyContext(self.settings, now, identity=identity,
+                                             query=dict(pairs))
             for key, value in pairs:
                 spec = route.query.get(key)
                 self.assertIsNotNone(spec, '%s：query key %s 代理不收' % (name, key))
@@ -307,6 +358,21 @@ class TestClientMatchesProxyRouteTable(_Base):
             self.assertEqual('X-Security-Proof' in headers, route.proof, name)
             self.assertEqual(name in nac.WEB_METHODS, route.web,
                              '%s：WEB_METHODS 與代理 routetable 的 web 旗標不一致' % name)
+
+    def test_every_proxy_route_has_a_client_method(self):
+        """反方向：代理白名單的每條路由（含每個身分）都有 client 方法會送到它。"""
+        now = int(time.time())
+        client = self.client()
+        covered = set()
+        for call in _representative_calls(now).values():
+            call(client)
+            request = self.recorder.requests[-1]
+            path = request['path'].partition('?')[0]
+            matched = proxy_routes.match(request['method'], path)
+            covered.add((matched.route.name, request['headers']['X-Woow-Identity']))
+        expected = {(route.name, identity) for route in proxy_routes.ROUTES
+                    for identity in route.identities}
+        self.assertEqual(expected - covered, set(), '代理有路由、client 沒有方法送到它')
 
     def test_web_client_refuses_cron_routes_before_sending(self):
         now = int(time.time())
@@ -485,6 +551,555 @@ class TestTransportClassification(_Base):
 
 
 # --------------------------------------------------------------------------- #
+#  NA-03 錄製的 fixture（src/tests/fixtures/newapi/，LLM-02）                       #
+# --------------------------------------------------------------------------- #
+FIXTURES = ROOT / 'src' / 'tests' / 'fixtures' / 'newapi'
+
+#: fixture → (分類, label)：DESIGN §3.4 的分類表逐列（寫入呼叫）。
+FIXTURE_EXPECTED = {
+    'newapi_500_empty_valkey_down': (nac.NotExecuted, 'upstream_unavailable'),
+    'newapi_500_panic': (nac.Unknown, 'new_api_panic'),
+    'proxy_auth': (nac.Definite, 'proxy_auth'),
+    'proxy_bad_request_authorization_not_allowed': (nac.Definite, 'proxy_bad_request'),
+    'proxy_body_timeout': (nac.NotExecuted, 'proxy_body_timeout'),
+    'proxy_budget': (nac.NotExecuted, 'proxy_budget'),
+    'proxy_busy_inflight': (nac.NotExecuted, 'proxy_busy'),
+    'proxy_busy_replay_store': (nac.NotExecuted, 'proxy_busy'),
+    'proxy_config': (nac.NotExecuted, 'proxy_config'),
+    'proxy_connect': (nac.NotExecuted, 'proxy_connect'),
+    'proxy_connect_deadline': (nac.NotExecuted, 'proxy_connect'),
+    'proxy_denied_manage_not_found': (nac.Definite, 'proxy_denied'),
+    'proxy_denied_manage_target': (nac.Definite, 'proxy_denied'),
+    'proxy_denied_reveal_name': (nac.Definite, 'proxy_denied'),
+    'proxy_denied_reveal_not_found': (nac.Definite, 'proxy_denied'),
+    'proxy_denied_reveal_token_mismatch': (nac.Definite, 'proxy_denied'),
+    'proxy_denied_reveal_window': (nac.Definite, 'proxy_denied'),
+    'proxy_internal': (nac.Unknown, 'proxy_internal'),
+    'proxy_policy_manage_mode': (nac.Definite, 'proxy_policy'),
+    'proxy_policy_route': (nac.Definite, 'proxy_policy'),
+    'proxy_reset': (nac.Unknown, 'proxy_reset'),
+    'proxy_timeout': (nac.Unknown, 'proxy_timeout'),
+    'proxy_too_large': (nac.Definite, 'proxy_too_large'),
+    'token_enable_exhausted_error': (nac.Definite, 'message_key'),
+    'token_enable_expired_error': (nac.Definite, 'message_key'),
+}
+#: 傳輸層的 fixture（沒有 body）：由 loopback 伺服器重演。
+TRANSPORT_FIXTURES = {'transport_send_then_drop_manage'}
+
+
+def _load_fixture(name):
+    return json.loads((FIXTURES / ('%s.json' % name)).read_text(encoding='utf-8'))
+
+
+def _fixture_response(fixture):
+    body = b'' if fixture.get('_raw_empty') or fixture.get('body') is None \
+        else json.dumps(fixture['body']).encode()
+    return fixture['_http_status'], _Headers(fixture.get('_headers') or {}), body
+
+
+class TestRecordedFixtureClassification(_Base):
+    """每個 NA-03 fixture 都依 DESIGN §3.4 分類；代理的錯誤 class 與 circuit 的影響一併對。"""
+
+    def test_every_fixture_has_an_expectation(self):
+        names = {path.stem for path in FIXTURES.glob('*.json')}
+        self.assertEqual(names, set(FIXTURE_EXPECTED) | TRANSPORT_FIXTURES,
+                         'fixture 重新同步後多了或少了檔：在 FIXTURE_EXPECTED 補上它的分類')
+
+    def test_http_fixtures(self):
+        for name, (kind, label) in sorted(FIXTURE_EXPECTED.items()):
+            with self.subTest(fixture=name):
+                fixture = _load_fixture(name)
+                status, headers, body = _fixture_response(fixture)
+                result = nac.classify_response(status, headers, body, write=True)
+                self.assertIsInstance(result, kind)
+                self.assertEqual(result.label(), label)
+                self.assertNotIn('<redacted>', repr(result))
+                reason = (fixture.get('body') or {}).get('reason') if isinstance(
+                    fixture.get('body'), dict) else None
+                if isinstance(result, nac.Definite) and result.proxy_error:
+                    self.assertEqual(result.reason, reason)
+
+    def test_fixture_circuit_effects(self):
+        """denied 不開 circuit；簽章／政策錯一次就開；busy／connect／reset 算連續失敗；budget 不計。"""
+        expected = {
+            'proxy_denied_reveal_window': (None, None),
+            'proxy_auth': ('trip', 'llm_proxy_auth'),
+            'proxy_policy_route': ('trip', 'llm_proxy_policy'),
+            'proxy_busy_inflight': ('failure', nac.CIRCUIT_FAILURES_CODE),
+            'proxy_connect': ('failure', nac.CIRCUIT_FAILURES_CODE),
+            'proxy_reset': ('failure', nac.CIRCUIT_FAILURES_CODE),
+            'proxy_budget': (None, None),
+            'newapi_500_empty_valkey_down': ('failure', nac.CIRCUIT_FAILURES_CODE),
+            'token_enable_expired_error': ('success', None),
+        }
+        for name, effect in expected.items():
+            with self.subTest(fixture=name):
+                status, headers, body = _fixture_response(_load_fixture(name))
+                result = nac.classify_response(status, headers, body, write=True)
+                self.assertEqual(nac.circuit_effect('user', result), effect)
+
+    def test_send_then_drop_add_quota_is_unknown_and_never_resent(self):
+        """X09：代理把 add_quota 轉給 new-api 之後、回應之前 pod 被殺 ⇒ Unknown，不重送。"""
+        fixture = _load_fixture('transport_send_then_drop_manage')
+        self.assertEqual((fixture['_transport'], fixture['after_send']), ('RemoteDisconnected', True))
+        self.recorder.mode = 'disconnect'
+        sessions = []
+
+        def factory():
+            session = nac.NewApiClient._new_session()
+            sessions.append(session)
+            return session
+        client = self.client(session_factory=factory)
+        result = client.ap_add_quota(42, 50 * nac.QUOTA_PER_POINT)
+        self.assertIsInstance(result, nac.Unknown)
+        self.assertEqual(result.reason, 'transport')
+        self.assertEqual(len(self.recorder.requests), 1, '寫入只送一次（client 不重試）')
+        request = self.recorder.requests[0]
+        self.assertEqual(request['headers']['Connection'], 'close')
+        self.assertEqual(json.loads(request['body']),
+                         {'id': 42, 'action': 'add_quota', 'mode': 'add',
+                          'value': 50 * nac.QUOTA_PER_POINT})
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].get_adapter('http://x').max_retries.total, 0)
+        self.assertEqual(nac.circuit_effect('ap', result), ('failure', nac.CIRCUIT_FAILURES_CODE))
+
+    def test_rows_not_recorded_by_na03(self):
+        """§3.4 其餘幾列（NA-03 沒錄到）：依表自己組。"""
+        cases = [
+            ((200, {'success': True, 'data': {}}, {}), True, nac.Ok, 'ok'),
+            ((401, {'success': False, 'code': 'AUTH_UNAUTHORIZED'}, {}), True, nac.Definite,
+             'AUTH_UNAUTHORIZED'),
+            ((200, {'success': False, 'message': 'database error'}, {}), True, nac.Unknown,
+             'no_message_key'),
+            ((200, {'success': False, 'message': 'record not found'}, {}), False, nac.Definite,
+             'no_message_key'),
+            ((429, b'', {'Retry-After': '30'}), True, nac.NotExecuted, 'rate_limited'),
+            ((401, {'success': False, 'code': 'ACCESS_TOKEN_EXPIRED'},
+              {'X-Woow-Proxy-Precheck': 'manage'}), True, nac.Definite, 'ACCESS_TOKEN_EXPIRED'),
+            ((502, b'<html>bad gateway</html>', {}), True, nac.Unknown, 'non_json'),
+        ]
+        for (status, body, headers), write, kind, label in cases:
+            with self.subTest(status=status, label=label):
+                result = _classify(status, body, headers, write=write)
+                self.assertIsInstance(result, kind)
+                self.assertEqual(result.label(), label)
+
+
+# --------------------------------------------------------------------------- #
+#  circuit breaker 與 AP 限速的鉤子（DESIGN §1.5、§3.6）                            #
+# --------------------------------------------------------------------------- #
+class _RecordingGuard(nac.CallGuard):
+    def __init__(self, block=None, raise_before=False, raise_after=False):
+        self.block = block
+        self.raise_before = raise_before
+        self.raise_after = raise_after
+        self.before_calls = []
+        self.after_calls = []
+
+    def before(self, identity, priority):
+        self.before_calls.append((identity, priority))
+        if self.raise_before:
+            raise RuntimeError('db down ' + SECRET)
+        return self.block
+
+    def after(self, identity, result):
+        self.after_calls.append((identity, result.kind))
+        if self.raise_after:
+            raise RuntimeError('db down')
+
+
+class TestCallGuard(_Base):
+
+    def test_guard_sees_every_call_with_identity_and_priority(self):
+        guard = _RecordingGuard()
+        client = self.client(guard=guard)
+        client.ap_list_users(1)
+        client.ap_add_quota(42, 15625)
+        client.ap_search_user('wsab0000000042')
+        client.user_self(TENANT_IP, UP)
+        self.assertEqual(guard.before_calls, [
+            ('ap', nac.AP_PRIORITY_BALANCE), ('ap', nac.AP_PRIORITY_CONVERSION),
+            ('ap', nac.AP_PRIORITY_OTHER), ('user', None)])
+        self.assertEqual(guard.after_calls, [('ap', 'ok'), ('ap', 'ok'), ('ap', 'ok'),
+                                             ('user', 'ok')])
+
+    def test_blocked_call_is_not_sent(self):
+        guard = _RecordingGuard(block=nac.NotExecuted('circuit_open'))
+        client = self.client(guard=guard)
+        result = client.user_create_token(TENANT_IP, UP,
+                                          nac.free_trial_token_body('wp_17_ab12', 2 ** 31))
+        self.assertIsInstance(result, nac.NotExecuted)
+        self.assertEqual(result.reason, 'circuit_open')
+        self.assertEqual(self.recorder.requests, [])
+        self.assertEqual(guard.after_calls, [], '沒送出的不再計一次')
+
+    def test_guard_failure_before_is_fail_closed_and_after_is_ignored(self):
+        client = self.client(guard=_RecordingGuard(raise_before=True))
+        result = client.status()
+        self.assertIsInstance(result, nac.NotExecuted)
+        self.assertEqual(result.reason, 'guard_unavailable')
+        self.assertEqual(self.recorder.requests, [])
+        client = self.client(guard=_RecordingGuard(raise_after=True))
+        self.assertTrue(client.status().ok)
+
+    def test_expired_deadline_after_guard_never_sends(self):
+        now = [100.0]
+        guard = _RecordingGuard()
+
+        def before(identity, priority):
+            now[0] += 3
+        guard.before = before
+        client = self.client(guard=guard, monotonic=lambda: now[0])
+        result = client.ap_add_quota(42, 15625, deadline=102.5)
+        self.assertEqual((result.kind, result.reason), ('not_executed', 'deadline'))
+        self.assertEqual(self.recorder.requests, [], 'DB 守衛耗完預算就不能再送寫入')
+        self.assertEqual(guard.after_calls, [])
+
+    def test_connect_and_read_share_the_remaining_deadline(self):
+        client = self.client(monotonic=lambda: 100.0)
+        for remaining in (2, 3, 10, 20, 30):
+            with self.subTest(remaining=remaining):
+                connect, read = client._timeout(nac.TIMEOUT_CRON_READ, 100 + remaining)
+                self.assertGreater(connect, 0)
+                self.assertGreater(read, 1, '代理至少等 1 秒，client 必須留餘裕')
+                self.assertLessEqual(connect + read, remaining,
+                                     '連線與讀取依序發生，不能各自用掉完整剩餘時間')
+
+    def test_ap_calls_need_a_known_priority(self):
+        client = self.client()
+        for priority in (None, 'urgent', 0):
+            with self.assertRaises(nac.NewApiInputError):
+                client.ap_status(priority=priority)
+        self.assertEqual(self.recorder.requests, [])
+
+    def test_priority_ceilings_put_the_balance_refresh_last(self):
+        ceilings = nac.AP_PRIORITY_CEILINGS
+        self.assertEqual(ceilings[nac.AP_PRIORITY_CONVERSION], nac.AP_RATE_PER_MINUTE)
+        self.assertGreater(ceilings[nac.AP_PRIORITY_CONVERSION],
+                           ceilings[nac.AP_PRIORITY_FREE_METER])
+        self.assertGreater(ceilings[nac.AP_PRIORITY_FREE_METER], ceilings[nac.AP_PRIORITY_OTHER])
+        self.assertGreater(ceilings[nac.AP_PRIORITY_OTHER], ceilings[nac.AP_PRIORITY_BALANCE])
+
+    def test_circuit_effect_table(self):
+        denied = _classify(403, {'reason': 'reveal_window'}, {'X-Woow-Proxy-Error': 'denied'})
+        policy = _classify(403, {'reason': 'route'}, {'X-Woow-Proxy-Error': 'policy'})
+        ap_revoked = _classify(401, {'success': False, 'code': 'AUTH_UNAUTHORIZED'})
+        up_revoked = ap_revoked
+        business = _classify(200, {'success': False, 'message_key': 'x'})
+        cases = [
+            ('ap', nac.Ok(status=200), ('success', None)),
+            ('user', nac.NotExecuted('proxy_busy'), ('failure', nac.CIRCUIT_FAILURES_CODE)),
+            ('user', nac.Unknown('proxy_timeout'), ('failure', nac.CIRCUIT_FAILURES_CODE)),
+            ('ap', nac.NotExecuted('connect'), ('failure', nac.CIRCUIT_FAILURES_CODE)),
+            ('user', denied, (None, None)),
+            ('user', policy, ('trip', 'llm_proxy_policy')),
+            ('ap', ap_revoked, ('trip', 'newapi_auth_unauthorized')),
+            ('op', ap_revoked, ('trip', 'newapi_auth_unauthorized')),
+            ('user', up_revoked, ('success', None)),  # 一戶的 UP 失效不是全域故障
+            ('ap', business, ('success', None)),
+            ('bg', policy, (None, None)),  # break_glass_off 不能讓全平台停擺
+            ('bg', nac.Unknown('transport'), (None, None)),
+        ]
+        for reason in nac.CIRCUIT_NEUTRAL_REASONS:
+            cases.append(('user', nac.NotExecuted(reason), (None, None)))
+        for identity, result, effect in cases:
+            with self.subTest(identity=identity, result=result):
+                self.assertEqual(nac.circuit_effect(identity, result), effect)
+        trip_codes = {nac.newapi_error_code(code) for code in nac.SERVICE_AUTH_CODES}
+        self.assertNotIn(nac.NEWAPI_OTHER_CODE, trip_codes, '每個 trip 碼都在封閉登記表裡')
+
+
+# --------------------------------------------------------------------------- #
+#  MCP 跳板（DESIGN §5.2 T3；LLM-02 AC5）                                         #
+# --------------------------------------------------------------------------- #
+class TestMcpUrlGuard(unittest.TestCase):
+    TABLE = {
+        'newapi-proxy.new-api-stg.svc.cluster.local': {'10.43.88.10'},
+        'newapi.new-api-stg.svc.cluster.local': {'10.43.88.11'},
+        'newapi-proxy.new-api.svc.cluster.local': {'10.43.99.10'},
+        'newapi.new-api.svc.cluster.local': {'10.43.99.11'},
+        'sneaky.example.com': {'203.0.113.9', '10.43.88.10'},  # 兩個答案，其中一個是代理
+        'cluster-ip.example.com': {'10.43.1.2'},
+        'demo-mcp.paas-ws-abc.svc.cluster.local': {'10.43.12.5'},
+        'headless-mcp.paas-ws-abc.svc.cluster.local': {'10.42.7.8'},
+        'mcp.example.com': {'203.0.113.7'},
+    }
+
+    def resolver(self, host):
+        return set(self.TABLE.get(host, ()))
+
+    def test_ac5_urls_are_rejected(self):
+        cases = {
+            'http://newapi-proxy.new-api-stg.svc.cluster.local:8080': 'newapi_namespace',
+            'http://newapi-proxy.new-api-stg:8080/x': 'newapi_namespace',
+            'http://newapi-proxy.new-api-stg.svc:8080': 'newapi_namespace',
+            'http://newapi-proxy.new-api-stg.svc.cluster.local.:8080': 'newapi_namespace',
+            'http://NewApi-Proxy.NEW-API.svc.cluster.local': 'newapi_namespace',
+            'http://10-42-3-7.new-api-stg.pod.cluster.local:8080': 'newapi_namespace',
+            'http://10.43.88.10:8080': 'newapi_address',
+            'http://[::ffff:10.43.88.10]:8080': 'newapi_address',
+            'http://10.42.3.77:8080': 'cluster_address',  # pod IP
+            'http://sneaky.example.com/sse': 'newapi_address',
+            'http://cluster-ip.example.com/sse': 'cluster_address',
+            'http://user:pw@10.43.99.11:3000/': 'newapi_address',
+        }
+        for url, reason in cases.items():
+            with self.subTest(url=url):
+                self.assertEqual(mcp_url_guard.jump_reason(url, self.resolver), reason)
+
+    def test_legitimate_urls_pass(self):
+        for url in ('http://demo-mcp.paas-ws-abc.svc.cluster.local:3001/mcp',
+                    'http://headless-mcp.paas-ws-abc.svc.cluster.local:3001/mcp',
+                    'https://mcp.example.com/sse', 'http://localhost:3000/mcp',
+                    'http://unknown.example.invalid/sse', 'https://new-api.example.com/sse',
+                    'not a url', '', None):
+            with self.subTest(url=url):
+                self.assertIsNone(mcp_url_guard.jump_reason(url, self.resolver))
+
+    def test_resolution_failures_and_timeouts_are_empty(self):
+        def boom(host):
+            raise socket.gaierror(-2, 'nope')
+        with patch.object(mcp_url_guard, '_getaddrinfo', side_effect=boom):
+            self.assertEqual(mcp_url_guard.resolve('x.example'), set())
+        with patch.object(mcp_url_guard, 'RESOLVE_TIMEOUT_SECONDS', 0.05), \
+                patch.object(mcp_url_guard, '_getaddrinfo', side_effect=lambda h: time.sleep(0.5)):
+            self.assertEqual(mcp_url_guard.resolve('slow.example'), set())
+
+    def test_resolution_capacity_stays_bounded_after_timeouts(self):
+        # Timed-out libc lookups keep running. They must retain their slots, including
+        # jobs waiting behind the blocked workers, until the actual futures finish.
+        release = threading.Event()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        slots = threading.BoundedSemaphore(2)
+        submitted = []
+        original_submit = executor.submit
+
+        def submit(*args):
+            submitted.append(args)
+            return original_submit(*args)
+
+        def blocked(host):
+            release.wait(2)
+            return {'203.0.113.7'}
+
+        try:
+            with patch.object(mcp_url_guard, '_EXECUTOR', executor), \
+                    patch.object(mcp_url_guard, '_RESOLVE_SLOTS', slots, create=True), \
+                    patch.object(mcp_url_guard, 'RESOLVE_TIMEOUT_SECONDS', 0.005), \
+                    patch.object(mcp_url_guard, '_getaddrinfo', side_effect=blocked), \
+                    patch.object(executor, 'submit', side_effect=submit):
+                for _ in range(20):
+                    self.assertEqual(mcp_url_guard.resolve('slow.example'), set())
+                self.assertEqual(len(submitted), 2, 'running + queued lookups must stay bounded')
+                _, httpcore = mcp_url_guard._http_modules()
+                backend = httpcore.AsyncMockBackend([])
+
+                async def connect_when_full():
+                    with patch.object(mcp_url_guard, '_network_backend', return_value=backend), \
+                            patch.object(backend, 'connect_tcp', wraps=backend.connect_tcp) as connect:
+                        async with mcp_url_guard.guarded_http_client_factory()() as client:
+                            with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
+                                await client.get('http://slow.example/mcp')
+                            self.assertEqual(caught.exception.reason, 'dns_unavailable')
+                        connect.assert_not_called()
+
+                asyncio.run(connect_when_full())
+                self.assertEqual(len(submitted), 2, 'exhausted connections must not enqueue more DNS')
+                release.set()
+                executor.shutdown(wait=True)
+                self.assertTrue(slots.acquire(blocking=False))
+                self.assertTrue(slots.acquire(blocking=False))
+                self.assertFalse(slots.acquire(blocking=False))
+        finally:
+            release.set()
+            executor.shutdown(wait=True)
+
+    def test_actual_connect_pins_one_dns_answer_and_preserves_https_origin(self):
+        _, httpcore = mcp_url_guard._http_modules()
+
+        class Stream(httpcore.AsyncMockStream):
+            async def write(self, buffer, timeout=None):
+                self.writes = getattr(self, 'writes', []) + [buffer]
+
+            async def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+                self.tls = (ssl_context.check_hostname, ssl_context.verify_mode, server_hostname)
+                return self
+
+        class Backend(httpcore.AsyncMockBackend):
+            async def connect_tcp(self, host, port, **kwargs):
+                self.target = (host, port)
+                self.stream = Stream([b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}'])
+                return self.stream
+
+        answers = []
+
+        def alternating(host):
+            if host == 'mcp.example.com':
+                answers.append(host)
+                return {'203.0.113.7'} if len(answers) == 1 else {'10.43.88.10'}
+            return self.resolver(host)
+
+        async def run():
+            backend = Backend([])
+            with patch.object(mcp_url_guard, '_network_backend', return_value=backend, create=True), \
+                    patch.object(httpcore.AnyIOBackend, 'connect_tcp', side_effect=backend.connect_tcp):
+                async with mcp_url_guard.guarded_http_client_factory(resolver=alternating)() as client:
+                    response = await client.get('https://mcp.example.com/mcp')
+                    self.assertEqual(response.json(), {})
+            self.assertEqual(answers, ['mcp.example.com'])
+            self.assertEqual(backend.target, ('203.0.113.7', 443))
+            self.assertEqual(backend.stream.tls, (True, 2, 'mcp.example.com'))
+            self.assertIn(b'Host: mcp.example.com\r\n', b''.join(backend.stream.writes))
+
+        asyncio.run(run())
+
+    def test_connect_fails_closed_on_empty_or_mixed_dns_answers(self):
+        _, httpcore = mcp_url_guard._http_modules()
+
+        async def run():
+            for addresses, reason in ((set(), 'dns_unavailable'),
+                                      ({'203.0.113.7', '10.43.88.10'}, 'newapi_address'),
+                                      ({'203.0.113.7', '10.42.1.2'}, 'cluster_address')):
+                def resolver(host):
+                    return addresses if host == 'mcp.example.com' else self.resolver(host)
+
+                backend = httpcore.AsyncMockBackend([])
+                with patch.object(mcp_url_guard, '_network_backend', return_value=backend, create=True), \
+                        patch.object(backend, 'connect_tcp', wraps=backend.connect_tcp) as connect:
+                    async with mcp_url_guard.guarded_http_client_factory(resolver=resolver)() as client:
+                        with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
+                            await client.get('https://mcp.example.com/mcp')
+                        self.assertEqual(caught.exception.reason, reason)
+                    connect.assert_not_called()
+
+        asyncio.run(run())
+
+    def test_real_tls_verifies_hostname_and_keeps_original_sni(self):
+        # A real handshake locks down certificate identity; replacing the URL with
+        # its numeric IP or disabling verification would make this test fail.
+        from datetime import datetime, timedelta, timezone
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.x509.oid import NameOID
+
+        httpx, httpcore = mcp_url_guard._http_modules()
+        key = ed25519.Ed25519PrivateKey.generate()
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'mcp.example.com')])
+        now = datetime.now(timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=1))
+                .not_valid_after(now + timedelta(minutes=5))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName('mcp.example.com')]),
+                               critical=False).sign(key, None))
+
+        with tempfile.TemporaryDirectory() as folder:
+            cert_path, key_path = Path(folder) / 'cert.pem', Path(folder) / 'key.pem'
+            cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                                   serialization.PrivateFormat.PKCS8,
+                                                   serialization.NoEncryption()))
+            server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_context.load_cert_chain(cert_path, key_path)
+            sni = []
+            server_context.set_servername_callback(lambda sock, name, context: sni.append(name))
+            client_context = ssl.create_default_context(cafile=str(cert_path))
+            requests_seen = []
+
+            async def respond(reader, writer):
+                try:
+                    requests_seen.append(await reader.readuntil(b'\r\n\r\n'))
+                    writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}')
+                    await writer.drain()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            def resolver(host):
+                return {'127.0.0.1'} if host in ('mcp.example.com', 'wrong.example.com') else set()
+
+            async def run():
+                server = await asyncio.start_server(respond, '127.0.0.1', 0, ssl=server_context)
+                port = server.sockets[0].getsockname()[1]
+                async with server:
+                    with patch.object(httpcore, 'default_ssl_context', return_value=client_context):
+                        async with mcp_url_guard.guarded_http_client_factory(resolver=resolver)() as client:
+                            response = await client.get('https://mcp.example.com:%s/mcp' % port)
+                            self.assertEqual(response.status_code, 200)
+                            with self.assertRaises(httpx.ConnectError):
+                                await client.get('https://wrong.example.com:%s/mcp' % port)
+                self.assertEqual(sni, ['mcp.example.com', 'wrong.example.com'])
+                self.assertEqual(len(requests_seen), 1, 'bad hostname must fail before HTTP')
+                self.assertIn(('Host: mcp.example.com:%s\r\n' % port).encode(), requests_seen[0])
+
+            asyncio.run(run())
+
+    def test_factory_uses_mcp_compatible_defaults_and_disables_all_redirects(self):
+        httpx, httpcore = mcp_url_guard._http_modules()
+
+        async def run():
+            for location in ('/same-host', 'http://10.43.88.10/'):
+                backend = httpcore.AsyncMockBackend([
+                    b'HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: '
+                    + location.encode() + b'\r\n\r\n'])
+                with patch.object(mcp_url_guard, '_network_backend', return_value=backend):
+                    async with mcp_url_guard.guarded_http_client_factory(resolver=self.resolver)(
+                            headers={'X-Mcp-Test': 'configured'}) as client:
+                        self.assertIsInstance(client, httpx.AsyncClient)
+                        self.assertEqual(client.timeout.connect, 30)
+                        self.assertEqual(client.timeout.read, 300)
+                        self.assertEqual(client.headers['X-Mcp-Test'], 'configured')
+                        self.assertFalse(client.follow_redirects)
+                        with self.assertRaises(mcp_url_guard.McpUrlRejected) as caught:
+                            await client.get('http://mcp.example.com/redirect')
+                        self.assertEqual(caught.exception.reason, 'redirect')
+
+        asyncio.run(run())
+
+    def test_protected_names_cover_both_environments(self):
+        self.assertEqual(set(mcp_url_guard.PROTECTED_HOSTS), {
+            'newapi-proxy.new-api.svc.cluster.local', 'newapi.new-api.svc.cluster.local',
+            'newapi-proxy.new-api-stg.svc.cluster.local', 'newapi.new-api-stg.svc.cluster.local'})
+        self.assertIn(nac.PROXY_URL_PROD.split('//')[1].split(':')[0],
+                      mcp_url_guard.PROTECTED_HOSTS)
+        self.assertIn(nac.PROXY_URL_STG.split('//')[1].split(':')[0],
+                      mcp_url_guard.PROTECTED_HOSTS)
+
+
+# --------------------------------------------------------------------------- #
+#  健康檢查 helper（後台〔測試連線〕；LLM-14 也用）                                  #
+# --------------------------------------------------------------------------- #
+class TestHealthHelpers(_Base):
+
+    def test_status_invariants_need_the_exact_type(self):
+        good = dict(nac.STATUS_INVARIANTS)
+        self.assertTrue(all(nac.status_invariants(good).values()))
+        bad = {**good, 'quota_per_unit': 500000.0, 'register_enabled': 0}
+        result = nac.status_invariants(bad)
+        self.assertFalse(result['quota_per_unit'])
+        self.assertFalse(result['register_enabled'])
+        self.assertFalse(any(nac.status_invariants(None).values()))
+
+    def test_readyz_only_returns_states_numbers_and_booleans(self):
+        self.recorder.status = 503
+        self.recorder.body = json.dumps({
+            'ready': False, 'upstream': 'connect', 'replay_store': 'ok', 'ap_days_left': 12,
+            'op_days_left': None, 'break_glass': False, 'version': '0.2.0',
+            'extra': 'nap_' + 'x' * 40, 'upstream_detail': 'Bearer abc'}).encode()
+        base = self.base.rsplit(':', 1)[0] + ':8080'
+        with patch.object(nac, 'PROXY_ADMIN_PORT', self.server.server_address[1]):
+            out = nac.fetch_readyz(base)
+        self.assertEqual(out, {'reachable': True, 'http_status': 503, 'ready': False,
+                               'upstream': 'connect', 'replay_store': 'ok', 'ap_days_left': 12,
+                               'op_days_left': None, 'break_glass': False, 'version': '0.2.0'})
+        self.assertEqual(self.recorder.requests[-1]['path'], '/readyz')
+        self.recorder.mode = 'disconnect'
+        with patch.object(nac, 'PROXY_ADMIN_PORT', self.server.server_address[1]):
+            self.assertEqual(nac.fetch_readyz(base), {'reachable': False, 'error': 'unknown'})
+
+
+# --------------------------------------------------------------------------- #
 #  秘密不外洩                                                                    #
 # --------------------------------------------------------------------------- #
 class TestSecretsDoNotLeak(_Base):
@@ -524,9 +1139,21 @@ class TestSecretsDoNotLeak(_Base):
             def get_param(self, key):
                 return self.value
 
-        env = {'ir.config_parameter': Icp(nac.PROXY_URL_STG)}
+        class RuntimeState:
+            guards = []
+
+            def _llm_call_guard(self, role):
+                guard = nac.CallGuard()
+                self.guards.append((role, guard))
+                return guard
+
+        state = RuntimeState()
+        env = {'ir.config_parameter': Icp(nac.PROXY_URL_STG), nac.RUNTIME_STATE_MODEL: state}
         environ = {nac.ENV_AUTH_CRON: '%s:%s' % (KID, SECRET)}
-        self.assertEqual(nac.get_newapi_client(env, nac.ROLE_CRON, environ=environ).role, 'cron')
+        client = nac.get_newapi_client(env, nac.ROLE_CRON, environ=environ)
+        self.assertEqual(client.role, 'cron')
+        self.assertEqual(state.guards[-1][0], 'cron')
+        self.assertIs(client._guard, state.guards[-1][1], '工廠一律掛上 DB 的 circuit／限速鉤子')
         with self.assertRaises(nac.NewApiConfigError) as caught:
             nac.get_newapi_client(env, nac.ROLE_WEB, environ=environ)
         self.assertEqual(caught.exception.code, 'signing_key_missing')

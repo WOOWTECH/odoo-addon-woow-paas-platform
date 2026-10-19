@@ -64,6 +64,10 @@
                             <field name="full_description" nolabel="1"
                                    placeholder="Detailed description with features and use cases"/>
                         </page>
+                        <page string="Service Documentation" name="documentation">
+                            <field name="documentation" nolabel="1"
+                                   placeholder="Markdown guide: getting started, configuration, troubleshooting and support"/>
+                        </page>
                         <page string="MCP Sidecar" name="mcp_sidecar">
                             <group>
                                 <field name="mcp_enabled"/>

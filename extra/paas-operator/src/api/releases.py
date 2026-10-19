@@ -20,6 +20,7 @@ from src.models.schemas import (
     ReleaseCreateRequest,
     ReleaseConfigProjectionRequest,
     ReleaseInfo,
+    ReleaseLogsResponse,
     ReleaseResetConfigRequest,
     ReleaseRevisionsResponse,
     ReleaseRollbackRequest,
@@ -59,6 +60,7 @@ from src.services.helm import _cloudflared_namespace, _live_objects, _sanitize_r
 from src.services.helm_limiter import helm_operation_slot
 from src.services.tenant_secret import validate_tenant_secret
 from src.services.ngrok_errors import describe_ngrok_error
+from src.services.release_logs import LOG_TAIL_DEFAULT, LOG_TAIL_MAX, ReleaseLogReader
 from src.services.upgrade_preflight import (
     build_expansion_error_detail,
     classify_expansion_rejection,
@@ -151,6 +153,7 @@ router = APIRouter(prefix="/api/releases", tags=["releases"])
 
 helm_service = HelmService()
 k8s_service = KubernetesService()
+release_log_reader = ReleaseLogReader()
 cloudflare_service = CloudflareService()
 
 
@@ -1741,6 +1744,28 @@ def _read_advertised_address(namespace: str, name: str, schemes) -> Tuple[Option
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read the advertised public address. Check operator logs.",
         )
+
+
+@router.get(
+    "/{namespace}/{name}/logs",
+    response_model=ReleaseLogsResponse,
+    summary="Read a bounded snapshot of release container logs",
+)
+def get_release_logs(
+    namespace: str,
+    name: str,
+    pod: Optional[str] = Query(default=None, max_length=253),
+    container: Optional[str] = Query(default=None, max_length=63),
+    tail_lines: int = Query(default=LOG_TAIL_DEFAULT, ge=1, le=LOG_TAIL_MAX),
+    previous: bool = Query(default=False),
+):
+    """Authenticate via middleware, then scope discovery and logs to one release."""
+    _validate_namespace_or_raise(namespace)
+    try:
+        return release_log_reader.read(namespace, name, pod, container, tail_lines, previous)
+    except ValueError:
+        # Do not reflect untrusted selectors or underlying command errors.
+        raise HTTPException(status_code=422, detail="Invalid release log request") from None
 
 
 @router.get(

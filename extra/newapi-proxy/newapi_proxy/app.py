@@ -14,8 +14,15 @@ Order of checks on the proxy port, each failing closed:
 10. Authorization / X-Security-Proof handling ................. 400 / 403
 11. JSON body + body policy ................................... 400 / 403
 12. in-flight cap per identity ................................ 503 busy
-13. reveal / add_quota pre-checks, add_quota hourly budget .... 403 denied / 429
+13. reveal / manage / bg group pre-checks, add_quota hourly budget  403 denied / 429
 14. one upstream call, no retry: connect 502 | reset 502 | timeout 504
+
+Break-glass (``bg``, CRON key only, ``PROXY_BREAK_GLASS_UNTIL`` in the future) has
+two routes (§1.4.2-2): the free-tier group fallback ``PUT /api/user/`` (the proxy
+reads the user and sends the full update with only ``group`` changed) and the
+``mode: subtract`` claw-back on ``POST /api/user/manage``. Every accepted bg call
+writes an audit line and a ``break_glass_used`` warning, and counts in
+``newapi_proxy_break_glass_calls_total``.
 
 Upstream responses pass through with only Content-Type, X-Oneapi-Request-Id
 and Retry-After kept (Set-Cookie and everything else dropped); a route with a
@@ -125,6 +132,9 @@ class Ctx:
     proxy_error: str | None = None
     reason: str | None = None
     upstream_status: int | None = None
+    #: Audit kind of this request: the route's (``reveal``／``add_quota``), or ``bg`` for
+    #: every break-glass call; None = not audited.
+    audit: str | None = None
     t0: float = field(default_factory=time.monotonic)
 
 
@@ -474,12 +484,15 @@ class Proxy:
             logs.audit("bg", kid=kid, ip=ip, method=method, path=path, active=active)
             if not active:
                 raise ProxyError("policy", "break_glass_off")
+            # Every use of break-glass is an alert (DESIGN §1.4.2-2): the owner opened it.
+            logs.event("break_glass_used", logging.WARNING, kid=kid, method=method, path=path)
 
         matched = routetable.match(method, path)
         if matched is None or identity not in matched.route.identities:
             raise ProxyError("policy", "route")
         route = matched.route
         ctx.route = route.name
+        ctx.audit = "bg" if identity == "bg" else route.audit
         if key_class == "web" and not route.web:
             raise ProxyError("policy", "key_scope")
 
@@ -535,19 +548,20 @@ class Proxy:
             upstream_body = b""
         else:
             obj = parse_json_object(body)
+            pctx = policy.PolicyContext(settings, now, identity=identity, query=dict(pairs))
             try:
-                validated = route.body_policy(obj, policy.PolicyContext(settings, now))
+                validated = route.body_policy(obj, pctx)
             except policy.PolicyDenied as err:
                 # e.g. an add_quota "override" attempt: worth an audit line that
                 # says against whom and for how much (only exact int fields).
                 fields: dict[str, Any] = {"kid": kid, "ip": ip}
-                if route.audit == "add_quota":
+                if ctx.audit is not None:
                     target, value = _int_field(obj, "id"), _int_field(obj, "value")
                     if target is not None:
                         fields["target_user_id"] = target
                     if value is not None:
                         fields["value"] = value
-                self._audit(route, fields, result="denied", reason=err.reason)
+                self._audit(ctx, fields, result="denied", reason=err.reason)
                 raise ProxyError("policy", err.reason) from None
             upstream_body = json.dumps(validated, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode(
                 "ascii"
@@ -591,36 +605,63 @@ class Proxy:
         if route.special == "reveal":
             token_id = int(matched.params["id"])
             audit_fields["token_id"] = token_id
-            relayed = await self._reveal_precheck(ctx, route, token_id, ip, upstream_auth, deadline, audit_fields)
+            relayed = await self._reveal_precheck(ctx, token_id, ip, upstream_auth, deadline, audit_fields)
+            if relayed is not None:
+                return relayed
+        elif route.special == "manage" and ctx.identity == "bg":
+            assert validated is not None
+            audit_fields.update(op="manage_subtract", target_user_id=validated["id"], value=validated["value"])
+            _user, relayed = await self._target_precheck(
+                ctx, validated["id"], ip, deadline, audit_fields, policy.PAAS_USER_GROUPS
+            )
             if relayed is not None:
                 return relayed
         elif route.special == "manage":
             assert validated is not None
             audit_fields.update(target_user_id=validated["id"], value=validated["value"])
-            reservation, relayed = await self._manage_precheck(ctx, route, validated, deadline, audit_fields)
+            reservation, relayed = await self._manage_precheck(ctx, validated, ip, deadline, audit_fields)
             if relayed is not None:
                 return relayed
+        elif route.special == "user_group":
+            assert validated is not None
+            audit_fields.update(op="user_group", target_user_id=validated["id"], group=validated["group"])
+            user, relayed = await self._target_precheck(
+                ctx, validated["id"], ip, deadline, audit_fields, policy.PAAS_USER_GROUPS
+            )
+            if relayed is not None:
+                return relayed
+            update = policy.bg_user_group_update(
+                user, validated, policy.PolicyContext(self.settings, self._now(), identity=ctx.identity)
+            )
+            if update is None:
+                self._audit(ctx, audit_fields, result="denied", reason="manage_target")
+                raise ProxyError("denied", "manage_target")
+            # new-api overwrites every user field it is sent: send back what it just said,
+            # with only the group changed.
+            upstream_body = json.dumps(update, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode(
+                "ascii"
+            )
 
         budget = self._remaining(deadline)
         if budget < MIN_SEND_BUDGET:
             if reservation is not None:
                 self.budget.release(reservation)
-            self._audit(route, audit_fields, result="not_sent", reason="deadline")
+            self._audit(ctx, audit_fields, result="not_sent", reason="deadline")
             raise ProxyError("connect", "deadline")
         # Written *before* the call: if this pod dies mid-call (OOM, SIGKILL,
-        # shutdown timeout) the reveal / add_quota is still on record as
-        # possibly executed — the case reconciliation needs evidence for.
-        self._audit(route, audit_fields, result="sending")
+        # shutdown timeout) the reveal / add_quota / bg call is still on record
+        # as possibly executed — the case reconciliation needs evidence for.
+        self._audit(ctx, audit_fields, result="sending")
         try:
             resp = await self.upstream.send(method, url, headers, upstream_body, budget=budget, write=write)
         except UpstreamError as err:
             if reservation is not None and err.kind == CONNECT:
                 self.budget.release(reservation)
             self.metrics.inc("newapi_proxy_upstream_errors_total", kind=err.kind, exc=err.exc_type)
-            self._audit(route, audit_fields, result=err.kind)
+            self._audit(ctx, audit_fields, result=err.kind)
             raise ProxyError(err.kind, err.detail or f"upstream_{err.kind}") from None
         except asyncio.CancelledError:
-            self._audit(route, audit_fields, result="cancelled")
+            self._audit(ctx, audit_fields, result="cancelled")
             raise
         ctx.upstream_status = resp.status
         if route.response is not None:
@@ -642,15 +683,20 @@ class Proxy:
             answer = _json_or_none(resp.body)
             if resp.status == 200 and isinstance(answer, dict) and answer.get("success") is True:
                 self.metrics.inc("newapi_proxy_add_quota_value_total", validated["value"])
-        self._audit(route, audit_fields, **outcome)
+        self._audit(ctx, audit_fields, **outcome)
         return response
 
-    def _audit(self, route: routetable.Route, fields: dict, **outcome: Any) -> None:
-        if route.audit is None:
+    _AUDIT_METRICS = {
+        "reveal": "newapi_proxy_reveal_total",
+        "add_quota": "newapi_proxy_add_quota_total",
+        "bg": "newapi_proxy_break_glass_calls_total",
+    }
+
+    def _audit(self, ctx: Ctx, fields: dict, **outcome: Any) -> None:
+        if ctx.audit is None:
             return
-        metric = {"reveal": "newapi_proxy_reveal_total", "add_quota": "newapi_proxy_add_quota_total"}[route.audit]
-        self.metrics.inc(metric, result=str(outcome.get("result")))
-        logs.audit(route.audit, **fields, **outcome)
+        self.metrics.inc(self._AUDIT_METRICS[ctx.audit], result=str(outcome.get("result")))
+        logs.audit(ctx.audit, **fields, **outcome)
 
     async def _precheck_get(
         self, ctx: Ctx, url: str, ip: str, auth: str, deadline: float, what: str
@@ -704,51 +750,65 @@ class Proxy:
         ctx.upstream_status = resp.status
         return self._relay(resp, ctx, extra={PRECHECK_HEADER: what})
 
-    async def _reveal_precheck(self, ctx, route, token_id, ip, auth, deadline, fields) -> Response | None:
+    async def _reveal_precheck(self, ctx, token_id, ip, auth, deadline, fields) -> Response | None:
         """Reveal only wp_ keys created within the last 120 s (〔REV〕2)."""
         try:
             data, relay = await self._precheck_get(ctx, f"/api/token/{token_id}", ip, auth, deadline, "reveal")
         except ProxyError as err:
-            self._audit(route, fields, result="denied" if err.kind == "denied" else "not_sent", reason=err.reason)
+            self._audit(ctx, fields, result="denied" if err.kind == "denied" else "not_sent", reason=err.reason)
             raise
         if relay is not None:
-            self._audit(route, fields, result="precheck_relayed", status=relay.status)
+            self._audit(ctx, fields, result="precheck_relayed", status=relay.status)
             return self._relay_precheck(ctx, relay, "reveal")
         denial = policy.reveal_denial(data.get("data"), token_id, self._now())
         if denial is not None:
-            self._audit(route, fields, result="denied", reason=denial)
+            self._audit(ctx, fields, result="denied", reason=denial)
             raise ProxyError("denied", denial)
         return None
 
-    async def _manage_precheck(self, ctx, route, validated: dict, deadline: float, fields: dict):
+    async def _target_precheck(
+        self, ctx: Ctx, target_id: int, ip: str, deadline: float, fields: dict, groups: frozenset
+    ) -> tuple[dict | None, Response | None]:
+        """AP ``GET /api/user/{id}``: the target must be a PaaS user (prefix, role 1, ``groups``).
+
+        Returns ``(user, None)`` to go on, or ``(None, relayed)`` when new-api's own
+        refusal is relayed. Raises 403 ``denied`` (``manage_target``／``manage_not_found``)
+        or 502 ``connect`` — the guarded call was not sent in either case.
+        """
+        try:
+            data, relay = await self._precheck_get(
+                ctx, f"/api/user/{target_id}", ip, f"Bearer {self.settings.ap_token}", deadline, "manage"
+            )
+        except ProxyError as err:
+            self._audit(ctx, fields, result="denied" if err.kind == "denied" else "not_sent", reason=err.reason)
+            raise
+        if relay is not None:
+            self._audit(ctx, fields, result="precheck_relayed", status=relay.status)
+            return None, self._relay_precheck(ctx, relay, "manage")
+        user = data.get("data")
+        pctx = policy.PolicyContext(self.settings, self._now(), identity=ctx.identity)
+        if not policy.manage_target_ok(user, target_id, pctx, groups=groups):
+            self._audit(ctx, fields, result="denied", reason="manage_target")
+            raise ProxyError("denied", "manage_target")
+        return user, None
+
+    async def _manage_precheck(self, ctx, validated: dict, ip: str, deadline: float, fields: dict):
         """Hourly budget, then the target must be a PaaS user (role 1, default)."""
         reservation = self.budget.reserve(validated["value"], self.monotonic())
         if reservation is None:
-            self._audit(route, fields, result="denied", reason="hourly_cap")
+            self._audit(ctx, fields, result="denied", reason="hourly_cap")
             logs.event("add_quota_budget_exhausted", logging.WARNING, cap=self.budget.cap)
             raise ProxyError("budget", "hourly_cap")
         try:
-            data, relay = await self._precheck_get(
-                ctx,
-                f"/api/user/{validated['id']}",
-                SYSTEM_IPS["ap"],
-                f"Bearer {self.settings.ap_token}",
-                deadline,
-                "manage",
+            _user, relayed = await self._target_precheck(
+                ctx, validated["id"], ip, deadline, fields, frozenset({"default"})
             )
-        except ProxyError as err:
+        except ProxyError:
             self.budget.release(reservation)
-            self._audit(route, fields, result="denied" if err.kind == "denied" else "not_sent", reason=err.reason)
             raise
-        if relay is not None:
+        if relayed is not None:
             self.budget.release(reservation)
-            self._audit(route, fields, result="precheck_relayed", status=relay.status)
-            return None, self._relay_precheck(ctx, relay, "manage")
-        pctx = policy.PolicyContext(self.settings, self._now())
-        if not policy.manage_target_ok(data.get("data"), validated["id"], pctx):
-            self.budget.release(reservation)
-            self._audit(route, fields, result="denied", reason="manage_target")
-            raise ProxyError("denied", "manage_target")
+            return None, relayed
         return reservation, None
 
     def _relay(self, resp: UpstreamResponse, ctx: Ctx, extra: dict[str, str] | None = None) -> Response:

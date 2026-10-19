@@ -427,6 +427,18 @@ export const cloudService = reactive({
         }
     },
 
+    async fetchDocumentation(workspaceId, serviceId) {
+        return jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/documentation`, {});
+    },
+
+    async fetchLogs(workspaceId, serviceId, options = {}) {
+        return jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/logs`, {
+            tail_lines: 500,
+            previous: false,
+            ...options,
+        });
+    },
+
     async resetAdminPassword(workspaceId, serviceId) {
         this.operationLoading.resetAdminPassword = true;
         try {

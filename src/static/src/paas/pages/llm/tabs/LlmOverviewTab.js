@@ -6,8 +6,10 @@ import { WoowButton } from "../../../components/button/WoowButton";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
+import { LlmTermsModal } from "../../../components/llm/LlmTermsModal";
 import { llmService } from "../../../services/llm_service";
 import { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } from "../../../services/llm_errors";
+import { representativeModels } from "./LlmModelsTab";
 import { copyText } from "../../../utils/clipboard";
 import {
   formatAiQuota,
@@ -33,11 +35,26 @@ export const PROVISION_FAILURE_HINT_AFTER = 3;
 /** 開通超過 3 分鐘：多一句「比平常久」（DESIGN §3.5 的 SLO 是「通常 1 分鐘內」）。 */
 const PROVISION_SLOW_HINT_MS = 3 * 60 * 1000;
 /**
- * 「最近 10 筆」每 30 秒重新整理一次。tracer 期間 `/api/llm/usage/recent` 是同步外呼，每次吃
- * 租戶合成 IP 1 格 GA（360 次／180 秒，DESIGN §1.5），所以這也是**最短間隔**：分頁在背景時
- * 計時器到了也不刷，等回到前景才補一次；回到前景時計時器還沒到就不刷（反覆切分頁不會多打）。
+ * 「最近 10 筆」每 30 秒重新整理一次。`/api/llm/usage/recent` 只讀後端快取（SWR，N26；LLM-02）：
+ * 快取超過 60 秒時後端排一次背景刷新，這次先回舊資料與 `data_as_of`。分頁在背景時計時器到了也不刷，
+ * 等回到前景才補一次；回到前景時計時器還沒到就不刷（反覆切分頁不會多打）。
  */
 export const USAGE_REFRESH_MS = 30000;
+/**
+ * 還沒有今天的快取（`data_as_of: null`，背景刷新剛排下去）：先每 3 秒再問一次、最多 5 次，
+ * 之後回到 30 秒的節奏（new-api 連不上時不會一直狂問）。
+ */
+export const USAGE_FIRST_FILL_MS = 3000;
+export const USAGE_FIRST_FILL_POLLS = 5;
+
+/** 下一次「最近 10 筆」的間隔（純函式，tests/ui/test_llm_overview.mjs 直接驗）。 */
+export function usageRefreshDelay(result, firstFillPolls) {
+  const data = result && result.success ? result.data : null;
+  if (data && data.data_as_of == null && firstFillPolls < USAGE_FIRST_FILL_POLLS) {
+    return USAGE_FIRST_FILL_MS;
+  }
+  return USAGE_REFRESH_MS;
+}
 /** 建立中的試用金鑰超過這麼久（與後端 `_STALE_CREATING_SECONDS` 相同），處理它的 worker 已經不在了。 */
 export const STALE_CREATING_MS = 300 * 1000;
 
@@ -127,7 +144,7 @@ export function llmUsageRow(item, index) {
  */
 export class LlmOverviewTab extends Component {
   static template = "woow_paas_platform.LlmOverviewTab";
-  static components = { WoowButton, WoowCard, WoowIcon, LlmKeyRevealModal };
+  static components = { WoowButton, WoowCard, WoowIcon, LlmKeyRevealModal, LlmTermsModal };
   static props = {};
 
   setup() {
@@ -138,9 +155,13 @@ export class LlmOverviewTab extends Component {
       refreshing: false,
       actionError: null,
       showReveal: false,
+      /** 條款對話框：null（關）、"read"（尚未開通畫面的連結）、"accept"（改版橫幅的〔查看並同意〕）。 */
+      showTerms: null,
       baseUrlCopied: false,
       baseUrlCopyFailed: false,
       refreshingUsage: false,
+      /** 後端還沒有今天的快取、正在快問（「讀取中」而不是「今天還沒有呼叫紀錄」）。 */
+      usageWaiting: false,
       provisionSince: null,
       pollFailing: false,
       announcement: "",
@@ -149,6 +170,8 @@ export class LlmOverviewTab extends Component {
     /** 上一次 onStateLoaded 的畫面（開通中 → 已開通／失敗時給讀屏播報一次）。 */
     this.lastScreen = null;
     this.freeTrialHeadingRef = useRef("freeTrialHeading");
+    /** 打開條款對話框的那顆鈕：關閉後焦點還給它（還在畫面上的話）。 */
+    this.termsTrigger = null;
     this.alive = true;
     /** `/api/llm/state` 連續失敗次數（開通輪詢的退避用；成功一次歸零）。 */
     this.stateFailures = 0;
@@ -158,6 +181,8 @@ export class LlmOverviewTab extends Component {
     this.usageTimer = null;
     /** 「最近 10 筆」的計時器在背景分頁到期（已滿最短間隔）：回到前景再補一次。 */
     this.usagePaused = false;
+    /** 還沒有快取時已經快問了幾次（見 USAGE_FIRST_FILL_POLLS）。 */
+    this.usageFirstFillPolls = 0;
     this.onVisibilityChange = () => {
       if (document.hidden || !this.alive) return;
       if (this.pollPaused) {
@@ -174,6 +199,7 @@ export class LlmOverviewTab extends Component {
     onMounted(() => {
       document.addEventListener("visibilitychange", this.onVisibilityChange);
       this.load();
+      llmService.fetchModels();
     });
     onWillUnmount(() => {
       this.alive = false;
@@ -250,7 +276,15 @@ export class LlmOverviewTab extends Component {
       // 登入逾時：再打也一樣，等使用者重新整理頁面。
       return;
     }
-    this.usageTimer = setTimeout(() => this.onUsageTimer(), USAGE_REFRESH_MS);
+    const delay = usageRefreshDelay(result, this.usageFirstFillPolls);
+    if (delay === USAGE_FIRST_FILL_MS) {
+      this.usageFirstFillPolls += 1;
+    } else if (result && result.success && result.data && result.data.data_as_of != null) {
+      // 第一次快問已用完時保持慢速；只有拿到新快取，才重設下一次缺資料的預算。
+      this.usageFirstFillPolls = 0;
+    }
+    this.state.usageWaiting = delay === USAGE_FIRST_FILL_MS;
+    this.usageTimer = setTimeout(() => this.onUsageTimer(), delay);
   }
 
   onUsageTimer() {
@@ -285,8 +319,19 @@ export class LlmOverviewTab extends Component {
       || null;
   }
 
+  /** published 的條款還是草稿文字（D15：stg 的草稿；`/api/llm/state` 的 tos_current_draft）。 */
   get tosIsDraft() {
-    return typeof this.tosVersion === "string" && this.tosVersion.startsWith("draft");
+    const overview = this.llm.overview;
+    return !!overview && overview.tos_current_draft === true;
+  }
+
+  /** 沒有 published 的條款（或讀不到版本）：不能開通，也不能叫使用者「請先同意」。 */
+  get tosUnavailable() {
+    return this.screen === "not_activated" && !this.tosVersion;
+  }
+
+  get tosUnavailableText() {
+    return llmErrorMessage({ code: "llm_tos_unavailable" });
   }
 
   get canActivate() {
@@ -307,16 +352,22 @@ export class LlmOverviewTab extends Component {
 
   // 文案放在 JS（單行 _t）：模板的多行文字節點會把換行與縮排一起抽進 msgid。
   get heroTitle() {
-    return _t("Call 40+ AI models with your credit");
+    return _t("Call AI models with your credit");
   }
 
   get heroSubtitle() {
     return _t("OpenAI-compatible API, plus a free trial of Qwen3-4B.");
   }
 
-  /** tracer 沒有價目 API，「模型與價格」子頁也還沒上線（LLM-06）：不叫使用者去那裡查。 */
+  get representativePrices() {
+    return this.llm.models && this.llm.models.state === "ok" ? representativeModels(this.llm.models.items) : [];
+  }
+
+  get previewUnit() { return _t("Input / output points per million tokens"); }
+
+  /** 價目與開通各自載入：讀不到價格仍可同意條款並開通。 */
   get pricingFallbackText() {
-    return _t("Prices cannot be shown yet; the Models & Pricing page is coming soon.");
+    return _t("Prices are temporarily unavailable. You can view Models & Pricing after activation.");
   }
 
   get tosDraftText() {
@@ -416,15 +467,28 @@ export class LlmOverviewTab extends Component {
     return _t("Your AI credit is 0. You can use the free trial model for now; moving credit from your points wallet is coming soon.");
   }
 
-  /** 條款改版（DESIGN §6.4-3）。〔查看並同意〕與 `/api/llm/account/accept_terms` 在 LLM-04。 */
+  /** 條款改版（DESIGN §6.4-3）：版本不同就顯示橫幅與〔查看並同意〕。 */
   get needsReaccept() {
     const account = this.account;
     return !!account && !!account.tos && account.tos.needs_reaccept === true
       && (this.screen === "active" || this.screen === "suspended");
   }
 
+  /**
+   * gate 會擋（`tos.blocking`）：建金鑰、轉換、啟用金鑰都要先同意。`requires_reaccept=false` 的改版只有
+   * 橫幅、不擋——畫面與 gate 要一致（LLM-05 審查）。舊後端沒有 `blocking` 時，版本不同就當成會擋。
+   */
+  get tosBlocking() {
+    const tos = this.account && this.account.tos;
+    if (!tos) return false;
+    if (typeof tos.blocking === "boolean") return tos.blocking;
+    return tos.needs_reaccept === true;
+  }
+
   get needsReacceptText() {
-    return _t("The AI Models Terms of Service have been updated. Please accept them again before creating keys or converting points; existing keys are not affected.");
+    return this.tosBlocking
+      ? _t("The AI Models Terms of Service have been updated. Please accept them again before creating keys, converting points or re-enabling keys; existing keys are not affected.")
+      : _t("The AI Models Terms of Service have been updated. Please review the new version; nothing you can do now is affected.");
   }
 
   /** 全域 guard（DESIGN §6.2「系統維護」）：建金鑰與轉換都停，既有金鑰照常。 */
@@ -438,16 +502,30 @@ export class LlmOverviewTab extends Component {
   }
 
   get freeTrial() {
-    return (this.llm.overview && this.llm.overview.free_trial) || {};
+    // Both endpoints read llm_free_usage. Keep a fresh state response authoritative
+    // when the usage refresh fails or still belongs to the previous Taipei day.
+    const state = (this.llm.overview && this.llm.overview.free_trial) || {};
+    const usage = this.llm.usage && this.llm.usage.free_trial;
+    if (!usage || this.llm.usageError ||
+        (state.day_tpe && (!usage.day_tpe || usage.day_tpe < state.day_tpe))) {
+      return state;
+    }
+    return { ...state, ...usage };
   }
 
-  /** 今日次數：tracer 期間由 usage/recent 提供（state 的 today_count 在 LLM-10 之前是 null）。 */
   get freeTrialUsageText() {
-    const usage = this.llm.usage;
-    const count = usage && typeof usage.today_count === "number"
-      ? usage.today_count : this.freeTrial.today_count;
-    const limit = (usage && usage.daily_limit) || this.freeTrial.daily_limit || 200;
-    return formatFreeTrialUsage(count, limit);
+    return formatFreeTrialUsage(this.freeTrial.today_count, this.freeTrial.daily_limit || 200);
+  }
+
+  get freeTrialCappedText() {
+    return this.freeTrial.capped
+      ? _t("Today's free trial is used up. Restores automatically at 00:00 Taipei time.") : null;
+  }
+
+  get freeTrialCreateDisabledText() {
+    if (this.freeTrial.capped) return this.freeTrialCappedText;
+    return this.freeTrial.keys_created_today >= 3
+      ? llmErrorMessage({ code: "llm_free_key_daily_limit" }) : null;
   }
 
   get baseUrl() {
@@ -489,7 +567,7 @@ export class LlmOverviewTab extends Component {
 
   get canCreateFreeTrialKey() {
     return this.screen === "active" && !this.hasFreeTrialKey && !this.state.showReveal
-      && !this.guardTripped && !this.needsReaccept;
+      && !this.guardTripped && !this.tosBlocking && !this.freeTrialCreateDisabledText;
   }
 
   get freeTrialHint() {
@@ -530,9 +608,12 @@ export class LlmOverviewTab extends Component {
     return this.llm.usageError ? llmErrorMessage({ code: this.llm.usageError }) : null;
   }
 
-  /** usage 還沒回來（null）就不能說「今天還沒有呼叫紀錄」。 */
+  /**
+   * usage 還沒回來（null）、或後端還沒有今天的快取而且還在快問，都不能說「今天還沒有呼叫紀錄」。
+   */
   get usageLoading() {
-    return !this.llm.usage && !this.llm.usageError;
+    if (this.llm.usageError) return false;
+    return !this.llm.usage || (this.llm.usage.data_as_of == null && this.state.usageWaiting);
   }
 
   get usageDataTimeText() {
@@ -541,6 +622,10 @@ export class LlmOverviewTab extends Component {
   }
 
   get emptyUsageText() {
+    if (this.llm.usage && this.llm.usage.data_as_of == null) {
+      // 快問了幾次還是沒有快取（new-api 暫時連不上）：不能假裝「今天沒有呼叫」。
+      return _t("Usage data is not available yet. Please check back later.");
+    }
     return _t("No free trial calls today yet.");
   }
 
@@ -600,11 +685,48 @@ export class LlmOverviewTab extends Component {
       return;
     }
     this.state.actionError = llmErrorMessage(result);
-    if (result.code === "llm_tos_outdated") {
-      // 條款版本換了：取新版本、要求重新勾選。
+    if (result.code === "llm_tos_required" || result.code === "llm_tos_outdated") {
+      // 送出的不是目前的版本（頁面打開之後改版了）：取新版本、要求重新勾選。
       this.state.tosAccepted = false;
       await this.load();
     }
+  }
+
+  /** 打開條款對話框（「尚未開通」的連結＝read；改版橫幅的〔查看並同意〕＝accept）。 */
+  openTerms(mode, ev) {
+    if (this.state.showTerms) return;
+    this.termsTrigger = ev && ev.currentTarget ? ev.currentTarget : null;
+    this.state.showTerms = mode === "accept" ? "accept" : "read";
+  }
+
+  /**
+   * 條款對話框關閉：焦點還給打開它的那顆鈕。同意了 ⇒ 重新讀狀態（橫幅消失、建金鑰恢復）；
+   * 只是閱讀、而對話框讀到的版本和畫面上的不同（頁面打開之後改版）⇒ 也重新讀，並取消勾選。
+   */
+  onTermsClosed({ accepted, version } = {}) {
+    this.state.showTerms = null;
+    const trigger = this.termsTrigger;
+    this.termsTrigger = null;
+    // 同意之後橫幅（連同〔查看並同意〕）會消失：焦點改放「免費試用」標題（tabindex=-1，畫面上一定還在）。
+    const heading = accepted ? this.freeTrialHeadingRef.el : null;
+    const target = heading || trigger;
+    if (target && target.isConnected !== false && typeof target.focus === "function") {
+      target.focus();
+    }
+    if (accepted) {
+      this.state.actionError = null;
+      this.state.announcement = this.termsAcceptedText;
+      this.load();
+      return;
+    }
+    if (typeof version === "string" && version && this.tosVersion && version !== this.tosVersion) {
+      this.state.tosAccepted = false;
+      this.load();
+    }
+  }
+
+  get termsAcceptedText() {
+    return _t("You have accepted the updated AI Models Terms of Service.");
   }
 
   /** 開通失敗與「暫時無法連線」的〔重新整理〕：重新讀一次帳戶狀態（tracer 沒有重新開戶）。 */

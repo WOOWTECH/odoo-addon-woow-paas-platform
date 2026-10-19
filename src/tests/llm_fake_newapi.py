@@ -180,6 +180,19 @@ class FakeNewApi:
         items = [dict(u, password=None) for u in self.users.values() if username in u['username']]
         return self._leave('ap_search_user', self._ok({'items': items, 'total': len(items)}))
 
+    def ap_health(self, prefix, **kw):
+        """circuit 的健康檢查（LLM-02）：搜尋永遠不存在的 ``<prefix>0000000000``。"""
+        self._enter('ap_health')
+        return self._leave('ap_health', self._ok({'items': [], 'total': 0}))
+
+    def ap_pricing(self, **kw):
+        """``GET /api/pricing``: preserve public envelope metadata (LLM-06)."""
+        self._enter('ap_pricing')
+        return self._leave('ap_pricing', self._ok({
+            'data': [{'model_name': 'qwen3-4b-cluster1', 'enable_groups': ['free'], 'model_ratio': 0}],
+            'group_ratio': {'default': 1.3, 'free': 0}, 'vendors': [],
+        }))
+
     def ap_get_user(self, user_id, **kw):
         self._enter('ap_get_user')
         user = self.users.get(user_id)

@@ -187,6 +187,51 @@ class TestModelIdRef(unittest.TestCase):
         self.assertIn("無法驗", violations[0])
 
 
+_MODEL_EXTENSION = """from odoo import models
+
+
+class ThingExtension(models.Model):
+    _inherit = 'woow_probe.thing'
+
+    def _cron_from_the_extension(self):
+        return True
+
+
+class ForeignExtension(models.Model):
+    _inherit = 'project.project'
+
+    def _cron_on_a_foreign_model(self):
+        return True
+"""
+
+
+class TestInPlaceExtension(unittest.TestCase):
+    """#1680：`_inherit` 單一字串、沒有 `_name` 的就地擴充，method 屬於被擴充的 model。"""
+
+    def test_method_defined_on_an_in_place_extension_is_wired(self):
+        with _FixtureRoot() as fx:
+            # 檔名排在 probe.py 前面：併入不能依賴掃描順序。
+            fx.write("src/models/a_extension.py", _MODEL_EXTENSION)
+            fx.cron("model_woow_probe_thing", "model._cron_from_the_extension()")
+            self.assertEqual(fx.gate(), [])
+
+    def test_extension_methods_do_not_leak_to_other_models(self):
+        with _FixtureRoot() as fx:
+            fx.write("src/models/a_extension.py", _MODEL_EXTENSION)
+            fx.cron("model_woow_probe_other", "model._cron_from_the_extension()")
+            violations = fx.gate()
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("woow_probe.other", violations[0])
+
+    def test_foreign_extension_does_not_invent_a_model(self):
+        with _FixtureRoot() as fx:
+            fx.write("src/models/a_extension.py", _MODEL_EXTENSION)
+            fx.cron("model_project_project", "model._cron_on_a_foreign_model()")
+            violations = fx.gate()
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn("model_project_project", violations[0])
+
+
 class TestCorrectWiring(unittest.TestCase):
     def test_correct_wiring_is_green(self):
         """D 格。"""

@@ -123,6 +123,23 @@ class TestAddonsUnpack(unittest.TestCase):
                          [{"path": "mod_b/font.otf", "target": "../../../share/fonts/x.otf"}])
         self.assertEqual(report["modules"]["mod_a"]["symlinks_outside"], [])
 
+    def test_several_tars_for_one_addon_dir(self):
+        """同一個 addon 根目錄可以分好幾顆 tar（根目錄是 symlink 的模組各自一顆，#1844）。"""
+        tar_a, tar_b = self.dir / "a1.tar", self.dir / "b1.tar"
+        with tarfile.open(tar_a, "w") as tar:
+            tar.add(self.src / "mod_a", arcname="mod_a")
+        with tarfile.open(tar_b, "w") as tar:
+            tar.add(self.src / "mod_b", arcname="mod_b")
+        args = ["--inventory", str(self.inventory), "--out", str(self.dir / "out")]
+        self.assertEqual(addons_unpack.main(args + ["%s=%s" % (BASE, tar_a), "%s=%s" % (BASE, tar_b)]), 0)
+        # 同一個模組出現在兩顆 tar ⇒ 拒收
+        both = self.make_tar()
+        args2 = ["--inventory", str(self.inventory), "--out", str(self.dir / "out2")]
+        self.assertEqual(addons_unpack.main(args2 + ["%s=%s" % (BASE, both), "%s=%s" % (BASE, tar_b)]), 3)
+        # 少一個模組 ⇒ 拒收
+        args3 = ["--inventory", str(self.inventory), "--out", str(self.dir / "out3")]
+        self.assertEqual(addons_unpack.main(args3 + ["%s=%s" % (BASE, tar_a)]), 3)
+
     def test_refuses_non_empty_output(self):
         (self.dir / "out" / "addons" / "old").mkdir(parents=True)
         self.assertEqual(self.run_unpack(self.make_tar()), 2)

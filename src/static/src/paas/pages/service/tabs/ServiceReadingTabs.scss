@@ -1,0 +1,140 @@
+.o_woow_service_information {
+  min-width: 0;
+  padding: clamp(1rem, 4vw, 2rem);
+  overflow-wrap: anywhere;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+
+    h2 { margin: 0.35rem 0 0; font-size: 1.5rem; }
+  }
+
+  &__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  &__version_note {
+    margin-bottom: 1.25rem;
+    padding: 0.75rem 1rem;
+    border-left: 3px solid #e3a738;
+    border-radius: 0.4rem;
+    background: #fff8e9;
+    line-height: 1.5;
+
+    p { margin: 0.35rem 0 0; }
+  }
+
+  &__body {
+    line-height: 1.7;
+
+    h1, h2, h3, h4 { margin: 1.5rem 0 0.75rem; line-height: 1.3; }
+    h1 { font-size: 1.75rem; }
+    h2 { font-size: 1.4rem; }
+    h3 { font-size: 1.2rem; }
+    ul, ol { padding-left: 1.5rem; }
+    li { margin: 0.3rem 0; }
+    a { color: #4b6bfb; }
+    pre { max-width: 100%; overflow-x: auto; padding: 1rem; background: #f5f6fa; border-radius: 0.5rem; }
+    code { overflow-wrap: anywhere; }
+    table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+    td, th { padding: 0.5rem; border: 1px solid #e6e8ee; }
+    blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid #5f81fc; }
+  }
+}
+
+.o_woow_service_logs {
+  min-width: 0;
+
+  &__permission { padding: 2rem; text-align: center; }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid #dce1eb;
+    border-radius: 0.75rem;
+    background: #fff;
+    color: #5f698c;
+
+    input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: #1a1c21;
+    }
+
+    &:focus-within { border-color: #5f81fc; box-shadow: 0 0 0 2px rgba(95, 129, 252, 0.15); }
+  }
+
+  &__card { min-width: 0; overflow: hidden; padding: 0; }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid #e6e8ee;
+
+    h2 { min-width: 0; margin: 0; font-size: 1.25rem; overflow-wrap: anywhere; }
+  }
+
+  &__actions { display: flex; flex-shrink: 0; gap: 0.25rem; }
+  &__actions button[aria-pressed="true"] { background: #edf0ff; color: #4b6bfb; }
+  &__controls { padding: 1rem 1.25rem; }
+  &__controls p { margin: 0.75rem 0 0; }
+
+  &__sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+
+    label { display: flex; flex: 1 1 14rem; min-width: 0; flex-direction: column; gap: 0.35rem; font-size: 0.8rem; color: #5f698c; }
+    select { width: 100%; min-width: 0; padding: 0.5rem; color: #1a1c21; background: #fff; border: 1px solid #dce1eb; border-radius: 0.5rem; }
+  }
+
+  &__refresh { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+  &__previous { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+  &__error { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.75rem 1.25rem; background: #fff4e5; color: #885411; }
+
+  &__viewport {
+    height: clamp(18rem, 50vh, 40rem);
+    min-width: 0;
+    max-width: 100%;
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: #1c1d21;
+    color: #e3e5ea;
+    padding: 1rem 1.25rem;
+  }
+
+  &__text {
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    font: 0.8125rem/1.7 'Monaco', 'Menlo', monospace;
+    white-space: pre;
+    overflow: visible;
+
+    &--wrap { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+  }
+
+  &__empty { margin: 0; color: #c2c7d3; }
+  &__latest { display: flex; justify-content: flex-end; padding: 0.75rem 1.25rem; background: #f7f8fc; }
+}
+
+@media (max-width: 640px) {
+  .o_woow_service_detail .o_woow_tab { padding: 0.75rem 0.8rem; gap: 0.35rem; }
+}

@@ -721,6 +721,10 @@ class ShSubscriptionFix(models.Model):
             email_layout_xmlid='mail.mail_notification_light',
         )
         mail = Mail.browse(mail_id) if mail_id else Mail
+        if mail:
+            # Clean the rendered default; preserve customized noupdate senders.
+            company = partner.company_id if partner.company_id.email else self.env.user.company_id
+            mail.email_from = company._woow_paas_mail_sender(mail.email_from)
         _logger.info(
             "[SUB_FIX] billing-hold notice queued partner=%s sub=%s service=%s mail=%s",
             partner.id, subscription.id, service.id, mail.id or None,
@@ -1139,6 +1143,9 @@ class ShSubscriptionFix(models.Model):
             return Mail
         mail = Mail.browse(mail_id) if mail_id else Mail
         if mail:
+            # Clean the rendered default; preserve customized noupdate senders.
+            company = partner.company_id if partner.company_id.email else self.env.user.company_id
+            mail.email_from = company._woow_paas_mail_sender(mail.email_from)
             mail.write({'auto_delete': False})
         _logger.info(
             "Low-balance notification queued for partner %s mail=%s",
@@ -1228,6 +1235,9 @@ class ShSubscriptionFix(models.Model):
             return Mail
         mail = Mail.browse(mail_id) if mail_id else Mail
         if mail:
+            # Clean the rendered default; preserve customized noupdate senders.
+            company = partner.company_id if partner.company_id.email else self.env.user.company_id
+            mail.email_from = company._woow_paas_mail_sender(mail.email_from)
             mail.write({'auto_delete': False})
         _logger.info(
             "[SUB_FIX] cancellation email queued partner=%s sub=%s mail=%s",
@@ -1362,8 +1372,14 @@ class ShSubscriptionFix(models.Model):
         email_values = (
             {'attachment_ids': [(6, 0, attachment_id.ids)]} if attachment_id else {})
         ctx = self._woow_subscription_status_context(has_invoice=bool(attachment_id))
-        template.sudo().with_context(**ctx).send_mail(
-            self.id, force_send=True, email_values=email_values)
+        template = template.sudo().with_context(**ctx)
+        # This path sends immediately: normalize before send_mail reaches SMTP.
+        sender = template._render_field('email_from', self.ids, compute_lang=True)[self.id]
+        company = self.sh_company_id if self.sh_company_id.email else self.env.user.company_id
+        clean_sender = company._woow_paas_mail_sender(sender)
+        if clean_sender != sender:
+            email_values['email_from'] = clean_sender
+        template.send_mail(self.id, force_send=True, email_values=email_values)
 
     def _handle_invoice_creation(self, invoice_id):
         """Override upstream: when wallet can cover, post + pay from wallet.
@@ -1445,7 +1461,7 @@ class ShSubscriptionFix(models.Model):
         if not token:
             return False, 'no_token'
 
-        # ECPay V4：這張卡最近被 ECPay 拒絕過（或要求 3D）⇒ 本計費週期不再對
+        # ECPay V4：這張卡最近 7 天被 ECPay 拒絕過（或要求 3D）⇒ 冷卻期內不再對
         # 同一個 BindCardID 自動授權（官方：連續失敗可能被暫停授權）。不建
         # topup、零外呼；dunning（失敗計數＋低餘額通知）照常往下走。
         if token._woow_auto_charge_blocked():

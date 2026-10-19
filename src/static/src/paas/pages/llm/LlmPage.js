@@ -5,6 +5,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { router } from "../../core/router";
 import { LLM_TABS, isLlmTabLive, llmTabPath, normalizeLlmTab } from "../../core/llm_routes";
+import { LlmModelsTab } from "./tabs/LlmModelsTab";
 import { LlmOverviewTab } from "./tabs/LlmOverviewTab";
 
 /** 子頁的名稱與圖示（順序取 llm_routes.LLM_TABS）。名稱在呼叫時才 `_t()`。 */
@@ -23,7 +24,7 @@ const TAB_META = {
  * 子頁用平台既有的水平 `.o_woow_tabs`（桌面與手機同一套、手機可橫捲）。**子頁的唯一來源是
  * 網址**（`props.tab`，由 Root 從 router.params 帶進來）：切換時只改 hash，重新整理、上一頁／
  * 下一頁都停在同一個子頁；本元件不另存一份 currentTab（那會與網址分岔）。
- * 本票只上線「總覽」，其他子頁顯示「即將推出」。
+ * 總覽與模型價格已上線，其他子頁依各自的票開放。
  *
  * 子頁列是「改網址的導覽」，不是 WAI-ARIA tabs（那要 roving tabindex、方向鍵、aria-controls）：
  * 照 ServiceDetailPage 的 .o_woow_tabs 用一般按鈕，外層 `<nav>` 帶名稱，目前的子頁標 aria-current。
@@ -31,7 +32,7 @@ const TAB_META = {
  */
 export class LlmPage extends Component {
   static template = "woow_paas_platform.LlmPage";
-  static components = { WoowIcon, LlmOverviewTab };
+  static components = { WoowIcon, LlmOverviewTab, LlmModelsTab };
   static props = {
     tab: { type: String, optional: true },
   };
