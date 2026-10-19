@@ -212,6 +212,7 @@
 8	test_cloud_api.TestCloudServiceController
 5	test_cloud_api.TestSeedTemplateHelmValueSpecs
 3	test_cloud_api.TestWorkspaceAPI
+1	test_cloud_app_documentation_seed.TestCloudAppDocumentationSeed
 11	test_cloud_app_template.TestCloudAppTemplate
 5	test_cloud_service.TestAssembleDeployValues411
 20	test_cloud_service.TestCloudService
