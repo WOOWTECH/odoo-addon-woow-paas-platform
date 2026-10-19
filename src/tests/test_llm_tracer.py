@@ -70,6 +70,7 @@ from .llm_test_support import (
     llm_env,
     reset_llm_config,
     scope_claims,
+    scope_swr_queue,
 )
 
 MODULE = 'woow_paas_platform'
@@ -77,10 +78,12 @@ TOS = TEST_TOS
 ACCOUNT_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_account'
 KEY_LOGGER = 'odoo.addons.woow_paas_platform.models.llm_api_key'
 CONTROLLER_LOGGER = 'odoo.addons.woow_paas_platform.controllers.llm'
-#: cron 路徑（CRON 金鑰）與 web 路徑（WEB 金鑰）各自會叫的 client 方法。
+#: cron 路徑（CRON 金鑰）與 web 路徑（WEB 金鑰）各自會叫的 client 方法。LLM-02 起 usage/recent 是
+#: SWR：``user_log_self`` 由背景刷新 cron 以 CRON 金鑰叫（端點本身不外呼）。
 CRON_ONLY_METHODS = ('ap_create_user', 'ap_search_user', 'user_login', 'user_list_access_tokens',
-                     'user_verify_generate', 'user_create_access_token', 'user_delete_session')
-WEB_PATH_METHODS = ('user_create_token', 'user_list_tokens', 'user_reveal_token', 'user_log_self')
+                     'user_verify_generate', 'user_create_access_token', 'user_delete_session',
+                     'user_log_self')
+WEB_PATH_METHODS = ('user_create_token', 'user_list_tokens', 'user_reveal_token')
 
 
 def _broken_signing_value(kid):
@@ -343,6 +346,8 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         mail_count = self.env['mail.mail'].sudo().search_count([])
         Account = type(self.env[ACCOUNT])
         Event = type(self.env[EVENT])
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        State = type(self.env['woow_paas_platform.llm_runtime_state'])
         with patch('requests.sessions.Session.request', side_effect=forbidden) as http, \
                 patch.object(Account, '_llm_client') as client, \
                 patch.object(Account, '_llm_claim_for_provision',
@@ -352,7 +357,13 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
                 patch.object(Event, '_llm_event_cleanup_tick',
                              side_effect=AssertionError('event cleanup ran')) as cleanup, \
                 patch.object(Event, '_llm_alert_delivery_tick',
-                             side_effect=AssertionError('alert delivery ran')) as delivery:
+                             side_effect=AssertionError('alert delivery ran')) as delivery, \
+                patch.object(Cache, '_llm_swr_refresh_tick',
+                             side_effect=AssertionError('swr refresh ran')) as swr, \
+                patch.object(State, '_llm_connection_test_tick',
+                             side_effect=AssertionError('connection test ran')) as probe, \
+                patch.object(State, '_llm_circuit_gate',
+                             side_effect=AssertionError('circuit gate ran')) as gate:
             # 「手動觸發」＝跑 cron 的 server action（與 method_direct_trigger 同一段 code、同一
             # 個執行者），但不經 _try_lock：live server 剛好在跑同一支 cron 時不會 UserError。
             for xmlid, (model, method) in sorted(llm_common.LLM_CRONS.items()):
@@ -369,6 +380,9 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         self.assertFalse(refresh.called, '未設定時餘額刷新不能跑')
         self.assertFalse(cleanup.called, '未設定時清理也不跑（所有 LLM cron 一致）')
         self.assertFalse(delivery.called, '未設定時 webhook 也不送')
+        self.assertFalse(swr.called, '未設定時 SWR 刷新不跑（LLM-02）')
+        self.assertFalse(probe.called, '未設定時測試連線不跑（LLM-02）')
+        self.assertFalse(gate.called, '未設定時連 circuit 的健康檢查都不做')
         self.assertFalse(http.called)
         self.assertEqual(self.env['woow.billing.incident'].sudo().search_count([]),
                          incident_count)
@@ -397,20 +411,32 @@ class TestLlmUnconfiguredZeroOutbound(TransactionCase):
         configure(self.env, prefix='wp', block=0)
         Account = type(self.env[ACCOUNT])
         Event = type(self.env[EVENT])
-        with patch.object(Account, '_llm_client') as client, \
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        State = type(self.env['woow_paas_platform.llm_runtime_state'])
+        # circuit 的閘門讀的是共用 DB（另一條連線）裡 live server 的狀態：這裡固定成「關著」。
+        with patch.object(llm_common, 'circuit_allows', return_value=True) as gate, \
+                patch.object(Account, '_llm_client') as client, \
                 patch.object(Account, '_llm_claim_for_provision', return_value=None) as claim, \
                 patch.object(Account, '_llm_balance_refresh_tick', return_value=False) as refresh, \
                 patch.object(Event, '_llm_event_cleanup_tick', return_value=False) as cleanup, \
-                patch.object(Event, '_llm_alert_delivery_tick', return_value=False) as delivery:
+                patch.object(Event, '_llm_alert_delivery_tick', return_value=False) as delivery, \
+                patch.object(Cache, '_llm_swr_refresh_tick', return_value=False) as swr, \
+                patch.object(State, '_llm_connection_test_tick', return_value=False) as probe:
             self.env[ACCOUNT]._cron_llm_provision()
             self.env[ACCOUNT]._cron_llm_balance_refresh()
             self.env[EVENT]._cron_llm_event_cleanup()
             self.env[EVENT]._cron_llm_alert_delivery()
+            self.env['woow_paas_platform.llm_swr_cache']._cron_llm_swr_refresh()
+            self.env['woow_paas_platform.llm_runtime_state']._cron_llm_connection_test()
         client.assert_called_once_with(nac.ROLE_CRON)
         claim.assert_called_once()
         refresh.assert_called_once()
         cleanup.assert_called_once()
         delivery.assert_called_once()
+        swr.assert_called_once()
+        probe.assert_called_once()
+        # 外呼類 cron（開戶、餘額刷新、SWR）才過 circuit 的閘門；清理、webhook、測試連線不看它。
+        self.assertEqual(gate.call_count, 3)
 
 
 # ====================================================================== #
@@ -660,17 +686,32 @@ class TestLlmTracerHttp(HttpCase):
                          {'client_request_id': str(uuid.uuid4()), 'kind': 'paid'})
         self.assertEqual((paid['code'], paid['field']), ('llm_key_invalid', 'kind'))
 
-        # 用量：一筆免費試用呼叫；channel 被剝掉、金鑰對回鏡像
+        # 用量：一筆免費試用呼叫；channel 被剝掉、金鑰對回鏡像。LLM-02：端點只讀快取（第一次是空的、
+        # 排一次背景刷新），刷新 cron 以 CRON 金鑰讀完之後才看得到。
         self.fake.add_log(user['id'], token['name'])
+        calls = len(self.fake.calls)
+        first = self._rpc('/api/llm/usage/recent')['data']
+        self.assertEqual((first['items'], first['data_as_of']), ([], None))
+        self.assertEqual(len(self.fake.calls), calls, '端點不外呼（N26）')
+        scope_swr_queue(self.env, [account.id])
+        self.env.invalidate_all()
+        # SWR cron 也會讀 token 清單；同一方法在兩個階段應各用自己的金鑰。
+        web_role_calls = list(self.fake.role_calls)
+        self.env['woow_paas_platform.llm_swr_cache']._cron_llm_swr_refresh()
         recent = self._rpc('/api/llm/usage/recent')['data']
         self.assertEqual(recent['today_count'], 1)
         self.assertEqual(recent['items'][0]['key_id'], mirror.id)
         self.assertNotIn('channel', recent['items'][0])
 
         # finding 12：web 路徑取 WEB 金鑰、cron 取 CRON 金鑰（取 client 的 role 與實際呼叫都對）
-        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_WEB, nac.ROLE_WEB])
-        self.assertEqual({r for n, r in self.fake.role_calls if n in WEB_PATH_METHODS},
+        self.assertEqual(self.client.roles_used(), [nac.ROLE_CRON, nac.ROLE_WEB, nac.ROLE_CRON])
+        self.assertEqual({r for n, r in web_role_calls if n in WEB_PATH_METHODS},
                          {nac.ROLE_WEB})
+        swr_role_calls = self.fake.role_calls[len(web_role_calls):]
+        self.assertEqual({r for _, r in swr_role_calls}, {nac.ROLE_CRON})
+        self.assertEqual({(n, r) for n, r in swr_role_calls
+                          if n in WEB_PATH_METHODS},
+                         {('user_list_tokens', nac.ROLE_CRON)})
         self.assertEqual({r for n, r in self.fake.role_calls if n in CRON_ONLY_METHODS},
                          {nac.ROLE_CRON})
 

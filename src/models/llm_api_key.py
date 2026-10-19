@@ -219,13 +219,23 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_keys_payload(self, partner):
+        """金鑰清單：只讀鏡像、不外呼（SWR，N26；LLM-02）。
+
+        ``data_as_of``＝鏡像的用量與最後使用時間上一次從 new-api 讀回的時間（``llm_swr`` 的 ``tokens``）；
+        超過 30 秒就排一次背景刷新（cron 以 CRON 金鑰、本帳戶的 UP 讀 ``GET /api/token/``）。
+        """
         Account = self.env['woow_paas_platform.llm_account']
         account = Account._llm_account_for_partner(partner)
         account._llm_require_listable()
         keys = account.api_key_ids.filtered(lambda k: k.state not in ('deleted', 'lost'))
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        cached = Cache._llm_swr_get(account, 'tokens')
+        fetched_at = cached and cached['fetched_at']
+        if keys.filtered('newapi_token_id'):
+            Cache._llm_swr_touch(account, 'tokens', fetched_at)
         return {
             'items': [key._llm_dto() for key in keys.sorted('id', reverse=True)],
-            'data_as_of': None,
+            'data_as_of': _iso(fetched_at) if fetched_at else None,
         }
 
     # ------------------------------------------------------------------ #

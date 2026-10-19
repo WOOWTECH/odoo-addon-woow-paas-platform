@@ -380,6 +380,11 @@ def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
             'http://<release>-mcp.<namespace>.svc.cluster.local:3001/mcp); '
             f'got: {url}'
         )
+    # LLM-02（DESIGN §5.2 T3）：不能拿 PaaS 當打 new-api／newapi-proxy 的跳板。與 model constraint
+    # 共用同一個判斷（two-layer-acl-lockstep），這裡先回友善訊息、不讓 ValidationError 冒上來。
+    McpServer = request.env['woow_paas_platform.mcp_server']
+    if McpServer._internal_service_reason(url):
+        return McpServer._internal_service_message()
     return None
 
 

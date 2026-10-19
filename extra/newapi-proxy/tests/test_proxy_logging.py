@@ -145,7 +145,7 @@ def test_logs_never_contain_secrets_and_audit_every_reveal(stdout_logs):
     assert not re.search(r"\b[0-9a-f]{64}\b", out)  # no signature or digest of any kind
 
     access = [line for line in lines if line.get("event") == "request"]
-    assert {line["route"] for line in access} >= {"anon.status", "user.login", "user.token.reveal", "ap.user.manage"}
+    assert {line["route"] for line in access} >= {"status", "user.login", "user.token.reveal", "ap.user.manage"}
     for line in access:
         assert set(line) >= {"method", "route", "status", "ms", "request_id", "ip", "identity", "kid"}
         assert "/api/token/42" not in json.dumps(line)  # templates, not concrete paths

@@ -10,8 +10,8 @@ only rule that cannot be bypassed with ``"Mode"`` or ``"role": true``.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from .settings import QUOTA_PER_POINT, Settings
 
@@ -62,6 +62,11 @@ class PolicyDenied(Exception):
 class PolicyContext:
     settings: Settings
     now: int
+    #: The request's identity: one route can mean different things per identity
+    #: (``POST /api/user/manage``: ap adds, bg subtracts).
+    identity: str = ""
+    #: The validated query pairs (``PUT /api/token/?status_only=true``).
+    query: Mapping[str, str] = field(default_factory=dict)
 
 
 def _is_int(value: Any) -> bool:
@@ -141,8 +146,42 @@ def manage_add_quota(body: dict, ctx: PolicyContext) -> dict:
     return {"id": target, "action": "add_quota", "mode": "add", "value": value}
 
 
-def manage_target_ok(user: Any, target_id: int, ctx: PolicyContext) -> bool:
-    """Pre-check of the add_quota target read with AP `GET /api/user/{id}`."""
+def manage_subtract(body: dict, ctx: PolicyContext) -> dict:
+    """`POST /api/user/manage` as bg: the claw-back after a voided order (DESIGN §4.2.4).
+
+    ``mode: subtract`` only, same value bounds as add. ``override`` is never
+    accepted from anyone.
+    """
+    _exact_keys(body, {"id", "action", "mode", "value"}, "manage_fields")
+    target = _int_in(body["id"], 1, 2_147_483_647, "manage_id")
+    if body["action"] != "add_quota":
+        raise PolicyDenied("manage_action")
+    if body["mode"] != "subtract":
+        raise PolicyDenied("manage_mode")
+    value = _int_in(body["value"], 1, MANAGE_MAX_VALUE, "manage_value")
+    return {"id": target, "action": "add_quota", "mode": "subtract", "value": value}
+
+
+def manage(body: dict, ctx: PolicyContext) -> dict:
+    """`POST /api/user/manage`: ap may only add, bg may only subtract."""
+    if ctx.identity == "bg":
+        return manage_subtract(body, ctx)
+    return manage_add_quota(body, ctx)
+
+
+#: Groups a PaaS user may be in: ``free_blocked`` is the free-tier fallback of
+#: DESIGN §1.3.3 that only bg sets.
+PAAS_USER_GROUPS = frozenset({"default", "free_blocked"})
+
+
+def manage_target_ok(
+    user: Any, target_id: int, ctx: PolicyContext, groups: frozenset = frozenset({"default"})
+) -> bool:
+    """Pre-check of the manage target read with AP `GET /api/user/{id}`.
+
+    add_quota (ap) only credits ``group == "default"`` users; the bg claw-back
+    and the group change also accept ``free_blocked``.
+    """
     if not isinstance(user, dict):
         return False
     return (
@@ -152,8 +191,59 @@ def manage_target_ok(user: Any, target_id: int, ctx: PolicyContext) -> bool:
         and bool(ctx.settings.username_re.fullmatch(user["username"]))
         and _is_int(user.get("role"))
         and user["role"] == 1
-        and user.get("group") == "default"
+        and _is_str(user.get("group"))
+        and user["group"] in groups
     )
+
+
+# --- bg (break-glass) ---------------------------------------------------------
+
+
+def bg_user_group(body: dict, ctx: PolicyContext) -> dict:
+    """`PUT /api/user/` as bg: the client names a user and a group, nothing else.
+
+    new-api's update overwrites ``username``, ``display_name``, ``group`` and
+    ``remark`` with whatever it is sent (``model/user.go`` ``EditWithTx``): the
+    proxy reads the user first and sends those back with only ``group`` changed
+    (:func:`bg_user_group_update`).
+    """
+    _exact_keys(body, {"id", "group"}, "bg_group_fields")
+    target = _int_in(body["id"], 1, 2_147_483_647, "bg_group_id")
+    if not _is_str(body["group"]) or body["group"] not in PAAS_USER_GROUPS:
+        raise PolicyDenied("bg_group_value")
+    return {"id": target, "group": body["group"]}
+
+
+#: new-api's ``model.User`` limits (``validate:"max=…"``).
+_USER_DISPLAY_NAME_MAX = 20
+_USER_REMARK_MAX = 255
+
+
+def bg_user_group_update(user: Any, validated: dict, ctx: PolicyContext) -> dict | None:
+    """The full `PUT /api/user/` body for a group change, or None if the target is not ours.
+
+    Built only from the user new-api just returned: same ``username``,
+    ``display_name`` and ``remark``, ``role`` 1, no password and no
+    ``admin_permissions`` (either would need an admin proof and is never sent).
+    """
+    if not manage_target_ok(user, validated["id"], ctx, groups=PAAS_USER_GROUPS):
+        return None
+    display = user.get("display_name")
+    remark = user.get("remark")
+    if remark is None:
+        remark = ""
+    if not (_is_str(display) and len(display) <= _USER_DISPLAY_NAME_MAX):
+        return None
+    if not (_is_str(remark) and len(remark) <= _USER_REMARK_MAX):
+        return None
+    return {
+        "id": validated["id"],
+        "username": user["username"],
+        "display_name": display,
+        "group": validated["group"],
+        "remark": remark,
+        "role": 1,
+    }
 
 
 # --- user (session / PAT management, CRON only) ------------------------------
@@ -224,6 +314,49 @@ def _model_list(value: Any, reason: str) -> list[str]:
 def token_create(body: dict, ctx: PolicyContext) -> dict:
     """`POST /api/token/`: exactly the §3.3 fields, wp_ names, default|free."""
     _exact_keys(body, TOKEN_FIELDS, "token_fields")
+    return _token_fields(body, ctx)
+
+
+#: `PUT /api/token/?status_only=true`: 1 enabled, 2 disabled (3 / 4 are new-api's own).
+TOKEN_STATUSES = frozenset({1, 2})
+
+
+def token_update(body: dict, ctx: PolicyContext) -> dict:
+    """`PUT /api/token/`: a full update (the §3.3 fields plus ``id``) or a status change.
+
+    ``?status_only=true`` takes ``{"id", "status"}`` only. Without it new-api
+    overwrites every field it is sent (``controller/token.go`` ``UpdateToken``),
+    so the same rules as creation apply — a free key stays a fuse.
+    """
+    if ctx.query.get("status_only") == "true":
+        _exact_keys(body, {"id", "status"}, "token_status_fields")
+        token_id = _int_in(body["id"], 1, 2_147_483_647, "token_id")
+        status = body["status"]
+        if not _is_int(status) or status not in TOKEN_STATUSES:
+            raise PolicyDenied("token_status")
+        return {"id": token_id, "status": status}
+    _exact_keys(body, TOKEN_FIELDS | {"id"}, "token_fields")
+    token_id = _int_in(body["id"], 1, 2_147_483_647, "token_id")
+    return {"id": token_id, **_token_fields(body, ctx)}
+
+
+#: `POST /api/token/batch` deletes at most this many keys at once (one account has at most 20).
+TOKEN_BATCH_MAX = 100
+
+
+def token_batch_delete(body: dict, ctx: PolicyContext) -> dict:
+    """`POST /api/token/batch`: ``{"ids": [...]}``, distinct positive ids only."""
+    _exact_keys(body, {"ids"}, "token_batch_fields")
+    ids = body["ids"]
+    if not isinstance(ids, list) or not 1 <= len(ids) <= TOKEN_BATCH_MAX:
+        raise PolicyDenied("token_batch_ids")
+    if not all(_is_int(i) and 1 <= i <= 2_147_483_647 for i in ids) or len(set(ids)) != len(ids):
+        raise PolicyDenied("token_batch_ids")
+    return {"ids": list(ids)}
+
+
+def _token_fields(body: dict, ctx: PolicyContext) -> dict:
+    """The §3.3 token fields, validated and rebuilt (creation and full update)."""
     name = body["name"]
     if not _is_str(name) or not TOKEN_NAME_RE.fullmatch(name):
         raise PolicyDenied("token_name")

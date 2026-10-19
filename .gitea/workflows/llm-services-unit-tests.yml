@@ -16,7 +16,11 @@ on:
       - "src/services/newapi_client.py"
       - "src/services/llm_crypto.py"
       - "src/services/llm_redact.py"
+      - "src/services/mcp_url_guard.py"
+      - "src/tests/fixtures/newapi/**"
       - "tests/test_llm_services.py"
+      - "tests/test_mcp_dependency_smoke.py"
+      - "src/requirements.txt"
       # 測試拿代理的參考實作驗章、body 政策與路由白名單（每個 client 方法的路由、身分、
       # query、web 旗標）：它們一改，這裡要重新證明兩邊一致。
       - "extra/newapi-proxy/newapi_proxy/signing.py"
@@ -33,7 +37,7 @@ permissions:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,12 +45,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install the two runtime dependencies (same packages as src/requirements.txt)
+      - name: Install service test dependencies (including deployed MCP HTTP stack)
         run: |
           python -m venv .venv-llm-services-ci
           .venv-llm-services-ci/bin/python -m pip install --disable-pip-version-check \
-            requests==2.34.2 cryptography==50.0.2
+            requests==2.34.2 cryptography==50.0.2 httpx2==2.13.1 httpcore2==2.13.1
+          # Resolve the same MCP pair as the Odoo image; keep httpx2 installed
+          # to catch accidental selection of an unrelated addon's HTTP stack.
+          sed -n '/^langchain-mcp-adapters[=<>]/p; /^mcp[=<>]/p' src/requirements.txt > /tmp/llm-mcp-requirements.txt
+          .venv-llm-services-ci/bin/python -m pip install --disable-pip-version-check -r /tmp/llm-mcp-requirements.txt
+          .venv-llm-services-ci/bin/python -m pip check
       - name: Unit tests
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: timeout 120s .venv-llm-services-ci/bin/python tests/test_llm_services.py -v
+      - name: Real MCP adapter transport smoke
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: timeout 30s .venv-llm-services-ci/bin/python tests/test_mcp_dependency_smoke.py -v

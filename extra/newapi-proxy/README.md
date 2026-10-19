@@ -82,32 +82,46 @@ env 格式 `kid:secret[,kid:secret]`：第一把是現用、後面是下一把�
 - 轉送的 URL 一律由樣板＋驗證過的參數**重組**，不轉送 client 原始路徑。
 - query：只收 `[A-Za-z0-9_.-=&:/]`（沒有 `%`、`+`、`;`）、每段剛好一個 `=`、值不能空、key 不能重複；每條路由宣告允許的 key 與值格式，多一個 key（例如 new-api 的別名 `ps`）就 400。
 
-### 路由白名單（LLM-01a：tracer 用得到的；LLM-02b 加 `GET /api/user/`；其餘 LLM-02 補）
+### 路由白名單（DESIGN §1.4.2-5；LLM-02 補齊）
 
 | 身分 | 方法與路徑 | WEB | query | body 政策 |
 |---|---|---|---|---|
-| anon | `GET /api/status` | | | |
+| anon、ap、user | `GET /api/status` | | | |
+| ap、user | `GET /api/pricing` | | | |
 | op | `GET /api/option/` | | | |
 | ap | `POST /api/user/` | | | 建使用者 |
 | ap | `GET /api/user/` | | `p`、`page_size`（1–100）、`sort_by`（只收 `id`）、`sort_order`（`asc`／`desc`） | 全部使用者分頁（餘額刷新，LLM-02b；PaaS 自己以前綴過濾）。**回應由代理重組**（見〈回應與錯誤〉） |
 | ap | `GET /api/user/search` | | `keyword`（必須符合 `PROXY_USERNAME_REGEX`）、`p`、`page_size` | |
 | ap | `GET /api/user/{id}` | | | |
-| ap | `POST /api/user/manage` | | | add_quota（含目標預檢與每小時總量） |
+| ap、bg | `POST /api/user/manage` | | | ap：add_quota（含目標預檢與每小時總量）；bg：只有 `mode: subtract`（事後扣回，目標預檢、不吃加額度預算） |
+| ap | `GET /api/log/` | | `p`、`page_size`、`type`、`start_timestamp`、`end_timestamp`、`model_name`、`token_name`、`group`、`request_id`、`username`（必須符合 `PROXY_USERNAME_REGEX`） | 不收 `channel`、`upstream_request_id` |
+| ap | `GET /api/log/stat` | | 同上去掉分頁與 `request_id` | |
+| ap | `GET /api/data/`、`GET /api/data/flow` | | `start_timestamp`、`end_timestamp`、`username`（同上） | |
+| ap | `GET /api/data/users` | | `start_timestamp`、`end_timestamp` | |
+| ap | `GET /api/verify/methods` | | `scope`（`<a-z_>.<a-z_>`） | |
+| bg | `PUT /api/user/` | | | 只收 `{"id", "group": "default"｜"free_blocked"}`；代理先以 AP 讀該使用者、確認是 PaaS 使用者，再帶回 `username`／`display_name`／`remark`、`role: 1`，只改 `group` |
 | user | `POST /api/user/login` | | | 登入（不帶 Authorization） |
 | user | `POST /api/verify` | | | verify |
 | user | `GET /api/user/access_tokens` | | | |
 | user | `POST /api/user/access_tokens` | | | 建 UP（必帶 proof） |
+| user | `DELETE /api/user/access_tokens/{id}` | | | 撤孤兒／舊 UP（必帶 `access_token.revoke` 的 proof） |
 | user | `DELETE /api/user/sessions/{sid}` | | | |
+| user | `GET /api/audit/self` | | `p`、`page_size` | |
 | user | `GET /api/user/self` | ✓ | | |
+| user | `GET /api/user/models`、`GET /api/user/self/groups` | ✓ | | |
 | user | `POST /api/token/` | ✓ | | 建金鑰 |
+| user | `PUT /api/token/` | ✓ | `status_only`（只收 `true`） | 整筆更新（建金鑰的欄位＋`id`）；`status_only=true` 只收 `{"id", "status": 1｜2}` |
+| user | `POST /api/token/batch` | ✓ | | 批次刪除：`{"ids": [1–100 個不重複的正整數]}` |
 | user | `GET /api/token/` | ✓ | `p`、`page_size` | |
-| user | `GET /api/token/{id}` | ✓ | | |
+| user | `GET /api/token/{id}`、`DELETE /api/token/{id}` | ✓ | | |
 | user | `POST /api/token/{id}/key` | ✓ | | reveal 預檢（無 body） |
 | user | `GET /api/log/self` | ✓ | `p`、`page_size`、`type`、`start_timestamp`、`end_timestamp`、`model_name`、`token_name`、`group`、`request_id` | |
+| user | `GET /api/log/self/stat` | ✓ | 同上去掉分頁與 `request_id` | |
+| user | `GET /api/data/self`、`GET /api/data/flow/self` | ✓ | `start_timestamp`、`end_timestamp` | |
 
-其他一律 403＋`X-Woow-Proxy-Error: policy`，特別是 `/v1/*`、`/pg/*`、`/api/option/*`（op 的 GET 除外）、`/api/channel/*`、`/api/redemption/*`、`/api/user/topup*`、`/api/user/auth/*`、`PUT /api/user/`、`POST /api/token/batch/keys`、`GET /api/log/self/export`。代理埠（8080）上沒有任何不需簽章的路徑：`/healthz`、`/readyz`、`/metrics` 在管理埠（8081）。
+同一條路由給好幾個身分時（`/api/status`、`/api/pricing`、`/api/user/manage`），body 政策依身分決定規則。其他一律 403＋`X-Woow-Proxy-Error: policy`，特別是 `/v1/*`、`/pg/*`、`/api/option/*`（op 的 GET 除外）、`/api/channel/*`、`/api/redemption/*`、`/api/user/topup*`、`/api/user/auth/*`、ap／user 的 `PUT /api/user/`、`POST /api/token/batch/keys`、`GET /api/log/self/export`、`GET /api/log/export`、`GET /api/token/search`、`PATCH /api/user/access_tokens/{id}`。代理埠（8080）上沒有任何不需簽章的路徑：`/healthz`、`/readyz`、`/metrics` 在管理埠（8081）。
 
-`bg`（break-glass，〔REV〕1）：框架已在，**預設關**（`PROXY_BREAK_GLASS_UNTIL` 未設）。只有 CRON 金鑰、而且 now < `PROXY_BREAK_GLASS_UNTIL`（最多 24 小時後；設得更遠視同關閉並告警）才放行；每次使用都寫稽核 log 並累加 metric。本票沒有任何 `bg` 路由，`PUT /api/user/` 改分組與 `manage` subtract 在 LLM-02 加。
+`bg`（break-glass，〔REV〕1）：**預設關**（`PROXY_BREAK_GLASS_UNTIL` 未設）。只有 CRON 金鑰、而且 now < `PROXY_BREAK_GLASS_UNTIL`（最多 24 小時後；設得更遠視同關閉並告警）才放行；只有上表兩條路由（上游一律帶 AP、來源 IP `198.18.0.4`）。每次使用都寫稽核 log（`action: bg`，`op` 是 `user_group`／`manage_subtract`）、一行 WARNING `break_glass_used`（log 告警的鉤子）、並累加 `newapi_proxy_break_glass_total`／`_calls_total`。
 
 ### body 政策（§1.4.2-5、§3.3）
 
@@ -122,6 +136,10 @@ env 格式 `kid:secret[,kid:secret]`：第一把是現用、後面是下一把�
 | `POST /api/user/access_tokens` | `{"name": "woow-paas-up-<id>-<YYYYMMDDHHMM>", "scopes": ⊆ UP scope, "expires_at": 同上}` |
 | `POST /api/token/` | §3.3 的 10 個欄位一個不少；`name` 是 `wp_<數字>_[a-z0-9]{4}`；`group` ∈ {default, free}；`allow_ips` 是空字串；`cross_group_retry`、`allow_user_quota_query` 是 false；`group=free` 時 `model_limits_enabled=true`、`model_limits` ⊆ `PROXY_FREE_MODELS`、`unlimited_quota=false`、`remain_quota=1`（保險絲） |
 | `POST /api/token/{id}/key` | 無 body。代理先用**同一把 UP、同一個合成 IP** `GET /api/token/{id}`：`name` 符合 `wp_<數字>_…`、`created_time` 在 120 秒內（容許 new-api 時鐘快 5 秒）才轉送，否則 403 `denied`（〔REV〕2） |
+| `PUT /api/token/` | 整筆：上一列的規則＋`id`（new-api 會覆寫每一個送去的欄位，免費金鑰的保險絲照樣守）；`?status_only=true`：只收 `{"id", "status": 1｜2}`（3／4 是 new-api 自己的狀態） |
+| `POST /api/token/batch` | `{"ids": [...]}`：1–100 個不重複的正整數 |
+| `POST /api/user/manage`（bg） | `{"id": >0, "action": "add_quota", "mode": "subtract", "value": 1–156,250,000}`；目標預檢同 add，但 `group` 可以是 `default` 或 `free_blocked`；不吃加額度預算 |
+| `PUT /api/user/`（bg） | `{"id": >0, "group": "default"｜"free_blocked"}`；代理以 AP `GET /api/user/{id}` 確認是 PaaS 使用者（前綴、`role==1`、`group` ∈ {default, free_blocked}、`display_name` ≤ 20、`remark` ≤ 255），送出 `{id, username, display_name, group, remark, role: 1}`——不帶密碼、`admin_permissions`（那兩個要 admin proof） |
 
 UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`、`usage:read`。
 
@@ -176,9 +194,9 @@ UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`�
 ### log、稽核、metric（§1.4.2-8）
 
 - stdout 一行一個 JSON。access log 只有 method、路由名稱（樣板，不含 id）、status、上游 status、耗時、`X-Oneapi-Request-Id`、合成 IP、身分、kid、錯誤分類；**不記任何標頭值與 body**（nonce 也不記）。uvicorn 自己的 access log 關掉。
-- 稽核 log（`"event":"audit"`）：每次 reveal（`token_id`）、每次 add_quota（`target_user_id`、`value`）、每次 bg，都記 kid、合成 IP、結果與 request id。**送出前先寫一筆 `result: "sending"`**，結果出來再寫一筆（`forwarded`＋status、`connect`、`reset`、`timeout`、`cancelled`；add_quota 另記 `budget: released｜kept`）；pod 在呼叫途中被殺（OOM、SIGKILL、關機逾時）時，對帳仍看得到「可能已執行」的那一筆。沒送出的寫 `not_sent`／`denied`／`precheck_relayed`；body 政策擋下的 add_quota（例如 `mode: override`）也記目標與 value（只記型別剛好是整數的 `id`／`value`）。這份紀錄 Odoo 改不到，對帳時拿來和 `llm_event` 比（§4.4 I3、LLM-14）。
+- 稽核 log（`"event":"audit"`）：每次 reveal（`token_id`）、每次 add_quota（`target_user_id`、`value`）、每次 bg（`op`、`target_user_id`，`value` 或 `group`），都記 kid、合成 IP、結果與 request id。**送出前先寫一筆 `result: "sending"`**，結果出來再寫一筆（`forwarded`＋status、`connect`、`reset`、`timeout`、`cancelled`；add_quota 另記 `budget: released｜kept`）；pod 在呼叫途中被殺（OOM、SIGKILL、關機逾時）時，對帳仍看得到「可能已執行」的那一筆。沒送出的寫 `not_sent`／`denied`／`precheck_relayed`；body 政策擋下的 add_quota（例如 `mode: override`）也記目標與 value（只記型別剛好是整數的 `id`／`value`）。這份紀錄 Odoo 改不到，對帳時拿來和 `llm_event` 比（§4.4 I3、LLM-14）。
 - 第二道防線：每一行輸出前都經過遮罩（`nap_…`、`sk-…`、`Bearer …`、JWT、64 位 hex、以及設定裡的每一把金鑰、PAT 與 Valkey 密碼原文）；例外只記型別名稱。
-- `/metrics`（管理埠，Prometheus 文字格式，數值一律完整輸出）：`newapi_proxy_requests_total`、`_rejections_total`、`_upstream_errors_total`、`_replay_store_errors_total`、`_readiness_checks_total`、`_reveal_total`、`_add_quota_total`、`_add_quota_value_total`、`_break_glass_total`、`_inflight`、`_add_quota_budget_used`。
+- `/metrics`（管理埠，Prometheus 文字格式，數值一律完整輸出）：`newapi_proxy_requests_total`、`_rejections_total`、`_upstream_errors_total`、`_replay_store_errors_total`、`_readiness_checks_total`、`_reveal_total`、`_add_quota_total`、`_add_quota_value_total`、`_break_glass_total`（每次 bg 嘗試，`active`／`off`）、`_break_glass_calls_total`（放行的 bg 呼叫，依結果）、`_inflight`、`_add_quota_budget_used`。
 
 ### 健康檢查（管理埠 8081）
 
@@ -306,5 +324,5 @@ kubectl -n "$NS" exec "$POD" -- python3 -c "import urllib.request as u; print(u.
 
 - 加額度每小時總量仍是各 replica 各算 1/replica（設計 §1.4.2-5 的近似）；in-flight 也是各 replica 各自的。
 - 重放紀錄的兩層：Valkey 沒有持久化，Valkey 重啟後 62 秒內，只有「同一個 replica」的記憶體擋得住重放；Valkey 記憶體吃緊時可能淘汰帶 TTL 的 key（`volatile-lru`），重放紀錄每筆很小、壽命只有 62 秒，實務上不會先被淘汰。
-- 本票只有 tracer 需要的路由與 `bg` 的框架；`op`／`bg` 完整用例、其餘路由、in-flight 調校在 LLM-02。
+- in-flight 上限的數值（user 32、ap 8、op／anon／bg 2）是起點；new-api 每個回應慢 7 秒時的實測數字記在 LLM-02 的 PR。
 - 能讀 `paas-system` Secret 或 exec 進 Odoo pod 的人就握有簽章金鑰，可以在 body 政策範圍內使用 AP（§1.4.1 末、§5.3）；代理擋的是「政策以外」的事。

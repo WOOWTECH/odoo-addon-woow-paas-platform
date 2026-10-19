@@ -88,6 +88,7 @@ from .llm_common import (
     llm_config,
     report_config_unavailable,
     run_llm_cron,
+    taipei_day,
 )
 from .llm_event import LlmAlert, LlmIncident, _begin, safe_code
 from .llm_terms import TERMS_MODEL, clean_version
@@ -556,6 +557,7 @@ class LlmAccount(models.Model):
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_state_payload(self, partner):
+        config = llm_config(self.env)
         current = self.env[TERMS_MODEL]._llm_current()
         account = self._llm_account_for_partner(partner)
         keys = account.api_key_ids.filtered(lambda k: k.state not in ('deleted', 'lost'))
@@ -565,6 +567,7 @@ class LlmAccount(models.Model):
             lambda k: k.kind == 'free_trial' and k.state in ('creating', 'active', 'disabled')
             and not k._llm_is_stale_creating())[:1]
         account_dto = None
+        payload = None
         if account:
             quota = int(account.quota_cached or 0)
             balance_points = quota // QUOTA_PER_POINT if quota > 0 else 0
@@ -580,7 +583,7 @@ class LlmAccount(models.Model):
                 'low_balance_threshold': account.low_balance_threshold,
                 'tos': account._llm_tos_dto(current),
             }
-        return {
+        payload = {
             'account': account_dto,
             # 目前 published 的條款（沒有＝null：「尚未開通」畫面不能開通，見前端 tosUnavailable）。
             'tos_current_version': current.version if current else None,
@@ -601,64 +604,44 @@ class LlmAccount(models.Model):
                 'convert_max': CONVERT_MAX_POINTS,
             },
             'pending_review': False,
-            'public_base_url': None,
+            # 只收白名單值（DESIGN §2.11；llm_common.llm_config 讀取時再驗一次）。
+            'public_base_url': config.get('public_base_url'),
             'guard': {'tripped': False},
             'data_as_of': _iso(account.balance_synced_at) if account else None,
         }
+        if account and account.state in ('active', 'suspended'):
+            # SWR（N26）：餘額快取超過 10 分鐘 ⇒ 背景以 UP ``GET /api/user/self`` 刷新；這裡不外呼。
+            self.env['woow_paas_platform.llm_swr_cache']._llm_swr_touch(
+                account, 'self', account.balance_synced_at)
+        return payload
 
     # ------------------------------------------------------------------ #
-    #  /api/llm/usage/recent（tracer；LLM-02 改 SWR、LLM-09／10 取代）       #
+    #  /api/llm/usage/recent（SWR；LLM-09／10 之後由 usage/summary 與 llm_free_usage 取代）#
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_usage_recent(self, partner):
-        """今天的免費試用呼叫（前 10 筆）。
+        """今天的免費試用呼叫（前 10 筆）：**只讀快取、不外呼**（N26，DESIGN §3.2；LLM-02）。
 
-        ⚠ **刻意偏離 DESIGN §3.2／§3.5／N26**（記在 DESIGN 變更紀錄第 4 版）：DESIGN 的
-        usage/recent 是 SWR、只讀 DB；tracer 期間這裡**同步外呼**（WEB 金鑰、UP、read 3 秒），
-        每次頁面載入吃該租戶合成 IP 1 格 GA。收斂回 SWR（cron 以 CRON 金鑰刷新、端點只讀
-        快取）在 LLM-02。
+        快取由 ``llm_swr`` 的刷新 cron 以 CRON 金鑰、本帳戶的 UP 讀 ``GET /api/log/self``（台北今天的
+        ``type=2``、``group=free``）寫入；超過 60 秒（或是昨天的）就一併排一次背景刷新。還沒有今天的
+        快取時回空清單、``data_as_of: null``（前端顯示「讀取中」、幾秒後再問）。
         """
         account = self._llm_account_for_partner(partner)
         account._llm_require_active()
-        ip = account._llm_tenant_ip()
-        up = account._llm_up_token()
-        client = self._llm_web_client('usage/recent')
-        now = datetime.now(timezone(timedelta(hours=8)))
-        start = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        result = client.user_log_self(ip, up, {
-            'type': 2, 'group': 'free', 'start_timestamp': start, 'p': 1, 'page_size': 10,
-        }, timeout=nac.TIMEOUT_INTERACTIVE_READ)
-        if not result.ok:
-            if isinstance(result, nac.Definite) and result.code in (
-                    'AUTH_UNAUTHORIZED', 'ACCESS_TOKEN_EXPIRED'):
-                account._llm_mark_up_invalid()
-            raise LlmError(ERR_LLM_UNAVAILABLE)
-        data = result.data if isinstance(result.data, dict) else {}
-        names = {k.newapi_name: k for k in account.api_key_ids if k.newapi_name}
-        items = []
-        for row in _items(data)[:10]:
-            if not isinstance(row, dict):
-                continue
-            key = names.get(row.get('token_name'))
-            created = row.get('created_at')
-            items.append({
-                'time': (datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
-                         if type(created) is int else None),
-                'model': row.get('model_name') if isinstance(row.get('model_name'), str) else None,
-                'input_tokens': row.get('prompt_tokens') if type(row.get('prompt_tokens')) is int else None,
-                'output_tokens': (row.get('completion_tokens')
-                                  if type(row.get('completion_tokens')) is int else None),
-                'duration_ms': row.get('use_time') * 1000 if type(row.get('use_time')) is int else None,
-                'request_id': row.get('request_id') if isinstance(row.get('request_id'), str) else None,
-                'key_id': key.id if key else None,
-                'key_kind': key.kind if key else None,
-            })
-        total = data.get('total')
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        cached = Cache._llm_swr_get(account, 'usage_recent')
+        payload = cached and cached['payload']
+        if not isinstance(payload, dict) or payload.get('day_tpe') != taipei_day():
+            payload = None
+        fetched_at = cached['fetched_at'] if payload else None
+        Cache._llm_swr_touch(account, 'usage_recent', fetched_at)
+        items = payload.get('items') if payload else None
+        count = payload.get('today_count') if payload else None
         return {
-            'today_count': total if type(total) is int else len(items),
+            'today_count': count if type(count) is int else None,
             'daily_limit': FREE_DAILY_LIMIT,
-            'items': items,
-            'data_as_of': datetime.now(timezone.utc).isoformat(),
+            'items': items if isinstance(items, list) else [],
+            'data_as_of': _iso(fetched_at),
         }
 
     # ------------------------------------------------------------------ #

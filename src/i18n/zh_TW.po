@@ -25921,3 +25921,185 @@ msgstr "暫時無法取得日誌，請稍後重試。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/LogsTab.js:0
 msgid "Auto-refresh is paused. Resume or refresh to load logs."
 msgstr "已暫停自動更新，請繼續或手動更新以載入日誌。"
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid "This URL points to an internal platform service and cannot be used as an MCP server."
+msgstr "這個網址指向平台內部服務，不能當作 MCP 伺服器使用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "Only administrators can test the AI models connection."
+msgstr "只有系統管理員可以測試 AI 模型連線。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "AI models are not configured"
+msgstr "AI 模型尚未設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "Set the proxy URL and switch the feature on (or set a pilot or canary) first."
+msgstr "請先設定代理網址並開啟功能（或設定試營運名單、canary）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "Connection test queued"
+msgstr "已排入連線測試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "A cron worker runs it with the CRON key within a few seconds. Reload this page to see the result."
+msgstr "排程工作會在幾秒內以 CRON 金鑰執行，重新整理此頁即可看到結果。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+#: model:ir.actions.server,name:woow_paas_platform.action_llm_runtime_state
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "AI Models Connection"
+msgstr "AI 模型連線"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_swr.py:0
+msgid "The AI models cache is maintained by the platform."
+msgstr "AI 模型的快取由平台維護。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_swr.py:0
+msgid "The AI models cache cannot be deleted."
+msgstr "AI 模型的快取不能刪除。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid "The AI models public base URL must be https://newapi.woowtech.io/v1 or https://newapi-stg.woowtech.io/v1."
+msgstr "AI 模型的公開 API 網址只能是 https://newapi.woowtech.io/v1 或 https://newapi-stg.woowtech.io/v1。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Usage data is not available yet. Please check back later."
+msgstr "用量資料暫時還拿不到，請稍後再看。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Test connection"
+msgstr "測試連線"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Circuit breaker"
+msgstr "斷路器（circuit breaker）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Guard"
+msgstr "不變量防護（guard）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Service account rate limit"
+msgstr "服務帳號限速"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Balance refresh"
+msgstr "餘額刷新"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Connection test"
+msgstr "連線測試"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_open_until
+msgid "Circuit Open Until"
+msgstr "斷路器開到"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_failures
+msgid "Circuit Failures"
+msgstr "連續失敗次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_reason
+msgid "Circuit reason"
+msgstr "斷路器開啟原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_opened_at
+msgid "Circuit opened at"
+msgstr "斷路器開啟時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__guard_tripped
+msgid "Guard Tripped"
+msgstr "防護已觸發"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__guard_reasons
+msgid "Guard Reasons"
+msgstr "防護原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__guard_since
+msgid "Guard Since"
+msgstr "防護觸發時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__dr_mode
+msgid "Dr Mode"
+msgstr "DR 模式"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__ap_rate_window
+msgid "AP rate window (unix minute)"
+msgstr "AP 限速時間窗（unix 分鐘）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__ap_rate_count
+msgid "AP calls this minute"
+msgstr "本分鐘 AP 呼叫次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__balance_refresh_page
+msgid "Balance Refresh Page"
+msgstr "餘額刷新頁數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__balance_refresh_started_at
+msgid "Balance Refresh Started At"
+msgstr "餘額刷新開始時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__balance_refresh_finished_at
+msgid "Balance Refresh Finished At"
+msgstr "餘額刷新完成時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__connection_test_requested_at
+msgid "Connection test requested at"
+msgstr "連線測試請求時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__connection_test_at
+msgid "Last connection test at"
+msgstr "上次連線測試時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__connection_test_result
+msgid "Last connection test result"
+msgstr "上次連線測試結果"
+
+#. module: woow_paas_platform
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_runtime_state
+msgid "Connection status"
+msgstr "連線狀態"

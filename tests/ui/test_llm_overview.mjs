@@ -4,7 +4,7 @@
 // 點背景／Esc／返回鍵／換頁先問一次；建立中不能關（關了就再也拿不到明文）；關閉時清掉明文、
 // 回呼不帶金鑰；卸載之後才回來的回應直接丟掉。
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import {
   loadPo, readPaas, stubImports, toDataUrl, translateFromGlobal, translator,
 } from "./lib/llm_test_support.mjs";
@@ -192,6 +192,9 @@ function unmount() {
   for (const fn of globalThis.__llmHooks.unmount) fn();
 }
 
+// 每個 fixture 都走與 OWL 相同的卸載生命週期；非同步 load 尚未回來時也會被 alive 擋下。
+afterEach(() => unmount());
+
 // ----------------------------------------------------------------------------- 總覽畫面
 
 test("llmOverviewScreen：依 /api/llm/state 決定畫面（§6.2）", () => {
@@ -294,7 +297,7 @@ function makeTab(state, extra = {}) {
       calls.fetchUsage += 1;
       return fake.usageResult;
     },
-    usageResult: { success: true, data: {} },
+    usageResult: { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } },
     activateResult: { success: true, data: { state: "provisioning" } },
     ...extra,
   };
@@ -485,6 +488,31 @@ test("最近 10 筆：背景分頁不刷；回前景只有滿 30 秒才補；登
   });
 });
 
+test("最近 10 筆：還沒有快取時每 3 秒快問、最多 5 次，之後回到 30 秒（SWR，LLM-02）", async () => {
+  const delay = overview.usageRefreshDelay;
+  const empty = { success: true, data: { items: [], data_as_of: null } };
+  assert.equal(delay(empty, 0), overview.USAGE_FIRST_FILL_MS);
+  assert.equal(delay(empty, overview.USAGE_FIRST_FILL_POLLS), overview.USAGE_REFRESH_MS);
+  assert.equal(delay({ success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } }, 0),
+    overview.USAGE_REFRESH_MS);
+  assert.equal(delay({ success: false, code: "llm_unavailable" }, 0), overview.USAGE_REFRESH_MS);
+  const { tab, fake } = makeTab(ACTIVE);
+  await withTimers(async (timers) => {
+    fake.usageResult = empty;
+    for (let i = 0; i < overview.USAGE_FIRST_FILL_POLLS + 3; i += 1) {
+      await tab.refreshUsage();
+    }
+    assert.deepEqual(timers.map((t) => t.ms), [
+      ...Array(overview.USAGE_FIRST_FILL_POLLS).fill(overview.USAGE_FIRST_FILL_MS),
+      ...Array(3).fill(overview.USAGE_REFRESH_MS),
+    ]);
+    assert.equal(tab.state.usageWaiting, false, "快問完了就不再顯示載入中");
+    fake.usageResult = { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } };
+    await tab.refreshUsage();
+    assert.equal(tab.usageFirstFillPolls, 0, "拿到資料就歸零");
+  });
+});
+
 test("已開通：額度用整數 quota 捨去、今日免費試用 X／200、沒有 Base URL 時顯示尚未提供", () => {
   const { tab, fake } = makeTab(ACTIVE);
   assert.equal(tab.screen, "active");
@@ -535,9 +563,17 @@ test("清單還沒回來時是載入中，不先閃「還沒有…」", () => {
   assert.equal(tab.usageLoading, true);
   assert.equal(tab.listLoadingText, "載入中…");
   fake.keysLoaded = true;
-  fake.usage = { today_count: 0, items: [] };
+  fake.usage = { today_count: 0, items: [], data_as_of: "2026-10-17T03:05:00+00:00" };
   assert.equal(tab.keysLoading, false);
   assert.equal(tab.usageLoading, false);
+  assert.equal(tab.emptyUsageText, "今天還沒有免費試用呼叫紀錄。");
+  // 後端還沒有今天的快取（SWR，LLM-02）：快問期間是載入中；快問完了還沒有就明說「還拿不到」。
+  fake.usage = { today_count: null, items: [], data_as_of: null };
+  tab.state.usageWaiting = true;
+  assert.equal(tab.usageLoading, true);
+  tab.state.usageWaiting = false;
+  assert.equal(tab.usageLoading, false);
+  assert.equal(tab.emptyUsageText, "用量資料暫時還拿不到，請稍後再看。");
   fake.usage = null;
   fake.usageError = "llm_unavailable";
   assert.equal(tab.usageLoading, false, "失敗時顯示錯誤，不是一直載入中");
