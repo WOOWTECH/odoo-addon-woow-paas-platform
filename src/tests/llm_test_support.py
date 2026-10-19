@@ -135,7 +135,8 @@ def reset_runtime_guards(env):
     env.cr.execute(
         'UPDATE woow_paas_platform_llm_runtime_state SET circuit_open_until = NULL, '
         'circuit_failures = 0, circuit_reason = NULL, circuit_opened_at = NULL, '
-        'ap_rate_window = 0, ap_rate_count = 0')
+        'ap_rate_window = 0, ap_rate_count = 0, guard_tripped = false, '
+        'guard_reasons = NULL, guard_since = NULL')
 
 
 def publish_test_terms(env, version=TEST_TOS, requires_reaccept=True, content='<p>QA terms</p>'):
@@ -160,12 +161,14 @@ TEST_CONFIG = {
     'proxy_state': 'usable',
     'proxy_url': nac.PROXY_URL_STG,
     'show': True,
+    'orders_enabled': True,
     'pilot': frozenset(),
     'canary': '',
     'prefix': TEST_PREFIX,
     'block': TEST_BLOCK,
     'identity_ok': True,
     'public_base_url': None,
+    'service_admin_id': 7,
 }
 
 
@@ -245,7 +248,11 @@ class CommittedLlmFixture:
         self.partner_ids = []
         self.account_ids = []
         self.cron_id = case.env.ref(PROVISION_CRON_XMLID).id
-        self._cron_active = None
+        # A committed test may exercise more than one worker.  Keep the
+        # historical ``cron_id`` override for existing callers, while giving
+        # a new caller an explicit, narrow way to pause its companion crons.
+        self.extra_cron_ids = []
+        self._cron_active = {}
         self._trigger_floor = None
         self._progress_floor = None
 
@@ -254,6 +261,9 @@ class CommittedLlmFixture:
 
     def start(self):
         self.case.addCleanup(self.purge)
+        cron_ids = tuple(dict.fromkeys([self.cron_id, *self.extra_cron_ids]))
+        if not cron_ids:
+            raise ValueError('committed fixture requires at least one cron')
         stack = ExitStack()
         stack.enter_context(patch.object(llm_account_module, 'llm_config',
                                          return_value=dict(TEST_CONFIG)))
@@ -268,10 +278,14 @@ class CommittedLlmFixture:
         self.case.addCleanup(stack.close)
         with self.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s', (CRON_PAUSE_LOCK_TIMEOUT,))
-            cr.execute('SELECT active FROM ir_cron WHERE id = %s FOR NO KEY UPDATE',
-                       (self.cron_id,))
-            self._cron_active = cr.fetchone()[0]
-            cr.execute('UPDATE ir_cron SET active = false WHERE id = %s', (self.cron_id,))
+            cr.execute('SELECT id, active FROM ir_cron WHERE id = ANY(%s) '
+                       'ORDER BY id FOR NO KEY UPDATE', (list(cron_ids),))
+            active_rows = dict(cr.fetchall())
+            if set(active_rows) != set(cron_ids):
+                raise ValueError('committed fixture cron is missing')
+            self._cron_active = active_rows
+            cr.execute('UPDATE ir_cron SET active = false WHERE id = ANY(%s)',
+                       (list(cron_ids),))
             cr.execute('SELECT COALESCE(MAX(id), 0) FROM ir_cron_trigger')
             self._trigger_floor = cr.fetchone()[0]
             cr.execute("SELECT to_regclass('ir_cron_progress')")
@@ -319,15 +333,17 @@ class CommittedLlmFixture:
                     cr.execute('DELETE FROM %s WHERE partner_id = ANY(%%s)' % EVENT_TABLE,
                                (self.partner_ids,))
                     cr.execute('DELETE FROM res_partner WHERE id = ANY(%s)', (self.partner_ids,))
-                if self._trigger_floor is not None:
-                    cr.execute('DELETE FROM ir_cron_trigger WHERE cron_id = %s AND id > %s',
-                               (self.cron_id, self._trigger_floor))
-                if self._progress_floor is not None:
-                    cr.execute('DELETE FROM ir_cron_progress WHERE cron_id = %s AND id > %s',
-                               (self.cron_id, self._progress_floor))
-                if self._cron_active is not None:
+                cron_ids = list(self._cron_active)
+                if self._trigger_floor is not None and cron_ids:
+                    cr.execute('DELETE FROM ir_cron_trigger WHERE cron_id = ANY(%s) AND id > %s',
+                               (cron_ids, self._trigger_floor))
+                if self._progress_floor is not None and cron_ids:
+                    cr.execute('DELETE FROM ir_cron_progress WHERE cron_id = ANY(%s) AND id > %s',
+                               (cron_ids, self._progress_floor))
+                for cron_id, active in self._cron_active.items():
                     cr.execute('UPDATE ir_cron SET active = %s WHERE id = %s',
-                               (self._cron_active, self.cron_id))
+                               (active, cron_id))
         except Exception:  # noqa: BLE001 - cleanup must not mask the test result
             _logger.exception(
-                'LLM committed fixture cleanup failed (cron %s may still be paused)', self.cron_id)
+                'LLM committed fixture cleanup failed (crons %s may still be paused)',
+                sorted(self._cron_active))

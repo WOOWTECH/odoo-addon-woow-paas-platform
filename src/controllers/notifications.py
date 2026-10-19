@@ -205,7 +205,8 @@ class NotificationsController(HiddenChainMixin, Controller):
             ('move_type', '=', 'out_invoice'),
             ('state', '=', 'posted'),
             ('payment_state', 'in', ('not_paid', 'partial')),
-        ], order='invoice_date desc, id desc', limit=_ITEM_LIMIT)
+        ] + env['account.move']._llm_credit_move_domain(),
+            order='invoice_date desc, id desc', limit=_ITEM_LIMIT)
         return [{
             'id': 'invoice_unpaid:%s' % move.id,
             'type': 'invoice_unpaid',
@@ -222,6 +223,8 @@ class NotificationsController(HiddenChainMixin, Controller):
         rows = env['wallet.transaction'].sudo().search(
             [('partner_id', '=', partner.id), ('create_date', '>=', since)],
             order='create_date desc, id desc', limit=_ACTIVITY_LIMIT)
+        descriptions = env['woow_paas_platform.llm_credit_order']._llm_wallet_descriptions(
+            partner, rows)
         items = []
         for row in rows:
             amount = row.amount or 0.0
@@ -236,7 +239,7 @@ class NotificationsController(HiddenChainMixin, Controller):
                 'type': 'wallet_activity',
                 'severity': 'info',
                 'title': title,
-                'message': message,
+                'message': descriptions.get(row.id, message),
                 'ts': _iso_utc(row.create_date),
                 'route': 'billing/transactions',
             })

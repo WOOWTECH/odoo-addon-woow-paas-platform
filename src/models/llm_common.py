@@ -36,6 +36,8 @@ _logger = logging.getLogger(__name__)
 #  設定 key（DESIGN §2.11）                                                     #
 # --------------------------------------------------------------------------- #
 PARAM_SHOW_LLM = 'woow_paas_platform.show_llm'
+#: 緊急開關只擋新操作；缺值 true，不影響已付款 outbox 與既有金鑰。
+PARAM_ORDERS_ENABLED = 'woow_paas_platform.llm_orders_enabled'
 PARAM_PILOT_PARTNER_IDS = 'woow_paas_platform.llm_pilot_partner_ids'
 PARAM_PROXY_URL = nac.PARAM_PROXY_URL
 PARAM_USERNAME_PREFIX = 'woow_paas_platform.newapi_username_prefix'
@@ -47,6 +49,9 @@ PARAM_ALERT_EMAIL = 'woow_paas_platform.llm_alert_email'
 PARAM_ALERT_WEBHOOK_URL = 'woow_paas_platform.llm_alert_webhook_url'
 #: 給使用者的 API base URL（DESIGN §2.11；LLM-02）：只收 :data:`ALLOWED_PUBLIC_BASE_URLS`。
 PARAM_PUBLIC_BASE_URL = 'woow_paas_platform.llm_public_base_url'
+#: LLM-08 verifier 的信任錨：發送 ``add_quota`` 的 new-api 服務帳號 id。這不是租戶資料，
+#: 但不能從 log 自己推導；未設時 verifier 仍可用 response request-id 或靜止取樣收斂。
+PARAM_SERVICE_ADMIN_ID = 'woow_paas_platform.llm_service_admin_id'
 ALLOWED_PUBLIC_BASE_URLS = frozenset({
     'https://newapi.woowtech.io/v1',
     'https://newapi-stg.woowtech.io/v1',
@@ -55,6 +60,7 @@ ALLOWED_PUBLIC_BASE_URLS = frozenset({
 #: AI 模型分頁的全部 key；``hooks._CONFIG_PARAMETERS`` 必須涵蓋（登記測試守）。
 LLM_CONFIG_PARAMETERS = (
     PARAM_SHOW_LLM,
+    PARAM_ORDERS_ENABLED,
     PARAM_PILOT_PARTNER_IDS,
     PARAM_PROXY_URL,
     PARAM_USERNAME_PREFIX,
@@ -63,6 +69,7 @@ LLM_CONFIG_PARAMETERS = (
     PARAM_ALERT_EMAIL,
     PARAM_ALERT_WEBHOOK_URL,
     PARAM_PUBLIC_BASE_URL,
+    PARAM_SERVICE_ADMIN_ID,
 )
 #: 一改就寫 ``llm_event(config_change)``、更新設定指紋並告警的 key（DESIGN §2.11）→ 錯誤碼。
 #: I8（LLM-12b）每次比對 ``llm_runtime_state.last_config_fingerprint``，SQL 直改也會被發現。
@@ -70,6 +77,7 @@ CONFIG_CHANGE_CODES = {
     PARAM_PROXY_URL: 'llm_config_proxy_url',
     PARAM_PUBLIC_BASE_URL: 'llm_config_public_base_url',
     PARAM_USERNAME_PREFIX: 'llm_config_username_prefix',
+    PARAM_SERVICE_ADMIN_ID: 'llm_config_service_admin_id',
 }
 
 # --------------------------------------------------------------------------- #
@@ -130,7 +138,10 @@ ERR_LLM_PROVISIONING = 'llm_provisioning'
 ERR_LLM_SUSPENDED = 'llm_suspended'
 ERR_LLM_CLOSED = 'llm_closed'
 ERR_LLM_UNAVAILABLE = 'llm_unavailable'
+ERR_LLM_GUARD = 'llm_guard'
+ERR_LLM_PENDING_REVIEW = 'llm_pending_review'
 ERR_LLM_RATE_LIMITED = 'llm_rate_limited'
+ERR_LLM_REAUTH_REQUIRED = 'llm_reauth_required'
 ERR_LLM_KEY_LIMIT = 'llm_key_limit'
 ERR_LLM_FREE_KEY_EXISTS = 'llm_free_key_exists'
 ERR_LLM_FREE_CAPPED_TODAY = 'llm_free_capped_today'
@@ -142,9 +153,23 @@ ERR_LLM_KEY_INVALID = 'llm_key_invalid'
 ERR_LLM_ACCOUNT_ERROR = 'llm_account_error'
 #: handler 的 catch-all（程式錯誤）。固定訊息、不帶任何例外文字。
 ERR_LLM_INTERNAL = 'llm_internal_error'
+#: 轉換付款沿用錢包 API 的既有錯誤碼，亦須能安全記進 LLM 事件。
+ERR_INSUFFICIENT_BALANCE = 'insufficient_balance'
+#: LLM-08 conversion accepts only a bounded, explicit request and whole points.
+ERR_LLM_INVALID_REQUEST = 'llm_invalid_request'
+ERR_LLM_ORDER_NOT_FOUND = 'llm_order_not_found'
+ERR_LLM_POINTS_OUT_OF_RANGE = 'llm_points_out_of_range'
+ERR_LLM_RESERVE_CONFIRM_REQUIRED = 'llm_reserve_confirm_required'
+ERR_LLM_NO_REFUND_ACK_REQUIRED = 'llm_no_refund_ack_required'
 #: gate 的帳號拒絕（``paas._account_denial``：未登入或帳號停用）。那個 helper 回的 dict 沒有
 #: ``code``；本分頁的回應一律帶小寫 snake code（DESIGN §3.1），所以在 controller 補上這一格。
 ERR_LLM_AUTH_REQUIRED = 'llm_auth_required'
+
+
+#: Reauth counts every password attempt, including rejected and interrupted attempts.
+REAUTH_ATTEMPT_LIMIT = 5
+REAUTH_WINDOW_SECONDS = 3600
+REAUTH_VALID_SECONDS = 600
 
 
 class LlmError(Exception):
@@ -217,7 +242,7 @@ CONFIG_CHANGE_ERROR_CODES = frozenset(CONFIG_CHANGE_CODES.values())
 UNKNOWN_CODE = 'llm_unknown_code'
 #: ``llm_event.result``：節流的 started → ok／failed／not_executed（LLM-02b）。之後的票新增結果碼加在這。
 RESULT_NOT_EXECUTED = 'not_executed'
-RESULT_CODES = frozenset({'started', 'ok', 'failed', RESULT_NOT_EXECUTED})
+RESULT_CODES = frozenset({'started', 'ok', 'failed', 'unknown', RESULT_NOT_EXECUTED})
 
 #: ``numbers``（告警）與 ``details``（稽核事件）的 key 也是封閉登記表（N24；審查 LLM-02b 第 2 輪）：
 #: key 會原樣成為告警信的列標題與 webhook 的欄位名，所以 ≤ 32 字元的 snake 指令
@@ -350,6 +375,20 @@ def _parse_block(raw):
     return value if 0 <= value <= nac.MAX_BLOCK else None
 
 
+def _parse_service_admin_id(raw):
+    """Return a trusted positive new-api user id, or ``None`` when absent/invalid.
+
+    The verifier must never make a log's embedded operator id its own trust
+    anchor. The setting is intentionally optional: a missing value simply
+    disables the full-operation proof path, not the request-id/quiescent paths.
+    """
+    text = (raw or '').strip()
+    if not text or not re.fullmatch(r'[1-9][0-9]{0,9}', text):
+        return None
+    value = int(text)
+    return value if value <= nac.INT32_MAX else None
+
+
 def llm_config(env):
     """一次讀完 LLM 設定（ir.config_parameter 有 ormcache，便宜）。"""
     icp = env['ir.config_parameter'].sudo()
@@ -365,6 +404,10 @@ def llm_config(env):
     except nac.NewApiConfigError:
         identity_ok = False
     canary = (icp.get_param(PARAM_CANARY_PARTNER_ID) or '').strip()
+    service_admin_id = _parse_service_admin_id(icp.get_param(PARAM_SERVICE_ADMIN_ID))
+    if (icp.get_param(PARAM_SERVICE_ADMIN_ID) or '').strip() and service_admin_id is None:
+        _logger.warning('[LLM] %s is malformed; log operation proof is disabled',
+                        PARAM_SERVICE_ADMIN_ID)
     public_base_url = (icp.get_param(PARAM_PUBLIC_BASE_URL) or '').strip()
     if public_base_url and public_base_url not in ALLOWED_PUBLIC_BASE_URLS:
         _logger.warning('[LLM] %s holds a value outside the allow-list; not shown',
@@ -374,17 +417,20 @@ def llm_config(env):
         'proxy_state': proxy_state,
         'proxy_url': proxy_url,
         'show': _truthy(icp.get_param(PARAM_SHOW_LLM)),
+        # get_param 回 False 表示缺值；不合法的 SQL 直改則 fail closed。
+        'orders_enabled': _truthy(icp.get_param(PARAM_ORDERS_ENABLED, 'True')),
         'pilot': _parse_pilot(icp.get_param(PARAM_PILOT_PARTNER_IDS)),
         'canary': canary,
         'prefix': prefix,
         'block': block,
         'identity_ok': identity_ok,
         'public_base_url': public_base_url or None,
+        'service_admin_id': service_admin_id,
     }
 
 
 def config_fingerprint(env):
-    """``newapi_proxy_url``／``llm_public_base_url``／``newapi_username_prefix`` 的指紋（DESIGN §2.11）。
+    """安全敏感 LLM endpoint／identity／service-admin 設定的指紋（DESIGN §2.11）。
 
     sha256 的前 32 個 hex；值本身不進 ``llm_runtime_state``。I8（LLM-12b）拿它比對上一次記下的值。
     """
@@ -424,6 +470,8 @@ def validate_llm_param(key, value):
     text = (value or '').strip() if isinstance(value, str) or value is None else str(value)
     if not text:
         return
+    if key == PARAM_ORDERS_ENABLED and text.lower() not in ('true', 'false', '1', '0'):
+        raise ValidationError(_('AI model orders enabled must be true or false.'))
     if key == PARAM_PROXY_URL and text not in nac.ALLOWED_PROXY_URLS:
         raise ValidationError(_(
             'The AI models proxy URL must be one of the in-cluster proxy addresses.'))
@@ -440,6 +488,8 @@ def validate_llm_param(key, value):
         raise ValidationError(_('The pilot list must be comma-separated partner IDs.'))
     if key == PARAM_CANARY_PARTNER_ID and not _PILOT_RE.fullmatch(text):
         raise ValidationError(_('The canary partner must be a partner ID.'))
+    if key == PARAM_SERVICE_ADMIN_ID and _parse_service_admin_id(text) is None:
+        raise ValidationError(_('The AI models service admin ID must be a positive integer.'))
     if key == PARAM_ALERT_EMAIL and parse_alert_emails(text) is None:
         raise ValidationError(_(
             'The AI models alert email must be one to five comma-separated email addresses.'))
@@ -496,6 +546,10 @@ def alert_targets(env):
 #: 凍結契約（改名要同 PR 寫 migration 改 ``ir_act_server.code``）；``TestLlmCronContract`` 對已
 #: 安裝 DB 逐支斷言，``TestLlmUnconfiguredZeroOutbound`` 逐支手動觸發。新增 LLM cron 一律登記在這。
 LLM_CRONS = {
+    'woow_paas_platform.ir_cron_llm_credit': (
+        'woow_paas_platform.llm_credit_order', '_cron_llm_credit'),
+    'woow_paas_platform.ir_cron_llm_credit_verify': (
+        'woow_paas_platform.llm_credit_order', '_cron_llm_credit_verify'),
     'woow_paas_platform.ir_cron_llm_free_tier_meter': (
         'woow_paas_platform.llm_free_usage', '_cron_llm_free_tier_meter'),
     'woow_paas_platform.ir_cron_llm_free_tier_reset': (
@@ -529,8 +583,19 @@ LLM_CRON_ERROR_CODES = {
 FREE_METER_ERROR_CODES = frozenset({
     'llm_free_meter_lag', 'llm_free_meter_gap', 'llm_free_up_failed',
 })
+LLM_CREDIT_ERROR_CODES = frozenset({
+    'llm_credit_void_pending', 'llm_credit_snapshot_mismatch',
+    'llm_credit_snapshot_invalid', 'llm_credit_response_invalid',
+    'llm_credit_client_unavailable', 'llm_credit_definite_unrecognised',
+    'llm_credit_not_executed', 'llm_credit_unknown', 'llm_credit_budget',
+    'llm_credit_reservation_invalid',
+    'llm_credit_evidence_unavailable', 'llm_credit_evidence_invalid',
+    'llm_credit_evidence_conflict', 'llm_credit_evidence_mismatch',
+    'llm_credit_evidence_missing_snapshot', 'llm_credit_evidence_retry_limit',
+})
 ERROR_CODES = (
-    API_ERROR_CODES | FREE_METER_ERROR_CODES | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
+    API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
+    | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
     | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
 

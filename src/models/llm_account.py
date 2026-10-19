@@ -55,6 +55,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_crypto, llm_redact
+from ..services.subscription_renewals import upcoming_renewal_requirements
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
@@ -65,8 +66,10 @@ from .llm_common import (
     CONFIG_PROXY_AUTH_UNAVAILABLE_WEB,
     ERR_LLM_ACCOUNT_ERROR,
     ERR_LLM_CLOSED,
+    ERR_LLM_GUARD,
     ERR_LLM_NOT_ACTIVATED,
     ERR_LLM_PROVISIONING,
+    ERR_LLM_REAUTH_REQUIRED,
     ERR_LLM_SUSPENDED,
     ERR_LLM_TOS_OUTDATED,
     ERR_LLM_TOS_REQUIRED,
@@ -80,6 +83,7 @@ from .llm_common import (
     PROVISION_LEASE_MINUTES,
     PROVISION_MAX_ATTEMPTS,
     QUOTA_PER_POINT,
+    REAUTH_VALID_SECONDS,
     LlmError,
     LlmQuotaInteger,
     _is_llm_internal,
@@ -98,6 +102,7 @@ _logger = logging.getLogger(__name__)
 ACCOUNT_MODEL = 'woow_paas_platform.llm_account'
 ACCOUNT_TABLE = 'woow_paas_platform_llm_account'
 EVENT_MODEL = 'woow_paas_platform.llm_event'
+REAUTH_SESSION_KEY = 'woow_llm_reauth'
 PROVISION_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_provision'
 BALANCE_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_balance_refresh'
 #: 餘額刷新：每頁幾個使用者（new-api 上限 100）、一個 tick 最多幾頁（N28）。
@@ -249,7 +254,17 @@ class LlmAccount(models.Model):
     used_quota_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
     request_count_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
     balance_synced_at = fields.Datetime(readonly=True, copy=False)
+    # A successful add_quota has no authoritative balance in its response.
+    # Preserve the earlier cache timestamp and reject GETs begun before this
+    # barrier; the next refresh supplies the new numeric balance.
+    balance_invalidated_at = fields.Datetime(readonly=True, copy=False)
+    reauth_at = fields.Datetime(readonly=True, copy=False,
+                                help='Audit only; eligibility belongs to the current session.')
     low_balance_threshold = fields.Integer(readonly=True, default=50)
+    # Real row update in T1 serializes distinct conversion requests under
+    # PostgreSQL REPEATABLE READ; never set from tenant input.
+    last_convert_request_at = fields.Datetime(readonly=True, copy=False,
+                                              groups='base.group_system')
     suspend_reason = fields.Selection(
         [('ops', 'Operations'), ('account_inactive', 'Account inactive'),
          ('policy', 'Policy'), ('not_me', 'Reported by the account owner')],
@@ -334,6 +349,110 @@ class LlmAccount(models.Model):
             'closed': ERR_LLM_CLOSED,
             'error': ERR_LLM_ACCOUNT_ERROR,
         }.get(self.state, ERR_LLM_UNAVAILABLE))
+
+    @api.model
+    def _llm_reauthenticate(self, partner, password, session, real_ip=''):
+        """Verify the caller's local password; credentials never enter audit/log/storage.
+
+        Installed Odoo 18.0-20250805 was inspected in the llmdev sandbox:
+        ``_check_credentials(credential, env)`` returns uid/auth_method, or raises
+        AccessDenied. Base verifies ``env.user``: never use the account's sudo env.
+        Passwordless accounts fail closed; email challenges are a separate release gate.
+        """
+        session.pop(REAUTH_SESSION_KEY, None)
+        current_user = self.env.user.with_user(self.env.uid)
+        if (not session.sid or session.uid != current_user.id
+                or partner.id != current_user.partner_id.id):
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+        account = self._llm_account_for_partner(current_user.partner_id)
+        account._llm_require_active()
+        events = self.env[EVENT_MODEL]
+        event_id = events._llm_reauth_reserve(account, uid=current_user.id,
+                                             real_ip=_clean_ip(real_ip))
+        verified = False
+        if isinstance(password, str) and password:
+            try:
+                with self.env.cr.savepoint():
+                    result = current_user._check_credentials(
+                        {'type': 'password', 'password': password}, {'interactive': True})
+                    verified = (isinstance(result, dict)
+                                and result.get('uid') == current_user.id
+                                and result.get('auth_method') == 'password')
+            except Exception:  # noqa: BLE001 - no credential/exception text may escape
+                pass
+        # Strict durable completion: if audit cannot be written, do not issue a grant.
+        stamp = events._llm_reauth_finish(event_id, account.id, current_user.id, verified)
+        if not verified:
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+        account.invalidate_recordset(['reauth_at'])
+        session[REAUTH_SESSION_KEY] = {
+            'uid': current_user.id, 'account_id': account.id,
+            'sid': session.sid, 'at': fields.Datetime.to_string(stamp),
+        }
+        return {'reauth_until': _iso(stamp + timedelta(seconds=REAUTH_VALID_SECONDS))}
+
+    def _llm_require_reauth(self, session, points=None):
+        """N25: strictly >1000 points, or an unconditional check when points is omitted.
+
+        Only a server-side session grant qualifies; account.reauth_at is audit-only.
+        Call with the request's actual session, never client-supplied flags/timestamps.
+        """
+        if points is not None and points <= 1000:
+            return
+        self.ensure_one()
+        grant = session.get(REAUTH_SESSION_KEY)
+        if not isinstance(grant, dict):
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+        try:
+            stamp = fields.Datetime.to_datetime(grant.get('at'))
+            age = (_utcnow() - stamp).total_seconds()
+            valid = (bool(session.sid) and session.uid == self.env.uid
+                     and grant.get('uid') == session.uid
+                     and grant.get('sid') == session.sid
+                     and grant.get('account_id') == self.id
+                     and self.partner_id.id == self.env.user.partner_id.id
+                     and 0 <= age < REAUTH_VALID_SECONDS)
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+
+    def _llm_require_new_operation(self):
+        """Shared gate for new keys/conversions; never used by paid-order workers.
+
+        All checks are local. Existing keys and order convergence keep running
+        when the emergency switch is off. Review only blocks conversions, so
+        T1 checks ``_llm_has_pending_review`` separately.
+        """
+        self._llm_require_active()
+        self._llm_require_current_terms()
+        if not llm_config(self.env)['orders_enabled'] or self._llm_guard_tripped():
+            raise LlmError(ERR_LLM_GUARD)
+
+    @api.model
+    def _llm_guard_tripped(self):
+        """Read the runtime mirror, including commits by another cron process."""
+        return bool(self.env['woow_paas_platform.llm_runtime_state']._llm_read()['guard_tripped'])
+
+    def _llm_has_pending_review(self):
+        """Whether this account has a conversion awaiting manual review."""
+        if not self:
+            return False
+        self.ensure_one()
+        return bool(self.env['woow_paas_platform.llm_credit_order'].sudo().search_count([
+            ('account_id', '=', self.id), ('state', '=', 'needs_review'),
+        ], limit=1))
+
+    def _llm_reserve_needed(self, days=7):
+        """Tax-inclusive renewals for N7; same predicate as billing's 3-day API.
+
+        Preview and T1 must call this again in their own transaction. A shortfall
+        requires confirmation; this read-only seam never debits or blocks.
+        """
+        self.ensure_one()
+        _upcoming, total_needed = upcoming_renewal_requirements(
+            self.env, self.partner_id, today=fields.Date.today(), days=days)
+        return total_needed
 
     def _llm_require_listable(self):
         """唯讀清單：active 與 suspended 都能看（暫停中的帳戶仍要看得到自己的金鑰）。"""
@@ -599,10 +718,10 @@ class LlmAccount(models.Model):
                 'convert_min': CONVERT_MIN_POINTS,
                 'convert_max': CONVERT_MAX_POINTS,
             },
-            'pending_review': False,
+            'pending_review': account._llm_has_pending_review(),
             # 只收白名單值（DESIGN §2.11；llm_common.llm_config 讀取時再驗一次）。
             'public_base_url': config.get('public_base_url'),
-            'guard': {'tripped': False},
+            'guard': {'tripped': self._llm_guard_tripped()},
             'data_as_of': _iso(account.balance_synced_at) if account else None,
         }
         if account and account.state in ('active', 'suspended'):
@@ -1180,7 +1299,9 @@ class LlmAccount(models.Model):
 
         守衛：使用者名稱與 ``newapi_user_id`` 都要對得上、帳戶是 active／suspended、而且現有的
         ``balance_synced_at`` **嚴格早於**這次讀取（``read_at``，:func:`balance_stamp`，在 GET 之前取）：
-        P9 或日後轉換在讀取之後寫的值不會被這頁的舊值蓋掉；同一微秒也不蓋（寧可等下一輪）。
+        P9 在讀取之後寫的值不會被舊頁蓋掉。轉換只有成功證據、沒有權威餘額，所以只設
+        ``balance_invalidated_at``（不把 before 快照當新餘額）；GET 必須開始於該 barrier 之後
+        才可更新數字並清掉 barrier。同一微秒也不蓋（寧可等下一輪）。
 
         交易是 **READ COMMITTED**（審查 LLM-02b 第 2 輪）：別的交易（P9、LLM-08 的轉換入帳）改了這一頁
         某一戶、而且 commit 了，REPEATABLE READ 會整句 40001（整頁 100 戶都丟掉）；READ COMMITTED
@@ -1200,14 +1321,17 @@ class LlmAccount(models.Model):
                 _begin(self.env, cr, read_committed=True)
                 cr.execute(
                     'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
-                    'request_count_cached = v.cnt, balance_synced_at = %s, write_uid = %s, '
+                    'request_count_cached = v.cnt, balance_synced_at = %s, '
+                    'balance_invalidated_at = NULL, write_uid = %s, '
                     'write_date = %s '
                     'FROM (VALUES {values}) AS v(username, user_id, quota, used, cnt) '
                     'WHERE a.newapi_username = v.username AND a.newapi_user_id = v.user_id '
                     'AND a.state IN %s '
-                    'AND (a.balance_synced_at IS NULL OR a.balance_synced_at < %s)'.format(
+                    'AND (a.balance_synced_at IS NULL OR a.balance_synced_at < %s) '
+                    'AND (a.balance_invalidated_at IS NULL OR '
+                    'a.balance_invalidated_at < %s)'.format(
                         t=ACCOUNT_TABLE, values=values),
-                    params)
+                    params + [read_at])
                 return cr.rowcount
         except psycopg2.Error as exc:
             _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',

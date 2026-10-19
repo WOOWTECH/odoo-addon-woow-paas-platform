@@ -1255,3 +1255,10 @@ from . import test_service_documentation_logs
 from . import test_cloud_app_documentation_seed
 from . import test_llm_free_usage
 from . import test_ha_onboarding
+from . import test_llm_credit_order
+from . import test_llm_credit_void
+from . import test_llm_credit_concurrency
+
+from . import test_llm_reauth
+from . import test_llm_credit_visibility
+from . import test_llm_credit_worker

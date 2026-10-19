@@ -257,6 +257,8 @@ class DashboardController(HiddenChainMixin, Controller):
             order='create_date desc, id desc',
             limit=_RECENT_ACTIVITY_LIMIT,
         )
+        descriptions = request.env['woow_paas_platform.llm_credit_order']._llm_wallet_descriptions(
+            partner, rows)
 
         result = []
         actor_name = partner.name or ''
@@ -267,7 +269,7 @@ class DashboardController(HiddenChainMixin, Controller):
                 'actor': actor_name,
                 'action': _ACTION_MAP.get(row.transaction_type, row.transaction_type or ''),
                 'target': target,
-                'description': row.description or row.name or '',
+                'description': descriptions.get(row.id, row.description or row.name or ''),
             })
         return result
 

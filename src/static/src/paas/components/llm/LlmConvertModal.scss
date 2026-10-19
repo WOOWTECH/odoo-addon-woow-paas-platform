@@ -1,0 +1,30 @@
+.o_woow_llm_convert {
+  width: 100%; max-width: 640px; max-height: calc(100dvh - 32px); overflow-y: auto;
+  border-radius: 20px; background: #fff; color: #212121;
+  font-family: $woow-font-body; font-size: 16px; line-height: 1.6;
+  box-shadow: 0 22px 52px rgba(33, 33, 33, .12);
+  h2 { font-family: $woow-font-display; letter-spacing: -.02em; line-height: 1.12; font-size: 24px; }
+  .o_woow_modal_header { align-items: flex-start; gap: 16px; }
+  .o_woow_modal_body { display: grid; gap: 16px; min-width: 0; }
+  p { margin: 0; overflow-wrap: anywhere; }
+  label { display: grid; gap: 8px; }
+  button, input[type="text"], input[type="password"] {
+    min-height: 44px; min-width: 0; max-width: 100%; border: 1px solid #dce0e8;
+    border-radius: 999px; padding: 8px 16px; background: #fff; color: #212121; font: inherit;
+  }
+  button { cursor: pointer; transition: background 220ms cubic-bezier(.4, 0, .2, 1); }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .55; cursor: default; }
+  button[aria-pressed="true"] { border-color: #6183fc; background: #eef2ff; }
+  :focus-visible { outline: 2px solid #6183fc; outline-offset: 4px; }
+  &__quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  &__preview, &__notice { padding: 16px; background: #eff1f5; border-radius: 20px; }
+  &__notice { display: grid; gap: 12px; }
+  label.o_woow_llm_convert__check { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+  &__check input { width: 24px; height: 24px; flex-shrink: 0; margin: 10px; accent-color: #6183fc; }
+  button.o_woow_llm_convert__primary { background: #6183fc; border-color: #6183fc; color: #fff; }
+  @media (max-width: $woow-bp-sm) {
+    .o_woow_modal_header, .o_woow_modal_body { padding: 16px; }
+    &__quick { grid-template-columns: repeat(2, 1fr); }
+  }
+}

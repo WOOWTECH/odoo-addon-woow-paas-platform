@@ -249,7 +249,7 @@ class LlmApiKey(models.Model):
         Account = self.env['woow_paas_platform.llm_account']
         account = Account._llm_account_for_partner(partner)
         account._llm_require_active()
-        # LLM-04：條款改版且要求重新同意 ⇒ llm_tos_outdated（零外呼；既有金鑰不受影響）。
+        # 免費試用不是付費點數轉換；僅需帳戶有效與目前條款已同意。
         account._llm_require_current_terms()
         if not isinstance(client_request_id, str) \
                 or not _CLIENT_REQUEST_ID_RE.fullmatch(client_request_id.strip().lower()):

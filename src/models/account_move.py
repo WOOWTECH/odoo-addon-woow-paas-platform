@@ -1,6 +1,6 @@
 import logging
 
-from odoo import _, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -113,6 +113,35 @@ def _is_invoice_issue_control(env, key):
 
 class AccountMove(models.Model):
     _inherit = 'account.move'
+
+    woow_llm_credit_order_id = fields.Many2one(
+        'woow_paas_platform.llm_credit_order',
+        string='AI Credit Conversion Order',
+        readonly=True,
+        index=True,
+        copy=False,
+        ondelete='restrict',
+        groups='base.group_system',
+        help='Internal conversion voucher; excluded from tenant invoice views.',
+    )
+
+    def _llm_is_internal_credit_move(self):
+        """Read only the private marker for document and deny-only payment gates.
+
+        The marker is system-only; portal consumers must never receive the
+        linked order. This predicate also works on unsaved payment previews.
+        """
+        self.ensure_one()
+        return bool(self.sudo().woow_llm_credit_order_id)
+
+    @api.model
+    def _llm_credit_move_domain(self):
+        """Exclude conversion invoices and reversals from tenant invoice surfaces.
+
+        Keep this subtractive predicate shared by every exposure point. The
+        restrictive relation preserves the marker for the voucher's lifetime.
+        """
+        return [('woow_llm_credit_order_id', '=', False)]
 
     def create_ecpay_invoice(self):
         """Short-circuit when invoice is PaaS-flagged and not forced.
