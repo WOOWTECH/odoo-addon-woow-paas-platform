@@ -352,10 +352,37 @@ export class LlmKeyRevealModal extends Component {
   }
 
   openDocs() {
-    if (this.props.onOpenDocs) {
-      this.props.onOpenDocs(this.state.key);
+    const onOpenDocs = this.props.onOpenDocs;
+    if (!onOpenDocs) {
+      this.close();
+      return;
     }
+    if (this.state.phase !== "shown" || typeof this.state.key !== "string" || !this.state.key) return;
+
+    // Capture the one-time secret before close() clears this component's state.
+    const key = this.state.key;
+    const kind = this.props.kind;
+    const models = this.props.models;
+    const currentState = window.history.state;
+    const ownSentinel = this.isOwnSentinel(currentState);
+    if (ownSentinel) {
+      // Keep this history entry; replacing its hash below makes Back return to the
+      // original tab without racing teardown's asynchronous history.back().
+      this.sentinelPushed = false;
+      const { woowLlmReveal, ...otherState } = currentState;
+      window.history.replaceState(otherState, "", window.location.href);
+    }
+
     this.close();
+    onOpenDocs(key, kind, models);
+    if (ownSentinel) {
+      // Replacing the sentinel entry avoids an extra Back stop.
+      window.location.replace("#/llm/docs");
+    } else {
+      // A missing sentinel can happen if the browser or host rewrites history.
+      // Teardown sees no owned sentinel, so normal router navigation cannot race a back().
+      router.navigate("llm/docs");
+    }
   }
 
   close() {

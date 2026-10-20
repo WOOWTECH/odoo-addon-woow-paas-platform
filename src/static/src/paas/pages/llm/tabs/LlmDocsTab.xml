@@ -24,7 +24,7 @@
       <WoowCard shadow="true" class="'o_woow_llm_docs__card'">
         <h2 t-esc="keyTitle"/>
         <code t-esc="apiKey"/>
-        <p t-if="endpointAvailable &amp;&amp; state.key" class="o_woow_hint" t-esc="_t('This key is held only by this guide instance and disappears when you leave it.')"/>
+        <p t-if="endpointAvailable &amp;&amp; state.key &amp;&amp; state.keyMode === state.mode" class="o_woow_hint" t-esc="_t('This key is held only by this guide instance and disappears when you leave it.')"/>
         <p t-else="" class="o_woow_hint" t-esc="_t('Replace YOUR_API_KEY with your own key. This example value is not a real credential.')"/>
         <p t-esc="pointsText"/>
       </WoowCard>
@@ -43,19 +43,29 @@
       <section class="o_woow_llm_docs__examples" aria-labelledby="o_woow_llm_docs_examples">
         <h2 id="o_woow_llm_docs_examples" t-esc="examplesTitle"/>
         <p t-if="!endpointAvailable" class="o_woow_hint" role="status" t-esc="examplesPlaceholderText"/>
-        <t t-foreach="examples" t-as="example" t-key="example.id">
-          <WoowCard shadow="true" class="'o_woow_llm_docs__card o_woow_llm_docs__example'">
-            <div class="o_woow_llm_docs__row">
-              <h3 t-esc="example.title"/>
-              <WoowButton variant="'secondary'" size="'sm'" disabled="!endpointAvailable" t-att-aria-label="copyNames[example.id]" onClick="() => this.copy(example.text, example.id)">
-                <WoowIcon name="'content_copy'" size="16"/>
-                <t t-if="state.copied === example.id" t-esc="copiedLabel"/>
-                <t t-else="" t-esc="copyLabel"/>
-              </WoowButton>
-            </div>
-            <pre><code t-esc="example.text"/></pre>
-          </WoowCard>
-        </t>
+        <div class="o_woow_llm_docs__tabs" role="group" t-att-aria-label="toolsLabel">
+          <button t-foreach="tools" t-as="tool" t-key="tool.id" type="button"
+                  t-att-class="{'o_woow_llm_docs__tab': true, 'active': state.tool === tool.id}"
+                  t-att-aria-pressed="state.tool === tool.id" t-on-click="() => this.selectTool(tool.id)">
+            <t t-esc="tool.label"/>
+          </button>
+        </div>
+        <div class="o_woow_llm_docs__modes" role="group" t-att-aria-label="modesLabel">
+          <button type="button" t-att-aria-pressed="state.mode === 'paid'" t-on-click="() => this.selectMode('paid')" t-esc="paidModeLabel"/>
+          <button type="button" t-att-aria-pressed="state.mode === 'free'" t-on-click="() => this.selectMode('free')" t-esc="freeModeLabel"/>
+        </div>
+        <WoowCard shadow="true" class="'o_woow_llm_docs__card o_woow_llm_docs__example'">
+          <div class="o_woow_llm_docs__row">
+            <h3 t-esc="example.title"/>
+            <WoowButton variant="'secondary'" size="'sm'" disabled="!endpointAvailable || modelPlaceholder" ariaLabel="copyNames.example" onClick.bind="copyExample">
+              <WoowIcon name="'content_copy'" size="16"/>
+              <t t-if="state.copied === 'example'" t-esc="copiedLabel"/>
+              <t t-else="" t-esc="copyLabel"/>
+            </WoowButton>
+          </div>
+          <p t-if="modelPlaceholder" class="o_woow_hint" t-esc="modelPlaceholderText"/>
+          <pre><code t-esc="example.text"/></pre>
+        </WoowCard>
         <p t-if="state.copyFailed" role="alert" class="o_woow_llm_docs__error" t-esc="copyFailedText"/>
       </section>
 

@@ -52,6 +52,28 @@
     gap: 12px;
   }
 
+  &__tabs,
+  &__modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+
+    button {
+      padding: 8px 14px;
+      border: 1px solid #d8dee8;
+      border-radius: 999px;
+      background: #fff;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    button[aria-pressed="true"] {
+      border-color: var(--woow-primary, #4353a3);
+      background: #eef0fb;
+    }
+  }
+
   &__example pre,
   &__card > code {
     display: block;

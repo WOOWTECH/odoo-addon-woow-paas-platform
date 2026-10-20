@@ -118,7 +118,7 @@ function statusLabel(status) {
 export class LlmKeysTab extends Component {
   static template = "woow_paas_platform.LlmKeysTab";
   static components = { WoowIcon, WoowButton, LlmKeyFormModal, LlmKeyRevealModal, LlmKeyActionConfirmModal };
-  static props = {};
+  static props = { onOpenDocs: { type: Function, optional: true } };
 
   setup() {
     this.service = useState(llmService);

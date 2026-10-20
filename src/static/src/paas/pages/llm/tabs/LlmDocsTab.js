@@ -1,11 +1,13 @@
 /** @odoo-module **/
 
-import { Component, useState } from "@odoo/owl";
+import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { copyText } from "../../../utils/clipboard";
+import { llmService } from "../../../services/llm_service";
+import { publishedPaidModel, shellQuote } from "./llm_docs_helpers";
 
 const SAFE_KEY = "YOUR_API_KEY";
 const SAFE_BASE_URL = "YOUR_BASE_URL";
@@ -17,7 +19,7 @@ function curlExample(base, key, model, content) {
     `curl ${base}/chat/completions`,
     `  -H "Authorization: Bearer ${key}"`,
     `  -H "Content-Type: application/json"`,
-    `  -d '${body}'`,
+    `  -d ${shellQuote(body)}`,
   ].join(continuation);
 }
 
@@ -26,18 +28,41 @@ export class LlmDocsTab extends Component {
   static components = { WoowButton, WoowCard, WoowIcon };
   static props = {
     initialKey: { type: String, optional: true },
+    initialMode: { type: String, optional: true },
+    initialAllowedModels: { type: [Array, { value: null }], optional: true },
     onConsumeKey: { type: Function, optional: true },
     baseUrl: { type: String, optional: true },
   };
 
   setup() {
-    this.state = useState({ key: this.props.initialKey || "", copied: "", copyFailed: false });
+    this.llm = useState(llmService);
+    this.state = useState({
+      key: this.props.initialKey || "",
+      mode: this.props.initialMode === "free" ? "free" : "paid",
+      keyMode: this.props.initialMode === "free" ? "free" : "paid",
+      tool: "curl",
+      copied: "",
+      copyFailed: false,
+    });
     if (this.props.initialKey) this.props.onConsumeKey?.();
+    onMounted(() => {
+      if (!this.llm.overviewLoaded || this.llm.overviewError) llmService.fetchState();
+      if (!this.llm.modelsLoaded || this.llm.models?.state !== "ok") llmService.fetchModels();
+    });
+    onWillUnmount(() => {
+      this.state.key = "";
+    });
   }
 
-  get apiKey() { return this.endpointAvailable && this.state.key ? this.state.key : SAFE_KEY; }
+  get apiKey() {
+    return this.endpointAvailable && this.state.key && this.state.keyMode === this.state.mode
+      ? this.state.key : SAFE_KEY;
+  }
   get endpoint() { return this.endpointAvailable ? this.props.baseUrl : SAFE_BASE_URL; }
-  get endpointAvailable() { return typeof this.props.baseUrl === "string" && this.props.baseUrl.trim().length > 0; }
+  get endpointAvailable() { return typeof this.props.baseUrl === "string" && this.props.baseUrl.length > 0; }
+  get selectedModel() { return publishedPaidModel(this.llm.models, this.props.initialAllowedModels); }
+  get model() { return this.state.mode === "free" ? "qwen3-4b-cluster1" : this.selectedModel || "YOUR_PUBLISHED_PAID_MODEL"; }
+  get modelPlaceholder() { return this.state.mode === "paid" && !this.selectedModel; }
   get unavailableText() { return _t("The Base URL is unavailable until the service provides its public endpoint."); }
   get examplesPlaceholderText() { return _t("Examples use YOUR_BASE_URL and YOUR_API_KEY placeholders until the Base URL is available. Copying is disabled."); }
   get copyFailedText() { return _t("Copy failed. Please select the text and copy it manually."); }
@@ -59,41 +84,68 @@ export class LlmDocsTab extends Component {
   get guardRateLimit() { return _t("All key-creation and conversion attempts also have a separate 30-per-hour guard"); }
   get limitsTitle() { return _t("Request limits"); }
   get examplesTitle() { return _t("Setup examples"); }
-  get pointsText() { return _t("1 point corresponds to NT$1 (New Taiwan Dollar)."); }
+  get toolsLabel() { return _t("Choose a tool"); }
+  get modesLabel() { return _t("Choose key type"); }
+  get paidModeLabel() { return _t("Paid model"); }
+  get freeModeLabel() { return _t("Free Qwen trial"); }
+  get modelPlaceholderText() { return _t("No published paid model is available in the catalog. Replace YOUR_PUBLISHED_PAID_MODEL after selecting a model from Models & Pricing."); }
+  get pointsText() { return _t("1 point corresponds to NT$1 (New Taiwan Dollar), including tax. Converted AI credit is non-refundable, including when closing the account."); }
   get sourceText() { return _t("This service uses new-api, licensed under AGPL-3.0. View the source for the deployed version."); }
   get faqTitle() { return _t("Frequently asked questions"); }
   get faq401() { return _t("401 — The key is invalid, disabled, expired, out of quota, or its free allowance for today is used. The response says 無效的令牌, or Invalid token when Accept-Language is en. Go to API keys to check the key status."); }
   get faq403() { return _t("403 — This is the request that crossed a limit. It can also mean insufficient AI credit, or that the key lacks permission for the requested model."); }
   get faq429() { return _t("429 — Too many requests in a short period. Wait briefly, then reduce the request rate."); }
-  get faq503() { return _t("503 — The service is temporarily unavailable. Retry after a short wait."); }
-  get faq524() { return _t("524 — The upstream request took too long. Retry later or shorten the request."); }
+  get faq503() { return _t("503 — No available channel can serve this request. For example, a paid key cannot call the free Qwen channel. Retry later or choose an available model."); }
+  get faq524() { return _t("524 — Cloudflare timed out while waiting for the upstream request. Retry later, use streaming for long requests, or shorten the request."); }
   get curlTitle() { return _t("curl"); }
   get pythonTitle() { return _t("Python with OpenAI SDK"); }
   get nodeTitle() { return _t("Node.js with OpenAI SDK"); }
   get n8nTitle() { return _t("n8n"); }
   get openWebUiTitle() { return _t("Open WebUI"); }
   get openCodeTitle() { return _t("OpenCode"); }
-  get copyNames() {
-    return { base: _t("Copy Base URL"), curl: _t("Copy curl example"), python: _t("Copy Python example"), node: _t("Copy Node example"), n8n: _t("Copy n8n example"), webui: _t("Copy Open WebUI example"), opencode: _t("Copy OpenCode example"), paid: _t("Copy paid key example"), free: _t("Copy free trial example") };
+  get tools() {
+    return [
+      { id: "curl", label: this.curlTitle }, { id: "python", label: this.pythonTitle },
+      { id: "node", label: this.nodeTitle }, { id: "n8n", label: this.n8nTitle },
+      { id: "webui", label: this.openWebUiTitle }, { id: "opencode", label: this.openCodeTitle },
+    ];
   }
+  get copyNames() { return { base: _t("Copy Base URL"), example: _t("Copy setup example") }; }
 
-  get examples() {
+  get example() {
     const base = this.endpoint;
     const key = this.apiKey;
-    return [
-      { id: "curl", title: this.curlTitle, text: curlExample(base, key, "gpt-4o-mini", "Hello") },
-      { id: "python", title: this.pythonTitle, text: `from openai import OpenAI\n\nclient = OpenAI(api_key="${key}", base_url="${base}")\nresponse = client.chat.completions.create(\n    model="gpt-4o-mini", messages=[{"role": "user", "content": "Hello"}]\n)\nprint(response.choices[0].message.content)` },
-      { id: "node", title: this.nodeTitle, text: `import OpenAI from "openai";\n\nconst client = new OpenAI({ apiKey: "${key}", baseURL: "${base}" });\nconst response = await client.chat.completions.create({\n  model: "gpt-4o-mini", messages: [{ role: "user", content: "Hello" }],\n});\nconsole.log(response.choices[0].message.content);` },
-      { id: "n8n", title: this.n8nTitle, text: _t("In the OpenAI Chat Model node, set the credential API key to %(key)s and the Base URL to %(base)s.", { key, base }) },
-      { id: "webui", title: this.openWebUiTitle, text: _t("In the OpenAI connection settings, set the API Base URL to %(base)s and the API key to %(key)s.", { key, base }) },
-      { id: "opencode", title: this.openCodeTitle, text: _t("Set the provider's baseURL to %(base)s and its API key to %(key)s.", { key, base }) },
-      { id: "paid", title: this.paidTitle, text: curlExample(base, key, "gpt-4o-mini", "Paid request") },
-      { id: "free", title: this.freeTitle, text: curlExample(base, key, "qwen3-4b-cluster1", "Free trial request") },
-    ];
+    const model = this.model;
+    const pyKey = JSON.stringify(key);
+    const pyBase = JSON.stringify(base);
+    const pyModel = JSON.stringify(model);
+    const jsKey = JSON.stringify(key);
+    const jsBase = JSON.stringify(base);
+    const jsModel = JSON.stringify(model);
+    const snippets = {
+      curl: curlExample(base, key, model, this.state.mode === "free" ? "Free trial request" : "Paid request"),
+      python: `from openai import OpenAI\n\nclient = OpenAI(api_key=${pyKey}, base_url=${pyBase})\nresponse = client.chat.completions.create(\n    model=${pyModel}, messages=[{"role": "user", "content": "Hello"}]\n)\nprint(response.choices[0].message.content)`,
+      node: `import OpenAI from "openai";\n\nconst client = new OpenAI({ apiKey: ${jsKey}, baseURL: ${jsBase} });\nconst response = await client.chat.completions.create({\n  model: ${jsModel}, messages: [{ role: "user", content: "Hello" }],\n});\nconsole.log(response.choices[0].message.content);`,
+      n8n: _t("In the OpenAI Chat Model node, set the credential API key to %(key)s and the Base URL to %(base)s. Select model %(model)s.", { key, base, model }),
+      webui: _t("In Open WebUI's OpenAI connection settings, set the API Base URL to %(base)s, the API key to %(key)s, and the model to %(model)s.", { key, base, model }),
+      opencode: _t("In OpenCode, configure an OpenAI-compatible provider with baseURL %(base)s, API key %(key)s, and model %(model)s.", { key, base, model }),
+    };
+    return { id: this.state.tool, title: this.tools.find((tool) => tool.id === this.state.tool)?.label || this.curlTitle, text: snippets[this.state.tool] };
+  }
+
+  selectTool(tool) { this.state.tool = tool; this.state.copied = ""; }
+  selectMode(mode) {
+    const nextMode = mode === "free" ? "free" : "paid";
+    if (nextMode !== this.state.mode) {
+      this.state.key = "";
+      this.state.keyMode = nextMode;
+      this.state.copied = "";
+    }
+    this.state.mode = nextMode;
   }
 
   async copy(value, id) {
-    if (!this.endpointAvailable || typeof value !== "string" || !value) {
+    if (!this.endpointAvailable || this.modelPlaceholder && id === "example" || typeof value !== "string" || !value) {
       this.state.copied = "";
       this.state.copyFailed = false;
       return false;
@@ -106,5 +158,5 @@ export class LlmDocsTab extends Component {
 
   async copyBase() { return this.copy(this.props.baseUrl, "base"); }
 
-  async copyText(value, id) { return this.copy(value, id); }
+  async copyExample() { return this.copy(this.example.text, "example"); }
 }
