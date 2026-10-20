@@ -243,26 +243,26 @@ export const llmService = reactive({
   },
 
   async updateKey(keyId, changes) {
-    if (!validKeyId(keyId) || !changes || typeof changes !== "object") return failure(KEY_INVALID);
-    const params = { key_id: keyId };
-    for (const name of ["name", "limitPoints", "expires", "models"]) {
-      if (!Object.hasOwn(changes, name)) continue;
-      let value;
-      try {
-        value = changes[name];
-      } catch {
-        return failure(KEY_INVALID);
+    let params;
+    try {
+      if (!validKeyId(keyId) || !changes || typeof changes !== "object") return failure(KEY_INVALID);
+      params = { key_id: keyId };
+      for (const name of ["name", "limitPoints", "expires", "models"]) {
+        if (!Object.hasOwn(changes, name)) continue;
+        const value = changes[name];
+        if (value === undefined) return failure(KEY_INVALID);
+        if (name === "name" && !validUpdateName(value)) return failure(KEY_INVALID);
+        if (name === "limitPoints" && value !== null
+          && (!Number.isSafeInteger(value) || value <= 0)) return failure(KEY_INVALID);
+        if (name === "expires" && value !== null
+          && !["30d", "90d", "180d", "never"].includes(value)) return failure(KEY_INVALID);
+        if (name === "models" && !validUpdateModels(value)) return failure(KEY_INVALID);
+        params[name === "limitPoints" ? "limit_points" : name] = value;
       }
-      if (value === undefined) return failure(KEY_INVALID);
-      if (name === "name" && !validUpdateName(value)) return failure(KEY_INVALID);
-      if (name === "limitPoints" && value !== null
-        && (!Number.isSafeInteger(value) || value <= 0)) return failure(KEY_INVALID);
-      if (name === "expires" && value !== null
-        && !["30d", "90d", "180d", "never"].includes(value)) return failure(KEY_INVALID);
-      if (name === "models" && !validUpdateModels(value)) return failure(KEY_INVALID);
-      params[name === "limitPoints" ? "limit_points" : name] = value;
+      if (Object.keys(params).length === 1) return failure(KEY_INVALID);
+    } catch {
+      return failure(KEY_INVALID);
     }
-    if (Object.keys(params).length === 1) return failure(KEY_INVALID);
     return runKeyAction(this, "update", keyId, "/api/llm/keys/update", params);
   },
 

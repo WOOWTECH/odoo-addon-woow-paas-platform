@@ -274,6 +274,11 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
   cyclicArray.push(cyclicArray);
   const cyclicObject = {};
   cyclicObject.self = cyclicObject;
+  const hostileChanges = new Proxy({}, {
+    getOwnPropertyDescriptor() { throw new Error("hostile descriptor"); },
+  });
+  const revokedModels = Proxy.revocable([], {});
+  revokedModels.revoke();
   for (const args of [
     [0, { name: "x" }], [1.5, { name: "x" }], [Number.MAX_SAFE_INTEGER + 1, { name: "x" }],
     [1, {}], [1, { name: undefined }], [1, { name: undefined, expires: "90d" }], [1, null],
@@ -283,6 +288,7 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
     [1, { models: "openai/gpt-4.1" }], [1, { models: [] }], [1, { models: ["x", "x"] }],
     [1, { models: ["bad model"] }], [1, { models: ["x".repeat(129)] }], [1, { models: [null] }],
     [1, { models: cyclicArray }], [1, { models: [{ id: "openai/gpt-4.1" }] }],
+    [1, hostileChanges], [1, { models: revokedModels.proxy }],
   ]) assert.deepEqual(await llmService.updateKey(...args), { success: false, code: "llm_key_invalid" });
   assert.equal(calls.length, 0, "invalid updates must not make any RPCs");
 
