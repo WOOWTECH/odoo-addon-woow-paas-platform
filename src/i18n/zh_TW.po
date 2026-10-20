@@ -3833,6 +3833,7 @@ msgstr "可檢視與編輯工作區內容"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_wizard_form
 msgid "Cancel"
 msgstr "取消"
 
@@ -21669,6 +21670,7 @@ msgstr "通知（%(count)s 則未讀）"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__account_id
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy_wizard__account_id
 msgid "Account"
 msgstr "帳號"
 
@@ -27819,6 +27821,8 @@ msgstr "花費"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__request_id
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy_wizard__request_id
 msgid "Request ID"
 msgstr "請求 ID"
 
@@ -28294,6 +28298,197 @@ msgstr ""
 "                <p>轉換訂單編號 <t t-out=\"ctx.get('llm_subject_id', 0)\"/> 未完成。\n"
 "                    點數已退回您的錢包。</p>\n"
 "            </div>"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Enter a whole signed quota integer."
+msgstr "請輸入可帶正負號的額度整數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "The quota difference must be non-zero and fit signed 64-bit range."
+msgstr "額度差額不得為零，且須在 64 位元有號整數範圍內。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "A canonical UUID request id is required."
+msgstr "請提供標準格式的 UUID 請求識別碼。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Known discrepancy certificates cannot be deleted."
+msgstr "已知額度差額憑證無法刪除。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Acknowledge known quota difference"
+msgstr "認列額度差額"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Known quota differences"
+msgstr "已知額度差額"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Known discrepancies can only be recorded by the platform service."
+msgstr "已知額度差額只能由平台服務記錄。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Known discrepancy certificates are immutable."
+msgstr "已知額度差額憑證不可修改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "Select an AI account."
+msgstr "請選擇 AI 帳戶。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "A reason of at least 10 characters is required."
+msgstr "請填寫至少 10 個字元的原因。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "A reason must contain 10 to 2000 characters."
+msgstr "原因須為 10 至 2000 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "AI Models are not configured; no discrepancy was recorded."
+msgstr "AI 模型尚未設定，因此未記錄差額。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "The selected AI account does not exist."
+msgstr "所選的 AI 帳戶不存在。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_known_discrepancy.py:0
+msgid "This request id was already used for another discrepancy."
+msgstr "此請求 ID 已用於另一筆差額。"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_known_discrepancy
+msgid "Known AI quota discrepancy"
+msgstr "已知額度差額"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_known_discrepancy_request_id_uniq
+msgid "This discrepancy request was already recorded."
+msgstr "此差額請求已記錄。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_known_discrepancy_quota_delta_nonzero
+msgid "A discrepancy must be non-zero."
+msgstr "差額不得為零。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_known_discrepancy_reason_length
+msgid "The reason must contain 10 to 2000 characters."
+msgstr "原因須為 10 至 2000 個字元。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__account_id
+msgid "AI account"
+msgstr "AI 帳戶"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__quota_delta
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__quota_delta_text
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy_wizard__quota_delta
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_list
+msgid "Quota difference"
+msgstr "額度差額"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__reason
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy_wizard__reason
+msgid "Reason"
+msgstr "原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__created_uid
+msgid "Recorded by"
+msgstr "記錄人員"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__llm_event_id
+msgid "Audit event"
+msgstr "稽核事件"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_known_discrepancy__created_at
+msgid "Recorded at"
+msgstr "記錄時間"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_known_discrepancy_wizard
+msgid "Acknowledge known AI quota difference"
+msgstr "認列額度差額"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_list
+msgid "Known AI Quota Differences"
+msgstr "已知額度差額"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_form
+msgid "Known AI Quota Difference"
+msgstr "已知額度差額"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_wizard_form
+msgid "Acknowledge Known Quota Difference"
+msgstr "認列額度差額"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_wizard_form
+msgid "Positive means new-api has more quota"
+msgstr "正值表示 new-api 的額度較多"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_wizard_form
+msgid "Explain the reconciliation evidence (10–2000 characters)."
+msgstr "請說明對帳依據（10 至 2000 個字元）。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_known_discrepancy_wizard_form
+msgid "Record difference"
+msgstr "記錄差額"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_account_discrepancy_action
+msgid "Acknowledge quota difference"
+msgstr "認列額度差額"
+
+#. module: woow_paas_platform
+#: model:ir.actions.act_window,name:woow_paas_platform.action_llm_known_discrepancies
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_known_discrepancies
+msgid "Known Quota Differences"
+msgstr "已知額度差額"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_backoffice.py:0
+msgid "A named system administrator is required."
+msgstr "此操作須由已取得具名操作資格的系統管理員執行。"
 
 #. module: woow_paas_platform
 #. odoo-python

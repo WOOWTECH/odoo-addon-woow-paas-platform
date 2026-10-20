@@ -476,6 +476,7 @@
 47	test_llm_api_key_management.TestLlmPaidKeyCreate
 29	test_llm_backoffice.TestLlmBackofficeCommitted
 8	test_llm_backoffice.TestLlmBackofficeGuards
+3	test_llm_bounded_cron.TestLlmBoundedCron
 2	test_llm_client_hardening.TestLlmApRateLimit
 9	test_llm_client_hardening.TestLlmCircuitBreaker
 3	test_llm_client_hardening.TestLlmCircuitCronGate
@@ -492,8 +493,10 @@
 6	test_llm_credit_visibility.TestLlmCreditVisibility
 13	test_llm_credit_void.TestLlmCreditVoid
 39	test_llm_credit_worker.TestLlmCreditWorkerCommitted
+1	test_llm_discrepancy_replay.TestLlmDiscrepancyReplay
 22	test_llm_free_usage.TestLlmFreeUsage
 2	test_llm_free_usage.TestLlmFreeUsageSecurity
+9	test_llm_known_discrepancy.TestLlmKnownDiscrepancy
 5	test_llm_mcp_jump_guard.TestLlmMcpJumpGuard
 1	test_llm_notification_suspension.TestLlmSuspensionManagementRace
 10	test_llm_notification_suspension.TestLlmSuspensionRecovery
@@ -515,6 +518,9 @@
 6	test_llm_platform_foundation.TestLlmThrottle
 14	test_llm_reauth.TestLlmReauth
 2	test_llm_reauth.TestLlmReauthCommitted
+1	test_llm_reconcile_local.TestLlmReconcileDeadline
+25	test_llm_reconcile_local.TestLlmReconcileLocal
+4	test_llm_sql_budget.TestLlmSqlBudget
 9	test_llm_terms.TestLlmTermsConsent
 3	test_llm_terms.TestLlmTermsHttp
 10	test_llm_terms.TestLlmTermsModel

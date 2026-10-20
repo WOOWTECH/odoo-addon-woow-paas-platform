@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Frozen model/method contract. The worker uses hourly I1 and Taipei-daily
+         I4 durable cursors; a short interval resumes bounded unfinished sweeps.
+         N27: unconfigured databases return before reconciliation work, incidents or alerts. -->
+    <data noupdate="1">
+        <record id="ir_cron_llm_reconcile_local" model="ir.cron">
+            <field name="name">PaaS: AI Local Ledger Reconciliation</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_reconcile_local_cursor"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_reconcile_local()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">10</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

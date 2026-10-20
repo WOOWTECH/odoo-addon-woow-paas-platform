@@ -17,6 +17,7 @@
 1	src/data/llm_cron.xml
 1	src/data/llm_notification_mail_templates.xml
 1	src/data/llm_notifications_cron.xml
+1	src/data/llm_reconcile_cron.xml
 1	src/data/low_balance_warning_cron.xml
 1	src/data/mail_templates.xml
 1	src/data/mcp_server_cron.xml

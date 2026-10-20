@@ -1274,3 +1274,10 @@ from . import test_llm_api_key_management
 
 from . import test_llm_notifications
 from . import test_llm_notification_suspension
+
+from . import test_llm_known_discrepancy
+from . import test_llm_reconcile_local
+
+from . import test_llm_sql_budget
+from . import test_llm_discrepancy_replay
+from . import test_llm_bounded_cron
