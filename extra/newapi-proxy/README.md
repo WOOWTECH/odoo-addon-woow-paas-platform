@@ -14,6 +14,17 @@ kubelet／helm test／Odoo 健康檢查 ──► newapi-proxy:8081（/healthz�
 
 ## 線上契約（給 `src/services/newapi_client.py`，LLM-01b）
 
+### 稽核呼叫識別（LLM-12b）
+
+每個請求由代理產生獨立 UUID v4 `attempt_id`，同一次呼叫的 access 與 audit 紀錄共用它；
+`sending`、`forwarded`、`connect`、`reset`、`timeout`、`cancelled` 等結果可據此配對。
+即使上游沒有回傳 `X-Oneapi-Request-Id`，仍保留同一個 `attempt_id`。它不取自使用者標頭，
+也不取代上游 `request_id`；相同內容的兩次呼叫會有不同 ID。
+
+這只是事件配對欄位。stdout 紀錄尚不構成持久、完整的對帳來源；收集器必須另外證明保存期間、
+環境歸屬與覆蓋水位。不能將 `sending` 與後續結果各算一次入帳，也不能將缺少結果視為未執行。
+共用同一簽章金鑰的 Odoo DB 無法僅靠 `kid` 區分，啟用 I3 前須完成身分隔離或跨 DB 認領。
+
 ### 請求標頭
 
 | 標頭 | 內容 |
