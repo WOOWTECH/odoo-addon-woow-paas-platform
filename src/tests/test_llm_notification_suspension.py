@@ -167,6 +167,23 @@ class TestLlmSuspensionRecovery(_ConfiguredCase):
         self.assertTrue(all(self.fake.tokens[i]['status'] == 2 for i in (older, newer)))
         self.assertEqual(sum(name == 'user_list_tokens' for name, _ip in self.fake.calls), 3)
 
+    def test_final_head_check_follows_all_disables_and_catches_late_insertion(self):
+        key = self.key('active')
+        token_ids = [self.token(key.newapi_name) for _ in range(3)]
+        _llm_internal(key).write({'newapi_token_id': token_ids[-1]})
+        self.tick()  # Disable the known ID.
+        self.tick()  # Find two siblings and schedule the final head check.
+        self.tick()  # Disable the first sibling.
+        self.tick()  # Must disable the last sibling, not verify the head yet.
+        self.assertTrue(all(self.fake.tokens[i]['status'] == 2 for i in token_ids))
+        self.assertFalse(key.not_me_disabled_notice_id)
+        self.assertTrue(key.not_me_disable_plan['scan_verify_head'])
+        token_ids.append(self.token(key.newapi_name))
+        self.drain([key])
+        self.assertEqual(set(key.not_me_disable_plan['disabled']), set(token_ids))
+        self.assertTrue(all(self.fake.tokens[i]['status'] == 2 for i in token_ids))
+        self.assertEqual(key.not_me_disabled_notice_id, 31)
+
     def test_equal_total_page_shift_is_revalidated_before_completion(self):
         key = self.key()
         oldest = self.token(key.newapi_name)

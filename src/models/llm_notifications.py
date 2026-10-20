@@ -436,7 +436,8 @@ class LlmNotification(models.Model):
         now = int(_utcnow().replace(tzinfo=timezone.utc).timestamp())
         due = sorted((entry['attempts'], entry['retry_at'], int(token_id))
                      for token_id, entry in plan['pending'].items() if entry['retry_at'] <= now)
-        scan_due = not plan['scan_complete'] and plan['scan_retry_at'] <= now
+        scan_due = (not plan['scan_complete'] and plan['scan_retry_at'] <= now
+                    and not (plan.get('scan_verify_head') and plan['pending']))
         if scan_due and (plan['prefer_scan'] or not due):
             self._llm_scan_disable_page(key, plan, client, ip, up, tick.deadline, now)
         elif due:
@@ -485,7 +486,7 @@ class LlmNotification(models.Model):
         fingerprint = hashlib.sha256(json.dumps(
             [(item['id'], item['name']) for item in items],
             separators=(',', ':'), ensure_ascii=True).encode('ascii')).hexdigest()
-        if (verifying and total == plan['scan_total']
+        if (verifying and not plan['pending'] and total == plan['scan_total']
                 and fingerprint == plan.get('scan_head')):
             plan['scan_complete'] = True
             plan['scan_verify_head'] = False
@@ -527,7 +528,8 @@ class LlmNotification(models.Model):
                 plan['scan_retry_at'] = now + min(3600, 60 * 2 ** min(plan['scan_attempts'] - 1, 6))
                 values['not_me_scan_page'] = 1
             deadlines = [entry['retry_at'] for entry in plan['pending'].values()]
-            if not plan['scan_complete']:
+            if (not plan['scan_complete']
+                    and not (plan.get('scan_verify_head') and plan['pending'])):
                 deadlines.append(plan['scan_retry_at'])
             values['not_me_disable_next_at'] = datetime.fromtimestamp(
                 max(now, min(deadlines)), timezone.utc).replace(tzinfo=None)
