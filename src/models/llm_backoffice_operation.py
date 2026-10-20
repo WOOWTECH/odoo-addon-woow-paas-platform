@@ -135,8 +135,7 @@ class LlmBackofficeOperation(models.Model):
                 'pending_tokens_json': ({str(snapshot['token_id_snapshot']): {
                     'attempts': 0, 'retry_at': 0,
                 }} if snapshot['token_id_snapshot'] else {}),
-                'prefer_scan': bool(snapshot['newapi_name_snapshot'])
-                               or not snapshot['token_id_snapshot'],
+                'prefer_scan': not bool(snapshot['token_id_snapshot']),
             } for snapshot in key_snapshots])
         return queued
 
@@ -328,10 +327,18 @@ class LlmBackofficeOperation(models.Model):
         # can never race a failed/slow upstream disable and reactivate the key.
         if key.disabled_by != 'ops':
             _llm_internal(key).write({'disabled_by': 'ops'})
+        # A finalizer can commit between the snapshot read and obligation INSERT.
+        # Merge its committed ID under the key lock even when discovery is down.
+        pending_tokens = dict(obligation.pending_tokens_json or {})
+        if (key.newapi_token_id and key.newapi_token_id not in (obligation.disabled_tokens_json or [])
+                and str(key.newapi_token_id) not in pending_tokens):
+            pending_tokens[str(key.newapi_token_id)] = {'attempts': 0, 'retry_at': 0}
+            _obligation_cap(obligation).write({
+                'pending_tokens_json': pending_tokens, 'prefer_scan': False,
+            })
         if tick:
             tick.took()
         try:
-            pending_tokens = obligation.pending_tokens_json or {}
             action = token_recovery.next_action(
                 scan_required=obligation.scan_required,
                 scan_complete=obligation.scan_complete,
@@ -341,6 +348,11 @@ class LlmBackofficeOperation(models.Model):
                 self._scan_obligation_page(obligation, account, key, actor, tick)
             elif action == 'disable':
                 self._disable_obligation_token(obligation, account, key, actor, tick)
+            elif not pending_tokens and not obligation.scan_required and obligation.disabled_tokens_json:
+                if self._obligation_creator_quiet(obligation, key):
+                    _obligation_cap(obligation).write({'state': 'done', 'result_code': 'ok'})
+                    if key.state != 'failed_reveal':
+                        _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'ops'})
             else:
                 retry_times = [entry['retry_at'] for entry in pending_tokens.values()]
                 next_at = min(retry_times) if retry_times else int(time.time()) + 60
@@ -403,7 +415,8 @@ class LlmBackofficeOperation(models.Model):
                           'result_code': 'token_disabled',
                           'prefer_scan': True,
                           'work_count': obligation.work_count + 1, 'next_work_at': False})
-        if not pending and not obligation.scan_required:
+        if (not pending and not obligation.scan_required
+                and self._obligation_creator_quiet(obligation, key)):
             _obligation_cap(obligation).write({'state': 'done', 'result_code': 'ok'})
             if key.state not in ('failed_reveal', 'creating'):
                 _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'ops'})
@@ -460,6 +473,8 @@ class LlmBackofficeOperation(models.Model):
                             timezone.utc).replace(tzinfo=None)),
                 })
                 return
+            if not self._obligation_creator_quiet(obligation, key):
+                return
             # Re-read page one and compare its exact head before accepting the
             # traversal. This is forbidden while any token ID is pending.
             verify = client.user_list_tokens(
@@ -507,11 +522,79 @@ class LlmBackofficeOperation(models.Model):
                           'result_code': 'scan_page'})
 
     @api.model
+    def _obligation_creator_quiet(self, obligation, key):
+        """A stop fences later POSTs; wait out the bounded request already sent."""
+        if key.state != 'creating' and obligation.state_snapshot != 'creating':
+            return True
+        quiet_after = key.create_date + timedelta(seconds=nac.KEY_CREATE_BUDGET_SECONDS + 10)
+        if fields.Datetime.now() < quiet_after:
+            _obligation_cap(obligation).write({
+                'result_code': 'creator_pending', 'next_work_at': quiet_after,
+                'work_count': obligation.work_count + 1,
+            })
+            return False
+        # Do not occupy the live-trial unique index after an interrupted create.
+        if key.state == 'creating':
+            _llm_internal(key).write({'state': 'failed_reveal'})
+        return True
+
+    @api.model
+    def _lock_key_obligations(self, key_id):
+        """Finalizers use the worker's operation -> obligation -> key lock order."""
+        self.env.cr.execute(
+            'SELECT op.id FROM woow_paas_platform_llm_backoffice_operation op '
+            'WHERE EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob '
+            'WHERE ob.operation_id=op.id AND ob.key_id=%s) ORDER BY op.id FOR UPDATE', (key_id,))
+        operation_ids = [row[0] for row in self.env.cr.fetchall()]
+        if not operation_ids:
+            return self.env[_OBL_MODEL].sudo().browse()
+        self.env.cr.execute(
+            'SELECT id FROM woow_paas_platform_llm_backoffice_key_obligation '
+            'WHERE key_id=%s AND operation_id=ANY(%s) ORDER BY id FOR UPDATE',
+            (key_id, operation_ids))
+        return self.env[_OBL_MODEL].sudo().browse([row[0] for row in self.env.cr.fetchall()])
+
+    @api.model
+    def _reenqueue_finalized_token(self, obligations, token_id):
+        """Same transaction as finalization: an unreceipted ID reopens its batch."""
+        if not token_id:
+            return
+        for obligation in obligations:
+            if token_id in (obligation.disabled_tokens_json or []):
+                continue
+            pending = dict(obligation.pending_tokens_json or {})
+            pending.setdefault(str(token_id), {'attempts': 0, 'retry_at': 0})
+            _obligation_cap(obligation).write({
+                'pending_tokens_json': pending, 'state': 'pending',
+                'scan_complete': False, 'scan_page': 1, 'scan_total': False,
+                'scan_head': False, 'prefer_scan': False, 'next_work_at': False,
+                'result_code': 'finalized_token_pending',
+            })
+            op = obligation.operation_id
+            remaining = self.env[_OBL_MODEL].sudo().search_count([
+                ('operation_id', '=', op.id), ('state', '=', 'pending')])
+            _cap(op).write({
+                'state': 'pending', 'result_code': 'pending', 'processed_at': False,
+                'key_done_count': op.key_target_count - remaining, 'key_failed_count': remaining,
+                'result_summary': _('Some API keys still need verification.'),
+            })
+
+    @api.model
     def _obligation_defer(self, obligation, code):
         attempts = obligation.work_count + 1
         delay = min(3600, 30 * 2 ** min(attempts - 1, 7))
-        _obligation_cap(obligation).write({'work_count': attempts, 'result_code': code,
-                          'next_work_at': fields.Datetime.now() + timedelta(seconds=delay)})
+        values = {'work_count': attempts, 'result_code': code,
+                  'next_work_at': fields.Datetime.now() + timedelta(seconds=delay)}
+        if code == 'upstream_unconfirmed':
+            # Discovery outages must not block an independently disableable ID.
+            # Keep the scan incomplete, but hand the next due unit to a token.
+            values['prefer_scan'] = False
+            retries = [entry.get('retry_at', 0)
+                       for entry in (obligation.pending_tokens_json or {}).values()]
+            if retries:
+                values['next_work_at'] = min(values['next_work_at'], datetime.fromtimestamp(
+                    max(int(time.time()), min(retries)), timezone.utc).replace(tzinfo=None))
+        _obligation_cap(obligation).write(values)
 
 
 class LlmBackofficeKeyObligation(models.Model):

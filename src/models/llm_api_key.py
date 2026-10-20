@@ -31,6 +31,7 @@ import re
 import secrets
 import string
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from psycopg2 import IntegrityError
@@ -60,7 +61,7 @@ from .llm_common import (
     _llm_internal,
     _without_llm_internal,
 )
-from .llm_event import _begin, safe_code
+from .llm_event import _begin, _env_on, safe_code
 
 _logger = logging.getLogger(__name__)
 
@@ -546,13 +547,32 @@ class LlmApiKey(models.Model):
         return self._llm_create_with_reveal(
             account, client_request_id, user, real_ip, spec, paid_body)
 
+    @contextmanager
+    def _llm_creation_guard(self, key_id, *, token_id=None):
+        """Fence each POST/reveal with the stop worker's key lock, including retries."""
+        with self.env.registry.cursor() as cr:
+            _begin(self.env, cr, read_committed=True)
+            cr.execute('SELECT state, disabled_by FROM %s WHERE id=%%s '
+                       'FOR NO KEY UPDATE' % KEY_TABLE, (key_id,))
+            row = cr.fetchone()
+            if row and row[0] == 'creating' and row[1] != 'ops':
+                yield
+                return
+        # Release the key lock before taking operation/obligation locks in finish.
+        values = {'state': 'failed_reveal'}
+        if token_id:
+            values['newapi_token_id'] = token_id
+        self._llm_finish(key_id, values)
+        raise LlmError(ERR_LLM_UNAVAILABLE)
+
     @api.model
     def _llm_create_remote(self, account, client, ip, up, key_id, name, expires, deadline,
                            *, payload_factory=None, spec=None):
         """§1.3.2 第 4–7 步：POST token → 依名稱找 id → reveal → 鏡像 active。"""
         body = (payload_factory(name) if payload_factory is not None else
                 nac.free_trial_token_body(name, int(expires.timestamp())))
-        created = client.user_create_token(ip, up, body, deadline=deadline)
+        with self._llm_creation_guard(key_id):
+            created = client.user_create_token(ip, up, body, deadline=deadline)
         if isinstance(created, (nac.NotExecuted, nac.Definite)):
             # 確定沒建：鏡像標 deleted（使用者可以直接重建）。
             self._llm_finish(key_id, {'state': 'deleted'})
@@ -566,7 +586,8 @@ class LlmApiKey(models.Model):
         token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None and isinstance(created, nac.Unknown):
             # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
-            retried = client.user_create_token(ip, up, body, deadline=deadline)
+            with self._llm_creation_guard(key_id):
+                retried = client.user_create_token(ip, up, body, deadline=deadline)
             if retried.ok or isinstance(retried, nac.Unknown):
                 token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None or token is TOKEN_LIST_FAILED:
@@ -575,10 +596,12 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_UNAVAILABLE)
         token_id = token['id']
 
-        revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
+        with self._llm_creation_guard(key_id, token_id=token_id):
+            revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         if isinstance(revealed, nac.NotExecuted) and revealed.reason != 'deadline' \
                 and not revealed.retry_after:
-            revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
+            with self._llm_creation_guard(key_id, token_id=token_id):
+                revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         raw = revealed.data.get('key') if revealed.ok and isinstance(revealed.data, dict) else None
         if not (isinstance(raw, str) and _REVEALED_KEY_RE.fullmatch(raw)):
             self._llm_finish(key_id, {'state': 'failed_reveal', 'newapi_token_id': token_id})
@@ -593,6 +616,8 @@ class LlmApiKey(models.Model):
             'masked_key': masked,
             'revealed_at': now,
         })
+        if not finish or finish['state'] != 'active':
+            raise LlmError(ERR_LLM_UNAVAILABLE)
         # 鏡像是獨立交易寫的：主 cursor 的 snapshot 看不到這一列，所以 DTO 直接由已知的值組。
         expires_at = spec['expires_at'] if spec is not None else expires.replace(tzinfo=None)
         return {
@@ -732,22 +757,24 @@ class LlmApiKey(models.Model):
         if values.get('state') == 'active':
             values['created_notice_pending'] = True
         with self.env.registry.cursor() as cr:
-            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
-            # A batch-disable operation can set the ops stop while this key is
-            # still creating. Serialize the final transition with that stop so
-            # a late create response cannot reactivate the mirror afterward.
-            if values.get('state') == 'active':
-                cr.execute('SELECT disabled_by FROM %s WHERE id = %%s AND state = %%s '
-                           'FOR UPDATE' % KEY_TABLE, (key_id, 'creating'))
-                row = cr.fetchone()
-                if row and row[0] == 'ops':
-                    values.update({'state': 'disabled', 'disabled_by': 'ops',
-                                   'created_notice_pending': False})
+            _begin(self.env, cr, read_committed=True)
+            env = _env_on(self.env.registry, cr)
+            worker = env['woow_paas_platform.llm_backoffice_operation']
+            obligations = worker._lock_key_obligations(key_id)
+            cr.execute('SELECT state, disabled_by FROM %s WHERE id=%%s FOR UPDATE'
+                       % KEY_TABLE, (key_id,))
+            row = cr.fetchone()
+            stopped = bool(row and (row[1] == 'ops' or obligations))
+            if stopped:
+                values.update({'state': 'failed_reveal', 'disabled_by': 'ops',
+                               'created_notice_pending': False})
+            worker._reenqueue_finalized_token(obligations, values.get('newapi_token_id'))
             columns = sorted(values)
             if not all(_COLUMN_RE.fullmatch(column) for column in columns):
                 raise ValueError('bad column name')
             cr.execute(
-                'UPDATE %s SET %s WHERE id = %%s AND state = %%s '
+                'UPDATE %s SET %s WHERE id = %%s AND (state = %%s '
+                "OR (state = 'failed_reveal' AND disabled_by = 'ops')) "
                 'RETURNING account_id, kind, create_date, state, disabled_by'
                 % (KEY_TABLE, ', '.join('%s = %%s' % column for column in columns)),
                 [values[column] for column in columns] + [key_id, 'creating'])

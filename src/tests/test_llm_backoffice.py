@@ -26,7 +26,10 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.fixture = CommittedLlmFixture(self).start()
+        self.fixture = CommittedLlmFixture(self)
+        self.fixture.extra_cron_ids = [
+            self.env.ref('woow_paas_platform.ir_cron_llm_backoffice_operations').id]
+        self.fixture.start()
         self.addCleanup(self._cleanup)
         tag = uuid.uuid4().hex[:10]
         self.partner_id = self.fixture.partner('LLM backoffice ' + tag)
@@ -634,34 +637,249 @@ class TestLlmBackofficeCommitted(TransactionCase):
         self.assertEqual(op.key_failed_count, len(pending))
         self.assertEqual(op.key_target_count, len(op.key_obligation_ids))
 
-    def test_ops_disable_marker_wins_over_late_create_finalize(self):
-        request_id = 'late-finalize-' + uuid.uuid4().hex
+    def _creator_recovery_fake(self):
+        from .llm_fake_newapi import FakeNewApi
+        fake = FakeNewApi()
+        fake._next['token'] = 0  # Deterministic IDs in this fixture's isolated upstream.
+        fake.users[4811020] = {'id': 4811020, 'status': 1}
+        fake.pats['test-up'] = {'user_id': 4811020, 'expires_at': None}
+        for method, options in (
+                ('_llm_tenant_ip', {'return_value': '198.18.0.1'}),
+                ('_llm_up_token', {'return_value': 'test-up'}),
+                ('_llm_client', {'side_effect': lambda role: fake.client(role)})):
+            patcher = patch.object(type(self.env[ACCOUNT]), method, **options)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return fake
+
+    def _creator_recovery_fixture(self, *, state='creating', token_id=0,
+                                  kind='paid', aged=True):
+        """Own committed snapshot only: ambient QA keys never enter these batches."""
+        from ..models.llm_backoffice_operation import _cap, _obligation_cap
         with self.registry.cursor() as cr:
             env = env_for(self.registry, cr)
             key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
-                'account_id': self.account_id, 'kind': 'paid',
-                'client_request_id': request_id,
-                'newapi_name': 'late_finalize_' + uuid.uuid4().hex[:10],
-                'state': 'creating',
+                'account_id': self.account_id, 'kind': kind, 'state': state,
+                'client_request_id': 'creator-' + uuid.uuid4().hex,
+                'newapi_name': 'wp_%d_abcd' % self.account_id,
+                'newapi_token_id': token_id,
             })
-            key_id = key.id
-            cr.commit()
-        with self.registry.cursor() as cr:
-            cr.execute('UPDATE woow_paas_platform_llm_api_key '
-                       "SET disabled_by = 'ops' WHERE id = %s AND state = 'creating'",
-                       (key_id,))
-            self.assertEqual(cr.rowcount, 1)
-            cr.commit()
+            if aged:
+                key.flush_recordset()
+                # ORM owns create_date; set an explicit committed fixture age.
+                cr.execute('UPDATE woow_paas_platform_llm_api_key '
+                           "SET create_date=NOW() AT TIME ZONE 'UTC' - INTERVAL '2 minutes' "
+                           'WHERE id=%s', (key.id,))
+                key.invalidate_recordset(['create_date'])
+            op = _cap(env['woow_paas_platform.llm_backoffice_operation']).create({
+                'operation': 'disable_all_keys', 'request_id': 'creator-stop-' + uuid.uuid4().hex,
+                'fingerprint': uuid.uuid4().hex, 'operator_id': self.operator_id,
+                'reason': 'isolated creator recovery regression', 'key_target_count': 1,
+            })
+            _obligation_cap(env['woow_paas_platform.llm_backoffice_key_obligation']).create({
+                'operation_id': op.id, 'key_id': key.id,
+                'account_id_snapshot': self.account_id, 'newapi_user_id_snapshot': 4811020,
+                'newapi_name_snapshot': key.newapi_name, 'token_id_snapshot': token_id,
+                'state_snapshot': state, 'scan_required': True,
+                'pending_tokens_json': ({str(token_id): {'attempts': 0, 'retry_at': 0}}
+                                        if token_id else {}),
+                'prefer_scan': not bool(token_id),
+            })
+            key_id, op_id, name = key.id, op.id, key.newapi_name
+        self.addCleanup(self._cleanup_operation, op_id)
+        return key_id, op_id, name
 
-        finish = self.env['woow_paas_platform.llm_api_key']._llm_finish(
-            key_id, {'state': 'active', 'newapi_token_id': 991122})
-        self.assertEqual(finish, {'state': 'disabled', 'disabled_by': 'ops'})
+    def _creator_recovery_unit(self, operation_id):
+        from ..models.llm_common import LlmCronTick
+        with self.registry.cursor() as cr:
+            cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            env = env_for(self.registry, cr)
+            cr.execute('SELECT id FROM woow_paas_platform_llm_backoffice_operation '
+                       'WHERE id=%s FOR UPDATE', (operation_id,))
+            worker = env['woow_paas_platform.llm_backoffice_operation']
+            op = worker.browse(operation_id)
+            worker._process_disable_keys(env, op, env['res.users'].browse(self.operator_id),
+                                         tick=LlmCronTick(20, 2))
+            env.flush_all()
+            return op.state
+
+    def _creator_recovery_snapshot(self, operation_id):
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            op = env['woow_paas_platform.llm_backoffice_operation'].browse(operation_id)
+            obligation = op.key_obligation_ids
+            key = obligation.key_id
+            return {'state': op.state, 'obligation': obligation.state,
+                    'code': obligation.result_code, 'key_state': key.state,
+                    'disabled_by': key.disabled_by, 'token_id': key.newapi_token_id,
+                    'pending': obligation.pending_tokens_json, 'scan_complete': obligation.scan_complete}
+
+    def test_failed_discovery_yields_to_known_ids_without_claiming_completion(self):
+        from ..models.llm_backoffice_operation import _obligation_cap
+        fake = self._creator_recovery_fake()
+        _key_id, op_id, name = self._creator_recovery_fixture(state='active', token_id=1)
+        client = fake.client(nac.ROLE_CRON)
+        for _ in range(2):
+            self.assertTrue(client.user_create_token(
+                '198.18.0.1', 'test-up', nac.free_trial_token_body(name, 1900000000)).ok)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            obligation = env['woow_paas_platform.llm_backoffice_operation'].browse(op_id).key_obligation_ids
+            # Also covers already queued prefer_scan=True and the post-disable scan.
+            _obligation_cap(obligation).write({
+                'prefer_scan': True,
+                'pending_tokens_json': {str(i): {'attempts': 0, 'retry_at': 0} for i in (1, 2)},
+            })
+        fake.fail_before_all['user_list_tokens'] = nac.Unknown('proxy_timeout')
+        for _ in range(4):
+            self.assertEqual(self._creator_recovery_unit(op_id), 'pending')
+        self.assertTrue(all(token['status'] == 2 for token in fake.tokens.values()))
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertFalse(snapshot['pending'])
+        self.assertFalse(snapshot['scan_complete'])
+        self.assertEqual(snapshot['obligation'], 'pending')
+        self.assertEqual(sum(method == 'user_list_tokens' for method, _ in fake.calls), 2)
+        self.assertNotIn('user_reveal_token', [method for method, _ in fake.calls])
+
+    def test_finalized_id_missing_from_snapshot_bypasses_failed_discovery(self):
+        fake = self._creator_recovery_fake()
+        key_id, op_id, name = self._creator_recovery_fixture(state='failed_reveal')
+        fake.client(nac.ROLE_CRON).user_create_token(
+            '198.18.0.1', 'test-up', nac.free_trial_token_body(name, 1900000000))
+        # Finalization committed before the obligation INSERT became visible to
+        # its independent cursor; only the current mirror has this numeric ID.
         with self.registry.cursor() as cr:
             env = env_for(self.registry, cr)
             key = env['woow_paas_platform.llm_api_key'].browse(key_id)
-            self.assertEqual(key.state, 'disabled')
-            self.assertEqual(key.disabled_by, 'ops')
-            self.assertEqual(key.newapi_token_id, 991122)
+            _llm_internal(key).write({'newapi_token_id': 1})
+        fake.fail_before_all['user_list_tokens'] = nac.Unknown('proxy_timeout')
+        self.assertEqual(self._creator_recovery_unit(op_id), 'pending')
+        self.assertEqual(fake.tokens[1]['status'], 2)
+        self.assertNotIn('user_list_tokens', [method for method, _ in fake.calls])
+        self.assertFalse(self._creator_recovery_snapshot(op_id)['scan_complete'])
+
+    def test_creating_key_cannot_complete_inside_its_quiet_window(self):
+        fake = self._creator_recovery_fake()
+        _key_id, op_id, name = self._creator_recovery_fixture(token_id=1, aged=False)
+        fake.client(nac.ROLE_CRON).user_create_token(
+            '198.18.0.1', 'test-up', nac.free_trial_token_body(name, 1900000000))
+        self.assertEqual(self._creator_recovery_unit(op_id), 'pending')
+        self.assertEqual(fake.tokens[1]['status'], 2, 'known ID is disabled before waiting')
+        self.assertEqual(self._creator_recovery_unit(op_id), 'pending')
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual(snapshot['code'], 'creator_pending')
+        self.assertEqual(snapshot['key_state'], 'creating')
+        self.assertFalse(snapshot['scan_complete'])
+
+    def _paused_creator_is_stopped(self, *, before_finish):
+        from datetime import datetime, timedelta
+        import time
+        fake = self._creator_recovery_fake()
+        key_id, op_id, name = self._creator_recovery_fixture()
+        Key = type(self.env['woow_paas_platform.llm_api_key'])
+        paused, resume = threading.Event(), threading.Event()
+        outcome = {}
+        method_name = '_llm_finish' if before_finish else '_llm_find_token'
+        original = getattr(Key, method_name)
+        if not before_finish:
+            fake.fail_next['user_create_token'] = nac.Unknown('proxy_timeout')
+            fake.fail_next['user_list_tokens'] = nac.Ok({'items': [], 'total': 0})
+
+        def checkpoint(records, *args, **kwargs):
+            if before_finish:
+                paused.set()
+                if not resume.wait(15):
+                    raise AssertionError('creator finalization barrier timed out')
+                return original(records, *args, **kwargs)
+            result = original(records, *args, **kwargs)
+            if result is None:
+                paused.set()
+                if not resume.wait(15):
+                    raise AssertionError('creator retry barrier timed out')
+            return result
+
+        def create():
+            try:
+                with self.registry.cursor() as cr:
+                    env = env_for(self.registry, cr)
+                    result = env['woow_paas_platform.llm_api_key']._llm_create_remote(
+                        env[ACCOUNT].browse(self.account_id), fake.client(nac.ROLE_WEB),
+                        '198.18.0.1', 'test-up', key_id, name,
+                        datetime.now() + timedelta(days=1), time.monotonic() + 20)
+                    outcome['returned_key'] = bool(result.get('key'))
+            except LlmError as exc:
+                outcome['code'] = exc.code
+            except Exception as exc:
+                outcome['error_type'] = type(exc).__name__
+
+        with patch.object(Key, method_name, checkpoint):
+            thread = threading.Thread(target=create, daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(paused.wait(5), 'creator reached the real retry/finalize boundary')
+                for _ in range(8):
+                    state = self._creator_recovery_unit(op_id)
+                    if state == 'done':
+                        self.assertTrue(all(t['status'] == 2 for t in fake.tokens.values()),
+                                        'remote disable must precede operation completion')
+                        break
+                self.assertEqual(state, 'done')
+            finally:
+                resume.set()
+                thread.join(timeout=8)
+            self.assertFalse(thread.is_alive())
+        self.assertNotIn('error_type', outcome)
+        self.assertFalse(outcome.get('returned_key'), 'a stopped create must never return its raw key')
+        self.assertEqual(outcome.get('code'), 'llm_unavailable')
+        self.assertEqual(sum(method == 'user_create_token' for method, _ in fake.calls), 1,
+                         'the paused retry must not POST after the ops stop')
+        if not before_finish:
+            self.assertNotIn('user_reveal_token', [method for method, _ in fake.calls])
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual(snapshot['state'], 'done')
+        self.assertEqual(snapshot['key_state'], 'failed_reveal')
+        self.assertEqual(snapshot['disabled_by'], 'ops')
+        self.assertTrue(all(t['status'] == 2 for t in fake.tokens.values()))
+
+    def test_ops_stop_fences_creator_paused_before_unknown_retry_post(self):
+        self._paused_creator_is_stopped(before_finish=False)
+
+    def test_ops_stop_fences_creator_paused_before_finish(self):
+        self._paused_creator_is_stopped(before_finish=True)
+
+    def test_ops_disable_marker_wins_over_late_create_finalize(self):
+        fake = self._creator_recovery_fake()
+        key_id, op_id, name = self._creator_recovery_fixture(kind='free_trial')
+        client = fake.client(nac.ROLE_CRON)
+        client.user_create_token('198.18.0.1', 'test-up', nac.free_trial_token_body(name, 1900000000))
+        for _ in range(8):
+            if self._creator_recovery_unit(op_id) == 'done':
+                break
+        self.assertEqual(self._creator_recovery_snapshot(op_id)['state'], 'done')
+        self.assertEqual(fake.tokens[1]['status'], 2)
+        # A legacy in-flight POST settles after the completed traversal. Its
+        # finalizer must atomically reopen proof, even beside a replacement trial.
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'free_trial', 'state': 'active',
+                'client_request_id': 'replacement-' + uuid.uuid4().hex,
+                'newapi_name': 'wp_%d_efgh' % self.account_id,
+            })
+        client.user_create_token('198.18.0.1', 'test-up', nac.free_trial_token_body(name, 1900000000))
+        finish = self.env['woow_paas_platform.llm_api_key']._llm_finish(
+            key_id, {'state': 'active', 'newapi_token_id': 2})
+        self.assertEqual(finish, {'state': 'failed_reveal', 'disabled_by': 'ops'})
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual(snapshot['state'], 'pending')
+        self.assertIn('2', snapshot['pending'])
+        self.assertEqual(snapshot['token_id'], 2)
+        for _ in range(8):
+            if self._creator_recovery_unit(op_id) == 'done':
+                self.assertEqual(fake.tokens[2]['status'], 2)
+                break
+        self.assertEqual(self._creator_recovery_snapshot(op_id)['state'], 'done')
+        self.assertTrue(all(token['status'] == 2 for token in fake.tokens.values()))
 
     def test_batch_disable_recovers_every_same_name_token_before_completion(self):
         Key = self.env['woow_paas_platform.llm_api_key']
