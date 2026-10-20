@@ -46,13 +46,13 @@
         <div class="o_woow_llm_docs__tabs" role="group" t-att-aria-label="toolsLabel">
           <button t-foreach="tools" t-as="tool" t-key="tool.id" type="button"
                   t-att-class="{'o_woow_llm_docs__tab': true, 'active': state.tool === tool.id}"
-                  t-att-aria-pressed="state.tool === tool.id" t-on-click="() => this.selectTool(tool.id)">
+                  t-att-aria-pressed="state.tool === tool.id ? 'true' : 'false'" t-on-click="() => this.selectTool(tool.id)">
             <t t-esc="tool.label"/>
           </button>
         </div>
         <div class="o_woow_llm_docs__modes" role="group" t-att-aria-label="modesLabel">
-          <button type="button" t-att-aria-pressed="state.mode === 'paid'" t-on-click="() => this.selectMode('paid')" t-esc="paidModeLabel"/>
-          <button type="button" t-att-aria-pressed="state.mode === 'free'" t-on-click="() => this.selectMode('free')" t-esc="freeModeLabel"/>
+          <button type="button" t-att-aria-pressed="state.mode === 'paid' ? 'true' : 'false'" t-on-click="() => this.selectMode('paid')" t-esc="paidModeLabel"/>
+          <button type="button" t-att-aria-pressed="state.mode === 'free' ? 'true' : 'false'" t-on-click="() => this.selectMode('free')" t-esc="freeModeLabel"/>
         </div>
         <WoowCard shadow="true" class="'o_woow_llm_docs__card o_woow_llm_docs__example'">
           <div class="o_woow_llm_docs__row">

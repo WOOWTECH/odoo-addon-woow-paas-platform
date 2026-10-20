@@ -276,3 +276,9 @@ test("guide templates use translated getters available on the component", () => 
   assert.match(docs, /get keyLifetimeText\(\)/);
   assert.match(docs, /get placeholderKeyText\(\)/);
 });
+
+test("guide pressed states are string ARIA values rather than boolean attributes", () => {
+  const attributes = [...docsXml.matchAll(/t-att-aria-pressed="([^"]*)"/g)];
+  assert.equal(attributes.length, 3);
+  for (const [, expression] of attributes) assert.ok(expression.endsWith("? 'true' : 'false'"));
+});
