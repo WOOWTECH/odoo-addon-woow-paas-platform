@@ -6,6 +6,7 @@
 # 用法：
 #   restore.sh --context <ctx> --ns <target-ns> --release <R> --set <name> [--replace-db] [--no-marker]
 #              [--neutralize [--extra-neutralize-sql <file>]] [--cron-hold-minutes <N>]
+#              [--rename-module <舊名>:<新名> …]
 #
 # 前置：export.sh 已把整組檔送進 incoming PVC；receive.sh close 已關洞（incoming PVC 是 RWO，receiver 還掛著就跑不了）；
 #   release R 的 odoo web 已經 0 副本（升級閘、bootstrap 都在 web pod 的 initContainer，web 停了才能安全換 DB）。
@@ -22,6 +23,8 @@
 #     ⛔ 中和過的資料庫不得用於正式切換；正式切換不要帶這個旗標。
 #   --cron-hold-minutes N（預設 120，0＝不暫停）：寫完 marker 後把過期的排程延到 N 分鐘後（cron-hold.sql），
 #     免得 web 一開機排程就改到客戶資料、升級後比對不準；比對通過後 verify.sh --release-crons／--cleanup 放開。
+#   --rename-module 舊名:新名（可重複）：站上模組的技術名與 image 裡的正式名不同時（例 cs_portal_discuss:woow_odoo_portal_discuss），
+#     逐位元比對通過後、中和與取基準之前在 DB 改名（rename-module.sql；細節見該檔檔頭），log 印出每項改了幾列與殘留掃描（rscan）。
 # incoming PVC 保留（升級後的指紋比對要用 source.fp／source.fs），由 verify.sh --stage upgrade --cleanup 刪除。印出 Job log 尾段。
 # exit：0 成功、2 參數或前置條件不符、3 Job 失敗
 set -euo pipefail
@@ -30,9 +33,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PVC=standalone-odoo-incoming
 RECEIVER=standalone-odoo-receiver
 LOGIN_SECRET=standalone-odoo-rehearsal-login
-CTX="" NS="" RELEASE="" SET="" REPLACE=0 MARKER=1 NEUTRALIZE=0 EXTRA_SQL="" CRON_HOLD=120
+CTX="" NS="" RELEASE="" SET="" REPLACE=0 MARKER=1 NEUTRALIZE=0 EXTRA_SQL="" CRON_HOLD=120 RENAMES=()
 
-usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { echo "ERROR: $2" >&2; exit "$1"; }
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -45,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --neutralize) NEUTRALIZE=1; shift ;;
     --extra-neutralize-sql) EXTRA_SQL=$2; shift 2 ;;
     --cron-hold-minutes) CRON_HOLD=$2; shift 2 ;;
+    --rename-module) RENAMES+=("$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die 2 "unknown argument: $1" ;;
   esac
@@ -57,6 +61,10 @@ if [[ -n $EXTRA_SQL ]]; then
 fi
 (( !NEUTRALIZE || MARKER )) || die 2 "--neutralize and --no-marker do not go together"
 [[ $CRON_HOLD =~ ^[0-9]+$ ]] || die 2 "--cron-hold-minutes must be a non-negative integer"
+for r in "${RENAMES[@]}"; do
+  [[ $r =~ ^([a-z0-9_]+):([a-z0-9_]+)$ && ${BASH_REMATCH[1]} != "${BASH_REMATCH[2]}" ]] \
+    || die 2 "--rename-module needs <old>:<new> module names, got '$r'"
+done
 K=(kubectl --context "$CTX" -n "$NS")
 JOB=standalone-odoo-restore-$(date -u +%H%M%S)
 
@@ -79,6 +87,7 @@ cm_files=(--from-file=restore-in-pod.sh="$SCRIPT_DIR/restore-in-pod.sh"
   --from-file=fingerprint.sql="$SCRIPT_DIR/../fingerprint.sql"
   --from-file=fingerprint_business.sql="$SCRIPT_DIR/../fingerprint_business.sql"
   --from-file=cron-hold.sql="$SCRIPT_DIR/cron-hold.sql")
+(( ${#RENAMES[@]} == 0 )) || cm_files+=(--from-file=rename-module.sql="$SCRIPT_DIR/rename-module.sql")
 if (( NEUTRALIZE )); then
   [[ -n $odoo_image ]] || die 2 "cannot find the odoo container image in deploy/$RELEASE"
   cm_files+=(--from-file=neutralize-in-odoo.sh="$SCRIPT_DIR/neutralize-in-odoo.sh"
@@ -100,7 +109,7 @@ fi
 jq -n --arg job "$JOB" --arg rel "$RELEASE" --arg set "$SET" --arg db "$db" --arg pvc "$PVC" \
   --arg pg "$pg_image" --arg odoo "$odoo_image" --arg replace "$replace_db" --arg marker "$MARKER" \
   --arg login "$LOGIN_SECRET" --argjson ps "$pull_secrets" --argjson neutralize "$NEUTRALIZE" \
-  --arg hold "$CRON_HOLD" \
+  --arg hold "$CRON_HOLD" --arg renames "${RENAMES[*]}" \
   --argjson extra "$([[ -n $EXTRA_SQL ]] && echo true || echo false)" '
   def secret($key): {valueFrom: {secretKeyRef: {name: ($rel + "-credentials"), key: $key}}};
   def mounts: [{name: "incoming", mountPath: "/incoming"}, {name: "data", mountPath: "/var/lib/odoo"},
@@ -118,7 +127,9 @@ jq -n --arg job "$JOB" --arg rel "$RELEASE" --arg set "$SET" --arg db "$db" --ar
       {name: "CRON_HOLD_MINUTES", value: $hold}, {name: "CRON_HOLD_SQL", value: "/opt/restore/cron-hold.sql"},
       ({name: "PGSUPERUSER_PASSWORD"} + secret("postgres-password")),
       ({name: "ODOO_DB_PASSWORD"} + secret("odoo-password"))
-    ] + (if $neutralize == 1 then [
+    ] + (if $renames != "" then [
+      {name: "RENAME_MODULES", value: $renames}, {name: "RENAME_SQL", value: "/opt/restore/rename-module.sql"}
+    ] else [] end) + (if $neutralize == 1 then [
       {name: "NEUTRALIZE_SQL", value: "/opt/restore/neutralize-supplement.sql"},
       {name: "NEUTRALIZE_ASSERT_SQL", value: "/opt/restore/neutralize-assert.sql"}
     ] + (if $extra then [{name: "NEUTRALIZE_EXTRA_SQL", value: "/opt/restore/neutralize-extra.sql"}] else [] end)
@@ -161,7 +172,7 @@ jq -n --arg job "$JOB" --arg rel "$RELEASE" --arg set "$SET" --arg db "$db" --ar
       }
     }
   }' | "${K[@]}" apply -f - >/dev/null
-echo "restore job $JOB started (db $db, replace=$REPLACE, marker=$MARKER, neutralize=$NEUTRALIZE, cron-hold=${CRON_HOLD}m)" >&2
+echo "restore job $JOB started (db $db, replace=$REPLACE, marker=$MARKER, neutralize=$NEUTRALIZE, cron-hold=${CRON_HOLD}m, rename=[${RENAMES[*]}])" >&2
 status=""
 for _ in $(seq 1 720); do
   status=$("${K[@]}" get job "$JOB" -o jsonpath='{.status.succeeded}/{.status.failed}')
@@ -169,7 +180,7 @@ for _ in $(seq 1 720); do
   sleep 5
 done
 if (( NEUTRALIZE )); then
-  "${K[@]}" logs "job/$JOB" -c restore --tail=12 >&2 || true
+  "${K[@]}" logs "job/$JOB" -c restore --tail=$(( ${#RENAMES[@]} ? 40 : 12 )) >&2 || true
   "${K[@]}" logs "job/$JOB" -c neutralize-sql --tail=8 >&2 || true
   "${K[@]}" logs "job/$JOB" -c finalize --tail=80 >&2 || true
 else

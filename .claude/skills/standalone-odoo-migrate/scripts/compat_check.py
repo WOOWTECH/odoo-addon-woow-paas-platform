@@ -3,13 +3,16 @@
 
 用法：
   compat_check.py --inventory inventory-<ns>.json --target image-inventory-<digest>.json \\
-                  [--ci-repo <paas-odoo-ci checkout>] [--accept-diverged a,b] [--json report.json]
+                  [--ci-repo <paas-odoo-ci checkout>] [--accept-diverged a,b] [--rename old:new,…] [--json report.json]
 
 輸入：
   --inventory  source/inventory.sh 的輸出（WMO 跑）
   --target     target/image-inventory.sh 的輸出（目標 cloud-odoo image）
   --ci-repo    paas-odoo-ci 的 checkout（讀 addons/、addons-cloud/ 與 config/cloud-addons.list）；給了才能分辨
                「只要加進清單」與「要匯入原始碼」
+  --rename     搬遷時要在 DB 改名的模組（restore.sh --rename-module 的同一組「舊名:新名」，逗號分隔）。
+               DB 的舊名當成新名比對；來源站舊名的程式碼不再適用（改用目標／paas-odoo-ci 的新名那份），
+               所以新名只看目標與 paas-odoo-ci。報告另列「搬遷時改名」。
 
 每個 DB 內已安裝的模組歸成一類：
   OK            目標 image 已有、版本 ≥ DB；非 core 的內容 hash 與來源相同
@@ -66,6 +69,42 @@ def load_ci(ci_repo):
     return {"modules": scanned["modules"], "listed": listed}
 
 
+def apply_renames(inv, renames):
+    """把 DB 的舊模組名換成新名（回傳新的 inv，不改原物件）。來源站舊名的程式碼拿掉：改名後用的是新名那份。
+
+    回傳 (inv, notes)；舊名不在 DB、或新名已在 DB 時記一條注意事項，那一組不套用。
+    """
+    if not renames:
+        return inv, []
+    db_modules = dict(inv["db"]["modules"])
+    src = dict(inv["addons"]["modules"])
+    notes = []
+    for old, new in renames:
+        if old not in db_modules:
+            notes.append("--rename %s:%s：DB 沒有 %s，沒有套用" % (old, new, old))
+            continue
+        if new in db_modules:
+            notes.append("--rename %s:%s：DB 已有 %s（%s），沒有套用" % (old, new, new, db_modules[new]["state"]))
+            continue
+        db_modules[new] = dict(db_modules.pop(old), renamed_from=old)
+        src.pop(old, None)
+        src.pop(new, None)
+    inv = dict(inv, db=dict(inv["db"], modules=db_modules), addons=dict(inv["addons"], modules=src))
+    return inv, notes
+
+
+def parse_renames(text):
+    pairs = []
+    for item in (x.strip() for x in text.split(",")):
+        if not item:
+            continue
+        m = re.fullmatch(r"([a-z0-9_]+):([a-z0-9_]+)", item)
+        if not m or m.group(1) == m.group(2):
+            raise ValueError("--rename 要寫成 舊名:新名（逗號分隔），收到 %r" % item)
+        pairs.append((m.group(1), m.group(2)))
+    return pairs
+
+
 def classify(inv, tgt, ci, select_dirs=SELECT_DIRS, accepted=frozenset()):
     db_modules = inv["db"]["modules"]
     src = inv["addons"]["modules"]
@@ -80,6 +119,8 @@ def classify(inv, tgt, ci, select_dirs=SELECT_DIRS, accepted=frozenset()):
         s_custom = bool(s and s.get("digest"))
         row = {"module": name, "state": info["state"], "db_version": dv,
                "source_dir": s and s["dir"], "source_version": s and s["version"]}
+        if info.get("renamed_from"):
+            row["renamed_from"] = info["renamed_from"]
         t = tmods.get(name)
         c = ci and ci["modules"].get(name)
 
@@ -279,6 +320,9 @@ def render(report):
            ("目標／ci 版本", "target_version"), ("說明", "note")])
     table("目標 image 已有、服務要勾選（SELECT）", by.get("SELECT", []),
           [("模組", "module"), ("DB 版本", "db_version"), ("目標版本", "target_version")])
+    table("搬遷時改名（--rename；restore.sh --rename-module 同一組）",
+          [r for r in report["modules"] if r.get("renamed_from")],
+          [("DB 舊名", "renamed_from"), ("新名", "module"), ("歸類", "status"), ("DB 版本", "db_version")])
     table("已裁決的差異（--accept-diverged）", [r for r in report["modules"] if r.get("accepted_divergence")],
           [("模組", "module"), ("歸類", "status"), ("DB 版本", "db_version"), ("來源版本", "source_version"),
            ("說明", "note")])
@@ -303,8 +347,15 @@ def main(argv=None):
     parser.add_argument("--ci-repo")
     parser.add_argument("--accept-diverged", default="",
                         help="已裁決改用目標／paas-odoo-ci 版本的模組（逗號分隔）")
+    parser.add_argument("--rename", default="",
+                        help="搬遷時在 DB 改名的模組：舊名:新名（逗號分隔），同 restore.sh --rename-module")
     parser.add_argument("--json")
     args = parser.parse_args(argv)
+    try:
+        renames = parse_renames(args.rename)
+    except ValueError as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
     try:
         doc = json.loads(Path(args.inventory).read_text())
         tgt = json.loads(Path(args.target).read_text())
@@ -316,12 +367,14 @@ def main(argv=None):
         print("ERROR: --inventory must be source/inventory.sh output, --target image-inventory.sh output",
               file=sys.stderr)
         return 2
+    inv, rename_notes = apply_renames(inv, renames)
     ci = load_ci(args.ci_repo)
     accepted = frozenset(m.strip() for m in args.accept_diverged.split(",") if m.strip())
     rows = classify(inv, tgt, ci, accepted=accepted)
     deps = python_deps(rows, inv, ci)
     pip_missing, source_only = pip_gaps(deps, inv, tgt)
     extra_notes, env_blocks = notes(inv, tgt, doc.get("k8s"))
+    extra_notes = rename_notes + extra_notes
     counts = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
