@@ -32,7 +32,8 @@ class TestLlmCreditVoid(HttpCase):
         _llm_internal(cls.account).write({'state': 'active', 'newapi_user_id': 4808})
         cls.operator = new_test_user(
             cls.env, login='llm_void_%s' % uuid.uuid4().hex,
-            groups='base.group_user', email='llm-void@example.com')
+            groups='base.group_user,base.group_system', email='llm-void@example.com')
+        cls.operator._llm_set_named_human_eligible(True)
         company = cls.env.company.sudo()
         journal = cls.env['account.journal'].sudo().search([
             ('company_id', '=', company.id), ('type', 'in', ('bank', 'cash'))], limit=1)
