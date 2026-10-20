@@ -272,6 +272,8 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
 
   const cyclicArray = [];
   cyclicArray.push(cyclicArray);
+  const hostileModels = ["openai/gpt-4.1"];
+  hostileModels.toJSON = () => { throw new Error("hostile toJSON"); };
   const cyclicObject = {};
   cyclicObject.self = cyclicObject;
   const hostileChanges = new Proxy({}, {
@@ -296,6 +298,11 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
     success: true, data: { key: "sk-SyntheticSecret" },
   });
   assert.deepEqual(calls[0], ["/api/llm/keys/update", { key_id: 1, name: "valid" }]);
+  calls.length = 0;
+
+  const hostileResult = await llmService.updateKey(1, { models: hostileModels });
+  assert.deepEqual(hostileResult, { success: true, data: { key: "sk-SyntheticSecret" } });
+  assert.deepEqual(calls[0], ["/api/llm/keys/update", { key_id: 1, models: ["openai/gpt-4.1"] }]);
   calls.length = 0;
 
   for (const result of [

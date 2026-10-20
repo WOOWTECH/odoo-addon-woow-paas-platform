@@ -102,7 +102,12 @@ async function call(url, params, { timeoutMs = null, transportCode = LLM_NETWORK
 }
 
 async function runKeyAction(service, action, keyId, url, params) {
-  const signature = JSON.stringify([action, url, params]);
+  let signature;
+  try {
+    signature = JSON.stringify([action, url, params]);
+  } catch {
+    return failure(KEY_INVALID);
+  }
   const dedupeKey = `${keyId}:${signature}`;
   if (keyActionsInFlight.has(dedupeKey)) return keyActionsInFlight.get(dedupeKey);
 
@@ -257,7 +262,9 @@ export const llmService = reactive({
         if (name === "expires" && value !== null
           && !["30d", "90d", "180d", "never"].includes(value)) return failure(KEY_INVALID);
         if (name === "models" && !validUpdateModels(value)) return failure(KEY_INVALID);
-        params[name === "limitPoints" ? "limit_points" : name] = value;
+        params[name === "limitPoints" ? "limit_points" : name] = name === "models" && value !== null
+          ? Array.from(value, (model) => model)
+          : value;
       }
       if (Object.keys(params).length === 1) return failure(KEY_INVALID);
     } catch {
