@@ -1066,6 +1066,42 @@ class SecurityAccessAccessPolicy(models.Model):
                 'target_seats': plan.ac_max_access_seats,
                 'protected_hostnames': hostnames}
 
+    @api.model
+    def _protection_enable_denial(self, anchor):
+        """商用驗收 AI-HMCP-002-4：0 席方案的錨點不能把保護從關打開。
+
+        2026-10-16 prod 實測（QA Hermes MCP 服務，0 席方案）：席位尺擋得下 email 白名單 policy，但 CS 的
+        access-config 端點照樣把 ``is_protected`` 打開（一條 policy 都沒有）⇒ Cloudflare Access 把所有請求
+        （含帶 ``/private_<token>/`` 的 MCP client）302 去登入頁，而 0 席加不了任何可登入的 email ⇒ 服務對外
+        整個不可用。
+
+        與 #1261 同一條線：0 席方案的 Access 頁籤不顯示（``ac_max_access_seats > 0`` 才有），換到 0 席時
+        仍受保護會被 ``_protection_gate_denial`` 擋。端點是唯一做得出「0 席＋受保護」的路，所以在開啟方向
+        擋；關閉方向（#1261 的復原通道）不經過這裡。
+
+        - 只看 ``_SEAT_GATED_PROTECTION_ANCHORS``（SA 的保護不看席位，理由見該常數）。
+        - 沒有訂閱／沒有方案 ⇒ grandfathered，放行（與 ``_check_access_seat_quota`` 同款）。
+        - 0 ＝一席都沒有（#521 留言 9960 §4），不是 unlimited。
+
+        :return: ``None``，或 ``{'error', 'code': 'access_seats_required', 'target_seats': 0}``
+        """
+        if anchor._name not in self._SEAT_GATED_PROTECTION_ANCHORS:
+            return None
+        sub = anchor.sudo().subscription_id
+        plan = sub.sh_subscription_plan_id if sub else self.env['sh.subscription.plan']
+        if not plan or plan.ac_max_access_seats > 0:
+            return None
+        message = _(
+            "This plan includes no Access seats, so Access protection cannot "
+            "be turned on: nobody could be allowed in, and every request to "
+            "this service (including MCP clients using the service's private "
+            "URL) would be sent to a login page. Add Access seats to the "
+            "subscription first."
+        )
+        return {'error': message,
+                'code': 'access_seats_required',
+                'target_seats': plan.ac_max_access_seats}
+
     def _listed_seat_addresses(self):
         """這批 policy 的 ``email_list`` 位址集合（正規化後去重）。
 

@@ -6,6 +6,7 @@ from odoo.tests.common import TransactionCase
 from odoo.exceptions import AccessError, ValidationError
 from ..models.cloud_service import _internal_provision
 from .ns_quota_fixture import answer_quota_reads
+from .wallet_fixture import fund_wallet
 
 
 class TestCloudService(TransactionCase):
@@ -646,6 +647,8 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
         """
         partner = self.workspace.owner_id.partner_id
         self.service._create_and_confirm_subscription(partner, plan)
+        # 換方案餘額閘（#1677 A1）：本 class 測試用模式（見 wallet_fixture）。
+        fund_wallet(partner)
         sub = self.service.sudo().subscription_id
         if sub.sh_trial:
             sub.write({"sh_end_date": False})

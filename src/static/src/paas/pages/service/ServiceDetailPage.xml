@@ -194,7 +194,10 @@
                     Reset Admin Password issues a new password that works right away.
                     Devices that are already signed in stay signed in.
                 </p>
-                <p t-if="adminResetSupported and isAppAdminReset and !appResetKeepsSessions" class="o_woow_hint">
+                <p t-if="adminResetSupported and isAppAdminReset and appResetHasNoSecondFactor" class="o_woow_hint">
+                    Reset Admin Password issues a new password that works right away. Anyone signed in to the dashboard with the old password is signed out.
+                </p>
+                <p t-if="adminResetSupported and isAppAdminReset and !appResetKeepsSessions and !appResetHasNoSecondFactor" class="o_woow_hint">
                     Reset Admin Password issues a new password that works right away: devices
                     signed in with the old password are signed out, and two-factor sign-in
                     is turned off.
@@ -282,6 +285,18 @@
                         Configuration
                     </button>
                     <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'information'}"
+                        t-on-click="() => this.setTab('information')">
+                        <WoowIcon name="'description'" size="18"/>
+                        Information
+                    </button>
+                    <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'logs'}"
+                        t-on-click="() => this.setTab('logs')">
+                        <WoowIcon name="'article'" size="18"/>
+                        Logs
+                    </button>
+                    <button
                         t-if="isOdooService"
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'addons'}"
                         t-on-click="() => this.setTab('addons')">
@@ -322,6 +337,7 @@
                     <OverviewTab
                         t-if="currentTab === 'overview'"
                         service="service"
+                        workspaceId="props.workspaceId"
                         resourceObservation="resources.state.observations[props.serviceId]"
                         resourcesLoading="resources.state.loading"
                         resourcesRefreshFailed="resources.state.refreshFailed"
@@ -332,6 +348,17 @@
                         workspaceId="props.workspaceId"
                         canManage="canManageService"
                         onSave.bind="handleConfigSave"/>
+                    <InformationTab
+                        t-if="currentTab === 'information'"
+                        t-key="service.id"
+                        service="service"
+                        workspaceId="props.workspaceId"/>
+                    <LogsTab
+                        t-if="currentTab === 'logs'"
+                        t-key="service.id + '-' + canManageService"
+                        service="service"
+                        workspaceId="props.workspaceId"
+                        canManage="canManageService"/>
                     <AddonsTab
                         t-if="currentTab === 'addons'"
                         service="service"
@@ -402,6 +429,7 @@
                 currentPlanId="serviceForModal.subscription?.plan_id ?? undefined"
                 loadPlans="loadCloudServicePlans"
                 confirmChange="confirmCloudServiceChangePlan"
+                estimateChange="estimateCloudServiceChangePlan"
                 resizesResources="true"
                 onClose.bind="hideChangePlan"
                 onChanged.bind="onPlanChanged"/>
@@ -428,6 +456,7 @@
                 service="serviceForModal"
                 appReset="isAppAdminReset"
                 keepsSessions="appResetKeepsSessions"
+                noSecondFactor="appResetHasNoSecondFactor"
                 onClose.bind="hideResetConfirm"
                 onConfirm.bind="confirmResetAdminPassword"/>
 

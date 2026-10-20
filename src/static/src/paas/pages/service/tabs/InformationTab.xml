@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.InformationTab">
+    <section class="o_woow_service_information o_woow_card">
+      <p t-if="state.loading" role="status">Loading documentation...</p>
+      <div t-elif="state.error" role="alert">
+        <p t-esc="errorText"/>
+        <button type="button" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm" t-on-click="load">Retry</button>
+      </div>
+      <t t-else="">
+        <div class="o_woow_service_information__header">
+          <div>
+            <span class="o_woow_hint">Related Documentation</span>
+            <h2 t-esc="state.title"/>
+          </div>
+          <div class="o_woow_service_information__links">
+            <a t-if="state.tutorialUrl" t-att-href="state.tutorialUrl" target="_blank" rel="noopener noreferrer" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm">
+              <WoowIcon name="'open_in_new'" size="18"/>
+              WOOWTECH tutorial site
+            </a>
+            <a t-if="state.url" t-att-href="state.url" target="_blank" rel="noopener noreferrer" class="o_woow_btn o_woow_btn_secondary o_woow_btn_sm">
+              <WoowIcon name="'open_in_new'" size="18"/>
+              Open related documentation
+            </a>
+          </div>
+        </div>
+        <aside t-if="hasVersionDifference" class="o_woow_service_information__version_note" role="note">
+          <strong>Version notice</strong>
+          <p><span>Deployed chart</span>: <code t-esc="state.deployedChartVersion"/> · <span>Current template chart</span>: <code t-esc="state.currentTemplateChartVersion"/></p>
+          <p>This guide describes the current template. Check the Overview tab and verify a feature on your deployed service before following its steps.</p>
+        </aside>
+        <article t-if="state.content" class="o_woow_service_information__body" t-out="state.content"/>
+        <p t-else="" class="o_woow_hint">No documentation is available for this service yet.</p>
+      </t>
+    </section>
+  </t>
+</templates>

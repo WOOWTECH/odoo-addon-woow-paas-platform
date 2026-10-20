@@ -846,6 +846,11 @@ export class SecurityAccessDetailPage extends Component {
     return securityAccessService.fetchPlans(t.data[0].id);
   };
 
+  estimateSaChangePlan = (planId) => {
+    return securityAccessService.changePlan(
+      this.props.workspaceId, this.props.saId, planId, { dryRun: true });
+  };
+
   confirmSaChangePlan = (planId) => {
     return securityAccessService.changePlan(
       this.props.workspaceId, this.props.saId, planId);

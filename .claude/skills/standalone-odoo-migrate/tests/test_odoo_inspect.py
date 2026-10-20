@@ -88,3 +88,24 @@ class WaitForReceiverTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClassifyPosSessionsTest(unittest.TestCase):
+    """#1758：opening_control、沒開始過、0 訂單的 session 不擋凍結；其餘未關帳的都算開著。"""
+
+    def test_idle_opening_control_is_not_open(self):
+        rows = [(185, "餐廳/00005", "opening_control", False, 0)]
+        self.assertEqual(odoo_inspect.classify_pos_sessions(rows), (0, [{"id": 185, "name": "餐廳/00005"}]))
+
+    def test_everything_else_counts_as_open(self):
+        rows = [
+            (1, "A", "opened", True, 3),
+            (2, "B", "closing_control", True, 0),
+            (3, "C", "opening_control", True, 0),    # 已有 start_at：開過帳
+            (4, "D", "opening_control", False, 2),   # 有訂單：保守當作開著
+            (5, "E", "opening_control", False, 0),
+        ]
+        self.assertEqual(odoo_inspect.classify_pos_sessions(rows), (4, [{"id": 5, "name": "E"}]))
+
+    def test_empty(self):
+        self.assertEqual(odoo_inspect.classify_pos_sessions([]), (0, []))

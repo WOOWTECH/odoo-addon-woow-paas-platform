@@ -1,5 +1,7 @@
+import copy
 import json
 import logging
+import math
 import re
 import unicodedata
 
@@ -7,11 +9,14 @@ from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 from ..services.woow_odoo_readiness import WOOW_ODOO_CHART, chart_name_of
+from ..services import tailscale_settings
 
 _logger = logging.getLogger(__name__)
 
 # `admin_username_helm_path` 的合法形態：點分式、每段是 values 鍵名。
 ADMIN_USERNAME_HELM_PATH_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$')
+# AI-OD-004-2：與 operator restart 端點 ``component`` 參數同一個 pattern（DNS-1123 label）。
+SECRET_RESTART_COMPONENT_RE = re.compile(r'^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
 
 # #535：`helm_value_specs` 解析失敗的哨兵。與「template 本來就沒有 specs」必須分得開
 # ——後者是正常狀態（例 `cloud_app_ha_paas`），前者代表無從得知哪些鍵是租戶填的憑證，
@@ -220,11 +225,163 @@ def parse_domain(raw):
     return low, None
 
 
+_HOST_PORT_RE = re.compile(
+    r'^(?P<host>%s(?:\.%s)+):(?P<port>[0-9]{1,5})\Z' % (_HOST_LABEL, _HOST_LABEL))
+
+
+def parse_host_port(raw):
+    """``host_port``：``主機:埠``（EMQX 的 ``ngrok.remoteAddr``，例 ``1.tcp.ngrok.io:12345``）。
+
+    service-update-api-validation（INFRA-EMQX-024-3）：這格原本只是一般文字，
+    ``tcp://bad host;touch /tmp/x`` 也照存進 helm values——chart 的 ngrok sidecar 執行時
+    驗證後忽略（``woow_remote_addr``，不會被注入），但服務頁不會說保留位址被忽略了。存檔時
+    就用與 chart 相同的規則擋下：主機至少兩段（字母數字與 ``-``；IP 也是這個形態）、總長
+    ≤ 253、埠 1–65535；不收 scheme、路徑、空白。大小寫不分，正規化成小寫。空 → 不設。
+
+    Returns:
+        (str | None, (error code, params) | None)
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, ('not_text', {})
+    value = raw.strip()
+    if not value:
+        return None, None
+    if '://' in value:
+        return None, ('host_port_scheme', {'entry': value})
+    low = value.lower() if value.isascii() else value
+    match = _HOST_PORT_RE.match(low)
+    if (not match or len(match.group('host')) > _DOMAIN_MAX
+            or not 0 < int(match.group('port')) < 65536):
+        return None, ('host_port_invalid', {'entry': value})
+    return low, None
+
+
+SPEC_FORMAT_HOST_PORT = 'host_port'
+
+# ---------------------------------------------------------------------------
+# service-update-api-validation：helm_value_specs 的值依 ``type`` 驗證。
+#
+# 白名單（``_filter_allowed_helm_values``）只管「鍵」，``format`` 只管少數文字欄位；值本身
+# 原本完全不檢查（AI-LLM-017 實測）：select 選項外的 ``'1d'``、boolean 填 ``'maybe'``、
+# 帶換行的 ``'90d\nevil_setting: true'`` 都原樣進 helm values（只靠 chart 的 regex 兜底），
+# 送 ``null`` 會讓 helm 刪掉 chart 預設（apiDocs 預設 true → /docs 被關）。
+#
+# 規則（``check_spec_value``）：
+# - boolean：只收真正的 true／false；
+# - number：數字（不收布林與字串；空字串＝留空，與前端 HelmValueForm 相同），有
+#   ``min``／``max``／``integer`` 就照檢查；
+# - select：必須是 ``options`` 裡的值（選項可以是字串或 ``{"value", "label"}``）；
+# - text／password（以及沒有 type 的舊 spec）：必須是字串，不得有換行與控制字元——表單
+#   都是單行輸入框，換行只可能來自直接打 API，而那正是 YAML 注入的形態。
+# - 任何型別都不收物件／陣列（會被 unflatten 成整棵子樹）。
+#
+# ``null`` 的語意（``CloudAppTemplate._validate_spec_values``）：有 ``default`` ⇒ 還原成
+# spec 預設；沒有預設的 text／number ⇒ 空字串（等於表單清空）；其餘（boolean／select／
+# password）拒絕——password 要清除請用 ``clear_keys``（#1455）。
+#
+# 「送回目前的值」一律放行（舊資料可能是這次之前存進去、不合新規則的值；表單整包送出
+# 時不能因為別格的舊值而存不了檔）。
+SPEC_VALUE_TYPES = ('text', 'password', 'number', 'boolean', 'select')
+# Cc＝C0／C1 控制字元（含 \n \r \t 與 YAML 當換行的 U+0085），Zl／Zp＝U+2028／U+2029。
+_SPEC_TEXT_FORBIDDEN_CATEGORIES = frozenset(('Cc', 'Zl', 'Zp'))
+
+
+def _spec_select_values(spec):
+    values = []
+    for option in spec.get('options') or []:
+        if isinstance(option, dict):
+            if 'value' in option:
+                values.append(option['value'])
+        else:
+            values.append(option)
+    return values
+
+
+def check_spec_value(spec, value):
+    """依 spec 的 ``type`` 檢查一個租戶值（``None`` 由呼叫端先處理）。
+
+    Returns:
+        (value, (error code, params) | None)——合法時回原值。
+    """
+    spec_type = spec.get('type') or 'text'
+    if isinstance(value, (dict, list, tuple, set)):
+        code = {'boolean': 'not_boolean', 'number': 'not_number'}.get(spec_type, 'not_text')
+        return value, (code, {})
+    if spec_type == 'boolean':
+        if not isinstance(value, bool):
+            return value, ('not_boolean', {})
+        return value, None
+    if spec_type == 'number':
+        if value == '':
+            return value, None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return value, ('not_number', {})
+        if spec.get('integer') is True and value != int(value):
+            return value, ('not_integer', {})
+        low, high = spec.get('min'), spec.get('max')
+        if isinstance(low, (int, float)) and value < low:
+            return value, ('below_min', {'min': low})
+        if isinstance(high, (int, float)) and value > high:
+            return value, ('above_max', {'max': high})
+        return value, None
+    if spec_type == 'select':
+        allowed = _spec_select_values(spec)
+        if allowed:
+            matched = any(
+                type(value) is type(opt) and value == opt for opt in allowed
+            ) or (isinstance(value, str) and value in [str(opt) for opt in allowed])
+            if not matched:
+                return value, ('not_option', {'options': ', '.join(str(o) for o in allowed)})
+            return value, None
+        # 沒有選項可比對（spec 寫壞）⇒ 至少照文字規則檢查。
+    if spec_type in ('text', 'password', 'select') and not isinstance(value, str):
+        return value, ('not_text', {})
+    if isinstance(value, str) and any(
+            unicodedata.category(ch) in _SPEC_TEXT_FORBIDDEN_CATEGORIES for ch in value):
+        return value, ('control_chars', {})
+    return value, None
+
+
+def _same_spec_value(a, b):
+    """「送回目前的值」的比對：同型別同值（``True`` 不等於 ``1``）；整數與浮點數視為同型。"""
+    numbers = (int, float)
+    if (isinstance(a, numbers) and isinstance(b, numbers)
+            and not isinstance(a, bool) and not isinstance(b, bool)):
+        return a == b
+    return type(a) is type(b) and a == b
+
+
 SPEC_FORMAT_PARSERS = {
+    SPEC_FORMAT_HOST_PORT: parse_host_port,
     SPEC_FORMAT_GIT_HOSTS: parse_git_hosts,
     SPEC_FORMAT_GIT_NAME: parse_git_name,
     SPEC_FORMAT_EMAIL: parse_email,
     SPEC_FORMAT_DOMAIN: parse_domain,
+}
+
+# INFRA-TS-005-5／TS-007-1：helm_value_specs 的 ``validate``——**只在存檔時**跑的檢查。
+#
+# 與 ``format`` 的差別：``format`` 也在部署組裝（``_apply_spec_formats``）正規化、不合法就整欄丟掉；
+# ``validate`` 不碰部署——既有服務已存的值（舊版允許存進去的）重新部署時照舊交給 chart，chart 自己
+# 只略過壞的那一筆。所以收緊 ``validate`` 不會讓既有服務在下一次 Redeploy 少掉設定。
+#
+# 每個 validator：``fn(get, namespace) -> (code, params) | None``；``get(dot_key)`` 讀「這次送出的值，
+# 沒送就讀既有值」。``triggers``：這次送出的鍵碰到其中之一才驗（只改別的欄位時不重驗已存的組合）。
+SPEC_VALIDATE_TAILSCALE_SERVE = 'tailscale_serve'
+SPEC_VALIDATE_TAILSCALE_LOGIN = 'tailscale_login'
+_TS_LOGIN_KEYS = ('tailscale.controlPlane', 'tailscale.loginServer', 'tailscale.authKey')
+SPEC_SAVE_VALIDATORS = {
+    SPEC_VALIDATE_TAILSCALE_SERVE: (
+        ('tailscale.serve',),
+        lambda get, ns: tailscale_settings.check_serve(get('tailscale.serve'), ns),
+    ),
+    SPEC_VALIDATE_TAILSCALE_LOGIN: (
+        _TS_LOGIN_KEYS,
+        lambda get, ns: tailscale_settings.check_login(
+            get('tailscale.controlPlane'), get('tailscale.loginServer'), get('tailscale.authKey')),
+    ),
 }
 
 # #501：限量商品的**內建**全域實例上限（slug → 台數）。
@@ -329,7 +486,18 @@ class CloudAppTemplate(models.Model):
 
     documentation_url = fields.Char(
         string='Documentation URL',
-        help='Link to official documentation',
+        help='External reference for this service, such as upstream documentation '
+             'or the WOOWTECH package README.',
+    )
+    tutorial_url = fields.Char(
+        string='WOOWTECH Tutorial URL',
+        help='Service-matched WOOWTECH learning site. Leave empty when no '
+             'tutorial for this PaaS edition has been verified.',
+    )
+    documentation = fields.Text(
+        string='Service Documentation',
+        help='Markdown usage and configuration guide shown in the service Information tab. '
+             'When empty, the existing full description is shown instead.',
     )
 
     # Helm Chart Configuration
@@ -355,6 +523,28 @@ class CloudAppTemplate(models.Model):
     helm_value_specs = fields.Text(
         string='Helm Value Specs',
         help='JSON schema defining configurable values for users',
+    )
+    # AI-OD-004-2：修改配置改了 ``type: password`` 設定（金鑰）之後，#1435 的補重啟只滾
+    # 這個 ``app.kubernetes.io/component`` 的工作負載。空白＝release 下全部（原行為）。
+    # open-design：金鑰只以 secretKeyRef env 進 daemon StatefulSet，console Deployment
+    # 不吃金鑰——全部重啟會讓進行中的 console 終端機斷線。
+    secret_change_restart_component = fields.Char(
+        string='Secret Change Restart Component',
+        help='After a tenant changes a password-type setting (API key), restart only the '
+             'workloads labelled app.kubernetes.io/component=<this value>. Empty: restart '
+             'every Deployment and StatefulSet of the release. The platform falls back to '
+             'restarting everything when no workload carries the label.',
+    )
+    # AI-OD-006-1：「回復版本」時維持目前狀態的平台功能開關（JSON 物件：開關路徑 →
+    # 守衛路徑清單）。守衛在目標 revision 與目前完全相同時才保留開關；不同時開關跟著
+    # 目標 revision 回復（例如 mcp.enabled 必須搭配帶 MCP runtime 的 image）。
+    rollback_feature_switches = fields.Text(
+        string='Rollback Feature Switches',
+        help='JSON object mapping a platform-managed feature switch (Helm values path, '
+             'e.g. "mcp.enabled") to guard paths (e.g. ["image"]). Rolling back keeps the '
+             'current value of the switch when every guard path is identical in the target '
+             'revision; otherwise the switch follows the target revision. Empty: switches '
+             'follow the target revision.',
     )
 
     # Service Configuration
@@ -513,6 +703,23 @@ class CloudAppTemplate(models.Model):
              'Empty address is a normal state (the tenant has not enabled it, or the '
              'agent has not connected yet).',
     )
+    # INFRA-FIX-005：VPN 節點（charts/tailscale）的即時狀態回讀——「這個商品有沒有一個平台要現場
+    # 問 pod、並把節點登入狀態／登入入口／serve 轉發結果顯示給租戶的節點」的**唯一事實源**
+    # （能力 gate 收斂成單一欄位，docs/decisions/patterns/capability-gate-single-source-field.md）。
+    # `CloudService._chart_has_vpn_node_status`、`/node-status` 端點、service payload 與前端
+    # 「VPN 節點狀態」那張卡都只讀它，不得自建 slug 名單。
+    #
+    # 為什麼需要：pod Ready ≠ 節點在線。chart 的 readiness 把 NeedsLogin 也當成可用，所以節點被
+    # 控制面到期／刪除後，平台 state 仍是 running、/woow 仍顯示 ONLINE（INFRA-TS-005／TS-007）。
+    # 這個狀態不寫進帳本（沒有欄位、沒有 cron、不碰 state）：租戶打開服務頁時才即時問 operator
+    # （`GET /api/releases/{ns}/{release}/vpn-node-status`），與 service-resource-observations 同款。
+    has_vpn_node_status = fields.Boolean(
+        string='Reports VPN node status',
+        default=False,
+        help='The chart runs a tailscaled node whose login state, login entrance and serve '
+             'forwards the platform reads live from the pod (operator vpn-node-status) and '
+             'shows on the service page.',
+    )
     # 服務頁那一格的標題（例 EMQX「對外 MQTT 位址」、Headscale「對外控制網址」）。
     # 這是範本 record 的**資料值**：seed 直接寫中文原文、**不可翻譯、不進 .po**
     # （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。空值時前端
@@ -524,6 +731,22 @@ class CloudAppTemplate(models.Model):
              '位址". A data value written in the seed as-is (not translated). Empty '
              'shows the generic "Public address". Display only; whether the row '
              'exists is decided by "Advertises a public tunnel address".',
+    )
+    # 商用驗收 EMQX-020-3／HS-013-3：服務頁那一格的兩則提示，範本 record 的**資料值**（seed 寫中文原文、
+    # 不可翻譯、不進 .po，同上面的標籤）。只是顯示字，不是能力判準——那一格畫不畫仍只看旗標。
+    # - address_note：有位址時顯示（EMQX：原生 MQTT 是明文 TCP、經 ngrok 第三方，能用就改 wss）。
+    # - error_note：沒有位址而且有原因時顯示（Headscale：ngrok 失敗時登入網址已退回叢集內網址，
+    #   外部裝置暫時離線——chart 的 internal-fallback 設計，#1559）。
+    public_tunnel_address_note = fields.Char(
+        string='Public Tunnel Address Note',
+        help='Shown under the public tunnel address when there is one, e.g. a plain-text '
+             'transport warning. A data value written in the seed as-is (not translated).',
+    )
+    public_tunnel_error_note = fields.Char(
+        string='Public Tunnel Error Note',
+        help='Shown under the reason when the public tunnel has no address, e.g. what the '
+             'service falls back to meanwhile. A data value written in the seed as-is (not '
+             'translated).',
     )
 
     # #530 一次性憑證視窗的 gateway 兩格提示（P3）。空值＝沿用前端內建的 hermes-agent
@@ -606,12 +829,16 @@ class CloudAppTemplate(models.Model):
     # （admin_password_carrier=app_managed，chart 只在首次開機建 admin），之後的 Reset 由
     # operator exec 改 omnigent 自己的 DB——所以它是唯一允許與 has_admin_gui 並存的 kind，
     # 且只限 app_managed（見 _check_app_admin_reset_kind）。
+    # emqx_exec（#1774）：同 omnigent——EMQX 的 dashboard.default_password 只在首次開機
+    # 生效（app_managed 供給初始值），之後由 operator exec ``emqx ctl admins passwd`` 重設。
+    _APP_MANAGED_EXEC_RESET_KINDS = ('omnigent_exec', 'emqx_exec')
     app_admin_reset_kind = fields.Selection(
         selection=[
             ('none', 'None'),
             ('odoo_exec', 'Odoo administrator (operator exec)'),
             ('n8n_exec', 'n8n owner (operator exec)'),
             ('omnigent_exec', 'Omnigent administrator (operator exec)'),
+            ('emqx_exec', 'EMQX Dashboard administrator (operator exec)'),
         ],
         string='App Admin Password Reset',
         default='none',
@@ -620,8 +847,9 @@ class CloudAppTemplate(models.Model):
              'platform can still reset it by running a script inside the app container '
              '(no helm upgrade, no restart): Odoo resets base.user_admin and clears its '
              'TOTP; n8n resets the owner account and turns off its MFA; Omnigent resets '
-             'its admin account (signed-in sessions are kept). Mutually exclusive with '
-             '"Built-in Admin GUI", except Omnigent with the "Initial only" carrier.',
+             'its admin account (signed-in sessions are kept); EMQX resets its Dashboard '
+             'admin (signed-in Dashboard sessions are signed out). Mutually exclusive with '
+             '"Built-in Admin GUI", except Omnigent and EMQX with the "Initial only" carrier.',
     )
 
     # 「平台能不能重設／改這台服務的 admin 憑證」的唯一事實源：reset endpoint 的能力
@@ -871,13 +1099,13 @@ class CloudAppTemplate(models.Model):
         兩者同時開著時 controller 只會走其中一條，另一條的承諾（例如 config.json
         的外科式 reset）就靜默失效——寧可在 seed／後台存檔時就擋下。
 
-        唯一例外：omnigent_exec ＋ admin_password_carrier=app_managed。app_managed 的
-        has_admin_gui 只負責**初始**密碼供給、本來就沒有 reset 路可以被遮蔽；Reset 只有
-        exec 這一條。
+        唯一例外：omnigent_exec／emqx_exec ＋ admin_password_carrier=app_managed。
+        app_managed 的 has_admin_gui 只負責**初始**密碼供給、本來就沒有 reset 路可以被
+        遮蔽；Reset 只有 exec 這一條。
         """
         for record in self:
             kind = record.app_admin_reset_kind or 'none'
-            if (kind == 'omnigent_exec' and record.has_admin_gui
+            if (kind in self._APP_MANAGED_EXEC_RESET_KINDS and record.has_admin_gui
                     and record.admin_password_carrier == 'app_managed'):
                 continue
             if kind != 'none' and record.has_admin_gui:
@@ -928,6 +1156,58 @@ class CloudAppTemplate(models.Model):
                       'and the Helm Secret password carrier (template: %s).')
                     % (record.name or record.slug or record.id)
                 )
+
+    @api.constrains('secret_change_restart_component')
+    def _check_secret_change_restart_component(self):
+        """AI-OD-004-2：值會拼進 operator 的 label selector，只收 DNS-1123 label。"""
+        for record in self:
+            value = record.secret_change_restart_component
+            if value and not SECRET_RESTART_COMPONENT_RE.match(value):
+                raise ValidationError(
+                    _('"Secret Change Restart Component" must be a Kubernetes label value '
+                      'such as daemon (template: %s).')
+                    % (record.name or record.slug or record.id)
+                )
+
+    @api.constrains('rollback_feature_switches')
+    def _check_rollback_feature_switches(self):
+        """AI-OD-006-1：寫入當下就驗格式，執行期不必再猜。"""
+        for record in self:
+            if record.rollback_feature_switches and \
+                    record._parse_rollback_feature_switches() is None:
+                raise ValidationError(
+                    _('"Rollback Feature Switches" must be a JSON object such as '
+                      '{"mcp.enabled": ["image"]} (template: %s).')
+                    % (record.name or record.slug or record.id)
+                )
+
+    def _parse_rollback_feature_switches(self):
+        """``rollback_feature_switches`` → ``{開關路徑: [守衛路徑…]}``；格式不對回 ``None``。
+
+        上限與 operator ``ReleaseRollbackRequest.preserve_when_equal`` 一致（16 個開關、
+        每個 8 條守衛），路徑格式同 ``admin_username_helm_path``。
+        """
+        self.ensure_one()
+        raw = self.rollback_feature_switches
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(parsed, dict) or len(parsed) > 16:
+            return None
+        result = {}
+        for path, guards in parsed.items():
+            if not isinstance(path, str) or not ADMIN_USERNAME_HELM_PATH_RE.match(path):
+                return None
+            if not isinstance(guards, list) or len(guards) > 8:
+                return None
+            if not all(isinstance(g, str) and ADMIN_USERNAME_HELM_PATH_RE.match(g)
+                       for g in guards):
+                return None
+            result[path] = list(guards)
+        return result
 
     # ------------------------------------------------------------------ #
     #  #501：供給閘門（全域實例上限 ＋ 營運停售）                          #
@@ -1315,6 +1595,111 @@ class CloudAppTemplate(models.Model):
                     out[field['key']] = field
         return out
 
+    # ------------------------------------------------------------------ #
+    #  spec ``ignored_when``：某個條件下 chart 會略過的欄位（INFRA-TS-004-1） #
+    # ------------------------------------------------------------------ #
+    # 形態：``"ignored_when": {"key": "<同一份 specs 裡的條件欄位>", "values": ["<值>", …]}``。
+    # 例：VPN 節點控制平面選「同工作區 Headscale」（tailscale.controlPlane=workspace）時，
+    # chart 0.1.4（#1554）忽略 tailscale.tags——之前設定頁照樣接受、回 success、白白升級一次。
+    # 前端 utils/ignored_when.js 讀同一個宣告（欄位下說明、空白時停用、有值時送出前標錯）。
+
+    def _ignored_when_value_specs(self):
+        """``{key: (spec, condition_key, frozenset(values))}``；宣告寫錯的一律略過（fail-open）。
+
+        只認：``ignored_when`` 是 dict、``key`` 是同一份 specs 裡另一個租戶欄位、
+        ``values`` 是非空的字串清單。seed 打錯字不得讓一格設定突然存不了。
+        """
+        specs = self._parse_helm_value_specs()
+        if not isinstance(specs, dict):
+            return {}
+        fields_list = [
+            field for section in ('required', 'optional')
+            for field in (specs.get(section) if isinstance(specs.get(section), list) else [])
+            if isinstance(field, dict) and isinstance(field.get('key'), str) and field['key']
+        ]
+        by_key = {field['key']: field for field in fields_list}
+        out = {}
+        for field in fields_list:
+            rule = field.get('ignored_when')
+            if not isinstance(rule, dict):
+                continue
+            cond_key, values = rule.get('key'), rule.get('values')
+            if (not isinstance(cond_key, str) or cond_key == field['key']
+                    or cond_key not in by_key):
+                continue
+            if (not isinstance(values, list) or not values
+                    or not all(isinstance(v, str) for v in values)):
+                continue
+            out[field['key']] = (field, cond_key, frozenset(v.strip() for v in values))
+        return out
+
+    def _ignored_when_violation(self, submitted, base_values):
+        """存檔前（create／reconfigure）：會被 chart 略過的欄位有值就回錯誤訊息。
+
+        有效值＝本次送來的值 → 既有（或範本預設）helm values → spec ``default``。
+        只在本次請求**碰到**欄位或條件欄位時才擋：沒碰到這兩格的請求照舊放行，
+        不讓 ignored_when 上線前就存了值的既有服務被鎖死（設定頁整包送出，會碰到）。
+
+        Args:
+            submitted: 已過白名單的 dot-path 扁平 dict
+            base_values: 巢狀 helm values（reconfigure＝服務現值；create＝範本預設）
+
+        Returns:
+            str | None: 租戶語言的錯誤訊息；沒有違反回 None
+        """
+        rules = self._ignored_when_value_specs()
+        if not rules:
+            return None
+        submitted = submitted if isinstance(submitted, dict) else {}
+        all_specs = self._parse_helm_value_specs()
+        specs_by_key = {
+            field['key']: field for section in ('required', 'optional')
+            for field in (all_specs.get(section) or [])
+            if isinstance(field, dict) and isinstance(field.get('key'), str)
+        }
+
+        def _effective(key):
+            if key in submitted:
+                return submitted[key]
+            node = base_values if isinstance(base_values, dict) else {}
+            if key in node:
+                return node[key]
+            for part in key.split('.'):
+                if not isinstance(node, dict) or part not in node:
+                    return specs_by_key.get(key, {}).get('default')
+                node = node[part]
+            return node
+
+        def _blank(value):
+            if value is None or value is False:
+                return True
+            if isinstance(value, str):
+                return not value.strip()
+            if isinstance(value, (list, dict)):
+                return not value
+            return False
+
+        for key, (spec, cond_key, values) in rules.items():
+            if key not in submitted and cond_key not in submitted:
+                continue
+            condition = _effective(cond_key)
+            if condition is None or str(condition).strip() not in values:
+                continue
+            if _blank(_effective(key)):
+                continue
+            cond_spec = specs_by_key.get(cond_key, {})
+            choice = str(condition).strip()
+            for opt in cond_spec.get('options') or []:
+                if isinstance(opt, dict) and opt.get('value') == choice:
+                    choice = opt.get('label') or choice
+                    break
+            return _('"%(label)s" is not applied when "%(condition)s" is "%(choice)s"; '
+                     'clear it before saving.',
+                     label=spec.get('label') or key,
+                     condition=cond_spec.get('label') or cond_key,
+                     choice=choice)
+        return None
+
     def _formatted_value_specs(self):
         """這個 template 帶 ``format`` 的 spec：``{key: format}``（未知 format 略過）。"""
         specs = self._parse_helm_value_specs()
@@ -1333,8 +1718,58 @@ class CloudAppTemplate(models.Model):
                     out[key] = fmt
         return out
 
+    def _save_validated_value_specs(self):
+        """這個 template 帶 ``validate`` 的 spec：``{validate 名: spec key}``（未知名略過）。"""
+        specs = self._parse_helm_value_specs()
+        if not isinstance(specs, dict):
+            return {}
+        out = {}
+        for section in ('required', 'optional'):
+            fields_list = specs.get(section)
+            if not isinstance(fields_list, list):
+                continue
+            for field in fields_list:
+                if not isinstance(field, dict):
+                    continue
+                name = field.get('validate')
+                if isinstance(name, str) and name in SPEC_SAVE_VALIDATORS:
+                    out[name] = field.get('key')
+        return out
+
     def _spec_format_message(self, code, params):
-        """把 ``parse_*`` 的錯誤碼翻成租戶語言（``_()`` 需要這個 frame 的 ``self.env``）。"""
+        """把 ``parse_*``／``validate`` 的錯誤碼翻成租戶語言（``_()`` 需要這個 frame 的 ``self.env``）。"""
+        # INFRA-TS-007-1：轉發清單（與映像 entrypoint parse_serve 同一套規則）。
+        if code == 'serve_bad_format':
+            return _('Forwards: "%(entry)s" is not in the format tailnet-port=service:port '
+                     '(example: 8069=svc-1a2b3c4d:80).', **params)
+        if code == 'serve_port_range':
+            return _('Forwards: "%(entry)s" has a port outside 1-65535.', **params)
+        if code == 'serve_other_namespace':
+            return _('Forwards: "%(entry)s" is not a service of this workspace. Only services of '
+                     'this workspace are allowed (no IP addresses, external names or other '
+                     'workspaces).', **params)
+        if code == 'serve_not_service_name':
+            return _('Forwards: "%(entry)s" does not name a service.', **params)
+        if code == 'serve_duplicate_port':
+            return _('Forwards: tailnet port %(port)s is used more than once ("%(entry)s").',
+                     **params)
+        if code == 'serve_too_many':
+            return _('Forwards: at most %(max)s entries.', **params)
+        # INFRA-TS-005-5：控制平面／控制伺服器／auth key 的組合（不回顯 key）。
+        if code == 'login_server_required':
+            return _('Control server: required when the control plane is "Custom URL".')
+        if code == 'login_server_invalid':
+            return _('Control server: "%(entry)s" is not a valid URL; use '
+                     'https://headscale.example.com or http://host:port.', **params)
+        if code == 'auth_key_whitespace':
+            return _('Auth key: the key contains a space or line break; paste it again as one line.')
+        if code == 'auth_key_not_tailscale':
+            return _('Auth key: the control plane is official Tailscale, so the key must be a '
+                     'Tailscale key starting with tskey-. A Headscale pre-auth key only works with '
+                     '"Same workspace Headscale" or "Custom URL".')
+        if code == 'auth_key_is_tailscale':
+            return _('Auth key: a tskey- key only works with official Tailscale. For a Headscale '
+                     'control plane, create a pre-auth key in Headplane and paste that instead.')
         if code == 'hosts_not_https':
             return _('Git token hosts only accept https; "%(entry)s" is not allowed.',
                      **params)
@@ -1350,6 +1785,12 @@ class CloudAppTemplate(models.Model):
                      'name such as github.com or git.example.com.', **params)
         if code == 'hosts_too_many':
             return _('Git token hosts: at most %(max)s hosts.', **params)
+        if code == 'host_port_scheme':
+            return _('Reserved address: enter host:port only, without tcp:// (for example '
+                     '1.tcp.ngrok.io:12345 instead of "%(entry)s").', **params)
+        if code == 'host_port_invalid':
+            return _('Reserved address: "%(entry)s" is not a host:port address such as '
+                     '1.tcp.ngrok.io:12345.', **params)
         if code == 'name_invalid':
             return _('Git author name must be one line of at most %(max)s characters, '
                      'without " \\ ; # < > or invisible control characters.', **params)
@@ -1375,11 +1816,16 @@ class CloudAppTemplate(models.Model):
                      **params)
         return _('Invalid setting value.')
 
-    def _validate_spec_formats(self, flat_values):
-        """存檔前（create／reconfigure）：帶 ``format`` 的鍵不合法就回錯誤訊息。
+    def _validate_spec_formats(self, flat_values, existing_values=None, namespace=None,
+                               cleared_keys=()):
+        """存檔前（create／reconfigure）：帶 ``format``／``validate`` 的鍵不合法就回錯誤訊息。
 
         Args:
             flat_values: 已過白名單的 dot-path 扁平 dict（controller 送進來的形態）
+            existing_values: 服務既有的巢狀 helm values（reconfigure；``validate`` 的跨欄位檢查
+                沒送的欄位讀這裡）；create 時為 None
+            namespace: 服務的 namespace（``validate`` 的同工作區檢查用）
+            cleared_keys: 同一請求要清除的鍵（#1455），視為空值
 
         Returns:
             str | None: 第一個錯誤的租戶語言訊息；全部合法回 None
@@ -1392,7 +1838,113 @@ class CloudAppTemplate(models.Model):
             _value, error = SPEC_FORMAT_PARSERS[fmt](flat_values[key])
             if error:
                 return self._spec_format_message(*error)
+
+        cleared = set(cleared_keys or ())
+
+        def get(dot_key):
+            if dot_key in cleared:
+                return None
+            if dot_key in flat_values:
+                return flat_values[dot_key]
+            node = existing_values
+            for part in dot_key.split('.'):
+                node = node.get(part) if isinstance(node, dict) else None
+            return node
+
+        for name in self._save_validated_value_specs():
+            triggers, check = SPEC_SAVE_VALIDATORS[name]
+            if not any(key in flat_values or key in cleared for key in triggers):
+                continue
+            error = check(get, namespace)
+            if error:
+                return self._spec_format_message(*error)
         return None
+
+    def _value_specs_by_key(self):
+        """``{key: spec dict}``（required＋optional）；舊式純字串 spec 視為沒有 type 的文字欄位。"""
+        specs = self._parse_helm_value_specs()
+        out = {}
+        if not isinstance(specs, dict):
+            return out
+        for section in ('required', 'optional'):
+            fields_list = specs.get(section)
+            if not isinstance(fields_list, list):
+                continue
+            for field in fields_list:
+                if isinstance(field, dict) and isinstance(field.get('key'), str) and field['key']:
+                    out.setdefault(field['key'], field)
+                elif isinstance(field, str) and field:
+                    out.setdefault(field, {'key': field})
+        return out
+
+    def _spec_value_message(self, spec, code, params):
+        """把 ``check_spec_value`` 的錯誤碼翻成租戶語言（欄位名稱用 spec label）。"""
+        params = dict(params, label=spec.get('label') or spec.get('key') or '')
+        if code == 'not_boolean':
+            return _('%(label)s must be on or off (true or false).', **params)
+        if code == 'not_number':
+            return _('%(label)s must be a number.', **params)
+        if code == 'not_integer':
+            return _('%(label)s must be a whole number.', **params)
+        if code == 'below_min':
+            return _('%(label)s must be at least %(min)s.', **params)
+        if code == 'above_max':
+            return _('%(label)s must be at most %(max)s.', **params)
+        if code == 'not_option':
+            return _('%(label)s must be one of: %(options)s.', **params)
+        if code == 'control_chars':
+            return _('%(label)s must be a single line without line breaks or control '
+                     'characters.', **params)
+        if code == 'null':
+            return _('%(label)s cannot be set to an empty (null) value.', **params)
+        return _('%(label)s must be text.', **params)
+
+    def _validate_spec_values(self, flat_values, current_values=None):
+        """存檔前（create／reconfigure）：依 spec ``type`` 驗證並正規化租戶送來的值。
+
+        service-update-api-validation（規則見檔頭 ``check_spec_value`` 上方的說明）。
+
+        Args:
+            flat_values: 已過白名單的 dot-path 扁平 dict
+            current_values: ``{key: 目前存的值}``（reconfigure 傳；只放存在的鍵）。
+                送回目前的值或 spec 預設值一律放行。
+
+        Returns:
+            (dict, str | None)：正規化後的值（``null`` 已換成預設／空字串）與第一個錯誤的
+            租戶語言訊息；有錯時回原 dict。
+        """
+        if not flat_values:
+            return flat_values, None
+        specs = self._value_specs_by_key()
+        current_values = current_values or {}
+        out = {}
+        for key, value in flat_values.items():
+            spec = specs.get(key)
+            if spec is None:
+                out[key] = value
+                continue
+            spec_type = spec.get('type') or 'text'
+            if value is None:
+                if 'default' in spec:
+                    out[key] = copy.deepcopy(spec['default'])
+                elif spec_type in ('text', 'number'):
+                    out[key] = ''
+                else:
+                    return flat_values, self._spec_value_message(spec, 'null', {})
+                continue
+            baselines = []
+            if key in current_values:
+                baselines.append(current_values[key])
+            if 'default' in spec:
+                baselines.append(spec['default'])
+            if any(_same_spec_value(value, base) for base in baselines):
+                out[key] = value
+                continue
+            _value, error = check_spec_value(spec, value)
+            if error:
+                return flat_values, self._spec_value_message(spec, *error)
+            out[key] = value
+        return out, None
 
     def _apply_spec_formats(self, values):
         """部署組裝：把 helm_values 裡帶 ``format`` 的鍵轉成 chart 要的形態（就地）。

@@ -19,6 +19,7 @@
                                         t-att-id="'helm_' + spec.key"
                                         t-att-value="getDisplayValue(spec)"
                                         t-att-placeholder="getPlaceholder(spec)"
+                                        t-att-disabled="isIgnoredInputDisabled(spec)"
                                         t-on-input="(ev) => this.onInputChange(spec, ev)"
                                         class="o_woow_input"
                                     />
@@ -43,6 +44,10 @@
                                 </div>
                                 <p t-if="spec.description" class="o_woow_field_hint">
                                     <t t-esc="spec.description"/>
+                                </p>
+                                <!-- INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec ignored_when）。 -->
+                                <p t-if="ignoredWhenHint(spec)" t-att-class="ignoredWhenHintClass(spec)">
+                                    <t t-esc="ignoredWhenHint(spec)"/>
                                 </p>
                             </t>
 
@@ -127,6 +132,7 @@
                                         t-att-id="'helm_' + spec.key"
                                         t-att-value="getDisplayValue(spec)"
                                         t-att-placeholder="getPlaceholder(spec)"
+                                        t-att-disabled="isIgnoredInputDisabled(spec)"
                                         t-on-input="(ev) => this.onInputChange(spec, ev)"
                                         class="o_woow_input"
                                     />
@@ -151,6 +157,10 @@
                                 </div>
                                 <p t-if="spec.description" class="o_woow_field_hint">
                                     <t t-esc="spec.description"/>
+                                </p>
+                                <!-- INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec ignored_when）。 -->
+                                <p t-if="ignoredWhenHint(spec)" t-att-class="ignoredWhenHintClass(spec)">
+                                    <t t-esc="ignoredWhenHint(spec)"/>
                                 </p>
                             </t>
 

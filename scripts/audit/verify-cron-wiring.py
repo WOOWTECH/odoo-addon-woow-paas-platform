@@ -44,9 +44,11 @@ exit 0 ＝ 全部接得上；exit 1 ＝ 有問題（逐條列名）。
 * `model_id` 的 ref **帶模組前綴**者（如 `project.model_project_project`）**略過並列名**
   ——那是跨模組 ref，本檔只讀 `src/models/`，看不到別的 addon 的 `_name`。
 * 只認 `code` 是 `model.<method>()` 形狀的；其它形狀會被列為「無法驗」而不是靜默放過。
-* AST 只看 class 自己 body 裡的 `def`——**繼承來的 method 看不到**。今天 repo 內的
-  cron method 都定義在同一個 class 上；若日後有人把 `_cron_*` 放進 mixin，這裡會誤報。
-  修法是往 `_inherit` 追，屆時再說。
+* AST 只看 class 自己 body 裡的 `def`，外加 #1680：沒有 `_name`、`_inherit` 是**單一字串**
+  的 class（Odoo 的「就地擴充」形狀，例如 `workspace_quota_policy.py` 擴充
+  `woow_paas_platform.workspace`）的 `def` 併入被擴充的那個 model——只併入 `src/models/`
+  裡有 `_name` 的 model，跨模組的 `_inherit`（如 `project.project`）不憑空長出 model。
+  仍看不到的：`_inherit` 是 list、Python 層的 mixin 基底類別。
 
 ## 出處
 
@@ -84,6 +86,7 @@ def _src_dir(root=None) -> pathlib.Path:
 def python_models(root=None) -> dict[str, dict]:
     """{_name: {'file':…, 'methods': {…}, 'xmlid': model_…}}，用 AST 不用 grep。"""
     out = {}
+    extensions = []  # (被擴充的 _name, methods)：所有檔案掃完才併入，與檔名排序無關
     for py in sorted((_src_dir(root) / 'models').glob('*.py')):
         try:
             tree = ast.parse(py.read_text(encoding='utf-8'))
@@ -92,20 +95,27 @@ def python_models(root=None) -> dict[str, dict]:
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
-            name = None
+            name = inherit = None
             for stmt in node.body:
-                if (isinstance(stmt, ast.Assign)
-                        and any(getattr(t, 'id', None) == '_name'
-                                for t in stmt.targets)
-                        and isinstance(stmt.value, ast.Constant)):
+                if not (isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant)):
+                    continue
+                targets = {getattr(t, 'id', None) for t in stmt.targets}
+                if '_name' in targets:
                     name = stmt.value.value
-            if not name:
-                continue
+                if '_inherit' in targets and isinstance(stmt.value.value, str):
+                    inherit = stmt.value.value
             meths = {s.name for s in node.body
                      if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            if not name:
+                if inherit:
+                    extensions.append((inherit, meths))
+                continue
             rec = out.setdefault(name, {'file': py.name, 'methods': set(),
                                         'xmlid': 'model_' + name.replace('.', '_')})
             rec['methods'] |= meths
+    for inherit, meths in extensions:
+        if inherit in out:
+            out[inherit]['methods'] |= meths
     return out
 
 

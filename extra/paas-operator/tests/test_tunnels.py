@@ -230,6 +230,7 @@ class TestGetTunnelStatus:
                 "connections": [
                     {
                         "connector_id": "conn-1",
+                        "client_id": "client-a",
                         "type": "cloudflared",
                         "origin_ip": "192.168.1.100",
                         "opened_at": "2026-01-01T00:00:00Z",
@@ -248,6 +249,10 @@ class TestGetTunnelStatus:
         assert data["status"] == "healthy"
         assert len(data["connections"]) == 1
         assert data["connections"][0]["connector_id"] == "conn-1"
+        # 平台端靠 client_id 數「有幾台機器接著這條 tunnel」（一個 cloudflared 行程
+        # 的 4 條連線共用一個 client_id，而 connector_id 是每條連線一個）。掉了這個
+        # 欄位，平台就只能用「連線數 / 4」猜（平台 #1766）。
+        assert data["connections"][0]["client_id"] == "client-a"
         assert data["created_at"] == "2026-01-01T00:00:00Z"
 
     @patch("src.api.tunnels.cloudflare_service")

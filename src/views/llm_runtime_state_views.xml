@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- LLM-02：AI 模型的連線狀態（llm_runtime_state 單例；system 的後台）。circuit breaker、AP 限速、
+         guard 與〔測試連線〕（DESIGN §3.6、§1.5；代理 :8081/readyz、AP 健康檢查、匿名 /api/status
+         不變量）。表單只讀：這張表只經 service method 寫。 -->
+    <record id="view_llm_runtime_state_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_runtime_state.form</field>
+        <field name="model">woow_paas_platform.llm_runtime_state</field>
+        <field name="arch" type="xml">
+            <form string="AI Models Connection" create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_llm_test_connection" type="object" string="Test connection"
+                            class="btn-primary" groups="base.group_system"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Circuit breaker">
+                            <field name="circuit_open_until"/>
+                            <field name="circuit_failures"/>
+                            <field name="circuit_reason"/>
+                            <field name="circuit_opened_at"/>
+                        </group>
+                        <group string="Guard">
+                            <field name="guard_tripped"/>
+                            <field name="guard_reasons"/>
+                            <field name="guard_since"/>
+                            <field name="dr_mode"/>
+                        </group>
+                        <group string="Service account rate limit">
+                            <field name="ap_rate_window"/>
+                            <field name="ap_rate_count"/>
+                        </group>
+                        <group string="Balance refresh">
+                            <field name="balance_refresh_page"/>
+                            <field name="balance_refresh_started_at"/>
+                            <field name="balance_refresh_finished_at"/>
+                        </group>
+                    </group>
+                    <group string="Connection test">
+                        <field name="connection_test_requested_at"/>
+                        <field name="connection_test_at"/>
+                        <field name="connection_test_result" widget="text" class="font-monospace"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_llm_runtime_state" model="ir.actions.server">
+        <field name="name">AI Models Connection</field>
+        <field name="model_id" ref="model_woow_paas_platform_llm_runtime_state"/>
+        <field name="state">code</field>
+        <field name="code">action = model._llm_action_open()</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+    </record>
+
+    <menuitem
+        id="menu_llm_runtime_state"
+        name="Connection status"
+        parent="menu_llm"
+        action="action_llm_runtime_state"
+        groups="base.group_system"
+        sequence="20"/>
+    <!-- Object buttons call guarded methods directly; ir.actions.server would
+         require write ACL on the account model, which is intentionally read-only. -->
+    <record id="view_llm_free_fallback_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_account.free.fallback.list</field>
+        <field name="model">woow_paas_platform.llm_account</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="partner_id"/>
+                <field name="newapi_username"/>
+                <field name="state"/>
+                <field name="free_group_requested"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_free_fallback_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_account.free.fallback.form</field>
+        <field name="model">woow_paas_platform.llm_account</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_llm_block_free_trial" type="object" string="Block free trial (break-glass)"
+                            groups="base.group_system" confirm="Have the proxy owner enable break-glass before continuing. This makes one attempt to block the free trial group; if it fails, check the alert and press this button again."/>
+                    <button name="action_llm_restore_free_group" type="object" string="Restore default group (break-glass)"
+                            groups="base.group_system" confirm="Have the proxy owner enable break-glass before continuing. This makes one attempt to restore the default group; if it fails, check the alert and press this button again."/>
+                </header>
+                <sheet><group>
+                    <field name="partner_id"/>
+                    <field name="newapi_username"/>
+                    <field name="state"/>
+                    <field name="free_group_requested"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_free_fallback" model="ir.actions.act_window">
+        <field name="name">Free trial fallback</field>
+        <field name="res_model">woow_paas_platform.llm_account</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="view_llm_free_fallback_list"/>
+        <field name="domain">[("newapi_user_id", "&gt;", 0)]</field>
+    </record>
+    <menuitem id="menu_llm_free_fallback" name="Free trial fallback" parent="menu_llm"
+              action="action_llm_free_fallback" groups="base.group_system" sequence="25"/>
+</odoo>

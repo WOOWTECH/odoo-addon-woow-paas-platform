@@ -8,12 +8,14 @@
 7	src/controllers/dashboard.py
 4	src/controllers/ecpg_callback.py
 4	src/controllers/ha_api.py
+7	src/controllers/ha_onboarding.py
 12	src/controllers/ha_paas.py
-5	src/controllers/notifications.py
+0	src/controllers/llm.py
+6	src/controllers/notifications.py
 15	src/controllers/oauth2.py
 31	src/controllers/paas.py
 3	src/controllers/portal.py
 1	src/controllers/profile.py
 0	src/controllers/reconcile_report.py
 15	src/controllers/security_access.py
-13	src/controllers/smart_home.py
+16	src/controllers/smart_home.py

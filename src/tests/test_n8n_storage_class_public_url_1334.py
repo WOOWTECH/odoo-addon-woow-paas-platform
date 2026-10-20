@@ -133,7 +133,7 @@ class TestN8nStorageClassPinnedAtInstall(TransactionCase):
         svc.write({'state': 'pending'})
         seen = {}
 
-        def fake_assemble(rec):
+        def fake_assemble(rec, **kwargs):  # INFRA-FIX-019-1：開通會帶 chart_version=
             seen['values'] = rec._helm_values_dict()
             raise RuntimeError('stop after assemble')
 

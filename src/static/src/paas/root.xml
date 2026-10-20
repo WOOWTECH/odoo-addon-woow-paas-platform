@@ -57,6 +57,10 @@
                     <AiChatPage conversationId="conversationId"/>
                 </t>
             </t>
+            <t t-elif="router.current === 'llm'">
+                <!-- LLM-01c：子頁由網址決定（LlmPage 不另存 currentTab），切子頁不會重新掛載。 -->
+                <LlmPage tab="llmTab"/>
+            </t>
             <t t-elif="router.current === 'billing'">
                 <BillingOverviewPage/>
             </t>

@@ -25,6 +25,7 @@ from .publication_receipt_fixture import (
     install_publication_receipts,
     routes_receipt,
 )
+from .wallet_fixture import fund_wallet
 
 # 兩條呼叫路徑、兩個 patch target（namespace 不同，缺一不可）：
 # 1. controller._check_route_prefix 用 function-local import
@@ -600,6 +601,8 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
         """把 self.sa（template-less）開到 in_progress，回原始 plan。"""
         partner = self.workspace.owner_id.partner_id
         self.sa._create_and_confirm_subscription(partner, self.plan)
+        # 換方案餘額閘（#1677 A1）：本 class 測 plan 家族閘（見 wallet_fixture）。
+        fund_wallet(partner)
         self.assertEqual(self.sa.sudo().subscription_id.state, 'in_progress')
         self.env.invalidate_all()
         return self.plan

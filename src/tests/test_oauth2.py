@@ -1007,7 +1007,7 @@ class TestAuthorizeEndpointPkce(TransactionCase):
             state='xyz',
         )
         self.assertEqual(result['template'], 'woow_paas_platform.oauth2_error')
-        self.assertEqual(result['ctx']['error_title'], 'PKCE Required')
+        self.assertEqual(result['ctx']['error_title'], '授權資料不完整')
 
     def test_authorize_get_with_plain_method_rejected(self):
         result = self._call_authorize_get(
@@ -1020,7 +1020,7 @@ class TestAuthorizeEndpointPkce(TransactionCase):
             code_challenge_method='plain',
         )
         self.assertEqual(result['template'], 'woow_paas_platform.oauth2_error')
-        self.assertEqual(result['ctx']['error_title'], 'Invalid PKCE Method')
+        self.assertEqual(result['ctx']['error_title'], '授權驗證方式不符')
 
     def test_authorize_post_without_challenge_redirects_with_error(self):
         # Bypass GET: hand-crafted POST without code_challenge must not

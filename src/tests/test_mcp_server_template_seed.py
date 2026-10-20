@@ -332,11 +332,10 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     PROD_M = 'woow_paas_platform.product_mcp_odoo_monthly'
     IMAGE_REPO_SUFFIX = 'odoo-mcp-admin'
     APP = 'odoo'
-    # 現行釘的 image（7b5944c4）裝的是 tuanle96 odoo-mcp：自帶 console script
-    # ``odoo-mcp``、原生 streamable-http，故直跑 console script、不經 core 的
-    # mcp_sse_wrapper（#708）。首建 image 9d10944 的 odoo-mcp-server 0.1.3 才是
-    # stdio-only + wrapper，那份事實隨 2026-07-14 重釘（6fb93163）就失效了。
-    EXPECT_MCP_COMMAND = 'odoo-mcp'
+    # #70 的 LaunchPolicy 改用 woow-odoo-mcp；launcher 安裝讀取錯誤、大小限制、
+    # isError 與唯讀並行修補後，仍呼叫 odoo-mcp 1.1.0 的原生 streamable-http。
+    # 這不是 #708 已淘汰的 mcp_sse_wrapper；command 必須與新 image 的 policy 同步。
+    EXPECT_MCP_COMMAND = 'woow-odoo-mcp'
     # 與上面那條 launch spec 綁成 lockstep 的常數，見
     # test_image_repin_must_recheck_launch_spec。
     # 2026-10-03 重釘 e310dfe0（#20–#27）：已覆核 apps/odoo/Dockerfile 與 uv.lock 的
@@ -376,7 +375,13 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 真imageID45b88bf4之 CLI args、MCP initialize／預設tools/list41／離線tools/call 已驗；
     # QA240 direct-write 模式的MCP38／管理目錄41差三支明示隱藏的審批工具，亦已另驗。
     # 此常數與seed一起改釘；229／230既有tag和正式部署不受這個候選分支影響。
-    EXPECT_IMAGE_TAG = 'e178c4cef76a43b20abfd6ea0282060d94abf115@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8'
+    # 2026-10-18 重釘 #70（5526e865）：逐字覆核 LaunchPolicy、pyproject console script
+    # 與 launcher；args 不變，command 同步改為 woow-odoo-mcp。odoo-mcp 仍 1.1.0，
+    # mcp SDK 已升 1.30.0；五支真 image 的 imports／CLI help／ASGI 限定 smoke 共 111 項通過。
+    # 未啟動 lifespan／MCP daemon、未呼叫 MCP 工具；既有 PVC 升級與 ORM 仍未驗。
+    # 來源／實機窄證據：docs/verification/2026-10-18-mcp-5526e865-source-contract.json
+    # 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
+    EXPECT_IMAGE_TAG = '5526e8658a8046253a0b324825a12222096fa858@sha256:39402798b9dfc6565f9cc7f395fb2a7fb0696d1be8cf01f2a45b1a94e5766fe5'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。

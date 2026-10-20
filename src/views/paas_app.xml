@@ -11,7 +11,8 @@
                 <link rel="preconnect" href="https://fonts.googleapis.com"/>
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
                 <!-- Google Fonts: Manrope & Outfit -->
-                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&amp;family=Outfit:wght@300..700&amp;display=swap" rel="stylesheet"/>
+                <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&amp;family=Outfit:wght@300..700&amp;family=Poppins:wght@500;600&amp;family=Noto+Sans+TC:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+                <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet"/>
                 <!-- Material Symbols Outlined: display=block, not swap. With swap the
                      ligature names ("notifications", "dashboard"…) render as plain text
                      until the font arrives, which is what a cold-cache visit sees. -->

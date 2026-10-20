@@ -194,6 +194,9 @@ class TestLiveTunnelsAreUnaffected:
         """有 connection 的 tunnel，既有欄位語意一格都不准變。"""
         conn = {
             "id": "conn-1",
+            # 一個 cloudflared 行程的多條連線共用這個 id；平台端靠它數機器數
+            # （平台 #1766）。CF 本來就會回，#1766 之前只是沒有轉發。
+            "client_id": "client-a",
             "type": "cloudflared",
             "origin_ip": "192.168.1.100",
             "opened_at": "2026-08-01T01:00:00Z",
@@ -205,6 +208,7 @@ class TestLiveTunnelsAreUnaffected:
         assert got["connections"] == [
             {
                 "connector_id": "conn-1",
+                "client_id": "client-a",
                 "type": "cloudflared",
                 "origin_ip": "192.168.1.100",
                 "opened_at": "2026-08-01T01:00:00Z",

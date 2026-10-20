@@ -44,6 +44,9 @@ class TestTunnelValsFromStatus(TransactionCase):
         super().setUp()
         self.SA = self.env['woow_paas_platform.security_access']
 
+    # #1766：多了 `connector_count`（**機器數**，distinct client_id）與
+    # `binding_conflict`。⚠ 別把它跟 `edge_connection_count`（**連線數**，一台
+    # cloudflared 預設 4 條）看成同一件事——這裡剛好 2 條連線＝1 台。
     def test_connected(self):
         vals = self.SA._tunnel_vals_from_status(_CONNECTED)
         self.assertEqual(vals, {
@@ -51,12 +54,14 @@ class TestTunnelValsFromStatus(TransactionCase):
             'connector_id': 'c-live', 'connector_type': '',
             'connector_version': '2026.7.3',
             'tunnel_uptime': '2026-09-29T11:29:42Z',
+            'connector_count': 1, 'binding_conflict': False,
         })
 
     def test_disconnected(self):
         self.assertEqual(self.SA._tunnel_vals_from_status(_DOWN), {
             'tunnel_status': 'disconnected', 'edge_connection_count': 0,
             'connector_version': '',
+            'connector_count': 0, 'binding_conflict': False,
         })
 
     def test_deleted_clears_connector_bookkeeping(self):

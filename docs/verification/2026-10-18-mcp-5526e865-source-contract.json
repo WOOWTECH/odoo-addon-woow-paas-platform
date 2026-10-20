@@ -1,0 +1,243 @@
+{
+  "checked_at_utc": "2026-10-18",
+  "platform_base_sha": "5df7ef5649ca42a512bab8e272d053da05e2a7a3",
+  "mcp_source_sha": "5526e8658a8046253a0b324825a12222096fa858",
+  "scope": "Source contract and authenticated registry digest mapping, supplemented by limited actual-image imports/CLI help/ASGI smoke.",
+  "registry_verification": {
+    "method": "Authenticated registry HEAD using own QA249 imagePullSecret in memory only; no pull/build/push",
+    "checked_at_utc": "2026-10-18T08:12:59.794868+00:00"
+  },
+  "chart_defaults": {
+    "source_sha": "eb2700fff109f3b25ea5168db3e1b5948d016bdb",
+    "version": "0.1.7",
+    "values": {
+      "path": "charts/mcp-server/values.yaml",
+      "sha256": "c4dc330cb6ed1e8cfcbb7baa75a438bd5c79d0660ec1f881f60666f4be7c7794"
+    },
+    "hermes_command": "hermes-mcp-server",
+    "hermes_args": [
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ]
+  },
+  "apps": [
+    {
+      "app": "hermes",
+      "xmlid": "cloud_app_mcp_hermes",
+      "old_tag": "8c942d648276974aa4d5def5bbb7cea6dcf4ea51@sha256:ffd39d8bf9aabf00cc1681613f1e88c36f4c374692442a2a242f919189bd322a",
+      "new_tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:6cafc0edf5a676729bdf8ad2f8ed3662d18d8cb5545b9d79f4c2085e5108e92c",
+      "launch_command": "hermes-mcp-server",
+      "launch_args": [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "env_prefix": "HERMES_",
+      "console_script": "hermes_mcp_server.launcher:main",
+      "source_files": [
+        {
+          "path": "apps/hermes/hermes_mcp_admin/main.py",
+          "sha256": "4a8a8187fbef1094f49ff104eba0c862a1ba71de34066aad78d0e45dd50e02f5"
+        },
+        {
+          "path": "apps/hermes/pyproject.toml",
+          "sha256": "e56149161533fd66b4c6d8f042dd4273cabbf0f520c092d9d212d74885893e3b"
+        },
+        {
+          "path": "apps/hermes/hermes_mcp_server/launcher.py",
+          "sha256": "605f4e9f242d8c304f93a49cfa00512e7a92e8a3df00c7552df56b32dc49a143"
+        },
+        {
+          "path": "apps/hermes/Dockerfile",
+          "sha256": "f7bcfd7a216223a6254b2d382267667ccd2543a6a605d95db1a6c25865e27948"
+        }
+      ],
+      "seed_command_source": "mcp-server 0.1.7 chart default",
+      "source_contract": "PASS"
+    },
+    {
+      "app": "odoo",
+      "xmlid": "cloud_app_mcp_odoo",
+      "old_tag": "e178c4cef76a43b20abfd6ea0282060d94abf115@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8",
+      "new_tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:39402798b9dfc6565f9cc7f395fb2a7fb0696d1be8cf01f2a45b1a94e5766fe5",
+      "launch_command": "woow-odoo-mcp",
+      "launch_args": [
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "env_prefix": "",
+      "console_script": "odoo_mcp_admin.launcher:main",
+      "source_files": [
+        {
+          "path": "apps/odoo/odoo_mcp_admin/main.py",
+          "sha256": "e0f727b052a9a230387578af9028fdeb01df6445fa61e59d131f7d424942525d"
+        },
+        {
+          "path": "apps/odoo/pyproject.toml",
+          "sha256": "db20b20bd973f0d2045661c55a530bf4d840566a08d140ee4e770a1417714495"
+        },
+        {
+          "path": "apps/odoo/odoo_mcp_admin/launcher.py",
+          "sha256": "8b8a27d4d0a6146221ce752031d376370a9d00ed10779388cc90913908eb51e7"
+        },
+        {
+          "path": "apps/odoo/Dockerfile",
+          "sha256": "d0bea301698eddabbc495c3901eeb7d49a6c060144edc886f009c65ffeb7f325"
+        }
+      ],
+      "seed_command_source": "explicit",
+      "source_contract": "PASS",
+      "launcher_before_upstream": [
+        "upstream_fixes.propagate_read_errors(OdooClient)",
+        "result_limits.install(mcp)",
+        "tool_errors.install(mcp)",
+        "concurrency.install(mcp, OdooClient)"
+      ],
+      "command_change_reason": "New LaunchPolicy only permits woow-odoo-mcp; wrapper installs error, size and readonly concurrency fixes before upstream main."
+    },
+    {
+      "app": "n8n",
+      "xmlid": "cloud_app_mcp_n8n",
+      "old_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e",
+      "new_tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:0800f5693bde0e974901515b269bed00135a38f42c065fd03242446727e1fef4",
+      "launch_command": "n8n-mcp-http",
+      "launch_args": [
+        "--port",
+        "3000"
+      ],
+      "env_prefix": "",
+      "console_script": "n8n_mcp_admin.launcher:main",
+      "source_files": [
+        {
+          "path": "apps/n8n/n8n_mcp_admin/main.py",
+          "sha256": "20f50dbfd67708054731cc04a6071b572cc69ddd337df1d3c8fd5b9af35b6a44"
+        },
+        {
+          "path": "apps/n8n/pyproject.toml",
+          "sha256": "171921160ab1814e83200cfe8e600f44e897f47bd26b9ca71d07b21df313b86b"
+        },
+        {
+          "path": "apps/n8n/n8n_mcp_admin/launcher.py",
+          "sha256": "dc44bdc7e6d0a90dc29ad946971a896fbc9c5db88442f1cb3cf8c60c6d611ace"
+        },
+        {
+          "path": "apps/n8n/Dockerfile",
+          "sha256": "ce428d1e2374b1bbd74fa958e5f22c673d33601025cbac6f8240053194705390"
+        }
+      ],
+      "seed_command_source": "explicit",
+      "source_contract": "PASS"
+    },
+    {
+      "app": "litellm",
+      "xmlid": "cloud_app_mcp_litellm",
+      "old_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:1cdd351ddc781170e48e4f9b37e6d60585b81623335b051a62a043512f1a101b",
+      "new_tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:4c3713b51e558b56efafe20ee8be30e618eea231d2debebb983ad7b137b0c98c",
+      "launch_command": "litellm-mcp-server",
+      "launch_args": [
+        "--port",
+        "8000"
+      ],
+      "env_prefix": "LITELLM_MCP_",
+      "console_script": "litellm_mcp_admin.launcher:main",
+      "source_files": [
+        {
+          "path": "apps/litellm/litellm_mcp_admin/main.py",
+          "sha256": "f1b0cafc13ac698a00638de52e39291d00912a4a30ed47634d9f6ddaa8670ea4"
+        },
+        {
+          "path": "apps/litellm/pyproject.toml",
+          "sha256": "6bd62e8b56ab0e7892c625e6ba148ff4f9f7f38c55fd960d77099373e0441768"
+        },
+        {
+          "path": "apps/litellm/litellm_mcp_admin/launcher.py",
+          "sha256": "a532f80296501d4791c76ae1078cbd12972a88fad6acb90da86a94a26d0c7812"
+        },
+        {
+          "path": "apps/litellm/Dockerfile",
+          "sha256": "7fe6ad6f164b4511ba994e997f74eb79c0726d02819d46a03aafa6587275ef75"
+        }
+      ],
+      "seed_command_source": "explicit",
+      "source_contract": "PASS",
+      "launch_and_seed_files_unchanged_from_previous_pin": [
+        "apps/litellm/litellm_mcp_admin/main.py",
+        "apps/litellm/pyproject.toml",
+        "apps/litellm/litellm_mcp_admin/launcher.py",
+        "apps/litellm/litellm_mcp_admin/seed_defaults.py"
+      ]
+    },
+    {
+      "app": "nextcloud",
+      "xmlid": "cloud_app_mcp_nextcloud",
+      "old_tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:427a0b994f278ff48457ff3e1fa02a9028674889e21f5cdb2dc7266b1daabb89",
+      "new_tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:f2d39c5c7bbdb597ffb6f9e2c3da7064bd500cb5c8ef67a201c1b57236a7c467",
+      "launch_command": "nextcloud-mcp-server",
+      "launch_args": [
+        "--port",
+        "8000"
+      ],
+      "env_prefix": "NEXTCLOUD_MCP_",
+      "console_script": "nextcloud_mcp_admin.launcher:main",
+      "source_files": [
+        {
+          "path": "apps/nextcloud/nextcloud_mcp_admin/main.py",
+          "sha256": "ba41cc80ae10af841969af690c577e82f876aa4fbb6afca3fc38ba34f68f7c07"
+        },
+        {
+          "path": "apps/nextcloud/pyproject.toml",
+          "sha256": "07279c9b4906b1ea18c2496acb6f41ff5661cd578beea1f03e1d8a4546aff14d"
+        },
+        {
+          "path": "apps/nextcloud/nextcloud_mcp_admin/launcher.py",
+          "sha256": "21e111e4ccf57551ec5208cf7dae6dd6d7593614a184ebaccaec832f63cadd2f"
+        },
+        {
+          "path": "apps/nextcloud/Dockerfile",
+          "sha256": "d119dd18d61460d597f00cfb78f5775661be8b25285ebd9abd9f9eb3d636e627"
+        }
+      ],
+      "seed_command_source": "explicit",
+      "source_contract": "PASS",
+      "launch_and_seed_files_unchanged_from_previous_pin": [
+        "apps/nextcloud/nextcloud_mcp_admin/main.py",
+        "apps/nextcloud/pyproject.toml",
+        "apps/nextcloud/nextcloud_mcp_admin/launcher.py",
+        "apps/nextcloud/nextcloud_mcp_admin/seed_defaults.py"
+      ]
+    }
+  ],
+  "limitations": [
+    "Limited actual-image smoke did not start lifespan or MCP daemons, initialize MCP, call MCP tools, or perform upstream operations.",
+    "No existing PVC upgrade or persisted-config runtime test.",
+    "No Odoo ORM/module upgrade or sandbox suite executed.",
+    "No production service config, manifest version, chart version or deployment changed."
+  ],
+  "dependencies": {
+    "current": {
+      "mcp": "1.30.0",
+      "odoo-mcp": "1.1.0"
+    },
+    "previous_pins_mcp_sdk": "1.28.1",
+    "consequence": "Actual-image imports/CLI help/ASGI smoke passed; MCP transport/daemon startup and existing-PVC runtime still require testing."
+  },
+  "existing_test_subset": {
+    "method": "Existing test method bodies with XML-backed reference adapter; no Odoo import, ORM, module upgrade or image runtime.",
+    "tests_passed": 45,
+    "old_seed_negative_control_failures": 5
+  },
+  "limited_image_smoke": {
+    "evidence": "2026-10-18-mcp-5526e865-limited-image-smoke.json",
+    "result": "PASS_FOR_LIMITED_IMAGE_SMOKE",
+    "images": 5,
+    "checks_pass": 111,
+    "scope": "Imports/CLI help/ASGI in-process only; no lifespan or MCP tools; existing PVC upgrade and ORM remain untested."
+  }
+}

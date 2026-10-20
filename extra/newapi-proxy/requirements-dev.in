@@ -1,0 +1,5 @@
+# Test dependencies (CI unit tests). Lock with:
+#   uv pip compile --python-version 3.12 --generate-hashes --exclude-newer <today-14d> \
+#     requirements-dev.in -o requirements-dev.txt
+-r requirements.in
+pytest==9.1.1

@@ -1,4 +1,5 @@
 from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt
+import psycopg2.errors
 import contextlib
 import copy
 import json
@@ -19,7 +20,9 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
-from ..services import dns_probe, rollback_config
+from ..services import backup_health, dns_probe, rollback_config
+from ..services.chart_version import reported_helm_revision
+from ..services.tenant_secret import has_secret_refs, secret_refs, split_tenant_secret
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
 from ..services.workload_health import (
@@ -33,6 +36,7 @@ from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
     CONTRACT_MISMATCH,
     chart_mismatch_detail,
+    chart_name_of,
     woow_odoo_contract,
     woow_odoo_ready,
 )
@@ -358,8 +362,14 @@ def _reject_init_control_writes(env, vals):
 # （清掉旗標、把 alerted 標記填上讓平台不再通知），或替別的服務偽造一則。
 _OBSERVATION_CONTROL_FIELDS = frozenset({
     'observed_at', 'observation_episode_started_at',
+    # 商用驗收 HS-013-2：對外位址的「最後檢查時間」與重探窗口。租戶寫得進窗口，就能讓平台每分鐘
+    # 替它打一次 operator；寫得進檢查時間，就能讓一個過期的位址看起來剛驗過。
+    'public_tunnel_checked_at', 'public_tunnel_recheck_until',
     'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
     'workload_fault_alerted_at', 'workload_checked_at',
+    # X-BK-006-1：備份事實同理——租戶能寫就能把「備份失敗」改成 ok、或把告警標記填上。
+    'backup_health', 'last_backup_success_at', 'last_backup_failure_at',
+    'backup_failure_reason', 'backup_consecutive_failures', 'backup_failure_alerted_at',
 })
 
 
@@ -449,6 +459,31 @@ def _reject_chart_version_writes(env, vals):
         raise AccessError(_(
             'The chart version of a service is managed by the platform: %(fields)s',
             fields=', '.join(touched)))
+
+
+# ------------------------------------------------------------------------- #
+#  AUDITFIX template-id-write-guard：服務綁的範本只有平台改得動（#1216 第一格）  #
+# ------------------------------------------------------------------------- #
+#
+# `template_id` 決定 chart、方案白名單、計費、`conceal_instances` 等一切；沒有 `groups=`、
+# ACL 給 `base.group_user` 1,1,1,1、`cloud_service_rule_owner_admin_manage` 給 owner／admin
+# 寫入，而 owner 資格可自我滿足（自建 workspace）⇒ 沒有這道閘時 `group_user` 的 owner 一筆
+# `/web/dataset/call_kw` 就能把服務改綁到別的範本（商用驗收沙盒實測 `result: True`）。
+# 租戶沒有任何合法的改綁路徑（開通時決定、之後不變；換方案只換訂閱）；平台的寫入走 sudo／
+# cron ⇒ 判準同 #1525：`env.is_system()`。寫回相同的值不擋（整包回存）。#1216 其餘平台控制
+# 欄位（state、helm_namespace、allocated_*…）要先把 controller 以租戶身分寫 state 的路徑改走
+# sudo，不在這一格。
+
+
+def _reject_template_binding_writes(records, vals):
+    """write() 側：非平台身分不得把服務改綁到**不同**的範本。"""
+    if 'template_id' not in vals or records.env.is_system():
+        return
+    target = vals['template_id']
+    target_id = (target.id if hasattr(target, 'id') else target) or False
+    if any(record.template_id.id != target_id for record in records):
+        raise AccessError(_(
+            'The product of a cloud service is fixed when it is created and cannot be changed.'))
 
 
 # ------------------------------------------------------------------------- #
@@ -749,9 +784,16 @@ INIT_CRON_SOFT_CAP = 10
 _INIT_CRON_XMLID = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
 # init cron 的 wall 時鐘（模組層級，測試可替換）。
 _init_cron_clock = time.monotonic
+# 商用驗收 HS-013-2：服務**進入** running 後，對外位址（ngrok sidecar）要在這段時間內每分鐘重探一次
+# （`_cron_recheck_public_tunnels`）。轉回 running 的那一輪 poll 常常早於 agent 連上（Pod 換新約 80 秒、
+# agent 再 20 秒），之後 running 服務只有每日對帳會再探 ⇒ 服務頁「尚未取得」或過期的錯誤原因會掛到
+# 下一次動作（實測 1–9 分鐘）。10 分鐘涵蓋 Headscale 設了網域時 bootstrap 等 agent 的 90 秒＋重試。
+PUBLIC_TUNNEL_RECHECK_MINUTES = 10
 # #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）。
 # 沒有 FailedCreate 證據的 0 個 Pod（`no_pods`）要持續這麼久才算確認——換 Pod 的瞬間
 # （Recreate 砍舊建新、節點重開）也會短暫是 0，那不是故障。有證據的不必等。
+# #1456 的三個代碼（Pod 在、沒有一顆就緒：oom_killed／crash_loop／not_ready）也走這個門檻：
+# 單次 OOM 或一次 back-off 幾十秒就自己好了（見 `services/workload_health.py` 檔頭）。
 WORKLOAD_FAULT_CONFIRM_MINUTES = 5
 # 10 分鐘那條 cron 每趟的 wall 預算：超過就停，沒查到的下一趟從輪替游標之後接著查
 # （游標記在 platform_monitor 單例的 `workload_check_cursor`，不記在服務列上）。
@@ -765,6 +807,16 @@ _workload_check_clock = time.monotonic
 _WORKLOAD_FAULT_FIELDS = (
     'workload_fault_code', 'workload_fault_detail', 'workload_fault_since',
     'workload_fault_alerted_at',
+)
+
+# X-BK-006-1／#1190：備份狀態檢查 cron（`_cron_refresh_backup_status`）每趟的 wall 預算與
+# 連續傳輸錯誤中止門檻（同 workload 檢查的形狀；游標記在 platform_monitor 單例）。
+BACKUP_CHECK_BUDGET_SECONDS = 120
+BACKUP_CHECK_TRANSPORT_ABORT = 2
+_backup_check_clock = time.monotonic
+_BACKUP_FACT_FIELDS = (
+    'backup_health', 'last_backup_success_at', 'last_backup_failure_at',
+    'backup_failure_reason', 'backup_consecutive_failures',
 )
 
 # 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
@@ -1211,7 +1263,29 @@ _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 # （``_inject_n8n_runtime_defaults``）而不是寫在範本預設：存量服務的 helm_values 是開通時凍結
 # 的，寫在範本只會影響新服務。服務自己的 helm_values 有明確值就不覆寫（將來加 runner 時，
 # 個別服務可改成 'true'）。
-_N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
+#
+# DATA-N8N-007-2：``N8N_PROXY_HOPS=1``。n8n 在 Cloudflare Tunnel（cloudflared）後面，沒設時 Express
+# 的 trust proxy 是 false：每個請求都帶 ``X-Forwarded-For``，n8n 卻拿 socket 位址（cloudflared 的
+# 位址）當 IP ⇒ ``/rest/login`` 的 IP 限流（1000 次／5 分鐘）整個服務共用一個桶，任何匿名者送
+# 1000 個請求就讓所有人（含 owner）登入拿 429；日誌每個請求噴一次 express-rate-limit 的
+# ERR_ERL_UNEXPECTED_X_FORWARDED_FOR。設 1 ＝ 只信任最靠近的一跳（cloudflared），req.ip 取
+# 其後 ``X-Forwarded-For`` 最右一段（Cloudflare 邊緣追加的真實用戶端位址；用戶端自己塞的左段
+# 不被採信）。實測（n8n 2.43.6、NODE_ENV=production）：沒設時一個來源的 1010 次失敗登入讓另一個
+# 來源的正確登入也回 429；設 1 後後者回 200。上游的「同一 email 每分鐘 5 次」限流是另一層
+# （body keyed），不受此設定影響。
+_N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false', 'N8N_PROXY_HOPS': '1'}
+
+# 商用驗收 n8n-credential-key-backup（DATA-N8N-013-1）：n8n 的加密金鑰由平台在**開通時**產生，
+# 存進服務自己的 ``main.secret``（8gears chart 2.0.1 放進 ``<release>-n8n-app-secret``、以 envFrom
+# 變成容器環境變數，與 N8N_API_KEY／N8N_SMTP_PASS 同一顆 Secret）。以前沒設 ⇒ n8n 第一次開機
+# 自己亂數產生、只寫在 PVC 的 /home/node/.n8n/config；只備份 SQLite 還原到新實例時 credential
+# 全部解不開。現在金鑰同時在平台 DB（helm_values）與 K8s Secret，n8n 開機時 config 不存在就用這個
+# 環境變數寫出 config ⇒ PVC 與平台保存的是同一把。
+# ⚠ 只在開通時產生（``_mint_n8n_encryption_key`` 由 controller ``_create_service`` 呼叫），部署組裝
+# 不補：存量服務 PVC 上已有 n8n 自己的金鑰，送一把不同的 n8n 會報「Mismatching encryption keys」
+# 起不來。存量服務要納管，只能把 PVC config 裡那把原樣寫進 helm_values（人工、逐台核對）。
+# 服務詳情 API 對這一格全遮（``PaasController._sanitize_helm_values``），不沿用 secret 子樹的前綴遮罩。
+N8N_ENCRYPTION_KEY_PATH = ('main', 'secret', 'N8N_ENCRYPTION_KEY')
 
 
 # 範本的「平台政策鍵」：每次部署都以範本 ``helm_default_values`` 的值為準，不吃服務
@@ -1238,12 +1312,18 @@ _N8N_RUNTIME_DEFAULT_CONFIG = {'N8N_PYTHON_ENABLED': 'false'}
 #   - hermes-agent agent 容器的 requests（閒置就 1.06G）；
 #   - mcp-server 家族的記憶體 requests（128Mi 低於實測）。
 #   都不是租戶可設的鍵；pi-agent 刻意不列（pi1–pi5 不動）。
+# 商用驗收 X-SEC-004-2／X-SEC-005-7（2026-10-17）——容器加固也是平台政策：
+#   - n8n ``main.securityContext``／``main.podSecurityContext``（PSA restricted）與
+#     ``main.extraVolumes``／``main.extraVolumeMounts``（遮住 SA token 路徑；8gears chart 沒有
+#     automount 欄位）。既有服務 Redeploy 時跟著範本走；租戶不能設（不在 helm_value_specs）。
 #   ⚠ 每一條都要寫成字面量：scripts/audit/audit_411_reset_values.py 的 _INJECTOR_VALUE_PATHS
 #   以 AST 對帳這張表（test_audit_411_classifier），推導式它讀不到。
 _TEMPLATE_POLICY_VALUE_PATHS = {
     'ha-full': [('haProxy', 'ipBanEnabled'), ('seed', 'unlockCoreConfig'),
                 ('terminationGracePeriodSeconds',)],
-    'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe')],
+    'n8n': [('main', 'livenessProbe'), ('main', 'readinessProbe'),
+            ('main', 'securityContext'), ('main', 'podSecurityContext'),
+            ('main', 'extraVolumes'), ('main', 'extraVolumeMounts')],
     'litellm': [('postgresql', 'resources', 'limits', 'cpu')],
     'hermes-agent': [('agent', 'resources', 'requests')],
     'mcp-hermes': [('resources', 'requests', 'memory')],
@@ -1933,7 +2013,8 @@ class CloudService(models.Model):
     # ---- #1647：running 服務的 workload 觀測（「期望有 Pod、實際一顆都沒有」）----
     # 這五格**只描述 running 的服務**：某個 Deployment／StatefulSet 期望 ≥1 個 Pod、實際
     # 0 個（2026-10-10 事故：ReplicaSet FailedCreate exceeded quota，服務顯示 running 卻
-    # 中斷近 6 小時）。
+    # 中斷近 6 小時）；#1456 起也描述「Pod 都在、卻沒有一顆就緒」（CrashLoopBackOff／
+    # OOMKilled／未就緒，2026-10-16 商用驗收 DATA-N8N-009-1／010-1）。
     #   * 誰寫：只有 `_apply_workload_observation`（10 分鐘的 `_cron_check_running_workloads`
     #     ＋每日對帳 cron 順帶呼叫）。非平台身分寫不進去（`_OBSERVATION_CONTROL_FIELDS`）。
     #   * **值真的變了才寫**：健康而且四格異常欄位本來就是空的 ⇒ 一格都不寫；異常持續、代碼與
@@ -1953,30 +2034,42 @@ class CloudService(models.Model):
     # 而且沒有 tooltip）。完整的說明放兩處——這一格的 help，以及表單警示區塊裡依代碼顯示
     # 的那一行（`cloud_service_views.xml`）。改標籤或加代碼時三處連同 zh_TW.po 一起改，
     # `TestWorkloadFaultTranslations1647` 守長度、譯文與「每個代碼都有說明」。
+    # #1456 起多三個代碼：Pod 都在、卻沒有一顆就緒（代碼定義與判定見
+    # `services/workload_health.py`；selection 必須正好是 `FAULT_CODES`，測試守）。
     workload_fault_code = fields.Selection(
         selection=[
             ('quota_exceeded', 'Quota blocked'),
             ('create_failed', 'Create failed'),
             ('no_pods', 'No pods'),
+            ('oom_killed', 'OOM killed'),
+            ('crash_loop', 'Crash loop'),
+            ('not_ready', 'Not ready'),
         ],
         string='Workload Fault',
         copy=False,
         readonly=True,
         help='Set while the service is marked running but one of its workloads '
-             '(Deployment or StatefulSet) wants at least one pod and has none (#1647). '
+             '(Deployment or StatefulSet) wants at least one pod and has none (#1647), '
+             'or has pods but none of them is ready (#1456). '
              'Quota blocked: the namespace ResourceQuota rejected the pods. '
              'Create failed: the cluster rejected the pods for a reason other than the quota. '
              'No pods: the pods are missing and the cluster reported no reason. '
-             'Cleared automatically once the pods are back or the service leaves running. '
-             'It never changes the service state.',
+             'OOM killed: no pod is ready and a container was last killed for running out '
+             'of memory. '
+             'Crash loop: no pod is ready and a container keeps crashing (CrashLoopBackOff). '
+             'Not ready: the pods exist but none of them is ready, and the cluster reported '
+             'no crash. '
+             'Cleared automatically once the workloads are back to normal or the service '
+             'leaves running. It never changes the service state.',
     )
     workload_fault_detail = fields.Text(
         string='Workload Fault Detail',
         copy=False,
         readonly=True,
         groups='base.group_system',
-        help='Which workloads have no pods and what the cluster reported '
-             '(for example the quota rejection message). Administrators only.',
+        help='Which workloads have no pods or no ready pod and what the cluster reported '
+             '(for example the quota rejection message or the last termination reason). '
+             'Administrators only.',
     )
     # 有值就是旗標，不另設布林。
     workload_fault_since = fields.Datetime(
@@ -2005,6 +2098,64 @@ class CloudService(models.Model):
              'workloads of this running service (UTC): a fault first seen, changed, '
              'confirmed or cleared. Checks that find nothing new do not update it, so an '
              'old or empty value does not mean the service is not being checked.',
+    )
+    # ── 備份狀態（#1190／#1265；商用驗收 X-BK-006-1、DATA-ODOO-005-2、AI-LLM-009-1）──
+    # 由 `_cron_refresh_backup_status`（每小時）經 operator backup-status 寫入；判定規則在
+    # `services/backup_health.py`。🔴 不影響 state（#1251 Q6：例行備份 Job 不參與
+    # readiness）；值真的變了才寫（理由同 workload 觀測，見 `_apply_backup_observation`）。
+    # 只有 woow-odoo／litellm 範本有值（`_backup_supported`），其他範本恆為 unknown。
+    backup_health = fields.Selection(
+        selection=[
+            ('ok', 'Healthy'),
+            ('failed', 'Failed'),
+            ('stale', 'Overdue'),
+            ('unknown', 'Unknown'),
+        ],
+        string='Backup Health',
+        default='unknown',
+        copy=False,
+        readonly=True,
+        help='Result of the hourly backup check (only for templates whose chart takes '
+             'backups: Odoo and LiteLLM). Failed: the latest backup attempt failed after '
+             'the latest successful one. Overdue: no successful backup for more than 27 hours. '
+             'Unknown: not checked yet, never backed up yet, backups disabled, or the '
+             'template has no backup. It never changes the service state.',
+    )
+    last_backup_success_at = fields.Datetime(
+        string='Last Successful Backup',
+        copy=False,
+        readonly=True,
+        help='Start time (UTC) of the newest backup known to have succeeded. Only moves '
+             'forward: it is kept when the cluster no longer has the record.',
+    )
+    last_backup_failure_at = fields.Datetime(
+        string='Last Failed Backup',
+        copy=False,
+        readonly=True,
+        help='When (UTC) the newest known failed backup attempt ended.',
+    )
+    backup_failure_reason = fields.Char(
+        string='Backup Failure Reason',
+        copy=False,
+        readonly=True,
+        help='Reason code of the newest failed backup attempt reported by the cluster, '
+             'for example no_space (the backup volume is full), postgres_unavailable, '
+             'lock_busy, dump_failed, oom_killed, deadline_exceeded or job_failed.',
+    )
+    backup_consecutive_failures = fields.Integer(
+        string='Consecutive Backup Failures',
+        copy=False,
+        readonly=True,
+        help='How many backup attempts in a row have failed, as far as the cluster still '
+             'keeps the records (failed attempts are kept for 3 days).',
+    )
+    backup_failure_alerted_at = fields.Datetime(
+        string='Backup Failure Alerted At',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='When the system administrators were notified about the current backup '
+             'failure. One notification per failure; cleared once a backup succeeds.',
     )
     # Q4／Q33：短 poll 觀測到 initializing 的 pods ready ＝ 排進 init cron 的佇列。
     # init cron 只 claim 這些服務；not ready 時清掉（等待期間由時限約束）。
@@ -2058,6 +2209,25 @@ class CloudService(models.Model):
         copy=False,
         help='Why the ngrok sidecar has no public address, when its log says so '
              '(wrong or missing authtoken, domain already in use, restart needed).',
+    )
+    # 商用驗收 HS-013-2：最後一次「探過、有結論」的時間（有位址或確定沒有）。與上面兩格同一個咽喉
+    # 寫入（`_tunnel_facts`）；operator 掛了＝沒探，不更新。服務頁顯示它，讓租戶知道那一格多新。
+    public_tunnel_checked_at = fields.Datetime(
+        string='Public Tunnel Last Checked',
+        readonly=True,
+        copy=False,
+        help='Last time the platform asked the ngrok sidecar for the public address and got an '
+             'answer (an address, or none with or without a reason), in UTC.',
+    )
+    # 商用驗收 HS-013-2：重探窗口的終點。服務**進入** running 時由 write() 集中 stamp（與
+    # first_running_at 同一個咽喉，任何寫回 running 的路徑自動跟上），`_cron_recheck_public_tunnels`
+    # 只看窗口內的服務。只有平台寫得進來（`_OBSERVATION_CONTROL_FIELDS`）。
+    public_tunnel_recheck_until = fields.Datetime(
+        string='Re-check Public Tunnel Until',
+        readonly=True,
+        copy=False,
+        help='Until when the platform re-reads the public tunnel address every minute after '
+             'the service (re)entered the running state, in UTC.',
     )
     subdomain = fields.Char(
         string='Subdomain',
@@ -2530,7 +2700,9 @@ class CloudService(models.Model):
             # #1408：範本改釘的 image 寫回服務自己的 helm_values（之後租戶儲存設定
             # 也沿用同一組）。upgrade 失敗時 UserError 讓整筆交易回捲，這次寫入一起撤銷。
             image_changes = self._refresh_template_images()
-            values = self._assemble_deploy_values()['values']
+            # INFRA-FIX-019-1：Redeploy 部署的是範本 pin 的 chart。
+            assembled = self._assemble_deploy_values(chart_version=template.helm_chart_version)
+            values = assembled['values']
             # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
             sensitive_values = self._build_deploy_sensitive_values()
             try:
@@ -2541,6 +2713,7 @@ class CloudService(models.Model):
                     version=template.helm_chart_version,
                     values=values,
                     sensitive_values=sensitive_values or None,
+                    tenant_secret=assembled.get('tenant_secret'),
                     reset_values=True,
                     # #1647：請 operator 在套用前檢查工作區的 compute 配額放不放得下。
                     check_compute_quota=self._compute_quota_check_requested(),
@@ -2581,7 +2754,9 @@ class CloudService(models.Model):
                 'state': 'suspended' if halted else 'deploying',
                 'error_message': False,
                 'init_redeploy_requested': False,
-                'helm_revision': release_info.get('revision', self.helm_revision),
+                # #1414：0／缺值＝operator 不知道版次（舊版讀錯欄位），不覆蓋帳本。
+                'helm_revision': (reported_helm_revision(release_info.get('revision'))
+                                  or self.helm_revision),
                 # #552: redeploy runs a real helm upgrade carrying
                 # `template.helm_chart_version` (possibly empty ⇒ registry latest),
                 # so it can move the deployed chart version. Record what the
@@ -2844,9 +3019,9 @@ class CloudService(models.Model):
         # 欄位，這裡是第二道防線（本 method 還有別的 caller 時也守得住）。
         # 只擋「有供給、但不能重設」：has_admin_gui=False 的授權一直由 controller
         # 負責（model 端既有行為不變，縱深測試直接呼叫本 method 驗 state 守衛）。
-        # #1370 後續：omnigent 現在 admin_reset_supported=True，但那是 omnigent_exec
-        # （_reset_app_admin_password）的能力；helm 這條對 app_managed 仍然是假裝成功，
-        # 所以載體本身也要擋。
+        # #1370 後續：omnigent（#1774 起還有 EMQX）現在 admin_reset_supported=True，但那是
+        # omnigent_exec／emqx_exec（_reset_app_admin_password）的能力；helm 這條對
+        # app_managed 仍然是假裝成功，所以載體本身也要擋。
         if self.template_id.has_admin_gui and (
                 not self.template_id.admin_reset_supported
                 or self.template_id.admin_password_carrier == 'app_managed'):
@@ -2938,7 +3113,12 @@ class CloudService(models.Model):
         # 沿用舊 coalesced values（同一 bug class，見 #411）。chart 版本見下方
         # `pinned_chart_version`：reset **不**升版。
         # #1158：不疊方案規格——那會改 pod template，15 秒等不到新 pod（F-461-2）。
-        values = self._assemble_deploy_values(apply_plan=False)['values']
+        # INFRA-FIX-019-1：組裝要知道這次部署的 chart 版本（reset 釘服務現行版本，見下方
+        # `pinned_chart_version`；同一條 fallback 在這裡先算一次）。
+        assembled = self._assemble_deploy_values(
+            apply_plan=False,
+            chart_version=self.helm_chart_version or self.template_id.helm_chart_version)
+        values = assembled['values']
         if new_username is not None:
             # 只改送給 operator 的這份；helm_values 等 2xx 之後才落庫（2xx 前失敗
             # 叢集仍是舊帳號，DB 也必須還是舊帳號）。
@@ -2996,6 +3176,11 @@ class CloudService(models.Model):
                 # 值必 500（#449）。判別器＝template 欄位，不得在此自建 slug／chart
                 # allowlist——與 has_admin_gui 同一紀律（#357 C01）。
                 admin_password_carrier=self.template_id.admin_password_carrier,
+                tenant_secret=assembled.get('tenant_secret'),
+                # INFRA-FIX-018：DB 快照的方案資源鍵可能是舊 overlay 寫的，與叢集現況
+                # 不同；請 operator 在 helm_secret 路先把這些鍵釘到叢集目前的值，
+                # reset 才不會改 pod template（改了就撞 15 秒 --atomic，必敗）。
+                preserve_value_paths=self._reset_pod_template_value_paths(),
             )
         except PaaSOperatorTimeoutError as e:
             # #461 C11′ (commit-on-secret) — this branch survived the async
@@ -3179,9 +3364,27 @@ class CloudService(models.Model):
             "Reset failed and the password was not changed. Check the service status "
             "and try again.")
 
+    @staticmethod
+    def _emqx_password_is_legal(password):
+        """EMQX 5.8 emqx_dashboard_admin:legal_password 的規則：8–64 個可見 ASCII 字元，且
+        字母／數字／符號至少兩類（#1774；沙盒以平台釘的 5.8.9 實測）。
+
+        ``_generate_admin_password`` 的 token_urlsafe(24) 約有 0.1% 全是字母——那一把送去
+        EMQX 會被拒（``Error: Bad password``），租戶就撞到一次莫名的「重設失敗」。
+        """
+        if not isinstance(password, str) or not 8 <= len(password) <= 64:
+            return False
+        if any(not 33 <= ord(ch) <= 126 for ch in password):
+            return False
+        kinds = {
+            'alpha' if ch.isalpha() else 'digit' if ch.isdigit() else 'symbol'
+            for ch in password
+        }
+        return len(kinds) >= 2
+
     def _reset_app_admin_password(self):
         """#1370／#1186：重設 app 自管的管理員密碼（Odoo base.user_admin／n8n owner／
-        Omnigent admin）。
+        Omnigent admin／EMQX Dashboard admin（#1774））。
 
         與 ``_reset_admin_password``（helm Secret／config.json）是兩條不同的契約：這兩個
         app 的密碼權威在 app 自己的 DB，operator exec 一支腳本直接改，**不 helm
@@ -3211,7 +3414,7 @@ class CloudService(models.Model):
         )
 
         kind = self.template_id.app_admin_reset_kind or 'none'
-        if kind not in ('odoo_exec', 'n8n_exec', 'omnigent_exec'):
+        if kind not in ('odoo_exec', 'n8n_exec', 'omnigent_exec', 'emqx_exec'):
             raise UserError(_("This service does not support resetting its admin password."))
 
         # 同 _reset_admin_password：列鎖序列化同一台服務的並發 Reset。
@@ -3244,10 +3447,17 @@ class CloudService(models.Model):
             raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         new_password = self._generate_admin_password()
+        if kind == 'emqx_exec':
+            # EMQX 自己會擋「只有一類字元」的密碼：重鑄到合規為止（仍走唯一生成點）。
+            for _attempt in range(20):
+                if self._emqx_password_is_legal(new_password):
+                    break
+                new_password = self._generate_admin_password()
         reset = {
             'odoo_exec': client.reset_odoo_admin_password,
             'n8n_exec': client.reset_n8n_owner_password,
             'omnigent_exec': client.reset_omnigent_admin_password,
+            'emqx_exec': client.reset_emqx_admin_password,
         }[kind]
         unknown_message = _(
             "Reset status unknown — the request timed out before the service confirmed "
@@ -3304,9 +3514,10 @@ class CloudService(models.Model):
         # ================= 提交點之後：只剩記帳（#525 B3） =================
         try:
             with self.env.cr.savepoint():
-                if kind in ('odoo_exec', 'omnigent_exec'):
-                    # omnigent：chart Secret 的 admin_password 只在首次開機用；存回憑證記錄
-                    # 讓平台與 app 一致（redeploy 重送也是 no-op）。
+                if kind in ('odoo_exec', 'omnigent_exec', 'emqx_exec'):
+                    # omnigent／EMQX：chart Secret 的 admin_password 只在首次開機用；存回憑證
+                    # 記錄讓平台與 app 一致（下次 redeploy 把同一組值帶進 chart Secret，對已
+                    # 開機的 app 是 no-op；資料磁碟重建時首次開機也會用這組新值）。
                     self._set_admin_password_secret(new_password)
                 else:
                     vals = {'n8n_owner_password': new_password}
@@ -3362,6 +3573,32 @@ class CloudService(models.Model):
         if remaining:
             self.env.ref('woow_paas_platform.ir_cron_deploy_cloud_services')._trigger()
 
+    def _try_lock_lifecycle_rows(self):
+        """RACE-09: NOWAIT row lock before any external helm side effect.
+
+        ORM writes stay buffered while an operator request is in flight, so
+        ``state='deleting'`` / ``'deploying'`` alone does not serialize a
+        concurrent deploy cron against a tenant delete.
+        """
+        ids = tuple(sorted(set(self.ids)))
+        if not ids:
+            return True
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    'SELECT id FROM %s WHERE id IN %%s '
+                    'ORDER BY id FOR UPDATE NOWAIT' % self._table, [ids])
+                locked = {row[0] for row in self.env.cr.fetchall()}
+        except (psycopg2.errors.LockNotAvailable,
+                psycopg2.errors.SerializationFailure):
+            return False
+        if locked != set(ids):
+            raise UserError(_('One or more services no longer exist.'))
+        fields_ = ['state', 'helm_release_name', 'helm_namespace']
+        self.flush_recordset(fields_)
+        self.invalidate_recordset(fields_)
+        return True
+
     def _execute_deploy(self):
         """Execute the actual deployment for a single pending service."""
         self.ensure_one()
@@ -3370,6 +3607,17 @@ class CloudService(models.Model):
             PaaSOperatorError,
             PaaSOperatorConnectionError,
         )
+
+        # RACE-09: serialize against a concurrent tenant delete / cleanup.
+        # A busy row means another lifecycle operation owns it: leave the
+        # service untouched so the next cron pass re-evaluates it.
+        if not self._try_lock_lifecycle_rows():
+            _logger.warning(
+                "Deploy skipped service=%s: another lifecycle operation "
+                "holds the row", self.id)
+            return
+        if self.state in ('deleting',):
+            return
 
         _logger.info("Deploying service %s (id=%s)", self.name, self.id)
         self.write({'state': 'deploying'})
@@ -3395,7 +3643,8 @@ class CloudService(models.Model):
         # #411: values 組裝走單一真相源 helper（與 redeploy / reconfigure /
         # reset admin password 共用同一條全量管線）。expose_config 亦由 helper
         # 重算，取代 create 時存在 deploy_params 的等價值（收斂雙寫）。
-        assembled = self._assemble_deploy_values()
+        # INFRA-FIX-019-1：開通部署的是範本 pin 的 chart。
+        assembled = self._assemble_deploy_values(chart_version=template.helm_chart_version)
         merged_values = assembled['values']
         expose_config = assembled['expose_config']
 
@@ -3497,6 +3746,7 @@ class CloudService(models.Model):
                 sensitive_values=sensitive_values or None,
                 create_namespace=True,
                 expose=expose_config,
+                tenant_secret=assembled.get('tenant_secret'),
             )
 
             # Patch MCP sidecar if enabled
@@ -3519,7 +3769,9 @@ class CloudService(models.Model):
 
             # Helm install done — update release info and clean up deploy params
             self.write({
-                'helm_revision': release_info.get('revision', 1),
+                # #1414：0／缺值＝operator 不知道版次；首裝記 1，不記 0。
+                'helm_revision': (reported_helm_revision(release_info.get('revision'))
+                                  or self.helm_revision or 1),
                 # #552: record the chart version helm ACTUALLY resolved. With an
                 # empty `template.helm_chart_version` no `--version` is sent and
                 # helm picks the registry's latest — the ledger used to keep the
@@ -3980,7 +4232,7 @@ class CloudService(models.Model):
     #  #411 — 全量 values 組裝（單一真相源）                              #
     # ------------------------------------------------------------------ #
 
-    def _assemble_deploy_values(self, apply_plan=True, values=None, plan=None):
+    def _assemble_deploy_values(self, apply_plan=True, values=None, plan=None, chart_version=None):
         """組裝部署用的全量「非敏感」helm values ＋ expose_config（單一真相源）。
 
         Fresh install 與既存 release 升級**共用這一條**組裝管線，讓 helm 在
@@ -4035,12 +4287,23 @@ class CloudService(models.Model):
         ``sensitive_values``（admin_password）不在此組：它是敏感值、且 stored
         release values 本就不含它，由各呼叫點自組（reset 路徑帶新密碼）。
 
+        INFRA-FIX-019-1：``chart_version``＝這次**實際要部署**的 chart 版本（Redeploy／開通＝
+        範本 pin；reset／修改配置／換方案＝服務現行版本）。範本 password spec 標了
+        ``secret_ref`` 且 chart 版本 ≥ 其 ``since_chart`` 時，租戶憑證（ngrok token、Tailscale
+        auth key）拿出 values：原路徑寫 ``""``、加 ``tenantSecret.{name, revision,
+        nonEmptyKeys}``，值放進回傳的 ``tenant_secret`` 交給 operator 寫進
+        ``<release>-tenant-secret``（helm release 之外）——helm 把每個 revision 的 values 與
+        manifest 都存在 release 歷史裡，清除後舊 token 仍讀得到。不給（盤點腳本、舊呼叫端）
+        或 chart 較舊＝舊路徑（token 照舊在 values），``tenant_secret`` 為 None。見
+        ``services/tenant_secret.py``。
+
         Returns:
             dict: {
                 'values': 全量非敏感 helm values（dict）,
                 'expose_config': ingress expose dict 或 None（Cloudflare tunnel；
                                 僅 fresh install 用，upgrade endpoint 無 expose
                                 參數，升級路徑忽略此鍵）,
+                'tenant_secret': INFRA-FIX-019-1 送 operator 的 ``{name, data}`` 或 None,
             }
         """
         self.ensure_one()
@@ -4170,10 +4433,36 @@ class CloudService(models.Model):
                 else:
                     values[key] = val
 
+        # INFRA-FIX-019-1：最後一步——前面的 injector 不會再把值寫回 values。
+        values, tenant_secret = split_tenant_secret(
+            values, self._tenant_secret_refs(chart_version), self.helm_release_name,
+            self._tenant_secret_revision_key())
         return {
             'values': values,
             'expose_config': self._build_expose_config(),
+            'tenant_secret': tenant_secret,
         }
+
+    def _tenant_secret_refs(self, chart_version):
+        """INFRA-FIX-019-1：這次部署要拿出 values 的 ``(helm 路徑, Secret 鍵)``。
+
+        沒給版本、specs 讀不懂 ⇒ 空（舊路徑：token 至少送得到 chart，不會被清成空）。
+        """
+        self.ensure_one()
+        if not chart_version:
+            return []
+        specs = self.template_id._parse_helm_value_specs_or_fail()
+        if specs is SPECS_UNPARSEABLE:
+            return []
+        return secret_refs(specs, chart_version)
+
+    def _tenant_secret_revision_key(self):
+        """INFRA-FIX-019-1：``tenantSecret.revision`` 的 HMAC 密鑰（平台自己的 database.secret）。
+
+        revision 存在 release 歷史裡（values 與 manifest 都有），用純雜湊就是一枚可以比對的
+        token 指紋；用平台密鑰做 HMAC 則只看得出「變了沒」。
+        """
+        return self.env['ir.config_parameter'].sudo().get_param('database.secret')
 
     def _build_expose_config(self, *, allow_pending=False):
         """Cloudflare tunnel ingress expose 設定（fresh install 用）。
@@ -4519,6 +4808,28 @@ class CloudService(models.Model):
         for key, value in _N8N_RUNTIME_DEFAULT_CONFIG.items():
             if not str(config.get(key) or '').strip():
                 config[key] = value
+        return values
+
+    @classmethod
+    def _mint_n8n_encryption_key(cls, values, template_slug):
+        """開通 n8n 時產生加密金鑰，寫進 ``main.secret.N8N_ENCRYPTION_KEY``（就地修改並回傳）。
+
+        見 ``N8N_ENCRYPTION_KEY_PATH`` 上方註解（DATA-N8N-013-1）。只給開通呼叫——部署組裝
+        不得呼叫，否則存量服務會拿到一把與 PVC config 不同的金鑰而起不來。已有非空值（重跑、
+        管理員搬遷時寫入的舊金鑰）不覆寫。金鑰走平台唯一的憑證生成點
+        ``_generate_admin_password``（``token_urlsafe(24)``，32 字元，不弱於 n8n 自己的
+        ``randomBytes(24)``）。其他範本 no-op。
+        """
+        if template_slug != 'n8n':
+            return values
+        node = values
+        for key in N8N_ENCRYPTION_KEY_PATH[:-1]:
+            if not isinstance(node.get(key), dict):
+                node[key] = {}
+            node = node[key]
+        leaf = N8N_ENCRYPTION_KEY_PATH[-1]
+        if not str(node.get(leaf) or '').strip():
+            node[leaf] = cls._generate_admin_password()
         return values
 
     @staticmethod
@@ -5401,6 +5712,17 @@ class CloudService(models.Model):
         self.ensure_one()
         return bool(self.template_id.has_public_tunnel_address)
 
+    def _chart_has_vpn_node_status(self):
+        """本服務的 chart 有沒有一個要即時回讀給租戶看的 VPN 節點狀態（INFRA-FIX-005）。
+
+        唯一事實源是 `cloud_app_template.has_vpn_node_status`（能力 gate 一律收斂成單一欄位，
+        見該欄位註解與 docs/decisions/patterns/capability-gate-single-source-field.md）。
+        `/node-status` 端點、service payload 與前端卡片都必須讀本方法／本欄位，**不得**任何
+        一端自建 slug 名單。
+        """
+        self.ensure_one()
+        return bool(self.template_id.has_vpn_node_status)
+
     def _probe_public_tunnel_address(self, client):
         """問 operator 一次：ngrok agent 現在廣告的對外位址是什麼。
 
@@ -5481,6 +5803,16 @@ class CloudService(models.Model):
             return env._(
                 'ngrok needs a verified account and authtoken (ERR_NGROK_4018). Verify your '
                 'ngrok account and enter its authtoken in Configuration.')
+        if code == 'ERR_NGROK_9014':
+            # 商用驗收 EMQX-020-1：legacy／免費帳號被拒的是 PROXY protocol（EMQX chart 0.1.6 起預設
+            # `ngrok.proxyProtocol=true`），token 其實有效——通用句「請檢查 authtoken 與網域」會讓
+            # 租戶永遠查不到問題。⚠ 不寫成「不支援 TCP」（更正版缺陷）。
+            return env._(
+                'Your ngrok account plan does not allow a feature this service uses '
+                '(ERR_NGROK_9014) — usually the PROXY protocol that passes the real client '
+                'address. The authtoken itself is fine. Upgrade the ngrok account to a paid plan '
+                '(Pay-as-you-go), or turn off the PROXY protocol option in Configuration if this '
+                'service offers one.')
         if re.fullmatch(r'ERR_NGROK_[0-9]{1,5}', code):
             return env._(
                 'The ngrok agent could not connect (%(code)s, see '
@@ -5601,6 +5933,39 @@ class CloudService(models.Model):
             values['auth'] = {'apiServerKey': gateway_api_key}
         return values
 
+    def _reset_pod_template_value_paths(self):
+        """INFRA-FIX-018（商用驗收 INFRA-HS-002-1）：reset 時要以**叢集現況**為準的 values 路徑。
+
+        reset 的契約是「只動憑證，pod template 位元不變」——operator 的 reset 是
+        ``helm upgrade --atomic --timeout 15s``，pod template 一變（StatefulSet 滾動、RWO
+        重新 attach 45 秒以上）就必敗，還各留 2 筆 failed revision。``apply_plan=False`` 已經
+        不疊方案規格，但送出去的仍是 DB 的 ``helm_values`` 快照，而快照的方案資源鍵可能與
+        叢集不同：#1637 把 headscale 的方案 CPU／RAM 從頂層 ``resources`` 搬到
+        ``headscale.resources``，之後的 deploy／redeploy／reconfigure 都寫新鍵，但 DB 快照留著
+        舊的頂層鍵（chart 把它 deep-merge 進 headplane）⇒ reset 把兩個容器的資源對調 ⇒ 必敗
+        （Headscale 238 實測 3/3，helm rev 8～13 全 failed）。
+
+        這裡回傳會左右 pod template 的**方案資源**鍵：方案寫入路徑（``_plan_spec_paths``，chart
+        真正讀的那個）＋舊 overlay 的頂層 ``resources``（路徑搬家的範本才有殘值）。operator 在
+        helm_secret 路 upgrade 前用叢集目前的值（含「不存在」）覆寫它們。
+
+        只列資源：儲存大小不改 pod template（PVC 不可變欄位另有 #1407 preflight 擋）。只有
+        helm_secret 載體會送——config_json 路的 operator 預算沒有空位（見 operator
+        ``RESET_LIVE_VALUES_TIMEOUT_SECONDS``），也不屬於這個缺陷的路徑。
+
+        路徑與供給鏈同源（讀 ``_PLAN_SPEC_VALUE_PATHS``，不自建 slug 名單）。
+        """
+        self.ensure_one()
+        template = self.template_id
+        if template.admin_password_carrier != 'helm_secret':
+            return []
+        resources = tuple(_plan_spec_paths(template).get('resources')
+                          or _PLAN_SPEC_DEFAULT_PATHS['resources'])
+        paths = ['.'.join(resources)]
+        if resources != _PLAN_SPEC_DEFAULT_PATHS['resources']:
+            paths.append('.'.join(_PLAN_SPEC_DEFAULT_PATHS['resources']))
+        return paths
+
     def _rollback_preserved_value_paths(self):
         """#1433：「回復版本」時必須維持**目前值**的 helm values 路徑（平台管的憑證）。
 
@@ -5641,6 +6006,10 @@ class CloudService(models.Model):
         for key in self._rollback_password_spec_paths():
             if key not in paths:
                 paths.append(key)
+        # INFRA-FIX-019-1：values 裡的 ``tenantSecret``（名稱＋revision）指向目前那把憑證；
+        # 回復到別的 revision 也要指向目前的（Secret 本身不跟著回復——同上「憑證不跟著回復」）。
+        if has_secret_refs(template._parse_helm_value_specs()) and 'tenantSecret' not in paths:
+            paths.append('tenantSecret')
         return paths
 
     def _rollback_password_spec_paths(self):
@@ -5669,6 +6038,27 @@ class CloudService(models.Model):
                 if isinstance(key, str) and key and not key.startswith('_init.'):
                     keys.append(key)
         return keys
+
+    def _rollback_feature_switches(self):
+        """AI-OD-006-1：「回復版本」時跟著守衛維持目前值的平台功能開關（``{路徑: [守衛]}``）。
+
+        open-design 244 回復到 MCP 上線前的 revision（values 沒有 ``mcp.enabled``）⇒ 內建
+        MCP 容器消失、``/mcp`` 401，要管理員 Redeploy 才回來。開關由範本決定、不是租戶設定，
+        不該被「回復一般設定」帶走——但它與 image 是一組（舊 image 沒有 MCP runtime，硬開會
+        CrashLoop），所以由範本宣告守衛，operator 只在守衛相同時保留（``preserve_when_equal``）。
+
+        與 ``_rollback_preserved_value_paths``（憑證，無條件保留）分開：這裡的路徑不是憑證，
+        不進回復後的公開設定同步（``_sync_rollback_config``）的排除清單。範本欄位已由
+        constraint 驗過格式；萬一讀不懂就回空（＝原本的回復行為），不擋回復。
+        """
+        self.ensure_one()
+        parsed = self.template_id._parse_rollback_feature_switches()
+        if parsed is None:
+            _logger.warning(
+                'Template %s has unreadable rollback_feature_switches; rolling back '
+                'without feature switches', self.template_id.id)
+            return {}
+        return parsed
 
     def _build_odoo_sensitive_values(self):
         """#1130：woow-odoo 的初始管理員密碼 sensitive value（odoo 專屬 helper）。
@@ -5880,6 +6270,30 @@ class CloudService(models.Model):
             'ledger_digest': rollback_config.ledger_digest(self._helm_values_dict()),
         }, sort_keys=True)})
 
+    def _rollback_sync_paths(self, specs, preserved, values):
+        """回復後要從目標 revision 投影回帳本的路徑 → kind。
+
+        兩組：spec 的公開設定（421faf23）＋帳本裡範本管理的 image 參照（AI-OMN-005-2）。
+        後者與 #1408 Redeploy 刷新同一範圍：``_iter_image_refs`` 找到的參照的
+        ``_IMAGE_REF_KEYS``，加上 Omnigent 平台擁有的字串 ``runner.image``。不同步
+        image 的話，回復後叢集跑舊 image、帳本卻還是新的，租戶下一次儲存設定（沿用
+        帳本 image）就把服務悄悄前滾，與回復對話框「應用設定會回到該版本當時儲存的值」
+        矛盾。管理員 Redeploy 仍套用範本當下的 pin（#1408 的既定語意），不受影響。
+        """
+        self.ensure_one()
+        public = rollback_config.public_paths(specs, preserved)
+        candidates = [
+            '.'.join(path + (key,))
+            for path, _ref in _iter_image_refs(values) for key in _IMAGE_REF_KEYS
+        ]
+        runner = values.get('runner') if isinstance(values, dict) else None
+        if (isinstance(runner, dict) and isinstance(runner.get('image'), str)
+                and runner['image'].startswith(_OMNIGENT_HOST_IMAGE + ':')):
+            candidates.append('runner.image')
+        images = rollback_config.image_paths(
+            candidates, self.template_id._tenant_value_keys(), preserved, taken=public)
+        return {**images, **public}
+
     def _sync_rollback_config(self, client, release):
         """Ready 前同步固定回滾 revision；失敗可重試，舊結果不能覆蓋新操作。"""
         self.ensure_one()
@@ -5894,7 +6308,7 @@ class CloudService(models.Model):
             specs = self.template_id._parse_helm_value_specs_or_fail()
             if specs is SPECS_UNPARSEABLE:
                 return False
-            paths = rollback_config.public_paths(specs, preserved)
+            paths = self._rollback_sync_paths(specs, preserved, self._helm_values_dict())
             response = client.get_config_projection(
                 namespace=self.helm_namespace, release_name=self.helm_release_name,
                 revision=pending['revision'], paths=list(paths), excluded_paths=preserved,
@@ -5909,7 +6323,8 @@ class CloudService(models.Model):
             self.invalidate_recordset(['helm_values', 'rollback_config_sync', 'last_upgraded_at'])
             current = self._helm_values_dict()
             latest_specs = self.template_id._parse_helm_value_specs_or_fail()
-            if rollback_config.public_paths(latest_specs, self._rollback_preserved_value_paths()) != paths:
+            if self._rollback_sync_paths(
+                    latest_specs, self._rollback_preserved_value_paths(), current) != paths:
                 return False
             if rollback_config.ledger_digest(current) != pending['ledger_digest']:
                 return False
@@ -6277,7 +6692,8 @@ class CloudService(models.Model):
                     drift = {
                         field: (service[field], value)
                         for field, value in facts.items()
-                        if field != 'last_release_sync_at'
+                        # 兩個「問過的時間」每次都會變，不是漂移。
+                        if field not in ('last_release_sync_at', 'public_tunnel_checked_at')
                         and service[field] != value
                     }
                     # 有沒有漂移都寫同一個 dict：`drift` 只用於 log。
@@ -7179,6 +7595,44 @@ class CloudService(models.Model):
                 _logger.exception(
                     "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)
 
+    def _cron_recheck_public_tunnels(self):
+        """商用驗收 HS-013-2：剛進入 running 的服務，每分鐘重讀一次 ngrok sidecar 廣告的對外位址。
+
+        頻率（每分鐘）寫在 ``cloud_service_cron.xml``；範圍＝``public_tunnel_recheck_until`` 還沒過的
+        running 服務（窗口由 write() 在服務進入 running 時 stamp，見 ``PUBLIC_TUNNEL_RECHECK_MINUTES``）。
+        之後的新鮮度照舊由每日對帳 ``_cron_reconcile_release_facts`` 維持。
+
+        只讀 → 回寫對外位址三格（``_tunnel_facts``，與 poll／對帳同一個 producer），**一行 state／
+        error_message 都不寫**：這是觀測，不是狀態機。operator 失敗＝這一輪沒探（``_probe_public_tunnel``
+        回 None）⇒ 不寫，也不更新「最後檢查時間」。逐台 savepoint（同每日對帳）：一台失敗不中斷整批，
+        整批由 cron 框架在結束時 commit——本方法不自己 commit（窗口內通常只有個位數台、每台一次 HTTP）。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('public_tunnel_recheck_until', '>=', fields.Datetime.now()),
+        ])
+        if not services:
+            return
+        from ..services.paas_operator import get_paas_operator_client
+        client = get_paas_operator_client(self.env)
+        if not client:
+            _logger.warning(
+                "recheck-public-tunnels: operator client 未設定，本輪未執行（%d 台在窗口內）",
+                len(services))
+            return
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                # ⚠ #1052 標記（非裁定）：逐筆 batch isolation，同每日對帳 cron 的站點形狀。
+                with self.env.cr.savepoint():
+                    address, error = service._probe_public_tunnel(client)
+                    vals = service._tunnel_facts(address, error)
+                    if vals:
+                        service.sudo().write(vals)
+            except Exception:
+                _logger.exception(
+                    "recheck-public-tunnels failed for service %s (id=%s)", *service_label)
+
     def _timeout_classify(self, detail):
         """detail → ``(原因分型, hint key)``（#1417）；hint key 為 None＝沒有方向可給。
 
@@ -7902,7 +8356,9 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         vals = {
-            'helm_revision': release.get('revision', self.helm_revision),
+            # #1414：0／缺值＝不知道，保留帳本原值（與 chart_version 的「未知不覆蓋」同語意）。
+            'helm_revision': (reported_helm_revision(release.get('revision'))
+                              or self.helm_revision),
             'helm_chart_version': (
                 release.get('chart_version') or self.helm_chart_version
             ),
@@ -7929,12 +8385,27 @@ class CloudService(models.Model):
         # 對外位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
         # `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 帳本原值不動；
         # `''` ＝ 探過而且現在沒有位址 ⇒ 清掉（留著一個連不上的舊位址比空值更糟）。
-        if tunnel_address is not None:
-            vals['public_tunnel_url'] = tunnel_address or False
-            # #1559：原因只描述「現在沒有位址」——有位址就清掉；同一個「探過才寫」的閘門。
-            vals['public_tunnel_error'] = (
-                False if tunnel_address else (tunnel_error or False))
+        vals.update(self._tunnel_facts(tunnel_address, tunnel_error))
         return vals
+
+    def _tunnel_facts(self, tunnel_address, tunnel_error):
+        """對外位址探測結果 → 帳本欄位。**對外位址三格的單一 producer。**
+
+        `_release_facts`（背景 poll／每日對帳）與 `_cron_recheck_public_tunnels`（進入 running 後的
+        重探窗口）都從這裡拿 vals——三格一起寫、一起不寫，不會出現「位址更新了、錯誤原因還是舊的」。
+
+        `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 回空 dict，帳本原值不動；
+        `''` ＝ 探過而且現在沒有位址 ⇒ 清掉位址（留著一個連不上的舊位址比空值更糟）。
+        """
+        if tunnel_address is None:
+            return {}
+        return {
+            'public_tunnel_url': tunnel_address or False,
+            # #1559：原因只描述「現在沒有位址」——有位址就清掉；同一個「探過才寫」的閘門。
+            'public_tunnel_error': False if tunnel_address else (tunnel_error or False),
+            # 商用驗收 HS-013-2：服務頁的「最後檢查」。
+            'public_tunnel_checked_at': fields.Datetime.now(),
+        }
 
     # ------------------------------------------------------------------ #
     #  #1647：running 服務的 workload 觀測（期望有 Pod、實際一顆都沒有）   #
@@ -7981,6 +8452,217 @@ class CloudService(models.Model):
         if self.state != 'running' or not self._workload_fault_confirmed():
             return None
         return self.workload_fault_code
+
+    # ------------------------------------------------------------------ #
+    #  備份狀態（#1190／#1265；商用驗收 X-BK-006-1、DATA-ODOO-005-2、AI-LLM-009-1）#
+    # ------------------------------------------------------------------ #
+
+    def _backup_supported(self):
+        """這台服務的範本有沒有由 operator backup-status 回報的備份機制。
+
+        依範本 ``helm_chart_name`` 最後一段（woow-odoo／litellm），與
+        ``woow_odoo_readiness.chart_name_of`` 同一個拆法。operator 端另依 release 實際物件
+        再判一次（沒有 CronJob／db-agent 就回 ``supported: false``），所以這裡只是「值得問」。
+        """
+        self.ensure_one()
+        return chart_name_of(self.template_id.helm_chart_name) in backup_health.BACKUP_CHARTS
+
+    def _backup_status_public(self):
+        """給 /woow 服務詳情的唯讀備份卡（DATA-ODOO-005-2）。只讀已存值，不呼叫 operator。
+
+        - ``supported``：卡片畫不畫的唯一判準（capability-gate-single-source-field）。
+        - ``paused``：停權中（scale 0）不會有新備份（由 state 推導，不讀 ``backup_health``；
+          #1265 Q22）。
+        - 原因只給代碼；文案由前端依代碼對照，不轉送叢集原文。
+        """
+        self.ensure_one()
+        if not self._backup_supported():
+            return {'supported': False}
+        service = self.sudo()
+
+        def iso(value):
+            return value.replace(tzinfo=pytz.UTC).isoformat() if value else None
+
+        return {
+            'supported': True,
+            'health': service.backup_health or 'unknown',
+            'paused': service.state == 'suspended',
+            'last_success_at': iso(service.last_backup_success_at),
+            'last_failure_at': iso(service.last_backup_failure_at),
+            'failure_reason': service.backup_failure_reason or None,
+            'consecutive_failures': service.backup_consecutive_failures or 0,
+            'stale_hours': backup_health.BACKUP_STALE_HOURS,
+        }
+
+    def _apply_backup_observation(self, payload, now=None):
+        """把一份 operator backup-status 回應落到備份欄位上（**唯一寫入者**）。
+
+        🔴 不寫 ``state``／``error_message``：備份失敗是要讓人知道的事實，不是服務沒起來。
+        🔴 值真的變了才寫：本方法每小時對每台 running 的 woow-odoo／litellm 服務跑一次，
+        每次都寫會與每日對帳、生命週期 cron 的 REPEATABLE READ 長交易互撞（同
+        ``_apply_workload_observation`` 的理由）。
+
+        轉成 ``failed`` 時通知系統管理員一次（``platform_monitor._report_backup_failure``，
+        送不出去就不記標記、下一輪重試）；租戶端由 /api/notifications 依 ``backup_health``
+        直接列出（不另存標記）。恢復（不再是 failed）時清掉告警標記。
+
+        本方法不 commit、不 rollback、不攔例外：回捲單位由呼叫端決定。
+
+        Args:
+            payload: operator 回應 dict；``None`` ＝ 這一輪讀取失敗（只依時間重算 health）。
+
+        Returns:
+            ``'unchanged'``／``'raised'``（新轉成 failed）／``'stale'``（新轉成 stale）／
+            ``'cleared'``（離開 failed／stale）／``'updated'``（其他欄位變動）。
+        """
+        self.ensure_one()
+        service = self.sudo()
+        now = now or fields.Datetime.now()
+        current = {name: service[name] for name in _BACKUP_FACT_FIELDS}
+        facts = backup_health.next_backup_facts(current, payload, service.deployed_at, now)
+        changed = {name: value for name, value in facts.items()
+                   if (current[name] or False) != (value or False)}
+        previous = current['backup_health'] or 'unknown'
+        health = facts['backup_health']
+        if health != 'failed' and service.backup_failure_alerted_at:
+            changed['backup_failure_alerted_at'] = False
+        if changed:
+            service.write(changed)
+        if health == previous:
+            outcome = 'updated' if changed else 'unchanged'
+        elif health == 'failed':
+            outcome = 'raised'
+            _logger.warning(
+                "[X-BK-006] backup failed for service id=%s %s (namespace %s, release %s): "
+                "reason=%s consecutive=%s last_success=%s", service.id, service.name,
+                service.helm_namespace, service.helm_release_name, service.backup_failure_reason,
+                service.backup_consecutive_failures, service.last_backup_success_at)
+        elif health == 'stale':
+            outcome = 'stale'
+            _logger.warning(
+                "[X-BK-006] no successful backup for more than %sh: service id=%s %s "
+                "(last success %s)", backup_health.BACKUP_STALE_HOURS, service.id,
+                service.name, service.last_backup_success_at)
+        elif previous in ('failed', 'stale'):
+            outcome = 'cleared'
+        else:
+            outcome = 'updated'
+        if health == 'failed' and not service.backup_failure_alerted_at:
+            monitor = self.env['woow_paas_platform.platform_monitor']
+            if monitor._report_backup_failure(service):
+                service.write({'backup_failure_alerted_at': now})
+        return outcome
+
+    @api.model
+    def _cron_refresh_backup_status(self):
+        """X-BK-006-1／#1190：每小時讀一次 running 的 woow-odoo／litellm 服務的備份狀態。
+
+        2026-10-16 商用驗收：備份卷滿時 Odoo 備份 Job 3 次重試後 BackoffLimitExceeded，
+        唯一的訊號是叢集通用 KubeJobFailed 寄 ops 信箱（約 20 分延遲、與 28 筆舊告警混在
+        一起）；平台 readiness 刻意豁免備份 Job、服務 API 沒有任何備份欄位，客戶看到的服務
+        永遠 running。LiteLLM 空間不足時只在 sidecar log 印 WARNING。本條補上平台這一側：
+        讀 operator ``backup-status``、寫備份事實、轉 failed 時通知系統管理員；租戶在服務頁
+        備份卡與通知中心看得到。
+
+        節奏同 ``_cron_check_running_workloads``：游標記在 ``platform_monitor`` 單例
+        （``backup_check_cursor``），依 id 升冪輪替、逐台 commit、wall 預算
+        ``BACKUP_CHECK_BUDGET_SECONDS``、連續 ``BACKUP_CHECK_TRANSPORT_ABORT`` 次連不上就中止；
+        operator 太舊（端點 404）時第一台之後就中止本趟。**絕不碰 state**。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ], order='id').filtered(lambda s: s._backup_supported())
+        if not services:
+            return
+
+        from ..services.paas_operator import (
+            PaaSOperatorAPIError,
+            PaaSOperatorConnectionError,
+            PaaSOperatorTimeoutError,
+            get_paas_operator_client,
+        )
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            _logger.info("backup-check: operator client 未設定，本趟未執行（%d 筆）", len(services))
+            return
+
+        monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+        cursor = monitor.backup_check_cursor
+        ordered = (services.filtered(lambda s: s.id > cursor)
+                   + services.filtered(lambda s: s.id <= cursor))
+        started = _backup_check_clock()
+        counts = {}
+        raised = []
+        failed = transport_streak = over_budget = 0
+        stopped_early = ''
+        last_id = cursor
+        for index, service in enumerate(ordered):
+            if _backup_check_clock() - started > BACKUP_CHECK_BUDGET_SECONDS:
+                over_budget = len(ordered) - index
+                break
+            service_id = service.id
+            last_id = service_id
+            try:
+                service.invalidate_recordset()
+                if not service.exists() or service.state != 'running':
+                    continue
+                payload = client.get_backup_status(
+                    namespace=service.helm_namespace,
+                    release_name=service.helm_release_name,
+                )
+                outcome = service._apply_backup_observation(payload)
+                self.env.cr.commit()
+                counts[outcome] = counts.get(outcome, 0) + 1
+                transport_streak = 0
+                if outcome == 'raised':
+                    raised.append((service.id, service.name, service.backup_failure_reason))
+            except (PaaSOperatorConnectionError, PaaSOperatorTimeoutError) as exc:
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak += 1
+                _logger.warning("backup-check: service id=%s 連不上 operator 或逾時：%s",
+                                service_id, exc)
+                if transport_streak >= BACKUP_CHECK_TRANSPORT_ABORT:
+                    stopped_early = 'operator 連續 %d 次連不上或逾時' % transport_streak
+                    break
+            except PaaSOperatorAPIError as exc:
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                if exc.status_code == 404 and not counts:
+                    # 舊 operator 沒有這個端點：對每一台的回答都一樣，不逐台白打。
+                    stopped_early = 'operator 尚未提供 backup-status（HTTP 404）'
+                    break
+                _logger.warning("backup-check: service id=%s operator 回錯（HTTP %s）：%s",
+                                service_id, exc.status_code, exc)
+            except Exception:
+                # ⚠ #1052 標記（非裁定）：逐筆 batch isolation，同 workload 檢查的站點。
+                self.env.cr.rollback()
+                failed += 1
+                transport_streak = 0
+                _logger.exception("backup-check: service id=%s 檢查失敗（本筆略過）", service_id)
+
+        if last_id != cursor:
+            try:
+                with self.env.cr.savepoint():
+                    monitor.write({'backup_check_cursor': last_id})
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.warning("backup-check: 輪替游標寫回失敗（id %s→%s）", cursor, last_id,
+                                exc_info=True)
+
+        _logger.info(
+            "backup-check: 有備份機制的 running 服務 %d 筆，結果 %s，讀取失敗 %d 筆，"
+            "預算用完未檢查 %d 筆%s；游標 id %s→%s",
+            len(services), ', '.join('%s %d' % kv for kv in sorted(counts.items())) or '無',
+            failed, over_budget, ("；提前中止：%s" % stopped_early) if stopped_early else "",
+            cursor, last_id)
+        for service_id, name, reason in raised:
+            _logger.warning("  備份失敗 id=%s %s  %s", service_id, name, reason)
 
     def _apply_workload_observation(self, status):
         """把一份 operator status（帶 ``include_workloads``）的 workload 觀測落到欄位上。
@@ -8036,7 +8718,7 @@ class CloudService(models.Model):
             service.write(cleared)
             _logger.info(
                 "[#1647] workload fault cleared for service id=%s %s (was %s since %s): "
-                "every workload that wants pods has pods again",
+                "every workload that wants pods has pods again, at least one of them ready",
                 service.id, service.name, previous_code, previous_since)
             if was_alerted:
                 # 沒通知過的（未確認就恢復的 no_pods）不必再說「已恢復」。
@@ -8068,8 +8750,8 @@ class CloudService(models.Model):
         if not previous_since:
             _logger.warning(
                 "[#1647] running service id=%s %s (namespace %s, release %s) has a workload "
-                "with no pods: %s", service.id, service.name, service.helm_namespace,
-                service.helm_release_name, detail)
+                "fault (%s): %s", service.id, service.name, service.helm_namespace,
+                service.helm_release_name, code, detail)
         # 每段異常只通知一次；通知沒落地（沒有收件者、寫入失敗）就不記標記，下一輪重試。
         if confirmed and not service.workload_fault_alerted_at:
             if monitor._report_workload_fault(service):
@@ -10220,8 +10902,8 @@ class CloudService(models.Model):
 
         #1679：先讀叢集現況再決定送什麼——每項取 max(目標, 叢集)，任何一項會下降、讀不到
         或資料不完整就不送；目標低於叢集的項目標示為待處理降額。工作區正被其他交易同步時
-        不等鎖、跳過這次推送（記 warning；自動重試屬 #1680）。任何失敗只記錄，絕不 abort
-        刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
+        不等鎖、不推送，改排背景同步一分鐘後重來（#1680：換方案剛好撞上推送時增額不會遺失）；
+        失敗另排有限次自動重試。任何失敗只記錄，絕不 abort 刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
         """
         if not helm_namespace or not workspace:
             return
@@ -10233,6 +10915,12 @@ class CloudService(models.Model):
             _logger.warning(
                 "quota recompute failed for %s: %s", helm_namespace, e,
             )
+            # #1680：savepoint 回捲了同步紀錄，改由背景同步收斂（trigger 跟著本交易 commit）。
+            try:
+                with self.env.cr.savepoint():
+                    workspace.sudo()._schedule_quota_reconcile()
+            except Exception:  # noqa: BLE001 —— 排程失敗也不阻斷刪除；兜底 cron 每 5 分鐘仍會看
+                _logger.warning("quota reconcile scheduling failed for %s", helm_namespace)
 
     def _do_cleanup(self):
         """Helm uninstall — permanently remove the service.
@@ -10628,6 +11316,7 @@ class CloudService(models.Model):
         _reject_upgrade_failure_control_writes(self.env, vals)
         _reject_service_history_writes(self.env, vals)
         _reject_chart_version_writes(self.env, vals)
+        _reject_template_binding_writes(self, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -10754,6 +11443,14 @@ class CloudService(models.Model):
         first_running = self.browse()
         if vals.get('state') == 'running' and 'first_running_at' not in vals:
             first_running = self.filtered(lambda r: not r.first_running_at)
+        # 商用驗收 HS-013-2：**進入** running（從任何其他狀態）就開一段對外位址重探窗口——設定變更、
+        # 重新啟動、Redeploy、復權之後 ngrok agent 要等新 Pod 起來才連得上，而轉回 running 的那一輪
+        # poll 往往更早。集中在這裡（同 first_running_at），任何寫回 running 的路徑自動跟上。
+        # 只對有這個能力的商品（`has_public_tunnel_address` 唯一事實源），running → running 不重開。
+        entering_running_tunnel = self.browse()
+        if vals.get('state') == 'running' and 'public_tunnel_recheck_until' not in vals:
+            entering_running_tunnel = self.filtered(
+                lambda r: r.state != 'running' and r._chart_has_public_tunnel_address())
         # #1647：`workload_fault_*` 只描述「running 的服務沒有 Pod」。服務一離開 running
         # （重新啟動、Redeploy、停權、刪除、轉 error……）這段異常就不再描述現況——留著的話
         # 回到 running 時會帶著上一段的起點與「已通知」標記，新的異常不會再告警。
@@ -10849,6 +11546,11 @@ class CloudService(models.Model):
             if first_running:
                 super(CloudService, first_running).write({
                     'first_running_at': fields.Datetime.now(),
+                })
+            if entering_running_tunnel:
+                super(CloudService, entering_running_tunnel.sudo()).write({
+                    'public_tunnel_recheck_until': fields.Datetime.now() + timedelta(
+                        minutes=PUBLIC_TUNNEL_RECHECK_MINUTES),
                 })
             if rebinding:
                 rebinding._assert_subscription_binding()

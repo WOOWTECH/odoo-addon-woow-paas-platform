@@ -1,5 +1,5 @@
 /** @odoo-module **/
-import { Component, useState, onMounted } from "@odoo/owl";
+import { Component, useState, onMounted, onWillUpdateProps, onWillUnmount } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
@@ -16,9 +16,11 @@ import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../componen
 import { formatTemplatePrice } from "../../utils/pricing_label";
 import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 import { cloudService } from "../../services/cloud_service";
+import { settingsErrors } from "../../utils/tailscale_settings";
 import { workspaceService } from "../../services/workspace_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
+import { useFormErrorReveal } from "../../utils/form_feedback";
 
 /**
  * AppConfigurationPage Component
@@ -39,6 +41,8 @@ export class AppConfigurationPage extends Component {
     setup() {
         this.state = useState({
             template: null,
+            workspace: null,
+            accessDenied: false,
             loading: true,
             error: null,
             // Form state
@@ -52,6 +56,8 @@ export class AppConfigurationPage extends Component {
             plansError: null,
             // Validation errors
             errors: {},
+            // X-LC-006-3：前端驗證每失敗一次 +1，觸發捲到第一個錯誤並聚焦。
+            errorRevealToken: 0,
             // Launch state
             launching: false,
             launchError: null,
@@ -60,46 +66,101 @@ export class AppConfigurationPage extends Component {
             oneTimeCredentials: null,
             createdServiceId: null,
         });
+        // X-LC-002-3／X-LC-006-3：送出失敗時把使用者帶到錯誤（欄位或頁尾的後端錯誤橫幅）。
+        useFormErrorReveal(
+            "configureRoot",
+            () => this.state.errorRevealToken,
+            () => this.state.launchError,
+        );
         this.router = useState(router);
 
-        onMounted(() => {
-            this.loadTemplate();
+        this._loadSequence = 0;
+        this._unmounted = false;
+        onMounted(() => this.loadTemplate());
+        onWillUpdateProps((nextProps) => {
+            if (nextProps.workspaceId !== this._requestedWorkspaceId ||
+                nextProps.templateId !== this._requestedTemplateId) {
+                return this.loadTemplate(nextProps);
+            }
+        });
+        onWillUnmount(() => {
+            this._unmounted = true;
+            this._loadSequence++;
         });
     }
 
     /**
-     * Load template details from API
+     * Read the current workspace role before showing a create form. The list
+     * cache is not authorization: direct routes may target another workspace.
+     * A newer route or unmount invalidates every outstanding read.
      */
-    async loadTemplate() {
-        this.state.loading = true;
-        this.state.error = null;
+    async loadTemplate(props = this.props) {
+        const { workspaceId, templateId } = props;
+        const sequence = ++this._loadSequence;
+        this._requestedWorkspaceId = workspaceId;
+        this._requestedTemplateId = templateId;
+        const isCurrent = () => !this._unmounted && sequence === this._loadSequence;
+        Object.assign(this.state, {
+            loading: true, error: null, accessDenied: false,
+            workspace: null, template: null,
+            name: '', helmValues: {}, selectedAddonIds: [], showAdvanced: false,
+            plans: [], selectedPlanId: undefined, plansError: null, errors: {},
+            launching: false, launchError: null,
+            oneTimeCredentials: null, createdServiceId: null,
+        });
 
-        const result = await cloudService.fetchTemplate(this.props.templateId);
+        try {
+            const workspaceResult = await workspaceService.getWorkspace(workspaceId);
+            if (!isCurrent()) return;
+            if (!workspaceResult.success) {
+                this.state.error = workspaceResult.error || _t("Failed to load workspace");
+                return;
+            }
+            const workspace = workspaceResult.data;
+            if (workspace?.id !== workspaceId ||
+                (workspace.role !== 'owner' && workspace.role !== 'admin')) {
+                this.state.accessDenied = true;
+                return;
+            }
+            this.state.workspace = workspace;
 
-        if (result.success) {
+            const result = await cloudService.fetchTemplate(templateId);
+            if (!isCurrent()) return;
+            if (!result.success) {
+                this.state.error = result.error || _t("Failed to load template");
+                return;
+            }
             this.state.template = result.data;
-            this._publishBreadcrumb();
-            // Initialize helm values with defaults
+            this._publishBreadcrumb(workspaceId);
             this.initializeHelmValues(result.data);
-            // Load available subscription plans. fetchPlans returns
-            // ApiResponse<Array> — surface backend errors verbatim so admin
-            // misconfiguration (template missing/inactive/empty) doesn't
-            // look like a blank-list bug.
-            this.state.plansError = null;
-            const plansResult = await cloudService.fetchPlans(this.props.templateId);
+            // Preserve plan selection and backend configuration errors.
+            const plansResult = await cloudService.fetchPlans(templateId);
+            if (!isCurrent()) return;
             if (plansResult.success) {
                 this.state.plans = plansResult.data;
-                // 決定性預設：最低 price × month × 0 席（取代 plans[0].id 語意任意）
                 this.state.selectedPlanId = pickDefaultPlan(this.state.plans);
             } else {
-                this.state.plans = [];
                 this.state.plansError = plansResult.error;
             }
-        } else {
-            this.state.error = result.error || _t("Failed to load template");
+        } catch (error) {
+            if (isCurrent()) {
+                this.state.error = error.message || _t("Failed to load configuration");
+            }
+        } finally {
+            if (isCurrent()) this.state.loading = false;
         }
+    }
 
-        this.state.loading = false;
+    /**
+     * UI affordance only; the existing create endpoint remains authoritative.
+     * Missing roles and data for another route never enable creation.
+     */
+    get canConfigure() {
+        const workspace = this.state.workspace;
+        return !this.state.loading && !this.state.error &&
+            workspace?.id === this.props.workspaceId &&
+            (workspace.role === 'owner' || workspace.role === 'admin') &&
+            this.state.template?.id === this.props.templateId;
     }
 
     /**
@@ -135,14 +196,14 @@ export class AppConfigurationPage extends Component {
 
     /**
      * 麵包屑軌跡：Workspaces → {工作區} → App Marketplace(連回市集) → Configure {模板名}。
-     * 此頁是從市集點模板進來的設定頁，父層接回市集；工作區名取自快取，缺則退守。
+     * 此頁是從市集點模板進來的設定頁，父層接回市集；工作區名取自本次 API 回覆。
      */
-    _publishBreadcrumb() {
-        const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+    _publishBreadcrumb(workspaceId) {
+        const ws = this.state.workspace;
         breadcrumbService.set("configure", [
             { label: _t("Workspaces"), path: "workspaces" },
-            { label: ws?.name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
-            { label: _t("App Marketplace"), path: `workspace/${this.props.workspaceId}/services/marketplace` },
+            { label: ws?.name || _t("Workspace"), path: `workspace/${workspaceId}` },
+            { label: _t("App Marketplace"), path: `workspace/${workspaceId}/services/marketplace` },
             { label: _t("Configure %s", this.state.template.name), path: null },
         ]);
     }
@@ -194,7 +255,7 @@ export class AppConfigurationPage extends Component {
      * @returns {boolean}
      */
     get launchDisabled() {
-        return this.state.launching || !this.isPurchasable;
+        return !this.canConfigure || this.state.launching || !this.isPurchasable;
     }
 
     get helmValueSpecs() {
@@ -326,13 +387,28 @@ export class AppConfigurationPage extends Component {
             }
         }
 
+        // INFRA-TS-005-5／TS-007-1：spec 帶 `validate` 的欄位（VPN 節點的轉發清單、控制平面＋key）。
+        // 開通頁還不知道 namespace（null）⇒ 同工作區檢查交給後端。
+        const specs = [...(this.helmValueSpecs.required || []), ...(this.helmValueSpecs.optional || [])];
+        const checked = settingsErrors(specs, this.state.helmValues, { namespace: null });
+        for (const [key, message] of Object.entries(checked)) {
+            if (!errors[key]) errors[key] = message;
+        }
+        if ((this.helmValueSpecs.optional || []).some((spec) => checked[spec.key])) {
+            this.state.showAdvanced = true;
+        }
+
         // Validate plan selection
         if (!this.state.selectedPlanId) {
             errors.plan = _t('Please select a subscription plan');
         }
 
         this.state.errors = errors;
-        return Object.keys(errors).length === 0;
+        const valid = Object.keys(errors).length === 0;
+        if (!valid) {
+            this.state.errorRevealToken++;
+        }
+        return valid;
     }
 
     /**
@@ -350,16 +426,19 @@ export class AppConfigurationPage extends Component {
      * Handle launch button click
      */
     async onLaunch() {
-        if (!this.validateForm()) {
+        if (this.launchDisabled || !this.validateForm()) {
             return;
         }
 
+        const { workspaceId, templateId } = this.props;
+        const sequence = this._loadSequence;
+        const isCurrent = () => !this._unmounted && sequence === this._loadSequence;
         this.state.launching = true;
         this.state.launchError = null;
 
         try {
             const payload = {
-                template_id: this.props.templateId,
+                template_id: templateId,
                 name: this.state.name.trim(),
                 values: this.state.helmValues,
                 plan_id: this.state.selectedPlanId,
@@ -367,7 +446,8 @@ export class AppConfigurationPage extends Component {
             if (this.isOdooTemplate && this.state.selectedAddonIds.length) {
                 payload.odoo_addon_ids = this.state.selectedAddonIds;
             }
-            const result = await cloudService.createService(this.props.workspaceId, payload);
+            const result = await cloudService.createService(workspaceId, payload);
+            if (!isCurrent()) return;
 
             if (result.success) {
                 const serviceId = result.data.id;
@@ -376,15 +456,17 @@ export class AppConfigurationPage extends Component {
                     this.state.oneTimeCredentials = credentials;
                     this.state.createdServiceId = serviceId;
                 } else {
-                    this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
+                    this.router.navigate(`workspace/${workspaceId}/services/${serviceId}`);
                 }
             } else {
                 this.state.launchError = result.error || _t('Failed to create service');
             }
         } catch (error) {
-            this.state.launchError = error.message || _t('An unexpected error occurred');
+            if (isCurrent()) {
+                this.state.launchError = error.message || _t('An unexpected error occurred');
+            }
         } finally {
-            this.state.launching = false;
+            if (isCurrent()) this.state.launching = false;
         }
     }
 

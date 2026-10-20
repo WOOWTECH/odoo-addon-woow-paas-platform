@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十七個 check 函式，歸為下列四十一條規則（其中四條各由多個函式實作：第 2 條
+四十八個 check 函式，歸為下列四十二條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -111,7 +111,8 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      前端多留舊 slug 的文案無害。
 17. repo-lint-docstring-registry  本檔檔頭與實作互為雙射：上面的編號條目名 ↔
                      `REPO_LINT_RULES` 映射表 ↔ `run_all()` 實際呼叫的 check_*，
-                     編號 1..N 連續遞增，開頭宣告的兩個數字也要對得上。#596 修好了
+                     編號 1..N 連續遞增，所有條目必須位於「用法：」之前的條目區塊
+                     （#835），開頭宣告的兩個數字也要對得上。#596 修好了
                      檔頭三處過期內容（「十五個 check」與實際不符、漏登記一條、11 與
                      12 顛倒），但那是症狀——**沒有任何 gate 會在下次漂移時變紅**，
                      同一個形態會原樣復發且復發時一樣零訊號。檔頭不是裝飾：它是後續
@@ -661,6 +662,16 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      只接受已核對的呼叫結構，解析失敗／結構漂移 fail-loud，不把固定 531
                      當硬上限。依據 #1257 Q31：n8n 原本共用 HELM_OPERATION_TIMEOUT=120，
                      比 operator 子步 envelope 短，client 先斷線、server 照跑。
+
+42. newapi-timeout-ladder  AI 模型分頁 前端 → Odoo → newapi-proxy 的逾時階梯。
+                     實作見 scripts/audit/newapi_timeout_ladder.py：每個 TIMEOUT_* 送出的
+                     X-Woow-Read-Timeout（read − 餘裕）落在代理 _READ_TIMEOUT_RE 的範圍且嚴格
+                     小於 read、client 夾值＝代理上限、建金鑰預算與開戶 tick 各容得下一次完整呼叫、
+                     lease 長於最壞的 tick、其他 LLM cron 的 tick（CRON_TICK_SECONDS，LLM-02b）容得下
+                     一次 cron 讀取且不超過開戶 tick、client 方法 → 逾時類別對 baseline json；前端那一半
+                     （LLM-01c）：llm_service.js 的 KEY_CREATE_TIMEOUT_MS 大於後端建金鑰預算＋一次
+                     呼叫、rpc.js 預設逾時大於互動讀／寫一次呼叫、建金鑰的呼叫一定帶那個具名常數。
+                     依據 DESIGN §1.2、§3.5（〔REV〕63）；票 LLM-01b、LLM-01c、LLM-02b。
 
 用法：
 
@@ -1290,7 +1301,7 @@ def check_reset_budget_ladder(root):
     app_src = _read_repo_file(root, RESET_LADDER_APP_OPERATOR)
     app = _fold_int_constants(app_src or "")
     exec_app = ("ODOO_RESET_EXEC_TIMEOUT_SECONDS", "N8N_RESET_EXEC_TIMEOUT_SECONDS",
-                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS")
+                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS", "EMQX_RESET_EXEC_TIMEOUT_SECONDS")
     needed_app = exec_app + ("APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS",)
     missing_app = [k for k in needed_app if k not in app]
     if app_src is None or missing_app:
@@ -1308,7 +1319,7 @@ def check_reset_budget_ladder(root):
                  % (app_platform, name, worst))
     if not frontend_seconds > app_platform:
         fail("前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 APP_ADMIN_RESET_TIMEOUT=%ss"
-             "（Odoo／n8n／Omnigent 的 Reset 與 reset-config 共用同一條前端 route）"
+             "（Odoo／n8n／Omnigent／EMQX 的 Reset 與 reset-config 共用同一條前端 route）"
              % (frontend_seconds, app_platform))
     return violations
 
@@ -1359,6 +1370,32 @@ def check_init_n8n_budget_ladder(root):
         return module.check(root)
     except Exception as exc:
         return ['init-n8n-budget-ladder：無法載入或執行守衛（%s：%s）；見 #1257'
+                % (type(exc).__name__, exc)]
+
+
+NEWAPI_LADDER_FILES = (
+    'src/services/newapi_client.py',
+    'src/models/llm_common.py',
+    'src/models/llm_api_key.py',
+    'extra/newapi-proxy/newapi_proxy/app.py',
+    'scripts/audit/newapi_timeout_ladder.py',
+    'scripts/audit/baselines/newapi-timeout-ladder.json',
+    # LLM-01c：前端那一半（建金鑰 40 秒、rpc.js 預設 30 秒）。
+    'src/static/src/paas/services/llm_service.js',
+    'src/static/src/paas/services/rpc.js',
+)
+
+
+def check_newapi_timeout_ladder(root):
+    """LLM-01b：同第 39／41 條——實作放 sibling script，載入／解析失敗不能變成零違規。"""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            'woow_newapi_timeout_ladder', os.path.join(SCRIPT_DIR, 'newapi_timeout_ladder.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.check(root)
+    except Exception as exc:
+        return ['newapi-timeout-ladder：無法載入或執行守衛（%s：%s）；見 DESIGN §3.5'
                 % (type(exc).__name__, exc)]
 
 
@@ -4926,6 +4963,17 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "先 `_record_ids()` 落帳才推 sync，而 context 只注入給 `exists()` 的"
                "子集 ⇒ 帳本是它的嚴格超集）。存量收斂改走 `_record_ids()`。",
     },
+    # --- LLM-01b：AI 模型分頁 ---------------------------------------------- #
+    "woow_llm_internal_write": {
+        "status": "enforced",
+        "sentinel": "_LLM_INTERNAL_WRITE",
+        "defined_in": "src/models/llm_common.py",
+        "reader": "_is_llm_internal",
+        "issue": "LLM-01b",
+        "why": "llm_account／llm_api_key 的 create／write 唯一入口（DESIGN §2.1：所有群組 "
+               "ACL 只讀，寫入只經 service method）。偽造 ⇒ 改 newapi_username／"
+               "newapi_user_id 讓 UP 與開戶指向別人的 new-api 使用者，或改 state 跳過開戶。",
+    },
     # --- 非安全決策 -------------------------------------------------------- #
     "skip_ai_reply": {
         "status": "not-security",
@@ -6287,6 +6335,7 @@ REPO_LINT_RULES = {
     "init-odoo-budget-ladder": ("check_init_odoo_budget_ladder",),
     "status-contract-golden": ("check_status_contract_golden",),
     "init-n8n-budget-ladder": ("check_init_n8n_budget_ladder",),
+    "newapi-timeout-ladder": ("check_newapi_timeout_ladder",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6448,7 +6497,8 @@ def check_repo_lint_docstring_registry(root):
     1. 數量：檔頭開頭宣告的「N 個 check 函式／M 條規則」要對得上 run_all() 實際
        呼叫的 check_* 個數與檔頭編號條目數。一對多（7. capability-gate 由三個函式
        實作）走 `REPO_LINT_RULES` 這張顯式映射表，**不是**寫死差額。
-    2. 編號 1..M 連續且嚴格遞增（#596 的第三處問題就是 11 與 12 顛倒）。
+    2. 編號 1..M 連續且嚴格遞增（#596 的第三處問題就是 11 與 12 顛倒），且所有
+       編號條目必須位於「用法：」之前的條目區塊，不能只守清單一致（#835）。
     3. 名稱互為雙射：條目名 ↔ `REPO_LINT_RULES` 的鍵 ↔ run_all() 呼叫的函式名。
        只比數字的話，「數量相等但名字錯配」完全抓不到。
     4. 兩條同型不變式：module 層定義了 check_* 卻沒進 run_all()（gate 寫好了沒人
@@ -6464,8 +6514,8 @@ def check_repo_lint_docstring_registry(root):
     「Fail-open」講的是 hook 模式的全域 except：hook 不擋開發，`--all` 必須紅，
     兩者不衝突。）
 
-    ⚠ 覆蓋邊界：只保證名單／編號／數字三者對得上，**不驗證條目的描述文字與該 check
-    的實際行為相符**。描述寫錯、pitfall 指針過期、依據文件被刪，本 gate 一個都抓不到
+    ⚠ 覆蓋邊界：只保證名單／編號／數字對得上與條目區塊位置，**不驗證條目的描述文字
+    與該 check 的實際行為相符**。描述寫錯、pitfall 指針過期、依據文件被刪，本 gate 一個都抓不到
     ——那留給人。把這條綠讀成「檔頭寫的都是真的」就是 #547 的原型錯誤換一個載體。
     """
     ref = REPO_LINT_REGISTRY_REF
@@ -6489,7 +6539,8 @@ def check_repo_lint_docstring_registry(root):
         return ["%s：檔頭抽不到任何 `N. rule-name` 編號條目——探針失去鑑別力（雙射在"
                 "空集合上恆真）。格式是行首 `1. controller-sudo   說明…`、續行縮排"
                 "（%s）" % (self_rel, ref)]
-    entries = [(int(n), name) for n, name in _REPO_LINT_ENTRY_RE.findall(doc)]
+    entry_matches = list(_REPO_LINT_ENTRY_RE.finditer(doc))
+    entries = [(int(m.group(1)), m.group(2)) for m in entry_matches]
     header = doc[:first.start()]
 
     top = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
@@ -6518,7 +6569,21 @@ def check_repo_lint_docstring_registry(root):
     num_of = {name: num for num, name in entries}
     violations = []
 
-    # (1) 編號 1..N 連續且嚴格遞增。
+    # (1a) 條目區塊必須在「用法：」之前；仍掃完整 docstring，避免區塊外條目被漏掉。
+    usage = re.search(r"^用法：[ \t]*$", doc, re.M)
+    if usage is None:
+        violations.append(
+            "%s：檔頭找不到「用法：」區塊邊界，無法確認編號條目是否都在條目區塊內"
+            "——邊界遺失不能當通過（#835；%s）" % (self_rel, ref))
+    else:
+        for match in entry_matches:
+            if match.start() >= usage.start():
+                violations.append(
+                    "%s：檔頭第 %s 條 `%s` 位於「用法：」之後——編號條目必須全部位於"
+                    "「用法：」之前的條目區塊（#835；%s）"
+                    % (self_rel, match.group(1), match.group(2), ref))
+
+    # (1b) 編號 1..N 連續且嚴格遞增。
     nums = [n for n, _ in entries]
     expected = list(range(1, len(entries) + 1))
     if sorted(nums) != expected:
@@ -6966,7 +7031,8 @@ def run_all(root):
                   + check_access_payload_shape_matches_operator_schema(root)
                   + check_init_odoo_budget_ladder(root)
                   + check_status_contract_golden(root)
-                  + check_init_n8n_budget_ladder(root))
+                  + check_init_n8n_budget_ladder(root)
+                  + check_newapi_timeout_ladder(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -7066,6 +7132,9 @@ def run_hook():
                        if rel in INIT_ODOO_LADDER_FILES else [])
         init_n8n_ladder = (check_init_n8n_budget_ladder(root)
                            if rel in INIT_N8N_LADDER_FILES else [])
+        # LLM-01b／01c 第 42 條：逾時階梯跨前端／client／model／代理四端（同 init ladders，不做切片）。
+        newapi_ladder = (check_newapi_timeout_ladder(root)
+                         if rel in NEWAPI_LADDER_FILES else [])
         # #552／#596：availability reason 的涵蓋同樣是**跨檔**不變式（後端 judge ／
         # 前端 REASON_LABELS），壞掉的是另一個檔 ⇒ 一樣整條重算、不做 only_file 切片。
         availability = (check_availability_reason_labels(root)
@@ -7232,7 +7301,8 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif (ladder or init_ladder or init_n8n_ladder or availability or poll_facts or anchors or floor
+        elif (ladder or init_ladder or init_n8n_ladder or newapi_ladder or availability
+                or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
                 or internal_ctx or tunnel_wire or route_golden or status_golden
                 or owl_imports
@@ -7248,6 +7318,7 @@ def run_hook():
         violations += ladder
         violations += init_ladder
         violations += init_n8n_ladder
+        violations += newapi_ladder
         violations += availability
         violations += poll_facts
         violations += anchors

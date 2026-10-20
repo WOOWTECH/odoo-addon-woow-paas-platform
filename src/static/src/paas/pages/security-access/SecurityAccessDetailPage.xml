@@ -487,6 +487,7 @@
             usedRoutes="routeCount"
             loadPlans="loadSaPlans"
             confirmChange="confirmSaChangePlan"
+            estimateChange="estimateSaChangePlan"
             onClose="() => state.showChangePlanModal = false"
             onChanged="onPlanChanged"/>
 

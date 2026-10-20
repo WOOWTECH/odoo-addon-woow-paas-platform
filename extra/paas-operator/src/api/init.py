@@ -239,3 +239,17 @@ def reset_omnigent_admin_password(namespace: str, release_name: str,
                                   request: AppAdminPasswordResetRequest):
     return _app_admin_reset("Omnigent", namespace, release_name, request,
                             app_admin_password_service.reset_omnigent_admin)
+
+
+@router.post(
+    "/{namespace}/{release_name}/emqx/admin-password",
+    response_model=AppAdminPasswordResetResponse,
+    summary="Reset the EMQX Dashboard administrator password",
+    description="Set a new password on the EMQX Dashboard admin account (username unchanged) with "
+                "EMQX's own `emqx ctl admins passwd`, the same change as the Dashboard's Change Password. "
+                "No helm upgrade, no restart; signed-in Dashboard sessions of that account are signed out.",
+)
+def reset_emqx_admin_password(namespace: str, release_name: str,
+                              request: AppAdminPasswordResetRequest):
+    return _app_admin_reset("EMQX", namespace, release_name, request,
+                            app_admin_password_service.reset_emqx_admin)

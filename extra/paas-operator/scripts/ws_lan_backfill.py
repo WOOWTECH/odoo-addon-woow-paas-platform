@@ -14,7 +14,11 @@ manifest 與標籤由 ``src/services/tenant_baseline.py`` 產生——和 operat
     # 2. 真的套用（逐 ns；任何一個 ns 失敗就停）
     python3 extra/paas-operator/scripts/ws_lan_backfill.py --ns paas-ws-7a3676a7 --apply
 
-    # 3. 回滾（刪 paas-baseline-egress、移除 PSA 標籤；同樣先預覽再 --apply）
+    # 2b. operator 開了公網埠收斂時，同樣的值也要給腳本（否則會判成 drift 改回去）
+    python3 extra/paas-operator/scripts/ws_lan_backfill.py --all --env prod --only egress \
+        --egress-blocked-ports 22,25 --egress-web-profile
+
+    # 3. 回滾（刪 paas-baseline-egress（與 -web）、移除 PSA 標籤；同樣先預覽再 --apply）
     python3 extra/paas-operator/scripts/ws_lan_backfill.py --ns paas-ws-7a3676a7 --rollback
     python3 extra/paas-operator/scripts/ws_lan_backfill.py --ns paas-ws-7a3676a7 --rollback --apply
 
@@ -89,8 +93,9 @@ def select_namespaces(ctx: str, names: List[str], all_ns: bool,
     return sorted(out, key=lambda n: n["metadata"]["name"])
 
 
-def live_egress_np(ctx: str, ns: str) -> Optional[dict]:
-    proc = kubectl(ctx, ["-n", ns, "get", "networkpolicy", tb.BASELINE_EGRESS_NP_NAME,
+def live_egress_np(ctx: str, ns: str,
+                   name: str = tb.BASELINE_EGRESS_NP_NAME) -> Optional[dict]:
+    proc = kubectl(ctx, ["-n", ns, "get", "networkpolicy", name,
                          "-o", "json"], check=False)
     if proc.returncode != 0:
         if "NotFound" in proc.stderr or "not found" in proc.stderr:
@@ -106,6 +111,36 @@ def desired_psa(ns: str, exempt: List[str], version: str) -> Tuple[Dict[str, str
     return tb.build_pod_security_labels(version=version), []
 
 
+def egress_options(opts) -> Tuple[List[int], bool]:
+    """(封掉的公網埠, web profile)；舊呼叫端的 opts 沒有這兩個屬性＝預設關。"""
+    return (tb.parse_port_list(getattr(opts, "egress_blocked_ports", "") or ""),
+            bool(getattr(opts, "egress_web_profile", False)))
+
+
+def desired_egress(ns: str, opts) -> Dict[str, dict]:
+    """名稱 → 要 apply 的 egress NP（順序＝apply 順序；web profile 時 web 在前）。"""
+    blocked, web = egress_options(opts)
+    return {np["metadata"]["name"]: np
+            for np in tb.build_baseline_egress_netpols(ns, blocked, web)}
+
+
+def _plan_one(ctx: str, ns: str, name: str, want: Optional[dict], opts) -> Tuple[str, List[str]]:
+    live = live_egress_np(ctx, ns, name)
+    if opts.rollback:
+        return ("delete" if live else "absent"), []
+    if live is None:
+        state = "create"
+    elif live.get("spec") == want["spec"]:
+        state = "unchanged"
+    else:
+        state = "update"
+    warnings: List[str] = []
+    if state in ("create", "update"):
+        proc = kubectl(ctx, ["apply", "--dry-run=server", "-f", "-"], stdin=json.dumps(want))
+        warnings = warnings_of(proc)
+    return state, warnings
+
+
 def plan_ns(ctx: str, ns_obj: dict, opts) -> dict:
     ns = ns_obj["metadata"]["name"]
     labels = ns_obj["metadata"].get("labels") or {}
@@ -114,20 +149,16 @@ def plan_ns(ctx: str, ns_obj: dict, opts) -> dict:
             "env": labels.get(ENV_LABEL), "egress": None, "psa": None, "warnings": []}
 
     if opts.only in (None, "egress"):
-        live = live_egress_np(ctx, ns)
-        want = tb.build_baseline_egress_netpol(ns)
-        if opts.rollback:
-            item["egress"] = "delete" if live else "absent"
-        elif live is None:
-            item["egress"] = "create"
-        elif live.get("spec") == want["spec"]:
-            item["egress"] = "unchanged"
-        else:
-            item["egress"] = "update"
-        if not opts.rollback and item["egress"] in ("create", "update"):
-            proc = kubectl(ctx, ["apply", "--dry-run=server", "-f", "-"],
-                           stdin=json.dumps(want))
-            item["warnings"] += warnings_of(proc)
+        want = desired_egress(ns, opts)
+        # web profile 的 NP 先規劃（apply 也是它先）；回滾或 web profile 開時才看它。
+        if opts.rollback or tb.BASELINE_EGRESS_WEB_NP_NAME in want:
+            item["egress_web"], warns = _plan_one(
+                ctx, ns, tb.BASELINE_EGRESS_WEB_NP_NAME,
+                want.get(tb.BASELINE_EGRESS_WEB_NP_NAME), opts)
+            item["warnings"] += warns
+        item["egress"], warns = _plan_one(
+            ctx, ns, tb.BASELINE_EGRESS_NP_NAME, want.get(tb.BASELINE_EGRESS_NP_NAME), opts)
+        item["warnings"] += warns
 
     if opts.only in (None, "psa"):
         exempt = tb.parse_namespace_list(opts.psa_exempt)
@@ -159,6 +190,8 @@ def apply_ns(ctx: str, item: dict, opts) -> None:
     if opts.rollback:
         if item["egress"] == "delete":
             kubectl(ctx, ["-n", ns, "delete", "networkpolicy", tb.BASELINE_EGRESS_NP_NAME])
+        if item.get("egress_web") == "delete":
+            kubectl(ctx, ["-n", ns, "delete", "networkpolicy", tb.BASELINE_EGRESS_WEB_NP_NAME])
         if item["psa"] and item["psa"]["changes"]:
             kubectl(ctx, ["label", "ns", ns] + [f"{k}-" for k in tb.psa_label_keys()])
         return
@@ -172,9 +205,12 @@ def apply_ns(ctx: str, item: dict, opts) -> None:
             kubectl(ctx, ["label", "ns", ns] + [f"{k}-" for k in remove])
             kubectl(ctx, ["annotate", "--overwrite", "ns", ns,
                           f"{tb.PSA_EXEMPT_ANNOTATION}={tb.PSA_EXEMPT_REASON}"])
-    if item["egress"] in ("create", "update"):
-        kubectl(ctx, ["apply", "-f", "-"],
-                stdin=json.dumps(tb.build_baseline_egress_netpol(ns)))
+    want = desired_egress(ns, opts)
+    states = {tb.BASELINE_EGRESS_NP_NAME: item["egress"],
+              tb.BASELINE_EGRESS_WEB_NP_NAME: item.get("egress_web")}
+    for name, manifest in want.items():   # web 在前、一般 baseline 在後（同 operator）
+        if states.get(name) in ("create", "update"):
+            kubectl(ctx, ["apply", "-f", "-"], stdin=json.dumps(manifest))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -190,7 +226,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--psa-exempt", default=",".join(tb.DEFAULT_PSA_EXEMPT_NAMESPACES))
     ap.add_argument("--psa-version", default="v1.34")
     ap.add_argument("--report", default="", help="把預覽／結果寫成 JSON")
+    # 要和 operator 的 TENANT_BASELINE_EGRESS_BLOCKED_PORTS／_WEB_PROFILE 同值，否則會把
+    # operator 套的 manifest 判成 drift 改回去。
+    ap.add_argument("--egress-blocked-ports", default="",
+                    help="公網封掉的埠（逗號分隔，例 22,25）＝TENANT_BASELINE_EGRESS_BLOCKED_PORTS")
+    ap.add_argument("--egress-web-profile", action="store_true",
+                    help="加 paas-baseline-egress-web＝TENANT_BASELINE_EGRESS_WEB_PROFILE")
     opts = ap.parse_args(argv)
+    try:
+        tb.parse_port_list(opts.egress_blocked_ports)
+    except ValueError as e:
+        ap.error(f"--egress-blocked-ports: {e}")
 
     names = tb.parse_namespace_list(opts.ns)
     targets = select_namespaces(opts.context, names, opts.all, opts.env)
@@ -204,6 +250,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         psa = item["psa"] or {}
         tag = "（PSA 例外）" if psa.get("exempt") else ""
         print(f"\n== {item['namespace']}  ws={item['workspace_id']}  env={item['env']}{tag}")
+        if item.get("egress_web") is not None:
+            print(f"   NetworkPolicy {tb.BASELINE_EGRESS_WEB_NP_NAME}: {item['egress_web']}")
         if item["egress"] is not None:
             print(f"   NetworkPolicy {tb.BASELINE_EGRESS_NP_NAME}: {item['egress']}")
         if item["psa"] is not None:

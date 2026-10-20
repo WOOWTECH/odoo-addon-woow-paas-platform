@@ -56,6 +56,42 @@ export const workspaceService = reactive({
     operationLoading: {},
     /** @type {string|null} */
     error: null,
+    /** @type {Object.<number, string>} 單一工作區名稱快取（麵包屑用，X-LC-001-4） */
+    workspaceNames: {},
+
+    /**
+     * 已知的工作區名稱：先查清單快取，再查單筆快取；都沒有回 null。
+     * @param {number} workspaceId
+     * @returns {string|null}
+     */
+    cachedWorkspaceName(workspaceId) {
+        const ws = this.workspaces.find((w) => w.id === workspaceId);
+        return ws?.name || this.workspaceNames[workspaceId] || null;
+    },
+
+    /**
+     * 麵包屑要顯示工作區名稱（X-LC-001-4）：deep-link 進市集／設定頁／服務詳情時清單快取是空的，
+     * 原本只能退守泛用的「工作區」。這裡缺快取就讀一次單一工作區並記住；讀不到回 null。
+     * 不碰 `operationLoading`，避免影響其他頁的載入狀態。
+     * @param {number} workspaceId
+     * @returns {Promise<string|null>}
+     */
+    async resolveWorkspaceName(workspaceId) {
+        const cached = this.cachedWorkspaceName(workspaceId);
+        if (cached) {
+            return cached;
+        }
+        try {
+            const result = await jsonRpc(`/api/workspaces/${workspaceId}`, { action: "get" });
+            const name = result && result.success && result.data ? result.data.name : null;
+            if (name) {
+                this.workspaceNames[workspaceId] = name;
+            }
+            return name || null;
+        } catch {
+            return null;
+        }
+    },
 
     /**
      * Fetch all workspaces for current user
@@ -482,21 +518,25 @@ export const workspaceService = reactive({
      * @param {number} planId - 目標方案 id（base 或席數變體）
      * @returns {Promise<ApiResponse<Object>>}
      */
-    async changeSmartHomePlan(workspaceId, homeId, planId) {
-        this.operationLoading.changeSmartHomePlan = true;
+    async changeSmartHomePlan(workspaceId, homeId, planId, { dryRun = false } = {}) {
+        if (!dryRun) {
+            this.operationLoading.changeSmartHomePlan = true;
+        }
         try {
             const result = await jsonRpc(
                 `/api/workspaces/${workspaceId}/smarthomes/${homeId}/change-plan`,
-                { plan_id: planId },
+                { plan_id: planId, ...(dryRun ? { dry_run: true } : {}) },
             );
             if (result.success) {
                 return { success: true, data: result.data };
             }
-            return { success: false, error: result.error };
+            return { success: false, error: result.error, data: result.data };
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.changeSmartHomePlan = false;
+            if (!dryRun) {
+                this.operationLoading.changeSmartHomePlan = false;
+            }
         }
     },
 

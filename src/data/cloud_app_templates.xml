@@ -77,6 +77,7 @@
             <field name="tags">["n8n", "automation", "workflow", "integration", "no-code"]</field>
 
             <field name="documentation_url">https://docs.n8n.io/</field>
+            <field name="tutorial_url">https://n8n-guide.woowtech.io/ch3_workspace_tour.html</field>
 
             <!-- Helm Configuration (OCI registry format) -->
             <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
@@ -131,7 +132,17 @@
                  迴圈時會被殺。8gears 2.0.1 沒有 startupProbe 欄位 ⇒ liveness 加 initialDelaySeconds 180
                  （＋6×20 秒＝開機寬限 300 秒，等同 startupProbe 10s×30）、period 20、timeout 5、failure 6；
                  readiness 改打 /healthz/readiness（含 DB 檢查）、timeout 3。兩個探針列在
-                 _TEMPLATE_POLICY_VALUE_PATHS，既有服務 Redeploy 時也照這裡。min_ram_gb 2.0＝T1。 -->
+                 _TEMPLATE_POLICY_VALUE_PATHS，既有服務 Redeploy 時也照這裡。min_ram_gb 2.0＝T1。
+                 商用驗收 X-SEC-004-2／X-SEC-005-7（2026-10-17）容器加固：8gears 2.0.1 預設
+                 main.securityContext={}、pod 沒有 seccomp ⇒ n8n 容器帶著預設 capability（含 NET_RAW）、
+                 可提權、沒有 seccomp；chart 自建的 SA 與 pod 都沒有 automountServiceAccountToken 欄位
+                 （2.1.1 也沒有），每個 n8n 容器都拿到一顆用不到的 token。這裡補：
+                 main.securityContext（禁提權、drop ALL、runAsNonRoot、RuntimeDefault）、
+                 main.podSecurityContext 只寫 seccompProfile（helm 與 chart 預設的 uid/gid 1000 合併，不蓋掉），
+                 main.extraVolumes／extraVolumeMounts 在 SA token 路徑唯讀掛一個空 emptyDir——k8s 的
+                 ServiceAccount admission 看到該路徑已有掛載就不注入 token（上游行為；values 唯一可行做法）。
+                 沙盒實測 2.43.6：uid 1000、CapEff 0、NoNewPrivs 1、Seccomp 2、沒有 kube-api-access volume、
+                 token 目錄空且唯讀、/healthz/readiness 200。四個鍵列在 _TEMPLATE_POLICY_VALUE_PATHS。 -->
             <field name="helm_default_values">{
                 "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n",
                 "tag": "20261015.2215@sha256:371dd463f02e8c35a4bc5aaf9855fc4cfec1babab97e5a02a1e31923a2ec8f5a"},
@@ -145,15 +156,26 @@
                 "initialDelaySeconds": 180, "periodSeconds": 20, "timeoutSeconds": 5, "failureThreshold": 6},
                 "readinessProbe": {"httpGet": {"path": "/healthz/readiness", "port": "http"},
                 "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 3},
-                "secret": {"N8N_API_KEY": "set-by-platform-init"}},
+                "secret": {"N8N_API_KEY": "set-by-platform-init"},
+                "podSecurityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
+                "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]},
+                "runAsNonRoot": true, "seccompProfile": {"type": "RuntimeDefault"}},
+                "extraVolumes": [{"name": "no-sa-token", "emptyDir": {"sizeLimit": "1Mi"}}],
+                "extraVolumeMounts": [{"name": "no-sa-token",
+                "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount", "readOnly": true}]},
                 "updateStrategy": {"type": "Recreate"}}</field>
             <!-- IMPORTANT: 換行只能落在 JSON token 之間，不可切斷字串值。字串值內夾字面換行
                  會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端
                  Application Settings 區塊靜默消失（見 fix/n8n-creation-issue）。 -->
+            <!-- DATA-N8N-008-1：_init.owner_email／_init.owner_password 只在開通時（post-deploy init）生效，
+                 不進 helm_values。標 create_only ⇒ 「儲存設定」若帶了不同的值，reconfigure 整筆拒絕並說明
+                 （比照 Odoo #1561），而不是回 success、靜默丟棄、白跑一次空的 helm upgrade。 -->
             <field name="helm_value_specs">{"required": [
                 {"key": "_init.owner_email", "label": "n8n 管理員 Email", "type": "text",
+                "create_only": true,
                 "placeholder": "you@example.com", "description": "n8n 管理員登入 Email"},
                 {"key": "_init.owner_password", "label": "n8n 管理員密碼", "type": "password",
+                "create_only": true,
                 "description": "至少 8 字元，需含大小寫字母與數字"}
                 ], "optional": [
                 {"key": "main.config.GENERIC_TIMEZONE", "label": "時區", "type": "select",
@@ -165,7 +187,8 @@
                 "placeholder": "smtp.example.com",
                 "description": "寄信伺服器（選填）。設定後 n8n 才能寄忘記密碼、邀請成員等信件；未設定時這些信不會寄出"},
                 {"key": "main.config.N8N_SMTP_PORT", "label": "SMTP 連接埠", "type": "number",
-                "default": 465, "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
+                "default": 465, "min": 1, "max": 65535, "integer": true,
+                "description": "465 搭配 SSL＝true；587 請把 SSL 設為 false（改用 STARTTLS）"},
                 {"key": "main.config.N8N_SMTP_SSL", "label": "SMTP 使用 SSL", "type": "select",
                 "default": "true", "options": ["true", "false"]},
                 {"key": "main.config.N8N_SMTP_USER", "label": "SMTP 帳號", "type": "text"},
@@ -324,7 +347,14 @@
                  程序的連線上限；預設 64 ×（workers＋cron＋1）一定超過 PG 的 100）；T1 記憶體 3Gi。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo</field>
-            <field name="helm_chart_version">0.2.7</field>
+            <!-- 0.2.17（2026-10-18，woow-paas-charts 整合包 #254）：0.2.8 conf.dbMaxconnGevent、0.2.9 cron.dbMaxconn（platform profile）、0.2.10
+                 networkPolicy.mcpOdoo.enabled、0.2.11 tolerations（預設 []）、0.2.12 restore 樣板 required podAffinity、
+                 0.2.13 /web/database/ 在 nginx 邊緣 404（DATA-ODOO-009-1）、0.2.14 備份失敗寫 terminationMessage
+                 （X-BK-006-1）、0.2.15 odoo／cron／PG 不掛 SA token（X-SEC-005-7）、0.2.16 請求 log 不記查詢字串
+                 （conf.logHandler 預設 werkzeug:WARNING＋nginx woow_noargs，X-SEC-002）、0.2.17 備份 Job 自我親和
+                 （X-BK-006-3）。新鍵都有 chart 預設、tenant schema 沒有新的必填鍵，helm_default_values 不需改；
+                 image 不變（換 chart 版本會改 checksum，web 重啟一次）。回滾值：0.2.7。 -->
+            <field name="helm_chart_version">0.2.17</field>
             <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20261010.1604", "digest": "sha256:c0c849aac39773ba13dc81ed781da8d7622780a296c2d94affdafe164f5743dc"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "3Gi"}}, "persistence": {"size": "6Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 1, "dbMaxconn": 8}, "postgres": {"database": "odoo", "persistence": {"size": "4Gi"}}, "backup": {"persistence": {"size": "10Gi"}}}</field>
             <field name="helm_value_specs">{"required": [
                 {"key": "conf.adminEmail", "label": "管理員 Email", "type": "text",
@@ -443,10 +473,23 @@
                  回滾值（chart 不變，只把 image.tag 改回）：本筆
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:44f4a19a77a6c78ebe1ba9eac57aa5f1079d5317e7401cd18ceb3d7ce8573917；
                  其餘見各筆註解。 -->
+            <!-- 2026-10-17 只改釘本筆 image（woow-mcp-server #59，issue #58）：合併 commit
+                 8c942d648276974aa4d5def5bbb7cea6dcf4ea51（main CI run 21331 job 23320 的 push digest，單一 manifest.v2，
+                 已用 jcr-prod 的 registry API 讀回同一 digest）。其他 7 筆 MCP 範本不動。
+                 版本內容（#59）：hermes_config get（整份或指定 key）與 hermes_inspect 的 config_summary 不再原文回傳
+                 Hermes 設定裡的憑證（custom_providers[].api_key、*_TOKEN、secrets.* 等），值換成 [REDACTED]、欄位名稱
+                 保留；set 不變。HA 測試機 2026-10-16 實測發現 api_key 原文外洩，HA Woow Hermes MCP Server 0.2.2 已同法修正。
+                 爆炸半徑（相對 1d16391d）：1d16391d..8c942d64 之間 apps/hermes 只改 hermes_mcp_server/server.py
+                 （遮罩）並新增測試；mcp-admin-core 只多測試檔、執行期程式碼未變；中間的 #51／#52 只動 apps/odoo。
+                 Dockerfile、pyproject、uv.lock、LaunchPolicy 皆未變。只影響新開通與之後被 Redeploy 的服務（#1408）；
+                 Redeploy 時 Recreate 重啟 pod 一次，MCP 既有 session 失效、用戶端要重新 initialize。已被讀走的 key
+                 不會因此失效，現有服務要不要輪替 Hermes 設定裡的 key 另案決定。
+                 回滾值（chart 不變，只把 image.tag 改回）：本筆
+                 1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:6cafc0edf5a676729bdf8ad2f8ed3662d18d8cb5545b9d79f4c2085e5108e92c"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -557,7 +600,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "e178c4cef76a43b20abfd6ea0282060d94abf115@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:39402798b9dfc6565f9cc7f395fb2a7fb0696d1be8cf01f2a45b1a94e5766fe5"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "woow-odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -714,7 +757,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:0800f5693bde0e974901515b269bed00135a38f42c065fd03242446727e1fef4"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -968,7 +1011,11 @@
                  helm_chart_name 帶完整 oci://。chart 由 woow-paas-charts repo 發佈。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant</field>
-            <field name="helm_chart_version">0.2.2</field>
+            <!-- 0.2.3（2026-10-18，woow-paas-charts 整合包 #254，X-SEC-004-2）：兩個容器一律 drop NET_RAW／MKNOD／SYS_CHROOT／AUDIT_WRITE／SETFCAP、
+                 allowPrivilegeEscalation=false、pod seccomp RuntimeDefault（template 強制，覆寫／null 也拿不掉）。
+                 image 不變（仍是 root＋s6-overlay，例外見 charts docs/psa-restricted-exceptions.md），
+                 helm_default_values 不需改。回滾值：0.2.2。 -->
+            <field name="helm_chart_version">0.2.3</field>
             <!-- woowtech-ha image（HA core 2026.7.2、整合集 ~999→~125、seed 檔烤入
                  /config：無 http/無 default_config 的 configuration.yaml ＋ 9 個
                  custom_components）＋ /config PVC 5Gi。
@@ -1052,6 +1099,7 @@
             <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode", "mcp"]</field>
 
             <field name="documentation_url">https://github.com/nexu-io/open-design</field>
+            <field name="tutorial_url">https://opendesign-guide.woowtech.io/tutorial.html</field>
 
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈，支線 A PR #41）。
                  helm_default_values 鍵名對齊 charts/open-design/values.yaml；只放平台 pin/覆寫
@@ -1121,14 +1169,31 @@
                  回滾值：chart 0.4.5＋20261014.1921@sha256:3ae19d81…，並拿掉 mcp／omnigentHost 兩鍵。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.5.0</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261015.0617@sha256:c683db73f8a64c7044ff5ffb39a5f216b75fb761b952a01ef4a352402238351d"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <!-- 0.5.6（2026-10-18，woow-paas-charts 整合包 #254）：0.5.1 console 改 uid 10002＋drop ALL＋唯讀根目錄、auth-proxy 加 securityContext、
+                 pod seccomp RuntimeDefault、prune-runs 清掉已刪專案的 run 紀錄（AI-OD-007-4／-6）；0.5.2 auth-proxy
+                 登入失敗鎖 IP＋安全標頭（AI-FIX-SEC-1）、匿名 /api/health 只回 {"ok":true}；0.5.3 ttyd 改 loopback＋
+                 Basic 前門、console Role 拿掉 secrets 權限；0.5.4 access log 不記查詢字串；0.5.5 daemon
+                 securityContext 逐鍵套用；0.5.6 daemon pod 帶 egress-profile=web（operator 開
+                 TENANT_BASELINE_EGRESS_WEB_PROFILE 才生效）。console app 在 chart 的 ConfigMap 裡，image 不變；
+                 新鍵都有 chart 預設，helm_default_values 不需改。升版時 daemon 與 console 各重啟一次（PVC 保留）。
+                 回滾值：0.5.0。 -->
+            <field name="helm_chart_version">0.5.6</field>
+            <!-- 2026-10-18 CI run22994 候選完成、#372 人工核可、run23032 正式發布；digest 與候選相同。 -->
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261018.1219@sha256:52423ef65af59d685f8cd3a559689b9dd34674e14d2452ae8578c9b88d4d4314"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "容器內 OpenCode 使用的伺服器端 OpenRouter Key（選填）；填了就預設用 OpenCode，修改後服務會自動重啟（約 1–2 分鐘）；網頁介面自行輸入的 BYOK Key 不受影響"}
                 ]}</field>
+            <!-- AI-OD-004-2：金鑰只以 secretKeyRef env 進 daemon StatefulSet（component=daemon），
+                 console Deployment 不吃金鑰。改金鑰後的補重啟（#1435）只滾 daemon，進行中的
+                 console 終端機不再斷線。chart 0.4.0 起 daemon 另有 checksum/api-keys，本來就會滾。 -->
+            <field name="secret_change_restart_component">daemon</field>
+            <!-- AI-OD-006-1：回復版本時，內建 MCP（mcp.enabled）與 Omnigent 暫停（omnigentHost.enabled）
+                 這兩個平台開關，在目標 revision 的 image 與目前相同時維持目前值；image 不同時跟著
+                 目標 revision（mcp.enabled 必須搭配帶 /opt/woow MCP runtime 的 image，硬開會 CrashLoop）。 -->
+            <field name="rollback_feature_switches">{"mcp.enabled": ["image"], "omnigentHost.enabled": ["image"]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">7457</field>
@@ -1308,7 +1373,9 @@
                 性顯示、可重置）。dashboard 以 root URL（chart 0.1.3 起，nginx `/` 直連）對外，
                 供 MCP OAuth 授權流程回呼使用。
                 agent 的 gateway API 以 /gateway 子路徑對外（Bearer 驗證，不套 basic-auth），
-                對應的 Gateway API Key 於建立服務與重置密碼時一次性顯示，供 MCP 等外部客戶端連線。LLM 供應商金鑰
+                對應的 Gateway API Key 於建立服務與重置密碼時一次性顯示，供 MCP 等外部客戶端連線。經公開網址時，
+                平台入口約 120 秒收不到任何資料就會中斷連線：非串流請求超過約 120 秒會收到 HTTP 524、拿不到結果，
+                長任務請改用串流（"stream": true，Hermes 每 10 秒送 keepalive）或 /v1/runs（送出後再查結果）。LLM 供應商金鑰
                 （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
                 刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
@@ -1363,8 +1430,14 @@
                  20261014.0625@sha256:5a7ae1d3…（CI run 19326，與專用候選驗收同一 digest）。chart 版本與 image
                  必須一起動、一起回滾。既有服務 Redeploy 前先整顆 PVC 冷備份（0.21.6 會升 state.db／config
                  schema，只換回舊 image 不夠）。回滾值：0.3.4＋20261003.1400@sha256:7b095a72…。 -->
-            <field name="helm_chart_version">0.3.6</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261014.0625@sha256:5a7ae1d3ebea8430ca1f82305c5fc26c92736b4b6966ed5c9add81c2d5b4d7aa"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <!-- 0.3.12（2026-10-18，woow-paas-charts 整合包 #254）：0.3.7 auth-proxy 登入失敗鎖 IP＋安全標頭（AI-FIX-SEC-1）；0.3.8 liveness 也探
+                 gateway、auth.apiServerKey 少於 16 字元直接拒絕（values.schema.json；seed 不設、chart 自產 64 字元）；
+                 0.3.9 nginx sidecar／console 容器加固（X-SEC-004-2）；0.3.10 ttyd 改 loopback＋Basic 前門、console Role
+                 拿掉 secrets 權限；0.3.11 dashboard cookie 帶 Secure；0.3.12 agent pod 帶 egress-profile=web（operator
+                 開 TENANT_BASELINE_EGRESS_WEB_PROFILE 才生效）。image 不變（console app 在 chart 的 ConfigMap），
+                 helm_default_values 不需改；升版時 agent 與 console 各重啟一次。回滾值：0.3.6。 -->
+            <field name="helm_chart_version">0.3.12</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261018.0829@sha256:68e4efca6a7e4a347be3520706545a1b548c3bdb21972fd801481c82aba06932"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API 金鑰", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
@@ -1520,6 +1593,7 @@
             <field name="tags">["home-assistant", "haos", "smart-home", "vm", "kubevirt"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+            <field name="tutorial_url">https://woowtech.github.io/Woow_ha_tutorial_site/tutorial.html</field>
 
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
@@ -1528,7 +1602,21 @@
                  proxy_buffer_size 32k（M4 R10：HA add-on 經 Ingress 回 ~9KB 標頭時，原本 4k/8k 預設在這層回 502）。
                  只改 xff-proxy ConfigMap；Redeploy 只重建 xff-proxy pod，VM／DataVolume 的 spec 不變（ws97 實測 VMI 未重建）。
                  HAOS 映像不變，所以這次不需要同步改 helm_default_values.image.*。回滾值：0.1.4。 -->
-            <field name="helm_chart_version">0.1.5</field>
+            <!-- 0.1.6（2026-10-17，woow-paas-charts #211，INFRA-HAOS-004-1）：VirtualMachine 的
+                 spec.template.spec 加 terminationGracePeriodSeconds（vm.terminationGracePeriodSeconds，預設 300，
+                 只收 30..3600）。0.1.5 以前沒設＝KubeVirt 預設 30 秒：平台停機／重啟時 Supervisor 還在逐一停 add-on，
+                 HA Core 就被強制終止（sqlite 未乾淨關閉、restore_state 遺失；ws97 實測）。seed 刻意不設這個鍵，交給
+                 chart 預設（守線 test_vm_termination_grace_left_to_chart_default）。
+                 ⚠ 寬限值在 VMI 啟動時才複製進去：Redeploy 只改 VM spec、不重建正在跑的 VMI，升版後的「第一次」停機
+                 仍是 30 秒——要先讓 guest 自己關機（HA 設定 → 系統 → 關機，runStrategy Always 會用新 spec 重開 VMI），
+                 之後的停機／重啟才是 300 秒。HAOS 映像不變，不需要同步改 helm_default_values.image.*。
+                 回滾值：0.1.5（回滾後下一次 VMI 啟動又退回 30 秒）。 -->
+            <!-- 0.1.7（2026-10-18，woow-paas-charts 整合包 #254，X-SEC-005-7）：xff-proxy pod 設
+                 automountServiceAccountToken: false（它在 namespace default SA 下拿到一顆用不到的 token）。
+                 0.1.6 不會發佈（charts 整合包裡 0.1.6 只是中間版號，registry 查 haos 0.1.6 回 404），所以範本直接
+                 釘 0.1.7：同時帶 0.1.6 的 VM 關機寬限 300 秒。只改 xff-proxy pod template，升版時 proxy 重啟一次
+                 （數秒），VM 不動。HAOS 映像不變，不需要同步改 helm_default_values.image.*。回滾值：0.1.5。 -->
+            <field name="helm_chart_version">0.1.7</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵；chart 內部契約
                  （UEFI secureBoot=false、masquerade 僅轉 guest :80、limits==requests、
                  DataVolume 的 helm.sh/resource-policy: keep、`-vm` Service 的 selector
@@ -1594,7 +1682,7 @@
                    故 `_inject_apiserver_cidrs` 的 path_map 也刻意不收 'haos'。
                  - ingress.*：本 chart **沒有** ingress 區塊（對外走平台 subdomain +
                    Cloudflare tunnel）。寫了是死鍵，會讓後人以為 chart 支援 Ingress。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20261018.0850@sha256:5e40d52660b8a618412d59223005d44fcd4d152fb5d2bf4ed8f309385741ff04"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HAOS 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1778,12 +1866,21 @@
                 即可使用；平台不持有你的 Home Assistant 帳密。
                 服務附 10 GB 資料磁碟：設定、歷史紀錄，以及你在「媒體」（我的媒體，/media）
                 上傳或錄製的檔案都保存在這顆磁碟上，重新啟動、暫停後恢復都不會遺失。
-                **本版沒有下列三項功能，購買前請務必確認**（這是 Home Assistant 官方對
+                **本版沒有下列兩項功能，購買前請務必確認**（這是 Home Assistant 官方對
                 Container 安裝方式的既有限制，非平台刪減）：**① 沒有 Add-on 商店**
-                （官方新稱「Apps」）；**② 沒有內建備份**；**③ 沒有一鍵更新**。
+                （官方新稱「Apps」）；**② 沒有一鍵更新**。
                 因此倚賴 Add-on 的整合（如 Thread、Z-Wave）在本版沒有現成支援。
-                若你需要 Add-on 商店、備份快照與系統一鍵更新，請改選「Home Assistant OS」
+                **備份**：有 Home Assistant 內建備份（設定 → 系統 → 備份），可自行建立、下載與
+                還原；但備份檔存在同一顆資料磁碟上，沒有異地副本，請定期下載另存——磁碟故障，或
+                刪除服務後磁碟依保留政策回收時，留在磁碟上的備份會一起消失。
+                若你需要 Add-on 商店與系統一鍵更新，請改選「Home Assistant OS」
                 方案——那是跑完整 HAOS 作業系統的專屬虛擬機。
+                **連接需要 OAuth 授權的雲端整合**（例如 Google、Spotify、Withings、Nest）時，
+                在原廠開發者後台登錄的「授權重新導向 URI（redirect URI）」請填
+                「你的服務網址＋/auth/external/callback」，例如
+                https://你的服務網址/auth/external/callback；不要填整合畫面或原廠文件提到的
+                https://my.home-assistant.io/redirect/oauth——本版不含 My Home Assistant
+                轉址服務，填了會在授權完成後被導到找不到的頁面。
                 **本版不含 Home Assistant 內建的 AI 對話與語音助理（Assist）**：對話、AI 任務、
                 語音辨識／語音合成／喚醒詞與 Home Assistant Cloud 元件都已停用，因此 OpenAI、
                 OpenRouter、Anthropic、Google Gemini、Ollama 等 AI 對話整合即使能在「新增整合」
@@ -1795,11 +1892,13 @@
                 原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">container</field>
             <!-- 與 cloud_app_haos／cloud_app_ha_paas 同為 container 分類，讓 Home Assistant
-                 系列產品在前台同一格；租戶靠上面 full_description 的「沒有這三項」與
-                 HAOS 文案的「三項原生可用」一眼分辨。 -->
+                 系列產品在前台同一格；租戶靠上面 full_description 的「沒有這兩項」（Add-on 商店、
+                 一鍵更新；內建備份本版也有，只是存在同一顆磁碟，X-BK-005-2）與 HAOS 文案的
+                 「三項原生可用」一眼分辨。 -->
             <field name="tags">["home-assistant", "smart-home", "container", "ha-full"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+            <field name="tutorial_url">https://woowtech.github.io/Woow_ha_tutorial_site/ch8_first_automation.html</field>
 
             <!-- 2026-10-03 換 chart 0.1.5（woow-paas-charts #115＋#118）：0.1.4 新實例預設座標台北
                  （.storage/core.config，缺才寫，#1374）；0.1.5 平台注入的公開網址寫入
@@ -1829,7 +1928,13 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.6</field>
+            <!-- 0.1.10（2026-10-18，woow-paas-charts 整合包 #254）：0.1.7 工作區＝區網（同 ns ingress 全通、allowAllEgress 不再 render 裸 `- {}`，
+                 #1441／#1436）；0.1.8 drop NET_RAW（INFRA-HA-002-1）；0.1.9 再 drop MKNOD／SYS_CHROOT／AUDIT_WRITE／
+                 SETFCAP、allowPrivilegeEscalation=false、pod seccomp RuntimeDefault（X-SEC-004-2）；0.1.10 HA 原生備份
+                 還原後 /media 綁到已刪目錄，liveness 改 exec 比對 inode、不一致重啟一次（INFRA-HA-008-2）。
+                 本範本寫死的 haProxy.ipBanEnabled=false／seed.unlockCoreConfig=false 照舊有效；image 不變、
+                 helm_default_values 不需改。回滾值：0.1.6。 -->
+            <field name="helm_chart_version">0.1.10</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
@@ -1978,7 +2083,7 @@
             <field name="slug">ha-full-apporo</field>
             <field name="description">APPORO 品牌的容器版 Home Assistant 完整版：與「Home Assistant 完整版」同一套整合集與內建元件，僅品牌外觀不同。1 vCPU／1 GB RAM／10 GB 磁碟</field>
             <field name="full_description">APPORO 品牌的 Home Assistant 完整版雲端服務。功能、整合集、內建元件、
-                限制（無 Add-on 商店、無內建備份、無一鍵更新）與資料保留政策皆與
+                限制（無 Add-on 商店、無一鍵更新；內建備份存在同一顆磁碟、請下載另存）與資料保留政策皆與
                 「Home Assistant 完整版」完全相同，差別只在品牌外觀（APPORO 標誌、色彩與
                 文件連結）。對外僅曝露 Home Assistant 網頁介面（8123 埠）。</field>
             <field name="category">container</field>
@@ -2034,8 +2139,12 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261014.1017@sha256:e03edf0de84081a0c52e17bcfd85de404b214c5abd380b629352228658c7e063"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <!-- 0.1.9（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 auth-proxy 登入失敗鎖 IP＋安全標頭（AI-FIX-SEC-1）、/healthz-upstream 不回
+                 pi-web 內容；0.1.9 三個 exec probe 加時限（probe.curlMaxSeconds=5，卡死的 pi-web 150 秒內重啟，
+                 AI-PI-005-1）、超過 clientMaxBodySize 回 JSON 413（AI-PI-005-4）。image 不變、helm_default_values 不需改；
+                 pod template 變了，升版時重啟一次（PVC 保留）。回滾值：0.1.7。 -->
+            <field name="helm_chart_version">0.1.9</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261018.0104@sha256:0614e0260679b83876cb54b19cda118dea8fb8e236c822f2068afbd3f9707d09"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
@@ -2121,10 +2230,16 @@
                 資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["omnigent", "coding-agent", "ai", "agent"]</field>
-            <field name="documentation_url">https://omnigent-guide.woowtech.io</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_omnigent_tutorial_site</field>
+            <field name="tutorial_url">https://omnigent-guide.woowtech.io/tutorial.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
-            <field name="helm_chart_version">0.1.7</field>
+            <!-- 0.1.12（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 runner Job 預設 nodeSelector paas.woowtech.io/tenant-schedulable=true
+                 （AI-FIX-OMN-3-2）——⚠ 上線前提：31zix／z0v3w／pggrg 三台節點要先加這個 label，否則新 runner 一律
+                 Pending；0.1.9 runner egress gate（#1497）；0.1.10 readiness 加 /data 寫入檢查（AI-OMN-005-1）；
+                 0.1.11 runner-gc 回收孤兒 token Secret（AI-FIX-OMN-1-1）；0.1.12 server／proxy pod 帶 egress-profile=web。
+                 image 不變、helm_default_values 不需改。回滾值：0.1.7。 -->
+            <field name="helm_chart_version">0.1.12</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
@@ -2207,7 +2322,11 @@
                bc970850，OCI sha256:29328050…）。
              爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本，既有服務
              要 redeploy 升到 0.1.7 才修好 #1556）；升到 0.1.7 時 checksum/optional-auth 多了常數，pod 重啟一次
-             （約一分鐘、磁碟保留），卡住的舊金鑰也一併離開執行中的程序。回滾值：0.1.5。 -->
+             （約一分鐘、磁碟保留），卡住的舊金鑰也一併離開執行中的程序。回滾值：0.1.5。
+             2026-10-17 商用驗收 INFRA-DOC-007-2（charts#221）：full_description 與三個金鑰欄位說明揭露「IDE
+             內的擴充與 AI 助手讀得到密碼與金鑰」（密碼經 /proc/1/environ，沙盒以哨兵值實證），建議 LiteLLM
+             虛擬金鑰；頁籤名稱改用中文介面實際顯示的「管理員帳密」。chart 端的揭露與繁中登入頁在 charts
+             code-server 0.1.9（charts #245）；本 PR 不動 chart pin。 -->
         <record id="cloud_app_code_server" model="woow_paas_platform.cloud_app_template">
             <field name="name">Code Server</field>
             <field name="slug">code-server</field>
@@ -2220,23 +2339,31 @@
                 也改走 OpenRouter）。可選填 Git Token（預設給 github.com，可另加 GitLab、Gitea 等主機）與 commit
                 作者名稱／Email，推送免再輸入帳密。另內建 omnigent 指令，
                 可把這台接成同工作區 Omnigent 的工作機。**密碼登入**：沒有帳號，密碼於開通時一次性顯示；
-                可在服務頁「Admin Credentials」重設或改成自己的密碼，修改後服務重啟約一分鐘生效。
+                可在服務頁「管理員帳密」重設或改成自己的密碼，修改後服務重啟約一分鐘生效。
+                **金鑰與密碼的可見範圍**：登入密碼與上述金鑰都是 IDE 容器的環境變數，IDE 裡的擴充與
+                AI 助手（pi、Claude Code、Omnigent 工作階段）都讀得到。請使用設有額度上限的專用金鑰——
+                建議用同工作區 LiteLLM 虛擬金鑰（可設預算、限定模型、隨時撤銷），不要貼主帳號金鑰；
+                Git Token 請限定 repo 並設到期日；只安裝信任的擴充。懷疑外洩時重設密碼（所有登入同時失效）並撤換金鑰。
                 自行安裝的擴充會保留在磁碟上。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
                 刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["code-server", "vscode", "ide", "pi-agent", "claude-code", "ai"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
+            <field name="tutorial_url">https://code-server-guide.woowtech.io/tutorial.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}}},"persistence":{"workspace":{"size":"16Gi"},"piData":{"size":"4Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
+            <!-- 0.1.9（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 startupProbe timeoutSeconds 5（#1637）；0.1.9 登入頁繁中、不再提示
+                 $PASSWORD（codeServer.loginI18n 預設 true，INFRA-DOC-007-3）。image 不變、helm_default_values 不需改；
+                 升版時 pod 重啟一次。回滾值：0.1.7。 -->
+            <field name="helm_chart_version">0.1.9</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261018.0107@sha256:84a37cddc190d8933678a4036b0c6609955122adcec48a147ced6e6693e2c561"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}}},"persistence":{"workspace":{"size":"16Gi"},"piData":{"size":"4Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
-                "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},
+                "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）。IDE 內的擴充與 AI 助手讀得到此金鑰，請用設有額度上限的專用金鑰"},
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
-                "description": "pi 使用的 OpenRouter Key（選填）；未填 Anthropic API Key 時，Claude Code 也改經 OpenRouter 連線"},
+                "description": "pi 使用的 OpenRouter Key（選填）；未填 Anthropic API Key 時，Claude Code 也改經 OpenRouter 連線。IDE 內的擴充與 AI 助手讀得到此金鑰，請用設有額度上限的金鑰"},
                 {"key": "auth.gitToken", "label": "Git Token", "type": "password",
-                "description": "Git 個人存取權杖（選填，GitHub／GitLab／Gitea 皆可）；git 推送／拉取「Git Token 適用主機」時自動帶入，不寫入磁碟"},
+                "description": "Git 個人存取權杖（選填，GitHub／GitLab／Gitea 皆可）；git 推送／拉取「Git Token 適用主機」時自動帶入，不寫入磁碟。IDE 內的擴充與 AI 助手讀得到此權杖，請限定 repo 並設到期日"},
                 {"key": "git.tokenHosts", "label": "Git Token 適用主機", "type": "text", "format": "git_hosts",
                 "default": "github.com", "placeholder": "github.com, git.example.com",
                 "description": "Git Token 只會交給這些主機（只限 https；多個請用逗號分隔、不能用空白；要填含網域的完整主機名，例 git.example.com；最多 10 個，可帶 :port）；留空＝只有 github.com。修改後服務重啟約一分鐘"},
@@ -2296,8 +2423,12 @@
              broker 不受影響（sidecar 退避重試）。正式站以測試帳號開通驗收在本 PR 上線後進行。
              test_emqx_seed.test_hidden_until_mirror_lands 守線：上架 ⟹ 兩顆 image 雙釘。
              ⚠ 憑證形態 app_managed：EMQX 的 dashboard.default_password 依官方文件
-             「只在第一次開機生效、之後變更一律忽略」，且首次登入強制改密碼 ⇒ 平台只供給
-             初始密碼並顯示一次，**不能**重設（admin_password_settable=False）。
+             「只在第一次開機生效、之後變更一律忽略」⇒ chart／helm 只負責初始密碼（顯示一次），
+             helm 那條**不能**重設（admin_password_settable=False）。#1774（商用驗收 INFRA-EMQX-007-1）起
+             Reset 走 app_admin_reset_kind=emqx_exec：operator exec `emqx ctl admins passwd`（與 Dashboard
+             「修改密碼」同一條，EMQX 自己驗密碼規則、撤銷該帳號的 Dashboard token），不重啟；新密碼存回
+             平台憑證記錄。EMQX 開源版沒有 RBAC：role=viewer 的 Dashboard 使用者／API 金鑰其實有完整權限
+             （INFRA-EMQX-007-3，上游行為），說明裡明講。
              同理 MQTT 使用者是 chart 以 built_in_database bootstrap_file 種進空節點的。
              ⚠ min_storage_gb=12 ＝ data 10Gi（mnesia）＋ log 2Gi；方案的 cs_storage_gb=10
              只決定 data 那顆（#332 overlay 落在 persistence.size）。
@@ -2311,8 +2442,12 @@
             <field name="description">開源 MQTT 訊息中介（broker）：物聯網裝置的連線與訊息轉送，附網頁管理後台。WebSocket 裝置直接連服務網址，原生 MQTT 對外透過你自己的 ngrok 帳號。1 vCPU／2 GB RAM／3 GB 磁碟</field>
             <field name="full_description">EMQX 開源版（5.8，Apache-2.0）雲端 MQTT broker：裝置以 MQTT 連進來、訊息由 broker 轉給其他訂閱者，
                 適合環控、感測器、自動化場景。內含網頁管理後台（連線中的裝置、主題、規則、流量）。
-                **帳密**：後台管理員帳號為 admin，密碼由平台在開通時產生並顯示一次，之後由你在後台自行變更——
-                EMQX 的設計是這組密碼只在首次開機寫入它自己的資料庫，平台事後無法代為重設，請務必保存。
+                **帳密**：後台管理員帳號為 admin，密碼由平台在開通時產生並顯示一次，之後可在後台自行變更。
+                忘記密碼時，服務擁有者或管理員可在服務頁按「重設管理員密碼」：平台產生新密碼並只顯示一次，立即生效、服務不重啟，
+                已登入的後台會被登出。
+                **後台只有一種管理員等級**：EMQX 開源版沒有權限分級，後台新增使用者或 API 金鑰時即使選「唯讀（viewer）」，
+                實際上仍有完整管理權限（可改設定、規則、刪除裝置帳號）；請只把後台帳號與 API 金鑰交給可完全信任的人，
+                裝置一律用下方的 MQTT 帳號連線。
                 **裝置連線帳號**：broker 拒絕匿名連線，開通時沒有任何 MQTT 帳號；請在後台的存取控制（Access Control）→
                 認證（Authentication）為裝置建立帳號密碼。
                 **主題權限（預設拒絕）**：每個帳號只能發布／訂閱以自己帳號名稱開頭的主題（帳號 sensor01 → sensor01/#，
@@ -2325,6 +2460,9 @@
                 （後台「诊断工具 → WebSocket 客户端」預設就連這個位址，可直接測試）。原生 MQTT（1883）要讓外部裝置連上，
                 需在服務設定填入你自己的 ngrok authtoken；填了 ngrok 保留位址就固定用該位址，
                 沒填則每次重啟由 ngrok 指派，服務頁會顯示目前位址。
+                對外原生 MQTT 是明文 TCP（沒有 TLS）、經 ngrok 第三方轉送，能用 WebSocket 的裝置請優先走 wss://。
+                ngrok 舊版（legacy）或免費帳號不允許 PROXY protocol（服務頁顯示 ERR_NGROK_9014）：請升級 ngrok 付費方案，
+                或在服務設定關閉「對外 MQTT 傳遞真實來源位址（PROXY protocol）」。
                 同一工作區內的其他服務（如 n8n、Home Assistant）可直接連 1883／8083。
                 **重啟**：保留訊息（retained）存在磁碟，重啟後仍在；持久 session（clean start = false）
                 的離線佇列在服務重啟（包括每次儲存設定）後不會保留。
@@ -2333,11 +2471,22 @@
             <field name="category">automation</field>
             <field name="tags">["emqx", "mqtt", "iot", "broker", "messaging"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
+            <field name="tutorial_url">https://emqx-guide.woowtech.io/ch5_first_connection.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
-            <field name="helm_chart_version">0.1.7</field>
+            <!-- 0.1.11（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 startupProbe timeoutSeconds 3（#1637）；0.1.9 /status/、/api/v5/status/
+                 前綴拒絕（INFRA-EMQX-004）；0.1.10 dashboard 登入限速（entrance.loginRateLimit，INFRA-EMQX-007-2）；
+                 0.1.11 tenantSecret.name（INFRA-FIX-019-1）。⚠ pin ≥ 0.1.11 ＝ secret_ref.since_chart 成立：
+                 平台改把 ngrok authtoken 交給 operator 寫進租戶自己的 Secret，operator 一定要先換到有 tenant_secret
+                 的版本（#1803）。image 不變、helm_default_values 不需改。回滾值：0.1.7。 -->
+            <field name="helm_chart_version">0.1.11</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"2Gi"},"log":{"size":"1Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
-            <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
+            <!-- INFRA-FIX-019-1：password spec 的 secret_ref＝chart 版本 ≥ since_chart 時，這個值不進 helm
+                 values（helm 把每個 revision 的 values／manifest 都存在 release 歷史裡，清除後舊值仍讀得到），
+                 改由 operator 寫進 <release>-tenant-secret 的 key（chart tenantSecret 契約；見
+                 services/tenant_secret.py）。pin 低於 since_chart 時照舊走 values。⚠ 已寫進舊 revision 的值清不掉：
+                 撤銷後仍要到 ngrok 後台（Authtokens）輪換／撤銷。 -->
+            <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線。⚠ 對外原生 MQTT 是明文 TCP（沒有 TLS），MQTT 帳密與訊息內容都經 ngrok 第三方轉送，知道位址的人都能嘗試連線（只靠 MQTT 帳密與主題權限把關）；只在裝置無法走 WebSocket 時使用，其餘請連 wss://服務網址/mqtt"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "secret_ref": {"key": "ngrok_authtoken", "since_chart": "0.1.11"}, "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。已設定後欄位留空＝不變更；要撤銷請勾選下方「清除已設定的金鑰」裡的「清除 ngrok Authtoken」"}, {"key": "ngrok.proxyProtocol", "label": "對外 MQTT 傳遞真實來源位址（PROXY protocol）", "type": "boolean", "default": true, "description": "開啟時 EMQX 看得到每個 ngrok 用戶端的真實來源位址（可依 IP 封鎖、辨識裝置）。ngrok 舊版（legacy）或免費帳號不允許 PROXY protocol，服務頁會顯示 ERR_NGROK_9014：請升級 ngrok 付費方案，或關閉本選項。關閉後所有經 ngrok 連入的用戶端在 EMQX 看來都是 127.0.0.1（預設權限不給 127.0.0.1 任何主題；若你曾在後台加過依 127.0.0.1 或 IP 放行的授權規則，關閉前請先移除），也無法再依來源位址封鎖或辨識"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "format": "host_port", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址，格式「主機:埠」，例如 1.tcp.ngrok.io:12345，不要加 tcp://）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
@@ -2349,9 +2498,12 @@
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
+            <field name="app_admin_reset_kind">emqx_exec</field>
             <field name="admin_password_settable" eval="False"/>
             <field name="has_public_tunnel_address" eval="True"/>
             <field name="public_tunnel_label">對外 MQTT 位址</field>
+            <!-- 商用驗收 EMQX-020-3：對外原生 MQTT 是明文 TCP、經 ngrok 第三方（資料值，不進 .po）。 -->
+            <field name="public_tunnel_address_note">明文 TCP（沒有 TLS），經 ngrok 第三方轉送；能用 WebSocket 的裝置請改連 wss://服務網址/mqtt。</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>
@@ -2406,6 +2558,7 @@
             <field name="category">web</field>
             <field name="tags">["nextcloud", "files", "storage", "collaboration", "calendar"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_nextcloud#readme</field>
+            <field name="tutorial_url">https://nextcloud-guide.woowtech.io/ch6_files_basics.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
             <field name="helm_chart_version">0.1.7</field>
@@ -2517,18 +2670,30 @@
             <field name="category">devops</field>
             <field name="tags">["headscale", "headplane", "vpn", "tailscale", "wireguard"]</field>
             <field name="documentation_url">https://headscale.net/stable/</field>
+            <field name="tutorial_url">https://headscale-guide.woowtech.io/ch4_user_preauth.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
-            <field name="helm_chart_version">0.1.4</field>
+            <!-- 0.1.8（2026-10-18，woow-paas-charts 整合包 #254）：0.1.5 GOMEMLIMIT＋方案資源改落在 headscale 容器（#1637）；0.1.6 入口安全標頭＋
+                 限速（INFRA-HS-005）；0.1.7 tenantSecret.name（INFRA-FIX-019-1）；0.1.8 ngrok 只放行 Tailscale 用的
+                 路徑（ngrok.pathFilter，INFRA-HS-013）、CF-Connecting-IP 只信公網 IP＋每個 TCP peer 另計
+                 （INFRA-HS-005-2）。⚠ pin ≥ 0.1.7 ＝ secret_ref.since_chart 成立，operator 要先換版（#1803）。
+                 image 不變、helm_default_values 不需改。回滾值：0.1.4。 -->
+            <field name="helm_chart_version">0.1.8</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0502@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261013.1924@sha256:6ba6c42bb9e277c729ae69c6d42c4ba367655e7b4e8b03a22189204ecfb4a4c5"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
+            <!-- INFRA-FIX-019-1：password spec 的 secret_ref＝chart 版本 ≥ since_chart 時，這個值不進 helm
+                 values（helm 把每個 revision 的 values／manifest 都存在 release 歷史裡，清除後舊值仍讀得到），
+                 改由 operator 寫進 <release>-tenant-secret 的 key（chart tenantSecret 契約；見
+                 services/tenant_secret.py）。pin 低於 since_chart 時照舊走 values。⚠ 已寫進舊 revision 的值清不掉：
+                 撤銷後仍要到 ngrok 後台（Authtokens）輪換／撤銷。 -->
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
                 "description": "Tailscale 的登入協定無法經過平台的服務網址，外部裝置要登入必須透過你自己的 ngrok 帳號；未開啟時只有同工作區的 VPN 節點能用內部網址登入"},
-                {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password",
-                "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外登入網址時要填；清空即撤銷。換成另一個 ngrok 帳號＝登入網址改變，所有裝置都要重新登入。免費帳號每月約 1 GB 流量／2 萬次請求，正式使用建議升級付費方案"},
+                {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "secret_ref": {"key": "ngrok_authtoken", "since_chart": "0.1.7"},
+                "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外登入網址時要填；已設定後欄位留空＝不變更，要撤銷請勾選下方「清除已設定的金鑰」裡的「清除 ngrok Authtoken」。換成另一個 ngrok 帳號＝登入網址改變，所有裝置都要重新登入。免費帳號每月約 1 GB 流量／2 萬次請求，正式使用建議升級付費方案"},
                 {"key": "ngrok.domain", "label": "ngrok 網域（選填）", "type": "text", "format": "domain",
                 "placeholder": "xxx.ngrok-free.app",
-                "description": "只填網域、不要加 https://；留空＝自動使用這個 ngrok 帳號的免費固定網域。改網域＝所有裝置都要重新登入。同一個網域同時只能給一台使用：已在別處上線（ERR_NGROK_334）時，本服務改為只有內部網址可登入"},
+                "description": "只填網域、不要加 https://；留空＝自動使用這個 ngrok 帳號的免費固定網域。請照抄 ngrok 後台 Domains 頁列出的網域：平台無法核對網域是否屬於你的帳號，打錯字或填了不屬於你帳號的網域，ngrok 仍可能讓它上線並成為登入網址，之後登入的裝置都會指向那個網址。改網域＝所有裝置都要重新登入。同一個網域同時只能給一台使用：已在別處上線（ERR_NGROK_334）時，本服務改為只有內部網址可登入",
+                "confirm_change": "改 ngrok 網域會改變 VPN 登入網址：已登入的裝置會離線且不會自動搬到新網址，每台都要重新登入。請確認新網域是你 ngrok 後台 Domains 頁列出的網域（平台無法核對網域是否屬於你的帳號）。"},
                 {"key": "headscale.dns.magicDns", "label": "MagicDNS", "type": "boolean", "default": true,
                 "description": "開啟時 tailnet 內的裝置可以用名稱互連（例如 my-laptop.tailnet.internal）"},
                 {"key": "headscale.dns.baseDomain", "label": "MagicDNS 網域", "type": "text", "default": "tailnet.internal",
@@ -2556,6 +2721,9 @@
             <field name="admin_username_helm_path">entrance.basicAuthUsername</field>
             <field name="has_public_tunnel_address" eval="True"/>
             <field name="public_tunnel_label">VPN 登入網址（login server）</field>
+            <!-- 商用驗收 HS-013-3：ngrok 失敗時 chart 把 server_url 退回叢集內網址（#1559 internal-fallback），
+                 外部裝置會離線——原因文案下面補這一句（資料值，不進 .po）。 -->
+            <field name="public_tunnel_error_note">目前登入網址已暫時改為叢集內網址：外部裝置暫時離線，只有同工作區的 VPN 節點連得上。ngrok 修好後請重新啟動服務，登入網址才會改回 ngrok 網址。</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>
@@ -2612,7 +2780,11 @@
              爆炸半徑：只影響新開通與之後 redeploy 的服務（reconfigure／reset 釘服務現行 chart 版本）；redeploy
              時 StatefulSet 重啟一次（節點身分在 PVC，回來仍是同一台）。workspace 模式填了 tags 的節點，換版後
              tags 被略過（沙盒：被舊版登出的節點升級後由 liveness 重啟一次、約 40 秒救回），節點的 tag 改由
-             pre-auth key 決定。回滾值：0.1.2。 -->
+             pre-auth key 決定。回滾值：0.1.2。
+             INFRA-TS-004-1（2026-10-16 商用驗收）：tailscale.tags 帶 spec ``ignored_when``
+             （controlPlane=workspace）——chart 會略過這一欄，所以開通／儲存設定時有值就擋下（不再白白
+             helm upgrade 一次），設定頁在欄位下說明原因、空白時停用輸入、檢視模式標「未套用」。
+             判準在 CloudAppTemplate._ignored_when_violation 與 static/src/paas/utils/ignored_when.js。 -->
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 節點（相容 Tailscale）</field>
             <field name="slug">tailscale</field>
@@ -2630,7 +2802,7 @@
                 或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。使用同工作區 Headscale 時，標籤（tag）要建在 pre-auth key 上
                 （Headplane 建 key 時指定），「標籤 tags」欄位請留空：Headscale 不接受節點登入時自己要求的標籤，帶了節點會被登出。
                 **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
-                IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
+                IP、外部網址或其他工作區的項目會被略過；被略過的項目與原因、以及每個轉發有沒有生效，都顯示在服務頁的「VPN 節點狀態」。
                 **網頁介面**：帳號預設 admin，帳號與密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
                 重設或改成自己的，重設後節點會重新啟動，約數十秒（節點身分保留，回到 tailnet 仍是同一台）。網頁介面僅供登入與查看狀態；
                 請從瀏覽器開服務網址操作，其他設定一律在服務設定修改；儲存設定時節點會重啟約一分鐘。
@@ -2644,26 +2816,37 @@
             <field name="documentation_url">https://tailscale.com/kb</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
-            <field name="helm_chart_version">0.1.5</field>
+            <!-- 0.1.10（2026-10-18，woow-paas-charts 整合包 #254）：0.1.6 GOMEMLIMIT（#1637）；0.1.7 入口安全標頭＋限速；0.1.8 tenantSecret.name
+                 （INFRA-FIX-019-1）；0.1.9 Ready 要等 serve 轉發套用（INFRA-TS-008-2，serveSyncSeconds 15 → 5）；
+                 0.1.10 關閉 Taildrop（INFRA-DOC-003）、CF-Connecting-IP 只信公網 IP（INFRA-HS-005-2）。
+                 ⚠ pin ≥ 0.1.8 ＝ secret_ref.since_chart 成立，operator 要先換版（#1803）。
+                 image 不變、helm_default_values 不需改。回滾值：0.1.5。 -->
+            <field name="helm_chart_version">0.1.10</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
+            <!-- INFRA-FIX-019-1：password spec 的 secret_ref＝chart 版本 ≥ since_chart 時，這個值不進 helm
+                 values（helm 把每個 revision 的 values／manifest 都存在 release 歷史裡，清除後舊值仍讀得到），
+                 改由 operator 寫進 <release>-tenant-secret 的 key（chart tenantSecret 契約；見
+                 services/tenant_secret.py）。pin 低於 since_chart 時照舊走 values。⚠ 已寫進舊 revision 的值清不掉：
+                 撤銷後仍要到 Tailscale 管理後台（Keys）或 Headplane（pre-auth keys）輪換／撤銷。 -->
             <field name="helm_value_specs">{"required": [], "optional": [
-                {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official",
+                {"key": "tailscale.controlPlane", "label": "控制平面", "type": "select", "default": "official", "validate": "tailscale_login",
                 "options": [{"value": "official", "label": "官方 Tailscale"}, {"value": "workspace", "label": "同工作區 Headscale"}, {"value": "custom", "label": "自訂網址"}],
                 "description": "選「同工作區 Headscale」時平台自動帶入同工作區 VPN 控制台的內部網址（有好幾台時用最早建立、執行中的那台），只帶網址：pre-auth key 仍要你在它的網頁後台 Headplane 建好、貼到 auth key 欄位；工作區還沒有執行中的 Headscale 時節點不登入並寫入服務記錄。選「自訂網址」時用下方「控制伺服器」欄位。換控制平面＝這台節點登記成新機器（新的 tailnet IP）"},
                 {"key": "tailscale.loginServer", "label": "控制伺服器（自訂網址）", "type": "text",
                 "placeholder": "https://headscale.example.com",
-                "description": "只在「控制平面」選「自訂網址」時使用，例如其他地方的 Headscale；同工作區的 VPN 控制台請改選「同工作區 Headscale」，不必自己填。換網址＝這台節點登記成新機器（新的 tailnet IP）；網址格式不正確或留空時維持目前的登入並寫入服務記錄"},
-                {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password",
-                "description": "Tailscale 的 tskey-auth-… 或 Headscale 的 pre-auth key，只在節點尚未登入時使用。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
+                "description": "只在「控制平面」選「自訂網址」時使用，例如其他地方的 Headscale；同工作區的 VPN 控制台請改選「同工作區 Headscale」，不必自己填。換網址＝這台節點登記成新機器（新的 tailnet IP）；選「自訂網址」時必填，格式要是 https://主機 或 http://主機:埠，否則無法儲存"},
+                {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password", "secret_ref": {"key": "authkey", "since_chart": "0.1.8"},
+                "description": "Tailscale 的 tskey-auth-…（控制平面選官方 Tailscale）或 Headscale 的 pre-auth key（控制平面選 Headscale），種類不符時無法儲存。只在節點需要登入時使用：已登入的節點不會用新 key（服務頁「VPN 節點狀態」會提示），key 過期／已用過等登入失敗原因也顯示在那裡。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
                 {"key": "tailscale.hostname", "label": "節點名稱（選填）", "type": "text",
                 "placeholder": "woow-office",
                 "description": "tailnet 上顯示的名稱（英文字母、數字與連字號）；留空或格式不合時用 woow-&lt;Helm Release&gt;"},
                 {"key": "tailscale.tags", "label": "標籤 tags（選填）", "type": "text",
                 "placeholder": "tag:server",
+                "ignored_when": {"key": "tailscale.controlPlane", "values": ["workspace"]},
                 "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過。控制平面選「同工作區 Headscale」時請留空（新版節點會略過這一欄）：Headscale 不接受節點用 pre-auth key 登入時自己要求的標籤，帶了會被登出；要帶 tag，請在 Headplane 建 pre-auth key 時就指定 tags，節點登入後就帶著 key 的 tag（之後要在 ACL 規則用這個 tag，再把它列進 tagOwners）"},
-                {"key": "tailscale.serve", "label": "轉發清單", "type": "text",
+                {"key": "tailscale.serve", "label": "轉發清單", "type": "text", "validate": "tailscale_serve",
                 "placeholder": "8069=svc-1a2b3c4d:80",
-                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔；只接受同一工作區的服務，不合格的項目（IP、外部網址、其他工作區）會被略過並寫入服務記錄"},
+                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔，最多 32 筆；只接受同一工作區的服務，格式不對、埠超出 1–65535、IP、外部網址、其他工作區或重複的 tailnet 埠都無法儲存。每個轉發的生效狀態（含服務不存在）顯示在服務頁的「VPN 節點狀態」"},
                 {"key": "tailscale.noLogs", "label": "不上傳診斷記錄到 Tailscale", "type": "boolean", "default": true,
                 "description": "開啟時節點不把診斷記錄上傳到 Tailscale 公司（--no-logs-no-support）；關閉才能向 Tailscale 官方申請支援"}
                 ]}</field>
@@ -2677,6 +2860,8 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="admin_password_settable" eval="True"/>
             <field name="admin_username_helm_path">entrance.basicAuthUsername</field>
+            <!-- INFRA-FIX-005：服務頁「VPN 節點狀態」卡（登入狀態、登入入口、轉發結果）的唯一事實源。 -->
+            <field name="has_vpn_node_status" eval="True"/>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>
@@ -2767,7 +2952,11 @@
                 可連多個 ChatGPT 帳號（每個帳號一個憑證），同名模型會在帳號間自動分流。
                 這是借用 Codex 的登入方式、非 OpenAI 官方的第三方整合，用量算在你的訂閱、帳號風險自負，僅限你自己使用。
                 **使用 API**：應用程式請一律用後台建立的虛擬金鑰，master key 只給管理腳本。經公開網址單次請求上限 100 MB；
-                長回應請用串流（stream），否則超過約 100 秒沒有任何輸出會被平台入口中斷。同一工作區的其他服務可改用內部網址
+                平台入口約 120 秒收不到任何資料就會中斷連線。非串流請求要等整段回應生成完才送出第一個位元組，超過約 120 秒
+                會收到 HTTP 524、拿不到結果；長回應請用串流（stream: true）。串流在第一段輸出之前或中途（例如推理模型思考時）
+                沒有輸出時，閘道每 15 秒送一行 SSE 註解（: ping）維持連線，OpenAI 等 SDK 會自動忽略；因此送出 keepalive
+                之後才發生的錯誤會以串流中的錯誤事件送達（HTTP 狀態仍是 200）。被入口中斷的請求，上游模型可能仍會跑完並向
+                供應商計費。同一工作區的其他服務可改用內部網址
                 http://&lt;服務 release&gt;-litellm:4000/v1（&lt;服務 release&gt; 是本服務頁 Helm Release 那一格），不受上述限制。
                 **注意**：不要對這個服務的網址開啟「Access 保護」——它會擋掉 API 用戶端，只剩瀏覽器能通過。
                 **用量紀錄與備份**：每筆請求的明細紀錄保留天數在服務設定調整（預設 90 天）；資料庫每天自動備份到同一顆磁碟，
@@ -2778,8 +2967,14 @@
             <field name="documentation_url">https://docs.litellm.ai/docs/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
-            <field name="helm_chart_version">0.3.5</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261015.0956@sha256:35a2eca3fbc0edcd4da8de2bcf3d05248198b790da6d7dca9e1b3584185f38b0"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
+            <!-- 0.3.10（2026-10-18，woow-paas-charts 整合包 #254）：0.3.6 num_retries 預設 0；0.3.7 推理模型小 max_tokens 自動拉高（AI-LLM-003-1）；
+                 0.3.8 有預算的呼叫者打到沒定價的模型會警告（AI-LLM-005-1）；0.3.9／0.3.10 備份結果寫入設定、每日備份
+                 補跑（AI-LLM-009-1／-2）；0.3.10 另含 SSE keepalive 15 秒（#1840 的說明要這版才成立）、⚠
+                 litellm.requestTimeoutSeconds 預設 600 → 90 秒（上游逾時回 JSON 504）、請求大小上限 32 MB、preStop 75 秒。
+                 image 不變（外掛檔在 chart 裡），helm_default_values 不需改；Redeploy 是 Recreate，約中斷 60–70 秒。
+                 回滾值：0.3.5。 -->
+            <field name="helm_chart_version">0.3.10</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261018.0834@sha256:ad43b95960642ec76cb60c97167f1d21a19dfa6660c06f484f8007d674f5da10"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
@@ -2874,7 +3069,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:1cdd351ddc781170e48e4f9b37e6d60585b81623335b051a62a043512f1a101b"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:4c3713b51e558b56efafe20ee8be30e618eea231d2debebb983ad7b137b0c98c"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -2963,7 +3158,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:427a0b994f278ff48457ff3e1fa02a9028674889e21f5cdb2dc7266b1daabb89"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:f2d39c5c7bbdb597ffb6f9e2c3da7064bd500cb5c8ef67a201c1b57236a7c467"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>

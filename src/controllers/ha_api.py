@@ -12,6 +12,7 @@ from typing import Any
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
+from ..models.tunnel_binding_mixin import TunnelBindingConflict
 from ..models.workspace_access import ROLE_ADMIN
 from ..services.paas_capability import _PaaSCapability
 from odoo import _
@@ -35,6 +36,65 @@ def _json_response(data: dict, status: int = 200) -> Response:
         content_type='application/json',
         headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'},
     )
+
+
+def _release_binding(record, kwargs: dict) -> Response:
+    """#1766：HA 端移除整合時呼叫，把綁定讓出來給下一台。
+
+    只有持有者自己放得掉（`instance_uid` 要對得上），否則 409——不然 B 機器可以先
+    放掉 A 的綁定再自己搶，整個閘就白做了。已經 unbound 回 200（冪等：HA 可能重試、
+    平台可能先被後台解綁過）。
+
+    ⚠ 這個端點**不會**讓對方的 cloudflared 斷線，平台收不回已交出的權杖；它只決定
+    「下一台能不能接手」。
+    """
+    released, holder = record._tunnel_binding_release(
+        (kwargs.get('instance_uid') or '').strip()[:64])
+    if not released:
+        return _json_response({
+            'error': 'not_the_holder',
+            'detail': _("This tunnel is held by another Home Assistant "
+                        "installation (%(label)s); only that installation can "
+                        "release it. A workspace owner or admin can release it "
+                        "from the portal.", label=holder),
+            'bound_to': holder,
+        }, status=409)
+    return _json_response({'binding_state': record.binding_state})
+
+
+def _claim_binding(record, kwargs: dict) -> Response | None:
+    """#1766：把這條 tunnel 綁給呼叫端那一台 HA，衝突時回 409。
+
+    `instance_uid` 是呼叫端自報的 Home Assistant instance id（元件 0.4.12 起會
+    帶）。第一台要到權杖的會被記成綁定對象；之後**其他** uid 來要同一筆資源就拿不
+    到權杖。沒帶 uid 的舊元件照發（legacy），但 legacy → claimed 是單向的，見
+    `models/tunnel_binding_mixin.py` 的模組 docstring。
+
+    ⚠ 回 409 而不是 403：這不是權限問題（呼叫端確實是 owner／admin），而是資源
+    狀態衝突，而且對方有明確修法（在後台解綁或改綁別的）。元件端靠這個狀態碼決定
+    「不要退回用快取的權杖」——那正是會長出第二個 connector 的那條路。
+
+    Returns a Response to send back, or None when the claim succeeded.
+    """
+    try:
+        record._tunnel_binding_claim(
+            (kwargs.get('instance_uid') or '').strip()[:64],
+            (kwargs.get('instance_label') or '').strip()[:128],
+        )
+    except TunnelBindingConflict as conflict:
+        _logger.warning(
+            "[tunnel-binding] refused tunnel token: %s id=%s already bound to "
+            "%s (caller uid=%r)",
+            record._name, record.id, conflict.bound_to or '-',
+            (kwargs.get('instance_uid') or '')[:64],
+        )
+        return _json_response({
+            'error': 'already_bound',
+            'detail': str(conflict),
+            'bound_to': conflict.bound_to,
+            'bound_at': conflict.bound_at,
+        }, status=409)
+    return None
 
 
 def _json_error(error: str, detail: str, status: int = 400) -> Response:
@@ -387,6 +447,19 @@ class HAIntegrationController(Controller):
         if denied:
             return denied
 
+        # `_get_home_with_access` returns a sudoed record only after the
+        # workspace and owner/admin gates above have accepted the caller.
+        sub = home.subscription_id
+        if sub and sub._woow_trial_expired():
+            return _json_error('trial_expired',
+                               '七天試用已結束，請到 woowtech 選擇付費方案。', 409)
+
+        # 綁定閘在**發權杖之前**（#1766）：claim 失敗就不該有權杖出門。claim 成功
+        # 但 HTTP 回應在路上丟掉沒關係——同一個 uid 再問一次是冪等的。
+        conflict = _claim_binding(home, kwargs)
+        if conflict is not None:
+            return conflict
+
         domain = home._get_paas_domain()
         subdomain = home.subdomain or ''
         fqdn = f"{subdomain}.{domain}" if subdomain else ''
@@ -397,6 +470,32 @@ class HAIntegrationController(Controller):
             'subdomain': fqdn,
             'mcp': home._get_mcp_integration(),
         })
+
+    @route(
+        '/api/smarthome/homes/<int:smarthome_id>/tunnel-binding',
+        type='http', auth='none', methods=['DELETE'], csrf=False,
+    )
+    def release_tunnel_binding(self, smarthome_id: int, **kwargs: Any) -> Response:
+        """Release this smart home's Home Assistant binding (#1766).
+
+        HA 的 `async_remove_entry` 會打這裡：使用者在 HA 移除整合 ⇒ 這個家要能馬上
+        給下一台接。沒有這一支的話，綁定只能靠人去後台按「解除綁定」，換機器就卡住。
+
+        Required scope: ``smarthome:tunnel``（跟拿權杖同一級——放掉綁定是它的反向
+        動作）；呼叫者須為 owner／admin。只有持有者本人放得掉，見 `_release_binding`。
+        """
+        result = _authenticate(required_scopes=['smarthome:tunnel'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+
+        home = self._get_home_with_access(user, smarthome_id)
+        if isinstance(home, Response):
+            return home
+        denied = _require_manage_role(user, home.workspace_id)
+        if denied:
+            return denied
+        return _release_binding(home, kwargs)
 
     # ==================== Live Status ====================
 
@@ -520,6 +619,12 @@ class HAIntegrationController(Controller):
         denied = _require_manage_role(user, sa.workspace_id)
         if denied:
             return denied
+
+        # 與 smart home 同步收緊（#1766）。⚠ 這兩個端點是鏡像：只收一側，攻擊面
+        # 只是搬家到另一側（`two-layer-acl-lockstep` pattern）。
+        conflict = _claim_binding(sa, kwargs)
+        if conflict is not None:
+            return conflict
         # Asymmetry with smart home's tunnel-token (which returns a single
         # `subdomain` FQDN) is intentional: a Security Access is a Cloudflare
         # Tunnel with N application routes and no single hostname, so there is
@@ -530,6 +635,28 @@ class HAIntegrationController(Controller):
             'tunnel_token': sa.tunnel_token or '',
             'tunnel_id': sa.tunnel_id or '',
         })
+
+    @route(
+        '/api/security-access/accesses/<int:sa_id>/tunnel-binding',
+        type='http', auth='none', methods=['DELETE'], csrf=False,
+    )
+    def sa_release_tunnel_binding(self, sa_id: int, **kwargs: Any) -> Response:
+        """Mirror of ``release_tunnel_binding``. Scope: security-access:tunnel.
+
+        ⚠ 兩個端點是鏡像：claim 收緊時兩邊一起收，release 也必須兩邊一起開——只開
+        一側的話，SA 那邊換機器照樣卡死（`two-layer-acl-lockstep`）。
+        """
+        result = _authenticate(required_scopes=['security-access:tunnel'])
+        if isinstance(result, Response):
+            return result
+        user, _token = result
+        sa = self._get_sa_with_access(user, sa_id)
+        if isinstance(sa, Response):
+            return sa
+        denied = _require_manage_role(user, sa.workspace_id)
+        if denied:
+            return denied
+        return _release_binding(sa, kwargs)
 
     @route(
         '/api/security-access/accesses/<int:sa_id>/status',

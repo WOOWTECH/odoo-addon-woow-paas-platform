@@ -1,4 +1,4 @@
-"""Portal page extension: agent status card + AI chat on native pages.
+"""Native portal: project agent cards/chat and D19 invoice privacy.
 
 Extends the native ``ProjectCustomerPortal`` view-value hooks. Pages are
 reachable only after the native ``_document_check_access`` (ir.rule or
@@ -7,11 +7,23 @@ status data endpoints enforce their own portal legs (ai_assistant.py).
 """
 import logging
 
-from odoo.http import request
+from odoo import _
+from odoo.exceptions import MissingError, ValidationError
+from odoo.http import request, route
 
+from odoo.addons.account_payment.controllers.payment import PaymentPortal
+from odoo.addons.account_payment.controllers.portal import PortalAccount
 from odoo.addons.project.controllers.portal import ProjectCustomerPortal
 
 _logger = logging.getLogger(__name__)
+
+
+def _check_credit_document_privacy(model_name, document):
+    """Token-authorized sudo documents still obey D19 for tenant visitors."""
+    if (model_name == 'account.move' and request.env.user.share
+            and document._llm_is_internal_credit_move()):
+        raise MissingError('This document does not exist.')
+    return document
 
 
 class PaasProjectCustomerPortal(ProjectCustomerPortal):
@@ -74,3 +86,50 @@ class PaasProjectCustomerPortal(ProjectCustomerPortal):
                 'channel_member_ids': [(0, 0, {'partner_id': partner.id})]})
         values['paas_channel_id'] = channel.id
         return values
+
+
+class PaasAccountCustomerPortal(PortalAccount):
+    """D19: private conversion vouchers never enter the tenant invoice portal.
+
+    Odoo 18 account.portal lists/home counters use the global read rule.
+    Keep its caller-scoped search domain unchanged: the private marker is
+    system-only and _field_to_sql checks field permissions. Rule expressions
+    are compiled with sudo by _apply_ir_rules, so they can safely use it.
+    Detail, report_type and legal-document download call _document_check_access
+    first, but that helper accepts access tokens and returns a sudo document.
+    The explicit share-user gate closes that token bypass. Direct /report
+    rendering keeps the caller's environment and is covered by the global
+    account.move read rule; internal ERP/accounting users remain unaffected.
+    """
+
+    def _document_check_access(self, model_name, document_id, access_token=None):
+        document = super()._document_check_access(model_name, document_id, access_token)
+        return _check_credit_document_privacy(model_name, document)
+
+
+class PaasInvoicePaymentPortal(PaymentPortal):
+    """Cover native transaction and payment-link routes as well as invoice UI.
+
+    account_payment has a separate payment controller: invoice_transaction
+    accepts a document token, while payment_pay uses a context payment token
+    and directly browses the invoice under sudo. Neither grants tenants the
+    right to pay internal vouchers. Internal accounting users keep native ERP
+    behavior and ordinary invoices continue through the upstream flow.
+    """
+
+    def _document_check_access(self, model_name, document_id, access_token=None):
+        document = super()._document_check_access(model_name, document_id, access_token)
+        return _check_credit_document_privacy(model_name, document)
+
+    @route()
+    def payment_pay(self, *args, amount=None, invoice_id=None, access_token=None, **kwargs):
+        document_id = self._cast_as_int(invoice_id)
+        if request.env.user.share and document_id:
+            # exists() resolves only this supplied id; the private model helper
+            # reads just the marker. This lookup can only deny, never return an
+            # invoice or relax the upstream payment-token/ownership checks.
+            document = request.env['account.move'].browse(document_id).exists()
+            if document and document._llm_is_internal_credit_move():
+                raise ValidationError(_('The provided parameters are invalid.'))
+        return super().payment_pay(
+            *args, amount=amount, invoice_id=invoice_id, access_token=access_token, **kwargs)

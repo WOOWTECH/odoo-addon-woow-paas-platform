@@ -5,7 +5,9 @@ import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { HelmValueForm } from "../../../components/config/HelmValueForm";
+import { ignoredWhenMessage, ignoredWhenViewNote, isBlankSpecValue } from "../../../utils/ignored_when";
 import { cloudService } from "../../../services/cloud_service";
+import { settingsErrors } from "../../../utils/tailscale_settings";
 
 /**
  * ConfigurationTab Component
@@ -39,6 +41,9 @@ export class ConfigurationTab extends Component {
             errors: {},
             // #1455：勾選要清除的憑證欄位（spec key 陣列）。
             clearKeys: [],
+            // service-update-api-validation（INFRA-HS-013-4）：存檔前要租戶再確認一次的
+            // 說明（spec `confirm_change`，例 Headscale 改 ngrok 網域＝所有裝置要重新登入）。
+            pendingConfirm: [],
         });
     }
 
@@ -169,6 +174,14 @@ export class ConfigurationTab extends Component {
         return value !== undefined && value !== null && value !== "";
     }
 
+    /**
+     * INFRA-TS-004-1：檢視模式在值旁標「未套用」——條件下會被 chart 略過、卻存了值的欄位
+     * （例：ignored_when 上線前、在「同工作區 Headscale」模式存的 tags）。
+     */
+    ignoredWhenViewNote(spec) {
+        return ignoredWhenViewNote(spec, this.helmValueSpecs, this.currentValues);
+    }
+
     formatSpecValue(spec) {
         const value = this.getSpecValue(spec);
         // #1455：從沒設定過的金鑰原本也顯示成 ********，租戶以為已設定。
@@ -243,10 +256,13 @@ export class ConfigurationTab extends Component {
         this.state.errors = {};
         this.state.showAdvanced = false;
         this.state.clearKeys = [];
+        this.state.pendingConfirm = [];
     }
 
     onHelmValueUpdate(key, value) {
         this.state.editedValues = { ...this.state.editedValues, [key]: value };
+        // 值又改了 ⇒ 之前的確認不算數，下次存檔重新判斷。
+        this.state.pendingConfirm = [];
         if (this.state.errors[key]) {
             const newErrors = { ...this.state.errors };
             delete newErrors[key];
@@ -260,6 +276,16 @@ export class ConfigurationTab extends Component {
 
     validateForm() {
         const errors = {};
+        // INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec `ignored_when`，例 VPN 節點
+        // 「同工作區 Headscale」模式的 tags）有值 ⇒ 送出前就標錯（後端同一判準也會擋）。
+        // 只在欄位有值時標，與下方 required 的「空白」檢查不重疊。
+        for (const spec of this.allSpecs) {
+            if (isBlankSpecValue(this.state.editedValues[spec.key])) continue;
+            const message = ignoredWhenMessage(spec, this.configurableSpecs, this.state.editedValues);
+            if (message) {
+                errors[spec.key] = message;
+            }
+        }
         for (const spec of this.configurableSpecs.required) {
             // #535：required 的密碼欄留白代表「不變更」，不是漏填。這是重新設定
             // 頁面，密碼在建立服務時就已經設過了（建立頁 AppConfigurationPage
@@ -269,6 +295,25 @@ export class ConfigurationTab extends Component {
             if (value === undefined || value === null || value === "") {
                 errors[spec.key] = _t("%s is required", spec.label || spec.key);
             }
+        }
+        // INFRA-TS-005-5／TS-007-1：spec 帶 `validate` 的欄位（VPN 節點的轉發清單、控制平面＋key）
+        // 在送出前就擋下節點一定會略過／登入一定失敗的值（後端存檔時同一套規則再驗一次）。
+        const edited = this.state.editedValues;
+        const checked = settingsErrors(this.allSpecs, edited, {
+            namespace: this.props.service.helm_namespace ?? null,
+            changed: (key) => {
+                const spec = this.allSpecs.find((s) => s.key === key);
+                if (!spec || !(key in edited)) return false;
+                if (this.isPasswordSpec(spec)) return !!edited[key];
+                return String(edited[key] ?? "") !== String(this.getSpecValue(spec) ?? "");
+            },
+        });
+        for (const [key, message] of Object.entries(checked)) {
+            if (!errors[key]) errors[key] = message;
+        }
+        // 錯在「進階」區的欄位時把進階區打開，否則看不到紅字。
+        if (this.configurableSpecs.optional.some((spec) => errors[spec.key])) {
+            this.state.showAdvanced = true;
         }
         this.state.errors = errors;
         return Object.keys(errors).length === 0;
@@ -315,7 +360,37 @@ export class ConfigurationTab extends Component {
         return false;
     }
 
-    async saveChanges() {
+    /**
+     * service-update-api-validation（INFRA-HS-013-4）：這次會改到、而且 spec 帶
+     * `confirm_change` 說明的欄位 ⇒ 回那些說明（存檔前要租戶再確認一次）。
+     * 「有沒有改」與 `hasChanges` 同一個比對基準（進入編輯時的回填值）。
+     */
+    confirmMessages(payload) {
+        const messages = [];
+        for (const spec of this.allSpecs) {
+            const message = spec.confirm_change;
+            if (typeof message !== "string" || !message || !(spec.key in payload)) continue;
+            if (String(payload[spec.key] ?? "") !== String(this.getSpecValue(spec) ?? "")) {
+                messages.push(message);
+            }
+        }
+        return messages;
+    }
+
+    confirmSave() {
+        this.state.pendingConfirm = [];
+        return this.saveChanges(true);
+    }
+
+    dismissConfirm() {
+        this.state.pendingConfirm = [];
+    }
+
+    /**
+     * @param {boolean} [confirmed] 只有「確認儲存」按鈕會傳 `true`；Save 按鈕經
+     *   `onClick.bind` 呼叫時第一個參數是事件物件，所以要嚴格比對 `=== true`。
+     */
+    async saveChanges(confirmed) {
         if (this.state.saving) return;
         if (!this.validateForm()) return;
 
@@ -324,6 +399,13 @@ export class ConfigurationTab extends Component {
         if (!this.hasChanges(payload) && !this.state.clearKeys.length) {
             this.cancelEditing();
             return;
+        }
+        if (confirmed !== true) {
+            const messages = this.confirmMessages(payload);
+            if (messages.length) {
+                this.state.pendingConfirm = messages;
+                return;
+            }
         }
 
         this.state.saving = true;

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _GATE_PATH = pathlib.Path(__file__).with_name("repo-lint.py")
@@ -141,6 +142,10 @@ class _TmpRepo(unittest.TestCase):
     `origin/develop` 指到 base；每個測試再往上加新檔。"""
 
     def setUp(self):
+        # CI 的 PR base 屬於真實 repo；此 fixture 只建立 origin/develop。
+        base_env = patch.dict(os.environ, {"REPO_LINT_INDENT_BASE": "origin/develop"})
+        base_env.start()
+        self.addCleanup(base_env.stop)
         self.root = tempfile.mkdtemp(prefix="indent-gate-")
         self.addCleanup(shutil.rmtree, self.root, True)
         _git(self.root, "init", "-q", "-b", "develop")
