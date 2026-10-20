@@ -14,6 +14,8 @@
 resourceVersion 為前提，前提不成立回 409 ``quota_conflict``（建立路徑回 ``quota: conflict``）。
 ``guarded=False`` 模擬舊 operator：GET 沒有 ``sync_token`` 鍵，寫入一律無條件覆寫。
 
+#1681／#1682：``used``／``drop_used`` 設定每個 namespace 的 status.used（安全降額判斷讀它）。
+
 遠端延遲也只在這個邊界注入：
 
 - ``lose_response``：寫入照套用，但回應遺失（raise 逾時）；
@@ -93,6 +95,9 @@ class FakeQuotaOperator:
         self.rv = {ns: 100 for ns in self.live}
         self.missing_quota = set()
         self.namespace_exists = {}
+        # #1681／#1682：叢集用量（status.used）。未設的 key 回 '0'；drop_used 讓 GET 不回那些 key。
+        self.used = {}
+        self.drop_used = {}
         self.get_error = None
         self.put_error = None
         self.create_error = None
@@ -122,7 +127,7 @@ class FakeQuotaOperator:
                     'uid': 'uid-' + namespace, 'resource_version': str(self.rv.get(namespace, 1)),
                     'observed_at': '2026-10-15T00:00:00Z', 'namespace_exists': True,
                     'available': True, 'reason': None,
-                    'hard': hard, 'used': {k: '0' for k in hard}, 'spec_hard': dict(hard),
+                    'hard': hard, 'used': self._used(namespace, hard), 'spec_hard': dict(hard),
                 }
             else:
                 managed = {
@@ -137,6 +142,12 @@ class FakeQuotaOperator:
                 managed['sync_token'] = self.tokens.get(namespace)
             report['managed_quota'] = managed
             return report
+
+    def _used(self, namespace, hard):
+        used = {key: self.used.get(namespace, {}).get(key, '0') for key in hard}
+        for key in self.drop_used.get(namespace, ()):
+            used.pop(key, None)
+        return used
 
     def update_namespace_quota(self, namespace, cpu_limit, memory_limit, storage_limit,
                                ephemeral_storage_request=None, ephemeral_storage_limit=None,

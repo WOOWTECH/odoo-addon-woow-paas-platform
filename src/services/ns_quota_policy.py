@@ -130,3 +130,111 @@ def merge_never_lower(target, spec_hard, status_hard):
                 lowering.append(key)
                 break
     return payload, lowering, pending
+
+
+# ------------------------------------------------------------------------- #
+#  #1681／#1682 安全降額判斷（管理員確認流程與生命週期自動降額共用這一份）     #
+# ------------------------------------------------------------------------- #
+#: 可以降額的 payload 欄位 → 對應的 hard key。ephemeral-storage 與 pvc 不在範圍內，維持不降額。
+LOWERABLE_FIELDS = {
+    'cpu_limit': ('requests.cpu', 'limits.cpu'),
+    'memory_limit': ('requests.memory', 'limits.memory'),
+    'storage_limit': ('requests.storage',),
+}
+#: 只要有任何降額，這 5 項 used 都必須存在且看得懂（「完整用量」，缺一項就 fail-closed）。
+SAFE_LOWER_KEYS = ('requests.cpu', 'limits.cpu', 'requests.memory', 'limits.memory',
+                   'requests.storage')
+
+
+def plan_safe_lower(target, managed):
+    """依受管 quota 的 hard／used 判斷這次能不能把叢集降到目標（純函式）。
+
+    ``target``：``_ns_quota_payload`` 形狀；``managed``：operator GET
+    ``include_managed=true`` 回的 ``managed_quota``。
+
+    回傳 dict：
+
+    - ``payload``：要送的 payload。全部降額都安全時，降額欄位取目標值；否則（全有或全無）
+      等於 ``merge_never_lower`` 的結果，只送增額。``managed`` 不可用或叢集值看不懂時是
+      ``None``（沒有可信的叢集現值，不能組任何 payload）。
+    - ``lowered``：``[(hard_key, 叢集值, 目標值, used)]``，這次真的會降的項（全部已通過檢查）。
+    - ``blocked``：``[(hard_key, reason)]``，想降但不安全。reason 為 ``used_exceeds: …``、
+      ``used_missing``、``used_invalid``；整體性的原因 key 為 ``'*'``：
+      ``operator_unsupported``（舊 operator：沒有受管 quota 報表或沒有 ``sync_token`` 鍵）、
+      ``managed_unavailable: <reason>``、``quota_not_provable: …``。
+    - ``pending_decrease``：``[(key, 叢集值, 目標值)]``，目標低於叢集但這次不降的項
+      （ephemeral-storage，以及被擋下的降額）。
+    - ``lowering_unsafe``：合併後仍會降、但不在可降範圍的 hard key（例如 pvc 高於 10）——
+      呼叫端要整筆不送（同 ``would_lower``）。
+
+    叢集現值取 spec.hard 與 status.hard 的較大者。``used`` 等於目標算安全（admission 是 ≤）。
+    當下用量通過檢查不代表未來 rollout 有空間，也不是與 K8s admission 原子化的容量保留。
+    """
+    def _result(payload, blocked, pending=(), lowering=(), lowered=()):
+        return {'payload': payload, 'lowered': list(lowered), 'blocked': list(blocked),
+                'pending_decrease': list(pending), 'lowering_unsafe': list(lowering)}
+
+    if not isinstance(managed, dict):
+        return _result(None, [('*', 'operator_unsupported')])
+    if managed.get('available') is not True:
+        return _result(None, [('*', 'managed_unavailable: %s' % (
+            managed.get('reason') or 'managed_quota_unavailable'))])
+    spec_hard = managed.get('spec_hard') or {}
+    status_hard = managed.get('hard') or {}
+    try:
+        base, lowering, pending = merge_never_lower(target, spec_hard, status_hard)
+    except QuotaNotProvable as exc:
+        return _result(None, [('*', 'quota_not_provable: %s' % exc)])
+
+    decreases = {key: (live, wanted) for key, live, wanted in pending if key in SAFE_LOWER_KEYS}
+    if not decreases:
+        return _result(base, [], pending, lowering)
+    if 'sync_token' not in managed:
+        # 舊 operator 沒有版本防護：降額一旦被晚到的舊請求蓋掉就看不出來，不降。
+        return _result(base, [('*', 'operator_unsupported')], pending, lowering)
+
+    used = managed.get('used') if isinstance(managed.get('used'), dict) else {}
+    used_numbers = {}
+    blocked = []
+    for key in SAFE_LOWER_KEYS:
+        if key not in used:
+            blocked.append((key, 'used_missing'))
+            continue
+        number = parse_quantity(used[key])
+        if number is None:
+            blocked.append((key, 'used_invalid'))
+            continue
+        used_numbers[key] = number
+    lower_fields = [field for field, keys in LOWERABLE_FIELDS.items()
+                    if any(key in decreases for key in keys)]
+    if not blocked:
+        for field in lower_fields:
+            wanted_number = parse_quantity(target[field])
+            for key in LOWERABLE_FIELDS[field]:
+                if used_numbers[key] > wanted_number:
+                    blocked.append((key, 'used_exceeds: used %s > target %s' % (
+                        used[key], target[field])))
+    if blocked:
+        return _result(base, blocked, pending, lowering)
+
+    payload = dict(base)
+    lowered = []
+    lowered_keys = set()
+    for field in lower_fields:
+        payload[field] = target[field]
+        for key in LOWERABLE_FIELDS[field]:
+            if key in decreases:
+                live, wanted = decreases[key]
+                lowered.append((key, live, wanted, used[key]))
+                lowered_keys.add(key)
+    remaining = [item for item in pending if item[0] not in lowered_keys]
+    unsafe = []
+    for key, value in build_hard(payload).items():
+        if key in lowered_keys:
+            continue
+        number = parse_quantity(value)
+        for live_number, _text in _live_values(key, spec_hard, status_hard):
+            if number is None or live_number > number:
+                unsafe.append(key)
+                break
+    return _result(payload, [], remaining, unsafe, lowered)
