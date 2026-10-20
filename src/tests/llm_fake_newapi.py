@@ -37,6 +37,10 @@ import time
 from ..services import newapi_client as nac
 
 _ALNUM = string.ascii_letters + string.digits
+_TOKEN_BODY_FIELDS = (
+    'name', 'expired_time', 'remain_quota', 'unlimited_quota', 'model_limits_enabled',
+    'model_limits', 'allow_ips', 'group', 'cross_group_retry', 'allow_user_quota_query',
+)
 #: ``NewApiClient`` 的公開方法（角色視圖只管這些；``pats_of`` 等測試 helper 照常穿透）。
 CLIENT_METHODS = frozenset(
     name for name in dir(nac.NewApiClient)
@@ -418,6 +422,48 @@ class FakeNewApi:
                                nac.Definite(proxy_error='denied', reason='reveal_window',
                                             status=403))
         return self._leave('user_reveal_token', self._ok({'key': token['key']}))
+
+    def user_update_token(self, client_ip, up, body, **kw):
+        self._enter('user_update_token', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_update_token', error)
+        if not isinstance(body, dict) or set(body) != set(_TOKEN_BODY_FIELDS) | {'id'} \
+                or type(body.get('id')) is not int:
+            return self._leave('user_update_token',
+                               nac.Definite(reason='token_fields', status=400))
+        token = self.tokens.get(body['id'])
+        if not token or token['user_id'] != user['id']:
+            return self._leave('user_update_token',
+                               nac.Unknown('no_message_key', status=200))
+        token.update({field: body[field] for field in _TOKEN_BODY_FIELDS})
+        return self._leave('user_update_token', self._ok())
+
+    def user_set_token_status(self, client_ip, up, token_id, enabled, **kw):
+        if type(enabled) is not bool:
+            raise nac.NewApiInputError('token_status') from None
+        self._enter('user_set_token_status', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_set_token_status', error)
+        token = self.tokens.get(token_id) if type(token_id) is int else None
+        if not token or token['user_id'] != user['id']:
+            return self._leave('user_set_token_status',
+                               nac.Unknown('no_message_key', status=200))
+        token['status'] = 1 if enabled else 2
+        return self._leave('user_set_token_status', self._ok())
+
+    def user_delete_token(self, client_ip, up, token_id, **kw):
+        self._enter('user_delete_token', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_delete_token', error)
+        token = self.tokens.get(token_id) if type(token_id) is int else None
+        if not token or token['user_id'] != user['id']:
+            return self._leave('user_delete_token',
+                               nac.Unknown('no_message_key', status=200))
+        self.tokens.pop(token_id)
+        return self._leave('user_delete_token', self._ok())
 
     def user_log_self(self, client_ip, up, query, **kw):
         self._enter('user_log_self', client_ip)

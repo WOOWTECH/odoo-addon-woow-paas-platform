@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmKeyFormModal">
+    <div class="o_woow_modal_backdrop o_woow_llm_key_form_backdrop" t-ref="backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_llm_key_form" t-ref="dialog" role="dialog" aria-modal="true" aria-labelledby="o_woow_llm_key_form_title" tabindex="-1" t-on-click.stop="">
+        <div class="o_woow_modal_header"><h2 id="o_woow_llm_key_form_title" t-esc="title"/><button type="button" t-on-click="requestClose" aria-label="Close" t-att-disabled="state.saving">×</button></div>
+        <div class="o_woow_modal_body">
+          <p t-if="state.error" role="alert" t-esc="state.error"/>
+          <label>Key name<input type="text" maxlength="64" t-model="state.name" autocomplete="off" t-att-disabled="state.saving"/></label>
+          <label>Total limit (points)<input type="number" min="1" step="1" inputmode="numeric" t-model="state.limitPoints" t-att-disabled="state.saving"/><small>Leave blank for unlimited.</small></label>
+          <p t-if="hasUsedPoints" t-esc="usedText"/>
+          <p t-if="validation.error === 'below_used'" role="alert">Total limit cannot be below points already used.</p>
+          <label>Expiry<select t-model="state.expires" t-att-disabled="state.saving"><option t-if="editMode" value="keep">Keep current expiry</option><option value="30d">30 days</option><option value="90d">90 days</option><option value="180d">180 days</option><option value="never">Never expires</option></select></label>
+          <div t-if="!editMode and needsReauth" class="o_woow_llm_key_form__handoff"><p>Identity verification is required for a never-expiring unlimited key.</p><label>Password<input type="password" autocomplete="current-password" t-ref="password"/></label><button type="button" t-on-click="verifyIdentity">Verify identity</button></div>
+          <fieldset><legend>Paid models</legend><label t-foreach="paidModels" t-as="item" t-key="item.model"><input type="checkbox" t-att-value="item.model" t-att-checked="state.models === null || state.models.includes(item.model)" t-att-disabled="state.saving" t-on-change="() => this.toggleModel(item.model)"/><span t-esc="item.model"/></label></fieldset>
+          <p t-if="state.models === null">All paid models</p>
+          <p t-if="!paidModels.length" role="status">Paid models are unavailable right now.</p>
+          <div class="o_woow_llm_key_form__actions"><WoowButton variant="'secondary'" size="'md'" disabled="state.saving" onClick.bind="requestClose">Cancel</WoowButton><WoowButton variant="'primary'" size="'md'" disabled="submitDisabled || state.saving" onClick.bind="submitDraft"><t t-esc="submitLabel"/></WoowButton></div>
+          <div t-if="state.confirmingClose" class="o_woow_llm_key_form__confirm" t-ref="confirm" role="alertdialog" aria-modal="true" aria-labelledby="o_woow_llm_key_form_discard_title" aria-describedby="o_woow_llm_key_form_discard_description" tabindex="-1"><h3 id="o_woow_llm_key_form_discard_title">Discard draft?</h3><p id="o_woow_llm_key_form_discard_description">Close this form and discard the draft?</p><button type="button" t-ref="keepEditing" t-on-click="cancelClose">Keep editing</button><button type="button" t-on-click="confirmClose">Close form</button></div>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

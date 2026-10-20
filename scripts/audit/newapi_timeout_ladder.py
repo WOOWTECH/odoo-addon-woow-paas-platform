@@ -24,7 +24,7 @@
    ``KEY_CREATE_TIMEOUT_MS`` > （``KEY_CREATE_BUDGET_SECONDS``＋一次完整呼叫）× 1000——前端要比後端的
    建金鑰總預算晚放棄，否則前端先逾時、後端還在建，使用者看不到明文；``rpc.js`` 的預設
    ``REQUEST_TIMEOUT_MS`` > 互動讀／寫各一次完整呼叫。結構：``llm_service.js`` 裡每個 ``timeoutMs:``
-   都只能是 ``KEY_CREATE_TIMEOUT_MS``（不寫字面值），而且 ``/api/llm/keys/create`` 那一呼叫一定帶它。
+   都只能是 ``KEY_CREATE_TIMEOUT_MS``（不寫字面值），而且每個 ``/api/llm/keys/create`` 呼叫都一定帶它。
 
 ⚠ 不守的格（具名盲區）：互動寫入的端點總預算
 15 秒（LLM-07）還沒有常數，第 6 點暫以「一次完整呼叫」比；呼叫端明確覆寫 ``timeout=`` 的地方（例如 P9 用
@@ -261,8 +261,10 @@ def check(root):
     if literal_front:
         fail('%s 的 timeoutMs 只能用具名常數 KEY_CREATE_TIMEOUT_MS，收到：%s'
              % (FRONTEND_SERVICE, ', '.join(literal_front)))
-    if not re.search(r'"/api/llm/keys/create"[^;]*?\btimeoutMs:\s*KEY_CREATE_TIMEOUT_MS\b',
-                     front_source, re.S):
+    create_calls = re.findall(r'\bcall\("/api/llm/keys/create"([^;]*?)\);',
+                              front_source, re.S)
+    if not create_calls or any(not re.search(r'\btimeoutMs:\s*KEY_CREATE_TIMEOUT_MS\b', body)
+                               for body in create_calls):
         fail('%s 建金鑰（"/api/llm/keys/create"）的呼叫必須帶 timeoutMs: KEY_CREATE_TIMEOUT_MS'
              '（否則用 rpc.js 的預設 30 秒，比 DESIGN §3.5 的 40 秒短）' % FRONTEND_SERVICE)
 

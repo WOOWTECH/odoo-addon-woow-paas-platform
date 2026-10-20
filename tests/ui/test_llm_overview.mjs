@@ -150,6 +150,7 @@ const overviewSource = stubImports(await readPaas("pages/llm/tabs/LlmOverviewTab
   "../../../components/llm/LlmTermsModal": "const LlmTermsModal = {};",
   "../../../services/llm_service":
     "const llmService = new Proxy({}, { get: (_, k) => globalThis.__llmFakeService[k] });",
+  "../../../core/router": "const router = { navigate: (...args) => globalThis.__llmNavigate?.(...args) };",
   "../../../services/llm_errors": `const { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } = await import("${errorsUrl}");`,
   "../../../utils/clipboard": "const copyText = (...args) => globalThis.__llmCopy(...args);",
   "../../../utils/llm_format": `const { formatAiQuota, formatFreeTrialUsage, formatLatency, formatTaipeiDate, formatTaipeiTime, formatTokens, formatWholePoints, isExpiringSoon, isZeroCreditQuota, overdraftPointsText } = await import("${formatUrl}");`,
@@ -183,9 +184,9 @@ function openModal({ create, baseUrl } = {}) {
   globalThis.window.history = fakeHistory();
   globalThis.__llmRouter.guard = null;
   const closes = [];
-  globalThis.__llmFakeService = { createFreeTrialKey: create };
+  globalThis.__llmFakeService = { keys: [], createFreeTrialKey: create };
   const modal = new LlmKeyRevealModal();
-  modal.props = { kind: "free_trial", baseUrl, onClose: (...args) => closes.push(args) };
+  modal.props = { kind: "free_trial", baseUrl, createKey: create, onClose: (...args) => closes.push(args) };
   modal.setup();
   return { modal, closes };
 }
@@ -255,7 +256,7 @@ test("金鑰清單列：只有遮罩；免費試用的名稱、類型、今日�
     assert.equal(overview.llmKeyRow({ ...base, status }, now).statusLabel, "狀態不明", String(status));
   }
   assert.equal(overview.llmKeyRow({ ...base, expires_at: "2026-10-20T00:00:00Z" }, now).expiringSoon, true);
-  assert.equal(overview.llmKeyRow({ ...base, expires_at: null }, now).expires, "永不過期");
+  assert.equal(overview.llmKeyRow({ ...base, expires_at: null }, now).expires, "永不到期");
   assert.equal(overview.llmKeyRow({ ...base, kind: "paid", display_name: "n8n-正式" }, now).kind, "付費");
 });
 
@@ -555,9 +556,16 @@ test("已開通：已有試用金鑰就不能再建；說明給走得通的下�
 
   fake.overview = { ...ACTIVE, free_trial: { ...ACTIVE.free_trial, key_id: 9 } };
   assert.equal(tab.canCreateFreeTrialKey, false);
-  assert.equal(tab.freeTrialExistsText, "您已經有一把免費試用金鑰（每個帳號一把）。如果沒有保存到金鑰，請聯絡客服協助重設。");
+  assert.match(tab.freeTrialExistsText, /金鑰管理/);
+  assert.match(tab.freeTrialExistsText, /停用或刪除/);
+  let destination = null;
+  globalThis.__llmNavigate = (path) => { destination = path; };
+  tab.goToKeyManagement();
+  assert.equal(destination, "llm/keys");
+  delete globalThis.__llmNavigate;
   fake.keys = [{ id: 9, kind: "free_trial", status: "expired" }];
-  assert.equal(tab.freeTrialExistsText, "您的免費試用金鑰已到期。金鑰管理功能上線前，請聯絡客服協助重設。");
+  assert.match(tab.freeTrialExistsText, /已到期/);
+  assert.match(tab.freeTrialExistsText, /停用或刪除/);
 
   // 建立中超過 5 分鐘（worker 途中被殺）：仍然可以按〔建立〕（後端會先收尾）。
   const old = new Date(Date.now() - overview.STALE_CREATING_MS - 1000).toISOString();
@@ -715,7 +723,7 @@ test("對話框文案（§6.3.2）：標題跟著階段走；免費試用的內�
   const shown = openModal({ create: async () => ({ success: true, data: { key: KEY } }) });
   await mount(shown.modal);
   assert.equal(shown.modal.title, "請立即複製您的 API 金鑰");
-  assert.equal(shown.modal.intro, "基於安全考量，完整金鑰只會顯示這一次。關閉視窗後無法再查看；如果遺失，請聯絡客服協助重設。");
+  assert.match(shown.modal.intro, /建立新金鑰，並停用或刪除舊金鑰/);
   assert.deepEqual(shown.modal.copyLabels, {
     key: "複製金鑰", base: "複製 Base URL", model: "複製模型名稱", env: "複製為環境變數",
   });
@@ -798,6 +806,7 @@ test("顯示一次：要勾「我已妥善保存此金鑰」才能完成；背�
   modal.finish();
   assert.deepEqual(closes, [[{ created: true }]]);
   assert.equal(modal.state.key, null);
+  assert.ok(!Object.hasOwn(globalThis.__llmFakeService.keys, "key"));
   assert.ok(!JSON.stringify(closes).includes(KEY));
   // 關閉時守衛全部拆掉，自己推的哨兵收回（history.back 一次）。
   assert.equal(history.backs, 1);
@@ -836,6 +845,7 @@ test("〔仍要關閉〕也會清掉明文；返回鍵彈掉哨兵之後關閉�
   modal.requestClose();
   modal.close();
   assert.equal(modal.state.key, null);
+  assert.ok(!JSON.stringify(modal.state).includes(KEY));
   assert.deepEqual(closes, [[{ created: true }]]);
   assert.equal(history.backs, 1);
 
@@ -857,6 +867,7 @@ test("建立中被卸載（例如重新整理途中）：之後才回來的回�
   assert.equal(modal.state.key, null);
   assert.equal(modal.state.phase, "creating");
   assert.ok(!JSON.stringify(modal.state).includes(KEY));
+  assert.ok(!Object.hasOwn(globalThis.__llmFakeService.keys, "key"));
   assert.equal(globalThis.__llmRouter.guard, null);
 });
 
@@ -898,6 +909,7 @@ test("複製：成功顯示「已複製」並給讀屏播報；失敗要有提�
   assert.equal(modal.state.copied, "env");
   assert.equal(modal.copiedAnnouncement, "已複製環境變數。");
   assert.deepEqual(copied, [KEY, buildEnvVarsText(KEY, BASE)]);
+  assert.ok(!Object.hasOwn(globalThis.__llmFakeService.keys, "key"));
   globalThis.__llmCopy = async () => false;
   await modal.copy("base");
   assert.equal(modal.state.copied, null);

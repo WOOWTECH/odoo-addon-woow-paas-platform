@@ -189,7 +189,10 @@
             <WoowIcon name="'key'" size="18"/>
             Create free trial key
           </WoowButton>
-          <p t-else="" class="o_woow_llm_section__note" t-esc="freeTrialExistsText"/>
+          <div t-else="" class="o_woow_llm_section__note">
+            <p t-esc="freeTrialExistsText"/>
+            <WoowButton variant="'secondary'" size="'sm'" onClick.bind="goToKeyManagement">Key Management</WoowButton>
+          </div>
           <p t-if="freeTrialCreateDisabledText" class="o_woow_llm_section__note" role="status" t-esc="freeTrialCreateDisabledText"/>
         </WoowCard>
 
@@ -280,7 +283,7 @@
       <!-- 常駐的播報區：開通完成或失敗時整張開通中卡片會被換掉（被移除的 live region 不會播報）。 -->
       <div class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
 
-      <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" onClose.bind="onRevealClosed"/>
+      <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" createKey.bind="createFreeTrialKey" onClose.bind="onRevealClosed"/>
       <LlmTermsModal t-if="state.showTerms" mode="state.showTerms" blocking="tosBlocking" onClose.bind="onTermsClosed"/>
     </div>
   </t>
