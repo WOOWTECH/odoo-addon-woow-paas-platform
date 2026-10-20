@@ -57,6 +57,8 @@ SYNC_FIELDS = (
     'quota_expected_tokens', 'quota_sync_unguarded', 'quota_attempt_fingerprint',
     'quota_synced_fingerprint', 'quota_retry_count', 'quota_next_retry_at',
     'quota_last_attempt_at', 'quota_verified_at',
+    # #1682
+    'quota_reconcile_pending',
 )
 PROTECTED_FIELDS = tuple(FLOOR_FIELDS) + SYNC_FIELDS
 
@@ -146,6 +148,21 @@ def _floor_text(value, unit):
     return '%s%s' % (value, unit) if value else '-'
 
 
+class _SubsetAttempt:
+    """#1682：``_quota_attempt_fingerprint`` 回傳的 marker——這次只同步了工作區的子集。
+
+    子集的結果不能代表整個工作區，所以不記指紋、不動重試額度（見 ``_record_quota_sync``）。
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<workspace quota subset attempt>'
+
+
+_SUBSET_ATTEMPT = _SubsetAttempt()
+
+
 def _fingerprint(target, namespaces):
     """目標指紋：namespace 集合＋目標 payload。重試額度與「已同步是否仍是現在的目標」都以它計。"""
     raw = json.dumps({'namespaces': sorted(namespaces), 'target': target}, sort_keys=True)
@@ -216,6 +233,14 @@ class WorkspaceQuotaPolicy(models.Model):
     quota_verified_at = fields.Datetime(
         string='Last Verified Against Cluster', groups='base.group_system', copy=False,
         readonly=True)
+    # #1682：子集同步（生命週期／開通只同步自己的 namespace）之後，整個工作區要重新評估一次。
+    # 與目標指紋分開：指紋只負責「目標有沒有變」（決定重試額度要不要重置），這個旗標只負責
+    # 「要不要排一次全集對帳」——兩件事共用空指紋會讓同目標事件重置額度（#1682 留言 22779）。
+    quota_reconcile_pending = fields.Boolean(
+        string='Full Quota Re-check Pending', groups='base.group_system', copy=False,
+        readonly=True,
+        help='A service event synced only its own namespace; the next background run '
+             're-checks every namespace of this Workspace.')
     quota_sync_status = fields.Selection(
         SYNC_STATES, string='Current Sync Status', compute='_compute_quota_policy_view',
         groups='base.group_system',
@@ -294,9 +319,12 @@ class WorkspaceQuotaPolicy(models.Model):
                 workspace.quota_audit_ids = False
                 continue
             state = workspace.quota_sync_state
-            if state == 'synced' and workspace.quota_synced_fingerprint != _fingerprint(
-                    Service._ns_quota_payload(workspace), workspace._quota_namespaces()):
-                state = 'pending'  # 已同步的是舊目標（服務集合或政策已變），還沒同步到現在的目標
+            if state == 'synced' and (
+                    workspace.quota_reconcile_pending
+                    or workspace.quota_synced_fingerprint != _fingerprint(
+                        Service._ns_quota_payload(workspace), workspace._quota_namespaces())):
+                # 已同步的是舊目標（服務集合或政策已變），或只同步了子集：還沒同步到現在的目標
+                state = 'pending'
             workspace.quota_sync_status = state
             formula = Service._compute_ns_quota_formula(workspace)
             target = Service._compute_ns_quota(workspace)
@@ -482,13 +510,16 @@ class WorkspaceQuotaPolicy(models.Model):
         """這次嘗試要記的目標指紋。
 
         生命週期與開通只同步自己那一個 namespace；工作區若不只這一個，子集的結果不能代表整個
-        工作區（會把其他 namespace 的狀態蓋掉）。這時不記指紋（``False``），並立刻排背景同步：
-        下一輪 cron 看到指紋不符，會把整個工作區重新評估一次。
+        工作區（會把其他 namespace 的狀態蓋掉）。這時回 ``_SUBSET_ATTEMPT``：不記指紋、不動
+        重試額度，改以 ``quota_reconcile_pending`` 標記，並立刻排背景同步重新評估整個工作區。
+
+        #1682：以前回空指紋兼任「觸發對帳」與「重置額度」，同目標的生命週期事件就會讓已耗盡的
+        工作區重新拿到 5 次自動重試；指紋也不能改記子集的值，否則會在子集與全集之間來回。
         """
         if set(attempted) == set(own):
             return _fingerprint(target, own)
         self._schedule_quota_reconcile()
-        return False
+        return _SUBSET_ATTEMPT
 
     def _schedule_quota_reconcile(self, at=None):
         """喚醒背景同步 cron（``ir.cron.trigger`` 是 DB 列，跟著呼叫端交易 commit／回捲）。"""
@@ -525,9 +556,15 @@ class WorkspaceQuotaPolicy(models.Model):
         return summary
 
     def _record_quota_sync(self, version, results, fingerprint=None, trigger=None):
+        """記錄一次同步嘗試。``fingerprint`` 為 ``_SUBSET_ATTEMPT`` 表示只同步了子集。"""
         self.ensure_one()
         now = fields.Datetime.now()
         previous_state = self.quota_sync_state
+        previous_count = self.quota_retry_count or 0
+        subset = fingerprint is _SUBSET_ATTEMPT
+        if subset:
+            # 子集不代表整個工作區：指紋維持上一次全集嘗試的值（重試額度只跟著全集目標走）。
+            fingerprint = self.quota_attempt_fingerprint
         retryable = False
         if not results:
             vals = {'quota_sync_state': 'pending_first_deploy',
@@ -564,7 +601,17 @@ class WorkspaceQuotaPolicy(models.Model):
                     'quota_pending_decrease': '\n'.join(pending) or False,
                     'quota_sync_unguarded': bool(unguarded),
                     'quota_expected_tokens': json.dumps(tokens, sort_keys=True) if tokens else False}
-            if state == 'synced':
+            if state == 'synced' and subset:
+                # 子集成功不等於整個工作區已同步：只補記這幾個 namespace 推了什麼。
+                try:
+                    pushed = json.loads(self.quota_synced_hard or '{}')
+                except ValueError:
+                    pushed = {}
+                if not isinstance(pushed, dict):
+                    pushed = {}
+                pushed.update({ns: r['hard'] for ns, r in results.items() if r.get('hard')})
+                vals['quota_synced_hard'] = json.dumps(pushed, sort_keys=True) if pushed else False
+            elif state == 'synced':
                 vals.update({
                     'quota_synced_version': version,
                     'quota_synced_at': now,
@@ -577,11 +624,13 @@ class WorkspaceQuotaPolicy(models.Model):
             retryable = superseded or any(r.get('retryable') for r in results.values()
                                           if r['state'] != 'synced')
         # 重試額度：以目標指紋計；人的動作（保存、手動重試）也重置。背景重試每次消耗一格。
+        # 子集嘗試不重置、不消耗，成功也不歸零（其他 namespace 可能仍在失敗）。
         reset = fingerprint != self.quota_attempt_fingerprint or trigger in _RESETTING_TRIGGERS
-        count = 0 if reset else (self.quota_retry_count or 0) + (1 if trigger == 'retry' else 0)
+        count = 0 if reset else previous_count + (1 if trigger == 'retry' else 0)
         next_at = False
         if vals['quota_sync_state'] == 'synced':
-            count = 0
+            if not subset:
+                count = 0
         elif retryable:
             if count >= MAX_AUTO_RETRIES:
                 vals['quota_sync_state'] = 'exhausted'
@@ -589,11 +638,13 @@ class WorkspaceQuotaPolicy(models.Model):
                 next_at = now + timedelta(minutes=RETRY_BACKOFF_MINUTES[count])
         vals.update({'quota_attempt_fingerprint': fingerprint or False,
                      'quota_last_attempt_at': now, 'quota_retry_count': count,
-                     'quota_next_retry_at': next_at})
+                     'quota_next_retry_at': next_at, 'quota_reconcile_pending': subset})
         _internal_quota_policy_write(self).write(vals)
         if next_at:
             self._schedule_quota_reconcile(next_at)
-        if vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted':
+        # 只在這一次用掉最後一格時通知；同目標的子集事件或對帳讓狀態回到 exhausted 不算新的耗盡。
+        if (vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted'
+                and previous_count < MAX_AUTO_RETRIES):
             self.env['woow_paas_platform.platform_monitor']._singleton()._message_log(body=_(
                 'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync stopped after '
                 '%(count)s automatic retries: %(reason)s. Retry it manually from the Workspace '
@@ -654,6 +705,7 @@ class WorkspaceQuotaPolicy(models.Model):
             ('state', '!=', 'deleting'), ('workspace_id', '!=', False)]).mapped('workspace_id')
         return self.search([
             '|', ('id', 'in', live.ids),
+            '|', ('quota_reconcile_pending', '=', True),
             ('quota_sync_state', 'in', ('pending', 'unconfirmed', 'blocked', 'exhausted')),
         ], order='id')
 
@@ -664,7 +716,9 @@ class WorkspaceQuotaPolicy(models.Model):
         now = fields.Datetime.now()
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
         state = workspace.quota_sync_state
-        if _fingerprint(target, workspace._quota_namespaces()) != workspace.quota_attempt_fingerprint:
+        if (workspace.quota_reconcile_pending
+                or _fingerprint(target, workspace._quota_namespaces())
+                != workspace.quota_attempt_fingerprint):
             return 'reconcile'
         if (state in ('pending', 'unconfirmed', 'blocked') and workspace.quota_next_retry_at
                 and workspace.quota_next_retry_at <= now):

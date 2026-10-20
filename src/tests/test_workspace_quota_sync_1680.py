@@ -279,6 +279,12 @@ class TestWorkspaceQuotaRetryBudget1680(_SyncFixture):
             with freeze_time(self._ws().quota_next_retry_at):
                 self._background()
         self.assertEqual(self._ws().quota_retry_count, 2)
+        # #1682：目標不變的生命週期事件（每日清理一台早已 deleting 的服務）不重置額度。
+        stale = self._service('svc-budget-stale', vcpu=2, ram=2.0, storage=10)
+        stale.sudo().write({'state': 'deleting'})
+        with patch(_CLIENT, return_value=self.client):
+            stale._do_cleanup()
+        self.assertEqual(self._ws().quota_retry_count, 2, '同目標事件不重置額度')
         # 目標改變（服務集合變了）：背景發現後以新目標重試，額度重置。
         self._service('svc-budget-c', vcpu=1, ram=1.0, storage=10)
         self._background()
@@ -554,7 +560,7 @@ class TestWorkspaceQuotaOperatorErrors1680(_SyncFixture):
         triggers = len(self._cron_triggers())
         with patch(_CLIENT, return_value=self.client):
             sibling.unlink()  # 生命週期只同步自己的 namespace
-        self.assertFalse(self._ws().quota_attempt_fingerprint, '子集結果不記成整個工作區的指紋')
+        self.assertEqual(self._ws().quota_sync_status, 'pending', '子集結果不代表整個工作區')
         self.assertGreater(len(self._cron_triggers()), triggers, '立刻排背景同步重新評估')
         self._background()  # 下一輪 cron：整個工作區重新評估，另一個 namespace 的阻擋回到畫面上
         ws = self._ws()
