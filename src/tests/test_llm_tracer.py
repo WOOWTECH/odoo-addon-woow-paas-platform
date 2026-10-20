@@ -736,9 +736,15 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(same['code'], 'llm_key_already_shown')
         self.assertEqual(self._create_key()['code'], 'llm_free_key_exists')
         self.assertEqual(len(self.fake.tokens), 1)
+        calls = len(self.fake.calls)
         paid = self._rpc('/api/llm/keys/create',
                          {'client_request_id': str(uuid.uuid4()), 'kind': 'paid'})
-        self.assertEqual((paid['code'], paid['field']), ('llm_key_invalid', 'kind'))
+        # LLM-07 supports paid keys; an incomplete paid form now fails on name.
+        self.assertEqual((paid['code'], paid['field']), ('llm_key_invalid', 'name'))
+        unsupported = self._rpc('/api/llm/keys/create',
+                                {'client_request_id': str(uuid.uuid4()), 'kind': 'unsupported'})
+        self.assertEqual((unsupported['code'], unsupported['field']), ('llm_key_invalid', 'kind'))
+        self.assertEqual(len(self.fake.calls), calls, 'Invalid forms must not call new-api')
 
         # 用量：一筆免費試用呼叫；channel 被剝掉、金鑰對回鏡像。LLM-02：端點只讀快取（第一次是空的、
         # 排一次背景刷新），刷新 cron 以 CRON 金鑰讀完之後才看得到。
