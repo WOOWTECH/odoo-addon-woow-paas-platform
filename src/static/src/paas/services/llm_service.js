@@ -24,6 +24,12 @@ export const KEY_CREATE_TIMEOUT_MS = 40000;
 /** 失敗回應裡可以帶給 llm_errors.js 組句的參數（與 controllers/llm.py `_SAFE_PARAMS` 對齊、外加 §3.4 的參數）。 */
 const SAFE_PARAMS = ["retry_after", "current_version", "max_keys", "field", "reason", "used",
   "needed_7d", "short_by"];
+const KEY_INVALID = "llm_key_invalid";
+const keyActionsInFlight = new Map();
+
+function validKeyId(keyId) {
+  return Number.isSafeInteger(keyId) && keyId > 0;
+}
 
 function failure(code) {
   return { success: false, code };
@@ -77,6 +83,22 @@ async function call(url, params, { timeoutMs = null, transportCode = LLM_NETWORK
   return normalize(result);
 }
 
+async function runKeyAction(service, action, keyId, url, params) {
+  const dedupeKey = `${action}:${keyId}`;
+  if (keyActionsInFlight.has(dedupeKey)) return keyActionsInFlight.get(dedupeKey);
+  const pending = (async () => {
+    try {
+      const result = await call(url, params);
+      if (result.success) await Promise.allSettled([service.fetchKeys(), service.fetchState()]);
+      return result;
+    } finally {
+      keyActionsInFlight.delete(dedupeKey);
+    }
+  })();
+  keyActionsInFlight.set(dedupeKey, pending);
+  return pending;
+}
+
 /**
  * 建金鑰的冪等鍵（打開建立流程時產生一次，DESIGN §3.2）。後端只收小寫的 UUID 形狀；
  * `crypto.randomUUID()` 只在安全來源可用，所以用 `getRandomValues()` 自己排成 v4。
@@ -109,6 +131,8 @@ export const llmService = reactive({
   models: null,
   modelsLoaded: false,
   modelsRequest: 0,
+  keysRequest: 0,
+  overviewRequest: 0,
 
   // Conversion responses and passwords stay with the caller, never in the global store.
   async previewCredit(points) {
@@ -147,7 +171,9 @@ export const llmService = reactive({
   },
 
   async fetchState() {
+    const request = ++this.overviewRequest;
     const result = await call("/api/llm/state", {});
+    if (request !== this.overviewRequest) return result;
     if (result.success) {
       this.overview = result.data;
       this.overviewError = null;
@@ -177,7 +203,9 @@ export const llmService = reactive({
   },
 
   async fetchKeys() {
+    const request = ++this.keysRequest;
     const result = await call("/api/llm/keys/list", {});
+    if (request !== this.keysRequest) return result;
     if (result.success) {
       const items = result.data && Array.isArray(result.data.items) ? result.data.items : [];
       this.keys = items;
@@ -187,6 +215,32 @@ export const llmService = reactive({
     }
     this.keysLoaded = true;
     return result;
+  },
+
+  async updateKey(keyId, changes) {
+    if (!validKeyId(keyId) || !changes || typeof changes !== "object") return failure(KEY_INVALID);
+    const params = { key_id: keyId };
+    for (const name of ["name", "limitPoints", "expires", "models"]) {
+      if (!Object.hasOwn(changes, name) || changes[name] === undefined) continue;
+      params[name === "limitPoints" ? "limit_points" : name] = changes[name];
+    }
+    if (Object.keys(params).length === 1) return failure(KEY_INVALID);
+    return runKeyAction(this, "update", keyId, "/api/llm/keys/update", params);
+  },
+
+  async extendKey(keyId) {
+    if (!validKeyId(keyId)) return failure(KEY_INVALID);
+    return runKeyAction(this, "extend", keyId, "/api/llm/keys/extend", { key_id: keyId });
+  },
+
+  async setKeyStatus(keyId, enabled) {
+    if (!validKeyId(keyId) || typeof enabled !== "boolean") return failure(KEY_INVALID);
+    return runKeyAction(this, `status:${enabled}`, keyId, "/api/llm/keys/set_status", { key_id: keyId, enabled });
+  },
+
+  async deleteKey(keyId, confirmName) {
+    if (!validKeyId(keyId) || typeof confirmName !== "string") return failure(KEY_INVALID);
+    return runKeyAction(this, "delete", keyId, "/api/llm/keys/delete", { key_id: keyId, confirm_name: confirmName });
   },
 
   async fetchUsageRecent() {

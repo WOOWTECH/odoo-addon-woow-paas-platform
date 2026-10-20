@@ -240,6 +240,91 @@ test("其他端點用預設逾時（rpc.js 30 秒），只有建金鑰明確傳 
   assert.deepEqual(calls[1][1], { tos_version: "draft-0" });
 });
 
+test("paid key mutations validate, preserve omitted/null fields, refresh both resources, and sanitize results", async () => {
+  const calls = [];
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/update") return { success: true, data: { key: "sk-" + "SyntheticSecret" } };
+    return { success: true, data: args[0] === "/api/llm/keys/list" ? { items: [] } : {} };
+  };
+  assert.deepEqual(await llmService.updateKey(7, { name: null, limitPoints: null, ignored: "no" }), {
+    success: true, data: { key: "sk-SyntheticSecret" },
+  });
+  assert.deepEqual(calls.slice(0, 3).map(([url, params]) => [url, params]), [
+    ["/api/llm/keys/update", { key_id: 7, name: null, limit_points: null }],
+    ["/api/llm/keys/list", {}], ["/api/llm/state", {}],
+  ]);
+  assert.equal(JSON.stringify(llmService).includes("sk-SyntheticSecret"), false);
+
+  calls.length = 0;
+  assert.deepEqual(await llmService.updateKey(7, { expires: "90d" }), { success: true, data: { key: "sk-SyntheticSecret" } });
+  assert.deepEqual(calls[0][1], { key_id: 7, expires: "90d" });
+  calls.length = 0;
+  for (const args of [[0, { name: "x" }], [1.5, { name: "x" }], [1, {}], [1, { name: undefined }], [1, null], [1, { name: "x", other: true }].slice(0, 1)]) {
+    const result = await llmService.updateKey(...args);
+    assert.deepEqual(result, { success: false, code: "llm_key_invalid" });
+  }
+  await llmService.extendKey(8);
+  await llmService.setKeyStatus(8, false);
+  await llmService.deleteKey(8, "Confirm");
+  assert.deepEqual(calls.filter(([url]) => ["/api/llm/keys/extend", "/api/llm/keys/set_status", "/api/llm/keys/delete"].includes(url)).map(([url, params]) => [url, params]), [
+    ["/api/llm/keys/extend", { key_id: 8 }],
+    ["/api/llm/keys/set_status", { key_id: 8, enabled: false }],
+    ["/api/llm/keys/delete", { key_id: 8, confirm_name: "Confirm" }],
+  ]);
+});
+
+test("action failures do not refresh and session expiry stays classified", async () => {
+  const calls = [];
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend") throw rpcError("raw transport sk-" + "synthetic", { httpStatus: 401 });
+    return { success: true, data: {} };
+  };
+  assert.deepEqual(await llmService.extendKey(81), { success: false, code: "llm_session_expired" });
+  assert.deepEqual(calls.map(([url]) => url), ["/api/llm/keys/extend"]);
+  assert.equal(JSON.stringify(llmService).includes("synthetic"), false);
+});
+
+test("concurrent identical action deduplicates mutation and stale resource responses cannot overwrite newer state", async () => {
+  const calls = [];
+  let releaseAction;
+  globalThis.__llmRpc = (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend") return new Promise((resolve) => { releaseAction = () => resolve({ success: true, data: {} }); });
+    if (args[0] === "/api/llm/keys/list") return Promise.resolve({ success: true, data: { items: [{ id: calls.length }] } });
+    return Promise.resolve({ success: true, data: { marker: calls.length } });
+  };
+  const first = llmService.extendKey(90);
+  const second = llmService.extendKey(90);
+  await Promise.resolve();
+  releaseAction();
+  assert.deepEqual(await Promise.all([first, second]), [{ success: true, data: {} }, { success: true, data: {} }]);
+  assert.equal(calls.filter(([url]) => url === "/api/llm/keys/extend").length, 1);
+  assert.equal(calls.filter(([url]) => url === "/api/llm/keys/list").length, 1);
+  assert.equal(calls.filter(([url]) => url === "/api/llm/state").length, 1);
+
+  let resolveOldKeys;
+  let resolveOldState;
+  globalThis.__llmRpc = (url) => {
+    if (url === "/api/llm/keys/list") return new Promise((resolve) => { resolveOldKeys = resolve; });
+    if (url === "/api/llm/state") return new Promise((resolve) => { resolveOldState = resolve; });
+    throw new Error("unexpected");
+  };
+  const oldKeys = llmService.fetchKeys();
+  const oldState = llmService.fetchState();
+  globalThis.__llmRpc = async (url) => url === "/api/llm/keys/list"
+    ? { success: true, data: { items: [{ id: "new" }] } }
+    : { success: true, data: { marker: "new" } };
+  await llmService.fetchKeys();
+  await llmService.fetchState();
+  resolveOldKeys({ success: true, data: { items: [{ id: "old" }] } });
+  resolveOldState({ success: true, data: { marker: "old" } });
+  await Promise.all([oldKeys, oldState]);
+  assert.deepEqual(llmService.keys, [{ id: "new" }]);
+  assert.deepEqual(llmService.overview, { marker: "new" });
+});
+
 test("client_request_id 是後端收的小寫 UUID v4 形狀，每次不同", () => {
   const backend = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const a = newClientRequestId();
