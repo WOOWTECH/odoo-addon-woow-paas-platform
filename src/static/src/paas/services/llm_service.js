@@ -22,8 +22,32 @@ import { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR, LLM_SESSION_EXPIRED } fr
 export const KEY_CREATE_TIMEOUT_MS = 40000;
 
 /** 失敗回應裡可以帶給 llm_errors.js 組句的參數（與 controllers/llm.py `_SAFE_PARAMS` 對齊、外加 §3.4 的參數）。 */
-const SAFE_PARAMS = ["retry_after", "current_version", "max_keys", "field", "reason", "used",
-  "needed_7d", "short_by"];
+const NUMERIC_PARAMS = ["retry_after", "max_keys", "used", "needed_7d", "short_by"];
+const KEY_ENABLE_REASONS = new Set(["expired", "exhausted", "free_capped", "suspended", "overdraft"]);
+const KEY_INVALID = "llm_key_invalid";
+const keyActionTails = new Map();
+const keyActionsInFlight = new Map();
+
+function validKeyId(keyId) {
+  return Number.isSafeInteger(keyId) && keyId > 0;
+}
+
+function validUpdateName(value) {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 64;
+}
+
+function validUpdateModels(value) {
+  if (value === null) return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const seen = new Set();
+  for (const model of value) {
+    if (typeof model !== "string" || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model) || seen.has(model)) {
+      return false;
+    }
+    seen.add(model);
+  }
+  return true;
+}
 
 function failure(code) {
   return { success: false, code };
@@ -35,11 +59,13 @@ function normalize(result) {
   }
   if (result && typeof result.code === "string" && result.code) {
     const out = failure(result.code);
-    for (const name of SAFE_PARAMS) {
+    for (const name of NUMERIC_PARAMS) {
       const value = result[name];
-      if (typeof value === "number" || (typeof value === "string" && value.length <= 64)) {
-        out[name] = value;
-      }
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) out[name] = value;
+    }
+    if (KEY_ENABLE_REASONS.has(result.reason)) out.reason = result.reason;
+    if (typeof result.current_version === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(result.current_version)) {
+      out.current_version = result.current_version;
     }
     return out;
   }
@@ -77,6 +103,35 @@ async function call(url, params, { timeoutMs = null, transportCode = LLM_NETWORK
   return normalize(result);
 }
 
+async function runKeyAction(service, action, keyId, url, params) {
+  let signature;
+  try {
+    signature = JSON.stringify([action, url, params]);
+  } catch {
+    return failure(KEY_INVALID);
+  }
+  const dedupeKey = `${keyId}:${signature}`;
+  if (keyActionsInFlight.has(dedupeKey)) return keyActionsInFlight.get(dedupeKey);
+
+  const previous = keyActionTails.get(keyId) || Promise.resolve();
+  const pending = previous.catch(() => {}).then(async () => {
+    const result = await call(url, params);
+    if (!result.success) return result;
+    await Promise.allSettled([service.fetchKeys(), service.fetchState()]);
+    return { success: true, data: null };
+  });
+  const tail = pending.then(() => {}, () => {});
+  keyActionTails.set(keyId, tail);
+  keyActionsInFlight.set(dedupeKey, pending);
+
+  const release = () => {
+    if (keyActionsInFlight.get(dedupeKey) === pending) keyActionsInFlight.delete(dedupeKey);
+    if (keyActionTails.get(keyId) === tail) keyActionTails.delete(keyId);
+  };
+  pending.then(release, release);
+  return pending;
+}
+
 /**
  * 建金鑰的冪等鍵（打開建立流程時產生一次，DESIGN §3.2）。後端只收小寫的 UUID 形狀；
  * `crypto.randomUUID()` 只在安全來源可用，所以用 `getRandomValues()` 自己排成 v4。
@@ -109,6 +164,8 @@ export const llmService = reactive({
   models: null,
   modelsLoaded: false,
   modelsRequest: 0,
+  keysRequest: 0,
+  overviewRequest: 0,
 
   // Conversion responses and passwords stay with the caller, never in the global store.
   async previewCredit(points) {
@@ -135,6 +192,21 @@ export const llmService = reactive({
     return call("/api/llm/account/reauth", { password });
   },
 
+  async updateSettings(lowBalanceThreshold) {
+    if (!Number.isSafeInteger(lowBalanceThreshold) || lowBalanceThreshold < 0 || lowBalanceThreshold > 100000) {
+      return failure("llm_settings_invalid");
+    }
+    return call("/api/llm/account/settings", { low_balance_threshold: lowBalanceThreshold });
+  },
+
+  async reportNotMe(token) {
+    const match = typeof token === "string" ? token.match(/^[A-Za-z0-9_.-]{1,512}$/) : null;
+    if (!match || match[0] !== token) {
+      return failure("llm_not_me_invalid");
+    }
+    return call("/api/llm/account/report_not_me", { token });
+  },
+
   async fetchModels() {
     const request = ++this.modelsRequest;
     const result = await call("/api/llm/models", {});
@@ -147,7 +219,9 @@ export const llmService = reactive({
   },
 
   async fetchState() {
+    const request = ++this.overviewRequest;
     const result = await call("/api/llm/state", {});
+    if (request !== this.overviewRequest) return result;
     if (result.success) {
       this.overview = result.data;
       this.overviewError = null;
@@ -177,7 +251,9 @@ export const llmService = reactive({
   },
 
   async fetchKeys() {
+    const request = ++this.keysRequest;
     const result = await call("/api/llm/keys/list", {});
+    if (request !== this.keysRequest) return result;
     if (result.success) {
       const items = result.data && Array.isArray(result.data.items) ? result.data.items : [];
       this.keys = items;
@@ -187,6 +263,47 @@ export const llmService = reactive({
     }
     this.keysLoaded = true;
     return result;
+  },
+
+  async updateKey(keyId, changes) {
+    let params;
+    try {
+      if (!validKeyId(keyId) || !changes || typeof changes !== "object") return failure(KEY_INVALID);
+      params = { key_id: keyId };
+      for (const name of ["name", "limitPoints", "expires", "models"]) {
+        if (!Object.hasOwn(changes, name)) continue;
+        const value = changes[name];
+        if (value === undefined) return failure(KEY_INVALID);
+        if (name === "name" && !validUpdateName(value)) return failure(KEY_INVALID);
+        if (name === "limitPoints" && value !== null
+          && (!Number.isSafeInteger(value) || value <= 0)) return failure(KEY_INVALID);
+        if (name === "expires" && value !== null
+          && !["30d", "90d", "180d", "never"].includes(value)) return failure(KEY_INVALID);
+        if (name === "models" && !validUpdateModels(value)) return failure(KEY_INVALID);
+        params[name === "limitPoints" ? "limit_points" : name] = name === "models" && value !== null
+          ? Array.from(value, (model) => model)
+          : value;
+      }
+      if (Object.keys(params).length === 1) return failure(KEY_INVALID);
+    } catch {
+      return failure(KEY_INVALID);
+    }
+    return runKeyAction(this, "update", keyId, "/api/llm/keys/update", params);
+  },
+
+  async extendKey(keyId) {
+    if (!validKeyId(keyId)) return failure(KEY_INVALID);
+    return runKeyAction(this, "extend", keyId, "/api/llm/keys/extend", { key_id: keyId });
+  },
+
+  async setKeyStatus(keyId, enabled) {
+    if (!validKeyId(keyId) || typeof enabled !== "boolean") return failure(KEY_INVALID);
+    return runKeyAction(this, "status", keyId, "/api/llm/keys/set_status", { key_id: keyId, enabled });
+  },
+
+  async deleteKey(keyId, confirmName) {
+    if (!validKeyId(keyId) || typeof confirmName !== "string") return failure(KEY_INVALID);
+    return runKeyAction(this, "delete", keyId, "/api/llm/keys/delete", { key_id: keyId, confirm_name: confirmName });
   },
 
   async fetchUsageRecent() {
@@ -200,6 +317,19 @@ export const llmService = reactive({
     return result;
   },
 
+  /** Usage aggregates are returned to the caller and are never kept in the shared LLM store. */
+  async fetchUsageSummary(params) {
+    return call("/api/llm/usage/summary", params);
+  },
+
+  async fetchUsageDaily(params) {
+    return call("/api/llm/usage/daily", params);
+  },
+
+  async fetchUsageLogs(params) {
+    return call("/api/llm/usage/logs", params);
+  },
+
   /**
    * 建一把免費試用金鑰（付費金鑰在 LLM-07）。回應的 `data.key` 是**唯一一次**看得到的明文：
    * 這裡不存、不記錄，直接交還呼叫端。請求沒拿到回應時回 `llm_key_create_interrupted`
@@ -209,6 +339,18 @@ export const llmService = reactive({
     return call("/api/llm/keys/create", {
       client_request_id: clientRequestId,
       kind: "free_trial",
+    }, { timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode: LLM_KEY_CREATE_INTERRUPTED });
+  },
+
+  /** Paid creation handoff for LLM-07. Task 9 must route this response directly to reveal local state. */
+  async createPaidKey(clientRequestId, values) {
+    return call("/api/llm/keys/create", {
+      client_request_id: clientRequestId,
+      kind: "paid",
+      name: values.name,
+      limit_points: values.limitPoints,
+      expires: values.expires,
+      models: values.models,
     }, { timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode: LLM_KEY_CREATE_INTERRUPTED });
   },
 });

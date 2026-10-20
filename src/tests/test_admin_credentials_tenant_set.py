@@ -104,6 +104,93 @@ class _CredentialsFixture(TransactionCase):
         )
 
 
+class TestAdminCredentialsRestartScope1675(_CredentialsFixture):
+    """#1675：文案與兩份 payload 同讀 template 旗標，不更動重啟行為。"""
+
+    def _set_credentials(self, scope=None, password=GOOD_PASSWORD,
+                         gateway=False, service=None):
+        service = service if service is not None else self.service
+        if scope is not None:
+            service.template_id.credential_change_restart_scope = scope
+        gateway_data = {'gateway_api_key': 'new-gateway-key-1675'} if gateway else {}
+        with patch(_OPERATOR_CLIENT) as get_client, self._patch_request_as(
+                self.admin_user), patch.object(
+                self.controller, '_gateway_credentials', return_value=gateway_data):
+            get_client.return_value = MagicMock()
+            result = self.controller.api_service_set_admin_credentials(
+                self.workspace.id, service.id, password=password,
+                rotate_gateway_key=gateway)
+        self.assertTrue(result.get('success'), result)
+        get_client.return_value.reset_release_config.assert_called_once()
+        data = result['data']
+        expected_scope = scope or 'service'
+        self.assertEqual(
+            data['template']['credential_change_restart_scope'], expected_scope)
+        self.assertEqual(
+            self.controller._format_service(service)['template'][
+                'credential_change_restart_scope'], expected_scope)
+        if password:
+            self.assertNotIn('admin_password', data)
+            self.assertNotIn(password, json.dumps(result))
+        return data
+
+    def _assert_no_service_restart_claim(self, data):
+        self.assertNotIn('restarts the service', data['message'])
+        self.assertNotIn('The service restarts', data['message'])
+
+    def test_console_only_custom_password(self):
+        data = self._set_credentials('console_only')
+        self._assert_no_service_restart_claim(data)
+        self.assertIn('the main service keeps running', data['message'])
+        self.assertIn('only the console restarts', data['message'])
+        self.assertIn('within about a minute', data['message'])
+
+    def test_console_only_generated_password(self):
+        data = self._set_credentials('console_only', password='')
+        self._assert_no_service_restart_claim(data)
+        self.assertEqual(data['admin_password'], self._secret_password(self.service))
+        self.assertIn('Save the new password now', data['message'])
+        self.assertIn('only the console restarts', data['message'])
+
+    def test_default_password_only_template_still_restarts_service(self):
+        """未設旗標的 helm_secret、只有密碼的模板沿用既有提示（code-server 類）。"""
+        template = self._make_template(
+            'creds-password-only-1675', 'oci://example/password-only', 'helm_secret')
+        template.admin_password_settable = True
+        service = self._make_service(template, 'svc-creds-password-1675')
+        self.assertEqual(template.credential_change_restart_scope, 'service')
+        data = self._set_credentials(service=service)
+        self.assertEqual(
+            data['message'],
+            'Admin credentials updated. The service restarts to apply them '
+            '(about a minute).')
+
+    def test_none_does_not_claim_a_restart(self):
+        data = self._set_credentials('none')
+        self._assert_no_service_restart_claim(data)
+        self.assertIn('within about a minute; the service does not restart.', data['message'])
+
+    def test_console_only_gateway_replacement_copy(self):
+        """gateway 交付以 mock 隔離；只驗本單的訊息組裝，實際換發由既有測試守住。"""
+        data = self._set_credentials('console_only', gateway=True)
+        self._assert_no_service_restart_claim(data)
+        self.assertEqual(data['gateway_api_key'], 'new-gateway-key-1675')
+        self.assertIn('Save the new Gateway API Key now', data['message'])
+        self.assertIn('only the console restarts', data['message'])
+
+    def test_none_gateway_replacement_copy(self):
+        data = self._set_credentials('none', gateway=True)
+        self._assert_no_service_restart_claim(data)
+        self.assertEqual(data['gateway_api_key'], 'new-gateway-key-1675')
+        self.assertIn('Save the new Gateway API Key now', data['message'])
+        self.assertIn('the service does not restart.', data['message'])
+
+    def test_seed_declares_console_only(self):
+        template = self.env.ref('woow_paas_platform.cloud_app_opendesign')
+        self.assertEqual(template.credential_change_restart_scope, 'console_only')
+        self.assertEqual(template.admin_password_carrier, 'helm_secret')
+
+
 class TestAdminUsernameHelmPathConstraint(_CredentialsFixture):
     """能力欄位只能設在「憑證真的活在 chart Secret」的模板上。"""
 

@@ -31,12 +31,13 @@ import re
 import secrets
 import string
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from psycopg2 import IntegrityError
 
 from odoo import SUPERUSER_ID, _, api, fields, models
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, ValidationError
 
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
@@ -46,16 +47,21 @@ from .llm_common import (
     ERR_LLM_KEY_ALREADY_SHOWN,
     ERR_LLM_KEY_INVALID,
     ERR_LLM_KEY_LIMIT,
+    ERR_LLM_KEY_NOT_FOUND,
+    ERR_LLM_KEY_LIMIT_BELOW_USED,
+    ERR_LLM_KEY_CANNOT_ENABLE,
     ERR_LLM_RATE_LIMITED,
     ERR_LLM_UNAVAILABLE,
     MAX_KEYS_PER_ACCOUNT,
+    QUOTA_PER_POINT,
     RESULT_NOT_EXECUTED,
     LlmError,
     LlmQuotaInteger,
     _is_llm_internal,
+    _llm_internal,
     _without_llm_internal,
 )
-from .llm_event import _begin, safe_code
+from .llm_event import _begin, _env_on, safe_code
 
 _logger = logging.getLogger(__name__)
 
@@ -70,8 +76,21 @@ _REVEALED_KEY_RE = re.compile(r'[A-Za-z0-9]{16,128}', re.ASCII)
 _STALE_CREATING_SECONDS = 300
 _COLUMN_RE = re.compile(r'[a-z][a-z0-9_]{0,62}')
 _RAND4_ALPHABET = string.ascii_lowercase + string.digits
+# Must remain no broader than ``newapi_client.paid_token_body`` / proxy policy.
+# A stale or malformed cached catalogue is an availability failure, never a reason
+# to reserve throttle or create a mirror that later cannot be posted.
+_MODEL_ID_RE = re.compile(r'[A-Za-z0-9._:/-]{1,128}', re.ASCII)
+_PAID_EXPIRY_DAYS = {'30d': 30, '90d': 90, '180d': 180}
+_MAX_KEY_LABEL_LENGTH = 64
+_MAX_PAID_LIMIT_POINTS = nac.TOKEN_MAX_REMAIN_QUOTA // QUOTA_PER_POINT
+_OMITTED = object()
 #: 「有效」的試用金鑰（DESIGN §2.3：每帳號最多 1 把）。
 _FREE_TRIAL_LIVE_STATES = ('creating', 'active', 'disabled')
+_DISABLED_STATUS_BY_REASON = {
+    'free_daily_cap': 'free_capped',
+    'suspend': 'suspended',
+    'overdraft': 'overdraft',
+}
 
 
 class _ListFailed:
@@ -103,6 +122,28 @@ def _iso(value):
     return value.replace(tzinfo=timezone.utc).isoformat() if value else None
 
 
+class LlmOptionalLimitInteger(fields.Integer):
+    """Keep an unlimited SQL NULL distinct from a corrupt zero total limit.
+
+    Odoo's standard Integer converts NULL/False to 0 at each ORM boundary.
+    Only this optional limit field needs nullable semantics; its PostgreSQL
+    int4 column and the framework's registered integer type stay unchanged.
+    """
+
+    def convert_to_cache(self, value, record, validate=True):
+        if value is None or value is False:
+            return None
+        return super().convert_to_cache(value, record, validate=validate)
+
+    def convert_to_column(self, value, record, values=None, validate=True):
+        if value is None or value is False:
+            return None
+        return super().convert_to_column(value, record, values=values, validate=validate)
+
+    def convert_to_record(self, value, record):
+        return None if value is None else super().convert_to_record(value, record)
+
+
 class LlmApiKey(models.Model):
     _name = 'woow_paas_platform.llm_api_key'
     _description = 'AI Models API Key (mirror)'
@@ -119,6 +160,8 @@ class LlmApiKey(models.Model):
     key_label = fields.Char(
         readonly=True,
         help='User-facing name (only in PaaS). Never placed in alerts, incidents or emails (N24).')
+    creation_rejected = fields.Boolean(readonly=True, default=False, copy=False,
+                                        groups='base.group_system')
     newapi_name = fields.Char(readonly=True, index=True, copy=False,
                               help='wp_<id>_<rand4> — the token name on new-api.')
     newapi_token_id = fields.Integer(readonly=True, copy=False)
@@ -133,12 +176,34 @@ class LlmApiKey(models.Model):
     free_cap_attempted_at = fields.Datetime(readonly=True, copy=False)
     free_cap_pending = fields.Boolean(readonly=True, copy=False, default=False)
     masked_key = fields.Char(readonly=True, copy=False, help='sk- plus first 4 and last 4.')
-    quota_limit_points = fields.Integer(readonly=True)
+    quota_limit_points = LlmOptionalLimitInteger(readonly=True)
     expires_at = fields.Datetime(readonly=True)
     model_allowlist = fields.Text(readonly=True)
     created_uid = fields.Many2one('res.users', readonly=True, ondelete='set null')
     created_ip = fields.Char(readonly=True)
     revealed_at = fields.Datetime(readonly=True, copy=False)
+    # LLM-07：到期通知要可去重；worker 寫入發送時間，絕不靠瞬時 new-api 狀態推論。
+    expiry_notice_7d_at = fields.Datetime(readonly=True, copy=False)
+    expiry_notice_1d_at = fields.Datetime(readonly=True, copy=False)
+    expiry_notice_7d_retry_at = fields.Datetime(readonly=True, copy=False)
+    expiry_notice_1d_retry_at = fields.Datetime(readonly=True, copy=False)
+    created_notice_retry_at = fields.Datetime(readonly=True, copy=False)
+    created_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
+                                            groups='base.group_system')
+    not_me_disable_attempts = fields.Integer(readonly=True, default=0, copy=False,
+                                             groups='base.group_system')
+    not_me_disable_next_at = fields.Datetime(readonly=True, copy=False,
+                                             groups='base.group_system')
+    not_me_scan_page = fields.Integer(readonly=True, default=1, copy=False,
+                                      groups='base.group_system')
+    # Numeric IDs and retry counters only; never store a list response or key material.
+    not_me_disable_plan = fields.Json(readonly=True, copy=False, groups='base.group_system')
+    not_me_disable_work_count = fields.Integer(readonly=True, default=0, copy=False,
+                                               groups='base.group_system')
+    not_me_attempt_notice_id = fields.Integer(readonly=True, default=0, copy=False,
+                                              groups='base.group_system')
+    not_me_disabled_notice_id = fields.Integer(readonly=True, default=0, copy=False,
+                                               groups='base.group_system')
     remain_quota_cached = LlmQuotaInteger(readonly=True, copy=False)
     used_quota_cached = LlmQuotaInteger(readonly=True, copy=False)
     accessed_at = fields.Datetime(readonly=True, copy=False)
@@ -177,6 +242,20 @@ class LlmApiKey(models.Model):
             return super().unlink()
         raise AccessError(_('AI model keys cannot be deleted; they are marked deleted.'))
 
+    @api.constrains('account_id', 'state')
+    def _llm_check_account_key_limit(self):
+        """All non-deleted/non-lost keys occupy one of the account's 20 slots (D10)."""
+        for account in self.mapped('account_id'):
+            count = self.sudo().search_count([
+                ('account_id', '=', account.id),
+                ('state', 'not in', ('deleted', 'lost')),
+            ])
+            if count > MAX_KEYS_PER_ACCOUNT:
+                raise ValidationError(_(
+                    'An account can have at most %(max_keys)s API keys.',
+                    max_keys=MAX_KEYS_PER_ACCOUNT,
+                ))
+
     # ------------------------------------------------------------------ #
     #  DTO                                                                 #
     # ------------------------------------------------------------------ #
@@ -200,7 +279,23 @@ class LlmApiKey(models.Model):
         if self.state in ('active', 'disabled') and self.expires_at \
                 and self.expires_at < _utcnow():
             return 'expired'
+        if self.state == 'disabled':
+            return _DISABLED_STATUS_BY_REASON.get(self.disabled_by, 'disabled')
+        if self.state == 'active' and self.quota_limit_points and \
+                self.used_quota_cached is not None and \
+                self.used_quota_cached >= self.quota_limit_points * QUOTA_PER_POINT:
+            return 'exhausted'
         return self.state
+
+    @staticmethod
+    def _llm_points_from_quota(quota):
+        """Translate new-api integer quota to whole PaaS points without float arithmetic."""
+        # ``False`` is how an unset Odoo Integer may surface in a record cache;
+        # it is not a zero-quota observation.  Only an actual non-negative
+        # Python integer is safe to expose as an integer point value.
+        if type(quota) is not int or quota < 0:
+            return None
+        return quota // QUOTA_PER_POINT
 
     def _llm_dto(self):
         self.ensure_one()
@@ -211,9 +306,9 @@ class LlmApiKey(models.Model):
             'masked_key': self.masked_key or None,
             'status': self._llm_status(),
             'disabled_by': self.disabled_by or None,
-            'used_points': None,
+            'used_points': self._llm_points_from_quota(self.used_quota_cached),
             'limit_points': self.quota_limit_points or None,
-            'remain_points': None,
+            'remain_points': self._llm_points_from_quota(self.remain_quota_cached),
             'last_used_at': _iso(self.accessed_at),
             'expires_at': _iso(self.expires_at),
             'created_at': _iso(self.create_date),
@@ -245,6 +340,146 @@ class LlmApiKey(models.Model):
     #  建立免費試用金鑰（/api/llm/keys/create，kind='free_trial'）           #
     # ------------------------------------------------------------------ #
     @api.model
+    def _llm_client_request_id(self, client_request_id):
+        if not isinstance(client_request_id, str):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='client_request_id')
+        client_request_id = client_request_id.strip().lower()
+        if not _CLIENT_REQUEST_ID_RE.fullmatch(client_request_id):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='client_request_id')
+        return client_request_id
+
+    @api.model
+    def _llm_preflight_create(self, account, client_request_id):
+        """Reject replay, settle stale mirrors, and apply the cheap 20-key check locally."""
+        existing = self.sudo().search([
+            ('account_id', '=', account.id),
+            ('client_request_id', '=', client_request_id),
+        ], limit=1)
+        if existing:
+            raise LlmError(ERR_LLM_KEY_ALREADY_SHOWN)
+        stale_before = _utcnow() - timedelta(seconds=_STALE_CREATING_SECONDS)
+        keys = self.sudo().search([('account_id', '=', account.id)])
+        stale = keys.filtered(lambda key: key.state == 'creating' and key.create_date
+                              and key.create_date < stale_before)
+        if stale:
+            self._llm_settle_stale_creating(account, stale_before)
+            self.invalidate_model()
+            account.invalidate_recordset(['api_key_ids'])
+            keys = self.sudo().search([('account_id', '=', account.id)])
+        live = keys.filtered(lambda key: key.state not in ('deleted', 'lost'))
+        if len(live) >= MAX_KEYS_PER_ACCOUNT:
+            raise LlmError(ERR_LLM_KEY_LIMIT, max_keys=MAX_KEYS_PER_ACCOUNT)
+        return live
+
+    @api.model
+    def _llm_validate_paid_create(self, account, *, name, limit_points, expires, models):
+        """Translate only the closed paid-key form into a safe mirror/token specification."""
+        account.ensure_one()
+        if not isinstance(name, str) or not name.strip() or len(name) > _MAX_KEY_LABEL_LENGTH:
+            raise LlmError(ERR_LLM_KEY_INVALID, field='name')
+        if limit_points is not None and (
+                type(limit_points) is not int
+                or not 1 <= limit_points <= _MAX_PAID_LIMIT_POINTS):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='limit_points')
+        if expires not in (*_PAID_EXPIRY_DAYS, 'never'):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='expires')
+        expires_at = None
+        if expires != 'never':
+            expires_at = _utcnow().replace(microsecond=0) + timedelta(
+                days=_PAID_EXPIRY_DAYS[expires])
+
+        default_models = self._llm_default_models()
+        selected = None
+        if models is not None:
+            if type(models) is not list or not models \
+                    or any(not isinstance(model, str) for model in models) \
+                    or len(set(models)) != len(models) \
+                    or not set(models) <= set(default_models):
+                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
+            requested = set(models)
+            # Use cached catalogue order, never client ordering.
+            selected = [model for model in default_models if model in requested]
+        return {
+            'kind': 'paid',
+            'key_label': name,
+            'limit_points': limit_points,
+            'expires_at': expires_at,
+            'model_allowlist': ','.join(selected) if selected else None,
+            'models': tuple(selected) if selected else None,
+            'model_limits_enabled': selected is not None,
+        }
+
+    @api.model
+    def _llm_default_models(self):
+        """Return validated cached default model IDs or fail closed before any external call."""
+        payload = self.env['woow_paas_platform.llm_swr_cache']._llm_models_payload()
+        if not isinstance(payload, dict) or payload.get('state') != 'ok' \
+                or not isinstance(payload.get('items'), list):
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        default_models = []
+        for item in payload['items']:
+            if not isinstance(item, dict) or item.get('group') != 'default':
+                continue
+            model = item.get('model')
+            if not isinstance(model, str) or not _MODEL_ID_RE.fullmatch(model) \
+                    or model in default_models:
+                raise LlmError(ERR_LLM_UNAVAILABLE)
+            default_models.append(model)
+        if not default_models:
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        return default_models
+
+    @staticmethod
+    def _llm_expired_time(expires_at):
+        if expires_at is None:
+            return -1
+        return int(expires_at.replace(tzinfo=timezone.utc).timestamp())
+
+    @api.model
+    def _llm_create_with_reveal(self, account, client_request_id, user, real_ip, spec,
+                                payload_factory):
+        """Persist a validated mirror, create/reveal remotely, and close its audit event.
+
+        Callers own their authorization, consent, reauthentication, and local quota
+        checks.  Keeping the external transaction here makes paid and free-trial
+        creation share the same durable ``creating``/one-time-reveal semantics.
+        """
+        Account = self.env['woow_paas_platform.llm_account']
+        ip = account._llm_tenant_ip()
+        up = account._llm_up_token()
+        client = Account._llm_web_client('keys/create')
+        Event = self.env[EVENT_MODEL]
+        event_id = Event._llm_throttle_reserve(
+            account, 'key_create', uid=user.id if user else None, real_ip=real_ip)
+        deadline = time.monotonic() + nac.KEY_CREATE_BUDGET_SECONDS
+        key_id = None
+        try:
+            key_id, newapi_name = self._llm_insert_creating(
+                account, spec['kind'], client_request_id, user, real_ip,
+                spec['expires_at'], spec['model_allowlist'], key_label=spec['key_label'],
+                quota_limit_points=spec['limit_points'])
+            created = self._llm_create_remote(
+                account, client, ip, up, key_id, newapi_name, spec['expires_at'], deadline,
+                payload_factory=payload_factory, spec=spec)
+        except LlmError as exc:
+            Event._llm_event_finish(event_id,
+                                    RESULT_NOT_EXECUTED if exc.not_executed else 'failed',
+                                    error_code=safe_code(exc.code),
+                                    target_model=KEY_MODEL if key_id else None,
+                                    target_id=key_id)
+            raise
+        except Exception:
+            # A client/programming exception must not leave a durable creating mirror.
+            if key_id:
+                self._llm_finish(key_id, {'state': 'failed_reveal'})
+            Event._llm_event_finish(event_id, 'failed', error_code=ERR_LLM_INTERNAL,
+                                    target_model=KEY_MODEL if key_id else None,
+                                    target_id=key_id)
+            raise
+        Event._llm_event_finish(event_id, 'ok', target_model=KEY_MODEL, target_id=key_id)
+        return created
+
+    @api.model
     def _llm_create_free_trial_key(self, partner, client_request_id, user, real_ip):
         Account = self.env['woow_paas_platform.llm_account']
         account = Account._llm_account_for_partner(partner)
@@ -273,47 +508,73 @@ class LlmApiKey(models.Model):
         if live.filtered(lambda k: k.kind == 'free_trial' and k.state in _FREE_TRIAL_LIVE_STATES):
             raise LlmError(ERR_LLM_FREE_KEY_EXISTS)
 
-        ip = account._llm_tenant_ip()
-        up = account._llm_up_token()
-        client = Account._llm_web_client('keys/create')
-
-        Event = self.env[EVENT_MODEL]
-        event_id = Event._llm_throttle_reserve(account, 'key_create',
-                                               uid=user.id if user else None, real_ip=real_ip)
-        deadline = time.monotonic() + nac.KEY_CREATE_BUDGET_SECONDS
-        expires = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
+        expires_at = _utcnow().replace(microsecond=0) + timedelta(
             seconds=nac.FREE_TRIAL_LIFETIME_SECONDS)
-        key_id = None
-        try:
-            key_id, name = self._llm_insert_creating(
-                account, 'free_trial', client_request_id, user, real_ip,
-                expires.replace(tzinfo=None), ','.join(nac.FREE_TRIAL_MODELS))
-            created = self._llm_create_remote(account, client, ip, up, key_id, name, expires,
-                                              deadline)
-        except LlmError as exc:
-            Event._llm_event_finish(event_id,
-                                    RESULT_NOT_EXECUTED if exc.not_executed else 'failed',
-                                    error_code=safe_code(exc.code),
-                                    target_model=KEY_MODEL if key_id else None,
-                                    target_id=key_id)
-            raise
-        except Exception:
-            # 程式錯誤（例如 client 自己的例外）：鏡像不能卡在 creating。已經收尾的列不受影響
-            # （``_llm_finish`` 只改 creating）。
-            if key_id:
-                self._llm_finish(key_id, {'state': 'failed_reveal'})
-            Event._llm_event_finish(event_id, 'failed', error_code=ERR_LLM_INTERNAL,
-                                    target_model=KEY_MODEL if key_id else None,
-                                    target_id=key_id)
-            raise
-        Event._llm_event_finish(event_id, 'ok', target_model=KEY_MODEL, target_id=key_id)
-        return created
+        spec = {
+            'kind': 'free_trial',
+            'key_label': '',
+            'limit_points': None,
+            'expires_at': expires_at,
+            'model_allowlist': ','.join(nac.FREE_TRIAL_MODELS),
+            'models': tuple(nac.FREE_TRIAL_MODELS),
+            'model_limits_enabled': True,
+        }
+        return self._llm_create_with_reveal(
+            account, client_request_id, user, real_ip, spec,
+            lambda newapi_name: nac.free_trial_token_body(
+                newapi_name, self._llm_expired_time(expires_at)))
 
     @api.model
-    def _llm_create_remote(self, account, client, ip, up, key_id, name, expires, deadline):
+    def _llm_create_paid_key(self, partner, client_request_id, user, real_ip, session, *,
+                             name, limit_points, expires, models):
+        """Create a paid mirror/token pair without exposing its generated upstream name."""
+        Account = self.env['woow_paas_platform.llm_account']
+        account = Account._llm_account_for_partner(partner)
+        account._llm_require_active()
+        client_request_id = self._llm_client_request_id(client_request_id)
+        spec = self._llm_validate_paid_create(
+            account, name=name, limit_points=limit_points, expires=expires, models=models)
+        account._llm_require_current_terms()
+        if spec['expires_at'] is None and spec['limit_points'] is None:
+            account._llm_require_reauth(session)
+        self._llm_preflight_create(account, client_request_id)
+
+        def paid_body(newapi_name):
+            return nac.paid_token_body(
+                newapi_name, self._llm_expired_time(spec['expires_at']),
+                (spec['limit_points'] or 0) * QUOTA_PER_POINT,
+                spec['limit_points'] is None,
+                spec['model_limits_enabled'], spec['model_allowlist'] or '')
+
+        return self._llm_create_with_reveal(
+            account, client_request_id, user, real_ip, spec, paid_body)
+
+    @contextmanager
+    def _llm_creation_guard(self, key_id, *, token_id=None):
+        """Fence each POST/reveal with the stop worker's key lock, including retries."""
+        with self.env.registry.cursor() as cr:
+            _begin(self.env, cr, read_committed=True)
+            cr.execute('SELECT state, disabled_by FROM %s WHERE id=%%s '
+                       'FOR NO KEY UPDATE' % KEY_TABLE, (key_id,))
+            row = cr.fetchone()
+            if row and row[0] == 'creating' and row[1] != 'ops':
+                yield
+                return
+        # Release the key lock before taking operation/obligation locks in finish.
+        values = {'state': 'failed_reveal'}
+        if token_id:
+            values['newapi_token_id'] = token_id
+        self._llm_finish(key_id, values)
+        raise LlmError(ERR_LLM_UNAVAILABLE)
+
+    @api.model
+    def _llm_create_remote(self, account, client, ip, up, key_id, name, expires, deadline,
+                           *, payload_factory=None, spec=None):
         """§1.3.2 第 4–7 步：POST token → 依名稱找 id → reveal → 鏡像 active。"""
-        body = nac.free_trial_token_body(name, int(expires.timestamp()))
-        created = client.user_create_token(ip, up, body, deadline=deadline)
+        body = (payload_factory(name) if payload_factory is not None else
+                nac.free_trial_token_body(name, int(expires.timestamp())))
+        with self._llm_creation_guard(key_id):
+            created = client.user_create_token(ip, up, body, deadline=deadline)
         if isinstance(created, (nac.NotExecuted, nac.Definite)):
             # 確定沒建：鏡像標 deleted（使用者可以直接重建）。
             self._llm_finish(key_id, {'state': 'deleted'})
@@ -327,7 +588,8 @@ class LlmApiKey(models.Model):
         token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None and isinstance(created, nac.Unknown):
             # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
-            retried = client.user_create_token(ip, up, body, deadline=deadline)
+            with self._llm_creation_guard(key_id):
+                retried = client.user_create_token(ip, up, body, deadline=deadline)
             if retried.ok or isinstance(retried, nac.Unknown):
                 token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None or token is TOKEN_LIST_FAILED:
@@ -336,10 +598,12 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_UNAVAILABLE)
         token_id = token['id']
 
-        revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
+        with self._llm_creation_guard(key_id, token_id=token_id):
+            revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         if isinstance(revealed, nac.NotExecuted) and revealed.reason != 'deadline' \
                 and not revealed.retry_after:
-            revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
+            with self._llm_creation_guard(key_id, token_id=token_id):
+                revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         raw = revealed.data.get('key') if revealed.ok and isinstance(revealed.data, dict) else None
         if not (isinstance(raw, str) and _REVEALED_KEY_RE.fullmatch(raw)):
             self._llm_finish(key_id, {'state': 'failed_reveal', 'newapi_token_id': token_id})
@@ -348,30 +612,34 @@ class LlmApiKey(models.Model):
             self._llm_raise_for(account, revealed)
         masked = 'sk-%s…%s' % (raw[:4], raw[-4:])
         now = _utcnow()
-        self._llm_finish(key_id, {
+        finish = self._llm_finish(key_id, {
             'state': 'active',
             'newapi_token_id': token_id,
             'masked_key': masked,
             'revealed_at': now,
         })
+        if not finish or finish['state'] != 'active':
+            raise LlmError(ERR_LLM_UNAVAILABLE)
         # 鏡像是獨立交易寫的：主 cursor 的 snapshot 看不到這一列，所以 DTO 直接由已知的值組。
+        expires_at = spec['expires_at'] if spec is not None else expires.replace(tzinfo=None)
         return {
             'key_id': key_id,
             'key': 'sk-' + raw,
             'base_url': None,
             'id': key_id,
-            'kind': 'free_trial',
-            'display_name': '',
+            'kind': spec['kind'] if spec is not None else 'free_trial',
+            'display_name': spec['key_label'] if spec is not None else '',
             'masked_key': masked,
-            'status': 'active',
-            'disabled_by': None,
+            'status': finish['state'] if finish else 'active',
+            'disabled_by': finish['disabled_by'] if finish else None,
             'used_points': None,
-            'limit_points': None,
+            'limit_points': spec['limit_points'] if spec is not None else None,
             'remain_points': None,
             'last_used_at': None,
-            'expires_at': _iso(expires.replace(tzinfo=None)),
+            'expires_at': _iso(expires_at),
             'created_at': _iso(now),
-            'models': list(nac.FREE_TRIAL_MODELS),
+            'models': (list(spec['models']) if spec is not None and spec['models'] else
+                       (None if spec is not None else list(nac.FREE_TRIAL_MODELS))),
         }
 
     @api.model
@@ -390,43 +658,77 @@ class LlmApiKey(models.Model):
     def _llm_find_token(self, client, ip, up, name, deadline):
         """依名稱在 token 列表找剛建的那把。
 
-        回傳三種：token dict（找到）、``None``（列表成功、確定沒有）、:data:`TOKEN_LIST_FAILED`
-        （列表本身失敗：NotExecuted／Unknown／Definite——不知道有沒有）。呼叫端只能在 ``None``
-        時重送建立。
+        回傳三種：token dict（找到）、``None``（完整列表成功、確定沒有）、
+        :data:`TOKEN_LIST_FAILED`（列表失敗或無法確認首頁完整——不知道有沒有）。呼叫端只能在
+        ``None`` 時重送建立。
         """
         listed = client.user_list_tokens(ip, up, 1, 10, deadline=deadline)
-        if not listed.ok:
+        if not listed.ok or not isinstance(listed.data, dict):
             return TOKEN_LIST_FAILED
-        data = listed.data if isinstance(listed.data, dict) else {}
-        items = data.get('items') if isinstance(data.get('items'), list) else []
+        items = listed.data.get('items')
+        total = listed.data.get('total')
+        if not isinstance(items, list) or type(total) is not int or total < 0 \
+                or len(items) != total:
+            return TOKEN_LIST_FAILED
         for item in items:
-            if isinstance(item, dict) and item.get('name') == name \
-                    and type(item.get('id')) is int and item['id'] > 0:
+            if not isinstance(item, dict) or not isinstance(item.get('name'), str) \
+                    or type(item.get('id')) is not int or item['id'] <= 0:
+                return TOKEN_LIST_FAILED
+            if item['name'] == name:
                 return item
         return None
 
     @api.model
     def _llm_insert_creating(self, account, kind, client_request_id, user, real_ip,
-                             expires_at, models):
+                             expires_at, models, *, key_label='', quota_limit_points=None):
         """獨立 cursor INSERT ``state=creating`` 的鏡像並 commit（外呼前就持久化）。"""
+        if kind not in ('paid', 'free_trial'):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
+        if not isinstance(client_request_id, str) or not _CLIENT_REQUEST_ID_RE.fullmatch(
+                client_request_id):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='client_request_id')
+        if not isinstance(key_label, str) or len(key_label) > _MAX_KEY_LABEL_LENGTH:
+            raise LlmError(ERR_LLM_KEY_INVALID, field='name')
+        if expires_at is not None and not isinstance(expires_at, datetime):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='expires')
+        if models is not None and not isinstance(models, str):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='models')
+        if quota_limit_points is not None and (
+                type(quota_limit_points) is not int or quota_limit_points <= 0):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='limit_points')
         now = _utcnow()
         rand4 = ''.join(secrets.choice(_RAND4_ALPHABET) for _ in range(4))
         try:
             with self.env.registry.cursor() as cr:
                 _begin(self.env, cr, read_committed=True)
+                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                # This account-row lock serializes the count+insert pair across web workers.
+                # The cheap service preflight avoids a throttle/event for ordinary 21st-key
+                # attempts; this independent-cursor guard closes the remaining race.
+                cr.execute('SELECT id FROM %s WHERE id = %%s FOR NO KEY UPDATE' % account._table,
+                           (account.id,))
+                if cr.fetchone() is None:
+                    raise LlmError(ERR_LLM_UNAVAILABLE)
+                cr.execute(
+                    "SELECT count(*) FROM %s WHERE account_id = %%s "
+                    "AND state NOT IN ('deleted', 'lost')" % KEY_TABLE,
+                    (account.id,))
+                if cr.fetchone()[0] >= MAX_KEYS_PER_ACCOUNT:
+                    raise LlmError(ERR_LLM_KEY_LIMIT, max_keys=MAX_KEYS_PER_ACCOUNT)
                 if kind == 'free_trial':
                     from .llm_free_usage import taipei_day
                     self.env['woow_paas_platform.llm_free_usage']._llm_reserve_key_cr(
                         cr, account.id, taipei_day(now.replace(tzinfo=timezone.utc).timestamp()))
                 cr.execute(
                     'INSERT INTO %s (account_id, partner_id, kind, client_request_id, state, '
-                    'expires_at, model_allowlist, created_uid, created_ip, '
-                    'create_uid, create_date, write_uid, write_date) '
-                    'VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s) '
+                    'key_label, quota_limit_points, expires_at, model_allowlist, '
+                    'created_uid, created_ip, create_uid, create_date, write_uid, write_date) '
+                    'VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, '
+                    '%%s, %%s) '
                     'RETURNING id' % KEY_TABLE,
                     (account.id, account.partner_id.id, kind, client_request_id, 'creating',
-                     expires_at, models, user.id if user else None, real_ip or None,
-                     SUPERUSER_ID, now, SUPERUSER_ID, now), log_exceptions=False)
+                     key_label, quota_limit_points, expires_at, models, user.id if user else None,
+                     real_ip or None, SUPERUSER_ID, now, SUPERUSER_ID, now), log_exceptions=False)
                 key_id = cr.fetchone()[0]
                 name = 'wp_%d_%s' % (key_id, rand4)
                 cr.execute('UPDATE %s SET newapi_name = %%s WHERE id = %%s' % KEY_TABLE,
@@ -453,15 +755,35 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_finish(self, key_id, values):
+        # Only the initial definite rejection requests deleted. Unknown/retry
+        # cancellation requests failed_reveal and must retain its reservation.
+        not_created = values.get('state') == 'deleted' and not values.get('newapi_token_id')
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
-        columns = sorted(values)
-        if not all(_COLUMN_RE.fullmatch(column) for column in columns):
-            raise ValueError('bad column name')
+        if values.get('state') == 'active':
+            values['created_notice_pending'] = True
         with self.env.registry.cursor() as cr:
-            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+            _begin(self.env, cr, read_committed=True)
+            env = _env_on(self.env.registry, cr)
+            worker = env['woow_paas_platform.llm_backoffice_operation']
+            obligations = worker._lock_key_obligations(key_id)
+            cr.execute('SELECT state, disabled_by, newapi_token_id FROM %s '
+                       'WHERE id=%%s FOR UPDATE' % KEY_TABLE, (key_id,))
+            row = cr.fetchone()
+            not_created = not_created and bool(row) and not row[2]
+            if not_created:
+                values['creation_rejected'] = True
+            stopped = bool(row and (row[1] == 'ops' or obligations))
+            if stopped:
+                values.update({'state': 'deleted' if not_created else 'failed_reveal',
+                               'disabled_by': 'ops', 'created_notice_pending': False})
+            worker._reenqueue_finalized_token(obligations, values.get('newapi_token_id'))
+            columns = sorted(values)
+            if not all(_COLUMN_RE.fullmatch(column) for column in columns):
+                raise ValueError('bad column name')
             cr.execute(
-                'UPDATE %s SET %s WHERE id = %%s AND state = %%s '
-                'RETURNING account_id, kind, create_date'
+                'UPDATE %s SET %s WHERE id = %%s AND (state = %%s '
+                "OR (state = 'failed_reveal' AND disabled_by = 'ops')) "
+                'RETURNING account_id, kind, create_date, state, disabled_by'
                 % (KEY_TABLE, ', '.join('%s = %%s' % column for column in columns)),
                 [values[column] for column in columns] + [key_id, 'creating'])
             changed = cr.fetchone()
@@ -471,3 +793,252 @@ class LlmApiKey(models.Model):
                 cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
                            'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
                            (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))
+            if changed and not_created:
+                worker._settle_not_created_obligations(obligations)
+        if changed and values.get('state') == 'active':
+            # This mirror committed on the independent cursor. A fresh cursor
+            # avoids the HTTP transaction's stale REPEATABLE READ snapshot.
+            from .llm_notifications import MODEL as NOTIFICATION_MODEL
+            try:
+                with self.env.registry.cursor() as notice_cr:
+                    notice_env = api.Environment(notice_cr, SUPERUSER_ID, {})
+                    notice_id = notice_env[NOTIFICATION_MODEL]._llm_notice(
+                        changed[0], 'key_created', KEY_MODEL, key_id,
+                        occurrence_key=str(key_id), token=True, email=True)
+                    if notice_id:
+                        key = notice_env[KEY_MODEL].sudo().browse(key_id)
+                        from .llm_common import _llm_internal
+                        _llm_internal(key).write({'created_notice_pending': False})
+            except Exception:  # noqa: BLE001 - key creation must survive notification failures
+                _logger.warning('[LLM] key-created notice deferred key=%s', key_id)
+        return ({'state': changed[3], 'disabled_by': changed[4]}
+                if changed else None)
+
+    @api.model
+    def _llm_management_key(self, partner, key_id, *, allow_failed_reveal=False):
+        """Anchor an exposed mirror id to the caller's account before any upstream access."""
+        account = self.env['woow_paas_platform.llm_account']._llm_account_for_partner(partner)
+        if not account:
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        account._llm_require_active()
+        key = self.sudo().search([('id', '=', key_id), ('account_id', '=', account.id)], limit=1)
+        if not key:
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        # SWR writes the mirror through an independent cursor. Lock before
+        # remote I/O so a stale snapshot fails here, not after a DELETE or a
+        # relative expiry extension which Odoo would replay on transaction retry.
+        # NOWAIT also keeps competing management requests bounded.
+        self.env.cr.execute(
+            'SELECT id FROM %s WHERE id = %%s AND account_id = %%s FOR UPDATE NOWAIT'
+            % KEY_TABLE, (key.id, account.id))
+        if not self.env.cr.fetchone():
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        # Under READ COMMITTED the locking SELECT can wait for an ops worker
+        # that commits a new marker; discard the pre-lock ORM cache so all
+        # subsequent status/enable guards observe that committed value.
+        key.invalidate_recordset()
+        if key.state in ('deleted', 'lost', 'creating') or \
+                (key.state == 'failed_reveal' and not allow_failed_reveal):
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        return account, key
+
+    @api.model
+    def _llm_management_token_id(self, key, *, allow_missing=False):
+        """Return an exact valid upstream id, or fail closed before client construction."""
+        token_id = key.newapi_token_id
+        if type(token_id) is int and 1 <= token_id <= nac.INT32_MAX:
+            return token_id
+        if allow_missing:
+            return None
+        raise LlmError(ERR_LLM_UNAVAILABLE)
+
+    @api.model
+    def _llm_management_remote(self, account):
+        return (account._llm_tenant_ip(), account._llm_up_token(),
+                account._llm_web_client('keys/manage'))
+
+    @api.model
+    def _llm_management_missing(self, result):
+        return isinstance(result, nac.Definite) and result.reason == 'no_message_key'
+
+    @api.model
+    def _llm_management_raise(self, account, result):
+        self._llm_raise_for(account, result)
+
+    @api.model
+    def _llm_management_audit(self, action, account, key, user, real_ip):
+        self.env[EVENT_MODEL]._llm_record(
+            action, account_id=account.id, partner_id=account.partner_id.id,
+            uid=user.id if user else None, real_ip=real_ip or None,
+            target_model=KEY_MODEL, target_id=key.id)
+
+    @api.model
+    def _llm_update_key(self, partner, key_id, *, user=None, real_ip=None, name=_OMITTED,
+                        limit_points=_OMITTED, expires=_OMITTED, models=_OMITTED):
+        account, key = self._llm_management_key(partner, key_id)
+        changes = any(value is not _OMITTED for value in (limit_points, expires, models))
+        if name is not _OMITTED and (not isinstance(name, str) or not name.strip()
+                                     or len(name) > _MAX_KEY_LABEL_LENGTH):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='name')
+        if key.kind == 'free_trial' and changes:
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        if not changes:
+            if name is not _OMITTED and name != key.key_label:
+                _llm_internal(key).write({'key_label': name})
+                self._llm_management_audit('key_update', account, key, user, real_ip)
+            dto = key._llm_dto()
+            dto['remain_after_points'] = dto['remain_points']
+            return dto
+        if limit_points is _OMITTED:
+            local_limit = key.quota_limit_points
+            if local_limit is False or local_limit is None:
+                requested_limit = None
+            elif type(local_limit) is int and 1 <= local_limit <= _MAX_PAID_LIMIT_POINTS:
+                requested_limit = local_limit
+            else:
+                raise LlmError(ERR_LLM_KEY_INVALID, field='limit_points')
+        else:
+            requested_limit = limit_points
+        if requested_limit is not None and (type(requested_limit) is not int or
+                not 1 <= requested_limit <= _MAX_PAID_LIMIT_POINTS):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='limit_points')
+        expiry = key.expires_at if expires is _OMITTED else expires
+        if expires is not _OMITTED and expires not in (*_PAID_EXPIRY_DAYS, 'never', None):
+            raise LlmError(ERR_LLM_KEY_INVALID, field='expires')
+        expires_at = (None if expiry in ('never', None) else
+                      _utcnow().replace(microsecond=0) + timedelta(days=_PAID_EXPIRY_DAYS[expiry])
+                      if expires is not _OMITTED else expiry)
+        model_value = key.model_allowlist if models is _OMITTED else models
+        if models is not _OMITTED:
+            defaults = self._llm_default_models()
+            if models is not None and (type(models) is not list or not models or
+                    any(not isinstance(m, str) for m in models) or len(set(models)) != len(models)
+                    or not set(models) <= set(defaults)):
+                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
+            selected = [m for m in defaults if m in set(models)] if models is not None else None
+            model_value = ','.join(selected) if selected else None
+        token_id = self._llm_management_token_id(key)
+        ip, up, client = self._llm_management_remote(account)
+        got = client.user_get_token(ip, up, token_id)
+        if not got.ok or not isinstance(got.data, dict):
+            if self._llm_management_missing(got):
+                _llm_internal(key).write({'state': 'deleted'})
+                raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+            self._llm_management_raise(account, got)
+        remote = got.data
+        used = remote.get('used_quota')
+        if limit_points is not _OMITTED:
+            if type(used) is not int or used < 0:
+                raise LlmError(ERR_LLM_UNAVAILABLE)
+            if requested_limit is not None and used > requested_limit * QUOTA_PER_POINT:
+                raise LlmError(ERR_LLM_KEY_LIMIT_BELOW_USED,
+                               used=self._llm_points_from_quota(used))
+        remaining = (0 if requested_limit is None else
+                     max(0, requested_limit * QUOTA_PER_POINT -
+                         (used if type(used) is int else 0))) \
+            if limit_points is not _OMITTED else None
+        try:
+            body = nac.paid_token_update_body(
+                remote, token_id, key.newapi_name,
+                remain_quota=remaining,
+                unlimited_quota=(requested_limit is None if limit_points is not _OMITTED else None),
+                expired_time=(self._llm_expired_time(expires_at) if expires is not _OMITTED else None),
+                model_limits_enabled=(bool(model_value) if models is not _OMITTED else None),
+                model_limits=(model_value or '' if models is not _OMITTED else None))
+        except nac.NewApiInputError:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        written = client.user_update_token(ip, up, body)
+        if not written.ok:
+            self._llm_management_raise(account, written)
+        vals = {}
+        if limit_points is not _OMITTED:
+            vals['quota_limit_points'] = requested_limit if requested_limit is not None else False
+            vals['remain_quota_cached'] = remaining
+            vals['used_quota_cached'] = used
+        if expires is not _OMITTED:
+            vals['expires_at'] = expires_at
+        if models is not _OMITTED:
+            vals['model_allowlist'] = model_value
+        if name is not _OMITTED:
+            vals['key_label'] = name
+        _llm_internal(key).write(vals)
+        self._llm_management_audit('key_update', account, key, user, real_ip)
+        dto = key._llm_dto()
+        dto['remain_after_points'] = (self._llm_points_from_quota(remaining)
+                                      if limit_points is not _OMITTED else dto['remain_points'])
+        return dto
+
+    @api.model
+    def _llm_extend_key(self, partner, key_id, user=None, real_ip=None):
+        account, key = self._llm_management_key(partner, key_id)
+        if key.kind != 'paid':
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        if not key.expires_at:
+            return key._llm_dto()
+        token_id = self._llm_management_token_id(key)
+        ip, up, client = self._llm_management_remote(account)
+        got = client.user_get_token(ip, up, token_id)
+        if not got.ok or not isinstance(got.data, dict):
+            if self._llm_management_missing(got):
+                _llm_internal(key).write({'state': 'deleted'})
+                raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+            self._llm_management_raise(account, got)
+        try:
+            current = got.data.get('expired_time')
+            if type(current) is not int or current <= 0:
+                raise nac.NewApiInputError('token_response')
+            base = max(int(_utcnow().replace(tzinfo=timezone.utc).timestamp()), current)
+            expiry = base + 90 * 86400
+            body = nac.paid_token_update_body(got.data, token_id, key.newapi_name,
+                                              expired_time=expiry)
+        except nac.NewApiInputError:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        result = client.user_update_token(ip, up, body)
+        if not result.ok:
+            self._llm_management_raise(account, result)
+        expiry_dt = datetime.fromtimestamp(expiry, timezone.utc).replace(tzinfo=None)
+        _llm_internal(key).write({'expires_at': expiry_dt, 'expiry_notice_7d_at': False,
+                                  'expiry_notice_1d_at': False})
+        self._llm_management_audit('key_update', account, key, user, real_ip)
+        return key._llm_dto()
+
+    @api.model
+    def _llm_set_key_status(self, partner, key_id, enabled, user=None, real_ip=None, session=None):
+        if type(enabled) is not bool:
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        account, key = self._llm_management_key(partner, key_id)
+        if enabled:
+            if key.disabled_by == 'ops':
+                raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason='disabled')
+            reason = key._llm_status()
+            if reason in ('expired', 'exhausted', 'free_capped', 'suspended', 'overdraft'):
+                raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason=reason)
+            account._llm_require_current_terms()
+        token_id = self._llm_management_token_id(key)
+        ip, up, client = self._llm_management_remote(account)
+        result = client.user_set_token_status(ip, up, token_id, enabled)
+        if not result.ok:
+            self._llm_management_raise(account, result)
+        _llm_internal(key).write({
+            'state': 'active' if enabled else 'disabled',
+            'disabled_by': (False if enabled else
+                            'ops' if key.disabled_by == 'ops' else 'user'),
+        })
+        self._llm_management_audit('key_status', account, key, user, real_ip)
+        return key._llm_dto()
+
+    @api.model
+    def _llm_delete_key(self, partner, key_id, confirm_name, user=None, real_ip=None):
+        account, key = self._llm_management_key(partner, key_id, allow_failed_reveal=True)
+        if not isinstance(confirm_name, str) or confirm_name != (key.key_label or ''):
+            raise LlmError(ERR_LLM_KEY_INVALID)
+        token_id = self._llm_management_token_id(
+            key, allow_missing=(key.state == 'failed_reveal'))
+        if token_id is not None:
+            ip, up, client = self._llm_management_remote(account)
+            result = client.user_delete_token(ip, up, token_id)
+            if not result.ok:
+                self._llm_management_raise(account, result)
+        _llm_internal(key).write({'state': 'deleted'})
+        self._llm_management_audit('key_delete', account, key, user, real_ip)
+        return {'deleted': True}

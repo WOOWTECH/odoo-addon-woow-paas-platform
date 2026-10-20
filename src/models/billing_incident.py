@@ -47,19 +47,18 @@ import logging
 import math
 import re
 import unicodedata
+from contextlib import contextmanager
 from datetime import date, datetime
 
 from markupsafe import Markup, escape
-from psycopg2 import sql
-
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 from odoo.osv import expression
-from odoo.tools import Query, SQL, config, html2plaintext, single_email_re
+from odoo.tools import SQL, Query, config, html2plaintext, single_email_re
 from odoo.tools.translate import get_translation
+from psycopg2 import sql
 
 from ..services import llm_redact
-
 
 _logger = logging.getLogger(__name__)
 
@@ -375,6 +374,7 @@ class BillingIncident(models.Model):
         ('llm_not_me', 'AI account reported as not me'),
         ('llm_secret_mismatch', 'AI account credential check failed (ciphertext mismatch)'),
         ('llm_account_error', 'AI account error'),
+        ('llm_manual_credit_budget', 'AI manual credit daily limit reached'),
     )
     _STATE_SELECTION = (
         ('open', 'Open'),
@@ -2758,21 +2758,45 @@ class IrAttachment(models.Model):
         }
 
     @api.model
+    @contextmanager
+    def _billing_attachment_visibility_cursor(self):
+        """Keep loader-owned DDL and its data reads in the same transaction.
+
+        During Registry.new(), module installation can hold ACCESS EXCLUSIVE
+        on ir_attachment (or an activity carrier). A second connection cannot
+        see that schema and waits for the loader, which is waiting for this
+        read. Registry lifecycle flags are server-owned; neither install_mode
+        nor sudo/context values can select this path on a ready registry.
+        All authorization, provenance classification and carrier locks still
+        run, including for protected attachments loaded from module data.
+
+        Live requests retain fresh READ COMMITTED pre/post-lock snapshots.
+        A schema lock there must fail closed within a bounded wait, never fall
+        back to a stale caller snapshot.
+        """
+        if self.env.registry._init and not self.env.registry.ready:
+            yield self.env.cr
+            return
+        visibility_cr = self.env.registry._db.cursor()
+        try:
+            visibility_cr.execute('SET LOCAL lock_timeout = %s', ('2s',))
+            visibility_cr.execute(
+                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            yield visibility_cr
+        finally:
+            visibility_cr.close()
+
+    @api.model
     def _fresh_billing_attachment_provenance(
             self, attachment_ids, extra_direct_targets=(),
             extra_m2m_links=()):
-        visibility_cr = self.env.registry._db.cursor()
-        try:
-            visibility_cr.execute(
-                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        with self._billing_attachment_visibility_cursor() as visibility_cr:
             return self._read_billing_attachment_provenance(
                 visibility_cr,
                 attachment_ids,
                 extra_direct_targets,
                 extra_m2m_links,
             )
-        finally:
-            visibility_cr.close()
 
     @api.model
     def _merge_billing_attachment_provenance(self, *snapshots):
@@ -2858,13 +2882,8 @@ class IrAttachment(models.Model):
             )
             return set(cr.fetchall())
 
-        visibility_cr = self.env.registry._db.cursor()
-        try:
-            visibility_cr.execute(
-                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        with self._billing_attachment_visibility_cursor() as visibility_cr:
             committed = read(visibility_cr)
-        finally:
-            visibility_cr.close()
         return committed | read(self.env.cr)
 
     @api.model
@@ -2884,13 +2903,8 @@ class IrAttachment(models.Model):
             )
             return {attachment_id for attachment_id, in cr.fetchall()}
 
-        visibility_cr = self.env.registry._db.cursor()
-        try:
-            visibility_cr.execute(
-                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        with self._billing_attachment_visibility_cursor() as visibility_cr:
             committed_ids = read(visibility_cr)
-        finally:
-            visibility_cr.close()
         return committed_ids | read(self.env.cr)
 
     @api.model

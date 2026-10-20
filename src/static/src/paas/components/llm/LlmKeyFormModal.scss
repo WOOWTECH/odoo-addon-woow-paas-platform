@@ -1,0 +1,27 @@
+.o_woow_llm_key_form {
+  width: 100%; max-width: 640px; max-height: calc(100dvh - 32px); overflow-y: auto;
+  border-radius: 20px; background: #fff; color: #212121; font: 16px/1.6 $woow-font-body;
+  box-shadow: 0 22px 52px rgba(33, 33, 33, .12);
+  h2 { margin: 0; font: 600 24px/1.2 $woow-font-display; }
+  .o_woow_modal_header, .o_woow_modal_body { padding: 20px; }
+  .o_woow_modal_header { align-items: flex-start; gap: 12px; }
+  .o_woow_modal_body { display: grid; gap: 16px; }
+  p { margin: 0; overflow-wrap: anywhere; }
+  label { display: grid; grid-template-columns: 1fr; gap: 6px; }
+  input[type="text"], input[type="number"], select { width: 100%; min-height: 44px; border: 1px solid #dce0e8; border-radius: 12px; padding: 8px 12px; background: #fff; color: #212121; font: inherit; }
+  fieldset { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 12px; border: 1px solid #dce0e8; border-radius: 16px; }
+  fieldset label { display: flex; align-items: center; gap: 10px; min-height: 44px; overflow-wrap: anywhere; }
+  fieldset input { width: 20px; height: 20px; flex: 0 0 auto; accent-color: #6183fc; }
+  &__handoff, &__confirm { padding: 14px; border-radius: 16px; background: #eff1f5; }
+  &__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+  &__confirm { display: grid; gap: 10px; background: #fff4dc; }
+  :focus-visible { outline: 2px solid #6183fc; outline-offset: 3px; }
+  &:focus { outline: none; }
+  @media (max-width: $woow-bp-md) {
+    max-width: none; width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0;
+    .o_woow_modal_body { flex: 1 1 auto; overflow-y: auto; }
+  }
+}
+.o_woow_llm_key_form_backdrop {
+  @media (max-width: $woow-bp-md) { align-items: stretch; }
+}

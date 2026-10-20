@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="mail_template_llm_low_balance" model="mail.template">
+            <field name="name">PaaS: AI Models Low Balance</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">Your AI credit is running low</field>
+            <field name="email_from">{{ user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html"><div>
+                <p>Your AI credit is below your reminder threshold.</p>
+                <p>Current balance: <t t-out="ctx.get('llm_number_value', 0)"/> points.</p>
+                <p><a t-att-href="ctx.get('llm_credit_url', '#')">Open AI credit</a></p>
+            </div></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+        <record id="mail_template_llm_key_expiring" model="mail.template">
+            <field name="name">PaaS: AI Models Key Expiring</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">An AI API key is approaching expiry</field>
+            <field name="email_from">{{ user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html"><div>
+                <p>API key ID <t t-out="ctx.get('llm_subject_id', 0)"/> expires at
+                    <t t-out="ctx.get('llm_expiry_time', '')"/>.</p>
+                <p><a t-att-href="ctx.get('llm_expiry_url', '#')">Review the 90-day extension</a></p>
+            </div></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+        <record id="mail_template_llm_key_created" model="mail.template">
+            <field name="name">PaaS: AI Models Key Created</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">A new AI API key was created</field>
+            <field name="email_from">{{ user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html"><div>
+                <p>API key ID <t t-out="ctx.get('llm_subject_id', 0)"/> was created at
+                    <t t-out="ctx.get('llm_notice_time', '')"/>.</p>
+                <p>Masked key: <t t-out="ctx.get('llm_masked_key', '')"/></p>
+                <p><a t-att-href="ctx.get('llm_not_me_url', '#')">I did not create this key</a></p>
+            </div></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+        <record id="mail_template_llm_credit_converted" model="mail.template">
+            <field name="name">PaaS: AI Models Credit Converted</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">Points converted to AI credit</field>
+            <field name="email_from">{{ user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html"><div>
+                <p>Conversion order ID <t t-out="ctx.get('llm_subject_id', 0)"/> converted
+                    <t t-out="ctx.get('llm_number_value', 0)"/> points at
+                    <t t-out="ctx.get('llm_notice_time', '')"/>.</p>
+                <p><a t-att-href="ctx.get('llm_not_me_url', '#')">I did not make this conversion</a></p>
+            </div></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+        <record id="mail_template_llm_credit_pending" model="mail.template">
+            <field name="name">PaaS: AI Models Credit Pending</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">Your AI credit conversion is being checked</field>
+            <field name="email_from">{{ user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html"><div>
+                <p>Conversion order ID <t t-out="ctx.get('llm_subject_id', 0)"/> is being checked.</p>
+                <p>Your points are safe. We will process this and notify you.</p>
+            </div></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+        <record id="mail_template_llm_credit_voided" model="mail.template">
+            <field name="name">PaaS: AI Models Credit Returned</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">AI credit conversion was not completed</field>
+            <field name="email_from">{{ user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html"><div>
+                <p>Conversion order ID <t t-out="ctx.get('llm_subject_id', 0)"/> was not completed.
+                    The points were returned to your wallet.</p>
+            </div></field>
+            <field name="auto_delete" eval="True"/>
+        </record>
+    </data>
+</odoo>

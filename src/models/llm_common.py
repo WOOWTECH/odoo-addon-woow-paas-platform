@@ -148,6 +148,10 @@ ERR_LLM_FREE_CAPPED_TODAY = 'llm_free_capped_today'
 ERR_LLM_FREE_KEY_DAILY_LIMIT = 'llm_free_key_daily_limit'
 ERR_LLM_KEY_ALREADY_SHOWN = 'llm_key_already_shown'
 ERR_LLM_KEY_INVALID = 'llm_key_invalid'
+#: LLM-07 management operations only expose a PaaS mirror id, never an upstream token id/name.
+ERR_LLM_KEY_NOT_FOUND = 'llm_key_not_found'
+ERR_LLM_KEY_LIMIT_BELOW_USED = 'llm_key_limit_below_used'
+ERR_LLM_KEY_CANNOT_ENABLE = 'llm_key_cannot_enable'
 #: 開戶失敗（``state=error``）的帳戶操作建金鑰時。DESIGN 的碼表沒有這一格：error 狀態在
 #: §6.2 只有畫面，沒有 API 錯誤碼；沿用 ``llm_unavailable`` 會讓前端以為只是暫時連不上。
 ERR_LLM_ACCOUNT_ERROR = 'llm_account_error'
@@ -164,6 +168,8 @@ ERR_LLM_NO_REFUND_ACK_REQUIRED = 'llm_no_refund_ack_required'
 #: gate 的帳號拒絕（``paas._account_denial``：未登入或帳號停用）。那個 helper 回的 dict 沒有
 #: ``code``；本分頁的回應一律帶小寫 snake code（DESIGN §3.1），所以在 controller 補上這一格。
 ERR_LLM_AUTH_REQUIRED = 'llm_auth_required'
+ERR_LLM_SETTINGS_INVALID = 'llm_settings_invalid'
+ERR_LLM_NOT_ME_INVALID = 'llm_not_me_invalid'
 
 
 #: Reauth counts every password attempt, including rejected and interrupted attempts.
@@ -249,6 +255,10 @@ RESULT_CODES = frozenset({'started', 'ok', 'failed', 'unknown', RESULT_NOT_EXECU
 #: （``credit_1000_to_account_5``）也不能進來。新增一個 key＝加在這裡（``TestLlmClosedCodes`` 以原始碼
 #: 比對守住每個呼叫端的字面 key 都在表內）。
 NUMBER_KEYS = frozenset({
+    'account_id',          # manual_credit: PaaS account identifier only
+    'order_id',            # manual_credit: PaaS order identifier only
+    'points',              # manual_credit: integer amount only
+    'operator_uid',        # manual_credit: Odoo uid only
     'attempts',           # provision_failed：開戶嘗試次數
     'probe',              # alert_test：驗證告警出口用的隨機數（LLM-02b AC2）
     'affected_accounts',  # 摘要信：這一波影響幾個帳戶
@@ -562,6 +572,10 @@ LLM_CRONS = {
         'woow_paas_platform.llm_account', '_cron_llm_provision'),
     'woow_paas_platform.ir_cron_llm_balance_refresh': (
         'woow_paas_platform.llm_account', '_cron_llm_balance_refresh'),
+    'woow_paas_platform.ir_cron_llm_notifications': (
+        'woow_paas_platform.llm_notification', '_cron_llm_notifications'),
+    'woow_paas_platform.ir_cron_llm_not_me_disable': (
+        'woow_paas_platform.llm_notification', '_cron_llm_not_me_disable'),
     'woow_paas_platform.ir_cron_llm_event_cleanup': (
         'woow_paas_platform.llm_event', '_cron_llm_event_cleanup'),
     'woow_paas_platform.ir_cron_llm_alert_delivery': (
@@ -573,6 +587,10 @@ LLM_CRONS = {
         'woow_paas_platform.llm_swr_cache', '_cron_llm_swr_refresh'),
     'woow_paas_platform.ir_cron_llm_connection_test': (
         'woow_paas_platform.llm_runtime_state', '_cron_llm_connection_test'),
+    'woow_paas_platform.ir_cron_llm_manual_credit_monthly_report': (
+        'woow_paas_platform.llm_manual_credit_cron', '_cron_manual_credit_monthly_report'),
+    'woow_paas_platform.ir_cron_llm_backoffice_operations': (
+        'woow_paas_platform.llm_backoffice_operation', '_cron_process'),
 }
 #: cron 當掉時告警（``LlmAlert.CRON_FAILED``）用的錯誤碼：每支 LLM cron 一個固定碼（封閉對照，
 #: 不從例外取任何字）。``TestLlmCronFramework`` 斷言鍵＝:data:`LLM_CRONS`。
@@ -584,6 +602,7 @@ FREE_METER_ERROR_CODES = frozenset({
     'llm_free_meter_lag', 'llm_free_meter_gap', 'llm_free_up_failed',
 })
 LLM_CREDIT_ERROR_CODES = frozenset({
+    'llm_manual_credit_budget',
     'llm_credit_void_pending', 'llm_credit_snapshot_mismatch',
     'llm_credit_snapshot_invalid', 'llm_credit_response_invalid',
     'llm_credit_client_unavailable', 'llm_credit_definite_unrecognised',
@@ -597,7 +616,8 @@ ERROR_CODES = (
     API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
     | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
-    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
+    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES
+    | {ERR_LLM_SETTINGS_INVALID, ERR_LLM_NOT_ME_INVALID, UNKNOWN_CODE})
 
 
 def report_cron_failed(env, xmlid):

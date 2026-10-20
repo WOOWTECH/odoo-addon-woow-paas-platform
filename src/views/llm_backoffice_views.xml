@@ -1,0 +1,349 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Readonly disclosure only. Provisioning is deployment-controlled via
+         the private server hook; it is deliberately not a form/RPC setting. -->
+    <record id="view_users_form_llm_named_human" model="ir.ui.view">
+        <field name="name">res.users.form.llm.named.human.readonly</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='login']" position="after">
+                <field name="llm_named_human_eligible" readonly="1"
+                       groups="base.group_system"
+                       help="Provisioned by trusted deployment configuration after confirming an individual operator."/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_llm_account_backoffice_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_account.backoffice.list</field>
+        <field name="model">woow_paas_platform.llm_account</field>
+        <field name="arch" type="xml">
+            <list string="AI Accounts" create="0" edit="0" delete="0">
+                <field name="partner_id"/>
+                <field name="newapi_username"/>
+                <field name="newapi_user_id"/>
+                <field name="state" widget="badge"/>
+                <field name="quota_cached"/>
+                <field name="used_quota_cached"/>
+                <field name="balance_synced_at"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_account_backoffice_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_account.backoffice.form</field>
+        <field name="model">woow_paas_platform.llm_account</field>
+        <field name="arch" type="xml">
+            <form string="AI Account" create="0" edit="0" delete="0">
+                <sheet><group>
+                    <field name="partner_id"/>
+                    <field name="newapi_username"/>
+                    <field name="newapi_user_id"/>
+                    <field name="state"/>
+                    <field name="suspend_reason"/>
+                    <field name="quota_cached"/>
+                    <field name="used_quota_cached"/>
+                    <field name="request_count_cached"/>
+                    <field name="balance_synced_at"/>
+                    <field name="create_date"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_accounts_backoffice" model="ir.actions.act_window">
+        <field name="name">AI Accounts</field>
+        <field name="res_model">woow_paas_platform.llm_account</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_llm_accounts_backoffice" name="Accounts" parent="menu_llm"
+              action="action_llm_accounts_backoffice" groups="base.group_system,account.group_account_manager" sequence="10"/>
+
+    <record id="view_llm_api_key_backoffice_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_api_key.backoffice.list</field>
+        <field name="model">woow_paas_platform.llm_api_key</field>
+        <field name="arch" type="xml">
+            <list string="API Key Mirrors" create="0" edit="0" delete="0">
+                <field name="account_id"/>
+                <field name="key_label"/>
+                <field name="kind"/>
+                <field name="masked_key"/>
+                <field name="state" widget="badge"/>
+                <field name="disabled_by"/>
+                <field name="quota_limit_points"/>
+                <field name="expires_at"/>
+                <field name="created_uid"/>
+                <field name="create_date"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_api_key_backoffice_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_api_key.backoffice.form</field>
+        <field name="model">woow_paas_platform.llm_api_key</field>
+        <field name="arch" type="xml">
+            <form string="API Key Mirror" create="0" edit="0" delete="0">
+                <sheet><group>
+                    <field name="account_id"/>
+                    <field name="key_label"/>
+                    <field name="newapi_name"/>
+                    <field name="kind"/>
+                    <field name="masked_key"/>
+                    <field name="state"/>
+                    <field name="disabled_by"/>
+                    <field name="quota_limit_points"/>
+                    <field name="expires_at"/>
+                    <field name="model_allowlist"/>
+                    <field name="remain_quota_cached"/>
+                    <field name="used_quota_cached"/>
+                    <field name="accessed_at"/>
+                    <field name="synced_at"/>
+                    <field name="created_uid"/>
+                    <field name="created_ip"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_api_keys_backoffice" model="ir.actions.act_window">
+        <field name="name">API Key Mirrors</field>
+        <field name="res_model">woow_paas_platform.llm_api_key</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_llm_api_keys_backoffice" name="API Keys" parent="menu_llm"
+              action="action_llm_api_keys_backoffice" groups="base.group_system,account.group_account_manager" sequence="20"/>
+
+    <record id="view_llm_credit_order_backoffice_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_credit_order.backoffice.list</field>
+        <field name="model">woow_paas_platform.llm_credit_order</field>
+        <field name="arch" type="xml">
+            <list string="AI Credit Orders" create="0" edit="0" delete="0"
+                  decoration-warning="state == 'needs_review'">
+                <field name="name"/>
+                <field name="account_id"/>
+                <field name="source"/>
+                <field name="points"/>
+                <field name="state" widget="badge"/>
+                <field name="attempt"/>
+                <field name="newapi_request_id"/>
+                <field name="last_error_code"/>
+                <field name="create_date"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_credit_order_backoffice_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_credit_order.backoffice.form</field>
+        <field name="model">woow_paas_platform.llm_credit_order</field>
+        <field name="arch" type="xml">
+            <form string="AI Credit Order" create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_open_audit_events" type="object" string="Audit events"
+                            groups="base.group_system,account.group_account_manager"/>
+                    <button name="action_open_manual_review" type="object" string="Review order"
+                            class="btn-primary" groups="base.group_system"
+                            invisible="state != 'needs_review'"/>
+                    <button name="action_open_recharge_wizard" type="object" string="Recharge late credit"
+                            groups="base.group_system"
+                            invisible="source != 'user' or state != 'voided'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet><group>
+                    <field name="name"/>
+                    <field name="account_id"/>
+                    <field name="partner_id"/>
+                    <field name="newapi_user_id"/>
+                    <field name="source"/>
+                    <field name="points"/>
+                    <field name="quota"/>
+                    <field name="reason" groups="base.group_system"/>
+                    <field name="requested_by_uid"/>
+                    <field name="client_request_id" groups="base.group_system"/>
+                    <field name="attempt"/>
+                    <field name="sent_at"/>
+                    <field name="credited_at"/>
+                    <field name="credit_evidence"/>
+                    <field name="newapi_request_id"/>
+                    <field name="last_error_code"/>
+                    <field name="evidence_json" widget="text" groups="base.group_system"/>
+                    <field name="admin_review_reason" groups="base.group_system"/>
+                    <field name="invoice_id"/>
+                    <field name="wallet_transaction_id"/>
+                    <field name="void_credit_note_id"/>
+                    <field name="void_wallet_transaction_id"/>
+                    <field name="recharge_of_order_id"/>
+                    <field name="create_date"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_credit_orders_backoffice" model="ir.actions.act_window">
+        <field name="name">AI Credit Orders</field>
+        <field name="res_model">woow_paas_platform.llm_credit_order</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_llm_credit_orders_backoffice" name="Credit Orders" parent="menu_llm"
+              action="action_llm_credit_orders_backoffice" groups="base.group_system,account.group_account_manager" sequence="30"/>
+
+    <record id="view_llm_event_backoffice_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_event.backoffice.list</field>
+        <field name="model">woow_paas_platform.llm_event</field>
+        <field name="arch" type="xml">
+            <list string="AI Events" create="0" edit="0" delete="0">
+                <field name="create_date"/>
+                <field name="account_id"/>
+                <field name="uid"/>
+                <field name="action"/>
+                <field name="target_model"/>
+                <field name="target_id"/>
+                <field name="result"/>
+                <field name="error_code"/>
+                <field name="severity" widget="badge"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_event_backoffice_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_event.backoffice.form</field>
+        <field name="model">woow_paas_platform.llm_event</field>
+        <field name="arch" type="xml">
+            <form string="AI Event" create="0" edit="0" delete="0">
+                <sheet><group>
+                    <field name="create_date"/>
+                    <field name="account_id"/>
+                    <field name="partner_id"/>
+                    <field name="uid"/>
+                    <field name="real_ip"/>
+                    <field name="action"/>
+                    <field name="target_model"/>
+                    <field name="target_id"/>
+                    <field name="result"/>
+                    <field name="error_code"/>
+                    <field name="severity"/>
+                    <field name="details_json" widget="text"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_events_backoffice" model="ir.actions.act_window">
+        <field name="name">AI Events</field>
+        <field name="res_model">woow_paas_platform.llm_event</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_llm_events_backoffice" name="Events" parent="menu_llm"
+              action="action_llm_events_backoffice" groups="base.group_system,account.group_account_manager" sequence="40"/>
+
+    <record id="action_llm_manual_credit_wizard" model="ir.actions.act_window">
+        <field name="name">Manual AI Credit</field>
+        <field name="res_model">woow_paas_platform.llm_manual_credit_wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+    </record>
+    <menuitem id="menu_llm_manual_credit" name="Manual Credit" parent="menu_llm"
+              action="action_llm_manual_credit_wizard" groups="base.group_system" sequence="50"/>
+
+    <record id="view_llm_backoffice_operation_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_backoffice_operation.list</field>
+        <field name="model">woow_paas_platform.llm_backoffice_operation</field>
+        <field name="arch" type="xml">
+            <list string="AI Backoffice Operations" create="0" edit="0" delete="0">
+                <field name="create_date"/><field name="operation"/>
+                <field name="operator_id"/><field name="order_id"/>
+                <field name="state" widget="badge"/><field name="result_code"/>
+                <field name="key_done_count"/><field name="key_failed_count"/>
+                <field name="processed_at"/>
+            </list>
+        </field>
+    </record>
+    <record id="view_llm_backoffice_operation_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_backoffice_operation.form</field>
+        <field name="model">woow_paas_platform.llm_backoffice_operation</field>
+        <field name="arch" type="xml">
+            <form string="AI Backoffice Operation" create="0" edit="0" delete="0">
+                <sheet><group>
+                    <field name="request_id" groups="base.group_system"/>
+                    <field name="operation"/><field name="state"/>
+                    <field name="operator_id"/><field name="account_id"/>
+                    <field name="order_id"/><field name="decision"/>
+                    <field name="points"/><field name="reason" groups="base.group_system"/>
+                    <field name="key_done_count"/><field name="key_failed_count"/>
+                    <field name="key_target_count" groups="base.group_system"/>
+                    <field name="result_code"/><field name="result_summary"/>
+                    <field name="evidence_json" widget="text" groups="base.group_system"/>
+                    <field name="processed_at"/><field name="create_date"/>
+                </group>
+                <group string="Per-key disable evidence" groups="base.group_system">
+                    <field name="key_obligation_ids" nolabel="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="key_id"/><field name="state_snapshot"/>
+                            <field name="state"/><field name="result_code"/>
+                            <field name="work_count"/><field name="next_work_at"/>
+                        </list>
+                    </field>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_backoffice_operations" model="ir.actions.act_window">
+        <field name="name">AI Backoffice Operations</field>
+        <field name="res_model">woow_paas_platform.llm_backoffice_operation</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_llm_backoffice_operations" name="Backoffice Operations"
+              parent="menu_llm" action="action_llm_backoffice_operations"
+              groups="base.group_system,account.group_account_manager" sequence="55"/>
+
+    <record id="view_llm_manual_credit_report_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_manual_credit_report.list</field>
+        <field name="model">woow_paas_platform.llm_manual_credit_report</field>
+        <field name="arch" type="xml">
+            <list string="Monthly Manual Credit Reports" create="0" edit="0" delete="0">
+                <field name="period_id"/><field name="start_utc"/><field name="end_utc"/>
+                <field name="order_count"/><field name="points_total"/>
+                <field name="mail_ref"/><field name="queued_at"/>
+            </list>
+        </field>
+    </record>
+    <record id="action_llm_manual_credit_reports" model="ir.actions.act_window">
+        <field name="name">Monthly Manual Credit Reports</field>
+        <field name="res_model">woow_paas_platform.llm_manual_credit_report</field>
+        <field name="view_mode">list,form</field>
+    </record>
+    <menuitem id="menu_llm_manual_credit_reports" name="Monthly Credit Reports"
+              parent="menu_llm" action="action_llm_manual_credit_reports"
+              groups="base.group_system" sequence="60"/>
+
+    <record id="view_llm_disable_all_keys_wizard_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_disable_all_keys_wizard.form</field>
+        <field name="model">woow_paas_platform.llm_disable_all_keys_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Disable all AI API keys">
+                <group><div class="text-muted">This queues disabling API keys mirrored in this PaaS database.</div>
+                    <field name="reason"/></group>
+                <footer>
+                    <button name="action_enqueue" type="object" string="Queue disable" class="btn-primary"
+                            confirm="This queues a background request to disable all active API keys mirrored in this PaaS database. Continue?"/>
+                    <button string="Cancel" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+    <record id="view_llm_manual_credit_report_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_manual_credit_report.form</field>
+        <field name="model">woow_paas_platform.llm_manual_credit_report</field>
+        <field name="arch" type="xml">
+            <form string="Monthly Manual Credit Report" create="0" edit="0" delete="0">
+                <sheet><group>
+                    <field name="period_id"/><field name="start_utc"/><field name="end_utc"/>
+                    <field name="order_count"/><field name="points_total"/>
+                    <field name="mail_ref"/><field name="queued_at"/>
+                </group></sheet>
+            </form>
+        </field>
+    </record>
+    <record id="action_llm_disable_all_keys_wizard" model="ir.actions.act_window">
+        <field name="name">Disable All API Keys</field>
+        <field name="res_model">woow_paas_platform.llm_disable_all_keys_wizard</field>
+        <field name="view_mode">form</field><field name="target">new</field>
+        <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
+    </record>
+    <menuitem id="menu_llm_disable_all_keys" name="Disable All API Keys"
+              parent="menu_llm" action="action_llm_disable_all_keys_wizard"
+              groups="base.group_system" sequence="65"/>
+</odoo>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_llm_manual_credit_wizard_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_manual_credit_wizard.form</field>
+        <field name="model">woow_paas_platform.llm_manual_credit_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Manual AI Credit">
+                <group>
+                    <field name="account_id" options="{'no_create': True, 'no_open': True}"/>
+                    <field name="points"/>
+                    <field name="reason" placeholder="Explain why this credit is needed (at least 10 characters)."/>
+                </group>
+                <footer>
+                    <button name="action_create" type="object" string="Create credit order"
+                            class="btn-primary" groups="base.group_system"/>
+                    <button string="Cancel" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+    <record id="view_llm_review_wizard_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_review_wizard.form</field>
+        <field name="model">woow_paas_platform.llm_review_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Review AI Credit Order">
+                <group>
+                    <field name="order_id" options="{'no_create': True, 'no_open': True}"/>
+                    <field name="order_source" invisible="1"/>
+                    <field name="evidence_summary" widget="text"/>
+                    <field name="reason" placeholder="Record the review basis (at least 10 characters)."/>
+                </group>
+                <footer>
+                    <button name="action_mark_credited" type="object" string="Confirm credited"
+                            class="btn-primary" groups="base.group_system"/>
+                    <button name="action_retry" type="object" string="Not credited, retry"
+                            groups="base.group_system"/>
+                    <button name="action_void_user_order" type="object" string="Void and return points"
+                            groups="base.group_system" invisible="order_source != 'user'"/>
+                    <button name="action_cancel_adjustment" type="object" string="Cancel adjustment"
+                            groups="base.group_system" invisible="order_source not in ['manual', 'dr']"/>
+                    <button string="Cancel" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+    <record id="view_llm_recharge_wizard_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_recharge_wizard.form</field>
+        <field name="model">woow_paas_platform.llm_recharge_wizard</field>
+        <field name="arch" type="xml">
+            <form string="Recharge Late AI Credit">
+                <group>
+                    <field name="order_id" options="{'no_create': True, 'no_open': True}"/>
+                    <field name="reason" placeholder="Document the late credit evidence (at least 10 characters)."/>
+                </group>
+                <footer>
+                    <button name="action_recharge" type="object" string="Deduct points and recharge"
+                            class="btn-primary" groups="base.group_system"/>
+                    <button string="Cancel" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

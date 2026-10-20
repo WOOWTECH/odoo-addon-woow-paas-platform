@@ -27,4 +27,7 @@
         name="Security Access"
         parent="menu_woow_paas_platform_root"
         sequence="50"/>
+
+    <menuitem id="menu_llm" name="AI Models" parent="menu_woow_paas_platform_root"
+              groups="base.group_system,account.group_account_manager" sequence="60"/>
 </odoo>
