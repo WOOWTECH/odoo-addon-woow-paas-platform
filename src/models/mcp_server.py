@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
 
+from ..services import mcp_url_guard
+
 _logger = logging.getLogger(__name__)
 
 
@@ -149,6 +151,34 @@ class McpServer(models.Model):
             return False
         return parsed.scheme == 'http' and host.endswith('.svc.cluster.local')
 
+    @classmethod
+    def _internal_service_reason(cls, url):
+        """LLM-02（DESIGN §5.2 T3）：``url`` 指到 new-api／newapi-proxy（名字、Service 位址、或不是叢集
+        內名稱卻落在叢集網段）⇒ 原因碼；否則 ``None``。
+
+        model constraint 與 ``controllers/paas.py:_validate_mcp_url`` 共用這一個判斷
+        （two-layer-acl-lockstep）；連線時 :meth:`_get_mcp_client_config` 的 client 對每個請求再查一次。
+        """
+        return mcp_url_guard.jump_reason(url)
+
+    @staticmethod
+    def _internal_service_message():
+        return _('This URL points to an internal platform service and cannot be used as an '
+                 'MCP server.')
+
+    @api.constrains('url')
+    def _check_url_not_internal_service(self):
+        # LLM-02：沒有群組例外（同 _check_sidecar_url_in_cluster；su-env-exempt-guard-false-green）。
+        for record in self:
+            if record.url and self._internal_service_reason(record.url):
+                raise ValidationError(self._internal_service_message())
+
+    def _check_target_before_connect(self):
+        """連線前再查一次（DNS 可能已經換了答案）；不過 ⇒ 友善的 ``ValidationError``。"""
+        for record in self:
+            if self._internal_service_reason(record.url):
+                raise ValidationError(self._internal_service_message())
+
     @api.constrains('sidecar_backed', 'url')
     def _check_sidecar_url_in_cluster(self):
         # #271 invariant: sidecar_backed=True ⟹ url must be in-cluster DNS
@@ -237,11 +267,17 @@ class McpServer(models.Model):
         return result
 
     def _get_mcp_client_config(self):
-        """Build config dict for MultiServerMCPClient."""
+        """Build config dict for MultiServerMCPClient.
+
+        LLM-02：http 類的 transport 都經 ``mcp_url_guard.guarded_http_client_factory``——每個請求送出前
+        再查一次目標不是 new-api／代理（防 DNS rebinding），跨主機的 redirect 一律當錯誤、不跟。
+        """
         config = {
             'transport': self.transport,
             'url': self.url,
         }
+        if self.transport in ('sse', 'streamable_http'):
+            config['httpx_client_factory'] = mcp_url_guard.guarded_http_client_factory()
         if self.api_key:
             headers = {'Authorization': f'Bearer {self.api_key}'}
         else:
@@ -389,6 +425,8 @@ class McpServer(models.Model):
 
     async def _async_sync_tools(self):
         """Async: connect to MCP server and discover tools."""
+        # LLM-02：先查目標（DNS 可能換了答案），再載入 MCP client。
+        self._check_target_before_connect()
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         config = {self.name: self._get_mcp_client_config()}
@@ -458,6 +496,8 @@ class McpServer(models.Model):
 
     async def _async_test_connection(self):
         """Async: attempt to connect to MCP server."""
+        # LLM-02：先查目標（DNS 可能換了答案），再載入 MCP client。
+        self._check_target_before_connect()
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         config = {self.name: self._get_mcp_client_config()}

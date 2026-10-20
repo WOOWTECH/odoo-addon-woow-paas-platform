@@ -58,6 +58,7 @@ export class ChangePlanModal extends Component {
   static props = {
     service: { type: Object },
     currentPlanId: { type: Number, optional: true },
+    activatingTrial: { type: Boolean, optional: true },
     loadPlans: { type: Function },
     confirmChange: { type: Function },
     onClose: { type: Function },
@@ -138,7 +139,8 @@ export class ChangePlanModal extends Component {
     const planId = this.state.selectedPlanId;
     const seq = ++this.estimateSeq;
     this.state.estimate = null;
-    if (!this.props.estimateChange || !planId || planId === this.props.currentPlanId) {
+    if (!this.props.estimateChange || !planId ||
+        (planId === this.props.currentPlanId && !this.props.activatingTrial)) {
       this.state.estimating = false;
       return;
     }
@@ -164,6 +166,13 @@ export class ChangePlanModal extends Component {
   get balanceShortfallMessage() {
     const est = this.state.estimate;
     if (!est) return "";
+    if (this.props.activatingTrial) {
+      return _t("餘額不足，還需要 %(shortfall)s 點。首期費用 %(required)s 點，可用餘額 %(available)s 點。", {
+        shortfall: formatPoints(est.shortfall),
+        required: formatPoints(est.required),
+        available: formatPoints(est.available),
+      });
+    }
     return _t(
       "Insufficient balance. You need %(shortfall)s more to change to this plan (first payment %(required)s; available %(available)s including the refund).",
       {
@@ -211,7 +220,8 @@ export class ChangePlanModal extends Component {
    * 若哪天有人改後端讓 trial→trial 保留試用，請一併改這裡的文案——否則它會變成謊言。
    */
   get willEndTrial() {
-    return !!this.props.service.subscription?.is_trial;
+    return !!this.props.service.subscription?.is_trial &&
+      !this.props.service.subscription?.trial_expired;
   }
 
   /**
@@ -234,10 +244,8 @@ export class ChangePlanModal extends Component {
       !this.state.loadingPlans &&
       !this.state.plansError &&
       !!this.state.selectedPlanId &&
-      // 不可 churn 成同方案：定位後（selectedPlanId===currentPlanId）確認鈕維持
-      // disabled，使用者需真的改選另一方案／席數才 arm。currentPlanId 缺時此條恆真
-      // （undefined !== 任何 plan id），退化為單純「有選才可確認」。
-      this.state.selectedPlanId !== this.props.currentPlanId &&
+      // 一般換方案不可原地重開；試用轉付費可明確選擇沿用目前方案。
+      (this.props.activatingTrial || this.state.selectedPlanId !== this.props.currentPlanId) &&
       // AUDITFIX（#1677 A1）：估算中先不放行；付不起就停用（差額與儲值連結見 xml）。
       !this.state.estimating &&
       !this.balanceBlocked &&
@@ -262,7 +270,7 @@ export class ChangePlanModal extends Component {
     // #36 P2 第一階段：試用中還沒看過警告 ⇒ 只切到警告階段，**不呼叫
     // confirmChange**。使用者按「返回」回選擇階段、按「確認」才會再次進到這裡，
     // 屆時 confirmingTrialEnd 已為 true、直接落到下方送出。
-    if (this.willEndTrial && !this.state.confirmingTrialEnd) {
+    if ((this.willEndTrial || this.props.activatingTrial) && !this.state.confirmingTrialEnd) {
       this.state.confirmingTrialEnd = true;
       return;
     }

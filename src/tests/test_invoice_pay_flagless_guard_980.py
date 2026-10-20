@@ -563,6 +563,7 @@ class TestSkipTrialPreviewContract980(TransactionCase):
             move_type='out_invoice',
             woow_skip_upstream_hook=True,
             company_id=False,
+            _llm_is_internal_credit_move=lambda: False,
         )
         self.assertFalse(
             _invoice_pay_is_replay_safe(invoice),

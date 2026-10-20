@@ -1218,6 +1218,13 @@ from . import test_llm_tracer
 # LLM-02b：AI 模型分頁的平台基礎（llm_event、節流、告警出口、incident helper、
 # llm_runtime_state、餘額刷新 cron、共用遮罩、cron tick 預算）。
 from . import test_llm_platform_foundation
+# LLM-04：《AI 模型服務條款》的版本、發佈、同意與重新同意的 gate（llm_terms）。
+from . import test_llm_terms
+# LLM-02：newapi_client／代理完整化的 Odoo 端（circuit breaker、AP 限速、SWR 快取、設定變更稽核、
+# MCP 跳板、後台〔測試連線〕）。
+from . import test_llm_client_hardening
+# LLM-02 AC5：MCP URL 不能拿 PaaS 當打 new-api／代理的跳板。
+from . import test_llm_mcp_jump_guard
 # INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
 from . import test_vpn_node_status_fix005
 # INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
@@ -1239,5 +1246,19 @@ from . import test_n8n_podsec_hardening
 from . import test_n8n_encryption_key_backup
 # INFRA-FIX-018（INFRA-HS-002-1）：重設管理員帳密不改 pod template（helm_secret 路把方案資源鍵釘到叢集現況）。
 from . import test_reset_pod_template_neutral_infra_fix_018
+from . import test_security_access_provision_delete_race_09
+from . import test_sh_provision_delete_race_09
+from . import test_cs_provision_delete_race_09
+from . import test_race10_independent_rows
 from . import test_paas_mail_sender
 from . import test_service_documentation_logs
+from . import test_cloud_app_documentation_seed
+from . import test_llm_free_usage
+from . import test_ha_onboarding
+from . import test_llm_credit_order
+from . import test_llm_credit_void
+from . import test_llm_credit_concurrency
+
+from . import test_llm_reauth
+from . import test_llm_credit_visibility
+from . import test_llm_credit_worker

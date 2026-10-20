@@ -7,7 +7,11 @@ new-api 上一個使用者 ``<prefix>%010d``。本檔有三件事：
    ``llm_common._llm_internal`` 的把手（sudo 也擋）；``newapi_username``、``partner_id``、
    ``newapi_user_id`` 設定後不能改；unlink 只在模組卸載時允許。
 2. **開通**（``_llm_activate``）：同意條款 → 建 ``state=provisioning`` 的列 → ``_trigger()``
-   開戶 cron。冪等：已有未關閉的帳戶就回它。
+   開戶 cron。冪等：已有未關閉的帳戶就回它。條款版本由 ``llm_terms`` 的 published 版提供
+   （LLM-04）：沒帶或不是目前的版本 ⇒ ``llm_tos_required``。改版後的重新同意是
+   ``_llm_accept_terms``；建金鑰、轉換、啟用金鑰前呼叫 ``_llm_require_current_terms``（gate）。
+   每一次同意都寫一筆 ``llm_event``（``tos_accept``：版本＝對象 ``llm_terms``、時間、uid、
+   controller 取得的真實 IP），等這個交易 commit 之後才寫。
 3. **開戶 cron**（``_cron_llm_provision``，P0–P9，〔PROV〕§3.2）：
 
    * 第一行就檢查「未設定」（N27）：未設定 ⇒ 直接 return，不外呼。
@@ -51,6 +55,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_crypto, llm_redact
+from ..services.subscription_renewals import upcoming_renewal_requirements
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
@@ -61,11 +66,14 @@ from .llm_common import (
     CONFIG_PROXY_AUTH_UNAVAILABLE_WEB,
     ERR_LLM_ACCOUNT_ERROR,
     ERR_LLM_CLOSED,
+    ERR_LLM_GUARD,
     ERR_LLM_NOT_ACTIVATED,
     ERR_LLM_PROVISIONING,
+    ERR_LLM_REAUTH_REQUIRED,
     ERR_LLM_SUSPENDED,
     ERR_LLM_TOS_OUTDATED,
     ERR_LLM_TOS_REQUIRED,
+    ERR_LLM_TOS_UNAVAILABLE,
     ERR_LLM_UNAVAILABLE,
     FREE_DAILY_LIMIT,
     CONVERT_MAX_POINTS,
@@ -75,7 +83,7 @@ from .llm_common import (
     PROVISION_LEASE_MINUTES,
     PROVISION_MAX_ATTEMPTS,
     QUOTA_PER_POINT,
-    TOS_VERSION_CURRENT,
+    REAUTH_VALID_SECONDS,
     LlmError,
     LlmQuotaInteger,
     _is_llm_internal,
@@ -84,14 +92,17 @@ from .llm_common import (
     llm_config,
     report_config_unavailable,
     run_llm_cron,
+    taipei_day,
 )
 from .llm_event import LlmAlert, LlmIncident, _begin, safe_code
+from .llm_terms import TERMS_MODEL, clean_version
 
 _logger = logging.getLogger(__name__)
 
 ACCOUNT_MODEL = 'woow_paas_platform.llm_account'
 ACCOUNT_TABLE = 'woow_paas_platform_llm_account'
 EVENT_MODEL = 'woow_paas_platform.llm_event'
+REAUTH_SESSION_KEY = 'woow_llm_reauth'
 PROVISION_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_provision'
 BALANCE_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_balance_refresh'
 #: 餘額刷新：每頁幾個使用者（new-api 上限 100）、一個 tick 最多幾頁（N28）。
@@ -167,6 +178,14 @@ def _iso(value):
     return value.replace(tzinfo=timezone.utc).isoformat() if value else None
 
 
+def _clean_ip(real_ip):
+    """controller 取得的對端位址 → 正規化的字串；空值或不合格 ⇒ ``False``（不存）。"""
+    try:
+        return str(ipaddress.ip_address(real_ip)) if real_ip else False
+    except ValueError:
+        return False
+
+
 def _items(data):
     """new-api 的列表回應：``data.items`` 或直接是 list。"""
     if isinstance(data, dict):
@@ -235,7 +254,17 @@ class LlmAccount(models.Model):
     used_quota_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
     request_count_cached = LlmQuotaInteger(readonly=True, default=0, copy=False)
     balance_synced_at = fields.Datetime(readonly=True, copy=False)
+    # A successful add_quota has no authoritative balance in its response.
+    # Preserve the earlier cache timestamp and reject GETs begun before this
+    # barrier; the next refresh supplies the new numeric balance.
+    balance_invalidated_at = fields.Datetime(readonly=True, copy=False)
+    reauth_at = fields.Datetime(readonly=True, copy=False,
+                                help='Audit only; eligibility belongs to the current session.')
     low_balance_threshold = fields.Integer(readonly=True, default=50)
+    # Real row update in T1 serializes distinct conversion requests under
+    # PostgreSQL REPEATABLE READ; never set from tenant input.
+    last_convert_request_at = fields.Datetime(readonly=True, copy=False,
+                                              groups='base.group_system')
     suspend_reason = fields.Selection(
         [('ops', 'Operations'), ('account_inactive', 'Account inactive'),
          ('policy', 'Policy'), ('not_me', 'Reported by the account owner')],
@@ -320,6 +349,110 @@ class LlmAccount(models.Model):
             'closed': ERR_LLM_CLOSED,
             'error': ERR_LLM_ACCOUNT_ERROR,
         }.get(self.state, ERR_LLM_UNAVAILABLE))
+
+    @api.model
+    def _llm_reauthenticate(self, partner, password, session, real_ip=''):
+        """Verify the caller's local password; credentials never enter audit/log/storage.
+
+        Installed Odoo 18.0-20250805 was inspected in the llmdev sandbox:
+        ``_check_credentials(credential, env)`` returns uid/auth_method, or raises
+        AccessDenied. Base verifies ``env.user``: never use the account's sudo env.
+        Passwordless accounts fail closed; email challenges are a separate release gate.
+        """
+        session.pop(REAUTH_SESSION_KEY, None)
+        current_user = self.env.user.with_user(self.env.uid)
+        if (not session.sid or session.uid != current_user.id
+                or partner.id != current_user.partner_id.id):
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+        account = self._llm_account_for_partner(current_user.partner_id)
+        account._llm_require_active()
+        events = self.env[EVENT_MODEL]
+        event_id = events._llm_reauth_reserve(account, uid=current_user.id,
+                                             real_ip=_clean_ip(real_ip))
+        verified = False
+        if isinstance(password, str) and password:
+            try:
+                with self.env.cr.savepoint():
+                    result = current_user._check_credentials(
+                        {'type': 'password', 'password': password}, {'interactive': True})
+                    verified = (isinstance(result, dict)
+                                and result.get('uid') == current_user.id
+                                and result.get('auth_method') == 'password')
+            except Exception:  # noqa: BLE001 - no credential/exception text may escape
+                pass
+        # Strict durable completion: if audit cannot be written, do not issue a grant.
+        stamp = events._llm_reauth_finish(event_id, account.id, current_user.id, verified)
+        if not verified:
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+        account.invalidate_recordset(['reauth_at'])
+        session[REAUTH_SESSION_KEY] = {
+            'uid': current_user.id, 'account_id': account.id,
+            'sid': session.sid, 'at': fields.Datetime.to_string(stamp),
+        }
+        return {'reauth_until': _iso(stamp + timedelta(seconds=REAUTH_VALID_SECONDS))}
+
+    def _llm_require_reauth(self, session, points=None):
+        """N25: strictly >1000 points, or an unconditional check when points is omitted.
+
+        Only a server-side session grant qualifies; account.reauth_at is audit-only.
+        Call with the request's actual session, never client-supplied flags/timestamps.
+        """
+        if points is not None and points <= 1000:
+            return
+        self.ensure_one()
+        grant = session.get(REAUTH_SESSION_KEY)
+        if not isinstance(grant, dict):
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+        try:
+            stamp = fields.Datetime.to_datetime(grant.get('at'))
+            age = (_utcnow() - stamp).total_seconds()
+            valid = (bool(session.sid) and session.uid == self.env.uid
+                     and grant.get('uid') == session.uid
+                     and grant.get('sid') == session.sid
+                     and grant.get('account_id') == self.id
+                     and self.partner_id.id == self.env.user.partner_id.id
+                     and 0 <= age < REAUTH_VALID_SECONDS)
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            raise LlmError(ERR_LLM_REAUTH_REQUIRED)
+
+    def _llm_require_new_operation(self):
+        """Shared gate for new keys/conversions; never used by paid-order workers.
+
+        All checks are local. Existing keys and order convergence keep running
+        when the emergency switch is off. Review only blocks conversions, so
+        T1 checks ``_llm_has_pending_review`` separately.
+        """
+        self._llm_require_active()
+        self._llm_require_current_terms()
+        if not llm_config(self.env)['orders_enabled'] or self._llm_guard_tripped():
+            raise LlmError(ERR_LLM_GUARD)
+
+    @api.model
+    def _llm_guard_tripped(self):
+        """Read the runtime mirror, including commits by another cron process."""
+        return bool(self.env['woow_paas_platform.llm_runtime_state']._llm_read()['guard_tripped'])
+
+    def _llm_has_pending_review(self):
+        """Whether this account has a conversion awaiting manual review."""
+        if not self:
+            return False
+        self.ensure_one()
+        return bool(self.env['woow_paas_platform.llm_credit_order'].sudo().search_count([
+            ('account_id', '=', self.id), ('state', '=', 'needs_review'),
+        ], limit=1))
+
+    def _llm_reserve_needed(self, days=7):
+        """Tax-inclusive renewals for N7; same predicate as billing's 3-day API.
+
+        Preview and T1 must call this again in their own transaction. A shortfall
+        requires confirmation; this read-only seam never debits or blocks.
+        """
+        self.ensure_one()
+        _upcoming, total_needed = upcoming_renewal_requirements(
+            self.env, self.partner_id, today=fields.Date.today(), days=days)
+        return total_needed
 
     def _llm_require_listable(self):
         """唯讀清單：active 與 suspended 都能看（暫停中的帳戶仍要看得到自己的金鑰）。"""
@@ -420,10 +553,12 @@ class LlmAccount(models.Model):
         那筆回 ``llm_provisioning``：這是**預期結果**，前端照常輪詢 ``/api/llm/state``（下一個
         請求是新的交易、看得到那一列）。``TestLlmActivateRace`` 用兩條真連線驗。
         """
-        if not isinstance(tos_version, str) or not tos_version.strip():
-            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=TOS_VERSION_CURRENT)
-        if tos_version.strip() != TOS_VERSION_CURRENT:
-            raise LlmError(ERR_LLM_TOS_OUTDATED, current_version=TOS_VERSION_CURRENT)
+        current = self.env[TERMS_MODEL]._llm_current()
+        if current is None:
+            raise LlmError(ERR_LLM_TOS_UNAVAILABLE)
+        # 沒帶、或帶的不是目前 published 的版本（舊版、亂填）：都是「還沒同意目前的條款」（LLM-04 AC1）。
+        if clean_version(tos_version) != current.version:
+            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=current.version)
         Account = self.sudo()
         existing = Account._llm_account_for_partner(partner)
         if existing:
@@ -431,16 +566,13 @@ class LlmAccount(models.Model):
         config = llm_config(self.env)
         if not config['identity_ok']:
             raise LlmError(ERR_LLM_UNAVAILABLE)
-        try:
-            ip_text = str(ipaddress.ip_address(real_ip)) if real_ip else False
-        except ValueError:
-            ip_text = False
+        ip_text = _clean_ip(real_ip)
         try:
             with self.env.cr.savepoint():
                 account = _llm_internal(Account).create({
                     'partner_id': partner.id,
                     'state': 'provisioning',
-                    'tos_version': TOS_VERSION_CURRENT,
+                    'tos_version': current.version,
                     'tos_accepted_at': _utcnow(),
                     'tos_accepted_uid': user.id if user else False,
                     'tos_accepted_ip': ip_text,
@@ -458,6 +590,11 @@ class LlmAccount(models.Model):
             # 另一個請求先 commit 了同一個 partner 的帳戶（見 docstring：本交易的 snapshot
             # 看不到它，重新 search 也找不到）⇒ 預期結果 llm_provisioning。
             raise LlmError(ERR_LLM_PROVISIONING) from None
+        # 帳戶是這個交易剛建的：稽核等 commit 之後才寫（llm_event 模組 docstring 第 1 點的前提一）。
+        self.env[EVENT_MODEL]._llm_record_after_commit(
+            'tos_accept', account_id=account.id, partner_id=partner.id,
+            uid=user.id if user else None, real_ip=ip_text or None,
+            target_model=TERMS_MODEL, target_id=current.id)
         cron = self.env.ref(PROVISION_CRON_XMLID, raise_if_not_found=False)
         if cron:
             cron.sudo()._trigger()
@@ -466,10 +603,81 @@ class LlmAccount(models.Model):
         return Account.browse(account.id)
 
     # ------------------------------------------------------------------ #
+    #  條款：改版後重新同意（/api/llm/account/accept_terms）與 gate（LLM-04）   #
+    # ------------------------------------------------------------------ #
+    @api.model
+    def _llm_accept_terms(self, partner, tos_version, user, real_ip):
+        """同意目前 published 的條款版本（DESIGN §6.4-3）。回 ``{'tos': …}``（同 ``/api/llm/state``）。
+
+        * 沒有未關閉的帳戶 ⇒ ``llm_not_activated``（還沒開通的人走 ``activate``，它本身就記同意）。
+        * 沒帶版本 ⇒ ``llm_tos_required``；帶的不是目前的版本（對話框開著的時候又改版了）⇒
+          ``llm_tos_outdated``＋``current_version``，前端重新讀條款。
+        * 已經同意的就是目前的版本 ⇒ 什麼都不寫（不是新的同意）。
+        * 暫停中、開戶失敗的帳戶也可以同意（同意本身不會建立或恢復任何東西）。
+
+        帳戶列以 ORM 寫（``FOR NO KEY UPDATE``）；兩個請求同時同意 ⇒ 後到的那筆在 REPEATABLE READ 下撞
+        serialization failure，``retrying()`` 重播時看到已經同意、不再寫。稽核在 commit 之後才寫：交易回捲
+        （或被重播）的那一次不會留下「同意了」的紀錄。
+        """
+        account = self._llm_account_for_partner(partner)
+        if not account:
+            raise LlmError(ERR_LLM_NOT_ACTIVATED)
+        current = self.env[TERMS_MODEL]._llm_current()
+        if current is None:
+            raise LlmError(ERR_LLM_TOS_UNAVAILABLE)
+        version = clean_version(tos_version)
+        if version is None:
+            raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=current.version)
+        if version != current.version:
+            raise LlmError(ERR_LLM_TOS_OUTDATED, current_version=current.version)
+        if account.tos_version != current.version:
+            ip_text = _clean_ip(real_ip)
+            _llm_internal(account).write({
+                'tos_version': current.version,
+                'tos_accepted_at': _utcnow(),
+                'tos_accepted_uid': user.id if user else False,
+                'tos_accepted_ip': ip_text,
+            })
+            self.env[EVENT_MODEL]._llm_record_after_commit(
+                'tos_accept', account_id=account.id, partner_id=account.partner_id.id,
+                uid=user.id if user else None, real_ip=ip_text or None,
+                target_model=TERMS_MODEL, target_id=current.id)
+        return {'tos': account._llm_tos_dto(current)}
+
+    def _llm_require_current_terms(self):
+        """gate（DESIGN §6.4-3）：條款改版且要求重新同意 ⇒ ``llm_tos_outdated``。
+
+        **建金鑰、轉換、啟用金鑰都要在第一次外呼之前呼叫**（LLM-07 的付費金鑰與啟用、LLM-08 的轉換
+        照用）；既有金鑰不受影響——這裡只擋 PaaS 端的寫入，不碰 new-api 上的 token。判準見
+        ``llm_terms.LlmTerms._llm_reaccept_required``。
+        """
+        self.ensure_one()
+        Terms = self.env[TERMS_MODEL]
+        current = Terms._llm_current()
+        if Terms._llm_reaccept_required(self.tos_version or None, current=current):
+            raise LlmError(ERR_LLM_TOS_OUTDATED,
+                           current_version=current.version if current else None)
+
+    def _llm_tos_dto(self, current):
+        """``/api/llm/state`` 的 ``account.tos``：``needs_reaccept``＝版本不同（顯示「條款已更新」橫幅）；
+        ``blocking``＝gate 會擋（橫幅改說「同意前不能建立金鑰、轉換點數或重新啟用金鑰」）。
+        ``requires_reaccept=False`` 的改版只有前者（LLM-05 審查：畫面與 gate 要一致）。"""
+        self.ensure_one()
+        accepted = self.tos_version or None
+        return {
+            'accepted_version': accepted,
+            'current_version': current.version if current else None,
+            'needs_reaccept': current is not None and accepted != current.version,
+            'blocking': self.env[TERMS_MODEL]._llm_reaccept_required(accepted, current=current),
+        }
+
+    # ------------------------------------------------------------------ #
     #  /api/llm/state                                                      #
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_state_payload(self, partner):
+        config = llm_config(self.env)
+        current = self.env[TERMS_MODEL]._llm_current()
         account = self._llm_account_for_partner(partner)
         keys = account.api_key_ids.filtered(lambda k: k.state not in ('deleted', 'lost'))
         # 卡在 creating 太久的那把不算（見 llm_api_key._llm_is_stale_creating）：否則前端藏起
@@ -478,6 +686,7 @@ class LlmAccount(models.Model):
             lambda k: k.kind == 'free_trial' and k.state in ('creating', 'active', 'disabled')
             and not k._llm_is_stale_creating())[:1]
         account_dto = None
+        payload = None
         if account:
             quota = int(account.quota_cached or 0)
             balance_points = quota // QUOTA_PER_POINT if quota > 0 else 0
@@ -491,22 +700,17 @@ class LlmAccount(models.Model):
                 'overdraft_points': overdraft_points,
                 'suspend_reason': account.suspend_reason or None,
                 'low_balance_threshold': account.low_balance_threshold,
-                'tos': {
-                    'accepted_version': account.tos_version or None,
-                    'current_version': TOS_VERSION_CURRENT,
-                    'needs_reaccept': (account.tos_version or '') != TOS_VERSION_CURRENT,
-                },
+                'tos': account._llm_tos_dto(current),
             }
-        return {
+        payload = {
             'account': account_dto,
-            'tos_current_version': TOS_VERSION_CURRENT,
+            # 目前 published 的條款（沒有＝null：「尚未開通」畫面不能開通，見前端 tosUnavailable）。
+            'tos_current_version': current.version if current else None,
+            # 草稿文字（D15）：「尚未開通」畫面在勾選框下標「草稿，尚未生效」。
+            'tos_current_draft': bool(current and current.is_draft),
             'free_trial': {
                 'key_id': free_key.id or None,
-                # 每日計數在 LLM-10（llm_free_usage）；tracer 用 /api/llm/usage/recent。
-                'today_count': None,
-                'daily_limit': FREE_DAILY_LIMIT,
-                'capped': False,
-                'keys_created_today': None,
+                **self.env['woow_paas_platform.llm_free_usage']._llm_today(account.id),
             },
             'limits': {
                 'max_keys': MAX_KEYS_PER_ACCOUNT,
@@ -514,65 +718,46 @@ class LlmAccount(models.Model):
                 'convert_min': CONVERT_MIN_POINTS,
                 'convert_max': CONVERT_MAX_POINTS,
             },
-            'pending_review': False,
-            'public_base_url': None,
-            'guard': {'tripped': False},
+            'pending_review': account._llm_has_pending_review(),
+            # 只收白名單值（DESIGN §2.11；llm_common.llm_config 讀取時再驗一次）。
+            'public_base_url': config.get('public_base_url'),
+            'guard': {'tripped': self._llm_guard_tripped()},
             'data_as_of': _iso(account.balance_synced_at) if account else None,
         }
+        if account and account.state in ('active', 'suspended'):
+            # SWR（N26）：餘額快取超過 10 分鐘 ⇒ 背景以 UP ``GET /api/user/self`` 刷新；這裡不外呼。
+            self.env['woow_paas_platform.llm_swr_cache']._llm_swr_touch(
+                account, 'self', account.balance_synced_at)
+        return payload
 
     # ------------------------------------------------------------------ #
-    #  /api/llm/usage/recent（tracer；LLM-02 改 SWR、LLM-09／10 取代）       #
+    #  /api/llm/usage/recent（SWR；LLM-09／10 之後由 usage/summary 與 llm_free_usage 取代）#
     # ------------------------------------------------------------------ #
     @api.model
     def _llm_usage_recent(self, partner):
-        """今天的免費試用呼叫（前 10 筆）。
+        """今天的免費試用呼叫（前 10 筆）：**只讀快取、不外呼**（N26，DESIGN §3.2；LLM-02）。
 
-        ⚠ **刻意偏離 DESIGN §3.2／§3.5／N26**（記在 DESIGN 變更紀錄第 4 版）：DESIGN 的
-        usage/recent 是 SWR、只讀 DB；tracer 期間這裡**同步外呼**（WEB 金鑰、UP、read 3 秒），
-        每次頁面載入吃該租戶合成 IP 1 格 GA。收斂回 SWR（cron 以 CRON 金鑰刷新、端點只讀
-        快取）在 LLM-02。
+        快取由 ``llm_swr`` 的刷新 cron 以 CRON 金鑰、本帳戶的 UP 讀 ``GET /api/log/self``（台北今天的
+        ``type=2``、``group=free``）寫入；超過 60 秒（或是昨天的）就一併排一次背景刷新。還沒有今天的
+        快取時回空清單、``data_as_of: null``（前端顯示「讀取中」、幾秒後再問）。
         """
         account = self._llm_account_for_partner(partner)
         account._llm_require_active()
-        ip = account._llm_tenant_ip()
-        up = account._llm_up_token()
-        client = self._llm_web_client('usage/recent')
-        now = datetime.now(timezone(timedelta(hours=8)))
-        start = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        result = client.user_log_self(ip, up, {
-            'type': 2, 'group': 'free', 'start_timestamp': start, 'p': 1, 'page_size': 10,
-        }, timeout=nac.TIMEOUT_INTERACTIVE_READ)
-        if not result.ok:
-            if isinstance(result, nac.Definite) and result.code in (
-                    'AUTH_UNAUTHORIZED', 'ACCESS_TOKEN_EXPIRED'):
-                account._llm_mark_up_invalid()
-            raise LlmError(ERR_LLM_UNAVAILABLE)
-        data = result.data if isinstance(result.data, dict) else {}
-        names = {k.newapi_name: k for k in account.api_key_ids if k.newapi_name}
-        items = []
-        for row in _items(data)[:10]:
-            if not isinstance(row, dict):
-                continue
-            key = names.get(row.get('token_name'))
-            created = row.get('created_at')
-            items.append({
-                'time': (datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
-                         if type(created) is int else None),
-                'model': row.get('model_name') if isinstance(row.get('model_name'), str) else None,
-                'input_tokens': row.get('prompt_tokens') if type(row.get('prompt_tokens')) is int else None,
-                'output_tokens': (row.get('completion_tokens')
-                                  if type(row.get('completion_tokens')) is int else None),
-                'duration_ms': row.get('use_time') * 1000 if type(row.get('use_time')) is int else None,
-                'request_id': row.get('request_id') if isinstance(row.get('request_id'), str) else None,
-                'key_id': key.id if key else None,
-                'key_kind': key.kind if key else None,
-            })
-        total = data.get('total')
+        Cache = self.env['woow_paas_platform.llm_swr_cache']
+        cached = Cache._llm_swr_get(account, 'usage_recent')
+        payload = cached and cached['payload']
+        if not isinstance(payload, dict) or payload.get('day_tpe') != taipei_day():
+            payload = None
+        fetched_at = cached['fetched_at'] if payload else None
+        Cache._llm_swr_touch(account, 'usage_recent', fetched_at)
+        items = payload.get('items') if payload else None
+        count = payload.get('today_count') if payload else None
         return {
-            'today_count': total if type(total) is int else len(items),
+            'free_trial': self.env['woow_paas_platform.llm_free_usage']._llm_today(account.id),
+            'today_count': count if type(count) is int else None,
             'daily_limit': FREE_DAILY_LIMIT,
-            'items': items,
-            'data_as_of': datetime.now(timezone.utc).isoformat(),
+            'items': items if isinstance(items, list) else [],
+            'data_as_of': _iso(fetched_at),
         }
 
     # ------------------------------------------------------------------ #
@@ -1114,7 +1299,9 @@ class LlmAccount(models.Model):
 
         守衛：使用者名稱與 ``newapi_user_id`` 都要對得上、帳戶是 active／suspended、而且現有的
         ``balance_synced_at`` **嚴格早於**這次讀取（``read_at``，:func:`balance_stamp`，在 GET 之前取）：
-        P9 或日後轉換在讀取之後寫的值不會被這頁的舊值蓋掉；同一微秒也不蓋（寧可等下一輪）。
+        P9 在讀取之後寫的值不會被舊頁蓋掉。轉換只有成功證據、沒有權威餘額，所以只設
+        ``balance_invalidated_at``（不把 before 快照當新餘額）；GET 必須開始於該 barrier 之後
+        才可更新數字並清掉 barrier。同一微秒也不蓋（寧可等下一輪）。
 
         交易是 **READ COMMITTED**（審查 LLM-02b 第 2 輪）：別的交易（P9、LLM-08 的轉換入帳）改了這一頁
         某一戶、而且 commit 了，REPEATABLE READ 會整句 40001（整頁 100 戶都丟掉）；READ COMMITTED
@@ -1134,14 +1321,17 @@ class LlmAccount(models.Model):
                 _begin(self.env, cr, read_committed=True)
                 cr.execute(
                     'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
-                    'request_count_cached = v.cnt, balance_synced_at = %s, write_uid = %s, '
+                    'request_count_cached = v.cnt, balance_synced_at = %s, '
+                    'balance_invalidated_at = NULL, write_uid = %s, '
                     'write_date = %s '
                     'FROM (VALUES {values}) AS v(username, user_id, quota, used, cnt) '
                     'WHERE a.newapi_username = v.username AND a.newapi_user_id = v.user_id '
                     'AND a.state IN %s '
-                    'AND (a.balance_synced_at IS NULL OR a.balance_synced_at < %s)'.format(
+                    'AND (a.balance_synced_at IS NULL OR a.balance_synced_at < %s) '
+                    'AND (a.balance_invalidated_at IS NULL OR '
+                    'a.balance_invalidated_at < %s)'.format(
                         t=ACCOUNT_TABLE, values=values),
-                    params)
+                    params + [read_at])
                 return cr.rowcount
         except psycopg2.Error as exc:
             _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',

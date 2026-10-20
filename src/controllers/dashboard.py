@@ -117,6 +117,7 @@ class DashboardController(HiddenChainMixin, Controller):
         # 搶 primary 綁架 cycle/next_bill 估算。
         active_subs = request.env['sh.subscription.subscription'].sudo().search(
             [('sh_partner_id', '=', partner.id), ('state', '=', 'in_progress'),
+             ('woow_trial_only', '=', False),
              ('id', 'not in', self._hidden_subscription_ids(request.env))],
             order='sh_start_date desc, id desc',
         )
@@ -256,6 +257,8 @@ class DashboardController(HiddenChainMixin, Controller):
             order='create_date desc, id desc',
             limit=_RECENT_ACTIVITY_LIMIT,
         )
+        descriptions = request.env['woow_paas_platform.llm_credit_order']._llm_wallet_descriptions(
+            partner, rows)
 
         result = []
         actor_name = partner.name or ''
@@ -266,7 +269,7 @@ class DashboardController(HiddenChainMixin, Controller):
                 'actor': actor_name,
                 'action': _ACTION_MAP.get(row.transaction_type, row.transaction_type or ''),
                 'target': target,
-                'description': row.description or row.name or '',
+                'description': descriptions.get(row.id, row.description or row.name or ''),
             })
         return result
 

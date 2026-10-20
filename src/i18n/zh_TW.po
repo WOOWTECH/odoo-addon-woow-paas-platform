@@ -1103,6 +1103,7 @@ msgstr "AI 模型金鑰不能刪除，只會標記為已刪除。"
 #: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm
 msgid "AI Models"
 msgstr "AI 模型"
 
@@ -1570,6 +1571,32 @@ msgid ""
 msgstr "管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——它不會再顯示。服務會重新啟動以套用變更。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Admin credentials updated and the Gateway API Key was replaced. "
+"Save the new Gateway API Key now — it will not be shown again. "
+"The new sign-in password takes effect within about a minute; "
+"the main service keeps running. If a web console is enabled, "
+"only the console restarts."
+msgstr ""
+"管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——"
+"它不會再顯示。新登入密碼約一分鐘內生效，主服務持續運行。若已啟用網頁管理介面，"
+"則只有該介面會重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Admin credentials updated and the Gateway API Key was replaced. "
+"Save the new Gateway API Key now — it will not be shown again. "
+"The new sign-in password takes effect within about a minute; "
+"the service does not restart."
+msgstr ""
+"管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——"
+"它不會再顯示。新登入密碼約一分鐘內生效，服務不會重新啟動。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__external_mcp_allowed
 msgid ""
 "Admin gate for NetworkPolicy egress to external MCP endpoints (design §6.3 "
@@ -1787,12 +1814,6 @@ msgstr "免費試用金鑰只能呼叫 Qwen3-4B，每分鐘 10 次、每天約 2
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
 msgid "Free trial today"
 msgstr "今日免費試用"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
-msgid "I agree to the AI Models Terms of Service"
-msgstr "我同意《AI 模型服務條款》"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2021,15 +2042,6 @@ msgid ""
 msgstr "系統維護中，暫時無法建立金鑰或轉換點數；既有金鑰不受影響。"
 
 #. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
-msgid ""
-"The AI Models Terms of Service have been updated. Please accept them "
-"again before creating keys or converting points; existing keys are not "
-"affected."
-msgstr "《AI 模型服務條款》已更新，請重新同意才能建立金鑰或轉換點數；既有金鑰不受影響。"
-
-#. module: woow_paas_platform
 #. odoo-python
 #. odoo-javascript
 #: code:addons/woow_paas_platform/controllers/llm.py:0
@@ -2179,8 +2191,137 @@ msgstr "總額上限不能低於這把金鑰的已用量"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
 msgid "These terms are a draft and have not taken effect yet."
 msgstr "條款目前是草稿，尚未生效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+#: model:ir.actions.act_window,name:woow_paas_platform.action_llm_terms
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_list
+msgid "AI Models Terms of Service"
+msgstr "《AI 模型服務條款》"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "I have read and agree to the"
+msgstr "我已閱讀並同意"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.xml:0
+msgid "I have read and agree"
+msgstr "我已閱讀並同意"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Review and accept"
+msgstr "查看並同意"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "Version: %(version)s"
+msgstr "版本：%(version)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "Loading the terms…"
+msgstr "正在載入條款…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "Accepting lets you create keys, convert points and re-enable keys again. Existing keys keep working either way."
+msgstr "同意後即可再建立金鑰、轉換點數與重新啟用金鑰；不論是否同意，既有金鑰都照常可用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "The AI Models Terms of Service cannot be shown right now. Please try again later."
+msgstr "《AI 模型服務條款》暫時無法顯示，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "The conversion request was not found or is invalid."
+msgstr "找不到此筆點數轉換申請，或申請資料無效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "The AI Models Terms of Service have been updated. Please accept them again before creating keys, converting points or re-enabling keys; existing keys are not affected."
+msgstr "《AI 模型服務條款》已更新，請重新同意才能建立金鑰、轉換點數或重新啟用金鑰；既有金鑰不受影響。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "The AI Models Terms of Service have been updated. Please review the new version; nothing you can do now is affected."
+msgstr "《AI 模型服務條款》已更新，請查看新版條款；目前的操作不受影響。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "You have accepted the updated AI Models Terms of Service."
+msgstr "已同意新版《AI 模型服務條款》。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "The terms version must start with a letter or digit and contain only letters, digits, \".\", \"_\" or \"-\" (at most 64 characters)."
+msgstr "條款版本號必須以英文字母或數字開頭，只能包含英文字母、數字、「.」「_」「-」，最多 64 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "A terms version is always created as a draft."
+msgstr "條款版本一律以草稿建立。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Use Publish to change the state of a terms version."
+msgstr "條款版本的狀態只能透過「Publish」（發佈）改變。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "A published or retired terms version cannot be changed. Duplicate it as a new draft instead."
+msgstr "已發佈的版本與舊版都不能修改，請複製成新的草稿再改。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Published or retired terms versions cannot be deleted: users must be able to look up the version they accepted."
+msgstr "已發佈的版本與舊版都不能刪除：使用者要能查到自己同意過的版本。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Only a draft terms version can be published."
+msgstr "只有草稿可以發佈。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "The terms content is empty."
+msgstr "條款內容是空的。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Draft terms (marked 草稿，尚未生效 or 【待…】) can only be published on staging. Production can only publish the finalized text (D15)."
+msgstr "草稿文字（含「草稿，尚未生效」或【待…】標記）只能在測試環境發佈；正式站只能發佈定稿（D15）。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -3953,6 +4094,8 @@ msgstr "client 驗證失敗。"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.xml:0
 msgid "Close"
 msgstr "關閉"
 
@@ -5889,6 +6032,7 @@ msgstr "在你的 Home Assistant 裝置上下載並安裝 Woow Connector。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_agent_template__state__draft
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_terms__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__draft
@@ -12064,22 +12208,25 @@ msgid "Public · anyone can reach it"
 msgstr "公開 · 任何人都能連入"
 
 #. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_form
 msgid "Publish"
-msgstr ""
+msgstr "發佈"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_agent_template__state__published
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_terms__state__published
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill__state__published
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
 msgid "Published"
-msgstr ""
+msgstr "已發佈"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__published_at
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__published_at
 msgid "Published At"
-msgstr ""
+msgstr "發佈時間"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13003,6 +13150,7 @@ msgstr "同 init 類型的公平佇列位置；成功 claim 後會把自己移�
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 msgid "Save"
@@ -14480,6 +14628,7 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__state
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_server__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__state
@@ -14489,6 +14638,7 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_account__state
 msgid "State"
 msgstr "狀態"
 
@@ -15469,6 +15619,28 @@ msgid ""
 msgstr ""
 "這組帳密用來登入此服務（若有網頁管理介面也一併適用）。儲存後服務會重新啟動"
 "（約一分鐘）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid ""
+"These credentials sign in to this service, including its web console if it "
+"has one. The new sign-in password takes effect within about a minute; the "
+"main service keeps running. If a web console is enabled, only the console restarts."
+msgstr ""
+"這組帳密用來登入此服務（若有網頁管理介面也一併適用）。新登入密碼約一分鐘內生效，"
+"主服務持續運行。若已啟用網頁管理介面，則只有該介面會重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid ""
+"These credentials sign in to this service, including its web console if it "
+"has one. The new sign-in password takes effect within about a minute; the "
+"service does not restart."
+msgstr ""
+"這組帳密用來登入此服務（若有網頁管理介面也一併適用）。新登入密碼約一分鐘內生效，"
+"服務不會重新啟動。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -16812,10 +16984,11 @@ msgid "Verifying…"
 msgstr "驗證中…"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__version
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__version
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill_upload_wizard__version
 msgid "Version"
-msgstr ""
+msgstr "版本"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__helm_chart_version
@@ -19906,6 +20079,7 @@ msgstr "帳務事件不允許自由格式的 chatter。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__ecpay_found
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__ecpay_manual_check_result__ecpay_found
 msgid "Found in ECPay"
 msgstr "在 ECPay 找到"
 
@@ -19957,6 +20131,7 @@ msgstr "下次查詢時間"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__ecpay_not_found
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__ecpay_manual_check_result__ecpay_not_found
 msgid "Not found in ECPay"
 msgstr "未在 ECPay 找到"
 
@@ -21202,6 +21377,7 @@ msgstr "通知（%(count)s 則未讀）"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__account_id
 msgid "Account"
 msgstr "帳號"
 
@@ -24920,6 +25096,128 @@ msgid "AI account error"
 msgstr "AI 帳戶異常"
 
 #. module: woow_paas_platform
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_terms
+msgid "Terms of Service"
+msgstr "服務條款"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_terms
+msgid "AI Models Terms of Service Version"
+msgstr "AI 模型服務條款版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_terms_version_uniq
+msgid "Each terms version must be unique."
+msgstr "條款版本代號不能重複。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
+msgid "Publish this version? The current published version will be retired. If Requires re-acceptance is set, existing accounts must accept this version before creating keys, converting points or re-enabling keys. A published version can no longer be changed or deleted."
+msgstr "確定要發佈這個版本嗎？目前已發佈的版本會轉為「已停用」。若勾選「需重新同意」，既有帳戶要先同意這一版，才能建立金鑰、轉換點數或重新啟用金鑰。發佈後就不能再修改或刪除。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.actions.act_window,help:woow_paas_platform.action_llm_terms
+msgid "Create the first terms version"
+msgstr "建立第一個條款版本"
+
+#. module: woow_paas_platform
+#: model_terms:ir.actions.act_window,help:woow_paas_platform.action_llm_terms
+msgid ""
+"Users must accept the published version to activate AI Models.\n"
+"                Draft text can only be published on staging."
+msgstr ""
+"使用者要同意已發佈的版本，才能開通 AI 模型。\n"
+"                草稿文字只能在測試環境（stg）發佈。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__title
+msgid "Title"
+msgstr "標題"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__content_html
+msgid "Content"
+msgstr "內容"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__requires_reaccept
+msgid "Requires re-acceptance"
+msgstr "需重新同意"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__retired_at
+msgid "Retired At"
+msgstr "停用時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__publish_seq
+msgid "Publish order"
+msgstr "發佈順序"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_terms__is_draft_text
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_terms_form
+msgid "Draft text"
+msgstr "草稿文字"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__version
+msgid "Unique version label sent back by the client when accepting, e.g. 2026-10-draft-1."
+msgstr "唯一的版本代號，使用者同意時會送回這個值，例如 2026-10-draft-1。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__title
+msgid "Shown as the heading of the terms dialog (data value)."
+msgstr "條款對話框的標題（資料值，不翻譯）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__content_html
+msgid "The terms text (data value, not translated). Sanitized on write; sanitized again in the browser before it is shown."
+msgstr "條款全文（資料值，不翻譯）。寫入時伺服器端會先清理，顯示前瀏覽器會再清理一次。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__requires_reaccept
+msgid "When published, accounts that accepted an earlier version cannot create keys, convert points or re-enable keys until they accept this version. Existing keys keep working."
+msgstr "發佈後，同意過舊版的帳戶要先同意這一版，才能建立金鑰、轉換點數或重新啟用金鑰；既有金鑰照常可用。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__publish_seq
+msgid "1 for the first version ever published, then +1 for each publication."
+msgstr "第一個發佈的版本是 1，之後每發佈一次加 1。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_terms__is_draft_text
+msgid "The title or content still carries a draft marker (草稿，尚未生效 or 【待…】). Draft text can be published on staging only."
+msgstr "標題或內容還有草稿標記（「草稿，尚未生效」或【待…】）。草稿文字只能在測試環境（stg）發佈。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_terms__state__retired
+msgid "Retired"
+msgstr "已停用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_event__action__tos_accept
+msgid "Terms accepted"
+msgstr "同意條款"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_event__action__tos_publish
+msgid "Terms published"
+msgstr "發佈條款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
+msgid "This update does not affect anything you can do now. Existing keys keep working."
+msgstr "這次改版不影響目前的操作；既有金鑰都照常可用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_terms.py:0
+msgid "Draft text is computed from the title and the content."
+msgstr "「草稿文字」由標題與內容自動判斷，不能直接修改。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/utils/vpn_node_status.js:0
 msgid "Not connected"
@@ -25524,8 +25822,38 @@ msgstr "無法載入相關文件，請重試。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
-msgid "Official documentation"
-msgstr "官方文件"
+msgid "Open related documentation"
+msgstr "開啟相關文件"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "WOOWTECH tutorial site"
+msgstr "WOOWTECH 教學網站"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "Version notice"
+msgstr "版本提醒"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "Deployed chart"
+msgstr "已部署 Chart"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "Current template chart"
+msgstr "目前模板 Chart"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/InformationTab.xml:0
+msgid "This guide describes the current template. Check the Overview tab and verify a feature on your deployed service before following its steps."
+msgstr "本指南依目前模板撰寫。請先到「總覽」核對已部署版本，並確認服務中有對應功能，再依步驟操作。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -25684,3 +26012,833 @@ msgstr "暫時無法取得日誌，請稍後重試。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/LogsTab.js:0
 msgid "Auto-refresh is paused. Resume or refresh to load logs."
 msgstr "已暫停自動更新，請繼續或手動更新以載入日誌。"
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid "This URL points to an internal platform service and cannot be used as an MCP server."
+msgstr "這個網址指向平台內部服務，不能當作 MCP 伺服器使用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "Only administrators can test the AI models connection."
+msgstr "只有系統管理員可以測試 AI 模型連線。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "AI models are not configured"
+msgstr "AI 模型尚未設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "Set the proxy URL and switch the feature on (or set a pilot or canary) first."
+msgstr "請先設定代理網址並開啟功能（或設定試營運名單、canary）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "Connection test queued"
+msgstr "已排入連線測試"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+msgid "A cron worker runs it with the CRON key within a few seconds. Reload this page to see the result."
+msgstr "排程工作會在幾秒內以 CRON 金鑰執行，重新整理此頁即可看到結果。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_runtime_state.py:0
+#: model:ir.actions.server,name:woow_paas_platform.action_llm_runtime_state
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "AI Models Connection"
+msgstr "AI 模型連線"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_swr.py:0
+msgid "The AI models cache is maintained by the platform."
+msgstr "AI 模型的快取由平台維護。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_swr.py:0
+msgid "The AI models cache cannot be deleted."
+msgstr "AI 模型的快取不能刪除。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_common.py:0
+msgid "The AI models public base URL must be https://newapi.woowtech.io/v1 or https://newapi-stg.woowtech.io/v1."
+msgstr "AI 模型的公開 API 網址只能是 https://newapi.woowtech.io/v1 或 https://newapi-stg.woowtech.io/v1。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Usage data is not available yet. Please check back later."
+msgstr "用量資料暫時還拿不到，請稍後再看。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Test connection"
+msgstr "測試連線"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Circuit breaker"
+msgstr "斷路器（circuit breaker）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Guard"
+msgstr "不變量防護（guard）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Service account rate limit"
+msgstr "服務帳號限速"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Balance refresh"
+msgstr "餘額刷新"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_runtime_state_form
+msgid "Connection test"
+msgstr "連線測試"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_open_until
+msgid "Circuit Open Until"
+msgstr "斷路器開到"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_failures
+msgid "Circuit Failures"
+msgstr "連續失敗次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_reason
+msgid "Circuit reason"
+msgstr "斷路器開啟原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__circuit_opened_at
+msgid "Circuit opened at"
+msgstr "斷路器開啟時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__guard_tripped
+msgid "Guard Tripped"
+msgstr "防護已觸發"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__guard_reasons
+msgid "Guard Reasons"
+msgstr "防護原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__guard_since
+msgid "Guard Since"
+msgstr "防護觸發時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__dr_mode
+msgid "Dr Mode"
+msgstr "DR 模式"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__ap_rate_window
+msgid "AP rate window (unix minute)"
+msgstr "AP 限速時間窗（unix 分鐘）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__ap_rate_count
+msgid "AP calls this minute"
+msgstr "本分鐘 AP 呼叫次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__balance_refresh_page
+msgid "Balance Refresh Page"
+msgstr "餘額刷新頁數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__balance_refresh_started_at
+msgid "Balance Refresh Started At"
+msgstr "餘額刷新開始時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__balance_refresh_finished_at
+msgid "Balance Refresh Finished At"
+msgstr "餘額刷新完成時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__connection_test_requested_at
+msgid "Connection test requested at"
+msgstr "連線測試請求時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__connection_test_at
+msgid "Last connection test at"
+msgstr "上次連線測試時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__connection_test_result
+msgid "Last connection test result"
+msgstr "上次連線測試結果"
+
+#. module: woow_paas_platform
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_runtime_state
+msgid "Connection status"
+msgstr "連線狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Text"
+msgstr "文字"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Vision"
+msgstr "視覺"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Reasoning"
+msgstr "推理"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Tool use"
+msgstr "工具呼叫"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Embeddings"
+msgstr "向量嵌入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Images"
+msgstr "圖片"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Audio"
+msgstr "語音"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Not specified"
+msgstr "未提供"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Usage-based pricing"
+msgstr "依用量計價"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "%(points)s points per call"
+msgstr "每次 %(points)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Model ID"
+msgstr "模型 ID"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Capabilities"
+msgstr "能力"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Output"
+msgstr "輸出"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Cache read"
+msgstr "快取讀取"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Cache write"
+msgstr "快取寫入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Loading model prices…"
+msgstr "正在讀取模型價格…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Models and prices are unavailable right now. Please try again later."
+msgstr "目前無法取得模型與價格，請稍後再試"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "No models match your search or capability filter."
+msgstr "沒有符合搜尋或能力篩選的模型。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "10 requests per minute, about 200 per day (resets at 00:00 Taipei time). Free trial keys only; capacity may change."
+msgstr "每分鐘 10 次、每天約 200 次（台北時間 00:00 重置），僅限免費試用金鑰；容量可能調整。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Prices are in points per million tokens. 1 point = NT$1 (tax included). Price increases will be announced 7 days in advance."
+msgstr "價格以點／百萬 tokens 計，1 點＝NT$1（含稅）。漲價會在 7 天前公告。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "A dash means no separate price is published. For Claude usage, when the upstream reports 1-hour cache-creation tokens, cache writes are billed at 1.6× the displayed cache-write rate."
+msgstr "「—」代表未提供獨立價格。Claude 用量若由上游回報 1 小時快取寫入 tokens，該寫入費率為畫面所列快取寫入價格的 1.6 倍。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Copy model ID"
+msgstr "複製模型 ID"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Copied model ID: %(model)s"
+msgstr "已複製模型 ID：%(model)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Copy failed. Please select and copy the model ID."
+msgstr "複製失敗，請選取並複製模型 ID。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Search models"
+msgstr "搜尋模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Model ID or provider"
+msgstr "模型 ID 或供應商"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "All capabilities"
+msgstr "全部能力"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Models and prices"
+msgstr "模型與價格"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Call AI models with your credit"
+msgstr "用點數呼叫 AI 模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Input / output points per million tokens"
+msgstr "輸入／輸出價格（點／百萬 tokens）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Prices are temporarily unavailable. You can view Models & Pricing after activation."
+msgstr "價格暫時無法顯示，開通後可在「模型與價格」查看。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmModelsTab.js:0
+msgid "Data as of %(time)s"
+msgstr "資料時間 %(time)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+msgid "Today's free trial is used up. Restores automatically at 00:00 Taipei time."
+msgstr "今日免費試用已用完，台北時間 00:00 自動恢復。"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_free_usage
+msgid "AI Models Free Trial Daily Usage"
+msgstr "AI 模型免費試用每日用量"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_llm_free_log_receipt
+msgid "AI Models Free Trial Log Receipt"
+msgstr "AI 模型免費試用日誌收據"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_usage_account_day_uniq
+msgid "One free trial counter per day."
+msgstr "每天只能有一筆免費試用計數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_usage_counts_nonnegative
+msgid "Free trial counters cannot be negative."
+msgstr "免費試用計數不能為負數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_llm_free_log_receipt_log_uniq
+msgid "Log already metered."
+msgstr "這筆日誌已計入用量。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Free trial usage is maintained by the platform."
+msgstr "免費試用用量由平台維護。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Only administrators can request the free trial fallback."
+msgstr "只有系統管理員可以要求免費試用備援操作。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/llm_free_usage.py:0
+msgid "Break-glass request queued for one attempt. If it fails, confirm break-glass is enabled and press the button again."
+msgstr "已排入一次 break-glass 操作。若失敗，請確認 break-glass 已啟用後再按一次按鈕。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__day_tpe
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_log_receipt__day_tpe
+msgid "Day Tpe"
+msgstr "台北日期"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__success_count
+msgid "Success Count"
+msgstr "成功呼叫次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__trial_keys_created
+msgid "Trial Keys Created"
+msgstr "已建立試用金鑰數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_usage__capped_at
+msgid "Capped At"
+msgstr "達上限時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_free_log_receipt__newapi_log_id
+msgid "Newapi Log"
+msgstr "new-api 日誌 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_capped_day
+msgid "Free Capped Day"
+msgstr "免費試用封鎖日期"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_cap_attempted_at
+msgid "Free Cap Attempted At"
+msgstr "免費試用封鎖嘗試時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_api_key__free_cap_pending
+msgid "Free Cap Pending"
+msgstr "免費試用封鎖待確認"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_log_id
+msgid "Free Meter Last Log"
+msgstr "免費試用計量最後日誌 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_ts
+msgid "Free Meter Last Ts"
+msgstr "免費試用計量最後時間戳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_last_ts
+msgid "Unix seconds of the last free-usage log read."
+msgstr "上次讀取免費試用日誌的 Unix 秒數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_start
+msgid "Free Meter Scan Start"
+msgstr "免費試用計量掃描起點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_end
+msgid "Free Meter Scan End"
+msgstr "免費試用計量掃描終點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_page
+msgid "Free Meter Scan Page"
+msgstr "免費試用計量掃描頁數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_runtime_state__free_meter_scan_max_id
+msgid "Free Meter Scan Max"
+msgstr "免費試用計量掃描最大 ID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_llm_account__free_group_requested
+msgid "Free Group Requested"
+msgstr "待執行群組操作"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_account__free_group_requested__free_blocked
+msgid "Block free trial"
+msgstr "封鎖免費試用"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_llm_account__free_group_requested__default
+msgid "Restore default group"
+msgstr "還原預設群組"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Block free trial (break-glass)"
+msgstr "封鎖免費試用（break-glass）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Restore default group (break-glass)"
+msgstr "還原預設群組（break-glass）"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Have the proxy owner enable break-glass before continuing. This makes one attempt to block the free trial group; if it fails, check the alert and press this button again."
+msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試封鎖免費試用群組一次；若失敗，請查看告警並再按此按鈕。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_llm_free_fallback_form
+msgid "Have the proxy owner enable break-glass before continuing. This makes one attempt to restore the default group; if it fails, check the alert and press this button again."
+msgstr "繼續前請代理服務負責人啟用 break-glass。這會嘗試還原預設群組一次；若失敗，請查看告警並再按此按鈕。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.act_window,name:woow_paas_platform.action_llm_free_fallback
+#: model:ir.ui.menu,name:woow_paas_platform.menu_llm_free_fallback
+msgid "Free trial fallback"
+msgstr "免費試用備援"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Credited"
+msgstr "已入帳"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Confirming (usually a few minutes, up to about 15 minutes; your points will not be lost)."
+msgstr "確認中（通常幾分鐘內，最長約 15 分鐘，點數不會遺失）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Our team is reviewing this conversion. Your points will not be lost; we will handle it and notify you as soon as possible."
+msgstr "人工處理中（點數不會遺失，我們會盡快處理並通知你）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Conversion did not complete. Your points have been returned to your points wallet."
+msgstr "轉換未完成，點數已退回點數錢包。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Our team is checking the return of your points. Your points will not be lost."
+msgstr "我們正在確認點數退回情形，點數不會遺失。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Our team is restoring this AI credit. We will notify you as soon as possible."
+msgstr "我們正在恢復這筆 AI 額度，會盡快通知你。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Conversion cancelled."
+msgstr "轉換已取消。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Processing…"
+msgstr "處理中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Move points wallet balance to AI credit"
+msgstr "從點數錢包轉入 AI 額度"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "I understand: converted AI credit cannot be returned as points or cash, including when I close my AI models account."
+msgstr "我了解：轉換後的 AI 額度不能退回點數或現金，包含關閉 AI 模型帳戶的情況。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Choose 50–10,000 whole points. 1 point = NT$1 (tax included); the conversion rate is fixed at NT$32 per US$1."
+msgstr "請選擇 50–10,000 整數點。1 點＝NT$1（含稅），換算匯率固定為 NT$32＝US$1。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Points wallet: %(before)s points → %(after)s points"
+msgstr "點數錢包：%(before)s 點 → 轉換後 %(after)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "AI credit: %(before)s points → %(after)s points"
+msgstr "AI 額度：%(before)s 點 → 轉換後 %(after)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+msgid "Your points wallet will have %(after)s points left, below the %(needed)s points needed for renewals due within 7 days. Those services may be suspended if payment fails. Convert anyway?"
+msgstr "轉換後點數錢包剩 %(after)s 點，不夠支付 7 天內到期的續費 %(needed)s 點，服務可能因扣款失敗而暫停。仍要轉換嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit: %(points)s points"
+msgstr "AI 額度：%(points)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit is not available right now."
+msgstr "目前無法取得 AI 額度。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit is only for AI models. Move it from your points wallet; once converted, it cannot be moved back."
+msgstr "AI 額度只能用於 AI 模型，由點數錢包轉入，轉入後不能轉回。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "Page %(page)s"
+msgstr "第 %(page)s 頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Custom points"
+msgstr "自訂點數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Loading preview…"
+msgstr "正在讀取轉換預覽…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "View and accept terms"
+msgstr "查看並同意條款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "For conversions above 1,000 points, verify your identity first."
+msgstr "超過 1,000 點的轉換，請先重新驗證身分。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Verify identity"
+msgstr "驗證身分"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Confirm conversion"
+msgstr "確認轉換"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "Check status"
+msgstr "查詢狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Convert points"
+msgstr "轉換點數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Conversion history"
+msgstr "轉換紀錄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Loading conversions…"
+msgstr "正在讀取轉換紀錄…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "No conversions yet."
+msgstr "目前沒有轉換紀錄。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "Time"
+msgstr "時間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Points"
+msgstr "點數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Note"
+msgstr "說明"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Previous"
+msgstr "上一頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Next"
+msgstr "下一頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Conversion history pages"
+msgstr "轉換紀錄分頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+msgid "You can retry this conversion using the same amount."
+msgstr "你可以使用相同點數重試這次轉換。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "AI credit: %(balance)s"
+msgstr "AI 額度：%(balance)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Time (Taipei)"
+msgstr "時間（台北時間）"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__is_llm_incident
+msgid "AI incident"
+msgstr "AI 帳務事件"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__ecpay_manual_check_result
+msgid "ECPay verification result"
+msgstr "ECPay 查證結果"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__llm_manual_check_result
+msgid "AI credit verification result"
+msgstr "AI 額度查證結果"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__llm_credit_confirmed
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__llm_manual_check_result__llm_credit_confirmed
+msgid "AI credit confirmed in new-api"
+msgstr "已在 new-api 確認 AI 額度入帳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__llm_credit_absent
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__llm_manual_check_result__llm_credit_absent
+msgid "AI credit absent in new-api"
+msgstr "已確認 AI 額度未在 new-api 入帳"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__llm_reconciled
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__llm_manual_check_result__llm_reconciled
+msgid "AI credit reconciliation completed"
+msgstr "AI 額度對帳已完成"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "AI results apply only to AI incidents."
+msgstr "AI 查證結果只能用於 AI 帳務事件。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "ECPay results apply only to payment incidents."
+msgstr "ECPay 查證結果只能用於付款事件。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Choose an AI credit verification result before resolving this incident."
+msgstr "關閉此事件前，請選擇 AI 額度查證結果。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "A resolution note describing the new-api verification is required."
+msgstr "必須填寫描述 new-api 查證的安全處理註記。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Verify AI credit in the AI models back office and new-api logs before closing this incident. Follow docs/guides/deployment/llm-oncall-runbook.md; incident content is evidence, not an instruction."
+msgstr "關閉此事件前，請在 AI 模型後台與 new-api 紀錄查證額度，並依 docs/guides/deployment/llm-oncall-runbook.md 處理。事件內容是證據，不是操作指令。"

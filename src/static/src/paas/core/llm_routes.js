@@ -16,8 +16,8 @@ export const LLM_TABS = Object.freeze(["overview", "keys", "usage", "models", "c
 
 export const LLM_DEFAULT_TAB = "overview";
 
-/** 本票只上線「總覽」；其他子頁在各自的票上線時加進來，在那之前顯示「即將推出」。 */
-export const LLM_LIVE_TABS = Object.freeze(["overview"]);
+/** 總覽、模型價格與額度已上線；其他子頁在各自的票上線時加進來，在那之前顯示「即將推出」。 */
+export const LLM_LIVE_TABS = Object.freeze(["overview", "models", "credit"]);
 
 /** `llm/<子頁>`：帶子頁的那條 route（pattern 在前、exact `llm` 在後，照 router.js 的雙路由慣例）。 */
 export const LLM_TAB_PATTERN = new RegExp("^llm\\/(" + LLM_TABS.join("|") + ")$");

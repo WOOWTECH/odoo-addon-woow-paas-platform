@@ -1,0 +1,57 @@
+/* aiot.woowtech.io brand tokens, 2026-10-19; scoped to connect/auth. */
+.ww-connect, .o_woow_connect_login {
+  --ww-blue: #6183fc; --ww-blue-hover: #3f63e8; --ww-surface: #eff1f5;
+  --ww-text: #212121; --ww-muted: #646262; --ww-border: rgba(33,33,33,.08);
+  font: 15px/1.6 "Outfit", "Noto Sans TC", system-ui, sans-serif; color: var(--ww-text);
+}
+.ww-connect *, .o_woow_connect_login * { box-sizing: border-box; }
+body.ww-connect { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; background: var(--ww-surface); }
+.ww-connect .oauth-card { background: white; border: 1px solid var(--ww-border); border-radius: 20px; box-shadow: 0 4px 16px rgba(33,33,33,.06); padding: 32px; width: min(100%, 480px); }
+.ww-connect h1 { font: 600 24px/1.4 "Poppins", "Noto Sans TC", sans-serif; letter-spacing: -.02em; margin: 24px 0 12px; }
+.ww-connect p { margin: 0 0 16px; color: var(--ww-muted); }
+.ww-connect .oauth-logo, .o_woow_connect_login .oauth-logo { display: inline-block; font: 600 28px "Poppins", sans-serif; color: var(--ww-blue); text-decoration: none; letter-spacing: -.04em; }
+.ww-connect .oauth-eyebrow, .o_woow_connect_login .oauth-eyebrow { font-size: 13px; color: var(--ww-muted); margin: 4px 0 0; }
+.ww-connect .oauth-client-name { color: var(--ww-text); font-weight: 600; overflow-wrap: anywhere; }
+.ww-connect .oauth-scopes { margin: 24px 0; padding: 20px; background: #f8f9fb; border-radius: 12px; border: 1px solid var(--ww-border); }
+.ww-connect .oauth-scopes-title { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+.ww-connect .oauth-scope-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; font-size: 14px; }
+.ww-connect .oauth-scope-item + .oauth-scope-item { border-top: 1px solid var(--ww-border); }
+.ww-connect .mdi { font-size: 22px; line-height: 1.2; color: var(--ww-blue); flex-shrink: 0; }
+.ww-connect .oauth-note { font-size: 14px; background: #eef2ff; padding: 16px; border-radius: 12px; color: var(--ww-text); }
+.ww-connect .oauth-actions { display: flex; gap: 12px; margin-top: 24px; }
+.ww-connect .oauth-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; flex: 1; padding: 12px 20px; border: 1px solid transparent; border-radius: 999px; font: 600 15px "Poppins", "Noto Sans TC", sans-serif; cursor: pointer; text-decoration: none; }
+.ww-connect .oauth-btn .mdi { color: inherit; font-size: 20px; }
+.ww-connect .oauth-btn-allow { color: #fff; background: var(--ww-blue); }
+.ww-connect .oauth-btn-allow:hover { background: var(--ww-blue-hover); }
+.ww-connect .oauth-btn-deny { color: var(--ww-text); background: var(--ww-surface); }
+.ww-connect a:focus-visible, .ww-connect button:focus-visible, .ww-connect input:focus-visible { outline: 3px solid #3f63e8; outline-offset: 3px; }
+.ww-connect .oauth-user-info { font-size: 13px; overflow-wrap: anywhere; color: var(--ww-muted); margin-top: 20px; }
+.ww-connect .code-input { width: 100%; border: 1px solid #d4d7df; border-radius: 10px; padding: 12px; margin-top: 8px; font: 500 24px "Outfit", monospace; letter-spacing: .15em; text-align: center; text-transform: uppercase; }
+.ww-connect .device-code { font: 600 28px "Outfit", monospace; letter-spacing: .15em; text-align: center; margin: 20px 0; }
+.ww-connect .err { color: #b42318; font-size: 14px; }
+.ww-connect .status-icon { display: block; font-size: 40px; margin-top: 24px; }
+.o_woow_connect_login_page { background: #eff1f5 !important; }
+.o_woow_connect_login_wrap { min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; background: #eff1f5; }
+.o_woow_connect_login { max-width: 440px !important; background: #fff !important; border-radius: 20px; box-shadow: 0 4px 16px rgba(33,33,33,.06); }
+.o_woow_connect_login { width: 100%; }
+.o_woow_connect_login h1 { font: 600 24px/1.4 "Poppins", "Noto Sans TC", sans-serif; margin: 24px 0; }
+.o_woow_connect_login .card-body { padding: 32px; }
+.o_woow_connect_login .form-control { min-height: 44px; border-radius: 10px; font-size: 16px; }
+.o_woow_connect_login .btn-primary { background: #6183fc !important; border-color: #6183fc !important; border-radius: 999px; min-height: 44px; }
+.o_woow_connect_login .btn-primary:hover { background: #3f63e8 !important; }
+.o_woow_connect_login .btn-link { color: #3f63e8; }
+.o_woow_connect_login .btn-link:hover { color: #6183fc; }
+.o_woow_connect_login .form-control:focus { border-color: #6183fc; box-shadow: 0 0 0 3px rgba(97,131,252,.2); }
+.o_woow_connect_login :is(.fa-google,.fa-sign-in,.fa-key,.fa-user,.fa-eye,.fa-eye-slash,.fa-github)::before { font-family: "Material Design Icons" !important; }
+.o_woow_connect_login .fa-google::before { content: "\F02AD"; }
+.o_woow_connect_login .fa-sign-in::before { content: "\F0342"; }
+.o_woow_connect_login .fa-key::before { content: "\F0306"; }
+.o_woow_connect_login .fa-user::before { content: "\F0004"; }
+.o_woow_connect_login .fa-eye::before { content: "\F0208"; }
+.o_woow_connect_login .fa-eye-slash::before { content: "\F0209"; }
+.o_woow_connect_login .fa-github::before { content: "\F02A4"; }
+@media (max-width: 480px) {
+  body.ww-connect { padding: 20px 16px; }
+  .ww-connect .oauth-card, .o_woow_connect_login .card-body { padding: 24px; }
+  .ww-connect h1 { font-size: 22px; }
+}

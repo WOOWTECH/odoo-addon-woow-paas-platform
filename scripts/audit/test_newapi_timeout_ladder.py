@@ -105,9 +105,13 @@ class NewapiTimeoutLadderCLITests(unittest.TestCase):
         self.mutation(CLIENT, "def user_log_self(self, client_ip, up, query, *, timeout=TIMEOUT_INTERACTIVE_READ,",
                       "def user_log_self(self, client_ip, up, query, *, timeout=TIMEOUT_CRON_READ,",
                       'user_log_self')
-        self.mutation(CLIENT, "def ap_get_user(self, user_id, *, timeout=TIMEOUT_PROVISION, deadline=None):",
-                      "def ap_get_user(self, user_id, *, timeout=(5, 15), deadline=None):",
+        self.mutation(CLIENT, "def ap_get_user(self, user_id, *, timeout=TIMEOUT_PROVISION, deadline=None,",
+                      "def ap_get_user(self, user_id, *, timeout=(5, 15), deadline=None,",
                       '不是 TIMEOUT_* 常數：ap_get_user')
+        # LLM-02：cron 的非冪等寫入（add_quota）有自己的類別，改類別也要改 baseline。
+        self.mutation(CLIENT, "def ap_add_quota(self, user_id, value, *, timeout=TIMEOUT_CRON_WRITE,",
+                      "def ap_add_quota(self, user_id, value, *, timeout=TIMEOUT_PROVISION,",
+                      'ap_add_quota')
 
     def test_frontend_key_create_timeout_outlasts_the_backend_budget(self):
         # LLM-01c：前端 40 秒 > 後端建金鑰預算 20 秒＋一次完整呼叫 11 秒。

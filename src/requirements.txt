@@ -1,7 +1,10 @@
 # woow_paas_platform core
 langchain-openai>=0.3.0
 langchain-core>=0.3.0
-langchain-mcp-adapters>=0.2.0,<0.3.0
+# Adapter 0.2 uses the MCP 1.x streamablehttp_client/httpx factory API.
+# MCP 2 removes that API and switches to httpx2; upgrade both together.
+langchain-mcp-adapters==0.2.2
+mcp==1.30.0
 langgraph>=0.2.0
 # agent-runtime SSE<->WS bridge: ai_assistant._stream_agent_runtime opens an
 # async client connection to the pod's /v1/chat (async with websockets.connect()).

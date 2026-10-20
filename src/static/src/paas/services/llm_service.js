@@ -106,6 +106,46 @@ export const llmService = reactive({
   usage: null,
   usageError: null,
 
+  models: null,
+  modelsLoaded: false,
+  modelsRequest: 0,
+
+  // Conversion responses and passwords stay with the caller, never in the global store.
+  async previewCredit(points) {
+    return call("/api/llm/credit/preview", { points });
+  },
+
+  async convertCredit(params) {
+    return call("/api/llm/credit/convert", params);
+  },
+
+  async fetchCreditOrders(page = 1, limit = 20) {
+    return call("/api/llm/credit/orders", { page, limit });
+  },
+
+  async findCreditOrder(clientRequestId) {
+    return call("/api/llm/credit/orders", { client_request_id: clientRequestId, page: 1, limit: 1 });
+  },
+
+  async fetchCreditOrder(id) {
+    return call("/api/llm/credit/orders/" + id, {});
+  },
+
+  async reauth(password) {
+    return call("/api/llm/account/reauth", { password });
+  },
+
+  async fetchModels() {
+    const request = ++this.modelsRequest;
+    const result = await call("/api/llm/models", {});
+    if (request !== this.modelsRequest) return result;
+    // Pricing failure clears old rates; history's SWR policy does not apply to tariffs.
+    this.models = result.success && result.data && result.data.state === "ok"
+      && Array.isArray(result.data.items) ? result.data : { items: [], state: "maintenance" };
+    this.modelsLoaded = true;
+    return result;
+  },
+
   async fetchState() {
     const result = await call("/api/llm/state", {});
     if (result.success) {
@@ -120,6 +160,20 @@ export const llmService = reactive({
 
   async activate(tosVersion) {
     return call("/api/llm/account/activate", { tos_version: tosVersion });
+  },
+
+  /**
+   * 《AI 模型服務條款》的 published 版（LLM-04）：`{version, title, content_html, is_draft, …}`。
+   * `content_html` 是 HTML：畫面一律經 html_sanitize.js 的 `safeHtml()` 才顯示（LlmTermsModal）。
+   * 不進 store：每次打開對話框都重新讀（條款可能在頁面打開之後改版）。
+   */
+  async fetchTerms() {
+    return call("/api/llm/terms", {});
+  },
+
+  /** 改版後重新同意（DESIGN §6.4-3）：帶對話框裡顯示的那一版；成功回 `{tos}`。 */
+  async acceptTerms(tosVersion) {
+    return call("/api/llm/account/accept_terms", { tos_version: tosVersion });
   },
 
   async fetchKeys() {

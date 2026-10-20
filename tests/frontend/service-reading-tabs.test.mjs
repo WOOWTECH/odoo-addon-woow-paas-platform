@@ -153,9 +153,9 @@ function componentFixture(canManage = true) {
   const mounted = [], destroyed = [];
   let started = 0, stopped = 0;
   const LogsTab = new Function("Component", "useState", "useRef", "onMounted", "onPatched", "onWillDestroy",
-    "_t", "WoowIcon", "createLogPoller", "filterLogLines", `${componentSource};return LogsTab;`)(
+    "_t", "WoowIcon", "formatUserTime", "createLogPoller", "filterLogLines", `${componentSource};return LogsTab;`)(
     class {}, (value) => value, () => ({ el: null }), (fn) => mounted.push(fn), () => {}, (fn) => destroyed.push(fn),
-    (text) => text, class {}, () => ({ start() { started++; }, stop() { stopped++; }, setPaused() {} }), filterLogLines,
+    (text) => text, class {}, (date) => date.toISOString(), () => ({ start() { started++; }, stop() { stopped++; }, setPaused() {} }), filterLogLines,
   );
   const component = new LogsTab();
   component.props = { canManage, workspaceId: 9, service: { id: 12 } };

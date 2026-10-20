@@ -380,6 +380,11 @@ def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
             'http://<release>-mcp.<namespace>.svc.cluster.local:3001/mcp); '
             f'got: {url}'
         )
+    # LLM-02（DESIGN §5.2 T3）：不能拿 PaaS 當打 new-api／newapi-proxy 的跳板。與 model constraint
+    # 共用同一個判斷（two-layer-acl-lockstep），這裡先回友善訊息、不讓 ValidationError 冒上來。
+    McpServer = request.env['woow_paas_platform.mcp_server']
+    if McpServer._internal_service_reason(url):
+        return McpServer._internal_service_message()
     return None
 
 
@@ -2804,6 +2809,26 @@ class PaasController(HiddenChainMixin, Controller):
         # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
         # 判準只算這一次：下方的 message 與 payload 都讀它，兩者不得各判各的。
         deliver_password = not (tenant_set and new_password is not None)
+        # #1675：前後端文案讀同一個 template 旗標，不自建 slug 判準；讀取失敗保守提示會重啟。
+        try:
+            restart_scope = service.template_id.credential_change_restart_scope or 'service'
+        except Exception:
+            _logger.exception(
+                "credential restart scope lookup failed for service %s after credentials "
+                "took effect", service.id,
+            )
+            restart_scope = 'service'
+        restart_notice = {
+            'console_only': (
+                'The new sign-in password takes effect within about a minute; '
+                'the main service keeps running. If a web console is enabled, '
+                'only the console restarts.'
+            ),
+            'none': (
+                'The new sign-in password takes effect within about a minute; '
+                'the service does not restart.'
+            ),
+        }.get(restart_scope)
         message = (
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'
@@ -2816,6 +2841,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'Admin credentials updated. The service restarts to apply them '
                 '(about a minute).'
             )
+            if restart_notice:
+                message = (
+                    'Admin credentials updated. Save the new password now — '
+                    'it will not be shown again. '
+                    if new_password is None else 'Admin credentials updated. '
+                ) + restart_notice
         # #672：判準是 payload 裡**真的有 gateway key**，不是 payload 非空——
         # 同一個 dict 現在也可能只帶 dashboard_url（兩個閘門各判各的）。用非空當
         # 判準的話，那種服務會收到一句「Gateway API Key 已重設」的假話，而租戶會
@@ -2836,6 +2867,21 @@ class PaasController(HiddenChainMixin, Controller):
                     'Save the new Gateway API Key now — it will not be shown again. '
                     'The service restarts to apply them.'
                 )
+                if restart_scope == 'console_only':
+                    message = _(
+                        'Admin credentials updated and the Gateway API Key was replaced. '
+                        'Save the new Gateway API Key now — it will not be shown again. '
+                        'The new sign-in password takes effect within about a minute; '
+                        'the main service keeps running. If a web console is enabled, '
+                        'only the console restarts.'
+                    )
+                elif restart_scope == 'none':
+                    message = _(
+                        'Admin credentials updated and the Gateway API Key was replaced. '
+                        'Save the new Gateway API Key now — it will not be shown again. '
+                        'The new sign-in password takes effect within about a minute; '
+                        'the service does not restart.'
+                    )
         if app_reset_kind == 'omnigent_exec':
             # Omnigent：與上游 Members → Reset 相同——不重啟、立刻生效，但不登出既有 session。
             message = (
@@ -2880,6 +2926,8 @@ class PaasController(HiddenChainMixin, Controller):
                 'admin_username_editable': bool(
                     service.template_id.admin_username_helm_path),
                 'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
+                # #1675：鏡射 template 的重啟範圍供文案使用，不自建 slug 判準。
+                'credential_change_restart_scope': restart_scope,
                 # #1542：一次性視窗挑 MCP 文案（config_json＝mcp-server 家族）。
                 'admin_password_carrier': service.template_id.admin_password_carrier or '',
             }
@@ -3017,18 +3065,26 @@ class PaasController(HiddenChainMixin, Controller):
         if error:
             return error
         template = service.template_id
-        documentation_url = (template.documentation_url or '').strip()
-        try:
-            parsed = urlparse(documentation_url)
-            safe_url = (parsed.scheme in ('https', 'http') and parsed.hostname
+        def safe_external_url(value):
+            url = (value or '').strip()
+            try:
+                parsed = urlparse(url)
+                safe = (parsed.scheme in ('https', 'http') and parsed.hostname
                         and not parsed.username and not parsed.password
-                        and not any(ord(char) < 32 for char in documentation_url))
-        except ValueError:
-            safe_url = False
+                        and not any(ord(char) < 32 for char in url))
+            except ValueError:
+                safe = False
+            return url if safe else ''
+
         return {'success': True, 'data': {
             'title': template.name,
             'content': template.documentation or template.full_description or template.description or '',
-            'documentation_url': documentation_url if safe_url else '',
+            'documentation_url': safe_external_url(template.documentation_url),
+            'tutorial_url': safe_external_url(template.tutorial_url),
+            # The service ledger may lag live Helm until its next sync; the
+            # Overview tab already shows when that ledger was last refreshed.
+            'deployed_chart_version': service.helm_chart_version or '',
+            'current_template_chart_version': template.helm_chart_version or '',
         }}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/logs",
@@ -5639,6 +5695,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('PaaS Operator not configured. Cannot safely delete service without cleaning up Kubernetes resources. Contact administrator.'),
             }
 
+        # RACE-09: take the row lock before any external helm side effect so a
+        # concurrent deploy cron cannot install while this delete uninstalls.
+        if not service._try_lock_lifecycle_rows():
+            return {'success': False, 'error': _(
+                'Another operation on this service is in progress. '
+                'Please retry shortly.')}
         try:
             service.write({'state': 'deleting'})
 
@@ -6026,6 +6088,9 @@ class PaasController(HiddenChainMixin, Controller):
                 # #1370：Reset 走 operator exec 改 app DB（Odoo／n8n）時的種類；前端用它
                 # 挑文案（不重啟、立刻生效、2FA 已關），不自建 slug 判準。
                 'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
+                # #1675：鏡射同一個 template 旗標，與自設憑證回應同名同值，不自建 slug 判準。
+                'credential_change_restart_scope': (
+                    service.template_id.credential_change_restart_scope or 'service'),
                 # #1542：一次性憑證視窗（buildOneTimeCredentials）挑 MCP 文案用——
                 # config_json 載體＝mcp-server 家族（後台只有密碼、沒有帳號）。直接鏡射
                 # 模板欄位，不自建 slug 判準；Reset 回應的 template 子物件同名同值。

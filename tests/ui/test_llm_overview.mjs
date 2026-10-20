@@ -4,7 +4,7 @@
 // 點背景／Esc／返回鍵／換頁先問一次；建立中不能關（關了就再也拿不到明文）；關閉時清掉明文、
 // 回呼不帶金鑰；卸載之後才回來的回應直接丟掉。
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import {
   loadPo, readPaas, stubImports, toDataUrl, translateFromGlobal, translator,
 } from "./lib/llm_test_support.mjs";
@@ -131,13 +131,23 @@ const modalSource = stubImports(await readPaas("components/llm/LlmKeyRevealModal
 const modalUrl = toDataUrl(modalSource);
 const { LlmKeyRevealModal, buildEnvVarsText, FREE_TRIAL_EXAMPLE_MODEL } = await import(modalUrl);
 
+const modelsSource = stubImports(await readPaas("pages/llm/tabs/LlmModelsTab.js"), {
+  "@odoo/owl": owlStub,
+  "@web/core/l10n/translation": translateFromGlobal,
+  "../../../services/llm_service": "const llmService = {};",
+  "../../../utils/clipboard": "const copyText = async () => true;",
+  "../../../utils/llm_format": `const { formatTaipeiTime } = await import("${formatUrl}");`,
+});
+const modelsUrl = toDataUrl(modelsSource);
 const overviewSource = stubImports(await readPaas("pages/llm/tabs/LlmOverviewTab.js"), {
   "@odoo/owl": owlStub,
   "@web/core/l10n/translation": translateFromGlobal,
+  "./LlmModelsTab": `const { representativeModels } = await import("${modelsUrl}");`,
   "../../../components/button/WoowButton": "const WoowButton = {};",
   "../../../components/card/WoowCard": "const WoowCard = {};",
   "../../../components/icon/WoowIcon": "const WoowIcon = {};",
   "../../../components/llm/LlmKeyRevealModal": "const LlmKeyRevealModal = {};",
+  "../../../components/llm/LlmTermsModal": "const LlmTermsModal = {};",
   "../../../services/llm_service":
     "const llmService = new Proxy({}, { get: (_, k) => globalThis.__llmFakeService[k] });",
   "../../../services/llm_errors": `const { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } = await import("${errorsUrl}");`,
@@ -190,6 +200,9 @@ async function mount(modal) {
 function unmount() {
   for (const fn of globalThis.__llmHooks.unmount) fn();
 }
+
+// 每個 fixture 都走與 OWL 相同的卸載生命週期；非同步 load 尚未回來時也會被 alive 擋下。
+afterEach(() => unmount());
 
 // ----------------------------------------------------------------------------- 總覽畫面
 
@@ -271,6 +284,7 @@ function makeTab(state, extra = {}) {
     usage: null,
     usageError: null,
     stateResults: [],
+    async fetchModels() { return { success: false }; },
     async fetchState() {
       calls.fetchState += 1;
       const next = fake.stateResults.shift();
@@ -293,7 +307,7 @@ function makeTab(state, extra = {}) {
       calls.fetchUsage += 1;
       return fake.usageResult;
     },
-    usageResult: { success: true, data: {} },
+    usageResult: { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } },
     activateResult: { success: true, data: { state: "provisioning" } },
     ...extra,
   };
@@ -308,7 +322,7 @@ function makeTab(state, extra = {}) {
 const ACTIVE = Object.freeze({
   account: {
     state: "active", balance_quota: 0, balance_points: 0, overdraft_points: 0, suspend_reason: null,
-    tos: { accepted_version: "draft-0", current_version: "draft-0", needs_reaccept: false },
+    tos: { accepted_version: "2026-10-draft-1", current_version: "2026-10-draft-1", needs_reaccept: false, blocking: false },
   },
   free_trial: { key_id: null, today_count: null, daily_limit: 200 },
   public_base_url: null,
@@ -316,11 +330,11 @@ const ACTIVE = Object.freeze({
 });
 
 test("開通：沒勾條款不送；勾了送 state 給的條款版本；llm_provisioning 也當成開通中", async () => {
-  const notActivated = { account: null, tos_current_version: "draft-0", free_trial: {} };
+  const notActivated = { account: null, tos_current_version: "2026-10-draft-1", tos_current_draft: true, free_trial: {} };
   const { tab, calls, fake } = makeTab(notActivated);
   assert.equal(tab.screen, "not_activated");
   assert.equal(tab.tosIsDraft, true);
-  assert.equal(tab.pricingFallbackText, "價格暫時無法顯示；「模型與價格」頁面即將推出。");
+  assert.equal(tab.pricingFallbackText, "價格暫時無法顯示，開通後可在「模型與價格」查看。");
   await tab.activate();
   assert.deepEqual(calls.activate, []);
   tab.onTosChange({ target: { checked: true } });
@@ -330,15 +344,71 @@ test("開通：沒勾條款不送；勾了送 state 給的條款版本；llm_pro
     await tab.activate();
     assert.deepEqual(timers.map((t) => t.ms), [overview.PROVISION_POLL_FAST_MS]);
   });
-  assert.deepEqual(calls.activate, ["draft-0"]);
+  assert.deepEqual(calls.activate, ["2026-10-draft-1"]);
   assert.equal(tab.state.actionError, null);
   assert.equal(tab.screen, "provisioning");
   assert.match(tab.provisioningText, /通常 1 分鐘內完成/);
   assert.equal(tab.provisioningProgressLabel, "正在建立 AI 模型帳戶");
 });
 
+test("條款（LLM-04）：沒有 published 的條款不能開通；送出的版本過期就取消勾選、重新讀狀態", async () => {
+  const none = { account: null, tos_current_version: null, tos_current_draft: false, free_trial: {} };
+  const { tab, calls, fake } = makeTab(none);
+  assert.equal(tab.tosUnavailable, true);
+  assert.equal(tab.tosUnavailableText, "《AI 模型服務條款》暫時無法顯示，請稍後再試");
+  tab.onTosChange({ target: { checked: true } });
+  assert.equal(tab.canActivate, false);
+  await tab.activate();
+  assert.deepEqual(calls.activate, []);
+
+  fake.overview = { ...none, tos_current_version: "2026-10-draft-1" };
+  assert.equal(tab.tosUnavailable, false);
+  assert.equal(tab.tosIsDraft, false);
+  for (const code of ["llm_tos_required", "llm_tos_outdated"]) {
+    tab.onTosChange({ target: { checked: true } });
+    fake.activateResult = { success: false, code, current_version: "2026-10-draft-2" };
+    const before = calls.fetchState;
+    await tab.activate();
+    assert.equal(tab.state.tosAccepted, false, code);
+    assert.equal(calls.fetchState, before + 1, code);
+  }
+  assert.equal(tab.state.actionError, "條款已更新，請重新同意");
+});
+
+test("條款對話框：連結開 read、橫幅開 accept；關閉時焦點還給觸發鈕；同意後重新讀狀態", async () => {
+  const notActivated = { account: null, tos_current_version: "2026-10-draft-1", free_trial: {} };
+  const { tab, calls } = makeTab(notActivated);
+  let focused = 0;
+  const link = { isConnected: true, focus: () => { focused += 1; } };
+  tab.openTerms("read", { currentTarget: link });
+  assert.equal(tab.state.showTerms, "read");
+  tab.openTerms("accept", { currentTarget: {} });
+  assert.equal(tab.state.showTerms, "read", "已經開著就不換");
+  tab.onTosChange({ target: { checked: true } });
+  tab.onTermsClosed({ accepted: false, version: "2026-10-draft-1" });
+  assert.equal(tab.state.showTerms, null);
+  assert.equal(focused, 1);
+  assert.equal(tab.state.tosAccepted, true, "讀到的就是畫面上的版本：勾選保留");
+  assert.equal(calls.fetchState, 0);
+
+  // 對話框讀到的比畫面上的新（頁面打開之後改版）：取消勾選、重新讀狀態。
+  tab.openTerms("read", { currentTarget: link });
+  tab.onTermsClosed({ accepted: false, version: "2026-10-draft-2" });
+  assert.equal(tab.state.tosAccepted, false);
+  assert.equal(calls.fetchState, 1);
+
+  // 橫幅的〔查看並同意〕：同意了 ⇒ 重新讀狀態、給讀屏播報。
+  const gone = { isConnected: false, focus: () => { throw new Error("不在畫面上的鈕不能 focus"); } };
+  tab.openTerms("accept", { currentTarget: gone });
+  assert.equal(tab.state.showTerms, "accept");
+  tab.onTermsClosed({ accepted: true, version: "2026-10-draft-2" });
+  assert.equal(tab.state.showTerms, null);
+  assert.equal(calls.fetchState, 2);
+  assert.equal(tab.state.announcement, "已同意新版《AI 模型服務條款》。");
+});
+
 test("開通失敗的訊息走碼表，不顯示後端文字", async () => {
-  const { tab, fake } = makeTab({ account: null, tos_current_version: "draft-0", free_trial: {} });
+  const { tab, fake } = makeTab({ account: null, tos_current_version: "2026-10-draft-1", free_trial: {} });
   tab.onTosChange({ target: { checked: true } });
   fake.activateResult = { success: false, code: "llm_unavailable" };
   await tab.activate();
@@ -428,6 +498,31 @@ test("最近 10 筆：背景分頁不刷；回前景只有滿 30 秒才補；登
   });
 });
 
+test("最近 10 筆：還沒有快取時每 3 秒快問、最多 5 次，之後回到 30 秒（SWR，LLM-02）", async () => {
+  const delay = overview.usageRefreshDelay;
+  const empty = { success: true, data: { items: [], data_as_of: null } };
+  assert.equal(delay(empty, 0), overview.USAGE_FIRST_FILL_MS);
+  assert.equal(delay(empty, overview.USAGE_FIRST_FILL_POLLS), overview.USAGE_REFRESH_MS);
+  assert.equal(delay({ success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } }, 0),
+    overview.USAGE_REFRESH_MS);
+  assert.equal(delay({ success: false, code: "llm_unavailable" }, 0), overview.USAGE_REFRESH_MS);
+  const { tab, fake } = makeTab(ACTIVE);
+  await withTimers(async (timers) => {
+    fake.usageResult = empty;
+    for (let i = 0; i < overview.USAGE_FIRST_FILL_POLLS + 3; i += 1) {
+      await tab.refreshUsage();
+    }
+    assert.deepEqual(timers.map((t) => t.ms), [
+      ...Array(overview.USAGE_FIRST_FILL_POLLS).fill(overview.USAGE_FIRST_FILL_MS),
+      ...Array(3).fill(overview.USAGE_REFRESH_MS),
+    ]);
+    assert.equal(tab.state.usageWaiting, false, "快問完了就不再顯示載入中");
+    fake.usageResult = { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } };
+    await tab.refreshUsage();
+    assert.equal(tab.usageFirstFillPolls, 0, "拿到資料就歸零");
+  });
+});
+
 test("已開通：額度用整數 quota 捨去、今日免費試用 X／200、沒有 Base URL 時顯示尚未提供", () => {
   const { tab, fake } = makeTab(ACTIVE);
   assert.equal(tab.screen, "active");
@@ -435,7 +530,9 @@ test("已開通：額度用整數 quota 捨去、今日免費試用 X／200、�
   assert.equal(tab.showZeroCreditBanner, true);
   assert.equal(tab.zeroCreditText, "AI 額度為 0。您可以先使用免費試用模型；從點數錢包轉入 AI 額度的功能即將推出。");
   assert.equal(tab.freeTrialUsageText, "—／200 次");
-  fake.usage = { today_count: 1, daily_limit: 200, items: [] };
+  fake.usage = { today_count: 99, daily_limit: 200, items: [] };
+  assert.equal(tab.freeTrialUsageText, "—／200 次", "recent log page count cannot override the meter");
+  fake.usage.free_trial = { today_count: 1, daily_limit: 200 };
   assert.equal(tab.freeTrialUsageText, "1／200 次");
   assert.equal(tab.baseUrl, null);
   assert.equal(tab.revealBaseUrl, undefined);
@@ -478,9 +575,17 @@ test("清單還沒回來時是載入中，不先閃「還沒有…」", () => {
   assert.equal(tab.usageLoading, true);
   assert.equal(tab.listLoadingText, "載入中…");
   fake.keysLoaded = true;
-  fake.usage = { today_count: 0, items: [] };
+  fake.usage = { today_count: 0, items: [], data_as_of: "2026-10-17T03:05:00+00:00" };
   assert.equal(tab.keysLoading, false);
   assert.equal(tab.usageLoading, false);
+  assert.equal(tab.emptyUsageText, "今天還沒有免費試用呼叫紀錄。");
+  // 後端還沒有今天的快取（SWR，LLM-02）：快問期間是載入中；快問完了還沒有就明說「還拿不到」。
+  fake.usage = { today_count: null, items: [], data_as_of: null };
+  tab.state.usageWaiting = true;
+  assert.equal(tab.usageLoading, true);
+  tab.state.usageWaiting = false;
+  assert.equal(tab.usageLoading, false);
+  assert.equal(tab.emptyUsageText, "用量資料暫時還拿不到，請稍後再看。");
   fake.usage = null;
   fake.usageError = "llm_unavailable";
   assert.equal(tab.usageLoading, false, "失敗時顯示錯誤，不是一直載入中");
@@ -492,10 +597,21 @@ test("橫幅：條款已更新、系統維護、已透支（§6.2）；維護中
   assert.equal(tab.guardTripped, false);
   assert.equal(tab.overdraftText, null);
 
-  fake.overview = { ...ACTIVE, account: { ...ACTIVE.account, tos: { ...ACTIVE.account.tos, needs_reaccept: true } } };
+  const updated = (tos) => ({ ...ACTIVE, account: { ...ACTIVE.account, tos: { ...ACTIVE.account.tos, ...tos } } });
+  fake.overview = updated({ current_version: "2026-11-1", needs_reaccept: true, blocking: true });
   assert.equal(tab.needsReaccept, true);
-  assert.equal(tab.needsReacceptText, "《AI 模型服務條款》已更新，請重新同意才能建立金鑰或轉換點數；既有金鑰不受影響。");
+  assert.equal(tab.tosBlocking, true);
+  assert.equal(tab.needsReacceptText, "《AI 模型服務條款》已更新，請重新同意才能建立金鑰、轉換點數或重新啟用金鑰；既有金鑰不受影響。");
   assert.equal(tab.canCreateFreeTrialKey, false);
+  // requires_reaccept=false 的改版：只有橫幅，不擋（畫面與 gate 一致，LLM-05 審查）。
+  fake.overview = updated({ current_version: "2026-11-1", needs_reaccept: true, blocking: false });
+  assert.equal(tab.needsReaccept, true);
+  assert.equal(tab.tosBlocking, false);
+  assert.equal(tab.needsReacceptText, "《AI 模型服務條款》已更新，請查看新版條款；目前的操作不受影響。");
+  assert.equal(tab.canCreateFreeTrialKey, true);
+  // 舊後端沒有 blocking：版本不同就當成會擋。
+  fake.overview = updated({ needs_reaccept: true, blocking: undefined });
+  assert.equal(tab.tosBlocking, true);
 
   fake.overview = { ...ACTIVE, guard: { tripped: true } };
   assert.equal(tab.guardTripped, true);
@@ -808,4 +924,69 @@ test("沒建成：顯示碼表句子、可直接關閉（created=false）；成�
   assert.match(odd.modal.state.errorMessage, /建立中斷.*重新建立/);
   assert.match(odd.modal.state.errorMessage, /啟用中.*請聯絡客服/);
   odd.modal.close();
+});
+
+
+test("LLM-10: capped and daily creation limit disable free trial with an explanation", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: { today_count: 200, daily_limit: 200, capped: true, keys_created_today: 1 } };
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.equal(tab.freeTrialCreateDisabledText, "今日免費試用已用完，台北時間 00:00 自動恢復。");
+  fake.usage = { free_trial: { today_count: 0, daily_limit: 200, capped: false, keys_created_today: 3 } };
+  assert.equal(tab.freeTrialUsageText, "0／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCreateDisabledText, /明天/);
+  fake.usage.free_trial.keys_created_today = 0;
+  assert.equal(tab.canCreateFreeTrialKey, true, "next Taipei day refreshes the daily gate");
+});
+
+test("LLM-10: yesterday's usage cannot override a fresh Taipei-day state", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: {
+    day_tpe: "2026-10-19", today_count: 0, daily_limit: 200,
+    capped: false, keys_created_today: 0,
+  } };
+  fake.usage = { free_trial: {
+    day_tpe: "2026-10-18", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 3,
+  } };
+  assert.equal(tab.freeTrialUsageText, "0／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, true);
+  assert.equal(tab.freeTrialCappedText, null);
+
+  fake.overview.free_trial = {
+    day_tpe: "2026-10-19", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  };
+  fake.usage.free_trial = {
+    day_tpe: "2026-10-18", today_count: 0, daily_limit: 200,
+    capped: false, keys_created_today: 0,
+  };
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCappedText, /已用完/);
+});
+
+test("LLM-10: failed usage refresh leaves the fresh state authoritative", () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  fake.overview = { ...ACTIVE, free_trial: {
+    day_tpe: "2026-10-19", today_count: 200, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  } };
+  fake.usage = { free_trial: {
+    day_tpe: "2026-10-19", today_count: 199, daily_limit: 200,
+    capped: false, keys_created_today: 1,
+  } };
+  fake.usageError = "llm_network_error";
+  assert.equal(tab.freeTrialUsageText, "200／200 次");
+  assert.equal(tab.canCreateFreeTrialKey, false);
+  assert.match(tab.freeTrialCappedText, /已用完/);
+
+  fake.usageError = null;
+  fake.usage.free_trial = {
+    day_tpe: "2026-10-19", today_count: 201, daily_limit: 200,
+    capped: true, keys_created_today: 1,
+  };
+  assert.equal(tab.freeTrialUsageText, "201／200 次");
 });

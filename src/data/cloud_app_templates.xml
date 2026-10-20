@@ -77,6 +77,7 @@
             <field name="tags">["n8n", "automation", "workflow", "integration", "no-code"]</field>
 
             <field name="documentation_url">https://docs.n8n.io/</field>
+            <field name="tutorial_url">https://n8n-guide.woowtech.io/ch3_workspace_tour.html</field>
 
             <!-- Helm Configuration (OCI registry format) -->
             <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
@@ -488,7 +489,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "8c942d648276974aa4d5def5bbb7cea6dcf4ea51@sha256:ffd39d8bf9aabf00cc1681613f1e88c36f4c374692442a2a242f919189bd322a"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:6cafc0edf5a676729bdf8ad2f8ed3662d18d8cb5545b9d79f4c2085e5108e92c"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -599,7 +600,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "e178c4cef76a43b20abfd6ea0282060d94abf115@sha256:45b88bf4920486bd3df44e224c20d479486e63ea8003d8ecc765c3d72537e5c8"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:39402798b9dfc6565f9cc7f395fb2a7fb0696d1be8cf01f2a45b1a94e5766fe5"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "woow-odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -756,7 +757,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:3179462fb6b47f535985f9d3e8debc03716e1b0033589499e77965c3e7fa6e4e"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:0800f5693bde0e974901515b269bed00135a38f42c065fd03242446727e1fef4"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -1098,6 +1099,7 @@
             <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode", "mcp"]</field>
 
             <field name="documentation_url">https://github.com/nexu-io/open-design</field>
+            <field name="tutorial_url">https://opendesign-guide.woowtech.io/tutorial.html</field>
 
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈，支線 A PR #41）。
                  helm_default_values 鍵名對齊 charts/open-design/values.yaml；只放平台 pin/覆寫
@@ -1176,7 +1178,8 @@
                  新鍵都有 chart 預設，helm_default_values 不需改。升版時 daemon 與 console 各重啟一次（PVC 保留）。
                  回滾值：0.5.0。 -->
             <field name="helm_chart_version">0.5.6</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261015.0617@sha256:c683db73f8a64c7044ff5ffb39a5f216b75fb761b952a01ef4a352402238351d"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <!-- 2026-10-18 CI run22994 候選完成、#372 人工核可、run23032 正式發布；digest 與候選相同。 -->
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261018.1219@sha256:52423ef65af59d685f8cd3a559689b9dd34674e14d2452ae8578c9b88d4d4314"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
@@ -1223,18 +1226,18 @@
                  config.sensitive.admin_password，由平台 has_admin_gui 供給鏈注入（建立服務時
                  生成、存入 cloud_service_secret、經 Helm sensitive values 注入、一次性顯示＋reset）。 -->
             <field name="has_admin_gui" eval="True"/>
-            <!-- #449 密碼載體＝helm_secret：本 chart 沒有 /data/config.json（PVC 掛
-                 /app/.od 與 /home/opendesign），密碼由 chart Secret 承載、nginx
-                 auth-proxy 的 htpasswd 在 pod 啟動時從 Secret 算出。reset 因此走
-                 helm upgrade ＋ rollout restart（daemon 與 console 兩顆 Deployment
-                 共用同一個 instance label，operator 端用複數版探索一次滾完）；沿用
-                 預設 config_json 會對不存在的檔做 exec patch → 必 500。 -->
+            <!-- #449／#1675 密碼載體＝helm_secret：本 chart 沒有 /data/config.json（PVC 掛
+                 /app/.od 與 /home/opendesign），密碼由 chart Secret 承載。daemon 的 nginx
+                 auth-proxy 經 Secret volume 原地讀取 htpasswd，密碼約一分鐘內生效，daemon
+                 StatefulSet 刻意不重啟；reset 的 helm upgrade ＋ rollout restart 只重啟
+                 console Deployment。沿用預設 config_json 會對不存在的檔做 exec patch → 必 500。 -->
             <field name="admin_password_carrier">helm_secret</field>
+            <field name="credential_change_restart_scope">console_only</field>
             <!-- 租戶可自設帳號密碼：帳號在 chart 的 authProxy.basicAuth.username（0.2.0 起
                  chart 端 open-design.basicAuthUsername 會驗證格式）。nginx auth-proxy 的
                  htpasswd 與 console（ttyd／dashboard）都從這個值與 admin_password 取帳密，
-                 所以 OpenDesign 與 ttyd 永遠同一組。修改走 reset 同一條 helm upgrade ＋
-                 rollout restart（daemon 與 console 都重啟）。 -->
+                 所以 OpenDesign 與 ttyd 永遠同一組。修改走 reset 同一條 helm upgrade，daemon
+                 不重啟、密碼經 Secret volume 原地生效，只有 console Deployment 重啟。 -->
             <field name="admin_username_helm_path">authProxy.basicAuth.username</field>
             <field name="post_deploy_init_type">none</field>
 
@@ -1434,7 +1437,7 @@
                  開 TENANT_BASELINE_EGRESS_WEB_PROFILE 才生效）。image 不變（console app 在 chart 的 ConfigMap），
                  helm_default_values 不需改；升版時 agent 與 console 各重啟一次。回滾值：0.3.6。 -->
             <field name="helm_chart_version">0.3.12</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261014.0625@sha256:5a7ae1d3ebea8430ca1f82305c5fc26c92736b4b6966ed5c9add81c2d5b4d7aa"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261018.0829@sha256:68e4efca6a7e4a347be3520706545a1b548c3bdb21972fd801481c82aba06932"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API 金鑰", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
@@ -1590,6 +1593,7 @@
             <field name="tags">["home-assistant", "haos", "smart-home", "vm", "kubevirt"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+            <field name="tutorial_url">https://woowtech.github.io/Woow_ha_tutorial_site/tutorial.html</field>
 
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
@@ -1678,7 +1682,7 @@
                    故 `_inject_apiserver_cidrs` 的 path_map 也刻意不收 'haos'。
                  - ingress.*：本 chart **沒有** ingress 區塊（對外走平台 subdomain +
                    Cloudflare tunnel）。寫了是死鍵，會讓後人以為 chart 支援 Ingress。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20260730.0912@sha256:6123d82a9efd6a79bd3e31709627837205b2947f4b23caa1686e54770c4787ea"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/haos", "tag": "18.1-20261018.0850@sha256:5e40d52660b8a618412d59223005d44fcd4d152fb5d2bf4ed8f309385741ff04"}, "dataVolume": {"source": "registry", "registry": {"pullMethod": "node"}}, "persistence": {"size": "30Gi", "volumeMode": "Filesystem"}, "vm": {"cores": 2, "memory": "4Gi"}, "service": {"port": 8123, "targetPort": 80}, "networkPolicy": {"enabled": true}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HAOS 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1894,6 +1898,7 @@
             <field name="tags">["home-assistant", "smart-home", "container", "ha-full"]</field>
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+            <field name="tutorial_url">https://woowtech.github.io/Woow_ha_tutorial_site/ch8_first_automation.html</field>
 
             <!-- 2026-10-03 換 chart 0.1.5（woow-paas-charts #115＋#118）：0.1.4 新實例預設座標台北
                  （.storage/core.config，缺才寫，#1374）；0.1.5 平台注入的公開網址寫入
@@ -2225,7 +2230,8 @@
                 資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["omnigent", "coding-agent", "ai", "agent"]</field>
-            <field name="documentation_url">https://omnigent-guide.woowtech.io</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_omnigent_tutorial_site</field>
+            <field name="tutorial_url">https://omnigent-guide.woowtech.io/tutorial.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
             <!-- 0.1.12（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 runner Job 預設 nodeSelector paas.woowtech.io/tenant-schedulable=true
@@ -2343,6 +2349,7 @@
             <field name="category">ai_llm</field>
             <field name="tags">["code-server", "vscode", "ide", "pi-agent", "claude-code", "ai"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
+            <field name="tutorial_url">https://code-server-guide.woowtech.io/tutorial.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
             <!-- 0.1.9（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 startupProbe timeoutSeconds 5（#1637）；0.1.9 登入頁繁中、不再提示
@@ -2464,6 +2471,7 @@
             <field name="category">automation</field>
             <field name="tags">["emqx", "mqtt", "iot", "broker", "messaging"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
+            <field name="tutorial_url">https://emqx-guide.woowtech.io/ch5_first_connection.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
             <!-- 0.1.11（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 startupProbe timeoutSeconds 3（#1637）；0.1.9 /status/、/api/v5/status/
@@ -2550,6 +2558,7 @@
             <field name="category">web</field>
             <field name="tags">["nextcloud", "files", "storage", "collaboration", "calendar"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_nextcloud#readme</field>
+            <field name="tutorial_url">https://nextcloud-guide.woowtech.io/ch6_files_basics.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
             <field name="helm_chart_version">0.1.7</field>
@@ -2661,6 +2670,7 @@
             <field name="category">devops</field>
             <field name="tags">["headscale", "headplane", "vpn", "tailscale", "wireguard"]</field>
             <field name="documentation_url">https://headscale.net/stable/</field>
+            <field name="tutorial_url">https://headscale-guide.woowtech.io/ch4_user_preauth.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
             <!-- 0.1.8（2026-10-18，woow-paas-charts 整合包 #254）：0.1.5 GOMEMLIMIT＋方案資源改落在 headscale 容器（#1637）；0.1.6 入口安全標頭＋
@@ -2964,7 +2974,7 @@
                  image 不變（外掛檔在 chart 裡），helm_default_values 不需改；Redeploy 是 Recreate，約中斷 60–70 秒。
                  回滾值：0.3.5。 -->
             <field name="helm_chart_version">0.3.10</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261015.0956@sha256:35a2eca3fbc0edcd4da8de2bcf3d05248198b790da6d7dca9e1b3584185f38b0"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261018.0834@sha256:ad43b95960642ec76cb60c97167f1d21a19dfa6660c06f484f8007d674f5da10"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
@@ -3059,7 +3069,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:1cdd351ddc781170e48e4f9b37e6d60585b81623335b051a62a043512f1a101b"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:4c3713b51e558b56efafe20ee8be30e618eea231d2debebb983ad7b137b0c98c"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -3148,7 +3158,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:427a0b994f278ff48457ff3e1fa02a9028674889e21f5cdb2dc7266b1daabb89"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:f2d39c5c7bbdb597ffb6f9e2c3da7064bd500cb5c8ef67a201c1b57236a7c467"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>

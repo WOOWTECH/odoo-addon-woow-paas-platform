@@ -105,7 +105,15 @@ class FakeNewApi:
         self.pats = {}
         self.tokens = {}
         self.logs = []
-        self._next = {'user': 100, 'pat': 500, 'token': 900}
+        self.quota_additions = []
+        # The configured verifier trust anchor. Tests may deliberately change
+        # it to exercise a mismatched operation log.
+        self.service_admin_id = 7
+        # Optional barriers for committed worker tests. A hook may block or
+        # raise SimulatedCrash before/after the irreversible in-memory write.
+        self.before_quota_add = None
+        self.after_quota_add = None
+        self._next = {'user': 100, 'pat': 500, 'token': 900, 'log': 2000}
         #: 測試可以改：新使用者的初始額度（P9 斷言 0）。
         self.quota_for_new_user = 0
 
@@ -180,12 +188,92 @@ class FakeNewApi:
         items = [dict(u, password=None) for u in self.users.values() if username in u['username']]
         return self._leave('ap_search_user', self._ok({'items': items, 'total': len(items)}))
 
+    def ap_health(self, prefix, **kw):
+        """circuit 的健康檢查（LLM-02）：搜尋永遠不存在的 ``<prefix>0000000000``。"""
+        self._enter('ap_health')
+        return self._leave('ap_health', self._ok({'items': [], 'total': 0}))
+
+    def ap_pricing(self, **kw):
+        """``GET /api/pricing``: preserve public envelope metadata (LLM-06)."""
+        self._enter('ap_pricing')
+        return self._leave('ap_pricing', self._ok({
+            'data': [{'model_name': 'qwen3-4b-cluster1', 'enable_groups': ['free'], 'model_ratio': 0}],
+            'group_ratio': {'default': 1.3, 'free': 0}, 'vendors': [],
+        }))
+
     def ap_get_user(self, user_id, **kw):
         self._enter('ap_get_user')
         user = self.users.get(user_id)
         if not user:
             return self._leave('ap_get_user', nac.Definite(reason='no_message_key', status=200))
         return self._leave('ap_get_user', self._ok(dict(user, password=None)))
+
+    def ap_add_quota(self, user_id, value, **kw):
+        self._enter('ap_add_quota')
+        if self.before_quota_add:
+            self.before_quota_add(user_id, value)
+        user = self.users.get(user_id)
+        if not user:
+            return self._leave('ap_add_quota', nac.Definite(
+                message_key='User does not exist', status=200))
+        if type(value) is not int or value <= 0:
+            return self._leave('ap_add_quota', nac.Definite(
+                message_key='Invalid parameters', status=200))
+        before = user['quota']
+        user['quota'] += value
+        result = self._ok({'quota': user['quota']})
+        self.quota_additions.append((user_id, value, result.request_id))
+        # Mirror controller/user_quota.go::manageUserQuota and
+        # model/log.go::RecordLogWithAdminInfo. In particular, Log.quota is a
+        # display/usage field and the authoritative operation amount is
+        # other.op.params.requested_quota.
+        self.logs.append({
+            'id': self._id('log'), 'type': 1, 'user_id': user_id,
+            'username': user['username'], 'created_at': int(self.clock()),
+            'request_id': result.request_id, 'quota': 0,
+            'other': {
+                'admin_info': {'admin_id': self.service_admin_id},
+                'op': {'action': 'user.quota_add', 'params': {
+                    'target_user_id': user_id, 'target_username': user['username'],
+                    'mode': 'add', 'requested_quota': value,
+                    'from': before, 'to': user['quota'],
+                }},
+            },
+        })
+        if self.after_quota_add:
+            self.after_quota_add(user_id, value)
+        return self._leave('ap_add_quota', result)
+
+    def ap_log(self, query, **kw):
+        """``GET /api/log/`` admin page, including deterministic id tie-breaks."""
+        self._enter('ap_log')
+        page = query.get('p')
+        page_size = query.get('page_size')
+        if type(page) is not int or type(page_size) is not int or not (1 <= page and 1 <= page_size <= 100):
+            return self._leave('ap_log', nac.Definite(reason='no_message_key', status=200))
+        rows = list(self.logs)
+        log_type = query.get('type')
+        if type(log_type) is int and log_type:
+            rows = [row for row in rows if row.get('type') == log_type]
+        username = query.get('username')
+        if username:
+            rows = [row for row in rows if row.get('username') == username]
+        start = query.get('start_timestamp', 0)
+        end = query.get('end_timestamp', 0)
+        if type(start) is not int or type(end) is not int or start < 0 or end < start:
+            return self._leave('ap_log', nac.Definite(reason='no_message_key', status=200))
+        rows = [row for row in rows if row.get('created_at', 0) >= start and
+                (not end or row.get('created_at', 0) <= end)]
+        request_id = query.get('request_id')
+        if request_id:
+            rows = [row for row in rows if row.get('request_id') == request_id]
+        rows.sort(key=lambda row: (row.get('created_at', 0), row.get('id', 0)), reverse=True)
+        total = len(rows)
+        start_idx = (page - 1) * page_size
+        items = [dict(row) for row in rows[start_idx:start_idx + page_size]]
+        return self._leave('ap_log', self._ok({
+            'page': page, 'page_size': page_size, 'total': total, 'items': items,
+        }))
 
     def ap_list_users(self, page, page_size=100, **kw):
         """``GET /api/user/?sort_by=id&sort_order=asc``：全部使用者（含別的環境與軟刪除的）。"""
@@ -346,7 +434,7 @@ class FakeNewApi:
     def add_log(self, user_id, token_name, model='qwen3-4b-cluster1', group='free'):
         """模擬一次 relay 呼叫留下的 type=2 log（含要被 DTO 剝掉的 channel）。"""
         self.logs.append({
-            'user_id': user_id, 'token_name': token_name, 'model_name': model, 'group': group,
+            'id': self._id('log'), 'user_id': user_id, 'token_name': token_name, 'model_name': model, 'group': group,
             'created_at': int(self.clock()), 'prompt_tokens': 12, 'completion_tokens': 34,
             'use_time': 2, 'request_id': _rand(20), 'channel': 7, 'quota': 0, 'type': 2,
         })

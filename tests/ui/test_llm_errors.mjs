@@ -52,6 +52,8 @@ test("DESIGN §3.4 的繁中句子（與後端 fallback 同一條譯文）", () 
   assert.equal(m("llm_unavailable"), "AI 模型服務暫時無法連線，請稍後再試");
   assert.equal(m("llm_free_key_exists"), "每個帳號只能有一把免費試用金鑰");
   assert.equal(m("llm_key_limit"), "每個帳號最多 20 把金鑰，請先刪除不用的金鑰");
+  assert.equal(m("llm_invalid_request"), "找不到此筆點數轉換申請，或申請資料無效。");
+  assert.equal(m("llm_order_not_found"), "找不到此筆點數轉換申請，或申請資料無效。");
   assert.equal(m("llm_account_error"), "AI 模型帳戶建立失敗，請聯絡客服");
   assert.equal(m("llm_internal_error"), "系統發生錯誤，請稍後再試");
   assert.equal(m("llm_auth_required"), "需要登入");
@@ -137,6 +139,24 @@ test("傳輸錯誤（逾時、網路、JSON-RPC 例外）→ llm_network_error�
   // 沒有 code 的失敗也不轉述文字。
   globalThis.__llmRpc = async () => ({ success: false, error: "raw" });
   assert.deepEqual(await llmService.fetchUsageRecent(), { success: false, code: "llm_internal_error" });
+});
+
+test("usage API 失敗時保留舊快取並標錯，成功重取後清除錯誤", async () => {
+  const previous = { free_trial: { day_tpe: "2026-10-18", today_count: 200, capped: true } };
+  globalThis.__llmRpc = async () => ({ success: true, data: previous });
+  await llmService.fetchUsageRecent();
+  assert.equal(llmService.usage, previous);
+
+  globalThis.__llmRpc = async () => { throw new Error("request failed"); };
+  assert.deepEqual(await llmService.fetchUsageRecent(), { success: false, code: "llm_network_error" });
+  assert.equal(llmService.usage, previous);
+  assert.equal(llmService.usageError, "llm_network_error");
+
+  const fresh = { free_trial: { day_tpe: "2026-10-19", today_count: 0, capped: false } };
+  globalThis.__llmRpc = async () => ({ success: true, data: fresh });
+  await llmService.fetchUsageRecent();
+  assert.equal(llmService.usage, fresh);
+  assert.equal(llmService.usageError, null);
 });
 
 test("登入逾時（JSON-RPC code 100／SessionExpiredException／HTTP 401）→ llm_session_expired，不是「暫時無法連線」", async () => {

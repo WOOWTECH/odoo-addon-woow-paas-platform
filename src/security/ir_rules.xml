@@ -14,6 +14,21 @@
          (project_rule_workspace_member, cloud_service_rule_workspace_member,
          project_task_rule_workspace_member). -->
     <data noupdate="0">
+        <!-- D19: global AND restriction, so another portal group rule cannot
+             OR conversion vouchers back into visibility. Internal ERP users
+             retain their existing rules. Token-based portal sudo access is
+             separately gated by PaasAccountCustomerPortal. -->
+        <record id="account_move_llm_credit_tenant_private" model="ir.rule">
+            <field name="name">LLM conversion vouchers: internal readers only</field>
+            <field name="model_id" ref="account.model_account_move"/>
+            <field name="groups" eval="[(5, 0, 0)]"/>
+            <field name="domain_force">[] if not user.share else [('woow_llm_credit_order_id', '=', False)]</field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
         <!-- Project visibility (decoupled CloudService ↔ Project):
              - bound project → visible to workspace members (via cloud_service.workspace)
              - unbound project → visible to project members (user_ids / follower partner / creator)

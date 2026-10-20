@@ -27,16 +27,23 @@ DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 # （#336 F1：device 同意頁原本直印 raw scope 字串、不讀此 dict，故 App 走 device
 # flow 只看到 'ha:provision' 這種機器字串。抽出後兩頁一致顯示人話描述）。
 SCOPE_DESCRIPTIONS = {
-    'smarthome:read': 'Read your Smart Home and Workspace data',
-    'smarthome:tunnel': 'Access tunnel connections to your devices',
-    'workspace:read': 'Read your Workspace information',
+    'smarthome:read': '讀取你的智慧家庭服務與連線狀態',
+    'smarthome:tunnel': '建立這台 Home Assistant 的安全連線',
+    'workspace:read': '讀取你可以使用的工作區',
+    'smarthome:provision': '建立缺少的工作區與七天試用服務（到期不會自動收費）',
     'security-access:read':
-        'Read your Security Access services and subscription',
+        '讀取你的安全存取服務與訂閱',
     'security-access:tunnel':
-        'Access the Cloudflare Tunnel token for your Security '
-        'Access connector',
-    'ha:provision': 'Create and manage your cloud Home Assistant instance',
+        '為安全存取連接器取得安全通道授權',
+    'ha:provision': '建立與管理你的雲端 Home Assistant',
 }
+
+
+def _client_display_name(client):
+    return {
+        'woow-ha-smart-home': 'woowtech 智慧家庭連結',
+        'woow-ha-app': 'woowtech Home Assistant 應用程式',
+    }.get(client.client_id, client.name)
 
 
 def _json_error(error: str, description: str, status: int = 400) -> http.Response:
@@ -173,8 +180,8 @@ class OAuth2Controller(Controller):
         # Validate response_type
         if response_type != 'code':
             return request.render('woow_paas_platform.oauth2_error', {
-                'error_title': 'Invalid Request',
-                'error_message': _('Only response_type=code is supported.'),
+                'error_title': '無法完成授權',
+                'error_message': _('授權請求的格式不正確，請從 Home Assistant 重新開始連結。'),
             })
 
         # Validate client_id
@@ -185,15 +192,15 @@ class OAuth2Controller(Controller):
 
         if not client:
             return request.render('woow_paas_platform.oauth2_error', {
-                'error_title': 'Invalid Client',
-                'error_message': _('The client_id is invalid or the application is inactive.'),
+                'error_title': '應用程式無法使用',
+                'error_message': _('此應用程式不存在或已停用，請聯絡支援。'),
             })
 
         # Validate redirect_uri
         if not redirect_uri or not client.check_redirect_uri(redirect_uri):
             return request.render('woow_paas_platform.oauth2_error', {
-                'error_title': 'Invalid Redirect URI',
-                'error_message': _('The redirect_uri is not registered for this application.'),
+                'error_title': '回傳網址無效',
+                'error_message': _('此 Home Assistant 的回傳網址尚未獲准，請確認網址設定。'),
             })
 
         # Enforce PKCE for public / require_pkce clients
@@ -205,10 +212,8 @@ class OAuth2Controller(Controller):
                     client.name,
                 )
                 return request.render('woow_paas_platform.oauth2_error', {
-                    'error_title': 'PKCE Required',
-                    'error_message': _('This client requires PKCE. '
-                                       'Include code_challenge and '
-                                       'code_challenge_method=S256.'),
+                    'error_title': '授權資料不完整',
+                    'error_message': _('授權請求缺少必要的安全驗證資料，請更新整合後重新連結。'),
                 })
             if code_challenge_method != 'S256':
                 _logger.warning(
@@ -216,9 +221,8 @@ class OAuth2Controller(Controller):
                     client.name, code_challenge_method,
                 )
                 return request.render('woow_paas_platform.oauth2_error', {
-                    'error_title': 'Invalid PKCE Method',
-                    'error_message': _('Only code_challenge_method=S256 is '
-                                       'accepted for this client.'),
+                    'error_title': '授權驗證方式不符',
+                    'error_message': _('此整合使用的授權驗證方式不受支援，請更新整合後重新連結。'),
                 })
 
         # Validate scopes
@@ -227,8 +231,8 @@ class OAuth2Controller(Controller):
         invalid_scopes = [s for s in requested_scopes if s not in allowed_scopes]
         if invalid_scopes:
             return request.render('woow_paas_platform.oauth2_error', {
-                'error_title': 'Invalid Scope',
-                'error_message': _('Invalid scope(s): %(scopes)s', scopes=', '.join(invalid_scopes)),
+                'error_title': '要求的權限無法使用',
+                'error_message': _('無法授予以下權限：%(scopes)s。請確認平台與整合版本。', scopes=', '.join(invalid_scopes)),
             })
 
         # Use all allowed scopes if none specified
@@ -245,7 +249,7 @@ class OAuth2Controller(Controller):
         ]
 
         return request.render('woow_paas_platform.oauth2_authorize', {
-            'client_name': client.name,
+            'client_name': _client_display_name(client),
             'scopes': scopes_display,
             'client_id': client_id_param,
             'redirect_uri': redirect_uri,
@@ -281,8 +285,8 @@ class OAuth2Controller(Controller):
 
         if not client or not client.check_redirect_uri(redirect_uri):
             return request.render('woow_paas_platform.oauth2_error', {
-                'error_title': 'Invalid Request',
-                'error_message': _('Invalid client or redirect URI.'),
+                'error_title': '無法完成授權',
+                'error_message': _('應用程式或回傳網址無效，請重新開始連結。'),
             })
 
         # Re-enforce PKCE on POST (defense against bypassing the GET step).
@@ -434,7 +438,7 @@ class OAuth2Controller(Controller):
         fails = request.session.get('device_verify_fails', 0)
         if fails >= MAX_VERIFICATION_ATTEMPTS:
             return request.render('woow_paas_platform.device_verify', {
-                'user_code': '', 'error': _('Too many attempts. Please wait and try again.'),
+                'user_code': '', 'error': _('嘗試次數過多，請稍候再試。'),
             })
 
         DeviceCode = request.env['woow_paas_platform.oauth_device_code'].sudo()
@@ -447,7 +451,7 @@ class OAuth2Controller(Controller):
         if not device or device.is_expired():
             request.session['device_verify_fails'] = fails + 1
             return request.render('woow_paas_platform.device_verify', {
-                'user_code': '', 'error': _('Invalid or expired code. Please try again.'),
+                'user_code': '', 'error': _('代碼不正確或已過期，請回到 Home Assistant 取得新代碼。'),
             })
 
         # Valid code entered — reset the session failure counter.
@@ -473,7 +477,7 @@ class OAuth2Controller(Controller):
             for s in scope_names
         ]
         return request.render('woow_paas_platform.device_consent', {
-            'client_name': device.client_id.name,
+            'client_name': _client_display_name(device.client_id),
             'user_code': device.user_code,
             'scopes': scopes_display,
         })
