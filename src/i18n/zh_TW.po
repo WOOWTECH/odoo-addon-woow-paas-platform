@@ -24823,9 +24823,10 @@ msgstr "待重新核對整個工作區"
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_reconcile_pending
 msgid ""
-"A service event synced only its own namespace; the next background run re-"
-"checks every namespace of this Workspace."
-msgstr "服務事件只同步了自己的 namespace；下一輪背景同步會重新核對這個工作區的所有 namespace。"
+"The next background run re-checks every namespace of this Workspace: a "
+"service event synced only its own namespace, or a decrease is waiting to be "
+"reclaimed."
+msgstr "下一輪背景同步會重新核對這個工作區的所有 namespace：服務事件只同步了自己的 namespace，或有待收回的降額。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_next_retry_at

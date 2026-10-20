@@ -85,6 +85,11 @@ VERIFY_INTERVAL = timedelta(hours=6)
 #: 這些觸發來源代表人的明確動作：重置重試額度。
 _RESETTING_TRIGGERS = ('admin', 'manual')
 _RECONCILE_CRON = 'woow_paas_platform.ir_cron_reconcile_workspace_quota'
+#: #1682：這些觸發來源的同步不會自動降額（管理員只能降已確認的目標、開通一律不降）。它們留下
+#: 下列資源的待處理降額時，交給背景（生命週期免確認的安全降額）儘快收回，不必等 6 小時讀回。
+_NON_RECLAIMING_TRIGGERS = ('admin', 'provision')
+_RECLAIMABLE_KEYS = ('requests.cpu', 'limits.cpu', 'requests.memory', 'limits.memory',
+                     'requests.storage')
 #: blocked 之中屬於暫時性、值得自動重試的原因（其餘 blocked 是永久阻擋，等人處理）。
 _TRANSIENT_BLOCKED = ('quota_unreadable', 'managed_quota_status_pending')
 #: 確定沒寫入、但值得自動重試的 4xx（其餘 4xx 是請求本身有問題，記為 blocked 等人處理）。
@@ -233,14 +238,15 @@ class WorkspaceQuotaPolicy(models.Model):
     quota_verified_at = fields.Datetime(
         string='Last Verified Against Cluster', groups='base.group_system', copy=False,
         readonly=True)
-    # #1682：子集同步（生命週期／開通只同步自己的 namespace）之後，整個工作區要重新評估一次。
-    # 與目標指紋分開：指紋只負責「目標有沒有變」（決定重試額度要不要重置），這個旗標只負責
-    # 「要不要排一次全集對帳」——兩件事共用空指紋會讓同目標事件重置額度（#1682 留言 22779）。
+    # #1682：背景要儘快以全集重新評估一次——子集同步（生命週期／開通只同步自己的 namespace）
+    # 之後，或管理員／開通的同步留下可自動收回的降額時。與目標指紋分開：指紋只負責「目標有沒有
+    # 變」（決定重試額度要不要重置），這個旗標只負責「要不要排一次對帳」——兩件事共用空指紋會讓
+    # 同目標事件重置額度（#1682 留言 22779）。
     quota_reconcile_pending = fields.Boolean(
         string='Full Quota Re-check Pending', groups='base.group_system', copy=False,
         readonly=True,
-        help='A service event synced only its own namespace; the next background run '
-             're-checks every namespace of this Workspace.')
+        help='The next background run re-checks every namespace of this Workspace: a service '
+             'event synced only its own namespace, or a decrease is waiting to be reclaimed.')
     quota_sync_status = fields.Selection(
         SYNC_STATES, string='Current Sync Status', compute='_compute_quota_policy_view',
         groups='base.group_system',
@@ -636,12 +642,20 @@ class WorkspaceQuotaPolicy(models.Model):
                 vals['quota_sync_state'] = 'exhausted'
             else:
                 next_at = now + timedelta(minutes=RETRY_BACKOFF_MINUTES[count])
+        # 不會自動降額的同步（管理員只提高、開通）留下 CPU／memory／storage 的待處理降額：
+        # 交給背景以生命週期的安全降額收回（每次仍重讀用量檢查）。
+        reclaim = trigger in _NON_RECLAIMING_TRIGGERS and any(
+            item[0] in _RECLAIMABLE_KEYS
+            for r in (results or {}).values() for item in r.get('pending_decrease', ()))
         vals.update({'quota_attempt_fingerprint': fingerprint or False,
                      'quota_last_attempt_at': now, 'quota_retry_count': count,
-                     'quota_next_retry_at': next_at, 'quota_reconcile_pending': subset})
+                     'quota_next_retry_at': next_at,
+                     'quota_reconcile_pending': subset or reclaim})
         _internal_quota_policy_write(self).write(vals)
         if next_at:
             self._schedule_quota_reconcile(next_at)
+        if reclaim:
+            self._schedule_quota_reconcile()
         # 只在這一次用掉最後一格時通知；同目標的子集事件或對帳讓狀態回到 exhausted 不算新的耗盡。
         if (vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted'
                 and previous_count < MAX_AUTO_RETRIES):
