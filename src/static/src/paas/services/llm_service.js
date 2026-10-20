@@ -25,6 +25,7 @@ export const KEY_CREATE_TIMEOUT_MS = 40000;
 const SAFE_PARAMS = ["retry_after", "current_version", "max_keys", "field", "reason", "used",
   "needed_7d", "short_by"];
 const KEY_INVALID = "llm_key_invalid";
+const keyActionTails = new Map();
 const keyActionsInFlight = new Map();
 
 function validKeyId(keyId) {
@@ -84,18 +85,25 @@ async function call(url, params, { timeoutMs = null, transportCode = LLM_NETWORK
 }
 
 async function runKeyAction(service, action, keyId, url, params) {
-  const dedupeKey = `${action}:${keyId}`;
+  const signature = JSON.stringify([action, url, params]);
+  const dedupeKey = `${keyId}:${signature}`;
   if (keyActionsInFlight.has(dedupeKey)) return keyActionsInFlight.get(dedupeKey);
-  const pending = (async () => {
-    try {
-      const result = await call(url, params);
-      if (result.success) await Promise.allSettled([service.fetchKeys(), service.fetchState()]);
-      return result;
-    } finally {
-      keyActionsInFlight.delete(dedupeKey);
-    }
-  })();
+
+  const previous = keyActionTails.get(keyId) || Promise.resolve();
+  const pending = previous.catch(() => {}).then(async () => {
+    const result = await call(url, params);
+    if (result.success) await Promise.allSettled([service.fetchKeys(), service.fetchState()]);
+    return result;
+  });
+  const tail = pending.then(() => {}, () => {});
+  keyActionTails.set(keyId, tail);
   keyActionsInFlight.set(dedupeKey, pending);
+
+  const release = () => {
+    if (keyActionsInFlight.get(dedupeKey) === pending) keyActionsInFlight.delete(dedupeKey);
+    if (keyActionTails.get(keyId) === tail) keyActionTails.delete(keyId);
+  };
+  pending.then(release, release);
   return pending;
 }
 

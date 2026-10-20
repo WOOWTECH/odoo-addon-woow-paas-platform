@@ -257,6 +257,10 @@ test("paid key mutations preserve omitted/null fields, refresh both resources, a
   assert.equal(JSON.stringify(llmService).includes("sk-SyntheticSecret"), false);
 
   calls.length = 0;
+  assert.deepEqual(await llmService.updateKey(7, { expires: null, models: null }), { success: true, data: { key: "sk-SyntheticSecret" } });
+  assert.deepEqual(calls[0][1], { key_id: 7, expires: null, models: null });
+
+  calls.length = 0;
   assert.deepEqual(await llmService.updateKey(7, { expires: "90d" }), { success: true, data: { key: "sk-SyntheticSecret" } });
   assert.deepEqual(calls[0][1], { key_id: 7, expires: "90d" });
   calls.length = 0;
@@ -315,7 +319,7 @@ test("action failures do not refresh and session expiry stays classified", async
   assert.equal(JSON.stringify(llmService).includes("synthetic"), false);
 });
 
-test("mutation dedupe is per action and key, releases after completion, and stale failures cannot overwrite fresh state", async () => {
+test("mutation intents serialize per key, dedupe identical requests, and release after completion", async () => {
   const calls = [];
   let releaseAction;
   globalThis.__llmRpc = (...args) => {
@@ -327,7 +331,9 @@ test("mutation dedupe is per action and key, releases after completion, and stal
   const first = llmService.extendKey(90);
   const second = llmService.extendKey(90);
   const independent = llmService.extendKey(91);
-  await Promise.resolve();
+  while (calls.filter(([url]) => url === "/api/llm/keys/extend").length < 2) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   assert.equal(calls.filter(([url]) => url === "/api/llm/keys/extend").length, 2);
   await independent;
   releaseAction();
@@ -342,18 +348,55 @@ test("mutation dedupe is per action and key, releases after completion, and stal
   assert.equal(calls.filter(([url, params]) => url === "/api/llm/keys/extend" && params.key_id === 90).length, 2);
 
   const statusStart = calls.length;
-  let releaseStatus;
+  const statusPhases = [];
+  let releaseFirstStatus;
+  let releaseFirstKeys;
+  let releaseFirstState;
+  let releaseSecondStatus;
   globalThis.__llmRpc = (...args) => {
     calls.push(args);
-    if (args[0] === "/api/llm/keys/set_status") return new Promise((resolve) => { releaseStatus = () => resolve({ success: true, data: {} }); });
+    if (args[0] === "/api/llm/keys/set_status" && args[1].key_id === 92) {
+      statusPhases.push(args[1].enabled);
+      if (statusPhases.length === 1) return new Promise((resolve) => { releaseFirstStatus = () => resolve({ success: true, data: {} }); });
+      return new Promise((resolve) => { releaseSecondStatus = () => resolve({ success: true, data: {} }); });
+    }
+    if (args[0] === "/api/llm/keys/list" && statusPhases.length === 1) return new Promise((resolve) => { releaseFirstKeys = () => resolve({ success: true, data: { items: [] } }); });
+    if (args[0] === "/api/llm/state" && statusPhases.length === 1) return new Promise((resolve) => { releaseFirstState = () => resolve({ success: true, data: {} }); });
     return Promise.resolve({ success: true, data: {} });
   };
   const enabling = llmService.setKeyStatus(92, true);
   const disabling = llmService.setKeyStatus(92, false);
-  await Promise.resolve();
+  while (calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length < 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   assert.equal(calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length, 1);
-  releaseStatus();
+  assert.deepEqual(statusPhases, [true]);
+  releaseFirstStatus();
+  while (typeof releaseFirstKeys !== "function" || typeof releaseFirstState !== "function") {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length, 1,
+    "the next mutation must wait for both first-mutation refreshes");
+  releaseFirstKeys();
+  releaseFirstState();
+  while (statusPhases.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(statusPhases, [true, false]);
+  releaseSecondStatus();
   assert.deepEqual(await Promise.all([enabling, disabling]), [{ success: true, data: {} }, { success: true, data: {} }]);
+
+  const sameStart = calls.length;
+  let releaseSame;
+  globalThis.__llmRpc = (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 93) return new Promise((resolve) => { releaseSame = () => resolve({ success: true, data: {} }); });
+    return Promise.resolve({ success: true, data: {} });
+  };
+  const sameFirst = llmService.extendKey(93);
+  const sameSecond = llmService.extendKey(93);
+  while (typeof releaseSame !== "function") await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.slice(sameStart).filter(([url]) => url === "/api/llm/keys/extend").length, 1);
+  releaseSame();
+  await Promise.all([sameFirst, sameSecond]);
 
   let resolveOldKeys;
   let resolveOldState;
