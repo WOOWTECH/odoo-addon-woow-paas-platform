@@ -40,6 +40,8 @@ from ..models.llm_common import (
     ERR_LLM_FREE_KEY_DAILY_LIMIT,
     ERR_LLM_INTERNAL,
     ERR_LLM_INVALID_REQUEST,
+    ERR_LLM_NOT_ME_INVALID,
+    ERR_LLM_SETTINGS_INVALID,
     ERR_LLM_KEY_ALREADY_SHOWN,
     ERR_LLM_KEY_CANNOT_ENABLE,
     ERR_LLM_KEY_INVALID,
@@ -228,6 +230,25 @@ class LlmController(HiddenChainMixin, Controller):
     def llm_account_reauth(self, password=None, **kw) -> dict[str, Any]:
         return self._run('account/reauth', lambda partner: request.env[ACCOUNT_MODEL]
                          ._llm_reauthenticate(partner, password, request.session, _peer_ip()))
+
+    @route('/api/llm/account/settings', auth='user', methods=['POST'], type='json')
+    def llm_account_settings(self, low_balance_threshold=None, **kw) -> dict[str, Any]:
+        def handler(partner):
+            result = request.env['woow_paas_platform.llm_notification']._llm_update_settings(
+                partner, low_balance_threshold)
+            if not result:
+                raise LlmError(ERR_LLM_SETTINGS_INVALID)
+            return result
+        return self._run('account/settings', handler)
+
+    @route('/api/llm/account/report_not_me', auth='user', methods=['POST'], type='json')
+    def llm_account_report_not_me(self, token=None, **kw) -> dict[str, Any]:
+        def handler(partner):
+            if not request.env['woow_paas_platform.llm_notification']._llm_report_not_me(
+                    partner, token):
+                raise LlmError(ERR_LLM_NOT_ME_INVALID)
+            return {'state': 'suspended'}
+        return self._run('account/report_not_me', handler)
 
     @route('/api/llm/terms', auth='user', methods=['POST'], type='json')
     def llm_terms(self, version=None, **kw) -> dict[str, Any]:

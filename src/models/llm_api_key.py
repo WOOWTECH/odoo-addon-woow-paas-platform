@@ -182,6 +182,12 @@ class LlmApiKey(models.Model):
     # LLM-07：到期通知要可去重；worker 寫入發送時間，絕不靠瞬時 new-api 狀態推論。
     expiry_notice_7d_at = fields.Datetime(readonly=True, copy=False)
     expiry_notice_1d_at = fields.Datetime(readonly=True, copy=False)
+    created_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
+                                            groups='base.group_system')
+    not_me_disable_attempts = fields.Integer(readonly=True, default=0, copy=False,
+                                             groups='base.group_system')
+    not_me_disable_next_at = fields.Datetime(readonly=True, copy=False,
+                                             groups='base.group_system')
     remain_quota_cached = LlmQuotaInteger(readonly=True, copy=False)
     used_quota_cached = LlmQuotaInteger(readonly=True, copy=False)
     accessed_at = fields.Datetime(readonly=True, copy=False)
@@ -710,6 +716,8 @@ class LlmApiKey(models.Model):
     @api.model
     def _llm_finish(self, key_id, values):
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
+        if values.get('state') == 'active':
+            values['created_notice_pending'] = True
         columns = sorted(values)
         if not all(_COLUMN_RE.fullmatch(column) for column in columns):
             raise ValueError('bad column name')
@@ -727,6 +735,22 @@ class LlmApiKey(models.Model):
                 cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
                            'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
                            (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))
+        if changed and values.get('state') == 'active':
+            # This mirror committed on the independent cursor. A fresh cursor
+            # avoids the HTTP transaction's stale REPEATABLE READ snapshot.
+            from .llm_notifications import MODEL as NOTIFICATION_MODEL
+            try:
+                with self.env.registry.cursor() as notice_cr:
+                    notice_env = api.Environment(notice_cr, SUPERUSER_ID, {})
+                    notice_id = notice_env[NOTIFICATION_MODEL]._llm_notice(
+                        changed[0], 'key_created', KEY_MODEL, key_id,
+                        occurrence_key=str(key_id), token=True, email=True)
+                    if notice_id:
+                        key = notice_env[KEY_MODEL].sudo().browse(key_id)
+                        from .llm_common import _llm_internal
+                        _llm_internal(key).write({'created_notice_pending': False})
+            except Exception:  # noqa: BLE001 - key creation must survive notification failures
+                _logger.warning('[LLM] key-created notice deferred key=%s', key_id)
 
     @api.model
     def _llm_management_key(self, partner, key_id, *, allow_failed_reveal=False):

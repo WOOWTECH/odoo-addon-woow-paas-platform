@@ -261,6 +261,10 @@ class LlmAccount(models.Model):
     reauth_at = fields.Datetime(readonly=True, copy=False,
                                 help='Audit only; eligibility belongs to the current session.')
     low_balance_threshold = fields.Integer(readonly=True, default=50)
+    low_balance_armed = fields.Boolean(readonly=True, default=True, copy=False)
+    low_balance_cycle = fields.Integer(readonly=True, default=0, copy=False)
+    low_balance_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
+                                                groups='base.group_system')
     # Real row update in T1 serializes distinct conversion requests under
     # PostgreSQL REPEATABLE READ; never set from tenant input.
     last_convert_request_at = fields.Datetime(readonly=True, copy=False,
@@ -1323,16 +1327,47 @@ class LlmAccount(models.Model):
                     'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
                     'request_count_cached = v.cnt, balance_synced_at = %s, '
                     'balance_invalidated_at = NULL, write_uid = %s, '
-                    'write_date = %s '
+                    'write_date = %s, low_balance_cycle = CASE '
+                    'WHEN a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625 '
+                    'THEN a.low_balance_cycle + 1 ELSE a.low_balance_cycle END, '
+                    'low_balance_armed = CASE '
+                    'WHEN v.quota >= a.low_balance_threshold * 15625 THEN TRUE '
+                    'WHEN a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625 '
+                    'THEN FALSE ELSE a.low_balance_armed END '
+                    ', low_balance_notice_pending = CASE '
+                    'WHEN v.quota >= a.low_balance_threshold * 15625 THEN FALSE '
+                    'ELSE a.low_balance_notice_pending OR '
+                    '(a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625) END '
                     'FROM (VALUES {values}) AS v(username, user_id, quota, used, cnt) '
                     'WHERE a.newapi_username = v.username AND a.newapi_user_id = v.user_id '
                     'AND a.state IN %s '
                     'AND (a.balance_synced_at IS NULL OR a.balance_synced_at < %s) '
                     'AND (a.balance_invalidated_at IS NULL OR '
-                    'a.balance_invalidated_at < %s)'.format(
+                    'a.balance_invalidated_at < %s) RETURNING a.id, a.quota_cached, '
+                    'a.low_balance_threshold, a.low_balance_cycle, '
+                    'a.low_balance_notice_pending'.format(
                         t=ACCOUNT_TABLE, values=values),
                     params + [read_at])
-                return cr.rowcount
+                changed = cr.fetchall()
+            crossed = [row for row in changed if row[4]]
+            # This is deliberately after the balance transaction committed. A
+            # notification may lag one tick, but cannot describe an uncommitted read.
+            if crossed:
+                from .llm_notifications import MODEL as NOTIFICATION_MODEL
+                with self.env.registry.cursor() as notice_cr:
+                    notice_env = api.Environment(notice_cr, SUPERUSER_ID, {})
+                    for account_id, quota, threshold, cycle, _pending in crossed:
+                        notice_id = notice_env[NOTIFICATION_MODEL]._llm_notice(
+                            account_id, 'low_balance', ACCOUNT_MODEL, account_id,
+                            occurrence_key=str(cycle),
+                            number_value=max(0, quota // 15625))
+                        if notice_id:
+                            notice_cr.execute(
+                                'UPDATE %s SET low_balance_notice_pending=FALSE, '
+                                'write_uid=%%s, write_date=%%s WHERE id=%%s '
+                                'AND low_balance_cycle=%%s' % ACCOUNT_TABLE,
+                                (SUPERUSER_ID, _utcnow(), account_id, cycle))
+            return len(changed)
         except psycopg2.Error as exc:
             _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',
                             getattr(exc, 'pgcode', None))

@@ -272,7 +272,7 @@ class LlmCreditOrder(models.Model):
     incident_id = fields.Many2one('woow.billing.incident', readonly=True,
                                   ondelete='restrict', copy=False)
     notified_state = fields.Selection(selection=[(s, s) for s in
-                                                 ('credited', 'needs_review', 'voided',
+                                                 ('unknown', 'credited', 'needs_review', 'voided',
                                                   'cancelled', 'void_failed', 'credit_lost')],
                                       readonly=True, copy=False)
     # Acceptance and terminal mail have separate durable lifecycles. LLM-11

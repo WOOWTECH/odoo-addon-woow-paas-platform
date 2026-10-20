@@ -192,6 +192,21 @@ export const llmService = reactive({
     return call("/api/llm/account/reauth", { password });
   },
 
+  async updateSettings(lowBalanceThreshold) {
+    if (!Number.isSafeInteger(lowBalanceThreshold) || lowBalanceThreshold < 0 || lowBalanceThreshold > 100000) {
+      return failure("llm_settings_invalid");
+    }
+    return call("/api/llm/account/settings", { low_balance_threshold: lowBalanceThreshold });
+  },
+
+  async reportNotMe(token) {
+    const match = typeof token === "string" ? token.match(/^[A-Za-z0-9_.-]{1,512}$/) : null;
+    if (!match || match[0] !== token) {
+      return failure("llm_not_me_invalid");
+    }
+    return call("/api/llm/account/report_not_me", { token });
+  },
+
   async fetchModels() {
     const request = ++this.modelsRequest;
     const result = await call("/api/llm/models", {});

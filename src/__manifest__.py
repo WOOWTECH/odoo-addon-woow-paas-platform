@@ -44,6 +44,7 @@
         # LLM：內部額度轉換商品／sequence 先於背景 cron（DESIGN §1.2）。
         "data/llm_credit_data.xml",
         "data/llm_cron.xml",
+        "data/llm_notifications_cron.xml",
         "views/menu.xml",
         "views/workspace_views.xml",
         "views/workspace_quota_inspection_views.xml",
@@ -76,6 +77,7 @@
         "views/res_config_settings_views.xml",
         "data/subscription_lifecycle_cron.xml",
         "data/mail_templates.xml",
+        "data/llm_notification_mail_templates.xml",
         "data/billing_mail_lang_sync.xml",
         "data/workspace_invitation_mail.xml",
         "data/low_balance_warning_cron.xml",

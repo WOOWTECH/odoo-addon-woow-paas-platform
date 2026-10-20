@@ -27969,3 +27969,320 @@ msgstr "最近 30 天 · 依模型分類的花費"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
 msgid "Usage summary is loading."
 msgstr "正在載入用量統計。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Low balance reminder"
+msgstr "低額度提醒"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Choose the balance at which you want to be notified. Enter whole points from 0 to 100,000."
+msgstr "設定低於多少點時通知您，請輸入 0 至 100,000 的整數點數。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Notify me below (points)"
+msgstr "低於此點數時通知我"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.xml:0
+msgid "Save threshold"
+msgstr "儲存門檻"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmCreditTab.js:0
+msgid "Low balance threshold saved."
+msgstr "低額度通知門檻已儲存。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "Enter a whole number from 0 to 100,000 points."
+msgstr "請輸入 0 至 100,000 的整數點數。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/llm_errors.js:0
+msgid "This security link is invalid or has expired. Please contact support if you need help."
+msgstr "此安全連結無效或已過期。如需協助，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+msgid "Report activity that was not yours?"
+msgstr "回報非本人操作？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+msgid "Confirming will suspend your AI Models account and begin disabling its API keys. Keys may take a short time to stop working. Converted AI credit cannot be refunded."
+msgstr "確認後將暫停您的 AI 模型帳戶並開始停用 API 金鑰。金鑰可能需要一點時間才會停止運作。已轉換的 AI 額度無法退款。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+msgid "Submitting…"
+msgstr "正在送出…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+msgid "Suspend account"
+msgstr "暫停帳戶"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
+msgid "Your AI Models account has been suspended."
+msgstr "您的 AI 模型帳戶已暫停。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "AI model notifications can only be created by the platform."
+msgstr "AI 模型通知只能由平台建立。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "AI model notifications can only be changed by the platform."
+msgstr "AI 模型通知只能由平台變更。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "AI model notifications cannot be deleted."
+msgstr "AI 模型通知無法刪除。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "AI credit is overdrawn"
+msgstr "AI 額度已透支"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Your AI credit is %(points)s points below zero."
+msgstr "您的 AI 額度已透支 %(points)s 點。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Today’s free trial limit has been reached"
+msgstr "今日免費試用已達上限"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Your free trial requests are used up for today."
+msgstr "您今日的免費試用次數已用完。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "AI models service suspended"
+msgstr "AI 模型服務已暫停"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Your AI models service is suspended."
+msgstr "您的 AI 模型服務已暫停。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "AI models terms have been updated"
+msgstr "AI 模型服務條款已更新"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Please review and accept the current terms."
+msgstr "請閱讀並同意最新服務條款。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Low AI credit"
+msgstr "AI 額度偏低"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Your AI credit is below the reminder threshold."
+msgstr "您的 AI 額度已低於提醒門檻。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "API key expiring soon"
+msgstr "API 金鑰即將到期"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "API key %(id)s is approaching its expiry."
+msgstr "API 金鑰 %(id)s 即將到期。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "New API key created"
+msgstr "已建立新的 API 金鑰"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "API key %(id)s was created."
+msgstr "已建立 API 金鑰 %(id)s。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Points converted"
+msgstr "點數已轉換"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "%(points)s points were converted."
+msgstr "已轉換 %(points)s 點。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Conversion credited"
+msgstr "轉換已入帳"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Conversion order %(id)s was credited."
+msgstr "轉換訂單 %(id)s 已入帳。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Conversion being checked"
+msgstr "轉換確認中"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Your points are safe. We will process this and notify you."
+msgstr "點數不會遺失，我們會盡快處理並通知您。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "Conversion not completed"
+msgstr "轉換未完成"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/llm_notifications.py:0
+msgid "The points were returned to your wallet."
+msgstr "點數已退回您的錢包。"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_llm_low_balance
+msgid "Your AI credit is running low"
+msgstr "您的 AI 額度偏低"
+
+#. module: woow_paas_platform
+#: model_terms:mail.template,body_html:woow_paas_platform.mail_template_llm_low_balance
+msgid ""
+"<div>\n"
+"                <p>Your AI credit is below your reminder threshold.</p>\n"
+"                <p>Current balance: <t t-out=\"ctx.get('llm_number_value', 0)\"/> points.</p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_credit_url', '#')\">Open AI credit</a></p>\n"
+"            </div>"
+msgstr ""
+"<div>\n"
+"                <p>您的 AI 額度已低於提醒門檻。</p>\n"
+"                <p>目前餘額：<t t-out=\"ctx.get('llm_number_value', 0)\"/> 點。</p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_credit_url', '#')\">查看 AI 額度</a></p>\n"
+"            </div>"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_llm_key_expiring
+msgid "An AI API key is approaching expiry"
+msgstr "您的 AI API 金鑰即將到期"
+
+#. module: woow_paas_platform
+#: model_terms:mail.template,body_html:woow_paas_platform.mail_template_llm_key_expiring
+msgid ""
+"<div>\n"
+"                <p>API key ID <t t-out=\"ctx.get('llm_subject_id', 0)\"/> expires at\n"
+"                    <t t-out=\"ctx.get('llm_expiry_time', '')\"/>.</p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_expiry_url', '#')\">Review the 90-day extension</a></p>\n"
+"            </div>"
+msgstr ""
+"<div>\n"
+"                <p>API 金鑰編號 <t t-out=\"ctx.get('llm_subject_id', 0)\"/> 的到期時間為\n"
+"                    <t t-out=\"ctx.get('llm_expiry_time', '')\"/>.</p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_expiry_url', '#')\">確認延長 90 天</a></p>\n"
+"            </div>"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_llm_key_created
+msgid "A new AI API key was created"
+msgstr "已建立新的 AI API 金鑰"
+
+#. module: woow_paas_platform
+#: model_terms:mail.template,body_html:woow_paas_platform.mail_template_llm_key_created
+msgid ""
+"<div>\n"
+"                <p>API key ID <t t-out=\"ctx.get('llm_subject_id', 0)\"/> was created at\n"
+"                    <t t-out=\"ctx.get('llm_notice_time', '')\"/>.</p>\n"
+"                <p>Masked key: <t t-out=\"ctx.get('llm_masked_key', '')\"/></p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_not_me_url', '#')\">I did not create this key</a></p>\n"
+"            </div>"
+msgstr ""
+"<div>\n"
+"                <p>API 金鑰編號 <t t-out=\"ctx.get('llm_subject_id', 0)\"/> 的建立時間為\n"
+"                    <t t-out=\"ctx.get('llm_notice_time', '')\"/>.</p>\n"
+"                <p>金鑰遮罩：<t t-out=\"ctx.get('llm_masked_key', '')\"/></p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_not_me_url', '#')\">不是我建立的金鑰</a></p>\n"
+"            </div>"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_llm_credit_converted
+msgid "Points converted to AI credit"
+msgstr "點數已轉換為 AI 額度"
+
+#. module: woow_paas_platform
+#: model_terms:mail.template,body_html:woow_paas_platform.mail_template_llm_credit_converted
+msgid ""
+"<div>\n"
+"                <p>Conversion order ID <t t-out=\"ctx.get('llm_subject_id', 0)\"/> converted\n"
+"                    <t t-out=\"ctx.get('llm_number_value', 0)\"/> points at\n"
+"                    <t t-out=\"ctx.get('llm_notice_time', '')\"/>.</p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_not_me_url', '#')\">I did not make this conversion</a></p>\n"
+"            </div>"
+msgstr ""
+"<div>\n"
+"                <p>轉換訂單編號 <t t-out=\"ctx.get('llm_subject_id', 0)\"/> 已轉換\n"
+"                    <t t-out=\"ctx.get('llm_number_value', 0)\"/> 點，時間為\n"
+"                    <t t-out=\"ctx.get('llm_notice_time', '')\"/>.</p>\n"
+"                <p><a t-att-href=\"ctx.get('llm_not_me_url', '#')\">不是我操作的轉換</a></p>\n"
+"            </div>"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_llm_credit_pending
+msgid "Your AI credit conversion is being checked"
+msgstr "您的 AI 額度轉換正在確認中"
+
+#. module: woow_paas_platform
+#: model_terms:mail.template,body_html:woow_paas_platform.mail_template_llm_credit_pending
+msgid ""
+"<div>\n"
+"                <p>Conversion order ID <t t-out=\"ctx.get('llm_subject_id', 0)\"/> is being checked.</p>\n"
+"                <p>Your points are safe. We will process this and notify you.</p>\n"
+"            </div>"
+msgstr ""
+"<div>\n"
+"                <p>轉換訂單編號 <t t-out=\"ctx.get('llm_subject_id', 0)\"/> 正在確認中。</p>\n"
+"                <p>點數不會遺失，我們會盡快處理並通知您。</p>\n"
+"            </div>"
+
+#. module: woow_paas_platform
+#: model:mail.template,subject:woow_paas_platform.mail_template_llm_credit_voided
+msgid "AI credit conversion was not completed"
+msgstr "AI 額度轉換未完成"
+
+#. module: woow_paas_platform
+#: model_terms:mail.template,body_html:woow_paas_platform.mail_template_llm_credit_voided
+msgid ""
+"<div>\n"
+"                <p>Conversion order ID <t t-out=\"ctx.get('llm_subject_id', 0)\"/> was not completed.\n"
+"                    The points were returned to your wallet.</p>\n"
+"            </div>"
+msgstr ""
+"<div>\n"
+"                <p>轉換訂單編號 <t t-out=\"ctx.get('llm_subject_id', 0)\"/> 未完成。\n"
+"                    點數已退回您的錢包。</p>\n"
+"            </div>"

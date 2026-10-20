@@ -168,6 +168,8 @@ ERR_LLM_NO_REFUND_ACK_REQUIRED = 'llm_no_refund_ack_required'
 #: gate 的帳號拒絕（``paas._account_denial``：未登入或帳號停用）。那個 helper 回的 dict 沒有
 #: ``code``；本分頁的回應一律帶小寫 snake code（DESIGN §3.1），所以在 controller 補上這一格。
 ERR_LLM_AUTH_REQUIRED = 'llm_auth_required'
+ERR_LLM_SETTINGS_INVALID = 'llm_settings_invalid'
+ERR_LLM_NOT_ME_INVALID = 'llm_not_me_invalid'
 
 
 #: Reauth counts every password attempt, including rejected and interrupted attempts.
@@ -566,6 +568,10 @@ LLM_CRONS = {
         'woow_paas_platform.llm_account', '_cron_llm_provision'),
     'woow_paas_platform.ir_cron_llm_balance_refresh': (
         'woow_paas_platform.llm_account', '_cron_llm_balance_refresh'),
+    'woow_paas_platform.ir_cron_llm_notifications': (
+        'woow_paas_platform.llm_notification', '_cron_llm_notifications'),
+    'woow_paas_platform.ir_cron_llm_not_me_disable': (
+        'woow_paas_platform.llm_notification', '_cron_llm_not_me_disable'),
     'woow_paas_platform.ir_cron_llm_event_cleanup': (
         'woow_paas_platform.llm_event', '_cron_llm_event_cleanup'),
     'woow_paas_platform.ir_cron_llm_alert_delivery': (
@@ -601,7 +607,8 @@ ERROR_CODES = (
     API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
     | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
-    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
+    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES
+    | {ERR_LLM_SETTINGS_INVALID, ERR_LLM_NOT_ME_INVALID, UNKNOWN_CODE})
 
 
 def report_cron_failed(env, xmlid):
