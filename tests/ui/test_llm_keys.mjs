@@ -162,6 +162,26 @@ test("paid model options emit null for all models and filter restricted selectio
   assert.equal(JSON.stringify(normalizePaidDraft({ name: "x", limitPoints: "", expires: "90d", models: ["free-a"] }, ["paid-a", "paid-b"]).models).includes("free-a"), false);
 });
 
+test("paid reveal models prop accepts null or canonical model ID arrays and drives the reveal summary", () => {
+  const prop = PaidRevealModal.props.models;
+  assert.deepEqual(prop.type, [Array, { value: null }]);
+  assert.equal(prop.optional, true);
+  assert.equal(prop.validate(null), true);
+  assert.equal(prop.validate(["vendor/model-v1", "qwen3-4b-cluster1"]), true);
+  assert.equal(prop.validate([]), true);
+  assert.equal(prop.validate(undefined), false);
+  assert.equal(prop.validate("vendor/model-v1"), false);
+  assert.equal(prop.validate(["invalid model id"]), false);
+  assert.equal(prop.validate(["model", null]), false);
+
+  const reveal = Object.create(PaidRevealModal.prototype);
+  reveal.props = { kind: "paid", allowedModels: ["vendor/model-v1", "vendor/model-v2"], models: null };
+  reveal.state = { models: reveal.props.models, modelAllowlist: [...reveal.props.allowedModels] };
+  assert.equal(reveal.paidModelsText, "All paid models");
+  reveal.state.models = ["vendor/model-v2"];
+  assert.equal(reveal.paidModelsText, "vendor/model-v2");
+});
+
 test("limited edit rejects total limits below used and reports remaining after change", () => {
   assert.deepEqual(validatePaidDraft({ name: "Key", limitPoints: "29", expires: "90d", models: ["m"] }, {
     paidModels: ["m"], usedPoints: 30,

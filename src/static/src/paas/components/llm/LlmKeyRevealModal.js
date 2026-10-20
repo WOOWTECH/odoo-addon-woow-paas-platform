@@ -62,6 +62,12 @@ export class LlmKeyRevealModal extends Component {
   static props = {
     kind: { type: String, validate: (kind) => kind === "free_trial" || kind === "paid" },
     allowedModels: { type: Array, optional: true },
+    models: {
+      type: [Array, { value: null }],
+      optional: true,
+      validate: (models) => models === null || (Array.isArray(models)
+        && models.every((model) => typeof model === "string" && /^[A-Za-z0-9._:/-]{1,128}$/.test(model))),
+    },
     createKey: { type: Function },
     // `/api/llm/state` 的 public_base_url；建金鑰的回應有帶 base_url 時以回應為準。
     baseUrl: { type: String, optional: true },
