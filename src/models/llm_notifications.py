@@ -473,10 +473,11 @@ class LlmNotification(models.Model):
                             self._llm_notifications_tick, items=5, outbound=False)
 
     @api.model
-    def _llm_notifications_tick(self, config, tick):
+    def _llm_notifications_tick(self, config, tick, *, account_ids=None):
         Notice = self.sudo()
+        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
         # Audit repair gets at most one slot; each notice class then gets a turn.
-        pending_reports = Notice.search([
+        pending_reports = Notice.search(scope + [
             ('consumed_at', '!=', False),
             '|', ('report_incident_id', '=', False), ('report_alert_id', '=', False),
         ], order='id', limit=1)
@@ -492,19 +493,20 @@ class LlmNotification(models.Model):
             for worker in workers:
                 if not tick.can_take():
                     break
-                worker(1, tick)
+                worker(1, tick, account_ids=account_ids)
             if tick.done == before:
                 break
-        more = self._llm_has_pending_notifications()
+        more = self._llm_has_pending_notifications(account_ids=account_ids)
         if more:
             tick.delay = 60
         return more
 
     @api.model
-    def _llm_low_balance_tick(self, limit, tick):
+    def _llm_low_balance_tick(self, limit, tick, *, account_ids=None):
         now = _utcnow()
         Account = self.env['woow_paas_platform.llm_account'].sudo()
-        due = Account.search([
+        scope = [('id', 'in', account_ids)] if account_ids is not None else []
+        due = Account.search(scope + [
             ('low_balance_notice_pending', '=', True), '|',
             ('low_balance_notice_retry_at', '=', False), ('low_balance_notice_retry_at', '<=', now),
         ], order='low_balance_notice_retry_at,id', limit=limit)
@@ -524,10 +526,11 @@ class LlmNotification(models.Model):
             tick.took()
 
     @api.model
-    def _llm_created_notice_tick(self, limit, tick):
+    def _llm_created_notice_tick(self, limit, tick, *, account_ids=None):
         now = _utcnow()
         Key = self.env['woow_paas_platform.llm_api_key'].sudo()
-        due = Key.search([
+        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
+        due = Key.search(scope + [
             ('created_notice_pending', '=', True), '|',
             ('created_notice_retry_at', '=', False), ('created_notice_retry_at', '<=', now),
         ], order='created_notice_retry_at,id', limit=limit)
@@ -545,48 +548,56 @@ class LlmNotification(models.Model):
             tick.took()
 
     @api.model
-    def _llm_has_pending_notifications(self):
+    def _llm_has_pending_notifications(self, *, account_ids=None):
         now = _utcnow()
         Account = self.env['woow_paas_platform.llm_account'].sudo()
         Order = self.env['woow_paas_platform.llm_credit_order'].sudo()
         Key = self.env['woow_paas_platform.llm_api_key'].sudo()
+        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
         local_now = datetime.now(ZoneInfo('Asia/Taipei'))
-        return bool(self.sudo().search_count([
+        return bool(self.sudo().search_count(scope + [
                         ('consumed_at', '!=', False), '|',
                         ('report_incident_id', '=', False), ('report_alert_id', '=', False),
                     ], limit=1)
-                    or Account.search_count([('low_balance_notice_pending', '=', True)], limit=1)
-                    or Key.search_count([('created_notice_pending', '=', True)], limit=1)
-                    or Order.search_count([('acceptance_notice_pending', '=', True)], limit=1)
-                    or self._llm_has_unnotified_order_state()
-                    or self._llm_has_unnotified_unknown()
-                    or (local_now.hour >= 9 and self._llm_has_due_expiry(Key, now)))
+                    or Account.search_count(
+                        ([('id', 'in', account_ids)] if account_ids is not None else [])
+                        + [('low_balance_notice_pending', '=', True)], limit=1)
+                    or Key.search_count(scope + [('created_notice_pending', '=', True)], limit=1)
+                    or Order.search_count(scope + [('acceptance_notice_pending', '=', True)], limit=1)
+                    or self._llm_has_unnotified_order_state(account_ids=account_ids)
+                    or self._llm_has_unnotified_unknown(account_ids=account_ids)
+                    or (local_now.hour >= 9 and self._llm_has_due_expiry(Key, now, account_ids=account_ids)))
 
     @api.model
-    def _llm_has_unnotified_order_state(self):
+    def _llm_has_unnotified_order_state(self, *, account_ids=None):
         self.env.cr.execute(
             "SELECT 1 FROM woow_paas_platform_llm_credit_order "
             "WHERE state IN ('credited','needs_review','voided') "
-            'AND state IS DISTINCT FROM notified_state LIMIT 1')
+            'AND state IS DISTINCT FROM notified_state '
+            + ('AND account_id = ANY(%s) ' if account_ids is not None else '') + 'LIMIT 1',
+            [list(account_ids)] if account_ids is not None else [])
         return bool(self.env.cr.fetchone())
 
     @api.model
-    def _llm_has_unnotified_unknown(self):
+    def _llm_has_unnotified_unknown(self, *, account_ids=None):
         self.env.cr.execute(
             "SELECT 1 FROM woow_paas_platform_llm_credit_order "
             "WHERE state='unknown' AND COALESCE(sent_at, create_date) <= %s "
-            'AND state IS DISTINCT FROM notified_state LIMIT 1',
-            (_utcnow() - timedelta(minutes=5),))
+            'AND state IS DISTINCT FROM notified_state '
+            + ('AND account_id = ANY(%s) ' if account_ids is not None else '') + 'LIMIT 1',
+            [_utcnow() - timedelta(minutes=5)]
+            + ([list(account_ids)] if account_ids is not None else []))
         return bool(self.env.cr.fetchone())
 
     @api.model
-    def _llm_has_due_expiry(self, Key, now):
-        return bool(Key.search_count([
+    def _llm_has_due_expiry(self, Key, now, *, account_ids=None):
+        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
+        return bool(Key.search_count(scope + [
             ('account_id.state', '!=', 'closed'),
             ('state', 'in', ('active', 'disabled')), ('expires_at', '>', now),
             ('expires_at', '<=', now + timedelta(days=1)), ('expiry_notice_1d_at', '=', False), '|',
             ('expiry_notice_1d_retry_at', '=', False), ('expiry_notice_1d_retry_at', '<=', now),
-        ], limit=1) or Key.search_count([
+        ], limit=1) or Key.search_count(scope + [
             ('account_id.state', '!=', 'closed'),
             ('state', 'in', ('active', 'disabled')), ('expires_at', '>', now + timedelta(days=1)),
             ('expires_at', '<=', now + timedelta(days=7)), ('expiry_notice_7d_at', '=', False), '|',
@@ -594,20 +605,21 @@ class LlmNotification(models.Model):
         ], limit=1))
 
     @api.model
-    def _llm_expiry_tick(self, limit, tick):
+    def _llm_expiry_tick(self, limit, tick, *, account_ids=None):
         now = _utcnow()
         local_now = datetime.now(ZoneInfo('Asia/Taipei'))
         if local_now.hour < 9:
             return 0
         Key = self.env['woow_paas_platform.llm_api_key'].sudo()
-        due = Key.search([
+        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
+        due = Key.search(scope + [
             ('account_id.state', '!=', 'closed'),
             ('state', 'in', ('active', 'disabled')), ('expires_at', '>', now),
             ('expires_at', '<=', now + timedelta(days=1)), ('expiry_notice_1d_at', '=', False), '|',
             ('expiry_notice_1d_retry_at', '=', False), ('expiry_notice_1d_retry_at', '<=', now),
         ], order='expires_at,id', limit=limit)
         if len(due) < limit:
-            due |= Key.search([
+            due |= Key.search(scope + [
                 ('account_id.state', '!=', 'closed'), ('state', 'in', ('active', 'disabled')),
                 ('expires_at', '>', now + timedelta(days=1)),
                 ('expires_at', '<=', now + timedelta(days=7)), ('expiry_notice_7d_at', '=', False), '|',
@@ -637,60 +649,54 @@ class LlmNotification(models.Model):
 
     @api.model
     def _llm_order_notice_tick(self, limit, tick, *, account_ids=None):
+        from .llm_credit_order import _credit_internal
         Order = self.env['woow_paas_platform.llm_credit_order'].sudo()
-        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
-        processed = 0
-        now = _utcnow()
-        for order in Order.search(scope + [('acceptance_notice_pending', '=', True), '|',
-                                  ('acceptance_notice_retry_at', '=', False),
-                                  ('acceptance_notice_retry_at', '<=', now)],
-                                  order='id', limit=limit):
-            if not tick.can_take():
-                return processed
-            obsolete = order.account_id.state == 'closed'
-            notice_id = False if obsolete else self._llm_notice(
-                order.account_id.id, 'credit_converted', 'woow_paas_platform.llm_credit_order',
-                order.id, occurrence_key=str(order.id), number_value=order.points,
-                email=True, token=True)
-            from .llm_credit_order import _credit_internal
-            _credit_internal(order).write({
-                'acceptance_notice_pending': not (obsolete or bool(notice_id)),
-                'acceptance_notice_retry_at': False if obsolete or notice_id else now + timedelta(minutes=5),
-            })
-            processed += 1
-            tick.took()
-        remaining = limit - processed
-        if remaining <= 0:
-            return processed
         now = _utcnow()
         Order.flush_model(['state', 'notified_state', 'sent_at', 'create_date', 'account_id',
-                           'state_notice_retry_at'])
+                           'state_notice_retry_at', 'acceptance_notice_pending',
+                           'acceptance_notice_retry_at'])
+        # One oldest eligible order per slot, regardless of obligation class.
+        # New acceptances cannot overtake an older terminal-state notice.
         self.env.cr.execute(
             "SELECT id FROM woow_paas_platform_llm_credit_order WHERE ("
-            "(state IN ('credited','needs_review','voided') AND state IS DISTINCT FROM notified_state) "
+            "(acceptance_notice_pending AND (acceptance_notice_retry_at IS NULL "
+            "OR acceptance_notice_retry_at <= %s)) OR ("
+            "((state IN ('credited','needs_review','voided') AND state IS DISTINCT FROM notified_state) "
             "OR (state='unknown' AND state IS DISTINCT FROM notified_state "
             "AND COALESCE(sent_at, create_date) <= %s)) "
+            "AND (state_notice_retry_at IS NULL OR state_notice_retry_at <= %s))) "
             + ('AND account_id = ANY(%s) ' if account_ids is not None else '')
-            + 'AND (state_notice_retry_at IS NULL OR state_notice_retry_at <= %s) '
             + 'ORDER BY id LIMIT %s',
-            [now - timedelta(minutes=5)]
-            + ([list(account_ids)] if account_ids is not None else []) + [now, remaining])
+            [now, now - timedelta(minutes=5), now]
+            + ([list(account_ids)] if account_ids is not None else []) + [limit])
         candidates = Order.browse([row[0] for row in self.env.cr.fetchall()])
+        processed = 0
         for order in candidates:
             if not tick.can_take():
                 break
-            kind = {'credited': 'credit_credited', 'needs_review': 'credit_pending',
-                    'voided': 'credit_voided', 'unknown': 'credit_pending'}[order.state]
             obsolete = order.account_id.state == 'closed'
-            notice_id = False if obsolete else self._llm_notice(
-                order.account_id.id, kind, 'woow_paas_platform.llm_credit_order', order.id,
-                occurrence_key=order.state, number_value=order.points,
-                email=order.state != 'credited')
-            from .llm_credit_order import _credit_internal
-            if notice_id or obsolete:
-                _credit_internal(order).write({'notified_state': order.state, 'state_notice_retry_at': False})
+            acceptance_due = order.acceptance_notice_pending and (
+                not order.acceptance_notice_retry_at or order.acceptance_notice_retry_at <= now)
+            if acceptance_due:
+                notice_id = False if obsolete else self._llm_notice(
+                    order.account_id.id, 'credit_converted', 'woow_paas_platform.llm_credit_order',
+                    order.id, occurrence_key=str(order.id), number_value=order.points,
+                    email=True, token=True)
+                _credit_internal(order).write({
+                    'acceptance_notice_pending': not (obsolete or bool(notice_id)),
+                    'acceptance_notice_retry_at': False if obsolete or notice_id else now + timedelta(minutes=5),
+                })
             else:
-                _credit_internal(order).write({'state_notice_retry_at': now + timedelta(minutes=5)})
+                kind = {'credited': 'credit_credited', 'needs_review': 'credit_pending',
+                        'voided': 'credit_voided', 'unknown': 'credit_pending'}[order.state]
+                notice_id = False if obsolete else self._llm_notice(
+                    order.account_id.id, kind, 'woow_paas_platform.llm_credit_order', order.id,
+                    occurrence_key=order.state, number_value=order.points,
+                    email=order.state != 'credited')
+                if notice_id or obsolete:
+                    _credit_internal(order).write({'notified_state': order.state, 'state_notice_retry_at': False})
+                else:
+                    _credit_internal(order).write({'state_notice_retry_at': now + timedelta(minutes=5)})
             processed += 1
             tick.took()
         return processed

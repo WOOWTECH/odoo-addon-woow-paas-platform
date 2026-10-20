@@ -192,7 +192,8 @@ class TestLlmNotifications(_ConfiguredCase):
                      points * 15625, 0, 0)]
             updated = self.env[ACCOUNT]._llm_store_balances(rows, balance_stamp())
             self.env.invalidate_all()
-            self.Notice._llm_notifications_tick({}, LlmCronTick(30, 5))
+            self.Notice._llm_notifications_tick(
+                {}, LlmCronTick(30, 5), account_ids=[account.id])
             return updated
 
         self.assertEqual(refresh(900), 1)
@@ -272,7 +273,7 @@ class TestLlmNotifications(_ConfiguredCase):
 
         with patch.object(notifications_module, '_utcnow', return_value=now), \
                 patch.object(notifications_module, 'datetime', NoonTaipei):
-            count = self.Notice._llm_expiry_tick(5, LlmCronTick(10, 5))
+            count = self.Notice._llm_expiry_tick(5, LlmCronTick(10, 5), account_ids=[account.id])
         self.assertEqual(count, 2)
         self.assertTrue(key_7d.expiry_notice_7d_at)
         self.assertTrue(key_1d.expiry_notice_1d_at)
@@ -418,7 +419,7 @@ class TestLlmNotifications(_ConfiguredCase):
                 patch.object(notifications_module, '_utcnow', return_value=now):
             local_clock.now.return_value = datetime(2032, 1, 1, 12)
             tick = LlmCronTick(30, 5)
-            self.Notice._llm_notifications_tick({}, tick)
+            self.Notice._llm_notifications_tick({}, tick, account_ids=[account.id])
         self.assertEqual(tick.done, 4)
         self.assertTrue(account.low_balance_notice_pending)
         self.assertGreater(account.low_balance_notice_retry_at, now)
@@ -430,7 +431,8 @@ class TestLlmNotifications(_ConfiguredCase):
         self.assertEqual(set(notices.mapped('kind')), {'key_expiring_7d', 'credit_converted'})
         self.assertEqual(len(notices.mapped('mail_id')), 2)
         with patch.object(notifications_module, '_utcnow', return_value=now + timedelta(minutes=5)):
-            self.Notice._llm_notifications_tick({}, LlmCronTick(30, 5))
+            self.Notice._llm_notifications_tick(
+                {}, LlmCronTick(30, 5), account_ids=[account.id])
         self.assertFalse(account.low_balance_notice_pending)
         self.assertFalse(key.created_notice_pending)
 
@@ -443,7 +445,7 @@ class TestLlmNotifications(_ConfiguredCase):
             'newapi_name': 'wp_closed_notice', 'created_notice_pending': True,
         })
         tick = LlmCronTick(30, 5)
-        self.Notice._llm_notifications_tick({}, tick)
+        self.Notice._llm_notifications_tick({}, tick, account_ids=[self.account.id])
         self.assertFalse(self.account.low_balance_notice_pending)
         self.assertFalse(key.created_notice_pending)
         self.assertFalse(self.Notice.search([('account_id', '=', self.account.id)]))
@@ -465,11 +467,49 @@ class TestLlmNotifications(_ConfiguredCase):
         clock = [0]
         expired_tick = LlmCronTick(30, 5, monotonic=lambda: clock[0])
         clock[0] = 31
-        self.Notice._llm_notifications_tick({}, expired_tick)
+        self.Notice._llm_notifications_tick({}, expired_tick, account_ids=ids)
         self.assertEqual(expired_tick.done, 0)
         self.assertEqual(self.Notice.search_count([('account_id', 'in', ids)]), 0)
         tick = LlmCronTick(30, 5)
-        self.Notice._llm_notifications_tick({}, tick)
+        self.Notice._llm_notifications_tick({}, tick, account_ids=ids)
         self.assertEqual(tick.done, 5)
         self.assertEqual(self.Notice.search_count([('account_id', 'in', ids)]), 5)
         self.assertEqual(sum(a.low_balance_notice_pending for a in accounts), 2)
+
+    def test_oldest_order_terminal_notice_precedes_new_acceptances(self):
+        foreign = _new_account(self.env, 'LLM other queue', user_id=988120)
+        account = _new_account(self.env, 'LLM oldest queue', user_id=988121)
+        account.partner_id.write({'email': 'oldest-order@example.invalid'})
+
+        def new_order(owner, review=False):
+            order = _credit_internal(self.env[ORDER_MODEL].sudo()).create({
+                'account_id': owner.id, 'partner_id': owner.partner_id.id,
+                'newapi_user_id': owner.newapi_user_id, 'source': 'user',
+                'points': 20, 'quota': 20 * 15625,
+                'client_request_id': str(uuid.uuid4()), 'acceptance_notice_pending': True,
+            })
+            if review:
+                _credit_internal(order)._transition('sending')
+                _credit_internal(order)._transition('needs_review')
+            return order
+
+        outside = new_order(foreign, review=True)
+        oldest = new_order(account, review=True)
+        self.assertEqual(self.Notice._llm_order_notice_tick(
+            1, LlmCronTick(30, 1), account_ids=[]), 0)
+        for expected in ('credit_converted', 'credit_pending'):
+            newer = new_order(account)
+            tick = LlmCronTick(30, 1)
+            self.assertEqual(self.Notice._llm_order_notice_tick(
+                1, tick, account_ids=[account.id]), 1)
+            self.assertEqual(tick.done, 1)
+            notice = self.Notice.search([
+                ('account_id', '=', account.id), ('kind', '=', expected),
+                ('subject_id', '=', oldest.id),
+            ])
+            self.assertEqual(len(notice), 1)
+            self.assertTrue(notice.mail_id)
+            self.assertTrue(newer.acceptance_notice_pending)
+        self.assertEqual(oldest.notified_state, 'needs_review')
+        self.assertTrue(outside.acceptance_notice_pending)
+        self.assertFalse(outside.notified_state)
