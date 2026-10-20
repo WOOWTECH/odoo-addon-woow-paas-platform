@@ -96,7 +96,7 @@ class TestLlmKnownDiscrepancy(TransactionCase):
 
     def test_idempotency_returns_same_row_and_rejects_payload_reuse(self):
         request_id = str(uuid.uuid4())
-        first = self._ack('9007199254740993', reason='  Same evidence after trim  ',
+        first = self._ack(9007199254740993, reason='  Same evidence after trim  ',
                           request_id=request_id)
         replay = self._ack(9007199254740993, reason='Same evidence after trim',
                            request_id=request_id)
@@ -209,6 +209,14 @@ class TestLlmKnownDiscrepancy(TransactionCase):
             self._ack(2 ** 63 - 1)
             self._ack(-(2 ** 63))
             self.assertEqual(self.env[MODEL]._quota_total(self.account.id), -1)
+            self._ack(2 ** 63 - 1)
+            self._ack(2 ** 63 - 1)
+            self.assertEqual(self.env[MODEL]._quota_total(self.account.id), 2 * (2 ** 63 - 1) - 1)
+            self._ack(-(2 ** 63))
+            self._ack(-(2 ** 63))
+            self.assertEqual(self.env[MODEL]._quota_total(self.account.id), -3)
+            self._ack(-(2 ** 63))
+            self.assertEqual(self.env[MODEL]._quota_total(self.account.id), -(2 ** 63) - 3)
             request.assert_not_called()
 
     def test_unconfigured_service_fails_closed_without_writing(self):

@@ -125,3 +125,6 @@ from . import llm_backoffice_report
 from . import llm_usage
 
 from . import llm_notifications
+
+from . import llm_known_discrepancy
+from . import llm_reconcile_local

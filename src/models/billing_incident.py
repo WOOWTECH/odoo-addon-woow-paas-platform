@@ -59,6 +59,7 @@ from odoo.tools.translate import get_translation
 from psycopg2 import sql
 
 from ..services import llm_redact
+from ..services.llm_sql_budget import deadline_cursor
 
 _logger = logging.getLogger(__name__)
 
@@ -1263,7 +1264,7 @@ class BillingIncident(models.Model):
         return normalized
 
     @api.model
-    def _log(self, snapshot):
+    def _log(self, snapshot, *, deadline=None):
         """Atomically insert/update one durable incident in a new transaction.
 
         Callers must freeze every needed ORM value into a flat scalar ``dict``
@@ -1272,7 +1273,8 @@ class BillingIncident(models.Model):
         It returns only the integer incident id (or ``False``) so no recordset
         backed by a closed cursor can escape.
         """
-        return self._upsert_incident_snapshot(snapshot, match_kind=True)
+        budget = {'deadline': deadline} if deadline is not None else {}
+        return self._upsert_incident_snapshot(snapshot, match_kind=True, **budget)
 
     @api.model
     def _log_callback_evidence(self, snapshot):
@@ -1342,7 +1344,7 @@ class BillingIncident(models.Model):
 
     @api.model
     def _upsert_incident_snapshot(self, snapshot, match_kind,
-                                  promote_from=None):
+                                  promote_from=None, deadline=None):
         """Shared body of `_log` / `_log_callback_evidence` /
         `_log_charged_not_credited`.
 
@@ -1440,7 +1442,7 @@ class BillingIncident(models.Model):
                 updates=sql.SQL(', ').join(updates),
             )
 
-            with self.env.registry.cursor() as cr:
+            with deadline_cursor(self.env.registry.cursor, deadline, lock_seconds=1.0) as cr:
                 # Must be the first statement: the independent connection can
                 # otherwise wait on the caller's own outer transaction forever.
                 cr.execute('SET LOCAL lock_timeout = %s',
@@ -1459,6 +1461,8 @@ class BillingIncident(models.Model):
                 if not self.env.registry.in_test_mode():
                     cr.execute(
                         'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+                if cr.transaction is None:
+                    cr.transaction = api.Transaction(self.env.registry)
                 api.Environment(cr, SUPERUSER_ID, {})
                 # Odoo's default SQL exception logger renders query params;
                 # provider references must never be copied into an error log.
@@ -1524,7 +1528,8 @@ class BillingIncident(models.Model):
                 cr.commit()
             if incident_state in ('orphan', 'needs_human'):
                 try:
-                    self._schedule_review_activities(incident_id)
+                    self._schedule_review_activities(
+                        incident_id, **({'deadline': deadline} if deadline is not None else {}))
                 except Exception:
                     # The incident transaction is already committed.  Activity
                     # is a second best-effort transaction and must never change
@@ -1747,7 +1752,7 @@ class BillingIncident(models.Model):
         return True
 
     @api.model
-    def _schedule_review_activities(self, incident_id):
+    def _schedule_review_activities(self, incident_id, *, deadline=None):
         """Best-effort transaction around current-cursor alert convergence."""
         # Real scheduler transactions bypass Registry.cursor's signaling
         # query so READ COMMITTED can be the first SQL statement.  Odoo's
@@ -1758,12 +1763,14 @@ class BillingIncident(models.Model):
             if config['test_enable']
             else self.env.registry._db.cursor
         )
-        with cursor_factory() as cr:
+        with deadline_cursor(cursor_factory, deadline, lock_seconds=1.0) as cr:
             if not config['test_enable']:
                 cr.execute(
                     'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
+            if cr.transaction is None:
+                cr.transaction = api.Transaction(self.env.registry)
             env = api.Environment(cr, SUPERUSER_ID, {})
             result = env[self._name] \
                 ._ensure_review_activities_current_cursor(incident_id)

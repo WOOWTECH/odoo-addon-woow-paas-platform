@@ -66,12 +66,7 @@ def _is_request_id_unique_error(error):
         diag = getattr(current, 'diag', None)
         constraint = getattr(diag, 'constraint_name', '') if diag else ''
         if (getattr(current, 'pgcode', None) == '23505'
-                and constraint.endswith('_request_id_uniq')):
-            return True
-        # Odoo versions that translate the psycopg exception can preserve the
-        # named constraint in the ValidationError text while dropping __cause__.
-        expected_constraint = TABLE + '_request_id_uniq'
-        if expected_constraint in str(current):
+                and constraint == TABLE + '_request_id_uniq'):
             return True
         for chained in (getattr(current, '__cause__', None),
                         getattr(current, '__context__', None)):
@@ -108,20 +103,20 @@ class LlmKnownDiscrepancy(models.Model):
     ]
 
     account_id = fields.Many2one(
-        'woow_paas_platform.llm_account', required=True, readonly=True, index=True,
+        'woow_paas_platform.llm_account', string='AI account', required=True, readonly=True, index=True,
         ondelete='restrict')
     quota_delta = LlmQuotaInteger(
-        required=True, readonly=True, copy=False, groups='base.group_system')
+        string='Quota difference', required=True, readonly=True, copy=False, groups='base.group_system')
     quota_delta_text = fields.Char(
         string='Quota difference', compute='_compute_quota_delta_text',
         compute_sudo=True, readonly=True)
     reason = fields.Text(required=True, readonly=True, copy=False, groups='base.group_system')
     created_uid = fields.Many2one(
-        'res.users', required=True, readonly=True, copy=False, ondelete='restrict')
+        'res.users', string='Recorded by', required=True, readonly=True, copy=False, ondelete='restrict')
     llm_event_id = fields.Many2one(
-        EVENT_MODEL, readonly=True, copy=False, ondelete='set null', index=True)
-    request_id = fields.Char(required=True, readonly=True, copy=False, index=True, size=36)
-    created_at = fields.Datetime(required=True, readonly=True, copy=False, index=True,
+        EVENT_MODEL, string='Audit event', readonly=True, copy=False, ondelete='set null', index=True)
+    request_id = fields.Char(string='Request ID', required=True, readonly=True, copy=False, index=True, size=36)
+    created_at = fields.Datetime(string='Recorded at', required=True, readonly=True, copy=False, index=True,
                                  default=fields.Datetime.now)
 
     @api.depends('quota_delta')
@@ -272,9 +267,9 @@ class LlmKnownDiscrepancyWizard(models.TransientModel):
     account_id = fields.Many2one(
         'woow_paas_platform.llm_account', required=True, readonly=True,
         ondelete='cascade')
-    quota_delta = fields.Char(required=True, size=20)
+    quota_delta = fields.Char(string='Quota difference', required=True, size=20)
     reason = fields.Text(required=True)
-    request_id = fields.Char(required=True, readonly=True, size=36)
+    request_id = fields.Char(string='Request ID', required=True, readonly=True, size=36)
 
     @api.model
     def default_get(self, names):

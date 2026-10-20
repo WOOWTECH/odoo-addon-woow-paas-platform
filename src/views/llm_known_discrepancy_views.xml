@@ -69,9 +69,11 @@
         <field name="model">woow_paas_platform.llm_account</field>
         <field name="inherit_id" ref="view_llm_account_backoffice_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//form/header" position="inside">
-                <button name="action_open_known_discrepancy_wizard" type="object"
-                        string="Acknowledge quota difference" groups="base.group_system"/>
+            <xpath expr="//form/sheet" position="before">
+                <header>
+                    <button name="action_open_known_discrepancy_wizard" type="object"
+                            string="Acknowledge quota difference" groups="base.group_system"/>
+                </header>
             </xpath>
         </field>
     </record>
