@@ -182,6 +182,9 @@ class LlmApiKey(models.Model):
     # LLM-07：到期通知要可去重；worker 寫入發送時間，絕不靠瞬時 new-api 狀態推論。
     expiry_notice_7d_at = fields.Datetime(readonly=True, copy=False)
     expiry_notice_1d_at = fields.Datetime(readonly=True, copy=False)
+    expiry_notice_7d_retry_at = fields.Datetime(readonly=True, copy=False)
+    expiry_notice_1d_retry_at = fields.Datetime(readonly=True, copy=False)
+    created_notice_retry_at = fields.Datetime(readonly=True, copy=False)
     created_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
                                             groups='base.group_system')
     not_me_disable_attempts = fields.Integer(readonly=True, default=0, copy=False,

@@ -265,6 +265,7 @@ class LlmAccount(models.Model):
                                       groups='base.group_system')
     low_balance_armed = fields.Boolean(readonly=True, default=True, copy=False)
     low_balance_cycle = fields.Integer(readonly=True, default=0, copy=False)
+    low_balance_notice_retry_at = fields.Datetime(readonly=True, copy=False)
     low_balance_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
                                                 groups='base.group_system')
     # Real row update in T1 serializes distinct conversion requests under
@@ -1329,7 +1330,9 @@ class LlmAccount(models.Model):
                     'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
                     'request_count_cached = v.cnt, balance_synced_at = %s, '
                     'balance_invalidated_at = NULL, write_uid = %s, '
-                    'write_date = %s, low_balance_cycle = CASE '
+                    'write_date = %s, low_balance_notice_retry_at = CASE '
+                    'WHEN v.quota >= a.low_balance_threshold * 15625 OR a.low_balance_armed '
+                    'THEN NULL ELSE a.low_balance_notice_retry_at END, low_balance_cycle = CASE '
                     'WHEN a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625 '
                     'THEN a.low_balance_cycle + 1 ELSE a.low_balance_cycle END, '
                     'low_balance_armed = CASE '
@@ -1351,24 +1354,11 @@ class LlmAccount(models.Model):
                         t=ACCOUNT_TABLE, values=values),
                     params + [read_at])
                 changed = cr.fetchall()
-            crossed = [row for row in changed if row[4]]
-            # This is deliberately after the balance transaction committed. A
-            # notification may lag one tick, but cannot describe an uncommitted read.
-            if crossed:
-                from .llm_notifications import MODEL as NOTIFICATION_MODEL
-                with self.env.registry.cursor() as notice_cr:
-                    notice_env = api.Environment(notice_cr, SUPERUSER_ID, {})
-                    for account_id, quota, threshold, cycle, _pending in crossed:
-                        notice_id = notice_env[NOTIFICATION_MODEL]._llm_notice(
-                            account_id, 'low_balance', ACCOUNT_MODEL, account_id,
-                            occurrence_key=str(cycle),
-                            number_value=max(0, quota // 15625))
-                        if notice_id:
-                            notice_cr.execute(
-                                'UPDATE %s SET low_balance_notice_pending=FALSE, '
-                                'write_uid=%%s, write_date=%%s WHERE id=%%s '
-                                'AND low_balance_cycle=%%s' % ACCOUNT_TABLE,
-                                (SUPERUSER_ID, _utcnow(), account_id, cycle))
+                if any(row[4] for row in changed):
+                    # Only schedule work here: the five-item notification cron
+                    # owns rendering. Trigger and crossing markers commit together.
+                    notice_env = api.Environment(cr, SUPERUSER_ID, {})
+                    notice_env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()._trigger()
             return len(changed)
         except psycopg2.Error as exc:
             _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',

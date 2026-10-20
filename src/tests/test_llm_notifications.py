@@ -1,7 +1,7 @@
 """LLM-11 notification ownership, dedupe and balance reminder transitions."""
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from odoo import fields
@@ -192,6 +192,7 @@ class TestLlmNotifications(_ConfiguredCase):
                      points * 15625, 0, 0)]
             updated = self.env[ACCOUNT]._llm_store_balances(rows, balance_stamp())
             self.env.invalidate_all()
+            self.Notice._llm_notifications_tick({}, LlmCronTick(30, 5))
             return updated
 
         self.assertEqual(refresh(900), 1)
@@ -390,3 +391,85 @@ class TestLlmNotifications(_ConfiguredCase):
         self.assertEqual(active.state, 'disabled')
         self.assertEqual(client.user_set_token_status.call_count, 3)
 
+
+    def test_failed_templates_defer_without_starving_expiry_and_conversion(self):
+        account = self.account
+        account.partner_id.write({'email': 'queue-fairness@example.invalid'})
+        _llm_internal(account).write({
+            'newapi_user_id': 988100, 'quota_cached': 0, 'low_balance_threshold': 50,
+            'low_balance_cycle': 1, 'low_balance_notice_pending': True,
+        })
+        key = _llm_internal(self.env[KEY].sudo()).create({
+            'account_id': account.id, 'kind': 'paid', 'state': 'active',
+            'newapi_name': 'wp_fair_queue', 'created_notice_pending': True,
+            'expires_at': fields.Datetime.now() + timedelta(days=6),
+        })
+        order = _credit_internal(self.env[ORDER_MODEL].sudo()).create({
+            'account_id': account.id, 'partner_id': account.partner_id.id,
+            'source': 'user', 'newapi_user_id': account.newapi_user_id,
+            'points': 20, 'quota': 20 * 15625,
+            'client_request_id': str(uuid.uuid4()), 'acceptance_notice_pending': True,
+        })
+        now = fields.Datetime.now()
+        with patch.dict(notifications_module._TEMPLATES, {
+                'low_balance': 'missing_low_balance_template',
+                'key_created': 'missing_key_created_template',
+        }), patch.object(notifications_module, 'datetime', wraps=datetime) as local_clock, \
+                patch.object(notifications_module, '_utcnow', return_value=now):
+            local_clock.now.return_value = datetime(2032, 1, 1, 12)
+            tick = LlmCronTick(30, 5)
+            self.Notice._llm_notifications_tick({}, tick)
+        self.assertEqual(tick.done, 4)
+        self.assertTrue(account.low_balance_notice_pending)
+        self.assertGreater(account.low_balance_notice_retry_at, now)
+        self.assertTrue(key.created_notice_pending)
+        self.assertGreater(key.created_notice_retry_at, now)
+        self.assertTrue(key.expiry_notice_7d_at)
+        self.assertFalse(order.acceptance_notice_pending)
+        notices = self.Notice.search([('account_id', '=', account.id)])
+        self.assertEqual(set(notices.mapped('kind')), {'key_expiring_7d', 'credit_converted'})
+        self.assertEqual(len(notices.mapped('mail_id')), 2)
+        with patch.object(notifications_module, '_utcnow', return_value=now + timedelta(minutes=5)):
+            self.Notice._llm_notifications_tick({}, LlmCronTick(30, 5))
+        self.assertFalse(account.low_balance_notice_pending)
+        self.assertFalse(key.created_notice_pending)
+
+    def test_closed_obligations_are_retired(self):
+        _llm_internal(self.account).write({
+            'state': 'closed', 'low_balance_cycle': 1, 'low_balance_notice_pending': True,
+        })
+        key = _llm_internal(self.env[KEY].sudo()).create({
+            'account_id': self.account.id, 'kind': 'paid', 'state': 'active',
+            'newapi_name': 'wp_closed_notice', 'created_notice_pending': True,
+        })
+        tick = LlmCronTick(30, 5)
+        self.Notice._llm_notifications_tick({}, tick)
+        self.assertFalse(self.account.low_balance_notice_pending)
+        self.assertFalse(key.created_notice_pending)
+        self.assertFalse(self.Notice.search([('account_id', '=', self.account.id)]))
+
+    def test_balance_page_only_schedules_bounded_notification_work(self):
+        accounts = [_new_account(self.env, 'LLM queue budget %s' % i, user_id=988000 + i)
+                    for i in range(7)]
+        cron = self.env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()
+        cron.write({'active': True})
+        triggers = self.env['ir.cron.trigger'].sudo()
+        domain = [('cron_id', '=', cron.id)]
+        before = triggers.search_count(domain)
+        rows = [(a.newapi_username, a.newapi_user_id, 0, 0, 0) for a in accounts]
+        self.assertEqual(self.env[ACCOUNT]._llm_store_balances(rows, balance_stamp()), 7)
+        self.env.invalidate_all()
+        self.assertGreater(triggers.search_count(domain), before)
+        ids = [a.id for a in accounts]
+        self.assertEqual(self.Notice.search_count([('account_id', 'in', ids)]), 0)
+        clock = [0]
+        expired_tick = LlmCronTick(30, 5, monotonic=lambda: clock[0])
+        clock[0] = 31
+        self.Notice._llm_notifications_tick({}, expired_tick)
+        self.assertEqual(expired_tick.done, 0)
+        self.assertEqual(self.Notice.search_count([('account_id', 'in', ids)]), 0)
+        tick = LlmCronTick(30, 5)
+        self.Notice._llm_notifications_tick({}, tick)
+        self.assertEqual(tick.done, 5)
+        self.assertEqual(self.Notice.search_count([('account_id', 'in', ids)]), 5)
+        self.assertEqual(sum(a.low_balance_notice_pending for a in accounts), 2)
