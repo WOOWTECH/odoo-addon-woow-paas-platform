@@ -75,7 +75,7 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.3.5',
+        self.assertEqual(tpl.helm_chart_version, '0.3.10',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
                          '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt；'
                          '0.2.2＝後台 Add Credential 選 ChatGPT 跳出登入方式子畫面；0.2.3＝多個 ChatGPT 帳號；'
@@ -84,7 +84,9 @@ class TestLitellmSeed(TransactionCase):
                          '0.3.2＝改帳密時撤銷後台 session、Router metadata 補齊；'
                          '0.3.3＝ChatGPT 上下文長度以帳號清單為準；'
                          '0.3.4＝預算拒絕回 429（litellm.budgetExceededStatusCode）；'
-                         '0.3.5＝M4 第一批（帳號綁定不可被請求覆寫、restore 寫檔失敗、升版前 dump）')
+                         '0.3.5＝M4 第一批（帳號綁定不可被請求覆寫、restore 寫檔失敗、升版前 dump）；'
+                         '0.3.6–0.3.10＝charts 整合包 #254（num_retries 0、推理模型 max_tokens 下限、未定價警告、'
+                         '備份結果與補跑、SSE keepalive、requestTimeoutSeconds 600→90、請求上限 32 MB、preStop 75 秒）')
 
     def test_chatgpt_login_inside_litellm(self):
         """chart 0.2.1 起 ChatGPT 訂閱登入在 LiteLLM 自己的 /woow/chatgpt（用 LiteLLM 管理員登入）；
@@ -124,9 +126,9 @@ class TestLitellmSeed(TransactionCase):
         self.assertRegex(v['image']['tag'], PINNED_TAG_RE)
         self.assertTrue(
             v['image']['tag'].endswith(
-                '@sha256:35a2eca3fbc0edcd4da8de2bcf3d05248198b790da6d7dca9e1b3584185f38b0'),
-            'litellm 20261015.0956（paas-odoo-ci #338，核可 #340）：0748（HA 0.1.9 upstream guard＋0.1.10 D1）'
-            '再加 M4 第一批建置補丁（HA 0.1.11）；0.3.0 起是 LiteLLM 1.104.0，'
+                '@sha256:ad43b95960642ec76cb60c97167f1d21a19dfa6660c06f484f8007d674f5da10'),
+            'litellm 20261018.0834（paas-odoo-ci #366，核可 #368）：ce10a018 建置，'
+            'canonical 與已測 candidate digest 相同；0.3.0 起是 LiteLLM 1.104.0，'
             'HA「Woow LiteLLM」add-on 用同一份補丁')
         pg = v['postgresql']['image']
         self.assertEqual(pg['repository'], JCR + 'paas-postgres')
@@ -272,6 +274,26 @@ class TestLitellmSeed(TransactionCase):
                 ('master key 會一起換新', 'Reset 一起換（PLAN Q8）'),
                 ('約中斷 2 分鐘', '重設帳密／master key 會重啟服務（整合實測斷線約 2 分 15 秒）'),
                 ('帳號預設 admin', '帳號可改（admin_username_helm_path＝auth.adminUser）'),
+        ):
+            self.assertIn(needle, desc, why)
+
+    def test_description_long_request_limits_match_measurement(self):
+        """AI-LLM-013-3／FU3-AI-LLM-013-R-1：公開網址的長連線上限要寫實測值，且說清楚串流靠什麼撐住。
+
+        實測（svc262，chart 0.3.5）：非串流 140 s 在 125.7 s 回 524；串流首 chunk 後靜默 150 s 在約 127 s
+        被切；首位元組 140 s 在 125.5 s 回 524。舊文案寫「約 100 秒、用串流即可」——數字不對，也沒說串流
+        中途靜默同樣會被切。chart 0.3.10 起閘道在串流靜默時每 15 秒送 SSE 註解（: ping）撐住連線。
+        """
+        desc = self._tpl().full_description
+        self.assertNotIn('約 100 秒', desc, '實測約 120–125 秒，不是 100 秒')
+        for needle, why in (
+                ('約 120 秒', '入口靜默上限（實測 120–125 秒）'),
+                ('524', '非串流超時時用戶端看到的狀態碼'),
+                ('stream: true', '長回應改用串流'),
+                (': ping', '串流靜默時閘道送 SSE 註解維持連線（SDK 會忽略）'),
+                ('中途', '串流中途靜默也會被切——閘道的 keepalive 就是為此'),
+                ('錯誤會以串流', '送出 keepalive 後才發生的錯誤以 SSE 錯誤事件送達（HTTP 仍是 200）'),
+                ('可能仍會跑完', '入口中斷後上游可能照樣計費（AI-LLM-013-1）'),
         ):
             self.assertIn(needle, desc, why)
 

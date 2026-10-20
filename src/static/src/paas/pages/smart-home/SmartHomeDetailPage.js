@@ -268,6 +268,7 @@ export class SmartHomeDetailPage extends Component {
      * `active`／`suspended` 後端一律拒絕，顯示按鈕只會換來一句錯誤。
      */
     get canRetrySetup() {
+        if (this.subscription?.trial_expired || this.home?.setup_requested) return false;
         if (this.home?.provision_operation &&
             this.home.provision_operation.retry_allowed !== true) return false;
         return ["pending", "error"].includes(this.home?.state);
@@ -310,7 +311,34 @@ export class SmartHomeDetailPage extends Component {
                 isBadge: hasTunnel,
             },
             { label: _t("Connector Opened"), value: this.home.tunnel_uptime || _t("N/A"), icon: "schedule" },
+            // #1766：綁在哪一台 Home Assistant。沒綁過的家不顯示這一列（新建完
+            // 還沒接過的狀態多一列 "N/A" 只是雜訊）。
+            ...(this.home.binding_state && this.home.binding_state !== "unbound"
+                ? [{
+                    label: _t("Connected Home Assistant"),
+                    value: this.home.bound_instance_label
+                        || (this.home.binding_state === "legacy"
+                            ? _t("An installation that did not identify itself")
+                            : _t("Unknown")),
+                    icon: "home",
+                }]
+                : []),
         ];
+    }
+
+    /**
+     * 兩台機器同時接著同一條 tunnel（#1766）。
+     *
+     * 這是錯誤不是警告：Cloudflare 會把每個請求送給先回應的那一台，所以對外網址
+     * 大約有一半的機會連到錯的機器（使用者的症狀是「遠端登入時好時壞」）。平台
+     * 端只有這個旗標看得出來——`tunnel_status` 兩台接著的時候一樣是 connected。
+     */
+    get bindingConflict() {
+        return !!(this.home && this.home.binding_conflict);
+    }
+
+    get connectorCount() {
+        return (this.home && this.home.connector_count) || 0;
     }
 
     // Navigation
@@ -450,6 +478,10 @@ export class SmartHomeDetailPage extends Component {
         return !!(this.subscription && this.subscription.is_trial);
     }
 
+    get requiresPaidActivation() {
+        return !!this.subscription?.requires_paid_activation;
+    }
+
     get formattedPlanPrice() {
         const sub = this.subscription;
         if (!sub) return "";
@@ -511,6 +543,11 @@ export class SmartHomeDetailPage extends Component {
             };
         }
         return workspaceService.fetchSmartHomePlans(t.data[0].id);
+    };
+
+    estimateSmartHomeChangePlan = (planId) => {
+        return workspaceService.changeSmartHomePlan(
+            this.props.workspaceId, this.props.homeId, planId, { dryRun: true });
     };
 
     confirmSmartHomeChangePlan = (planId) => {

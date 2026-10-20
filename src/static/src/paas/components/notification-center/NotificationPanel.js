@@ -8,6 +8,7 @@ const TYPE_ICONS = {
   trial_ending: "hourglass_bottom",
   renewal_low_balance: "account_balance_wallet",
   service_error: "error",
+  backup_failed: "backup",
   invoice_unpaid: "receipt_long",
   wallet_activity: "payments",
 };

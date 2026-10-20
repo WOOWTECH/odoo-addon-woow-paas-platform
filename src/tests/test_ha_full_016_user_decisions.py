@@ -65,8 +65,9 @@ class TestHaFull016TemplateDecisions(TransactionCase):
     def _values(self):
         return json.loads(_ha_full(self.env).helm_default_values)
 
-    def test_chart_pinned_0_1_6(self):
-        self.assertEqual(_ha_full(self.env).helm_chart_version, '0.1.6')
+    def test_chart_pinned_0_1_10(self):
+        # 0.1.10＝charts 整合包 #254；下面「不採用」的兩個鍵在 0.1.10 預設仍是 true，範本照舊明寫 false。
+        self.assertEqual(_ha_full(self.env).helm_chart_version, '0.1.10')
 
     def test_ip_ban_off_1446(self):
         """#1446 不做：chart 0.1.6 預設 true，範本必須明寫 false。"""
@@ -155,7 +156,7 @@ class TestHaFullExistingServiceRedeploy016(TransactionCase):
     def _redeploy(self):
         client = operator_client(
             get_release={'name': 'svc-ha016'},
-            upgrade_release={'revision': 7, 'chart_version': '0.1.6'},
+            upgrade_release={'revision': 7, 'chart_version': '0.1.10'},
         )
         with patch(_CLIENT_PATH, return_value=client):
             self.service.action_redeploy()
@@ -168,7 +169,7 @@ class TestHaFullExistingServiceRedeploy016(TransactionCase):
     def test_redeploy_keeps_existing_pvc_size(self):
         """🔴 不改 PVC：送進 helm 的 persistence.size 仍是服務自己的 10Gi。"""
         sent = self._redeploy()
-        self.assertEqual(sent['version'], '0.1.6')
+        self.assertEqual(sent['version'], '0.1.10')
         self.assertTrue(sent['reset_values'])
         self.assertEqual(sent['values']['persistence']['size'], '10Gi')
         self.assertEqual(self._stored()['persistence']['size'], '10Gi')

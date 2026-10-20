@@ -232,6 +232,10 @@ def notes(inv, tgt, k8s):
     if db.get("pos_sessions_open") or db.get("pos_orders_draft"):
         out.append("POS：開啟中的 session %s、draft 訂單 %s（凍結時必須為 0）"
                    % (db.get("pos_sessions_open"), db.get("pos_orders_draft")))
+    idle = db.get("pos_sessions_idle_opening") or []
+    if idle:
+        out.append("POS：%d 個 session 停在開帳步驟、沒開始過也沒有訂單（%s），不擋凍結；照原狀搬，店家在新站接著開帳"
+                   % (len(idle), "、".join(str(s["name"]) for s in idle)))
     for wl in (k8s or {}).get("workloads", []):
         for item in wl.get("pip_install_commands", []):
             out.append("%s 的%s %s 執行時 pip：%s%s" % (

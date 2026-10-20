@@ -80,8 +80,9 @@ class TestHeadscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HEADSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.4',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.4＝'
+        self.assertEqual(tpl.helm_chart_version, '0.1.8',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.5–0.1.8＝'
+                         'charts 整合包 #254（GOMEMLIMIT、入口安全標頭＋限速、tenantSecret、ngrok 路徑過濾）；0.1.4＝'
                          '#1613 ngrok agent 輸出改走共用的 authtoken 遮蔽過濾器（舊 sed 對格式錯的 token 會外洩）；'
                          '0.1.3＝#1559 設定的 ngrok 網域等 agent 上線才當 server_url'
                          '（0.1.1＝restart-on-credential-reset label，.207 重設必失敗的修正）')

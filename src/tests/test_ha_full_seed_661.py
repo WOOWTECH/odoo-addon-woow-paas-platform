@@ -112,11 +112,13 @@ class TestHaFullSeed661(TransactionCase):
         0.1.5 = 平台注入的公開網址寫入 core.config external_url（charts #118，#1388）。
         0.1.6 = R8 修正（charts #130）；平台只採用其中一部分，逐項守線在
         test_ha_full_016_user_decisions.py。
+        0.1.7–0.1.10＝charts 整合包 #254：工作區＝區網、drop NET_RAW 等能力＋seccomp、
+        備份還原後 /media 重新綁定（INFRA-HA-008-2）。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HA_FULL_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.6')
+        self.assertEqual(tpl.helm_chart_version, '0.1.10')
         self.assertNotEqual(
             tpl.helm_chart_version, '0.1.0',
             '0.1.0 的 seed 錨點指向 woow_panel_frontend（非 component）→ '

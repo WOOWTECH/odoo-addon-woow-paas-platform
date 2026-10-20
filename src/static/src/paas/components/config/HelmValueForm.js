@@ -2,6 +2,7 @@
 import { Component, useState } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../icon/WoowIcon";
+import { ignoredWhenMessage, isBlankSpecValue } from "../../utils/ignored_when";
 
 /**
  * HelmValueForm Component
@@ -124,6 +125,35 @@ export class HelmValueForm extends Component {
      */
     getError(key) {
         return this.props.errors && this.props.errors[key];
+    }
+
+    /**
+     * INFRA-TS-004-1：條件下會被 chart 略過的欄位（spec `ignored_when`）的說明；
+     * 條件不成立回空字串。判準在 utils/ignored_when.js（與後端同一個宣告）。
+     * @param {Object} spec - The spec object
+     * @returns {string}
+     */
+    ignoredWhenHint(spec) {
+        return ignoredWhenMessage(spec, this.props.specs, this.props.values) || '';
+    }
+
+    /**
+     * 條件成立且欄位空白 ⇒ 停用輸入（不讓租戶填一個不會套用的值）；已經有值時保持可編輯，
+     * 讓租戶能清掉它（送出前 ConfigurationTab.validateForm 會標錯，後端也會擋）。
+     * @param {Object} spec - The spec object
+     * @returns {boolean}
+     */
+    isIgnoredInputDisabled(spec) {
+        return !!this.ignoredWhenHint(spec) && isBlankSpecValue(this.getValue(spec));
+    }
+
+    /**
+     * 說明的樣式：欄位空白＝一般提示；已經有值＝錯誤樣式（要清掉才能存）。
+     * @param {Object} spec - The spec object
+     * @returns {string}
+     */
+    ignoredWhenHintClass(spec) {
+        return isBlankSpecValue(this.getValue(spec)) ? 'o_woow_field_hint' : 'o_woow_field_error';
     }
 
     /**

@@ -31,12 +31,14 @@ export class CategoryFilter extends Component {
     static props = {
         selectedCategory: { type: String },
         onCategoryChange: { type: Function },
+        // X-LC-001-5：有公開範本的分類代碼；未提供（舊後端）時全部頁籤照舊顯示。
+        availableCategories: { type: Array, optional: true },
     };
 
     /**
      * Category definitions matching CloudAppTemplate model
      */
-    categories = [
+    allCategories = [
         { key: "all", label: _t("All") },
         { key: "ai_llm", label: _t("AI & LLM") },
         { key: "automation", label: _t("Automation") },
@@ -47,6 +49,21 @@ export class CategoryFilter extends Component {
         { key: "container", label: _t("Container") },
         { key: "mcp", label: _t("MCP Server") },
     ];
+
+    /**
+     * 要顯示的頁籤：「全部」＋有公開範本的分類（依上方定義的順序）。
+     * 目前選中的分類即使已沒有範本也保留，避免選取狀態指向一個看不到的頁籤。
+     * @returns {Array<{key: string, label: string}>}
+     */
+    get categories() {
+        const available = this.props.availableCategories;
+        if (!Array.isArray(available)) {
+            return this.allCategories;
+        }
+        return this.allCategories.filter(
+            (c) => c.key === "all" || available.includes(c.key) || c.key === this.props.selectedCategory
+        );
+    }
 
     /**
      * Handle category tab click

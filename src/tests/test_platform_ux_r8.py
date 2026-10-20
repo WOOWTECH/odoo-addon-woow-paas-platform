@@ -255,6 +255,33 @@ class TestReconfigureRevisionWriteBack(_ServiceFixture):
         self.assertEqual(svc.state, 'deleting')
         self.assertEqual(svc.helm_revision, 4)
 
+    def test_zero_revision_never_clobbers_the_ledger(self):
+        """#1414：舊 operator 讀錯欄位，upgrade 永遠回報 revision 0。
+
+        修法前 upgrading 分支寫 ``release_info.get('revision', …)``——鍵存在 ⇒ 帳本被寫成
+        0（AI-OD-004-3「更新中短暫回 0」）。讀不到正整數時不覆蓋；向 operator 讀一次
+        release 也失敗就保留原值，交給 poll／每日對帳。
+        """
+        client = MagicMock()
+        client.upgrade_release.return_value = {'revision': 0, 'chart_version': '1.0.1'}
+        client.get_release.side_effect = RuntimeError('operator unreachable')
+        self._run_update(client)
+        svc = self._reload()
+        self.assertEqual(svc.state, 'upgrading', '前提：走的是 upgrading 分支')
+        self.assertEqual(svc.helm_revision, 4)
+        self.assertEqual(svc.helm_chart_version, '1.0.1')
+
+    def test_unknown_revision_is_synced_from_the_release(self):
+        """#1414：upgrade 沒回報可用的 revision ⇒ 立刻讀一次 release（helm list）補上。"""
+        client = MagicMock()
+        client.upgrade_release.return_value = {'revision': 0}
+        client.get_release.return_value = {'revision': 6, 'chart_version': '1.0.2'}
+        self._run_update(client)
+        svc = self._reload()
+        self.assertEqual(svc.helm_revision, 6)
+        self.assertEqual(client.get_release.call_args.args,
+                         (self.service.helm_namespace, self.service.helm_release_name))
+
     def test_upgrading_path_unchanged(self):
         """陽性對照：沒有 race 時照舊走原本那條（state 仍 upgrading）。"""
         client = MagicMock()

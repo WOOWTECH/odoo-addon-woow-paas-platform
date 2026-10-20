@@ -5,6 +5,7 @@ import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
 import { PlanTotalBar } from "../subscription/PlanTotalBar";
+import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * ChangePlanModal Component
@@ -45,6 +46,11 @@ import { PlanTotalBar } from "../subscription/PlanTotalBar";
  *     方案卡的警告標註；降級被 route gate 擋時，後端錯誤訊息照常顯示在 `state.error`。
  *   - resizesResources (Boolean, optional): true 時多顯示「規格不同會重啟服務套用、
  *     儲存空間不會縮小」（#1158；僅 CS 父頁傳）。
+ *   - estimateChange (Function, optional): (planId) => Promise<ApiResponse<{required,
+ *     balance, refund, available, sufficient, shortfall}>>。AUDITFIX（#1677 A1）：選到方案
+ *     時呼叫（後端 change-plan 的 dry_run，不寫 DB）；錢包＋退點付不起首期就停用確認鈕、
+ *     顯示差額與儲值連結。⛔ 前端不自己用 plan_price 算——含稅口徑與退點都在後端。
+ *     後端換方案時同一把尺會再擋一次（前端擋不算 gate）。
  */
 export class ChangePlanModal extends Component {
   static template = "woow_paas_platform.ChangePlanModal";
@@ -52,6 +58,7 @@ export class ChangePlanModal extends Component {
   static props = {
     service: { type: Object },
     currentPlanId: { type: Number, optional: true },
+    activatingTrial: { type: Boolean, optional: true },
     loadPlans: { type: Function },
     confirmChange: { type: Function },
     onClose: { type: Function },
@@ -62,6 +69,7 @@ export class ChangePlanModal extends Component {
     // #1261／#342：只有 Cloud Service 父頁傳 true——CS 的 vCPU／RAM／儲存空間只在
     // 建立時套用、change-plan 不會 redeploy，modal 要多講這一句（見 xml 同名那格）。
     resizesResources: { type: Boolean, optional: true },
+    estimateChange: { type: Function, optional: true },
   };
 
   setup() {
@@ -83,7 +91,12 @@ export class ChangePlanModal extends Component {
       // 只是一個 view flag——切換它**不動** selectedPlanId，所以使用者從警告返回
       // 選擇階段時原本的選擇（含席數變體）原封不動（E2E 情境 2 驗這格）。
       confirmingTrialEnd: false,
+      // AUDITFIX（#1677 A1）：所選方案的首期應付估算（estimateChange 的 data）；null＝沒有
+      // 估算（沒選、選回目前方案、父頁沒傳 estimateChange、或估算失敗——後端仍會擋）。
+      estimate: null,
+      estimating: false,
     });
+    this.estimateSeq = 0;
     // onMounted（非 onWillStart）：讓 modal 先掛載再載方案，使用者按下「變更方案」
     // 當下就看得到 modal 與 loading 態。onWillStart 會 block 首次 render，RPC 期間
     // 畫面毫無回饋（SA/SH 的 loadPlans 是 fetchTemplates→fetchPlans 兩支序列 RPC，
@@ -118,6 +131,56 @@ export class ChangePlanModal extends Component {
       this.state.plansError = res.error || _t("Failed to load plans");
     }
     this.state.loadingPlans = false;
+    this.refreshEstimate();
+  }
+
+  /** AUDITFIX（#1677 A1）：向後端要所選方案的首期應付估算；只採用最後一次請求的結果。 */
+  async refreshEstimate() {
+    const planId = this.state.selectedPlanId;
+    const seq = ++this.estimateSeq;
+    this.state.estimate = null;
+    if (!this.props.estimateChange || !planId ||
+        (planId === this.props.currentPlanId && !this.props.activatingTrial)) {
+      this.state.estimating = false;
+      return;
+    }
+    this.state.estimating = true;
+    let res;
+    try {
+      res = await this.props.estimateChange(planId);
+    } catch {
+      res = { success: false };
+    }
+    if (seq !== this.estimateSeq) {
+      return;
+    }
+    this.state.estimate = res.success ? res.data : null;
+    this.state.estimating = false;
+  }
+
+  /** 錢包＋這次退點付不起新方案首期（含稅）。 */
+  get balanceBlocked() {
+    return !!this.state.estimate && this.state.estimate.sufficient === false;
+  }
+
+  get balanceShortfallMessage() {
+    const est = this.state.estimate;
+    if (!est) return "";
+    if (this.props.activatingTrial) {
+      return _t("餘額不足，還需要 %(shortfall)s 點。首期費用 %(required)s 點，可用餘額 %(available)s 點。", {
+        shortfall: formatPoints(est.shortfall),
+        required: formatPoints(est.required),
+        available: formatPoints(est.available),
+      });
+    }
+    return _t(
+      "Insufficient balance. You need %(shortfall)s more to change to this plan (first payment %(required)s; available %(available)s including the refund).",
+      {
+        shortfall: formatPoints(est.shortfall),
+        required: formatPoints(est.required),
+        available: formatPoints(est.available),
+      }
+    );
   }
 
   get currentPlanName() {
@@ -129,6 +192,7 @@ export class ChangePlanModal extends Component {
   onSelectPlan(planId) {
     this.state.selectedPlanId = planId;
     this.state.error = null;
+    this.refreshEstimate();
   }
 
   /**
@@ -156,7 +220,8 @@ export class ChangePlanModal extends Component {
    * 若哪天有人改後端讓 trial→trial 保留試用，請一併改這裡的文案——否則它會變成謊言。
    */
   get willEndTrial() {
-    return !!this.props.service.subscription?.is_trial;
+    return !!this.props.service.subscription?.is_trial &&
+      !this.props.service.subscription?.trial_expired;
   }
 
   /**
@@ -179,10 +244,11 @@ export class ChangePlanModal extends Component {
       !this.state.loadingPlans &&
       !this.state.plansError &&
       !!this.state.selectedPlanId &&
-      // 不可 churn 成同方案：定位後（selectedPlanId===currentPlanId）確認鈕維持
-      // disabled，使用者需真的改選另一方案／席數才 arm。currentPlanId 缺時此條恆真
-      // （undefined !== 任何 plan id），退化為單純「有選才可確認」。
-      this.state.selectedPlanId !== this.props.currentPlanId &&
+      // 一般換方案不可原地重開；試用轉付費可明確選擇沿用目前方案。
+      (this.props.activatingTrial || this.state.selectedPlanId !== this.props.currentPlanId) &&
+      // AUDITFIX（#1677 A1）：估算中先不放行；付不起就停用（差額與儲值連結見 xml）。
+      !this.state.estimating &&
+      !this.balanceBlocked &&
       !this.state.changing
     );
   }
@@ -204,7 +270,7 @@ export class ChangePlanModal extends Component {
     // #36 P2 第一階段：試用中還沒看過警告 ⇒ 只切到警告階段，**不呼叫
     // confirmChange**。使用者按「返回」回選擇階段、按「確認」才會再次進到這裡，
     // 屆時 confirmingTrialEnd 已為 true、直接落到下方送出。
-    if (this.willEndTrial && !this.state.confirmingTrialEnd) {
+    if ((this.willEndTrial || this.props.activatingTrial) && !this.state.confirmingTrialEnd) {
       this.state.confirmingTrialEnd = true;
       return;
     }

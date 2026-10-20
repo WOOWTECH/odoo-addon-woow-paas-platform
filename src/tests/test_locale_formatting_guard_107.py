@@ -19,8 +19,9 @@ LOC.2  沒有任何硬編 BCP-47 語言標籤字面值（`en-US` / `zh_TW` …�
 LOC.3  QWeb 樣板不得把後端日期欄位裸 `t-esc` 出來（那是把伺服器序列化格式
        直接印給租戶看，#107 已修 5 處）。
 LOC.4  `datetime_helpers` 的行為開關 `BACKEND_NAIVE_DATETIME_READING`
-       仍存在且預設維持現況——它是 #914 的切換點，被人順手改掉會在沒有任何
-       時區驗證的情況下改變全站顯示時間。
+       仍存在且維持 #914 切換後的值（`utc-wire-format`）——被人順手改回會在
+       沒有任何時區驗證的情況下改變全站顯示時間。跨時區驗證在
+       `tests/ui/test_datetime_tz_914.mjs`。
 """
 
 import os
@@ -104,10 +105,10 @@ _BARE_DATE_TESC_EXEMPT = {
      'server.last_sync'): '#918',
 }
 
-# `datetime_helpers.js` 的行為開關：#914 的切換點。
+# `datetime_helpers.js` 的行為開關：#914 已切到 utc-wire-format（X-LC-006-1／-2）。
 _ZONE_SWITCH_FILE = 'paas/utils/datetime_helpers.js'
 _ZONE_SWITCH_NAME = 'BACKEND_NAIVE_DATETIME_READING'
-_ZONE_SWITCH_DEFAULT = 'ecmascript-date'
+_ZONE_SWITCH_DEFAULT = 'utc-wire-format'
 
 
 def _strip_js_comments(src):
@@ -421,11 +422,11 @@ class TestLocaleFormattingGuard107(TransactionCase):
 
     # ----- LOC.4 時區行為開關仍在、且維持現況 ----------------------------- #
     def test_LOC4_timezone_switch_still_defaults_to_current_behaviour(self):
-        """`BACKEND_NAIVE_DATETIME_READING` 是 #914 的切換點，不可被順手改掉。
+        """`BACKEND_NAIVE_DATETIME_READING` 已由 #914 切到 utc-wire-format，不可被順手改回。
 
-        改成 ``"utc-wire-format"`` 會同時改變**每一個顯示時間的地方**的值
+        改回 ``"ecmascript-date"`` 會同時改變**每一個顯示時間的地方**的值
         （台北下相差 8 小時），而且只有日期的欄位與帶時間的欄位位移方向相反。
-        那需要跨時區、跨粒度的獨立驗證 ⇒ 由 #914 負責，⛔ 不要在別的 PR 裡順手翻。
+        跨時區、跨粒度的驗證在 ``tests/ui/test_datetime_tz_914.mjs``；要改這個值就要一併改那支測試。
 
         這條紅了不代表程式壞了，代表**有人在做一個需要 #914 那組驗證的變更**。
         """
@@ -443,5 +444,5 @@ class TestLocaleFormattingGuard107(TransactionCase):
         self.assertEqual(
             m.group(2), _ZONE_SWITCH_DEFAULT,
             f"LOC.4：`{_ZONE_SWITCH_NAME}` 已從 {_ZONE_SWITCH_DEFAULT!r} 改成 "
-            f"{m.group(2)!r}。切換時區讀法需要 #914 的跨時區驗證，"
-            "⛔ 不可在其他 PR 裡順手改；若這就是 #914 本身，請一併更新本測試的期望值。")
+            f"{m.group(2)!r}。切換時區讀法需要 #914 的跨時區驗證（tests/ui/test_datetime_tz_914.mjs），"
+            "⛔ 不可在其他 PR 裡順手改。")

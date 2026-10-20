@@ -457,7 +457,8 @@ class TestZhTwTranslations(TransactionCase):
     用 Odoo 自己的 `PoFileReader` 讀——runtime 就是用它（見 test_lang_zh_tw_activation_107）。
     """
 
-    _DATA_VALUE_FIELDS = ('public_tunnel_label', 'gateway_api_key_hint', 'gateway_url_hint')
+    _DATA_VALUE_FIELDS = ('public_tunnel_label', 'public_tunnel_address_note',
+                          'public_tunnel_error_note', 'gateway_api_key_hint', 'gateway_url_hint')
 
     def _entries(self):
         po = os.path.join(

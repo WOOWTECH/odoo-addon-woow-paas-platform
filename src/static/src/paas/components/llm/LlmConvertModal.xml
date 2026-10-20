@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmConvertModal">
+    <div class="o_woow_modal_backdrop" t-ref="backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_llm_convert" t-ref="dialog" role="dialog" aria-modal="true" aria-labelledby="o_woow_llm_convert_title" tabindex="-1" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2 id="o_woow_llm_convert_title" t-esc="heading"/>
+          <button type="button" t-att-disabled="state.busy || state.verifying" t-on-click="requestClose" t-esc="closeLabel"/>
+        </div>
+        <div class="o_woow_modal_body">
+          <t t-if="state.phase === 'form'">
+            <p id="o_woow_llm_convert_range" t-esc="rangeText"/>
+            <p t-if="state.pointsLocked" role="status">You can retry this conversion using the same amount.</p>
+            <div class="o_woow_llm_convert__quick">
+              <button t-foreach="quickPoints" t-as="amount" t-key="amount" type="button" t-att-disabled="state.busy || state.pointsLocked" t-att-aria-pressed="points === amount ? 'true' : 'false'" t-on-click="() => this.setPoints(amount)" t-esc="amount"/>
+            </div>
+            <label class="o_woow_llm_convert__amount">Custom points
+              <input type="text" inputmode="numeric" pattern="[0-9]*" t-att-value="state.points" t-att-disabled="state.busy || state.pointsLocked" t-on-input="ev => this.setPoints(ev.target.value)" aria-describedby="o_woow_llm_convert_range"/>
+            </label>
+            <p t-if="points === null" role="alert" t-esc="rangeError"/>
+            <p t-if="state.previewLoading" role="status">Loading preview…</p>
+            <div t-if="state.preview" class="o_woow_llm_convert__preview" aria-live="polite">
+              <p t-esc="walletText"/><p t-esc="creditText"/>
+            </div>
+            <p t-if="insufficientBalance" role="alert" t-esc="insufficientText"/>
+            <p t-if="state.preview &amp;&amp; state.preview.pending_review" role="status" t-esc="pendingReviewText"/>
+            <div t-if="termsBlocked" class="o_woow_llm_convert__notice">
+              <p t-esc="termsText"/>
+              <button type="button" t-on-click="() => this.state.showTerms = true">View and accept terms</button>
+            </div>
+            <label t-if="reserveShort" class="o_woow_llm_convert__check">
+              <input type="checkbox" t-model="state.confirmReserve" t-att-disabled="state.busy"/>
+              <span t-esc="reserveText"/>
+            </label>
+            <label class="o_woow_llm_convert__check">
+              <input type="checkbox" t-model="state.acceptNoRefund" t-att-disabled="state.busy"/>
+              <span t-esc="noRefundText"/>
+            </label>
+            <div t-if="needsReauth" class="o_woow_llm_convert__notice">
+              <p>For conversions above 1,000 points, verify your identity first.</p>
+              <label>Password<input type="password" autocomplete="current-password" t-ref="password" t-att-disabled="state.verifying"/></label>
+              <button type="button" t-att-disabled="state.verifying" t-on-click="verifyIdentity">Verify identity</button>
+            </div>
+            <p t-if="state.error" role="alert" t-esc="state.error"/>
+            <button type="button" class="o_woow_llm_convert__primary" t-att-disabled="!canSubmit" t-on-click="submit">Confirm conversion</button>
+          </t>
+          <t t-else="">
+            <p t-if="state.order" class="o_woow_llm_convert__reference" t-esc="state.order.name"/>
+            <p role="status" t-esc="statusText"/>
+            <button type="button" t-att-disabled="state.busy" t-on-click="() => state.order ? this.pollOrder() : this.recoverOrder()">Check status</button>
+          </t>
+        </div>
+      </div>
+    </div>
+    <LlmTermsModal t-if="state.showTerms" mode="'accept'" blocking="true" onClose.bind="onTermsClose"/>
+  </t>
+</templates>

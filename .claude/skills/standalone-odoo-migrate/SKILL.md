@@ -23,9 +23,36 @@ kubectl 白名單（CLAUDE.md 鐵律）決定誰跑哪一段：
 | 平台 pod 的 odoo shell：停權、復權、Redeploy、conf 覆寫 | 人（平台管理員），用 `scripts/platform/cloud-service.sh`；agent 只給整行指令 | prod 平台寫入，agent 在 auto mode 下會被擋，不要繞過 |
 | paas-odoo-ci PR merge、prod image `/approve` | 人 | agent 只開 PR |
 
+## 追蹤 issue
+
+**一站一張追蹤票，動手之前先開**（或確認已經有）：本 repo 的 Gitea issue，標題 `migrate: <來源 ns> 搬進 PaaS`，
+body 寫 `Refs #1604`。範例：#1760（harumi；它是補開的，10-16 之前的紀錄留在 #1604 的留言、由 #1760 逐條連結）。
+
+- **body＝現況**，每次有進展就改寫：來源（ns、hostname、tunnel）、正式目標（工作區、cloud_service id、release、ns）、
+  方案與試用起始日、addon、conf 覆寫、寄收信、外部整合（MCP 等）、回切方式、證據與離線備份的位置；下面接待辦 checklist
+  與「歷程」連結表。**留言＝歷程**，一個里程碑一則。
+- work-state label 照 `docs/agents/triage-labels.md` 只掛一個：agent 在做 `ready-for-agent`、等人（驗收、WMO、放行）
+  `ready-for-human`、等裁決 `needs-decision`；另掛 `derived`。來源下線、待辦全勾才關票。
+- 什麼時候留言：
+
+  | 時點 | 記什麼 |
+  |---|---|
+  | 「開始前先問調用者」每次有答案 | 已裁決表（項目、答案、日期）；答案改了就另起一則註明取代哪一則，不改舊留言 |
+  | 步驟 1～3 | 盤點摘要（core_date、模組數、非 core addon、filestore、POS）、相容性比對的阻斷與注意事項 |
+  | 步驟 5 | addon PR、image tag／digest、Sync 是否已按 |
+  | 每輪彩排 | 彩排站 cs id、匯出量、restore／兩次 verify 結果、發現的缺口（缺口另開 follow-up 票） |
+  | 購買目標服務 | cs id、release、ns、方案、`trial_end_date`；刪除也記 |
+  | 切換前檢查 | 每一項的結論 |
+  | 步驟 9 切換 | 切換紀錄：UTC 時間線表（時間｜動作｜結果）→ 技術驗收 → 回切方式 → 待辦（範例 #1604 留言 22602） |
+  | 收尾 | 平台備份 id、離線備份位置、刪掉的資源、來源下線日期 |
+
+- **不寫進 issue**：帳密、token、初始管理員密碼、客戶的 addon 原始碼、客戶資料內容（比對結果只列表名與筆數）。
+- 本機證據（盤點 JSON、匯出 JSON、restore／verify log、DNS 備份）放 repo 旁的 `woow-<追蹤票號>-evidence/<set>/`，
+  路徑寫進 body；它與 scratchpad 不同，不會被清掉。
+
 ## 開始前先問調用者
 
-搬一個站有幾件事只有調用本 skill 的人能決定。照下表的時機逐項問清楚，答案寫進該站的追蹤 issue；沒有答案的項目
+搬一個站有幾件事只有調用本 skill 的人能決定。照下表的時機逐項問清楚，答案寫進該站的追蹤 issue（見上一節）；沒有答案的項目
 不要自己假設，也不要拿上一站的答案套用。
 
 | 何時問 | 問什麼 | 為什麼要問 |
@@ -113,6 +140,7 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 ## 步驟
 
 每支腳本的參數與 exit code 寫在檔頭（`sed -n '2,20p' <script>`），這裡不重複。
+開始前先確認這一站有追蹤 issue（上方「追蹤 issue」）；每一步的完成條件達成後，把結果留言到追蹤 issue，並更新 body。
 
 1. **盤點來源**（WMO）：`scripts/source/inventory.sh --context woow-k3s --ns <ns>`。
    完成條件：拿到 `inventory-<ns>-<UTC>.json`，stderr 摘要列出 core_date、模組數、非 core addon、filestore。
@@ -132,7 +160,9 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
 5. **addon 進 image**（WMO 導出、agent 開 PR、人 merge 與 `/approve`）：
    - 導出原始碼（WMO）：`scripts/source/export-addons.sh --inventory <步驟 1 的盤點檔> --out-dir <新目錄>`。唯讀 exec，
      逐模組對盤點檔驗內容 hash；完成條件：exit 0，拿到 `<out-dir>/addons/` 與 `addons-export.json`。原始碼是客戶的
-     程式碼，留在本機交接，不貼進 issue／PR 留言。
+     程式碼，留在本機交接，不貼進 issue／PR 留言。模組根目錄本身是 symlink（例：`woow_odoo_line_liff -> _repo_line_bridge`）
+     時另外一次 exec 打包連結指向的內容；這要靠盤點檔的 `root_symlink`，#1844 以前產生的盤點檔遇到這種模組會 exit 4
+     ——重跑 `inventory.sh` 再導出。
    - paas-odoo-ci PR（agent）：以步驟 3 的報告為準——`NEED_IMPORT` 的模組從 `<out-dir>/addons/` 原樣複製進
      **`addons-cloud/`**（只進 cloud-odoo、不進平台 image；不要放 `addons/`，也不要列進 `config/paas-addons.list`），
      `NEED_IMPORT`＋`NEED_LIST` 加進 `config/cloud-addons.list`，重跑 `generate-catalog.sh`／`generate-requirements.sh`
@@ -141,6 +171,17 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
      - `DIVERGED`：同名模組不能同時在 `addons/` 與 `addons-cloud/`，只能「用 paas-odoo-ci／目標那份」或「把那份換成
        來源的」。逐檔 diff（先 `--strip-trailing-cr`，差異常常只是 CRLF）後寫進 PR 描述給人裁決；裁決用現有那份的，
        之後的比對加 `--accept-diverged <模組,…>`。
+     - **多站共用、各站程式碼不同的模組**（例：LINE 三件組在 9～10 站有 3～5 種程式碼）：一顆 image 同名模組只放一份，
+       上面「原樣複製」只適用於只有一站有原始碼的模組。這類模組先合併成一份再進 paas-odoo-ci，搬遷前先確認：
+       - 版本號要 ≥ 所有要搬的站的 DB 版本，否則那一站比對會判 `BLOCK_DOWNGRADE`。合併版在每一站都會是 `DIVERGED`；
+         裁決用合併版之後，每一站的比對都要帶 `--accept-diverged`，列了哪些模組記進該站的追蹤 issue。
+       - 合併版的升級（migration script、改了 stored compute 欄位的算法）若會改到既有的客戶資料列，步驟 8 的 upgrade 比對
+         一定不通過，現在也沒有放行機制。合併時避開；避不開就先改比對（`fingerprint_business.sql`／`fingerprint_diff.py`），
+         不要帶著差異上線。每一站都要先在彩排把 `-u all` 走過一次。
+       - 平台 Odoo 自己也裝的模組放在 `addons/`，平台 image 也帶。合併版放進去，平台 image 跟著換版，平台要另排一次
+         `-u <模組>` 與測試（#1820）；PR 描述要列出受影響的平台模組。只給租戶用的才放 `addons-cloud/`。
+       - 已在 PaaS 的租戶（含先前搬進來的站）不會馬上換：服務的 image 釘在自己的 `helm_values`，下次 Redeploy 才換成
+         範本的新 image、跑 `-u all`。範本換 digest 時列出受影響的服務，事先通知。
      - pip：`requirements-cloud.txt` 由 CI 從清單內模組 manifest 的 `external_dependencies` 產生。manifest 寫的是
        import 名而 pip 裝不了時（例 `PIL`），在 paas-odoo-ci 的 `generate-requirements.sh` 對照表補一筆，不改 manifest。
      - 匯入前掃一次寫死的密碼／金鑰；`addons-export.json` 裡 `symlinks_outside` 非空的模組先處理連結。
@@ -148,7 +189,8 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    - build 出新 cloud-odoo 後，目標服務改用這顆 image，回到步驟 2 重比到 `READY`。data_dir 的 addon 也要進 image：
      升級閘只讀 image 的 `addons_path`，不讀 data_dir。完成條件：目標 image 的盤點涵蓋來源所有已安裝模組。
 6. **搬運**：目標端 `scripts/target/receive.sh open`（agent）印出 `--url` 並寫出 token 檔 → 兩者交給 WMO 跑
-   `scripts/source/export.sh`（預設凍結：來源 odoo 先 scale 0；`--live` 只給彩排）→ `receive.sh close`。
+   `scripts/source/export.sh` → `receive.sh close`。export.sh **只檢查、不凍結**：預設要求來源 odoo 已 scale 0、沒有 pod
+   （否則 `ERROR: … is not frozen`），凍結指令見步驟 9.2；`--live` 跳過檢查，只給彩排。
    完成條件：`export-<ns>-<UTC>.json` 每個檔的 sha256 都跟 receiver 回報一致（export.sh 失敗即 exit 3）。
    - helper pod 剛起來時，來源 ns 與目標 ns 的 NetworkPolicy 還沒放行它的 IP，連 PG、連 receiver 都會被拒（harumi
      prod 彩排與沙盒實測 Connection refused）。export 會先等 receiver 的 `/healthz`、連 PG 失敗也會重試，各最多約 60 秒；
@@ -169,14 +211,16 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    完成條件：Job 印出 `RESTORE-DONE`（暫停排程時多一行 `crons held until …`），verify exit 0。
 8. **升級驗證**（agent）：平台復權，等升級閘跑完、pod Ready → `scripts/target/verify.sh --stage upgrade` → Redeploy
    （`cloud-service.sh redeploy`，等 `status` 回到 running）→
-   再跑一次 `verify.sh --stage upgrade --release-crons`（彩排直接帶 `--cleanup`，它也會放開排程）。
+   再跑一次 `verify.sh --stage upgrade --cleanup`（比對通過才放開排程、刪 restore Job 與 incoming PVC；彩排與正式切換
+   都一樣）。這次就是最後一次比對：排程一放開，收信、金流等排程就會改到客戶資料列（harumi 正式切換實測：fetchmail
+   一跑就更新 `fetchmail_server` 那一列），之後再比一定不通過。想先留著 incoming PVC 再查時改帶 `--release-crons`，
+   事後用步驟 9.7 的手動指令刪。
    initContainer exit 4＝image 缺來源模組（DB 沒被動），回步驟 5；exit 78＝DB core 比 image 新，image 選錯。
    判準是客戶資料列（`scripts/fingerprint_business.sql` 檔頭）：還原當時就存在的客戶資料列必須原封不動；模組資料列
    被 `-u all` 重寫、升級後新增的列、registry 表的變動列為「預期內」。模組擁有的列（含 noupdate）的可翻譯欄位只比
    en_US——升級會替它們補上新翻譯。filestore：仍被附件引用的檔不能少、內容不能變；
    模組附件換了內容後被 Odoo 回收的舊檔列為「預期內」。
-   完成條件：兩次 verify 都 exit 0，「預期內的變動」逐條看過；最後一次印出「排程已放開」。`--cleanup` 才會刪掉含客戶資料的
-   incoming PVC。
+   完成條件：兩次 verify 都 exit 0，「預期內的變動」逐條看過；最後一次印出「排程已放開」與 `incoming PVC … deleted`。
    - 排程要等最後一次比對通過才放開：放開後過期的排程跑一輪、改到客戶資料，之後再比就不準。比對沒過、但差異查明可以接受
      （或要提早恢復排程）時，用 `scripts/target/cron-hold.sh status|release` 手動處理。
    - 放開（`cron-release.sql`）先移除 PG trigger，再處理仍停在暫停時點的排程與 trigger：暫停當時就有的還原原值，暫停期間
@@ -185,6 +229,7 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    - upgrade 階段的 verify 取完指紋後會檢查暫停是否擋住：暫停起點之後有排程跑過（`lastcall`）或正在跑（cron job 對
      `ir_cron` 持有鎖）就判不通過——指紋之後還可能再跑，比對通過也不可信（彩排第二輪舊版暫停就是這樣「剛好通過」）。
    比對要在任何人登入目標站之前跑：管理員登入會改寫 `web.base.url`，之後的比對會多出 `ir_config_parameter` 不一致。
+   對網址的任何 HTTP 請求（含 agent 自己的 `curl /web/login`）會新增 `website_visitor`／`website_track` 列，列為「升級後新增」不擋。
    session 檔不在搬遷範圍：搬過去之後所有人都要重新登入（Odoo 的 autovacuum 會把舊的裝置紀錄標成已撤銷）。
    - 平台的 Redeploy 與改 addon 會觸發部署後初始化（operator `POST /init/odoo`：更新模組清單＋台灣在地化）。在地化會裝
      zh_TW、改管理員語言／時區與公司國家／幣別；restore 預寫的 `tenant_localized` 讓它整段跳過。所以第一次 verify 在 Redeploy
@@ -199,15 +244,24 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
       - 關帳＝每台收銀機在 POS 畫面按 Close Register 做完結班（點現金、過帳），`pos.session` 的 state 都是 `closed`。
         POS 會把訂單先存在平板的瀏覽器再同步；session 開著就凍結，平板上還沒同步的訂單不會在匯出的資料裡。
       - scale 0 之前重跑一次 `inventory.sh`（唯讀），摘要的 `pos` 那行是 `open sessions 0, draft orders 0` 才往下。
+        後面若多一段 `idle opening_control N (…)`：那些 session 停在開帳步驟（`opening_control`、沒有 `start_at`、0 訂單）——
+        有人打開 POS 但沒按開帳，前端停在開帳視窗不能點單，平板上不會有未同步的訂單，**不擋凍結**；照原狀搬，店家在新站
+        接著開帳（harumi 的 session 185 就是這樣，10-10 到 10-16 一直掛著）。
+      - 凍結與回切的指令（來源 ns 不在本 repo 白名單，由 WMO 或人跑；`<odoo>` 是來源的 odoo Deployment）：
+        `kubectl --context <ctx> -n <ns> scale deploy/<odoo> --replicas=0`，再 `kubectl get pods` 確認 `<odoo>-*` 都消失才跑
+        export；回切＝`--replicas=1`。export.sh 不會替你 scale。
    3. 走步驟 6～8：`export.sh` **不帶** `--live`、`restore.sh` **不帶** `--neutralize`。兩階段 verify 都 exit 0 才往下；
-      不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。Redeploy 後那次 verify 帶 `--release-crons`：
-      排程沒放開，第 5 點驗收的收發信不會動（最晚到暫停時間結束才會自己恢復）。
+      不通過就回切（第 6 點），不要帶著差異上線。比對在任何人登入之前跑完。Redeploy 後那次 verify 帶 `--cleanup`
+      （放開排程並刪 incoming PVC）：排程沒放開的話，第 5 點驗收的收發信不會動（最晚到暫停時間結束才會自己恢復）。
    4. 對外網址改指（下方「對外網址」的三步順序；`curl` 回到目標站才算完成）、外部整合改指（MCP、webhook 來源端的設定）。
    5. 驗收（人）：登入、開一個 POS session、收發各一封信、金流測一筆。通過後立刻手動加一份平台備份
       （「備份與失敗還原」），再開放給使用者。
    6. 回切：新站產生第一筆真實交易之前可以回切——匯出全程唯讀，來源資料沒被動過；之後就不能回切（兩邊資料分岔）。
       各階段的回復動作與順序見「備份與失敗還原」。要不要回切由調用者決定，agent 不自行決定。
-   7. 收尾：`verify.sh --stage upgrade --cleanup` 刪掉含客戶資料的 incoming PVC；來源保留到約定的觀察期滿再下線（WMO）。
+   7. 收尾：incoming PVC 已在第 3 點的 `--cleanup` 刪掉；來源保留到約定的觀察期滿再下線（WMO）。
+      第 3 點改帶 `--release-crons`、PVC 還留著時，**不要**再跑 `verify --cleanup`（排程放開後必定不通過、不會刪），直接刪：
+      `kubectl --context <ctx> -n <target-ns> delete job -l app.kubernetes.io/part-of=standalone-odoo-migrate,app.kubernetes.io/component=restore`
+      → `kubectl --context <ctx> -n <target-ns> delete pvc standalone-odoo-incoming`（先刪 Job：它的 pod 還掛著這顆 PVC）。
 
 ## 切換前檢查
 

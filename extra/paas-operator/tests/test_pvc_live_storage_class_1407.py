@@ -139,7 +139,7 @@ def test_cli_with_snapshot_reuses_and_still_stamps_keep():
 
 _RELEASE = {
     "name": "r", "namespace": "paas-ws-test",
-    "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+    "version": 2, "info": {"status": "deployed", "last_deployed": ""},
     "chart": {"metadata": {"name": "home-assistant-full", "appVersion": "1"}},
     "manifest": "kind: ConfigMap\nmetadata:\n  name: c\n",
 }

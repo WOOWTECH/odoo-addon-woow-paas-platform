@@ -80,7 +80,7 @@ class FakeHelm:
             name = args[1]
             out = json.dumps({
                 "name": name, "namespace": NS, "manifest": "",
-                "info": {"revision": 2, "status": "deployed", "last_deployed": "x"},
+                "version": 2, "info": {"status": "deployed", "last_deployed": "x"},
                 "chart": {"metadata": {"name": "c", "version": "0.1.0", "appVersion": "1"}},
                 "config": {},
             })

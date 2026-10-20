@@ -3,6 +3,8 @@ import logging
 import re
 import uuid
 
+import psycopg2.errors
+
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
@@ -314,7 +316,11 @@ _RETRYABLE_WITH_TUNNEL_STATES = ('pending', 'error')
 
 class SmartHome(models.Model):
     _name = 'woow_paas_platform.smart_home'
-    _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
+    _inherit = [
+        'woow_paas_platform.subscription_lifecycle_mixin',
+        # #1766：一台 HA 一條 tunnel（claim／release／第二台偵測）。
+        'woow_paas_platform.tunnel.binding.mixin',
+    ]
     _description = 'Smart Home Instance'
     _order = 'create_date desc'
 
@@ -643,6 +649,37 @@ class SmartHome(models.Model):
                 failed.append(info['label'])
         return failed
 
+    def _try_lock_lifecycle_rows(self):
+        """RACE-09: NOWAIT row lock before any external lifecycle side effect.
+
+        ORM writes stay buffered while an external request is in flight, so
+        ``state='provisioning'`` alone does not serialize a concurrent delete.
+        """
+        ids = tuple(sorted(set(self.ids)))
+        if not ids:
+            return True
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    'SELECT id FROM %s WHERE id IN %%s '
+                    'ORDER BY id FOR UPDATE NOWAIT' % self._table, [ids])
+                locked = {row[0] for row in self.env.cr.fetchall()}
+        except (psycopg2.errors.LockNotAvailable,
+                psycopg2.errors.SerializationFailure):
+            return False
+        if locked != set(ids):
+            raise UserError(_('One or more Smart Home records no longer exist.'))
+        fields_ = ['state', 'error_message', 'tunnel_id', 'tunnel_name']
+        self.flush_recordset(fields_)
+        self.invalidate_recordset(fields_)
+        return True
+
+    def _lock_lifecycle_or_raise(self):
+        if not self._try_lock_lifecycle_rows():
+            raise UserError(_(
+                'Another Smart Home lifecycle operation is in progress. '
+                'Please retry when it finishes.'))
+
     def action_provision(self):
         """Provision the smart home by creating a dedicated Cloudflare Tunnel.
 
@@ -688,6 +725,7 @@ class SmartHome(models.Model):
         provision，修前同樣會建第二條 tunnel 並蓋掉 ``tunnel_id``。同一道 guard 一併關掉。
         """
         self.ensure_one()
+        self._lock_lifecycle_or_raise()
 
         # stored-id guard —— 必須在任何 write 之前（含 state='provisioning'），
         # 否則被拒的重試會把記錄推離原本的 state 卻什麼也沒做成。
@@ -1068,6 +1106,7 @@ class SmartHome(models.Model):
         """
         self.ensure_one()
         self._assert_unlink_authorized()
+        self._lock_lifecycle_or_raise()
         if self.tunnel_id:
             self.write({'state': 'deleting'})
         self.unlink()
@@ -1288,7 +1327,11 @@ class SmartHome(models.Model):
 
         try:
             result = client.get_tunnel_status(self.tunnel_id)
-            self.write(self._tunnel_vals_from_status(result))
+            vals = self._tunnel_vals_from_status(result)
+            # 翻旗標的那一刻記一行（不是每次輪詢都記）——#1766 的現場是「平台顯示
+            # 一切正常」，所以第二台接上必須在 log 裡留痕。
+            self._tunnel_binding_log_conflict(vals)
+            self.write(vals)
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
@@ -1323,6 +1366,8 @@ class SmartHome(models.Model):
                 'tunnel_status': 'deleted',
                 'connector_id': '',
                 'connector_type': '',
+                'connector_count': 0,
+                'binding_conflict': False,
             }
         vals = {
             'tunnel_status': 'connected' if connections else 'disconnected',
@@ -1333,6 +1378,10 @@ class SmartHome(models.Model):
             vals['connector_type'] = conn.get('type', '')
             if conn.get('opened_at'):
                 vals['tunnel_uptime'] = conn['opened_at']
+        # ⛔ 上面只看 connections[0]（顯示用的那一個 connector），所以它**看不出**
+        # 有兩台機器接著同一條 tunnel——那正是 #1766 的隱形成因。機器數要數
+        # distinct client_id，由 binding mixin 負責（#1766）。
+        vals.update(self._tunnel_binding_vals_from_connections(connections))
         return vals
 
     def _live_tunnel_status(self):
@@ -1413,6 +1462,14 @@ class SmartHome(models.Model):
             'tunnel_uptime': self.tunnel_uptime or '',
             'connector_id': self.connector_id or '',
             'connector_type': self.connector_type or '',
+            # #1766：綁在哪一台 HA、以及現在有幾個 cloudflared 接著。
+            # `binding_conflict=True` ＝ 兩台共用一條 tunnel，對外網址會連到先回應
+            # 的那一台（UI 要把它當錯誤顯示，不是裝飾）。
+            'binding_state': self.binding_state,
+            'bound_instance_label': self.bound_instance_label or '',
+            'bound_at': self.bound_at.isoformat() if self.bound_at else '',
+            'connector_count': self.connector_count,
+            'binding_conflict': self.binding_conflict,
             'ha_port': self.ha_port,
             'subdomain': self.subdomain or '',
             'error_message': self.error_message or '',

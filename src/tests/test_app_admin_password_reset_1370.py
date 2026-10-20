@@ -351,3 +351,135 @@ class TestOmnigentAdminReset1370(_AppAdminResetFixture):
         self.assertNotIn('archived', result['error'])
         self.assertNotIn('in Odoo', result['error'])
         self.assertEqual(self._secret(self.omni_service).admin_password, before)
+
+
+class TestEmqxAdminReset1774(_AppAdminResetFixture):
+    """#1774（商用驗收 INFRA-EMQX-007-1）：EMQX Dashboard 的 Reset 走 operator exec（emqx_exec）。
+
+    EMQX 的初始密碼由 has_admin_gui 供給（app_managed：dashboard.default_password 只在第一次
+    開機生效），之後密碼只活在 EMQX 自己的 mnesia。原本平台回「請在服務內修改」，擁有者忘記
+    密碼就沒有救援；現在由 operator exec ``emqx ctl admins passwd`` 重設。
+    """
+
+    def setUp(self):
+        super().setUp()
+        Template = self.env['woow_paas_platform.cloud_app_template']
+        self.emqx_template = Template.create({
+            'name': 'EMQX 1774', 'slug': 'emqx-1774', 'category': 'web',
+            'helm_repo_url': '', 'helm_chart_version': '1.0.0',
+            'helm_chart_name': 'oci://example/emqx-1774',
+            'has_admin_gui': True, 'admin_password_carrier': 'app_managed',
+            'app_admin_reset_kind': 'emqx_exec',
+        })
+        Service = _internal_provision(self.env['woow_paas_platform.cloud_service'])
+        self.emqx_service = Service.create({
+            'name': 'EMQX 1774', 'workspace_id': self.workspace.id,
+            'template_id': self.emqx_template.id, 'state': 'running',
+            'helm_namespace': 'paas-ws-test-1774', 'helm_release_name': 'emqx-1774',
+        })
+
+    def test_capability(self):
+        self.assertTrue(self.emqx_template.admin_reset_supported)
+        # 只有 Reset（平台鑄造、一次性顯示），不開放租戶自設。
+        self.assertFalse(self.emqx_template.admin_credentials_settable)
+
+    def test_exception_is_limited_to_app_managed(self):
+        for vals in ({'admin_password_carrier': 'helm_secret'},
+                     {'admin_password_carrier': 'config_json'}):
+            with self.assertRaises(ValidationError, msg=repr(vals)):
+                with self.env.cr.savepoint():
+                    self.emqx_template.write(vals)
+
+    def test_helm_reset_path_still_refused(self):
+        """app_managed 走 helm reset＝helm upgrade 成功、密碼沒變（假裝成功），照擋。"""
+        from odoo.exceptions import UserError
+        with self.assertRaisesRegex(UserError, 'manages its own admin password'):
+            self.emqx_service._reset_admin_password()
+
+    @patch(CLIENT_PATH)
+    def test_reset_calls_emqx_endpoint_and_stores_password(self, get_client):
+        client = get_client.return_value
+        client.reset_emqx_admin_password.return_value = {
+            'success': True, 'login': 'admin', 'second_factor_cleared': False}
+
+        result = self._reset(self.emqx_service)
+
+        self.assertTrue(result['success'], result)
+        data = result['data']
+        kwargs = client.reset_emqx_admin_password.call_args.kwargs
+        self.assertEqual(kwargs['namespace'], 'paas-ws-test-1774')
+        self.assertEqual(kwargs['release_name'], 'emqx-1774')
+        self.assertEqual(data['admin_password'], kwargs['new_password'])
+        # 平台記錄與 EMQX 一致（下次 Redeploy 也把同一組值帶進 chart Secret）。
+        self.assertEqual(self._secret(self.emqx_service).admin_password, kwargs['new_password'])
+        self.assertEqual(data['admin_username'], 'admin')
+        self.assertEqual(data['template']['app_admin_reset_kind'], 'emqx_exec')
+        # EMQX 改密碼會撤銷該帳號的 Dashboard token；CE 沒有 2FA——文案不能說關了 2FA。
+        self.assertIn('signed out', data['message'])
+        self.assertNotIn('two-factor', data['message'])
+        client.reset_release_config.assert_not_called()
+        client.reset_omnigent_admin_password.assert_not_called()
+        client.reset_odoo_admin_password.assert_not_called()
+        self.assertEqual(self.emqx_service.state, 'running')
+
+    @patch(CLIENT_PATH)
+    def test_generated_password_always_meets_emqx_rules(self, get_client):
+        """EMQX 要求至少兩類字元（字母／數字／符號）。token_urlsafe 約 0.1% 會全是字母，
+        那一把送過去會被 EMQX 拒絕——平台要重鑄，而不是讓租戶撞到「重設失敗」。"""
+        client = get_client.return_value
+        client.reset_emqx_admin_password.return_value = {
+            'success': True, 'login': 'admin', 'second_factor_cleared': False}
+        letters_only = 'abcdefghijklmnopqrstuvwxyzABCDEF'
+        legal = 'abcdefghijklmnopqrstuvwxyz-ABC12'
+        Service = type(self.env['woow_paas_platform.cloud_service'])
+        with patch.object(Service, '_generate_admin_password',
+                          side_effect=[letters_only, legal]) as gen:
+            result = self._reset(self.emqx_service)
+
+        self.assertTrue(result['success'], result)
+        self.assertEqual(gen.call_count, 2)
+        self.assertEqual(client.reset_emqx_admin_password.call_args.kwargs['new_password'], legal)
+
+    @patch(CLIENT_PATH)
+    def test_refusal_stores_nothing(self, get_client):
+        get_client.return_value.reset_emqx_admin_password.return_value = {
+            'success': False, 'error_kind': 'failed', 'error_code': 'admin_missing'}
+        before = self._secret(self.emqx_service).admin_password
+
+        result = self._reset(self.emqx_service)
+
+        self.assertFalse(result['success'])
+        self.assertIn('could not be found', result['error'])
+        self.assertEqual(self._secret(self.emqx_service).admin_password, before)
+
+    @patch(CLIENT_PATH)
+    def test_unknown_outcome_never_claims_unchanged(self, get_client):
+        get_client.return_value.reset_emqx_admin_password.return_value = {
+            'success': False, 'error_kind': 'unknown', 'error_step': 'exec'}
+        before = self._secret(self.emqx_service).admin_password
+
+        result = self._reset(self.emqx_service)
+
+        self.assertFalse(result['success'])
+        self.assertIn('status unknown', result['error'])
+        self.assertEqual(self._secret(self.emqx_service).admin_password, before)
+
+    @patch(CLIENT_PATH)
+    def test_non_admin_member_is_denied(self, get_client):
+        member = self._make_member('emqx-1774-user', ROLE_USER)
+
+        result = self._reset(self.emqx_service, user=member)
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error'], 'Permission denied')
+        get_client.return_value.reset_emqx_admin_password.assert_not_called()
+
+    @patch(CLIENT_PATH)
+    def test_tenant_cannot_set_own_credentials(self, get_client):
+        with self._as(self.admin):
+            result = self.controller.api_service_set_admin_credentials(
+                self.workspace.id, self.emqx_service.id, password='Tenant-Chosen-123')
+
+        self.assertFalse(result['success'])
+        self.assertIn('can only be reset', result['error'])
+        get_client.return_value.reset_emqx_admin_password.assert_not_called()

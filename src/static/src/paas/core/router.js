@@ -1,7 +1,8 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
-import { showProjects } from "./platform_config";
+import { showLlm, showProjects } from "./platform_config";
+import { buildLlmRoutes, llmGateRedirect } from "./llm_routes";
 import { captureInvitationFragment, clearInvitationToken, getInvitationRevision } from "./invitation_context";
 
 /** @type {Array<{path: string, name: string, routeName?: string, pattern?: RegExp}>} */
@@ -26,7 +27,7 @@ const routes = [
     // `access`（#746）：CS Access Control 頁籤。白名單沒有它的話，深連結
     // .../services/:id/access 會掉到 NotFoundPage——頁籤自己 setTab 改的 hash
     // 也一樣，換頁後重新整理就進不去。
-    { path: "workspace/:id/services/:serviceId/:tab", name: _t("Service Detail Tab"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers|access)$/ },
+    { path: "workspace/:id/services/:serviceId/:tab", name: _t("Service Detail Tab"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|information|logs|addons|mcp-servers|access)$/ },
     { path: "workspace/:id/services/:serviceId", name: _t("Service Detail"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     // D4=C: `/woow#/projects` is the new entry for the Projects list page; the
     //        legacy `/woow#/ai-assistant/projects` route below stays active and
@@ -39,6 +40,9 @@ const routes = [
     { path: "ai-assistant/tasks/:taskId", name: _t("Task Detail"), routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },
     { path: "ai-assistant/tasks", name: _t("Tasks"), routeName: "ai-tasks" },
     { path: "ai-assistant/chat/:conversationId", name: _t("AI Chat"), routeName: "ai-chat", pattern: /^ai-assistant\/chat\/(\d+)$/ },
+    // LLM-01c：「AI 模型」分頁。單一 routeName `llm` 的雙路由（`llm/<子頁>` 在前、exact `llm`
+    // 在後；子頁白名單與 pattern 在 core/llm_routes.js，node 測試直接驗那一份）。
+    ...buildLlmRoutes(_t("AI Models")),
     { path: "deployments", name: _t("Deployments"), routeName: "deployments" },
     { path: "billing", name: _t("Billing"), routeName: "billing" },
     { path: "billing/topup", name: _t("Top-up Store"), routeName: "billing-topup" },
@@ -67,16 +71,44 @@ export const router = reactive({
 
     _initialized: false,
 
+    /**
+     * LLM-01c：離開守衛。一次性金鑰對話框在「建立中／顯示中」時登記一個函式；hash 一變（側欄、
+     * Header、程式呼叫 navigate、瀏覽器上一頁跨到別的 hash），守衛回 true 就**不換頁**：hash 用
+     * replaceState 還原（不再觸發 hashchange），由守衛自己提示（對話框顯示關閉確認）。Root 依
+     * router.current 換分支，換頁就會卸載整串元件、明文跟著丟掉，所以要擋在 parseRoute 之前。
+     */
+    _leaveGuard: null,
+    _currentHash: "",
+
     init() {
         if (this._initialized) return;
         this._initialized = true;
         this.parseRoute();
         window.addEventListener("hashchange", () => {
-            this.parseRoute();
+            this.onHashChange();
         });
         if (!window.location.hash) {
             window.location.hash = "#/dashboard";
         }
+    },
+
+    /** 登記離開守衛；回傳移除函式（只移除自己登記的那一個）。 */
+    setLeaveGuard(guard) {
+        this._leaveGuard = guard;
+        return () => {
+            if (this._leaveGuard === guard) {
+                this._leaveGuard = null;
+            }
+        };
+    },
+
+    onHashChange() {
+        const guard = this._leaveGuard;
+        if (guard && window.location.hash !== this._currentHash && guard()) {
+            window.history.replaceState(window.history.state, "", this._currentHash || "#/dashboard");
+            return;
+        }
+        this.parseRoute();
     },
 
     parseRoute() {
@@ -92,6 +124,7 @@ export const router = reactive({
         const queryStr = qIdx === -1 ? "" : raw.slice(qIdx + 1);
 
         this.params = {};
+        this._currentHash = window.location.hash;
         if (path === "workspace-invitation/accept") {
             this.current = "workspace-invitation-accept";
             this.params.invitationRevision = getInvitationRevision();
@@ -139,8 +172,13 @@ export const router = reactive({
                         this.params.conversationId = match[1];
                     } else if (route.routeName === 'ai-project-kanban') {
                         this.params.id = match[1];
+                    } else if (route.routeName === 'llm') {
+                        // 唯一的 capture 是子頁，不是記錄 id。
+                        this.params.tab = match[1];
+                        delete this.params.id;
                     }
                     this._applyProjectGate();
+                    this._applyLlmGate();
                     return;
                 }
             }
@@ -151,6 +189,7 @@ export const router = reactive({
         const route = routes.find(r => r.path === path);
         this.current = route ? route.routeName : "not-found";
         this._applyProjectGate();
+        this._applyLlmGate();
     },
 
     _applyProjectGate() {
@@ -163,6 +202,21 @@ export const router = reactive({
             if (window.location.hash !== "#/dashboard") {
                 window.location.hash = "#/dashboard";
             }
+            this._currentHash = "#/dashboard";
+        }
+    },
+
+    _applyLlmGate() {
+        // LLM-01c：開關關（或不在 pilot 名單）時 `#/llm`、`#/llm/<子頁>` 都導回總覽，
+        // 判準同 _applyProjectGate（同步讀 session，不會閃現分頁）。後端 /api/llm/* 另回
+        // llm_disabled——這裡只是外觀。
+        if (llmGateRedirect(this.current, showLlm())) {
+            this.current = "dashboard";
+            this.params = {};
+            if (window.location.hash !== "#/dashboard") {
+                window.location.hash = "#/dashboard";
+            }
+            this._currentHash = "#/dashboard";
         }
     },
 

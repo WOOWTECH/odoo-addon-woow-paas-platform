@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- #1680 Workspace quota 背景同步：有限次自動重試（退避 1/5/15/60/240 分鐘）、
+             目標改變後補推、已同步者每 6 小時讀回驗證。失敗與忙碌路徑另以 ir.cron.trigger
+             精準喚醒；這裡的間隔只是兜底。必須 active，否則 _trigger 不建立觸發。 -->
+        <record id="ir_cron_reconcile_workspace_quota" model="ir.cron">
+            <field name="name">Workspace Quota: Sync Retry and Reconcile</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reconcile_workspace_quotas()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>
