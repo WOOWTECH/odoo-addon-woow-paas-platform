@@ -373,22 +373,27 @@ class TestLlmNotifications(_ConfiguredCase):
         client.user_set_token_status.side_effect = [
             nac.Unknown('proxy_timeout'), nac.Ok({}), nac.Ok({}),
         ]
-        now = fields.Datetime.now()
+        client.user_list_tokens.return_value = nac.Ok({'total': 0, 'items': []})
+        now = fields.Datetime.now() + timedelta(minutes=2)
         tick_model = type(account)
         with patch.object(tick_model, '_llm_tenant_ip', return_value='198.18.0.1'), \
                 patch.object(tick_model, '_llm_up_token', return_value='test-up'), \
                 patch.object(tick_model, '_llm_client', return_value=client), \
                 patch.object(notifications_module, '_utcnow', return_value=now):
             tick = LlmCronTick(30, 1)
-            self.assertTrue(self.Notice._llm_not_me_disable_tick({}, tick))
+            self.assertTrue(self.Notice._llm_not_me_disable_tick({}, tick, account_ids=[account.id]))
             self.assertEqual(tick.done, 1)
             self.assertEqual(active.not_me_disable_attempts, 1)
             self.assertEqual(active.state, 'active', 'failure does not claim remote disable')
-            self.assertFalse(self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1)))
-            self.assertEqual(failed_reveal.state, 'disabled')
+            self.assertTrue(self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id]))
+            self.assertEqual(failed_reveal.state, 'failed_reveal')
             self.assertEqual(client.user_set_token_status.call_args.args[2], 712)
+            # Both mirrors must finish the full name scan before their receipt.
+            self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id])
+            self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id])
+            self.assertEqual(failed_reveal.disabled_by, 'suspend')
             with patch.object(notifications_module, '_utcnow', return_value=now + timedelta(seconds=60)):
-                self.assertFalse(self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1)))
+                self.assertFalse(self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id]))
         self.assertEqual(active.state, 'disabled')
         self.assertEqual(client.user_set_token_status.call_count, 3)
 

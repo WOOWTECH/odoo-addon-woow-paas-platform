@@ -193,6 +193,10 @@ class LlmApiKey(models.Model):
                                              groups='base.group_system')
     not_me_scan_page = fields.Integer(readonly=True, default=1, copy=False,
                                       groups='base.group_system')
+    # Numeric IDs and retry counters only; never store a list response or key material.
+    not_me_disable_plan = fields.Json(readonly=True, copy=False, groups='base.group_system')
+    not_me_disable_work_count = fields.Integer(readonly=True, default=0, copy=False,
+                                               groups='base.group_system')
     not_me_attempt_notice_id = fields.Integer(readonly=True, default=0, copy=False,
                                               groups='base.group_system')
     not_me_disabled_notice_id = fields.Integer(readonly=True, default=0, copy=False,

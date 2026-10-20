@@ -1,5 +1,6 @@
 """Durable, tenant-bound notifications and one-time account action tokens."""
 import base64
+from copy import deepcopy
 import hashlib
 import hmac
 import logging
@@ -43,8 +44,9 @@ _DISABLE_PENDING_SQL = """
     JOIN woow_paas_platform_llm_account a ON a.id=k.account_id
     WHERE a.state='suspended' AND a.suspend_reason='not_me'
     AND k.state IN ('active','disabled','failed_reveal','creating')
-    AND (k.state<>'disabled' OR k.disabled_by IS DISTINCT FROM 'suspend'
-         OR COALESCE(k.not_me_disabled_notice_id,0)<>COALESCE(a.not_me_notice_id,0))
+    AND (k.state IN ('active','creating') OR k.disabled_by IS DISTINCT FROM 'suspend'
+         OR COALESCE(k.not_me_disabled_notice_id,0)<>COALESCE(a.not_me_notice_id,0)
+         OR NOT COALESCE((k.not_me_disable_plan->>'complete')::boolean,FALSE))
     AND (k.not_me_disable_next_at IS NULL OR k.not_me_disable_next_at<=%s
          OR COALESCE(k.not_me_attempt_notice_id,0)<>COALESCE(a.not_me_notice_id,0))
 """
@@ -365,92 +367,151 @@ class LlmNotification(models.Model):
 
     @api.model
     def _cron_llm_not_me_disable(self):
-        """Bounded background disable: at most one key remote write per tick."""
+        """At most one list page or idempotent remote disable per tick."""
         return run_llm_cron(self.env, 'woow_paas_platform.ir_cron_llm_not_me_disable',
                             self._llm_not_me_disable_tick, items=1, outbound=True)
 
     @api.model
-    def _llm_not_me_disable_tick(self, config, tick):
+    def _llm_not_me_disable_tick(self, config, tick, *, account_ids=None):
         if not tick.can_take(nac.MIN_CALL_SECONDS):
             return False
         Key = self.env['woow_paas_platform.llm_api_key'].sudo()
         Key.flush_model()
         self.env['woow_paas_platform.llm_account'].flush_model()
-        # Web management holds this same lock before remote I/O. Never send the
-        # final disable while an older enable can still finish and then roll back.
+        scope = ' AND a.id = ANY(%s) ' if account_ids is not None else ''
+        params = [_utcnow()] + ([list(account_ids)] if account_ids is not None else [])
+        # Hold the management lock before *any* upstream operation. Fair ordering
+        # counts work units, so a large scan cannot monopolize same-second ticks.
         self.env.cr.execute(
-            'SELECT k.id ' + _DISABLE_PENDING_SQL
-            + ' ORDER BY k.not_me_disable_next_at NULLS FIRST,k.id '
-              'LIMIT 1 FOR UPDATE OF k SKIP LOCKED', (_utcnow(),))
+            'SELECT k.id ' + _DISABLE_PENDING_SQL + scope
+            + ' ORDER BY CASE WHEN COALESCE(k.not_me_attempt_notice_id,0) '
+              '<>COALESCE(a.not_me_notice_id,0) THEN 0 '
+              'ELSE COALESCE(k.not_me_disable_work_count,0) END, '
+              'k.not_me_disable_next_at NULLS FIRST,k.id '
+              'LIMIT 1 FOR UPDATE OF k SKIP LOCKED', params)
         row = self.env.cr.fetchone()
         if not row:
-            return self._llm_has_pending_disables()
+            return self._llm_has_pending_disables(account_ids=account_ids)
         key = Key.browse(row[0])
         key.invalidate_recordset()
         account = key.account_id
         generation = account.not_me_notice_id
-        if key.not_me_attempt_notice_id != generation:
+        if (key.not_me_attempt_notice_id != generation or not key.not_me_disable_plan
+                or key.not_me_disable_plan.get('complete')):
+            # Even a known ID can have same-name siblings: an unknown create can
+            # have retried its POST before the original request became visible.
+            quiet_after = key.create_date + timedelta(seconds=nac.KEY_CREATE_BUDGET_SECONDS + 10)
+            quiet_epoch = int(quiet_after.replace(tzinfo=timezone.utc).timestamp())
+            plan = {
+                'complete': False, 'scan_complete': not bool(key.newapi_name),
+                'scan_retry_at': quiet_epoch, 'scan_attempts': 0, 'scan_total': None,
+                'prefer_scan': False, 'pending': {}, 'disabled': [],
+            }
+            if key.newapi_token_id:
+                plan['pending'][str(key.newapi_token_id)] = {'attempts': 0, 'retry_at': 0}
             _llm_internal(key).write({
                 'not_me_disable_attempts': 0, 'not_me_scan_page': 1,
-                'not_me_attempt_notice_id': generation,
+                'not_me_attempt_notice_id': generation, 'not_me_disable_plan': plan,
+                'not_me_disable_work_count': 0,
             })
+        tick.took()
+        _llm_internal(key).write({'not_me_disable_work_count': key.not_me_disable_work_count + 1})
         if key.state == 'creating':
             quiet_after = key.create_date + timedelta(seconds=nac.KEY_CREATE_BUDGET_SECONDS + 10)
             if _utcnow() < quiet_after:
                 _llm_internal(key).write({'not_me_disable_next_at': quiet_after})
-                return self._llm_has_pending_disables()
+                return self._llm_has_pending_disables(account_ids=account_ids)
             _llm_internal(key).write({'state': 'failed_reveal'})
         try:
             ip = account._llm_tenant_ip()
-            up = account._llm_up_token()
+            up = account._llm_up_token(role=nac.ROLE_CRON)
             client = account._llm_client(nac.ROLE_CRON)
         except Exception:  # noqa: BLE001 - no credential or config details in logs
             _logger.warning('[LLM] not-me disable deferred account=%s key=%s', account.id, key.id)
-            return self._llm_defer_key_disable(key)
-        tick.took()
-        if not key.newapi_token_id:
-            # One page per tick; an interrupted create may have committed at the
-            # upstream despite the client losing its response. Never reveal keys.
-            page = max(1, key.not_me_scan_page)
-            listed = client.user_list_tokens(ip, up, page, 100, deadline=tick.deadline)
-            data = listed.data if listed.ok and isinstance(listed.data, dict) else {}
-            items, total = data.get('items'), data.get('total')
-            if (not isinstance(items, list) or type(total) is not int or total < 0
-                    or len(items) > 100 or any(
-                        not isinstance(item, dict) or not isinstance(item.get('name'), str)
-                        or type(item.get('id')) is not int or not 0 < item['id'] <= nac.INT32_MAX
-                        for item in items)):
-                return self._llm_defer_key_disable(key)
-            matches = [item for item in items if item['name'] == key.newapi_name]
-            if len(matches) == 1:
-                _llm_internal(key).write({
-                    'newapi_token_id': matches[0]['id'], 'not_me_scan_page': 1,
-                    'not_me_disable_next_at': False,
-                })
-            elif not matches and len(items) == 100 and page * 100 < total:
-                _llm_internal(key).write({
-                    'not_me_scan_page': page + 1, 'not_me_disable_next_at': False,
-                })
+            return self._llm_defer_key_disable(key, account_ids=account_ids)
+        # Work on a copy: a failed transaction must not leave mutated ORM JSON cache.
+        plan = deepcopy(key.not_me_disable_plan)
+        now = int(_utcnow().replace(tzinfo=timezone.utc).timestamp())
+        due = sorted((entry['attempts'], entry['retry_at'], int(token_id))
+                     for token_id, entry in plan['pending'].items() if entry['retry_at'] <= now)
+        scan_due = not plan['scan_complete'] and plan['scan_retry_at'] <= now
+        if scan_due and (plan['prefer_scan'] or not due):
+            self._llm_scan_disable_page(key, plan, client, ip, up, tick.deadline, now)
+        elif due:
+            token_id = due[0][2]
+            result = client.user_set_token_status(ip, up, token_id, False, deadline=tick.deadline)
+            plan['prefer_scan'] = True
+            if result.ok:
+                plan['pending'].pop(str(token_id))
+                plan['disabled'].append(token_id)
             else:
-                # Complete absence is only an observation: an uncertain POST can
-                # still settle later. Keep the durable obligation and re-scan.
-                _llm_internal(key).write({'not_me_scan_page': 1})
-                self._llm_defer_key_disable(key)
-            return self._llm_has_pending_disables()
-        result = client.user_set_token_status(ip, up, key.newapi_token_id, False,
-                                              deadline=tick.deadline)
-        if result.ok:
-            _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'suspend',
-                                      'not_me_disable_next_at': False,
-                                      'not_me_disabled_notice_id': generation})
-        else:
-            _logger.warning('[LLM] not-me disable deferred account=%s key=%s result=%s',
-                            account.id, key.id, result.kind)
-            self._llm_defer_key_disable(key)
-        return self._llm_has_pending_disables()
+                entry = plan['pending'][str(token_id)]
+                entry['attempts'] += 1
+                entry['retry_at'] = now + min(3600, 60 * 2 ** min(entry['attempts'] - 1, 6))
+                _llm_internal(key).write({'not_me_disable_attempts': key.not_me_disable_attempts + 1})
+        self._llm_save_disable_plan(key, plan, generation, now)
+        return self._llm_has_pending_disables(account_ids=account_ids)
 
     @api.model
-    def _llm_defer_key_disable(self, key):
+    def _llm_scan_disable_page(self, key, plan, client, ip, up, deadline, now):
+        """Persist every exact-name ID and the page cursor atomically; never reveal."""
+        page = max(1, key.not_me_scan_page)
+        result = client.user_list_tokens(ip, up, page, 100, deadline=deadline)
+        data = result.data if result.ok and isinstance(result.data, dict) else {}
+        items, total = data.get('items'), data.get('total')
+        valid = (isinstance(items, list) and type(total) is int and total >= 0
+                 and len(items) == min(100, max(0, total - (page - 1) * 100))
+                 and all(isinstance(item, dict) and isinstance(item.get('name'), str)
+                         and type(item.get('id')) is int and 0 < item['id'] <= nac.INT32_MAX
+                         for item in items))
+        if valid:
+            valid = len({item['id'] for item in items}) == len(items)
+        plan['prefer_scan'] = False
+        if not valid:
+            plan['scan_attempts'] += 1
+            plan['scan_retry_at'] = now + min(3600, 60 * 2 ** min(plan['scan_attempts'] - 1, 6))
+            return
+        disabled = set(plan['disabled'])
+        for item in items:
+            if item['name'] == key.newapi_name and item['id'] not in disabled:
+                plan['pending'].setdefault(str(item['id']), {'attempts': 0, 'retry_at': 0})
+        # Insert/delete changes can shift offset pages. Preserve discovered IDs
+        # but restart the traversal before asserting that every page was covered.
+        changed = page > 1 and plan['scan_total'] != total
+        plan['scan_total'] = total
+        plan['scan_attempts'] = 0
+        plan['scan_retry_at'] = 0
+        plan['scan_complete'] = not changed and page * 100 >= total
+        _llm_internal(key).write({'not_me_scan_page': 1 if changed else page + 1})
+
+    @api.model
+    def _llm_save_disable_plan(self, key, plan, generation, now):
+        values = {'not_me_disable_plan': plan}
+        if plan['scan_complete'] and not plan['pending'] and plan['disabled']:
+            plan['complete'] = True
+            values.update({
+                # Quarantine must stay outside the one-live-trial partial index.
+                'state': 'failed_reveal' if key.state == 'failed_reveal' else 'disabled',
+                'disabled_by': 'suspend', 'not_me_disable_next_at': False,
+                'not_me_disabled_notice_id': generation,
+            })
+        else:
+            if plan['scan_complete'] and not plan['pending']:
+                # Absence does not settle an unknown POST. Retry a full scan,
+                # retaining the suspension and never manufacturing a receipt.
+                plan['scan_complete'] = False
+                plan['scan_attempts'] += 1
+                plan['scan_retry_at'] = now + min(3600, 60 * 2 ** min(plan['scan_attempts'] - 1, 6))
+                values['not_me_scan_page'] = 1
+            deadlines = [entry['retry_at'] for entry in plan['pending'].values()]
+            if not plan['scan_complete']:
+                deadlines.append(plan['scan_retry_at'])
+            values['not_me_disable_next_at'] = datetime.fromtimestamp(
+                max(now, min(deadlines)), timezone.utc).replace(tzinfo=None)
+        _llm_internal(key).write(values)
+
+    @api.model
+    def _llm_defer_key_disable(self, key, *, account_ids=None):
         attempts = key.not_me_disable_attempts + 1
         delay = min(3600, 60 * (2 ** min(attempts - 1, 6)))
         _llm_internal(key).write({
@@ -458,13 +519,15 @@ class LlmNotification(models.Model):
             'not_me_disable_next_at': _utcnow() + timedelta(seconds=delay),
             'not_me_attempt_notice_id': key.account_id.not_me_notice_id,
         })
-        return self._llm_has_pending_disables()
+        return self._llm_has_pending_disables(account_ids=account_ids)
 
     @api.model
-    def _llm_has_pending_disables(self):
+    def _llm_has_pending_disables(self, *, account_ids=None):
         self.env['woow_paas_platform.llm_api_key'].flush_model()
         self.env['woow_paas_platform.llm_account'].flush_model()
-        self.env.cr.execute('SELECT 1 ' + _DISABLE_PENDING_SQL + ' LIMIT 1', (_utcnow(),))
+        scope = ' AND a.id = ANY(%s) ' if account_ids is not None else ''
+        params = [_utcnow()] + ([list(account_ids)] if account_ids is not None else [])
+        self.env.cr.execute('SELECT 1 ' + _DISABLE_PENDING_SQL + scope + ' LIMIT 1', params)
         return bool(self.env.cr.fetchone())
 
     @api.model
