@@ -263,11 +263,19 @@
                     <field name="order_id"/><field name="decision"/>
                     <field name="points"/><field name="reason" groups="base.group_system"/>
                     <field name="key_done_count"/><field name="key_failed_count"/>
-                    <field name="key_cursor" groups="base.group_system"/>
                     <field name="key_target_count" groups="base.group_system"/>
                     <field name="result_code"/><field name="result_summary"/>
                     <field name="evidence_json" widget="text" groups="base.group_system"/>
                     <field name="processed_at"/><field name="create_date"/>
+                </group>
+                <group string="Per-key disable evidence" groups="base.group_system">
+                    <field name="key_obligation_ids" nolabel="1">
+                        <list create="0" edit="0" delete="0">
+                            <field name="key_id"/><field name="state_snapshot"/>
+                            <field name="state"/><field name="result_code"/>
+                            <field name="work_count"/><field name="next_work_at"/>
+                        </list>
+                    </field>
                 </group></sheet>
             </form>
         </field>
@@ -306,7 +314,7 @@
         <field name="model">woow_paas_platform.llm_disable_all_keys_wizard</field>
         <field name="arch" type="xml">
             <form string="Disable all AI API keys">
-                <group><label string="This queues disabling every active API key mirrored in this PaaS database."/>
+                <group><div class="text-muted">This queues disabling API keys mirrored in this PaaS database.</div>
                     <field name="reason"/></group>
                 <footer>
                     <button name="action_enqueue" type="object" string="Queue disable" class="btn-primary"

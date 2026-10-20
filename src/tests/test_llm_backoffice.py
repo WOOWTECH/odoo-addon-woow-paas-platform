@@ -1,6 +1,7 @@
 """Safety contracts for LLM-12a backoffice actions."""
 import threading
 import uuid
+import json
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests.common import TransactionCase, new_test_user, tagged
 
 from ..models.llm_common import _llm_internal
+from ..models.llm_common import LlmError
 from ..models.llm_credit_order import ORDER_TABLE, _credit_internal
 from ..services import newapi_client as nac
 from .llm_test_support import CommittedLlmFixture, env_for
@@ -90,6 +92,11 @@ class TestLlmBackofficeCommitted(TransactionCase):
             with self.registry.cursor() as cr:
                 env_for(self.registry, cr)['res.users'].sudo().browse(
                     self.operator_id).unlink()
+
+    def _cleanup_operation(self, operation_id):
+        with self.registry.cursor() as cr:
+            cr.execute('DELETE FROM woow_paas_platform_llm_backoffice_operation WHERE id = %s',
+                       (operation_id,))
 
     def _service_call(self, request_id, points=900, reason='approved manual backoffice credit',
                       account_id=None):
@@ -207,10 +214,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
             'sending', sent_at=stamp, quota_before=1000, used_quota_before=100,
             request_count_before=4, before_snapshot_present=True, before_sampled_at=stamp)
         _credit_internal(order)._transition('needs_review')
-        with self.env.cr.savepoint():
-            self.env.cr.execute('UPDATE woow_paas_platform_llm_event '
-                                'SET target_model = %s, target_id = %s WHERE id = %s',
-                                (ORDER, order.id, reservation_id))
+        self.env['woow_paas_platform.llm_event']._llm_event_finish(
+            reservation_id, 'not_executed', target_model=ORDER, target_id=order.id)
 
         class Client:
             def ap_log(self, *args, **kwargs):
@@ -256,9 +261,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
             'sending', sent_at=stamp, quota_before=1000, used_quota_before=100,
             request_count_before=4, before_snapshot_present=True, before_sampled_at=stamp)
         _credit_internal(order)._transition('needs_review')
-        self.env.cr.execute('UPDATE woow_paas_platform_llm_event '
-                            'SET target_model = %s, target_id = %s WHERE id = %s',
-                            (ORDER, order.id, reservation_id))
+        self.env['woow_paas_platform.llm_event']._llm_event_finish(
+            reservation_id, 'not_executed', target_model=ORDER, target_id=order.id)
 
         class Client:
             def ap_log(self, *args, **kwargs):
@@ -275,12 +279,13 @@ class TestLlmBackofficeCommitted(TransactionCase):
                 patch.object(type(self.env['woow_paas_platform.llm_runtime_state']),
                              '_llm_read', return_value={'guard_tripped': False}), \
                 patch.object(type(self.env['woow_paas_platform.llm_event']),
-                             '_llm_insert_event_cr', side_effect=RuntimeError('injected')):
+                             '_llm_insert_event_cr', side_effect=RuntimeError('injected')) as audit_insert:
             with self.assertRaisesRegex(RuntimeError, 'injected'):
                 with self.env.cr.savepoint():
                     order.with_user(self.operator_id)._admin_review(
                         'retry', 'upstream checked no matching log',
                         operator_id=self.operator_id)
+        self.assertEqual(audit_insert.call_count, 1, 'financial audit failure injection was reached')
         order.invalidate_recordset()
         self.assertEqual(order.state, 'needs_review')
 
@@ -297,8 +302,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
                 'account_id': account.id, 'partner_id': account.partner_id.id,
                 'newapi_user_id': account.newapi_user_id, 'source': 'user', 'points': 10,
                 'quota': 156250, 'client_request_id': 'deadline-' + uuid.uuid4().hex,
-                'state': 'needs_review',
             })
+            _credit_internal(order)._transition('needs_review')
             operation = env['woow_paas_platform.llm_backoffice_operation']._enqueue(
                 operation='review', request_id='deadline-op-' + uuid.uuid4().hex,
                 operator=env['res.users'].browse(operator_id), account=account,
@@ -332,49 +337,164 @@ class TestLlmBackofficeCommitted(TransactionCase):
     def test_monthly_report_queues_once_for_configured_recipients_with_escaped_reasons(self):
         from datetime import datetime, timedelta, timezone
         from ..models import llm_backoffice
+        taipei = timezone(timedelta(hours=8))
+        fixed_now = datetime(2099, 9, 15, 12, tzinfo=taipei)
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now.astimezone(tz) if tz else fixed_now.replace(tzinfo=None)
+
         reason = "<script>alert('not markup')</script> approved manual correction"
         created = self._service_call(
             uuid.uuid4().int % (2 ** 31 - 1) or 1, points=13, reason=reason)
-        now_tw = datetime.now(timezone(timedelta(hours=8)))
+        now_tw = fixed_now
         month_start = now_tw.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         previous_start = (month_start - timedelta(days=1)).replace(day=1)
         prior_month_stamp = previous_start.astimezone(timezone.utc).replace(tzinfo=None)
         period_id = previous_start.strftime('%Y-%m')
-
-        def cleanup_report():
-            with self.registry.cursor() as cr:
-                cr.execute('SELECT mail_ref FROM woow_paas_platform_llm_manual_credit_report '
-                           'WHERE period_id = %s', (period_id,))
-                report = cr.fetchone()
-                cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report '
-                           'WHERE period_id = %s', (period_id,))
-                if report:
-                    cr.execute('DELETE FROM mail_mail WHERE id = %s', (report[0],))
-
-        self.addCleanup(cleanup_report)
         with self.registry.cursor() as cr:
             cr.execute('UPDATE ' + ORDER_TABLE + ' SET create_date = %s WHERE id = %s',
                        (prior_month_stamp, created['id']))
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT id FROM woow_paas_platform_llm_manual_credit_report '
+                       'WHERE period_id = %s', (period_id,))
+            if cr.fetchone():
+                self.skipTest('isolated synthetic report period is already occupied')
+
+        cursor_key = 'monthly-test-' + uuid.uuid4().hex
+        owned = {'report_id': None, 'mail_id': None, 'cursor_id': None}
+        def cleanup_report():
+            with self.registry.cursor() as cr:
+                if owned['report_id'] and owned['mail_id']:
+                    cr.execute('SELECT mail_ref FROM woow_paas_platform_llm_manual_credit_report '
+                               'WHERE id = %s AND period_id = %s',
+                               (owned['report_id'], period_id))
+                    report = cr.fetchone()
+                    if report and report[0] == owned['mail_id']:
+                        cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report '
+                                   'WHERE id = %s AND period_id = %s AND mail_ref = %s',
+                                   (owned['report_id'], period_id, owned['mail_id']))
+                        if cr.rowcount == 1:
+                            cr.execute('DELETE FROM mail_mail WHERE id = %s', (owned['mail_id'],))
+                if owned['cursor_id']:
+                    cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                               'WHERE id = %s AND cursor_key = %s',
+                               (owned['cursor_id'], cursor_key))
+
+        self.addCleanup(cleanup_report)
         with patch.object(llm_backoffice, 'alert_targets', return_value={
                 'emails': ('authorized-reports@example.test',), 'webhook': None}):
             cron = self.env['woow_paas_platform.llm_manual_credit_cron']
-            self.assertTrue(cron._queue_monthly_report())
-            self.assertFalse(cron._queue_monthly_report())
+            with patch.object(llm_backoffice, 'datetime', FrozenDateTime):
+                self.assertTrue(cron._queue_monthly_report(
+                    cursor_key=cursor_key, initial_period=period_id))
+                self.assertFalse(cron._queue_monthly_report(
+                    cursor_key=cursor_key, initial_period=period_id))
         with self.registry.cursor() as cr:
-            cr.execute('SELECT period_id, start_utc, end_utc, order_count, points_total, mail_ref '
+            cr.execute('SELECT id FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE cursor_key = %s', (cursor_key,))
+            cursor_row = cr.fetchone()
+            owned['cursor_id'] = cursor_row[0]
+            cr.execute('SELECT id, period_id, start_utc, end_utc, order_count, points_total, mail_ref '
                        'FROM woow_paas_platform_llm_manual_credit_report '
                        'WHERE period_id = %s', (period_id,))
             row = cr.fetchone()
             self.assertTrue(row)
-            self.assertEqual(row[1], previous_start.astimezone(timezone.utc).replace(tzinfo=None))
-            self.assertEqual(row[2], month_start.astimezone(timezone.utc).replace(tzinfo=None))
+            owned['report_id'] = row[0]
+            owned['mail_id'] = row[6]
+            self.assertEqual(row[2], previous_start.astimezone(timezone.utc).replace(tzinfo=None))
+            self.assertEqual(row[3], month_start.astimezone(timezone.utc).replace(tzinfo=None))
+            self.assertEqual(row[4], 1)
+            self.assertEqual(row[5], 13)
             cr.execute('SELECT email_to, body_html, auto_delete FROM mail_mail WHERE id = %s',
-                       (row[5],))
+                       (row[6],))
             email_to, body_html, auto_delete = cr.fetchone()
             self.assertEqual(email_to, 'authorized-reports@example.test')
             self.assertIn('&lt;script&gt;', body_html)
             self.assertNotIn('<script>', body_html)
             self.assertTrue(auto_delete)
+
+    def test_monthly_report_catches_up_failed_period_after_month_rollover(self):
+        from datetime import datetime, timedelta, timezone
+        from ..models import llm_backoffice
+        taipei = timezone(timedelta(hours=8))
+        first_now = datetime(2099, 9, 15, 12, tzinfo=taipei)
+        rolled_now = datetime(2099, 10, 2, 12, tzinfo=taipei)
+        cursor_key = 'monthly-catchup-' + uuid.uuid4().hex
+        created = self._service_call(
+            uuid.uuid4().int % (2 ** 31 - 1) or 1, points=23,
+            reason='durable monthly report retry fixture')
+        start_local = datetime(2099, 8, 1, tzinfo=taipei)
+        period_id = '2099-08'
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT id FROM woow_paas_platform_llm_manual_credit_report '
+                       'WHERE period_id = %s', (period_id,))
+            if cr.fetchone():
+                self.skipTest('isolated synthetic catch-up period is already occupied')
+            cr.execute('UPDATE ' + ORDER_TABLE + ' SET create_date = %s WHERE id = %s',
+                       (start_local.astimezone(timezone.utc).replace(tzinfo=None), created['id']))
+        owned = {'cursor_id': None, 'report_id': None, 'mail_id': None}
+
+        def cleanup_report():
+            with self.registry.cursor() as cr:
+                if owned['report_id'] and owned['mail_id']:
+                    cr.execute('SELECT mail_ref FROM woow_paas_platform_llm_manual_credit_report '
+                               'WHERE id = %s AND period_id = %s',
+                               (owned['report_id'], period_id))
+                    report = cr.fetchone()
+                    if report and report[0] == owned['mail_id']:
+                        cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report '
+                                   'WHERE id = %s AND period_id = %s AND mail_ref = %s',
+                                   (owned['report_id'], period_id, owned['mail_id']))
+                        if cr.rowcount == 1:
+                            cr.execute('DELETE FROM mail_mail WHERE id = %s', (owned['mail_id'],))
+                if owned['cursor_id']:
+                    cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                               'WHERE id = %s AND cursor_key = %s',
+                               (owned['cursor_id'], cursor_key))
+
+        self.addCleanup(cleanup_report)
+
+        def frozen_datetime(now):
+            class FrozenDateTime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+            return FrozenDateTime
+
+        cron = self.env['woow_paas_platform.llm_manual_credit_cron']
+        with patch.object(llm_backoffice, 'alert_targets', return_value={
+                'emails': ('authorized-reports@example.test',), 'webhook': None}), \
+                patch.object(llm_backoffice, 'datetime', frozen_datetime(first_now)), \
+                patch.object(type(self.env['mail.mail']), 'create',
+                             side_effect=RuntimeError('injected queue failure')):
+            with self.assertRaisesRegex(RuntimeError, 'injected queue failure'):
+                cron._queue_monthly_report(
+                    cursor_key=cursor_key, initial_period=period_id)
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT id, next_period FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE cursor_key = %s', (cursor_key,))
+            cursor_row = cr.fetchone()
+            self.assertEqual(cursor_row[1], period_id)
+            owned['cursor_id'] = cursor_row[0]
+
+        with patch.object(llm_backoffice, 'alert_targets', return_value={
+                'emails': ('authorized-reports@example.test',), 'webhook': None}), \
+                patch.object(llm_backoffice, 'datetime', frozen_datetime(rolled_now)):
+            self.assertTrue(cron._queue_monthly_report(
+                cursor_key=cursor_key, initial_period=period_id))
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT id, order_count, points_total, mail_ref '
+                       'FROM woow_paas_platform_llm_manual_credit_report '
+                       'WHERE period_id = %s', (period_id,))
+            report = cr.fetchone()
+            self.assertTrue(report)
+            owned['report_id'], owned['mail_id'] = report[0], report[3]
+            self.assertEqual(report[1:3], (1, 23))
+            cr.execute('SELECT next_period FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE id = %s AND cursor_key = %s', (owned['cursor_id'], cursor_key))
+            self.assertEqual(cr.fetchone()[0], '2099-09')
 
     def test_budget_alert_and_incident_inputs_contain_no_reason(self):
         with self.registry.cursor() as cr:
@@ -409,29 +529,183 @@ class TestLlmBackofficeCommitted(TransactionCase):
         with self.assertRaises(ValidationError):
             wizard.action_create()
 
+    def test_token_recovery_alternates_scan_and_disable_and_requires_complete_proof(self):
+        from ..services import llm_token_recovery as recovery
+
+        self.assertEqual(recovery.next_action(
+            scan_required=True, scan_complete=False,
+            pending={'10': {'retry_at': 999}}, prefer_scan=False, now=100), 'scan')
+        self.assertEqual(recovery.next_action(
+            scan_required=True, scan_complete=False,
+            pending={'10': {'retry_at': 0}}, prefer_scan=True, now=100), 'scan')
+        self.assertEqual(recovery.next_action(
+            scan_required=True, scan_complete=False,
+            pending={'10': {'retry_at': 0}}, prefer_scan=False, now=100), 'disable')
+        self.assertFalse(recovery.valid_page([], 101, 3, 100, nac.INT32_MAX),
+                         'a page past the reported end cannot prove a full scan')
+        first_page = [{'id': 10, 'name': 'same'}]
+        head = recovery.page_fingerprint(first_page)
+        proof = dict(pending={}, disabled={10}, total=1, baseline_total=1,
+                     head=head, verify_items=first_page, verify_total=1,
+                     page_size=100, max_id=nac.INT32_MAX)
+        self.assertTrue(recovery.stable_scan_complete(**proof))
+        self.assertFalse(recovery.stable_scan_complete(
+            **dict(proof, pending={'11': {'retry_at': 0}})),
+            'the head and total proof is invalid until every discovered ID settles')
+
     def test_batch_disable_is_queued_bounded_and_uses_cron_client(self):
-        from ..models import llm_backoffice_operation
         Key = self.env['woow_paas_platform.llm_api_key']
-        keys = _llm_internal(Key).create([{
+        vals_list = [{
             'account_id': self.account_id, 'kind': 'paid',
             'client_request_id': 'batch-' + uuid.uuid4().hex,
-            'newapi_token_id': index, 'state': 'active',
-        } for index in range(11)])
+            'newapi_token_id': index, 'state': 'active', 'newapi_name': 'batch-%s' % index,
+        } for index in range(501, 512)]
+        vals_list[0].update({'kind': 'free_trial', 'state': 'disabled',
+                             'disabled_by': 'free_daily_cap'})
+        keys = _llm_internal(Key).create(vals_list)
         op = self.env['woow_paas_platform.llm_backoffice_operation']._enqueue(
             operation='disable_all_keys', request_id='disable-test-' + uuid.uuid4().hex,
             operator=self.env['res.users'].browse(self.operator_id),
             reason='disable the mirrored account keys for a safety test')
+        self.addCleanup(self._cleanup_operation, op.id)
 
         class Client:
             def __init__(self):
                 self.calls = []
-                self.failed_once = False
+                self.failed_501 = False
 
             def user_set_token_status(self, ip, up, token_id, enabled, **kwargs):
                 self.calls.append((token_id, enabled, kwargs.get('timeout')))
-                if not self.failed_once:
-                    self.failed_once = True
+                if token_id == 501 and not self.failed_501:
+                    self.failed_501 = True
                     return nac.Definite(status=503, code='TEMPORARY_TEST_FAILURE')
+                return nac.Ok(data={})
+
+            def user_list_tokens(self, *args, **kwargs):
+                return nac.Ok(data={'items': [], 'total': 0})
+
+        client = Client()
+        account_class = type(self.env[ACCOUNT])
+        with patch.object(account_class, '_llm_tenant_ip', return_value='203.0.113.1'), \
+                patch.object(account_class, '_llm_up_token', return_value='test-up'), \
+                patch.object(account_class, '_llm_client', return_value=client):
+            worker = self.env['woow_paas_platform.llm_backoffice_operation']
+            actor = self.env['res.users'].browse(self.operator_id)
+            for _ in range(100):
+                worker._process_disable_keys(self.env, op, actor)
+                if set(range(501, 512)).issubset({call[0] for call in client.calls}):
+                    break
+            self.assertTrue(set(range(501, 512)).issubset(
+                {call[0] for call in client.calls}),
+                'a failing first key must not starve later obligations')
+            self.assertEqual(op.state, 'pending')
+            failed_obligation = op.key_obligation_ids.filtered(
+                lambda item: item.key_id.id == keys[0].id)
+            self.assertEqual(failed_obligation.state, 'pending')
+            self.env.cr.execute(
+                'UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                'SET next_work_at = NULL WHERE id = %s', (failed_obligation.id,))
+            for _ in range(100):
+                worker._process_disable_keys(self.env, op, actor)
+                if all(row.state == 'done' for row in op.key_obligation_ids.filtered(
+                        lambda item: item.key_id.id in keys.ids)):
+                    break
+        self.assertTrue(all(call[1] is False for call in client.calls))
+        self.assertTrue(all(call[2] == nac.TIMEOUT_CRON_WRITE for call in client.calls))
+        self.assertTrue(all(key.state == 'disabled' and key.disabled_by == 'ops' for key in keys))
+        class DisableClient:
+            def user_set_token_status(self, *args, **kwargs):
+                return nac.Ok(data={})
+
+        with patch.object(type(Key), '_llm_management_remote',
+                          return_value=('203.0.113.1', 'test-up', DisableClient())):
+            Key._llm_set_key_status(keys[1].partner_id, keys[1].id, False)
+        keys[1].invalidate_recordset(['state', 'disabled_by'])
+        self.assertEqual(keys[1].disabled_by, 'ops', 'user disable must preserve ops restriction')
+        with patch.object(type(Key), '_llm_management_remote',
+                          side_effect=AssertionError('ops key enable must stop before remote I/O')):
+            with self.assertRaises(LlmError):
+                Key._llm_set_key_status(keys[1].partner_id, keys[1].id, True)
+        own_obligations = op.key_obligation_ids.filtered(lambda item: item.key_id.id in keys.ids)
+        self.assertEqual(len(own_obligations), len(keys))
+        self.assertTrue(all(row.state == 'done' for row in own_obligations))
+        pending = op.key_obligation_ids.filtered(lambda item: item.state == 'pending')
+        self.assertEqual(op.state, 'pending' if pending else 'done')
+        self.assertEqual(op.key_failed_count, len(pending))
+        self.assertEqual(op.key_target_count, len(op.key_obligation_ids))
+
+    def test_ops_disable_marker_wins_over_late_create_finalize(self):
+        request_id = 'late-finalize-' + uuid.uuid4().hex
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'paid',
+                'client_request_id': request_id,
+                'newapi_name': 'late_finalize_' + uuid.uuid4().hex[:10],
+                'state': 'creating',
+            })
+            key_id = key.id
+            cr.commit()
+        with self.registry.cursor() as cr:
+            cr.execute('UPDATE woow_paas_platform_llm_api_key '
+                       "SET disabled_by = 'ops' WHERE id = %s AND state = 'creating'",
+                       (key_id,))
+            self.assertEqual(cr.rowcount, 1)
+            cr.commit()
+
+        finish = self.env['woow_paas_platform.llm_api_key']._llm_finish(
+            key_id, {'state': 'active', 'newapi_token_id': 991122})
+        self.assertEqual(finish, {'state': 'disabled', 'disabled_by': 'ops'})
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key = env['woow_paas_platform.llm_api_key'].browse(key_id)
+            self.assertEqual(key.state, 'disabled')
+            self.assertEqual(key.disabled_by, 'ops')
+            self.assertEqual(key.newapi_token_id, 991122)
+
+    def test_batch_disable_recovers_every_same_name_token_before_completion(self):
+        Key = self.env['woow_paas_platform.llm_api_key']
+        name = 'wp_recovery_' + uuid.uuid4().hex[:12]
+        key = _llm_internal(Key).create({
+            'account_id': self.account_id, 'kind': 'free_trial',
+            'client_request_id': 'batch-recovery-' + uuid.uuid4().hex,
+            'newapi_name': name, 'state': 'failed_reveal',
+        })
+        _llm_internal(Key).create({
+            'account_id': self.account_id, 'kind': 'free_trial',
+            'client_request_id': 'batch-replacement-' + uuid.uuid4().hex,
+            'newapi_name': 'wp_replacement_' + uuid.uuid4().hex[:12],
+            'state': 'creating',
+        })
+        op = self.env['woow_paas_platform.llm_backoffice_operation']._enqueue(
+            operation='disable_all_keys', request_id='disable-recovery-' + uuid.uuid4().hex,
+            operator=self.env['res.users'].browse(self.operator_id),
+            reason='recover and disable all same-name token ids')
+        self.addCleanup(self._cleanup_operation, op.id)
+        obligation = op.key_obligation_ids.filtered(lambda row: row.key_id.id == key.id)
+        self.assertTrue(obligation.scan_required)
+        matching = [{'id': 2000 + i, 'name': name if i in (10, 20) else 'other-%d' % i}
+                    for i in range(100)]
+
+        class Client:
+            def __init__(self):
+                self.disabled = []
+                self.pages = []
+                self.events = []
+                self.failed_2010 = False
+
+            def user_list_tokens(self, ip, up, page=1, page_size=100, **kwargs):
+                self.pages.append(page)
+                self.events.append(('list', page))
+                items = matching if page == 1 else [{'id': 3000, 'name': name}]
+                return nac.Ok(data={'items': items, 'total': 101})
+
+            def user_set_token_status(self, ip, up, token_id, enabled, **kwargs):
+                self.events.append(('disable', token_id))
+                if token_id == 2010 and not self.failed_2010:
+                    self.failed_2010 = True
+                    return nac.Definite(status=503, code='TEMPORARY_TEST_FAILURE')
+                self.disabled.append(token_id)
                 return nac.Ok(data={})
 
         client = Client()
@@ -440,18 +714,82 @@ class TestLlmBackofficeCommitted(TransactionCase):
                 patch.object(account_class, '_llm_up_token', return_value='test-up'), \
                 patch.object(account_class, '_llm_client', return_value=client):
             worker = self.env['woow_paas_platform.llm_backoffice_operation']
-            worker._process_disable_keys(self.env, op, self.env['res.users'].browse(self.operator_id))
-            self.assertEqual(len(client.calls), 10)
-            self.assertEqual(op.state, 'pending')
-            self.assertEqual(op.key_failed_count, 1)
-            self.assertTrue(op.key_retry_ids_json)
-            worker._process_disable_keys(self.env, op, self.env['res.users'].browse(self.operator_id))
-        self.assertEqual(len(client.calls), 12)
-        self.assertTrue(all(call[1] is False for call in client.calls))
-        self.assertTrue(all(call[2] == nac.TIMEOUT_CRON_WRITE for call in client.calls))
-        self.assertEqual(op.state, 'done')
-        self.assertEqual(op.key_failed_count, 0)
-        self.assertTrue(all(key.state == 'disabled' for key in keys))
+            actor = self.env['res.users'].browse(self.operator_id)
+            for _ in range(200):
+                if {2020, 3000}.issubset(set(client.disabled)):
+                    break
+                worker._process_disable_keys(self.env, op, actor)
+            self.assertEqual(set(client.disabled), {2020, 3000},
+                             'a backed-off token must not block healthy same-name siblings')
+            self.assertTrue(obligation.pending_tokens_json.get('2010'))
+            self.assertTrue(obligation.result_code != 'ok')
+            from ..services import llm_token_recovery
+            self.assertFalse(llm_token_recovery.stable_scan_complete(
+                pending={'2010': {'attempts': 1, 'retry_at': 123}},
+                disabled={2020, 3000}, total=101, baseline_total=101,
+                head=llm_token_recovery.page_fingerprint(matching[:100]),
+                verify_items=matching, verify_total=101, page_size=100,
+                max_id=nac.INT32_MAX),
+                'the final proof must refuse completion while one token remains pending')
+            self.env.cr.execute(
+                'SELECT pending_tokens_json FROM '
+                'woow_paas_platform_llm_backoffice_key_obligation WHERE id = %s',
+                (obligation.id,))
+            pending = self.env.cr.fetchone()[0]
+            pending['2010']['retry_at'] = 0
+            self.env.cr.execute(
+                'UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                'SET pending_tokens_json = %s::jsonb, next_work_at = NULL WHERE id = %s',
+                (json.dumps(pending), obligation.id))
+            for _ in range(200):
+                if obligation.state == 'done':
+                    break
+                worker._process_disable_keys(self.env, op, actor)
+        self.assertEqual(obligation.state, 'done')
+        key.invalidate_recordset(['state'])
+        self.assertEqual(key.state, 'failed_reveal', 'recovery must preserve free-trial quarantine')
+        self.assertEqual(set(client.disabled), {2010, 2020, 3000})
+        self.assertTrue(obligation.scan_complete)
+        self.assertIn(2, client.pages, 'the worker must traverse every page')
+        self.assertGreaterEqual(client.pages.count(1), 2,
+                                'the head page is rechecked after pending token IDs clear')
+
+    def test_batch_disable_does_not_complete_an_unresolved_missing_token_id(self):
+        Key = self.env['woow_paas_platform.llm_api_key']
+        name = 'wp_unresolved_' + uuid.uuid4().hex[:12]
+        key = _llm_internal(Key).create({
+            'account_id': self.account_id, 'kind': 'paid',
+            'client_request_id': 'batch-unresolved-' + uuid.uuid4().hex,
+            'newapi_name': name, 'state': 'failed_reveal',
+        })
+        op = self.env['woow_paas_platform.llm_backoffice_operation']._enqueue(
+            operation='disable_all_keys', request_id='disable-unresolved-' + uuid.uuid4().hex,
+            operator=self.env['res.users'].browse(self.operator_id),
+            reason='keep unresolved create identity pending')
+        self.addCleanup(self._cleanup_operation, op.id)
+        obligation = op.key_obligation_ids.filtered(lambda row: row.key_id.id == key.id)
+
+        class Client:
+            def user_list_tokens(self, *args, **kwargs):
+                return nac.Ok(data={'items': [], 'total': 0})
+
+            def user_set_token_status(self, ip, up, token_id, enabled, **kwargs):
+                return nac.Ok(data={})
+
+        account_class = type(self.env[ACCOUNT])
+        with patch.object(account_class, '_llm_tenant_ip', return_value='203.0.113.1'), \
+                patch.object(account_class, '_llm_up_token', return_value='test-up'), \
+                patch.object(account_class, '_llm_client', return_value=Client()):
+            worker = self.env['woow_paas_platform.llm_backoffice_operation']
+            actor = self.env['res.users'].browse(self.operator_id)
+            for _ in range(200):
+                if obligation.result_code == 'identity_unresolved':
+                    break
+                worker._process_disable_keys(self.env, op, actor)
+        self.assertEqual(obligation.state, 'pending')
+        self.assertEqual(obligation.result_code, 'identity_unresolved')
+        self.assertEqual(op.state, 'pending')
+        self.assertFalse(obligation.disabled_tokens_json)
 
     def test_daily_cap_serializes_concurrent_read_committed_requests(self):
         with self.registry.cursor() as cr:
@@ -687,14 +1025,30 @@ class TestLlmBackofficeGuards(TransactionCase):
 
     def test_monthly_report_is_noop_without_valid_configured_recipients(self):
         from ..models import llm_backoffice
+        cursor_key = 'monthly-no-recipient-' + uuid.uuid4().hex
         before_mail = self.env['mail.mail'].sudo().search_count([])
         before_periods = self.env[
             'woow_paas_platform.llm_manual_credit_report'].sudo().search_count([])
+        cursor_id = None
         with patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
                 patch.object(llm_backoffice, 'alert_targets', return_value={
                     'emails': (), 'webhook': None}):
             self.assertFalse(self.env[
-                'woow_paas_platform.llm_manual_credit_cron']._queue_monthly_report())
+                'woow_paas_platform.llm_manual_credit_cron']._queue_monthly_report(
+                    cursor_key=cursor_key, initial_period='2099-01'))
         self.assertEqual(self.env['mail.mail'].sudo().search_count([]), before_mail)
         self.assertEqual(self.env[
             'woow_paas_platform.llm_manual_credit_report'].sudo().search_count([]), before_periods)
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT id, next_period FROM '
+                       'woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE cursor_key = %s', (cursor_key,))
+            row = cr.fetchone()
+            self.assertTrue(row, 'missing recipients must preserve a durable retry cursor')
+            cursor_id = row[0]
+            self.assertEqual(row[1], '2099-01')
+            cr.execute('SELECT count(*) FROM woow_paas_platform_llm_manual_credit_report '
+                       'WHERE period_id = %s', ('2099-01',))
+            self.assertEqual(cr.fetchone()[0], 0, 'no success receipt is written without recipients')
+            cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE id = %s AND cursor_key = %s', (cursor_id, cursor_key))

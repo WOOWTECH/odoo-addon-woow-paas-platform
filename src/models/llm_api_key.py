@@ -587,7 +587,7 @@ class LlmApiKey(models.Model):
             self._llm_raise_for(account, revealed)
         masked = 'sk-%s…%s' % (raw[:4], raw[-4:])
         now = _utcnow()
-        self._llm_finish(key_id, {
+        finish = self._llm_finish(key_id, {
             'state': 'active',
             'newapi_token_id': token_id,
             'masked_key': masked,
@@ -603,8 +603,8 @@ class LlmApiKey(models.Model):
             'kind': spec['kind'] if spec is not None else 'free_trial',
             'display_name': spec['key_label'] if spec is not None else '',
             'masked_key': masked,
-            'status': 'active',
-            'disabled_by': None,
+            'status': finish['state'] if finish else 'active',
+            'disabled_by': finish['disabled_by'] if finish else None,
             'used_points': None,
             'limit_points': spec['limit_points'] if spec is not None else None,
             'remain_points': None,
@@ -731,14 +731,24 @@ class LlmApiKey(models.Model):
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
         if values.get('state') == 'active':
             values['created_notice_pending'] = True
-        columns = sorted(values)
-        if not all(_COLUMN_RE.fullmatch(column) for column in columns):
-            raise ValueError('bad column name')
         with self.env.registry.cursor() as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+            # A batch-disable operation can set the ops stop while this key is
+            # still creating. Serialize the final transition with that stop so
+            # a late create response cannot reactivate the mirror afterward.
+            if values.get('state') == 'active':
+                cr.execute('SELECT disabled_by FROM %s WHERE id = %%s AND state = %%s '
+                           'FOR UPDATE' % KEY_TABLE, (key_id, 'creating'))
+                row = cr.fetchone()
+                if row and row[0] == 'ops':
+                    values.update({'state': 'disabled', 'disabled_by': 'ops',
+                                   'created_notice_pending': False})
+            columns = sorted(values)
+            if not all(_COLUMN_RE.fullmatch(column) for column in columns):
+                raise ValueError('bad column name')
             cr.execute(
                 'UPDATE %s SET %s WHERE id = %%s AND state = %%s '
-                'RETURNING account_id, kind, create_date'
+                'RETURNING account_id, kind, create_date, state, disabled_by'
                 % (KEY_TABLE, ', '.join('%s = %%s' % column for column in columns)),
                 [values[column] for column in columns] + [key_id, 'creating'])
             changed = cr.fetchone()
@@ -764,6 +774,8 @@ class LlmApiKey(models.Model):
                         _llm_internal(key).write({'created_notice_pending': False})
             except Exception:  # noqa: BLE001 - key creation must survive notification failures
                 _logger.warning('[LLM] key-created notice deferred key=%s', key_id)
+        return ({'state': changed[3], 'disabled_by': changed[4]}
+                if changed else None)
 
     @api.model
     def _llm_management_key(self, partner, key_id, *, allow_failed_reveal=False):
@@ -784,6 +796,10 @@ class LlmApiKey(models.Model):
             % KEY_TABLE, (key.id, account.id))
         if not self.env.cr.fetchone():
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        # Under READ COMMITTED the locking SELECT can wait for an ops worker
+        # that commits a new marker; discard the pre-lock ORM cache so all
+        # subsequent status/enable guards observe that committed value.
+        key.invalidate_recordset()
         if key.state in ('deleted', 'lost', 'creating') or \
                 (key.state == 'failed_reveal' and not allow_failed_reveal):
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
@@ -955,6 +971,8 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_KEY_INVALID)
         account, key = self._llm_management_key(partner, key_id)
         if enabled:
+            if key.disabled_by == 'ops':
+                raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason='disabled')
             reason = key._llm_status()
             if reason in ('expired', 'exhausted', 'free_capped', 'suspended', 'overdraft'):
                 raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason=reason)
@@ -964,8 +982,11 @@ class LlmApiKey(models.Model):
         result = client.user_set_token_status(ip, up, token_id, enabled)
         if not result.ok:
             self._llm_management_raise(account, result)
-        _llm_internal(key).write({'state': 'active' if enabled else 'disabled',
-                                  'disabled_by': False if enabled else 'user'})
+        _llm_internal(key).write({
+            'state': 'active' if enabled else 'disabled',
+            'disabled_by': (False if enabled else
+                            'ops' if key.disabled_by == 'ops' else 'user'),
+        })
         self._llm_management_audit('key_status', account, key, user, real_ip)
         return key._llm_dto()
 
