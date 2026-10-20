@@ -418,7 +418,7 @@ class TestLlmApiKeyMirror(TransactionCase):
                         remain_quota_cached=13 * QUOTA_PER_POINT,
                         newapi_token_id=821, newapi_name='wp_821_abcd')
         fetched = fields.Datetime.now() - timedelta(seconds=31)
-        self.env['woow_paas_platform.llm_swr_cache'].sudo().create({
+        _llm_internal(self.env['woow_paas_platform.llm_swr_cache'].sudo()).create({
             'account_id': self.account.id,
             'kind': KIND_TOKENS,
             'payload': '{}',
@@ -1151,11 +1151,16 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
     def test_management_delete_expired_trial_releases_unique_slot(self):
         trial = self._management_key(kind='free_trial', expires_at=fields.Datetime.now() -
                                      timedelta(days=1), key_label='trial')
+        self._management_remote(expiry=int(trial.expires_at.replace(tzinfo=timezone.utc).timestamp()))
+        self.fake.tokens[501]['group'] = 'free'
         self.service._llm_delete_key(self.user.partner_id, trial.id, 'trial', user=self.user,
                                      real_ip=self.real_ip)
+        self.assertEqual(trial.state, 'deleted')
+        self.assertNotIn(501, self.fake.tokens)
         replacement = self._management_key(kind='free_trial', key_label='replacement')
         self.assertEqual(replacement.state, 'active')
-        self.assertEqual(self.fake.calls, [])
+        self.assertNotEqual(replacement.id, trial.id)
+        self.assertEqual([call[0] for call in self.fake.calls], ['user_delete_token'])
 
     def test_management_success_events_use_closed_actions_and_safe_targets(self):
         key = self._management_key()
@@ -1294,7 +1299,7 @@ class TestLlmPaidKeyCreate(_ConfiguredCase):
         self.assertEqual(args[1], request_id)
         self.assertEqual(args[2], self.user)
         self.assertNotEqual(args[3], '192.0.2.200')
-        self.assertIsInstance(args[4], dict)
+        self.assertEqual(args[4].uid, self.user.id)
         self.assertNotEqual(args[4], 'untrusted')
         self.assertEqual(set(kwargs), {'name', 'limit_points', 'expires', 'models'})
         self.assertEqual(kwargs, {
