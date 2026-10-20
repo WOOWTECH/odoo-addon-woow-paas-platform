@@ -4,6 +4,8 @@ from odoo.exceptions import AccessError, ValidationError
 
 _CAP_KEY = 'woow_llm_manual_credit_report_cap'
 _CAP = object()
+_CURSOR_CAP_KEY = 'woow_llm_manual_credit_report_cursor_cap'
+_CURSOR_CAP = object()
 
 
 class LlmManualCreditReport(models.Model):
@@ -48,4 +50,43 @@ class LlmManualCreditReport(models.Model):
         return self.with_context(**{_CAP_KEY: _CAP}).create({
             'period_id': period_id, 'start_utc': start_utc, 'end_utc': end_utc,
             'order_count': order_count, 'points_total': points_total, 'mail_ref': mail_ref,
+        })
+
+
+class LlmManualCreditReportCursor(models.Model):
+    """Durable retry position; advancing it is atomic with the report receipt."""
+    _name = 'woow_paas_platform.llm_manual_credit_report_cursor'
+    _description = 'Manual AI credit report cursor'
+
+    cursor_key = fields.Char(required=True, readonly=True, index=True)
+    next_period = fields.Char(required=True, readonly=True)
+
+    _sql_constraints = [
+        ('cursor_key_unique', 'UNIQUE(cursor_key)', 'Report cursor keys are unique.'),
+    ]
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        if self.env.context.get(_CURSOR_CAP_KEY) is not _CURSOR_CAP:
+            raise AccessError(_('Report cursors can only be initialized by the report worker.'))
+        return super().create(vals_list)
+
+    def write(self, vals):
+        if self.env.context.get(_CURSOR_CAP_KEY) is not _CURSOR_CAP:
+            raise AccessError(_('Report cursors can only advance with a queued report.'))
+        return super().write(vals)
+
+    def unlink(self):
+        raise AccessError(_('Report cursor history cannot be deleted.'))
+
+    @api.model
+    def _initialize(self, cursor_key, next_period):
+        return self.with_context(**{_CURSOR_CAP_KEY: _CURSOR_CAP}).create({
+            'cursor_key': cursor_key, 'next_period': next_period,
+        })
+
+    def _advance(self, next_period):
+        self.ensure_one()
+        return self.with_context(**{_CURSOR_CAP_KEY: _CURSOR_CAP}).write({
+            'next_period': next_period,
         })

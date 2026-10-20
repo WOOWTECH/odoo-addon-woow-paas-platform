@@ -15,8 +15,8 @@
             <field name="model_id" ref="model_woow_paas_platform_llm_manual_credit_cron"/>
             <field name="state">code</field>
             <field name="code">model._cron_manual_credit_monthly_report()</field>
-            <field name="interval_number">1</field>
-            <field name="interval_type">months</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
     </data>

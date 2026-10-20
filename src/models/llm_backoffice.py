@@ -19,7 +19,7 @@ from ..services import llm_credit_evidence as credit_evidence
 from ..services import newapi_client as nac
 from .llm_common import alert_targets, llm_config, llm_unconfigured, run_llm_cron
 from .llm_credit_order import ORDER_MODEL, ORDER_TABLE, _credit_internal
-from .llm_event import EVENT_TABLE, LlmAlert, LlmIncident, _begin
+from .llm_event import EVENT_TABLE, LlmAlert, LlmIncident, _begin, _env_on
 
 _logger = logging.getLogger(__name__)
 _MANUAL_DAILY_LIMIT = 3000
@@ -209,8 +209,10 @@ class LlmManualCreditService(models.AbstractModel):
         next_day = day_start + timedelta(days=1)
         with self.env.registry.cursor() as cr:
             _begin(self.env, cr, read_committed=True)
+            bound_env = _env_on(self.env.registry, cr)
             cr.execute('SELECT pg_advisory_xact_lock(%s)', (_MANUAL_LOCK,))
-            env = api.Environment(cr, self.env.uid, dict(self.env.context))
+            env = bound_env['res.users'].with_user(self.env.uid).with_context(
+                dict(self.env.context)).env
             stable_request_id = 'manual-wizard-%d' % request_id
             prior = env[ORDER_MODEL].sudo().search([
                 ('client_request_id', '=', stable_request_id),
@@ -684,35 +686,83 @@ class LlmManualCreditCron(models.AbstractModel):
         config = llm_config(self.env)
         return run_llm_cron(
             self.env, xmlid,
-            lambda _config, _tick: self._queue_monthly_report(),
+            lambda _config, tick: self._queue_monthly_report(tick=tick),
             items=1, config=config, outbound=False)
 
     @api.model
-    def _queue_monthly_report(self):
+    def _queue_monthly_report(self, tick=None, cursor_key='manual_credit_monthly',
+                              initial_period=None):
         if llm_unconfigured(self.env):
-            return False
-        recipients = alert_targets(self.env)['emails']
-        if not recipients:
             return False
         now_tw = datetime.now(_TAIPEI)
         current_start = now_tw.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        previous_start = (current_start - timedelta(days=1)).replace(day=1)
-        start_utc = previous_start.astimezone(timezone.utc).replace(tzinfo=None)
-        end_utc = current_start.astimezone(timezone.utc).replace(tzinfo=None)
-        period = previous_start.strftime('%Y-%m')
+        last_completed_period = (current_start - timedelta(days=1)).strftime('%Y-%m')
+        Cursor = 'woow_paas_platform.llm_manual_credit_report_cursor'
+        # Persist the first due period before attempting recipient parsing or
+        # mail creation. A failed/misconfigured run therefore has a durable
+        # point to retry after the calendar advances.
         with self.env.registry.cursor() as cr:
             cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
-            cr.execute('SELECT pg_advisory_xact_lock(%s)', (938174212,))
-            env = api.Environment(cr, self.env.uid, dict(self.env.context))
-            report_model = env['woow_paas_platform.llm_manual_credit_report']
-            if report_model.sudo().search_count([('period_id', '=', period)]):
+            bound_env = _env_on(self.env.registry, cr)
+            env = bound_env['res.users'].with_user(self.env.uid).with_context(
+                dict(self.env.context)).env
+            cr.execute("SELECT set_config('lock_timeout', %s, true)", ('1000ms',))
+            cr.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                       ('woow_llm_report_cursor:' + cursor_key,))
+            cr.execute('SELECT id FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE cursor_key = %s FOR UPDATE', (cursor_key,))
+            cursor_row = cr.fetchone()
+            if not cursor_row:
+                first_due = initial_period or last_completed_period
+                if (not isinstance(first_due, str) or len(first_due) != 7
+                        or first_due[4] != '-' or not first_due[:4].isdigit()
+                        or not first_due[5:].isdigit() or not 1 <= int(first_due[5:]) <= 12):
+                    raise ValidationError(_('The monthly report start period is invalid.'))
+                env[Cursor].sudo()._initialize(cursor_key, first_due)
+                # Cursor start survives missing recipients and failed mail
+                # creation, so a later month can catch up the oldest period.
+                cr.commit()
+        recipients = alert_targets(self.env)['emails']
+        if not recipients:
+            if tick:
+                tick.more = True
+                tick.delay = 900
+            return False
+        if tick and not tick.can_take(need_seconds=1):
+            return True
+        more = False
+        with self.env.registry.cursor() as cr:
+            cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            bound_env = _env_on(self.env.registry, cr)
+            env = bound_env['res.users'].with_user(self.env.uid).with_context(
+                dict(self.env.context)).env
+            cr.execute("SELECT set_config('lock_timeout', %s, true)", ('1000ms',))
+            cr.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                       ('woow_llm_report_cursor:' + cursor_key,))
+            cr.execute('SELECT id, next_period FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE cursor_key = %s FOR NO KEY UPDATE', (cursor_key,))
+            row = cr.fetchone()
+            if not row:
                 return False
-            cr.execute(
-                'SELECT count(*), COALESCE(sum(points), 0) '
-                'FROM woow_paas_platform_llm_credit_order '
-                "WHERE source = 'manual' AND state <> 'cancelled' "
-                'AND create_date >= %s AND create_date < %s', (start_utc, end_utc))
-            total_count, total_points = cr.fetchone()
+            cursor_record = env[Cursor].sudo().browse(row[0])
+            period = row[1]
+            if period > last_completed_period:
+                return False
+            if tick:
+                tick.took()
+            start_local = datetime.strptime(period, '%Y-%m').replace(tzinfo=_TAIPEI)
+            next_local = (start_local.replace(day=28) + timedelta(days=4)).replace(day=1)
+            start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+            end_utc = next_local.astimezone(timezone.utc).replace(tzinfo=None)
+            report_model = env['woow_paas_platform.llm_manual_credit_report'].sudo()
+            existing_report = report_model.search([('period_id', '=', period)], limit=1)
+            if existing_report:
+                cursor_record._advance(next_local.strftime('%Y-%m'))
+                more = next_local.strftime('%Y-%m') <= last_completed_period
+                if tick and more:
+                    tick.more = True
+                    tick.delay = 5
+                return more
             cr.execute(
                 'SELECT requested_by_uid, reason, count(*), COALESCE(sum(points), 0) '
                 'FROM woow_paas_platform_llm_credit_order '
@@ -721,6 +771,8 @@ class LlmManualCreditCron(models.AbstractModel):
                 'GROUP BY requested_by_uid, reason ORDER BY requested_by_uid, reason',
                 (start_utc, end_utc))
             detail_rows = cr.fetchall()
+            total_count = sum(row[2] for row in detail_rows)
+            total_points = sum(row[3] for row in detail_rows)
             User = env['res.users'].sudo()
             body_rows = []
             for uid, reason, count, points in detail_rows:
@@ -745,4 +797,10 @@ class LlmManualCreditCron(models.AbstractModel):
             env['woow_paas_platform.llm_manual_credit_report']._create_period(
                 period_id=period, start_utc=start_utc, end_utc=end_utc,
                 order_count=total_count, points_total=total_points, mail_ref=mail.id)
-            return True
+            next_period = next_local.strftime('%Y-%m')
+            cursor_record._advance(next_period)
+            more = next_period <= last_completed_period
+        if tick and more:
+            tick.more = True
+            tick.delay = 5
+        return True
