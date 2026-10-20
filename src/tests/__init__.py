@@ -534,6 +534,7 @@ from . import test_sa_sync_ctx_forgery_536
 from . import test_billing_silence_alert
 # feat: #864 PR-D 帳務 incident 地基（純值 schema／獨立交易／後台人工關單）
 from . import test_billing_incident_864
+from . import test_billing_attachment_module_install
 # fix: #864 PR-E `_on_payment_failure` 失敗域拆分（失敗計數 vs 通知/cancel）
 from . import test_dunning_failure_domain_split_864
 # fix: #864 PR-E CHARGED_NOT_CREDITED 改走獨立交易 incident（含順序／sanitize）
@@ -1263,7 +1264,13 @@ from . import test_ha_onboarding
 from . import test_llm_credit_order
 from . import test_llm_credit_void
 from . import test_llm_credit_concurrency
+from . import test_llm_backoffice
 
 from . import test_llm_reauth
 from . import test_llm_credit_visibility
 from . import test_llm_credit_worker
+# LLM-07：付費／免費試用金鑰鏡像的總額上限、狀態與管理契約。
+from . import test_llm_api_key_management
+
+from . import test_llm_notifications
+from . import test_llm_notification_suspension

@@ -153,6 +153,9 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    - `ACTIONS`（exit 1）：每個 `NEED_IMPORT`／`NEED_LIST`／pip 缺口都變成 paas-odoo-ci PR 的一行；`DIVERGED`
      與注意事項逐條列給使用者裁決。新 image 建好後回到步驟 2 重比，直到 `READY`。
    - `BLOCKED`（exit 3）：停下，把阻斷原因原文回報使用者。
+   - **站上的模組技術名與正式名不同**（例 well-101 `cs_portal_discuss` → `woow_odoo_portal_discuss`、hsinpoli
+     `woow_line_bridge` → `woow_odoo_line_liff`，#1878）：image 只放正式名那份；比對加 `--rename 舊名:新名,…`，
+     步驟 7 的還原加同一組 `--rename-module`。改名的那些站記進追蹤 issue。
 4. **資料指紋**（凍結窗口內，WMO）：`scripts/source/fingerprint.sh`，產出 `.fp`（每張表筆數＋內容 hash、sequence）
    與 `.fs`（filestore 逐檔 sha256），跟 dump 一起交回。目標還原後在目標端產同格式的兩個檔，用
    `scripts/fingerprint_diff.py --stage restore` 比對；升級閘跑完 `-u all` 後再以 `--stage upgrade` 比一次。
@@ -201,6 +204,10 @@ receiver 與 Secret 都是 ns 內的固定名稱，`receive.sh open` 會沿用�
    - restore Job 內已逐位元比對，一致才留下客戶資料列基準（`baseline.bfp`）並預寫兩個標記：`upgrade_done`（來源 image
      digest＋core_date，讓 web 開機時升級閘自動跑 `-u all`）與 `tenant_localized`（擋掉平台的台灣在地化，見步驟 8）。
    - **彩排**（來源還在營運，目標是彩排站）一律加 `--neutralize`，見下方「彩排與中和」。正式切換不加。
+   - **模組改名**：步驟 3 帶了 `--rename` 的站，彩排與正式切換都加 `--rename-module 舊名:新名`（可重複）。restore Job 在
+     逐位元比對通過後、中和與取基準之前跑 `scripts/target/rename-module.sql`（單一交易；改 `ir_module_module`、相依、
+     xmlid、view key／arch、asset／attachment 路徑、`<舊名>.*` 設定等，清單見檔頭），log 印出每項改了幾列；`rscan` 行是
+     改完仍含舊名的欄位（只列筆數），逐條看過再往下。升級閘看到的是新名，`-u all` 用正式名的程式碼升級。
    - 寫完標記後 restore 會**暫停排程**到 N 分鐘後（`--cron-hold-minutes`，預設 120，0＝不暫停）：啟用中、`nextcall` 早於那個
      時點的排程與 trigger 一律延到那個時點，原值存在 `ir_config_parameter` 的 `standalone_odoo_migrate.cron_hold`；另在
      `ir_cron`／`ir_cron_trigger` 掛 PG trigger，暫停期間才排的 trigger、被改寫或重新啟用的排程也夾到那個時點。理由：

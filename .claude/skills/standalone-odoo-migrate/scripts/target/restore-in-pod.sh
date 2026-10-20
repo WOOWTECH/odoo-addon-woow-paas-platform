@@ -11,6 +11,7 @@
 #        restore →（release 的 odoo image 產官方中和 SQL）→ finalize 三個容器，所以要能分段跑。
 #      NEUTRALIZE（1／0）、NEUTRALIZE_SQL、NEUTRALIZE_ASSERT_SQL、NEUTRALIZE_EXTRA_SQL（選配）：見步驟 7a
 #      CRON_HOLD_MINUTES（0＝不暫停）、CRON_HOLD_SQL：見步驟 8c
+#      RENAME_MODULES（選配，空白分隔的「舊名:新名」）、RENAME_SQL：見步驟 7r
 # 輸入（export.sh 經 receiver 送進來）：db.dump、filestore.tar、manifest.json、source.fp、source.fs、SHA256SUMS
 # 輸出：SET_DIR/target.fp、SET_DIR/target.fs、SET_DIR/baseline.bfp（客戶資料列基準，verify.sh --stage upgrade 用）、
 #      中和時另有 SET_DIR/neutralize-report.txt 與空檔 SET_DIR/neutralized（標記這組是彩排）、
@@ -22,7 +23,7 @@ die() { echo "RESTORE-FAIL: $*" >&2; exit 1; }
 : "${SET_DIR:?}" "${ODOO_DB_NAME:?}" "${PGHOST:?}" "${PGSUPERUSER_PASSWORD:?}" "${ODOO_DB_PASSWORD:?}" "${DATA_ROOT:?}" "${FINGERPRINT_SQL:?}" "${BUSINESS_SQL:?}"
 export PGPORT="${PGPORT:-5432}" LC_ALL=C
 REPLACE_DB=${REPLACE_DB:-} WRITE_MARKER=${WRITE_MARKER:-1} PHASE=${PHASE:-all} NEUTRALIZE=${NEUTRALIZE:-0}
-CRON_HOLD_MINUTES=${CRON_HOLD_MINUTES:-0}
+CRON_HOLD_MINUTES=${CRON_HOLD_MINUTES:-0} RENAME_MODULES=${RENAME_MODULES:-}
 [[ "$CRON_HOLD_MINUTES" =~ ^[0-9]+$ ]] || die "CRON_HOLD_MINUTES='${CRON_HOLD_MINUTES}' 不是整數"
 case "$PHASE" in all|restore|finalize) ;; *) die "PHASE='${PHASE}' 不合法" ;; esac
 sup() { PGPASSWORD="$PGSUPERUSER_PASSWORD" psql -h "$PGHOST" -U postgres -X -q -v ON_ERROR_STOP=1 -tA "$@"; }
@@ -127,6 +128,23 @@ if ! diff source.fs target.fs > /tmp/fs.diff; then
 fi
 echo "RESTORE fingerprint ok: $(grep -c '^table|' target.fp) tables, $(grep -c '^seq|' target.fp) sequences, $(grep -c . target.fs) files identical"
 rm -f neutralized neutralize-report.txt neutralize-official.sql rehearsal.pwhash   # 重新還原過：上一輪彩排的產物作廢
+
+# 7r. 模組改名（restore.sh --rename-module）：站上的技術名與 image 裡的正式名不同時，在 DB 改名（rename-module.sql）。
+#     放在逐位元比對之後（target.fp 仍是改名前、與來源相同）、中和與取基準之前：官方中和 SQL 依已安裝模組產生、
+#     升級閘只認 image 裡的模組名，兩者都要看到新名；基準取在改名之後，升級後的比對不會把改名算成差異。
+if [[ -n "$RENAME_MODULES" ]]; then
+    : "${RENAME_SQL:?}"
+    : > rename-report.txt
+    for pair in $RENAME_MODULES; do
+        [[ "$pair" =~ ^([a-z0-9_]+):([a-z0-9_]+)$ ]] || die "RENAME_MODULES 的 '${pair}' 不是 舊名:新名"
+        out=$(odoo_sql -v old="${BASH_REMATCH[1]}" -v new="${BASH_REMATCH[2]}" -v apply=1 -f "$RENAME_SQL") \
+            || die "模組改名 ${pair} 失敗（交易已回滾）"
+        printf '%s\n' "$out" | sed "s/^/${pair}|/" >> rename-report.txt
+        grep -qx 'rename-ok|commit' <<<"$out" || die "模組改名 ${pair} 沒有 commit"
+    done
+    echo "RESTORE rename report（rscan＝改完仍含舊名的欄位，逐條看）："; grep -v '|0$' rename-report.txt | sed 's/^/  /'
+    echo "RESTORE rename ok: ${RENAME_MODULES}"
+fi
 fi
 if [[ "$PHASE" == restore ]]; then
     echo "RESTORE-PHASE-RESTORE-DONE"

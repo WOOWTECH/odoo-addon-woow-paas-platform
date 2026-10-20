@@ -60,6 +60,32 @@
   }
 }
 
+.o_woow_llm_not_me {
+  width: calc(100% - 32px); max-width: 520px; max-height: calc(100dvh - 32px); overflow-y: auto;
+  border-radius: 20px; background: $woow-card-light; color: $woow-text-primary;
+  box-shadow: 0 22px 52px rgba(33, 33, 33, .16); font: 16px/1.6 $woow-font-body;
+  h2 { margin: 0; padding: 20px 20px 0; color: $woow-text-primary; font: 700 1.375rem/1.2 $woow-font-display; }
+  p { margin: 0; padding: 12px 20px 0; overflow-wrap: anywhere; }
+  [role="alert"] { color: #b91c1c; }
+  .o_woow_modal_footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 20px; }
+  button {
+    min-height: 44px; border: 1px solid $woow-border-light; border-radius: $woow-radius-full;
+    padding: 8px 18px; background: #fff; color: $woow-text-primary; font: inherit; cursor: pointer;
+  }
+  button:last-child { border-color: $woow-primary; background: $woow-primary; color: #fff; }
+  button:disabled { opacity: .55; cursor: default; }
+  :focus-visible { outline: 2px solid $woow-primary; outline-offset: 3px; }
+}
+
+.o_woow_llm_not_me_backdrop {
+  @media (max-width: $woow-bp-sm) {
+    padding: 12px;
+    .o_woow_llm_not_me { width: 100%; max-width: none; }
+    .o_woow_modal_footer { flex-direction: column-reverse; }
+    .o_woow_modal_footer button { width: 100%; }
+  }
+}
+
 .o_woow_llm_overview {
   display: flex;
   flex-direction: column;
@@ -300,6 +326,28 @@
 
   @media (max-width: $woow-bp-sm) {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.o_woow_llm_usage_overview {
+  margin-top: 20px;
+  padding: 20px;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(33, 33, 33, .06);
+
+  &__heading, &__metrics { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  &__heading { margin-bottom: 18px; }
+  &__heading h3 { margin: 0; }
+  &__heading > span, &__metrics > div > span { color: #646262; }
+  &__metrics { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
+  &__metrics > div { display: grid; gap: 4px; min-width: 110px; }
+  &__metrics strong { font-family: $woow-font-display; font-size: 20px; }
+  @media (max-width: $woow-bp-sm) {
+    padding: 16px;
+    &__heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+    &__metrics { justify-content: space-between; gap: 8px; }
+    &__metrics > div { min-width: 0; }
   }
 }
 

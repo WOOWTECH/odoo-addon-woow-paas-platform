@@ -191,6 +191,34 @@ class TestClassify(unittest.TestCase):
         out, _blocks = compat_check.notes(inv, tgt, None)
         self.assertIn("開啟中的 session 1", "\n".join(out))
 
+    def test_rename_maps_db_name_to_new_module(self):
+        # 站上裝的是舊名 old_name（來源有自己的程式碼）；image 裡只有新名 in_image
+        make_module(self.src_extra, "old_name", version="1.0", extra_files={"x.py": "site"})
+        mods = {"old_name": {"state": "installed", "version": "18.0.1.0"}}
+        rows, inv, *_ = self.run_classify(mods)
+        self.assertEqual(rows["old_name"]["status"], "NEED_IMPORT")
+        renamed, notes = compat_check.apply_renames(inv, [("old_name", "in_image"), ("ghost", "x")])
+        self.assertIn("old_name", inv["db"]["modules"])  # 原物件不動
+        self.assertEqual(renamed["db"]["modules"]["in_image"]["renamed_from"], "old_name")
+        self.assertNotIn("old_name", renamed["addons"]["modules"])
+        self.assertEqual(len(notes), 1)
+        self.assertIn("ghost", notes[0])
+        tgt = {"addons": scan_addons([str(self.all_addons)], digest_filter=lambda _d: True)}
+        rows = {r["module"]: r for r in compat_check.classify(renamed, tgt, None, select_dirs={str(self.all_addons)})}
+        self.assertNotIn("old_name", rows)
+        self.assertEqual(rows["in_image"]["status"], "SELECT")
+        self.assertEqual(rows["in_image"]["renamed_from"], "old_name")
+        # 新名的版本低於 DB 舊名的版本：一樣阻斷
+        renamed["db"]["modules"]["in_image"]["version"] = "18.0.1.1"
+        rows = {r["module"]: r for r in compat_check.classify(renamed, tgt, None, select_dirs={str(self.all_addons)})}
+        self.assertEqual(rows["in_image"]["status"], "BLOCK_DOWNGRADE")
+
+    def test_parse_renames(self):
+        self.assertEqual(compat_check.parse_renames("a_1:b, c:d_2,"), [("a_1", "b"), ("c", "d_2")])
+        for bad in ("a", "a:a", "A:b", "a:b:c"):
+            with self.assertRaises(ValueError):
+                compat_check.parse_renames(bad)
+
     def test_db_newer_than_image_blocks(self):
         rows, *_ = self.run_classify({"in_image": {"state": "installed", "version": "18.0.1.1"}})
         self.assertEqual(rows["in_image"]["status"], "BLOCK_DOWNGRADE")

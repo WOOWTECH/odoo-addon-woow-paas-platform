@@ -37,6 +37,7 @@ class TestLlmCreditOrderSchema(TransactionCase):
         cls.operator = new_test_user(
             cls.env, login='credit_operator_%s' % uuid.uuid4().hex,
             groups='base.group_user,base.group_system', email='credit-operator@example.com')
+        cls.operator._llm_set_named_human_eligible(True)
         cls.partner = cls.env['res.partner'].create({'name': 'LLM credit schema'})
         cls.account = _llm_internal(cls.env['woow_paas_platform.llm_account']).create({
             'partner_id': cls.partner.id,
@@ -847,6 +848,27 @@ class TestLlmCreditT1(HttpCase):
     def _convert_events(self):
         return self.env['woow_paas_platform.llm_event'].sudo().search([
             ('account_id', '=', self.account.id), ('action', '=', 'convert')])
+
+    def test_notification_trigger_commits_and_rolls_back_with_t1(self):
+        cron = self.env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()
+        cron.write({'active': True})
+        Trigger = self.env['ir.cron.trigger'].sudo()
+        domain = [('cron_id', '=', cron.id)]
+        before = Trigger.search_count(domain)
+        with self.assertRaisesRegex(RuntimeError, 'rollback notification trigger'):
+            with self.env.cr.savepoint():
+                result = self._convert()
+                order = self.Order.sudo().browse(result['order_id'])
+                self.assertTrue(order.acceptance_notice_pending)
+                self.assertEqual(Trigger.search_count(domain), before + 1)
+                raise RuntimeError('rollback notification trigger')
+        self.assertEqual(Trigger.search_count(domain), before)
+        request_id = str(uuid.uuid4())
+        result = self._convert(request_id=request_id)
+        self.assertTrue(self.Order.sudo().browse(result['order_id']).acceptance_notice_pending)
+        self.assertEqual(Trigger.search_count(domain), before + 1)
+        self._convert(request_id=request_id)
+        self.assertEqual(Trigger.search_count(domain), before + 1)
 
     def test_one_paid_order_and_exact_replay_without_second_debit(self):
         request_id = str(uuid.uuid4())
