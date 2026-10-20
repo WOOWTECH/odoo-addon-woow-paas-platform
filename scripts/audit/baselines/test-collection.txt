@@ -478,7 +478,7 @@
 3	test_llm_client_hardening.TestLlmCircuitCronGate
 3	test_llm_client_hardening.TestLlmConfigChange
 3	test_llm_client_hardening.TestLlmConnectionTest
-12	test_llm_client_hardening.TestLlmSwr
+13	test_llm_client_hardening.TestLlmSwr
 7	test_llm_credit_concurrency.TestLlmCreditAccountingCommitted
 7	test_llm_credit_order.TestLlmCreditFoundation
 20	test_llm_credit_order.TestLlmCreditOrderSchema

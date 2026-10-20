@@ -385,9 +385,9 @@ class LlmSwrCache(models.Model):
             payload, label = self._llm_swr_refresh_one(
                 client, config, None, KIND_PRICING, tick.deadline)
         except Exception:  # noqa: BLE001 - clear stale rates before cron framework alerts
-            self._llm_swr_finish(row_id, None, 'internal')
+            self._llm_swr_finish(row_id, None, 'internal', attempted_at=now)
             raise
-        self._llm_swr_finish(row_id, payload, label)
+        self._llm_swr_finish(row_id, payload, label, attempted_at=now)
         return False
 
     @api.model
@@ -406,14 +406,14 @@ class LlmSwrCache(models.Model):
             claimed = self._llm_swr_claim(1)
             if not claimed:
                 return False
-            row_id, account_id, kind, cache_key = claimed[0]
+            row_id, account_id, kind, cache_key, attempted_at = claimed[0]
             tick.took()
             if client is None:
                 try:
                     client = self.env[ACCOUNT_MODEL].sudo()._llm_client(nac.ROLE_CRON)
                 except nac.NewApiError as exc:
                     _logger.error('[LLM] swr refresh skipped: %s', exc.code)
-                    self._llm_swr_finish(row_id, None, 'config_%s' % exc.code)
+                    self._llm_swr_finish(row_id, None, 'config_%s' % exc.code, attempted_at=attempted_at)
                     return False
             try:
                 payload, label = self._llm_swr_refresh_one(client, config, account_id, kind,
@@ -424,10 +424,10 @@ class LlmSwrCache(models.Model):
                 payload, label = None, 'internal'
             if label == 'deadline':
                 # 剩下的預算不夠一次呼叫：放回去，下一個 tick 再做。
-                self._llm_swr_requeue(row_id)
+                self._llm_swr_requeue(row_id, attempted_at=attempted_at)
                 tick.more = True
                 return True
-            self._llm_swr_finish(row_id, payload, label)
+            self._llm_swr_finish(row_id, payload, label, attempted_at=attempted_at)
         return self._llm_swr_pending()
 
     def _llm_swr_claim(self, limit):
@@ -439,11 +439,11 @@ class LlmSwrCache(models.Model):
                 'UPDATE {t} SET requested_at = NULL, attempted_at = %s, write_date = %s '
                 'WHERE id IN (SELECT id FROM {t} WHERE requested_at IS NOT NULL '
                 'ORDER BY requested_at, id FOR UPDATE SKIP LOCKED LIMIT %s) '
-                'RETURNING id, account_id, kind, cache_key'.format(t=CACHE_TABLE),
+                'RETURNING id, account_id, kind, cache_key, attempted_at'.format(t=CACHE_TABLE),
                 (now, now, limit))
             return cr.fetchall()
 
-    def _llm_swr_requeue(self, row_id):
+    def _llm_swr_requeue(self, row_id, *, attempted_at=None):
         with self.env.registry.cursor() as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
             cr.execute('UPDATE %s SET requested_at = %%s, attempted_at = NULL WHERE id = %%s'
@@ -454,8 +454,11 @@ class LlmSwrCache(models.Model):
             cr.execute('SELECT 1 FROM %s WHERE requested_at IS NOT NULL LIMIT 1' % CACHE_TABLE)
             return cr.fetchone() is not None
 
-    def _llm_swr_finish(self, row_id, payload, label):
-        """成功才發布新 payload；價目失敗清空，其他種類失敗只記 ``last_result``。"""
+    def _llm_swr_finish(self, row_id, payload, label, *, attempted_at=None):
+        """Publish only the current claim; a late worker cannot overwrite a newer attempt.
+
+        Pricing failures clear their payload; other failures keep the last good data.
+        """
         label = (label or 'unknown')[:64]
         now = _utcnow()
         try:
@@ -466,20 +469,22 @@ class LlmSwrCache(models.Model):
                         payload, ensure_ascii=True, separators=(',', ':'))
                     if text is not None and len(text) > _PAYLOAD_MAX:
                         cr.execute('UPDATE %s SET last_result = %%s, write_date = %%s '
-                                   'WHERE id = %%s' % CACHE_TABLE, ('too_large', now, row_id))
+                                   'WHERE id = %%s AND (%%s::timestamp IS NULL OR attempted_at = %%s)'
+                                   % CACHE_TABLE, ('too_large', now, row_id, attempted_at, attempted_at))
                         return
                     cr.execute(
                         'UPDATE %s SET payload = COALESCE(%%s, payload), fetched_at = %%s, '
-                        'last_result = %%s, write_date = %%s WHERE id = %%s' % CACHE_TABLE,
-                        (text, now, 'ok', now, row_id))
+                        'last_result = %%s, write_date = %%s WHERE id = %%s '
+                        'AND (%%s::timestamp IS NULL OR attempted_at = %%s)' % CACHE_TABLE,
+                        (text, now, 'ok', now, row_id, attempted_at, attempted_at))
                 else:
                     # Fail closed for pricing: never retain privileged or obsolete tariffs
                     # after a failed refresh (usage/self/token SWR semantics stay unchanged).
                     cr.execute('UPDATE %s SET last_result = %%s, write_date = %%s, '
                                'payload = CASE WHEN kind = %%s THEN NULL ELSE payload END, '
                                'fetched_at = CASE WHEN kind = %%s THEN NULL ELSE fetched_at END '
-                               'WHERE id = %%s' % CACHE_TABLE,
-                               (label, now, KIND_PRICING, KIND_PRICING, row_id))
+                               'WHERE id = %%s AND (%%s::timestamp IS NULL OR attempted_at = %%s)' % CACHE_TABLE,
+                               (label, now, KIND_PRICING, KIND_PRICING, row_id, attempted_at, attempted_at))
         except psycopg2.Error as exc:
             _logger.warning('[LLM] swr row=%s: result not written (pgcode=%s)', row_id,
                             getattr(exc, 'pgcode', None))

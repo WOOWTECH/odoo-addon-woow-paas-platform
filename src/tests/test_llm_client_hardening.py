@@ -566,6 +566,28 @@ class TestLlmSwr(_LlmCase):
         self.assertEqual(rows.filtered(lambda row: row.cache_key == yesterday.isoformat()).payload,
                          old_payload)
 
+    def test_late_swr_result_cannot_overwrite_a_newer_claim(self):
+        self._rpc('/api/llm/usage/recent')
+        claimed = self.Cache._llm_swr_claim(1)
+        self.assertEqual(len(claimed), 1)
+        row_id, _account_id, _kind, _key, old_attempt = claimed[0]
+        new_attempt = old_attempt + timedelta(seconds=31)
+        self.env.cr.execute(
+            'UPDATE %s SET attempted_at=%%s, payload=%%s WHERE id=%%s' % CACHE_TABLE,
+            (new_attempt, json.dumps({'today_count': 8, 'items': []}), row_id))
+        self.Cache._llm_swr_finish(
+            row_id, {'today_count': 1, 'items': []}, 'ok', attempted_at=old_attempt)
+        self.env.invalidate_all()
+        row = self.Cache.browse(row_id)
+        self.assertEqual(json.loads(row.payload)['today_count'], 8)
+        self.Cache._llm_swr_requeue(row_id, attempted_at=old_attempt)
+        self.env.invalidate_all()
+        self.assertFalse(row.requested_at, 'expired worker cannot requeue a newer claim')
+        self.Cache._llm_swr_finish(
+            row_id, {'today_count': 9, 'items': []}, 'ok', attempted_at=new_attempt)
+        self.env.invalidate_all()
+        self.assertEqual(json.loads(row.payload)['today_count'], 9)
+
     def test_yesterdays_cache_is_not_shown_as_today(self):
         self.env.cr.execute(
             'INSERT INTO %s (account_id, kind, payload, fetched_at, create_date, write_date) '
