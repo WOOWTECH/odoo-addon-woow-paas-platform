@@ -536,6 +536,7 @@ class TestLlmNotifications(_ConfiguredCase):
             })
             _credit_internal(order)._transition('sending')
             _credit_internal(order)._transition('credited', credited_at=fields.Datetime.now())
+            order.flush_recordset(['state'])
             if _index not in (0, 25):
                 _credit_internal(order).write({'notified_state': 'credited'})
             orders |= order
