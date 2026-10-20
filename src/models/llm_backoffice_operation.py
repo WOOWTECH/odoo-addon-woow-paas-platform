@@ -52,6 +52,7 @@ class LlmBackofficeOperation(models.Model):
     state = fields.Selection([
         ('pending', 'Pending'), ('done', 'Complete'), ('refused', 'Refused'),
     ], required=True, readonly=True, default='pending', index=True)
+    last_attempt_at = fields.Datetime(readonly=True, index=True)
     result_code = fields.Char(readonly=True)
     result_summary = fields.Char(readonly=True)
     evidence_json = fields.Json(readonly=True, groups='base.group_system')
@@ -153,8 +154,16 @@ class LlmBackofficeOperation(models.Model):
             return False
         ids = []
         with self.env.registry.cursor() as cr:
-            cr.execute("SELECT id FROM woow_paas_platform_llm_backoffice_operation "
-                       "WHERE state = 'pending' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 10")
+            cr.execute(
+                "SELECT op.id FROM woow_paas_platform_llm_backoffice_operation op "
+                "WHERE op.state = 'pending' AND (op.operation <> 'disable_all_keys' OR "
+                "NOT EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
+                "WHERE ob.operation_id = op.id AND ob.state = 'pending') OR "
+                "EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
+                "WHERE ob.operation_id = op.id AND ob.state = 'pending' "
+                "AND (ob.next_work_at IS NULL OR ob.next_work_at <= (NOW() AT TIME ZONE 'UTC')))) "
+                "ORDER BY op.last_attempt_at NULLS FIRST, op.id "
+                "FOR UPDATE OF op SKIP LOCKED LIMIT 10")
             ids = [row[0] for row in cr.fetchall()]
         for operation_id in ids:
             if not tick.can_take(need_seconds=8):
@@ -182,6 +191,7 @@ class LlmBackofficeOperation(models.Model):
                 op = env[_OP_MODEL].sudo().browse(operation_id).exists()
                 if not op or op.state != 'pending':
                     continue
+                _cap(op).write({'last_attempt_at': fields.Datetime.now()})
                 actor = op.operator_id
                 actor_env = bound_env['res.users'].with_user(actor).with_context(
                     dict(self.env.context)).env

@@ -1,7 +1,8 @@
 """Safety contracts for LLM-12a backoffice actions."""
 import threading
 import uuid
-import json
+import time
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -20,6 +21,66 @@ ACCOUNT = 'woow_paas_platform.llm_account'
 ORDER = 'woow_paas_platform.llm_credit_order'
 
 
+def _capture_monthly_creation_ids(case, cursor_key, period_id, owned):
+    """Capture IDs at creation so failure cleanup can never infer ownership by period."""
+    Cursor = type(case.env['woow_paas_platform.llm_manual_credit_report_cursor'])
+    Report = type(case.env['woow_paas_platform.llm_manual_credit_report'])
+    Mail = type(case.env['mail.mail'])
+    initialize = Cursor._initialize
+    create_period = Report._create_period
+    create_mail = Mail.create
+
+    def capture_cursor(records, key, next_period):
+        record = initialize(records, key, next_period)
+        if key == cursor_key:
+            owned['cursor_id'] = record.id
+        return record
+
+    def capture_report(records, **values):
+        record = create_period(records, **values)
+        if values.get('period_id') == period_id:
+            owned['report_id'] = record.id
+            owned['mail_id'] = values['mail_ref']
+        return record
+
+    def capture_mail(records, values):
+        mails = create_mail(records, values)
+        candidates = values if isinstance(values, list) else [values]
+        if any(period_id in (item.get('subject') or '') for item in candidates):
+            owned['mail_id'] = mails[:1].id
+        return mails
+
+    stack = ExitStack()
+    stack.enter_context(patch.object(Cursor, '_initialize', new=capture_cursor))
+    stack.enter_context(patch.object(Report, '_create_period', new=capture_report))
+    stack.enter_context(patch.object(Mail, 'create', new=capture_mail))
+    return stack
+
+
+def _cleanup_monthly_owned(case, owned, cursor_key, period_id):
+    with case.registry.cursor() as cr:
+        if owned['report_id'] and owned['mail_id']:
+            cr.execute('SELECT mail_ref FROM woow_paas_platform_llm_manual_credit_report '
+                       'WHERE id = %s AND period_id = %s',
+                       (owned['report_id'], period_id))
+            report = cr.fetchone()
+            if report and report[0] == owned['mail_id']:
+                cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report '
+                           'WHERE id = %s AND period_id = %s AND mail_ref = %s',
+                           (owned['report_id'], period_id, owned['mail_id']))
+                if cr.rowcount == 1:
+                    cr.execute('DELETE FROM mail_mail WHERE id = %s', (owned['mail_id'],))
+        elif owned['mail_id']:
+            cr.execute('SELECT id FROM woow_paas_platform_llm_manual_credit_report '
+                       'WHERE mail_ref = %s', (owned['mail_id'],))
+            if not cr.fetchone():
+                cr.execute('DELETE FROM mail_mail WHERE id = %s', (owned['mail_id'],))
+        if owned['cursor_id']:
+            cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
+                       'WHERE id = %s AND cursor_key = %s',
+                       (owned['cursor_id'], cursor_key))
+
+
 @tagged('post_install', '-at_install', 'llm_credit')
 class TestLlmBackofficeCommitted(TransactionCase):
     """Real cursors prove idempotency and the daily cap at the DB boundary."""
@@ -31,6 +92,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
             self.env.ref('woow_paas_platform.ir_cron_llm_backoffice_operations').id]
         self.fixture.start()
         self.addCleanup(self._cleanup)
+        self.owned_operation_ids = set()
         tag = uuid.uuid4().hex[:10]
         self.partner_id = self.fixture.partner('LLM backoffice ' + tag)
         self.account_id = self.fixture.activate(self.partner_id)
@@ -47,6 +109,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
         # Patch the imported symbols in the implementation module. Patches are
         # process-local and never alter shared database configuration.
         from ..models import llm_backoffice
+        from ..models import llm_backoffice_operation
         begin = llm_backoffice._begin
 
         def begin_read_committed_in_test(env, cr, read_committed=False):
@@ -69,6 +132,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
             patch.object(llm_backoffice, 'llm_config', return_value={
                 'orders_enabled': True, 'service_admin_id': None}),
             patch.object(llm_backoffice, 'llm_unconfigured', return_value=False),
+            patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False),
             patch.object(llm_backoffice, '_begin', begin_read_committed_in_test),
             patch.object(type(self.env['woow_paas_platform.llm_runtime_state']),
                          '_llm_read', return_value={'guard_tripped': False}),
@@ -100,6 +164,56 @@ class TestLlmBackofficeCommitted(TransactionCase):
         with self.registry.cursor() as cr:
             cr.execute('DELETE FROM woow_paas_platform_llm_backoffice_operation WHERE id = %s',
                        (operation_id,))
+        self.owned_operation_ids.discard(operation_id)
+
+    def _enqueue_test_disable(self, env, key_ids, request_id, reason):
+        """Keep the production all-keys action fixture-local in committed tests."""
+        key_ids = tuple(key_ids)
+        key_class = type(env['woow_paas_platform.llm_api_key'])
+        original_search = key_class.search
+
+        def scoped_search(records, domain, *args, **kwargs):
+            state_domain = any(
+                isinstance(term, (tuple, list)) and len(term) == 3
+                and term[0] == 'state' and term[1] == 'in'
+                for term in domain
+            ) if isinstance(domain, (tuple, list)) else False
+            if records._name == 'woow_paas_platform.llm_api_key' and state_domain:
+                domain = list(domain) + [('id', 'in', key_ids)]
+            return original_search(records, domain, *args, **kwargs)
+
+        with patch.object(key_class, 'search', new=scoped_search):
+            operation = env['woow_paas_platform.llm_backoffice_operation']._enqueue(
+                operation='disable_all_keys', request_id=request_id,
+                operator=env['res.users'].browse(self.operator_id), reason=reason)
+        self.owned_operation_ids.add(operation.id)
+        self.addCleanup(self._cleanup_operation, operation.id)
+        return operation
+
+    def _run_batch_fresh(self, allowed_operation_ids, seconds=20, items=10):
+        """Each worker invocation uses its production-owned per-operation cursors."""
+        from ..models import llm_backoffice_operation
+        from ..models.llm_common import LlmCronTick
+        self.env.flush_all()
+        self.env.invalidate_all()
+        allowed = set(allowed_operation_ids)
+        with self.registry.cursor() as cr:
+            cr.execute(
+                "SELECT op.id FROM woow_paas_platform_llm_backoffice_operation op "
+                "WHERE op.state = 'pending' AND (op.operation <> 'disable_all_keys' OR "
+                "NOT EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
+                "WHERE ob.operation_id = op.id AND ob.state = 'pending') OR "
+                "EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
+                "WHERE ob.operation_id = op.id AND ob.state = 'pending' "
+                "AND (ob.next_work_at IS NULL OR ob.next_work_at <= (NOW() AT TIME ZONE 'UTC'))))")
+            foreign = {row[0] for row in cr.fetchall()} - allowed
+        if foreign:
+            self.skipTest('eligible foreign backoffice operations exist; refusing to process them')
+        with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
+            tick = LlmCronTick(seconds=seconds, items=items)
+            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(tick)
+        self.env.invalidate_all()
+        return tick
 
     def _service_call(self, request_id, points=900, reason='approved manual backoffice credit',
                       account_id=None):
@@ -170,6 +284,49 @@ class TestLlmBackofficeCommitted(TransactionCase):
             cr.execute('SELECT source, points FROM ' + ORDER_TABLE + ' WHERE id = %s',
                        (order_id,))
             self.assertEqual(cr.fetchone(), ('manual', 19))
+
+    def test_waiting_batches_do_not_starve_new_manual_operation(self):
+        from ..models.llm_common import LlmCronTick
+
+        operation_ids = []
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.operator_id, {})
+            key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'paid',
+                'client_request_id': 'fair-batch-key-' + uuid.uuid4().hex,
+                'newapi_token_id': 882001, 'newapi_name': 'fair_batch_key',
+                'state': 'active',
+            })
+            for index in range(10):
+                op = self._enqueue_test_disable(
+                    env, [key.id], 'fair-batch-%s-%s' % (index, uuid.uuid4().hex),
+                    'wait for the per-key retry window')
+                operation_ids.append(op.id)
+            cr.execute(
+                'UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                "SET next_work_at = (NOW() AT TIME ZONE 'UTC') + interval '1 hour' "
+                'WHERE operation_id = ANY(%s)', (operation_ids,))
+            manual = env['woow_paas_platform.llm_backoffice_operation']._enqueue(
+                operation='manual_credit', request_id='fair-manual-' + uuid.uuid4().hex,
+                operator=env['res.users'].browse(self.operator_id),
+                account=env[ACCOUNT].browse(self.account_id), points=19,
+                reason='new manual grant should not wait behind delayed batches')
+            manual_id = manual.id
+            cr.commit()
+        self.owned_operation_ids.add(manual_id)
+        self.addCleanup(self._cleanup_operation, manual_id)
+
+        self._run_batch_fresh(set(operation_ids) | {manual_id})
+
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT state, last_attempt_at FROM '
+                       'woow_paas_platform_llm_backoffice_operation WHERE id = %s', (manual_id,))
+            state, last_attempt_at = cr.fetchone()
+            self.assertEqual(state, 'done')
+            self.assertTrue(last_attempt_at)
+            cr.execute('SELECT count(*) FROM woow_paas_platform_llm_backoffice_operation '
+                       "WHERE id = ANY(%s) AND state = 'pending'", (operation_ids,))
+            self.assertEqual(cr.fetchone()[0], len(operation_ids))
 
     def test_manual_notice_repair_survives_operator_revocation(self):
         from ..models.llm_common import LlmCronTick
@@ -367,27 +524,10 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
         cursor_key = 'monthly-test-' + uuid.uuid4().hex
         owned = {'report_id': None, 'mail_id': None, 'cursor_id': None}
-        def cleanup_report():
-            with self.registry.cursor() as cr:
-                if owned['report_id'] and owned['mail_id']:
-                    cr.execute('SELECT mail_ref FROM woow_paas_platform_llm_manual_credit_report '
-                               'WHERE id = %s AND period_id = %s',
-                               (owned['report_id'], period_id))
-                    report = cr.fetchone()
-                    if report and report[0] == owned['mail_id']:
-                        cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report '
-                                   'WHERE id = %s AND period_id = %s AND mail_ref = %s',
-                                   (owned['report_id'], period_id, owned['mail_id']))
-                        if cr.rowcount == 1:
-                            cr.execute('DELETE FROM mail_mail WHERE id = %s', (owned['mail_id'],))
-                if owned['cursor_id']:
-                    cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
-                               'WHERE id = %s AND cursor_key = %s',
-                               (owned['cursor_id'], cursor_key))
-
-        self.addCleanup(cleanup_report)
-        with patch.object(llm_backoffice, 'alert_targets', return_value={
-                'emails': ('authorized-reports@example.test',), 'webhook': None}):
+        self.addCleanup(_cleanup_monthly_owned, self, owned, cursor_key, period_id)
+        with _capture_monthly_creation_ids(self, cursor_key, period_id, owned), \
+                patch.object(llm_backoffice, 'alert_targets', return_value={
+                    'emails': ('authorized-reports@example.test',), 'webhook': None}):
             cron = self.env['woow_paas_platform.llm_manual_credit_cron']
             with patch.object(llm_backoffice, 'datetime', FrozenDateTime):
                 self.assertTrue(cron._queue_monthly_report(
@@ -396,16 +536,17 @@ class TestLlmBackofficeCommitted(TransactionCase):
                     cursor_key=cursor_key, initial_period=period_id))
         with self.registry.cursor() as cr:
             cr.execute('SELECT id FROM woow_paas_platform_llm_manual_credit_report_cursor '
-                       'WHERE cursor_key = %s', (cursor_key,))
+                       'WHERE id = %s AND cursor_key = %s',
+                       (owned['cursor_id'], cursor_key))
             cursor_row = cr.fetchone()
-            owned['cursor_id'] = cursor_row[0]
+            self.assertTrue(cursor_row)
             cr.execute('SELECT id, period_id, start_utc, end_utc, order_count, points_total, mail_ref '
                        'FROM woow_paas_platform_llm_manual_credit_report '
-                       'WHERE period_id = %s', (period_id,))
+                       'WHERE id = %s AND period_id = %s',
+                       (owned['report_id'], period_id))
             row = cr.fetchone()
             self.assertTrue(row)
-            owned['report_id'] = row[0]
-            owned['mail_id'] = row[6]
+            self.assertEqual((row[0], row[6]), (owned['report_id'], owned['mail_id']))
             self.assertEqual(row[2], previous_start.astimezone(timezone.utc).replace(tzinfo=None))
             self.assertEqual(row[3], month_start.astimezone(timezone.utc).replace(tzinfo=None))
             self.assertEqual(row[4], 1)
@@ -438,26 +579,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
             cr.execute('UPDATE ' + ORDER_TABLE + ' SET create_date = %s WHERE id = %s',
                        (start_local.astimezone(timezone.utc).replace(tzinfo=None), created['id']))
         owned = {'cursor_id': None, 'report_id': None, 'mail_id': None}
-
-        def cleanup_report():
-            with self.registry.cursor() as cr:
-                if owned['report_id'] and owned['mail_id']:
-                    cr.execute('SELECT mail_ref FROM woow_paas_platform_llm_manual_credit_report '
-                               'WHERE id = %s AND period_id = %s',
-                               (owned['report_id'], period_id))
-                    report = cr.fetchone()
-                    if report and report[0] == owned['mail_id']:
-                        cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report '
-                                   'WHERE id = %s AND period_id = %s AND mail_ref = %s',
-                                   (owned['report_id'], period_id, owned['mail_id']))
-                        if cr.rowcount == 1:
-                            cr.execute('DELETE FROM mail_mail WHERE id = %s', (owned['mail_id'],))
-                if owned['cursor_id']:
-                    cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
-                               'WHERE id = %s AND cursor_key = %s',
-                               (owned['cursor_id'], cursor_key))
-
-        self.addCleanup(cleanup_report)
+        self.addCleanup(_cleanup_monthly_owned, self, owned, cursor_key, period_id)
 
         def frozen_datetime(now):
             class FrozenDateTime(datetime):
@@ -467,33 +589,34 @@ class TestLlmBackofficeCommitted(TransactionCase):
             return FrozenDateTime
 
         cron = self.env['woow_paas_platform.llm_manual_credit_cron']
-        with patch.object(llm_backoffice, 'alert_targets', return_value={
-                'emails': ('authorized-reports@example.test',), 'webhook': None}), \
-                patch.object(llm_backoffice, 'datetime', frozen_datetime(first_now)), \
-                patch.object(type(self.env['mail.mail']), 'create',
-                             side_effect=RuntimeError('injected queue failure')):
-            with self.assertRaisesRegex(RuntimeError, 'injected queue failure'):
-                cron._queue_monthly_report(
-                    cursor_key=cursor_key, initial_period=period_id)
-        with self.registry.cursor() as cr:
-            cr.execute('SELECT id, next_period FROM woow_paas_platform_llm_manual_credit_report_cursor '
-                       'WHERE cursor_key = %s', (cursor_key,))
-            cursor_row = cr.fetchone()
-            self.assertEqual(cursor_row[1], period_id)
-            owned['cursor_id'] = cursor_row[0]
+        with _capture_monthly_creation_ids(self, cursor_key, period_id, owned):
+            with patch.object(llm_backoffice, 'alert_targets', return_value={
+                    'emails': ('authorized-reports@example.test',), 'webhook': None}), \
+                    patch.object(llm_backoffice, 'datetime', frozen_datetime(first_now)), \
+                    patch.object(type(self.env['mail.mail']), 'create',
+                                 side_effect=RuntimeError('injected queue failure')):
+                with self.assertRaisesRegex(RuntimeError, 'injected queue failure'):
+                    cron._queue_monthly_report(
+                        cursor_key=cursor_key, initial_period=period_id)
+            with self.registry.cursor() as cr:
+                cr.execute('SELECT next_period FROM '
+                           'woow_paas_platform_llm_manual_credit_report_cursor '
+                           'WHERE id = %s AND cursor_key = %s',
+                           (owned['cursor_id'], cursor_key))
+                self.assertEqual(cr.fetchone()[0], period_id)
 
-        with patch.object(llm_backoffice, 'alert_targets', return_value={
-                'emails': ('authorized-reports@example.test',), 'webhook': None}), \
-                patch.object(llm_backoffice, 'datetime', frozen_datetime(rolled_now)):
-            self.assertTrue(cron._queue_monthly_report(
-                cursor_key=cursor_key, initial_period=period_id))
+            with patch.object(llm_backoffice, 'alert_targets', return_value={
+                    'emails': ('authorized-reports@example.test',), 'webhook': None}), \
+                    patch.object(llm_backoffice, 'datetime', frozen_datetime(rolled_now)):
+                self.assertTrue(cron._queue_monthly_report(
+                    cursor_key=cursor_key, initial_period=period_id))
         with self.registry.cursor() as cr:
             cr.execute('SELECT id, order_count, points_total, mail_ref '
                        'FROM woow_paas_platform_llm_manual_credit_report '
-                       'WHERE period_id = %s', (period_id,))
+                       'WHERE id = %s AND period_id = %s', (owned['report_id'], period_id))
             report = cr.fetchone()
             self.assertTrue(report)
-            owned['report_id'], owned['mail_id'] = report[0], report[3]
+            self.assertEqual((report[0], report[3]), (owned['report_id'], owned['mail_id']))
             self.assertEqual(report[1:3], (1, 23))
             cr.execute('SELECT next_period FROM woow_paas_platform_llm_manual_credit_report_cursor '
                        'WHERE id = %s AND cursor_key = %s', (owned['cursor_id'], cursor_key))
@@ -557,7 +680,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
             'the head and total proof is invalid until every discovered ID settles')
 
     def test_batch_disable_is_queued_bounded_and_uses_cron_client(self):
-        Key = self.env['woow_paas_platform.llm_api_key']
+        from ..models import llm_backoffice_operation
         vals_list = [{
             'account_id': self.account_id, 'kind': 'paid',
             'client_request_id': 'batch-' + uuid.uuid4().hex,
@@ -565,12 +688,15 @@ class TestLlmBackofficeCommitted(TransactionCase):
         } for index in range(501, 512)]
         vals_list[0].update({'kind': 'free_trial', 'state': 'disabled',
                              'disabled_by': 'free_daily_cap'})
-        keys = _llm_internal(Key).create(vals_list)
-        op = self.env['woow_paas_platform.llm_backoffice_operation']._enqueue(
-            operation='disable_all_keys', request_id='disable-test-' + uuid.uuid4().hex,
-            operator=self.env['res.users'].browse(self.operator_id),
-            reason='disable the mirrored account keys for a safety test')
-        self.addCleanup(self._cleanup_operation, op.id)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            keys = _llm_internal(env['woow_paas_platform.llm_api_key']).create(vals_list)
+            key_ids = keys.ids
+            op = self._enqueue_test_disable(
+                env, key_ids, 'disable-test-' + uuid.uuid4().hex,
+                'disable the mirrored account keys for a safety test')
+            op_id = op.id
+            cr.commit()
 
         class Client:
             def __init__(self):
@@ -589,30 +715,46 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
         client = Client()
         account_class = type(self.env[ACCOUNT])
+        clock = [int(time.time())]
+        controlled_clock = type('ControlledClock', (), {
+            'time': staticmethod(lambda: clock[0]),
+            'monotonic': staticmethod(time.monotonic),
+        })()
         with patch.object(account_class, '_llm_tenant_ip', return_value='203.0.113.1'), \
                 patch.object(account_class, '_llm_up_token', return_value='test-up'), \
-                patch.object(account_class, '_llm_client', return_value=client):
-            worker = self.env['woow_paas_platform.llm_backoffice_operation']
-            actor = self.env['res.users'].browse(self.operator_id)
+                patch.object(account_class, '_llm_client', return_value=client), \
+                patch.object(llm_backoffice_operation, 'time', controlled_clock):
             for _ in range(100):
-                worker._process_disable_keys(self.env, op, actor)
+                self._run_batch_fresh({op_id})
                 if set(range(501, 512)).issubset({call[0] for call in client.calls}):
                     break
             self.assertTrue(set(range(501, 512)).issubset(
                 {call[0] for call in client.calls}),
                 'a failing first key must not starve later obligations')
-            self.assertEqual(op.state, 'pending')
-            failed_obligation = op.key_obligation_ids.filtered(
-                lambda item: item.key_id.id == keys[0].id)
-            self.assertEqual(failed_obligation.state, 'pending')
-            self.env.cr.execute(
-                'UPDATE woow_paas_platform_llm_backoffice_key_obligation '
-                'SET next_work_at = NULL WHERE id = %s', (failed_obligation.id,))
+            with self.registry.cursor() as cr:
+                cr.execute('SELECT id, pending_tokens_json FROM '
+                           'woow_paas_platform_llm_backoffice_key_obligation '
+                           'WHERE operation_id = %s AND key_id = %s', (op_id, key_ids[0]))
+                failed_obligation_id, pending_tokens = cr.fetchone()
+                retry_at = next(iter(pending_tokens.values()))['retry_at']
+                self.assertGreater(retry_at, clock[0])
+                clock[0] = retry_at + 1
+                cr.execute('UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                           'SET next_work_at = NULL WHERE id = %s', (failed_obligation_id,))
+                self.assertEqual(cr.rowcount, 1)
+                cr.commit()
             for _ in range(100):
-                worker._process_disable_keys(self.env, op, actor)
-                if all(row.state == 'done' for row in op.key_obligation_ids.filtered(
-                        lambda item: item.key_id.id in keys.ids)):
-                    break
+                self._run_batch_fresh({op_id})
+                with self.registry.cursor() as cr:
+                    cr.execute('SELECT count(*) FROM '
+                               'woow_paas_platform_llm_backoffice_key_obligation '
+                               "WHERE operation_id = %s AND state <> 'done'", (op_id,))
+                    if cr.fetchone()[0] == 0:
+                        break
+        self.env.invalidate_all()
+        keys = self.env['woow_paas_platform.llm_api_key'].browse(key_ids)
+        Key = self.env['woow_paas_platform.llm_api_key']
+        keys.invalidate_recordset(['state', 'disabled_by'])
         self.assertTrue(all(call[1] is False for call in client.calls))
         self.assertTrue(all(call[2] == nac.TIMEOUT_CRON_WRITE for call in client.calls))
         self.assertTrue(all(key.state == 'disabled' and key.disabled_by == 'ops' for key in keys))
@@ -629,13 +771,10 @@ class TestLlmBackofficeCommitted(TransactionCase):
                           side_effect=AssertionError('ops key enable must stop before remote I/O')):
             with self.assertRaises(LlmError):
                 Key._llm_set_key_status(keys[1].partner_id, keys[1].id, True)
-        own_obligations = op.key_obligation_ids.filtered(lambda item: item.key_id.id in keys.ids)
-        self.assertEqual(len(own_obligations), len(keys))
-        self.assertTrue(all(row.state == 'done' for row in own_obligations))
-        pending = op.key_obligation_ids.filtered(lambda item: item.state == 'pending')
-        self.assertEqual(op.state, 'pending' if pending else 'done')
-        self.assertEqual(op.key_failed_count, len(pending))
-        self.assertEqual(op.key_target_count, len(op.key_obligation_ids))
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT state, key_failed_count, key_target_count FROM '
+                       'woow_paas_platform_llm_backoffice_operation WHERE id = %s', (op_id,))
+            self.assertEqual(cr.fetchone(), ('done', 0, len(key_ids)))
 
     def _creator_recovery_fake(self):
         from .llm_fake_newapi import FakeNewApi
@@ -882,26 +1021,31 @@ class TestLlmBackofficeCommitted(TransactionCase):
         self.assertTrue(all(token['status'] == 2 for token in fake.tokens.values()))
 
     def test_batch_disable_recovers_every_same_name_token_before_completion(self):
-        Key = self.env['woow_paas_platform.llm_api_key']
+        from ..models import llm_backoffice_operation
+        from ..services import llm_token_recovery
         name = 'wp_recovery_' + uuid.uuid4().hex[:12]
-        key = _llm_internal(Key).create({
-            'account_id': self.account_id, 'kind': 'free_trial',
-            'client_request_id': 'batch-recovery-' + uuid.uuid4().hex,
-            'newapi_name': name, 'state': 'failed_reveal',
-        })
-        _llm_internal(Key).create({
-            'account_id': self.account_id, 'kind': 'free_trial',
-            'client_request_id': 'batch-replacement-' + uuid.uuid4().hex,
-            'newapi_name': 'wp_replacement_' + uuid.uuid4().hex[:12],
-            'state': 'creating',
-        })
-        op = self.env['woow_paas_platform.llm_backoffice_operation']._enqueue(
-            operation='disable_all_keys', request_id='disable-recovery-' + uuid.uuid4().hex,
-            operator=self.env['res.users'].browse(self.operator_id),
-            reason='recover and disable all same-name token ids')
-        self.addCleanup(self._cleanup_operation, op.id)
-        obligation = op.key_obligation_ids.filtered(lambda row: row.key_id.id == key.id)
-        self.assertTrue(obligation.scan_required)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'free_trial',
+                'client_request_id': 'batch-recovery-' + uuid.uuid4().hex,
+                'newapi_name': name, 'state': 'failed_reveal',
+            })
+            replacement = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'free_trial',
+                'client_request_id': 'batch-replacement-' + uuid.uuid4().hex,
+                'newapi_name': 'wp_replacement_' + uuid.uuid4().hex[:12],
+                'state': 'creating',
+            })
+            key_id = key.id
+            op = self._enqueue_test_disable(
+                env, [key.id, replacement.id], 'disable-recovery-' + uuid.uuid4().hex,
+                'recover and disable all same-name token ids')
+            op_id = op.id
+            cr.execute('SELECT id FROM woow_paas_platform_llm_backoffice_key_obligation '
+                       'WHERE operation_id = %s AND key_id = %s', (op_id, key_id))
+            obligation_id = cr.fetchone()[0]
+            cr.commit()
         matching = [{'id': 2000 + i, 'name': name if i in (10, 20) else 'other-%d' % i}
                     for i in range(100)]
 
@@ -928,46 +1072,68 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
         client = Client()
         account_class = type(self.env[ACCOUNT])
+        clock = [int(time.time())]
+        controlled_clock = type('ControlledClock', (), {
+            'time': staticmethod(lambda: clock[0]),
+            'monotonic': staticmethod(time.monotonic),
+        })()
         with patch.object(account_class, '_llm_tenant_ip', return_value='203.0.113.1'), \
                 patch.object(account_class, '_llm_up_token', return_value='test-up'), \
-                patch.object(account_class, '_llm_client', return_value=client):
-            worker = self.env['woow_paas_platform.llm_backoffice_operation']
-            actor = self.env['res.users'].browse(self.operator_id)
+                patch.object(account_class, '_llm_client', return_value=client), \
+                patch.object(llm_backoffice_operation, 'time', controlled_clock):
             for _ in range(200):
+                self._run_batch_fresh({op_id})
+                with self.registry.cursor() as cr:
+                    cr.execute('SELECT state, pending_tokens_json, result_code FROM '
+                               'woow_paas_platform_llm_backoffice_key_obligation '
+                               'WHERE id = %s', (obligation_id,))
+                    state, pending, result_code = cr.fetchone()
                 if {2020, 3000}.issubset(set(client.disabled)):
                     break
-                worker._process_disable_keys(self.env, op, actor)
             self.assertEqual(set(client.disabled), {2020, 3000},
                              'a backed-off token must not block healthy same-name siblings')
-            self.assertTrue(obligation.pending_tokens_json.get('2010'))
-            self.assertTrue(obligation.result_code != 'ok')
-            from ..services import llm_token_recovery
+            self.assertTrue(pending.get('2010'))
+            self.assertNotEqual(result_code, 'ok')
             self.assertFalse(llm_token_recovery.stable_scan_complete(
-                pending={'2010': {'attempts': 1, 'retry_at': 123}},
+                pending=pending,
                 disabled={2020, 3000}, total=101, baseline_total=101,
                 head=llm_token_recovery.page_fingerprint(matching[:100]),
                 verify_items=matching, verify_total=101, page_size=100,
                 max_id=nac.INT32_MAX),
                 'the final proof must refuse completion while one token remains pending')
-            self.env.cr.execute(
-                'SELECT pending_tokens_json FROM '
-                'woow_paas_platform_llm_backoffice_key_obligation WHERE id = %s',
-                (obligation.id,))
-            pending = self.env.cr.fetchone()[0]
-            pending['2010']['retry_at'] = 0
-            self.env.cr.execute(
-                'UPDATE woow_paas_platform_llm_backoffice_key_obligation '
-                'SET pending_tokens_json = %s::jsonb, next_work_at = NULL WHERE id = %s',
-                (json.dumps(pending), obligation.id))
+            retry_at = pending['2010']['retry_at']
+            self.assertGreater(retry_at, clock[0])
+            clock[0] = retry_at + 1
+            with self.registry.cursor() as cr:
+                cr.execute('UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                           'SET next_work_at = NULL WHERE id = %s', (obligation_id,))
+                self.assertEqual(cr.rowcount, 1)
+                cr.commit()
+            self.env.invalidate_all()
             for _ in range(200):
-                if obligation.state == 'done':
+                self._run_batch_fresh({op_id})
+                with self.registry.cursor() as cr:
+                    cr.execute('SELECT state FROM '
+                               'woow_paas_platform_llm_backoffice_key_obligation WHERE id = %s',
+                               (obligation_id,))
+                    state = cr.fetchone()[0]
+                if state == 'done':
                     break
-                worker._process_disable_keys(self.env, op, actor)
-        self.assertEqual(obligation.state, 'done')
+        self.assertEqual(state, 'done')
+        key = self.env['woow_paas_platform.llm_api_key'].browse(key_id)
         key.invalidate_recordset(['state'])
         self.assertEqual(key.state, 'failed_reveal', 'recovery must preserve free-trial quarantine')
         self.assertEqual(set(client.disabled), {2010, 2020, 3000})
-        self.assertTrue(obligation.scan_complete)
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT scan_complete, operation.state FROM '
+                       'woow_paas_platform_llm_backoffice_key_obligation obligation '
+                       'JOIN woow_paas_platform_llm_backoffice_operation operation '
+                       'ON operation.id = obligation.operation_id WHERE obligation.id = %s',
+                       (obligation_id,))
+            scan_complete, operation_state = cr.fetchone()
+        self.assertTrue(scan_complete)
+        self.assertEqual(operation_state, 'pending',
+                         'the separate creating-key obligation remains unresolved')
         self.assertIn(2, client.pages, 'the worker must traverse every page')
         self.assertGreaterEqual(client.pages.count(1), 2,
                                 'the head page is rechecked after pending token IDs clear')
@@ -980,11 +1146,9 @@ class TestLlmBackofficeCommitted(TransactionCase):
             'client_request_id': 'batch-unresolved-' + uuid.uuid4().hex,
             'newapi_name': name, 'state': 'failed_reveal',
         })
-        op = self.env['woow_paas_platform.llm_backoffice_operation']._enqueue(
-            operation='disable_all_keys', request_id='disable-unresolved-' + uuid.uuid4().hex,
-            operator=self.env['res.users'].browse(self.operator_id),
-            reason='keep unresolved create identity pending')
-        self.addCleanup(self._cleanup_operation, op.id)
+        op = self._enqueue_test_disable(
+            self.env, [key.id], 'disable-unresolved-' + uuid.uuid4().hex,
+            'keep unresolved create identity pending')
         obligation = op.key_obligation_ids.filtered(lambda row: row.key_id.id == key.id)
 
         class Client:
@@ -1247,8 +1411,11 @@ class TestLlmBackofficeGuards(TransactionCase):
         before_mail = self.env['mail.mail'].sudo().search_count([])
         before_periods = self.env[
             'woow_paas_platform.llm_manual_credit_report'].sudo().search_count([])
-        cursor_id = None
-        with patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
+        period_id = '2099-01'
+        owned = {'cursor_id': None, 'report_id': None, 'mail_id': None}
+        self.addCleanup(_cleanup_monthly_owned, self, owned, cursor_key, period_id)
+        with _capture_monthly_creation_ids(self, cursor_key, period_id, owned), \
+                patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
                 patch.object(llm_backoffice, 'alert_targets', return_value={
                     'emails': (), 'webhook': None}):
             self.assertFalse(self.env[
@@ -1260,13 +1427,12 @@ class TestLlmBackofficeGuards(TransactionCase):
         with self.registry.cursor() as cr:
             cr.execute('SELECT id, next_period FROM '
                        'woow_paas_platform_llm_manual_credit_report_cursor '
-                       'WHERE cursor_key = %s', (cursor_key,))
+                       'WHERE id = %s AND cursor_key = %s',
+                       (owned['cursor_id'], cursor_key))
             row = cr.fetchone()
             self.assertTrue(row, 'missing recipients must preserve a durable retry cursor')
-            cursor_id = row[0]
+            self.assertEqual(row[0], owned['cursor_id'])
             self.assertEqual(row[1], '2099-01')
             cr.execute('SELECT count(*) FROM woow_paas_platform_llm_manual_credit_report '
-                       'WHERE period_id = %s', ('2099-01',))
+                       'WHERE period_id = %s', (period_id,))
             self.assertEqual(cr.fetchone()[0], 0, 'no success receipt is written without recipients')
-            cr.execute('DELETE FROM woow_paas_platform_llm_manual_credit_report_cursor '
-                       'WHERE id = %s AND cursor_key = %s', (cursor_id, cursor_key))
