@@ -484,7 +484,7 @@
 20	test_llm_credit_order.TestLlmCreditOrderSchema
 12	test_llm_credit_order.TestLlmCreditPayment
 6	test_llm_credit_order.TestLlmCreditRollback
-13	test_llm_credit_order.TestLlmCreditT1
+14	test_llm_credit_order.TestLlmCreditT1
 8	test_llm_credit_visibility.TestLlmCreditNativePortal
 6	test_llm_credit_visibility.TestLlmCreditVisibility
 13	test_llm_credit_void.TestLlmCreditVoid
@@ -494,7 +494,7 @@
 5	test_llm_mcp_jump_guard.TestLlmMcpJumpGuard
 1	test_llm_notification_suspension.TestLlmSuspensionManagementRace
 3	test_llm_notification_suspension.TestLlmSuspensionRecovery
-13	test_llm_notifications.TestLlmNotifications
+17	test_llm_notifications.TestLlmNotifications
 17	test_llm_platform_foundation.TestLlmAlert
 2	test_llm_platform_foundation.TestLlmAlertBurst
 4	test_llm_platform_foundation.TestLlmAlertConfigGuard
