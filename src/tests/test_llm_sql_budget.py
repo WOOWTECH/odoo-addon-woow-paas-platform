@@ -6,6 +6,7 @@ Odoo database. Raw registry database cursors avoid taking the Registry lock.
 """
 
 import time
+import unittest
 import uuid
 from unittest.mock import patch
 
@@ -19,6 +20,9 @@ from ..services.llm_sql_budget import SqlBudgetExpired, deadline_cursor
 
 
 _TIMEOUTS = (SqlBudgetExpired, QueryCanceled, LockNotAvailable)
+# These cursors own their transactions. Use unittest's exception context:
+# Odoo's override assumes one exception class and wraps the test env in a
+# savepoint, which neither accepts the tuple nor owns these raw transactions.
 
 
 @tagged("post_install", "-at_install")
@@ -36,7 +40,7 @@ class TestLlmSqlBudget(TransactionCase):
             holder.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
 
             started = time.monotonic()
-            with self.assertRaises(_TIMEOUTS):
+            with unittest.TestCase.assertRaises(self, _TIMEOUTS):
                 with deadline_cursor(
                     self._cursor_factory(),
                     deadline=time.monotonic() + 0.4,
@@ -66,15 +70,16 @@ class TestLlmSqlBudget(TransactionCase):
     def test_successive_statements_share_one_absolute_deadline(self):
         started = time.monotonic()
         deadline = started + 0.32
+        body_checked = False
         # The inner assertion proves the second statement expires; the outer
         # one captures deadline_cursor's independent exit/commit budget check.
-        with self.assertRaises(SqlBudgetExpired):
+        with unittest.TestCase.assertRaises(self, SqlBudgetExpired):
             with deadline_cursor(
                 self._cursor_factory(), deadline=deadline, lock_seconds=5.0
             ) as cr:
                 cr.execute('SAVEPOINT "llm_sql_budget_cleanup"')
                 cr.execute("SELECT pg_sleep(0.20)")
-                with self.assertRaises(_TIMEOUTS):
+                with unittest.TestCase.assertRaises(self, _TIMEOUTS):
                     # This call has only the remainder of the original budget.
                     cr.execute("SELECT pg_sleep(0.20)")
 
@@ -85,9 +90,11 @@ class TestLlmSqlBudget(TransactionCase):
 
                 # Invalid SQL distinguishes local expiry refusal from a server
                 # parse error: this statement must never reach PostgreSQL.
-                with self.assertRaises(SqlBudgetExpired):
+                with unittest.TestCase.assertRaises(self, SqlBudgetExpired):
                     cr.execute("SELECT definitely_not_valid_sql")
+                body_checked = True
 
+        self.assertTrue(body_checked, "expiry bypassed the statement/cleanup assertions")
         self.assertLess(
             time.monotonic() - started,
             2.0,
@@ -96,8 +103,9 @@ class TestLlmSqlBudget(TransactionCase):
 
     def test_already_expired_cursor_refuses_sql_but_allows_savepoint_cleanup(self):
         unrelated = self.registry._db.cursor()
+        body_checked = False
         try:
-            with self.assertRaises(SqlBudgetExpired):
+            with unittest.TestCase.assertRaises(self, SqlBudgetExpired):
                 with deadline_cursor(
                     self._cursor_factory(),
                     deadline=time.monotonic() + 0.1,
@@ -106,7 +114,7 @@ class TestLlmSqlBudget(TransactionCase):
                     cr.execute('SAVEPOINT "llm_sql_budget_expired_cleanup"')
                     time.sleep(0.15)
 
-                    with self.assertRaises(SqlBudgetExpired):
+                    with unittest.TestCase.assertRaises(self, SqlBudgetExpired):
                         # If sent to PostgreSQL this would raise a syntax error.
                         cr.execute("SELECT definitely_not_valid_sql")
 
@@ -121,6 +129,8 @@ class TestLlmSqlBudget(TransactionCase):
                     # one still sends and receives SQL normally.
                     unrelated.execute("SELECT 23")
                     self.assertEqual(unrelated.fetchone()[0], 23)
+                    body_checked = True
+            self.assertTrue(body_checked, "expiry bypassed the cleanup/isolation assertions")
         finally:
             unrelated.close()
 
@@ -150,7 +160,7 @@ class TestLlmSqlBudget(TransactionCase):
                         "alert_targets",
                         return_value={"emails": (), "webhook": None},
                     ):
-                with self.assertRaises(_TIMEOUTS):
+                with unittest.TestCase.assertRaises(self, _TIMEOUTS):
                     service._llm_alert(
                         alert,
                         target_model=target_model,

@@ -130,13 +130,23 @@ class TestLlmKnownDiscrepancy(TransactionCase):
             self.env, login='llm_discrepancy_acl_portal_' + uuid.uuid4().hex[:8],
             groups='base.group_portal', email='acl-portal@example.test')
 
-        self.assertTrue(self.env[MODEL].with_user(self.operator).check_access_rights('read'))
-        self.assertTrue(self.env[MODEL].with_user(manager).check_access_rights('read'))
+        operator_record = self.env[MODEL].with_user(self.operator).sudo(False).browse(record.id)
+        manager_record = self.env[MODEL].with_user(manager).sudo(False).browse(record.id)
+        self.assertFalse(operator_record.env.su)
+        self.assertFalse(manager_record.env.su)
+        # In Odoo 18 check_access_rights(..., raise_exception=True) returns
+        # None on success. has_access is the boolean API; also read the row.
+        self.assertTrue(operator_record.has_access('read'))
+        self.assertTrue(manager_record.has_access('read'))
+        operator_values = operator_record.read(['quota_delta_text', 'reason'])[0]
+        self.assertEqual(operator_values['quota_delta_text'], '9007199254740993')
+        self.assertEqual(operator_values['reason'], 'Verified local reconciliation evidence')
         for user in (ordinary, portal):
             with self.subTest(user=user.login), self.assertRaises(AccessError):
-                self.env[MODEL].with_user(user).check_access_rights('read')
-        manager_record = self.env[MODEL].with_user(manager).browse(record.id)
-        self.assertEqual(manager_record.quota_delta_text, '9007199254740993')
+                self.env[MODEL].with_user(user).sudo(False).browse(record.id).read(
+                    ['quota_delta_text'])
+        self.assertEqual(manager_record.read(['quota_delta_text'])[0]['quota_delta_text'],
+                         '9007199254740993')
         with self.assertRaises(AccessError):
             manager_record.read(['reason'])
 
