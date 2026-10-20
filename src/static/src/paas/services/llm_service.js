@@ -22,8 +22,8 @@ import { LLM_KEY_CREATE_INTERRUPTED, LLM_NETWORK_ERROR, LLM_SESSION_EXPIRED } fr
 export const KEY_CREATE_TIMEOUT_MS = 40000;
 
 /** 失敗回應裡可以帶給 llm_errors.js 組句的參數（與 controllers/llm.py `_SAFE_PARAMS` 對齊、外加 §3.4 的參數）。 */
-const SAFE_PARAMS = ["retry_after", "current_version", "max_keys", "field", "reason", "used",
-  "needed_7d", "short_by"];
+const NUMERIC_PARAMS = ["retry_after", "max_keys", "used", "needed_7d", "short_by"];
+const KEY_ENABLE_REASONS = new Set(["expired", "exhausted", "free_capped", "suspended", "overdraft"]);
 const KEY_INVALID = "llm_key_invalid";
 const keyActionTails = new Map();
 const keyActionsInFlight = new Map();
@@ -59,11 +59,13 @@ function normalize(result) {
   }
   if (result && typeof result.code === "string" && result.code) {
     const out = failure(result.code);
-    for (const name of SAFE_PARAMS) {
+    for (const name of NUMERIC_PARAMS) {
       const value = result[name];
-      if (typeof value === "number" || (typeof value === "string" && value.length <= 64)) {
-        out[name] = value;
-      }
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) out[name] = value;
+    }
+    if (KEY_ENABLE_REASONS.has(result.reason)) out.reason = result.reason;
+    if (typeof result.current_version === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(result.current_version)) {
+      out.current_version = result.current_version;
     }
     return out;
   }
@@ -114,8 +116,9 @@ async function runKeyAction(service, action, keyId, url, params) {
   const previous = keyActionTails.get(keyId) || Promise.resolve();
   const pending = previous.catch(() => {}).then(async () => {
     const result = await call(url, params);
-    if (result.success) await Promise.allSettled([service.fetchKeys(), service.fetchState()]);
-    return result;
+    if (!result.success) return result;
+    await Promise.allSettled([service.fetchKeys(), service.fetchState()]);
+    return { success: true, data: null };
   });
   const tail = pending.then(() => {}, () => {});
   keyActionTails.set(keyId, tail);

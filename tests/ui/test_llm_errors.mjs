@@ -76,6 +76,25 @@ test("帶參數的碼：retry_after 換成分鐘（無條件進位）、used、r
   }
 });
 
+test("error params are restricted to safe numeric and enumerated values", async () => {
+  globalThis.__llmRpc = async () => ({
+    success: false, code: "llm_key_cannot_enable",
+    retry_after: NaN, max_keys: -1, used: "3", needed_7d: Infinity, short_by: -0.5,
+    reason: "<img src=x onerror=alert(1)>", field: "<script>alert(1)</script>",
+    current_version: "1.2.3<script>",
+  });
+  assert.deepEqual(await llmService.fetchState(), { success: false, code: "llm_key_cannot_enable" });
+
+  globalThis.__llmRpc = async () => ({
+    success: false, code: "llm_key_cannot_enable", retry_after: 0, max_keys: 20,
+    used: 3.5, needed_7d: 7, short_by: 2, reason: "exhausted", field: "name", current_version: "v1.2_rc-3",
+  });
+  assert.deepEqual(await llmService.fetchState(), {
+    success: false, code: "llm_key_cannot_enable", retry_after: 0, max_keys: 20,
+    used: 3.5, needed_7d: 7, short_by: 2, reason: "exhausted", current_version: "v1.2_rc-3",
+  });
+});
+
 test("llm_suspended 的句子不指向「橫幅」（在沒有橫幅的地方也講得通）", () => {
   assert.equal(errors.llmErrorMessage({ code: "llm_suspended" }), "AI 模型服務已暫停");
 });
@@ -248,7 +267,7 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
     return { success: true, data: args[0] === "/api/llm/keys/list" ? { items: [] } : {} };
   };
   assert.deepEqual(await llmService.updateKey(7, { name: "Renamed", limitPoints: null, ignored: "no" }), {
-    success: true, data: { key: "sk-SyntheticSecret" },
+    success: true, data: null,
   });
   assert.deepEqual(calls.slice(0, 3).map(([url, params]) => [url, params]), [
     ["/api/llm/keys/update", { key_id: 7, name: "Renamed", limit_points: null }],
@@ -257,15 +276,15 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
   assert.equal(JSON.stringify(llmService).includes("sk-SyntheticSecret"), false);
 
   calls.length = 0;
-  assert.deepEqual(await llmService.updateKey(7, { expires: null, models: null }), { success: true, data: { key: "sk-SyntheticSecret" } });
+  assert.deepEqual(await llmService.updateKey(7, { expires: null, models: null }), { success: true, data: null });
   assert.deepEqual(calls[0][1], { key_id: 7, expires: null, models: null });
 
   calls.length = 0;
-  assert.deepEqual(await llmService.updateKey(7, { expires: "90d" }), { success: true, data: { key: "sk-SyntheticSecret" } });
+  assert.deepEqual(await llmService.updateKey(7, { expires: "90d" }), { success: true, data: null });
   assert.deepEqual(calls[0][1], { key_id: 7, expires: "90d" });
   calls.length = 0;
   assert.deepEqual(await llmService.updateKey(7, { models: ["openai/gpt-4.1", "vendor:model_v2/path-1"] }), {
-    success: true, data: { key: "sk-SyntheticSecret" },
+    success: true, data: null,
   });
   assert.deepEqual(calls[0][1], { key_id: 7, models: ["openai/gpt-4.1", "vendor:model_v2/path-1"] });
   calls.length = 0;
@@ -295,13 +314,13 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
   assert.equal(calls.length, 0, "invalid updates must not make any RPCs");
 
   assert.deepEqual(await llmService.updateKey(1, { name: "valid", extra: "omitted" }), {
-    success: true, data: { key: "sk-SyntheticSecret" },
+    success: true, data: null,
   });
   assert.deepEqual(calls[0], ["/api/llm/keys/update", { key_id: 1, name: "valid" }]);
   calls.length = 0;
 
   const hostileResult = await llmService.updateKey(1, { models: hostileModels });
-  assert.deepEqual(hostileResult, { success: true, data: { key: "sk-SyntheticSecret" } });
+  assert.deepEqual(hostileResult, { success: true, data: null });
   assert.deepEqual(calls[0], ["/api/llm/keys/update", { key_id: 1, models: ["openai/gpt-4.1"] }]);
   calls.length = 0;
 
@@ -321,7 +340,7 @@ test("paid key mutations validate fields, preserve omitted/null fields, refresh,
   ]);
 });
 
-test("successful mutation stays successful when refreshes fail; plaintext never enters the store", async () => {
+test("successful mutation stays successful when refreshes fail; plaintext never reaches store or caller", async () => {
   const plaintext = "sk-" + "OnlyCallerCanSeeThis";
   let refreshCount = 0;
   globalThis.__llmRpc = async (url) => {
@@ -330,7 +349,7 @@ test("successful mutation stays successful when refreshes fail; plaintext never 
     throw new Error("refresh failed " + plaintext);
   };
   const result = await llmService.updateKey(17, { name: "safe" });
-  assert.deepEqual(result, { success: true, data: { key: plaintext } });
+  assert.deepEqual(result, { success: true, data: null });
   assert.equal(refreshCount, 2);
   assert.equal(JSON.stringify(llmService).includes(plaintext), false);
 });
@@ -361,7 +380,7 @@ test("a failed mutation does not refresh and releases its queue for a successful
   };
   assert.deepEqual(await llmService.extendKey(82), { success: false, code: "llm_key_invalid" });
   assert.deepEqual(calls.map(([url]) => url), ["/api/llm/keys/extend"], "failed action must not refresh");
-  assert.deepEqual(await llmService.extendKey(82), { success: true, data: { key: "sk-never-in-store" } });
+  assert.deepEqual(await llmService.extendKey(82), { success: true, data: null });
   assert.deepEqual(calls.map(([url]) => url), [
     "/api/llm/keys/extend", "/api/llm/keys/extend", "/api/llm/keys/list", "/api/llm/state",
   ]);
@@ -386,14 +405,14 @@ test("mutation intents serialize per key, dedupe identical requests, and release
   assert.equal(calls.filter(([url]) => url === "/api/llm/keys/extend").length, 2);
   await independent;
   releaseAction();
-  assert.deepEqual(await Promise.all([first, second]), [{ success: true, data: {} }, { success: true, data: {} }]);
+  assert.deepEqual(await Promise.all([first, second]), [{ success: true, data: null }, { success: true, data: null }]);
   globalThis.__llmRpc = async (...args) => {
     calls.push(args);
     if (args[0] === "/api/llm/keys/list") return { success: true, data: { items: [] } };
     return { success: true, data: {} };
   };
   assert.equal(calls.filter(([url, params]) => url === "/api/llm/keys/extend" && params.key_id === 90).length, 1);
-  assert.deepEqual(await llmService.extendKey(90), { success: true, data: {} });
+  assert.deepEqual(await llmService.extendKey(90), { success: true, data: null });
   assert.equal(calls.filter(([url, params]) => url === "/api/llm/keys/extend" && params.key_id === 90).length, 2);
 
   const statusStart = calls.length;
@@ -431,7 +450,7 @@ test("mutation intents serialize per key, dedupe identical requests, and release
   while (statusPhases.length < 2) await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(statusPhases, [true, false]);
   releaseSecondStatus();
-  assert.deepEqual(await Promise.all([enabling, disabling]), [{ success: true, data: {} }, { success: true, data: {} }]);
+  assert.deepEqual(await Promise.all([enabling, disabling]), [{ success: true, data: null }, { success: true, data: null }]);
 
   const sameStart = calls.length;
   let releaseSame;
