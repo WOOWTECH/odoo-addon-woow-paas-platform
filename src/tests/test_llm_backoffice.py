@@ -196,22 +196,10 @@ class TestLlmBackofficeCommitted(TransactionCase):
         from ..models.llm_common import LlmCronTick
         self.env.flush_all()
         self.env.invalidate_all()
-        allowed = set(allowed_operation_ids)
-        with self.registry.cursor() as cr:
-            cr.execute(
-                "SELECT op.id FROM woow_paas_platform_llm_backoffice_operation op "
-                "WHERE op.state = 'pending' AND (op.operation <> 'disable_all_keys' OR "
-                "NOT EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
-                "WHERE ob.operation_id = op.id AND ob.state = 'pending') OR "
-                "EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
-                "WHERE ob.operation_id = op.id AND ob.state = 'pending' "
-                "AND (ob.next_work_at IS NULL OR ob.next_work_at <= (NOW() AT TIME ZONE 'UTC'))))")
-            foreign = {row[0] for row in cr.fetchall()} - allowed
-        if foreign:
-            self.skipTest('eligible foreign backoffice operations exist; refusing to process them')
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
             tick = LlmCronTick(seconds=seconds, items=items)
-            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(tick)
+            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(
+                tick, operation_ids=list(allowed_operation_ids))
         self.env.invalidate_all()
         return tick
 
@@ -274,7 +262,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
         worker = self.env['woow_paas_platform.llm_backoffice_operation']
         tick = LlmCronTick(seconds=20, items=10)
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
-            self.assertFalse(worker._process_batch(tick))
+            self.assertFalse(worker._process_batch(tick, operation_ids=[operation_id]))
         self.assertEqual(tick.done, 1)
         with self.registry.cursor() as cr:
             cr.execute('SELECT state, order_id FROM woow_paas_platform_llm_backoffice_operation '
@@ -328,6 +316,94 @@ class TestLlmBackofficeCommitted(TransactionCase):
                        "WHERE id = ANY(%s) AND state = 'pending'", (operation_ids,))
             self.assertEqual(cr.fetchone()[0], len(operation_ids))
 
+    def test_worker_scope_excludes_foreign_work_due_or_queued_before_selection(self):
+        # "Foreign" operations are also fixture-owned for cleanup, but excluded
+        # from this worker invocation. No real unrelated rows are modified.
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'paid', 'state': 'active',
+                'client_request_id': 'scope-key-' + uuid.uuid4().hex,
+                'newapi_token_id': 882002, 'newapi_name': 'scope_foreign_key',
+            })
+            key_id = key.id
+            batch = self._enqueue_test_disable(
+                env, [key_id], 'scope-batch-' + uuid.uuid4().hex,
+                'fixture operation outside the selected worker scope')
+            foreign_batch_id = batch.id
+            env.flush_all()
+            cr.execute('UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                       "SET next_work_at = (NOW() AT TIME ZONE 'UTC') + interval '1 hour' "
+                       'WHERE operation_id = %s', (foreign_batch_id,))
+        owned_id = self._queue_manual_operation('scope-owned-' + uuid.uuid4().hex)
+        with self.registry.cursor() as cr:
+            cr.execute("SELECT next_work_at > (NOW() AT TIME ZONE 'UTC') FROM "
+                       'woow_paas_platform_llm_backoffice_key_obligation '
+                       'WHERE operation_id = %s', (foreign_batch_id,))
+            self.assertEqual(cr.fetchone(), (True,))
+
+        worker_class = type(self.env['woow_paas_platform.llm_backoffice_operation'])
+        process_batch = worker_class._process_batch
+        inserted = {}
+
+        def race_before_selection(worker, tick, operation_ids=None):
+            if not inserted:
+                # Simulate changes after an ownership observation, before the
+                # real worker opens its selection cursor. SQL scope must hold.
+                with self.registry.cursor() as cr:
+                    cr.execute('UPDATE woow_paas_platform_llm_backoffice_key_obligation '
+                               'SET next_work_at = NULL WHERE operation_id = %s',
+                               (foreign_batch_id,))
+                inserted['manual_id'] = self._queue_manual_operation(
+                    'scope-foreign-' + uuid.uuid4().hex)
+            return process_batch(worker, tick, operation_ids=operation_ids)
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def user_list_tokens(self, *args, **kwargs):
+                self.calls.append('list')
+                return nac.Ok(data={'items': [], 'total': 0})
+
+            def user_set_token_status(self, *args, **kwargs):
+                self.calls.append('disable')
+                return nac.Ok(data={})
+
+        client = Client()
+        account_class = type(self.env[ACCOUNT])
+        with patch.object(worker_class, '_process_batch', new=race_before_selection), \
+                patch.object(account_class, '_llm_client', return_value=client), \
+                patch.object(account_class, '_llm_tenant_ip', return_value='203.0.113.1'), \
+                patch.object(account_class, '_llm_up_token', return_value='test-up'):
+            empty_tick = self._run_batch_fresh([])
+            self.assertEqual(empty_tick.done, 0, 'an empty scope must claim nothing')
+            tick = self._run_batch_fresh([owned_id])
+            self.assertEqual(tick.done, 1)
+        self.assertEqual(client.calls, [], 'global fake clients must not touch foreign work')
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT state, order_id FROM '
+                       'woow_paas_platform_llm_backoffice_operation WHERE id = %s', (owned_id,))
+            state, order_id = cr.fetchone()
+            self.assertEqual(state, 'done')
+            self.assertTrue(order_id)
+            cr.execute('SELECT state, last_attempt_at, order_id FROM '
+                       'woow_paas_platform_llm_backoffice_operation WHERE id = ANY(%s)',
+                       ([foreign_batch_id, inserted['manual_id']],))
+            self.assertEqual(cr.fetchall(), [('pending', None, None)] * 2)
+            cr.execute('SELECT state, disabled_by FROM woow_paas_platform_llm_api_key '
+                       'WHERE id = %s', (key_id,))
+            self.assertEqual(cr.fetchone(), ('active', None))
+            cr.execute('SELECT state, work_count, disabled_tokens_json FROM '
+                       'woow_paas_platform_llm_backoffice_key_obligation '
+                       'WHERE operation_id = %s', (foreign_batch_id,))
+            state, work_count, disabled_tokens = cr.fetchone()
+            self.assertEqual((state, work_count), ('pending', 0))
+            self.assertFalse(disabled_tokens)
+            cr.execute('SELECT count(*) FROM ' + ORDER_TABLE + ' WHERE client_request_id = %s',
+                       ('manual-wizard-%d' % inserted['manual_id'],))
+            self.assertEqual(cr.fetchone()[0], 0)
+
     def test_manual_notice_repair_survives_operator_revocation(self):
         from ..models.llm_common import LlmCronTick
         from ..models import llm_backoffice_operation
@@ -335,7 +411,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
         worker = self.env['woow_paas_platform.llm_backoffice_operation']
         self.alert_mock.return_value = False
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
-            worker._process_batch(LlmCronTick(seconds=20, items=10))
+            worker._process_batch(LlmCronTick(seconds=20, items=10),
+                                  operation_ids=[operation_id])
         with self.registry.cursor() as cr:
             cr.execute('SELECT id FROM ' + ORDER_TABLE +
                        " WHERE client_request_id = %s AND manual_notice_accepted = FALSE",
@@ -345,7 +422,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
             env['res.users'].browse(self.operator_id)._llm_set_named_human_eligible(False)
         self.alert_mock.return_value = 1
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
-            worker._process_batch(LlmCronTick(seconds=20, items=10))
+            worker._process_batch(LlmCronTick(seconds=20, items=10),
+                                  operation_ids=[operation_id])
         with self.registry.cursor() as cr:
             cr.execute('SELECT state FROM woow_paas_platform_llm_backoffice_operation '
                        'WHERE id = %s', (operation_id,))
@@ -478,7 +556,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
         tick = LlmCronTick(seconds=12, items=10)
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False), \
                 patch.object(type(self.env[ORDER]), '_admin_review', fake_review):
-            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(tick)
+            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(
+                tick, operation_ids=[operation_id])
         self.assertEqual(len(deadlines), 1)
         self.assertGreater(deadlines[0], time.monotonic())
         self.assertLessEqual(deadlines[0], tick.deadline)
@@ -487,7 +566,8 @@ class TestLlmBackofficeCommitted(TransactionCase):
         exhausted = LlmCronTick(seconds=1, items=10)
         exhausted.deadline = time.monotonic() - 1
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
-            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(exhausted)
+            self.env['woow_paas_platform.llm_backoffice_operation']._process_batch(
+                exhausted, operation_ids=[pending_id])
         self.assertTrue(exhausted.more)
         with self.registry.cursor() as cr:
             cr.execute('SELECT state FROM woow_paas_platform_llm_backoffice_operation '

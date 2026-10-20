@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+from odoo import api
 from odoo.exceptions import AccessError
 from odoo.tests.common import new_test_user, tagged
 

@@ -149,9 +149,12 @@ class LlmBackofficeOperation(models.Model):
                             items=10, config=config, outbound=True)
 
     @api.model
-    def _process_batch(self, tick):
+    def _process_batch(self, tick, operation_ids=None):
+        """Process eligible work; an explicit private scope limits the SQL claim."""
         if llm_unconfigured(self.env):
             return False
+        scope_sql = '' if operation_ids is None else 'AND op.id = ANY(%s) '
+        scope_params = () if operation_ids is None else (list(operation_ids),)
         ids = []
         with self.env.registry.cursor() as cr:
             cr.execute(
@@ -162,8 +165,8 @@ class LlmBackofficeOperation(models.Model):
                 "EXISTS (SELECT 1 FROM woow_paas_platform_llm_backoffice_key_obligation ob "
                 "WHERE ob.operation_id = op.id AND ob.state = 'pending' "
                 "AND (ob.next_work_at IS NULL OR ob.next_work_at <= (NOW() AT TIME ZONE 'UTC')))) "
-                "ORDER BY op.last_attempt_at NULLS FIRST, op.id "
-                "FOR UPDATE OF op SKIP LOCKED LIMIT 10")
+                + scope_sql + "ORDER BY op.last_attempt_at NULLS FIRST, op.id "
+                "FOR UPDATE OF op SKIP LOCKED LIMIT 10", scope_params)
             ids = [row[0] for row in cr.fetchall()]
         for operation_id in ids:
             if not tick.can_take(need_seconds=8):
