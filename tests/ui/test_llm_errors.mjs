@@ -389,19 +389,65 @@ test("a failed mutation does not refresh and releases its queue for a successful
 
 test("mutation intents serialize per key, dedupe identical requests, and release after completion", async () => {
   const calls = [];
+  const deferredReleases = new Set();
+  const pendingWork = new Set();
+  const deferRpc = (makeResult) => {
+    let release;
+    const promise = new Promise((resolve) => {
+      let released = false;
+      release = () => {
+        if (released) return;
+        released = true;
+        deferredReleases.delete(release);
+        resolve(makeResult());
+      };
+      deferredReleases.add(release);
+    });
+    return { promise, release };
+  };
+  const track = (promise) => {
+    pendingWork.add(promise);
+    promise.finally(() => pendingWork.delete(promise));
+    return promise;
+  };
+  const waitForTurns = async (predicate, description) => {
+    for (let turn = 0; turn < 20; turn += 1) {
+      if (predicate()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail(`Timed out after 20 event-loop turns waiting for ${description}`);
+  };
+  const resolveOld = {};
   let releaseAction;
+  let releaseFirstStatus;
+  let releaseFirstKeys;
+  let releaseFirstState;
+  let releaseSecondStatus;
+  let releaseSame;
+  let first;
+  let second;
+  let independent;
+  let enabling;
+  let disabling;
+  let sameFirst;
+  let sameSecond;
+  let oldKeys;
+  let oldState;
+  try {
   globalThis.__llmRpc = (...args) => {
     calls.push(args);
-    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 90) return new Promise((resolve) => { releaseAction = () => resolve({ success: true, data: {} }); });
+    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 90) {
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      releaseAction = deferred.release;
+      return deferred.promise;
+    }
     if (args[0] === "/api/llm/keys/list") return Promise.resolve({ success: true, data: { items: [{ id: calls.length }] } });
     return Promise.resolve({ success: true, data: { marker: calls.length } });
   };
-  const first = llmService.extendKey(90);
-  const second = llmService.extendKey(90);
-  const independent = llmService.extendKey(91);
-  while (calls.filter(([url]) => url === "/api/llm/keys/extend").length < 2) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
+  first = track(llmService.extendKey(90));
+  second = track(llmService.extendKey(90));
+  independent = track(llmService.extendKey(91));
+  await waitForTurns(() => calls.filter(([url]) => url === "/api/llm/keys/extend").length >= 2, "independent mutation RPC");
   assert.equal(calls.filter(([url]) => url === "/api/llm/keys/extend").length, 2);
   await independent;
   releaseAction();
@@ -417,64 +463,67 @@ test("mutation intents serialize per key, dedupe identical requests, and release
 
   const statusStart = calls.length;
   const statusPhases = [];
-  let releaseFirstStatus;
-  let releaseFirstKeys;
-  let releaseFirstState;
-  let releaseSecondStatus;
   globalThis.__llmRpc = (...args) => {
     calls.push(args);
     if (args[0] === "/api/llm/keys/set_status" && args[1].key_id === 92) {
       statusPhases.push(args[1].enabled);
-      if (statusPhases.length === 1) return new Promise((resolve) => { releaseFirstStatus = () => resolve({ success: true, data: {} }); });
-      return new Promise((resolve) => { releaseSecondStatus = () => resolve({ success: true, data: {} }); });
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      if (statusPhases.length === 1) releaseFirstStatus = deferred.release;
+      else releaseSecondStatus = deferred.release;
+      return deferred.promise;
     }
-    if (args[0] === "/api/llm/keys/list" && statusPhases.length === 1) return new Promise((resolve) => { releaseFirstKeys = () => resolve({ success: true, data: { items: [] } }); });
-    if (args[0] === "/api/llm/state" && statusPhases.length === 1) return new Promise((resolve) => { releaseFirstState = () => resolve({ success: true, data: {} }); });
+    if (args[0] === "/api/llm/keys/list" && statusPhases.length === 1) {
+      const deferred = deferRpc(() => ({ success: true, data: { items: [] } }));
+      releaseFirstKeys = deferred.release;
+      return deferred.promise;
+    }
+    if (args[0] === "/api/llm/state" && statusPhases.length === 1) {
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      releaseFirstState = deferred.release;
+      return deferred.promise;
+    }
     return Promise.resolve({ success: true, data: {} });
   };
-  const enabling = llmService.setKeyStatus(92, true);
-  const disabling = llmService.setKeyStatus(92, false);
-  while (calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length < 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
+  enabling = track(llmService.setKeyStatus(92, true));
+  disabling = track(llmService.setKeyStatus(92, false));
+  await waitForTurns(() => calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length >= 1, "first status mutation RPC");
   assert.equal(calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length, 1);
   assert.deepEqual(statusPhases, [true]);
   releaseFirstStatus();
-  while (typeof releaseFirstKeys !== "function" || typeof releaseFirstState !== "function") {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
+  await waitForTurns(() => typeof releaseFirstKeys === "function" && typeof releaseFirstState === "function", "first mutation refresh RPCs");
   assert.equal(calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length, 1,
     "the next mutation must wait for both first-mutation refreshes");
   releaseFirstKeys();
   releaseFirstState();
-  while (statusPhases.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  await waitForTurns(() => statusPhases.length >= 2, "second status mutation RPC");
   assert.deepEqual(statusPhases, [true, false]);
   releaseSecondStatus();
   assert.deepEqual(await Promise.all([enabling, disabling]), [{ success: true, data: null }, { success: true, data: null }]);
 
   const sameStart = calls.length;
-  let releaseSame;
   globalThis.__llmRpc = (...args) => {
     calls.push(args);
-    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 93) return new Promise((resolve) => { releaseSame = () => resolve({ success: true, data: {} }); });
+    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 93) {
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      releaseSame = deferred.release;
+      return deferred.promise;
+    }
     return Promise.resolve({ success: true, data: {} });
   };
-  const sameFirst = llmService.extendKey(93);
-  const sameSecond = llmService.extendKey(93);
-  while (typeof releaseSame !== "function") await new Promise((resolve) => setImmediate(resolve));
+  sameFirst = track(llmService.extendKey(93));
+  sameSecond = track(llmService.extendKey(93));
+  await waitForTurns(() => typeof releaseSame === "function", "deduplicated mutation RPC");
   assert.equal(calls.slice(sameStart).filter(([url]) => url === "/api/llm/keys/extend").length, 1);
   releaseSame();
   await Promise.all([sameFirst, sameSecond]);
 
-  let resolveOldKeys;
-  let resolveOldState;
   globalThis.__llmRpc = (url) => {
-    if (url === "/api/llm/keys/list") return new Promise((resolve) => { resolveOldKeys = resolve; });
-    if (url === "/api/llm/state") return new Promise((resolve) => { resolveOldState = resolve; });
+    if (url === "/api/llm/keys/list") return new Promise((resolve) => { resolveOld.keys = resolve; });
+    if (url === "/api/llm/state") return new Promise((resolve) => { resolveOld.state = resolve; });
     throw new Error("unexpected");
   };
-  const oldKeys = llmService.fetchKeys();
-  const oldState = llmService.fetchState();
+  oldKeys = track(llmService.fetchKeys());
+  oldState = track(llmService.fetchState());
   globalThis.__llmRpc = async (url) => url === "/api/llm/keys/list"
     ? { success: true, data: { items: [{ id: "new" }] } }
     : { success: true, data: { marker: "new" } };
@@ -484,8 +533,8 @@ test("mutation intents serialize per key, dedupe identical requests, and release
   assert.equal(llmService.overviewError, null);
   assert.equal(llmService.keysLoaded, true);
   assert.equal(llmService.overviewLoaded, true);
-  resolveOldKeys({ success: false, code: "llm_network_error" });
-  resolveOldState({ success: false, code: "llm_network_error" });
+  resolveOld.keys({ success: false, code: "llm_network_error" });
+  resolveOld.state({ success: false, code: "llm_network_error" });
   await Promise.all([oldKeys, oldState]);
   assert.equal(llmService.keysError, null);
   assert.equal(llmService.overviewError, null);
@@ -493,6 +542,16 @@ test("mutation intents serialize per key, dedupe identical requests, and release
   assert.equal(llmService.overviewLoaded, true);
   assert.deepEqual(llmService.keys, [{ id: "new" }]);
   assert.deepEqual(llmService.overview, { marker: "new" });
+  } finally {
+    for (const release of [...deferredReleases]) release();
+    for (const release of [releaseAction, releaseFirstStatus, releaseFirstKeys, releaseFirstState, releaseSecondStatus, releaseSame]) release?.();
+    resolveOld.keys?.({ success: false, code: "llm_network_error" });
+    resolveOld.state?.({ success: false, code: "llm_network_error" });
+    for (const promise of [first, second, independent, enabling, disabling, sameFirst, sameSecond, oldKeys, oldState]) {
+      if (promise) pendingWork.add(promise);
+    }
+    await Promise.allSettled([...pendingWork]);
+  }
 });
 
 test("client_request_id 是後端收的小寫 UUID v4 形狀，每次不同", () => {
