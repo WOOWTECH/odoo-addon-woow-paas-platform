@@ -534,13 +534,16 @@ class TestLlmNotifications(_ConfiguredCase):
                 'points': 20, 'quota': 20 * 15625,
                 'client_request_id': str(uuid.uuid4()), 'acceptance_notice_pending': True,
             })
-            orders |= order
-        # Both the oldest failing order and the last order have healthy terminal
-        # obligations. No acceptance template is restored during the test.
-        terminal_orders = orders[:1] | orders[-1:]
-        for order in terminal_orders:
             _credit_internal(order)._transition('sending')
             _credit_internal(order)._transition('credited', credited_at=fields.Datetime.now())
+            if _index not in (0, 25):
+                _credit_internal(order).write({'notified_state': 'credited'})
+            orders |= order
+        # Both the oldest failing order and the last order have healthy terminal
+        # obligations; the others already announced their credited state. Each
+        # order completes before the next is created, preserving the one-inflight
+        # invariant. No acceptance template is restored during the test.
+        terminal_orders = orders[:1] | orders[-1:]
         now = fields.Datetime.now()
         with patch.dict(notifications_module._TEMPLATES, {
                 'credit_converted': 'missing_conversion_template',
