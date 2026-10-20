@@ -253,3 +253,18 @@ test("API guide PO entries are marked for Odoo JavaScript translation", () => {
   assert.ok(source.includes(DEMO_KEY));
   assert.doesNotMatch(source, /sk-[A-Za-z0-9_-]{20,}/);
 });
+
+// Odoo PoFileReader requires a leading module comment and a code occurrence;
+// a JS marker alone passes the UI translator stub but breaks the real registry.
+test("guide PO entries have Odoo module and code metadata", () => {
+  const guideMessages = new Set([...docs.matchAll(/_t\("((?:[^"\\]|\\.)*)"/g)]
+    .map((match) => JSON.parse('"' + match[1] + '"')));
+  guideMessages.add("View usage guide");
+  for (const block of po.split(/\n\s*\n/)) {
+    const id = block.match(/^msgid (".*")$/m);
+    if (!id || !guideMessages.has(JSON.parse(id[1]))) continue;
+    const comments = block.split("\n").filter((line) => line.startsWith("#. "));
+    assert.match(comments[0] || "", /^#\. modules?: \w+/, "Odoo parser requires module first");
+    assert.match(block, /^#: (?:code:[^\n]+:\d+|(?:model|model_terms|selection):[^\n]+)$/m, "Odoo requires a recognized source occurrence");
+  }
+});
