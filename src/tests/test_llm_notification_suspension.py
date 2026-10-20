@@ -85,7 +85,7 @@ class TestLlmSuspensionRecovery(_ConfiguredCase):
         self.assertFalse(key.newapi_token_id)
         self.assertTrue(self.tick())
         self.assertIn(str(token_id), key.not_me_disable_plan['pending'])
-        self.assertFalse(self.tick())
+        self.drain([key])
         self.assertEqual(key.state, 'failed_reveal')
         self.assertEqual(key.not_me_disabled_notice_id, 31)
         self.assertEqual(self.fake.tokens[token_id]['status'], 2)
@@ -93,7 +93,8 @@ class TestLlmSuspensionRecovery(_ConfiguredCase):
 
     def test_absent_interrupted_create_stays_pending_until_late_token_is_found(self):
         key = self.key('creating')
-        self.assertFalse(self.tick())
+        self.assertTrue(self.tick())
+        self.assertFalse(self.tick())  # Empty traversal is revalidated, then backed off.
         self.assertEqual(key.state, 'failed_reveal')
         self.assertFalse(key.not_me_disabled_notice_id)
         self.assertFalse(key.newapi_token_id)
@@ -164,7 +165,23 @@ class TestLlmSuspensionRecovery(_ConfiguredCase):
         self.drain([key])
         self.assertEqual(set(key.not_me_disable_plan['disabled']), {older, newer})
         self.assertTrue(all(self.fake.tokens[i]['status'] == 2 for i in (older, newer)))
-        self.assertEqual(sum(name == 'user_list_tokens' for name, _ip in self.fake.calls), 2)
+        self.assertEqual(sum(name == 'user_list_tokens' for name, _ip in self.fake.calls), 3)
+
+    def test_equal_total_page_shift_is_revalidated_before_completion(self):
+        key = self.key()
+        oldest = self.token(key.newapi_name)
+        unrelated = [self.token('wp_999999_%04d' % i) for i in range(100)]
+        self.tick()  # First page excludes the oldest matching token.
+        self.assertEqual(key.not_me_scan_page, 2)
+        newest = self.token(key.newapi_name)
+        del self.fake.tokens[unrelated[49]]  # Same total; offset traversal misses the new head.
+        self.tick()
+        self.assertTrue(key.not_me_disable_plan['scan_verify_head'])
+        self.assertFalse(key.not_me_disabled_notice_id)
+        self.drain([key])
+        self.assertEqual(set(key.not_me_disable_plan['disabled']), {oldest, newest})
+        self.assertTrue(all(self.fake.tokens[i]['status'] == 2 for i in (oldest, newest)))
+        self.assertEqual(key.not_me_disabled_notice_id, 31)
 
     def test_scan_and_disable_failures_preserve_cursor_and_allow_other_work(self):
         key = self.key()
@@ -290,7 +307,8 @@ class TestLlmSuspensionManagementRace(TransactionCase):
                     thread.join(timeout=8)
             outcome.clear()
             work()  # Disable the known ID while holding the management lock.
-            work()  # Confirm no same-name siblings before recording completion.
+            work()  # Traverse the first page.
+            work()  # Revalidate its fingerprint before recording completion.
         self.assertNotIn('error', outcome)
         self.assertEqual(calls, [True, False])
         with self.registry.cursor() as cr:

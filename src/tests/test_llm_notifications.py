@@ -388,12 +388,15 @@ class TestLlmNotifications(_ConfiguredCase):
             self.assertTrue(self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id]))
             self.assertEqual(failed_reveal.state, 'failed_reveal')
             self.assertEqual(client.user_set_token_status.call_args.args[2], 712)
-            # Both mirrors must finish the full name scan before their receipt.
-            self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id])
-            self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id])
+            # Finish traversal and head validation while the first remote write
+            # remains backed off. The quarantined key must get its own receipt.
+            for _ in range(6):
+                self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id])
             self.assertEqual(failed_reveal.disabled_by, 'suspend')
             with patch.object(notifications_module, '_utcnow', return_value=now + timedelta(seconds=60)):
-                self.assertFalse(self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id]))
+                for _ in range(6):
+                    self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=[account.id])
+                self.assertFalse(self.Notice._llm_has_pending_disables(account_ids=[account.id]))
         self.assertEqual(active.state, 'disabled')
         self.assertEqual(client.user_set_token_status.call_count, 3)
 

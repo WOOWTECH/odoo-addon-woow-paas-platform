@@ -3,6 +3,7 @@ import base64
 from copy import deepcopy
 import hashlib
 import hmac
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -405,6 +406,7 @@ class LlmNotification(models.Model):
             plan = {
                 'complete': False, 'scan_complete': not bool(key.newapi_name),
                 'scan_retry_at': quiet_epoch, 'scan_attempts': 0, 'scan_total': None,
+                'scan_head': '', 'scan_verify_head': False,
                 'prefer_scan': False, 'pending': {}, 'disabled': [],
             }
             if key.newapi_token_id:
@@ -455,7 +457,8 @@ class LlmNotification(models.Model):
     @api.model
     def _llm_scan_disable_page(self, key, plan, client, ip, up, deadline, now):
         """Persist every exact-name ID and the page cursor atomically; never reveal."""
-        page = max(1, key.not_me_scan_page)
+        verifying = plan.get('scan_verify_head', False)
+        page = 1 if verifying else max(1, key.not_me_scan_page)
         result = client.user_list_tokens(ip, up, page, 100, deadline=deadline)
         data = result.data if result.ok and isinstance(result.data, dict) else {}
         items, total = data.get('items'), data.get('total')
@@ -475,14 +478,34 @@ class LlmNotification(models.Model):
         for item in items:
             if item['name'] == key.newapi_name and item['id'] not in disabled:
                 plan['pending'].setdefault(str(item['id']), {'attempts': 0, 'retry_at': 0})
-        # Insert/delete changes can shift offset pages. Preserve discovered IDs
-        # but restart the traversal before asserting that every page was covered.
+        # IDs are ordered descending upstream. A matching insertion plus an
+        # unrelated deletion can preserve total while shifting offset pages.
+        # Re-read the head after the traversal: its ID/name fingerprint detects
+        # that movement before any generation receipt can exclude this key.
+        fingerprint = hashlib.sha256(json.dumps(
+            [(item['id'], item['name']) for item in items],
+            separators=(',', ':'), ensure_ascii=True).encode('ascii')).hexdigest()
+        if (verifying and total == plan['scan_total']
+                and fingerprint == plan.get('scan_head')):
+            plan['scan_complete'] = True
+            plan['scan_verify_head'] = False
+            plan['scan_attempts'] = 0
+            plan['scan_retry_at'] = 0
+            return
         changed = page > 1 and plan['scan_total'] != total
         plan['scan_total'] = total
         plan['scan_attempts'] = 0
         plan['scan_retry_at'] = 0
-        plan['scan_complete'] = not changed and page * 100 >= total
-        _llm_internal(key).write({'not_me_scan_page': 1 if changed else page + 1})
+        plan['scan_complete'] = False
+        if changed:
+            plan['scan_verify_head'] = False
+            plan['scan_head'] = ''
+            _llm_internal(key).write({'not_me_scan_page': 1})
+            return
+        if page == 1:
+            plan['scan_head'] = fingerprint
+        plan['scan_verify_head'] = page * 100 >= total
+        _llm_internal(key).write({'not_me_scan_page': page + 1})
 
     @api.model
     def _llm_save_disable_plan(self, key, plan, generation, now):
