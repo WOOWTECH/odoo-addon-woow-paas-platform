@@ -188,6 +188,12 @@ class LlmApiKey(models.Model):
                                              groups='base.group_system')
     not_me_disable_next_at = fields.Datetime(readonly=True, copy=False,
                                              groups='base.group_system')
+    not_me_scan_page = fields.Integer(readonly=True, default=1, copy=False,
+                                      groups='base.group_system')
+    not_me_attempt_notice_id = fields.Integer(readonly=True, default=0, copy=False,
+                                              groups='base.group_system')
+    not_me_disabled_notice_id = fields.Integer(readonly=True, default=0, copy=False,
+                                               groups='base.group_system')
     remain_quota_cached = LlmQuotaInteger(readonly=True, copy=False)
     used_quota_cached = LlmQuotaInteger(readonly=True, copy=False)
     accessed_at = fields.Datetime(readonly=True, copy=False)

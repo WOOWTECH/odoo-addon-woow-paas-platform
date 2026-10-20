@@ -38,6 +38,16 @@ _TEMPLATES = {
     'credit_voided': 'mail_template_llm_credit_voided',
 }
 _ORDER_NOTICE_STATES = frozenset(('unknown', 'needs_review', 'credited', 'voided'))
+_DISABLE_PENDING_SQL = """
+    FROM woow_paas_platform_llm_api_key k
+    JOIN woow_paas_platform_llm_account a ON a.id=k.account_id
+    WHERE a.state='suspended' AND a.suspend_reason='not_me'
+    AND k.state IN ('active','disabled','failed_reveal','creating')
+    AND (k.state<>'disabled' OR k.disabled_by IS DISTINCT FROM 'suspend'
+         OR COALESCE(k.not_me_disabled_notice_id,0)<>COALESCE(a.not_me_notice_id,0))
+    AND (k.not_me_disable_next_at IS NULL OR k.not_me_disable_next_at<=%s
+         OR COALESCE(k.not_me_attempt_notice_id,0)<>COALESCE(a.not_me_notice_id,0))
+"""
 
 
 def _utcnow():
@@ -246,8 +256,9 @@ class LlmNotification(models.Model):
             account_id = row[0]
             cr.execute(
                 "UPDATE woow_paas_platform_llm_account SET state='suspended', "
-                "suspend_reason='not_me', write_uid=%s, write_date=%s WHERE id=%s AND state='active'",
-                (SUPERUSER_ID, now, account_id))
+                "suspend_reason='not_me', not_me_notice_id=%s, write_uid=%s, write_date=%s "
+                "WHERE id=%s AND state='active'",
+                (notice_id, SUPERUSER_ID, now, account_id))
             if cr.rowcount != 1:
                 raise RuntimeError('suspension transition failed')
             cr.execute(
@@ -362,21 +373,33 @@ class LlmNotification(models.Model):
     def _llm_not_me_disable_tick(self, config, tick):
         if not tick.can_take(nac.MIN_CALL_SECONDS):
             return False
-        key = self.env['woow_paas_platform.llm_api_key'].sudo().search([
-            ('account_id.state', '=', 'suspended'), ('account_id.suspend_reason', '=', 'not_me'),
-            ('state', 'in', ('active', 'failed_reveal')),
-            '|', ('not_me_disable_next_at', '=', False),
-            ('not_me_disable_next_at', '<=', _utcnow()),
-        ], order='not_me_disable_next_at,id', limit=1)
-        if not key:
-            return False
+        Key = self.env['woow_paas_platform.llm_api_key'].sudo()
+        Key.flush_model()
+        self.env['woow_paas_platform.llm_account'].flush_model()
+        # Web management holds this same lock before remote I/O. Never send the
+        # final disable while an older enable can still finish and then roll back.
+        self.env.cr.execute(
+            'SELECT k.id ' + _DISABLE_PENDING_SQL
+            + ' ORDER BY k.not_me_disable_next_at NULLS FIRST,k.id '
+              'LIMIT 1 FOR UPDATE OF k SKIP LOCKED', (_utcnow(),))
+        row = self.env.cr.fetchone()
+        if not row:
+            return self._llm_has_pending_disables()
+        key = Key.browse(row[0])
+        key.invalidate_recordset()
         account = key.account_id
-        if not key.newapi_token_id:
-            # An active mirror without an upstream id is inconsistent; keep the
-            # queue row visible for a later repair and never report success.
-            _logger.warning('[LLM] not-me disable pending account=%s key=%s missing token id',
-                            account.id, key.id)
-            return self._llm_defer_key_disable(key)
+        generation = account.not_me_notice_id
+        if key.not_me_attempt_notice_id != generation:
+            _llm_internal(key).write({
+                'not_me_disable_attempts': 0, 'not_me_scan_page': 1,
+                'not_me_attempt_notice_id': generation,
+            })
+        if key.state == 'creating':
+            quiet_after = key.create_date + timedelta(seconds=nac.KEY_CREATE_BUDGET_SECONDS + 10)
+            if _utcnow() < quiet_after:
+                _llm_internal(key).write({'not_me_disable_next_at': quiet_after})
+                return self._llm_has_pending_disables()
+            _llm_internal(key).write({'state': 'failed_reveal'})
         try:
             ip = account._llm_tenant_ip()
             up = account._llm_up_token()
@@ -385,11 +408,41 @@ class LlmNotification(models.Model):
             _logger.warning('[LLM] not-me disable deferred account=%s key=%s', account.id, key.id)
             return self._llm_defer_key_disable(key)
         tick.took()
+        if not key.newapi_token_id:
+            # One page per tick; an interrupted create may have committed at the
+            # upstream despite the client losing its response. Never reveal keys.
+            page = max(1, key.not_me_scan_page)
+            listed = client.user_list_tokens(ip, up, page, 100, deadline=tick.deadline)
+            data = listed.data if listed.ok and isinstance(listed.data, dict) else {}
+            items, total = data.get('items'), data.get('total')
+            if (not isinstance(items, list) or type(total) is not int or total < 0
+                    or len(items) > 100 or any(
+                        not isinstance(item, dict) or not isinstance(item.get('name'), str)
+                        or type(item.get('id')) is not int or not 0 < item['id'] <= nac.INT32_MAX
+                        for item in items)):
+                return self._llm_defer_key_disable(key)
+            matches = [item for item in items if item['name'] == key.newapi_name]
+            if len(matches) == 1:
+                _llm_internal(key).write({
+                    'newapi_token_id': matches[0]['id'], 'not_me_scan_page': 1,
+                    'not_me_disable_next_at': False,
+                })
+            elif not matches and len(items) == 100 and page * 100 < total:
+                _llm_internal(key).write({
+                    'not_me_scan_page': page + 1, 'not_me_disable_next_at': False,
+                })
+            else:
+                # Complete absence is only an observation: an uncertain POST can
+                # still settle later. Keep the durable obligation and re-scan.
+                _llm_internal(key).write({'not_me_scan_page': 1})
+                self._llm_defer_key_disable(key)
+            return self._llm_has_pending_disables()
         result = client.user_set_token_status(ip, up, key.newapi_token_id, False,
                                               deadline=tick.deadline)
         if result.ok:
             _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'suspend',
-                                      'not_me_disable_next_at': False})
+                                      'not_me_disable_next_at': False,
+                                      'not_me_disabled_notice_id': generation})
         else:
             _logger.warning('[LLM] not-me disable deferred account=%s key=%s result=%s',
                             account.id, key.id, result.kind)
@@ -403,17 +456,16 @@ class LlmNotification(models.Model):
         _llm_internal(key).write({
             'not_me_disable_attempts': attempts,
             'not_me_disable_next_at': _utcnow() + timedelta(seconds=delay),
+            'not_me_attempt_notice_id': key.account_id.not_me_notice_id,
         })
         return self._llm_has_pending_disables()
 
     @api.model
     def _llm_has_pending_disables(self):
-        return bool(self.env['woow_paas_platform.llm_api_key'].sudo().search_count([
-            ('account_id.state', '=', 'suspended'), ('account_id.suspend_reason', '=', 'not_me'),
-            ('state', 'in', ('active', 'failed_reveal')),
-            '|', ('not_me_disable_next_at', '=', False),
-            ('not_me_disable_next_at', '<=', _utcnow()),
-        ], limit=1))
+        self.env['woow_paas_platform.llm_api_key'].flush_model()
+        self.env['woow_paas_platform.llm_account'].flush_model()
+        self.env.cr.execute('SELECT 1 ' + _DISABLE_PENDING_SQL + ' LIMIT 1', (_utcnow(),))
+        return bool(self.env.cr.fetchone())
 
     @api.model
     def _cron_llm_notifications(self):

@@ -261,6 +261,8 @@ class LlmAccount(models.Model):
     reauth_at = fields.Datetime(readonly=True, copy=False,
                                 help='Audit only; eligibility belongs to the current session.')
     low_balance_threshold = fields.Integer(readonly=True, default=50)
+    not_me_notice_id = fields.Integer(readonly=True, default=0, copy=False,
+                                      groups='base.group_system')
     low_balance_armed = fields.Boolean(readonly=True, default=True, copy=False)
     low_balance_cycle = fields.Integer(readonly=True, default=0, copy=False)
     low_balance_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
