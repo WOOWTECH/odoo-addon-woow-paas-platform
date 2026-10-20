@@ -585,6 +585,7 @@ class LlmBackofficeOperation(models.Model):
                 ('operation_id', '=', op.id), ('state', '=', 'pending')])
             _cap(op).write({
                 'state': 'pending', 'result_code': 'pending', 'processed_at': False,
+                'last_attempt_at': False,
                 'key_done_count': op.key_target_count - remaining, 'key_failed_count': remaining,
                 'result_summary': _('Some API keys still need verification.'),
             })
