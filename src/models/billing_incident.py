@@ -375,6 +375,7 @@ class BillingIncident(models.Model):
         ('llm_not_me', 'AI account reported as not me'),
         ('llm_secret_mismatch', 'AI account credential check failed (ciphertext mismatch)'),
         ('llm_account_error', 'AI account error'),
+        ('llm_manual_credit_budget', 'AI manual credit daily limit reached'),
     )
     _STATE_SELECTION = (
         ('open', 'Open'),

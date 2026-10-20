@@ -1258,6 +1258,7 @@ from . import test_ha_onboarding
 from . import test_llm_credit_order
 from . import test_llm_credit_void
 from . import test_llm_credit_concurrency
+from . import test_llm_backoffice
 
 from . import test_llm_reauth
 from . import test_llm_credit_visibility

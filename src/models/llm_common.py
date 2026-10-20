@@ -255,6 +255,10 @@ RESULT_CODES = frozenset({'started', 'ok', 'failed', 'unknown', RESULT_NOT_EXECU
 #: （``credit_1000_to_account_5``）也不能進來。新增一個 key＝加在這裡（``TestLlmClosedCodes`` 以原始碼
 #: 比對守住每個呼叫端的字面 key 都在表內）。
 NUMBER_KEYS = frozenset({
+    'account_id',          # manual_credit: PaaS account identifier only
+    'order_id',            # manual_credit: PaaS order identifier only
+    'points',              # manual_credit: integer amount only
+    'operator_uid',        # manual_credit: Odoo uid only
     'attempts',           # provision_failed：開戶嘗試次數
     'probe',              # alert_test：驗證告警出口用的隨機數（LLM-02b AC2）
     'affected_accounts',  # 摘要信：這一波影響幾個帳戶
@@ -583,6 +587,10 @@ LLM_CRONS = {
         'woow_paas_platform.llm_swr_cache', '_cron_llm_swr_refresh'),
     'woow_paas_platform.ir_cron_llm_connection_test': (
         'woow_paas_platform.llm_runtime_state', '_cron_llm_connection_test'),
+    'woow_paas_platform.ir_cron_llm_manual_credit_monthly_report': (
+        'woow_paas_platform.llm_manual_credit_cron', '_cron_manual_credit_monthly_report'),
+    'woow_paas_platform.ir_cron_llm_backoffice_operations': (
+        'woow_paas_platform.llm_backoffice_operation', '_cron_process'),
 }
 #: cron 當掉時告警（``LlmAlert.CRON_FAILED``）用的錯誤碼：每支 LLM cron 一個固定碼（封閉對照，
 #: 不從例外取任何字）。``TestLlmCronFramework`` 斷言鍵＝:data:`LLM_CRONS`。
@@ -594,6 +602,7 @@ FREE_METER_ERROR_CODES = frozenset({
     'llm_free_meter_lag', 'llm_free_meter_gap', 'llm_free_up_failed',
 })
 LLM_CREDIT_ERROR_CODES = frozenset({
+    'llm_manual_credit_budget',
     'llm_credit_void_pending', 'llm_credit_snapshot_mismatch',
     'llm_credit_snapshot_invalid', 'llm_credit_response_invalid',
     'llm_credit_client_unavailable', 'llm_credit_definite_unrecognised',

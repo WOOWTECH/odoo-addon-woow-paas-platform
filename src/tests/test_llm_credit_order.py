@@ -37,6 +37,7 @@ class TestLlmCreditOrderSchema(TransactionCase):
         cls.operator = new_test_user(
             cls.env, login='credit_operator_%s' % uuid.uuid4().hex,
             groups='base.group_user,base.group_system', email='credit-operator@example.com')
+        cls.operator._llm_set_named_human_eligible(True)
         cls.partner = cls.env['res.partner'].create({'name': 'LLM credit schema'})
         cls.account = _llm_internal(cls.env['woow_paas_platform.llm_account']).create({
             'partner_id': cls.partner.id,
