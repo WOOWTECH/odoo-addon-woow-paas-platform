@@ -220,6 +220,7 @@ test("paid and free curl, Python, and Node examples use escaped values and the c
 });
 
 test("guide includes approved limits, FAQ, billing note, AGPL source, and mobile overflow", () => {
+  assert.match(docs, /get curlTitle\(\) \{ return "curl";/);
   for (const phrase of [
     "Paid keys allow up to 120 successful requests per minute",
     "Free trial keys allow up to 10 requests per minute",

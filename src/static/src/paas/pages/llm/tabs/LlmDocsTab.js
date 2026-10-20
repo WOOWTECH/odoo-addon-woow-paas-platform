@@ -100,7 +100,7 @@ export class LlmDocsTab extends Component {
   get faq429() { return _t("429 — Too many requests in a short period. Wait briefly, then reduce the request rate."); }
   get faq503() { return _t("503 — No available channel can serve this request. For example, a paid key cannot call the free Qwen channel. Retry later or choose an available model."); }
   get faq524() { return _t("524 — Cloudflare timed out while waiting for the upstream request. Retry later, use streaming for long requests, or shorten the request."); }
-  get curlTitle() { return _t("curl"); }
+  get curlTitle() { return "curl"; } // CLI name, not the English word.
   get pythonTitle() { return _t("Python with OpenAI SDK"); }
   get nodeTitle() { return _t("Node.js with OpenAI SDK"); }
   get n8nTitle() { return _t("n8n"); }
