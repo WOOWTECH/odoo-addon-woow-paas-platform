@@ -20,7 +20,7 @@
       <p t-if="!state.loading &amp;&amp; !errorText &amp;&amp; !rows.length" class="o_woow_llm_keys__empty" t-esc="emptyText"/>
       <div t-if="rows.length" class="o_woow_llm_keys__desktop">
         <table>
-          <thead><tr><th>Key</th><th>Type</th><th>Status</th><th>Used / total</th><th>Last use</th><th>Expiry</th><th>Created</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Key</th><th>API key type</th><th>Status</th><th>Used / total</th><th>Last use</th><th>Expiry</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody><tr t-foreach="rows" t-as="row" t-key="row.id">
             <td><strong t-esc="row.name"/><code t-esc="row.masked"/></td><td><span class="o_woow_llm_keys__chip" t-esc="row.kind"/></td>
             <td><span class="o_woow_llm_keys__chip" t-esc="row.statusLabel"/></td>

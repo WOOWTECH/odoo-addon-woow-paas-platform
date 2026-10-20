@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
-import { PAAS, loadPo } from "./lib/llm_test_support.mjs";
+import { PAAS, loadPo, translator } from "./lib/llm_test_support.mjs";
 
 const po = await loadPo();
 
@@ -36,6 +36,10 @@ const XML_FILES = [
   ...(await filesUnder("components/llm/", ".xml")),
   ...(await filesUnder("pages/llm/", ".xml")),
 ];
+
+const LLM07_FILES = [...JS_FILES, ...XML_FILES].filter((url) =>
+  /\/components\/llm\/LlmKey[^/]*\.(js|xml)$/.test(url.pathname)
+  || /\/pages\/llm\/tabs\/LlmKeysTab\.(js|xml)$/.test(url.pathname));
 /** 導覽（Sidebar／BottomNav／router）上新增的那一句。 */
 const NAV_MSGIDS = ["AI Models"];
 
@@ -98,6 +102,64 @@ test("每一句都有前端載得到的繁中譯文（odoo-javascript＋msgstr �
     else if (!entry.msgstr) problems.push(`msgstr 是空的：${JSON.stringify(msgid)}`);
   }
   assert.deepEqual(problems, []);
+});
+
+test("LLM-07 前端 PO 條目有對應的 Odoo code occurrence", async () => {
+  const sources = new Map();
+  const addSource = (msgid, url) => {
+    if (!sources.has(msgid)) sources.set(msgid, new Set());
+    const marker = "/static/src/paas/";
+    const index = url.pathname.indexOf(marker);
+    assert.notEqual(index, -1, `${url.pathname} 不在 PaaS 前端 source 目錄`);
+    sources.get(msgid).add(`code:addons/woow_paas_platform/static/src/paas/${url.pathname.slice(index + marker.length)}:`);
+  };
+  for (const url of LLM07_FILES) {
+    const source = await readFile(url, "utf8");
+    if (url.pathname.endsWith(".js")) {
+      for (const match of source.matchAll(/\b_t\(\s*"((?:[^"\\]|\\.)*)"/g)) {
+        addSource(unescapeJs(match[1]), url);
+      }
+    } else {
+      const clean = source.replace(/<!--[\s\S]*?-->/g, "");
+      for (const match of clean.matchAll(/>([^<>]+)</g)) {
+        const text = match[1].trim();
+        if (/[A-Za-z]/.test(text)) addSource(text, url);
+      }
+      for (const match of clean.matchAll(/<([a-z][\w-]*)\b[^>]*?\s(aria-label|title|placeholder|alt)="([^"]+)"/g)) {
+        addSource(match[3], url);
+      }
+    }
+  }
+
+  const missing = [];
+  for (const [msgid, expectedRefs] of sources) {
+    const entry = po.get(msgid);
+    if (!entry) continue; // The translation coverage test above reports missing entries.
+    for (const expected of expectedRefs) {
+      if (!entry.references.some((reference) => reference.startsWith(expected))) {
+        missing.push(`${JSON.stringify(msgid)} 缺少 source occurrence ${expected}`);
+      }
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+test("LLM-07 金鑰頁關鍵控件載入指定繁中譯文", () => {
+  const t = translator(po, "zh_TW");
+  const expected = {
+    "API keys": "API 金鑰",
+    "Manage paid API keys and review masked key details.": "管理付費 API 金鑰並查看遮蔽後的金鑰資訊。",
+    "Create paid key": "建立付費金鑰",
+    "API key type": "API 金鑰類型",
+    "Used / total": "已使用／總額度",
+    "Last use": "最近使用",
+    Expiry: "到期時間",
+    Disable: "停用",
+  };
+  for (const [msgid, translation] of Object.entries(expected)) {
+    assert.equal(t(msgid), translation, `${msgid} 應載入指定繁中譯文`);
+    assert.notEqual(t(msgid), msgid, `${msgid} 不可回退到英文原文`);
+  }
 });
 
 test("譯文的具名參數都是原文有的（打錯字會在畫面上留下 %(xxx)s）", async () => {

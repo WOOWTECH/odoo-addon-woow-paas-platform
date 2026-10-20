@@ -1152,6 +1152,8 @@ msgstr "API 金鑰"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API key"
 msgstr "API 金鑰"
 
@@ -1595,6 +1597,7 @@ msgstr "管理員 Email 必須是收得到信的信箱（%(domain)s 是保留給
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API keys"
 msgstr "API 金鑰"
 
@@ -1702,6 +1705,7 @@ msgstr "建立中"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Creation interrupted"
 msgstr "建立中斷"
 
@@ -1749,6 +1753,7 @@ msgstr "到期（台北時間）"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Expiring soon"
 msgstr "即將到期"
 
@@ -1765,6 +1770,7 @@ msgstr "基於安全考量，完整金鑰只會顯示這一次。關閉視窗後
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Free trial"
 msgstr "免費試用"
 
@@ -1863,12 +1869,15 @@ msgstr "模型與價格"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Never expires"
 msgstr "永不到期"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "No API keys yet."
 msgstr "還沒有 API 金鑰。"
 
@@ -3542,6 +3551,8 @@ msgstr "可檢視與編輯工作區內容"
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_upload_wizard_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Cancel"
 msgstr "取消"
 
@@ -4070,6 +4081,9 @@ msgstr "client 驗證失敗。"
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmTermsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 msgid "Close"
 msgstr "關閉"
 
@@ -4654,6 +4668,7 @@ msgstr "容器"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_verify
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.js:0
 msgid "Continue"
 msgstr "繼續"
 
@@ -4672,6 +4687,7 @@ msgstr "已複製到剪貼簿"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 msgid "Copy"
 msgstr "複製"
 
@@ -4885,6 +4901,7 @@ msgstr "建立第一個工作區，開始管理你的團隊與服務。"
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Created"
 msgstr "建立時間"
 
@@ -5351,6 +5368,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Delete"
 msgstr "刪除"
 
@@ -5828,6 +5846,7 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Disabled"
 msgstr "已停用"
 
@@ -5974,6 +5993,7 @@ msgstr "捐贈"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/TopupSuccessModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__done
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 msgid "Done"
 msgstr "完成"
 
@@ -6284,6 +6304,7 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Enabled"
 msgstr "已啟用"
 
@@ -6548,6 +6569,7 @@ msgstr "排除 — 皆不符合（NOT）"
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Expired"
 msgstr "已到期"
 
@@ -9457,6 +9479,7 @@ msgstr "手機條碼"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 msgid "Model"
 msgstr "模型"
 
@@ -11227,6 +11250,7 @@ msgstr "找不到頁面"
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Paid"
 msgstr "已付款"
 
@@ -12768,6 +12792,7 @@ msgstr "恢復失敗：服務已重新啟動，但對外網址仍顯示停權說
 #: code:addons/woow_paas_platform/static/src/paas/components/notification-center/NotificationPanel.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Retry"
 msgstr "重試"
 
@@ -14639,6 +14664,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__status
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Status"
 msgstr "狀態"
 
@@ -14957,6 +14983,7 @@ msgstr "停權失敗：%(error)s"
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__suspended
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__suspended
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__suspended
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Suspended"
 msgstr "已停權"
 
@@ -16397,6 +16424,12 @@ msgstr "類型"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
+msgid "API key type"
+msgstr "API 金鑰類型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/portal/portal_task_chat.xml:0
 msgid "Type a message... (Enter to send)"
 msgstr "輸入訊息…（Enter 送出）"
@@ -16587,6 +16620,7 @@ msgstr "單價"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__backup_health__unknown
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Unknown"
 msgstr "未知"
 
@@ -21185,6 +21219,7 @@ msgstr "租戶可自設管理員憑證"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Password"
 msgstr "密碼"
 
@@ -26641,6 +26676,7 @@ msgstr "超過 1,000 點的轉換，請先重新驗證身分。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmConvertModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Verify identity"
 msgstr "驗證身分"
 
@@ -26798,146 +26834,176 @@ msgstr "關閉此事件前，請在 AI 模型後台與 new-api 紀錄查證額�
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Extend API key"
 msgstr "延長 API 金鑰期限"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Disable API key"
 msgstr "停用 API 金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Delete API key"
 msgstr "刪除 API 金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Add 90 days to this key’s expiry date?"
 msgstr "要將這把金鑰的期限延長 90 天嗎？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Disable this API key? It will stop accepting requests."
 msgstr "要停用這把 API 金鑰嗎？停用後將無法再用它送出請求。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Deleting this key cannot be undone. Type the key name exactly to confirm."
 msgstr "刪除後無法復原。請輸入完整且相符的金鑰名稱以確認。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Deleting the free trial key cannot be undone. Confirm deletion to create another free trial key later."
 msgstr "刪除免費試用金鑰後無法復原。確認刪除後，之後才能再建立另一把免費試用金鑰。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Extend 90 days"
 msgstr "延長 90 天"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Disable key"
 msgstr "停用金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Delete key"
 msgstr "刪除金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.js:0
 msgid "Used %(used)s points; %(remaining)s points remain after this change."
 msgstr "已使用 %(used)s 點；變更後還剩 %(remaining)s 點。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.js:0
 msgid "Edit paid API key"
 msgstr "編輯付費 API 金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.js:0
 msgid "Create paid API key"
 msgstr "建立付費 API 金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid "Creating your paid API key"
 msgstr "正在建立付費 API 金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid "For security, the full key is shown only this once. You cannot view it again after closing this window; if you lose it, create a new key and disable or delete the old one."
 msgstr "基於安全考量，完整金鑰只會顯示這一次。關閉此視窗後便無法再次查看；若遺失，請建立新金鑰，並停用或刪除舊金鑰。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
 msgid "All paid models"
 msgstr "所有付費模型"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Unlimited"
 msgstr "不限額"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Used %(used)s of %(total)s points"
 msgstr "已使用 %(total)s 點中的 %(used)s 點"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Limit used"
 msgstr "額度已用完"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Daily limit used"
 msgstr "今日額度已用完"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Credit overdrawn"
 msgstr "額度已超支"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "Review and accept the AI Models Terms of Service in Overview before creating a paid key or enabling a key."
 msgstr "建立付費金鑰或啟用金鑰前，請先前往總覽頁檢視並接受 AI 模型服務條款。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "View Overview and Terms"
 msgstr "前往總覽與服務條款"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API key settings updated."
 msgstr "API 金鑰設定已更新。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API key enabled."
 msgstr "API 金鑰已啟用。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API key expiry extended by 90 days."
 msgstr "API 金鑰期限已延長 90 天。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API key disabled."
 msgstr "API 金鑰已停用。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "API key deleted."
 msgstr "API 金鑰已刪除。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 msgid "The key may have been created without being shown. Create a new key and disable or delete the old one if needed."
 msgstr "金鑰可能已建立，但未顯示給你。請建立新金鑰，並視需要停用或刪除舊金鑰。"
 
@@ -26953,151 +27019,182 @@ msgstr "每個帳號只能有一把免費試用金鑰。若你沒有妥善保存
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 msgid "Type %(keyName)s to confirm"
 msgstr "輸入 %(keyName)s 以確認"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.xml:0
 msgid "This permanently deletes the free trial key. Its secret cannot be recovered."
 msgstr "這會永久刪除免費試用金鑰，刪除後無法復原。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Key name"
 msgstr "金鑰名稱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Total limit (points)"
 msgstr "總額度（點）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Leave blank for unlimited."
 msgstr "留空表示不設上限。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Total limit cannot be below points already used."
 msgstr "總額度不可低於已使用的點數。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Expiry"
 msgstr "到期時間"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Keep current expiry"
 msgstr "保留目前的到期時間"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "30 days"
 msgstr "30 天"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "90 days"
 msgstr "90 天"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "180 days"
 msgstr "180 天"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Identity verification is required for a never-expiring unlimited key."
 msgstr "建立永不到期且不限額的金鑰前，必須先完成身分驗證。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Paid models"
 msgstr "付費模型"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Paid models are unavailable right now."
 msgstr "付費模型目前無法使用。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Discard draft?"
 msgstr "要捨棄草稿嗎？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Close this form and discard the draft?"
 msgstr "要關閉表單並捨棄草稿嗎？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Keep editing"
 msgstr "繼續編輯"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.xml:0
 msgid "Close form"
 msgstr "關閉表單"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Manage paid API keys and review masked key details."
 msgstr "管理付費 API 金鑰並查看遮蔽後的金鑰資訊。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Create paid key"
 msgstr "建立付費金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Loading API keys…"
 msgstr "正在載入 API 金鑰…"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Key"
 msgstr "金鑰"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Used / total"
 msgstr "已使用／總額度"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Last use"
 msgstr "最近使用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Actions"
 msgstr "操作"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "used"
 msgstr "已使用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Edit"
 msgstr "編輯"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Extend"
 msgstr "延長期限"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Disable"
 msgstr "停用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
 msgid "Enable"
 msgstr "啟用"
 
@@ -27108,5 +27205,6 @@ msgstr "金鑰管理"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.js:0
 msgid "Save changes"
 msgstr "儲存變更"

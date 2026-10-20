@@ -57,6 +57,7 @@ from .llm_common import (
     LlmError,
     LlmQuotaInteger,
     _is_llm_internal,
+    _llm_internal,
     _without_llm_internal,
 )
 from .llm_event import _begin, safe_code
@@ -120,6 +121,28 @@ def _iso(value):
     return value.replace(tzinfo=timezone.utc).isoformat() if value else None
 
 
+class LlmOptionalLimitInteger(fields.Integer):
+    """Keep an unlimited SQL NULL distinct from a corrupt zero total limit.
+
+    Odoo's standard Integer converts NULL/False to 0 at each ORM boundary.
+    Only this optional limit field needs nullable semantics; its PostgreSQL
+    int4 column and the framework's registered integer type stay unchanged.
+    """
+
+    def convert_to_cache(self, value, record, validate=True):
+        if value is None or value is False:
+            return None
+        return super().convert_to_cache(value, record, validate=validate)
+
+    def convert_to_column(self, value, record, values=None, validate=True):
+        if value is None or value is False:
+            return None
+        return super().convert_to_column(value, record, values=values, validate=validate)
+
+    def convert_to_record(self, value, record):
+        return None if value is None else super().convert_to_record(value, record)
+
+
 class LlmApiKey(models.Model):
     _name = 'woow_paas_platform.llm_api_key'
     _description = 'AI Models API Key (mirror)'
@@ -150,7 +173,7 @@ class LlmApiKey(models.Model):
     free_cap_attempted_at = fields.Datetime(readonly=True, copy=False)
     free_cap_pending = fields.Boolean(readonly=True, copy=False, default=False)
     masked_key = fields.Char(readonly=True, copy=False, help='sk- plus first 4 and last 4.')
-    quota_limit_points = fields.Integer(readonly=True)
+    quota_limit_points = LlmOptionalLimitInteger(readonly=True)
     expires_at = fields.Datetime(readonly=True)
     model_allowlist = fields.Text(readonly=True)
     created_uid = fields.Many2one('res.users', readonly=True, ondelete='set null')
