@@ -218,6 +218,9 @@ class LlmAlert(enum.Enum):
     #: A conversion needs human review; no refund or credit is asserted.
     CREDIT_REVIEW = 'credit_review'
     CREDIT_BUDGET = 'credit_budget'
+    NOT_ME_REPORTED = 'not_me_reported'
+    MANUAL_CREDIT_BUDGET = 'manual_credit_budget'
+    MANUAL_CREDIT = 'manual_credit'
 
 
 class LlmIncident(enum.Enum):
@@ -230,6 +233,7 @@ class LlmIncident(enum.Enum):
     NOT_ME = 'llm_not_me'
     SECRET_MISMATCH = 'llm_secret_mismatch'
     ACCOUNT_ERROR = 'llm_account_error'
+    MANUAL_CREDIT_BUDGET = 'llm_manual_credit_budget'
 
 
 class LlmAlertInputError(TypeError):
@@ -833,9 +837,14 @@ class LlmEvent(models.Model):
                     'dedupe_key': dedupe_key,
                     'last_seen_at': now,
                 }
-                cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
-                           (_burst_lock_key(alert.value, error_code),))
-                carrier = self._llm_alert_carrier_cr(cr, alert.value, error_code, now)
+                # Manual-credit alerts are a per-order delivery obligation.
+                # Keep dedupe by target above, but never hide one order inside
+                # the generic burst carrier.
+                carrier = None
+                if alert != LlmAlert.MANUAL_CREDIT:
+                    cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+                               (_burst_lock_key(alert.value, error_code),))
+                    carrier = self._llm_alert_carrier_cr(cr, alert.value, error_code, now)
                 if carrier:
                     outcome = 'batched'
                     email_state = webhook_state = 'batched'

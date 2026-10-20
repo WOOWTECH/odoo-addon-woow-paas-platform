@@ -388,6 +388,14 @@ export class ServiceDetailPage extends Component {
     }
 
     /**
+     * #1675：直接鏡射 template 的自設憑證重啟範圍，不自建 slug 判準。
+     * 缺欄位時保守沿用 service，不能對會重啟的服務承諾不中斷。
+     */
+    get adminCredentialsRestartScope() {
+        return this.service?.template?.credential_change_restart_scope || "service";
+    }
+
+    /**
      * #1370：Reset 走 operator exec 直接改 app DB（Odoo／n8n）——不重啟、立刻生效、
      * 舊 session 失效、2FA 關閉。鏡射 payload 的 template.app_admin_reset_kind
      * （＝後端 template 欄位），不用 slug 判斷；缺欄位視同 none。

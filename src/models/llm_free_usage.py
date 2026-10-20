@@ -269,7 +269,9 @@ class LlmFreeUsage(models.Model):
                    "AND COALESCE(k.free_capped_day, DATE '1970-01-01')=%s)) "
                    "AND EXISTS (SELECT 1 FROM {usage} u "
                    "WHERE u.account_id=a.id AND u.day_tpe=%s AND u.capped_at IS NOT NULL) ")
-                .format(usage=USAGE_TABLE) + 'ORDER BY k.free_cap_attempted_at NULLS FIRST, k.id LIMIT 100',
+                .format(usage=USAGE_TABLE)
+                + "AND k.disabled_by IS DISTINCT FROM 'ops' "
+                + 'ORDER BY k.free_cap_attempted_at NULLS FIRST, k.id LIMIT 100',
                 (day, fields.Datetime.now(), day) if enabled else (day, day))
             rows = cr.dictfetchall()
         for row in rows:
@@ -318,7 +320,8 @@ class LlmFreeUsage(models.Model):
                         cr.execute(
                             'UPDATE %s SET free_cap_pending=true, free_capped_day=%%s, '
                             "disabled_by='free_daily_cap' WHERE id=%%s AND state=%%s "
-                            'AND disabled_by IS NOT DISTINCT FROM %%s' % KEY_TABLE,
+                            'AND disabled_by IS NOT DISTINCT FROM %%s '
+                            "AND disabled_by IS DISTINCT FROM 'ops'" % KEY_TABLE,
                             (row['cap_day'], row['id'], row['state'], row['disabled_by']))
                         if not cr.rowcount:
                             continue

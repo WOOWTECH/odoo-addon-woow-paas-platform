@@ -37,8 +37,9 @@ import os
 import secrets
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from psycopg2 import IntegrityError
 
@@ -736,9 +737,15 @@ class TestLlmTracerHttp(HttpCase):
         self.assertEqual(same['code'], 'llm_key_already_shown')
         self.assertEqual(self._create_key()['code'], 'llm_free_key_exists')
         self.assertEqual(len(self.fake.tokens), 1)
+        calls = len(self.fake.calls)
         paid = self._rpc('/api/llm/keys/create',
                          {'client_request_id': str(uuid.uuid4()), 'kind': 'paid'})
-        self.assertEqual((paid['code'], paid['field']), ('llm_key_invalid', 'kind'))
+        # LLM-07 supports paid keys; an incomplete paid form now fails on name.
+        self.assertEqual((paid['code'], paid['field']), ('llm_key_invalid', 'name'))
+        unsupported = self._rpc('/api/llm/keys/create',
+                                {'client_request_id': str(uuid.uuid4()), 'kind': 'unsupported'})
+        self.assertEqual((unsupported['code'], unsupported['field']), ('llm_key_invalid', 'kind'))
+        self.assertEqual(len(self.fake.calls), calls, 'Invalid forms must not call new-api')
 
         # 用量：一筆免費試用呼叫；channel 被剝掉、金鑰對回鏡像。LLM-02：端點只讀快取（第一次是空的、
         # 排一次背景刷新），刷新 cron 以 CRON 金鑰讀完之後才看得到。
@@ -786,6 +793,133 @@ class TestLlmTracerHttp(HttpCase):
         mine = self._create_key()
         self.assertTrue(mine['success'])
         self.assertNotEqual(mine['data']['key_id'], created['data']['key_id'])
+
+    def test_usage_logs_are_bounded_scoped_and_allowlisted(self):
+        today = datetime.now(ZoneInfo('Asia/Taipei')).date()
+        today_range = {'start_date': today.isoformat(), 'end_date': today.isoformat()}
+        account = self._activate_and_provision(self.alice)
+        self.authenticate(self.alice.login, self.password)
+        Cache = type(self.env['woow_paas_platform.llm_swr_cache'])
+        with patch.object(Cache, '_llm_models_payload', return_value={
+                'state': 'ok', 'items': [{'model': 'paid-a', 'group': 'default'}]}):
+            selected = self._rpc('/api/llm/keys/create', {
+                'kind': 'paid', 'client_request_id': str(uuid.uuid4()),
+                'name': 'Selected Alice usage key', 'limit_points': 1,
+                'expires': '30d', 'models': ['paid-a'],
+            })
+        self.assertTrue(selected['success'], selected)
+        selected_key_id = selected['data']['key_id']
+        self.assertEqual(selected['data']['display_name'], 'Selected Alice usage key')
+        other = self._create_key()
+        self.assertTrue(other['success'], other)
+
+        selected_tokens = [token for token in self.fake.tokens.values()
+                           if token['group'] == 'default']
+        other_tokens = [token for token in self.fake.tokens.values() if token['group'] == 'free']
+        self.assertEqual((len(selected_tokens), len(other_tokens)), (1, 1))
+        selected_token, other_token = selected_tokens[0], other_tokens[0]
+        self.assertEqual({selected_token['user_id'], other_token['user_id']},
+                         {account.newapi_user_id})
+        self.fake.add_usage_log(account.newapi_user_id, selected_token['name'])
+        self.fake.add_usage_log(account.newapi_user_id, '', log_type=5, model='')
+        self.fake.add_log(account.newapi_user_id, other_token['name'], model='paid-a', group='default')
+        other_request_id = self.fake.logs[-1]['request_id']
+        # An otherwise matching row just beyond the inclusive end timestamp
+        # must not leak into today's result.
+        tomorrow_start = datetime.combine(
+            today + timedelta(days=1), datetime.min.time(), tzinfo=ZoneInfo('Asia/Taipei'))
+        self.fake.logs.append(dict(
+            self.fake.usage_log_rows[0], user_id=account.newapi_user_id,
+            token_name=selected_token['name'], created_at=int(tomorrow_start.timestamp()),
+            id=self.fake._id('log'), request_id='req_llm09_future_001',
+        ))
+
+        before = len(self.fake.calls)
+        invalid = self._rpc('/api/llm/usage/logs', {
+            'start_date': (today - timedelta(days=31)).isoformat(),
+            'end_date': today.isoformat()})  # 32 inclusive days
+        self.assertFalse(invalid['success'])
+        self.assertEqual(len(self.fake.calls), before, 'invalid range must not issue upstream I/O')
+        before = len(self.fake.calls)
+        oversized = self._rpc('/api/llm/usage/logs', {**today_range, 'page': 1, 'page_size': 51})
+        self.assertFalse(oversized['success'])
+        self.assertEqual(len(self.fake.calls), before, 'oversized page must not issue upstream I/O')
+
+        result = self._rpc('/api/llm/usage/logs', {
+            'start_date': (today - timedelta(days=30)).isoformat(),
+            'end_date': today.isoformat(), 'page': 1, 'page_size': 50})
+        self.assertTrue(result['success'], result)
+        data = result['data']
+        self.assertLessEqual(len(data['items']), 50)
+        self.assertEqual(data['total'], 2, 'future log is excluded by end_timestamp')
+
+        page_one = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'page': 1, 'page_size': 1})['data']
+        page_two = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'page': 2, 'page_size': 1})['data']
+        self.assertEqual((page_one['total'], page_two['total']), (2, 2))
+        self.assertNotEqual(page_one['items'][0]['request_id'], page_two['items'][0]['request_id'])
+        no_model_match = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'model': 'other-model', 'page': 1, 'page_size': 50})['data']
+        self.assertEqual(no_model_match['total'], 0,
+                         'model_name filter is exact rather than a substring match')
+
+        selected_result = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'key_id': selected_key_id, 'page': 1, 'page_size': 50})
+        self.assertTrue(selected_result['success'], selected_result)
+        selected_rows = selected_result['data']['items']
+        self.assertEqual(len(selected_rows), 1)
+        self.assertLessEqual(len(selected_rows), 50)
+        self.assertEqual({row['request_id'] for row in selected_rows},
+                         {'req_llm09_known_001'})
+        selected_row = selected_rows[0]
+        self.assertEqual(set(selected_row), {
+            'time_tpe', 'key_id', 'key_name', 'model', 'input_tokens', 'output_tokens',
+            'cache_tokens', 'duration_ms', 'quota', 'spend_points', 'request_id',
+            'status', 'error_code',
+        })
+        self.assertEqual(selected_row['key_id'], selected_key_id)
+        self.assertEqual(selected_row['key_name'], 'Selected Alice usage key')
+        self.assertEqual(selected_row['status'], 'success', 'type=2 is the default success page')
+        self.assertIsNone(selected_row['error_code'])
+        selected_serialized = json.dumps(selected_row)
+        for forbidden in ('private-channel-name', 'raw upstream prose',
+                          'upstream private explanation', 'raw upstream error body',
+                          '"channel"', '"channel_name"', '"admin_info"'):
+            self.assertNotIn(forbidden, selected_serialized)
+        self.assertNotIn(selected_token['name'], selected_serialized)
+        self.assertNotIn(other_request_id, json.dumps(selected_rows))
+
+        error_result = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'status': 'error', 'page': 1, 'page_size': 50})
+        self.assertTrue(error_result['success'], error_result)
+        [error_row] = error_result['data']['items']
+        self.assertEqual(error_row['status'], 'error')
+        self.assertEqual(error_row['error_code'], 'rate_limit')
+        self.assertEqual(error_row['request_id'], 'req_llm09_error_001')
+        self.assertIsNone(error_row['model'])
+        self.assertIsNone(error_row['key_id'])
+        self.assertIsNone(error_row['key_name'])
+        error_payload = json.dumps(error_row)
+        self.assertNotIn('raw provider error text', error_payload)
+        self.assertNotIn('provider-private-code', error_payload)
+        self.assertNotIn('admin_info', error_payload)
+
+        bob_account = self._activate_and_provision(self.bob)
+        self.authenticate(self.bob.login, self.password)
+        bob_result = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'page': 1, 'page_size': 50})
+        self.assertTrue(bob_result['success'], bob_result)
+        bob_payload = json.dumps(bob_result['data'])
+        self.assertNotIn('req_llm09_known_001', bob_payload)
+        self.assertNotIn(other_request_id, bob_payload)
+        self.assertNotEqual(bob_account, self._account(self.alice))
+        before = len(self.fake.calls)
+        bob_selected = self._rpc('/api/llm/usage/logs', {
+            **today_range, 'key_id': selected_key_id, 'page': 1, 'page_size': 50})
+        self.assertFalse(bob_selected['success'])
+        self.assertEqual(len(self.fake.calls), before,
+                         'another account\'s key selector must not issue upstream I/O')
 
     def test_stale_creating_trial_key_does_not_hide_the_create_button(self):
         """LLM-01c review 16：卡在 creating 的試用金鑰（處理它的 worker 在請求途中被殺）超過

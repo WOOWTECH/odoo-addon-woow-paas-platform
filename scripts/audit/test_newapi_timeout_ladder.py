@@ -122,10 +122,19 @@ class NewapiTimeoutLadderCLITests(unittest.TestCase):
                       'KEY_CREATE_TIMEOUT_MS=40000 必須 >')
 
     def test_frontend_key_create_call_must_use_the_named_timeout(self):
-        self.mutation(FRONTEND_SERVICE, '{ timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode',
-                      '{ transportCode', '必須帶 timeoutMs: KEY_CREATE_TIMEOUT_MS')
-        self.mutation(FRONTEND_SERVICE, '{ timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode',
-                      '{ timeoutMs: 40000, transportCode', 'timeoutMs 只能用具名常數')
+        # Each create path must be checked independently: a valid paid call must
+        # not hide a missing timeout on the free call (or vice versa).
+        for kind, last_arg in (("free_trial", 'kind: "free_trial",'),
+                               ("paid", 'models: values.models,')):
+            original = last_arg + '\n    }, { timeoutMs: KEY_CREATE_TIMEOUT_MS, transportCode'
+            with self.subTest(kind=kind, mutation='missing'):
+                self.mutation(FRONTEND_SERVICE, original,
+                              last_arg + '\n    }, { transportCode',
+                              '必須帶 timeoutMs: KEY_CREATE_TIMEOUT_MS')
+            with self.subTest(kind=kind, mutation='literal'):
+                self.mutation(FRONTEND_SERVICE, original,
+                              last_arg + '\n    }, { timeoutMs: 40000, transportCode',
+                              'timeoutMs 只能用具名常數')
 
     def test_rpc_default_timeout_outlasts_interactive_calls(self):
         self.mutation(FRONTEND_RPC, 'const REQUEST_TIMEOUT_MS = 30000;',

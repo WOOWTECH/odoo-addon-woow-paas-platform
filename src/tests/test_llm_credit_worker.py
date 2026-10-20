@@ -119,10 +119,12 @@ class TestLlmCreditWorkerCommitted(TransactionCase):
                 requester = env['res.users'].with_context(no_reset_password=True).create({
                     'name': 'Worker QA', 'login': 'worker_qa_%s' % uuid.uuid4().hex,
                     'email': 'worker-qa@example.invalid',
-                    'groups_id': [(6, 0, [env.ref('base.group_user').id])],
+                    'groups_id': [(6, 0, [env.ref('base.group_user').id,
+                                         env.ref('base.group_system').id])],
                 })
                 self.requester_ids.append(requester.id)
                 self.fixture.partner_ids.append(requester.partner_id.id)
+                requester._llm_set_named_human_eligible(True)
                 values.update(requested_by_uid=requester.id, reason='Worker cancellation QA')
             elif source == 'dr':
                 origin = _credit_internal(env[ORDER_MODEL]).create(values | {
@@ -150,8 +152,12 @@ class TestLlmCreditWorkerCommitted(TransactionCase):
                 cr.execute("DELETE FROM %s WHERE id = ANY(%%s) AND source IN ('dr','recharge')"
                            % ORDER_TABLE, (self.order_ids,))
                 cr.execute('DELETE FROM %s WHERE id = ANY(%%s)' % ORDER_TABLE, (self.order_ids,))
-            if self.requester_ids:
-                env_for(self.registry, cr)['res.users'].browse(self.requester_ids).unlink()
+        # Commit order deletion before requester hooks run, so a user cleanup
+        # error cannot restore order FKs and block the later account purge.
+        if self.requester_ids:
+            with self.registry.cursor() as cr:
+                env_for(self.registry, cr)['res.users'].browse(
+                    self.requester_ids).exists().unlink()
 
     def _row(self, order_id):
         with self.registry.cursor() as cr:
