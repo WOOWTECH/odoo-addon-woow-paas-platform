@@ -239,7 +239,9 @@ class LlmKnownDiscrepancy(models.Model):
             raise ValidationError(_('Select an AI account.'))
         self.flush_model(['account_id', 'quota_delta'])
         self.env.cr.execute(
-            'SELECT COALESCE(SUM(quota_delta), 0) FROM %s WHERE account_id = %%s' % TABLE,
+            # Odoo's global numeric typecaster returns float. Fetch text so the
+            # PostgreSQL numeric SUM stays exact even beyond signed int64.
+            'SELECT COALESCE(SUM(quota_delta), 0)::text FROM %s WHERE account_id = %%s' % TABLE,
             (account_id,))
         return int(self.env.cr.fetchone()[0])
 
