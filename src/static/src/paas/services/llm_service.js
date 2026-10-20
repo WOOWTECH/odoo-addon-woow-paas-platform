@@ -221,7 +221,10 @@ export const llmService = reactive({
     if (!validKeyId(keyId) || !changes || typeof changes !== "object") return failure(KEY_INVALID);
     const params = { key_id: keyId };
     for (const name of ["name", "limitPoints", "expires", "models"]) {
-      if (!Object.hasOwn(changes, name) || changes[name] === undefined) continue;
+      if (!Object.hasOwn(changes, name)) continue;
+      if (changes[name] === undefined) return failure(KEY_INVALID);
+      if (name === "limitPoints" && changes[name] !== null
+        && (!Number.isSafeInteger(changes[name]) || changes[name] <= 0)) return failure(KEY_INVALID);
       params[name === "limitPoints" ? "limit_points" : name] = changes[name];
     }
     if (Object.keys(params).length === 1) return failure(KEY_INVALID);
@@ -235,7 +238,7 @@ export const llmService = reactive({
 
   async setKeyStatus(keyId, enabled) {
     if (!validKeyId(keyId) || typeof enabled !== "boolean") return failure(KEY_INVALID);
-    return runKeyAction(this, `status:${enabled}`, keyId, "/api/llm/keys/set_status", { key_id: keyId, enabled });
+    return runKeyAction(this, "status", keyId, "/api/llm/keys/set_status", { key_id: keyId, enabled });
   },
 
   async deleteKey(keyId, confirmName) {
