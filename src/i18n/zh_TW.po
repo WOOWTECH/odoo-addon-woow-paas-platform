@@ -25387,6 +25387,11 @@ msgid "AI account error"
 msgstr "AI 帳戶異常"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__llm_manual_credit_budget
+msgid "AI manual credit daily limit reached"
+msgstr "AI 人工補點已達每日上限"
+
+#. module: woow_paas_platform
 #: model:ir.ui.menu,name:woow_paas_platform.menu_llm_terms
 msgid "Terms of Service"
 msgstr "服務條款"
