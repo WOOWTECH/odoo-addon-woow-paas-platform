@@ -160,6 +160,8 @@ class LlmApiKey(models.Model):
     key_label = fields.Char(
         readonly=True,
         help='User-facing name (only in PaaS). Never placed in alerts, incidents or emails (N24).')
+    creation_rejected = fields.Boolean(readonly=True, default=False, copy=False,
+                                        groups='base.group_system')
     newapi_name = fields.Char(readonly=True, index=True, copy=False,
                               help='wp_<id>_<rand4> — the token name on new-api.')
     newapi_token_id = fields.Integer(readonly=True, copy=False)
@@ -753,6 +755,9 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_finish(self, key_id, values):
+        # Only the initial definite rejection requests deleted. Unknown/retry
+        # cancellation requests failed_reveal and must retain its reservation.
+        not_created = values.get('state') == 'deleted' and not values.get('newapi_token_id')
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
         if values.get('state') == 'active':
             values['created_notice_pending'] = True
@@ -761,13 +766,16 @@ class LlmApiKey(models.Model):
             env = _env_on(self.env.registry, cr)
             worker = env['woow_paas_platform.llm_backoffice_operation']
             obligations = worker._lock_key_obligations(key_id)
-            cr.execute('SELECT state, disabled_by FROM %s WHERE id=%%s FOR UPDATE'
-                       % KEY_TABLE, (key_id,))
+            cr.execute('SELECT state, disabled_by, newapi_token_id FROM %s '
+                       'WHERE id=%%s FOR UPDATE' % KEY_TABLE, (key_id,))
             row = cr.fetchone()
+            not_created = not_created and bool(row) and not row[2]
+            if not_created:
+                values['creation_rejected'] = True
             stopped = bool(row and (row[1] == 'ops' or obligations))
             if stopped:
-                values.update({'state': 'failed_reveal', 'disabled_by': 'ops',
-                               'created_notice_pending': False})
+                values.update({'state': 'deleted' if not_created else 'failed_reveal',
+                               'disabled_by': 'ops', 'created_notice_pending': False})
             worker._reenqueue_finalized_token(obligations, values.get('newapi_token_id'))
             columns = sorted(values)
             if not all(_COLUMN_RE.fullmatch(column) for column in columns):
@@ -785,6 +793,8 @@ class LlmApiKey(models.Model):
                 cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
                            'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
                            (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))
+            if changed and not_created:
+                worker._settle_not_created_obligations(obligations)
         if changed and values.get('state') == 'active':
             # This mirror committed on the independent cursor. A fresh cursor
             # avoids the HTTP transaction's stale REPEATABLE READ snapshot.

@@ -792,17 +792,21 @@ class TestLlmBackofficeCommitted(TransactionCase):
         return fake
 
     def _creator_recovery_fixture(self, *, state='creating', token_id=0,
-                                  kind='paid', aged=True):
+                                  kind='paid', aged=True, existing_key_id=None):
         """Own committed snapshot only: ambient QA keys never enter these batches."""
         from ..models.llm_backoffice_operation import _cap, _obligation_cap
         with self.registry.cursor() as cr:
             env = env_for(self.registry, cr)
-            key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
-                'account_id': self.account_id, 'kind': kind, 'state': state,
-                'client_request_id': 'creator-' + uuid.uuid4().hex,
-                'newapi_name': 'wp_%d_abcd' % self.account_id,
-                'newapi_token_id': token_id,
-            })
+            if existing_key_id:
+                key = env['woow_paas_platform.llm_api_key'].browse(existing_key_id)
+                state, token_id = key.state, key.newapi_token_id
+            else:
+                key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                    'account_id': self.account_id, 'kind': kind, 'state': state,
+                    'client_request_id': 'creator-' + uuid.uuid4().hex,
+                    'newapi_name': 'wp_%d_abcd' % self.account_id,
+                    'newapi_token_id': token_id,
+                })
             if aged:
                 key.flush_recordset()
                 # ORM owns create_date; set an explicit committed fixture age.
@@ -851,7 +855,128 @@ class TestLlmBackofficeCommitted(TransactionCase):
             return {'state': op.state, 'obligation': obligation.state,
                     'code': obligation.result_code, 'key_state': key.state,
                     'disabled_by': key.disabled_by, 'token_id': key.newapi_token_id,
-                    'pending': obligation.pending_tokens_json, 'scan_complete': obligation.scan_complete}
+                    'pending': obligation.pending_tokens_json, 'scan_complete': obligation.scan_complete,
+                    'not_created': key.creation_rejected, 'disabled': obligation.disabled_tokens_json}
+
+    def _reserve_creator_trial(self):
+        from datetime import datetime, timedelta
+        expires = datetime.now() + timedelta(days=1)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key_id, name = env['woow_paas_platform.llm_api_key']._llm_insert_creating(
+                env[ACCOUNT].browse(self.account_id), 'free_trial', str(uuid.uuid4()),
+                env.user, '', expires, ','.join(nac.FREE_TRIAL_MODELS))
+        return key_id, name, expires
+
+    def _reserved_creator_count(self):
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            return env['woow_paas_platform.llm_free_usage']._llm_today(
+                self.account_id)['keys_created_today']
+
+    def _rejected_creator_attempt(self, fake, key_id, name, expires, result):
+        import time
+        fake.fail_before['user_create_token'] = result
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            with self.assertRaises(LlmError):
+                env['woow_paas_platform.llm_api_key']._llm_create_remote(
+                    env[ACCOUNT].browse(self.account_id), fake.client(nac.ROLE_WEB),
+                    '198.18.0.1', 'test-up', key_id, name, expires, time.monotonic() + 20)
+
+    def _assert_initial_rejection_returns_slot_once(self, result):
+        fake = self._creator_recovery_fake()
+        key_id, name, expires = self._reserve_creator_trial()
+        self.assertEqual(self._reserved_creator_count(), 1)
+        _key_id, op_id, _name = self._creator_recovery_fixture(
+            existing_key_id=key_id, aged=False)
+        self._rejected_creator_attempt(fake, key_id, name, expires, result)
+        self.assertEqual(self._reserved_creator_count(), 0)
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual(snapshot['key_state'], 'deleted')
+        self.assertTrue(snapshot['not_created'])
+        self.assertEqual((snapshot['state'], snapshot['obligation'], snapshot['code']),
+                         ('done', 'done', 'not_created'))
+        self.assertFalse(snapshot['pending'])
+        self.assertFalse(snapshot['disabled'], 'noncreation is not a successful remote disable')
+        self.assertFalse(snapshot['scan_complete'], 'no discovery proof was fabricated')
+        self.assertFalse(fake.tokens)
+        self.assertEqual([method for method, _ in fake.calls], ['user_create_token'])
+        # Reserve another real slot before replay: GREATEST(0, ...) cannot hide
+        # an accidental second decrement of the rejected mirror's reservation.
+        self._reserve_creator_trial()
+        self.assertEqual(self._reserved_creator_count(), 1)
+        keys = self.env['woow_paas_platform.llm_api_key']
+        keys._llm_finish(key_id, {'state': 'deleted'})
+        keys._llm_finish(key_id, {'state': 'deleted'})
+        self.assertEqual(self._reserved_creator_count(), 1)
+        self.assertEqual(self._creator_recovery_unit(op_id), 'done')
+        self.assertEqual([method for method, _ in fake.calls], ['user_create_token'])
+
+    def test_initial_not_executed_returns_reserved_slot_and_settles_batch_once(self):
+        self._assert_initial_rejection_returns_slot_once(nac.NotExecuted('connect'))
+
+    def test_initial_definite_rejection_returns_reserved_slot_and_settles_batch_once(self):
+        self._assert_initial_rejection_returns_slot_once(
+            nac.Definite(proxy_error='denied', reason='token_fields', status=403))
+
+    def test_initial_rejection_never_discards_observed_pending_token_ids(self):
+        from ..models.llm_backoffice_operation import _obligation_cap
+        fake = self._creator_recovery_fake()
+        key_id, name, expires = self._reserve_creator_trial()
+        _key_id, op_id, _name = self._creator_recovery_fixture(
+            existing_key_id=key_id, aged=False)
+        fake.client(nac.ROLE_CRON).user_create_token(
+            '198.18.0.1', 'test-up', nac.free_trial_token_body(name, 1900000000))
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            obligation = env['woow_paas_platform.llm_backoffice_operation'].browse(op_id).key_obligation_ids
+            _obligation_cap(obligation).write({
+                'pending_tokens_json': {'1': {'attempts': 0, 'retry_at': 0}}, 'prefer_scan': False,
+            })
+        self._rejected_creator_attempt(fake, key_id, name, expires, nac.NotExecuted('connect'))
+        self.assertEqual(self._reserved_creator_count(), 0)
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual((snapshot['key_state'], snapshot['state']), ('deleted', 'pending'))
+        self.assertIn('1', snapshot['pending'])
+        self.assertFalse(snapshot['disabled'])
+        self._reserve_creator_trial()  # The rejected mirror must stay outside the live-trial index.
+        self.assertEqual(self._creator_recovery_unit(op_id), 'pending')
+        self.assertEqual(fake.tokens[1]['status'], 2)
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual(snapshot['key_state'], 'deleted')
+        self.assertIn(1, snapshot['disabled'])
+        self.assertEqual(self._reserved_creator_count(), 1)
+
+    def test_unknown_initial_create_keeps_reservation_and_quarantine(self):
+        fake = self._creator_recovery_fake()
+        key_id, name, expires = self._reserve_creator_trial()
+        _key_id, op_id, _name = self._creator_recovery_fixture(
+            existing_key_id=key_id, aged=False)
+        # Both uncertain POST attempts have no visible result. This is not
+        # definite noncreation, even though the fake currently has no tokens.
+        fake.fail_before_all['user_create_token'] = nac.Unknown('proxy_timeout')
+        self._rejected_creator_attempt(fake, key_id, name, expires, nac.Unknown('proxy_timeout'))
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertEqual((snapshot['key_state'], snapshot['state']), ('failed_reveal', 'pending'))
+        self.assertFalse(snapshot['not_created'])
+        self.assertFalse(snapshot['disabled'])
+        self.assertEqual(self._reserved_creator_count(), 1)
+        self.assertFalse(fake.tokens)
+        self.assertNotIn('user_reveal_token', [method for method, _ in fake.calls])
+
+    def test_deleting_unknown_mirror_does_not_manufacture_noncreation_proof(self):
+        fake = self._creator_recovery_fake()
+        key_id, op_id, _name = self._creator_recovery_fixture(state='failed_reveal')
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            _llm_internal(env['woow_paas_platform.llm_api_key'].browse(key_id)).write({'state': 'deleted'})
+        self.assertEqual(self._creator_recovery_unit(op_id), 'pending')
+        snapshot = self._creator_recovery_snapshot(op_id)
+        self.assertFalse(snapshot['not_created'])
+        self.assertEqual(snapshot['code'], 'identity_unresolved')
+        self.assertFalse(snapshot['disabled'])
+        self.assertFalse(fake.tokens)
 
     def test_failed_discovery_yields_to_known_ids_without_claiming_completion(self):
         from ..models.llm_backoffice_operation import _obligation_cap

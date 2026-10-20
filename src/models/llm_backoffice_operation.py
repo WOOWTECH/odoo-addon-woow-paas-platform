@@ -287,7 +287,7 @@ class LlmBackofficeOperation(models.Model):
             _cap(op).write({
                 'state': 'done' if not pending else 'pending',
                 'result_code': 'ok' if not pending else 'pending',
-                'result_summary': _('All snapshotted API keys were disabled.') if not pending
+                'result_summary': _('All snapshotted API keys are disabled or were not created.') if not pending
                                   else _('Some API keys still need verification.'),
                 'key_done_count': Obligation.search_count([
                     ('operation_id', '=', op.id), ('state', '=', 'done')]),
@@ -333,6 +333,13 @@ class LlmBackofficeOperation(models.Model):
         if type(obligation.newapi_user_id_snapshot) is not int or obligation.newapi_user_id_snapshot <= 0:
             self._obligation_defer(obligation, 'upstream_user_unresolved')
             return
+        # A definite initial rejection may have committed before this snapshot's
+        # obligation INSERT became visible to its finalizer. Only its explicit
+        # receipt proves noncreation; user deletion of an unknown key does not.
+        if key.creation_rejected and key.state == 'deleted' and not key.newapi_token_id:
+            self._settle_not_created_obligations(obligation)
+            if obligation.state == 'done':
+                return
         # This durable stop precedes remote work, so the free-cap reset worker
         # can never race a failed/slow upstream disable and reactivate the key.
         if key.disabled_by != 'ops':
@@ -361,7 +368,7 @@ class LlmBackofficeOperation(models.Model):
             elif not pending_tokens and not obligation.scan_required and obligation.disabled_tokens_json:
                 if self._obligation_creator_quiet(obligation, key):
                     _obligation_cap(obligation).write({'state': 'done', 'result_code': 'ok'})
-                    if key.state != 'failed_reveal':
+                    if key.state not in ('failed_reveal', 'deleted'):
                         _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'ops'})
             else:
                 retry_times = [entry['retry_at'] for entry in pending_tokens.values()]
@@ -380,7 +387,7 @@ class LlmBackofficeOperation(models.Model):
             'result_code': 'pending' if pending else 'ok',
             'result_summary': (_('Disable progress: %(done)s complete, %(pending)s pending.',
                                  done=done, pending=pending) if pending
-                               else _('All snapshotted API keys were disabled.')),
+                               else _('All snapshotted API keys are disabled or were not created.')),
             'key_done_count': done, 'key_failed_count': pending,
             'processed_at': fields.Datetime.now() if not pending else False,
         })
@@ -428,7 +435,7 @@ class LlmBackofficeOperation(models.Model):
         if (not pending and not obligation.scan_required
                 and self._obligation_creator_quiet(obligation, key)):
             _obligation_cap(obligation).write({'state': 'done', 'result_code': 'ok'})
-            if key.state not in ('failed_reveal', 'creating'):
+            if key.state not in ('failed_reveal', 'creating', 'deleted'):
                 _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'ops'})
         env = obligation.env
         env['woow_paas_platform.llm_event']._llm_record(
@@ -518,7 +525,7 @@ class LlmBackofficeOperation(models.Model):
                 _obligation_cap(obligation).write({'scan_page': 1, 'scan_total': total, 'scan_head': head,
                                   'scan_complete': True, 'state': 'done', 'result_code': 'ok',
                                   'work_count': obligation.work_count + 1, 'next_work_at': False})
-                if key.state not in ('failed_reveal', 'creating'):
+                if key.state not in ('failed_reveal', 'creating', 'deleted'):
                     _llm_internal(key).write({'state': 'disabled', 'disabled_by': 'ops'})
                 return
             _obligation_cap(obligation).write({'scan_page': 1, 'scan_total': total, 'scan_head': head,
@@ -565,6 +572,30 @@ class LlmBackofficeOperation(models.Model):
         return self.env[_OBL_MODEL].sudo().browse([row[0] for row in self.env.cr.fetchall()])
 
     @api.model
+    def _settle_not_created_obligations(self, obligations):
+        """Accept definite local noncreation, never erase an observed token ID."""
+        for obligation in obligations:
+            if (obligation.pending_tokens_json or obligation.token_id_snapshot
+                    or obligation.disabled_tokens_json):
+                continue
+            _obligation_cap(obligation).write({
+                'state': 'done', 'result_code': 'not_created', 'next_work_at': False,
+                'scan_required': False, 'scan_complete': False,
+                'scan_head': False, 'scan_total': False, 'scan_page': 1,
+            })
+            op = obligation.operation_id
+            remaining = self.env[_OBL_MODEL].sudo().search_count([
+                ('operation_id', '=', op.id), ('state', '=', 'pending')])
+            _cap(op).write({
+                'state': 'pending' if remaining else 'done',
+                'result_code': 'pending' if remaining else 'ok',
+                'key_done_count': op.key_target_count - remaining, 'key_failed_count': remaining,
+                'processed_at': False if remaining else fields.Datetime.now(),
+                'result_summary': (_('Some API keys still need verification.') if remaining else
+                                   _('All snapshotted API keys are disabled or were not created.')),
+            })
+
+    @api.model
     def _reenqueue_finalized_token(self, obligations, token_id):
         """Same transaction as finalization: an unreceipted ID reopens its batch."""
         if not token_id:
@@ -576,6 +607,7 @@ class LlmBackofficeOperation(models.Model):
             pending.setdefault(str(token_id), {'attempts': 0, 'retry_at': 0})
             _obligation_cap(obligation).write({
                 'pending_tokens_json': pending, 'state': 'pending',
+                'scan_required': bool(obligation.newapi_name_snapshot),
                 'scan_complete': False, 'scan_page': 1, 'scan_total': False,
                 'scan_head': False, 'prefer_scan': False, 'next_work_at': False,
                 'result_code': 'finalized_token_pending',
