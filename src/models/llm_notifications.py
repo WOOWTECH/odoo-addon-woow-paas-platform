@@ -15,7 +15,7 @@ from .llm_common import (
     LlmQuotaInteger, _is_llm_internal, _llm_internal, _without_llm_internal, llm_unconfigured, llm_visible,
     run_llm_cron,
 )
-from .llm_event import LlmAlert, LlmIncident
+from .llm_event import LlmAlert, LlmIncident, _env_on
 from ..services import newapi_client as nac
 
 _logger = logging.getLogger(__name__)
@@ -299,7 +299,7 @@ class LlmNotification(models.Model):
                 if not row:
                     return False
                 account_id, consumed_at, incident_id, alert_id = row
-                env = api.Environment(cr, SUPERUSER_ID, {})
+                env = _env_on(self.env.registry, cr)
                 Event = env['woow_paas_platform.llm_event']
                 if not incident_id:
                     # Recover the crash window after the helper's own commit.

@@ -455,6 +455,7 @@ class TestLlmNotifications(_ConfiguredCase):
                     for i in range(7)]
         cron = self.env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()
         cron.write({'active': True})
+        cron.flush_recordset(['active'])
         triggers = self.env['ir.cron.trigger'].sudo()
         domain = [('cron_id', '=', cron.id)]
         before = triggers.search_count(domain)

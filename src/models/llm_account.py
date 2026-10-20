@@ -94,7 +94,7 @@ from .llm_common import (
     run_llm_cron,
     taipei_day,
 )
-from .llm_event import LlmAlert, LlmIncident, _begin, safe_code
+from .llm_event import LlmAlert, LlmIncident, _begin, _env_on, safe_code
 from .llm_terms import TERMS_MODEL, clean_version
 
 _logger = logging.getLogger(__name__)
@@ -1357,7 +1357,7 @@ class LlmAccount(models.Model):
                 if any(row[4] for row in changed):
                     # Only schedule work here: the five-item notification cron
                     # owns rendering. Trigger and crossing markers commit together.
-                    notice_env = api.Environment(cr, SUPERUSER_ID, {})
+                    notice_env = _env_on(self.env.registry, cr)
                     notice_env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()._trigger()
             return len(changed)
         except psycopg2.Error as exc:
