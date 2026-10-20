@@ -388,6 +388,18 @@ test("a failed mutation does not refresh and releases its queue for a successful
 });
 
 test("mutation intents serialize per key, dedupe identical requests, and release after completion", async () => {
+  const priorRpc = globalThis.__llmRpc;
+  const cloneState = (value) => {
+    if (Array.isArray(value)) return value.map(cloneState);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneState(item)]));
+    }
+    return value;
+  };
+  const priorServiceState = Object.fromEntries([
+    "keys", "keysError", "keysLoaded", "keysRequest",
+    "overview", "overviewError", "overviewLoaded", "overviewRequest",
+  ].map((field) => [field, cloneState(llmService[field])]));
   const calls = [];
   const deferredReleases = new Set();
   const pendingWork = new Set();
@@ -551,6 +563,8 @@ test("mutation intents serialize per key, dedupe identical requests, and release
       if (promise) pendingWork.add(promise);
     }
     await Promise.allSettled([...pendingWork]);
+    globalThis.__llmRpc = priorRpc;
+    for (const [field, value] of Object.entries(priorServiceState)) llmService[field] = value;
   }
 });
 
