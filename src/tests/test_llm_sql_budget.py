@@ -7,11 +7,14 @@ Odoo database. Raw registry database cursors avoid taking the Registry lock.
 
 import time
 import uuid
+from unittest.mock import patch
 
 from psycopg2.errors import LockNotAvailable, QueryCanceled
 
 from odoo.tests import TransactionCase, tagged
 
+from ..models import llm_event as llm_event_module
+from ..models.llm_common import ERR_LLM_INTERNAL
 from ..services.llm_sql_budget import SqlBudgetExpired, deadline_cursor
 
 
@@ -112,3 +115,59 @@ class TestLlmSqlBudget(TransactionCase):
                 self.assertEqual(unrelated.fetchone()[0], 23)
         finally:
             unrelated.close()
+
+    def test_llm_alert_decorator_and_nested_cursor_share_deadline(self):
+        alert = llm_event_module.LlmAlert.TEST
+        target_model = "woow_paas_platform.llm_runtime_state"
+        target_id = (uuid.uuid4().int % (2 ** 31 - 1)) + 1
+        dedupe_key = llm_event_module.alert_dedupe_key(
+            alert,
+            target_model=target_model,
+            target_id=target_id,
+            error_code=ERR_LLM_INTERNAL,
+        )
+        holder = self.registry._db.cursor()
+        try:
+            holder.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                ("woow_llm_alert:%s" % dedupe_key,),
+            )
+
+            service = self.env[llm_event_module.EVENT_MODEL]
+            deadline = time.monotonic() + 0.4
+            started = time.monotonic()
+            with patch.object(llm_event_module, "llm_unconfigured", return_value=False), \
+                    patch.object(
+                        llm_event_module,
+                        "alert_targets",
+                        return_value={"emails": (), "webhook": None},
+                    ):
+                with self.assertRaises(_TIMEOUTS):
+                    service._llm_alert(
+                        alert,
+                        target_model=target_model,
+                        target_id=target_id,
+                        error_code=ERR_LLM_INTERNAL,
+                        deadline=deadline,
+                    )
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 2.0, "_llm_alert exceeded its shared SQL budget")
+
+            # The held per-alert lock is before the dedupe lookup and all event,
+            # burst-carrier, email, and webhook work. Scope this check to this
+            # unique target so other full-suite fixtures cannot affect it.
+            check = self.registry._db.cursor()
+            try:
+                check.execute(
+                    "SELECT count(*) FROM woow_paas_platform_llm_event "
+                    "WHERE target_model = %s AND target_id = %s AND alert_code = %s",
+                    (target_model, target_id, alert.value),
+                )
+                self.assertEqual(check.fetchone()[0], 0)
+            finally:
+                check.close()
+        finally:
+            try:
+                holder.rollback()
+            finally:
+                holder.close()
