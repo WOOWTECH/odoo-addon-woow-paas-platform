@@ -1,16 +1,20 @@
-"""Real rollback-only ledger/scanner tests; no committed fixtures or global sweep.
+"""Real ledger/scanner tests; no global sweep.
 
 Payments and reversals use actual wallet/accounting services. Only the external
 durable sinks are replaced, since their independent transactions cannot observe
 TransactionCase fixtures. Every worker invocation supplies owned order IDs and
 uses the same SQL/locking core as cron. No production config or cursor is changed.
+The deadline regression separately commits only its marker-owned fixture and
+scoped cursors, then reads through fresh connections to prove turn durability.
 """
 import logging
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from psycopg2 import IntegrityError
+from psycopg2 import IntegrityError, errors
 
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, new_test_user, tagged
@@ -20,7 +24,7 @@ from ..models import llm_common
 from ..models import llm_reconcile_local as local
 from ..models.llm_common import LlmCronTick, _llm_internal
 from ..models.llm_credit_order import ORDER_MODEL, ORDER_TABLE, _credit_internal
-from ..models.llm_event import LlmAlert, LlmIncident
+from ..models.llm_event import LlmAlert, LlmIncident, _env_on
 
 
 @tagged('post_install', '-at_install', 'llm_reconcile_local')
@@ -455,7 +459,7 @@ class TestLlmReconcileLocal(TransactionCase):
         self.assertEqual(self.incident.call_args.args, (LlmIncident.RECONCILE_MISMATCH,))
         self.assertEqual(self.alert.call_args.args, (LlmAlert.RECONCILE_MISMATCH,))
         payload = self.alert.call_args.kwargs
-        self.assertEqual(payload['deadline'], 30)
+        self.assertEqual(payload['deadline'], 30 - local.SINK_TAIL_RESERVE)
         self.assertEqual(self.incident.call_args.kwargs['deadline'], payload['deadline'])
         self.assertEqual(payload['target_id'], orders[0].id)
         self.assertEqual(payload['numbers'], {'age_seconds': 960, 'attempts': 0, 'points': 100})
@@ -541,3 +545,143 @@ class TestLlmReconcileLocal(TransactionCase):
         self.assertEqual(self.Scanner.search_count([]), count)
         self.incident.assert_not_called()
         self.alert.assert_not_called()
+
+
+@tagged('post_install', '-at_install', 'llm_reconcile_local')
+class TestLlmReconcileDeadline(TransactionCase):
+    """Real elapsed SQL timeout and committed cursor progress, without HTTP."""
+
+    @contextmanager
+    def _owned_order(self):
+        marker = 'llm_reconcile_deadline_' + uuid.uuid4().hex
+        owned = None
+        try:
+            with self.registry._db.cursor() as cr:
+                env = _env_on(self.registry, cr)
+                partner = env['res.partner'].create({'name': marker})
+                account = _llm_internal(env['woow_paas_platform.llm_account']).create({
+                    'partner_id': partner.id, 'state': 'closed', 'newapi_user_id': partner.id})
+                # No sendable order/account, voucher, key, or cron trigger.
+                # I1 reports needs_review; I4 reports the deliberately absent
+                # debit. This fixture needs no global config or named user.
+                order = _credit_internal(env[ORDER_MODEL]).create({
+                    'account_id': account.id, 'partner_id': partner.id,
+                    'newapi_user_id': account.newapi_user_id, 'source': 'user',
+                    'points': 1, 'quota': 15625, 'client_request_id': marker, 'reason': marker})
+                _credit_internal(order)._transition('needs_review')
+                env.flush_all()
+                owned = (partner.id, account.id, order.id)
+                keys = list(local._task_keys([order.id]))
+                cr.execute('SELECT id FROM ' + local.CURSOR_TABLE + ' WHERE task_key = ANY(%s)',
+                           (keys,))
+                self.assertFalse(cr.fetchall())
+                cr.commit()
+            yield owned[2], keys
+        finally:
+            if owned:
+                partner_id, account_id, order_id = owned
+                with self.registry._db.cursor() as cr:
+                    cr.execute("SET LOCAL lock_timeout = '2s'")
+                    cr.execute("SET LOCAL statement_timeout = '5s'")
+                    cr.execute('SELECT name FROM res_partner WHERE id = %s', (partner_id,))
+                    partner = cr.fetchone()
+                    cr.execute(
+                        'SELECT partner_id, state FROM woow_paas_platform_llm_account WHERE id = %s',
+                        (account_id,))
+                    account = cr.fetchone()
+                    cr.execute(
+                        'SELECT account_id, partner_id, source, state, client_request_id, reason, '
+                        'invoice_id, wallet_transaction_id, void_credit_note_id, '
+                        'void_wallet_transaction_id, incident_id FROM ' + ORDER_TABLE
+                        + ' WHERE id = %s', (order_id,))
+                    order = cr.fetchone()
+                    if partner or account or order:
+                        message = 'Owned deadline fixture retained: ' + marker
+                        self.assertEqual(partner, (marker,), message)
+                        self.assertEqual(account, (partner_id, 'closed'), message)
+                        self.assertEqual(order, (
+                            account_id, partner_id, 'user', 'needs_review', marker, marker,
+                            None, None, None, None, None), message)
+                        cr.execute(
+                            'SELECT id FROM woow_paas_platform_llm_event '
+                            'WHERE account_id = %s OR (target_model = %s AND target_id = %s)',
+                            (account_id, ORDER_MODEL, order_id))
+                        self.assertFalse(cr.fetchall(), message)
+                        # Exact private keys only. Foreign FK references abort
+                        # the entire cleanup transaction; never broaden deletes.
+                        cr.execute('DELETE FROM ' + local.CURSOR_TABLE
+                                   + ' WHERE task_key = ANY(%s)', (keys,))
+                        cr.execute('DELETE FROM ' + ORDER_TABLE + ' WHERE id = %s', (order_id,))
+                        cr.execute('DELETE FROM woow_paas_platform_llm_account WHERE id = %s',
+                                   (account_id,))
+                        _env_on(self.registry, cr)['res.partner'].browse(partner_id).unlink()
+                        cr.commit()
+
+    def _committed_progress(self, keys):
+        with self.registry._db.cursor() as cr:
+            cr.execute('SELECT task, turn, after_id, finished_at FROM ' + local.CURSOR_TABLE
+                       + ' WHERE task_key = ANY(%s)', (keys,))
+            return {row[0]: row[1:] for row in cr.fetchall()}
+
+    def test_expired_sink_preserves_committed_turn_and_other_task_progress(self):
+        # Main's shared helper is exercised, not a fake monotonic clock. Shrink
+        # only sink admission thresholds; retain the real 2.5s scanner tail.
+        from ..services.llm_sql_budget import deadline_cursor
+
+        event_type = type(self.env['woow_paas_platform.llm_event'])
+        with patch.object(local, 'llm_unconfigured', return_value=False), \
+                patch.object(local, 'SINK_RESERVE', 0.25), \
+                patch.object(local, 'ALERT_RESERVE', 0.1), \
+                patch.object(self.registry, 'cursor', self.registry._db.cursor), \
+                patch.object(event_type, '_llm_incident', return_value=101) as incident, \
+                patch.object(event_type, '_llm_alert', return_value=102) as alert, \
+                patch('requests.sessions.Session.request',
+                      side_effect=AssertionError('Local reconciliation cannot make HTTP requests')):
+            for blocked in (incident, alert):
+                with self.subTest(sink='incident' if blocked is incident else 'alert'), \
+                        self._owned_order() as (order_id, keys):
+                    incident.reset_mock()
+                    alert.reset_mock()
+                    incident.side_effect = alert.side_effect = None
+                    deadlines, expirations = [], []
+
+                    def exhaust_deadline(*args, deadline, **kwargs):
+                        deadlines.append(deadline)
+                        try:
+                            with deadline_cursor(self.registry._db.cursor, deadline) as cr:
+                                cr.execute('SELECT pg_sleep(%s)',
+                                           (max(0, deadline - time.monotonic()) + 1,))
+                        except errors.QueryCanceled:
+                            expirations.append(time.monotonic())
+                            return False
+                        return True  # Assertions below require a real SQL timeout.
+
+                    blocked.side_effect = exhaust_deadline
+                    tick = LlmCronTick(local.SINK_TAIL_RESERVE + 1.5, local.SCAN_ROWS)
+                    scanner = self.env[local.CURSOR_MODEL]
+                    self.assertTrue(scanner._process_batch(tick, order_ids=[order_id]))
+                    self.assertEqual(len(expirations), 1, 'The real pg_sleep timeout must be reached')
+                    # The helper reserves 50ms; this is actual elapsed time,
+                    # not an immediately returned False or advanced fake clock.
+                    self.assertGreaterEqual(expirations[0], deadlines[0] - 0.2)
+                    first = self._committed_progress(keys)
+                    self.assertEqual(set(first), {'i1', 'i4'},
+                                     'Sink timeout must not roll back the sweep cursors')
+                    self.assertGreater(first['i1'][0], 0)
+                    self.assertEqual(first['i1'][1:], (0, None))
+                    self.assertEqual(first['i4'], (0, 0, None))
+                    self.assertEqual(deadlines, [tick.deadline - local.SINK_TAIL_RESERVE])
+                    if blocked is incident:
+                        alert.assert_not_called()
+                    else:
+                        self.assertEqual(incident.call_args.kwargs['deadline'], deadlines[0])
+                    # A fresh worker must observe that committed turn and let
+                    # I4 advance, while I1's unaccepted finding remains pending.
+                    incident.side_effect = alert.side_effect = None
+                    self.assertTrue(scanner._process_batch(
+                        LlmCronTick(30, local.SCAN_ROWS), order_ids=[order_id]))
+                    second = self._committed_progress(keys)
+                    self.assertEqual(second['i1'], first['i1'])
+                    self.assertGreater(second['i4'][0], first['i1'][0])
+                    self.assertEqual(second['i4'][1], order_id)
+                    self.assertEqual(alert.call_args.kwargs['error_code'], local.I4_DEBIT)

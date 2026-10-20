@@ -8,9 +8,9 @@ accounting links. No ORM cache, order/account row locks, repair, or HTTP.
 
 One tick claims one task, reads at most SCAN_ROWS orders, and delivers at most
 one incident/alert pair. Durable turn counters alternate unfinished tasks even
-when a sink keeps failing. Both independent sink transactions receive the
-shared tick deadline (the llm_event/billing deadline plumbing is integrated
-separately). SINK_RESERVE also reserves their normal lock/cleanup allowances.
+when a sink keeps failing. Both independent sink transactions share an earlier
+deadline, leaving time to commit the turn even when notification times out.
+SINK_RESERVE also reserves their normal lock/cleanup allowances.
 """
 import hashlib
 import logging
@@ -37,6 +37,10 @@ SCAN_ROWS = 200
 SINK_RESERVE = 25.0
 ALERT_RESERVE = 16.0
 FINISH_RESERVE = 0.5
+# Successful notification has two tail statements (progress + more), each
+# capped at .5s by _execute. Add its .5s finish floor and 1s for timeout setup,
+# commit and bounded cron continuation. A failed sink still commits its turn.
+SINK_TAIL_RESERVE = 2.5
 CONTINUE_DELAY = 60
 
 # Main registers these closed codes in llm_common.ERROR_CODES. Reasons,
@@ -199,7 +203,7 @@ def _execute(cr, tick, query, params=()):
 
 
 class LlmReconcileLocalCursor(models.Model):
-    _name = CURSOR_MODEL
+    _name = 'woow_paas_platform.llm_reconcile_local_cursor'
     _description = 'LLM local reconciliation sweep cursor'
     _rec_name = 'task_key'
     _order = 'task_key'
@@ -433,21 +437,23 @@ class LlmReconcileLocalCursor(models.Model):
 
     @api.model
     def _notify(self, row, code, now, tick):
-        if tick.remaining() < SINK_RESERVE:
+        remaining = tick.remaining()
+        if remaining < SINK_RESERVE or remaining <= SINK_TAIL_RESERVE:
             return False
+        sink_deadline = tick.deadline - SINK_TAIL_RESERVE
         event = self.env['woow_paas_platform.llm_event']
         try:
             incident = event._llm_incident(
                 LlmIncident.RECONCILE_MISMATCH, account_id=row['account_id'],
                 order_id=row['id'], error_code=code, points=row['points'],
-                deadline=tick.deadline)
-            if not incident or tick.remaining() < ALERT_RESERVE:
+                deadline=sink_deadline)
+            if not incident or tick.remaining() - SINK_TAIL_RESERVE < ALERT_RESERVE:
                 return False
             return bool(event._llm_alert(
                 LlmAlert.RECONCILE_MISMATCH, account_id=row['account_id'],
                 target_model=ORDER_MODEL, target_id=row['id'], error_code=code,
                 numbers={'age_seconds': _age(row, now), 'attempts': row['attempt'],
-                         'points': row['points']}, deadline=tick.deadline))
+                         'points': row['points']}, deadline=sink_deadline))
         except Exception:  # noqa: BLE001 - retry the same row; never log tenant text
             _logger.error('[LLM] local reconciliation sink failed order=%s code=%s',
                           row['id'], code)
