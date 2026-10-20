@@ -343,4 +343,8 @@ related:
 - [x] Task 4 implementation: added closed paid-create validation, cache-only default-model allowlists, terms/N25 ordering, one-time reveal reuse, and an independent-cursor 20-key race guard; free and paid creation now share the durable create/reveal transaction.
 - [x] Task 4 static evidence: `py_compile`, `git diff --check`, C2 collection audit (1,242 entries), and pure new-api transport tests (86 tests) passed.
 - [x] Task 4 focused Odoo class: CI run `23615` built `sha256:85095cee7bf9c0284819c6d8f45262a0973441cc1ce568e273de011f1983611d` from `addon_ref=feat/llm-07-paid-key-management-1019` (remote branch head verified as `60824659`); after the explicitly approved isolated `llmdev` bootstrap `-u web` completed, the no-`-u` `llm_key_management` run passed 19 tests (0 failed, 0 errors).
-- [ ] Tasks 2–11 complete with recorded verification evidence.
+- [x] Task 10A: committed safe update/extend/status/delete service actions, per-key intent serialization, response sanitization, and bounded concurrency regression tests.
+- [x] Task 10B/C: wired desktop/mobile edit/extend/disable/enable/delete actions, exact-name deletion confirmation, edit-only diffs, modal focus recovery, terms-gated create/enable, and complete frontend zh-TW coverage.
+- [x] 2026-10-20 local verification: all `tests/ui/test_llm_*.mjs` passed (168 tests); `tests/test_llm_services.py` passed (86 tests); Python 3.12 `repo-lint.py --all`, timeout ladder, Python compilation, docs-index check, and `git diff --check` passed.
+- [ ] Task 11: validate the final branch in isolated `llmdev`, including actual OWL rendering and backend management/HTTP regressions. The earlier 19-test sandbox result covers Task 4 only and is not evidence for the final branch.
+- [ ] Complete AC1–AC10 staging acceptance and record the exact image/commit evidence before recommending merge. Owner-only merge and production release approval gates remain in force.

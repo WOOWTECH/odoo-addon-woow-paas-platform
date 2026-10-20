@@ -308,6 +308,7 @@ test("OWL template 名稱全域唯一；AI 模型的 template 一律 woow_paas_p
   assert.deepEqual(llmNames.sort(), [
     "woow_paas_platform.LlmConvertModal",
     "woow_paas_platform.LlmCreditTab",
+    "woow_paas_platform.LlmKeyActionConfirmModal",
     "woow_paas_platform.LlmKeyFormModal",
     "woow_paas_platform.LlmKeyRevealModal",
     "woow_paas_platform.LlmKeysTab",

@@ -1,0 +1,16 @@
+.o_woow_llm_key_action {
+  width: 100%; max-width: 520px; max-height: calc(100dvh - 32px); overflow-y: auto;
+  border-radius: 20px; background: #fff; color: #212121; font: 16px/1.6 $woow-font-body;
+  box-shadow: 0 22px 52px rgba(33, 33, 33, .12);
+  h2 { margin: 0; font: 600 24px/1.2 $woow-font-display; }
+  .o_woow_modal_header, .o_woow_modal_body, .o_woow_modal_footer { padding: 20px; }
+  .o_woow_modal_header { align-items: flex-start; gap: 12px; }
+  .o_woow_modal_body { display: grid; gap: 14px; }
+  p { margin: 0; overflow-wrap: anywhere; }
+  label { display: grid; gap: 6px; }
+  input { width: 100%; min-height: 44px; border: 1px solid #dce0e8; border-radius: 12px; padding: 8px 12px; font: inherit; }
+  .o_woow_modal_footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+  :focus-visible { outline: 2px solid #6183fc; outline-offset: 3px; }
+  &:focus { outline: none; }
+}
+.o_woow_llm_key_action_backdrop { @media (max-width: $woow-bp-md) { align-items: stretch; } }

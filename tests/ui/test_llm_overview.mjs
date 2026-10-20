@@ -256,7 +256,7 @@ test("金鑰清單列：只有遮罩；免費試用的名稱、類型、今日�
     assert.equal(overview.llmKeyRow({ ...base, status }, now).statusLabel, "狀態不明", String(status));
   }
   assert.equal(overview.llmKeyRow({ ...base, expires_at: "2026-10-20T00:00:00Z" }, now).expiringSoon, true);
-  assert.equal(overview.llmKeyRow({ ...base, expires_at: null }, now).expires, "永不過期");
+  assert.equal(overview.llmKeyRow({ ...base, expires_at: null }, now).expires, "永不到期");
   assert.equal(overview.llmKeyRow({ ...base, kind: "paid", display_name: "n8n-正式" }, now).kind, "付費");
 });
 
@@ -556,16 +556,16 @@ test("已開通：已有試用金鑰就不能再建；說明給走得通的下�
 
   fake.overview = { ...ACTIVE, free_trial: { ...ACTIVE.free_trial, key_id: 9 } };
   assert.equal(tab.canCreateFreeTrialKey, false);
-  assert.match(tab.freeTrialExistsText, /Key Management/);
-  assert.match(tab.freeTrialExistsText, /disable or delete/);
+  assert.match(tab.freeTrialExistsText, /金鑰管理/);
+  assert.match(tab.freeTrialExistsText, /停用或刪除/);
   let destination = null;
   globalThis.__llmNavigate = (path) => { destination = path; };
   tab.goToKeyManagement();
   assert.equal(destination, "llm/keys");
   delete globalThis.__llmNavigate;
   fake.keys = [{ id: 9, kind: "free_trial", status: "expired" }];
-  assert.match(tab.freeTrialExistsText, /expired/);
-  assert.match(tab.freeTrialExistsText, /disable or delete/);
+  assert.match(tab.freeTrialExistsText, /已到期/);
+  assert.match(tab.freeTrialExistsText, /停用或刪除/);
 
   // 建立中超過 5 分鐘（worker 途中被殺）：仍然可以按〔建立〕（後端會先收尾）。
   const old = new Date(Date.now() - overview.STALE_CREATING_MS - 1000).toISOString();
@@ -723,7 +723,7 @@ test("對話框文案（§6.3.2）：標題跟著階段走；免費試用的內�
   const shown = openModal({ create: async () => ({ success: true, data: { key: KEY } }) });
   await mount(shown.modal);
   assert.equal(shown.modal.title, "請立即複製您的 API 金鑰");
-  assert.match(shown.modal.intro, /create a new key and disable or delete the old one/);
+  assert.match(shown.modal.intro, /建立新金鑰，並停用或刪除舊金鑰/);
   assert.deepEqual(shown.modal.copyLabels, {
     key: "複製金鑰", base: "複製 Base URL", model: "複製模型名稱", env: "複製為環境變數",
   });

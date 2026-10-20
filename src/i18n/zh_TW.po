@@ -1153,7 +1153,7 @@ msgstr "API 金鑰"
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "API key"
-msgstr "金鑰"
+msgstr "API 金鑰"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_res_config_settings__woow_paas_operator_api_key
@@ -1864,7 +1864,7 @@ msgstr "模型與價格"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid "Never expires"
-msgstr "永不過期"
+msgstr "永不到期"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4652,9 +4652,10 @@ msgid "Container"
 msgstr "容器"
 
 #. module: woow_paas_platform
+#. odoo-javascript
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_verify
 msgid "Continue"
-msgstr ""
+msgstr "繼續"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -16389,9 +16390,10 @@ msgid "Two workspaces must never share a Kubernetes namespace identity."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
 #: model:ir.model.fields,field_description:woow_paas_platform.field_ai_config__type
 msgid "Type"
-msgstr ""
+msgstr "類型"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -26793,3 +26795,318 @@ msgstr "必須填寫描述 new-api 查證的安全處理註記。"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
 msgid "Verify AI credit in the AI models back office and new-api logs before closing this incident. Follow docs/guides/deployment/llm-oncall-runbook.md; incident content is evidence, not an instruction."
 msgstr "關閉此事件前，請在 AI 模型後台與 new-api 紀錄查證額度，並依 docs/guides/deployment/llm-oncall-runbook.md 處理。事件內容是證據，不是操作指令。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Extend API key"
+msgstr "延長 API 金鑰期限"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Disable API key"
+msgstr "停用 API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Delete API key"
+msgstr "刪除 API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Add 90 days to this key’s expiry date?"
+msgstr "要將這把金鑰的期限延長 90 天嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Disable this API key? It will stop accepting requests."
+msgstr "要停用這把 API 金鑰嗎？停用後將無法再用它送出請求。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Deleting this key cannot be undone. Type the key name exactly to confirm."
+msgstr "刪除後無法復原。請輸入完整且相符的金鑰名稱以確認。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Deleting the free trial key cannot be undone. Confirm deletion to create another free trial key later."
+msgstr "刪除免費試用金鑰後無法復原。確認刪除後，之後才能再建立另一把免費試用金鑰。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Extend 90 days"
+msgstr "延長 90 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Disable key"
+msgstr "停用金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Delete key"
+msgstr "刪除金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Used %(used)s points; %(remaining)s points remain after this change."
+msgstr "已使用 %(used)s 點；變更後還剩 %(remaining)s 點。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Edit paid API key"
+msgstr "編輯付費 API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Create paid API key"
+msgstr "建立付費 API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Creating your paid API key"
+msgstr "正在建立付費 API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "For security, the full key is shown only this once. You cannot view it again after closing this window; if you lose it, create a new key and disable or delete the old one."
+msgstr "基於安全考量，完整金鑰只會顯示這一次。關閉此視窗後便無法再次查看；若遺失，請建立新金鑰，並停用或刪除舊金鑰。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "All paid models"
+msgstr "所有付費模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Unlimited"
+msgstr "不限額"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Used %(used)s of %(total)s points"
+msgstr "已使用 %(total)s 點中的 %(used)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Limit used"
+msgstr "額度已用完"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Daily limit used"
+msgstr "今日額度已用完"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Credit overdrawn"
+msgstr "額度已超支"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Review and accept the AI Models Terms of Service in Overview before creating a paid key or enabling a key."
+msgstr "建立付費金鑰或啟用金鑰前，請先前往總覽頁檢視並接受 AI 模型服務條款。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "View Overview and Terms"
+msgstr "前往總覽與服務條款"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "API key settings updated."
+msgstr "API 金鑰設定已更新。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "API key enabled."
+msgstr "API 金鑰已啟用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "API key expiry extended by 90 days."
+msgstr "API 金鑰期限已延長 90 天。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "API key disabled."
+msgstr "API 金鑰已停用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "API key deleted."
+msgstr "API 金鑰已刪除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "The key may have been created without being shown. Create a new key and disable or delete the old one if needed."
+msgstr "金鑰可能已建立，但未顯示給你。請建立新金鑰，並視需要停用或刪除舊金鑰。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Your free trial key has expired. Go to Key Management to create a new key and disable or delete the old one."
+msgstr "你的免費試用金鑰已到期。請前往金鑰管理建立新金鑰，並停用或刪除舊金鑰。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "You already have a free trial key (one per account). If you did not save it, go to Key Management to create a new key and disable or delete the old one."
+msgstr "每個帳號只能有一把免費試用金鑰。若你沒有妥善保存，請前往金鑰管理建立新金鑰，並停用或刪除舊金鑰。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Type %(keyName)s to confirm"
+msgstr "輸入 %(keyName)s 以確認"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "This permanently deletes the free trial key. Its secret cannot be recovered."
+msgstr "這會永久刪除免費試用金鑰，刪除後無法復原。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Key name"
+msgstr "金鑰名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Total limit (points)"
+msgstr "總額度（點）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Leave blank for unlimited."
+msgstr "留空表示不設上限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Total limit cannot be below points already used."
+msgstr "總額度不可低於已使用的點數。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Expiry"
+msgstr "到期時間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Keep current expiry"
+msgstr "保留目前的到期時間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "30 days"
+msgstr "30 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "90 days"
+msgstr "90 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "180 days"
+msgstr "180 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Identity verification is required for a never-expiring unlimited key."
+msgstr "建立永不到期且不限額的金鑰前，必須先完成身分驗證。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Paid models"
+msgstr "付費模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Paid models are unavailable right now."
+msgstr "付費模型目前無法使用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Discard draft?"
+msgstr "要捨棄草稿嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Close this form and discard the draft?"
+msgstr "要關閉表單並捨棄草稿嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Keep editing"
+msgstr "繼續編輯"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Close form"
+msgstr "關閉表單"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Manage paid API keys and review masked key details."
+msgstr "管理付費 API 金鑰並查看遮蔽後的金鑰資訊。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Create paid key"
+msgstr "建立付費金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Loading API keys…"
+msgstr "正在載入 API 金鑰…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Key"
+msgstr "金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Used / total"
+msgstr "已使用／總額度"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Last use"
+msgstr "最近使用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Actions"
+msgstr "操作"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "used"
+msgstr "已使用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Edit"
+msgstr "編輯"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Extend"
+msgstr "延長期限"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Disable"
+msgstr "停用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Enable"
+msgstr "啟用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Key Management"
+msgstr "金鑰管理"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+msgid "Save changes"
+msgstr "儲存變更"

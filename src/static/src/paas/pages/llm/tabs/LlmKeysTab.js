@@ -6,9 +6,11 @@ import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { LlmKeyFormModal } from "../../../components/llm/LlmKeyFormModal";
 import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
+import { LlmKeyActionConfirmModal } from "../../../components/llm/LlmKeyActionConfirmModal";
 import { llmService } from "../../../services/llm_service";
 import { llmErrorMessage } from "../../../services/llm_errors";
 import { formatTaipeiDateTime, isExpiringSoon } from "../../../utils/llm_format";
+import { router } from "../../../core/router";
 
 /** Only the cached catalog's paid/default group may be offered to a paid key. */
 export function paidKeyModels(items) {
@@ -80,20 +82,51 @@ export function keyRow(item) {
   };
 }
 
+const MANAGED_KEY_KINDS = new Set(["paid", "free_trial"]);
+const MANAGED_KEY_STATUSES = new Set([
+  "active", "disabled", "expired", "exhausted", "free_capped", "suspended", "overdraft", "failed_reveal",
+]);
+const PAID_MUTABLE_KEY_STATUSES = new Set([
+  "active", "disabled", "expired", "exhausted", "free_capped", "suspended", "overdraft",
+]);
+const CONFIRM_ACTIONS = new Set(["extend", "disable", "delete"]);
+const TOS_ERROR_CODES = new Set(["llm_tos_outdated", "llm_tos_required"]);
+
+export function keyActionEligibility(item, tosBlocking = false) {
+  const status = item && typeof item.status === "string" ? item.status : "unknown";
+  const managed = MANAGED_KEY_KINDS.has(item?.kind) && MANAGED_KEY_STATUSES.has(status);
+  if (!managed) return { edit: false, extend: false, disable: false, enable: false, delete: false };
+  if (status === "failed_reveal") return { edit: false, extend: false, disable: false, enable: false, delete: true };
+  const paidMutable = item.kind === "paid" && PAID_MUTABLE_KEY_STATUSES.has(status);
+  const hasExpiry = typeof item.expires_at === "string" && !!item.expires_at;
+  return {
+    edit: paidMutable,
+    extend: paidMutable && hasExpiry,
+    disable: status === "active",
+    enable: status === "disabled" && !tosBlocking,
+    delete: true,
+  };
+}
+
 function statusLabel(status) {
   const labels = { active: _t("Enabled"), disabled: _t("Disabled"), expired: _t("Expired"),
-    exhausted: _t("Limit used"), failed_reveal: _t("Creation interrupted"), unknown: _t("Unknown") };
+    exhausted: _t("Limit used"), free_capped: _t("Daily limit used"), suspended: _t("Suspended"),
+    overdraft: _t("Credit overdrawn"), failed_reveal: _t("Creation interrupted"), unknown: _t("Unknown") };
   return Object.hasOwn(labels, status) ? labels[status] : labels.unknown;
 }
 
 export class LlmKeysTab extends Component {
   static template = "woow_paas_platform.LlmKeysTab";
-  static components = { WoowIcon, WoowButton, LlmKeyFormModal, LlmKeyRevealModal };
+  static components = { WoowIcon, WoowButton, LlmKeyFormModal, LlmKeyRevealModal, LlmKeyActionConfirmModal };
   static props = {};
 
   setup() {
     this.service = useState(llmService);
-    this.state = useState({ loading: false, showForm: false, showReveal: false, pendingDraft: null, createError: null, extendConfirmation: null, notice: null });
+    this.state = useState({
+      loading: false, overviewReady: false, showForm: false, editKey: null, showReveal: false,
+      pendingDraft: null, createError: null, confirmation: null, busyKey: null, notice: null,
+      actionError: null, redirectToOverviewAfterReveal: false,
+    });
     this.keysHeadingRef = useRef("keysHeading");
     this.destroyed = false;
     this.extendConsumed = new Set();
@@ -101,7 +134,19 @@ export class LlmKeysTab extends Component {
     onWillUnmount(() => { this.destroyed = true; });
   }
 
-  get rows() { return this.service.keys.map(keyRow); }
+  get tosBlocking() {
+    if (this.state.overviewReady !== true) return true;
+    if (this.service.overviewLoaded !== true || this.service.overviewError) return true;
+    const tos = this.service.overview?.account?.tos;
+    if (!tos || typeof tos !== "object" || Array.isArray(tos)) return true;
+    if (typeof tos.blocking === "boolean") return tos.blocking;
+    return tos.needs_reaccept === true;
+  }
+  get termsBlockedMessage() {
+    return _t("Review and accept the AI Models Terms of Service in Overview before creating a paid key or enabling a key.");
+  }
+  get termsBlockedActionLabel() { return _t("View Overview and Terms"); }
+  get rows() { return this.service.keys.map((item) => ({ ...keyRow(item), ...keyActionEligibility(item, this.tosBlocking) })); }
   get errorText() { return this.service.keysError ? llmErrorMessage({ code: this.service.keysError }) : ""; }
   get emptyText() { return _t("No API keys yet."); }
   get title() { return _t("API keys"); }
@@ -114,9 +159,14 @@ export class LlmKeysTab extends Component {
   async refresh() {
     if (this.state.loading) return;
     this.state.loading = true;
-    await llmService.fetchKeys();
+    this.state.overviewReady = false;
+    let stateResult;
+    try {
+      [, stateResult] = await Promise.all([llmService.fetchKeys(), llmService.fetchState()]);
+    } catch { /* a failed refresh must leave terms fail-closed */ }
     if (this.destroyed) return;
     this.state.loading = false;
+    this.state.overviewReady = stateResult?.success === true;
     this.consumeExtendQuery();
   }
 
@@ -131,44 +181,158 @@ export class LlmKeysTab extends Component {
       globalThis.history.replaceState(globalThis.history.state, "", base + nextHash);
     }
     if (result.id !== null) {
-      this.state.extendConfirmation = result.id;
-      this.state.notice = _t("Review the 90-day extension for this key. No change has been submitted.");
+      const item = this.service.keys.find((key) => key.id === result.id);
+      if (item && keyActionEligibility(item, this.tosBlocking).extend) this.openConfirmation(item, "extend");
     }
   }
 
-  openCreate() { this.state.showForm = true; }
-  closeForm() { this.state.showForm = false; }
+  goToOverview() { if (!this.destroyed) router.navigate("llm"); }
+  openCreate() {
+    if (this.destroyed || this.state.busyKey != null) return;
+    if (this.tosBlocking) {
+      this.state.createError = this.termsBlockedMessage;
+      return;
+    }
+    this.state.createError = null;
+    this.state.redirectToOverviewAfterReveal = false;
+    this.state.showForm = true;
+  }
+  closeForm() { this.state.showForm = false; this.state.editKey = null; }
+  edit(item) {
+    if (!this.destroyed && this.state.busyKey == null && keyActionEligibility(item).edit) {
+      this.state.editKey = item;
+      this.state.showForm = true;
+    }
+  }
+  openConfirmation(item, action) {
+    if (this.destroyed || this.state.busyKey != null || !CONFIRM_ACTIONS.has(action)) return;
+    const eligible = keyActionEligibility(item, this.tosBlocking);
+    if (!eligible[action]) return;
+    this.state.confirmation = { item, action };
+    this.state.actionError = null;
+  }
+  closeConfirmation() { if (!this.destroyed && this.state.busyKey == null) this.state.confirmation = null; }
+  async saveEdit(item, changes) {
+    if (this.destroyed || this.state.busyKey != null || !keyActionEligibility(item).edit
+        || !changes || typeof changes !== "object" || Array.isArray(changes) || !Object.keys(changes).length) {
+      return { success: false, code: "llm_key_invalid" };
+    }
+    this.state.busyKey = item.id;
+    this.state.actionError = null;
+    let result;
+    try { result = await llmService.updateKey(item.id, changes); }
+    catch { result = { success: false, code: "llm_internal_error" }; }
+    if (this.destroyed) return result;
+    this.state.busyKey = null;
+    if (result?.success) { this.state.showForm = false; this.state.editKey = null; this.state.notice = _t("API key settings updated."); }
+    return result;
+  }
+  async enable(item) {
+    if (this.destroyed || this.state.busyKey != null || !keyActionEligibility(item).enable) return;
+    if (this.tosBlocking) {
+      this.state.actionError = this.termsBlockedMessage;
+      return { success: false, code: "llm_tos_required" };
+    }
+    this.state.busyKey = item.id;
+    this.state.actionError = null;
+    let result;
+    try { result = await llmService.setKeyStatus(item.id, true); }
+    catch { result = { success: false, code: "llm_internal_error" }; }
+    if (this.destroyed) return result;
+    const termsOutdated = TOS_ERROR_CODES.has(result?.code);
+    if (termsOutdated) {
+      this.state.overviewReady = false;
+      let stateResult;
+      try { stateResult = await llmService.fetchState(); } catch { /* safe service failures leave enable blocked */ }
+      if (this.destroyed) return result;
+      this.state.overviewReady = stateResult?.success === true;
+    }
+    this.state.busyKey = null;
+    if (result?.success) this.state.notice = _t("API key enabled.");
+    else {
+      this.state.actionError = llmErrorMessage(result);
+      if (termsOutdated) {
+        this.state.notice = llmErrorMessage(result);
+        router.navigate("llm");
+      }
+    }
+  }
+  async confirmAction(confirmName) {
+    const pending = this.state.confirmation;
+    if (!pending || this.destroyed || this.state.busyKey != null || !CONFIRM_ACTIONS.has(pending.action)) return;
+    const { item, action } = pending;
+    if (!keyActionEligibility(item, this.tosBlocking)[action]) return;
+    if (action === "delete" && item.kind === "paid"
+        && (typeof item.display_name !== "string" || confirmName !== item.display_name)) return;
+    if (action === "delete" && item.kind === "free_trial") confirmName = "";
+    this.state.busyKey = item.id;
+    this.state.actionError = null;
+    let result;
+    try {
+      if (action === "extend") result = await llmService.extendKey(item.id);
+      else if (action === "disable") result = await llmService.setKeyStatus(item.id, false);
+      else if (action === "delete") result = await llmService.deleteKey(item.id, confirmName);
+    } catch { result = { success: false, code: "llm_internal_error" }; }
+    if (this.destroyed) return result;
+    this.state.busyKey = null;
+    if (result?.success) {
+      this.state.confirmation = null;
+      this.state.notice = action === "extend" ? _t("API key expiry extended by 90 days.")
+        : action === "disable" ? _t("API key disabled.") : _t("API key deleted.");
+    } else this.state.actionError = llmErrorMessage(result);
+    return result;
+  }
   onDraft(draft) {
+    if (this.destroyed) return;
+    if (this.tosBlocking) {
+      this.state.pendingDraft = null;
+      this.state.showForm = false;
+      this.state.showReveal = false;
+      this.state.createError = this.termsBlockedMessage;
+      return;
+    }
     this.state.pendingDraft = { ...draft, models: draft.models === null ? null : [...draft.models] };
     this.state.showForm = false;
     this.state.createError = null;
+    this.state.redirectToOverviewAfterReveal = false;
     this.state.showReveal = true;
   }
-  createPendingPaidKey(requestId) {
+  async createPendingPaidKey(requestId) {
     this.state.createError = null;
-    return Promise.resolve().then(() => llmService.createPaidKey(requestId, this.state.pendingDraft)).then((result) => {
-      if (!result || !result.success) this.setCreateError(result);
-      return result;
-    }, () => {
-      const result = { success: false, code: "llm_key_create_interrupted" };
-      this.setCreateError(result);
-      return result;
-    });
+    let result;
+    try { result = await llmService.createPaidKey(requestId, this.state.pendingDraft); }
+    catch { result = { success: false, code: "llm_key_create_interrupted" }; }
+    if (this.destroyed) return result;
+    if (!result || !result.success) this.setCreateError(result);
+    if (TOS_ERROR_CODES.has(result?.code)) {
+      this.state.overviewReady = false;
+      let stateResult;
+      try { stateResult = await llmService.fetchState(); } catch { /* terms remain fail-closed */ }
+      if (this.destroyed) return result;
+      this.state.overviewReady = stateResult?.success === true;
+      this.state.redirectToOverviewAfterReveal = true;
+    }
+    return result;
   }
   setCreateError(result) {
     this.state.createError = result && typeof result.code === "string"
       ? llmErrorMessage({ code: result.code }) : _t("The key may have been created without being shown. Create a new key and disable or delete the old one if needed.");
   }
+  focusKeysHeading() {
+    const heading = this.keysHeadingRef.el;
+    if (heading && heading.isConnected !== false && typeof heading.focus === "function") heading.focus();
+  }
   onRevealClosed() {
+    if (this.destroyed) return;
+    const redirectToOverview = this.state.redirectToOverviewAfterReveal;
     this.state.showReveal = false;
     this.state.pendingDraft = null;
-    const heading = this.keysHeadingRef.el;
-    if (heading && typeof heading.focus === "function") heading.focus();
+    this.state.redirectToOverviewAfterReveal = false;
+    if (redirectToOverview) {
+      router.navigate("llm");
+      return;
+    }
+    this.focusKeysHeading();
     llmService.fetchKeys();
-  }
-  cancelExtend() { this.state.extendConfirmation = null; }
-  confirmExtend() {
-    this.state.extendConfirmation = null;
-    this.state.notice = _t("Extension request is ready for the next implementation step.");
   }
 }
