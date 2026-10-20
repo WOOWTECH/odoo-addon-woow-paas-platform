@@ -45,7 +45,7 @@ test("page connects paid and free reveals and consumes the key in the docs compo
   assert.match(pageXml, /<LlmKeysTab\b[^>]*onOpenDocs\.bind="openDocsWithKey"/);
   assert.match(pageXml, /<LlmDocsTab\b[^>]*initialKey="docsKeyHandoff\.peekKey\(\)"[^>]*initialMode="docsKeyHandoff\.peekMode\(\)"[^>]*initialAllowedModels="docsKeyHandoff\.peekAllowedModels\(\)"[^>]*onConsumeKey\.bind="consumeDocsKey"/);
   assert.match(source, /openDocsWithKey\(key, kind, allowedModels\)[\s\S]{0,180}docsKeyHandoff\.put\(key,[\s\S]{0,120}allowedModels/);
-  assert.match(source, /onWillUnmount\(\(\)\s*=>\s*this\.docsKeyHandoff\.clear\(\)\)/);
+  assert.match(source, /onWillUnmount\(\(\)\s*=>\s*\{[\s\S]*?this\.docsKeyHandoff\.clear\(\)[\s\S]*?this\.clearNotMe\(\)/);
   assert.match(source, /setTab\(tab\)\s*\{[\s\S]{0,180}docsKeyHandoff\.clear\(\)/);
   assert.match(source, /onWillUpdateProps\(\(nextProps\)[\s\S]{0,150}normalizeLlmTab\(nextProps\.tab\) !== "docs"[\s\S]{0,100}docsKeyHandoff\.clear\(\)/);
   assert.match(routes, /LLM_LIVE_TABS\s*=\s*Object\.freeze\(\[[^\]]*"docs"/);

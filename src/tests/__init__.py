@@ -1265,3 +1265,6 @@ from . import test_llm_credit_visibility
 from . import test_llm_credit_worker
 # LLM-07：付費／免費試用金鑰鏡像的總額上限、狀態與管理契約。
 from . import test_llm_api_key_management
+
+from . import test_llm_notifications
+from . import test_llm_notification_suspension

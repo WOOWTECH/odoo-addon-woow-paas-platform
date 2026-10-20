@@ -8,6 +8,19 @@
         <p t-if="blockedText" role="status" t-esc="blockedText"/>
         <button type="button" t-att-disabled="!!blockedText" t-on-click="openConvert">Convert points</button>
       </div>
+      <section t-if="thresholdVisible" class="o_woow_llm_credit__threshold" aria-labelledby="llm_threshold_title">
+        <h3 id="llm_threshold_title">Low balance reminder</h3>
+        <p>Choose the balance at which you want to be notified. Enter whole points from 0 to 100,000.</p>
+        <label for="llm_low_balance_threshold">Notify me below (points)</label>
+        <input id="llm_low_balance_threshold" type="number" min="0" max="100000" step="1" inputmode="numeric"
+               t-att-value="state.threshold" t-att-aria-invalid="thresholdInputError ? 'true' : 'false'"
+               t-att-aria-describedby="thresholdInputError ? 'llm_threshold_error' : false"
+               t-on-input="(ev) => this.setThreshold(ev.target.value)" t-att-disabled="state.savingThreshold"/>
+        <p t-if="thresholdInputError" id="llm_threshold_error" role="alert" t-esc="thresholdInputErrorText"/>
+        <p t-if="state.thresholdError" role="alert" t-esc="thresholdSaveErrorText"/>
+        <p t-if="state.thresholdNotice" role="status" t-esc="state.thresholdNotice"/>
+        <button type="button" t-att-disabled="state.savingThreshold || !!thresholdInputError" t-on-click="saveThreshold">Save threshold</button>
+      </section>
       <div class="o_woow_llm_credit__heading"><h3>Conversion history</h3><button type="button" t-att-disabled="state.loading" t-on-click="refresh">Refresh</button></div>
       <p t-if="state.error" role="alert" t-esc="state.error"/>
       <p t-if="state.loading" role="status">Loading conversions…</p>

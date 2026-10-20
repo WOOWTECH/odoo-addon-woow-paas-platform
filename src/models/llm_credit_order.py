@@ -272,12 +272,14 @@ class LlmCreditOrder(models.Model):
     incident_id = fields.Many2one('woow.billing.incident', readonly=True,
                                   ondelete='restrict', copy=False)
     notified_state = fields.Selection(selection=[(s, s) for s in
-                                                 ('credited', 'needs_review', 'voided',
+                                                 ('unknown', 'credited', 'needs_review', 'voided',
                                                   'cancelled', 'void_failed', 'credit_lost')],
                                       readonly=True, copy=False)
     # Acceptance and terminal mail have separate durable lifecycles. LLM-11
     # consumes the former; notified_state remains terminal-only.
     acceptance_notice_pending = fields.Boolean(readonly=True, default=False, copy=False)
+    acceptance_notice_retry_at = fields.Datetime(readonly=True, copy=False)
+    state_notice_retry_at = fields.Datetime(readonly=True, copy=False)
     # The event belongs to this attempt, not the entire order lifetime. Worker
     # retries reserve a fresh event and retain prior audit rows unchanged.
     # Scalar audit reference, deliberately without a foreign key. The event
@@ -602,6 +604,7 @@ class LlmCreditOrder(models.Model):
                     # this pointer can ever be replaced on a later attempt.
                     # The trigger row and paid order commit or roll back as one.
                     self.env.ref(CREDIT_CRON_XMLID).sudo()._trigger()
+                    self.env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()._trigger()
                 else:
                     order = existing
         except Exception:
@@ -1675,6 +1678,7 @@ class LlmCreditOrder(models.Model):
                 'woow_paas_platform.llm_runtime_state']._llm_read().get('dr_mode'):
             raise ValidationError(_('Lost credit may only be recorded in recovery mode.'))
         values['state'] = state
+        values['state_notice_retry_at'] = False
         return self.with_context(**{_TRANSITION_KEY: _TRANSITION_CAPABILITY}).write(values)
 
     @api.model

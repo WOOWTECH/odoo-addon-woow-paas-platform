@@ -34,6 +34,20 @@
           <p t-esc="comingSoonText"/>
         </div>
       </div>
+      <div t-if="notMeState.confirmation" class="o_woow_modal_backdrop o_woow_llm_not_me_backdrop" role="presentation">
+        <section class="o_woow_modal o_woow_llm_not_me" role="alertdialog" aria-modal="true" aria-labelledby="llm_not_me_title" aria-describedby="llm_not_me_description">
+          <h2 id="llm_not_me_title">Report activity that was not yours?</h2>
+          <p id="llm_not_me_description">Confirming will suspend your AI Models account and begin disabling its API keys. Keys may take a short time to stop working. Converted AI credit cannot be refunded.</p>
+          <p t-if="notMeErrorText" role="alert" t-esc="notMeErrorText"/>
+          <div class="o_woow_modal_footer">
+            <button type="button" t-att-disabled="notMeState.busy" t-on-click="dismissNotMe">Cancel</button>
+            <button type="button" t-if="notMeToken" t-att-disabled="notMeState.busy" t-on-click="confirmNotMe">
+              <t t-if="notMeState.busy">Submitting…</t><t t-else="">Suspend account</t>
+            </button>
+          </div>
+        </section>
+      </div>
+      <p t-if="notMeState.done" role="status">Your AI Models account has been suspended.</p>
     </div>
   </t>
 </templates>

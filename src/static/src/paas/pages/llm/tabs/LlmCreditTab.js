@@ -15,11 +15,13 @@ export class LlmCreditTab extends Component {
 
   setup() {
     this.service = useState(llmService);
-    this.state = useState({ items: [], total: 0, page: 1, loading: false, error: null, showConvert: false });
+    this.state = useState({ items: [], total: 0, page: 1, loading: false, error: null, showConvert: false,
+      threshold: "50", thresholdError: null, thresholdNotice: null, savingThreshold: false });
     this.destroyed = false;
     this.pollTimer = null;
     this.pollCount = 0;
     this.loadSeq = 0;
+    this.thresholdInitialized = false;
     this.walletStates = new Map();
     onMounted(() => this.refresh());
     onWillUnmount(() => { this.destroyed = true; this.clearPoll(); });
@@ -41,16 +43,22 @@ export class LlmCreditTab extends Component {
     return "";
   }
   get pageText() { return _t("Page %(page)s", { page: this.state.page }); }
+  get thresholdVisible() { return ["active", "suspended"].includes(this.service.overview?.account?.state); }
   get rows() { return this.state.items.map(order => ({ ...order, time: formatTaipeiDateTime(order.created_at), status: creditOrderText(order.state) })); }
   async load(page = this.state.page, { refreshState = false } = {}) {
     const seq = ++this.loadSeq;
     this.clearPoll();
     this.state.loading = true;
-    const [result] = await Promise.all([
+    const [result, stateResult] = await Promise.all([
       llmService.fetchCreditOrders(page, 20),
       refreshState ? llmService.fetchState() : Promise.resolve(null),
     ]);
     if (this.destroyed || seq !== this.loadSeq) return;
+    if (refreshState && stateResult?.success && !this.thresholdInitialized) {
+      const value = stateResult.data?.account?.low_balance_threshold;
+      this.state.threshold = Number.isInteger(value) && value >= 0 && value <= 100000 ? String(value) : "50";
+      this.thresholdInitialized = true;
+    }
     if (result.success && Array.isArray(result.data?.items)) {
       // Keep the Header wallet current even if a conversion finishes after its modal closes.
       const walletChanged = result.data.items.some(order => this.walletStates.get(order.id) !== order.state);
@@ -75,6 +83,38 @@ export class LlmCreditTab extends Component {
     }
   }
   refresh() { return this.load(this.state.page, { refreshState: true }); }
+  get thresholdInputError() {
+    const raw = this.state.threshold;
+    return typeof raw === "string" && /^(0|[1-9]\d*)$/.test(raw) && Number(raw) <= 100000 ? null : "llm_settings_invalid";
+  }
+  get thresholdInputErrorText() {
+    return this.thresholdInputError ? llmErrorMessage({ code: this.thresholdInputError }) : "";
+  }
+  get thresholdSaveErrorText() {
+    return this.state.thresholdError ? llmErrorMessage({ code: this.state.thresholdError }) : "";
+  }
+  setThreshold(value) {
+    this.state.threshold = value;
+    this.state.thresholdError = null;
+    this.state.thresholdNotice = null;
+  }
+  async saveThreshold() {
+    if (this.state.savingThreshold || this.thresholdInputError) return;
+    this.state.savingThreshold = true;
+    this.state.thresholdError = null;
+    this.state.thresholdNotice = null;
+    let result;
+    try { result = await llmService.updateSettings(Number(this.state.threshold)); }
+    catch { result = { success: false, code: "llm_internal_error" }; }
+    if (this.destroyed) return;
+    this.state.savingThreshold = false;
+    if (result?.success) {
+      if (this.service.overview?.account) this.service.overview.account.low_balance_threshold = Number(this.state.threshold);
+      this.state.thresholdNotice = _t("Low balance threshold saved.");
+    } else {
+      this.state.thresholdError = result?.code || "llm_internal_error";
+    }
+  }
   openConvert() { if (!this.blockedText) this.state.showConvert = true; }
   onConvertClose() {
     this.state.showConvert = false;

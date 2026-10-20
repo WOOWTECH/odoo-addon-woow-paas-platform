@@ -218,6 +218,7 @@ class LlmAlert(enum.Enum):
     #: A conversion needs human review; no refund or credit is asserted.
     CREDIT_REVIEW = 'credit_review'
     CREDIT_BUDGET = 'credit_budget'
+    NOT_ME_REPORTED = 'not_me_reported'
 
 
 class LlmIncident(enum.Enum):

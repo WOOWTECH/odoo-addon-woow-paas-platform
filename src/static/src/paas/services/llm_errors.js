@@ -102,6 +102,8 @@ const CODE_MAP = Object.assign(Object.create(null), {
       : _t("After this conversion your points wallet may not cover renewals due within 7 days.");
   },
   llm_no_refund_ack_required: () => _t("Please confirm that converted AI credit cannot be refunded."),
+  llm_settings_invalid: () => _t("Enter a whole number from 0 to 100,000 points."),
+  llm_not_me_invalid: () => _t("This security link is invalid or has expired. Please contact support if you need help."),
   llm_invalid_range: () => _t("You can query at most 31 days at a time."),
   llm_invalid_filter: () => _t("One or more usage filters are invalid."),
   llm_account_error: () => _t("Setting up your AI models account failed. Please contact support."),
