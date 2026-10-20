@@ -159,9 +159,13 @@ class _SubsetAttempt:
     """#1682：``_quota_attempt_fingerprint`` 回傳的 marker——這次只同步了工作區的子集。
 
     子集的結果不能代表整個工作區，所以不記指紋、不動重試額度（見 ``_record_quota_sync``）。
+    布林值為假：沿用「指紋非空＝整個工作區的嘗試」的判斷（例如 #1681 清除降額授權）。
     """
 
     __slots__ = ()
+
+    def __bool__(self):
+        return False
 
     def __repr__(self):
         return '<workspace quota subset attempt>'
@@ -416,9 +420,10 @@ class WorkspaceQuotaPolicy(models.Model):
     def action_retry_quota_sync(self):
         """#1680 管理員手動重試：重置自動重試額度，以最新政策與服務集合立即同步。
 
-        與背景重試走同一個同步（同樣的鎖、讀取、不降額與防護），所以不能用來繞過任何安全
-        檢查——會降低叢集任何一項的推送照樣不送。不改政策，所以不寫異動紀錄（ledger）；只在
-        監控 chatter 留一行誰在何時手動重試。
+        與背景重試走同一個同步（同樣的鎖、讀取、安全降額與防護），所以不能用來繞過任何安全
+        檢查——#1682 起與背景一樣會把已保存的目標安全降下來（重讀用量、5 項全部容得下才降），
+        非降不可的項（例如 pvc）與用量不足的降額照樣不送。不改政策，所以不寫異動紀錄
+        （ledger）；只在監控 chatter 留一行誰在何時手動重試。
         """
         if not self.env.user.has_group('base.group_system'):
             raise AccessError(_('Only system administrators may retry Workspace quota sync.'))
@@ -432,7 +437,8 @@ class WorkspaceQuotaPolicy(models.Model):
             'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync retried manually by '
             '%(login)s (uid %(uid)s)', name=workspace.name, id=workspace.id,
             ws_hash=workspace.ws_hash, login=actor.login, uid=actor.id))
-        result = workspace._quota_sync('manual')
+        # #1682：與背景重試同一套安全降額（重讀用量、全部安全才降），避免「背景會降、手動不降」。
+        result = workspace._quota_sync('manual', allow_lower=True)
         state = result.get('state')
         if state == 'synced':
             message, kind = _('Quota synced with the cluster.'), 'success'
@@ -783,7 +789,9 @@ class WorkspaceQuotaPolicy(models.Model):
         trigger = workspace._quota_reconcile_trigger()
         if not trigger:
             return {'state': 'skipped'}
-        return workspace._quota_sync(trigger, nowait=True)
+        # #1682：背景是生命週期降額的後續（被用量擋下的降額要靠它收回），一律走安全降額。
+        # 已保存的政策都是合法的（未確認的人工降額不會被保存，見 #1681），所以不必分辨降額來源。
+        return workspace._quota_sync(trigger, nowait=True, allow_lower=True)
 
     def _quota_create_namespace(self, client, namespace):
         """開通路徑（``create_namespace``）的同一個政策：必要時才降級成不送 quota。
