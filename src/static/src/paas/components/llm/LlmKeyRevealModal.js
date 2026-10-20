@@ -7,7 +7,7 @@ import { WoowIcon } from "../icon/WoowIcon";
 import { router } from "../../core/router";
 import { copyText } from "../../utils/clipboard";
 import { inertOutside, trapTab } from "../../utils/modal_focus";
-import { llmService, newClientRequestId } from "../../services/llm_service";
+import { newClientRequestId } from "../../services/llm_service";
 import { LLM_KEY_CREATE_INTERRUPTED, llmErrorMessage } from "../../services/llm_errors";
 
 /** 免費試用金鑰的範例模型（DESIGN §6.3.6）；兩個 Qwen 都能叫，教學用 cluster1 這個。 */
@@ -36,7 +36,7 @@ const GUARDED_PHASES = new Set(["creating", "shown"]);
 /**
  * 一次性金鑰對話框（DESIGN §5.4、§6.3.2；參考 OneTimeCredentialsModal）。
  *
- * **建立金鑰的請求由本元件自己送**，明文只放在本元件的 state：不經頁面 state、不進
+ * **建立金鑰的請求由本元件透過 callback 送出**，明文只放在本元件的 state：不經頁面 state、不進
  * llm_service 的 store；關閉（或元件卸載）時清掉。流程：
  *
  *   creating（送出中，不能關：關了就再也拿不到明文，而免費試用每帳號只有一把）
@@ -60,8 +60,9 @@ export class LlmKeyRevealModal extends Component {
   static template = "woow_paas_platform.LlmKeyRevealModal";
   static components = { WoowButton, WoowIcon };
   static props = {
-    // 本票只有免費試用（付費金鑰在 LLM-07，會帶建立表單的欄位進來）。
-    kind: { type: String, validate: (kind) => kind === "free_trial" },
+    kind: { type: String, validate: (kind) => kind === "free_trial" || kind === "paid" },
+    allowedModels: { type: Array, optional: true },
+    createKey: { type: Function },
     // `/api/llm/state` 的 public_base_url；建金鑰的回應有帶 base_url 時以回應為準。
     baseUrl: { type: String, optional: true },
     // 關閉後通知頁面：{ created: boolean }（頁面據此重新整理清單；不帶任何金鑰內容）。
@@ -73,6 +74,8 @@ export class LlmKeyRevealModal extends Component {
       phase: "creating",
       key: null,
       baseUrl: this.props.baseUrl || null,
+      models: Array.isArray(this.props.models) ? [...this.props.models] : null,
+      modelAllowlist: Array.isArray(this.props.allowedModels) ? [...this.props.allowedModels] : [],
       maskedKey: null,
       errorMessage: null,
       saved: false,
@@ -162,7 +165,7 @@ export class LlmKeyRevealModal extends Component {
   async create() {
     let result;
     try {
-      result = await llmService.createFreeTrialKey(this.clientRequestId);
+      result = await this.props.createKey(this.clientRequestId);
     } catch {
       // llm_service 的契約是不丟例外；萬一丟了，當成「沒拿到回應」。
       result = { success: false, code: LLM_KEY_CREATE_INTERRUPTED };
@@ -198,7 +201,7 @@ export class LlmKeyRevealModal extends Component {
   /** 標題跟著階段走：建立中、沒建成時都不能說「請立即複製」（使用者會以為有東西可複製）。 */
   get title() {
     if (this.state.phase === "creating") {
-      return _t("Creating your free trial key");
+      return this.isFreeTrial ? _t("Creating your free trial key") : _t("Creating your paid API key");
     }
     if (this.state.phase === "error") {
       return _t("The key was not created");
@@ -206,12 +209,9 @@ export class LlmKeyRevealModal extends Component {
     return _t("Copy your API key now");
   }
 
-  /**
-   * 免費試用金鑰在金鑰管理（LLM-07）上線前不能停用或刪除，所以不能照 DESIGN §6.3.2 寫
-   * 「遺失時請建立新金鑰並停用舊的」；付費金鑰上線時再換回 DESIGN 的句子。
-   */
+  /** Both key types recover by creating a replacement and disabling or deleting the old key. */
   get intro() {
-    return _t("For security, the full key is shown only this once. You cannot view it again after closing this window; if you lose it, please contact support to reset it.");
+    return _t("For security, the full key is shown only this once. You cannot view it again after closing this window; if you lose it, create a new key and disable or delete the old one.");
   }
 
   get creatingText() {
@@ -220,6 +220,23 @@ export class LlmKeyRevealModal extends Component {
 
   get freeTrialHint() {
     return _t("Free trial keys can only call Qwen3-4B: 10 calls per minute and about 200 calls per day.");
+  }
+
+  get isFreeTrial() { return this.props.kind === "free_trial"; }
+
+  get displayedModels() {
+    if (this.isFreeTrial) return [FREE_TRIAL_EXAMPLE_MODEL];
+    if (!this.state.modelAllowlist.length || this.state.models === null) return [];
+    const allowed = new Set(this.state.modelAllowlist);
+    return this.state.models.filter((model) => allowed.has(model));
+  }
+
+  get allPaidModels() {
+    return !this.isFreeTrial && this.state.models === null;
+  }
+
+  get paidModelsText() {
+    return this.state.models === null ? _t("All paid models") : this.displayedModels.join(", ");
   }
 
   get closeConfirmText() {
@@ -289,7 +306,7 @@ export class LlmKeyRevealModal extends Component {
     } else if (what === "env") {
       text = buildEnvVarsText(this.state.key, this.state.baseUrl);
     } else if (what === "model") {
-      text = FREE_TRIAL_EXAMPLE_MODEL;
+      text = this.isFreeTrial ? FREE_TRIAL_EXAMPLE_MODEL : this.displayedModels[0];
     }
     const ok = text ? await copyText(text) : false;
     if (this.destroyed) return;
@@ -336,6 +353,8 @@ export class LlmKeyRevealModal extends Component {
 
   forgetKey() {
     this.state.key = null;
+    this.state.models = null;
+    this.state.modelAllowlist = [];
   }
 
   onBackdropClick(ev) {

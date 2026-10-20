@@ -60,15 +60,19 @@
 
             <div class="o_woow_llm_reveal__field">
               <div class="o_woow_llm_reveal__label">Model</div>
-              <code class="o_woow_llm_reveal__value" t-esc="exampleModel"/>
-              <div class="o_woow_llm_reveal__actions">
+              <code t-if="isFreeTrial" class="o_woow_llm_reveal__value" t-esc="exampleModel"/>
+              <code t-elif="allPaidModels" class="o_woow_llm_reveal__value" t-esc="paidModelsText"/>
+              <div t-elif="!isFreeTrial" class="o_woow_llm_reveal__model_list">
+                <code t-foreach="displayedModels" t-as="model" t-key="model" class="o_woow_llm_reveal__value" t-esc="model"/>
+              </div>
+              <div t-if="isFreeTrial" class="o_woow_llm_reveal__actions">
                 <WoowButton variant="'secondary'" size="'sm'" ariaLabel="copyLabels.model" onClick="() => this.copy('model')">
                   <WoowIcon name="'content_copy'" size="16"/>
                   <t t-if="state.copied === 'model'">Copied.</t>
                   <t t-else="">Copy</t>
                 </WoowButton>
               </div>
-              <p class="o_woow_hint" t-esc="freeTrialHint"/>
+              <p t-if="isFreeTrial" class="o_woow_hint" t-esc="freeTrialHint"/>
             </div>
 
             <!-- 沒有 Base URL 就不給〔複製為環境變數〕：只有金鑰那行的話，工具會連到預設的 OpenAI。 -->

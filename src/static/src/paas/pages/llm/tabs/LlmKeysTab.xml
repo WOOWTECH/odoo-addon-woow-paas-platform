@@ -11,6 +11,7 @@
         <p t-esc="errorText"/><WoowButton variant="'secondary'" onClick.bind="refresh">Retry</WoowButton>
       </div>
       <p t-if="state.notice" role="status" t-esc="state.notice"/>
+      <p t-if="state.createError" role="alert" class="o_woow_llm_keys__error" t-esc="state.createError"/>
       <p t-if="state.extendConfirmation !== null" class="o_woow_llm_keys__confirm" role="status">
         Extend this key by 90 days? This is a confirmation preview; no request has been sent.
         <button type="button" t-on-click="confirmExtend">Continue</button>
@@ -39,6 +40,7 @@
         </article>
       </div>
       <LlmKeyFormModal t-if="state.showForm" onClose.bind="closeForm" onDraft.bind="onDraft"/>
+      <LlmKeyRevealModal t-if="state.showReveal" kind="'paid'" allowedModels="paidModelAllowlist" models="state.pendingDraft.models" baseUrl="paidBaseUrl" createKey.bind="createPendingPaidKey" onClose.bind="onRevealClosed"/>
     </section>
   </t>
 </templates>

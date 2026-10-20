@@ -5,6 +5,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
 import { LlmKeyFormModal } from "../../../components/llm/LlmKeyFormModal";
+import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
 import { llmService } from "../../../services/llm_service";
 import { llmErrorMessage } from "../../../services/llm_errors";
 import { formatTaipeiDateTime, isExpiringSoon } from "../../../utils/llm_format";
@@ -87,12 +88,12 @@ function statusLabel(status) {
 
 export class LlmKeysTab extends Component {
   static template = "woow_paas_platform.LlmKeysTab";
-  static components = { WoowIcon, WoowButton, LlmKeyFormModal };
+  static components = { WoowIcon, WoowButton, LlmKeyFormModal, LlmKeyRevealModal };
   static props = {};
 
   setup() {
     this.service = useState(llmService);
-    this.state = useState({ loading: false, showForm: false, extendConfirmation: null, notice: null });
+    this.state = useState({ loading: false, showForm: false, showReveal: false, pendingDraft: null, createError: null, extendConfirmation: null, notice: null });
     this.destroyed = false;
     this.extendConsumed = new Set();
     onMounted(() => this.refresh());
@@ -103,6 +104,11 @@ export class LlmKeysTab extends Component {
   get errorText() { return this.service.keysError ? llmErrorMessage({ code: this.service.keysError }) : ""; }
   get emptyText() { return _t("No API keys yet."); }
   get title() { return _t("API keys"); }
+  get paidBaseUrl() {
+    const value = this.service.overview && this.service.overview.public_base_url;
+    return typeof value === "string" && value ? value : undefined;
+  }
+  get paidModelAllowlist() { return paidKeyModels(this.service.models?.items).map((item) => item.model); }
 
   async refresh() {
     if (this.state.loading) return;
@@ -132,10 +138,26 @@ export class LlmKeysTab extends Component {
   openCreate() { this.state.showForm = true; }
   closeForm() { this.state.showForm = false; }
   onDraft(draft) {
-    // Task 9 owns the only one-time plaintext boundary. Keep this safe draft for its callback handoff.
+    this.state.pendingDraft = { ...draft, models: draft.models === null ? null : [...draft.models] };
     this.state.showForm = false;
-    this.state.notice = _t("Draft ready for secure creation handoff.");
-    this.props.onPaidDraft?.(draft);
+    this.state.createError = null;
+    this.state.showReveal = true;
+  }
+  createPendingPaidKey(requestId) {
+    return llmService.createPaidKey(requestId, this.state.pendingDraft).then((result) => {
+      if (!result || !result.success) this.setCreateError(result);
+      return result;
+    });
+  }
+  setCreateError(result) {
+    this.state.createError = result && typeof result.code === "string"
+      ? llmErrorMessage({ code: result.code }) : _t("The key may have been created without being shown. Create a new key and disable or delete the old one if needed.");
+  }
+  onRevealClosed() {
+    this.state.showReveal = false;
+    this.state.pendingDraft = null;
+    this.state.createError = null;
+    llmService.fetchKeys();
   }
   cancelExtend() { this.state.extendConfirmation = null; }
   confirmExtend() {

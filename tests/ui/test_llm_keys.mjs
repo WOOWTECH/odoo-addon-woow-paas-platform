@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readPaas, stubImports, toDataUrl } from "./lib/llm_test_support.mjs";
 
+const owlStub = "class Component {} const onMounted = (fn) => { globalThis.__keyHooks.mounted.push(fn); }; const onWillUnmount = (fn) => { globalThis.__keyHooks.unmount.push(fn); }; const useState = (value) => value;";
+globalThis.__keyHooks = { mounted: [], unmount: [] };
+
 const routesSource = await readPaas("core/llm_routes.js");
 const routes = await import(toDataUrl(routesSource));
 
@@ -19,10 +22,23 @@ const serviceSource = stubImports(await readPaas("services/llm_service.js"), {
 const serviceUrl = toDataUrl(serviceSource);
 const { llmService, KEY_CREATE_TIMEOUT_MS } = await import(serviceUrl);
 
-const modelsSource = stubImports(await readPaas("pages/llm/tabs/LlmModelsTab.js"), {
-  "@odoo/owl": "class Component {} const onMounted = () => {}; const onWillUnmount = () => {}; const useState = (value) => value;",
+const revealModalSource = stubImports(await readPaas("components/llm/LlmKeyRevealModal.js"), {
+  "@odoo/owl": "class Component {} const useState = (value) => value; const useRef = () => ({ el: null }); const onMounted = () => {}; const onPatched = () => {}; const onWillUnmount = () => {};",
   "@web/core/l10n/translation": "const _t = (message) => message;",
-  "../../../services/llm_service": `const llmService = (await import("${serviceUrl}")).llmService;`,
+  "../button/WoowButton": "const WoowButton = {};",
+  "../icon/WoowIcon": "const WoowIcon = {};",
+  "../../core/router": "const router = { setLeaveGuard: () => () => {} };",
+  "../../utils/clipboard": "const copyText = async () => true;",
+  "../../utils/modal_focus": "const inertOutside = () => () => {}; const trapTab = () => {};",
+  "../../services/llm_service": "const newClientRequestId = () => 'request-paid-id';",
+  "../../services/llm_errors": "const LLM_KEY_CREATE_INTERRUPTED = 'interrupted'; const llmErrorMessage = (result) => result.code;",
+});
+const { LlmKeyRevealModal: PaidRevealModal } = await import(toDataUrl(revealModalSource));
+
+const modelsSource = stubImports(await readPaas("pages/llm/tabs/LlmModelsTab.js"), {
+  "@odoo/owl": owlStub,
+  "@web/core/l10n/translation": "const _t = (message) => message;",
+  "../../../services/llm_service": `const llmService = (await import("${serviceUrl}")).llmService; const newClientRequestId = () => 'request-paid-id';`,
   "../../../utils/clipboard": "const copyText = async () => true;",
   "../../../utils/llm_format": "const formatTaipeiTime = (value) => value;",
 });
@@ -36,6 +52,7 @@ const keyTabSource = stubImports(await readPaas("pages/llm/tabs/LlmKeysTab.js"),
   "../../../utils/llm_format": "const formatTaipeiDateTime = (value) => value || '—'; const isExpiringSoon = () => false;",
   "../../../services/llm_errors": `const llmErrorMessage = (result) => result.code;`,
   "../../../components/llm/LlmKeyFormModal": "const LlmKeyFormModal = {};",
+  "../../../components/llm/LlmKeyRevealModal": "const LlmKeyRevealModal = {};",
 });
 const keyTabUrl = toDataUrl(keyTabSource);
 const { LlmKeysTab, parseExtendId, applyExtendQueryOnce, extendQueryFromHash, stripExtendFromHash, paidKeyModels, keyRow } = await import(keyTabUrl);
@@ -58,6 +75,56 @@ test("createPaidKey sends the closed paid payload through sanitized call with cr
     expires: "never", models: ["model-a"],
   }, KEY_CREATE_TIMEOUT_MS]]);
   assert.equal(KEY_CREATE_TIMEOUT_MS, 40000);
+});
+
+test("paid key handoff keeps only safe draft in parent and never caches plaintext", async () => {
+  globalThis.__llmKeyCalls.length = 0;
+  const secret = "sk-" + "PaidTest".repeat(5);
+  llmService.keys = [];
+  llmService.createPaidKey = async (requestId, draft) => {
+    assert.equal(requestId, "request-paid-id");
+    assert.deepEqual(draft, { name: "Ops", limitPoints: null, expires: "90d", models: ["paid-a"] });
+    return { success: true, data: { key: secret, masked_key: "sk-Paid…Test" } };
+  };
+  const tab = Object.create(LlmKeysTab.prototype);
+  tab.service = llmService;
+  tab.state = { loading: false, showForm: true, showReveal: false, pendingDraft: null, extendConfirmation: null, notice: null };
+  tab.destroyed = false;
+  tab.onDraft({ name: "Ops", limitPoints: null, expires: "90d", models: ["paid-a"] });
+  assert.equal(tab.state.showForm, false);
+  assert.equal(tab.state.showReveal, true);
+  assert.deepEqual(tab.state.pendingDraft, { name: "Ops", limitPoints: null, expires: "90d", models: ["paid-a"] });
+  assert.ok(!JSON.stringify(tab.state).includes(secret));
+  const result = await tab.createPendingPaidKey("request-paid-id");
+  assert.equal(result.data.key, secret);
+  assert.ok(!Object.hasOwn(llmService.keys, "key"));
+  assert.ok(!JSON.stringify(llmService.keys).includes(secret));
+  assert.ok(!JSON.stringify(tab.state).includes(secret));
+  const reveal = Object.create(PaidRevealModal.prototype);
+  reveal.props = { kind: "paid", allowedModels: ["paid-a", "paid-b"], models: ["paid-a", "free-a"] };
+  reveal.state = { models: [...reveal.props.models], modelAllowlist: [...reveal.props.allowedModels] };
+  assert.deepEqual(reveal.displayedModels, ["paid-a"]);
+  reveal.state.models = null;
+  assert.equal(reveal.paidModelsText, "All paid models");
+  assert.ok(!reveal.paidModelsText.includes("qwen3-4b-cluster1"));
+  reveal.state.key = secret;
+  reveal.forgetKey();
+  assert.equal(reveal.state.key, null);
+  assert.equal(reveal.state.modelAllowlist.length, 0);
+  tab.onRevealClosed({ created: true });
+  assert.equal(tab.state.pendingDraft, null);
+  assert.equal(tab.state.showReveal, false);
+  assert.ok(!JSON.stringify(tab.state).includes(secret));
+});
+
+test("paid draft errors exposed to users are mapped, never raw transport text", () => {
+  const raw = "socket exploded secret-value";
+  const tab = Object.create(LlmKeysTab.prototype);
+  tab.service = { keys: [], keysError: "llm_network_error" };
+  tab.state = { createError: null };
+  assert.ok(!tab.errorText.includes(raw));
+  tab.setCreateError({ success: false, code: "llm_network_error", error: raw });
+  assert.ok(!tab.state.createError.includes(raw));
 });
 
 test("keys route goes live only with LlmPage registration and rendered component", async () => {

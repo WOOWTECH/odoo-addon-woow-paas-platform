@@ -8,6 +8,7 @@ import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
 import { LlmTermsModal } from "../../../components/llm/LlmTermsModal";
 import { llmService } from "../../../services/llm_service";
+import { router } from "../../../core/router";
 import { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } from "../../../services/llm_errors";
 import { representativeModels } from "./LlmModelsTab";
 import { copyText } from "../../../utils/clipboard";
@@ -581,9 +582,9 @@ export class LlmOverviewTab extends Component {
   get freeTrialExistsText() {
     const key = this.freeTrialKey;
     if (key && key.status === "expired") {
-      return _t("Your free trial key has expired. Until key management is available, please contact support to reset it.");
+      return _t("Your free trial key has expired. Go to Key Management to create a new key and disable or delete the old one.");
     }
-    return _t("You already have a free trial key (one per account). If you did not save it, please contact support to reset it.");
+    return _t("You already have a free trial key (one per account). If you did not save it, go to Key Management to create a new key and disable or delete the old one.");
   }
 
   get keyRows() {
@@ -756,6 +757,10 @@ export class LlmOverviewTab extends Component {
     this.state.actionError = null;
     this.state.showReveal = true;
   }
+
+  createFreeTrialKey(requestId) { return llmService.createFreeTrialKey(requestId); }
+
+  goToKeyManagement() { router.navigate("llm/keys"); }
 
   /**
    * 對話框關閉：只拿到「有沒有建成」，金鑰內容不經過這裡。焦點還給「免費試用」標題（觸發鈕在
