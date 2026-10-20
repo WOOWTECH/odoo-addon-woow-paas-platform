@@ -446,8 +446,9 @@ class LlmSwrCache(models.Model):
     def _llm_swr_requeue(self, row_id, *, attempted_at=None):
         with self.env.registry.cursor() as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
-            cr.execute('UPDATE %s SET requested_at = %%s, attempted_at = NULL WHERE id = %%s'
-                       % CACHE_TABLE, (_utcnow(), row_id))
+            cr.execute('UPDATE %s SET requested_at = %%s, attempted_at = NULL WHERE id = %%s '
+                       'AND (%%s::timestamp IS NULL OR attempted_at = %%s)'
+                       % CACHE_TABLE, (_utcnow(), row_id, attempted_at, attempted_at))
 
     def _llm_swr_pending(self):
         with self.env.registry.cursor() as cr:

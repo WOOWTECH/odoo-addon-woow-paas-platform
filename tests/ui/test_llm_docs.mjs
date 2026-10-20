@@ -283,3 +283,8 @@ test("guide pressed states are string ARIA values rather than boolean attributes
   assert.equal(attributes.length, 3);
   for (const [, expression] of attributes) assert.ok(expression.endsWith("? 'true' : 'false'"));
 });
+
+// gettext comments belong before msgid, including after conflict resolution.
+test("PO source occurrences never split a message translation", () => {
+  assert.doesNotMatch(po, /^msgid [^\n]*\n(?:"[^\n]*"\n)*#:/m);
+});

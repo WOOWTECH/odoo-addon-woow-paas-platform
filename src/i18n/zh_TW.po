@@ -20489,6 +20489,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_billing_incident__trade_no
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__intent
 msgid ""
 "Provider-issued trade number (ECPay TradeNo). Only write the value the "
 "payment provider gave us in its callback payload. Never store our own "
@@ -20498,7 +20499,6 @@ msgid ""
 "number."
 msgstr "Provider（ECPay）配發的交易單號（TradeNo）。只寫 payment provider 在 callback payload 裡給我們的值。⛔ 不得把我方的 MerchantTradeNo／payment.transaction reference 寫進來——那屬於 external_ref。當 callback 早於 transaction 可見時，這一欄是平台唯一一份 provider 側的交易單號紀錄。"
 #. module: woow_paas_platform
-#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__intent
 msgid "Payment intent"
 msgstr "付款意圖"
 
@@ -26301,11 +26301,11 @@ msgstr "暫時無法取得日誌，請稍後重試。"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/LogsTab.js:0
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
 msgid "Auto-refresh is paused. Resume or refresh to load logs."
 msgstr "已暫停自動更新，請繼續或手動更新以載入日誌。"
 #. module: woow_paas_platform
 #. odoo-python
-#: code:addons/woow_paas_platform/models/mcp_server.py:0
 msgid "This URL points to an internal platform service and cannot be used as an MCP server."
 msgstr "這個網址指向平台內部服務，不能當作 MCP 伺服器使用。"
 
@@ -27572,8 +27572,8 @@ msgstr "API 金鑰"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
-msgid "Model"
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
+msgid "Model"
 msgstr "模型"
 
 #. module: woow_paas_platform
@@ -27693,10 +27693,10 @@ msgstr "花費（點）"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
-msgid "API key"
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
+msgid "API key"
 msgstr "API 金鑰"
 
 #. module: woow_paas_platform
@@ -27708,8 +27708,8 @@ msgstr "請求紀錄"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
-msgid "Status"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
+msgid "Status"
 msgstr "狀態"
 
 #. module: woow_paas_platform
