@@ -66,24 +66,27 @@ class TestLlmSqlBudget(TransactionCase):
     def test_successive_statements_share_one_absolute_deadline(self):
         started = time.monotonic()
         deadline = started + 0.32
-        with deadline_cursor(
-            self._cursor_factory(), deadline=deadline, lock_seconds=5.0
-        ) as cr:
-            cr.execute("SAVEPOINT llm_sql_budget_cleanup")
-            cr.execute("SELECT pg_sleep(0.20)")
-            with self.assertRaises(_TIMEOUTS):
-                # This call has only the remainder of the original budget.
+        # The inner assertion proves the second statement expires; the outer
+        # one captures deadline_cursor's independent exit/commit budget check.
+        with self.assertRaises(SqlBudgetExpired):
+            with deadline_cursor(
+                self._cursor_factory(), deadline=deadline, lock_seconds=5.0
+            ) as cr:
+                cr.execute('SAVEPOINT "llm_sql_budget_cleanup"')
                 cr.execute("SELECT pg_sleep(0.20)")
+                with self.assertRaises(_TIMEOUTS):
+                    # This call has only the remainder of the original budget.
+                    cr.execute("SELECT pg_sleep(0.20)")
 
-            # Cleanup SQL is permitted after expiry, including when the timed
-            # out PostgreSQL statement left the transaction in failed state.
-            cr.execute("ROLLBACK TO SAVEPOINT llm_sql_budget_cleanup")
-            cr.execute("RELEASE SAVEPOINT llm_sql_budget_cleanup")
+                # Cleanup SQL is permitted after expiry, including when the timed
+                # out PostgreSQL statement left the transaction in failed state.
+                cr.execute('ROLLBACK TO SAVEPOINT "llm_sql_budget_cleanup"')
+                cr.execute('RELEASE SAVEPOINT "llm_sql_budget_cleanup"')
 
-            # Invalid SQL makes this assertion distinguish a local expiry guard
-            # from PostgreSQL parsing: the query must be refused before sending.
-            with self.assertRaises(SqlBudgetExpired):
-                cr.execute("SELECT definitely_not_valid_sql")
+                # Invalid SQL distinguishes local expiry refusal from a server
+                # parse error: this statement must never reach PostgreSQL.
+                with self.assertRaises(SqlBudgetExpired):
+                    cr.execute("SELECT definitely_not_valid_sql")
 
         self.assertLess(
             time.monotonic() - started,
@@ -94,25 +97,30 @@ class TestLlmSqlBudget(TransactionCase):
     def test_already_expired_cursor_refuses_sql_but_allows_savepoint_cleanup(self):
         unrelated = self.registry._db.cursor()
         try:
-            with deadline_cursor(
-                self._cursor_factory(),
-                deadline=time.monotonic() + 0.1,
-                lock_seconds=5.0,
-            ) as cr:
-                cr.execute("SAVEPOINT llm_sql_budget_expired_cleanup")
-                time.sleep(0.15)
+            with self.assertRaises(SqlBudgetExpired):
+                with deadline_cursor(
+                    self._cursor_factory(),
+                    deadline=time.monotonic() + 0.1,
+                    lock_seconds=5.0,
+                ) as cr:
+                    cr.execute('SAVEPOINT "llm_sql_budget_expired_cleanup"')
+                    time.sleep(0.15)
 
-                with self.assertRaises(SqlBudgetExpired):
-                    # If sent to PostgreSQL this would raise a syntax error.
-                    cr.execute("SELECT definitely_not_valid_sql")
+                    with self.assertRaises(SqlBudgetExpired):
+                        # If sent to PostgreSQL this would raise a syntax error.
+                        cr.execute("SELECT definitely_not_valid_sql")
 
-                cr.execute("ROLLBACK TO SAVEPOINT llm_sql_budget_expired_cleanup")
-                cr.execute("RELEASE SAVEPOINT llm_sql_budget_expired_cleanup")
+                    cr.execute(
+                        'ROLLBACK TO SAVEPOINT "llm_sql_budget_expired_cleanup"'
+                    )
+                    cr.execute(
+                        'RELEASE SAVEPOINT "llm_sql_budget_expired_cleanup"'
+                    )
 
-                # The expired wrapper is local to its cursor; an unrelated one
-                # still sends and receives SQL normally.
-                unrelated.execute("SELECT 23")
-                self.assertEqual(unrelated.fetchone()[0], 23)
+                    # The expired wrapper is local to its cursor; an unrelated
+                    # one still sends and receives SQL normally.
+                    unrelated.execute("SELECT 23")
+                    self.assertEqual(unrelated.fetchone()[0], 23)
         finally:
             unrelated.close()
 
@@ -133,7 +141,7 @@ class TestLlmSqlBudget(TransactionCase):
                 ("woow_llm_alert:%s" % dedupe_key,),
             )
 
-            service = self.env[llm_event_module.EVENT_MODEL]
+            service = self.env["woow_paas_platform.llm_event"]
             deadline = time.monotonic() + 0.4
             started = time.monotonic()
             with patch.object(llm_event_module, "llm_unconfigured", return_value=False), \
