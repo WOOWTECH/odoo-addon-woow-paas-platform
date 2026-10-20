@@ -5,14 +5,18 @@
 operator 取代（``ns_quota_fixture``）。
 """
 from datetime import timedelta
+import uuid
 from unittest.mock import patch
 
 from freezegun import freeze_time
 
-from odoo.tests.common import tagged
+from odoo.tests.common import TransactionCase, tagged
 
 from ..services.paas_operator import PaaSOperatorAPIError
-from .ns_quota_fixture import build_hard
+from ..services.workspace_quota import workspace_namespace
+from .ns_quota_fixture import FakeQuotaOperator, build_hard
+from .test_change_plan_reapply_1158 import _ChangePlanFixture
+from .test_workspace_quota_floor_rpc_1679 import _WS, _QuotaRpcFixture
 from .test_workspace_quota_floor_1679 import _CLIENT
 from .test_workspace_quota_sync_1680 import _SyncFixture
 
@@ -303,3 +307,123 @@ class TestWorkspaceQuotaLifecycleReclaim1682(_LifecycleFixture):
             self._background()
         self.assertEqual(self._live('limits.cpu', 'limits.memory'), ('30', '12Gi'),
                          '背景以最新政策收回 memory，CPU 維持新的最低保障')
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaDowngradeReclaim1682(_ChangePlanFixture, TransactionCase):
+    """換方案降級：原有業務檢查照舊；降低的 quota 檢查用量、安全才收回。
+
+    方案 B（vcpu 2、ram 4、storage 30）→ A（ram 2；儲存只擴不縮）：memory 目標 12Gi → 8Gi，
+    CPU 8 與 storage 100Gi 都是公式下限、不變。
+    """
+
+    def _downgrade_setup(self, tag, used_memory='4Gi'):
+        owner, svc = self._service(tag, plan=self.plan_b)
+        ns = svc.helm_namespace
+        operator = FakeQuotaOperator({ns: build_hard('8', '12Gi', '100Gi', '4Gi', '80Gi')})
+        # 工作區推導出的 namespace 還沒建立（服務住在 fixture 指定的 namespace）。
+        operator.namespace_exists[workspace_namespace(self.env, svc.workspace_id)] = False
+        operator.used[ns] = {'requests.cpu': '2', 'limits.cpu': '2', 'requests.memory': '4Gi',
+                             'limits.memory': used_memory, 'requests.storage': '30Gi'}
+        client = operator.bind(self._client())
+        return owner, svc, operator, client
+
+    def _background(self, svc, client):
+        with patch(_CLIENT, return_value=client):
+            return svc.workspace_id.sudo()._quota_reconcile_one()
+
+    def test_downgrade_keeps_the_business_check_and_reclaims_memory(self):
+        owner, svc, operator, client = self._downgrade_setup('dn-ok')
+        res = self._change(owner, svc, self.plan_a, client)
+        self.assertTrue(res['success'], res.get('error'))
+        pre = client.upgrade_preflight.call_args.kwargs
+        self.assertEqual(pre['pending_quota']['memory_limit'], '8Gi',
+                         '換方案的預檢照舊，拿的是換完之後的目標')
+        live = operator.live[svc.helm_namespace]
+        self.assertEqual((live['requests.memory'], live['limits.memory']), ('8Gi', '8Gi'))
+        self.assertEqual((live['limits.cpu'], live['requests.storage']), ('8', '100Gi'))
+        names = [c[0] for c in client.method_calls
+                 if c[0] in ('upgrade_preflight', 'update_namespace_quota', 'upgrade_release')]
+        self.assertEqual(names, ['upgrade_preflight', 'update_namespace_quota', 'upgrade_release'])
+
+    def test_refused_downgrade_changes_nothing(self):
+        owner, svc, operator, client = self._downgrade_setup('dn-deny')
+        old_sub = svc.sudo().subscription_id
+        client.upgrade_preflight.side_effect = PaaSOperatorAPIError(
+            'API error: boom', status_code=500)
+        res = self._change(owner, svc, self.plan_a, client)
+        self.assertFalse(res['success'])
+        self.assertEqual(svc.sudo().subscription_id, old_sub, '業務檢查擋下：不換訂閱')
+        self.assertEqual(operator.puts, [])
+        self.assertEqual(operator.live[svc.helm_namespace]['limits.memory'], '12Gi')
+
+    def test_downgrade_waits_for_the_old_pods_before_reclaiming(self):
+        # 舊 pod 還用 limits.memory 10Gi（高於新目標 8Gi）。
+        owner, svc, operator, client = self._downgrade_setup('dn-wait', used_memory='10Gi')
+        res = self._change(owner, svc, self.plan_a, client)
+        self.assertTrue(res['success'], res.get('error'))
+        client.upgrade_release.assert_called_once()
+        self.assertEqual(operator.live[svc.helm_namespace]['limits.memory'], '12Gi')
+        ws = svc.workspace_id.sudo()
+        self.assertIn('unsafe_decrease', ws.quota_sync_reason or '')
+        # 升級完成、舊 pod 結束 ⇒ 背景收回。
+        operator.used[svc.helm_namespace]['limits.memory'] = '2Gi'
+        for _round in range(2):  # 子集事件先排全集對帳，之後依退避重試
+            with freeze_time(ws.quota_next_retry_at or ws.quota_last_attempt_at):
+                self._background(svc, client)
+            if operator.live[svc.helm_namespace]['limits.memory'] == '8Gi':
+                break
+        self.assertEqual(operator.live[svc.helm_namespace]['limits.memory'], '8Gi')
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceQuotaReclaimRpc1682(_QuotaRpcFixture):
+    """免確認降額只屬於伺服器內部的生命週期來源：真實登入的 RPC 偽裝不了。"""
+
+    _FORGED = {'su': True, 'allow_lower': True, 'woow_quota_trigger': 'lifecycle',
+               'woow_quota_lifecycle': True, 'woow_ws_quota_policy_write': True}
+
+    def _error_name(self, response):
+        self.assertIn('error', response, response)
+        return response['error']['data']['name']
+
+    def test_tenants_cannot_dress_a_quota_change_as_a_lifecycle_event(self):
+        portal = self.env['res.users'].with_context(no_reset_password=True)._create_user_from_template({
+            'name': 'Reclaim portal', 'login': 'reclaim-portal-%s' % uuid.uuid4().hex})
+        portal.write({'password': portal.login})
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': portal.id, 'role': 'admin'})
+        before = self._floors()
+        for user in (self.owner, portal):
+            self.authenticate(user.login, user.login)
+            for model, method, args, kwargs in (
+                (_WS, 'set_quota_minimums', [[self.workspace.id]], {'cpu': 1}),
+                (_WS, 'set_quota_minimums', [[self.workspace.id]], {'cpu': 1, 'allow_lower': True}),
+                (_WS, '_quota_sync', [[self.workspace.id], 'lifecycle'], {'allow_lower': True}),
+                (_WS, 'write', [[self.workspace.id], {'quota_reconcile_pending': True}], {}),
+                ('woow_paas_platform.cloud_service', '_push_ns_quota', [[]], {}),
+            ):
+                with self.subTest(user=user.login, method=method, kwargs=kwargs):
+                    response = self._call_kw(model, method, args,
+                                             dict(kwargs, context=self._FORGED))
+                    self._error_name(response)
+            with self.subTest(user=user.login, call='read'):
+                self._error_name(self._call_kw(_WS, 'read', [[self.workspace.id]],
+                                               {'fields': ['quota_reconcile_pending']}))
+        self.assertEqual(self._floors(), before)
+        self.assertEqual((self.operator.reads, self.operator.puts), ([], []))
+
+    def test_administrator_lowering_still_needs_confirmation_under_a_forged_context(self):
+        self.authenticate('admin', 'admin')
+        raised = self._call_kw(_WS, 'set_quota_minimums', [[self.workspace.id]], {'cpu': 30})
+        self.assertNotIn('error', raised, raised)
+        self.assertEqual(self.operator.live[self.namespace]['limits.cpu'], '30')
+        puts = len(self.operator.puts)
+        for kwargs in ({'cpu': 0, 'context': self._FORGED},
+                       {'cpu': 0, 'allow_lower': True, 'context': self._FORGED}):
+            with self.subTest(kwargs=kwargs):
+                self._error_name(self._call_kw(_WS, 'set_quota_minimums',
+                                               [[self.workspace.id]], kwargs))
+        self.assertEqual(self._floors()[0], 30, '未確認的降額不保存')
+        self.assertEqual(len(self.operator.puts), puts)
+        self.assertEqual(self.operator.live[self.namespace]['limits.cpu'], '30')
