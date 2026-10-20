@@ -14,6 +14,7 @@ from unittest.mock import PropertyMock, patch
 from odoo import fields
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase, new_test_user, tagged
+from psycopg2.errors import LockNotAvailable, SerializationFailure
 
 from ..models import llm_api_key
 from ..models import llm_swr
@@ -543,6 +544,75 @@ class TestLlmApiKeyMirror(TransactionCase):
                                  'model-a,model-b'))
         self.assertTrue(created.ok)
         return fake, client, ip, owner_up, other_up, next(iter(fake.tokens))
+
+    def test_management_stale_snapshot_and_held_lock_fail_before_remote_call(self):
+        """Real independent transactions must conflict before any remote side effect."""
+        operations = ('update', 'extend', 'status', 'delete')
+        remotes = {operation: self._fake_paid_token() for operation in operations}
+        fixture, account_id, key_ids = self._committed_swr_fixture({
+            operation: {
+                'newapi_name': 'wp_101_abcd',
+                'newapi_token_id': remotes[operation][-1],
+                'quota_limit_points': 100,
+                'expires_at': fields.Datetime.now() + timedelta(days=30),
+                'model_allowlist': 'model-a,model-b',
+                'remain_quota_cached': 100 * QUOTA_PER_POINT,
+                'used_quota_cached': 0,
+            } for operation in operations
+        })
+        calls = {
+            'update': lambda service, partner, key_id: service._llm_update_key(
+                partner, key_id, expires='90d'),
+            'extend': lambda service, partner, key_id: service._llm_extend_key(partner, key_id),
+            'status': lambda service, partner, key_id: service._llm_set_key_status(
+                partner, key_id, False),
+            'delete': lambda service, partner, key_id: service._llm_delete_key(
+                partner, key_id, 'delete'),
+        }
+        for operation in operations:
+            key_id = key_ids[operation]
+            fake, client, ip, up, _other, _token_id = remotes[operation]
+            fake.calls.clear()
+            with self.subTest(operation=operation):
+                with self.registry.cursor() as request_cr:
+                    request_env = fixture.env(request_cr)
+                    stale_key = request_env[KEY].browse(key_id)
+                    self.assertEqual(stale_key.key_label, operation)
+                    partner = request_env[ACCOUNT].browse(account_id).partner_id
+                    with self.registry.cursor() as writer_cr:
+                        writer_cr.execute(
+                            'UPDATE woow_paas_platform_llm_api_key '
+                            'SET remain_quota_cached = remain_quota_cached + 1 WHERE id = %s',
+                            (key_id,))
+                    with patch.object(type(request_env[KEY]), '_llm_management_remote',
+                                      return_value=(ip, up, client)):
+                        with self.assertRaises(SerializationFailure):
+                            calls[operation](request_env[KEY], partner, key_id)
+                            request_env.flush_all()
+                self.assertEqual(fake.calls, [])
+
+        # A held row lock must reject a competitor without waiting on remote I/O.
+        held_key_id = key_ids['status']
+        fake, client, ip, up, _other, _token_id = self._fake_paid_token()
+        fake.calls.clear()
+        holder_cr = self.registry.cursor()
+        try:
+            holder_cr.execute(
+                'SELECT id FROM woow_paas_platform_llm_api_key WHERE id = %s FOR UPDATE',
+                (held_key_id,))
+            with self.registry.cursor() as request_cr:
+                request_env = fixture.env(request_cr)
+                partner = request_env[ACCOUNT].browse(account_id).partner_id
+                request_cr.execute("SET LOCAL lock_timeout = '500ms'")
+                with patch.object(type(request_env[KEY]), '_llm_management_remote',
+                                  return_value=(ip, up, client)):
+                    with self.assertRaises(LockNotAvailable):
+                        request_env[KEY]._llm_set_key_status(partner, held_key_id, False)
+                        request_env.flush_all()
+        finally:
+            holder_cr.rollback()
+            holder_cr.close()
+        self.assertEqual(fake.calls, [])
 
     def test_fake_paid_token_management_authenticates_ownership_and_preserves_fields(self):
         fake, client, ip, owner_up, other_up, token_id = self._fake_paid_token()

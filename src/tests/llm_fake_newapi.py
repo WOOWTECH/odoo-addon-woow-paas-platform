@@ -393,9 +393,17 @@ class FakeNewApi:
             return self._leave('user_list_tokens', error)
         mine = sorted((t for t in self.tokens.values() if t['user_id'] == user['id']),
                       key=lambda t: -t['id'])
-        items = [dict(t, key=t['key'][:4] + '*' * 10 + t['key'][-4:])
+        items = [self._masked_token(t)
                  for t in mine[(page - 1) * page_size:page * page_size]]
         return self._leave('user_list_tokens', self._ok({'items': items, 'total': len(mine)}))
+
+    @staticmethod
+    def _masked_token(token):
+        result = dict(token, key=token['key'][:4] + '*' * 10 + token['key'][-4:])
+        # rc.44 controller.buildMaskedTokenResponse embeds model.Token, which
+        # does not expose the proxy-only write-contract field below.
+        result.pop('allow_user_quota_query', None)
+        return result
 
     def user_get_token(self, client_ip, up, token_id, **kw):
         self._enter('user_get_token', client_ip)
@@ -405,7 +413,7 @@ class FakeNewApi:
         token = self.tokens.get(token_id)
         if not token or token['user_id'] != user['id']:
             return self._leave('user_get_token', nac.Definite(reason='no_message_key', status=200))
-        return self._leave('user_get_token', self._ok(dict(token, key=token['key'][:4] + '**')))
+        return self._leave('user_get_token', self._ok(self._masked_token(token)))
 
     def user_reveal_token(self, client_ip, up, token_id, **kw):
         self._enter('user_reveal_token', client_ip)

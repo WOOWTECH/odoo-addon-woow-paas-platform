@@ -736,7 +736,18 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
         account._llm_require_active()
         key = self.sudo().search([('id', '=', key_id), ('account_id', '=', account.id)], limit=1)
-        if not key or key.state in ('deleted', 'lost', 'creating') or \
+        if not key:
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        # SWR writes the mirror through an independent cursor. Lock before
+        # remote I/O so a stale snapshot fails here, not after a DELETE or a
+        # relative expiry extension which Odoo would replay on transaction retry.
+        # NOWAIT also keeps competing management requests bounded.
+        self.env.cr.execute(
+            'SELECT id FROM %s WHERE id = %%s AND account_id = %%s FOR UPDATE NOWAIT'
+            % KEY_TABLE, (key.id, account.id))
+        if not self.env.cr.fetchone():
+            raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        if key.state in ('deleted', 'lost', 'creating') or \
                 (key.state == 'failed_reveal' and not allow_failed_reveal):
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
         return account, key

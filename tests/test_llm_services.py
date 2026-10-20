@@ -1354,6 +1354,25 @@ class TestIdentityHelpers(unittest.TestCase):
         self.assertFalse(body['model_limits_enabled'])
         self.assertEqual(body['model_limits'], '')
 
+    def test_paid_update_accepts_rc44_without_quota_query_field(self):
+        # rc.44 model.Token / controller.tokenResponse do not define this
+        # field. The proxy's write contract still requires explicit False.
+        remote = self._paid_remote_token()
+        remote.pop('allow_user_quota_query')
+        body = nac.paid_token_update_body(
+            remote, 901, 'wp_42_abcd', remain_quota=70 * nac.QUOTA_PER_POINT)
+        self.assertIs(body['allow_user_quota_query'], False)
+        self.assertEqual(body['remain_quota'], 70 * nac.QUOTA_PER_POINT)
+        self.assertNotIn('allow_user_quota_query', remote)
+        self.assertNotIn('key', body)
+
+    def test_paid_update_rejects_explicit_untrusted_quota_query_field(self):
+        for value in (True, None, 0, 1, '', 'false', [], {}):
+            remote = self._paid_remote_token()
+            remote['allow_user_quota_query'] = value
+            with self.subTest(value=value), self.assertRaises(nac.NewApiInputError):
+                nac.paid_token_update_body(remote, 901, 'wp_42_abcd')
+
     def test_paid_update_body_rejects_missing_foreign_or_untrusted_get_data(self):
         missing = self._paid_remote_token()
         missing.pop('allow_ips')
