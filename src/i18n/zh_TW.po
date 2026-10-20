@@ -1571,6 +1571,32 @@ msgid ""
 msgstr "管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——它不會再顯示。服務會重新啟動以套用變更。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Admin credentials updated and the Gateway API Key was replaced. "
+"Save the new Gateway API Key now — it will not be shown again. "
+"The new sign-in password takes effect within about a minute; "
+"the main service keeps running. If a web console is enabled, "
+"only the console restarts."
+msgstr ""
+"管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——"
+"它不會再顯示。新登入密碼約一分鐘內生效，主服務持續運行。若已啟用網頁管理介面，"
+"則只有該介面會重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Admin credentials updated and the Gateway API Key was replaced. "
+"Save the new Gateway API Key now — it will not be shown again. "
+"The new sign-in password takes effect within about a minute; "
+"the service does not restart."
+msgstr ""
+"管理員帳密已更新，Gateway API 金鑰也已換新。請立即保存新的 Gateway API 金鑰——"
+"它不會再顯示。新登入密碼約一分鐘內生效，服務不會重新啟動。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__external_mcp_allowed
 msgid ""
 "Admin gate for NetworkPolicy egress to external MCP endpoints (design §6.3 "
@@ -13124,6 +13150,7 @@ msgstr "同 init 類型的公平佇列位置；成功 claim 後會把自己移�
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 msgid "Save"
@@ -15592,6 +15619,28 @@ msgid ""
 msgstr ""
 "這組帳密用來登入此服務（若有網頁管理介面也一併適用）。儲存後服務會重新啟動"
 "（約一分鐘）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid ""
+"These credentials sign in to this service, including its web console if it "
+"has one. The new sign-in password takes effect within about a minute; the "
+"main service keeps running. If a web console is enabled, only the console restarts."
+msgstr ""
+"這組帳密用來登入此服務（若有網頁管理介面也一併適用）。新登入密碼約一分鐘內生效，"
+"主服務持續運行。若已啟用網頁管理介面，則只有該介面會重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AdminCredentialsModal.xml:0
+msgid ""
+"These credentials sign in to this service, including its web console if it "
+"has one. The new sign-in password takes effect within about a minute; the "
+"service does not restart."
+msgstr ""
+"這組帳密用來登入此服務（若有網頁管理介面也一併適用）。新登入密碼約一分鐘內生效，"
+"服務不會重新啟動。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
