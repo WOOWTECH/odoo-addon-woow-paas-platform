@@ -567,8 +567,11 @@ def paid_token_update_body(token, expected_token_id, expected_name, *,
             or type(token.get('name')) is not str \
             or token['id'] != expected_token_id or token['name'] != expected_name:
         raise NewApiInputError('token_response') from None
+    # The pinned rc.44 Token/GET schema has no allow_user_quota_query field.
+    # Accept its absence only; explicit null/true/non-booleans still fail closed.
+    # paid_token_body always sends False, as required by the proxy write policy.
     if token.get('allow_ips') != '' or token.get('cross_group_retry') is not False \
-            or token.get('allow_user_quota_query') is not False:
+            or token.get('allow_user_quota_query', False) is not False:
         raise NewApiInputError('token_response') from None
     values = {
         'name': expected_name,
