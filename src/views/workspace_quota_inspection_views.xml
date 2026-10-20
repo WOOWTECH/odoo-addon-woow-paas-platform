@@ -55,7 +55,7 @@
                             string="Set Quota Minimums" groups="base.group_system"/>
                     <button name="action_retry_quota_sync" type="object" string="Retry Quota Sync"
                             groups="base.group_system"
-                            confirm="Retry the quota sync now with the current policy? The push never lowers any cluster value; a blocked push stays blocked."/>
+                            confirm="Retry the quota sync now with the current policy? The cluster quota is lowered to the current target only after checking current usage again and only if every checked resource fits; otherwise the cluster value is kept."/>
                 </header>
                 <sheet>
                     <h1><field name="name" readonly="True"/></h1>
@@ -142,6 +142,7 @@
                         <group string="Last Pushed and Pending">
                             <field name="quota_synced_hard"/>
                             <field name="quota_pending_decrease"/>
+                            <field name="quota_lower_authorization"/>
                         </group>
                     </group>
                     <separator string="Quota Change Log"/>
@@ -163,17 +164,32 @@
         <field name="model">woow_paas_platform.workspace_quota_minimum_wizard</field>
         <field name="arch" type="xml">
             <form string="Set Quota Minimums">
+                <field name="step" invisible="True"/>
                 <p>The applied quota is the larger of the plan formula and the minimum.
-                    0 clears a minimum. Lowering the target is not supported yet.</p>
+                    0 clears a minimum. A change that lowers the cluster quota is checked against
+                    current usage and needs confirmation.</p>
                 <group>
                     <field name="workspace_id"/>
-                    <field name="cpu"/>
-                    <field name="memory_gi"/>
-                    <field name="storage_gi"/>
+                    <field name="cpu" readonly="step == 'confirm'"/>
+                    <field name="memory_gi" readonly="step == 'confirm'"/>
+                    <field name="storage_gi" readonly="step == 'confirm'"/>
                 </group>
+                <div invisible="step != 'confirm'">
+                    <div class="alert alert-warning" role="alert">
+                        <field name="decrease_warning" nolabel="1"/>
+                    </div>
+                    <group string="These cluster quota values will be lowered">
+                        <field name="decrease_summary" nolabel="1" colspan="2"/>
+                    </group>
+                    <p>Usage is checked again when you confirm and on every retry. The confirmation
+                        is valid for 10 minutes and only for exactly this change.</p>
+                </div>
                 <footer>
                     <button name="action_apply" type="object" string="Save and Apply"
-                            class="oe_highlight"/>
+                            class="oe_highlight" invisible="step == 'confirm'"/>
+                    <button name="action_confirm_decrease" type="object"
+                            string="Confirm Decrease and Apply" class="btn-danger"
+                            invisible="step != 'confirm'"/>
                     <button string="Cancel" special="cancel"/>
                 </footer>
             </form>
