@@ -2,11 +2,11 @@
 import threading
 import uuid
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-from odoo import SUPERUSER_ID, api
+from odoo import SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests.common import TransactionCase, new_test_user, tagged
 
@@ -203,11 +203,14 @@ class TestLlmBackofficeCommitted(TransactionCase):
         self.env.invalidate_all()
         return tick
 
+    def _operator_env(self, cr):
+        """Use the known registry and a real named actor on each fresh cursor."""
+        return env_for(self.registry, cr)['res.users'].with_user(self.operator_id).env
+
     def _service_call(self, request_id, points=900, reason='approved manual backoffice credit',
                       account_id=None):
         with self.registry.cursor() as cr:
-            env_for(self.registry, cr)
-            env = api.Environment(cr, self.operator_id, {})
+            env = self._operator_env(cr)
             return env[BACKOFFICE]._create_manual(
                 account_id or self.account_id, points, reason, request_id)
 
@@ -247,7 +250,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
     def _queue_manual_operation(self, request_id):
         with self.registry.cursor() as cr:
-            env = api.Environment(cr, self.operator_id, {})
+            env = self._operator_env(cr)
             operation = env['woow_paas_platform.llm_backoffice_operation']._enqueue(
                 operation='manual_credit', request_id=request_id,
                 operator=env['res.users'].browse(self.operator_id),
@@ -278,23 +281,25 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
         operation_ids = []
         with self.registry.cursor() as cr:
-            env = api.Environment(cr, self.operator_id, {})
+            env = env_for(self.registry, cr)
             key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
                 'account_id': self.account_id, 'kind': 'paid',
                 'client_request_id': 'fair-batch-key-' + uuid.uuid4().hex,
                 'newapi_token_id': 882001, 'newapi_name': 'fair_batch_key',
                 'state': 'active',
             })
+            actor_env = self._operator_env(cr)
             for index in range(10):
                 op = self._enqueue_test_disable(
-                    env, [key.id], 'fair-batch-%s-%s' % (index, uuid.uuid4().hex),
+                    actor_env, [key.id], 'fair-batch-%s-%s' % (index, uuid.uuid4().hex),
                     'wait for the per-key retry window')
                 operation_ids.append(op.id)
+            env.flush_all()
             cr.execute(
                 'UPDATE woow_paas_platform_llm_backoffice_key_obligation '
                 "SET next_work_at = (NOW() AT TIME ZONE 'UTC') + interval '1 hour' "
                 'WHERE operation_id = ANY(%s)', (operation_ids,))
-            manual = env['woow_paas_platform.llm_backoffice_operation']._enqueue(
+            manual = actor_env['woow_paas_platform.llm_backoffice_operation']._enqueue(
                 operation='manual_credit', request_id='fair-manual-' + uuid.uuid4().hex,
                 operator=env['res.users'].browse(self.operator_id),
                 account=env[ACCOUNT].browse(self.account_id), points=19,
@@ -418,7 +423,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
                        " WHERE client_request_id = %s AND manual_notice_accepted = FALSE",
                        ('manual-wizard-%d' % operation_id,))
             self.assertTrue(cr.fetchone())
-            env = api.Environment(cr, self.operator_id, {})
+            env = self._operator_env(cr)
             env['res.users'].browse(self.operator_id)._llm_set_named_human_eligible(False)
         self.alert_mock.return_value = 1
         with patch.object(llm_backoffice_operation, 'llm_unconfigured', return_value=False):
@@ -432,28 +437,36 @@ class TestLlmBackofficeCommitted(TransactionCase):
                        ' WHERE client_request_id = %s', ('manual-wizard-%d' % operation_id,))
             self.assertTrue(cr.fetchone()[0])
         with self.registry.cursor() as cr:
-            api.Environment(cr, self.operator_id, {})['res.users'].browse(
+            self._operator_env(cr)['res.users'].browse(
                 self.operator_id)._llm_set_named_human_eligible(True)
+
+    def _committed_review_order(self, request_prefix):
+        from odoo import fields
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            account = env[ACCOUNT].browse(self.account_id)
+            event = env['woow_paas_platform.llm_event']
+            reservation_id = event._llm_throttle_reserve(
+                account, 'convert', uid=self.operator_id)
+            stamp = fields.Datetime.now()
+            order = _credit_internal(env[ORDER]).create({
+                'account_id': account.id, 'partner_id': account.partner_id.id,
+                'newapi_user_id': account.newapi_user_id, 'source': 'user', 'points': 10,
+                'quota': 156250, 'client_request_id': request_prefix + uuid.uuid4().hex,
+                'convert_event_id': reservation_id,
+            })
+            _credit_internal(order)._transition(
+                'sending', sent_at=stamp, quota_before=1000, used_quota_before=100,
+                request_count_before=4, before_snapshot_present=True, before_sampled_at=stamp)
+            _credit_internal(order)._transition('needs_review')
+            event._llm_event_finish(
+                reservation_id, 'not_executed', target_model=ORDER, target_id=order.id)
+            order_id = order.id
+        return order_id, reservation_id
 
     def test_retry_uses_owned_reservation_and_audits_in_same_transaction(self):
         from ..models import llm_backoffice
-        from odoo import fields
-        account = self.env[ACCOUNT].browse(self.account_id)
-        reservation_id = self.env['woow_paas_platform.llm_event']._llm_throttle_reserve(
-            account, 'convert', uid=self.operator_id)
-        stamp = fields.Datetime.now()
-        order = _credit_internal(self.env[ORDER].sudo()).create({
-            'account_id': account.id, 'partner_id': account.partner_id.id,
-            'newapi_user_id': account.newapi_user_id, 'source': 'user', 'points': 10,
-            'quota': 156250, 'client_request_id': 'retry-' + uuid.uuid4().hex,
-            'convert_event_id': reservation_id,
-        })
-        _credit_internal(order)._transition(
-            'sending', sent_at=stamp, quota_before=1000, used_quota_before=100,
-            request_count_before=4, before_snapshot_present=True, before_sampled_at=stamp)
-        _credit_internal(order)._transition('needs_review')
-        self.env['woow_paas_platform.llm_event']._llm_event_finish(
-            reservation_id, 'not_executed', target_model=ORDER, target_id=order.id)
+        order_id, reservation_id = self._committed_review_order('retry-')
 
         class Client:
             def ap_log(self, *args, **kwargs):
@@ -463,44 +476,36 @@ class TestLlmBackofficeCommitted(TransactionCase):
                 return nac.Ok(data={'id': user_id, 'quota': 1000,
                                     'used_quota': 100, 'request_count': 4})
 
-        with patch.object(type(account), '_llm_client', return_value=Client()), \
-                patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
-                patch.object(llm_backoffice, 'llm_config', return_value={
-                    'service_admin_id': None, 'orders_enabled': True}), \
-                patch.object(type(self.env['woow_paas_platform.llm_runtime_state']),
-                             '_llm_read', return_value={'guard_tripped': False}):
-            order.with_user(self.operator_id)._admin_review(
-                'retry', 'upstream was checked and no credit occurred',
-                operator_id=self.operator_id)
-        self.assertEqual(order.state, 'paid')
-        self.env.cr.execute('SELECT result FROM woow_paas_platform_llm_event WHERE id = %s',
-                            (reservation_id,))
-        self.assertEqual(self.env.cr.fetchone()[0], 'not_executed')
-        self.env.cr.execute('SELECT id, uid FROM woow_paas_platform_llm_event '
-                            "WHERE action = 'order_transition' AND target_id = %s", (order.id,))
-        audit = self.env.cr.fetchone()
-        self.assertTrue(audit)
-        self.assertEqual(audit[1], self.operator_id)
+        with self.registry.cursor() as cr:
+            env = self._operator_env(cr)
+            order = env[ORDER].browse(order_id)
+            with patch.object(type(env[ACCOUNT]), '_llm_client', return_value=Client()), \
+                    patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
+                    patch.object(llm_backoffice, 'llm_config', return_value={
+                        'service_admin_id': None, 'orders_enabled': True}), \
+                    patch.object(type(env['woow_paas_platform.llm_runtime_state']),
+                                 '_llm_read', return_value={'guard_tripped': False}):
+                order._admin_review(
+                    'retry', 'upstream was checked and no credit occurred',
+                    operator_id=self.operator_id)
+            self.assertEqual(order.state, 'paid')
+            env.flush_all()
+            cr.execute('SELECT id, uid FROM woow_paas_platform_llm_event '
+                       "WHERE action = 'order_transition' AND target_model = %s AND target_id = %s",
+                       (ORDER, order_id))
+            audit = cr.fetchone()
+            self.assertTrue(audit)
+            self.assertEqual(audit[1], self.operator_id)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            self.assertEqual(env[ORDER].browse(order_id).state, 'paid')
+            cr.execute('SELECT result FROM woow_paas_platform_llm_event WHERE id = %s',
+                       (reservation_id,))
+            self.assertEqual(cr.fetchone()[0], 'not_executed')
 
     def test_review_audit_insert_failure_rolls_back_transition(self):
         from ..models import llm_backoffice
-        from odoo import fields
-        account = self.env[ACCOUNT].browse(self.account_id)
-        stamp = fields.Datetime.now()
-        reservation_id = self.env['woow_paas_platform.llm_event']._llm_throttle_reserve(
-            account, 'convert', uid=self.operator_id)
-        order = _credit_internal(self.env[ORDER].sudo()).create({
-            'account_id': account.id, 'partner_id': account.partner_id.id,
-            'newapi_user_id': account.newapi_user_id, 'source': 'user', 'points': 10,
-            'quota': 156250, 'client_request_id': 'audit-fail-' + uuid.uuid4().hex,
-            'convert_event_id': reservation_id,
-        })
-        _credit_internal(order)._transition(
-            'sending', sent_at=stamp, quota_before=1000, used_quota_before=100,
-            request_count_before=4, before_snapshot_present=True, before_sampled_at=stamp)
-        _credit_internal(order)._transition('needs_review')
-        self.env['woow_paas_platform.llm_event']._llm_event_finish(
-            reservation_id, 'not_executed', target_model=ORDER, target_id=order.id)
+        order_id, _reservation_id = self._committed_review_order('audit-fail-')
 
         class Client:
             def ap_log(self, *args, **kwargs):
@@ -510,22 +515,32 @@ class TestLlmBackofficeCommitted(TransactionCase):
                 return nac.Ok(data={'id': user_id, 'quota': 1000,
                                     'used_quota': 100, 'request_count': 4})
 
-        with patch.object(type(account), '_llm_client', return_value=Client()), \
-                patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
-                patch.object(llm_backoffice, 'llm_config', return_value={
-                    'service_admin_id': None, 'orders_enabled': True}), \
-                patch.object(type(self.env['woow_paas_platform.llm_runtime_state']),
-                             '_llm_read', return_value={'guard_tripped': False}), \
-                patch.object(type(self.env['woow_paas_platform.llm_event']),
-                             '_llm_insert_event_cr', side_effect=RuntimeError('injected')) as audit_insert:
-            with self.assertRaisesRegex(RuntimeError, 'injected'):
-                with self.env.cr.savepoint():
-                    order.with_user(self.operator_id)._admin_review(
+        with self.registry.cursor() as cr:
+            env = self._operator_env(cr)
+            order = env[ORDER].browse(order_id)
+            with patch.object(type(env[ACCOUNT]), '_llm_client', return_value=Client()), \
+                    patch.object(llm_backoffice, 'llm_unconfigured', return_value=False), \
+                    patch.object(llm_backoffice, 'llm_config', return_value={
+                        'service_admin_id': None, 'orders_enabled': True}), \
+                    patch.object(type(env['woow_paas_platform.llm_runtime_state']),
+                                 '_llm_read', return_value={'guard_tripped': False}), \
+                    patch.object(type(env['woow_paas_platform.llm_event']),
+                                 '_llm_insert_event_cr', side_effect=RuntimeError('injected')) as audit_insert:
+                with self.assertRaisesRegex(RuntimeError, 'injected'), cr.savepoint():
+                    order._admin_review(
                         'retry', 'upstream checked no matching log',
                         operator_id=self.operator_id)
-        self.assertEqual(audit_insert.call_count, 1, 'financial audit failure injection was reached')
-        order.invalidate_recordset()
-        self.assertEqual(order.state, 'needs_review')
+            self.assertEqual(audit_insert.call_count, 1,
+                             'financial audit failure injection was reached')
+            order.invalidate_recordset()
+            self.assertEqual(order.state, 'needs_review')
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            self.assertEqual(env[ORDER].browse(order_id).state, 'needs_review')
+            cr.execute('SELECT count(*) FROM woow_paas_platform_llm_event '
+                       "WHERE action = 'order_transition' AND target_model = %s AND target_id = %s",
+                       (ORDER, order_id))
+            self.assertEqual(cr.fetchone()[0], 0)
 
     def test_worker_passes_shared_deadline_and_leaves_unclaimed_work_pending(self):
         import time
@@ -534,7 +549,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
         account_id = self.account_id
         operator_id = self.operator_id
         with self.registry.cursor() as cr:
-            env = api.Environment(cr, operator_id, {})
+            env = self._operator_env(cr)
             account = env[ACCOUNT].browse(account_id)
             order = _credit_internal(env[ORDER].sudo()).create({
                 'account_id': account.id, 'partner_id': account.partner_id.id,
@@ -704,8 +719,7 @@ class TestLlmBackofficeCommitted(TransactionCase):
 
     def test_budget_alert_and_incident_inputs_contain_no_reason(self):
         with self.registry.cursor() as cr:
-            env_for(self.registry, cr)
-            env = api.Environment(cr, self.operator_id, {})
+            env = self._operator_env(cr)
             env[BACKOFFICE]._report_manual_cap(self.account_id)
         self.assertNotIn('reason', repr(self.alert_mock.call_args.kwargs))
         self.assertNotIn('reason', repr(self.incident_mock.call_args.kwargs))
@@ -714,26 +728,27 @@ class TestLlmBackofficeCommitted(TransactionCase):
         })
 
     def test_manual_rpc_only_queues_stable_operation(self):
-        wizard = self.env['woow_paas_platform.llm_manual_credit_wizard'].with_user(
-            self.operator_id).create({
+        with closing(self.registry.cursor()) as cr:
+            env = self._operator_env(cr)
+            wizard = env['woow_paas_platform.llm_manual_credit_wizard'].create({
                 'account_id': self.account_id, 'points': 17,
                 'reason': 'manual adjustment approved for testing',
             })
-        action = wizard.action_create()
-        operation = self.env['woow_paas_platform.llm_backoffice_operation'].browse(
-            action['res_id'])
-        self.assertEqual(operation.state, 'pending')
-        self.assertEqual(operation.operator_id.id, self.operator_id)
-        with self.registry.cursor() as cr:
-            cr.execute("SELECT count(*) FROM " + ORDER_TABLE +
-                       " WHERE source = 'manual' AND client_request_id = %s",
-                       ('manual-wizard-%d' % operation.id,))
-            self.assertEqual(cr.fetchone()[0], 0)
-        replay = wizard.action_create()
-        self.assertEqual(replay['res_id'], operation.id)
-        wizard.write({'reason': 'a changed reason that must not replay'})
-        with self.assertRaises(ValidationError):
-            wizard.action_create()
+            action = wizard.action_create()
+            operation = env['woow_paas_platform.llm_backoffice_operation'].browse(
+                action['res_id'])
+            self.assertEqual(operation.state, 'pending')
+            self.assertEqual(operation.operator_id.id, self.operator_id)
+            with self.registry.cursor() as check_cr:
+                check_cr.execute("SELECT count(*) FROM " + ORDER_TABLE +
+                                 " WHERE source = 'manual' AND client_request_id = %s",
+                                 ('manual-wizard-%d' % operation.id,))
+                self.assertEqual(check_cr.fetchone()[0], 0)
+            replay = wizard.action_create()
+            self.assertEqual(replay['res_id'], operation.id)
+            wizard.write({'reason': 'a changed reason that must not replay'})
+            with self.assertRaises(ValidationError), cr.savepoint():
+                wizard.action_create()
 
     def test_token_recovery_alternates_scan_and_disable_and_requires_complete_proof(self):
         from ..services import llm_token_recovery as recovery
@@ -831,26 +846,30 @@ class TestLlmBackofficeCommitted(TransactionCase):
                                "WHERE operation_id = %s AND state <> 'done'", (op_id,))
                     if cr.fetchone()[0] == 0:
                         break
-        self.env.invalidate_all()
-        keys = self.env['woow_paas_platform.llm_api_key'].browse(key_ids)
-        Key = self.env['woow_paas_platform.llm_api_key']
-        keys.invalidate_recordset(['state', 'disabled_by'])
         self.assertTrue(all(call[1] is False for call in client.calls))
         self.assertTrue(all(call[2] == nac.TIMEOUT_CRON_WRITE for call in client.calls))
-        self.assertTrue(all(key.state == 'disabled' and key.disabled_by == 'ops' for key in keys))
+
         class DisableClient:
             def user_set_token_status(self, *args, **kwargs):
                 return nac.Ok(data={})
 
-        with patch.object(type(Key), '_llm_management_remote',
-                          return_value=('203.0.113.1', 'test-up', DisableClient())):
-            Key._llm_set_key_status(keys[1].partner_id, keys[1].id, False)
-        keys[1].invalidate_recordset(['state', 'disabled_by'])
-        self.assertEqual(keys[1].disabled_by, 'ops', 'user disable must preserve ops restriction')
-        with patch.object(type(Key), '_llm_management_remote',
-                          side_effect=AssertionError('ops key enable must stop before remote I/O')):
-            with self.assertRaises(LlmError):
-                Key._llm_set_key_status(keys[1].partner_id, keys[1].id, True)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            Key = env['woow_paas_platform.llm_api_key']
+            keys = Key.browse(key_ids)
+            self.assertTrue(all(key.state == 'disabled' and key.disabled_by == 'ops' for key in keys))
+            with patch.object(type(Key), '_llm_management_remote',
+                              return_value=('203.0.113.1', 'test-up', DisableClient())):
+                Key._llm_set_key_status(keys[1].partner_id, keys[1].id, False)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            Key = env['woow_paas_platform.llm_api_key']
+            key = Key.browse(key_ids[1])
+            self.assertEqual(key.disabled_by, 'ops', 'user disable must preserve ops restriction')
+            with patch.object(type(Key), '_llm_management_remote',
+                              side_effect=AssertionError('ops key enable must stop before remote I/O')):
+                with self.assertRaises(LlmError), cr.savepoint():
+                    Key._llm_set_key_status(key.partner_id, key.id, True)
         with self.registry.cursor() as cr:
             cr.execute('SELECT state, key_failed_count, key_target_count FROM '
                        'woow_paas_platform_llm_backoffice_operation WHERE id = %s', (op_id,))
@@ -1325,11 +1344,11 @@ class TestLlmBackofficeCommitted(TransactionCase):
                 if state == 'done':
                     break
         self.assertEqual(state, 'done')
-        key = self.env['woow_paas_platform.llm_api_key'].browse(key_id)
-        key.invalidate_recordset(['state'])
-        self.assertEqual(key.state, 'failed_reveal', 'recovery must preserve free-trial quarantine')
         self.assertEqual(set(client.disabled), {2010, 2020, 3000})
         with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key = env['woow_paas_platform.llm_api_key'].browse(key_id)
+            self.assertEqual(key.state, 'failed_reveal', 'recovery must preserve free-trial quarantine')
             cr.execute('SELECT scan_complete, operation.state FROM '
                        'woow_paas_platform_llm_backoffice_key_obligation obligation '
                        'JOIN woow_paas_platform_llm_backoffice_operation operation '
@@ -1344,17 +1363,18 @@ class TestLlmBackofficeCommitted(TransactionCase):
                                 'the head page is rechecked after pending token IDs clear')
 
     def test_batch_disable_does_not_complete_an_unresolved_missing_token_id(self):
-        Key = self.env['woow_paas_platform.llm_api_key']
         name = 'wp_unresolved_' + uuid.uuid4().hex[:12]
-        key = _llm_internal(Key).create({
-            'account_id': self.account_id, 'kind': 'paid',
-            'client_request_id': 'batch-unresolved-' + uuid.uuid4().hex,
-            'newapi_name': name, 'state': 'failed_reveal',
-        })
-        op = self._enqueue_test_disable(
-            self.env, [key.id], 'disable-unresolved-' + uuid.uuid4().hex,
-            'keep unresolved create identity pending')
-        obligation = op.key_obligation_ids.filtered(lambda row: row.key_id.id == key.id)
+        with self.registry.cursor() as cr:
+            env = env_for(self.registry, cr)
+            key = _llm_internal(env['woow_paas_platform.llm_api_key']).create({
+                'account_id': self.account_id, 'kind': 'paid',
+                'client_request_id': 'batch-unresolved-' + uuid.uuid4().hex,
+                'newapi_name': name, 'state': 'failed_reveal',
+            })
+            op = self._enqueue_test_disable(
+                env, [key.id], 'disable-unresolved-' + uuid.uuid4().hex,
+                'keep unresolved create identity pending')
+            op_id = op.id
 
         class Client:
             def user_list_tokens(self, *args, **kwargs):
@@ -1367,16 +1387,15 @@ class TestLlmBackofficeCommitted(TransactionCase):
         with patch.object(account_class, '_llm_tenant_ip', return_value='203.0.113.1'), \
                 patch.object(account_class, '_llm_up_token', return_value='test-up'), \
                 patch.object(account_class, '_llm_client', return_value=Client()):
-            worker = self.env['woow_paas_platform.llm_backoffice_operation']
-            actor = self.env['res.users'].browse(self.operator_id)
             for _ in range(200):
-                if obligation.result_code == 'identity_unresolved':
+                self._run_batch_fresh({op_id})
+                snapshot = self._creator_recovery_snapshot(op_id)
+                if snapshot['code'] == 'identity_unresolved':
                     break
-                worker._process_disable_keys(self.env, op, actor)
-        self.assertEqual(obligation.state, 'pending')
-        self.assertEqual(obligation.result_code, 'identity_unresolved')
-        self.assertEqual(op.state, 'pending')
-        self.assertFalse(obligation.disabled_tokens_json)
+        self.assertEqual(snapshot['obligation'], 'pending')
+        self.assertEqual(snapshot['code'], 'identity_unresolved')
+        self.assertEqual(snapshot['state'], 'pending')
+        self.assertFalse(snapshot['disabled'])
 
     def test_daily_cap_serializes_concurrent_read_committed_requests(self):
         with self.registry.cursor() as cr:
@@ -1481,7 +1500,8 @@ class TestLlmBackofficeGuards(TransactionCase):
         Users = self.env['res.users'].sudo()
         system = new_test_user(
             self.env, login='llm_default_owner_' + uuid.uuid4().hex,
-            groups='base.group_user,base.group_system', email='default-owner@example.test')
+            groups='base.group_user,base.group_system,base.group_partner_manager',
+            email='default-owner@example.test')
         context_user = Users.with_user(system).with_context(
             default_llm_named_human_eligible=True).create({
                 'name': 'Context default must not provision',
@@ -1511,13 +1531,20 @@ class TestLlmBackofficeGuards(TransactionCase):
         partner = self.env['res.partner'].create({'name': 'LLM RPC mutation fixture'})
         account = _llm_internal(self.env[ACCOUNT]).create({'partner_id': partner.id})
         _llm_internal(account).write({'state': 'active', 'newapi_user_id': 4811023})
-        wizard = Wizard.sudo().create({
+        operator = new_test_user(
+            self.env, login='llm_wizard_guard_' + uuid.uuid4().hex,
+            groups='base.group_user,base.group_system', email='wizard-guard@example.test')
+        operator._llm_set_named_human_eligible(True)
+        wizard = Wizard.with_user(operator).create({
             'account_id': account.id, 'points': 1, 'reason': 'valid wizard reason text',
         })
         for uid in (SUPERUSER_ID, self.env.ref('base.user_admin').id,
                     self.env.ref('base.public_user').id):
-            with self.subTest(uid=uid), self.assertRaises(AccessError):
-                wizard.with_user(uid).action_create()
+            with self.subTest(uid=uid):
+                with self.assertRaises(AccessError):
+                    Wizard.with_user(uid).default_get(['account_id', 'points', 'reason'])
+                with self.assertRaises(AccessError):
+                    wizard.with_user(uid).action_create()
         order = _credit_internal(self.env[ORDER].sudo()).create({
             'account_id': account.id, 'partner_id': partner.id,
             'newapi_user_id': account.newapi_user_id, 'source': 'user', 'points': 10,
