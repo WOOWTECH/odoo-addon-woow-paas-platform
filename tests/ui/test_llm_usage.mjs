@@ -114,6 +114,9 @@ test("latest filter request wins when older summary/chart/log responses arrive a
   assert.equal(tab.state.summary.requests, 2);
   assert.equal(tab.state.items[0].request_id, "r2");
   assert.equal(tab.state.page, 2);
+  assert.equal(tab.rows[0].displayStatus, "失敗");
+  assert.equal(tab.logLabels.status, "狀態");
+  assert.equal(tab.logLabels.time, "時間（台北時間）");
   assert.equal(tab.rows[0].safeError, "服務暫時無法使用");
   assert.equal(tab.rows[0].displaySpend, "<0.0001 點");
   for (const dispose of globalThis.__llmUsageHooks.unmount) dispose();

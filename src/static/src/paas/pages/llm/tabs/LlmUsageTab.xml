@@ -63,13 +63,13 @@
             <thead><tr><th>Time (Taipei)</th><th>API key</th><th>Model</th><th>Tokens</th><th>Spend</th><th>Status</th><th>Request ID</th></tr></thead>
             <tbody>
               <tr t-foreach="rows" t-as="row" t-key="row.key">
-                <td data-label="Time (Taipei)" t-esc="row.displayTime"/>
-                <td data-label="API key" t-esc="row.displayKeyName"/>
-                <td data-label="Model"><code t-esc="row.model || '—'"/></td>
-                <td data-label="Tokens"><span>In <t t-esc="row.displayInput"/> · Out <t t-esc="row.displayOutput"/></span><small>Cache <t t-esc="row.displayCache"/></small></td>
-                <td data-label="Spend" t-esc="row.displaySpend"/>
-                <td data-label="Status"><span t-esc="row.status === 'error' ? 'Failed' : 'Successful'"/><small t-if="row.safeError" t-esc="row.safeError"/></td>
-                <td data-label="Request ID" class="o_woow_llm_usage__request_id">
+                <td t-att-data-label="logLabels.time" t-esc="row.displayTime"/>
+                <td t-att-data-label="logLabels.key" t-esc="row.displayKeyName"/>
+                <td t-att-data-label="logLabels.model"><code t-esc="row.model || '—'"/></td>
+                <td t-att-data-label="logLabels.tokens"><span>In <t t-esc="row.displayInput"/> · Out <t t-esc="row.displayOutput"/></span><small>Cache <t t-esc="row.displayCache"/></small></td>
+                <td t-att-data-label="logLabels.spend" t-esc="row.displaySpend"/>
+                <td t-att-data-label="logLabels.status"><span t-esc="row.displayStatus"/><small t-if="row.safeError" t-esc="row.safeError"/></td>
+                <td t-att-data-label="logLabels.requestId" class="o_woow_llm_usage__request_id">
                   <code t-esc="row.request_id || '—'"/>
                   <button t-if="row.request_id" type="button" t-on-click="() => this.copyRequestId(row.request_id)"
                           t-att-aria-label="copyLabel(row.request_id)">Copy</button>

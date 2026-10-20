@@ -109,6 +109,10 @@ export class LlmUsageTab extends Component {
   get footerText() {
     return _t("Statistics are delayed by about 5 minutes; logs are retained for 180 days; concurrent requests may cause actual spend to exceed an API key’s total limit.");
   }
+  get logLabels() {
+    return { time: _t("Time (Taipei)"), key: _t("API key"), model: _t("Model"), tokens: _t("Tokens"),
+      spend: _t("Spend"), status: _t("Status"), requestId: _t("Request ID") };
+  }
   get rows() {
     return this.state.items.map((item, index) => ({
       ...item,
@@ -123,6 +127,7 @@ export class LlmUsageTab extends Component {
         : Number.isInteger(item.quota)
           ? _t("%(amount)s pts", { amount: quotaToPointsText(item.quota, 4) })
           : formatSpendPoints(item.spend_points),
+      displayStatus: item.status === "error" ? _t("Failed") : _t("Successful"),
       safeError: item.status === "error" ? usageErrorLabel(item.error_code) : "",
     }));
   }
