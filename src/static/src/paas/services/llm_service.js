@@ -32,6 +32,23 @@ function validKeyId(keyId) {
   return Number.isSafeInteger(keyId) && keyId > 0;
 }
 
+function validUpdateName(value) {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 64;
+}
+
+function validUpdateModels(value) {
+  if (value === null) return true;
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const seen = new Set();
+  for (const model of value) {
+    if (typeof model !== "string" || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model) || seen.has(model)) {
+      return false;
+    }
+    seen.add(model);
+  }
+  return true;
+}
+
 function failure(code) {
   return { success: false, code };
 }
@@ -230,10 +247,20 @@ export const llmService = reactive({
     const params = { key_id: keyId };
     for (const name of ["name", "limitPoints", "expires", "models"]) {
       if (!Object.hasOwn(changes, name)) continue;
-      if (changes[name] === undefined) return failure(KEY_INVALID);
-      if (name === "limitPoints" && changes[name] !== null
-        && (!Number.isSafeInteger(changes[name]) || changes[name] <= 0)) return failure(KEY_INVALID);
-      params[name === "limitPoints" ? "limit_points" : name] = changes[name];
+      let value;
+      try {
+        value = changes[name];
+      } catch {
+        return failure(KEY_INVALID);
+      }
+      if (value === undefined) return failure(KEY_INVALID);
+      if (name === "name" && !validUpdateName(value)) return failure(KEY_INVALID);
+      if (name === "limitPoints" && value !== null
+        && (!Number.isSafeInteger(value) || value <= 0)) return failure(KEY_INVALID);
+      if (name === "expires" && value !== null
+        && !["30d", "90d", "180d", "never"].includes(value)) return failure(KEY_INVALID);
+      if (name === "models" && !validUpdateModels(value)) return failure(KEY_INVALID);
+      params[name === "limitPoints" ? "limit_points" : name] = value;
     }
     if (Object.keys(params).length === 1) return failure(KEY_INVALID);
     return runKeyAction(this, "update", keyId, "/api/llm/keys/update", params);

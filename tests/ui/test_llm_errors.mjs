@@ -240,18 +240,18 @@ test("其他端點用預設逾時（rpc.js 30 秒），只有建金鑰明確傳 
   assert.deepEqual(calls[1][1], { tos_version: "draft-0" });
 });
 
-test("paid key mutations preserve omitted/null fields, refresh both resources, and sanitize results", async () => {
+test("paid key mutations validate fields, preserve omitted/null fields, refresh, and sanitize results", async () => {
   const calls = [];
   globalThis.__llmRpc = async (...args) => {
     calls.push(args);
     if (args[0] === "/api/llm/keys/update") return { success: true, data: { key: "sk-" + "SyntheticSecret" } };
     return { success: true, data: args[0] === "/api/llm/keys/list" ? { items: [] } : {} };
   };
-  assert.deepEqual(await llmService.updateKey(7, { name: null, limitPoints: null, ignored: "no" }), {
+  assert.deepEqual(await llmService.updateKey(7, { name: "Renamed", limitPoints: null, ignored: "no" }), {
     success: true, data: { key: "sk-SyntheticSecret" },
   });
   assert.deepEqual(calls.slice(0, 3).map(([url, params]) => [url, params]), [
-    ["/api/llm/keys/update", { key_id: 7, name: null, limit_points: null }],
+    ["/api/llm/keys/update", { key_id: 7, name: "Renamed", limit_points: null }],
     ["/api/llm/keys/list", {}], ["/api/llm/state", {}],
   ]);
   assert.equal(JSON.stringify(llmService).includes("sk-SyntheticSecret"), false);
@@ -264,10 +264,25 @@ test("paid key mutations preserve omitted/null fields, refresh both resources, a
   assert.deepEqual(await llmService.updateKey(7, { expires: "90d" }), { success: true, data: { key: "sk-SyntheticSecret" } });
   assert.deepEqual(calls[0][1], { key_id: 7, expires: "90d" });
   calls.length = 0;
+  assert.deepEqual(await llmService.updateKey(7, { models: ["openai/gpt-4.1", "vendor:model_v2/path-1"] }), {
+    success: true, data: { key: "sk-SyntheticSecret" },
+  });
+  assert.deepEqual(calls[0][1], { key_id: 7, models: ["openai/gpt-4.1", "vendor:model_v2/path-1"] });
+  calls.length = 0;
+
+  const cyclicArray = [];
+  cyclicArray.push(cyclicArray);
+  const cyclicObject = {};
+  cyclicObject.self = cyclicObject;
   for (const args of [
     [0, { name: "x" }], [1.5, { name: "x" }], [Number.MAX_SAFE_INTEGER + 1, { name: "x" }],
     [1, {}], [1, { name: undefined }], [1, { name: undefined, expires: "90d" }], [1, null],
+    [1, { name: null }], [1, { name: "" }], [1, { name: " \t\n" }], [1, { name: "x".repeat(65) }], [1, { name: 42 }],
     [1, { limitPoints: 0 }], [1, { limitPoints: -1 }], [1, { limitPoints: 1.5 }], [1, { limitPoints: "2" }],
+    [1, { expires: "30" }], [1, { expires: {} }], [1, { expires: cyclicObject }], [1, { expires: undefined }],
+    [1, { models: "openai/gpt-4.1" }], [1, { models: [] }], [1, { models: ["x", "x"] }],
+    [1, { models: ["bad model"] }], [1, { models: ["x".repeat(129)] }], [1, { models: [null] }],
+    [1, { models: cyclicArray }], [1, { models: [{ id: "openai/gpt-4.1" }] }],
   ]) assert.deepEqual(await llmService.updateKey(...args), { success: false, code: "llm_key_invalid" });
   assert.equal(calls.length, 0, "invalid updates must not make any RPCs");
 
@@ -317,6 +332,27 @@ test("action failures do not refresh and session expiry stays classified", async
   assert.deepEqual(await llmService.extendKey(81), { success: false, code: "llm_session_expired" });
   assert.deepEqual(calls.map(([url]) => url), ["/api/llm/keys/extend"]);
   assert.equal(JSON.stringify(llmService).includes("synthetic"), false);
+});
+
+test("a failed mutation does not refresh and releases its queue for a successful retry", async () => {
+  const calls = [];
+  let attempt = 0;
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend") {
+      attempt += 1;
+      if (attempt === 1) return { success: false, code: "llm_key_invalid", error: "raw detail" };
+      return { success: true, data: { key: "sk-never-in-store" } };
+    }
+    return { success: true, data: args[0] === "/api/llm/keys/list" ? { items: [] } : {} };
+  };
+  assert.deepEqual(await llmService.extendKey(82), { success: false, code: "llm_key_invalid" });
+  assert.deepEqual(calls.map(([url]) => url), ["/api/llm/keys/extend"], "failed action must not refresh");
+  assert.deepEqual(await llmService.extendKey(82), { success: true, data: { key: "sk-never-in-store" } });
+  assert.deepEqual(calls.map(([url]) => url), [
+    "/api/llm/keys/extend", "/api/llm/keys/extend", "/api/llm/keys/list", "/api/llm/state",
+  ]);
+  assert.equal(JSON.stringify(llmService).includes("sk-never-in-store"), false);
 });
 
 test("mutation intents serialize per key, dedupe identical requests, and release after completion", async () => {
