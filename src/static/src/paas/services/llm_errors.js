@@ -103,6 +103,7 @@ const CODE_MAP = Object.assign(Object.create(null), {
   },
   llm_no_refund_ack_required: () => _t("Please confirm that converted AI credit cannot be refunded."),
   llm_invalid_range: () => _t("You can query at most 31 days at a time."),
+  llm_invalid_filter: () => _t("One or more usage filters are invalid."),
   llm_account_error: () => _t("Setting up your AI models account failed. Please contact support."),
   llm_internal_error: () => _t("Something went wrong. Please try again later."),
   llm_auth_required: () => _t("Authentication required"),

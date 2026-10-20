@@ -41,8 +41,11 @@ from ..models.llm_common import (
     ERR_LLM_INTERNAL,
     ERR_LLM_INVALID_REQUEST,
     ERR_LLM_KEY_ALREADY_SHOWN,
+    ERR_LLM_KEY_CANNOT_ENABLE,
     ERR_LLM_KEY_INVALID,
     ERR_LLM_KEY_LIMIT,
+    ERR_LLM_KEY_LIMIT_BELOW_USED,
+    ERR_LLM_KEY_NOT_FOUND,
     ERR_LLM_NOT_ACTIVATED,
     ERR_LLM_NO_REFUND_ACK_REQUIRED,
     ERR_LLM_ORDER_NOT_FOUND,
@@ -60,6 +63,7 @@ from ..models.llm_common import (
     LlmError,
     llm_visible,
 )
+from ..models.llm_api_key import _OMITTED
 from ..services import llm_redact
 from .ha_paas import HiddenChainMixin
 from .paas import _account_denial
@@ -71,12 +75,20 @@ KEY_MODEL = 'woow_paas_platform.llm_api_key'
 ORDER_MODEL = 'woow_paas_platform.llm_credit_order'
 TERMS_MODEL = 'woow_paas_platform.llm_terms'
 #: 錯誤回應可以帶的參數欄位（只放數字與固定字串，前端用來組句）。
-_SAFE_PARAMS = frozenset({'retry_after', 'current_version', 'max_keys', 'field',
-                          'needed_7d', 'short_by'})
+_SAFE_PARAMS = frozenset({
+    'retry_after', 'current_version', 'max_keys', 'field',
+    'needed_7d', 'short_by',
+    # LLM-07：都是 closed code／integer；不可把 key label、model list 或 upstream body 帶出來。
+    'reason', 'used',
+})
 
 
 def _message(code: str) -> str:
     """後端的 fallback 訊息（前端以 code 組句為準）。"""
+    if code == 'llm_invalid_range':
+        return _('Choose a date range of at most 31 days within the last 180 days.')
+    if code == 'llm_invalid_filter':
+        return _('Please check the usage filters and page size.')
     if code == ERR_LLM_DISABLED:
         return _('This feature is not available yet.')
     if code == ERR_LLM_NOT_ACTIVATED:
@@ -112,6 +124,12 @@ def _message(code: str) -> str:
                  'Please delete it and create a new one.')
     if code == ERR_LLM_KEY_INVALID:
         return _('The key settings are invalid.')
+    if code == ERR_LLM_KEY_NOT_FOUND:
+        return _('This key could not be found.')
+    if code == ERR_LLM_KEY_LIMIT_BELOW_USED:
+        return _('The total limit cannot be lower than what this key has already used.')
+    if code == ERR_LLM_KEY_CANNOT_ENABLE:
+        return _('This key cannot be enabled right now.')
     if code == ERR_LLM_UNAVAILABLE:
         return _('The AI models service is temporarily unavailable. Please try again later.')
     if code == ERR_LLM_AUTH_REQUIRED:
@@ -179,12 +197,18 @@ class LlmController(HiddenChainMixin, Controller):
         except OperationalError:
             if not swallow_operational:
                 raise
-            _logger.error('[LLM] %s: database error after the external call (uid=%s): %s',
-                          endpoint, request.env.uid, llm_redact.redact(traceback.format_exc()))
+            if endpoint == 'keys/create':
+                _logger.error('[LLM] internal error endpoint=keys/create uid=%s', request.env.uid)
+            else:
+                _logger.error('[LLM] %s: database error after the external call (uid=%s): %s',
+                              endpoint, request.env.uid, llm_redact.redact(traceback.format_exc()))
             return _fail(ERR_LLM_UNAVAILABLE)
         except Exception:  # noqa: BLE001 - see module docstring (catch-all)
-            _logger.error('[LLM] %s failed (uid=%s): %s', endpoint, request.env.uid,
-                          llm_redact.redact(traceback.format_exc()))
+            if endpoint == 'keys/create':
+                _logger.error('[LLM] internal error endpoint=keys/create uid=%s', request.env.uid)
+            else:
+                _logger.error('[LLM] %s failed (uid=%s): %s', endpoint, request.env.uid,
+                              llm_redact.redact(traceback.format_exc()))
             return _fail(ERR_LLM_INTERNAL)
 
     @route('/api/llm/state', auth='user', methods=['POST'], type='json')
@@ -224,19 +248,70 @@ class LlmController(HiddenChainMixin, Controller):
                          ._llm_keys_payload(partner))
 
     @route('/api/llm/keys/create', auth='user', methods=['POST'], type='json')
-    def llm_keys_create(self, client_request_id=None, kind=None, **kw) -> dict[str, Any]:
+    def llm_keys_create(self, client_request_id=None, kind=None, name=None,
+                        limit_points=None, expires=None, models=None,
+                        **kw) -> dict[str, Any]:
         def handler(partner):
-            if kind != 'free_trial':
-                # 付費金鑰在 LLM-07。
-                raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
-            return request.env[KEY_MODEL]._llm_create_free_trial_key(
-                partner, client_request_id, request.env.user, _peer_ip())
+            if kind == 'free_trial':
+                return request.env[KEY_MODEL]._llm_create_free_trial_key(
+                    partner, client_request_id, request.env.user, _peer_ip())
+            if kind == 'paid':
+                return request.env[KEY_MODEL]._llm_create_paid_key(
+                    partner, client_request_id, request.env.user, _peer_ip(),
+                    request.session, name=name, limit_points=limit_points,
+                    expires=expires, models=models)
+            raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
         return self._run('keys/create', handler, swallow_operational=True)
+
+    @route('/api/llm/keys/update', auth='user', methods=['POST'], type='json')
+    def llm_keys_update(self, key_id=None, **kw) -> dict[str, Any]:
+        """Keep omitted JSON fields distinct from explicit ``null`` for the service."""
+        def handler(partner):
+            return request.env[KEY_MODEL]._llm_update_key(
+                partner, key_id, user=request.env.user, real_ip=_peer_ip(),
+                name=kw.get('name', _OMITTED),
+                limit_points=kw.get('limit_points', _OMITTED),
+                expires=kw.get('expires', _OMITTED),
+                models=kw.get('models', _OMITTED))
+        return self._run('keys/update', handler)
+
+    @route('/api/llm/keys/extend', auth='user', methods=['POST'], type='json')
+    def llm_keys_extend(self, key_id=None, **kw) -> dict[str, Any]:
+        return self._run('keys/extend', lambda partner: request.env[KEY_MODEL]
+                         ._llm_extend_key(partner, key_id, user=request.env.user,
+                                          real_ip=_peer_ip()))
+
+    @route('/api/llm/keys/set_status', auth='user', methods=['POST'], type='json')
+    def llm_keys_set_status(self, key_id=None, enabled=None, **kw) -> dict[str, Any]:
+        return self._run('keys/set_status', lambda partner: request.env[KEY_MODEL]
+                         ._llm_set_key_status(partner, key_id, enabled, user=request.env.user,
+                                              real_ip=_peer_ip(), session=request.session))
+
+    @route('/api/llm/keys/delete', auth='user', methods=['POST'], type='json')
+    def llm_keys_delete(self, key_id=None, confirm_name=None, **kw) -> dict[str, Any]:
+        return self._run('keys/delete', lambda partner: request.env[KEY_MODEL]
+                         ._llm_delete_key(partner, key_id, confirm_name, user=request.env.user,
+                                          real_ip=_peer_ip()))
 
     @route('/api/llm/models', auth='user', methods=['POST'], type='json')
     def llm_models(self) -> dict[str, Any]:
         return self._run('models', lambda partner: request.env['woow_paas_platform.llm_swr_cache']
                          ._llm_models_payload())
+
+    @route('/api/llm/usage/summary', auth='user', methods=['POST'], type='json')
+    def llm_usage_summary(self, **kw) -> dict[str, Any]:
+        return self._run('usage/summary', lambda partner: request.env[ACCOUNT_MODEL]
+                         ._llm_usage_aggregate(partner, kw))
+
+    @route('/api/llm/usage/daily', auth='user', methods=['POST'], type='json')
+    def llm_usage_daily(self, **kw) -> dict[str, Any]:
+        return self._run('usage/daily', lambda partner: request.env[ACCOUNT_MODEL]
+                         ._llm_usage_aggregate(partner, kw, chart=True))
+
+    @route('/api/llm/usage/logs', auth='user', methods=['POST'], type='json')
+    def llm_usage_logs(self, **kw) -> dict[str, Any]:
+        return self._run('usage/logs', lambda partner: request.env[ACCOUNT_MODEL]
+                         ._llm_usage_logs(partner, kw))
 
     @route('/api/llm/usage/recent', auth='user', methods=['POST'], type='json')
     def llm_usage_recent(self) -> dict[str, Any]:

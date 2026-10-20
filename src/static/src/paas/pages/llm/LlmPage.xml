@@ -22,9 +22,12 @@
       </nav>
 
       <div class="o_woow_llm_page__content">
-        <LlmOverviewTab t-if="currentTab === 'overview'"/>
+        <LlmOverviewTab t-if="currentTab === 'overview'" onOpenDocs.bind="openDocsWithKey"/>
+        <LlmKeysTab t-elif="currentTab === 'keys'" onOpenDocs.bind="openDocsWithKey"/>
+        <LlmUsageTab t-elif="currentTab === 'usage'"/>
         <LlmModelsTab t-elif="currentTab === 'models'"/>
         <LlmCreditTab t-elif="currentTab === 'credit'"/>
+        <LlmDocsTab t-elif="currentTab === 'docs'" initialKey="docsKeyHandoff.peekKey()" initialMode="docsKeyHandoff.peekMode()" initialAllowedModels="docsKeyHandoff.peekAllowedModels()" onConsumeKey.bind="consumeDocsKey" baseUrl="docsBaseUrl"/>
         <div t-elif="!currentTabLive" class="o_woow_llm_page__soon">
           <WoowIcon name="'schedule'" size="32"/>
           <h3 t-esc="currentTabLabel"/>

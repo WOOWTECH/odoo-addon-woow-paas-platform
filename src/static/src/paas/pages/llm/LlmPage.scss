@@ -303,6 +303,28 @@
   }
 }
 
+.o_woow_llm_usage_overview {
+  margin-top: 20px;
+  padding: 20px;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(33, 33, 33, .06);
+
+  &__heading, &__metrics { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  &__heading { margin-bottom: 18px; }
+  &__heading h3 { margin: 0; }
+  &__heading > span, &__metrics > div > span { color: #646262; }
+  &__metrics { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
+  &__metrics > div { display: grid; gap: 4px; min-width: 110px; }
+  &__metrics strong { font-family: $woow-font-display; font-size: 20px; }
+  @media (max-width: $woow-bp-sm) {
+    padding: 16px;
+    &__heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+    &__metrics { justify-content: space-between; gap: 8px; }
+    &__metrics > div { min-width: 0; }
+  }
+}
+
 .o_woow_llm_card {
   display: flex;
   flex-direction: column;

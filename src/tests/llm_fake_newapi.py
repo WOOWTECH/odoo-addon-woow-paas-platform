@@ -26,17 +26,25 @@ Odoo 測試真的跑的是 model、cron、獨立 cursor 與 commit，以及：
 * ``fail_next``：指定方法下一次**照常執行**、但回給定的 ``Result``（例如「建好了但回應遺失」
   的 ``Unknown``、列表失敗的 ``NotExecuted``）。
 * ``fail_before``：指定方法下一次**不執行**、只回給定的 ``Result``（例如「沒建成、結果未知」）。
+* ``fail_before_all``：指定方法每次都不執行、都回給定的 ``Result``（多日 SWR 失敗測試）。
 * ``crash_before``／``crash_after``：在指定方法之前／之後丟例外（一次）——模擬 pod 在
   開戶途中被殺。丟 :class:`SimulatedCrash`（``BaseException``）才不會被 cron 的
   catch-all 吃掉，等同行程直接死掉。
 """
+import json
 import secrets
 import string
 import time
+from datetime import datetime, timedelta, timezone
 
 from ..services import newapi_client as nac
 
 _ALNUM = string.ascii_letters + string.digits
+_TAIPEI = timezone(timedelta(hours=8))
+_TOKEN_BODY_FIELDS = (
+    'name', 'expired_time', 'remain_quota', 'unlimited_quota', 'model_limits_enabled',
+    'model_limits', 'allow_ips', 'group', 'cross_group_retry', 'allow_user_quota_query',
+)
 #: ``NewApiClient`` 的公開方法（角色視圖只管這些；``pats_of`` 等測試 helper 照常穿透）。
 CLIENT_METHODS = frozenset(
     name for name in dir(nac.NewApiClient)
@@ -75,6 +83,10 @@ class _RoleClient:
             if role == nac.ROLE_WEB and name not in nac.WEB_METHODS:
                 # 與 NewApiClient._request 相同：WEB 金鑰叫 cron 路由，送出前就擋。
                 raise nac.NewApiInputError('web_key_scope')
+            persistent = fake.fail_before_all.get(name)
+            if persistent is not None:
+                fake.calls.append((name, args[0] if name.startswith('user_') and args else ''))
+                return persistent
             dropped = fake.fail_before.pop(name, None)
             if dropped is not None:
                 # 請求沒有到 new-api（或到了但沒有任何效果），只回這個結果。
@@ -97,6 +109,7 @@ class FakeNewApi:
         self.role_calls = []
         self.fail_next = {}
         self.fail_before = {}
+        self.fail_before_all = {}
         self.crash_before = {}
         self.crash_after = {}
         self.users = {}
@@ -105,6 +118,28 @@ class FakeNewApi:
         self.pats = {}
         self.tokens = {}
         self.logs = []
+        # Exact v1.0.0-rc.44 user-scoped usage responses used by LLM-09.
+        self.usage_stat = {'quota': 1562500, 'rpm': 20, 'tpm': 4000}
+        self.usage_data = [{
+            'model_name': 'paid-a', 'created_at': 1900000000, 'count': 2,
+            'quota': 31250, 'token_used': 600,
+        }]
+        # Tests may override a specific Taipei date. By default the flow comes
+        # from this fake user's own type=2 logs, like rc.44's quota_data query.
+        self.usage_flow = {}
+        self.usage_log_rows = [{
+            'id': 2401, 'request_id': 'req_llm09_known_001',
+            'created_at': int(self.clock()), 'type': 2,
+            'model_name': 'paid-a', 'token_name': 'wp_501_demo', 'use_group': 'default',
+            'prompt_tokens': 200, 'completion_tokens': 400, 'quota': 31250,
+            'use_time': 2, 'group': 'default',
+            'channel': 73, 'channel_name': 'private-channel-name',
+            'content': 'raw upstream error body',
+            'other': json.dumps({
+                'admin_info': {'admin_id': 7, 'note': 'raw upstream prose'},
+                'message': 'upstream private explanation', 'cache_tokens': 80,
+            }),
+        }]
         self.quota_additions = []
         # The configured verifier trust anchor. Tests may deliberately change
         # it to exercise a mismatched operation log.
@@ -389,9 +424,17 @@ class FakeNewApi:
             return self._leave('user_list_tokens', error)
         mine = sorted((t for t in self.tokens.values() if t['user_id'] == user['id']),
                       key=lambda t: -t['id'])
-        items = [dict(t, key=t['key'][:4] + '*' * 10 + t['key'][-4:])
+        items = [self._masked_token(t)
                  for t in mine[(page - 1) * page_size:page * page_size]]
         return self._leave('user_list_tokens', self._ok({'items': items, 'total': len(mine)}))
+
+    @staticmethod
+    def _masked_token(token):
+        result = dict(token, key=token['key'][:4] + '*' * 10 + token['key'][-4:])
+        # rc.44 controller.buildMaskedTokenResponse embeds model.Token, which
+        # does not expose the proxy-only write-contract field below.
+        result.pop('allow_user_quota_query', None)
+        return result
 
     def user_get_token(self, client_ip, up, token_id, **kw):
         self._enter('user_get_token', client_ip)
@@ -401,7 +444,7 @@ class FakeNewApi:
         token = self.tokens.get(token_id)
         if not token or token['user_id'] != user['id']:
             return self._leave('user_get_token', nac.Definite(reason='no_message_key', status=200))
-        return self._leave('user_get_token', self._ok(dict(token, key=token['key'][:4] + '**')))
+        return self._leave('user_get_token', self._ok(self._masked_token(token)))
 
     def user_reveal_token(self, client_ip, up, token_id, **kw):
         self._enter('user_reveal_token', client_ip)
@@ -419,17 +462,124 @@ class FakeNewApi:
                                             status=403))
         return self._leave('user_reveal_token', self._ok({'key': token['key']}))
 
+    def user_update_token(self, client_ip, up, body, **kw):
+        self._enter('user_update_token', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_update_token', error)
+        if not isinstance(body, dict) or set(body) != set(_TOKEN_BODY_FIELDS) | {'id'} \
+                or type(body.get('id')) is not int:
+            return self._leave('user_update_token',
+                               nac.Definite(reason='token_fields', status=400))
+        token = self.tokens.get(body['id'])
+        if not token or token['user_id'] != user['id']:
+            return self._leave('user_update_token',
+                               nac.Unknown('no_message_key', status=200))
+        token.update({field: body[field] for field in _TOKEN_BODY_FIELDS})
+        return self._leave('user_update_token', self._ok())
+
+    def user_set_token_status(self, client_ip, up, token_id, enabled, **kw):
+        if type(enabled) is not bool:
+            raise nac.NewApiInputError('token_status') from None
+        self._enter('user_set_token_status', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_set_token_status', error)
+        token = self.tokens.get(token_id) if type(token_id) is int else None
+        if not token or token['user_id'] != user['id']:
+            return self._leave('user_set_token_status',
+                               nac.Unknown('no_message_key', status=200))
+        token['status'] = 1 if enabled else 2
+        return self._leave('user_set_token_status', self._ok())
+
+    def user_delete_token(self, client_ip, up, token_id, **kw):
+        self._enter('user_delete_token', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_delete_token', error)
+        token = self.tokens.get(token_id) if type(token_id) is int else None
+        if not token or token['user_id'] != user['id']:
+            return self._leave('user_delete_token',
+                               nac.Unknown('no_message_key', status=200))
+        self.tokens.pop(token_id)
+        return self._leave('user_delete_token', self._ok())
+
     def user_log_self(self, client_ip, up, query, **kw):
         self._enter('user_log_self', client_ip)
         user, error = self._user_by_bearer(up)
         if error:
             return self._leave('user_log_self', error)
+        page, size = query.get('p', 1), query.get('page_size', 10)
+        log_type = query.get('type', 2)
+        if (type(page) is not int or not 1 <= page <= 10000
+                or type(size) is not int or not 1 <= size <= 100
+                or type(log_type) is not int):
+            return self._leave('user_log_self', nac.Definite(reason='no_message_key', status=200))
+        start, end = query.get('start_timestamp', 0), query.get('end_timestamp', 0)
         rows = [r for r in self.logs if r['user_id'] == user['id']
-                and r['created_at'] >= int(query.get('start_timestamp') or 0)
-                and (not query.get('group') or r.get('group') == query['group'])]
-        rows.sort(key=lambda r: -r['created_at'])
-        size = int(query.get('page_size') or 10)
-        return self._leave('user_log_self', self._ok({'items': rows[:size], 'total': len(rows)}))
+                and r.get('created_at', 0) >= start
+                and (not end or r.get('created_at', 0) <= end)
+                and r.get('type', 2) == log_type
+                and (not query.get('group') or r.get('group') == query['group'])
+                and ('token_name' not in query or r.get('token_name') == query['token_name'])
+                and ('model_name' not in query or r.get('model_name') == query['model_name'])]
+        # rc.44's self endpoint sorts newest first; id breaks same-second ties.
+        rows.sort(key=lambda r: (r.get('created_at', 0), r.get('id', 0)), reverse=True)
+        total = len(rows)
+        start_idx = (page - 1) * size
+        return self._leave('user_log_self', self._ok({
+            'items': rows[start_idx:start_idx + size], 'total': total,
+        }))
+
+    def user_log_self_stat(self, client_ip, up, query, **kw):
+        self._enter('user_log_self_stat', client_ip)
+        _user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_log_self_stat', error)
+        return self._leave('user_log_self_stat', self._ok(dict(self.usage_stat)))
+
+    def user_data_self(self, client_ip, up, start, end, **kw):
+        self._enter('user_data_self', client_ip)
+        _user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_data_self', error)
+        return self._leave('user_data_self', self._ok(
+            [dict(r) for r in self.usage_data if start <= r['created_at'] <= end]))
+
+    def user_data_flow_self(self, client_ip, up, start, end, **kw):
+        self._enter('user_data_flow_self', client_ip)
+        user, error = self._user_by_bearer(up)
+        if error:
+            return self._leave('user_data_flow_self', error)
+        day = datetime.fromtimestamp(start, _TAIPEI).date().isoformat()
+        if day in self.usage_flow:
+            return self._leave('user_data_flow_self', self._ok(
+                [dict(row) for row in self.usage_flow[day]]))
+
+        # rc.44 returns post-range aggregates from quota_data, grouped by
+        # token_id/use_group/model_name, for this user and requested day only.
+        grouped = {}
+        for log in self.logs:
+            if (log.get('user_id') != user['id'] or log.get('type', 2) != 2
+                    or not start <= log.get('created_at', 0) <= end):
+                continue
+            token = next((item for item in self.tokens.values()
+                          if item['user_id'] == user['id']
+                          and item['name'] == log.get('token_name')), None)
+            group = log.get('group') or (token.get('group') if token else '')
+            if not group:
+                continue
+            token_id = token['id'] if token else 0
+            model = log.get('model_name') or ''
+            key = (token_id, group, model)
+            row = grouped.setdefault(key, {
+                'token_id': token_id, 'use_group': group, 'model_name': model,
+                'count': 0, 'quota': 0, 'token_used': 0,
+            })
+            row['count'] += 1
+            row['quota'] += log.get('quota', 0)
+            row['token_used'] += log.get('prompt_tokens', 0) + log.get('completion_tokens', 0)
+        return self._leave('user_data_flow_self', self._ok(list(grouped.values())))
 
     def add_log(self, user_id, token_name, model='qwen3-4b-cluster1', group='free'):
         """模擬一次 relay 呼叫留下的 type=2 log（含要被 DTO 剝掉的 channel）。"""
@@ -438,3 +588,21 @@ class FakeNewApi:
             'created_at': int(self.clock()), 'prompt_tokens': 12, 'completion_tokens': 34,
             'use_time': 2, 'request_id': _rand(20), 'channel': 7, 'quota': 0, 'type': 2,
         })
+
+    def add_usage_log(self, user_id, token_name, log_type=2, model='paid-a'):
+        """Add a current, typed sensitive rc.44 row for the LLM-09 DTO tests."""
+        row = dict(self.usage_log_rows[0], user_id=user_id, token_name=token_name,
+                   created_at=int(self.clock()), type=log_type, model_name=model,
+                   id=self._id('log'))
+        if log_type == 5:
+            row.update({
+                'request_id': 'req_llm09_error_001', 'prompt_tokens': 0,
+                'completion_tokens': 0, 'quota': 0,
+                'other': json.dumps({
+                    'status_code': 429, 'error_type': 'rate_limit_error',
+                    'error_code': 'provider-private-code',
+                    'message': 'raw provider error text must not escape',
+                    'admin_info': {'admin_id': 7},
+                }),
+            })
+        self.logs.append(row)
