@@ -429,6 +429,16 @@ test("mutation intents serialize per key, dedupe identical requests, and release
     }
     assert.fail(`Timed out after 20 event-loop turns waiting for ${description}`);
   };
+  const waitForPendingSettlement = async () => {
+    const settlement = Promise.allSettled([...pendingWork]);
+    let settled = false;
+    settlement.then(() => { settled = true; });
+    for (let turn = 0; turn < 20; turn += 1) {
+      if (settled) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail(`Timed out after 20 event-loop turns waiting for ${pendingWork.size} tracked mutation promise(s) to settle`);
+  };
   const resolveOld = {};
   let releaseAction;
   let releaseFirstStatus;
@@ -562,9 +572,12 @@ test("mutation intents serialize per key, dedupe identical requests, and release
     for (const promise of [first, second, independent, enabling, disabling, sameFirst, sameSecond, oldKeys, oldState]) {
       if (promise) pendingWork.add(promise);
     }
-    await Promise.allSettled([...pendingWork]);
-    globalThis.__llmRpc = priorRpc;
-    for (const [field, value] of Object.entries(priorServiceState)) llmService[field] = value;
+    try {
+      await waitForPendingSettlement();
+    } finally {
+      globalThis.__llmRpc = priorRpc;
+      for (const [field, value] of Object.entries(priorServiceState)) llmService[field] = value;
+    }
   }
 });
 
