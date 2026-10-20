@@ -12,8 +12,9 @@ const helpers = await import(helpersUrl);
 const chartSource = stubImports(await readPaas("components/llm/LlmUsageChart.js"), {
   "@odoo/owl": "class Component {}",
   "@web/core/l10n/translation": translateFromGlobal,
+  "../../utils/datetime_helpers": "const formatUserDate = value => globalThis.__llmFormatUserDate(value);",
 });
-const { usageChartLayout } = await import(toDataUrl(chartSource));
+const { usageChartLayout, LlmUsageChart } = await import(toDataUrl(chartSource));
 const formatUrl = toDataUrl(stubImports(await readPaas("utils/llm_format.js"), {
   "@web/core/l10n/translation": translateFromGlobal,
 }));
@@ -51,6 +52,21 @@ test("preset date boundaries use Taipei dates and custom ranges obey 31/180-day 
   assert.equal(helpers.validateUsageDates("2026-04-23", "2026-04-23", "2026-10-20"), "history");
   assert.equal(helpers.validateUsageDates("2026-02-30", "2026-03-01", "2026-10-20"), "date");
   assert.equal(helpers.validateUsageDates("2026-10-20", "2026-10-20", "2026-10-20"), null);
+});
+
+test("Taipei billing date crosses midnight, month and leap-day boundaries without browser locale", () => {
+  assert.equal(helpers.taipeiToday(new Date("2026-10-20T15:59:59Z")), "2026-10-20");
+  assert.equal(helpers.taipeiToday(new Date("2026-10-20T16:00:00Z")), "2026-10-21");
+  assert.equal(helpers.taipeiToday(new Date("2026-12-31T16:00:00Z")), "2027-01-01");
+  assert.equal(helpers.taipeiToday(new Date("2028-02-28T16:00:00Z")), "2028-02-29");
+});
+
+test("chart calendar dates use the shared user-language formatter", () => {
+  const chart = new LlmUsageChart();
+  globalThis.__llmFormatUserDate = value => value.split("-").reverse().join("/");
+  assert.equal(chart.formatDate("2026-10-20"), "20/10/2026");
+  globalThis.__llmFormatUserDate = value => value.replaceAll("-", "/");
+  assert.equal(chart.formatDate("2026-10-20"), "2026/10/20");
 });
 
 test("request parameters include selected key/model and log status only for logs; page size stays bounded", () => {
