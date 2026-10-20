@@ -372,6 +372,17 @@ $woow-radius-lg: 1.25rem;
     gap: 0.5rem;
 }
 
+// X-LC-006-4：複製後的文字回饋（role=status，讀屏也會播報）；平常是空的、不佔位。
+.o_woow_copy_feedback {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: $woow-primary;
+
+    &:empty {
+        display: none;
+    }
+}
+
 .o_woow_copy_btn {
     background: transparent;
     border: none;
@@ -384,6 +395,35 @@ $woow-radius-lg: 1.25rem;
     &:hover {
         background: rgba(0, 0, 0, 0.05);
         color: $woow-primary;
+    }
+}
+
+// INFRA-FIX-005：VPN 節點狀態卡
+.o_woow_vpn_state {
+    font-weight: 600;
+
+    &.o_woow_vpn_state_ok { color: #22c55e; }
+    &.o_woow_vpn_state_warn { color: #d97706; }
+    &.o_woow_vpn_state_bad { color: #dc2626; }
+    &.o_woow_vpn_state_muted { color: #6b7280; }
+}
+
+// INFRA-TS-005-5：上一次登入失敗的原因
+.o_woow_vpn_login_error {
+    color: #dc2626;
+}
+
+.o_woow_vpn_forwards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+
+    .o_woow_vpn_forward {
+        margin-bottom: 0.4rem;
+
+        &.o_woow_vpn_forward_ok small { color: #16a34a; }
+        &.o_woow_vpn_forward_warn small { color: #d97706; }
+        &.o_woow_vpn_forward_bad small { color: #dc2626; }
     }
 }
 
@@ -635,6 +675,35 @@ $woow-radius-lg: 1.25rem;
     border-radius: $woow-radius-default;
     color: $woow-text-secondary;
     font-size: 0.8rem;
+}
+
+// service-update-api-validation：spec confirm_change 的二次確認
+.o_woow_config_confirm {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: $woow-radius-default;
+    color: $woow-text-primary;
+    font-size: 0.875rem;
+
+    &__body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+
+        p {
+            margin: 0;
+        }
+    }
+
+    &__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
 }
 
 // #1455：清除已設定的金鑰

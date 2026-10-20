@@ -263,6 +263,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.5rem;
     padding-top: 1rem;
     border-top: 1px solid $woow-border-light;
 }
@@ -271,6 +272,9 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.375rem;
+    // X-LC-001-3：標籤區可縮、可換行，空間不夠時讓標籤換行，不要擠壓價格。
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 .o_woow_app_card_tag {
@@ -285,6 +289,9 @@
     font-size: 0.875rem;
     font-weight: 600;
     color: $woow-primary;
+    // X-LC-001-3：「1,500 點/月」不可從「點/」與「月」中間斷行（1280px 13/18 張卡）。
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 // #501：售罄／停售時取代「＋」按鈕的狀態徽章。刻意佔與按鈕相同的位置，讓「這張

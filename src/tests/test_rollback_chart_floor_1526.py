@@ -31,6 +31,7 @@ from ..services.chart_version import (
     chart_version_from_history,
     chart_version_not_lower,
     rollback_floor_violation,
+    rollback_request_problem,
 )
 from ..services.paas_operator import PaaSOperatorAPIError
 
@@ -103,6 +104,43 @@ class TestChartVersionFloorHelpers1526(TransactionCase):
 
     def test_unknown_revision_is_left_to_the_operator(self):
         self.assertIsNone(rollback_floor_violation(AUDIT_HISTORY, 9))
+
+    # ---- DATA-ODOO-010-1：回復請求本身不成立 ----------------------------------
+
+    def test_rollback_to_the_currently_deployed_revision_is_refused(self):
+        """實測：revision＝目前版，helm 照樣回復到自己、產生新 revision、換掉 Pod。"""
+        self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 3), 'already_current')
+
+    def test_zero_missing_and_negative_revisions_are_invalid(self):
+        """AUDITFIX rollback-api-input-validation：0／缺值不再解讀成「上一版」。
+
+        實測（DATA-ODOO-010-1、AI-PI-004-4、INFRA-EMQX-013-1）：誤送 0 會真的回復並重啟，
+        pi 映像就這樣被退回舊版。API 語意改為「revision 必須是 ≥ 1 的整數」。
+        """
+        for requested in (None, 0, -1, True, '2'):
+            with self.subTest(requested=requested):
+                self.assertEqual(
+                    rollback_request_problem(AUDIT_HISTORY, requested), 'invalid_revision')
+        only_one = [_rev(1, '0.1.6', 'deployed')]
+        self.assertEqual(rollback_request_problem(only_one, None), 'invalid_revision')
+
+    def test_revision_missing_from_history_is_not_found(self):
+        """AI-LLM-007-2：9999 不在歷史裡——平台先擋，不讓 helm 的英文原文透出。"""
+        self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 9999), 'not_found')
+        self.assertEqual(rollback_request_problem(AUDIT_HISTORY, 9), 'not_found')
+
+    def test_explicit_older_revision_is_allowed(self):
+        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 2))
+        self.assertIsNone(rollback_request_problem(AUDIT_HISTORY, 1))
+
+    def test_failed_latest_revision_can_roll_back_to_the_deployed_one(self):
+        """升級失敗的 revision 狀態是 failed：回復到前一個 deployed 版本是合法的修復動作。"""
+        history = [_rev(1, '0.1.6', 'deployed'), _rev(2, '0.1.7', 'failed')]
+        self.assertIsNone(rollback_request_problem(history, 1))
+
+    def test_unreadable_history_is_left_to_the_operator(self):
+        self.assertIsNone(rollback_request_problem([], 3))
+        self.assertIsNone(rollback_request_problem(None, 2))
 
 
 @tagged('post_install', '-at_install')
@@ -209,6 +247,78 @@ class TestRollbackChartFloorAndKeys1526(TransactionCase):
         self.assertFalse(response.get('success'), response)
         client.rollback_release.assert_not_called()
 
+    def test_rollback_to_current_revision_is_refused_without_touching_helm(self):
+        """DATA-ODOO-010-1：回復到目前版不得送給 operator（否則白白 helm 一輪、重建 Pod）。"""
+        service = self._service(self._od_template('rb1526-cur'), 'svc-rb1526-cur')
+        client = self._client()
+
+        response = self._rollback(service, client, 3)
+
+        self.assertFalse(response.get('success'), response)
+        self.assertIn('currently deployed', response['error'])
+        client.rollback_release.assert_not_called()
+        self.assertEqual(service.state, 'running', '被擋下的回復不得推進 state')
+
+    def test_zero_or_missing_revision_is_refused_without_touching_helm(self):
+        """AUDITFIX：0／None 回結構化錯誤、不送 operator、state 不動（#1786 驗收）。"""
+        service = self._service(self._od_template('rb1526-zero'), 'svc-rb1526-zero')
+        for requested in (0, None, -3):
+            with self.subTest(requested=requested):
+                client = self._client()
+
+                response = self._rollback(service, client, requested)
+
+                self.assertFalse(response.get('success'), response)
+                self.assertEqual(response.get('data', {}).get('code'), 'invalid_revision')
+                self.assertNotIn('None', response['error'])
+                client.get_revisions.assert_not_called()
+                client.rollback_release.assert_not_called()
+                self.assertEqual(service.state, 'running', '被擋下的回復不得推進 state')
+
+    def test_unknown_revision_is_refused_with_a_localized_message(self):
+        """AI-LLM-007-2：9999 → 平台自己的訊息（有 zh_TW 譯文），不是 helm 的英文原文。"""
+        service = self._service(self._od_template('rb1526-9999'), 'svc-rb1526-9999')
+        client = self._client()
+
+        response = self._rollback(service, client, 9999)
+
+        self.assertFalse(response.get('success'), response)
+        self.assertEqual(response.get('data', {}).get('code'), 'revision_not_found')
+        self.assertIn('9999', response['error'])
+        self.assertNotIn('release history', response['error'])
+        client.rollback_release.assert_not_called()
+        self.assertEqual(service.state, 'running')
+
+    def test_operator_400_detail_is_not_shown_verbatim(self):
+        """歷史在兩次呼叫之間變了，operator 回 400：不把 operator／helm 的英文原文丟給租戶。"""
+        service = self._service(self._od_template('rb1526-400'), 'svc-rb1526-400')
+        client = self._client()
+        client.rollback_release.side_effect = PaaSOperatorAPIError(
+            'API error', status_code=400,
+            detail='Revision 2 not found in release history')
+
+        response = self._rollback(service, client, 2)
+
+        self.assertFalse(response.get('success'), response)
+        self.assertNotIn('release history', response['error'])
+        self.assertEqual(response.get('data', {}).get('code'), 'revision_not_restorable')
+        self.assertEqual(service.state, 'running')
+
+    def test_api_refuses_zero_and_missing_revision_before_access_checks(self):
+        """路由層：0／None／非數字一律回 invalid_revision，不進 _rollback_service。"""
+        service = self._service(self._od_template('rb1526-api'), 'svc-rb1526-api')
+        with patch.object(PaasController, '_rollback_service') as downstream, \
+                patch(f'{_CONTROLLER}.request',
+                      new=MagicMock(env=self.env(user=self.admin_user))):
+            for requested in (0, None, -1, 'abc'):
+                with self.subTest(requested=requested):
+                    response = self.controller.api_service_rollback(
+                        self.workspace.id, service.id, revision=requested)
+                    self.assertFalse(response.get('success'), response)
+                    self.assertEqual(
+                        response.get('data', {}).get('code'), 'invalid_revision')
+            downstream.assert_not_called()
+
     def test_same_chart_rollback_goes_through_and_records_the_version(self):
         service = self._service(self._od_template('rb1526-same'), 'svc-rb1526-same')
         client = self._client()
@@ -244,6 +354,28 @@ class TestRollbackChartFloorAndKeys1526(TransactionCase):
             result = self.controller._get_service_revisions(service)
         self.assertTrue(result['success'], result)
         self.assertEqual([r['rollback_allowed'] for r in result['data']], [False, True, True])
+
+    def _listing(self, operator_result):
+        service = self._service(self._od_template('rb1526-hmax'), 'svc-rb1526-hmax')
+        client = self._client()
+        client.get_revisions.return_value = operator_result
+        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
+                patch(f'{_CONTROLLER}.request',
+                      new=MagicMock(env=self.env(user=self.admin_user))):
+            return self.controller._get_service_revisions(service)
+
+    def test_revisions_listing_reports_the_history_limit(self):
+        """INFRA-FIX-018-1／AI-HER-003-1：operator 回報的 helm --history-max 原樣交給對話框。"""
+        result = self._listing({'revisions': AUDIT_HISTORY, 'history_max': 20})
+        self.assertTrue(result['success'], result)
+        self.assertEqual(result['history_max'], 20)
+
+    def test_revisions_listing_from_an_older_operator_has_no_limit(self):
+        """舊 operator 沒有 history_max ⇒ None（對話框不顯示那一行），清單照舊。"""
+        result = self._listing({'revisions': AUDIT_HISTORY})
+        self.assertTrue(result['success'], result)
+        self.assertIsNone(result['history_max'])
+        self.assertEqual(len(result['data']), 3)
 
     # ---- 2. password 型設定不跟著回復 ---------------------------------------
 

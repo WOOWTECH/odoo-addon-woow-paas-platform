@@ -64,6 +64,26 @@ class LifecycleHaltEscapeError(AccessError):
 # #1310：每個計費週期換算成「月」的倍數，供工作區月費估算。
 _MONTHS_PER_UNIT = {'day': 12 / 365, 'week': 12 / 52, 'month': 1.0, 'year': 12.0}
 
+_CYCLE_UNITS = {'day': 'days', 'week': 'weeks', 'month': 'months', 'year': 'years'}
+
+
+def _plan_cycle_delta(plan):
+    """計算 trial／active 共用的計費週期；異常方案必須在寫日期之前拒絕。"""
+    if plan.sh_duration < 1:
+        raise UserError(_(
+            "Invalid billing cycle for plan '%(plan)s': duration %(duration)s "
+            "must be at least 1.",
+            plan=plan.name, duration=plan.sh_duration,
+        ))
+    try:
+        delta_unit = _CYCLE_UNITS[plan.sh_unit]
+    except KeyError:
+        raise UserError(_(
+            "Invalid billing cycle for plan '%(plan)s': unknown unit '%(unit)s'.",
+            plan=plan.name, unit=plan.sh_unit,
+        )) from None
+    return relativedelta(**{delta_unit: plan.sh_duration})
+
 
 def _monthly_estimate(sub):
     """Tax-included cost of one billing cycle normalised to a month (rounded to 2dp)."""
@@ -215,7 +235,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
     # Subscription creation
     # ----------------------------------------------------------------
 
-    def _create_and_confirm_subscription(self, partner, plan):
+    def _create_and_confirm_subscription(self, partner, plan, *, trial_only=False):
         """Create a subscription linked to this entity and confirm it.
 
         Args:
@@ -245,6 +265,10 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         # Read here, before the create + the trailing self.write() that replaces
         # it at the end of this method, so it reflects the entity's PRIOR state.
         entity_has_prior_sub = bool(self._sub())
+        if trial_only and (entity_has_prior_sub or not plan.sh_trial
+                           or plan.sh_trial_unit != 'day'
+                           or plan.sh_trial_duration != 7):
+            raise UserError(_('此服務無法開通七天試用，請聯絡支援。'))
         _logger.info(
             "[SUB_MIXIN] _create_and_confirm_subscription entry entity=%s:%s partner=%s plan=%s prior_sub=%s",
             self._name, self.id, partner.id, plan.id, entity_has_prior_sub,
@@ -269,6 +293,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'product_id': product.id,
             'sh_subscription_plan_id': plan.id,
             'sh_source': 'manual',
+            'woow_trial_only': trial_only,
         }
         subscription = Subscription.sudo().create(sub_vals)
 
@@ -296,6 +321,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
 
         # Confirm → in_progress (starts trial if configured)
         subscription.sh_subscription_confirm()
+        if trial_only:
+            # No payment is scheduled until the user selects a paid plan.
+            subscription.write({'sh_date_of_next_payment': False})
 
         self.write({'subscription_id': subscription.id})
         _logger.info(
@@ -304,6 +332,83 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             self._name, self.id, subscription.sh_trial,
         )
         return subscription
+
+    def _change_plan_balance_quote(self, plan, refund):
+        """換到 ``plan`` 的首期應付與錢包是否付得起（不寫 DB）。
+
+        AUDITFIX change-plan-insufficient-balance（#1677 A1）：三個 change-plan 入口原本沒有
+        任何餘額檢查——錢包不足時照樣退點、關舊訂閱、建新訂閱，新訂閱 confirm 開出首期發票、
+        錢包扣不到就留成未付。換方案時新訂閱一律不給試用（``entity_has_prior_sub`` 在這條路徑
+        上恆為 True，見 ``_create_and_confirm_subscription``），confirm 當下就開首期發票。
+
+        * ``required``：新方案首期應付（含稅）。用上游與發票同源的
+          ``_sh_get_period_billing_amount``，套在一筆與 ``_create_and_confirm_subscription``
+          同樣方式組出來的暫存訂閱上（skip-trial、自助續訂同一把尺）。
+        * ``available``：錢包餘額＋這次換方案會先退的點（``refund``，呼叫端以舊訂閱的
+          ``_compute_unused_refund`` 算好傳入——退點在建新訂閱之前入帳）。
+        * ``shortfall``：還差多少（付得起時為 0）。
+
+        Raises:
+            UserError: 方案沒有訂閱產品（``_subscription_product_for``）。
+        """
+        self.ensure_one()
+        old = self._sub()
+        partner = old.sh_partner_id
+        product = self._subscription_product_for(plan)
+        draft = self.env['sh.subscription.subscription'].sudo().new({
+            'sh_partner_id': partner.id,
+            'product_id': product.id,
+            'sh_subscription_plan_id': plan.id,
+            'sh_source': 'manual',
+        })
+        draft._onchange_sh_subscription_plan_id()
+        draft._onchange_sh_product_id()
+        currency = draft.currency_id or self.env.company.currency_id
+        required = currency.round(draft._sh_get_period_billing_amount() or 0.0)
+        balance = currency.round(partner.sudo().wallet_balance or 0.0)
+        refund = currency.round(refund or 0.0)
+        available = currency.round(balance + refund)
+        shortfall = currency.round(max(required - available, 0.0))
+        return {
+            'plan_id': plan.id,
+            'required': float(required),
+            'balance': float(balance),
+            'refund': float(refund),
+            'available': float(available),
+            'sufficient': currency.compare_amounts(available, required) >= 0,
+            'shortfall': float(shortfall),
+        }
+
+    def _change_plan_balance_gate(self, plan, refund, dry_run=False):
+        """三個 change-plan 入口共用：錢包付不起就回 endpoint 的失敗回應；``dry_run`` 回估算。
+
+        放在每個入口「所有既有閘之後、第一個寫入（退點）之前」——與 #773 席數閘同一個相對
+        位置。錯誤碼與 ``/api/billing/invoices/<id>/pay`` 一致（頂層 ``code`` 與
+        ``data.code`` 都是 ``insufficient_balance``）。
+
+        Returns:
+            ``None``＝放行（繼續換方案）；否則是 endpoint 要直接回傳的 dict。
+        """
+        try:
+            quote = self._change_plan_balance_quote(plan, refund)
+        except UserError as e:
+            return {'success': False, 'error': str(e)}
+        if dry_run:
+            return {'success': True, 'data': dict(quote, dry_run=True)}
+        if quote['sufficient']:
+            return None
+        _logger.info(
+            "[SUB_MIXIN] change_plan refused (insufficient balance) entity=%s:%s plan=%s "
+            "required=%s available=%s", self._name, self.id, plan.id,
+            quote['required'], quote['available'],
+        )
+        return {
+            'success': False,
+            'error': _('Insufficient wallet balance. %(shortage)s more points are needed.',
+                       shortage=f"{quote['shortfall']:,.2f}"),
+            'code': 'insufficient_balance',
+            'data': dict(quote, code='insufficient_balance'),
+        }
 
     def _subscription_product_for(self, plan):
         """``plan`` 的訂閱產品（第一個 variant）；沒有就 raise UserError。
@@ -333,18 +438,13 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         sh_end_date — so downstream readers (UI trial countdown, refund
         compute) never see a partial state.
         """
+        cycle_delta = _plan_cycle_delta(plan)
         trial_delta = {
             'day': relativedelta(days=plan.sh_trial_duration),
             'week': relativedelta(weeks=plan.sh_trial_duration),
             'month': relativedelta(months=plan.sh_trial_duration),
             'year': relativedelta(years=plan.sh_trial_duration),
         }.get(plan.sh_trial_unit, relativedelta())
-        cycle_delta = {
-            'day': relativedelta(days=plan.sh_duration),
-            'week': relativedelta(weeks=plan.sh_duration),
-            'month': relativedelta(months=plan.sh_duration),
-            'year': relativedelta(years=plan.sh_duration),
-        }.get(plan.sh_unit, relativedelta())
         trial_end = date.today() + trial_delta - relativedelta(days=1)
         start_date = trial_end + relativedelta(days=1)
         end_date = start_date + cycle_delta - relativedelta(days=1)
@@ -382,12 +482,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         ``sh_trial=True``, so the flag must be cleared to stay consistent with
         the active date triple.
         """
-        cycle_delta = {
-            'day': relativedelta(days=plan.sh_duration),
-            'week': relativedelta(weeks=plan.sh_duration),
-            'month': relativedelta(months=plan.sh_duration),
-            'year': relativedelta(years=plan.sh_duration),
-        }.get(plan.sh_unit, relativedelta())
+        cycle_delta = _plan_cycle_delta(plan)
         start_date = date.today()
         end_date = start_date + cycle_delta - relativedelta(days=1)
         subscription.write({

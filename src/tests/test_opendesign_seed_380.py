@@ -92,7 +92,9 @@ class TestOpendesignTemplateSeed(TransactionCase):
         # 0.4.5＝#1556（ANTHROPIC／OPENROUTER 金鑰一律輸出，清除後 daemon 不留舊值）；
         # 0.5.0＝內建 OpenDesign MCP（mcp sidecar＋/mcp、/private_<token>/mcp、/mcp-admin/）、
         #       omnigentHost 預設關（od-mcp-merge-20261015）。
-        self.assertEqual(tpl.helm_chart_version, '0.5.0')
+        # 0.5.1–0.5.6＝charts 整合包 #254：console／auth-proxy 加固、prune-runs、登入失敗鎖 IP、
+        #       ttyd 改 loopback＋Basic 前門、log 不記查詢字串、egress-profile=web。
+        self.assertEqual(tpl.helm_chart_version, '0.5.6')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""

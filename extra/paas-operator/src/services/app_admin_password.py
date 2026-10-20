@@ -1,5 +1,5 @@
 """租戶 app 自管的管理員密碼重設（#1370／#1186）：Odoo 的 base.user_admin、n8n 的 owner、
-Omnigent 的 admin（#1370 後續）。
+Omnigent 的 admin（#1370 後續）、EMQX 的 Dashboard admin（#1774）。
 
 這兩種 app 的密碼權威在 app 自己的 DB（不是 chart Secret、也不是 PVC 上的
 config.json），所以既有的 reset-config（helm upgrade／exec patch config.json）
@@ -11,6 +11,10 @@ config.json），所以既有的 reset-config（helm upgrade／exec patch config
 - Omnigent：``omnigent_scripts/reset_admin_password.py``（omnigent 自己的 AccountStore＋
   hash_password，與 Members → Reset 同一條寫入；不動 account_generation ⇒ 與上游 admin
   reset 一樣，已登入的 session 與已配對的 host 不受影響）
+- EMQX：``emqx_scripts/reset_admin_password.sh``（``emqx ctl admins passwd``，與 Dashboard
+  「修改密碼」同一個 change_password：EMQX 自己檢查密碼規則、寫 mnesia、撤銷該帳號的
+  Dashboard token ⇒ 已登入的 Dashboard 被登出；CE 沒有 2FA）。``emqx ctl`` 只收 argv，所以
+  腳本從 stdin 讀密碼後在容器內自己帶進 argv——operator 的 kubectl 指令列與 log 仍然看不到。
 
 共同紀律：
 
@@ -43,6 +47,8 @@ ODOO_RESET_EXEC_TIMEOUT_SECONDS = 45
 N8N_RESET_EXEC_TIMEOUT_SECONDS = 30
 # Omnigent：冷 import omnigent＋一次 scrypt/argon hash＋SQLite 寫入，沙盒實測約 5.5 秒。
 OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS = 30
+# EMQX：emqx ctl 走 nodetool 連本機 broker，平台釘的 5.8.9 沙盒實測約 3 秒。
+EMQX_RESET_EXEC_TIMEOUT_SECONDS = 30
 # 找 pod 最多三次 kubectl get（selector 兩次＋fallback 驗證一次）的餘裕。
 APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS = 15
 
@@ -51,6 +57,8 @@ N8N_CONTAINER_NAME = "n8n"
 OMNIGENT_CONTAINER_NAME = "server"
 # omnigent server image 的 venv python（PATH 上的 python 即此；寫絕對路徑免受 PATH 影響）。
 OMNIGENT_PYTHON = "/opt/venv/bin/python"
+# woow-paas-charts emqx：StatefulSet 的 broker 容器（另有 entrance／ngrok sidecar）。
+EMQX_CONTAINER_NAME = "emqx"
 
 # 腳本在 commit **之後**才回報的失敗碼：密碼可能已變 ⇒ 不可歸類成 failed。
 SCRIPT_CODES_AFTER_COMMIT = frozenset({"sessions_not_revoked"})
@@ -62,6 +70,7 @@ N8N_RESET_OWNER_SCRIPT = (_SCRIPTS / "n8n_scripts" / "reset_owner_password.js").
 OMNIGENT_RESET_ADMIN_SCRIPT = (
     _SCRIPTS / "omnigent_scripts" / "reset_admin_password.py"
 ).read_text(encoding="utf-8")
+EMQX_RESET_ADMIN_SCRIPT = (_SCRIPTS / "emqx_scripts" / "reset_admin_password.sh").read_text(encoding="utf-8")
 
 
 class AppAdminResetError(Exception):
@@ -78,7 +87,7 @@ class AppAdminResetError(Exception):
 
 
 class AppAdminPasswordService:
-    """Odoo／n8n／Omnigent 管理員密碼重設（operator 端唯一實作）。"""
+    """Odoo／n8n／Omnigent／EMQX 管理員密碼重設（operator 端唯一實作）。"""
 
     def __init__(self, k8s_service: KubernetesService | None = None):
         self.k8s = k8s_service or KubernetesService()
@@ -126,6 +135,23 @@ class AppAdminPasswordService:
             namespace, pod_name, OMNIGENT_CONTAINER_NAME,
             [OMNIGENT_PYTHON, "-c", OMNIGENT_RESET_ADMIN_SCRIPT],
             new_password, OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS, app="omnigent",
+        )
+
+    def reset_emqx_admin(self, namespace: str, release_name: str, new_password: str) -> dict:
+        # charts/emqx 的 StatefulSet pod（emqx.labels：name=emqx、component=broker）。
+        selector = (f"app.kubernetes.io/instance={release_name},"
+                    f"app.kubernetes.io/name=emqx,app.kubernetes.io/component=broker")
+        try:
+            pod_name = self.k8s.get_pod_name(namespace, selector)
+        except (KubectlException, ValueError) as exc:
+            raise AppAdminResetError(
+                f"Cannot find the EMQX broker pod for release {release_name} in {namespace}",
+                step="find_pod", kind="not_executed",
+            ) from exc
+        return self._run(
+            namespace, pod_name, EMQX_CONTAINER_NAME,
+            ["sh", "-c", EMQX_RESET_ADMIN_SCRIPT],
+            new_password, EMQX_RESET_EXEC_TIMEOUT_SECONDS, app="emqx",
         )
 
     # --- internal ---------------------------------------------------------

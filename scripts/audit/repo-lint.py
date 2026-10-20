@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十七個 check 函式，歸為下列四十一條規則（其中四條各由多個函式實作：第 2 條
+四十八個 check 函式，歸為下列四十二條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -663,6 +663,16 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      當硬上限。依據 #1257 Q31：n8n 原本共用 HELM_OPERATION_TIMEOUT=120，
                      比 operator 子步 envelope 短，client 先斷線、server 照跑。
 
+42. newapi-timeout-ladder  AI 模型分頁 前端 → Odoo → newapi-proxy 的逾時階梯。
+                     實作見 scripts/audit/newapi_timeout_ladder.py：每個 TIMEOUT_* 送出的
+                     X-Woow-Read-Timeout（read − 餘裕）落在代理 _READ_TIMEOUT_RE 的範圍且嚴格
+                     小於 read、client 夾值＝代理上限、建金鑰預算與開戶 tick 各容得下一次完整呼叫、
+                     lease 長於最壞的 tick、其他 LLM cron 的 tick（CRON_TICK_SECONDS，LLM-02b）容得下
+                     一次 cron 讀取且不超過開戶 tick、client 方法 → 逾時類別對 baseline json；前端那一半
+                     （LLM-01c）：llm_service.js 的 KEY_CREATE_TIMEOUT_MS 大於後端建金鑰預算＋一次
+                     呼叫、rpc.js 預設逾時大於互動讀／寫一次呼叫、建金鑰的呼叫一定帶那個具名常數。
+                     依據 DESIGN §1.2、§3.5（〔REV〕63）；票 LLM-01b、LLM-01c、LLM-02b。
+
 用法：
 
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1291,7 +1301,7 @@ def check_reset_budget_ladder(root):
     app_src = _read_repo_file(root, RESET_LADDER_APP_OPERATOR)
     app = _fold_int_constants(app_src or "")
     exec_app = ("ODOO_RESET_EXEC_TIMEOUT_SECONDS", "N8N_RESET_EXEC_TIMEOUT_SECONDS",
-                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS")
+                "OMNIGENT_RESET_EXEC_TIMEOUT_SECONDS", "EMQX_RESET_EXEC_TIMEOUT_SECONDS")
     needed_app = exec_app + ("APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS",)
     missing_app = [k for k in needed_app if k not in app]
     if app_src is None or missing_app:
@@ -1309,7 +1319,7 @@ def check_reset_budget_ladder(root):
                  % (app_platform, name, worst))
     if not frontend_seconds > app_platform:
         fail("前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 APP_ADMIN_RESET_TIMEOUT=%ss"
-             "（Odoo／n8n／Omnigent 的 Reset 與 reset-config 共用同一條前端 route）"
+             "（Odoo／n8n／Omnigent／EMQX 的 Reset 與 reset-config 共用同一條前端 route）"
              % (frontend_seconds, app_platform))
     return violations
 
@@ -1360,6 +1370,32 @@ def check_init_n8n_budget_ladder(root):
         return module.check(root)
     except Exception as exc:
         return ['init-n8n-budget-ladder：無法載入或執行守衛（%s：%s）；見 #1257'
+                % (type(exc).__name__, exc)]
+
+
+NEWAPI_LADDER_FILES = (
+    'src/services/newapi_client.py',
+    'src/models/llm_common.py',
+    'src/models/llm_api_key.py',
+    'extra/newapi-proxy/newapi_proxy/app.py',
+    'scripts/audit/newapi_timeout_ladder.py',
+    'scripts/audit/baselines/newapi-timeout-ladder.json',
+    # LLM-01c：前端那一半（建金鑰 40 秒、rpc.js 預設 30 秒）。
+    'src/static/src/paas/services/llm_service.js',
+    'src/static/src/paas/services/rpc.js',
+)
+
+
+def check_newapi_timeout_ladder(root):
+    """LLM-01b：同第 39／41 條——實作放 sibling script，載入／解析失敗不能變成零違規。"""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            'woow_newapi_timeout_ladder', os.path.join(SCRIPT_DIR, 'newapi_timeout_ladder.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.check(root)
+    except Exception as exc:
+        return ['newapi-timeout-ladder：無法載入或執行守衛（%s：%s）；見 DESIGN §3.5'
                 % (type(exc).__name__, exc)]
 
 
@@ -4927,6 +4963,17 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "先 `_record_ids()` 落帳才推 sync，而 context 只注入給 `exists()` 的"
                "子集 ⇒ 帳本是它的嚴格超集）。存量收斂改走 `_record_ids()`。",
     },
+    # --- LLM-01b：AI 模型分頁 ---------------------------------------------- #
+    "woow_llm_internal_write": {
+        "status": "enforced",
+        "sentinel": "_LLM_INTERNAL_WRITE",
+        "defined_in": "src/models/llm_common.py",
+        "reader": "_is_llm_internal",
+        "issue": "LLM-01b",
+        "why": "llm_account／llm_api_key 的 create／write 唯一入口（DESIGN §2.1：所有群組 "
+               "ACL 只讀，寫入只經 service method）。偽造 ⇒ 改 newapi_username／"
+               "newapi_user_id 讓 UP 與開戶指向別人的 new-api 使用者，或改 state 跳過開戶。",
+    },
     # --- 非安全決策 -------------------------------------------------------- #
     "skip_ai_reply": {
         "status": "not-security",
@@ -6288,6 +6335,7 @@ REPO_LINT_RULES = {
     "init-odoo-budget-ladder": ("check_init_odoo_budget_ladder",),
     "status-contract-golden": ("check_status_contract_golden",),
     "init-n8n-budget-ladder": ("check_init_n8n_budget_ladder",),
+    "newapi-timeout-ladder": ("check_newapi_timeout_ladder",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6983,7 +7031,8 @@ def run_all(root):
                   + check_access_payload_shape_matches_operator_schema(root)
                   + check_init_odoo_budget_ladder(root)
                   + check_status_contract_golden(root)
-                  + check_init_n8n_budget_ladder(root))
+                  + check_init_n8n_budget_ladder(root)
+                  + check_newapi_timeout_ladder(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -7083,6 +7132,9 @@ def run_hook():
                        if rel in INIT_ODOO_LADDER_FILES else [])
         init_n8n_ladder = (check_init_n8n_budget_ladder(root)
                            if rel in INIT_N8N_LADDER_FILES else [])
+        # LLM-01b／01c 第 42 條：逾時階梯跨前端／client／model／代理四端（同 init ladders，不做切片）。
+        newapi_ladder = (check_newapi_timeout_ladder(root)
+                         if rel in NEWAPI_LADDER_FILES else [])
         # #552／#596：availability reason 的涵蓋同樣是**跨檔**不變式（後端 judge ／
         # 前端 REASON_LABELS），壞掉的是另一個檔 ⇒ 一樣整條重算、不做 only_file 切片。
         availability = (check_availability_reason_labels(root)
@@ -7249,7 +7301,8 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif (ladder or init_ladder or init_n8n_ladder or availability or poll_facts or anchors or floor
+        elif (ladder or init_ladder or init_n8n_ladder or newapi_ladder or availability
+                or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
                 or internal_ctx or tunnel_wire or route_golden or status_golden
                 or owl_imports
@@ -7265,6 +7318,7 @@ def run_hook():
         violations += ladder
         violations += init_ladder
         violations += init_n8n_ladder
+        violations += newapi_ladder
         violations += availability
         violations += poll_facts
         violations += anchors

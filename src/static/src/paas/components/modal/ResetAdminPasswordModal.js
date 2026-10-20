@@ -13,6 +13,7 @@ import { WoowIcon } from "../icon/WoowIcon";
  * 本元件不自建判準）：
  *   - appReset：operator 直接改 app 資料庫（Odoo／n8n／Omnigent）——不重啟、立即生效
  *   - keepsSessions：app 重設不登出既有 session（Omnigent）
+ *   - noSecondFactor：app 重設會登出、但沒有 2FA 可關（EMQX 開源版，#1774）
  * Gateway API Key 會不會一併換發（#530，hermes-agent）讀 service payload 的
  * `has_gateway`（getter `replacesGatewayKey`）——與後端交付判準同一個欄位，
  * repo-lint check_gateway_copy_gate_anchor 鎖這句文案的 gate。
@@ -21,6 +22,7 @@ import { WoowIcon } from "../icon/WoowIcon";
  *   - service (Object): detail payload（含 has_gateway）
  *   - appReset (Boolean)
  *   - keepsSessions (Boolean)
+ *   - noSecondFactor (Boolean)
  *   - onClose (Function)
  *   - onConfirm (Function): 回傳 Promise；完成後由父層關閉本視窗
  */
@@ -31,6 +33,7 @@ export class ResetAdminPasswordModal extends Component {
     service: { type: Object },
     appReset: { type: Boolean, optional: true },
     keepsSessions: { type: Boolean, optional: true },
+    noSecondFactor: { type: Boolean, optional: true },
     onClose: { type: Function },
     onConfirm: { type: Function },
   };

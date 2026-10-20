@@ -13,9 +13,9 @@ ECPG_BINDCARD_UNIQUE_INDEX = 'payment_token_woow_ecpg_bindcard_active_uniq'
 
 # 自動扣款被 ECPay 拒絕（或要求 3D）後，同一張卡在這段時間內不再自動授權。
 # ECPay 官方：交易失敗後不要對同一個 BindCardID 反覆重新授權（連續失敗可能被
-# 暫停授權）。訂閱多為月繳 ⇒ 30 天≈一個計費週期；使用者用這張卡手動儲值成功
-# 會立即解除。
-AUTO_CHARGE_DECLINE_BLOCK_DAYS = 30
+# 暫停授權）。拒絕後等待完整 7 天才恢復自動授權；使用者用這張卡手動儲值成功
+# 會立即解除，新的拒絕則重新起算 7 天。
+AUTO_CHARGE_DECLINE_BLOCK_DAYS = 7
 
 
 class PaymentToken(models.Model):

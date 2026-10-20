@@ -29,6 +29,7 @@
 
                 <CategoryFilter
                     selectedCategory="state.selectedCategory"
+                    availableCategories="cloudService.templateCategories || undefined"
                     onCategoryChange.bind="onCategoryChange"
                 />
             </div>

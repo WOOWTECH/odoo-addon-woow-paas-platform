@@ -1,6 +1,6 @@
 import logging
 
-from odoo import _, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -114,6 +114,35 @@ def _is_invoice_issue_control(env, key):
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
+    woow_llm_credit_order_id = fields.Many2one(
+        'woow_paas_platform.llm_credit_order',
+        string='AI Credit Conversion Order',
+        readonly=True,
+        index=True,
+        copy=False,
+        ondelete='restrict',
+        groups='base.group_system',
+        help='Internal conversion voucher; excluded from tenant invoice views.',
+    )
+
+    def _llm_is_internal_credit_move(self):
+        """Read only the private marker for document and deny-only payment gates.
+
+        The marker is system-only; portal consumers must never receive the
+        linked order. This predicate also works on unsaved payment previews.
+        """
+        self.ensure_one()
+        return bool(self.sudo().woow_llm_credit_order_id)
+
+    @api.model
+    def _llm_credit_move_domain(self):
+        """Exclude conversion invoices and reversals from tenant invoice surfaces.
+
+        Keep this subtractive predicate shared by every exposure point. The
+        restrictive relation preserves the marker for the voucher's lifetime.
+        """
+        return [('woow_llm_credit_order_id', '=', False)]
+
     def create_ecpay_invoice(self):
         """Short-circuit when invoice is PaaS-flagged and not forced.
 
@@ -164,6 +193,27 @@ class AccountMove(models.Model):
             )
             return
         return super().run_refund()
+
+    def _woow_render_tenant_invoice_pdf(self):
+        """AUDITFIX tax-invoice-pdf-403：以平台身分渲染這張發票的 PDF，回傳 ``(bytes, 檔名)``。
+
+        租戶（portal）以自己的身分走原生 ``/report/pdf/account.account_invoices/<id>`` 時，
+        報表要讀發票行的 ``account.tax``，portal 沒有讀取權 ⇒ 403（政策 A 起所有新發票都帶
+        5% 稅，等於每張都下載不了）。不給 portal 全域的 ``account.tax`` 讀取權（那會把
+        公司所有稅別設定開給所有租戶），改由 ``/api/billing/invoices/<id>/pdf`` 先驗
+        「這張發票屬於目前使用者」，再呼叫這裡以 sudo 渲染。**呼叫端必須先驗擁有權**。
+
+        語言用發票客戶的語言（與原生 portal 下載相同）。
+        """
+        self.ensure_one()
+        move = self.sudo()
+        lang = move.partner_id.lang or self.env.lang
+        report = self.env['ir.actions.report'].sudo().with_company(
+            move.company_id).with_context(lang=lang)
+        content, _content_type = report._render_qweb_pdf(
+            'account.account_invoices', move.ids)
+        filename = '%s.pdf' % ((move.name or 'invoice').replace('/', '_'))
+        return content, filename
 
     def _pay_from_wallet(self, subscription=None):
         """Settle this invoice using wallet points.

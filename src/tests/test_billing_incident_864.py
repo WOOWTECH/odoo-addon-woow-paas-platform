@@ -154,6 +154,13 @@ class TestBillingIncidentSchema864(TransactionCase):
                 ('bind_failed', 'Card binding failed'),
                 ('stuck_pending', 'Stuck pending payment'),
                 ('manual_invoice_stale', 'Manual invoice stale'),
+                ('llm_credit_unknown', 'AI credit result unknown'),
+                ('llm_reconcile_mismatch', 'AI credit reconciliation mismatch'),
+                ('llm_external_credit', 'AI credit added outside the platform'),
+                ('llm_void_failed', 'AI credit void failed'),
+                ('llm_not_me', 'AI account reported as not me'),
+                ('llm_secret_mismatch', 'AI account credential check failed (ciphertext mismatch)'),
+                ('llm_account_error', 'AI account error'),
             ),
             'state': (
                 ('open', 'Open'),
@@ -164,6 +171,9 @@ class TestBillingIncidentSchema864(TransactionCase):
             'manual_check_result': (
                 ('ecpay_found', 'Found in ECPay'),
                 ('ecpay_not_found', 'Not found in ECPay'),
+                ('llm_credit_confirmed', 'AI credit confirmed in new-api'),
+                ('llm_credit_absent', 'AI credit absent in new-api'),
+                ('llm_reconciled', 'AI credit reconciliation completed'),
             ),
         }
         constants = {
@@ -191,6 +201,14 @@ class TestBillingIncidentSchema864(TransactionCase):
             Incident._MANUAL_RESULTS,
             frozenset(
                 key for key, _label in Incident._MANUAL_RESULT_SELECTION),
+        )
+        self.assertEqual(
+            tuple(Incident._fields['llm_manual_check_result'].selection),
+            Incident._LLM_MANUAL_RESULT_SELECTION,
+        )
+        self.assertEqual(
+            tuple(Incident._fields['ecpay_manual_check_result'].selection),
+            Incident._ECPAY_MANUAL_RESULT_SELECTION,
         )
 
     def test_review_activity_type_is_model_restricted_when_core_supports_it(self):
@@ -464,6 +482,13 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     '%s → open 是禁止的 state downgrade' % initial_state,
                 )
                 self.assertEqual(incident['occurrences'], 2)
+        # An ECPay duplicate remains evidence only, even when it asks for review.
+        ecpay_ref = self.ref + '-payment-open'
+        ecpay_id = self.Incident._log(self._snapshot(external_ref=ecpay_ref))
+        self.assertEqual(self.Incident._log(self._snapshot(
+            external_ref=ecpay_ref, state='needs_human')), ecpay_id)
+        self.assertEqual(self._read(ecpay_id)['state'], 'open')
+        self.assertEqual(self._read(ecpay_id)['occurrences'], 2)
 
     def test_log_detail_rejects_sensitive_markers_and_luhn_pan_without_leaking(self):
         legal_ref = self.ref + '-legal-mtn'
@@ -962,6 +987,91 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.assertEqual(incident['resolved_by_ref'], 99)
         self.assertTrue(incident['resolved_at'])
         self.assertEqual(incident['occurrences'], 1)
+
+    def test_private_resolve_enforces_kind_results_and_ai_note(self):
+        ecpay_id = self.Incident._log(self._snapshot(state='needs_human'))
+        self.assertFalse(self.Incident._resolve(
+            self.ref, manual_check_result='llm_reconciled',
+            resolution_note='Verified in AI models back office'))
+        self.assertEqual(self._read(ecpay_id)['state'], 'needs_human')
+        # Existing ECPay automation still resolves without a manual result.
+        self.assertEqual(self.Incident._resolve(self.ref), ecpay_id)
+        self.assertEqual(self._read(ecpay_id)['state'], 'resolved')
+
+        ai_ref = 'llm:credit_unknown/order/%d' % int(uuid.uuid4().hex[:10], 16)
+        self._extra_cleanup_refs.add(ai_ref)
+        ai_id = self.Incident._log({
+            'external_ref': ai_ref,
+            'kind': 'llm_credit_unknown',
+            'state': 'needs_human',
+            'source_model': 'woow_paas_platform.llm_credit_order',
+            'source_ref': 987654,
+        })
+        for result, note in (
+                (None, 'Verified in new-api logs'),
+                ('ecpay_found', 'Verified in new-api logs'),
+                ('llm_credit_confirmed', None),
+                ('llm_credit_confirmed', '   '),
+                ('llm_credit_confirmed', 'ResultData=unsafe-note')):
+            with self.subTest(result=result, note=note):
+                self.assertFalse(self.Incident._resolve(
+                    ai_ref, manual_check_result=result, resolution_note=note))
+                self.assertEqual(self._read(ai_id)['state'], 'needs_human')
+        self.assertEqual(self.Incident._resolve(
+            ai_ref, manual_check_result='llm_credit_confirmed',
+            resolution_note='  Verified in new-api logs  '), ai_id)
+        resolved = self._read(ai_id)
+        self.assertEqual(resolved['state'], 'resolved')
+        self.assertEqual(resolved['resolution_note'], 'Verified in new-api logs')
+        with self.env.registry.cursor() as cr:
+            cr.execute('SELECT manual_check_result FROM woow_billing_incident WHERE id = %s',
+                       (ai_id,))
+            self.assertEqual(cr.fetchone()[0], 'llm_credit_confirmed')
+        self.assertFalse(self.Incident._resolve(
+            ai_ref, manual_check_result='ecpay_not_found',
+            resolution_note='Must not overwrite the first audit'))
+        self.assertEqual(self._read(ai_id)['resolution_note'], resolved['resolution_note'])
+
+    def test_private_resolve_rejects_ai_secrets_and_legacy_note_fallback(self):
+        ai_ref = 'llm:credit_unknown/order/%d' % int(uuid.uuid4().hex[:10], 16)
+        self._extra_cleanup_refs.add(ai_ref)
+        ai_id = self.Incident._log({
+            'external_ref': ai_ref, 'kind': 'llm_credit_unknown',
+            'state': 'needs_human',
+        })
+        self.assertIsInstance(ai_id, int)
+        secrets = (
+            'sk-' + 'A' * 24,
+            'nap_' + 'B' * 24,
+            'key: ' + 'C' * 48,
+            'token: ' + 'D' * 24,
+        )
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident._logger.error'
+        for secret in secrets:
+            with self.subTest(secret_type=secret[:4]), patch(logger) as logged:
+                self.assertFalse(self.Incident._resolve(
+                    ai_ref, manual_check_result='llm_credit_confirmed',
+                    resolution_note='Verified in new-api: ' + secret))
+                logged.assert_called()
+                self.assertNotIn(secret, str(logged.call_args_list))
+                self.assertEqual(self._read(ai_id)['state'], 'needs_human')
+                self.assertFalse(self._read(ai_id)['resolution_note'])
+
+        # Simulate an old unsafe note already in the ledger: a caller that
+        # omits resolution_note must not accidentally resolve from that value.
+        with self.env.registry.cursor() as cr:
+            cr.execute('UPDATE woow_billing_incident SET resolution_note = %s WHERE id = %s',
+                       (secrets[0], ai_id))
+        with patch(logger) as logged:
+            self.assertFalse(self.Incident._resolve(
+                ai_ref, manual_check_result='llm_reconciled'))
+            logged.assert_called()
+            self.assertNotIn(secrets[0], str(logged.call_args_list))
+        self.assertEqual(self._read(ai_id)['state'], 'needs_human')
+        self.assertEqual(self.Incident._resolve(
+            ai_ref, manual_check_result='llm_reconciled',
+            resolution_note='Verified in new-api ledger'), ai_id)
+        self.assertEqual(self._read(ai_id)['resolution_note'], 'Verified in new-api ledger')
 
     def test_idempotent_resolve_retries_failed_activity_cleanup(self):
         incident_id = self.Incident._log(
@@ -2925,6 +3035,95 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
             record.action_mark_manually_resolved()
         self.assertEqual(record.resolution_note, first_note)
         self.assertEqual(record.resolved_at, first_resolved_at)
+
+    def test_ai_manual_resolution_uses_ai_selection_and_keeps_ledger_unchanged(self):
+        incident = self.env['woow.billing.incident']._create_test_fixture({
+            'external_ref': 'llm:credit_unknown/order/%d' % self.incident.id,
+            'kind': 'llm_credit_unknown',
+            'state': 'needs_human',
+            'source_model': 'woow_paas_platform.llm_credit_order',
+            'source_ref': self.incident.id,
+        })
+        record = incident.with_user(self.manager)
+        self.assertTrue(record.is_llm_incident)
+        with self.assertRaises(UserError):
+            record.action_mark_manually_resolved()
+        with self.assertRaises(UserError):
+            record.write({'ecpay_manual_check_result': 'ecpay_found'})
+        record.write({
+            'manual_check_result': 'ecpay_found',
+            'resolution_note': 'Checked AI models back office and new-api logs',
+        })
+        with self.assertRaises(UserError):
+            record.action_mark_manually_resolved()
+        record.write({'llm_manual_check_result': 'llm_credit_absent'})
+        self.assertEqual(record.manual_check_result, 'llm_credit_absent')
+        self.assertEqual(record.llm_manual_check_result, 'llm_credit_absent')
+        self.assertFalse(record.ecpay_manual_check_result)
+        wallet_before = self.wallet_card.points
+        wallet_rows_before = self.env['wallet.transaction'].search_count([
+            ('partner_id', '=', self.wallet_partner.id),
+        ])
+        with patch('odoo.modules.registry.Registry.cursor',
+                   side_effect=RuntimeError('must not open a new cursor')):
+            self.assertTrue(record.action_mark_manually_resolved())
+        self.assertEqual(record.state, 'resolved')
+        self.assertEqual(record.resolved_by_ref, self.manager.id)
+        self.wallet_card.invalidate_recordset(['points'])
+        self.assertEqual(self.wallet_card.points, wallet_before)
+        self.assertEqual(self.env['wallet.transaction'].search_count([
+            ('partner_id', '=', self.wallet_partner.id),
+        ]), wallet_rows_before)
+        with self.assertRaises(AccessError):
+            record.write({'llm_manual_check_result': 'llm_reconciled'})
+
+    def test_ai_manager_write_rejects_credentials_before_storage(self):
+        ai = self.env['woow.billing.incident']._create_test_fixture({
+            'external_ref': 'llm:credit_unknown/order/%d' % self.incident.id,
+            'kind': 'llm_credit_unknown', 'state': 'needs_human',
+        }).with_user(self.manager)
+        secrets = (
+            'sk-' + 'A' * 24,
+            'nap_' + 'B' * 24,
+            'key: ' + 'C' * 48,
+            'token: ' + 'D' * 24,
+        )
+        for secret in secrets:
+            with self.subTest(secret_type=secret[:4]):
+                with self.assertRaises(UserError) as caught:
+                    ai.write({'llm_manual_check_result': 'llm_credit_confirmed',
+                              'resolution_note': 'Checked new-api: ' + secret})
+                self.assertNotIn(secret, str(caught.exception))
+                ai.invalidate_recordset(['resolution_note', 'manual_check_result'])
+                self.assertFalse(ai.resolution_note)
+                self.assertFalse(ai.manual_check_result)
+        ai.write({'llm_manual_check_result': 'llm_credit_confirmed',
+                  'resolution_note': 'Checked AI models back office and new-api logs'})
+        self.assertTrue(ai.action_mark_manually_resolved())
+        self.assertEqual(ai.state, 'resolved')
+
+        # The payment path still accepts ordinary ECPay verification text.
+        ecpay = self.incident.with_user(self.manager)
+        ecpay.write({'ecpay_manual_check_result': 'ecpay_found',
+                     'resolution_note': 'MerchantTradeNo verified in ECPay back office'})
+        self.assertTrue(ecpay.action_mark_manually_resolved())
+
+    def test_incident_form_shows_only_matching_verification_selection(self):
+        arch = etree.fromstring(self.env.ref(
+            'woow_paas_platform.view_billing_incident_form').arch.encode())
+        ai = arch.xpath("//field[@name='llm_manual_check_result']")
+        ecpay = arch.xpath("//field[@name='ecpay_manual_check_result']")
+        self.assertEqual(len(ai), 1)
+        self.assertEqual(len(ecpay), 1)
+        self.assertEqual(ai[0].get('invisible'), 'not is_llm_incident')
+        self.assertEqual(ecpay[0].get('invisible'), 'is_llm_incident')
+        self.assertEqual(
+            {key for key, _ in self.incident._fields['llm_manual_check_result'].selection},
+            {'llm_credit_confirmed', 'llm_credit_absent', 'llm_reconciled'},
+        )
+        self.assertFalse({key for key, _ in self.incident._fields[
+            'ecpay_manual_check_result'].selection} & {'llm_credit_confirmed',
+                                                        'llm_credit_absent', 'llm_reconciled'})
 
     def test_sudo_cannot_mutate_evidence_reopen_resolved_or_unlink(self):
         sudo_record = self.incident.sudo()

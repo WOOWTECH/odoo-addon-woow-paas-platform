@@ -10,6 +10,17 @@ import { copyText } from "../../../utils/clipboard";
 import { formatPoints } from "../../../utils/billing_helpers";
 import { hasConfirmedWorkloadFault } from "../../../utils/service_presentation";
 import { ResourceUsage } from "../../../components/resource-usage/ResourceUsage";
+import { useVpnNodeStatus } from "../../../services/vpn_node_status";
+import {
+    authKeyNotice,
+    forwardRows,
+    hasNodeProblem,
+    loginErrorHint,
+    loginGuidance,
+    nodeStateHint,
+    nodeStateLabel,
+    nodeStateTone,
+} from "../../../utils/vpn_node_status";
 
 /**
  * OverviewTab Component
@@ -31,11 +42,21 @@ export class OverviewTab extends Component {
         resourcesLoading: { type: Boolean, optional: true },
         resourcesRefreshFailed: { type: Boolean, optional: true },
         resourcesNow: { type: Number, optional: true },
+        workspaceId: { type: [Number, String], optional: true },
     };
 
     setup() {
         // #1310：複製按鈕原本無論成敗都沒有回饋，不支援 Clipboard API 時直接沒反應。
         this.copyState = useState({ copied: null, failed: null });
+        // INFRA-FIX-005：VPN 節點狀態（登入狀態／登入入口／轉發結果）。gate 讀後端的
+        // `has_vpn_node_status`（capability-gate-single-source-field）；沒有這個能力或服務不在
+        // running／upgrading 時 poller 不打任何請求。
+        this.vpn = useVpnNodeStatus(
+            () => this.props.workspaceId ?? this.props.service.workspace_id,
+            () => this.props.service.id,
+            () => this.props.service.has_vpn_node_status === true
+                && ["running", "upgrading"].includes(this.props.service.state),
+        );
     }
 
     get isOnline() {
@@ -64,11 +85,84 @@ export class OverviewTab extends Component {
     get connectionStatus() {
         const { state, last_upgraded_at: lastUpgradedAt } = this.props.service;
         if (state === "running") {
-            return hasConfirmedWorkloadFault(this.props.service) ? "offline" : "online";
+            // INFRA-FIX-005：pod Ready ≠ 節點在線（NeedsLogin 時 pod 仍 Ready）。節點狀態卡讀到
+            // 「需要登入／等待核可／離線／停止」時，這一格不能同時寫 ONLINE。
+            if (hasConfirmedWorkloadFault(this.props.service) || hasNodeProblem(this.vpn.state.report)) {
+                return "offline";
+            }
+            return "online";
         }
         if (state === "upgrading") return "updating";
         if (["deploying", "initializing"].includes(state) && lastUpgradedAt) return "updating";
         return "offline";
+    }
+
+    // ---- INFRA-FIX-005：VPN 節點狀態卡 ------------------------------------------------
+    get vpnReport() {
+        return this.props.service.has_vpn_node_status ? this.vpn.state.report : null;
+    }
+
+    get vpnCanManage() {
+        return this.props.service.viewer_can_manage === true;
+    }
+
+    get vpnStateLabel() {
+        return nodeStateLabel(this.vpnReport?.state);
+    }
+
+    get vpnStateTone() {
+        return nodeStateTone(this.vpnReport?.state);
+    }
+
+    get vpnStateHint() {
+        return nodeStateHint(this.vpnReport);
+    }
+
+    /** INFRA-TS-005-5：上一次登入失敗的原因（key 過期／已用過／不對／連不到控制伺服器）。 */
+    get vpnLoginError() {
+        return loginErrorHint(this.vpnReport);
+    }
+
+    /** INFRA-TS-005-5：已登入的節點不會使用設定裡的 auth key。 */
+    get vpnAuthKeyNotice() {
+        return authKeyNotice(this.vpnReport);
+    }
+
+    get vpnLoginGuidance() {
+        return loginGuidance(this.vpnReport, this.vpnCanManage);
+    }
+
+    get vpnForwardRows() {
+        return forwardRows(this.vpnReport);
+    }
+
+    get vpnTailnetAddress() {
+        const report = this.vpnReport;
+        return report && report.tailnet_ips && report.tailnet_ips.length ? report.tailnet_ips.join(", ") : "";
+    }
+
+    get vpnCardTitle() {
+        return _t("VPN node status");
+    }
+
+    get vpnStateRowLabel() {
+        return _t("Node");
+    }
+
+    get vpnAddressRowLabel() {
+        return _t("Tailnet address");
+    }
+
+    get vpnForwardsRowLabel() {
+        return _t("Forwards");
+    }
+
+    get vpnNoForwardsText() {
+        return _t("No forwards are configured.");
+    }
+
+    get vpnLoadingText() {
+        return _t("Reading the node status...");
     }
 
     get subscription() {
@@ -113,12 +207,96 @@ export class OverviewTab extends Component {
         return _t("Copy address");
     }
 
+    /**
+     * 商用驗收 HS-013-2：對外位址那一格最後一次「探過、有結論」的時間（背景回讀；剛進入 running 的
+     * 10 分鐘內每分鐘一次，之後每日對帳）。沒有時回 ""（不畫）。
+     */
+    get publicTunnelCheckedText() {
+        const checkedAt = this.props.service.public_tunnel_checked_at;
+        if (!checkedAt) return "";
+        return _t("Last checked: %s", formatUserDateTime(checkedAt, { showSeconds: false }, ""));
+    }
+
     // #1647：Resource Allocation 卡顯示的是「這台服務的方案規格」，容易被讀成工作區的上限。
     // 補一句說明兩者的差別。刻意**不寫**「目前用量請看工作區頁」：那塊配額面板在 operator
     // 還沒升級、平台沒接 operator、namespace 沒有 quota、服務住在舊 namespace 時整塊不畫，
     // 這一句不能承諾那裡一定看得到用量。
     get workspaceQuotaHint() {
         return _t("This is the plan of this service only. All services in the workspace share one overall CPU, memory and disk quota.");
+    }
+
+    // ── DATA-ODOO-005-2／X-BK-006-1：唯讀備份卡 ───────────────────────────────
+    // payload.backup 由後端 `_backup_status_public` 組（只讀已存值）；supported＝畫不畫。
+    get backup() {
+        return this.props.service.backup || { supported: false };
+    }
+
+    get backupTitle() {
+        return _t("Backups");
+    }
+
+    get backupStatusLabel() {
+        if (this.backup.paused) return _t("Paused");
+        switch (this.backup.health) {
+            case "ok":
+                return _t("Healthy");
+            case "failed":
+                return _t("Failed");
+            case "stale":
+                return _t("Overdue");
+            default:
+                return _t("Not checked yet");
+        }
+    }
+
+    get backupBadgeClass() {
+        if (this.backup.paused) return "o_woow_badge_gray";
+        return {
+            ok: "o_woow_badge_green",
+            failed: "o_woow_badge_red",
+            stale: "o_woow_badge_amber",
+        }[this.backup.health] || "o_woow_badge_gray";
+    }
+
+    get backupLastSuccessLabel() {
+        return _t("Last successful backup");
+    }
+
+    get backupLastFailureLabel() {
+        return _t("Last failed backup");
+    }
+
+    get backupLastSuccessText() {
+        return this.backup.last_success_at
+            ? this.formatSyncedAt(this.backup.last_success_at)
+            : _t("None yet");
+    }
+
+    /** 原因代碼 → 租戶看得懂的一句話（代碼定義：chart backup-common.sh／db-agent.sh、operator backup_status.py）。 */
+    get backupReasonText() {
+        const reason = this.backup.failure_reason;
+        const texts = {
+            no_space: _t("The backup storage is full."),
+            postgres_unavailable: _t("The database could not be reached during the backup."),
+            lock_busy: _t("Another backup or restore was still running."),
+            oom_killed: _t("The backup ran out of memory."),
+            deadline_exceeded: _t("The backup took too long and was stopped."),
+            terminated: _t("The backup took too long and was stopped."),
+        };
+        return texts[reason] || _t("The backup could not be completed.");
+    }
+
+    get backupHint() {
+        if (this.backup.paused) {
+            return _t("No backups are taken while the service is suspended.");
+        }
+        if (this.backup.health === "failed") {
+            return _t("Your service keeps running and earlier backups are kept. Our team has been notified and will fix it; contact support if you need help.");
+        }
+        if (this.backup.health === "stale") {
+            return _t("No successful backup in the last day. Our team has been notified.");
+        }
+        return _t("A backup is taken automatically every day. Contact support to restore data from a backup.");
     }
 
     get helmNamespace() {

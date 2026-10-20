@@ -236,6 +236,21 @@ class TestPlainRollbackFloor:
         mock_helm.rollback.assert_called_once_with("paas-ws-x", "svc-x", 1)
 
     @patch("src.api.releases.helm_service")
+    def test_explicit_zero_or_negative_revision_is_400(self, mock_helm, client):
+        """AUDITFIX rollback-api-input-validation：明確送 0 不再被解讀成「上一版」。
+
+        helm 把 0 當上一版；原本 ``requested or (current - 1)`` 也這樣解，誤送 0 會真的回復並
+        重啟（INFRA-EMQX-013-1）。平台已改成只送 ≥ 1 的明確號碼，這裡是 defense-in-depth。
+        """
+        _helm(mock_helm, AUDIT_HISTORY)
+
+        for revision in (0, -1):
+            resp = client.post(URL, json={"revision": revision})
+            assert resp.status_code == 400, resp.text
+
+        mock_helm.rollback.assert_not_called()
+
+    @patch("src.api.releases.helm_service")
     def test_unknown_revision_is_400(self, mock_helm, client):
         _helm(mock_helm, AUDIT_HISTORY)
 

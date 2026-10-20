@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Internal conversion only: wallet topups already carry VAT (D13). -->
+    <record id="product_llm_credit" model="product.product">
+        <field name="name">AI Credit Conversion</field>
+        <field name="type">service</field>
+        <field name="sale_ok" eval="False"/>
+        <field name="purchase_ok" eval="False"/>
+        <field name="default_code">LLM_CREDIT</field>
+        <field name="list_price">1</field>
+        <field name="taxes_id" eval="[(5, 0, 0)]"/>
+    </record>
+    <record id="sequence_llm_credit_order" model="ir.sequence">
+        <field name="name">AI Credit Conversion Order</field>
+        <field name="code">woow_paas_platform.llm_credit_order</field>
+        <field name="prefix">LLMC/%(year)s/</field>
+        <field name="padding">5</field>
+        <field name="company_id" eval="False"/>
+    </record>
+</odoo>

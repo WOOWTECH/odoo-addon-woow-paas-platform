@@ -11,6 +11,9 @@ export class WoowButton extends Component {
         slots: { type: Object, optional: true },
         // #1310：TopupStorePage／InvoiceDetailPage 一直有傳 class，但從未宣告也從未套用。
         class: { type: String, optional: true },
+        // LLM-01c：同一畫面有好幾顆字一樣的按鈕（例如四顆「複製」）時，給讀屏分得出來的可讀名稱。
+        // 傳 _t() 過的字串（repo-lint #2(b)：component tag 上不寫字面字串）。
+        ariaLabel: { type: String, optional: true },
     };
 
     get buttonClass() {

@@ -89,6 +89,8 @@ export async function getDomain() {
 export const cloudService = reactive({
     /** @type {TemplateData[]} */
     templates: [],
+    /** @type {string[]|null} 有公開範本的分類代碼（null＝後端未提供，頁籤全列） */
+    templateCategories: null,
     /** @type {ServiceData[]} */
     services: [],
     /** @type {boolean} */
@@ -145,20 +147,26 @@ export const cloudService = reactive({
      * @param {number} planId - New plan ID
      * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
      */
-    async changePlan(serviceId, planId) {
-        this.operationLoading.changePlan = true;
+    async changePlan(serviceId, planId, { dryRun = false } = {}) {
+        // AUDITFIX（#1677 A1）：dryRun＝只問「換得起嗎」（首期應付／錢包／差額），後端什麼都不寫。
+        if (!dryRun) {
+            this.operationLoading.changePlan = true;
+        }
         try {
             const result = await jsonRpc(`/api/cloud-services/services/${serviceId}/change-plan`, {
                 plan_id: planId,
+                ...(dryRun ? { dry_run: true } : {}),
             });
             if (result.success) {
                 return { success: true, data: result.data };
             }
-            return { success: false, error: result.error };
+            return { success: false, error: result.error, data: result.data };
         } catch (err) {
             return { success: false, error: err.message };
         } finally {
-            this.operationLoading.changePlan = false;
+            if (!dryRun) {
+                this.operationLoading.changePlan = false;
+            }
         }
     },
 
@@ -289,7 +297,7 @@ export const cloudService = reactive({
     /**
      * Fetch all available templates
      * @param {string|null} category - Filter by category
-     * @param {string|null} search - Search in name/description
+     * @param {string|null} search - Search in name/description/tags
      * @returns {Promise<void>}
      */
     async fetchTemplates(category = null, search = null) {
@@ -302,6 +310,8 @@ export const cloudService = reactive({
             });
             if (result.success) {
                 this.templates = result.data;
+                // X-LC-001-5：有公開範本的分類（舊後端沒有這個欄位 ⇒ null ＝ 全部頁籤照舊顯示）。
+                this.templateCategories = Array.isArray(result.categories) ? result.categories : null;
             } else {
                 this.error = result.error || _t("Failed to fetch templates");
             }
@@ -415,6 +425,18 @@ export const cloudService = reactive({
         } finally {
             this.operationLoading.fetchService = false;
         }
+    },
+
+    async fetchDocumentation(workspaceId, serviceId) {
+        return jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/documentation`, {});
+    },
+
+    async fetchLogs(workspaceId, serviceId, options = {}) {
+        return jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/logs`, {
+            tail_lines: 500,
+            previous: false,
+            ...options,
+        });
     },
 
     async resetAdminPassword(workspaceId, serviceId) {
@@ -613,7 +635,8 @@ export const cloudService = reactive({
         try {
             const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/revisions`, {});
             if (result.success) {
-                return { success: true, data: result.data };
+                // INFRA-FIX-018-1：historyMax＝operator 每個 release 保留幾筆 revision（舊後端沒有 ⇒ null）。
+                return { success: true, data: result.data, historyMax: result.history_max ?? null };
             } else {
                 return { success: false, error: result.error };
             }

@@ -71,6 +71,7 @@ from odoo.addons.woow_paas_platform.controllers.smart_home import (
     SmartHomeController,
 )
 from .smart_home_fixture import sh_model
+from .wallet_fixture import fund_wallet
 
 
 def _patch_sa_request(env):
@@ -167,6 +168,9 @@ class TestSaChangePlanEndsTrial36(TransactionCase):
             'workspace_id': ws.id,
             'template_id': self.template.id,
         })
+        # 換方案餘額閘（#1677 A1）：本檔測試用結束與帳單（見 wallet_fixture）。首購是試用
+        # 方案（不開發票），先補點不影響「首購零發票」的對照組。
+        fund_wallet(ws.owner_id.partner_id)
         return owner, ws.owner_id.partner_id, sa
 
     def _invoices_of(self, sub):
@@ -262,6 +266,7 @@ class TestShChangePlanEndsTrial36(TransactionCase):
         home = self.SmartHome.sudo().create({
             'name': 'SH 36 Home %s' % tag, 'workspace_id': ws.id,
         })
+        fund_wallet(ws.owner_id.partner_id)  # 同上（#1677 A1 餘額閘）
         return owner, ws.owner_id.partner_id, home
 
     def _invoices_of(self, sub):

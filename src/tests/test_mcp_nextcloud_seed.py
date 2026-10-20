@@ -8,8 +8,7 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 ``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
 
 1. **釘版**：chart mcp-server 0.1.7（OCI；image 以 uid／gid 1000 執行，要非 root 的 chart）；image
-   nextcloud-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI 推的那一顆（現行＝#50 合併 1d16391d、run 18319
-   job 20066；首次上架是 #44 的 9a0fafa2）——
+   nextcloud-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI 推的那一顆（現行＝#70 合併 5526e865；首次上架是 #44 的 9a0fafa2）——
    換 image 時這條會紅，逼下一個人覆核啟動契約（#708 教訓）。
 2. **啟動契約**：``nextcloud-mcp-server``、args 只有 port 8000（launcher 硬綁 127.0.0.1，seed 不給 host；
    app 的 LaunchPolicy 固定 command／args）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
@@ -48,9 +47,15 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # 在實際 digest 的離線 probe 驗 CLI、LaunchPolicy、127.0.0.1／port 8000、出廠唯讀；
 # main.py／launcher.py／seed_defaults.py 三個 hash 與該 main SHA 一致。
 # 1ec1bb0b..1d16391d 的 apps/nextcloud 及 uv.lock 無內容差異，既有啟動／唯讀檢查仍成立。
+# 2026-10-18 重釘 #70（5526e865）：LaunchPolicy／console script／launcher／seed_defaults
+# 對照前一 pin 均未變；uv.lock 的 mcp SDK 從 1.28.1 升為 1.30.0。
+# 五支真 image 的 imports／CLI help／ASGI 限定 smoke 共 111 項通過；未啟動 lifespan／
+# MCP daemon、未呼叫 MCP 工具；既有 PVC 升級與 ORM 仍未驗。來源／實機窄證據見
+# docs/verification/2026-10-18-mcp-5526e865-source-contract.json
+# 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
 EXPECT_IMAGE_TAG = (
-    '1d16391d1a62fdda2b8de6bd16491c22330b127f'
-    '@sha256:427a0b994f278ff48457ff3e1fa02a9028674889e21f5cdb2dc7266b1daabb89')
+    '5526e8658a8046253a0b324825a12222096fa858'
+    '@sha256:f2d39c5c7bbdb597ffb6f9e2c3da7064bd500cb5c8ef67a201c1b57236a7c467')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 

@@ -245,6 +245,31 @@ Communicating this to customers is the job of the cancellation email
 (template added by Decision 2): it should call out the 6-month preservation
 window and the path back to service.
 
+### 營運注意事項（2026-10-17，商用驗收 AUDITFIX）
+
+**取消通知不會再因 SMTP 故障永久遺失**（dunning-lost-on-smtp-failure）：只有信真的排進佇列，
+才會蓋 `woow_cancellation_notified`；載體記在 `woow_cancellation_mail_id`（`auto_delete=False`）。
+信若投遞失敗停在 `exception`（例如 SMTP 421），每日 `_sh_create_auto_invoice` 結尾的
+`_retry_cancellation_notices` 會在自動取消後 7 天內（`_CANCELLATION_NOTICE_RETRY_WINDOW_DAYS`）補送；
+只有 dunning 自動取消（`woow_auto_cancelled_at` 有值）的訂閱才會補送，人工或租戶取消不會。
+升級前就已取消的訂閱沒有 `woow_auto_cancelled_at`，不會補送。
+
+**通知信語言與日期**（dunning-mail-english／payment-mail-wrong-date）：低餘額、自動取消兩封信依
+收件人 `res.partner.lang` 渲染（既有 DB 由 `billing_mail_lang_sync.xml` 補 `lang`）。平台訂閱
+（方案 `sh_never_expire`）的開通／付款成功／取消通知改用 `mail_template_subscription_status`：
+寫「下次扣款日」（`sh_date_of_next_payment`），不寫到期日——平台訂閱的 `sh_end_date` 是第一期
+最後一天、續期不推進（#1574）。
+
+**計費排程的已知行為（設計如此，非缺陷；X-BIL-004-5）**——對帳或客訴時請先對照：
+
+- **同一天重跑 cron 會多算失敗次數**：`woow_consecutive_payment_failures` 每「執行一次」排程就 +1
+  （Decision 1 的 ticks 語意），不是每天 +1。手動多跑一次 `_sh_create_auto_invoice` 等於多吃掉一次
+  寬限。人工補跑前先確認當天是否已跑過。
+- **延遲付款會讓扣款日漂移**：`_on_payment_success` 以「扣款當天＋一個週期」推進
+  `sh_date_of_next_payment`，不是「原定扣款日＋一個週期」。欠費 3 天後補點成功，之後每期都晚 3 天。
+- **停擺期間不追補**：排程（或整個平台）停擺 N 天，恢復後每筆到期訂閱只扣一期，不補扣停擺期間
+  跨過的週期；扣款日照上一條從恢復當天重新起算。
+
 ## Implementation effort breakdown
 
 | Component | LOC (est.) | File |

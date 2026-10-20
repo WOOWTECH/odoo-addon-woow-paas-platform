@@ -4,19 +4,19 @@
     <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
       <div class="o_woow_modal o_woow_modal_lg" t-on-click.stop="">
         <div class="o_woow_modal_header">
-          <h2>Change Plan</h2>
+          <h2><t t-if="props.activatingTrial">選擇付費方案</t><t t-else="">Change Plan</t></h2>
           <button
             class="o_woow_modal_close"
             t-on-click="props.onClose"
             t-att-disabled="state.changing">
-            <WoowIcon name="'close'" size="20"/>
+            <WoowIcon name="props.activatingTrial ? 'mdi-close' : 'close'" size="20"/>
           </button>
         </div>
 
         <div class="o_woow_modal_body">
           <!-- 目前方案（變體 plan 名已含席數，直接顯示） -->
           <div class="o_woow_change_plan__current">
-            <span class="o_woow_change_plan__current_label">Current Plan</span>
+            <span class="o_woow_change_plan__current_label"><t t-if="props.activatingTrial">目前試用方案</t><t t-else="">Current Plan</t></span>
             <span class="o_woow_change_plan__current_value" t-esc="currentPlanName"/>
           </div>
 
@@ -27,13 +27,15 @@
           <t t-if="state.confirmingTrialEnd">
             <div class="o_woow_change_plan__trial_warning">
               <div class="o_woow_change_plan__trial_warning_head">
-                <WoowIcon name="'warning'" size="28"/>
-                <p>This will end your trial immediately</p>
+                <WoowIcon name="props.activatingTrial ? 'mdi-alert-outline' : 'warning'" size="28"/>
+                <p t-if="props.activatingTrial">確認啟用付費方案</p>
+                <p t-else="">This will end your trial immediately</p>
               </div>
-              <p class="o_woow_change_plan__trial_warning_lead">
+              <p t-if="props.activatingTrial" class="o_woow_change_plan__trial_warning_lead">確認後會從今天開始計費，並依所選方案產生首期帳單。若仍在試用中，剩餘試用將立即結束。</p>
+              <p t-else="" class="o_woow_change_plan__trial_warning_lead">
                 Your current trial has not ended yet. Confirming the plan change will:
               </p>
-              <ul class="o_woow_change_plan__trial_warning_list">
+              <ul t-if="!props.activatingTrial" class="o_woow_change_plan__trial_warning_list">
                 <li>End your current trial immediately</li>
                 <li>Start your first billing cycle now</li>
                 <li>Generate your first invoice</li>
@@ -46,15 +48,15 @@
             <!-- 載入方案清單中 -->
             <t t-if="state.loadingPlans">
               <div class="o_woow_pay_confirm_text">
-                <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
-                <p>Loading plans...</p>
+                <WoowIcon name="props.activatingTrial ? 'mdi-loading' : 'sync'" size="20" class="'o_woow_spin'"/>
+                <p><t t-if="props.activatingTrial">正在載入方案…</t><t t-else="">Loading plans...</t></p>
               </div>
             </t>
 
             <!-- 方案清單載入失敗 -->
             <t t-if="!state.loadingPlans and state.plansError">
               <div class="o_woow_error_message">
-                <WoowIcon name="'error'" size="16"/>
+                <WoowIcon name="props.activatingTrial ? 'mdi-alert-circle-outline' : 'error'" size="16"/>
                 <span t-esc="state.plansError"/>
               </div>
             </t>
@@ -62,7 +64,7 @@
             <!-- 方案選擇器（內嵌 PlanSelector，變體自動展開席數第二步） -->
             <t t-if="!state.loadingPlans and !state.plansError">
               <div class="o_woow_form_group">
-                <label>Select New Plan</label>
+                <label><t t-if="props.activatingTrial">選擇付費方案</t><t t-else="">Select New Plan</t></label>
                 <PlanSelector
                   plans="state.plans"
                   selectedPlanId="state.selectedPlanId"
@@ -79,8 +81,9 @@
                    同樣成立——`_compute_unused_refund` 的前提是
                    `_has_paid_current_cycle()`（#324 (b)），不是只有試用才退 0。 -->
               <div class="o_woow_change_plan__advisory">
-                <WoowIcon name="'info'" size="16"/>
-                <span>
+                <WoowIcon name="props.activatingTrial ? 'mdi-information-outline' : 'info'" size="16"/>
+                <span t-if="props.activatingTrial">試用不會自動轉為付費。你可以沿用目前方案或選擇其他方案；確認開始計費後，才會建立付費訂閱。到期暫停的服務會在付款完成後恢復。</span>
+                <span t-else="">
                   Changing your plan closes the current subscription and re-bills under the
                   new plan; the unused portion of the current cycle is refunded to your
                   wallet as credit points on a pro-rata basis (if this cycle has not been
@@ -93,8 +96,8 @@
                    PlanSelector 的卡片還標著「N-day free trial」。這句把真正的後果
                    （試用當場結束、開始計費）講在選擇當下，確認前的警告階段再要一次
                    明示同意。 -->
-              <div t-if="willEndTrial" class="o_woow_change_plan__advisory o_woow_change_plan__advisory--trial">
-                <WoowIcon name="'warning'" size="16"/>
+              <div t-if="willEndTrial and !props.activatingTrial" class="o_woow_change_plan__advisory o_woow_change_plan__advisory--trial">
+                <WoowIcon name="props.activatingTrial ? 'mdi-alert-outline' : 'warning'" size="16"/>
                 <span>
                   You are currently on a trial: changing your plan ends the trial
                   immediately, starts billing and generates your first invoice. No payment
@@ -111,8 +114,8 @@
                    當場開出——舊文案讓租戶以為還能用舊額度到週期結束。
                    退點細節（按比例、本期未扣款則無可退）由上方 advisory 負責，這裡
                    只指回去、不重述，免得兩處說法漂開。 -->
-              <div class="o_woow_change_plan__notice">
-                <WoowIcon name="'bolt'" size="14"/>
+              <div t-if="!props.activatingTrial" class="o_woow_change_plan__notice">
+                <WoowIcon name="props.activatingTrial ? 'mdi-lightning-bolt-outline' : 'bolt'" size="14"/>
                 <span>The change takes effect immediately: the new plan and its limits apply as soon as you confirm and are billed from today. The unused part of the current period is refunded as described above.</span>
               </div>
               <!-- #1158（Closes #342）：Cloud Service 的運算規格也是立即生效——確認後
@@ -121,11 +124,25 @@
                    方案時保留目前大小。只有 CS 父頁會傳 resizesResources；SA／SH 的方案
                    沒有運算規格。 -->
               <div t-if="props.resizesResources" class="o_woow_change_plan__notice">
-                <WoowIcon name="'info'" size="14"/>
+                <WoowIcon name="props.activatingTrial ? 'mdi-information-outline' : 'info'" size="14"/>
                 <span>If the new plan has different compute resources, the service restarts to apply them (about 30 seconds of downtime). Storage is never reduced: on a plan with less storage, the current storage size is kept.</span>
               </div>
             </t>
           </t>
+
+          <!-- AUDITFIX change-plan-insufficient-balance（#1677 A1）：錢包＋退點付不起新方案首期
+               （含稅）時停用確認鈕並顯示差額與儲值連結。金額全部來自後端 dry_run 估算，前端
+               不自己算；後端換方案時同一把尺會再擋一次。 -->
+          <div t-if="balanceBlocked and !state.confirmingTrialEnd" class="o_woow_pay_warning o_woow_change_plan__balance">
+            <WoowIcon name="props.activatingTrial ? 'mdi-alert-outline' : 'warning'" size="20"/>
+            <div>
+              <p t-esc="balanceShortfallMessage"/>
+              <a href="#/billing/topup" class="o_woow_pay_topup_link" t-on-click="props.onClose">
+                <WoowIcon name="props.activatingTrial ? 'mdi-plus' : 'add'" size="16"/>
+                <t t-if="props.activatingTrial">前往儲值</t><t t-else="">Top up your wallet</t>
+              </a>
+            </div>
+          </div>
 
           <!-- #1647：錯誤訊息排在可捲動的 body 最後（與其他 modal 同一個位置）。body 的
                內容比視窗高時它會落在可視範圍之外，所以每次失敗都由 ChangePlanModal.js 把
@@ -133,7 +150,7 @@
                ⛔ 拿掉 t-ref 或把這一塊搬到別處前先看
                test_compute_quota_preflight_1647.py::TestChangePlanErrorVisible1647。 -->
           <div t-if="state.error" class="o_woow_error_message" t-ref="errorMessage">
-            <WoowIcon name="'error'" size="16"/>
+            <WoowIcon name="props.activatingTrial ? 'mdi-alert-circle-outline' : 'error'" size="16"/>
             <span t-esc="state.error"/>
           </div>
         </div>
@@ -156,7 +173,7 @@
               size="'md'"
               onClick.bind="onBackFromTrialWarning"
               disabled="state.changing">
-              Back
+              <t t-if="props.activatingTrial">返回選擇</t><t t-else="">Back</t>
             </WoowButton>
             <WoowButton
               variant="'danger'"
@@ -164,12 +181,13 @@
               onClick.bind="onConfirm"
               disabled="!canConfirm">
               <t t-if="state.changing">
-                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
-                Processing...
+                <WoowIcon name="props.activatingTrial ? 'mdi-loading' : 'sync'" size="18" class="'o_woow_spin'"/>
+                <t t-if="props.activatingTrial">處理中…</t><t t-else="">Processing...</t>
               </t>
               <t t-else="">
-                <WoowIcon name="'receipt_long'" size="18"/>
-                End Trial &amp; Start Billing
+                <WoowIcon name="props.activatingTrial ? 'mdi-receipt-text-outline' : 'receipt_long'" size="18"/>
+                <t t-if="props.activatingTrial">確認方案並開始計費</t>
+                <t t-else="">End Trial &amp; Start Billing</t>
               </t>
             </WoowButton>
           </t>
@@ -179,7 +197,7 @@
               size="'md'"
               onClick="props.onClose"
               disabled="state.changing">
-              Cancel
+              <t t-if="props.activatingTrial">取消</t><t t-else="">Cancel</t>
             </WoowButton>
             <WoowButton
               variant="'primary'"
@@ -187,12 +205,13 @@
               onClick.bind="onConfirm"
               disabled="!canConfirm">
               <t t-if="state.changing">
-                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
-                Processing...
+                <WoowIcon name="props.activatingTrial ? 'mdi-loading' : 'sync'" size="18" class="'o_woow_spin'"/>
+                <t t-if="props.activatingTrial">處理中…</t><t t-else="">Processing...</t>
               </t>
               <t t-else="">
-                <WoowIcon name="'swap_horiz'" size="18"/>
-                Confirm Change
+                <WoowIcon name="props.activatingTrial ? 'mdi-swap-horizontal' : 'swap_horiz'" size="18"/>
+                <t t-if="props.activatingTrial">繼續確認付費方案</t>
+                <t t-else="">Confirm Change</t>
               </t>
             </WoowButton>
           </t>

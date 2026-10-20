@@ -25,3 +25,36 @@
   cursor: default;
   pointer-events: none;
 }
+
+// X-LC-006-7：手機版觸控目標。390px 實測麵包屑 26×19、「查看紀錄」「查看全部」19px 高、
+// 客服 email／電話 21px、公開網址 18px、複製鈕 24×24，「管理」與「查看全部」緊貼無間距。
+// WCAG 2.2（2.5.8）最低 24×24，Apple 建議 44pt ⇒ 手機一律撐到 44px 高（文字大小不變，
+// 只加點擊區）。選擇器多一層 .o_woow_content 祖先，蓋過各頁 scss（它們在本檔之後載入）。
+@media (max-width: 768px) {
+  .o_woow_content {
+    .o_woow_breadcrumb_link,
+    .o_woow_billing_view_history_link,
+    .o_woow_billing_view_all_link,
+    .o_woow_billing_support_item a,
+    .o_woow_info_value a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+    }
+
+    .o_woow_copy_btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    // 並排的「管理」按鈕與「查看全部」連結之間保留間距，避免誤觸。
+    .o_woow_billing_sub_header_actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+  }
+}

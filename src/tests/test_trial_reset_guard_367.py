@@ -20,6 +20,7 @@ from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
+from .wallet_fixture import fund_wallet
 
 
 class TestTrialResetGuard367(TransactionCase):
@@ -82,6 +83,9 @@ class TestTrialResetGuard367(TransactionCase):
             'name': '367 Svc %s' % tag, 'workspace_id': ws.id,
             'template_id': self.template.id,
         })
+        # 換方案餘額閘（#1677 A1）：本檔測試用期，不測錢包不足（見 wallet_fixture）。
+        # 首購都是試用方案（不開發票），先補點不影響退點前提。
+        fund_wallet(ws.owner_id.partner_id)
         return owner, ws.owner_id.partner_id, svc
 
     def _patch_request(self, env):

@@ -43,6 +43,34 @@
                             <field name="edge_connection_count" readonly="1"/>
                             <field name="deployed_at" readonly="1"/>
                         </group>
+                        <!-- #1766：一條 tunnel 只給一台 HA 接。connector_count
+                             是機器數（distinct client_id），和上面的
+                             edge_connection_count（一台預設 4 條）不是同一回事。 -->
+                        <group string="Home Assistant Binding">
+                            <field name="binding_state" readonly="1"/>
+                            <field name="bound_instance_label" readonly="1"/>
+                            <field name="bound_instance_uid" readonly="1"
+                                   groups="base.group_system"/>
+                            <field name="bound_at" readonly="1"/>
+                            <field name="connector_count" readonly="1"/>
+                            <field name="binding_conflict" readonly="1"
+                                   invisible="not binding_conflict"
+                                   decoration-danger="binding_conflict"/>
+                            <div colspan="2" class="alert alert-danger" role="alert"
+                                 invisible="not binding_conflict">
+                                Two machines are attached to this tunnel. Cloudflare
+                                sends each request to whichever answers first, so the
+                                public address reaches the wrong machine about half the
+                                time. Stop the tunnel on the machine that should not
+                                have it; releasing the binding here does not disconnect
+                                it (the token it already holds stays valid).
+                            </div>
+                            <button name="action_release_binding" type="object"
+                                    string="Release binding"
+                                    class="btn-secondary" colspan="2"
+                                    confirm="The next Home Assistant that asks for this tunnel's token will be able to take it over. The installation that holds the token now is NOT disconnected by this — to cut it off you have to delete and recreate this access. Continue?"
+                                    invisible="binding_state == 'unbound'"/>
+                        </group>
                     </group>
                     <notebook>
                         <page string="Application Routes" name="routes">

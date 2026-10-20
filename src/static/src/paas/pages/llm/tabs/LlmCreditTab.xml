@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmCreditTab">
+    <section class="o_woow_llm_credit">
+      <div class="o_woow_llm_credit__summary">
+        <h2 t-esc="balanceText"/>
+        <p t-esc="hintText"/>
+        <p t-if="blockedText" role="status" t-esc="blockedText"/>
+        <button type="button" t-att-disabled="!!blockedText" t-on-click="openConvert">Convert points</button>
+      </div>
+      <div class="o_woow_llm_credit__heading"><h3>Conversion history</h3><button type="button" t-att-disabled="state.loading" t-on-click="refresh">Refresh</button></div>
+      <p t-if="state.error" role="alert" t-esc="state.error"/>
+      <p t-if="state.loading" role="status">Loading conversions…</p>
+      <p t-if="!state.loading &amp;&amp; !state.error &amp;&amp; !rows.length">No conversions yet.</p>
+      <div class="o_woow_llm_credit__orders">
+        <article t-foreach="rows" t-as="order" t-key="order.id" class="o_woow_llm_credit__order">
+          <h4 t-esc="order.name"/>
+          <dl>
+            <div><dt>Time (Taipei)</dt><dd t-esc="order.time"/></div>
+            <div><dt>Points</dt><dd t-esc="order.points"/></div>
+            <div><dt>Status</dt><dd t-esc="order.status"/></div>
+            <div t-if="order.note"><dt>Note</dt><dd t-esc="order.note"/></div>
+          </dl>
+        </article>
+      </div>
+      <nav t-if="state.total > 20" class="o_woow_llm_credit__pager" aria-label="Conversion history pages">
+        <button type="button" t-att-disabled="state.page === 1 || state.loading" t-on-click="() => this.load(state.page - 1)">Previous</button>
+        <span t-esc="pageText"/>
+        <button type="button" t-att-disabled="state.page * 20 >= state.total || state.loading" t-on-click="() => this.load(state.page + 1)">Next</button>
+      </nav>
+      <LlmConvertModal t-if="state.showConvert" onClose.bind="onConvertClose"/>
+    </section>
+  </t>
+</templates>

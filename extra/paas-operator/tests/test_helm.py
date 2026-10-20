@@ -97,9 +97,9 @@ class TestHelmService:
             stdout=json.dumps({
                 "name": "test-release",
                 "namespace": "paas-ws-test",
+                "version": 1,
                 "info": {
                     "status": "deployed",
-                    "revision": 1,
                     "last_deployed": "2024-01-01T00:00:00Z",
                 },
                 "chart": {
@@ -121,6 +121,8 @@ class TestHelmService:
         assert result.name == "test-release"
         assert result.namespace == "paas-ws-test"
         assert result.chart == "nginx"
+        # #1414：版次讀頂層 `version`（真實 helm 輸出），不是 info.revision。
+        assert result.revision == 1
 
     @patch("subprocess.run")
     def test_install_adds_pvc_keep_post_renderer(self, mock_run, helm_service):
@@ -133,7 +135,8 @@ class TestHelmService:
             returncode=0,
             stdout=json.dumps({
                 "name": "r", "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "n8n", "appVersion": "1.0.0"}},
             }),
             stderr="",
@@ -157,7 +160,8 @@ class TestHelmService:
             returncode=0,
             stdout=json.dumps({
                 "name": "r", "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+                "version": 2,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "n8n", "appVersion": "1.0.0"}},
             }),
             stderr="",
@@ -195,7 +199,8 @@ class TestHelmService:
             stdout=json.dumps({
                 "name": "agent-pa-abc",
                 "namespace": "paas-ws-pa-abc",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "agent-runtime", "appVersion": "1.0.0"}},
             }),
             stderr="",
@@ -229,7 +234,8 @@ class TestHelmService:
             stdout=json.dumps({
                 "name": "agent-pa-abc",
                 "namespace": "paas-ws-pa-abc",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "agent-runtime", "appVersion": "1.0.0"}},
             }),
             stderr="",
@@ -268,7 +274,8 @@ class TestHelmService:
             returncode=0,
             stdout=json.dumps({
                 "name": "svc-x", "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "mcp-server", "appVersion": "9d10944"}},
             }),
             stderr="",
@@ -311,7 +318,8 @@ class TestHelmService:
             returncode=0,
             stdout=json.dumps({
                 "name": "pg", "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "postgresql", "appVersion": "16"}},
             }),
             stderr="",
@@ -355,7 +363,8 @@ class TestHelmService:
             returncode=0,
             stdout=json.dumps({
                 "name": "svc-n8n", "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "n8n", "appVersion": "1.0"}},
             }),
             stderr="",
@@ -392,7 +401,8 @@ class TestHelmService:
             stdout=json.dumps({
                 "name": "test-release",
                 "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 1, "last_deployed": ""},
+                "version": 1,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "postgresql", "appVersion": "16"}},
             }),
             stderr="",
@@ -421,7 +431,8 @@ class TestHelmService:
             stdout=json.dumps({
                 "name": "agent-pa-abc",
                 "namespace": "paas-ws-pa-abc",
-                "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+                "version": 2,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "agent-runtime", "appVersion": "1.0.0"}},
             }),
             stderr="",
@@ -449,7 +460,8 @@ class TestHelmService:
             stdout=json.dumps({
                 "name": "test-release",
                 "namespace": "paas-ws-test",
-                "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+                "version": 2,
+                "info": {"status": "deployed", "last_deployed": ""},
                 "chart": {"metadata": {"name": "postgresql", "appVersion": "16"}},
             }),
             stderr="",
@@ -473,7 +485,8 @@ class TestHelmService:
         return json.dumps({
             "name": "test-release",
             "namespace": "paas-ws-test",
-            "info": {"status": "deployed", "revision": 2, "last_deployed": ""},
+            "version": 2,
+                "info": {"status": "deployed", "last_deployed": ""},
             "chart": {"metadata": {"name": "mcp-server", "appVersion": "1.0.0"}},
         })
 

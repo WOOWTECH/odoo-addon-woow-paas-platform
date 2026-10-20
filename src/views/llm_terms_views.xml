@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- LLM-04：《AI 模型服務條款》的版本（system 的後台表單；DESIGN §2.7、§6.4）。
+         發佈只能用表單上的〔Publish〕（state 與發佈時間都是唯讀）；published／retired 不能改也不能刪。 -->
+    <record id="view_llm_terms_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_terms.list</field>
+        <field name="model">woow_paas_platform.llm_terms</field>
+        <field name="arch" type="xml">
+            <list string="AI Models Terms of Service"
+                  decoration-success="state == 'published'"
+                  decoration-muted="state == 'retired'">
+                <field name="version"/>
+                <field name="title"/>
+                <field name="state" widget="badge"/>
+                <field name="requires_reaccept"/>
+                <field name="is_draft_text"/>
+                <field name="publish_seq"/>
+                <field name="published_at"/>
+                <field name="retired_at" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_llm_terms_form" model="ir.ui.view">
+        <field name="name">woow_paas_platform.llm_terms.form</field>
+        <field name="model">woow_paas_platform.llm_terms</field>
+        <field name="arch" type="xml">
+            <form string="AI Models Terms of Service">
+                <header>
+                    <button name="action_publish" type="object" string="Publish"
+                            class="btn-primary" invisible="state != 'draft'"
+                            confirm="Publish this version? The current published version will be retired. If Requires re-acceptance is set, existing accounts must accept this version before creating keys, converting points or re-enabling keys. A published version can no longer be changed or deleted."/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Draft text" bg_color="text-bg-warning"
+                            invisible="not is_draft_text"/>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="version" placeholder="2026-10-draft-1"
+                                   readonly="state != 'draft'"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="title" readonly="state != 'draft'"/>
+                            <field name="requires_reaccept" readonly="state != 'draft'"/>
+                            <field name="is_draft_text"/>
+                        </group>
+                        <group>
+                            <field name="publish_seq"/>
+                            <field name="published_at"/>
+                            <field name="retired_at"/>
+                        </group>
+                    </group>
+                    <field name="content_html" readonly="state != 'draft'"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_llm_terms" model="ir.actions.act_window">
+        <field name="name">AI Models Terms of Service</field>
+        <field name="res_model">woow_paas_platform.llm_terms</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create the first terms version
+            </p>
+            <p>
+                Users must accept the published version to activate AI Models.
+                Draft text can only be published on staging.
+            </p>
+        </field>
+    </record>
+
+    <menuitem
+        id="menu_llm"
+        name="AI Models"
+        parent="menu_woow_paas_platform_root"
+        groups="base.group_system"
+        sequence="60"/>
+
+    <menuitem
+        id="menu_llm_terms"
+        name="Terms of Service"
+        parent="menu_llm"
+        action="action_llm_terms"
+        groups="base.group_system"
+        sequence="10"/>
+</odoo>
