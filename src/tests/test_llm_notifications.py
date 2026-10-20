@@ -513,3 +513,41 @@ class TestLlmNotifications(_ConfiguredCase):
         self.assertEqual(oldest.notified_state, 'needs_review')
         self.assertTrue(outside.acceptance_notice_pending)
         self.assertFalse(outside.notified_state)
+
+    def test_failing_acceptance_backlog_cannot_starve_terminal_notifications(self):
+        account = _new_account(self.env, 'LLM repeated retries', user_id=988122)
+        account.partner_id.write({'email': 'retry-order@example.invalid'})
+        orders = self.env[ORDER_MODEL].browse()
+        for _index in range(26):
+            order = _credit_internal(self.env[ORDER_MODEL].sudo()).create({
+                'account_id': account.id, 'partner_id': account.partner_id.id,
+                'newapi_user_id': account.newapi_user_id, 'source': 'user',
+                'points': 20, 'quota': 20 * 15625,
+                'client_request_id': str(uuid.uuid4()), 'acceptance_notice_pending': True,
+            })
+            orders |= order
+        # Both the oldest failing order and the last order have healthy terminal
+        # obligations. No acceptance template is restored during the test.
+        terminal_orders = orders[:1] | orders[-1:]
+        for order in terminal_orders:
+            _credit_internal(order)._transition('sending')
+            _credit_internal(order)._transition('credited', credited_at=fields.Datetime.now())
+        now = fields.Datetime.now()
+        with patch.dict(notifications_module._TEMPLATES, {
+                'credit_converted': 'missing_conversion_template',
+        }):
+            for minute in range(7):
+                with patch.object(notifications_module, '_utcnow',
+                                  return_value=now + timedelta(minutes=minute)):
+                    tick = LlmCronTick(30, 5)
+                    self.Notice._llm_notifications_tick({}, tick, account_ids=[account.id])
+                    self.assertLessEqual(tick.done, 5)
+        self.assertEqual(set(terminal_orders.mapped('notified_state')), {'credited'})
+        notices = self.Notice.search([
+            ('account_id', '=', account.id), ('kind', '=', 'credit_credited'),
+        ])
+        self.assertEqual(set(notices.mapped('subject_id')), set(terminal_orders.ids))
+        self.assertTrue(all(orders.mapped('acceptance_notice_pending')))
+        self.assertFalse(self.Notice.search([
+            ('account_id', '=', account.id), ('kind', '=', 'credit_converted'),
+        ]))

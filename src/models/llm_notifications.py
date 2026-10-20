@@ -652,31 +652,44 @@ class LlmNotification(models.Model):
         from .llm_credit_order import _credit_internal
         Order = self.env['woow_paas_platform.llm_credit_order'].sudo()
         now = _utcnow()
-        Order.flush_model(['state', 'notified_state', 'sent_at', 'create_date', 'account_id',
-                           'state_notice_retry_at', 'acceptance_notice_pending',
-                           'acceptance_notice_retry_at'])
-        # One oldest eligible order per slot, regardless of obligation class.
-        # New acceptances cannot overtake an older terminal-state notice.
-        self.env.cr.execute(
-            "SELECT id FROM woow_paas_platform_llm_credit_order WHERE ("
-            "(acceptance_notice_pending AND (acceptance_notice_retry_at IS NULL "
-            "OR acceptance_notice_retry_at <= %s)) OR ("
-            "((state IN ('credited','needs_review','voided') AND state IS DISTINCT FROM notified_state) "
-            "OR (state='unknown' AND state IS DISTINCT FROM notified_state "
-            "AND COALESCE(sent_at, create_date) <= %s)) "
-            "AND (state_notice_retry_at IS NULL OR state_notice_retry_at <= %s))) "
-            + ('AND account_id = ANY(%s) ' if account_ids is not None else '')
-            + 'ORDER BY id LIMIT %s',
-            [now, now - timedelta(minutes=5), now]
-            + ([list(account_ids)] if account_ids is not None else []) + [limit])
-        candidates = Order.browse([row[0] for row in self.env.cr.fetchall()])
         processed = 0
-        for order in candidates:
+        # Retry deadlines also define fair service order. A permanently failing
+        # prefix cannot jump ahead of older, never-serviced terminal notices.
+        # Re-query after each marker write so two obligations on one order can
+        # share the budget without a stale acceptance/terminal decision.
+        for _slot in range(limit):
             if not tick.can_take():
                 break
+            Order.flush_model(['state', 'notified_state', 'sent_at', 'create_date', 'account_id',
+                               'state_notice_retry_at', 'acceptance_notice_pending',
+                               'acceptance_notice_retry_at'])
+            scope = ' AND account_id = ANY(%s)' if account_ids is not None else ''
+            self.env.cr.execute(
+                'SELECT id, acceptance FROM ('
+                'SELECT id, TRUE AS acceptance, '
+                'COALESCE(acceptance_notice_retry_at, create_date) AS eligible_since '
+                'FROM woow_paas_platform_llm_credit_order '
+                'WHERE acceptance_notice_pending AND '
+                '(acceptance_notice_retry_at IS NULL OR acceptance_notice_retry_at <= %s)'
+                + scope + ' UNION ALL '
+                'SELECT id, FALSE AS acceptance, '
+                'COALESCE(state_notice_retry_at, create_date) AS eligible_since '
+                'FROM woow_paas_platform_llm_credit_order WHERE '
+                "((state IN ('credited','needs_review','voided') AND state IS DISTINCT FROM notified_state) "
+                "OR (state='unknown' AND state IS DISTINCT FROM notified_state "
+                'AND COALESCE(sent_at, create_date) <= %s)) '
+                'AND (state_notice_retry_at IS NULL OR state_notice_retry_at <= %s)'
+                + scope + ') obligations '
+                'ORDER BY eligible_since, id, acceptance DESC LIMIT 1',
+                [now] + ([list(account_ids)] if account_ids is not None else [])
+                + [now - timedelta(minutes=5), now]
+                + ([list(account_ids)] if account_ids is not None else []))
+            candidate = self.env.cr.fetchone()
+            if not candidate:
+                break
+            order = Order.browse(candidate[0])
+            acceptance_due = candidate[1]
             obsolete = order.account_id.state == 'closed'
-            acceptance_due = order.acceptance_notice_pending and (
-                not order.acceptance_notice_retry_at or order.acceptance_notice_retry_at <= now)
             if acceptance_due:
                 notice_id = False if obsolete else self._llm_notice(
                     order.account_id.id, 'credit_converted', 'woow_paas_platform.llm_credit_order',
