@@ -24,8 +24,8 @@
       <WoowCard shadow="true" class="'o_woow_llm_docs__card'">
         <h2 t-esc="keyTitle"/>
         <code t-esc="apiKey"/>
-        <p t-if="endpointAvailable &amp;&amp; state.key &amp;&amp; state.keyMode === state.mode" class="o_woow_hint" t-esc="_t('This key is held only by this guide instance and disappears when you leave it.')"/>
-        <p t-else="" class="o_woow_hint" t-esc="_t('Replace YOUR_API_KEY with your own key. This example value is not a real credential.')"/>
+        <p t-if="endpointAvailable &amp;&amp; state.key &amp;&amp; state.keyMode === state.mode" class="o_woow_hint" t-esc="keyLifetimeText"/>
+        <p t-else="" class="o_woow_hint" t-esc="placeholderKeyText"/>
         <p t-esc="pointsText"/>
       </WoowCard>
 

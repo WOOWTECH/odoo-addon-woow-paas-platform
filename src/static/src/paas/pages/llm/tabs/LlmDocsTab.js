@@ -64,6 +64,8 @@ export class LlmDocsTab extends Component {
   get selectedModel() { return publishedPaidModel(this.llm.models, this.state.allowedModels); }
   get model() { return this.state.mode === "free" ? "qwen3-4b-cluster1" : this.selectedModel || "YOUR_PUBLISHED_PAID_MODEL"; }
   get modelPlaceholder() { return this.state.mode === "paid" && !this.selectedModel; }
+  get keyLifetimeText() { return _t("This key is held only by this guide instance and disappears when you leave it."); }
+  get placeholderKeyText() { return _t("Replace YOUR_API_KEY with your own key. This example value is not a real credential."); }
   get unavailableText() { return _t("The Base URL is unavailable until the service provides its public endpoint."); }
   get examplesPlaceholderText() { return _t("Examples use YOUR_BASE_URL and YOUR_API_KEY placeholders until the Base URL is available. Copying is disabled."); }
   get copyFailedText() { return _t("Copy failed. Please select the text and copy it manually."); }

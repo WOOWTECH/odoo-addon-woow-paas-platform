@@ -268,3 +268,11 @@ test("guide PO entries have Odoo module and code metadata", () => {
     assert.match(block, /^#: (?:code:[^\n]+:\d+|(?:model|model_terms|selection):[^\n]+)$/m, "Odoo requires a recognized source occurrence");
   }
 });
+
+test("guide templates use translated getters available on the component", () => {
+  assert.doesNotMatch(docsXml, /t-esc="_t\(/);
+  assert.match(docsXml, /t-esc="keyLifetimeText"/);
+  assert.match(docsXml, /t-esc="placeholderKeyText"/);
+  assert.match(docs, /get keyLifetimeText\(\)/);
+  assert.match(docs, /get placeholderKeyText\(\)/);
+});
