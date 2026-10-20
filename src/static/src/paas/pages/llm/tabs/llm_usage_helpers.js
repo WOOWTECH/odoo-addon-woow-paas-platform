@@ -5,9 +5,9 @@ export const USAGE_MAX_DAYS = 31;
 export const USAGE_HISTORY_DAYS = 180;
 
 export function taipeiToday(now = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(now);
+  // A Taipei billing-calendar wire value, independent of display language.
+  // Current billing/history dates use Taiwan's fixed UTC+08:00 offset.
+  return new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function shiftDay(isoDate, delta) {
