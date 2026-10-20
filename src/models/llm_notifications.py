@@ -561,10 +561,12 @@ class LlmNotification(models.Model):
         return processed
 
     @api.model
-    def _llm_order_notice_tick(self, limit, tick):
+    def _llm_order_notice_tick(self, limit, tick, *, account_ids=None):
         Order = self.env['woow_paas_platform.llm_credit_order'].sudo()
+        scope = [('account_id', 'in', account_ids)] if account_ids is not None else []
         processed = 0
-        for order in Order.search([('acceptance_notice_pending', '=', True)], order='id', limit=limit):
+        for order in Order.search(scope + [('acceptance_notice_pending', '=', True)],
+                                  order='id', limit=limit):
             if not tick.can_take():
                 return processed
             notice_id = self._llm_notice(
@@ -580,12 +582,16 @@ class LlmNotification(models.Model):
         if remaining <= 0:
             return processed
         now = _utcnow()
+        Order.flush_model(['state', 'notified_state', 'sent_at', 'create_date', 'account_id'])
         self.env.cr.execute(
-            "SELECT id FROM woow_paas_platform_llm_credit_order WHERE "
+            "SELECT id FROM woow_paas_platform_llm_credit_order WHERE ("
             "(state IN ('credited','needs_review','voided') AND state IS DISTINCT FROM notified_state) "
             "OR (state='unknown' AND state IS DISTINCT FROM notified_state "
-            "AND COALESCE(sent_at, create_date) <= %s) "
-            'ORDER BY id LIMIT %s', (now - timedelta(minutes=5), remaining))
+            "AND COALESCE(sent_at, create_date) <= %s)) "
+            + ('AND account_id = ANY(%s) ' if account_ids is not None else '')
+            + 'ORDER BY id LIMIT %s',
+            [now - timedelta(minutes=5)]
+            + ([list(account_ids)] if account_ids is not None else []) + [remaining])
         candidates = Order.browse([row[0] for row in self.env.cr.fetchall()])
         for order in candidates:
             if not tick.can_take():
@@ -611,6 +617,12 @@ class LlmNotification(models.Model):
         if not account:
             return []
         now = _utcnow()
+        self.flush_model()
+        account.flush_model(['quota_cached', 'low_balance_threshold', 'low_balance_cycle'])
+        self.env['woow_paas_platform.llm_api_key'].flush_model([
+            'account_id', 'state', 'expires_at', 'expiry_notice_1d_at', 'expiry_notice_7d_at',
+        ])
+        self.env['woow_paas_platform.llm_credit_order'].flush_model(['account_id', 'state'])
         self.env.cr.execute(
             'SELECT n.id FROM %s n '
             'JOIN woow_paas_platform_llm_account a ON a.id=n.account_id '
@@ -690,8 +702,8 @@ class LlmNotification(models.Model):
                           'ts': _iso(current_terms.published_at), 'route': 'llm/docs'})
         return items
 
-    @staticmethod
-    def _llm_notice_text(notice):
+    @api.model
+    def _llm_notice_text(self, notice):
         if notice.kind == 'low_balance':
             return _('Low AI credit'), _('Your AI credit is below the reminder threshold.')
         if notice.kind.startswith('key_expiring'):

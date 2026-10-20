@@ -307,7 +307,8 @@ class TestLlmNotifications(_ConfiguredCase):
         def process(delay_minutes=0):
             now = fields.Datetime.now() + timedelta(minutes=delay_minutes)
             with patch.object(notifications_module, '_utcnow', return_value=now):
-                return self.Notice._llm_order_notice_tick(10, LlmCronTick(10, 10))
+                return self.Notice._llm_order_notice_tick(
+                    10, LlmCronTick(10, 10), account_ids=[account.id])
 
         uncertain = new_order('uncertain')
         uncertain._transition('unknown')
