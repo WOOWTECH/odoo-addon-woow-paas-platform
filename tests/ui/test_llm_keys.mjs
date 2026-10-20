@@ -196,10 +196,13 @@ test("keys route goes live only with LlmPage registration and rendered component
     "./tabs/LlmDocsTab": "const LlmDocsTab = {};",
     "../../services/llm_service": "const llmService = {};",
     "./tabs/llm_docs_helpers": "const createLlmDocsKeyHandoff = () => ({ put() {}, peekKey() { return ''; }, peekMode() { return 'paid'; }, clear() {} }); const validatedLlmPublicBaseUrl = () => null;",
+    "./tabs/LlmUsageTab": "const LlmUsageTab = {};",
   });
   assert.match(page, /LlmKeysTab/);
+  assert.match(page, /LlmUsageTab/);
   const xml = await readPaas("pages/llm/LlmPage.xml");
   assert.match(xml, /<LlmKeysTab t-elif="currentTab === 'keys'" onOpenDocs\.bind="openDocsWithKey"\/>/);
+  assert.match(xml, /<LlmUsageTab t-elif="currentTab === 'usage'"\/>/);
 });
 
 test("paid model options emit null for all models and filter restricted selections to default group", () => {

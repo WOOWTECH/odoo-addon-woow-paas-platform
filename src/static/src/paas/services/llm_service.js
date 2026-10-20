@@ -302,6 +302,19 @@ export const llmService = reactive({
     return result;
   },
 
+  /** Usage aggregates are returned to the caller and are never kept in the shared LLM store. */
+  async fetchUsageSummary(params) {
+    return call("/api/llm/usage/summary", params);
+  },
+
+  async fetchUsageDaily(params) {
+    return call("/api/llm/usage/daily", params);
+  },
+
+  async fetchUsageLogs(params) {
+    return call("/api/llm/usage/logs", params);
+  },
+
   /**
    * 建一把免費試用金鑰（付費金鑰在 LLM-07）。回應的 `data.key` 是**唯一一次**看得到的明文：
    * 這裡不存、不記錄，直接交還呼叫端。請求沒拿到回應時回 `llm_key_create_interrupted`

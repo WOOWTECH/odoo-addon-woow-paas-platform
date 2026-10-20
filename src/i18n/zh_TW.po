@@ -27511,3 +27511,461 @@ msgstr "金鑰管理"
 #: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyFormModal.js:0
 msgid "Save changes"
 msgstr "儲存變更"
+
+#. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Choose a date range of at most 31 days within the last 180 days."
+msgstr "請選擇最近 180 天內、最多 31 天的日期區間。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/llm.py:0
+msgid "Please check the usage filters and page size."
+msgstr "請檢查用量篩選條件與每頁筆數。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/services/llm_usage.py:0
+msgid "One or more usage filters are invalid."
+msgstr "一或多項用量篩選條件無效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Usage & Logs"
+msgstr "用量與紀錄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Review AI model usage and individual requests."
+msgstr "查看 AI 模型用量與個別請求。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Date range"
+msgstr "日期區間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Start date"
+msgstr "開始日期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "End date"
+msgstr "結束日期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "API key"
+msgstr "API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Model"
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
+msgstr "模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "All keys"
+msgstr "所有金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "All models"
+msgstr "所有模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Today"
+msgstr "今天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Last 7 days"
+msgstr "最近 7 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Last 30 days"
+msgstr "最近 30 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "This month"
+msgstr "本月"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Last month"
+msgstr "上個月"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Custom range"
+msgstr "自訂區間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Loading usage summary…"
+msgstr "正在載入用量統計…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Total spend"
+msgstr "總花費"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Tokens"
+msgstr "Tokens"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Input"
+msgstr "輸入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Output"
+msgstr "輸出"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Estimated days remaining"
+msgstr "預估可用天數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Group by"
+msgstr "分組方式"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Chart metric"
+msgstr "圖表指標"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Spend"
+msgstr "花費"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Requests"
+msgstr "請求數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Spend (points)"
+msgstr "花費（點）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "API key"
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyActionConfirmModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.xml:0
+msgstr "API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Request logs"
+msgstr "請求紀錄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Status"
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmKeysTab.xml:0
+msgstr "狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "About %(days)s days"
+msgstr "約 %(days)s 天"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmUsageChart.xml:0
+msgid "Chart legend"
+msgstr "圖表圖例"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Usage &amp; Logs"
+msgstr "用量與紀錄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "· Output"
+msgstr "· 輸出"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Loading chart…"
+msgstr "正在載入圖表…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Statistics are updating. Showing the latest available data."
+msgstr "統計資料正在更新，目前顯示最新可用資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Loading request logs…"
+msgstr "正在載入請求紀錄…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "In"
+msgstr "輸入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "· Out"
+msgstr "· 輸出"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Cache"
+msgstr "快取"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Copied"
+msgstr "已複製"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Copy failed"
+msgstr "複製失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Successful"
+msgstr "成功"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Failed"
+msgstr "失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Time (Taipei)"
+msgstr "時間（台北時間）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Spend"
+msgstr "花費"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Request ID"
+msgstr "請求 ID"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Unknown key"
+msgstr "未知金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Request failed"
+msgstr "請求失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Invalid request"
+msgstr "請求格式無效"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Authentication failed"
+msgstr "驗證失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Permission denied"
+msgstr "權限不足"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Resource not found"
+msgstr "找不到資源"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Rate limit exceeded"
+msgstr "已達速率限制"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Insufficient quota"
+msgstr "額度不足"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Context length exceeded"
+msgstr "輸入內容超過模型長度限制"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Content policy restriction"
+msgstr "內容受到政策限制"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Request timed out"
+msgstr "請求逾時"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Service temporarily unavailable"
+msgstr "服務暫時無法使用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Copy request ID %(id)s"
+msgstr "複製請求 ID %(id)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.xml:0
+msgid "Statistics are delayed by about 5 minutes; logs are retained for 180 days; concurrent requests may cause actual spend to exceed an API key’s total limit."
+msgstr "統計約延遲 5 分鐘；明細保留 180 天；同時進行的請求可能讓實際花費超過金鑰的總額上限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Data as of %(time)s (Taipei time)"
+msgstr "資料時間：%(time)s（台北時間）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Data time unavailable"
+msgstr "目前沒有資料時間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "No usage records for these filters."
+msgstr "這些篩選條件沒有用量紀錄。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmUsageTab.js:0
+msgid "Page %(page)s of %(pages)s"
+msgstr "第 %(page)s 頁，共 %(pages)s 頁"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmUsageChart.js:0
+msgid "Unknown key"
+msgstr "未知金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmUsageChart.js:0
+msgid "Daily usage"
+msgstr "每日用量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmUsageChart.js:0
+msgid "Stacked daily %(metric)s by %(group)s"
+msgstr "依%(group)s分類的每日%(metric)s堆疊圖"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "This month’s usage"
+msgstr "本月用量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Estimated days remaining:"
+msgstr "預估可用天數："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Spend"
+msgstr "花費"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Last 30 days · spend by model"
+msgstr "最近 30 天 · 依模型分類的花費"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.xml:0
+msgid "Usage summary is loading."
+msgstr "正在載入用量統計。"

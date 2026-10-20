@@ -16,10 +16,11 @@
   ``pricing``             10 分鐘    AP ``GET /api/pricing`` → 公開 DTO（全平台一份；獨立 10 分鐘 cron）       ``models``
   ======================  =========  ======================================================  ==========
 
-  ``usage/summary``、``usage/daily``（LLM-09）在這張表加一種 kind、寫一個 handler 就好。
+  ``usage_day``（LLM-09）：每帳戶、台北日期一份；UP flow/self 一次抓一天，60 秒 TTL。
+  summary/daily 共用日別快取，缺日回 complete=false；每次請求最多 31 日＋估算用的近 7 日。
 * **排刷新**（:meth:`LlmSwrCache._llm_swr_touch`）：過期、還沒排、上一次嘗試也夠久了 ⇒ 以獨立 cursor
   upsert 一列 ``requested_at`` 並 ``_trigger()`` :data:`SWR_CRON_XMLID`。同一個帳戶同一種 kind 同時只會
-  排一次；失敗之後至少隔 :data:`SWR_RETRY_SECONDS` 秒才再排（new-api 掛掉時頁面一直開著也不會洪水）。
+  排一次（日別種類另按 cache_key 去重）；失敗之後至少隔 :data:`SWR_RETRY_SECONDS` 秒才再排（new-api 掛掉時頁面一直開著也不會洪水）。
   一般讀取不寫任何東西。
 * **刷新 cron**（:meth:`LlmSwrCache._cron_llm_swr_refresh`，每 5 分鐘保險＋被 ``_trigger()``）：外呼類 cron，
   circuit 開著就跳過（DESIGN §3.6；半開時由它做健康檢查——web 在半開時也是叫醒它）；每 tick ≤ 30 秒、
@@ -67,18 +68,21 @@ KIND_SELF = 'self'
 KIND_TOKENS = 'tokens'
 KIND_USAGE_RECENT = 'usage_recent'
 KIND_PRICING = 'pricing'
+KIND_USAGE_DAY = 'usage_day'
 #: kind → (TTL 秒, 範圍)。``account``＝每個帳戶一份；``global``＝全平台一份（``account_id`` 空）。
 SWR_KINDS = {
     KIND_SELF: (600, 'account'),
     KIND_TOKENS: (30, 'account'),
     KIND_USAGE_RECENT: (60, 'account'),
     KIND_PRICING: (600, 'global'),
+    KIND_USAGE_DAY: (60, 'account'),
 }
 KIND_SELECTION = [
     (KIND_SELF, 'Account balance'),
     (KIND_TOKENS, 'API key list'),
     (KIND_USAGE_RECENT, 'Recent free trial calls'),
     (KIND_PRICING, 'Pricing'),
+    (KIND_USAGE_DAY, 'Daily usage by key and model'),
 ]
 #: 一次嘗試（成功或失敗）之後，至少隔這麼久才再排同一筆。
 SWR_RETRY_SECONDS = 30
@@ -166,6 +170,7 @@ class LlmSwrCache(models.Model):
     account_id = fields.Many2one(ACCOUNT_MODEL, ondelete='cascade', index=True, readonly=True,
                                  help='Empty for platform-wide kinds (pricing).')
     kind = fields.Selection(KIND_SELECTION, required=True, readonly=True)
+    cache_key = fields.Char(readonly=True, help='Taipei date for usage_day; empty for other kinds.')
     payload = fields.Text(readonly=True, help='JSON. Never contains keys, tokens or passwords.')
     fetched_at = fields.Datetime(readonly=True, help='When new-api was last read successfully.')
     requested_at = fields.Datetime(readonly=True, help='A background refresh is pending.')
@@ -173,9 +178,15 @@ class LlmSwrCache(models.Model):
     last_result = fields.Char(readonly=True, help='ok, or the classification of the last failure.')
 
     def init(self):
+        # Replace the old two-column index only after its successor exists. Legacy NULL
+        # cache keys and new empty strings intentionally identify the same singleton.
         self.env.cr.execute(
-            'CREATE UNIQUE INDEX IF NOT EXISTS woow_llm_swr_cache_uniq '
-            'ON %s ((COALESCE(account_id, 0)), kind)' % CACHE_TABLE)
+            "CREATE UNIQUE INDEX IF NOT EXISTS woow_llm_swr_cache_key_uniq "
+            "ON %s ((COALESCE(account_id, 0)), kind, (COALESCE(cache_key, '')))" % CACHE_TABLE)
+        self.env.cr.execute('DROP INDEX IF EXISTS woow_llm_swr_cache_uniq')
+        self.env.cr.execute(
+            'CREATE INDEX IF NOT EXISTS woow_llm_swr_usage_days '
+            'ON %s (kind, cache_key)' % CACHE_TABLE)
         self.env.cr.execute(
             'CREATE INDEX IF NOT EXISTS woow_llm_swr_cache_pending '
             'ON %s (requested_at) WHERE requested_at IS NOT NULL' % CACHE_TABLE)
@@ -203,12 +214,13 @@ class LlmSwrCache(models.Model):
     #  讀（端點，不外呼）                                                    #
     # ------------------------------------------------------------------ #
     @api.model
-    def _llm_swr_get(self, account, kind):
+    def _llm_swr_get(self, account, kind, cache_key=None):
         """``{'payload', 'fetched_at', ...}`` 或 ``None``（還沒有這一列）。payload 解不開＝``None``。"""
         if kind not in SWR_KINDS:
             raise ValueError('llm_swr: unknown kind')
         account_id = account.id if account else False
-        row = self.sudo().search([('account_id', '=', account_id), ('kind', '=', kind)], limit=1)
+        row = self.sudo().search([('account_id', '=', account_id), ('kind', '=', kind),
+                                   ('cache_key', '=', cache_key or False)], limit=1)
         if not row:
             return None
         payload = None
@@ -260,7 +272,7 @@ class LlmSwrCache(models.Model):
                 cr.execute(
                     'INSERT INTO {t} (account_id, kind, requested_at, create_uid, create_date, '
                     'write_uid, write_date) VALUES (%s, %s, %s, %s, %s, %s, %s) '
-                    'ON CONFLICT ((COALESCE(account_id, 0)), kind) DO UPDATE '
+                    "ON CONFLICT ((COALESCE(account_id, 0)), kind, (COALESCE(cache_key, ''))) DO UPDATE "
                     'SET requested_at = EXCLUDED.requested_at '
                     'WHERE {t}.requested_at IS NULL '
                     'AND ({t}.attempted_at IS NULL OR {t}.attempted_at < %s) '
@@ -276,6 +288,65 @@ class LlmSwrCache(models.Model):
             if cron:
                 cron.sudo()._trigger()
         return queued
+
+    @api.model
+    def _llm_usage_day_snapshots(self, account, days):
+        """Read/queue at most 38 dates in two DB operations, with no upstream I/O.
+
+        A cache miss is explicitly incomplete, never a fabricated zero. One row per
+        account/date avoids an unbounded key/model/filter cache. The existing cron
+        refreshes each date using its bounded time/item budget and tenant UP.
+        """
+        wanted = sorted({day.isoformat() for day in days})
+        if not wanted or len(wanted) > 38:
+            raise ValueError('llm_swr: invalid daily window')
+        rows = self.sudo().search([
+            ('account_id', '=', account.id), ('kind', '=', KIND_USAGE_DAY),
+            ('cache_key', 'in', wanted),
+        ])
+        snapshots, pending = {}, []
+        now = _utcnow()
+        for row in rows:
+            try:
+                payload = json.loads(row.payload or 'null')
+            except ValueError:
+                payload = None
+            if (isinstance(payload, dict) and payload.get('day') == row.cache_key
+                    and isinstance(payload.get('items'), list) and row.fetched_at):
+                snapshots[row.cache_key] = {
+                    'items': payload['items'], 'fetched_at': row.fetched_at,
+                    'stale': is_stale(row.fetched_at, KIND_USAGE_DAY, now),
+                }
+        for day in wanted:
+            if day not in snapshots or snapshots[day]['stale']:
+                pending.append(day)
+        if pending:
+            retry_before = now - timedelta(seconds=SWR_RETRY_SECONDS)
+            try:
+                with self.env.registry.cursor() as cr:
+                    cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                    cr.execute(
+                        'INSERT INTO {t} (account_id, kind, cache_key, requested_at, '
+                        'create_uid, create_date, write_uid, write_date) '
+                        'SELECT %s, %s, day, %s, %s, %s, %s, %s '
+                        'FROM unnest(%s::text[]) AS day '
+                        "ON CONFLICT ((COALESCE(account_id, 0)), kind, (COALESCE(cache_key, ''))) "
+                        'DO UPDATE SET requested_at = EXCLUDED.requested_at '
+                        'WHERE {t}.requested_at IS NULL AND '
+                        '({t}.attempted_at IS NULL OR {t}.attempted_at < %s) '
+                        'RETURNING id'.format(t=CACHE_TABLE),
+                        (account.id, KIND_USAGE_DAY, now, SUPERUSER_ID, now,
+                         SUPERUSER_ID, now, pending, retry_before))
+                    queued = bool(cr.fetchall())
+            except psycopg2.Error as exc:
+                _logger.warning('[LLM] daily usage refresh not queued (pgcode=%s)',
+                                getattr(exc, 'pgcode', None))
+                queued = False
+            if queued:
+                cron = self.env.ref(SWR_CRON_XMLID, raise_if_not_found=False)
+                if cron:
+                    cron.sudo()._trigger()
+        return snapshots
 
     # ------------------------------------------------------------------ #
     #  刷新 cron                                                           #
@@ -305,7 +376,7 @@ class LlmSwrCache(models.Model):
             cr.execute(
                 'INSERT INTO {t} (kind, attempted_at, create_uid, create_date, write_uid, write_date) '
                 'VALUES (%s, %s, %s, %s, %s, %s) '
-                'ON CONFLICT ((COALESCE(account_id, 0)), kind) DO UPDATE '
+                "ON CONFLICT ((COALESCE(account_id, 0)), kind, (COALESCE(cache_key, ''))) DO UPDATE "
                 'SET attempted_at = EXCLUDED.attempted_at, requested_at = NULL RETURNING id'
                 .format(t=CACHE_TABLE), (KIND_PRICING, now, SUPERUSER_ID, now, SUPERUSER_ID, now))
             row_id = cr.fetchone()[0]
@@ -322,12 +393,20 @@ class LlmSwrCache(models.Model):
     @api.model
     def _llm_swr_refresh_tick(self, config, tick):
         """一個 tick：搶待刷新的列 → 一筆一筆讀 new-api 寫回。回傳「還有剩」。"""
+        # Bound retention without another scheduler; only reached after N27 guards.
+        cutoff = (datetime.now(TPE).date() - timedelta(days=179)).isoformat()
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'DELETE FROM {t} WHERE id IN (SELECT id FROM {t} '
+                'WHERE kind = %s AND cache_key < %s ORDER BY id '
+                'FOR UPDATE SKIP LOCKED LIMIT 500)'.format(t=CACHE_TABLE),
+                (KIND_USAGE_DAY, cutoff))
         client = None
         while tick.can_take(nac.MIN_CALL_SECONDS):
             claimed = self._llm_swr_claim(1)
             if not claimed:
                 return False
-            row_id, account_id, kind = claimed[0]
+            row_id, account_id, kind, cache_key = claimed[0]
             tick.took()
             if client is None:
                 try:
@@ -338,7 +417,7 @@ class LlmSwrCache(models.Model):
                     return False
             try:
                 payload, label = self._llm_swr_refresh_one(client, config, account_id, kind,
-                                                           tick.deadline)
+                                                           tick.deadline, cache_key=cache_key)
             except Exception:  # noqa: BLE001 - one row must not wedge the cron
                 _logger.error('[LLM] swr %s account=%s crashed: %s', kind, account_id,
                               llm_redact.redact(traceback.format_exc()))
@@ -360,7 +439,7 @@ class LlmSwrCache(models.Model):
                 'UPDATE {t} SET requested_at = NULL, attempted_at = %s, write_date = %s '
                 'WHERE id IN (SELECT id FROM {t} WHERE requested_at IS NOT NULL '
                 'ORDER BY requested_at, id FOR UPDATE SKIP LOCKED LIMIT %s) '
-                'RETURNING id, account_id, kind'.format(t=CACHE_TABLE),
+                'RETURNING id, account_id, kind, cache_key'.format(t=CACHE_TABLE),
                 (now, now, limit))
             return cr.fetchall()
 
@@ -408,7 +487,7 @@ class LlmSwrCache(models.Model):
     # ------------------------------------------------------------------ #
     #  handlers                                                            #
     # ------------------------------------------------------------------ #
-    def _llm_swr_refresh_one(self, client, config, account_id, kind, deadline):
+    def _llm_swr_refresh_one(self, client, config, account_id, kind, deadline, cache_key=None):
         """讀一次 new-api → ``(payload 或 None, 'ok' 或失敗的 label)``。``'deadline'``＝沒送出。"""
         if kind == KIND_PRICING:
             result = client.ap_pricing(deadline=deadline, priority=nac.AP_PRIORITY_OTHER)
@@ -433,6 +512,24 @@ class LlmSwrCache(models.Model):
             up = account._llm_up_token(role=nac.ROLE_CRON)
         except (LlmError, llm_crypto.LlmCryptoError):
             return None, 'up_unavailable'
+        if kind == KIND_USAGE_DAY:
+            from ..services.llm_usage import UsageInvalid, day_bounds, normalize_flow, parse_range
+            try:
+                day, _ = parse_range('custom', cache_key, cache_key)
+            except UsageInvalid:
+                return None, 'invalid_day'
+            start, end = day_bounds(day)
+            result = client.user_data_flow_self(ip, up, start, end, deadline=deadline)
+            if not result.ok:
+                return None, self._label(result, account)
+            names = {key.newapi_token_id: {
+                'id': key.id, 'name': key.key_label or None, 'kind': key.kind,
+            } for key in account.api_key_ids if key.newapi_token_id}
+            try:
+                rows = normalize_flow(result.data, names, day)
+            except UsageInvalid:
+                return None, 'shape'
+            return {'day': day.isoformat(), 'items': rows}, 'ok'
         if kind == KIND_SELF:
             read_at = balance_stamp()
             result = client.user_self(ip, up, deadline=deadline)
