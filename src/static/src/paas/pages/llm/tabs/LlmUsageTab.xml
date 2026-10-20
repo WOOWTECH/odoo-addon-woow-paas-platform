@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmUsageTab">
+    <section class="o_woow_llm_usage">
+      <div class="o_woow_llm_usage__heading">
+        <div><h2>Usage &amp; Logs</h2><p>Review AI model usage and individual requests.</p></div>
+        <button type="button" t-att-disabled="state.loading || state.logsLoading" t-on-click="refresh">Refresh</button>
+      </div>
+
+      <form class="o_woow_llm_usage__filters" t-on-submit.prevent="refresh">
+        <label><span t-esc="rangeLabel"/>
+          <select t-att-value="state.range" t-on-change="(ev) => this.setFilter('range', ev)">
+            <option value="today">Today</option><option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option><option value="month">This month</option>
+            <option value="last_month">Last month</option><option value="custom">Custom range</option>
+          </select>
+        </label>
+        <label><span>Start date</span><input type="date" t-att-value="state.start" t-on-change="(ev) => this.setFilter('start', ev)"/></label>
+        <label><span>End date</span><input type="date" t-att-value="state.end" t-on-change="(ev) => this.setFilter('end', ev)"/></label>
+        <label><span>API key</span>
+          <select t-att-value="state.keyId" t-on-change="(ev) => this.setFilter('keyId', ev)">
+            <option value="">All keys</option>
+            <option t-foreach="keys" t-as="key" t-key="key.id" t-att-value="key.id" t-esc="key.label"/>
+          </select>
+        </label>
+        <label><span>Model</span>
+          <select t-att-value="state.model" t-on-change="(ev) => this.setFilter('model', ev)">
+            <option value="">All models</option>
+            <option t-foreach="models" t-as="model" t-key="model" t-att-value="model" t-esc="model"/>
+          </select>
+        </label>
+        <p t-if="dateError" class="o_woow_llm_usage__filter_error" role="alert" t-esc="dateError"/>
+      </form>
+
+      <div t-if="state.error" class="o_woow_llm_usage__error" role="alert" t-esc="errorMessage(state.error)"/>
+      <p t-if="state.loading &amp;&amp; !state.summary" class="o_woow_llm_usage__loading" role="status">Loading usage summary…</p>
+      <div class="o_woow_llm_usage__cards">
+        <article><span>Total spend</span><strong t-esc="summarySpend"/></article>
+        <article><span>Requests</span><strong t-esc="requestCount"/></article>
+        <article><span>Tokens</span><strong t-esc="tokenCount"/><small>Input <t t-esc="inputTokenCount"/> · Output <t t-esc="outputTokenCount"/></small></article>
+        <article><span>Estimated days remaining</span><strong t-esc="daysLeft"/></article>
+      </div>
+
+      <section class="o_woow_llm_usage__chart_panel">
+        <div class="o_woow_llm_usage__chart_controls">
+          <label><span>Group by</span><select t-att-value="state.groupBy" t-on-change="(ev) => this.setChart('groupBy', ev)"><option value="model">Model</option><option value="key">API key</option></select></label>
+          <label><span>Chart metric</span><select t-att-value="state.metric" t-on-change="(ev) => this.setChart('metric', ev)"><option value="spend">Spend</option><option value="requests">Requests</option><option value="tokens">Tokens</option></select></label>
+        </div>
+        <p t-if="!state.daily &amp;&amp; state.loading" role="status">Loading chart…</p>
+        <p t-elif="state.daily &amp;&amp; !state.daily.complete" class="o_woow_llm_usage__stale" role="status">Statistics are updating. Showing the latest available data.</p>
+        <LlmUsageChart t-if="state.daily" data="state.daily" title="metricLabel(state.metric)" formatValue.bind="chartValue"/>
+      </section>
+
+      <section class="o_woow_llm_usage__logs">
+        <div class="o_woow_llm_usage__logs_heading"><h3>Request logs</h3>
+          <label><span>Status</span><select t-att-value="state.status" t-on-change="setStatus"><option value="success">Successful</option><option value="error">Failed</option></select></label>
+        </div>
+        <p t-if="state.logsError" class="o_woow_llm_usage__error" role="alert" t-esc="errorMessage(state.logsError)"/>
+        <p t-elif="state.logsLoading &amp;&amp; !rows.length" role="status">Loading request logs…</p>
+        <p t-elif="!rows.length" class="o_woow_llm_usage__empty" t-esc="noRowsText"/>
+        <div t-else="" class="o_woow_llm_usage__table_wrap">
+          <table>
+            <thead><tr><th>Time (Taipei)</th><th>API key</th><th>Model</th><th>Tokens</th><th>Spend</th><th>Status</th><th>Request ID</th></tr></thead>
+            <tbody>
+              <tr t-foreach="rows" t-as="row" t-key="row.key">
+                <td t-att-data-label="logLabels.time" t-esc="row.displayTime"/>
+                <td t-att-data-label="logLabels.key" t-esc="row.displayKeyName"/>
+                <td t-att-data-label="logLabels.model"><code t-esc="row.model || '—'"/></td>
+                <td t-att-data-label="logLabels.tokens"><span>In <t t-esc="row.displayInput"/> · Out <t t-esc="row.displayOutput"/></span><small>Cache <t t-esc="row.displayCache"/></small></td>
+                <td t-att-data-label="logLabels.spend" t-esc="row.displaySpend"/>
+                <td t-att-data-label="logLabels.status"><span t-esc="row.displayStatus"/><small t-if="row.safeError" t-esc="row.safeError"/></td>
+                <td t-att-data-label="logLabels.requestId" class="o_woow_llm_usage__request_id">
+                  <code t-esc="row.request_id || '—'"/>
+                  <button t-if="row.request_id" type="button" t-on-click="() => this.copyRequestId(row.request_id)"
+                          t-att-aria-label="copyLabel(row.request_id)">Copy</button>
+                  <small t-if="state.copyId === row.request_id &amp;&amp; !state.copyFailed" role="status">Copied</small>
+                  <small t-elif="state.copyFailed &amp;&amp; state.copyId === row.request_id" role="alert">Copy failed</small>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <nav t-if="state.total > 0" class="o_woow_llm_usage__pager" aria-label="Request log pages">
+          <button type="button" t-att-disabled="state.page &lt;= 1 || state.logsLoading" t-on-click="previousPage">Previous</button>
+          <span t-esc="pageText"/>
+          <button type="button" t-att-disabled="state.page &gt;= pageCount || state.logsLoading" t-on-click="nextPage">Next</button>
+        </nav>
+      </section>
+      <p class="o_woow_llm_usage__footer" t-esc="footerText"/>
+      <p class="o_woow_llm_usage__data_time" t-esc="dataTime"/>
+    </section>
+  </t>
+</templates>

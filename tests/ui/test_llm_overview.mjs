@@ -148,12 +148,13 @@ const overviewSource = stubImports(await readPaas("pages/llm/tabs/LlmOverviewTab
   "../../../components/icon/WoowIcon": "const WoowIcon = {};",
   "../../../components/llm/LlmKeyRevealModal": "const LlmKeyRevealModal = {};",
   "../../../components/llm/LlmTermsModal": "const LlmTermsModal = {};",
+  "../../../components/llm/LlmUsageChart": "const LlmUsageChart = {};",
   "../../../services/llm_service":
     "const llmService = new Proxy({}, { get: (_, k) => globalThis.__llmFakeService[k] });",
   "../../../core/router": "const router = { navigate: (...args) => globalThis.__llmNavigate?.(...args) };",
   "../../../services/llm_errors": `const { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } = await import("${errorsUrl}");`,
   "../../../utils/clipboard": "const copyText = (...args) => globalThis.__llmCopy(...args);",
-  "../../../utils/llm_format": `const { formatAiQuota, formatFreeTrialUsage, formatLatency, formatTaipeiDate, formatTaipeiTime, formatTokens, formatWholePoints, isExpiringSoon, isZeroCreditQuota, overdraftPointsText } = await import("${formatUrl}");`,
+  "../../../utils/llm_format": `const { formatAiQuota, formatAiPoints, formatCount, formatFreeTrialUsage, formatLatency, formatTaipeiDate, formatTaipeiTime, formatTokens, formatWholePoints, isExpiringSoon, isZeroCreditQuota, overdraftPointsText, quotaToPointsText } = await import("${formatUrl}");`,
 });
 const overview = await import(toDataUrl(overviewSource));
 
@@ -308,6 +309,8 @@ function makeTab(state, extra = {}) {
       calls.fetchUsage += 1;
       return fake.usageResult;
     },
+    async fetchUsageSummary() { return { success: true, data: null }; },
+    async fetchUsageDaily() { return { success: true, data: null }; },
     usageResult: { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } },
     activateResult: { success: true, data: { state: "provisioning" } },
     ...extra,
@@ -521,6 +524,54 @@ test("最近 10 筆：還沒有快取時每 3 秒快問、最多 5 次，之後�
     fake.usageResult = { success: true, data: { data_as_of: "2026-10-17T03:05:00+00:00" } };
     await tab.refreshUsage();
     assert.equal(tab.usageFirstFillPolls, 0, "拿到資料就歸零");
+  });
+});
+
+test("usage dashboard retries incomplete cache without overlap and refreshes after completion", async () => {
+  const { tab, fake } = makeTab(ACTIVE);
+  const pending = [];
+  let summaryCalls = 0;
+  fake.fetchUsageSummary = () => new Promise((resolve) => {
+    summaryCalls += 1;
+    pending.push({ kind: "summary", resolve });
+  });
+  fake.fetchUsageDaily = () => new Promise((resolve) => pending.push({ kind: "daily", resolve }));
+  const complete = (index, ready) => {
+    const data = { complete: ready, spend_points: index, requests: index, tokens: index };
+    for (const call of pending.splice(0, 2)) call.resolve({ success: true, data });
+  };
+
+  await withTimers(async () => {
+    await tab.refreshUsage();
+    assert.equal(summaryCalls, 1);
+    await tab.refreshUsage({ manual: false });
+    assert.equal(summaryCalls, 1, "dashboard calls do not overlap");
+    complete(0, false);
+    await settle();
+    assert.equal(tab.usageDashboardFillPolls, 1);
+    assert.equal(tab.usageDashboardComplete, false);
+    assert.equal(tab.state.monthlyUsage.requests, 0, "incomplete cache data is still useful");
+
+    for (let index = 1; index < overview.USAGE_DASHBOARD_FILL_POLLS; index += 1) {
+      await tab.refreshUsage({ manual: false });
+      assert.equal(summaryCalls, index + 1);
+      complete(index, false);
+      await settle();
+    }
+    assert.equal(tab.usageDashboardFillPolls, overview.USAGE_DASHBOARD_FILL_POLLS);
+    await tab.refreshUsage({ manual: false });
+    assert.equal(summaryCalls, overview.USAGE_DASHBOARD_FILL_POLLS, "automatic incomplete retries are bounded");
+
+    await tab.refreshUsage();
+    assert.equal(summaryCalls, overview.USAGE_DASHBOARD_FILL_POLLS + 1, "manual refresh restarts the fill budget");
+    complete(8, true);
+    await settle();
+    assert.equal(tab.usageDashboardComplete, true);
+    assert.equal(tab.usageDashboardFillPolls, 0);
+    await tab.refreshUsage({ manual: false });
+    assert.equal(summaryCalls, overview.USAGE_DASHBOARD_FILL_POLLS + 2, "complete dashboard data refreshes on interval");
+    complete(9, true);
+    await settle();
   });
 });
 

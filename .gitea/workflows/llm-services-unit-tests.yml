@@ -17,6 +17,8 @@ on:
       - "src/services/llm_crypto.py"
       - "src/services/llm_credit_evidence.py"
       - "tests/test_llm_credit_evidence.py"
+      - "src/services/llm_usage.py"
+      - "tests/unit/test_llm_usage.py"
       - "src/services/llm_pricing.py"
       - "tests/test_llm_pricing.py"
       - "src/services/llm_redact.py"
@@ -66,6 +68,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           timeout 120s .venv-llm-services-ci/bin/python tests/test_llm_services.py -v
+          .venv-llm-services-ci/bin/python tests/unit/test_llm_usage.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_pricing.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_worker.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_evidence.py -v

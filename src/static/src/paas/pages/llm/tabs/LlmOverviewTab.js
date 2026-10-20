@@ -7,6 +7,7 @@ import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { LlmKeyRevealModal } from "../../../components/llm/LlmKeyRevealModal";
 import { LlmTermsModal } from "../../../components/llm/LlmTermsModal";
+import { LlmUsageChart } from "../../../components/llm/LlmUsageChart";
 import { llmService } from "../../../services/llm_service";
 import { router } from "../../../core/router";
 import { LLM_SESSION_EXPIRED, llmErrorMessage, llmSuspendReason } from "../../../services/llm_errors";
@@ -14,6 +15,8 @@ import { representativeModels } from "./LlmModelsTab";
 import { copyText } from "../../../utils/clipboard";
 import {
   formatAiQuota,
+  formatAiPoints,
+  formatCount,
   formatFreeTrialUsage,
   formatLatency,
   formatTaipeiDate,
@@ -23,6 +26,7 @@ import {
   isExpiringSoon,
   isZeroCreditQuota,
   overdraftPointsText,
+  quotaToPointsText,
 } from "../../../utils/llm_format";
 
 /** 開通中輪詢 `/api/llm/state`（讀 DB、不外呼）：前 2 分鐘每 3 秒，之後每 10 秒。 */
@@ -47,6 +51,8 @@ export const USAGE_REFRESH_MS = 30000;
  */
 export const USAGE_FIRST_FILL_MS = 3000;
 export const USAGE_FIRST_FILL_POLLS = 5;
+/** Usage dashboard SWR fill attempts share the existing recent-usage polling cadence. */
+export const USAGE_DASHBOARD_FILL_POLLS = 5;
 
 /** 下一次「最近 10 筆」的間隔（純函式，tests/ui/test_llm_overview.mjs 直接驗）。 */
 export function usageRefreshDelay(result, firstFillPolls) {
@@ -145,7 +151,7 @@ export function llmUsageRow(item, index) {
  */
 export class LlmOverviewTab extends Component {
   static template = "woow_paas_platform.LlmOverviewTab";
-  static components = { WoowButton, WoowCard, WoowIcon, LlmKeyRevealModal, LlmTermsModal };
+  static components = { WoowButton, WoowCard, WoowIcon, LlmKeyRevealModal, LlmTermsModal, LlmUsageChart };
   static props = { onOpenDocs: { type: Function, optional: true } };
 
   setup() {
@@ -167,6 +173,8 @@ export class LlmOverviewTab extends Component {
       pollFailing: false,
       announcement: "",
       now: Date.now(),
+      monthlyUsage: null,
+      monthlyChart: null,
     });
     /** 上一次 onStateLoaded 的畫面（開通中 → 已開通／失敗時給讀屏播報一次）。 */
     this.lastScreen = null;
@@ -184,6 +192,10 @@ export class LlmOverviewTab extends Component {
     this.usagePaused = false;
     /** 還沒有快取時已經快問了幾次（見 USAGE_FIRST_FILL_POLLS）。 */
     this.usageFirstFillPolls = 0;
+    this.usageDashboardComplete = false;
+    this.usageDashboardFillPolls = 0;
+    this.usageDashboardInFlight = false;
+    this.usageDashboardEpoch = 0;
     this.onVisibilityChange = () => {
       if (document.hidden || !this.alive) return;
       if (this.pollPaused) {
@@ -204,6 +216,7 @@ export class LlmOverviewTab extends Component {
     });
     onWillUnmount(() => {
       this.alive = false;
+      this.usageDashboardEpoch += 1;
       clearTimeout(this.pollTimer);
       clearTimeout(this.usageTimer);
       document.removeEventListener("visibilitychange", this.onVisibilityChange);
@@ -264,12 +277,16 @@ export class LlmOverviewTab extends Component {
     this.load();
   }
 
-  async refreshUsage() {
+  async refreshUsage({ manual = true } = {}) {
     if (this.state.refreshingUsage) return;
     clearTimeout(this.usageTimer);
     this.usageTimer = null;
     this.usagePaused = false;
     this.state.refreshingUsage = true;
+    if (manual) this.usageDashboardFillPolls = 0;
+    if (manual || this.usageDashboardComplete || this.usageDashboardFillPolls < USAGE_DASHBOARD_FILL_POLLS) {
+      this.loadUsageDashboard();
+    }
     const result = await llmService.fetchUsageRecent();
     if (!this.alive) return;
     this.state.refreshingUsage = false;
@@ -288,6 +305,42 @@ export class LlmOverviewTab extends Component {
     this.usageTimer = setTimeout(() => this.onUsageTimer(), delay);
   }
 
+  async loadUsageDashboard() {
+    if (this.usageDashboardInFlight || !this.alive) return;
+    this.usageDashboardInFlight = true;
+    const epoch = ++this.usageDashboardEpoch;
+    try {
+      const [summary, chart] = await Promise.all([
+        llmService.fetchUsageSummary({ range: "month" }),
+        llmService.fetchUsageDaily({ range: "30d", group_by: "model", metric: "spend" }),
+      ]);
+      if (!this.alive || epoch !== this.usageDashboardEpoch) return;
+      if (summary?.success) this.state.monthlyUsage = summary.data;
+      if (chart?.success) this.state.monthlyChart = chart.data;
+      const complete = summary?.success && chart?.success
+        && summary.data?.complete !== false && chart.data?.complete !== false;
+      this.usageDashboardComplete = !!complete;
+      this.usageDashboardFillPolls = complete
+        ? 0 : Math.min(this.usageDashboardFillPolls + 1, USAGE_DASHBOARD_FILL_POLLS);
+    } finally {
+      if (epoch === this.usageDashboardEpoch) this.usageDashboardInFlight = false;
+    }
+  }
+
+  get monthlySpendText() {
+    const usage = this.state.monthlyUsage;
+    const points = usage && quotaToPointsText(usage.quota, 2);
+    return points === null ? formatAiPoints(usage?.spend_points) : _t("%(amount)s pts", { amount: points });
+  }
+  get monthlyRequestsText() { return formatCount(this.state.monthlyUsage?.requests); }
+  get monthlyTokensText() { return formatTokens(this.state.monthlyUsage?.tokens); }
+  get daysLeftText() {
+    const days = this.state.monthlyUsage?.days_left;
+    return typeof days === "number" && Number.isFinite(days)
+      ? _t("About %(days)s days", { days: String(Math.floor(days * 10) / 10) }) : "—";
+  }
+  monthlyChartValue(value) { return formatAiPoints(value); }
+
   onUsageTimer() {
     this.usageTimer = null;
     if (!this.alive || this.screen !== "active") return;
@@ -295,7 +348,7 @@ export class LlmOverviewTab extends Component {
       this.usagePaused = true;
       return;
     }
-    this.refreshUsage();
+    this.refreshUsage({ manual: false });
   }
 
   // ------------------------------------------------------------------ 畫面狀態

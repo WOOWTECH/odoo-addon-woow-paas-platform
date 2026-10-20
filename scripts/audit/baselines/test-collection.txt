@@ -478,7 +478,7 @@
 3	test_llm_client_hardening.TestLlmCircuitCronGate
 3	test_llm_client_hardening.TestLlmConfigChange
 3	test_llm_client_hardening.TestLlmConnectionTest
-10	test_llm_client_hardening.TestLlmSwr
+13	test_llm_client_hardening.TestLlmSwr
 7	test_llm_credit_concurrency.TestLlmCreditAccountingCommitted
 7	test_llm_credit_order.TestLlmCreditFoundation
 20	test_llm_credit_order.TestLlmCreditOrderSchema
@@ -521,7 +521,7 @@
 6	test_llm_tracer.TestLlmProvisionRealCron
 3	test_llm_tracer.TestLlmQuotaInteger
 2	test_llm_tracer.TestLlmSigningKeyFailClosed
-11	test_llm_tracer.TestLlmTracerHttp
+12	test_llm_tracer.TestLlmTracerHttp
 4	test_llm_tracer.TestLlmUnconfiguredZeroOutbound
 1	test_llm_tracer.TestLlmWoowSessionFlag
 5	test_locale_formatting_guard_107.TestLocaleFormattingGuard107

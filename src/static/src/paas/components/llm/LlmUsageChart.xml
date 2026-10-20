@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmUsageChart">
+    <section class="o_woow_llm_usage_chart" t-att-aria-label="chartTitle">
+      <h3 t-esc="chartTitle"/>
+      <div class="o_woow_llm_usage_chart__scroll" role="group" t-att-aria-label="description">
+        <svg class="o_woow_llm_usage_chart__svg" role="img" t-att-viewBox="'0 0 ' + layout.width + ' ' + layout.height"
+             t-att-width="layout.width" t-att-height="layout.height" t-att-aria-label="description">
+          <title t-esc="chartTitle"/>
+          <desc t-esc="description"/>
+          <line x1="0" t-att-y1="layout.height - 25" t-att-x2="layout.width" t-att-y2="layout.height - 25"/>
+          <g t-foreach="layout.bars" t-as="bar" t-key="bar.date">
+            <rect t-foreach="bar.segments" t-as="segment" t-key="segment.key"
+                  t-att-x="segment.x" t-att-y="segment.y" t-att-width="segment.width" t-att-height="segment.height"
+                  t-att-fill="segment.color" rx="3">
+              <title t-esc="bar.date + ' · ' + segment.label + ': ' + format(segment.value)"/>
+            </rect>
+            <text t-att-x="bar.x" t-att-y="layout.height - 7" text-anchor="middle" t-esc="dateLabel(bar.date)"/>
+          </g>
+        </svg>
+      </div>
+      <ul class="o_woow_llm_usage_chart__legend" aria-label="Chart legend">
+        <li t-foreach="layout.series" t-as="item" t-key="item.id">
+          <span class="o_woow_llm_usage_chart__swatch" t-att-style="'background-color:' + item.color" aria-hidden="true"/>
+          <span t-esc="item.label || unknownLabel"/>
+        </li>
+      </ul>
+      <table class="o_woow_sr_only">
+        <caption t-esc="chartTitle"/>
+        <thead><tr><th>Date</th><th t-foreach="layout.series" t-as="item" t-key="item.id" t-esc="item.label || unknownLabel"/></tr></thead>
+        <tbody>
+          <tr t-foreach="tableRows" t-as="row" t-key="row.date">
+            <th t-esc="row.date"/>
+            <td t-foreach="row.values" t-as="value" t-key="value_index">
+              <t t-esc="value"/>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </t>
+</templates>

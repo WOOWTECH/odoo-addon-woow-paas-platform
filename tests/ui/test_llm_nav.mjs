@@ -98,7 +98,7 @@ test("子頁白名單與 pattern：六個子頁、順序固定，白名單外一
   for (const path of ["llm", "llm/", "llm/bogus", "llm/overview/x", "xllm/overview", "llm/Overview"]) {
     assert.doesNotMatch(path, llmRoutes.LLM_TAB_PATTERN, path);
   }
-  assert.deepEqual([...llmRoutes.LLM_LIVE_TABS], ["overview", "keys", "models", "credit", "docs"]);
+  assert.deepEqual([...llmRoutes.LLM_LIVE_TABS], ["overview", "keys", "usage", "models", "credit", "docs"]);
   assert.equal(llmRoutes.isLlmTabLive("overview"), true);
   assert.equal(llmRoutes.isLlmTabLive("keys"), true);
 });
@@ -317,6 +317,8 @@ test("OWL template 名稱全域唯一；AI 模型的 template 一律 woow_paas_p
     "woow_paas_platform.LlmOverviewTab",
     "woow_paas_platform.LlmPage",
     "woow_paas_platform.LlmTermsModal",
+    "woow_paas_platform.LlmUsageChart",
+    "woow_paas_platform.LlmUsageTab",
   ]);
 });
 
