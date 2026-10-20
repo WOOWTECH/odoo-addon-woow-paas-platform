@@ -2,6 +2,7 @@
 
 import { Component } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
+import { formatUserDate } from "../../utils/datetime_helpers";
 
 const COLORS = ["#6183fc", "#27a88a", "#f0a43c", "#9a6ce0", "#e36e81", "#4d9ecb", "#82984d", "#bf7b45"];
 const CHART_HEIGHT = 156;
@@ -83,5 +84,6 @@ export class LlmUsageChart extends Component {
     });
   }
   format(value) { return this.props.formatValue ? this.props.formatValue(value) : String(value); }
+  formatDate(date) { return formatUserDate(date, "—"); }
   dateLabel(date) { return date.slice(5); }
 }
