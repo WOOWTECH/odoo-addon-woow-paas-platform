@@ -1213,6 +1213,7 @@ from . import test_workspace_quota_lower_confirm_1681
 from . import test_workspace_quota_lower_confirm_rpc_1681
 from . import test_workspace_quota_floor_live_1679
 from . import test_workspace_quota_reclaim_1682
+from . import test_workspace_quota_reclaim_live_1682
 from . import test_ecpg_v4_golive
 # #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
 from . import test_tunnel_binding_1766
