@@ -31,6 +31,7 @@ import re
 import secrets
 import string
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from psycopg2 import IntegrityError
@@ -60,7 +61,7 @@ from .llm_common import (
     _llm_internal,
     _without_llm_internal,
 )
-from .llm_event import _begin, safe_code
+from .llm_event import _begin, _env_on, safe_code
 
 _logger = logging.getLogger(__name__)
 
@@ -159,6 +160,8 @@ class LlmApiKey(models.Model):
     key_label = fields.Char(
         readonly=True,
         help='User-facing name (only in PaaS). Never placed in alerts, incidents or emails (N24).')
+    creation_rejected = fields.Boolean(readonly=True, default=False, copy=False,
+                                        groups='base.group_system')
     newapi_name = fields.Char(readonly=True, index=True, copy=False,
                               help='wp_<id>_<rand4> — the token name on new-api.')
     newapi_token_id = fields.Integer(readonly=True, copy=False)
@@ -546,13 +549,32 @@ class LlmApiKey(models.Model):
         return self._llm_create_with_reveal(
             account, client_request_id, user, real_ip, spec, paid_body)
 
+    @contextmanager
+    def _llm_creation_guard(self, key_id, *, token_id=None):
+        """Fence each POST/reveal with the stop worker's key lock, including retries."""
+        with self.env.registry.cursor() as cr:
+            _begin(self.env, cr, read_committed=True)
+            cr.execute('SELECT state, disabled_by FROM %s WHERE id=%%s '
+                       'FOR NO KEY UPDATE' % KEY_TABLE, (key_id,))
+            row = cr.fetchone()
+            if row and row[0] == 'creating' and row[1] != 'ops':
+                yield
+                return
+        # Release the key lock before taking operation/obligation locks in finish.
+        values = {'state': 'failed_reveal'}
+        if token_id:
+            values['newapi_token_id'] = token_id
+        self._llm_finish(key_id, values)
+        raise LlmError(ERR_LLM_UNAVAILABLE)
+
     @api.model
     def _llm_create_remote(self, account, client, ip, up, key_id, name, expires, deadline,
                            *, payload_factory=None, spec=None):
         """§1.3.2 第 4–7 步：POST token → 依名稱找 id → reveal → 鏡像 active。"""
         body = (payload_factory(name) if payload_factory is not None else
                 nac.free_trial_token_body(name, int(expires.timestamp())))
-        created = client.user_create_token(ip, up, body, deadline=deadline)
+        with self._llm_creation_guard(key_id):
+            created = client.user_create_token(ip, up, body, deadline=deadline)
         if isinstance(created, (nac.NotExecuted, nac.Definite)):
             # 確定沒建：鏡像標 deleted（使用者可以直接重建）。
             self._llm_finish(key_id, {'state': 'deleted'})
@@ -566,7 +588,8 @@ class LlmApiKey(models.Model):
         token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None and isinstance(created, nac.Unknown):
             # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
-            retried = client.user_create_token(ip, up, body, deadline=deadline)
+            with self._llm_creation_guard(key_id):
+                retried = client.user_create_token(ip, up, body, deadline=deadline)
             if retried.ok or isinstance(retried, nac.Unknown):
                 token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None or token is TOKEN_LIST_FAILED:
@@ -575,10 +598,12 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_UNAVAILABLE)
         token_id = token['id']
 
-        revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
+        with self._llm_creation_guard(key_id, token_id=token_id):
+            revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         if isinstance(revealed, nac.NotExecuted) and revealed.reason != 'deadline' \
                 and not revealed.retry_after:
-            revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
+            with self._llm_creation_guard(key_id, token_id=token_id):
+                revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         raw = revealed.data.get('key') if revealed.ok and isinstance(revealed.data, dict) else None
         if not (isinstance(raw, str) and _REVEALED_KEY_RE.fullmatch(raw)):
             self._llm_finish(key_id, {'state': 'failed_reveal', 'newapi_token_id': token_id})
@@ -587,12 +612,14 @@ class LlmApiKey(models.Model):
             self._llm_raise_for(account, revealed)
         masked = 'sk-%s…%s' % (raw[:4], raw[-4:])
         now = _utcnow()
-        self._llm_finish(key_id, {
+        finish = self._llm_finish(key_id, {
             'state': 'active',
             'newapi_token_id': token_id,
             'masked_key': masked,
             'revealed_at': now,
         })
+        if not finish or finish['state'] != 'active':
+            raise LlmError(ERR_LLM_UNAVAILABLE)
         # 鏡像是獨立交易寫的：主 cursor 的 snapshot 看不到這一列，所以 DTO 直接由已知的值組。
         expires_at = spec['expires_at'] if spec is not None else expires.replace(tzinfo=None)
         return {
@@ -603,8 +630,8 @@ class LlmApiKey(models.Model):
             'kind': spec['kind'] if spec is not None else 'free_trial',
             'display_name': spec['key_label'] if spec is not None else '',
             'masked_key': masked,
-            'status': 'active',
-            'disabled_by': None,
+            'status': finish['state'] if finish else 'active',
+            'disabled_by': finish['disabled_by'] if finish else None,
             'used_points': None,
             'limit_points': spec['limit_points'] if spec is not None else None,
             'remain_points': None,
@@ -728,17 +755,35 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_finish(self, key_id, values):
+        # Only the initial definite rejection requests deleted. Unknown/retry
+        # cancellation requests failed_reveal and must retain its reservation.
+        not_created = values.get('state') == 'deleted' and not values.get('newapi_token_id')
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
         if values.get('state') == 'active':
             values['created_notice_pending'] = True
-        columns = sorted(values)
-        if not all(_COLUMN_RE.fullmatch(column) for column in columns):
-            raise ValueError('bad column name')
         with self.env.registry.cursor() as cr:
-            cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+            _begin(self.env, cr, read_committed=True)
+            env = _env_on(self.env.registry, cr)
+            worker = env['woow_paas_platform.llm_backoffice_operation']
+            obligations = worker._lock_key_obligations(key_id)
+            cr.execute('SELECT state, disabled_by, newapi_token_id FROM %s '
+                       'WHERE id=%%s FOR UPDATE' % KEY_TABLE, (key_id,))
+            row = cr.fetchone()
+            not_created = not_created and bool(row) and not row[2]
+            if not_created:
+                values['creation_rejected'] = True
+            stopped = bool(row and (row[1] == 'ops' or obligations))
+            if stopped:
+                values.update({'state': 'deleted' if not_created else 'failed_reveal',
+                               'disabled_by': 'ops', 'created_notice_pending': False})
+            worker._reenqueue_finalized_token(obligations, values.get('newapi_token_id'))
+            columns = sorted(values)
+            if not all(_COLUMN_RE.fullmatch(column) for column in columns):
+                raise ValueError('bad column name')
             cr.execute(
-                'UPDATE %s SET %s WHERE id = %%s AND state = %%s '
-                'RETURNING account_id, kind, create_date'
+                'UPDATE %s SET %s WHERE id = %%s AND (state = %%s '
+                "OR (state = 'failed_reveal' AND disabled_by = 'ops')) "
+                'RETURNING account_id, kind, create_date, state, disabled_by'
                 % (KEY_TABLE, ', '.join('%s = %%s' % column for column in columns)),
                 [values[column] for column in columns] + [key_id, 'creating'])
             changed = cr.fetchone()
@@ -748,6 +793,8 @@ class LlmApiKey(models.Model):
                 cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
                            'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE,
                            (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))
+            if changed and not_created:
+                worker._settle_not_created_obligations(obligations)
         if changed and values.get('state') == 'active':
             # This mirror committed on the independent cursor. A fresh cursor
             # avoids the HTTP transaction's stale REPEATABLE READ snapshot.
@@ -764,6 +811,8 @@ class LlmApiKey(models.Model):
                         _llm_internal(key).write({'created_notice_pending': False})
             except Exception:  # noqa: BLE001 - key creation must survive notification failures
                 _logger.warning('[LLM] key-created notice deferred key=%s', key_id)
+        return ({'state': changed[3], 'disabled_by': changed[4]}
+                if changed else None)
 
     @api.model
     def _llm_management_key(self, partner, key_id, *, allow_failed_reveal=False):
@@ -784,6 +833,10 @@ class LlmApiKey(models.Model):
             % KEY_TABLE, (key.id, account.id))
         if not self.env.cr.fetchone():
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        # Under READ COMMITTED the locking SELECT can wait for an ops worker
+        # that commits a new marker; discard the pre-lock ORM cache so all
+        # subsequent status/enable guards observe that committed value.
+        key.invalidate_recordset()
         if key.state in ('deleted', 'lost', 'creating') or \
                 (key.state == 'failed_reveal' and not allow_failed_reveal):
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
@@ -955,6 +1008,8 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_KEY_INVALID)
         account, key = self._llm_management_key(partner, key_id)
         if enabled:
+            if key.disabled_by == 'ops':
+                raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason='disabled')
             reason = key._llm_status()
             if reason in ('expired', 'exhausted', 'free_capped', 'suspended', 'overdraft'):
                 raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason=reason)
@@ -964,8 +1019,11 @@ class LlmApiKey(models.Model):
         result = client.user_set_token_status(ip, up, token_id, enabled)
         if not result.ok:
             self._llm_management_raise(account, result)
-        _llm_internal(key).write({'state': 'active' if enabled else 'disabled',
-                                  'disabled_by': False if enabled else 'user'})
+        _llm_internal(key).write({
+            'state': 'active' if enabled else 'disabled',
+            'disabled_by': (False if enabled else
+                            'ops' if key.disabled_by == 'ops' else 'user'),
+        })
         self._llm_management_audit('key_status', account, key, user, real_ip)
         return key._llm_dto()
 

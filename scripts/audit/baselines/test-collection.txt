@@ -474,6 +474,8 @@
 18	test_litellm_seed.TestLitellmSeed
 22	test_llm_api_key_management.TestLlmApiKeyMirror
 47	test_llm_api_key_management.TestLlmPaidKeyCreate
+29	test_llm_backoffice.TestLlmBackofficeCommitted
+8	test_llm_backoffice.TestLlmBackofficeGuards
 2	test_llm_client_hardening.TestLlmApRateLimit
 9	test_llm_client_hardening.TestLlmCircuitBreaker
 3	test_llm_client_hardening.TestLlmCircuitCronGate
@@ -490,7 +492,7 @@
 6	test_llm_credit_visibility.TestLlmCreditVisibility
 13	test_llm_credit_void.TestLlmCreditVoid
 39	test_llm_credit_worker.TestLlmCreditWorkerCommitted
-20	test_llm_free_usage.TestLlmFreeUsage
+22	test_llm_free_usage.TestLlmFreeUsage
 2	test_llm_free_usage.TestLlmFreeUsageSecurity
 5	test_llm_mcp_jump_guard.TestLlmMcpJumpGuard
 1	test_llm_notification_suspension.TestLlmSuspensionManagementRace

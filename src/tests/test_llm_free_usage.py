@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+from odoo import api
 from odoo.exceptions import AccessError
 from odoo.tests.common import new_test_user, tagged
 
@@ -215,6 +216,66 @@ class TestLlmFreeUsage(_ConfiguredCase):
         self.assertEqual(expired.state, 'disabled')
         self.client.user_set_token_status.assert_called_once()
         self.assertTrue(self.client.user_set_token_status.call_args.args[3])
+
+    def test_ops_restriction_survives_free_cap_enforcement_and_reset(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.env.uid, {})
+            key = _llm_internal(env[KEY]).create({
+                'account_id': self.account.id, 'kind': 'free_trial', 'state': 'active',
+                'disabled_by': 'ops', 'free_cap_pending': True, 'free_capped_day': DAY,
+                'newapi_token_id': 123, 'newapi_name': 'wp_123_qa',
+            })
+            _llm_internal(env[USAGE_MODEL]).create({
+                'account_id': self.account.id, 'day_tpe': DAY,
+                'success_count': 5, 'capped_at': NOW,
+            })
+            key_id = key.id
+            cr.commit()
+        key = self.env[KEY].browse(key_id)
+
+        self.assertFalse(any(row['id'] == key.id
+                             for row in self.Usage._llm_cap_candidates(enabled=False)))
+        self.assertFalse(any(row['id'] == key.id
+                             for row in self.Usage._llm_cap_candidates(enabled=True)))
+        self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+        with patch.object(free_module, 'taipei_day', return_value=DAY + timedelta(days=1)):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=True)
+
+        key.invalidate_recordset(['state', 'disabled_by', 'free_cap_pending', 'free_capped_day'])
+        self.assertEqual((key.state, key.disabled_by, key.free_cap_pending, key.free_capped_day),
+                         ('active', 'ops', True, DAY))
+        self.client.user_set_token_status.assert_not_called()
+
+    def test_stale_cap_candidate_cannot_replace_concurrent_ops_restriction(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, self.env.uid, {})
+            key = _llm_internal(env[KEY]).create({
+                'account_id': self.account.id, 'kind': 'free_trial', 'state': 'active',
+                'newapi_token_id': 124, 'newapi_name': 'wp_124_qa',
+            })
+            _llm_internal(env[USAGE_MODEL]).create({
+                'account_id': self.account.id, 'day_tpe': DAY,
+                'success_count': 5, 'capped_at': NOW,
+            })
+            key_id = key.id
+            cr.commit()
+        key = self.env[KEY].browse(key_id)
+        stale_row = next(row for row in self.Usage._llm_cap_candidates(enabled=False)
+                         if row['id'] == key.id)
+        with self.registry.cursor() as cr:
+            cr.execute('UPDATE woow_paas_platform_llm_api_key '
+                       "SET disabled_by = 'ops' WHERE id = %s AND state = 'active'",
+                       (key.id,))
+            self.assertEqual(cr.rowcount, 1)
+
+        with patch.object(type(self.Usage), '_llm_cap_candidates',
+                          return_value=[stale_row]):
+            self.Usage._llm_enforce_caps(LlmCronTick(30, 20), enabled=False)
+
+        key.invalidate_recordset(['state', 'disabled_by', 'free_cap_pending'])
+        self.assertEqual((key.state, key.disabled_by, key.free_cap_pending),
+                         ('active', 'ops', False))
+        self.client.user_set_token_status.assert_not_called()
 
     def test_unknown_disable_can_be_reset_after_midnight(self):
         key = self._key()

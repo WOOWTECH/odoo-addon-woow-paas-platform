@@ -1145,6 +1145,7 @@ class LlmCreditOrder(models.Model):
                                 'write_uid = %s, write_date = %s '
                                 'WHERE target.id = (SELECT o.id FROM {t} o '
                                 "WHERE o.state = 'paid' AND o.source IN ('user','manual','dr') "
+                                "AND (o.source <> 'manual' OR o.manual_notice_accepted) "
                                 'AND o.attempt < %s '
                                 'AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= %s) '
                                 'AND o.verify_token IS NULL {scope}'
@@ -1262,6 +1263,7 @@ class LlmCreditOrder(models.Model):
         scope_params = [list(account_ids)] if account_ids is not None else []
         with self.env.registry.cursor() as cr:
             cr.execute("SELECT 1 FROM {t} o WHERE o.state = %s AND o.source IN ('user','manual','dr') "
+                       "AND (o.source <> 'manual' OR o.manual_notice_accepted) "
                        'AND o.attempt < %s '
                        'AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= %s) '
                        'AND o.verify_token IS NULL {scope}'
@@ -1631,10 +1633,11 @@ class LlmCreditOrder(models.Model):
             requester = order.requested_by_uid
             if order.source == 'manual' and (not requester or requester.share or
                                             not requester.active or not requester.login or
-                                            not requester.email or '@' not in requester.email or
+                                            not requester.email or not requester.email.strip() or
+                                            not requester.llm_named_human_eligible or
                                             requester in (self.env.ref('base.user_root'),
                                                           self.env.ref('base.user_admin'))):
-                raise ValidationError(_('Manual credits require a named internal requester.'))
+                raise ValidationError(_('Manual credits require a provisioned named internal requester.'))
             if order.newapi_user_id != order.account_id.newapi_user_id:
                 raise ValidationError(_('A credit order must snapshot its current upstream user.'))
         return _without_llm_internal(_without_capabilities(orders))
