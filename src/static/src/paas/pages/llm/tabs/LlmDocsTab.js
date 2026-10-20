@@ -31,13 +31,14 @@ export class LlmDocsTab extends Component {
     initialMode: { type: String, optional: true },
     initialAllowedModels: { type: [Array, { value: null }], optional: true },
     onConsumeKey: { type: Function, optional: true },
-    baseUrl: { type: String, optional: true },
+    baseUrl: { type: [String, { value: null }], optional: true },
   };
 
   setup() {
     this.llm = useState(llmService);
     this.state = useState({
       key: this.props.initialKey || "",
+      allowedModels: Array.isArray(this.props.initialAllowedModels) ? [...this.props.initialAllowedModels] : null,
       mode: this.props.initialMode === "free" ? "free" : "paid",
       keyMode: this.props.initialMode === "free" ? "free" : "paid",
       tool: "curl",
@@ -60,7 +61,7 @@ export class LlmDocsTab extends Component {
   }
   get endpoint() { return this.endpointAvailable ? this.props.baseUrl : SAFE_BASE_URL; }
   get endpointAvailable() { return typeof this.props.baseUrl === "string" && this.props.baseUrl.length > 0; }
-  get selectedModel() { return publishedPaidModel(this.llm.models, this.props.initialAllowedModels); }
+  get selectedModel() { return publishedPaidModel(this.llm.models, this.state.allowedModels); }
   get model() { return this.state.mode === "free" ? "qwen3-4b-cluster1" : this.selectedModel || "YOUR_PUBLISHED_PAID_MODEL"; }
   get modelPlaceholder() { return this.state.mode === "paid" && !this.selectedModel; }
   get unavailableText() { return _t("The Base URL is unavailable until the service provides its public endpoint."); }
@@ -138,6 +139,7 @@ export class LlmDocsTab extends Component {
     const nextMode = mode === "free" ? "free" : "paid";
     if (nextMode !== this.state.mode) {
       this.state.key = "";
+      this.state.allowedModels = null;
       this.state.keyMode = nextMode;
       this.state.copied = "";
     }

@@ -170,6 +170,8 @@ test("reveal-to-Docs integration closes the guard, consumes locally, filters mod
   guide.setup();
   assert.equal(guide.state.key, DEMO_KEY);
   assert.equal(guide.selectedModel, "allowed-paid");
+  guide.props = { ...guide.props, initialKey: "", initialAllowedModels: null };
+  assert.equal(guide.selectedModel, "allowed-paid", "consuming the parent handoff must not remove the active key model restrictions on rerender");
   assert.equal(handoff.peekKey(), "");
   guide.selectMode("free");
   assert.equal(guide.state.key, "");
@@ -195,7 +197,7 @@ test("Base URL comes only from the configured public endpoint and paid IDs come 
   assert.equal(publishedPaidModel({ state: "ok", items: [{ model: "free-only", group: "free" }] }), null);
   assert.equal(publishedPaidModel({ state: "maintenance", items: [{ model: "stale-model", group: "default" }] }), null);
   assert.match(page, /validatedLlmPublicBaseUrl\(this\.llm\.overview\)/);
-  assert.match(docs, /publishedPaidModel\(this\.llm\.models, this\.props\.initialAllowedModels\)/);
+  assert.match(docs, /publishedPaidModel\(this\.llm\.models, this\.state\.allowedModels\)/);
   assert.match(docs, /YOUR_PUBLISHED_PAID_MODEL/);
   assert.doesNotMatch(docs, /gpt-4o-mini/);
 });
@@ -208,7 +210,7 @@ test("paid and free curl, Python, and Node examples use escaped values and the c
   assert.match(docs, /JSON\.stringify\(base\)/);
   assert.match(docs, /JSON\.stringify\(model\)/);
   assert.match(docs, /this\.state\.mode === "free" \? "qwen3-4b-cluster1"/);
-  assert.match(docs, /get selectedModel\(\) \{ return publishedPaidModel\(this\.llm\.models, this\.props\.initialAllowedModels\); \}/);
+  assert.match(docs, /get selectedModel\(\) \{ return publishedPaidModel\(this\.llm\.models, this\.state\.allowedModels\); \}/);
   assert.match(docs, /this\.selectedModel \|\| "YOUR_PUBLISHED_PAID_MODEL"/);
   assert.match(docs, /python: `from openai import OpenAI/);
   assert.match(docs, /node: `import OpenAI from "openai"/);
