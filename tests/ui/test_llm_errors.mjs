@@ -419,7 +419,10 @@ test("mutation intents serialize per key, dedupe identical requests, and release
   };
   const track = (promise) => {
     pendingWork.add(promise);
-    promise.finally(() => pendingWork.delete(promise));
+    promise.then(
+      () => pendingWork.delete(promise),
+      () => pendingWork.delete(promise),
+    );
     return promise;
   };
   const waitForTurns = async (predicate, description) => {
