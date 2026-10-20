@@ -184,7 +184,7 @@ test("keys route goes live only with LlmPage registration and rendered component
   assert.ok(routes.LLM_LIVE_TABS.includes("keys"));
   assert.equal(routes.isLlmTabLive("keys"), true);
   const page = stubImports(await readPaas("pages/llm/LlmPage.js"), {
-    "@odoo/owl": "class Component {} const onMounted = () => {}; const onPatched = () => {}; const useRef = () => ({ el: null });",
+    "@odoo/owl": "class Component {} const onMounted = () => {}; const onPatched = () => {}; const onWillUnmount = () => {}; const onWillUpdateProps = () => {}; const useRef = () => ({ el: null }); const useState = (value) => value;",
     "@web/core/l10n/translation": "const _t = (message) => message;",
     "../../components/icon/WoowIcon": "const WoowIcon = {};",
     "../../core/router": "const router = { navigate() {} };",
@@ -193,10 +193,13 @@ test("keys route goes live only with LlmPage registration and rendered component
     "./tabs/LlmModelsTab": `const LlmModelsTab = (await import("${modelsUrl}")).LlmModelsTab;`,
     "./tabs/LlmOverviewTab": "const LlmOverviewTab = {};",
     "./tabs/LlmKeysTab": `const LlmKeysTab = (await import("${keyTabUrl}")).LlmKeysTab;`,
+    "./tabs/LlmDocsTab": "const LlmDocsTab = {};",
+    "../../services/llm_service": "const llmService = {};",
+    "./tabs/llm_docs_helpers": "const createLlmDocsKeyHandoff = () => ({ put() {}, peekKey() { return ''; }, peekMode() { return 'paid'; }, clear() {} }); const validatedLlmPublicBaseUrl = () => null;",
   });
   assert.match(page, /LlmKeysTab/);
   const xml = await readPaas("pages/llm/LlmPage.xml");
-  assert.match(xml, /<LlmKeysTab t-elif="currentTab === 'keys'"\/>/);
+  assert.match(xml, /<LlmKeysTab t-elif="currentTab === 'keys'" onOpenDocs\.bind="openDocsWithKey"\/>/);
 });
 
 test("paid model options emit null for all models and filter restricted selections to default group", () => {

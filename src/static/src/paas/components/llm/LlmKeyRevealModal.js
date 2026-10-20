@@ -73,6 +73,7 @@ export class LlmKeyRevealModal extends Component {
     baseUrl: { type: String, optional: true },
     // 關閉後通知頁面：{ created: boolean }（頁面據此重新整理清單；不帶任何金鑰內容）。
     onClose: { type: Function },
+    onOpenDocs: { type: Function, optional: true },
   };
 
   setup() {
@@ -216,6 +217,9 @@ export class LlmKeyRevealModal extends Component {
   }
 
   /** Both key types recover by creating a replacement and disabling or deleting the old key. */
+  get openDocsLabel() {
+    return _t("View usage guide");
+  }
   get intro() {
     return _t("For security, the full key is shown only this once. You cannot view it again after closing this window; if you lose it, create a new key and disable or delete the old one.");
   }
@@ -344,6 +348,40 @@ export class LlmKeyRevealModal extends Component {
   finish() {
     if (this.canFinish) {
       this.close();
+    }
+  }
+
+  openDocs() {
+    const onOpenDocs = this.props.onOpenDocs;
+    if (!onOpenDocs) {
+      this.close();
+      return;
+    }
+    if (this.state.phase !== "shown" || typeof this.state.key !== "string" || !this.state.key) return;
+
+    // Capture the one-time secret before close() clears this component's state.
+    const key = this.state.key;
+    const kind = this.props.kind;
+    const models = this.props.models;
+    const currentState = window.history.state;
+    const ownSentinel = this.isOwnSentinel(currentState);
+    if (ownSentinel) {
+      // Keep this history entry; replacing its hash below makes Back return to the
+      // original tab without racing teardown's asynchronous history.back().
+      this.sentinelPushed = false;
+      const { woowLlmReveal, ...otherState } = currentState;
+      window.history.replaceState(otherState, "", window.location.href);
+    }
+
+    this.close();
+    onOpenDocs(key, kind, models);
+    if (ownSentinel) {
+      // Replacing the sentinel entry avoids an extra Back stop.
+      window.location.replace("#/llm/docs");
+    } else {
+      // A missing sentinel can happen if the browser or host rewrites history.
+      // Teardown sees no owned sentinel, so normal router navigation cannot race a back().
+      router.navigate("llm/docs");
     }
   }
 

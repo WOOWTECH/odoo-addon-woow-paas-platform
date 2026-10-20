@@ -30,6 +30,10 @@
           <t t-else="">
             <p class="o_woow_llm_reveal__intro" t-esc="intro"/>
 
+            <button t-if="props.onOpenDocs" type="button" class="o_woow_llm_link" t-on-click="openDocs">
+              <t t-esc="openDocsLabel"/>
+            </button>
+
             <div class="o_woow_llm_reveal__field">
               <div class="o_woow_llm_reveal__label">API key</div>
               <!-- e2e 截圖一律遮住這一格（o_woow_llm_reveal__key）；明文只在這裡出現一次。 -->

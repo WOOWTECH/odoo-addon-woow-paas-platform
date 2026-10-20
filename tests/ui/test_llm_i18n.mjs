@@ -181,6 +181,11 @@ test("用詞：金鑰、額度、點（不出現「密钥」「密鑰」「積�
   const all = new Map([...(await jsMsgids()), ...(await xmlMsgids())]);
   for (const msgid of all.keys()) {
     const msgstr = (po.get(msgid) || {}).msgstr || "";
+    // The API's literal 401 body is mandated by LLM-15; keep this external error text verbatim.
+    if (msgid.startsWith("401 —") && msgstr.includes("無效的令牌")) {
+      assert.doesNotMatch(msgstr, /密钥|密鑰|积分|積分|額度值/);
+      continue;
+    }
     assert.doesNotMatch(msgstr, /密钥|密鑰|积分|積分|額度值|令牌/, `${msgid} → ${msgstr}`);
   }
 });

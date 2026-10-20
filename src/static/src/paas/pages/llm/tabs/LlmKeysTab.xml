@@ -52,7 +52,7 @@
         </article>
       </div>
       <LlmKeyFormModal t-if="state.showForm" keyItem="state.editKey" onClose.bind="closeForm" onDraft.bind="onDraft" onUpdate.bind="saveEdit"/>
-      <LlmKeyRevealModal t-if="state.showReveal" kind="'paid'" allowedModels="paidModelAllowlist" models="state.pendingDraft.models" baseUrl="paidBaseUrl" createKey.bind="createPendingPaidKey" onClose.bind="onRevealClosed"/>
+      <LlmKeyRevealModal t-if="state.showReveal" kind="'paid'" allowedModels="paidModelAllowlist" models="state.pendingDraft.models" baseUrl="paidBaseUrl" createKey.bind="createPendingPaidKey" onClose.bind="onRevealClosed" onOpenDocs.bind="props.onOpenDocs"/>
       <LlmKeyActionConfirmModal t-if="state.confirmation" item="state.confirmation.item" action="state.confirmation.action" busy="state.busyKey !== null" errorText="state.actionError || ''" onClose.bind="closeConfirmation" onConfirm.bind="confirmAction" onReturnFocus.bind="focusKeysHeading"/>
     </section>
   </t>

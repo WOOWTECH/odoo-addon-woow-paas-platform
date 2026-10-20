@@ -14,6 +14,260 @@
 #   * JS 層（#903，376 條）：`_t()` 包起來的字串，譯文取自該批的交接清單。
 #   * 啟用批（#902 的字面值改名 ＋ 同一控制項的兄弟字串，12 條）。
 #
+# LLM-15 使用說明頁
+#
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/llm/LlmKeyRevealModal.js:0
+msgid "View usage guide"
+msgstr "查看使用說明"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "API usage guide"
+msgstr "API 使用說明"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Connect your preferred tools with the examples below. Replace the placeholders with your own values."
+msgstr "使用下方範例連接常用工具，並以自己的資料取代範例值。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "The Base URL is unavailable until the service provides its public endpoint."
+msgstr "服務提供公開端點前，Base URL 暫時無法使用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Examples use YOUR_BASE_URL and YOUR_API_KEY placeholders until the Base URL is available. Copying is disabled."
+msgstr "Base URL 可用前，範例會使用 YOUR_BASE_URL 與 YOUR_API_KEY 佔位值，且無法複製。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "This key is held only by this guide instance and disappears when you leave it."
+msgstr "此金鑰只保留在目前的使用說明頁面；離開頁面後即會清除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Replace YOUR_API_KEY with your own key. This example value is not a real credential."
+msgstr "請將 YOUR_API_KEY 換成自己的金鑰。此範例值不是真實憑證。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Paid key example"
+msgstr "付費金鑰範例"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Free trial example"
+msgstr "免費試用範例"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Paid keys allow up to 120 successful requests per minute"
+msgstr "付費金鑰每分鐘最多可成功請求 120 次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Free trial keys allow up to 10 requests per minute"
+msgstr "免費試用金鑰每分鐘最多可請求 10 次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "The 120 successful-request ceiling is shared across paid and free traffic."
+msgstr "每分鐘 120 次成功請求的上限由付費與免費流量共用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Free requests use a token bucket of 10. One token is refilled every six seconds, and failed requests count."
+msgstr "免費請求使用容量 10 的權杖桶；每六秒補回一個權杖，失敗請求也會計入。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "The approximate daily free allowance is 200 successful requests."
+msgstr "每日免費額度約為 200 次成功請求。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Key creation and credit conversion have a 10-per-hour limit after the request reaches new-api"
+msgstr "建立金鑰與額度轉換請求抵達 new-api 後，各自受每小時 10 次限制。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "All key-creation and conversion attempts also have a separate 30-per-hour guard"
+msgstr "所有建立金鑰與轉換嘗試另受每小時 30 次的獨立防護限制。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Request limits"
+msgstr "請求限制"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Setup examples"
+msgstr "設定範例"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Choose a tool"
+msgstr "選擇工具"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Choose key type"
+msgstr "選擇金鑰類型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Paid model"
+msgstr "付費模型"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Free Qwen trial"
+msgstr "Qwen 免費試用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "No published paid model is available in the catalog. Replace YOUR_PUBLISHED_PAID_MODEL after selecting a model from Models & Pricing."
+msgstr "目錄目前沒有已發布的付費模型。請先至「模型與價格」選擇模型，再將 YOUR_PUBLISHED_PAID_MODEL 換成該模型名稱。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "1 point corresponds to NT$1 (New Taiwan Dollar), including tax. Converted AI credit is non-refundable, including when closing the account."
+msgstr "1 點等於新台幣 NT$1（含稅）。轉換成 AI 額度後不予退款，關閉帳戶時也不退還。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "This service uses new-api, licensed under AGPL-3.0. View the source for the deployed version."
+msgstr "本服務使用採 AGPL-3.0 授權的 new-api。請參閱目前部署版本的原始碼。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Frequently asked questions"
+msgstr "常見問題"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "401 — The key is invalid, disabled, expired, out of quota, or its free allowance for today is used. The response says 無效的令牌, or Invalid token when Accept-Language is en. Go to API keys to check the key status."
+msgstr "401 — 金鑰無效、已停用、已過期、額度已用完，或今日免費額度已用完。回應會顯示「無效的令牌」；Accept-Language 為 en 時則顯示「Invalid token」。請至 API 金鑰查看金鑰狀態。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "403 — This is the request that crossed a limit. It can also mean insufficient AI credit, or that the key lacks permission for the requested model."
+msgstr "403 — 這是跨過限制的那一次請求；也可能表示 AI 額度不足，或金鑰沒有使用所請求模型的權限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "429 — Too many requests in a short period. Wait briefly, then reduce the request rate."
+msgstr "429 — 短時間內請求過多。請稍候並降低請求頻率。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "503 — No available channel can serve this request. For example, a paid key cannot call the free Qwen channel. Retry later or choose an available model."
+msgstr "503 — 目前沒有可處理此請求的渠道。例如，付費金鑰不能呼叫免費 Qwen 渠道。請稍後重試或選擇可用模型。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "524 — Cloudflare timed out while waiting for the upstream request. Retry later, use streaming for long requests, or shorten the request."
+msgstr "524 — Cloudflare 等待上游請求時逾時。請稍後重試、長請求使用串流，或縮短請求內容。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Python with OpenAI SDK"
+msgstr "Python（OpenAI SDK）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Node.js with OpenAI SDK"
+msgstr "Node.js（OpenAI SDK）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "In the OpenAI Chat Model node, set the credential API key to %(key)s and the Base URL to %(base)s. Select model %(model)s."
+msgstr "在 OpenAI Chat Model 節點的憑證中，將 API 金鑰設為 %(key)s、Base URL 設為 %(base)s，並選擇模型 %(model)s。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "In Open WebUI's OpenAI connection settings, set the API Base URL to %(base)s, the API key to %(key)s, and the model to %(model)s."
+msgstr "在 Open WebUI 的 OpenAI 連線設定中，將 API Base URL 設為 %(base)s、API 金鑰設為 %(key)s，並選擇模型 %(model)s。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "In OpenCode, configure an OpenAI-compatible provider with baseURL %(base)s, API key %(key)s, and model %(model)s."
+msgstr "在 OpenCode 設定 OpenAI 相容供應商，baseURL 設為 %(base)s、API 金鑰設為 %(key)s，模型設為 %(model)s。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Copy setup example"
+msgstr "複製設定範例"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "curl"
+msgstr "curl"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "n8n"
+msgstr "n8n"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "Open WebUI"
+msgstr "Open WebUI"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "OpenCode"
+msgstr "OpenCode"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
+msgid "new-api v1.0.0-rc.44"
+msgstr "new-api v1.0.0-rc.44"
+
 # 🔴 跨模組覆蓋不可靠，所以「撞名時填什麼」不是偏好問題：
 #   Odoo 前端的 translatedTerms 是跨 module **攤平**的 flat map，合併順序來自
 #   `list(Registry._init_modules)`（那是 **set**，hash 順序、每個進程不同）⇒ 同一條

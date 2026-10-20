@@ -146,7 +146,7 @@ export function llmUsageRow(item, index) {
 export class LlmOverviewTab extends Component {
   static template = "woow_paas_platform.LlmOverviewTab";
   static components = { WoowButton, WoowCard, WoowIcon, LlmKeyRevealModal, LlmTermsModal };
-  static props = {};
+  static props = { onOpenDocs: { type: Function, optional: true } };
 
   setup() {
     this.llm = useState(llmService);
