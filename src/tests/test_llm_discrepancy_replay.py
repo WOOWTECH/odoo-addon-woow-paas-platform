@@ -94,12 +94,29 @@ class TestLlmDiscrepancyReplay(TransactionCase):
                         replay = service._acknowledge(account_id, delta, reason, request_id)
                     # Do not read fields through the stale snapshot/MissingError.
                     self.assertEqual(replay.id, winner_id)
+                    self.assertIs(replay.env.cr, loser_cr)
+                    loser_cr.execute(query, (request_id,))
+                    self.assertIsNone(loser_cr.fetchone(), 'Replay must not refresh the RR snapshot')
                     for actor, amount in ((actor_id, delta + 1), (other_id, delta)):
-                        with self.subTest(actor=actor, amount=amount), \
-                                TestCase.assertRaises(self, ValidationError), \
-                                mute_logger('odoo.sql_db'):
-                            loser_env[discrepancy.MODEL].with_user(actor)._acknowledge(
-                                account_id, amount, reason, request_id)
+                        # These raw transactions do not belong to self.env. Use
+                        # unittest contexts explicitly; no Odoo assertion helper
+                        # should flush/invalidate the outer TestCase transaction.
+                        with TestCase.subTest(self, actor=actor, amount=amount):
+                            actor_service = loser_env[discrepancy.MODEL].with_user(actor)
+                            self.assertIs(actor_service.env.cr, loser_cr)
+                            self.assertIs(actor_service.env.transaction, loser_cr.transaction)
+                            self.assertIs(actor_service.env.cache, loser_cr.transaction.cache)
+                            self.assertEqual(actor_service.env.uid, actor)
+                            self.assertFalse(actor_service.env.su)
+                            self.assertFalse(loser_cr.closed)
+                            # Leave lang unset and do not prime authorization or
+                            # translation caches: rejection must work on its own.
+                            self.assertNotIn('lang', actor_service.env.context)
+                            with TestCase.assertRaises(self, ValidationError), \
+                                    mute_logger('odoo.sql_db'):
+                                actor_service._acknowledge(account_id, amount, reason, request_id)
+                            loser_cr.execute(query, (request_id,))
+                            self.assertIsNone(loser_cr.fetchone(), 'Rejection must keep stale RR')
                     loser_cr.rollback()
                 with self._connection() as (cr, _env):
                     cr.execute(

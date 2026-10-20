@@ -220,7 +220,7 @@ class LlmKnownDiscrepancy(models.Model):
                 if (row[1], int(row[2]), row[3], row[4]) != (
                         account_id, delta, reason, operator.id):
                     raise ValidationError(
-                        _('This request id was already used for another discrepancy.')) from None
+                        self.env._('This request id was already used for another discrepancy.')) from None
                 return Model.browse(row[0])
             self._check_idempotent_payload(existing, account_id, delta, reason, operator.id)
             return existing
@@ -230,7 +230,7 @@ class LlmKnownDiscrepancy(models.Model):
     def _check_idempotent_payload(self, record, account_id, delta, reason, operator_id):
         if (record.account_id.id, record.quota_delta, record.reason,
                 record.created_uid.id) != (account_id, delta, reason, operator_id):
-            raise ValidationError(_('This request id was already used for another discrepancy.'))
+            raise ValidationError(self.env._('This request id was already used for another discrepancy.'))
 
     @api.model
     def _quota_total(self, account_id):
