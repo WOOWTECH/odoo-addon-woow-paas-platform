@@ -181,9 +181,14 @@ test("credit threshold rejects blank, fractional, negative and oversized input; 
   const { LlmCreditTab } = await import(toDataUrl(source));
   const tab = new LlmCreditTab(); tab.setup();
   assert.equal(tab.thresholdVisible, true);
+  assert.equal(tab.thresholdInputError, null, "initial render must not show an invalid-input error");
+  assert.equal(tab.thresholdInputErrorText, "");
+  tab.state.thresholdError = "llm_unavailable";
+  assert.equal(tab.thresholdSaveErrorText, "llm_unavailable");
   for (const invalid of ["", "1.5", "-1", "100001", "1e2"]) {
     tab.setThreshold(invalid);
     assert.equal(tab.thresholdInputError, "llm_settings_invalid");
+    assert.equal(tab.thresholdInputErrorText, "llm_settings_invalid");
     await tab.saveThreshold();
   }
   assert.deepEqual(submitted, []);

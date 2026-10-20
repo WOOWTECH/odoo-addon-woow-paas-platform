@@ -16,7 +16,7 @@ export class LlmCreditTab extends Component {
   setup() {
     this.service = useState(llmService);
     this.state = useState({ items: [], total: 0, page: 1, loading: false, error: null, showConvert: false,
-      threshold: 50, thresholdError: null, thresholdNotice: null, savingThreshold: false });
+      threshold: "50", thresholdError: null, thresholdNotice: null, savingThreshold: false });
     this.destroyed = false;
     this.pollTimer = null;
     this.pollCount = 0;
@@ -86,6 +86,12 @@ export class LlmCreditTab extends Component {
   get thresholdInputError() {
     const raw = this.state.threshold;
     return typeof raw === "string" && /^(0|[1-9]\d*)$/.test(raw) && Number(raw) <= 100000 ? null : "llm_settings_invalid";
+  }
+  get thresholdInputErrorText() {
+    return this.thresholdInputError ? llmErrorMessage({ code: this.thresholdInputError }) : "";
+  }
+  get thresholdSaveErrorText() {
+    return this.state.thresholdError ? llmErrorMessage({ code: this.state.thresholdError }) : "";
   }
   setThreshold(value) {
     this.state.threshold = value;
