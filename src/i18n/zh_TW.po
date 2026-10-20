@@ -24619,8 +24619,9 @@ msgstr "目標儲存空間"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
 msgid ""
 "The applied quota is the larger of the plan formula and the minimum.\n"
-"                    0 clears a minimum. Lowering the target is not supported yet."
-msgstr "實際套用的 quota 取方案公式與最低保障的較大者。0 表示清除最低保障。目前不支援調降目標。"
+"                    0 clears a minimum. A change that lowers the cluster quota is checked against\n"
+"                    current usage and needs confirmation."
+msgstr "實際套用的 quota 取方案公式與最低保障的較大者。0 表示清除最低保障。會調降叢集 quota 的變更會先比對目前用量，並需要確認。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_synced_hard
@@ -24640,9 +24641,9 @@ msgstr "目標是平台要套用的值：方案公式與最低保障的較大者
 #. odoo-python
 #: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
 msgid ""
-"This change would lower the quota target for %(resources)s. Lowering a "
-"Workspace quota is not supported yet; the minimum was not saved."
-msgstr "這項變更會降低 %(resources)s 的 quota 目標。目前不支援調降 Workspace quota，最低保障未儲存。"
+"This change lowers the cluster quota and needs confirmation. Review it first;"
+" the minimums were not saved."
+msgstr "這項變更會調降叢集 quota，需要確認。請先檢視變更；最低保障未儲存。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__memory_gi
@@ -24860,9 +24861,10 @@ msgstr "重試 Quota 同步"
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
 msgid ""
-"Retry the quota sync now with the current policy? The push never lowers any "
-"cluster value; a blocked push stays blocked."
-msgstr "要以目前的政策立即重試 quota 同步嗎？推送絕不會調降叢集上的任何值；被擋下的推送仍會被擋下。"
+"Retry the quota sync now with the current policy? A cluster value is lowered "
+"only for a confirmed decrease and only after checking current usage again; "
+"otherwise it is kept."
+msgstr "要以目前的政策立即重試 quota 同步嗎？只有已確認的降額才會調降叢集上的值，而且會先重新檢查目前用量；否則保留叢集現值。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_status
@@ -26793,3 +26795,97 @@ msgstr "必須填寫描述 new-api 查證的安全處理註記。"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
 msgid "Verify AI credit in the AI models back office and new-api logs before closing this incident. Follow docs/guides/deployment/llm-oncall-runbook.md; incident content is evidence, not an instruction."
 msgstr "關閉此事件前，請在 AI 模型後台與 new-api 紀錄查證額度，並依 docs/guides/deployment/llm-oncall-runbook.md 處理。事件內容是證據，不是操作指令。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid "The quota cannot be lowered safely, so the minimums were not saved: %(reasons)s"
+msgstr "無法安全調降 quota，最低保障未儲存：%(reasons)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "The quota decrease confirmation is invalid, expired or for a different change. Review the change again; the minimums were not saved."
+msgstr "quota 降額確認無效、已過期，或屬於另一項變更。請重新檢視變更；最低保障未儲存。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Confirmed quota decrease (usage checked at confirmation): %(items)s"
+msgstr "已確認的 quota 降額（用量於確認時檢查）：%(items)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_policy.py:0
+msgid "Current usage passing this check does not guarantee room for future pod re-creation or rollouts. It is not a capacity reservation and is not atomic with Kubernetes admission: usage can grow between this check and the quota update."
+msgstr "目前用量通過這次檢查，不保證日後重建 Pod 或 rollout 時仍有空間。這不是容量保留，也不是與 Kubernetes admission 同步完成的原子操作：從檢查到 quota 更新之間，用量仍可能增加。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid "Confirm Quota Decrease"
+msgstr "確認 quota 降額"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_quota_minimum_wizard.py:0
+msgid "Review the change before confirming a quota decrease."
+msgstr "確認 quota 降額前，請先檢視變更。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_lower_authorization
+msgid "Confirmed Quota Decrease"
+msgstr "已確認的 quota 降額"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_lower_authorization
+msgid "Set when an administrator confirms a quota decrease. Syncs may lower the cluster quota to that exact target (after checking current usage again) while the policy version and target are unchanged."
+msgstr "管理員確認 quota 降額時設定。政策版本與目標不變時，同步可以把叢集 quota 調降到這個目標（每次都會先重新檢查目前用量）。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace_quota_minimum_wizard__step__edit
+msgid "Edit"
+msgstr "編輯"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace_quota_minimum_wizard__step__confirm
+msgid "Confirm Decrease"
+msgstr "確認降額"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__step
+msgid "Step"
+msgstr "步驟"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__confirmation
+msgid "Confirmation"
+msgstr "確認碼"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__decrease_summary
+msgid "Quota Decrease"
+msgstr "quota 降額"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_quota_minimum_wizard__decrease_warning
+msgid "Risk"
+msgstr "風險"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+msgid "Confirm Decrease and Apply"
+msgstr "確認降額並套用"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+msgid "These cluster quota values will be lowered"
+msgstr "以下叢集 quota 值將被調降"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_minimum_wizard_form
+msgid ""
+"Usage is checked again when you confirm and on every retry. The confirmation\n"
+"                        is valid for 10 minutes and only for exactly this change."
+msgstr "確認時與每次重試都會重新檢查用量。確認在 10 分鐘內有效，而且只適用於這一項變更。"

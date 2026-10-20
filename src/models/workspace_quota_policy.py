@@ -21,7 +21,19 @@
   遠端留下沒提交的值）就以新 token 重推（圍籬），值仍取 max(目標, 叢集)，不降額。
 - **有限重試**：見 ``RETRY_BACKOFF_MINUTES``；額度以目標指紋（namespace 集合＋payload）計，
   目標改變、管理員保存或手動重試才重置。永久阻擋（would_lower 等）不自動重試。
+
+#1681 管理員安全降低或清除最低保障：
+
+- 管理員的變更讓目標下降時，先讀每個 namespace 的受管 quota，以共用的 ``plan_safe_lower``
+  依「完整新目標 vs 叢集 hard」判斷哪些項會降，逐項比對 5 項 used。讀不到、缺項、舊
+  operator、低於任一 used、會降低 pvc 一律拒絕，**不保存**。
+- 會降低叢集時要求風險確認：``preview_quota_minimums`` 回傳伺服器簽章的確認碼，綁定
+  Workspace、操作者、政策版本、新的最低保障、完整目標與 namespace 集合，10 分鐘內有效。
+  ``set_quota_minimums(..., confirmation=...)`` 在鎖內逐項比對並**再檢查一次**用量，通過才
+  保存，並記下 ``quota_lower_authorization``（政策版本＋目標），之後每次重試都重讀 used 重檢。
+- 確認只套用在管理員主動降低／清除；生命週期與背景同步不經過這裡。
 """
+import base64
 from datetime import timedelta
 import hashlib
 import json
@@ -32,7 +44,8 @@ from psycopg2 import errors as pg_errors
 
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tools import mute_logger
+from odoo.tools import consteq, mute_logger
+from odoo.tools.misc import hmac as odoo_hmac
 
 from ..services.ns_quota_policy import (
     QuotaNotProvable, build_hard, merge_never_lower, parse_quantity, plan_safe_lower,
@@ -89,6 +102,9 @@ _RECONCILE_CRON = 'woow_paas_platform.ir_cron_reconcile_workspace_quota'
 _TRANSIENT_BLOCKED = ('quota_unreadable', 'managed_quota_status_pending')
 #: 確定沒寫入、但值得自動重試的 4xx（其餘 4xx 是請求本身有問題，記為 blocked 等人處理）。
 _TRANSIENT_HTTP = (401, 403, 408, 429)
+#: #1681 降額確認碼的有效期間與 HMAC scope。
+LOWER_CONFIRMATION_TTL = timedelta(minutes=10)
+_LOWER_CONFIRMATION_SCOPE = 'woow_paas_platform.workspace_quota_lower_confirmation'
 
 
 # ------------------------------------------------------------------------- #
@@ -317,13 +333,8 @@ class WorkspaceQuotaPolicy(models.Model):
     # --------------------------------------------------------------------- #
     #  管理員入口                                                            #
     # --------------------------------------------------------------------- #
-    def set_quota_minimums(self, cpu=None, memory_gi=None, storage_gi=None):
-        """管理員設定 CPU（cores）、memory、storage（Gi）最低保障，保存後立即同步。
-
-        參數為 ``None`` 表示該項不變更；``0``／``False`` 表示清除（沿用公式）。
-        任何一項目標因此下降的變更本票一律拒絕（安全降額由後續票交付），不會保存。
-        回傳同步結果摘要。
-        """
+    def _quota_minimum_change(self, cpu, memory_gi, storage_gi):
+        """管理員入口共用的前置：授權、鎖、正規化。回傳 ``(workspace, old, new)``。"""
         # uid 判準：Portal capability 的 sudo 保留 portal uid，不會因此通過。
         if not self.env.user.has_group('base.group_system'):
             raise AccessError(_('Only system administrators may change Workspace quota minimums.'))
@@ -342,26 +353,123 @@ class WorkspaceQuotaPolicy(models.Model):
         for name, value in requested.items():
             if value is not None:
                 new[name] = _normalize_floor(labels[name], value)
+        return workspace, old, new
+
+    def _quota_minimum_review(self, old, new):
+        """新最低保障會不會降低叢集：回傳 ``(target, decreases, problems)``。
+
+        只有政策目標下降（管理員主動降低／清除）才讀叢集；判斷以完整新目標對叢集 hard，
+        所以先前留下的待處理降額也會一併列出、一併檢查。
+        """
+        self.ensure_one()
+        Service = self.env['woow_paas_platform.cloud_service'].sudo()
+        target = Service._ns_quota_payload(self)
+        before = Service._compute_ns_quota(self, floors=old)
+        after = Service._compute_ns_quota(self, floors=new)
+        target.update(zip(('cpu_limit', 'memory_limit', 'storage_limit'), after))
+        if not any(parse_quantity(a) < parse_quantity(b) for b, a in zip(before, after)):
+            return target, [], []
+        decreases, problems = _review_lower(
+            paas_operator_service.get_paas_operator_client(self.env(context={})),
+            self._quota_namespaces(), target)
+        return target, decreases, problems
+
+    def preview_quota_minimums(self, cpu=None, memory_gi=None, storage_gi=None):
+        """#1681 管理員預覽：這次變更是否會降低叢集 quota、能不能安全降、要不要確認。
+
+        不保存任何東西。回傳 ``state``：
+
+        - ``no_change``／``ok``：不會降低叢集，可直接 ``set_quota_minimums``；
+        - ``confirmation_required``：會降低叢集且目前用量允許，附 ``confirmation``（確認碼）、
+          ``decreases`` 與 ``warning``；
+        - ``rejected``：讀取失敗、缺項、舊 operator 或低於用量，``reasons`` 說明原因。
+        """
+        workspace, old, new = self._quota_minimum_change(cpu, memory_gi, storage_gi)
+        if new == old:
+            return {'state': 'no_change'}
+        target, decreases, problems = workspace._quota_minimum_review(old, new)
+        if problems:
+            return {'state': 'rejected', 'reasons': problems, 'decreases': decreases}
+        if not decreases:
+            return {'state': 'ok', 'decreases': []}
+        return {
+            'state': 'confirmation_required',
+            'confirmation': workspace._sign_lower_confirmation(new, target),
+            'decreases': decreases,
+            'warning': _lower_warning(),
+            'expires_in_minutes': int(LOWER_CONFIRMATION_TTL.total_seconds() // 60),
+        }
+
+    def set_quota_minimums(self, cpu=None, memory_gi=None, storage_gi=None, confirmation=None):
+        """管理員設定 CPU（cores）、memory、storage（Gi）最低保障，保存後立即同步。
+
+        參數為 ``None`` 表示該項不變更；``0``／``False`` 表示清除（沿用公式）。
+        #1681：會降低叢集 quota 的變更必須帶 ``preview_quota_minimums`` 給的確認碼；確認碼
+        必須仍符合目前的 Workspace、操作者、政策版本、最低保障、目標與 namespace，且鎖內
+        再檢查一次用量。任一項不符、讀取失敗、缺項或低於用量就拒絕，不保存。
+        回傳同步結果摘要。
+        """
+        workspace, old, new = self._quota_minimum_change(cpu, memory_gi, storage_gi)
         if new == old:
             return workspace._quota_status_summary()
-
-        Service = self.env['woow_paas_platform.cloud_service'].sudo()
-        before = Service._compute_ns_quota(workspace, floors=old)
-        after = Service._compute_ns_quota(workspace, floors=new)
-        lowered = [label for label, b, a in zip((_('CPU'), _('Memory'), _('Storage')), before, after)
-                   if parse_quantity(a) < parse_quantity(b)]
-        if lowered:
+        target, decreases, problems = workspace._quota_minimum_review(old, new)
+        if problems:
             raise UserError(_(
-                'This change would lower the quota target for %(resources)s. Lowering a '
-                'Workspace quota is not supported yet; the minimum was not saved.',
-                resources=', '.join(lowered)))
+                'The quota cannot be lowered safely, so the minimums were not saved: '
+                '%(reasons)s', reasons='; '.join(problems)))
+        if decreases:
+            if not confirmation:
+                raise UserError(_(
+                    'This change lowers the cluster quota and needs confirmation. Review it '
+                    'first; the minimums were not saved.'))
+            workspace._verify_lower_confirmation(confirmation, new, target)
 
         version = workspace.quota_target_version + 1
-        _internal_quota_policy_write(workspace).write(dict(
-            new, quota_target_version=version, quota_sync_state='pending',
-            quota_sync_reason=False))
-        workspace._log_quota_minimum_change(old, new, version)
+        vals = dict(new, quota_target_version=version, quota_sync_state='pending',
+                    quota_sync_reason=False, quota_lower_authorization=(
+                        workspace._quota_lower_authorization_key(version, target)
+                        if decreases else False))
+        _internal_quota_policy_write(workspace).write(vals)
+        workspace._log_quota_minimum_change(old, new, version, decreases)
         return workspace._quota_sync('admin')
+
+    # --------------------------------------------------------------------- #
+    #  #1681 降額確認碼                                                      #
+    # --------------------------------------------------------------------- #
+    def _lower_confirmation_claims(self, new, target):
+        """確認碼綁定的內容（不含到期時間）。"""
+        self.ensure_one()
+        return {'workspace': self.id, 'uid': self.env.uid, 'version': self.quota_target_version,
+                'floors': {name: new[name] for name in sorted(FLOOR_FIELDS)},
+                'target': {key: target.get(key) for key in sorted(target)},
+                'namespaces': self._quota_namespaces()}
+
+    def _sign_lower_confirmation(self, new, target):
+        expires = int((fields.Datetime.now() + LOWER_CONFIRMATION_TTL).timestamp())
+        body = json.dumps(dict(self._lower_confirmation_claims(new, target), exp=expires),
+                          sort_keys=True, separators=(',', ':'))
+        signature = odoo_hmac(self.env(su=True), _LOWER_CONFIRMATION_SCOPE, body)
+        return '%s.%s' % (base64.urlsafe_b64encode(body.encode()).decode(), signature)
+
+    def _verify_lower_confirmation(self, confirmation, new, target):
+        """確認碼必須是伺服器簽的、未過期，而且內容與這一次完全相同。"""
+        invalid = UserError(_(
+            'The quota decrease confirmation is invalid, expired or for a different change. '
+            'Review the change again; the minimums were not saved.'))
+        try:
+            encoded, signature = str(confirmation).rsplit('.', 1)
+            body = base64.urlsafe_b64decode(encoded.encode()).decode()
+            claims = json.loads(body)
+        except (ValueError, TypeError, UnicodeDecodeError):
+            raise invalid from None
+        expected = odoo_hmac(self.env(su=True), _LOWER_CONFIRMATION_SCOPE, body)
+        if not consteq(expected, signature) or not isinstance(claims, dict):
+            raise invalid
+        expires = claims.pop('exp', None)
+        if not isinstance(expires, int) or expires < fields.Datetime.now().timestamp():
+            raise invalid
+        if claims != json.loads(json.dumps(self._lower_confirmation_claims(new, target))):
+            raise invalid
 
     def action_open_quota_minimum_wizard(self):
         if not self.env.user.has_group('base.group_system'):
@@ -382,8 +490,8 @@ class WorkspaceQuotaPolicy(models.Model):
     def action_retry_quota_sync(self):
         """#1680 管理員手動重試：重置自動重試額度，以最新政策與服務集合立即同步。
 
-        與背景重試走同一個同步（同樣的鎖、讀取、不降額與防護），所以不能用來繞過任何安全
-        檢查——會降低叢集任何一項的推送照樣不送。不改政策，所以不寫異動紀錄（ledger）；只在
+        與背景重試走同一個同步（同樣的鎖、讀取、降額檢查與防護），所以不能用來繞過任何安全
+        檢查——#1681：只有已確認的降額才會降，而且每次都重讀用量重檢。不改政策，所以不寫異動紀錄（ledger）；只在
         監控 chatter 留一行誰在何時手動重試。
         """
         if not self.env.user.has_group('base.group_system'):
@@ -412,8 +520,11 @@ class WorkspaceQuotaPolicy(models.Model):
                        'next': {'type': 'ir.actions.client', 'tag': 'soft_reload'}},
         }
 
-    def _log_quota_minimum_change(self, old, new, version):
-        """稽核：append-only ledger（結構化）＋ admin-only monitor chatter（無通知）。"""
+    def _log_quota_minimum_change(self, old, new, version, decreases=()):
+        """稽核：append-only ledger（結構化）＋ admin-only monitor chatter（無通知）。
+
+        #1681：確認過的降額另在 chatter 列出每項叢集值、目標與確認當下的用量。
+        """
         self.ensure_one()
         actor = self.env.user
 
@@ -429,11 +540,15 @@ class WorkspaceQuotaPolicy(models.Model):
             'old_values': _summary(old), 'new_values': _summary(new),
         })
         monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
-        monitor._message_log(body=_(
+        body = _(
             'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota minimums changed by %(login)s '
             '(uid %(uid)s), policy version %(version)s: %(old)s -> %(new)s',
             name=self.name, id=self.id, ws_hash=self.ws_hash, login=actor.login, uid=actor.id,
-            version=version, old=_summary(old), new=_summary(new)))
+            version=version, old=_summary(old), new=_summary(new))
+        if decreases:
+            body += '\n' + _('Confirmed quota decrease (usage checked at confirmation): '
+                             '%(items)s', items='; '.join(_decrease_text(d) for d in decreases))
+        monitor._message_log(body=body)
 
     # --------------------------------------------------------------------- #
     #  同步（不降額）                                                        #
@@ -783,6 +898,50 @@ class WorkspaceQuotaPolicy(models.Model):
             'version': self.quota_target_version,
             'synced_version': self.quota_synced_version,
         }
+
+
+def _lower_warning():
+    return _('Current usage passing this check does not guarantee room for future pod '
+             're-creation or rollouts. It is not a capacity reservation and is not atomic with '
+             'Kubernetes admission: usage can grow between this check and the quota update.')
+
+
+def _decrease_text(item):
+    return '%(namespace)s %(key)s: %(cluster)s -> %(target)s (used %(used)s)' % item
+
+
+def _review_lower(client, namespaces, target):
+    """#1681 管理員降額前檢查：每個 namespace 讀受管 quota，以共用 ``plan_safe_lower`` 判斷。
+
+    回傳 ``(decreases, problems)``：``decreases`` 是會降的項（dict：namespace、key、cluster、
+    target、used）；``problems`` 非空就不能保存。確認 namespace 尚不存在的沒有可降的 quota。
+    """
+    decreases, problems = [], []
+    if not client:
+        return decreases, ['operator_not_configured']
+    for namespace in namespaces:
+        try:
+            report = client.get_namespace_quota(namespace, include_managed=True)
+        except PaaSOperatorError as exc:
+            unsupported = getattr(exc, 'status_code', None) in (404, 405)
+            problems.append('%s: %s' % (
+                namespace, 'operator_unsupported' if unsupported else 'quota_unreadable'))
+            continue
+        managed = report.get('managed_quota') if isinstance(report, dict) else None
+        if (isinstance(managed, dict) and managed.get('available') is not True
+                and managed.get('reason') == 'managed_quota_not_found'
+                and managed.get('namespace_exists') is False):
+            continue
+        plan = plan_safe_lower(target, managed)
+        problems.extend('%s: %s %s' % (namespace, key, reason) if key != '*'
+                        else '%s: %s' % (namespace, reason) for key, reason in plan['blocked'])
+        if plan['lowering_unsafe']:
+            problems.append('%s: would_lower: %s' % (
+                namespace, ', '.join(sorted(plan['lowering_unsafe']))))
+        decreases.extend({'namespace': namespace, 'key': key, 'cluster': cluster,
+                          'target': wanted, 'used': used}
+                         for key, cluster, wanted, used in plan['lowered'])
+    return decreases, problems
 
 
 def _plan_namespace(client, namespace, target, allow_lower=False):

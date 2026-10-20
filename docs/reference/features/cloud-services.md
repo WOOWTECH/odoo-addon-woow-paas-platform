@@ -404,7 +404,10 @@ spec:
 平台在開通、換方案、刪除服務，以及管理員變更最低保障時重算並推送。所有路徑共用同一個政策（`src/models/workspace_quota_policy.py`、`src/services/ns_quota_policy.py`）：
 
 - 推送前先讀叢集上的受管 quota（operator `GET /api/namespaces/{name}/quota?include_managed=true`），每一項取 max(目標, 叢集現況)，再以 operator 同形的完整 hard（含 `persistentvolumeclaims` 與 ephemeral-storage）逐項檢查，**不會降低叢集任何一項**。
-- 目標低於叢集的項目記為「待處理降額」（後台 Pending Quota Decrease），叢集保留較高的值；安全降額由後續工作（#1681、#1682）處理。
+- 目標低於叢集的項目記為「待處理降額」（後台 Pending Quota Decrease），叢集保留較高的值，直到有安全降額的路徑把它收回。
+- 安全降額判斷只有一份（#1681，`src/services/ns_quota_policy.py` 的 `plan_safe_lower`）：以完整目標對叢集 hard（spec 與 status 取較大者）找出會降的項，逐項比對 `requests.cpu`、`limits.cpu`、`requests.memory`、`limits.memory`、`requests.storage` 的 used（已佔用的配額，不是即時使用率）。只要有一項降額，5 項 used 都必須讀得到；任何一項 used 高於目標、缺項、看不懂、受管 quota 讀不到或 operator 太舊（沒有 `sync_token`）就一項都不降，只送增額。ephemeral-storage 與 `persistentvolumeclaims` 不在降額範圍。通過檢查也不保證未來 Pod 重建或 rollout 有空間，它不是容量保留，也不與 K8s admission 原子化。
+- 管理員主動降低或清除最低保障（#1681）：只有讓政策目標下降的變更才檢查。目標下降但叢集本來就不高於新目標時直接保存；會降低叢集時，Set Quota Minimums 對話框先列出每項「叢集值 → 目標（used）」與風險警示，按「Confirm Decrease and Apply」才保存。確認碼由伺服器簽章，綁定 Workspace、操作者、政策版本、新的最低保障、完整目標與 namespace 集合，10 分鐘內有效；確認時在工作區鎖內再檢查一次用量。讀取失敗、缺項、舊 operator、低於任一 used、或會降低 pvc 都拒絕，不保存。RPC 入口是 `preview_quota_minimums`（預覽與取得確認碼）與 `set_quota_minimums(..., confirmation=...)`，僅限 `base.group_system`。
+- 確認保存後記下 `quota_lower_authorization`（政策版本＋目標）。推送失敗時設定保留並照常有限重試，每次重試都重讀 used 重檢；用量變多讓降額不安全時保留叢集額度，狀態「已被安全檢查擋下」、原因 `unsafe_decrease: …`，仍會自動重試。政策版本或目標一變（例如新增服務），這次確認就不再適用；整個工作區同步成功後授權即清除。確認只套用在管理員主動降低／清除，服務生命週期不經過確認。
 - 讀不到現況、資料不完整、或某一項非降不可（例如叢集的 pvc 上限大於 10）時不推送並記錄原因。開通路徑：讀不到現況或資料不完整時開通失敗待重試，因為無法證明不降額；某一項非降不可時跳過這次 quota 套用（namespace 與基線已存在），開通照常繼續。刪除服務永遠不會因 quota 推送失敗而被擋下。
 - 同一個工作區同時只有一筆交易推送 quota（工作區列鎖，所有平台 quota 寫入都經過它：管理員設定、手動重試、背景重試、生命週期重算、開通建立 namespace）。管理員入口會等鎖；背景、生命週期與開通路徑不等，拿不到鎖就不推送也不寫工作區狀態：生命週期不擋刪除，改排背景同步一分鐘後重來（#1680，換方案剛好撞上推送時增額不再遺失）；開通失敗待重試。
 - 遠端版本防護（#1680）：每次推送帶新的 sync token 與鎖內讀到的 resourceVersion（受管 quota 尚不存在時改為「只在不存在時建立」），operator 以條件寫入套用，物件被改過就回 409 不覆寫；開通建立 `<ns>-quota` 走同一套。只有叢集上的 token 與平台預期的相符才算已同步：逾時、5xx、斷線先讀回，落地了就算成功，沒落地就記下在途 token，下一次同步以新 token 重推，晚到的舊請求因 resourceVersion 已變而落不下。叢集上出現平台不認得的 token（例如推送成功後 DB 交易回捲）時同樣重推，值仍取 max(目標, 叢集)，不會因此降額，多出來的部分顯示在 Pending Quota Decrease。operator 太舊（GET 沒有 `sync_token`）時退回無防護推送，後台標示「Operator 不支援版本防護」。
