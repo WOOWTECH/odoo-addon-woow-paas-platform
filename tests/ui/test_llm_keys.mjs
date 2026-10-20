@@ -5,6 +5,7 @@ import { readPaas, stubImports, toDataUrl } from "./lib/llm_test_support.mjs";
 
 const owlStub = "class Component {} const onMounted = (fn) => { globalThis.__keyHooks.mounted.push(fn); }; const onWillUnmount = (fn) => { globalThis.__keyHooks.unmount.push(fn); }; const useState = (value) => value;";
 globalThis.__keyHooks = { mounted: [], unmount: [] };
+globalThis.__keyRefs = {};
 
 const routesSource = await readPaas("core/llm_routes.js");
 const routes = await import(toDataUrl(routesSource));
@@ -44,7 +45,7 @@ const modelsSource = stubImports(await readPaas("pages/llm/tabs/LlmModelsTab.js"
 });
 const modelsUrl = toDataUrl(modelsSource);
 const keyTabSource = stubImports(await readPaas("pages/llm/tabs/LlmKeysTab.js"), {
-  "@odoo/owl": "class Component {} const onMounted = () => {}; const onWillUnmount = () => {}; const useState = (value) => value;",
+  "@odoo/owl": "class Component {} const onMounted = () => {}; const onWillUnmount = () => {}; const useRef = (name) => globalThis.__keyRefs[name] || (globalThis.__keyRefs[name] = { el: null }); const useState = (value) => value;",
   "@web/core/l10n/translation": "const _t = (message, values) => values ? message.replace(/%\\((\\w+)\\)s/g, (_, k) => String(values[k])) : message;",
   "../../../components/icon/WoowIcon": "const WoowIcon = {};",
   "../../../components/button/WoowButton": "const WoowButton = {};",
@@ -88,6 +89,7 @@ test("paid key handoff keeps only safe draft in parent and never caches plaintex
   };
   const tab = Object.create(LlmKeysTab.prototype);
   tab.service = llmService;
+  tab.keysHeadingRef = { el: { focus() {} } };
   tab.state = { loading: false, showForm: true, showReveal: false, pendingDraft: null, extendConfirmation: null, notice: null };
   tab.destroyed = false;
   tab.onDraft({ name: "Ops", limitPoints: null, expires: "90d", models: ["paid-a"] });
@@ -121,10 +123,46 @@ test("paid draft errors exposed to users are mapped, never raw transport text", 
   const raw = "socket exploded secret-value";
   const tab = Object.create(LlmKeysTab.prototype);
   tab.service = { keys: [], keysError: "llm_network_error" };
+  tab.keysHeadingRef = { el: null };
   tab.state = { createError: null };
   assert.ok(!tab.errorText.includes(raw));
   tab.setCreateError({ success: false, code: "llm_network_error", error: raw });
   assert.ok(!tab.state.createError.includes(raw));
+});
+
+test("failed paid reveal keeps mapped recovery feedback after close until another attempt", async () => {
+  const raw = "socket exploded secret-value";
+  const tab = Object.create(LlmKeysTab.prototype);
+  tab.service = { keys: [], keysError: null };
+  tab.state = { loading: false, showReveal: true, pendingDraft: { name: "Ops" }, createError: null };
+  tab.keysHeadingRef = { el: { calls: 0, focus() { this.calls++; } } };
+  llmService.createPaidKey = async () => ({ success: false, code: "llm_network_error", error: raw });
+  llmService.fetchKeys = () => Promise.resolve({ success: true });
+
+  await tab.createPendingPaidKey("request-paid-id");
+  const mappedError = tab.state.createError;
+  assert.ok(mappedError);
+  assert.ok(!mappedError.includes(raw));
+  tab.onRevealClosed();
+  assert.equal(tab.state.createError, mappedError);
+  assert.equal(tab.state.showReveal, false);
+  assert.equal(tab.state.pendingDraft, null);
+  assert.equal(tab.keysHeadingRef.el.calls, 1);
+
+  tab.state.pendingDraft = { name: "Retry" };
+  llmService.createPaidKey = async () => ({ success: true, data: { key: "sk-hidden" } });
+  await tab.createPendingPaidKey("next-request");
+  assert.equal(tab.state.createError, null);
+  tab.state.createError = mappedError;
+  tab.state.pendingDraft = { name: "Retry" };
+  llmService.createPaidKey = async () => { throw new Error(raw); };
+  const rejected = await tab.createPendingPaidKey("rejected-request");
+  assert.equal(rejected.success, false);
+  assert.ok(tab.state.createError);
+  assert.ok(!tab.state.createError.includes(raw));
+  tab.onRevealClosed();
+  assert.ok(tab.state.createError);
+  assert.equal(tab.keysHeadingRef.el.calls, 2);
 });
 
 test("keys route goes live only with LlmPage registration and rendered component", async () => {

@@ -3,7 +3,7 @@
   <t t-name="woow_paas_platform.LlmKeysTab">
     <section class="o_woow_llm_keys">
       <header class="o_woow_llm_keys__heading">
-        <div><h2 t-esc="title"/><p>Manage paid API keys and review masked key details.</p></div>
+        <div><h2 t-ref="keysHeading" tabindex="-1" t-esc="title"/><p>Manage paid API keys and review masked key details.</p></div>
         <WoowButton variant="'primary'" size="'md'" onClick.bind="openCreate">Create paid key</WoowButton>
       </header>
       <p t-if="state.loading" role="status">Loading API keys…</p>

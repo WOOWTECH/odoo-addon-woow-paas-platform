@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { Component, onMounted, onWillUnmount, useState } from "@odoo/owl";
+import { Component, onMounted, onWillUnmount, useRef, useState } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
@@ -94,6 +94,7 @@ export class LlmKeysTab extends Component {
   setup() {
     this.service = useState(llmService);
     this.state = useState({ loading: false, showForm: false, showReveal: false, pendingDraft: null, createError: null, extendConfirmation: null, notice: null });
+    this.keysHeadingRef = useRef("keysHeading");
     this.destroyed = false;
     this.extendConsumed = new Set();
     onMounted(() => this.refresh());
@@ -144,8 +145,13 @@ export class LlmKeysTab extends Component {
     this.state.showReveal = true;
   }
   createPendingPaidKey(requestId) {
-    return llmService.createPaidKey(requestId, this.state.pendingDraft).then((result) => {
+    this.state.createError = null;
+    return Promise.resolve().then(() => llmService.createPaidKey(requestId, this.state.pendingDraft)).then((result) => {
       if (!result || !result.success) this.setCreateError(result);
+      return result;
+    }, () => {
+      const result = { success: false, code: "llm_key_create_interrupted" };
+      this.setCreateError(result);
       return result;
     });
   }
@@ -156,7 +162,8 @@ export class LlmKeysTab extends Component {
   onRevealClosed() {
     this.state.showReveal = false;
     this.state.pendingDraft = null;
-    this.state.createError = null;
+    const heading = this.keysHeadingRef.el;
+    if (heading && typeof heading.focus === "function") heading.focus();
     llmService.fetchKeys();
   }
   cancelExtend() { this.state.extendConfirmation = null; }
