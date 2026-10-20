@@ -1208,6 +1208,11 @@ from . import test_workspace_quota_floor_rpc_1679
 from . import test_workspace_quota_sync_1680
 from . import test_workspace_quota_sync_rpc_1680
 from . import test_workspace_quota_sync_live_1680
+from . import test_ns_quota_safe_lower_1681
+from . import test_workspace_quota_safe_lower_1681
+from . import test_workspace_quota_lower_confirm_1681
+from . import test_workspace_quota_lower_confirm_rpc_1681
+from . import test_workspace_quota_lower_live_1681
 from . import test_workspace_quota_floor_live_1679
 from . import test_ecpg_v4_golive
 # #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
