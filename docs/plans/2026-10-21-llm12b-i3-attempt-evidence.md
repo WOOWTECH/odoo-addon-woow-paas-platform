@@ -1,6 +1,6 @@
 # I3 Logical Attempt Evidence Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Implementation note:** Work directly in this isolated branch. This repository has retired the superpowers workflow.
 
 **Goal:** Collapse an ingested proxy `intent` and optional `outcome` into one conservative, immutable logical attempt without declaring that quota was credited or an order was owned.
 

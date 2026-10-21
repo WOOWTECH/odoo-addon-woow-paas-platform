@@ -30,6 +30,30 @@ def outcome(seq=2, *, result='forwarded', status=200, request_id='safe-id-1'):
 
 
 class TestLogicalAttempt(unittest.TestCase):
+    def test_real_page_normalizer_output_pairs_across_pages(self):
+        page_path = SOURCE.with_name('llm_audit_page.py')
+        page_spec = importlib.util.spec_from_file_location('llm_audit_page', page_path)
+        page = importlib.util.module_from_spec(page_spec)
+        page_spec.loader.exec_module(page)
+        start = 2 ** 53 + 1
+        first = intent(start + 1)
+        second = outcome(start + 2)
+        raw_first = {key: value for key, value in first.items() if key in
+                     ('seq', 'attempt_id', 'kind', 'at', 'target_user_id', 'quota')}
+        raw_second = {key: value for key, value in second.items() if key in
+                      ('seq', 'attempt_id', 'kind', 'at', 'result', 'status', 'request_id')}
+        highwater, first_rows = page.normalize_page(
+            {'env': 'llmdev', 'highwater': start + 2, 'events': [raw_first]},
+            'llmdev', start, limit=1)
+        next_head, second_rows = page.normalize_page(
+            {'env': 'llmdev', 'highwater': start + 2, 'events': [raw_second]},
+            'llmdev', start + 1, through=highwater, limit=1)
+        self.assertEqual(next_head, highwater)
+        result = attempts.collapse_attempt(first_rows[0], second_rows[0])
+        self.assertEqual(result.classification, 'correlation_candidate')
+        self.assertEqual((result.intent_seq, result.outcome_seq),
+                         (start + 1, start + 2))
+
     def test_forwarded_receipt_is_only_a_correlation_candidate(self):
         before, after = intent(), outcome()
         original = copy.deepcopy((before, after))
