@@ -396,7 +396,7 @@ spec:
     requests.memory: 24Gi
     limits.memory: 24Gi
     requests.storage: 180Gi
-    persistentvolumeclaims: "10"
+    persistentvolumeclaims: "10"     # #1781：max(10, 叢集現值)，見下方
     requests.ephemeral-storage: 4Gi
     limits.ephemeral-storage: 80Gi
 ```
@@ -409,10 +409,11 @@ spec:
 - 管理員主動降低或清除最低保障（#1681）：只有讓政策目標下降的變更才檢查。目標下降但叢集本來就不高於新目標時直接保存；會降低叢集時，Set Quota Minimums 對話框先列出每項「叢集值 → 目標（used）」與風險警示，按「Confirm Decrease and Apply」才保存。確認碼由伺服器簽章，綁定 Workspace、操作者、政策版本、新的最低保障、完整目標與 namespace 集合，10 分鐘內有效；確認時在工作區鎖內再檢查一次用量。讀取失敗、缺項、舊 operator、低於任一 used、或會降低 pvc 都拒絕，不保存。RPC 入口是 `preview_quota_minimums`（預覽與取得確認碼）與 `set_quota_minimums(..., confirmation=...)`，僅限 `base.group_system`。
 - 確認保存後記下 `quota_lower_authorization`（政策版本＋目標）。推送失敗時設定保留並照常有限重試，每次重試都重讀 used 重檢；用量變多讓降額不安全時保留叢集額度，狀態「已被安全檢查擋下」、原因 `unsafe_decrease: …`，仍會自動重試。政策版本或目標一變（例如新增服務），這次確認就不再適用；整個工作區同步成功後授權即清除。確認只套用在管理員主動降低／清除，服務生命週期不經過確認。
 - 生命週期自動收回（#1682）：刪除服務、清理到期服務、換方案降級，以及之後的背景重試、對帳、6 小時讀回與管理員手動重試，都以同一份判斷（`plan_safe_lower`）免確認降額——每次重讀 used，5 項全部容得下才降到目標，否則一項都不降、只送增額，狀態記為「已被安全檢查擋下」、原因 `unsafe_decrease: <資源> <原因>`，並照有限次重試（用量釋放後就收回）。最低保障（override）不變，目標一律是 max(公式, 最低保障)。quota 讀取或推送失敗不回捲也不阻斷刪除，逾時記為「結果待確認」。免確認只屬於伺服器內部的生命週期與背景入口（底線方法、RPC 呼叫不到），租戶與管理員都不能用 context 或參數把人工降額偽裝成自動事件。管理員只提高（不需確認）或開通留下 CPU／memory／storage 的待處理降額時，標記 `quota_reconcile_pending` 並立刻排背景收回，不必等 6 小時讀回。換方案扣款前的升級預檢照舊（以換完之後的目標檢查）；降級時 quota 在 helm upgrade 之前推送，舊 pod 還佔著用量時這次不降，升級完成、用量釋放後由背景重試收回。
-- 讀不到現況、資料不完整、或某一項非降不可（例如叢集的 pvc 上限大於 10）時不推送並記錄原因。開通路徑：讀不到現況或資料不完整時開通失敗待重試，因為無法證明不降額；某一項非降不可時跳過這次 quota 套用（namespace 與基線已存在），開通照常繼續。刪除服務永遠不會因 quota 推送失敗而被擋下。
+- PVC 上限（#1781，#1189 依 template 計算 PVC 數之前的止血）：operator 回報支援 `pvc_limit`（GET `managed_quota.supports_pvc_limit`）時，平台以 10 為基準、與叢集現值取大送出，PVC 上限高於 10 的工作區不再整筆擋下；叢集高於 10 的部分不算待處理降額，也不會降。operator 不支援時不送這個欄位（舊 operator 會忽略它、照樣寫 10），照舊因 PVC 高於 10 擋下。送了 `pvc_limit` 卻沒在回應拿到相同的值（operator 滾動更新時 PUT 落在舊 pod，PVC 已被寫成 10）時記為「已被安全檢查擋下」、原因 `pvc_limit_not_confirmed`，不自動重試。
+- 讀不到現況、資料不完整、或某一項非降不可（例如舊 operator 下叢集的 pvc 上限大於 10）時不推送並記錄原因。開通路徑：讀不到現況或資料不完整時開通失敗待重試，因為無法證明不降額；某一項非降不可時跳過這次 quota 套用（namespace 與基線已存在），開通照常繼續。刪除服務永遠不會因 quota 推送失敗而被擋下。
 - 同一個工作區同時只有一筆交易推送 quota（工作區列鎖，所有平台 quota 寫入都經過它：管理員設定、手動重試、背景重試、生命週期重算、開通建立 namespace）。管理員入口會等鎖；背景、生命週期與開通路徑不等，拿不到鎖就不推送也不寫工作區狀態：生命週期不擋刪除，改排背景同步一分鐘後重來（#1680，換方案剛好撞上推送時增額不再遺失）；開通失敗待重試。
 - 遠端版本防護（#1680）：每次推送帶新的 sync token 與鎖內讀到的 resourceVersion（受管 quota 尚不存在時改為「只在不存在時建立」），operator 以條件寫入套用，物件被改過就回 409 不覆寫；開通建立 `<ns>-quota` 走同一套。只有叢集上的 token 與平台預期的相符才算已同步：逾時、5xx、斷線先讀回，落地了就算成功，沒落地就記下在途 token，下一次同步以新 token 重推，晚到的舊請求因 resourceVersion 已變而落不下。叢集上出現平台不認得的 token（例如推送成功後 DB 交易回捲）時同樣重推，值仍取 max(目標, 叢集)，不會因此降額，多出來的部分顯示在 Pending Quota Decrease。operator 太舊（GET 沒有 `sync_token`）時退回無防護推送，後台標示「Operator 不支援版本防護」。
-- 有限次自動重試（#1680，背景 cron `ir_cron_reconcile_workspace_quota`，每個工作區各自一筆交易）：暫時性失敗（operator 未設定、斷線、5xx、逾時、版本衝突、讀不到叢集）在失敗後 1、5、15、60、240 分鐘各重試一次，共 5 次，之後轉為「重試已用完」，只能由系統管理員按「Retry Quota Sync」手動重試。永久阻擋（會降低某一項，例如叢集 pvc 上限大於 10；operator 不支援；資料看不懂）不自動重試。重試額度以目標（namespace 集合＋目標值）計：目標改變、管理員保存最低保障、手動重試、或同步成功時重置；背景重試與目標不變的生命週期事件不重置。生命週期與開通只同步自己的 namespace：工作區不只一個 namespace 時，這次子集同步不記目標指紋、不重置也不消耗額度，改以 `quota_reconcile_pending` 排一次全集對帳（#1682，修正 #1680 讓同目標事件重新拿到 5 次重試的問題）。已同步的工作區每 6 小時讀回驗證一次。手動與背景重試都不寫最低保障的異動紀錄；手動重試只在監控 chatter 留下操作者。
+- 有限次自動重試（#1680，背景 cron `ir_cron_reconcile_workspace_quota`，每個工作區各自一筆交易）：暫時性失敗（operator 未設定、斷線、5xx、逾時、版本衝突、讀不到叢集）在失敗後 1、5、15、60、240 分鐘各重試一次，共 5 次，之後轉為「重試已用完」，只能由系統管理員按「Retry Quota Sync」手動重試。永久阻擋（會降低某一項，例如舊 operator 下叢集 pvc 上限大於 10；operator 不支援；資料看不懂）不自動重試。重試額度以目標（namespace 集合＋目標值）計：目標改變、管理員保存最低保障、手動重試、或同步成功時重置；背景重試與目標不變的生命週期事件不重置。生命週期與開通只同步自己的 namespace：工作區不只一個 namespace 時，這次子集同步不記目標指紋、不重置也不消耗額度，改以 `quota_reconcile_pending` 排一次全集對帳（#1682，修正 #1680 讓同目標事件重新拿到 5 次重試的問題）。已同步的工作區每 6 小時讀回驗證一次。手動與背景重試都不寫最低保障的異動紀錄；手動重試只在監控 chatter 留下操作者。
 - 管理員在後台「Woow PaaS → Workspace Quotas」查看公式、最低保障、目標、最後成功推送值與時間、同步狀態；目標不是叢集現況，叢集現況看同一頁的觀測（#1678）。尚未建立 namespace 時，最低保障先保存，首次開通時套用。
 
 排查與調整方式見 `docs/guides/deployment/troubleshooting.md` 的「Namespace Quota Exceeded」。
