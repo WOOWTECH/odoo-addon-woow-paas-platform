@@ -1,8 +1,9 @@
-# I3 proxy-audit ingestion foundation（僅本機，未啟用）
+# I3 proxy-audit ingestion foundation（已隔離驗證，未啟用）
 
 Base `38cd584a39e72cad26834454c801224764d755fd`（I2 #1899 指定 head；I3 commit 已 rebase）；獨立 worktree
 `impl/wt-llm12b-i3-audit-ingest-1021`，branch `feat/llm-12b-i3-audit-ingest-1021`。
-未改 I2 或 Singer 工作樹、runner、cluster、aimodels／prod；未 push／PR。
+未改 I2 或 LLM-13 工作樹；已開 draft #1900。僅在 `dev-sandbox-llmdev` 的自有一次性 DB
+實測並清理，未部署 aimodels／prod 或啟用 I3 排程。
 
 ## 精確範圍
 
@@ -52,11 +53,22 @@ Base `38cd584a39e72cad26834454c801224764d755fd`（I2 #1899 指定 head；I3 comm
 ## 驗證
 
 - 本機新純 parser：**10 passed**；既有 reconciliation 純回歸：**33 passed**。
-- 新 Odoo TransactionCase：**9 方法，尚未執行**。涵蓋100＋1固定head續頁與 Environment reload、
+- 新 Odoo TransactionCase：**9/9 方法各執行一次，0 failure/error/skip**。涵蓋100＋1固定head續頁與 Environment reload、
   store unavailable／invalid rollback、部分snapshot gap／漂移、exact replay與衝突、第二列插入
   失敗回滾、unconfigured／expired零外呼、environment／設定漂移、CRUD／FK、>2^53存取精度。
   Responses 是合成 fixture；沒有真上游 HTTP，reload 不是已提交後 crash-restart 測試。
+- 固定來源 `175860233d56492600326f9146f17d67c44cbcd2` 在 `dev-sandbox-llmdev` 一次性 DB
+  fresh install、同版 upgrade、兩輪全部 18 支 LLM cron 未設定 probe 均通過；
+  `network/process/http/newapi/foreign_database/effect` 均為 0。runner 清理後另以精確 DB
+  查詢及 pod 檔案檢查確認 DB／overlay 不存在；證據在
+  `impl/llm12b-i3-validation-1021/run-live-17586023-02/findings.json`。
+  首次執行 `67990dfb` 時只因 Odoo `assertRaises` 不接受 tuple 而有一項測試 TypeError；
+  該次資源也已核對清理，測試相容性修正在本 PR `17586023`，產品接收邏輯未變。
+- 真 PG 跨版本 `38cd584a`（I2 #1899）→ `17586023`（I3）亦通過：先在獨立
+  template0 DB 寫入待處理候選及閉戶封存證據，再 `-u`；升級後及9項測試後，
+  I2 逐欄 snapshot／帳戶身分皆不變，I3 bigint、唯一鍵及 RESTRICT 外鍵符合預期。
+  三輪全部18支 cron 未設定 probe 均為零外呼／副作用；最後獨立確認精確 DB 與
+  overlay 不存在。證據在 `impl/llm12b-i3-migration-validation-1021/run-live-38cd-to-175860-01/findings.json`。
 - C2 --all：1266 class 基準一致；repo-lint --all、compileall、git diff --check：通過。
-  所有 Odoo schema install／upgrade、
-  真 PG rollback／競爭／commit-time budget、stall HTTP 與重啟續頁實測仍待主代理隔離驗證。
+  真 PG 競爭／commit-time budget、stall HTTP 與重啟續頁實測仍待驗證。
 - 本切片不是完整 I3、LLM-12b 或 GA 完成；不啟用自動分類／告警。
