@@ -114,7 +114,10 @@ class TestLlmCreditAttemptCommitted(TestLlmCreditWorkerCommitted):
             orders = env_for(self.registry, cr)[ORDER_MODEL]
             self.assertIsNone(orders._llm_claimed_row(bad))
             self.assertFalse(orders._llm_worker_update(bad, {'state': 'credited'}))
-        self._update_order(order_id, quota=1562501)
+        ledger_before = self._attempts(order_id)
+        # Keep the fixed-rate CHECK valid while diverging from the issued snapshot.
+        self._update_order(order_id, points=101, quota=1578125)
+        self.assertEqual(self._attempts(order_id), ledger_before)
         self.assertFalse(self._entry(claim))
         self._send(claim)
         self.assertFalse(self.fake.calls)
@@ -198,3 +201,113 @@ class TestLlmCreditAttemptCommitted(TestLlmCreditWorkerCommitted):
                     attempts.with_user(user).read(['attempt_uuid'])
             with self.assertRaises(AccessError):
                 ledger_module._issue_cr(cr, {}, 1, object())
+
+
+    def _invalid_reservation_verifier(self):
+        order_id = self._order()
+        self.fake.fail_next['ap_add_quota'] = nac.Unknown('timeout')
+        self._run()
+        self.assertEqual(self._row(order_id)['state'], 'unknown')
+        self._update_order(order_id, convert_event_id=0)
+        with self.registry.cursor() as cr:
+            claim = env_for(self.registry, cr)[ORDER_MODEL]._llm_claim_credit_verification()
+        self.assertEqual(claim['id'], order_id)
+        self.assertTrue(claim['attempt_uuid'])
+        return order_id, claim
+
+    def test_invalid_reservation_review_rejects_wrong_owners_and_financial_updates(self):
+        order_id, claim = self._invalid_reservation_verifier()
+        before, ledger, events = self._row(order_id), self._attempts(order_id), self._events()
+        calls = list(self.fake.calls)
+        bad_claims = [dict(claim, **{key: value}) for key, value in (
+            ('id', order_id + 1), ('account_id', self.account_id + 1),
+            ('attempt', claim['attempt'] + 1), ('state', 'paid'), ('token', 'stale'),
+            ('event_id', None), ('event_id', -1), ('event_id', False),
+            ('event_id', '0'), ('event_id', 1), ('attempt_uuid', None),
+            ('attempt_uuid', str(uuid.uuid4())),
+        )]
+        with self.registry.cursor() as cr:
+            orders = env_for(self.registry, cr)[ORDER_MODEL]
+            for bad in bad_claims:
+                with self.subTest(claim_keys=[k for k in claim if claim[k] != bad.get(k)]):
+                    self.assertFalse(orders._llm_verify_invalid_reservation_review(
+                        bad, worker_module.CREDIT_EVIDENCE_INVALID))
+            self.assertFalse(orders._llm_verify_invalid_reservation_review(
+                claim, worker_module.CREDIT_EVIDENCE_CONFLICT))
+            for state in ('credited', 'paid', 'needs_review'):
+                self.assertFalse(orders._llm_verify_update(claim, {'state': state}))
+            self.assertFalse(orders._llm_verify_finish(claim, 'paid'))
+        self.assertEqual(self._row(order_id), before)
+        self.assertEqual(self._attempts(order_id), ledger)
+        self.assertEqual(self._events(), events)
+        self.assertEqual(self.fake.calls, calls)
+        # All denied calls left the genuine verifier's quarantine authority intact.
+        with self.registry.cursor() as cr:
+            self.assertTrue(env_for(self.registry, cr)[ORDER_MODEL]._llm_verify_review(
+                claim, worker_module.CREDIT_EVIDENCE_INVALID))
+        reviewed = self._row(order_id)
+        self.assertEqual(reviewed['state'], 'needs_review')
+        self.assertEqual(reviewed['last_error_code'], worker_module.CREDIT_EVIDENCE_INVALID)
+        self.assertFalse(reviewed['verify_token'])
+        self.assertFalse(reviewed['verify_lease_until'])
+        self.assertEqual(reviewed['convert_event_id'], 0)
+        self.assertEqual(self._attempts(order_id), ledger)
+        self.assertEqual(self._events(), events)
+        self.assertEqual(self.fake.calls, calls)
+
+    def test_invalid_reservation_review_rejects_snapshot_drift_and_expired_lease(self):
+        order_id, claim = self._invalid_reservation_verifier()
+        ledger, events, calls = self._attempts(order_id), self._events(), list(self.fake.calls)
+        for changed, restored in (
+                ({'newapi_user_id': self.user_id + 1}, {'newapi_user_id': self.user_id}),
+                ({'points': 101, 'quota': 1578125}, {'points': 100, 'quota': 1562500})):
+            self._update_order(order_id, **changed)
+            before = self._row(order_id)
+            with self.registry.cursor() as cr:
+                self.assertFalse(env_for(self.registry, cr)[ORDER_MODEL]._llm_verify_review(
+                    claim, worker_module.CREDIT_EVIDENCE_INVALID))
+            self.assertEqual(self._row(order_id), before)
+            self._update_order(order_id, **restored)
+        self._update_order(order_id, verify_lease_until=fields.Datetime.now() - timedelta(seconds=1))
+        before = self._row(order_id)
+        with self.registry.cursor() as cr:
+            orders = env_for(self.registry, cr)[ORDER_MODEL]
+            self.assertFalse(orders._llm_verify_invalid_reservation_review(
+                claim, worker_module.CREDIT_EVIDENCE_INVALID))
+        self.assertEqual(self._row(order_id), before)
+        with self.registry.cursor() as cr:
+            takeover = env_for(self.registry, cr)[ORDER_MODEL]._llm_claim_credit_verification()
+        self.assertEqual(takeover['id'], order_id)
+        self.assertNotEqual(takeover['token'], claim['token'])
+        with self.registry.cursor() as cr:
+            orders = env_for(self.registry, cr)[ORDER_MODEL]
+            self.assertFalse(orders._llm_verify_invalid_reservation_review(
+                claim, worker_module.CREDIT_EVIDENCE_INVALID))
+            self.assertTrue(orders._llm_verify_review(takeover, worker_module.CREDIT_EVIDENCE_INVALID))
+        self.assertEqual(self._row(order_id)['state'], 'needs_review')
+        self.assertEqual(self._attempts(order_id), ledger)
+        self.assertEqual(self._events(), events)
+        self.assertEqual(self.fake.calls, calls)
+
+    def test_invalid_reservation_review_cas_has_one_winner_and_keeps_dispatch_latch(self):
+        order_id, claim = self._invalid_reservation_verifier()
+        ledger, events, calls = self._attempts(order_id), self._events(), list(self.fake.calls)
+        self.assertTrue(ledger[0]['dispatch_claimed_at'])
+        barrier = Barrier(2)
+
+        def contender():
+            barrier.wait(timeout=10)
+            with self.registry.cursor() as cr:
+                return env_for(self.registry, cr)[ORDER_MODEL]._llm_verify_invalid_reservation_review(
+                    claim, worker_module.CREDIT_EVIDENCE_INVALID)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(contender) for _ in range(2)]
+            results = [future.result(timeout=15) for future in futures]
+        self.assertEqual(sorted(results), [False, True])
+        self.assertEqual(self._row(order_id)['state'], 'needs_review')
+        self.assertEqual(self._attempts(order_id), ledger)
+        self.assertEqual(self._events(), events)
+        self.assertEqual(self.fake.calls, calls)
+        with self.registry.cursor() as cr:
+            self.assertFalse(env_for(self.registry, cr)[ORDER_MODEL]._llm_verify_update(
+                claim, {'state': 'credited'}))

@@ -982,12 +982,51 @@ class LlmCreditOrder(models.Model):
         return True
 
     @api.model
+    def _llm_verify_invalid_reservation_review(self, claim, error_code):
+        """Quarantine an owned verifier with a broken event scalar, never settle it.
+
+        The normal owner guard remains mandatory for credit/retry/completion.
+        This separate CAS tolerates only the invalid order-event binding: the
+        immutable ledger must still match UUID/order/account/attempt/target/quota.
+        It cannot repair a reservation, mutate a ledger or authorize another send.
+        """
+        event_id = claim.get('event_id')
+        if (error_code != CREDIT_EVIDENCE_INVALID or
+                (event_id is not None and (type(event_id) is not int or event_id > 0)) or
+                claim.get('state') not in ('unknown', 'sending')):
+            return False
+        now = fields.Datetime.now()
+        with self.env.registry.cursor() as cr:
+            _begin(self.env, cr, read_committed=True)
+            cr.execute(
+                "UPDATE {orders} AS o SET state = 'needs_review', last_error_code = %s, "
+                'lease_until = NULL, next_attempt_at = NULL, verify_token = NULL, '
+                'verify_lease_until = NULL, verify_log_page = 0, verify_log_end_at = NULL, '
+                'write_uid = %s, write_date = %s '
+                'WHERE o.id = %s AND o.account_id = %s AND o.attempt = %s AND o.state = %s '
+                "AND o.state IN ('unknown', 'sending') "
+                'AND o.verify_token = %s AND o.verify_lease_until > %s '
+                'AND o.convert_event_id IS NOT DISTINCT FROM %s '
+                'AND (o.convert_event_id IS NULL OR o.convert_event_id <= 0) '
+                'AND EXISTS (SELECT 1 FROM {ledger} ca WHERE ca.order_id = o.id '
+                'AND ca.account_id = o.account_id AND ca.attempt_no = o.attempt '
+                'AND ca.target_user_id = o.newapi_user_id AND ca.quota = o.quota '
+                'AND ca.attempt_uuid = %s AND ca.reservation_event_id > 0) RETURNING id'.format(
+                    orders=ORDER_TABLE, ledger=ATTEMPT_TABLE),
+                (CREDIT_EVIDENCE_INVALID, SUPERUSER_ID, now, claim['id'], claim['account_id'],
+                 claim['attempt'], claim['state'], claim['token'], now, event_id,
+                 claim.get('attempt_uuid')), log_exceptions=False)
+            return cr.dictfetchone() is not None
+
+    @api.model
     def _llm_verify_review(self, claim, error_code, *, evidence=None):
         """Mark the order for humans only after its verifier guard commits."""
         committed = self._llm_verify_finish(
             claim, 'needs_review', error_code,
             terminal_event='unknown' if claim.get('event_id') else None,
             strict_event=False, evidence=evidence)
+        if not committed:
+            committed = self._llm_verify_invalid_reservation_review(claim, error_code)
         if not committed:
             return False
         self._llm_credit_alert(claim, error_code)
