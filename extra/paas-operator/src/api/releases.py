@@ -866,6 +866,7 @@ def _compute_quota_check(
                 namespace, pending_quota.cpu_limit, pending_quota.memory_limit,
                 pending_quota.storage_limit, pending_quota.ephemeral_storage_request,
                 pending_quota.ephemeral_storage_limit,
+                pvc_limit=pending_quota.pvc_limit,
             )["spec"]["hard"]
         result = compute_quota.evaluate(
             name, docs, live_items, snapshot["pods"], snapshot["quotas"],

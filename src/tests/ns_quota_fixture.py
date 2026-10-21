@@ -16,6 +16,11 @@ resourceVersion 為前提，前提不成立回 409 ``quota_conflict``（建立�
 
 #1681／#1682：``used``／``drop_used`` 設定每個 namespace 的 status.used（安全降額判斷讀它）。
 
+#1781：``pvc_capable=True`` 模擬支援 ``pvc_limit`` 的 operator——GET 帶 ``supports_pvc_limit``、
+寫入照送來的值寫 pvc 並在回應回報 ``pvc_limit``。預設 ``False``＝#1781 之前的 operator（現行
+prod）：GET 沒有能力鍵，寫入靜默忽略 ``pvc_limit``、一律寫 10。``pvc_write_capable`` 可單獨關掉
+寫入端，模擬滾動更新時 GET 落在新 pod、PUT 落在舊 pod。``pvc_sent`` 記每筆寫入收到的值。
+
 遠端延遲也只在這個邊界注入：
 
 - ``lose_response``：寫入照套用，但回應遺失（raise 逾時）；
@@ -31,14 +36,14 @@ PVC_HARD = '10'
 
 
 def build_hard(cpu_limit, memory_limit, storage_limit,
-               ephemeral_storage_request=None, ephemeral_storage_limit=None):
+               ephemeral_storage_request=None, ephemeral_storage_limit=None, pvc_limit=None):
     """與 operator ``_build_quota_manifest`` 的 spec.hard 同形。"""
     hard = {
         'requests.cpu': cpu_limit,
         'limits.cpu': cpu_limit,
         'requests.memory': memory_limit,
         'limits.memory': memory_limit,
-        'persistentvolumeclaims': PVC_HARD,
+        'persistentvolumeclaims': pvc_limit or PVC_HARD,
         'requests.storage': storage_limit,
     }
     if ephemeral_storage_request:
@@ -87,8 +92,11 @@ class FakeQuotaOperator:
     多執行緒測試會同時呼叫，所有狀態都在 ``lock`` 內讀寫。
     """
 
-    def __init__(self, namespaces=None, *, guarded=True):
+    def __init__(self, namespaces=None, *, guarded=True, pvc_capable=False):
         self.guarded = guarded
+        self.pvc_capable = pvc_capable
+        self.pvc_write_capable = None  # None＝跟 pvc_capable 相同
+        self.pvc_sent = []
         self.lock = threading.RLock()
         self.live = {ns: dict(hard) for ns, hard in (namespaces or {}).items()}
         self.tokens = {}
@@ -140,6 +148,8 @@ class FakeQuotaOperator:
                 }
             if self.guarded:
                 managed['sync_token'] = self.tokens.get(namespace)
+            if self.pvc_capable:
+                managed['supports_pvc_limit'] = True
             report['managed_quota'] = managed
             return report
 
@@ -151,42 +161,55 @@ class FakeQuotaOperator:
 
     def update_namespace_quota(self, namespace, cpu_limit, memory_limit, storage_limit,
                                ephemeral_storage_request=None, ephemeral_storage_limit=None,
-                               quota_guard=None):
+                               quota_guard=None, pvc_limit=None):
         call = (namespace, cpu_limit, memory_limit, storage_limit,
                 ephemeral_storage_request, ephemeral_storage_limit)
         with self.lock:
             self.puts.append(call)
             self.guards.append(quota_guard)
+            self.pvc_sent.append(pvc_limit)
+            pvc = self._pvc_written(pvc_limit)
         if self.on_put:
             self.on_put(*call)
         with self.lock:
             if self.put_error:
                 raise self.put_error
-            outcome = self._write(namespace, call[1:], quota_guard)
+            outcome = self._write(namespace, call[1:] + (pvc,), quota_guard)
         if outcome == 'conflict':
             raise PaaSOperatorAPIError('API error: quota_conflict', status_code=409,
                                        detail='quota_conflict')
         result = {'message': 'Namespace %s quota updated' % namespace}
         if self.guarded and quota_guard:
             result['quota'] = 'applied'
+        if pvc:
+            result['pvc_limit'] = pvc
         return result
 
     def create_namespace(self, namespace, cpu_limit='2', memory_limit='4Gi',
                          storage_limit='20Gi', workspace_id=None,
                          ephemeral_storage_request=None, ephemeral_storage_limit=None,
-                         quota_guard=None):
+                         quota_guard=None, pvc_limit=None):
         call = (namespace, cpu_limit, memory_limit, storage_limit,
                 ephemeral_storage_request, ephemeral_storage_limit)
         with self.lock:
             self.creates.append(call)
             self.guards.append(quota_guard)
+            self.pvc_sent.append(pvc_limit)
+            pvc = self._pvc_written(pvc_limit)
             if self.create_error:
                 raise self.create_error
-            outcome = self._write(namespace, call[1:], quota_guard)
+            outcome = self._write(namespace, call[1:] + (pvc,), quota_guard)
         result = {'message': 'Namespace %s created with quota' % namespace}
         if self.guarded and quota_guard:
             result['quota'] = outcome
+        if pvc and outcome == 'applied':
+            result['pvc_limit'] = pvc
         return result
+
+    def _pvc_written(self, pvc_limit):
+        """這筆寫入實際會寫的 pvc（``None``＝operator 寫固定 10）。"""
+        capable = self.pvc_capable if self.pvc_write_capable is None else self.pvc_write_capable
+        return pvc_limit if capable else None
 
     def _write(self, namespace, quota_args, quota_guard):
         """套用一筆寫入；``hold_writes``／``lose_response`` 在這裡注入遠端延遲。"""
