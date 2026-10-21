@@ -61,6 +61,17 @@ def _display_time(value):
         ZoneInfo('Asia/Taipei')).isoformat(sep=' ', timespec='seconds')
 
 
+def _disable_provenance(key):
+    """Keep trusted provenance until a confirmed human choice replaces it."""
+    previous = key.not_me_disable_plan or {}
+    if previous:
+        return ({'disabled_by_before_suspend': previous['disabled_by_before_suspend']}
+                if 'disabled_by_before_suspend' in previous else {})
+    if key.disabled_by == 'suspend':
+        return {}
+    return {'disabled_by_before_suspend': key.disabled_by or False}
+
+
 class LlmNotification(models.Model):
     _name = 'woow_paas_platform.llm_notification'
     _description = 'AI Model Notification'
@@ -398,6 +409,8 @@ class LlmNotification(models.Model):
         if not row:
             return (self.env['woow_paas_platform.llm_account']._llm_resume_tick(
                 tick, account_ids=account_ids)
+                or self.env['woow_paas_platform.llm_account']._llm_flush_lifecycle_audit(
+                    tick, account_ids=account_ids)
                 or self._llm_has_pending_disables(account_ids=account_ids))
         key = Key.browse(row[0])
         key.invalidate_recordset()
@@ -419,15 +432,6 @@ class LlmNotification(models.Model):
             # Preserve the original disable reason across same-generation
             # rescans. A late SWR status snapshot must not turn a prior user
             # disable into a key eligible for restoration.
-            previous = key.not_me_disable_plan or {}
-            # A new generation must not turn an ambiguous legacy receipt into
-            # proof that restoration is safe. Preserve absent provenance until
-            # an operator has reviewed the old key independently.
-            known_original = ('disabled_by_before_suspend' in previous if previous
-                              else key.disabled_by != 'suspend')
-            original_reason = (previous.get('disabled_by_before_suspend', key.disabled_by or False)
-                               if key.not_me_attempt_notice_id == generation or key.disabled_by == 'suspend'
-                               else key.disabled_by or False)
             quiet_after = key.create_date + timedelta(seconds=nac.KEY_CREATE_BUDGET_SECONDS + 10)
             quiet_epoch = int(quiet_after.replace(tzinfo=timezone.utc).timestamp())
             plan = {
@@ -437,8 +441,7 @@ class LlmNotification(models.Model):
                 'scan_head': '', 'scan_verify_head': False,
                 'prefer_scan': False, 'pending': {}, 'disabled': [],
             }
-            if known_original:
-                plan['disabled_by_before_suspend'] = original_reason
+            plan.update(_disable_provenance(key))
             if key.newapi_token_id:
                 plan['pending'][str(key.newapi_token_id)] = {'attempts': 0, 'retry_at': 0}
             _llm_internal(key).write({
@@ -567,7 +570,7 @@ class LlmNotification(models.Model):
                 max(now, min(deadlines)), timezone.utc).replace(tzinfo=None)
         _llm_internal(key).write(values)
         if plan.get('complete'):
-            key.account_id._llm_lifecycle_event('key_status', key=key)
+            key.account_id._llm_lifecycle_event('key_status', key=key, defer=True)
 
     @api.model
     def _llm_defer_key_disable(self, key, *, account_ids=None):

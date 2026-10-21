@@ -348,6 +348,129 @@ class TestLlmAccountLifecycle(_ConfiguredCase):
         self.assertEqual((key.state, key.disabled_by), ('disabled', 'user'))
         self.assertEqual(self.fake.tokens[key.newapi_token_id]['status'], 2)
 
+    def test_new_generation_preserves_user_disable_despite_late_mirror_updates(self):
+        key = self.key('disabled', 'user')
+        self.action('action_llm_suspend_ops')
+        self.quarantine()
+        for reason, mirror_first in (('policy', True), ('ops', False)):
+            if mirror_first:
+                _llm_internal(key).write({'state': 'active', 'disabled_by': False})
+            self.action('action_llm_suspend_' + reason)
+            if not mirror_first:
+                _llm_internal(key).write({'state': 'active', 'disabled_by': False})
+            self.quarantine()
+            self.assertEqual(key.not_me_disable_plan['disabled_by_before_suspend'], 'user')
+            self.assertEqual(key.disabled_by, 'user')
+        self.action('action_llm_resume')
+        self.restore()
+        self.assertEqual((key.state, key.disabled_by), ('disabled', 'user'))
+        self.assertEqual(self.fake.tokens[key.newapi_token_id]['status'], 2)
+
+    def test_confirmed_human_status_change_retires_old_suspension_provenance(self):
+        key = self.key('disabled', 'user')
+        self.action('action_llm_suspend_ops')
+        self.quarantine()
+        self.action('action_llm_resume')
+        self.restore()
+        with patch.object(type(self.env[KEY]), '_llm_management_remote',
+                          return_value=('198.18.0.1', 'test-up', self.client)), patch.object(
+                              type(self.account), '_llm_require_current_terms'):
+            self.env[KEY]._llm_set_key_status(self.owner.partner_id, key.id, True)
+        self.assertEqual(key.not_me_disable_plan, {'disabled_by_before_suspend': False})
+        self.action('action_llm_suspend_ops')
+        self.quarantine()
+        self.action('action_llm_resume')
+        self.restore()
+        self.assertEqual((key.state, key.disabled_by), ('active', False))
+
+    def test_enable_audit_outage_requarantines_and_replays_durable_audit(self):
+        key = self.key()
+        self.action('action_llm_suspend_ops')
+        self.quarantine()
+        self.action('action_llm_resume')
+        generation = self.account.suspend_generation
+        with patch.object(type(self.env[EVENT]), '_llm_insert_event_cr',
+                          side_effect=RuntimeError('audit unavailable')):
+            self.tick()
+            self.assertFalse(self.account.resume_pending)
+            self.assertGreater(self.account.suspend_generation, generation)
+            self.quarantine()
+            self.assertEqual(self.fake.tokens[key.newapi_token_id]['status'], 2)
+            self.assertTrue(self.account.lifecycle_audit_pending)
+        with self.assertRaises(UserError):
+            self.action('action_llm_resume')
+        for _ in range(20):
+            if not self.account.lifecycle_audit_pending:
+                break
+            self.tick()
+        self.assertFalse(self.account.lifecycle_audit_pending)
+        self.assertEqual(self.account.state, 'suspended')
+        self.action('action_llm_resume')
+        self.restore()
+        self.assertEqual(self.account.state, 'active')
+
+    def test_revoked_operator_requarantines_even_during_audit_outage(self):
+        keys = self.key() | self.key()
+        self.action('action_llm_suspend_ops')
+        self.quarantine()
+        self.action('action_llm_resume')
+        self.tick()
+        _llm_internal(keys.filtered(lambda key: key.state == 'disabled')).write({
+            'not_me_disable_next_at': self.now + timedelta(hours=1),
+        })
+        self.operator._llm_set_named_human_eligible(False)
+        with patch.object(type(self.env[EVENT]), '_llm_insert_event_cr',
+                          side_effect=RuntimeError('audit unavailable')):
+            self.tick()
+            self.assertFalse(self.account.resume_pending)
+            self.quarantine()
+        self.assertTrue(self.account.lifecycle_audit_pending)
+        self.assertTrue(all(self.fake.tokens[key.newapi_token_id]['status'] == 2 for key in keys))
+
+    def test_unknown_enable_followed_by_cap_confirms_remote_disable(self):
+        key = self.key(kind='free_trial')
+        self.action('action_llm_suspend_ops')
+        self.quarantine()
+        self.action('action_llm_resume')
+        original = self.client.user_set_token_status
+        def applied_but_unknown(*args, **kwargs):
+            self.assertTrue(original(*args, **kwargs).ok)
+            return nac.Unknown('timeout')
+        with patch.object(self.client, 'user_set_token_status', side_effect=applied_but_unknown):
+            self.tick()
+        self.assertEqual(self.fake.tokens[key.newapi_token_id]['status'], 1)
+        from ..models.llm_free_usage import taipei_day
+        _llm_internal(self.env['woow_paas_platform.llm_free_usage'].sudo()).create({
+            'account_id': self.account.id, 'day_tpe': taipei_day(),
+            'success_count': 200, 'capped_at': self.now,
+        })
+        _llm_internal(key).write({'not_me_disable_next_at': False})
+        self.tick()
+        self.assertEqual(self.fake.tokens[key.newapi_token_id]['status'], 2)
+        self.assertEqual(key.disabled_by, 'free_daily_cap')
+        self.restore()
+        self.assertEqual(self.account.state, 'active')
+
+    def test_twenty_backoff_accounts_do_not_hide_a_ready_account(self):
+        accounts = self.env[ACCOUNT].sudo().browse()
+        for index in range(21):
+            partner = self.env['res.partner'].sudo().create({'name': 'lifecycle fairness'})
+            account = _llm_internal(self.env[ACCOUNT].sudo()).create({
+                'partner_id': partner.id, 'state': 'suspended', 'suspend_reason': 'ops',
+                'resume_pending': True, 'suspend_generation': 1,
+                'suspend_return_state': 'active', 'lifecycle_operator_id': self.operator.id,
+            })
+            accounts |= account
+            if index < 20:
+                _llm_internal(self.env[KEY].sudo()).create({
+                    'account_id': account.id, 'kind': 'paid', 'state': 'disabled',
+                    'disabled_by': 'suspend', 'not_me_disable_next_at': self.now + timedelta(hours=1),
+                })
+        self.Notice._llm_not_me_disable_tick({}, LlmCronTick(30, 1), account_ids=accounts.ids)
+        self.assertEqual(accounts[-1].state, 'active')
+        self.assertTrue(all(account.state == 'suspended' for account in accounts[:-1]))
+        self.assertFalse(self.fake.calls)
+
     def test_resume_honors_a_daily_cap_recorded_while_account_was_suspended(self):
         key = self.key(kind='free_trial')
         self.action('action_llm_suspend_ops')

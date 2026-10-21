@@ -1039,6 +1039,12 @@ class LlmApiKey(models.Model):
             'state': 'active' if enabled else 'disabled',
             'disabled_by': (False if enabled else
                             'ops' if key.disabled_by == 'ops' else 'user'),
+            # Retire the old receipt, but keep this confirmed human decision
+            # independently of mirror snapshots that may arrive later.
+            'not_me_disable_plan': {'disabled_by_before_suspend': False if enabled else
+                                   'ops' if key.disabled_by == 'ops' else 'user'},
+            'not_me_disabled_notice_id': 0,
+            'not_me_attempt_notice_id': 0, 'not_me_disable_next_at': False,
         })
         self._llm_management_audit('key_status', account, key, user, real_ip)
         return key._llm_dto()
