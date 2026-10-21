@@ -75,11 +75,16 @@ class TestLlmAuditIngest(TransactionCase):
         self.assertEqual(self.client.control_audit.call_args.args, (101, None, 100))
 
     def test_unavailable_disabled_or_invalid_first_page_has_no_durable_progress(self):
-        values = (nac.NotExecuted(status=503), nac.Unknown(), self._page([], 1),
-                  self._page([event(2)], 1), self._page([event(1)], 1, env='foreign'))
-        for response in values:
+        values = (
+            (nac.NotExecuted(status=503), ingest.AuditIngestError),
+            (nac.Unknown(), ingest.AuditIngestError),
+            (self._page([], 1), AuditPageError),
+            (self._page([event(2)], 1), AuditPageError),
+            (self._page([event(1)], 1, env='foreign'), AuditPageError),
+        )
+        for response, error in values:
             self.client.control_audit.return_value = response
-            with self.assertRaises((ingest.AuditIngestError, AuditPageError)):
+            with self.assertRaises(error):
                 self._run()
             self.assertFalse(self._stream())
         self.assertFalse(self.Evidence.search([('cursor_id.environment', '=', self.scope)]))
