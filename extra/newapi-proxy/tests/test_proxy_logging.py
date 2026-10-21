@@ -1,8 +1,10 @@
 """Log redaction and audit lines (DESIGN §1.4.2-8, §5.5; LLM-01a acceptance 7)."""
 
+import asyncio
 import json
 import logging
 import re
+import uuid
 
 import httpx
 import pytest
@@ -184,3 +186,65 @@ def test_formatter_logs_exception_type_only(stdout_logs):
     assert "ValueError" in out
     assert USER_PAT not in out
     assert "header value was" not in out
+
+
+@pytest.mark.parametrize("outcome", ["forwarded", "connect", "reset", "timeout", "cancelled", "denied"])
+def test_attempt_id_joins_one_call_even_without_upstream_receipt(stdout_logs, outcome):
+    h = Harness()
+    logs.configure("info", h.settings.secrets)
+    h.upstream.on("GET", "/api/user/123", ok({
+        "id": 123, "username": "wsab0000000123", "role": 1, "group": "default",
+    }))
+
+    def reply(request):
+        if outcome == "cancelled":
+            raise asyncio.CancelledError()
+        errors = {"connect": httpx.ConnectError, "reset": httpx.ReadError, "timeout": httpx.ReadTimeout}
+        if outcome in errors:
+            raise errors[outcome]("synthetic transport failure", request=request)
+        # Deliberately no upstream request-id header.
+        return httpx.Response(200, json={"success": True})
+
+    h.upstream.on("POST", "/api/user/manage", reply)
+    body = {"id": 123, "action": "add_quota", "mode": "override" if outcome == "denied" else "add", "value": 15625}
+    if outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            h.signed("POST", "/api/user/manage", identity="ap", body=body)
+    else:
+        h.signed("POST", "/api/user/manage", identity="ap", body=body)
+    lines = [json.loads(line) for line in stdout_logs.readouterr().out.splitlines()]
+    audits = [line for line in lines if line.get("event") == "audit" and line["action"] == "add_quota"]
+    assert [line["result"] for line in audits] == (["denied"] if outcome == "denied" else ["sending", outcome])
+    attempts = {line["attempt_id"] for line in audits}
+    assert len(attempts) == 1
+    attempt = attempts.pop()
+    assert str(uuid.UUID(attempt)) == attempt and uuid.UUID(attempt).version == 4
+    access = [line for line in lines if line.get("event") == "request"]
+    if outcome == "cancelled":
+        # Cancellation propagates out of ASGI before a response/access record;
+        # the sending + cancelled audit pair remains independently usable.
+        assert not access
+    else:
+        assert access and {line["attempt_id"] for line in access} == {attempt}
+
+
+def test_identical_calls_on_two_replicas_have_distinct_attempt_ids(stdout_logs):
+    attempts = []
+    for _ in range(2):
+        h = Harness()
+        logs.configure("info", h.settings.secrets)
+        h.upstream.on("GET", "/api/user/123", ok({
+            "id": 123, "username": "wsab0000000123", "role": 1, "group": "default",
+        }))
+        h.upstream.on("POST", "/api/user/manage", ok(request_id="same-upstream-receipt"))
+        response = h.signed("POST", "/api/user/manage", identity="ap", body={
+            "id": 123, "action": "add_quota", "mode": "add", "value": 15625,
+        }, headers=[("X-Woow-Attempt-Id", "caller-forged-id")])
+        assert response.status == 200
+        lines = [json.loads(line) for line in stdout_logs.readouterr().out.splitlines()]
+        audits = [line for line in lines if line.get("event") == "audit"]
+        assert len(audits) == 2 and audits[0]["attempt_id"] == audits[1]["attempt_id"]
+        assert audits[0]["attempt_id"] != "caller-forged-id"
+        assert audits[1]["request_id"] == "same-upstream-receipt"
+        attempts.append(audits[0]["attempt_id"])
+    assert len(set(attempts)) == 2

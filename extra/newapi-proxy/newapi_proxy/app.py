@@ -44,6 +44,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -135,6 +136,9 @@ class Ctx:
     #: Audit kind of this request: the route's (``reveal``／``add_quota``), or ``bg`` for
     #: every break-glass call; None = not audited.
     audit: str | None = None
+    # Generated here, never taken from caller headers or the upstream response.
+    # The same ID joins sending/outcome/access even if upstream returns no ID.
+    attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     t0: float = field(default_factory=time.monotonic)
 
 
@@ -356,6 +360,7 @@ class Proxy:
             code=f"{status // 100}xx",
         )
         logs.access(
+            attempt_id=ctx.attempt_id,
             method=ctx.method,
             route=ctx.route,
             status=status,
@@ -481,7 +486,7 @@ class Proxy:
         if identity == "bg":
             active = self.break_glass_active(now)
             self.metrics.inc("newapi_proxy_break_glass_total", result="active" if active else "off")
-            logs.audit("bg", kid=kid, ip=ip, method=method, path=path, active=active)
+            logs.audit("bg", attempt_id=ctx.attempt_id, kid=kid, ip=ip, method=method, path=path, active=active)
             if not active:
                 raise ProxyError("policy", "break_glass_off")
             # Every use of break-glass is an alert (DESIGN §1.4.2-2): the owner opened it.
@@ -696,7 +701,7 @@ class Proxy:
         if ctx.audit is None:
             return
         self.metrics.inc(self._AUDIT_METRICS[ctx.audit], result=str(outcome.get("result")))
-        logs.audit(ctx.audit, **fields, **outcome)
+        logs.audit(ctx.audit, attempt_id=ctx.attempt_id, **fields, **outcome)
 
     async def _precheck_get(
         self, ctx: Ctx, url: str, ip: str, auth: str, deadline: float, what: str
