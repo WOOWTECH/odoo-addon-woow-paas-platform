@@ -204,7 +204,7 @@ CIRCUIT_FAILURES_CODE = 'llm_circuit_failures'
 #: 停擺；``proxy_budget`` 是每小時加額度總量）。
 CIRCUIT_NEUTRAL_REASONS = frozenset({
     'deadline', 'circuit_open', 'ap_rate_limited', 'guard_unavailable', 'request_invalid',
-    'rate_limited', 'proxy_budget',
+    'rate_limited', 'proxy_budget', 'proxy_ap_rate',
 })
 #: 服務帳號的 PAT（AP、OP）被 new-api 拒絕＝全域故障（〔PROV〕§6.1）：一次就開。
 SERVICE_AUTH_CODES = frozenset({
@@ -669,6 +669,10 @@ def classify_response(status, headers, body, write, *, pricing=False):
                 reason = parsed['reason']
         except (ValueError, UnicodeDecodeError):
             reason = None
+        if proxy_error == 'budget' and reason == 'ap_rate':
+            # The shared AP admission bucket is transient. The hourly credit
+            # budget still uses proxy_budget and raises its existing alert.
+            return NotExecuted('proxy_ap_rate', **common)
         if proxy_error in _PROXY_NOT_EXECUTED:
             return NotExecuted('proxy_%s' % proxy_error, **common)
         if proxy_error in _PROXY_UNKNOWN:

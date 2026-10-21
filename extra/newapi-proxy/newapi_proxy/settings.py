@@ -90,6 +90,8 @@ class Settings:
     valkey_port: int = 6379
     valkey_user: str = "newapi-proxy"
     valkey_password: str | None = field(default=None, repr=False)
+    control_dsn: str | None = field(default=None, repr=False)
+    control_environment: str | None = None
     replicas: int = 1
     default_read_timeout: float = 10.0
     connect_timeout: float = 2.0
@@ -297,10 +299,19 @@ def load_settings(env: Mapping[str, str], now: int) -> tuple[Settings, list[str]
     if log_level not in _LOG_LEVELS:
         raise SettingsError("PROXY_LOG_LEVEL", "must be one of " + "/".join(_LOG_LEVELS))
 
+    control_dsn = _get(env, "PROXY_CONTROL_DSN") or None
+    control_environment = _get(env, "PROXY_CONTROL_ENVIRONMENT") or None
+    if bool(control_dsn) != bool(control_environment):
+        raise SettingsError("PROXY_CONTROL_DSN/PROXY_CONTROL_ENVIRONMENT", "must be configured together")
+    if control_environment and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", control_environment):
+        raise SettingsError("PROXY_CONTROL_ENVIRONMENT", "must be a stable environment identifier")
+    if control_dsn and (len(control_dsn) > 4096 or any(c in control_dsn for c in "\r\n\x00")):
+        raise SettingsError("PROXY_CONTROL_DSN", "invalid connection configuration")
     secrets = frozenset(
         [s.decode("ascii") for s in all_secrets]
         + [t for t in tokens.values() if t]
         + ([valkey_password] if valkey_password else [])
+        + ([control_dsn] if control_dsn else [])
     )
     settings = Settings(
         upstream_url=upstream,
@@ -321,6 +332,8 @@ def load_settings(env: Mapping[str, str], now: int) -> tuple[Settings, list[str]
         valkey_port=valkey_port,
         valkey_user=valkey_user,
         valkey_password=valkey_password,
+        control_dsn=control_dsn,
+        control_environment=control_environment,
         replicas=replicas,
         default_read_timeout=float(read_timeout),
         port=port,

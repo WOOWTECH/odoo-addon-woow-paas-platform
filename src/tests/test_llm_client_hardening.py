@@ -187,10 +187,15 @@ class TestLlmCircuitBreaker(_LlmCase):
         budget, _session = self._client(_Response(
             429, {'success': False, 'proxy_error': 'budget', 'reason': 'hourly_cap'},
             {'X-Woow-Proxy-Error': 'budget'}), role=nac.ROLE_CRON)
+        ap_budget, _session = self._client(_Response(
+            429, {'success': False, 'proxy_error': 'budget', 'reason': 'ap_rate'},
+            {'X-Woow-Proxy-Error': 'budget', 'Retry-After': '17'}), role=nac.ROLE_CRON)
         for _ in range(nac.CIRCUIT_FAILURE_THRESHOLD + 1):
             denied.user_reveal_token(TENANT_IP, UP, 5)
             limited.user_self(TENANT_IP, UP)
             budget.ap_add_quota(5, 15625)
+            outcome = ap_budget.ap_add_quota(5, 15625)
+            self.assertEqual((outcome.reason, outcome.retry_after), ('proxy_ap_rate', 17))
         self.assertEqual(self._state()['circuit_failures'], 0)
         self.assertFalse(self._state()['circuit_open_until'])
 
