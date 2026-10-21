@@ -70,6 +70,8 @@ SYNC_FIELDS = (
     'quota_expected_tokens', 'quota_sync_unguarded', 'quota_attempt_fingerprint',
     'quota_synced_fingerprint', 'quota_retry_count', 'quota_next_retry_at',
     'quota_last_attempt_at', 'quota_verified_at',
+    # #1682
+    'quota_reconcile_pending',
     # #1681
     'quota_lower_authorization',
 )
@@ -98,6 +100,11 @@ VERIFY_INTERVAL = timedelta(hours=6)
 #: 這些觸發來源代表人的明確動作：重置重試額度。
 _RESETTING_TRIGGERS = ('admin', 'manual')
 _RECONCILE_CRON = 'woow_paas_platform.ir_cron_reconcile_workspace_quota'
+#: #1682：這些觸發來源的同步不會自動降額（管理員只能降已確認的目標、開通一律不降）。它們留下
+#: 下列資源的待處理降額時，交給背景（生命週期免確認的安全降額）儘快收回，不必等 6 小時讀回。
+_NON_RECLAIMING_TRIGGERS = ('admin', 'provision')
+_RECLAIMABLE_KEYS = ('requests.cpu', 'limits.cpu', 'requests.memory', 'limits.memory',
+                     'requests.storage')
 #: blocked 之中屬於暫時性、值得自動重試的原因（其餘 blocked 是永久阻擋，等人處理）。
 _TRANSIENT_BLOCKED = ('quota_unreadable', 'managed_quota_status_pending')
 #: 確定沒寫入、但值得自動重試的 4xx（其餘 4xx 是請求本身有問題，記為 blocked 等人處理）。
@@ -162,6 +169,25 @@ def _normalize_floor(label, value):
 
 def _floor_text(value, unit):
     return '%s%s' % (value, unit) if value else '-'
+
+
+class _SubsetAttempt:
+    """#1682：``_quota_attempt_fingerprint`` 回傳的 marker——這次只同步了工作區的子集。
+
+    子集的結果不能代表整個工作區，所以不記指紋、不動重試額度（見 ``_record_quota_sync``）。
+    布林值為假：沿用「指紋非空＝整個工作區的嘗試」的判斷（例如 #1681 清除降額授權）。
+    """
+
+    __slots__ = ()
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return '<workspace quota subset attempt>'
+
+
+_SUBSET_ATTEMPT = _SubsetAttempt()
 
 
 def _fingerprint(target, namespaces):
@@ -234,6 +260,15 @@ class WorkspaceQuotaPolicy(models.Model):
     quota_verified_at = fields.Datetime(
         string='Last Verified Against Cluster', groups='base.group_system', copy=False,
         readonly=True)
+    # #1682：背景要儘快以全集重新評估一次——子集同步（生命週期／開通只同步自己的 namespace）
+    # 之後，或管理員／開通的同步留下可自動收回的降額時。與目標指紋分開：指紋只負責「目標有沒有
+    # 變」（決定重試額度要不要重置），這個旗標只負責「要不要排一次對帳」——兩件事共用空指紋會讓
+    # 同目標事件重置額度（#1682 留言 22779）。
+    quota_reconcile_pending = fields.Boolean(
+        string='Full Quota Re-check Pending', groups='base.group_system', copy=False,
+        readonly=True,
+        help='The next background run re-checks every namespace of this Workspace: a service '
+             'event synced only its own namespace, or a decrease is waiting to be reclaimed.')
     # #1681 管理員確認過的降額：綁定政策版本與目標指紋，只有目前目標仍等於它時同步才可降額。
     quota_lower_authorization = fields.Char(
         string='Confirmed Quota Decrease', groups='base.group_system', copy=False, readonly=True,
@@ -318,9 +353,12 @@ class WorkspaceQuotaPolicy(models.Model):
                 workspace.quota_audit_ids = False
                 continue
             state = workspace.quota_sync_state
-            if state == 'synced' and workspace.quota_synced_fingerprint != _fingerprint(
-                    Service._ns_quota_payload(workspace), workspace._quota_namespaces()):
-                state = 'pending'  # 已同步的是舊目標（服務集合或政策已變），還沒同步到現在的目標
+            if state == 'synced' and (
+                    workspace.quota_reconcile_pending
+                    or workspace.quota_synced_fingerprint != _fingerprint(
+                        Service._ns_quota_payload(workspace), workspace._quota_namespaces())):
+                # 已同步的是舊目標（服務集合或政策已變），或只同步了子集：還沒同步到現在的目標
+                state = 'pending'
             workspace.quota_sync_status = state
             formula = Service._compute_ns_quota_formula(workspace)
             target = Service._compute_ns_quota(workspace)
@@ -490,9 +528,10 @@ class WorkspaceQuotaPolicy(models.Model):
     def action_retry_quota_sync(self):
         """#1680 管理員手動重試：重置自動重試額度，以最新政策與服務集合立即同步。
 
-        與背景重試走同一個同步（同樣的鎖、讀取、降額檢查與防護），所以不能用來繞過任何安全
-        檢查——#1681：只有已確認的降額才會降，而且每次都重讀用量重檢。不改政策，所以不寫異動紀錄（ledger）；只在
-        監控 chatter 留一行誰在何時手動重試。
+        與背景重試走同一個同步（同樣的鎖、讀取、安全降額與防護），所以不能用來繞過任何安全
+        檢查——#1682 起與背景一樣會把已保存的目標安全降下來（重讀用量、5 項全部容得下才降），
+        非降不可的項（例如 pvc）與用量不足的降額照樣不送。不改政策，所以不寫異動紀錄
+        （ledger）；只在監控 chatter 留一行誰在何時手動重試。
         """
         if not self.env.user.has_group('base.group_system'):
             raise AccessError(_('Only system administrators may retry Workspace quota sync.'))
@@ -506,7 +545,8 @@ class WorkspaceQuotaPolicy(models.Model):
             'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync retried manually by '
             '%(login)s (uid %(uid)s)', name=workspace.name, id=workspace.id,
             ws_hash=workspace.ws_hash, login=actor.login, uid=actor.id))
-        result = workspace._quota_sync('manual')
+        # #1682：與背景重試同一套安全降額（重讀用量、全部安全才降），避免「背景會降、手動不降」。
+        result = workspace._quota_sync('manual', allow_lower=True)
         state = result.get('state')
         if state == 'synced':
             message, kind = _('Quota synced with the cluster.'), 'success'
@@ -605,13 +645,16 @@ class WorkspaceQuotaPolicy(models.Model):
         """這次嘗試要記的目標指紋。
 
         生命週期與開通只同步自己那一個 namespace；工作區若不只這一個，子集的結果不能代表整個
-        工作區（會把其他 namespace 的狀態蓋掉）。這時不記指紋（``False``），並立刻排背景同步：
-        下一輪 cron 看到指紋不符，會把整個工作區重新評估一次。
+        工作區（會把其他 namespace 的狀態蓋掉）。這時回 ``_SUBSET_ATTEMPT``：不記指紋、不動
+        重試額度，改以 ``quota_reconcile_pending`` 標記，並立刻排背景同步重新評估整個工作區。
+
+        #1682：以前回空指紋兼任「觸發對帳」與「重置額度」，同目標的生命週期事件就會讓已耗盡的
+        工作區重新拿到 5 次自動重試；指紋也不能改記子集的值，否則會在子集與全集之間來回。
         """
         if set(attempted) == set(own):
             return _fingerprint(target, own)
         self._schedule_quota_reconcile()
-        return False
+        return _SUBSET_ATTEMPT
 
     def _schedule_quota_reconcile(self, at=None):
         """喚醒背景同步 cron（``ir.cron.trigger`` 是 DB 列，跟著呼叫端交易 commit／回捲）。"""
@@ -672,9 +715,15 @@ class WorkspaceQuotaPolicy(models.Model):
                 self.quota_target_version, target))
 
     def _record_quota_sync(self, version, results, fingerprint=None, trigger=None):
+        """記錄一次同步嘗試。``fingerprint`` 為 ``_SUBSET_ATTEMPT`` 表示只同步了子集。"""
         self.ensure_one()
         now = fields.Datetime.now()
         previous_state = self.quota_sync_state
+        previous_count = self.quota_retry_count or 0
+        subset = fingerprint is _SUBSET_ATTEMPT
+        if subset:
+            # 子集不代表整個工作區：指紋維持上一次全集嘗試的值（重試額度只跟著全集目標走）。
+            fingerprint = self.quota_attempt_fingerprint
         retryable = False
         if not results:
             vals = {'quota_sync_state': 'pending_first_deploy',
@@ -711,7 +760,17 @@ class WorkspaceQuotaPolicy(models.Model):
                     'quota_pending_decrease': '\n'.join(pending) or False,
                     'quota_sync_unguarded': bool(unguarded),
                     'quota_expected_tokens': json.dumps(tokens, sort_keys=True) if tokens else False}
-            if state == 'synced':
+            if state == 'synced' and subset:
+                # 子集成功不等於整個工作區已同步：只補記這幾個 namespace 推了什麼。
+                try:
+                    pushed = json.loads(self.quota_synced_hard or '{}')
+                except ValueError:
+                    pushed = {}
+                if not isinstance(pushed, dict):
+                    pushed = {}
+                pushed.update({ns: r['hard'] for ns, r in results.items() if r.get('hard')})
+                vals['quota_synced_hard'] = json.dumps(pushed, sort_keys=True) if pushed else False
+            elif state == 'synced':
                 vals.update({
                     'quota_synced_version': version,
                     'quota_synced_at': now,
@@ -724,23 +783,35 @@ class WorkspaceQuotaPolicy(models.Model):
             retryable = superseded or any(r.get('retryable') for r in results.values()
                                           if r['state'] != 'synced')
         # 重試額度：以目標指紋計；人的動作（保存、手動重試）也重置。背景重試每次消耗一格。
+        # 子集嘗試不重置、不消耗，成功也不歸零（其他 namespace 可能仍在失敗）。
         reset = fingerprint != self.quota_attempt_fingerprint or trigger in _RESETTING_TRIGGERS
-        count = 0 if reset else (self.quota_retry_count or 0) + (1 if trigger == 'retry' else 0)
+        count = 0 if reset else previous_count + (1 if trigger == 'retry' else 0)
         next_at = False
         if vals['quota_sync_state'] == 'synced':
-            count = 0
+            if not subset:
+                count = 0
         elif retryable:
             if count >= MAX_AUTO_RETRIES:
                 vals['quota_sync_state'] = 'exhausted'
             else:
                 next_at = now + timedelta(minutes=RETRY_BACKOFF_MINUTES[count])
+        # 不會自動降額的同步（管理員只提高、開通）留下 CPU／memory／storage 的待處理降額：
+        # 交給背景以生命週期的安全降額收回（每次仍重讀用量檢查）。
+        reclaim = trigger in _NON_RECLAIMING_TRIGGERS and any(
+            item[0] in _RECLAIMABLE_KEYS
+            for r in (results or {}).values() for item in r.get('pending_decrease', ()))
         vals.update({'quota_attempt_fingerprint': fingerprint or False,
                      'quota_last_attempt_at': now, 'quota_retry_count': count,
-                     'quota_next_retry_at': next_at})
+                     'quota_next_retry_at': next_at,
+                     'quota_reconcile_pending': subset or reclaim})
         _internal_quota_policy_write(self).write(vals)
         if next_at:
             self._schedule_quota_reconcile(next_at)
-        if vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted':
+        if reclaim:
+            self._schedule_quota_reconcile()
+        # 只在這一次用掉最後一格時通知；同目標的子集事件或對帳讓狀態回到 exhausted 不算新的耗盡。
+        if (vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted'
+                and previous_count < MAX_AUTO_RETRIES):
             self.env['woow_paas_platform.platform_monitor']._singleton()._message_log(body=_(
                 'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync stopped after '
                 '%(count)s automatic retries: %(reason)s. Retry it manually from the Workspace '
@@ -801,6 +872,7 @@ class WorkspaceQuotaPolicy(models.Model):
             ('state', '!=', 'deleting'), ('workspace_id', '!=', False)]).mapped('workspace_id')
         return self.search([
             '|', ('id', 'in', live.ids),
+            '|', ('quota_reconcile_pending', '=', True),
             ('quota_sync_state', 'in', ('pending', 'unconfirmed', 'blocked', 'exhausted')),
         ], order='id')
 
@@ -811,7 +883,9 @@ class WorkspaceQuotaPolicy(models.Model):
         now = fields.Datetime.now()
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
         state = workspace.quota_sync_state
-        if _fingerprint(target, workspace._quota_namespaces()) != workspace.quota_attempt_fingerprint:
+        if (workspace.quota_reconcile_pending
+                or _fingerprint(target, workspace._quota_namespaces())
+                != workspace.quota_attempt_fingerprint):
             return 'reconcile'
         if (state in ('pending', 'unconfirmed', 'blocked') and workspace.quota_next_retry_at
                 and workspace.quota_next_retry_at <= now):
@@ -830,7 +904,9 @@ class WorkspaceQuotaPolicy(models.Model):
         trigger = workspace._quota_reconcile_trigger()
         if not trigger:
             return {'state': 'skipped'}
-        return workspace._quota_sync(trigger, nowait=True)
+        # #1682：背景是生命週期降額的後續（被用量擋下的降額要靠它收回），一律走安全降額。
+        # 已保存的政策都是合法的（未確認的人工降額不會被保存，見 #1681），所以不必分辨降額來源。
+        return workspace._quota_sync(trigger, nowait=True, allow_lower=True)
 
     def _quota_create_namespace(self, client, namespace):
         """開通路徑（``create_namespace``）的同一個政策：必要時才降級成不送 quota。

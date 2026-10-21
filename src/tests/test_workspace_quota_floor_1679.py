@@ -100,10 +100,10 @@ class TestWorkspaceQuotaFloor1679(_QuotaFloorFixture):
     def test_no_minimum_keeps_formula(self):
         with patch(_CLIENT, return_value=self.client):
             self.s1.unlink()
-        # 沒有任何服務、沒有最低保障 → 公式下限 8／8Gi／100Gi；叢集現況較高 → 不推下降。
-        for put in self.operator.puts:
-            self.assertGreaterEqual(int(put[1]), 12)
-        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '12')
+        # 沒有任何服務、沒有最低保障 → 公式下限 8／8Gi／100Gi。#1682：用量容得下（假 operator
+        # 預設 used 為 0）⇒ 生命週期自動收回到公式值（用量不足時不降的情況見下一個 class）。
+        self.assertEqual(self.operator.puts[-1], (self.ns, '8', '8Gi', '100Gi', '4Gi', '80Gi'))
+        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '8')
 
     def test_lifecycle_recompute_does_not_overwrite_minimum(self):
         sibling = self._service('svc-floor-c', vcpu=1, ram=1.0, storage=10)
@@ -247,6 +247,8 @@ class TestWorkspaceQuotaFloorSafety1679(_QuotaFloorFixture):
     def test_lifecycle_decrease_is_visible_and_never_blocks_deletion(self):
         sibling = self._service('svc-floor-b', vcpu=4, ram=4.0, storage=20)
         self.operator.live[self.ns] = build_hard('24', '24Gi', '120Gi', '4Gi', '80Gi')
+        # #1682：sibling 的 pod 還在（requests.cpu 20 高於新目標 12）⇒ 不能安全降額。
+        self.operator.used[self.ns] = {'requests.cpu': '20', 'limits.cpu': '20'}
         with patch(_CLIENT, return_value=self.client):
             sibling.unlink()
         self.assertFalse(sibling.exists())

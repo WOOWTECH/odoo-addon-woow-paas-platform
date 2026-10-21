@@ -506,7 +506,8 @@ kubectl --context <context> -n <namespace> patch resourcequota <namespace>-quota
 
 - 「待同步」或「結果待確認」且有「下次自動重試」時間：平台會自己重試（失敗後 1、5、15、60、240 分鐘），不需處理。原因 `quota_conflict` 表示叢集上的 quota 在讀取後被改過（含 quota controller 更新 status），下一次重讀再推即可。
 - 「重試已用完」：5 次自動重試都失敗。依 Quota Sync Detail 的原因修正（operator 位址或 API key、operator 是否在跑、namespace 的 ResourceQuota），再按「Retry Quota Sync」。
-- 「已被安全檢查擋下」且原因是 `would_lower: <資源>`：推送會降低叢集上的某一項（常見是有人把 `persistentvolumeclaims` 手動調到大於 10），平台不自動重試，手動重試也一樣會擋下。降額要另行處理（#1681、#1682），不要為了讓同步通過去改 operator 的固定值。
+- 「已被安全檢查擋下」且原因是 `would_lower: <資源>`：推送會降低叢集上的某一項，而這一項不在安全降額範圍（常見是有人把 `persistentvolumeclaims` 手動調到大於 10）。平台不自動重試，手動重試也一樣會擋下；不要為了讓同步通過去改 operator 的固定值。
+- 「已被安全檢查擋下」且原因是 `unsafe_decrease: <資源> <原因>`（#1682）：服務刪除或降級後目標變低，但叢集上的用量還容不下，平台保留原額度（增額照送）並自動重試。`used_exceeds` 常見於刪除後 pod 還沒結束、保留期 PVC 仍佔 `requests.storage`、或降級時舊 pod 還在——通常等它結束後的下一次重試就會收回，不需處理；重試用完時確認用量已釋放再按「Retry Quota Sync」。`used_missing`／`used_invalid`／`operator_unsupported` 表示讀不到完整用量或 operator 太舊，先修 operator 或 ResourceQuota。這個狀態不影響服務刪除。
 - 「未受版本防護」：operator 比平台舊，不支援 `sync_token`。推送照舊進行，但晚完成的舊請求可能蓋掉新值；請先升級 operator。
 
 ### Issue: PVC Not Binding
