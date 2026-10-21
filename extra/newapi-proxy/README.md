@@ -30,6 +30,11 @@ begin unavailable／commit 回覆不明，以及未確認的 pre-begin 限流／
 NotExecuted 自動另產 UUID 重送。未改 Odoo client：既有未知 proxy error 的
 fallback 是 Unknown；client opt-in 與持久 ledger 仍須獨立切片。
 
+已驗章的 AP／CRON conversion metadata 請求若同 nonce 重送，被 local/shared
+replay 拒絕的 `auth_replay` 亦回 `attempt_unknown`：第一個回應可能已遺失，
+不能當成 definite client bug。僅此 auth reason 例外；簽章失敗、其他 auth
+錯誤及 legacy replay 保持原行為，不藉此採用尚未通過 policy 的 caller ID。
+
 SQL v1 重複 begin 拒絕規則不變：拒絕不再 forward quota POST，亦不替原 attempt
 寫 not_sent。只有本 delivery 成功取得 fresh begin、且確定尚未送 POST並完成
 持久 not_sent 後，才保留可重試 budget 回應；not_sent 寫入失敗仍 unknown。

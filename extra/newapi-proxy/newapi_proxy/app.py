@@ -384,6 +384,10 @@ class Proxy:
     def _error(self, err: ProxyError, ctx: Ctx) -> Response:
         # Failure of this delivery cannot prove the caller's durable attempt
         # was never executed by an earlier delivery on another replica.
+        if ctx.correlation_requested and err.kind == "auth" and err.reason == "auth_replay":
+            # The signature already passed for AP/CRON conversion metadata.
+            # Replayed delivery says nothing about the first delivery's outcome.
+            err = ProxyError("attempt_unknown", "begin_unconfirmed")
         if ((ctx.correlated or ctx.correlation_requested) and not ctx.not_sent_confirmed
                 and err.kind in {"busy", "budget", "config", "connect", "body_timeout"}):
             err = ProxyError("attempt_unknown", "begin_unconfirmed")

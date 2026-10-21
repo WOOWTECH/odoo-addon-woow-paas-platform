@@ -221,7 +221,7 @@ def test_nonce_replay_does_not_start_another_attempt():
     h, store = setup()
     nonce = "a" * 22
     assert credit(h, nonce=nonce).status == 200
-    assert credit(h, nonce=nonce).status == 401
+    assert_unknown(credit(h, nonce=nonce))
     assert len(h.upstream.calls("POST")) == 1
     assert len([c for c in store.calls if c[0] == "begin"]) == 1
 
@@ -266,3 +266,64 @@ def test_other_routes_and_duplicate_json_cannot_adopt_caller_id(caplog):
     assert h.signed("POST", PATH, identity="ap", body=payload.encode()).status == 400
     assert not store.calls and not h.upstream.requests
     assert ATTEMPT not in caplog.text
+
+
+@pytest.mark.parametrize("shared_replay", [False, True])
+def test_lost_http_response_same_nonce_is_unknown_without_changing_audit(shared_replay):
+    first, store = setup()
+    nonce = "r" * 22
+    payload, headers = request(first, nonce=nonce)
+
+    class LostResponse(Exception):
+        pass
+
+    async def lose_reply(scope, receive, send):
+        async def lost(message):
+            raise LostResponse()
+        await first.app(scope, receive, lost)
+
+    with pytest.raises(LostResponse):
+        asyncio.run(asgi_call(lose_reply, "POST", PATH.encode(), b"", headers, payload))
+    assert len(first.upstream.calls("POST")) == 1
+    original_intents, original_finished = dict(store.intents), dict(store.finished)
+    original_calls = list(store.calls)
+    assert original_finished == {ATTEMPT: ("forwarded", 200, "one-credit")}
+    retry = first
+    if shared_replay:
+        retry, _ = setup()
+        retry.proxy.control = store
+        retry.proxy.shared_replay = first.replay_store
+    assert_unknown(retry.call("POST", PATH.encode(), headers=headers, body=payload))
+    assert store.intents == original_intents and store.finished == original_finished
+    assert store.calls == original_calls
+    assert len(first.upstream.calls("POST")) == 1
+    if shared_replay:
+        assert not retry.upstream.requests
+
+
+def test_legacy_same_nonce_replay_remains_auth_error():
+    h, store = setup()
+    nonce = "l" * 22
+    assert h.signed("POST", PATH, identity="ap", body=LEGACY, nonce=nonce).status == 200
+    original = dict(store.finished)
+    res = h.signed("POST", PATH, identity="ap", body=LEGACY, nonce=nonce)
+    assert res.status == 401 and res.proxy_error == "auth"
+    assert store.finished == original and len(h.upstream.calls("POST")) == 1
+
+
+@pytest.mark.parametrize("failure", ["signature", "timestamp", "missing_sig"])
+def test_other_auth_failures_with_metadata_are_not_hidden_as_unknown(failure):
+    h, store = setup()
+    nonce = "s" * 22
+    assert credit(h, nonce=nonce).status == 200
+    payload, headers = request(h, nonce=nonce)
+    if failure == "signature":
+        payload = payload.replace(b"15625", b"15626")
+    elif failure == "timestamp":
+        headers = h.sign_headers("POST", PATH, body=payload, identity="ap", nonce=nonce, ts=h.now - 100)
+    else:
+        headers = [(k, v) for k, v in headers if k.lower() != "x-woow-proxy-sig"]
+    res = h.call("POST", PATH.encode(), headers=headers, body=payload)
+    assert res.status == 401 and res.proxy_error == "auth"
+    assert len(h.upstream.calls("POST")) == 1
+    assert len([c for c in store.calls if c[0] == "begin"]) == 1
