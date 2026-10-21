@@ -636,7 +636,11 @@ LLM_RECONCILE_ERROR_CODES = frozenset({
     'llm_i4_dr_origin',
     'llm_i4_recharge_origin',
 })
+LIFECYCLE_EVENT_CODES = frozenset({
+    'llm_suspend_ops', 'llm_suspend_policy', 'llm_suspend_account_inactive', 'llm_suspend_not_me',
+})
 ERROR_CODES = (
+    LIFECYCLE_EVENT_CODES |
     LLM_RECONCILE_ERROR_CODES | API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
     | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())

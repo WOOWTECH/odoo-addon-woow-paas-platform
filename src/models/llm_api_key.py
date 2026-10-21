@@ -42,6 +42,8 @@ from odoo.exceptions import AccessError, ValidationError
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
+    ERR_LLM_CLOSED,
+    ERR_LLM_SUSPENDED,
     ERR_LLM_FREE_KEY_EXISTS,
     ERR_LLM_INTERNAL,
     ERR_LLM_KEY_ALREADY_SHOWN,
@@ -705,10 +707,16 @@ class LlmApiKey(models.Model):
                 # This account-row lock serializes the count+insert pair across web workers.
                 # The cheap service preflight avoids a throttle/event for ordinary 21st-key
                 # attempts; this independent-cursor guard closes the remaining race.
-                cr.execute('SELECT id FROM %s WHERE id = %%s FOR NO KEY UPDATE' % account._table,
+                cr.execute('SELECT state FROM ' + account._table + ' WHERE id = %s FOR NO KEY UPDATE',
                            (account.id,))
-                if cr.fetchone() is None:
+                row = cr.fetchone()
+                if row is None:
                     raise LlmError(ERR_LLM_UNAVAILABLE)
+                # The web preflight may predate a committed suspension. Recheck
+                # the authoritative state under this READ COMMITTED insert lock.
+                if row[0] != 'active':
+                    raise LlmError(ERR_LLM_CLOSED if row[0] == 'closed' else
+                                   ERR_LLM_SUSPENDED if row[0] == 'suspended' else ERR_LLM_UNAVAILABLE)
                 cr.execute(
                     "SELECT count(*) FROM %s WHERE account_id = %%s "
                     "AND state NOT IN ('deleted', 'lost')" % KEY_TABLE,
@@ -824,6 +832,14 @@ class LlmApiKey(models.Model):
         key = self.sudo().search([('id', '=', key_id), ('account_id', '=', account.id)], limit=1)
         if not key:
             raise LlmError(ERR_LLM_KEY_NOT_FOUND)
+        # Lock the account before the key and before any remote I/O. A stale
+        # REPEATABLE READ snapshot fails here, so an enable cannot slip past a
+        # committed suspension or an in-progress named restoration.
+        account.flush_recordset()
+        self.env.cr.execute('SELECT id FROM woow_paas_platform_llm_account '
+                            'WHERE id=%s FOR NO KEY UPDATE NOWAIT', (account.id,))
+        account.invalidate_recordset()
+        account._llm_require_active()
         # SWR writes the mirror through an independent cursor. Lock before
         # remote I/O so a stale snapshot fails here, not after a DELETE or a
         # relative expiry extension which Odoo would replay on transaction retry.

@@ -82,8 +82,8 @@ export function provisionPollDelay(elapsedMs, consecutiveFailures) {
  *   也換成「請重新整理頁面」——重試沒用，輪詢也不能拿著舊的「開通中」一直轉。
  * - 其他失敗：已經有上一次的資料就照舊顯示（輪詢途中的一次失敗不把畫面整個換掉），
  *   沒有才顯示「暫時無法連線」。
- * - `closed`：後端目前不回已關閉的帳戶（`_llm_account_for_partner` 排除 closed；關閉與重新開通
- *   在 LLM-13），回了就顯示「已關閉」畫面，不落進「尚未開通」。
+ * - `closed`：沒有未關閉帳戶時，後端回最新 closed 與餘額；顯示「已關閉」畫面。
+ *   一般 activate 不會重開，重新開通必須由後台維運處理（LLM-13）。
  */
 export function llmOverviewScreen({ loaded, overview, error }) {
   if (!loaded) return "loading";
