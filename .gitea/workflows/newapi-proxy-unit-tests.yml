@@ -102,4 +102,3 @@ jobs:
       - name: Run real PostgreSQL control-store acceptance
         working-directory: extra/newapi-proxy
         run: python -m pytest tests/integration/test_controlstore_postgres.py -q
-          fi
