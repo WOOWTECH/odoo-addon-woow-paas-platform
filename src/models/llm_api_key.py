@@ -42,6 +42,8 @@ from odoo.exceptions import AccessError, ValidationError
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
+    ERR_LLM_GUARD,
+    PARAM_ORDERS_ENABLED,
     ERR_LLM_FREE_KEY_EXISTS,
     ERR_LLM_INTERNAL,
     ERR_LLM_KEY_ALREADY_SHOWN,
@@ -340,6 +342,33 @@ class LlmApiKey(models.Model):
     #  建立免費試用金鑰（/api/llm/keys/create，kind='free_trial'）           #
     # ------------------------------------------------------------------ #
     @api.model
+    def _llm_assert_key_create_allowed(self):
+        """Local admission for a new key, never for reveal/retry convergence.
+
+        Runtime reads include status freshness and other guards. Read the
+        emergency switch on a fresh cursor rather than a cached HTTP snapshot.
+        This is a last committed-state check, not a distributed lock through
+        the subsequent HTTP write. Unreadable/unknown state fails closed.
+        """
+        allowed = False
+        try:
+            row = self.env['woow_paas_platform.llm_runtime_state'].sudo()._llm_read()
+            with self.env.registry.cursor() as cr:
+                cr.execute('SELECT value FROM ir_config_parameter WHERE key = %s',
+                           (PARAM_ORDERS_ENABLED,), log_exceptions=False)
+                switch = cr.fetchone()
+            # Missing ICP retains the existing orders_enabled=True default.
+            enabled = switch is None or (
+                type(switch[0]) is str and switch[0].strip().lower() in ('true', '1'))
+            allowed = enabled and type(row) is dict and row.get('guard_tripped') is False
+        except Exception:  # noqa: BLE001 - no upstream or exception text in the response
+            allowed = False
+        if not allowed:
+            error = LlmError(ERR_LLM_GUARD)
+            error.not_executed = True
+            raise error
+
+    @api.model
     def _llm_client_request_id(self, client_request_id):
         if not isinstance(client_request_id, str):
             raise LlmError(ERR_LLM_KEY_INVALID, field='client_request_id')
@@ -444,6 +473,7 @@ class LlmApiKey(models.Model):
         checks.  Keeping the external transaction here makes paid and free-trial
         creation share the same durable ``creating``/one-time-reveal semantics.
         """
+        self._llm_assert_key_create_allowed()
         Account = self.env['woow_paas_platform.llm_account']
         ip = account._llm_tenant_ip()
         up = account._llm_up_token()
@@ -484,7 +514,8 @@ class LlmApiKey(models.Model):
         Account = self.env['woow_paas_platform.llm_account']
         account = Account._llm_account_for_partner(partner)
         account._llm_require_active()
-        # 免費試用不是付費點數轉換；僅需帳戶有效與目前條款已同意。
+        self._llm_assert_key_create_allowed()
+        # Both free and paid new keys obey the emergency/runtime admission gate.
         account._llm_require_current_terms()
         if not isinstance(client_request_id, str) \
                 or not _CLIENT_REQUEST_ID_RE.fullmatch(client_request_id.strip().lower()):
@@ -531,6 +562,7 @@ class LlmApiKey(models.Model):
         Account = self.env['woow_paas_platform.llm_account']
         account = Account._llm_account_for_partner(partner)
         account._llm_require_active()
+        self._llm_assert_key_create_allowed()
         client_request_id = self._llm_client_request_id(client_request_id)
         spec = self._llm_validate_paid_create(
             account, name=name, limit_points=limit_points, expires=expires, models=models)
@@ -573,8 +605,22 @@ class LlmApiKey(models.Model):
         """§1.3.2 第 4–7 步：POST token → 依名稱找 id → reveal → 鏡像 active。"""
         body = (payload_factory(name) if payload_factory is not None else
                 nac.free_trial_token_body(name, int(expires.timestamp())))
-        with self._llm_creation_guard(key_id):
-            created = client.user_create_token(ip, up, body, deadline=deadline)
+        admission_rejected = False
+        try:
+            with self._llm_creation_guard(key_id):
+                try:
+                    self._llm_assert_key_create_allowed()
+                except LlmError:
+                    admission_rejected = True
+                    raise
+                created = client.user_create_token(ip, up, body, deadline=deadline)
+        except LlmError:
+            if admission_rejected:
+                # No POST was attempted. Release creation_guard's key lock
+                # before finish opens its own cursor/obligation locks. Existing
+                # finish returns a reserved free slot once and records rejection.
+                self._llm_finish(key_id, {'state': 'deleted'})
+            raise
         if isinstance(created, (nac.NotExecuted, nac.Definite)):
             # 確定沒建：鏡像標 deleted（使用者可以直接重建）。
             self._llm_finish(key_id, {'state': 'deleted'})

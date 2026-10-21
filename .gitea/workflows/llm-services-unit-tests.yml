@@ -40,6 +40,8 @@ on:
       - "src/tests/fixtures/newapi/**"
       - "tests/test_llm_services.py"
       - "tests/test_llm_credit_worker.py"
+      - "tests/test_llm_key_create_guard.py"
+      - "src/models/llm_api_key.py"
       - "src/models/llm_credit_order.py"
       - "tests/test_mcp_dependency_smoke.py"
       - "src/requirements.txt"
@@ -85,6 +87,7 @@ jobs:
           .venv-llm-services-ci/bin/python tests/unit/test_llm_usage.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_pricing.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_worker.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_key_create_guard.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_evidence.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_balance.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_evidence.py -v
