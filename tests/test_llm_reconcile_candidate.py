@@ -24,7 +24,9 @@ def load_module():
     odoo = types.ModuleType('odoo')
     odoo.api = types.SimpleNamespace(model=lambda f: f, model_create_multi=lambda f: f)
     odoo.fields = types.SimpleNamespace(**{
-        name: lambda *a, **kw: None for name in ('Many2one', 'Selection')})
+        name: lambda *a, **kw: None for name in ('Many2one', 'Selection', 'Char', 'Integer')})
+    odoo.fields.Datetime = lambda *args, **kwargs: None
+    odoo.fields.Datetime.now = lambda: None
     odoo.models = types.SimpleNamespace(Model=object)
     odoo._ = lambda text: text
     exceptions = types.ModuleType('odoo.exceptions')
@@ -52,7 +54,11 @@ Sample = adapter.BalanceSample
 class Row:
     def __init__(self, store, values):
         self.store = store
+        self.id = len(store) + 1
         self.__dict__.update(values)
+
+    def __getitem__(self, name):
+        return getattr(self, name)
 
     def invalidate_recordset(self):
         pass
@@ -73,7 +79,7 @@ class FakeEnv:
 
     def __init__(self):
         self.cr = Mock()
-        self.cr.fetchone.return_value = ('active',)
+        self.cr.fetchone.return_value = ('active', 121222)
         self.model = Mock()
 
     def __getitem__(self, name):
@@ -83,9 +89,17 @@ class FakeEnv:
 class Observer(adapter.LlmReconcileCandidate):
     def __init__(self, store, env, bounds=(0, 0, 0)):
         self.store, self.env, self.bounds = store, env, bounds
+        self.archives = []
 
     def search(self, *args, **kwargs):
         return self.store[0] if self.store else Empty()
+
+    def browse(self):
+        return Empty()
+
+    def _archive(self, state, reason):
+        self.archives.append({**{key: state[key] for key in adapter._SNAPSHOT_FIELDS}, 'reason': reason})
+        self.store.remove(state)
 
     def _ledger_bounds(self, account_id):
         return self.bounds
@@ -154,13 +168,60 @@ class TestCandidateFoundation(unittest.TestCase):
                         self.observer._observe(1, Sample(100_000, 0, 10, at))
                 self.assertEqual(self.store[0].__dict__, before)
 
-    def test_closed_or_missing_accounts_discard_candidates(self):
-        for account in (('closed',), None):
-            self.env.cr.fetchone.return_value = ('active',)
-            self.observe(100_000, 100)
+    def test_closed_or_missing_accounts_preserve_pending_first_sample(self):
+        big = 2 ** 53 + 1
+        for account, reason in ((('closed', 121222), 'closed'), (None, 'missing_account')):
+            self.env.cr.fetchone.return_value = ('active', 121222)
+            self.observe(big, 100)
+            self.observe(big, 400)
+            before = {key: self.store[0][key] for key in adapter._SNAPSHOT_FIELDS}
             self.env.cr.fetchone.return_value = account
-            self.assertIsNone(self.observe(100_000, 400))
+            self.observer._ledger_bounds = Mock(side_effect=AssertionError('closed sampling'))
+            self.assertIsNone(self.observer._observe(1, None))
             self.assertEqual(self.store, [])
+            archived = self.observer.archives[-1]
+            self.assertEqual(archived, {**before, 'reason': reason})
+            self.assertEqual(archived['first_quota'], big)
+            self.assertEqual(archived['outcome'], 'evidence_pending')
+            self.observer._ledger_bounds = lambda account_id: (0, 0, 0)
+
+    def test_new_identity_archives_old_baseline_and_restarts_five_minutes(self):
+        self.observe(100_000, 100)
+        self.observe(100_000, 400)
+        self.env.cr.fetchone.return_value = ('active', 999)
+        self.assertEqual(self.observe(100_000, 500).outcome, 'candidate_up')
+        self.assertEqual(self.store[0].newapi_user_id, 999)
+        self.assertEqual(self.store[0].first_sampled_at, 500)
+        self.assertEqual(self.observer.archives[0]['newapi_user_id'], 121222)
+        self.assertEqual(self.observer.archives[0]['reason'], 'identity_changed')
+
+    def test_closed_then_reopened_same_identity_starts_fresh(self):
+        self.observe(100_000, 100)
+        self.env.cr.fetchone.return_value = ('closed', 121222)
+        self.assertIsNone(self.observer._observe(1, None))
+        self.env.cr.fetchone.return_value = ('active', 121222)
+        self.assertEqual(self.observe(100_000, 500).outcome, 'candidate_up')
+        self.assertEqual(self.store[0].first_sampled_at, 500)
+        self.assertEqual(self.observer.archives[0]['first_sampled_at'], 100)
+
+    def test_legacy_unbound_identity_is_never_attributed_to_current_account(self):
+        self.observe(100_000, 100)
+        self.store[0].newapi_user_id = 0
+        self.store[0].lower_text = False
+        self.assertEqual(self.observe(100_000, 500).outcome, 'candidate_up')
+        self.assertEqual(self.observer.archives[0]['reason'], 'identity_unbound')
+        self.assertIs(self.observer.archives[0]['lower_text'], False)
+        self.assertEqual(self.store[0].first_sampled_at, 500)
+
+    def test_archive_keeps_signed_aggregates_beyond_int64_as_text(self):
+        big = 2 ** 64 + 1
+        self.observer.bounds = (big, big + 1, -big)
+        self.observe(0, 100)
+        self.env.cr.fetchone.return_value = ('closed', 121222)
+        self.observer._observe(1, None)
+        archived = self.observer.archives[0]
+        self.assertEqual((archived['lower_text'], archived['upper_text'], archived['known_text']),
+                         (str(big), str(big + 1), str(-big)))
 
     def test_unconfigured_db_has_no_reads_or_candidate_effects(self):
         self.env.unconfigured = True
