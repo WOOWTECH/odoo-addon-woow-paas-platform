@@ -1,13 +1,14 @@
 """Run the actual narrowly scoped circuit exemption without ORM/network."""
 import ast
 import contextvars
+import json
 from contextlib import contextmanager
 from pathlib import Path
 import types
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from test_llm_status_monitor_worker import nac
+from test_llm_status_monitor_worker import nac, MemoryWorker, Worker, valid_data
 
 PATH = Path(__file__).resolve().parents[1] / 'src/models/llm_runtime_state.py'
 tree = ast.parse(PATH.read_text())
@@ -47,6 +48,54 @@ class TestStatusProbe(unittest.TestCase):
         with self.assertRaises(ValueError):
             with probe(types.SimpleNamespace(_guard=Guard(self.env, nac.ROLE_WEB))):
                 self.fail('web probe must be refused')
+
+    def test_probe_after_never_records_success_or_failure(self):
+        for result in (nac.Ok(data=valid_data()), nac.Unknown('read_timeout')):
+            with self.subTest(kind=result.kind):
+                self.state._llm_circuit_record.reset_mock()
+                with probe(self.client):
+                    self.assertIsNone(self.guard.before('anon', None))
+                    self.guard.after('anon', result)
+                    self.assertIsInstance(self.guard.before('anon', None), nac.NotExecuted)
+                self.state._llm_circuit_record.assert_not_called()
+                self.assertIsInstance(self.guard.before('anon', None), nac.NotExecuted)
+
+    def test_normal_after_still_records_success_and_failure(self):
+        for result in (nac.Ok(), nac.Unknown('read_timeout')):
+            with self.subTest(kind=result.kind):
+                self.state._llm_circuit_record.reset_mock()
+                self.guard.after('anon', result)
+                self.state._llm_circuit_record.assert_called_once_with(
+                    *nac.circuit_effect('anon', result))
+
+    def test_probe_does_not_suppress_another_guards_bookkeeping(self):
+        other = Guard(self.env, nac.ROLE_CRON)
+        with probe(self.client):
+            self.assertIsInstance(other.before('anon', None), nac.NotExecuted)
+            other.after('anon', nac.Ok())
+        self.state._llm_circuit_record.assert_called_once_with(nac.CIRCUIT_SUCCESS, None)
+
+    def test_real_client_status_and_worker_agree_on_unwrapped_data(self):
+        for data, expected in ((valid_data(), 'ok'),
+                               ({'success': True, 'data': valid_data()}, 'invalid')):
+            with self.subTest(result=expected):
+                session = MagicMock()
+                session.request.return_value = types.SimpleNamespace(
+                    status_code=200, headers={},
+                    content=json.dumps({'success': True, 'data': data}).encode())
+                client = nac.NewApiClient(nac.PROXY_URL_STG, 'probe', b'S' * 40,
+                                          nac.ROLE_CRON, guard=self.guard,
+                                          session_factory=lambda: session)
+                worker = MemoryWorker()
+                worker.env.__getitem__.return_value._llm_client.return_value = client
+                worker.claim['url'] = client.base_url
+                self.state._llm_circuit_record.reset_mock()
+                with patch.dict(Worker._status_tick.__globals__, status_probe=probe):
+                    worker._cron_llm_status_monitor()
+                self.assertEqual(worker.receipt, expected)
+                session.request.assert_called_once()
+                self.assertTrue(session.request.call_args.args[1].endswith('/api/status'))
+                self.state._llm_circuit_record.assert_not_called()
 
     def test_exception_restores_original_guard_context(self):
         with self.assertRaises(RuntimeError):

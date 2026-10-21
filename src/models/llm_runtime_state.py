@@ -536,6 +536,12 @@ class LlmCallGuard(nac.CallGuard):
         return None
 
     def after(self, identity, result):
+        probe = _STATUS_PROBE.get()
+        if probe is not None and probe['guard'] is self and identity == 'anon':
+            # /api/status proves invariants, not DB health. Its success or
+            # failure must not change circuit bookkeeping. before() still
+            # admits only one anon send; all other admissions remain refused.
+            return
         if identity == 'bg':
             report_break_glass_used(self.env, result)
             return

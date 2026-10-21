@@ -23,6 +23,7 @@ on:
       - "tests/test_llm_status_invariants.py"
       - "src/services/llm_status_monitor.py"
       - "src/models/llm_status_monitor.py"
+      - "src/tests/test_llm_status_monitor.py"
       - "src/models/llm_runtime_state.py"
       - "src/models/llm_swr.py"
       - "src/models/llm_common.py"

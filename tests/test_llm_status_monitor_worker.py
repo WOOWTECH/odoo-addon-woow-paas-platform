@@ -174,6 +174,18 @@ class TestStatusMonitorWorker(unittest.TestCase):
         self.assertEqual(registry['woow_paas_platform.ir_cron_llm_status_monitor'],
                          ('woow_paas_platform.llm_runtime_state', '_cron_llm_status_monitor'))
 
+    def test_odoo_harness_does_not_assume_uncommitted_cross_cursor_visibility(self):
+        path = ROOT / 'src/tests/test_llm_status_monitor.py'
+        tree = ast.parse(path.read_text())
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+        forbidden = {'configure', 'reset_llm_config'}
+        self.assertFalse(any(isinstance(n.func, ast.Name) and n.func.id in forbidden for n in calls))
+        self.assertFalse(any(isinstance(n.func, ast.Attribute) and
+                             n.func.attr in {'commit', 'set_param', 'write', '_llm_read'} for n in calls))
+        source = path.read_text()
+        for seam in ("'_environment'", "'_now'", "'deadline_cursor'", "'_begin'"):
+            self.assertIn(seam, source)
+
     def test_alert_failure_keeps_failure_receipt(self):
         worker = MemoryWorker()
         worker.client.status.return_value = nac.Unknown('non_json')
