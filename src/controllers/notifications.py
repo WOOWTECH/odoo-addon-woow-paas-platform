@@ -65,6 +65,7 @@ class NotificationsController(HiddenChainMixin, Controller):
             items += self._backup_items(env, user)
             items += self._unpaid_invoice_items(env, partner)
             items += self._wallet_activity_items(env, partner)
+            items += self._llm_items(env, partner)
             items.sort(key=lambda i: (_SEVERITY_ORDER.get(i['severity'], 9), -(_ts_key(i['ts']))))
             actionable = sum(1 for i in items if i['severity'] in ('error', 'warning'))
             return {'success': True, 'data': {'items': items, 'actionable_count': actionable}}
@@ -75,6 +76,10 @@ class NotificationsController(HiddenChainMixin, Controller):
     # ------------------------------------------------------------------
     # Builders
     # ------------------------------------------------------------------
+
+    def _llm_items(self, env, partner) -> list[dict[str, Any]]:
+        """LLM notifications are read only through the owner-anchored service."""
+        return env['woow_paas_platform.llm_notification']._llm_items(partner)
 
     def _subscription_items(self, env, partner) -> list[dict[str, Any]]:
         today = fields.Date.today()

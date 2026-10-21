@@ -64,6 +64,7 @@
 把程式帶上 prod 之後，任何路徑都不會對負責人或帳務群組製造東西。
 """
 import enum
+from functools import wraps
 import hashlib
 import json
 import logging
@@ -82,6 +83,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_redact
+from ..services.llm_sql_budget import deadline_cursor, trigger_cron
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
@@ -174,6 +176,7 @@ SEVERITIES = frozenset(key for key, _label in SEVERITY_SELECTION)
 
 #: ``target_model`` 的封閉清單（N24：告警裡的「對象」只能是 PaaS 自己的列）。
 TARGET_MODELS = frozenset({
+    'woow_paas_platform.llm_known_discrepancy',
     'woow_paas_platform.llm_account',
     'woow_paas_platform.llm_api_key',
     'woow_paas_platform.llm_credit_order',
@@ -218,6 +221,10 @@ class LlmAlert(enum.Enum):
     #: A conversion needs human review; no refund or credit is asserted.
     CREDIT_REVIEW = 'credit_review'
     CREDIT_BUDGET = 'credit_budget'
+    NOT_ME_REPORTED = 'not_me_reported'
+    MANUAL_CREDIT_BUDGET = 'manual_credit_budget'
+    MANUAL_CREDIT = 'manual_credit'
+    RECONCILE_MISMATCH = 'reconcile_mismatch'
 
 
 class LlmIncident(enum.Enum):
@@ -230,6 +237,7 @@ class LlmIncident(enum.Enum):
     NOT_ME = 'llm_not_me'
     SECRET_MISMATCH = 'llm_secret_mismatch'
     ACCOUNT_ERROR = 'llm_account_error'
+    MANUAL_CREDIT_BUDGET = 'llm_manual_credit_budget'
 
 
 class LlmAlertInputError(TypeError):
@@ -430,6 +438,19 @@ def _env_on(registry, cr):
     if cr.transaction is None:
         cr.transaction = api.Transaction(registry)
     return api.Environment(cr, SUPERUSER_ID, {})
+
+
+def _deadline_service(method):
+    """Bound configuration reads as well as the nested durable sink cursors."""
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        deadline = kwargs.get('deadline')
+        if deadline is None:
+            return method(self, *args, **kwargs)
+        with deadline_cursor(self.env.registry.cursor, deadline) as cr:
+            env = _env_on(self.env.registry, cr)
+            return method(self.with_env(env), *args, **kwargs)
+    return call
 
 
 def _webhook_session():
@@ -748,8 +769,9 @@ class LlmEvent(models.Model):
     #  告警出口（N13、N24）                                                 #
     # ------------------------------------------------------------------ #
     @api.model
+    @_deadline_service
     def _llm_alert(self, alert, *, account_id=None, target_model=None, target_id=None,
-                   error_code=None, numbers=None):
+                   error_code=None, numbers=None, deadline=None):
         """告警：``llm_event(severity=alert)``＋email（＋選配 webhook），30 分鐘內同一個告警不重寄。
 
         只收：``alert``（:class:`LlmAlert`）、``account_id``／``target_id``（正整數，≤ int4）、
@@ -799,7 +821,7 @@ class LlmEvent(models.Model):
             'at': _iso(now),
         }
         outcome = 'new'
-        with self.env.registry.cursor() as cr:
+        with deadline_cursor(self.env.registry.cursor, deadline) as cr:
             _begin(self.env, cr, read_committed=True)
             cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
                        ('woow_llm_alert:%s' % dedupe_key,))
@@ -833,9 +855,14 @@ class LlmEvent(models.Model):
                     'dedupe_key': dedupe_key,
                     'last_seen_at': now,
                 }
-                cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
-                           (_burst_lock_key(alert.value, error_code),))
-                carrier = self._llm_alert_carrier_cr(cr, alert.value, error_code, now)
+                # Manual-credit alerts are a per-order delivery obligation.
+                # Keep dedupe by target above, but never hide one order inside
+                # the generic burst carrier.
+                carrier = None
+                if alert != LlmAlert.MANUAL_CREDIT:
+                    cr.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+                               (_burst_lock_key(alert.value, error_code),))
+                    carrier = self._llm_alert_carrier_cr(cr, alert.value, error_code, now)
                 if carrier:
                     outcome = 'batched'
                     email_state = webhook_state = 'batched'
@@ -962,7 +989,7 @@ class LlmEvent(models.Model):
                 })
                 cron = env.ref(MAIL_CRON_XMLID, raise_if_not_found=False)
                 if cron:
-                    cron._trigger()
+                    trigger_cron(cron)
             return {'email_state': 'queued', 'mail_id': mail.id, 'email_attempts': attempts}
         except Exception:  # noqa: BLE001 - the alert row itself must still be written
             _logger.error('[LLM] alert event=%s: email not queued: %s', payload['event_id'],
@@ -1005,7 +1032,7 @@ class LlmEvent(models.Model):
                 return {}
             cron = _env_on(self.env.registry, cr).ref(MAIL_CRON_XMLID, raise_if_not_found=False)
             if cron:
-                cron._trigger()
+                trigger_cron(cron)
             _logger.warning('[LLM] alert event=%s: email delivery failed, re-queued (attempt %s)',
                             row['id'], attempts + 1)
             return {'email_attempts': attempts + 1}
@@ -1024,7 +1051,7 @@ class LlmEvent(models.Model):
         env = _env_on(self.env.registry, cr)
         cron = env.ref(DELIVERY_CRON_XMLID, raise_if_not_found=False)
         if cron:
-            cron._trigger()
+            trigger_cron(cron)
         return 'pending'
 
     @api.model
@@ -1233,8 +1260,9 @@ class LlmEvent(models.Model):
     #  incident helper                                                     #
     # ------------------------------------------------------------------ #
     @api.model
+    @_deadline_service
     def _llm_incident(self, kind, *, account_id=None, order_id=None, error_code=None,
-                      points=None, needs_human=False):
+                      points=None, needs_human=False, deadline=None):
         """寫（或累加）一筆 ``woow.billing.incident``（獨立 cursor、fail-soft；N24）。
 
         * ``kind``：:class:`LlmIncident`。對象：有 ``order_id`` 就是那張單（每張單一筆）；否則是帳戶，
@@ -1272,7 +1300,7 @@ class LlmEvent(models.Model):
         burst = False
         if account_id:
             try:
-                with self.env.registry.cursor() as cr:
+                with deadline_cursor(self.env.registry.cursor, deadline) as cr:
                     _begin(self.env, cr)
                     cr.execute('SELECT partner_id FROM %s WHERE id = %%s' % ACCOUNT_TABLE,
                                (account_id,))
@@ -1306,7 +1334,8 @@ class LlmEvent(models.Model):
             'credits': float(points) if points is not None else None,
             'state': 'needs_human' if needs_human else 'open',
         }
-        incident_id = self.env['woow.billing.incident'].sudo()._log(snapshot)
+        budget = {'deadline': deadline} if deadline is not None else {}
+        incident_id = self.env['woow.billing.incident'].sudo()._log(snapshot, **budget)
         if incident_id:
             _logger.warning('[LLM] incident %s id=%s account=%s order=%s%s', kind.value,
                             incident_id, account_id or '-', order_id or '-',

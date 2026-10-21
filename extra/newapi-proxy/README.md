@@ -4,7 +4,7 @@ PaaS Odoo 呼叫 new-api 的**唯一**通道，也是 PaaS 出錯或被攻破時
 
 - 程式碼在這裡（`extra/newapi-proxy/`），CI 建 image、只推不可變的 `<commit sha>` tag 到 JCR。
 - 部署由 new-api 部署 repo（Gitea `woow-paas/Woow_k3s_newapi`）的 chart component `proxy` 以 **digest** 釘住：stg 在 `new-api-stg`、prod 在 `new-api`（N1）。AP／OP 兩把服務帳號 PAT 只放在 new-api chart 的 Secret；Odoo 只拿簽章金鑰。
-- 不碰 Odoo、不碰資料庫；重放紀錄放在同一個 release 的 Valkey（專屬 ACL 使用者，只能 `SET` 自己前綴的 key）。Python 3.12＋Starlette（只用 Request／Response）＋httpx＋uvicorn（h11）。
+- 不直接存取 Odoo 資料庫。重放紀錄放在同一個 release 的 Valkey（專屬 ACL 使用者，只能 `SET` 自己前綴的 key）；啟用 LLM-12b 控制庫時，另連專屬 PostgreSQL 儲存共用 AP 預算與加額度意圖／結果。Python 3.12＋Starlette（只用 Request／Response）＋httpx＋uvicorn（h11）。
 
 ```
 Odoo web／cron ──(HMAC 簽章＋nonce＋X-Woow-Identity＋X-Woow-Client-IP)──► newapi-proxy:8080 ──(單一 XFF＝合成 IP；AP／OP 由代理注入)──► newapi:3000
@@ -13,6 +13,20 @@ kubelet／helm test／Odoo 健康檢查 ──► newapi-proxy:8081（/healthz�
 ```
 
 ## 線上契約（給 `src/services/newapi_client.py`，LLM-01b）
+
+### 稽核呼叫識別（LLM-12b）
+
+每個請求由代理產生獨立 UUID v4 `attempt_id`，同一次呼叫的 access 與 audit 紀錄共用它；
+`sending`、`forwarded`、`connect`、`reset`、`timeout`、`cancelled` 等結果可據此配對。
+即使上游沒有回傳 `X-Oneapi-Request-Id`，仍保留同一個 `attempt_id`。它不取自使用者標頭，
+也不取代上游 `request_id`；相同內容的兩次呼叫會有不同 ID。
+
+這只是事件配對欄位。stdout 紀錄尚不構成持久、完整的對帳來源；收集器必須另外證明保存期間、
+環境歸屬與覆蓋水位。啟用下述控制庫後，**只有 AP `add_quota`** 在送出前提交持久 `intent`，
+並在取得結果後附加 `outcome`；缺少結果仍視為可能已執行，不能自動重送。
+控制庫的 `read_events` 是受 DB 角色限制的分頁函式，尚未提供 Odoo 稽核讀取服務或完整 I3 對帳。
+不能將 `sending` 與後續結果各算一次入帳，也不能將缺少結果視為未執行。
+共用同一簽章金鑰的 Odoo DB 無法僅靠 `kid` 區分，啟用 I3 前須完成身分隔離或跨 DB 認領。
 
 ### 請求標頭
 
@@ -172,8 +186,8 @@ UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`�
 | `auth` | 401 | 缺簽章或 nonce、kid 不認得、ts 超過 ±30 秒、簽章錯、重放 | Definite（PaaS bug／設定錯），circuit 開 |
 | `policy` | 403 | 白名單外、WEB 越權、body 政策、bg 未開 | Definite（PaaS bug），circuit 開 |
 | `denied` | 403 | 預檢判定**這一把金鑰／這一個使用者**不行（見上表） | Definite、確定沒執行；**預期內的業務結果，不開 circuit**（reveal 失敗 → 鏡像 `failed_reveal`；add_quota → 訂單人工處理） |
-| `budget` | 429 | 加額度每小時總量用完 | NotExecuted＋告警 |
-| `busy` | 503 | 該身分 in-flight 滿了（reason `inflight`）、共用重放紀錄無法確認（`replay_store`） | NotExecuted（換新 nonce 重送） |
+| `budget` | 429 | 加額度每小時總量用完（`hourly_cap`），或已啟用控制庫的共用 AP 60 秒預算用完（`ap_rate`，帶 `Retry-After`） | NotExecuted；前者告警，後者延後重試 |
+| `busy` | 503 | 該身分 in-flight 滿了（reason `inflight`）、共用重放紀錄無法確認（`replay_store`）、或控制庫無法確認預算／持久意圖（`control_store`） | NotExecuted（換新 nonce 重送） |
 | `config` | 503 | 該身分需要的 PAT 沒設定 | NotExecuted＋告警 |
 | `connect` | 502 | 沒連上 new-api、期限不夠送出（`deadline`）、或預檢沒有明確回答（受保護的請求**沒送出**），預檢遇到 429 會帶回 `Retry-After` | NotExecuted（可重送） |
 | `reset` | 502 | 送出後斷線、回應超過 1 MiB | Unknown（寫入不重送） |
@@ -202,7 +216,7 @@ UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`�
 
 - 管理埠是另一個 listener，有自己的連線上限：代理埠被塞滿時 probe 照樣能答。每條連線的請求標頭必須在 5 秒內送完（uvicorn 本身沒有這個期限），不然直接關掉。
 - `GET /healthz`：不碰上游（liveness）。
-- `GET /readyz`：以 `198.18.0.5` 打上游 `/api/status`，並 `PING` 共用重放紀錄；兩者都通才 200（readiness：打通才 Ready）。上游回 429 算「打得通」。檢查**同一時間只跑一次**，結果成功時重用 5 秒、失敗時 1 秒，所以不管多少人打 `/readyz`，上游每 replica 最多每 5 秒（失敗時每秒）一次。另回 `upstream`、`replay_store`、`ap_days_left`、`op_days_left`（`PROXY_AP_EXPIRES_AT`／`PROXY_OP_EXPIRES_AT`，chart values `proxy.apExpiresAt`／`opExpiresAt`）、`break_glass`，不回任何金鑰值。PaaS 的健康檢查（LLM-02、LLM-14）讀 `http://newapi-proxy.<ns>.svc.cluster.local:8081/readyz`。
+- `GET /readyz`：以 `198.18.0.5` 打上游 `/api/status`，並 `PING` 共用重放紀錄；啟用控制庫時也檢查其連線。上游回 429 算「打得通」。檢查**同一時間只跑一次**，結果成功時重用 5 秒、失敗時 1 秒，所以不管多少人打 `/readyz`，上游每 replica 最多每 5 秒（失敗時每秒）一次。另回 `upstream`、`replay_store`、`control_store`（`disabled`／`ok`／`unavailable`）、`ap_days_left`、`op_days_left`（`PROXY_AP_EXPIRES_AT`／`PROXY_OP_EXPIRES_AT`，chart values `proxy.apExpiresAt`／`opExpiresAt`）、`break_glass`，不回任何金鑰值。`disabled` 只表示沿用舊行為，不表示已有共用預算保護。PaaS 的健康檢查（LLM-02、LLM-14）讀 `http://newapi-proxy.<ns>.svc.cluster.local:8081/readyz`。
 - 管理埠只收 GET、不得帶 query、只有這三個路徑（其他 404）。
 
 ## 設定（env）
@@ -218,6 +232,7 @@ UP scope＝`api_key:read`、`api_key:reveal`、`api_key:write`、`profile:read`�
 | `PROXY_REPLICAS` | `1` | 上面的上限平均分給各 replica；**大於 1 時必須設 `PROXY_VALKEY_ADDR`**，不然代理不啟動 |
 | `PROXY_VALKEY_ADDR` | 空 | `<host>:<port>`，共用重放紀錄；空＝只有本機記憶體（只允許單一 replica） |
 | `PROXY_VALKEY_USER`、`PROXY_VALKEY_PASSWORD` | `newapi-proxy`、— | Valkey ACL 使用者；密碼 `[A-Za-z0-9_-]{16,256}`（chart 自動產生） |
+| `PROXY_CONTROL_DSN`、`PROXY_CONTROL_ENVIRONMENT` | 空（功能關閉） | 必須一起設定；前者由 Secret 注入專屬控制 DB 的**低權限角色**連線字串，後者是穩定環境 ID（例 `llmdev`）。只設一個會拒絕啟動；已啟用時控制庫故障會在送出 AP 呼叫前拒絕。不同 Odoo DB 應使用不同角色與環境綁定，共用 AP scope。|
 | `PROXY_INFLIGHT_USER`／`_AP`／`_OP`／`_ANON`／`_BG` | 32／8／2／2／2 | 各身分 in-flight 上限 |
 | `PROXY_BREAK_GLASS_UNTIL` | 空（關） | unix 秒，最多 24 小時後 |
 | `PROXY_AP_EXPIRES_AT`、`PROXY_OP_EXPIRES_AT` | 空 | unix 秒或 `YYYY-MM-DD` |
@@ -239,6 +254,7 @@ uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.tx
 ```
 
 - 測試直接對 ASGI app 送手工組的 scope（`tests/proxy_harness.py`），`raw_path` 一個 byte 都不經過 HTTP client 正規化；上游是 `httpx.MockTransport`，不連網；共用重放紀錄用記憶體假物件（多個 harness 共用一個＝多個 replica）。`test_proxy_script_and_server.py` 另起真的 uvicorn（127.0.0.1）以 raw socket 驗證 `%2e%2e`、`..`、absolute-form 等請求目標原樣進到代理、標頭期限，最後一支直接跑 `python -m newapi_proxy`（兩個埠、SIGTERM）。`test_proxy_replaystore.py` 對一個照 chart ACL 行為的假 Valkey 驗證 RESP client。
+- `tests/integration/test_controlstore_postgres.py` 需要**空的拋棄式 PostgreSQL 資料庫**及可建角色的管理員 DSN；CI 以獨立容器跑，`REQUIRE_PROXY_CONTROL_TEST=1` 保證沒接上資料庫時不會假綠。測試只在該 DB 安裝 `sql/controlstore-v1.sql`，驗證跨角色共享上限、序列水位、權限與故障後再讀；不可指向 Odoo、new-api 或已有 `proxy_control` schema 的 DB。
 - 依賴鎖檔含 hash：改 `requirements*.in` 後重產（`--exclude-newer` 設成兩週前，不用剛發布的版本）：
 
   ```bash
@@ -252,6 +268,7 @@ uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.tx
 - **合併後會有新的 sha**：develop 一律用 merge commit，所以 feature branch 的 image（給 stg 驗收用）和合併後 develop 上建出來的 image 是兩個不同的 sha tag。stg 驗收可以先釘 feature branch 的 sha；**合併後 stg 與 prod 都改釘 develop 合併 commit 的 sha 與 digest**（部署的 image 一律對得到 develop 上的 commit）。
 - 部署：把 tag 與 digest 填進 Woow_k3s_newapi 的 `deploy/woow-k3s-stg.yaml`（或 prod 的 `deploy/woow-k3s.yaml`）`proxy.image.tag`／`proxy.image.digest`，走該 repo 的 PR 與 helm upgrade。chart 拒絕全 0 的佔位 digest。
 - Secret（值不進任何 repo、檔案或 log）：AP／OP 在 `newapi-proxy-pats`（key `ap`、`op`，NA-01／NA-05）；代理端簽章金鑰在 `newapi-proxy-hmac`（key `web`、`cron`，格式見上）；stg 的 Odoo 端複本在 `paas-stg-system/paas-stg-newapi-proxy-client`（key `web`、`cron`）；Valkey 密碼由 chart 產生在 `newapi-secrets`（key `PROXY_VALKEY_PASSWORD`）。一律 `kubectl create`／`replace` 從 stdin 寫入，不要 `kubectl apply`。建立與輪替指令在 Woow_k3s_newapi `docs/OPERATIONS.md`。
+- 控制庫啟用前，DBA 須在**專屬** PostgreSQL DB 依 `sql/controlstore-v1.sql` 檔頭建立非登入 owner、執行 SQL、撤掉建表權，再為每個環境建立獨立的無管理權限登入角色，只授權五個函式與 schema usage；將所有使用同一上游 AP 的環境綁到同一 `rate_scope`。控制庫不由代理啟動時自動建表，也不得把管理員 DSN 給代理。事件不自動刪除，須另定備份與至少 180 天保存政策。此變更尚未把環境變數注入現有部署，兩站的 `control_store` 仍應顯示 `disabled`，上線需另做 chart／Secret、契約 gate 與 staging 驗收。
 
 ### stg 驗收工具
 

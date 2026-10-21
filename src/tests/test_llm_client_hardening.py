@@ -26,6 +26,7 @@ import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import requests
 from requests.structures import CaseInsensitiveDict
@@ -186,10 +187,15 @@ class TestLlmCircuitBreaker(_LlmCase):
         budget, _session = self._client(_Response(
             429, {'success': False, 'proxy_error': 'budget', 'reason': 'hourly_cap'},
             {'X-Woow-Proxy-Error': 'budget'}), role=nac.ROLE_CRON)
+        ap_budget, _session = self._client(_Response(
+            429, {'success': False, 'proxy_error': 'budget', 'reason': 'ap_rate'},
+            {'X-Woow-Proxy-Error': 'budget', 'Retry-After': '17'}), role=nac.ROLE_CRON)
         for _ in range(nac.CIRCUIT_FAILURE_THRESHOLD + 1):
             denied.user_reveal_token(TENANT_IP, UP, 5)
             limited.user_self(TENANT_IP, UP)
             budget.ap_add_quota(5, 15625)
+            outcome = ap_budget.ap_add_quota(5, 15625)
+            self.assertEqual((outcome.reason, outcome.retry_after), ('proxy_ap_rate', 17))
         self.assertEqual(self._state()['circuit_failures'], 0)
         self.assertFalse(self._state()['circuit_open_until'])
 
@@ -448,6 +454,144 @@ class TestLlmSwr(_LlmCase):
         self.assertNotIn('channel', refreshed['items'][0])
         self.assertTrue(refreshed['data_as_of'])
         self.assertFalse(self._row('usage_recent').requested_at, '新鮮的快取不再排')
+
+    def test_usage_summary_and_daily_are_cache_first_and_refresh_last_good(self):
+        """Summary and chart series are served from SWR; failures retain the last good snapshot."""
+        params = {'range': 'today'}
+        created = self._rpc('/api/llm/keys/create', {
+            'kind': 'free_trial', 'client_request_id': str(uuid.uuid4()),
+        })
+        self.assertTrue(created['success'], created)
+        key_id = created['data']['key_id']
+        self.env.invalidate_all()
+        local_key = self.env['woow_paas_platform.llm_api_key'].sudo().browse(key_id)
+        user_id = self.fake.user_id_for_up(next(iter(self.fake.pats)))
+        token = next(token for token in self.fake.tokens.values()
+                     if token['user_id'] == user_id and token['name'] == local_key.newapi_name)
+        now = int(self.fake.clock())
+        for log_id, model, quota, prompt, completion in (
+                (7101, 'paid-a', 1, 4, 6), (7102, 'paid-b', 2, 8, 12)):
+            self.fake.logs.append({
+                'id': log_id, 'user_id': user_id, 'token_name': token['name'],
+                'model_name': model, 'group': token.get('group') or 'free',
+                'created_at': now, 'type': 2, 'prompt_tokens': prompt,
+                'completion_tokens': completion, 'use_time': 1, 'quota': quota,
+                'request_id': 'req_usage_%s' % log_id,
+            })
+        # A plausible upstream row from another user's log must not enter this account's flow.
+        self.fake.logs.append({
+            'id': 7199, 'user_id': user_id + 1, 'token_name': token['name'],
+            'model_name': 'foreign-model', 'group': 'free', 'created_at': now,
+            'type': 2, 'prompt_tokens': 999, 'completion_tokens': 999,
+            'use_time': 1, 'quota': 999, 'request_id': 'req_usage_foreign',
+        })
+        first_summary = self._rpc('/api/llm/usage/summary', params)
+        first_daily = self._rpc('/api/llm/usage/daily', params)
+        self.assertTrue(first_summary['success'], first_summary)
+        self.assertTrue(first_daily['success'], first_daily)
+        self.assertFalse(first_summary['data']['complete'])
+        self.assertIsNone(first_summary['data']['quota'],
+                          'a cache miss is incomplete, not a fabricated zero')
+        day_rows = self.Cache.search([('account_id', '=', self.account.id),
+                                      ('kind', '=', 'usage_day')])
+        self.assertEqual(len(day_rows), 7, 'summary batches today plus the recent seven-day window')
+        self.assertEqual(len(set(day_rows.mapped('cache_key'))), 7,
+                         'summary and daily enqueue each account/date at most once')
+        before = len(self.fake.calls)
+        summary = self._rpc('/api/llm/usage/summary', params)
+        daily = self._rpc('/api/llm/usage/daily', params)
+        self.assertTrue(summary['success'], summary)
+        self.assertTrue(daily['success'], daily)
+        self.assertEqual(len(self.fake.calls), before, 'usage HTTP endpoints are cache-first')
+
+        self._refresh()
+        last_good_summary = self._rpc('/api/llm/usage/summary', params)['data']
+        last_good_daily = self._rpc('/api/llm/usage/daily', params)['data']
+        self.assertTrue(last_good_summary['complete'])
+        self.assertTrue(last_good_daily['complete'])
+        self.assertEqual((last_good_summary['requests'], last_good_summary['quota'],
+                          last_good_summary['tokens']), (2, 3, 30))
+        self.assertAlmostEqual(last_good_summary['spend_points'], 3 / 15625)
+        model_rows = {row['id']: row for row in last_good_daily['series']}
+        self.assertEqual(set(model_rows), {'paid-a', 'paid-b'})
+        self.assertEqual((model_rows['paid-a']['quota'][0], model_rows['paid-b']['quota'][0]),
+                         (1, 2))
+        self.assertAlmostEqual(sum(row['values'][0] for row in model_rows.values()), 3 / 15625)
+        key_daily = self._rpc('/api/llm/usage/daily', {
+            **params, 'group_by': 'key', 'metric': 'spend',
+        })['data']
+        self.assertEqual(len(key_daily['series']), 1)
+        self.assertEqual(key_daily['series'][0]['id'], str(key_id))
+        self.assertEqual(key_daily['series'][0]['quota'][0], 3)
+        self.assertAlmostEqual(key_daily['series'][0]['values'][0], 3 / 15625)
+        good_payloads = {row.cache_key: row.payload for row in day_rows}
+        self._age_cache()
+        self._rpc('/api/llm/usage/summary', params)
+        self._rpc('/api/llm/usage/daily', params)
+        self.fake.fail_before_all['user_data_flow_self'] = nac.Unknown('proxy_timeout')
+        self._refresh()
+        stale_summary = self._rpc('/api/llm/usage/summary', params)['data']
+        stale_daily = self._rpc('/api/llm/usage/daily', params)['data']
+        self.assertEqual((stale_summary['requests'], stale_summary['quota'],
+                          stale_summary['tokens']), (2, 3, 30))
+        for field in ('quota', 'spend_points', 'requests', 'tokens'):
+            self.assertEqual(stale_summary[field], last_good_summary[field], field)
+        self.assertEqual(stale_daily['series'], last_good_daily['series'])
+        self.assertTrue(stale_summary['stale'])
+        self.assertTrue(stale_daily['stale'])
+        after_rows = self.Cache.search([('account_id', '=', self.account.id),
+                                        ('kind', '=', 'usage_day')])
+        self.assertEqual({row.cache_key: row.payload for row in after_rows}, good_payloads,
+                         'failed multi-day refresh must not replace any last-good date payload')
+
+    def test_usage_day_cache_isolated_by_taipei_date_and_boundary(self):
+        today = datetime.now(ZoneInfo('Asia/Taipei')).date()
+        yesterday = today - timedelta(days=1)
+        old_payload = json.dumps({'day': yesterday.isoformat(), 'items': [{
+            'day': yesterday.isoformat(), 'key_id': 999, 'key_name': 'yesterday-only',
+            'key_kind': 'paid', 'model': 'paid-a', 'requests': 99,
+            'quota': 99000, 'tokens': 999,
+        }]})
+        self.env.cr.execute(
+            'INSERT INTO %s (account_id, kind, cache_key, payload, fetched_at, create_date, write_date) '
+            "VALUES (%%s, 'usage_day', %%s, %%s, now() at time zone 'UTC', now(), now())" % CACHE_TABLE,
+            (self.account.id, yesterday.isoformat(), old_payload))
+
+        result = self._rpc('/api/llm/usage/daily', {'range': 'today'})
+        self.assertTrue(result['success'], result)
+        self.assertEqual(result['data']['dates'], [today.isoformat()])
+        self.assertFalse(result['data']['complete'])
+        self.assertEqual(result['data']['series'], [],
+                         'yesterday snapshot cannot be reused to fill today')
+        rows = self.Cache.search([('account_id', '=', self.account.id),
+                                  ('kind', '=', 'usage_day')])
+        self.assertEqual(set(rows.mapped('cache_key')), {yesterday.isoformat(), today.isoformat()})
+        today_row = rows.filtered(lambda row: row.cache_key == today.isoformat())
+        self.assertTrue(today_row.requested_at, 'today miss is independently queued')
+        self.assertEqual(rows.filtered(lambda row: row.cache_key == yesterday.isoformat()).payload,
+                         old_payload)
+
+    def test_late_swr_result_cannot_overwrite_a_newer_claim(self):
+        self._rpc('/api/llm/usage/recent')
+        claimed = self.Cache._llm_swr_claim(1)
+        self.assertEqual(len(claimed), 1)
+        row_id, _account_id, _kind, _key, old_attempt = claimed[0]
+        new_attempt = old_attempt + timedelta(seconds=31)
+        self.env.cr.execute(
+            'UPDATE %s SET attempted_at=%%s, payload=%%s WHERE id=%%s' % CACHE_TABLE,
+            (new_attempt, json.dumps({'today_count': 8, 'items': []}), row_id))
+        self.Cache._llm_swr_finish(
+            row_id, {'today_count': 1, 'items': []}, 'ok', attempted_at=old_attempt)
+        self.env.invalidate_all()
+        row = self.Cache.browse(row_id)
+        self.assertEqual(json.loads(row.payload)['today_count'], 8)
+        self.Cache._llm_swr_requeue(row_id, attempted_at=old_attempt)
+        self.env.invalidate_all()
+        self.assertFalse(row.requested_at, 'expired worker cannot requeue a newer claim')
+        self.Cache._llm_swr_finish(
+            row_id, {'today_count': 9, 'items': []}, 'ok', attempted_at=new_attempt)
+        self.env.invalidate_all()
+        self.assertEqual(json.loads(row.payload)['today_count'], 9)
 
     def test_yesterdays_cache_is_not_shown_as_today(self):
         self.env.cr.execute(

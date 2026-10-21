@@ -132,6 +132,11 @@ UP_LIFETIME_SECONDS = 90 * 86400
 #: 兩個自架 Qwen（DESIGN §1.3.3；代理 ``PROXY_FREE_MODELS`` 的預設值）。
 FREE_TRIAL_MODELS = ('qwen3-4b-aicoder', 'qwen3-4b-cluster1')
 FREE_TRIAL_LIFETIME_SECONDS = 90 * 86400
+#: ``token`` body 的 upstream 上限；須和代理的 ``policy.py`` 一致。
+TOKEN_MAX_REMAIN_QUOTA = 1_000_000_000 * 500_000
+TOKEN_MAX_EXPIRED_TIME = 4_102_444_800  # 2100-01-01
+_TOKEN_NAME_RE = re.compile(r'wp_[0-9]{1,12}_[a-z0-9]{4}', re.ASCII)
+_TOKEN_MODEL_RE = re.compile(r'[A-Za-z0-9._:/-]{1,128}', re.ASCII)
 
 #: new-api 回的英文原句（``message_key``）——依它分類，不受語系影響。
 MSG_LOGIN_FAILED = 'Username or password is incorrect, or user has been banned'
@@ -199,7 +204,7 @@ CIRCUIT_FAILURES_CODE = 'llm_circuit_failures'
 #: 停擺；``proxy_budget`` 是每小時加額度總量）。
 CIRCUIT_NEUTRAL_REASONS = frozenset({
     'deadline', 'circuit_open', 'ap_rate_limited', 'guard_unavailable', 'request_invalid',
-    'rate_limited', 'proxy_budget',
+    'rate_limited', 'proxy_budget', 'proxy_ap_rate',
 })
 #: 服務帳號的 PAT（AP、OP）被 new-api 拒絕＝全域故障（〔PROV〕§6.1）：一次就開。
 SERVICE_AUTH_CODES = frozenset({
@@ -503,6 +508,90 @@ def free_trial_token_body(name, expired_time):
     }
 
 
+def paid_token_body(name, expired_time, remain_quota, unlimited_quota,
+                    model_limits_enabled, model_limits, group='default'):
+    """付費金鑰的封閉 ``POST /api/token/`` body（DESIGN §3.3）。
+
+    此 transport helper 收的是已由 key service 驗證過的 upstream 值，而非使用者輸入；仍在
+    送往代理前重做完整型別與範圍檢查，確保任何 caller 都無法把任意 token 欄位帶過去。
+    ``unlimited_quota`` 時的 quota 必須是 0；未限制模型時的字串必須是空字串。
+    """
+    if not isinstance(name, str) or not _TOKEN_NAME_RE.fullmatch(name):
+        raise NewApiInputError('token_name') from None
+    if type(expired_time) is not int or not (
+            expired_time == -1 or 0 < expired_time <= TOKEN_MAX_EXPIRED_TIME):
+        raise NewApiInputError('token_expired_time') from None
+    if type(remain_quota) is not int or not 0 <= remain_quota <= TOKEN_MAX_REMAIN_QUOTA:
+        raise NewApiInputError('token_remain_quota') from None
+    if type(unlimited_quota) is not bool or type(model_limits_enabled) is not bool:
+        raise NewApiInputError('token_bool') from None
+    if unlimited_quota != (remain_quota == 0):
+        raise NewApiInputError('token_remain_quota') from None
+    if group != 'default':
+        raise NewApiInputError('token_group') from None
+    if model_limits_enabled:
+        if not isinstance(model_limits, str) or not model_limits:
+            raise NewApiInputError('token_model_limits') from None
+        if not all(_TOKEN_MODEL_RE.fullmatch(model) for model in model_limits.split(',')):
+            raise NewApiInputError('token_model_limits') from None
+    elif model_limits != '':
+        raise NewApiInputError('token_model_limits') from None
+    return {
+        'name': name,
+        'expired_time': expired_time,
+        'remain_quota': remain_quota,
+        'unlimited_quota': unlimited_quota,
+        'model_limits_enabled': model_limits_enabled,
+        'model_limits': model_limits,
+        'allow_ips': '',
+        'group': 'default',
+        'cross_group_retry': False,
+        'allow_user_quota_query': False,
+    }
+
+
+def paid_token_update_body(token, expected_token_id, expected_name, *,
+                           remain_quota=None, unlimited_quota=None, expired_time=None,
+                           model_limits_enabled=None, model_limits=None):
+    """以剛讀回的 paid token 建立封閉的整筆 ``PUT /api/token/`` body。
+
+    new-api 的 token 更新會清空沒有送回的欄位，因此 caller 只交 mirror 已知的 id/name
+    與少數可變值；本 helper 驗證安全 GET 的欄位後，保留其餘完整設定。任何不是本鏡像的
+    回應、或會擴大 token 權限的欄位，都在本機拒絕。
+    """
+    if type(expected_token_id) is not int or not 1 <= expected_token_id <= INT32_MAX:
+        raise NewApiInputError('token_response') from None
+    if not isinstance(expected_name, str) or not _TOKEN_NAME_RE.fullmatch(expected_name):
+        raise NewApiInputError('token_response') from None
+    if not isinstance(token, dict) or type(token.get('id')) is not int \
+            or type(token.get('name')) is not str \
+            or token['id'] != expected_token_id or token['name'] != expected_name:
+        raise NewApiInputError('token_response') from None
+    # The pinned rc.44 Token/GET schema has no allow_user_quota_query field.
+    # Accept its absence only; explicit null/true/non-booleans still fail closed.
+    # paid_token_body always sends False, as required by the proxy write policy.
+    if token.get('allow_ips') != '' or token.get('cross_group_retry') is not False \
+            or token.get('allow_user_quota_query', False) is not False:
+        raise NewApiInputError('token_response') from None
+    values = {
+        'name': expected_name,
+        'expired_time': token.get('expired_time') if expired_time is None else expired_time,
+        'remain_quota': token.get('remain_quota') if remain_quota is None else remain_quota,
+        'unlimited_quota': (
+            token.get('unlimited_quota') if unlimited_quota is None else unlimited_quota),
+        'model_limits_enabled': (
+            token.get('model_limits_enabled')
+            if model_limits_enabled is None else model_limits_enabled),
+        'model_limits': token.get('model_limits') if model_limits is None else model_limits,
+        'group': token.get('group'),
+    }
+    try:
+        body = paid_token_body(**values)
+    except NewApiInputError:
+        raise NewApiInputError('token_response') from None
+    return {'id': expected_token_id, **body}
+
+
 def canonical_query(pairs):
     return '&'.join('%s=%s' % (k, v) for k, v in sorted(pairs))
 
@@ -580,6 +669,10 @@ def classify_response(status, headers, body, write, *, pricing=False):
                 reason = parsed['reason']
         except (ValueError, UnicodeDecodeError):
             reason = None
+        if proxy_error == 'budget' and reason == 'ap_rate':
+            # The shared AP admission bucket is transient. The hourly credit
+            # budget still uses proxy_budget and raises its existing alert.
+            return NotExecuted('proxy_ap_rate', **common)
         if proxy_error in _PROXY_NOT_EXECUTED:
             return NotExecuted('proxy_%s' % proxy_error, **common)
         if proxy_error in _PROXY_UNKNOWN:

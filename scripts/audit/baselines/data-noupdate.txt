@@ -12,8 +12,12 @@
 1	src/data/data_retrieval_cron.xml
 1	src/data/demo_system_skill.xml
 1	src/data/ecpay_invoice_cron.xml
+1	src/data/llm_backoffice_cron.xml
 1	src/data/llm_credit_data.xml
 1	src/data/llm_cron.xml
+1	src/data/llm_notification_mail_templates.xml
+1	src/data/llm_notifications_cron.xml
+1	src/data/llm_reconcile_cron.xml
 1	src/data/low_balance_warning_cron.xml
 1	src/data/mail_templates.xml
 1	src/data/mcp_server_cron.xml

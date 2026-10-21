@@ -179,6 +179,17 @@
           </WoowCard>
         </div>
 
+        <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_usage_overview'">
+          <div class="o_woow_llm_usage_overview__heading"><h3>This month’s usage</h3><span>Estimated days remaining: <t t-esc="daysLeftText"/></span></div>
+          <div class="o_woow_llm_usage_overview__metrics">
+            <div><span>Spend</span><strong t-esc="monthlySpendText"/></div>
+            <div><span>Requests</span><strong t-esc="monthlyRequestsText"/></div>
+            <div><span>Tokens</span><strong t-esc="monthlyTokensText"/></div>
+          </div>
+          <LlmUsageChart t-if="state.monthlyChart" data="state.monthlyChart" title.translate="Last 30 days · spend by model" formatValue.bind="monthlyChartValue"/>
+          <p t-elif="!state.monthlyUsage" class="o_woow_hint" role="status">Usage summary is loading.</p>
+        </WoowCard>
+
         <WoowCard t-if="screen === 'active'" shadow="true" class="'o_woow_llm_section'">
           <div class="o_woow_llm_section__header">
             <!-- tabindex=-1：金鑰對話框關閉後焦點回到這裡（觸發鈕那時是停用的，建成後也不在了）。 -->
@@ -189,7 +200,10 @@
             <WoowIcon name="'key'" size="18"/>
             Create free trial key
           </WoowButton>
-          <p t-else="" class="o_woow_llm_section__note" t-esc="freeTrialExistsText"/>
+          <div t-else="" class="o_woow_llm_section__note">
+            <p t-esc="freeTrialExistsText"/>
+            <WoowButton variant="'secondary'" size="'sm'" onClick.bind="goToKeyManagement">Key Management</WoowButton>
+          </div>
           <p t-if="freeTrialCreateDisabledText" class="o_woow_llm_section__note" role="status" t-esc="freeTrialCreateDisabledText"/>
         </WoowCard>
 
@@ -280,7 +294,7 @@
       <!-- 常駐的播報區：開通完成或失敗時整張開通中卡片會被換掉（被移除的 live region 不會播報）。 -->
       <div class="o_woow_llm_sr" role="status" t-esc="state.announcement"/>
 
-      <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" onClose.bind="onRevealClosed"/>
+      <LlmKeyRevealModal t-if="state.showReveal" kind="'free_trial'" baseUrl="revealBaseUrl" createKey.bind="createFreeTrialKey" onClose.bind="onRevealClosed" onOpenDocs.bind="props.onOpenDocs"/>
       <LlmTermsModal t-if="state.showTerms" mode="state.showTerms" blocking="tosBlocking" onClose.bind="onTermsClosed"/>
     </div>
   </t>

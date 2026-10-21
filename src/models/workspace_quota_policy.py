@@ -21,7 +21,28 @@
   遠端留下沒提交的值）就以新 token 重推（圍籬），值仍取 max(目標, 叢集)，不降額。
 - **有限重試**：見 ``RETRY_BACKOFF_MINUTES``；額度以目標指紋（namespace 集合＋payload）計，
   目標改變、管理員保存或手動重試才重置。永久阻擋（would_lower 等）不自動重試。
+
+#1681 管理員安全降低或清除最低保障：
+
+- 管理員的變更讓目標下降時，先讀每個 namespace 的受管 quota，以共用的 ``plan_safe_lower``
+  依「完整新目標 vs 叢集 hard」判斷哪些項會降，逐項比對 5 項 used。讀不到、缺項、舊
+  operator、低於任一 used、會降低 pvc 一律拒絕，**不保存**。
+- 會降低叢集時要求風險確認：``preview_quota_minimums`` 回傳伺服器簽章的確認碼，綁定
+  Workspace、操作者、政策版本、新的最低保障、完整目標與 namespace 集合，10 分鐘內有效。
+  ``set_quota_minimums(..., confirmation=...)`` 在鎖內逐項比對並**再檢查一次**用量，通過才
+  保存，並記下 ``quota_lower_authorization``（政策版本＋目標），之後每次重試都重讀 used 重檢。
+- 確認只套用在管理員主動降低／清除；生命週期與背景同步不經過這裡。
+
+#1781 PVC 上限也走不降額（#1189 之前的止血）：
+
+- 只有 GET 受管 quota 回報 ``supports_pvc_limit`` 時，``_plan_namespace`` 才把 PVC 基準 10
+  加進目標（``with_pvc_baseline``），PUT／POST 帶 ``pvc_limit``＝max(10, 叢集)。舊 operator
+  沒有這個鍵、而且會靜默忽略 ``pvc_limit``，所以不送，照舊因 PVC 高於 10 判為 ``would_lower``。
+- 新 operator 在回應原樣回報寫入的 ``pvc_limit``。送了卻沒拿到相符的回報（operator 滾動更新時
+  PUT 落在舊 pod，PVC 已被寫成 10）就記為 ``blocked: pvc_limit_not_confirmed``，不算已同步，
+  等人處理——這是偵測，不是防止。
 """
+import base64
 from datetime import timedelta
 import hashlib
 import json
@@ -32,10 +53,12 @@ from psycopg2 import errors as pg_errors
 
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tools import mute_logger
+from odoo.tools import consteq, mute_logger
+from odoo.tools.misc import hmac as odoo_hmac
 
 from ..services.ns_quota_policy import (
-    QuotaNotProvable, build_hard, merge_never_lower, parse_quantity,
+    PVC_HARD, QuotaNotProvable, build_hard, merge_never_lower, parse_quantity, plan_safe_lower,
+    with_pvc_baseline,
 )
 from ..services import paas_operator as paas_operator_service
 from ..services.paas_operator import PaaSOperatorError, PaaSOperatorTimeoutError
@@ -57,6 +80,10 @@ SYNC_FIELDS = (
     'quota_expected_tokens', 'quota_sync_unguarded', 'quota_attempt_fingerprint',
     'quota_synced_fingerprint', 'quota_retry_count', 'quota_next_retry_at',
     'quota_last_attempt_at', 'quota_verified_at',
+    # #1682
+    'quota_reconcile_pending',
+    # #1681
+    'quota_lower_authorization',
 )
 PROTECTED_FIELDS = tuple(FLOOR_FIELDS) + SYNC_FIELDS
 
@@ -83,10 +110,18 @@ VERIFY_INTERVAL = timedelta(hours=6)
 #: 這些觸發來源代表人的明確動作：重置重試額度。
 _RESETTING_TRIGGERS = ('admin', 'manual')
 _RECONCILE_CRON = 'woow_paas_platform.ir_cron_reconcile_workspace_quota'
+#: #1682：這些觸發來源的同步不會自動降額（管理員只能降已確認的目標、開通一律不降）。它們留下
+#: 下列資源的待處理降額時，交給背景（生命週期免確認的安全降額）儘快收回，不必等 6 小時讀回。
+_NON_RECLAIMING_TRIGGERS = ('admin', 'provision')
+_RECLAIMABLE_KEYS = ('requests.cpu', 'limits.cpu', 'requests.memory', 'limits.memory',
+                     'requests.storage')
 #: blocked 之中屬於暫時性、值得自動重試的原因（其餘 blocked 是永久阻擋，等人處理）。
 _TRANSIENT_BLOCKED = ('quota_unreadable', 'managed_quota_status_pending')
 #: 確定沒寫入、但值得自動重試的 4xx（其餘 4xx 是請求本身有問題，記為 blocked 等人處理）。
 _TRANSIENT_HTTP = (401, 403, 408, 429)
+#: #1681 降額確認碼的有效期間與 HMAC scope。
+LOWER_CONFIRMATION_TTL = timedelta(minutes=10)
+_LOWER_CONFIRMATION_SCOPE = 'woow_paas_platform.workspace_quota_lower_confirmation'
 
 
 # ------------------------------------------------------------------------- #
@@ -144,6 +179,25 @@ def _normalize_floor(label, value):
 
 def _floor_text(value, unit):
     return '%s%s' % (value, unit) if value else '-'
+
+
+class _SubsetAttempt:
+    """#1682：``_quota_attempt_fingerprint`` 回傳的 marker——這次只同步了工作區的子集。
+
+    子集的結果不能代表整個工作區，所以不記指紋、不動重試額度（見 ``_record_quota_sync``）。
+    布林值為假：沿用「指紋非空＝整個工作區的嘗試」的判斷（例如 #1681 清除降額授權）。
+    """
+
+    __slots__ = ()
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return '<workspace quota subset attempt>'
+
+
+_SUBSET_ATTEMPT = _SubsetAttempt()
 
 
 def _fingerprint(target, namespaces):
@@ -216,6 +270,21 @@ class WorkspaceQuotaPolicy(models.Model):
     quota_verified_at = fields.Datetime(
         string='Last Verified Against Cluster', groups='base.group_system', copy=False,
         readonly=True)
+    # #1682：背景要儘快以全集重新評估一次——子集同步（生命週期／開通只同步自己的 namespace）
+    # 之後，或管理員／開通的同步留下可自動收回的降額時。與目標指紋分開：指紋只負責「目標有沒有
+    # 變」（決定重試額度要不要重置），這個旗標只負責「要不要排一次對帳」——兩件事共用空指紋會讓
+    # 同目標事件重置額度（#1682 留言 22779）。
+    quota_reconcile_pending = fields.Boolean(
+        string='Full Quota Re-check Pending', groups='base.group_system', copy=False,
+        readonly=True,
+        help='The next background run re-checks every namespace of this Workspace: a service '
+             'event synced only its own namespace, or a decrease is waiting to be reclaimed.')
+    # #1681 管理員確認過的降額：綁定政策版本與目標指紋，只有目前目標仍等於它時同步才可降額。
+    quota_lower_authorization = fields.Char(
+        string='Confirmed Quota Decrease', groups='base.group_system', copy=False, readonly=True,
+        help='Set when an administrator confirms a quota decrease. Syncs may lower the cluster '
+             'quota to that exact target (after checking current usage again) while the policy '
+             'version and target are unchanged.')
     quota_sync_status = fields.Selection(
         SYNC_STATES, string='Current Sync Status', compute='_compute_quota_policy_view',
         groups='base.group_system',
@@ -294,9 +363,12 @@ class WorkspaceQuotaPolicy(models.Model):
                 workspace.quota_audit_ids = False
                 continue
             state = workspace.quota_sync_state
-            if state == 'synced' and workspace.quota_synced_fingerprint != _fingerprint(
-                    Service._ns_quota_payload(workspace), workspace._quota_namespaces()):
-                state = 'pending'  # 已同步的是舊目標（服務集合或政策已變），還沒同步到現在的目標
+            if state == 'synced' and (
+                    workspace.quota_reconcile_pending
+                    or workspace.quota_synced_fingerprint != _fingerprint(
+                        Service._ns_quota_payload(workspace), workspace._quota_namespaces())):
+                # 已同步的是舊目標（服務集合或政策已變），或只同步了子集：還沒同步到現在的目標
+                state = 'pending'
             workspace.quota_sync_status = state
             formula = Service._compute_ns_quota_formula(workspace)
             target = Service._compute_ns_quota(workspace)
@@ -309,13 +381,8 @@ class WorkspaceQuotaPolicy(models.Model):
     # --------------------------------------------------------------------- #
     #  管理員入口                                                            #
     # --------------------------------------------------------------------- #
-    def set_quota_minimums(self, cpu=None, memory_gi=None, storage_gi=None):
-        """管理員設定 CPU（cores）、memory、storage（Gi）最低保障，保存後立即同步。
-
-        參數為 ``None`` 表示該項不變更；``0``／``False`` 表示清除（沿用公式）。
-        任何一項目標因此下降的變更本票一律拒絕（安全降額由後續票交付），不會保存。
-        回傳同步結果摘要。
-        """
+    def _quota_minimum_change(self, cpu, memory_gi, storage_gi):
+        """管理員入口共用的前置：授權、鎖、正規化。回傳 ``(workspace, old, new)``。"""
         # uid 判準：Portal capability 的 sudo 保留 portal uid，不會因此通過。
         if not self.env.user.has_group('base.group_system'):
             raise AccessError(_('Only system administrators may change Workspace quota minimums.'))
@@ -334,26 +401,123 @@ class WorkspaceQuotaPolicy(models.Model):
         for name, value in requested.items():
             if value is not None:
                 new[name] = _normalize_floor(labels[name], value)
+        return workspace, old, new
+
+    def _quota_minimum_review(self, old, new):
+        """新最低保障會不會降低叢集：回傳 ``(target, decreases, problems)``。
+
+        只有政策目標下降（管理員主動降低／清除）才讀叢集；判斷以完整新目標對叢集 hard，
+        所以先前留下的待處理降額也會一併列出、一併檢查。
+        """
+        self.ensure_one()
+        Service = self.env['woow_paas_platform.cloud_service'].sudo()
+        target = Service._ns_quota_payload(self)
+        before = Service._compute_ns_quota(self, floors=old)
+        after = Service._compute_ns_quota(self, floors=new)
+        target.update(zip(('cpu_limit', 'memory_limit', 'storage_limit'), after))
+        if not any(parse_quantity(a) < parse_quantity(b) for b, a in zip(before, after)):
+            return target, [], []
+        decreases, problems = _review_lower(
+            paas_operator_service.get_paas_operator_client(self.env(context={})),
+            self._quota_namespaces(), target)
+        return target, decreases, problems
+
+    def preview_quota_minimums(self, cpu=None, memory_gi=None, storage_gi=None):
+        """#1681 管理員預覽：這次變更是否會降低叢集 quota、能不能安全降、要不要確認。
+
+        不保存任何東西。回傳 ``state``：
+
+        - ``no_change``／``ok``：不會降低叢集，可直接 ``set_quota_minimums``；
+        - ``confirmation_required``：會降低叢集且目前用量允許，附 ``confirmation``（確認碼）、
+          ``decreases`` 與 ``warning``；
+        - ``rejected``：讀取失敗、缺項、舊 operator 或低於用量，``reasons`` 說明原因。
+        """
+        workspace, old, new = self._quota_minimum_change(cpu, memory_gi, storage_gi)
+        if new == old:
+            return {'state': 'no_change'}
+        target, decreases, problems = workspace._quota_minimum_review(old, new)
+        if problems:
+            return {'state': 'rejected', 'reasons': problems, 'decreases': decreases}
+        if not decreases:
+            return {'state': 'ok', 'decreases': []}
+        return {
+            'state': 'confirmation_required',
+            'confirmation': workspace._sign_lower_confirmation(new, target),
+            'decreases': decreases,
+            'warning': _lower_warning(),
+            'expires_in_minutes': int(LOWER_CONFIRMATION_TTL.total_seconds() // 60),
+        }
+
+    def set_quota_minimums(self, cpu=None, memory_gi=None, storage_gi=None, confirmation=None):
+        """管理員設定 CPU（cores）、memory、storage（Gi）最低保障，保存後立即同步。
+
+        參數為 ``None`` 表示該項不變更；``0``／``False`` 表示清除（沿用公式）。
+        #1681：會降低叢集 quota 的變更必須帶 ``preview_quota_minimums`` 給的確認碼；確認碼
+        必須仍符合目前的 Workspace、操作者、政策版本、最低保障、目標與 namespace，且鎖內
+        再檢查一次用量。任一項不符、讀取失敗、缺項或低於用量就拒絕，不保存。
+        回傳同步結果摘要。
+        """
+        workspace, old, new = self._quota_minimum_change(cpu, memory_gi, storage_gi)
         if new == old:
             return workspace._quota_status_summary()
-
-        Service = self.env['woow_paas_platform.cloud_service'].sudo()
-        before = Service._compute_ns_quota(workspace, floors=old)
-        after = Service._compute_ns_quota(workspace, floors=new)
-        lowered = [label for label, b, a in zip((_('CPU'), _('Memory'), _('Storage')), before, after)
-                   if parse_quantity(a) < parse_quantity(b)]
-        if lowered:
+        target, decreases, problems = workspace._quota_minimum_review(old, new)
+        if problems:
             raise UserError(_(
-                'This change would lower the quota target for %(resources)s. Lowering a '
-                'Workspace quota is not supported yet; the minimum was not saved.',
-                resources=', '.join(lowered)))
+                'The quota cannot be lowered safely, so the minimums were not saved: '
+                '%(reasons)s', reasons='; '.join(problems)))
+        if decreases:
+            if not confirmation:
+                raise UserError(_(
+                    'This change lowers the cluster quota and needs confirmation. Review it '
+                    'first; the minimums were not saved.'))
+            workspace._verify_lower_confirmation(confirmation, new, target)
 
         version = workspace.quota_target_version + 1
-        _internal_quota_policy_write(workspace).write(dict(
-            new, quota_target_version=version, quota_sync_state='pending',
-            quota_sync_reason=False))
-        workspace._log_quota_minimum_change(old, new, version)
+        vals = dict(new, quota_target_version=version, quota_sync_state='pending',
+                    quota_sync_reason=False, quota_lower_authorization=(
+                        workspace._quota_lower_authorization_key(version, target)
+                        if decreases else False))
+        _internal_quota_policy_write(workspace).write(vals)
+        workspace._log_quota_minimum_change(old, new, version, decreases)
         return workspace._quota_sync('admin')
+
+    # --------------------------------------------------------------------- #
+    #  #1681 降額確認碼                                                      #
+    # --------------------------------------------------------------------- #
+    def _lower_confirmation_claims(self, new, target):
+        """確認碼綁定的內容（不含到期時間）。"""
+        self.ensure_one()
+        return {'workspace': self.id, 'uid': self.env.uid, 'version': self.quota_target_version,
+                'floors': {name: new[name] for name in sorted(FLOOR_FIELDS)},
+                'target': {key: target.get(key) for key in sorted(target)},
+                'namespaces': self._quota_namespaces()}
+
+    def _sign_lower_confirmation(self, new, target):
+        expires = int((fields.Datetime.now() + LOWER_CONFIRMATION_TTL).timestamp())
+        body = json.dumps(dict(self._lower_confirmation_claims(new, target), exp=expires),
+                          sort_keys=True, separators=(',', ':'))
+        signature = odoo_hmac(self.env(su=True), _LOWER_CONFIRMATION_SCOPE, body)
+        return '%s.%s' % (base64.urlsafe_b64encode(body.encode()).decode(), signature)
+
+    def _verify_lower_confirmation(self, confirmation, new, target):
+        """確認碼必須是伺服器簽的、未過期，而且內容與這一次完全相同。"""
+        invalid = UserError(_(
+            'The quota decrease confirmation is invalid, expired or for a different change. '
+            'Review the change again; the minimums were not saved.'))
+        try:
+            encoded, signature = str(confirmation).rsplit('.', 1)
+            body = base64.urlsafe_b64decode(encoded.encode()).decode()
+            claims = json.loads(body)
+        except (ValueError, TypeError, UnicodeDecodeError):
+            raise invalid from None
+        expected = odoo_hmac(self.env(su=True), _LOWER_CONFIRMATION_SCOPE, body)
+        if not consteq(expected, signature) or not isinstance(claims, dict):
+            raise invalid
+        expires = claims.pop('exp', None)
+        if not isinstance(expires, int) or expires < fields.Datetime.now().timestamp():
+            raise invalid
+        if claims != json.loads(json.dumps(self._lower_confirmation_claims(new, target))):
+            raise invalid
 
     def action_open_quota_minimum_wizard(self):
         if not self.env.user.has_group('base.group_system'):
@@ -374,9 +538,10 @@ class WorkspaceQuotaPolicy(models.Model):
     def action_retry_quota_sync(self):
         """#1680 管理員手動重試：重置自動重試額度，以最新政策與服務集合立即同步。
 
-        與背景重試走同一個同步（同樣的鎖、讀取、不降額與防護），所以不能用來繞過任何安全
-        檢查——會降低叢集任何一項的推送照樣不送。不改政策，所以不寫異動紀錄（ledger）；只在
-        監控 chatter 留一行誰在何時手動重試。
+        與背景重試走同一個同步（同樣的鎖、讀取、安全降額與防護），所以不能用來繞過任何安全
+        檢查——#1682 起與背景一樣會把已保存的目標安全降下來（重讀用量、5 項全部容得下才降），
+        非降不可的項（例如 pvc）與用量不足的降額照樣不送。不改政策，所以不寫異動紀錄
+        （ledger）；只在監控 chatter 留一行誰在何時手動重試。
         """
         if not self.env.user.has_group('base.group_system'):
             raise AccessError(_('Only system administrators may retry Workspace quota sync.'))
@@ -390,7 +555,8 @@ class WorkspaceQuotaPolicy(models.Model):
             'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync retried manually by '
             '%(login)s (uid %(uid)s)', name=workspace.name, id=workspace.id,
             ws_hash=workspace.ws_hash, login=actor.login, uid=actor.id))
-        result = workspace._quota_sync('manual')
+        # #1682：與背景重試同一套安全降額（重讀用量、全部安全才降），避免「背景會降、手動不降」。
+        result = workspace._quota_sync('manual', allow_lower=True)
         state = result.get('state')
         if state == 'synced':
             message, kind = _('Quota synced with the cluster.'), 'success'
@@ -404,8 +570,11 @@ class WorkspaceQuotaPolicy(models.Model):
                        'next': {'type': 'ir.actions.client', 'tag': 'soft_reload'}},
         }
 
-    def _log_quota_minimum_change(self, old, new, version):
-        """稽核：append-only ledger（結構化）＋ admin-only monitor chatter（無通知）。"""
+    def _log_quota_minimum_change(self, old, new, version, decreases=()):
+        """稽核：append-only ledger（結構化）＋ admin-only monitor chatter（無通知）。
+
+        #1681：確認過的降額另在 chatter 列出每項叢集值、目標與確認當下的用量。
+        """
         self.ensure_one()
         actor = self.env.user
 
@@ -421,11 +590,15 @@ class WorkspaceQuotaPolicy(models.Model):
             'old_values': _summary(old), 'new_values': _summary(new),
         })
         monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
-        monitor._message_log(body=_(
+        body = _(
             'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota minimums changed by %(login)s '
             '(uid %(uid)s), policy version %(version)s: %(old)s -> %(new)s',
             name=self.name, id=self.id, ws_hash=self.ws_hash, login=actor.login, uid=actor.id,
-            version=version, old=_summary(old), new=_summary(new)))
+            version=version, old=_summary(old), new=_summary(new))
+        if decreases:
+            body += '\n' + _('Confirmed quota decrease (usage checked at confirmation): '
+                             '%(items)s', items='; '.join(_decrease_text(d) for d in decreases))
+        monitor._message_log(body=body)
 
     # --------------------------------------------------------------------- #
     #  同步（不降額）                                                        #
@@ -482,13 +655,16 @@ class WorkspaceQuotaPolicy(models.Model):
         """這次嘗試要記的目標指紋。
 
         生命週期與開通只同步自己那一個 namespace；工作區若不只這一個，子集的結果不能代表整個
-        工作區（會把其他 namespace 的狀態蓋掉）。這時不記指紋（``False``），並立刻排背景同步：
-        下一輪 cron 看到指紋不符，會把整個工作區重新評估一次。
+        工作區（會把其他 namespace 的狀態蓋掉）。這時回 ``_SUBSET_ATTEMPT``：不記指紋、不動
+        重試額度，改以 ``quota_reconcile_pending`` 標記，並立刻排背景同步重新評估整個工作區。
+
+        #1682：以前回空指紋兼任「觸發對帳」與「重置額度」，同目標的生命週期事件就會讓已耗盡的
+        工作區重新拿到 5 次自動重試；指紋也不能改記子集的值，否則會在子集與全集之間來回。
         """
         if set(attempted) == set(own):
             return _fingerprint(target, own)
         self._schedule_quota_reconcile()
-        return False
+        return _SUBSET_ATTEMPT
 
     def _schedule_quota_reconcile(self, at=None):
         """喚醒背景同步 cron（``ir.cron.trigger`` 是 DB 列，跟著呼叫端交易 commit／回捲）。"""
@@ -496,13 +672,18 @@ class WorkspaceQuotaPolicy(models.Model):
         if cron:
             cron.sudo()._trigger(at)
 
-    def _quota_sync(self, trigger, namespaces=None, *, nowait=False):
-        """把目前目標推到叢集（每項都不低於叢集現況），記錄結果並回傳摘要。
+    def _quota_sync(self, trigger, namespaces=None, *, nowait=False, allow_lower=None):
+        """把目前目標推到叢集，記錄結果並回傳摘要。
 
         ``trigger``：admin／manual（人的動作，重置重試額度）、retry（背景重試，消耗額度）、
         reconcile（背景發現目標已變）、verify（定期讀回）、lifecycle、provision。
         ``nowait=True``（背景與生命週期路徑）：拿不到鎖回 ``busy``，不推送、不寫這一列，
         改排 cron 一分鐘後再看（``BUSY_RETRY``）。管理員入口已先拿鎖，不帶這個參數。
+
+        #1681／#1682 ``allow_lower``：``True`` 可降到目標（每次都重讀 used 重檢，見
+        ``plan_safe_lower``）；``False`` 不降額；``None``（預設）只在管理員確認過、且目前政策
+        版本與目標仍等於確認時的那一個才降（``quota_lower_authorization``）。這是伺服器端
+        參數，底線方法無法經 RPC 呼叫，context 也影響不了它。
         """
         self.ensure_one()
         workspace = self.sudo()
@@ -511,23 +692,48 @@ class WorkspaceQuotaPolicy(models.Model):
             return {'state': 'busy', 'trigger': trigger}
         version = workspace.quota_target_version
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
+        if allow_lower is None:
+            allow_lower = workspace._quota_lower_authorized(target)
         own = workspace._quota_namespaces()
         attempted = sorted(set(namespaces)) if namespaces else own
         client = paas_operator_service.get_paas_operator_client(self.env(context={}))
         expected = workspace._quota_expected_tokens()
         results = {}
         for namespace in attempted:
-            results[namespace] = _sync_namespace(client, namespace, target, expected.get(namespace))
-        workspace._record_quota_sync(
-            version, results, workspace._quota_attempt_fingerprint(target, own, attempted), trigger)
+            results[namespace] = _sync_namespace(
+                client, namespace, target, expected.get(namespace), allow_lower=bool(allow_lower))
+        fingerprint = workspace._quota_attempt_fingerprint(target, own, attempted)
+        workspace._record_quota_sync(version, results, fingerprint, trigger)
+        if (workspace.quota_lower_authorization and fingerprint
+                and workspace.quota_sync_state == 'synced'):
+            # 確認過的目標已整個工作區落地：授權用完即清，之後同一目標不再沿用這次確認。
+            _internal_quota_policy_write(workspace).write({'quota_lower_authorization': False})
         summary = workspace._quota_status_summary()
         summary['trigger'] = trigger
         return summary
 
+    @staticmethod
+    def _quota_lower_authorization_key(version, target):
+        """確認綁定的內容：政策版本＋完整目標 payload。"""
+        return '%s:%s' % (version, _fingerprint(target, []))
+
+    def _quota_lower_authorized(self, target):
+        """目前政策版本與目標是否仍等於管理員確認過的降額。"""
+        self.ensure_one()
+        return bool(self.quota_lower_authorization) and (
+            self.quota_lower_authorization == self._quota_lower_authorization_key(
+                self.quota_target_version, target))
+
     def _record_quota_sync(self, version, results, fingerprint=None, trigger=None):
+        """記錄一次同步嘗試。``fingerprint`` 為 ``_SUBSET_ATTEMPT`` 表示只同步了子集。"""
         self.ensure_one()
         now = fields.Datetime.now()
         previous_state = self.quota_sync_state
+        previous_count = self.quota_retry_count or 0
+        subset = fingerprint is _SUBSET_ATTEMPT
+        if subset:
+            # 子集不代表整個工作區：指紋維持上一次全集嘗試的值（重試額度只跟著全集目標走）。
+            fingerprint = self.quota_attempt_fingerprint
         retryable = False
         if not results:
             vals = {'quota_sync_state': 'pending_first_deploy',
@@ -564,7 +770,17 @@ class WorkspaceQuotaPolicy(models.Model):
                     'quota_pending_decrease': '\n'.join(pending) or False,
                     'quota_sync_unguarded': bool(unguarded),
                     'quota_expected_tokens': json.dumps(tokens, sort_keys=True) if tokens else False}
-            if state == 'synced':
+            if state == 'synced' and subset:
+                # 子集成功不等於整個工作區已同步：只補記這幾個 namespace 推了什麼。
+                try:
+                    pushed = json.loads(self.quota_synced_hard or '{}')
+                except ValueError:
+                    pushed = {}
+                if not isinstance(pushed, dict):
+                    pushed = {}
+                pushed.update({ns: r['hard'] for ns, r in results.items() if r.get('hard')})
+                vals['quota_synced_hard'] = json.dumps(pushed, sort_keys=True) if pushed else False
+            elif state == 'synced':
                 vals.update({
                     'quota_synced_version': version,
                     'quota_synced_at': now,
@@ -577,23 +793,35 @@ class WorkspaceQuotaPolicy(models.Model):
             retryable = superseded or any(r.get('retryable') for r in results.values()
                                           if r['state'] != 'synced')
         # 重試額度：以目標指紋計；人的動作（保存、手動重試）也重置。背景重試每次消耗一格。
+        # 子集嘗試不重置、不消耗，成功也不歸零（其他 namespace 可能仍在失敗）。
         reset = fingerprint != self.quota_attempt_fingerprint or trigger in _RESETTING_TRIGGERS
-        count = 0 if reset else (self.quota_retry_count or 0) + (1 if trigger == 'retry' else 0)
+        count = 0 if reset else previous_count + (1 if trigger == 'retry' else 0)
         next_at = False
         if vals['quota_sync_state'] == 'synced':
-            count = 0
+            if not subset:
+                count = 0
         elif retryable:
             if count >= MAX_AUTO_RETRIES:
                 vals['quota_sync_state'] = 'exhausted'
             else:
                 next_at = now + timedelta(minutes=RETRY_BACKOFF_MINUTES[count])
+        # 不會自動降額的同步（管理員只提高、開通）留下 CPU／memory／storage 的待處理降額：
+        # 交給背景以生命週期的安全降額收回（每次仍重讀用量檢查）。
+        reclaim = trigger in _NON_RECLAIMING_TRIGGERS and any(
+            item[0] in _RECLAIMABLE_KEYS
+            for r in (results or {}).values() for item in r.get('pending_decrease', ()))
         vals.update({'quota_attempt_fingerprint': fingerprint or False,
                      'quota_last_attempt_at': now, 'quota_retry_count': count,
-                     'quota_next_retry_at': next_at})
+                     'quota_next_retry_at': next_at,
+                     'quota_reconcile_pending': subset or reclaim})
         _internal_quota_policy_write(self).write(vals)
         if next_at:
             self._schedule_quota_reconcile(next_at)
-        if vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted':
+        if reclaim:
+            self._schedule_quota_reconcile()
+        # 只在這一次用掉最後一格時通知；同目標的子集事件或對帳讓狀態回到 exhausted 不算新的耗盡。
+        if (vals['quota_sync_state'] == 'exhausted' and previous_state != 'exhausted'
+                and previous_count < MAX_AUTO_RETRIES):
             self.env['woow_paas_platform.platform_monitor']._singleton()._message_log(body=_(
                 'Workspace %(name)s (id=%(id)s, %(ws_hash)s) quota sync stopped after '
                 '%(count)s automatic retries: %(reason)s. Retry it manually from the Workspace '
@@ -654,6 +882,7 @@ class WorkspaceQuotaPolicy(models.Model):
             ('state', '!=', 'deleting'), ('workspace_id', '!=', False)]).mapped('workspace_id')
         return self.search([
             '|', ('id', 'in', live.ids),
+            '|', ('quota_reconcile_pending', '=', True),
             ('quota_sync_state', 'in', ('pending', 'unconfirmed', 'blocked', 'exhausted')),
         ], order='id')
 
@@ -664,7 +893,9 @@ class WorkspaceQuotaPolicy(models.Model):
         now = fields.Datetime.now()
         target = self.env['woow_paas_platform.cloud_service'].sudo()._ns_quota_payload(workspace)
         state = workspace.quota_sync_state
-        if _fingerprint(target, workspace._quota_namespaces()) != workspace.quota_attempt_fingerprint:
+        if (workspace.quota_reconcile_pending
+                or _fingerprint(target, workspace._quota_namespaces())
+                != workspace.quota_attempt_fingerprint):
             return 'reconcile'
         if (state in ('pending', 'unconfirmed', 'blocked') and workspace.quota_next_retry_at
                 and workspace.quota_next_retry_at <= now):
@@ -683,7 +914,9 @@ class WorkspaceQuotaPolicy(models.Model):
         trigger = workspace._quota_reconcile_trigger()
         if not trigger:
             return {'state': 'skipped'}
-        return workspace._quota_sync(trigger, nowait=True)
+        # #1682：背景是生命週期降額的後續（被用量擋下的降額要靠它收回），一律走安全降額。
+        # 已保存的政策都是合法的（未確認的人工降額不會被保存，見 #1681），所以不必分辨降額來源。
+        return workspace._quota_sync(trigger, nowait=True, allow_lower=True)
 
     def _quota_create_namespace(self, client, namespace):
         """開通路徑（``create_namespace``）的同一個政策：必要時才降級成不送 quota。
@@ -717,8 +950,10 @@ class WorkspaceQuotaPolicy(models.Model):
         plan = _plan_namespace(client, namespace, target)
         token = uuid.uuid4().hex if plan.get('guarded') else None
         if plan.get('not_found'):
-            payload, plan = target, dict(plan, state='synced', reason=None, retryable=False,
-                                         hard=build_hard(target), pending_decrease=())
+            # #1781：沒有既有值可降；operator 支援時 ``plan['target']`` 帶 PVC 基準。
+            payload = plan.get('target', target)
+            plan = dict(plan, state='synced', reason=None, retryable=False,
+                        hard=build_hard(payload), pending_decrease=())
             guard = {'sync_token': token, 'expect_absent': True}
         elif plan['state'] == 'synced':
             payload = plan['payload']
@@ -730,13 +965,15 @@ class WorkspaceQuotaPolicy(models.Model):
             workspace._record_quota_sync(version, {namespace: plan}, fingerprint, 'provision')
             return False, plan['reason']
         extra = {'quota_guard': guard} if token else {}
+        extra.update(_pvc_kwargs(payload))
         result = _push_result(plan, lambda: client.create_namespace(
             namespace=namespace, cpu_limit=payload['cpu_limit'],
             memory_limit=payload['memory_limit'], storage_limit=payload['storage_limit'],
             workspace_id=self.id or None,
             ephemeral_storage_request=payload.get('ephemeral_storage_request'),
             ephemeral_storage_limit=payload.get('ephemeral_storage_limit'), **extra),
-            lambda: _read_back(client, namespace, token, payload), token)
+            lambda: _read_back(client, namespace, token, payload), token,
+            pvc_limit=payload.get('pvc_limit'))
         workspace._record_quota_sync(version, {namespace: result}, fingerprint, 'provision')
         if result.get('error') is not None:
             raise result['error']
@@ -753,14 +990,65 @@ class WorkspaceQuotaPolicy(models.Model):
         }
 
 
-def _plan_namespace(client, namespace, target):
+def _lower_warning():
+    return _('Current usage passing this check does not guarantee room for future pod '
+             're-creation or rollouts. It is not a capacity reservation and is not atomic with '
+             'Kubernetes admission: usage can grow between this check and the quota update.')
+
+
+def _decrease_text(item):
+    return '%(namespace)s %(key)s: %(cluster)s -> %(target)s (used %(used)s)' % item
+
+
+def _review_lower(client, namespaces, target):
+    """#1681 管理員降額前檢查：每個 namespace 讀受管 quota，以共用 ``plan_safe_lower`` 判斷。
+
+    回傳 ``(decreases, problems)``：``decreases`` 是會降的項（dict：namespace、key、cluster、
+    target、used）；``problems`` 非空就不能保存。確認 namespace 尚不存在的沒有可降的 quota。
+    """
+    decreases, problems = [], []
+    if not client:
+        return decreases, ['operator_not_configured']
+    for namespace in namespaces:
+        try:
+            report = client.get_namespace_quota(namespace, include_managed=True)
+        except PaaSOperatorError as exc:
+            unsupported = getattr(exc, 'status_code', None) in (404, 405)
+            problems.append('%s: %s' % (
+                namespace, 'operator_unsupported' if unsupported else 'quota_unreadable'))
+            continue
+        managed = report.get('managed_quota') if isinstance(report, dict) else None
+        if (isinstance(managed, dict) and managed.get('available') is not True
+                and managed.get('reason') == 'managed_quota_not_found'
+                and managed.get('namespace_exists') is False):
+            continue
+        plan = plan_safe_lower(target, managed)
+        problems.extend('%s: %s %s' % (namespace, key, reason) if key != '*'
+                        else '%s: %s' % (namespace, reason) for key, reason in plan['blocked'])
+        if plan['lowering_unsafe']:
+            problems.append('%s: would_lower: %s' % (
+                namespace, ', '.join(sorted(plan['lowering_unsafe']))))
+        decreases.extend({'namespace': namespace, 'key': key, 'cluster': cluster,
+                          'target': wanted, 'used': used}
+                         for key, cluster, wanted, used in plan['lowered'])
+    return decreases, problems
+
+
+def _plan_namespace(client, namespace, target, allow_lower=False):
     """讀取→合併→逐項檢查；不推送。回傳 dict（不 raise）。
+
+    #1681／#1682 ``allow_lower``：以共用的 ``plan_safe_lower`` 判斷能不能降到目標（逐項檢查
+    5 項 used、缺項／舊 operator fail-closed）。全部安全才降；任一項不安全就只送增額
+    （同不降額合併），並在 ``unsafe_decrease`` 帶原因，由 ``_sync_namespace`` 記為可重試的
+    blocked。不帶＝#1679／#1680 的不降額。
 
     ``push``：可以送出 ``payload``（不會降低任何一項）；``not_found``：叢集上沒有受管
     quota（list 成功、確定沒有這個物件）。其餘情況 ``state`` 已是最終結果。
     #1680：``retryable`` 標示暫時性失敗（值得自動重試）；``guarded`` 為 operator 是否支援
     版本防護（GET 有沒有 ``sync_token`` 鍵——舊 operator 會靜默忽略 PUT 的未知欄位，不能
     用 PUT 有沒有報錯判斷）；``remote_token``／``resource_version`` 是叢集目前的版本。
+    #1781：operator 回報支援 ``pvc_limit`` 時目標加上 PVC 基準（同一份能力判斷也決定送不送
+    這個欄位）；``not_found`` 的結果帶 ``target`` 給開通路徑直接建立。
     """
     if not client:
         return {'state': 'pending', 'reason': 'operator_not_configured', 'retryable': True}
@@ -775,23 +1063,35 @@ def _plan_namespace(client, namespace, target):
     if not isinstance(managed, dict):
         return {'state': 'blocked', 'reason': 'operator_unsupported', 'retryable': False}
     guarded = 'sync_token' in managed
+    target = with_pvc_baseline(target, managed)
     if managed.get('available') is not True:
         reason = managed.get('reason') or 'managed_quota_unavailable'
         if reason == 'managed_quota_not_found':
             if managed.get('namespace_exists') is False:
                 # 確認 namespace 尚不存在：政策已保存，等首次開通套用；不建立空 namespace。
                 return {'state': 'pending_first_deploy', 'reason': 'namespace_not_created',
-                        'not_found': True, 'guarded': guarded, 'retryable': False}
+                        'not_found': True, 'guarded': guarded, 'retryable': False,
+                        'target': target}
             return {'state': 'blocked', 'reason': reason, 'not_found': True, 'guarded': guarded,
-                    'retryable': False}
+                    'retryable': False, 'target': target}
         return {'state': 'blocked', 'reason': reason, 'retryable': reason in _TRANSIENT_BLOCKED}
-    try:
-        payload, lowering, pending = merge_never_lower(
-            target, managed.get('spec_hard'), managed.get('hard'))
-    except QuotaNotProvable as exc:
-        return {'state': 'blocked', 'reason': 'quota_not_provable: %s' % exc, 'retryable': False}
+    lowered, unsafe = [], []
+    if allow_lower:
+        safe = plan_safe_lower(target, managed)
+        if safe['payload'] is None:
+            return {'state': 'blocked', 'reason': safe['blocked'][0][1], 'retryable': False}
+        payload, lowering, pending = (
+            safe['payload'], safe['lowering_unsafe'], safe['pending_decrease'])
+        lowered, unsafe = safe['lowered'], safe['blocked']
+    else:
+        try:
+            payload, lowering, pending = merge_never_lower(
+                target, managed.get('spec_hard'), managed.get('hard'))
+        except QuotaNotProvable as exc:
+            return {'state': 'blocked', 'reason': 'quota_not_provable: %s' % exc,
+                    'retryable': False}
     if lowering:
-        # 永久阻擋：叢集上的值（例如 pvc 12）高於 operator 一定會寫的值；不自動重試。
+        # 永久阻擋：叢集上的值（例如舊 operator 下 pvc 12）高於 operator 一定會寫的值；不自動重試。
         return {'state': 'blocked', 'reason': 'would_lower: %s' % ', '.join(sorted(lowering)),
                 'pending_decrease': pending, 'retryable': False}
     hard = build_hard(payload)
@@ -800,14 +1100,25 @@ def _plan_namespace(client, namespace, target):
                     for key, value in hard.items())
     return {'state': 'synced', 'hard': hard, 'payload': payload, 'pending_decrease': pending,
             'push': not unchanged, 'guarded': guarded, 'remote_token': managed.get('sync_token'),
-            'resource_version': managed.get('resource_version')}
+            'resource_version': managed.get('resource_version'), 'lowered': lowered,
+            'unsafe_decrease': '; '.join('%s %s' % item for item in unsafe) or None}
+
+
+#: ``_read_back`` 的第四種結果（#1781）：這次推送落地了，但 PVC 上限不是送出的值。
+_PVC_LOST = 'pvc_limit_not_applied'
+
+
+def _pvc_can_be_lost(pvc_limit):
+    """送出的 PVC 上限高於 10：落在不支援的 operator 上就會被寫成 10（實際降額）。"""
+    return bool(pvc_limit) and parse_quantity(pvc_limit) > parse_quantity(PVC_HARD)
 
 
 def _read_back(client, namespace, token, payload):
     """推送結果不明時讀回：``True`` 已落地、``False`` 未落地（仍可能在途）、``None`` 讀不到。
 
     有 token（新 operator）只認 token；舊 operator 只能比值（推送前值不同才會推，所以值相等
-    就是落地了）。
+    就是落地了）。#1781：token 相符但 PVC 上限不是送出的值（滾動更新時寫入落在不支援
+    ``pvc_limit`` 的舊 pod，PVC 已被寫成 10）回 ``_PVC_LOST``。
     """
     try:
         report = client.get_namespace_quota(namespace, include_managed=True)
@@ -819,7 +1130,14 @@ def _read_back(client, namespace, token, payload):
     if token:
         if 'sync_token' not in managed:
             return None
-        return managed.get('sync_token') == token
+        if managed.get('sync_token') != token:
+            return False
+        pvc_limit = payload.get('pvc_limit')
+        if _pvc_can_be_lost(pvc_limit) and parse_quantity(
+                (managed.get('spec_hard') or {}).get('persistentvolumeclaims')) != parse_quantity(
+                    pvc_limit):
+            return _PVC_LOST
+        return True
     spec_hard = managed.get('spec_hard')
     if not isinstance(spec_hard, dict) or not spec_hard:
         return None
@@ -827,8 +1145,18 @@ def _read_back(client, namespace, token, payload):
                for key, value in build_hard(payload).items())
 
 
-def _push_result(plan, call, readback=None, token=None):
+def _pvc_kwargs(payload):
+    """#1781：payload 有 ``pvc_limit``（operator 回報支援）才帶給 client；否則不帶這個參數。"""
+    return {'pvc_limit': payload['pvc_limit']} if payload.get('pvc_limit') else {}
+
+
+def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
     """執行推送（``call()``），把 operator 的結果轉成同步狀態。
+
+    #1781 ``pvc_limit``：這次送出的 PVC 上限。高於 10 而成功回應沒有原樣回報它（或結果不明時
+    讀回 token 相符但 PVC 不是送出的值），代表請求落在不支援的 operator pod 上（滾動更新中），
+    PVC 已被寫成 10 ⇒ 記為 ``blocked: pvc_limit_not_confirmed``（不自動重試：叢集已低於原值，
+    平台補不回來，要人處理）。送出 10 時舊 pod 寫的也是 10，沒有損失，不檢查。
 
     結果不明（逾時、5xx、斷線）先讀回：落地就算成功（回應遺失而已）；否則記下在途 token
     （``expect_token``）——遠端之後帶的若不是它，下一次同步必定以新 token 重推，讓還在途的
@@ -840,6 +1168,8 @@ def _push_result(plan, call, readback=None, token=None):
     except PaaSOperatorTimeoutError as exc:
         # operator 端的 kubectl 可能已套用：先讀回，讀不出來就是結果未知，不是失敗也不是成功。
         landed = readback() if readback else None
+        if landed == _PVC_LOST:
+            return _pvc_not_confirmed(base, token, pvc_limit, 'read back after timeout', exc)
         if landed:
             return dict(plan, state='synced', expect_token=token, error=exc,
                         reason='operator_timeout (read back: applied)')
@@ -859,6 +1189,8 @@ def _push_result(plan, call, readback=None, token=None):
                         retryable=False, error=exc)
         landed = readback() if readback else None
         detail = code or exc.message
+        if landed == _PVC_LOST:
+            return _pvc_not_confirmed(base, token, pvc_limit, 'read back after %s' % detail, exc)
         if landed:
             return dict(plan, state='synced', expect_token=token, error=exc,
                         reason='operator_error: %s (read back: applied)' % detail)
@@ -867,28 +1199,58 @@ def _push_result(plan, call, readback=None, token=None):
     if isinstance(response, dict) and response.get('quota') == 'conflict':
         # 建立路徑：基線已做、quota 沒覆寫（前提不成立）。
         return dict(base, state='pending', reason='quota_conflict', retryable=True)
+    if _pvc_can_be_lost(pvc_limit) and not (
+            isinstance(response, dict)
+            and parse_quantity(response.get('pvc_limit')) == parse_quantity(pvc_limit)):
+        return _pvc_not_confirmed(base, token, pvc_limit, 'response=%r' % (response,))
     return dict(plan, state='synced', expect_token=token)
 
 
-def _sync_namespace(client, namespace, target, expected_token=None):
-    """單一 namespace 的不降額同步（PUT）；回傳結果 dict（不 raise）。
+def _pvc_not_confirmed(base, token, pvc_limit, detail, error=None):
+    """#1781：寫入落地了，但 PVC 上限沒有被確認（多半已被舊 operator pod 寫成 10）。"""
+    _logger.error("[#1781] quota push sent pvc_limit=%s but the operator did not confirm it "
+                  "(%s); the write may have reset persistentvolumeclaims to 10", pvc_limit, detail)
+    result = dict(base, state='blocked', retryable=False, expect_token=token,
+                  reason='pvc_limit_not_confirmed: sent %s' % pvc_limit)
+    if error is not None:
+        result['error'] = error
+    return result
+
+
+def _sync_namespace(client, namespace, target, expected_token=None, allow_lower=False):
+    """單一 namespace 的同步（PUT）；回傳結果 dict（不 raise）。
 
     #1680：值不變但遠端 token 不是平台預期的那一個（別的寫入落在那裡）也要重推一次（圍籬）。
+    #1681／#1682 ``allow_lower``：見 ``_plan_namespace``。降額被用量擋下時增額照送，結果記為
+    ``blocked``／``unsafe_decrease``（可重試，叢集保留原額度）。
     """
-    plan = _plan_namespace(client, namespace, target)
+    plan = _plan_namespace(client, namespace, target, allow_lower=allow_lower)
     if plan['state'] != 'synced':
         return plan
     guarded = plan['guarded']
     if guarded and plan['remote_token'] != expected_token:
         plan = dict(plan, push=True)
     if not plan.get('push'):
-        return plan
+        return _unsafe_decrease_result(plan)
     payload = plan['payload']
     token = uuid.uuid4().hex if guarded else None
     extra = {'quota_guard': {'sync_token': token,
                              'expected_resource_version': plan['resource_version']}} if guarded else {}
-    return _push_result(plan, lambda: client.update_namespace_quota(
+    extra.update(_pvc_kwargs(payload))
+    return _unsafe_decrease_result(_push_result(plan, lambda: client.update_namespace_quota(
         namespace, payload['cpu_limit'], payload['memory_limit'], payload['storage_limit'],
         ephemeral_storage_request=payload.get('ephemeral_storage_request'),
         ephemeral_storage_limit=payload.get('ephemeral_storage_limit'), **extra),
-        lambda: _read_back(client, namespace, token, payload), token)
+        lambda: _read_back(client, namespace, token, payload), token,
+        pvc_limit=payload.get('pvc_limit')))
+
+
+def _unsafe_decrease_result(result):
+    """推送（或不需推送）成功，但想降的項被用量擋下：目前目標沒有達成，記為可重試的 blocked。
+
+    增額與圍籬 token 已落地（``expect_token`` 保留），叢集保留原額度；每次重試都重讀 used 重判。
+    """
+    if result.get('state') != 'synced' or not result.get('unsafe_decrease'):
+        return result
+    return dict(result, state='blocked', retryable=True,
+                reason='unsafe_decrease: %s' % result['unsafe_decrease'])

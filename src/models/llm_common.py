@@ -28,6 +28,7 @@ from odoo import _, fields
 from odoo.exceptions import ValidationError
 
 from ..services import llm_crypto, llm_redact
+from ..services.llm_sql_budget import deadline_cursor, trigger_cron
 from ..services import newapi_client as nac
 
 _logger = logging.getLogger(__name__)
@@ -148,6 +149,10 @@ ERR_LLM_FREE_CAPPED_TODAY = 'llm_free_capped_today'
 ERR_LLM_FREE_KEY_DAILY_LIMIT = 'llm_free_key_daily_limit'
 ERR_LLM_KEY_ALREADY_SHOWN = 'llm_key_already_shown'
 ERR_LLM_KEY_INVALID = 'llm_key_invalid'
+#: LLM-07 management operations only expose a PaaS mirror id, never an upstream token id/name.
+ERR_LLM_KEY_NOT_FOUND = 'llm_key_not_found'
+ERR_LLM_KEY_LIMIT_BELOW_USED = 'llm_key_limit_below_used'
+ERR_LLM_KEY_CANNOT_ENABLE = 'llm_key_cannot_enable'
 #: 開戶失敗（``state=error``）的帳戶操作建金鑰時。DESIGN 的碼表沒有這一格：error 狀態在
 #: §6.2 只有畫面，沒有 API 錯誤碼；沿用 ``llm_unavailable`` 會讓前端以為只是暫時連不上。
 ERR_LLM_ACCOUNT_ERROR = 'llm_account_error'
@@ -164,6 +169,8 @@ ERR_LLM_NO_REFUND_ACK_REQUIRED = 'llm_no_refund_ack_required'
 #: gate 的帳號拒絕（``paas._account_denial``：未登入或帳號停用）。那個 helper 回的 dict 沒有
 #: ``code``；本分頁的回應一律帶小寫 snake code（DESIGN §3.1），所以在 controller 補上這一格。
 ERR_LLM_AUTH_REQUIRED = 'llm_auth_required'
+ERR_LLM_SETTINGS_INVALID = 'llm_settings_invalid'
+ERR_LLM_NOT_ME_INVALID = 'llm_not_me_invalid'
 
 
 #: Reauth counts every password attempt, including rejected and interrupted attempts.
@@ -249,6 +256,12 @@ RESULT_CODES = frozenset({'started', 'ok', 'failed', 'unknown', RESULT_NOT_EXECU
 #: （``credit_1000_to_account_5``）也不能進來。新增一個 key＝加在這裡（``TestLlmClosedCodes`` 以原始碼
 #: 比對守住每個呼叫端的字面 key 都在表內）。
 NUMBER_KEYS = frozenset({
+    'age_seconds',        # I1 local reconciliation: bounded age of the order
+
+    'account_id',          # manual_credit: PaaS account identifier only
+    'order_id',            # manual_credit: PaaS order identifier only
+    'points',              # manual_credit: integer amount only
+    'operator_uid',        # manual_credit: Odoo uid only
     'attempts',           # provision_failed：開戶嘗試次數
     'probe',              # alert_test：驗證告警出口用的隨機數（LLM-02b AC2）
     'affected_accounts',  # 摘要信：這一波影響幾個帳戶
@@ -546,6 +559,8 @@ def alert_targets(env):
 #: 凍結契約（改名要同 PR 寫 migration 改 ``ir_act_server.code``）；``TestLlmCronContract`` 對已
 #: 安裝 DB 逐支斷言，``TestLlmUnconfiguredZeroOutbound`` 逐支手動觸發。新增 LLM cron 一律登記在這。
 LLM_CRONS = {
+    'woow_paas_platform.ir_cron_llm_reconcile_local': (
+        'woow_paas_platform.llm_reconcile_local_cursor', '_cron_llm_reconcile_local'),
     'woow_paas_platform.ir_cron_llm_credit': (
         'woow_paas_platform.llm_credit_order', '_cron_llm_credit'),
     'woow_paas_platform.ir_cron_llm_credit_verify': (
@@ -562,6 +577,10 @@ LLM_CRONS = {
         'woow_paas_platform.llm_account', '_cron_llm_provision'),
     'woow_paas_platform.ir_cron_llm_balance_refresh': (
         'woow_paas_platform.llm_account', '_cron_llm_balance_refresh'),
+    'woow_paas_platform.ir_cron_llm_notifications': (
+        'woow_paas_platform.llm_notification', '_cron_llm_notifications'),
+    'woow_paas_platform.ir_cron_llm_not_me_disable': (
+        'woow_paas_platform.llm_notification', '_cron_llm_not_me_disable'),
     'woow_paas_platform.ir_cron_llm_event_cleanup': (
         'woow_paas_platform.llm_event', '_cron_llm_event_cleanup'),
     'woow_paas_platform.ir_cron_llm_alert_delivery': (
@@ -573,6 +592,10 @@ LLM_CRONS = {
         'woow_paas_platform.llm_swr_cache', '_cron_llm_swr_refresh'),
     'woow_paas_platform.ir_cron_llm_connection_test': (
         'woow_paas_platform.llm_runtime_state', '_cron_llm_connection_test'),
+    'woow_paas_platform.ir_cron_llm_manual_credit_monthly_report': (
+        'woow_paas_platform.llm_manual_credit_cron', '_cron_manual_credit_monthly_report'),
+    'woow_paas_platform.ir_cron_llm_backoffice_operations': (
+        'woow_paas_platform.llm_backoffice_operation', '_cron_process'),
 }
 #: cron 當掉時告警（``LlmAlert.CRON_FAILED``）用的錯誤碼：每支 LLM cron 一個固定碼（封閉對照，
 #: 不從例外取任何字）。``TestLlmCronFramework`` 斷言鍵＝:data:`LLM_CRONS`。
@@ -584,6 +607,7 @@ FREE_METER_ERROR_CODES = frozenset({
     'llm_free_meter_lag', 'llm_free_meter_gap', 'llm_free_up_failed',
 })
 LLM_CREDIT_ERROR_CODES = frozenset({
+    'llm_manual_credit_budget',
     'llm_credit_void_pending', 'llm_credit_snapshot_mismatch',
     'llm_credit_snapshot_invalid', 'llm_credit_response_invalid',
     'llm_credit_client_unavailable', 'llm_credit_definite_unrecognised',
@@ -593,19 +617,40 @@ LLM_CREDIT_ERROR_CODES = frozenset({
     'llm_credit_evidence_conflict', 'llm_credit_evidence_mismatch',
     'llm_credit_evidence_missing_snapshot', 'llm_credit_evidence_retry_limit',
 })
+LLM_RECONCILE_ERROR_CODES = frozenset({
+    'llm_i1_paid_overdue',
+    'llm_i1_sending_lease',
+    'llm_i1_unknown',
+    'llm_i1_needs_review',
+    'llm_i1_void_failed',
+    'llm_i1_attempt_limit',
+    'llm_i4_order_partner',
+    'llm_i4_wallet_debit',
+    'llm_i4_invoice',
+    'llm_i4_wallet_refund',
+    'llm_i4_credit_note',
+    'llm_i4_internal_links',
+    'llm_i4_missing_reason',
+    'llm_i4_cancelled_refund',
+    'llm_i4_unexpected_reversal',
+    'llm_i4_dr_origin',
+    'llm_i4_recharge_origin',
+})
 ERROR_CODES = (
-    API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
+    LLM_RECONCILE_ERROR_CODES | API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
     | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())
-    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES | {UNKNOWN_CODE})
+    | CIRCUIT_ERROR_CODES | CONFIG_CHANGE_ERROR_CODES
+    | {ERR_LLM_SETTINGS_INVALID, ERR_LLM_NOT_ME_INVALID, UNKNOWN_CODE})
 
 
-def report_cron_failed(env, xmlid):
+def report_cron_failed(env, xmlid, *, deadline=None):
     """``run_llm_cron`` 收掉例外之後告警（``cron_failed``＋該 cron 的固定碼；30 分鐘去重）。
 
     盡力而為、不往外丟：告警本身失敗（例如 DB 掛了）只記 log。
     """
-    _report(env, 'CRON_FAILED', LLM_CRON_ERROR_CODES.get(xmlid, UNKNOWN_CODE))
+    _report(env, 'CRON_FAILED', LLM_CRON_ERROR_CODES.get(xmlid, UNKNOWN_CODE),
+            deadline=deadline)
 
 
 def report_config_unavailable(env, code):
@@ -630,11 +675,13 @@ def report_break_glass_used(env, result):
     _report(env, 'BREAK_GLASS_USED', BREAK_GLASS_USED if result.ok else BREAK_GLASS_FAILED)
 
 
-def _report(env, alert_name, code):
+def _report(env, alert_name, code, *, deadline=None):
     # llm_event import llm_common：在這裡才 import（避免循環）。
     from .llm_event import LlmAlert
     try:
-        env['woow_paas_platform.llm_event']._llm_alert(LlmAlert[alert_name], error_code=code)
+        budget = {'deadline': deadline} if deadline is not None else {}
+        env['woow_paas_platform.llm_event']._llm_alert(
+            LlmAlert[alert_name], error_code=code, **budget)
     except Exception:  # noqa: BLE001 - alerting must not break the cron framework
         _logger.error('[LLM] alert %s (%s) not raised: %s', alert_name, code,
                       llm_redact.redact(traceback.format_exc()))
@@ -726,15 +773,21 @@ def run_llm_cron(env, xmlid, work, *, seconds=nac.CRON_TICK_SECONDS, items, conf
     except Exception:  # noqa: BLE001 - see docstring
         _logger.error('[LLM] cron %s crashed: %s', xmlid,
                       llm_redact.redact(traceback.format_exc()))
-        report_cron_failed(env, xmlid)
+        report_cron_failed(env, xmlid, deadline=tick.deadline)
         return False
     more = bool(more) or tick.more
     if more:
-        cron = env.ref(xmlid, raise_if_not_found=False)
-        if cron:
-            if tick.delay:
-                cron.sudo()._trigger(
-                    at=fields.Datetime.now() + timedelta(seconds=tick.delay))
-            else:
-                cron.sudo()._trigger()
+        # A continuation is only an acceleration: the regular schedule remains
+        # authoritative if the shared deadline is exhausted. Use a bounded
+        # independent transaction and the native trigger queue without _notifydb.
+        from .llm_event import _env_on
+        try:
+            with deadline_cursor(env.registry.cursor, tick.deadline) as cr:
+                bounded_env = _env_on(env.registry, cr)
+                cron = bounded_env.ref(xmlid, raise_if_not_found=False)
+                if cron:
+                    at = fields.Datetime.now() + timedelta(seconds=tick.delay)
+                    trigger_cron(cron.sudo(), at=at)
+        except Exception:  # noqa: BLE001 - normal schedule will retry
+            _logger.info('[LLM] cron %s continuation deferred to normal schedule', xmlid)
     return more

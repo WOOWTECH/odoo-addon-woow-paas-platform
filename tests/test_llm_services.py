@@ -495,6 +495,15 @@ class TestResponseClassification(unittest.TestCase):
         self.assertEqual(denied.reason, 'reveal_window')
         self.assertTrue(_classify(401, {}, {'X-Woow-Proxy-Error': 'auth'}).circuit)
 
+    def test_shared_ap_rate_is_transient_not_hourly_credit_budget(self):
+        headers = {'X-Woow-Proxy-Error': 'budget', 'Retry-After': '17'}
+        limited = _classify(429, {'reason': 'ap_rate'}, headers)
+        hourly = _classify(429, {'reason': 'hourly_cap'}, headers)
+        self.assertIsInstance(limited, nac.NotExecuted)
+        self.assertEqual((limited.reason, limited.retry_after), ('proxy_ap_rate', 17))
+        self.assertEqual(nac.circuit_effect('ap', limited), (None, None))
+        self.assertEqual(hourly.reason, 'proxy_budget')
+
     def test_precheck_relay_is_classified_as_new_api_answer(self):
         result = _classify(401, {'success': False, 'code': 'ACCESS_TOKEN_EXPIRED'},
                            {'X-Woow-Proxy-Precheck': 'reveal'})
@@ -1246,6 +1255,170 @@ class TestIdentityHelpers(unittest.TestCase):
             'group': 'free', 'cross_group_retry': False, 'allow_user_quota_query': False})
         with self.assertRaises(nac.NewApiInputError):
             nac.free_trial_token_body('ws_17_ab12', 1)
+
+    def test_paid_body_is_the_closed_default_group_contract(self):
+        expires = 1_900_000_000
+
+        body = nac.paid_token_body(
+            'wp_42_abcd', expires, 100 * nac.QUOTA_PER_POINT, False, True,
+            'model-a,model-b', 'default')
+
+        self.assertEqual(body, {
+            'name': 'wp_42_abcd',
+            'expired_time': expires,
+            'remain_quota': 100 * nac.QUOTA_PER_POINT,
+            'unlimited_quota': False,
+            'model_limits_enabled': True,
+            'model_limits': 'model-a,model-b',
+            'allow_ips': '',
+            'group': 'default',
+            'cross_group_retry': False,
+            'allow_user_quota_query': False,
+        })
+
+    def test_paid_body_supports_unlimited_all_default_models(self):
+        self.assertEqual(nac.paid_token_body(
+            'wp_42_abcd', -1, 0, True, False, '', 'default'), {
+            'name': 'wp_42_abcd',
+            'expired_time': -1,
+            'remain_quota': 0,
+            'unlimited_quota': True,
+            'model_limits_enabled': False,
+            'model_limits': '',
+            'allow_ips': '',
+            'group': 'default',
+            'cross_group_retry': False,
+            'allow_user_quota_query': False,
+        })
+
+    def test_paid_body_rejects_untrusted_values(self):
+        good = ('wp_42_abcd', 1_900_000_000, nac.QUOTA_PER_POINT, False,
+                True, 'model-a', 'default')
+        invalid = (
+            ('wp_42_ABCd',) + good[1:],
+            (good[0], 0) + good[2:],
+            (good[0], good[1], True) + good[3:],
+            (good[0], good[1], -1) + good[3:],
+            good[:3] + ('false',) + good[4:],
+            good[:4] + ('true',) + good[5:],
+            good[:5] + ('model a',) + good[6:],
+            good[:6] + ('free',),
+        )
+        for values in invalid:
+            with self.subTest(values=values), self.assertRaises(nac.NewApiInputError):
+                nac.paid_token_body(*values)
+
+    @staticmethod
+    def _paid_remote_token():
+        return {
+            'id': 901,
+            'name': 'wp_42_abcd',
+            'expired_time': 1_900_000_000,
+            'remain_quota': 100 * nac.QUOTA_PER_POINT,
+            'unlimited_quota': False,
+            'model_limits_enabled': True,
+            'model_limits': 'model-a,model-b',
+            'allow_ips': '',
+            'group': 'default',
+            'cross_group_retry': False,
+            'allow_user_quota_query': False,
+            # Actual safe GET responses contain additional uneditable fields.
+            'created_time': 1_800_000_000,
+            'key': 'abcd********wxyz',
+            'status': 1,
+            'used_quota': 30 * nac.QUOTA_PER_POINT,
+        }
+
+    def test_paid_update_body_preserves_full_safe_get_shape(self):
+        remote = self._paid_remote_token()
+
+        body = nac.paid_token_update_body(
+            remote, 901, 'wp_42_abcd', remain_quota=70 * nac.QUOTA_PER_POINT)
+
+        self.assertEqual(body, {
+            'id': 901,
+            'name': 'wp_42_abcd',
+            'expired_time': 1_900_000_000,
+            'remain_quota': 70 * nac.QUOTA_PER_POINT,
+            'unlimited_quota': False,
+            'model_limits_enabled': True,
+            'model_limits': 'model-a,model-b',
+            'allow_ips': '',
+            'group': 'default',
+            'cross_group_retry': False,
+            'allow_user_quota_query': False,
+        })
+        self.assertEqual(remote['remain_quota'], 100 * nac.QUOTA_PER_POINT,
+                         'the helper must not mutate the GET response')
+
+    def test_paid_update_body_can_switch_to_unlimited_all_default(self):
+        body = nac.paid_token_update_body(
+            self._paid_remote_token(), 901, 'wp_42_abcd', expired_time=-1,
+            remain_quota=0, unlimited_quota=True, model_limits_enabled=False,
+            model_limits='')
+
+        self.assertEqual(body['expired_time'], -1)
+        self.assertEqual(body['remain_quota'], 0)
+        self.assertTrue(body['unlimited_quota'])
+        self.assertFalse(body['model_limits_enabled'])
+        self.assertEqual(body['model_limits'], '')
+
+    def test_paid_update_accepts_rc44_without_quota_query_field(self):
+        # rc.44 model.Token / controller.tokenResponse do not define this
+        # field. The proxy's write contract still requires explicit False.
+        remote = self._paid_remote_token()
+        remote.pop('allow_user_quota_query')
+        body = nac.paid_token_update_body(
+            remote, 901, 'wp_42_abcd', remain_quota=70 * nac.QUOTA_PER_POINT)
+        self.assertIs(body['allow_user_quota_query'], False)
+        self.assertEqual(body['remain_quota'], 70 * nac.QUOTA_PER_POINT)
+        self.assertNotIn('allow_user_quota_query', remote)
+        self.assertNotIn('key', body)
+
+    def test_paid_update_rejects_explicit_untrusted_quota_query_field(self):
+        for value in (True, None, 0, 1, '', 'false', [], {}):
+            remote = self._paid_remote_token()
+            remote['allow_user_quota_query'] = value
+            with self.subTest(value=value), self.assertRaises(nac.NewApiInputError):
+                nac.paid_token_update_body(remote, 901, 'wp_42_abcd')
+
+    def test_paid_update_body_rejects_missing_foreign_or_untrusted_get_data(self):
+        missing = self._paid_remote_token()
+        missing.pop('allow_ips')
+        foreign_id = self._paid_remote_token()
+        foreign_id['id'] = 902
+        bool_id = self._paid_remote_token()
+        bool_id['id'] = True
+        foreign_name = self._paid_remote_token()
+        foreign_name['name'] = 'wp_99_abcd'
+        untrusted = self._paid_remote_token()
+        untrusted['cross_group_retry'] = True
+        for token, token_id, name in (
+                (missing, 901, 'wp_42_abcd'),
+                (foreign_id, 901, 'wp_42_abcd'),
+                (bool_id, 1, 'wp_42_abcd'),
+                (foreign_name, 901, 'wp_42_abcd'),
+                (untrusted, 901, 'wp_42_abcd')):
+            with self.subTest(token=token), self.assertRaises(nac.NewApiInputError):
+                nac.paid_token_update_body(token, token_id, name)
+
+    def test_paid_token_bodies_are_accepted_by_proxy_policy(self):
+        settings, _warnings = proxy_settings.load_settings({
+            'PROXY_AUTH_CRON': '%s:%s' % (KID, SECRET),
+            'PROXY_USERNAME_REGEX': r'^ws[a-z]{2}\d{10}$',
+            'PROXY_TENANT_IP_RANGE': '198.18.17.0-198.19.255.255',
+        }, int(time.time()))
+        ctx = proxy_policy.PolicyContext(settings, int(time.time()))
+        created = nac.paid_token_body(
+            'wp_42_abcd', 1_900_000_000, 100 * nac.QUOTA_PER_POINT,
+            False, True, 'model-a,model-b')
+        remote = dict(created, id=901, created_time=1_800_000_000, status=1,
+                      used_quota=30 * nac.QUOTA_PER_POINT, key='abcd********wxyz')
+        updated = nac.paid_token_update_body(
+            remote, 901, 'wp_42_abcd', remain_quota=70 * nac.QUOTA_PER_POINT)
+
+        self.assertEqual(proxy_policy.token_create(created, ctx), created)
+        self.assertEqual(proxy_policy.token_update(updated, ctx), updated)
 
     def test_up_name_matches_proxy_pattern(self):
         self.assertRegex(nac.up_name(123, 1_800_000_000), proxy_policy.UP_NAME_RE.pattern)

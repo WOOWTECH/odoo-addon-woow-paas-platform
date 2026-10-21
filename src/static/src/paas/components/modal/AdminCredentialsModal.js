@@ -16,7 +16,8 @@ const PASSWORD_RE = /^[\x21-\x7e]{12,128}$/;
  * 只有密碼、沒有帳號）時不顯示帳號欄、也不送 username。
  *
  * 密碼兩種模式：平台隨機產生（預設，成功後由 OneTimeCredentialsModal 一次性顯示）
- * 或自行設定（後端不回傳明文）。儲存走 helm upgrade ＋ rollout restart，服務會重啟。
+ * 或自行設定（後端不回傳明文）。儲存走 helm upgrade；重啟範圍由 template 旗標
+ * credential_change_restart_scope（restartScope prop）描述，不在前端自建 slug 判準。
  *
  * #1557：有 gateway 的服務（LiteLLM 的 master key）多一個「一併換掉 Gateway API Key」
  * 勾選，預設不勾＝保留目前的 key（腳本與整合不受影響）；勾了才換發，並在送出前把後果
@@ -31,6 +32,7 @@ export class AdminCredentialsModal extends Component {
     serviceId: { type: Number },
     currentUsername: { type: [String, { value: null }], optional: true },
     usernameEditable: { type: Boolean, optional: true },
+    restartScope: { type: String, optional: true },
     // #1557：detail payload（讀 has_gateway）。沒傳＝當作沒有 gateway。
     service: { type: Object, optional: true },
     onClose: { type: Function },

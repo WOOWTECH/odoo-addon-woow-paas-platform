@@ -94,7 +94,7 @@ from .llm_common import (
     run_llm_cron,
     taipei_day,
 )
-from .llm_event import LlmAlert, LlmIncident, _begin, safe_code
+from .llm_event import LlmAlert, LlmIncident, _begin, _env_on, safe_code
 from .llm_terms import TERMS_MODEL, clean_version
 
 _logger = logging.getLogger(__name__)
@@ -261,6 +261,13 @@ class LlmAccount(models.Model):
     reauth_at = fields.Datetime(readonly=True, copy=False,
                                 help='Audit only; eligibility belongs to the current session.')
     low_balance_threshold = fields.Integer(readonly=True, default=50)
+    not_me_notice_id = fields.Integer(readonly=True, default=0, copy=False,
+                                      groups='base.group_system')
+    low_balance_armed = fields.Boolean(readonly=True, default=True, copy=False)
+    low_balance_cycle = fields.Integer(readonly=True, default=0, copy=False)
+    low_balance_notice_retry_at = fields.Datetime(readonly=True, copy=False)
+    low_balance_notice_pending = fields.Boolean(readonly=True, default=False, copy=False,
+                                                groups='base.group_system')
     # Real row update in T1 serializes distinct conversion requests under
     # PostgreSQL REPEATABLE READ; never set from tenant input.
     last_convert_request_at = fields.Datetime(readonly=True, copy=False,
@@ -1323,16 +1330,36 @@ class LlmAccount(models.Model):
                     'UPDATE {t} AS a SET quota_cached = v.quota, used_quota_cached = v.used, '
                     'request_count_cached = v.cnt, balance_synced_at = %s, '
                     'balance_invalidated_at = NULL, write_uid = %s, '
-                    'write_date = %s '
+                    'write_date = %s, low_balance_notice_retry_at = CASE '
+                    'WHEN v.quota >= a.low_balance_threshold * 15625 OR a.low_balance_armed '
+                    'THEN NULL ELSE a.low_balance_notice_retry_at END, low_balance_cycle = CASE '
+                    'WHEN a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625 '
+                    'THEN a.low_balance_cycle + 1 ELSE a.low_balance_cycle END, '
+                    'low_balance_armed = CASE '
+                    'WHEN v.quota >= a.low_balance_threshold * 15625 THEN TRUE '
+                    'WHEN a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625 '
+                    'THEN FALSE ELSE a.low_balance_armed END '
+                    ', low_balance_notice_pending = CASE '
+                    'WHEN v.quota >= a.low_balance_threshold * 15625 THEN FALSE '
+                    'ELSE a.low_balance_notice_pending OR '
+                    '(a.low_balance_armed AND v.quota < a.low_balance_threshold * 15625) END '
                     'FROM (VALUES {values}) AS v(username, user_id, quota, used, cnt) '
                     'WHERE a.newapi_username = v.username AND a.newapi_user_id = v.user_id '
                     'AND a.state IN %s '
                     'AND (a.balance_synced_at IS NULL OR a.balance_synced_at < %s) '
                     'AND (a.balance_invalidated_at IS NULL OR '
-                    'a.balance_invalidated_at < %s)'.format(
+                    'a.balance_invalidated_at < %s) RETURNING a.id, a.quota_cached, '
+                    'a.low_balance_threshold, a.low_balance_cycle, '
+                    'a.low_balance_notice_pending'.format(
                         t=ACCOUNT_TABLE, values=values),
                     params + [read_at])
-                return cr.rowcount
+                changed = cr.fetchall()
+                if any(row[4] for row in changed):
+                    # Only schedule work here: the five-item notification cron
+                    # owns rendering. Trigger and crossing markers commit together.
+                    notice_env = _env_on(self.env.registry, cr)
+                    notice_env.ref('woow_paas_platform.ir_cron_llm_notifications').sudo()._trigger()
+            return len(changed)
         except psycopg2.Error as exc:
             _logger.warning('[LLM] balance refresh: page write failed (pgcode=%s)',
                             getattr(exc, 'pgcode', None))

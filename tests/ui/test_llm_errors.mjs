@@ -76,6 +76,25 @@ test("帶參數的碼：retry_after 換成分鐘（無條件進位）、used、r
   }
 });
 
+test("error params are restricted to safe numeric and enumerated values", async () => {
+  globalThis.__llmRpc = async () => ({
+    success: false, code: "llm_key_cannot_enable",
+    retry_after: NaN, max_keys: -1, used: "3", needed_7d: Infinity, short_by: -0.5,
+    reason: "<img src=x onerror=alert(1)>", field: "<script>alert(1)</script>",
+    current_version: "1.2.3<script>",
+  });
+  assert.deepEqual(await llmService.fetchState(), { success: false, code: "llm_key_cannot_enable" });
+
+  globalThis.__llmRpc = async () => ({
+    success: false, code: "llm_key_cannot_enable", retry_after: 0, max_keys: 20,
+    used: 3.5, needed_7d: 7, short_by: 2, reason: "exhausted", field: "name", current_version: "v1.2_rc-3",
+  });
+  assert.deepEqual(await llmService.fetchState(), {
+    success: false, code: "llm_key_cannot_enable", retry_after: 0, max_keys: 20,
+    used: 3.5, needed_7d: 7, short_by: 2, reason: "exhausted", current_version: "v1.2_rc-3",
+  });
+});
+
 test("llm_suspended 的句子不指向「橫幅」（在沒有橫幅的地方也講得通）", () => {
   assert.equal(errors.llmErrorMessage({ code: "llm_suspended" }), "AI 模型服務已暫停");
 });
@@ -238,6 +257,331 @@ test("其他端點用預設逾時（rpc.js 30 秒），只有建金鑰明確傳 
     ["/api/llm/usage/recent", 2],
   ]);
   assert.deepEqual(calls[1][1], { tos_version: "draft-0" });
+});
+
+test("paid key mutations validate fields, preserve omitted/null fields, refresh, and sanitize results", async () => {
+  const calls = [];
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/update") return { success: true, data: { key: "sk-" + "SyntheticSecret" } };
+    return { success: true, data: args[0] === "/api/llm/keys/list" ? { items: [] } : {} };
+  };
+  assert.deepEqual(await llmService.updateKey(7, { name: "Renamed", limitPoints: null, ignored: "no" }), {
+    success: true, data: null,
+  });
+  assert.deepEqual(calls.slice(0, 3).map(([url, params]) => [url, params]), [
+    ["/api/llm/keys/update", { key_id: 7, name: "Renamed", limit_points: null }],
+    ["/api/llm/keys/list", {}], ["/api/llm/state", {}],
+  ]);
+  assert.equal(JSON.stringify(llmService).includes("sk-SyntheticSecret"), false);
+
+  calls.length = 0;
+  assert.deepEqual(await llmService.updateKey(7, { expires: null, models: null }), { success: true, data: null });
+  assert.deepEqual(calls[0][1], { key_id: 7, expires: null, models: null });
+
+  calls.length = 0;
+  assert.deepEqual(await llmService.updateKey(7, { expires: "90d" }), { success: true, data: null });
+  assert.deepEqual(calls[0][1], { key_id: 7, expires: "90d" });
+  calls.length = 0;
+  assert.deepEqual(await llmService.updateKey(7, { models: ["openai/gpt-4.1", "vendor:model_v2/path-1"] }), {
+    success: true, data: null,
+  });
+  assert.deepEqual(calls[0][1], { key_id: 7, models: ["openai/gpt-4.1", "vendor:model_v2/path-1"] });
+  calls.length = 0;
+
+  const cyclicArray = [];
+  cyclicArray.push(cyclicArray);
+  const hostileModels = ["openai/gpt-4.1"];
+  hostileModels.toJSON = () => { throw new Error("hostile toJSON"); };
+  const cyclicObject = {};
+  cyclicObject.self = cyclicObject;
+  const hostileChanges = new Proxy({}, {
+    getOwnPropertyDescriptor() { throw new Error("hostile descriptor"); },
+  });
+  const revokedModels = Proxy.revocable([], {});
+  revokedModels.revoke();
+  for (const args of [
+    [0, { name: "x" }], [1.5, { name: "x" }], [Number.MAX_SAFE_INTEGER + 1, { name: "x" }],
+    [1, {}], [1, { name: undefined }], [1, { name: undefined, expires: "90d" }], [1, null],
+    [1, { name: null }], [1, { name: "" }], [1, { name: " \t\n" }], [1, { name: "x".repeat(65) }], [1, { name: 42 }],
+    [1, { limitPoints: 0 }], [1, { limitPoints: -1 }], [1, { limitPoints: 1.5 }], [1, { limitPoints: "2" }],
+    [1, { expires: "30" }], [1, { expires: {} }], [1, { expires: cyclicObject }], [1, { expires: undefined }],
+    [1, { models: "openai/gpt-4.1" }], [1, { models: [] }], [1, { models: ["x", "x"] }],
+    [1, { models: ["bad model"] }], [1, { models: ["x".repeat(129)] }], [1, { models: [null] }],
+    [1, { models: cyclicArray }], [1, { models: [{ id: "openai/gpt-4.1" }] }],
+    [1, hostileChanges], [1, { models: revokedModels.proxy }],
+  ]) assert.deepEqual(await llmService.updateKey(...args), { success: false, code: "llm_key_invalid" });
+  assert.equal(calls.length, 0, "invalid updates must not make any RPCs");
+
+  assert.deepEqual(await llmService.updateKey(1, { name: "valid", extra: "omitted" }), {
+    success: true, data: null,
+  });
+  assert.deepEqual(calls[0], ["/api/llm/keys/update", { key_id: 1, name: "valid" }]);
+  calls.length = 0;
+
+  const hostileResult = await llmService.updateKey(1, { models: hostileModels });
+  assert.deepEqual(hostileResult, { success: true, data: null });
+  assert.deepEqual(calls[0], ["/api/llm/keys/update", { key_id: 1, models: ["openai/gpt-4.1"] }]);
+  calls.length = 0;
+
+  for (const result of [
+    llmService.extendKey(0), llmService.extendKey(-1),
+    llmService.setKeyStatus(0, true), llmService.setKeyStatus(2, "yes"),
+    llmService.deleteKey(0, "Confirm"), llmService.deleteKey(2, null),
+  ]) assert.deepEqual(await result, { success: false, code: "llm_key_invalid" });
+  assert.equal(calls.length, 0, "invalid extend/status/delete arguments must not make RPCs");
+  await llmService.extendKey(8);
+  await llmService.setKeyStatus(8, false);
+  await llmService.deleteKey(8, "Confirm");
+  assert.deepEqual(calls.filter(([url]) => ["/api/llm/keys/extend", "/api/llm/keys/set_status", "/api/llm/keys/delete"].includes(url)).map(([url, params]) => [url, params]), [
+    ["/api/llm/keys/extend", { key_id: 8 }],
+    ["/api/llm/keys/set_status", { key_id: 8, enabled: false }],
+    ["/api/llm/keys/delete", { key_id: 8, confirm_name: "Confirm" }],
+  ]);
+});
+
+test("successful mutation stays successful when refreshes fail; plaintext never reaches store or caller", async () => {
+  const plaintext = "sk-" + "OnlyCallerCanSeeThis";
+  let refreshCount = 0;
+  globalThis.__llmRpc = async (url) => {
+    if (url === "/api/llm/keys/update") return { success: true, data: { key: plaintext } };
+    refreshCount += 1;
+    throw new Error("refresh failed " + plaintext);
+  };
+  const result = await llmService.updateKey(17, { name: "safe" });
+  assert.deepEqual(result, { success: true, data: null });
+  assert.equal(refreshCount, 2);
+  assert.equal(JSON.stringify(llmService).includes(plaintext), false);
+});
+
+test("action failures do not refresh and session expiry stays classified", async () => {
+  const calls = [];
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend") throw rpcError("raw transport sk-" + "synthetic", { httpStatus: 401 });
+    return { success: true, data: {} };
+  };
+  assert.deepEqual(await llmService.extendKey(81), { success: false, code: "llm_session_expired" });
+  assert.deepEqual(calls.map(([url]) => url), ["/api/llm/keys/extend"]);
+  assert.equal(JSON.stringify(llmService).includes("synthetic"), false);
+});
+
+test("a failed mutation does not refresh and releases its queue for a successful retry", async () => {
+  const calls = [];
+  let attempt = 0;
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend") {
+      attempt += 1;
+      if (attempt === 1) return { success: false, code: "llm_key_invalid", error: "raw detail" };
+      return { success: true, data: { key: "sk-never-in-store" } };
+    }
+    return { success: true, data: args[0] === "/api/llm/keys/list" ? { items: [] } : {} };
+  };
+  assert.deepEqual(await llmService.extendKey(82), { success: false, code: "llm_key_invalid" });
+  assert.deepEqual(calls.map(([url]) => url), ["/api/llm/keys/extend"], "failed action must not refresh");
+  assert.deepEqual(await llmService.extendKey(82), { success: true, data: null });
+  assert.deepEqual(calls.map(([url]) => url), [
+    "/api/llm/keys/extend", "/api/llm/keys/extend", "/api/llm/keys/list", "/api/llm/state",
+  ]);
+  assert.equal(JSON.stringify(llmService).includes("sk-never-in-store"), false);
+});
+
+test("mutation intents serialize per key, dedupe identical requests, and release after completion", async () => {
+  const priorRpc = globalThis.__llmRpc;
+  const cloneState = (value) => {
+    if (Array.isArray(value)) return value.map(cloneState);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneState(item)]));
+    }
+    return value;
+  };
+  const priorServiceState = Object.fromEntries([
+    "keys", "keysError", "keysLoaded", "keysRequest",
+    "overview", "overviewError", "overviewLoaded", "overviewRequest",
+  ].map((field) => [field, cloneState(llmService[field])]));
+  const calls = [];
+  const deferredReleases = new Set();
+  const pendingWork = new Set();
+  const deferRpc = (makeResult) => {
+    let release;
+    const promise = new Promise((resolve) => {
+      let released = false;
+      release = () => {
+        if (released) return;
+        released = true;
+        deferredReleases.delete(release);
+        resolve(makeResult());
+      };
+      deferredReleases.add(release);
+    });
+    return { promise, release };
+  };
+  const track = (promise) => {
+    pendingWork.add(promise);
+    promise.then(
+      () => pendingWork.delete(promise),
+      () => pendingWork.delete(promise),
+    );
+    return promise;
+  };
+  const waitForTurns = async (predicate, description) => {
+    for (let turn = 0; turn < 20; turn += 1) {
+      if (predicate()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail(`Timed out after 20 event-loop turns waiting for ${description}`);
+  };
+  const waitForPendingSettlement = async () => {
+    const settlement = Promise.allSettled([...pendingWork]);
+    let settled = false;
+    settlement.then(() => { settled = true; });
+    for (let turn = 0; turn < 20; turn += 1) {
+      if (settled) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail(`Timed out after 20 event-loop turns waiting for ${pendingWork.size} tracked mutation promise(s) to settle`);
+  };
+  const resolveOld = {};
+  let releaseAction;
+  let releaseFirstStatus;
+  let releaseFirstKeys;
+  let releaseFirstState;
+  let releaseSecondStatus;
+  let releaseSame;
+  let first;
+  let second;
+  let independent;
+  let enabling;
+  let disabling;
+  let sameFirst;
+  let sameSecond;
+  let oldKeys;
+  let oldState;
+  try {
+  globalThis.__llmRpc = (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 90) {
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      releaseAction = deferred.release;
+      return deferred.promise;
+    }
+    if (args[0] === "/api/llm/keys/list") return Promise.resolve({ success: true, data: { items: [{ id: calls.length }] } });
+    return Promise.resolve({ success: true, data: { marker: calls.length } });
+  };
+  first = track(llmService.extendKey(90));
+  second = track(llmService.extendKey(90));
+  independent = track(llmService.extendKey(91));
+  await waitForTurns(() => calls.filter(([url]) => url === "/api/llm/keys/extend").length >= 2, "independent mutation RPC");
+  assert.equal(calls.filter(([url]) => url === "/api/llm/keys/extend").length, 2);
+  await independent;
+  releaseAction();
+  assert.deepEqual(await Promise.all([first, second]), [{ success: true, data: null }, { success: true, data: null }]);
+  globalThis.__llmRpc = async (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/list") return { success: true, data: { items: [] } };
+    return { success: true, data: {} };
+  };
+  assert.equal(calls.filter(([url, params]) => url === "/api/llm/keys/extend" && params.key_id === 90).length, 1);
+  assert.deepEqual(await llmService.extendKey(90), { success: true, data: null });
+  assert.equal(calls.filter(([url, params]) => url === "/api/llm/keys/extend" && params.key_id === 90).length, 2);
+
+  const statusStart = calls.length;
+  const statusPhases = [];
+  globalThis.__llmRpc = (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/set_status" && args[1].key_id === 92) {
+      statusPhases.push(args[1].enabled);
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      if (statusPhases.length === 1) releaseFirstStatus = deferred.release;
+      else releaseSecondStatus = deferred.release;
+      return deferred.promise;
+    }
+    if (args[0] === "/api/llm/keys/list" && statusPhases.length === 1) {
+      const deferred = deferRpc(() => ({ success: true, data: { items: [] } }));
+      releaseFirstKeys = deferred.release;
+      return deferred.promise;
+    }
+    if (args[0] === "/api/llm/state" && statusPhases.length === 1) {
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      releaseFirstState = deferred.release;
+      return deferred.promise;
+    }
+    return Promise.resolve({ success: true, data: {} });
+  };
+  enabling = track(llmService.setKeyStatus(92, true));
+  disabling = track(llmService.setKeyStatus(92, false));
+  await waitForTurns(() => calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length >= 1, "first status mutation RPC");
+  assert.equal(calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length, 1);
+  assert.deepEqual(statusPhases, [true]);
+  releaseFirstStatus();
+  await waitForTurns(() => typeof releaseFirstKeys === "function" && typeof releaseFirstState === "function", "first mutation refresh RPCs");
+  assert.equal(calls.slice(statusStart).filter(([url]) => url === "/api/llm/keys/set_status").length, 1,
+    "the next mutation must wait for both first-mutation refreshes");
+  releaseFirstKeys();
+  releaseFirstState();
+  await waitForTurns(() => statusPhases.length >= 2, "second status mutation RPC");
+  assert.deepEqual(statusPhases, [true, false]);
+  releaseSecondStatus();
+  assert.deepEqual(await Promise.all([enabling, disabling]), [{ success: true, data: null }, { success: true, data: null }]);
+
+  const sameStart = calls.length;
+  globalThis.__llmRpc = (...args) => {
+    calls.push(args);
+    if (args[0] === "/api/llm/keys/extend" && args[1].key_id === 93) {
+      const deferred = deferRpc(() => ({ success: true, data: {} }));
+      releaseSame = deferred.release;
+      return deferred.promise;
+    }
+    return Promise.resolve({ success: true, data: {} });
+  };
+  sameFirst = track(llmService.extendKey(93));
+  sameSecond = track(llmService.extendKey(93));
+  await waitForTurns(() => typeof releaseSame === "function", "deduplicated mutation RPC");
+  assert.equal(calls.slice(sameStart).filter(([url]) => url === "/api/llm/keys/extend").length, 1);
+  releaseSame();
+  await Promise.all([sameFirst, sameSecond]);
+
+  globalThis.__llmRpc = (url) => {
+    if (url === "/api/llm/keys/list") return new Promise((resolve) => { resolveOld.keys = resolve; });
+    if (url === "/api/llm/state") return new Promise((resolve) => { resolveOld.state = resolve; });
+    throw new Error("unexpected");
+  };
+  oldKeys = track(llmService.fetchKeys());
+  oldState = track(llmService.fetchState());
+  globalThis.__llmRpc = async (url) => url === "/api/llm/keys/list"
+    ? { success: true, data: { items: [{ id: "new" }] } }
+    : { success: true, data: { marker: "new" } };
+  await llmService.fetchKeys();
+  await llmService.fetchState();
+  assert.equal(llmService.keysError, null);
+  assert.equal(llmService.overviewError, null);
+  assert.equal(llmService.keysLoaded, true);
+  assert.equal(llmService.overviewLoaded, true);
+  resolveOld.keys({ success: false, code: "llm_network_error" });
+  resolveOld.state({ success: false, code: "llm_network_error" });
+  await Promise.all([oldKeys, oldState]);
+  assert.equal(llmService.keysError, null);
+  assert.equal(llmService.overviewError, null);
+  assert.equal(llmService.keysLoaded, true);
+  assert.equal(llmService.overviewLoaded, true);
+  assert.deepEqual(llmService.keys, [{ id: "new" }]);
+  assert.deepEqual(llmService.overview, { marker: "new" });
+  } finally {
+    for (const release of [...deferredReleases]) release();
+    for (const release of [releaseAction, releaseFirstStatus, releaseFirstKeys, releaseFirstState, releaseSecondStatus, releaseSame]) release?.();
+    resolveOld.keys?.({ success: false, code: "llm_network_error" });
+    resolveOld.state?.({ success: false, code: "llm_network_error" });
+    for (const promise of [first, second, independent, enabling, disabling, sameFirst, sameSecond, oldKeys, oldState]) {
+      if (promise) pendingWork.add(promise);
+    }
+    try {
+      await waitForPendingSettlement();
+    } finally {
+      globalThis.__llmRpc = priorRpc;
+      for (const [field, value] of Object.entries(priorServiceState)) llmService[field] = value;
+    }
+  }
 });
 
 test("client_request_id 是後端收的小寫 UUID v4 形狀，每次不同", () => {

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.LlmKeyActionConfirmModal">
+    <div class="o_woow_modal_backdrop o_woow_llm_key_action_backdrop" t-ref="backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_llm_key_action" t-ref="dialog" role="dialog" aria-modal="true" aria-labelledby="o_woow_llm_key_action_title" aria-describedby="o_woow_llm_key_action_description" tabindex="-1" t-on-click.stop="">
+        <div class="o_woow_modal_header"><h2 id="o_woow_llm_key_action_title" t-esc="title"/><button type="button" aria-label="Close" t-att-disabled="props.busy" t-on-click="requestClose">×</button></div>
+        <div class="o_woow_modal_body">
+          <p id="o_woow_llm_key_action_description" t-esc="description"/>
+          <p><strong t-esc="displayName"/></p>
+          <label t-if="isPaidDelete"><span t-esc="typePrompt"/><input type="text" autocomplete="off" t-model="state.confirmName" t-att-disabled="props.busy"/></label>
+          <p t-if="isDelete and !isPaidDelete" role="alert">This permanently deletes the free trial key. Its secret cannot be recovered.</p>
+          <p t-if="props.errorText" role="alert" t-esc="props.errorText"/>
+        </div>
+        <div class="o_woow_modal_footer">
+          <WoowButton variant="'secondary'" size="'md'" disabled="props.busy" onClick.bind="requestClose">Cancel</WoowButton>
+          <WoowButton variant="'primary'" size="'md'" disabled="props.busy || !nameMatches" onClick.bind="confirm"><t t-esc="submitLabel"/></WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>
