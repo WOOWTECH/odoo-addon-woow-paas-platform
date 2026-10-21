@@ -186,18 +186,75 @@ class TestKeyCreateAdmission(unittest.TestCase):
         worker.client.user_create_token.assert_called_once()
         worker.client.user_reveal_token.assert_called_once()
 
-    def test_unknown_first_post_then_guard_flip_preserves_safe_retry_and_reveal(self):
+    def test_unknown_absent_retries_only_while_fresh_guard_still_allows(self):
         worker = MemoryWorker()
-        worker.mode = 'flip_after_post'
-        worker._llm_assert_key_create_allowed = types.MethodType(
-            lambda self: MemoryWorker._llm_assert_key_create_allowed(self)
-            if self.mode != 'flip_after_post' else None, worker)
         worker.first_outcome = nac.Unknown('read_timeout')
         tokens = iter((None, {'id': 33}))
         worker._llm_find_token = lambda *args: next(tokens)
         self.assertEqual(worker.create()['status'], 'active')
         self.assertEqual(worker.client.user_create_token.call_count, 2)
+        self.assertEqual(worker.checked, 3)  # early, first POST, retry POST
         self.assertEqual(worker.slot, 1)
+
+    def flipped_unknown_worker(self, kind, flip, *, found=False):
+        worker = MemoryWorker(kind)
+        worker._llm_assert_key_create_allowed = types.MethodType(
+            Worker._llm_assert_key_create_allowed, worker)
+        switch, guard = ['True'], [False]
+        runtime = MagicMock()
+        runtime.sudo.return_value = runtime
+        runtime._llm_read.side_effect = lambda: {'guard_tripped': guard[0]}
+        worker.env.__getitem__.side_effect = lambda name: (
+            runtime if name == 'woow_paas_platform.llm_runtime_state' else
+            worker.event if name == 'event' else worker.account)
+        cursor = worker.env.registry.cursor.return_value.__enter__.return_value
+        cursor.fetchone.side_effect = lambda: (switch[0],)
+
+        def post(*args, **kwargs):
+            if flip == 'orders':
+                switch[0] = 'False'
+            elif flip == 'status':
+                guard[0] = True
+            else:
+                cursor.execute.side_effect = RuntimeError('unreadable database')
+            return nac.Unknown('read_timeout')
+
+        worker.client.user_create_token.side_effect = post
+        worker.token = {'id': 33} if found else None
+        return worker, runtime
+
+    def test_unknown_absent_rechecks_guard_refuses_retry_and_retains_uncertain_evidence(self):
+        for kind in ('free_trial', 'paid'):
+            for flip in ('orders', 'status', 'unreadable'):
+                with self.subTest(kind=kind, flip=flip):
+                    worker, runtime = self.flipped_unknown_worker(kind, flip)
+                    with self.assertRaises(LlmError) as caught:
+                        worker.create()
+                    self.assertEqual(caught.exception.code, 'llm_guard')
+                    # First POST WAS attempted: never describe the whole event as not_executed.
+                    self.assertFalse(caught.exception.not_executed)
+                    self.assertEqual(runtime._llm_read.call_count, 3)
+                    worker.client.user_create_token.assert_called_once()
+                    worker.client.user_reveal_token.assert_not_called()
+                    self.assertEqual(worker.state, 'failed_reveal')
+                    self.assertEqual(worker.slot, int(kind == 'free_trial'))
+                    self.assertEqual(worker.operations, ['failed_reveal'])
+                    worker.event._llm_event_finish.assert_called_once_with(
+                        17, 'failed', error_code='llm_guard', target_model='key', target_id=9)
+
+    def test_unknown_found_can_reveal_after_guard_flip_without_another_create(self):
+        for kind in ('free_trial', 'paid'):
+            for flip in ('orders', 'status'):
+                with self.subTest(kind=kind, flip=flip):
+                    worker, runtime = self.flipped_unknown_worker(kind, flip, found=True)
+                    self.assertEqual(worker.create()['status'], 'active')
+                    self.assertEqual(runtime._llm_read.call_count, 2)
+                    worker.client.user_create_token.assert_called_once()
+                    worker.client.user_reveal_token.assert_called_once()
+                    self.assertEqual(worker.slot, int(kind == 'free_trial'))
+                    self.assertEqual(worker.operations, ['active'])
+                    worker.event._llm_event_finish.assert_called_once_with(
+                        17, 'ok', target_model='key', target_id=9)
 
     def test_unknown_and_failed_list_keeps_reservation_without_retry(self):
         worker = MemoryWorker()

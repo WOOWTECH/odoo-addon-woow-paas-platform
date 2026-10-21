@@ -634,8 +634,25 @@ class LlmApiKey(models.Model):
         token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None and isinstance(created, nac.Unknown):
             # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
-            with self._llm_creation_guard(key_id):
-                retried = client.user_create_token(ip, up, body, deadline=deadline)
+            retry_admission_rejected = False
+            try:
+                with self._llm_creation_guard(key_id):
+                    try:
+                        self._llm_assert_key_create_allowed()
+                    except LlmError as exc:
+                        retry_admission_rejected = True
+                        # Only the retry was prevented. The first POST was
+                        # Unknown: the whole operation is NOT not_executed.
+                        exc.not_executed = False
+                        raise
+                    retried = client.user_create_token(ip, up, body, deadline=deadline)
+            except LlmError:
+                if retry_admission_rejected:
+                    # Unwind the key lock before independent-cursor finish.
+                    # Retain uncertainty and the free slot; never assert that
+                    # the initial Unknown did not create an upstream token.
+                    self._llm_finish(key_id, {'state': 'failed_reveal'})
+                raise
             if retried.ok or isinstance(retried, nac.Unknown):
                 token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None or token is TOKEN_LIST_FAILED:
