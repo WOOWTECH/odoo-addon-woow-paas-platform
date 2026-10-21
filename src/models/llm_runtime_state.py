@@ -30,6 +30,7 @@ thread 都要看到同一份：
 * 每次呼叫多一次獨立 cursor 的讀（與 ap 的一次限速寫）；成功時只有在失敗數 > 0 才寫。
 """
 import contextvars
+from contextlib import contextmanager
 import json
 import logging
 import time
@@ -63,6 +64,8 @@ _LOCK_TIMEOUT = '5s'
 
 #: 可以經 :meth:`LlmRuntimeState._llm_write` 改的欄位（＝本 model 的業務欄位）。
 STATE_FIELDS = (
+    'status_armed', 'status_generation', 'status_started_at', 'status_completed_at',
+    'status_success_at', 'status_result', 'status_fingerprint',
     # 免費試用計數的游標（LLM-10；DESIGN §1.3.3）。new-api 的 log id 與 unix 秒都用 int8。
     'free_meter_last_log_id',
     'free_meter_last_ts',
@@ -106,6 +109,25 @@ CIRCUIT_PROBE_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_swr_refresh'
 CONNECTION_TEST_CRON_XMLID = 'woow_paas_platform.ir_cron_llm_connection_test'
 #: 「這一次是健康檢查」：:meth:`LlmRuntimeState._llm_circuit_gate` 探的那一次呼叫不受 circuit 擋。
 _PROBING = contextvars.ContextVar('woow_llm_circuit_probe', default=False)
+_STATUS_PROBE = contextvars.ContextVar('woow_llm_status_probe', default=None)
+
+
+@contextmanager
+def status_probe(client):
+    """Allow exactly one anon call on this CRON client's own DB guard.
+
+    Used only around client.status(). Other identities/clients in this scope
+    are refused, not exempted from the circuit; normal behavior is restored
+    even when transport raises. This never closes the circuit.
+    """
+    guard = client._guard
+    if not isinstance(guard, LlmCallGuard) or guard.role != nac.ROLE_CRON:
+        raise ValueError('invalid_status_probe')
+    token = _STATUS_PROBE.set({'guard': guard, 'remaining': 1})
+    try:
+        yield
+    finally:
+        _STATUS_PROBE.reset(token)
 
 
 class LlmRuntimeState(models.Model):
@@ -198,7 +220,7 @@ class LlmRuntimeState(models.Model):
                 self._llm_ensure_row(cr)
                 cr.execute('SELECT %s FROM %s ORDER BY id LIMIT 1' % (columns, STATE_TABLE))
                 row = cr.dictfetchone()
-        return row
+            return self._llm_status_guard(cr, row)
 
     @api.model
     def _llm_write(self, **values):
@@ -494,6 +516,12 @@ class LlmCallGuard(nac.CallGuard):
         return self.env[STATE_MODEL].sudo()
 
     def before(self, identity, priority):
+        probe = _STATUS_PROBE.get()
+        if probe is not None:
+            if probe['guard'] is self and identity == 'anon' and probe['remaining'] == 1:
+                probe['remaining'] = 0
+                return None
+            return nac.NotExecuted('guard_unavailable')
         state = self._state()
         if identity != 'bg' and not _PROBING.get():
             circuit, retry_after = state._llm_circuit_state()

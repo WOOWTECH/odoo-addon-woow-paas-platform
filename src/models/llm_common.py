@@ -559,6 +559,8 @@ def alert_targets(env):
 #: 凍結契約（改名要同 PR 寫 migration 改 ``ir_act_server.code``）；``TestLlmCronContract`` 對已
 #: 安裝 DB 逐支斷言，``TestLlmUnconfiguredZeroOutbound`` 逐支手動觸發。新增 LLM cron 一律登記在這。
 LLM_CRONS = {
+    'woow_paas_platform.ir_cron_llm_status_monitor': (
+        'woow_paas_platform.llm_runtime_state', '_cron_llm_status_monitor'),
     'woow_paas_platform.ir_cron_llm_reconcile_local': (
         'woow_paas_platform.llm_reconcile_local_cursor', '_cron_llm_reconcile_local'),
     'woow_paas_platform.ir_cron_llm_credit': (
@@ -637,6 +639,7 @@ LLM_RECONCILE_ERROR_CODES = frozenset({
     'llm_i4_recharge_origin',
 })
 ERROR_CODES = (
+    {'llm_status_invalid', 'llm_status_stale', 'llm_status_config_changed'} |
     LLM_RECONCILE_ERROR_CODES | API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
     | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES
     | llm_crypto.ERROR_CODES | CONFIG_ERROR_CODES | frozenset(LLM_CRON_ERROR_CODES.values())

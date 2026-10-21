@@ -521,6 +521,7 @@
 1	test_llm_reconcile_local.TestLlmReconcileDeadline
 25	test_llm_reconcile_local.TestLlmReconcileLocal
 4	test_llm_sql_budget.TestLlmSqlBudget
+8	test_llm_status_monitor.TestLlmStatusMonitor
 9	test_llm_terms.TestLlmTermsConsent
 3	test_llm_terms.TestLlmTermsHttp
 10	test_llm_terms.TestLlmTermsModel

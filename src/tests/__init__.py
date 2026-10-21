@@ -1286,3 +1286,5 @@ from . import test_llm_reconcile_local
 from . import test_llm_sql_budget
 from . import test_llm_discrepancy_replay
 from . import test_llm_bounded_cron
+
+from . import test_llm_status_monitor
