@@ -29,6 +29,7 @@ from .llm_common import (
     ERR_LLM_RESERVE_CONFIRM_REQUIRED, ERR_LLM_RATE_LIMITED, LlmError, LlmQuotaInteger, QUOTA_PER_POINT,
     _without_llm_internal, llm_config, llm_unconfigured, run_llm_cron,
 )
+from .llm_credit_attempt import ATTEMPT_TABLE, _ISSUE_CAPABILITY, _issue_cr
 from .llm_account import ACCOUNT_TABLE, balance_stamp
 from .llm_event import EVENT_TABLE, LlmAlert, LlmIncident, _begin, _iso, _throttle_reserve_cr, safe_code
 
@@ -93,6 +94,24 @@ _TRANSITIONS = {
 }
 _REQUEST_ID_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z')
 _INT8_MAX = 2 ** 63 - 1
+
+
+# Full local owner check. A missing/mismatched ledger never authorizes a worker.
+# Verifier alone may keep handling pre-upgrade orders with no ledger history.
+def _attempt_guard(order, *, legacy=False):
+    owned = (
+        'EXISTS (SELECT 1 FROM ' + ATTEMPT_TABLE + ' attempt_owner WHERE '
+        'attempt_owner.order_id = {o}.id AND attempt_owner.account_id = {o}.account_id '
+        'AND attempt_owner.attempt_no = {o}.attempt '
+        'AND attempt_owner.reservation_event_id = {o}.convert_event_id '
+        'AND attempt_owner.target_user_id = {o}.newapi_user_id '
+        'AND attempt_owner.quota = {o}.quota AND attempt_owner.attempt_uuid = %s)'
+    ).format(o=order)
+    if legacy:
+        return ('(' + owned + ' OR (%s IS NULL AND NOT EXISTS (SELECT 1 FROM '
+                + ATTEMPT_TABLE + ' legacy_owner WHERE legacy_owner.order_id = '
+                + order + '.id)))')
+    return owned
 
 
 class _CreditReservationInvalid(ValueError):
@@ -705,7 +724,10 @@ class LlmCreditOrder(models.Model):
                 '(o.lease_until IS NULL OR o.lease_until <= %s))) '
                 'ORDER BY o.sent_at NULLS FIRST, o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1) '
                 'RETURNING target.id, target.account_id, target.attempt, target.state, '
-                'target.convert_event_id AS event_id, target.points'.format(t=ORDER_TABLE),
+                'target.convert_event_id AS event_id, target.points, '
+                '(SELECT ca.attempt_uuid FROM {ledger} ca WHERE ca.order_id = target.id '
+                'AND ca.attempt_no = target.attempt) AS attempt_uuid'.format(
+                    t=ORDER_TABLE, ledger=ATTEMPT_TABLE),
                 (token, now + CREDIT_VERIFY_LEASE, SUPERUSER_ID, now, now, now),
                 log_exceptions=False)
             row = cr.dictfetchone()
@@ -740,10 +762,12 @@ class LlmCreditOrder(models.Model):
                 'o.newapi_request_id, a.newapi_username, a.newapi_user_id AS account_user_id '
                 'FROM {t} o JOIN {a} a ON a.id = o.account_id '
                 'WHERE o.id = %s AND o.account_id = %s AND o.attempt = %s AND o.state = %s '
-                'AND o.verify_token = %s AND o.verify_lease_until > %s'.format(
-                    t=ORDER_TABLE, a=ACCOUNT_TABLE),
+                'AND o.verify_token = %s AND o.verify_lease_until > %s '
+                'AND o.convert_event_id IS NOT DISTINCT FROM %s AND '.format(
+                    t=ORDER_TABLE, a=ACCOUNT_TABLE) + _attempt_guard('o', legacy=True),
                 (claim['id'], claim['account_id'], claim['attempt'], claim['state'],
-                 claim['token'], fields.Datetime.now()))
+                 claim['token'], fields.Datetime.now(), claim.get('event_id'), claim.get('attempt_uuid'),
+                 claim.get('attempt_uuid')))
             row = cr.dictfetchone()
         return row
 
@@ -886,8 +910,11 @@ class LlmCreditOrder(models.Model):
                 'UPDATE %s SET %s, write_uid = %%s, write_date = %%s '
                 'WHERE id = %%s AND account_id = %%s AND attempt = %%s AND state = %%s '
                 'AND verify_token = %%s AND verify_lease_until > %%s '
-                'RETURNING account_id, newapi_user_id, quota' % (ORDER_TABLE, assignments),
-                params, log_exceptions=False)
+                'AND convert_event_id IS NOT DISTINCT FROM %%s '
+                'AND %s RETURNING account_id, newapi_user_id, quota'
+                % (ORDER_TABLE, assignments, _attempt_guard(ORDER_TABLE, legacy=True)),
+                params + [claim.get('event_id'), claim.get('attempt_uuid'), claim.get('attempt_uuid')],
+                log_exceptions=False)
             updated = cr.dictfetchone()
             if not updated:
                 return False
@@ -918,6 +945,11 @@ class LlmCreditOrder(models.Model):
     def _llm_verify_finish(self, claim, state, error_code=None, *, terminal_event=None,
                            strict_event=True, evidence=None, request_id=None,
                            next_attempt_at=None, credit_evidence_kind=None):
+        # A quiet balance / absent outcome cannot fence a paused dispatcher.
+        # Until owner/epoch and stronger not-sent evidence are defined, a
+        # durable attempt is never automatically reissued by the verifier.
+        if state == 'paid' and claim.get('attempt_uuid'):
+            return self._llm_verify_review(claim, CREDIT_EVIDENCE_CONFLICT, evidence=evidence)
         values = {
             'state': state,
             'lease_until': None,
@@ -1155,7 +1187,8 @@ class LlmCreditOrder(models.Model):
                                 "busy.state IN ('sending','unknown','needs_review')) "
                                 'ORDER BY o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1) '
                                 'RETURNING target.id, target.account_id, target.partner_id, '
-                                'target.attempt, target.convert_event_id, target.source'.format(t=ORDER_TABLE, scope=scope),
+                                'target.attempt, target.convert_event_id, target.source, '
+                                'target.newapi_user_id, target.quota'.format(t=ORDER_TABLE, scope=scope),
                                 ('sending', now + CREDIT_LEASE, now, SUPERUSER_ID, now,
                                  CREDIT_RETRY_LIMIT, now, *scope_params, list(excluded)),
                                 log_exceptions=False)
@@ -1163,9 +1196,11 @@ class LlmCreditOrder(models.Model):
                             if not row:
                                 return None
                             event_id = self._llm_claim_event_cr(cr, row)
+                            attempt_uuid = _issue_cr(cr, row, event_id, _ISSUE_CAPABILITY)
                             cr.check()
                             return {'id': row['id'], 'account_id': row['account_id'],
-                                    'attempt': row['attempt'], 'event_id': event_id}
+                                    'attempt': row['attempt'], 'event_id': event_id,
+                                    'attempt_uuid': attempt_uuid}
                     except _CreditReservationInvalid:
                         # The provisional claim has rolled back. Keep the
                         # inconsistent audit row untouched and stop for review.
@@ -1284,17 +1319,46 @@ class LlmCreditOrder(models.Model):
                 'FROM %s o JOIN %s a ON a.id = o.account_id '
                 "WHERE o.id = %%s AND o.state = 'sending' AND o.attempt = %%s "
                 'AND o.account_id = %%s AND o.convert_event_id = %%s '
-                'AND o.verify_token IS NULL AND o.lease_until > %%s'
-                % (ORDER_TABLE, ACCOUNT_TABLE),
+                'AND o.verify_token IS NULL AND o.lease_until > %%s AND '
+                % (ORDER_TABLE, ACCOUNT_TABLE) + _attempt_guard('o'),
                 (claim['id'], claim['attempt'], claim['account_id'], claim['event_id'],
-                 fields.Datetime.now()))
+                 fields.Datetime.now(), claim.get('attempt_uuid')))
             row = cr.dictfetchone()
         if not row or row['state'] != 'sending' or row['attempt'] != claim['attempt']:
             return None
         return row
 
     @api.model
+    def _llm_dispatch_claim(self, claim):
+        """Commit a one-way worker-entry CAS before any precheck/HTTP.
+
+        Lock order first, as completion/verifier do. Crash after this commit
+        consumes entry permanently; another invocation cannot retry this UUID.
+        The timestamp is an entry receipt, never proof that HTTP was sent.
+        """
+        with self.env.registry.cursor() as cr:
+            _begin(self.env, cr, read_committed=True)
+            cr.execute(
+                'SELECT o.id FROM ' + ORDER_TABLE + ' o WHERE o.id = %s '
+                "AND o.state = 'sending' AND o.account_id = %s AND o.attempt = %s "
+                'AND o.convert_event_id = %s AND o.verify_token IS NULL '
+                'AND o.lease_until > %s AND ' + _attempt_guard('o') + ' FOR UPDATE OF o',
+                (claim['id'], claim['account_id'], claim['attempt'], claim['event_id'],
+                 fields.Datetime.now(), claim.get('attempt_uuid')))
+            if not cr.fetchone():
+                return False
+            cr.execute(
+                'UPDATE ' + ATTEMPT_TABLE + ' SET dispatch_claimed_at = %s '
+                'WHERE order_id = %s AND attempt_no = %s AND attempt_uuid = %s '
+                'AND dispatch_claimed_at IS NULL RETURNING id',
+                (fields.Datetime.now(), claim['id'], claim['attempt'], claim.get('attempt_uuid')),
+                log_exceptions=False)
+            return bool(cr.fetchone())
+
+    @api.model
     def _llm_send_claimed(self, claim, deadline):
+        if not self._llm_dispatch_claim(claim):
+            return
         row = self._llm_claimed_row(claim)
         if not row:
             return
@@ -1495,8 +1559,9 @@ class LlmCreditOrder(models.Model):
                 "WHERE id = %%s AND state = 'sending' AND attempt = %%s "
                 'AND account_id = %%s AND convert_event_id = %%s '
                 'AND verify_token IS NULL AND lease_until > %%s '
-                'RETURNING account_id, newapi_user_id, quota'
-                % (ORDER_TABLE, assignments), params, log_exceptions=False)
+                'AND %s RETURNING account_id, newapi_user_id, quota'
+                % (ORDER_TABLE, assignments, _attempt_guard(ORDER_TABLE)),
+                params + [claim.get('attempt_uuid')], log_exceptions=False)
             updated = cr.dictfetchone()
             if not updated:
                 return False

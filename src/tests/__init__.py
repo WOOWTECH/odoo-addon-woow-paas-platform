@@ -1283,3 +1283,5 @@ from . import test_llm_discrepancy_replay
 from . import test_llm_bounded_cron
 from . import test_llm_reconcile_candidate
 from . import test_llm_audit_ingest
+
+from . import test_llm_credit_attempt

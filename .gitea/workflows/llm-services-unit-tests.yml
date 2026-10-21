@@ -38,6 +38,7 @@ on:
       - "tests/test_llm_audit_attempt.py"
       - "src/models/llm_reconcile_candidate.py"
       - "src/models/llm_credit_order.py"
+      - "src/models/llm_credit_attempt.py"
       - "tests/test_mcp_dependency_smoke.py"
       - "src/requirements.txt"
       # 測試拿代理的參考實作驗章、body 政策與路由白名單（每個 client 方法的路由、身分、
