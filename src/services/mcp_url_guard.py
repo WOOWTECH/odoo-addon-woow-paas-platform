@@ -36,7 +36,8 @@ PROTECTED_NAMESPACES = frozenset({'new-api', 'new-api-stg'})
 PROTECTED_HOSTS = tuple(
     '%s.%s.svc.cluster.local' % (service, namespace)
     for namespace in sorted(PROTECTED_NAMESPACES)
-    for service in ('newapi-proxy', 'newapi'))
+    for service in ('newapi-proxy', 'newapi')) + (
+        'newapi-proxy-llmdev.new-api-stg.svc.cluster.local',)
 #: k3s 預設的 pod 與 service 網段：不是叢集內名稱卻解析到這裡 ⇒ 拒絕。
 CLUSTER_NETWORKS = (ipaddress.ip_network('10.42.0.0/16'), ipaddress.ip_network('10.43.0.0/16'))
 CLUSTER_SUFFIX = '.svc.cluster.local'
