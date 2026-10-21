@@ -8,10 +8,11 @@ GET 與 PUT 落在不同版本的 pod）。
 實際案例：prod ``paas-ws-7948b087`` 的 PVC hard=12、used=12，#1680 起停在
 ``blocked: would_lower: persistentvolumeclaims``。
 """
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from odoo.tests.common import tagged
+from odoo.tests.common import BaseCase, tagged
 
+from ..services.paas_operator import PaaSOperatorClient
 from .ns_quota_fixture import FakeQuotaOperator, build_hard
 from .test_workspace_quota_floor_1679 import _CLIENT
 from .test_workspace_quota_sync_1680 import _SyncFixture
@@ -178,3 +179,30 @@ class TestWorkspaceQuotaPvcDeployAndLifecycle1781(_PvcFixture):
         self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '24')
         self.assertEqual(self._pvc(), '12')
         self.assertEqual(self._ws().quota_sync_state, 'synced')
+
+
+@tagged('post_install', '-at_install')
+class TestPvcLimitClientWire1781(BaseCase):
+    """client 的 HTTP body：有 ``pvc_limit`` 才送（舊呼叫端的 body 不變）。"""
+
+    def _body(self, call, **kwargs):
+        response = MagicMock(status_code=200, content=b'{}')
+        response.json.return_value = {}
+        client = PaaSOperatorClient(base_url='http://paas-operator:8000', api_key='k')
+        with patch('requests.Session.request', return_value=response) as request:
+            getattr(client, call)(**kwargs)
+        return request.call_args.kwargs['json']
+
+    def test_put_quota_sends_pvc_limit_only_when_given(self):
+        args = {'namespace': 'paas-ws-a1b2c3d4', 'cpu_limit': '8', 'memory_limit': '8Gi',
+                'storage_limit': '100Gi'}
+        self.assertEqual(self._body('update_namespace_quota', pvc_limit='12', **args)['pvc_limit'],
+                         '12')
+        self.assertNotIn('pvc_limit', self._body('update_namespace_quota', **args))
+
+    def test_create_namespace_sends_pvc_limit_only_when_given(self):
+        args = {'namespace': 'paas-ws-a1b2c3d4', 'cpu_limit': '8', 'memory_limit': '8Gi',
+                'storage_limit': '100Gi', 'workspace_id': 7}
+        body = self._body('create_namespace', pvc_limit='12', **args)
+        self.assertEqual((body['pvc_limit'], body['name']), ('12', 'paas-ws-a1b2c3d4'))
+        self.assertNotIn('pvc_limit', self._body('create_namespace', **args))
