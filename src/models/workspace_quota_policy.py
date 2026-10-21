@@ -57,7 +57,7 @@ from odoo.tools import consteq, mute_logger
 from odoo.tools.misc import hmac as odoo_hmac
 
 from ..services.ns_quota_policy import (
-    QuotaNotProvable, build_hard, merge_never_lower, parse_quantity, plan_safe_lower,
+    PVC_HARD, QuotaNotProvable, build_hard, merge_never_lower, parse_quantity, plan_safe_lower,
     with_pvc_baseline,
 )
 from ..services import paas_operator as paas_operator_service
@@ -1104,11 +1104,21 @@ def _plan_namespace(client, namespace, target, allow_lower=False):
             'unsafe_decrease': '; '.join('%s %s' % item for item in unsafe) or None}
 
 
+#: ``_read_back`` 的第四種結果（#1781）：這次推送落地了，但 PVC 上限不是送出的值。
+_PVC_LOST = 'pvc_limit_not_applied'
+
+
+def _pvc_can_be_lost(pvc_limit):
+    """送出的 PVC 上限高於 10：落在不支援的 operator 上就會被寫成 10（實際降額）。"""
+    return bool(pvc_limit) and parse_quantity(pvc_limit) > parse_quantity(PVC_HARD)
+
+
 def _read_back(client, namespace, token, payload):
     """推送結果不明時讀回：``True`` 已落地、``False`` 未落地（仍可能在途）、``None`` 讀不到。
 
     有 token（新 operator）只認 token；舊 operator 只能比值（推送前值不同才會推，所以值相等
-    就是落地了）。
+    就是落地了）。#1781：token 相符但 PVC 上限不是送出的值（滾動更新時寫入落在不支援
+    ``pvc_limit`` 的舊 pod，PVC 已被寫成 10）回 ``_PVC_LOST``。
     """
     try:
         report = client.get_namespace_quota(namespace, include_managed=True)
@@ -1120,7 +1130,14 @@ def _read_back(client, namespace, token, payload):
     if token:
         if 'sync_token' not in managed:
             return None
-        return managed.get('sync_token') == token
+        if managed.get('sync_token') != token:
+            return False
+        pvc_limit = payload.get('pvc_limit')
+        if _pvc_can_be_lost(pvc_limit) and parse_quantity(
+                (managed.get('spec_hard') or {}).get('persistentvolumeclaims')) != parse_quantity(
+                    pvc_limit):
+            return _PVC_LOST
+        return True
     spec_hard = managed.get('spec_hard')
     if not isinstance(spec_hard, dict) or not spec_hard:
         return None
@@ -1136,9 +1153,10 @@ def _pvc_kwargs(payload):
 def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
     """執行推送（``call()``），把 operator 的結果轉成同步狀態。
 
-    #1781 ``pvc_limit``：這次送出的 PVC 上限。成功回應沒有原樣回報它，代表請求落在不支援的
-    operator pod 上（滾動更新中），PVC 已被寫成 10 ⇒ 記為 ``blocked: pvc_limit_not_confirmed``
-    （不自動重試：叢集已低於原值，平台補不回來，要人處理）。
+    #1781 ``pvc_limit``：這次送出的 PVC 上限。高於 10 而成功回應沒有原樣回報它（或結果不明時
+    讀回 token 相符但 PVC 不是送出的值），代表請求落在不支援的 operator pod 上（滾動更新中），
+    PVC 已被寫成 10 ⇒ 記為 ``blocked: pvc_limit_not_confirmed``（不自動重試：叢集已低於原值，
+    平台補不回來，要人處理）。送出 10 時舊 pod 寫的也是 10，沒有損失，不檢查。
 
     結果不明（逾時、5xx、斷線）先讀回：落地就算成功（回應遺失而已）；否則記下在途 token
     （``expect_token``）——遠端之後帶的若不是它，下一次同步必定以新 token 重推，讓還在途的
@@ -1150,6 +1168,8 @@ def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
     except PaaSOperatorTimeoutError as exc:
         # operator 端的 kubectl 可能已套用：先讀回，讀不出來就是結果未知，不是失敗也不是成功。
         landed = readback() if readback else None
+        if landed == _PVC_LOST:
+            return _pvc_not_confirmed(base, token, pvc_limit, 'read back after timeout', exc)
         if landed:
             return dict(plan, state='synced', expect_token=token, error=exc,
                         reason='operator_timeout (read back: applied)')
@@ -1169,6 +1189,8 @@ def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
                         retryable=False, error=exc)
         landed = readback() if readback else None
         detail = code or exc.message
+        if landed == _PVC_LOST:
+            return _pvc_not_confirmed(base, token, pvc_limit, 'read back after %s' % detail, exc)
         if landed:
             return dict(plan, state='synced', expect_token=token, error=exc,
                         reason='operator_error: %s (read back: applied)' % detail)
@@ -1177,14 +1199,22 @@ def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
     if isinstance(response, dict) and response.get('quota') == 'conflict':
         # 建立路徑：基線已做、quota 沒覆寫（前提不成立）。
         return dict(base, state='pending', reason='quota_conflict', retryable=True)
-    if pvc_limit and not (isinstance(response, dict) and parse_quantity(response.get('pvc_limit'))
-                          == parse_quantity(pvc_limit)):
-        _logger.error("[#1781] quota push sent pvc_limit=%s but the operator did not confirm it "
-                      "(response=%r); the write may have reset persistentvolumeclaims to 10",
-                      pvc_limit, response)
-        return dict(base, state='blocked', retryable=False, expect_token=token,
-                    reason='pvc_limit_not_confirmed: sent %s' % pvc_limit)
+    if _pvc_can_be_lost(pvc_limit) and not (
+            isinstance(response, dict)
+            and parse_quantity(response.get('pvc_limit')) == parse_quantity(pvc_limit)):
+        return _pvc_not_confirmed(base, token, pvc_limit, 'response=%r' % (response,))
     return dict(plan, state='synced', expect_token=token)
+
+
+def _pvc_not_confirmed(base, token, pvc_limit, detail, error=None):
+    """#1781：寫入落地了，但 PVC 上限沒有被確認（多半已被舊 operator pod 寫成 10）。"""
+    _logger.error("[#1781] quota push sent pvc_limit=%s but the operator did not confirm it "
+                  "(%s); the write may have reset persistentvolumeclaims to 10", pvc_limit, detail)
+    result = dict(base, state='blocked', retryable=False, expect_token=token,
+                  reason='pvc_limit_not_confirmed: sent %s' % pvc_limit)
+    if error is not None:
+        result['error'] = error
+    return result
 
 
 def _sync_namespace(client, namespace, target, expected_token=None, allow_lower=False):

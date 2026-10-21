@@ -150,6 +150,13 @@ def merge_never_lower(target, spec_hard, status_hard):
             if live_max[0] > best_number:
                 best_number, best_text = live_max
         payload[field] = best_text
+    if payload.get('pvc_limit'):
+        # #1781：PVC 是數量，送整數字串（叢集上可能是 apiserver 正規化後的 ``1k`` 或
+        # 手動設的 ``2Ki``）；operator 只收整數（可帶 k／M）。不是整數就無法證明。
+        number = parse_quantity(payload['pvc_limit'])
+        if number != number.to_integral_value():
+            raise QuotaNotProvable('persistentvolumeclaims=%r' % payload['pvc_limit'])
+        payload['pvc_limit'] = str(int(number))
     lowering = []
     for key, value in build_hard(payload).items():
         number = parse_quantity(value)

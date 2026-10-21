@@ -51,6 +51,19 @@ class TestPvcNeverLower1781(BaseCase):
         managed['hard']['persistentvolumeclaims'] = '12'
         self.assertEqual(self._plan(managed)['payload']['pvc_limit'], '12')
 
+    def test_cluster_pvc_is_sent_as_a_plain_integer(self):
+        """叢集可能存 apiserver 正規化後的 ``1k`` 或手動設的 ``2Ki``；operator 只收整數。"""
+        for live, sent in (('1k', '1000'), ('2Ki', '2048'), ('12', '12')):
+            with self.subTest(live=live):
+                plan = self._plan(_capable(_hard('8', '8Gi', '100Gi', pvc=live)))
+                self.assertEqual(plan['payload']['pvc_limit'], sent)
+                self.assertEqual(plan['lowering_unsafe'], [])
+
+    def test_fractional_cluster_pvc_is_not_provable(self):
+        plan = self._plan(_capable(_hard('8', '8Gi', '100Gi', pvc='12.5')))
+        self.assertIsNone(plan['payload'])
+        self.assertTrue(plan['blocked'][0][1].startswith('quota_not_provable'))
+
     def test_unreadable_cluster_pvc_is_not_provable(self):
         plan = self._plan(_capable(_hard('8', '8Gi', '100Gi', pvc='lots')))
         self.assertIsNone(plan['payload'])

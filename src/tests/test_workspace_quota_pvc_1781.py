@@ -130,6 +130,33 @@ class TestWorkspaceQuotaPvcRolloutMismatch1781(_PvcFixture):
         self.assertIn('pvc_limit_not_confirmed', ws.quota_sync_reason)
         self.assertFalse(ws.quota_next_retry_at, '要人處理：叢集已低於原值，平台自己補不回來')
 
+    def test_timeout_whose_read_back_finds_ten_is_not_reported_synced(self):
+        """回應遺失 → 讀回 token 相符，但 PVC 是 10：不能因 token 相符就當成已同步。"""
+        self.operator.pvc_write_capable = False
+        self.operator.lose_response = True
+        self._set(cpu=18)
+        self.assertEqual(self._pvc(), '10')
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'blocked')
+        self.assertIn('pvc_limit_not_confirmed: sent 12', ws.quota_sync_reason)
+        self.assertIn(self.operator.tokens[self.ns], ws.quota_expected_tokens,
+                      '寫入確實落地：記下它的 token，之後不重複圍籬')
+
+    def test_timeout_whose_read_back_finds_the_pvc_is_synced(self):
+        self.operator.lose_response = True
+        self._set(cpu=18)
+        self.assertEqual(self._pvc(), '12')
+        self.assertEqual(self._ws().quota_sync_state, 'synced')
+
+    def test_sending_ten_to_an_old_pod_loses_nothing_and_is_synced(self):
+        """送出 10 時舊 pod 寫的也是 10：沒有損失，不能因為沒有回報就擋下。"""
+        self.operator.live[self.ns]['persistentvolumeclaims'] = '8'
+        self.operator.pvc_write_capable = False
+        self._set(cpu=18)
+        self.assertEqual(self.operator.pvc_sent[-1], '10')
+        self.assertEqual(self._pvc(), '10')
+        self.assertEqual(self._ws().quota_sync_state, 'synced')
+
 
 @tagged('post_install', '-at_install')
 class TestWorkspaceQuotaPvcDeployAndLifecycle1781(_PvcFixture):
@@ -160,6 +187,15 @@ class TestWorkspaceQuotaPvcDeployAndLifecycle1781(_PvcFixture):
         self.assertTrue(self.operator.guards[-1]['expect_absent'])
         self.assertEqual(self._pvc(), '10')
         self.assertEqual(self._ws().quota_sync_state, 'synced')
+
+    def test_deploy_landing_on_an_old_pod_is_not_reported_synced(self):
+        self.operator.pvc_write_capable = False
+        self._deploy()
+        self.client.install_release.assert_called()
+        self.assertEqual(self.operator.pvc_sent[-1], '12')
+        ws = self._ws()
+        self.assertEqual(ws.quota_sync_state, 'blocked')
+        self.assertIn('pvc_limit_not_confirmed: sent 12', ws.quota_sync_reason)
 
     def test_deploy_with_an_old_operator_still_skips_the_quota_but_installs(self):
         self.operator.pvc_capable = False
