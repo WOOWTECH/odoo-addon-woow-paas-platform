@@ -15,7 +15,8 @@ Order of checks on the proxy port, each failing closed:
 11. JSON body + body policy ................................... 400 / 403
 12. in-flight cap per identity ................................ 503 busy
 13. reveal / manage / bg group pre-checks, add_quota hourly budget  403 denied / 429
-14. one upstream call, no retry: connect 502 | reset 502 | timeout 504
+14. if configured: durable credit intent, shared AP admission .... 503 busy / 429
+15. one upstream call, no retry: connect 502 | reset 502 | timeout 504
 
 Break-glass (``bg``, CRON key only, ``PROXY_BREAK_GLASS_UNTIL`` in the future) has
 two routes (§1.4.2-2): the free-tier group fallback ``PUT /api/user/`` (the proxy
@@ -53,6 +54,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 
 from . import __version__, canonical, logs, policy, responses, routetable, signing
+from .controlstore import ControlStoreError, PostgresControlStore
 from .limits import CachedCheck, HourlyBudget, InflightLimiter, ReplayCache
 from .metrics import Metrics
 from .replaystore import ReplayStoreUnavailable, ValkeyReplayStore
@@ -139,6 +141,7 @@ class Ctx:
     # Generated here, never taken from caller headers or the upstream response.
     # The same ID joins sending/outcome/access even if upstream returns no ID.
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    ap_priority: str = "other"
     t0: float = field(default_factory=time.monotonic)
 
 
@@ -235,6 +238,7 @@ class Proxy:
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         replay_store: Any = None,
+        control_store: Any = None,
     ):
         self.settings = settings
         self.clock = clock
@@ -255,6 +259,9 @@ class Proxy:
             )
         #: Shared (all replicas) replay record; None only with one replica.
         self.shared_replay = replay_store
+        self.control = control_store
+        if self.control is None and settings.control_dsn:
+            self.control = PostgresControlStore(settings.control_dsn, settings.control_environment)
         self.inflight = InflightLimiter(dict(settings.inflight))
         self.budget = HourlyBudget(settings.add_quota_hourly_cap)
         self.metrics = Metrics()
@@ -278,6 +285,8 @@ class Proxy:
         await self.upstream.aclose()
         if self.shared_replay is not None:
             await self.shared_replay.aclose()
+        if self.control is not None:
+            await self.control.aclose()
 
     # --- helpers ---------------------------------------------------------------
 
@@ -317,6 +326,38 @@ class Proxy:
 
     def _remaining(self, deadline: float) -> float:
         return deadline - self.monotonic()
+
+    async def _control_call(self, deadline, method, *args):
+        # Includes connection, lock, query and COMMIT; never retry a lost reply.
+        budget = min(0.5, self._remaining(deadline) - MIN_SEND_BUDGET)
+        if budget <= 0:
+            raise ControlStoreError("deadline")
+        try:
+            async with asyncio.timeout(budget):
+                return await getattr(self.control, method)(*args)
+        except TimeoutError:
+            raise ControlStoreError("deadline") from None
+
+    async def _ap_admit(self, ctx, deadline, auth):
+        if self.control is None or not auth or auth != f"Bearer {self.settings.ap_token}":
+            return
+        try:
+            retry = await self._control_call(deadline, "acquire", ctx.ap_priority)
+        except ControlStoreError:
+            raise ProxyError("busy", "control_store") from None
+        if retry:
+            raise ProxyError("budget", "ap_rate", {"Retry-After": str(retry)})
+
+    async def _finish_intent(self, ctx, deadline, result, status=None, request_id=None):
+        # HTTP has possibly executed: losing its audit outcome must not turn a
+        # successful credit into NotExecuted or trigger an automatic resend.
+        if request_id is not None and logs.Redactor(self.settings.secrets)(request_id) != request_id:
+            request_id = None
+        try:
+            await self._control_call(deadline, "finish", ctx.attempt_id, result, status, request_id)
+        except ControlStoreError:
+            logs.event("audit_outcome_pending", logging.ERROR, attempt_id=ctx.attempt_id)
+            self.metrics.inc("newapi_proxy_audit_pending_total")
 
     # --- proxy port --------------------------------------------------------------
 
@@ -498,6 +539,12 @@ class Proxy:
         route = matched.route
         ctx.route = route.name
         ctx.audit = "bg" if identity == "bg" else route.audit
+        if route.name in {"ap.user.manage", "ap.user.get"}:
+            ctx.ap_priority = "conversion"
+        elif route.name == "ap.user.list":
+            ctx.ap_priority = "balance"
+        elif route.name == "ap.log.list" and dict(pairs).get("group") == "free" and dict(pairs).get("type") == "2":
+            ctx.ap_priority = "free_meter"
         if key_class == "web" and not route.web:
             raise ProxyError("policy", "key_scope")
 
@@ -647,11 +694,32 @@ class Proxy:
                 "ascii"
             )
 
-        budget = self._remaining(deadline)
+        intent = self.control is not None and ctx.audit == "add_quota"
+        try:
+            if intent:
+                await self._control_call(deadline, "begin", ctx.attempt_id, validated["id"], validated["value"])
+            await self._ap_admit(ctx, deadline, upstream_auth)
+        except (ControlStoreError, ProxyError) as err:
+            if reservation is not None:
+                self.budget.release(reservation)
+            self._audit(ctx, audit_fields, result="not_sent", reason="control_store")
+            # If intent COMMIT was ambiguous, there is deliberately no attempt
+            # to infer it was absent. The possibly stored intent stays pending.
+            if intent and isinstance(err, ProxyError):
+                await self._finish_intent(ctx, deadline, "not_sent")
+            if isinstance(err, ProxyError):
+                raise
+            raise ProxyError("busy", "control_store") from None
+
+        # Leave a bounded tail for recording the outcome within the same
+        # incoming request deadline (no detached background audit writes).
+        budget = self._remaining(deadline) - (0.6 if intent else 0)
         if budget < MIN_SEND_BUDGET:
             if reservation is not None:
                 self.budget.release(reservation)
             self._audit(ctx, audit_fields, result="not_sent", reason="deadline")
+            if intent:
+                await self._finish_intent(ctx, deadline, "not_sent")
             raise ProxyError("connect", "deadline")
         # Written *before* the call: if this pod dies mid-call (OOM, SIGKILL,
         # shutdown timeout) the reveal / add_quota / bg call is still on record
@@ -664,9 +732,13 @@ class Proxy:
                 self.budget.release(reservation)
             self.metrics.inc("newapi_proxy_upstream_errors_total", kind=err.kind, exc=err.exc_type)
             self._audit(ctx, audit_fields, result=err.kind)
+            if intent:
+                await self._finish_intent(ctx, deadline, err.kind)
             raise ProxyError(err.kind, err.detail or f"upstream_{err.kind}") from None
         except asyncio.CancelledError:
             self._audit(ctx, audit_fields, result="cancelled")
+            # Durable intent already exists. Avoid delaying cancellation with
+            # a second database request; absent outcome is explicitly unknown.
             raise
         ctx.upstream_status = resp.status
         if route.response is not None:
@@ -689,6 +761,9 @@ class Proxy:
             if resp.status == 200 and isinstance(answer, dict) and answer.get("success") is True:
                 self.metrics.inc("newapi_proxy_add_quota_value_total", validated["value"])
         self._audit(ctx, audit_fields, **outcome)
+        if intent:
+            await self._finish_intent(ctx, deadline, "forwarded", resp.status,
+                                      None if ctx.request_id == "-" else ctx.request_id)
         return response
 
     _AUDIT_METRICS = {
@@ -723,6 +798,10 @@ class Proxy:
             raise ProxyError("connect", "deadline")
         headers = self._base_headers(ip, write=False)
         headers["Authorization"] = auth
+        await self._ap_admit(ctx, deadline, auth)
+        budget = min(budget, self._remaining(deadline) - MIN_SEND_BUDGET)
+        if budget < MIN_SEND_BUDGET:
+            raise ProxyError("connect", "deadline")
         try:
             resp = await self.upstream.send("GET", url, headers, b"", budget=budget, write=False)
         except UpstreamError as err:
@@ -870,10 +949,19 @@ class Proxy:
         return "ok" if await self.shared_replay.ping() else "unavailable"
 
     async def _readiness_check(self) -> dict:
-        upstream, store = await asyncio.gather(self._check_upstream(), self._check_replay_store())
-        ready = upstream in ("ok", "rate_limited") and store in ("ok", "local")
+        async def control_health():
+            if self.control is None:
+                return "disabled"
+            try:
+                async with asyncio.timeout(0.5):
+                    return "ok" if await self.control.ping() else "unavailable"
+            except (ControlStoreError, TimeoutError):
+                return "unavailable"
+        upstream, store, control = await asyncio.gather(
+            self._check_upstream(), self._check_replay_store(), control_health())
+        ready = upstream in ("ok", "rate_limited") and store in ("ok", "local") and control != "unavailable"
         self.metrics.inc("newapi_proxy_readiness_checks_total", result="ready" if ready else "not_ready")
-        return {"ready": ready, "upstream": upstream, "replay_store": store}
+        return {"ready": ready, "upstream": upstream, "replay_store": store, "control_store": control}
 
     async def _readyz(self) -> Response:
         check = await self.readiness.get()
@@ -942,5 +1030,7 @@ def create_app(
     clock: Callable[[], float] = time.time,
     monotonic: Callable[[], float] = time.monotonic,
     replay_store: Any = None,
+    control_store: Any = None,
 ) -> ProxyApp:
-    return ProxyApp(Proxy(settings, transport=transport, clock=clock, monotonic=monotonic, replay_store=replay_store))
+    return ProxyApp(Proxy(settings, transport=transport, clock=clock, monotonic=monotonic,
+                          replay_store=replay_store, control_store=control_store))

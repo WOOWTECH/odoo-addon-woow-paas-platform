@@ -495,6 +495,15 @@ class TestResponseClassification(unittest.TestCase):
         self.assertEqual(denied.reason, 'reveal_window')
         self.assertTrue(_classify(401, {}, {'X-Woow-Proxy-Error': 'auth'}).circuit)
 
+    def test_shared_ap_rate_is_transient_not_hourly_credit_budget(self):
+        headers = {'X-Woow-Proxy-Error': 'budget', 'Retry-After': '17'}
+        limited = _classify(429, {'reason': 'ap_rate'}, headers)
+        hourly = _classify(429, {'reason': 'hourly_cap'}, headers)
+        self.assertIsInstance(limited, nac.NotExecuted)
+        self.assertEqual((limited.reason, limited.retry_after), ('proxy_ap_rate', 17))
+        self.assertEqual(nac.circuit_effect('ap', limited), (None, None))
+        self.assertEqual(hourly.reason, 'proxy_budget')
+
     def test_precheck_relay_is_classified_as_new_api_answer(self):
         result = _classify(401, {'success': False, 'code': 'ACCESS_TOKEN_EXPIRED'},
                            {'X-Woow-Proxy-Precheck': 'reveal'})
