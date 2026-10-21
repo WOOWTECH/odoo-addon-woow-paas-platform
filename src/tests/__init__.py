@@ -1219,6 +1219,8 @@ from . import test_workspace_quota_reclaim_live_1682
 from . import test_ns_quota_pvc_1781
 from . import test_workspace_quota_pvc_1781
 from . import test_workspace_quota_pvc_live_1781
+# fix: #1917 結果不明時的讀回先比對 PVC 再看 token（#1680 之前的舊 pod 把 PVC 寫成 10）
+from . import test_workspace_quota_pvc_readback_1917
 from . import test_ecpg_v4_golive
 # #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
 from . import test_tunnel_binding_1766
