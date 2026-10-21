@@ -14,9 +14,36 @@ kubelet／helm test／Odoo 健康檢查 ──► newapi-proxy:8081（/healthz�
 
 ## 線上契約（給 `src/services/newapi_client.py`，LLM-01b）
 
+### 持久轉換 attempt metadata（I3 切片 B；未啟用 client）
+
+AP 身分、CRON 簽章的 `POST /api/user/manage`、`add_quota`／`mode=add`
+可選帶 `woow_conversion_attempt_id`：canonical lowercase UUIDv4。它在原始
+JSON body 內，受既有 HMAC body hash 綁定；其餘 route、BG／WEB、未知欄位或
+不合格式的 ID 均拒絕。政策輸出仍只有 `id/action/mode/value` 四欄，metadata
+不轉送 new-api。只有通過驗章、身分與完整 policy 後才採用 UUID 作 audit ID；
+未簽的 attempt header 不採用。未帶 metadata 的四欄 legacy 請求保持相容。
+
+Correlated 請求必須有 controlstore。duplicate begin（即使同 payload、新 nonce）、
+begin unavailable／commit 回覆不明，以及未確認的 pre-begin 限流／replay-store
+失效，回 HTTP503、`X-Woow-Proxy-Error: attempt_unknown`、固定 reason
+`begin_unconfirmed`。它代表**整個 durable attempt 不確定**，不可按 busy／
+NotExecuted 自動另產 UUID 重送。未改 Odoo client：既有未知 proxy error 的
+fallback 是 Unknown；client opt-in 與持久 ledger 仍須獨立切片。
+
+SQL v1 重複 begin 拒絕規則不變：拒絕不再 forward quota POST，亦不替原 attempt
+寫 not_sent。只有本 delivery 成功取得 fresh begin、且確定尚未送 POST並完成
+持久 not_sent 後，才保留可重試 budget 回應；not_sent 寫入失敗仍 unknown。
+stdout 的未確認 not_sent 降為 uncertain，不更改 audit v1 event schema。
+
+此能力不是入帳證明、跨 DB／env ownership、store epoch 或 exactly-once 保證。
+舊 client 不會自動送新欄位；本切片不新增 opt-in、排程、部署或 image pin。
+啟用前先驗 stg 全 replica 相同 digest與真 PG 併發／loss contract，再由 Elmo
+另核 client ledger／binding 與 prod。回退先停 correlated dispatch並排空，保留
+ledger/audit；不可去掉 ID 重送、清 store 或降舊 proxy後繼續送新 body。
+
 ### 稽核呼叫識別（LLM-12b）
 
-每個請求由代理產生獨立 UUID v4 `attempt_id`，同一次呼叫的 access 與 audit 紀錄共用它；
+未帶上述 metadata 的每個請求由代理產生獨立 UUID v4 `attempt_id`，同一次呼叫的 access 與 audit 紀錄共用它；
 `sending`、`forwarded`、`connect`、`reset`、`timeout`、`cancelled` 等結果可據此配對。
 即使上游沒有回傳 `X-Oneapi-Request-Id`，仍保留同一個 `attempt_id`。它不取自使用者標頭，
 也不取代上游 `request_id`；相同內容的兩次呼叫會有不同 ID。

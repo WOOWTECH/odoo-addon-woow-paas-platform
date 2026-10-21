@@ -110,6 +110,7 @@ class ProxyError(Exception):
         "reset": 502,
         "config": 503,
         "busy": 503,
+        "attempt_unknown": 503,
         "timeout": 504,
     }
 
@@ -138,9 +139,12 @@ class Ctx:
     #: Audit kind of this request: the route's (``reveal``／``add_quota``), or ``bg`` for
     #: every break-glass call; None = not audited.
     audit: str | None = None
-    # Generated here, never taken from caller headers or the upstream response.
+    # Legacy/local ID; authenticated conversion metadata may replace it after policy.
     # The same ID joins sending/outcome/access even if upstream returns no ID.
     attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    correlation_requested: bool = False
+    correlated: bool = False
+    not_sent_confirmed: bool = False
     ap_priority: str = "other"
     t0: float = field(default_factory=time.monotonic)
 
@@ -355,6 +359,8 @@ class Proxy:
             request_id = None
         try:
             await self._control_call(deadline, "finish", ctx.attempt_id, result, status, request_id)
+            if result == "not_sent":
+                ctx.not_sent_confirmed = True
         except ControlStoreError:
             logs.event("audit_outcome_pending", logging.ERROR, attempt_id=ctx.attempt_id)
             self.metrics.inc("newapi_proxy_audit_pending_total")
@@ -376,6 +382,11 @@ class Proxy:
         return response
 
     def _error(self, err: ProxyError, ctx: Ctx) -> Response:
+        # Failure of this delivery cannot prove the caller's durable attempt
+        # was never executed by an earlier delivery on another replica.
+        if ((ctx.correlated or ctx.correlation_requested) and not ctx.not_sent_confirmed
+                and err.kind in {"busy", "budget", "config", "connect", "body_timeout"}):
+            err = ProxyError("attempt_unknown", "begin_unconfirmed")
         ctx.proxy_error = err.kind
         ctx.reason = err.reason
         self.metrics.inc("newapi_proxy_rejections_total", kind=err.kind, reason=err.reason)
@@ -508,6 +519,11 @@ class Proxy:
         message = signing.string_to_sign(method, path, query, body, ts, nonce, kid, identity, client_ip)
         if not signing.signature_matches(secret, message, sig):
             raise ProxyError("auth", "auth_sig")
+        # Only a conservative error hint, not an accepted audit identity.
+        # A shared replay outage must not classify a prior delivery as unsent.
+        if method == "POST" and path == "/api/user/manage" and identity == "ap" and key_class == "cron":
+            hint = _json_or_none(body)
+            ctx.correlation_requested = isinstance(hint, dict) and policy.CONVERSION_ATTEMPT_FIELD in hint
         await self._claim_nonce(kid, nonce)
 
         # identity and synthetic source address
@@ -615,6 +631,14 @@ class Proxy:
                         fields["value"] = value
                 self._audit(ctx, fields, result="denied", reason=err.reason)
                 raise ProxyError("policy", err.reason) from None
+            if (route.name == "ap.user.manage" and ctx.identity == "ap"
+                    and policy.CONVERSION_ATTEMPT_FIELD in obj):
+                # HMAC, CRON scope and the full body policy have already passed.
+                # validated is rebuilt without metadata: never forward it upstream.
+                ctx.attempt_id = obj[policy.CONVERSION_ATTEMPT_FIELD]
+                ctx.correlated = True
+                if self.control is None:
+                    raise ProxyError("attempt_unknown", "begin_unconfirmed")
             upstream_body = json.dumps(validated, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode(
                 "ascii"
             )
@@ -693,6 +717,8 @@ class Proxy:
             audit_fields.update(target_user_id=validated["id"], value=validated["value"])
             reservation, relayed = await self._manage_precheck(ctx, validated, ip, deadline, audit_fields)
             if relayed is not None:
+                if ctx.correlated:
+                    raise ProxyError("attempt_unknown", "begin_unconfirmed")
                 return relayed
         elif route.special == "user_group":
             assert validated is not None
@@ -795,6 +821,8 @@ class Proxy:
     def _audit(self, ctx: Ctx, fields: dict, **outcome: Any) -> None:
         if ctx.audit is None:
             return
+        if ctx.correlated and not ctx.not_sent_confirmed and outcome.get("result") == "not_sent":
+            outcome["result"] = "uncertain"
         self.metrics.inc(self._AUDIT_METRICS[ctx.audit], result=str(outcome.get("result")))
         logs.audit(ctx.audit, attempt_id=ctx.attempt_id, **fields, **outcome)
 
