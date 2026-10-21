@@ -37,12 +37,16 @@ class TestLlmReconcileCandidate(TransactionCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         # Any accidental outward effect fails the test immediately.
+        def forbid_effect(*args, **kwargs):
+            raise AssertionError('I2 foundation external effect')
+
         for model, name in (
                 ('woow_paas_platform.llm_account', '_llm_client'),
                 ('woow_paas_platform.llm_event', '_llm_incident'),
                 ('woow_paas_platform.llm_event', '_llm_alert')):
-            effect = patch.object(type(self.env[model]), name,
-                                  side_effect=AssertionError('I2 foundation external effect'))
+            # Odoo discovers ondelete methods via hasattr(func, '_ondelete').
+            # A MagicMock answers that check and can become a cached hook.
+            effect = patch.object(type(self.env[model]), name, new=forbid_effect)
             effect.start()
             self.addCleanup(effect.stop)
 
@@ -140,7 +144,10 @@ class TestLlmReconcileCandidate(TransactionCase):
         self._sample(big, 100)
         self._sample(big, 400)
         _llm_internal(self.account).write({'state': 'closed'})
-        with patch.object(type(self.Model), '_ledger_bounds', side_effect=AssertionError('closed sampled')):
+        def forbid_closed_sample(*args, **kwargs):
+            raise AssertionError('closed sampled')
+
+        with patch.object(type(self.Model), '_ledger_bounds', new=forbid_closed_sample):
             self.assertIsNone(self.Model._observe(self.account.id, None))
             self.assertIsNone(self.Model._observe(self.account.id, None))
         rows = self.env[candidate.ARCHIVE_MODEL].sudo().search([('account_ref', '=', self.account.id)])
@@ -198,7 +205,10 @@ class TestLlmReconcileCandidate(TransactionCase):
         self._sample(100_000, 100)
         _llm_internal(self.account).write({'state': 'closed'})
         Evidence = self.env[candidate.ARCHIVE_MODEL].sudo()
-        with patch.object(type(Evidence), 'create', side_effect=RuntimeError('owned archive failure')):
+        def fail_archive(*args, **kwargs):
+            raise RuntimeError('owned archive failure')
+
+        with patch.object(type(Evidence), 'create', new=fail_archive):
             with self.assertRaises(RuntimeError):
                 self.Model._observe(self.account.id, None)
         self.assertEqual(self.Model.search([('account_id', '=', self.account.id)]).first_sampled_at, 100)
@@ -207,7 +217,10 @@ class TestLlmReconcileCandidate(TransactionCase):
     def test_retirement_failure_rolls_back_archive_and_preserves_candidate(self):
         self._sample(100_000, 100)
         _llm_internal(self.account).write({'state': 'closed'})
-        with patch.object(type(self.Model), 'unlink', side_effect=RuntimeError('owned retire failure')):
+        def fail_retirement(*args, **kwargs):
+            raise RuntimeError('owned retire failure')
+
+        with patch.object(type(self.Model), 'unlink', new=fail_retirement):
             with self.assertRaises(RuntimeError):
                 self.Model._observe(self.account.id, None)
         self.assertEqual(self.Model.search([('account_id', '=', self.account.id)]).first_sampled_at, 100)
@@ -215,7 +228,10 @@ class TestLlmReconcileCandidate(TransactionCase):
 
     def test_exact_aggregate_text_and_account_deletion_fk_do_not_cascade(self):
         big = 2 ** 64 + 1
-        with patch.object(type(self.Model), '_ledger_bounds', return_value=(big, big + 1, -big)):
+        def exact_bounds(*args, **kwargs):
+            return big, big + 1, -big
+
+        with patch.object(type(self.Model), '_ledger_bounds', new=exact_bounds):
             self._sample(0, 100)
         state = self.Model.search([('account_id', '=', self.account.id)])
         for model in (self.Model, self.env[candidate.ARCHIVE_MODEL]):
@@ -239,6 +255,10 @@ class TestLlmReconcileCandidate(TransactionCase):
         _llm_internal(self.account).write({'state': 'closed'})
         # Supported lifecycle: reopen creates another local/remote identity.
         # There was no I2 observation while the historical account was closed.
+        self.env.flush_all()
+        self.env.cr.execute('SELECT state FROM woow_paas_platform_llm_account WHERE id = %s',
+                            (old_id,))
+        self.assertEqual(self.env.cr.fetchone()[0], 'closed')
         new = _llm_internal(self.env['woow_paas_platform.llm_account']).create({'partner_id': partner_id})
         _llm_internal(new).write({'state': 'active', 'newapi_user_id': 121224})
         with patch.object(candidate.time, 'time', return_value=500):
