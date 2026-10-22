@@ -64,7 +64,7 @@ guardrails:
         arguments:
           expression: |-
             event.type == "tool_call" && (
-              (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"] && (
+              (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit"] && (
                 (has(event.data.arguments.path) && event.data.arguments.path.matches("\\.woow-issues/"))
                 || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("\\.woow-issues/"))
               ))
