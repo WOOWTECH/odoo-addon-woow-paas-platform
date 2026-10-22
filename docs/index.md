@@ -10,7 +10,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`guides/deployment/`](guides/deployment/) | 上 prod／stg、發版、升版、image 重釘 | 22 |
+| [`guides/deployment/`](guides/deployment/) | 上 prod／stg、發版、升版、image 重釘 | 23 |
 | [`guides/testing/`](guides/testing/) | 跑測試、E2E、本機沙盒 | 8 |
 | [`guides/development/`](guides/development/) | 開發期工具與架構 | 5 |
 
