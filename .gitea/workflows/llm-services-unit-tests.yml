@@ -40,6 +40,8 @@ on:
       - "src/tests/fixtures/newapi/**"
       - "tests/test_llm_services.py"
       - "tests/test_llm_credit_worker.py"
+      - "tests/test_llm_key_create_guard.py"
+      - "src/models/llm_api_key.py"
       - "tests/test_llm_credit_invalid_review.py"
       - "tests/test_llm_reconcile_candidate.py"
       - "src/services/llm_audit_page.py"
@@ -94,6 +96,7 @@ jobs:
           .venv-llm-services-ci/bin/python tests/unit/test_llm_usage.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_pricing.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_worker.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_key_create_guard.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_invalid_review.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_evidence.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_balance.py -v
