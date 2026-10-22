@@ -43,8 +43,8 @@ REPO_LEADER_SKILLS 列的那幾個）、以及 claude-native 層的 `hooks/`。�
    沒有）。驗收第 18 項機器強制。
 10. **worker 模板的共用片段由產生器展開**——八份 `_templates/<role>/AGENTS.md` 逐字相同的段落
    住在 `_templates/_shared/<片段>.md`，模板用 `<!-- include: <片段> -->` 引用，
-   `generate-worker.py` 複製時展開（review F10）。驗收第 20 項對**所有**模板（含暫停使用的
-   implementer_cc／verifier_pi，產生器平常不會跑到它們）解析 include、抓孤兒片段。
+   `generate-worker.py` 複製時展開（review F10）。驗收第 20 項對**所有**模板（含 ROSTER
+   目前沒有引用、產生器平常不會跑到的）解析 include、抓孤兒片段。
 """
 
 from __future__ import annotations
@@ -662,13 +662,34 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _write_ev("/tmp/x", key="file_path", name="Write"),
             _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/../woow_paas_platform/x.py",
                       key="file_path", name="Edit"),
+            # #1729：claude-native implement 不再疊 worktree_guard ⇒ 上游原本有的覆蓋由本條補齊
+            #   NotebookEdit 的 notebook_path（主 checkout／worktree 外／.. 逃逸）
+            _write_ev("/home/elmo/woow-repos/paas/woow_paas_platform/x.ipynb",
+                      key="notebook_path", name="NotebookEdit"),
+            _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/../x.ipynb",
+                      key="notebook_path", name="NotebookEdit"),
+            #   `~` 開頭、Windows drive：不符合 worktree 前綴
+            _write_ev("~/x.py", key="file_path", name="Write"),
+            _write_ev("C:/Windows/x.py", key="file_path", name="Write"),
+            #   decoy：path 在 worktree 內、notebook_path 在外 ⇒ 仍要 DENY（每個欄位各自判）
+            {"type": "tool_call", "target": "NotebookEdit",
+             "data": {"name": "NotebookEdit",
+                      "arguments": {"path": "paas/wt-selfcheck/x.ipynb",
+                                    "notebook_path": "/home/elmo/woow-repos/paas/woow_paas_platform/x.ipynb"}}},
         ],
         "allow": [
             _write_ev("paas/wt-selfcheck/src/x.py", key="path", name="sys_os_write"),
             _write_ev("paas/wt-selfcheck/src/x.py", key="path", name="sys_os_edit"),
             _write_ev("./paas/wt-selfcheck/docs/a.md", key="path", name="write"),
-            # 絕對形式的 worktree 前綴：本條放行（worktree_guard 另外會擋絕對路徑，兩條各自獨立）
+            # 絕對形式的 worktree 前綴：本條放行——claude-native implement 的正常寫法（#1729 起它
+            # 不再疊 worktree_guard；pi implement 另掛 worktree_guard 會擋絕對路徑，兩條各自獨立）
             _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/src/x.py", key="file_path", name="Edit"),
+            _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/src/x.py", key="file_path", name="Write"),
+            _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/nb/a.ipynb",
+                      key="notebook_path", name="NotebookEdit"),
+            # 反斜線：POSIX 下不是分隔符，`..\..\y` 只是 worktree 內一個怪檔名、不構成逃逸
+            #   （#1729 裁定不補；上游 worktree_guard 擋它是為了 Windows runner）
+            _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/..\\..\\y", key="file_path", name="Write"),
             # 非寫入工具不管（唯讀跨 repo 是允許的）
             {"type": "tool_call", "target": "Read",
              "data": {"name": "Read", "arguments": {"file_path": "WOOW/ecpay_odoo18/x.py"}}},
@@ -982,9 +1003,9 @@ def run_checks() -> int:
     # 19：repo-leader 副本必須蓋上身分行、不留佔位符（review F7）。
     r.guard("19. repo-leader 副本已蓋身分行（無佔位符）",
             lambda: _check_repo_leader_identity(nodes))
-    # 20：模板的共用片段——產生器只會展開 ROSTER 用到的模板，暫停使用的兩份沒人驗；片段沒人引用
+    # 20：模板的共用片段——產生器只會展開 ROSTER 用到的模板，沒被引用的模板沒人驗；片段沒人引用
     #     也不會有任何錯誤（review F10）。
-    r.guard("20. 模板 include 片段全部可解析、無殘留、無孤兒（含暫停使用的模板）",
+    r.guard("20. 模板 include 片段全部可解析、無殘留、無孤兒（含 ROSTER 未引用的模板）",
             _check_template_includes)
 
     print()
@@ -1621,7 +1642,7 @@ def _check_repo_leader_identity(nodes) -> tuple[bool, str]:
 
 
 def _check_template_includes() -> tuple[bool, str]:
-    """第 20 項：每份模板（含暫停使用的）的 include 全部可解析、展開後仍含 marker；
+    """第 20 項：每份模板（含 ROSTER 未引用的）的 include 全部可解析、展開後仍含 marker；
     `_shared/` 的每個片段至少被一份模板引用（孤兒片段＝沒人讀的文字，會靜默漂移）。"""
     bad: list[str] = []
     used: set[str] = set()
