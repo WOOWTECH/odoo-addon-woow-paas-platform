@@ -713,6 +713,9 @@ class KubectlException(Exception):
 #: #1680：平台每次 quota 推送的 id；GET ``managed_quota.sync_token`` 原樣回報。
 QUOTA_SYNC_TOKEN_ANNOTATION = "woow.tw/quota-sync-token"
 
+#: #1781：平台沒送 ``pvc_limit`` 時（舊平台）ResourceQuota 的 ``persistentvolumeclaims``。
+DEFAULT_PVC_LIMIT = "10"
+
 #: 條件寫入的前提不成立時 kubectl 的錯誤分類（``Error from server (<Reason>)``）。
 _QUOTA_PRECONDITION_FAILURES = ("(Conflict)", "(AlreadyExists)", "(NotFound)")
 
@@ -2205,6 +2208,7 @@ class KubernetesService:
         sync_token: Optional[str] = None,
         expected_resource_version: Optional[str] = None,
         expect_absent: bool = False,
+        pvc_limit: Optional[str] = None,
     ) -> Dict[str, str]:
         """Create namespace with resource quota.
 
@@ -2242,6 +2246,7 @@ class KubernetesService:
             name, cpu_limit, memory_limit, storage_limit,
             ephemeral_storage_request, ephemeral_storage_limit,
             sync_token=sync_token, resource_version=expected_resource_version,
+            pvc_limit=pvc_limit,
         )
 
         # Apply namespace
@@ -2299,6 +2304,9 @@ class KubernetesService:
         result = {"message": f"Namespace {name} created with quota"}
         if sync_token:
             result["quota"] = quota_status
+        if pvc_limit and quota_status == "applied":
+            # #1781：只在真的寫了 quota 時回報；平台靠它確認 PVC 上限不是被舊 pod 寫成 10。
+            result["pvc_limit"] = quota_manifest["spec"]["hard"]["persistentvolumeclaims"]
         return result
 
     def _build_limitrange_manifest(self, name: str) -> dict:
@@ -2348,6 +2356,7 @@ class KubernetesService:
         ephemeral_storage_limit: Optional[str] = None,
         sync_token: Optional[str] = None,
         resource_version: Optional[str] = None,
+        pvc_limit: Optional[str] = None,
     ) -> dict:
         """ns ResourceQuota 的唯一組裝點（create 與 update 共用，避免兩份 hard map 漂移）。
 
@@ -2355,13 +2364,16 @@ class KubernetesService:
         行為與 #1434 之前完全相同，operator 可以先於平台發版。
 
         #1680：``sync_token`` 寫成 annotation；``resource_version`` 寫進 metadata，配合
-        ``kubectl replace`` 成為條件寫入的前提。兩者都沒給時 manifest 與之前相同。"""
+        ``kubectl replace`` 成為條件寫入的前提。兩者都沒給時 manifest 與之前相同。
+
+        #1781：``pvc_limit`` 有帶就寫它（平台送 max(10, 叢集現值)，#1189 前的止血）；沒帶
+        維持 ``DEFAULT_PVC_LIMIT``，舊平台行為不變。"""
         hard = {
             "requests.cpu": cpu_limit,
             "requests.memory": memory_limit,
             "limits.cpu": cpu_limit,
             "limits.memory": memory_limit,
-            "persistentvolumeclaims": "10",
+            "persistentvolumeclaims": pvc_limit or DEFAULT_PVC_LIMIT,
             "requests.storage": storage_limit,
         }
         if ephemeral_storage_request:
@@ -2415,9 +2427,10 @@ class KubernetesService:
                                sync_token: Optional[str] = None,
                                expected_resource_version: Optional[str] = None,
                                expect_absent: bool = False,
+                               pvc_limit: Optional[str] = None,
                                ) -> Dict[str, str]:
         """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
-        apply 完整 hard map（含 pvc=10），無 stale key。
+        apply 完整 hard map（pvc 沒帶時為 10，#1781），無 stale key。
 
         #1434：quota 帶 ephemeral-storage 時先重套 LimitRange（補預設），理由見
         ``create_namespace`` 同一段——既有 ns 第一次收到含 ephemeral 的 quota 時，
@@ -2430,12 +2443,16 @@ class KubernetesService:
             name, cpu_limit, memory_limit, storage_limit,
             ephemeral_storage_request, ephemeral_storage_limit,
             sync_token=sync_token, resource_version=expected_resource_version,
+            pvc_limit=pvc_limit,
         )
         # #1680：條件寫入的前提不成立時 raise ``QuotaWriteConflict``（API 層轉 409）。
         self._write_quota_manifest(quota_manifest, sync_token, expect_absent)
         result = {"message": f"Namespace {name} quota updated"}
         if sync_token:
             result["quota"] = "applied"
+        if pvc_limit:
+            # #1781：見 create_namespace 同一段。
+            result["pvc_limit"] = quota_manifest["spec"]["hard"]["persistentvolumeclaims"]
         return result
 
     def _apply_baseline_netpol(self, namespace: str, workspace_id: int) -> None:

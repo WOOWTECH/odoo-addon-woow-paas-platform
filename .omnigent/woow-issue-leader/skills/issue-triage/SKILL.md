@@ -28,10 +28,11 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 
 ## 3. 選 harness 與角色
 
-- 需要兩輪獨立判斷的重要變更 → 兩個 `repo_leader` 各跑一輪；worker 路徑仍固定為 pi 實作、
-  claude-native 覆核。
+- 需要兩輪獨立判斷的重要變更 → 兩個 `repo_leader` 各跑一輪；worker 的實作與覆核仍須跨
+  vendor 配對。
 - 只是單線推進 → 挑一個 `repo_leader`（看哪邊額度池還有餘裕）。
-- 實作固定 pi、覆核固定 claude-native：`impl_pi_*` 的 diff → `ver_cc_*`，單向確保跨 vendor。
+- 實作與覆核跨 vendor 配對（#1729）：`impl_pi_*` 的 diff → `ver_cc_*`、`impl_cc_*` 的 diff →
+  `ver_pi_*`；pi 額度池空時改派 claude-native 實作，不讓實作線停擺（降級規則見 `repo_leader`）。
 
 ## 4. `args.purpose` 對照
 

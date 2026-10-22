@@ -570,13 +570,14 @@ PY'
 
 # ⚠ 這個 case 驗的是第 8 項的「孤兒向量」方向：policy 被拔掉、向量還在 ⇒ 必須紅。
 #   2026-09-14 之前第 8 項只比「policy 有沒有向量」，這種拔法全綠。
-run_mut AM "產生器不再對 implement 掛 P-path（向量成孤兒）" "8" "p_path_write_inside_worktree" \
+#   #1729 起第 4 項（自檢）也斷言兩種 harness 的 implement 都掛 P-path ⇒ 4、8 一起紅是對的。
+run_mut AM "產生器不再對 implement 掛 P-path（向量成孤兒）" "4,8" "p_path_write_inside_worktree" \
 'python3 - <<"PY"
 import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
 mutation_lib.edit(str(p),
-    old="body += [P_WORKTREE, _p_workdir(worktree, repo_root), _p_path(worktree_rel, worktree)]",
-    new="body += [P_WORKTREE, _p_workdir(worktree, repo_root)]")
+    old="body += [_p_workdir(worktree, repo_root), _p_path(worktree_rel, worktree)]",
+    new="body += [_p_workdir(worktree, repo_root)]")
 PY'
 
 run_mut AN "P-kubectl 唯讀 pipe 退回一律 DENY（get … | jq 被擋）" "8" "p_kubectl_namespace_scope" \
@@ -599,12 +600,16 @@ mutation_lib.edit(str(p), old=old,
     new="""&& !event.data.arguments.command.matches("{K8S_LOCAL_CONTEXT_RE}")""")
 PY'
 
-# ⚠ 故意挑**暫停使用**的模板：產生器平常不會跑到它，只有第 20 項會掃到 ⇒ 紅點必須單獨落在 20。
-run_mut AP "暫停使用的模板引用不存在的片段" "20" "implementer_cc" \
+# ⚠ 故意用 **ROSTER 沒有引用**的模板：產生器平常不會跑到它，只有第 20 項會掃到 ⇒ 紅點必須單獨
+#   落在 20。#1729 之前用的是暫停使用的 implementer_cc；它重新啟用後已沒有未引用的模板，改成
+#   突變時新增一份只有 marker＋壞 include 的模板。
+run_mut AP "ROSTER 未引用的模板引用不存在的片段" "20" "unrouted_probe" \
 'python3 - <<"PY"
-import mutation_lib, pathlib
-mutation_lib.edit("woow-issue-leader/_templates/implementer_cc/AGENTS.md",
-                  old="<!-- include: stay-in-worktree -->", new="<!-- include: no-such-fragment -->")
+import pathlib
+d = pathlib.Path("woow-issue-leader/_templates/unrouted_probe")
+d.mkdir()
+(d / "AGENTS.md").write_text("<!-- omnigent-prompt-marker: unrouted_probe -->" + chr(10) * 2
+                             + "<!-- include: no-such-fragment -->" + chr(10))
 PY'
 
 # ⚠ 第 4（自檢）、8（產生 worker spec）、20 一起紅是對的：三條路都會撞到殘留的 include 標記。
@@ -643,6 +648,31 @@ import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
 mutation_lib.edit(str(p), old="    name = _agent_name(purpose, harness, name)\n",
                   new="    name = _safe_name(purpose, harness)\n")
+PY'
+
+# ── #1729：implement 解除固定 pi（claude-native 不疊 worktree_guard）──────────────
+
+run_mut AU "claude-native implement 又疊回上游 worktree_guard（原生 Edit／Write 全數被擋）" "4" "worktree_guard" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+mutation_lib.edit(str(p), old="        if harness == " + chr(34) + "pi" + chr(34) + ":" + chr(10) + "            body.append(P_WORKTREE)",
+                  new="        body.append(P_WORKTREE)")
+PY'
+
+run_mut AV "claude-native implement 的 cost_budget 帶回 ask 門檻（D2）" "4" "ask_thresholds_usd" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+mutation_lib.edit(str(p), old="body.append(P_COST_IMPLEMENT if purpose == " + chr(34) + "implement" + chr(34) + " else P_COST)",
+                  new="body.append(P_COST)")
+PY'
+
+run_mut AW "P-path 不看 notebook_path（NotebookEdit 寫到 worktree 外滑過）" "8" "p_path_write_inside_worktree" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+mutation_lib.edit(str(p), old=chr(10) + "    || {_bad(" + chr(34) + "notebook_path" + chr(34) + ")}", new="")
 PY'
 
 echo

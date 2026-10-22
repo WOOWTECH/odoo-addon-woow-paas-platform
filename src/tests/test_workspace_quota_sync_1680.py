@@ -80,10 +80,15 @@ class TestWorkspaceQuotaGuardedSync1680(_SyncFixture):
         self.assertIn('remote_guard_unavailable', ws.quota_sync_reason)
 
     def test_unknown_remote_token_is_fenced_and_a_higher_remote_value_is_not_lowered(self):
-        """遠端有一個 DB 沒提交的較高值（交易回捲或舊請求晚到）：重推不能把它降回去。"""
+        """遠端有一個 DB 沒提交的較高值（交易回捲或舊請求晚到）：重推不能把它降回去。
+
+        #1682：手動重試會安全降額，所以這裡讓用量（requests.cpu 25）高於已提交的 18——
+        用量不足時照樣不降、看得到；用量釋放後才收回。
+        """
         self._set(cpu=18)
         self.operator.live[self.ns] = build_hard('30', '12Gi', '100Gi', '4Gi', '80Gi')
         self.operator.tokens[self.ns] = 'deadbeef' * 4
+        self.operator.used[self.ns] = {'requests.cpu': '25', 'limits.cpu': '25'}
         for _attempt in range(2):  # 手動重試兩次都一樣：不降、可見
             self._retry()
             self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '30')
@@ -93,6 +98,11 @@ class TestWorkspaceQuotaGuardedSync1680(_SyncFixture):
         # 第一次重試以新 token 圍籬（遠端 token 從此是平台認得的），第二次就不必再寫。
         self.assertNotEqual(self._remote_token(), 'deadbeef' * 4)
         self.assertEqual(self.operator.puts[-1][1], '30')
+        self.assertIn('unsafe_decrease', self._ws().quota_sync_reason)
+        self.operator.used[self.ns] = {}
+        self._retry()
+        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '18', '用量釋放後收回')
+        self.assertEqual(self._ws().quota_sync_state, 'synced')
 
 
 @tagged('post_install', '-at_install')
@@ -279,6 +289,12 @@ class TestWorkspaceQuotaRetryBudget1680(_SyncFixture):
             with freeze_time(self._ws().quota_next_retry_at):
                 self._background()
         self.assertEqual(self._ws().quota_retry_count, 2)
+        # #1682：目標不變的生命週期事件（每日清理一台早已 deleting 的服務）不重置額度。
+        stale = self._service('svc-budget-stale', vcpu=2, ram=2.0, storage=10)
+        stale.sudo().write({'state': 'deleting'})
+        with patch(_CLIENT, return_value=self.client):
+            stale._do_cleanup()
+        self.assertEqual(self._ws().quota_retry_count, 2, '同目標事件不重置額度')
         # 目標改變（服務集合變了）：背景發現後以新目標重試，額度重置。
         self._service('svc-budget-c', vcpu=1, ram=1.0, storage=10)
         self._background()
@@ -433,19 +449,21 @@ class TestWorkspaceQuotaConcurrentSync1680(_CommittedFixture):
         self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '18')
         self.assertEqual(self._committed('quota_sync_state')[0], 'synced')
 
-    def test_remote_success_then_db_rollback_converges_without_lowering(self):
-        """遠端已套用一個 DB 沒提交的較高值：照已提交政策重推等於降額 ⇒ 不降、看得到。"""
+    def test_remote_success_then_db_rollback_converges_to_the_committed_policy(self):
+        """遠端已套用一個 DB 沒提交的較高值：讀回時以已提交政策收斂。
+
+        #1680 只圍籬不降（值維持 30，列在待處理降額）；#1682 起背景走安全降額：用量容得下
+        就降回已提交的 18。用量不足時不降的情況見 ``test_unknown_remote_token_is_fenced…``。
+        """
         self._admin_set(cpu=18)
         self._admin_set(rollback=True, cpu=30)  # 推送成功之後，交易失敗回捲
         self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '30')
         self.assertEqual(self._committed('quota_floor_cpu')[0], 18, 'DB 是已提交的權威政策')
         with freeze_time(fields.Datetime.now() + timedelta(hours=6, minutes=1)):
-            self._run_cron()  # 定期讀回：遠端 token 不是平台預期的 ⇒ 圍籬重推
-        self._admin_retry()  # 管理員手動重試也一樣
-        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '30', '不降回 18')
+            self._run_cron()  # 定期讀回：遠端 token 不是平台預期的 ⇒ 圍籬重推、安全降額
+        self.assertEqual(self.operator.live[self.ns]['limits.cpu'], '18', '收斂到已提交政策')
         state, pending = self._committed('quota_sync_state', 'quota_pending_decrease')
-        self.assertEqual(state, 'synced')
-        self.assertIn('limits.cpu: cluster 30, target 18', pending)
+        self.assertEqual((state, pending), ('synced', False))
         tokens = self._committed('quota_expected_tokens')[0]
         self.assertIn(self.operator.tokens[self.ns], tokens, '遠端 token 已是平台認得的')
 
@@ -554,7 +572,7 @@ class TestWorkspaceQuotaOperatorErrors1680(_SyncFixture):
         triggers = len(self._cron_triggers())
         with patch(_CLIENT, return_value=self.client):
             sibling.unlink()  # 生命週期只同步自己的 namespace
-        self.assertFalse(self._ws().quota_attempt_fingerprint, '子集結果不記成整個工作區的指紋')
+        self.assertEqual(self._ws().quota_sync_status, 'pending', '子集結果不代表整個工作區')
         self.assertGreater(len(self._cron_triggers()), triggers, '立刻排背景同步重新評估')
         self._background()  # 下一輪 cron：整個工作區重新評估，另一個 namespace 的阻擋回到畫面上
         ws = self._ws()
