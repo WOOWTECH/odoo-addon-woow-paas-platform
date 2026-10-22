@@ -118,7 +118,8 @@ class TestWorkspaceQuotaPvcReadBackUnchanged1917(_Pre1680PodFixture):
         self.assertEqual(self._pvc(), '12')
         ws = self._ws()
         self.assertEqual(ws.quota_sync_state, 'unconfirmed')
-        self.assertEqual(ws.quota_sync_reason, 'operator_timeout')
+        self.assertIn('operator_timeout', ws.quota_sync_reason)
+        self.assertNotIn('pvc_limit_not_confirmed', ws.quota_sync_reason)
         self.assertTrue(ws.quota_next_retry_at)
 
     def test_read_back_without_a_token_key_with_the_pvc_intact_still_failed(self):
@@ -130,6 +131,7 @@ class TestWorkspaceQuotaPvcReadBackUnchanged1917(_Pre1680PodFixture):
         ws = self._ws()
         self.assertEqual(ws.quota_sync_state, 'unconfirmed')
         self.assertIn('read back failed', ws.quota_sync_reason)
+        self.assertNotIn('pvc_limit_not_confirmed', ws.quota_sync_reason)
         self.assertTrue(ws.quota_next_retry_at)
 
 
