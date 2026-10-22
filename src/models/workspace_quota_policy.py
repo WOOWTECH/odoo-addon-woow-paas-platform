@@ -1119,6 +1119,12 @@ def _read_back(client, namespace, token, payload):
     有 token（新 operator）只認 token；舊 operator 只能比值（推送前值不同才會推，所以值相等
     就是落地了）。#1781：token 相符但 PVC 上限不是送出的值（滾動更新時寫入落在不支援
     ``pvc_limit`` 的舊 pod，PVC 已被寫成 10）回 ``_PVC_LOST``。
+
+    #1917：送出的 PVC 上限高於 10 時，**先比 PVC 再看 token**——讀回的 PVC 低於送出值就回
+    ``_PVC_LOST``，不論 token 是否相符、回應有沒有 ``sync_token`` 鍵。#1680 之前的舊 pod
+    不寫 token（叢集仍是上一次的 token），只看 token 會在比 PVC 之前就返回，之後重試以 10
+    為基準記成 synced。成立的理由：送出值就是叢集現值（不降額合併），PVC 也不在可降欄位內，
+    平台自己不會降它；推送後變小只可能是舊 pod 或外部寫入。PVC 仍等於送出值時照舊看 token。
     """
     try:
         report = client.get_namespace_quota(namespace, include_managed=True)
@@ -1127,12 +1133,18 @@ def _read_back(client, namespace, token, payload):
     managed = report.get('managed_quota') if isinstance(report, dict) else None
     if not isinstance(managed, dict):
         return None
+    pvc_limit = payload.get('pvc_limit')
+    if _pvc_can_be_lost(pvc_limit):
+        spec_hard = managed.get('spec_hard')
+        remote_pvc = parse_quantity(
+            spec_hard.get('persistentvolumeclaims') if isinstance(spec_hard, dict) else None)
+        if remote_pvc is not None and remote_pvc < parse_quantity(pvc_limit):
+            return _PVC_LOST
     if token:
         if 'sync_token' not in managed:
             return None
         if managed.get('sync_token') != token:
             return False
-        pvc_limit = payload.get('pvc_limit')
         if _pvc_can_be_lost(pvc_limit) and parse_quantity(
                 (managed.get('spec_hard') or {}).get('persistentvolumeclaims')) != parse_quantity(
                     pvc_limit):
@@ -1154,7 +1166,8 @@ def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
     """執行推送（``call()``），把 operator 的結果轉成同步狀態。
 
     #1781 ``pvc_limit``：這次送出的 PVC 上限。高於 10 而成功回應沒有原樣回報它（或結果不明時
-    讀回 token 相符但 PVC 不是送出的值），代表請求落在不支援的 operator pod 上（滾動更新中），
+    讀回的 PVC 低於送出值——#1917 起不論 token，見 ``_read_back``），代表請求落在不支援的
+    operator pod 上（滾動更新中），
     PVC 已被寫成 10 ⇒ 記為 ``blocked: pvc_limit_not_confirmed``（不自動重試：叢集已低於原值，
     平台補不回來，要人處理）。送出 10 時舊 pod 寫的也是 10，沒有損失，不檢查。
 

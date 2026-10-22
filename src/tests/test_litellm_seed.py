@@ -75,7 +75,7 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.3.10',
+        self.assertEqual(tpl.helm_chart_version, '0.3.11',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1 起 UI_USERNAME '
                          '走 Secret（admin_username_helm_path 的前提）；0.2.1＝ChatGPT 訂閱登入頁 /woow/chatgpt；'
                          '0.2.2＝後台 Add Credential 選 ChatGPT 跳出登入方式子畫面；0.2.3＝多個 ChatGPT 帳號；'

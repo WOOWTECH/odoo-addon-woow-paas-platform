@@ -236,6 +236,7 @@ def _representative_calls(now):
     expires = now + nac.UP_LIFETIME_SECONDS
     return {
         'status': lambda c: c.status(),
+        'control_audit': lambda c: c.control_audit(0, limit=100),
         'ap_create_user': lambda c: c.ap_create_user('wsab0000000042', 'P' * 64, 'PaaS 42'),
         'ap_search_user': lambda c: c.ap_search_user('wsab0000000042'),
         'ap_get_user': lambda c: c.ap_get_user(42),
@@ -399,6 +400,19 @@ class TestClientMatchesProxyRouteTable(_Base):
         self.assertTrue(client.ap_list_users(1).ok)
         raw_query = self.recorder.requests[-1]['path'].partition('?')[2]
         self.assertEqual(raw_query, 'p=1&page_size=100&sort_by=id&sort_order=asc')
+
+    def test_control_audit_rejects_bad_cursor_before_sending(self):
+        client = self.client()
+        for after, through, limit in ((-1, None, 1), (True, None, 1),
+                                      (0, -1, 1), (0, True, 1),
+                                      (0, 9223372036854775808, 1),
+                                      (0, None, 0), (0, None, 101)):
+            with self.assertRaises(nac.NewApiInputError):
+                client.control_audit(after, through, limit)
+        self.assertEqual(self.recorder.requests, [])
+        self.assertTrue(client.control_audit(4, 9, 20).ok)
+        self.assertEqual(self.recorder.requests[-1]['path'],
+                         '/_control/audit?after=4&limit=20&through=9')
 
     def test_signing_key_for_role_never_falls_back(self):
         environ = {nac.ENV_AUTH_CRON: '%s:%s' % (KID, SECRET)}

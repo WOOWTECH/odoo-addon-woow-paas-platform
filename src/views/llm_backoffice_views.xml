@@ -35,12 +35,26 @@
         <field name="model">woow_paas_platform.llm_account</field>
         <field name="arch" type="xml">
             <form string="AI Account" create="0" edit="0" delete="0">
+                <header>
+                    <button name="action_llm_suspend_ops" type="object" string="Suspend (operations)"
+                            groups="base.group_system" invisible="state == 'closed'"
+                            confirm="Suspend AI service and queue disabling all API keys?"/>
+                    <button name="action_llm_suspend_policy" type="object" string="Suspend (policy)"
+                            groups="base.group_system" invisible="state == 'closed'"
+                            confirm="Suspend AI service for a policy violation and queue disabling all API keys?"/>
+                    <button name="action_llm_resume" type="object" string="Restore AI service"
+                            groups="base.group_system" invisible="state != 'suspended' or resume_pending"
+                            confirm="Restore only keys disabled by suspension after quarantine completes?"/>
+                </header>
                 <sheet><group>
                     <field name="partner_id"/>
                     <field name="newapi_username"/>
                     <field name="newapi_user_id"/>
                     <field name="state"/>
                     <field name="suspend_reason"/>
+                    <field name="resume_pending"/>
+                    <field name="suspend_generation"/>
+                    <field name="lifecycle_operator_id" groups="base.group_system"/>
                     <field name="quota_cached"/>
                     <field name="used_quota_cached"/>
                     <field name="request_count_cached"/>

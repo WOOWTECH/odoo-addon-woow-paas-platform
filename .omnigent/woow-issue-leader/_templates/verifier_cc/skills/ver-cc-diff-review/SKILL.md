@@ -1,6 +1,6 @@
 ---
 name: ver-cc-diff-review
-description: claude-native 覆核 worker：只對著驗收契約審 pi 實作的 diff，分 blocking／non-blocking／建議回報。
+description: claude-native 覆核 worker：只對著驗收契約審 pi 實作（降級模式下為 claude-native 實作）的 diff，分 blocking／non-blocking／建議回報。
 ---
 
 # ver-cc-diff-review
@@ -12,7 +12,9 @@ description: claude-native 覆核 worker：只對著驗收契約審 pi 實作的
 ## ⛔ 前提
 
 - 你**唯讀**（`read_only_os` 機器守線）。發現問題只回報，⛔ 不動手改。
-- 你審的是 **pi 實作**的 diff。同 vendor 自審不算獨立覆核。
+- 你正常審的是 **pi 實作**的 diff。同 vendor 自審不算獨立覆核。
+- 降級模式（pi 池不可用）下才會審 **claude-native 實作**：工單必須標 implementer 的
+  harness／model；沒標、或 model 與你相同，就拒審並回報（見 AGENTS.md「跨 vendor 覆核」）。
 - 你只有 diff ＋ 契約，**不要**去翻實作者的 worktree。
 
 ## 步驟
