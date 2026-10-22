@@ -819,6 +819,8 @@ class TestLlmConnectionTest(_LlmCase):
     def test_readyz_helpers(self):
         self.assertEqual(nac.readyz_url(nac.PROXY_URL_STG),
                          'http://newapi-proxy.new-api-stg.svc.cluster.local:8081/readyz')
+        self.assertEqual(nac.readyz_url(nac.PROXY_URL_LLMDEV),
+                         'http://newapi-proxy-llmdev.new-api-stg.svc.cluster.local:8081/readyz')
         session = SimpleNamespace(
             get=lambda *a, **kw: SimpleNamespace(status_code=503, content=json.dumps({
                 'ready': False, 'upstream': 'connect', 'replay_store': 'ok',
