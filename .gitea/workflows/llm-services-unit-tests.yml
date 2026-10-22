@@ -35,6 +35,8 @@ on:
       - "tests/unit/test_llm_usage.py"
       - "src/services/llm_pricing.py"
       - "tests/test_llm_pricing.py"
+      - "src/services/llm_price_notice.py"
+      - "tests/test_llm_price_notice.py"
       - "src/services/llm_redact.py"
       - "src/services/mcp_url_guard.py"
       - "src/tests/fixtures/newapi/**"
@@ -95,6 +97,7 @@ jobs:
           timeout 120s .venv-llm-services-ci/bin/python tests/test_llm_services.py -v
           .venv-llm-services-ci/bin/python tests/unit/test_llm_usage.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_pricing.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_price_notice.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_worker.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_key_create_guard.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_invalid_review.py -v
