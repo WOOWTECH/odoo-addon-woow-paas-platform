@@ -43,3 +43,11 @@ git diff --check
 - 本 slice 尚無「preflight 到 SMTP claim」的 writer interlock：mail、obligation、MIME 與 binding 檢查後可能併發改變。未來 dispatcher 必須建立 immutable outbox/最終 bytes 與身份綁定、在 transport claim 做相同快照校驗並互鎖所有 writer；不能把這次 preflight 當可重放的寄送授權。
 - 未接 `ir.mail_server.connect/send_email` 或 `_postprocess_sent_message`；不得將一般 SMTP session 的回傳值補寫成 acceptance。llmdev 現役 Odoo 18 的 `connect` 回傳 `SMTPConnection` wrapper、內部才是 `smtplib.SMTP`；`mail.mail.send` 為批次共用 session，`_prepare_email_message` 會重算 envelope／刪 Bcc／可能改 From。因此本切片 `AcceptanceSMTP` **不會被 Odoo 自動使用**，且 payload digest 必須綁在最後準備完成的 MIME bytes。下一切片需專用單封 dispatch/session，不得 monkeypatch 全域或混入一般 mail batch；見工作區 `impl/price-notice-smtp-connection-shape-20261022.md`。只有既有 observer 的 RCPT + DATA 250 路徑能提供觀測。DATA250→journal commit crash window 仍存在，unknown 要以可信 relay 記錄人工對帳，不自動重送。
 - 未提供 publication/owner/legal 及 new-api pricing writer gate，也不啟動七天時計、不解除 GA blocker。
+
+## 單封 Odoo SMTPConnection 包裝器草稿（2026-10-22）
+
+在相同未註冊分支新增 `src/services/llm_price_notice_odoo_smtp.py`。llmdev 現役 Odoo 核心已唯讀確認：`SMTPConnection` 把 `sendmail`／`rcpt`／`data` setter 轉送至內部 `smtplib` 物件；`ir.mail_server.send_email` 在最終 `_prepare_email_message` 後呼叫 `smtp_session.send_message`；`mail.mail.send` 會在批次共享 session。故草稿 `BoundNoticeSMTP` 僅接受由未來受信任派送器持有的**專用新 session**，一次性替換該實例的三個傳輸方法，於 `send_message` 真正序列化後的 bytes／唯一 envelope 上重讀 committed source/binding，再獨立 claim。只有相同單一 RCPT 250/251 及 DATA 250 後同步提交 journal acceptance，`finally` 恢復方法。未觀測 DATA 的假成功會拒絕；外層 Odoo 的 Message-ID／mail state 仍不是證據。
+
+離線 `tests/test_llm_price_notice_odoo_smtp.py` 用真 `smtplib.send_message/sendmail` 與仿 Odoo property-delegating wrapper、無 socket 的合成協定覆蓋成功、RCPT/DATA 拒絕、最終 MIME 或收件人漂移、committed preflight 拒絕、假成功與 journal 提交失敗。這不是 Odoo registry、真 PostgreSQL、真 SMTP 或 relay 回執測試；沒有呼叫 `ir.mail_server.connect`、`mail.mail.send` 或任何現役寄信。測試只確認這個有界 transport observer 的形狀。
+
+**接線前硬前置：** 專用 session 必須由受信 server 以已批准 mail server 設定建立與關閉，不能傳入 `mail.mail.send` 的共享批次 session；mailer 要在源資料 writer lock 與已批准公告／受眾下取得最終 Odoo MIME；即使 preflight 通過，現有程式也沒有跨 writer 互鎖，mail/義務仍可能在 claim 前後改變。需於真 Odoo／PG 隔離資料庫驗證 `_prepare_email_message`、單封 `mail.mail` 展開、MRO 覆寫鏈、權限、鎖次序、auto_delete、測試模式及崩潰窗口；再接受控 SMTP sink，最後由負責人／法務核可正式發佈。此草稿仍不能寄送真通知或啟動七天。
