@@ -1,6 +1,6 @@
 # Dormant Odoo 18 / PG adapter boundary
 
-此 bounded slice 不註冊 hook、model、migration、cron 或 RPC，不連 SMTP、不變更七天 gate。工作分支為 `feat/llm-price-notice-transport-journal-dormant-1022`，其基礎 ledger PR 分支 `feat/llm-price-notice-ledger-1022` 停在 `4ae421a8b`；本切片不修改該分支或 Gitea。
+此 bounded slice 不註冊 hook、model、migration、cron 或 RPC，不連 SMTP、不變更七天 gate。工作分支為 `feat/llm-price-notice-transport-journal-dormant-1022`，已重定基到 #1936 新 head `6acaafcd2dbcb0ced4ec009f94b79871a58e01e1`；本切片不修改該 PR 或 Gitea。
 
 ## 目標與實作
 
@@ -23,7 +23,7 @@ repo 參照：`src/models/llm_event.py` `_llm_alert_queue_email` 使用多地址
 
 ## 驗證
 
-本機無 Odoo module，亦無 psql/postgres/initdb；沒有接觸叢集、Secret 或 Gitea。測試以 socket guard 禁止 SMTP connection；fake ORM 的 mail.state/message_id getter 會直接拋錯，正常 matching case 仍通過。
+最初的離線測試沒有 Odoo module 或本機 psql/postgres/initdb；測試以 socket guard 禁止 SMTP connection，fake ORM 的 mail.state/message_id getter 會直接拋錯，正常 matching case 仍通過。其後**在獨立、精確標記的 llmdev scratch DB** 補了真 PostgreSQL DDL／兩個 session 並發 claim／唯一約束，以及真 Odoo SQL cursor 的 `OdooJournal` prepare/bind/claim/accept 合成 API 與外層 rollback 對照；測試 DB 已刪除、獨立查核不存在。這不是註冊 addon 或真 ORM mail／義務測試，也沒有 SMTP、Secret 或 Gitea 寫入。
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B tests/test_llm_price_notice_odoo_adapter.py -v
@@ -33,13 +33,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B tests/test_llm_price_notice.py -v
 git diff --check
 ```
 
-結果：adapter 21、transport 21、notice 17，共 59 個離線測試通過；ruff F、tracked diff/new-file whitespace 通過。沒有真 Odoo/PG integration success claim。新 adapter 的 dormant import 邊界包含在測試中。
+結果：adapter 21、transport 21、notice 17，共 59 個離線測試通過；ruff F、tracked diff/new-file whitespace 通過。真 PG／Odoo SQL cursor 的有限路徑見工作區 `impl/price-notice-pg-contract-run-20261022.md`；它沒有驗證 Odoo ORM `OdooMailBoundary.bind/preflight`。新 adapter 的 dormant import 邊界包含在離線測試中。
 
 ## 接線前仍缺
 
 - 核可的 PG migration/schema 版本、snapshot/receipt 防修改角色與 DB 權限、service UID 的 mail/obligation read ACL/record rules；目前不防 DB owner 或任意受信 Python 呼叫內部 API。既有 #1936 state 仍 draft-only，沒有批准/dispatch 權限。
-- 真 PG 驗證：registry pool/backend 獨立性、Repeatable Read 與 serialization failure、並行 bind/claim/唯一鍵、外層已持鎖時 journal commit/rollback、commit response lost；SQLite 與 fake cursor 結果不能替代這些。
+- 剩餘真 PG 驗證：真正 Odoo registry pool（不是合成 registry wrapper）的權限、Repeatable Read 與 serialization failure、並行 bind、外層已持 Odoo mail 鎖時 journal commit/rollback、commit response lost。兩個真 session 的 claim 與 schema 約束已測，但只覆蓋合成資料。
 - 真 Odoo 驗證：fresh Environment/cache/ACL、未提交 mail/obligation 不可見、實際 MIME/附件/CC/BCC/partner 展開及 payload hash 穩定性、auto_delete 後 binding/receipt 保存。fake ORM 缺列測試只驗證 contract。
 - 本 slice 尚無「preflight 到 SMTP claim」的 writer interlock：mail、obligation、MIME 與 binding 檢查後可能併發改變。未來 dispatcher 必須建立 immutable outbox/最終 bytes 與身份綁定、在 transport claim 做相同快照校驗並互鎖所有 writer；不能把這次 preflight 當可重放的寄送授權。
-- 未接 ir.mail_server.connect/send_email 或 _postprocess_sent_message；不得將一般 SMTP session 的回傳值補寫成 acceptance。只有既有 observer 的 RCPT + DATA 250 路徑能提供觀測。DATA250→journal commit crash window 仍存在，unknown 要以可信 relay 記錄人工對帳，不自動重送。
+- 未接 `ir.mail_server.connect/send_email` 或 `_postprocess_sent_message`；不得將一般 SMTP session 的回傳值補寫成 acceptance。llmdev 現役 Odoo 18 的 `connect` 回傳 `SMTPConnection` wrapper、內部才是 `smtplib.SMTP`；`mail.mail.send` 為批次共用 session，`_prepare_email_message` 會重算 envelope／刪 Bcc／可能改 From。因此本切片 `AcceptanceSMTP` **不會被 Odoo 自動使用**，且 payload digest 必須綁在最後準備完成的 MIME bytes。下一切片需專用單封 dispatch/session，不得 monkeypatch 全域或混入一般 mail batch；見工作區 `impl/price-notice-smtp-connection-shape-20261022.md`。只有既有 observer 的 RCPT + DATA 250 路徑能提供觀測。DATA250→journal commit crash window 仍存在，unknown 要以可信 relay 記錄人工對帳，不自動重送。
 - 未提供 publication/owner/legal 及 new-api pricing writer gate，也不啟動七天時計、不解除 GA blocker。
