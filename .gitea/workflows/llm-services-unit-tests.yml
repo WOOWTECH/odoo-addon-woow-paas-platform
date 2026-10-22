@@ -41,6 +41,9 @@ on:
       - "tests/test_llm_services.py"
       - "tests/test_llm_credit_worker.py"
       - "tests/test_llm_reconcile_candidate.py"
+      - "src/services/llm_audit_page.py"
+      - "src/models/llm_audit_ingest.py"
+      - "tests/test_llm_audit_page.py"
       - "src/models/llm_reconcile_candidate.py"
       - "src/models/llm_credit_order.py"
       - "tests/test_mcp_dependency_smoke.py"
@@ -90,6 +93,7 @@ jobs:
           .venv-llm-services-ci/bin/python tests/test_llm_credit_evidence.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_balance.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_candidate.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_audit_page.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_evidence.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_status_invariants.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_status_monitor.py -v
