@@ -8,6 +8,7 @@ Jev（TypeSafe System One）只負責「判斷」：回傳 choice／score／noul
 
     jev_gate.py models                         # 列出可用 model（驗證 API key 可用）
     jev_gate.py triage --run-dir <dir>         # 閘門 A：逐筆判斷 findings，寫 decisions.jsonl
+    jev_gate.py carryover --run-dir <dir>      # 前幾輪未決的 finding 帶到本輪，寫 carryover.jsonl
     jev_gate.py ready --case <json> --config <json>   # 閘門 C：修正能否交給人 merge
     jev_gate.py human --id <decision id> --label <l> --action <a> [--note <n>]
     jev_gate.py calibrate [--gate triage|ready] [--min-samples 50]
@@ -324,6 +325,7 @@ def triage_run(run_dir: Path, gates: dict[str, Any], sdir: Path, *, caller=call_
     out_path = run_dir / "decisions.jsonl"
     out_path.write_text("", encoding="utf-8")
     shadow = sdir / "shadow.jsonl"
+    history = triage_history(read_jsonl(shadow))
     questions = triage_questions(gates["severity_levels"])
     summary = {r: 0 for r in ROUTES} | {"errors": 0, "total": len(findings)}
     auth_failed: str | None = None
@@ -334,6 +336,10 @@ def triage_run(run_dir: Path, gates: dict[str, Any], sdir: Path, *, caller=call_
             "fingerprint": finding.get("fingerprint"), "mode": gates["mode"],
             "model": None, "answers": None, "error": None,
         }
+        prior = history.get((record["repo"], record["fingerprint"]), {}).get("human")
+        if prior:
+            # 同一個 fingerprint 之前已有人決定（還沒進 baseline）：報告列為已決，不再問
+            record["prior_human"] = {k: prior.get(k) for k in ("ref", "ts", "label", "action", "note")}
         try:
             if auth_failed:
                 raise GateError(auth_failed)
@@ -354,6 +360,95 @@ def triage_run(run_dir: Path, gates: dict[str, Any], sdir: Path, *, caller=call_
         append_jsonl(shadow, record)
     summary["auth_failed"] = bool(auth_failed)
     return summary
+
+
+# ── 跨輪未決（carryover） ────────────────────────────────────────────────────
+
+def triage_history(records: list[dict[str, Any]]) -> dict[tuple[Any, Any], dict[str, Any]]:
+    """依 (repo, fingerprint) 整理閘門 A 的歷史。
+
+    回傳每組的 decisions（依時間）、human（組內最後一筆人工決定，沒有則 None）、
+    last（最後一個事件：decision 或 resolved）。只讀，不寫檔。
+    """
+    humans = {r["ref"]: r for r in records if r.get("type") == "human"}
+    groups: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for r in records:
+        key = (r.get("repo"), r.get("fingerprint"))
+        if r.get("type") == "decision" and r.get("gate") == "triage":
+            g = groups.setdefault(key, {"decisions": [], "human": None, "last": None})
+            g["decisions"].append(r)
+            g["last"] = "decision"
+            if r["id"] in humans:
+                g["human"] = humans[r["id"]]
+        elif r.get("type") == "resolved" and key in groups:
+            groups[key]["last"] = "resolved"
+    return groups
+
+
+def _scanned_paths(meta: dict[str, Any]) -> set[str] | None:
+    """本輪實際掃過的檔案；None 表示全部（舊版 meta 的 full 掃描）。"""
+    if isinstance(meta.get("scanned_files"), list):
+        return set(meta["scanned_files"])
+    changed = (meta.get("scope") or {}).get("changed")
+    return None if changed is None else set(changed)
+
+
+def _findings_by_decision(runs_root: Path) -> dict[str, dict[str, Any]]:
+    """shadow log 不存 finding 本體；從各輪 decisions.jsonl 找回來。"""
+    out: dict[str, dict[str, Any]] = {}
+    for path in sorted(runs_root.glob("*/*/decisions.jsonl")):
+        for r in read_jsonl(path):
+            if r.get("id") and r.get("finding"):
+                out[r["id"]] = r["finding"]
+    return out
+
+
+def carryover_run(run_dir: Path, sdir: Path) -> dict[str, Any]:
+    """把同一 repo 前幾輪「Jev 判過、人還沒決定」的 finding 帶到本輪。
+
+    - 組內有人工決定 ⇒ 已決，不帶；最後事件是 resolved ⇒ 已解決，不帶
+    - 本輪 decisions 已含的 fingerprint ⇒ 本輪照常處理，不重複帶
+    - 檔案本輪有掃到、該工具本輪 status=ok、卻沒再偵測到 ⇒ 追加 resolved 紀錄，不帶
+      （工具失敗或 deep review 沒跑時不判 resolved，寧可多帶）
+    """
+    cfg = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
+    tools_path = run_dir / "tools.json"
+    tools = json.loads(tools_path.read_text(encoding="utf-8")) if tools_path.exists() else {}
+    repo = cfg.get("repo", {}).get("full_name")
+    current = {r.get("fingerprint") for r in read_jsonl(run_dir / "decisions.jsonl")}
+    scanned = _scanned_paths(meta)
+    shadow = sdir / "shadow.jsonl"
+    groups = triage_history(read_jsonl(shadow))
+    findings = _findings_by_decision(run_dir.parent.parent)
+
+    carried: list[dict[str, Any]] = []
+    resolved = 0
+    for (g_repo, fp), g in groups.items():
+        if g_repo != repo or fp in current or g["human"] or g["last"] != "decision":
+            continue
+        last = g["decisions"][-1]
+        finding = findings.get(last["id"])
+        path, tool = (finding or {}).get("path"), (finding or {}).get("tool")
+        tool_ok = (tools.get(tool) or {}).get("status") == "ok"
+        if finding and path and tool_ok and (scanned is None or path in scanned):
+            append_jsonl(shadow, {
+                "type": "resolved", "id": uuid.uuid4().hex[:12], "ts": now_iso(), "repo": repo,
+                "fingerprint": fp, "ref": last["id"], "run": str(run_dir),
+                "reason": f"本輪掃到 {path}（{tool} ok）但未再偵測到",
+            })
+            resolved += 1
+            continue
+        carried.append({
+            "decision_id": last["id"], "fingerprint": fp, "finding_id": last.get("finding_id"),
+            "first_seen": g["decisions"][0].get("ts"), "seen_runs": len(g["decisions"]),
+            "proposed": last.get("proposed"), "reasons": last.get("reasons"), "info": last.get("info"),
+            "finding": finding,
+        })
+    with open(run_dir / "carryover.jsonl", "w", encoding="utf-8") as fh:
+        for item in carried:
+            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    return {"repo": repo, "carried": len(carried), "resolved": resolved}
 
 
 # ── 閘門 C：ready ─────────────────────────────────────────────────────────────
@@ -520,6 +615,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("models", help="列出可用 model")
     p = sub.add_parser("triage", help="閘門 A")
     p.add_argument("--run-dir", required=True)
+    p = sub.add_parser("carryover", help="前幾輪未決的 finding 帶到本輪")
+    p.add_argument("--run-dir", required=True)
     p = sub.add_parser("ready", help="閘門 C")
     p.add_argument("--case", required=True)
     p.add_argument("--config", required=True)
@@ -546,6 +643,9 @@ def main(argv: list[str] | None = None) -> int:
             summary = triage_run(Path(args.run_dir), gates, sdir)
             print(json.dumps(summary, ensure_ascii=False))
             return 3 if summary["auth_failed"] else 0
+        if args.cmd == "carryover":
+            print(json.dumps(carryover_run(Path(args.run_dir), sdir), ensure_ascii=False))
+            return 0
         if args.cmd == "ready":
             case = json.loads(Path(args.case).read_text(encoding="utf-8"))
             cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))

@@ -85,7 +85,8 @@ class LlmFreeUsage(models.Model):
         # Only trusted staging shell/cron context can lower the cap. RPC context
         # alone cannot change production enforcement or raise its ceiling.
         override = self.env.context.get('llm_free_daily_limit')
-        if (self.env.su and llm_config(self.env).get('proxy_url') == nac.PROXY_URL_STG
+        if (self.env.su and llm_config(self.env).get('proxy_url') in (
+                nac.PROXY_URL_STG, nac.PROXY_URL_LLMDEV)
                 and type(override) is int and 0 < override <= FREE_DAILY_LIMIT):
             return override
         return FREE_DAILY_LIMIT
