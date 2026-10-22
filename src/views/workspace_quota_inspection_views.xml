@@ -55,7 +55,7 @@
                             string="Set Quota Minimums" groups="base.group_system"/>
                     <button name="action_retry_quota_sync" type="object" string="Retry Quota Sync"
                             groups="base.group_system"
-                            confirm="Retry the quota sync now with the current policy? A cluster value is lowered only for a confirmed decrease and only after checking current usage again; otherwise it is kept."/>
+                            confirm="Retry the quota sync now with the current policy? The cluster quota is lowered to the current target only after checking current usage again and only if every checked resource fits; otherwise the cluster value is kept."/>
                 </header>
                 <sheet>
                     <h1><field name="name" readonly="True"/></h1>

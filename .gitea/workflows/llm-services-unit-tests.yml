@@ -19,6 +19,8 @@ on:
       - "tests/test_llm_credit_evidence.py"
       - "src/services/llm_reconcile_balance.py"
       - "src/services/llm_reconcile_evidence.py"
+      - "src/services/llm_status_invariants.py"
+      - "tests/test_llm_status_invariants.py"
       - "tests/test_llm_reconcile_balance.py"
       - "tests/test_llm_reconcile_evidence.py"
       - "src/services/llm_usage.py"
@@ -88,6 +90,7 @@ jobs:
           .venv-llm-services-ci/bin/python tests/test_llm_audit_page.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_audit_attempt.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_evidence.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_status_invariants.py -v
       - name: Real MCP adapter transport smoke
         env:
           PYTHONDONTWRITEBYTECODE: "1"

@@ -876,6 +876,8 @@ class TestNamespaceEndpoints:
         mock_k8s.update_namespace_quota.assert_called_once_with(
             "paas-ws-test-abc", "12", "12Gi", "150Gi",
             ephemeral_storage_request=None, ephemeral_storage_limit=None,
+            # #1781：舊平台不送 pvc_limit → None（pvc 維持 10）
+            pvc_limit=None,
             # #1680：沒帶版本防護欄位 ＝ 無條件寫入（既有行為）
             sync_token=None, expected_resource_version=None, expect_absent=False)
 

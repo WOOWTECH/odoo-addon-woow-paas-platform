@@ -1214,6 +1214,13 @@ from . import test_workspace_quota_lower_confirm_1681
 from . import test_workspace_quota_lower_confirm_rpc_1681
 from . import test_workspace_quota_lower_live_1681
 from . import test_workspace_quota_floor_live_1679
+from . import test_workspace_quota_reclaim_1682
+from . import test_workspace_quota_reclaim_live_1682
+from . import test_ns_quota_pvc_1781
+from . import test_workspace_quota_pvc_1781
+from . import test_workspace_quota_pvc_live_1781
+# fix: #1917 結果不明時的讀回先比對 PVC 再看 token（#1680 之前的舊 pod 把 PVC 寫成 10）
+from . import test_workspace_quota_pvc_readback_1917
 from . import test_ecpg_v4_golive
 # #1766：一條 tunnel 只給一台 Home Assistant 接（claim／legacy 升級／機器數）。
 from . import test_tunnel_binding_1766
@@ -1283,3 +1290,4 @@ from . import test_llm_discrepancy_replay
 from . import test_llm_bounded_cron
 from . import test_llm_reconcile_candidate
 from . import test_llm_audit_ingest
+from . import test_llm_account_lifecycle  # noqa: F401 - register Odoo tests

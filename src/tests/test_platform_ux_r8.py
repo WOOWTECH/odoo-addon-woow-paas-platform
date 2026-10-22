@@ -4,15 +4,13 @@
   補 ``template.documentation_url``（配置頁的「View Documentation」原本永遠不出現）。
 - #1456：「最後同步於」帶 UTC offset（前端把不帶 offset 的值當當地時間）；reconfigure
   背景執行緒在 poll 早一步把服務推回 running 時仍單調回寫 helm_revision。
-- #1457：/woow、OAuth、/device 頁面帶 HSTS／防點擊劫持／nosniff，且只套在本 addon 的路徑。
+- #1457：/woow、OAuth、/device 頁面帶完整安全標頭；公開平台主機全路徑帶 HSTS。
 
 前端（連線狀態三態、方案與帳期卡、訂閱列表標籤、變更方案不顯示試用）沒有 JS 測試框架，
 由 PR 描述的瀏覽器實測涵蓋。
 """
 import json
 from unittest.mock import MagicMock, patch
-
-from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform import hooks
 from odoo.addons.woow_paas_platform.controllers.paas import (
@@ -22,10 +20,16 @@ from odoo.addons.woow_paas_platform.controllers.paas import (
     _help_url,
 )
 from odoo.addons.woow_paas_platform.services.security_headers import (
+    AIOT_PUBLIC_HOST,
     SECURITY_HEADERS,
+    apply_hsts_header,
     apply_security_headers,
+    wants_platform_hsts,
     wants_security_headers,
 )
+from odoo.tests.common import HttpCase, TransactionCase, tagged
+from odoo.tools import config
+
 from ..models.cloud_service import _internal_provision
 
 _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
@@ -62,7 +66,7 @@ class TestHelpUrl(TransactionCase):
 
 
 class TestSecurityHeaderHelpers(TransactionCase):
-    """#1457：路徑判準與「不覆蓋既有標頭」。"""
+    """#1457：路徑／公開主機判準與「不覆蓋既有標頭」。"""
 
     def test_paths(self):
         for path in ('/woow', '/woow/', '/oauth2/authorize', '/oauth2/token', '/device'):
@@ -87,10 +91,25 @@ class TestSecurityHeaderHelpers(TransactionCase):
         self.assertNotIn('includeSubDomains', hsts)
         self.assertNotIn('preload', hsts)
 
+    def test_hsts_only_targets_the_public_platform_host(self):
+        for host in (AIOT_PUBLIC_HOST, AIOT_PUBLIC_HOST.upper(), f'{AIOT_PUBLIC_HOST}:443',
+                     f'{AIOT_PUBLIC_HOST}.'):
+            with self.subTest(host=host):
+                self.assertTrue(wants_platform_hsts(host))
+        for host in ('www.woowtech.io', 'aiot.woowtech.io.evil.example',
+                     'aiot.woowtech.io:invalid', '', None):
+            with self.subTest(host=host):
+                self.assertFalse(wants_platform_hsts(host))
+
+    def test_existing_hsts_is_kept(self):
+        headers = {'Strict-Transport-Security': 'max-age=63072000'}
+        apply_hsts_header(headers)
+        self.assertEqual(headers['Strict-Transport-Security'], 'max-age=63072000')
+
 
 @tagged('post_install', '-at_install')
 class TestWoowPageHelpUrlAndHeaders(HttpCase):
-    """/woow 的 session_info 帶 woow_help_url，回應帶安全標頭；非本 addon 路徑不帶。"""
+    """/woow 帶完整安全標頭；公開平台主機的每個路徑帶 HSTS。"""
 
     def setUp(self):
         super().setUp()
@@ -114,9 +133,36 @@ class TestWoowPageHelpUrlAndHeaders(HttpCase):
                          SECURITY_HEADERS['Strict-Transport-Security'])
 
     def test_other_paths_untouched(self):
-        """同一套 Odoo 也服務官網與 ERP：本 addon 不改它們的標頭（陰性對照）。"""
+        """非 aiot 的預設共用主機維持既有行為（陰性對照）。"""
         res = self.url_open('/web/login', timeout=30)
         self.assertEqual(res.status_code, 200)
+        self.assertNotIn('Strict-Transport-Security', res.headers)
+
+    @staticmethod
+    def _forwarded_https_headers(host):
+        return {
+            'Host': host,
+            'X-Forwarded-Host': host,
+            'X-Forwarded-Proto': 'https',
+        }
+
+    def test_aiot_host_sets_hsts_on_login_and_not_found(self):
+        """ProxyFix 後的公開平台 Host 在一般與錯誤回應都得到 HSTS。"""
+        with patch.dict(config.options, {'proxy_mode': True}):
+            for path, status_code in (('/web/login', 200), ('/not-a-real-platform-route', 404)):
+                with self.subTest(path=path):
+                    res = self.url_open(path, headers=self._forwarded_https_headers(
+                        AIOT_PUBLIC_HOST), timeout=30)
+                    self.assertEqual(res.status_code, status_code, res.text[:200])
+                    self.assertEqual(res.headers['Strict-Transport-Security'],
+                                     SECURITY_HEADERS['Strict-Transport-Security'])
+
+    def test_other_shared_host_stays_without_hsts_on_login(self):
+        """共享 Odoo 的另一個 Host 不因全路徑公開平台政策被改變。"""
+        with patch.dict(config.options, {'proxy_mode': True}):
+            res = self.url_open('/web/login', headers=self._forwarded_https_headers(
+                'www.woowtech.io'), timeout=30)
+        self.assertEqual(res.status_code, 200, res.text[:200])
         self.assertNotIn('Strict-Transport-Security', res.headers)
 
 
