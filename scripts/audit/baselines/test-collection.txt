@@ -520,6 +520,7 @@
 6	test_llm_platform_foundation.TestLlmThrottle
 14	test_llm_reauth.TestLlmReauth
 2	test_llm_reauth.TestLlmReauthCommitted
+15	test_llm_reconcile_candidate.TestLlmReconcileCandidate
 1	test_llm_reconcile_local.TestLlmReconcileDeadline
 25	test_llm_reconcile_local.TestLlmReconcileLocal
 4	test_llm_sql_budget.TestLlmSqlBudget
