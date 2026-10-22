@@ -226,9 +226,16 @@ class TestLlmConfigGuard(TransactionCase):
         self.assertFalse(self.icp.get_param(llm_common.PARAM_PROXY_URL))
 
     def test_proxy_url_accepts_allow_list_and_blackhole(self):
-        for good in (nac.PROXY_URL_PROD, nac.PROXY_URL_STG, nac.PROXY_URL_BLACKHOLE):
+        self.icp.set_param(llm_common.PARAM_PROXY_URL, nac.PROXY_URL_STG)
+        old_fingerprint = llm_common.config_fingerprint(self.env)
+        self.icp.set_param(llm_common.PARAM_PROXY_URL, nac.PROXY_URL_LLMDEV)
+        self.assertEqual(llm_common.llm_config(self.env)['proxy_state'], 'usable')
+        self.assertNotEqual(llm_common.config_fingerprint(self.env), old_fingerprint)
+        for good in (nac.PROXY_URL_PROD, nac.PROXY_URL_STG,
+                     nac.PROXY_URL_LLMDEV, nac.PROXY_URL_BLACKHOLE):
             self.icp.set_param(llm_common.PARAM_PROXY_URL, good)
             self.assertEqual(self.icp.get_param(llm_common.PARAM_PROXY_URL), good)
+        self.assertTrue(llm_common.llm_unconfigured(self.env))
         # 更新既有那一列也受同一個守衛管
         with self.assertRaises(ValidationError):
             self.icp.set_param(llm_common.PARAM_PROXY_URL, 'http://evil.example')

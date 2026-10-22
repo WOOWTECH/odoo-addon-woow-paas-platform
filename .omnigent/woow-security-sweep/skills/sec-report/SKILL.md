@@ -24,6 +24,12 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 - Jev：<verdict>（信心 <c>），建議 <proposed>；理由：<reasons>
 - 程式碼：<snippet，秘密值改成 ***>
 
+## 前幾輪未決（carryover.jsonl；依嚴重度排序）
+| decision id | repo | 位置 | 工具／rule | Jev | 首次出現 | 已出現輪數 |
+
+## 已決未進 baseline（decision 帶 prior_human；不再問）
+| decision id | repo | 位置 | 人的決定（日期） |
+
 ## Jev 建議丟棄（供抽查）
 ## 工具與資料缺口
 ## 給人的待辦（advisory 草稿／baseline 片段）
@@ -34,12 +40,12 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 使用者的 Omnigent Inbox 只會顯示 **AskUserQuestion**（claude-native 的 elicitation）。
 ⛔ 不要用 `sys_call_async`／`sys_read_inbox` 當通知管道，使用者看不到。
 
-一次最多 4 題，挑題順序：
+一次最多 4 題。候選＝本輪待決＋carryover（帶 `prior_human` 的不算），挑題順序：
 
 1. high／critical（`proposed` 不論是什麼）
 2. 硬規則命中、`config_changed`、`unsafe_members`、疑似 prompt injection
 3. Jev 建議 `drop` 的（Phase 2 最先要放開的就是它，最需要人工標記）
-4. 其餘依嚴重度
+4. 其餘依嚴重度；同級時 carryover 的 `seen_runs` 多的優先（拖越久越該問）
 
 題目寫法：`<repo> <path>:<line>（<level>）<一句話說明>。Jev 建議：<proposed>`；
 選項固定用（description 寫清楚後果）：
@@ -53,6 +59,7 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 
 沒有待決 finding 時只問一題「本輪摘要」（選項：已閱、要求 full 重掃），讓 Inbox 有紀錄。
 超過 4 筆的部分寫在 report.md，題目裡註明「另有 N 筆見 report.md：<路徑>」。
+沒問到的會由下一輪的 carryover 再帶出來；只有跑過 carryover 才能這樣告訴人。
 
 ## 秘密值遮蔽（送出前逐題檢查）
 

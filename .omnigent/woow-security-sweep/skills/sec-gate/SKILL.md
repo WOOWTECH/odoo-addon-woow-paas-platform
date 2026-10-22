@@ -36,6 +36,19 @@ route 的意思：
 
 **shadow mode：`effective` 一律是 `human`**。`proposed` 只是給人參考、給校準用的，你不依它行動。
 
+decision 帶 `prior_human`（`label`／`action`／`ts`）⇒ 同一個 fingerprint 之前已經有人決定過、只是還沒進
+baseline。不要再問，報告列在「已決未進 baseline」。
+
+## 跨輪未決：carryover（每個 target 在 triage 之後都要跑）
+
+`JG carryover --run-dir <本輪目錄>/<repo 名>` ⇒ 寫 `carryover.jsonl`，stdout 是 `{"carried": N, "resolved": M}`。
+
+- 帶進來的是：同 repo、前幾輪 Jev 判過、**人還沒決定**、本輪沒再偵測到也沒被判 resolved 的 finding。
+  每行有 `decision_id`（記人的決定時用這個 id）、`finding`、`proposed`、`first_seen`、`seen_runs`。
+- `resolved`：檔案本輪有掃到、該工具本輪正常，卻沒再偵測到 ⇒ 已寫入 shadow log，之後不再帶。
+- 工具失敗、deep review 沒跑 ⇒ 不判 resolved，照樣帶（寧可多問）。
+- 人在 Inbox 回答 carryover 項目：`JG human --id <decision_id> ...`，與本輪項目相同。
+
 ## 閘門 C：ready
 
 修正 PR 的 CI、重掃、review 都有結果後，把 case 寫成 JSON：
