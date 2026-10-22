@@ -214,9 +214,9 @@ def test_web_routes_are_exactly_the_interactive_user_routes():
     assert {(r.method, r.template) for r in routetable.ROUTES if r.web} == WEB_ROUTES
 
 
-#: DESIGN §1.4.2-5: the complete whitelist, by identity.
+#: DESIGN §1.4.2-5 upstream whitelist plus the local, CRON-only control read.
 DESIGN_ROUTES = {
-    "anon": {("GET", "/api/status")},
+    "anon": {("GET", "/api/status"), ("GET", "/_control/audit")},
     "op": {("GET", "/api/option/")},
     "ap": {
         ("POST", "/api/user/"),
