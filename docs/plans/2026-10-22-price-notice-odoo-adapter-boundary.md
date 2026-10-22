@@ -1,6 +1,6 @@
 # Dormant Odoo 18 / PG adapter boundary
 
-此 bounded slice 不註冊 hook、model、migration、cron 或 RPC，不連 SMTP、不變更七天 gate。工作分支為 `feat/llm-price-notice-transport-journal-dormant-1022`，已重定基到 #1936 新 head `6acaafcd2dbcb0ced4ec009f94b79871a58e01e1`；本切片不修改該 PR 或 Gitea。
+此 bounded slice 不註冊 hook、model、migration、cron 或 RPC，不連 SMTP、不變更七天 gate。工作分支為 `feat/llm-price-notice-transport-journal-dormant-1022`，已重定基到 #1936 新 head `56b2b3c1df13489ec86bc66cfff1cbb0bc2d7ca5`；本切片不修改該 PR 或 Gitea。
 
 ## 目標與實作
 
