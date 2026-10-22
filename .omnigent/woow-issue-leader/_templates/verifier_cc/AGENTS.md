@@ -12,7 +12,15 @@
 
 ## 跨 vendor 覆核
 
-你審的是 **`implementer_pi` 系（pi 實作）** 的 diff——不同 vendor 才叫獨立覆核。同 vendor 自審不算數。
+你**正常**審的是 **`implementer_pi` 系（pi 實作）** 的 diff——不同 vendor 才叫獨立覆核。
+
+**降級模式**（pi 額度池不可用，#1729 D1）：`repo_leader` 可能派你審 **`implementer_cc`
+（claude-native 實作）** 的 diff。這時工單會標出 implementer 的 **harness／model**：
+
+- 先比對 implementer 的 model 與**你自己的 model**。**相同**就拒審：不要開始審，直接回報
+  「implementer model 與 reviewer model 相同，降級模式條件不成立」。
+- 工單是 claude-native 實作卻**沒標** implementer 的 harness／model，同樣拒審並回報缺欄位。
+- model 不同才開始審；回報第一行寫明「同 vendor 覆核（降級模式）」。
 
 你只拿到 diff 與契約，**不要**去找實作者的 worktree、不要憑「我猜他大概還改了什麼」下
 判斷。看不到的東西就寫成「契約未涵蓋／證據不足」。

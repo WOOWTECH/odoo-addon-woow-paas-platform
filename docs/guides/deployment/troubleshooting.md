@@ -506,7 +506,10 @@ kubectl --context <context> -n <namespace> patch resourcequota <namespace>-quota
 
 - 「待同步」或「結果待確認」且有「下次自動重試」時間：平台會自己重試（失敗後 1、5、15、60、240 分鐘），不需處理。原因 `quota_conflict` 表示叢集上的 quota 在讀取後被改過（含 quota controller 更新 status），下一次重讀再推即可。
 - 「重試已用完」：5 次自動重試都失敗。依 Quota Sync Detail 的原因修正（operator 位址或 API key、operator 是否在跑、namespace 的 ResourceQuota），再按「Retry Quota Sync」。
-- 「已被安全檢查擋下」且原因是 `would_lower: <資源>`：推送會降低叢集上的某一項，而這一項不在安全降額範圍（常見是有人把 `persistentvolumeclaims` 手動調到大於 10）。平台不自動重試，手動重試也一樣會擋下；不要為了讓同步通過去改 operator 的固定值。
+- 「已被安全檢查擋下」且原因是 `would_lower: <資源>`：推送會降低叢集上的某一項，而這一項不在安全降額範圍。平台不自動重試。
+  - `would_lower: persistentvolumeclaims`（叢集 PVC 上限大於 10）：#1781 起只有 operator 太舊（GET 沒有 `supports_pvc_limit`）才會出現。先升級 operator，再按「Retry Quota Sync」——平台會送 max(10, 叢集現值)，PVC 上限維持原值。不要為了讓同步通過去改 operator 的固定值或手動調低 PVC 上限。
+  - 其他資源：手動重試也一樣會擋下，依原因修正叢集上的值或 operator。
+- 「已被安全檢查擋下」且原因是 `pvc_limit_not_confirmed: sent <n>`（#1781）：平台送了 PVC 上限，但 operator 的回應沒有確認寫入——通常是 operator 滾動更新時請求落在舊版 pod，PVC 上限已被寫成 10。推送結果不明（逾時、5xx、斷線）後讀回時，只要讀到的 PVC 上限低於送出值也記成這個原因（#1917），不論讀回的 `sync_token` 是否相符、回應有沒有 `sync_token` 鍵：#1680 之前的舊 pod（例 `paas-operator:20261018.0117`）寫入時不更新 token，只看 token 會漏掉這種情況，PVC 會被靜默留在 10。是哪一條路徑觸發（回應未確認、逾時後讀回、5xx 後讀回）記在 Odoo log 的 `[#1781]` ERROR。平台不自動重試，也補不回原值。確認 operator 已全部換成新版後，比對該 namespace 的 PVC 數（`kubectl get pvc -n <ns> --no-headers | wc -l`），需要時由營運把 `persistentvolumeclaims` 調回原值，再按「Retry Quota Sync」。
 - 「已被安全檢查擋下」且原因是 `unsafe_decrease: <資源> <原因>`（#1682）：服務刪除或降級後目標變低，但叢集上的用量還容不下，平台保留原額度（增額照送）並自動重試。`used_exceeds` 常見於刪除後 pod 還沒結束、保留期 PVC 仍佔 `requests.storage`、或降級時舊 pod 還在——通常等它結束後的下一次重試就會收回，不需處理；重試用完時確認用量已釋放再按「Retry Quota Sync」。`used_missing`／`used_invalid`／`operator_unsupported` 表示讀不到完整用量或 operator 太舊，先修 operator 或 ResourceQuota。這個狀態不影響服務刪除。
 - 「未受版本防護」：operator 比平台舊，不支援 `sync_token`。推送照舊進行，但晚完成的舊請求可能蓋掉新值；請先升級 operator。
 

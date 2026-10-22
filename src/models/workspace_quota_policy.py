@@ -32,6 +32,15 @@
   ``set_quota_minimums(..., confirmation=...)`` 在鎖內逐項比對並**再檢查一次**用量，通過才
   保存，並記下 ``quota_lower_authorization``（政策版本＋目標），之後每次重試都重讀 used 重檢。
 - 確認只套用在管理員主動降低／清除；生命週期與背景同步不經過這裡。
+
+#1781 PVC 上限也走不降額（#1189 之前的止血）：
+
+- 只有 GET 受管 quota 回報 ``supports_pvc_limit`` 時，``_plan_namespace`` 才把 PVC 基準 10
+  加進目標（``with_pvc_baseline``），PUT／POST 帶 ``pvc_limit``＝max(10, 叢集)。舊 operator
+  沒有這個鍵、而且會靜默忽略 ``pvc_limit``，所以不送，照舊因 PVC 高於 10 判為 ``would_lower``。
+- 新 operator 在回應原樣回報寫入的 ``pvc_limit``。送了卻沒拿到相符的回報（operator 滾動更新時
+  PUT 落在舊 pod，PVC 已被寫成 10）就記為 ``blocked: pvc_limit_not_confirmed``，不算已同步，
+  等人處理——這是偵測，不是防止。
 """
 import base64
 from datetime import timedelta
@@ -48,7 +57,8 @@ from odoo.tools import consteq, mute_logger
 from odoo.tools.misc import hmac as odoo_hmac
 
 from ..services.ns_quota_policy import (
-    QuotaNotProvable, build_hard, merge_never_lower, parse_quantity, plan_safe_lower,
+    PVC_HARD, QuotaNotProvable, build_hard, merge_never_lower, parse_quantity, plan_safe_lower,
+    with_pvc_baseline,
 )
 from ..services import paas_operator as paas_operator_service
 from ..services.paas_operator import PaaSOperatorError, PaaSOperatorTimeoutError
@@ -940,8 +950,10 @@ class WorkspaceQuotaPolicy(models.Model):
         plan = _plan_namespace(client, namespace, target)
         token = uuid.uuid4().hex if plan.get('guarded') else None
         if plan.get('not_found'):
-            payload, plan = target, dict(plan, state='synced', reason=None, retryable=False,
-                                         hard=build_hard(target), pending_decrease=())
+            # #1781：沒有既有值可降；operator 支援時 ``plan['target']`` 帶 PVC 基準。
+            payload = plan.get('target', target)
+            plan = dict(plan, state='synced', reason=None, retryable=False,
+                        hard=build_hard(payload), pending_decrease=())
             guard = {'sync_token': token, 'expect_absent': True}
         elif plan['state'] == 'synced':
             payload = plan['payload']
@@ -953,13 +965,15 @@ class WorkspaceQuotaPolicy(models.Model):
             workspace._record_quota_sync(version, {namespace: plan}, fingerprint, 'provision')
             return False, plan['reason']
         extra = {'quota_guard': guard} if token else {}
+        extra.update(_pvc_kwargs(payload))
         result = _push_result(plan, lambda: client.create_namespace(
             namespace=namespace, cpu_limit=payload['cpu_limit'],
             memory_limit=payload['memory_limit'], storage_limit=payload['storage_limit'],
             workspace_id=self.id or None,
             ephemeral_storage_request=payload.get('ephemeral_storage_request'),
             ephemeral_storage_limit=payload.get('ephemeral_storage_limit'), **extra),
-            lambda: _read_back(client, namespace, token, payload), token)
+            lambda: _read_back(client, namespace, token, payload), token,
+            pvc_limit=payload.get('pvc_limit'))
         workspace._record_quota_sync(version, {namespace: result}, fingerprint, 'provision')
         if result.get('error') is not None:
             raise result['error']
@@ -1033,6 +1047,8 @@ def _plan_namespace(client, namespace, target, allow_lower=False):
     #1680：``retryable`` 標示暫時性失敗（值得自動重試）；``guarded`` 為 operator 是否支援
     版本防護（GET 有沒有 ``sync_token`` 鍵——舊 operator 會靜默忽略 PUT 的未知欄位，不能
     用 PUT 有沒有報錯判斷）；``remote_token``／``resource_version`` 是叢集目前的版本。
+    #1781：operator 回報支援 ``pvc_limit`` 時目標加上 PVC 基準（同一份能力判斷也決定送不送
+    這個欄位）；``not_found`` 的結果帶 ``target`` 給開通路徑直接建立。
     """
     if not client:
         return {'state': 'pending', 'reason': 'operator_not_configured', 'retryable': True}
@@ -1047,15 +1063,17 @@ def _plan_namespace(client, namespace, target, allow_lower=False):
     if not isinstance(managed, dict):
         return {'state': 'blocked', 'reason': 'operator_unsupported', 'retryable': False}
     guarded = 'sync_token' in managed
+    target = with_pvc_baseline(target, managed)
     if managed.get('available') is not True:
         reason = managed.get('reason') or 'managed_quota_unavailable'
         if reason == 'managed_quota_not_found':
             if managed.get('namespace_exists') is False:
                 # 確認 namespace 尚不存在：政策已保存，等首次開通套用；不建立空 namespace。
                 return {'state': 'pending_first_deploy', 'reason': 'namespace_not_created',
-                        'not_found': True, 'guarded': guarded, 'retryable': False}
+                        'not_found': True, 'guarded': guarded, 'retryable': False,
+                        'target': target}
             return {'state': 'blocked', 'reason': reason, 'not_found': True, 'guarded': guarded,
-                    'retryable': False}
+                    'retryable': False, 'target': target}
         return {'state': 'blocked', 'reason': reason, 'retryable': reason in _TRANSIENT_BLOCKED}
     lowered, unsafe = [], []
     if allow_lower:
@@ -1073,7 +1091,7 @@ def _plan_namespace(client, namespace, target, allow_lower=False):
             return {'state': 'blocked', 'reason': 'quota_not_provable: %s' % exc,
                     'retryable': False}
     if lowering:
-        # 永久阻擋：叢集上的值（例如 pvc 12）高於 operator 一定會寫的值；不自動重試。
+        # 永久阻擋：叢集上的值（例如舊 operator 下 pvc 12）高於 operator 一定會寫的值；不自動重試。
         return {'state': 'blocked', 'reason': 'would_lower: %s' % ', '.join(sorted(lowering)),
                 'pending_decrease': pending, 'retryable': False}
     hard = build_hard(payload)
@@ -1086,11 +1104,27 @@ def _plan_namespace(client, namespace, target, allow_lower=False):
             'unsafe_decrease': '; '.join('%s %s' % item for item in unsafe) or None}
 
 
+#: ``_read_back`` 的第四種結果（#1781）：這次推送落地了，但 PVC 上限不是送出的值。
+_PVC_LOST = 'pvc_limit_not_applied'
+
+
+def _pvc_can_be_lost(pvc_limit):
+    """送出的 PVC 上限高於 10：落在不支援的 operator 上就會被寫成 10（實際降額）。"""
+    return bool(pvc_limit) and parse_quantity(pvc_limit) > parse_quantity(PVC_HARD)
+
+
 def _read_back(client, namespace, token, payload):
     """推送結果不明時讀回：``True`` 已落地、``False`` 未落地（仍可能在途）、``None`` 讀不到。
 
     有 token（新 operator）只認 token；舊 operator 只能比值（推送前值不同才會推，所以值相等
-    就是落地了）。
+    就是落地了）。#1781：token 相符但 PVC 上限不是送出的值（滾動更新時寫入落在不支援
+    ``pvc_limit`` 的舊 pod，PVC 已被寫成 10）回 ``_PVC_LOST``。
+
+    #1917：送出的 PVC 上限高於 10 時，**先比 PVC 再看 token**——讀回的 PVC 低於送出值就回
+    ``_PVC_LOST``，不論 token 是否相符、回應有沒有 ``sync_token`` 鍵。#1680 之前的舊 pod
+    不寫 token（叢集仍是上一次的 token），只看 token 會在比 PVC 之前就返回，之後重試以 10
+    為基準記成 synced。成立的理由：送出值就是叢集現值（不降額合併），PVC 也不在可降欄位內，
+    平台自己不會降它；推送後變小只可能是舊 pod 或外部寫入。PVC 仍等於送出值時照舊看 token。
     """
     try:
         report = client.get_namespace_quota(namespace, include_managed=True)
@@ -1099,10 +1133,23 @@ def _read_back(client, namespace, token, payload):
     managed = report.get('managed_quota') if isinstance(report, dict) else None
     if not isinstance(managed, dict):
         return None
+    pvc_limit = payload.get('pvc_limit')
+    if _pvc_can_be_lost(pvc_limit):
+        spec_hard = managed.get('spec_hard')
+        remote_pvc = parse_quantity(
+            spec_hard.get('persistentvolumeclaims') if isinstance(spec_hard, dict) else None)
+        if remote_pvc is not None and remote_pvc < parse_quantity(pvc_limit):
+            return _PVC_LOST
     if token:
         if 'sync_token' not in managed:
             return None
-        return managed.get('sync_token') == token
+        if managed.get('sync_token') != token:
+            return False
+        if _pvc_can_be_lost(pvc_limit) and parse_quantity(
+                (managed.get('spec_hard') or {}).get('persistentvolumeclaims')) != parse_quantity(
+                    pvc_limit):
+            return _PVC_LOST
+        return True
     spec_hard = managed.get('spec_hard')
     if not isinstance(spec_hard, dict) or not spec_hard:
         return None
@@ -1110,8 +1157,19 @@ def _read_back(client, namespace, token, payload):
                for key, value in build_hard(payload).items())
 
 
-def _push_result(plan, call, readback=None, token=None):
+def _pvc_kwargs(payload):
+    """#1781：payload 有 ``pvc_limit``（operator 回報支援）才帶給 client；否則不帶這個參數。"""
+    return {'pvc_limit': payload['pvc_limit']} if payload.get('pvc_limit') else {}
+
+
+def _push_result(plan, call, readback=None, token=None, pvc_limit=None):
     """執行推送（``call()``），把 operator 的結果轉成同步狀態。
+
+    #1781 ``pvc_limit``：這次送出的 PVC 上限。高於 10 而成功回應沒有原樣回報它（或結果不明時
+    讀回的 PVC 低於送出值——#1917 起不論 token，見 ``_read_back``），代表請求落在不支援的
+    operator pod 上（滾動更新中），
+    PVC 已被寫成 10 ⇒ 記為 ``blocked: pvc_limit_not_confirmed``（不自動重試：叢集已低於原值，
+    平台補不回來，要人處理）。送出 10 時舊 pod 寫的也是 10，沒有損失，不檢查。
 
     結果不明（逾時、5xx、斷線）先讀回：落地就算成功（回應遺失而已）；否則記下在途 token
     （``expect_token``）——遠端之後帶的若不是它，下一次同步必定以新 token 重推，讓還在途的
@@ -1123,6 +1181,8 @@ def _push_result(plan, call, readback=None, token=None):
     except PaaSOperatorTimeoutError as exc:
         # operator 端的 kubectl 可能已套用：先讀回，讀不出來就是結果未知，不是失敗也不是成功。
         landed = readback() if readback else None
+        if landed == _PVC_LOST:
+            return _pvc_not_confirmed(base, token, pvc_limit, 'read back after timeout', exc)
         if landed:
             return dict(plan, state='synced', expect_token=token, error=exc,
                         reason='operator_timeout (read back: applied)')
@@ -1142,6 +1202,8 @@ def _push_result(plan, call, readback=None, token=None):
                         retryable=False, error=exc)
         landed = readback() if readback else None
         detail = code or exc.message
+        if landed == _PVC_LOST:
+            return _pvc_not_confirmed(base, token, pvc_limit, 'read back after %s' % detail, exc)
         if landed:
             return dict(plan, state='synced', expect_token=token, error=exc,
                         reason='operator_error: %s (read back: applied)' % detail)
@@ -1150,7 +1212,22 @@ def _push_result(plan, call, readback=None, token=None):
     if isinstance(response, dict) and response.get('quota') == 'conflict':
         # 建立路徑：基線已做、quota 沒覆寫（前提不成立）。
         return dict(base, state='pending', reason='quota_conflict', retryable=True)
+    if _pvc_can_be_lost(pvc_limit) and not (
+            isinstance(response, dict)
+            and parse_quantity(response.get('pvc_limit')) == parse_quantity(pvc_limit)):
+        return _pvc_not_confirmed(base, token, pvc_limit, 'response=%r' % (response,))
     return dict(plan, state='synced', expect_token=token)
+
+
+def _pvc_not_confirmed(base, token, pvc_limit, detail, error=None):
+    """#1781：寫入落地了，但 PVC 上限沒有被確認（多半已被舊 operator pod 寫成 10）。"""
+    _logger.error("[#1781] quota push sent pvc_limit=%s but the operator did not confirm it "
+                  "(%s); the write may have reset persistentvolumeclaims to 10", pvc_limit, detail)
+    result = dict(base, state='blocked', retryable=False, expect_token=token,
+                  reason='pvc_limit_not_confirmed: sent %s' % pvc_limit)
+    if error is not None:
+        result['error'] = error
+    return result
 
 
 def _sync_namespace(client, namespace, target, expected_token=None, allow_lower=False):
@@ -1172,11 +1249,13 @@ def _sync_namespace(client, namespace, target, expected_token=None, allow_lower=
     token = uuid.uuid4().hex if guarded else None
     extra = {'quota_guard': {'sync_token': token,
                              'expected_resource_version': plan['resource_version']}} if guarded else {}
+    extra.update(_pvc_kwargs(payload))
     return _unsafe_decrease_result(_push_result(plan, lambda: client.update_namespace_quota(
         namespace, payload['cpu_limit'], payload['memory_limit'], payload['storage_limit'],
         ephemeral_storage_request=payload.get('ephemeral_storage_request'),
         ephemeral_storage_limit=payload.get('ephemeral_storage_limit'), **extra),
-        lambda: _read_back(client, namespace, token, payload), token))
+        lambda: _read_back(client, namespace, token, payload), token,
+        pvc_limit=payload.get('pvc_limit')))
 
 
 def _unsafe_decrease_result(result):

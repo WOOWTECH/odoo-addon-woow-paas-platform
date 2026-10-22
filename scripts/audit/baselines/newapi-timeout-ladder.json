@@ -17,6 +17,7 @@
     "ap_verify_methods": "TIMEOUT_CRON_READ",
     "bg_set_user_group": "TIMEOUT_CRON_WRITE",
     "bg_subtract_quota": "TIMEOUT_CRON_WRITE",
+    "control_audit": "TIMEOUT_CRON_READ",
     "op_options": "TIMEOUT_CRON_READ",
     "status": "TIMEOUT_CRON_READ",
     "user_audit_self": "TIMEOUT_CRON_READ",

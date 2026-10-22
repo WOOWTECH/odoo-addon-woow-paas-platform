@@ -385,6 +385,15 @@ class QuotaWriteGuard(BaseModel):
         return self
 
 
+#: #1781 ``pvc_limit`` 的格式：正整數，可帶 apiserver 正規化後會出現的 ``k``／``M`` 後綴
+#: （例如 1000 會被存成 ``1k``；平台原樣回送叢集現值）。
+PVC_LIMIT_PATTERN = r"^[1-9][0-9]{0,8}[kM]?$"
+PVC_LIMIT_DESCRIPTION = (
+    "#1781: persistentvolumeclaims hard. None (older platform) keeps the fixed 10. "
+    "Only send it when GET managed_quota reports supports_pvc_limit: older operators "
+    "silently ignore this field and still write 10")
+
+
 class NamespaceCreateRequest(QuotaWriteGuard):
     """Request to create a namespace with resource quota."""
 
@@ -401,6 +410,8 @@ class NamespaceCreateRequest(QuotaWriteGuard):
         default=None,
         description="#1434: limits.ephemeral-storage quota. None keeps the key absent",
     )
+    pvc_limit: Optional[str] = Field(
+        default=None, pattern=PVC_LIMIT_PATTERN, description=PVC_LIMIT_DESCRIPTION)
     workspace_id: Optional[int] = Field(
         default=None,
         description="Odoo workspace id of the owning CloudService; stamped as the "
@@ -418,6 +429,8 @@ class NamespaceQuotaUpdateRequest(QuotaWriteGuard):
         default=None, description="#1434: requests.ephemeral-storage, e.g. 4Gi")
     ephemeral_storage_limit: Optional[str] = Field(
         default=None, description="#1434: limits.ephemeral-storage, e.g. 80Gi")
+    pvc_limit: Optional[str] = Field(
+        default=None, pattern=PVC_LIMIT_PATTERN, description=PVC_LIMIT_DESCRIPTION)
 
 
 # #1647：``ReleaseUpgradeRequest.pending_quota`` 以字串前向參照上面這個 model。

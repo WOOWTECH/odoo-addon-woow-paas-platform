@@ -100,6 +100,7 @@ env 格式 `kid:secret[,kid:secret]`：第一把是現用、後面是下一把�
 
 | 身分 | 方法與路徑 | WEB | query | body 政策 |
 |---|---|---|---|---|
+| anon（CRON 簽章） | `GET /_control/audit` | | 必填 `after`，可選 `through`、`limit`（1–100） | **代理本地**持久事件讀取，不送 new-api／不使用 AP；只讀控制庫角色綁定的環境 |
 | anon、ap、user | `GET /api/status` | | | |
 | ap、user | `GET /api/pricing` | | | |
 | op | `GET /api/option/` | | | |
@@ -269,6 +270,7 @@ uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.tx
 - 部署：把 tag 與 digest 填進 Woow_k3s_newapi 的 `deploy/woow-k3s-stg.yaml`（或 prod 的 `deploy/woow-k3s.yaml`）`proxy.image.tag`／`proxy.image.digest`，走該 repo 的 PR 與 helm upgrade。chart 拒絕全 0 的佔位 digest。
 - Secret（值不進任何 repo、檔案或 log）：AP／OP 在 `newapi-proxy-pats`（key `ap`、`op`，NA-01／NA-05）；代理端簽章金鑰在 `newapi-proxy-hmac`（key `web`、`cron`，格式見上）；stg 的 Odoo 端複本在 `paas-stg-system/paas-stg-newapi-proxy-client`（key `web`、`cron`）；Valkey 密碼由 chart 產生在 `newapi-secrets`（key `PROXY_VALKEY_PASSWORD`）。一律 `kubectl create`／`replace` 從 stdin 寫入，不要 `kubectl apply`。建立與輪替指令在 Woow_k3s_newapi `docs/OPERATIONS.md`。
 - 控制庫啟用前，DBA 須在**專屬** PostgreSQL DB 依 `sql/controlstore-v1.sql` 檔頭建立非登入 owner、執行 SQL、撤掉建表權，再為每個環境建立獨立的無管理權限登入角色，只授權五個函式與 schema usage；將所有使用同一上游 AP 的環境綁到同一 `rate_scope`。控制庫不由代理啟動時自動建表，也不得把管理員 DSN 給代理。事件不自動刪除，須另定備份與至少 180 天保存政策。此變更尚未把環境變數注入現有部署，兩站的 `control_store` 仍應顯示 `disabled`，上線需另做 chart／Secret、契約 gate 與 staging 驗收。
+- `GET /_control/audit` 只接受 CRON HMAC（`anon` 表示不使用上游 PAT），回 `{success:true,data:{env,highwater,events}}`。`after` 是已安全消費的序號；首讀不帶 `through` 取得固定 `highwater`，後續帶同一 `through` 逐頁讀到它。資料庫角色限制環境、SQL 檢查事件序號連續；缺頁、控制庫未啟用或故障時回錯，**不得把錯誤當成空頁或完整 coverage**。目前 llmdev／aimodels 尚共用簽章身分和代理，啟用 I3 前仍須建立可信環境歸屬。
 
 ### stg 驗收工具
 

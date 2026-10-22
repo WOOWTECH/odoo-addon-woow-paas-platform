@@ -963,6 +963,25 @@ class NewApiClient:
         return self._request('GET', '/api/status', identity='anon', write=False,
                              timeout=timeout, deadline=deadline)
 
+    def control_audit(self, after, through=None, limit=100, *,
+                      timeout=TIMEOUT_CRON_READ, deadline=None):
+        """Read one bounded, environment-bound proxy audit page (CRON only).
+
+        No new-api AP call is made and this never consumes the AP quota bucket.
+        A caller must retain the returned highwater and prove contiguous pages
+        before claiming coverage; an unavailable store is never an empty page.
+        """
+        if (type(after) is not int or not 0 <= after <= 9223372036854775807
+                or (through is not None and (type(through) is not int
+                    or not after <= through <= 9223372036854775807))
+                or type(limit) is not int or not 1 <= limit <= 100):
+            raise NewApiInputError('audit_cursor') from None
+        query = {'after': after, 'limit': limit}
+        if through is not None:
+            query['through'] = through
+        return self._request('GET', '/_control/audit', identity='anon', write=False,
+                             timeout=timeout, deadline=deadline, query=query)
+
     # ---- op（root 名下只有 option:read 的 PAT；只給 CRON 金鑰） ---------------- #
     def op_options(self, *, timeout=TIMEOUT_CRON_READ, deadline=None):
         """``GET /api/option/``（I8 的設定不變量，LLM-12b／LLM-14）。"""
