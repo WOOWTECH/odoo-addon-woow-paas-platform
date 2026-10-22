@@ -128,5 +128,6 @@ from . import llm_notifications
 
 from . import llm_known_discrepancy
 from . import llm_reconcile_local
+from . import llm_reconcile_candidate
 
 from . import llm_account_lifecycle  # noqa: F401 - register Odoo model extensions
