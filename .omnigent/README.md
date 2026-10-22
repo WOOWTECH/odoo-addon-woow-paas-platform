@@ -31,8 +31,8 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1[1m]／xhigh／spawn: t
 > **`executor.config.harness` 是 bundle 屬性，派工當下換不掉。**
 > `sys_session_send` 只能覆寫 `args.model` / `args.reasoning_effort`，harness 不在其中。
 
-而需求是依 `ROSTER` 為不同 purpose 指定 harness，並在 config 裡帶入 worktree 守線；#1096
-起 implement 固定 pi、review 固定 claude-native。這些都是派工時才知道的資料 ⇒ 靜態 bundle
+而需求是依 `ROSTER` 為不同 purpose 指定 harness，並在 config 裡帶入 worktree 守線；#1729
+起 implement 與 review 都可 pi／claude-native、配對須跨 vendor。這些都是派工時才知道的資料 ⇒ 靜態 bundle
 做不到，只有**執行期產生 config** 做得到。
 
 `sys_session_create(config_path=<dir>)` 實測可行，而且：
@@ -222,11 +222,12 @@ repo 實際註冊的 4 支（dispatcher 兩種事件都要支援）：
 | --- | --- | --- | --- |
 | `woow_issue_leader`（頂層） | `claude-sdk` | `mcp__omnigent__sys_os_shell` / `sys_os_write` / `sys_os_edit` | ⛔ **不生效** |
 | `repo_leader_cc` | `claude-native` | `Bash` / `Edit` / `Write`（claude CLI 原生） | ✅ |
-| `review`／`ops_k8s` 的 `_cc` worker | `claude-native` | 同上 | ✅ |
+| `implement`／`review`／`ops_k8s` 的 `_cc` worker | `claude-native` | 同上 | ✅ |
 | `repo_leader_pi`／`_pi` worker | `pi` | pi 自己的工具 | ⛔（pi 無 hook 機制） |
 
-#1096 起 `implement` 固定 pi、`review` 固定 claude-native；因此實作與覆核的跨 vendor 路徑
-固定為單向。
+#1729 起 `implement` 與 `review` 都可 pi／claude-native：正常配對 `implement_pi ⇒ review_cc`、
+`implement_cc ⇒ review_pi`；pi 額度池不可用時才准 `implement_cc ⇒ review_cc` 降級（條件見
+`_shared/repo_leader/AGENTS.md`「跨 vendor 覆核」）。
 
 ⚠ 頂層那格的機制：`claude-sdk` 一樣會發 `--plugin-dir <bundle>`
 （`claude_agent_sdk/_internal/transport/subprocess_cli.py:726`，與 native 的
@@ -262,8 +263,9 @@ tool call 是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_sh
 | `repo_leader_pi` | 10 | 5 | P-board | `cost_budget`（非 CEL，見 §cost_budget） |
 | 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（只存在於動態 config） | P-path |
 | 執行期產生的 `implement_pi` worker | 12 | 6 | P-board ＋ **P-path**（只存在於動態 config；前綴每個 worker 不同，由派工當下的 worktree 算出） | P-kubectl、`cost_budget` |
+| 執行期產生的 `implement_cc` worker | 12 | 6 | P-board ＋ **P-path**（同上） | P-kubectl、**`worktree_guard`**（#1729：對原生 Edit／Write 的絕對路徑一律 DENY，改由 P-path＋`block_working_dir_changes` 單獨守）；`cost_budget` 只有 350 硬上限、無 ask |
 | 執行期產生的 `review_cc` worker | 11 | 5 | P-board | P-kubectl、P-path |
-| 執行期產生的 `explore_pi`／`researcher_pi` worker | 10 | 5 | P-board | P-kubectl、P-path、`cost_budget` |
+| 執行期產生的 `review_pi`／`explore_pi`／`researcher_pi` worker | 10 | 5 | P-board | P-kubectl、P-path、`cost_budget` |
 | 執行期產生的 `tracker_pi` worker | 9 | 5 | P-board | `read_only_os`（它要寫產物）、P-kubectl、P-path、`cost_budget` |
 
 <!-- retired-ok:start 下面這段是本節自己抓過的目視推導事故紀錄，必須點名當時那支 policy -->
@@ -472,7 +474,8 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 ## 對照表
 
 真相在 `generate-worker.py` 的 `ROSTER`；給人看的摘要在 `skills/dispatch-policy/SKILL.md`。
-#1096 起 implement 固定 pi、review 固定 claude-native，跨 vendor 覆核為單向。
+#1729 起 implement 與 review 都可 pi／claude-native，配對須跨 vendor（pi 池不可用時的同 vendor
+降級由 repo_leader 依紀律規則執行，產生器不擋）。
 硬規則：claude 家族只吃 id 含 `claude` 的 model（`opus`／`sonnet`／`fable` 等 CLI alias 一律
 被防線 1 擋下）；effort 只用 `high`／`xhigh`（`ultra` 只有 pi 原生支援，claude 上**靜默降級**）。
 
@@ -581,7 +584,7 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `p_approve_no_agent_signoff` | 全部 | 指令中**出現 `/approve` 字串**（不再限定工具名） |
 | `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge release 子命令（tea `releases`／`release`／`r`、gh／glab `release`）、forge API 或 curl 對 `/releases` collection endpoint（可帶單一尾斜線／query）的 POST（含未明示 method 但帶 body 的隱含 POST）、`git tag <name>` |
 | `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | 提到 `kubectl` 且：含串接（`&&`／`\|\|`／`;`／`` ` ``／`$(`／換行；**pipe 只在第一段是唯讀 kubectl、且 pipe 之後沒有 kubectl 時放行**）／第一段 `-n` 出現多次／寫入 verb 但 ns 不在白名單／寫入 verb 但沒帶 `--context`。`--context docker-desktop` 整條免除，但**整條只能有一個 `kubectl`** |
-| `p_path_write_inside_worktree` | 僅 `implement_*` | 檔案工具（`sys_os_write`／`Edit`…）的 `path`／`file_path` 不以本 issue 的 worktree 為前綴（相對 workspace 或絕對形式）、或含 `..`。**比對結構化參數，A 類**；前綴由產生器在派工當下算出 |
+| `p_path_write_inside_worktree` | 僅 `implement_*` | 檔案工具（`sys_os_write`／`Edit`／`NotebookEdit`…）的 `path`／`file_path`／`notebook_path` 不以本 issue 的 worktree 為前綴（相對 workspace 或絕對形式）、或含 `..`。**比對結構化參數，A 類**；前綴由產生器在派工當下算出。claude-native implement 的檔案寫入邊界只靠它（不疊 `worktree_guard`，#1729） |
 
 ### ⚠ 已知的刻意誤擋（fail loud，不放寬）
 
@@ -617,7 +620,7 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `read_only_os` | 比對**工具名**（`Write`/`Edit`/`sys_os_write`…），不看 shell 字串 |
 | `headless_subagent_purpose_guard` / `spawn_bounds` | 同上，結構化參數 |
 | `block_working_dir_changes` | 有自己的 shell 解析（非單一 regex），且只需判斷 `cd`/`git -C` 這種固定形狀 |
-| `p_path_write_inside_worktree`（僅 implement） | 比對檔案工具的 `path`／`file_path` **結構化參數**是否以 worktree 為前綴、是否含 `..`，不看 shell 字串。⚠ 它管的只是**檔案工具**那一側——shell 重導向寫檔（`echo x > …`、`sed -i`）沒有任何機器守線，見下方已知繞過向量 |
+| `p_path_write_inside_worktree`（僅 implement） | 比對檔案工具的 `path`／`file_path`／`notebook_path` **結構化參數**是否以 worktree 為前綴、是否含 `..`，不看 shell 字串。⚠ 它管的只是**檔案工具**那一側——shell 重導向寫檔（`echo x > …`、`sed -i`）沒有任何機器守線，見下方已知繞過向量 |
 | repo 的 `.claude/hooks/kubectl-ns-guard.py`（**被執行到之後**的判定） | 用 `shlex` 正確解析，剝 heredoc、認 `bash -c`、認 `--`；且 repo-lint 對帳白名單 |
 
 ⚠ **但它要先被執行到。** 在共同祖先 workspace 下，repo hook 只能透過 dispatcher 被呼叫，
@@ -700,6 +703,10 @@ repo），而且完全不認 `tea`。所以 `p_tag_no_agent_tag_push` 自己對 
 ⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os`（一層）。
 
 ### ⚠ `cost_budget` 只掛 claude 家族（claude-native／claude-sdk）
+
+#1729 D2：claude-native **implement** 掛的是 `P_COST_IMPLEMENT`（只有 `max_cost_usd: 350`、不設
+`ask_thresholds_usd`）——ASK 在無人值守時等於停機，且卡在 ASK 的 session 不發完成通知、不標
+blocked。其餘 claude 家族 worker 仍是 `P_COST`（350／70／210）。產生器自檢斷言這兩件事。
 
 pi 是 subscription 且無 catalog pricing，掛上去會走 `_UNPRICED_ASK`，**每個 session 卡一次
 人工批准**，會毀掉無人值守。claude 家族兩種 harness 都有**計價路徑**（⚠ 計價路徑 ≠ 一定查得到
@@ -983,7 +990,7 @@ woow-k3s delete …` 接在後面就滑過。改法：pipe 在「第一段是唯
 約 3.6 KB 逐字相同的段落在八份 `_templates/<role>/AGENTS.md` 各存一份，已經漂出變體（ops_k8s 的鐵律結構不同、
 唯讀角色的回報段講 pytest collected cases、每個角色的守線清單都列只掛在 ops_k8s 的 P-kubectl；review F10）。
 改法：片段抽到 `_templates/_shared/<片段>.md`，模板用 `<!-- include: <片段> -->` 引用，`generate-worker.py`
-複製 AGENTS.md 時展開；驗收第 20 項對所有模板（含暫停使用的兩份）解析 include 並抓孤兒片段。片段裡提到只掛在
+複製 AGENTS.md 時展開；驗收第 20 項對所有模板（不論 ROSTER 是否引用）解析 include 並抓孤兒片段。片段裡提到只掛在
 部分角色的 policy 要寫明「只掛在誰身上」。
 
 ### 12. 「進 repo root 只為建 worktree、只在 worktree 裡改檔」純靠紀律（#1099 起，2026-09-14 補機器守線）

@@ -25159,6 +25159,19 @@ msgid "Last Verified Against Cluster"
 msgstr "最近一次與叢集核對"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_reconcile_pending
+msgid "Full Quota Re-check Pending"
+msgstr "待重新核對整個工作區"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_reconcile_pending
+msgid ""
+"The next background run re-checks every namespace of this Workspace: a "
+"service event synced only its own namespace, or a decrease is waiting to be "
+"reclaimed."
+msgstr "下一輪背景同步會重新核對這個工作區的所有 namespace：服務事件只同步了自己的 namespace，或有待收回的降額。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__quota_next_retry_at
 msgid "Next Automatic Retry"
 msgstr "下次自動重試"
@@ -25203,10 +25216,10 @@ msgstr "重試 Quota 同步"
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_workspace_quota_inspection_form
 msgid ""
-"Retry the quota sync now with the current policy? A cluster value is lowered "
-"only for a confirmed decrease and only after checking current usage again; "
-"otherwise it is kept."
-msgstr "要以目前的政策立即重試 quota 同步嗎？只有已確認的降額才會調降叢集上的值，而且會先重新檢查目前用量；否則保留叢集現值。"
+"Retry the quota sync now with the current policy? The cluster quota is "
+"lowered to the current target only after checking current usage again and "
+"only if every checked resource fits; otherwise the cluster value is kept."
+msgstr "要以目前的政策立即重試 quota 同步嗎？會先重新檢查目前用量，每一項都容得下時才把叢集上的值降到目前目標；否則保留叢集現值。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__quota_sync_status

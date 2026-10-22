@@ -77,8 +77,11 @@ def _omnigent_on_path() -> None:
 # 出處：omnigent/policies/builtins/_shell.py::SHELL_TOOLS
 SHELL_TOOLS = ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
 # 出處：omnigent/policies/builtins/orchestration.py::read_only_os / worktree_guard
-# 參數：omnigent／pi 用 `path`，claude-native 用 `file_path`。
-WRITE_TOOLS = ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"]
+# 參數：omnigent／pi 用 `path`，claude-native 用 `file_path`（NotebookEdit 用 `notebook_path`）。
+# NotebookEdit（#1729）：上游 worktree_guard 有比對 `notebook_path`；claude-native implement
+# 拿掉 worktree_guard 之後，P-path 要自己補上這一格，否則 notebook 寫入沒有任何守線。
+WRITE_TOOLS = ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "NotebookEdit",
+               "write", "edit"]
 
 # ── 快層 model ───────────────────────────────────────────────────────────────
 # scout／tracker／researcher 的 model 由 ROSTER 釘在快層（gpt-6-luna／gpt-5.6-terra）。
@@ -407,11 +410,19 @@ CEL_KUBECTL = f"""event.type == "tool_call"
 # `WOOW/ecpay_odoo18/x.py`（相對、無 `..`、別的 repo）舊的兩條守線都放行，寫進 repo root 的
 # 主 checkout（`paas/woow_paas_platform/src/x.py`）也放行。這一支補上「寫入 path 必須以本
 # issue 的 worktree 為前綴」：
-#   - 相對形式 `<worktree 相對 workspace 的路徑>/…`（正常寫法），或絕對形式 `<worktree>/…`
-#     （worktree_guard 會擋絕對路徑，但本條不依賴它——兩條各自獨立成立）；
+#   - 相對形式 `<worktree 相對 workspace 的路徑>/…`（pi 的正常寫法），或絕對形式 `<worktree>/…`
+#     （claude-native 原生 Edit／Write／NotebookEdit 必帶絕對路徑，走的就是這一支）；
 #   - 不得含 `..` 段（`paas/wt-1/../woow_paas_platform/x` 前綴對了也擋）。
-# 比對的是工具的**結構化參數**（`path`／`file_path`），不看 shell 字串 ⇒ A 類，與 read_only_os
-# 同級。⚠ 它管不到 shell 重導向（`echo x > WOOW/x.py`、`sed -i`）——那一側沒有機器守線，
+# 比對的是工具的**結構化參數**（`path`／`file_path`／`notebook_path`），不看 shell 字串 ⇒ A 類，
+# 與 read_only_os 同級。
+# #1729：claude-native implement **不再疊上游 worktree_guard**（它對絕對路徑一律 DENY，
+# claude-native 因此改不了檔），worktree 的寫入邊界由本條＋block_working_dir_changes 單獨成立；
+# pi implement 仍三條都掛。所以上游有、本條原本沒有的覆蓋要補齊：
+#   - `notebook_path`（NotebookEdit）：已補，見 _bad("notebook_path") 與 WRITE_TOOLS；
+#   - `~` 開頭、Windows drive（`C:/…`）：不符合 worktree 前綴，本來就 DENY；
+#   - 反斜線：刻意**不補**。POSIX 下反斜線不是路徑分隔符，`paas/wt-x/..\..\y` 只是
+#     worktree 內一個名字怪異的檔案，不構成逃逸（上游擋它是為了 Windows runner）。
+#   - symlink 逃逸：上游與本條都只做字串比對、不 resolve，不在 #1729 範圍。⚠ 它管不到 shell 重導向（`echo x > WOOW/x.py`、`sed -i`）——那一側沒有機器守線，
 # 記在 CEL_VECTORS 的 known_gap，prompt 寫成紀律規則。欄位缺席時不 DENY（與 P-board 同款）。
 # 前綴由 generate() 在派工當下算出（worktree 相對 workspace），所以這支 CEL 是**每個 worker
 # 不同**的，只存在於動態 config；驗收第 8 項用 SELF_CHECK_* 那組樣本路徑測它。
@@ -434,7 +445,8 @@ def _cel_path(worktree_rel: str, worktree: str) -> str:
     return f"""event.type == "tool_call"
 && event.data.name in {_cel_list(WRITE_TOOLS)}
 && ({_bad("path")}
-    || {_bad("file_path")})
+    || {_bad("file_path")}
+    || {_bad("notebook_path")})
 ? {{"result": "DENY", "reason": "implement worker 只能寫進本 issue 的 worktree（{worktree}）：檔案工具的 path 必須以 {worktree_rel}/ 開頭（相對 workspace，或用 worktree 絕對路徑）且不含 ..；sibling repo 與 repo root 的主 checkout 都不能寫。"}} : {{"result": "ALLOW"}}"""
 
 
@@ -500,6 +512,15 @@ P_COST = _fn_policy(
     "cost_budget", "omnigent.policies.builtins.cost.cost_budget",
     {"max_cost_usd": 350.0, "ask_thresholds_usd": [70.0, 210.0]},
     note="⛔ 只掛 claude 家族（claude-native／claude-sdk）。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。")
+# #1729 D2=A：claude-native implement 只留硬上限、不設 ask。ASK 在無人值守時等於停機，而且卡在
+# ASK 的 session 不發完成通知、不標 blocked，是最難被發現的失敗形態（cd#112 覆核者卡在 $70 ASK
+# 靜置 22 小時）；implement 需要的是不中斷。撞到 350 ⇒ policy 層 DENY 每一輪工具呼叫，
+# implementer_cc 的 prompt 寫明「先 commit 進度、以結語回報 repo_leader」。
+# 其餘 claude 家族 worker（review／ops_k8s…）維持 P_COST；pi 系仍不掛。
+P_COST_IMPLEMENT = _fn_policy(
+    "cost_budget", "omnigent.policies.builtins.cost.cost_budget",
+    {"max_cost_usd": 350.0},
+    note="implement 專用：只留硬上限、不設 ask（#1729 D2）。⛔ 只掛 claude 家族，理由同 P_COST。")
 
 # ── 頂層 issue-leader 專用：按日計的花費上限 ─────────────────────────────────
 # issue-leader 是**長時間運作的單一 session**，per-session 累計的 cost_budget 遲早撞到上限
@@ -551,12 +572,17 @@ P_READONLY = _fn_policy("read_only_os", "omnigent.policies.builtins.orchestratio
 # ⚠ allowed_root 只出現在 deny 訊息裡，**不是**判斷依據——實際規則是「絕對路徑或含
 #   `..` 的寫入路徑一律 DENY，相對且不上跳的放行」。所以它只能靠「cwd 從頭到尾不動」
 #   來成立，必須與下面的 block_working_dir_changes 成對出現。
+# ⚠ #1729：**只掛 pi implement**。claude-native 原生 Edit／Write／NotebookEdit 必帶絕對路徑，
+#   這條會全數 DENY（#1096 實測 implement_cc 不能改檔的機制）；上游 docstring 假設「worker 以
+#   worktree 為 cwd、合法寫入一律相對」，本 bundle 的 runner cwd 是六 repo 共同祖先，假設不成立。
+#   claude-native implement 的 worktree 邊界由 P-path＋block_working_dir_changes 單獨成立。
 P_WORKTREE = _fn_policy(
     "worktree_guard",
     "omnigent.policies.builtins.orchestration.worktree_guard",
     {"allowed_root": "'<工單指定的 worktree>'"}, on=["tool_call"],
     note="allowed_root 只用在 deny 訊息；真正的規則是「絕對路徑或含 .. 的寫入路徑一律\n"
-         "DENY」。它要成立，前提是 cwd 不會被搬走 → 見下面的 block_working_dir_changes。")
+         "DENY」。它要成立，前提是 cwd 不會被搬走 → 見下面的 block_working_dir_changes。\n"
+         "只掛 pi implement；claude-native 由 P-path 單獨成立，理由見 #1729。")
 # ⚠ worktree 由 implement worker **自己建**（2026-09-14 裁決）：repo_leader 只指定路徑，
 #   worker 開工第一件事是 `git -C <repo_root> worktree add <worktree> -b <branch> origin/<base>`。
 #   所以 allowed_dirs 要含 **repo_root 與 worktree 兩處**（`git -C <repo_root>` 才進得去），
@@ -579,7 +605,7 @@ def _p_workdir(worktree: str, repo_root: str) -> str:
         note="allowed_dirs 含本 issue 的 worktree 與其 repo root ⇒ cd / git -C 只能進這兩處或其子目錄，\n"
              "其餘一律 DENY。block_worktree 關掉是刻意的：worktree 由 worker 自己 `git -C <repo root>\n"
              "worktree add`，之後只能在 worktree 裡改（進 repo root 只為建 worktree，這是紀律規則）。\n"
-             "這是 worktree_guard 的另一半：擋掉「先 cd 出去、再寫相對路徑」的逃逸。\n"
+             "這是檔案工具路徑守線（P-path；pi 另有上游路徑守線）的另一半：擋掉「先 cd 出去、再寫相對路徑」的逃逸。\n"
              "副作用（刻意）：implementer 不能跨 repo，跨 repo 唯讀是 leader 的職責。")
 
 # ── os_env ───────────────────────────────────────────────────────────────────
@@ -630,8 +656,9 @@ ASK_TIMEOUT = 900
 #   - claude 家族 harness **只吃 id 含 `claude`** 的 model ⇒ `opus` / `sonnet` / `fable`
 #     這些 CLI alias 一律被 `model_family_mismatch` 擋下（防線 1 會在寫檔前攔到）。
 #   - `ultra` 只有 pi 原生支援，claude 上**靜默降級成 `xhigh`** ⇒ 只用 `high` / `xhigh`。
-#   - `implement` **固定 pi**：上游 `worktree_guard` 對 Claude 原生 Edit／Write 必帶的絕對
-#     `file_path` 一律 DENY，implement_cc 實測不能改檔（#1096）。
+#   - `implement` 可 pi／claude-native（#1729）：claude-native **不疊上游 `worktree_guard`**
+#     （它對 Claude 原生 Edit／Write 必帶的絕對 `file_path` 一律 DENY，#1096 實測不能改檔），
+#     改由 P-path＋block_working_dir_changes 守 worktree；pi 三條都掛。
 #   - `ops_k8s` **固定 claude-native**：pi 沒有 hook 機制（`pi --help | grep -ci hook` = 0），
 #     換成 pi 會讓 dispatcher 失效 ⇒ repo 的 kubectl-ns-guard 拿不回來。
 #
@@ -651,17 +678,23 @@ ROSTER: dict[str, dict[str, object]] = {
         "writes": True,
     },
     "implement": {
-        # ⛔ 固定 pi：上游 `worktree_guard` 對 Claude 原生 Edit／Write 必帶的絕對
-        # `file_path` 一律 DENY（`policies/builtins/orchestration.py:590`），implement_cc
-        # 實測不能改檔（#1096）。`_templates/implementer_cc/` 保留、暫停使用。
-        "template": {"pi": "implementer_pi"},
-        "models": {"pi": ("gpt-6.1-sol", "xhigh")},
+        # #1729：pi 或 claude-native 皆可（pi 額度池空時實作線不再停擺）。claude-native 不疊上游
+        # `worktree_guard`（它對 Claude 原生 Edit／Write 必帶的絕對 `file_path` 一律 DENY，#1096），
+        # worktree 邊界由 P-path＋block_working_dir_changes 守，見 _guardrails()。
+        # D3=B：implementer_cc 預設 fable／xhigh——與 verifier_cc（sonnet）不同 model，降級模式
+        # （D1 第 1 條「implementer model ≠ reviewer model」）由預設天然成立；難單用 --model 覆寫。
+        "template": {"pi": "implementer_pi", "claude-native": "implementer_cc"},
+        "models": {"pi": ("gpt-6.1-sol", "xhigh"),
+                   "claude-native": ("claude-fable-5-1[1m]", "xhigh")},
         "writes": True,
     },
     "review": {
-        # ⚠ 覆核固定 claude-native：實作固定 pi ⇒ 跨 vendor 自動成立（單向）。
-        "template": {"claude-native": "verifier_cc"},
-        "models": {"claude-native": ("claude-sonnet-5-5[1m]", "high")},
+        # #1729 D1=B：正常配對 implement_pi ⇒ verifier_cc、implement_cc ⇒ verifier_pi（跨 vendor）；
+        # pi 池空時的降級模式 implement_cc ⇒ verifier_cc 是 repo_leader 的紀律規則（model 不同＋
+        # PR body 標註＋pr-open 前人再看一眼），產生器不擋這個組合。
+        "template": {"claude-native": "verifier_cc", "pi": "verifier_pi"},
+        "models": {"claude-native": ("claude-sonnet-5-5[1m]", "high"),
+                   "pi": ("gpt-6-astra", "high")},
         "writes": False,
     },
     "explore": {
@@ -797,7 +830,13 @@ def _guardrails(purpose: str, harness: str, *, worktree: str | None = None,
         # ⛔ 三個路徑缺一不可——generate() 已驗過；這裡再斷言一次，免得有人直接呼叫本函式
         #   產出一份「有 worktree_guard 卻沒有 P-path」的 config（那正是 review F6 的洞）。
         assert worktree and repo_root and worktree_rel, "implement 必須帶 worktree／repo_root／worktree_rel"
-        body += [P_WORKTREE, _p_workdir(worktree, repo_root), _p_path(worktree_rel, worktree)]
+        # #1729：上游 worktree_guard 只掛 pi。claude-native 原生 Edit／Write／NotebookEdit 必帶絕對
+        #   路徑，疊上它就全數 DENY（上游假設 cwd＝worktree，本 bundle 的 cwd 是共同祖先，不成立）；
+        #   claude-native 的 worktree 邊界由 P-path（放行 worktree 前綴下的絕對路徑、擋其餘）＋
+        #   block_working_dir_changes 單獨成立。
+        if harness == "pi":
+            body.append(P_WORKTREE)
+        body += [_p_workdir(worktree, repo_root), _p_path(worktree_rel, worktree)]
     if purpose == "ops_k8s":
         body.append(P_KUBECTL)
     body += [P_BOARD, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
@@ -805,7 +844,8 @@ def _guardrails(purpose: str, harness: str, *, worktree: str | None = None,
     if harness == "claude-native":
         # ⚠ pi 系刻意不掛 cost_budget：subscription 模型無 catalog pricing 時會回
         #   _UNPRICED_ASK，每個 session 卡一次人工批准，會毀掉無人值守。
-        body.append(P_COST)
+        # #1729 D2：implement 只留硬上限、不設 ask；其餘 purpose 維持 P_COST。
+        body.append(P_COST_IMPLEMENT if purpose == "implement" else P_COST)
     return "\n".join(out + body)
 
 
@@ -937,6 +977,8 @@ def _verify_generated(out_dir: Path, *, expect_skills: int, expect_name: str) ->
 
     return {"name": spec.name, "skills": len(spec.skills),
             "policies": len(spec.guardrails.policies) if spec.guardrails else 0,
+            "policy_names": ([p.name for p in spec.guardrails.policies]
+                             if spec.guardrails and spec.guardrails.policies else []),
             "model": spec.executor.model, "effort": spec.executor.reasoning_effort}
 
 
@@ -988,10 +1030,7 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
             f"purpose {purpose!r} 的 prompt 不由本檔產生（repo-leader 是靜態 bundle）")
     if harness not in templates:
         detail = ""
-        if purpose == "implement":
-            detail = ("。⛔ implement 固定 pi：上游 worktree_guard 對 Claude 原生 Edit／Write "
-                      "的絕對 file_path 一律 DENY，implement_cc 實測不能改檔。")
-        elif purpose == "ops_k8s":
+        if purpose == "ops_k8s":
             detail = "。⛔ ops_k8s 固定 claude-native：pi 沒有 hook 機制，換了 dispatcher 就失效。"
         raise GenerateFailure(
             f"purpose {purpose!r} 不支援 harness {harness!r}（只支援 {sorted(templates)}）"
@@ -1090,13 +1129,37 @@ def self_check() -> tuple[bool, str]:
                 pass
             else:
                 bad.append(f"反面案例未被擋下：claude-native + {model}")
-        # harness 不在該 purpose 的支援清單（implement 固定 pi）
+        # #1729：implement 兩種 harness 的 worktree 守線組合（正面案例）
+        #   claude-native：P-path＋block_working_dir_changes，⛔ 不得疊上游 worktree_guard（它對
+        #   原生 Edit／Write 的絕對 file_path 一律 DENY）；pi：三條都要在。
+        #   D2：claude-native implement 的 cost_budget 不得帶 ask_thresholds_usd，review 的要帶。
+        must_both = ("p_path_write_inside_worktree", "block_working_dir_changes")
+        for harness, want_wg in (("claude-native", False), ("pi", True)):
+            d = Path(td) / f"pos-implement-{harness}"
+            try:
+                info = generate("implement", harness, d, **sample_kwargs("implement"))
+            except GenerateFailure as exc:
+                bad.append(f"implement + {harness} 應可產生卻被拒絕：{exc}")
+                continue
+            names = info["policy_names"]
+            missing = [n for n in must_both if n not in names]
+            if missing:
+                bad.append(f"implement + {harness} 缺 worktree 守線 {missing}")
+            if ("worktree_guard" in names) != want_wg:
+                bad.append(f"implement + {harness} 的 worktree_guard 應{'掛' if want_wg else '不掛'}"
+                           f"，實際{'有' if 'worktree_guard' in names else '無'}")
+            if harness == "claude-native":
+                text = (d / "config.yaml").read_text()
+                if "cost_budget" not in names or "ask_thresholds_usd" in text:
+                    bad.append("implement + claude-native 的 cost_budget 應只留 max_cost_usd、"
+                               "不帶 ask_thresholds_usd（#1729 D2）")
         try:
-            generate("implement", "claude-native", Path(td) / "neg3")
-        except GenerateFailure:
-            pass
+            generate("review", "claude-native", Path(td) / "pos-review-cc")
+        except GenerateFailure as exc:
+            bad.append(f"review + claude-native 應可產生卻被拒絕：{exc}")
         else:
-            bad.append("反面案例未被擋下：implement + claude-native（worktree_guard 擋 Claude 原生寫檔）")
+            if "ask_thresholds_usd" not in (Path(td) / "pos-review-cc" / "config.yaml").read_text():
+                bad.append("review + claude-native 的 cost_budget 應保留 ask_thresholds_usd（#1729 D2 只改 implement）")
         # harness 不在該 purpose 的支援清單（ops_k8s 固定 claude-native）
         try:
             generate("ops_k8s", "pi", Path(td) / "neg2")
@@ -1134,9 +1197,11 @@ def self_check() -> tuple[bool, str]:
         else:
             bad.append("反面案例未被擋下：worktree 不在 workspace 底下")
     ok = not bad
-    checked = len(made) + 4  # 另計四種固定拒絕：implement+claude-native（#1096）、implement 缺 worktree、worktree 不在 workspace、--name 不合規則
-    return ok, (f"{checked} 種組合自檢通過（{len(made)} 種可產生＋4 種固定拒絕案例：implement 固定 pi／"
-                f"implement 缺 worktree／worktree 不在 workspace／--name 不合規則；--name 合法時成為 agent name）：{', '.join(made)}" if ok
+    checked = len(made) + 4  # 另計四種固定拒絕：ops_k8s+pi、implement 缺 worktree、worktree 不在 workspace、--name 不合規則
+    return ok, (f"{checked} 種組合自檢通過（{len(made)} 種可產生＋4 種固定拒絕案例：ops_k8s 固定 claude-native／"
+                f"implement 缺 worktree／worktree 不在 workspace／--name 不合規則；--name 合法時成為 agent name；"
+                f"implement/claude-native 不掛 worktree_guard、implement/pi 三條齊、implement/claude-native 無 ask 門檻）："
+                f"{', '.join(made)}" if ok
                 else f"{len(bad)} 個問題：" + "；".join(bad[:4]))
 
 
