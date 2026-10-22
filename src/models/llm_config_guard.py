@@ -1,7 +1,7 @@
 """AI 模型設定的寫入守衛與變更稽核（DESIGN §2.11，〔REV〕15；LLM-01b、LLM-02）。
 
 ``newapi_proxy_url`` 決定 PaaS 把簽過章的請求（含 UP 與開戶密碼）送到哪裡：寫成外部主機
-就等於把憑證交出去。所以只接受兩個叢集內代理位址與 neutralize 的黑洞值，其他值在
+就等於把憑證交出去。所以只接受固定的叢集內代理位址與 neutralize 的黑洞值，其他值在
 ``ir.config_parameter`` 的 ORM 寫入當下就拒絕（``set_param`` 走 create／write）；
 ``llm_public_base_url``（顯示給使用者的 API 網址）同樣只收兩個白名單值。SQL 直改擋不住，但
 ``llm_common.llm_config`` 讀取時會再驗一次、不合法就當「未設定」／不顯示。

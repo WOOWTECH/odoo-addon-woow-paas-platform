@@ -448,6 +448,9 @@ class TestLlmFreeUsageSecurity(_ConfiguredCase):
     def test_test_cap_override_is_staging_superuser_only(self):
         usage = self.env[USAGE_MODEL].sudo().with_context(llm_free_daily_limit=5)
         self.assertEqual(usage._llm_daily_limit(), 5)
+        with patch.object(free_module, 'llm_config', return_value={
+                'proxy_url': nac.PROXY_URL_LLMDEV}):
+            self.assertEqual(usage._llm_daily_limit(), 5)
         with patch.object(free_module, 'llm_config', return_value={'proxy_url': nac.PROXY_URL_PROD}):
             self.assertEqual(usage._llm_daily_limit(), 200)
         self.assertEqual(usage.with_context(llm_free_daily_limit=999)._llm_daily_limit(), 200)
