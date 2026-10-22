@@ -23,7 +23,8 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 ```
 排程（prompt 帶 targets）
  → collect run（每個 repo）→ [deep review worker → collect import]
- → jev_gate triage（閘門 A）→ report.md ＋ AskUserQuestion（Inbox）
+ → jev_gate triage（閘門 A）→ jev_gate carryover（帶入前幾輪未決）
+ → report.md ＋ AskUserQuestion（Inbox）
  → jev_gate human（記錄人的決定）
  → 人選「修正」且 ≤ medium ⇒ fix worker → review worker → jev_gate ready（閘門 C）→ 再問人
  → collect commit（推進 last_sha）
