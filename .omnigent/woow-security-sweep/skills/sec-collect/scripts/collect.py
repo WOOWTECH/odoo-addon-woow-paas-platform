@@ -361,7 +361,8 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
 
     meta = {
         "repo": cfg["repo"]["full_name"], "repo_path": str(repo), "branch": branch, "head_sha": head,
-        "last_sha": last, "scope": sc, "files_scanned": len(files), "config_changed": config_changed,
+        "last_sha": last, "scope": sc, "files_scanned": len(files), "scanned_files": files,
+        "config_changed": config_changed,
         "unsafe_members": unsafe_members,
         "config_sources": cfg.pop("_sources"), "fetch_error": fetch_error, "findings": len(findings),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),

@@ -39,9 +39,10 @@ prompt 格式不對、targets 為空或路徑不存在 ⇒ 用 AskUserQuestion �
 2. **深度審查**（`sec-dispatch` skill）：符合 deep_review 條件的 target，各派一個唯讀 review
    worker 審快照，回報用 `collect import` 併入。派完就結束當輪，收到完成通知再繼續。
 3. **閘門 A**（`sec-gate` skill）：每個 target 跑 `jev_gate triage --run-dir <dir>`。
-   exit 3（API key 失效）⇒ 全部轉人工，報告第一行寫明。
+   exit 3（API key 失效）⇒ 全部轉人工，報告第一行寫明。接著跑 `jev_gate carryover --run-dir <dir>`，
+   把前幾輪還沒人決定的 finding 帶進本輪（`carryover.jsonl`）。⛔ 沒跑 carryover 不能寫「下輪還會出現」。
 4. **報告與提問**（`sec-report` skill）：寫 `<run>/report.md`，再用 **AskUserQuestion** 把摘要與
-   最多 4 筆待決 finding 送進 Inbox。
+   最多 4 筆待決 finding（本輪＋carryover 一起排）送進 Inbox。有 `prior_human` 的不再問。
 5. **記錄人的決定**：每個回答都用 `jev_gate human` 寫回 shadow log。
 6. **依人的決定行動**（`sec-dispatch` skill）：
    - 「修正」且嚴重度 ≤ medium、該 repo `autofix.enabled` ⇒ 派 fix worker，完成後派 review worker，
@@ -53,7 +54,8 @@ prompt 格式不對、targets 為空或路徑不存在 ⇒ 用 AskUserQuestion �
 7. **推進進度**：每個 target 的閘門 A 都跑完（不論人回答與否）⇒ `collect commit --run-dir <dir>`。
    閘門 A 失敗的 target 不 commit，下輪會重掃同一段。
 
-沒有新 commit、也沒有 finding ⇒ 不派 worker、不提問，只在報告記「無變化」後結束。
+本輪沒有 finding、carryover 也是 0 ⇒ 不派 worker、不提問，只在報告記「無變化」後結束。
+carryover 不是 0 ⇒ 照常寫報告、照常提問（沒有新 commit 也一樣）。
 
 ## ⛔ 鐵律
 

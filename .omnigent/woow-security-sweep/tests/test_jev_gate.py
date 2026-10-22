@@ -180,6 +180,98 @@ class TriageRunTest(unittest.TestCase):
         self.assertEqual(summary["human"], 3)
 
 
+class CarryoverTest(unittest.TestCase):
+    """前幾輪未決的 finding 要帶到下一輪（#1932）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = Path(self.tmp.name)
+        self.caller = mock.Mock(return_value={"model": "m", "answers": answers(score=2.0)})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_round(self, name, rows, *, scanned=None, tools_ok=("semgrep",), repo="WOOWTECH/demo"):
+        """模擬一輪：寫 run 目錄 → triage → carryover。scanned=None 代表 full。"""
+        run = self.state / "runs" / name / repo.split("/")[1]
+        run.mkdir(parents=True)
+        (run / "config.json").write_text(json.dumps(dict(CFG, repo={"full_name": repo})))
+        (run / "meta.json").write_text(json.dumps(
+            {"scope": {"mode": "full" if scanned is None else "incremental", "changed": scanned},
+             **({} if scanned is None else {"scanned_files": scanned})}))
+        (run / "tools.json").write_text(json.dumps({t: {"status": "ok"} for t in tools_ok}))
+        (run / "findings.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        jg.triage_run(run, gates(), self.state, caller=self.caller, today=TODAY)
+        return run, jg.carryover_run(run, self.state)
+
+    def carried(self, run):
+        return {r["fingerprint"] for r in jg.read_jsonl(run / "carryover.jsonl")}
+
+    def decision_id(self, fp):
+        return next(r["id"] for r in jg.read_jsonl(self.state / "shadow.jsonl")
+                    if r.get("type") == "decision" and r["fingerprint"] == fp)
+
+    def two_findings(self):
+        return [dict(finding("a.py"), id="fa", fingerprint="fpA"), dict(finding("b.py"), id="fb", fingerprint="fpB")]
+
+    def test_unanswered_carried_to_incremental_round(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [], scanned=[])
+        self.assertEqual(self.carried(run2), {"fpA", "fpB"})
+        self.assertEqual((summary["carried"], summary["resolved"]), (2, 0))
+        item = jg.read_jsonl(run2 / "carryover.jsonl")[0]
+        self.assertEqual(item["finding"]["path"], "a.py")  # finding 本體從 decisions.jsonl 找回
+        self.assertEqual(item["seen_runs"], 1)
+
+    def test_human_decided_not_carried(self):
+        self.run_round("r1", self.two_findings())
+        jg.record_human(self.state, self.decision_id("fpA"), "false_positive", "drop", None)
+        run2, _ = self.run_round("r2", [], scanned=[])
+        self.assertEqual(self.carried(run2), {"fpB"})
+
+    def test_redetected_this_round_not_duplicated(self):
+        self.run_round("r1", self.two_findings())
+        run2, _ = self.run_round("r2", [self.two_findings()[0]], scanned=["a.py"])
+        self.assertEqual(self.carried(run2), {"fpB"})
+
+    def test_scanned_but_gone_is_resolved_once(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [], scanned=["a.py"])
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpB"}, 1))
+        run3, summary = self.run_round("r3", [], scanned=[])
+        self.assertEqual((self.carried(run3), summary["resolved"]), ({"fpB"}, 0))
+
+    def test_not_resolved_when_tool_did_not_run(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [], scanned=["a.py"], tools_ok=())
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpA", "fpB"}, 0))
+
+    def test_full_round_resolves_everything_not_redetected(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [self.two_findings()[1]])
+        self.assertEqual((self.carried(run2), summary["resolved"]), (set(), 1))
+
+    def test_resolved_then_redetected_is_open_again(self):
+        self.run_round("r1", self.two_findings())
+        self.run_round("r2", [], scanned=["a.py"])                       # fpA resolved
+        self.run_round("r3", [self.two_findings()[0]], scanned=["a.py"])  # fpA 又出現
+        run4, _ = self.run_round("r4", [], scanned=[])
+        self.assertEqual(self.carried(run4), {"fpA", "fpB"})
+
+    def test_other_repo_not_mixed(self):
+        self.run_round("r1", self.two_findings(), repo="WOOWTECH/other")
+        run2, _ = self.run_round("r2", [], scanned=[])
+        self.assertEqual(self.carried(run2), set())
+
+    def test_prior_human_marked_on_redetection(self):
+        self.run_round("r1", self.two_findings())
+        jg.record_human(self.state, self.decision_id("fpA"), "false_positive", "drop", "常數")
+        run2, _ = self.run_round("r2", self.two_findings())
+        recs = {r["fingerprint"]: r for r in jg.read_jsonl(run2 / "decisions.jsonl")}
+        self.assertEqual(recs["fpA"]["prior_human"]["action"], "drop")
+        self.assertNotIn("prior_human", recs["fpB"])
+
+
 class ReadyTest(unittest.TestCase):
     GOOD = {"addresses": {"noul": 0.95}, "unrelated": {"noul": 0.05}, "weakens": {"noul": 0.02},
             "injection": {"noul": 0.01}}

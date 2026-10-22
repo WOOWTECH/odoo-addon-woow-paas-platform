@@ -72,12 +72,16 @@ ROLE_WEB = 'web'
 ROLE_CRON = 'cron'
 _ROLE_ENV = {ROLE_WEB: ENV_AUTH_WEB, ROLE_CRON: ENV_AUTH_CRON}
 
-#: DESIGN §2.11：``newapi_proxy_url`` 只接受這三個值；黑洞值（neutralize）視同未設定。
+#: DESIGN §2.11：只接受固定的叢集內位址；黑洞值（neutralize）視同未設定。
 PROXY_URL_PROD = 'http://newapi-proxy.new-api.svc.cluster.local:8080'
 PROXY_URL_STG = 'http://newapi-proxy.new-api-stg.svc.cluster.local:8080'
+#: 預留 llmdev 專屬代理；部署時須綁獨立 AP/HMAC 身分與控制庫角色。
+PROXY_URL_LLMDEV = 'http://newapi-proxy-llmdev.new-api-stg.svc.cluster.local:8080'
 PROXY_URL_BLACKHOLE = 'http://127.0.0.1:9'
-ALLOWED_PROXY_URLS = frozenset({PROXY_URL_PROD, PROXY_URL_STG, PROXY_URL_BLACKHOLE})
-USABLE_PROXY_URLS = frozenset({PROXY_URL_PROD, PROXY_URL_STG})
+ALLOWED_PROXY_URLS = frozenset({
+    PROXY_URL_PROD, PROXY_URL_STG, PROXY_URL_LLMDEV, PROXY_URL_BLACKHOLE,
+})
+USABLE_PROXY_URLS = frozenset({PROXY_URL_PROD, PROXY_URL_STG, PROXY_URL_LLMDEV})
 
 # --------------------------------------------------------------------------- #
 #  逾時階梯（DESIGN §3.5；前端 > 平台 > 代理 > new-api）                            #
