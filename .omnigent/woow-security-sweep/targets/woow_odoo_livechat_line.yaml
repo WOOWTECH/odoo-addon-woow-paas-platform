@@ -1,0 +1,49 @@
+# woow-security-sweep：WOOWTECH/woow_odoo_livechat_line 的內部上下文（⚠ 不可複製到 public repo）
+#
+# public 規則（scan／always_human／autofix／verify）在該 repo 預設分支的
+# .security/sweep.yaml；collect.py 把兩份合併成 config.json。
+# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、history、baseline、disclosure。
+
+context:
+  summary: LINE ↔ Odoo LiveChat 橋接。webhook 收 LINE 訊息後建立 guest 與 discuss channel，客服回覆再推回 LINE；支援多個 livechat channel
+    各自綁一組 LINE channel。
+  entry_points:
+  - route: /line/webhook/<channel_id>
+    file: controllers/webhook.py
+    auth: public
+    csrf: false
+    methods:
+    - POST
+    note: 偽造請求回 403（H-11）、redelivery 冪等（H-13）；sudo 9 處
+  sensitive_code:
+  - models/im_livechat_channel.py
+  - models/mail_guest.py
+  - models/discuss_channel.py
+  - wizard/line_guest_link_partner_wizard.py
+  trust_boundaries:
+  - LINE 平台 → webhook（以 channel_id 對應的 secret 驗簽）
+  - LINE 使用者 → guest／channel（不可存取其他 channel 的訊息）
+  upstream:
+  - WOOWTECH/woow_line_base
+  downstream: []
+review_focus:
+- webhook 是否先驗簽，才做任何 DB 寫入或 sudo()
+- channel_id 是否可被列舉，或拿來推測其他租戶的設定
+- log 有沒有寫入 PII 或 message body（H-11）
+- 附件下載的大小與型別限制
+history:
+  fixed:
+  - H-11
+  - H-13
+disclosure:
+  findings_to: omnigent_inbox
+  fix_via: github_security_advisory
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD

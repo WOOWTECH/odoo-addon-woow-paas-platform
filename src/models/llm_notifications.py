@@ -43,13 +43,12 @@ _ORDER_NOTICE_STATES = frozenset(('unknown', 'needs_review', 'credited', 'voided
 _DISABLE_PENDING_SQL = """
     FROM woow_paas_platform_llm_api_key k
     JOIN woow_paas_platform_llm_account a ON a.id=k.account_id
-    WHERE a.state='suspended' AND a.suspend_reason='not_me'
+    WHERE a.state='suspended' AND NOT COALESCE(a.resume_pending,FALSE)
     AND k.state IN ('active','disabled','failed_reveal','creating')
-    AND (k.state IN ('active','creating') OR k.disabled_by IS DISTINCT FROM 'suspend'
-         OR COALESCE(k.not_me_disabled_notice_id,0)<>COALESCE(a.not_me_notice_id,0)
+    AND (k.state IN ('active','creating') OR COALESCE(k.not_me_disabled_notice_id,0)<>COALESCE(NULLIF(a.suspend_generation,0),a.not_me_notice_id,0)
          OR NOT COALESCE((k.not_me_disable_plan->>'complete')::boolean,FALSE))
     AND (k.not_me_disable_next_at IS NULL OR k.not_me_disable_next_at<=%s
-         OR COALESCE(k.not_me_attempt_notice_id,0)<>COALESCE(a.not_me_notice_id,0))
+         OR COALESCE(k.not_me_attempt_notice_id,0)<>COALESCE(NULLIF(a.suspend_generation,0),a.not_me_notice_id,0))
 """
 
 
@@ -60,6 +59,17 @@ def _utcnow():
 def _display_time(value):
     return value.replace(tzinfo=timezone.utc).astimezone(
         ZoneInfo('Asia/Taipei')).isoformat(sep=' ', timespec='seconds')
+
+
+def _disable_provenance(key):
+    """Keep trusted provenance until a confirmed human choice replaces it."""
+    previous = key.not_me_disable_plan or {}
+    if previous:
+        return ({'disabled_by_before_suspend': previous['disabled_by_before_suspend']}
+                if 'disabled_by_before_suspend' in previous else {})
+    if key.disabled_by == 'suspend':
+        return {}
+    return {'disabled_by_before_suspend': key.disabled_by or False}
 
 
 class LlmNotification(models.Model):
@@ -259,9 +269,11 @@ class LlmNotification(models.Model):
             account_id = row[0]
             cr.execute(
                 "UPDATE woow_paas_platform_llm_account SET state='suspended', "
-                "suspend_reason='not_me', not_me_notice_id=%s, write_uid=%s, write_date=%s "
+                "suspend_reason='not_me', not_me_notice_id=%s, resume_pending=FALSE, "
+                "suspend_generation=GREATEST(COALESCE(suspend_generation,0)+1,COALESCE(not_me_notice_id,0)+1,%s), "
+                "suspend_return_state='active', lifecycle_operator_id=%s, write_uid=%s, write_date=%s "
                 "WHERE id=%s AND state='active'",
-                (notice_id, SUPERUSER_ID, now, account_id))
+                (notice_id, notice_id, self.env.uid, SUPERUSER_ID, now, account_id))
             if cr.rowcount != 1:
                 raise RuntimeError('suspension transition failed')
             cr.execute(
@@ -368,7 +380,10 @@ class LlmNotification(models.Model):
 
     @api.model
     def _cron_llm_not_me_disable(self):
-        """At most one list page or idempotent remote disable per tick."""
+        """One disable/restore work unit for any suspension reason per tick.
+
+        Keep the existing cron XMLID for upgrade compatibility.
+        """
         return run_llm_cron(self.env, 'woow_paas_platform.ir_cron_llm_not_me_disable',
                             self._llm_not_me_disable_tick, items=1, outbound=True)
 
@@ -386,29 +401,47 @@ class LlmNotification(models.Model):
         self.env.cr.execute(
             'SELECT k.id ' + _DISABLE_PENDING_SQL + scope
             + ' ORDER BY CASE WHEN COALESCE(k.not_me_attempt_notice_id,0) '
-              '<>COALESCE(a.not_me_notice_id,0) THEN 0 '
+              '<>COALESCE(NULLIF(a.suspend_generation,0),a.not_me_notice_id,0) THEN 0 '
               'ELSE COALESCE(k.not_me_disable_work_count,0) END, '
               'k.not_me_disable_next_at NULLS FIRST,k.id '
               'LIMIT 1 FOR UPDATE OF k SKIP LOCKED', params)
         row = self.env.cr.fetchone()
         if not row:
-            return self._llm_has_pending_disables(account_ids=account_ids)
+            return (self.env['woow_paas_platform.llm_account']._llm_resume_tick(
+                tick, account_ids=account_ids)
+                or self.env['woow_paas_platform.llm_account']._llm_flush_lifecycle_audit(
+                    tick, account_ids=account_ids)
+                or self._llm_has_pending_disables(account_ids=account_ids))
         key = Key.browse(row[0])
         key.invalidate_recordset()
         account = key.account_id
-        generation = account.not_me_notice_id
+        # Serialize against suspend/resume before any remote mutation. The key
+        # management lock is already held; SKIP LOCKED avoids lock-order waits.
+        self.env.cr.execute('SELECT id FROM woow_paas_platform_llm_account '
+                            'WHERE id=%s FOR NO KEY UPDATE SKIP LOCKED', (account.id,))
+        if not self.env.cr.fetchone():
+            return True
+        account.invalidate_recordset()
+        if account.state != 'suspended' or account.resume_pending:
+            return True
+        generation = account.suspend_generation or account.not_me_notice_id
         if (key.not_me_attempt_notice_id != generation or not key.not_me_disable_plan
                 or key.not_me_disable_plan.get('complete')):
             # Even a known ID can have same-name siblings: an unknown create can
             # have retried its POST before the original request became visible.
+            # Preserve the original disable reason across same-generation
+            # rescans. A late SWR status snapshot must not turn a prior user
+            # disable into a key eligible for restoration.
             quiet_after = key.create_date + timedelta(seconds=nac.KEY_CREATE_BUDGET_SECONDS + 10)
             quiet_epoch = int(quiet_after.replace(tzinfo=timezone.utc).timestamp())
             plan = {
-                'complete': False, 'scan_complete': not bool(key.newapi_name),
+                'complete': False,
+                'scan_complete': not bool(key.newapi_name),
                 'scan_retry_at': quiet_epoch, 'scan_attempts': 0, 'scan_total': None,
                 'scan_head': '', 'scan_verify_head': False,
                 'prefer_scan': False, 'pending': {}, 'disabled': [],
             }
+            plan.update(_disable_provenance(key))
             if key.newapi_token_id:
                 plan['pending'][str(key.newapi_token_id)] = {'attempts': 0, 'retry_at': 0}
             _llm_internal(key).write({
@@ -516,7 +549,9 @@ class LlmNotification(models.Model):
             values.update({
                 # Quarantine must stay outside the one-live-trial partial index.
                 'state': 'failed_reveal' if key.state == 'failed_reveal' else 'disabled',
-                'disabled_by': 'suspend', 'not_me_disable_next_at': False,
+                'disabled_by': (key.disabled_by if key.disabled_by not in (False, None, 'user', 'suspend')
+                                else plan.get('disabled_by_before_suspend') or 'suspend'),
+                'not_me_disable_next_at': False,
                 'not_me_disabled_notice_id': generation,
             })
         else:
@@ -534,6 +569,8 @@ class LlmNotification(models.Model):
             values['not_me_disable_next_at'] = datetime.fromtimestamp(
                 max(now, min(deadlines)), timezone.utc).replace(tzinfo=None)
         _llm_internal(key).write(values)
+        if plan.get('complete'):
+            key.account_id._llm_lifecycle_event('key_status', key=key, defer=True)
 
     @api.model
     def _llm_defer_key_disable(self, key, *, account_ids=None):
@@ -542,7 +579,8 @@ class LlmNotification(models.Model):
         _llm_internal(key).write({
             'not_me_disable_attempts': attempts,
             'not_me_disable_next_at': _utcnow() + timedelta(seconds=delay),
-            'not_me_attempt_notice_id': key.account_id.not_me_notice_id,
+            'not_me_attempt_notice_id': (key.account_id.suspend_generation
+                                         or key.account_id.not_me_notice_id),
         })
         return self._llm_has_pending_disables(account_ids=account_ids)
 
