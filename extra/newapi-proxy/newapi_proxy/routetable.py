@@ -47,6 +47,8 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}", re.ASCII)
 _SORT_BY_ID = re.compile(r"id", re.ASCII)
 _SORT_ORDER = re.compile(r"asc|desc", re.ASCII)
 _STATUS_ONLY = re.compile(r"true", re.ASCII)
+_AUDIT_SEQ = re.compile(r"0|[1-9][0-9]{0,18}", re.ASCII)
+_AUDIT_LIMIT = re.compile(r"[1-9]|[1-9][0-9]|100", re.ASCII)
 #: ``GET /api/verify/methods?scope=…``: a verification scope such as ``access_token.generate``.
 _VERIFY_SCOPE = re.compile(r"[a-z_]{1,32}\.[a-z_]{1,32}", re.ASCII)
 
@@ -106,6 +108,12 @@ def _r(name, method, template, identities, **kw) -> Route:
 
 
 ROUTES: tuple[Route, ...] = (
+    # Local control-store read, never forwarded to new-api. "anon" means no
+    # upstream PAT; every caller still needs a valid CRON HMAC and nonce. The
+    # database role binds the proxy to one environment regardless of query.
+    _r("control.audit", "GET", "/_control/audit", {"anon"},
+       query={"after": _AUDIT_SEQ, "through": _AUDIT_SEQ, "limit": _AUDIT_LIMIT},
+       special="control_read"),
     # Shared by several identities (DESIGN §1.4.2-5): anon is the readiness-style check,
     # ap / user read it with their own credential (cron only).
     _r("status", "GET", "/api/status", {"anon", "ap", "user"}),
