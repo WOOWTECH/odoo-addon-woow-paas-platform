@@ -67,8 +67,9 @@ EFFORT = "high"
 
 #: API key 與 TypeSafe 相關路徑。jev_gate.py 自己讀 key，agent 完全不需要碰。
 SECRET_RE = "(?i)(typesafe|api_key)"
-FILE_TOOLS = GEN.WRITE_TOOLS + ["Read", "sys_os_read", "read", "NotebookRead", "NotebookEdit",
-                                "Grep", "Glob", "LS"]
+# dict.fromkeys 去重保序：GEN.WRITE_TOOLS 已含 NotebookEdit（#1922），這裡仍列出以防產生器日後移除
+FILE_TOOLS = list(dict.fromkeys(GEN.WRITE_TOOLS + ["Read", "sys_os_read", "read", "NotebookRead", "NotebookEdit",
+                                                   "Grep", "Glob", "LS"]))
 
 CEL_SECRET = f"""event.type == "tool_call" && (
   (event.data.name in {GEN._cel_list(GEN.SHELL_TOOLS)}
