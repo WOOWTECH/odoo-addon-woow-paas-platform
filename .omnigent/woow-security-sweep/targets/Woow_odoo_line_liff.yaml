@@ -1,0 +1,96 @@
+# woow-security-sweep：WOOWTECH/Woow_odoo_line_liff 的內部上下文（⚠ 不可複製到 public repo）
+#
+# public 規則（scan／always_human／autofix／verify）在該 repo 預設分支的
+# .security/sweep.yaml；collect.py 把兩份合併成 config.json。
+# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、history、baseline、disclosure。
+
+context:
+  summary: LINE LIFF 整合層。webhook 接收、LIFF 登入（LINE id_token 換 Odoo session）、LIFF 頁面、rich menu、推播與 narrowcast、自動回覆。
+  entry_points:
+  - route: /line/webhook[/<config_id>]
+    file: controllers/webhook.py
+    auth: public
+    csrf: false
+    note: 必須驗 X-Line-Signature；sudo 31 處
+  - route: /liff/redirect[/<target>]
+    file: controllers/liff_redirect.py
+    auth: none
+    csrf: false
+    note: LIFF 登入、建 session；target 白名單（B-2）
+  - route: /liff/redirect/booking/<id>
+    file: controllers/liff_redirect.py
+    auth: none
+    csrf: false
+  - route: /api/line/bind
+    file: controllers/liff_api.py
+    auth: public
+    csrf: false
+  - route: /api/line/me
+    file: controllers/liff_api.py
+    auth: public
+    csrf: false
+  - route: /api/line/notification/toggle
+    file: controllers/liff_api.py
+    auth: public
+    csrf: false
+  - route: /liff/clear-session
+    file: controllers/liff_pages.py
+    auth: none
+    csrf: false
+  - route: /liff/news[/image/<id>]
+    file: controllers/liff_pages.py
+    auth: none
+  - route: /liff/locations
+    file: controllers/liff_pages.py
+    auth: none
+    csrf: false
+  - route: /liff/debug
+    file: controllers/liff_pages.py
+    auth: public
+    csrf: false
+    note: 正式環境是否該開放
+  - route: /my/account
+    file: controllers/portal.py
+    auth: user
+  sensitive_code:
+  - controllers/liff_sso_policy.py
+  - models/line_liff_config.py
+  - models/res_config_settings.py
+  - models/line_auto_reply.py
+  trust_boundaries:
+  - LINE 平台 → webhook（以簽章驗證來源）
+  - LINE 內瀏覽器（LIFF）→ controller（id_token、target 參數不可信）
+  - 外部網站 → /liff/redirect（open redirect、反射型 XSS）
+  upstream:
+  - WOOWTECH/woow_line_base
+  downstream: []
+review_focus:
+- auth=public／none 的 route 是否在 sudo() 前先驗身分或簽章
+- csrf=False 的 route 是否有其他防護（簽章、id_token、只讀）
+- secret 與 token 欄位是否有欄位層級的 groups 限制（目前只靠 model ACL manager-only）
+- 輸出到 HTML 的值是否都經過 escape；redirect target 是否走白名單
+- 使用者可控的 regex 與大小是否有上限
+history:
+  fixed:
+  - B-2
+  - H-2
+  - H-3
+  - H-4
+  - H-5
+  - H-7
+  - H-8
+  - H-14
+  - H-17
+  - H-19
+disclosure:
+  findings_to: omnigent_inbox
+  fix_via: github_security_advisory
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD

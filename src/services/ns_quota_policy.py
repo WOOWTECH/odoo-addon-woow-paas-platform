@@ -11,11 +11,20 @@ ephemeral 兩鍵有帶才寫。它沒有任何「不可降低」保護，所以�
 3. 目標低於叢集的項目回報為「待處理降額」，本票不推下降（降額由後續票交付）。
 
 看不懂的叢集值一律視為「無法證明不降額」，不送。
+
+#1781（#1189 之前的止血）：operator 回報支援 ``pvc_limit``（GET ``managed_quota`` 的
+``supports_pvc_limit`` 為 ``True``）時，``with_pvc_baseline`` 把基準 ``PVC_HARD`` 加進目標，
+合併後送 ``max(10, 叢集現值)``，PVC 不再因高於 10 判為 ``would_lower``。不支援時目標沒有
+``pvc_limit``、``build_hard`` 照舊展開成 10——舊 operator 會靜默忽略未知欄位、照樣寫 10，
+所以只能依能力鍵決定，不能「送了看看」。PVC 只走不降額：基準 10 不是目標，叢集高於它不算
+待處理降額，也不在可降額範圍內。
 """
 from decimal import Decimal, InvalidOperation
 import re
 
 PVC_HARD = '10'
+#: #1781：operator GET ``managed_quota`` 回報「PUT／POST 收 ``pvc_limit``」的能力鍵。
+PVC_CAPABILITY_KEY = 'supports_pvc_limit'
 
 # payload 欄位 → operator 會寫入的 ResourceQuota hard key
 PAYLOAD_KEYS = {
@@ -24,7 +33,11 @@ PAYLOAD_KEYS = {
     'storage_limit': ('requests.storage',),
     'ephemeral_storage_request': ('requests.ephemeral-storage',),
     'ephemeral_storage_limit': ('limits.ephemeral-storage',),
+    # #1781：只有 operator 支援時目標才會有這個欄位（``with_pvc_baseline``）。
+    'pvc_limit': ('persistentvolumeclaims',),
 }
+#: 目標是固定基準值、不是需求量的欄位：叢集高於它不列為待處理降額（#1781）。
+BASELINE_FIELDS = ('pvc_limit',)
 
 _BINARY = {'Ki': 2 ** 10, 'Mi': 2 ** 20, 'Gi': 2 ** 30, 'Ti': 2 ** 40, 'Pi': 2 ** 50, 'Ei': 2 ** 60}
 _DECIMAL = {'n': Decimal('1e-9'), 'u': Decimal('1e-6'), 'm': Decimal('1e-3'), 'k': Decimal(10 ** 3),
@@ -60,14 +73,29 @@ def parse_quantity(value):
     return None
 
 
+def supports_pvc_limit(managed):
+    """operator 的受管 quota 報表有沒有回報支援 ``pvc_limit``（只認 ``True``）。"""
+    return isinstance(managed, dict) and managed.get(PVC_CAPABILITY_KEY) is True
+
+
+def with_pvc_baseline(target, managed):
+    """operator 支援 ``pvc_limit`` 時，回傳加上 PVC 基準的目標（新 dict）；否則原樣回傳。
+
+    目標已有 ``pvc_limit`` 時不覆蓋。合併（``merge_never_lower``）會再與叢集取大。
+    """
+    if not supports_pvc_limit(managed) or target.get('pvc_limit'):
+        return target
+    return dict(target, pvc_limit=PVC_HARD)
+
+
 def build_hard(payload):
-    """與 operator ``_build_quota_manifest`` 的 spec.hard 同形。"""
+    """與 operator ``_build_quota_manifest`` 的 spec.hard 同形（沒有 ``pvc_limit`` 時 pvc 為 10）。"""
     hard = {
         'requests.cpu': payload['cpu_limit'],
         'limits.cpu': payload['cpu_limit'],
         'requests.memory': payload['memory_limit'],
         'limits.memory': payload['memory_limit'],
-        'persistentvolumeclaims': PVC_HARD,
+        'persistentvolumeclaims': payload.get('pvc_limit') or PVC_HARD,
         'requests.storage': payload['storage_limit'],
     }
     if payload.get('ephemeral_storage_request'):
@@ -117,11 +145,18 @@ def merge_never_lower(target, spec_hard, status_hard):
             if not live:
                 continue
             live_max = max(live, key=lambda item: item[0])
-            if live_max[0] > wanted_number:
+            if live_max[0] > wanted_number and field not in BASELINE_FIELDS:
                 pending.append((key, live_max[1], wanted))
             if live_max[0] > best_number:
                 best_number, best_text = live_max
         payload[field] = best_text
+    if payload.get('pvc_limit'):
+        # #1781：PVC 是數量，送整數字串（叢集上可能是 apiserver 正規化後的 ``1k`` 或
+        # 手動設的 ``2Ki``）；operator 只收整數（可帶 k／M）。不是整數就無法證明。
+        number = parse_quantity(payload['pvc_limit'])
+        if number != number.to_integral_value():
+            raise QuotaNotProvable('persistentvolumeclaims=%r' % payload['pvc_limit'])
+        payload['pvc_limit'] = str(int(number))
     lowering = []
     for key, value in build_hard(payload).items():
         number = parse_quantity(value)
@@ -164,8 +199,11 @@ def plan_safe_lower(target, managed):
       ``managed_unavailable: <reason>``、``quota_not_provable: …``。
     - ``pending_decrease``：``[(key, 叢集值, 目標值)]``，目標低於叢集但這次不降的項
       （ephemeral-storage，以及被擋下的降額）。
-    - ``lowering_unsafe``：合併後仍會降、但不在可降範圍的 hard key（例如 pvc 高於 10）——
-      呼叫端要整筆不送（同 ``would_lower``）。
+    - ``lowering_unsafe``：合併後仍會降、但不在可降範圍的 hard key（例如舊 operator 下
+      pvc 高於 10）——呼叫端要整筆不送（同 ``would_lower``）。
+
+    #1781：operator 回報支援 ``pvc_limit`` 時，目標先經 ``with_pvc_baseline``（payload 帶
+    ``pvc_limit``＝max(10, 叢集)）。
 
     叢集現值取 spec.hard 與 status.hard 的較大者。``used`` 等於目標算安全（admission 是 ≤）。
     當下用量通過檢查不代表未來 rollout 有空間，也不是與 K8s admission 原子化的容量保留。
@@ -179,6 +217,7 @@ def plan_safe_lower(target, managed):
     if managed.get('available') is not True:
         return _result(None, [('*', 'managed_unavailable: %s' % (
             managed.get('reason') or 'managed_quota_unavailable'))])
+    target = with_pvc_baseline(target, managed)
     spec_hard = managed.get('spec_hard') or {}
     status_hard = managed.get('hard') or {}
     try:

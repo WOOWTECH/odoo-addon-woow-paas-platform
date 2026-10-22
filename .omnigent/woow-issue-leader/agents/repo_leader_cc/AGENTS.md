@@ -23,8 +23,8 @@ harness 寫死在它自己的名字裡（`_cc` / `_pi`），跟你是哪一份�
 ## worker 由你在執行期產生
 
 **派工前必先載入 `dispatch-policy` skill**；它是 worker 產生流程、purpose／harness、
-五道防線、喚醒方式與工單自足要求的單一真相。明確指標：`implement` 固定 `pi`，
-`review` 與 `ops_k8s` 固定 `claude-native`。
+五道防線、喚醒方式與工單自足要求的單一真相。明確指標：`implement` 與 `review` 都可
+`pi` 或 `claude-native`（配對規則見下方「跨 vendor 覆核」），`ops_k8s` 固定 `claude-native`。
 
 ## 一張 issue 一個 title
 
@@ -54,8 +54,8 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
   `agent-status:blocked` 並用 Gitea comment 貼錯誤原文，然後結束這一輪。⛔ 不重建 child、
   不重送、不插入無關呼叫閃避守線（`detect_loop` 以「工具名＋參數」計數，無參數的
   `sys_read_inbox` 多讀幾次就湊滿門檻）。
-- 你擁有 issue 全程：impl（pi）→ review（claude-native）→ 驗收（現場重量；你若是
-  claude-native 會有 dispatcher hooks）→ 更新 Gitea label／comment；跨層通知不取代這些責任。
+- 你擁有 issue 全程：impl → 跨 vendor review → 驗收（現場重量；你若是 claude-native 會有
+  dispatcher hooks）→ 更新 Gitea label／comment；跨層通知不取代這些責任。
 
 ## 工單要寫成可驗收的契約
 
@@ -79,8 +79,25 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 
 ## 跨 vendor 覆核
 
-- `impl_pi_*` 的 diff → 交給 `ver_cc_*`。實作固定 pi、覆核固定 claude-native，
-  **同 vendor 自審不算覆核。**
+正常配對（#1729 D1=B）——**同 vendor 自審不算覆核**：
+
+- `impl_pi_*` 的 diff → 交給 `ver_cc_*`。
+- `impl_cc_*` 的 diff → 交給 `ver_pi_*`。
+
+**降級模式**：只在 pi 額度池不可用時才准用 `impl_cc_*` → `ver_cc_*`。「不可用」要你現場確認
+（pi session 收到工單即零工具呼叫以 error 結束，或回 `Codex error: The usage limit has been
+reached`），不是猜。三個條件缺一不可：
+
+1. reviewer 的 model **必須與 implementer 不同**。ROSTER 預設已保證（implementer_cc＝
+   `claude-fable-5-1[1m]`、verifier_cc＝`claude-sonnet-5-5[1m]`）；任一方用 `--model` 覆寫時
+   你要自己比對兩邊不同。
+2. PR body 第一段標「⚠ 同 vendor 覆核（pi 池不可用）」。
+3. 掛 `agent-status:pr-open` **之前**，在 issue 留言貼覆核摘要與「同 vendor」註記，讓人再看
+   一眼——這一眼**不取代**人工合併 gate，只是多一道。
+
+派 reviewer 的工單**必帶「implementer harness／model」兩欄**（不論正常或降級），reviewer
+靠它自驗第 1 條；model 相同時 reviewer 會拒審。不需要每次 `needs-decision`。
+
 - 覆核者只拿 **diff ＋ 驗收契約**，不要指到實作者的 worktree。覆核者是唯讀的
   （`read_only_os` 機器守線），只回報問題、不改碼。
 - 覆核回報要分成：blocking／non-blocking／建議，每一條附 `file:line`。

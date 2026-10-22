@@ -32,9 +32,8 @@
 
 ## 覆核者固定跨 vendor
 
-`implement` 固定 pi、`review` 固定 claude-native（#1096）：你的 diff 一律交給 `verifier_cc`
-審，`implementer_cc` 已暫停使用（見該模板頭部）。把驗收證據寫清楚——覆核者拿到的只有
-diff 與契約，看不到你的 worktree。
+`implement` 可 pi 或 claude-native（#1729）；你（pi）的 diff 交給 `verifier_cc` 審，跨 vendor
+成立。把驗收證據寫清楚——覆核者拿到的只有 diff 與契約，看不到你的 worktree。
 
 ## PR 與 issue 的關聯
 

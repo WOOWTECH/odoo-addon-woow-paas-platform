@@ -99,7 +99,7 @@ Deploy the operator before the Odoo addon that consumes this endpoint. An older/
 
 - `POST /api/namespaces` - Create namespace with resource quota
 - `POST /api/namespaces/{name}/baseline-netpol` - Idempotent backfill of the tenant baseline on an existing workspace namespace (#279 P5): the four ingress NetworkPolicies, the managed labels and — when their switches are on — the #1441 egress baseline and Pod Security labels (below).
-- `PUT /api/namespaces/{name}/quota` - (#278) Overwrite the namespace ResourceQuota as a whole (`cpu_limit` / `memory_limit` / `storage_limit`, optional `ephemeral_storage_*`); the platform recomputes the values from the workspace's live services and pushes them.
+- `PUT /api/namespaces/{name}/quota` - (#278) Overwrite the namespace ResourceQuota as a whole (`cpu_limit` / `memory_limit` / `storage_limit`, optional `ephemeral_storage_*`, optional `pvc_limit` (#1781)); the platform recomputes the values from the workspace's live services and pushes them.
 - `GET /api/namespaces/{name}/quota` - (#1647) Read-only: the ResourceQuota `hard` / `used` of the namespace, i.e. how much of the quota is reserved (declared requests / limits and PVC sizes), not live usage. Always `200`: `available: true` with `resources` keyed by the k8s resource name (`limits.cpu`, `limits.memory`, `requests.storage`, `persistentvolumeclaims`, …; each `{hard, used, hard_value, used_value, unit, ratio, quota}`, the tightest quota wins when several declare the same resource), or `available: false` with `reason` `quota_not_found` (no unscoped ResourceQuota — a missing namespace looks the same) / `quota_unreadable` (kubectl failed or timed out). `400` only for a namespace outside the allowed prefix. An operator older than this endpoint answers the GET with `405` (the path exists for `PUT` only).
 
 #### Managed quota observation (#1678)
@@ -150,6 +150,20 @@ guard both endpoints keep the unconditional `kubectl apply`. Older operators ign
 these fields silently, so callers must not infer support from the PUT response.
 An old operator omitting `managed_quota` is unsupported/unknown in the backend;
 Odoo never falls back to the frontend summary. Deploy compatible operator first.
+
+`pvc_limit` (#1781, a stop-gap before #1189 computes PVC counts from templates):
+`PUT /api/namespaces/{name}/quota` and `POST /api/namespaces` accept an optional
+`pvc_limit` (a positive integer, optionally with the `k`／`M` suffix the apiserver
+uses when it normalises a count). When present it becomes
+`spec.hard.persistentvolumeclaims` and the response echoes it as `"pvc_limit"` — on
+POST only when the quota was actually written (not on `"quota": "conflict"`). When
+absent the value stays the fixed `10`, exactly as before, so older platforms are
+unaffected. `managed_quota.supports_pvc_limit` is always `true` on operators that
+accept the field (also when the quota is missing or unreadable). Older operators
+ignore `pvc_limit` silently and still write `10`, so the platform sends it only
+when this key is present, and treats a write whose response does not echo the value
+as "not confirmed" (during a rolling update the GET and the PUT can reach different
+operator versions).
 
 The Odoo backend is a system-administrator-only read projection: one observation
 per Workspace per compute batch, at most five HTTP reads per batch, list page size

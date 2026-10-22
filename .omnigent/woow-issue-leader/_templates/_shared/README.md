@@ -17,7 +17,7 @@
 
 - 片段不存在 ⇒ 產生器 fail loud（防線 2 的一部分，驗收第 4 項會紅）。
 - 產出裡殘留 `<!-- include:` ⇒ 同上。
-- 驗收第 20 項對**所有**模板（含暫停使用的 implementer_cc／verifier_pi）解析 include，並驗
+- 驗收第 20 項對**所有**模板解析 include（不論 ROSTER 是否引用），並驗
   每個片段至少被一份模板引用（孤兒片段＝沒人讀的文字）。
 
 ⚠ 片段裡提到的 policy 若只掛在部分角色（`P-path` 只掛 implement、`P-kubectl` 只掛 ops_k8s），
