@@ -838,10 +838,12 @@ class TestCallGuard(_Base):
 class TestMcpUrlGuard(unittest.TestCase):
     TABLE = {
         'newapi-proxy.new-api-stg.svc.cluster.local': {'10.43.88.10'},
+        'newapi-proxy-llmdev.new-api-stg.svc.cluster.local': {'10.43.88.12'},
         'newapi.new-api-stg.svc.cluster.local': {'10.43.88.11'},
         'newapi-proxy.new-api.svc.cluster.local': {'10.43.99.10'},
         'newapi.new-api.svc.cluster.local': {'10.43.99.11'},
         'sneaky.example.com': {'203.0.113.9', '10.43.88.10'},  # 兩個答案，其中一個是代理
+        'sneaky-dev.example.com': {'203.0.113.10', '10.43.88.12'},
         'cluster-ip.example.com': {'10.43.1.2'},
         'demo-mcp.paas-ws-abc.svc.cluster.local': {'10.43.12.5'},
         'headless-mcp.paas-ws-abc.svc.cluster.local': {'10.42.7.8'},
@@ -854,6 +856,7 @@ class TestMcpUrlGuard(unittest.TestCase):
     def test_ac5_urls_are_rejected(self):
         cases = {
             'http://newapi-proxy.new-api-stg.svc.cluster.local:8080': 'newapi_namespace',
+            'http://newapi-proxy-llmdev.new-api-stg.svc.cluster.local:8080': 'newapi_namespace',
             'http://newapi-proxy.new-api-stg:8080/x': 'newapi_namespace',
             'http://newapi-proxy.new-api-stg.svc:8080': 'newapi_namespace',
             'http://newapi-proxy.new-api-stg.svc.cluster.local.:8080': 'newapi_namespace',
@@ -863,6 +866,7 @@ class TestMcpUrlGuard(unittest.TestCase):
             'http://[::ffff:10.43.88.10]:8080': 'newapi_address',
             'http://10.42.3.77:8080': 'cluster_address',  # pod IP
             'http://sneaky.example.com/sse': 'newapi_address',
+            'http://sneaky-dev.example.com/sse': 'newapi_address',
             'http://cluster-ip.example.com/sse': 'cluster_address',
             'http://user:pw@10.43.99.11:3000/': 'newapi_address',
         }
@@ -1083,10 +1087,13 @@ class TestMcpUrlGuard(unittest.TestCase):
     def test_protected_names_cover_both_environments(self):
         self.assertEqual(set(mcp_url_guard.PROTECTED_HOSTS), {
             'newapi-proxy.new-api.svc.cluster.local', 'newapi.new-api.svc.cluster.local',
-            'newapi-proxy.new-api-stg.svc.cluster.local', 'newapi.new-api-stg.svc.cluster.local'})
+            'newapi-proxy.new-api-stg.svc.cluster.local', 'newapi.new-api-stg.svc.cluster.local',
+            'newapi-proxy-llmdev.new-api-stg.svc.cluster.local'})
         self.assertIn(nac.PROXY_URL_PROD.split('//')[1].split(':')[0],
                       mcp_url_guard.PROTECTED_HOSTS)
         self.assertIn(nac.PROXY_URL_STG.split('//')[1].split(':')[0],
+                      mcp_url_guard.PROTECTED_HOSTS)
+        self.assertIn(nac.PROXY_URL_LLMDEV.split('//')[1].split(':')[0],
                       mcp_url_guard.PROTECTED_HOSTS)
 
 
@@ -1177,6 +1184,12 @@ class TestSecretsDoNotLeak(_Base):
         self.assertEqual(client.role, 'cron')
         self.assertEqual(state.guards[-1][0], 'cron')
         self.assertIs(client._guard, state.guards[-1][1], '工廠一律掛上 DB 的 circuit／限速鉤子')
+        dev = nac.get_newapi_client({
+            'ir.config_parameter': Icp(nac.PROXY_URL_LLMDEV),
+            nac.RUNTIME_STATE_MODEL: state,
+        }, nac.ROLE_CRON, environ=environ)
+        self.assertEqual(dev.base_url, nac.PROXY_URL_LLMDEV)
+        self.assertIs(dev._guard, state.guards[-1][1])
         with self.assertRaises(nac.NewApiConfigError) as caught:
             nac.get_newapi_client(env, nac.ROLE_WEB, environ=environ)
         self.assertEqual(caught.exception.code, 'signing_key_missing')

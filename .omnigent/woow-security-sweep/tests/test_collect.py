@@ -122,10 +122,12 @@ class RunTest(RepoFixture):
         meta = self.run_once()
         self.assertEqual(meta["scope"]["mode"], "full")
         self.assertTrue((self.runs / "demo" / "src" / "models" / "x.py").exists())
+        self.assertIn("models/x.py", meta["scanned_files"])  # carryover 判 resolved 用
         cl.cmd_commit(Path(meta["run_dir"]), self.state)
         meta = self.run_once()
         self.assertEqual((meta["scope"]["mode"], meta["scope"]["changed"]), ("incremental", []))
         self.assertEqual(meta["tools"]["_all"]["status"], "skipped")
+        self.assertEqual(meta["scanned_files"], [])
 
     def test_security_change_creates_finding(self):
         cl.cmd_commit(Path(self.run_once()["run_dir"]), self.state)
