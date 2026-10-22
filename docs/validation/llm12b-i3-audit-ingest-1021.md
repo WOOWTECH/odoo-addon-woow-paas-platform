@@ -50,6 +50,11 @@ Base `38cd584a39e72cad26834454c801224764d755fd`（I2 #1899 指定 head；I3 comm
    evidence integration、incident／recharge 或 GA acceptance。部署 control store／env binding、
    source retention與備份也不是本切片的一部分。
 
+後續獨立切片的純 `llm_audit_attempt.collapse_attempt()` 可把同一 UUID 的 intent／outcome
+視為一次邏輯嘗試，僅將明確 `not_sent` 判為未送出，有 safe request ID 的 forwarded
+列為待對照候選，其餘保留不確定。此服務未接排程或 ORM；候選不是已入帳證明，仍須
+獨立 type=1 log、唯一訂單歸屬、環境／store generation 驗證，不能據此開 incident。
+
 ## 驗證
 
 - 本機新純 parser：**10 passed**；既有 reconciliation 純回歸：**33 passed**。
