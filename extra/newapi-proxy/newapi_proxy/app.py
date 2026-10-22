@@ -622,11 +622,31 @@ class Proxy:
         if not self.inflight.try_acquire(identity):
             raise ProxyError("busy", "inflight")
         try:
+            if route.special == "control_read":
+                return await self._read_control_audit(pairs, deadline)
             return await self._forward(
                 ctx, matched, method, query, ip, upstream_auth, proof, upstream_body, validated, deadline
             )
         finally:
             self.inflight.release(identity)
+
+    async def _read_control_audit(self, pairs, deadline):
+        if self.control is None:
+            raise ProxyError("config", "control_store_disabled")
+        params = dict(pairs)
+        if "after" not in params:
+            raise ProxyError("bad_request", "query_key")
+        after = int(params["after"])
+        through = int(params["through"]) if "through" in params else None
+        limit = int(params.get("limit", "100"))
+        if (after > 9223372036854775807
+                or (through is not None and (through < after or through > 9223372036854775807))):
+            raise ProxyError("bad_request", "query_value")
+        try:
+            result = await self._control_call(deadline, "read", after, through, limit)
+        except ControlStoreError:
+            raise ProxyError("busy", "control_store") from None
+        return _json_response({"success": True, "data": result})
 
     async def _forward(
         self,

@@ -21,9 +21,16 @@ resourceVersion 為前提，前提不成立回 409 ``quota_conflict``（建立�
 prod）：GET 沒有能力鍵，寫入靜默忽略 ``pvc_limit``、一律寫 10。``pvc_write_capable`` 可單獨關掉
 寫入端，模擬滾動更新時 GET 落在新 pod、PUT 落在舊 pod。``pvc_sent`` 記每筆寫入收到的值。
 
+#1917：``legacy_write``／``legacy_read`` 模擬 #1680 之前的 operator pod（例
+``paas-operator:20261018.0117``）。``legacy_write``：寫入忽略 ``quota_guard``（不檢查
+resourceVersion、不寫也不刪 token annotation）、忽略 ``pvc_limit``（pvc 寫 10），回應沒有
+``quota``／``pvc_limit``；``legacy_read``：GET 沒有 ``sync_token`` 與 ``supports_pvc_limit`` 鍵。
+兩者分開設，才能模擬滾動更新時 GET、PUT、讀回各自落在不同版本的 pod。
+
 遠端延遲也只在這個邊界注入：
 
-- ``lose_response``：寫入照套用，但回應遺失（raise 逾時）；
+- ``lose_response``：寫入照套用，但回應遺失（raise 逾時；設成 exception 實例則 raise 它，
+  例如寫入後才回 500）；
 - ``hold_writes``：請求「卡在 operator 裡」——不套用、回應逾時；之後 ``land_held()`` 才以
   當初的前提真正寫入（模擬 kubectl 晚到），前提已不成立就落不下。
 """
@@ -97,6 +104,8 @@ class FakeQuotaOperator:
         self.pvc_capable = pvc_capable
         self.pvc_write_capable = None  # None＝跟 pvc_capable 相同
         self.pvc_sent = []
+        self.legacy_write = False
+        self.legacy_read = False
         self.lock = threading.RLock()
         self.live = {ns: dict(hard) for ns, hard in (namespaces or {}).items()}
         self.tokens = {}
@@ -146,9 +155,9 @@ class FakeQuotaOperator:
                     'available': False, 'reason': 'managed_quota_not_found',
                     'hard': {}, 'used': {},
                 }
-            if self.guarded:
+            if self.guarded and not self.legacy_read:
                 managed['sync_token'] = self.tokens.get(namespace)
-            if self.pvc_capable:
+            if self.pvc_capable and not self.legacy_read:
                 managed['supports_pvc_limit'] = True
             report['managed_quota'] = managed
             return report
@@ -179,7 +188,7 @@ class FakeQuotaOperator:
             raise PaaSOperatorAPIError('API error: quota_conflict', status_code=409,
                                        detail='quota_conflict')
         result = {'message': 'Namespace %s quota updated' % namespace}
-        if self.guarded and quota_guard:
+        if self.guarded and quota_guard and not self.legacy_write:
             result['quota'] = 'applied'
         if pvc:
             result['pvc_limit'] = pvc
@@ -200,7 +209,7 @@ class FakeQuotaOperator:
                 raise self.create_error
             outcome = self._write(namespace, call[1:] + (pvc,), quota_guard)
         result = {'message': 'Namespace %s created with quota' % namespace}
-        if self.guarded and quota_guard:
+        if self.guarded and quota_guard and not self.legacy_write:
             result['quota'] = outcome
         if pvc and outcome == 'applied':
             result['pvc_limit'] = pvc
@@ -208,6 +217,8 @@ class FakeQuotaOperator:
 
     def _pvc_written(self, pvc_limit):
         """這筆寫入實際會寫的 pvc（``None``＝operator 寫固定 10）。"""
+        if self.legacy_write:
+            return None
         capable = self.pvc_capable if self.pvc_write_capable is None else self.pvc_write_capable
         return pvc_limit if capable else None
 
@@ -217,8 +228,15 @@ class FakeQuotaOperator:
         if self.hold_writes:
             self.held.append((namespace, quota_args, guard))
             raise PaaSOperatorTimeoutError('Request timeout')
-        outcome = self._apply_guarded(namespace, quota_args, guard)
+        if self.legacy_write:
+            # #1917：#1680 之前的 pod——無條件覆寫，token annotation 原封不動（不寫也不刪）。
+            self._apply(namespace, *quota_args)
+            outcome = 'applied'
+        else:
+            outcome = self._apply_guarded(namespace, quota_args, guard)
         if self.lose_response and outcome == 'applied':
+            if isinstance(self.lose_response, Exception):
+                raise self.lose_response
             raise PaaSOperatorTimeoutError('Request timeout')
         return outcome
 

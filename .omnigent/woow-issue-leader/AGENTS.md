@@ -92,12 +92,12 @@ worktree 不是你建、也不是 `repo_leader` 建，是 **implement worker 自
 ## 派工：purpose × harness
 
 你派給 `repo_leader_*` 的工單要講清楚三件事：**purpose**、**harness**、**目標 repo**。
-harness 依 `ROSTER` 決定；implement 與 review 已固定為單向跨 vendor 路徑。
+harness 依 `ROSTER` 決定；implement 與 review 都可 pi／claude-native，配對須跨 vendor。
 
 | purpose | harness 選項 | model | effort |
 |---|---|---|---|
-| `implement` | **固定 pi** | `gpt-6.1-sol` | xhigh |
-| `review` | **固定 claude-native** | `claude-sonnet-5-5[1m]` | high |
+| `implement` | pi／claude-native | `gpt-6.1-sol`／`claude-fable-5-1[1m]` | xhigh |
+| `review` | claude-native／pi | `claude-sonnet-5-5[1m]`／`gpt-6-astra` | high |
 | `explore`（＝`search`） | pi | `gpt-6-luna` | high |
 | `tracker`（＝`triage`） | pi | `gpt-5.6-terra` | high |
 | `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5-5[1m]` | xhigh |
@@ -105,9 +105,13 @@ harness 依 `ROSTER` 決定；implement 與 review 已固定為單向跨 vendor 
 
 硬規則：
 
-- **`implement` 固定 pi，`review` 固定 claude-native。** 實作 pi ⇒ 覆核 claude-native，
-  跨 vendor 單向成立。產生器會直接拒絕 `implement + claude-native`：上游 `worktree_guard`
-  對 Claude 原生 Edit／Write 必帶的絕對 `file_path` 一律 DENY，implement_cc 實測不能改檔。
+- **implement 與 review 跨 vendor 配對**（#1729 D1=B）：正常 `implement pi ⇒ review
+  claude-native`、`implement claude-native ⇒ review pi`。pi 額度池不可用時才准降級成
+  `implement claude-native ⇒ review claude-native`，條件（model 不同、PR body 標「⚠ 同 vendor
+  覆核（pi 池不可用）」、掛 `pr-open` 前 issue 留言給人再看一眼）由 `repo_leader` 執行。
+  ⇒ pi 額度池空時，實作線改派 claude-native，不再整條停擺。
+- **implement + claude-native 不掛上游 `worktree_guard`**（它對 Claude 原生 Edit／Write 必帶的
+  絕對 `file_path` 一律 DENY）；worktree 由 `P-path`＋`block_working_dir_changes` 守。
 - **`ops_k8s` 固定 claude-native。** pi 沒有 hook 機制 ⇒ 換成 pi 會讓 dispatcher 失效、
   repo 的 `kubectl-ns-guard` 拿不回來。產生器會直接拒絕 `ops_k8s + pi`。
 - **model 不要用 CLI alias**（`opus`／`sonnet`／`fable`）：claude 家族只吃 id 含 `claude` 的
@@ -187,8 +191,9 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 
 ## 跨 vendor 覆核紀律
 
-- **實作固定 pi、覆核固定 claude-native**：`impl_pi_*` 的 diff 交給 `ver_cc_*`，單向確保
-  不同 vendor。這一段由 `repo_leader` 執行；跨層摘要不取代其驗收責任。
+- **跨 vendor 配對**：`impl_pi_*` 的 diff 交給 `ver_cc_*`、`impl_cc_*` 的 diff 交給
+  `ver_pi_*`；pi 池不可用時的同 vendor 降級模式與三條件見 `repo_leader` 的 AGENTS.md。這一段
+  由 `repo_leader` 執行；跨層摘要不取代其驗收責任。
 - 覆核者**只拿到 diff ＋ 驗收契約**，不要把它指到實作者的 worktree。覆核者是唯讀的
   （`read_only_os` 機器守線），它只回報問題、不改碼。
 - 只有實作者開 PR。覆核通過的 PR 就等人來 merge。
