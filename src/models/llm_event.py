@@ -200,6 +200,7 @@ class LlmAlert(enum.Enum):
 
     #: 驗證告警出口用（odoo shell 觸發；LLM-02b AC2）。
     TEST = 'alert_test'
+    STATUS_INVALID = 'status_invalid'
     #: 開戶放棄（``state=error``，第 6 次失敗或不可重試的錯誤）；錯誤碼＝``last_error_code``。
     PROVISION_FAILED = 'provision_failed'
     #: 密文被拒（綁定不符、解不開、內容不合）——有人動過 DB 或加密金鑰換掉了（DESIGN §2.9）。
