@@ -58,7 +58,7 @@ guardrails:
         arguments:
           expression: |-
             event.type == "tool_call" && (
-              (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"] && (
+              (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit"] && (
                 (has(event.data.arguments.path) && event.data.arguments.path.matches("\\.woow-issues/"))
                 || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("\\.woow-issues/"))
               ))
@@ -147,7 +147,7 @@ guardrails:
               (event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
                && has(event.data.arguments.command)
                && event.data.arguments.command.matches("(?i)(typesafe|api_key)"))
-              || (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit", "Read", "sys_os_read", "read", "NotebookRead", "NotebookEdit", "Grep", "Glob", "LS"] && (
+              || (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit", "Read", "sys_os_read", "read", "NotebookRead", "Grep", "Glob", "LS"] && (
                    (has(event.data.arguments.path) && event.data.arguments.path.matches("(?i)(typesafe|api_key)"))
                 || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("(?i)(typesafe|api_key)"))
                 || (has(event.data.arguments.notebook_path) && event.data.arguments.notebook_path.matches("(?i)(typesafe|api_key)"))
