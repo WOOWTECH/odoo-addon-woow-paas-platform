@@ -42,6 +42,7 @@ on:
       - "tests/test_llm_credit_worker.py"
       - "tests/test_llm_key_create_guard.py"
       - "src/models/llm_api_key.py"
+      - "tests/test_llm_credit_invalid_review.py"
       - "tests/test_llm_reconcile_candidate.py"
       - "src/services/llm_audit_page.py"
       - "src/services/llm_audit_attempt.py"
@@ -50,6 +51,7 @@ on:
       - "tests/test_llm_audit_attempt.py"
       - "src/models/llm_reconcile_candidate.py"
       - "src/models/llm_credit_order.py"
+      - "src/models/llm_credit_attempt.py"
       - "tests/test_mcp_dependency_smoke.py"
       - "src/requirements.txt"
       # 測試拿代理的參考實作驗章、body 政策與路由白名單（每個 client 方法的路由、身分、
@@ -95,6 +97,7 @@ jobs:
           .venv-llm-services-ci/bin/python tests/test_llm_pricing.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_worker.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_key_create_guard.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_credit_invalid_review.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_credit_evidence.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_balance.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_reconcile_candidate.py -v

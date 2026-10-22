@@ -105,3 +105,4 @@ access_llm_reconcile_candidate_system,LLM I2 state system read,model_woow_paas_p
 access_llm_reconcile_evidence_system,LLM I2 evidence system read,model_woow_paas_platform_llm_reconcile_evidence,base.group_system,1,0,0,0
 access_llm_audit_cursor_system,Audit cursor system read,model_woow_paas_platform_llm_audit_cursor,base.group_system,1,0,0,0
 access_llm_audit_evidence_system,Audit evidence system read,model_woow_paas_platform_llm_audit_evidence,base.group_system,1,0,0,0
+access_llm_credit_attempt_system,Local credit attempt system read,model_woow_paas_platform_llm_credit_attempt,base.group_system,1,0,0,0

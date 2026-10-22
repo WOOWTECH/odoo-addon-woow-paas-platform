@@ -50,6 +50,7 @@ def load_worker():
     constants = [n for n in tree.body if isinstance(n, ast.Assign) and
                  any(isinstance(t, ast.Name) and (t.id.startswith('CREDIT_') or
                      t.id in {'ORDER_MODEL', '_INT8_MAX', '_QUOTA_REJECTIONS'}) for t in n.targets)]
+    guard = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_attempt_guard')
     request_id = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_request_id')
     ns = {'timedelta': timedelta, 'time': time, 'nac': nac, 'ValidationError': ValidationError,
           'llm_redact': redact, '_': lambda s: s, 'safe_code': lambda s: s,
@@ -60,7 +61,9 @@ def load_worker():
           'run_llm_cron': lambda env, *a, **kw: env.runner(*a, **kw),
           'LlmAlert': types.SimpleNamespace(CREDIT_REVIEW='credit_review', CREDIT_BUDGET='credit_budget'),
           'BALANCE_CRON_XMLID': 'balance', '_logger': MagicMock()}
-    ns.update(SUPERUSER_ID=1, EVENT_TABLE='woow_paas_platform_llm_event',
+    ns.update(ATTEMPT_TABLE='woow_paas_platform_llm_credit_attempt',
+              _ISSUE_CAPABILITY=object(), _issue_cr=lambda *a: 'eaf6854d-98a8-4807-a69c-05a7ac656536',
+              SUPERUSER_ID=1, EVENT_TABLE='woow_paas_platform_llm_event',
               ORDER_TABLE='woow_paas_platform_llm_credit_order', math=math,
               _utcnow=datetime.utcnow, LlmAlertInputError=ValidationError)
     common = ast.parse((ROOT / 'src/models/llm_common.py').read_text())
@@ -81,7 +84,7 @@ def load_worker():
     ast_model = ast.ClassDef(name='Worker', bases=[], keywords=[], body=methods, decorator_list=[])
     exceptions = [n for n in tree.body if isinstance(n, ast.ClassDef) and
                   n.name in {'_CreditReservationInvalid', '_CreditClaimDeadline', '_CreditClaimCursor'}]
-    module = ast.fix_missing_locations(ast.Module(body=constants + exceptions + [request_id, ast_model], type_ignores=[]))
+    module = ast.fix_missing_locations(ast.Module(body=constants + exceptions + [guard, request_id, ast_model], type_ignores=[]))
     exec(compile(module, str(ROOT / 'src/models/llm_credit_order.py'), 'exec'), ns)
     return ns['Worker']
 
@@ -99,7 +102,10 @@ class MemoryWorker(Worker):
         self.env.__getitem__.return_value._llm_read.side_effect = lambda: dict(self.runtime)
         self.client = MagicMock()
         self.env.__getitem__.return_value._llm_client.return_value = self.client
-        self.claim = {'id': 1, 'account_id': 7, 'attempt': 1, 'event_id': 9}
+        self.claim = {'id': 1, 'account_id': 7, 'attempt': 1, 'event_id': 9,
+                      'attempt_uuid': 'eaf6854d-98a8-4807-a69c-05a7ac656536'}
+        self.dispatch_claimed = False
+        self.dispatch_lock = threading.Lock()
         self.row = {'state': 'sending', 'attempt': 1, 'source': 'user',
                     'newapi_user_id': 101, 'account_user_id': 101,
                     'account_state': 'active', 'quota': 1562500,
@@ -110,7 +116,16 @@ class MemoryWorker(Worker):
             'id': 101, 'quota': 2 ** 40, 'used_quota': 2 ** 40, 'request_count': 2 ** 40})
         self.client.ap_add_quota.return_value = nac.Ok(request_id='rid-worker')
 
+    def _llm_dispatch_claim(self, claim):
+        with self.dispatch_lock:
+            if self.dispatch_claimed or not self._llm_claimed_row(claim):
+                return False
+            self.dispatch_claimed = True
+            return True
+
     def _llm_claimed_row(self, claim):
+        if claim.get('attempt_uuid') != self.claim['attempt_uuid']:
+            return None
         if self.owned and self.row['state'] == 'sending' and self.row['attempt'] == claim['attempt']:
             return dict(self.row)
         return None
@@ -130,6 +145,23 @@ class MemoryWorker(Worker):
 class TestCreditWorkerLocal(unittest.TestCase):
     def setUp(self):
         self.worker = MemoryWorker()
+
+    def test_verifier_never_requeues_durable_unknown_from_quiet_balance(self):
+        review = self.worker._llm_verify_review = MagicMock(return_value=True)
+        update = self.worker._llm_verify_update = MagicMock(return_value=False)
+        self.assertTrue(self.worker._llm_verify_finish(
+            self.worker.claim, 'paid', terminal_event='not_executed',
+            credit_evidence_kind='quiescent_noop'))
+        review.assert_called_once()
+        update.assert_not_called()
+
+    def test_preupgrade_verifier_still_uses_existing_guarded_update(self):
+        claim = {k: v for k, v in self.worker.claim.items() if k != 'attempt_uuid'}
+        review = self.worker._llm_verify_review = MagicMock()
+        update = self.worker._llm_verify_update = MagicMock(return_value=False)
+        self.assertFalse(self.worker._llm_verify_finish(claim, 'paid'))
+        update.assert_called_once()
+        review.assert_not_called()
 
     def test_guard_precedes_half_open_probe(self):
         self.worker.runtime['guard_tripped'] = True
@@ -157,6 +189,34 @@ class TestCreditWorkerLocal(unittest.TestCase):
         self.assertEqual(self.worker.row['credit_evidence'], 'response')
         self.assertEqual(self.worker.events, ['ok'])
         self.worker.client.ap_add_quota.assert_called_once()
+
+    def test_reentry_while_first_worker_is_reading_cannot_retry_or_post(self):
+        def read(*args, **kwargs):
+            self.worker.send()
+            self.assertEqual(self.worker.events, [])
+            self.assertEqual(self.worker.row['state'], 'sending')
+            return nac.Ok(data={'id': 101, 'quota': 0, 'used_quota': 0, 'request_count': 0})
+        self.worker.client.ap_get_user.side_effect = read
+        self.worker.send()
+        self.worker.client.ap_get_user.assert_called_once()
+        self.worker.client.ap_add_quota.assert_called_once()
+
+    def test_crash_after_entry_never_reopens_dispatch(self):
+        self.worker.client.ap_get_user.side_effect = BaseException('simulated crash')
+        with self.assertRaises(BaseException):
+            self.worker.send()
+        self.worker.client.ap_get_user.side_effect = None
+        self.worker.send()
+        self.assertEqual(self.worker.row['state'], 'sending')
+        self.assertEqual(self.worker.events, [])
+        self.worker.client.ap_add_quota.assert_not_called()
+
+    def test_foreign_uuid_never_gets_or_posts(self):
+        claim = dict(self.worker.claim, attempt_uuid='a002739a-3e6d-4b9a-af01-88d62524e69a')
+        self.worker._llm_send_claimed(claim, 999999999999)
+        self.assertFalse(self.worker.dispatch_claimed)
+        self.worker.client.ap_get_user.assert_not_called()
+        self.worker.client.ap_add_quota.assert_not_called()
 
     def test_zero_snapshot_is_present(self):
         self.worker.client.ap_get_user.return_value = nac.Ok(data={
@@ -384,7 +444,8 @@ class TestCreditClaimDeadlineLocal(unittest.TestCase):
     def test_two_short_waits_commit_owned_retry_event(self):
         db = _ClaimDeadlineMemory(waits=(0.1, 0.1))
         claim = self._claim(db)
-        self.assertEqual(claim, {'id': 500, 'account_id': 7, 'attempt': 2, 'event_id': 2})
+        self.assertEqual(claim, {'id': 500, 'account_id': 7, 'attempt': 2, 'event_id': 2,
+                                 'attempt_uuid': 'eaf6854d-98a8-4807-a69c-05a7ac656536'})
         self.assertEqual(db.order['state'], 'sending')
         self.assertEqual(db.order['attempt'], 2)
         self.assertEqual(db.events[-1]['target_id'], 500)
@@ -432,6 +493,40 @@ class TestCreditClaimDeadlineLocal(unittest.TestCase):
         self.assertEqual(cursor.dictfetchone.call_count, 6)
         self.assertLess(elapsed[0], 30)
         self.assertEqual(worker.env.registry.cursor.call_count, 6)
+
+
+class TestCreditAttemptIssuanceLocal(unittest.TestCase):
+    def setUp(self):
+        tree = ast.parse((ROOT / 'src/models/llm_credit_attempt.py').read_text())
+        issue = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_issue_cr')
+        self.cap = object()
+        ns = {'uuid': __import__('uuid'), 'fields': types.SimpleNamespace(
+            Datetime=types.SimpleNamespace(now=datetime.utcnow)), 'SUPERUSER_ID': 1,
+            'ATTEMPT_TABLE': 'woow_paas_platform_llm_credit_attempt',
+            '_ISSUE_CAPABILITY': self.cap, 'AccessError': PermissionError, '_': lambda s: s}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[issue], type_ignores=[])),
+                     str(ROOT / 'src/models/llm_credit_attempt.py'), 'exec'), ns)
+        self.issue = ns['_issue_cr']
+
+    def test_caller_uuid_is_not_accepted_and_each_issue_is_fresh(self):
+        cr = MagicMock()
+        row = dict(id=123, account_id=456, attempt=2, newapi_user_id=77,
+                   quota=2 ** 40, attempt_uuid='caller-supplied')
+        first = self.issue(cr, row, 999, self.cap)
+        second = self.issue(cr, row, 999, self.cap)
+        self.assertNotEqual(first, second)
+        self.assertEqual(str(__import__('uuid').UUID(first)), first)
+        self.assertEqual(__import__('uuid').UUID(first).version, 4)
+        params = cr.execute.call_args_list[0].args[1]
+        self.assertEqual(params[:7], (123, 456, 2, first, 77, 2 ** 40, 999))
+        cr.commit.assert_not_called()
+
+    def test_serializable_or_foreign_capability_cannot_issue(self):
+        cr = MagicMock()
+        for cap in (None, True, 'internal', {}, object()):
+            with self.assertRaises(PermissionError):
+                self.issue(cr, {}, 1, cap)
+        cr.execute.assert_not_called()
 
 
 class _EventMemory:
