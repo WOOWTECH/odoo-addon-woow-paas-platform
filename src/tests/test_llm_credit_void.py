@@ -13,6 +13,7 @@ from odoo.exceptions import UserError
 from odoo.tests.common import HttpCase, new_test_user, tagged
 
 from ..models.llm_common import _llm_internal
+from ..models.llm_credit_attempt import _ISSUE_CAPABILITY, _issue_cr
 from ..models.llm_credit_order import ORDER_MODEL, _credit_internal
 from ..models.llm_event import LlmIncident
 
@@ -70,8 +71,11 @@ class TestLlmCreditVoid(HttpCase):
             'sending', attempt=1, convert_event_id=event.id,
             lease_until=fields.Datetime.now() + timedelta(minutes=5))
         self.env.flush_all()
+        row = {'id': order.id, 'account_id': self.account.id, 'attempt': 1,
+               'newapi_user_id': order.newapi_user_id, 'quota': order.quota}
+        attempt_uuid = _issue_cr(self.env.cr, row, event.id, _ISSUE_CAPABILITY)
         return {'id': order.id, 'account_id': self.account.id, 'attempt': 1,
-                'event_id': event.id}
+                'event_id': event.id, 'attempt_uuid': attempt_uuid}
 
     def _snapshot(self):
         self.env.flush_all()
@@ -236,6 +240,8 @@ class TestLlmCreditVoid(HttpCase):
             with self.subTest(key=key):
                 self.assertFalse(self.Order._llm_worker_void_pending(
                     dict(claim, **{key: claim[key] + 100000})))
+        self.assertFalse(self.Order._llm_worker_void_pending(
+            dict(claim, attempt_uuid=str(uuid.uuid4()))))
         self.assertEqual(self._snapshot(), before)
         self.assertEqual(order.state, 'sending')
         self.incident.assert_not_called()

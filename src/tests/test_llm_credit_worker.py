@@ -29,6 +29,7 @@ from ..models.llm_credit_order import (
     BALANCE_CRON_XMLID, CREDIT_CRON_XMLID, CREDIT_VERIFY_CRON_XMLID,
     ORDER_MODEL, ORDER_TABLE, _credit_internal,
 )
+from ..models.llm_credit_attempt import ATTEMPT_TABLE
 from ..models.llm_event import EVENT_TABLE
 from ..services import newapi_client as nac
 from .llm_fake_newapi import FakeNewApi, SimulatedCrash
@@ -149,6 +150,8 @@ class TestLlmCreditWorkerCommitted(TransactionCase):
     def _purge_orders(self):
         with self.registry.cursor() as cr:
             if self.order_ids:
+                cr.execute('DELETE FROM ' + ATTEMPT_TABLE + ' WHERE order_id = ANY(%s)',
+                           (self.order_ids,))
                 cr.execute("DELETE FROM %s WHERE id = ANY(%%s) AND source IN ('dr','recharge')"
                            % ORDER_TABLE, (self.order_ids,))
                 cr.execute('DELETE FROM %s WHERE id = ANY(%%s)' % ORDER_TABLE, (self.order_ids,))
@@ -596,11 +599,11 @@ class TestLlmCreditWorkerCommitted(TransactionCase):
         self.assertEqual(row['credit_evidence'], 'quiescent_delta')
         self.assertEqual(self._events()[0]['result'], 'ok')
 
-    def test_verifier_quiescent_noop_requeues_only_with_a_safe_event(self):
+    def test_verifier_quiescent_noop_with_ledger_requires_review(self):
         order_id = self._order()
         # The worker took and persisted its before snapshot, but this request
-        # definitely did not reach new-api. It still becomes unknown because a
-        # generic transport result is never safe to resend without verification.
+        # did not reach fake new-api. Production cannot infer that from a
+        # generic transport result or a quiet balance; late dispatch is possible.
         self.fake.fail_before['ap_add_quota'] = nac.Unknown('transport')
         self._run()
         self.assertEqual(self._row(order_id)['state'], 'unknown')
@@ -609,34 +612,24 @@ class TestLlmCreditWorkerCommitted(TransactionCase):
                            fields.Datetime.now() - timedelta(minutes=5, seconds=1))
         self._verify()
         row = self._row(order_id)
-        self.assertEqual(row['state'], 'paid')
-        self.assertEqual(row['credit_evidence'], 'quiescent_noop')
-        self.assertEqual(self._events()[0]['result'], 'not_executed')
-        self.assertIsNotNone(row['next_attempt_at'])
+        self.assertEqual(row['state'], 'needs_review')
+        self.assertEqual(row['last_error_code'], worker_module.CREDIT_EVIDENCE_CONFLICT)
+        self.assertEqual(self._events()[0]['result'], 'unknown')
+        self.assertIsNone(row['next_attempt_at'])
 
-    def test_retry_after_quiescent_noop_clears_old_request_receipt(self):
+    def test_quiescent_noop_preserves_uncertain_receipt_and_does_not_resend(self):
         order_id = self._order()
-        receipt = 'old-unexecuted-receipt'
-        # Even if a transport layer exposed a request-like identifier, the
-        # quiescent proof below establishes that this attempt did not execute.
-        # Its receipt must not become evidence for the next, new POST.
+        receipt = 'old-uncertain-receipt'
         self.fake.fail_before['ap_add_quota'] = nac.Unknown('transport', request_id=receipt)
         self._run()
-        self.assertEqual(self._row(order_id)['newapi_request_id'], receipt)
         self._verify()
         self._update_order(order_id, verify_first_sample_at=
                            fields.Datetime.now() - timedelta(minutes=5, seconds=1))
         self._verify()
-        self.assertEqual(self._row(order_id)['state'], 'paid')
-
-        def before_retry_post(_user_id, _quota):
-            row = self._row(order_id)
-            self.assertEqual(row['state'], 'sending')
-            self.assertIsNone(row['newapi_request_id'])
-
-        self.fake.before_quota_add = before_retry_post
+        self.assertEqual(self._row(order_id)['state'], 'needs_review')
+        self.assertEqual(self._row(order_id)['newapi_request_id'], receipt)
         self._run()
-        self.assertEqual(self._row(order_id)['state'], 'credited')
+        self.assertFalse(self.fake.quota_additions)
 
     def test_verifier_mismatch_requires_human_review_without_releasing_account(self):
         order_id = self._order()

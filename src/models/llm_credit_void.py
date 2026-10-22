@@ -10,7 +10,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import UserError
 
 from .llm_common import ERR_LLM_INTERNAL
-from .llm_credit_order import ORDER_MODEL, ORDER_TABLE, _credit_internal
+from .llm_credit_order import ORDER_MODEL, ORDER_TABLE, _attempt_guard, _credit_internal
 from .llm_event import EVENT_TABLE, LlmIncident, _begin, _env_on
 
 _logger = logging.getLogger(__name__)
@@ -36,10 +36,10 @@ class LlmCreditVoid(models.Model):
         self.env.cr.execute(
             'SELECT id FROM ' + ORDER_TABLE + " WHERE id = %s AND state = 'sending' "
             'AND account_id = %s AND attempt = %s AND convert_event_id = %s '
-            'AND verify_token IS NULL AND lease_until > %s '
-            'FOR NO KEY UPDATE',
+            'AND verify_token IS NULL AND lease_until > %s AND '
+            + _attempt_guard(ORDER_TABLE) + ' FOR NO KEY UPDATE',
             (claim['id'], claim['account_id'], claim['attempt'], claim['event_id'],
-             fields.Datetime.now()))
+             fields.Datetime.now(), claim.get('attempt_uuid')))
         row = self.env.cr.fetchone()
         order = self.sudo().browse(row[0] if row else [])
         order.invalidate_recordset()

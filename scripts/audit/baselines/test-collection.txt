@@ -486,6 +486,7 @@
 3	test_llm_client_hardening.TestLlmConfigChange
 3	test_llm_client_hardening.TestLlmConnectionTest
 13	test_llm_client_hardening.TestLlmSwr
+13	test_llm_credit_attempt.TestLlmCreditAttemptCommitted
 7	test_llm_credit_concurrency.TestLlmCreditAccountingCommitted
 7	test_llm_credit_order.TestLlmCreditFoundation
 20	test_llm_credit_order.TestLlmCreditOrderSchema
