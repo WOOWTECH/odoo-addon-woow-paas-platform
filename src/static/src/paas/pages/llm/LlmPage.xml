@@ -13,6 +13,21 @@
         <div class="o_woow_llm_price_notice__text">
           <h2 t-att-id="'llm_price_notice_' + notice_index" t-esc="notice.title"/>
           <p t-esc="notice.body_text"/>
+          <div class="o_woow_llm_price_notice__changes">
+            <h3 t-esc="priceNoticeChangesLabel"/>
+            <article t-foreach="priceNoticeRows(notice)" t-as="change" t-key="change.key"
+                     class="o_woow_llm_price_notice__model">
+              <h4 t-esc="change.model"/>
+              <div class="o_woow_llm_price_notice__rate" t-foreach="change.rates" t-as="rate" t-key="rate.id">
+                <span class="o_woow_llm_price_notice__rate_label" t-esc="rate.label"/>
+                <span class="o_woow_llm_price_notice__rate_value">
+                  <span class="o_woow_llm_price_notice__side"><span t-esc="priceNoticeBeforeLabel"/> <b t-esc="rate.before"/> <span t-esc="rate.unit"/></span>
+                  <span class="o_woow_llm_price_notice__side"><span t-esc="priceNoticeAfterLabel"/> <b t-esc="rate.after"/> <span t-esc="rate.unit"/></span>
+                </span>
+              </div>
+            </article>
+          </div>
+          <p class="o_woow_llm_price_notice__effective"><b t-esc="priceNoticeEffectiveLabel"/> <time t-att-datetime="priceNoticeEffectiveIso(notice)" t-esc="priceNoticeEffectiveTime(notice)"/> <span t-esc="priceNoticeTimezoneLabel"/></p>
           <a href="#/llm/models" t-esc="priceNoticeModelsLabel"/>
         </div>
       </section>

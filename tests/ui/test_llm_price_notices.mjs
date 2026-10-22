@@ -16,6 +16,9 @@ const notice = () => ({
   not_before: 1800000000, timezone: "Asia/Taipei", unit: "points_per_million_tokens_or_per_call",
   changes: [{ model: "model/a", mode: "fixed", before: { per_call: "1" }, after: { per_call: "2" } }],
 });
+const ratioNotice = () => ({ ...notice(), changes: [{ model: "model/ratio", mode: "ratio",
+  before: { input: "0.1", output: "0.2", cache_read: "0.03", cache_write: "0.04" },
+  after: { input: "0.5", output: "0.6", cache_read: "0.07", cache_write: "0.08" } }] });
 const hooks = { mounted: [], unmount: [], update: [] };
 globalThis.__noticeHooks = hooks;
 globalThis.__noticeService = llmService;
@@ -71,6 +74,22 @@ test("malformed and oversized DTOs fail closed; valid canonical schema and versi
   assert.deepEqual(priceNoticeDtos({ notices: [notice()] }), []);
   assert.equal(priceNoticeDtos([notice(), notice()]).length, 1);
   assert.equal(priceNoticeDtos([{ ...notice(), version: "v1" }])[0].version, "v1");
+});
+
+test("notice rows preserve exact rates, mode units, and Taipei effective time", () => {
+  globalThis.__noticeRpc = async () => ({ notices: [] });
+  const instance = page();
+  const fixed = instance.priceNoticeRows(notice())[0];
+  assert.deepEqual(fixed.rates, [{ id: "per_call", label: "Per call", unit: "points per call", before: "1", after: "2" }]);
+  const ratio = instance.priceNoticeRows(ratioNotice())[0];
+  assert.deepEqual(ratio.rates.map(rate => [rate.id, rate.before, rate.after]), [
+    ["input", "0.1", "0.5"], ["output", "0.2", "0.6"],
+    ["cache_read", "0.03", "0.07"], ["cache_write", "0.04", "0.08"],
+  ]);
+  assert.ok(ratio.rates.every(rate => rate.unit === "points per million tokens"));
+  assert.equal(instance.priceNoticeEffectiveTime(notice()), "2027/01/15 16:00");
+  assert.equal(instance.priceNoticeEffectiveIso(notice()), "2027-01-15T08:00:00.000Z");
+  hooks.unmount.at(-1)();
 });
 
 test("direct entry to every tab fetches the shared banner; focus clears immediately and withdrawal wins over old responses", async () => {
@@ -142,7 +161,12 @@ test("real OWL renders hostile DTOs as text above all tabs and removes empty ban
       const banner = view.locator(".o_woow_llm_price_notice");
       await banner.waitFor();
       assert.equal(await banner.locator("h2").textContent(), notice().title);
-      assert.equal(await banner.locator("p").textContent(), notice().body_text);
+      assert.equal(await banner.locator("p").first().textContent(), notice().body_text);
+      assert.equal(await banner.locator("time").textContent(), "2027/01/15 16:00");
+      assert.equal(await banner.locator("time").getAttribute("datetime"), "2027-01-15T08:00:00.000Z");
+      assert.match(await banner.locator(".o_woow_llm_price_notice__effective").textContent(), /Taipei time/);
+      assert.match(await banner.locator(".o_woow_llm_price_notice__model").textContent(), /model\/a.*1.*2.*points per call/s);
+      assert.equal(await banner.locator(".o_woow_llm_price_notice__side").count(), 2);
       assert.equal(await banner.locator("script,img,p a").count(), 0);
       assert.equal(await banner.locator("a").getAttribute("href"), "#/llm/models");
       assert.equal(await banner.evaluate(el => !!(el.compareDocumentPosition(document.querySelector("nav")) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
@@ -157,6 +181,18 @@ test("real OWL renders hostile DTOs as text above all tabs and removes empty ban
         window.__noticeService.fetchPriceNotices = async () => ({ success: true, data: { notices: [dto] } });
       }, priceNoticeDtos([notice()])[0]);
     }
+    await view.evaluate(async dto => {
+      window.__noticeService.fetchPriceNotices = async () => ({ success: true, data: { notices: [dto] } });
+      window.__app = new owl.App(window.__noticePageClass, { templates: window.__noticeTemplate, props: { tab: "models" } });
+      await window.__app.mount(document.querySelector("#app"));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, priceNoticeDtos([ratioNotice()])[0]);
+    const ratioBanner = view.locator(".o_woow_llm_price_notice");
+    for (const label of ["Input", "Output", "Cache read", "Cache write", "0.03", "0.08", "points per million tokens"]) {
+      assert.ok((await ratioBanner.textContent()).includes(label), `missing ${label}`);
+    }
+    assert.equal(await ratioBanner.locator(".o_woow_llm_price_notice__rate").count(), 4);
+    await view.evaluate(() => window.__app.destroy());
     for (const fail of [false, true]) {
       await view.evaluate(async fail => {
         window.__noticeService.fetchPriceNotices = async () => {

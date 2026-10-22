@@ -95,6 +95,53 @@ export class LlmPage extends Component {
 
   get priceNoticeModelsLabel() { return _t("Models & Pricing"); }
 
+  get priceNoticeChangesLabel() { return _t("Price changes"); }
+  get priceNoticeBeforeLabel() { return _t("Before"); }
+  get priceNoticeAfterLabel() { return _t("After"); }
+  get priceNoticeEffectiveLabel() { return _t("Effective from"); }
+  get priceNoticeTimezoneLabel() { return _t("Taipei time"); }
+
+  priceNoticeRows(notice) {
+    return notice.changes.map((change, index) => {
+      const fields = change.mode === "fixed"
+        ? [{ id: "per_call", label: _t("Per call"), unit: _t("points per call") }]
+        : [
+          { id: "input", label: _t("Input"), unit: _t("points per million tokens") },
+          { id: "output", label: _t("Output"), unit: _t("points per million tokens") },
+          { id: "cache_read", label: _t("Cache read"), unit: _t("points per million tokens") },
+          { id: "cache_write", label: _t("Cache write"), unit: _t("points per million tokens") },
+        ];
+      return {
+        key: `${notice.id}-${index}`,
+        model: change.model,
+        rates: fields.map((field) => ({
+          id: field.id,
+          label: field.label,
+          unit: field.unit,
+          before: change.before[field.id],
+          after: change.after[field.id],
+        })),
+      };
+    });
+  }
+
+  priceNoticeEffectiveTime(notice) {
+    const date = new Date(notice.not_before * 1000);
+    if (!Number.isFinite(date.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(date).reduce((values, part) => {
+      if (part.type !== "literal") values[part.type] = part.value;
+      return values;
+    }, {});
+    return `${parts.year}/${parts.month}/${parts.day} ${parts.hour}:${parts.minute}`;
+  }
+
+  priceNoticeEffectiveIso(notice) {
+    return new Date(notice.not_before * 1000).toISOString();
+  }
+
   get currentTab() {
     return normalizeLlmTab(this.props.tab);
   }

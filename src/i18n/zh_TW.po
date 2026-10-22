@@ -28591,3 +28591,43 @@ msgid ""
 "Usage is checked again when you confirm and on every retry. The confirmation\n"
 "                        is valid for 10 minutes and only for exactly this change."
 msgstr "確認時與每次重試都會重新檢查用量。確認在 10 分鐘內有效，而且只適用於這一項變更。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "Price changes"
+msgstr "價格調整"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "Before"
+msgstr "調整前"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "After"
+msgstr "調整後"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "Effective from"
+msgstr "生效時間"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "Taipei time"
+msgstr "台北時間"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "Per call"
+msgstr "每次呼叫"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "points per call"
+msgstr "點／次"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js
+msgid "points per million tokens"
+msgstr "點／百萬 Token"
