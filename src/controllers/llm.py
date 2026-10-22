@@ -234,6 +234,7 @@ class LlmController(HiddenChainMixin, Controller):
     @route('/api/llm/account/settings', auth='user', methods=['POST'], type='json')
     def llm_account_settings(self, low_balance_threshold=None, **kw) -> dict[str, Any]:
         def handler(partner):
+            request.env[ACCOUNT_MODEL]._llm_account_for_partner(partner)._llm_require_not_closed()
             result = request.env['woow_paas_platform.llm_notification']._llm_update_settings(
                 partner, low_balance_threshold)
             if not result:
@@ -244,6 +245,7 @@ class LlmController(HiddenChainMixin, Controller):
     @route('/api/llm/account/report_not_me', auth='user', methods=['POST'], type='json')
     def llm_account_report_not_me(self, token=None, **kw) -> dict[str, Any]:
         def handler(partner):
+            request.env[ACCOUNT_MODEL]._llm_account_for_partner(partner)._llm_require_not_closed()
             if not request.env['woow_paas_platform.llm_notification']._llm_report_not_me(
                     partner, token):
                 raise LlmError(ERR_LLM_NOT_ME_INVALID)
