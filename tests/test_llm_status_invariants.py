@@ -151,13 +151,14 @@ class TestStatusInvariants(unittest.TestCase):
                    if isinstance(node, ast.ImportFrom)]
         self.assertEqual(imports, ['dataclasses'])
         self.assertFalse(any(isinstance(node, ast.Import) for node in ast.walk(tree)))
-        # No cron/model/HTTP integration or imports through Odoo package init.
+        # The only authorized consumer is the separate, inactive monitor slice.
         root = SOURCE.parents[1]
         for directory in ('models', 'controllers', 'data'):
             self.assertTrue((root / directory).is_dir())
             for file in (root / directory).rglob('*'):
                 if file.suffix in ('.py', '.xml'):
-                    self.assertNotIn('llm_status_invariants', file.read_text())
+                    if file.name != 'llm_status_monitor.py':
+                        self.assertNotIn('llm_status_invariants', file.read_text())
         self.assertNotIn('llm_status_invariants',
                          SOURCE.with_name('__init__.py').read_text())
 
