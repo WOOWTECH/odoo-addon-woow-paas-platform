@@ -53,8 +53,9 @@ jobs:
   full-suite:
     runs-on: ubuntu-latest
     # 單一 job 硬上限是 3 小時（job container entrypoint = sleep 10800）；
-    # 實測全套約 6 分鐘，留大餘裕但不放到無限。
-    timeout-minutes: 45
+    # 2026-10-22 develop run #25121 在 45m07s 到達原時限，測試仍未產生 summary。
+    # 留有界的執行餘裕；只有完整 summary 與後續 C0/C2/C3/C4/C5 通過才算全綠。
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
