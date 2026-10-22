@@ -15,6 +15,12 @@ from typing import Any, Mapping
 
 from .settings import QUOTA_PER_POINT, Settings
 
+#: Proxy-only metadata, covered by the existing signed body hash.
+CONVERSION_ATTEMPT_FIELD = "woow_conversion_attempt_id"
+_CONVERSION_ATTEMPT_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z", re.ASCII
+)
+
 #: `POST /api/user/manage` value range: 1 quota .. 10,000 points.
 MANAGE_MAX_VALUE = 10_000 * QUOTA_PER_POINT  # 156,250,000
 
@@ -136,7 +142,14 @@ def user_create(body: dict, ctx: PolicyContext) -> dict:
 
 def manage_add_quota(body: dict, ctx: PolicyContext) -> dict:
     """`POST /api/user/manage`: add_quota + mode add + bounded value, only."""
-    _exact_keys(body, {"id", "action", "mode", "value"}, "manage_fields")
+    keys = {"id", "action", "mode", "value"}
+    if CONVERSION_ATTEMPT_FIELD in body:
+        keys.add(CONVERSION_ATTEMPT_FIELD)
+        attempt = body[CONVERSION_ATTEMPT_FIELD]
+        if (ctx.identity != "ap" or type(attempt) is not str
+                or not _CONVERSION_ATTEMPT_RE.fullmatch(attempt)):
+            raise PolicyDenied("conversion_attempt")
+    _exact_keys(body, keys, "manage_fields")
     target = _int_in(body["id"], 1, 2_147_483_647, "manage_id")
     if body["action"] != "add_quota":
         raise PolicyDenied("manage_action")
