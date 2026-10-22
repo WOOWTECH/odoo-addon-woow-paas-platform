@@ -45,6 +45,9 @@ export class LlmPage extends Component {
   };
 
   setup() {
+    this.priceNotices = useState({ items: [] });
+    this.priceNoticeGeneration = 0;
+    this.onNoticeFocus = () => this.refreshPriceNotices();
     this.tabsRef = useRef("tabs");
     this.llm = useState(llmService);
     this.docsKeyHandoff = createLlmDocsKeyHandoff();
@@ -55,21 +58,42 @@ export class LlmPage extends Component {
     this.onHashChange = () => this.consumeNotMeQuery();
     this.scrolledTab = null;
     onMounted(() => {
+      this.refreshPriceNotices();
+      window.addEventListener("focus", this.onNoticeFocus);
       this.revealActiveTab();
       window.addEventListener("hashchange", this.onHashChange);
       this.consumeNotMeQuery();
     });
     onPatched(() => this.revealActiveTab());
     onWillUnmount(() => {
+      this.priceNoticeGeneration++;
+      this.priceNotices.items = [];
+      window.removeEventListener("focus", this.onNoticeFocus);
       window.removeEventListener("hashchange", this.onHashChange);
       this.docsKeyHandoff.clear();
       this.clearNotMe();
     });
     onWillUpdateProps((nextProps) => {
+      if (nextProps.tab !== this.props.tab) this.refreshPriceNotices();
       if (normalizeLlmTab(nextProps.tab) !== "docs") this.docsKeyHandoff.clear();
       if (normalizeLlmTab(nextProps.tab) !== "overview") this.clearNotMe();
     });
   }
+
+  async refreshPriceNotices() {
+    const generation = ++this.priceNoticeGeneration;
+    // Withdraw immediately while revalidating; failures never keep an old notice.
+    this.priceNotices.items = [];
+    try {
+      const result = await llmService.fetchPriceNotices();
+      if (generation !== this.priceNoticeGeneration) return;
+      this.priceNotices.items = result?.success ? result.data.notices : [];
+    } catch {
+      // Transport failures are silent and do not block any of the six tabs.
+    }
+  }
+
+  get priceNoticeModelsLabel() { return _t("Models & Pricing"); }
 
   get currentTab() {
     return normalizeLlmTab(this.props.tab);

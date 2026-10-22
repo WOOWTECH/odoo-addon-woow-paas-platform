@@ -316,6 +316,11 @@ class LlmController(HiddenChainMixin, Controller):
                          ._llm_delete_key(partner, key_id, confirm_name, user=request.env.user,
                                           real_ip=_peer_ip()))
 
+    @route('/api/llm/price-notices', auth='user', methods=['POST'], type='json', readonly=True)
+    def llm_price_notices(self) -> dict[str, Any]:
+        """Dormant presentation contract: never read draft campaigns or recipients."""
+        return {'notices': []}
+
     @route('/api/llm/models', auth='user', methods=['POST'], type='json')
     def llm_models(self) -> dict[str, Any]:
         return self._run('models', lambda partner: request.env['woow_paas_platform.llm_swr_cache']

@@ -7,6 +7,16 @@
         <p t-esc="subtitle"/>
       </div>
 
+      <section t-foreach="priceNotices.items" t-as="notice" t-key="notice.id"
+               class="o_woow_llm_price_notice" t-att-aria-labelledby="'llm_price_notice_' + notice_index">
+        <span class="o_woow_llm_price_notice__icon" aria-hidden="true"><i class="mdi mdi-information-outline"/></span>
+        <div class="o_woow_llm_price_notice__text">
+          <h2 t-att-id="'llm_price_notice_' + notice_index" t-esc="notice.title"/>
+          <p t-esc="notice.body_text"/>
+          <a href="#/llm/models" t-esc="priceNoticeModelsLabel"/>
+        </div>
+      </section>
+
       <!-- 子頁：平台既有的 .o_woow_tabs（手機可橫捲）；切換只改 hash（見 JS setTab）。
            是改網址的導覽、不是 ARIA tabs（見 JS 檔頭），所以用 nav＋aria-current，不用 role=tab。 -->
       <nav class="o_woow_tabs o_woow_llm_page__tabs" t-ref="tabs" t-att-aria-label="tabsLabel">
