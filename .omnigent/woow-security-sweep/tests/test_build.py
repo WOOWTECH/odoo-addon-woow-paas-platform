@@ -30,5 +30,24 @@ class TestConfigInSync(unittest.TestCase):
         self.assertEqual(len(build.FILE_TOOLS), len(set(build.FILE_TOOLS)))
 
 
+class TestHostAgnostic(unittest.TestCase):
+    """agent 照著跑的文件不得綁主機（#1934：排程改在 pi3，workspace 不是 /home/elmo）。"""
+
+    RUNTIME_DOCS = ["AGENTS.md", *sorted(str(p.relative_to(SWEEP)) for p in SWEEP.glob("skills/*/SKILL.md"))]
+
+    def test_runtime_docs_use_ws_placeholder(self):
+        for rel in self.RUNTIME_DOCS:
+            text = (SWEEP / rel).read_text(encoding="utf-8")
+            with self.subTest(doc=rel):
+                self.assertNotIn("/home/elmo", text)
+
+    def test_runtime_docs_pin_python312(self):
+        # collect.py 需要 tarfile.data_filter；裸 python3 在 pi3 是 3.11.2
+        for rel in self.RUNTIME_DOCS:
+            text = (SWEEP / rel).read_text(encoding="utf-8")
+            with self.subTest(doc=rel):
+                self.assertNotRegex(text, r"python3 [<~/]")
+
+
 if __name__ == "__main__":
     unittest.main()

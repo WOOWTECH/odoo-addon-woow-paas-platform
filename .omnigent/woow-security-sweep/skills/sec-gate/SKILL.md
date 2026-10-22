@@ -5,13 +5,15 @@ description: woow-security-sweep 的 Jev 判斷閘門：jev_gate.py 的 triage�
 
 # sec-gate
 
+`<WS>`＝runner workspace（取得方式見 AGENTS.md「固定路徑」），指令裡一律代入字面值。
+
 Jev 只回答問題（choice／score／noul ＋ 信心值），**路由由 jev_gate.py 的程式碼決定**：
 硬規則 → baseline → Jev 答案 → `gates.yaml` 門檻。⛔ 不要自己讀 Jev 的原始答案再「覺得」該怎麼走。
 
 所有指令共用前綴（下稱 `JG`）：
 
 ```bash
-python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-gate/scripts/jev_gate.py --state-dir /home/elmo/woow-repos/.omnigent-runtime/woow-security-sweep
+python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-gate/scripts/jev_gate.py --state-dir <WS>/.omnigent-runtime/woow-security-sweep
 ```
 
 ## 閘門 A：triage

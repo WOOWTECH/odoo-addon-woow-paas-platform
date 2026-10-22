@@ -56,40 +56,53 @@ collect.py 只從 private 檔取上面五個 key，private 不能放寬 public �
 - `gates.yaml` 釘版本號（`jev-1.13.0`），⛔ 不用 `jev-latest`：alias 換版後答案會變、門檻失效。
   換版要重跑 calibrate
 - 問題一律英文：官方文件註明 CJK 準確度較差
-- 冒煙測試：`python3 skills/sec-gate/scripts/jev_gate.py models`
+- 冒煙測試：`python3.12 skills/sec-gate/scripts/jev_gate.py models`
 
-## 上線步驟（骨架 merge 後）
+## 上線步驟
 
-1. 更新 runner 用的主 checkout：`/home/elmo/woow-repos/paas/woow_paas_platform` 切到最新 develop
-   （AGENTS.md 與 skills 用這個絕對路徑呼叫腳本）
-2. 本機驗收：`python3 .omnigent/woow-security-sweep/build.py --check`、
-   `python3 -m unittest discover -s .omnigent/woow-security-sweep/tests`
-3. 註冊 agent：在 `/home/elmo/woow-repos` 執行
-   `omnigent run /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep --server <url>`，
-   手動餵一次 prompt 試跑；記下 `sys_agent_list` 裡 `woow_security_sweep` 的 `agent_id`
-4. 建排程（`sys_scheduled_task_create`），每組 repo 一個排程：
+bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIGENT_RUNNER_WORKSPACE` 取得（#1934）。
+
+| 主機 | host_id | `<WS>` |
+|---|---|---|
+| UbuntuServer-59mqj | `88ca3ca80a434609a3ed3a35d7bac513` | `/home/elmo/woow-repos` |
+| Pi Web ChatGPT (pi3) | `f3cb408633ad4ddabcbabec0401c41d6` | `/data/pi-agent/home/woow-repos` |
+
+1. **主機環境**（換主機時逐項確認）：
+   - `python3.12` 可用且裝了 PyYAML（`collect.py` 需要 `tarfile.data_filter`，3.11.2 不行）
+   - `gitleaks`（釘 8.30.1，對過官方 checksums）、`uvx`（semgrep／bandit 由它拉）
+   - Jev key 在 `~/.config/typesafe/api_key`（`chmod 600`）；`claude` 已登入
+   - `<WS>/WOOW/` 下有要掃的 repo；`<WS>/.omnigent-runtime/woow-security-sweep` 是 state
+     （換主機要整個搬過去，否則人工決定與 carryover 會遺失）
+2. 更新該主機的主 checkout：`<WS>/paas/woow_paas_platform` 切到最新 develop
+   （AGENTS.md 與 skills 用這個路徑呼叫腳本）
+3. 本機驗收：`python3.12 .omnigent/woow-security-sweep/build.py --check`、
+   `python3.12 -m unittest discover -s .omnigent/woow-security-sweep/tests`
+4. 註冊 agent：`sys_session_create(config_path="paas/woow_paas_platform/.omnigent/woow-security-sweep")`
+   （路徑相對於 workspace），手動餵一次 prompt 試跑；記下 `agent_id`
+5. 建排程（`sys_scheduled_task_create`）：
 
    | 欄位 | 值 |
    |---|---|
-   | `agent_id` | 第 3 步的 id（bundle 每次改版重新上傳都會換 id ⇒ 要 update 排程） |
-   | `rrule` | `FREQ=DAILY;BYHOUR=8;BYMINUTE=30`（上班前跑完，Inbox 問題有人接） |
+   | `agent_id` | 第 4 步的 id（bundle 每次改版重新上傳都會換 id ⇒ 要 update 排程） |
+   | `rrule` | 每日 `FREQ=WEEKLY;BYDAY=TU,WE,TH,FR,SA,SU;BYHOUR=8;BYMINUTE=30`；每週 `FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=30` |
    | `timezone` | `Asia/Taipei` |
-   | `workspace` | `/home/elmo/woow-repos` |
+   | `workspace` | 該主機的 `<WS>` |
+   | `host_id` | 該主機的 host_id（有給 workspace 就必填，否則 400） |
    | `permission_mode` | `auto` |
    | `max_cost_usd` | `30`（config 另有 60 USD 硬上限） |
    | `prompt` | 見下 |
 
    ```yaml
    targets:
-     - /home/elmo/woow-repos/WOOW/woow_line_base
-     - /home/elmo/woow-repos/WOOW/Woow_odoo_line_liff
-     - /home/elmo/woow-repos/WOOW/woow_odoo_livechat_line
-   mode: incremental
-   deep_review: auto
+     - <WS>/WOOW/woow_line_base
+     - <WS>/WOOW/Woow_odoo_line_liff
+     - <WS>/WOOW/woow_odoo_livechat_line
+   mode: incremental        # 每週：full
+   deep_review: auto        # 每週：always
    roster: {review: claude-native, fix: pi}
    ```
 
-   另開一個每週排程（`FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=0`）帶 `mode: full`、`deep_review: always`。
+   週一只跑每週那支（全量），避免兩支排程同時推進同一份 state。
 
 ## 已知限制與風險
 
