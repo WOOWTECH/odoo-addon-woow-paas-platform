@@ -1,0 +1,36 @@
+# woow-security-sweep 的 Jev 閘門設定（單一真相；jev_gate.py 讀這個檔）。
+#
+# ⚠ 門檻是 Phase 1（shadow）的起始猜測值，不是校準結果。
+#   跑 `jev_gate.py calibrate` 累積到每個閘門 ≥ 50 筆後再依實際一致率調整。
+
+# shadow：Jev 照常判斷並記錄，但 effective 一律是 human（所有動作由人決定）。
+# enforce：effective = 程式碼依門檻算出的 proposed。⛔ 未經人拍板不要改。
+mode: shadow
+
+# 調門檻時要釘版本號，不要用 jev-latest／jev-preview 這種會移動的 alias
+# （alias 換版後答案會變，舊門檻就失效）。
+model: jev-1.13.0
+
+api:
+  base_url: https://api.typesafe.ai
+  timeout_seconds: 30
+  max_attempts: 3          # 429／529 以指數退避重試
+
+thresholds:
+  # 閘門 A（triage）
+  min_confidence: 0.5      # verdict 信心低於此值 ⇒ human
+  drop_fp_confidence: 0.9  # 判誤報且信心 ≥ 此值、嚴重度 ≤ medium ⇒ drop
+  fix_confidence: 0.7      # 判成立且信心 ≥ 此值 ⇒ 才考慮 auto_fix
+  autofix_noul: 0.7        # 「可自動修」機率 ≥ 此值 ⇒ auto_fix，否則 issue_only
+  injection_noul: 0.5      # prompt injection 跡象 ≥ 此值 ⇒ human
+  # 閘門 C（ready）
+  ready_addresses_noul: 0.8
+  ready_unrelated_noul: 0.3
+  ready_weakens_noul: 0.2
+  ready_injection_noul: 0.2
+  max_fix_attempts: 2
+
+# severity 等級（score 題的 criteria 順序；index 即等級）
+severity_levels: [info, low, medium, high, critical]
+# 等級 ≥ 此值走 private（GitHub Security Advisory），不開公開 PR（揭露政策 C）
+private_disclosure_min_level: high

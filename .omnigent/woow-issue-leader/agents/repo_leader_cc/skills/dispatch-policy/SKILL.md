@@ -67,8 +67,8 @@ session-scoped agent）；會撞的是同一 parent 下的 `sys_session_send` ti
 | purpose | harness | model／effort | 定位 | 寫權 |
 |---|---|---|---|---|
 | `repo-leader` | claude-native／pi | `claude-fable-5-1[1m]`／`gpt-6-astra`；xhigh | issue 全程與派工 | ⛔ 不寫產品碼 |
-| `implement` | **固定 pi** | `gpt-6.1-sol`；xhigh | 多檔重構、寫測試 | ✅ |
-| `review` | **固定 claude-native** | `claude-sonnet-5-5[1m]`；high | 審 diff | ⛔ 唯讀 |
+| `implement` | pi／claude-native | `gpt-6.1-sol`／`claude-fable-5-1[1m]`；xhigh | 多檔重構、寫測試 | ✅ |
+| `review` | claude-native／pi | `claude-sonnet-5-5[1m]`／`gpt-6-astra`；high | 審 diff | ⛔ 唯讀 |
 | `explore`（＝`search`） | pi | `gpt-6-luna`；high | recon／lookup | ⛔ 唯讀 |
 | `tracker`（＝`triage`） | pi | `gpt-5.6-terra`；high | 六 repo `tea` 對帳、查重、開單 | ✅（只寫產物） |
 | `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5-5[1m]`；xhigh | kubectl／deploy-stg／sandbox | ✅ |
@@ -79,9 +79,17 @@ model／effort 用對照表的預設；要覆寫就由 `generate-worker.py` 帶 
 
 硬規則：
 
-- **實作固定 pi ⇒ 覆核固定 claude-native（單向）**，跨 vendor 自動成立。產生器會拒絕
-  `implement + claude-native`：上游 `worktree_guard` 對 Claude 原生 Edit／Write 必帶的
-  絕對 `file_path` 一律 DENY，implement_cc 實測不能改檔。
+- **implement 與 review 跨 vendor 配對**（#1729 D1=B）：正常 `implement pi ⇒ review
+  claude-native`、`implement claude-native ⇒ review pi`。pi 額度池不可用時才准用降級模式
+  `implement claude-native ⇒ review claude-native`，三條件缺一不可：reviewer model 與
+  implementer 不同、PR body 第一段標「⚠ 同 vendor 覆核（pi 池不可用）」、掛 `pr-open` 前在 issue
+  留言貼覆核摘要讓人再看一眼（細節見 AGENTS.md「跨 vendor 覆核」）。⚠ 產生器**不擋**同 vendor
+  組合——這是紀律規則；派 reviewer 的工單必帶「implementer harness／model」兩欄。
+- **implement + claude-native 不掛上游 `worktree_guard`**：它對 Claude 原生 Edit／Write 必帶的
+  絕對 `file_path` 一律 DENY；改由 `P-path`（放行 worktree 前綴下的絕對路徑）＋
+  `block_working_dir_changes` 守 worktree。implement + pi 三條都掛。
+- **implement + claude-native 的 `cost_budget` 只有 350 USD 硬上限、不設 ask**（#1729 D2）：撞頂
+  時 worker 會 DENY 每一輪工具呼叫並回報 ⇒ 標 `agent-status:blocked`＋留言貼原文，⛔ 不重派。
 - **`ops_k8s` 固定 claude-native**。pi 沒有 hook 機制（`pi --help` 完全沒有 hook），換成 pi
   會讓 dispatcher 失效 ⇒ repo 的 `kubectl-ns-guard` 拿不回來。產生器會直接拒絕 `ops_k8s + pi`。
 - **claude 家族只吃 id 含 `claude` 的 model**：`opus` / `sonnet` / `fable` 這些 CLI alias

@@ -331,4 +331,5 @@ class TestLlmSuspensionManagementRace(TransactionCase):
         with self.registry.cursor() as cr:
             cr.execute('SELECT state,disabled_by,not_me_disabled_notice_id '
                        'FROM woow_paas_platform_llm_api_key WHERE id=%s', (self.key_id,))
-            self.assertEqual(cr.fetchone(), ('disabled', 'suspend', 32))
+            # Quarantine must not turn a prior user disable into a restorable key.
+            self.assertEqual(cr.fetchone(), ('disabled', 'user', 32))

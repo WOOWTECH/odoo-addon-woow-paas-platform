@@ -337,11 +337,21 @@ class LlmAccount(models.Model):
 
     @api.model
     def _llm_account_for_partner(self, partner):
-        """partner 的未關閉 AI 帳戶（sudo；呼叫端傳入的 partner 一律是 request.env.user 的）。"""
+        """Prefer the open account, otherwise return the latest closed account.
+
+        Closed history must remain visible to state and mutation gates (LLM-13).
+        Only an explicit backoffice reopen may create a successor account.
+        """
         if not partner:
             return self.sudo().browse()
-        return self.sudo().search(
-            [('partner_id', '=', partner.id), ('state', '!=', 'closed')], limit=1)
+        Account = self.sudo()
+        return Account.search(
+            [('partner_id', '=', partner.id), ('state', '!=', 'closed')], limit=1
+        ) or Account.search([('partner_id', '=', partner.id)], order='id desc', limit=1)
+
+    def _llm_require_not_closed(self):
+        if self and self.state == 'closed':
+            raise LlmError(ERR_LLM_CLOSED)
 
     def _llm_require_active(self):
         """非 active 的帳戶 ⇒ 對應的 ``LlmError``。"""
@@ -560,14 +570,15 @@ class LlmAccount(models.Model):
         那筆回 ``llm_provisioning``：這是**預期結果**，前端照常輪詢 ``/api/llm/state``（下一個
         請求是新的交易、看得到那一列）。``TestLlmActivateRace`` 用兩條真連線驗。
         """
+        Account = self.sudo()
+        existing = Account._llm_account_for_partner(partner)
+        existing._llm_require_not_closed()
         current = self.env[TERMS_MODEL]._llm_current()
         if current is None:
             raise LlmError(ERR_LLM_TOS_UNAVAILABLE)
         # 沒帶、或帶的不是目前 published 的版本（舊版、亂填）：都是「還沒同意目前的條款」（LLM-04 AC1）。
         if clean_version(tos_version) != current.version:
             raise LlmError(ERR_LLM_TOS_REQUIRED, current_version=current.version)
-        Account = self.sudo()
-        existing = Account._llm_account_for_partner(partner)
         if existing:
             return existing
         config = llm_config(self.env)
@@ -616,7 +627,7 @@ class LlmAccount(models.Model):
     def _llm_accept_terms(self, partner, tos_version, user, real_ip):
         """同意目前 published 的條款版本（DESIGN §6.4-3）。回 ``{'tos': …}``（同 ``/api/llm/state``）。
 
-        * 沒有未關閉的帳戶 ⇒ ``llm_not_activated``（還沒開通的人走 ``activate``，它本身就記同意）。
+        * 沒有帳戶 ⇒ ``llm_not_activated``；只有已關閉帳戶 ⇒ ``llm_closed``。
         * 沒帶版本 ⇒ ``llm_tos_required``；帶的不是目前的版本（對話框開著的時候又改版了）⇒
           ``llm_tos_outdated``＋``current_version``，前端重新讀條款。
         * 已經同意的就是目前的版本 ⇒ 什麼都不寫（不是新的同意）。
@@ -627,6 +638,7 @@ class LlmAccount(models.Model):
         （或被重播）的那一次不會留下「同意了」的紀錄。
         """
         account = self._llm_account_for_partner(partner)
+        account._llm_require_not_closed()
         if not account:
             raise LlmError(ERR_LLM_NOT_ACTIVATED)
         current = self.env[TERMS_MODEL]._llm_current()

@@ -87,6 +87,9 @@ def managed_quota_report(namespace: str, quota_items: Iterable[Dict[str, Any]],
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "namespace_exists": None, "available": False,
         "reason": reason or "managed_quota_not_found", "hard": {}, "used": {},
+        # #1781：PUT／POST 收 ``pvc_limit``。鍵一定存在、與可用性無關（舊 operator 沒有這個鍵，
+        # 而且會靜默忽略 ``pvc_limit``、照樣寫 10——平台只能靠這個鍵判斷能不能送）。
+        "supports_pvc_limit": True,
     }
     if reason:
         return report

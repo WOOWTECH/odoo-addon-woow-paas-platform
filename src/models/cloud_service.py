@@ -10898,10 +10898,13 @@ class CloudService(models.Model):
         }
 
     def _push_ns_quota(self, workspace, helm_namespace):
-        """best-effort：以同一個政策（目標含最低保障、不降額）重推 ns quota。
+        """best-effort：以同一個政策（目標含最低保障）重推 ns quota。
 
-        #1679：先讀叢集現況再決定送什麼——每項取 max(目標, 叢集)，任何一項會下降、讀不到
-        或資料不完整就不送；目標低於叢集的項目標示為待處理降額。工作區正被其他交易同步時
+        #1682：生命週期（刪除、清理、換方案）是可信的內部來源，免人工確認即可降額——每次重讀
+        叢集的 used，CPU／memory／storage 對應的 5 項全部容得下才降到目標；任一項不安全、缺項、
+        讀不到或舊 operator 就不降（增額照送），保留叢集原額度並排有限次重試。override 不變。
+        #1679：先讀叢集現況再決定送什麼——任何一項非降不可（例如 pvc）、讀不到或資料不完整
+        就不送。工作區正被其他交易同步時
         不等鎖、不推送，改排背景同步一分鐘後重來（#1680：換方案剛好撞上推送時增額不會遺失）；
         失敗另排有限次自動重試。任何失敗只記錄，絕不 abort 刪除；同步狀態寫在 savepoint 內，失敗也不會讓外層交易進入 aborted 狀態。
         """
@@ -10910,7 +10913,7 @@ class CloudService(models.Model):
         try:
             with self.env.cr.savepoint():
                 workspace.sudo()._quota_sync(
-                    'lifecycle', namespaces=[helm_namespace], nowait=True)
+                    'lifecycle', namespaces=[helm_namespace], nowait=True, allow_lower=True)
         except Exception as e:  # noqa: BLE001 —— 見 docstring：絕不阻斷刪除
             _logger.warning(
                 "quota recompute failed for %s: %s", helm_namespace, e,

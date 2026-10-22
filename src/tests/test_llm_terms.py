@@ -264,6 +264,84 @@ class TestLlmTermsModel(_TermsCase):
 @tagged('post_install', '-at_install', 'llm_terms')
 class TestLlmTermsConsent(_TermsCase):
 
+    def _closed_account(self, quota=0):
+        account = self._activate(self.alice)
+        _llm_internal(account).write({'state': 'closed', 'quota_cached': quota})
+        return account
+
+    def test_closed_history_is_visible_with_signed_balance_without_refresh(self):
+        account = self._closed_account()
+        for quota in (123456, -123456):
+            _llm_internal(account).write({'quota_cached': quota})
+            Cache = self.env['woow_paas_platform.llm_swr_cache']
+            with patch.object(type(Cache), '_llm_swr_touch') as refresh:
+                payload = self.env[ACCOUNT]._llm_state_payload(self.alice.partner_id)
+            self.assertEqual(payload['account']['state'], 'closed')
+            self.assertEqual(payload['account']['balance_quota'], quota)
+            self.assertEqual(self.env[ACCOUNT]._llm_account_for_partner(self.alice.partner_id),
+                             account)
+            refresh.assert_not_called()
+
+    def test_closed_account_cannot_activate_even_with_missing_or_outdated_terms(self):
+        account = self._closed_account()
+        Account = self.env[ACCOUNT]
+        before = Account.sudo().search_count([('partner_id', '=', self.alice.partner_id.id)])
+        cron = self.env.ref('woow_paas_platform.ir_cron_llm_provision')
+        with patch.object(type(cron), '_trigger') as trigger:
+            for version in (TEST_TOS, None, 'old-version'):
+                # Bare catch: Odoo assertRaises would roll back unintended writes.
+                try:
+                    Account._llm_activate(self.alice.partner_id, version, self.alice, CLIENT_IP)
+                except LlmError as exc:
+                    self.assertEqual(exc.code, llm_common.ERR_LLM_CLOSED)
+                else:
+                    self.fail('closed account was activated')
+            _llm_internal(self.v1).write({'state': 'retired'})
+            self.assertEqual(self._code(lambda: self._activate(self.alice))[0],
+                             llm_common.ERR_LLM_CLOSED)
+        trigger.assert_not_called()
+        self.assertEqual(Account.sudo().search_count([
+            ('partner_id', '=', self.alice.partner_id.id)]), before)
+        self.assertEqual(account.state, 'closed')
+        self.assertFalse(self.fake.calls)
+
+    def test_closed_account_rejects_terms_keys_and_new_conversion(self):
+        account = self._closed_account(-123456)
+        Account, Key = self.env[ACCOUNT], self.env[KEY]
+        partner = self.alice.partner_id
+        calls = (
+            lambda: Account._llm_accept_terms(partner, TEST_TOS, self.alice, CLIENT_IP),
+            lambda: Key._llm_create_free_trial_key(partner, uuid.uuid4().hex, self.alice, CLIENT_IP),
+            lambda: Key._llm_create_paid_key(
+                partner, uuid.uuid4().hex, self.alice, CLIENT_IP, {},
+                name='closed', limit_points=10, expires=None, models=None),
+            lambda: Key._llm_set_key_status(partner, 999999, True, session={}),
+            lambda: Key._llm_update_key(partner, 999999, name='closed'),
+            lambda: Key._llm_delete_key(partner, 999999, 'closed'),
+            lambda: self.env['woow_paas_platform.llm_credit_order']._llm_convert(
+                partner, 100, uuid.uuid4().hex, True, True, self.alice, {}, CLIENT_IP),
+        )
+        for call in calls:
+            self.assertEqual(self._code(call)[0], llm_common.ERR_LLM_CLOSED)
+        self.assertEqual(account.quota_cached, -123456)
+        self.assertFalse(self.fake.calls)
+
+    def test_partial_unique_allows_history_but_rejects_two_open_accounts(self):
+        closed = self._closed_account()
+        Account = self.env[ACCOUNT].sudo()
+        values = {'partner_id': self.alice.partner_id.id, 'state': 'closed'}
+        latest = _llm_internal(Account).create(values)
+        self.assertEqual(Account._llm_account_for_partner(self.alice.partner_id), latest)
+        successor = _llm_internal(Account).create({**values, 'state': 'provisioning'})
+        # A newer historical row must never displace the one open account.
+        _llm_internal(Account).create(values)
+        self.assertEqual(Account._llm_account_for_partner(self.alice.partner_id), successor)
+        self.assertEqual(self._activate(self.alice), successor)
+        self.assertEqual(closed.state, 'closed')
+        with mute_logger('odoo.sql_db'), self.assertRaises(IntegrityError), self.env.cr.savepoint():
+            _llm_internal(Account).create({**values, 'state': 'active'})
+            self.env.flush_all()
+
     def test_activation_needs_the_published_version(self):
         partner = self.alice.partner_id
         Account = self.env[ACCOUNT]
@@ -401,6 +479,32 @@ class TestLlmTermsConsent(_TermsCase):
 # ====================================================================== #
 @tagged('post_install', '-at_install', 'llm_terms')
 class TestLlmTermsHttp(_TermsCase):
+
+    def test_closed_state_and_notification_mutations_return_closed(self):
+        account = self._activate(self.alice)
+        _llm_internal(account).write({'state': 'closed', 'quota_cached': 123456})
+        self.authenticate(self.alice.login, self.password)
+        state = self._rpc('/api/llm/state')['data']['account']
+        self.assertEqual((state['state'], state['balance_quota']), ('closed', 123456))
+        for path, params in (
+            ('account/activate', {'tos_version': TEST_TOS}),
+            ('account/accept_terms', {'tos_version': TEST_TOS}),
+            ('account/reauth', {'password': 'unused'}),
+            ('account/settings', {'low_balance_threshold': 100}),
+            ('account/report_not_me', {'token': 'invalid'}),
+            ('keys/create', {'kind': 'free_trial', 'client_request_id': uuid.uuid4().hex}),
+            ('keys/create', {'kind': 'paid', 'client_request_id': uuid.uuid4().hex}),
+            ('keys/update', {'key_id': 999999, 'name': 'closed'}),
+            ('keys/extend', {'key_id': 999999}),
+            ('keys/set_status', {'key_id': 999999, 'enabled': True}),
+            ('keys/delete', {'key_id': 999999, 'confirm_name': 'closed'}),
+            ('credit/convert', {'points': 100, 'client_request_id': uuid.uuid4().hex,
+                                'confirm_reserve': True, 'accept_no_refund': True}),
+        ):
+            result = self._rpc('/api/llm/' + path, params)
+            self.assertFalse(result['success'])
+            self.assertEqual(result['code'], llm_common.ERR_LLM_CLOSED)
+        self.assertFalse(self.fake.calls)
 
     def _rpc(self, path, params=None, headers=None):
         response = self.url_open(path, data=json.dumps({
