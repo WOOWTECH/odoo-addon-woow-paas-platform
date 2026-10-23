@@ -623,3 +623,56 @@
     color: $woow-text-secondary;
   }
 }
+
+// Shared announcement surface; uses the existing WoowTech palette and type.
+.o_woow_llm_price_notice {
+  display: flex;
+  gap: 16px;
+  min-width: 0;
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid $woow-border-light;
+  border-radius: 20px;
+  background: $woow-card-light;
+  color: $woow-text-primary;
+  font: 16px/1.6 $woow-font-body;
+
+  &__icon {
+    display: inline-flex;
+    flex: 0 0 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: rgba($woow-primary, .08);
+    color: $woow-primary;
+    font-size: 24px;
+  }
+  &__text { min-width: 0; overflow-wrap: anywhere; }
+  h2 { margin: 0 0 12px; font: 600 20px/1.12 $woow-font-display; letter-spacing: -.02em; }
+  p { margin: 0; white-space: pre-wrap; }
+  &__changes { display: grid; gap: 12px; margin-top: 16px; }
+  &__changes > h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+  &__model { min-width: 0; padding: 12px; border: 1px solid $woow-border-light; border-radius: 12px; background: $woow-background-light; }
+  &__model > h4 { margin: 0 0 8px; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
+  &__rate { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid $woow-border-light; }
+  &__rate_label { flex: 0 0 auto; font-weight: 500; }
+  &__rate_value { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; min-width: 0; text-align: right; }
+  &__side { overflow-wrap: anywhere; }
+  &__side b { font-variant-numeric: tabular-nums; }
+  &__effective { margin-top: 12px !important; }
+  a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    color: $woow-primary;
+    text-decoration: underline;
+  }
+  a:focus-visible { outline: 2px solid $woow-primary; outline-offset: 3px; }
+  @media (max-width: $woow-bp-sm) {
+    flex-direction: column;
+    &__icon { flex-basis: auto; width: 40px; }
+    &__rate { flex-direction: column; gap: 2px; }
+    &__rate_value { justify-content: flex-start; text-align: left; }
+  }
+}

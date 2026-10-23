@@ -12,6 +12,7 @@ import { LlmKeysTab } from "./tabs/LlmKeysTab";
 import { LlmDocsTab } from "./tabs/LlmDocsTab";
 import { llmService } from "../../services/llm_service";
 import { llmErrorMessage } from "../../services/llm_errors";
+import { formatTaipeiDateTime } from "../../utils/llm_format";
 import { createLlmDocsKeyHandoff, validatedLlmPublicBaseUrl } from "./tabs/llm_docs_helpers";
 import { LlmUsageTab } from "./tabs/LlmUsageTab";
 
@@ -45,6 +46,9 @@ export class LlmPage extends Component {
   };
 
   setup() {
+    this.priceNotices = useState({ items: [] });
+    this.priceNoticeGeneration = 0;
+    this.onNoticeFocus = () => this.refreshPriceNotices();
     this.tabsRef = useRef("tabs");
     this.llm = useState(llmService);
     this.docsKeyHandoff = createLlmDocsKeyHandoff();
@@ -55,20 +59,79 @@ export class LlmPage extends Component {
     this.onHashChange = () => this.consumeNotMeQuery();
     this.scrolledTab = null;
     onMounted(() => {
+      this.refreshPriceNotices();
+      window.addEventListener("focus", this.onNoticeFocus);
       this.revealActiveTab();
       window.addEventListener("hashchange", this.onHashChange);
       this.consumeNotMeQuery();
     });
     onPatched(() => this.revealActiveTab());
     onWillUnmount(() => {
+      this.priceNoticeGeneration++;
+      this.priceNotices.items = [];
+      window.removeEventListener("focus", this.onNoticeFocus);
       window.removeEventListener("hashchange", this.onHashChange);
       this.docsKeyHandoff.clear();
       this.clearNotMe();
     });
     onWillUpdateProps((nextProps) => {
+      if (nextProps.tab !== this.props.tab) this.refreshPriceNotices();
       if (normalizeLlmTab(nextProps.tab) !== "docs") this.docsKeyHandoff.clear();
       if (normalizeLlmTab(nextProps.tab) !== "overview") this.clearNotMe();
     });
+  }
+
+  async refreshPriceNotices() {
+    const generation = ++this.priceNoticeGeneration;
+    // Withdraw immediately while revalidating; failures never keep an old notice.
+    this.priceNotices.items = [];
+    try {
+      const result = await llmService.fetchPriceNotices();
+      if (generation !== this.priceNoticeGeneration) return;
+      this.priceNotices.items = result?.success ? result.data.notices : [];
+    } catch {
+      // Transport failures are silent and do not block any of the six tabs.
+    }
+  }
+
+  get priceNoticeModelsLabel() { return _t("Models & Pricing"); }
+
+  get priceNoticeChangesLabel() { return _t("Price changes"); }
+  get priceNoticeBeforeLabel() { return _t("Before"); }
+  get priceNoticeAfterLabel() { return _t("After"); }
+  get priceNoticeEffectiveLabel() { return _t("Effective from"); }
+  get priceNoticeTimezoneLabel() { return _t("Taipei time"); }
+
+  priceNoticeRows(notice) {
+    return notice.changes.map((change, index) => {
+      const fields = change.mode === "fixed"
+        ? [{ id: "per_call", label: _t("Per call"), unit: _t("points per call") }]
+        : [
+          { id: "input", label: _t("Input"), unit: _t("points per million tokens") },
+          { id: "output", label: _t("Output"), unit: _t("points per million tokens") },
+          { id: "cache_read", label: _t("Cache read"), unit: _t("points per million tokens") },
+          { id: "cache_write", label: _t("Cache write"), unit: _t("points per million tokens") },
+        ];
+      return {
+        key: `${notice.id}-${index}`,
+        model: change.model,
+        rates: fields.map((field) => ({
+          id: field.id,
+          label: field.label,
+          unit: field.unit,
+          before: change.before[field.id],
+          after: change.after[field.id],
+        })),
+      };
+    });
+  }
+
+  priceNoticeEffectiveTime(notice) {
+    return formatTaipeiDateTime(this.priceNoticeEffectiveIso(notice));
+  }
+
+  priceNoticeEffectiveIso(notice) {
+    return new Date(notice.not_before * 1000).toISOString();
   }
 
   get currentTab() {
