@@ -165,6 +165,18 @@ guardrails:
             && has(event.data.arguments.command)
             && event.data.arguments.command.matches("(\\bgh\\s+(issue|pr|release|gist|label)\\s+(create|comment|edit|close|reopen|merge|review|delete|lock|transfer|develop)\\b|\\bgh\\s+api\\b[\\s\\S]*(-X\\s*(POST|PATCH|PUT|DELETE)|--method\\s+(POST|PATCH|PUT|DELETE)|\\s(-f|-F|--field|--raw-field|--input)\\s)|\\bgit\\b[\\s\\S]*\\bpush\\b|\\bcurl\\b[\\s\\S]*api\\.github\\.com)")
             ? {"result": "DENY", "reason": "woow-security-sweep 的 leader 不對 GitHub 寫入（issue／PR／留言／push）：目標 repo 是 public，寫出去就公開。結果寫進本機報告與 Inbox；修正由 fix worker 在 worktree 裡做，PR 由人核准後才開。"} : {"result": "ALLOW"}
+    p_gitea_issue_via_script:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("(\\btea\\s+api\\b[\\s\\S]*(-X\\s*(POST|PATCH|PUT|DELETE)|--method\\s+(POST|PATCH|PUT|DELETE)|\\s(-d|--data|-f|-F|--field)\\s)|\\btea\\s+(issues?|i|pulls?|pr|labels?|milestones?|ms|releases?|r)\\s+(create|c|edit|e|close|reopen|open|delete|rm|merge|m|approve|reject)\\b|\\btea\\s+(comment|c)\\s|\\bcurl\\b[\\s\\S]*git-prod\\.woowtech\\.io/api)")
+            ? {"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫 mirror-internal、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"} : {"result": "ALLOW"}
     max_tool_calls_per_session:
       type: function
       function:

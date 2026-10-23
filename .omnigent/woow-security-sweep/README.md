@@ -14,6 +14,7 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 │   ├── sec-collect/          scripts/collect.py：設定合併、增量範圍、掃描工具、findings
 │   ├── sec-gate/             scripts/jev_gate.py：Jev 閘門、路由、shadow log、校準
 │   ├── sec-dispatch/         用 woow-issue-leader/generate-worker.py 派 worker
+│   ├── sec-issue/            scripts/issue_sync.py：成立的 finding 開到 Gitea mirror-internal（#1957）
 │   └── sec-report/           report.md 與 Inbox 提問
 └── tests/                    unittest（CI：.gitea/workflows/security-sweep-tests.yml）
 ```
@@ -24,8 +25,9 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 排程（prompt 帶 targets）
  → collect run（每個 repo）→ [deep review worker → collect import]
  → jev_gate triage（閘門 A）→ jev_gate carryover（帶入前幾輪未決）
+ → issue_sync（Jev 高信心成立 ⇒ 開 sweep/jev 單）
  → report.md ＋ AskUserQuestion（Inbox）
- → jev_gate human（記錄人的決定）
+ → jev_gate human（記錄人的決定）→ issue_sync（人判成立開單、判誤報關單）
  → 人選「修正」且 ≤ medium ⇒ fix worker → review worker → jev_gate ready（閘門 C）→ 再問人
  → collect commit（推進 last_sha）
 ```
@@ -36,6 +38,22 @@ committed 的 mode 必須是 shadow——改成 enforce 要人拍板、改測試
 
 **Phase 2**：`jev_gate.py calibrate` 每個閘門 ≥ 50 筆後，依信心區間的一致率逐項放開
 （先放「丟誤報」與「開 draft PR」）。
+
+## issue（#1957）
+
+成立的 finding 由 `issue_sync.py` 開到 **Gitea `mirror-internal/<repo>`**（org 為 limited，匿名看不到）。
+⛔ 不開在 GitHub：目標 repo 是 public。開單條件、label 與去重見 `skills/sec-issue/SKILL.md`；
+`gates.yaml` 的 `issues` 區塊控制開關與 Jev 門檻（`jev_min_confidence`，起始 0.85）。
+
+| label | 意思 |
+|---|---|
+| `woow-security-sweep` | 由 sweep 開的單（篩選用） |
+| `sweep/human` | 人在 Inbox 判成立 |
+| `sweep/jev` | Jev 高信心判成立，還沒經人確認 |
+| `sweep/false-positive` | 人判誤報或接受風險，sweep 已關單 |
+| `severity/<level>` | 嚴重度（Jev 與工具取高者） |
+
+寫入走 runner 上的 `tea` 登入（`issues.tea_login`），以登入者身分開單；換主機要先 `tea login`。
 
 ## 設定的兩層
 
