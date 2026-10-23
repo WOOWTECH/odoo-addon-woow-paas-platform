@@ -142,7 +142,7 @@ jobs:
             > /tmp/llm-price-notice-mailpit-install.log 2>&1 \
             || { tail -60 /tmp/llm-price-notice-mailpit-install.log; echo "::error::Odoo module install 失敗。"; exit 1; }
 
-      - name: Run the synthetic Mailpit probe in Odoo shell
+      - name: Run synthetic acceptance and unknown quarantine in Odoo shell
         run: |
           set +e
           timeout 5m docker exec -i \
@@ -170,6 +170,13 @@ jobs:
             exit 1
           }
           grep -Fx 'LLM_PRICE_NOTICE_MAILPIT_PROBE_OK' /tmp/llm-price-notice-mailpit-probe.log
+          UNKNOWN_COUNT=$(grep -Fx -c 'LLM_PRICE_NOTICE_UNKNOWN_QUARANTINE_OK' /tmp/llm-price-notice-mailpit-probe.log || true)
+          [ "${UNKNOWN_COUNT}" -eq 1 ] || {
+            tail -100 /tmp/llm-price-notice-mailpit-probe.log
+            echo "::error::不確定結果隔離探針未輸出恰好一行成功 sentinel。"
+            exit 1
+          }
+          grep -Fx 'LLM_PRICE_NOTICE_UNKNOWN_QUARANTINE_OK' /tmp/llm-price-notice-mailpit-probe.log
 
       - name: Remove only containers and network created by this run
         if: always()

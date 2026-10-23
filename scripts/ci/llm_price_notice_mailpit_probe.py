@@ -124,6 +124,137 @@ def _make_message(server, mail):
     return message, payload
 
 
+def _prove_unknown_is_quarantined(env, server):
+    """A real DATA 250 with a lost journal result must never be resent.
+
+    Only the receipt commit seam is fault-injected. The message still travels
+    through Odoo's real SMTP session to the private Mailpit container, while
+    the claim and all checks use independently committed PostgreSQL rows.
+    """
+    _require(len(_mailpit_messages()) == 1, 'unknown_probe_requires_first_message')
+    version = 'rehearsal-' + uuid.uuid4().hex
+    body = MARKER + '\nCI uncertain acceptance probe.'
+    now = int(time.time())
+    recipient = RecipientSnapshot('paas:synthetic_unknown', DESTINATION, 1)
+    proposal = prepare_candidate(
+        version=version, environment='stg', body_text=body,
+        before=BEFORE, after=AFTER, recipients=(recipient,),
+        now=now, not_before=now + SEVEN_DAYS + 120)
+    campaign = env[CAMPAIGN].create({
+        'version': version, 'body_text': body,
+        'catalog_fingerprint': proposal.catalog_sha256, 'environment': 'stg',
+    })
+    env[RECIPIENT].create({
+        'campaign_id': campaign.id, 'recipient_key': recipient.key,
+        'destination_snapshot': DESTINATION, 'destination_revision': 1,
+    })
+    publication = env[PUBLICATION]._llm_publish_synthetic_rehearsal(
+        campaign.id, BEFORE, AFTER, now + SEVEN_DAYS + 120)
+    outbox = env[OUTBOX].search([('publication_id', '=', publication.id)])
+    _require(len(outbox) == 1 and outbox.state == 'pending',
+             'unknown_probe_requires_pending_outbox')
+    mail = env['mail.mail'].create({
+        'subject': 'Synthetic staging notice uncertain acceptance probe',
+        'body_html': '<p>' + MARKER + '</p><p>CI uncertain acceptance probe.</p>',
+        'email_from': SENDER, 'reply_to': SENDER, 'email_to': DESTINATION,
+        'headers': repr({'Return-Path': SENDER}), 'auto_delete': False,
+        'state': 'exception',
+    })
+    campaign_fingerprint, outbox_id, mail_id = campaign.fingerprint, outbox.id, mail.id
+    env.cr.commit()
+    with env.registry.cursor() as committed:
+        committed.execute('SELECT count(*) FROM woow_paas_platform_llm_price_notice_outbox '
+                          'WHERE id = %s AND state = %s', (outbox_id, 'pending'))
+        _require(committed.fetchone()[0] == 1, 'unknown_outbox_not_committed')
+        committed.execute('SELECT count(*) FROM mail_mail WHERE id = %s', (mail_id,))
+        _require(committed.fetchone()[0] == 1, 'unknown_mail_not_committed')
+
+    message, payload = _make_message(server, env['mail.mail'].browse(mail_id))
+    attempt = Attempt(
+        str(uuid.uuid4()), campaign_fingerprint, 'stg', recipient.key,
+        DESTINATION, 1, hashlib.sha256(payload).hexdigest())
+    binding = MailBinding(attempt, env.cr.dbname, mail_id, outbox_id)
+    boundary = odoo_boundary(env, service_uid=odoo.SUPERUSER_ID,
+                             runtime_environment='stg')
+    boundary._journal.prepare(attempt)
+    boundary.bind(binding, payload=payload, envelope=(DESTINATION,))
+    _require(boundary.preflight(binding, payload=payload,
+                                envelope=(DESTINATION,)) == binding,
+             'unknown_binding_preflight_failed')
+
+    def uncertain_receipt_commit(attempt_uuid):
+        _require(attempt_uuid == attempt.attempt_uuid, 'wrong_uncertain_attempt')
+        raise RuntimeError('injected_receipt_commit_uncertain')
+
+    # The injection never reports success. A separate PG cursor must retain
+    # the pre-SMTP claim as unknown even though Mailpit receives the DATA bytes.
+    boundary._journal._accept = uncertain_receipt_commit
+    session = server.connect(host='mailpit', port=1025, encryption='none')
+    _require(session is not None, 'unknown_smtp_connection_missing')
+    try:
+        actual_from, actual_to, message = server._prepare_email_message(message, session)
+        _require(actual_from == SENDER and actual_to == [DESTINATION]
+                 and message.as_bytes(policy=message.policy.clone(linesep='\r\n')) == payload,
+                 'unknown_live_session_changed_final_mime')
+        try:
+            server.send_email(message, smtp_session=BoundNoticeSMTP(
+                session, boundary=boundary, binding=binding))
+        except RuntimeError as error:
+            _require(str(error) == 'injected_receipt_commit_uncertain',
+                     'wrong_uncertain_commit_error')
+        else:
+            raise RuntimeError('uncertain_acceptance_reported_success')
+    finally:
+        session.quit()
+    env.cr.rollback()
+
+    with env.registry.cursor() as verify:
+        verify.execute('SELECT status FROM llm_notice_transport_attempt '
+                       'WHERE attempt_uuid = %s', (attempt.attempt_uuid,))
+        _require(verify.fetchone() == ('unknown',), 'uncertain_claim_not_durable')
+        verify.execute('SELECT count(*) FROM llm_notice_transport_acceptance '
+                       'WHERE attempt_uuid = %s', (attempt.attempt_uuid,))
+        _require(verify.fetchone()[0] == 0, 'uncertain_acceptance_fabricated')
+    for _ in range(30):
+        if len(_mailpit_messages()) == 2:
+            break
+        time.sleep(0.2)
+    _require(len(_mailpit_messages()) == 2, 'uncertain_smtp_data_not_observed')
+    _require(_mailpit_raw('latest').endswith(payload),
+             'uncertain_mailpit_payload_mismatch')
+
+    # A fresh boundary and fresh SMTP session simulate a later worker retry.
+    # The committed unknown state must reject it before MAIL/RCPT/DATA.
+    fresh_boundary = odoo_boundary(env, service_uid=odoo.SUPERUSER_ID,
+                                   runtime_environment='stg')
+    replay_session = server.connect(host='mailpit', port=1025, encryption='none')
+    _require(replay_session is not None, 'replay_smtp_connection_missing')
+    try:
+        actual_from, actual_to, replay_message = server._prepare_email_message(
+            message, replay_session)
+        _require(actual_from == SENDER and actual_to == [DESTINATION]
+                 and replay_message.as_bytes(
+                     policy=replay_message.policy.clone(linesep='\r\n')) == payload,
+                 'replay_changed_final_mime')
+        try:
+            server.send_email(replay_message, smtp_session=BoundNoticeSMTP(
+                replay_session, boundary=fresh_boundary, binding=binding))
+        except ValueError as error:
+            _require(str(error) == 'attempt_not_ready', 'wrong_replay_rejection')
+        else:
+            raise RuntimeError('unknown_attempt_was_resent')
+    finally:
+        replay_session.quit()
+    _require(len(_mailpit_messages()) == 2, 'unknown_retry_sent_another_message')
+    with env.registry.cursor() as verify:
+        verify.execute('SELECT status FROM llm_notice_transport_attempt '
+                       'WHERE attempt_uuid = %s', (attempt.attempt_uuid,))
+        _require(verify.fetchone() == ('unknown',), 'unknown_retry_changed_state')
+        verify.execute('SELECT count(*) FROM llm_notice_transport_acceptance '
+                       'WHERE attempt_uuid = %s', (attempt.attempt_uuid,))
+        _require(verify.fetchone()[0] == 0, 'unknown_retry_fabricated_receipt')
+
+
 def main(env):
     _require(os.environ.get('WOOW_LLM_PRICE_NOTICE_REHEARSAL') == 'llmdev-synthetic-v1',
              'synthetic_rehearsal_flag_required')
@@ -297,6 +428,8 @@ def main(env):
     _require(MARKER in decoded_parts, 'mailpit_synthetic_body_missing')
     # 250 proves Mailpit accepted DATA, not delivery to a recipient mailbox.
     print('LLM_PRICE_NOTICE_MAILPIT_PROBE_OK')
+    _prove_unknown_is_quarantined(env, server)
+    print('LLM_PRICE_NOTICE_UNKNOWN_QUARANTINE_OK')
 
 
 main(globals()['env'])  # Odoo shell injects `env`; ordinary Python does not.
