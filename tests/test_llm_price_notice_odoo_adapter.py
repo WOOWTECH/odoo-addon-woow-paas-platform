@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 from uuid import uuid4
 import hashlib
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 # Load only dormant service files; do not import addon __init__ (requires Odoo).
@@ -58,6 +59,8 @@ class Record:
 
     @property
     def state(self):
+        if '_state' in self.__dict__:
+            return self._state
         raise AssertionError('mail_state_is_not_evidence')
 
     @property
@@ -78,16 +81,33 @@ class TestOdooMailBoundary(unittest.TestCase):
                                  'recipient@example.test', 1, hashlib.sha256(PAYLOAD).hexdigest())
         self.journal.prepare(self.attempt)
         self.binding = a.MailBinding(self.attempt, 'synthetic_odoo', 41, 17)
-        self.campaign = Record(fingerprint='a' * 64, environment='stg')
-        self.obligation = Record(campaign_id=self.campaign, recipient_key='paas:synthetic',
-                                 destination_snapshot='recipient@example.test', destination_revision=1)
+        self.campaign = Record(fingerprint='a' * 64, environment='stg',
+                               version='rehearsal-unit',
+                               body_text='【合成測試，不代表正式公告】unit')
+        self.recipient = Record(campaign_id=self.campaign, recipient_key='paas:synthetic',
+                                destination_snapshot='recipient@example.test',
+                                destination_revision=1)
+        public_json = json.dumps({'version': self.campaign.version,
+                                  'body_text': self.campaign.body_text},
+                                 ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+        self.publication = Record(campaign_id=self.campaign, campaign_fingerprint='a' * 64,
+                                  environment='stg', withdrawn_at=False,
+                                  public_payload_json=public_json,
+                                  payload_sha256=hashlib.sha256(public_json.encode()).hexdigest())
+        self.obligation = Record(publication_id=self.publication, recipient_id=self.recipient,
+                                 recipient_key='paas:synthetic',
+                                 destination_snapshot='recipient@example.test',
+                                 destination_revision=1, campaign_fingerprint='a' * 64,
+                                 payload_sha256=self.publication.payload_sha256,
+                                 _state='pending')
         self.mail = Record(email_to='recipient@example.test', email_cc=False, recipient_ids=[])
         self.mail_model = Mock()
         self.mail_model.browse.return_value = self.mail
         self.obligation_model = Mock()
         self.obligation_model.browse.return_value = self.obligation
         self.models = {'mail.mail': self.mail_model,
-                       'woow_paas_platform.llm_price_notice_recipient': self.obligation_model}
+                       'woow_paas_platform.llm_price_notice_recipient': Mock(),
+                       'woow_paas_platform.llm_price_notice_outbox': self.obligation_model}
         self.database = 'synthetic_odoo'
         self.reader_calls = 0
         self.test_mode = False
@@ -133,6 +153,19 @@ class TestOdooMailBoundary(unittest.TestCase):
                 'SELECT * FROM llm_notice_transport_acceptance').fetchall(), [])
             self.assertEqual(connection.execute(
                 'SELECT status FROM llm_notice_transport_attempt').fetchone(), ('prepared',))
+
+    def test_binding_requires_committed_outbox_not_just_recipient(self):
+        self.models['woow_paas_platform.llm_price_notice_recipient'].browse.return_value = self.recipient
+        self.obligation_model.browse.return_value = Mock(exists=Mock(return_value=[]))
+        with self.assertRaisesRegex(ValueError, 'source_missing'):
+            self.bind()
+
+    def test_distinct_mail_and_attempt_cannot_rebind_same_outbox(self):
+        self.bind()
+        another = replace(self.attempt, attempt_uuid=str(uuid4()))
+        self.journal.prepare(another)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.journal.bind(replace(self.binding, attempt=another, mail_id=42))
 
     def test_no_committed_binding_or_attempt_denies(self):
         with self.assertRaisesRegex(ValueError, 'binding_not_committed'):
@@ -180,12 +213,13 @@ class TestOdooMailBoundary(unittest.TestCase):
                 self.preflight(payload=payload)
 
     def test_noncanonical_matching_snapshot_denies_bind_and_preflight(self):
-        for payload in (PAYLOAD[:-2], PAYLOAD.replace(b'\r\n', b'\n'),
-                        PAYLOAD + b'bare\rreturn\r\n', PAYLOAD + b'null\x00byte\r\n'):
+        for index, payload in enumerate((PAYLOAD[:-2], PAYLOAD.replace(b'\r\n', b'\n'),
+                        PAYLOAD + b'bare\rreturn\r\n', PAYLOAD + b'null\x00byte\r\n')):
             with self.subTest(payload=repr(payload)):
                 attempt = replace(self.attempt, attempt_uuid=str(uuid4()),
                                   payload_sha256=hashlib.sha256(payload).hexdigest())
-                binding = replace(self.binding, attempt=attempt, mail_id=self.binding.mail_id + 1)
+                binding = replace(self.binding, attempt=attempt, mail_id=self.binding.mail_id + index + 1,
+                                  obligation_id=self.binding.obligation_id + index + 1)
                 self.binding = binding
                 self.journal.prepare(attempt)
                 # Simulate an already persisted untrusted snapshot/binding.
@@ -210,12 +244,45 @@ class TestOdooMailBoundary(unittest.TestCase):
             (self.obligation, 'recipient_key', 'legacy:other'),
             (self.obligation, 'destination_snapshot', 'other@example.test'),
             (self.obligation, 'destination_revision', 2),
+            (self.obligation, 'campaign_fingerprint', 'b' * 64),
+            (self.recipient, 'recipient_key', 'legacy:other'),
+            (self.recipient, 'destination_snapshot', 'other@example.test'),
+            (self.recipient, 'destination_revision', 2),
+            (self.recipient, 'campaign_id', Record(fingerprint='a' * 64)),
+            (self.publication, 'campaign_fingerprint', 'b' * 64),
+            (self.publication, 'payload_sha256', 'b' * 64),
+            (self.publication, 'public_payload_json', '{"version":"wrong"}'),
+            (self.publication, 'environment', 'prod'),
+            (self.publication, 'withdrawn_at', '2026-10-23 00:00:00'),
+            (self.obligation, 'payload_sha256', 'b' * 64),
+            (self.obligation, '_state', 'missing_address'),
+            (self.campaign, 'version', 'ordinary'),
+            (self.campaign, 'body_text', 'Unlabelled notice'),
         ):
-            original = getattr(record, field)
-            setattr(record, field, value)
-            with self.assertRaisesRegex(ValueError, 'obligation_snapshot'):
-                self.bind()
-            setattr(record, field, original)
+            with self.subTest(field=field, value=value):
+                original = getattr(record, field)
+                setattr(record, field, value)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'obligation_snapshot'):
+                        self.bind()
+                finally:
+                    setattr(record, field, original)
+
+    def test_synthetic_staging_destination_is_strict(self):
+        for destination in ('recipient@example.com', 'recipient@sub.example.com'):
+            with self.subTest(destination=destination):
+                attempt = replace(self.attempt, destination=destination)
+                binding = replace(self.binding, attempt=attempt)
+                self.mail.email_to = destination
+                self.recipient.destination_snapshot = destination
+                self.obligation.destination_snapshot = destination
+                try:
+                    with self.assertRaisesRegex(ValueError, 'obligation_snapshot'):
+                        self.boundary.bind(binding, payload=PAYLOAD, envelope=(destination,))
+                finally:
+                    self.mail.email_to = self.attempt.destination
+                    self.recipient.destination_snapshot = self.attempt.destination
+                    self.obligation.destination_snapshot = self.attempt.destination
 
     def test_wrong_runtime_or_odoo_database_denies(self):
         self.boundary._environment = 'prod'

@@ -78,12 +78,12 @@ jobs:
             > /tmp/llm-price-notice-install.log 2>&1 \
             || { tail -60 /tmp/llm-price-notice-install.log; echo "::error::Odoo module install 失敗。"; exit 1; }
 
-      - name: Run only the real PostgreSQL journal regression
+      - name: Run the real PostgreSQL journal and outbox binding regressions
         id: run_journal_test
         run: |
           set +e
           docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -u woow_paas_platform \
-            --test-enable --test-tags llm_price_notice_journal_rollback \
+            --test-enable --test-tags llm_price_notice_journal_rollback,llm_price_notice_binding_pg \
             --stop-after-init --limit-memory-hard=0 --max-cron-threads=0 \
             --http-port=18069 --gevent-port=18072 \
             --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
@@ -96,13 +96,13 @@ jobs:
             echo "::error::Odoo test process exit=${ODOO_EXIT}."
             exit 1
           fi
-          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 1 tests' /tmp/llm-price-notice-test.log || true)
+          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 3 tests' /tmp/llm-price-notice-test.log || true)
           [ "${SUMMARY_COUNT}" -eq 1 ] || {
             tail -80 /tmp/llm-price-notice-test.log
-            echo "::error::預期恰好 1 test、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
+            echo "::error::預期恰好 3 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
             exit 1
           }
-          grep -F '0 failed, 0 error(s) of 1 tests' /tmp/llm-price-notice-test.log
+          grep -F '0 failed, 0 error(s) of 3 tests' /tmp/llm-price-notice-test.log
 
       - name: Remove only containers created by this run
         if: always()
