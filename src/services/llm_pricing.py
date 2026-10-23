@@ -49,6 +49,21 @@ def _decimal_text(value):
     return format(value, 'f').rstrip('0').rstrip('.') if '.' in format(value, 'f') else str(value)
 
 
+def _notice_rate(value):
+    """Keep source rates inside the downstream notice catalog's decimal bounds."""
+    if type(value) is not str or not 0 < len(value) <= 64:
+        raise PricingInvalid('notice_source_unknown_rate')
+    try:
+        number = Decimal(value)
+    except InvalidOperation:
+        raise PricingInvalid('notice_source_unknown_rate') from None
+    if (not number.is_finite() or number < 0 or len(number.as_tuple().digits) > 24
+            or not -64 <= number.as_tuple().exponent <= 64
+            or (number and not -18 <= number.adjusted() <= 12)):
+        raise PricingInvalid('notice_source_unknown_rate')
+    return value
+
+
 def model_price(row, group, group_ratio):
     """DESIGN §4.1: ratio, fixed, tiered and free; no float arithmetic or quota rounding."""
     price = dict.fromkeys(PRICE_FIELDS)
@@ -81,6 +96,73 @@ def model_price(row, group, group_ratio):
             create_cache_ratio = CREATE_CACHE_RATIO_DEFAULT
         price['cache_write'] = _decimal_text(input_price * _number(create_cache_ratio))
         return 'ratio', price
+
+
+def project_default_notice_increase(payload, *, source_version):
+    """Project a proposed 1→1.3 default tariff, without attesting its source.
+
+    The caller must separately prove that this is a fresh, complete view for
+    every affected account and that group overrides, options and the deployed
+    source version match. Unknown cache rates and unsupported modes fail closed.
+    This pure result is not a publication or a pricing permit.
+    """
+    if source_version != 'v1.0.0-rc.44':
+        raise PricingInvalid('notice_source_version')
+    if (type(payload) is not dict or type(payload.get('group_ratio')) is not dict
+            or type(payload.get('data')) is not list):
+        raise PricingInvalid('notice_source_shape')
+    groups, rows = payload['group_ratio'], payload['data']
+    extra = set(groups) - ALLOWED_GROUPS
+    usable = payload.get('usable_group')
+    if (not ALLOWED_GROUPS <= set(groups) or len(extra) > 1
+            or any(type(group) is not str
+                   or re.fullmatch(r'[A-Za-z0-9_-]{1,64}', group) is None for group in groups)
+            or type(usable) is not dict or set(usable) != set(groups)
+            or (extra and usable.get(next(iter(extra))) != 'User group')
+            or not 0 < len(rows) <= 10000):
+        raise PricingInvalid('notice_source_scope')
+    own_group = next(iter(extra)) if extra else None
+    if own_group is not None:
+        _number(groups[own_group])
+    allowed_enabled = (['default'], ['free']) + (([own_group],) if own_group is not None else ())
+    current, target = _number(groups['default']), Decimal('1.3')
+    if current != 1 or _number(groups['free']) != 0:
+        raise PricingInvalid('notice_source_ratio')
+    before, after, seen = {}, {}, set()
+    for row in rows:
+        if type(row) is not dict or type(row.get('enable_groups')) is not list:
+            raise PricingInvalid('notice_source_shape')
+        enabled = row['enable_groups']
+        if enabled not in allowed_enabled:
+            raise PricingInvalid('notice_source_scope')
+        name = row.get('model_name')
+        if type(name) is not str or re.fullmatch(r'[A-Za-z0-9_.:/+-]{1,200}', name) is None:
+            raise PricingInvalid('notice_source_model')
+        if name in seen:
+            raise PricingInvalid('notice_source_model')
+        seen.add(name)
+        if enabled != ['default']:
+            continue
+        if name in FREE_MODELS or name.endswith(':free') or len(before) >= 100:
+            raise PricingInvalid('notice_source_model')
+        mode, old = model_price(row, 'default', current)
+        new_mode, new = model_price(row, 'default', target)
+        if mode != new_mode or mode not in ('ratio', 'fixed'):
+            raise PricingInvalid('notice_source_mode')
+        if row.get('billing_mode') not in (None, '', mode):
+            raise PricingInvalid('notice_source_mode')
+        fields = ('per_call',) if mode == 'fixed' else ('input', 'output', 'cache_read', 'cache_write')
+        for key in fields:
+            _notice_rate(old[key])
+            _notice_rate(new[key])
+        if Decimal(old['per_call' if mode == 'fixed' else 'input']) <= 0:
+            raise PricingInvalid('notice_source_zero_rate')
+        before[name] = dict(mode=mode, rates={k: old[k] for k in fields})
+        after[name] = dict(mode=mode, rates={k: new[k] for k in fields})
+    if not before:
+        raise PricingInvalid('notice_source_scope')
+    return ({'default': dict(sorted(before.items()))},
+            {'default': dict(sorted(after.items()))})
 
 
 def normalize_pricing(payload):

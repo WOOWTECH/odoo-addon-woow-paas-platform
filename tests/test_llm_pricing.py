@@ -92,5 +92,74 @@ class TestPricing(unittest.TestCase):
                 pricing.normalize_pricing(data)
 
 
+class TestPriceNoticeSourceProjection(unittest.TestCase):
+    """Read-only effective rates; no authority, notice or price writer."""
+
+    def source(self, *rows, **changes):
+        payload = envelope(*(rows or (row(model_ratio='1', completion_ratio='4',
+                                          cache_ratio='0.1', create_cache_ratio='1.25'),)),
+                           group_ratio={'default': 1, 'free': 0},
+                           usable_group={'default': '預設', 'free': '免費'})
+        payload.update(changes)
+        return payload
+
+    def project(self, payload):
+        return pricing.project_default_notice_increase(payload, source_version='v1.0.0-rc.44')
+
+    def test_current_one_to_target_one_point_three_uses_effective_points(self):
+        before, after = self.project(self.source())
+        self.assertEqual(before, {'default': {'provider/model': {'mode': 'ratio', 'rates': {
+            'input': '64', 'output': '256', 'cache_read': '6.4', 'cache_write': '80'}}}})
+        self.assertEqual(after, {'default': {'provider/model': {'mode': 'ratio', 'rates': {
+            'input': '83.2', 'output': '332.8', 'cache_read': '8.32', 'cache_write': '104'}}}})
+
+    def test_fixed_price_and_free_only_rows(self):
+        paid = row(model_name='fixed/model', quota_type=1, model_price='0.003')
+        free = row(model_name='qwen3-4b-aicoder', enable_groups=['free'])
+        before, after = self.project(self.source(paid, free))
+        self.assertEqual(before['default']['fixed/model'],
+                         {'mode': 'fixed', 'rates': {'per_call': '0.096'}})
+        self.assertEqual(after['default']['fixed/model'],
+                         {'mode': 'fixed', 'rates': {'per_call': '0.1248'}})
+        self.assertNotIn('qwen3-4b-aicoder', str(before))
+
+    def test_callers_extra_own_group_is_ignored_only_when_marked_by_upstream(self):
+        payload = self.source(row(), row(model_name='internal/model', enable_groups=['internal']),
+                              group_ratio={'default': 1, 'free': 0, 'internal': 1},
+                              usable_group={'default': '預設', 'free': '免費', 'internal': 'User group'})
+        before, after = self.project(payload)
+        self.assertEqual(set(before['default']), {'provider/model'})
+        self.assertEqual(set(after['default']), {'provider/model'})
+        payload['usable_group']['internal'] = 'selectable'
+        with self.assertRaises(pricing.PricingInvalid):
+            self.project(payload)
+
+    def test_missing_cache_read_or_tiered_price_never_gets_guessed(self):
+        for item in (row(cache_ratio=None), row(billing_mode='tiered_expr'),
+                     row(quota_type=1, model_price=0), row(model_ratio=0)):
+            with self.subTest(item=item), self.assertRaises(pricing.PricingInvalid):
+                self.project(self.source(item))
+        # Individually valid upstream decimals may multiply beyond the notice schema.
+        with self.assertRaises(pricing.PricingInvalid):
+            self.project(self.source(row(model_ratio='0.123456789012345678901234')))
+
+    def test_unknown_group_scope_version_and_model_set_fail_closed(self):
+        valid = row()
+        for payload in (self.source(group_ratio={'default': 1.3, 'free': 0}),
+                        self.source(group_ratio={'default': 1, 'free': 0, 'internal': 1}),
+                        self.source(usable_group={}),
+                        self.source(row(enable_groups=['default', 'free'])),
+                        self.source(row(model_name='qwen3-4b-aicoder')),
+                        self.source(row(model_name='bad<script>')),
+                        self.source(row(), row()),
+                        self.source(row(), row(enable_groups=['free'])),
+                        self.source(row(enable_groups=['free'])),
+                        self.source(data=[row(model_name=f'model/{i}') for i in range(101)])):
+            with self.subTest(payload=payload), self.assertRaises(pricing.PricingInvalid):
+                self.project(payload)
+        with self.assertRaises(pricing.PricingInvalid):
+            pricing.project_default_notice_increase(self.source(valid), source_version='unknown')
+
+
 if __name__ == '__main__':
     unittest.main()
