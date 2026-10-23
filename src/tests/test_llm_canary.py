@@ -10,6 +10,7 @@ These tests establish SQL predicates and state transitions on one transaction.
 They do not establish lock contention between independent connections,
 commit visibility, restart durability, or real upstream behavior.
 """
+import json
 import time
 import uuid
 from contextlib import contextmanager
@@ -36,6 +37,7 @@ class TestLlmCanary(_ConfiguredCase):
         self.Keys = self.env[KEY].sudo()
         self.clock = datetime(2031, 6, 8, 12)  # noqa: DTZ001 - Odoo stores naive UTC.
         self.fingerprint = 'canary-test-environment-a'
+        self._real_environment = module._environment
         self.account = self._account('Canary internal')
         self.State._llm_ensure_row(self.env.cr)
         self.env.cr.execute(
@@ -230,6 +232,69 @@ class TestLlmCanary(_ConfiguredCase):
         with self.assertRaises(LlmError):
             self.State._canary_validate_claim_cr(self.env.cr, claim)
         self.fingerprint = original
+
+    def test_real_environment_fingerprints_only_canary_identity_settings(self):
+        icp = self.env['ir.config_parameter'].sudo()
+        icp.set_param(module.common.PARAM_CANARY_PARTNER_ID, str(self.account.partner_id.id))
+        icp.set_param(module.common.PARAM_PUBLIC_BASE_URL,
+                      'https://newapi-stg.woowtech.io/v1')
+        icp.set_param(module.common.PARAM_ALERT_EMAIL, 'first-alert@example.org')
+        self.env.flush_all()
+        baseline = self._real_environment(self.env.cr)
+
+        icp.set_param(module.common.PARAM_ALERT_EMAIL, 'second-alert@example.org')
+        self.env.flush_all()
+        alert_changed = self._real_environment(self.env.cr)
+        self.assertEqual(alert_changed['fingerprint'], baseline['fingerprint'])
+
+        icp.set_param(module.common.PARAM_PROXY_URL, nac.PROXY_URL_PROD)
+        self.env.flush_all()
+        proxy_changed = self._real_environment(self.env.cr)
+        self.assertNotEqual(proxy_changed['fingerprint'], baseline['fingerprint'])
+
+    def test_invalid_canary_identity_records_two_failures_without_network(self):
+        # Model a malformed value introduced outside the normal parameter validator,
+        # as can happen after a direct SQL edit.
+        self.env.cr.execute(
+            'INSERT INTO ir_config_parameter '
+            '(key, value, create_uid, write_uid, create_date, write_date) '
+            "VALUES (%s, %s, 1, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') "
+            'ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, '
+            'write_uid=EXCLUDED.write_uid, write_date=EXCLUDED.write_date',
+            (module.common.PARAM_CANARY_PARTNER_ID, 'abc'))
+        self.env.flush_all()
+        actual = self._real_environment(self.env.cr)
+        self.assertTrue(actual['enabled'])
+        self.assertEqual(actual['partner_id'], 0)
+        self.assertFalse(actual['valid'])
+
+        # Isolate the enabled-but-invalid worker state: it must persist
+        # account_unavailable samples while taking the cleanup-only path.
+        environment = {
+            **self._environment(self.env.cr),
+            'enabled': True,
+            'partner_id': 0,
+            'valid': False,
+        }
+        event_cls = type(self.env[EVENT])
+        with patch.object(module, '_environment', return_value=environment), \
+                patch.object(type(self.Account), '_llm_client',
+                             side_effect=AssertionError('invalid identity must not call network')), \
+                patch.object(module.llm_canary_probe, 'probe',
+                             side_effect=AssertionError('invalid identity must not probe')), \
+                patch.object(event_cls, '_llm_alert') as alert:
+            for sample in range(2):
+                if sample:
+                    self.clock += timedelta(minutes=30)
+                tick = type('Tick', (), {'deadline': self.deadline(), 'delay': None})()
+                self.assertFalse(self.State._canary_tick({}, tick))
+
+        self.assertEqual(self._row()['canary_failures'], 2)
+        self.assertEqual(self._row()['last_canary_result'], 'account_unavailable')
+        events = self.env[EVENT].sudo().search([('action', '=', 'canary')], order='id')
+        self.assertEqual(events.mapped('result'), ['failed', 'failed'])
+        self.assertEqual([json.loads(event.details_json)['count'] for event in events], [1, 2])
+        alert.assert_called_once()
 
     def test_portal_only_account_cannot_be_claimed_as_internal_canary(self):
         portal_account = self._account('Canary portal only', groups='base.group_portal')

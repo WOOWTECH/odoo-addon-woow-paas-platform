@@ -481,7 +481,7 @@
 29	test_llm_backoffice.TestLlmBackofficeCommitted
 8	test_llm_backoffice.TestLlmBackofficeGuards
 3	test_llm_bounded_cron.TestLlmBoundedCron
-14	test_llm_canary.TestLlmCanary
+16	test_llm_canary.TestLlmCanary
 8	test_llm_canary_keys.TestLlmCanaryKeys
 2	test_llm_client_hardening.TestLlmApRateLimit
 9	test_llm_client_hardening.TestLlmCircuitBreaker

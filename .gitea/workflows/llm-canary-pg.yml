@@ -78,7 +78,7 @@ jobs:
             > /tmp/llm-canary-install.log 2>&1 \
             || { tail -60 /tmp/llm-canary-install.log; echo "::error::Odoo module install 失敗。"; exit 1; }
 
-      - name: Run rollback-scoped canary service tests (22)
+      - name: Run rollback-scoped canary service tests (24)
         run: |
           set +e
           docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -u woow_paas_platform \
@@ -96,13 +96,13 @@ jobs:
             echo "::error::Odoo rollback/service tests exit=${ODOO_EXIT}。"
             exit 1
           fi
-          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 22 tests' /tmp/llm-canary-service.log || true)
+          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 24 tests' /tmp/llm-canary-service.log || true)
           [ "${SUMMARY_COUNT}" -eq 1 ] || {
             tail -100 /tmp/llm-canary-service.log
-            echo "::error::預期恰好 22 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
+            echo "::error::預期恰好 24 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
             exit 1
           }
-          grep -F '0 failed, 0 error(s) of 22 tests' /tmp/llm-canary-service.log
+          grep -F '0 failed, 0 error(s) of 24 tests' /tmp/llm-canary-service.log
 
       - name: Run six real PostgreSQL canary tests
         run: |

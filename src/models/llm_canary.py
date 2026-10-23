@@ -29,6 +29,9 @@ EVENT = 'woow_paas_platform.llm_event'
 _COLUMNS = ('canary_generation', 'canary_started_at', 'canary_lease_until', 'canary_work',
             'canary_probe_result', 'canary_latency_ms', 'canary_failures',
             'last_canary_at', 'last_canary_result')
+_IDENTITY_PARAMETERS = (common.PARAM_PROXY_URL, common.PARAM_PUBLIC_BASE_URL,
+                        common.PARAM_CANARY_PARTNER_ID, common.PARAM_USERNAME_PREFIX,
+                        common.PARAM_IP_BLOCK)
 
 
 def _now(cr):
@@ -42,9 +45,10 @@ def _environment(cr):
     values = dict(cr.fetchall())
     fingerprint = hashlib.sha256('\n'.join(
         '%s=%s' % (key, (values.get(key) or '').strip())
-        for key in sorted(common.LLM_CONFIG_PARAMETERS)).encode()).hexdigest()
+        for key in sorted(_IDENTITY_PARAMETERS)).encode()).hexdigest()
     state, proxy = nac.proxy_url_state(values.get(common.PARAM_PROXY_URL))
-    partner = common._parse_service_admin_id(values.get(common.PARAM_CANARY_PARTNER_ID))
+    enabled = bool((values.get(common.PARAM_CANARY_PARTNER_ID) or '').strip())
+    partner = common._parse_service_admin_id(values.get(common.PARAM_CANARY_PARTNER_ID)) or 0
     prefix = (values.get(common.PARAM_USERNAME_PREFIX) or nac.PROD_USERNAME_PREFIX).strip()
     block = common._parse_block(values.get(common.PARAM_IP_BLOCK))
     public = (values.get(common.PARAM_PUBLIC_BASE_URL) or '').strip()
@@ -57,7 +61,8 @@ def _environment(cr):
                 else 'https://newapi-stg.woowtech.io/v1')
     valid = valid and public == expected
     return {'fingerprint': fingerprint, 'proxy_url': proxy, 'public_base_url': public,
-            'partner_id': partner, 'prefix': prefix, 'block': block, 'valid': bool(valid)}
+            'partner_id': partner, 'prefix': prefix, 'block': block, 'valid': bool(valid),
+            'enabled': enabled}
 
 
 def _account(cr, partner_id):
@@ -101,7 +106,7 @@ class LlmCanary(models.Model):
         with deadline_cursor(self.env.registry.cursor, deadline) as cr:
             _begin(self.env, cr, read_committed=True)
             environment = _environment(cr)
-            if not environment['partner_id']:
+            if not environment.get('enabled', bool(environment['partner_id'])):
                 return None
             self._llm_ensure_row(cr)
             row, now = self._canary_row(cr, lock=True), _now(cr)
@@ -173,24 +178,25 @@ class LlmCanary(models.Model):
         claim, work = claimed
         if work['phase'] == 'creating':
             result, latency = 'create_failed', 0
+            created = {}
             try:
                 # A fresh environment avoids the cron's old REPEATABLE READ
                 # snapshot and contains no request-controlled context.
-                with deadline_cursor(self.env.registry.cursor, tick.deadline - 8) as cr:
+                create_deadline = min(time.monotonic() + 12, tick.deadline - 16)
+                with deadline_cursor(self.env.registry.cursor, create_deadline) as cr:
                     _begin(self.env, cr, read_committed=True)
                     env = _env_on(self.env.registry, cr)
                     account = env[ACCOUNT].sudo().browse(claim.account_id)
                     created = env[KEY]._llm_create_canary_key(
-                        account, claim, min(time.monotonic() + 12, tick.deadline - 16))
-                    try:
-                        probe = llm_canary_probe.probe(work['public_base_url'], created['key'],
-                                                      deadline=tick.deadline - 8)
-                        result = 'ok' if probe.code == 'ok' else 'probe_failed'
-                        latency = probe.latency_ms
-                    finally:
-                        created.clear()
+                        account, claim, create_deadline)
+                probe = llm_canary_probe.probe(work['public_base_url'], created['key'],
+                                              deadline=tick.deadline - 8)
+                result = 'ok' if probe.code == 'ok' else 'probe_failed'
+                latency = probe.latency_ms
             except Exception:  # noqa: BLE001 - never log credential-bearing exception objects
                 _logger.warning('[LLM] canary create/probe did not complete')
+            finally:
+                created.clear()
             if not self._canary_save_probe(claim, result, latency, tick.deadline):
                 return False
         cleaned, failure = self._canary_cleanup(claim, work, tick.deadline - 2)
