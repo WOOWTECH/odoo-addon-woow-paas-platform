@@ -15,7 +15,7 @@
 #   redeploy  action_redeploy()：重新套用範本釘的 chart 版本與 helm_values，觸發部署後初始化（running）
 #   conf      把給定的 conf.limitTimeCpu／limitTimeReal／serverWideModules 寫進 helm_values，再 redeploy（running）
 # redeploy／conf 是非同步的：之後用 status 等 state 回到 running。
-# stg 平台：--platform-ns dev-sandbox-stg --deploy stg-odoo-dev-sandbox-odoo --db woow_stg
+# stg 平台（cd#289 起由 Fleet 管理）：--platform-ns paas-stg-system --deploy paas-odoo-platform-stg --db woow_stg
 # 走 deploy/<name> 而不是 pod 名稱：平台升版後 pod 會換名。實作在同目錄 cloud_service_ops.py。
 # 輸出平台回的 JSON（conf 只印三個鍵，不印 helm_values 裡的密碼）。
 # exit：0 成功、1 動作失敗或 state=error（JSON 的 error／error_message）、2 參數錯、3 kubectl 或 odoo shell 沒有回 JSON

@@ -7,7 +7,7 @@
 **SA P1 stg 真 Cloudflare E2E（2026-06-07 首驗全通，image 20260606.2328 = develop@d0237ae）**
 
 E2E driver = JSON-RPC（admin session）對 `https://stg.woowtech.io`，比 odoo shell 更貼近正式（走 controller gating + 訂閱建立）：
-1. 認證：`POST /web/session/authenticate`（admin 密碼從 `dev-sandbox-stg/stg-odoo-dev-sandbox-secret` key `odoo-admin-password`，command substitution 不落地）→ cookie jar。
+1. 認證：`POST /web/session/authenticate`（DB `woow_stg`，帳密由人私下提供已核准的 stg 測試帳號，密碼不落檔、不印 log）→ cookie jar。stg 平台現為 Fleet release `paas-stg-system/paas-odoo-platform-stg`；舊沙盒已於 [cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289) 退役，不再從舊 Secret 取密碼，也不把新 chart 的 master／DB 密碼當成登入密碼。
 2. create：`POST /api/workspaces/{wid}/security-accesses` `{action:create, name, template_id:1, plan_id:11(trial)}` → canonical `paas-sa-{ws8}-{ref8}`、trial 訂閱 in_progress。
 3. provision：detail endpoint `{action:provision}`（admin 有 `base.group_system` bypass 訂閱 gate）。⚠ **關於 `tunnel_token` 那句已於 #805 (b) 更正**：本檔原寫「`tunnel_token` 是 groups 欄位、非 system caller 會 AccessError fail-closed by design」——`by design` 的部分是假的。該端點對非 system 的 workspace owner／admin **從來沒有成功過**，#805 (b) 裁定那是 bug（同 #739／PR #797 在 smart_home 上的裁決），controller 已改為 `sa.sudo().action_provision()` ⇒ **本 recipe 現在也可以用非 admin 的租戶 session 驅動第 3 步**。欄位遮罩本身沒有放寬：讀側不變，且繞過本 controller 直呼（`/web/dataset/call_kw`）仍 fail-closed。範圍限定見 `src/models/security_access.py::action_provision` 的 tunnel_token ACL note，端點層覆蓋見 `src/tests/test_sa_provision_tenant_rpc_805.py`。
 4. route：routes endpoint `{action:create, subdomain_prefix, service_url}` → 自動觸發 `PUT /api/tunnels/{id}/routes` 宣告式同步。

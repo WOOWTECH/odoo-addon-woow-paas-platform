@@ -82,7 +82,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## A0 定位與邊界
 
 - 只處理平台 `woow_prod`（14057 D1）。租戶 odoo DB clone 不在範圍。
-- ⛔ 禁止重用或覆蓋 `dev-sandbox-stg`：它是 `seed-from-stg.sh` 的來源，也是 `paas-operator-stg` 的 `odooBaseUrl` 目標，誤用＝stg 全租戶事故（13439 ⑥）。
+- ⛔ 彩排不得使用或覆蓋正式 stg `paas-stg-system/paas-odoo-platform-stg`（DB `woow_stg`）；`paas-operator-stg` 的 `odooBaseUrl` 現指 `http://paas-odoo-active-stg.paas-stg-system.svc.cluster.local`。舊 `dev-sandbox-stg` 已於 [cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289) 退役，`seed-from-stg.sh` 已停用，也不得重建同名 namespace；彩排用獨立 `dev-sandbox-<slug>`（原隔離要求：13439 ⑥）。
 - 與 #1206 交付 3 分工：中和段、斷言表、外連證據、PII 與銷毀規則一律**引用** [prod clone 中和 runbook](prod-clone-neutralization-runbook.md)（#1206）；本檔只寫 chart 切換段。
 - 彩排不是正式切換的替身；與正式切換的差異列在 A3 差異表（CONTEXT.md:136）。
 - 彩排使用的現成值（已落地，不必佔位）：

@@ -1,5 +1,11 @@
 # project 427 operator ingress baseline
 
+> **環境更新（2026-10-23）**：`dev-sandbox-stg` 已隨 [cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289) 退役並刪除。
+> 現行 stg Odoo 是 `paas-stg-system/paas-odoo-platform-stg`（DB `woow_stg`），
+> operator `odooBaseUrl` 為 `http://paas-odoo-active-stg.paas-stg-system.svc.cluster.local`（Service 80 → nginx 8080）。
+> 下方保留原決策與當時實測，不是現況白名單或操作座標；現行部署與網路驗收見
+> [CD stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)。
+
 > 自 Claude memory 遷移（2026-08-05）。原 slug `project_427_operator_ingress_baseline`。盤點依據見 [memory-inventory-2026-08-05](../tracking/memory-inventory-2026-08-05.md)。
 >
 > 原 description："#427 控制面 ingress 白名單最小版上 prod——per-chart egress 對第三方 chart 結構上不成立，只能從被連的那端擋"
