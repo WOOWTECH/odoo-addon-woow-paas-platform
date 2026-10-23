@@ -1,0 +1,27 @@
+# Price notice's pure contracts include the authenticated route AST check.
+# Run on every PR: a path filter silently skipped the route test when #1944
+# changed the reader, leaving a stale assertion undetected by remote CI.
+name: llm-price-notice-offline-contracts
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Price notice offline contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -B -m unittest discover -s tests -p 'test_llm_price_notice*.py' -q
