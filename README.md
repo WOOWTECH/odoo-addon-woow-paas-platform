@@ -40,8 +40,12 @@ open http://localhost:8080          # login: admin / admin
 /woow-dev:k8s-dev-sandbox destroy <sandbox-name> --context docker-desktop    # 銷毀
 ```
 
-> in-repo `.claude/skills/woow-e2e-fixtures/` 只剩 woow 專屬 fixture／clone helper：
-> `scripts/{e2e-seed,e2e-seed-reset-button,seed-from-stg}.sh`（生命週期與 test／extend 都在 plugin；測試通過後的 e2e seed 由 `.sandbox/post-test.sh` hook 接手，帶 `WOOW_E2E_SEED=1`）。
+> in-repo [woow-e2e-fixtures](.claude/skills/woow-e2e-fixtures/SKILL.md) 提供 woow 專屬 fixture／clone helper：
+> 一般 E2E 使用合成 fixture `scripts/{e2e-seed,e2e-seed-reset-button}.sh`；需要 prod 資料形狀的彩排才依 [prod-clone 授權流程](docs/guides/deployment/prod-clone-neutralization-runbook.md)使用 `seed-from-prod.sh`＋`neutralize-clone.sh`。
+> 生命週期與 test／extend 都在 plugin；測試通過後的 e2e seed 由 `.sandbox/post-test.sh` hook 接手，帶 `WOOW_E2E_SEED=1`。
+>
+> `seed-from-stg.sh` 已正式退役並刪除（[#1955](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1955)），不保留提示腳本；**prod clone 不能重現 stg 特有的資料或版本問題**。
+> 舊流程僅供歷史查閱，不作為執行指引：`git show 686c1e2c:.claude/skills/woow-e2e-fixtures/scripts/seed-from-stg.sh`。
 
 ## Running Tests
 

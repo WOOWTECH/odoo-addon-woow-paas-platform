@@ -86,7 +86,7 @@ unit tests（與 CI `.gitea/workflows/paas-operator-unit-tests.yml` 同式）：
 
 ### K8s Dev Sandbox
 
-本機開發與測試一律走沙盒：用 `woow-dev` plugin `/woow-dev:k8s-dev-sandbox <subcommand>`（舊名 `woowprd`；`create`/`destroy` 必帶 `--context`，需要被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`）。子命令、三種 mode、`.sandbox/` hook 以 plugin 的 SKILL.md 為準；本 repo 的宣告在 `.sandbox.yml`；上手指令見 README §Quick Start。in-repo `woow-e2e-fixtures` skill 只剩 woow 專屬 seed helper（e2e seed／stg clone）；test／extend 已由 plugin 取代（2026-09-04），測試後 e2e seed 走 `.sandbox/post-test.sh` hook（`WOOW_E2E_SEED=1`）。
+本機開發與測試一律走沙盒：用 `woow-dev` plugin `/woow-dev:k8s-dev-sandbox <subcommand>`（舊名 `woowprd`；`create`/`destroy` 必帶 `--context`，需要被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`）。子命令、三種 mode、`.sandbox/` hook 以 plugin 的 SKILL.md 為準；本 repo 的宣告在 `.sandbox.yml`；上手指令見 README §Quick Start。in-repo `woow-e2e-fixtures` skill 提供 E2E fixture／prod clone 中和；test／extend 已由 plugin 取代（2026-09-04），測試後 e2e seed 走 `.sandbox/post-test.sh` hook（`WOOW_E2E_SEED=1`）。
 
 ### Release & Build paas-odoo Image
 
@@ -94,7 +94,7 @@ unit tests（與 CI `.gitea/workflows/paas-operator-unit-tests.yml` 同式）：
 
 ### Deploy Staging (deploy-stg)
 
-部署 staging 到 dev sandbox → `deploy-stg` skill（[`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)；frontmatter `name` 為 `woow:deploy-stg`，呼叫時加 `/` 前綴）。前置條件（tea login／token scope）、參數、`--skip-build`／`--image`、image 命名、以及 agent 必走的兩段式跑法（自跑輪詢迴圈會被 harness 砍 sleep 而 exit 5、不可重跑）都在該 skill；沙盒日誌／銷毀走 `/woow-dev:k8s-dev-sandbox logs|destroy`。
+stg 平台換版走 paas-app-bundle-cd 的 `paas-odoo-platform-stg/values-stg.yaml` image pin PR（cd#289）；其他 dev sandbox 才用 `deploy-stg` skill（[`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)，`/woow:deploy-stg --slug <name>`）。前置條件、參數、image 命名與 agent 兩段式跑法見該 skill；沙盒日誌／銷毀走 `/woow-dev:k8s-dev-sandbox logs|destroy`。
 
 ## Architecture
 

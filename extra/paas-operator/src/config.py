@@ -230,7 +230,7 @@ class Settings(BaseSettings):
     agent_runtime_repo_username: str = ""  # Gitea read:package username (--username); private repo auth
     agent_runtime_repo_password: str = ""  # Gitea read:package token (--password); private repo auth
     agent_runtime_image_tag: str = "1.4.4"  # pod image tag injected into values; prod/stg override via AGENT_RUNTIME_IMAGE_TAG. 1.0.0 and 1.4.2 were deleted from JCR (2026-09-30 cleanup, #1273) — keep this default on a tag that exists
-    odoo_base_url: str = ""  # ODOO_BASE_URL injected into pod env (skill-bundle fetch); stg = internal svc, e.g. http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069
+    odoo_base_url: str = ""  # 注入 pod 的 ODOO_BASE_URL（skill-bundle fetch）；stg 例：http://paas-odoo-active-stg.paas-stg-system.svc.cluster.local
     # F-PILOT-10 (A): open the agent pod's egress to the EXTERNAL LLM endpoint
     # (e.g. eugene-minimax.woowtech.io:443). The chart gates this behind
     # `agentRuntime.externalEgress.enabled`; default OFF (closed egress = secure),

@@ -233,11 +233,11 @@ class CloudServiceShTest(unittest.TestCase):
         self.assertIn("does not match", json.loads(r.stdout)["error"])
 
     def test_stg_flags(self):
-        r = self.run_sh("status", *self.BASE, "--platform-ns", "dev-sandbox-stg",
-                        "--deploy", "stg-odoo-dev-sandbox-odoo", "--db", "woow_stg")
+        r = self.run_sh("status", *self.BASE, "--platform-ns", "paas-stg-system",
+                        "--deploy", "paas-odoo-platform-stg", "--db", "woow_stg")
         self.assertEqual(r.returncode, 0, r.stderr)
         args = (Path(self.tmp.name) / "kubectl.args").read_text()
-        self.assertIn("-n dev-sandbox-stg exec -i deploy/stg-odoo-dev-sandbox-odoo", args)
+        self.assertIn("-n paas-stg-system exec -i deploy/paas-odoo-platform-stg -c odoo", args)
         self.assertIn("-d woow_stg", args)
 
     def test_bad_args_exit_2(self):

@@ -108,13 +108,13 @@ related:
 | postgresql | `paas-system` | `bitnamilegacy/postgresql:17.6.0-debian-12-r4` | `92635613…0a8d` | （subchart） | — | `paas-odoo/values-prod.yaml`（postgresql 區塊） |
 | cloudflared | `paas-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `6b599ca3…31b0` | `cloudflare-tunnel-remote` | **`0.1.2`**（已 pin） | tag→`cloudflare/values-prod.yaml:8`；chart→`cloudflare/fleet.yaml` `version`（issue #19 已於 `a76517e` pin） |
 
-### Stg 對照（同 cluster，靠 namespace 區隔）
+### Stg 對照（同 cluster，靠 namespace 區隔；Odoo 列於 2026-10-23 隨 cd#289 更新，其餘為歷史快照）
 
 | Component | NS | image:tag | chart 版本 |
 |-----------|----|-----------|-----------|
 | paas-operator-stg | `paas-stg-system` | `…/paas-operator:8577944`（digest `35f0d1de…6885`，與 prod 同版 parity） | `0.1.17` |
 | cloudflared-stg | `paas-stg-cloudflare-system` | `cloudflare/cloudflared:2026.3.0` | `0.1.2`（已 pin） |
-| odoo（stg） | — | **不在此 CD**：stg odoo 走 `dev-sandbox-stg`（見 [deploy-stg](../../../CLAUDE.md)） | — |
+| odoo（stg） | `paas-stg-system` | Fleet release `paas-odoo-platform-stg`；image pin PR 改 CD repo `paas-odoo-platform-stg/values-stg.yaml` 的 `image.digest`＋`image.tag`；穩定 Service `paas-odoo-active-stg`、DB `woow_stg`，舊沙盒已退役（[cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289)／[stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)） | `woow-odoo`（版本以 CD `fleet.yaml` 為準） |
 
 > **觀察（2026-07-10）：odoo `.48→.51` prod rollout 完成。** prod odoo 由 `20260708.0051`（18.0.1.0.48）升至 **`20260710.0902`（18.0.1.0.51，含 #318/#322 訂閱聯動 + #324 計費雙缺口）**；migration `-u` 0 error、pod digest `4412ed69…c764` 閉環、站點 `/woow /odoo /my /web/login` 全 200（詳見 memory `project_prod_rollout_20260710_51`）。**operator 本輪未動**：現役 **`8577944` / chart `0.1.17`**（`.49/.51` 沒碰 `extra/paas-operator`）——**取代下方 2026-06-25 觀察的 `0.1.16` / `20260624.1022` 快照**；自 #317 PVC keep（PR #321）起 prod/stg operator 仍維持同版 parity（皆 `8577944` / `0.1.17`，digest `35f0d1de…6885`）。**agent-runtime**：operator env 已帶完整 `AGENT_RUNTIME_*`（pin `1.4.2` / chart `0.4.3`、skillRunner on），約 2026-06-26 起 prod **enabled-dormant**（zero 租戶 spawn）——舊「prod 未啟用」認知作廢。
 
