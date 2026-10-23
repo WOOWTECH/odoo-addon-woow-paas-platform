@@ -520,6 +520,7 @@
 3	test_llm_platform_foundation.TestLlmRedactShared
 4	test_llm_platform_foundation.TestLlmRuntimeState
 6	test_llm_platform_foundation.TestLlmThrottle
+11	test_llm_price_notice_ledger.TestLlmPriceNoticeLedger
 14	test_llm_reauth.TestLlmReauth
 2	test_llm_reauth.TestLlmReauthCommitted
 15	test_llm_reconcile_candidate.TestLlmReconcileCandidate

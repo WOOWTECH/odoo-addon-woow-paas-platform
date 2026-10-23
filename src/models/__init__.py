@@ -133,3 +133,4 @@ from . import llm_reconcile_local
 from . import llm_reconcile_candidate
 from . import llm_audit_ingest
 from . import llm_account_lifecycle  # noqa: F401 - register Odoo model extensions
+from . import llm_price_notice
