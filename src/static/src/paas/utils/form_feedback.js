@@ -38,7 +38,10 @@ export function revealFirstError(root, selector, options = {}) {
   if (!target) {
     return null;
   }
-  const { behavior = "smooth" } = options;
+  // WebKit can cancel a pending smooth scroll when focus({preventScroll:true})
+  // moves into the offscreen field. Finish the scroll before moving focus so
+  // rejected submissions always leave their error visible (X-LC-006-3).
+  const { behavior = "instant" } = options;
   if (typeof target.scrollIntoView === "function") {
     target.scrollIntoView({ block: "center", behavior });
   }
