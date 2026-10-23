@@ -161,21 +161,24 @@ class LlmPriceNoticeRecipient(models.Model):
             destination = destination if destination and destination.strip() else False
             prepared.append(dict(vals, destination_snapshot=destination,
                                  state='pending' if destination else 'missing_address'))
-        # A publisher locks the same campaign row before reading recipients.
-        # Lock first, then check publication: an insert racing publication must
-        # either precede its snapshot or be rejected after publication commits.
-        for campaign_id in sorted({row['campaign_id'] for row in prepared}):
-            self.env.cr.execute(
-                'SELECT id FROM woow_paas_platform_llm_price_notice_campaign '
-                'WHERE id = %s FOR UPDATE', (campaign_id,))
-            if self.env.cr.fetchone() is None:
-                raise ValidationError(_('An existing draft campaign is required.'))
-            self.env.cr.execute(
-                'SELECT 1 FROM woow_paas_platform_llm_price_notice_publication '
-                'WHERE campaign_id = %s LIMIT 1', (campaign_id,))
-            if self.env.cr.fetchone() is not None:
-                raise ValidationError(_('A published campaign cannot gain recipients.'))
-        return super(LlmPriceNoticeRecipient, self.with_context({})).create(prepared)
+        # Odoo uses REPEATABLE READ: a row lock alone does not refresh an old
+        # snapshot. Both recipient creation and publication UPDATE this conflict
+        # row, so the loser gets 40001 and must retry with a new snapshot.
+        with self.env.cr.savepoint():
+            for campaign_id in sorted({row['campaign_id'] for row in prepared}):
+                self.env.cr.execute(
+                    'UPDATE woow_paas_platform_llm_price_notice_campaign '
+                    "SET write_date = CURRENT_TIMESTAMP AT TIME ZONE 'UTC' "
+                    'WHERE id = %s RETURNING id', (campaign_id,))
+                if self.env.cr.fetchone() is None:
+                    raise ValidationError(_('An existing draft campaign is required.'))
+                self.env[_CAMPAIGN].browse(campaign_id).invalidate_recordset(['write_date'])
+                self.env.cr.execute(
+                    'SELECT 1 FROM woow_paas_platform_llm_price_notice_publication '
+                    'WHERE campaign_id = %s LIMIT 1', (campaign_id,))
+                if self.env.cr.fetchone() is not None:
+                    raise ValidationError(_('A published campaign cannot gain recipients.'))
+            return super(LlmPriceNoticeRecipient, self.with_context({})).create(prepared)
 
     def write(self, vals):
         raise AccessError(_('Recipient identity and destination snapshots are immutable.'))

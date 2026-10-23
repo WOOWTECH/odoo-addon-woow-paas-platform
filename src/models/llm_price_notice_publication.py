@@ -94,13 +94,18 @@ class LlmPriceNoticePublication(models.Model):
                 or type(campaign_id) is not int or campaign_id <= 0):
             raise AccessError('Synthetic price notice rehearsal is disabled.')
         with self.env.cr.savepoint():
-            # A recipient insert needs a parent FK KEY SHARE lock. This lock
-            # serializes a new recipient against the snapshot and outbox insert.
+            # Odoo's REPEATABLE READ needs a *written* conflict row. A lock
+            # alone would let a waiting transaction query its old snapshot.
+            # Recipient.create writes this same row before its publication
+            # check; 40001 propagates for Odoo's whole-request retry.
             self.env.cr.execute(
-                f'SELECT id FROM {_CAMPAIGN_TABLE} WHERE id = %s FOR UPDATE', (campaign_id,))
+                f'''UPDATE {_CAMPAIGN_TABLE}
+                    SET write_date = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+                    WHERE id = %s RETURNING id''', (campaign_id,))
             if self.env.cr.fetchone() is None:
                 raise ValidationError('A synthetic staging campaign is required.')
             campaign = self.env[_CAMPAIGN].browse(campaign_id).exists()
+            campaign.invalidate_recordset(['write_date'])
             if (not campaign or campaign.environment != 'stg' or campaign.state != 'draft'
                     or not campaign.version.startswith('rehearsal-')
                     or not campaign.body_text.startswith(_REHEARSAL_MARKER)):

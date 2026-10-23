@@ -20,6 +20,7 @@
 # 與真實執行清單雙向對帳：C2（vs 原始碼）與 C3（vs 實際執行清單）皆 PASS，
 # 當時兩側各 653 項、完全一致（653 是該 run 當下的條目數，不代表現況；見 issue #837）。
 18	integration.test_auto_recredit_864.TestAutoRecreditPostgresCapability864
+2	integration.test_llm_price_notice_rehearsal_rr.TestLlmPriceNoticeRehearsalRR
 2	test_ac_access_seat_enforcement_521.TestAcSeatBasePlanBlastRadius
 1	test_ac_access_seat_enforcement_521.TestAcSeatQuotaBff
 10	test_ac_access_seat_enforcement_521.TestAcSeatQuotaModel
