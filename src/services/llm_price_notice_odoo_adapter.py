@@ -6,6 +6,9 @@ A successful preflight is a snapshot check, not permission to publish/send.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
+import hashlib
+import json
+import re
 
 from .llm_price_notice_transport import Attempt, Journal, _matches_mime_snapshot
 
@@ -15,12 +18,15 @@ BINDING_SCHEMA = """CREATE TABLE llm_notice_odoo_mail_binding (
     database_name TEXT NOT NULL,
     mail_id INTEGER NOT NULL CHECK (mail_id > 0),
     obligation_id INTEGER NOT NULL CHECK (obligation_id > 0),
-    UNIQUE (database_name, mail_id)
+    UNIQUE (database_name, mail_id),
+    UNIQUE (database_name, obligation_id)
 )"""  # Proposed migration only; never executed here. No FK to auto-deleted mail.
 
 
 @dataclass(frozen=True)
 class MailBinding:
+    """One committed mail row bound to one immutable synthetic outbox row."""
+
     attempt: Attempt
     database_name: str
     mail_id: int
@@ -182,7 +188,7 @@ class OdooMailBoundary:
             if env.cr.dbname != binding.database_name:
                 raise ValueError('odoo_database_mismatch')
             mail = env['mail.mail'].browse(binding.mail_id).exists()
-            obligation = env['woow_paas_platform.llm_price_notice_recipient'].browse(
+            obligation = env['woow_paas_platform.llm_price_notice_outbox'].browse(
                 binding.obligation_id).exists()
             if len(mail) != 1 or len(obligation) != 1:
                 raise ValueError('committed_source_missing')
@@ -190,12 +196,44 @@ class OdooMailBoundary:
             # expansion and cc are excluded; actual final SMTP envelope checked too.
             if (mail.email_to != attempt.destination or mail.email_cc or mail.recipient_ids):
                 raise ValueError('odoo_mail_recipient_mismatch')
-            campaign = obligation.campaign_id
-            if (len(campaign) != 1 or campaign.fingerprint != attempt.campaign_fingerprint
-                    or campaign.environment != attempt.environment
+            publication = obligation.publication_id
+            recipient = obligation.recipient_id
+            if len(publication) != 1 or len(recipient) != 1:
+                raise ValueError('committed_source_missing')
+            campaign = publication.campaign_id
+            if len(campaign) != 1 or len(recipient.campaign_id) != 1:
+                raise ValueError('committed_source_missing')
+            raw = publication.public_payload_json
+            if type(raw) is not str or len(raw) > 1048576:
+                raise ValueError('odoo_obligation_snapshot_mismatch')
+            try:
+                public_payload = json.loads(raw)
+            except (TypeError, ValueError):
+                raise ValueError('odoo_obligation_snapshot_mismatch') from None
+            if (attempt.environment != 'stg' or campaign.environment != 'stg'
+                    or publication.environment != 'stg'
+                    or not campaign.version.startswith('rehearsal-')
+                    or not campaign.body_text.startswith('【合成測試，不代表正式公告】')
+                    or not re.fullmatch(r'(?:paas|legacy):synthetic(?:_[A-Za-z0-9_-]{1,54})?',
+                                        attempt.recipient_key)
+                    or not re.fullmatch(r'[A-Za-z0-9_.+%-]+@(?:[A-Za-z0-9-]+\.)*example\.test',
+                                        attempt.destination)
+                    or obligation.state != 'pending' or publication.withdrawn_at
+                    or recipient.campaign_id != campaign
+                    or campaign.fingerprint != attempt.campaign_fingerprint
+                    or publication.campaign_fingerprint != campaign.fingerprint
+                    or obligation.campaign_fingerprint != campaign.fingerprint
+                    or hashlib.sha256(raw.encode('utf-8')).hexdigest() != publication.payload_sha256
+                    or obligation.payload_sha256 != publication.payload_sha256
+                    or type(public_payload) is not dict
+                    or public_payload.get('version') != campaign.version
+                    or public_payload.get('body_text') != campaign.body_text
                     or obligation.recipient_key != attempt.recipient_key
+                    or recipient.recipient_key != attempt.recipient_key
                     or obligation.destination_snapshot != attempt.destination
-                    or obligation.destination_revision != attempt.destination_revision):
+                    or recipient.destination_snapshot != attempt.destination
+                    or obligation.destination_revision != attempt.destination_revision
+                    or recipient.destination_revision != attempt.destination_revision):
                 raise ValueError('odoo_obligation_snapshot_mismatch')
         # No mail.state, message_id, notification state or success_pids access.
 
