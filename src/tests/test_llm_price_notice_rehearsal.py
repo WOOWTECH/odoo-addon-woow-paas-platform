@@ -174,3 +174,17 @@ class TestLlmPriceNoticeRehearsal(TransactionCase):
               self.env.cr.savepoint()):
             self._publish(campaign)
         self.assertEqual(self._counts(), (1, 2))
+
+    def test_published_campaign_cannot_gain_a_recipient_without_outbox(self):
+        campaign = self._campaign()
+        self._publish(campaign)
+        with self.assertRaises(ValidationError):
+            self.env[RECIPIENT].with_user(self.admin).create({
+                'campaign_id': campaign.id,
+                'recipient_key': 'legacy:synthetic_late',
+                'destination_snapshot': 'late@example.test',
+                'destination_revision': 1,
+            })
+        self.assertEqual(self._counts(), (1, 2))
+        self.assertEqual(self.env[RECIPIENT].sudo().search_count([
+            ('campaign_id', '=', campaign.id)]), 2)
