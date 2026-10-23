@@ -3,7 +3,7 @@ title: AI 模型值班 runbook（LLM-14 第一切片）
 category: guides
 status: draft
 created: 2026-10-21T05:15:16Z
-updated: 2026-10-21T05:15:16Z
+updated: 2026-10-23T15:49:00Z
 related:
   - docs/guides/deployment/prod-release-sop.md
   - docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md
@@ -15,7 +15,7 @@ related:
 ## 適用範圍與操作底線
 
 給值班人員及協助調查的 agent。這是文件切片，不是 LLM-14 偵測器或正式上線驗收。
-以 PaaS develop `ddbcfb4add85d7e4453b0b7f5335a70788b8e22a` 的既有程式為基準；
+原稿以 PaaS develop `ddbcfb4add` 為基準，監控入口現況已於 `2af3aa7fe` 重新核對；
 執行前先核對實際部署版本、站點、DB、namespace、事件時間與操作者權限。以下命令僅供審查後使用，
 不是讀到告警就自動執行；正式處置由負責人決定，不占用他人的測試站或 sandbox。
 
@@ -35,9 +35,18 @@ D16／D17 與票單來源是專案交接目錄的 `DECISIONS.md`、`tickets/LLM-
 
 ## 1. 先判斷偵測與通知是否還活著
 
-目前 [LLM_CRONS](../../../src/models/llm_common.py) 有 alert delivery、connection test 等18個入口，
-**沒有 LLM-14 的每5分鐘 health／每30分鐘 canary cron**。`last_canary_at/result` 有欄位不代表有人寫入。
+目前 [LLM_CRONS](../../../src/models/llm_common.py) 包含 alert delivery、connection test 與
+[每 5 分鐘匿名狀態不變量監控](../../../src/models/llm_status_monitor.py)。此監控安裝預設停用，
+啟用前須確認環境；它尚未涵蓋 LLM-14 完整健康檢查。**每 30 分鐘的 canary 工作尚未接線**，
+`last_canary_at/result` 有欄位不代表有人寫入。
 `action_llm_test_connection` 是人工排程，非定期探測；無 canary 紀錄、無信或無 incident 都不能證明正常。
+
+公網 Qwen 的 [有界探針 helper](../../../src/services/llm_canary_probe.py) 目前僅提供獨立 transport，
+尚未由 cron 呼叫、建立／刪除金鑰或記錄 canary 結果。它只接受兩個既有公網 API base，固定免費
+Qwen 模型，以子程序限制 DNS／TLS／回應的總耗時。傳入金鑰只經 stdin／記憶體；輸出僅固定結果碼、
+延遲和 HTTP status，不保留模型內容。此 helper 的測試成功不等於 staging canary 或正式上線驗收。
+正常逾時會終止並回收子程序；如果作業系統拒絕終止，或期限內無法確認回收，會回
+`cleanup_error`，不可當作已清理成功。Linux 子程序另有自身逾時；呼叫端須保留此失敗結果供後續處理。
 
 管理員可從現有 **AI Models → Connection status → Test connection** 排一次檢查，回讀
 `connection_test_requested_at`、`connection_test_at/result`。這會經 CRON 簽章外呼，不是唯讀操作；
