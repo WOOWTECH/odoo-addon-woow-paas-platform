@@ -30,6 +30,10 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 ## 已決未進 baseline（decision 帶 prior_human；不再問）
 | decision id | repo | 位置 | 人的決定（日期） |
 
+## issue（issue_sync 兩次執行的合計；見 sec-issue skill）
+| 動作 | repo | issue | 來源 | 位置 |
+<opened／confirmed／closed 逐筆列；skipped、errors 另列原因；都沒有就寫「本輪無變動」>
+
 ## Jev 建議丟棄（供抽查）
 ## 工具與資料缺口
 ## 給人的待辦（advisory 草稿／baseline 片段）

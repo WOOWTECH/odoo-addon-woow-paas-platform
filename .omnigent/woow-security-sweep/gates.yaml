@@ -34,3 +34,14 @@ thresholds:
 severity_levels: [info, low, medium, high, critical]
 # 等級 ≥ 此值走 private（GitHub Security Advisory），不開公開 PR（揭露政策 C）
 private_disclosure_min_level: high
+
+# 自動開 issue（#1957，sec-issue skill）。
+# ⛔ owner 只能是 Gitea 的 mirror-internal（issue_sync.py 寫死檢查）：目標 repo 在 GitHub 是 public，
+#    未修先開等於公開漏洞細節。
+issues:
+  enabled: true
+  owner: mirror-internal
+  tea_login: git-prod
+  # 沒有人工決定時，Jev 判 true_positive 且信心 ≥ 此值就開（標 sweep/jev）。
+  # 起始值：既有 17 筆中唯一 ≥ 0.85 的那筆人也判成立；判成立 0.55 的那筆人判誤報。
+  jev_min_confidence: 0.85

@@ -20,7 +20,8 @@
 腳本的單元測試由 CI 的 security-sweep-tests workflow 跑。
 
 policy 片段一律從 woow-issue-leader/generate-worker.py 取（單一真相）；本檔只定義 sweep
-專屬的兩條 CEL：P-secret（不准讀 API key）與 P-forge（不准對 GitHub 寫入）。
+專屬的三條 CEL：P-secret（不准讀 API key）、P-forge（不准對 GitHub 寫入）、
+P-gitea（Gitea issue 只能經 issue_sync.py）。
 """
 
 from __future__ import annotations
@@ -98,8 +99,26 @@ CEL_FORGE = f"""event.type == "tool_call"
 && event.data.arguments.command.matches("{FORGE_WRITE_RE}")
 ? {{"result": "DENY", "reason": "woow-security-sweep 的 leader 不對 GitHub 寫入（issue／PR／留言／push）：目標 repo 是 public，寫出去就公開。結果寫進本機報告與 Inbox；修正由 fix worker 在 worktree 裡做，PR 由人核准後才開。"}} : {{"result": "ALLOW"}}"""
 
+#: Gitea issue 只能由 issue_sync.py 開（#1957）：它寫死 owner、遮蔽秘密值、去重。
+#: leader 直接 tea／curl 寫入就繞過這些檢查。tea 的讀取（GET）不擋。
+GITEA_WRITE_RE = (
+    "(\\\\btea\\\\s+api\\\\b[\\\\s\\\\S]*(-X\\\\s*(POST|PATCH|PUT|DELETE)|--method\\\\s+(POST|PATCH|PUT|DELETE)"
+    "|\\\\s(-d|--data|-f|-F|--field)\\\\s)"
+    "|\\\\btea\\\\s+(issues?|i|pulls?|pr|labels?|milestones?|ms|releases?|r)\\\\s+"
+    "(create|c|edit|e|close|reopen|open|delete|rm|merge|m|approve|reject)\\\\b"
+    "|\\\\btea\\\\s+(comment|c)\\\\s"
+    "|\\\\bcurl\\\\b[\\\\s\\\\S]*git-prod\\\\.woowtech\\\\.io/api)"
+)
+
+CEL_GITEA = f"""event.type == "tool_call"
+&& event.data.name in {GEN._cel_list(GEN.SHELL_TOOLS)}
+&& has(event.data.arguments.command)
+&& event.data.arguments.command.matches("{GITEA_WRITE_RE}")
+? {{"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫 mirror-internal、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"}} : {{"result": "ALLOW"}}"""
+
 P_SECRET = GEN._cel_yaml("p_secret_no_api_key_read", CEL_SECRET)
 P_FORGE = GEN._cel_yaml("p_forge_no_public_write", CEL_FORGE)
+P_GITEA = GEN._cel_yaml("p_gitea_issue_via_script", CEL_GITEA)
 
 #: 花費：每天一個新 session ⇒ per-session 上限即每日上限。⛔ 不設 ask：無人值守時 ASK 等於停機。
 #: 排程另設 max_cost_usd 當第二道上限。
@@ -110,7 +129,7 @@ P_COST_SWEEP = GEN._fn_policy(
 
 def policies() -> list[str]:
     return (GEN.P_LEADER_ORCH + [GEN.P_BOARD, GEN.P_MERGE, GEN.P_APPROVE, GEN.P_TAG, GEN.P_ESCAPE,
-                                 P_SECRET, P_FORGE] + GEN.P_SAFETY + [P_COST_SWEEP])
+                                 P_SECRET, P_FORGE, P_GITEA] + GEN.P_SAFETY + [P_COST_SWEEP])
 
 
 def config_text() -> str:
@@ -157,6 +176,8 @@ def _file(name: str, **args: str) -> dict:
 
 
 J = "python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-gate/scripts/jev_gate.py"
+I = ("python3.12 /data/pi-agent/home/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep"
+     "/skills/sec-issue/scripts/issue_sync.py")
 
 CEL_VECTORS: dict[str, dict[str, list[dict]]] = {
     "p_secret_no_api_key_read": {
@@ -191,6 +212,24 @@ CEL_VECTORS: dict[str, dict[str, list[dict]]] = {
             _shell("gh api repos/WOOWTECH/woow_line_base/pulls/8"),
             _shell("gh run list --repo WOOWTECH/woow_line_base --limit 5"),
             _shell("git -C /home/elmo/woow-repos/WOOW/woow_line_base fetch origin"),
+        ],
+    },
+    "p_gitea_issue_via_script": {
+        "deny": [
+            _shell("tea api -X POST -d @/tmp/i.json repos/mirror-internal/woow_line_base/issues"),
+            _shell("tea api --login git-prod --method PATCH repos/mirror-internal/x/issues/1 -f state=closed"),
+            _shell("tea api -d @b.json repos/mirror-internal/x/issues"),
+            _shell("tea issues create --repo mirror-internal/x --title t"),
+            _shell("tea issue close 3 --repo mirror-internal/x"),
+            _shell("tea comment 3 hello", name="sys_os_shell"),
+            _shell("tea labels create --name x"),
+            _shell("curl -s https://git-prod.woowtech.io/api/v1/repos/mirror-internal/x/issues"),
+        ],
+        "allow": [
+            _shell(f"{I} --state-dir /tmp/s sync --run-dir /tmp/run/woow_line_base"),
+            _shell(f"{I} --state-dir /tmp/s sync --run-dir /tmp/run/woow_line_base --dry-run"),
+            _shell("tea api --login git-prod repos/mirror-internal/woow_line_base/issues?state=open"),
+            _shell("tea issues list --repo mirror-internal/woow_line_base"),
         ],
     },
 }
@@ -245,7 +284,8 @@ def run_checks() -> int:
     def c3():
         _, cel_policy = _import_omnigent()
         bad, n = [], 0
-        for name, expr in (("p_secret_no_api_key_read", CEL_SECRET), ("p_forge_no_public_write", CEL_FORGE)):
+        for name, expr in (("p_secret_no_api_key_read", CEL_SECRET), ("p_forge_no_public_write", CEL_FORGE),
+                           ("p_gitea_issue_via_script", CEL_GITEA)):
             evaluate = cel_policy(expression=expr, reason="policy")
             for want, events in (("DENY", CEL_VECTORS[name]["deny"]), ("ALLOW", CEL_VECTORS[name]["allow"])):
                 for ev in events:
