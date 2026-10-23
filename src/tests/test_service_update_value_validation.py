@@ -397,11 +397,14 @@ class TestCreateServiceValueValidation(TransactionCase):
         self.env['woow_paas_platform.workspace_access'].create({
             'workspace_id': self.workspace.id, 'user_id': self.member.id, 'role': 'admin'})
 
-    def _create(self, values):
+    def _create(self, values, **overrides):
         with patch(f'{_CONTROLLER}.request', new=MagicMock(env=self.env(user=self.member))):
             return PaasController()._create_service(
-                workspace=self.workspace, template_id=self.tpl.id, name='svcupd-create',
-                values=values, plan_id=self.plan.id)
+                workspace=self.workspace,
+                template_id=overrides.get('template_id', self.tpl.id),
+                name=overrides.get('name', 'svcupd-create'),
+                values=values,
+                plan_id=overrides.get('plan_id', self.plan.id))
 
     def _services(self):
         return self.env['woow_paas_platform.cloud_service'].search([
@@ -420,6 +423,31 @@ class TestCreateServiceValueValidation(TransactionCase):
                 self.assertFalse(result.get('success'), result)
                 self.assertIn(needle, result.get('error', ''))
                 self.assertFalse(self._services(), '被擋的開通不得留下服務列')
+
+    def test_malformed_create_input_types_are_refused_before_orm_lookup(self):
+        for overrides in (
+                {'name': 123},
+                {'name': ['service']},
+                {'name': {'value': 'service'}},
+                {'name': True},
+                {'template_id': 'not-a-number'},
+                {'template_id': True},
+                {'plan_id': 'not-a-number'},
+                {'plan_id': True},
+        ):
+            with self.subTest(overrides=overrides):
+                with patch(f'{_CONTROLLER}._PaaSCapability') as capability:
+                    result = self._create({}, **overrides)
+                    capability.assert_not_called()
+                self.assertFalse(result.get('success'), result)
+                self.assertEqual(result.get('error'), 'Invalid request')
+                self.assertFalse(self._services(), '被擋的開通不得留下服務列')
+
+    def test_create_numeric_strings_are_not_part_of_the_json_id_contract(self):
+        result = self._create({}, template_id=str(self.tpl.id), plan_id=str(self.plan.id))
+        self.assertFalse(result.get('success'), result)
+        self.assertEqual(result.get('error'), 'Invalid request')
+        self.assertFalse(self._services(), '被擋的開通不得留下服務列')
 
 
 @tagged('post_install', '-at_install')
