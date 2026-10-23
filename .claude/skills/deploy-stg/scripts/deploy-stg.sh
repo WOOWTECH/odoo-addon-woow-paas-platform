@@ -3,11 +3,17 @@
 # Deploy Staging (paas-odoo)
 # 觸發 Gitea CI 建置 staging image，等待完成後部署到 K8s dev sandbox。
 #
+# ⛔ stg 平台已不在這裡：2026-10-23 起 stg.woowtech.io 由 Fleet 管理的
+#    paas-stg-system/paas-odoo-platform-stg 提供（woow-paas/paas-app-bundle-cd#289），
+#    dev-sandbox-stg 已退役。--slug stg 一律拒絕（見 scripts/retired-stg.sh）；
+#    stg 換版改走 paas-app-bundle-cd 的 image pin PR。本腳本只適用其他沙盒。
+#
 # Usage:
 #   .claude/skills/deploy-stg/scripts/deploy-stg.sh [OPTIONS] [ADDON_REF]
 #
 # Options:
-#   --slug <name>         Sandbox slug (default: stg)
+#   --slug <name>         Sandbox slug（必填；namespace = dev-sandbox-<slug>）。
+#                         stg 已退役、會被拒絕，沒有繞過旗標
 #   --image <full-image>  Skip CI build, use existing image (format: registry/repo:tag)
 #   --skip-build          Skip CI build, only poll CI status for existing tag
 #   --ingress             Enable Ingress ({slug}.woowtech.io)
@@ -27,10 +33,9 @@
 #   (run: tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>)
 #
 # Examples:
-#   .claude/skills/deploy-stg/scripts/deploy-stg.sh
-#   .claude/skills/deploy-stg/scripts/deploy-stg.sh v18.0.1.0.5
-#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --slug stg-test
-#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1400
+#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --slug my-sandbox
+#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --slug my-sandbox v18.0.1.0.5
+#   .claude/skills/deploy-stg/scripts/deploy-stg.sh --slug my-sandbox --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1400
 
 set -euo pipefail
 
@@ -52,7 +57,9 @@ REGISTRY_HOST="jcr-prod.woowtech.io"
 IMAGE_PATH="woow-paas-docker-local/paas-odoo-stg"
 
 # --- Defaults ---
-SLUG="stg"
+# 以前預設 stg ⇒ 不帶參數就會重建已退役的 dev-sandbox-stg（cd#289／#342）。
+# 改成必填：空值與 stg 都在參數解析完、任何寫入之前由退役守衛擋下。
+SLUG=""
 ADDON_REF=""
 IMAGE_OVERRIDE=""
 GIT_TAG_OVERRIDE=""
@@ -132,6 +139,33 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# --- dev-sandbox-stg 退役守衛（cd#289／#342）---
+#
+# 🔴 必須在這裡、在任何寫入之前：後面依序會 git fetch、到 paas-odoo-ci 建 tag 觸發
+#    CI（遠端寫入），最後 create.sh 才建沙盒。等到 create.sh 才擋，tag 與 CI build
+#    已經發生了。刻意沒有繞過旗標，理由見 retired-stg.sh 檔頭。
+# fail-closed：守衛檔不在就不跑 —— 沒有守衛時 --slug stg 會靜默重建舊沙盒。
+RETIRED_STG_SH="${SCRIPT_DIR}/retired-stg.sh"
+if [ ! -f "$RETIRED_STG_SH" ]; then
+    echo -e "${RED}ERROR: 找不到 dev-sandbox-stg 退役守衛：${RETIRED_STG_SH}${NC}" >&2
+    echo -e "${YELLOW}沒有守衛就無法保證不會重建已退役的 dev-sandbox-stg —— 拒絕繼續。${NC}" >&2
+    exit 2
+fi
+# shellcheck source=./retired-stg.sh
+source "$RETIRED_STG_SH"
+
+if [ -z "$SLUG" ]; then
+    echo -e "${RED}ERROR: 必須明確指定 --slug <沙盒名>。${NC}" >&2
+    echo -e "${YELLOW}以前的預設值 stg 已退役，不再提供預設。${NC}" >&2
+    echo "" >&2
+    dstg_print_retired_notice "deploy-stg"
+    exit 2
+fi
+if dstg_is_retired_target "$SLUG" "dev-sandbox-${SLUG}"; then
+    dstg_print_retired_notice "deploy-stg"
+    exit 2
+fi
 
 # --- Prerequisites ---
 echo -e "${BLUE}Checking prerequisites...${NC}"
