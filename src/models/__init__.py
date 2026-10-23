@@ -135,3 +135,4 @@ from . import llm_audit_ingest
 from . import llm_account_lifecycle  # noqa: F401 - register Odoo model extensions
 from . import llm_price_notice
 from . import llm_price_notice_publication
+from . import llm_price_notice_outbox

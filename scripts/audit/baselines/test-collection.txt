@@ -522,6 +522,7 @@
 6	test_llm_platform_foundation.TestLlmThrottle
 13	test_llm_price_notice_ledger.TestLlmPriceNoticeLedger
 8	test_llm_price_notice_publication.TestLlmPriceNoticePublication
+7	test_llm_price_notice_rehearsal.TestLlmPriceNoticeRehearsal
 14	test_llm_reauth.TestLlmReauth
 2	test_llm_reauth.TestLlmReauthCommitted
 15	test_llm_reconcile_candidate.TestLlmReconcileCandidate
