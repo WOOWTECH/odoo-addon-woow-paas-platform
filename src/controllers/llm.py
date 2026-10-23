@@ -76,6 +76,7 @@ ACCOUNT_MODEL = 'woow_paas_platform.llm_account'
 KEY_MODEL = 'woow_paas_platform.llm_api_key'
 ORDER_MODEL = 'woow_paas_platform.llm_credit_order'
 TERMS_MODEL = 'woow_paas_platform.llm_terms'
+PUBLICATION_MODEL = 'woow_paas_platform.llm_price_notice_publication'
 #: 錯誤回應可以帶的參數欄位（只放數字與固定字串，前端用來組句）。
 _SAFE_PARAMS = frozenset({
     'retry_after', 'current_version', 'max_keys', 'field',
@@ -318,8 +319,14 @@ class LlmController(HiddenChainMixin, Controller):
 
     @route('/api/llm/price-notices', auth='user', methods=['POST'], type='json', readonly=True)
     def llm_price_notices(self) -> dict[str, Any]:
-        """Dormant presentation contract: never read draft campaigns or recipients."""
-        return {'notices': []}
+        """Read only explicitly enabled publications, including for inactive users."""
+        try:
+            return {'notices': request.env[PUBLICATION_MODEL]._llm_public_notices()}
+        except OperationalError:
+            raise
+        except Exception:  # noqa: BLE001 - never reflect stored notice fields to a tenant
+            _logger.error('[LLM] price-notices read failed (uid=%s)', request.env.uid)
+            return {'notices': []}
 
     @route('/api/llm/models', auth='user', methods=['POST'], type='json')
     def llm_models(self) -> dict[str, Any]:
