@@ -10,6 +10,10 @@ const serviceSource = stubImports(await readPaas("services/llm_service.js"), {
   "./llm_errors": "const LLM_KEY_CREATE_INTERRUPTED='interrupted', LLM_NETWORK_ERROR='network', LLM_SESSION_EXPIRED='expired';",
 });
 const { llmService, priceNoticeDtos } = await import(toDataUrl(serviceSource));
+const formatSource = stubImports(await readPaas("utils/llm_format.js"), {
+  "@web/core/l10n/translation": "const _t=x=>x;",
+});
+const formatUrl = toDataUrl(formatSource);
 const notice = () => ({
   schema: 1, id: "pc_" + "a".repeat(32), title: '<img src=x onerror="alert(1)">',
   body_text: '<script>alert(1)</script>\n<a href="javascript:alert(1)">link</a>\n' + "x".repeat(300),
@@ -30,6 +34,7 @@ const replacements = {
   "../../core/llm_routes": "const LLM_TABS=['overview','keys','usage','models','credit','docs']; const isLlmTabLive=()=>true; const llmTabPath=x=>'llm/'+x; const normalizeLlmTab=x=>x||'overview';",
   "../../services/llm_service": "const llmService=globalThis.__noticeService;",
   "../../services/llm_errors": "const llmErrorMessage=x=>x.code;",
+  "../../utils/llm_format": `const { formatTaipeiDateTime } = await import("${formatUrl}");`,
   "./tabs/llm_docs_helpers": "const createLlmDocsKeyHandoff=()=>({clear(){}}); const validatedLlmPublicBaseUrl=()=>'';",
 };
 for (const name of ["Credit", "Models", "Overview", "Keys", "Docs", "Usage"]) {
@@ -87,7 +92,7 @@ test("notice rows preserve exact rates, mode units, and Taipei effective time", 
     ["cache_read", "0.03", "0.07"], ["cache_write", "0.04", "0.08"],
   ]);
   assert.ok(ratio.rates.every(rate => rate.unit === "points per million tokens"));
-  assert.equal(instance.priceNoticeEffectiveTime(notice()), "2027/01/15 16:00");
+  assert.equal(instance.priceNoticeEffectiveTime(notice()), "2027-01-15 16:00");
   assert.equal(instance.priceNoticeEffectiveIso(notice()), "2027-01-15T08:00:00.000Z");
   hooks.unmount.at(-1)();
 });
@@ -140,6 +145,7 @@ test("real OWL renders hostile DTOs as text above all tabs and removes empty ban
     await view.addScriptTag({ content: await readFile(process.env.LLM_NOTICE_OWL, "utf8") });
     const browserReplacements = { ...replacements,
       "@odoo/owl": "const {Component,onMounted,onPatched,onWillUnmount,onWillUpdateProps,useRef,useState}=owl;",
+      "../../utils/llm_format": "const formatTaipeiDateTime=window.__noticeFormat;",
       "../../components/icon/WoowIcon": `class WoowIcon extends owl.Component { static template=owl.xml\`<span/>\`; static props=['name','size']; }`,
       "./tabs/llm_docs_helpers": "const createLlmDocsKeyHandoff=()=>({clear(){},peekKey(){},peekMode(){},peekAllowedModels(){}}); const validatedLlmPublicBaseUrl=()=>'';",
     };
@@ -147,12 +153,13 @@ test("real OWL renders hostile DTOs as text above all tabs and removes empty ban
       browserReplacements[`./tabs/Llm${name}Tab`] = `class Llm${name}Tab extends owl.Component { static template=owl.xml\`<div data-tab="${name}"/>\`; static props=['*']; }`;
     }
     const script = stubImports(originalPage, browserReplacements).replace("export class LlmPage", "class LlmPage");
-    await view.evaluate(({ script, template, dto }) => {
+    await view.evaluate(({ script, template, dto, formatSource }) => {
+      window.__noticeFormat = new Function(formatSource.replace(/\bexport\s+(?=(?:const|function)\b)/g, "") + "; return formatTaipeiDateTime;")();
       window.__noticeService = { fetchPriceNotices: async () => ({ success: true, data: { notices: [dto] } }) };
       window.__noticeTemplate = template;
       // The source is local code; untrusted announcement fields only enter reactive state.
       window.__noticePageClass = new Function(script + "; return LlmPage;")();
-    }, { script, template: await readPaas("pages/llm/LlmPage.xml"), dto: priceNoticeDtos([notice()])[0] });
+    }, { script, template: await readPaas("pages/llm/LlmPage.xml"), dto: priceNoticeDtos([notice()])[0], formatSource });
     for (const tab of ["overview", "keys", "usage", "models", "credit", "docs"]) {
       await view.evaluate(async tab => {
         window.__app = new owl.App(window.__noticePageClass, { templates: window.__noticeTemplate, props: { tab } });
@@ -162,7 +169,7 @@ test("real OWL renders hostile DTOs as text above all tabs and removes empty ban
       await banner.waitFor();
       assert.equal(await banner.locator("h2").textContent(), notice().title);
       assert.equal(await banner.locator("p").first().textContent(), notice().body_text);
-      assert.equal(await banner.locator("time").textContent(), "2027/01/15 16:00");
+      assert.equal(await banner.locator("time").textContent(), "2027-01-15 16:00");
       assert.equal(await banner.locator("time").getAttribute("datetime"), "2027-01-15T08:00:00.000Z");
       assert.match(await banner.locator(".o_woow_llm_price_notice__effective").textContent(), /Taipei time/);
       assert.match(await banner.locator(".o_woow_llm_price_notice__model").textContent(), /model\/a.*1.*2.*points per call/s);

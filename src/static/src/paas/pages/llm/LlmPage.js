@@ -12,6 +12,7 @@ import { LlmKeysTab } from "./tabs/LlmKeysTab";
 import { LlmDocsTab } from "./tabs/LlmDocsTab";
 import { llmService } from "../../services/llm_service";
 import { llmErrorMessage } from "../../services/llm_errors";
+import { formatTaipeiDateTime } from "../../utils/llm_format";
 import { createLlmDocsKeyHandoff, validatedLlmPublicBaseUrl } from "./tabs/llm_docs_helpers";
 import { LlmUsageTab } from "./tabs/LlmUsageTab";
 
@@ -126,16 +127,7 @@ export class LlmPage extends Component {
   }
 
   priceNoticeEffectiveTime(notice) {
-    const date = new Date(notice.not_before * 1000);
-    if (!Number.isFinite(date.getTime())) return "";
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-    }).formatToParts(date).reduce((values, part) => {
-      if (part.type !== "literal") values[part.type] = part.value;
-      return values;
-    }, {});
-    return `${parts.year}/${parts.month}/${parts.day} ${parts.hour}:${parts.minute}`;
+    return formatTaipeiDateTime(this.priceNoticeEffectiveIso(notice));
   }
 
   priceNoticeEffectiveIso(notice) {
