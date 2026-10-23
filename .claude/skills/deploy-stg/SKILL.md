@@ -1,19 +1,45 @@
 ---
 name: woow:deploy-stg
-description: Deploy a staging paas-odoo instance. Triggers CI to build a staging image, waits for completion, then deploys to a K8s dev sandbox.
-when_to_use: 使用者要部署／建置 staging paas-odoo（「deploy stg」「部署 STG」「建 staging」）。/woow:deploy-stg [addon_ref] [--slug <name>] [--skip-build] [--image <full-image>]
+description: Build a staging-mode paas-odoo image via CI and deploy it to a non-stg K8s dev sandbox (--slug required). The stg platform itself (stg.woowtech.io) moved to the Fleet-managed paas-stg-system/paas-odoo-platform-stg release; --slug stg is refused.
+when_to_use: 使用者要把 staging 模式的 paas-odoo 部署到「其他」dev sandbox（/woow:deploy-stg --slug <name> [addon_ref] [--skip-build] [--image <full-image>]）。⛔ 要換 stg 平台（stg.woowtech.io）的版本不是用這個 skill——改 paas-app-bundle-cd 的 paas-odoo-platform-stg image pin（見本檔開頭）。
 ---
 
 # Deploy Staging (paas-odoo)
 
 透過 `tea` CLI 建立 tag 觸發 CI 建置 paas-odoo staging image，輪詢 CI 狀態等待建置完成後，部署到 K8s dev sandbox。
 
+## ⛔ stg 平台已不在這裡（2026-10-23 起）
+
+stg 平台 Odoo 已在 woow-paas/paas-app-bundle-cd#289 從舊沙盒 `dev-sandbox-stg` 搬到 **Fleet 管理的 release**：
+
+| 項目 | 值 |
+|---|---|
+| namespace／release | `paas-stg-system`／`paas-odoo-platform-stg`（chart `woow-odoo`） |
+| DB | `woow_stg`（PG pod `paas-odoo-platform-stg-postgresql-0`） |
+| 外部 | `https://stg.woowtech.io`（2026-10-23 13:49Z 起走新 release） |
+
+`dev-sandbox-stg` 已退役（cd#342 PR-4；ns 由人刪，TTL 10/29 也會自動刪）。因此：
+
+- **`--slug stg`（以及 `STG`、`stg.` 這類正規化後等於 `stg` 的寫法）一律被拒絕**，exit 2，在建 tag、git fetch、
+  任何 kubectl／helm 之前就結束。照舊流程跑會把 `dev-sandbox-stg` 重建出來：它不受 Fleet 管，stg operator 的沙盒
+  NetworkPolicy 規則也會放行它，可能和新 release 的 cron 雙跑。**沒有繞過旗標。**
+- **`--slug` 改為必填**：以前的預設值就是 `stg`，不帶參數會被同一道守衛擋下。
+- 守衛在 [`scripts/retired-stg.sh`](scripts/retired-stg.sh)，`deploy-stg.sh` 與 `verify-addon-version.sh` 共用；
+  測試 [`tests/test-retired-stg-guard.sh`](tests/test-retired-stg-guard.sh)（repo-lint 會跑）。
+
+**stg 換版的正確流程**：在 woow-paas/paas-app-bundle-cd 改 `paas-odoo-platform-stg/values-stg.yaml` 的 image pin
+（`image.digest`＋`image.tag`；digest 是權威 pin），開 PR → 覆核 → merge，由 Fleet 套用。步驟、gate 與驗收見該 repo 的
+`docs/platform-odoo-stg-runbook.md`，pin 位置見 `docs/sop-cd.md` §4。新 release 的 chart 自帶升級閘
+（`woow_paas_platform.upgrade_done` marker＋post-verify），不靠本 skill 的 Step 8 post-check。
+
+**本 skill 現在只適用其他沙盒**（例如要在自己的沙盒用 stg 模式驗一顆 image）。以下內容都以「其他沙盒」為前提。
+
 ## 參數
 
 | 參數 | 必填 | 預設值 | 說明 |
 |------|------|--------|------|
 | `addon_ref` | 否 | 最新 git tag 或 HEAD short SHA | woow_paas_platform 的 git ref（tag 或 branch） |
-| `--slug <name>` | 否 | `stg` | Sandbox 識別名稱，namespace = `dev-sandbox-{slug}` |
+| `--slug <name>` | **是** | （無） | Sandbox 識別名稱，namespace = `dev-sandbox-{slug}`。`stg` 已退役、會被拒絕（見本檔開頭） |
 | `--skip-build` | 否 | - | 跳過建立 tag，僅輪詢已存在 tag 的 CI 狀態 |
 | `--image <full>` | 否 | - | 直接指定完整 image（跳過 CI 建置），格式: `registry/repo:tag` |
 | `--ingress` | 否 | - | 啟用 Ingress（`{slug}.woowtech.io`） |
@@ -128,7 +154,8 @@ cd "$PROJECT_ROOT"
 
 # 若未指定 addon_ref，取最新 git tag；若無 tag 則用 HEAD short SHA
 ADDON_REF="${1:-$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)}"
-SLUG="${SLUG:-stg}"
+# --slug 必填；stg 已退役（deploy-stg.sh 會在這之前就擋下，見本檔開頭）
+SLUG="${SLUG:?必須指定 --slug <沙盒名>}"
 
 # Git tag（觸發 CI 用，帶 stg- 前綴）
 GIT_TAG="stg-$(date -u +'%Y%m%d.%H%M')"
@@ -364,7 +391,7 @@ migration，而手動 upgrade Job 有 ResourceQuota 與 filestore RWO nodeSelect
 
 1. **先等**：`-u web` 的傳播升級要跑完才會落到 `installed`。rollout 剛收斂就查會抓到
    `to upgrade` 的**進行中**快照——那不是失敗。單獨重跑 post-check 確認。
-2. **再看 log**：`kubectl --context woow-k3s -n dev-sandbox-stg logs deploy/stg-odoo-dev-sandbox-odoo`
+2. **再看 log**：`kubectl --context woow-k3s -n dev-sandbox-<slug> logs deploy/<slug>-odoo-dev-sandbox-odoo`
    找 `Running migration [<ver>>] post-migrate` 與 `Modules loaded.`。傳播有被觸發、但
    migration 途中炸了，錯誤會在這裡。
 3. **確認傳播鏈還在**：`src/__manifest__.py` 的 `depends`（直接 `web`，或間接經 `project` /
@@ -373,18 +400,23 @@ migration，而手動 upgrade Job 有 ResourceQuota 與 filestore RWO nodeSelect
    [`docs/guides/deployment/stg-db-manual-upgrade-recipe.md`](../../../docs/guides/deployment/stg-db-manual-upgrade-recipe.md)。
    它在傳播沒發生、或要單獨升某個模組時仍然有用，**但不是 deploy-stg 的必要步驟**。
 
-**單獨執行**（不重跑部署，隨時可查 stg 現況）：
+**單獨執行**（不重跑部署，隨時可查該沙盒現況；`--slug` 或 `--namespace` 必填）：
 
 ```bash
 # 預設：拿 pod 正在跑的 image 當期望值
-.claude/skills/deploy-stg/scripts/verify-addon-version.sh --slug stg --context woow-k3s --timeout 0
+.claude/skills/deploy-stg/scripts/verify-addon-version.sh --slug <slug> --context woow-k3s --timeout 0
 
-# 問「我手上這份 code 有沒有上到 stg」：改用本機 manifest 當期望值
-.claude/skills/deploy-stg/scripts/verify-addon-version.sh --slug stg --context woow-k3s \
+# 問「我手上這份 code 有沒有上到這個沙盒」：改用本機 manifest 當期望值
+.claude/skills/deploy-stg/scripts/verify-addon-version.sh --slug <slug> --context woow-k3s \
   --manifest src/__manifest__.py --timeout 0
 ```
 
-exit code：`0` 一致、`1` 版號判定失敗、`2` 取樣／環境錯誤（**取樣不到 ≠ 沒問題**）。
+exit code：`0` 一致、`1` 版號判定失敗、`2` 取樣／環境錯誤（**取樣不到 ≠ 沒問題**），或目標是已退役的
+`dev-sandbox-stg`（`--slug stg`／`--namespace dev-sandbox-stg`／兩者都沒給）。
+
+> ⚠ 本 gate **不適用**新的 stg（`paas-stg-system/paas-odoo-platform-stg`）：label（`component=server`）、
+> container（odoo＋nginx）、addons 路徑、PG 都和沙盒不同，而且那個 chart 自帶升級閘。要看新 stg 的 addon
+> 版號，照 paas-app-bundle-cd `docs/platform-odoo-stg-runbook.md` 的唯讀驗收步驟。
 
 **gate 自己的自測**：每次跑 post-check 都會先跑一次判定層自測
 （`tests/test-verify-addon-version.sh`，純函式、零外部相依），自測紅或自測檔不見就直接
@@ -403,23 +435,23 @@ say -r 180 "主人，staging 環境部署完成了"
 ## 快速指令範例
 
 ```bash
-# 使用最新 tag 部署（最常見）
-/woow:deploy-stg
+# 使用最新 tag 部署到自己的沙盒（--slug 必填；namespace 為 dev-sandbox-my-sandbox）
+/woow:deploy-stg --slug my-sandbox
 
 # 指定 addon ref
-/woow:deploy-stg v18.0.1.0.5
-
-# 自訂 slug（namespace 為 dev-sandbox-stg-test）
-/woow:deploy-stg --slug stg-test
+/woow:deploy-stg --slug my-sandbox v18.0.1.0.5
 
 # 跳過建置，用已存在的 image（docker tag 格式）
-/woow:deploy-stg --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1400
+/woow:deploy-stg --slug my-sandbox --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:20260329.1400
 
 # 跳過建立 tag，輪詢已存在 git tag 的 CI 狀態（git tag 格式）
-/woow:deploy-stg --skip-build --tag stg-20260329.1400
+/woow:deploy-stg --slug my-sandbox --skip-build --tag stg-20260329.1400
 
-# 銷毀 staging sandbox（in-repo skill 已無 destroy，走 plugin）
-/woow-dev:k8s-dev-sandbox destroy stg --context woow-k3s
+# 銷毀沙盒（in-repo skill 已無 destroy，走 plugin；明寫 NAME）
+/woow-dev:k8s-dev-sandbox destroy my-sandbox --context woow-k3s
+
+# ⛔ /woow:deploy-stg 不帶 --slug 或 --slug stg：會被拒絕（stg 已搬到 paas-stg-system，見本檔開頭）。
+#    dev-sandbox-stg 的拆除由人照 paas-app-bundle-cd runbook〈PR-4〉執行。
 ```
 
 ## 疑難排解
@@ -434,7 +466,8 @@ say -r 180 "主人，staging 環境部署完成了"
 | CI status: failure | CI build 失敗 | 到 Gitea UI 檢查 workflow run 日誌 |
 | CI 輪詢 timeout | CI build 時間過長 | 使用 `--timeout` 增加等待時間，或到 Gitea UI 檢查 |
 | Helm install 失敗 | kubectl 未連線或權限不足 | 確認 kubeconfig 和 RBAC |
-| Pod CrashLoopBackOff | Odoo 啟動失敗 | `kubectl logs -n dev-sandbox-stg <pod>` 檢查日誌 |
+| Pod CrashLoopBackOff | Odoo 啟動失敗 | `kubectl --context woow-k3s logs -n dev-sandbox-<slug> <pod>` 檢查日誌 |
+| `拒絕執行 —— 目標是已退役的 dev-sandbox-stg` | `--slug stg`、沒給 `--slug`，或 verify 指到 `dev-sandbox-stg` | stg 換版改走 paas-app-bundle-cd 的 image pin PR（見本檔開頭）；要部署其他沙盒就給 `--slug <其他名>`。沒有繞過旗標 |
 | `addon 版號 post-check 失敗（#665）`，DB 版號落後 | **不是**「deploy-stg 沒有升 addon 的步驟」——`-u web` 會經 reverse-dependency 傳播升它（見 Step 8）。落後代表**升級沒收斂**：還在跑、migration 炸了、或模組被卡住 | 照 Step 8「紅燈時的處置順序」：先重跑 post-check 確認不是進行中快照 → 查 odoo pod log 的 `post-migrate` / `Modules loaded.` → 確認 `depends` 傳播鏈未斷 → 都排除了才跑手動 upgrade Job |
 | post-check 說 `找不到可用的 odoo pod` | rollout 還沒收斂到本次的 image，或 image 字串不符 | 等 rollout 完成後單獨重跑 post-check；**不要**當成「沒問題」略過 |
 | post-check 說 `讀不到 image 內的 manifest` | 該 image 的 addons 路徑不是預設值 | 用 `--addons-path` 指定；讀不到一律當失敗，不會 fallback |

@@ -93,8 +93,12 @@
 # ---------------------------------------------------------------------------
 #   verify-addon-version.sh [OPTIONS]
 #
-#   --slug <name>         sandbox slug（預設 stg）；namespace = dev-sandbox-<slug>
+#   --slug <name>         sandbox slug（與 --namespace 至少給一個）；namespace = dev-sandbox-<slug>
 #   --namespace <ns>      直接指定 namespace（未同時給 --slug 時，slug 由 ns 反推）
+#                         ⛔ slug=stg／ns=dev-sandbox-stg 已退役（cd#289），一律拒絕（exit 2）。
+#                         新的 stg（paas-stg-system/paas-odoo-platform-stg）不在本 gate 範圍：
+#                         它的 chart 自帶升級閘（upgrade_done marker＋post-verify），驗收見
+#                         paas-app-bundle-cd 的 docs/platform-odoo-stg-runbook.md
 #   --module <name>       Odoo 模組技術名（預設 woow_paas_platform）
 #   --db <name>           DB 名（預設 <db-prefix> + slug 的 '-' 換成 '_'）
 #   --db-prefix <p>       DB 名前綴（預設 woow_，與 deploy-stg 傳給 create.sh 的一致）
@@ -412,13 +416,35 @@ vav_main() {
         esac
     done
 
+    # --- dev-sandbox-stg 退役守衛（cd#289／#342）---
+    # 本 gate 雖然唯讀，舊預設 slug=stg 在 ns 刪掉後只會回「找不到 odoo pod」，看起來像
+    # 部署失敗而不是「目標已退役」；而新 release 的 label／container／addons 路徑／PG 都
+    # 不同，硬套只會得到假紅。所以與 deploy-stg 共用同一道守衛、在任何 kubectl 前擋下。
+    local retired_sh="${VAV_SCRIPT_DIR}/retired-stg.sh"
+    if [ ! -f "$retired_sh" ]; then
+        echo -e "${VAV_RED}找不到 dev-sandbox-stg 退役守衛：${retired_sh}${VAV_NC}" >&2
+        return 2
+    fi
+    # shellcheck source=./retired-stg.sh
+    source "$retired_sh"
+    if [ -z "$SLUG" ] && [ -z "$NAMESPACE" ]; then
+        echo -e "${VAV_RED}必須指定 --slug 或 --namespace（以前的預設 stg 已退役）。${VAV_NC}" >&2
+        echo "" >&2
+        dstg_print_retired_notice "verify-addon-version"
+        return 2
+    fi
+    if dstg_is_retired_target "$SLUG" "$NAMESPACE" \
+        || { [ -z "$SLUG" ] && dstg_is_retired_target "${NAMESPACE#dev-sandbox-}" ""; }; then
+        dstg_print_retired_notice "verify-addon-version"
+        return 2
+    fi
+
     # --- 名稱推導 ---
     if [ -z "$SLUG" ] && [ -n "$NAMESPACE" ]; then
         # 只給 namespace 時反推 slug（create.sh 的慣例：ns = dev-sandbox-<slug>，
         # 且 helm instance label = slug）。推不出來就讓後面的 pod 解析 fail-loud。
         SLUG="${NAMESPACE#dev-sandbox-}"
     fi
-    [ -n "$SLUG" ] || SLUG="stg"
     [ -n "$NAMESPACE" ] || NAMESPACE="dev-sandbox-${SLUG}"
     INSTANCE="$SLUG"
     [ -n "$DB_NAME" ] || DB_NAME="$(compute_db_name_local "$SLUG" "$DB_PREFIX")"
