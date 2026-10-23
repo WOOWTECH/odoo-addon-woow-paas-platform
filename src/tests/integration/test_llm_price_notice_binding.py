@@ -172,3 +172,35 @@ class TestLlmPriceNoticeOutboxBindingPG(BaseCase):
                 self.assertEqual(verify.fetchone()[0], 0)
         finally:
             outer.close()
+
+    def test_uncommitted_mail_cannot_be_bound_from_an_independent_cursor(self):
+        outer = self.registry.cursor()
+        try:
+            uncommitted_mail_id = self._create_mail(api.Environment(
+                outer, odoo.SUPERUSER_ID, {}))
+            factory = RegistryConnectionFactory(self.registry, outer)
+            journal = OdooJournal(factory)
+            boundary = OdooMailBoundary(
+                journal,
+                lambda: factory.committed_environment(
+                    lambda cr: api.Environment(cr, odoo.SUPERUSER_ID, {})),
+                runtime_environment='stg', test_mode=lambda: False)
+            attempt = Attempt(
+                str(uuid.uuid4()), self.campaign_fingerprint, 'stg',
+                'paas:synthetic_one', 'one@example.test', 1,
+                hashlib.sha256(PAYLOAD).hexdigest())
+            binding = MailBinding(attempt, get_db_name(),
+                                  uncommitted_mail_id, self.outbox_id)
+            journal.prepare(attempt)
+            with self.assertRaisesRegex(ValueError, 'committed_source_missing'):
+                boundary.bind(binding, payload=PAYLOAD, envelope=(attempt.destination,))
+            outer.rollback()
+            with self.registry.cursor() as verify:
+                verify.execute('SELECT count(*) FROM llm_notice_odoo_mail_binding '
+                               'WHERE obligation_id = %s', (self.outbox_id,))
+                self.assertEqual(verify.fetchone()[0], 0)
+                verify.execute('SELECT count(*) FROM mail_mail WHERE id = %s',
+                               (uncommitted_mail_id,))
+                self.assertEqual(verify.fetchone()[0], 0)
+        finally:
+            outer.close()

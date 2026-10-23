@@ -96,13 +96,13 @@ jobs:
             echo "::error::Odoo test process exit=${ODOO_EXIT}."
             exit 1
           fi
-          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 2 tests' /tmp/llm-price-notice-test.log || true)
+          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 3 tests' /tmp/llm-price-notice-test.log || true)
           [ "${SUMMARY_COUNT}" -eq 1 ] || {
             tail -80 /tmp/llm-price-notice-test.log
-            echo "::error::預期恰好 2 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
+            echo "::error::預期恰好 3 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
             exit 1
           }
-          grep -F '0 failed, 0 error(s) of 2 tests' /tmp/llm-price-notice-test.log
+          grep -F '0 failed, 0 error(s) of 3 tests' /tmp/llm-price-notice-test.log
 
       - name: Remove only containers created by this run
         if: always()
