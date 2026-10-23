@@ -265,8 +265,17 @@ def main(env):
         time.sleep(0.2)
     _require(len(messages) == 1, 'mailpit_single_message_required')
     raw = _mailpit_raw('latest')
-    _require(raw == payload, 'mailpit_raw_mime_sha_mismatch'
-             + f': expected={attempt.payload_sha256}, actual={hashlib.sha256(raw).hexdigest()}')
+    if raw != payload:
+        first = next((index for index, pair in enumerate(zip(payload, raw))
+                      if pair[0] != pair[1]), min(len(payload), len(raw)))
+        raise RuntimeError(
+            'mailpit_raw_mime_sha_mismatch: '
+            f'expected={attempt.payload_sha256}, actual={hashlib.sha256(raw).hexdigest()}, '
+            f'expected_len={len(payload)}, actual_len={len(raw)}, first_diff={first}, '
+            f'expected_window={payload[max(0, first - 16):first + 48]!r}, '
+            f'actual_window={raw[max(0, first - 16):first + 48]!r}, '
+            f'expected_tail={payload[-32:]!r}, actual_tail={raw[-32:]!r}'
+        )
     parsed = BytesParser(policy=email.policy.default).parsebytes(raw)
     _require(parsed['To'] == DESTINATION and parsed['From'] == SENDER
              and parsed['Cc'] is None and parsed['Bcc'] is None,
