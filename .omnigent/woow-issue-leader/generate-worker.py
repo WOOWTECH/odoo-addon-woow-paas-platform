@@ -61,8 +61,13 @@ TEMPLATES_DIR = BUNDLE_DIR / "_templates"
 SHARED_FRAGMENTS_DIR = TEMPLATES_DIR / "_shared"   # worker prompt 的共用片段（見該目錄 README）
 HOOKS_DIR = BUNDLE_DIR / "hooks"
 MESSAGING_SKILL_DIR = BUNDLE_DIR / "skills" / "omni-msg"
-DEFAULT_SITE_PACKAGES = (
-    "/home/elmo/.local/share/uv/tools/omnigent/lib/python3.12/site-packages"
+# 已知主機上 omnigent 的 site-packages，取第一個存在的；OMNIGENT_SITE_PACKAGES 仍優先（#1934）
+_SITE_PACKAGES_CANDIDATES = (
+    "/home/elmo/.local/share/uv/tools/omnigent/lib/python3.12/site-packages",  # 59mqj（uv tool）
+    "/opt/omnigent/venv/lib/python3.12/site-packages",                        # pi3（omnigent-host kit）
+)
+DEFAULT_SITE_PACKAGES = next(
+    (p for p in _SITE_PACKAGES_CANDIDATES if os.path.isdir(p)), _SITE_PACKAGES_CANDIDATES[0]
 )
 
 
