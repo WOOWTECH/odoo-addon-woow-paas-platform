@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('price_notice_draft', ROOT / 'src/services/llm_price_notice.py')
@@ -195,6 +196,94 @@ class TestPriceNotice(unittest.TestCase):
         names={node.id for node in ast.walk(tree) if isinstance(node,ast.Name)}
         self.assertFalse(names & {'odoo','requests','socket','smtplib','subprocess','open','eval','exec'})
         self.assertNotIn('llm_price_notice',(ROOT/'src/services/__init__.py').read_text())
+
+
+class TestCandidateSnapshot(unittest.TestCase):
+    """A candidate binds draft inputs but never represents approval or delivery."""
+
+    def recipients(self):
+        return (
+            n.RecipientSnapshot('paas:synthetic', 'one@example.test', 1),
+            n.RecipientSnapshot('legacy:synthetic', None, 2),
+        )
+
+    def candidate(self, **changes):
+        values = dict(version='synthetic-v1', environment='stg',
+                      body_text='合成公告：價格調整', before=catalog(),
+                      after=catalog(input='2'), recipients=self.recipients(),
+                      now=NOW, not_before=NOW+n.SEVEN_DAYS)
+        values.update(changes)
+        return n.prepare_candidate(**values)
+
+    def test_candidate_keeps_missing_address_as_unresolved_obligation(self):
+        candidate = self.candidate()
+        self.assertEqual(candidate.recipient_count, 2)
+        self.assertEqual(candidate.unresolved_count, 1)
+        self.assertEqual(len(candidate.audience_sha256), 64)
+        self.assertEqual(len(candidate.catalog_sha256), 64)
+        self.assertEqual(len(candidate.campaign_fingerprint), 64)
+        self.assertEqual(len(candidate.fingerprint), 64)
+        public = json.loads(candidate.payload_json)
+        self.assertEqual(public['version'], 'synthetic-v1')
+        self.assertEqual(public['changes'][0]['after']['input'], '2')
+        self.assertNotIn('example.test', repr(candidate))
+        self.assertNotIn('example.test', candidate.payload_json)
+        self.assertNotIn('approval', candidate.__dict__)
+
+    def test_canonical_order_and_decimal_spelling_keep_same_digest(self):
+        first = self.candidate()
+        second = self.candidate(before=catalog(input='1.000'),
+                                after=catalog(input='2.00'),
+                                recipients=tuple(reversed(self.recipients())))
+        self.assertEqual(first, second)
+
+    def test_every_campaign_and_audience_revision_changes_identity(self):
+        first = self.candidate()
+        for changes in (
+            dict(version='synthetic-v2'), dict(environment='prod'),
+            dict(body_text='合成公告：不同文字'), dict(after=catalog(input='3')),
+            dict(not_before=NOW+n.SEVEN_DAYS+1),
+            dict(recipients=self.recipients()[:-1]),
+            dict(recipients=(self.recipients()[0],
+                             n.RecipientSnapshot('legacy:synthetic', None, 3))),
+            dict(recipients=(n.RecipientSnapshot('paas:synthetic', 'two@example.test', 1),
+                             self.recipients()[1])),
+        ):
+            with self.subTest(changes=changes):
+                self.assertNotEqual(self.candidate(**changes).fingerprint, first.fingerprint)
+
+    def test_public_payload_change_invalidates_candidate_fingerprint(self):
+        first = self.candidate()
+        with patch.object(n, '_TITLE', '不同的公告標題'):
+            changed = self.candidate()
+        self.assertEqual(first.campaign_fingerprint, changed.campaign_fingerprint)
+        self.assertNotEqual(first.payload_json, changed.payload_json)
+        self.assertNotEqual(first.fingerprint, changed.fingerprint)
+
+    def test_campaign_fingerprint_matches_immutable_odoo_draft_format(self):
+        candidate = self.candidate()
+        payload = dict(version='synthetic-v1', body_text='合成公告：價格調整',
+                       catalog_fingerprint=candidate.catalog_sha256, environment='stg')
+        expected = n._hash(n._json(payload))
+        self.assertEqual(candidate.campaign_fingerprint, expected)
+
+    def test_invalid_snapshot_and_unpriced_scope_fail_closed(self):
+        rows = self.recipients()
+        invalid = (
+            dict(recipients=()), dict(recipients=(rows[0], rows[0])),
+            dict(recipients=(n.RecipientSnapshot('bad', 'one@example.test', 1),)),
+            dict(recipients=(n.RecipientSnapshot('paas:synthetic', 'one@example.test\r\nBcc:x', 1),)),
+            dict(recipients=(n.RecipientSnapshot('paas:synthetic', 'one@example.test', 0),)),
+            dict(recipients=(n.RecipientSnapshot('paas:synthetic', 'one@example.test', True),)),
+            dict(before=catalog(input='NaN')),
+            dict(after=catalog(input='1')),
+            dict(after={'default': {'other/model': next(iter(catalog()['default'].values()))}}),
+            dict(not_before=NOW+n.SEVEN_DAYS-1),
+            dict(body_text='  '),
+        )
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises(n.NoticeBlocked):
+                self.candidate(**changes)
 
 
 if __name__=='__main__':
