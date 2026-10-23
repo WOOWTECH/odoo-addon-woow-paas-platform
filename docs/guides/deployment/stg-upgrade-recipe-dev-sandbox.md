@@ -1,5 +1,19 @@
 # reference stg upgrade recipe dev sandbox
 
+> ⛔ **舊沙盒已隨 cd#289 退役（2026-10-23）**：本檔的 `dev-sandbox-stg` namespace 已刪除；
+> 下方原文只供考古，不適用現行 stg，不可用它重建舊沙盒或 clone 舊 Job。
+> 現行平台是 `paas-stg-system/paas-odoo-platform-stg`（chart `woow-odoo`），DB `woow_stg`，
+> PG pod `paas-odoo-platform-stg-postgresql-0`，穩定 Service `paas-odoo-active-stg`（80 → nginx 8080）。
+> 換版改 paas-app-bundle-cd 的 `paas-odoo-platform-stg/values-stg.yaml`：`image.digest`（權威 pin）＋`image.tag`，
+> 開 PR、人工覆核 merge，由 Fleet 套用；升級由 chart 的 marker／post-verify gate 管理，不沿用下方手動 Job。
+> 正本：[cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289)、
+> [stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)、
+> [CD SOP](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/sop-cd.md)。
+> `/woow:deploy-stg --slug <非 stg 名稱>` 只用於其他 dev sandbox；下方 Odoo reverse-dependency 的框架結論保留。
+
+<details>
+<summary>歷史 recipe（舊沙盒已退役；含 2026-08-11 傳播結論與更正證據）</summary>
+
 > 自 Claude memory 遷移（2026-08-05）。原 slug `reference_stg_upgrade_recipe_dev_sandbox`。盤點依據見 [memory-inventory-2026-08-05](../../tracking/memory-inventory-2026-08-05.md)。
 >
 > 原 description：stg（dev-sandbox-stg）升版三步 recipe——build stg-* tag→upgrade job（nodeSelector 釘同 node 避 RWO Multi-Attach）→helm 換 tag；含 log 位置與硬驗版號的三方證據
@@ -142,3 +156,5 @@ select slug, helm_chart_version from woow_paas_platform_cloud_app_template where
 ### 附帶：租戶 ns 的既有 release 不受影響
 
 同時段 `paas-ws-stg-*` 內其他 release（open-design／n8n／haos／hermes-agent）REVISION 與 Running 狀態全程不變，ResourceQuota 未被重算。但**手動 helm 升過的 CS chart 版本不會回寫進 Odoo DB 的 `cloud_service.helm_chart_version`**（那欄只在平台自己發起部署時寫）⇒ DB 與叢集分歧永不收斂，症狀是 reset 時 log 印一行看似「chart 要被動」的訊息。詳見 [[project_530_gateway_landing_542_baseline]]。
+
+</details>

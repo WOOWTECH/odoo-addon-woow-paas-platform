@@ -1,5 +1,18 @@
 # reference stg db manual upgrade recipe
 
+> ⛔ **舊沙盒已隨 cd#289 退役（2026-10-23）**：下方是已刪除的 `dev-sandbox-stg` 的歷史 recipe，
+> Secret／PVC／Job 範本與 binary 路徑都不適用現行 stg，不可照抄或只替換 namespace 後執行。
+> 現行平台是 Fleet 管理的 `paas-stg-system/paas-odoo-platform-stg`（DB `woow_stg`），
+> 換版走 paas-app-bundle-cd 的 `paas-odoo-platform-stg/values-stg.yaml` image pin PR（`image.digest`＋`image.tag`），
+> 人工覆核 merge；chart 的升級閘負責升級與 post-verify，不再以本檔手動 Job 作為 stg 操作入口。
+> 正本：[cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289)、
+> [stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)、
+> [CD SOP](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/sop-cd.md)。
+> 下方保留框架傳播的更正與當時實測，不代表舊資源仍存在。
+
+<details>
+<summary>歷史手動 upgrade Job recipe（不適用現行 stg）</summary>
+
 > 自 Claude memory 遷移（2026-08-05）。原 slug `reference_stg_db_manual_upgrade_recipe`。盤點依據見 [memory-inventory-2026-08-05](../../tracking/memory-inventory-2026-08-05.md)。
 >
 > 原 description：stg dev-sandbox DB 升版（新 seed/功能生效）完整 recipe＋三大陷阱：--image 拿不到新版、升版需手動 upgrade job、job 撞 ResourceQuota
@@ -57,3 +70,5 @@ stg `.74`(seed chart 0.1.1) → `.74`(seed chart 0.1.2)：#398–#401 全落在 
 **2026-07-28 補（`.79`→`.80`，第 4 個陷阱）：clone 的 upgrade job 少了 nodeSelector 會撞 filestore PVC 的 RWO Multi-Attach。** `stg-odoo-dev-sandbox-odoo-filestore` 是 `ReadWriteOnce`（SC `longhorn-delete`），已被 odoo pod attach 在其所在 node；job pod 若被 scheduler 排到**別的 node**，會卡 `ContainerCreating` 直到 timeout，event＝`FailedAttachVolume: Multi-Attach error for volume "pvc-..." Volume is already used by pod(s) stg-odoo-dev-sandbox-odoo-*`。**與 quota `FailedCreate` 症狀不同**（那個是 job Running 但 `get pods` 查無 pod；這個是 pod 存在但永遠 ContainerCreating），別誤診。過去 `.74`–`.79` 沒撞到純屬 scheduler 碰巧排同 node。解法：先 `kubectl get pod -l app.kubernetes.io/component=odoo -o jsonpath='{.items[0].spec.nodeName}'` 查 odoo pod 在哪，job JSON 補 `.spec.template.spec.nodeSelector = {"kubernetes.io/hostname": "<該 node>"}`（RWO 是 node-level 語意，**同 node 多 pod 可共掛**，不需停 odoo）。已 apply 的 job 要改得 delete 重 apply（pod template immutable）。實測補 nodeSelector 後 38s Complete。
 
 相關：[[reference_deploy_stg_gotchas]]、[[reference_agent_runtime_respawn_mechanism]]（升版後既存 pod 不自動 roll 的同源現象）、[[reference_prod_odoo_bitnami_module_mgmt]]（prod 版 `-u` 不裝 uninstalled 等）、[[project_opendesign_cs_onboarding_380]]（既有 service 升 chart 的 reuse_values 陷阱）。
+
+</details>

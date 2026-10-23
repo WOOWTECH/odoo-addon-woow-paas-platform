@@ -168,8 +168,13 @@ Source of truth: `src/controllers/agent_runtime_skill.py` (route `:91-95`).
 ```
 GET {ODOO_BASE_URL}/api/agent-runtimes/skill-bundle?project_hash={hash}&skill_name={name}&version={ver}
 Authorization: Bearer <SKILL_BUNDLE_TOKEN>
-ODOO_BASE_URL = http://stg-odoo-dev-sandbox-odoo.dev-sandbox-stg.svc.cluster.local:8069
+ODOO_BASE_URL = http://paas-odoo-active-stg.paas-stg-system.svc.cluster.local
 ```
+
+stg 範例自 [cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289)
+起走穩定 Service `paas-odoo-active-stg`（port 80 → web nginx 8080）；pod 側 `odooNamespace` 為
+`paas-stg-system`。舊沙盒已退役，現行部署與驗收見 CD repo 的
+[stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)。
 
 - **Response = the RAW bundle bytes** (`:135-143`) — **NOT base64, NOT a JSON
   wrapper**. `Content-Type` is the attachment mimetype (default `application/gzip`).

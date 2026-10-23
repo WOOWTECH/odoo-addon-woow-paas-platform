@@ -16,6 +16,12 @@ related:
 
 # Decision: agent-runtime chart 的 operator install 契約（gap C）
 
+> **環境更新（2026-10-23）**：`dev-sandbox-stg` 已隨 [cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289) 退役並刪除。
+> 現行 stg Odoo 是 Fleet release `paas-stg-system/paas-odoo-platform-stg`（DB `woow_stg`），
+> `ODOO_BASE_URL` 為 `http://paas-odoo-active-stg.paas-stg-system.svc.cluster.local`（Service 80 → nginx 8080），
+> agent chart 的 `odooNamespace` 為 `paas-stg-system`。下方原決策、2026-05 env 快照與 NP 敘述原文保留，
+> 不代表現況；部署與驗收見 [CD stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)。
+
 > 適用：paas-operator 動態 spawn per-project agent-runtime pod 時，要如何 `helm install` 一個發佈在**私有 Gitea classic Helm repo** 的 chart。這份記錄 install 機制、operator code 改動、env / values 契約，以及跨 lane 分工。
 
 ## Status

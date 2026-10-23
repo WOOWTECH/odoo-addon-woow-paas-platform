@@ -22,6 +22,12 @@ issues:
 
 # Decision：agent 資料面全 in-cluster，#271 走 route (a)（in-cluster DNS），不開 CF Access IP bypass
 
+> **環境更新（2026-10-23）**：下方實測的 `dev-sandbox-stg` 已隨 [cd#289](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/issues/289) 退役並刪除。
+> 現行 stg Odoo 是 `paas-stg-system/paas-odoo-platform-stg`（DB `woow_stg`），
+> agent 回連 URL 為 `http://paas-odoo-active-stg.paas-stg-system.svc.cluster.local`（Service 80 → nginx 8080）。
+> 原決策與歷史實測保留；in-cluster 原則不變，但舊 pod 座標不適用。現行驗收見
+> [CD stg runbook](https://git-prod.woowtech.io/woow-paas/paas-app-bundle-cd/src/branch/main/docs/platform-odoo-stg-runbook.md)。
+
 > 適用：任何要處理 #271（叢集內服務撞 CF Access 登入頁）、或提議用「填 IP 當 CF Access bypass 白名單」讓內網服務免 Access 的人。
 
 ## TL;DR（結論）
