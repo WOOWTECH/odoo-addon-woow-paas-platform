@@ -1295,3 +1295,5 @@ from . import test_llm_status_monitor
 from . import test_llm_account_lifecycle  # noqa: F401 - register Odoo tests
 from . import test_llm_price_notice_ledger
 from . import test_llm_price_notice_publication
+# 真 PostgreSQL 邊界：journal receipt 必須活過呼叫端 Odoo transaction rollback。
+from .integration import test_llm_price_notice_journal_rollback  # noqa: F401
