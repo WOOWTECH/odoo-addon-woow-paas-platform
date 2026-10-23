@@ -395,7 +395,7 @@ scripts/platform/cloud-service.sh redeploy "${P[@]}"   # action_redeploy（非�
 - 每次都先比對 id、名稱、release，有一個不符就不動手；動作只接受搬遷流程會遇到的 state（例如 resume 只接受
   suspended），欠費停權等其他情況要先查清楚。
 - 走 `deploy/paas-odoo-platform-cron`，不寫 pod 名稱：平台升版後 pod 會換名（harumi 彩排第二輪撞過——寫死的 pod 名稱讓
-  指令什麼都沒做，錯誤又被輸出過濾吃掉）。stg 平台加 `--platform-ns dev-sandbox-stg --deploy stg-odoo-dev-sandbox-odoo --db woow_stg`。
+  指令什麼都沒做，錯誤又被輸出過濾吃掉）。stg 平台加 `--platform-ns paas-stg-system --deploy paas-odoo-platform-stg --db woow_stg`（cd#289 起由 Fleet 管理）。
 - 回 `ok: false` 或 `state: error`（operator 失敗）時 exit 1，看 JSON 的 `error`／`error_message`。prod 每一步人工放行。
 
 ⚠ 訂閱正常（含試用中）時，每天一次的訂閱生命週期排程會把停權中的服務 `_do_resume()` 開回來。停權前先跑 `status`
