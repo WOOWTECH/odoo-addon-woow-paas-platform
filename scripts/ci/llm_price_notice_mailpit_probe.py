@@ -16,6 +16,7 @@ from email.parser import BytesParser
 from types import SimpleNamespace
 
 import odoo
+from odoo.addons.base.models.ir_mail_server import MailDeliveryException
 from odoo.modules import module
 
 from odoo.addons.woow_paas_platform.services.llm_price_notice import (
@@ -199,8 +200,8 @@ def _prove_unknown_is_quarantined(env, server):
         try:
             server.send_email(message, smtp_session=BoundNoticeSMTP(
                 session, boundary=boundary, binding=binding))
-        except RuntimeError as error:
-            _require(str(error) == 'injected_receipt_commit_uncertain',
+        except MailDeliveryException as error:
+            _require('RuntimeError: injected_receipt_commit_uncertain' in str(error),
                      'wrong_uncertain_commit_error')
         else:
             raise RuntimeError('uncertain_acceptance_reported_success')
@@ -239,8 +240,9 @@ def _prove_unknown_is_quarantined(env, server):
         try:
             server.send_email(replay_message, smtp_session=BoundNoticeSMTP(
                 replay_session, boundary=fresh_boundary, binding=binding))
-        except ValueError as error:
-            _require(str(error) == 'attempt_not_ready', 'wrong_replay_rejection')
+        except MailDeliveryException as error:
+            _require('ValueError: attempt_not_ready' in str(error),
+                     'wrong_replay_rejection')
         else:
             raise RuntimeError('unknown_attempt_was_resent')
     finally:
