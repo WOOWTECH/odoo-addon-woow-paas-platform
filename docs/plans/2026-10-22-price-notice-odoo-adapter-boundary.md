@@ -1,6 +1,6 @@
 # Dormant Odoo 18 / PG adapter boundary
 
-此 bounded slice 不註冊 hook、model、migration、cron 或 RPC，不連 SMTP、不變更七天 gate。工作分支為 `feat/llm-price-notice-transport-journal-dormant-1022`，已重定基到 #1936 新 head `ac5293fde3559e1380b39f6c9f6bc70dba805cbc`；本切片不修改該 PR 或 Gitea。
+此 bounded slice 不註冊 hook、model、migration、cron 或 RPC，不連 SMTP、不變更七天 gate。工作分支為 `feat/llm-price-notice-transport-journal-dormant-1022`，已在 #1936 由 Elmo 合併後重定基到 `develop` merge `fe9b38aef36518a4b8ee9c9e917116fd748e2494`；本切片不修改 Gitea 或正式環境。
 
 ## 目標與實作
 
@@ -37,7 +37,7 @@ git diff --check
 
 ## 接線前仍缺
 
-- 核可的 PG migration/schema 版本、snapshot/receipt 防修改角色與 DB 權限、service UID 的 mail/obligation read ACL/record rules；目前不防 DB owner 或任意受信 Python 呼叫內部 API。既有 #1936 state 仍 draft-only，沒有批准/dispatch 權限。
+- 核可的 PG migration/schema 版本、snapshot/receipt 防修改角色與 DB 權限、service UID 的 mail/obligation read ACL/record rules；目前不防 DB owner 或任意受信 Python 呼叫內部 API。已合併的 #1936 模型仍只存草稿，沒有批准/dispatch 權限。
 - 剩餘真 PG 驗證：真正 Odoo registry pool（不是合成 registry wrapper）的權限、Repeatable Read 與 serialization failure、並行 bind、外層已持 Odoo mail 鎖時 journal commit/rollback、commit response lost。兩個真 session 的 claim 與 schema 約束已測，但只覆蓋合成資料。
 - 真 Odoo 驗證：fresh Environment/cache/ACL、未提交 mail/obligation 不可見、實際 MIME/附件/CC/BCC/partner 展開及 payload hash 穩定性、auto_delete 後 binding/receipt 保存。fake ORM 缺列測試只驗證 contract。
 - 本 slice 尚無「preflight 到 SMTP claim」的 writer interlock：mail、obligation、MIME 與 binding 檢查後可能併發改變。未來 dispatcher 必須建立 immutable outbox/最終 bytes 與身份綁定、在 transport claim 做相同快照校驗並互鎖所有 writer；不能把這次 preflight 當可重放的寄送授權。
@@ -45,6 +45,8 @@ git diff --check
 - 未提供 publication/owner/legal 及 new-api pricing writer gate，也不啟動七天時計、不解除 GA blocker。
 
 ## 單封 Odoo SMTPConnection 包裝器草稿（2026-10-22）
+
+2026-10-23 在已合併 #1936 的 `develop` 上重定基後，使用 Python 3.12 重跑 adapter 21、SMTP wrapper 7、transport 21、notice 17，共 **66/66 通過**；新增 service／測試檔的 Ruff F 通過。只更新本地工作樹，未推送或開 PR，未接線寄送。
 
 在相同未註冊分支新增 `src/services/llm_price_notice_odoo_smtp.py`。llmdev 現役 Odoo 核心已唯讀確認：`SMTPConnection` 把 `sendmail`／`rcpt`／`data` setter 轉送至內部 `smtplib` 物件；`ir.mail_server.send_email` 在最終 `_prepare_email_message` 後呼叫 `smtp_session.send_message`；`mail.mail.send` 會在批次共享 session。故草稿 `BoundNoticeSMTP` 僅接受由未來受信任派送器持有的**專用新 session**，一次性替換該實例的三個傳輸方法，於 `send_message` 真正序列化後的 bytes／唯一 envelope 上重讀 committed source/binding，再獨立 claim。只有相同單一 RCPT 250/251 及 DATA 250 後同步提交 journal acceptance，`finally` 恢復方法。未觀測 DATA 的假成功會拒絕；外層 Odoo 的 Message-ID／mail state 仍不是證據。
 
