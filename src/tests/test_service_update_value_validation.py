@@ -432,8 +432,14 @@ class TestCreateServiceValueValidation(TransactionCase):
                 {'name': True},
                 {'template_id': 'not-a-number'},
                 {'template_id': True},
+                {'template_id': ['18']},
+                {'template_id': {'id': 18}},
+                {'template_id': 18.5},
                 {'plan_id': 'not-a-number'},
                 {'plan_id': True},
+                {'plan_id': ['18']},
+                {'plan_id': {'id': 18}},
+                {'plan_id': 18.5},
         ):
             with self.subTest(overrides=overrides):
                 with patch(f'{_CONTROLLER}._PaaSCapability') as capability:
