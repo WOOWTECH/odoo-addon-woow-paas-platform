@@ -110,12 +110,14 @@ from . import llm_api_key
 from . import llm_event
 from . import llm_terms
 from . import llm_runtime_state
+from . import llm_status_monitor
 from . import llm_swr
 # 商用驗收 X-SET-007-1／X-SEC-007：自助設定密碼的強度下限、忘記密碼請求排隊（不洩露帳號是否存在）。
 from . import res_users_password_policy
 from . import password_reset_request
 from . import llm_free_usage
 from . import smart_home_onboarding
+from . import llm_credit_attempt
 from . import llm_credit_order
 from . import llm_credit_void
 from . import llm_backoffice
@@ -131,3 +133,5 @@ from . import llm_reconcile_local
 from . import llm_reconcile_candidate
 from . import llm_audit_ingest
 from . import llm_account_lifecycle  # noqa: F401 - register Odoo model extensions
+from . import llm_price_notice
+from . import llm_price_notice_publication

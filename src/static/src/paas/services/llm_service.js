@@ -145,6 +145,40 @@ export function newClientRequestId(cryptoImpl = globalThis.crypto) {
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
 }
 
+/** Project only public announcement fields; never retain campaign/audience metadata.
+ * body_text is the canonical plain-text rendering of changes and not_before.
+ * Bounds keep a future malformed response from overwhelming the shared page.
+ */
+export function priceNoticeDtos(items) {
+  if (!Array.isArray(items) || items.length > 10) return [];
+  const seen = new Set();
+  const text = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max;
+  return items.flatMap((item) => {
+    if (!item || !text(item.id, 120) || seen.has(item.id)
+      || !text(item.title, 256) || !text(item.body_text, 65536)
+      || !Number.isSafeInteger(item.not_before) || item.not_before <= 0 || item.not_before > 4102444800
+      || !Array.isArray(item.changes) || !item.changes.length || item.changes.length > 100) return [];
+    const changes = [];
+    for (const change of item.changes) {
+      if (!change || !text(change.model, 200) || !["ratio", "fixed"].includes(change.mode)) return [];
+      const fields = change.mode === "fixed" ? ["per_call"] : ["input", "output", "cache_read", "cache_write"];
+      const row = { model: change.model, mode: change.mode, before: {}, after: {} };
+      for (const side of ["before", "after"]) {
+        for (const field of fields) {
+          const rate = change[side]?.[field];
+          if (!text(rate, 64) || !/^[0-9]+(?:\.[0-9]+)?$/.test(rate)) return [];
+          row[side][field] = rate;
+        }
+      }
+      changes.push(row);
+    }
+    const dto = { id: item.id, title: item.title, body_text: item.body_text, changes, not_before: item.not_before };
+    if (text(item.version, 120)) dto.version = item.version;
+    seen.add(item.id);
+    return [dto];
+  });
+}
+
 export const llmService = reactive({
   /** `/api/llm/state` 的 data；還沒讀過時是 null。 */
   overview: null,
@@ -205,6 +239,16 @@ export const llmService = reactive({
       return failure("llm_not_me_invalid");
     }
     return call("/api/llm/account/report_not_me", { token });
+  },
+
+  /** No shared cache: callers own notice lifetime and stale-response protection. */
+  async fetchPriceNotices() {
+    try {
+      const result = await jsonRpc("/api/llm/price-notices", {});
+      return { success: true, data: { notices: priceNoticeDtos(result?.notices) } };
+    } catch {
+      return failure(LLM_NETWORK_ERROR);
+    }
   },
 
   async fetchModels() {

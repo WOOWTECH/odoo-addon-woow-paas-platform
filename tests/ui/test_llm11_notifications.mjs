@@ -39,6 +39,7 @@ const pageSource = stubImports(await readPaas("pages/llm/LlmPage.js"), {
   "./tabs/llm_docs_helpers": "const createLlmDocsKeyHandoff=()=>({clear(){},put(){},peekKey(){},peekMode(){},peekAllowedModels(){}}); const validatedLlmPublicBaseUrl=()=>'';",
   "./tabs/LlmUsageTab": "class LlmUsageTab {}",
   "../../services/llm_errors": "const llmErrorMessage=result=>result.code;",
+  "../../utils/llm_format": "const formatTaipeiDateTime=()=>'';",
 });
 const { LlmPage } = await import(toDataUrl(pageSource));
 

@@ -295,3 +295,63 @@ def test_failed_connection_bounded_and_sanitized(control):
         assert error.value.kind in ('unavailable', 'timeout')
         assert 'sensitive' not in repr(error.value) and dsn not in repr(s)
     run(scenario())
+
+
+@pytest.mark.parametrize("lost_begin_reply", [False, True])
+def test_correlated_http_deliveries_share_real_durable_begin(control, lost_begin_reply):
+    """Actual PG transaction gate plus signed HTTP: no second quota POST."""
+    import json
+
+    from proxy_harness import ok
+    from test_proxy_control_flow import configured
+
+    async def scenario():
+        a, b, _ = stores(control)
+        first, _ = configured()
+        second, _ = configured()
+        first.proxy.control, second.proxy.control = a, b
+        attempt = str(uuid4())
+        body = json.dumps({"id": 123, "action": "add_quota", "mode": "add",
+                           "value": 15625, "woow_conversion_attempt_id": attempt}).encode()
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def hold(req):
+            started.set()
+            await release.wait()
+            return ok(request_id="pg-once")
+
+        first.upstream.on("POST", "/api/user/manage", hold)
+        if lost_begin_reply:
+            begin = a.begin
+
+            async def lose_reply(*args):
+                await begin(*args)
+                raise ControlStoreError("timeout")
+
+            a.begin = lose_reply
+
+        async def deliver(h):
+            headers = h.sign_headers("POST", "/api/user/manage", body=body, identity="ap")
+            return await h.acall("POST", b"/api/user/manage", headers=headers, body=body)
+
+        if lost_begin_reply:
+            assert (await deliver(first)).proxy_error == "attempt_unknown"
+            assert (await deliver(second)).proxy_error == "attempt_unknown"
+            assert not first.upstream.calls("POST") and not second.upstream.calls("POST")
+        else:
+            task = asyncio.create_task(deliver(first))
+            try:
+                await asyncio.wait_for(started.wait(), 3)
+                assert (await deliver(second)).proxy_error == "attempt_unknown"
+            finally:
+                release.set()
+            assert (await task).status == 200
+            assert len(first.upstream.calls("POST")) == 1 and not second.upstream.calls("POST")
+        events = (await b.read(0))["events"]
+        mine = [e for e in events if e["attempt_id"] == attempt]
+        assert [e["kind"] for e in mine] == (["intent"] if lost_begin_reply else ["intent", "outcome"])
+        if not lost_begin_reply:
+            assert mine[1]["result"] == "forwarded"
+        await a.aclose()
+        await b.aclose()
+    run(scenario())

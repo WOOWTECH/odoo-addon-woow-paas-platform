@@ -16,6 +16,18 @@
          LLM-02b：每支 cron 都經 llm_common.run_llm_cron（未設定 no-op、tick 預算、_trigger() 接續），
          而且登記在 llm_common.LLM_CRONS（凍結契約與「未設定零外呼」的測試以它為準）。 -->
     <data noupdate="1">
+        <!-- LLM-14 review slice: never activated by installation or upgrade.
+             Once manually invoked, durable status freshness guards remain armed. -->
+        <record id="ir_cron_llm_status_monitor" model="ir.cron">
+            <field name="name">PaaS: AI Models Status Invariants</field>
+            <field name="model_id" ref="model_woow_paas_platform_llm_runtime_state"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_llm_status_monitor()</field>
+            <field name="user_id" ref="base.user_root"/>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="False"/>
+        </record>
         <!-- 開戶 P0–P9：每 tick 只做一戶、總 deadline 60 秒；activate 與退避會 _trigger()，
              這裡的 5 分鐘只是保險（例如 pod 在開戶途中被殺、lease 5 分鐘後到期）。 -->
         <record id="ir_cron_llm_provision" model="ir.cron">

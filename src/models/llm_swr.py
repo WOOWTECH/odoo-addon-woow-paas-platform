@@ -241,8 +241,8 @@ class LlmSwrCache(models.Model):
         This also rejects pre-LLM-06 raw cache rows until the next scheduled refresh.
         """
         empty = {'items': [], 'state': 'maintenance', 'data_as_of': None}
-        state = self.env['woow_paas_platform.llm_runtime_state'].sudo().search([], limit=1)
-        if not state or state.guard_tripped:
+        state = self.env['woow_paas_platform.llm_runtime_state'].sudo()._llm_read()
+        if not state or state['guard_tripped']:
             return empty
         row = self._llm_swr_get(None, KIND_PRICING)
         if not row or row['last_result'] != 'ok' or is_stale(row['fetched_at'], KIND_PRICING):

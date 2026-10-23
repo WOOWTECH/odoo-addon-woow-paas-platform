@@ -1290,4 +1290,8 @@ from . import test_llm_discrepancy_replay
 from . import test_llm_bounded_cron
 from . import test_llm_reconcile_candidate
 from . import test_llm_audit_ingest
+from . import test_llm_credit_attempt
+from . import test_llm_status_monitor
 from . import test_llm_account_lifecycle  # noqa: F401 - register Odoo tests
+from . import test_llm_price_notice_ledger
+from . import test_llm_price_notice_publication

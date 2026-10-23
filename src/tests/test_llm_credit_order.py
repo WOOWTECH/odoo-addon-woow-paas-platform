@@ -689,8 +689,8 @@ class TestLlmCreditFoundation(TransactionCase):
             up.assert_not_called()
             throttle.assert_not_called()
 
-    def test_free_trial_ignores_paid_conversion_switch_and_guard(self):
-        from ..models.llm_common import LlmError, PARAM_ORDERS_ENABLED
+    def test_free_trial_uses_key_admission_before_free_usage(self):
+        from ..models.llm_common import LlmError
         Account = type(self.account)
         Event = type(self.env['woow_paas_platform.llm_event'])
         FreeUsage = type(self.env['woow_paas_platform.llm_free_usage'])
@@ -699,16 +699,26 @@ class TestLlmCreditFoundation(TransactionCase):
         with patch.object(Account, '_llm_web_client') as client, \
                 patch.object(Account, '_llm_up_token') as up, \
                 patch.object(Event, '_llm_throttle_reserve') as throttle, \
-                patch.object(FreeUsage, '_llm_assert_can_create', side_effect=stop) as usage:
-            for switched_off, tripped in ((True, False), (False, True)):
-                self.env['ir.config_parameter'].sudo().set_param(
-                    PARAM_ORDERS_ENABLED, 'False' if switched_off else 'True')
-                self.guard.return_value = {'guard_tripped': tripped}
-                with self.assertRaises(LlmError) as error:
-                    Key._llm_create_free_trial_key(
-                        self.partner, str(uuid.uuid4()), self.env.user, None)
-                self.assertEqual(error.exception.code, 'test_free_trial_continues')
-            self.assertEqual(usage.call_count, 2)
+                patch.object(FreeUsage, '_llm_assert_can_create', side_effect=stop) as usage, \
+                patch.object(type(Key), '_llm_assert_key_create_allowed') as admission:
+            # The fresh-cursor switch/runtime policy has its own focused tests.
+            # Here the real Odoo entrypoint must stop before quota or remote work.
+            admission.side_effect = LlmError('llm_guard')
+            with self.assertRaises(LlmError) as error:
+                Key._llm_create_free_trial_key(
+                    self.partner, str(uuid.uuid4()), self.env.user, None)
+            self.assertEqual(error.exception.code, 'llm_guard')
+            admission.assert_called_once_with()
+            usage.assert_not_called()
+
+            admission.reset_mock()
+            admission.side_effect = None
+            with self.assertRaises(LlmError) as error:
+                Key._llm_create_free_trial_key(
+                    self.partner, str(uuid.uuid4()), self.env.user, None)
+            self.assertEqual(error.exception.code, 'test_free_trial_continues')
+            admission.assert_called_once_with()
+            usage.assert_called_once_with(self.account.id)
             client.assert_not_called()
             up.assert_not_called()
             throttle.assert_not_called()

@@ -2976,7 +2976,9 @@
             <!-- 0.3.11（2026-10-19，charts #257）：dashboard session 改為 Secure＋HttpOnly cookie，
                  JSON 登入回應只回無權限 sentinel；首次升級會撤銷舊 session key。
                  image pin／helm_default_values 不變。需受控 Redeploy 存量 QA 262 後線上重測。 -->
-            <field name="helm_chart_version">0.3.11</field>
+            <!-- 0.3.12（charts #262）：修正 0.3.11 在 FastAPI 0.136.3 的 /login、/v2/login 500；
+                 登入路由改用 FastAPI 的 request_response 保留 dependency stack。image／values 不變。 -->
+            <field name="helm_chart_version">0.3.12</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261018.0834@sha256:ad43b95960642ec76cb60c97167f1d21a19dfa6660c06f484f8007d674f5da10"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",

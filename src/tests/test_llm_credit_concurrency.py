@@ -202,6 +202,8 @@ class TestLlmCreditAccountingCommitted(TransactionCase):
                 ('partner_id', 'in', partner_ids),
             ]).unlink()
             if order_ids:
+                cr.execute('DELETE FROM woow_paas_platform_llm_credit_attempt '
+                           'WHERE order_id = ANY(%s)', (order_ids,))
                 cr.execute('DELETE FROM ' + ORDER_TABLE + ' WHERE id = ANY(%s)',
                            (order_ids,))
             if self._owned_journals:
