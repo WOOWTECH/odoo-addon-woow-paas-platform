@@ -1,7 +1,7 @@
 ---
 name: woow-e2e-fixtures
-description: "woow 專屬的沙盒 fixture / clone helper：e2e-seed（tests/e2e/skill）、e2e-seed-reset-button（tests/e2e/service-reset-button）、seed-from-stg（stg DB + filestore clone）、seed-from-prod＋neutralize-clone（prod clone 灌進 lockdown 平台沙盒並中和，#1206）。全部作用在「已存在」的沙盒上。建立／銷毀沙盒、跑測試、延長 TTL 一律用 /woow-dev:k8s-dev-sandbox。"
-when_to_use: 使用者提到 e2e skill fixture、reset-button fixture、seed-from-stg、prod clone、中和（neutralize）、彩排沙盒灌資料。建立／銷毀沙盒、跑測試、延長 TTL 不在此，改用 /woow-dev:k8s-dev-sandbox。
+description: "woow 專屬的沙盒 fixture / clone helper：e2e-seed（tests/e2e/skill）、e2e-seed-reset-button（tests/e2e/service-reset-button）、seed-from-prod＋neutralize-clone（prod clone 灌進 lockdown 平台沙盒並中和，#1206）。全部作用在「已存在」的沙盒上。建立／銷毀沙盒、跑測試、延長 TTL 一律用 /woow-dev:k8s-dev-sandbox。"
+when_to_use: 使用者提到 e2e skill fixture、reset-button fixture、prod clone、中和（neutralize）、彩排沙盒灌資料。建立／銷毀沙盒、跑測試、延長 TTL 不在此，改用 /woow-dev:k8s-dev-sandbox。
 ---
 
 # woow E2E Fixtures — 沙盒 fixture / clone helper
@@ -17,9 +17,19 @@ when_to_use: 使用者提到 e2e skill fixture、reset-button fixture、seed-fro
 | --- | --- | --- |
 | `scripts/e2e-seed.sh <slug> [--context <ctx>] [--reset\|--purge]` | 把 e2e skill fixture（project + draft skill）冪等 seed 進已存在的沙盒；`--name`／`--version` 預設必須與 spec 的 `SKILL_E2E_NAME` 對齊 | `tests/e2e/skill`、`.sandbox/post-test.sh` |
 | `scripts/e2e-seed-reset-button.sh <slug> [--manifest <path>\|--purge]` | Reset 按鈕可見性 e2e 的 fixture（1 workspace ＋ 4 個代表模板的 `state=running` CloudService），輸出 manifest JSON 給 spec 讀（#464）。路徑登記在 repo-lint `PROVISION_SENTINEL_ALLOWLIST`，搬動要同步 | `tests/e2e/service-reset-button` |
-| `scripts/seed-from-stg.sh` | ⛔ **已停用**（2026-10-23，paas-app-bundle-cd#289）：來源 `dev-sandbox-stg` 已退役，腳本在任何 kubectl 前 exit 2。stg 平台改為 Fleet 管理的 `paas-stg-system/paas-odoo-platform-stg`，改寫成新來源的要點見腳本檔頭 | — |
+| `seed-from-stg`（舊入口） | **已退役（#1955）**：腳本已刪除，不保留提示入口；替代做法與歷史查閱方式見下方退役說明 | — |
 | `scripts/seed-from-prod.sh receive\|restore\|stage-b\|gate\|close <slug> --context <ctx>` | prod clone 的**沙盒段**（#1206）：搬運洞（HTTP PUT receiver）、restore、Stage A／B、斷言 gate。只作用在 `SANDBOX_NEUTRALIZE_LOCKDOWN=1` 建的 platform 沙盒；取資料段由人執行 | 彩排（[runbook](../../../docs/guides/deployment/prod-clone-neutralization-runbook.md)） |
 | `scripts/neutralize-clone.sh <slug> --context <ctx> [--db woow_prod] [--write-upgrade-marker]` | 中和：官方 `odoo neutralize --stdout`＋#1201 平台段＋`prod-clone/supplement.sql`＋沙盒密碼，同一個交易；結尾跑 `prod-clone/assertions.toml` 斷言 gate | `seed-from-prod.sh` |
+
+### seed-from-stg 已退役（#1955）
+
+2026-10-23 使用者選擇正式退役（[#1955](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1955)）：舊來源 `dev-sandbox-stg` 已退役，`scripts/seed-from-stg.sh` 已刪除，不改寫成新 stg 來源。
+
+- 一般 E2E 使用合成 fixture：`e2e-seed.sh`、`e2e-seed-reset-button.sh`。
+- 需要 prod 資料形狀的彩排，走下方既有 prod clone 的授權、中和與銷毀流程；不是一般測試的預設資料來源。
+- **prod clone 不能重現 stg 特有的資料或版本問題**；有此需求時另開 issue 討論來源與安全搬運方式。
+
+舊流程僅供歷史查閱，不作為執行指引：`git show 686c1e2c:.claude/skills/woow-e2e-fixtures/scripts/seed-from-stg.sh`。
 
 ### prod clone（#1206）
 
