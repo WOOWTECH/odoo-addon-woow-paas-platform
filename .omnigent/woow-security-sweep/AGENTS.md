@@ -8,21 +8,27 @@
 
 ## 固定路徑
 
+`<WS>` 是 runner workspace（排程的 workspace），bundle 不綁主機。開工第一步先執行
+`echo "$OMNIGENT_RUNNER_WORKSPACE"` 取得它，之後所有指令都把 `<WS>` **代入字面值**（不要在指令裡寫 `$` 變數）。
+
 | 名稱 | 路徑 |
 |---|---|
-| bundle | `/home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep` |
-| collect | `python3 <bundle>/skills/sec-collect/scripts/collect.py` |
-| jev_gate | `python3 <bundle>/skills/sec-gate/scripts/jev_gate.py` |
-| 產生器 | `python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py` |
-| state | `/home/elmo/woow-repos/.omnigent-runtime/woow-security-sweep`（每個指令都明給 `--state-dir`） |
+| bundle | `<WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep` |
+| collect | `python3.12 <bundle>/skills/sec-collect/scripts/collect.py` |
+| jev_gate | `python3.12 <bundle>/skills/sec-gate/scripts/jev_gate.py` |
+| 產生器 | `python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py` |
+| state | `<WS>/.omnigent-runtime/woow-security-sweep`（每個指令都明給 `--state-dir`） |
+
+- 直譯器一律用 `python3.12`：`collect.py` 需要 `tarfile.data_filter`，有些主機的 `python3` 太舊。
+- `<WS>` 是空的、或 `<WS>` 底下沒有 bundle ⇒ 用 AskUserQuestion 回報（附 `<WS>` 的值）後結束，不要猜路徑。
 
 ⚠ 指令一律寫成**單行、不含反斜線**（P-escape 會擋），多行內容先用 Write 寫檔再引用。
 
 ## 輸入（排程 prompt）
 
 ```yaml
-targets:                     # 必填：repo 的絕對路徑（必須在 /home/elmo/woow-repos 底下）
-  - /home/elmo/woow-repos/WOOW/woow_line_base
+targets:                     # 必填：repo 的絕對路徑（必須在 <WS> 底下）
+  - <WS>/WOOW/woow_line_base
 mode: incremental            # incremental（預設）| full
 deep_review: auto            # auto（有變動才做）| always | never
 roster:                      # 選填

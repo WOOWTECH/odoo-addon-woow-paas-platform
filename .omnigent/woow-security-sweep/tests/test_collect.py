@@ -10,8 +10,10 @@ import json
 import os
 import subprocess
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SWEEP = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("collect", SWEEP / "skills/sec-collect/scripts/collect.py")
@@ -146,6 +148,13 @@ class RunTest(RepoFixture):
         self.assertFalse((self.runs / "demo" / "src" / "models" / "leak").exists())
         rows = [json.loads(x) for x in (self.runs / "demo" / "findings.jsonl").read_text().splitlines()]
         self.assertIn("unsafe-archive-member", {r["rule"] for r in rows})
+
+    def test_snapshot_refuses_without_data_filter(self):
+        # 模擬 Python < 3.11.4：沒有 data_filter 時要中止，不能在無檢查下解開（#1934）
+        with mock.patch.object(cl, "tarfile", types.SimpleNamespace()):
+            with self.assertRaisesRegex(cl.CollectError, "python3.12"):
+                cl.snapshot(self.repo, "HEAD", self.runs / "snap")
+        self.assertFalse((self.runs / "snap").exists())
 
     def test_import_rejects_untrusted_rows(self):
         run_dir = Path(self.run_once()["run_dir"])

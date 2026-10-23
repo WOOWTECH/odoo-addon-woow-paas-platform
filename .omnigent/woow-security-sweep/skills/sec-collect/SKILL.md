@@ -5,10 +5,12 @@ description: woow-security-sweep 收集階段：用 collect.py 合併設定、�
 
 # sec-collect
 
+`<WS>`＝runner workspace（取得方式見 AGENTS.md「固定路徑」），指令裡一律代入字面值。
+
 ## 跑一個 target
 
 ```bash
-python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py --state-dir /home/elmo/woow-repos/.omnigent-runtime/woow-security-sweep run --repo-path <repo 絕對路徑> --run-root <本輪目錄> --mode <incremental|full>
+python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py --state-dir <WS>/.omnigent-runtime/woow-security-sweep run --repo-path <repo 絕對路徑> --run-root <本輪目錄> --mode <incremental|full>
 ```
 
 產出在 `<本輪目錄>/<repo 名>/`：
@@ -35,7 +37,7 @@ review worker 回報的 finding 先用 Write 寫成 JSON lines（每行 `rule`�
 `line`、`severity`），再：
 
 ```bash
-python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py import --run-dir <本輪目錄>/<repo 名> --input <jsonl 檔>
+python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py import --run-dir <本輪目錄>/<repo 名> --input <jsonl 檔>
 ```
 
 快照外的路徑、格式錯的行會被丟棄並列在 `rejected`——把數量寫進報告。
@@ -45,5 +47,5 @@ python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sw
 閘門 A 跑完才推進（否則下一輪會漏掉這段 commit）：
 
 ```bash
-python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py --state-dir /home/elmo/woow-repos/.omnigent-runtime/woow-security-sweep commit --run-dir <本輪目錄>/<repo 名>
+python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py --state-dir <WS>/.omnigent-runtime/woow-security-sweep commit --run-dir <本輪目錄>/<repo 名>
 ```

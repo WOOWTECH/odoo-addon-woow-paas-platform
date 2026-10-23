@@ -156,14 +156,31 @@ class PublicationEvidence:
     mails: tuple
 
 
-def prepare_notice(policy, change_id, before, after, recipients, *, now, not_before):
-    """Build an inert publication/outbox plan; no model, network, mail or file writes."""
-    _need(type(policy) is Policy, 'notice_policy')
-    policy.require_enabled()  # Dormant denies before touching supplied catalogs/audience.
-    _need(type(change_id) is str and re.fullmatch(r'pc_[a-f0-9]{32}', change_id), 'notice_id')
-    now, not_before = _time(now), _time(not_before)
-    _need(not_before >= now + SEVEN_DAYS, 'notice_too_soon')
-    recipients = _audience(recipients)
+@dataclass(frozen=True)
+class RecipientSnapshot:
+    """Exact draft obligation; an absent address is retained, never filtered."""
+
+    key: str
+    destination: str | None
+    revision: int
+
+
+@dataclass(frozen=True)
+class CandidateSnapshot:
+    """Content-addressed proposal only: no source, approval or commit authority."""
+
+    version: str
+    environment: str
+    campaign_fingerprint: str
+    catalog_sha256: str
+    audience_sha256: str
+    recipient_count: int
+    unresolved_count: int
+    payload_json: str
+    fingerprint: str
+
+
+def _effective_changes(before, after):
     before, after = _catalog(before), _catalog(after)
     old, new = before['default'], after['default']
     _need(set(old) == set(new), 'notice_scope_review')
@@ -176,7 +193,78 @@ def prepare_notice(policy, change_id, before, after, recipients, *, now, not_bef
                          for k, v in old[name]['rates'].items())
         changed.append(dict(model=name, mode=new[name]['mode'],
                             before=old[name]['rates'], after=new[name]['rates']))
-    _need(increases, 'notice_no_increase')  # No lower-price bypass implemented here.
+    _need(increases, 'notice_no_increase')
+    _need(len(changed) <= 100, 'notice_scope_review')  # Public projection limit.
+    return before, after, changed
+
+
+def _audience_snapshot(recipients):
+    _need(type(recipients) is tuple and 0 < len(recipients) <= 100000, 'notice_audience')
+    rows, keys, unresolved = [], set(), 0
+    for recipient in recipients:
+        _need(type(recipient) is RecipientSnapshot, 'notice_audience')
+        key, destination, revision = recipient.key, recipient.destination, recipient.revision
+        _need(type(key) is str and _RECIPIENT.fullmatch(key) and key not in keys,
+              'notice_audience')
+        _need(type(revision) is int and 0 < revision <= 2147483647, 'notice_audience')
+        if destination is None:
+            unresolved += 1
+        else:
+            _need(type(destination) is str and 3 <= len(destination) <= 320
+                  and destination.count('@') == 1
+                  and all(part for part in destination.split('@'))
+                  and not any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127
+                              or ch in '<>\x00' for ch in destination), 'notice_address')
+        keys.add(key)
+        rows.append(dict(key=key, destination=destination, revision=revision))
+    return sorted(rows, key=lambda row: row['key']), unresolved
+
+
+def prepare_candidate(*, version, environment, body_text, before, after,
+                      recipients, now, not_before):
+    """Bind proposed content and every supplied obligation without authorizing it.
+
+    The caller's catalog and audience may be incomplete or forged. This result
+    is never publication, legal approval, SMTP evidence or a price-write permit.
+    A future adapter must verify sources and persist the exact fingerprint.
+    """
+    _need(_ref(version) and environment in ('stg', 'prod'), 'notice_identity')
+    _need(type(body_text) is str and 0 < len(body_text) <= 65536
+          and body_text.strip() and '\x00' not in body_text, 'notice_body')
+    now, not_before = _time(now), _time(not_before)
+    _need(not_before >= now + SEVEN_DAYS, 'notice_too_soon')
+    before, after, changes = _effective_changes(before, after)
+    rows, unresolved = _audience_snapshot(recipients)
+    catalog_sha256 = _hash(_json(dict(before=before, after=after)))
+    audience_sha256 = _hash(_json(rows))
+    campaign_fingerprint = _hash(_json(dict(
+        version=version, body_text=body_text,
+        catalog_fingerprint=catalog_sha256, environment=environment)))
+    content_sha256 = _hash(_json(dict(campaign_fingerprint=campaign_fingerprint,
+        catalog_sha256=catalog_sha256, audience_sha256=audience_sha256,
+        recipient_count=len(rows), unresolved_count=unresolved,
+        not_before=not_before)))
+    payload = dict(schema=1, id='pc_' + content_sha256[:32], version=version,
+                   title=_TITLE, body_text=body_text, not_before=not_before,
+                   timezone='Asia/Taipei', unit='points_per_million_tokens_or_per_call',
+                   changes=changes)
+    payload_json = _json(payload)
+    fingerprint = _hash(_json(dict(content_sha256=content_sha256,
+                                   payload_json=payload_json)))
+    return CandidateSnapshot(version, environment, campaign_fingerprint,
+                             catalog_sha256, audience_sha256, len(rows), unresolved,
+                             payload_json, fingerprint)
+
+
+def prepare_notice(policy, change_id, before, after, recipients, *, now, not_before):
+    """Build an inert publication/outbox plan; no model, network, mail or file writes."""
+    _need(type(policy) is Policy, 'notice_policy')
+    policy.require_enabled()  # Dormant denies before touching supplied catalogs/audience.
+    _need(type(change_id) is str and re.fullmatch(r'pc_[a-f0-9]{32}', change_id), 'notice_id')
+    now, not_before = _time(now), _time(not_before)
+    _need(not_before >= now + SEVEN_DAYS, 'notice_too_soon')
+    recipients = _audience(recipients)
+    before, after, changed = _effective_changes(before, after)
     payload = dict(schema=1, id=change_id, title=_TITLE, not_before=not_before,
                    timezone='Asia/Taipei', unit='points_per_million_tokens_or_per_call', changes=changed)
     payload['body_text'] = _body(payload)

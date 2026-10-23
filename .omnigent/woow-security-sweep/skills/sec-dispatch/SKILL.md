@@ -5,6 +5,8 @@ description: woow-security-sweep 派工：用 woow-issue-leader 的 generate-wor
 
 # sec-dispatch
 
+`<WS>`＝runner workspace（取得方式見 AGENTS.md「固定路徑」），指令裡一律代入字面值。
+
 worker 一律在**執行期產生**：
 
 1. `generate-worker.py` 寫出 worker 的 config 目錄（它有五道防線，⛔ 不要手寫 config）
@@ -14,7 +16,7 @@ worker 一律在**執行期產生**：
    claude worker 追加訊息（會取消它的回合）。
 
 產生器共用參數（每次都要明給，cwd 會飄）：
-`--workspace /home/elmo/woow-repos --out-dir /home/elmo/woow-repos/.omnigent-runtime/workers --json`
+`--workspace <WS> --out-dir <WS>/.omnigent-runtime/workers --json`
 
 pi worker 完成後 inbox 可能回 `no output`：⛔ 不要當失敗重派，改讀
 `sys_session_get_history` 尾段，再用 git 現場重查。

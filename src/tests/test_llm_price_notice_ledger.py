@@ -10,6 +10,8 @@ from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import TransactionCase, new_test_user, tagged
 from odoo.tools import mute_logger
 
+from ..services.llm_price_notice import RecipientSnapshot, prepare_candidate
+
 CAMPAIGN = 'woow_paas_platform.llm_price_notice_campaign'
 RECIPIENT = 'woow_paas_platform.llm_price_notice_recipient'
 
@@ -223,3 +225,46 @@ class TestLlmPriceNoticeLedger(TransactionCase):
             for spy in (mail_create, mail_send, cron_create, http_request):
                 spy.assert_not_called()
         self.assertEqual(campaign.state, 'draft')
+
+    def test_private_candidate_preview_binds_actual_draft_and_obligations(self):
+        before = {'default': {'vendor/model': {'mode': 'fixed', 'rates': {'per_call': '1'}}}}
+        after = {'default': {'vendor/model': {'mode': 'fixed', 'rates': {'per_call': '1.3'}}}}
+        rows = (RecipientSnapshot('paas:synthetic', 'one@example.test', 1),
+                RecipientSnapshot('legacy:synthetic', None, 2))
+        version = 'test-' + uuid.uuid4().hex
+        body = '合成公告：價格調整'
+        proposed = prepare_candidate(version=version, environment='stg', body_text=body,
+                                     before=before, after=after, recipients=rows,
+                                     now=1800000000, not_before=1800604800)
+        campaign = self._campaign(version=version, body_text=body,
+                                  catalog_fingerprint=proposed.catalog_sha256)
+        self._recipient(campaign, recipient_key='paas:synthetic',
+                        destination_snapshot='one@example.test')
+        self._recipient(campaign, recipient_key='legacy:synthetic',
+                        destination_snapshot=False, destination_revision=2)
+        preview = campaign.with_user(self.admin)._llm_candidate_preview(
+            before, after, now=1800000000, not_before=1800604800)
+        self.assertEqual(preview, proposed)
+        self.assertEqual(preview.campaign_fingerprint, campaign.fingerprint)
+        self.assertEqual(preview.unresolved_count, 1)
+        self.assertFalse(self.env['woow_paas_platform.llm_price_notice_publication'].sudo().search([
+            ('campaign_id', '=', campaign.id)]))
+        self._recipient(campaign, recipient_key='paas:joined_later',
+                        destination_snapshot='two@example.test')
+        changed = campaign.with_user(self.admin)._llm_candidate_preview(
+            before, after, now=1800000000, not_before=1800604800)
+        self.assertNotEqual(changed.fingerprint, preview.fingerprint)
+        self.assertEqual(changed.recipient_count, 3)
+
+    def test_candidate_preview_rejects_wrong_catalog_and_unprivileged_user(self):
+        before = {'default': {'vendor/model': {'mode': 'fixed', 'rates': {'per_call': '1'}}}}
+        after = {'default': {'vendor/model': {'mode': 'fixed', 'rates': {'per_call': '1.3'}}}}
+        campaign = self._campaign()
+        self._recipient(campaign)
+        with self.assertRaises(ValidationError):
+            campaign.with_user(self.admin)._llm_candidate_preview(
+                before, after, now=1800000000, not_before=1800604800)
+        with self.assertRaises(AccessError):
+            campaign.with_user(self.normal).sudo(False).with_context(
+                price_notice_approved=True)._llm_candidate_preview(
+                    before, after, now=1800000000, not_before=1800604800)

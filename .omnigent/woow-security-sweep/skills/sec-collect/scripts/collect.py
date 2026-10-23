@@ -94,6 +94,9 @@ def snapshot(repo: Path, rev: str, dest: Path) -> list[str]:
     以 tarfile 的 data_filter 逐一檢查：絕對路徑、`..`、指向快照外的 symlink 一律不解，
     並回報出來（之後變成 high finding 交人工）——不讓單一惡意成員中斷整輪。
     """
+    # 舊版 Python（< 3.11.4）沒有 data_filter：寧可中止也不在無檢查下解開
+    if not hasattr(tarfile, "data_filter"):
+        raise CollectError(f"Python {sys.version.split()[0]} 沒有 tarfile.data_filter，請改用 python3.12 執行")
     data = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", rev],
                           capture_output=True, check=True).stdout
     dest.mkdir(parents=True, exist_ok=True)
