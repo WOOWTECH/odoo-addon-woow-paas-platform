@@ -23,6 +23,10 @@ on:
       - "tests/test_llm_status_invariants.py"
       - "src/services/llm_status_monitor.py"
       - "src/services/llm_canary_probe.py"
+      - "src/services/llm_canary.py"
+      - "src/models/llm_canary.py"
+      - "src/tests/test_llm_canary*.py"
+      - "tests/test_llm_canary.py"
       - "tests/test_llm_canary_probe.py"
       - "src/models/llm_status_monitor.py"
       - "src/tests/test_llm_status_monitor.py"
@@ -114,6 +118,7 @@ jobs:
           .venv-llm-services-ci/bin/python tests/test_llm_status_monitor_worker.py -v
           .venv-llm-services-ci/bin/python tests/test_llm_status_monitor_probe.py -v
           timeout 45s .venv-llm-services-ci/bin/python tests/test_llm_canary_probe.py -v
+          .venv-llm-services-ci/bin/python tests/test_llm_canary.py -v
       - name: Real MCP adapter transport smoke
         env:
           PYTHONDONTWRITEBYTECODE: "1"

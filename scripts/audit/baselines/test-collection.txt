@@ -481,6 +481,8 @@
 29	test_llm_backoffice.TestLlmBackofficeCommitted
 8	test_llm_backoffice.TestLlmBackofficeGuards
 3	test_llm_bounded_cron.TestLlmBoundedCron
+14	test_llm_canary.TestLlmCanary
+8	test_llm_canary_keys.TestLlmCanaryKeys
 2	test_llm_client_hardening.TestLlmApRateLimit
 9	test_llm_client_hardening.TestLlmCircuitBreaker
 3	test_llm_client_hardening.TestLlmCircuitCronGate
@@ -529,7 +531,7 @@
 15	test_llm_reconcile_candidate.TestLlmReconcileCandidate
 1	test_llm_reconcile_local.TestLlmReconcileDeadline
 25	test_llm_reconcile_local.TestLlmReconcileLocal
-4	test_llm_sql_budget.TestLlmSqlBudget
+5	test_llm_sql_budget.TestLlmSqlBudget
 8	test_llm_status_monitor.TestLlmStatusMonitor
 13	test_llm_terms.TestLlmTermsConsent
 4	test_llm_terms.TestLlmTermsHttp

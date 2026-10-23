@@ -1,0 +1,139 @@
+name: llm-canary-pg
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+  ODOO_BIN: /opt/bitnami/odoo/bin/odoo
+  ADDONS_PATH: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons
+  MODULE_DIR: /opt/bitnami/odoo/custom-addons/woow_paas_platform
+
+jobs:
+  canary-postgres-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: JCR login
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login "${JCR}" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      - name: Pull and pin the Odoo CI image
+        run: |
+          IMG="${JCR}/woow-paas-docker-local/paas-odoo-ci:latest"
+          if ! docker pull "${IMG}"; then
+            echo "::error::無法取得 paas-odoo-ci image；拒絕 fallback 到其他 image。"
+            exit 1
+          fi
+          if ! REPO_DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMG}"); then
+            echo "::error::無法解析 Odoo CI image RepoDigest。"
+            exit 1
+          fi
+          case "${REPO_DIGEST}" in
+            "${JCR}/woow-paas-docker-local/paas-odoo-ci@sha256:"*) ;;
+            *) echo "::error::Odoo CI image RepoDigest 缺失或 repository 不符。"; exit 1 ;;
+          esac
+          echo "Odoo CI image pinned to ${REPO_DIGEST}"
+          echo "IMG_PINNED=${REPO_DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Start isolated PostgreSQL and Odoo containers
+        run: |
+          PG_CT="llm-canary-pg-${{ github.run_id }}"
+          ODOO_CT="llm-canary-odoo-${{ github.run_id }}"
+          echo "PG_CT=${PG_CT}" >> "$GITHUB_ENV"
+          echo "ODOO_CT=${ODOO_CT}" >> "$GITHUB_ENV"
+          docker run -d --name "${PG_CT}" \
+            -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
+            -e POSTGRES_DB=postgres postgres:15
+          docker run -d --name "${ODOO_CT}" \
+            --entrypoint bash "${IMG_PINNED}" -c 'sleep infinity'
+          for i in $(seq 1 60); do
+            docker exec "${PG_CT}" pg_isready -U odoo >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec "${PG_CT}" pg_isready -U odoo
+          PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${PG_CT}")
+          [ -n "${PG_IP}" ] || { echo "::error::拿不到 PostgreSQL container IP。"; exit 1; }
+          echo "PG_IP=${PG_IP}" >> "$GITHUB_ENV"
+
+      - name: Install this checkout into the scratch database
+        run: |
+          docker exec "${ODOO_CT}" rm -rf "${MODULE_DIR}"
+          docker exec "${ODOO_CT}" mkdir -p "${MODULE_DIR}"
+          docker cp src/. "${ODOO_CT}:${MODULE_DIR}/"
+          docker exec "${ODOO_CT}" sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -i woow_paas_platform \
+            --stop-after-init --without-demo=all --no-http \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            > /tmp/llm-canary-install.log 2>&1 \
+            || { tail -60 /tmp/llm-canary-install.log; echo "::error::Odoo module install 失敗。"; exit 1; }
+
+      - name: Run rollback-scoped canary service tests (22)
+        run: |
+          set +e
+          docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags llm_canary \
+            --stop-after-init --without-demo=all \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --http-port=18069 --gevent-port=18072 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.stats:DEBUG > /tmp/llm-canary-service.log 2>&1
+          ODOO_EXIT=$?
+          set -e
+          if [ "${ODOO_EXIT}" -ne 0 ]; then
+            tail -100 /tmp/llm-canary-service.log
+            echo "::error::Odoo rollback/service tests exit=${ODOO_EXIT}。"
+            exit 1
+          fi
+          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 22 tests' /tmp/llm-canary-service.log || true)
+          [ "${SUMMARY_COUNT}" -eq 1 ] || {
+            tail -100 /tmp/llm-canary-service.log
+            echo "::error::預期恰好 22 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
+            exit 1
+          }
+          grep -F '0 failed, 0 error(s) of 22 tests' /tmp/llm-canary-service.log
+
+      - name: Run six real PostgreSQL canary tests
+        run: |
+          set +e
+          docker exec -e WOOW_LLM_CANARY_PG_TEST=isolated-v1 "${ODOO_CT}" \
+            "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags llm_canary_pg \
+            --stop-after-init --without-demo=all --no-http \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.stats:DEBUG > /tmp/llm-canary-test.log 2>&1
+          ODOO_EXIT=$?
+          set -e
+          if [ "${ODOO_EXIT}" -ne 0 ]; then
+            tail -100 /tmp/llm-canary-test.log
+            echo "::error::Odoo test process exit=${ODOO_EXIT}。"
+            exit 1
+          fi
+          SUMMARY_COUNT=$(grep -Fc '0 failed, 0 error(s) of 6 tests' /tmp/llm-canary-test.log || true)
+          [ "${SUMMARY_COUNT}" -eq 1 ] || {
+            tail -100 /tmp/llm-canary-test.log
+            echo "::error::預期恰好 6 tests、0 failed、0 error；summary 命中數=${SUMMARY_COUNT}。"
+            exit 1
+          }
+          grep -F '0 failed, 0 error(s) of 6 tests' /tmp/llm-canary-test.log
+
+      - name: Remove only containers created by this run
+        if: always()
+        run: |
+          docker rm -f \
+            "llm-canary-odoo-${{ github.run_id }}" \
+            "llm-canary-pg-${{ github.run_id }}" \
+            2>/dev/null || true

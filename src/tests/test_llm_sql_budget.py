@@ -16,7 +16,7 @@ from odoo.tests import TransactionCase, tagged
 
 from ..models import llm_event as llm_event_module
 from ..models.llm_common import ERR_LLM_INTERNAL
-from ..services.llm_sql_budget import SqlBudgetExpired, deadline_cursor
+from ..services.llm_sql_budget import SqlBudgetExpired, cursor_deadline, deadline_cursor
 
 
 _TIMEOUTS = (SqlBudgetExpired, QueryCanceled, LockNotAvailable)
@@ -31,6 +31,18 @@ class TestLlmSqlBudget(TransactionCase):
         # Do not use registry.cursor(): the budget wrapper is exercised against
         # independent PostgreSQL sessions without contending for Registry._lock.
         return self.registry._db.cursor
+
+    def test_nested_independent_cursor_keeps_the_remaining_budget(self):
+        deadline = time.monotonic() + 0.30
+        with unittest.TestCase.assertRaises(self, SqlBudgetExpired):
+            with deadline_cursor(self._cursor_factory(), deadline) as outer:
+                outer.execute('SELECT pg_sleep(0.15)')
+                self.assertEqual(cursor_deadline(outer), deadline)
+                with unittest.TestCase.assertRaises(self, _TIMEOUTS):
+                    with deadline_cursor(self._cursor_factory(), cursor_deadline(outer)) as nested:
+                        nested.execute('SELECT pg_sleep(0.30)')
+        with self._cursor_factory()() as ordinary:
+            self.assertIsNone(cursor_deadline(ordinary))
 
     def test_deadline_bounds_advisory_lock_wait_and_is_per_cursor(self):
         holder = self.registry._db.cursor()

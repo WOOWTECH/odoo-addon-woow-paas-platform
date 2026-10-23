@@ -43,6 +43,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_redact
+from ..services.llm_sql_budget import cursor_deadline, deadline_cursor, trigger_cron
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
@@ -64,6 +65,8 @@ _LOCK_TIMEOUT = '5s'
 
 #: 可以經 :meth:`LlmRuntimeState._llm_write` 改的欄位（＝本 model 的業務欄位）。
 STATE_FIELDS = (
+    'canary_generation', 'canary_started_at', 'canary_lease_until', 'canary_work',
+    'canary_probe_result', 'canary_latency_ms', 'canary_failures',
     'status_armed', 'status_generation', 'status_started_at', 'status_completed_at',
     'status_success_at', 'status_result', 'status_fingerprint',
     # 免費試用計數的游標（LLM-10；DESIGN §1.3.3）。new-api 的 log id 與 unix 秒都用 int8。
@@ -212,7 +215,7 @@ class LlmRuntimeState(models.Model):
     def _llm_read(self):
         """回傳單例目前的值（dict；獨立 cursor 讀，看得到別的交易剛 commit 的游標）。"""
         columns = ', '.join(('id',) + STATE_FIELDS)
-        with self.env.registry.cursor() as cr:
+        with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
             cr.execute('SELECT %s FROM %s ORDER BY id LIMIT 1' % (columns, STATE_TABLE))
             row = cr.dictfetchone()
@@ -244,7 +247,7 @@ class LlmRuntimeState(models.Model):
         ``RETURNING`` 的那一列（沒有符合 ``where`` 的列 ⇒ ``None``）。
         """
         from .llm_event import _begin
-        with self.env.registry.cursor() as cr:
+        with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
             _begin(self.env, cr, read_committed=True)
             self._llm_ensure_row(cr)
             cr.execute(
@@ -305,7 +308,7 @@ class LlmRuntimeState(models.Model):
         else:
             return False
         from .llm_event import _begin
-        with self.env.registry.cursor() as cr:
+        with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
             _begin(self.env, cr, read_committed=True)
             self._llm_ensure_row(cr)
             cr.execute(
@@ -377,12 +380,12 @@ class LlmRuntimeState(models.Model):
         """
         from .llm_event import _env_on
         try:
-            with self.env.registry.cursor() as cr:
+            with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
                 cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
                 env = _env_on(self.env.registry, cr)
                 cron = env.ref(CIRCUIT_PROBE_CRON_XMLID, raise_if_not_found=False)
                 if cron:
-                    cron._trigger(at=at)
+                    trigger_cron(cron, at=at)
         except Exception:  # noqa: BLE001 - never break the caller
             _logger.warning('[LLM] could not trigger the circuit health check')
 

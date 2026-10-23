@@ -132,6 +132,26 @@ class LlmFreeUsage(models.Model):
                    'WHERE account_id=%%s AND day_tpe=%%s' % USAGE_TABLE, (account_id, day))
 
     @api.model
+    def _llm_reserve_canary_key_cr(self, cr, account_id, day, claim):
+        """Reserve the daily canary slot exemption while retaining a hard cap latch."""
+        from ..services.llm_canary import CanaryClaim
+
+        if (type(claim) is not CanaryClaim or type(account_id) is not int
+                or type(claim.account_id) is not int):
+            raise LlmError(ERR_LLM_FREE_KEY_DAILY_LIMIT)
+        self.env['woow_paas_platform.llm_runtime_state']._canary_validate_claim_cr(cr, claim)
+        if claim.account_id != account_id:
+            raise LlmError(ERR_LLM_FREE_KEY_DAILY_LIMIT)
+        cr.execute('INSERT INTO %s (account_id, day_tpe, success_count, trial_keys_created) '
+                   'VALUES (%%s, %%s, 0, 0) ON CONFLICT DO NOTHING' % USAGE_TABLE,
+                   (account_id, day))
+        cr.execute('SELECT capped_at FROM %s WHERE account_id=%%s AND day_tpe=%%s '
+                   'FOR UPDATE' % USAGE_TABLE, (account_id, day))
+        row = cr.dictfetchone()
+        if row and row.get('capped_at'):
+            raise LlmError(ERR_LLM_FREE_CAPPED_TODAY)
+
+    @api.model
     def _llm_alert(self, alert, code, account_id=None):
         self.env['woow_paas_platform.llm_event']._llm_alert(
             alert, account_id=account_id, error_code=code)

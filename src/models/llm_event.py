@@ -83,7 +83,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_redact
-from ..services.llm_sql_budget import deadline_cursor, trigger_cron
+from ..services.llm_sql_budget import cursor_deadline, deadline_cursor, trigger_cron
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
@@ -143,6 +143,7 @@ EMAIL_DELIVERED = ('queued', 'sent', 'no_recipient', 'batched', 'digested')
 WEBHOOK_DELIVERED = ('pending', 'sent', 'not_configured', 'batched', 'digested')
 
 ACTION_SELECTION = [
+    ('canary', 'Canary health sample'),
     ('activate', 'Activate'),
     # LLM-04：每一次同意條款（開通時與改版後重新同意）各一筆；對象＝那一版的 llm_terms。
     ('tos_accept', 'Terms accepted'),
@@ -201,6 +202,7 @@ class LlmAlert(enum.Enum):
     #: 驗證告警出口用（odoo shell 觸發；LLM-02b AC2）。
     TEST = 'alert_test'
     STATUS_INVALID = 'status_invalid'
+    CANARY_FAILED = 'canary_failed'
     #: 開戶放棄（``state=error``，第 6 次失敗或不可重試的錯誤）；錯誤碼＝``last_error_code``。
     PROVISION_FAILED = 'provision_failed'
     #: 密文被拒（綁定不符、解不開、內容不合）——有人動過 DB 或加密金鑰換掉了（DESIGN §2.9）。
@@ -447,7 +449,10 @@ def _deadline_service(method):
     def call(self, *args, **kwargs):
         deadline = kwargs.get('deadline')
         if deadline is None:
+            deadline = cursor_deadline(self.env.cr)
+        if deadline is None:
             return method(self, *args, **kwargs)
+        kwargs['deadline'] = deadline
         with deadline_cursor(self.env.registry.cursor, deadline) as cr:
             env = _env_on(self.env.registry, cr)
             return method(self.with_env(env), *args, **kwargs)
@@ -655,7 +660,7 @@ class LlmEvent(models.Model):
             result = _check_code('result', result, RESULT_CODES)
             error_code = _check_code('error_code', error_code)
             target_model, target_id = _check_target(target_model, target_id)
-            with self.env.registry.cursor() as cr:
+            with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
                 _begin(self.env, cr)
                 cr.execute(
                     'UPDATE %s SET result = %%s, error_code = %%s, '
@@ -697,7 +702,7 @@ class LlmEvent(models.Model):
         uid = _check_id('uid', uid)
         real_ip = self._llm_ip(real_ip)
         try:
-            with self.env.registry.cursor() as cr:
+            with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
                 _begin(self.env, cr, read_committed=True)
                 return _throttle_reserve_cr(
                     cr, account.id, action, partner_id=account.partner_id.id, uid=uid,

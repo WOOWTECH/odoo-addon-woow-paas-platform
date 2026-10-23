@@ -372,7 +372,8 @@ class TestLlmCronContract(TransactionCase):
                 # LLM model 沒有任何群組的 write ACL；ir.actions.server.run() 對非 superuser 會先
                 # check_access('write') ⇒ cron 的執行者必須是 superuser。
                 self.assertEqual(cron.user_id.id, 1)
-                if xmlid == 'woow_paas_platform.ir_cron_llm_status_monitor':
+                if xmlid in ('woow_paas_platform.ir_cron_llm_status_monitor',
+                             'woow_paas_platform.ir_cron_llm_canary'):
                     self.assertFalse(cron.active, 'LLM-14 review slice must remain inactive')
                 else:
                     self.assertTrue(cron.active,

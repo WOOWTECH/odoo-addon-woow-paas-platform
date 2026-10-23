@@ -17,6 +17,12 @@ class SqlBudgetExpired(TimeoutError):
     """Fixed, credential-free failure; retry from the last durable receipt."""
 
 
+def cursor_deadline(cr):
+    """Carry an owned cursor's budget into nested independent transactions."""
+    value = getattr(cr, '_llm_sql_deadline', None)
+    return value if type(value) in (int, float) else None
+
+
 def _remaining(deadline):
     milliseconds = int((deadline - time.monotonic() - _FINISH_MARGIN) * 1000)
     if milliseconds < 1:

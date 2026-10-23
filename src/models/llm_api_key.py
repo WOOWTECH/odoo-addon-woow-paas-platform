@@ -66,6 +66,7 @@ from .llm_common import (
     _without_llm_internal,
 )
 from .llm_event import _begin, _env_on, safe_code
+from ..services.llm_sql_budget import cursor_deadline, deadline_cursor
 
 _logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class LlmApiKey(models.Model):
                               help='wp_<id>_<rand4> — the token name on new-api.')
     newapi_token_id = fields.Integer(readonly=True, copy=False)
     client_request_id = fields.Char(readonly=True, copy=False)
+    canary_generation = LlmQuotaInteger(readonly=True, default=0, copy=False)
     state = fields.Selection(KEY_STATE_SELECTION, required=True, default='creating',
                              readonly=True, index=True)
     disabled_by = fields.Selection(
@@ -355,7 +357,7 @@ class LlmApiKey(models.Model):
         allowed = False
         try:
             row = self.env['woow_paas_platform.llm_runtime_state'].sudo()._llm_read()
-            with self.env.registry.cursor() as cr:
+            with deadline_cursor(self.env.registry.cursor, cursor_deadline(self.env.cr)) as cr:
                 cr.execute('SELECT value FROM ir_config_parameter WHERE key = %s',
                            (PARAM_ORDERS_ENABLED,), log_exceptions=False)
                 switch = cr.fetchone()
@@ -468,7 +470,8 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_create_with_reveal(self, account, client_request_id, user, real_ip, spec,
-                                payload_factory):
+                                payload_factory, *, canary_claim=None, deadline=None,
+                                role=nac.ROLE_WEB):
         """Persist a validated mirror, create/reveal remotely, and close its audit event.
 
         Callers own their authorization, consent, reauthentication, and local quota
@@ -478,21 +481,32 @@ class LlmApiKey(models.Model):
         self._llm_assert_key_create_allowed()
         Account = self.env['woow_paas_platform.llm_account']
         ip = account._llm_tenant_ip()
-        up = account._llm_up_token()
-        client = Account._llm_web_client('keys/create')
+        up = (account._llm_up_token(role=role) if canary_claim is not None
+              else account._llm_up_token())
+        client = (Account._llm_client(role) if canary_claim is not None else
+                  Account._llm_web_client('keys/create'))
+        if canary_claim is not None:
+            with deadline_cursor(self.env.registry.cursor, deadline) as cr:
+                _begin(self.env, cr, read_committed=True)
+                work = self.env['woow_paas_platform.llm_runtime_state']._canary_validate_claim_cr(
+                    cr, canary_claim)
+            if client.base_url != work['proxy_url'] or ip != work['ip']:
+                raise LlmError(ERR_LLM_UNAVAILABLE)
         Event = self.env[EVENT_MODEL]
         event_id = Event._llm_throttle_reserve(
             account, 'key_create', uid=user.id if user else None, real_ip=real_ip)
-        deadline = time.monotonic() + nac.KEY_CREATE_BUDGET_SECONDS
+        deadline = deadline if deadline is not None else (
+            time.monotonic() + nac.KEY_CREATE_BUDGET_SECONDS)
         key_id = None
         try:
             key_id, newapi_name = self._llm_insert_creating(
                 account, spec['kind'], client_request_id, user, real_ip,
                 spec['expires_at'], spec['model_allowlist'], key_label=spec['key_label'],
-                quota_limit_points=spec['limit_points'])
+                quota_limit_points=spec['limit_points'], canary_claim=canary_claim,
+                deadline=deadline if canary_claim is not None else None)
             created = self._llm_create_remote(
                 account, client, ip, up, key_id, newapi_name, spec['expires_at'], deadline,
-                payload_factory=payload_factory, spec=spec)
+                payload_factory=payload_factory, spec=spec, canary_claim=canary_claim)
         except LlmError as exc:
             Event._llm_event_finish(event_id,
                                     RESULT_NOT_EXECUTED if exc.not_executed else 'failed',
@@ -503,7 +517,8 @@ class LlmApiKey(models.Model):
         except Exception:
             # A client/programming exception must not leave a durable creating mirror.
             if key_id:
-                self._llm_finish(key_id, {'state': 'failed_reveal'})
+                self._llm_finish(key_id, {'state': 'failed_reveal'},
+                                 deadline=deadline if canary_claim is not None else None)
             Event._llm_event_finish(event_id, 'failed', error_code=ERR_LLM_INTERNAL,
                                     target_model=KEY_MODEL if key_id else None,
                                     target_id=key_id)
@@ -558,6 +573,59 @@ class LlmApiKey(models.Model):
                 newapi_name, self._llm_expired_time(expires_at)))
 
     @api.model
+    def _llm_create_canary_key(self, account, claim, deadline):
+        """Create the private ten-minute free key for one validated canary claim."""
+        from ..services import llm_canary as canary_policy
+        from ..services.llm_canary import CanaryClaim
+
+        if type(claim) is not CanaryClaim or not canary_policy.authorized(claim):
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        account.ensure_one()
+        account._llm_require_active()
+        self._llm_assert_key_create_allowed()
+        account._llm_require_current_terms()
+        if (type(claim.generation) is not int or claim.generation <= 0
+                or type(claim.request_id) is not str or not claim.request_id
+                or len(claim.request_id) > 128
+                or type(claim.account_id) is not int or claim.account_id != account.id
+                or type(claim.partner_id) is not int
+                or claim.partner_id != account.partner_id.id
+                or type(claim.fingerprint) is not str or not claim.fingerprint
+                or len(claim.fingerprint) > 128):
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        with deadline_cursor(self.env.registry.cursor, deadline) as cr:
+            _begin(self.env, cr, read_committed=True)
+            work = self.env['woow_paas_platform.llm_runtime_state']._canary_validate_claim_cr(
+                cr, claim)
+        if not isinstance(work, dict) or type(work.get('expires_at')) is not str:
+            raise LlmError(ERR_LLM_UNAVAILABLE)
+        try:
+            expires_at = datetime.fromisoformat(work['expires_at'])
+        except ValueError:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+
+        client_request_id = claim.request_id
+        live = self._llm_preflight_create(account, client_request_id)
+        if live.filtered(lambda key: key.kind == 'free_trial'
+                         and key.state in _FREE_TRIAL_LIVE_STATES):
+            raise LlmError(ERR_LLM_FREE_KEY_EXISTS)
+
+        spec = {
+            'kind': 'free_trial',
+            'key_label': '',
+            'limit_points': None,
+            'expires_at': expires_at,
+            'model_allowlist': ','.join(nac.FREE_TRIAL_MODELS),
+            'models': tuple(nac.FREE_TRIAL_MODELS),
+            'model_limits_enabled': True,
+        }
+        return self._llm_create_with_reveal(
+            account, client_request_id, None, '', spec,
+            lambda newapi_name: nac.free_trial_token_body(
+                newapi_name, self._llm_expired_time(expires_at)),
+            canary_claim=claim, deadline=deadline, role=nac.ROLE_CRON)
+
+    @api.model
     def _llm_create_paid_key(self, partner, client_request_id, user, real_ip, session, *,
                              name, limit_points, expires, models):
         """Create a paid mirror/token pair without exposing its generated upstream name."""
@@ -584,32 +652,46 @@ class LlmApiKey(models.Model):
             account, client_request_id, user, real_ip, spec, paid_body)
 
     @contextmanager
-    def _llm_creation_guard(self, key_id, *, token_id=None):
+    def _llm_creation_guard(self, key_id, *, token_id=None, canary_claim=None,
+                            deadline=None):
         """Fence each POST/reveal with the stop worker's key lock, including retries."""
-        with self.env.registry.cursor() as cr:
+        rejected = None
+        with deadline_cursor(self.env.registry.cursor, deadline) as cr:
             _begin(self.env, cr, read_committed=True)
             cr.execute('SELECT state, disabled_by FROM %s WHERE id=%%s '
                        'FOR NO KEY UPDATE' % KEY_TABLE, (key_id,))
             row = cr.fetchone()
             if row and row[0] == 'creating' and row[1] != 'ops':
-                yield
-                return
+                if canary_claim is not None:
+                    try:
+                        # The 45s lease outlives this bounded 30s tick. Do not
+                        # hold the singleton lock across HTTP: the client's
+                        # circuit callback writes it on a separate cursor.
+                        self.env['woow_paas_platform.llm_runtime_state']._canary_validate_claim_cr(
+                            cr, canary_claim, lock=False)
+                    except LlmError as exc:
+                        rejected = exc
+                if rejected is None:
+                    yield
+                    return
         # Release the key lock before taking operation/obligation locks in finish.
         values = {'state': 'failed_reveal'}
         if token_id:
             values['newapi_token_id'] = token_id
-        self._llm_finish(key_id, values)
-        raise LlmError(ERR_LLM_UNAVAILABLE)
+        self._llm_finish(key_id, values, deadline=deadline)
+        raise rejected or LlmError(ERR_LLM_UNAVAILABLE)
 
     @api.model
     def _llm_create_remote(self, account, client, ip, up, key_id, name, expires, deadline,
-                           *, payload_factory=None, spec=None):
+                           *, payload_factory=None, spec=None, canary_claim=None):
         """§1.3.2 第 4–7 步：POST token → 依名稱找 id → reveal → 鏡像 active。"""
+        sql_deadline = deadline if canary_claim is not None else None
         body = (payload_factory(name) if payload_factory is not None else
                 nac.free_trial_token_body(name, int(expires.timestamp())))
         admission_rejected = False
         try:
-            with self._llm_creation_guard(key_id):
+            with self._llm_creation_guard(key_id, canary_claim=canary_claim,
+                                          deadline=sql_deadline):
                 try:
                     self._llm_assert_key_create_allowed()
                 except LlmError:
@@ -621,11 +703,13 @@ class LlmApiKey(models.Model):
                 # No POST was attempted. Release creation_guard's key lock
                 # before finish opens its own cursor/obligation locks. Existing
                 # finish returns a reserved free slot once and records rejection.
-                self._llm_finish(key_id, {'state': 'deleted'})
+                self._llm_finish(key_id, {'state': 'deleted'},
+                                 deadline=sql_deadline)
             raise
         if isinstance(created, (nac.NotExecuted, nac.Definite)):
             # 確定沒建：鏡像標 deleted（使用者可以直接重建）。
-            self._llm_finish(key_id, {'state': 'deleted'})
+            self._llm_finish(key_id, {'state': 'deleted'},
+                             deadline=sql_deadline)
             try:
                 self._llm_raise_for(account, created)
             except LlmError as exc:
@@ -634,11 +718,12 @@ class LlmApiKey(models.Model):
                     getattr(created, 'proxy_error', None))
                 raise
         token = self._llm_find_token(client, ip, up, name, deadline)
-        if token is None and isinstance(created, nac.Unknown):
+        if token is None and isinstance(created, nac.Unknown) and canary_claim is None:
             # 結果未知、而且列表**成功**證明確實沒有：用同名重送一次（〔PROV〕§6.2）。
             retry_admission_rejected = False
             try:
-                with self._llm_creation_guard(key_id):
+                with self._llm_creation_guard(key_id, canary_claim=canary_claim,
+                                              deadline=sql_deadline):
                     try:
                         self._llm_assert_key_create_allowed()
                     except LlmError as exc:
@@ -653,25 +738,30 @@ class LlmApiKey(models.Model):
                     # Unwind the key lock before independent-cursor finish.
                     # Retain uncertainty and the free slot; never assert that
                     # the initial Unknown did not create an upstream token.
-                    self._llm_finish(key_id, {'state': 'failed_reveal'})
+                    self._llm_finish(key_id, {'state': 'failed_reveal'},
+                                     deadline=sql_deadline)
                 raise
             if retried.ok or isinstance(retried, nac.Unknown):
                 token = self._llm_find_token(client, ip, up, name, deadline)
         if token is None or token is TOKEN_LIST_FAILED:
             # 找不到，或列表失敗、不知道有沒有建成：不再送第二次 POST。
-            self._llm_finish(key_id, {'state': 'failed_reveal'})
+            self._llm_finish(key_id, {'state': 'failed_reveal'},
+                             deadline=sql_deadline)
             raise LlmError(ERR_LLM_UNAVAILABLE)
         token_id = token['id']
 
-        with self._llm_creation_guard(key_id, token_id=token_id):
+        with self._llm_creation_guard(key_id, token_id=token_id,
+                                      canary_claim=canary_claim, deadline=sql_deadline):
             revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         if isinstance(revealed, nac.NotExecuted) and revealed.reason != 'deadline' \
                 and not revealed.retry_after:
-            with self._llm_creation_guard(key_id, token_id=token_id):
+            with self._llm_creation_guard(key_id, token_id=token_id,
+                                          canary_claim=canary_claim, deadline=sql_deadline):
                 revealed = client.user_reveal_token(ip, up, token_id, deadline=deadline)
         raw = revealed.data.get('key') if revealed.ok and isinstance(revealed.data, dict) else None
         if not (isinstance(raw, str) and _REVEALED_KEY_RE.fullmatch(raw)):
-            self._llm_finish(key_id, {'state': 'failed_reveal', 'newapi_token_id': token_id})
+            self._llm_finish(key_id, {'state': 'failed_reveal', 'newapi_token_id': token_id},
+                             deadline=sql_deadline)
             if revealed.ok:
                 raise LlmError(ERR_LLM_UNAVAILABLE)
             self._llm_raise_for(account, revealed)
@@ -682,7 +772,7 @@ class LlmApiKey(models.Model):
             'newapi_token_id': token_id,
             'masked_key': masked,
             'revealed_at': now,
-        })
+        }, deadline=sql_deadline)
         if not finish or finish['state'] != 'active':
             raise LlmError(ERR_LLM_UNAVAILABLE)
         # 鏡像是獨立交易寫的：主 cursor 的 snapshot 看不到這一列，所以 DTO 直接由已知的值組。
@@ -745,13 +835,19 @@ class LlmApiKey(models.Model):
 
     @api.model
     def _llm_insert_creating(self, account, kind, client_request_id, user, real_ip,
-                             expires_at, models, *, key_label='', quota_limit_points=None):
+                             expires_at, models, *, key_label='', quota_limit_points=None,
+                             canary_claim=None, deadline=None):
         """獨立 cursor INSERT ``state=creating`` 的鏡像並 commit（外呼前就持久化）。"""
         if kind not in ('paid', 'free_trial'):
             raise LlmError(ERR_LLM_KEY_INVALID, field='kind')
-        if not isinstance(client_request_id, str) or not _CLIENT_REQUEST_ID_RE.fullmatch(
-                client_request_id):
+        if not isinstance(client_request_id, str) or (canary_claim is None and
+                not _CLIENT_REQUEST_ID_RE.fullmatch(client_request_id)):
             raise LlmError(ERR_LLM_KEY_INVALID, field='client_request_id')
+        if canary_claim is not None:
+            from ..services.llm_canary import CanaryClaim
+            if type(canary_claim) is not CanaryClaim or kind != 'free_trial' \
+                    or client_request_id != canary_claim.request_id:
+                raise LlmError(ERR_LLM_UNAVAILABLE)
         if not isinstance(key_label, str) or len(key_label) > _MAX_KEY_LABEL_LENGTH:
             raise LlmError(ERR_LLM_KEY_INVALID, field='name')
         if expires_at is not None and not isinstance(expires_at, datetime):
@@ -764,7 +860,7 @@ class LlmApiKey(models.Model):
         now = _utcnow()
         rand4 = ''.join(secrets.choice(_RAND4_ALPHABET) for _ in range(4))
         try:
-            with self.env.registry.cursor() as cr:
+            with deadline_cursor(self.env.registry.cursor, deadline) as cr:
                 _begin(self.env, cr, read_committed=True)
                 cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
                 # This account-row lock serializes the count+insert pair across web workers.
@@ -780,6 +876,11 @@ class LlmApiKey(models.Model):
                 if row[0] != 'active':
                     raise LlmError(ERR_LLM_CLOSED if row[0] == 'closed' else
                                    ERR_LLM_SUSPENDED if row[0] == 'suspended' else ERR_LLM_UNAVAILABLE)
+                generation = 0
+                if canary_claim is not None:
+                    runtime = self.env['woow_paas_platform.llm_runtime_state']
+                    runtime._canary_validate_claim_cr(cr, canary_claim)
+                    generation = canary_claim.generation
                 cr.execute(
                     "SELECT count(*) FROM %s WHERE account_id = %%s "
                     "AND state NOT IN ('deleted', 'lost')" % KEY_TABLE,
@@ -788,17 +889,22 @@ class LlmApiKey(models.Model):
                     raise LlmError(ERR_LLM_KEY_LIMIT, max_keys=MAX_KEYS_PER_ACCOUNT)
                 if kind == 'free_trial':
                     from .llm_free_usage import taipei_day
-                    self.env['woow_paas_platform.llm_free_usage']._llm_reserve_key_cr(
-                        cr, account.id, taipei_day(now.replace(tzinfo=timezone.utc).timestamp()))
+                    day = taipei_day(now.replace(tzinfo=timezone.utc).timestamp())
+                    usage = self.env['woow_paas_platform.llm_free_usage']
+                    if canary_claim is None:
+                        usage._llm_reserve_key_cr(cr, account.id, day)
+                    else:
+                        usage._llm_reserve_canary_key_cr(cr, account.id, day, canary_claim)
                 cr.execute(
                     'INSERT INTO %s (account_id, partner_id, kind, client_request_id, state, '
-                    'key_label, quota_limit_points, expires_at, model_allowlist, '
+                    'key_label, quota_limit_points, expires_at, model_allowlist, canary_generation, '
                     'created_uid, created_ip, create_uid, create_date, write_uid, write_date) '
-                    'VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, '
+                    'VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, '
                     '%%s, %%s) '
                     'RETURNING id' % KEY_TABLE,
                     (account.id, account.partner_id.id, kind, client_request_id, 'creating',
-                     key_label, quota_limit_points, expires_at, models, user.id if user else None,
+                     key_label, quota_limit_points, expires_at, models, generation,
+                     user.id if user else None,
                      real_ip or None, SUPERUSER_ID, now, SUPERUSER_ID, now), log_exceptions=False)
                 key_id = cr.fetchone()[0]
                 name = 'wp_%d_%s' % (key_id, rand4)
@@ -825,22 +931,23 @@ class LlmApiKey(models.Model):
                 ('failed_reveal', SUPERUSER_ID, _utcnow(), account.id, 'creating', stale_before))
 
     @api.model
-    def _llm_finish(self, key_id, values):
+    def _llm_finish(self, key_id, values, *, deadline=None):
         # Only the initial definite rejection requests deleted. Unknown/retry
         # cancellation requests failed_reveal and must retain its reservation.
         not_created = values.get('state') == 'deleted' and not values.get('newapi_token_id')
         values = dict(values, write_uid=SUPERUSER_ID, write_date=_utcnow())
-        if values.get('state') == 'active':
-            values['created_notice_pending'] = True
-        with self.env.registry.cursor() as cr:
+        with deadline_cursor(self.env.registry.cursor, deadline) as cr:
             _begin(self.env, cr, read_committed=True)
             env = _env_on(self.env.registry, cr)
             worker = env['woow_paas_platform.llm_backoffice_operation']
             obligations = worker._lock_key_obligations(key_id)
-            cr.execute('SELECT state, disabled_by, newapi_token_id FROM %s '
+            cr.execute('SELECT state, disabled_by, newapi_token_id, canary_generation FROM %s '
                        'WHERE id=%%s FOR UPDATE' % KEY_TABLE, (key_id,))
             row = cr.fetchone()
             not_created = not_created and bool(row) and not row[2]
+            is_canary = bool(row and row[3])
+            if values.get('state') == 'active':
+                values['created_notice_pending'] = not is_canary
             if not_created:
                 values['creation_rejected'] = True
             stopped = bool(row and (row[1] == 'ops' or obligations))
@@ -858,7 +965,8 @@ class LlmApiKey(models.Model):
                 % (KEY_TABLE, ', '.join('%s = %%s' % column for column in columns)),
                 [values[column] for column in columns] + [key_id, 'creating'])
             changed = cr.fetchone()
-            if changed and changed[1] == 'free_trial' and values.get('state') == 'deleted':
+            if (changed and changed[1] == 'free_trial' and values.get('state') == 'deleted'
+                    and not is_canary):
                 # Definite non-creation gives back the reserved daily slot once.
                 from .llm_free_usage import USAGE_TABLE, taipei_day
                 cr.execute('UPDATE %s SET trial_keys_created=GREATEST(0,trial_keys_created-1) '
@@ -866,7 +974,7 @@ class LlmApiKey(models.Model):
                            (changed[0], taipei_day(changed[2].replace(tzinfo=timezone.utc).timestamp())))
             if changed and not_created:
                 worker._settle_not_created_obligations(obligations)
-        if changed and values.get('state') == 'active':
+        if changed and values.get('state') == 'active' and not is_canary:
             # This mirror committed on the independent cursor. A fresh cursor
             # avoids the HTTP transaction's stale REPEATABLE READ snapshot.
             from .llm_notifications import MODEL as NOTIFICATION_MODEL
