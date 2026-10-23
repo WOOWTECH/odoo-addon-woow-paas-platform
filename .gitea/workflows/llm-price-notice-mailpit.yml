@@ -1,0 +1,189 @@
+name: llm-price-notice-mailpit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+  ODOO_BIN: /opt/bitnami/odoo/bin/odoo
+  ADDONS_PATH: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons
+  MODULE_DIR: /opt/bitnami/odoo/custom-addons/woow_paas_platform
+
+jobs:
+  synthetic-mailpit-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: JCR login
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login "${JCR}" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      - name: Pull and pin the Odoo CI image
+        run: |
+          IMG="${JCR}/woow-paas-docker-local/paas-odoo-ci:latest"
+          if ! docker pull "${IMG}"; then
+            echo "::error::無法取得 paas-odoo-ci image；拒絕 fallback 到其他 image。"
+            exit 1
+          fi
+          if ! REPO_DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMG}"); then
+            echo "::error::無法解析 Odoo CI image RepoDigest。"
+            exit 1
+          fi
+          case "${REPO_DIGEST}" in
+            "${JCR}/woow-paas-docker-local/paas-odoo-ci@sha256:"*) ;;
+            *) echo "::error::Odoo CI image RepoDigest 缺失或 repository 不符。"; exit 1 ;;
+          esac
+          echo "Odoo CI image pinned to ${REPO_DIGEST}"
+          echo "IMG_PINNED=${REPO_DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Pull and pin the official Mailpit image
+        run: |
+          if ! docker pull axllent/mailpit:v1.31.3; then
+            echo "::error::無法取得官方 Mailpit v1.31.3 image。"
+            exit 1
+          fi
+          if ! REPO_DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' axllent/mailpit:v1.31.3); then
+            echo "::error::無法解析 Mailpit image RepoDigest。"
+            exit 1
+          fi
+          if ! [[ "${REPO_DIGEST}" =~ ^(docker\.io/)?axllent/mailpit@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Mailpit RepoDigest 缺失或格式不符；拒絕使用未 pin image。"
+            exit 1
+          fi
+          echo "Mailpit image pinned to ${REPO_DIGEST}"
+          echo "MAILPIT_IMG_PINNED=${REPO_DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Start isolated PostgreSQL, Odoo, and Mailpit containers
+        run: |
+          RUN_ID="${{ github.run_id }}"
+          NET="llm-price-notice-mailpit-net-${RUN_ID}"
+          PG_CT="llm-price-notice-mailpit-pg-${RUN_ID}"
+          ODOO_CT="llm-price-notice-mailpit-odoo-${RUN_ID}"
+          MAILPIT_CT="llm-price-notice-mailpit-mailpit-${RUN_ID}"
+          echo "NET=${NET}" >> "$GITHUB_ENV"
+          echo "PG_CT=${PG_CT}" >> "$GITHUB_ENV"
+          echo "ODOO_CT=${ODOO_CT}" >> "$GITHUB_ENV"
+          echo "MAILPIT_CT=${MAILPIT_CT}" >> "$GITHUB_ENV"
+
+          docker network create --internal "${NET}"
+          docker run -d --name "${PG_CT}" --network "${NET}" --network-alias pg \
+            --health-cmd='pg_isready -U odoo -d postgres' \
+            --health-interval=2s --health-timeout=2s --health-retries=30 \
+            -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
+            -e POSTGRES_DB=postgres postgres:15
+          docker run -d --name "${ODOO_CT}" --network "${NET}" --network-alias odoo \
+            --entrypoint bash "${IMG_PINNED}" -c 'sleep infinity'
+          docker run -d --name "${MAILPIT_CT}" --network "${NET}" --network-alias mailpit \
+            "${MAILPIT_IMG_PINNED}"
+
+          ODOO_RUNNING=0
+          for i in $(seq 1 15); do
+            if [ "$(docker inspect -f '{{.State.Running}}' "${ODOO_CT}" 2>/dev/null || true)" = true ]; then
+              ODOO_RUNNING=1
+              break
+            fi
+            sleep 2
+          done
+          [ "${ODOO_RUNNING}" -eq 1 ] || {
+            docker logs "${ODOO_CT}"
+            echo "::error::Odoo CI container 在 30 秒內未進入 running 狀態。"
+            exit 1
+          }
+
+          for i in $(seq 1 60); do
+            PG_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' "${PG_CT}" 2>/dev/null || true)
+            [ "${PG_HEALTH}" = healthy ] && break
+            [ "${PG_HEALTH}" = unhealthy ] && {
+              docker logs "${PG_CT}"
+              echo "::error::PostgreSQL health check 失敗。"
+              exit 1
+            }
+            sleep 2
+          done
+          [ "$(docker inspect -f '{{.State.Health.Status}}' "${PG_CT}")" = healthy ] || {
+            docker logs "${PG_CT}"
+            echo "::error::PostgreSQL 在 120 秒內未就緒。"
+            exit 1
+          }
+
+          MAILPIT_READY=0
+          for i in $(seq 1 60); do
+            if docker exec "${ODOO_CT}" python -c 'import socket, urllib.request; socket.create_connection(("mailpit", 1025), timeout=2); urllib.request.urlopen("http://mailpit:8025/api/v1/info", timeout=2).read()' >/dev/null 2>&1; then
+              MAILPIT_READY=1
+              break
+            fi
+            sleep 2
+          done
+          [ "${MAILPIT_READY}" -eq 1 ] || {
+            docker logs "${MAILPIT_CT}"
+            echo "::error::Mailpit SMTP 1025 與 HTTP API 8025 在 120 秒內未就緒。"
+            exit 1
+          }
+
+      - name: Install this checkout of the addon
+        run: |
+          docker exec "${ODOO_CT}" rm -rf "${MODULE_DIR}"
+          docker exec "${ODOO_CT}" mkdir -p "${MODULE_DIR}"
+          docker cp src/. "${ODOO_CT}:${MODULE_DIR}/"
+          docker exec "${ODOO_CT}" sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -i woow_paas_platform \
+            --stop-after-init --without-demo=all --no-http \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host pg --db_user odoo --db_password odoo \
+            > /tmp/llm-price-notice-mailpit-install.log 2>&1 \
+            || { tail -60 /tmp/llm-price-notice-mailpit-install.log; echo "::error::Odoo module install 失敗。"; exit 1; }
+
+      - name: Run synthetic acceptance and unknown quarantine in Odoo shell
+        run: |
+          set +e
+          timeout 5m docker exec -i \
+            -e WOOW_LLM_PRICE_NOTICE_REHEARSAL=llmdev-synthetic-v1 \
+            -e MAILPIT_HOST=mailpit \
+            -e MAILPIT_SMTP_PORT=1025 \
+            -e MAILPIT_HTTP_PORT=8025 \
+            "${ODOO_CT}" "${ODOO_BIN}" shell -d test --no-http \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host pg --db_user odoo --db_password odoo \
+            < scripts/ci/llm_price_notice_mailpit_probe.py \
+            > /tmp/llm-price-notice-mailpit-probe.log 2>&1
+          PROBE_EXIT=$?
+          set -e
+          if [ "${PROBE_EXIT}" -ne 0 ]; then
+            tail -100 /tmp/llm-price-notice-mailpit-probe.log
+            echo "::error::Odoo shell Mailpit probe 失敗，exit=${PROBE_EXIT}。"
+            exit 1
+          fi
+          SENTINEL_COUNT=$(grep -Fx -c 'LLM_PRICE_NOTICE_MAILPIT_PROBE_OK' /tmp/llm-price-notice-mailpit-probe.log || true)
+          [ "${SENTINEL_COUNT}" -eq 1 ] || {
+            tail -100 /tmp/llm-price-notice-mailpit-probe.log
+            echo "::error::探針未輸出恰好一行成功 sentinel。"
+            exit 1
+          }
+          grep -Fx 'LLM_PRICE_NOTICE_MAILPIT_PROBE_OK' /tmp/llm-price-notice-mailpit-probe.log
+          UNKNOWN_COUNT=$(grep -Fx -c 'LLM_PRICE_NOTICE_UNKNOWN_QUARANTINE_OK' /tmp/llm-price-notice-mailpit-probe.log || true)
+          [ "${UNKNOWN_COUNT}" -eq 1 ] || {
+            tail -100 /tmp/llm-price-notice-mailpit-probe.log
+            echo "::error::不確定結果隔離探針未輸出恰好一行成功 sentinel。"
+            exit 1
+          }
+          grep -Fx 'LLM_PRICE_NOTICE_UNKNOWN_QUARANTINE_OK' /tmp/llm-price-notice-mailpit-probe.log
+
+      - name: Remove only containers and network created by this run
+        if: always()
+        run: |
+          docker rm -f \
+            "llm-price-notice-mailpit-odoo-${{ github.run_id }}" \
+            "llm-price-notice-mailpit-pg-${{ github.run_id }}" \
+            "llm-price-notice-mailpit-mailpit-${{ github.run_id }}" \
+            2>/dev/null || true
+          docker network rm "llm-price-notice-mailpit-net-${{ github.run_id }}" 2>/dev/null || true
