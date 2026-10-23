@@ -115,8 +115,8 @@ heartbeat 監看仍是缺口。
   以及建鍵期間 circuit callback 可更新 runtime、不形成自我鎖等待。
   專用 `.gitea/workflows/llm-canary-pg.yml` 為手動 dispatch：在隔離容器啟動 PostgreSQL 15 與 Odoo，使用
   暫存 DB `test`；測試同時要求 `WOOW_LLM_CANARY_PG_TEST=isolated-v1` 且 DB 名稱恰為 `test`，否則 fail。
-  Fixture 只建立合成帳戶，清理時限於該帳戶的資料並還原 runtime singleton。該 workflow 尚未執行；本文不宣稱
-  任一測試已通過、committed PG 證據已取得，或 live Qwen 已成功。
+  Fixture 只建立合成帳戶，清理時限於該帳戶的資料並還原 runtime singleton。實際測試結果與對應 commit
+  以 PR 的 workflow 證據為準；即使這些測試通過，也不代表 live Qwen 已成功。
 
 ## 2. 告警判讀與優先順序
 
