@@ -20,6 +20,8 @@ pkg = types.ModuleType(PKG)
 pkg.__path__ = [str(ROOT / 'src/services')]
 sys.modules[PKG] = pkg
 nac = importlib.import_module(PKG + '.newapi_client')
+deadline_cursor = importlib.import_module(PKG + '.llm_sql_budget').deadline_cursor
+cursor_deadline = importlib.import_module(PKG + '.llm_sql_budget').cursor_deadline
 
 
 class LlmError(Exception):
@@ -44,7 +46,8 @@ def load_worker():
               EVENT_MODEL='event', KEY_MODEL='key', time=time,
               _utcnow=lambda: datetime(2026, 10, 21, 12), _iso=lambda value: str(value),
               _REVEALED_KEY_RE=__import__('re').compile(r'[A-Za-z0-9]{32,}'),
-              TOKEN_LIST_FAILED=object(), safe_code=lambda value: value, _logger=MagicMock())
+              TOKEN_LIST_FAILED=object(), safe_code=lambda value: value, _logger=MagicMock(),
+              deadline_cursor=deadline_cursor, cursor_deadline=cursor_deadline)
     node = ast.ClassDef(name='Worker', bases=[], keywords=[], body=methods, decorator_list=[])
     exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), str(path), 'exec'), ns)
     return ns['Worker'], ns
@@ -97,7 +100,7 @@ class MemoryWorker(Worker):
         finally:
             self.locked = False
 
-    def _llm_finish(self, key_id, values):
+    def _llm_finish(self, key_id, values, *, deadline=None):
         self.assert_unlocked()
         self.operations.append(values['state'])
         if values['state'] == 'deleted' and self.state == 'creating':
@@ -195,6 +198,23 @@ class TestKeyCreateAdmission(unittest.TestCase):
         self.assertEqual(worker.client.user_create_token.call_count, 2)
         self.assertEqual(worker.checked, 3)  # early, first POST, retry POST
         self.assertEqual(worker.slot, 1)
+
+    def test_canary_unknown_post_never_reposts_after_an_empty_list(self):
+        worker = MemoryWorker()
+        worker.first_outcome = nac.Unknown('read_timeout')
+        worker.token = None
+        worker.state = 'creating'
+        policy = importlib.import_module(PKG + '.llm_canary')
+        claim = policy.issue_claim(1, dict(request_id='canary', account_id=1,
+                                         partner_id=1, fingerprint='f'))
+        with self.assertRaises(LlmError):
+            worker._llm_create_remote(
+                worker.account, worker.client, 'test-ip', 'test-up', 9, 'test-name',
+                worker.spec['expires_at'], time.monotonic() + 10,
+                payload_factory=lambda name: {'name': name}, canary_claim=claim)
+        worker.client.user_create_token.assert_called_once()
+        worker.client.user_reveal_token.assert_not_called()
+        self.assertEqual(worker.state, 'failed_reveal')
 
     def flipped_unknown_worker(self, kind, flip, *, found=False):
         worker = MemoryWorker(kind)
@@ -360,7 +380,7 @@ class TestExistingRejectionCleanup(unittest.TestCase):
 
                 def execute(self, query, params=(), **kwargs):
                     if query.startswith('SELECT state, disabled_by, newapi_token_id'):
-                        self.result = (self.state, None, None)
+                        self.result = (self.state, None, None, 0)
                     elif query.startswith('UPDATE key SET'):
                         columns = query.split(' SET ', 1)[1].split(' WHERE ', 1)[0]
                         columns = [part.strip().split(' = ')[0] for part in columns.split(',')]

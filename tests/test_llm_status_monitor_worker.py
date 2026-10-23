@@ -1,7 +1,6 @@
 """Execute the real monitor methods with a memory transaction adapter; no Odoo."""
 import ast
 from contextlib import contextmanager
-from datetime import datetime
 import importlib
 from pathlib import Path
 import sys
@@ -170,7 +169,7 @@ class TestStatusMonitorWorker(unittest.TestCase):
         node = next(n for n in tree.body if isinstance(n, ast.Assign) and
                     any(isinstance(t, ast.Name) and t.id == 'LLM_CRONS' for t in n.targets))
         registry = ast.literal_eval(node.value)
-        self.assertEqual(len(registry), 19)
+        self.assertEqual(len(registry), 20)
         self.assertEqual(registry['woow_paas_platform.ir_cron_llm_status_monitor'],
                          ('woow_paas_platform.llm_runtime_state', '_cron_llm_status_monitor'))
 

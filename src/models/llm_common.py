@@ -269,6 +269,7 @@ NUMBER_KEYS = frozenset({
     'burst_event_id',     # 摘要信：這一波第一則告警的事件 id
 })
 DETAIL_KEYS = frozenset({
+    'latency_ms',         # canary: bounded public inference latency only
     'count',              # 筆數
     'reason',             # 原因碼（值必須是 ERROR_CODES／RESULT_CODES 裡的碼）
     'retried',            # 是否重送過（布林）
@@ -559,6 +560,8 @@ def alert_targets(env):
 #: 凍結契約（改名要同 PR 寫 migration 改 ``ir_act_server.code``）；``TestLlmCronContract`` 對已
 #: 安裝 DB 逐支斷言，``TestLlmUnconfiguredZeroOutbound`` 逐支手動觸發。新增 LLM cron 一律登記在這。
 LLM_CRONS = {
+    'woow_paas_platform.ir_cron_llm_canary': (
+        'woow_paas_platform.llm_runtime_state', '_cron_llm_canary'),
     'woow_paas_platform.ir_cron_llm_status_monitor': (
         'woow_paas_platform.llm_runtime_state', '_cron_llm_status_monitor'),
     'woow_paas_platform.ir_cron_llm_reconcile_local': (
@@ -642,6 +645,7 @@ LIFECYCLE_EVENT_CODES = frozenset({
     'llm_suspend_ops', 'llm_suspend_policy', 'llm_suspend_account_inactive', 'llm_suspend_not_me',
 })
 ERROR_CODES = (
+    {'llm_canary_failed'} |
     LIFECYCLE_EVENT_CODES | {'llm_status_invalid', 'llm_status_stale', 'llm_status_config_changed'} |
     LLM_RECONCILE_ERROR_CODES | API_ERROR_CODES | FREE_METER_ERROR_CODES | LLM_CREDIT_ERROR_CODES
     | PROVISION_STOP_CODES | PROXY_ERROR_CODES | NEWAPI_ERROR_CODES

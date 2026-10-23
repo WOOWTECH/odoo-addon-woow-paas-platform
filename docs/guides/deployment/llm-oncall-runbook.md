@@ -1,21 +1,22 @@
 ---
-title: AI 模型值班 runbook（LLM-14 第一切片）
+title: AI 模型值班 runbook（LLM-14 canary runner）
 category: guides
 status: draft
 created: 2026-10-21T05:15:16Z
-updated: 2026-10-21T05:15:16Z
+updated: 2026-10-23T16:31:23Z
 related:
   - docs/guides/deployment/prod-release-sop.md
   - docs/guides/deployment/platform-odoo-cutover-switchback-runbook.md
   - docs/guides/testing/TESTING.md
 ---
 
-# AI 模型值班 runbook（LLM-14 第一切片）
+# AI 模型值班 runbook（LLM-14 canary runner）
 
 ## 適用範圍與操作底線
 
-給值班人員及協助調查的 agent。這是文件切片，不是 LLM-14 偵測器或正式上線驗收。
-以 PaaS develop `ddbcfb4add85d7e4453b0b7f5335a70788b8e22a` 的既有程式為基準；
+給值班人員及協助調查的 agent。專用 canary runner 已在程式碼中實作，尚未部署、啟用或以真實 Qwen
+端點實測；程式存在與測試來源都不是正式上線驗收。
+原稿以 PaaS develop `ddbcfb4add` 為基準，監控入口現況已於 `2af3aa7fe` 重新核對；
 執行前先核對實際部署版本、站點、DB、namespace、事件時間與操作者權限。以下命令僅供審查後使用，
 不是讀到告警就自動執行；正式處置由負責人決定，不占用他人的測試站或 sandbox。
 
@@ -35,9 +36,38 @@ D16／D17 與票單來源是專案交接目錄的 `DECISIONS.md`、`tickets/LLM-
 
 ## 1. 先判斷偵測與通知是否還活著
 
-目前 [LLM_CRONS](../../../src/models/llm_common.py) 有 alert delivery、connection test 等18個入口，
-**沒有 LLM-14 的每5分鐘 health／每30分鐘 canary cron**。`last_canary_at/result` 有欄位不代表有人寫入。
-`action_llm_test_connection` 是人工排程，非定期探測；無 canary 紀錄、無信或無 incident 都不能證明正常。
+目前 [LLM_CRONS](../../../src/models/llm_common.py) 包含 alert delivery、connection test、
+[每 5 分鐘匿名狀態不變量監控](../../../src/models/llm_status_monitor.py)，以及專用 canary runner。
+狀態監控與 canary cron 的資料定義已在程式碼中；兩者安裝預設均停用。`action_llm_test_connection`
+仍是人工排程，不能取代定期 canary。**canary runner 尚未部署或啟用，亦未對真實 Qwen 做端到端實測**；
+沒有 canary 紀錄不代表正常，程式碼或離線測試也不能證明 live 連線成功。
+
+Runner 每 30 分鐘最多開始一個樣本，使用 runtime generation、request ID 與 45 秒 lease 管理工作。
+只會選取設定指定的專用 internal partner：該 partner 必須有 active、非 portal 的內部使用者及符合環境
+prefix 的帳戶；設定指紋、帳戶與 claim 不符時拒絕建立。建立、probe 和 cleanup 共用一個有界 cron tick；
+建立階段約保留 12 秒，整個 tick 最長 30 秒。Runner 用 CRON role 建立一把免費試用 key，將 key 交給
+[有界公網探針](../../../src/services/llm_canary_probe.py)呼叫固定免費 Qwen 模型，並在 finally 路徑清除
+記憶體中的 DTO。探針只接受兩個核准的公網 API base，限制 DNS／TLS／回應總耗時；金鑰只經 stdin／記憶體，
+輸出固定結果碼、延遲與 HTTP status，不保留模型內容。逾時或無法確認子程序回收是失敗結果，不可視為成功。
+
+Canary key 的 expiry 是 claim 起點設定的絕對時間（600 秒）。若 worker 在 POST／reveal 後中斷，後續
+lease owner 以同一 request ID 進入 cleanup，不再建立第二把 key。回收先核對 account、request ID、token
+name／ID 與當前設定，再停用上游 token 並標記 mirror deleted；若 POST 結果未知且列表尚無 token，會保留
+工作到絕對 expiry，作為上游延遲建立的 quarantine，不能提早宣告清理完成。清理遇到不確定狀態會保留
+cleanup 工作供後續 tick 恢復。每 30 分鐘樣本最多計一次失敗，cleanup 重試不重複累加；成功會清除失敗連續數，
+達第 2 個失敗樣本才觸發 `llm_canary_failed` 告警。需同時檢查 runtime 的 `last_canary_at`、
+`last_canary_result`、`canary_failures` 與事件紀錄；無信或無 incident 仍不能證明通知出口正常。
+
+**Free-key 配額決策 A：只有經 runtime claim 驗證的專用 internal canary 工作，豁免每帳號每日 3 把
+free-key 建立次數。** 普通租戶的每日 3 把規則不變；canary 豁免不增加 `trial_keys_created`，但每日
+`capped_at` 仍會拒絕 canary 建鍵。Canary 仍遵守 active account、current terms、admission、每帳號最多
+1 把 live free key、每帳號 20 把總 key 上限，以及真實的每小時 10 次 key-create throttle。sudo、RPC
+context 或一般 free-key API 都不能取得豁免。
+
+`ir_cron_llm_canary` 的 XML 設定為每 30 分鐘、`active=False`，且 cron data 為 `noupdate`；安裝／升級不會
+自動啟用它。Runner 另要求 `woow_paas_platform.llm_canary_partner_id` 指向專用 internal partner，並要求
+proxy、public base、prefix／IP block 等設定有效且指紋在工作期間不變。未設定或 cron 停用時不會執行探測。
+本文件不代表已設定此 partner、已啟用 cron 或已部署對應版本。
 
 管理員可從現有 **AI Models → Connection status → Test connection** 排一次檢查，回讀
 `connection_test_requested_at`、`connection_test_at/result`。這會經 CRON 簽章外呼，不是唯讀操作；
@@ -58,24 +88,45 @@ for xmlid in sorted(LLM_CRONS):
     print(xmlid, bool(cron), bool(cron and cron.active), cron.nextcall if cron else None)
 env.cr.execute('''SELECT connection_test_requested_at, connection_test_at,
     balance_refresh_finished_at, free_meter_last_ts, last_canary_at,
+    last_canary_result, canary_failures, canary_generation, canary_lease_until,
     guard_tripped, circuit_open_until, dr_mode
     FROM woow_paas_platform_llm_runtime_state LIMIT 1''')
 print(env.cr.fetchall())
 env.cr.rollback()
 ```
 
-`nextcall` 在過去、cron 不 active、runtime 時間不再前進要升級為「偵測可能失效」；nextcall 正常也不等於
-工作成功。對照 scheduler／worker 的受控日誌與測試結果。未設定 DB 的 cron 刻意 no-op，不能為了
-出現 heartbeat 就打開 `show_llm` 或新增 canary partner。此切片未實作監控失效的外部 heartbeat。
+`nextcall` 在過去、預期啟用的 cron 不 active、runtime 時間不再前進時，升級為「偵測可能失效」；
+nextcall 正常也不等於工作成功。Canary cron 目前按設計保持 inactive，除非部署與啟用已有明確核准；
+不要為了 heartbeat 打開 `show_llm` 或填入 canary partner。未設定 DB 的 cron 刻意 no-op；沒有外部
+heartbeat 監看仍是缺口。
+
+### Canary 測試種類與隔離界線
+
+程式碼提供數種不同證據，不能互相替代：
+
+- `tests/test_llm_canary.py` 是純 policy 測試，涵蓋 sealed claim、generation／request／account／partner／
+  fingerprint／lease fence 與 30 分鐘失敗計數。`tests/test_llm_canary_probe.py` 測 bounded probe 的固定輸入、
+  回應、逾時與子程序回收；它不連真 Qwen。
+- `src/tests/test_llm_canary.py` 和 `src/tests/test_llm_canary_keys.py` 是 Odoo rollback-scoped 測試，
+  以測試交易、mock client／validator 驗 service glue、worker 分支及 key finish 行為。Key 測試的 validator
+  fixture 是 stub；這些測試不證明 runtime authority 或跨連線 SQL lock fence。
+- `src/tests/integration/test_llm_canary_pg.py` 有 6 個真 PostgreSQL 測試，檢查獨立 Registry cursor 的 commit、
+  `SKIP LOCKED`、lease reclaim／舊 claim fence、ordinary 三把與 canary exemption、probe／finish receipt，
+  以及建鍵期間 circuit callback 可更新 runtime、不形成自我鎖等待。
+  專用 `.gitea/workflows/llm-canary-pg.yml` 為手動 dispatch：在隔離容器啟動 PostgreSQL 15 與 Odoo，使用
+  暫存 DB `test`；測試同時要求 `WOOW_LLM_CANARY_PG_TEST=isolated-v1` 且 DB 名稱恰為 `test`，否則 fail。
+  Fixture 只建立合成帳戶，清理時限於該帳戶的資料並還原 runtime singleton。實際測試結果與對應 commit
+  以 PR 的 workflow 證據為準；即使這些測試通過，也不代表 live Qwen 已成功。
 
 ## 2. 告警判讀與優先順序
 
 先記 UTC 時間、環境、event ID、alert_code、error_code、account/order ID、是否仍擴大；
 只保存必要 ID／固定碼／數字，不轉貼 token、payload、客戶內容或信件全文。
 下面名稱來自 [LlmAlert／LlmIncident](../../../src/models/llm_event.py) 與
-[封閉 error codes](../../../src/models/llm_common.py)，不是新增告警功能。
+[封閉 error codes](../../../src/models/llm_common.py)。Canary runner 尚未部署／啟用，以下 canary 告警
+判讀只適用於之後核准部署並啟用的環境。
 
-| 現有 alert_code／error_code | 判讀與下一步 |
+| alert_code／error_code | 判讀與下一步 |
 |---|---|
 | `config_unavailable` + `llm_proxy_auth_unavailable_web`／`llm_crypto_unavailable_web` | 查實際提供 web 請求的 deployment；CRON pod 的成功不能替 web 作證。核對 `WOOW_NEWAPI_PROXY_AUTH_WEB`／`WOOW_LLM_SECRET_KEYS` 的 env **引用位置**與 rollout，勿印值。 |
 | `config_unavailable` + `llm_proxy_auth_unavailable`／`llm_crypto_unavailable` | 查 cron deployment 的 `WOOW_NEWAPI_PROXY_AUTH_CRON`／`WOOW_LLM_SECRET_KEYS` 引用；不要互換 WEB／CRON 金鑰。 |
@@ -83,13 +134,14 @@ env.cr.rollback()
 | `circuit_open`；`break_glass_used` | 先查 reason 與事件；401/403 可能是簽章／PAT／權限，不用重複 login/verify 試錯。break-glass 每次都要獨立核對批准時窗。 |
 | `cron_failed` + `llm_cron_*` | 對照登記表找到故障入口；尤其 credit、credit_verify、free_tier_meter、alert_delivery，不把重啟當作 outbox 已收斂。 |
 | `free_meter_lag`／`free_up_failed` | 免費用量證據／停用可能延遲，不能視為今日用量0；調查時評估按第4節關閉免費渠道。 |
+| `canary_failed` + `llm_canary_failed` | 查看 runtime `last_canary_result`／`canary_failures` 與 `last_canary_at`，核對工作是否卡在 cleanup、lease 是否續進、cron 是否按核准狀態運作；不要手動重放 POST、揭露金鑰或直接清除 runtime work。告警門檻是兩個失敗樣本，cleanup retry 不重複計數；成功樣本會歸零。 |
 | `pricing_invalid`／`reconcile_mismatch` | 核對價格／帳務證據，保留 guard；不 apply-settings、不清差額、不手改單據。現有 local 對帳不代表 I1–I8 全部已驗。 |
 | `credit_review`／`credit_budget`／`manual_credit_budget`／`manual_credit` | 依 order ID 交具名管理員覆核。`sending/unknown` 不等於沒入帳，不重送非冪等 add_quota。 |
 | `not_me_reported`／`secret_rejected` | 先止血並獨立核對身分／憑證綁定；按第5節處理，不承諾退款。 |
 
-Canary 失敗、type=5 上升、AP/OP 剩14天、svc203 revision／訂閱／餘額、reveal 計數差異是 LLM-14
-待實作的訊號，**不能捏造它們已存在的 alert_code／cron／自動解除行為**。上游500空body連發也要
-排查 new-api／Valkey／代理，不先認定是某一個元件壞掉。
+type=5 上升、AP/OP 剩14天、svc203 revision／訂閱／餘額、reveal 計數差異仍是待補訊號；**不要捏造
+對應的 alert_code／cron／自動解除行為**。Canary 是已實作但未部署／啟用的獨立健康樣本，不代表
+上述其他 LLM-14 訊號已涵蓋。上游500空body連發也要排查 new-api／Valkey／代理，不先認定是某一個元件壞掉。
 
 ### 寄信失敗與摘要找回
 
@@ -246,11 +298,14 @@ env.cr.rollback()
    配置回復用已核對的單項前值與批准計畫，不執行正式 apply-settings整包覆寫。回復後重新驗價目、
    金鑰／guard／通知出口及 outbox；信件送出或網站200都不是所有義務已完成的證據。
 
-## 來源與本切片缺口
+## 來源與尚未完成項目
 
 - 本 repo：[事件／告警](../../../src/models/llm_event.py)、[封閉碼／cron登記](../../../src/models/llm_common.py)、
   [runtime](../../../src/models/llm_runtime_state.py)、[outbox](../../../src/models/llm_credit_order.py)、
-  [後台操作](../../../src/models/llm_backoffice_operation.py)。本文沒有新增 scheduler 或代碼。
+  [後台操作](../../../src/models/llm_backoffice_operation.py)、[canary runner](../../../src/models/llm_canary.py)、
+  [canary policy](../../../src/services/llm_canary.py)、[有界探針](../../../src/services/llm_canary_probe.py)、
+  [cron資料](../../../src/data/llm_cron.xml)。Runner 已在本 checkout 實作，但尚未部署或啟用，亦沒有真實
+  Qwen 端到端實測；下列測試與 workflow 狀態依實際執行結果更新，本文不表示已通過。
 - Proxy template、drift、CF、PAT工具以 `Woow_k3s_newapi` commit
   [b7752131](https://git-prod.woowtech.io/woow-paas/Woow_k3s_newapi/src/commit/b7752131ba5f000ab4e4cb397713bd0677e16e68/docs/OPERATIONS.md)
   為對照：[check-drift.sh](https://git-prod.woowtech.io/woow-paas/Woow_k3s_newapi/src/commit/b7752131ba5f000ab4e4cb397713bd0677e16e68/scripts/check-drift.sh)、
@@ -262,5 +317,6 @@ env.cr.rollback()
   為準；[handler](https://github.com/QuantumNous/new-api/blob/633b4c5b190dc1af99a2814391354d86948e7943/controller/channel.go)
   與 [status 常數](https://github.com/QuantumNous/new-api/blob/633b4c5b190dc1af99a2814391354d86948e7943/common/constants.go)
   已做離線 source核對，**未宣稱任何 live站已跑該版本或本處置已實測**。
-- 待補：定期health／canary、AP/OP到期、type5與用量異常、reveal／add_quota完整稽核、svc203訂閱／revision、
-  通知失效的獨立監看與Cloudflare自動drift。需stg故障注入、惡意告警文字與郵件去敏實測，才可驗收LLM-14。
+- 尚未完成：AP/OP到期、type5與用量異常、reveal／add_quota完整稽核、svc203訂閱／revision、通知失效的獨立監看
+  與 Cloudflare 自動 drift。Canary policy／probe／Odoo 測試及隔離 PostgreSQL workflow 尚未在此更新中執行或取得
+  通過證據；部署啟用、真實 Qwen 端到端驗證，以及 stg 故障注入、惡意告警文字與郵件去敏實測仍待安排，才能驗收 LLM-14。
