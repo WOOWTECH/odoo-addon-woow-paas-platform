@@ -179,6 +179,22 @@ class TestOdooMailBoundary(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'mime_snapshot'):
                 self.preflight(payload=payload)
 
+    def test_noncanonical_matching_snapshot_denies_bind_and_preflight(self):
+        for payload in (PAYLOAD[:-2], PAYLOAD.replace(b'\r\n', b'\n'),
+                        PAYLOAD + b'bare\rreturn\r\n', PAYLOAD + b'null\x00byte\r\n'):
+            with self.subTest(payload=repr(payload)):
+                attempt = replace(self.attempt, attempt_uuid=str(uuid4()),
+                                  payload_sha256=hashlib.sha256(payload).hexdigest())
+                binding = replace(self.binding, attempt=attempt, mail_id=self.binding.mail_id + 1)
+                self.binding = binding
+                self.journal.prepare(attempt)
+                # Simulate an already persisted untrusted snapshot/binding.
+                self.journal.bind(binding)
+                for operation in (self.boundary.bind, self.boundary.preflight):
+                    with self.assertRaisesRegex(ValueError, 'final_mime_snapshot'):
+                        operation(binding, payload=payload, envelope=(attempt.destination,))
+                self.assertEqual(self.reader_calls, 0)
+
     def test_direct_address_cc_or_partner_expansion_denies(self):
         for field, value in (('email_to', 'Name <recipient@example.test>'),
                              ('email_cc', 'extra@example.test'), ('recipient_ids', [1])):
@@ -300,6 +316,30 @@ class TestRegistryConnectionFactory(unittest.TestCase):
                 self.factory()
             self.assertNotIn('close', cursor.events)
             self.assertNotIn('rollback', cursor.events)
+
+    def test_identity_probe_failure_never_closes_potential_shared_owner(self):
+        for method in ('execute', 'fetchone'):
+            for error in (TimeoutError('probe cancelled'), KeyboardInterrupt()):
+                with self.subTest(method=method, error=type(error).__name__):
+                    shared = FakePgCursor(pid=11)
+                    shared.close = self.outer.close  # Closing wrapper closes caller.
+                    self.registry.cursor.return_value = shared
+                    with patch.object(shared, method, side_effect=error):
+                        with self.assertRaises(type(error)):
+                            self.factory()
+                    self.assertNotIn('close', self.outer.events)
+                    self.assertNotIn('rollback', self.outer.events)
+
+    def test_invalid_backend_identity_never_establishes_close_ownership(self):
+        for pid in (None, True, '22', 0, -1):
+            with self.subTest(pid=pid):
+                shared = FakePgCursor(pid=pid)
+                shared.close = self.outer.close
+                self.registry.cursor.return_value = shared
+                with self.assertRaisesRegex(ValueError, 'independent'):
+                    self.factory()
+                self.assertNotIn('close', self.outer.events)
+                self.assertNotIn('rollback', self.outer.events)
 
     def test_wrong_database_is_closed_and_rejected(self):
         self.fresh.identity = ('other_database', 22)

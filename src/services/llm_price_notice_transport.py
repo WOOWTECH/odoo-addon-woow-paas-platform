@@ -61,6 +61,20 @@ class Attempt:
                 raise ValueError('invalid_transport_digest')
 
 
+def _matches_mime_snapshot(payload, expected_digest):
+    """Hash receiver content, before SMTP dot transparency and DATA framing.
+
+    smtplib sends bytes unchanged except for dot-stuffing and a missing final
+    CRLF. Reject noncanonical bytes rather than silently changing the snapshot.
+    This validates transport bytes, not MIME structure or content approval.
+    """
+    return (type(payload) is bytes
+            and payload.endswith(b'\r\n')
+            and b'\x00' not in payload
+            and re.search(rb'(?<!\r)\n|\r(?!\n)', payload) is None
+            and hashlib.sha256(payload).hexdigest() == expected_digest)
+
+
 class Journal:
     """DB-API journal; factory MUST open a fresh dedicated PG connection per call.
 
@@ -172,8 +186,7 @@ class _AcceptanceMixin:
             to_addrs = list(to_addrs)
         if to_addrs != [self._attempt.destination]:
             raise ValueError('single_bound_envelope_required')
-        if (not isinstance(msg, bytes)
-                or hashlib.sha256(msg).hexdigest() != self._attempt.payload_sha256):
+        if not _matches_mime_snapshot(msg, self._attempt.payload_sha256):
             raise ValueError('payload_snapshot_mismatch')
         if self._claimed:
             raise ValueError('attempt_not_retryable')
@@ -195,8 +208,7 @@ class _AcceptanceMixin:
 
     def data(self, msg):
         if (not self._in_sendmail or not self._rcpt_accepted
-                or not isinstance(msg, bytes)
-                or hashlib.sha256(msg).hexdigest() != self._attempt.payload_sha256):
+                or not _matches_mime_snapshot(msg, self._attempt.payload_sha256)):
             raise ValueError('unbound_data')
         code, response = super().data(msg)
         if code == 250:

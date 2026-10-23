@@ -21,6 +21,7 @@ spec = importlib.util.spec_from_file_location(
 t = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = t
 spec.loader.exec_module(t)
+REAL_SMTP_DATA = smtplib.SMTP.data
 PAYLOAD = b'From: sender@example.test\r\nTo: recipient@example.test\r\n\r\nSynthetic\r\n'
 
 
@@ -86,9 +87,11 @@ class TestTransportJournal(unittest.TestCase):
     def rows(self):
         with sqlite3.connect(self.path) as connection:
             status = connection.execute(
-                'SELECT status FROM llm_notice_transport_attempt').fetchone()[0]
+                'SELECT status FROM llm_notice_transport_attempt WHERE attempt_uuid = ?',
+                (self.attempt.attempt_uuid,)).fetchone()[0]
             receipts = connection.execute(
-                'SELECT attempt_uuid, accepted_at_us, data_code FROM llm_notice_transport_acceptance'
+                'SELECT attempt_uuid, accepted_at_us, data_code FROM llm_notice_transport_acceptance '
+                'WHERE attempt_uuid = ?', (self.attempt.attempt_uuid,)
             ).fetchall()
         return status, receipts
 
@@ -102,6 +105,54 @@ class TestTransportJournal(unittest.TestCase):
         self.assertEqual(receipts[0][2], 250)
         reopened = t.Journal(lambda: ConnectionAdapter(self.path))
         self.assertEqual(reopened.attempt(self.attempt.attempt_uuid), self.attempt)
+
+    def test_noncanonical_bytes_deny_before_claim_even_with_matching_hash(self):
+        class BytesSubclass(bytes):
+            pass
+
+        for cls in (t.AcceptanceSMTP, t.AcceptanceSMTPSSL):
+            for payload in (PAYLOAD[:-2], PAYLOAD.replace(b'\r\n', b'\n'),
+                            PAYLOAD + b'bare\rreturn\r\n', b'',
+                            PAYLOAD + b'null\x00byte\r\n', BytesSubclass(PAYLOAD)):
+                with self.subTest(transport=cls.__name__, payload=repr(payload)):
+                    self.attempt = replace(
+                        self.attempt, attempt_uuid=str(uuid4()),
+                        payload_sha256=hashlib.sha256(payload).hexdigest())
+                    self.journal.prepare(self.attempt)
+                    session = cls(journal=self.journal, attempt_uuid=self.attempt.attempt_uuid)
+                    with self.assertRaisesRegex(ValueError, 'payload_snapshot'):
+                        self.send(session, payload=payload)
+                    self.mail.assert_not_called()
+                    self.data.assert_not_called()
+                    self.assertEqual(self.rows(), ('prepared', []))
+
+    def test_real_data_transparency_preserves_snapshot_content(self):
+        payload = b'To: recipient@example.test\r\n\r\n.\r\n..two\r\nmid.dot\r\n'
+        expected_wire = b'To: recipient@example.test\r\n\r\n..\r\n...two\r\nmid.dot\r\n.\r\n'
+        for cls in (t.AcceptanceSMTP, t.AcceptanceSMTPSSL):
+            with self.subTest(transport=cls.__name__):
+                self.attempt = replace(
+                    self.attempt, attempt_uuid=str(uuid4()),
+                    payload_sha256=hashlib.sha256(payload).hexdigest())
+                self.journal.prepare(self.attempt)
+                session = cls(journal=self.journal, attempt_uuid=self.attempt.attempt_uuid)
+                with patch.object(smtplib.SMTP, 'data', REAL_SMTP_DATA), \
+                        patch.object(smtplib.SMTP, 'putcmd'), \
+                        patch.object(smtplib.SMTP, 'getreply',
+                                     side_effect=[(354, b'go'), (250, b'accepted')]), \
+                        patch.object(smtplib.SMTP, 'send') as wire_send:
+                    self.assertEqual(self.send(session, payload=payload), {})
+                wire_send.assert_called_once_with(expected_wire)
+                # Receiver removes framing, then one transparency dot per line.
+                wire_content = wire_send.call_args.args[0][:-3]
+                received = b'\r\n'.join(
+                    line[1:] if line.startswith(b'..') else line
+                    for line in wire_content.split(b'\r\n'))
+                self.assertEqual(received, payload)
+                self.assertEqual(hashlib.sha256(received).hexdigest(), self.attempt.payload_sha256)
+                status, receipts = self.rows()
+                self.assertEqual(status, 'accepted')
+                self.assertEqual(len(receipts), 1)
 
     def test_rcpt_251_is_also_accepted_only_after_data(self):
         self.rcpt.return_value = (251, b'forwarded')

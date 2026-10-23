@@ -6,9 +6,8 @@ A successful preflight is a snapshot check, not permission to publish/send.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
-import hashlib
 
-from .llm_price_notice_transport import Attempt, Journal
+from .llm_price_notice_transport import Attempt, Journal, _matches_mime_snapshot
 
 
 BINDING_SCHEMA = """CREATE TABLE llm_notice_odoo_mail_binding (
@@ -120,11 +119,12 @@ class RegistryConnectionFactory:
         cursor = self._registry.cursor()
         if cursor is self._outer:
             raise ValueError('independent_cursor_required')
-        shares_backend = False
+        independent_backend = False
         try:
             cursor.execute('SELECT current_database(), pg_backend_pid()')
             database, pid = cursor.fetchone()
-            shares_backend = pid == outer_pid
+            independent_backend = (type(pid) is int and type(outer_pid) is int
+                                   and pid > 0 and outer_pid > 0 and pid != outer_pid)
             if (not isinstance(outer_database, str) or not outer_database
                     or database != outer_database or cursor.dbname != database
                     or self._outer.dbname != database
@@ -133,9 +133,10 @@ class RegistryConnectionFactory:
                 raise ValueError('independent_same_database_backend_required')
             return _CursorConnection(cursor)
         except BaseException:
-            # A shared test wrapper is not ours to rollback/close. Its owner
-            # must dispose it; closing could affect the caller transaction.
-            if not shares_backend:
+            # Only a proven independent backend is ours to close. If the probe
+            # fails or returns invalid PIDs, ownership is unknown: leave disposal
+            # to the registry owner, as close could affect the caller transaction.
+            if independent_backend:
                 cursor.close()
             raise
 
@@ -175,8 +176,7 @@ class OdooMailBoundary:
         attempt = binding.attempt
         if type(envelope) is not tuple or envelope != (attempt.destination,):
             raise ValueError('single_final_envelope_required')
-        if (type(payload) is not bytes
-                or hashlib.sha256(payload).hexdigest() != attempt.payload_sha256):
+        if not _matches_mime_snapshot(payload, attempt.payload_sha256):
             raise ValueError('final_mime_snapshot_mismatch')
         with self._open_environment() as env:
             if env.cr.dbname != binding.database_name:

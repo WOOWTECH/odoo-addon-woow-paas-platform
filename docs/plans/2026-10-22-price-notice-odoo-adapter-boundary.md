@@ -46,7 +46,7 @@ git diff --check
 
 ## 單封 Odoo SMTPConnection 包裝器草稿（2026-10-22）
 
-2026-10-23 在已合併 #1936 的 `develop` 上重定基後，使用 Python 3.12 重跑 adapter 21、SMTP wrapper 7、transport 21、notice 17，共 **66/66 通過**；新增 service／測試檔的 Ruff F 通過。只更新本地工作樹，未推送或開 PR，未接線寄送。
+2026-10-23 在已合併 #1936 的 `develop` 上重定基後，使用 Python 3.12 重跑 adapter 21、SMTP wrapper 7、transport 21、notice 17，共 66/66 通過。獨立只讀審查另發現兩個 P2：缺尾端 CRLF 的 MIME snapshot 與 smtplib DATA 真正送出的內容不符；registry cursor 身分探測失敗可能誤 close 外層交易。已改成要求標準 CRLF／單一 bytes 型別並以真 smtplib.data 傳輸測試補覆蓋；只有確認獨立 backend 才自行 close cursor。修正後 adapter 24、SMTP wrapper 7、transport 23、notice 17，共 **71/71 通過**；Python 3.12 全量 repo-lint、Ruff F、diff check 通過。未接線寄送，真 Odoo／PG runtime 尚未驗證。
 
 在相同未註冊分支新增 `src/services/llm_price_notice_odoo_smtp.py`。llmdev 現役 Odoo 核心已唯讀確認：`SMTPConnection` 把 `sendmail`／`rcpt`／`data` setter 轉送至內部 `smtplib` 物件；`ir.mail_server.send_email` 在最終 `_prepare_email_message` 後呼叫 `smtp_session.send_message`；`mail.mail.send` 會在批次共享 session。故草稿 `BoundNoticeSMTP` 僅接受由未來受信任派送器持有的**專用新 session**，一次性替換該實例的三個傳輸方法，於 `send_message` 真正序列化後的 bytes／唯一 envelope 上重讀 committed source/binding，再獨立 claim。只有相同單一 RCPT 250/251 及 DATA 250 後同步提交 journal acceptance，`finally` 恢復方法。未觀測 DATA 的假成功會拒絕；外層 Odoo 的 Message-ID／mail state 仍不是證據。
 
