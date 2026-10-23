@@ -196,6 +196,7 @@ test("keys route goes live only with LlmPage registration and rendered component
     "./tabs/LlmDocsTab": "const LlmDocsTab = {};",
     "../../services/llm_service": "const llmService = {};",
     "../../services/llm_errors": "const llmErrorMessage = result => result.code;",
+    "../../utils/llm_format": "const formatTaipeiDateTime = () => '';",
     "./tabs/llm_docs_helpers": "const createLlmDocsKeyHandoff = () => ({ put() {}, peekKey() { return ''; }, peekMode() { return 'paid'; }, clear() {} }); const validatedLlmPublicBaseUrl = () => null;",
     "./tabs/LlmUsageTab": "const LlmUsageTab = {};",
   });
