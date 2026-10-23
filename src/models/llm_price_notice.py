@@ -12,6 +12,8 @@ import re
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
 
+from ..services.llm_price_notice import NoticeBlocked, RecipientSnapshot, prepare_candidate
+
 _CAMPAIGN = 'woow_paas_platform.llm_price_notice_campaign'
 _RECIPIENT = 'woow_paas_platform.llm_price_notice_recipient'
 _VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}\Z')
@@ -78,6 +80,33 @@ class LlmPriceNoticeCampaign(models.Model):
 
     def copy(self, default=None):
         raise AccessError(_('Create an explicit new campaign version and audience.'))
+
+    def _llm_candidate_preview(self, before, after, *, now, not_before):
+        """Read-only draft comparison; inputs and coverage are not trusted evidence.
+
+        This is private, creates no approval/publication/outbox/mail, and does
+        not establish an authoritative price catalog or complete recipient set.
+        """
+        self.ensure_one()
+        _require_admin(self)
+        if self.state != 'draft':
+            raise ValidationError(_('A draft campaign is required.'))
+        obligations = self.env[_RECIPIENT].search([('campaign_id', '=', self.id)])
+        rows = tuple(RecipientSnapshot(row.recipient_key,
+                                       row.destination_snapshot or None,
+                                       row.destination_revision)
+                     for row in obligations)
+        try:
+            candidate = prepare_candidate(
+                version=self.version, environment=self.environment, body_text=self.body_text,
+                before=before, after=after, recipients=rows,
+                now=now, not_before=not_before)
+        except NoticeBlocked:
+            raise ValidationError(_('Invalid price notice candidate.')) from None
+        if (candidate.catalog_sha256 != self.catalog_fingerprint
+                or candidate.campaign_fingerprint != self.fingerprint):
+            raise ValidationError(_('The candidate does not match the immutable campaign.'))
+        return candidate
 
 
 class LlmPriceNoticeRecipient(models.Model):
