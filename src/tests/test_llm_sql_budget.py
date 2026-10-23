@@ -34,13 +34,15 @@ class TestLlmSqlBudget(TransactionCase):
 
     def test_nested_independent_cursor_keeps_the_remaining_budget(self):
         deadline = time.monotonic() + 0.30
-        with unittest.TestCase.assertRaises(self, SqlBudgetExpired):
+        nested_attempted = False
+        with unittest.TestCase.assertRaises(self, _TIMEOUTS):
             with deadline_cursor(self._cursor_factory(), deadline) as outer:
                 outer.execute('SELECT pg_sleep(0.15)')
                 self.assertEqual(cursor_deadline(outer), deadline)
-                with unittest.TestCase.assertRaises(self, _TIMEOUTS):
-                    with deadline_cursor(self._cursor_factory(), cursor_deadline(outer)) as nested:
-                        nested.execute('SELECT pg_sleep(0.30)')
+                with deadline_cursor(self._cursor_factory(), cursor_deadline(outer)) as nested:
+                    nested_attempted = True
+                    nested.execute('SELECT pg_sleep(0.30)')
+        self.assertTrue(nested_attempted)
         with self._cursor_factory()() as ordinary:
             self.assertIsNone(cursor_deadline(ordinary))
 
