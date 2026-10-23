@@ -265,7 +265,9 @@ def main(env):
         time.sleep(0.2)
     _require(len(messages) == 1, 'mailpit_single_message_required')
     raw = _mailpit_raw('latest')
-    if raw != payload:
+    # Mailpit adds one Received header ahead of the submitted DATA. Check its
+    # complete raw source without allowing any change to the frozen MIME bytes.
+    if not raw.endswith(payload):
         first = next((index for index, pair in enumerate(zip(payload, raw))
                       if pair[0] != pair[1]), min(len(payload), len(raw)))
         raise RuntimeError(
@@ -276,7 +278,17 @@ def main(env):
             f'actual_window={raw[max(0, first - 16):first + 48]!r}, '
             f'expected_tail={payload[-32:]!r}, actual_tail={raw[-32:]!r}'
         )
+    prefix = raw[:-len(payload)]
+    prefix_lines = prefix.split(b'\r\n')
+    _require(0 < len(prefix) <= 2048
+             and prefix_lines[0].startswith(b'Received: ')
+             and prefix_lines[-1] == b''
+             and all(line.startswith((b' ', b'\t')) for line in prefix_lines[1:-1])
+             and b'\n' not in prefix.replace(b'\r\n', b''),
+             'unexpected_mailpit_added_headers')
     parsed = BytesParser(policy=email.policy.default).parsebytes(raw)
+    _require(len(parsed.get_all('Received', [])) == 1,
+             'mailpit_received_header_count')
     _require(parsed['To'] == DESTINATION and parsed['From'] == SENDER
              and parsed['Cc'] is None and parsed['Bcc'] is None,
              'mailpit_message_recipients_mismatch')
