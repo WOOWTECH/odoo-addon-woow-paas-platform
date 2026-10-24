@@ -3015,7 +3015,13 @@
                  model_name 規則不變。正式站與 QA 的舊名稱都沒有這些字元。chart 不變（0.3.15）。svc203 已於 10-24 10:00Z Redeploy
                  （helm rev 20，正式站實測 10 種名稱都 400、含空白的名稱照常可建、查、刪），QA 262 為 rev 46。
                  回滾值：20261024.0245@sha256:8a0ff1f0…。 -->
-            <field name="helm_chart_version">0.3.15</field>
+            <!-- 0.3.16（2026-10-24，charts #276，main 08a3c98；在 HA 0.1.14 重驗 0.3.15 時發現，只改外掛檔）：
+                 ChatGPT 的 chat 請求一律走 Responses API bridge。原本模型對照表沒標 mode: responses 的 chatgpt/ 模型（手動加的、
+                 沒有已登入帳號可讀模型清單時）會經 OpenAI SDK 直接送出、帶未解析的帳號參照；現在一樣解析帳號，未連線的帳號在送出前
+                 回 401。CPL-12.S03：訂閱頁第一個請求遇閘道錯誤或斷線時保留登入、顯示說明、15 秒後重試，不再誤判未登入。
+                 image／helm_default_values 不變，Redeploy 時 litellm pod 重啟一次。svc203 已於 10-24 15:28Z Redeploy（helm rev 21，
+                 正式站實測手動模型綁未連線帳號：chat 與 completions 都 401、沒有外連），QA 262 為 rev 47。回滾值：0.3.15。 -->
+            <field name="helm_chart_version">0.3.16</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261024.0943@sha256:87900caf08de32ee80858d98428ee6fb4aed369482d6327109dde1f7c6d6395b"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
