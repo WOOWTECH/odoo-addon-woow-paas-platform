@@ -57,7 +57,7 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # 2026-10-24：#71 merge 5fa1ff0a（含 #72）八支 image 的 registry digest 已逐一驗證；
 # LaunchPolicy 維持 nextcloud-mcp-server、port 8000。
 EXPECT_IMAGE_TAG = (
-    '4d90de3bd26e959045973e022457331514a85330@sha256:a5fd4ceefee8c2ffa427a04237ca93e9bb09b58bdc14adbcecbaffc243c33761')
+    '6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:74bfa405800d7791cc0a0aef45a1e035338ae9b8b9b532022d3d28b77257e6d6')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 
