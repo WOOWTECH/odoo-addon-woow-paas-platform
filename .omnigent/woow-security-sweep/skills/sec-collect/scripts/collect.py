@@ -5,6 +5,7 @@
 
     collect.py run --repo-path <abs> --run-root <dir> [--mode incremental|full] [--state-dir <dir>]
     collect.py commit --run-dir <dir> [--state-dir <dir>]   # 本輪處理完才推進 last_sha
+    collect.py preset --name <名稱> [--state-dir <dir>]    # 讀 <state>/presets/<名稱>.yaml，驗證後印出本輪輸入
 
 run 的產出（<run-root>/<repo 名>/）：
 
@@ -32,6 +33,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -299,6 +301,72 @@ def collect_tools(src: Path, files: list[str], scan_cfg: dict[str, Any], workdir
     return list(uniq.values()), status
 
 
+# ── 本輪輸入（preset） ──────────────────────────────────────────────────────────
+# 排程 prompt 只放一行 `preset: <名稱>`：Omnigent 0.16.0 會把長 prompt 收合成 [Pasted text]
+# 後偵測不到草稿、只盲按一次 Enter，訊息就停在輸入框不送出（#1989）。
+
+PRESET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+INPUT_KEYS = ("targets", "mode", "deep_review", "roster")
+INPUT_MODES = ("incremental", "full")
+DEEP_REVIEW = ("auto", "always", "never")
+ROSTER_HARNESSES = ("claude-native", "pi")
+
+
+def validate_input(data: Any, workspace: Path) -> dict[str, Any]:
+    """驗證本輪輸入並補上預設值。targets 必須是 workspace 底下既有的 git repo。"""
+    if not isinstance(data, dict):
+        raise CollectError("輸入必須是 YAML mapping")
+    unknown = sorted(set(data) - set(INPUT_KEYS))
+    if unknown:
+        raise CollectError(f"不認得的欄位：{unknown}（只接受 {list(INPUT_KEYS)}）")
+    targets = data.get("targets")
+    if not isinstance(targets, list) or not targets or not all(isinstance(x, str) for x in targets):
+        raise CollectError("targets 必須是非空的 repo 絕對路徑清單")
+    ws = workspace.resolve()
+    out: list[str] = []
+    for raw in targets:
+        path = Path(raw)
+        if not path.is_absolute():
+            raise CollectError(f"target 必須是絕對路徑：{raw}")
+        real = path.resolve()
+        if not real.is_relative_to(ws):
+            raise CollectError(f"target 不在 workspace {ws} 底下：{raw}")
+        if not (real / ".git").exists():
+            raise CollectError(f"target 不是 git repo：{raw}")
+        if str(real) not in out:
+            out.append(str(real))
+    mode = data.get("mode", "incremental")
+    if mode not in INPUT_MODES:
+        raise CollectError(f"mode 只能是 {INPUT_MODES}")
+    deep = data.get("deep_review", "auto")
+    if deep not in DEEP_REVIEW:
+        raise CollectError(f"deep_review 只能是 {DEEP_REVIEW}")
+    roster = data.get("roster") or {}
+    if not isinstance(roster, dict) or set(roster) - {"review", "fix"} \
+            or any(v not in ROSTER_HARNESSES for v in roster.values()):
+        raise CollectError(f"roster 只接受 review／fix，值為 {ROSTER_HARNESSES}")
+    return {"targets": out, "mode": mode, "deep_review": deep, "roster": roster}
+
+
+def preset_path(state_dir: Path, name: str) -> Path:
+    if not PRESET_NAME_RE.match(name or ""):
+        raise CollectError(f"preset 名稱不合法：{name!r}（小寫英數與 -，最多 32 字）")
+    return state_dir / "presets" / f"{name}.yaml"
+
+
+def cmd_preset(name: str, state_dir: Path) -> dict[str, Any]:
+    """讀 <state>/presets/<名稱>.yaml 並驗證。workspace 取 state 目錄往上兩層（<WS>/.omnigent-runtime/…）。"""
+    path = preset_path(state_dir, name)
+    if not path.is_file():
+        raise CollectError(f"找不到 preset 檔：{path}（用 setup skill 的 preset 子命令建立）")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise CollectError(f"preset 檔不是合法 YAML：{path}") from exc
+    workspace = state_dir.resolve().parents[1]
+    return {"preset": name, "path": str(path), **validate_input(data, workspace)}
+
+
 # ── 子命令 ────────────────────────────────────────────────────────────────────
 
 def resolve_state_dir(explicit: str | None) -> Path:
@@ -444,13 +512,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("import", help="併入 deep review worker 回報的 finding")
     p.add_argument("--run-dir", required=True)
     p.add_argument("--input", required=True, help="JSON lines：rule、path、message，選填 line、severity")
+    p = sub.add_parser("preset", help="讀 <state>/presets/<名稱>.yaml，驗證後印出本輪輸入")
+    p.add_argument("--name", required=True)
     args = ap.parse_args(argv)
     try:
         if args.cmd == "import":
             print(json.dumps(cmd_import(Path(args.run_dir), Path(args.input)), ensure_ascii=False, indent=2))
             return 0
         sdir = resolve_state_dir(args.state_dir)
-        if args.cmd == "run":
+        if args.cmd == "preset":
+            out = cmd_preset(args.name, sdir)
+        elif args.cmd == "run":
             out = cmd_run(Path(args.repo_path), Path(args.run_root), args.mode, sdir, fetch=not args.no_fetch)
         else:
             out = cmd_commit(Path(args.run_dir), sdir)

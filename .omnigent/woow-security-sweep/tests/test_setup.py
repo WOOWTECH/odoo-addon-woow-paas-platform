@@ -147,14 +147,20 @@ class RecordAgentTest(Base):
 
 
 class ScheduleTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.repo = self.ws / "WOOW" / "demo"
+        (self.repo / ".git").mkdir(parents=True)
+        su.write_preset(self.ws, "line-daily", [str(self.repo)], "incremental", "auto", None, None)
+
     def task(self, **kw):
         base = {"id": "t1", "name": "woow-security-sweep 每日", "agent_id": "agent123", "host_id": "h1",
                 "workspace": str(self.ws), "permission_mode": "auto", "max_cost_usd": 30.0, "state": "active",
-                "rrule": "FREQ=WEEKLY;BYDAY=TU,WE;BYHOUR=8", "prompt": "targets:\n  - /r/a\nmode: incremental\n"}
+                "rrule": "FREQ=WEEKLY;BYDAY=TU,WE;BYHOUR=8", "prompt": "preset: line-daily"}
         return dict(base, **kw)
 
-    def run_check(self, tasks):
-        api = FakeApi({"/v1/scheduled-tasks": (200, {"scheduled_tasks": tasks})})
+    def run_check(self, tasks, extra=None):
+        api = FakeApi({"/v1/scheduled-tasks": (200, {"scheduled_tasks": tasks}), **(extra or {})})
         return su.check_schedules(api, {"agent_id": "agent123"}, "h1", self.ws)
 
     def test_healthy(self):
@@ -170,9 +176,22 @@ class ScheduleTest(Base):
     def test_foreign_host_fails(self):
         self.assertEqual(self.status(self.run_check([self.task(host_id="h2")]), "schedule:t1"), su.FAIL)
 
+    def test_long_prompt_fails(self):
+        for prompt in ("targets:\n  - /r/a\nmode: incremental\n", "{targets: [" + "/x" * 40 + "]}"):
+            c = next(c for c in self.run_check([self.task(prompt=prompt)]) if c["id"] == "schedule:t1")
+            self.assertEqual(c["status"], su.FAIL)
+            self.assertIn("Pasted text", c["detail"])
+
+    def test_missing_preset_fails(self):
+        c = next(c for c in self.run_check([self.task(prompt="preset: nope")]) if c["id"] == "schedule:t1")
+        self.assertEqual(c["status"], su.FAIL)
+        self.assertIn("preset 無效", c["detail"])
+
     def test_same_day_same_target_overlap(self):
+        su.write_preset(self.ws, "line-weekly", [str(self.repo)], "full", "always", None, None)
         checks = self.run_check([self.task(), self.task(id="t2", name="woow-security-sweep 每週",
-                                                        rrule="FREQ=WEEKLY;BYDAY=WE;BYHOUR=9")])
+                                                        rrule="FREQ=WEEKLY;BYDAY=WE;BYHOUR=9",
+                                                        prompt="preset: line-weekly")])
         self.assertEqual(self.status(checks, "schedule_overlap"), su.FAIL)
 
     def test_different_days_no_overlap(self):
@@ -182,6 +201,56 @@ class ScheduleTest(Base):
     def test_no_sweep_schedule_is_skip(self):
         checks = self.run_check([self.task(name="other", agent_id="x")])
         self.assertEqual(checks[0]["status"], su.SKIP)
+
+
+class LastRunTest(Base):
+    NOW = 1_800_000_000.0
+
+    def api(self, fired_ago, item_types, code=200):
+        items = [{"type": x} for x in item_types]
+        return FakeApi({"/v1/scheduled-tasks/t1/runs?limit=1": (200, {"data": [
+                            {"conversation_id": "s1", "status": "succeeded", "fired_at": self.NOW - fired_ago}]}),
+                        "/v1/sessions/s1/items?limit=20&order=asc": (code, {"data": items})})
+
+    def test_not_submitted_fails_even_if_run_succeeded(self):
+        c = su.check_last_run(self.api(3600, ["resource_event"]), {"id": "t1"}, now=self.NOW)
+        self.assertEqual(c["status"], su.FAIL)
+        self.assertIn("沒有送出", c["detail"])
+
+    def test_started_ok(self):
+        c = su.check_last_run(self.api(3600, ["resource_event", "message"]), {"id": "t1"}, now=self.NOW)
+        self.assertEqual(c["status"], su.OK)
+
+    def test_recent_fire_skipped(self):
+        c = su.check_last_run(self.api(60, ["resource_event"]), {"id": "t1"}, now=self.NOW)
+        self.assertEqual(c["status"], su.SKIP)
+
+    def test_no_runs_skipped(self):
+        self.assertEqual(su.check_last_run(FakeApi({}), {"id": "t1"}, now=self.NOW)["status"], su.SKIP)
+
+
+class PresetTest(Base):
+    def test_write_and_validate_shared_with_collect(self):
+        repo = self.ws / "WOOW" / "demo"
+        (repo / ".git").mkdir(parents=True)
+        out = su.write_preset(self.ws, "line-daily", [str(repo), str(repo)], "full", "always", "claude-native", "pi")
+        self.assertEqual(out["schedule_prompt"], "preset: line-daily")
+        self.assertLessEqual(len(out["schedule_prompt"]), su.PROMPT_MAX)
+        got = su._load_collect().cmd_preset("line-daily", self.sdir)
+        self.assertEqual((got["targets"], got["mode"], got["roster"]), ([str(repo.resolve())], "full",
+                                                                         {"review": "claude-native", "fix": "pi"}))
+
+    def test_rejects_target_outside_workspace(self):
+        with tempfile.TemporaryDirectory() as other:
+            (Path(other) / ".git").mkdir()
+            with self.assertRaises(su.SetupError):
+                su.write_preset(self.ws, "x", [other], "incremental", "auto", None, None)
+
+    def test_rejects_bad_name(self):
+        repo = self.ws / "r"
+        (repo / ".git").mkdir(parents=True)
+        with self.assertRaises(su.SetupError):
+            su.write_preset(self.ws, "../evil", [str(repo)], "incremental", "auto", None, None)
 
 
 class JevKeyTest(Base):
@@ -283,7 +352,8 @@ class SkillLayoutTest(unittest.TestCase):
 
     def test_doctor_ids_documented(self):
         text = (REPO / ".agents/skills/woow-security-sweep-setup/SKILL.md").read_text(encoding="utf-8")
-        for cid in ("python", "jev_key", "issues:<repo>", "host", "agent_owner", "schedule_overlap"):
+        for cid in ("python", "jev_key", "issues:<repo>", "host", "agent_owner", "schedule_overlap",
+                    "schedule_run:<id>"):
             self.assertIn(f"`{cid}`", text)
 
 

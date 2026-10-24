@@ -108,7 +108,9 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
    | `host_id` | 該主機的 host_id（有給 workspace 就必填，否則 400） |
    | `permission_mode` | `auto` |
    | `max_cost_usd` | `30`（config 另有 60 USD 硬上限） |
-   | `prompt` | 見下 |
+   | `prompt` | `preset: line-daily`／`preset: line-weekly`（只有這一行） |
+
+   preset 用 setup skill 建立（`setup.py preset`），內容存在 `<state>/presets/<名稱>.yaml`：
 
    ```yaml
    targets:
@@ -119,6 +121,10 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
    deep_review: auto        # 每週：always
    roster: {review: claude-native, fix: pi}
    ```
+
+   ⛔ 不要把上面的 YAML 直接當排程 prompt：Omnigent 0.16.0 會把長 prompt 收合成 `[Pasted text]`，
+   偵測不到草稿就只盲按一次 Enter，訊息停在輸入框不送出，run 紀錄卻寫 `succeeded`（#1989）。
+   setup skill 的 doctor 會檢查 prompt 長度與最近一次觸發是否真的開始執行。
 
    週一只跑每週那支（全量），避免兩支排程同時推進同一份 state。
 
