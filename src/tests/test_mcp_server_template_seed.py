@@ -381,7 +381,10 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 未啟動 lifespan／MCP daemon、未呼叫 MCP 工具；既有 PVC 升級與 ORM 仍未驗。
     # 來源／實機窄證據：docs/verification/2026-10-18-mcp-5526e865-source-contract.json
     # 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
-    EXPECT_IMAGE_TAG = '5526e8658a8046253a0b324825a12222096fa858@sha256:39402798b9dfc6565f9cc7f395fb2a7fb0696d1be8cf01f2a45b1a94e5766fe5'
+    # 2026-10-23 重釘 #72（32a5263c）：相對 #70，兩 app 的 Dockerfile、pyproject、
+    # main.py、launcher.py 與 uv.lock 均未變；主分支 CI26543 的 core、八支 image
+    # build／healthz／push 全通過，registry HEAD 獨立確認 digest。正式 PVC 升級另驗。
+    EXPECT_IMAGE_TAG = '32a5263c9b54268b5141f931b5f1d088fff697ab@sha256:86d66ddca23d3ca2d8d0ec08c6c84e72d3a429011fb69349eadeaa9a532be19c'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
