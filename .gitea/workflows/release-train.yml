@@ -1,0 +1,48 @@
+name: release-train
+
+# woow release train 第 1 期：把 src/data/cloud_app_templates.xml 的範本映像（seed）和清冊
+# woow-paas/woow-release-train（woow-versions.yaml）比對。目前涵蓋 EMQX、n8n 的上游 digest；
+# LiteLLM 的 seed 是 Woow 包裝映像，只列參考。之後清冊加入的產品自動納入，這裡不用改。
+#
+# 擋不擋由清冊的 enforcement 決定，不在這支 workflow：第 1 期只有各產品的 hard_rules 會擋
+# （EMQX 授權上限 <5.9.0；seed 釘了清冊不認得的 EMQX digest 也擋，因為版本無從判讀），
+# 其他（例如 n8n seed 落後）只警告。
+#
+# 🔴 刻意**沒有 paths 白名單**——每一個 PR 都無條件跑（判準同 manifest-version-gate.yml）：
+#    清冊改了，即使 PR 沒碰 seed 也要重驗；而且日後要設成 required status check 時，
+#    paths 過濾會讓沒命中的 PR 永遠缺這個 context、永遠不能 merge。代價：每個 PR 多跑幾秒。
+#
+# 唯讀：只用 CI_GITEA_TOKEN 從叢集內網 clone 清冊；checkout 不留憑證給後面的 step。
+on:
+  pull_request:
+  push:
+    branches: [develop]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-train-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 取清冊（woow-release-train main，叢集內網）
+        env:
+          U: ${{ secrets.CI_GITEA_USERNAME }}
+          T: ${{ secrets.CI_GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          d="${RUNNER_TEMP:-/tmp}/release-train"
+          rm -rf "${d}"
+          git -c http.extraHeader="Authorization: Basic $(printf '%s:%s' "${U:-ci}" "${T}" | base64 -w0)" \
+            clone -q --depth 1 http://gitea-http.gitea.svc.cluster.local:3000/woow-paas/woow-release-train.git "${d}"
+          git -C "${d}" log -1 --format='清冊 %h %s'
+      - name: wvt check
+        run: python3 "${RUNNER_TEMP:-/tmp}/release-train/tools/wvt.py" check --leg paas --repo "gitea:${{ github.repository }}" --repo-dir .
