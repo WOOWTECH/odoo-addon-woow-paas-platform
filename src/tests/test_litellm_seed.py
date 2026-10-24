@@ -130,8 +130,8 @@ class TestLitellmSeed(TransactionCase):
         self.assertRegex(v['image']['tag'], PINNED_TAG_RE)
         self.assertTrue(
             v['image']['tag'].endswith(
-                '@sha256:8a0ff1f0112f638e4141770b1524639603d597cd892a1d41c41f3f0e80767e19'),
-            'litellm 20261024.0245（paas-odoo-ci #393，核可 #395）：29e1d9d3 建置，'
+                '@sha256:87900caf08de32ee80858d98428ee6fb4aed369482d6327109dde1f7c6d6395b'),
+            'litellm 20261024.0943（paas-odoo-ci #399，核可 #400）：0ab8d11f 建置，'
             'canonical 與已測 candidate digest 相同；0.3.0 起是 LiteLLM 1.104.0，'
             'HA「Woow LiteLLM」add-on 用同一份補丁')
         pg = v['postgresql']['image']
