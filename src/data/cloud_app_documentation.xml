@@ -356,8 +356,8 @@ AI 可讀寫的資料受 Odoo 帳號權限、Tools 與當前實例的寫入／�
 
 ## 開始使用
 1. 開啟服務網址，以開通時顯示的 admin 帳密通過瀏覽器登入；主畫面與 console 共用這組帳密。
-2. 要使用內建 AI 代理，可在 console 執行 `claude login`，或在服務設定提供所需模型金鑰。
-3. 需要 MCP 時，在 `https://你的服務網址/mcp-admin/` 管理金鑰與工具。一般用戶端連 `/mcp` 並附 `Authorization: Bearer <金鑰>`；Claude.ai 可用 `/private_<金鑰>/mcp`。
+2. 要使用內建 AI 代理，到 OpenDesign「外掛」頁按內建「CLI 終端機」的「開啟」（即 `https://你的服務網址/console/`），執行 `claude login`；或在服務設定提供所需模型金鑰。
+3. 需要 MCP 時，到「外掛」頁按內建「MCP Server」的「開啟」（即 `https://你的服務網址/mcp-admin/`）管理金鑰與工具。一般用戶端連 `/mcp` 並附 `Authorization: Bearer <金鑰>`；Claude.ai 可用 `/private_<金鑰>/mcp`。
 
 ## 跟著做：完成第一份設計
 1. 登入後設定模型金鑰，建立測試專案，描述畫面用途、受眾與尺寸，讓代理產生第一版。
