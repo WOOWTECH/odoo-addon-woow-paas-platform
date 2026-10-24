@@ -2979,7 +2979,11 @@
                  image pin／helm_default_values 不變。需受控 Redeploy 存量 QA 262 後線上重測。 -->
             <!-- 0.3.12（charts #262）：修正 0.3.11 在 FastAPI 0.136.3 的 /login、/v2/login 500；
                  登入路由改用 FastAPI 的 request_response 保留 dependency stack。image／values 不變。 -->
-            <field name="helm_chart_version">0.3.12</field>
+            <!-- 0.3.13／0.3.14（charts main d3cd6898b2）：0.3.13＝ChatGPT 帳號可同時登入多個 LiteLLM 的頁面文字修正；
+                 0.3.14＝ChatGPT 週額度用完（usage_limit_reached）的 429 補 Retry-After、帳號冷卻最長 15 分鐘
+                 （values litellm.usageLimitCooldownMaxSeconds，0 關閉）、手機版憑證控制項排版。
+                 image 不變（20261018.0834@sha256:ad43b959…）、helm_default_values 不需改。回滾值：0.3.12。 -->
+            <field name="helm_chart_version">0.3.14</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261018.0834@sha256:ad43b95960642ec76cb60c97167f1d21a19dfa6660c06f484f8007d674f5da10"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
