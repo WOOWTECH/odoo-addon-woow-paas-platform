@@ -6,11 +6,13 @@ on:
       - ".omnigent/woow-security-sweep/**"
       - ".omnigent/woow-issue-leader/generate-worker.py"
       - ".gitea/workflows/security-sweep-tests.yml"
+      - ".agents/skills/woow-security-sweep-setup/**"
   push:
     branches:
       - develop
     paths:
       - ".omnigent/woow-security-sweep/**"
+      - ".agents/skills/woow-security-sweep-setup/**"
   workflow_dispatch:
 
 jobs:
