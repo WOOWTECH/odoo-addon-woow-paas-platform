@@ -2,6 +2,9 @@
 
 woow 六個 repo 的 issue／實作編制。**本檔是給維護者看的**，不進任何 agent 的 prompt。
 
+同目錄另有 `woow-security-sweep`（每日安全掃描）；它和 setup skill、前台 agent 的關係見
+[§woow-security-sweep 整體關係](#woow-security-sweep-整體關係)，bundle 細節見該目錄的 README。
+
 ```
 cd /home/elmo/woow-repos && omnigent run .omnigent/woow-issue-leader --server <url>
    ↑ workspace = 六 repo 的共同祖先（不是任何單一 repo——理由見 §workspace）
@@ -1001,6 +1004,46 @@ woow-k3s delete …` 接在後面就滑過。改法：pipe 在「第一段是唯
 prompt 只能誠實寫成紀律規則（review F6）。改法：產生器在派工當下用 worktree 相對 workspace 的路徑多掛一支
 `p_path_write_inside_worktree`（比對檔案工具的 `path`／`file_path`，A 類），implement 沒帶 worktree 直接拒絕產生。
 shell 重導向那一側仍是紀律（記在 `known_gap`）。`RETIRED_TERMS` 把「「只在 worktree 裡改檔」是紀律規則」列為廢止詞彙。
+
+## woow-security-sweep 整體關係
+
+（#1978）sweep 要給多人使用：每個人建自己的排程，也能從 Omnigent UI 直接叫起。拆成三個角色：
+
+```
+setup skill（repo 層：.agents/skills/woow-security-sweep-setup）
+  ├─ doctor：環境與權限檢查（全部由程式判斷，不問人）
+  ├─ 註冊／接手／原地更新 ──▶ sweep agent（.omnigent/woow-security-sweep）
+  │                            claude-native，agent_id 固定；只由排程或 agent_id 啟動，不在 UI picker
+  └─ 註冊／原地更新 ────────▶ 前台 agent（claude-sdk，出現在 UI picker）［階段 B］
+
+sweep-launch skill（前台 agent 與 CLI 共用同一份，build 時複製進前台 bundle）［階段 B］
+  ├─ 跑一次：sys_session_create(agent_id=sweep) ＋ sys_session_send(參數)；判斷題照常進 Inbox
+  └─ 排程：直接以 sweep 的 agent_id 建 Omnigent 排程，不經前台（少一層成本與失敗點）
+```
+
+| 角色 | 位置 | 誰用 |
+|---|---|---|
+| setup skill | `.agents/skills/woow-security-sweep-setup/`（`.claude/skills/` 有同名入口指向同一目錄） | 維護者發新版；新同事第一次在自己主機設定；排程跑不起來時 |
+| sweep agent | `.omnigent/woow-security-sweep/` | 排程（無人值守） |
+| 前台 agent［階段 B］ | `.omnigent/<前台 bundle>/` | 任何人從 UI 叫起 |
+| sweep-launch skill［階段 B］ | 正本在 repo 層 `.agents/skills/`，build 時複製成實體檔放進前台 bundle | 前台 agent；CLI 的 Claude Code／Pi session |
+
+**為什麼前台與 sweep 分開**：sweep 必須是 `claude-native` 才能把判斷題送進 Inbox，但 UI picker
+會過濾頂層 `*-native`（§UI picker）。前台用 `claude-sdk` 進 picker；從 UI 叫起時人就在對話框前，
+參數直接在聊天裡問，不需要 Inbox。
+
+### 由 server 程式碼決定的規則（setup skill 的 doctor 逐項檢查）
+
+| 規則 | 出處 | 後果 |
+|---|---|---|
+| 排程只能建在呼叫者自己的主機 | `routes/_host_launch.py::resolve_host_owner`（別人的 host 回 403 `not your host`） | 每個人用自己的主機；setup 在哪台跑就裝在哪台。不同人不可能共用同一台主機的 state |
+| 上傳的 agent 是 session-scoped，對 anchor session 有 READ 即可使用 | `routes/_session_create_validation.py::validate_session_agent` | 維護者把 anchor session 分享給同事，同事就能用同一個 agent_id |
+| 原地更新需要 anchor session 的 OWNER | `routes/sessions/routes_agent.py::update_session_agent`（`PUT /v1/sessions/{id}/agent`） | 共用時只有維護者能發新版；同事要自己維護就自己註冊一份 |
+| `sys_session_create(config_path=…)` 每次都建新的 agent row | `_create_session_from_bundle` | 改版要用 PUT 原地更新，否則 agent_id 會換、排程要跟著改 |
+
+每台主機的 agent 紀錄存在 `<WS>/.omnigent-runtime/woow-security-sweep/agent.json`（anchor session、
+agent_id、能否更新），不進 repo。發新版走 setup skill 的 `bundle-plan` → 人核准 plan digest →
+`bundle-apply`；打包只取已 commit 的檔案（`git archive`），不會把 `__pycache__` 帶上去。
 
 ## 機器相關的值
 

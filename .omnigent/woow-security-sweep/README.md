@@ -85,23 +85,23 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
 | UbuntuServer-59mqj | `88ca3ca80a434609a3ed3a35d7bac513` | `/home/elmo/woow-repos` |
 | Pi Web ChatGPT (pi3) | `f3cb408633ad4ddabcbabec0401c41d6` | `/data/pi-agent/home/woow-repos` |
 
-1. **主機環境**（換主機時逐項確認）：
-   - `python3.12` 可用且裝了 PyYAML（`collect.py` 需要 `tarfile.data_filter`，3.11.2 不行）
-   - `gitleaks`（釘 8.30.1，對過官方 checksums）、`uvx`（semgrep／bandit 由它拉）
-   - Jev key 在 `~/.config/typesafe/api_key`（`chmod 600`）；`claude` 已登入
-   - `<WS>/WOOW/` 下有要掃的 repo；`<WS>/.omnigent-runtime/woow-security-sweep` 是 state
-     （換主機要整個搬過去，否則人工決定與 carryover 會遺失）
-2. 更新該主機的主 checkout：`<WS>/paas/woow_paas_platform` 切到最新 develop
+安裝、檢查、發新版一律走 setup skill（`.agents/skills/woow-security-sweep-setup`，#1978）；
+三者關係見 `.omnigent/README.md` §woow-security-sweep 整體關係。
+
+1. 更新該主機的主 checkout：`<WS>/paas/woow_paas_platform` 切到最新 develop
    （AGENTS.md 與 skills 用這個路徑呼叫腳本）
-3. 本機驗收：`python3.12 .omnigent/woow-security-sweep/build.py --check`、
-   `python3.12 -m unittest discover -s .omnigent/woow-security-sweep/tests`
-4. 註冊 agent：`sys_session_create(config_path="paas/woow_paas_platform/.omnigent/woow-security-sweep")`
-   （路徑相對於 workspace），手動餵一次 prompt 試跑；記下 `agent_id`
+2. `setup.py --workspace <WS> doctor --check-api`：環境（python3.12、gitleaks、uvx、tea、Jev key）、
+   targets、tea 對 mirror-internal 的寫入權限、主機擁有者、既有排程，全部由腳本判斷。
+   state（`<WS>/.omnigent-runtime/woow-security-sweep`）換主機要整個搬過去，否則人工決定與 carryover 會遺失
+3. 註冊或接手 agent：照 setup skill §2（自己註冊或接手共用的 anchor），完成後 `record-agent`
+   記下 anchor 與 agent_id（`<state>/agent.json`）。⛔ 改版不要再 `sys_session_create` 重新上傳
+   （會換 agent_id），改走 setup skill §3 的 `bundle-plan`／`bundle-apply` 原地更新
+4. 再跑一次 doctor，`ready: true` 才建排程
 5. 建排程（`sys_scheduled_task_create`）：
 
    | 欄位 | 值 |
    |---|---|
-   | `agent_id` | 第 4 步的 id（bundle 每次改版重新上傳都會換 id ⇒ 要 update 排程） |
+   | `agent_id` | `<state>/agent.json` 的 `agent_id`（原地更新不會換） |
    | `rrule` | 每日 `FREQ=WEEKLY;BYDAY=TU,WE,TH,FR,SA,SU;BYHOUR=8;BYMINUTE=30`；每週 `FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=30` |
    | `timezone` | `Asia/Taipei` |
    | `workspace` | 該主機的 `<WS>` |
