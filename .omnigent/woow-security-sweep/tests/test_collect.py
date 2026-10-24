@@ -180,5 +180,55 @@ class RunTest(RepoFixture):
         self.assertEqual(meta["scope"]["mode"], "full")
 
 
+
+class PresetTest(unittest.TestCase):
+    """排程 prompt 只放 `preset: <名稱>`（#1989：長 prompt 在 Omnigent 0.16.0 不會送出）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.state = self.ws / ".omnigent-runtime" / "woow-security-sweep"
+        (self.state / "presets").mkdir(parents=True)
+        self.repo = self.ws / "WOOW" / "demo"
+        (self.repo / ".git").mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, text, name="line-daily"):
+        (self.state / "presets" / f"{name}.yaml").write_text(text)
+
+    def test_defaults_and_dedupe(self):
+        self.write(f"targets: [{self.repo}, {self.repo}]\n")
+        got = cl.cmd_preset("line-daily", self.state)
+        self.assertEqual((got["targets"], got["mode"], got["deep_review"], got["roster"]),
+                         ([str(self.repo.resolve())], "incremental", "auto", {}))
+
+    def test_cli_exit_codes(self):
+        self.write(f"targets: [{self.repo}]\nmode: full\n")
+        self.assertEqual(cl.main(["--state-dir", str(self.state), "preset", "--name", "line-daily"]), 0)
+        self.assertEqual(cl.main(["--state-dir", str(self.state), "preset", "--name", "missing"]), 2)
+
+    def test_rejections(self):
+        cases = {
+            "unknown key": f"targets: [{self.repo}]\nignore_checks: true\n",
+            "empty targets": "targets: []\n",
+            "relative": "targets: [WOOW/demo]\n",
+            "outside ws": "targets: [/etc]\n",
+            "bad mode": f"targets: [{self.repo}]\nmode: yolo\n",
+            "bad roster": f"targets: [{self.repo}]\nroster: {{fix: codex}}\n",
+            "not yaml": "targets: [\n",
+        }
+        for why, text in cases.items():
+            with self.subTest(why=why):
+                self.write(text)
+                with self.assertRaises(cl.CollectError):
+                    cl.cmd_preset("line-daily", self.state)
+
+    def test_bad_name(self):
+        for name in ("../x", "Line", "", "a" * 40):
+            with self.subTest(name=name), self.assertRaises(cl.CollectError):
+                cl.cmd_preset(name, self.state)
+
 if __name__ == "__main__":
     unittest.main()

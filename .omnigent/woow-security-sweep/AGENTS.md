@@ -28,6 +28,15 @@
 
 ## 輸入（排程 prompt）
 
+排程的 prompt 一律只有一行 `preset: <名稱>`（例：`preset: line-daily`）。收到就先跑
+
+```bash
+python3.12 <bundle>/skills/sec-collect/scripts/collect.py --state-dir <state> preset --name <名稱>
+```
+
+它讀 `<state>/presets/<名稱>.yaml`、驗證後印出本輪輸入（JSON，欄位同下）。⛔ 不要自己讀或改 preset 檔，
+以這個指令的輸出為準。手動跑一次時，prompt 也可以直接是下面的 YAML：
+
 ```yaml
 targets:                     # 必填：repo 的絕對路徑（必須在 <WS> 底下）
   - <WS>/WOOW/woow_line_base
@@ -38,7 +47,7 @@ roster:                      # 選填
   fix: pi                    # 修正用的 harness；claude-native 需等 #1729 合併
 ```
 
-prompt 格式不對、targets 為空或路徑不存在 ⇒ 用 AskUserQuestion 說明問題後結束，不要猜。
+`preset` 指令失敗、prompt 格式不對、targets 為空或路徑不存在 ⇒ 用 AskUserQuestion 說明問題後結束，不要猜。
 
 ## 每輪流程
 

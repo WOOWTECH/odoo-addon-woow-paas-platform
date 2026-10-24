@@ -7,6 +7,15 @@ description: woow-security-sweep 收集階段：用 collect.py 合併設定、�
 
 `<WS>`＝runner workspace（取得方式見 AGENTS.md「固定路徑」），指令裡一律代入字面值。
 
+## 讀 preset（排程 prompt 是 `preset: <名稱>` 時）
+
+```bash
+python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-collect/scripts/collect.py --state-dir <WS>/.omnigent-runtime/woow-security-sweep preset --name <名稱>
+```
+
+印出 `targets`（已解析成實際路徑、去重）、`mode`、`deep_review`、`roster`。名稱不合法、檔案不存在、
+targets 不在 `<WS>` 底下或不是 git repo ⇒ exit 2，照 AGENTS.md 回報後結束。
+
 ## 跑一個 target
 
 ```bash

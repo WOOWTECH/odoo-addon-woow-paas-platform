@@ -5,6 +5,7 @@
 
     setup.py doctor [--targets <repo 路徑> ...] [--check-api]   # 環境與權限檢查
     setup.py record-agent --session <session id>                # 註冊或接手共用 agent 後記下 anchor
+    setup.py preset --name <名稱> --targets <repo> ... [--mode …]  # 寫 <state>/presets/<名稱>.yaml（排程 prompt 用）
     setup.py bundle-plan                                        # 打包本機 checkout，與 server 上的版本比較
     setup.py bundle-apply --plan <plan 目錄>                    # 依核准的計畫原地更新（PUT）
 
@@ -33,6 +34,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,6 +52,24 @@ SITE_PACKAGES_CANDIDATES = (
 )
 
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
+
+#: 排程 prompt 上限。Omnigent 0.16.0 會把長 prompt 收合成 [Pasted text] 後偵測不到草稿、
+#: 只盲按一次 Enter，訊息停在輸入框不送出（#1989）。實測 `ping` 正常；`preset: <名稱>` 遠低於上限。
+PROMPT_MAX = 40
+PRESET_PROMPT_RE = re.compile(r"preset:\s*(\S+)")
+#: 觸發後超過這個秒數，session 仍沒有任何訊息 ⇒ 判定 prompt 沒送出
+SUBMIT_GRACE_S = 600
+
+
+def _load_collect():
+    """preset 的驗證與 sweep 共用同一份程式（collect.py），避免兩邊規則漂移。"""
+    import importlib.util
+
+    path = REPO / BUNDLE_REL / "skills/sec-collect/scripts/collect.py"
+    spec = importlib.util.spec_from_file_location("_sweep_collect", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class SetupError(Exception):
@@ -259,7 +279,29 @@ def check_agent(api: Any, sdir: Path, user: str | None, ws: Path) -> tuple[list[
                   else f"共用 {record.get('recorded_by')} 註冊的 agent（權限等級 {level}）：可使用、不能更新（PUT 需要 OWNER）")], record
 
 
+def check_last_run(api: Any, task: dict[str, Any], now: float | None = None) -> dict[str, Any]:
+    """最近一次觸發有沒有真的開始跑。run 紀錄的 succeeded 只代表「已觸發」，不代表 prompt 有送出。"""
+    cid = f"schedule_run:{task.get('id')}"
+    code, body = api.get(f"/v1/scheduled-tasks/{task.get('id')}/runs?limit=1")
+    rows = (body.get("data") or body.get("runs") or body.get("scheduled_task_runs") or []) if code == 200 and isinstance(body, dict) else []
+    if not rows or not rows[0].get("conversation_id"):
+        return check(cid, SKIP, "還沒有觸發紀錄")
+    run, sid = rows[0], rows[0]["conversation_id"]
+    age = (now or time.time()) - float(run.get("fired_at") or 0)
+    if age < SUBMIT_GRACE_S:
+        return check(cid, SKIP, f"session {sid} 剛觸發（{int(age)} 秒前），稍後再檢查")
+    code, items = api.get(f"/v1/sessions/{sid}/items?limit=20&order=asc")
+    rows = (items.get("data") or items.get("items") or []) if code == 200 and isinstance(items, dict) else []
+    started = any(x.get("type") in ("message", "function_call") for x in rows)
+    if code != 200:
+        return check(cid, WARN, f"讀不到 session {sid} 的內容（HTTP {code}）")
+    return check(cid, OK if started else FAIL,
+                 f"最近一次觸發 session {sid}：" + ("已開始執行" if started else "prompt 沒有送出（session 沒有任何訊息）"),
+                 None if started else "打開該 session，輸入框卡在 [Pasted text] 就按一次 Enter；排程 prompt 改用 `preset: <名稱>`")
+
+
 def check_schedules(api: Any, record: dict[str, Any] | None, host_id: str | None, ws: Path) -> list[dict[str, Any]]:
+    sdir = state_dir(ws)
     code, body = api.get("/v1/scheduled-tasks")
     if code != 200:
         return [check("schedules", WARN, f"讀不到排程（HTTP {code}）")]
@@ -282,14 +324,26 @@ def check_schedules(api: Any, record: dict[str, Any] | None, host_id: str | None
             problems.append(f"permission_mode 是 {t.get('permission_mode')}")
         if not t.get("max_cost_usd"):
             problems.append("沒有費用上限（create 不會存 max_cost_usd，要再 update）")
+        prompt = str(t.get("prompt") or "").strip()
+        targets: list[str] = []
+        m = PRESET_PROMPT_RE.fullmatch(prompt)
+        if m:
+            try:
+                targets = _load_collect().cmd_preset(m.group(1), sdir)["targets"]
+            except Exception as exc:  # CollectError 或檔案問題，一律當成設定錯誤回報
+                problems.append(f"preset 無效：{exc}")
+        elif "\n" in prompt or len(prompt) > PROMPT_MAX:
+            problems.append(f"prompt 太長（{len(prompt)} 字元、{prompt.count(chr(10)) + 1} 行）："
+                            "Omnigent 0.16.0 會卡在 [Pasted text] 不送出，改用 `preset: <名稱>`")
         days = re.search(r"BYDAY=([A-Z,]+)", t.get("rrule") or "")
         for day in (days.group(1).split(",") if days else ["*"]):
-            for tgt in re.findall(r"^\s*-\s*(\S+)\s*$", t.get("prompt") or "", re.M):
+            for tgt in targets:
                 claimed.setdefault(f"{day}|{tgt}", []).append(t.get("name", t.get("id")))
         out.append(check(f"schedule:{t.get('id')}", FAIL if problems else OK,
                          f"{t.get('name')}（{t.get('state')}）" + (f"：{'；'.join(problems)}" if problems else ""),
-                         "sys_scheduled_task_update 修正上述欄位（換 agent 要一併重送 permission_mode 與 max_cost_usd）"
-                         if problems else None))
+                         "sys_scheduled_task_update 修正上述欄位（換 agent 要一併重送 permission_mode 與 max_cost_usd；"
+                         "preset 用 setup.py preset 建立）" if problems else None))
+        out.append(check_last_run(api, t))
     overlap = sorted({f"{k.split('|')[1]}（{k.split('|')[0]}）：{'、'.join(v)}" for k, v in claimed.items() if len(v) > 1})
     if overlap:
         out.append(check("schedule_overlap", FAIL, "同一天有多個排程掃同一個 repo：" + "；".join(overlap),
@@ -346,6 +400,27 @@ def record_agent(api: Any, ws: Path, session: str, user: str | None = None) -> d
               "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
     save_agent_record(state_dir(ws), record)
     return record
+
+
+# ── preset ───────────────────────────────────────────────────────────────────
+
+def write_preset(ws: Path, name: str, targets: list[str], mode: str, deep_review: str,
+                 review: str | None, fix: str | None) -> dict[str, Any]:
+    import yaml
+
+    collect = _load_collect()
+    roster = {k: v for k, v in (("review", review), ("fix", fix)) if v}
+    data = {"targets": targets, "mode": mode, "deep_review": deep_review, **({"roster": roster} if roster else {})}
+    try:
+        normalized = collect.validate_input(data, ws)
+        path = collect.preset_path(state_dir(ws), name)
+    except collect.CollectError as exc:
+        raise SetupError(str(exc)) from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {k: v for k, v in normalized.items() if v or k != "roster"}
+    path.write_text("# 由 woow-security-sweep-setup 的 preset 子命令產生；排程 prompt 寫 `preset: "
+                    f"{name}`\n" + yaml.safe_dump(body, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return {"path": str(path), "schedule_prompt": f"preset: {name}", **normalized}
 
 
 # ── bundle 打包與比對 ─────────────────────────────────────────────────────────
@@ -484,6 +559,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tea-login", default="git-prod")
     p = sub.add_parser("record-agent")
     p.add_argument("--session", required=True)
+    p = sub.add_parser("preset", help="寫 <state>/presets/<名稱>.yaml；排程 prompt 只寫 `preset: <名稱>`")
+    p.add_argument("--name", required=True)
+    p.add_argument("--targets", nargs="+", required=True, help="repo 絕對路徑（必須在 <WS> 底下）")
+    p.add_argument("--mode", choices=("incremental", "full"), default="incremental")
+    p.add_argument("--deep-review", choices=("auto", "always", "never"), default="auto")
+    p.add_argument("--review", choices=("claude-native", "pi"))
+    p.add_argument("--fix", choices=("claude-native", "pi"))
     sub.add_parser("bundle-plan")
     p = sub.add_parser("bundle-apply")
     p.add_argument("--plan", required=True)
@@ -496,6 +578,10 @@ def main(argv: list[str] | None = None) -> int:
             out = doctor(ws, targets, call_api=args.check_api, tea_login=args.tea_login)
             print(json.dumps(out, ensure_ascii=False, indent=2))
             return 0 if out["ready"] else 1
+        if args.cmd == "preset":
+            out = write_preset(ws, args.name, args.targets, args.mode, args.deep_review, args.review, args.fix)
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            return 0
         api, user = _api()
         if args.cmd == "record-agent":
             out = record_agent(api, ws, args.session, user)

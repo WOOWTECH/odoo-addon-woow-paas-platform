@@ -41,7 +41,8 @@ python3.12 <本目錄>/scripts/setup.py --workspace <WS> doctor --check-api
 | `identity`／`host` | `/v1/me`；本機 host 屬於你、online | **排程只能建在自己的主機**（server `resolve_host_owner`：別人的 host 回 403）⇒ setup 在哪台跑就裝在哪台 |
 | `agent` | `<state>/agent.json` 記錄的 anchor 讀得到、名稱與 id 相符 | session-scoped agent 對 anchor session 有 READ 權限即可使用（`validate_session_agent`） |
 | `agent_owner` | 你對 anchor 的權限等級 | 原地更新（PUT）需要 OWNER（等級 4）⇒ 共用者只能用、不能發新版（`warn`，不是錯） |
-| `schedule:<id>` | agent_id 是現行的、host 是本機、workspace、`permission_mode: auto`、有費用上限 | 換 agent 時 permission_mode 與 max_cost_usd 不會沿用；create 不會存 max_cost_usd |
+| `schedule:<id>` | agent_id 是現行的、host 是本機、workspace、`permission_mode: auto`、有費用上限；prompt 是 `preset: <名稱>` 且 preset 有效（或不超過 40 字元的單行） | 換 agent 時 permission_mode 與 max_cost_usd 不會沿用；create 不會存 max_cost_usd；**長 prompt 在 Omnigent 0.16.0 不會送出**（收合成 `[Pasted text]` 後偵測不到，只盲按一次 Enter，#1989） |
+| `schedule_run:<id>` | 最近一次觸發超過 10 分鐘後，session 裡有沒有任何訊息 | run 紀錄的 `succeeded` 只代表「已觸發」；沒有訊息＝prompt 沒送出 |
 | `schedule_overlap` | 同一天有沒有兩個排程掃同一個 repo | 兩輪同時推進同一份 state 會重複出題 |
 
 ## 2. 第一次在這台主機設定
@@ -55,7 +56,16 @@ python3.12 <本目錄>/scripts/setup.py --workspace <WS> doctor --check-api
      ⛔ 不帶 message：只是註冊，不要觸發掃描
   2. `setup.py --workspace <WS> record-agent --session <回傳的 conversation_id>`
 
-再跑一次 doctor，`agent` 通過後才建排程。排程欄位見 sweep 的 README §上線步驟；
+再跑一次 doctor，`agent` 通過後，先為每個排程建一個 preset（本輪輸入放主機上的檔案，排程 prompt 只寫名稱）：
+
+```bash
+setup.py --workspace <WS> preset --name line-daily --targets <WS>/WOOW/woow_line_base <WS>/WOOW/Woow_odoo_line_liff <WS>/WOOW/woow_odoo_livechat_line --mode incremental --deep-review auto --review claude-native --fix pi
+```
+
+輸出的 `schedule_prompt`（例：`preset: line-daily`）就是排程的 prompt。驗證規則與 sweep 共用
+（`collect.py` 的 `validate_input`），寫得進去就代表 sweep 讀得懂。
+
+然後建排程。排程欄位見 sweep 的 README §上線步驟；
 `agent_id` 取 `<state>/agent.json`，`host_id` 取 doctor 輸出的 `host_id`（有給 workspace 就必填）。
 ⚠ create 後立刻再 `sys_scheduled_task_update` 一次 `max_cost_usd`（create 不會存）。
 
