@@ -57,7 +57,7 @@ test("X-LC-006-3：前端驗證失敗 → 捲到第一個錯誤欄位並把焦�
   });
   const focused = formFeedback.revealFirstError(root, formFeedback.FIELD_ERROR_SELECTOR);
   assert.equal(focused, nameInput, "第一個錯誤（服務名稱）");
-  assert.deepEqual(nameGroup.log, [["scroll", { block: "center", behavior: "smooth" }]]);
+  assert.deepEqual(nameGroup.log, [["scroll", { block: "center", behavior: "instant" }]]);
   assert.deepEqual(nameInput.log, [["focus", { preventScroll: true }]]);
   assert.deepEqual(emailInput.log, []);
 });

@@ -4674,6 +4674,17 @@ class PaasController(HiddenChainMixin, Controller):
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
+        # JSON-RPC clients send record IDs as JSON integers. Validate their types
+        # before browse(), and exclude bool explicitly because bool subclasses int.
+        if (template_id is not None and
+                (not isinstance(template_id, int) or isinstance(template_id, bool))):
+            return {'success': False, 'error': _('Invalid request')}
+        if (plan_id is not None and
+                (not isinstance(plan_id, int) or isinstance(plan_id, bool))):
+            return {'success': False, 'error': _('Invalid request')}
+        if name is not None and not isinstance(name, str):
+            return {'success': False, 'error': _('Invalid request')}
+
         if not template_id:
             return {'success': False, 'error': _('Template ID is required')}
         if not name:
