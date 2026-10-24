@@ -51,7 +51,7 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # 2026-10-24：#71 merge 5fa1ff0a（含 #72）八支 image 的 registry digest 已逐一驗證；
 # LaunchPolicy 維持 litellm-mcp-server、port 8000。chart0.1.8 的首次 seed 改為 create-only。
 EXPECT_IMAGE_TAG = (
-    '5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:60753dc5852b3b05dcc32446b1fa605a01035f82e10733eb8911c1d5be64761a')
+    'a5db051488e6656598a6d93a797fa513fe213db1@sha256:9a98f64b66820b6f21706046ffef235693e91d7a7d53d9b64b261c0ac7ac7336')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'
@@ -88,7 +88,7 @@ class TestMcpLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, MCP_SERVER_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.8',
+        self.assertEqual(tpl.helm_chart_version, '0.1.9',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.8 修正首次 seed'
                          '不得覆寫既存狀態，並保留 0.1.7 的非 root 設定')
 
