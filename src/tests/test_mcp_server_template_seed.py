@@ -386,7 +386,7 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # build／healthz／push 全通過，registry HEAD 獨立確認 digest。正式 PVC 升級另驗。
     # 2026-10-24：#71 merge 5fa1ff0a 包含 #72；八支 image registry digest 已逐一驗證。
     # LaunchPolicy 維持 woow-odoo-mcp／streamable-http／127.0.0.1／port8000。
-    EXPECT_IMAGE_TAG = '5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:814750fb0f01ae4b96c6d110644f7179fe82bb618584ca4808b2b549a69eb705'
+    EXPECT_IMAGE_TAG = 'a5db051488e6656598a6d93a797fa513fe213db1@sha256:9f7effa0597219c6b612d81e85e115b34cc86aab4bfec5abe064ae8a096c5207'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
