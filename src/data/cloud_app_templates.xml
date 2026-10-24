@@ -2,6 +2,10 @@
 <odoo>
     <!-- All templates use noupdate=0 so helm values and image tags stay current on upgrade -->
     <data noupdate="0">
+        <!-- 2026-10-24 MCP batch3：八個維護中 MCP 範本固定到 woow-mcp-server #71
+             merge 5fa1ff0a（包含 #72）；各 image digest 已由 registry 讀回。
+             chart 0.1.8（woow-paas-charts #271）須發布驗證後才套用正式範本。
+             僅更新 chart/image pin；封存的 mcp-odoo-manage 與其他商品不變。 -->
         <!-- PostgreSQL Database -->
         <record id="cloud_app_postgresql" model="woow_paas_platform.cloud_app_template">
             <field name="name">PostgreSQL</field>
@@ -488,8 +492,8 @@
                  1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:b6a82ab23172f793a7bffc2b964c45aa9ce00622e42cdf2469505764114455a5。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:6cafc0edf5a676729bdf8ad2f8ed3662d18d8cb5545b9d79f4c2085e5108e92c"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:ffcef3d934faeb3b5cd23adb40392c146fc04cfff72095f4fd890e62685c6a9f"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -599,8 +603,8 @@
                  當成既有229／230範本；回滾值為上方0b2cff1f完整tag@digest。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "32a5263c9b54268b5141f931b5f1d088fff697ab@sha256:86d66ddca23d3ca2d8d0ec08c6c84e72d3a429011fb69349eadeaa9a532be19c"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "woow-odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:814750fb0f01ae4b96c6d110644f7179fe82bb618584ca4808b2b549a69eb705"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "woow-odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -756,8 +760,8 @@
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:db66a0f333add5cef0a5a6a072b9048dcfdf6a2e5487c633f478f4b624588536。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "32a5263c9b54268b5141f931b5f1d088fff697ab@sha256:f267ff8b357bc26b40356074c94b6547d01f0d6b92493f33cc0bfcff68701aa9"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:88f97271843f1b98075e6553002b5c0c20847bfef4fe3fa5853fbb18a02b429d"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -832,8 +836,8 @@
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:4774f40d7c7daa41dbb0e40fe30bc67fafe56530d32f5b75b7f99eaa0a95efca。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:2e7d3302936be8c2d04d1d3b17e1c759d48121d849a79e7a8b4842b6e1632358"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:71a7174e3e1509312d39bec221b68b84878204727eb2ab1b4a3a27ca57b4ddeb"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -879,8 +883,8 @@
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:87982c513b8f75f7d26f0cdeb1fd611ade90f616f1ff204e2fcd58276007a7c1。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:7f6e591aef2ceb743cde1595e95da12ead3297b52605743b997090bd88594105"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "vk", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:c62f261fcd906ce3b6eec7d112c2733f0c34397edee844ef1ddfdab80ed0c589"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "vibe-kanban-mcp --mode global", "--port", "8000", "--outputTransport", "streamableHttp", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -937,8 +941,8 @@
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:f954ceb588f2051258ac7f77cb672bc6530a119e87f82ace96e83041c05e1553。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "1d16391d1a62fdda2b8de6bd16491c22330b127f@sha256:ba052cec12fd3926ce85ee3bb6fb5f6b1609790c53ca877efd241d2b83e0d4ef"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "opendesign", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:95dd14b9cf971a3b121c3e92815c24b1d8c10e9c722d83790d3927294764c3d0"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "supergateway", "args": ["--stdio", "python -m opendesign_mcp_server", "--outputTransport", "streamableHttp", "--streamableHttpPath", "/mcp", "--port", "8000", "--healthEndpoint", "/healthz"], "port": 8000, "env": {}, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -3078,8 +3082,8 @@
 
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:4c3713b51e558b56efafe20ee8be30e618eea231d2debebb983ad7b137b0c98c"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:60753dc5852b3b05dcc32446b1fa605a01035f82e10733eb8911c1d5be64761a"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -3167,8 +3171,8 @@
 
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
-            <field name="helm_chart_version">0.1.7</field>
-            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "5526e8658a8046253a0b324825a12222096fa858@sha256:f2d39c5c7bbdb597ffb6f9e2c3da7064bd500cb5c8ef67a201c1b57236a7c467"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
+            <field name="helm_chart_version">0.1.8</field>
+            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:5e8d27de155bc09a3099403a09dbeb95988ff9c90f97ae42c1d06c2b4dab67c0"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>

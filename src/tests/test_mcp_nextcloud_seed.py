@@ -41,7 +41,8 @@ JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
 MCP_SERVER_CHART = 'oci://%smcp-server' % JCR
 # woow-paas-charts main 3746cd6（#1530）：runAsNonRoot、uid／gid 1000、保留 fsGroup 1000。publish-charts
 # run 16234 已推上 OCI（verify 步驟 OK oci mcp-server:0.1.7）。
-MCP_SERVER_CHART_VERSION = '0.1.7'
+# 0.1.8 保留非 root 設定，首次 seed 改為 create-only，既存狀態不可覆寫。
+MCP_SERVER_CHART_VERSION = '0.1.8'
 IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # 2026-10-12 覆核 main #50 的真發布 image：1d16391d，run 18319 job 20066。
 # 在實際 digest 的離線 probe 驗 CLI、LaunchPolicy、127.0.0.1／port 8000、出廠唯讀；
@@ -53,9 +54,10 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # MCP daemon、未呼叫 MCP 工具；既有 PVC 升級與 ORM 仍未驗。來源／實機窄證據見
 # docs/verification/2026-10-18-mcp-5526e865-source-contract.json
 # 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
+# 2026-10-24：#71 merge 5fa1ff0a（含 #72）八支 image 的 registry digest 已逐一驗證；
+# LaunchPolicy 維持 nextcloud-mcp-server、port 8000。
 EXPECT_IMAGE_TAG = (
-    '5526e8658a8046253a0b324825a12222096fa858'
-    '@sha256:f2d39c5c7bbdb597ffb6f9e2c3da7064bd500cb5c8ef67a201c1b57236a7c467')
+    '5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:5e8d27de155bc09a3099403a09dbeb95988ff9c90f97ae42c1d06c2b4dab67c0')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 

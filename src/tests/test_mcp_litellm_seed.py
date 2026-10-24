@@ -48,9 +48,10 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # MCP daemon、未呼叫 MCP 工具；既有 PVC 升級與 ORM 仍未驗。來源／實機窄證據見
 # docs/verification/2026-10-18-mcp-5526e865-source-contract.json
 # 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
+# 2026-10-24：#71 merge 5fa1ff0a（含 #72）八支 image 的 registry digest 已逐一驗證；
+# LaunchPolicy 維持 litellm-mcp-server、port 8000。chart0.1.8 的首次 seed 改為 create-only。
 EXPECT_IMAGE_TAG = (
-    '5526e8658a8046253a0b324825a12222096fa858'
-    '@sha256:4c3713b51e558b56efafe20ee8be30e618eea231d2debebb983ad7b137b0c98c')
+    '5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:60753dc5852b3b05dcc32446b1fa605a01035f82e10733eb8911c1d5be64761a')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'
@@ -87,9 +88,9 @@ class TestMcpLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, MCP_SERVER_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.7',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.7＝家族現行版'
-                         '（0.1.6＝#1441 egress 不再全放、0.1.7＝#1530 非 root）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.8',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.8 修正首次 seed'
+                         '不得覆寫既存狀態，並保留 0.1.7 的非 root 設定')
 
     def test_image_from_jcr_and_double_pinned(self):
         image = self._values()['image']
