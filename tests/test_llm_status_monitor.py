@@ -68,15 +68,44 @@ class TestStatusMonitorSafety(unittest.TestCase):
         self.assertEqual(row, original)
         self.assertFalse(monitor.effective_guard(row, NOW, 'a')['guard_tripped'])
 
-    def test_pending_lease_and_regular_five_minute_schedule(self):
+    def test_pending_lease_and_bounded_scheduler_jitter(self):
         self.assertTrue(monitor.due({}, NOW))
         row = dict(healthy(), status_result='pending', status_started_at=NOW)
         self.assertFalse(monitor.due(row, NOW + timedelta(seconds=29)))
         self.assertTrue(monitor.due(row, NOW + timedelta(seconds=30)))
         row['status_result'] = 'ok'
-        self.assertFalse(monitor.due(row, NOW + timedelta(seconds=299)))
-        self.assertTrue(monitor.due(row, NOW + timedelta(seconds=300)))
+        self.assertEqual(monitor.FRESH_SECONDS, 360)
+        self.assertEqual(monitor.LEASE_SECONDS, 30)
+        self.assertEqual(monitor.EARLY_DUE_GRACE_SECONDS,
+                         monitor.SCHEDULER_POLL_SECONDS
+                         + monitor.SCHEDULER_JITTER_BUDGET_SECONDS)
+        self.assertEqual(monitor.DUE_SECONDS,
+                         monitor.INTERVAL_SECONDS - monitor.EARLY_DUE_GRACE_SECONDS)
+        self.assertFalse(monitor.due(row, NOW + timedelta(seconds=179)))
+        self.assertTrue(monitor.due(row, NOW + timedelta(seconds=180)))
+        self.assertTrue(monitor.due(row, NOW + timedelta(seconds=239)))
+        self.assertTrue(monitor.due(row, NOW + timedelta(seconds=298)))
         self.assertTrue(monitor.due(row, NOW - timedelta(seconds=1)))
+
+    def test_anchor_schedule_with_jitter_budget_and_late_fail_closed(self):
+        # Poll + explicit jitter budget is 120s. Anchored dispatch delays
+        # alternating 120s/0s create 180s early-side and 420s late-side gaps.
+        # Early ticks renew; late ticks are due but freshness remains stale.
+        row = dict(status_armed=True, status_result='ok', status_fingerprint='a',
+                   status_started_at=NOW + timedelta(seconds=120),
+                   status_completed_at=NOW + timedelta(seconds=121))
+        for scheduled_seconds, delay in ((300, 0), (600, 120), (900, 0),
+                                         (1200, 120), (1500, 0), (1800, 120),
+                                         (2100, 0), (2400, 120)):
+            tick = NOW + timedelta(seconds=scheduled_seconds + delay)
+            elapsed = (tick - row['status_started_at']).total_seconds()
+            with self.subTest(tick=tick, elapsed=elapsed):
+                self.assertTrue(monitor.due(row, tick))
+                expected = None if elapsed <= monitor.FRESH_SECONDS else 'llm_status_stale'
+                self.assertEqual(monitor.guard_reason(row, tick, 'a'), expected)
+            row = dict(status_armed=True, status_result='ok', status_fingerprint='a',
+                       status_started_at=tick,
+                       status_completed_at=tick + timedelta(seconds=1))
 
     def test_finish_requires_current_generation_pending_and_lease(self):
         row = dict(healthy(), status_generation=4, status_result='pending', status_started_at=NOW)
