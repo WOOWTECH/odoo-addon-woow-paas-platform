@@ -39,7 +39,7 @@ from odoo.tests.common import TransactionCase
 # 常數——兩邊各自宣告才會在 chart 改名時各自紅，而不是一起靜默失效。
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 
-# chart mcp-server（0.1.5～0.1.7 皆同）的 config.nonSensitive 預設是 hermes 形的
+# chart mcp-server（0.1.5～0.1.8 皆同）的 config.nonSensitive 預設是 hermes 形的
 # （values.yaml: config.nonSensitive.mcp_server.command）。hermes 靠它拿到啟動
 # 命令；其餘 app 必須覆寫，否則子行程從不 spawn、MCP endpoint 靜默 502 而
 # /healthz 與 GUI 看起來都正常（GAP-O1）。
@@ -384,7 +384,9 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 2026-10-23 重釘 #72（32a5263c）：相對 #70，兩 app 的 Dockerfile、pyproject、
     # main.py、launcher.py 與 uv.lock 均未變；主分支 CI26543 的 core、八支 image
     # build／healthz／push 全通過，registry HEAD 獨立確認 digest。正式 PVC 升級另驗。
-    EXPECT_IMAGE_TAG = '32a5263c9b54268b5141f931b5f1d088fff697ab@sha256:86d66ddca23d3ca2d8d0ec08c6c84e72d3a429011fb69349eadeaa9a532be19c'
+    # 2026-10-24：#71 merge 5fa1ff0a 包含 #72；八支 image registry digest 已逐一驗證。
+    # LaunchPolicy 維持 woow-odoo-mcp／streamable-http／127.0.0.1／port8000。
+    EXPECT_IMAGE_TAG = '5fa1ff0a9b6c981049f50a81c97941258c19a76f@sha256:814750fb0f01ae4b96c6d110644f7179fe82bb618584ca4808b2b549a69eb705'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
