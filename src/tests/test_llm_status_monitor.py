@@ -6,7 +6,7 @@ _environment and _now are deterministic fixtures, and _begin is bypassed only
 here because isolation cannot be changed after test queries. Production code
 and global registry.cursor are unchanged. Independent cursors/real commits,
 concurrency, restart and fresh raw-ICP reads require an owned scratch PG runner.
-These eight Odoo tests have not been executed during this revision.
+Run the llm_status_monitor tag in an isolated Odoo database.
 """
 import time
 from contextlib import contextmanager
@@ -87,6 +87,33 @@ class TestLlmStatusMonitor(TransactionCase):
         self.assertEqual(row['guard_reasons'], 'other_i7')
         self.assertEqual(row['status_completed_at'], self.clock)
         self.assertEqual(row['status_success_at'], self.clock)
+
+    def test_successive_anchored_claims_accept_actual_early_tick(self):
+        anchor = self.clock
+        # First sample starts 2s after its schedule anchor. The next anchored
+        # firing lands 298.114247s later, matching the observed early-tick case.
+        self.clock = anchor + timedelta(seconds=2)
+        previous = self.State._status_claim(self.deadline())
+        self.clock += timedelta(milliseconds=10)
+        self.assertEqual(self.State._status_finish(previous, 'ok', self.deadline()), 'ok')
+
+        # Vary dispatch delay across later 300s anchors. Every gap is inside
+        # the 120s early-jitter budget and 360s freshness envelope.
+        anchors_and_delays = (
+            (300, 0.114247), (600, 60), (900, 30),
+            (1200, 90), (1500, 0), (1800, 60),
+        )
+        expected_generation = previous['status_generation']
+        for scheduled_seconds, delay in anchors_and_delays:
+            self.clock = anchor + timedelta(seconds=scheduled_seconds + delay)
+            with self.subTest(scheduled_seconds=scheduled_seconds, delay=delay):
+                self.assertFalse(self._read_receipt()['guard_tripped'])
+                claim = self.State._status_claim(self.deadline())
+                expected_generation += 1
+                self.assertEqual(claim['status_generation'], expected_generation)
+                self.clock += timedelta(milliseconds=10)
+                self.assertEqual(self.State._status_finish(claim, 'ok', self.deadline()), 'ok')
+                self.assertFalse(self._read_receipt()['guard_tripped'])
 
     def test_stale_receipt_guards_without_cron_tick(self):
         claim = self.State._status_claim(self.deadline())

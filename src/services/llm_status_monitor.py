@@ -8,6 +8,14 @@ freshness guard. Unarmed installations retain their existing behavior.
 from datetime import datetime
 
 INTERVAL_SECONDS = 300
+# _reschedule_later advances the stored nextcall anchor, not actual start.
+# Budget one poll interval plus one more interval for phase/thread contention.
+# This is an explicit jitter envelope, not a scheduler maximum; outside it the
+# unchanged freshness guard fails closed.
+SCHEDULER_POLL_SECONDS = 60
+SCHEDULER_JITTER_BUDGET_SECONDS = 60
+EARLY_DUE_GRACE_SECONDS = SCHEDULER_POLL_SECONDS + SCHEDULER_JITTER_BUDGET_SECONDS
+DUE_SECONDS = INTERVAL_SECONDS - EARLY_DUE_GRACE_SECONDS
 LEASE_SECONDS = 30
 FRESH_SECONDS = 360
 
@@ -45,7 +53,7 @@ def due(row, now):
     if not start:
         return True
     elapsed = (now - start).total_seconds()
-    interval = LEASE_SECONDS if row.get('status_result') == 'pending' else INTERVAL_SECONDS
+    interval = LEASE_SECONDS if row.get('status_result') == 'pending' else DUE_SECONDS
     return elapsed < 0 or elapsed >= interval
 
 
