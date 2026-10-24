@@ -2987,8 +2987,13 @@
                  0.3.14＝ChatGPT 週額度用完（usage_limit_reached）的 429 補 Retry-After、帳號冷卻最長 15 分鐘
                  （values litellm.usageLimitCooldownMaxSeconds，0 關閉）、手機版憑證控制項排版。
                  image 不變（20261018.0834@sha256:ad43b959…）、helm_default_values 不需改。回滾值：0.3.12。 -->
+            <!-- image 20261024.0245（2026-10-24，paas-odoo-ci #393，核可 #395；與 HA「Woow LiteLLM」0.1.13 同一份建置補丁）：
+                 M4 API-09 apply_stream_slot_release.py。0.3.10 起預設 SSE keepalive 15 秒後，LiteLLM 1.104.0 把請求放到另一個
+                 task 跑，設了 max_parallel_requests 的金鑰每個串流請求的名額都要等 3600 秒才放；修正後 2 秒內釋放。
+                 chart 不變（0.3.14）。svc203 已於 10-24 03:03Z Redeploy 並重驗（斷線後 1.3–1.5 秒釋放）。
+                 回滾值：20261018.0834@sha256:ad43b959…。 -->
             <field name="helm_chart_version">0.3.14</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261018.0834@sha256:ad43b95960642ec76cb60c97167f1d21a19dfa6660c06f484f8007d674f5da10"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261024.0245@sha256:8a0ff1f0112f638e4141770b1524639603d597cd892a1d41c41f3f0e80767e19"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"},"resources":{"limits":{"cpu":"1"}}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"5Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
