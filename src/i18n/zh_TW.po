@@ -16321,8 +16321,8 @@ msgstr "這會移除通道設定與所有相關資料。此操作無法復原。
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_list
 msgid ""
-"Re-apply this product's current chart version to the service (in-place helm "
-"upgrade; data volumes are kept). If the release no longer exists, the service "
+"Re-apply this service's deployment target (product template by default, or its "
+"administrator-configured pin; data volumes are kept). If the release no longer exists, the service "
 "is installed again. When the chart version, image or settings changed, the "
 "service restarts, and a single-instance service is unavailable until the new "
 "instance is ready (one to a few minutes; LiteLLM about 90 s). Each redeploy "
@@ -16330,7 +16330,7 @@ msgid ""
 "revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). "
 "Continue?"
 msgstr ""
-"將此商品目前釘選的 chart 版本重新套用到這個服務（原地 helm upgrade，資料磁碟會保留）。"
+"重新套用此服務的部署目標（預設跟隨商品範本，或使用管理員指定的固定版本；資料磁碟會保留）。"
 "若 release 已不存在，則重新安裝。chart 版本、映像或設定有變時服務會重啟，"
 "單一執行個體的服務在新的執行個體就緒前無法使用（約一到數分鐘；LiteLLM 約 90 秒）。"
 "即使設定與版本都沒變，每次重新部署也會新增一個版本；"
@@ -16341,6 +16341,41 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
 msgid "This workspace still has services that have not been deleted."
 msgstr "此工作區還有尚未刪除的服務。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "Deployment Target"
+msgstr "部署目標"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__deployment_policy
+msgid "Deployment Policy"
+msgstr "部署版本策略"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__deployment_chart_version
+msgid "Deployment Chart Version"
+msgstr "部署 Chart 版本"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__deployment_image_overrides
+msgid "Deployment Image Overrides"
+msgstr "部署映像覆寫"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__deployment_policy__template
+msgid "Follow product template"
+msgstr "跟隨商品範本"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__deployment_policy__pinned
+msgid "Pinned deployment"
+msgstr "指定固定部署版本"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
+msgid "Switching back to the product template clears the pinned version and image overrides."
+msgstr "切回商品範本時，將自動清除指定版本及映像覆寫。"
 
 #. module: woow_paas_platform
 #. odoo-python

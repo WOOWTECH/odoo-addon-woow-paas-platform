@@ -10,7 +10,7 @@
                 <header>
                     <button name="action_redeploy" type="object"
                             string="Redeploy" icon="fa-refresh"
-                            confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. When the chart version, image or settings changed, the service restarts, and a single-instance service is unavailable until the new instance is ready (one to a few minutes; LiteLLM about 90 s). Each redeploy records a new revision even when nothing changed, and only the most recent revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). Continue?"
+                            confirm="Re-apply this service's deployment target (product template by default, or its administrator-configured pin; data volumes are kept). If the release no longer exists, the service is installed again. When the chart version, image or settings changed, the service restarts, and a single-instance service is unavailable until the new instance is ready (one to a few minutes; LiteLLM about 90 s). Each redeploy records a new revision even when nothing changed, and only the most recent revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). Continue?"
                             class="oe_highlight"
                             invisible="state in ('pending', 'deploying', 'deleting')"/>
                     <field name="state" widget="statusbar"
@@ -45,7 +45,7 @@
                         <field name="workload_fault_detail" nolabel="1"/>
                     </div>
                     <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->
-                    <div class="alert alert-warning" role="alert"
+                    <div class="alert alert-warning" role="alert" groups="base.group_system"
                          invisible="not redeploy_check_message">
                         <field name="redeploy_check_message" nolabel="1"/>
                     </div>
@@ -75,6 +75,17 @@
                     </group>
                     <notebook>
                         <page string="Helm Config" name="helm">
+                            <group string="Deployment Target" groups="base.group_system">
+                                <field name="deployment_policy"/>
+                                <field name="deployment_chart_version"
+                                       invisible="deployment_policy != 'pinned'"/>
+                                <field name="deployment_image_overrides"
+                                       widget="woow_deployment_image_overrides"
+                                       invisible="deployment_policy != 'pinned'"/>
+                                <div class="text-muted" colspan="2">
+                                    Switching back to the product template clears the pinned version and image overrides.
+                                </div>
+                            </group>
                             <group>
                                 <group>
                                     <field name="helm_release_name"/>
@@ -148,7 +159,7 @@
                 <field name="deployed_at"/>
                 <button name="action_redeploy" type="object"
                         string="Redeploy" icon="fa-refresh"
-                        confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. When the chart version, image or settings changed, the service restarts, and a single-instance service is unavailable until the new instance is ready (one to a few minutes; LiteLLM about 90 s). Each redeploy records a new revision even when nothing changed, and only the most recent revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). Continue?"/>
+                        confirm="Re-apply this service's deployment target (product template by default, or its administrator-configured pin; data volumes are kept). If the release no longer exists, the service is installed again. When the chart version, image or settings changed, the service restarts, and a single-instance service is unavailable until the new instance is ready (one to a few minutes; LiteLLM about 90 s). Each redeploy records a new revision even when nothing changed, and only the most recent revisions are kept for rollback (operator HELM_HISTORY_MAX, default 20). Continue?"/>
             </list>
         </field>
     </record>

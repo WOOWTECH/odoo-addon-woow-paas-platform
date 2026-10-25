@@ -1059,6 +1059,7 @@ from . import test_n8n_storage_class_public_url_1334
 from . import test_app_admin_password_reset_1370
 # #1408：Redeploy 帶範本 image、就緒後核對 workload image（#1407 為 operator 側）。
 from . import test_redeploy_images_1408
+from . import test_service_deployment_pin
 # #1417：部署逾時訊息分辨 Pending／Running、依原因分型，先給租戶一句建立者語言的話。
 from . import test_deploy_timeout_diagnosis_1417
 # #1416：逾時轉 error 後 release 就緒會自動恢復（背景低頻重查、只碰逾時造成的 error）。

@@ -22,6 +22,7 @@ from odoo.tools.sql import column_exists
 
 from ..services import backup_health, dns_probe, rollback_config
 from ..services.chart_version import reported_helm_revision
+from ..services.deployment_target import resolve_deployment_target
 from ..services.tenant_secret import has_secret_refs, secret_refs, split_tenant_secret
 from ..services.paas_operator import PaaSOperatorError
 from ..services.naming import make_cs_access_canonical_name
@@ -448,6 +449,14 @@ def _reject_service_history_writes(env, vals):
 # 平台自己的寫入全部走 `_record_chart_version`（sudo）或 cron／背景執行緒
 # （superuser）；判準同上：`env.is_system()`。
 _CHART_VERSION_CONTROL_FIELDS = frozenset({'helm_chart_version'})
+_DEPLOYMENT_PIN_FIELDS = frozenset({
+    'deployment_policy', 'deployment_chart_version', 'deployment_image_overrides',
+})
+
+
+def _reject_deployment_pin_writes(env, vals):
+    if not env.is_system() and _DEPLOYMENT_PIN_FIELDS.intersection(vals):
+        raise AccessError(_('Only platform administrators can configure deployment pins.'))
 
 
 def _reject_chart_version_writes(env, vals):
@@ -1752,6 +1761,23 @@ class CloudService(models.Model):
         ondelete='restrict',
         help='The application template used to create this service',
     )
+    deployment_policy = fields.Selection(
+        [('template', 'Follow product template'), ('pinned', 'Pinned deployment')],
+        default='template', required=True, copy=False, groups='base.group_system',
+        help='Applies to administrator Redeploy and fresh installation. '
+             'Following the template preserves the existing product upgrade policy.',
+    )
+    deployment_chart_version = fields.Char(
+        copy=False, groups='base.group_system',
+        help='Exact desired chart version, separate from the observed Helm version. '
+             'Required for pinned deployments; clear it when following the template.',
+    )
+    deployment_image_overrides = fields.Json(
+        default=dict, copy=False, groups='base.group_system',
+        help='Map existing product image paths (image, console.image, etc.) to '
+             'repository and tag@sha256 references. Optional registry is supported. '
+             'Unspecified images follow the product; feature settings are preserved.',
+    )
     provision_partner_id = fields.Many2one(
         comodel_name='res.partner',
         string='Provision Owner (One Per Account)',
@@ -2595,8 +2621,46 @@ class CloudService(models.Model):
             )
         return self._redeploy()
 
+    def _resolve_deployment_target(self):
+        """Resolve only administrator-owned desired state, never tenant values."""
+        self.ensure_one()
+        service = self.sudo()
+        template = self.template_id
+        try:
+            template_values = json.loads(template.helm_default_values or '{}')
+        except ValueError:
+            if service.deployment_policy == 'pinned':
+                raise ValidationError(_('The product has invalid Helm defaults.'))
+            template_values = {}
+        try:
+            return resolve_deployment_target(
+                policy=service.deployment_policy or 'template',
+                chart=template.helm_chart_name, repo_url=template.helm_repo_url,
+                template_version=template.helm_chart_version,
+                template_values=template_values,
+                image_paths=[path for path, _ref in _iter_image_refs(template_values)],
+                tenant_keys=template._tenant_value_keys(),
+                pinned_version=service.deployment_chart_version,
+                image_overrides=service.deployment_image_overrides,
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+
+    @api.constrains('deployment_policy', 'deployment_chart_version',
+                    'deployment_image_overrides', 'template_id')
+    def _check_deployment_pin(self):
+        for service in self:
+            service._resolve_deployment_target()
+
+    @api.onchange('deployment_policy')
+    def _onchange_deployment_policy(self):
+        for service in self:
+            if service.deployment_policy == 'template':
+                service.deployment_chart_version = False
+                service.deployment_image_overrides = {}
+
     def _redeploy_require_pinned_version(self):
-        """#552 層 4：沒釘 chart 版就不准 redeploy（upgrade 分支）。
+        """#552 層 4：部署目標沒釘 chart 版就不准 redeploy（upgrade 分支）。
 
         redeploy 帶 `template.helm_chart_version` 做 helm upgrade，空值 ⇒ 不帶
         `--version` ⇒ **升到 registry 當下的 latest**，而 `reset_values=True` 又讓 values
@@ -2607,12 +2671,11 @@ class CloudService(models.Model):
         `_redeploy` 登記意圖之前也先呼叫本檢查，讓 admin 當場看到拒絕理由；cron 執行時
         若仍被拒，原因寫進 `error_message`（`_cron_run_requested_redeploys`）。
 
-        刻意**不**退回 `self.helm_chart_version`：redeploy 的語意就是「重新套用商品當前
-        釘的版本」（允許夾帶升版），改讀服務自己的版本會把它悄悄變成另一個功能。要放行
-        就去把 template 的版本填上。
+        預設仍套用商品版本；管理員可明示選擇 per-service pinned 目標。
+        兩者都不退回觀測帳本 `self.helm_chart_version`，也不讀租戶 values 指定版本。
         """
         template = self.template_id
-        if not template.helm_chart_version:
+        if not self._resolve_deployment_target()['version']:
             raise UserError(
                 _('Cannot redeploy: the product "%(product)s" has no '
                   'chart version pinned. Deploying now would pull whatever '
@@ -2697,11 +2760,12 @@ class CloudService(models.Model):
             # #552 層 4：沒釘版就拒絕（理由見 helper）。這條路只有 `action_redeploy`
             # 的 group_system gate（#1185；在那之前連租戶都能經 `call_kw` 打到這裡）。
             self._redeploy_require_pinned_version()
+            target = self._resolve_deployment_target()
             # #1408：範本改釘的 image 寫回服務自己的 helm_values（之後租戶儲存設定
             # 也沿用同一組）。upgrade 失敗時 UserError 讓整筆交易回捲，這次寫入一起撤銷。
-            image_changes = self._refresh_template_images()
+            image_changes = self._refresh_template_images(target=target)
             # INFRA-FIX-019-1：Redeploy 部署的是範本 pin 的 chart。
-            assembled = self._assemble_deploy_values(chart_version=template.helm_chart_version)
+            assembled = self._assemble_deploy_values(chart_version=target['version'])
             values = assembled['values']
             # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
             sensitive_values = self._build_deploy_sensitive_values()
@@ -2709,8 +2773,8 @@ class CloudService(models.Model):
                 release_info = client.upgrade_release(
                     namespace=self.helm_namespace,
                     release_name=self.helm_release_name,
-                    chart=template.helm_chart_name,
-                    version=template.helm_chart_version,
+                    chart=target['chart'],
+                    version=target['version'],
                     values=values,
                     sensitive_values=sensitive_values or None,
                     tenant_secret=assembled.get('tenant_secret'),
@@ -3635,6 +3699,17 @@ class CloudService(models.Model):
         template = self.template_id
         helm_namespace = self.helm_namespace
         helm_release_name = self.helm_release_name
+        try:
+            target = self._resolve_deployment_target()
+        except ValidationError as exc:
+            # A product may have changed since the administrator saved the pin.
+            # Report the validation failure without contacting the operator.
+            self.write({'state': 'error', 'error_message': str(exc)})
+            return
+        if target['policy'] == 'pinned':
+            # A missing release retries through this path. Persist the same image
+            # selection as Redeploy so a later tenant reconfigure cannot undo it.
+            self._refresh_template_images(target=target)
 
         # #1334：首裝才決定的 storageClass 先寫進 helm_values，之後每次 upgrade
         # 都經 `_assemble_deploy_values` 帶同一個值（PVC storageClassName 不可變）。
@@ -3644,7 +3719,7 @@ class CloudService(models.Model):
         # reset admin password 共用同一條全量管線）。expose_config 亦由 helper
         # 重算，取代 create 時存在 deploy_params 的等價值（收斂雙寫）。
         # INFRA-FIX-019-1：開通部署的是範本 pin 的 chart。
-        assembled = self._assemble_deploy_values(chart_version=template.helm_chart_version)
+        assembled = self._assemble_deploy_values(chart_version=target['version'])
         merged_values = assembled['values']
         expose_config = assembled['expose_config']
 
@@ -3684,7 +3759,7 @@ class CloudService(models.Model):
             # ⚠ 例外型別同理**必須**是 `PaaSOperatorError`：底下那個 handler 才會
             # 把 detail 寫進 `error_message`。兩個條件（位置＋型別）少一個都會讓
             # 這道 backstop 退化成「擋下來了，但沒人知道為什麼」。
-            if not template.helm_chart_version:
+            if not target['version']:
                 raise PaaSOperatorError(
                     'chart version not pinned',
                     detail=_(
@@ -3739,9 +3814,9 @@ class CloudService(models.Model):
             release_info = client.install_release(
                 namespace=helm_namespace,
                 release_name=helm_release_name,
-                chart=template.helm_chart_name,
-                repo_url=template.helm_repo_url,
-                version=template.helm_chart_version,
+                chart=target['chart'],
+                repo_url=target['repo_url'],
+                version=target['version'],
                 values=merged_values,
                 sensitive_values=sensitive_values or None,
                 create_namespace=True,
@@ -6149,20 +6224,15 @@ class CloudService(models.Model):
     # docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md 講的那種洞。
     # ------------------------------------------------------------------
 
-    def _refresh_template_images(self):
-        """#1408：把範本目前釘的 image 參照寫進服務的 helm_values；回傳變更清單。
+    def _refresh_template_images(self, target=None):
+        """把部署目標的 image 參照寫進服務的 helm_values；回傳變更清單。
 
-        只在管理員 Redeploy 呼叫——租戶儲存設定與重設密碼（15 秒 atomic）不換
-        image，避免 pod template 變動。範本 JSON 壞掉時不動（create 時就擋過）。
+        管理員 Redeploy／pinned 首裝呼叫；租戶儲存設定與重設密碼不換 image。
+        預設延續 #1408 的商品範本語意，明示 pin 才覆蓋選定 image。
         """
         self.ensure_one()
-        try:
-            template_values = json.loads(self.template_id.helm_default_values or '{}')
-        except ValueError:
-            _logger.warning(
-                "Service id=%s: template %s has invalid helm_default_values; "
-                "images not refreshed", self.id, self.template_id.id)
-            return []
+        target = target or self._resolve_deployment_target()
+        template_values = target['image_values']
         new_values, changes = _refresh_image_refs(
             self._helm_values_dict(), template_values,
             self.template_id._tenant_value_keys(),
@@ -6174,11 +6244,11 @@ class CloudService(models.Model):
     def _redeploy_chart_check_message(self, resolved_version):
         """Redeploy 後 chart 版本與範本不符時的提示（相符或無從得知回 False）。"""
         self.ensure_one()
-        expected = self.template_id.helm_chart_version
+        expected = self._resolve_deployment_target()['version']
         if resolved_version and expected and resolved_version != expected:
             return _(
                 'Redeploy finished, but the release runs chart %(actual)s while the '
-                'product pins %(expected)s.',
+                'deployment target pins %(expected)s.',
                 actual=resolved_version, expected=expected)
         return False
 
@@ -11319,6 +11389,7 @@ class CloudService(models.Model):
         _reject_upgrade_failure_control_writes(self.env, vals)
         _reject_service_history_writes(self.env, vals)
         _reject_chart_version_writes(self.env, vals)
+        _reject_deployment_pin_writes(self.env, vals)
         _reject_template_binding_writes(self, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
@@ -12130,6 +12201,15 @@ class CloudService(models.Model):
                 'provisioning flow (%(model)s). Please order from the '
                 'marketplace instead of writing to this model directly.',
                 model=self._name))
+        # Keep the caller's uid/rules and use the ORM default channel rather than
+        # adding protected keys to a regular user's explicit create vals.
+        # Trusted defaults take precedence over RPC default_* and ir.default;
+        # explicit administrator vals remain authoritative.
+        self = self.with_context(
+            default_deployment_policy='template',
+            default_deployment_chart_version=False,
+            default_deployment_image_overrides={},
+        )
         # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
         # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
         # Access app id」，而開通流程本身（走 `_internal_provision`）是被上面
@@ -12146,6 +12226,7 @@ class CloudService(models.Model):
         normalized_vals_list = []
         observation_started = fields.Datetime.now()
         for vals in vals_list:
+            _reject_deployment_pin_writes(self.env, vals)
             normalized = dict(vals)
             # 新服務尚無 operator 觀測；明寫 False 才能同時中和 raw vals、context 與
             # ir.default。僅 pop 會在 super().create() 展開 default 時再被注入。
