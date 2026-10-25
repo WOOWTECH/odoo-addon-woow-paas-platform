@@ -34,7 +34,7 @@ class TestPiAgentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, PI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.9')
+        self.assertEqual(tpl.helm_chart_version, '0.1.10')
 
     def test_admin_gui_supply_chain(self):
         """has_admin_gui + helm_secret：平台供給 config.sensitive.admin_password 給 chart Secret，
@@ -69,7 +69,7 @@ class TestPiAgentSeed(TransactionCase):
         self.assertIn('@sha256:', tag, '上架前 image.tag 必須雙釘 tag@sha256')
         build_tag, digest = tag.split('@', 1)
         self.assertRegex(build_tag, r'^\d{8}\.\d{4}$')
-        self.assertEqual(len(digest), len('sha256:') + 64, digest)
+        self.assertRegex(digest, r'^sha256:[0-9a-f]{64}\Z')
         self.assertNotEqual(build_tag, '00000000.0000', '佔位 tag 不得上架')
 
     def test_resources_match_t1(self):
