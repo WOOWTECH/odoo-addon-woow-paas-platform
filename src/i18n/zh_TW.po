@@ -157,8 +157,8 @@ msgstr "目錄目前沒有已發布的付費模型。請先至「模型與價格
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmDocsTab.js:0
-msgid "1 point corresponds to NT$1 (New Taiwan Dollar), including tax. Converted AI credit is non-refundable, including when closing the account."
-msgstr "1 點等於新台幣 NT$1（含稅）。轉換成 AI 額度後不予退款，關閉帳戶時也不退還。"
+msgid "1 point corresponds to NT$1 (New Taiwan Dollar), including tax. Ordinary voluntary conversions are non-refundable. Exceptions for service termination, material price increases, incorrect charges, and statutory rights are handled under the AI Models Terms."
+msgstr "1 點等於新台幣 NT$1（含稅）。一般自願轉換的 AI 額度不予退款；平台終止服務、重大調價、錯誤扣款及法定權利的例外，依 AI 模型服務條款處理。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -28051,8 +28051,8 @@ msgstr "回報非本人操作？"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.xml:0
-msgid "Confirming will suspend your AI Models account and begin disabling its API keys. Keys may take a short time to stop working. Converted AI credit cannot be refunded."
-msgstr "確認後將暫停您的 AI 模型帳戶並開始停用 API 金鑰。金鑰可能需要一點時間才會停止運作。已轉換的 AI 額度無法退款。"
+msgid "Confirming will suspend your AI Models account and begin disabling its API keys. Keys may take a short time to stop working. Reporting activity does not automatically trigger a refund. Contact support about disputed charges or platform-related losses; the AI Models Terms and statutory rights apply."
+msgstr "確認後將暫停您的 AI 模型帳戶並開始停用 API 金鑰。金鑰可能需要一點時間才會停止運作。回報非本人操作不會自動退款；有爭議的扣款或可歸責平台的損害，請聯絡客服依 AI 模型服務條款與法律核對處理。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

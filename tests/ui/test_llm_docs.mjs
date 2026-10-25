@@ -229,7 +229,8 @@ test("guide includes approved limits, FAQ, billing note, AGPL source, and mobile
     "The approximate daily free allowance is 200 successful requests.",
     "Key creation and credit conversion have a 10-per-hour limit after the request reaches new-api",
     "All key-creation and conversion attempts also have a separate 30-per-hour guard",
-    "Converted AI credit is non-refundable, including when closing the account.",
+    "Ordinary voluntary conversions are non-refundable.",
+    "Exceptions for service termination, material price increases, incorrect charges, and statutory rights are handled under the AI Models Terms.",
     "Cloudflare timed out while waiting for the upstream request",
   ]) assert.ok(docs.includes(phrase), "missing guide fact: " + phrase);
   for (const status of ["401", "403", "429", "503", "524"]) assert.match(docsXml, new RegExp(`<h3>${status}<\\/h3>`));

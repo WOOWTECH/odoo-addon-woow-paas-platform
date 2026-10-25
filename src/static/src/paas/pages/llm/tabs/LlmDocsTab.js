@@ -92,7 +92,7 @@ export class LlmDocsTab extends Component {
   get paidModeLabel() { return _t("Paid model"); }
   get freeModeLabel() { return _t("Free Qwen trial"); }
   get modelPlaceholderText() { return _t("No published paid model is available in the catalog. Replace YOUR_PUBLISHED_PAID_MODEL after selecting a model from Models & Pricing."); }
-  get pointsText() { return _t("1 point corresponds to NT$1 (New Taiwan Dollar), including tax. Converted AI credit is non-refundable, including when closing the account."); }
+  get pointsText() { return _t("1 point corresponds to NT$1 (New Taiwan Dollar), including tax. Ordinary voluntary conversions are non-refundable. Exceptions for service termination, material price increases, incorrect charges, and statutory rights are handled under the AI Models Terms."); }
   get sourceText() { return _t("This service uses new-api, licensed under AGPL-3.0. View the source for the deployed version."); }
   get faqTitle() { return _t("Frequently asked questions"); }
   get faq401() { return _t("401 — The key is invalid, disabled, expired, out of quota, or its free allowance for today is used. The response says 無效的令牌, or Invalid token when Accept-Language is en. Go to API keys to check the key status."); }
