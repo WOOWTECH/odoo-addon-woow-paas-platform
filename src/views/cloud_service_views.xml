@@ -82,7 +82,7 @@
                                 <field name="deployment_image_overrides"
                                        invisible="deployment_policy != 'pinned'"/>
                                 <div class="text-muted" colspan="2">
-                                    Clear the pinned version and image overrides before switching back to the product template.
+                                    Switching back to the product template clears the pinned version and image overrides.
                                 </div>
                             </group>
                             <group>

@@ -16374,8 +16374,8 @@ msgstr "指定固定部署版本"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
-msgid "Clear the pinned version and image overrides before switching back to the product template."
-msgstr "切回商品範本前，請先清除指定版本及映像覆寫。"
+msgid "Switching back to the product template clears the pinned version and image overrides."
+msgstr "切回商品範本時，將自動清除指定版本及映像覆寫。"
 
 #. module: woow_paas_platform
 #. odoo-python

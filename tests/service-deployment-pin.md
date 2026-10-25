@@ -39,6 +39,9 @@ service.write({
 })
 ```
 
+既有管理員表單切換至 `template` 時，onchange 會自動清除兩個 override，
+避免欄位隱藏後無法儲存。RPC／ORM 仍須提供上述完整一致的更新。
+
 ## 生效範圍與整合
 
 - 私有 `_resolve_deployment_target()` 統一回傳 `policy/chart/repo_url/version/image_values`。
@@ -62,7 +65,7 @@ python -m pytest tests/test_deployment_target.py -q
 ```
 
 Odoo 測試使用獨立合成資料庫與隔離 sandbox，不使用 stg／prod DB。新增測試為
-`TestServiceDeploymentPin`（12 項）與 `TestServiceDeploymentPinRpc`（1 項），
+`TestServiceDeploymentPin`（13 項，含管理員表單解除 pin）與 `TestServiceDeploymentPinRpc`（1 項），
 operator HTTP 邊界使用 mock；驗證真實 ORM、constraints、field groups、交易回捲與 RPC。
 這些測試不等於真實 Helm／Kubernetes Redeploy 驗收。
 
@@ -74,3 +77,19 @@ operator HTTP 邊界使用 mock；驗證真實 ORM、constraints、field groups�
 
 測試 class 已登記 `src/tests/__init__.py` 與 collection baseline。PR 靜態 CI 綠燈不代表
 上述 Odoo 測試已執行；以 sandbox 實際 log 與 tested SHA 為準。
+
+### 2026-10-25 驗證紀錄
+
+- 離線 resolver：39 passed。
+- 真實 Odoo 18／PostgreSQL focused：61 tests，0 failed、0 errors，process exit 0。
+  新增 14 項（含真實 `Form` onchange/save 與 HTTP RPC），既有合約 47 項。
+- 環境：`dev-sandbox-paseo-pin-20261025/paseo-pin-tests`，official `.259` base image
+  載入此分支完整 `.260` addon source；全新合成 DB `paseo_pin_test`，Pod 內 localhost PG，
+  deny-all NetworkPolicy、無 ServiceAccount token；未使用 stg／prod DB。
+- 執行參數：`-c /dev/null -d paseo_pin_test -r odoo --db_host=127.0.0.1 --db_port=5432
+  --addons-path=/tmp/paseo-addons,/opt/woow/addons,/usr/lib/python3/dist-packages/odoo/addons
+  --data-dir=/tmp/paseo-odoo-data --limit-memory-hard=0 --max-cron-threads=0
+  --http-interface=127.0.0.1 --http-port=18069 --gevent-port=18072
+  -u woow_paas_platform --test-enable --stop-after-init`，加上上述 focused tags。
+- 本機 log：`/tmp/paseo-pin-odoo-focused.log`。此結果不包含完整 Odoo suite、瀏覽器 headed
+  UI 或實際 Helm 部署；正式平台 image 候選 build／部署由 parent 另行處理。

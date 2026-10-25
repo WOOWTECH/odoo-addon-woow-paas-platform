@@ -2652,6 +2652,13 @@ class CloudService(models.Model):
         for service in self:
             service._resolve_deployment_target()
 
+    @api.onchange('deployment_policy')
+    def _onchange_deployment_policy(self):
+        for service in self:
+            if service.deployment_policy == 'template':
+                service.deployment_chart_version = False
+                service.deployment_image_overrides = {}
+
     def _redeploy_require_pinned_version(self):
         """#552 層 4：部署目標沒釘 chart 版就不准 redeploy（upgrade 分支）。
 

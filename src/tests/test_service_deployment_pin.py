@@ -3,7 +3,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tests import HttpCase, tagged
+from odoo.tests import Form, HttpCase, tagged
 
 from ..models.cloud_service import _internal_provision
 from ..services.paas_operator import PaaSOperatorError
@@ -72,6 +72,22 @@ class TestServiceDeploymentPin(_Base):
         self.service.write(_PIN)
         self._redeploy({'revision': 30, 'chart_version': _VERSION})
         self.service.write(_UNPIN)
+        client = self._redeploy()
+        self.assertEqual(client.upgrade_release.call_args.kwargs['version'], '0.1.4')
+        self.assertEqual(self._values()['image']['tag'], _NEW)
+
+    def test_admin_form_unpin_clears_hidden_overrides_and_saves(self):
+        self.service.write(_PIN)
+        # RPC/ORM callers must still send a consistent complete update.
+        with self.assertRaises(ValidationError), self.env.cr.savepoint():
+            self.service.write({'deployment_policy': 'template'})
+        with Form(self.service, view='woow_paas_platform.view_cloud_service_form') as form:
+            form.deployment_policy = 'template'
+            self.assertFalse(form.deployment_chart_version)
+            self.assertFalse(form.deployment_image_overrides)
+        self.assertEqual(self.service.deployment_policy, 'template')
+        self.assertFalse(self.service.deployment_chart_version)
+        self.assertFalse(self.service.deployment_image_overrides)
         client = self._redeploy()
         self.assertEqual(client.upgrade_release.call_args.kwargs['version'], '0.1.4')
         self.assertEqual(self._values()['image']['tag'], _NEW)
