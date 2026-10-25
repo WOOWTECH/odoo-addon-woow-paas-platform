@@ -151,6 +151,36 @@ class TestServiceDeploymentPin(_Base):
         self.assertFalse(service.deployment_chart_version)
         self.assertFalse(service.deployment_image_overrides)
 
+    def test_regular_user_internal_provision_ignores_pin_defaults(self):
+        owner, _login = _group_user(self.env, 'pin-provision-owner')
+        workspace = self.env['woow_paas_platform.workspace'].with_user(owner).create(
+            {'name': 'pin-provision-workspace'})
+        for carrier in ('context', 'ir.default'):
+            with self.subTest(carrier=carrier):
+                model = self.env[self.service._name].with_user(owner)
+                if carrier == 'context':
+                    model = model.with_context(
+                        **{'default_' + key: value for key, value in _PIN.items()})
+                else:
+                    for key, value in _PIN.items():
+                        self.env['ir.default'].with_user(owner).set(
+                            model._name, key, value, user_id=owner.id)
+                    defaults = self.env['ir.default'].with_user(owner)._get_model_defaults(model._name)
+                    for key, value in _PIN.items():
+                        self.assertEqual(defaults[key], value, 'The injected default must exist')
+                self.assertFalse(model.env.su)
+                self.assertFalse(model.env.is_system())
+                service = _internal_provision(model).create({
+                    'name': 'regular-user-provision', 'workspace_id': workspace.id,
+                    'template_id': self.template.id,
+                })
+                self.assertEqual(service.env.uid, owner.id)
+                self.assertFalse(service.env.su)
+                self.assertEqual(service.name, 'regular-user-provision')
+                self.assertEqual(service.sudo().deployment_policy, 'template')
+                self.assertFalse(service.sudo().deployment_chart_version)
+                self.assertFalse(service.sudo().deployment_image_overrides)
+
     def test_tenant_values_cannot_select_deployment_target(self):
         values = self._values()
         values.update({'deployment_policy': 'pinned', 'deployment_chart_version': '9.9.9',
@@ -177,6 +207,19 @@ class TestServiceDeploymentPin(_Base):
                 tenant_service.write({name: value})
         with self.assertRaises(AccessError):
             tenant_service.read(list(_PIN))
+
+    def test_form_filters_admin_fields_and_their_modifiers_for_tenant(self):
+        owner, _login = _group_user(self.env, 'pin-form-owner')
+        view = self.env.ref('woow_paas_platform.view_cloud_service_form')
+        protected = [*_PIN, 'redeploy_check_message']
+        for user, visible in [(self.env.ref('base.user_admin'), True), (owner, False)]:
+            with self.subTest(user=user.login):
+                model = self.env[self.service._name].with_user(user)
+                arch = model.get_view(view.id, 'form')['arch']
+                metadata = model.fields_get()
+                for name in protected:
+                    self.assertEqual(name in arch, visible, name)
+                    self.assertEqual(name in metadata, visible, name)
 
 
 @tagged('post_install', '-at_install')

@@ -45,7 +45,7 @@
                         <field name="workload_fault_detail" nolabel="1"/>
                     </div>
                     <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->
-                    <div class="alert alert-warning" role="alert"
+                    <div class="alert alert-warning" role="alert" groups="base.group_system"
                          invisible="not redeploy_check_message">
                         <field name="redeploy_check_message" nolabel="1"/>
                     </div>
@@ -80,6 +80,7 @@
                                 <field name="deployment_chart_version"
                                        invisible="deployment_policy != 'pinned'"/>
                                 <field name="deployment_image_overrides"
+                                       widget="woow_deployment_image_overrides"
                                        invisible="deployment_policy != 'pinned'"/>
                                 <div class="text-muted" colspan="2">
                                     Switching back to the product template clears the pinned version and image overrides.

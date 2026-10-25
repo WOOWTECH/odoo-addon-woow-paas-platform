@@ -12201,6 +12201,15 @@ class CloudService(models.Model):
                 'provisioning flow (%(model)s). Please order from the '
                 'marketplace instead of writing to this model directly.',
                 model=self._name))
+        # Keep the caller's uid/rules and use the ORM default channel rather than
+        # adding protected keys to a regular user's explicit create vals.
+        # Trusted defaults take precedence over RPC default_* and ir.default;
+        # explicit administrator vals remain authoritative.
+        self = self.with_context(
+            default_deployment_policy='template',
+            default_deployment_chart_version=False,
+            default_deployment_image_overrides={},
+        )
         # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
         # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
         # Access app id」，而開通流程本身（走 `_internal_provision`）是被上面
@@ -12219,11 +12228,6 @@ class CloudService(models.Model):
         for vals in vals_list:
             _reject_deployment_pin_writes(self.env, vals)
             normalized = dict(vals)
-            # Never inherit a pin from RPC context defaults or ir.default, even
-            # when the provisioning caller uses sudo. Explicit admin vals only.
-            normalized.setdefault('deployment_policy', 'template')
-            normalized.setdefault('deployment_chart_version', False)
-            normalized.setdefault('deployment_image_overrides', {})
             # 新服務尚無 operator 觀測；明寫 False 才能同時中和 raw vals、context 與
             # ir.default。僅 pop 會在 super().create() 展開 default 時再被注入。
             normalized['observed_at'] = False

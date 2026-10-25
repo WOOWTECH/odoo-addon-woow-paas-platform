@@ -126,6 +126,7 @@
     "assets": {
         "web.assets_backend": [
             "woow_paas_platform/static/src/scss/main.scss",
+            "woow_paas_platform/static/src/components/deployment_image_overrides*.js",
             # 後續在此添加 JS 和 XML 元件
             # 'woow_paas_platform/static/src/components/**/*',
             # 'woow_paas_platform/static/src/services/**/*',
