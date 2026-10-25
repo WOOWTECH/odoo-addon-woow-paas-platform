@@ -2178,11 +2178,12 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <!-- 0.1.9（2026-10-18，woow-paas-charts 整合包 #254）：0.1.8 auth-proxy 登入失敗鎖 IP＋安全標頭（AI-FIX-SEC-1）、/healthz-upstream 不回
-                 pi-web 內容；0.1.9 三個 exec probe 加時限（probe.curlMaxSeconds=5，卡死的 pi-web 150 秒內重啟，
-                 AI-PI-005-1）、超過 clientMaxBodySize 回 JSON 413（AI-PI-005-4）。image 不變、helm_default_values 不需改；
-                 pod template 變了，升版時重啟一次（PVC 保留）。回滾值：0.1.7。 -->
-            <field name="helm_chart_version">0.1.9</field>
+            <!-- 0.1.10（woow-paas-charts #278）：新映像內建 Omnigent plugin 0.3.11；
+                 piWeb.omnigentSetup 預設啟用首次設定對話，網址及帳密由租戶自行填寫。
+                 WIP：下行 image 仍保留舊 pin。待 paas-odoo-ci #407 正式發布並核對
+                 20261025.1200 digest 後才可合併；不得使用 pending-approval 映像。
+                 交接與範圍驗證：tests/pi-agent-omnigent-pin.md。 -->
+            <field name="helm_chart_version">0.1.10</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261018.0104@sha256:0614e0260679b83876cb54b19cda118dea8fb8e236c822f2068afbd3f9707d09"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
