@@ -1,0 +1,208 @@
+# ⚠ 由 .omnigent/woow-security-sweep-launcher/build.py 產生——⛔ 不要手改。
+#   改 build.py 再重跑：python3 .omnigent/woow-security-sweep-launcher/build.py
+
+spec_version: 1
+name: woow_security_sweep_launcher
+description: woow-security-sweep 的前台：從 UI 叫起，檢查環境、跑一次（觸發手動排程）、建排程、查狀態；判斷題由 sweep 本體送進 Inbox。
+
+executor:
+  type: omnigent
+  reasoning_effort: medium
+  model: claude-sonnet-5-5
+  config:
+    # ⛔ 頂層不可 *-native：UI picker 會把它濾掉（.omnigent/README.md §UI picker）。
+    harness: claude-sdk
+    permission_mode: auto
+
+# 不 spawn：跑一次是觸發 sweep 的手動排程（launch.py run），不是自己派 sub-agent。
+spawn: false
+
+# prompt 由同目錄的 AGENTS.md 承載。⛔ 不要改寫成 `instructions: <相對路徑>`：
+#    containment 檢查失敗時整條路徑字串會被當成 system prompt，而且不報錯。
+
+# ⛔ 一律 `all`：`none` 會發出 --setting-sources ""。
+# skills/ 底下是 .agents/skills/woow-security-sweep-launch/SKILL.md 的副本（build.py 複製）。
+skills: all
+
+os_env:
+  # ⚠ cwd 寫 `.` 是刻意的：runner 一律用 OMNIGENT_RUNNER_WORKSPACE 覆寫它（見
+  #   build-bundles.py 的 OS_ENV_BLOCK 註解），所以這裡寫什麼都不會生效；而寫絕對路徑
+  #   會讓 deployed server 直接拒收整個 bundle（GHSA-p8rw-8qj3-hf33）。
+  #   ⛔ 不要改成絕對路徑——實際的 containment 錨點是啟動 omnigent run 時的 shell cwd。
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+guardrails:
+  ask_timeout: 900
+  policies:
+    p_merge_no_agent_merge:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\s+(pulls?|pr|mr)\\s+merge\\b|\\b(gh|glab)\\s+api\\b[\\s\\S]*/merge\\b|\\bcurl\\b[\\s\\S]*/merge\\b|\\b(gh|glab|curl)\\b[\\s\\S]*\\bgraphql\\b[\\s\\S]*[Mm]erge)")
+            ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
+    p_approve_no_agent_signoff:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("/approve")
+            ? {"result": "DENY", "reason": "prod build 的 /approve 核可只能由授權者本人送出——即使人類當場明確授權、即使手上憑證就是授權者本人，agent 也不代簽。"} : {"result": "ALLOW"}
+    p_tag_no_agent_tag_push:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && (
+                 (event.data.arguments.command.matches("\\bgit\\b[\\s\\S]*\\bpush\\b")
+                  && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"))
+              || event.data.arguments.command.matches("refs/tags/")
+              || event.data.arguments.command.matches("\\b(tea\\s+(releases|release|r)|gh\\s+release|glab\\s+release)\\b")
+              || ((event.data.arguments.command.matches("\\b(tea|gh|glab)\\s+api\\b")
+                   || event.data.arguments.command.matches("\\bcurl\\b"))
+                  && event.data.arguments.command.matches("/releases/?(\\?[^\\s\"\');&|><]*)?[\"\']?([\\s);&|><]|$)")
+                  && (event.data.arguments.command.matches("(^|\\s)(-X(=|\\s*)(POST|post)|--(method|request)(=|\\s+)(POST|post))(\\s|$)")
+                      || (event.data.arguments.command.matches("\\b(tea|gh|glab)\\s+api\\b")
+                          && event.data.arguments.command.matches("(^|\\s)((-f|-F|-d)([^\\s-]|\\s+)|--(field|Field|raw-field|form|input|data)(=|\\s+))")
+                          && !event.data.arguments.command.matches("(^|\\s)(-X(=|\\s*)[A-Za-z]+|--(method|request)(=|\\s+)[A-Za-z]+)(\\s|$)"))
+                      || (event.data.arguments.command.matches("\\bcurl\\b")
+                          && event.data.arguments.command.matches("(^|\\s)((-d|-F)([^\\s-]|\\s+)|--(data|data-ascii|data-binary|data-raw|data-urlencode|form|json)(=|\\s+))")
+                          && !event.data.arguments.command.matches("(^|\\s)(-X(=|\\s*)[A-Za-z]+|--(method|request)(=|\\s+)[A-Za-z]+)(\\s|$)")
+                          && !event.data.arguments.command.matches("(^|\\s)(-G|--get)(\\s|$)"))))
+              || event.data.arguments.command.matches("\\bgh\\b[\\s\\S]*\\bapi\\b[\\s\\S]*git/refs")
+              || event.data.arguments.command.matches("-X\\s+(POST|PATCH|PUT)[\\s\\S]*git/refs")
+              || event.data.arguments.command.matches("\\bgit\\s+tag\\s+[^-\\s]")
+            )
+            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 子命令 / POST /releases collection 建立端點〔可帶尾斜線〕皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"} : {"result": "ALLOW"}
+    p_escape_obfuscated_command:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("\\\\[a-zA-Z0-9]")
+            && event.data.arguments.command.matches("(k\\\\?u\\\\?b\\\\?e|m\\\\?e\\\\?r\\\\?g\\\\?e|a\\\\?p\\\\?p\\\\?r\\\\?o\\\\?v\\\\?e|t\\\\?a\\\\?g|p\\\\?u\\\\?s\\\\?h|b\\\\?o\\\\?a\\\\?r\\\\?d|w\\\\?o\\\\?o\\\\?w\\\\?-\\\\?i\\\\?s\\\\?s\\\\?u\\\\?e\\\\?s)")
+            ? {"result": "DENY", "reason": "指令同時含反斜線轉義序列與敏感字根（kube／merge／approve／tag／push／board）——這種寫法無法用字串比對判斷真正要執行什麼。請改用不含轉義的直白寫法。"} : {"result": "ALLOW"}
+    p_secret_no_api_key_read:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call" && (
+              (event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+               && has(event.data.arguments.command)
+               && event.data.arguments.command.matches("(?i)(typesafe|api_key)"))
+              || (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit", "Read", "sys_os_read", "read", "NotebookRead", "Grep", "Glob", "LS"] && (
+                   (has(event.data.arguments.path) && event.data.arguments.path.matches("(?i)(typesafe|api_key)"))
+                || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("(?i)(typesafe|api_key)"))
+                || (has(event.data.arguments.notebook_path) && event.data.arguments.notebook_path.matches("(?i)(typesafe|api_key)"))
+                || (has(event.data.arguments.pattern) && event.data.arguments.pattern.matches("(?i)(typesafe|api_key)"))))
+            ) ? {"result": "DENY", "reason": "TypeSafe API key 只由 jev_gate.py 讀取，agent 不讀、不搜、不印。要呼叫 Jev 就跑 jev_gate.py；不要直接打 API。"} : {"result": "ALLOW"}
+    p_forge_no_public_write:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("(\\bgh\\s+(issue|pr|release|gist|label)\\s+(create|comment|edit|close|reopen|merge|review|delete|lock|transfer|develop)\\b|\\bgh\\s+api\\b[\\s\\S]*(-X\\s*(POST|PATCH|PUT|DELETE)|--method\\s+(POST|PATCH|PUT|DELETE)|\\s(-f|-F|--field|--raw-field|--input)\\s)|\\bgit\\b[\\s\\S]*\\bpush\\b|\\bcurl\\b[\\s\\S]*api\\.github\\.com)")
+            ? {"result": "DENY", "reason": "woow-security-sweep 的 leader 不對 GitHub 寫入（issue／PR／留言／push）：目標 repo 是 public，寫出去就公開。結果寫進本機報告與 Inbox；修正由 fix worker 在 worktree 裡做，PR 由人核准後才開。"} : {"result": "ALLOW"}
+    p_gitea_issue_via_script:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("(\\btea\\s+api\\b[\\s\\S]*(-X\\s*(POST|PATCH|PUT|DELETE)|--method\\s+(POST|PATCH|PUT|DELETE)|\\s(-d|--data|-f|-F|--field)\\s)|\\btea\\s+(issues?|i|pulls?|pr|labels?|milestones?|ms|releases?|r)\\s+(create|c|edit|e|close|reopen|open|delete|rm|merge|m|approve|reject)\\b|\\btea\\s+(comment|c)\\s|\\bcurl\\b[\\s\\S]*git-prod\\.woowtech\\.io/api)")
+            ? {"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫 mirror-internal、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"} : {"result": "ALLOW"}
+    p_schedule_via_script:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call" && (
+              event.data.name.matches("sys_scheduled_task_")
+              || (event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+                  && has(event.data.arguments.command)
+                  && event.data.arguments.command.matches("(\\bcurl\\b|\\bwget\\b|\\bhttpx?\\b|\\brequests\\b|\\burllib\\b)[\\s\\S]*scheduled-tasks"))
+            ) ? {"result": "DENY", "reason": "排程一律經過 woow-security-sweep-launch 的 launch.py（run／schedule／status）：它會做 targets 重疊檢查、補設 max_cost_usd、讀回逐欄核對。不直接用排程的 MCP 工具，也不直接打 /v1/scheduled-tasks。"} : {"result": "ALLOW"}
+    p_state_via_script:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call" && (
+              (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit"] && (
+                (has(event.data.arguments.path) && event.data.arguments.path.matches("\\.omnigent-runtime/woow-security-sweep"))
+                || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("\\.omnigent-runtime/woow-security-sweep"))
+                || (has(event.data.arguments.notebook_path) && event.data.arguments.notebook_path.matches("\\.omnigent-runtime/woow-security-sweep"))
+              ))
+              || (event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+                  && has(event.data.arguments.command)
+                  && event.data.arguments.command.matches("\\.omnigent-runtime/woow-security-sweep")
+                  && !(event.data.arguments.command.matches("^\\s*(cat|less|head|tail|grep|rg|ls|wc|diff|git\\s+diff|git\\s+show)\\b")
+                       && !event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")))
+            ) ? {"result": "DENY", "reason": "sweep 的 state 目錄只由 sweep 與 launch.py／setup.py 寫。preset 用 launch.py preset 建立；唯讀請用單一不串接的 cat / less / head / tail / grep / rg / ls / wc / diff。"} : {"result": "ALLOW"}
+    max_tool_calls_per_session:
+      type: function
+      function:
+        path: omnigent.policies.builtins.safety.max_tool_calls_per_session
+        arguments:
+          limit: 400
+    detect_loop:
+      type: function
+      function:
+        path: omnigent.policies.builtins.safety.detect_loop
+        arguments:
+          window: 10
+          threshold: 3
+    detect_thrashing:
+      type: function
+      function:
+        path: omnigent.policies.builtins.context.detect_thrashing
+        arguments:
+          consecutive_threshold: 5
+          window: 10
+          action: ASK
+    # 前台專用：每個 session 硬上限 20 USD，不設 ask。sweep 那一輪的花費不算在這裡。
+    cost_budget:
+      type: function
+      function:
+        path: omnigent.policies.builtins.cost.cost_budget
+        arguments:
+          max_cost_usd: 20.0

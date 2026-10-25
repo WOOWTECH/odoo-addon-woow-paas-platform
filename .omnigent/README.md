@@ -2,8 +2,9 @@
 
 woow 六個 repo 的 issue／實作編制。**本檔是給維護者看的**，不進任何 agent 的 prompt。
 
-同目錄另有 `woow-security-sweep`（每日安全掃描）；它和 setup skill、前台 agent 的關係見
-[§woow-security-sweep 整體關係](#woow-security-sweep-整體關係)，bundle 細節見該目錄的 README。
+同目錄另有 `woow-security-sweep`（每日安全掃描）與它的前台 `woow-security-sweep-launcher`；兩者和
+setup／launch skill 的關係見 [§woow-security-sweep 整體關係](#woow-security-sweep-整體關係)，
+bundle 細節見各目錄的 README。
 
 ```
 cd /home/elmo/woow-repos && omnigent run .omnigent/woow-issue-leader --server <url>
@@ -1007,30 +1008,48 @@ shell 重導向那一側仍是紀律（記在 `known_gap`）。`RETIRED_TERMS` �
 
 ## woow-security-sweep 整體關係
 
-（#1978）sweep 要給多人使用：每個人建自己的排程，也能從 Omnigent UI 直接叫起。拆成三個角色：
+（#1978）sweep 要給多人使用：每個人建自己的排程，也能從 Omnigent UI 直接叫起。拆成四個角色：
 
 ```
 setup skill（repo 層：.agents/skills/woow-security-sweep-setup）
   ├─ doctor：環境與權限檢查（全部由程式判斷，不問人）
   ├─ 註冊／接手／原地更新 ──▶ sweep agent（.omnigent/woow-security-sweep）
-  │                            claude-native，agent_id 固定；只由排程或 agent_id 啟動，不在 UI picker
-  └─ 註冊／原地更新 ────────▶ 前台 agent（claude-sdk，出現在 UI picker）［階段 B］
+  │                            claude-native，agent_id 固定；只由排程啟動，不在 UI picker
+  └─ 註冊／原地更新 ────────▶ 前台 agent（.omnigent/woow-security-sweep-launcher）
+                               claude-sdk，出現在 UI picker；不 spawn
 
-sweep-launch skill（前台 agent 與 CLI 共用同一份，build 時複製進前台 bundle）［階段 B］
-  ├─ 跑一次：sys_session_create(agent_id=sweep) ＋ sys_session_send(參數)；判斷題照常進 Inbox
-  └─ 排程：直接以 sweep 的 agent_id 建 Omnigent 排程，不經前台（少一層成本與失敗點）
+launch skill（repo 層：.agents/skills/woow-security-sweep-launch；前台 agent 與 CLI 共用，
+             build 時把 SKILL.md 複製進前台 bundle，腳本一律從主 checkout 執行）
+  ├─ 跑一次：觸發該 preset「暫停中的手動排程」的立即執行（POST /v1/scheduled-tasks/{id}/run）
+  │          ＝與每日排程同一條 fire 路徑，判斷題進得了 Inbox；targets 重疊的輪次還在進行就拒絕
+  ├─ 建排程：同一天 targets 重疊（略過暫停中的）就拒絕；建好補設 max_cost_usd、讀回逐欄核對
+  └─ check／presets／preset／status
 ```
 
 | 角色 | 位置 | 誰用 |
 |---|---|---|
 | setup skill | `.agents/skills/woow-security-sweep-setup/`（`.claude/skills/` 有同名入口指向同一目錄） | 維護者發新版；新同事第一次在自己主機設定；排程跑不起來時 |
-| sweep agent | `.omnigent/woow-security-sweep/` | 排程（無人值守） |
-| 前台 agent［階段 B］ | `.omnigent/<前台 bundle>/` | 任何人從 UI 叫起 |
-| sweep-launch skill［階段 B］ | 正本在 repo 層 `.agents/skills/`，build 時複製成實體檔放進前台 bundle | 前台 agent；CLI 的 Claude Code／Pi session |
+| sweep agent | `.omnigent/woow-security-sweep/` | 排程（無人值守；手動排程的「立即執行」也是排程） |
+| 前台 agent | `.omnigent/woow-security-sweep-launcher/` | 任何人從 UI 叫起 |
+| launch skill | 正本在 `.agents/skills/woow-security-sweep-launch/`（`.claude/skills/` 有同名入口）；SKILL.md 由前台的 `build.py` 複製成實體檔放進前台 bundle | 前台 agent；CLI 的 Claude Code／Pi session |
 
 **為什麼前台與 sweep 分開**：sweep 必須是 `claude-native` 才能把判斷題送進 Inbox，但 UI picker
 會過濾頂層 `*-native`（§UI picker）。前台用 `claude-sdk` 進 picker；從 UI 叫起時人就在對話框前，
 參數直接在聊天裡問，不需要 Inbox。
+
+**為什麼「跑一次」走手動排程**：前台不 spawn。觸發暫停中排程的立即執行，session 建立、owner grant、
+prompt 送出全部與每日排程同一條路（server 明文允許手動觸發暫停中的排程），題目進 Inbox 已驗證；
+前台自己建 session 則要另外處理 harness、權限與 prompt 送出。手動排程每個 preset 一個，名稱
+`woow-security-sweep 手動 <preset>`，平常是暫停的，doctor 的重疊檢查略過它。
+
+**前台的守線**：沿用 sweep 的 P-secret／P-forge／P-gitea（前台 `build.py` 直接 import sweep 的
+`build.py`，CEL 與測試向量共用）與 merge／approve／tag／escape；另加兩條——不直接用排程的 MCP 工具
+（`p_schedule_via_script`）、不直接寫 `<state>/`（`p_state_via_script`），一律經過 launch skill 的腳本。
+
+**註冊前台**：做法同 woow_issue_leader——在 sweep 主機的 `<WS>` 執行一次
+`omnigent run paas/woow_paas_platform/.omnigent/woow-security-sweep-launcher --server <url>`
+（`sys_session_create` 建的是 sub-agent，不會出現在 picker），再
+`setup.py record-agent --agent launcher --session <id>`。
 
 ### 由 server 程式碼決定的規則（setup skill 的 doctor 逐項檢查）
 
@@ -1041,9 +1060,10 @@ sweep-launch skill（前台 agent 與 CLI 共用同一份，build 時複製進�
 | 原地更新需要 anchor session 的 OWNER | `routes/sessions/routes_agent.py::update_session_agent`（`PUT /v1/sessions/{id}/agent`） | 共用時只有維護者能發新版；同事要自己維護就自己註冊一份 |
 | `sys_session_create(config_path=…)` 每次都建新的 agent row | `_create_session_from_bundle` | 改版要用 PUT 原地更新，否則 agent_id 會換、排程要跟著改 |
 
-每台主機的 agent 紀錄存在 `<WS>/.omnigent-runtime/woow-security-sweep/agent.json`（anchor session、
-agent_id、能否更新），不進 repo。發新版走 setup skill 的 `bundle-plan` → 人核准 plan digest →
-`bundle-apply`；打包只取已 commit 的檔案（`git archive`），不會把 `__pycache__` 帶上去。
+每台主機的 agent 紀錄存在 `<WS>/.omnigent-runtime/woow-security-sweep/` 底下（sweep：`agent.json`；
+前台：`launcher-agent.json`；anchor session、agent_id、能否更新），不進 repo。sweep 與前台都走 setup skill
+發新版：`bundle-plan --agent sweep|launcher` → 人核准 plan digest → `bundle-apply`；打包只取已 commit 的
+`.omnigent` 與 `.agents`（`git archive`），跑該 bundle 自己的 `build.py --check`，不會把 `__pycache__` 帶上去。
 
 ## 機器相關的值
 

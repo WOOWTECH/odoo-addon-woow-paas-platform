@@ -4,17 +4,18 @@
 子命令（`--workspace` 預設 `$OMNIGENT_RUNNER_WORKSPACE`）::
 
     setup.py doctor [--targets <repo 路徑> ...] [--check-api]   # 環境與權限檢查
-    setup.py record-agent --session <session id>                # 註冊或接手共用 agent 後記下 anchor
+    setup.py record-agent [--agent sweep|launcher] --session <id>   # 註冊或接手 agent 後記下 anchor
     setup.py preset --name <名稱> --targets <repo> ... [--mode …]  # 寫 <state>/presets/<名稱>.yaml（排程 prompt 用）
-    setup.py bundle-plan                                        # 打包本機 checkout，與 server 上的版本比較
-    setup.py bundle-apply --plan <plan 目錄>                    # 依核准的計畫原地更新（PUT）
+    setup.py bundle-plan [--agent sweep|launcher]               # 打包本機 checkout，與 server 上的版本比較
+    setup.py bundle-apply [--agent …] --plan <plan 目錄> --digest <d>  # 依核准的計畫原地更新（PUT）
 
 設計原則：
 
 - 「能不能用」一律由檢查結果決定，不問人。規則來自 Omnigent server 的程式碼：
   排程只能建在呼叫者自己的主機（別人的 host 回 403）、session-scoped agent 對 anchor
   session 有 READ 權限即可使用、原地更新需要 anchor session 的 OWNER。
-- agent 紀錄存在 `<state>/agent.json`（每台主機各自一份，不進 repo）。
+- 兩個 agent（`--agent`）：sweep（排程跑的本體）與 launcher（前台，出現在 UI picker，#1978 階段 B）。
+  紀錄分別存在 `<state>/agent.json`、`<state>/launcher-agent.json`（每台主機各自一份，不進 repo）。
 - Jev key 只用 stat 檢查存在與權限，**不讀內容**；連線測試交給 jev_gate.py（它自己讀 key）。
 - Omnigent 認證沿用 omnigent CLI 的 `_remote_headers`（private API）；header 不印、不寫檔。
 """
@@ -42,6 +43,14 @@ SKILL_DIR = Path(__file__).resolve().parents[1]
 REPO = Path(__file__).resolve().parents[4]
 BUNDLE_REL = ".omnigent/woow-security-sweep"
 AGENT_NAME = "woow_security_sweep"
+#: 兩個由本 skill 註冊／更新的 agent。key 是 CLI 的 `--agent` 值。
+AGENTS: dict[str, dict[str, str]] = {
+    "sweep": {"name": AGENT_NAME, "bundle": BUNDLE_REL, "record": "agent.json"},
+    "launcher": {"name": "woow_security_sweep_launcher", "bundle": ".omnigent/woow-security-sweep-launcher",
+                 "record": "launcher-agent.json"},
+}
+#: snapshot 要 archive 的目錄：launcher 的 build.py --check 會比對 .agents/ 裡 launch skill 的正本
+SNAPSHOT_DIRS = (".omnigent", ".agents")
 DEFAULT_TARGETS = ("WOOW/woow_line_base", "WOOW/Woow_odoo_line_liff", "WOOW/woow_odoo_livechat_line")
 ISSUE_OWNER = "mirror-internal"
 #: omnigent/server/auth.py：READ=1、EDIT=2、MANAGE=3、OWNER=4。PUT bundle 需要 OWNER。
@@ -57,6 +66,7 @@ OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 #: 只盲按一次 Enter，訊息停在輸入框不送出（#1989）。實測 `ping` 正常；`preset: <名稱>` 遠低於上限。
 PROMPT_MAX = 40
 PRESET_PROMPT_RE = re.compile(r"preset:\s*(\S+)")
+WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 #: 觸發後超過這個秒數，session 仍沒有任何訊息 ⇒ 判定 prompt 沒送出
 SUBMIT_GRACE_S = 600
 
@@ -99,14 +109,35 @@ def omnigent_config() -> dict[str, Any]:
             "host_name": (data.get("host") or {}).get("name")}
 
 
-def load_agent_record(sdir: Path) -> dict[str, Any] | None:
-    path = sdir / "agent.json"
+def _agent_spec(agent: str) -> dict[str, str]:
+    if agent not in AGENTS:
+        raise SetupError(f"--agent 只能是 {sorted(AGENTS)}")
+    return AGENTS[agent]
+
+
+def load_agent_record(sdir: Path, agent: str = "sweep") -> dict[str, Any] | None:
+    path = sdir / _agent_spec(agent)["record"]
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
-def save_agent_record(sdir: Path, record: dict[str, Any]) -> None:
+def save_agent_record(sdir: Path, record: dict[str, Any], agent: str = "sweep") -> None:
     sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "agent.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (sdir / _agent_spec(agent)["record"]).write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                                    encoding="utf-8")
+
+
+def is_native(harness: Any) -> bool:
+    """UI picker 會濾掉頂層 *-native 的 custom agent（.omnigent/README.md §UI picker）。"""
+    return str(harness or "").endswith("-native")
+
+
+def rrule_days(rrule: str | None) -> set[str]:
+    """排程會在星期幾觸發。沒有 BYDAY、或不是 WEEKLY ⇒ 保守當成每天（重疊檢查寧可多擋）。"""
+    rule = rrule or ""
+    days = re.search(r"BYDAY=([A-Z0-9,+-]+)", rule)
+    if not days or not re.search(r"FREQ=WEEKLY", rule):
+        return set(WEEKDAYS)
+    return {d[-2:] for d in days.group(1).split(",") if d[-2:] in WEEKDAYS} or set(WEEKDAYS)
 
 
 # ── Omnigent API ─────────────────────────────────────────────────────────────
@@ -138,6 +169,12 @@ class Api:
 
     def put_bundle(self, path: str, data: bytes) -> tuple[int, Any]:
         return self.request("PUT", path, files={"bundle": ("bundle.tar.gz", data, "application/gzip")})
+
+    def post(self, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+        return self.request("POST", path, json=body or {})
+
+    def patch(self, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        return self.request("PATCH", path, json=body)
 
 
 # ── 檢查 ──────────────────────────────────────────────────────────────────────
@@ -279,6 +316,27 @@ def check_agent(api: Any, sdir: Path, user: str | None, ws: Path) -> tuple[list[
                   else f"共用 {record.get('recorded_by')} 註冊的 agent（權限等級 {level}）：可使用、不能更新（PUT 需要 OWNER）")], record
 
 
+def check_launcher(api: Any, sdir: Path) -> list[dict[str, Any]]:
+    """前台 agent（#1978 階段 B）：紀錄存在、讀得到、頂層 harness 不是 *-native。"""
+    spec = AGENTS["launcher"]
+    record = load_agent_record(sdir, "launcher")
+    if not record:
+        return [check("launcher", FAIL, "這台主機還沒有前台 agent 紀錄",
+                      f"在 <WS> 執行 `omnigent run paas/woow_paas_platform/{spec['bundle']} --server <url>` 註冊"
+                      "（出現在 UI picker），再 record-agent --agent launcher --session <該 session id>")]
+    code, agent = api.get(f"/v1/sessions/{record['anchor_session']}/agent")
+    if code != 200:
+        return [check("launcher", FAIL, f"讀不到前台 anchor {record['anchor_session']} 的 agent（HTTP {code}）",
+                      "anchor session 已刪或沒分享給你：重新註冊前台 agent")]
+    if agent.get("id") != record.get("agent_id") or agent.get("name") != spec["name"]:
+        return [check("launcher", FAIL, f"前台 anchor 上的 agent 是 {agent.get('name')}／{agent.get('id')}，與紀錄不符",
+                      "重新 record-agent --agent launcher")]
+    if is_native(agent.get("harness")):
+        return [check("launcher", FAIL, f"前台 agent 的 harness 是 {agent.get('harness')}：UI picker 會把它濾掉",
+                      "前台 bundle 的頂層 harness 必須是 claude-sdk（build.py --check 會擋），修正後 bundle-plan／bundle-apply")]
+    return [check("launcher", OK, f"前台 agent {agent['id']}（v{agent.get('version')}，harness {agent.get('harness')}）")]
+
+
 def check_last_run(api: Any, task: dict[str, Any], now: float | None = None) -> dict[str, Any]:
     """最近一次觸發有沒有真的開始跑。run 紀錄的 succeeded 只代表「已觸發」，不代表 prompt 有送出。"""
     cid = f"schedule_run:{task.get('id')}"
@@ -335,10 +393,11 @@ def check_schedules(api: Any, record: dict[str, Any] | None, host_id: str | None
         elif "\n" in prompt or len(prompt) > PROMPT_MAX:
             problems.append(f"prompt 太長（{len(prompt)} 字元、{prompt.count(chr(10)) + 1} 行）："
                             "Omnigent 0.16.0 會卡在 [Pasted text] 不送出，改用 `preset: <名稱>`")
-        days = re.search(r"BYDAY=([A-Z,]+)", t.get("rrule") or "")
-        for day in (days.group(1).split(",") if days else ["*"]):
-            for tgt in targets:
-                claimed.setdefault(f"{day}|{tgt}", []).append(t.get("name", t.get("id")))
+        # 暫停中的排程不會自己觸發（手動排程平常就是暫停的，只靠「立即執行」）⇒ 不算重疊
+        if t.get("state") != "paused":
+            for day in sorted(rrule_days(t.get("rrule"))):
+                for tgt in targets:
+                    claimed.setdefault(f"{day}|{tgt}", []).append(t.get("name", t.get("id")))
         out.append(check(f"schedule:{t.get('id')}", FAIL if problems else OK,
                          f"{t.get('name')}（{t.get('state')}）" + (f"：{'；'.join(problems)}" if problems else ""),
                          "sys_scheduled_task_update 修正上述欄位（換 agent 要一併重送 permission_mode 與 max_cost_usd；"
@@ -373,6 +432,7 @@ def doctor(ws: Path, targets: list[Path], *, call_api: bool, api_factory: Callab
         checks += part
         part, record = check_agent(api, sdir, user, ws)
         checks += part
+        checks += check_launcher(api, sdir)
         checks += check_schedules(api, record, conf.get("host_id"), ws)
     fails = [c["id"] for c in checks if c["status"] == FAIL]
     return {"workspace": str(ws), "host_id": conf.get("host_id"), "host_name": conf.get("host_name"),
@@ -381,24 +441,27 @@ def doctor(ws: Path, targets: list[Path], *, call_api: bool, api_factory: Callab
 
 # ── agent 紀錄 ────────────────────────────────────────────────────────────────
 
-def record_agent(api: Any, ws: Path, session: str, user: str | None = None) -> dict[str, Any]:
+def record_agent(api: Any, ws: Path, session: str, user: str | None = None, agent_kind: str = "sweep") -> dict[str, Any]:
+    spec = _agent_spec(agent_kind)
     if not re.fullmatch(r"[0-9a-f]{32}", session):
         raise SetupError("session id 格式不對（32 位 hex）")
     code, agent = api.get(f"/v1/sessions/{session}/agent")
     if code != 200:
         raise SetupError(f"讀不到 session {session} 的 agent（HTTP {code}）：沒有 READ 權限或 session 不存在")
-    if agent.get("name") != AGENT_NAME:
-        raise SetupError(f"session {session} 的 agent 是 {agent.get('name')!r}，不是 {AGENT_NAME}")
+    if agent.get("name") != spec["name"]:
+        raise SetupError(f"session {session} 的 agent 是 {agent.get('name')!r}，不是 {spec['name']}")
+    if agent_kind == "launcher" and is_native(agent.get("harness")):
+        raise SetupError(f"前台 agent 的 harness 是 {agent.get('harness')}：UI picker 會把它濾掉，不能當前台")
     if user is None:
         _, me = api.get("/v1/me")
         user = me.get("user_id")
     _, conv = api.get(f"/v1/sessions/{session}")
     level = (conv or {}).get("permission_level", 0) if isinstance(conv, dict) else 0
-    record = {"anchor_session": session, "agent_id": agent["id"], "name": AGENT_NAME,
+    record = {"anchor_session": session, "agent_id": agent["id"], "name": spec["name"], "agent": agent_kind,
               "version": agent.get("version"), "harness": agent.get("harness"),
               "can_update": level >= LEVEL_OWNER, "recorded_by": user,
               "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
-    save_agent_record(state_dir(ws), record)
+    save_agent_record(state_dir(ws), record, agent_kind)
     return record
 
 
@@ -432,15 +495,19 @@ def _git(repo: Path, *args: str) -> str:
     return res.stdout.strip()
 
 
-def source_snapshot(repo: Path, dest: Path, integration: str = "develop") -> str:
-    """確認 checkout 乾淨且等於已合併的 origin/<integration>，再用 git archive 取 tracked 檔。"""
+def source_snapshot(repo: Path, dest: Path, bundle_rel: str = BUNDLE_REL, integration: str = "develop") -> str:
+    """確認 checkout 乾淨且等於已合併的 origin/<integration>，再用 git archive 取 tracked 檔。
+
+    archive `.omnigent` 與 `.agents` 兩個目錄（launcher 的 build.py 要比對 launch skill 的正本），
+    再跑**該 bundle 自己的** build.py --check。
+    """
     _git(repo, "fetch", "-q", "origin", integration)
     head, merged = _git(repo, "rev-parse", "HEAD"), _git(repo, "rev-parse", f"origin/{integration}")
     if head != merged:
         raise SetupError(f"checkout 在 {head[:8]}，不是 origin/{integration}（{merged[:8]}）：先 merge --ff-only")
-    if _git(repo, "status", "--porcelain", "--", ".omnigent"):
-        raise SetupError(".omnigent 有未 commit 的變更：只能發已合併的版本")
-    data = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", head, ".omnigent"],
+    if _git(repo, "status", "--porcelain", "--", *SNAPSHOT_DIRS):
+        raise SetupError(f"{'／'.join(SNAPSHOT_DIRS)} 有未 commit 的變更：只能發已合併的版本")
+    data = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", head, *SNAPSHOT_DIRS],
                           capture_output=True, check=True).stdout
     old = os.umask(0o022)  # 執行位元要和 git 的 100755／100644 一致
     try:
@@ -448,9 +515,9 @@ def source_snapshot(repo: Path, dest: Path, integration: str = "develop") -> str
             tar.extractall(dest, filter="data")
     finally:
         os.umask(old)
-    res = run(["python3.12", str(dest / BUNDLE_REL / "build.py"), "--check"], timeout=300, cwd=dest)
+    res = run(["python3.12", str(dest / bundle_rel / "build.py"), "--check"], timeout=300, cwd=dest)
     if res.returncode or "❌" in res.stdout:
-        raise SetupError("build.py --check 沒通過：回原 PR 修正，不在部署時重產")
+        raise SetupError(f"{bundle_rel}/build.py --check 沒通過：回原 PR 修正，不在部署時重產")
     return head
 
 
@@ -478,8 +545,9 @@ def diff_manifest(before: dict[str, str], after: dict[str, str]) -> dict[str, li
             "changed": sorted(k for k in before.keys() & after.keys() if before[k] != after[k])}
 
 
-def bundle_plan(api: Any, ws: Path, record: dict[str, Any], *, packer: Callable = pack,
+def bundle_plan(api: Any, ws: Path, record: dict[str, Any], *, agent_kind: str = "sweep", packer: Callable = pack,
                 snapshot: Callable = source_snapshot) -> dict[str, Any]:
+    bundle_rel = _agent_spec(agent_kind)["bundle"]
     _, conv = api.get(f"/v1/sessions/{record['anchor_session']}")
     if not isinstance(conv, dict) or conv.get("permission_level", 0) < LEVEL_OWNER:
         raise SetupError("你不是 anchor session 的擁有者：只有擁有者能更新（PUT 需要 OWNER）")
@@ -488,15 +556,16 @@ def bundle_plan(api: Any, ws: Path, record: dict[str, Any], *, packer: Callable 
     out = Path(tempfile.mkdtemp(prefix="plan-", dir=plans))
     os.chmod(out, 0o700)
     src = out / "src"
-    sha = snapshot(ws / "paas/woow_paas_platform", src)
-    candidate = packer(src / BUNDLE_REL)
+    sha = snapshot(ws / "paas/woow_paas_platform", src, bundle_rel)
+    candidate = packer(src / bundle_rel)
     code, stored = api.get(f"/v1/sessions/{record['anchor_session']}/agent/contents")
     if code != 200:
         raise SetupError(f"讀不到 server 上的 bundle（HTTP {code}）")
     code, meta = api.get(f"/v1/sessions/{record['anchor_session']}/agent")
     diff = diff_manifest(manifest(stored), manifest(candidate))
     (out / "candidate.tar.gz").write_bytes(candidate)
-    plan = {"source_sha": sha, "anchor_session": record["anchor_session"], "agent_id": record["agent_id"],
+    plan = {"agent": agent_kind, "bundle": bundle_rel,
+            "source_sha": sha, "anchor_session": record["anchor_session"], "agent_id": record["agent_id"],
             "before_version": meta.get("version"), "before_sha256": hashlib.sha256(stored).hexdigest(),
             "candidate_sha256": hashlib.sha256(candidate).hexdigest(), "diff": diff,
             "noop": not any(diff.values()), "plan_dir": str(out)}
@@ -506,11 +575,14 @@ def bundle_plan(api: Any, ws: Path, record: dict[str, Any], *, packer: Callable 
     return plan
 
 
-def bundle_apply(api: Any, ws: Path, plan_dir: Path, digest: str) -> dict[str, Any]:
+def bundle_apply(api: Any, ws: Path, plan_dir: Path, digest: str, agent_kind: str | None = None) -> dict[str, Any]:
     raw = (plan_dir / "plan.json").read_bytes()
     if hashlib.sha256(raw).hexdigest() != digest:
         raise SetupError("plan digest 不符：計畫在核准後被改過，重新 bundle-plan")
     plan = json.loads(raw)
+    planned = plan.get("agent", "sweep")
+    if agent_kind is not None and agent_kind != planned:
+        raise SetupError(f"這份計畫是給 {planned} 的，不是 {agent_kind}：重新 bundle-plan --agent {agent_kind}")
     if plan["noop"]:
         return {"result": "NO-OP", "agent_id": plan["agent_id"]}
     candidate = (plan_dir / "candidate.tar.gz").read_bytes()
@@ -528,11 +600,11 @@ def bundle_apply(api: Any, ws: Path, plan_dir: Path, digest: str) -> dict[str, A
     same_content = manifest(after) == manifest(candidate) if isinstance(after, bytes) else False
     if meta.get("id") != plan["agent_id"] or not same_content:
         raise SetupError(f"PUT 後驗證失敗：agent_id {meta.get('id')}、內容一致 {same_content}")
-    record = load_agent_record(state_dir(ws)) or {}
+    record = load_agent_record(state_dir(ws), planned) or {}
     record.update({"version": meta.get("version"), "source_sha": plan["source_sha"],
                    "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")})
-    save_agent_record(state_dir(ws), record)
-    return {"result": "DEPLOYED", "agent_id": meta["id"], "version": meta.get("version"),
+    save_agent_record(state_dir(ws), record, planned)
+    return {"result": "DEPLOYED", "agent": planned, "agent_id": meta["id"], "version": meta.get("version"),
             "source_sha": plan["source_sha"]}
 
 
@@ -557,7 +629,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--targets", nargs="*", help="repo 絕對路徑；預設 <WS>/WOOW 下的 LINE 三件組")
     p.add_argument("--check-api", action="store_true", help="另外打一次 Jev API（jev_gate.py models）")
     p.add_argument("--tea-login", default="git-prod")
+    agent_help = "sweep（排程跑的本體，預設）或 launcher（前台，出現在 UI picker）"
     p = sub.add_parser("record-agent")
+    p.add_argument("--agent", choices=sorted(AGENTS), default="sweep", help=agent_help)
     p.add_argument("--session", required=True)
     p = sub.add_parser("preset", help="寫 <state>/presets/<名稱>.yaml；排程 prompt 只寫 `preset: <名稱>`")
     p.add_argument("--name", required=True)
@@ -566,8 +640,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--deep-review", choices=("auto", "always", "never"), default="auto")
     p.add_argument("--review", choices=("claude-native", "pi"))
     p.add_argument("--fix", choices=("claude-native", "pi"))
-    sub.add_parser("bundle-plan")
+    p = sub.add_parser("bundle-plan")
+    p.add_argument("--agent", choices=sorted(AGENTS), default="sweep", help=agent_help)
     p = sub.add_parser("bundle-apply")
+    p.add_argument("--agent", choices=sorted(AGENTS), help="給了就核對計畫的 agent 一致（預設照計畫）")
     p.add_argument("--plan", required=True)
     p.add_argument("--digest", required=True, help="bundle-plan 印出的 plan_digest（核准時看到的那個）")
     args = ap.parse_args(argv)
@@ -584,14 +660,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         api, user = _api()
         if args.cmd == "record-agent":
-            out = record_agent(api, ws, args.session, user)
+            out = record_agent(api, ws, args.session, user, args.agent)
         elif args.cmd == "bundle-plan":
-            record = load_agent_record(state_dir(ws))
+            record = load_agent_record(state_dir(ws), args.agent)
             if not record:
-                raise SetupError("沒有 agent 紀錄：先 record-agent")
-            out = bundle_plan(api, ws, record)
+                raise SetupError(f"沒有 {args.agent} 的 agent 紀錄：先 record-agent --agent {args.agent}")
+            out = bundle_plan(api, ws, record, agent_kind=args.agent)
         else:
-            out = bundle_apply(api, ws, Path(args.plan), args.digest)
+            out = bundle_apply(api, ws, Path(args.plan), args.digest, args.agent)
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
     except SetupError as exc:

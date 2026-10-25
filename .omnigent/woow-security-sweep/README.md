@@ -86,7 +86,9 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
 | Pi Web ChatGPT (pi3) | `f3cb408633ad4ddabcbabec0401c41d6` | `/data/pi-agent/home/woow-repos` |
 
 安裝、檢查、發新版一律走 setup skill（`.agents/skills/woow-security-sweep-setup`，#1978）；
-三者關係見 `.omnigent/README.md` §woow-security-sweep 整體關係。
+跑一次、建排程、查狀態走 launch skill（`.agents/skills/woow-security-sweep-launch`），或從 UI 叫起
+前台 agent（`.omnigent/woow-security-sweep-launcher`）。四者關係見 `.omnigent/README.md`
+§woow-security-sweep 整體關係。
 
 1. 更新該主機的主 checkout：`<WS>/paas/woow_paas_platform` 切到最新 develop
    （AGENTS.md 與 skills 用這個路徑呼叫腳本）
@@ -96,18 +98,21 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
 3. 註冊或接手 agent：照 setup skill §2（自己註冊或接手共用的 anchor），完成後 `record-agent`
    記下 anchor 與 agent_id（`<state>/agent.json`）。⛔ 改版不要再 `sys_session_create` 重新上傳
    （會換 agent_id），改走 setup skill §3 的 `bundle-plan`／`bundle-apply` 原地更新
-4. 再跑一次 doctor，`ready: true` 才建排程
-5. 建排程（`sys_scheduled_task_create`）：
+4. 註冊前台 agent（setup skill §2：在 `<WS>` 執行一次 `omnigent run …/woow-security-sweep-launcher`，
+   再 `record-agent --agent launcher`），再跑一次 doctor，`ready: true` 才建排程
+5. 建排程：一律用 launch skill 的 `launch.py schedule`（同一天 targets 重疊會拒絕、補設 `max_cost_usd`、
+   讀回逐欄核對）。定期排程用 `--rrule`，另為每個 preset 建一個 `--manual` 手動排程（暫停中，
+   「跑一次」觸發它的立即執行）。腳本寫入的欄位：
 
    | 欄位 | 值 |
    |---|---|
    | `agent_id` | `<state>/agent.json` 的 `agent_id`（原地更新不會換） |
-   | `rrule` | 每日 `FREQ=WEEKLY;BYDAY=TU,WE,TH,FR,SA,SU;BYHOUR=8;BYMINUTE=30`；每週 `FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=30` |
+   | `rrule` | 每日 `FREQ=WEEKLY;BYDAY=TU,WE,TH,FR,SA,SU;BYHOUR=8;BYMINUTE=30`；每週 `FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=30`；手動排程固定一年一次並暫停 |
    | `timezone` | `Asia/Taipei` |
    | `workspace` | 該主機的 `<WS>` |
    | `host_id` | 該主機的 host_id（有給 workspace 就必填，否則 400） |
    | `permission_mode` | `auto` |
-   | `max_cost_usd` | `30`（config 另有 60 USD 硬上限） |
+   | `max_cost_usd` | `30`（`--max-cost`；config 另有 60 USD 硬上限） |
    | `prompt` | `preset: line-daily`／`preset: line-weekly`（只有這一行） |
 
    preset 用 setup skill 建立（`setup.py preset`），內容存在 `<state>/presets/<名稱>.yaml`：
@@ -126,7 +131,8 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
    偵測不到草稿就只盲按一次 Enter，訊息停在輸入框不送出，run 紀錄卻寫 `succeeded`（#1989）。
    setup skill 的 doctor 會檢查 prompt 長度與最近一次觸發是否真的開始執行。
 
-   週一只跑每週那支（全量），避免兩支排程同時推進同一份 state。
+   週一只跑每週那支（全量），避免兩支排程同時推進同一份 state。「跑一次」同理：targets 重疊的輪次
+   還在進行（執行中、Inbox 有待答題目、或 6 小時內有活動但還沒 commit）就拒絕觸發。
 
 ## 已知限制與風險
 
