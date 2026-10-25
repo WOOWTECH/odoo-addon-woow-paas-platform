@@ -199,7 +199,7 @@ MCP token 或包含 token 的完整 URL 都視為密碼；外洩時在 Tokens �
 3. 只需要查詢時，改貼 `proxy_admin_viewer` 的金鑰或在 Settings 打開 Read-only Mode；需要建立金鑰、修改團隊或模型時，才用有寫入權限的金鑰，完成後再次縮小權限。
 
 ## 權限與排查
-新服務預設關閉 Read-only Mode（40 支工具全開）；打開後只提供查詢工具。2026-10-25 之前開通的服務預設是唯讀，維持原本的設定。也可於 Tools 逐支停用不需要的工具。MCP URL 含有憑證，外洩時撤銷 token。連線失敗先核對 LiteLLM 網址、金鑰權限及本服務「日誌」。
+預設關閉 Read-only Mode（40 支工具全開）；打開後只提供查詢工具。2026-10-25 之前開通、預設唯讀的服務，在平台換成新映像後第一次啟動時會一次性改成全開；之後你在 Settings 或 Tools 設定的限制會保留。也可於 Tools 逐支停用不需要的工具。MCP URL 含有憑證，外洩時撤銷 token。連線失敗先核對 LiteLLM 網址、金鑰權限及本服務「日誌」。
 
 ## 延伸學習
 [WOOWTECH LiteLLM MCP 套件說明](https://github.com/WOOWTECH/Woow_litellm_mcp_server#readme)包含工具與權限；是否能寫入以本服務的 Read-only Mode 和上游 LiteLLM 金鑰為準。]]></field>
@@ -239,7 +239,7 @@ API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開
 3. 從用戶端列出資料夾並讀取測試檔。確認只看得到該帳號有權限的資料；不需要的寫入或刪除工具可在 Tools 逐支停用。
 
 ## 權限與排查
-新服務預設全開：讀取、建立、改寫、上傳與刪除 9 支工具都開放，可在 Tools 逐支停用（2026-10-25 之前開通的服務預設只開讀取工具，維持原本的設定）。應用程式密碼可存取該帳號看得到的資料，MCP token 也視為密碼。若 Nextcloud 憑證錯誤，本服務會停止重試；在 Connection 存入新的應用程式密碼後再檢查狀態與「日誌」。
+預設全開：讀取、建立、改寫、上傳與刪除 9 支工具都開放，可在 Tools 逐支停用（2026-10-25 之前開通、只開讀取工具的服務，在平台換成新映像後第一次啟動時會一次性改成全開；之後你停用的工具會保留）。應用程式密碼可存取該帳號看得到的資料，MCP token 也視為密碼。若 Nextcloud 憑證錯誤，本服務會停止重試；在 Connection 存入新的應用程式密碼後再檢查狀態與「日誌」。
 
 ## 延伸學習
 [WOOWTECH Nextcloud MCP 繁體中文說明](https://github.com/WOOWTECH/Woow_nextcloud_mcp_server/blob/main/README.zh-TW.md)介紹專用帳號與應用程式密碼；[WOOWTECH Nextcloud 檔案教學](https://nextcloud-guide.woowtech.io/ch6_files_basics.html)介紹上游檔案與分享，略過該站的 Home Assistant add-on 安裝章節。]]></field>
@@ -259,7 +259,7 @@ API key 決定 MCP 可操作的 n8n 範圍；在 Tools 檢查對 AI 用戶端開
 3. 先檢查 Tools、Settings 的寫入與審批設定，再讓 AI 執行建立、修改或刪除。測試完撤銷不用的 token。
 
 ## 權限與排查
-AI 可讀寫的資料受 Odoo 帳號權限、Tools 與當前實例的寫入／審批設定影響。新服務預設全開：允許直接寫入（不走三階段審批）、可呼叫未審查的方法（例如確認訂單、過帳），chatter 訊息直接張貼；要收緊請到 Settings 關閉對應開關。既有服務可能保留舊設定（2026-10-25 之前開通的服務預設走審批流程），不能只按目前模板推斷。MCP token 和完整端點 URL 都視為密碼，外洩時撤銷並重建。若連線失敗，核對網址、資料庫名稱、帳號權限、憑證與本服務「日誌」。設定保存在專屬磁碟。
+AI 可讀寫的資料受 Odoo 帳號權限、Tools 與當前實例的寫入／審批設定影響。預設全開：允許直接寫入（不必走三階段審批，審批工具仍可用）、可呼叫未審查的方法（例如確認訂單、過帳），chatter 訊息直接張貼；要收緊請到 Settings 關閉對應開關。2026-10-25 之前開通的服務在平台換成新映像後第一次啟動時會一次性改成全開；之後你在 Settings 或 Tools 設定的限制會保留。MCP token 和完整端點 URL 都視為密碼，外洩時撤銷並重建。若連線失敗，核對網址、資料庫名稱、帳號權限、憑證與本服務「日誌」。設定保存在專屬磁碟。
 
 ## 延伸學習
 [WOOWTECH Odoo MCP 管理介面說明](https://github.com/WOOWTECH/woow_odoo_mcp_server#readme)可查看 Connection、Tools 與 Tokens；套件庫中的自行部署 SSE 範例不適用本 PaaS 入口，請使用本頁顯示的 Streamable HTTP 端點。]]></field>

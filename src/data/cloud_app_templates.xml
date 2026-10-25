@@ -601,13 +601,14 @@
                  明示隱藏的審批工具，屬預期模式差異；既有服務240
                  仍舊1ec，需另行升版回歸。此改釘屬230之後的下一次平台發版，不能
                  當成既有229／230範本；回滾值為上方0b2cff1f完整tag@digest。 -->
-            <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 0.2.0 起的 odoo 子行程相同）：新服務四個寫入開關都開——
+            <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 0.2.0 起的 odoo 子行程相同）：四個寫入開關都開——
                  ODOO_MCP_ENABLE_WRITES（審核寫入）、ODOO_MCP_ALLOW_DIRECT_WRITES（execute_method 直接 create／write／
-                 unlink；MCP 啟動時隱藏三支審批工具，41 → 38 支）、ODOO_MCP_ALLOW_UNKNOWN_METHODS（未審查的副作用方法，
+                 unlink；三支審批工具照樣列出，41 支，同 HA 0.4.0）、ODOO_MCP_ALLOW_UNKNOWN_METHODS（未審查的副作用方法，
                  如 action_confirm、action_post）、MCP_CHATTER_DIRECT（chatter_post 第一次就張貼、不先預覽）。後兩個從
                  woow-mcp-server #84 起才在 LaunchPolicy 白名單內；execute_method／chatter_post 的工具說明也從 #84 起跟著
-                 實際開關。只影響新開通：chart 是 seed-if-absent、Redeploy 只換 image（#1408），既有服務維持自己
-                 config.json 裡的值；新映像對既有設定缺鍵時補改版前的值（直接寫入、未審查方法、chatter 直接張貼為關）。
+                 實際開關。既有服務：chart 是 seed-if-absent、Redeploy 只換 image（#1408），config.json 不會重建；#84 的
+                 映像第一次啟動時看到沒有 owner_defaults_20261025 標記，會一次性把四個開關打開、清空停用清單並寫上標記
+                 （憑證與連線不動），之後租戶的限制保留。所以既有服務要在 Redeploy（換成本範本的映像）後才會全開。
                  回滾值：env {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
@@ -826,11 +827,12 @@
         <record id="cloud_app_mcp_k8s" model="woow_paas_platform.cloud_app_template">
             <field name="name">Kubernetes MCP</field>
             <field name="slug">mcp-k8s</field>
-            <field name="description">Kubernetes MCP — 以 kubeconfig 連接外部 K8s 叢集，預設全開（寫入、刪除、讀 Secret），權限由 kubeconfig 決定</field>
+            <field name="description">Kubernetes MCP — 以 kubeconfig 連接外部 K8s 叢集，預設全開（寫入、刪除、讀 Secret、多叢集），權限由 kubeconfig 決定</field>
             <field name="full_description">Kubernetes MCP server：以 kubeconfig 連接
                 「外部」Kubernetes 叢集，提供 config／core／helm／kcp／kubevirt／tekton 六個工具集共 34 支工具。
-                預設全開：寫入、刪除等破壞性工具與 Secret 存取都開啟（治理三 toggle READ_ONLY／DISABLE_DESTRUCTIVE／
-                ALLOW_SECRETS 於子行程真傳導，可在 admin Settings 頁改成唯讀、擋破壞性或封鎖 Secret）。AI 實際能做什麼由
+                預設全開：寫入、刪除等破壞性工具、Secret 存取與多叢集（kubeconfig 有多個 context 時可指定 context）都開啟
+                （治理 toggle READ_ONLY／DISABLE_DESTRUCTIVE／ALLOW_SECRETS／MULTI_CLUSTER 於子行程真傳導，可在 admin
+                Settings 頁改成唯讀、擋破壞性、封鎖 Secret 或單叢集）。AI 實際能做什麼由
                 kubeconfig 的 RBAC 決定。租戶前置需求：於目標外部叢集 (1) 建立 ServiceAccount 並綁定合適的 ClusterRole
                 （只想讀就綁 view；要讓 AI 寫入就綁 edit 等），(2) 產生 token 組成 kubeconfig，(3) 於 admin Connection 頁
                 貼入 kubeconfig。</field>
@@ -843,18 +845,20 @@
                  2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18845；見上方三型說明）。
                  apps/k8s 無變動、只多共用層 log 遮蔽；已下架，正式站沒有實例。回滾值（chart 0.1.7 不動）：
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:4774f40d7c7daa41dbb0e40fe30bc67fafe56530d32f5b75b7f99eaa0a95efca。 -->
-            <!-- 2026-10-25 預設全開（負責人決定：PaaS 限定的 k8s MCP 也全開——寫入、刪除資源、讀 Secret）：
+            <!-- 2026-10-25 預設全開（負責人決定：PaaS 限定的 k8s MCP 也全開——寫入、刪除資源、讀 Secret、多叢集）：
                  K8S_MCP_READ_ONLY=0、K8S_MCP_DISABLE_DESTRUCTIVE=0、K8S_MCP_ALLOW_SECRETS=1、K8S_MCP_TOOLSETS＝
                  config,core,helm,kcp,kubevirt,tekton（上游 v0.0.65 不需另外設定的全部工具集，34 支；kiali 要 Kiali
-                 網址、netobserv 的預設網址只對 MCP 所在叢集有效，兩者不開），與 woow-mcp-server #84 apps/k8s 的
-                 launcher.FRESH_ENV 相同；#84 起 registry 也收了 kcp／KubeVirt／Tekton 的 11 支。AI 實際能做什麼由
-                 租戶 kubeconfig 的 RBAC 決定。只影響新開通（已下架，正式站沒有實例）：既有服務維持自己 config.json
-                 的值，缺鍵時 launcher 仍擋 Secret、只開 core,config,helm。回滾值：env {"K8S_MCP_READ_ONLY": "1",
-                 "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}。 -->
+                 網址、netobserv 的預設網址只對 MCP 所在叢集有效，兩者不開）、K8S_MCP_MULTI_CLUSTER=1（不帶
+                 disable-multi-cluster 旗標：kubeconfig 有多個 context 時多 configuration_contexts_list、各工具可指定 context），
+                 與 woow-mcp-server #84 apps/k8s 的 launcher.FRESH_ENV 相同；#84 起 registry 收了 kcp／KubeVirt／Tekton 的
+                 11 支與 configuration_contexts_list。AI 實際能做什麼由租戶 kubeconfig 的 RBAC 決定。已下架，正式站沒有實例；
+                 若有既有服務，#84 的映像第一次啟動時一次性改成這組值（owner_defaults 標記，之後租戶的限制保留）。
+                 回滾值：env {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0",
+                 "K8S_MCP_TOOLSETS": "core,config,helm"}。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
-            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:2909a17f56b8019e70c99d4cc3f18f30e7377d93b72bbca937adaf83cea6e3ac"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "0", "K8S_MCP_DISABLE_DESTRUCTIVE": "0", "K8S_MCP_ALLOW_SECRETS": "1", "K8S_MCP_TOOLSETS": "config,core,helm,kcp,kubevirt,tekton"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:2909a17f56b8019e70c99d4cc3f18f30e7377d93b72bbca937adaf83cea6e3ac"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "0", "K8S_MCP_DISABLE_DESTRUCTIVE": "0", "K8S_MCP_ALLOW_SECRETS": "1", "K8S_MCP_TOOLSETS": "config,core,helm,kcp,kubevirt,tekton", "K8S_MCP_MULTI_CLUSTER": "1"}, "env_prefix": "K8S_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -3136,8 +3140,9 @@
             <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 相同）：LITELLM_MCP_READONLY "1" → "0"，新服務 40 支工具
                  全開（含 22 支寫入、其中 8 支破壞性）；租戶要唯讀在 admin Settings 頁打開 Read-only Mode。woow-mcp-server
                  #84 起 app 的 seed_defaults 缺鍵也補 "0"（缺鍵只會是從未啟動過的新安裝）。說明改成預設全開、權限由
-                 金鑰決定。只影響新開通：既有服務 config.json 裡的 "1" 照舊（chart seed-if-absent、Redeploy 只換
-                 image）。回滾值：env {"LITELLM_MCP_READONLY": "1"}＋上一版說明。 -->
+                 金鑰決定。既有服務：Redeploy 只換 image、config.json 不重建；#84 的映像第一次啟動時看到沒有
+                 owner_defaults_20261025 標記，會一次性把 "1" 改成 "0"、清空停用清單並寫上標記（金鑰與網址不動），
+                 之後租戶的限制保留。回滾值：env {"LITELLM_MCP_READONLY": "1"}＋上一版說明。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
@@ -3231,7 +3236,8 @@
 
             <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 相同）：seed 不變（本來就不帶 env／tools），全開由
                  woow-mcp-server #84 的 app seed_defaults 做——第一次啟動只寫 nextcloud_policy_seeded 標記、不再停用 4 支
-                 寫入／刪除工具，新服務 9 支全開；說明改成預設全開。已有標記的既有服務停用清單原封不動。回滾：
+                 寫入／刪除工具，新服務 9 支全開；說明改成預設全開。既有服務（出廠停用 4 支）在 Redeploy 換成 #84 的映像後，
+                 第一次啟動時由 owner_defaults 一次性清空停用清單（app password 與網址不動），之後租戶的限制保留。回滾：
                  改釘回 #84 之前的 image＋上一版說明。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>

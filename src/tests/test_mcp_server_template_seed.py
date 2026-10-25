@@ -435,10 +435,10 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     def test_new_services_get_all_write_switches_on(self):
         """預設全開（負責人 2026-10-25，與 HA add-on 相同）：新服務的四個寫入開關都開。
 
-        審核寫入、直接寫入（execute_method 直接 create／write／unlink，三支審批工具隱藏）、未審查的
+        審核寫入、直接寫入（execute_method 直接 create／write／unlink，三支審批工具照樣列出）、未審查的
         副作用方法（action_confirm、action_post…）、chatter_post 直接張貼。值與 woow-mcp-server
-        apps/odoo seed_defaults.FRESH_ENV 相同；chart 是 seed-if-absent、Redeploy 只換 image，所以
-        2026-10-25 之前開通的服務維持自己 config.json 裡的值。
+        apps/odoo seed_defaults.FRESH_ENV 相同。既有服務（2026-10-25 之前開通）的 config.json 不會因 Redeploy 重建，
+        由 #84 起的映像在第一次啟動時一次性改成全開（owner_defaults 標記）。
         """
         env = self._values()['config']['nonSensitive']['mcp_server']['env']
         self.assertEqual(env, {

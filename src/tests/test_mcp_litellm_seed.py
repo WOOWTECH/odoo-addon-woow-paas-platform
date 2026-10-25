@@ -16,7 +16,8 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
    base_url／master_key 靠它變成 ``LITELLM_MCP_BASE_URL``／``LITELLM_MCP_MASTER_KEY``。
 4. **預設全開**（負責人 2026-10-25）：``LITELLM_MCP_READONLY="0"``，40 支工具全開；seed 只帶這個開關，
    平台設定表單不開任何欄位（要改成唯讀在服務自己的 admin Settings 頁）。2026-10-25 之前開通的服務 seed 是
-   ``"1"``，chart 是 seed-if-absent、Redeploy 只換 image，所以那些服務維持唯讀。
+   ``"1"``，chart 是 seed-if-absent、Redeploy 只換 image；那些服務換成 woow-mcp-server #84 起的映像後，第一次啟動時
+   由 app 的 owner_defaults 一次性改成全開。
 5. **不帶秘密、不帶網址**：``config.sensitive`` 空、``nonSensitive`` 沒有 connection——網址由平台組裝時
    注入（同工作區 LiteLLM），金鑰由租戶自己貼；本範本也沒有 gateway 通道，平台不鑄／不交付任何 key。
 6. **方案與上架**：月 3,000／年 24,000、試用 7 天、免稅、雙向綁定；上架只翻曝光層（is_hidden），
