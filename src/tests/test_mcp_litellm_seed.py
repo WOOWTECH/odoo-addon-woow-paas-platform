@@ -53,8 +53,10 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
 # 2026-10-24：#71 merge 5fa1ff0a（含 #72）八支 image 的 registry digest 已逐一驗證；
 # LaunchPolicy 維持 litellm-mcp-server、port 8000。chart0.1.8 的首次 seed 改為 create-only。
+# 2026-10-25：改釘 #84 merge fc5fa02e（預設全開＋既有服務一次性遷移）；digest 取自
+# main CI run 27630 的 push 輸出，registry 讀回一致。
 EXPECT_IMAGE_TAG = (
-    '6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:1229c5259d3b1942705897b8604b4fe0c485995e68ebae0b4d71e874bb02d941')
+    'fc5fa02e3ff48225a1a2bdc5dfc74269a57a1b6f@sha256:4d6eb9c2e67a34d75824b58a9c08941f6a48853a6a2d6bba69b6638331ac438f')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'

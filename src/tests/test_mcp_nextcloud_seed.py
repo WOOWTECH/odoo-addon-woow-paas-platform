@@ -57,8 +57,10 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # 與同目錄的 2026-10-18-mcp-5526e865-limited-image-smoke.json。
 # 2026-10-24：#71 merge 5fa1ff0a（含 #72）八支 image 的 registry digest 已逐一驗證；
 # LaunchPolicy 維持 nextcloud-mcp-server、port 8000。
+# 2026-10-25：改釘 #84 merge fc5fa02e（預設全開＋既有服務一次性遷移）；digest 取自
+# main CI run 27630 的 push 輸出，registry 讀回一致。
 EXPECT_IMAGE_TAG = (
-    '6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:74bfa405800d7791cc0a0aef45a1e035338ae9b8b9b532022d3d28b77257e6d6')
+    'fc5fa02e3ff48225a1a2bdc5dfc74269a57a1b6f@sha256:4f9bf95bb94d6d0d8430a3ec9ad822e6b76d47ec85837ab3f60059302a1be5e1')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 
