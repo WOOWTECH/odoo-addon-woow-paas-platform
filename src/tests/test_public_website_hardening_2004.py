@@ -8,6 +8,11 @@ from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
 
+try:
+    from odoo.tests.common import BaseCase
+except ModuleNotFoundError:  # Standalone developer run outside the Odoo image.
+    from unittest import TestCase as BaseCase
+
 
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = MODULE_ROOT / "services" / "public_website_hardening.py"
@@ -53,7 +58,7 @@ HOMEPAGE_ARCH = """<div>
 </div>"""
 
 
-class PublicWebsiteHardeningTest(unittest.TestCase):
+class PublicWebsiteHardeningTest(BaseCase):
     def test_global_patch_is_valid_idempotent_and_scoped(self):
         patched = hardening.patch_global_view(GLOBAL_ARCH)
         self.assertNotIn('"start_url":"/"', patched)
