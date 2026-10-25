@@ -89,16 +89,24 @@ class TestMcp3TypeTemplateSeed(TransactionCase):
     def test_launch_k8s_native_http_env_governance(self):
         """k8s：原生 http（command=k8s-mcp-http、非 supergateway），治理三 toggle
         走 mcp_server.env 全名（不加前綴）＋TOOLSETS，env_prefix=K8S_MCP_（只作用於
-        connection 鍵）。tools.disabled 真傳導（與 opendesign advisory 相反）。"""
+        connection 鍵）。tools.disabled 真傳導（與 opendesign advisory 相反）。
+
+        預設全開（負責人 2026-10-25）：不唯讀、不擋破壞性、可讀 Secret；toolsets＝上游 v0.0.65
+        不需另外設定的全部工具集（kiali 要 Kiali 網址、netobserv 的預設網址只對 MCP 所在叢集有效，
+        兩者不開），共 34 支，與 woow-mcp-server apps/k8s 的 launcher.FRESH_ENV 相同。"""
         mcp = self._mcp_server('cloud_app_mcp_k8s')
         self.assertEqual(mcp['command'], 'k8s-mcp-http')
         self.assertNotIn('supergateway', mcp['command'])
         self.assertEqual(mcp['env_prefix'], 'K8S_MCP_')
-        env = mcp['env']
-        self.assertEqual(env['K8S_MCP_READ_ONLY'], '1')
-        self.assertEqual(env['K8S_MCP_DISABLE_DESTRUCTIVE'], '1')
-        self.assertEqual(env['K8S_MCP_ALLOW_SECRETS'], '0')
-        self.assertEqual(env['K8S_MCP_TOOLSETS'], 'core,config,helm')
+        self.assertEqual(mcp['env'], {
+            'K8S_MCP_READ_ONLY': '0',
+            'K8S_MCP_DISABLE_DESTRUCTIVE': '0',
+            'K8S_MCP_ALLOW_SECRETS': '1',
+            'K8S_MCP_TOOLSETS': 'config,core,helm,kcp,kubevirt,tekton',
+        })
+        tpl = self._tpl('cloud_app_mcp_k8s')
+        self.assertIn('預設全開', tpl.description)
+        self.assertNotIn('唯讀鎖定', tpl.description + tpl.full_description)
 
     def test_launch_vk_supergateway_bridge(self):
         """vk：supergateway 橋 stdio→streamableHttp（vibe-kanban-mcp global 模式），

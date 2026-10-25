@@ -14,15 +14,16 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
    app 的 LaunchPolicy 固定 command／args）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
 3. **env_prefix 兩處同值**：chart 的 configmap 以頂層 ``envPrefix`` 蓋掉巢狀那格；connection 鍵
    base_url／username／app_password 靠它變成 ``NEXTCLOUD_MCP_*``。
-4. **出廠唯讀由 app 自己做**：seed 不帶 ``mcp_server.env``（LaunchPolicy 的 env_keys 為空，帶了也被忽略）、
-   不帶 ``tools``（app 的 seed_defaults 第一次啟動時把 4 支寫入／刪除工具併入 tools.disabled）；平台設定表單
-   不開任何欄位（開啟寫入工具在服務自己的 Tools 頁）。
+4. **預設全開由 app 自己做**（負責人 2026-10-25）：seed 不帶 ``mcp_server.env``（LaunchPolicy 的 env_keys
+   為空，帶了也被忽略）、不帶 ``tools``（app 的 seed_defaults 第一次啟動時只寫上標記、9 支全開；之前的版本會
+   停用 4 支寫入／刪除工具，已開通的服務維持自己的停用清單）；平台設定表單不開任何欄位（逐支停用在服務自己的
+   Tools 頁）。
 5. **不帶秘密、不帶網址**：``config.sensitive`` 空、``nonSensitive`` 沒有 connection——網址由平台組裝時
    注入（同工作區 Nextcloud 的公開網址），app password 由租戶自己貼；本範本也沒有 gateway 通道，平台不鑄／
    不交付任何 key。
 6. **方案與隱藏**：照抄 mcp-litellm——月 3,000／年 24,000、試用 7 天、免稅、雙向綁定；隱藏只在曝光層
    （is_hidden），實例層不設，上架時只翻 is_hidden。
-7. **說明**：出廠唯讀／Tools 頁逐支開啟／專用帳號＋應用程式密碼（不是登入密碼）／暴力破解防護與停止重試／
+7. **說明**：預設全開／Tools 頁逐支停用／專用帳號＋應用程式密碼（不是登入密碼）／暴力破解防護與停止重試／
    預填網址只在第一次開通／``/mcp`` 不加結尾斜線；資料值直接寫中文、⛔ 不進 .po
    （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
 8. **上架即雙釘**：``test_hidden_until_listed``——2026-10-08 已上架（``is_hidden=False``），image
@@ -113,7 +114,7 @@ class TestMcpNextcloudSeed(TransactionCase):
             self._values()['image']['tag'], EXPECT_IMAGE_TAG,
             'image 被重釘了：請先實查新 image 的 apps/nextcloud（pyproject 的 console script '
             'nextcloud-mcp-server、main.py 的 LaunchPolicy、launcher 的 port／綁定位址、seed_defaults '
-            '的出廠停用清單），確認本檔 test_launch_contract／test_read_only_is_the_apps_own_default 仍成立，'
+            '的新安裝政策），確認本檔 test_launch_contract／test_all_on_is_the_apps_own_default 仍成立，'
             '最後才更新 EXPECT_IMAGE_TAG。')
 
     def test_launch_contract(self):
@@ -135,16 +136,17 @@ class TestMcpNextcloudSeed(TransactionCase):
                          '兩處不同值時以頂層為準——寫成同值，讀 seed 的人才不會被巢狀那格誤導')
         self.assertNotIn('env_prefix', values, 'camelCase：helm 會默默忽略 env_prefix 這個鍵')
 
-    def test_read_only_is_the_apps_own_default(self):
-        """出廠唯讀由 app 自己做：seed_defaults 停用 4 支寫入／刪除工具，launcher 依 Tools 頁算 gating env。
+    def test_all_on_is_the_apps_own_default(self):
+        """預設全開由 app 自己做：seed_defaults 第一次啟動只寫標記、9 支全開，launcher 依 Tools 頁算 gating env。
 
         seed 帶 ``mcp_server.env``（例 READONLY）沒有作用（LaunchPolicy 的 env_keys 為空），還會讓讀 seed 的人
-        以為唯讀是平台開關；seed 帶 ``tools`` 則會和 app 的出廠標記（nextcloud_policy_seeded）重複維護兩份。
+        以為唯讀是平台開關；seed 帶 ``tools`` 則會和 app 的標記（nextcloud_policy_seeded）重複維護兩份，
+        而且 seed 帶任何停用清單都會讓新服務不是全開。
         """
         self.assertNotIn('env', self._mcp_server())
         self.assertEqual(set(self._mcp_server()), {'command', 'args', 'port', 'env_prefix'})
         non_sensitive = self._values()['config']['nonSensitive']
-        self.assertNotIn('tools', non_sensitive, '出廠停用清單由 app 的 seed_defaults 寫，seed 不重複維護')
+        self.assertNotIn('tools', non_sensitive, '新安裝政策由 app 的 seed_defaults 決定（全開），seed 不重複維護')
         self.assertNotIn('READONLY', json.dumps(self._values()))
 
     def test_no_platform_form_fields(self):
@@ -238,14 +240,16 @@ class TestMcpNextcloudSeed(TransactionCase):
 
     def test_description_states_the_contract(self):
         tpl = self._tpl()
-        self.assertIn('出廠唯讀', tpl.description)
+        self.assertIn('預設全開', tpl.description)
+        self.assertNotIn('出廠唯讀', tpl.description + tpl.full_description)
         desc = tpl.full_description
         for needle, why in (
                 ('一個指定的 Nextcloud 帳號', '以單一帳號的權限工作'),
-                ('出廠唯讀', '預設只有讀取工具'),
-                ('5 支讀取工具', '出廠可用的工具數'),
-                ('4 支寫入與刪除工具', '出廠關閉的工具數'),
-                ('Tools 頁', '開啟寫入工具的位置'),
+                ('預設全開', '新服務 9 支工具全開'),
+                ('9 支工具都能用', '開通後可用的工具數'),
+                ('5 支讀取工具', '讀取工具'),
+                ('4 支寫入與刪除工具', '寫入與刪除工具也開著'),
+                ('Tools 頁', '逐支停用工具的位置'),
                 ('專用帳號', '建議另建帳號、只分享需要的資料夾'),
                 ('個人設定 → 安全性 → 建立新的應用程式密碼', '應用程式密碼的建立路徑'),
                 ('Connection 頁', '貼帳密的位置'),

@@ -306,7 +306,7 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
 
     def test_real_mcp_litellm_template_gets_only_the_url_on_top_of_its_seed(self):
         """真範本（seed 的 cloud_app_mcp_litellm）：開通時 helm_values＝範本預設。同工作區有 running
-        LiteLLM ⇒ 組裝結果只多 ``connection.base_url`` 一條（不含 /v1）；啟動契約、唯讀開關、envPrefix、
+        LiteLLM ⇒ 組裝結果只多 ``connection.base_url`` 一條（不含 /v1）；啟動契約、唯讀開關（全開）、envPrefix、
         requiredFields 原樣，任何地方都不帶金鑰。沒有 LiteLLM ⇒ 不寫 connection（租戶自己填）。"""
         real = self.env.ref('woow_paas_platform.cloud_app_mcp_litellm')
         seed = json.loads(real.helm_default_values)
@@ -323,7 +323,7 @@ class TestWorkspaceServiceUrlInjection(TransactionCase):
         self.assertEqual(after['config']['nonSensitive']['mcp_server'],
                          seed['config']['nonSensitive']['mcp_server'])
         self.assertEqual(after['config']['nonSensitive']['mcp_server']['env'],
-                         {'LITELLM_MCP_READONLY': '1'}, '注入不會動到出廠唯讀')
+                         {'LITELLM_MCP_READONLY': '0'}, '注入不會動到唯讀開關（新服務預設全開）')
         self.assertEqual(after['envPrefix'], 'LITELLM_MCP_')
         self.assertEqual(after['config']['requiredFields'], ['admin_password'])
         self.assertFalse(after['config'].get('sensitive'))

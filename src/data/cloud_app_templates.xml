@@ -601,10 +601,18 @@
                  明示隱藏的審批工具，屬預期模式差異；既有服務240
                  仍舊1ec，需另行升版回歸。此改釘屬230之後的下一次平台發版，不能
                  當成既有229／230範本；回滾值為上方0b2cff1f完整tag@digest。 -->
+            <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 0.2.0 起的 odoo 子行程相同）：新服務四個寫入開關都開——
+                 ODOO_MCP_ENABLE_WRITES（審核寫入）、ODOO_MCP_ALLOW_DIRECT_WRITES（execute_method 直接 create／write／
+                 unlink；MCP 啟動時隱藏三支審批工具，41 → 38 支）、ODOO_MCP_ALLOW_UNKNOWN_METHODS（未審查的副作用方法，
+                 如 action_confirm、action_post）、MCP_CHATTER_DIRECT（chatter_post 第一次就張貼、不先預覽）。後兩個從
+                 woow-mcp-server #84 起才在 LaunchPolicy 白名單內；execute_method／chatter_post 的工具說明也從 #84 起跟著
+                 實際開關。只影響新開通：chart 是 seed-if-absent、Redeploy 只換 image（#1408），既有服務維持自己
+                 config.json 裡的值；新映像對既有設定缺鍵時補改版前的值（直接寫入、未審查方法、chatter 直接張貼為關）。
+                 回滾值：env {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:165b3f73399a2113626d6983c32960dfee3406cadda36884cf0dffeaf3e07572"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "woow-odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "0"}}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:165b3f73399a2113626d6983c32960dfee3406cadda36884cf0dffeaf3e07572"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "woow-odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": "", "env": {"ODOO_MCP_ENABLE_WRITES": "1", "ODOO_MCP_ALLOW_DIRECT_WRITES": "1", "ODOO_MCP_ALLOW_UNKNOWN_METHODS": "1", "MCP_CHATTER_DIRECT": "1"}}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -809,22 +817,23 @@
         <!-- k8s：kubernetes-mcp-server（Go binary 原生 http，command=k8s-mcp-http，
              非 supergateway 橋）。治理三 toggle 走 mcp_server.env 全名
              （K8S_MCP_READ_ONLY／DISABLE_DESTRUCTIVE／ALLOW_SECRETS）＋TOOLSETS，
-             launcher 轉 TOML disabled_tools 真傳導、restart 生效（出廠即唯讀鎖，
-             tools.disabled 亦真生效）；env_prefix=K8S_MCP_ 只作用於 connection 鍵
+             launcher 轉 TOML disabled_tools 真傳導、restart 生效（原本出廠即唯讀鎖，2026-10-25 起
+             預設全開，見下方本筆註解；tools.disabled 亦真生效）；env_prefix=K8S_MCP_ 只作用於 connection 鍵
              （kubeconfig／in_cluster）。bind-address 127.0.0.1 與 disable-multi-cluster
              由 launcher 硬編（安全邊界，seed 不覆寫）。租戶前置：外部叢集建
-             ServiceAccount 綁 view ClusterRole，產生 token 組 kubeconfig，經 admin
-             Connection 頁貼入。 -->
+             ServiceAccount 綁合適的 ClusterRole（MCP 預設全開，權限由這裡決定；只讀就綁 view），
+             產生 token 組 kubeconfig，經 admin Connection 頁貼入。 -->
         <record id="cloud_app_mcp_k8s" model="woow_paas_platform.cloud_app_template">
             <field name="name">Kubernetes MCP</field>
             <field name="slug">mcp-k8s</field>
-            <field name="description">Kubernetes MCP — 以 kubeconfig 連接外部 K8s 叢集，治理工具出廠唯讀鎖定</field>
+            <field name="description">Kubernetes MCP — 以 kubeconfig 連接外部 K8s 叢集，預設全開（寫入、刪除、讀 Secret），權限由 kubeconfig 決定</field>
             <field name="full_description">Kubernetes MCP server：以 kubeconfig 連接
-                「外部」Kubernetes 叢集，提供 core／config／helm 工具集的唯讀治理能力。
-                治理三 toggle（READ_ONLY／DISABLE_DESTRUCTIVE／ALLOW_SECRETS）於子行程
-                真傳導、出廠即全鎖，危險與寫入工具預設封鎖。租戶前置需求：於目標外部叢集
-                (1) 建立 ServiceAccount 並綁定 view ClusterRole（寫操作另行授權），
-                (2) 產生 token 組成 kubeconfig，(3) 於 admin Connection 頁貼入 kubeconfig。</field>
+                「外部」Kubernetes 叢集，提供 config／core／helm／kcp／kubevirt／tekton 六個工具集共 34 支工具。
+                預設全開：寫入、刪除等破壞性工具與 Secret 存取都開啟（治理三 toggle READ_ONLY／DISABLE_DESTRUCTIVE／
+                ALLOW_SECRETS 於子行程真傳導，可在 admin Settings 頁改成唯讀、擋破壞性或封鎖 Secret）。AI 實際能做什麼由
+                kubeconfig 的 RBAC 決定。租戶前置需求：於目標外部叢集 (1) 建立 ServiceAccount 並綁定合適的 ClusterRole
+                （只想讀就綁 view；要讓 AI 寫入就綁 edit 等），(2) 產生 token 組成 kubeconfig，(3) 於 admin Connection 頁
+                貼入 kubeconfig。</field>
             <field name="category">mcp</field>
             <field name="tags">["mcp", "kubernetes", "k8s", "mcp-server", "ai"]</field>
 
@@ -834,10 +843,18 @@
                  2026-10-10 改釘 image 1ec1bb0b（woow-mcp-server #48，#1614；main CI run 17227 job 18845；見上方三型說明）。
                  apps/k8s 無變動、只多共用層 log 遮蔽；已下架，正式站沒有實例。回滾值（chart 0.1.7 不動）：
                  ff32a7c11f57f32838417fb3aa3a4d4593210818@sha256:4774f40d7c7daa41dbb0e40fe30bc67fafe56530d32f5b75b7f99eaa0a95efca。 -->
+            <!-- 2026-10-25 預設全開（負責人決定：PaaS 限定的 k8s MCP 也全開——寫入、刪除資源、讀 Secret）：
+                 K8S_MCP_READ_ONLY=0、K8S_MCP_DISABLE_DESTRUCTIVE=0、K8S_MCP_ALLOW_SECRETS=1、K8S_MCP_TOOLSETS＝
+                 config,core,helm,kcp,kubevirt,tekton（上游 v0.0.65 不需另外設定的全部工具集，34 支；kiali 要 Kiali
+                 網址、netobserv 的預設網址只對 MCP 所在叢集有效，兩者不開），與 woow-mcp-server #84 apps/k8s 的
+                 launcher.FRESH_ENV 相同；#84 起 registry 也收了 kcp／KubeVirt／Tekton 的 11 支。AI 實際能做什麼由
+                 租戶 kubeconfig 的 RBAC 決定。只影響新開通（已下架，正式站沒有實例）：既有服務維持自己 config.json
+                 的值，缺鍵時 launcher 仍擋 Secret、只開 core,config,helm。回滾值：env {"K8S_MCP_READ_ONLY": "1",
+                 "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
-            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:2909a17f56b8019e70c99d4cc3f18f30e7377d93b72bbca937adaf83cea6e3ac"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "1", "K8S_MCP_DISABLE_DESTRUCTIVE": "1", "K8S_MCP_ALLOW_SECRETS": "0", "K8S_MCP_TOOLSETS": "core,config,helm"}, "env_prefix": "K8S_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "k8s", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:2909a17f56b8019e70c99d4cc3f18f30e7377d93b72bbca937adaf83cea6e3ac"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "k8s-mcp-http", "args": ["--port", "8000"], "port": 8000, "env": {"K8S_MCP_READ_ONLY": "0", "K8S_MCP_DISABLE_DESTRUCTIVE": "0", "K8S_MCP_ALLOW_SECRETS": "1", "K8S_MCP_TOOLSETS": "config,core,helm,kcp,kubevirt,tekton"}, "env_prefix": "K8S_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -3067,8 +3084,9 @@
              env_prefix：chart configmap 以頂層 ``envPrefix`` 蓋掉 config.nonSensitive.mcp_server.env_prefix
              （sprig merge 以第一個 dict 為準），兩處寫同值 LITELLM_MCP_；connection 鍵 base_url／master_key 經
              前綴大寫注入子行程（LITELLM_MCP_BASE_URL／LITELLM_MCP_MASTER_KEY）。
-             **出廠唯讀**：mcp_server.env.LITELLM_MCP_READONLY="1"（子行程 gate 註冊時移除所有非 read 工具）；
-             租戶在 admin Settings 頁「Read-only Mode」關閉才解鎖寫入。app 啟動時鍵不存在也會補 "1"（保險）。
+             **唯讀開關**：mcp_server.env.LITELLM_MCP_READONLY（"1" 時子行程 gate 註冊時移除所有非 read 工具）；
+             原本出廠為 "1"，2026-10-25 起預設全開為 "0"（見本筆 record 內註解），租戶要唯讀在 admin Settings 頁
+             打開「Read-only Mode」。app 啟動時鍵不存在會補（#84 起補 "0"）。
              connection.base_url 刻意**不**寫在 seed：由 cloud_service ``_WORKSPACE_URL_INJECTORS`` 在組裝時
              注入同工作區 running LiteLLM 的 ``http://<release>-litellm.<ns>.svc.cluster.local:4000``（不含 /v1，
              #1482）；chart 是 seed-if-absent ⇒ 只有第一次開通生效。master_key **絕不**由平台供給（不跨服務傳
@@ -3098,14 +3116,15 @@
         <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：AI 模型閘道（LiteLLM）</field>
             <field name="slug">mcp-litellm</field>
-            <field name="description">用 MCP 讓 AI agent 查 LiteLLM 模型閘道的用量與花費、管理金鑰／團隊／使用者／模型。出廠唯讀（18 支查詢工具），在管理介面解鎖後才能寫入。1 vCPU／1 GB RAM／1 GB 磁碟</field>
+            <field name="description">用 MCP 讓 AI agent 查 LiteLLM 模型閘道的用量與花費、管理金鑰／團隊／使用者／模型。預設全開（40 支工具，含寫入與刪除），可在管理介面改成唯讀或逐支停用。1 vCPU／1 GB RAM／1 GB 磁碟</field>
             <field name="full_description">讓 Claude、Hermes、pi-agent 等 AI agent 透過 MCP 管理你的
                 LiteLLM AI 模型閘道——查模型、用量與花費、健康狀態，管理虛擬金鑰、團隊、使用者與模型，共 40 支工具。
-                **出廠唯讀**：開通後只提供 18 支查詢工具；要發金鑰、改模型、管團隊與使用者（22 支寫入工具，其中 8 支是刪除、封鎖等
-                破壞性工具），須在本服務管理介面的 Settings 頁關閉「Read-only Mode」才會解鎖。也可以在 Tools 頁逐支停用工具。
-                **金鑰**：建議在 LiteLLM 後台建立一個 proxy_admin_viewer（唯讀管理員）使用者，用他的金鑰貼到本服務管理介面的
-                Connection 頁，不要貼 master key；需要寫入時再換成有寫入權限的金鑰並解除唯讀。金鑰只存在本服務的磁碟，
-                平台不代管，也不會自動帶入。
+                **預設全開**：開通後 40 支工具都能用，包括發金鑰、改模型、管團隊與使用者的 22 支寫入工具（其中 8 支是刪除、
+                封鎖等破壞性工具）。要限制時，在本服務管理介面的 Settings 頁打開「Read-only Mode」（只留 18 支查詢工具），
+                或在 Tools 頁逐支停用工具。
+                **金鑰**：AI 實際能做什麼由你貼到本服務管理介面 Connection 頁的 LiteLLM 金鑰權限決定：要讓 AI 發金鑰、改模型，
+                就貼有寫入權限的金鑰；只想讓它查資料，就在 LiteLLM 後台建立一個 proxy_admin_viewer（唯讀管理員）使用者，
+                貼他的金鑰。不要貼 master key。金鑰只存在本服務的磁碟，平台不代管，也不會自動帶入。
                 **LiteLLM 網址**：同一工作區已有執行中的「AI 模型閘道（LiteLLM）」時，平台只在第一次開通時預填它的內部網址
                 （之後才開通或更換的 LiteLLM 不會自動帶入）；其他情況請在 Connection 頁自己填 LiteLLM 網址（不含 /v1）。
                 **接上 AI 用戶端**：管理介面密碼於開通時一次性顯示（可在服務頁重設）。在 Tokens 頁產生 MCP token，用戶端的
@@ -3114,10 +3133,15 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "litellm", "llm", "ai-gateway", "mcp-server", "ai"]</field>
 
+            <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 相同）：LITELLM_MCP_READONLY "1" → "0"，新服務 40 支工具
+                 全開（含 22 支寫入、其中 8 支破壞性）；租戶要唯讀在 admin Settings 頁打開 Read-only Mode。woow-mcp-server
+                 #84 起 app 的 seed_defaults 缺鍵也補 "0"（缺鍵只會是從未啟動過的新安裝）。說明改成預設全開、權限由
+                 金鑰決定。只影響新開通：既有服務 config.json 裡的 "1" 照舊（chart seed-if-absent、Redeploy 只換
+                 image）。回滾值：env {"LITELLM_MCP_READONLY": "1"}＋上一版說明。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:1229c5259d3b1942705897b8604b4fe0c485995e68ebae0b4d71e874bb02d941"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "1"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:1229c5259d3b1942705897b8604b4fe0c485995e68ebae0b4d71e874bb02d941"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "0"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -3148,10 +3172,11 @@
              ``mcp_server.port`` 8000＝args 的 port（core proxy 轉發目標，不一致一律 502）。
              env_prefix：頂層 ``envPrefix`` 與巢狀 mcp_server.env_prefix 寫同值 NEXTCLOUD_MCP_（chart configmap 以頂層為準）；
              connection 鍵 base_url／username／app_password 經前綴注入子行程（只走環境變數、不進 argv）。
-             **出廠唯讀**：app 的 seed_defaults 第一次啟動時自己把 4 支寫入／刪除工具併入 tools.disabled 並寫上
-             nextcloud_policy_seeded 標記；launcher 每次啟動依 Tools 頁的 tools.disabled 算出 NEXTCLOUD_MCP_READONLY／
+             **工具政策由 app 自己做**：原本 app 的 seed_defaults 第一次啟動時把 4 支寫入／刪除工具併入 tools.disabled
+             並寫上 nextcloud_policy_seeded 標記（出廠唯讀）；2026-10-25 起（woow-mcp-server #84）只寫標記、9 支全開，
+             見本筆 record 內註解。launcher 每次啟動依 Tools 頁的 tools.disabled 算出 NEXTCLOUD_MCP_READONLY／
              ALLOW_DELETE／DISABLED_TOOLS（LaunchPolicy 的 env_keys 為空 ⇒ mcp_server.env 會被忽略）。所以 seed **不帶**
-             mcp_server.env、也不帶 tools（與 litellm 的 READONLY env 不同）；租戶在 Tools 頁逐支開啟寫入工具。
+             mcp_server.env、也不帶 tools（與 litellm 的 READONLY env 不同）；租戶在 Tools 頁逐支停用工具。
              connection.base_url 刻意**不**寫在 seed：由 cloud_service ``_WORKSPACE_URL_INJECTORS`` 在組裝時注入同工作區
              running Nextcloud 的**公開** https 網址（``_public_base_url()``，與 Nextcloud chart 的 nextcloud.publicUrl
              同一個值）；chart 是 seed-if-absent ⇒ 只有第一次開通生效。⚠ 必須是公開網址：叢集內網址過不了 Nextcloud 的
@@ -3181,14 +3206,15 @@
         <record id="cloud_app_mcp_nextcloud" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：Nextcloud</field>
             <field name="slug">mcp-nextcloud</field>
-            <field name="description">用 MCP 讓 Claude 等 AI 用戶端讀寫一個 Nextcloud 帳號的檔案、行事曆與待辦。出廠唯讀（5 支讀取工具），寫入與刪除工具要在管理介面逐支開啟。1 vCPU／1 GB RAM／1 GB 磁碟</field>
+            <field name="description">用 MCP 讓 Claude 等 AI 用戶端讀寫一個 Nextcloud 帳號的檔案、行事曆與待辦。預設全開（9 支工具，含寫入與刪除），可在管理介面逐支停用。1 vCPU／1 GB RAM／1 GB 磁碟</field>
             <field name="full_description">讓 Claude、Hermes、pi-agent 等支援 MCP 的 AI 用戶端，以**一個指定的 Nextcloud 帳號**
-                工作：瀏覽資料夾、讀取檔案內容、查看行事曆與待辦事項；開放後也能建立、改寫、上傳與刪除檔案，共 9 支工具。
-                **出廠唯讀**：開通後只開 5 支讀取工具（列出資料夾、讀取檔案內容、讀取文字檔、列出行事曆、讀取待辦）；
-                4 支寫入與刪除工具（建立文字檔、改寫文字檔、上傳檔案、刪除檔案）預設關閉，須在本服務管理介面的 Tools 頁
-                逐支開啟。改寫與刪除前會比對檔案版本，檔案在讀取後被別人改過就會拒絕；刪除的檔案會進 Nextcloud 的垃圾桶。
-                **專用帳號與應用程式密碼**：建議在 Nextcloud 另建一個給 AI 用的專用帳號，只把需要的資料夾與行事曆分享給它
-                （不需寫入的用唯讀分享）——應用程式密碼能存取該帳號看得到的一切。以這個帳號登入 Nextcloud →
+                工作：瀏覽資料夾、讀取檔案內容、查看行事曆與待辦事項，也能建立、改寫、上傳與刪除檔案，共 9 支工具。
+                **預設全開**：開通後 9 支工具都能用——5 支讀取工具（列出資料夾、讀取檔案內容、讀取文字檔、列出行事曆、讀取待辦）
+                與 4 支寫入與刪除工具（建立文字檔、改寫文字檔、上傳檔案、刪除檔案）。要限制時，在本服務管理介面的 Tools 頁
+                逐支停用（停用那 4 支就是唯讀）。改寫與刪除前會比對檔案版本，檔案在讀取後被別人改過就會拒絕；刪除的檔案會進
+                Nextcloud 的垃圾桶。
+                **專用帳號與應用程式密碼**：AI 能讀寫的範圍就是這個帳號看得到的一切，建議在 Nextcloud 另建一個給 AI 用的專用帳號，
+                只把需要的資料夾與行事曆分享給它（不需寫入的用唯讀分享）。以這個帳號登入 Nextcloud →
                 個人設定 → 安全性 → 建立新的應用程式密碼，把只顯示一次的密碼連同帳號名稱貼到本服務管理介面的 Connection 頁。
                 請勿貼該帳號的登入密碼。應用程式密碼只存在本服務的磁碟，平台不代為提供、不會自動帶入，也不會存到其他地方；
                 在 Nextcloud 撤銷後，請回 Connection 頁貼上新的。
@@ -3203,6 +3229,10 @@
             <field name="category">mcp</field>
             <field name="tags">["mcp", "nextcloud", "files", "calendar", "mcp-server", "ai"]</field>
 
+            <!-- 2026-10-25 預設全開（負責人決定，與 HA add-on 相同）：seed 不變（本來就不帶 env／tools），全開由
+                 woow-mcp-server #84 的 app seed_defaults 做——第一次啟動只寫 nextcloud_policy_seeded 標記、不再停用 4 支
+                 寫入／刪除工具，新服務 9 支全開；說明改成預設全開。已有標記的既有服務停用清單原封不動。回滾：
+                 改釘回 #84 之前的 image＋上一版說明。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>

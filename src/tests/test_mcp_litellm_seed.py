@@ -14,13 +14,15 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
    host）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
 3. **env_prefix 兩處同值**：chart 的 configmap 以頂層 ``envPrefix`` 蓋掉巢狀那格；connection 鍵
    base_url／master_key 靠它變成 ``LITELLM_MCP_BASE_URL``／``LITELLM_MCP_MASTER_KEY``。
-4. **出廠唯讀**：``LITELLM_MCP_READONLY="1"``，seed 不帶任何放寬 gate 的 env；平台設定表單不開任何欄位
-   （解鎖在服務自己的 admin Settings 頁）。
+4. **預設全開**（負責人 2026-10-25）：``LITELLM_MCP_READONLY="0"``，40 支工具全開；seed 只帶這個開關，
+   平台設定表單不開任何欄位（要改成唯讀在服務自己的 admin Settings 頁）。2026-10-25 之前開通的服務 seed 是
+   ``"1"``，chart 是 seed-if-absent、Redeploy 只換 image，所以那些服務維持唯讀。
 5. **不帶秘密、不帶網址**：``config.sensitive`` 空、``nonSensitive`` 沒有 connection——網址由平台組裝時
    注入（同工作區 LiteLLM），金鑰由租戶自己貼；本範本也沒有 gateway 通道，平台不鑄／不交付任何 key。
 6. **方案與上架**：月 3,000／年 24,000、試用 7 天、免稅、雙向綁定；上架只翻曝光層（is_hidden），
    實例層從未設。
-7. **說明**：唯讀／解鎖／建議 viewer key／預填網址只在第一次開通／``/mcp`` 不加結尾斜線；資料值直接寫
+7. **說明**：預設全開／Read-only Mode 可收回／權限由金鑰決定（viewer key 只讀）／預填網址只在第一次開通／
+   ``/mcp`` 不加結尾斜線；資料值直接寫
    中文、⛔ 不進 .po（docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
 8. **上架即雙釘**：#1487 以隱藏卡片進 seed（隨 .210 上正式站），沙盒實測（woow-mcp-server #33）通過後
    2026-10-07 公開上架；``test_hidden_until_listed`` 從此是實際生效的守線（``is_hidden=False`` ⟹ image
@@ -107,7 +109,7 @@ class TestMcpLitellmSeed(TransactionCase):
             self._values()['image']['tag'], EXPECT_IMAGE_TAG,
             'image 被重釘了：請先實查新 image 的 apps/litellm（pyproject 的 console script '
             'litellm-mcp-server、launcher 的 port／綁定位址、seed_defaults 的唯讀鍵名），確認本檔'
-            'test_launch_contract／test_read_only_by_default 仍成立，最後才更新 EXPECT_IMAGE_TAG。')
+            'test_launch_contract／test_all_on_by_default 仍成立，最後才更新 EXPECT_IMAGE_TAG。')
 
     def test_launch_contract(self):
         mcp = self._mcp_server()
@@ -127,12 +129,12 @@ class TestMcpLitellmSeed(TransactionCase):
                          '兩處不同值時以頂層為準——寫成同值，讀 seed 的人才不會被巢狀那格誤導')
         self.assertNotIn('env_prefix', values, 'camelCase：helm 會默默忽略 env_prefix 這個鍵')
 
-    def test_read_only_by_default(self):
-        """出廠唯讀：18 支查詢工具；寫入要租戶在 admin Settings 頁自己解鎖。"""
+    def test_all_on_by_default(self):
+        """預設全開（負責人 2026-10-25）：40 支工具全開；要唯讀由租戶在 admin Settings 頁自己打開。"""
         env = self._mcp_server()['env']
-        self.assertEqual(env, {READONLY_ENV: '1'},
-                         'seed 只帶唯讀開關且值為 "1"；其他 gate（停用分類／工具）留給租戶在 admin 自己調')
-        self.assertIsInstance(env[READONLY_ENV], str, 'env 值要是字串 "1"（子行程讀環境變數）')
+        self.assertEqual(env, {READONLY_ENV: '0'},
+                         'seed 只帶唯讀開關且值為 "0"（全開）；其他 gate（停用分類／工具）留給租戶在 admin 自己調')
+        self.assertIsInstance(env[READONLY_ENV], str, 'env 值要是字串 "0"（子行程讀環境變數）')
         for key in env:
             self.assertTrue(key.startswith(ENV_PREFIX), key)
 
@@ -221,14 +223,17 @@ class TestMcpLitellmSeed(TransactionCase):
 
     def test_description_states_the_contract(self):
         tpl = self._tpl()
-        self.assertIn('出廠唯讀', tpl.description)
+        self.assertIn('預設全開', tpl.description)
+        self.assertNotIn('出廠唯讀', tpl.description + tpl.full_description)
         desc = tpl.full_description
         for needle, why in (
-                ('出廠唯讀', '預設只有查詢工具'),
+                ('預設全開', '新服務 40 支工具全開'),
+                ('40 支工具都能用', '開通後可用的工具數'),
+                ('8 支是刪除、', '包含破壞性工具'),
+                ('Read-only Mode', '改成唯讀的位置（admin Settings 頁）'),
                 ('18 支查詢工具', '唯讀模式可用的工具數'),
-                ('8 支是刪除、封鎖等', '解鎖後才有的破壞性工具'),
-                ('Read-only Mode', '解鎖位置（admin Settings 頁）'),
-                ('proxy_admin_viewer', '建議貼唯讀管理員的金鑰'),
+                ('金鑰權限決定', 'AI 能做什麼由金鑰權限決定'),
+                ('proxy_admin_viewer', '只想查資料時貼唯讀管理員的金鑰'),
                 ('不要貼 master key', '不建議 master key'),
                 ('只在第一次開通時預填', '同工作區網址只在第一次開通帶入（seed-if-absent）'),
                 ('不含 /v1', '手填網址的格式'),
