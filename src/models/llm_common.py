@@ -40,6 +40,7 @@ PARAM_SHOW_LLM = 'woow_paas_platform.show_llm'
 #: 緊急開關只擋新操作；缺值 true，不影響已付款 outbox 與既有金鑰。
 PARAM_ORDERS_ENABLED = 'woow_paas_platform.llm_orders_enabled'
 PARAM_PILOT_PARTNER_IDS = 'woow_paas_platform.llm_pilot_partner_ids'
+PARAM_PRICING_PROFILE = 'woow_paas_platform.llm_pricing_profile'
 PARAM_PROXY_URL = nac.PARAM_PROXY_URL
 PARAM_USERNAME_PREFIX = 'woow_paas_platform.newapi_username_prefix'
 PARAM_IP_BLOCK = 'woow_paas_platform.llm_synthetic_ip_block'
@@ -63,6 +64,7 @@ LLM_CONFIG_PARAMETERS = (
     PARAM_SHOW_LLM,
     PARAM_ORDERS_ENABLED,
     PARAM_PILOT_PARTNER_IDS,
+    PARAM_PRICING_PROFILE,
     PARAM_PROXY_URL,
     PARAM_USERNAME_PREFIX,
     PARAM_IP_BLOCK,
@@ -79,6 +81,7 @@ CONFIG_CHANGE_CODES = {
     PARAM_PUBLIC_BASE_URL: 'llm_config_public_base_url',
     PARAM_USERNAME_PREFIX: 'llm_config_username_prefix',
     PARAM_SERVICE_ADMIN_ID: 'llm_config_service_admin_id',
+    PARAM_PRICING_PROFILE: 'llm_config_pricing_profile',
 }
 
 # --------------------------------------------------------------------------- #
@@ -434,6 +437,7 @@ def llm_config(env):
         # get_param 回 False 表示缺值；不合法的 SQL 直改則 fail closed。
         'orders_enabled': _truthy(icp.get_param(PARAM_ORDERS_ENABLED, 'True')),
         'pilot': _parse_pilot(icp.get_param(PARAM_PILOT_PARTNER_IDS)),
+        'pricing_profile': (icp.get_param(PARAM_PRICING_PROFILE) or '').strip(),
         'canary': canary,
         'prefix': prefix,
         'block': block,
@@ -450,8 +454,10 @@ def config_fingerprint(env):
     """
     import hashlib
     icp = env['ir.config_parameter'].sudo()
+    # An unset new profile must not change every existing instance's I8 fingerprint.
     text = '\n'.join('%s=%s' % (key, (icp.get_param(key) or '').strip())
-                     for key in sorted(CONFIG_CHANGE_CODES))
+                     for key in sorted(CONFIG_CHANGE_CODES)
+                     if key != PARAM_PRICING_PROFILE or (icp.get_param(key) or '').strip())
     return hashlib.sha256(text.encode('utf-8')).hexdigest()[:32]
 
 
@@ -484,6 +490,10 @@ def validate_llm_param(key, value):
     text = (value or '').strip() if isinstance(value, str) or value is None else str(value)
     if not text:
         return
+    if key == PARAM_PRICING_PROFILE:
+        from ..services.llm_pricing import PAID_PILOT_PROFILE
+        if text != PAID_PILOT_PROFILE:
+            raise ValidationError(_('The AI models pricing profile is not supported.'))
     if key == PARAM_ORDERS_ENABLED and text.lower() not in ('true', 'false', '1', '0'):
         raise ValidationError(_('AI model orders enabled must be true or false.'))
     if key == PARAM_PROXY_URL and text not in nac.ALLOWED_PROXY_URLS:

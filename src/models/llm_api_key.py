@@ -40,6 +40,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
 
 from ..services import newapi_client as nac
+from ..services.llm_pricing import PricingInvalid, pricing_profile_for_config
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_common import (
     ERR_LLM_CLOSED,
@@ -61,6 +62,7 @@ from .llm_common import (
     RESULT_NOT_EXECUTED,
     LlmError,
     LlmQuotaInteger,
+    llm_config,
     _is_llm_internal,
     _llm_internal,
     _without_llm_internal,
@@ -422,16 +424,7 @@ class LlmApiKey(models.Model):
                 days=_PAID_EXPIRY_DAYS[expires])
 
         default_models = self._llm_default_models()
-        selected = None
-        if models is not None:
-            if type(models) is not list or not models \
-                    or any(not isinstance(model, str) for model in models) \
-                    or len(set(models)) != len(models) \
-                    or not set(models) <= set(default_models):
-                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
-            requested = set(models)
-            # Use cached catalogue order, never client ordering.
-            selected = [model for model in default_models if model in requested]
+        selected = self._llm_paid_model_selection(models, default_models)
         return {
             'kind': 'paid',
             'key_label': name,
@@ -441,6 +434,37 @@ class LlmApiKey(models.Model):
             'models': tuple(selected) if selected else None,
             'model_limits_enabled': selected is not None,
         }
+
+    @api.model
+    def _llm_paid_model_selection(self, models, default_models):
+        try:
+            profile = pricing_profile_for_config(llm_config(self.env))
+        except PricingInvalid:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        selected = list(default_models) if profile else None
+        if models is not None:
+            if type(models) is not list or not models \
+                    or any(not isinstance(model, str) for model in models) \
+                    or len(set(models)) != len(models) \
+                    or not set(models) <= set(default_models):
+                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
+            requested = set(models)
+            # Use cached catalogue order, never client ordering.
+            selected = [model for model in default_models if model in requested]
+        return selected
+
+    @api.model
+    def _llm_existing_paid_pilot_selection(self, key):
+        if key.kind != 'paid':
+            return None
+        try:
+            profile = pricing_profile_for_config(llm_config(self.env))
+        except PricingInvalid:
+            raise LlmError(ERR_LLM_UNAVAILABLE) from None
+        if not profile:
+            return None
+        current = key.model_allowlist.split(',') if key.model_allowlist else None
+        return self._llm_paid_model_selection(current, self._llm_default_models())
 
     @api.model
     def _llm_default_models(self):
@@ -1095,14 +1119,16 @@ class LlmApiKey(models.Model):
         expires_at = (None if expiry in ('never', None) else
                       _utcnow().replace(microsecond=0) + timedelta(days=_PAID_EXPIRY_DAYS[expiry])
                       if expires is not _OMITTED else expiry)
+        if models is _OMITTED:
+            selection = self._llm_existing_paid_pilot_selection(key)
+            if selection is not None:
+                # Any remote edit must preserve the bounded pilot. Older all-model
+                # keys are narrowed; obsolete explicit selections fail before I/O.
+                models = selection
         model_value = key.model_allowlist if models is _OMITTED else models
         if models is not _OMITTED:
             defaults = self._llm_default_models()
-            if models is not None and (type(models) is not list or not models or
-                    any(not isinstance(m, str) for m in models) or len(set(models)) != len(models)
-                    or not set(models) <= set(defaults)):
-                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
-            selected = [m for m in defaults if m in set(models)] if models is not None else None
+            selected = self._llm_paid_model_selection(models, defaults)
             model_value = ','.join(selected) if selected else None
         token_id = self._llm_management_token_id(key)
         ip, up, client = self._llm_management_remote(account)
@@ -1162,6 +1188,7 @@ class LlmApiKey(models.Model):
             raise LlmError(ERR_LLM_KEY_INVALID)
         if not key.expires_at:
             return key._llm_dto()
+        selection = self._llm_existing_paid_pilot_selection(key)
         token_id = self._llm_management_token_id(key)
         ip, up, client = self._llm_management_remote(account)
         got = client.user_get_token(ip, up, token_id)
@@ -1177,15 +1204,20 @@ class LlmApiKey(models.Model):
             base = max(int(_utcnow().replace(tzinfo=timezone.utc).timestamp()), current)
             expiry = base + 90 * 86400
             body = nac.paid_token_update_body(got.data, token_id, key.newapi_name,
-                                              expired_time=expiry)
+                                              expired_time=expiry,
+                                              model_limits_enabled=True if selection is not None else None,
+                                              model_limits=','.join(selection) if selection is not None else None)
         except nac.NewApiInputError:
             raise LlmError(ERR_LLM_UNAVAILABLE) from None
         result = client.user_update_token(ip, up, body)
         if not result.ok:
             self._llm_management_raise(account, result)
         expiry_dt = datetime.fromtimestamp(expiry, timezone.utc).replace(tzinfo=None)
-        _llm_internal(key).write({'expires_at': expiry_dt, 'expiry_notice_7d_at': False,
-                                  'expiry_notice_1d_at': False})
+        values = {'expires_at': expiry_dt, 'expiry_notice_7d_at': False,
+                  'expiry_notice_1d_at': False}
+        if selection is not None:
+            values['model_allowlist'] = ','.join(selection)
+        _llm_internal(key).write(values)
         self._llm_management_audit('key_update', account, key, user, real_ip)
         return key._llm_dto()
 
@@ -1201,8 +1233,23 @@ class LlmApiKey(models.Model):
             if reason in ('expired', 'exhausted', 'free_capped', 'suspended', 'overdraft'):
                 raise LlmError(ERR_LLM_KEY_CANNOT_ENABLE, reason=reason)
             account._llm_require_current_terms()
+        selection = self._llm_existing_paid_pilot_selection(key) if enabled else None
+        if selection is not None and not key.model_allowlist:
+            # Status-only PUT cannot also narrow an old unrestricted token.
+            raise LlmError(ERR_LLM_KEY_INVALID, field='models')
         token_id = self._llm_management_token_id(key)
         ip, up, client = self._llm_management_remote(account)
+        if selection is not None:
+            got = client.user_get_token(ip, up, token_id)
+            if not got.ok:
+                self._llm_management_raise(account, got)
+            try:
+                checked = nac.paid_token_update_body(got.data, token_id, key.newapi_name)
+            except nac.NewApiInputError:
+                raise LlmError(ERR_LLM_UNAVAILABLE) from None
+            if (checked['model_limits_enabled'] is not True
+                    or set(checked['model_limits'].split(',')) != set(selection)):
+                raise LlmError(ERR_LLM_KEY_INVALID, field='models')
         result = client.user_set_token_status(ip, up, token_id, enabled)
         if not result.ok:
             self._llm_management_raise(account, result)
