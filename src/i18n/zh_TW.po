@@ -14079,9 +14079,9 @@ msgstr "您回報了非本人操作，我們已暫停服務並會與您聯絡"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/tabs/LlmOverviewTab.js:0
 msgid ""
-"Your AI credit is 0. You can use the free trial model for now; moving "
-"credit from your points wallet is coming soon."
-msgstr "AI 額度為 0。您可以先使用免費試用模型；從點數錢包轉入 AI 額度的功能即將推出。"
+"Your AI credit is 0. You can use the free trial model for now, or go to "
+"the Credit tab to convert points from your points wallet into AI credit."
+msgstr "AI 額度為 0。您可以先使用免費試用模型，或前往「額度」分頁從點數錢包轉入 AI 額度。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

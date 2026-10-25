@@ -580,7 +580,7 @@ test("已開通：額度用整數 quota 捨去、今日免費試用 X／200、�
   assert.equal(tab.screen, "active");
   assert.equal(tab.balanceText, "0.00 點");
   assert.equal(tab.showZeroCreditBanner, true);
-  assert.equal(tab.zeroCreditText, "AI 額度為 0。您可以先使用免費試用模型；從點數錢包轉入 AI 額度的功能即將推出。");
+  assert.equal(tab.zeroCreditText, "AI 額度為 0。您可以先使用免費試用模型，或前往「額度」分頁從點數錢包轉入 AI 額度。");
   assert.equal(tab.freeTrialUsageText, "—／200 次");
   fake.usage = { today_count: 99, daily_limit: 200, items: [] };
   assert.equal(tab.freeTrialUsageText, "—／200 次", "recent log page count cannot override the meter");
