@@ -15,6 +15,16 @@ POINTS_PER_USD = 32
 CREATE_CACHE_RATIO_DEFAULT = Decimal('1.25')
 ALLOWED_GROUPS = frozenset({'default', 'free'})
 FREE_MODELS = frozenset({'qwen3-4b-aicoder', 'qwen3-4b-cluster1'})
+PAID_PILOT_PROFILE = 'litellm-three-providers-20261025-v1'
+PAID_PILOT_MODELS = frozenset({
+    'chatgpt/gpt-5.5', 'chatgpt/gpt-5.6-luna', 'chatgpt/gpt-5.6-sol',
+    'chatgpt/gpt-5.6-terra', 'chatgpt/gpt-6-astra', 'chatgpt/gpt-6-luna',
+    'chatgpt/gpt-6-sol', 'chatgpt/gpt-6.1-sol',
+    'deepseek/deepseek-v4-flash-0731', 'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4.1-flash',
+    'anthropic/claude-fable-5.1', 'anthropic/claude-haiku-5.5',
+    'anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5',
+})
 FREE_LIMITS = {'per_minute': 10, 'per_day': 200, 'reset_timezone': 'Asia/Taipei'}
 PRICE_FIELDS = ('input', 'output', 'cache_read', 'cache_write', 'per_call')
 _TAGS = {
@@ -165,8 +175,120 @@ def project_default_notice_increase(payload, *, source_version):
             {'default': dict(sorted(after.items()))})
 
 
-def normalize_pricing(payload):
+def pricing_profile_for_config(config):
+    """The cost-preserving pilot must remain restricted to named pilot partners."""
+    profile = config.get('pricing_profile', '')
+    if profile not in ('', PAID_PILOT_PROFILE):
+        raise PricingInvalid('pricing_profile')
+    if profile:
+        pilots = config.get('pilot')
+        if (not isinstance(pilots, (set, frozenset)) or not pilots
+                or any(type(partner) is not int or partner <= 0 for partner in pilots)):
+            raise PricingInvalid('pricing_profile')
+    return profile
+
+
+def _normalize_paid_pilot(payload):
+    """Build the bounded paid catalog from the frozen pilot model allowlist."""
+    if (not isinstance(payload, dict) or type(payload.get('group_ratio')) is not dict
+            or type(payload.get('data')) is not list):
+        raise PricingInvalid('pricing_shape')
+    groups = payload['group_ratio']
+    if any(type(group) is not str or group not in ALLOWED_GROUPS for group in groups):
+        raise PricingInvalid('pricing_groups')
+    if 'default' not in groups:
+        raise PricingInvalid('pricing_groups')
+    if _number(groups['default']) != Decimal('1'):
+        raise PricingInvalid('pricing_ratio')
+    if 'free' in groups and _number(groups['free']) != Decimal('0'):
+        raise PricingInvalid('pricing_ratio')
+
+    vendors = {}
+    vendor_rows = payload.get('vendors') or []
+    if not isinstance(vendor_rows, list):
+        raise PricingInvalid('pricing_shape')
+    for vendor in vendor_rows:
+        if isinstance(vendor, dict) and type(vendor.get('id')) is int and isinstance(vendor.get('name'), str):
+            vendors[vendor['id']] = vendor['name'][:120]
+
+    items, seen, paid_count = [], set(), 0
+    for row in payload['data']:
+        if (type(row) is not dict or type(row.get('enable_groups')) is not list
+                or any(type(group) is not str for group in row['enable_groups'])):
+            raise PricingInvalid('pricing_shape')
+        name = row.get('model_name')
+        if type(name) is not str or re.fullmatch(r'[A-Za-z0-9_.:/+-]{1,200}', name) is None:
+            # Preserve the upstream shape guard even for rows outside the catalog.
+            raise PricingInvalid('pricing_model')
+
+        enabled = row['enable_groups']
+        # rc.44 filters rows by usable groups but leaves each row's full channel
+        # membership intact. These exact ChatGPT IDs retain their old internal
+        # route alongside the new default route; never publish the internal group.
+        retained_internal_route = (name in PAID_PILOT_MODELS and name.startswith('chatgpt/')
+                                   and set(enabled) == {'default', 'internal'}
+                                   and len(enabled) == 2)
+        if not retained_internal_route and any(group not in ALLOWED_GROUPS for group in enabled):
+            raise PricingInvalid('pricing_groups')
+        if name in seen:
+            raise PricingInvalid('pricing_duplicate')
+        seen.add(name)
+        if name in FREE_MODELS:
+            # Qwen stays free only under an exclusively free key. Existing default or
+            # mixed exposure is omitted from this profile, never relabeled as paid.
+            if enabled == ['free']:
+                if 'free' not in groups:
+                    raise PricingInvalid('pricing_groups')
+                mode, price = model_price(row, 'free', groups['free'])
+                items.append({'model': name, 'vendor': vendors.get(row.get('vendor_id'))
+                              if type(row.get('vendor_id')) is int else None,
+                              'tags': _normalized_tags(row), 'group': 'free',
+                              'pricing_mode': mode, 'price': price,
+                              'free_limits': dict(FREE_LIMITS)})
+            continue
+
+        if name not in PAID_PILOT_MODELS:
+            # Legacy providers and unrelated catalog entries do not enter this pilot.
+            continue
+        if enabled != ['default'] and not retained_internal_route:
+            raise PricingInvalid('pricing_groups')
+        mode, price = model_price(row, 'default', Decimal('1'))
+        if mode not in ('ratio', 'fixed') or price is None:
+            raise PricingInvalid('pricing_mode')
+        if row.get('billing_mode') not in (None, '', mode):
+            raise PricingInvalid('pricing_mode')
+        populated_prices = [value for value in price.values() if value is not None]
+        if not populated_prices or any(Decimal(value) <= 0 for value in populated_prices):
+            raise PricingInvalid('pricing_zero')
+        items.append({'model': name, 'vendor': vendors.get(row.get('vendor_id'))
+                      if type(row.get('vendor_id')) is int else None,
+                      'tags': _normalized_tags(row), 'group': 'default',
+                      'pricing_mode': mode, 'price': price})
+        paid_count += 1
+
+    if paid_count == 0:
+        raise PricingInvalid('pricing_scope')
+    result = {'items': sorted(items, key=lambda item: (item['group'] != 'free', item['model'])),
+              'state': 'ok', 'pricing_profile': PAID_PILOT_PROFILE}
+    return result
+
+
+def _normalized_tags(row):
+    tags = row.get('tags') or []
+    if isinstance(tags, str):
+        tags = re.split(r'[,，;]', tags)
+    if not isinstance(tags, list):
+        tags = []
+    return sorted({_TAGS[tag.strip().lower()] for tag in tags
+                   if isinstance(tag, str) and tag.strip().lower() in _TAGS})
+
+
+def normalize_pricing(payload, *, profile=''):
     """Validate the service account's group boundary *before* looking at any model rows."""
+    if profile == PAID_PILOT_PROFILE:
+        return _normalize_paid_pilot(payload)
+    if profile != '':
+        raise PricingInvalid('pricing_profile')
     if not isinstance(payload, dict) or not isinstance(payload.get('group_ratio'), dict):
         raise PricingInvalid('pricing_shape')
     groups = payload['group_ratio']

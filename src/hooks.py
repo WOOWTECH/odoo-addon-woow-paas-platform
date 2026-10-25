@@ -222,6 +222,7 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.show_llm',
     'woow_paas_platform.llm_orders_enabled',
     'woow_paas_platform.llm_pilot_partner_ids',
+    'woow_paas_platform.llm_pricing_profile',
     'woow_paas_platform.newapi_proxy_url',
     'woow_paas_platform.newapi_username_prefix',
     'woow_paas_platform.llm_synthetic_ip_block',

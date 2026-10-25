@@ -16,6 +16,7 @@ sys.modules[PKG] = pkg
 nac = importlib.import_module(PKG + '.newapi_client')
 policy = importlib.import_module(PKG + '.llm_status_monitor')
 invariants = importlib.import_module(PKG + '.llm_status_invariants')
+pricing = importlib.import_module(PKG + '.llm_pricing')
 
 
 @contextmanager
@@ -150,7 +151,11 @@ class TestStatusMonitorWorker(unittest.TestCase):
         method = next(node for node in ast.walk(tree)
                       if isinstance(node, ast.FunctionDef) and node.name == '_llm_models_payload')
         method.decorator_list = []
-        ns = {}
+        # The extracted method starts with pricing-profile validation. Supply
+        # its imported names so this test reaches the runtime guard and cache.
+        ns = {'llm_config': lambda env: {},
+              'pricing_profile_for_config': pricing.pricing_profile_for_config,
+              'PricingInvalid': pricing.PricingInvalid}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])),
                      str(path), 'exec'), ns)
         model = MagicMock()

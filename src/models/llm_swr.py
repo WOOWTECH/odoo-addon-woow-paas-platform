@@ -41,7 +41,7 @@ from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError
 
 from ..services import llm_crypto, llm_redact
-from ..services.llm_pricing import PricingInvalid, normalize_pricing
+from ..services.llm_pricing import PricingInvalid, normalize_pricing, pricing_profile_for_config
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
 from .llm_account import balance_stamp
@@ -241,6 +241,10 @@ class LlmSwrCache(models.Model):
         This also rejects pre-LLM-06 raw cache rows until the next scheduled refresh.
         """
         empty = {'items': [], 'state': 'maintenance', 'data_as_of': None}
+        try:
+            profile = pricing_profile_for_config(llm_config(self.env))
+        except PricingInvalid:
+            return empty
         state = self.env['woow_paas_platform.llm_runtime_state'].sudo()._llm_read()
         if not state or state['guard_tripped']:
             return empty
@@ -250,7 +254,10 @@ class LlmSwrCache(models.Model):
         payload = row['payload']
         if not isinstance(payload, dict) or payload.get('state') != 'ok' or not isinstance(payload.get('items'), list):
             return empty
-        return {**payload, 'data_as_of': iso(row['fetched_at'])}
+        if payload.get('pricing_profile', '') != profile:
+            return empty
+        public = {key: value for key, value in payload.items() if key != 'pricing_profile'}
+        return {**public, 'data_as_of': iso(row['fetched_at'])}
 
     @api.model
     def _llm_swr_touch(self, account, kind, fetched_at):
@@ -500,7 +507,8 @@ class LlmSwrCache(models.Model):
             if not result.ok:
                 return None, self._label(result)
             try:
-                return normalize_pricing(result.data), 'ok'
+                profile = pricing_profile_for_config(config)
+                return normalize_pricing(result.data, profile=profile), 'ok'
             except PricingInvalid:
                 # A fixed error code only; raw upstream groups/models never enter alerts.
                 from .llm_event import EVENT_MODEL, LlmAlert

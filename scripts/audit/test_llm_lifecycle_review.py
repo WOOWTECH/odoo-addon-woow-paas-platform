@@ -93,11 +93,18 @@ class TestDisableProvenance(unittest.TestCase):
                 client = SimpleNamespace(user_set_token_status=Mock(return_value=SimpleNamespace(ok=True)))
                 service = SimpleNamespace(
                     _llm_management_key=lambda *_, account=account, key=key: (account, key),
+                    # This provenance scenario uses the standard, non-pilot
+                    # catalog. Pilot allowlist behavior has ORM coverage.
+                    _llm_existing_paid_pilot_selection=Mock(return_value=None),
                     _llm_management_token_id=lambda *_: 1,
                     _llm_management_remote=lambda *_, client=client: ('ip', 'fake-up', client),
                     _llm_management_audit=Mock(),
                 )
                 body(service, None, 1, enabled)
+                if enabled:
+                    service._llm_existing_paid_pilot_selection.assert_called_once_with(key)
+                else:
+                    service._llm_existing_paid_pilot_selection.assert_not_called()
                 self.assertNotIn('complete', key.not_me_disable_plan)
                 self.assertEqual(key.not_me_disabled_notice_id, 0)
                 self.assertEqual(key.not_me_attempt_notice_id, 0)

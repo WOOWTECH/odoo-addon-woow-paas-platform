@@ -1304,3 +1304,5 @@ from . import test_llm_price_notice_rehearsal
 from .integration import test_llm_price_notice_journal_rollback  # noqa: F401
 from .integration import test_llm_price_notice_binding  # noqa: F401
 from .integration import test_llm_price_notice_rehearsal_rr  # noqa: F401
+
+from . import test_llm_paid_pilot
