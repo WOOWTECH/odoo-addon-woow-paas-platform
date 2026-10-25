@@ -1306,3 +1306,6 @@ from .integration import test_llm_price_notice_binding  # noqa: F401
 from .integration import test_llm_price_notice_rehearsal_rr  # noqa: F401
 
 from . import test_llm_paid_pilot
+
+# #2004：公開首頁 blob manifest、mobile overflow 與 a11y heading／duplicate ID。
+from . import test_public_website_hardening_2004
