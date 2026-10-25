@@ -1,0 +1,57 @@
+PR1999 canonical pin — isolated Odoo verification (2026-10-25 UTC)
+Base develop: a00d2a5075efba3d1bf51e5f942f935a49580ce0
+Candidate source: 1edfb29be196454a11dfebf2688bc9abd45f2677
+Candidate build: https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/27837
+Canonical image tag prepared; canonical promotion and chart publication remain pending.
+Approval gate: https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/409
+Original synthetic DB retained; new canonical DB cloned within existing dedicated sandbox.
+1253 tracked src files match the tested pod snapshot byte-for-byte.
+Exit code: 0; 10 distinct test methods; 0 failed; 0 errors.
+Raw log SHA-256: 0412aa2b0a26f78b7d11816c03a07daad69bb0c1986c4b298d69688d9bbc71e0
+Raw log path: /tmp/pi-agent-pr1999-canonical-20261025T141518Z/focused.log
+
+Source file hashes:
+58bba91c61db569b87b4652774c5634685e4dd886948ed7d075bb6c2f7dbc2e9  src/data/cloud_app_templates.xml
+efd9db0aefc9d075fa82e74ea5785c291b289e6bc1619f9cf0bc4e220ee0c1bd  src/tests/test_pi_agent_seed.py
+ce13bd73622c27f459d7d098b5b5db779417b6eea799b2553e0171c19c5a6c05  src/__manifest__.py
+
+Executed command:
+kubectl --context woow-k3s exec -n dev-sandbox-pi-seed-20261025 pi-seed-tests -c odoo -- env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 odoo -c /etc/odoo/odoo.conf --addons-path=/tmp/pi-pr1999-canonical-addons,/opt/woow/addons,/usr/lib/python3/dist-packages/odoo/addons --data-dir=/tmp/pi-pr1999-canonical-data -d pi_seed_pr1999_canonical --db_host=127.0.0.1 --db_port=5432 --db_user=odoo -u woow_paas_platform --test-enable --test-tags=/woow_paas_platform:TestPiAgentSeed --stop-after-init --http-port=18069 --gevent-port=18072 --workers=0 --max-cron-threads=0 --log-level=test
+
+Relevant log lines (trailing spaces trimmed; full raw log remains at path above):
+2026-10-25 14:15:20,462 1100 INFO ? odoo: addons paths: ['/usr/lib/python3/dist-packages/odoo/addons', '/tmp/pi-pr1999-canonical-data/addons/18.0', '/tmp/pi-pr1999-canonical-addons', '/opt/woow/addons']
+2026-10-25 14:15:26,163 1100 INFO pi_seed_pr1999_canonical odoo.modules.loading: loading woow_paas_platform/data/cloud_app_templates.xml
+2026-10-25 14:15:34,504 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_admin_gui_supply_chain ...
+2026-10-25 14:15:34,508 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_chart_oci_pin ...
+2026-10-25 14:15:34,510 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_hidden_only_not_concealed ...
+2026-10-25 14:15:34,512 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_image_pinned_before_listing ...
+2026-10-25 14:15:34,513 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_image_repository ...
+2026-10-25 14:15:34,515 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_marketplace_fields ...
+2026-10-25 14:15:34,516 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_plans_linked_and_priced ...
+2026-10-25 14:15:34,525 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_resources_match_t1 ...
+2026-10-25 14:15:34,528 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_service_port_lockstep ...
+2026-10-25 14:15:34,530 1100 INFO pi_seed_pr1999_canonical odoo.addons.woow_paas_platform.tests.test_pi_agent_seed: Starting TestPiAgentSeed.test_tenant_can_set_credentials ...
+2026-10-25 14:15:34,534 1100 INFO pi_seed_pr1999_canonical odoo.service.server: 10 post-tests in 1.85s, 69 queries
+2026-10-25 14:15:34,534 1100 INFO pi_seed_pr1999_canonical odoo.tests.stats: woow_paas_platform: 12 tests 0.03s 69 queries
+2026-10-25 14:15:34,534 1100 INFO pi_seed_pr1999_canonical odoo.tests.result: 0 failed, 0 error(s) of 10 tests when loading database 'pi_seed_pr1999_canonical'
+
+Read-only DB results:
+pi_seed_pr1999
+BEGIN
+0.1.10|20261018.0104@sha256:0614e0260679b83876cb54b19cda118dea8fb8e236c822f2068afbd3f9707d09|f
+woow_paas_platform|installed|18.0.1.0.260
+0
+COMMIT
+pi_seed_pr1999_canonical
+BEGIN
+0.1.10|20261025.1200@sha256:7152969a4ffa3f05f46b28f49d8899448e426d85014d5f05875f7ede563c120d|f
+woow_paas_platform|installed|18.0.1.0.261
+0
+COMMIT
+
+Local checks:
+source-check.log: PASS: Pi-only scope, canonical pin matches receipt, other values unchanged, noupdate=0, manifest matches develop, 10 test methods
+manifest-gate.log: - 結果：✅ PASS
+collection-audit.log: C2 PASS：baseline 與 目前原始碼 完全一致（1289 項）
+repo-lint.log: 全部通過
+git diff --check: PASS
