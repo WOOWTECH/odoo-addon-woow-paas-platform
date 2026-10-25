@@ -4,7 +4,7 @@
 
 本 PR 已同步 `develop` `a00d2a5075efba3d1bf51e5f942f935a49580ce0`（#2000）。manifest 沿用 `18.0.1.0.261`，不另行 bump。商品變更只含 Pi Agent chart `0.1.10` 與 `helm_default_values.image.tag`，其餘商品、資源、方案、價格與憑證設定均不變。
 
-**不可合併／部署：canonical 尚未 promotion，chart 0.1.10 尚待正式發布。** 使用者已授權先準備下列 canonical pin；它是預備值，不是 canonical 已可拉取的證據：
+**維持 WIP：canonical 尚未 promotion，chart 0.1.10 尚待正式發布；平台合併須依 [CLAUDE.md:54](../CLAUDE.md#L54) 由人工執行。** 使用者已授權先準備下列 canonical pin；它是預備值，不是 canonical 已可拉取的證據：
 
 ```text
 jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent:20261025.1200@sha256:7152969a4ffa3f05f46b28f49d8899448e426d85014d5f05875f7ede563c120d
@@ -121,7 +121,7 @@ git diff --check
 
 1. 授權人處理 issue409；確認 canonical `20261025.1200` promotion 成功，registry 讀回 digest 與上列值一致。
 2. chart PR278 走正常合併流程，確認 OCI `0.1.10` 已發布。
-3. 重新核對 develop／#1866 等並行變更；確認正式映像與 chart 存在、required checks 通過後走正常合併流程。本次依使用者範圍維持 WIP、不 merge、不簽 approve、不發布全 Odoo；不新增平台 approval 要求。
+3. 重新核對 develop／#1866 等並行變更；確認正式映像與 chart 存在、required checks 通過後走正常合併流程。**映像/chart 依賴未完成，且 [CLAUDE.md:54](../CLAUDE.md#L54) 要求人工合併**（原文：「merge 是人工 gate、agent 不代 merge」；同段要求「⛔ 勿代 merge｜待覆核者覆核」標題）。這是既有平台人工合併規則，不是新增 approval，也不是因使用者要求而新增的不合併限制。PR 維持 WIP；agent 不 merge、不簽 issue409 approve、不發布全 Odoo。
 4. 正式套用若走管理員 ORM，只更新 `env.ref('woow_paas_platform.cloud_app_pi_agent')` 的 chart 與 image tag；以當時 DB 的 JSON 為起點，保留客製值。不得對 cloud services 呼叫 write/redeploy。`noupdate=0` 會在日後 module upgrade 重載 source seed，source PR 仍須正常覆核整併。
 
 本輪保留沙盒、原 DB 與新合成副本供覆查，不刪除他人或先前建立的資源。
