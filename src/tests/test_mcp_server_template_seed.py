@@ -386,7 +386,9 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # build／healthz／push 全通過，registry HEAD 獨立確認 digest。正式 PVC 升級另驗。
     # 2026-10-24：#71 merge 5fa1ff0a 包含 #72；八支 image registry digest 已逐一驗證。
     # LaunchPolicy 維持 woow-odoo-mcp／streamable-http／127.0.0.1／port8000。
-    EXPECT_IMAGE_TAG = '6b91398b8377a119fe9ef3f99bad49fd6443ad42@sha256:165b3f73399a2113626d6983c32960dfee3406cadda36884cf0dffeaf3e07572'
+    # 2026-10-25：改釘 #84 merge fc5fa02e（odoo 四開關全開、41 支、既有服務一次性遷移）；
+    # digest 取自 main CI run 27630 的 push 輸出，registry 讀回一致。
+    EXPECT_IMAGE_TAG = 'fc5fa02e3ff48225a1a2bdc5dfc74269a57a1b6f@sha256:45eb8812195d757fee126b9159e7cfa81a035862709c33de4a5fb211ec4c55b8'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
@@ -431,6 +433,22 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
             'class 的 EXPECT_MCP_COMMAND 與 launch args，最後才把 '
             'EXPECT_IMAGE_TAG 更新成新 tag。判別規則見 '
             'docs/reference/features/mcp-template-launch-contract.md 與 #708。')
+
+    def test_new_services_get_all_write_switches_on(self):
+        """預設全開（負責人 2026-10-25，與 HA add-on 相同）：新服務的四個寫入開關都開。
+
+        審核寫入、直接寫入（execute_method 直接 create／write／unlink，三支審批工具照樣列出）、未審查的
+        副作用方法（action_confirm、action_post…）、chatter_post 直接張貼。值與 woow-mcp-server
+        apps/odoo seed_defaults.FRESH_ENV 相同。既有服務（2026-10-25 之前開通）的 config.json 不會因 Redeploy 重建，
+        由 #84 起的映像在第一次啟動時一次性改成全開（owner_defaults 標記）。
+        """
+        env = self._values()['config']['nonSensitive']['mcp_server']['env']
+        self.assertEqual(env, {
+            'ODOO_MCP_ENABLE_WRITES': '1',
+            'ODOO_MCP_ALLOW_DIRECT_WRITES': '1',
+            'ODOO_MCP_ALLOW_UNKNOWN_METHODS': '1',
+            'MCP_CHATTER_DIRECT': '1',
+        })
 
 
 class TestMcpN8nTemplateSeed(_McpServerSeedAssertions, TransactionCase):
@@ -526,7 +544,7 @@ class TestMcpLitellmTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     """mcp-litellm template（PLAN §10）：LiteLLM 管理 MCP，launcher 直跑 Streamable HTTP。
 
     唯一 envPrefix 非空的非 pilot 成員（``LITELLM_MCP_``：connection 鍵 base_url／master_key 經前綴
-    注入子行程）。出廠唯讀、同工作區網址注入、上架即雙釘等本 app 專屬守線在 test_mcp_litellm_seed.py；
+    注入子行程）。預設全開、同工作區網址注入、上架即雙釘等本 app 專屬守線在 test_mcp_litellm_seed.py；
     這裡只守家族不變式。``is_hidden`` 不影響 ``is_active``（曝光層與上架旗標正交；2026-10-07 公開上架）。
     """
 
@@ -545,7 +563,7 @@ class TestMcpNextcloudTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     """mcp-nextcloud template：以一個 Nextcloud 帳號（app password）工作的 MCP，launcher 直跑 Streamable HTTP。
 
     envPrefix 非空（``NEXTCLOUD_MCP_``：connection 鍵 base_url／username／app_password 經前綴注入子行程）。
-    唯一釘 chart 0.1.7（#1530 非 root）的成員——image 以 uid／gid 1000 執行。出廠唯讀（由 app 自己做）、
+    唯一釘 chart 0.1.7（#1530 非 root）的成員——image 以 uid／gid 1000 執行。預設全開（由 app 自己做）、
     同工作區 Nextcloud 公開網址注入、隱藏到沙盒實測後等本 app 專屬守線在 test_mcp_nextcloud_seed.py；
     這裡只守家族不變式。``is_hidden=True`` 不影響 ``is_active``（曝光層與上架旗標正交）。
     """
