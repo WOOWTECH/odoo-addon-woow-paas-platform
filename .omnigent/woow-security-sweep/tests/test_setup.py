@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import tarfile
 import tempfile
 import unittest
@@ -131,6 +132,56 @@ class AgentTest(Base):
                              f"{self.ws.name}/paas/woow_paas_platform/.omnigent/woow-security-sweep")
 
 
+class LauncherTest(Base):
+    LAUNCHER = {"id": "launch1", "name": "woow_security_sweep_launcher", "version": 1, "harness": "claude-sdk"}
+
+    def routes(self, agent):
+        return {f"/v1/sessions/{ANCHOR}/agent": (200, agent), f"/v1/sessions/{ANCHOR}": (200, {"permission_level": 4}),
+                "/v1/me": (200, {"user_id": "eugene"})}
+
+    def test_missing_record_fails_with_registration_hint(self):
+        c = su.check_launcher(FakeApi({}), self.sdir)[0]
+        self.assertEqual(c["status"], su.FAIL)
+        self.assertIn("omnigent run paas/woow_paas_platform/.omnigent/woow-security-sweep-launcher", c["fix"])
+        self.assertIn("--agent launcher", c["fix"])
+
+    def test_record_and_check_ok(self):
+        rec = su.record_agent(FakeApi(self.routes(self.LAUNCHER)), self.ws, ANCHOR, "eugene", "launcher")
+        self.assertEqual((rec["agent"], rec["name"]), ("launcher", "woow_security_sweep_launcher"))
+        self.assertTrue((self.sdir / "launcher-agent.json").is_file())
+        self.assertIsNone(su.load_agent_record(self.sdir))  # 不會覆蓋 sweep 的 agent.json
+        c = su.check_launcher(FakeApi(self.routes(self.LAUNCHER)), self.sdir)[0]
+        self.assertEqual(c["status"], su.OK)
+
+    def test_native_harness_rejected(self):
+        native = dict(self.LAUNCHER, harness="claude-native")
+        with self.assertRaises(su.SetupError):
+            su.record_agent(FakeApi(self.routes(native)), self.ws, ANCHOR, "eugene", "launcher")
+        su.save_agent_record(self.sdir, {"anchor_session": ANCHOR, "agent_id": "launch1"}, "launcher")
+        c = su.check_launcher(FakeApi(self.routes(native)), self.sdir)[0]
+        self.assertEqual(c["status"], su.FAIL)
+        self.assertIn("picker", c["detail"])
+
+    def test_sweep_name_not_accepted_as_launcher(self):
+        with self.assertRaises(su.SetupError):
+            su.record_agent(FakeApi(self.routes(AGENT)), self.ws, ANCHOR, "eugene", "launcher")
+
+    def test_unreadable_or_mismatched_fails(self):
+        su.save_agent_record(self.sdir, {"anchor_session": ANCHOR, "agent_id": "launch1"}, "launcher")
+        self.assertEqual(su.check_launcher(FakeApi({}), self.sdir)[0]["status"], su.FAIL)
+        other = dict(self.LAUNCHER, id="other")
+        self.assertEqual(su.check_launcher(FakeApi(self.routes(other)), self.sdir)[0]["status"], su.FAIL)
+
+
+class RRuleDaysTest(unittest.TestCase):
+    def test_weekly_byday(self):
+        self.assertEqual(su.rrule_days("FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=8"), {"MO", "WE"})
+
+    def test_daily_or_missing_is_every_day(self):
+        for rule in ("FREQ=DAILY;BYHOUR=8", "", None, "FREQ=MONTHLY;BYDAY=1MO"):
+            self.assertEqual(su.rrule_days(rule), set(su.WEEKDAYS))
+
+
 class RecordAgentTest(Base):
     def test_rejects_bad_session_id(self):
         with self.assertRaises(su.SetupError):
@@ -193,6 +244,16 @@ class ScheduleTest(Base):
                                                         rrule="FREQ=WEEKLY;BYDAY=WE;BYHOUR=9",
                                                         prompt="preset: line-weekly")])
         self.assertEqual(self.status(checks, "schedule_overlap"), su.FAIL)
+
+    def test_daily_without_byday_overlaps_weekly(self):
+        checks = self.run_check([self.task(), self.task(id="t2", rrule="FREQ=DAILY;BYHOUR=9")])
+        self.assertEqual(self.status(checks, "schedule_overlap"), su.FAIL)
+
+    def test_paused_manual_schedule_not_overlap(self):
+        checks = self.run_check([self.task(), self.task(id="t2", name="woow-security-sweep 手動 line-daily",
+                                                        state="paused", rrule="FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=1")])
+        self.assertFalse([c for c in checks if c["id"] == "schedule_overlap"])
+        self.assertEqual(self.status(checks, "schedule:t2"), su.OK)
 
     def test_different_days_no_overlap(self):
         checks = self.run_check([self.task(), self.task(id="t2", rrule="FREQ=WEEKLY;BYDAY=MO;BYHOUR=8")])
@@ -282,12 +343,32 @@ class BundleTest(Base):
     STORED = tar_of({"AGENTS.md": (b"old", 0o644)})
     NEW = tar_of({"AGENTS.md": (b"new", 0o644)})
 
-    def plan(self, api, candidate):
-        def snapshot(repo, dest):
-            (dest / su.BUNDLE_REL).mkdir(parents=True)
+    def plan(self, api, candidate, agent_kind="sweep"):
+        self.snapshots = []
+
+        def snapshot(repo, dest, bundle_rel):
+            self.snapshots.append(bundle_rel)
+            (dest / bundle_rel).mkdir(parents=True)
             return "f" * 40
         record = {"anchor_session": ANCHOR, "agent_id": "agent123"}
-        return su.bundle_plan(api, self.ws, record, packer=lambda _: candidate, snapshot=snapshot)
+        return su.bundle_plan(api, self.ws, record, agent_kind=agent_kind, packer=lambda _: candidate,
+                              snapshot=snapshot)
+
+    def test_launcher_plan_and_apply_use_launcher_record(self):
+        plan = self.plan(FakeApi(agent_routes(contents=self.STORED)), self.NEW, agent_kind="launcher")
+        self.assertEqual((plan["agent"], self.snapshots), ("launcher", [".omnigent/woow-security-sweep-launcher"]))
+        su.save_agent_record(self.sdir, {"anchor_session": ANCHOR, "agent_id": "agent123"}, "launcher")
+        su.save_agent_record(self.sdir, {"anchor_session": "b" * 32, "agent_id": "sweep", "version": 7})
+        with self.assertRaises(su.SetupError):  # 計畫是 launcher 的，不能拿去 apply sweep
+            su.bundle_apply(FakeApi(agent_routes(contents=self.STORED)), self.ws, Path(plan["plan_dir"]),
+                            plan["plan_digest"], "sweep")
+        api = FakeApi(agent_routes(contents=self.STORED))
+        api.after_put = {f"/v1/sessions/{ANCHOR}/agent": (200, dict(AGENT, version=2)),
+                         f"/v1/sessions/{ANCHOR}/agent/contents": (200, self.NEW)}
+        out = su.bundle_apply(api, self.ws, Path(plan["plan_dir"]), plan["plan_digest"], "launcher")
+        self.assertEqual((out["agent"], out["version"]), ("launcher", 2))
+        self.assertEqual(su.load_agent_record(self.sdir, "launcher")["version"], 2)
+        self.assertEqual(su.load_agent_record(self.sdir)["version"], 7)  # sweep 紀錄不動
 
     def test_non_owner_cannot_plan(self):
         with self.assertRaises(su.SetupError):
@@ -344,15 +425,58 @@ class BundleTest(Base):
             su.bundle_apply(api, self.ws, Path(plan["plan_dir"]), plan["plan_digest"])
 
 
+class SnapshotTest(unittest.TestCase):
+    """source_snapshot 對真的 git repo：archive .omnigent 與 .agents，跑該 bundle 自己的 build.py。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.origin, self.repo, self.dest = root / "origin.git", root / "repo", root / "dest"
+        run = lambda *a, cwd=None: su.run(list(a), cwd=cwd)  # noqa: E731
+        run("git", "init", "-q", "--bare", "-b", "develop", str(self.origin))
+        run("git", "clone", "-q", str(self.origin), str(self.repo))
+        b = self.repo / ".omnigent/woow-security-sweep-launcher"
+        b.mkdir(parents=True)
+        # 假的 build.py：只在 .agents 的正本存在時才通過（模擬 launcher 比對 skill 正本）
+        (b / "build.py").write_text("import sys, pathlib\n"
+                                    "ok = (pathlib.Path(__file__).parents[2] / '.agents/skills/x/SKILL.md').is_file()\n"
+                                    "print('✅' if ok else '❌'); sys.exit(0 if ok else 1)\n")
+        (self.repo / ".agents/skills/x").mkdir(parents=True)
+        (self.repo / ".agents/skills/x/SKILL.md").write_text("x")
+        (self.repo / "src.py").write_text("不在 archive 裡")
+        ident = ["-c", "user.name=t", "-c", "user.email=t@example.com"]
+        run("git", *ident, "-C", str(self.repo), "add", "-A")
+        run("git", *ident, "-C", str(self.repo), "commit", "-qm", "init")
+        run("git", "-C", str(self.repo), "push", "-q", "origin", "HEAD:develop")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @unittest.skipUnless(shutil.which("python3.12"), "需要 python3.12")
+    def test_archives_both_dirs_and_runs_bundle_build(self):
+        sha = su.source_snapshot(self.repo, self.dest, ".omnigent/woow-security-sweep-launcher")
+        self.assertEqual(len(sha), 40)
+        self.assertTrue((self.dest / ".agents/skills/x/SKILL.md").is_file())
+        self.assertFalse((self.dest / "src.py").exists())
+
+    def test_dirty_agents_dir_refused(self):
+        (self.repo / ".agents/skills/x/SKILL.md").write_text("改了沒 commit")
+        with self.assertRaises(su.SetupError) as ctx:
+            su.source_snapshot(self.repo, self.dest, ".omnigent/woow-security-sweep-launcher")
+        self.assertIn(".agents", str(ctx.exception))
+
+
 class SkillLayoutTest(unittest.TestCase):
     def test_claude_entry_points_to_agents_skill(self):
-        link = REPO / ".claude/skills/woow-security-sweep-setup"
-        self.assertTrue(link.is_symlink())
-        self.assertEqual(link.resolve(), (REPO / ".agents/skills/woow-security-sweep-setup").resolve())
+        for name in ("woow-security-sweep-setup", "woow-security-sweep-launch"):
+            link = REPO / ".claude/skills" / name
+            with self.subTest(skill=name):
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(link.resolve(), (REPO / ".agents/skills" / name).resolve())
 
     def test_doctor_ids_documented(self):
         text = (REPO / ".agents/skills/woow-security-sweep-setup/SKILL.md").read_text(encoding="utf-8")
-        for cid in ("python", "jev_key", "issues:<repo>", "host", "agent_owner", "schedule_overlap",
+        for cid in ("python", "jev_key", "issues:<repo>", "host", "agent_owner", "launcher", "schedule_overlap",
                     "schedule_run:<id>"):
             self.assertIn(f"`{cid}`", text)
 
