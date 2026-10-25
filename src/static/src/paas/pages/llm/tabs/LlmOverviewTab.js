@@ -516,9 +516,9 @@ export class LlmOverviewTab extends Component {
     return account.balance_points === 0 && !account.overdraft_points;
   }
 
-  /** 〔轉換點數〕在 LLM-08：tracer 期間只說「即將推出」，不叫使用者去找畫面上沒有的按鈕。 */
+  /** 〔轉換點數〕已開放：額度為零時引導使用者到「額度」分頁。 */
   get zeroCreditText() {
-    return _t("Your AI credit is 0. You can use the free trial model for now; moving credit from your points wallet is coming soon.");
+    return _t("Your AI credit is 0. You can use the free trial model for now, or go to the Credit tab to convert points from your points wallet into AI credit.");
   }
 
   /** 條款改版（DESIGN §6.4-3）：版本不同就顯示橫幅與〔查看並同意〕。 */
