@@ -83,8 +83,28 @@ def test_capabilities_is_authenticated_safe_and_off_by_default(monkeypatch):
         "target_hostname": "customers.origin.example.net",
         "supported": False,
         "reason": "dedicated_gateway_not_configured",
+        "dcv_delegation_hostname": None,
     }
     assert TestClient(app).get(f"{BASE}/capabilities").status_code == 401
+
+
+def test_delegated_dcv_replaces_rotating_txt_and_preserves_hostname_proof(client, monkeypatch):
+    suffix = "ffe2fa273c1a1bd6.dcv.cloudflare.com"
+    monkeypatch.setattr(settings, "custom_domains_dcv_delegation_hostname", suffix)
+    result = api._dto(resource(), DOMAIN["origin_hostname"])
+    records = [record.model_dump() for record in result.validation_records]
+    assert records == [
+        {"type": "TXT", "name": "_cf-custom-hostname.shop.customer.example", "value": "ownership-token"},
+        {"type": "CNAME", "name": "_acme-challenge.shop.customer.example",
+         "value": f"shop.customer.example.{suffix}"},
+    ]
+    response = client.get(f"{BASE}/capabilities", headers=HEADERS)
+    assert response.json()["dcv_delegation_hostname"] == suffix
+
+
+def test_invalid_delegation_suffix_closes_onboarding(client, monkeypatch):
+    monkeypatch.setattr(settings, "custom_domains_dcv_delegation_hostname", "bad.example.com")
+    assert api._configured() is False
 
 
 def test_post_fails_closed_when_gateway_is_not_configured(client, monkeypatch):

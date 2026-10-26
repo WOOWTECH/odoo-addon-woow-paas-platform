@@ -1,5 +1,6 @@
 """Isolation and outcome tests for self-service custom domains."""
 import json
+import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -187,3 +188,46 @@ class TestCustomDomain(HttpCase):
             claim.hostname, claim.origin_hostname,
             self.s1.helm_namespace, self.s1.helm_release_name)
         client.create_custom_domain.assert_not_called()
+
+    def test_initial_dns_guidance_includes_permanent_certificate_delegation(self):
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.custom_domains_enabled', 'True')
+        with patch('odoo.addons.woow_paas_platform.models.custom_domain.get_paas_operator_client') as factory:
+            factory.return_value.custom_domain_capabilities.return_value = {
+                'enabled': True, 'target_hostname': 'customers.woowtech.io',
+                'dcv_delegation_hostname': 'ffe2fa273c1a1bd6.dcv.cloudflare.com',
+            }
+            claim = self.Domain._create_claim(self.s1, 'booking.example.com')
+        self.assertIn({
+            'type': 'CNAME', 'name': '_acme-challenge.booking.example.com',
+            'value': 'booking.example.com.ffe2fa273c1a1bd6.dcv.cloudflare.com',
+            'purpose': 'verify',
+        }, claim._public_dict()['dns_records'])
+
+    def test_reconcile_batch_does_not_starve_more_than_ten_claims(self):
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.custom_domains_enabled', 'True')
+        claims = self.Domain.browse()
+        for i in range(13):
+            claims |= self._claim(self.s1, 'batch%s.example.com' % i)
+        visited = []
+        def visit(rec, client):
+            visited.append(rec.id)
+        with patch('odoo.addons.woow_paas_platform.models.custom_domain.get_paas_operator_client'), \
+                patch.object(type(self.Domain), '_reconcile_one', visit):
+            self.Domain._cron_reconcile_custom_domains()
+            self.Domain._cron_reconcile_custom_domains()
+        self.assertTrue(set(claims.ids).issubset(visited))
+        self.assertTrue(all(claim.last_checked_at for claim in claims))
+
+    def test_route_failure_before_provider_creation_remains_retryable(self):
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.custom_domains_enabled', 'True')
+        claim = self._claim(self.s1, 'retry.example.com')
+        with patch('odoo.addons.woow_paas_platform.models.custom_domain.get_paas_operator_client'), \
+                patch.object(type(claim), '_reconcile_one', side_effect=UserError('Gateway temporarily unavailable')), \
+                self.assertLogs('odoo.addons.woow_paas_platform.models.custom_domain', level=logging.ERROR):
+            self.Domain._cron_reconcile_custom_domains()
+        self.assertEqual(claim.state, 'pending_dns')
+        self.assertFalse(claim.provider_id)
+        self.assertTrue(claim.last_checked_at)

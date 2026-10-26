@@ -302,6 +302,8 @@ class Settings(BaseSettings):
     custom_domains_api_token: str = ""
     # Proxied custom-origin CNAME in our SaaS zone, never the zone apex itself.
     custom_domains_target_hostname: str = ""
+    # Zone's Cloudflare DCV delegation suffix; enables unattended certificate renewal.
+    custom_domains_dcv_delegation_hostname: str = ""
     # The gateway and its route ConfigMap live beside the dedicated cloudflared
     # connector. Empty values keep onboarding closed during a partial rollout.
     custom_domains_gateway_url: str = ""

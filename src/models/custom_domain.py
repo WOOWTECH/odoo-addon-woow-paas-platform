@@ -183,6 +183,14 @@ class CustomDomain(models.Model):
         origin = urlparse(service._public_base_url()).hostname
         if not origin or not origin.endswith('.woowtech.io'):
             raise UserError(_('This service has no valid public hostname.'))
+        validation = []
+        dcv_suffix = advertised.get('dcv_delegation_hostname')
+        if dcv_suffix:
+            if not isinstance(dcv_suffix, str) or not re.fullmatch(
+                    r'[a-z0-9-]{1,63}\.dcv\.cloudflare\.com', dcv_suffix):
+                raise UserError(_('Domain provisioning is unavailable.'))
+            validation.append({'type': 'CNAME', 'name': '_acme-challenge.' + hostname,
+                               'value': hostname + '.' + dcv_suffix})
         # The only server-created fields here are based on a checked service,
         # a fixed operator target and cryptographically random proof.
         return self.sudo().create({
@@ -192,6 +200,7 @@ class CustomDomain(models.Model):
             'origin_hostname': origin,
             'cname_target': target.lower().rstrip('.'),
             'verification_token': secrets.token_urlsafe(24),
+            'provider_validation_json': json.dumps(validation),
             'state': 'pending_dns',
         })
 
@@ -389,9 +398,16 @@ class CustomDomain(models.Model):
         if not client:
             return
         try:
-            for rec in self.sudo().search([
-                ('state', 'in', states),
-            ], limit=10):
+            # New claims first, then least recently checked. A fixed id-desc
+            # batch would permanently starve older claims once ten are active.
+            batch = self.sudo().search([
+                ('state', 'in', states), ('last_checked_at', '=', False),
+            ], order='id', limit=10)
+            if len(batch) < 10:
+                batch |= self.sudo().search([
+                    ('state', 'in', states), ('last_checked_at', '!=', False),
+                ], order='last_checked_at, id', limit=10 - len(batch))
+            for rec in batch:
                 try:
                     if rec.state == 'pending_dns':
                         rec._reconcile_one(client)
@@ -403,7 +419,10 @@ class CustomDomain(models.Model):
                 except Exception:
                     _logger.exception('Custom domain reconciliation failed id=%s', rec.id)
                     if rec.state != 'removing':
-                        rec.write({'state': 'error',
+                        # A failed route/DNS check before provider POST is safe
+                        # to retry; it must not become an ambiguous creation.
+                        rec.write({'state': 'pending_dns' if rec.state == 'pending_dns' else 'error',
                                    'last_error': _('Checking the domain failed. Please retry.')})
+                rec.write({'last_checked_at': fields.Datetime.now()})
         finally:
             client._session.close()

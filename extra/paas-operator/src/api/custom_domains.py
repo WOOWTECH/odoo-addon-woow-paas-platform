@@ -67,9 +67,20 @@ def _zone() -> str:
         return ""
 
 
+def _dcv_suffix() -> str:
+    value = settings.custom_domains_dcv_delegation_hostname
+    if not value:
+        return ""
+    value = normalize_hostname(value)
+    if re.fullmatch(r"[a-z0-9-]{1,63}\.dcv\.cloudflare\.com", value) is None:
+        raise ValueError("invalid Cloudflare DCV delegation hostname")
+    return value
+
+
 def _configured() -> bool:
     try:
         target = normalize_hostname(settings.custom_domains_target_hostname)
+        _dcv_suffix()
     except ValueError:
         return False
     zone = _zone()
@@ -205,6 +216,7 @@ class CustomDomainCapabilities(BaseModel):
     target_hostname: str | None
     supported: bool
     reason: str | None
+    dcv_delegation_hostname: str | None = None
 
 
 def _dto(resource: dict[str, Any], logical_origin: str) -> CustomDomainResponse:
@@ -244,6 +256,16 @@ def _dto(resource: dict[str, Any], logical_origin: str) -> CustomDomainResponse:
             if triple[0] in ("TXT", "CNAME") and triple not in seen:
                 seen.add(triple)
                 records.append(ValidationRecord(type=triple[0], name=triple[1], value=triple[2]))
+    suffix = _dcv_suffix()
+    if suffix:
+        customer = normalize_hostname(str(resource.get("hostname") or ""))
+        name = f"_acme-challenge.{customer}"
+        # A CNAME and TXT cannot coexist at the same owner name. Replace the
+        # rotating certificate challenges with the stable delegation record;
+        # retain the provider's independent hostname ownership proof.
+        records = [r for r in records if r.name.rstrip('.').lower() != name]
+        records.append(ValidationRecord(type="CNAME", name=name,
+                                       value=f"{customer}.{suffix}"))
     try:
         return CustomDomainResponse(
             provider_id=str(resource["id"]),
@@ -300,6 +322,7 @@ async def capabilities():
         target_hostname=target,
         supported=gateway_configured(),
         reason=None if ready else (_EDGE_NOT_READY if configured else _GATEWAY_REASON),
+        dcv_delegation_hostname=_dcv_suffix() if configured else None,
     )
 
 
