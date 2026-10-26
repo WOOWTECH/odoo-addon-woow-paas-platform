@@ -1313,3 +1313,10 @@ from . import test_llm_paid_pilot
 
 # #2004：公開首頁 blob manifest、mobile overflow 與 a11y heading／duplicate ID。
 from . import test_public_website_hardening_2004
+# RACE-01：延遲的 sibling Access 發布不得抹掉已提交的 primary 隔離（真雙 PG
+# REPEATABLE READ 交易；兩方都必須提交，拒絕其中一方不算修好）。
+from . import test_race01_ingress_fence  # noqa: F401 - register Odoo tests
+
+# RACE-01 覆核（batch46）：圍籬鎖的壽命——放寬方的臨界區只該涵蓋「重讀已提交
+# 狀態 → 發布」，不該跟著呼叫端整筆交易（否則 resync cron 一輪會把它握到最後）。
+from . import test_race01_fence_scope  # noqa: F401 - register Odoo tests
