@@ -123,6 +123,23 @@ class TestAccessPublishPendingAC1011(PendingFixture, TransactionCase):
         self.assertTrue(anchor.access_publish_pending)
         self.assertFalse(self.client.origin)
 
+        unsafe_snapshots = (
+            {'tunnel_id': 'other-tunnel', 'name': sa.tunnel_name,
+             'status': 'healthy', 'connections': [{'connector_id': 'live'}]},
+            {'tunnel_id': sa.tunnel_id, 'name': 'other-name',
+             'status': 'healthy', 'connections': [{'connector_id': 'live'}]},
+            {'tunnel_id': sa.tunnel_id, 'name': sa.tunnel_name,
+             'status': 'healthy', 'connections': [{}]},
+            {'tunnel_id': sa.tunnel_id, 'name': sa.tunnel_name,
+             'status': 'healthy', 'connections': [{'connector_id': '  '}]},
+        )
+        for snapshot in unsafe_snapshots:
+            self.client.get_tunnel_status = lambda tunnel_id, row=snapshot: row
+            self.assertTrue(anchor.write({'is_protected': True}))
+            anchor.invalidate_recordset()
+            self.assertTrue(anchor.access_publish_pending)
+            self.assertFalse(self.client.origin)
+
         self.client.get_tunnel_status = lambda tunnel_id: {
             'tunnel_id': tunnel_id, 'name': sa.tunnel_name,
             'status': 'healthy',

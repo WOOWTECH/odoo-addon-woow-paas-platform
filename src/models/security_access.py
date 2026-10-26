@@ -1778,7 +1778,10 @@ class SecurityAccess(models.Model):
             not result.get('deleted_at') and
             result.get('status') in ('healthy', 'degraded') and
             type(connections) is list and
-            any(type(connection) is dict for connection in connections)
+            any(type(connection) is dict and
+                type(connection.get('connector_id')) is str and
+                bool(connection['connector_id'].strip())
+                for connection in connections)
         )
 
     # ------------------------------------------------------------------ #
