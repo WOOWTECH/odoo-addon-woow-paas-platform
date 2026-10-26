@@ -1,4 +1,5 @@
 # Test suite for woow_paas_platform
+from . import test_configure_required_a11y_2006
 from . import test_pricing_seed_330
 from . import test_smart_home_mcp
 from . import test_account_move_pay_from_wallet
@@ -1306,3 +1307,6 @@ from .integration import test_llm_price_notice_binding  # noqa: F401
 from .integration import test_llm_price_notice_rehearsal_rr  # noqa: F401
 
 from . import test_llm_paid_pilot
+
+# #2004：公開首頁 blob manifest、mobile overflow 與 a11y heading／duplicate ID。
+from . import test_public_website_hardening_2004

@@ -44,8 +44,11 @@ up() {
   [[ $IMAGE =~ ^([^/]+)/(.+):([^@]+)@(sha256:[a-f0-9]{64})$ ]] || { echo "--image must be registry/repo:tag@sha256:…" >&2; exit 2; }
   local registry=${BASH_REMATCH[1]} repo=${BASH_REMATCH[2]} tag=${BASH_REMATCH[3]} digest=${BASH_REMATCH[4]}
   if ! "${K[@]}" get secret paas-registry >/dev/null 2>&1; then
+    # The NotFound guard makes this create-only. Client-side apply would copy
+    # the complete docker credential into last-applied-configuration as a
+    # second readable Secret value.
     kubectl --context "$CTX" -n "${PULL_FROM%%/*}" get secret "${PULL_FROM#*/}" -o json \
-      | jq '{apiVersion, kind, type, data, metadata: {name: "paas-registry"}}' | "${K[@]}" apply -f - >/dev/null
+      | jq '{apiVersion, kind, type, data, metadata: {name: "paas-registry"}}' | "${K[@]}" create -f - >/dev/null
     log "copied pull secret from $PULL_FROM"
   fi
   local tmp chart values addons_json

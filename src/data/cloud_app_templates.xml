@@ -1208,7 +1208,9 @@
                  0.5.7（2026-10-24，woow-paas-charts #274）：auth-proxy 的 /terminal、/terminal/… 回 301 /console/
                  （HA 版同一個映像以前的終端機路徑；兩邊統一 /console/，外掛頁內建「CLI 終端機」開的就是它）。
                  只改 auth-proxy ConfigMap，helm_default_values 不需改。回滾值：0.5.6。 -->
-            <field name="helm_chart_version">0.5.7</field>
+            <!-- 0.5.9（2026-10-26，charts #284）：native Paseo、同源代理與程序監督。
+                 搭配下方 0712 immutable image；origin 由每台服務的公開網址在部署時注入。 -->
+            <field name="helm_chart_version">0.5.9</field>
             <!-- 2026-10-24 image 20261018.1219 → 20261024.0713@sha256:a6c20405…（paas-odoo-ci #396，build run 26985、
                  核可單 #397；core open-design-core:20261024.0713@sha256:bdb9febc…，fork woow-od-v0.24.1-w2.3 605efab）：
                  OpenDesign「外掛」頁「已安裝」最上方多兩個內建外掛 MCP Server（開 /mcp-admin/）與 CLI 終端機（開 /console/），
@@ -1217,7 +1219,7 @@
                  2026-10-24 同日改 20261024.0943@sha256:5252ac5b…（paas-odoo-ci #398，核可單 #401，promote run 27155；core
                  open-design-core:20261024.0943@sha256:ffbb2bd0…，fork w2.4 b8a1371）：兩個內建外掛在外掛頁預設的「官方」分頁也置頂
                  （0713 只在「已安裝」分頁，打開看不到），分頁標籤繁中「官方／團隊／已安裝」。0713 未上線過，回滾值同上。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261024.0943@sha256:5252ac5b3d97b094f3093619ac7eab8003455c817687f9d474f3bf9e26f9e5ce"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261026.0712@sha256:9de8850209a18d18579d81442f9d079076a76ef9128970296435abdb8c144ab2"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}, "paseo": {"enabled": true, "origin": ""}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
@@ -1228,10 +1230,10 @@
                  console Deployment 不吃金鑰。改金鑰後的補重啟（#1435）只滾 daemon，進行中的
                  console 終端機不再斷線。chart 0.4.0 起 daemon 另有 checksum/api-keys，本來就會滾。 -->
             <field name="secret_change_restart_component">daemon</field>
-            <!-- AI-OD-006-1：回復版本時，內建 MCP（mcp.enabled）與 Omnigent 暫停（omnigentHost.enabled）
-                 這兩個平台開關，在目標 revision 的 image 與目前相同時維持目前值；image 不同時跟著
+            <!-- AI-OD-006-1：回復版本時，內建 MCP（mcp.enabled）、Omnigent（omnigentHost.enabled）與 Paseo（paseo.enabled）
+                 這三個平台開關，在目標 revision 的 image 與目前相同時維持目前值；image 不同時跟著
                  目標 revision（mcp.enabled 必須搭配帶 /opt/woow MCP runtime 的 image，硬開會 CrashLoop）。 -->
-            <field name="rollback_feature_switches">{"mcp.enabled": ["image"], "omnigentHost.enabled": ["image"]}</field>
+            <field name="rollback_feature_switches">{"mcp.enabled": ["image"], "omnigentHost.enabled": ["image"], "paseo.enabled": ["image"]}</field>
 
             <!-- Service Configuration -->
             <field name="default_port">7457</field>

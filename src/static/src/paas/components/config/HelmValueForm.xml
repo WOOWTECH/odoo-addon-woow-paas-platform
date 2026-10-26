@@ -20,6 +20,10 @@
                                         t-att-value="getDisplayValue(spec)"
                                         t-att-placeholder="getPlaceholder(spec)"
                                         t-att-disabled="isIgnoredInputDisabled(spec)"
+                                        t-att-required="spec.required !== false"
+                                        t-att-aria-required="spec.required !== false ? 'true' : 'false'"
+                                        t-att-aria-invalid="hasError(spec.key) ? 'true' : 'false'"
+                                        t-att-aria-describedby="hasError(spec.key) ? 'helm_' + spec.key + '_error' : false"
                                         t-on-input="(ev) => this.onInputChange(spec, ev)"
                                         class="o_woow_input"
                                     />
@@ -58,6 +62,8 @@
                                         type="checkbox"
                                         t-att-id="'helm_' + spec.key"
                                         t-att-checked="getValue(spec)"
+                                        t-att-aria-invalid="hasError(spec.key) ? 'true' : 'false'"
+                                        t-att-aria-describedby="hasError(spec.key) ? 'helm_' + spec.key + '_error' : false"
                                         t-on-change="(ev) => this.onCheckboxChange(spec, ev)"
                                         class="o_woow_checkbox"
                                     />
@@ -79,6 +85,10 @@
                                 </label>
                                 <select
                                     t-att-id="'helm_' + spec.key"
+                                    t-att-required="spec.required !== false"
+                                    t-att-aria-required="spec.required !== false ? 'true' : 'false'"
+                                    t-att-aria-invalid="hasError(spec.key) ? 'true' : 'false'"
+                                    t-att-aria-describedby="hasError(spec.key) ? 'helm_' + spec.key + '_error' : false"
                                     t-on-change="(ev) => this.onSelectChange(spec, ev)"
                                     class="o_woow_select"
                                 >
@@ -106,7 +116,7 @@
 
                             <!-- Error Message -->
                             <t t-if="hasError(spec.key)">
-                                <p class="o_woow_field_error">
+                                <p t-att-id="'helm_' + spec.key + '_error'" role="alert" class="o_woow_field_error">
                                     <WoowIcon name="'error'" size="14"/>
                                     <t t-esc="getError(spec.key)"/>
                                 </p>
@@ -133,6 +143,8 @@
                                         t-att-value="getDisplayValue(spec)"
                                         t-att-placeholder="getPlaceholder(spec)"
                                         t-att-disabled="isIgnoredInputDisabled(spec)"
+                                        t-att-aria-invalid="hasError(spec.key) ? 'true' : 'false'"
+                                        t-att-aria-describedby="hasError(spec.key) ? 'helm_' + spec.key + '_error' : false"
                                         t-on-input="(ev) => this.onInputChange(spec, ev)"
                                         class="o_woow_input"
                                     />
@@ -171,6 +183,8 @@
                                         type="checkbox"
                                         t-att-id="'helm_' + spec.key"
                                         t-att-checked="getValue(spec)"
+                                        t-att-aria-invalid="hasError(spec.key) ? 'true' : 'false'"
+                                        t-att-aria-describedby="hasError(spec.key) ? 'helm_' + spec.key + '_error' : false"
                                         t-on-change="(ev) => this.onCheckboxChange(spec, ev)"
                                         class="o_woow_checkbox"
                                     />
@@ -190,6 +204,8 @@
                                 </label>
                                 <select
                                     t-att-id="'helm_' + spec.key"
+                                    t-att-aria-invalid="hasError(spec.key) ? 'true' : 'false'"
+                                    t-att-aria-describedby="hasError(spec.key) ? 'helm_' + spec.key + '_error' : false"
                                     t-on-change="(ev) => this.onSelectChange(spec, ev)"
                                     class="o_woow_select"
                                 >
@@ -217,7 +233,7 @@
 
                             <!-- Error Message -->
                             <t t-if="hasError(spec.key)">
-                                <p class="o_woow_field_error">
+                                <p t-att-id="'helm_' + spec.key + '_error'" role="alert" class="o_woow_field_error">
                                     <WoowIcon name="'error'" size="14"/>
                                     <t t-esc="getError(spec.key)"/>
                                 </p>
