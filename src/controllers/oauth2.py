@@ -485,7 +485,7 @@ class OAuth2Controller(Controller):
     # ==================== Token Endpoint ====================
 
     @route('/oauth2/token', type='http', auth='none', methods=['POST'],
-           csrf=False, save_session=False)
+           csrf=False, save_session=False, readonly=False)
     def token(self, **kwargs: Any) -> http.Response:
         """Exchange credentials for tokens (RFC 6749 Section 4.1.3, 4.3, 6).
 
