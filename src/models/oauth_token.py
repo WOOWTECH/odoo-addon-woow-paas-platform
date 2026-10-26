@@ -56,10 +56,68 @@ class OAuthToken(models.Model):
         default=False,
         help='Whether this token has been revoked',
     )
+    origin_code_id = fields.Many2one(
+        comodel_name='woow_paas_platform.oauth_code',
+        string='Origin Authorization Code',
+        ondelete='set null',
+        index=True,
+        help='The authorization code this token lineage came from. Carried '
+             'forward across refresh rotations so that a replay of that code '
+             'can invalidate everything it produced (RFC 6749 10.5). '
+             'set null, not cascade: deleting a spent code must never delete '
+             'the audit row of a token that is still live.',
+    )
+    parent_token_id = fields.Many2one(
+        comodel_name='woow_paas_platform.oauth_token',
+        string='Rotated From',
+        ondelete='set null',
+        index=True,
+        help='The token this one replaced during a refresh rotation. Lets a '
+             'detected refresh-token reuse invalidate the whole rotation '
+             'family (RFC 9700 4.14.2).',
+    )
 
     def revoke(self) -> None:
         """Mark this token (and its refresh token) as revoked."""
         self.write({'is_revoked': True})
+
+    def revoke_family(self):
+        """Revoke these tokens and everything they were rotated into.
+
+        Walks `parent_token_id` downwards, so a reused refresh token takes its
+        successors with it instead of leaving the attacker's freshly rotated
+        pair alive (RFC 9700 4.14.2). Returns the full revoked recordset.
+
+        The walk is breadth-first over committed rows and guards against a
+        cyclic chain (impossible via the controller, but a data fix could
+        create one) by never re-visiting an id.
+        """
+        family = self.browse()
+        frontier = self
+        while frontier:
+            family |= frontier
+            frontier = self.search([
+                ('parent_token_id', 'in', frontier.ids),
+                ('id', 'not in', family.ids),
+            ])
+        family.revoke()
+        return family
+
+    def revoke_issued_from_code(self, code):
+        """Revoke every token lineage issued from one authorization code.
+
+        Called when that code is replayed: the authorization server cannot tell
+        the legitimate client from the party that replayed it, so RFC 6749 10.5
+        has it invalidate what the code already produced. Returns the revoked
+        recordset (possibly empty).
+        """
+        if not code:
+            return self.browse()
+        roots = self.search([
+            ('origin_code_id', '=', code.id),
+            ('is_revoked', '=', False),
+        ])
+        return roots.revoke_family() if roots else self.browse()
 
     @api.model
     def is_issuance_identity_valid(self, client, user) -> bool:

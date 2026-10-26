@@ -24,6 +24,7 @@ from . import test_smart_home_subscription_flow
 from . import test_oauth2
 from . import test_oauth_subject_http_ac1011
 from . import test_oauth2_device_flow
+from . import test_auth05_replay_revocation
 from . import test_ha_api
 from . import test_ha_api_security_access
 # HA API tunnel-token 只給 owner／admin（role=user／guest 回 insufficient_role）。
