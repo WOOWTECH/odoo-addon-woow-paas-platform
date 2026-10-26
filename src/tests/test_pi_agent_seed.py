@@ -34,7 +34,7 @@ class TestPiAgentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, PI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.10')
+        self.assertEqual(tpl.helm_chart_version, '0.1.11')
 
     def test_admin_gui_supply_chain(self):
         """has_admin_gui + helm_secret：平台供給 config.sensitive.admin_password 給 chart Secret，
@@ -71,6 +71,11 @@ class TestPiAgentSeed(TransactionCase):
         self.assertRegex(build_tag, r'^\d{8}\.\d{4}$')
         self.assertRegex(digest, r'^sha256:[0-9a-f]{64}\Z')
         self.assertNotEqual(build_tag, '00000000.0000', '佔位 tag 不得上架')
+        self.assertEqual(
+            tag,
+            '20261026.2019@sha256:ac45232f3347c06cb2d9957bc8aaa8a649909d8dd70349723779518157dee075',
+            '新開通範本必須釘住已核准並從正式 JCR 讀回的 Pi Agent 映像',
+        )
 
     def test_resources_match_t1(self):
         """T1 = 2 vCPU / 8 Gi / 30 Gi（#1637 容量研究：4 → 8、20 → 30）：template min_*、plan cs_*、helm values 三處一致。"""
