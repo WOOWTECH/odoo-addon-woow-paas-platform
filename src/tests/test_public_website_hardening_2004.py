@@ -13,9 +13,8 @@ from odoo.tests.common import BaseCase
 
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = MODULE_ROOT / "services" / "public_website_hardening.py"
-MIGRATION_PATH = (
-    MODULE_ROOT / "migrations" / "18.0.1.0.266" / "post-migrate.py"
-)
+MIGRATION_VERSION = "18.0.1.0.266"
+MIGRATION_PATH = MODULE_ROOT / "migrations" / MIGRATION_VERSION / "post-migrate.py"
 
 spec = importlib.util.spec_from_file_location("public_website_hardening", HELPER_PATH)
 hardening = importlib.util.module_from_spec(spec)
@@ -114,8 +113,16 @@ class PublicWebsiteHardeningTest(BaseCase):
             hardening.patch_homepage_view(HOMEPAGE_ARCH.replace("<h4>A</h4>", ""))
 
     def test_release_version_and_migration_are_paired(self):
+        # 只要求 manifest 不低於 migration 版號（低於時 Odoo 不會跑這支 migration）；
+        # 不綁目前版號，否則之後每次發版 bump 都會讓這條測試變紅（run 29105）。
         manifest = ast.literal_eval((MODULE_ROOT / "__manifest__.py").read_text())
-        self.assertEqual(manifest["version"], "18.0.1.0.266")
+
+        def as_tuple(version):
+            return tuple(int(part) for part in version.split("."))
+
+        self.assertGreaterEqual(
+            as_tuple(manifest["version"]), as_tuple(MIGRATION_VERSION)
+        )
         self.assertTrue(MIGRATION_PATH.is_file())
 
 
