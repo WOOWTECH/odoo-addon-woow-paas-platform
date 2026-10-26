@@ -2279,9 +2279,19 @@
                  （AI-FIX-OMN-3-2）——⚠ 上線前提：31zix／z0v3w／pggrg 三台節點要先加這個 label，否則新 runner 一律
                  Pending；0.1.9 runner egress gate（#1497）；0.1.10 readiness 加 /data 寫入檢查（AI-OMN-005-1）；
                  0.1.11 runner-gc 回收孤兒 token Secret（AI-FIX-OMN-1-1）；0.1.12 server／proxy pod 帶 egress-profile=web。
-                 image 不變、helm_default_values 不需改。回滾值：0.1.7。 -->
-            <field name="helm_chart_version">0.1.12</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+                 image 不變、helm_default_values 不需改。回滾值：0.1.7。
+                 0.1.14（2026-10-26，woow-paas-charts #281；0.1.13 保留給 charts #256）＝上游 omnigent v0.19.1，
+                 server／runner 兩個 image 都換成以 v0.19.1 為底的 WoowTech overlay（isError 修補＋MCP proxy
+                 工具清單修補，原始碼 WOOWTECH/omnigent fix/omnigent-v0191-overlay-20261025）：server
+                 20261025.1643@sha256:1fc91dd4…（paas-odoo-ci #414）、runner omnigent-host
+                 20261025.1643@sha256:a1be5dd4…（#410），chart 模板不變。證據：
+                 docs/verification/2026-10-26-omnigent-0191-overlay-pin.json。
+                 ⚠ 0.19.1 開機跑 alembic nf12ab34cd56（conversation_metadata 加 index）。回滾到 0.17 必須先改 DB：
+                 PostgreSQL 把 alembic_version 改回 mm1a2b3c4d5e；SQLite 另要 DROP INDEX
+                 ix_conversation_metadata_host_id，否則之後再升級會 crash loop。回滾值：0.1.12 ＋
+                 server 20261014.0731@sha256:28b38b1d…、runner 20261013.1924@sha256:cdbda752…。 -->
+            <field name="helm_chart_version">0.1.14</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261025.1643@sha256:1fc91dd43019ff98943adafafdd5a87b43206e32e6f3983a8b89b683cb0fa434"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261025.1643@sha256:a1be5dd41c67fc9f6585af84415f4f58e7ae0718f8be4a43b78403736e0733dd"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},

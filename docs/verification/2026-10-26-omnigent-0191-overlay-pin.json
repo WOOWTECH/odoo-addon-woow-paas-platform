@@ -1,0 +1,68 @@
+{
+  "verified_at": "2026-10-26",
+  "service": "Omnigent",
+  "template": "woow_paas_platform.cloud_app_omnigent",
+  "chart": {
+    "from": "omnigent 0.1.12",
+    "to": "omnigent 0.1.14",
+    "chart_pr": "https://git-prod.woowtech.io/woow-paas/woow-paas-charts/pulls/281",
+    "merge_commit": "8e4c12b70cb0221bcd644bc55c08442d79c54693",
+    "publish_run": "https://git-prod.woowtech.io/woow-paas/woow-paas-charts/actions/runs/28579",
+    "gitea_helm_package_created_at": "2026-10-26T09:11:47Z",
+    "note": "0.1.13 is reserved for woow-paas-charts #256 (X-SEC-005-6), not part of this pin"
+  },
+  "source": {
+    "upstream_release": "omnigent-ai/omnigent v0.19.1",
+    "overlay_branch": "https://github.com/WOOWTECH/omnigent/tree/fix/omnigent-v0191-overlay-20261025",
+    "overlay_head": "39ccf9fd147e7da494d6252986989f3d66446ea8",
+    "qa_image_build": "https://github.com/WOOWTECH/omnigent/actions/runs/40211855409",
+    "server": {
+      "base": "ghcr.io/omnigent-ai/omnigent-server-kubernetes:v0.19.1@sha256:5746692f3c3a95502f76f83260c3e5ff36348ad8c3cdce1fab85784065e44dad",
+      "overlay_scope": "omnigent/server/routes/_sessions/orchestration.py only (preserve MCP isError on runner /mcp/execute path); build asserts original file sha256 and omnigent==0.19.1",
+      "qa_image": "ghcr.io/woowtech/omnigent-server-kubernetes@sha256:1fc91dd43019ff98943adafafdd5a87b43206e32e6f3983a8b89b683cb0fa434"
+    },
+    "host": {
+      "base": "ghcr.io/omnigent-ai/omnigent-host:v0.19.1@sha256:46ddb52b8013e69bcd2068842d9746bc896d50f5884a2469d51a27a6211c5814",
+      "overlay_scope": "omnigent/runner/mcp_routes.py, proxy_mcp_manager.py, tool_dispatch.py (MCP proxy tool catalog aligned with local dispatch grants; unknown local tool returns protocol error)",
+      "qa_image": "ghcr.io/woowtech/omnigent-host@sha256:a1be5dd41c67fc9f6585af84415f4f58e7ae0718f8be4a43b78403736e0733dd"
+    },
+    "related_tests": "overlay tests 113 passed on branch; same tests on pristine v0.19.1: 11 failed (both defects still present upstream)"
+  },
+  "mirror": {
+    "server": {
+      "pin": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261025.1643@sha256:1fc91dd43019ff98943adafafdd5a87b43206e32e6f3983a8b89b683cb0fa434",
+      "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/414",
+      "expired_previous_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/411",
+      "human_approve": "eugene 2026-10-25T23:55:27Z",
+      "publish_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/28203",
+      "jcr_image_coord_from_run": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261025.1643@sha256:1fc91dd43019ff98943adafafdd5a87b43206e32e6f3983a8b89b683cb0fa434",
+      "digest_exact_match": true
+    },
+    "host": {
+      "pin": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261025.1643@sha256:a1be5dd41c67fc9f6585af84415f4f58e7ae0718f8be4a43b78403736e0733dd",
+      "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/410",
+      "human_approve": "eugene 2026-10-25T16:44:30Z",
+      "publish_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/28010",
+      "jcr_image_coord_from_run": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261025.1643@sha256:a1be5dd41c67fc9f6585af84415f4f58e7ae0718f8be4a43b78403736e0733dd",
+      "digest_exact_match": true
+    },
+    "preserve_digests": true
+  },
+  "chart_rehearsal": {
+    "namespace": "dev-sandbox-omnigent-0191",
+    "shapes": ["external PostgreSQL, runner disabled", "SQLite, chart defaults, runner enabled"],
+    "from": "chart 0.1.12 + server 20261014.0731 + host 20261013.1924 (current template pins)",
+    "upgrade_seconds_to_ready": {"postgresql": 60, "sqlite": 67},
+    "alembic": "mm1a2b3c4d5e -> nf12ab34cd56 on both",
+    "old_cookie_auth_me": 200,
+    "old_sessions_readable": "6/6",
+    "jcr_pull_by_digest_in_cluster": "server, web-ui init, runner-gc and managed runner Job pod all ran from the pins above; runner pod imageID sha256:a1be5dd4...",
+    "old_host_017_on_server_0191": "connected, online, session created and message round-trip to harness",
+    "rollback": "helm rollback without DB change -> 0.17 refuses to start; PostgreSQL: reset alembic_version to mm1a2b3c4d5e; SQLite: also DROP INDEX ix_conversation_metadata_host_id, otherwise re-upgrade crash loops",
+    "re_upgrade_seconds_to_ready": {"postgresql": 26, "sqlite": 49},
+    "cleanup": "releases uninstalled, namespace deleted with UID precondition, Retained PVs deleted"
+  },
+  "migration_needed": false,
+  "migration_reason": "platform >= 18.0.1.0.232 (#1709) refreshes string runner.image on Redeploy; stage-0 inventory showed runner_pinned = t for every omnigent service",
+  "release_status": "Seed pin ready for human review/merge. Existing services switch only on admin Redeploy. Redeploy verification does not check runner.image; verify it in stage 5."
+}

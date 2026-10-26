@@ -52,11 +52,12 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.12',
+        self.assertEqual(tpl.helm_chart_version, '0.1.14',
                          '0.1.7：上游 omnigent v0.17.0（server／runner image pin，模板同 0.1.6）；'
                          '0.1.8–0.1.12＝charts 整合包 #254（runner nodeSelector tenant-schedulable——'
                          '節點 label 要先加、runner egress gate、/data 可寫 readiness、token Secret 回收、'
-                         'egress-profile=web）')
+                         'egress-profile=web）；0.1.14＝上游 v0.19.1＋WoowTech overlay（charts #281，'
+                         '只換 image；0.1.13 保留給 charts #256）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；
@@ -78,12 +79,12 @@ class TestOmnigentSeed(TransactionCase):
         self.assertTrue(v['runner']['image'].startswith(OMNI_HOST_IMAGE + ':'))
         self.assertEqual(
             v['runner']['image'],
-            OMNI_HOST_IMAGE + ':20261013.1924@sha256:cdbda75251185a9fe8bc1db38a54f6296755052f6f29496e0f22a64419b7954f',
-            'MCP 工具清單修補的自有 QA runner 映像須經 JCR 鏡像後雙釘')
+            OMNI_HOST_IMAGE + ':20261025.1643@sha256:a1be5dd41c67fc9f6585af84415f4f58e7ae0718f8be4a43b78403736e0733dd',
+            'v0.19.1 底的 MCP 工具清單修補 runner overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #410）')
         self.assertEqual(
             v['image']['tag'],
-            '20261014.0731@sha256:28b38b1d6098fcbbdf9aec9139f57d097f3ba2a12e2b666d886e884a9862cc40',
-            'MCP 工具執行錯誤保留 isError 的 server 修補映像須經 JCR 鏡像後雙釘')
+            '20261025.1643@sha256:1fc91dd43019ff98943adafafdd5a87b43206e32e6f3983a8b89b683cb0fa434',
+            'v0.19.1 底的 isError 修補 server overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #414）')
         host_tag = v['runner']['image'][len(OMNI_HOST_IMAGE) + 1:]
         self.assertRegex(host_tag, PINNED_TAG_RE,
                          'runner image 由 launcher 原樣寫進每個 Job，必須釘 digest')
