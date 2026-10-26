@@ -36,6 +36,13 @@ class TestAuth05ReplayRevocation(HttpCase):
             groups='base.group_user',
             context={'no_reset_password': True, 'mail_create_nosubscribe': True},
         )
+        self.other_user = new_test_user(
+            self.env,
+            login=f'auth05_other_{suffix}',
+            password='auth05-sandbox-only',
+            groups='base.group_user',
+            context={'no_reset_password': True, 'mail_create_nosubscribe': True},
+        )
         self.Token = self.env['woow_paas_platform.oauth_token'].sudo()
         self.Code = self.env['woow_paas_platform.oauth_code'].sudo()
         self.public_client = self.env['woow_paas_platform.oauth_client'].sudo().create({
@@ -67,13 +74,14 @@ class TestAuth05ReplayRevocation(HttpCase):
         ).rstrip(b'=').decode('ascii')
         return verifier, challenge
 
-    def _code(self, client, challenge=None, redirect_uri=REDIRECT_URI):
+    def _code(self, client, challenge=None, redirect_uri=REDIRECT_URI,
+              user=None):
         return self.Code.create({
             'code': secrets.token_urlsafe(32),
             'redirect_uri': redirect_uri,
             'scope': 'workspace:read',
             'expires_at': fields.Datetime.now() + timedelta(minutes=10),
-            'user_id': self.user.id,
+            'user_id': (user or self.user).id,
             'client_id': client.id,
             'code_challenge': challenge or False,
             'code_challenge_method': 'S256' if challenge else False,
@@ -213,6 +221,34 @@ class TestAuth05ReplayRevocation(HttpCase):
 
         self.env.invalidate_all()
         self.assertTrue(current.is_revoked)
+
+    def test_code_replay_does_not_revoke_another_users_lineage(self):
+        """The sudo revocation domain stays anchored to the exact code."""
+        verifier, challenge = self._pkce()
+        code = self._code(self.public_client, challenge)
+        owner_token = self._exchange(code, verifier).json()
+        owner_row = self._row(owner_token['access_token'])
+
+        other_verifier, other_challenge = self._pkce()
+        other_code = self._code(
+            self.public_client,
+            other_challenge,
+            user=self.other_user,
+        )
+        other_token = self._exchange(other_code, other_verifier).json()
+        other_row = self._row(other_token['access_token'])
+        self.assertEqual(other_row.user_id, self.other_user)
+        self.assertFalse(other_row.is_revoked)
+
+        self._assert_denied(self._exchange(code, verifier))
+
+        self.env.invalidate_all()
+        self.assertTrue(owner_row.is_revoked)
+        self.assertFalse(
+            other_row.is_revoked,
+            'replaying one user code revoked another user token lineage',
+        )
+        self.assertTrue(other_row.is_access_token_valid())
 
     # ---------------------------------------------------------- refresh reuse
     def test_reused_refresh_token_revokes_its_rotation_family(self):
