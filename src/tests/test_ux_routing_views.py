@@ -181,6 +181,68 @@ class TestSidebarEntry(TransactionCase):
             '裸字面會讓 babel jslexer 抽不到這條，翻譯靜默消失。',
         )
 
+    def test_issue_2008_primary_routes_are_native_links(self):
+        """Desktop and mobile primary routes must work without click handlers."""
+        contracts = (
+            (
+                'static/src/paas/layout/sidebar/Sidebar.xml',
+                'o_woow_nav_item',
+            ),
+            (
+                'static/src/paas/layout/bottom_nav/BottomNav.xml',
+                'o_woow_bottom_nav_item',
+            ),
+        )
+        for path, class_marker in contracts:
+            with self.subTest(path=path):
+                root = ET.fromstring(_AssetReader.read(path))
+                links = [
+                    node for node in root.iter('a')
+                    if class_marker in (
+                        node.get('t-att-class') or node.get('class') or ''
+                    )
+                    and 'item.path' in (node.get('t-att-href') or '')
+                ]
+                self.assertEqual(
+                    len(links), 1,
+                    f"{path} must render its repeated route as a real link",
+                )
+                link = links[0]
+                self.assertIn("'#/'", link.get('t-att-href', ''))
+                self.assertNotIn('t-on-click', link.attrib)
+                aria_current = link.get('t-att-aria-current', '')
+                self.assertIn('isActive(item)', aria_current)
+                self.assertIn("'page'", aria_current)
+
+    def test_issue_2008_sidebar_footer_has_native_link_semantics(self):
+        """Help and logout must not remain click-only anchor lookalikes."""
+        root = ET.fromstring(_AssetReader.read(
+            'static/src/paas/layout/sidebar/Sidebar.xml',
+        ))
+        links = list(root.iter('a'))
+        help_link = next(
+            node for node in links
+            if (node.get('t-att-href') or '') == 'helpHref'
+        )
+        self.assertEqual(help_link.get('target'), '_blank')
+        self.assertIn('noopener', help_link.get('rel', '').split())
+        self.assertNotIn('t-on-click', help_link.attrib)
+
+        logout_link = next(
+            node for node in links
+            if 'o_woow_logout' in (node.get('class') or '').split()
+        )
+        self.assertEqual(logout_link.get('href'), '/web/session/logout')
+        self.assertNotIn('t-on-click', logout_link.attrib)
+
+        sidebar_js = _AssetReader.read(
+            'static/src/paas/layout/sidebar/Sidebar.js',
+        )
+        self.assertRegex(
+            sidebar_js,
+            r'get\s+helpHref\s*\(\)\s*\{\s*return\s+helpUrl\(\);\s*\}',
+        )
+
 
 class TestCreateProjectModal(TransactionCase):
     """AC #22, #23 — modal allows unbound, drops the `has_project` filter."""

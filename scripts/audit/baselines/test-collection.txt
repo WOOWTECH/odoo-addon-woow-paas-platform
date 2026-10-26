@@ -1209,7 +1209,7 @@
 4	test_ux_routing_views.TestProjectsListBadge
 2	test_ux_routing_views.TestRouterAlias
 2	test_ux_routing_views.TestServiceDetailTabRoute
-1	test_ux_routing_views.TestSidebarEntry
+3	test_ux_routing_views.TestSidebarEntry
 1	test_ux_routing_views.TestTaskFormLinkedServicesPanel
 2	test_vpn_node_followup_ts005.TestFollowupFrontendWiring
 5	test_vpn_node_followup_ts005.TestLoginRules
