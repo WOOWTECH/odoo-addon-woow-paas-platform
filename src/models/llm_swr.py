@@ -13,7 +13,7 @@
   ``self``                10 分鐘    UP ``GET /api/user/self`` → 帳戶的餘額快取（同餘額刷新的守衛）  ``state``
   ``tokens``              30 秒      UP ``GET /api/token/`` → 金鑰鏡像的用量、最後使用時間          ``keys/list``
   ``usage_recent``        60 秒      UP ``GET /api/log/self``（今天的免費試用）→ 快取的 DTO          ``usage/recent``
-  ``pricing``             10 分鐘    AP ``GET /api/pricing`` → 公開 DTO（全平台一份；獨立 10 分鐘 cron）       ``models``
+  ``pricing``             10 分鐘    AP ``GET /api/pricing`` → 公開 DTO（全平台一份；獨立 5 分鐘 cron）       ``models``
   ======================  =========  ======================================================  ==========
 
   ``usage_day``（LLM-09）：每帳戶、台北日期一份；UP flow/self 一次抓一天，60 秒 TTL。
@@ -25,7 +25,7 @@
 * **刷新 cron**（:meth:`LlmSwrCache._cron_llm_swr_refresh`，每 5 分鐘保險＋被 ``_trigger()``）：外呼類 cron，
   circuit 開著就跳過（DESIGN §3.6；半開時由它做健康檢查——web 在半開時也是叫醒它）；每 tick ≤ 30 秒、
   最多 :data:`SWR_PER_TICK` 筆（N28），以 ``FOR UPDATE SKIP LOCKED`` 搶列（兩條 cron thread 不會做同一筆）；
-  價目由獨立 10 分鐘 cron 刷新；價目失敗清空，其他種類失敗只記 ``last_result``。
+  價目由獨立 5 分鐘 cron 刷新；價目失敗清空，其他種類失敗只記 ``last_result``。
 * **快取裡沒有秘密**：只有餘額數字、金鑰的用量與時間、用量 DTO（模型、token 數、request id）與價目。
   ACL 同其他 LLM model：system／帳務群組只讀；寫入一律走本檔的獨立 cursor SQL。
 """
@@ -369,14 +369,27 @@ class LlmSwrCache(models.Model):
                             items=SWR_PER_TICK, config=llm_config(self.env))
 
     @api.model
+    def _llm_ensure_pricing_refresh_cadence(self):
+        """Upgrade the legacy noupdate cron without changing operator custom schedules.
+
+        Called by XML on every -u, including when the installed version is unchanged.
+        A restart alone does not update ir.cron. Preserve active, nextcall and XMLID.
+        """
+        cron = self.env.ref(PRICING_CRON_XMLID, raise_if_not_found=False)
+        if (cron and cron.model_id.model == CACHE_MODEL
+                and cron.code == 'model._cron_llm_pricing_refresh()'
+                and cron.interval_type == 'minutes' and cron.interval_number == 10):
+            cron.write({'interval_number': 5})
+
+    @api.model
     def _cron_llm_pricing_refresh(self):
-        """Every ten minutes, including before the first customer activates (N20/N27)."""
+        """Every five minutes, ahead of the ten-minute TTL, even before activation."""
         return run_llm_cron(self.env, PRICING_CRON_XMLID, self._llm_pricing_refresh_tick,
                             items=1, config=llm_config(self.env))
 
     def _llm_pricing_refresh_tick(self, config, tick):
-        # A dedicated schedule avoids the five-minute SWR sweep drifting to a fifteen-minute
-        # price interval when its TTL comparison misses the exact ten-minute boundary.
+        # Refresh unconditionally, before TTL expiry; waiting until stale recreates
+        # the availability gap when scheduler polling or HTTP completion drifts.
         now = _utcnow()
         with self.env.registry.cursor() as cr:
             cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
