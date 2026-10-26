@@ -95,13 +95,17 @@
                             <input
                                 type="text"
                                 id="service_name"
+                                required="required"
+                                aria-required="true"
+                                t-att-aria-invalid="state.errors.name ? 'true' : 'false'"
+                                t-att-aria-describedby="state.errors.name ? 'service_name_error' : false"
                                 t-att-value="state.name"
                                 t-on-input="onNameChange"
                                 placeholder="Enter service name"
                                 class="o_woow_input"
                             />
                             <t t-if="state.errors.name">
-                                <p class="o_woow_field_error">
+                                <p id="service_name_error" role="alert" class="o_woow_field_error">
                                     <WoowIcon name="'error'" size="14"/>
                                     <t t-esc="state.errors.name"/>
                                 </p>

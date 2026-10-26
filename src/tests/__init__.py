@@ -1,4 +1,5 @@
 # Test suite for woow_paas_platform
+from . import test_configure_required_a11y_2006
 from . import test_pricing_seed_330
 from . import test_smart_home_mcp
 from . import test_account_move_pay_from_wallet
