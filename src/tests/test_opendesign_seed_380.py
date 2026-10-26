@@ -51,6 +51,28 @@ class TestOpendesignTemplateSeed(TransactionCase):
         chart 0.5.0 的 mcp.enabled 開啟；必須和含 runtime 的 image 同一次變更。"""
         self.assertEqual(self._values()['mcp'], {'enabled': True})
 
+    def test_enabled_paseo_uses_exact_service_origin(self):
+        from ..models.cloud_service import CloudService
+        values = {'paseo': {'enabled': True, 'origin': 'https://stale.example'}}
+        origin = 'https://svc-owned.tenant.example:8443'
+        result = CloudService._inject_allowed_origins(values, 'open-design', origin)
+        self.assertIs(result, values)
+        self.assertEqual(result['paseo'], {'enabled': True, 'origin': origin})
+        self.assertEqual(result['config']['allowedOrigins'], origin)
+
+    def test_paseo_origin_injection_preserves_legacy_and_disabled_values(self):
+        from ..models.cloud_service import CloudService
+        for paseo in (None, {}, {'enabled': False}, {'enabled': 'true'}):
+            with self.subTest(paseo=paseo):
+                values = {} if paseo is None else {'paseo': paseo.copy()}
+                result = CloudService._inject_allowed_origins(
+                    values, 'open-design', 'https://svc-owned.tenant.example')
+                self.assertEqual(result.get('paseo'), paseo)
+        values = {'paseo': {'enabled': True, 'origin': 'https://explicit.example'}}
+        result = CloudService._inject_allowed_origins(values, 'hermes-agent', 'https://other.example')
+        self.assertEqual(result, values)
+        self.assertEqual(result['paseo']['origin'], 'https://explicit.example')
+
     def test_omnigent_host_off(self):
         """2026-10-15 Open Design 暫停 Omnigent：明寫 omnigentHost.enabled=false（chart 0.5.0
         預設雖已 false，helm reuse-values 缺 key 時共用套件視為開啟），且平台不再注入
@@ -94,7 +116,9 @@ class TestOpendesignTemplateSeed(TransactionCase):
         #       omnigentHost 預設關（od-mcp-merge-20261015）。
         # 0.5.1–0.5.6＝charts 整合包 #254：console／auth-proxy 加固、prune-runs、登入失敗鎖 IP、
         #       ttyd 改 loopback＋Basic 前門、log 不記查詢字串、egress-profile=web。
-        self.assertEqual(tpl.helm_chart_version, '0.5.7')
+        self.assertEqual(tpl.helm_chart_version, '0.5.9')
+        self.assertEqual(self._values()['paseo'], {'enabled': True, 'origin': ''})
+        self.assertEqual(json.loads(tpl.rollback_feature_switches)['paseo.enabled'], ['image'])
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""

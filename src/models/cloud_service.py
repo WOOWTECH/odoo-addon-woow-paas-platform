@@ -5022,6 +5022,13 @@ class CloudService(models.Model):
         paths = path_map.get(template_slug)
         if not paths:
             return values
+        # Native Paseo shares the same authenticated public host as OpenDesign.
+        # Only bind an already-enabled runtime: legacy services and explicit
+        # per-service feature choices must not follow a new product default.
+        paseo = values.get('paseo')
+        if (template_slug == 'open-design' and isinstance(paseo, dict)
+                and paseo.get('enabled') is True):
+            paths = [*paths, ('paseo', 'origin')]
         for path in paths:
             d = values
             for key in path[:-1]:
