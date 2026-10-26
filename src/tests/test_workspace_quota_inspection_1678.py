@@ -252,6 +252,16 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
 
     def test_backend_views_expose_readonly_full_quota_and_unknown_state(self):
         from lxml import etree
+        quota_views = self.env['ir.ui.view']
+        for kind in ('list', 'form'):
+            source_view = self.env.ref(
+                'woow_paas_platform.view_workspace_quota_inspection_%s' % kind)
+            quota_views |= source_view
+            source_arch = etree.fromstring(
+                source_view.with_context(lang=None).arch_db.encode())
+            self.assertEqual(source_arch.get('groups'), 'base.group_system')
+            self.assertEqual(source_view.groups_id, self.env.ref('base.group_system'))
+
         action = self.env.ref('woow_paas_platform.action_workspace_quota_inspection')
         action_views = [tuple(view) for view in action.read(['views'])[0]['views']]
         self.authenticate('admin', 'admin')
@@ -271,6 +281,14 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
                 self.assertIn('quota_%s_used' % suffix, names)
         self.assertEqual(arch.xpath('//button[@name="action_refresh_quota"]')[0].get('type'),
                          'object')
+        with patch('odoo.addons.base.models.ir_ui_view._logger.warning') as warning:
+            self.assertTrue(quota_views._check_xml())
+        messages = [str(call.args[1]) for call in warning.call_args_list
+                    if len(call.args) > 1]
+        self.assertFalse(
+            any('Access Rights Inconsistency' in message for message in messages),
+            messages,
+        )
 
     def test_http_failures_and_recovery_never_report_zero_as_unknown(self):
         from odoo.tools import mute_logger

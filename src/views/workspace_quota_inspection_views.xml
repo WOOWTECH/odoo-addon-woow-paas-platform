@@ -8,6 +8,7 @@
         <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="arch" type="xml">
             <list string="Workspace Quota Observations" create="false" edit="false" delete="false"
+                  groups="base.group_system"
                   limit="5" decoration-warning="not quota_available">
                 <field name="name"/>
                 <field name="quota_status"/>
@@ -47,7 +48,8 @@
         <field name="priority">90</field>
         <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="arch" type="xml">
-            <form string="Workspace Quota Observation" create="false" edit="false" delete="false">
+            <form string="Workspace Quota Observation" create="false" edit="false" delete="false"
+                  groups="base.group_system">
                 <header>
                     <button name="action_refresh_quota" type="object" string="Refresh Observation"
                             class="oe_highlight" groups="base.group_system"/>
