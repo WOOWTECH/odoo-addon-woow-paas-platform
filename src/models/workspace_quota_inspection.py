@@ -95,6 +95,12 @@ class WorkspaceQuotaInspection(models.Model):
         string='Complete Quota Observation', compute='_compute_quota_inspection',
         compute_sudo=False, readonly=True, groups='base.group_system',
     )
+    quota_available_decoration = fields.Boolean(
+        string='Quota Observation Decoration', compute='_compute_quota_available_decoration',
+        compute_sudo=False, readonly=True, groups='base.group_user',
+        help='Technical list-decoration helper. It mirrors quota availability for system '
+             'administrators and is always false for other internal users.',
+    )
     quota_cpu_requests_hard = _quota_char('CPU Requests Hard')
     quota_cpu_requests_used = _quota_char('CPU Requests Used')
     quota_cpu_limits_hard = _quota_char('CPU Limits Hard')
@@ -108,7 +114,8 @@ class WorkspaceQuotaInspection(models.Model):
 
     def _reject_quota_inspection_write(self, values, *, defaults=False):
         projection = {name for name, field in self._fields.items()
-                      if field.compute == '_compute_quota_inspection'}
+                      if field.compute == '_compute_quota_inspection'} | {
+                          'quota_available_decoration'}
         if projection.intersection(values) or (defaults and any(
                 'default_' + name in self.env.context for name in projection)):
             raise AccessError(_('Quota observations are read-only operator data.'))
@@ -131,6 +138,16 @@ class WorkspaceQuotaInspection(models.Model):
         self.invalidate_recordset([name for name, field in self._fields.items()
                                   if field.compute == '_compute_quota_inspection'])
         return {'type': 'ir.actions.client', 'tag': 'reload'}
+
+    @api.depends_context('uid')
+    def _compute_quota_available_decoration(self):
+        if not self.env.user.has_group('base.group_system'):
+            for workspace in self:
+                workspace.quota_available_decoration = False
+            return
+        availability = self.mapped('quota_available')
+        for workspace, available in zip(self, availability):
+            workspace.quota_available_decoration = available
 
     @api.depends_context('uid')
     def _compute_quota_inspection(self):
