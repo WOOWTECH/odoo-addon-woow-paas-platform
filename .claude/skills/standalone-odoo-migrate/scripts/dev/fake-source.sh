@@ -208,8 +208,11 @@ copy_from_image() {
   # 起一顆只 sleep 的 pod 跑該 image，把 /all-addons 裡指定的模組用 tar 管線直接送進來源站的 volume（不落地本機）
   local pod=fake-source-addon-src
   if ! "${K[@]}" get secret paas-registry >/dev/null 2>&1; then
+    # The NotFound guard makes this create-only. Client-side apply would copy
+    # the complete docker credential into last-applied-configuration as a
+    # second readable Secret value.
     kubectl --context "$CTX" -n "${PULL_FROM%%/*}" get secret "${PULL_FROM#*/}" -o json \
-      | jq '{apiVersion, kind, type, data, metadata: {name: "paas-registry"}}' | "${K[@]}" apply -f - >/dev/null
+      | jq '{apiVersion, kind, type, data, metadata: {name: "paas-registry"}}' | "${K[@]}" create -f - >/dev/null
   fi
   "${K[@]}" delete pod "$pod" --ignore-not-found --wait >/dev/null
   "${K[@]}" apply -f - >/dev/null <<EOF
