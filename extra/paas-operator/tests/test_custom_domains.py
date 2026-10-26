@@ -1,5 +1,4 @@
 """Cloudflare Custom Hostnames API contract and security boundaries."""
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -127,16 +126,15 @@ def test_post_never_creates_provider_hostname_until_gateway_loaded(client, monke
     mocked.assert_not_called()
 
 
-def test_cloudflare_client_bare_create_contract_uses_txt_dv():
+async def test_cloudflare_client_bare_create_contract_uses_txt_dv():
     """Lock the provider contract independently of the fail-closed API gate."""
     from src.services.custom_domains import CustomDomainsClient
 
     mocked = AsyncMock(return_value=cf_response(201, result=resource()))
     with patch("httpx.AsyncClient.request", mocked):
-        import asyncio
-        result = asyncio.run(CustomDomainsClient(
+        result = await CustomDomainsClient(
             zone_id="zone-123", api_token="provider-secret"
-        ).create("shop.customer.example", "customers.origin.example.net"))
+        ).create("shop.customer.example", "customers.origin.example.net")
     assert result["id"] == "provider_123"
     mocked.assert_awaited_once()
     args, kwargs = mocked.await_args
@@ -151,15 +149,15 @@ def test_cloudflare_client_bare_create_contract_uses_txt_dv():
     }
 
 
-def test_fallback_origin_probe_is_read_only_and_requires_valid_resource():
+async def test_fallback_origin_probe_is_read_only_and_requires_valid_resource():
     from src.services.custom_domains import CustomDomainsClient
 
     mocked = AsyncMock(return_value=cf_response(result={
         "origin": "customers.origin.example.net", "status": "active"}))
     with patch("httpx.AsyncClient.request", mocked):
-        result = asyncio.run(CustomDomainsClient(
+        result = await CustomDomainsClient(
             zone_id="zone-123", api_token="provider-secret"
-        ).get_fallback_origin())
+        ).get_fallback_origin()
     assert result["status"] == "active"
     assert mocked.await_args.args[:2] == (
         "GET",
@@ -176,7 +174,7 @@ def test_custom_hostname_credential_is_separate_from_tunnel_credential(monkeypat
     assert api._client().api_token == "tunnel-only"
 
 
-def test_edge_readiness_requires_active_fallback_and_exact_tunnel(monkeypatch):
+async def test_edge_readiness_requires_active_fallback_and_exact_tunnel(monkeypatch):
     tunnel_id = "11111111-1111-4111-8111-111111111111"
     target = "customers.origin.example.net"
     gateway_url = "http://paas-custom-domain-gateway.paas-cloudflare-system.svc.cluster.local:8080"
@@ -202,30 +200,30 @@ def test_edge_readiness_requires_active_fallback_and_exact_tunnel(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "get", AsyncMock(return_value=httpx.Response(
         200, request=httpx.Request("GET", f"{gateway_url}/healthz"))))
 
-    def ready():
+    async def ready():
         monkeypatch.setattr(api, "_edge_cache", (0.0, False))
-        return asyncio.run(api._edge_ready())
+        return await api._edge_ready()
 
-    assert ready() is True
+    assert await ready() is True
     cf.get_dns_record.assert_awaited_with(target, raise_on_error=True)
     cf.get_tunnel_config.return_value = {"config": {"ingress": [
         {"hostname": "only.example.net", "service": gateway_url}]} }
-    assert ready() is False
+    assert await ready() is False
     cf.get_tunnel_config.return_value = {"config": {"ingress": [
         {"service": gateway_url}]} }
     provider.get_fallback_origin.return_value = {"origin": target, "status": "pending_deployment"}
-    assert ready() is False
+    assert await ready() is False
     provider.get_fallback_origin.return_value = {"origin": "other.origin.example.net", "status": "active"}
-    assert ready() is True
+    assert await ready() is True
     for invalid in (None, {}, {"origin": "attacker.example", "status": "active"},
                     {"origin": "", "status": "active"}):
         provider.get_fallback_origin.return_value = invalid
-        assert ready() is False
+        assert await ready() is False
     provider.get_fallback_origin.return_value = {"origin": "other.origin.example.net", "status": "pending_deployment"}
-    assert ready() is False
+    assert await ready() is False
     provider.get_fallback_origin.return_value = {"origin": target, "status": "active"}
     provider.can_manage.return_value = False
-    assert ready() is False
+    assert await ready() is False
 
 
 @pytest.mark.parametrize("hostname", [
