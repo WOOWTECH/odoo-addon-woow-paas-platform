@@ -20,7 +20,11 @@ from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorEr
 from ..models.cloud_service import _internal_provision
 from .test_restart_and_secret_keys_1432 import _BG_CLIENT, _CONTROLLER, _Fixture, _SyncThread
 
-FEATURES = {'mcp.enabled': ['image'], 'omnigentHost.enabled': ['image']}
+FEATURES = {
+    'mcp.enabled': ['image'],
+    'omnigentHost.enabled': ['image'],
+    'paseo.enabled': ['image'],
+}
 
 
 @tagged('post_install', '-at_install')
@@ -218,3 +222,4 @@ class TestRollbackFeatureSwitchesOD0061(TransactionCase):
         self.assertIn('image', defaults)
         self.assertIn('enabled', defaults['mcp'])
         self.assertIn('enabled', defaults['omnigentHost'])
+        self.assertIn('enabled', defaults['paseo'])
