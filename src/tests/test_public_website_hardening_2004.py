@@ -14,7 +14,7 @@ from odoo.tests.common import BaseCase
 MODULE_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = MODULE_ROOT / "services" / "public_website_hardening.py"
 MIGRATION_PATH = (
-    MODULE_ROOT / "migrations" / "18.0.1.0.264" / "post-migrate.py"
+    MODULE_ROOT / "migrations" / "18.0.1.0.266" / "post-migrate.py"
 )
 
 spec = importlib.util.spec_from_file_location("public_website_hardening", HELPER_PATH)
@@ -115,7 +115,7 @@ class PublicWebsiteHardeningTest(BaseCase):
 
     def test_release_version_and_migration_are_paired(self):
         manifest = ast.literal_eval((MODULE_ROOT / "__manifest__.py").read_text())
-        self.assertEqual(manifest["version"], "18.0.1.0.264")
+        self.assertEqual(manifest["version"], "18.0.1.0.266")
         self.assertTrue(MIGRATION_PATH.is_file())
 
 

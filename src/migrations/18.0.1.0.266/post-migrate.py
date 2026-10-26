@@ -1,5 +1,7 @@
 """Patch the database-backed public website views reported in #2004.
 
+This migration is paired with addon version ``18.0.1.0.266``.
+
 The views were created with Odoo's website editor and therefore have no addon
 XML source to update.  Their stable ``ir.ui.view.key`` values are used here;
 missing views are a supported no-op (staging does not host the public website),
