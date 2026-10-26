@@ -7,7 +7,7 @@
                     <img class="o_woow_site_logo" src="/woow_paas_platform/static/src/img/brands/woowtech-site-logo.jpg" alt="woowtech" draggable="false"/>
                 </div>
             </div>
-            <nav class="o_woow_sidebar_nav">
+            <nav class="o_woow_sidebar_nav" aria-label="Primary navigation">
                 <t t-foreach="navItems" t-as="item" t-key="item.section or item.path">
                     <t t-if="isSection(item)">
                         <div class="o_woow_nav_section">
@@ -16,7 +16,8 @@
                     </t>
                     <t t-elif="showItem(item)">
                         <a t-att-class="'o_woow_nav_item ' + (isActive(item) ? 'active' : '')"
-                           t-on-click="() => props.router.navigate(item.path)">
+                           t-att-href="'#/' + item.path"
+                           t-att-aria-current="isActive(item) ? 'page' : false">
                             <span class="material-symbols-outlined"><t t-esc="item.icon"/></span>
                             <span><t t-esc="item.name"/></span>
                         </a>
@@ -24,11 +25,11 @@
                 </t>
             </nav>
             <div class="o_woow_sidebar_footer">
-                <a class="o_woow_nav_item" t-on-click="openHelp">
+                <a class="o_woow_nav_item" t-att-href="helpHref" target="_blank" rel="noopener">
                     <span class="material-symbols-outlined" t-translation="off">help</span>
                     <span>Help &amp; Support</span>
                 </a>
-                <a class="o_woow_nav_item o_woow_logout" t-on-click="logout">
+                <a class="o_woow_nav_item o_woow_logout" href="/web/session/logout">
                     <span class="material-symbols-outlined" t-translation="off">logout</span>
                     <span>Log Out</span>
                 </a>

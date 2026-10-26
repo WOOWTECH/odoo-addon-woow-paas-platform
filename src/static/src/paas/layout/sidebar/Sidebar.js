@@ -50,6 +50,10 @@ export class Sidebar extends Component {
         return !!(this.profile.partner && this.profile.partner.is_admin);
     }
 
+    get helpHref() {
+        return helpUrl();
+    }
+
     /** adminOnly 項僅 admin 可見；非 adminOnly 一律顯示（用 JS helper 避模板運算子歧義）。 */
     showItem(item) {
         return (!item.adminOnly || this.isAdmin)
