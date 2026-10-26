@@ -1,5 +1,4 @@
 """Dedicated gateway route registry: ownership, CAS, and rollout guards."""
-import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -70,31 +69,31 @@ def configured(monkeypatch):
     return fake
 
 
-def test_publish_is_idempotent_and_uses_resource_version_cas(configured):
+async def test_publish_is_idempotent_and_uses_resource_version_cas(configured):
     configured.conflicts = 1
-    asyncio.run(gateway.publish(HOST, ORIGIN, NS, SERVICE))
+    await gateway.publish(HOST, ORIGIN, NS, SERVICE)
     assert configured.routes == {HOST: TARGET}
     assert configured.rv == 2
-    asyncio.run(gateway.publish(HOST, ORIGIN, NS, SERVICE))
+    await gateway.publish(HOST, ORIGIN, NS, SERVICE)
     assert configured.rv == 2
 
 
-def test_cross_service_takeover_and_unpublish_are_rejected(configured):
+async def test_cross_service_takeover_and_unpublish_are_rejected(configured):
     configured.routes[HOST] = {"namespace": "paas-ws-other",
                                "service": "other-odoo", "port": 80}
     with pytest.raises(gateway.GatewayRouteError, match="already belongs"):
-        asyncio.run(gateway.publish(HOST, ORIGIN, NS, SERVICE))
+        await gateway.publish(HOST, ORIGIN, NS, SERVICE)
     with pytest.raises(gateway.GatewayRouteError, match="belongs to another"):
-        asyncio.run(gateway.unpublish(HOST, NS, SERVICE))
+        await gateway.unpublish(HOST, NS, SERVICE)
     assert HOST in configured.routes
 
 
-def test_namespace_and_service_constraints_fail_before_kubernetes_or_cloudflare(configured):
+async def test_namespace_and_service_constraints_fail_before_kubernetes_or_cloudflare(configured):
     for namespace, service in (("kube-system", SERVICE),
                                ("paas-ws-stg-demo", SERVICE),
                                (NS, "127.0.0.1"), (NS, "bad/name")):
         with pytest.raises(gateway.GatewayRouteError):
-            asyncio.run(gateway.publish(HOST, ORIGIN, namespace, service))
+            await gateway.publish(HOST, ORIGIN, namespace, service)
     assert configured.routes == {}
 
 
@@ -108,18 +107,18 @@ def test_gateway_requires_matching_environment_and_distinct_tunnel(configured, m
     assert gateway.gateway_configured() is False
 
 
-def test_target_must_be_non_headless_release_owned_odoo_service(configured):
+async def test_target_must_be_non_headless_release_owned_odoo_service(configured):
     configured.services = [{"name": SERVICE, "clusterIP": "None",
                             "ports": [{"port": 80, "protocol": "TCP"}]}]
     with pytest.raises(gateway.GatewayRouteError, match="not ready"):
-        asyncio.run(gateway.publish(HOST, ORIGIN, NS, SERVICE))
+        await gateway.publish(HOST, ORIGIN, NS, SERVICE)
     configured.services = [{"name": SERVICE, "clusterIP": "10.43.1.2",
                             "ports": [{"port": 5432, "protocol": "TCP"}]}]
     with pytest.raises(gateway.GatewayRouteError, match="not ready"):
-        asyncio.run(gateway.publish(HOST, ORIGIN, NS, SERVICE))
+        await gateway.publish(HOST, ORIGIN, NS, SERVICE)
 
 
-def test_gateway_must_observe_mount_before_provider_create(configured, monkeypatch):
+async def test_gateway_must_observe_mount_before_provider_create(configured, monkeypatch):
     configured.routes[HOST] = TARGET
 
     async def fake_get(_self, url, **kwargs):
@@ -129,7 +128,7 @@ def test_gateway_must_observe_mount_before_provider_create(configured, monkeypat
                               request=httpx.Request("GET", url))
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
-    assert asyncio.run(gateway.route_loaded(HOST, NS, SERVICE, present=True)) is False
+    assert await gateway.route_loaded(HOST, NS, SERVICE, present=True) is False
 
 
 def test_gateway_route_endpoints_require_auth_and_cleanup_survives_kill_switch(
