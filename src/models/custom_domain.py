@@ -261,8 +261,21 @@ class CustomDomain(models.Model):
             return []
         return answers if isinstance(answers, list) else []
 
+    def _lock_claim(self):
+        """Serialize removal with polling; refresh state after taking the lock."""
+        self.ensure_one()
+        self.flush_recordset()
+        self.env.cr.execute(
+            'SELECT id FROM woow_paas_platform_custom_domain '
+            'WHERE id = %s FOR UPDATE', (self.id,))
+        found = bool(self.env.cr.fetchone())
+        self.invalidate_recordset()
+        return found
+
     def _reconcile_one(self, client):
         self.ensure_one()
+        if not self._lock_claim():
+            return
         if self.state == 'pending_dns':
             if self.service_id.state != 'running' or self.service_id.is_protected:
                 self.write({'last_checked_at': fields.Datetime.now()})

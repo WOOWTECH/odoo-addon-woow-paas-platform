@@ -81,6 +81,7 @@
                             <div t-if="domain.dns_records and domain.dns_records.length" class="o_woow_dns_records">
                                 <h3>DNS records</h3>
                                 <p>Add verification records first. When the status says “Ready to switch DNS”, replace the existing website CNAME with the record marked “Switch traffic”. Some DNS providers ask for a relative Host/Name instead of the full name shown here.</p>
+                                <p>Keep the _acme-challenge CNAME in your DNS after activation so HTTPS certificates can renew automatically.</p>
                                 <div t-foreach="domain.dns_records" t-as="record" t-key="record_index" class="o_woow_dns_record">
                                     <span class="o_woow_dns_record__type">
                                         <t t-esc="record.type"/>

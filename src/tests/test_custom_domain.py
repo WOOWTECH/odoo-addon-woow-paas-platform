@@ -128,6 +128,22 @@ class TestCustomDomain(HttpCase):
     def test_config_parameter_is_registered_for_uninstall(self):
         self.assertIn('woow_paas_platform.custom_domains_enabled', _CONFIG_PARAMETERS)
 
+    def test_poll_refreshes_state_before_reopening_a_removed_route(self):
+        claim = self._claim(self.s1, 'booking.example.com')
+        claim.write({'state': 'active', 'provider_id': 'provider_123'})
+        claim.flush_recordset()
+        self.assertEqual(claim.state, 'active')
+        # Simulate a newer stored removal while this environment has cached the
+        # old state. Locking must refresh it before any remote side effects.
+        self.env.cr.execute(
+            "UPDATE woow_paas_platform_custom_domain SET state = 'removed', "
+            "claim_hostname = NULL WHERE id = %s", (claim.id,))
+        client = MagicMock()
+        claim._reconcile_one(client)
+        self.assertEqual(claim.state, 'removed')
+        client.publish_custom_domain_route.assert_not_called()
+        client.get_custom_domain.assert_not_called()
+
     def test_service_teardown_blocks_live_claim_and_purges_removed_row(self):
         claim = self._claim(self.s1, 'booking.example.com')
         with self.assertRaises(UserError):

@@ -79,6 +79,8 @@ class CustomDomainController(Controller):
         if action == 'check':
             Domain._trigger_reconcile()
         else:
+            if not domain._lock_claim() or domain.state == 'removed':
+                return payload()
             if domain.state == 'needs_review' or domain.state == 'creating':
                 return {'success': False,
                         'error': _('This domain needs operator review before removal.')}
