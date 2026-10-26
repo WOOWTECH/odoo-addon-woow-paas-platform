@@ -12,6 +12,7 @@ from src.api import (
     agent_runtimes,
     analytics,
     cluster,
+    custom_domains,
     init,
     namespaces,
     odoo_modules,
@@ -200,6 +201,7 @@ async def health_check():
 app.include_router(releases.router)
 app.include_router(namespaces.router)
 app.include_router(routes.router)
+app.include_router(custom_domains.router)
 app.include_router(tunnels.router)
 app.include_router(init.router)
 app.include_router(odoo_modules.router)

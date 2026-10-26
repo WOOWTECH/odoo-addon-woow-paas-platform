@@ -10700,6 +10700,15 @@ class CloudService(models.Model):
 
         client = get_paas_operator_client(self.env)
         if client and self.helm_release_name and self.helm_namespace:
+            # A custom-domain gateway would otherwise bypass the canonical
+            # route's suspended-page parking. Remove its mappings before the
+            # workload is scaled down; reconciliation also retries removal.
+            for domain in self.env['woow_paas_platform.custom_domain'].sudo().search([
+                    ('service_id', '=', self.id), ('state', '!=', 'removed')]):
+                try:
+                    domain._unpublish_route(client)
+                except Exception:
+                    _logger.exception('Could not close custom domain route before suspend id=%s', domain.id)
             try:
                 client.scale_release(
                     self.helm_release_name, self.helm_namespace, replicas=0,
@@ -10876,6 +10885,9 @@ class CloudService(models.Model):
             # error_message、不看 state）。#1599 沙盒端到端發現。回到 error 的維持原說明。
             vals['error_message'] = False
         self.write(vals)
+        if self.env['woow_paas_platform.custom_domain'].sudo().search_count([
+                ('service_id', '=', self.id), ('state', '!=', 'removed')]):
+            self.env['woow_paas_platform.custom_domain']._trigger_reconcile()
         _logger.info(
             "[CLOUD_SVC] _do_resume done service=%s new_state=%s",
             self.id, restore_state,
@@ -11108,6 +11120,7 @@ class CloudService(models.Model):
         曾經 running 的服務呼叫形狀與 #1431 之前完全相同（不帶 ``grace_period_days``）。
         """
         self.ensure_one()
+        self.env['woow_paas_platform.custom_domain']._assert_service_can_be_deleted(self)
         kwargs = {'subdomain': self.subdomain}
         grace = self._orphan_grace_period_days()
         if grace:
@@ -11382,6 +11395,20 @@ class CloudService(models.Model):
         # #744：Access 身分錨點是硬不變式，對**所有人**（含 superuser、含
         # sudo'd controller）擋，唯一豁免是模組私有 sentinel。放在方法第一行
         # ——後面每一段都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。
+        if vals.get('is_protected') is True or 'subdomain' in vals:
+            live_domain_services = self.sudo().filtered(
+                lambda service: self.env['woow_paas_platform.custom_domain'].sudo()
+                .search_count([('service_id', '=', service.id),
+                               ('state', '!=', 'removed')]))
+            if live_domain_services and vals.get('is_protected') is True:
+                raise UserError(_(
+                    'Remove custom domains before enabling Access protection; '
+                    'the public gateway cannot enforce this service Access policy.'))
+            if live_domain_services and 'subdomain' in vals:
+                for service in live_domain_services:
+                    if vals['subdomain'] != service.subdomain:
+                        raise UserError(_(
+                            'Remove custom domains before changing this service hostname.'))
         if 'subdomain' in vals:
             for service in self:
                 if (service.is_protected and
@@ -12350,6 +12377,10 @@ class CloudService(models.Model):
         入口（existing_policy_ids）永遠收不到它們。所以拆除必須在
         `super().unlink()` 之前完成。
         """
+        # A provider hostname must not outlive its service: fail closed on a
+        # live claim, and clear only rows already confirmed removed upstream.
+        self.env['woow_paas_platform.custom_domain']._purge_removed_for_service(self)
+
         # #318: 在 super().unlink() 前捕獲仍 in_progress 的關聯訂閱。
         # subscription_id 是 ondelete='set null'（只保護反向），刪 service
         # 不會動訂閱 → 孤兒訂閱會被計費 cron 續扣。super().unlink() 後

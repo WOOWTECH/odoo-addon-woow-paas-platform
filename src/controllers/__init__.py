@@ -1,4 +1,5 @@
 from . import paas
+from . import custom_domain
 from . import ai_assistant
 from . import billing
 from . import oauth2

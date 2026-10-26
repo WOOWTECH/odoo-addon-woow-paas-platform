@@ -1,169 +1,155 @@
-// =============================================================================
-// Edit Domain Modal Styles
-// =============================================================================
-
 .o_woow_modal_domain {
-    max-width: 520px !important;
-}
+    max-width: 760px !important;
 
-.o_woow_domain_readonly {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    overflow-wrap: anywhere; // #1310
-    padding: 0.75rem 1rem;
-    background: rgba(0, 0, 0, 0.03);
-    border: 1px solid $woow-border-light;
-    border-radius: $woow-radius-default;
-    font-size: 0.9375rem;
-    color: $woow-text-primary;
-
-    .material-symbols-outlined {
-        color: $woow-primary;
+    .o_woow_modal_header p {
+        margin: 0.25rem 0 0;
+        color: $woow-text-secondary;
+        font-size: 0.875rem;
     }
 }
 
-.o_woow_domain_none {
-    color: $woow-text-secondary;
-    font-style: italic;
-}
-
-.o_woow_form_hint {
-    margin-top: 0.5rem;
-    font-size: 0.8rem;
-    color: $woow-text-secondary;
-}
-
-.o_woow_form_error {
+.o_woow_domain_notice {
     display: flex;
     align-items: center;
-    gap: 0.375rem;
-    margin-top: 0.5rem;
-    font-size: 0.8rem;
-    color: #ef4444;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: $woow-radius-default;
+    font-size: 0.875rem;
+
+    &--warning {
+        color: #92400e;
+        background: #fffbeb;
+        border: 1px solid #fde68a;
+    }
 }
 
-.o_woow_domain_input_wrapper {
-    position: relative;
+.o_woow_domain_add__controls {
+    display: flex;
+    gap: 0.75rem;
 
     .o_woow_input {
-        padding-right: 2.5rem;
+        flex: 1;
+        min-width: 0;
     }
 }
 
-.o_woow_domain_clear {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    background: transparent;
-    border: none;
-    padding: 0.375rem;
-    cursor: pointer;
-    color: $woow-text-secondary;
-    border-radius: 4px;
-    transition: all 0.2s ease;
-
-    &:hover {
-        background: rgba(0, 0, 0, 0.05);
-        color: $woow-text-primary;
-    }
-
-    &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-}
-
-// CNAME Instructions
-.o_woow_cname_instructions {
-    margin-top: 1.5rem;
-    border: 1px solid rgba($woow-primary, 0.2);
-    border-radius: $woow-radius-default;
-    overflow: hidden;
-}
-
-.o_woow_cname_header {
+.o_woow_domain_loading,
+.o_woow_domain_empty {
     display: flex;
+    justify-content: center;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    background: rgba($woow-primary, 0.05);
-    color: $woow-primary;
-    font-weight: 500;
-    font-size: 0.875rem;
+    min-height: 7rem;
+    color: $woow-text-secondary;
 }
 
-.o_woow_cname_content {
+.o_woow_domain_list {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.o_woow_domain_card {
     padding: 1rem;
-
-    > p {
-        margin: 0 0 0.75rem;
-        font-size: 0.875rem;
-        color: $woow-text-secondary;
-    }
-}
-
-.o_woow_cname_record {
-    background: rgba(0, 0, 0, 0.02);
+    border: 1px solid $woow-border-light;
     border-radius: $woow-radius-default;
-    padding: 0.75rem;
-}
+    background: $woow-card-light;
 
-.o_woow_cname_row {
-    display: flex;
-    align-items: center;
-    padding: 0.375rem 0;
-    border-bottom: 1px solid $woow-border-light;
-
-    &:last-child {
-        border-bottom: none;
-        padding-bottom: 0;
-    }
-
-    &:first-child {
-        padding-top: 0;
-    }
-
-    // #1310：手機上標籤在上、值在下，長網域不擠在 100px 標籤欄旁
-    @media (max-width: $woow-bp-sm) {
-        flex-direction: column;
+    &__header {
+        display: flex;
+        justify-content: space-between;
         align-items: flex-start;
-        gap: 0.125rem;
+        gap: 1rem;
 
-        .o_woow_cname_label {
-            flex-basis: auto;
+        strong {
+            display: block;
+            overflow-wrap: anywhere;
         }
     }
-}
 
-.o_woow_cname_label {
-    flex: 0 0 100px;
-    font-size: 0.8rem;
-    color: $woow-text-secondary;
-    font-weight: 500;
-}
-
-.o_woow_cname_value {
-    flex: 1;
-    min-width: 0; // #1310：網域任意字元換行，不撐破 modal
-    max-width: 100%;
-    overflow-wrap: anywhere;
-    font-size: 0.875rem;
-    color: $woow-text-primary;
-
-    code {
-        background: rgba($woow-primary, 0.1);
-        color: $woow-primary;
-        padding: 0.125rem 0.375rem;
-        border-radius: 4px;
-        font-family: 'Monaco', 'Menlo', monospace;
-        font-size: 0.8rem;
+    &__actions {
+        display: flex;
+        flex-shrink: 0;
+        gap: 0.5rem;
     }
 }
 
-.o_woow_cname_note {
-    margin-top: 0.75rem !important;
-    font-size: 0.75rem !important;
-    font-style: italic;
+.o_woow_domain_status {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: $woow-text-secondary;
+    font-size: 0.75rem;
+    font-weight: 600;
+
+    &--success { background: #ecfdf5; color: #047857; }
+    &--pending { background: #eff6ff; color: #1d4ed8; }
+    &--warning { background: #fffbeb; color: #92400e; }
+    &--error { background: #fef2f2; color: #b91c1c; }
+    &--muted { background: #f3f4f6; color: #6b7280; }
+}
+
+.o_woow_domain_last_error {
+    margin: 0.75rem 0 0;
+    padding: 0.625rem 0.75rem;
+    border-radius: 6px;
+    background: #fef2f2;
+    color: #b91c1c;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.o_woow_dns_records {
+    margin-top: 1rem;
+
+    h3 { margin: 0; font-size: 0.875rem; }
+    > p { margin: 0.25rem 0 0.625rem; color: $woow-text-secondary; font-size: 0.8rem; }
+}
+
+.o_woow_dns_record {
+    display: grid;
+    grid-template-columns: 70px minmax(100px, 0.8fr) minmax(160px, 1.5fr) auto;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-top: 1px solid $woow-border-light;
+
+    code {
+        overflow-wrap: anywhere;
+        min-width: 0;
+        color: $woow-text-primary;
+        font-size: 0.78rem;
+    }
+
+    &__type {
+        display: flex;
+        flex-direction: column;
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: $woow-primary;
+
+        small { color: $woow-text-secondary; font-weight: 400; }
+    }
+}
+
+@media (max-width: $woow-bp-sm) {
+    .o_woow_domain_add__controls,
+    .o_woow_domain_card__header,
+    .o_woow_domain_card__actions {
+        flex-direction: column;
+    }
+
+    .o_woow_domain_card__actions,
+    .o_woow_domain_card__actions .o_woow_btn {
+        width: 100%;
+    }
+
+    .o_woow_dns_record {
+        grid-template-columns: 56px 1fr auto;
+
+        &__value { grid-column: 1 / -1; }
+    }
 }

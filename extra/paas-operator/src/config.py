@@ -292,6 +292,23 @@ class Settings(BaseSettings):
     cloudflare_tunnel_id: str = ""  # Tunnel ID from Zero Trust dashboard
     cloudflare_zone_id: str = ""  # Zone ID for DNS management (found in domain overview)
     cloudflare_domain: str = ""  # Base domain (e.g., woowtech.io)
+    # Customer custom hostnames (Cloudflare for SaaS). This is deliberately a
+    # separate, off-by-default capability: enabling tunnel route management
+    # must never implicitly authorize creation of billable custom hostnames.
+    # The trusted origin suffix is derived from CLOUDFLARE_DOMAIN rather than
+    # accepted from an API caller.
+    custom_domains_enabled: bool = False
+    # Optional zone-scoped SSL token; keep existing Tunnel/DNS credentials intact.
+    custom_domains_api_token: str = ""
+    # Proxied custom-origin CNAME in our SaaS zone, never the zone apex itself.
+    custom_domains_target_hostname: str = ""
+    # Zone's Cloudflare DCV delegation suffix; enables unattended certificate renewal.
+    custom_domains_dcv_delegation_hostname: str = ""
+    # The gateway and its route ConfigMap live beside the dedicated cloudflared
+    # connector. Empty values keep onboarding closed during a partial rollout.
+    custom_domains_gateway_url: str = ""
+    custom_domains_gateway_token: str = ""
+    custom_domains_gateway_tunnel_id: str = ""
     # #279 O4 leg-2 baseline NP: the dedicated namespace hosting THIS env's Cloudflare
     # Tunnel connector pod. Grounded on woow-k3s: prod=`paas-cloudflare-system`,
     # stg=`paas-stg-cloudflare-system` (hostNetwork=False, dedicated → a namespaceSelector

@@ -5037,6 +5037,13 @@ class PaasController(HiddenChainMixin, Controller):
         data = self._format_service(service, include_details=True)
         if access is not None:
             data['viewer_can_manage'] = self._can_manage_service(access)
+            domain_capability = request.env[
+                'woow_paas_platform.custom_domain']._capability(service)
+            if not data['viewer_can_manage']:
+                domain_capability['supported'] = False
+                domain_capability['management_available'] = False
+                domain_capability['reason'] = _('Only workspace owners and admins can manage domains.')
+            data['custom_domain_capability'] = domain_capability
             # #1540：開著的取回入口（網址、帳號、到期）只給能操作的人看；不問 operator，
             # 就緒狀態由取回視窗自己查。
             if data['viewer_can_manage']:
@@ -5692,6 +5699,11 @@ class PaasController(HiddenChainMixin, Controller):
         """Delete/uninstall a service."""
         if service.state == 'deleting':
             return {'success': False, 'error': _('Service is already being deleted')}
+
+        try:
+            request.env['woow_paas_platform.custom_domain']._assert_service_can_be_deleted(service)
+        except UserError as exc:
+            return {'success': False, 'error': str(exc)}
 
         client = get_paas_operator_client(request.env)
         if not client:

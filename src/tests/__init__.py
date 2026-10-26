@@ -7,6 +7,7 @@ from . import test_account_move_skip_hook_field
 from . import test_action_post_hook_isolation
 from . import test_cloud_app_template
 from . import test_cloud_service
+from . import test_custom_domain
 from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home

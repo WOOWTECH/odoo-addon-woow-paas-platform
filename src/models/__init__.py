@@ -43,6 +43,7 @@ from . import security_access
 from . import security_access_access_policy
 from . import security_access_access_policy_rule
 from . import cloud_service
+from . import custom_domain
 # feat: #1611 欠費取消／到期後在 /woow 自助續訂（沿用上游續約鏈＋#1599 的復權觸發）
 from . import cloud_service_renewal
 from . import cloud_odoo_addon

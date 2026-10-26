@@ -1,0 +1,37 @@
+name: Build custom domain gateway
+
+on:
+  push:
+    tags:
+      - "domain-gateway-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable image tag
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            IMAGE_TAG="${{ inputs.tag }}"
+          else
+            IMAGE_TAG="${GITHUB_REF#refs/tags/domain-gateway-v}"
+          fi
+          echo "$IMAGE_TAG" | grep -Eq '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$'
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+      - name: Login to registry
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | docker login \
+            artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local \
+            -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+      - name: Build and push
+        working-directory: extra/custom-domain-gateway
+        run: |
+          IMAGE="artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/paas-custom-domain-gateway:${IMAGE_TAG}"
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$IMAGE" .
+          docker push "$IMAGE"
