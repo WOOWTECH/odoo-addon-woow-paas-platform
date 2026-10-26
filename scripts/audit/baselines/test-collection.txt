@@ -321,7 +321,7 @@
 5	test_cs_spec_332.TestPlanSpecOverlay
 3	test_cs_sync_ctx_forgery_787.TestCsSentinelStillWorks787
 5	test_cs_sync_ctx_forgery_787.TestCsSkipAccessSyncForgery787
-10	test_custom_domain.TestCustomDomain
+14	test_custom_domain.TestCustomDomain
 5	test_custom_domain_hidden_1535.TestCustomDomainHidden1535
 5	test_dashboard_summary.TestDashboardSummary
 4	test_data_retrieval_1540.TestDataRetrievalCapability1540
