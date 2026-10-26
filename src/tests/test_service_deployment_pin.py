@@ -100,6 +100,54 @@ class TestServiceDeploymentPin(_Base):
         self.assertEqual(client.upgrade_release.call_args.kwargs['version'], _VERSION)
         self.assertEqual(self._values()['image'], _REF)
 
+    def test_paseo_product_promotion_preserves_pinned_service_configuration(self):
+        values = self._values()
+        values.update({'paseo': {'enabled': False}, 'omnigentHost': {'enabled': True},
+                       'mcp': {'enabled': False},
+                       'persistence': {'data': {'size': '8Gi'}, 'home': {'size': '2Gi'}}})
+        self.service.write({**_PIN, 'deployment_chart_version': '0.5.8',
+                            'helm_values': json.dumps(values)})
+        self.template.write({
+            'helm_chart_version': '0.5.9',
+            'helm_default_values': json.dumps({
+                'image': {**_REF, 'tag': '20261026.1234@sha256:' + 'b' * 64},
+                'paseo': {'enabled': True, 'origin': ''},
+                'omnigentHost': {'enabled': False}, 'mcp': {'enabled': True},
+            }),
+        })
+        client = self._redeploy({'revision': 31, 'chart_version': '0.5.8'})
+        sent = client.upgrade_release.call_args.kwargs
+        self.assertEqual(sent['version'], '0.5.8')
+        self.assertEqual(sent['values']['image'], _REF)
+        for key in ('paseo', 'omnigentHost', 'mcp', 'persistence'):
+            self.assertEqual(sent['values'][key], values[key])
+
+    def test_new_install_follows_promoted_product_paseo_defaults(self):
+        template = self.env.ref('woow_paas_platform.cloud_app_opendesign')
+        defaults = json.loads(template.helm_default_values)
+        defaults['image'] = {**_REF, 'tag': '20261026.1234@sha256:' + 'b' * 64}
+        defaults['paseo'] = {'enabled': True, 'origin': ''}
+        template.write({'helm_chart_version': '0.5.9',
+                        'helm_default_values': json.dumps(defaults)})
+        service = _internal_provision(self.env[self.service._name]).create({
+            'name': 'paseo-new-install', 'workspace_id': self.workspace.id,
+            'template_id': template.id, 'helm_values': json.dumps(defaults),
+            'helm_release_name': 'svc-paseo-new', 'helm_namespace': 'paas-ws-test',
+            'subdomain': 'paseo-new-install', 'state': 'pending',
+        })
+        client = MagicMock()
+        answer_quota_reads(client)
+        client.install_release.return_value = {'revision': 1, 'chart_version': '0.5.9'}
+        with patch(_CLIENT_PATH, return_value=client):
+            service._execute_deploy()
+        sent = client.install_release.call_args.kwargs
+        self.assertEqual(sent['version'], '0.5.9')
+        self.assertEqual(sent['values']['image'], defaults['image'])
+        self.assertEqual(sent['values']['paseo'], {
+            'enabled': True, 'origin': service._public_base_url()})
+        self.assertEqual(sent['values']['config']['allowedOrigins'], service._public_base_url())
+        self.assertEqual(service.deployment_policy, 'template')
+
     def test_failed_redeploy_rolls_back_image_refresh_but_keeps_pin(self):
         self.service.write(_PIN)
         before = self._values()
