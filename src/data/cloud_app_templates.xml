@@ -2182,14 +2182,14 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <!-- 0.1.10（woow-paas-charts #278）：新映像內建 Omnigent plugin 0.3.11；
-                 piWeb.omnigentSetup 預設啟用首次設定對話，網址及帳密由租戶自行填寫。
-                 WIP：下行預備 canonical pin，digest 取自 paas-odoo-ci run27837 候選（source 1edfb29b）。
-                 canonical 尚未 promotion：待真正人工 issue409 核准、registry 讀回相同 digest，
-                 且 chart 0.1.10（PR278 head 6d5412e）正式發布後才可合併／部署。
-                 交接與範圍驗證：tests/pi-agent-omnigent-pin.md。 -->
-            <field name="helm_chart_version">0.1.10</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261025.1200@sha256:7152969a4ffa3f05f46b28f49d8899448e426d85014d5f05875f7ede563c120d"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <!-- Chart 0.1.11 defaults to the approved PaaS Pi Agent image 20261026.2019:
+                 root 0.3.13, Omnigent plugin 0.3.21, and Paseo 0.1.10.
+                 PaaS approval issue #453 and promotion run #29595 published the formal tag;
+                 its JCR digest matches the tested candidate. The plugin creates the
+                 first setup conversation; each tenant supplies its own server URL,
+                 account and password. Existing services retain their saved pins. -->
+            <field name="helm_chart_version">0.1.11</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261026.2019@sha256:ac45232f3347c06cb2d9957bc8aaa8a649909d8dd70349723779518157dee075"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
