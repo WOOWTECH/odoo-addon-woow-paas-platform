@@ -1674,6 +1674,60 @@ class PaaSOperatorClient:
         return self._request('GET', '/api/cluster/storage-capacity', params=params)
 
 
+    # Custom domains have a separate control plane.  Keep these requests out of
+    # Helm values and do not retry an ambiguous create.
+    def custom_domain_capabilities(self):
+        return self._request('GET', '/api/custom-domains/capabilities', timeout=(3, 8))
+
+    def publish_custom_domain_route(self, hostname, origin_hostname, namespace, service_name):
+        return self._request(
+            'POST', '/api/custom-domains/routes',
+            data={'hostname': hostname, 'origin_hostname': origin_hostname,
+                  'namespace': namespace, 'service_name': service_name},
+            timeout=(5, 45),
+        )
+
+    def unpublish_custom_domain_route(self, hostname, origin_hostname, namespace, service_name):
+        return self._request(
+            'DELETE', '/api/custom-domains/routes',
+            data={'hostname': hostname, 'origin_hostname': origin_hostname,
+                  'namespace': namespace, 'service_name': service_name},
+            timeout=(5, 15),
+        )
+
+    def custom_domain_gateway_route_ready(self, hostname, origin_hostname, namespace, service_name):
+        result = self._request(
+            'GET', '/api/custom-domains/routes/ready',
+            params={'hostname': hostname, 'origin_hostname': origin_hostname,
+                    'namespace': namespace, 'service_name': service_name},
+            timeout=(3, 10),
+        )
+        return result.get('ready') is True
+
+    def create_custom_domain(self, hostname, origin_hostname, namespace, service_name):
+        return self._request(
+            'POST', '/api/custom-domains',
+            data={'hostname': hostname, 'origin_hostname': origin_hostname,
+                  'namespace': namespace, 'service_name': service_name},
+            timeout=(5, 30), create_once=True,
+        )
+
+    def get_custom_domain(self, provider_id, hostname, origin_hostname, namespace, service_name):
+        return self._request(
+            'GET', '/api/custom-domains/%s' % provider_id,
+            params={'hostname': hostname, 'origin_hostname': origin_hostname,
+                    'namespace': namespace, 'service_name': service_name},
+            timeout=(3, 15),
+        )
+
+    def delete_custom_domain(self, provider_id, hostname, origin_hostname):
+        return self._request(
+            'DELETE', '/api/custom-domains/%s' % provider_id,
+            params={'hostname': hostname, 'origin_hostname': origin_hostname},
+            timeout=(3, 30),
+        )
+
+
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:
     """Get a configured PaaS Operator client from Odoo settings.
 

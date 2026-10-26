@@ -126,13 +126,11 @@
                             <WoowIcon name="'swap_horiz'" size="18"/>
                             Change Plan
                         </WoowButton>
-                        <!-- #1535：自訂網域從未實作，先對租戶隱藏（見 customDomainSupported）。 -->
                         <WoowButton
-                            t-if="customDomainSupported"
+                            t-if="customDomainManagementAvailable"
                             variant="'secondary'"
                             size="'md'"
-                            onClick.bind="showDomainModal"
-                            disabled="!canPerformActions">
+                            onClick.bind="showDomainModal">
                             <WoowIcon name="'language'" size="18"/>
                             Custom Domain
                         </WoowButton>
@@ -436,7 +434,7 @@
 
             <!-- Edit Domain Modal -->
             <EditDomainModal
-                t-if="customDomainSupported and state.showDomainModal and serviceForModal"
+                t-if="customDomainManagementAvailable and state.showDomainModal and serviceForModal"
                 service="serviceForModal"
                 onClose.bind="hideDomainModal"
                 onSaved.bind="onDomainSaved"/>

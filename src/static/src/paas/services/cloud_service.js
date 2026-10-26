@@ -41,6 +41,7 @@ const RESET_REQUEST_TIMEOUT_MS = 90000;
  * @property {string} state - Service state
  * @property {string} subdomain - Service subdomain
  * @property {string} custom_domain - Custom domain
+ * @property {{supported: boolean, management_available: boolean, reason: string, max_domains: number}} custom_domain_capability
  * @property {Object} template - Template info
  * @property {number} helm_revision - Helm revision number
  * @property {string} created_date - ISO date string
@@ -101,6 +102,16 @@ export const cloudService = reactive({
     error: null,
     /** @type {string} */
     domain: "woowtech.io",
+
+    async manageDomains(serviceId, params) {
+        try {
+            const result = await jsonRpc(`/api/services/${serviceId}/domains`, params);
+            if (result.success) return { success: true, data: result.data };
+            return { success: false, error: result.error || _t("Failed to manage custom domains") };
+        } catch (err) {
+            return { success: false, error: err.message || _t("Network error") };
+        }
+    },
 
     /**
      * Initialize config (call this early in app lifecycle)

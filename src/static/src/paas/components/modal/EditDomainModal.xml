@@ -4,117 +4,105 @@
         <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
             <div class="o_woow_modal o_woow_modal_domain" t-on-click.stop="">
                 <div class="o_woow_modal_header">
-                    <h2>Domain Settings</h2>
-                    <button
-                        class="o_woow_modal_close"
-                        t-on-click="props.onClose"
-                        t-att-disabled="state.saving">
+                    <div>
+                        <h2>Custom Domains</h2>
+                        <p>Connect subdomains you control to this service.</p>
+                    </div>
+                    <button class="o_woow_modal_close" t-on-click="props.onClose" t-att-disabled="state.action">
                         <WoowIcon name="'close'" size="20"/>
                     </button>
                 </div>
 
                 <div class="o_woow_modal_body">
-                    <!-- Default Subdomain (readonly) -->
-                    <div class="o_woow_form_group">
-                        <label>Default Subdomain</label>
-                        <div class="o_woow_domain_readonly">
-                            <WoowIcon name="'language'" size="18"/>
-                            <span t-if="fullSubdomain" t-esc="fullSubdomain"/>
-                            <span t-else="" class="o_woow_domain_none">Not assigned</span>
-                        </div>
-                        <p class="o_woow_form_hint">
-                            This is your default service URL, automatically assigned by the platform.
-                        </p>
+                    <div t-if="!state.capability.supported" class="o_woow_domain_notice o_woow_domain_notice--warning">
+                        <WoowIcon name="'info'" size="18"/>
+                        <span t-esc="state.capability.reason || 'Adding and checking domains is currently unavailable.'"/>
                     </div>
 
-                    <!-- Custom Domain Input -->
-                    <div class="o_woow_form_group">
-                        <label for="custom_domain">Custom Domain (Optional)</label>
-                        <div class="o_woow_domain_input_wrapper">
-                            <input
-                                type="text"
-                                id="custom_domain"
-                                class="o_woow_input"
-                                placeholder="app.yourdomain.com"
-                                t-att-value="state.customDomain"
-                                t-on-input="onDomainInput"
-                                t-att-disabled="state.saving"
-                                autocomplete="off"
-                            />
-                            <button
-                                t-if="state.customDomain"
-                                class="o_woow_domain_clear"
-                                t-on-click="clearDomain"
-                                t-att-disabled="state.saving">
-                                <WoowIcon name="'close'" size="16"/>
-                            </button>
-                        </div>
-                        <p t-if="state.validationError" class="o_woow_form_error">
-                            <WoowIcon name="'error'" size="14"/>
-                            <t t-esc="state.validationError"/>
-                        </p>
-                    </div>
-
-                    <!-- CNAME Instructions -->
-                    <div t-if="state.customDomain and !state.validationError" class="o_woow_cname_instructions">
-                        <div class="o_woow_cname_header">
-                            <WoowIcon name="'info'" size="18"/>
-                            <span>DNS Configuration Required</span>
-                        </div>
-                        <div class="o_woow_cname_content">
-                            <p>Add a CNAME record to your domain's DNS settings:</p>
-                            <div class="o_woow_cname_record">
-                                <div class="o_woow_cname_row">
-                                    <span class="o_woow_cname_label">Record Type</span>
-                                    <span class="o_woow_cname_value">CNAME</span>
-                                </div>
-                                <div class="o_woow_cname_row">
-                                    <span class="o_woow_cname_label">Name/Host</span>
-                                    <span class="o_woow_cname_value">
-                                        <code t-esc="state.customDomain.split('.')[0]"/>
-                                    </span>
-                                </div>
-                                <div class="o_woow_cname_row">
-                                    <span class="o_woow_cname_label">Target/Value</span>
-                                    <span class="o_woow_cname_value">
-                                        <code t-esc="fullSubdomain"/>
-                                    </span>
-                                </div>
+                    <div class="o_woow_domain_add">
+                        <div class="o_woow_form_group">
+                            <label for="custom_domain_hostname">Add a subdomain</label>
+                            <div class="o_woow_domain_add__controls">
+                                <input id="custom_domain_hostname" type="text" class="o_woow_input"
+                                    placeholder="app.example.com" autocomplete="off"
+                                    t-att-value="state.hostname" t-on-input="onHostnameInput"
+                                    t-att-disabled="!state.capability.supported or state.action or atLimit"/>
+                                <WoowButton variant="'primary'" size="'md'" onClick.bind="createDomain" disabled="!canCreate">
+                                    <WoowIcon name="'add'" size="18"/>
+                                    Add domain
+                                </WoowButton>
                             </div>
-                            <p class="o_woow_cname_note">
-                                DNS changes may take up to 48 hours to propagate.
+                            <p t-if="atLimit" class="o_woow_form_hint">The domain limit for this service has been reached.</p>
+                            <p t-elif="state.capability.max_domains" class="o_woow_form_hint">
+                                <t t-esc="state.domains.filter((domain) => domain.state !== 'removed').length"/>
+                                / <t t-esc="state.capability.max_domains"/> domains used
                             </p>
                         </div>
                     </div>
 
-                    <!-- Error Message -->
                     <div t-if="state.error" class="o_woow_error_message">
                         <WoowIcon name="'error'" size="16"/>
                         <span t-esc="state.error"/>
                     </div>
+
+                    <div t-if="state.loading" class="o_woow_domain_loading">
+                        <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
+                        Loading domains…
+                    </div>
+                    <div t-elif="!state.domains.length" class="o_woow_domain_empty">
+                        No custom domains have been added yet.
+                    </div>
+                    <div t-else="" class="o_woow_domain_list">
+                        <article t-foreach="state.domains" t-as="domain" t-key="domain.id" class="o_woow_domain_card">
+                            <div class="o_woow_domain_card__header">
+                                <div>
+                                    <strong t-esc="domain.hostname"/>
+                                    <span t-att-class="'o_woow_domain_status o_woow_domain_status--' + status(domain.state).tone">
+                                        <t t-esc="status(domain.state).label"/>
+                                    </span>
+                                </div>
+                                <div class="o_woow_domain_card__actions">
+                                    <WoowButton variant="'secondary'" size="'sm'"
+                                        onClick="() => this.checkDomain(domain)"
+                                        disabled="!state.capability.supported or state.action or ['removing', 'removed'].includes(domain.state)">
+                                        <WoowIcon name="'refresh'" size="16"/>
+                                        Check now
+                                    </WoowButton>
+                                    <WoowButton variant="'danger'" size="'sm'"
+                                        onClick="() => this.removeDomain(domain)"
+                                        disabled="state.action or ['removing', 'removed'].includes(domain.state)">
+                                        <WoowIcon name="'delete'" size="16"/>
+                                        Remove
+                                    </WoowButton>
+                                </div>
+                            </div>
+
+                            <p t-if="domain.last_error" class="o_woow_domain_last_error" t-esc="domain.last_error"/>
+                            <div t-if="domain.dns_records and domain.dns_records.length" class="o_woow_dns_records">
+                                <h3>DNS records</h3>
+                                <p>Add verification records first. When the status says “Ready to switch DNS”, replace the existing website CNAME with the record marked “Switch traffic”. Some DNS providers ask for a relative Host/Name instead of the full name shown here.</p>
+                                <div t-foreach="domain.dns_records" t-as="record" t-key="record_index" class="o_woow_dns_record">
+                                    <span class="o_woow_dns_record__type">
+                                        <t t-esc="record.type"/>
+                                        <small t-esc="record.purpose === 'route' ? 'Switch' : 'Verify'"/>
+                                    </span>
+                                    <code class="o_woow_dns_record__name" t-esc="record.name"/>
+                                    <code class="o_woow_dns_record__value" t-esc="record.value"/>
+                                    <button type="button" class="o_woow_copy_btn"
+                                        t-on-click="() => this.copyRecord(domain, record, record_index)"
+                                        title="Copy DNS value">
+                                        <WoowIcon name="'content_copy'" size="16"/>
+                                        <span t-if="state.copied === domain.id + ':' + record_index">Copied</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
                 </div>
 
                 <div class="o_woow_modal_footer">
-                    <WoowButton
-                        variant="'secondary'"
-                        size="'md'"
-                        onClick="props.onClose"
-                        disabled="state.saving">
-                        Cancel
-                    </WoowButton>
-                    <WoowButton
-                        variant="'primary'"
-                        size="'md'"
-                        onClick.bind="onSave"
-                        disabled="!canSave">
-                        <t t-if="state.saving">
-                            <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
-                            Saving...
-                        </t>
-                        <t t-else="">
-                            <WoowIcon name="'check'" size="18"/>
-                            Save Changes
-                        </t>
+                    <WoowButton variant="'secondary'" size="'md'" onClick="props.onClose" disabled="state.action">
+                        Close
                     </WoowButton>
                 </div>
             </div>

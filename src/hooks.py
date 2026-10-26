@@ -121,6 +121,7 @@ def pre_init_hook(env):
 
 
 _CONFIG_PARAMETERS = [
+    'woow_paas_platform.custom_domains_enabled',
     'woow_paas_platform.shc_durable_provision_prototype_enabled',
     'woow_paas_platform.shc_durable_provision_reconcile_enabled',
     'woow_paas_platform.shc_durable_provision_retention_days',
