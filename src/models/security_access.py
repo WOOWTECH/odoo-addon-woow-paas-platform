@@ -1748,6 +1748,39 @@ class SecurityAccess(models.Model):
                 # server-owned anchor: the CF DNS record id just returned
                 _internal_identity(route).dns_record_id = rec_id
 
+    def _access_recovery_tunnel_is_live(self):
+        """Return whether the exact tunnel can currently serve a recovery.
+
+        A successful route/access write receipt only proves that Cloudflare
+        accepted desired configuration.  It does not prove a connector is
+        still attached: Cloudflare can retain old connection inventory briefly
+        after a connector dies.  Pending-origin recovery therefore requires a
+        fresh status read with a serving tunnel state and at least one current
+        connection.  Anything malformed or unavailable stays fail-closed.
+        """
+        self.ensure_one()
+        if not self.tunnel_id:
+            return False
+        try:
+            result = self._get_operator_client().get_tunnel_status(
+                self.tunnel_id)
+        except PaaSOperatorError as error:
+            _logger.warning(
+                '[SA] Access recovery liveness unavailable sa=%s: %s',
+                self.id, error.message)
+            return False
+        if type(result) is not dict:
+            return False
+        connections = result.get('connections')
+        return bool(
+            result.get('tunnel_id') == self.tunnel_id and
+            result.get('name') == self.tunnel_name and
+            not result.get('deleted_at') and
+            result.get('status') in ('healthy', 'degraded') and
+            type(connections) is list and
+            any(type(connection) is dict for connection in connections)
+        )
+
     # ------------------------------------------------------------------ #
     #  Access sync (declarative; P2.5 per-route — see SecurityAccessRoute) #
     # ------------------------------------------------------------------ #
@@ -2630,6 +2663,11 @@ class SecurityAccessRoute(models.Model):
                 for sa in deferred_release.mapped('security_access_id'):
                     routes = deferred_release.filtered(
                         lambda route: route.security_access_id == sa)
+                    if not sa._access_recovery_tunnel_is_live():
+                        _logger.error(
+                            '[SA] Access batch recovery remains pending routes=%s: '
+                            'tunnel has no live connector', routes.ids)
+                        continue
                     _internal_identity(routes).access_publish_pending = False
                     try:
                         sa._sync_routes_to_operator()
@@ -3071,7 +3109,8 @@ class SecurityAccessRoute(models.Model):
                 (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
                 not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)):
             sa._sync_routes_to_operator()
-        needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
+        recovering_pending = self.access_publish_pending
+        needs_release = recovering_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
         client = sa._get_operator_client()
         payload = self._build_access_payload()
         result = client.sync_access_app(payload)
@@ -3143,6 +3182,12 @@ class SecurityAccessRoute(models.Model):
         if defer_release:
             return True
         if needs_release and not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC):
+            if recovering_pending and not sa._access_recovery_tunnel_is_live():
+                _internal_identity(self).access_publish_pending = True
+                _logger.error(
+                    '[SA] Access recovery remains pending route=%s: '
+                    'tunnel has no live connector', self.id)
+                return False
             try:
                 sa._sync_routes_to_operator()
             except (PaaSOperatorError, AccessPublicationError) as error:
