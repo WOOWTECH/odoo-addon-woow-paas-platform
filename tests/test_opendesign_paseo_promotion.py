@@ -8,6 +8,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -29,7 +30,28 @@ def load(path, name):
 PROMOTION = load('scripts/release/prepare_opendesign_paseo.py', 'promotion')
 TARGET = load('src/services/deployment_target.py', 'deployment_target')
 TAG = '20261026.1234@sha256:' + 'a' * 64
-SOURCE = (ROOT / PROMOTION.SEED).read_text()
+CURRENT_SOURCE = (ROOT / PROMOTION.SEED).read_text()
+
+
+def legacy_seed(source):
+    """Keep an explicit pre-promotion fixture after the real seed is promoted."""
+    pattern = re.compile(r'(<record id="cloud_app_opendesign"[^>]*>)(.*?)(</record>)', re.S)
+    record = pattern.search(source).group(0)
+    fields = {f.get('name'): f.text for f in ET.fromstring(record).findall('field')}
+    values = json.loads(fields['helm_default_values'])
+    values['image']['tag'] = '20261025.0000@sha256:' + 'c' * 64
+    values.pop('paseo', None)
+    switches = json.loads(fields['rollback_feature_switches'])
+    switches.pop('paseo.enabled', None)
+    for name, value in {'helm_chart_version': '0.5.7',
+                        'helm_default_values': json.dumps(values),
+                        'rollback_feature_switches': json.dumps(switches)}.items():
+        record = re.sub(r'(<field name="' + name + r'">).*?(</field>)',
+                        lambda m: m[1] + value + m[2], record, flags=re.S)
+    return pattern.sub(lambda _: record, source)
+
+
+SOURCE = legacy_seed(CURRENT_SOURCE)
 MODEL = ast.parse((ROOT / 'src/models/cloud_service.py').read_text())
 FUNCTIONS = {'_iter_image_refs', '_refresh_image_refs'}
 nodes = [n for n in MODEL.body if isinstance(n, ast.FunctionDef) and n.name in FUNCTIONS]
@@ -75,7 +97,17 @@ def test_missing_digest_emits_no_patch_and_does_not_write_source():
     assert result.returncode == 2
     assert result.stdout == ''
     assert 'AWAITING_COORDINATOR_DIGEST' in result.stderr
-    assert (ROOT / PROMOTION.SEED).read_text() == SOURCE
+    assert (ROOT / PROMOTION.SEED).read_text() == CURRENT_SOURCE
+
+
+def test_real_seed_promotes_native_paseo_with_an_immutable_image_and_empty_origin():
+    data = fields(CURRENT_SOURCE)
+    values = json.loads(data['helm_default_values'])
+    assert data['helm_chart_version'] == '0.5.9'
+    assert values['image']['repository'] == PROMOTION.IMAGE_REPOSITORY
+    assert PROMOTION.IMAGE_TAG.fullmatch(values['image']['tag'])
+    assert values['paseo'] == {'enabled': True, 'origin': ''}
+    assert json.loads(data['rollback_feature_switches'])['paseo.enabled'] == ['image']
 
 
 @pytest.mark.parametrize('tag', [None, '', 'latest', TAG + '\n', '20261026.1234',
@@ -179,17 +211,25 @@ def test_enabled_origin_is_authoritative_and_other_templates_are_untouched():
 
 
 def test_patch_updates_native_seed_contract_and_is_applyable(tmp_path):
-    patch = PROMOTION.promotion_patch(ROOT, TAG)
+    # Exercise the whole historical transition even after the real source moved.
+    seed = tmp_path / PROMOTION.SEED
+    seed.parent.mkdir(parents=True)
+    seed.write_text(SOURCE)
+    native_test = (ROOT / PROMOTION.TEST).read_text()
+    promoted_assertion = ("self.assertEqual(tpl.helm_chart_version, '0.5.9')\n"
+                          "        self.assertEqual(self._values()['paseo'], {'enabled': True, 'origin': ''})\n"
+                          "        self.assertEqual(json.loads(tpl.rollback_feature_switches)['paseo.enabled'], ['image'])")
+    native_test = native_test.replace(promoted_assertion, "self.assertEqual(tpl.helm_chart_version, '0.5.7')")
+    test_file = tmp_path / PROMOTION.TEST
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(native_test)
+    patch = PROMOTION.promotion_patch(tmp_path, TAG)
     assert patch.count('--- a/') == 2
     assert "+        self.assertEqual(tpl.helm_chart_version, '0.5.9')" in patch
     assert "['paseo.enabled']" in patch
-    result = subprocess.run(['git', '-C', str(ROOT), 'apply', '--check', '-'],
+    result = subprocess.run(['git', '-C', str(tmp_path), 'apply', '--check', '-'],
                             input=patch, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    for name in (PROMOTION.SEED, PROMOTION.TEST):
-        dest = tmp_path / name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text((ROOT / name).read_text())
     subprocess.run(['git', 'apply', '-'], cwd=tmp_path, input=patch, text=True, check=True)
     assert PROMOTION.promotion_patch(tmp_path, TAG) == ''
-    assert (ROOT / PROMOTION.SEED).read_text() == SOURCE
+    assert (ROOT / PROMOTION.SEED).read_text() == CURRENT_SOURCE

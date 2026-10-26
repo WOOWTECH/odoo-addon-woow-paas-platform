@@ -119,8 +119,13 @@ class TestServiceDeploymentPin(_Base):
         sent = client.upgrade_release.call_args.kwargs
         self.assertEqual(sent['version'], '0.5.8')
         self.assertEqual(sent['values']['image'], _REF)
-        for key in ('paseo', 'omnigentHost', 'mcp', 'persistence'):
+        for key in ('paseo', 'omnigentHost', 'mcp'):
             self.assertEqual(sent['values'][key], values[key])
+        # Assembly injects the platform storage class alongside the existing
+        # volume definitions; product promotion must preserve both volumes.
+        for volume in ('data', 'home'):
+            self.assertEqual(sent['values']['persistence'][volume],
+                             values['persistence'][volume])
 
     def test_new_install_follows_promoted_product_paseo_defaults(self):
         template = self.env.ref('woow_paas_platform.cloud_app_opendesign')

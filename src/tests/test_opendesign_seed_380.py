@@ -116,7 +116,9 @@ class TestOpendesignTemplateSeed(TransactionCase):
         #       omnigentHost 預設關（od-mcp-merge-20261015）。
         # 0.5.1–0.5.6＝charts 整合包 #254：console／auth-proxy 加固、prune-runs、登入失敗鎖 IP、
         #       ttyd 改 loopback＋Basic 前門、log 不記查詢字串、egress-profile=web。
-        self.assertEqual(tpl.helm_chart_version, '0.5.7')
+        self.assertEqual(tpl.helm_chart_version, '0.5.9')
+        self.assertEqual(self._values()['paseo'], {'enabled': True, 'origin': ''})
+        self.assertEqual(json.loads(tpl.rollback_feature_switches)['paseo.enabled'], ['image'])
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
