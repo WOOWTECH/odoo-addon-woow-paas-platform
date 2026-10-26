@@ -15,12 +15,18 @@ metadata; it must not reset route data during an upgrade.
 
 Before enabling onboarding, the platform must provide a distinct Cloudflare
 Tunnel with one catch-all ingress rule to this Service, a proxied CNAME to that
-Tunnel, an active Cloudflare for SaaS fallback origin at that CNAME, a scoped
+Tunnel, an active Cloudflare for SaaS fallback origin in the platform zone, a scoped
 Custom Hostnames API token, and a shared route-check secret for the gateway
 and Operator. The Operator's capability probe verifies these prerequisites and
 otherwise fails closed. Customers do not access the platform's Cloudflare
 account; they publish ownership and cutover DNS records with their own DNS
 provider.
+
+Existing fallback origins stay in place. Each newly created customer hostname
+selects the dedicated gateway through `custom_origin_server`. The optional
+`CUSTOM_DOMAINS_API_TOKEN` setting reads an independent Kubernetes Secret with
+zone-scoped SSL and Certificates Write permission; the existing Tunnel/DNS
+credential remains separate.
 
 Development tests: install `requirements-test.txt`, then run
 `python -m pytest -q`. The runtime image uses only `requirements.txt`.
