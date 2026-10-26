@@ -60,7 +60,8 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
             lambda access: access.user_id == self.env.ref('base.user_admin')))
         self.authenticate('admin', 'admin')  # uid 2, not Odoo SUPERUSER_ID
         fields = ['quota_namespace', 'quota_name', 'quota_uid', 'quota_resource_version',
-                  'quota_observed_at', 'quota_available', 'quota_reason',
+                  'quota_observed_at', 'quota_available', 'quota_available_decoration',
+                  'quota_reason',
                   'quota_cpu_requests_hard', 'quota_cpu_requests_used',
                   'quota_cpu_limits_hard', 'quota_cpu_limits_used',
                   'quota_memory_requests_hard', 'quota_memory_requests_used',
@@ -79,6 +80,7 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
         self.assertEqual(row['quota_resource_version'], '1678')
         self.assertEqual(row['quota_observed_at'], '2026-10-12 16:30:00')
         self.assertIs(row['quota_available'], True)
+        self.assertIs(row['quota_available_decoration'], True)
         self.assertEqual((row['quota_cpu_requests_hard'], row['quota_cpu_requests_used']),
                          ('12', '2500m'))
         self.assertEqual((row['quota_cpu_limits_hard'], row['quota_cpu_limits_used']),
@@ -159,9 +161,12 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
                                     method == 'export_data' else 'odoo.exceptions.AccessError')
                         self.assertEqual(response['error']['data']['name'], expected, response)
                 if user in (self.owner, internal_admin):
-                    own = self._call_kw('read', [[self.workspace.id]], {'fields': ['name']})
+                    own = self._call_kw('read', [[self.workspace.id]], {
+                        'fields': ['name', 'quota_available_decoration'],
+                    })
                     self.assertNotIn('error', own, own)
                     self.assertEqual(own['result'][0]['name'], self.workspace.name)
+                    self.assertIs(own['result'][0]['quota_available_decoration'], False)
         operator.assert_not_called()
 
     def test_incomplete_foreign_and_old_operator_data_remain_unknown(self):
@@ -203,6 +208,7 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
         with patch.object(PaaSOperatorClient, 'get_namespace_quota') as operator:
             for method, args, kwargs in (
                 ('write', [[self.workspace.id], {'quota_available': True}], {}),
+                ('write', [[self.workspace.id], {'quota_available_decoration': True}], {}),
                 ('create', [{'name': 'Forged observation', 'quota_uid': 'forged'}], {}),
                 ('create', [{'name': 'Forged default'}],
                  {'context': {'default_quota_cpu_requests_used': '0'}}),
@@ -252,6 +258,35 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
 
     def test_backend_views_expose_readonly_full_quota_and_unknown_state(self):
         from lxml import etree
+        quota_views = self.env['ir.ui.view']
+        for kind in ('list', 'form'):
+            source_view = self.env.ref(
+                'woow_paas_platform.view_workspace_quota_inspection_%s' % kind)
+            quota_views |= source_view
+            source_arch = etree.fromstring(
+                source_view.with_context(lang=None).arch_db.encode())
+            self.assertFalse(source_arch.get('groups'))
+            self.assertEqual(source_view.groups_id, self.env.ref('base.group_system'))
+            if kind == 'list':
+                self.assertEqual(
+                    source_arch.get('decoration-warning'),
+                    'not quota_available_decoration',
+                )
+                helper = source_arch.xpath(
+                    '//field[@name="quota_available_decoration"]')[0]
+                self.assertEqual(helper.get('groups'), 'base.group_user')
+                self.assertEqual(helper.get('column_invisible'), 'True')
+            else:
+                alerts = {node.get('invisible'): node
+                          for node in source_arch.xpath('//div[@role="alert"]')}
+                for expression in (
+                    'quota_available',
+                    "quota_sync_status != 'exhausted'",
+                    'not quota_sync_unguarded',
+                ):
+                    self.assertEqual(
+                        alerts[expression].get('groups'), 'base.group_system')
+
         action = self.env.ref('woow_paas_platform.action_workspace_quota_inspection')
         action_views = [tuple(view) for view in action.read(['views'])[0]['views']]
         self.authenticate('admin', 'admin')
@@ -271,6 +306,14 @@ class TestWorkspaceQuotaInspection1678(HttpCase):
                 self.assertIn('quota_%s_used' % suffix, names)
         self.assertEqual(arch.xpath('//button[@name="action_refresh_quota"]')[0].get('type'),
                          'object')
+        with patch('odoo.addons.base.models.ir_ui_view._logger.warning') as warning:
+            self.assertTrue(quota_views._check_xml())
+        messages = [str(call.args[1]) for call in warning.call_args_list
+                    if len(call.args) > 1]
+        self.assertFalse(
+            any('Access Rights Inconsistency' in message for message in messages),
+            messages,
+        )
 
     def test_http_failures_and_recovery_never_report_zero_as_unknown(self):
         from odoo.tools import mute_logger

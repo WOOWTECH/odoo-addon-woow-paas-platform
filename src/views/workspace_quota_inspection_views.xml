@@ -8,10 +8,12 @@
         <field name="groups_id" eval="[(4, ref('base.group_system'))]"/>
         <field name="arch" type="xml">
             <list string="Workspace Quota Observations" create="false" edit="false" delete="false"
-                  limit="5" decoration-warning="not quota_available">
+                  limit="5" decoration-warning="not quota_available_decoration">
                 <field name="name"/>
                 <field name="quota_status"/>
                 <field name="quota_available" column_invisible="True"/>
+                <field name="quota_available_decoration" column_invisible="True"
+                       groups="base.group_user"/>
                 <field name="quota_reason" optional="show"/>
                 <field name="quota_observed_at"/>
                 <field name="quota_namespace" optional="hide"/>
@@ -59,13 +61,16 @@
                 </header>
                 <sheet>
                     <h1><field name="name" readonly="True"/></h1>
-                    <div class="alert alert-warning" role="alert" invisible="quota_available">
+                    <div class="alert alert-warning" role="alert" invisible="quota_available"
+                         groups="base.group_system">
                         Quota observation is unknown or unavailable. Missing values are unknown, not zero.
                     </div>
-                    <div class="alert alert-danger" role="alert" invisible="quota_sync_status != 'exhausted'">
+                    <div class="alert alert-danger" role="alert"
+                         invisible="quota_sync_status != 'exhausted'" groups="base.group_system">
                         Automatic quota sync retries are exhausted. Check the sync detail, then use Retry Quota Sync.
                     </div>
-                    <div class="alert alert-warning" role="alert" invisible="not quota_sync_unguarded">
+                    <div class="alert alert-warning" role="alert" invisible="not quota_sync_unguarded"
+                         groups="base.group_system">
                         The operator does not support versioned quota writes, so pushes are made without protection.
                         An older request that finishes late could overwrite a newer value. Upgrade the operator.
                     </div>
