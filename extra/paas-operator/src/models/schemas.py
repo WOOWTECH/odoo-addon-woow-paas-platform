@@ -1681,6 +1681,21 @@ class IdentityProvidersResponse(BaseModel):
     identity_providers: List[IdentityProviderInfo]
 
 
+class AccessApplicationReviewRequest(BaseModel):
+    """Read-only lookup keys for resolving an uncertain Access POST."""
+
+    app_name: str = Field(..., min_length=1)
+    primary_hostname: str = Field(..., min_length=1)
+
+
+class AccessApplicationReviewResponse(BaseModel):
+    """A unique exact match is adoptable; zero/multiple matches stay fenced."""
+
+    status: str
+    app_id: Optional[str] = None
+    match_count: int
+
+
 # ==================== L4 reconciler（帳號級反向孤兒對帳）====================
 # 設計 doc: docs/plans/2026-Q2/2026-06-25-l4-reconciler-design.md
 # 首版「零自動刪除」：reconcilable / dry_run 的預設都偏向安全（不可回收 / dry-run）。

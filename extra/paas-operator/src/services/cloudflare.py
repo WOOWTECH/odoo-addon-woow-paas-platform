@@ -1921,6 +1921,46 @@ class CloudflareService:
                 status_code=response.status_code,
             )
         return "accepted"
+    async def review_access_app_exact(
+        self, app_name: str, primary_hostname: str,
+    ) -> dict:
+        """Read back one exact Access app without remote mutation.
+
+        Cloudflare documents exact name/domain filters but no idempotency key
+        for Access app POST. An empty read is therefore never retry authority.
+        Only one byte-for-byte match is returned as safely adoptable.
+        """
+        matches = []
+        page = 1
+        async with httpx.AsyncClient() as client:
+            while True:
+                response = await client.get(
+                    f"{self._access_base}/apps", headers=self._headers,
+                    params={"name": app_name, "domain": primary_hostname,
+                            "exact": "true", "page": page, "per_page": 1000},
+                    timeout=30.0)
+                if response.status_code != 200:
+                    raise CloudflareException(
+                        f"Failed to review access apps: {response.text}",
+                        status_code=response.status_code)
+                data = response.json()
+                if not data.get("success"):
+                    raise CloudflareException(
+                        f"Cloudflare API error: {data.get('errors', 'Unknown')}")
+                matches.extend(
+                    app for app in data.get("result", [])
+                    if app.get("name") == app_name
+                    and app.get("domain") == primary_hostname
+                    and app.get("id"))
+                info = data.get("result_info") or {}
+                if page >= int(info.get("total_pages") or 1):
+                    break
+                page += 1
+        if len(matches) == 1:
+            return {"status": "unique", "app_id": matches[0]["id"],
+                    "match_count": 1}
+        return {"status": "absent" if not matches else "ambiguous",
+                "app_id": None, "match_count": len(matches)}
 
     @staticmethod
     def _build_access_rule(rule_type: str, rule_value: str) -> List[dict]:

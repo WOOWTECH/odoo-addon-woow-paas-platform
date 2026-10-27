@@ -1606,6 +1606,13 @@ class PaaSOperatorClient:
         """List account Access IdPs ({identity_providers: [{id,name,type}]})."""
         return self._request('GET', '/api/access/identity-providers')
 
+    def review_access_app(self, app_name: str, primary_hostname: str) -> Dict[str, Any]:
+        """Read-only exact provider lookup used by the RACE-06 review gate."""
+        return self._request(
+            'POST', '/api/access/review-application',
+            data={'app_name': app_name, 'primary_hostname': primary_hostname},
+            timeout=HELM_OPERATION_TIMEOUT)
+
     def check_route_availability(self, subdomain: str) -> Dict[str, Any]:
         """Check Cloudflare-side whether a subdomain is free in the zone.
 

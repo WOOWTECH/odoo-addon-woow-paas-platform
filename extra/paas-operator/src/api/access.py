@@ -4,6 +4,8 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from src.models.schemas import (
+    AccessApplicationReviewRequest,
+    AccessApplicationReviewResponse,
     AccessSyncRequest,
     AccessSyncResponse,
     IdentityProviderInfo,
@@ -81,3 +83,22 @@ async def sync_access(request: AccessSyncRequest):
             detail=f"Failed to sync access: {e.message}",
         )
     return AccessSyncResponse(**result)
+
+
+@router.post(
+    "/review-application",
+    response_model=AccessApplicationReviewResponse,
+    summary="Read-only exact lookup for an uncertain Access create",
+)
+async def review_application(request: AccessApplicationReviewRequest):
+    """Return an id only for one exact name+domain match; never mutate CF."""
+    _require_credentials()
+    try:
+        result = await cloudflare_service.review_access_app_exact(
+            request.app_name, request.primary_hostname)
+    except CloudflareException as e:
+        logger.error("Failed to review Access application: %s", e.message)
+        raise HTTPException(
+            status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to review Access application: {e.message}")
+    return AccessApplicationReviewResponse(**result)

@@ -300,20 +300,46 @@ class AccessDispatchFence(models.Model):
         return True
 
     def action_record_verified_app(self, provider_app_id, reason):
+        """Reject unverified ids; adoption must use provider exact readback."""
+        self._require_system_review(reason)
+        raise UserError(_(
+            'Manual provider IDs are not accepted. Use exact provider '
+            'readback review so name and hostname are verified.'))
+
+    def action_review_and_adopt_provider_app(self, reason):
+        """Adopt only a unique exact provider readback after admin review.
+
+        Absence is not retry authority because Cloudflare does not document
+        read-after-write consistency or POST idempotency. Multiple exact matches
+        also leave the fence closed for explicit cleanup.
+        """
         self._require_system_review(reason)
         if self.state not in ('dispatching', 'prepared'):
             raise UserError(_('This fence is not awaiting provider review.'))
-        if not provider_app_id or len(provider_app_id.strip()) < 8:
-            raise ValidationError(_(
-                'A complete provider application ID is required.'))
+        result = self._provider_review_client().review_access_app(
+            self.app_name, self.primary_hostname)
+        if (result.get('status') != 'unique'
+                or result.get('match_count') != 1
+                or not result.get('app_id')):
+            raise UserError(_(
+                'Provider review did not return exactly one matching app; '
+                'the dispatch fence remains closed.'))
         self.sudo().write({
             'state': 'provider_adopted',
-            'provider_app_id': provider_app_id.strip(),
+            'provider_app_id': result['app_id'],
             'reviewed_at': fields.Datetime.now(),
             'reviewed_by': self.env.user.id,
             'review_reason': reason.strip(),
         })
         return True
+
+    def _provider_review_client(self):
+        """Resolve the owning route's operator client; split for native tests."""
+        self.ensure_one()
+        route = self.env[self.anchor_model].sudo().browse(self.anchor_id).exists()
+        if not route or route._name != _ROUTE_MODEL:
+            raise UserError(_('The fenced route no longer exists.'))
+        return route.smart_home_id._get_operator_client()
 
     def action_abandon_after_identity_change(self, reason):
         self._require_system_review(reason)

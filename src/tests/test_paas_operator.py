@@ -835,3 +835,16 @@ class TestSecurityAccessAccessClientMethods(TransactionCase):
         mock_req.assert_called_once_with(
             'GET', '/api/access/identity-providers')
         self.assertEqual(result['identity_providers'][0]['type'], 'google')
+
+    def test_review_access_app_contract(self):
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {
+                'status': 'unique', 'app_id': 'app-1', 'match_count': 1}
+            result = client.review_access_app('owned app', 'owned.example.test')
+        mock_req.assert_called_once_with(
+            'POST', '/api/access/review-application',
+            data={'app_name': 'owned app',
+                  'primary_hostname': 'owned.example.test'},
+            timeout=120)
+        self.assertEqual(result['app_id'], 'app-1')
