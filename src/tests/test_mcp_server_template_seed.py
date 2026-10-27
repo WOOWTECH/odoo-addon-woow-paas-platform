@@ -387,10 +387,10 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # 2026-10-24：#71 merge 5fa1ff0a 包含 #72；八支 image registry digest 已逐一驗證。
     # LaunchPolicy 維持 woow-odoo-mcp／streamable-http／127.0.0.1／port8000。
     # 2026-10-25：改釘 #84 merge fc5fa02e（odoo 四開關全開、41 支、既有服務一次性遷移）；
-    # 2026-10-27：#86 merge 1dcabf91 的 manifest digest 已從 registry 讀回，
+    # 2026-10-27：#89 merge 38a9041f（含 #87、#88）的 manifest digest 已從 registry 讀回，
     # 正式 Odoo MCP 服務啟動與唯讀工具呼叫已驗證；seed 的 command／port 契約不變。
     # digest 取自 main CI run 27630 的 push 輸出，registry 讀回一致。
-    EXPECT_IMAGE_TAG = '1dcabf91baf088f4d7a445e8d34aeb55e03cfebe@sha256:17a8ebbb5eb6f45d7a40da6c185a1d59e946273ea410fa5ddecc9df195951028'
+    EXPECT_IMAGE_TAG = '38a9041fb44de6d8848166473facd2f443e04710@sha256:9c33cca0b3b368aff094eabf6d0409ce132858105a13ec05cb1f040d2cc68bc9'
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
