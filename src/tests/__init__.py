@@ -1245,6 +1245,8 @@ from . import test_llm_mcp_jump_guard
 from . import test_vpn_node_status_fix005
 # INFRA-FIX-005 覆核補強：存檔前驗證轉發清單／控制平面＋key、登入失敗原因、/node-status 節流。
 from . import test_vpn_node_followup_ts005
+# 2026-10-27：MCP 服務「還沒設定連線」——管理頁 /healthz 的 mcp 欄位、/mcp-status、服務頁提示。
+from . import test_mcp_setup_status_20261027
 # 商用驗收 X-SET-007／X-W-002：註冊身分（login 大小寫正規化、email 格式、空欄位中文錯誤）。
 from . import test_signup_identity_x_set_007
 
