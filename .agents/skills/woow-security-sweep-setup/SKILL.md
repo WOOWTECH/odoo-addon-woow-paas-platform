@@ -88,7 +88,8 @@ sweep 與前台各自發版，步驟相同，用 `--agent sweep|launcher` 指定
 1. 主 checkout 切到最新整合分支：`git -C <WS>/paas/woow_paas_platform merge --ff-only origin/develop`
 2. `setup.py --workspace <WS> bundle-plan --agent <sweep|launcher>`：用 `git archive` 取**已 commit** 的
    `.omnigent` 與 `.agents`、跑**該 bundle 自己的** `build.py --check`、打包，與 server 上的 bundle
-   逐檔比對（sha256＋執行位元）。
+   逐檔比對（sha256＋執行位元）。這兩個目錄底下 git 追蹤中的檔案有未 commit 的修改（含已 stage 的新檔）就拒絕；
+   沒進 git 的檔案（例如本機的 `.omnigent/config.yaml`）不會被打包，不擋。
    - `noop: true` ⇒ 回報 NO-OP，結束
    - 否則把 `diff`（新增／刪除／修改的路徑）、`source_sha`、`plan_digest` 交給人，**停在這裡**
 3. 人核准**這個** `plan_digest` 之後：

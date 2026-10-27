@@ -505,7 +505,8 @@ def source_snapshot(repo: Path, dest: Path, bundle_rel: str = BUNDLE_REL, integr
     head, merged = _git(repo, "rev-parse", "HEAD"), _git(repo, "rev-parse", f"origin/{integration}")
     if head != merged:
         raise SetupError(f"checkout 在 {head[:8]}，不是 origin/{integration}（{merged[:8]}）：先 merge --ff-only")
-    if _git(repo, "status", "--porcelain", "--", *SNAPSHOT_DIRS):
+    # 只看 git 追蹤中的檔案（含已 stage 的新檔）：未追蹤的檔案不會進 git archive，不影響發出去的內容
+    if _git(repo, "status", "--porcelain", "--untracked-files=no", "--", *SNAPSHOT_DIRS):
         raise SetupError(f"{'／'.join(SNAPSHOT_DIRS)} 有未 commit 的變更：只能發已合併的版本")
     data = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", head, *SNAPSHOT_DIRS],
                           capture_output=True, check=True).stdout
