@@ -22,6 +22,7 @@ fail-closed、下一輪重試成功。`.251` 的列鎖候選一直走的是 **B*
 那半回捲不掉。operator 全程是行程內替身（``PaaSOperatorClient._request`` 被換成會
 raise 的守衛，禁止任何真 HTTP）；閘門用 ``threading.Event``，不用 sleep。
 """
+import os
 import threading
 import traceback
 import uuid
@@ -77,6 +78,9 @@ class External:
         self.hold_access_for = None
         self.access_offered = threading.Event()
         self.resume = threading.Event()
+        self.effect_url = os.environ.get('RACE01_EFFECT_URL', '').rstrip('/')
+        self.effect_client = (PaaSOperatorClient(self.effect_url, 'batch54')
+                              if self.effect_url else None)
 
     def _ev(self, phase, **kwargs):
         with self.lock:
@@ -110,13 +114,44 @@ class External:
     def configure_tunnel(self, tunnel_id, *, hostname, service_url,
                          tunnel_name):
         self._ev('offered', target=service_url)
-        with self.lock:
-            self.targets[tunnel_id] = service_url
+        if self.effect_client:
+            # Batch54 deployment-like lane: use the production HTTP client and
+            # a separately scheduled effect-end pod.  The actor header is only
+            # a harness correlation label; the product request body and
+            # receipt stay byte-for-byte on the real configure_tunnel wire.
+            self.effect_client._session.headers['X-RACE01-Actor'] = (
+                getattr(self.actor, 'name', '?'))
+            receipt = self.effect_client.configure_tunnel(
+                tunnel_id, hostname=hostname, service_url=service_url,
+                tunnel_name=tunnel_name)
+            with self.lock:
+                self.targets[tunnel_id] = self.remote_target(tunnel_id)
+        else:
+            with self.lock:
+                self.targets[tunnel_id] = service_url
+            receipt = configure_receipt(tunnel_id, hostname, service_url)
         self._ev('applied', target=service_url)
-        return configure_receipt(tunnel_id, hostname, service_url)
+        return receipt
 
     def sync_tunnel_routes(self, tunnel_id, routes, **kwargs):
         return routes_receipt(tunnel_id, routes, **kwargs)
+
+    def control(self, action):
+        if not self.effect_url:
+            raise AssertionError('RACE01_EFFECT_URL is required for remote lane')
+        response = self.effect_client._session.post(
+            self.effect_url + '/control/' + action, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def remote_state(self):
+        response = self.effect_client._session.get(
+            self.effect_url + '/control/state', timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def remote_target(self, tunnel_id):
+        return self.remote_state().get('targets', {}).get(tunnel_id)
 
 
 @tagged('post_install', '-at_install', '-standard', 'race01_fence')
@@ -136,8 +171,9 @@ class TestRace01IngressFence(BaseCase):
         self.stack.enter_context(patch(
             'odoo.addons.woow_paas_platform.services.paas_operator'
             '.get_paas_operator_client', return_value=self.ext))
-        self.stack.enter_context(patch.object(
-            PaaSOperatorClient, '_request', side_effect=_deny_http))
+        if not self.ext.effect_url:
+            self.stack.enter_context(patch.object(
+                PaaSOperatorClient, '_request', side_effect=_deny_http))
         self._seed()
 
     def _env(self, cr):
@@ -344,6 +380,75 @@ class TestRace01IngressFence(BaseCase):
             'RACE-01：DB 已提交 state=suspended，但外部實際生效的是延遲到達的 '
             'live=%r；兩方都提交而 primary 的隔離被抹掉；hist=%s'
             % (self.ext.targets[self.ids['tunnel']], hist))
+
+    def test_RACE01_remote_effect_late_live_apply_then_quarantine_wins(self):
+        """真 HTTP effect-end 已收 live、延後 apply 時，停權仍是最後效果。
+
+        與原案卡在 Access 呼叫不同，這條把 R 卡在遠端 ``PUT /config`` 已接收、
+        尚未套用的位置。M 必須等 R 的短圍籬離開，然後以另一個 RR backend 推 503
+        並提交；兩方都提交後，遠端效果端的精確最後狀態只能是 503。
+        """
+        if not self.ext.effect_url:
+            self.skipTest('RACE01_EFFECT_URL is only set in the Batch54 lane')
+        self.ext.hold_access_for = None
+        self.ext.control('reset')
+        self.ext.control('arm-live')
+        box = {}
+        sibling = threading.Thread(target=self._sibling, args=(box,), name='R')
+        sibling.start()
+        try:
+            # Poll the remote process, not an in-process Event: this proves the
+            # request crossed the pod/network boundary and is waiting there.
+            for _ in range(200):
+                state = self.ext.remote_state()
+                if state.get('held'):
+                    break
+                threading.Event().wait(0.05)
+            else:
+                self.fail('remote effect-end never held the live PUT: %r' % state)
+            quarantine = threading.Thread(
+                target=self._primary_quarantine, args=(box,), name='M')
+            quarantine.start()
+            # Let M contend while R's remote effect is genuinely in flight.
+            threading.Event().wait(0.2)
+            self.ext.control('release')
+            sibling.join(JOIN)
+            quarantine.join(JOIN)
+        finally:
+            self.ext.control('release')
+            sibling.join(JOIN)
+            if 'quarantine' in locals():
+                quarantine.join(JOIN)
+        self.assertFalse(sibling.is_alive(), 'remote sibling thread hung')
+        self.assertFalse(quarantine.is_alive(), 'remote quarantine thread hung')
+        state = self.ext.remote_state()
+        import logging
+        logging.getLogger(__name__).info('RACE01REMOTE EVIDENCE %r', {
+            'R_pid': box.get('R_pid'), 'M_pid': box.get('M_pid'),
+            'iso': (box.get('R_iso'), box.get('M_iso')),
+            'R_committed': box.get('R_committed'),
+            'M_committed': box.get('M_committed'),
+            'R_error': box.get('R_error'), 'M_error': box.get('M_error'),
+            'remote': state, 'committed_primary': self._committed()})
+        self.assertNotEqual(box.get('R_pid'), box.get('M_pid'))
+        self.assertEqual(box.get('R_iso'), 'repeatable read')
+        self.assertEqual(box.get('M_iso'), 'repeatable read')
+        self.assertNotIn('R_error', box, box.get('R_error'))
+        self.assertNotIn('M_error', box, box.get('M_error'))
+        self.assertTrue(box.get('R_committed'))
+        self.assertTrue(box.get('M_committed'))
+        events = state.get('history', [])
+        live_apply = [row['seq'] for row in events
+                      if row.get('phase') == 'applied'
+                      and row.get('target') != PARKED]
+        park_apply = [row['seq'] for row in events
+                      if row.get('phase') == 'applied'
+                      and row.get('target') == PARKED]
+        self.assertTrue(live_apply, events)
+        self.assertTrue(park_apply, events)
+        self.assertLess(live_apply[-1], park_apply[-1], events)
+        self.assertEqual(state['targets'][self.ids['tunnel']], PARKED)
+        self.assertEqual(self._committed()['home_state'], 'suspended')
 
     # ---------------------------------------------------------------- #
     #  正控制：序列執行時行為不變（這條紅＝harness／fixture 有問題）      #
