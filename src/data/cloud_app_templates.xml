@@ -2568,8 +2568,10 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- Nextcloud cloud service。chart woow-paas-charts charts/nextcloud 0.1.2
+        <!-- Nextcloud cloud service。chart woow-paas-charts charts/nextcloud 0.1.9
              （0.1.2：上傳分段寫系統鍵 files.chunked_upload.max_size；Cloudflare 上限實測 100 MiB）。
+             0.1.8：依 #1637 加入 Apache prefork、預覽併發、4G 上傳與 cron 1Gi 的穩定性界線；
+             0.1.9：背景預裝 App 只有在確認啟用後才寫完成標記，失敗可於下次啟動重試。
              上架（is_hidden=False，2026-10-02）：nextcloud（#195）／redis（#200）鏡像已對帳、
              chart 0.1.1 已發佈。dev-sandbox 實測（同 ns 兩台）：before-starting hook 生效
              （chunk 50 MiB、bulkupload 關、background:cron）、trusted_proxies＝pod CIDR、
@@ -2619,7 +2621,7 @@
             <field name="tutorial_url">https://nextcloud-guide.woowtech.io/ch6_files_basics.html</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
-            <field name="helm_chart_version">0.1.7</field>
+            <field name="helm_chart_version">0.1.9</field>
             <field name="helm_default_values">{"nextcloud":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud","tag":"20261002.0258@sha256:fc04168b172e09d9b9bc7665476a77898634fe2833f0a320366fb9eb0db491db"},"phpUploadLimit":"4G","resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}},"cron":{"resources":{"requests":{"cpu":"50m","memory":"256Mi"},"limits":{"cpu":"500m","memory":"1Gi"}}},"redis":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/redis","tag":"20261002.0258@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"},"persistence":{"size":"1Gi"}},"postgresql":{"persistence":{"size":"3Gi"}},"persistence":{"html":{"size":"3Gi"},"data":{"size":"13Gi"}},"service":{"port":80,"targetPort":80}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "nextcloud.phpMemoryLimit", "label": "PHP 記憶體上限", "type": "select", "default": "512M", "options": ["512M", "1G", "2G"], "description": "大量縮圖或線上文件編輯時可調高；不得超過方案的記憶體規格"}]}</field>
             <field name="default_port">80</field>

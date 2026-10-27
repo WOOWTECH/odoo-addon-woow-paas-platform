@@ -19,7 +19,7 @@
 - migration 18.0.1.0.223：noupdate=1 的方案 80 → 20，手調過的不覆蓋、冪等。
 - 其他範本（odoo／n8n）不受影響：方案鍵＝方案總量。
 
-render 層（nextcloud chart 0.1.7 的 ``persistence.size`` → data PVC）由 charts repo
+render 層（nextcloud chart 0.1.9 的 ``persistence.size`` → data PVC）由 charts repo
 ``charts/nextcloud/tests/test-render-contract.sh`` 鎖；沙盒實裝證據在 PR 說明。
 """
 import copy
@@ -42,7 +42,7 @@ def _gi(size):
 
 
 def _chart_pvc_gib(values):
-    """nextcloud chart 0.1.7 會建的四顆 PVC（GiB）：data 讀 persistence.size，空時讀 data.size。"""
+    """nextcloud chart 0.1.9 會建的四顆 PVC（GiB）：data 讀 persistence.size，空時讀 data.size。"""
     persistence = values['persistence']
     return {
         'data': _gi(persistence.get('size') or persistence['data']['size']),
