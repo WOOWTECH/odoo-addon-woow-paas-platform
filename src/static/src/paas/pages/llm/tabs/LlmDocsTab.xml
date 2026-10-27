@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
   <t t-name="woow_paas_platform.LlmDocsTab">
-    <main class="o_woow_llm_docs">
+    <section class="o_woow_llm_docs" aria-labelledby="o_woow_llm_docs_title">
       <header class="o_woow_llm_docs__header">
-        <h1 t-esc="pageTitle"/>
+        <h2 id="o_woow_llm_docs_title" t-esc="pageTitle"/>
         <p t-esc="pageIntro"/>
       </header>
 
       <WoowCard shadow="true" class="'o_woow_llm_docs__card'">
         <div class="o_woow_llm_docs__row">
           <h2>Base URL</h2>
-          <button type="button" class="o_woow_button o_woow_button--secondary" t-att-aria-label="copyBaseLabel" t-att-disabled="!endpointAvailable" t-on-click="copyBase">
+          <WoowButton variant="'secondary'" size="'sm'" ariaLabel="copyBaseLabel" disabled="!endpointAvailable" onClick.bind="copyBase">
             <WoowIcon name="'content_copy'" size="16"/>
             <t t-if="state.copied === 'base'" t-esc="copiedLabel"/>
             <t t-else="" t-esc="copyLabel"/>
-          </button>
+          </WoowButton>
         </div>
         <code t-esc="endpoint"/>
         <p t-if="!endpointAvailable" class="o_woow_hint" role="status" t-esc="unavailableText"/>
@@ -82,6 +82,6 @@
         <p t-esc="sourceText"/>
         <a href="https://github.com/QuantumNous/new-api/tree/v1.0.0-rc.44" target="_blank" rel="noopener noreferrer">new-api v1.0.0-rc.44</a>
       </footer>
-    </main>
+    </section>
   </t>
 </templates>

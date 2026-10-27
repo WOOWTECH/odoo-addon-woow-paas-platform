@@ -2,6 +2,9 @@
 <templates xml:space="preserve">
   <t t-name="woow_paas_platform.LlmModelsTab">
     <section class="o_woow_llm_models">
+      <header class="o_woow_llm_models__heading">
+        <h2>Models and prices</h2>
+      </header>
       <div class="o_woow_llm_models__toolbar">
         <label class="o_woow_llm_models__search">
           <span>Search models</span>
