@@ -44,6 +44,7 @@ from ..services import llm_crypto, llm_redact
 from ..services.llm_pricing import PricingInvalid, normalize_pricing, pricing_profile_for_config
 from ..services import newapi_client as nac
 from .billing_incident import _is_odoo_module_uninstall
+from .llm_event import _begin
 from .llm_account import balance_stamp
 from .llm_common import (
     LlmError,
@@ -275,7 +276,11 @@ class LlmSwrCache(models.Model):
         account_id = account.id if scope == 'account' else None
         try:
             with self.env.registry.cursor() as cr:
-                cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                # Another request may commit the same cache row while this
+                # UPSERT waits.  Under Odoo's default REPEATABLE READ that
+                # becomes 40001 and the fail-soft path silently loses the
+                # refresh request; READ COMMITTED re-evaluates the winner row.
+                _begin(self.env, cr, read_committed=True)
                 cr.execute(
                     'INSERT INTO {t} (account_id, kind, requested_at, create_uid, create_date, '
                     'write_uid, write_date) VALUES (%s, %s, %s, %s, %s, %s, %s) '
@@ -331,7 +336,9 @@ class LlmSwrCache(models.Model):
             retry_before = now - timedelta(seconds=SWR_RETRY_SECONDS)
             try:
                 with self.env.registry.cursor() as cr:
-                    cr.execute("SET LOCAL lock_timeout = %s", (_LOCK_TIMEOUT,))
+                    # Keep the whole pending-date batch when a concurrent
+                    # request commits one of the same cache rows (#2034).
+                    _begin(self.env, cr, read_committed=True)
                     cr.execute(
                         'INSERT INTO {t} (account_id, kind, cache_key, requested_at, '
                         'create_uid, create_date, write_uid, write_date) '
