@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <!-- 2026-10-27：MCP 尚未設定連線／子行程沒有在跑的提示。軟性提示（黃底），不是紅色故障 banner：
+       服務狀態照樣是 Running。文案全部走 JS 的 _t（單行 msgid），見 utils/mcp_setup_status.js。 -->
+  <t t-name="woow_paas_platform.McpSetupStatusNotice">
+    <div t-if="notice"
+         t-attf-class="o_woow_mcp_setup_notice o_woow_mcp_setup_notice--{{ notice.tone }}"
+         t-att-data-mcp-state="notice.state"
+         role="status" aria-live="polite">
+      <WoowIcon name="notice.icon" size="20"/>
+      <div class="o_woow_mcp_setup_notice__text">
+        <strong t-esc="notice.text"/>
+        <span t-if="adminUrl" class="o_woow_mcp_setup_notice__link">
+          <t t-esc="adminPageLabel"/>
+          <a t-att-href="adminUrl" target="_blank" rel="noopener noreferrer">
+            <t t-esc="adminUrl"/>
+            <WoowIcon name="'open_in_new'" size="14"/>
+          </a>
+        </span>
+      </div>
+    </div>
+  </t>
+</templates>

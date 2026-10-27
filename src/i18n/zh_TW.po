@@ -28679,3 +28679,25 @@ msgstr "點／次"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js:0
 msgid "points per million tokens"
 msgstr "點／百萬 Token"
+
+# 2026-10-27 服務頁「MCP 尚未設定連線」提示（components/mcp-setup-status、utils/mcp_setup_status.js）
+#
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid ""
+"MCP is not connected yet: open the admin page → Connection, fill it in and "
+"save. MCP starts providing tools only after that."
+msgstr "MCP 尚未設定連線：請到管理頁 → Connection 填好並儲存，MCP 才會開始提供工具。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "The MCP child process is not running. Check Logs on the admin page."
+msgstr "MCP 子行程沒有在跑，請到管理頁查看 Logs。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "Admin page:"
+msgstr "管理頁："

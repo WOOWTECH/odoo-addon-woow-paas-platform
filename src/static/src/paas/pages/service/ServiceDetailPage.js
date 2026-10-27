@@ -26,6 +26,7 @@ import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../componen
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
 import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswordModal";
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
+import { McpSetupStatusNotice } from "../../components/mcp-setup-status/McpSetupStatusNotice";
 import { serviceRetrievalEndpoint } from "../../services/data_retrieval";
 import { cloudService } from "../../services/cloud_service";
 import { useServiceResources } from "../../services/service_resources";
@@ -85,6 +86,7 @@ export class ServiceDetailPage extends Component {
         AdminCredentialsModal,
         ResetAdminPasswordModal,
         DataRetrievalModal,
+        McpSetupStatusNotice,
     };
     static props = {
         workspaceId: { type: Number },
@@ -368,6 +370,15 @@ export class ServiceDetailPage extends Component {
      */
     get hasGateway() {
         return this.service?.has_gateway === true;
+    }
+
+    /**
+     * 2026-10-27：「MCP 尚未設定連線」提示要不要掛上。鏡射 detail payload 的 `has_mcp_setup_status`
+     * （＝後端 `_chart_has_mcp_setup_status`，mcp-server 家族、與 `/mcp-status` 端點同一個判準），
+     * 前端不用 slug 判斷。fail-closed：欄位缺席一律不掛、不輪詢。
+     */
+    get hasMcpSetupStatus() {
+        return this.service?.has_mcp_setup_status === true;
     }
 
     /**
