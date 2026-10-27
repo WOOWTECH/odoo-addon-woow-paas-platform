@@ -27,6 +27,9 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 ## 前幾輪未決（carryover.jsonl；依嚴重度排序）
 | decision id | repo | 位置 | 工具／rule | Jev | 首次出現 | 已出現輪數 |
 
+## 本輪自動結案（resolved.jsonl；沒有就寫「無」）
+| decision id | repo | 位置 | 工具／rule | 原因（reason_code） | 人先前的決定 |
+
 ## 已決未進 baseline（decision 帶 prior_human；不再問）
 | decision id | repo | 位置 | 人的決定（日期） |
 

@@ -58,7 +58,9 @@ roster:                      # 選填
 3. **閘門 A**（`sec-gate` skill）：每個 target 跑 `jev_gate triage --run-dir <dir>`。
    exit 3（API key 失效）⇒ 全部轉人工，報告第一行寫明。接著跑 `jev_gate carryover --run-dir <dir>`，
    把前幾輪還沒人決定的 finding 帶進本輪（`carryover.jsonl`）。⛔ 沒跑 carryover 不能寫「下輪還會出現」。
-   最後跑 `issue_sync sync --run-dir <dir>`（`sec-issue` skill）：Jev 高信心判成立的不等人就先開 issue。
+   carryover 也會把「檔案已不在 HEAD」等已解決的 finding 結案（`resolved.jsonl`）。
+   最後跑 `issue_sync sync --run-dir <dir>`（`sec-issue` skill）：Jev 高信心判成立的不等人就先開 issue，
+   已解決的 open issue 留言後關閉。
 4. **報告與提問**（`sec-report` skill）：寫 `<run>/report.md`，再用 **AskUserQuestion** 把摘要與
    最多 4 筆待決 finding（本輪＋carryover 一起排）送進 Inbox。有 `prior_human` 的不再問。
 5. **記錄人的決定**：每個回答都用 `jev_gate human` 寫回 shadow log。全部記完後，每個 target 再跑一次
@@ -73,7 +75,7 @@ roster:                      # 選填
 7. **推進進度**：每個 target 的閘門 A 都跑完（不論人回答與否）⇒ `collect commit --run-dir <dir>`。
    閘門 A 失敗的 target 不 commit，下輪會重掃同一段。
 
-本輪沒有 finding、carryover 也是 0 ⇒ 不派 worker、不提問，只在報告記「無變化」後結束。
+本輪沒有 finding、carryover 也是 0 ⇒ 不派 worker、不提問，只在報告記「無變化」（有自動結案就列出來）後結束。
 carryover 不是 0 ⇒ 照常寫報告、照常提問（沒有新 commit 也一樣）。
 
 ## ⛔ 鐵律

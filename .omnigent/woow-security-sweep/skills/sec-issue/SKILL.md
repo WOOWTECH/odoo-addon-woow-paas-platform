@@ -37,6 +37,8 @@ AGENTS.md 每輪流程的兩個時間點各跑一次：
 | 還沒有人工決定，Jev 判 `true_positive` 且信心 ≥ `gates.yaml` 的 `issues.jev_min_confidence` | 開單 | `sweep/jev` |
 | `sweep/jev` 的 open 單，後來人判成立 | 留言、換 label | `sweep/human` |
 | 已開的 open 單，人判誤報或 action 為 drop／accept_risk | 留言、換 label、關閉 | `sweep/false-positive` |
+| 已開的 open 單，carryover 判 `resolved`（`file_removed`／`not_redetected`；人判成立過的也算） | 留言（原因代碼＋head SHA）、關閉 | 不改 |
+| `resolved` 的 finding 還沒開單 | 不開 | — |
 | 單已被人手動關閉 | 不動 | — |
 
 每張單都掛 `woow-security-sweep`（標示來源）與 `severity/<level>`。`sweep/*`、`severity/*` 是
@@ -47,7 +49,8 @@ exclusive scope，同 scope 只會留一個。缺的 label 腳本會自己建。
 
 ## 輸出與報告
 
-腳本印出 JSON：`opened`、`confirmed`、`closed`（各附 issue 連結）、`skipped`（附原因）、`errors`。
+腳本印出 JSON：`opened`、`confirmed`、`closed`（各附 issue 連結；因 resolved 關的另附 `reason`）、
+`skipped`（附原因）、`errors`。
 
 - exit 0：正常
 - exit 4：部分動作失敗，失敗的列在 `errors`，其餘照常完成。寫進報告，下一輪會重試
