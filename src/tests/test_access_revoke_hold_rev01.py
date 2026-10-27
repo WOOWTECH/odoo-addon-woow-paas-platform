@@ -297,8 +297,15 @@ class TestRevokeHoldRev01(PendingFixture, TransactionCase):
         def provider_down(payload):
             raise PaaSOperatorAPIError('provider down', status_code=502)
         self.client.sync_access_app = provider_down
-        with self.assertRaises(PaaSOperatorAPIError):
+        # Not ``assertRaises``: it rolls the whole block back, including the
+        # closure marker the failure handler writes.  The controllers catch the
+        # error, answer ``success: False`` and let the request commit; do the same.
+        try:
             policies[1].unlink()
+        except PaaSOperatorAPIError:
+            pass
+        else:
+            self.fail('the failing provider call must surface')
         self.assertTrue(policies[1].exists())
         anchor.invalidate_recordset()
         self.assertFalse(self.client.origin)  # parked before the failing call

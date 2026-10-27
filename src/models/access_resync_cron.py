@@ -337,5 +337,6 @@ class AccessResyncCron(models.AbstractModel):
         if row._access_sync_skip_reason():
             counts['gated'] += 1
             return False
-        counts['pending'] += 1
+        # ``get``: callers outside the leg scan build their own counts dict.
+        counts['pending'] = counts.get('pending', 0) + 1
         return True
