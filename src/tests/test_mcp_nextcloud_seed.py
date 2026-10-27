@@ -8,7 +8,7 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 ``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
 
 1. **釘版**：chart mcp-server 0.1.7（OCI；image 以 uid／gid 1000 執行，要非 root 的 chart）；image
-   nextcloud-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI 推的那一顆（現行＝#70 合併 5526e865；首次上架是 #44 的 9a0fafa2）——
+   nextcloud-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI 推的那一顆（現行＝#86 合併 1dcabf91；首次上架是 #44 的 9a0fafa2）——
    換 image 時這條會紅，逼下一個人覆核啟動契約（#708 教訓）。
 2. **啟動契約**：``nextcloud-mcp-server``、args 只有 port 8000（launcher 硬綁 127.0.0.1，seed 不給 host；
    app 的 LaunchPolicy 固定 command／args）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
@@ -59,8 +59,10 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # LaunchPolicy 維持 nextcloud-mcp-server、port 8000。
 # 2026-10-25：改釘 #84 merge fc5fa02e（預設全開＋既有服務一次性遷移）；digest 取自
 # main CI run 27630 的 push 輸出，registry 讀回一致。
+# 2026-10-27：#86 merge 1dcabf91 的 image digest 已從 registry 讀回；
+# 新安裝範本釘版與正式資料庫一致；此產品目前沒有既有正式服務。
 EXPECT_IMAGE_TAG = (
-    'fc5fa02e3ff48225a1a2bdc5dfc74269a57a1b6f@sha256:4f9bf95bb94d6d0d8430a3ec9ad822e6b76d47ec85837ab3f60059302a1be5e1')
+    '1dcabf91baf088f4d7a445e8d34aeb55e03cfebe@sha256:1255f405d8a1f229e37ccc32d1dfa8bffa64f2dd67ffe88c7f437eeedb68e8f1')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 
