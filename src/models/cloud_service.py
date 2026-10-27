@@ -5762,6 +5762,22 @@ class CloudService(models.Model):
             return ''
         return self._public_base_url()
 
+    def _chart_has_mcp_setup_status(self):
+        """本服務的管理頁 ``/healthz`` 有沒有可以回讀給租戶看的 MCP 設定狀態（2026-10-27）。
+
+        mcp-server 家族的新開服務在管理頁存好連線之前，MCP 一律回 503，平台 state 卻是 running
+        （第三輪 staging 實測 Nextcloud）。管理頁的 ``/healthz`` 會回 ``mcp``＝running／
+        not_configured／not_running（``services/mcp_setup_status.py``），服務頁據此提示「還沒設定連線、
+        要去哪裡設定」。
+
+        判準就是 ``_admin_page_public_url()`` 非空（has_admin_gui＋config_json 載體＋有 subdomain）：
+        要查的正是那個網址底下的 ``/healthz``，兩者同源才不會「提示裡的管理頁網址」與「查的網址」分家；
+        不建 slug 名單（capability-gate-single-source-field）。端點 ``/mcp-status``、detail payload 的
+        ``has_mcp_setup_status`` 與前端提示都讀這一支。
+        """
+        self.ensure_one()
+        return bool(self._admin_page_public_url())
+
     def _chart_has_gateway(self):
         """本服務的 chart 有沒有對外 gateway ⇒ 該不該有 gateway API key。
 
