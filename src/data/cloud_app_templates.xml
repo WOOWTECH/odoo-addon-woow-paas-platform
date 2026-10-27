@@ -2189,14 +2189,17 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <!-- Chart 0.1.14 pairs with the 20261027.0638 PaaS Pi Agent image:
-                 root 0.3.16, Omnigent plugin 0.3.25, and Paseo 0.1.12.
-                 Approval issue #476 and promotion run #30458 released the formal
-                 image tag. Chart 0.1.14 only corrects the Helm install notes for
-                 the settings-only binding flow; publish after OCI read-back.
+            <!-- Chart 0.1.15 pairs with the 20261027.1105 PaaS Pi Agent image:
+                 root 0.3.17, Omnigent plugin 0.3.26, and Paseo 0.1.12.
+                 Omnigent performs a bounded native model-catalog refresh after an
+                 independent openai-codex login; it does not copy conversations or
+                 provider tokens. The Paseo binding remains settings-only, without
+                 a first-boot setup conversation or home-screen shortcut. Candidate
+                 run #30532 and approval issue #478 guard the formal image tag;
+                 publish this seed only after chart 0.1.15 OCI read-back succeeds.
                  Existing services retain their saved pins. -->
-            <field name="helm_chart_version">0.1.14</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261027.0638@sha256:d9889388778bea22af443d360482b7b8032fd7965ceb02ac2c871860694bd226"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <field name="helm_chart_version">0.1.15</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261027.1105@sha256:2f9df9de0ee5efa5c8f27bce0764b01752463409be1fd9ed2bd2fa5760b3d572"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
