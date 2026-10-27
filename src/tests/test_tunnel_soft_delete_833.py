@@ -51,6 +51,7 @@ LIVE_CONN = {
 
 def _client(payload):
     c = MagicMock()
+    c.health_check.return_value = {'instance_epoch': 'epoch-test'}
     c.get_tunnel_status.return_value = payload
     return c
 
@@ -164,6 +165,7 @@ class TestSecurityAccessSoftDelete(TransactionCase):
         sa = self._sa()
         with patch(SA_CLIENT) as get_client:
             c = MagicMock()
+            c.health_check.return_value = {'instance_epoch': 'epoch-test'}
             c.get_tunnel_status.side_effect = PaaSOperatorError(
                 'Tunnel tun-833 not found', status_code=404)
             get_client.return_value = c

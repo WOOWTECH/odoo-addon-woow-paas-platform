@@ -818,6 +818,7 @@ from . import test_policy_anchor_ownership_guard_848
 # D4 釘住「零命中那輪也要出聲、且那一行自帶三個計數」——空手與全被擋是兩件事。
 # D5 釘住 cron 的回存過得了 #854 的 `access_app_id` 欄位級守衛。
 from . import test_access_resync_cron_803
+from . import test_fault02_durable_invalidation
 
 # feat: #36 試用中變更方案**一定**結束試用並開首期帳單——SA / SH 兩 surface。
 # `ChangePlanModal` 的警告文案逐字保證三件事（結束試用／開始計費／首期帳單），

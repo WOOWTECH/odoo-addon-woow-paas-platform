@@ -53,7 +53,7 @@
             <field name="name">PaaS: Re-sync Access protection (access_protection_lost)</field>
             <field name="model_id" ref="model_woow_paas_platform_access_resync_cron"/>
             <field name="state">code</field>
-            <field name="code">model._cron_resync_access_protection()</field>
+            <field name="code">model._cron_probe_security_access_faults(); model._cron_resync_access_protection()</field>
             <field name="interval_number">15</field>
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>

@@ -366,6 +366,7 @@
 5	test_ecpg_v4_golive.TestTopupInvoiceIssueMode
 5	test_ecpg_v4_golive.TestTopupMinimum
 12	test_emqx_seed.TestEmqxSeed
+9	test_fault02_durable_invalidation.TestFault02DurableInvalidation
 11	test_gateway_capability_payload_530.TestGatewayCapabilityPayload530
 6	test_gateway_hint_template.TestGatewayHintTemplate
 4	test_gift_grant_wizard.TestGiftGrantWizard

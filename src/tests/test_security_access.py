@@ -314,6 +314,7 @@ class TestSecurityAccess(TransactionCase):
     def test_refresh_status_connected(self, mock_get_client):
         """connections 非空 → connected + 解析 connector_*/uptime（鏡像 SmartHome）。"""
         mock_client = MagicMock()
+        mock_client.health_check.return_value = {'instance_epoch': 'epoch-test'}
         mock_client.configure_tunnel.side_effect = configure_receipt
         mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.return_value = {
@@ -343,6 +344,7 @@ class TestSecurityAccess(TransactionCase):
     def test_refresh_status_disconnected(self, mock_get_client):
         """connections 空 → disconnected。"""
         mock_client = MagicMock()
+        mock_client.health_check.return_value = {'instance_epoch': 'epoch-test'}
         mock_client.configure_tunnel.side_effect = configure_receipt
         mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.return_value = {'connections': []}
@@ -360,6 +362,7 @@ class TestSecurityAccess(TransactionCase):
             PaaSOperatorError,
         )
         mock_client = MagicMock()
+        mock_client.health_check.return_value = {'instance_epoch': 'epoch-test'}
         mock_client.configure_tunnel.side_effect = configure_receipt
         mock_client.sync_tunnel_routes.side_effect = routes_receipt
         mock_client.get_tunnel_status.side_effect = PaaSOperatorError('cf down')

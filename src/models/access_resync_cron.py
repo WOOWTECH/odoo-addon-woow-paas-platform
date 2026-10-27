@@ -69,6 +69,32 @@ class AccessResyncCron(models.AbstractModel):
     _name = 'woow_paas_platform.access_resync_cron'
     _description = 'PaaS: periodic Access protection re-sync'
 
+    @api.model
+    def _cron_probe_security_access_faults(self, limit=200):
+        """Persist connector/Operator faults before any later re-sync.
+
+        This phase only invalidates/parks. It deliberately does not clear
+        pending in the same transaction; recovery remains the existing exact
+        Access sync path, so readiness has a durable observable closed window.
+        """
+        rows = self.env['woow_paas_platform.security_access'].sudo().search([
+            ('state', 'in', ('active', 'active_no_route')),
+            ('tunnel_id', '!=', False),
+            ('route_ids.is_protected', '=', True),
+        ], limit=limit, order='id')
+        counts = {'probed': 0, 'failed': 0}
+        for row in rows:
+            try:
+                with self.env.cr.savepoint():
+                    row.action_refresh_status()
+                counts['probed'] += 1
+            except Exception as error:  # one tenant cannot stop the cohort
+                counts['failed'] += 1
+                _logger.warning('[FAULT02] probe failed sa=%s: %s', row.id, error)
+        _logger.info('[FAULT02] probed=%d failed=%d',
+                     counts['probed'], counts['failed'])
+        return counts
+
     # ------------------------------------------------------------------ #
     #  cron 入口                                                          #
     # ------------------------------------------------------------------ #

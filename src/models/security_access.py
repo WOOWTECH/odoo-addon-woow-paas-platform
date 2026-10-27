@@ -85,6 +85,7 @@ _IDENTITY_ANCHOR_FIELDS = (
     'tunnel_id',        # WHICH Cloudflare tunnel this row drives (#522)
     'tunnel_name',      # its CF-side name, mirrored back from create_tunnel
     'tunnel_token',     # the tunnel credential itself
+    'operator_instance_epoch',  # server-observed Operator process identity
 )
 
 _ROUTE_IDENTITY_ANCHOR_FIELDS = (
@@ -798,6 +799,12 @@ class SecurityAccess(models.Model):
         help="cloudflared client version reported by the active connector "
              "(from the operator tunnel-status connections payload).",
     )
+    operator_instance_epoch = fields.Char(
+        string='Observed Operator Instance Epoch',
+        copy=False,
+        groups='base.group_system',
+        help='Last Operator process identity confirmed by the fault monitor.',
+    )
     edge_connection_count = fields.Integer(
         string='Edge Connections',
         default=0,
@@ -1487,13 +1494,37 @@ class SecurityAccess(models.Model):
             return
         client = self._get_operator_client()
         try:
+            health = client.health_check()
+            epoch = health.get('instance_epoch') if type(health) is dict else None
+            if type(epoch) is not str or not epoch.strip() or len(epoch) > 128:
+                raise PaaSOperatorError('Operator instance epoch is unavailable')
             result = client.get_tunnel_status(self.tunnel_id)
             vals = self._tunnel_vals_from_status(result)
+            connections = result.get('connections') if type(result) is dict else None
+            invalidate = self._fault02_should_invalidate(
+                self.operator_instance_epoch, epoch, connections)
             # 翻旗標的那一刻記一行（不是每次輪詢都記）——#1766 的現場是「平台顯示
             # 一切正常」，所以第二台接上必須在 log 裡留痕。
             self._tunnel_binding_log_conflict(vals)
             self.write(vals)
+            _internal_identity(self).operator_instance_epoch = epoch
+            if invalidate:
+                protected = self.route_ids.filtered('is_protected')
+                if protected:
+                    _internal_identity(protected).access_publish_pending = True
+                    # Make the durable state real at the edge too. A recovered
+                    # Operator can still write CF config even when connector
+                    # inventory is empty; pending routes therefore park at 503.
+                    try:
+                        self._sync_routes_to_operator()
+                    except (PaaSOperatorError, AccessPublicationError) as error:
+                        _logger.warning(
+                            '[FAULT02] publication park failed sa=%s: %s',
+                            self.id, error)
         except PaaSOperatorError as e:
+            protected = self.route_ids.filtered('is_protected')
+            if protected:
+                _internal_identity(protected).access_publish_pending = True
             self.write({
                 'tunnel_status': 'error',
                 'error_message': _(
@@ -1502,6 +1533,18 @@ class SecurityAccess(models.Model):
             _logger.warning(
                 "[SA] status refresh failed sa=%s: %s", self.id, e.message,
             )
+
+    @api.model
+    def _fault02_should_invalidate(self, old_epoch, new_epoch, connections):
+        """Pure fault decision: connector loss or a replaced Operator closes."""
+        valid_connections = (
+            type(connections) is list and bool(connections) and
+            all(type(row) is dict and
+                type(row.get('connector_id')) is str and
+                bool(row['connector_id'].strip()) for row in connections)
+        )
+        restarted = bool(old_epoch and new_epoch and old_epoch != new_epoch)
+        return restarted or not valid_connections
 
     @api.model
     def _tunnel_vals_from_status(self, result):

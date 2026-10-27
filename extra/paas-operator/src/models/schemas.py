@@ -1098,6 +1098,10 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: datetime
     helm_version: Optional[str] = None
+    instance_epoch: str = Field(
+        ..., min_length=1, max_length=128,
+        description="Opaque identity for this Operator process lifetime",
+    )
 
 
 class SidecarContainer(BaseModel):
