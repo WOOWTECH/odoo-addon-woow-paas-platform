@@ -1988,6 +1988,16 @@ def get_release_status(
             detail=str(e),
         )
     except HelmException as e:
+        # A release can disappear between the platform's DB re-read and this
+        # read-only status request when a concurrent delete has already
+        # completed ``helm uninstall``.  The plain release GET and DELETE
+        # endpoints already expose that typed outcome as 404; status must keep
+        # the same contract instead of turning the expected race into a 500.
+        if "not found" in e.stderr.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Release {name} not found in namespace {namespace}",
+            )
         logger.error(f"Failed to get status: {e.message}\nStderr: {e.stderr}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
