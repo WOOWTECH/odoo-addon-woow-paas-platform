@@ -31,7 +31,7 @@
               <button t-if="row.extend" type="button" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'extend')">Extend</button>
               <button t-if="row.disable" type="button" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'disable')">Disable</button>
               <button t-if="row.enable || (row.status === 'disabled' and tosBlocking)" type="button" t-att-aria-describedby="tosBlocking ? 'o_woow_llm_keys_tos_help' : undefined" t-att-disabled="!row.enable || state.busyKey !== null" t-on-click="() => this.enable(this.service.keys.find((key) => key.id === row.id))">Enable</button>
-              <button t-if="row.delete" type="button" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'delete')">Delete</button>
+              <button t-if="row.delete" type="button" class="o_woow_llm_keys__danger" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'delete')">Delete</button>
             </div></td>
           </tr></tbody>
         </table>
@@ -47,7 +47,7 @@
             <button t-if="row.extend" type="button" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'extend')">Extend</button>
             <button t-if="row.disable" type="button" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'disable')">Disable</button>
             <button t-if="row.enable || (row.status === 'disabled' and tosBlocking)" type="button" t-att-aria-describedby="tosBlocking ? 'o_woow_llm_keys_tos_help' : undefined" t-att-disabled="!row.enable || state.busyKey !== null" t-on-click="() => this.enable(this.service.keys.find((key) => key.id === row.id))">Enable</button>
-            <button t-if="row.delete" type="button" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'delete')">Delete</button>
+            <button t-if="row.delete" type="button" class="o_woow_llm_keys__danger" t-att-disabled="state.busyKey !== null" t-on-click="() => this.openConfirmation(this.service.keys.find((key) => key.id === row.id), 'delete')">Delete</button>
           </div>
         </article>
       </div>

@@ -1,47 +1,236 @@
 .o_woow_llm_credit {
-  min-width: 0; font-family: $woow-font-body; font-size: 16px; line-height: 1.6; color: #212121;
-  h2, h3, h4 { font-family: $woow-font-display; letter-spacing: -.02em; line-height: 1.12; }
-  &__summary, &__order { padding: 24px; background: #fff; border-radius: 20px; box-shadow: 0 2px 8px rgba(33, 33, 33, .06); }
-  &__summary { display: grid; gap: 16px; }
-  &__summary h2, &__summary p { margin: 0; }
-  &__threshold {
-    display: grid; gap: 12px; margin-top: 20px; padding: 24px;
-    border: 1px solid $woow-border-light; border-radius: 20px; background: $woow-card-light;
+  min-width: 0;
+  font-family: $woow-font-body;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: $woow-text-primary;
+
+  h2,
+  h3,
+  h4 {
+    color: $woow-text-primary;
+    font-family: $woow-font-display;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  &__summary,
+  &__order {
+    padding: 1.5rem;
+    background: $woow-card-light;
+    border-radius: $woow-radius-lg;
     box-shadow: $woow-shadow-card;
+  }
+
+  &__summary {
+    display: grid;
+    gap: 1rem;
+  }
+
+  &__summary h2,
+  &__summary p {
+    margin: 0;
+  }
+
+  &__summary h2 {
+    font-size: 2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__summary p {
+    color: $woow-text-secondary;
+  }
+
+  &__threshold {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    padding: 1.5rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-lg;
+    background: $woow-card-light;
+    box-shadow: $woow-shadow-card;
+
     h3, p { margin: 0; }
     h3 { color: $woow-text-primary; font-size: 1.125rem; }
     p { color: $woow-text-secondary; }
     label { color: $woow-text-primary; font-weight: 600; }
+
     input {
-      width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box;
-      border: 1px solid $woow-border-light; border-radius: $woow-radius-default;
-      padding: 8px 12px; background: #fff; color: $woow-text-primary; font: inherit;
+      width: 100%;
+      min-width: 0;
+      min-height: 44px;
+      box-sizing: border-box;
+      border: 1px solid rgba($woow-text-secondary, 0.22);
+      border-radius: $woow-radius-default;
+      padding: 0.5rem 0.75rem;
+      background: $woow-card-light;
+      color: $woow-text-primary;
+      font: inherit;
     }
-    input:focus-visible, button:focus-visible { outline: 2px solid $woow-primary; outline-offset: 3px; }
+
     [role="alert"] { color: #b91c1c; }
     [role="status"] { color: #15803d; }
-    button { justify-self: start; background: $woow-primary; border-color: $woow-primary; color: #fff; }
-    button:disabled { opacity: .55; cursor: default; }
+
+    button {
+      justify-self: start;
+      background: $woow-primary;
+      border-color: $woow-primary;
+      color: #fff;
+    }
+
+    button:hover:not(:disabled) {
+      background: $woow-primary-hover;
+      border-color: $woow-primary-hover;
+      color: #fff;
+    }
   }
-  &__heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 32px 0 16px; }
-  &__orders { display: grid; gap: 16px; }
-  &__order { min-width: 0; overflow-wrap: anywhere; }
-  h4 { margin: 0 0 16px; }
-  dl { display: grid; gap: 12px; margin: 0; }
-  dl > div { display: grid; grid-template-columns: 100px 1fr; gap: 16px; }
-  dt { color: #646262; font-weight: 400; }
-  dd { margin: 0; min-width: 0; }
-  button { min-height: 44px; border: 1px solid #dce0e8; border-radius: 999px; padding: 8px 20px; font: inherit; color: #212121; background: #fff; cursor: pointer; }
-  button:disabled { opacity: .55; cursor: default; }
-  :focus-visible { outline: 2px solid #6183fc; outline-offset: 4px; }
-  &__summary > button { justify-self: start; background: #6183fc; color: #fff; border-color: #6183fc; }
-  &__pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
+
+  &__heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin: 2rem 0 1rem;
+  }
+
+  &__heading h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  &__orders {
+    display: grid;
+    gap: 1rem;
+  }
+
+  &__order {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  h4 {
+    margin: 0 0 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  dl {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+  }
+
+  dl > div {
+    display: grid;
+    grid-template-columns: 6.25rem 1fr;
+    gap: 1rem;
+  }
+
+  dt {
+    color: $woow-text-secondary;
+    font-weight: 400;
+  }
+
+  dd {
+    margin: 0;
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  button {
+    min-height: 44px;
+    border: 1px solid rgba($woow-text-secondary, 0.22);
+    border-radius: $woow-radius-default;
+    padding: 0.5rem 1.25rem;
+    font: 600 0.875rem/1.2 $woow-font-display;
+    color: $woow-text-primary;
+    background: $woow-card-light;
+    cursor: pointer;
+    transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+  }
+
+  button:hover:not(:disabled) {
+    color: $woow-primary;
+    border-color: $woow-primary;
+    background: rgba($woow-primary, 0.04);
+  }
+
+  button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgba($woow-primary, 0.55);
+    outline-offset: 2px;
+  }
+
+  &__summary > button {
+    justify-self: start;
+    background: $woow-primary;
+    color: #fff;
+    border-color: $woow-primary;
+  }
+
+  &__summary > button:hover:not(:disabled) {
+    background: $woow-primary-hover;
+    border-color: $woow-primary-hover;
+    color: #fff;
+  }
+
+  &__pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
   @media (max-width: $woow-bp-sm) {
-    &__summary, &__order { padding: 20px; }
-    &__threshold { padding: 20px; }
-    &__threshold button { width: 100%; }
-    dl > div { grid-template-columns: 1fr; gap: 4px; }
-    &__pager { flex-direction: column; }
-    &__pager button { width: 100%; }
+    &__summary,
+    &__order,
+    &__threshold {
+      padding: 1rem;
+    }
+
+    &__summary h2 {
+      font-size: 1.5rem;
+    }
+
+    &__threshold button {
+      width: 100%;
+    }
+
+    &__heading {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    &__heading button {
+      width: 100%;
+    }
+
+    dl > div {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
+
+    &__pager {
+      flex-direction: column;
+    }
+
+    &__pager button {
+      width: 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    button {
+      transition: none;
+    }
   }
 }
