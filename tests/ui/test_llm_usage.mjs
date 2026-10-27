@@ -138,14 +138,14 @@ test("latest filter request wins when older summary/chart/log responses arrive a
   for (const dispose of globalThis.__llmUsageHooks.unmount) dispose();
 });
 
-test("400px usage layout keeps a seven-day chart viewport, scrolls wider charts, and collapses logs into rows", async () => {
+test("small-screen usage layout uses the platform breakpoint, scrolls wider charts, and collapses logs into rows", async () => {
   const root = new URL("../../", import.meta.url);
   const usageScss = await readFile(new URL("src/static/src/paas/pages/llm/tabs/LlmUsageTab.scss", root), "utf8");
   const chartScss = await readFile(new URL("src/static/src/paas/components/llm/LlmUsageChart.scss", root), "utf8");
   const xml = await readPaas("pages/llm/tabs/LlmUsageTab.xml");
-  assert.match(usageScss, /@media \(max-width: 600px\)/);
+  assert.match(usageScss, /@media \(max-width: \$woow-bp-sm\)/);
   assert.match(usageScss, /tbody tr \{[^}]*border/);
-  assert.match(chartScss, /max-width: 294px/);
+  assert.match(chartScss, /max-width: 100%/);
   assert.match(chartScss, /overflow-x: auto/);
   assert.match(xml, /aria-label="Request log pages"/);
   assert.match(xml, /copyRequestId/);

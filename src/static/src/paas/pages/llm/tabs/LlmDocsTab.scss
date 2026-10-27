@@ -1,28 +1,78 @@
 .o_woow_llm_docs {
   display: grid;
-  gap: 20px;
+  gap: 1.5rem;
   min-width: 0;
   max-width: 100%;
-  color: var(--woow-text, #27313f);
+  color: $woow-text-primary;
+  font-family: $woow-font-body;
+  font-size: 1rem;
+  line-height: 1.6;
 
-  &__header,
+  h2,
+  h3 {
+    color: $woow-text-primary;
+    font-family: $woow-font-display;
+    letter-spacing: -0.02em;
+  }
+
   &__limits,
   &__faq,
   &__attribution {
-    padding: 20px;
-    background: #fff;
-    border: 1px solid #e7ebf0;
-    border-radius: 20px;
-    box-shadow: 0 4px 16px rgba(27, 43, 65, 0.06);
+    padding: 1.5rem;
+    background: $woow-card-light;
+    border-radius: $woow-radius-lg;
+    box-shadow: $woow-shadow-card;
     min-width: 0;
     overflow-wrap: anywhere;
   }
 
+  &__header {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  &__header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  &__header p {
+    margin: 0.25rem 0 0;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+  }
+
   &__card {
-    padding: 20px;
-    border-radius: 20px;
+    padding: 1.5rem !important;
     min-width: 0;
     max-width: 100%;
+  }
+
+  &__card h2,
+  &__limits h2,
+  &__faq > h2,
+  &__examples > h2 {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  &__card h3,
+  &__faq h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  &__card p,
+  &__limits p,
+  &__faq p,
+  &__attribution p {
+    margin: 0.5rem 0 0;
   }
 
   &__row {
@@ -30,7 +80,7 @@
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 16px;
+    gap: 1rem;
     min-width: 0;
 
     > * {
@@ -49,28 +99,37 @@
   &__faq,
   &__examples {
     display: grid;
-    gap: 12px;
+    gap: 0.75rem;
   }
 
   &__tabs,
   &__modes {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 0.5rem;
     min-width: 0;
 
     button {
-      padding: 8px 14px;
-      border: 1px solid #d8dee8;
-      border-radius: 999px;
-      background: #fff;
-      color: inherit;
+      min-height: 44px;
+      padding: 0.5rem 0.875rem;
+      border: 1px solid rgba($woow-text-secondary, 0.22);
+      border-radius: $woow-radius-default;
+      background: $woow-card-light;
+      color: $woow-text-primary;
+      font: 600 0.875rem/1.2 $woow-font-display;
       cursor: pointer;
+      transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
     }
 
     button[aria-pressed="true"] {
-      border-color: var(--woow-primary, #4353a3);
-      background: #eef0fb;
+      border-color: $woow-primary;
+      background: rgba($woow-primary, 0.1);
+      color: $woow-primary;
+    }
+
+    button:hover {
+      border-color: $woow-primary;
+      color: $woow-primary;
     }
   }
 
@@ -78,47 +137,65 @@
   &__card > code {
     display: block;
     max-width: 100%;
-    margin: 12px 0 0;
-    padding: 16px;
+    margin: 0.75rem 0 0;
+    padding: 1rem;
     overflow-x: auto;
     box-sizing: border-box;
-    border: 1px solid #e7ebf0;
-    border-radius: 12px;
-    background: #f7f8fa;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-background-light;
     white-space: pre;
     -webkit-overflow-scrolling: touch;
   }
 
   &__example code,
   &__card > code {
-    color: #27313f;
+    color: $woow-text-primary;
+    font-size: 0.875rem;
   }
 
   &__faq article {
-    padding: 16px;
-    border: 1px solid #e7ebf0;
-    border-radius: 12px;
-    background: #f8f9fb;
+    padding: 1rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: $woow-background-light;
   }
 
-  &__error { color: #a52c35; }
+  &__error {
+    color: #b91c1c;
+  }
 
   button,
   a {
     min-height: 44px;
   }
 
-  @media (max-width: 400px) {
-    &__header,
+  a {
+    color: $woow-primary;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgba($woow-primary, 0.55);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: $woow-bp-sm) {
     &__limits,
     &__faq,
     &__attribution,
     &__card {
-      padding: 16px;
+      padding: 1rem !important;
     }
 
     &__row {
       align-items: flex-start;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &__tabs button,
+    &__modes button {
+      transition: none;
     }
   }
 }

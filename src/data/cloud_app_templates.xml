@@ -1212,7 +1212,7 @@
                  （HA 版同一個映像以前的終端機路徑；兩邊統一 /console/，外掛頁內建「CLI 終端機」開的就是它）。
                  只改 auth-proxy ConfigMap，helm_default_values 不需改。回滾值：0.5.6。 -->
             <!-- 0.5.9（2026-10-26，charts #284）：native Paseo、同源代理與程序監督。
-                 搭配下方 1751 immutable image；origin 由每台服務的公開網址在部署時注入。 -->
+                 搭配下方 0212 immutable image；origin 由每台服務的公開網址在部署時注入。 -->
             <field name="helm_chart_version">0.5.9</field>
             <!-- 2026-10-24 image 20261018.1219 → 20261024.0713@sha256:a6c20405…（paas-odoo-ci #396，build run 26985、
                  核可單 #397；core open-design-core:20261024.0713@sha256:bdb9febc…，fork woow-od-v0.24.1-w2.3 605efab）：
@@ -1222,9 +1222,10 @@
                  2026-10-24 同日改 20261024.0943@sha256:5252ac5b…（paas-odoo-ci #398，核可單 #401，promote run 27155；core
                  open-design-core:20261024.0943@sha256:ffbb2bd0…，fork w2.4 b8a1371）：兩個內建外掛在外掛頁預設的「官方」分頁也置頂
                  （0713 只在「已安裝」分頁，打開看不到），分頁標籤繁中「官方／團隊／已安裝」。0713 未上線過，回滾值同上。 -->
-            <!-- 2026-10-26：1751 正式 JCR 映像；內部 service278 在 chart 0.5.9 上
-                 驗收 GUI、PVC／對話資料保留（Helm revision 4）。回滾映像：0712@sha256:9de8850209a18d18579d81442f9d079076a76ef9128970296435abdb8c144ab2。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261026.1751@sha256:2a19e82c2955a1e1d7edb866a2b9817cb2b1a65762c928a6fcb7839b37574cf7"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}, "paseo": {"enabled": true, "origin": ""}}</field>
+            <!-- 2026-10-27：0212 正式 JCR 映像（Paseo runtime 0.2.2）；內部 service278 在 chart 0.5.9 上
+                 驗收 GUI、Claude 兩回合對話、PVC／對話資料保留（Helm revision 6；與對話測試同一 digest）。
+                 回滾映像：1751@sha256:2a19e82c2955a1e1d7edb866a2b9817cb2b1a65762c928a6fcb7839b37574cf7。 -->
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261027.0212@sha256:c58c8f2d39895421a1fbbbb13dc65e56dad0c225939799abf31b91313b11024f"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}, "paseo": {"enabled": true, "origin": ""}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
