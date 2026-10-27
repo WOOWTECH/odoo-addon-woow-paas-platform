@@ -539,6 +539,7 @@
 25	test_llm_reconcile_local.TestLlmReconcileLocal
 5	test_llm_sql_budget.TestLlmSqlBudget
 9	test_llm_status_monitor.TestLlmStatusMonitor
+2	test_llm_swr_concurrency_2034.TestLlmSwrQueueConcurrency2034
 13	test_llm_terms.TestLlmTermsConsent
 4	test_llm_terms.TestLlmTermsHttp
 10	test_llm_terms.TestLlmTermsModel
