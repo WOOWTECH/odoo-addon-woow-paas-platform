@@ -29,6 +29,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -368,20 +369,22 @@ def triage_history(records: list[dict[str, Any]]) -> dict[tuple[Any, Any], dict[
     """依 (repo, fingerprint) 整理閘門 A 的歷史。
 
     回傳每組的 decisions（依時間）、human（組內最後一筆人工決定，沒有則 None）、
-    last（最後一個事件：decision 或 resolved）。只讀，不寫檔。
+    last（最後一個事件：decision 或 resolved）、resolved（last 為 resolved 時的那筆紀錄）。只讀，不寫檔。
     """
     humans = {r["ref"]: r for r in records if r.get("type") == "human"}
     groups: dict[tuple[Any, Any], dict[str, Any]] = {}
     for r in records:
         key = (r.get("repo"), r.get("fingerprint"))
         if r.get("type") == "decision" and r.get("gate") == "triage":
-            g = groups.setdefault(key, {"decisions": [], "human": None, "last": None})
+            g = groups.setdefault(key, {"decisions": [], "human": None, "last": None, "resolved": None})
             g["decisions"].append(r)
             g["last"] = "decision"
+            g["resolved"] = None
             if r["id"] in humans:
                 g["human"] = humans[r["id"]]
         elif r.get("type") == "resolved" and key in groups:
             groups[key]["last"] = "resolved"
+            groups[key]["resolved"] = r
     return groups
 
 
@@ -391,6 +394,28 @@ def _scanned_paths(meta: dict[str, Any]) -> set[str] | None:
         return set(meta["scanned_files"])
     changed = (meta.get("scope") or {}).get("changed")
     return None if changed is None else set(changed)
+
+
+# gitleaks 的秘密值在檔案刪除後仍留在 git 歷史（公開 repo 等於已外洩），要人處理輪替，不因刪檔自動結案
+FILE_REMOVED_KEEP_TOOLS = frozenset({"gitleaks"})
+
+
+def _head_paths(meta: dict[str, Any]) -> set[str] | None:
+    """本輪 head_sha 上存在的檔案；拿不到（舊 meta、git 失敗）回 None，呼叫端視為「無法判斷」。"""
+    repo_path, head = meta.get("repo_path"), meta.get("head_sha")
+    if not repo_path or not head:
+        return None
+    try:
+        out = subprocess.run(["git", "-C", str(repo_path), "ls-tree", "-r", "-z", "--name-only", str(head)],
+                             capture_output=True, check=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p}
+
+
+def _norm_path(path: Any) -> str | None:
+    p = str(path or "").removeprefix("./")
+    return p or None
 
 
 def _findings_by_decision(runs_root: Path) -> dict[str, dict[str, Any]]:
@@ -406,10 +431,15 @@ def _findings_by_decision(runs_root: Path) -> dict[str, dict[str, Any]]:
 def carryover_run(run_dir: Path, sdir: Path) -> dict[str, Any]:
     """把同一 repo 前幾輪「Jev 判過、人還沒決定」的 finding 帶到本輪。
 
-    - 組內有人工決定 ⇒ 已決，不帶；最後事件是 resolved ⇒ 已解決，不帶
     - 本輪 decisions 已含的 fingerprint ⇒ 本輪照常處理，不重複帶
-    - 檔案本輪有掃到、該工具本輪 status=ok、卻沒再偵測到 ⇒ 追加 resolved 紀錄，不帶
+    - 最後事件是 resolved ⇒ 已解決，不帶
+    - 檔案已不在本輪 HEAD ⇒ 追加 resolved（reason_code=file_removed），不看工具狀態；
+      人已決定過的也照寫，讓 issue_sync 能關單（#2053）。gitleaks 例外：秘密值仍在 git 歷史
+    - 組內有人工決定 ⇒ 已決，不帶
+    - 檔案本輪有掃到、該工具本輪 status=ok、卻沒再偵測到 ⇒ 追加 resolved（not_redetected），不帶
       （工具失敗或 deep review 沒跑時不判 resolved，寧可多帶）
+
+    本輪新判 resolved 的項目另寫 `resolved.jsonl` 給報告列「本輪自動結案」。
     """
     cfg = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
@@ -418,37 +448,53 @@ def carryover_run(run_dir: Path, sdir: Path) -> dict[str, Any]:
     repo = cfg.get("repo", {}).get("full_name")
     current = {r.get("fingerprint") for r in read_jsonl(run_dir / "decisions.jsonl")}
     scanned = _scanned_paths(meta)
+    head_paths = _head_paths(meta)
     shadow = sdir / "shadow.jsonl"
     groups = triage_history(read_jsonl(shadow))
     findings = _findings_by_decision(run_dir.parent.parent)
 
     carried: list[dict[str, Any]] = []
-    resolved = 0
+    resolved_items: list[dict[str, Any]] = []
+
+    def resolve(fp: str, last: dict[str, Any], finding: dict[str, Any], code: str, reason: str,
+                human: dict[str, Any] | None) -> None:
+        rec = {"type": "resolved", "id": uuid.uuid4().hex[:12], "ts": now_iso(), "repo": repo,
+               "fingerprint": fp, "ref": last["id"], "run": str(run_dir), "reason_code": code,
+               "reason": reason, "head_sha": meta.get("head_sha")}
+        append_jsonl(shadow, rec)
+        resolved_items.append(rec | {"path": finding.get("path"), "line": finding.get("line"),
+                                     "tool": finding.get("tool"), "rule": finding.get("rule"),
+                                     "level": (last.get("info") or {}).get("level"),
+                                     "human": {k: human.get(k) for k in ("label", "action")} if human else None})
+
     for (g_repo, fp), g in groups.items():
-        if g_repo != repo or fp in current or g["human"] or g["last"] != "decision":
+        if g_repo != repo or fp in current or g["last"] != "decision":
             continue
         last = g["decisions"][-1]
-        finding = findings.get(last["id"])
-        path, tool = (finding or {}).get("path"), (finding or {}).get("tool")
+        finding = findings.get(last["id"]) or {}
+        path, tool = _norm_path(finding.get("path")), finding.get("tool")
+        if (path and head_paths is not None and path not in head_paths
+                and tool not in FILE_REMOVED_KEEP_TOOLS):
+            resolve(fp, last, finding, "file_removed",
+                    f"{path} 已不在 HEAD {str(meta.get('head_sha') or '')[:8]}", g["human"])
+            continue
+        if g["human"]:
+            continue
         tool_ok = (tools.get(tool) or {}).get("status") == "ok"
-        if finding and path and tool_ok and (scanned is None or path in scanned):
-            append_jsonl(shadow, {
-                "type": "resolved", "id": uuid.uuid4().hex[:12], "ts": now_iso(), "repo": repo,
-                "fingerprint": fp, "ref": last["id"], "run": str(run_dir),
-                "reason": f"本輪掃到 {path}（{tool} ok）但未再偵測到",
-            })
-            resolved += 1
+        if path and tool_ok and (scanned is None or path in scanned):
+            resolve(fp, last, finding, "not_redetected", f"本輪掃到 {path}（{tool} ok）但未再偵測到", None)
             continue
         carried.append({
             "decision_id": last["id"], "fingerprint": fp, "finding_id": last.get("finding_id"),
             "first_seen": g["decisions"][0].get("ts"), "seen_runs": len(g["decisions"]),
             "proposed": last.get("proposed"), "reasons": last.get("reasons"), "info": last.get("info"),
-            "finding": finding,
+            "finding": finding or None,
         })
-    with open(run_dir / "carryover.jsonl", "w", encoding="utf-8") as fh:
-        for item in carried:
-            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
-    return {"repo": repo, "carried": len(carried), "resolved": resolved}
+    for name, rows in (("carryover.jsonl", carried), ("resolved.jsonl", resolved_items)):
+        with open(run_dir / name, "w", encoding="utf-8") as fh:
+            for item in rows:
+                fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    return {"repo": repo, "carried": len(carried), "resolved": len(resolved_items)}
 
 
 # ── 閘門 C：ready ─────────────────────────────────────────────────────────────

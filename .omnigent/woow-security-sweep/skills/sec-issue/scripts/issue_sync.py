@@ -80,6 +80,9 @@ class IssueError(Exception):
 
 # ── 純函式 ────────────────────────────────────────────────────────────────────
 
+HEX_RE = re.compile(r"^[0-9a-f]{7,64}$")
+
+
 def mask(text: str | None) -> str:
     out = str(text or "")
     for pat in SECRET_PATTERNS:
@@ -114,6 +117,21 @@ def classify(group: dict[str, Any], threshold: float) -> str | None:
     if info.get("verdict") == "true_positive" and float(info.get("confidence") or 0) >= threshold:
         return "jev"
     return None
+
+
+RESOLVED_TEXT = {
+    "file_removed": "finding 所在的檔案已不在預設分支 HEAD",
+    "not_redetected": "本輪掃到該檔案、工具正常，但沒有再偵測到這筆 finding",
+}
+
+
+def resolved_comment(res: dict[str, Any]) -> str:
+    """關單留言：只放原因代碼與 head SHA，不放 reason 原文（可能含路徑以外的工具輸出）。"""
+    code = str(res.get("reason_code") or "")
+    head = str(res.get("head_sha") or "")
+    head = head[:12] if HEX_RE.match(head) else "?"
+    why = RESOLVED_TEXT.get(code, "sweep 判定已解決")
+    return f"sweep 判定已解決：{why}（head `{head}`，代碼 `{code or 'resolved'}`），自動關閉本 issue。若判斷有誤請重新開啟。"
 
 
 def safe_path(path: str | None) -> str | None:
@@ -312,6 +330,24 @@ def sync_run(run_dir: Path, sdir: Path, gates: dict[str, Any], *, forge: Any = N
 
     for (g_repo, fp), group in groups.items():
         if g_repo != full_name:
+            continue
+        if group.get("last") == "resolved":
+            # carryover 判已解決（檔案已刪或掃到但未再偵測到）：不開新單；open 的單留言後關閉（#2053）
+            existing = remote.get(fp_key(fp))
+            if existing is None or existing.get("state") != "open":
+                continue
+            decision, res = group["decisions"][-1], group.get("resolved") or {}
+            item = {"fingerprint": fp, "decision_id": decision.get("id")}
+            ref = {"number": existing.get("number"), "html_url": existing.get("html_url")}
+            try:
+                if not dry_run:
+                    forge.comment(existing["number"], resolved_comment(res))
+                    forge.close(existing["number"])
+                log("closed", fp, decision, ref, "resolved")
+                summary["closed"].append(dict(item, number=ref["number"], url=ref["html_url"],
+                                              reason=res.get("reason_code") or "resolved"))
+            except IssueError as exc:
+                summary["errors"].append(dict(item, error=str(exc)))
             continue
         kind = classify(group, threshold)
         if kind is None:
