@@ -104,7 +104,8 @@ class AccessDispatchFence(models.Model):
         identity = self._identity(anchor, payload)
         with self.env.registry.cursor() as cr:
             cr.execute(
-                'SELECT id, state, provider_app_id, attempt '
+                'SELECT id, state, provider_app_id, attempt, '
+                'effect_started_at, effect_boundary_version '
                 'FROM woow_paas_platform_access_dispatch_fence '
                 'WHERE anchor_model=%s AND anchor_id=%s AND app_name=%s '
                 'AND primary_hostname=%s FOR UPDATE',
@@ -114,8 +115,10 @@ class AccessDispatchFence(models.Model):
             if not row:
                 raise UserError(_(
                     'Access create was refused because its durable fence is missing.'))
-            fence_id, state, provider_app_id, attempt = row
-            if state in ('prepared', 'retry_authorized'):
+            (fence_id, state, provider_app_id, attempt,
+             effect_started_at, boundary_version) = row
+            if (state in ('prepared', 'retry_authorized')
+                    and boundary_version == 1 and not effect_started_at):
                 cr.execute(
                     'UPDATE woow_paas_platform_access_dispatch_fence '
                     "SET state='dispatching', attempt=%s, claimed_at=now() at time zone 'UTC' "
@@ -169,7 +172,10 @@ class AccessDispatchFence(models.Model):
                 recoverable = (
                     state == 'dispatching' and boundary_version == 1
                     and not effect_started_at)
-                if state in ('prepared', 'retry_authorized') or recoverable:
+                first_send = (
+                    state in ('prepared', 'retry_authorized')
+                    and boundary_version == 1 and not effect_started_at)
+                if first_send or recoverable:
                     cr.execute(
                         'UPDATE woow_paas_platform_access_dispatch_fence '
                         "SET state='dispatching', attempt=%s, "
@@ -291,6 +297,11 @@ class AccessDispatchFence(models.Model):
         if self.state != 'dispatching':
             raise UserError(_(
                 'Only an unresolved dispatching fence can be retried.'))
+        if self.effect_boundary_version != 1 or self.effect_started_at:
+            raise UserError(_(
+                'Provider send may have started; absence from the provider '
+                'list cannot authorize another create. Review and adopt the '
+                'exact existing app instead.'))
         self.sudo().write({
             'state': 'retry_authorized',
             'reviewed_at': fields.Datetime.now(),

@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests.common import TransactionCase
 
@@ -31,6 +32,14 @@ class TestRace06DispatchFenceReview(TransactionCase):
             CONFIRM, 'reviewed exact provider identity and audit history'))
         self.assertEqual(self.fence.state, 'retry_authorized')
         self.assertEqual(self.fence.reviewed_by, self.env.user)
+
+    def test_post_send_absence_cannot_authorize_retry(self):
+        self.fence.write({'effect_started_at': fields.Datetime.now()})
+        with self.assertRaises(UserError):
+            self.fence.action_authorize_single_retry(
+                CONFIRM, 'provider inventory currently shows no matching app')
+        self.assertEqual(self.fence.state, 'dispatching')
+        self.assertFalse(self.fence.provider_app_id)
 
     def test_unverified_manual_provider_id_is_rejected(self):
         with self.assertRaises(UserError):
