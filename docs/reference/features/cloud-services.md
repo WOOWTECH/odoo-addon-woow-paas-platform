@@ -896,6 +896,29 @@ entrypoint 略過的項目只印在容器 stderr，Service 不存在的項目不
 - **範圍外**：「填新 key 後 tailscaled 進入 crash loop」（INFRA-TS-005-1）與「升級中鎖住所有動作」（-2）是 chart／entrypoint 與 operator rollout 逾時的問題，
   不在這裡。
 
+#### MCP 尚未設定連線的提示（2026-10-27）
+
+pod 在、管理頁在、`/healthz` 也是 200 ≠ MCP 在提供工具：新開的 mcp-server 家族服務（第三輪 staging 實測 Nextcloud）在管理頁 → Connection
+存好之前，`initialize`／`tools/list` 一律 503（子行程缺連線設定 exit 2），平台 `state` 卻是 `running`、/woow 顯示「運作中」。
+
+- **狀態來源**：woow-mcp-server（mcp-admin-core）的 `/healthz` 多回 `mcp`＝`running`｜`not_configured`｜`not_running`（字串、封閉集合；
+  舊映像沒有這個欄位，只回 `{"status":"ok"}`）。
+- **能力 gate**：`CloudService._chart_has_mcp_setup_status()`＝`_admin_page_public_url()` 非空（has_admin_gui＋`admin_password_carrier=config_json`
+  ＋有 subdomain，恰好是 mcp-server chart 家族）→ service detail payload 的 `has_mcp_setup_status` → 服務頁。前端不得用 slug 判斷。
+- **不進帳本**：沒有欄位、沒有 cron、不碰 `state`（服務是正常的，只是要設定；徽章照樣 Running）。租戶打開服務頁（服務 running）時，前端每 30 秒
+  （頁面可見才輪詢、切回分頁立刻再問）`POST /api/workspaces/<ws>/services/<id>/mcp-status`；後端對**該服務自己的對外根位址**
+  （`_admin_page_public_url()`，平台算出、不是使用者輸入；呼叫端多送任何參數整個拒絕）`GET /healthz`：自訂 User-Agent、不跟隨轉址、
+  總截止時間 3 秒（含 DNS）、body 最多 4 KiB、只解析 `mcp`。授權與 detail 同一條（工作區成員皆可讀）。
+- **降級**：不是 running、讀不到、逾時、轉址（例：開了 Cloudflare Access）、舊映像沒有欄位，一律回 `state: unknown`（正常降級，不顯示）。
+  同一網址 10 秒內共用上一次結果（每個 worker 一份表；`unknown` 也快取，讀不到的那台不會讓每次輪詢都付滿 3 秒）。
+- **網路路徑**：走公開網址（Cloudflare tunnel）而不是叢集內：租戶 namespace 的 ingress 只收 tunnel、同 namespace 與 reach 標籤的工作區
+  namespace，平台 namespace 不在其中；平台 egress 對公網放行（staging 有 egress policy、私網段排除；正式站沒有 egress policy）。
+- **UI**：`not_configured` → 黃底提示「MCP 尚未設定連線：請到管理頁 → Connection 填好並儲存，MCP 才會開始提供工具。」；`not_running` →
+  「MCP 子行程沒有在跑，請到管理頁查看 Logs。」；兩者都附管理頁網址（＝`admin_url`，同 `_admin_page_public_url`）。`running`／`unknown` 不顯示。
+  元件 `components/mcp-setup-status/McpSetupStatusNotice`，呈現邏輯 `utils/mcp_setup_status.js`，輪詢 `services/mcp_setup_status.js`，
+  後端 `services/mcp_setup_status.py`。
+- **部署順序**：兩邊獨立。平台先上：舊映像沒有 `mcp` 欄位 ⇒ 全部 `unknown`、不顯示，與現況相同；woow-mcp-server 先上：平台不讀，與現況相同。
+
 #### 一次性憑證視窗的 gateway 提示（P3）
 
 有 gateway 的模板（`helm_default_values.gateway.externalPath`，#530）在建立與 Reset
