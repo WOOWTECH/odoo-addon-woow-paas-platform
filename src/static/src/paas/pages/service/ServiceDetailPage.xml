@@ -268,13 +268,14 @@
                     <span class="o_woow_service_error_banner__text" t-esc="state.resetPasswordError"/>
                 </div>
                 <!-- 2026-10-27：mcp-server 家族（payload 的 has_mcp_setup_status）在管理頁存好連線之前，
-                     MCP 一律回 503、平台卻顯示 Running。元件在服務 running 時即時問 /mcp-status，
-                     not_configured／not_running 才畫黃底提示（附管理頁網址）；不改服務狀態本身。 -->
+                     MCP 一律回 503、平台卻顯示 Running。服務 running 時頁面即時問 /mcp-status（輪詢在本頁，
+                     與 Overview 的 Connection Info 共用），not_configured／not_running 畫黃底提示、
+                     第五輪的 backend_missing 畫較輕的藍底提示；能管理的人才附管理頁網址。不改服務狀態本身。 -->
                 <McpSetupStatusNotice
-                    t-if="hasMcpSetupStatus"
-                    t-key="service.id"
-                    service="service"
-                    workspaceId="props.workspaceId"/>
+                    t-if="mcpSetupCondition"
+                    condition="mcpSetupCondition"
+                    adminUrl="mcpSetup.state.adminUrl"
+                    canManage="canManageService"/>
 
                 <!-- Tab Navigation -->
                 <div class="o_woow_tabs">
@@ -344,6 +345,7 @@
                         t-if="currentTab === 'overview'"
                         service="service"
                         workspaceId="props.workspaceId"
+                        mcpSetupCondition="mcpSetupCondition"
                         resourceObservation="resources.state.observations[props.serviceId]"
                         resourcesLoading="resources.state.loading"
                         resourcesRefreshFailed="resources.state.refreshFailed"

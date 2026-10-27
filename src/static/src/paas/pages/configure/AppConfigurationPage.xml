@@ -290,6 +290,7 @@
                     t-if="state.oneTimeCredentials"
                     credentials="state.oneTimeCredentials"
                     mode="'provision'"
+                    setupHint="state.oneTimeSetupHint"
                     onClose.bind="onCredentialsClose"/>
             </t>
         </div>

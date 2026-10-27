@@ -108,11 +108,14 @@
                     <div class="o_woow_info_row">
                         <span class="o_woow_info_label">Status</span>
                         <!-- #1456：升級／重新部署期間舊版本仍在服務，原本一律顯示 OFFLINE，
-                             客戶以為服務壞了。判準見 connectionStatus。 -->
+                             客戶以為服務壞了。判準見 connectionStatus。
+                             2026-10-27（#2040 第五輪）：mcp-server 家族在頁首提示「要設定」時，這一格改寫
+                             與提示一致的字（mcpConnectionLabel，文案在 utils/mcp_setup_status.js）。 -->
                         <span t-att-class="'o_woow_info_value o_woow_connection_status ' + connectionStatus">
                             <span class="o_woow_status_indicator"/>
                             <t t-if="connectionStatus === 'online'">ONLINE</t>
                             <t t-elif="connectionStatus === 'updating'">UPDATING</t>
+                            <t t-elif="mcpConnectionLabel" t-esc="mcpConnectionLabel"/>
                             <t t-else="">OFFLINE</t>
                         </span>
                     </div>
