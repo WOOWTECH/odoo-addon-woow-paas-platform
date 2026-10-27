@@ -89,6 +89,7 @@ _IDENTITY_ANCHOR_FIELDS = (
 
 _ROUTE_IDENTITY_ANCHOR_FIELDS = (
     'access_publish_pending',  # server-owned publication state
+    'access_token_revoke_pending',
     'dns_record_id',    # WHICH CF DNS record this route reconciles/deletes
     'access_app_id',    # WHICH CF Access application this route configures
 )
@@ -2393,6 +2394,9 @@ class SecurityAccessRoute(models.Model):
     access_publish_pending = fields.Boolean(
         string='Access Publication Pending', default=False, readonly=True,
         help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
+    access_token_revoke_pending = fields.Boolean(
+        string='Access Token Revocation Pending', default=False, readonly=True,
+        help='Authorization changed for an existing Access app. Publication remains closed until a correlated denial receipt is recorded.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this route has been '
@@ -3059,7 +3063,16 @@ class SecurityAccessRoute(models.Model):
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,
             'existing_policy_ids': self._build_existing_policy_ids(),
+            'revoke_tokens': bool(self.access_app_id and self.access_token_revoke_pending),
         }
+
+    def _mark_access_token_revoke_pending(self):
+        existing = self.filtered('access_app_id')
+        if existing:
+            _internal_identity(existing).write({
+                'access_token_revoke_pending': True,
+                'access_publish_pending': True,
+            })
 
     def _sync_access_to_operator(self, release_control=None):
         """Push THIS route's full desired Access state to the operator
@@ -3109,7 +3122,7 @@ class SecurityAccessRoute(models.Model):
         # before attempting reconstruction. Lifecycle force callers parked the
         # full tunnel first and release it only after all routes succeed.
         if (self.is_protected and
-                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
+                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending or self.access_token_revoke_pending) and
                 not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)):
             sa._sync_routes_to_operator()
         recovering_pending = self.access_publish_pending
@@ -3180,8 +3193,14 @@ class SecurityAccessRoute(models.Model):
         # uses the private force sentinel and releases all routes only once every
         # Access update succeeded, so a later sibling failure stays fail-closed.
         defer_release = release_control is _DEFER_ACCESS_RELEASE
+        revoke_pending = bool(self.access_token_revoke_pending)
         _internal_identity(self).access_publish_pending = bool(
-            defer_release and needs_release)
+            revoke_pending or (defer_release and needs_release))
+        if revoke_pending:
+            # Cloudflare's 2xx/202 only accepts an asynchronous revoke.  It is
+            # deliberately not release authority; a correlated denial receipt
+            # from the Batch53 gate must clear this state in a later change.
+            return False
         if defer_release:
             return True
         if needs_release and not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC):

@@ -773,6 +773,38 @@ class TestSyncAccessApp:
         assert precs == [10, 30], \
             f"app policies must be precedence-sorted ascending: {precs}"
 
+    @pytest.mark.asyncio
+    async def test_existing_app_revoke_returns_acceptance_not_denial_proof(
+            self, cf_service):
+        cf_service._resolve_idp_ids = AsyncMock(return_value=([], []))
+        cf_service.create_reusable_policy = AsyncMock(return_value="pol-new")
+        cf_service.delete_reusable_policy = AsyncMock()
+        cf_service.revoke_access_app_tokens = AsyncMock(return_value="accepted")
+
+        class PutResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"success": True, "result": {"id": "app-owned"}}
+
+        with patch("httpx.AsyncClient.put",
+                   new=AsyncMock(return_value=PutResponse())):
+            result = await cf_service.sync_access_app(
+                canonical_name="owned", app_name="owned",
+                primary_hostname="owned.example.test",
+                protected_hostnames=["owned.example.test"],
+                session_duration="8h", login_idp_types=[],
+                policies=[{"name": "allow", "decision": "allow",
+                           "precedence": 1,
+                           "include": [{"rule_type": "everyone"}]}],
+                enabled=True, existing_app_id="app-owned",
+                existing_policy_ids=["pol-old"], revoke_tokens=True)
+
+        assert result["token_revocation"] == "accepted"
+        assert "denial" not in result
+        cf_service.revoke_access_app_tokens.assert_awaited_once_with("app-owned")
+
 
 class TestAccessPolicySpecValidation:
     """AccessPolicySpec model validators — defense in depth. Odoo enforces the

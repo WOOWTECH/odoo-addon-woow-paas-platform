@@ -1521,6 +1521,7 @@ class SecurityAccessAccessPolicy(models.Model):
                     # doomed id 由上面剛落的帳供給（`_build_existing_policy_ids`
                     # → `_pending_for` → `_pending_ids`）。這裡刻意**不帶任何
                     # context**：#783。
+                    anchor._mark_access_token_revoke_pending()
                     anchor._sync_access_to_operator()
         return result
 

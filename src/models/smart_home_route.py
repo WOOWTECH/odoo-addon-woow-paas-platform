@@ -78,6 +78,7 @@ _ACCESS_REVISION_MODEL = 'woow_paas_platform.smart_home_access_revision'
 # 的閘也不會再紅（見 `models/smart_home.py` 頂端同一段論證）。
 _SM_ROUTE_IDENTITY_ANCHOR_FIELDS = (
     'access_publish_pending',  # server-owned publication state
+    'access_token_revoke_pending',
     'access_app_id',    # WHICH CF Access application this route configures
 )
 
@@ -340,6 +341,8 @@ class SmartHomeRoute(models.Model):
     access_publish_pending = fields.Boolean(
         string='Access Publication Pending', default=False, readonly=True,
         help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
+    access_token_revoke_pending = fields.Boolean(
+        string='Access Token Revocation Pending', default=False, readonly=True)
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this route has been '
@@ -681,7 +684,16 @@ class SmartHomeRoute(models.Model):
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,
             'existing_policy_ids': self._build_existing_policy_ids(),
+            'revoke_tokens': bool(self.access_app_id and self.access_token_revoke_pending),
         }
+
+    def _mark_access_token_revoke_pending(self):
+        existing = self.filtered('access_app_id')
+        if existing:
+            _internal_sm_route_identity(existing).write({
+                'access_token_revoke_pending': True,
+                'access_publish_pending': True,
+            })
 
     def _access_app_name(self):
         """CF Access app 的顯示名：一台 SH 底下多條 route 不得撞名。"""
@@ -722,7 +734,7 @@ class SmartHomeRoute(models.Model):
         home = self.smart_home_id
         forced = _is_sm_sync_hatch_open(self.env, _CTX_SM_FORCE_ACCESS_SYNC)
         if (self.is_protected and
-                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
+                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending or self.access_token_revoke_pending) and
                 not forced):
             home._sync_access_ingress(park=True)
         needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
@@ -814,8 +826,11 @@ class SmartHomeRoute(models.Model):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         defer_release = release_control is _DEFER_ACCESS_RELEASE
+        revoke_pending = bool(self.access_token_revoke_pending)
         _internal_sm_route_identity(self).access_publish_pending = bool(
-            defer_release and needs_release)
+            revoke_pending or (defer_release and needs_release))
+        if revoke_pending:
+            return False
         if defer_release:
             return True
         if needs_release and not forced:

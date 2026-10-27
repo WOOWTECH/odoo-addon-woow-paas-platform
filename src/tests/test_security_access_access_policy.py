@@ -673,6 +673,9 @@ class TestRouteAccessSync(TransactionCase):
         self.assertIn('cf-b', payload['existing_policy_ids'])
         self.assertIn('cf-a', payload['existing_policy_ids'])
         self.assertEqual([p['name'] for p in payload['policies']], ['p1'])
+        self.assertTrue(payload['revoke_tokens'])
+        self.assertTrue(route.access_token_revoke_pending)
+        self.assertTrue(route.access_publish_pending)
 
     def test_unlink_all_policies_carries_every_cf_id(self):
         mc = self._mock()

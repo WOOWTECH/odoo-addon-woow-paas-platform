@@ -1738,6 +1738,7 @@ class CloudflareService:
         enabled: bool = True,
         existing_app_id: Optional[str] = None,
         existing_policy_ids: Optional[List[str]] = None,
+        revoke_tokens: bool = False,
     ) -> dict:
         """Declaratively reconcile one SA's Cloudflare Access config.
 
@@ -1766,7 +1767,8 @@ class CloudflareService:
                     logger.warning("Access teardown: policy %s delete failed "
                                    "(left as orphan): %s", pid, e)
             return {"app_id": None, "policy_ids": [], "allowed_idps": [],
-                    "unresolved_idp_types": [], "orphaned_policy_ids": orphaned}
+                    "unresolved_idp_types": [], "orphaned_policy_ids": orphaned,
+                    "token_revocation": "not_required"}
 
         # Validate explicit login restrictions before any remote mutation.
         # A missing IdP or failed lookup must preserve the existing app and
@@ -1880,6 +1882,16 @@ class CloudflareService:
                 logger.warning("Access resync: old policy %s delete failed "
                                "(left as orphan): %s", pid, e)
 
+        token_revocation = "not_required"
+        token_revocation_error = None
+        if existing_app_id and revoke_tokens:
+            try:
+                token_revocation = await self.revoke_access_app_tokens(app_id)
+            except Exception as error:
+                token_revocation = "failed"
+                token_revocation_error = str(error)
+                logger.error("Access app %s token revocation failed: %s", app_id, error)
+
         return {
             "app_id": app_id,
             "policy_ids": [pid for pid, _ in new_policy_ids],
@@ -1892,7 +1904,23 @@ class CloudflareService:
             # Old reusable policies that could not be deleted after the app was
             # repointed — permanent CF orphans the caller should log/alert on.
             "orphaned_policy_ids": orphaned,
+            "token_revocation": token_revocation,
+            "token_revocation_error": token_revocation_error,
         }
+
+    async def revoke_access_app_tokens(self, app_id: str) -> str:
+        """Ask Cloudflare to revoke app tokens; 2xx is acceptance, not denial proof."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self._access_base}/apps/{app_id}/revoke_tokens",
+                headers=self._headers, timeout=30.0,
+            )
+        if response.status_code < 200 or response.status_code >= 300:
+            raise CloudflareException(
+                f"Failed to revoke access app tokens: {response.text}",
+                status_code=response.status_code,
+            )
+        return "accepted"
 
     @staticmethod
     def _build_access_rule(rule_type: str, rule_value: str) -> List[dict]:

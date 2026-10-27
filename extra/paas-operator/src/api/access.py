@@ -72,6 +72,7 @@ async def sync_access(request: AccessSyncRequest):
             enabled=request.enabled,
             existing_app_id=getattr(request, "existing_app_id", None),
             existing_policy_ids=getattr(request, "existing_policy_ids", None),
+            revoke_tokens=request.revoke_tokens,
         )
     except CloudflareException as e:
         logger.error("Failed to sync access: %s", e.message)
