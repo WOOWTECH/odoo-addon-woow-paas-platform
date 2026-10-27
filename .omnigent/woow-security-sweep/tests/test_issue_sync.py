@@ -153,6 +153,51 @@ class SyncTest(unittest.TestCase):
         self.assertIn("sweep/false-positive", self.forge.label_names(1))
         self.assertEqual(self.sync(run)["closed"], [])
 
+    # ── carryover 判 resolved（#2053） ──
+
+    def mark_resolved(self, fp="fpA", code="file_removed"):
+        jg.append_jsonl(self.state / "shadow.jsonl", {
+            "type": "resolved", "id": "r-" + fp, "ts": jg.now_iso(), "repo": REPO, "fingerprint": fp,
+            "ref": self.decision_id(fp), "reason_code": code, "reason": "x.py 已不在 HEAD",
+            "head_sha": "b" * 40})
+
+    def test_resolved_closes_human_tracked_issue(self):
+        run = self.round([self.finding()], answers(conf=0.6))
+        jg.record_human(self.state, self.decision_id("fpA"), "true_positive", "track", None)
+        self.sync(run)
+        self.mark_resolved()
+        out = self.sync(run)
+        self.assertEqual([(c["number"], c["reason"]) for c in out["closed"]], [(1, "file_removed")])
+        self.assertEqual(self.forge.issues[0]["state"], "closed")
+        comment = [c for c in self.forge.calls if c[0] == "comment"][-1][2]
+        self.assertIn("bbbbbbbbbbbb", comment)
+        self.assertIn("file_removed", comment)
+        self.assertNotIn("x.py", comment)  # 不放 reason 原文
+        self.assertIn("sweep/human", self.forge.label_names(1))  # 來源 label 不改
+        self.assertEqual(self.issue_records()[-1]["trigger"], "resolved")
+        self.assertEqual(self.sync(run)["closed"], [])  # 冪等
+
+    def test_resolved_never_opens(self):
+        run = self.round([self.finding()], answers(conf=0.95))
+        jg.record_human(self.state, self.decision_id("fpA"), "true_positive", "track", None)
+        self.mark_resolved()
+        out = self.sync(run)
+        self.assertEqual((out["opened"], self.forge.issues), ([], []))
+
+    def test_resolved_dry_run_lists_without_writing(self):
+        run = self.round([self.finding()], answers(conf=0.95))
+        self.sync(run)
+        self.mark_resolved(code="not_redetected")
+        self.forge.calls.clear()
+        before = (self.state / "shadow.jsonl").read_text()
+        out = self.sync(run, dry_run=True)
+        self.assertEqual([c["reason"] for c in out["closed"]], ["not_redetected"])
+        self.assertEqual((self.forge.calls, self.forge.issues[0]["state"]), ([], "open"))
+        self.assertEqual((self.state / "shadow.jsonl").read_text(), before)
+
+    def test_resolved_comment_rejects_bad_head(self):
+        self.assertIn("head `?`", iss.resolved_comment({"reason_code": "file_removed", "head_sha": "`; rm"}))
+
     def test_accept_risk_closes_and_never_opens(self):
         run = self.round([self.finding()], answers(conf=0.6))
         jg.record_human(self.state, self.decision_id("fpA"), "true_positive", "accept_risk", None)

@@ -43,12 +43,16 @@ baseline。不要再問，報告列在「已決未進 baseline」。
 
 ## 跨輪未決：carryover（每個 target 在 triage 之後都要跑）
 
-`JG carryover --run-dir <本輪目錄>/<repo 名>` ⇒ 寫 `carryover.jsonl`，stdout 是 `{"carried": N, "resolved": M}`。
+`JG carryover --run-dir <本輪目錄>/<repo 名>` ⇒ 寫 `carryover.jsonl` 與 `resolved.jsonl`，stdout 是
+`{"carried": N, "resolved": M}`。
 
 - 帶進來的是：同 repo、前幾輪 Jev 判過、**人還沒決定**、本輪沒再偵測到也沒被判 resolved 的 finding。
   每行有 `decision_id`（記人的決定時用這個 id）、`finding`、`proposed`、`first_seen`、`seen_runs`。
-- `resolved`：檔案本輪有掃到、該工具本輪正常，卻沒再偵測到 ⇒ 已寫入 shadow log，之後不再帶。
-- 工具失敗、deep review 沒跑 ⇒ 不判 resolved，照樣帶（寧可多問）。
+- `resolved`（寫入 shadow log，之後不再帶；本輪新判的另列在 `resolved.jsonl`，每行有 `reason_code`）：
+  - `file_removed`：finding 的檔案已不在本輪 HEAD。**不看工具狀態，人已決定過的也照判**，讓 issue_sync 關單。
+    gitleaks 例外：秘密值仍留在 git 歷史，要人處理輪替，不因刪檔結案。
+  - `not_redetected`：檔案本輪有掃到、該工具本輪正常，卻沒再偵測到（只判人還沒決定的）。
+- 檔案還在但工具失敗、deep review 沒跑 ⇒ 不判 resolved，照樣帶（寧可多問）。
 - 人在 Inbox 回答 carryover 項目：`JG human --id <decision_id> ...`，與本輪項目相同。
 
 ## 閘門 C：ready
