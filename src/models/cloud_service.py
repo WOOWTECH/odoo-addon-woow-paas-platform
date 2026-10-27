@@ -10288,6 +10288,23 @@ class CloudService(models.Model):
                 'access_token_revoke_accepted_at': False,
             })
 
+    def _access_keep_parked_marker(self):
+        """After a rolled-back revoke-driven sync: keep a durable closure marker.
+
+        The revoke-driven sync parks the origin before the provider call, and a
+        parked edge cannot be rolled back with the transaction.  When the
+        deletion is rolled back (the documented contract) the origin must still
+        be re-opened, so only ``access_publish_pending`` is kept (no revocation:
+        nothing was deleted); the resync cron re-confirms Access and re-opens it.
+        """
+        closed = self.filtered(
+            lambda route: route.is_protected and route.access_app_id
+            and not route.access_publish_pending)
+        if closed:
+            _internal_cs_access_identity(closed).access_publish_pending = True
+            schedule_access_resync(
+                self.env, fields.Datetime.now() + timedelta(seconds=120))
+
     def _access_revoke_gate(self, result):
         """Settle this sync's view of the token-revocation hold.
 
@@ -10418,25 +10435,8 @@ class CloudService(models.Model):
                                   self.access_token_revoke_pending):
             parked_for_access = self._park_access_origin(client)
         payload = self._build_access_payload()
-        try:
-            result = client.sync_access_app(payload)
-            require_access_sync_receipt(result, payload)
-        except Exception as error:
-            from ..services.paas_operator import PaaSOperatorError
-            if (not self.access_token_revoke_pending
-                    or not isinstance(error, (
-                        PaaSOperatorError, AccessProtectionError,
-                        AccessPublicationError))):
-                raise
-            # The origin was closed on purpose and the revocation is saved.
-            # Raising would roll the markers back while the origin stays
-            # parked, leaving a closed origin with no record to recover.
-            _internal_cs_access_identity(self).access_publish_pending = True
-            _logger.error(
-                '[CLOUD_SVC] Access sync failed while a token revocation is '
-                'open service=%s: %s; the origin stays closed and the resync '
-                'cron retries', self.id, error)
-            return False
+        result = client.sync_access_app(payload)
+        require_access_sync_receipt(result, payload)
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(
                 "Access protection was not established. The origin remains "

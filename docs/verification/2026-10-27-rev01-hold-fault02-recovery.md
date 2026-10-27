@@ -59,9 +59,12 @@ claim.
 6. A second policy removal starts a new revocation generation and restarts the
    hold.
 7. If the revoke-driven sync itself fails (provider error, invalid receipt), the
-   markers are kept and the sync returns without raising. Raising would roll the
-   markers back while the edge stays parked, leaving a closed origin with no
-   record for the cron.
+   deletion is rolled back as before (the policy stays, nothing is revoked) - but
+   the origin was parked *before* the failing call and a parked edge cannot roll
+   back. The policy `unlink` therefore keeps a durable closure marker
+   (`access_publish_pending` only, after the rollback) and wakes the resync cron,
+   which re-confirms Access and re-opens the origin. Callers that catch the error
+   (the controllers) commit the marker.
 8. If the Access app is gone (protection turned off or lost) there is nothing to
    revoke: the origin is re-published and the markers cleared.
 9. A refused revocation (`token_revocation == "failed"`) and an Operator that does
@@ -105,11 +108,14 @@ again once.
   wrapping at the end, so every Security Access is probed.
 - A *new* closure wakes the resync cron about two minutes later; a connector
   that stays down does not create a loop.
-- Recovery is the existing exact Access sync: the Security Access resync leg also
-  scans `access_publish_pending` rows (not those inside a revocation hold).
-  Release still requires a fresh status read with a live connector, so recovery
-  never skips the Access confirmation. Smart Home and Cloud Service keep their
-  manual retry semantics for plain pending.
+- Recovery is the existing exact Access sync: every resync leg (Security Access,
+  Smart Home, Cloud Service) also scans `access_publish_pending` rows, but not
+  those inside a revocation hold. A sync that parks before its provider call can
+  leave a parked edge behind a rolled-back transaction on any of the three, so
+  each needs the automatic exit. Release still requires a fresh status read with
+  a live connector (Security Access) or the halted-state checks (Smart Home,
+  Cloud Service), so recovery never skips the Access confirmation. Rows left
+  pending by earlier failed publications are retried too, which is intended.
 - Resync budget: a sync that spent operator calls but did not release (a hold, no
   live connector, a fence awaiting review) now counts against the leg's budget
   (`pending=` in the run log); only the liveness gate means "no call was made".
@@ -147,8 +153,8 @@ invalidate anything on the missing epoch fields.
 through the AC1011 fake operator: close, hold, no re-revoke, re-confirm before
 re-publication, failed release keeps markers, tenant edit cannot release,
 restart of the hold, unacknowledged and refused revocations, teardown during the
-hold, provider failure at removal, cron scan shape, SA recovery through the cron,
-SH/CS plain pending left alone), `test_fault02_durable_invalidation` (per-instance
+hold, provider failure at removal keeps the closure and re-opens through the cron,
+cron scan shape, recovery of plain pending through the cron on every leg), `test_fault02_durable_invalidation` (per-instance
 epoch rules including two alternating replicas, old Operator, workspace admin
 without the system group, mark-only probe, rotation, cron wiring),
 `test_race06_fence_lifecycle` (refused create is retryable, uncertain create stays

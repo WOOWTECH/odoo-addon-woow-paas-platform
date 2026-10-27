@@ -288,25 +288,30 @@ class TestRevokeHoldRev01(PendingFixture, TransactionCase):
         self.assertFalse(anchor.access_app_id)
         self.assert_reopened(anchor)
 
-    def provider_failure_at_removal_keeps_the_markers(self, kind):
-        """The origin is parked before the provider call.  If that call fails, the
-        markers must survive (no rollback leaving a parked edge with no record)."""
+    def provider_failure_at_removal_reopens_through_the_cron(self, kind):
+        """The origin is parked before the provider call.  If the call fails the
+        deletion rolls back (the policy stays) - but the parked edge cannot roll
+        back, so a durable closure marker must remain for the cron to re-open it."""
         anchor, policies = self.protected_with_two_policies(kind)
 
         def provider_down(payload):
             raise PaaSOperatorAPIError('provider down', status_code=502)
         self.client.sync_access_app = provider_down
-        policies[1].unlink()  # must not raise
-        self.assertFalse(policies[1].exists())
-        self.assert_closed_in_hold(anchor)
-        self.assertFalse(anchor.access_token_revoke_accepted_at)
-        # The provider is back: the cron sends the revocation and starts the hold.
+        with self.assertRaises(PaaSOperatorAPIError):
+            policies[1].unlink()
+        self.assertTrue(policies[1].exists())
+        anchor.invalidate_recordset()
+        self.assertFalse(self.client.origin)  # parked before the failing call
+        self.assertTrue(anchor.access_publish_pending)
+        self.assertFalse(anchor.access_token_revoke_pending)  # nothing was deleted
+        # The provider is back: the cron re-confirms Access and re-opens it.
         self.client.sync_access_app = self.good_sync
         self.env['woow_paas_platform.access_resync_cron'
                  ]._cron_resync_access_protection()
         anchor.invalidate_recordset()
-        self.assertTrue(anchor.access_token_revoke_accepted_at)
-        self.assert_closed_in_hold(anchor)
+        self.assertFalse(anchor.access_publish_pending)
+        self.assertTrue(self.client.origin)
+        self.assertEqual(len(self.revocations()), 0)
 
     def test_sa_teardown_during_the_hold_releases_the_origin(self):
         self.teardown_during_the_hold_releases_the_origin('sa')
@@ -317,14 +322,14 @@ class TestRevokeHoldRev01(PendingFixture, TransactionCase):
     def test_cs_teardown_during_the_hold_releases_the_origin(self):
         self.teardown_during_the_hold_releases_the_origin('cs')
 
-    def test_sa_provider_failure_at_removal_keeps_the_markers(self):
-        self.provider_failure_at_removal_keeps_the_markers('sa')
+    def test_sa_provider_failure_at_removal_reopens_through_the_cron(self):
+        self.provider_failure_at_removal_reopens_through_the_cron('sa')
 
-    def test_sh_provider_failure_at_removal_keeps_the_markers(self):
-        self.provider_failure_at_removal_keeps_the_markers('sh')
+    def test_sh_provider_failure_at_removal_reopens_through_the_cron(self):
+        self.provider_failure_at_removal_reopens_through_the_cron('sh')
 
-    def test_cs_provider_failure_at_removal_keeps_the_markers(self):
-        self.provider_failure_at_removal_keeps_the_markers('cs')
+    def test_cs_provider_failure_at_removal_reopens_through_the_cron(self):
+        self.provider_failure_at_removal_reopens_through_the_cron('cs')
 
     def test_a_refused_revocation_is_logged_with_its_reason(self):
         anchor, policies = self.protected_with_two_policies('sa')
@@ -429,15 +434,16 @@ class TestRevokeHoldRev01(PendingFixture, TransactionCase):
         self.assertIn(anchor, Route.search(
             cron._resync_domain('woow_paas_platform.security_access_route')))
 
-    def test_only_the_sa_leg_recovers_plain_pending(self):
+    def test_every_leg_recovers_plain_pending_but_not_rows_in_a_hold(self):
         cron = self.env['woow_paas_platform.access_resync_cron']
-        sa_domain = repr(cron._resync_domain(
-            'woow_paas_platform.security_access_route'))
-        for model in ('woow_paas_platform.smart_home_route',
+        for model in ('woow_paas_platform.security_access_route',
+                      'woow_paas_platform.smart_home_route',
                       'woow_paas_platform.cloud_service'):
-            self.assertNotIn('access_publish_pending', repr(
-                cron._resync_domain(model)), model)
-        self.assertIn('access_publish_pending', sa_domain)
+            domain = repr(cron._resync_domain(model))
+            self.assertIn('access_publish_pending', domain, model)
+            # A row inside a revocation hold is also pending; its own clause
+            # decides when it is due, so the plain clause excludes it.
+            self.assertIn("('access_token_revoke_pending', '=', False)", domain, model)
 
 
 @tagged('post_install', '-at_install')
@@ -504,20 +510,22 @@ class TestFault02CronRecovery(PendingFixture, TransactionCase):
         self.assertFalse(route.access_publish_pending)
         self.assertTrue(self.client.origin)
 
-    def plain_pending_is_left_to_manual_retry(self, kind):
+    def plain_pending_recovers_through_the_cron(self, kind):
         anchor = self.anchor(kind)
         self.client.origin = True
         self.assertTrue(anchor.write({'is_protected': True}))
         {'sh': _internal_sm_route_identity, 'cs': _internal_cs_access_identity
          }[kind](anchor).access_publish_pending = True
+        self.client.origin = False  # parked while pending
         self.client.events.clear()
         self.cron._cron_resync_access_protection()
         anchor.invalidate_recordset()
-        self.assertTrue(anchor.access_publish_pending)
-        self.assertEqual(self.names(), [])
+        self.assertFalse(anchor.access_publish_pending)
+        self.assertTrue(self.client.origin)
+        self.assertIn('access', self.names())
 
-    def test_sh_plain_pending_keeps_manual_retry_semantics(self):
-        self.plain_pending_is_left_to_manual_retry('sh')
+    def test_sh_plain_pending_recovers_through_the_cron(self):
+        self.plain_pending_recovers_through_the_cron('sh')
 
-    def test_cs_plain_pending_keeps_manual_retry_semantics(self):
-        self.plain_pending_is_left_to_manual_retry('cs')
+    def test_cs_plain_pending_recovers_through_the_cron(self):
+        self.plain_pending_recovers_through_the_cron('cs')

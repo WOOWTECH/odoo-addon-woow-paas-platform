@@ -68,13 +68,13 @@ _RESYNC_LEGS = (
 #: * `access_token_revoke_pending`（REV-01）：三腿都掃，但只掃**該動作的列**——
 #:   還沒收到供應商受理（要重送撤銷），或受理後的保持時間已到（要重新確認 Access
 #:   並重新發布）。保持時間內的列掃了也只會白打一輪外呼，所以不掃。
-#: * `access_publish_pending`：**只有 Security Access 腿掃**（FAULT-02）。只有那一腿
-#:   會被 `_cron_probe_security_access_faults` 關閉，也只有它需要「連接器恢復後自動
-#:   重新確認 Access 才解除」；SH／CS 的單純 pending 維持既有的人工重試語意。
+#: * `access_publish_pending`（FAULT-02、撤銷同步失敗後的停機標記、發布失敗）：
+#:   三腿都掃，但**不含**仍在撤銷保持中的列（那一格由上一條決定何時到期）。
+#:   三腿的入口都可能被「先停機、後呼叫供應商」的同步停在 503，交易回捲帶不走邊緣
+#:   的 503，所以每一腿都需要「重新確認 Access 後自動解除」的出口。
 #:
 #: 不加「卡多久算不正常」的時間條件，也不加終態淘汰（終態定義未查證；那只改
 #: domain、不受 `noupdate` 綁，有資料再說）。
-_RESYNC_PENDING_LEGS = ('woow_paas_platform.security_access_route',)
 
 #: Where the fault probe resumes: the last Security Access id handled by the
 #: previous run ('0' = start over).
@@ -142,9 +142,9 @@ class AccessResyncCron(models.AbstractModel):
     @api.model
     def _cron_resync_access_protection(self, limit=200, scan_batch=1000,
                                        max_scan=20000):
-        """掃三張表上該收斂的列（`access_protection_lost`、待收尾的撤銷；SA 腿再加
-        FAULT-02 的 `access_publish_pending`，見 `_RESYNC_PENDING_LEGS`），逐列重推
-        Access 狀態。
+        """掃三張表上該收斂的列（`access_protection_lost`、待收尾的撤銷、
+        `access_publish_pending`，見 `_RESYNC_LEGS` 上方的說明），逐列重推 Access
+        狀態。
 
         回傳這一輪**真的推動**了幾列（被 gate 擋掉與推失敗的不算）。
 
@@ -241,7 +241,7 @@ class AccessResyncCron(models.AbstractModel):
 
     @api.model
     def _resync_domain(self, model_name):
-        """這一腿「有自動收斂出口該被推」的列（見 `_RESYNC_PENDING_LEGS` 的說明）。"""
+        """這一腿「有自動收斂出口該被推」的列（見 `_RESYNC_LEGS` 上方的說明）。"""
         cutoff = fields.Datetime.now() - timedelta(
             seconds=access_revoke_hold_seconds(self.env))
         legs = [
@@ -251,11 +251,10 @@ class AccessResyncCron(models.AbstractModel):
              '|', ('access_token_revoke_accepted_at', '=', False),
              ('access_token_revoke_accepted_at', '<=', cutoff)],
         ]
-        if model_name in _RESYNC_PENDING_LEGS:
-            # Plain pending only: a row inside a revocation hold is also pending,
-            # but its own clause above decides when it is due.
-            legs.append([('access_publish_pending', '=', True),
-                         ('access_token_revoke_pending', '=', False)])
+        # Plain pending only: a row inside a revocation hold is also pending, but
+        # its own clause above decides when it is due.
+        legs.append([('access_publish_pending', '=', True),
+                     ('access_token_revoke_pending', '=', False)])
         return expression.OR(legs)
 
     @api.model

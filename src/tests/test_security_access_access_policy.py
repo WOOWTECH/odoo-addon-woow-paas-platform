@@ -743,6 +743,12 @@ class TestRouteAccessSync(TransactionCase):
             with self.assertRaises(PaaSOperatorError):
                 pol.unlink()
         self.assertTrue(self.Policy.browse(pol_id).exists())
+        # The revoke-driven sync parks the origin before the failing call and a
+        # parked edge cannot roll back: the closure must stay recorded (the cron
+        # re-opens it), while nothing was deleted so no revocation is pending.
+        route.invalidate_recordset()
+        self.assertTrue(route.access_publish_pending)
+        self.assertFalse(route.access_token_revoke_pending)
 
     def test_writeback_maps_cf_policy_id_multi_policy(self):
         """多 policy writeback 順序：zip(route.access_policy_ids.sorted, returned)
