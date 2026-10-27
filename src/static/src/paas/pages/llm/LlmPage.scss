@@ -4,38 +4,58 @@
 // =============================================================================
 
 .o_woow_llm_page {
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 24px 32px;
+  min-width: 0;
 
-  // 手機上 .o_woow_content 已有 1rem 內距（同 settings 頁的 #1310 處理）。
-  @media (max-width: $woow-bp-md) {
-    padding-left: 0;
-    padding-right: 0;
-    padding-top: 0.5rem;
-  }
+  // 版面內距由全域 .o_woow_content 統一提供，避免桌面重複縮窄內容。
 
   &__header {
-    margin-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
 
     h1 {
       font-family: $woow-font-display;
-      font-size: 28px;
-      font-weight: 600;
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
       color: $woow-text-primary;
-      margin: 0 0 8px;
+      margin: 0 0 0.5rem;
     }
 
     p {
       color: $woow-text-secondary;
+      font-size: 0.875rem;
+      line-height: 1.5;
       margin: 0;
+      max-width: 44rem;
     }
 
     @media (max-width: $woow-bp-md) {
+      margin-bottom: 1rem;
+
       h1 {
-        font-size: 22px;
+        font-size: 1.5rem;
       }
     }
+  }
+
+  &__tabs {
+    scroll-padding-inline: 0.5rem;
+
+    .o_woow_tab {
+      min-height: 44px;
+      transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+
+      &:focus-visible {
+        outline: 2px solid rgba($woow-primary, 0.45);
+        outline-offset: -2px;
+      }
+    }
+  }
+
+  &__content {
+    min-width: 0;
   }
 
   &__soon {
@@ -89,7 +109,7 @@
 .o_woow_llm_overview {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1.5rem;
 
   .o_woow_error_message {
     margin-top: 0;
@@ -318,7 +338,7 @@
 .o_woow_llm_cards {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 1.5rem;
 
   @media (max-width: $woow-bp-lg) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -330,24 +350,78 @@
 }
 
 .o_woow_llm_usage_overview {
-  margin-top: 20px;
-  padding: 20px;
-  background: #fff;
-  border-radius: 20px;
-  box-shadow: 0 2px 8px rgba(33, 33, 33, .06);
+  margin-top: 0;
+  padding: 1.5rem !important;
 
-  &__heading, &__metrics { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-  &__heading { margin-bottom: 18px; }
-  &__heading h3 { margin: 0; }
-  &__heading > span, &__metrics > div > span { color: #646262; }
-  &__metrics { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
-  &__metrics > div { display: grid; gap: 4px; min-width: 110px; }
-  &__metrics strong { font-family: $woow-font-display; font-size: 20px; }
+  &__heading,
+  &__metrics {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  &__heading {
+    margin-bottom: 1.25rem;
+  }
+
+  &__heading h3 {
+    margin: 0;
+    color: $woow-text-primary;
+    font-family: $woow-font-display;
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  &__heading > span,
+  &__metrics > div > span {
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+  }
+
+  &__metrics {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+  }
+
+  &__metrics > div {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 8rem;
+  }
+
+  &__metrics strong {
+    color: $woow-text-primary;
+    font-family: $woow-font-display;
+    font-size: 1.75rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+  }
+
   @media (max-width: $woow-bp-sm) {
-    padding: 16px;
-    &__heading { align-items: flex-start; flex-direction: column; gap: 4px; }
-    &__metrics { justify-content: space-between; gap: 8px; }
-    &__metrics > div { min-width: 0; }
+    padding: 1rem !important;
+
+    &__heading {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    &__metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    &__metrics > div {
+      min-width: 0;
+    }
+
+    &__metrics strong {
+      font-size: 1.375rem;
+    }
   }
 }
 
@@ -355,7 +429,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 1.25rem !important;
+  padding: 1.5rem !important;
   min-width: 0;
 
   &--wide {
@@ -377,8 +451,10 @@
 
   &__value {
     font-family: $woow-font-display;
-    font-size: 1.5rem;
+    font-size: 2rem;
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
     color: $woow-text-primary;
     overflow-wrap: anywhere;
   }
@@ -405,7 +481,7 @@
 // ----------------------------------------------------------------------------- 區塊與清單
 
 .o_woow_llm_section {
-  padding: 1.25rem 1.5rem !important;
+  padding: 1.5rem !important;
 
   @media (max-width: $woow-bp-sm) {
     padding: 1rem !important;
@@ -416,11 +492,12 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 1rem;
 
     h3 {
       margin: 0;
-      font-size: 1rem;
+      font-family: $woow-font-display;
+      font-size: 1.125rem;
       font-weight: 600;
       color: $woow-text-primary;
 
@@ -629,10 +706,10 @@
   display: flex;
   gap: 16px;
   min-width: 0;
-  margin-bottom: 24px;
-  padding: 16px;
+  margin-bottom: 1.5rem;
+  padding: 1.5rem;
   border: 1px solid $woow-border-light;
-  border-radius: 20px;
+  border-radius: $woow-radius-lg;
   background: $woow-card-light;
   color: $woow-text-primary;
   font: 16px/1.6 $woow-font-body;
@@ -674,5 +751,16 @@
     &__icon { flex-basis: auto; width: 40px; }
     &__rate { flex-direction: column; gap: 2px; }
     &__rate_value { justify-content: flex-start; text-align: left; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .o_woow_llm_progress__bar span {
+    left: 30%;
+    animation: none;
+  }
+
+  .o_woow_llm_page__tabs .o_woow_tab {
+    transition: none;
   }
 }

@@ -20,7 +20,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
-from ..services import backup_health, dns_probe, rollback_config
+from ..services import backup_health, dns_probe, mcp_setup_status, rollback_config
 from ..services.chart_version import reported_helm_revision
 from ..services.deployment_target import resolve_deployment_target
 from ..services.tenant_secret import has_secret_refs, secret_refs, split_tenant_secret
@@ -5764,6 +5764,40 @@ class CloudService(models.Model):
         if not (template.has_admin_gui and template.admin_password_carrier == 'config_json'):
             return ''
         return self._public_base_url()
+
+    def _chart_has_mcp_setup_status(self):
+        """本服務的管理頁 ``/healthz`` 有沒有可以回讀給租戶看的 MCP 設定狀態（2026-10-27）。
+
+        mcp-server 家族的新開服務在管理頁存好連線之前，MCP 一律回 503，平台 state 卻是 running
+        （第三輪 staging 實測 Nextcloud）。管理頁的 ``/healthz`` 會回 ``mcp``＝running／
+        not_configured／not_running（``services/mcp_setup_status.py``），服務頁據此提示「還沒設定連線、
+        要去哪裡設定」。
+
+        判準就是 ``_admin_page_public_url()`` 非空（has_admin_gui＋config_json 載體＋有 subdomain）：
+        要查的正是那個網址底下的 ``/healthz``，兩者同源才不會「提示裡的管理頁網址」與「查的網址」分家；
+        不建 slug 名單（capability-gate-single-source-field）。端點 ``/mcp-status``、detail payload 的
+        ``has_mcp_setup_status`` 與前端提示都讀這一支。
+        """
+        self.ensure_one()
+        return bool(self._admin_page_public_url())
+
+    def _mcp_setup_status(self):
+        """服務頁「MCP 設定狀態」的即時查詢：回 ``(McpSetupStatus, admin_url)``。**純讀**，永不 raise。
+
+        端點 ``/mcp-status`` 的唯一入口（2026-10-27；第五輪起多回 ``backend``）。只有 running 且
+        ``_admin_page_public_url()`` 非空才查，其他一律 ``UNKNOWN``、不發請求。查詢對象由平台算出：
+        ``_admin_page_public_url()``（與提示裡的管理頁網址同一個值）＋平台的 ``paas_domain``
+        （``services/mcp_setup_status.healthz_url`` 要求網址落在它底下——縱深防禦）。``paas_domain``
+        與 ``_public_base_url`` 讀同一個 config_parameter、同一個預設值。
+        """
+        self.ensure_one()
+        admin_url = self._admin_page_public_url()
+        if self.state != 'running' or not admin_url:
+            return mcp_setup_status.UNKNOWN, admin_url
+        paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io',
+        )
+        return mcp_setup_status.probe(admin_url, paas_domain), admin_url
 
     def _chart_has_gateway(self):
         """本服務的 chart 有沒有對外 gateway ⇒ 該不該有 gateway API key。

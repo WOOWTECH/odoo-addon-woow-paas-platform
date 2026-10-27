@@ -12,7 +12,7 @@ import { PlanSelector } from "../../components/subscription/PlanSelector";
 import { PlanTotalBar } from "../../components/subscription/PlanTotalBar";
 import { pickDefaultPlan } from "../../components/subscription/plan_selector_utils";
 import { getCategoryLabel } from "../../components/marketplace/CategoryFilter";
-import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
+import { OneTimeCredentialsModal, buildOneTimeCredentials, oneTimeMcpSetupHint } from "../../components/modal/OneTimeCredentialsModal";
 import { formatTemplatePrice } from "../../utils/pricing_label";
 import { availabilityLabel, isPurchasable } from "../../utils/availability_label";
 import { cloudService } from "../../services/cloud_service";
@@ -64,6 +64,8 @@ export class AppConfigurationPage extends Component {
             // #530：一次性憑證由單一字串改成具名清單（Admin Password ＋ Gateway
             // API Key）。null＝不開視窗；非空陣列＝開。
             oneTimeCredentials: null,
+            // 2026-10-27（#2040 第五輪）：視窗裡「下一步」那一句（oneTimeMcpSetupHint）；""＝不顯示。
+            oneTimeSetupHint: "",
             createdServiceId: null,
         });
         // X-LC-002-3／X-LC-006-3：送出失敗時把使用者帶到錯誤（欄位或頁尾的後端錯誤橫幅）。
@@ -106,7 +108,7 @@ export class AppConfigurationPage extends Component {
             name: '', helmValues: {}, selectedAddonIds: [], showAdvanced: false,
             plans: [], selectedPlanId: undefined, plansError: null, errors: {},
             launching: false, launchError: null,
-            oneTimeCredentials: null, createdServiceId: null,
+            oneTimeCredentials: null, oneTimeSetupHint: "", createdServiceId: null,
         });
 
         try {
@@ -454,6 +456,8 @@ export class AppConfigurationPage extends Component {
                 const credentials = buildOneTimeCredentials(result.data);
                 if (credentials.length) {
                     this.state.oneTimeCredentials = credentials;
+                    // 2026-10-27（#2040 第五輪）：mcp-server 家族多一句「先到 Connection 存好連線」。
+                    this.state.oneTimeSetupHint = oneTimeMcpSetupHint(result.data);
                     this.state.createdServiceId = serviceId;
                 } else {
                     this.router.navigate(`workspace/${workspaceId}/services/${serviceId}`);
@@ -480,6 +484,7 @@ export class AppConfigurationPage extends Component {
     onCredentialsClose() {
         const serviceId = this.state.createdServiceId;
         this.state.oneTimeCredentials = null;
+        this.state.oneTimeSetupHint = "";
         this.state.createdServiceId = null;
         this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
     }

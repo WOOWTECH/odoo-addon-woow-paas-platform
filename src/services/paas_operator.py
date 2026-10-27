@@ -192,6 +192,7 @@ class PaaSOperatorClient:
         params: Optional[Dict[str, Any]] = None,
         timeout: Union[int, Tuple[int, int]] = DEFAULT_TIMEOUT,
         create_once: bool = False,
+        expected_status_codes: Tuple[int, ...] = (),
     ) -> Dict[str, Any]:
         """Make an HTTP request to the PaaS Operator API.
 
@@ -203,6 +204,10 @@ class PaaSOperatorClient:
             timeout: 秒數；scalar 同時套用 connect/read，tuple 為 (connect, read)。
                 requests 的 read timeout 是 inactivity 預算，不是整體 wall-clock 上限。
             create_once: Bare-create transport guard; no redirect replay, exact 201 only.
+            expected_status_codes: HTTP errors whose caller has an explicit
+                state-machine branch.  They still raise ``PaaSOperatorAPIError``
+                but do not emit a duplicate ERROR before the caller classifies
+                the outcome.
 
         Returns:
             Parsed JSON response
@@ -243,10 +248,16 @@ class PaaSOperatorClient:
             # Handle error responses
             if response.status_code >= 400:
                 error_detail = self._parse_error(response)
-                _logger.error(
-                    "PaaS Operator API error: %s %s -> %s: %s",
-                    method, endpoint, response.status_code, error_detail
-                )
+                if response.status_code in expected_status_codes:
+                    _logger.debug(
+                        "PaaS Operator expected API response: %s %s -> %s: %s",
+                        method, endpoint, response.status_code, error_detail,
+                    )
+                else:
+                    _logger.error(
+                        "PaaS Operator API error: %s %s -> %s: %s",
+                        method, endpoint, response.status_code, error_detail,
+                    )
                 raise PaaSOperatorAPIError(
                     message=f"API error: {error_detail}",
                     status_code=response.status_code,
@@ -1345,6 +1356,10 @@ class PaaSOperatorClient:
             'GET',
             f'/api/releases/{namespace}/{release_name}/status',
             params=params or None,
+            # Missing is an expected result for delete/status races and for the
+            # deleting state machine.  The caller still receives the typed 404
+            # and decides whether to warn, retry or unlink.
+            expected_status_codes=(404,),
         )
 
 

@@ -239,8 +239,11 @@ test("guide includes approved limits, FAQ, billing note, AGPL source, and mobile
   assert.match(docs, /AGPL-3\.0/);
   assert.doesNotMatch(docsXml, /Claude\s+Code/i);
   assert.match(scss, /overflow-x:\s*auto/);
-  assert.match(scss, /@media\s*\(max-width:\s*400px\)/);
+  assert.match(scss, /@media\s*\(max-width:\s*\$woow-bp-sm\)/);
   assert.match(docsXml, /class="o_woow_llm_docs__tabs"/);
+  assert.match(docsXml, /<section class="o_woow_llm_docs"[^>]*aria-labelledby=/);
+  assert.doesNotMatch(docsXml, /<main\b|<h1\b/);
+  assert.match(docsXml, /<WoowButton\b[^>]*ariaLabel="copyBaseLabel"/);
 });
 
 test("API guide PO entries are marked for Odoo JavaScript translation", () => {

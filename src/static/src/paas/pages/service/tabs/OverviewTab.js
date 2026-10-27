@@ -21,6 +21,7 @@ import {
     nodeStateLabel,
     nodeStateTone,
 } from "../../../utils/vpn_node_status";
+import { mcpConnectionStatusFor, mcpConnectionStatusLabel } from "../../../utils/mcp_setup_status";
 
 /**
  * OverviewTab Component
@@ -43,6 +44,9 @@ export class OverviewTab extends Component {
         resourcesRefreshFailed: { type: Boolean, optional: true },
         resourcesNow: { type: Number, optional: true },
         workspaceId: { type: [Number, String], optional: true },
+        // 2026-10-27（#2040 第五輪）：服務頁算好的 MCP 情況（not_configured／not_running／backend_missing，
+        // 沒有時 ""）。輪詢在 ServiceDetailPage，頁首提示與這裡共用同一份結果。
+        mcpSetupCondition: { type: String, optional: true },
     };
 
     setup() {
@@ -81,6 +85,10 @@ export class OverviewTab extends Component {
      * 探測 HTTP，應用程式自己重啟（例 HA 內按重新啟動）時這裡仍顯示 online（#1456 的
      * 未修部分，需 chart httpGet probe＋平台對 running 服務的低頻觀測）。#1647 的低頻觀測
      * 只涵蓋「Pod 一顆都沒有」，Pod 在但應用程式不通仍然看不出來。
+     *
+     * 2026-10-27（#2040 第五輪）：mcp-server 家族的「待設定／MCP 未運作／後端未設定」不在這裡加——
+     * 這一支維持平台觀測的三種（#1647／INFRA-FIX-005 的守線綁在這裡），畫面上那一格改讀
+     * `connectionDisplayStatus`（只在這裡是 online 時才換成 MCP 的說法）。
      */
     get connectionStatus() {
         const { state, last_upgraded_at: lastUpgradedAt } = this.props.service;
@@ -95,6 +103,32 @@ export class OverviewTab extends Component {
         if (state === "upgrading") return "updating";
         if (["deploying", "initializing"].includes(state) && lastUpgradedAt) return "updating";
         return "offline";
+    }
+
+    /**
+     * 2026-10-27（#2040 第五輪 D2-B）：Connection Info「狀態」那一格實際顯示的值（模板的 class 與文字都讀它）。
+     *
+     * mcp-server 家族在服務頁即時問了 `/healthz`（頁首提示）。平台觀測（`connectionStatus`）是 online、
+     * 但提示在說「MCP 尚未設定連線／MCP 服務程式沒有在運作／後端連線還沒設定」時，這一格不能同時寫 ONLINE，
+     * 改成與提示同一種說法（needs_setup／mcp_not_running／backend_missing）。updating、offline（含
+     * workload_fault、VPN 節點）照 `connectionStatus`；MCP 回 running、讀不到（unknown）、舊映像時維持 online。
+     */
+    get connectionDisplayStatus() {
+        const base = this.connectionStatus;
+        if (base !== "online") {
+            return base;
+        }
+        return this.mcpSetupConnectionStatus || base;
+    }
+
+    /** MCP 情況在 Connection Info 的值（needs_setup／mcp_not_running／backend_missing，沒有時 ""）。 */
+    get mcpSetupConnectionStatus() {
+        return mcpConnectionStatusFor(this.props.mcpSetupCondition);
+    }
+
+    /** 顯示值是 MCP 那三種時的文字（「待設定」「MCP 未運作」「後端未設定」）；其他回 ""，模板沿用原本的字。 */
+    get mcpConnectionLabel() {
+        return mcpConnectionStatusLabel(this.connectionDisplayStatus);
     }
 
     // ---- INFRA-FIX-005：VPN 節點狀態卡 ------------------------------------------------

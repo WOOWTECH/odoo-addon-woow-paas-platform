@@ -896,6 +896,46 @@ entrypoint 略過的項目只印在容器 stderr，Service 不存在的項目不
 - **範圍外**：「填新 key 後 tailscaled 進入 crash loop」（INFRA-TS-005-1）與「升級中鎖住所有動作」（-2）是 chart／entrypoint 與 operator rollout 逾時的問題，
   不在這裡。
 
+#### MCP 尚未設定連線的提示（2026-10-27）
+
+pod 在、管理頁在、`/healthz` 也是 200 ≠ MCP 在提供工具：新開的 mcp-server 家族服務（第三輪 staging 實測 Nextcloud）在管理頁 → Connection
+存好之前，`initialize`／`tools/list` 一律 503（子行程缺連線設定 exit 2），平台 `state` 卻是 `running`、/woow 顯示「運作中」。
+
+- **狀態來源**：woow-mcp-server（mcp-admin-core）的 `/healthz` 多回 `mcp`＝`running`｜`not_configured`｜`not_running`（字串、封閉集合；
+  舊映像沒有這個欄位，只回 `{"status":"ok"}`）。第五輪起宣告了後端連線欄位的產品（odoo、litellm、hermes、n8n 等，以 woow-mcp-server
+  的 `LaunchPolicy.backend_connection` 為準）另回 `backend`＝`configured`｜`missing`（沒有後端連線也起得來、列得出工具，`mcp` 是
+  `running`，但用到後端的工具會失敗；其他產品與舊映像沒有這個欄位）。兩個欄位各算各的：`mcp` 不是 `running` 時以 `mcp` 的提示為主。
+- **能力 gate**：`CloudService._chart_has_mcp_setup_status()`＝`_admin_page_public_url()` 非空（has_admin_gui＋`admin_password_carrier=config_json`
+  ＋有 subdomain，恰好是 mcp-server chart 家族）→ service detail payload 與開通回應的 `has_mcp_setup_status` → 服務頁／一次性憑證視窗。
+  前端不得用 slug 判斷。
+- **不進帳本**：沒有欄位、沒有 cron、不碰 `state`（服務是正常的，只是要設定；徽章照樣 Running）。租戶打開服務頁（服務 running）時，服務頁
+  （一頁一個 poller，頁首提示與 Overview 的 Connection Info 共用）每 30 秒（頁面可見才輪詢；提示顯示中改為每 10 秒；切回分頁、或提示顯示中
+  視窗重新取得焦點時立刻再問）`POST /api/workspaces/<ws>/services/<id>/mcp-status`；後端（`CloudService._mcp_setup_status`）對**該服務自己的對外根位址**
+  （`_admin_page_public_url()`，平台算出、不是使用者輸入；呼叫端多送任何參數整個拒絕）`GET /healthz`：自訂 User-Agent、不跟隨轉址、
+  body 最多 4 KiB、只解析 `mcp` 與 `backend`。網址形狀只收 `https://<一個 label>.<paas_domain>`（縱深防禦）。授權與 detail 同一條
+  （工作區成員皆可讀）；回應只有 `state`、`backend`、`admin_url`。
+- **時限**：呼叫端最多等 3 秒（含排隊）；探測本身連上之後由看門狗在 3 秒總時限到時切斷 socket，慢速逐 byte 的 header／body 拖不住執行緒
+  （`http.client`，TLS 照常驗憑證；涵蓋不到的只有 DNS）。同一網址同時只探測一次（後到的請求等同一個），探測完成時結果照樣寫進快取。
+- **降級**：不是 running、讀不到、逾時、轉址（例：開了 Cloudflare Access）、舊映像沒有欄位，一律回 `state: unknown`（正常降級，不顯示）。
+- **快取**（每個 worker 一份表）：要租戶動手的結果（`not_configured`、`not_running`、`running`＋`backend=missing`）只留 2 秒——它們會因為
+  租戶在管理頁按下 Save 而改變，存好連線、切回分頁就看得到新狀態；`running`、`unknown` 留 10 秒（讀不到的那台不會讓每次輪詢都付滿 3 秒）。
+- **網路路徑**：走公開網址（Cloudflare tunnel）而不是叢集內：租戶 namespace 的 ingress 只收 tunnel、同 namespace 與 reach 標籤的工作區
+  namespace，平台 namespace 不在其中；平台 egress 對公網放行（staging 有 egress policy、私網段排除；正式站沒有 egress policy）。
+- **UI**（文案依 `viewer_can_manage` 分兩種說法：owner／admin 叫他到管理頁設定並附管理頁網址；guest、Portal 的 user 拿不到管理密碼，
+  請他找工作區擁有者或管理員，不附連結）：
+  - `not_configured` → 黃底「MCP 尚未設定連線：請到管理頁 → Connection 填好並儲存，MCP 才會開始提供工具。」；Connection Info 狀態「待設定」。
+  - `not_running` → 黃底「MCP 服務程式沒有在運作，請到管理頁查看 Logs。」；Connection Info 狀態「MCP 未運作」。
+  - `running`＋`backend=missing` → 藍底（較輕）「尚未設定後端連線，需要後端的工具無法使用：請到管理頁 → Connection 設定。」；
+    Connection Info 狀態「後端未設定」。
+  - `running`（`backend` 是 configured 或沒有欄位）、`unknown` → 不顯示，Connection Info 照舊（ONLINE）。workload_fault、VPN 節點等更嚴重的
+    狀況仍優先顯示 OFFLINE。
+  - 開通 mcp-server 家族時的一次性憑證視窗（#1542）多一句「請先到管理頁 → Connection 存好連線，MCP 才會開始提供工具。」（只在開通；
+    Reset 不顯示）。
+  元件 `components/mcp-setup-status/McpSetupStatusNotice`（純呈現），呈現邏輯 `utils/mcp_setup_status.js`，輪詢
+  `services/mcp_setup_status.js`（ServiceDetailPage 呼叫），後端 `services/mcp_setup_status.py`。
+- **部署順序**：兩邊獨立。平台先上：舊映像沒有 `mcp`／`backend` 欄位 ⇒ 全部 `unknown`、不顯示，與現況相同；woow-mcp-server 先上：
+  平台不讀，與現況相同。
+
 #### 一次性憑證視窗的 gateway 提示（P3）
 
 有 gateway 的模板（`helm_default_values.gateway.externalPath`，#530）在建立與 Reset

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Nextcloud 上架 seed、公開網址注入、與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/nextcloud 0.1.4（app :80 是唯一入口、ClusterIP-only、
+契約來源：woow-paas-charts charts/nextcloud 0.1.9（app :80 是唯一入口、ClusterIP-only、
 release 前綴命名、自帶 postgresql(pgvector)＋redis、cron 走 sidecar、
 NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST 由 nextcloud.publicUrl 衍生）。
 
@@ -54,14 +54,15 @@ class TestNextcloudSeed(TransactionCase):
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, NC_CHART)
         self.assertEqual(
-            tpl.helm_chart_version, '0.1.7',
+            tpl.helm_chart_version, '0.1.9',
             '0.1.2 起 chart 以 before-starting hook 把上傳 chunk（系統鍵 '
             'files.chunked_upload.max_size）設 50 MiB、關 bulk upload'
             '（Cloudflare 每請求 100 MB 上限）並把背景工作改 cron；'
             '0.1.3 起背景預裝 Calendar／Contacts（#1363／#1364）；'
             '0.1.4 起關 app_api 時一併移除它的背景工作，新服務概覽不再出現'
             '「紀錄檔中有 2 個警告」（#1367）；0.1.7 起 wait-data initContainer 等自家 PG／Redis 可連，'
-            '避免 NetworkPolicy 啟動空窗讓開機 hook 靜默跳過平台設定（#1441）')
+            '避免 NetworkPolicy 啟動空窗讓開機 hook 靜默跳過平台設定（#1441）；'
+            '0.1.8 起套用 Apache／預覽／cron 穩定性界線；0.1.9 起預裝 App 只有確認啟用後才寫完成標記')
 
     def test_description_promises_only_what_ships(self):
         """#1364／#1365：說明只能承諾平台真的給的東西（2026-10-03 正式站實測）。"""
