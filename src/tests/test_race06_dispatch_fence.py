@@ -16,6 +16,7 @@ class TestRace06DispatchFenceReview(TransactionCase):
             'app_name': 'race06-focused',
             'primary_hostname': 'race06-focused.example.invalid',
             'state': 'dispatching',
+            'effect_boundary_version': 1,
         })
 
     def test_single_retry_requires_exact_confirmation_and_reason(self):

@@ -748,24 +748,32 @@ class SmartHomeRoute(models.Model):
         if payload.get('enabled') and not payload.get('existing_app_id'):
             Fence = self.env['woow_paas_platform.access_dispatch_fence'].sudo()
             Fence._ensure_prepared(self, payload)
-            fence_claim = Fence._claim_send(self, payload)
-            if fence_claim['mode'] == 'adopt_only':
-                # .271's operator has no idempotent create/adopt primitive.
-                # A reviewed exact app id can safely use the normal PUT path;
-                # otherwise stop before provider IO. Never turn uncertainty
-                # into a second POST.
-                if not fence_claim.get('provider_app_id'):
-                    _logger.error(
-                        '[SH] Access create fenced pending provider review '
-                        'route=%s app=%s hostname=%s', self.id,
-                        payload.get('app_name'), payload.get('primary_hostname'))
-                    return False
-                payload['existing_app_id'] = fence_claim['provider_app_id']
-        result = client.sync_access_app(payload)
-        require_access_sync_receipt(result, payload)
-        if fence_claim and result.get('app_id'):
-            Fence._record_provider_identity(
-                fence_claim['fence_id'], result['app_id'])
+            with Fence._dispatch_guard(self, payload) as fence_claim:
+                if fence_claim['mode'] == 'adopt_only':
+                    # No provider idempotency primitive: after the durable
+                    # effect-start marker, absence and delayed visibility are
+                    # indistinguishable.  Only an exact reviewed app id may use
+                    # the normal PUT path; never turn uncertainty into a POST.
+                    if not fence_claim.get('provider_app_id'):
+                        _logger.error(
+                            '[SH] Access create fenced after effect start; '
+                            'provider review required route=%s app=%s hostname=%s',
+                            self.id, payload.get('app_name'),
+                            payload.get('primary_hostname'))
+                        return False
+                    payload['existing_app_id'] = fence_claim['provider_app_id']
+                    result = client.sync_access_app(payload)
+                    require_access_sync_receipt(result, payload)
+                else:
+                    Fence._mark_effect_started(fence_claim)
+                    result = client.sync_access_app(payload)
+                    require_access_sync_receipt(result, payload)
+                    if result.get('app_id'):
+                        Fence._record_effect_finished(
+                            fence_claim, result['app_id'])
+        else:
+            result = client.sync_access_app(payload)
+            require_access_sync_receipt(result, payload)
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(
                 "Access protection was not established. Origin publication "

@@ -6,6 +6,7 @@ an automatically retryable failure.  This ledger prefers a stuck publication
 and explicit review over a duplicate Access application.
 """
 import logging
+from contextlib import contextmanager
 
 from odoo import _, api, fields, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
@@ -35,8 +36,14 @@ class AccessDispatchFence(models.Model):
         ('abandoned', 'Old identity abandoned'),
     ], required=True, readonly=True, default='prepared', index=True)
     attempt = fields.Integer(required=True, readonly=True, default=0)
+    # Version 0 is deliberately never auto-recovered: rows predating this
+    # protocol cannot prove whether an effect-start marker should exist.
+    effect_boundary_version = fields.Integer(
+        required=True, readonly=True, default=0)
     provider_app_id = fields.Char(readonly=True)
     claimed_at = fields.Datetime(readonly=True)
+    effect_started_at = fields.Datetime(readonly=True)
+    effect_finished_at = fields.Datetime(readonly=True)
     resolved_at = fields.Datetime(readonly=True)
     reviewed_at = fields.Datetime(readonly=True)
     reviewed_by = fields.Many2one('res.users', readonly=True)
@@ -66,8 +73,9 @@ class AccessDispatchFence(models.Model):
             cr.execute(
                 'INSERT INTO woow_paas_platform_access_dispatch_fence '
                 '(anchor_model, anchor_id, app_name, primary_hostname, state, '
-                'attempt, create_uid, write_uid, create_date, write_date) '
-                "VALUES (%s,%s,%s,%s,'prepared',0,%s,%s,"
+                'attempt, effect_boundary_version, create_uid, write_uid, '
+                'create_date, write_date) '
+                "VALUES (%s,%s,%s,%s,'prepared',0,1,%s,%s,"
                 "now() at time zone 'UTC',now() at time zone 'UTC') "
                 'ON CONFLICT (anchor_model,anchor_id,app_name,primary_hostname) '
                 'DO NOTHING RETURNING id',
@@ -88,6 +96,11 @@ class AccessDispatchFence(models.Model):
 
     @api.model
     def _claim_send(self, anchor, payload):
+        """Compatibility probe without automatic recovery.
+
+        New create callers must use :meth:`_dispatch_guard`: only its live PG
+        session lock can prove that a previous pre-effect owner is gone.
+        """
         identity = self._identity(anchor, payload)
         with self.env.registry.cursor() as cr:
             cr.execute(
@@ -113,6 +126,114 @@ class AccessDispatchFence(models.Model):
             cr.commit()
             return {'mode': 'adopt_only', 'fence_id': fence_id,
                     'provider_app_id': provider_app_id}
+
+    @api.model
+    def _advisory_identity(self, identity):
+        return '\x1f'.join((
+            identity['anchor_model'], str(identity['anchor_id']),
+            identity['app_name'], identity['primary_hostname']))
+
+    @api.model
+    @contextmanager
+    def _dispatch_guard(self, anchor, payload):
+        """Serialize one identity and safely recover a pre-effect dead owner.
+
+        The dedicated PostgreSQL session remains alive for the whole provider
+        create boundary.  Session advisory locks are released by PostgreSQL if
+        SIGKILL closes the worker connection.  Consequently a successor which
+        acquires the same lock may retry only when ``effect_started_at`` is
+        still NULL.  Once that marker is durable, provider outcome is
+        uncertain and automatic POST is forbidden.
+        """
+        identity = self._identity(anchor, payload)
+        lock_identity = self._advisory_identity(identity)
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'SELECT pg_advisory_lock(hashtextextended(%s, 0))',
+                (lock_identity,))
+            try:
+                cr.execute(
+                    'SELECT id, state, provider_app_id, attempt, '
+                    'effect_started_at, effect_boundary_version FROM '
+                    'woow_paas_platform_access_dispatch_fence '
+                    'WHERE anchor_model=%s AND anchor_id=%s AND app_name=%s '
+                    'AND primary_hostname=%s FOR UPDATE',
+                    (identity['anchor_model'], identity['anchor_id'],
+                     identity['app_name'], identity['primary_hostname']))
+                row = cr.fetchone()
+                if not row:
+                    raise UserError(_(
+                        'Access create was refused because its durable fence is missing.'))
+                (fence_id, state, provider_app_id, attempt,
+                 effect_started_at, boundary_version) = row
+                recoverable = (
+                    state == 'dispatching' and boundary_version == 1
+                    and not effect_started_at)
+                if state in ('prepared', 'retry_authorized') or recoverable:
+                    cr.execute(
+                        'UPDATE woow_paas_platform_access_dispatch_fence '
+                        "SET state='dispatching', attempt=%s, "
+                        "claimed_at=now() at time zone 'UTC', "
+                        'effect_started_at=NULL, effect_finished_at=NULL '
+                        'WHERE id=%s', (attempt + 1, fence_id))
+                    claim = {
+                        'mode': 'create', 'fence_id': fence_id,
+                        'provider_app_id': provider_app_id,
+                        'automatic_recovery': recoverable,
+                        '_guard_cursor': cr,
+                    }
+                else:
+                    claim = {
+                        'mode': 'adopt_only', 'fence_id': fence_id,
+                        'provider_app_id': provider_app_id,
+                        'automatic_recovery': False,
+                        '_guard_cursor': cr,
+                    }
+                cr.commit()
+                yield claim
+            finally:
+                # A provider exception does not abort this cursor (the marker
+                # was already committed), but an unexpected SQL exception can.
+                # Roll back only the dedicated guard cursor before unlocking;
+                # closing the session is the final release guarantee.
+                try:
+                    cr.rollback()
+                    cr.execute(
+                        'SELECT pg_advisory_unlock(hashtextextended(%s, 0))',
+                        (lock_identity,))
+                except Exception:
+                    _logger.exception(
+                        'Access dispatch advisory unlock failed; cursor close '
+                        'will release it for identity=%s', lock_identity)
+
+    @api.model
+    def _mark_effect_started(self, claim):
+        """Durably close the automatic-retry window before provider I/O."""
+        cr = claim.get('_guard_cursor')
+        if not cr or claim.get('mode') != 'create':
+            raise UserError(_('Access create has no active dispatch guard.'))
+        cr.execute(
+            'UPDATE woow_paas_platform_access_dispatch_fence '
+            "SET effect_started_at=now() at time zone 'UTC' "
+            'WHERE id=%s AND state=%s',
+            (claim['fence_id'], 'dispatching'))
+        if cr.rowcount != 1:
+            raise UserError(_('Access create lost its durable dispatch fence.'))
+        cr.commit()
+
+    @api.model
+    def _record_effect_finished(self, claim, app_id):
+        """Persist the provider receipt before releasing dispatch ownership."""
+        cr = claim.get('_guard_cursor')
+        if not cr or not app_id:
+            return
+        cr.execute(
+            'UPDATE woow_paas_platform_access_dispatch_fence '
+            'SET provider_app_id=%s, '
+            "effect_finished_at=now() at time zone 'UTC' "
+            'WHERE id=%s AND state != %s',
+            (app_id, claim['fence_id'], 'abandoned'))
+        cr.commit()
 
     @api.model
     def _record_provider_identity(self, fence_id, app_id):
