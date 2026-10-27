@@ -42,7 +42,7 @@ class TestRace06DispatchFenceReview(TransactionCase):
         user = self.env['res.users'].create({
             'name': 'RACE06 reviewer denied',
             'login': 'race06-reviewer-denied@example.invalid',
-            'group_ids': [(6, 0, [self.env.ref('base.group_user').id])],
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
         })
         with self.assertRaises(AccessError):
             self.fence.with_user(user).action_record_verified_app(
