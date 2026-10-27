@@ -1,0 +1,53 @@
+// 2026-10-27：服務頁的「MCP 尚未設定連線」提示。外觀對齊續訂橫幅的 warning 色調
+// （.o_woow_service_renewal_banner--warning）：要租戶採取行動，但不是紅色故障。
+.o_woow_mcp_setup_notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-radius: $woow-radius-default;
+  font-size: 0.875rem;
+  margin-bottom: 1.5rem;
+
+  &--warning {
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+  }
+
+  // 第五輪：後端連線還沒設定（MCP 在運作、用到後端的工具會失敗）——較輕的提示，對齊續訂橫幅的 info 色調。
+  &--info {
+    background: rgba(95, 129, 252, 0.08);
+    border: 1px solid rgba(95, 129, 252, 0.25);
+    color: $woow-primary-hover;
+  }
+
+  > .material-symbols-outlined {
+    flex-shrink: 0;
+  }
+
+  &__text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1 1 12rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+
+    strong {
+      font-weight: 600;
+    }
+  }
+
+  &__link a {
+    color: inherit;
+    text-decoration: underline;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  @media (max-width: $woow-bp-sm) {
+    flex-wrap: wrap;
+  }
+}

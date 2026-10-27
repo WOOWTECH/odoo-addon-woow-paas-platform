@@ -29,6 +29,9 @@ export class OneTimeCredentialsModal extends Component {
         // 舊 session 並關 2FA；Omnigent（omnigent_exec）與上游 Members → Reset 一樣，不登出；
         // EMQX（emqx_exec，#1774）登出已登入的 Dashboard，但開源版沒有 2FA 可關。
         appResetKind: { type: String, optional: true },
+        // 2026-10-27（#2040 第五輪 D2-B）：開通當下要先做的下一步（mcp-server 家族：先到管理頁
+        // Connection 存好連線，MCP 才會開始提供工具）。由呼叫端以 `oneTimeMcpSetupHint` 算；空字串＝不顯示。
+        setupHint: { type: String, optional: true },
     };
     static defaultProps = { mode: "reset" };
 
@@ -79,6 +82,24 @@ export class OneTimeCredentialsModal extends Component {
             this.props.onClose();
         }
     }
+}
+
+/**
+ * 2026-10-27（#2040 第五輪 D2-B）：開通 mcp-server 家族的服務時，一次性憑證視窗多一句「先到管理頁 →
+ * Connection 存好連線，MCP 才會開始提供工具」——新開的服務在那之前 MCP 一律沒有工具可用，租戶卻只看到
+ * 一個 Running 的服務（第三輪 staging 實測 Nextcloud）。
+ *
+ * gate 讀開通回應的 `has_mcp_setup_status`（＝後端 `_chart_has_mcp_setup_status`，與服務頁提示同名同值），
+ * 不用 slug、也不從 admin_url 反推。只給開通（`provision`）用：Reset 的服務多半早就存好連線，這句會誤導。
+ *
+ * @param {Object} data 建立服務的回應
+ * @returns {string} 要顯示的那一句；不適用時 ""
+ */
+export function oneTimeMcpSetupHint(data) {
+    if (data && data.has_mcp_setup_status === true) {
+        return _t("Save the connection under Connection on the admin page first: MCP starts providing tools only after that.");
+    }
+    return "";
 }
 
 /**

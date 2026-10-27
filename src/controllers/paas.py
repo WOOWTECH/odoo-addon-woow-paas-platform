@@ -2306,6 +2306,36 @@ class PaasController(HiddenChainMixin, Controller):
             return unavailable('operator_unavailable')
         return {'success': True, 'data': {'available': True, 'reason': None, 'report': report}}
 
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/mcp-status",
+           auth="user", methods=["POST"], type="json")
+    def api_service_mcp_status(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
+        """2026-10-27：MCP 服務「還沒設定連線」的即時狀態，**純讀、不寫 DB、不碰 state**。
+
+        新開的 mcp-server 家族服務（例：Nextcloud）在管理頁 → Connection 存好之前，MCP 一律回 503，
+        平台 state 卻是 running、/woow 顯示「運作中」。這支在租戶打開服務頁時，由伺服器對**該服務自己的
+        對外根位址**（``_admin_page_public_url()``，平台算出、不是使用者輸入）GET ``/healthz``，只取
+        ``mcp``（running／not_configured／not_running）與第五輪的 ``backend``（configured／missing；
+        宣告了後端連線欄位的產品才有，例如 odoo、litellm、hermes、n8n），讓服務頁提示「要去管理頁哪裡設定」。
+
+        * 授權＝與 detail 同一條（工作區成員、service 釘在 workspace 上、concealed 當不存在）；
+        * gate＝``_chart_has_mcp_setup_status()``（mcp-server 家族），沒有這個能力的服務一律「Service not found」；
+        * 只有 running 才查（``CloudService._mcp_setup_status``）；讀不到、逾時、舊映像沒有欄位都回
+          ``state: unknown``／``backend: unknown``（正常降級，前端什麼都不顯示），不是錯誤；
+        * 回應只有 ``state``、``backend`` 與 ``admin_url``（提示裡的管理頁網址，同一個值）——``/healthz``
+          的其他內容不轉出。
+        """
+        if kw:
+            return {'success': False, 'error': _('Invalid request')}
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id, require_manage=False)
+        if error:
+            return error
+        if not service._chart_has_mcp_setup_status():
+            return {'success': False, 'error': _('Service not found')}
+        status, admin_url = service._mcp_setup_status()
+        return {'success': True, 'data': {
+            'state': status.state, 'backend': status.backend, 'admin_url': admin_url}}
+
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None, **kw: Any) -> dict[str, Any]:
         """
@@ -4952,6 +4982,9 @@ class PaasController(HiddenChainMixin, Controller):
             resp_data.update(self._gateway_credentials(service))
             # #1542：mcp-server 家族的管理頁網址（非憑證、與 gateway 交付分開判）
             resp_data.update(self._admin_page_link(service))
+            # 2026-10-27（#2040 第五輪）：一次性憑證視窗的「先到 Connection 存好連線」那一句的 gate，
+            # 與 detail payload 同名同值（`_chart_has_mcp_setup_status`）；前端不用 slug 判。
+            resp_data['has_mcp_setup_status'] = service._chart_has_mcp_setup_status()
             return {
                 'success': True,
                 'data': resp_data,
@@ -6187,6 +6220,10 @@ class PaasController(HiddenChainMixin, Controller):
                 # INFRA-FIX-005：「VPN 節點狀態」卡的 gate。⚠ 同上，前端只讀這個旗標、不得用 slug 判；
                 # 狀態本身不在 payload 裡，卡片打開時才即時問 `/node-status`（見該端點）。
                 'has_vpn_node_status': service._chart_has_vpn_node_status(),
+                # 2026-10-27：「MCP 尚未設定連線」提示的 gate（mcp-server 家族＝`_admin_page_public_url`
+                # 非空）。⚠ 同上，前端只讀這個旗標、不得用 slug 判；狀態本身不在 payload 裡，服務頁打開時
+                # 才即時問 `/mcp-status`（見該端點）。
+                'has_mcp_setup_status': service._chart_has_mcp_setup_status(),
                 'public_tunnel_label': service.template_id.public_tunnel_label or None,
                 'public_tunnel_url': service.public_tunnel_url or None,
                 # #1559：沒有位址時 ngrok 說得出的原因（已是建立者語言的一句話）。
