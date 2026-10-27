@@ -12,6 +12,6 @@
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService._update_module_list": "75a0e39cd35596eb55c98fe265e8aa4c9537c66c5ee54502605b775524571b46",
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService._wait_for_ready": "bee58fca75c05cdaa9793713784aee34e0683bd4ffcd327f10a2adcf2ab40ec3",
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService.initialize": "3785df87287d4000401ba8fbfad158ebe6fe22811f46bc2b2f7ca9a587cc087c",
-  "src/services/paas_operator.py:PaaSOperatorClient._request": "048b48820dac16d7e733158568ad1ead21e1fac9a787346aff5fee93ce8dd7af",
+  "src/services/paas_operator.py:PaaSOperatorClient._request": "9947ed1db3f7c4953f8f8216d034e0aefb9ed2156552022e57cf5244977dc5e5",
   "src/services/paas_operator.py:PaaSOperatorClient.init_odoo": "4cda916723992266163c6523963b83b4a39b50d168f9e3249b3b88d6b14fc23c"
 }
