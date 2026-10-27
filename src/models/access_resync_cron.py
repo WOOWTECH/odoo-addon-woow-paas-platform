@@ -40,9 +40,13 @@ issue #803 的四腿表格裡，SmartHome 那腿的錨點就是它底下的 rout
 推導寫在 `src/data/access_resync_cron.xml` 的註解裡，**只有那一處**。
 這裡不複述——同一個推導寫兩處保證會漂移，而漂移之後兩份都像權威。
 """
+from datetime import timedelta
 import logging
 
-from odoo import api, models
+from odoo import api, fields, models
+from odoo.osv import expression
+
+from ..services.access_state import access_revoke_hold_seconds, schedule_access_resync
 
 _logger = logging.getLogger(__name__)
 
@@ -58,11 +62,23 @@ _RESYNC_LEGS = (
     'woow_paas_platform.cloud_service',
 )
 
-#: 只掃打開了旗標的列。**這就是全部的 domain**——不加「卡多久算不正常」的時間
-#: 條件（三腿旗標是純 Boolean、沒有時間欄位，要加就得新增欄位＝新增 migration，
-#: 形狀變太多，另開單），也不加終態淘汰（終態定義未查證；那只改 domain、不受
-#: `noupdate` 綁，有資料再說）。
-_RESYNC_DOMAIN_FIELD = 'access_protection_lost'
+#: 只掃「有一個自動收斂出口該被推一把」的列；沒有旗標的列一律不碰。
+#:
+#: * `access_protection_lost`（#803）：三腿都掃。
+#: * `access_token_revoke_pending`（REV-01）：三腿都掃，但只掃**該動作的列**——
+#:   還沒收到供應商受理（要重送撤銷），或受理後的保持時間已到（要重新確認 Access
+#:   並重新發布）。保持時間內的列掃了也只會白打一輪外呼，所以不掃。
+#: * `access_publish_pending`：**只有 Security Access 腿掃**（FAULT-02）。只有那一腿
+#:   會被 `_cron_probe_security_access_faults` 關閉，也只有它需要「連接器恢復後自動
+#:   重新確認 Access 才解除」；SH／CS 的單純 pending 維持既有的人工重試語意。
+#:
+#: 不加「卡多久算不正常」的時間條件，也不加終態淘汰（終態定義未查證；那只改
+#: domain、不受 `noupdate` 綁，有資料再說）。
+_RESYNC_PENDING_LEGS = ('woow_paas_platform.security_access_route',)
+
+#: Where the fault probe resumes: the last Security Access id handled by the
+#: previous run ('0' = start over).
+_PROBE_CURSOR_PARAM = 'woow_paas_platform.access_probe_cursor'
 
 
 class AccessResyncCron(models.AbstractModel):
@@ -73,26 +89,50 @@ class AccessResyncCron(models.AbstractModel):
     def _cron_probe_security_access_faults(self, limit=200):
         """Persist connector/Operator faults before any later re-sync.
 
-        This phase only invalidates/parks. It deliberately does not clear
-        pending in the same transaction; recovery remains the existing exact
-        Access sync path, so readiness has a durable observable closed window.
+        This phase only *marks* (durable pending); it does not park.  Parking
+        and recovery belong to the resync leg, which re-confirms Access first
+        and only then re-publishes, in a transaction that cannot strand a parked
+        edge without its marker (a probe parking in the same transaction as its
+        flag would, if that transaction rolled back).  A closure the probe finds
+        wakes the resync cron shortly instead of waiting for the next period.
+
+        One batch per run, continued from the last id the previous run handled
+        and wrapping around at the end, so every Security Access is probed even
+        when there are more than ``limit`` of them.
         """
-        rows = self.env['woow_paas_platform.security_access'].sudo().search([
+        params = self.env['ir.config_parameter'].sudo()
+        try:
+            after = int(params.get_param(_PROBE_CURSOR_PARAM) or 0)
+        except ValueError:
+            after = 0
+        domain = [
             ('state', 'in', ('active', 'active_no_route')),
             ('tunnel_id', '!=', False),
             ('route_ids.is_protected', '=', True),
-        ], limit=limit, order='id')
-        counts = {'probed': 0, 'failed': 0}
+        ]
+        rows = self.env['woow_paas_platform.security_access'].sudo().search(
+            domain + [('id', '>', after)], limit=limit, order='id')
+        counts = {'probed': 0, 'failed': 0, 'closed': 0}
         for row in rows:
+            was_pending = row._fault02_has_pending()
             try:
                 with self.env.cr.savepoint():
-                    row.action_refresh_status()
+                    row._refresh_status(park=False, fail_closed_on_error=False)
                 counts['probed'] += 1
             except Exception as error:  # one tenant cannot stop the cohort
                 counts['failed'] += 1
                 _logger.warning('[FAULT02] probe failed sa=%s: %s', row.id, error)
-        _logger.info('[FAULT02] probed=%d failed=%d',
-                     counts['probed'], counts['failed'])
+            if not was_pending and row._fault02_has_pending():
+                counts['closed'] += 1
+        params.set_param(
+            _PROBE_CURSOR_PARAM, str(rows[-1].id) if len(rows) == limit else '0')
+        if counts['closed']:
+            # Only a *new* closure schedules this, so an SA whose connector
+            # stays down does not turn the cron into a tight loop.
+            schedule_access_resync(
+                self.env, fields.Datetime.now() + timedelta(seconds=120))
+        _logger.info('[FAULT02] probed=%d failed=%d closed=%d',
+                     counts['probed'], counts['failed'], counts['closed'])
         return counts
 
     # ------------------------------------------------------------------ #
@@ -102,7 +142,9 @@ class AccessResyncCron(models.AbstractModel):
     @api.model
     def _cron_resync_access_protection(self, limit=200, scan_batch=1000,
                                        max_scan=20000):
-        """掃三張表上的 `access_protection_lost` 列，逐列重推 Access 狀態。
+        """掃三張表上該收斂的列（`access_protection_lost`、待收尾的撤銷；SA 腿再加
+        FAULT-02 的 `access_publish_pending`，見 `_RESYNC_PENDING_LEGS`），逐列重推
+        Access 狀態。
 
         回傳這一輪**真的推動**了幾列（被 gate 擋掉與推失敗的不算）。
 
@@ -143,7 +185,8 @@ class AccessResyncCron(models.AbstractModel):
         行為，旗標由 sync 結果驅動）。本方法一行清除碼都沒有——多寫一處就是第二個
         真相來源，而兩者不一致時沒有任何訊號。
         """
-        totals = {'scanned': 0, 'pushed': 0, 'gated': 0, 'failed': 0}
+        totals = {'scanned': 0, 'pushed': 0, 'pending': 0, 'gated': 0,
+                  'failed': 0}
         truncated = []
         per_leg = []
         for model_name in _RESYNC_LEGS:
@@ -154,9 +197,10 @@ class AccessResyncCron(models.AbstractModel):
                 totals[key] += counts[key]
             if cut:
                 truncated.append(model_name)
-            per_leg.append('%s(s=%d,p=%d,g=%d,f=%d)' % (
+            per_leg.append('%s(s=%d,p=%d,w=%d,g=%d,f=%d)' % (
                 model_name.rsplit('.', 1)[-1], counts['scanned'],
-                counts['pushed'], counts['gated'], counts['failed']))
+                counts['pushed'], counts['pending'], counts['gated'],
+                counts['failed']))
 
         if truncated:
             _logger.warning(
@@ -185,9 +229,10 @@ class AccessResyncCron(models.AbstractModel):
         # 的租戶會讓這一行每 15 分鐘 warn 一次＝96 次／日，正好長成上面那個「洪水
         # 等於沒有訊號」的形狀。三個計數照印 ⇒ 訊號不丟，只是不再每輪拉警報。
         (_logger.warning if totals['failed'] else _logger.info)(
-            "[ACCESS_RESYNC] scanned=%d pushed=%d gated=%d failed=%d | %s",
-            totals['scanned'], totals['pushed'], totals['gated'],
-            totals['failed'], ' '.join(per_leg))
+            "[ACCESS_RESYNC] scanned=%d pushed=%d pending=%d gated=%d "
+            "failed=%d | %s",
+            totals['scanned'], totals['pushed'], totals['pending'],
+            totals['gated'], totals['failed'], ' '.join(per_leg))
         return totals['pushed']
 
     # ------------------------------------------------------------------ #
@@ -195,20 +240,41 @@ class AccessResyncCron(models.AbstractModel):
     # ------------------------------------------------------------------ #
 
     @api.model
+    def _resync_domain(self, model_name):
+        """這一腿「有自動收斂出口該被推」的列（見 `_RESYNC_PENDING_LEGS` 的說明）。"""
+        cutoff = fields.Datetime.now() - timedelta(
+            seconds=access_revoke_hold_seconds(self.env))
+        legs = [
+            [('access_protection_lost', '=', True)],
+            # 撤銷：尚未收到供應商受理（重送），或受理後保持時間已到（重新發布）。
+            [('access_token_revoke_pending', '=', True),
+             '|', ('access_token_revoke_accepted_at', '=', False),
+             ('access_token_revoke_accepted_at', '<=', cutoff)],
+        ]
+        if model_name in _RESYNC_PENDING_LEGS:
+            # Plain pending only: a row inside a revocation hold is also pending,
+            # but its own clause above decides when it is due.
+            legs.append([('access_publish_pending', '=', True),
+                         ('access_token_revoke_pending', '=', False)])
+        return expression.OR(legs)
+
+    @api.model
     def _resync_leg(self, model_name, limit, scan_batch, max_scan):
         """掃一張表。回傳 ``({counts}, 是否踩到掃描上界)``。"""
         Leg = self.env[model_name].sudo()
-        counts = {'scanned': 0, 'pushed': 0, 'gated': 0, 'failed': 0}
+        counts = {'scanned': 0, 'pushed': 0, 'pending': 0, 'gated': 0,
+                  'failed': 0}
         last_id = 0
         attempted = 0
         truncated = False
+        flagged = self._resync_domain(model_name)
         while attempted < limit:
             # `order='id'` 顯式帶上，不靠 `_order` 的預設：游標式掃描的正確性完全
             # 建立在「這一批的最大 id 之後還有沒有列」上——日後有人改 `_order`
             # 就會讓游標原地空轉，而症狀是「每輪都回 0」，與真的沒有旗標列不可
             # 區分。（`smart_home_route._order` 現在就是 `is_primary desc, id`。）
             rows = Leg.search(
-                [('id', '>', last_id), (_RESYNC_DOMAIN_FIELD, '=', True)],
+                expression.AND([[('id', '>', last_id)], flagged]),
                 limit=scan_batch, order='id')
             if not rows:
                 break
@@ -224,7 +290,7 @@ class AccessResyncCron(models.AbstractModel):
                 # 判準時，旗標列數剛好整除 `scan_batch`（最後一批是滿的、但後面
                 # 其實沒有了）就會發假截斷警報。訊號通膨與訊號缺席一樣糟。
                 truncated = bool(Leg.search(
-                    [('id', '>', last_id), (_RESYNC_DOMAIN_FIELD, '=', True)],
+                    expression.AND([[('id', '>', last_id)], flagged]),
                     limit=1, order='id'))
                 break
         return counts, truncated
@@ -265,5 +331,12 @@ class AccessResyncCron(models.AbstractModel):
         # ——保護確實沒生效，那是實話，見本類方法的 docstring。唯一例外：列已改成
         # 公開且沒有 app，sync 在略過時就地清旗標（那時列不再宣稱保護），這一列
         # 下一輪就不會再被掃到。
-        counts['gated'] += 1
-        return False
+        # A False can also come *after* the sync spent operator calls without
+        # releasing: an open revocation hold, no live connector, a fence
+        # awaiting review.  Those count against the leg's budget (``pending``);
+        # only the liveness gate means "no external call was made".
+        if row._access_sync_skip_reason():
+            counts['gated'] += 1
+            return False
+        counts['pending'] += 1
+        return True

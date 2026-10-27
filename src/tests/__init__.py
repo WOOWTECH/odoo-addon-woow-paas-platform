@@ -12,6 +12,7 @@ from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
 from . import test_race06_dispatch_fence
+from . import test_race06_fence_lifecycle
 # #859：遠端 tunnel 已刪與本地 bookkeeping 失敗不可混成待重試。
 from . import test_cleanup_tunnel_859
 from . import test_workspace_cascade_cleanup
@@ -1177,6 +1178,7 @@ from . import test_cs_sh_fail_closed_ac1011
 from . import test_actual_operator_publish_recovery_ac1011
 
 from . import test_access_publish_pending_ac1011
+from . import test_access_revoke_hold_rev01
 
 from . import test_invite_profile_identity_ac1011
 

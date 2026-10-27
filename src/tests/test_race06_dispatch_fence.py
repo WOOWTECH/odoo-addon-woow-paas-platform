@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from odoo import fields
@@ -88,3 +89,25 @@ class TestRace06DispatchFenceReview(TransactionCase):
                     'admin reviewed the exact provider inventory')
         self.assertEqual(self.fence.state, 'dispatching')
         self.assertFalse(self.fence.provider_app_id)
+
+    def test_retry_is_refused_inside_the_settle_window_only(self):
+        """Absence right after a send proves nothing; after the settle window an
+        administrator's explicit attestation reopens exactly one create."""
+        self.fence.write({'effect_started_at': fields.Datetime.now()
+                          - timedelta(minutes=14)})
+        with self.assertRaises(UserError):
+            self.fence.action_authorize_single_retry(
+                CONFIRM, 'provider inventory currently shows no matching app')
+        self.fence.write({'effect_started_at': fields.Datetime.now()
+                          - timedelta(minutes=16)})
+        self.assertTrue(self.fence.action_authorize_single_retry(
+            CONFIRM, 'verified in the provider dashboard long after the send'))
+        self.assertEqual(self.fence.state, 'retry_authorized')
+        self.assertFalse(self.fence.effect_started_at)
+        self.assertEqual(self.fence.reviewed_by, self.env.user)
+
+    def test_legacy_fence_still_cannot_be_retried(self):
+        self.fence.write({'effect_boundary_version': 0})
+        with self.assertRaises(UserError):
+            self.fence.action_authorize_single_retry(
+                CONFIRM, 'verified in the provider dashboard long after the send')

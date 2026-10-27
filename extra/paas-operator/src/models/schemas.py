@@ -1102,6 +1102,12 @@ class HealthResponse(BaseModel):
         ..., min_length=1, max_length=128,
         description="Opaque identity for this Operator process lifetime",
     )
+    instance_id: Optional[str] = Field(
+        None, min_length=1, max_length=128,
+        description="Stable identity of the replica (pod name). Several replicas "
+                    "answer behind one Service, each with its own epoch, so an "
+                    "epoch change is only a restart for the same instance_id.",
+    )
 
 
 class SidecarContainer(BaseModel):

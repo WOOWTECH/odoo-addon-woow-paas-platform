@@ -174,7 +174,8 @@ class TestCsAccessPayload(_CsAccessSyncFixture):
             sorted(['enabled', 'canonical_name', 'app_name',
                     'primary_hostname', 'protected_hostnames',
                     'session_duration', 'login_idp_types', 'policies',
-                    'existing_app_id', 'existing_policy_ids']),
+                    'existing_app_id', 'existing_policy_ids',
+                    'revoke_tokens']),
             'payload 的 key 集合必須與 operator 的 AccessSyncRequest 一致')
         host = '%s.woowtech.io' % self.svc.subdomain
         self.assertTrue(payload['enabled'])

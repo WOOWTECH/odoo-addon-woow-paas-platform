@@ -1,4 +1,4 @@
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync
 import psycopg2.errors
 import contextlib
 import copy
@@ -249,6 +249,7 @@ def _is_internal_provision(env):
 _CS_ACCESS_IDENTITY_ANCHOR_FIELDS = (
     'access_publish_pending',  # server-owned publication state
     'access_token_revoke_pending',
+    'access_token_revoke_accepted_at',  # provider acknowledged the revocation
     'access_app_id',    # WHICH CF Access application this service configures
 )
 
@@ -2356,7 +2357,14 @@ class CloudService(models.Model):
         string='Access Publication Pending', default=False, readonly=True,
         help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
     access_token_revoke_pending = fields.Boolean(
-        string='Access Token Revocation Pending', default=False, readonly=True)
+        string='Access Token Revocation Pending', default=False, readonly=True,
+        help='Authorization changed for an existing Access app. The origin stays '
+             'closed until the provider acknowledged the token revocation, the '
+             'configured hold elapsed and the Access state was re-confirmed.')
+    access_token_revoke_accepted_at = fields.Datetime(
+        string='Access Token Revocation Accepted At', copy=False, readonly=True,
+        help='When the provider acknowledged the current token revocation. The '
+             'hold before re-publication is measured from this instant.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this service has '
@@ -10263,15 +10271,67 @@ class CloudService(models.Model):
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,
             'existing_policy_ids': self._build_existing_policy_ids(),
-            'revoke_tokens': bool(self.access_app_id and self.access_token_revoke_pending),
+            # Send the revocation until the provider acknowledged it; the
+            # hold that follows must not re-revoke on every later sync.
+            'revoke_tokens': bool(
+                self.access_app_id and self.access_token_revoke_pending
+                and not self.access_token_revoke_accepted_at),
         }
 
     def _mark_access_token_revoke_pending(self):
         existing = self.filtered('access_app_id')
         if existing:
+            # A new authorization change starts a new revocation generation.
             _internal_cs_access_identity(existing).write({
                 'access_token_revoke_pending': True,
                 'access_publish_pending': True,
+                'access_token_revoke_accepted_at': False,
+            })
+
+    def _access_revoke_gate(self, result):
+        """Settle this sync's view of the token-revocation hold.
+
+        Returns ``none`` | ``held`` | ``releasable`` (see the SA route model).
+        """
+        self.ensure_one()
+        if not self.access_token_revoke_pending:
+            return 'none'
+        if not self.access_app_id:
+            # The app was torn down (protection turned off or lost): its tokens
+            # are moot, so there is nothing left to revoke or to wait for.
+            return 'releasable'
+        now = fields.Datetime.now()
+        accepted_at = self.access_token_revoke_accepted_at
+        hold = access_revoke_hold_seconds(self.env)
+        if not accepted_at:
+            if access_revoke_provider_accepted(result):
+                accepted_at = now
+                _internal_cs_access_identity(
+                    self).access_token_revoke_accepted_at = accepted_at
+                schedule_access_resync(
+                    self.env, accepted_at + timedelta(seconds=hold + 5))
+            elif not access_revoke_operator_reports(result):
+                _logger.error(
+                    '[ACCESS] %s %s: the operator did not report token_revocation, so '
+                    'the revocation cannot be acknowledged and the origin stays closed. '
+                    'The operator predates the revocation contract; deploy it before '
+                    'this module.', self._name, self.id)
+            elif result.get('token_revocation') == 'failed':
+                _logger.error(
+                    '[ACCESS] %s %s: the provider did not accept the token '
+                    'revocation (%s); the origin stays closed and it is retried.',
+                    self._name, self.id,
+                    result.get('token_revocation_error') or 'no detail')
+        state = access_revoke_state(True, accepted_at, now, hold)
+        return 'releasable' if state == 'releasable' else 'held'
+
+    def _access_revoke_finish(self):
+        """Close the revocation generation after a confirmed re-publication."""
+        self.ensure_one()
+        if self.access_token_revoke_pending or self.access_token_revoke_accepted_at:
+            _internal_cs_access_identity(self).write({
+                'access_token_revoke_pending': False,
+                'access_token_revoke_accepted_at': False,
             })
 
     def _park_access_origin(self, client):
@@ -10358,8 +10418,25 @@ class CloudService(models.Model):
                                   self.access_token_revoke_pending):
             parked_for_access = self._park_access_origin(client)
         payload = self._build_access_payload()
-        result = client.sync_access_app(payload)
-        require_access_sync_receipt(result, payload)
+        try:
+            result = client.sync_access_app(payload)
+            require_access_sync_receipt(result, payload)
+        except Exception as error:
+            from ..services.paas_operator import PaaSOperatorError
+            if (not self.access_token_revoke_pending
+                    or not isinstance(error, (
+                        PaaSOperatorError, AccessProtectionError,
+                        AccessPublicationError))):
+                raise
+            # The origin was closed on purpose and the revocation is saved.
+            # Raising would roll the markers back while the origin stays
+            # parked, leaving a closed origin with no record to recover.
+            _internal_cs_access_identity(self).access_publish_pending = True
+            _logger.error(
+                '[CLOUD_SVC] Access sync failed while a token revocation is '
+                'open service=%s: %s; the origin stays closed and the resync '
+                'cron retries', self.id, error)
+            return False
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(
                 "Access protection was not established. The origin remains "
@@ -10413,7 +10490,11 @@ class CloudService(models.Model):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         defer_release = release_control is _DEFER_ACCESS_RELEASE
-        revoke_pending = bool(self.access_token_revoke_pending)
+        # Provider acceptance of a token revocation is not proof of denial:
+        # stay closed through the hold, re-publish only after this sync
+        # re-confirmed the Access state.
+        revoke_gate = self._access_revoke_gate(result)
+        revoke_pending = revoke_gate == 'held'
         _internal_cs_access_identity(self).access_publish_pending = bool(
             revoke_pending or (defer_release and (parked_for_access or was_pending)))
         if revoke_pending:
@@ -10428,6 +10509,8 @@ class CloudService(models.Model):
                 _internal_cs_access_identity(self).access_publish_pending = True
                 _logger.error("[CLOUD_SVC] Access publication pending service=%s: %s", self.id, error)
                 return False
+        if revoke_gate == 'releasable':
+            self._access_revoke_finish()
         return True
 
     def _access_sync_skip_reason(self):
@@ -11724,7 +11807,11 @@ class CloudService(models.Model):
             if access_sync:
                 # liveness gate 在 `_sync_access_to_operator` 裡（沒有 subdomain
                 # ／deleting／從未保護過都是 no-op），這裡只負責轉發。
-                deferred_release = self.filtered('access_publish_pending')
+                # A service held by a token revocation is never released by a
+                # tenant edit; only its own hold may re-publish it.
+                deferred_release = self.filtered(
+                    lambda service: service.access_publish_pending
+                    and not service.access_token_revoke_pending)
                 for service in self:
                     service._sync_access_to_operator(
                         _DEFER_ACCESS_RELEASE if deferred_release else None)

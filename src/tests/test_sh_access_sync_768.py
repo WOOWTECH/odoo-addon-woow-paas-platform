@@ -80,7 +80,7 @@ _POLICY = 'woow_paas_platform.security_access_access_policy'
 _PAYLOAD_KEYS = [
     'app_name', 'canonical_name', 'enabled', 'existing_app_id',
     'existing_policy_ids', 'login_idp_types', 'policies', 'primary_hostname',
-    'protected_hostnames', 'session_duration',
+    'protected_hostnames', 'revoke_tokens', 'session_duration',
 ]
 
 

@@ -5,17 +5,34 @@ process death around the provider call is therefore an uncertain result, not
 an automatically retryable failure.  This ledger prefers a stuck publication
 and explicit review over a duplicate Access application.
 """
+from datetime import timedelta
 import logging
 from contextlib import contextmanager
 
 from odoo import _, api, fields, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
 
+from ..services.paas_operator import (
+    PaaSOperatorConnectionError,
+    PaaSOperatorError,
+    PaaSOperatorTimeoutError,
+)
+
 
 _logger = logging.getLogger(__name__)
 _MODEL = 'woow_paas_platform.access_dispatch_fence'
 _ROUTE_MODEL = 'woow_paas_platform.smart_home_route'
 _RETRY_CONFIRMATION = 'I VERIFIED THE PROVIDER HAS NO APP FOR THIS IDENTITY'
+
+#: HTTP statuses that prove the provider refused the create before any app
+#: existed (validation, auth, not found, rate limit).  409 means "already
+#: exists" and every 5xx / transport failure is uncertain, so they are not here.
+_DEFINITIVE_REJECTION_STATUS = frozenset({400, 401, 403, 404, 405, 415, 422, 429})
+
+#: An administrator may authorize ONE more create for an uncertain send only
+#: after the provider had this long to make the app visible; absence from the
+#: provider list right after the send proves nothing (no read-after-write).
+_RETRY_SETTLE_MINUTES = 15
 
 
 class AccessDispatchFence(models.Model):
@@ -175,16 +192,24 @@ class AccessDispatchFence(models.Model):
                 first_send = (
                     state in ('prepared', 'retry_authorized')
                     and boundary_version == 1 and not effect_started_at)
-                if first_send or recoverable:
+                # A completed earlier cycle (the app was created and later torn
+                # down) must not pin the identity forever: callers only create
+                # when no app id is stored, so the stale ``provider_app_id`` of a
+                # ``resolved`` row names an app that no longer exists.  If it
+                # does still exist the provider refuses the duplicate domain
+                # (409), which stays uncertain and goes to review.
+                renewable = state == 'resolved' and boundary_version == 1
+                if first_send or recoverable or renewable:
                     cr.execute(
                         'UPDATE woow_paas_platform_access_dispatch_fence '
                         "SET state='dispatching', attempt=%s, "
                         "claimed_at=now() at time zone 'UTC', "
-                        'effect_started_at=NULL, effect_finished_at=NULL '
+                        'effect_started_at=NULL, effect_finished_at=NULL, '
+                        'provider_app_id=NULL, resolved_at=NULL '
                         'WHERE id=%s', (attempt + 1, fence_id))
                     claim = {
                         'mode': 'create', 'fence_id': fence_id,
-                        'provider_app_id': provider_app_id,
+                        'provider_app_id': None,
                         'automatic_recovery': recoverable,
                         '_guard_cursor': cr,
                     }
@@ -226,6 +251,39 @@ class AccessDispatchFence(models.Model):
         if cr.rowcount != 1:
             raise UserError(_('Access create lost its durable dispatch fence.'))
         cr.commit()
+
+    @api.model
+    def _is_definitive_rejection(self, error):
+        """True only when ``error`` proves the provider refused the create.
+
+        A transport failure or a 5xx may still have created the app, and 409
+        means it already exists: those stay uncertain (adopt-only, reviewed).
+        """
+        return (isinstance(error, PaaSOperatorError)
+                and not isinstance(error, (PaaSOperatorConnectionError,
+                                           PaaSOperatorTimeoutError))
+                and error.status_code in _DEFINITIVE_REJECTION_STATUS)
+
+    @api.model
+    def _clear_effect_started(self, claim):
+        """Reopen the retry window after a *definitive* provider refusal.
+
+        Without this a refused create (an unavailable login method, a 4xx, a
+        rate limit) would keep the effect-start marker and fence the route for
+        good: the fence has no administrator exit for the "no app exists" case.
+        """
+        cr = claim.get('_guard_cursor')
+        if not cr or claim.get('mode') != 'create':
+            return False
+        cr.execute(
+            'UPDATE woow_paas_platform_access_dispatch_fence '
+            "SET state='prepared', effect_started_at=NULL, "
+            'effect_finished_at=NULL '
+            "WHERE id=%s AND state='dispatching' AND provider_app_id IS NULL",
+            (claim['fence_id'],))
+        reopened = cr.rowcount == 1
+        cr.commit()
+        return reopened
 
     @api.model
     def _record_effect_finished(self, claim, app_id):
@@ -297,13 +355,24 @@ class AccessDispatchFence(models.Model):
         if self.state != 'dispatching':
             raise UserError(_(
                 'Only an unresolved dispatching fence can be retried.'))
-        if self.effect_boundary_version != 1 or self.effect_started_at:
+        if self.effect_boundary_version != 1:
             raise UserError(_(
-                'Provider send may have started; absence from the provider '
-                'list cannot authorize another create. Review and adopt the '
-                'exact existing app instead.'))
+                'This fence predates the effect-start protocol and cannot be '
+                'retried automatically.'))
+        if self.effect_started_at:
+            age = fields.Datetime.now() - self.effect_started_at
+            if age < timedelta(minutes=_RETRY_SETTLE_MINUTES):
+                raise UserError(_(
+                    'The provider send started less than %(minutes)d minutes '
+                    'ago. Absence from the provider list right after a send '
+                    'proves nothing: wait, then verify there is no app for this '
+                    'identity (or review and adopt the exact existing app).',
+                    minutes=_RETRY_SETTLE_MINUTES))
         self.sudo().write({
             'state': 'retry_authorized',
+            # The administrator's attestation reopens exactly one create.
+            'effect_started_at': False,
+            'effect_finished_at': False,
             'reviewed_at': fields.Datetime.now(),
             'reviewed_by': self.env.user.id,
             'review_reason': reason.strip(),
