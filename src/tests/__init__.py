@@ -1239,6 +1239,8 @@ from . import test_llm_terms
 # LLM-02：newapi_client／代理完整化的 Odoo 端（circuit breaker、AP 限速、SWR 快取、設定變更稽核、
 # MCP 跳板、後台〔測試連線〕）。
 from . import test_llm_client_hardening
+# #2034：兩條真 PostgreSQL 連線重現 SWR queue UPSERT 的 40001，守住 singleton／daily。
+from . import test_llm_swr_concurrency_2034
 # LLM-02 AC5：MCP URL 不能拿 PaaS 當打 new-api／代理的跳板。
 from . import test_llm_mcp_jump_guard
 # INFRA-FIX-005：VPN 節點即時狀態（pod Ready != 節點在線）。
