@@ -20,7 +20,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
-from ..services import backup_health, dns_probe, rollback_config
+from ..services import backup_health, dns_probe, mcp_setup_status, rollback_config
 from ..services.chart_version import reported_helm_revision
 from ..services.deployment_target import resolve_deployment_target
 from ..services.tenant_secret import has_secret_refs, secret_refs, split_tenant_secret
@@ -5777,6 +5777,24 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         return bool(self._admin_page_public_url())
+
+    def _mcp_setup_status(self):
+        """服務頁「MCP 設定狀態」的即時查詢：回 ``(McpSetupStatus, admin_url)``。**純讀**，永不 raise。
+
+        端點 ``/mcp-status`` 的唯一入口（2026-10-27；第五輪起多回 ``backend``）。只有 running 且
+        ``_admin_page_public_url()`` 非空才查，其他一律 ``UNKNOWN``、不發請求。查詢對象由平台算出：
+        ``_admin_page_public_url()``（與提示裡的管理頁網址同一個值）＋平台的 ``paas_domain``
+        （``services/mcp_setup_status.healthz_url`` 要求網址落在它底下——縱深防禦）。``paas_domain``
+        與 ``_public_base_url`` 讀同一個 config_parameter、同一個預設值。
+        """
+        self.ensure_one()
+        admin_url = self._admin_page_public_url()
+        if self.state != 'running' or not admin_url:
+            return mcp_setup_status.UNKNOWN, admin_url
+        paas_domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io',
+        )
+        return mcp_setup_status.probe(admin_url, paas_domain), admin_url
 
     def _chart_has_gateway(self):
         """本服務的 chart 有沒有對外 gateway ⇒ 該不該有 gateway API key。

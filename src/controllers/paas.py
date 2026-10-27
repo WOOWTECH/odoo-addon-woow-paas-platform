@@ -34,7 +34,6 @@ from ..models.workspace_access import (
 from ..services.paas_capability import _PaaSCapability
 from ..models.llm_common import llm_visible
 from ..services import vpn_node_status as _vpn_node_status
-from ..services import mcp_setup_status as _mcp_setup_status
 from ..services.paas_operator import (
     get_paas_operator_client,
     PaaSOperatorAPIError,
@@ -2315,13 +2314,15 @@ class PaasController(HiddenChainMixin, Controller):
         新開的 mcp-server 家族服務（例：Nextcloud）在管理頁 → Connection 存好之前，MCP 一律回 503，
         平台 state 卻是 running、/woow 顯示「運作中」。這支在租戶打開服務頁時，由伺服器對**該服務自己的
         對外根位址**（``_admin_page_public_url()``，平台算出、不是使用者輸入）GET ``/healthz``，只取
-        ``mcp`` 欄位（running／not_configured／not_running），讓服務頁提示「要去管理頁哪裡設定」。
+        ``mcp``（running／not_configured／not_running）與第五輪的 ``backend``（configured／missing；
+        odoo、litellm、hermes、n8n 才有），讓服務頁提示「要去管理頁哪裡設定」。
 
         * 授權＝與 detail 同一條（工作區成員、service 釘在 workspace 上、concealed 當不存在）；
         * gate＝``_chart_has_mcp_setup_status()``（mcp-server 家族），沒有這個能力的服務一律「Service not found」；
-        * 只有 running 才查；讀不到、逾時、舊映像沒有 ``mcp`` 欄位都回 ``state: unknown``（正常降級，
-          前端什麼都不顯示），不是錯誤；
-        * 回應只有 ``state`` 與 ``admin_url``（提示裡的管理頁網址，同一個值）——``/healthz`` 的其他內容不轉出。
+        * 只有 running 才查（``CloudService._mcp_setup_status``）；讀不到、逾時、舊映像沒有欄位都回
+          ``state: unknown``／``backend: unknown``（正常降級，前端什麼都不顯示），不是錯誤；
+        * 回應只有 ``state``、``backend`` 與 ``admin_url``（提示裡的管理頁網址，同一個值）——``/healthz``
+          的其他內容不轉出。
         """
         if kw:
             return {'success': False, 'error': _('Invalid request')}
@@ -2331,11 +2332,9 @@ class PaasController(HiddenChainMixin, Controller):
             return error
         if not service._chart_has_mcp_setup_status():
             return {'success': False, 'error': _('Service not found')}
-        admin_url = service._admin_page_public_url()
-        state = _mcp_setup_status.STATE_UNKNOWN
-        if service.state == 'running':
-            state = _mcp_setup_status.probe(admin_url)
-        return {'success': True, 'data': {'state': state, 'admin_url': admin_url}}
+        status, admin_url = service._mcp_setup_status()
+        return {'success': True, 'data': {
+            'state': status.state, 'backend': status.backend, 'admin_url': admin_url}}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, clear_keys: list[str] | None = None, **kw: Any) -> dict[str, Any]:
@@ -4983,6 +4982,9 @@ class PaasController(HiddenChainMixin, Controller):
             resp_data.update(self._gateway_credentials(service))
             # #1542：mcp-server 家族的管理頁網址（非憑證、與 gateway 交付分開判）
             resp_data.update(self._admin_page_link(service))
+            # 2026-10-27（#2040 第五輪）：一次性憑證視窗的「先到 Connection 存好連線」那一句的 gate，
+            # 與 detail payload 同名同值（`_chart_has_mcp_setup_status`）；前端不用 slug 判。
+            resp_data['has_mcp_setup_status'] = service._chart_has_mcp_setup_status()
             return {
                 'success': True,
                 'data': resp_data,
