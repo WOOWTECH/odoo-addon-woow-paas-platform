@@ -430,7 +430,7 @@ test("服務頁：hook 在 setup 裡建一次，頁首提示與 OverviewTab 都�
 
 // ── Overview：Connection Info ───────────────────────────────────────────────────
 
-/** OverviewTab 的 connectionStatus／mcpConnectionLabel，接上真的 helper。 */
+/** OverviewTab 的 connectionStatus／connectionDisplayStatus／mcpConnectionLabel，接上真的 helper。 */
 function overview(service, { condition = "", workloadFault = false, nodeProblem = false } = {}) {
   const self = {
     props: { service, mcpSetupCondition: condition },
@@ -445,6 +445,7 @@ function overview(service, { condition = "", workloadFault = false, nodeProblem 
       hasNodeProblem: (report) => Boolean(report),
     }),
   });
+  Object.defineProperty(self, "connectionDisplayStatus", { get: getter(overviewSource, "connectionDisplayStatus") });
   Object.defineProperty(self, "mcpConnectionLabel", {
     get: getter(overviewSource, "mcpConnectionLabel", { mcpConnectionStatusLabel: utils.mcpConnectionStatusLabel }),
   });
@@ -453,34 +454,43 @@ function overview(service, { condition = "", workloadFault = false, nodeProblem 
 
 test("Connection Info（P1）：提示在說要設定時不再寫 ONLINE，改成同一種說法", () => {
   const running = { state: "running" };
-  assert.deepEqual([overview(running, { condition: "not_configured" }).connectionStatus,
-    overview(running, { condition: "not_configured" }).mcpConnectionLabel], ["needs_setup", "NEEDS SETUP"]);
-  assert.deepEqual([overview(running, { condition: "not_running" }).connectionStatus,
-    overview(running, { condition: "not_running" }).mcpConnectionLabel], ["mcp_not_running", "MCP NOT RUNNING"]);
-  assert.deepEqual([overview(running, { condition: "backend_missing" }).connectionStatus,
-    overview(running, { condition: "backend_missing" }).mcpConnectionLabel], ["backend_missing", "BACKEND NOT SET"]);
+  for (const [condition, display, label] of [
+    ["not_configured", "needs_setup", "NEEDS SETUP"],
+    ["not_running", "mcp_not_running", "MCP NOT RUNNING"],
+    ["backend_missing", "backend_missing", "BACKEND NOT SET"],
+  ]) {
+    const view = overview(running, { condition });
+    assert.deepEqual([view.connectionDisplayStatus, view.mcpConnectionLabel], [display, label], condition);
+    assert.equal(view.connectionStatus, "online", "平台觀測的三種不動（#1647／INFRA-FIX-005 的守線）");
+  }
 });
 
 test("Connection Info：running／unknown（沒有情況）維持 ONLINE；更嚴重的狀況仍是 OFFLINE；其他狀態不受影響", () => {
   for (const condition of ["", undefined]) {
     const view = overview({ state: "running" }, { condition });
-    assert.equal(view.connectionStatus, "online");
-    assert.equal(view.mcpConnectionLabel, "");
+    assert.deepEqual([view.connectionStatus, view.connectionDisplayStatus, view.mcpConnectionLabel], ["online", "online", ""]);
   }
   for (const flags of [{ workloadFault: true }, { nodeProblem: true }]) {
-    assert.equal(overview({ state: "running" }, { condition: "not_configured", ...flags }).connectionStatus, "offline");
+    const view = overview({ state: "running" }, { condition: "not_configured", ...flags });
+    assert.deepEqual([view.connectionDisplayStatus, view.mcpConnectionLabel], ["offline", ""]);
   }
-  assert.equal(overview({ state: "upgrading" }, { condition: "not_configured" }).connectionStatus, "updating");
-  assert.equal(overview({ state: "error" }, { condition: "not_running" }).connectionStatus, "offline");
-  assert.equal(overview({ state: "deploying", last_upgraded_at: "2026-10-01" }, { condition: "backend_missing" }).connectionStatus,
-    "updating");
+  for (const [service, condition, display] of [
+    [{ state: "upgrading" }, "not_configured", "updating"],
+    [{ state: "error" }, "not_running", "offline"],
+    [{ state: "deploying", last_upgraded_at: "2026-10-01" }, "backend_missing", "updating"],
+  ]) {
+    const view = overview(service, { condition });
+    assert.deepEqual([view.connectionDisplayStatus, view.mcpConnectionLabel], [display, ""], JSON.stringify(service));
+  }
 });
 
-test("Connection Info 模板：新文字排在 OFFLINE 之前、沿用同一格的 class", () => {
+test("Connection Info 模板：MCP 的字排在最前（只有平台觀測是 online 時才有值），class 讀顯示值", () => {
   assert.match(overviewXml,
-    /<t t-if="connectionStatus === 'online'">ONLINE<\/t>\s*<t t-elif="connectionStatus === 'updating'">UPDATING<\/t>\s*<t t-elif="mcpConnectionLabel" t-esc="mcpConnectionLabel"\/>\s*<t t-else="">OFFLINE<\/t>/);
-  assert.match(overviewXml, /t-att-class="'o_woow_info_value o_woow_connection_status ' \+ connectionStatus"/);
+    /<t t-if="mcpConnectionLabel" t-esc="mcpConnectionLabel"\/>\s*<t t-elif="connectionStatus === 'online'">ONLINE<\/t>\s*<t t-elif="connectionStatus === 'updating'">UPDATING<\/t>\s*<t t-else="">OFFLINE<\/t>/);
+  assert.match(overviewXml, /t-att-class="'o_woow_info_value o_woow_connection_status ' \+ connectionDisplayStatus"/);
   assert.match(overviewSource, /mcpSetupCondition: \{ type: String, optional: true \}/);
+  assert.doesNotMatch(memberBody(overviewSource, "get connectionStatus() {"), /mcp/i,
+    "connectionStatus 維持平台觀測的三種，MCP 的說法只在 connectionDisplayStatus");
 });
 
 // ── 開通的一次性憑證視窗（P1 b） ────────────────────────────────────────────────
