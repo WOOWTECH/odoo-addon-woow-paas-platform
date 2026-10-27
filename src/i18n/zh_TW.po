@@ -28679,3 +28679,86 @@ msgstr "點／次"
 #: code:addons/woow_paas_platform/static/src/paas/pages/llm/LlmPage.js:0
 msgid "points per million tokens"
 msgstr "點／百萬 Token"
+
+# 2026-10-27 服務頁「MCP 尚未設定連線」提示（components/mcp-setup-status、utils/mcp_setup_status.js）
+#
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid ""
+"MCP is not connected yet: open the admin page → Connection, fill it in and "
+"save. MCP starts providing tools only after that."
+msgstr "MCP 尚未設定連線：請到管理頁 → Connection 填好並儲存，MCP 才會開始提供工具。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "Admin page:"
+msgstr "管理頁："
+
+# 2026-10-27 第五輪（#2040）：非管理成員的說法、MCP 服務程式沒有在運作、後端連線還沒設定、Connection Info 狀態、開通視窗的下一步
+#
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid ""
+"MCP is not connected yet: ask a workspace owner or admin to set up the "
+"connection on the admin page. MCP starts providing tools only after that."
+msgstr "MCP 尚未設定連線：請工作區擁有者或管理員到管理頁設定連線，MCP 才會開始提供工具。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "The MCP server is not running. Check Logs on the admin page."
+msgstr "MCP 服務程式沒有在運作，請到管理頁查看 Logs。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid ""
+"The MCP server is not running. Ask a workspace owner or admin to check Logs "
+"on the admin page."
+msgstr "MCP 服務程式沒有在運作，請工作區擁有者或管理員到管理頁查看 Logs。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid ""
+"The backend connection is not set up yet, so tools that need the backend "
+"will not work: set it up under Connection on the admin page."
+msgstr "尚未設定後端連線，需要後端的工具無法使用：請到管理頁 → Connection 設定。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid ""
+"The backend connection is not set up yet, so tools that need the backend "
+"will not work: ask a workspace owner or admin to set it up on the admin "
+"page."
+msgstr "尚未設定後端連線，需要後端的工具無法使用：請工作區擁有者或管理員到管理頁設定。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "NEEDS SETUP"
+msgstr "待設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "MCP NOT RUNNING"
+msgstr "MCP 未運作"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/mcp_setup_status.js:0
+msgid "BACKEND NOT SET"
+msgstr "後端未設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Save the connection under Connection on the admin page first: MCP starts "
+"providing tools only after that."
+msgstr "請先到管理頁 → Connection 存好連線，MCP 才會開始提供工具。"

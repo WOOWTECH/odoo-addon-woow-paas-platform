@@ -459,6 +459,19 @@ $woow-radius-lg: 1.25rem;
             box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
         }
     }
+
+    // 2026-10-27（#2040 第五輪）：mcp-server 家族的頁首提示在說「要設定」時（待設定／MCP 未運作／
+    // 後端未設定）。琥珀色＝要人處理，但不是故障的紅、也不是線上的綠。
+    &.needs_setup,
+    &.mcp_not_running,
+    &.backend_missing {
+        color: #d97706;
+
+        .o_woow_status_indicator {
+            background: #d97706;
+            box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.2);
+        }
+    }
 }
 
 .o_woow_status_indicator {
