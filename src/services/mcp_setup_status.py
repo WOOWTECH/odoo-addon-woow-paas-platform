@@ -13,7 +13,8 @@ woow-mcp-server（mcp-admin-core）從 2026-10-27 那一版起在 ``/healthz`` �
 * ``not_configured`` —— 還沒設定連線（管理頁 → Connection 還沒存）；
 * ``not_running``    —— 子行程沒有在跑（例如憑證錯誤後停止重試），原因在管理頁的 Logs。
 
-第五輪（負責人 10-27 決定一起做）起，odoo、litellm、hermes、n8n 另回 ``backend``＝``configured``｜``missing``：
+第五輪（負責人 10-27 決定一起做）起，宣告了後端連線欄位的產品（odoo、litellm、hermes、n8n 等，以 woow-mcp-server
+``LaunchPolicy.backend_connection`` 為準）另回 ``backend``＝``configured``｜``missing``：
 這幾個產品沒有後端連線也照樣起得來、列得出工具（odoo 41、litellm 40、hermes 11、n8n 文件模式 7），
 ``mcp`` 是 ``running``，但用到後端的工具會失敗。其他產品與舊映像沒有這個欄位。
 
@@ -114,7 +115,7 @@ STATES = REPORTED_STATES | {STATE_UNKNOWN}
 BACKEND_CONFIGURED = 'configured'
 BACKEND_MISSING = 'missing'
 BACKEND_UNKNOWN = 'unknown'
-#: ``/healthz`` 的 ``backend`` 欄位認得的兩個值（第五輪：odoo、litellm、hermes、n8n 才有）。
+#: ``/healthz`` 的 ``backend`` 欄位認得的兩個值（第五輪：宣告了後端連線欄位的產品才有）。
 REPORTED_BACKENDS = frozenset({BACKEND_CONFIGURED, BACKEND_MISSING})
 #: 端點回給前端的三個值（前端 ``MCP_BACKEND_STATES`` 與此一一對應）；沒有欄位＝``unknown``＝不提示。
 BACKENDS = REPORTED_BACKENDS | {BACKEND_UNKNOWN}

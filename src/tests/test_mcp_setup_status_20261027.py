@@ -6,7 +6,7 @@
 結束），平台 ``state`` 卻是 ``running``，/woow 顯示「運作中」，租戶看不出哪裡不對。
 
 修法：woow-mcp-server 的 ``/healthz`` 多回 ``mcp``（running／not_configured／not_running；舊映像沒有），
-第五輪 odoo、litellm、hermes、n8n 另回 ``backend``（configured／missing）。平台在服務頁打開時以
+第五輪宣告了後端連線欄位的產品（odoo、litellm、hermes、n8n 等）另回 ``backend``（configured／missing）。平台在服務頁打開時以
 ``POST …/mcp-status`` 由伺服器對該服務自己的對外根位址 GET ``/healthz``，服務頁顯示提示（附管理頁網址），
 服務狀態本身不動。守的事：
 
@@ -193,7 +193,7 @@ class TestMcpHealthzContract20261027(BaseCase):
 
 @tagged('post_install', '-at_install')
 class TestMcpBackendField20261027(BaseCase):
-    """第五輪 P3：odoo、litellm、hermes、n8n 的 ``/healthz`` 多回 ``backend``（configured｜missing）。"""
+    """第五輪 P3：宣告了後端連線欄位的產品（odoo、litellm、hermes、n8n 等）的 ``/healthz`` 多回 ``backend``。"""
 
     def test_backend_passes_through_with_the_mcp_state(self):
         for state in ('running', 'not_configured', 'not_running'):
@@ -684,7 +684,7 @@ class TestMcpStatusEndpoint20261027(HttpCase):
                 self.assertEqual(result['data']['state'], state)
 
     def test_backend_field_passes_through(self):
-        """第五輪 P3：odoo、litellm、hermes、n8n 的 backend（configured／missing）原樣給前端。"""
+        """第五輪 P3：backend（configured／missing）原樣給前端。"""
         for backend in ('missing', 'configured'):
             with self.subTest(backend=backend):
                 mss._cache.clear()

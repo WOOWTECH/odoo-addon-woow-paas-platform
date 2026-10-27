@@ -12,8 +12,8 @@ import { _t } from "@web/core/l10n/translation";
  * - `not_configured`：還沒在管理頁 → Connection 存好連線（新開的 Nextcloud MCP 在這之前一律回 503）；
  * - `not_running`：MCP 服務程式沒有在運作（例如憑證錯誤後停止重試），原因在管理頁的 Logs；
  * - `backend_missing`（第五輪）：MCP 在運作（`state=running`），但 `/healthz` 說後端連線還沒設定
- *   （`backend=missing`；odoo、litellm、hermes、n8n 才有這個欄位）——工具列得出來，用到後端的會失敗，
- *   所以是較輕的提示。
+ *   （`backend=missing`；宣告了後端連線欄位的產品才有這個欄位，例如 odoo、litellm、hermes、n8n）——
+ *   工具列得出來，用到後端的會失敗，所以是較輕的提示。
  * 其他（`running` 且 `backend` 是 configured／沒有欄位、`unknown`）不顯示：`unknown`＝讀不到、舊映像
  * 沒有這個欄位，不能當成錯誤。
  *

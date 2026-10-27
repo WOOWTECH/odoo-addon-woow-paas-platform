@@ -2315,7 +2315,7 @@ class PaasController(HiddenChainMixin, Controller):
         平台 state 卻是 running、/woow 顯示「運作中」。這支在租戶打開服務頁時，由伺服器對**該服務自己的
         對外根位址**（``_admin_page_public_url()``，平台算出、不是使用者輸入）GET ``/healthz``，只取
         ``mcp``（running／not_configured／not_running）與第五輪的 ``backend``（configured／missing；
-        odoo、litellm、hermes、n8n 才有），讓服務頁提示「要去管理頁哪裡設定」。
+        宣告了後端連線欄位的產品才有，例如 odoo、litellm、hermes、n8n），讓服務頁提示「要去管理頁哪裡設定」。
 
         * 授權＝與 detail 同一條（工作區成員、service 釘在 workspace 上、concealed 當不存在）；
         * gate＝``_chart_has_mcp_setup_status()``（mcp-server 家族），沒有這個能力的服務一律「Service not found」；

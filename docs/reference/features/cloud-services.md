@@ -902,8 +902,9 @@ pod 在、管理頁在、`/healthz` 也是 200 ≠ MCP 在提供工具：新開�
 存好之前，`initialize`／`tools/list` 一律 503（子行程缺連線設定 exit 2），平台 `state` 卻是 `running`、/woow 顯示「運作中」。
 
 - **狀態來源**：woow-mcp-server（mcp-admin-core）的 `/healthz` 多回 `mcp`＝`running`｜`not_configured`｜`not_running`（字串、封閉集合；
-  舊映像沒有這個欄位，只回 `{"status":"ok"}`）。第五輪起 odoo、litellm、hermes、n8n 另回 `backend`＝`configured`｜`missing`
-  （沒有後端連線也起得來、列得出工具，`mcp` 是 `running`，但用到後端的工具會失敗；其他產品與舊映像沒有這個欄位）。
+  舊映像沒有這個欄位，只回 `{"status":"ok"}`）。第五輪起宣告了後端連線欄位的產品（odoo、litellm、hermes、n8n 等，以 woow-mcp-server
+  的 `LaunchPolicy.backend_connection` 為準）另回 `backend`＝`configured`｜`missing`（沒有後端連線也起得來、列得出工具，`mcp` 是
+  `running`，但用到後端的工具會失敗；其他產品與舊映像沒有這個欄位）。兩個欄位各算各的：`mcp` 不是 `running` 時以 `mcp` 的提示為主。
 - **能力 gate**：`CloudService._chart_has_mcp_setup_status()`＝`_admin_page_public_url()` 非空（has_admin_gui＋`admin_password_carrier=config_json`
   ＋有 subdomain，恰好是 mcp-server chart 家族）→ service detail payload 與開通回應的 `has_mcp_setup_status` → 服務頁／一次性憑證視窗。
   前端不得用 slug 判斷。
