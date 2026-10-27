@@ -14,7 +14,7 @@ from src.models.schemas import (
     ReleaseRevision,
     ReleaseStatus,
 )
-from src.services.helm import KubectlException
+from src.services.helm import HelmException, KubectlException
 
 
 @pytest.fixture
@@ -674,6 +674,38 @@ class TestReleaseEndpoints:
         assert data["release"]["name"] == "test-release"
         assert len(data["pods"]) == 1
         assert data["pods"][0]["phase"] == "Running"
+
+    @patch("src.api.releases.helm_service")
+    def test_get_release_status_missing_release_is_404(self, mock_helm, client):
+        """#2044: delete/status race is a missing resource, not an operator 500."""
+        mock_helm.get.side_effect = HelmException(
+            message="Release test-release not found",
+            command="helm list [sanitized]",
+            stderr="Release test-release not found in namespace paas-ws-test",
+        )
+
+        response = client.get("/api/releases/paas-ws-test/test-release/status")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == (
+            "Release test-release not found in namespace paas-ws-test"
+        )
+
+    @patch("src.api.releases.helm_service")
+    def test_get_release_status_other_helm_failure_remains_500(self, mock_helm, client):
+        """#2044: do not disguise an actual Helm failure as expected deletion."""
+        mock_helm.get.side_effect = HelmException(
+            message="Helm command failed with code 1",
+            command="helm list [sanitized]",
+            stderr="cluster transport unavailable",
+        )
+
+        response = client.get("/api/releases/paas-ws-test/test-release/status")
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Failed to get release status. Check operator logs for details."
+        )
 
 
 class TestSidecarEndpoints:

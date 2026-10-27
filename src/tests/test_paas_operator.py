@@ -410,6 +410,41 @@ class TestPaaSOperatorClient(TransactionCase):
         self.assertEqual(context.exception.status_code, 404)
 
     @patch('requests.Session.request')
+    def test_status_not_found_raises_without_duplicate_error_log(self, mock_request):
+        """#2044: caller classifies the expected delete/status race."""
+        from ..services import paas_operator as client_module
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.json.return_value = {'detail': 'Release not found'}
+        mock_request.return_value = mock_response
+
+        with patch.object(client_module, '_logger') as mock_logger:
+            with self.assertRaises(self.PaaSOperatorAPIError) as context:
+                self.client.get_status('paas-ws-a1b2c3d4', 'missing')
+
+        self.assertEqual(context.exception.status_code, 404)
+        mock_logger.error.assert_not_called()
+        mock_logger.debug.assert_called()
+
+    @patch('requests.Session.request')
+    def test_status_server_error_still_logs_error(self, mock_request):
+        """#2044: only the explicit missing-release outcome is quiet."""
+        from ..services import paas_operator as client_module
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.json.return_value = {'detail': 'Helm failed'}
+        mock_request.return_value = mock_response
+
+        with patch.object(client_module, '_logger') as mock_logger:
+            with self.assertRaises(self.PaaSOperatorAPIError) as context:
+                self.client.get_status('paas-ws-a1b2c3d4', 'broken')
+
+        self.assertEqual(context.exception.status_code, 500)
+        mock_logger.error.assert_called_once()
+
+    @patch('requests.Session.request')
     def test_connection_error_handling(self, mock_request):
         """Test connection error handling."""
         from requests.exceptions import ConnectionError
