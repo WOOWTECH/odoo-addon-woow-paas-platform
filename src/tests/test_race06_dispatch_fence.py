@@ -64,7 +64,7 @@ class TestRace06DispatchFenceReview(TransactionCase):
             self.assertTrue(self.fence.action_review_and_adopt_provider_app(
                 'admin reviewed the exact provider inventory'))
         self.assertEqual(operator.args, (
-            'race06-review', 'race06-review.example.invalid'))
+            'race06-focused', 'race06-focused.example.invalid'))
         self.assertEqual(self.fence.state, 'provider_adopted')
         self.assertEqual(self.fence.provider_app_id, 'app-reviewed')
 
