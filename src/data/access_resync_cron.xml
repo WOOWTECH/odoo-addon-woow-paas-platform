@@ -58,5 +58,26 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- FAULT-02：連接器／Operator 故障探測，**獨立一筆 ir.cron**。
+
+             為什麼不是把探測接在上面那筆的 `code` 後面：上面那筆在 `noupdate="1"`
+             裡，模組升級**不會**更新已存在記錄的 `code`——正式站的既有 cron 會一直
+             只跑 `_cron_resync_access_protection()`，探測永遠不會被呼叫（只有全新安裝
+             才看得到）。新 xml id 的記錄則會在升級時被建立，所以探測另立一筆，不需要
+             為了它多一個 migration、也不需要為了 migration 去 bump 版號。
+
+             探測只負責「發現故障就關閉」（pending＋503）；解除走上面那筆的 resync 腿
+             （連接器存活、Access 重新確認成功後才解除）。探測發現新的關閉時會
+             `_trigger` 上面那筆在約 2 分鐘後再跑一次，所以恢復不必等下一個 15 分鐘。 -->
+        <record id="ir_cron_access_fault_probe" model="ir.cron">
+            <field name="name">PaaS: Probe Access faults (connector / Operator)</field>
+            <field name="model_id" ref="model_woow_paas_platform_access_resync_cron"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_probe_security_access_faults()</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

@@ -397,7 +397,10 @@ class TestRevisionLedgerDurabilityAndFailure(_LedgerFixture):
     def test_E3_cron_retry_is_bounded_when_the_ledger_keeps_failing(self):
         """access_resync_cron 重推遇到帳本失敗：一列一輪只推一次、旗標留著。"""
         self._protect()
-        self.route._access_mark_protection_lost()
+        # Flag only: clearing the app id would send the retry down the create
+        # path, whose dispatch fence also needs a registry cursor and would
+        # fail before the operator is reached.
+        self.route.access_protection_lost = True
         cron = self.env['woow_paas_platform.access_resync_cron']
         calls = self.client.sync_access_app.call_count
         with patch('odoo.modules.registry.Registry.cursor',

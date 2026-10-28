@@ -858,8 +858,32 @@ class TestSecurityAccessAccessClientMethods(TransactionCase):
                 'session_duration': '8h', 'login_idp_types': ['google'],
                 'policies': [], 'existing_app_id': None,
                 'existing_policy_ids': []},
-            timeout=120)
+            timeout=120, expected_status_codes=(409,))
         self.assertEqual(result['app_id'], 'app-1')
+
+    def test_sync_access_expects_conflict_only_for_create(self):
+        """A create may be answered 409 (one app per domain: the caller adopts the
+        exact match), so only that call keeps the conflict out of the ERROR log;
+        updates and teardowns log every provider refusal."""
+        client = self._make_client()
+        base = {
+            'canonical_name': 'paas-sa-x-y', 'app_name': 'gw',
+            'primary_hostname': 'paas-sa-x-y.woowtech.io',
+            'protected_hostnames': ['paas-sa-x-y.woowtech.io'],
+            'session_duration': '8h', 'login_idp_types': ['google'],
+            'policies': [], 'existing_policy_ids': []}
+        cases = (
+            (dict(base, enabled=True, existing_app_id=None), (409,)),
+            (dict(base, enabled=True, existing_app_id='app-1'), ()),
+            (dict(base, enabled=False, existing_app_id='app-1'), ()),
+            (dict(base, enabled=False, existing_app_id=None), ()),
+        )
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                with patch.object(client, '_request', return_value={}) as mock_req:
+                    client.sync_access_app(payload)
+                self.assertEqual(
+                    mock_req.call_args.kwargs.get('expected_status_codes'), expected)
 
     def test_list_identity_providers_contract(self):
         client = self._make_client()
@@ -870,3 +894,16 @@ class TestSecurityAccessAccessClientMethods(TransactionCase):
         mock_req.assert_called_once_with(
             'GET', '/api/access/identity-providers')
         self.assertEqual(result['identity_providers'][0]['type'], 'google')
+
+    def test_review_access_app_contract(self):
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {
+                'status': 'unique', 'app_id': 'app-1', 'match_count': 1}
+            result = client.review_access_app('owned app', 'owned.example.test')
+        mock_req.assert_called_once_with(
+            'POST', '/api/access/review-application',
+            data={'app_name': 'owned app',
+                  'primary_hostname': 'owned.example.test'},
+            timeout=120)
+        self.assertEqual(result['app_id'], 'app-1')

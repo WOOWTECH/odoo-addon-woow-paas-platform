@@ -35,6 +35,13 @@ _logger = logging.getLogger(__name__)
 
 
 class PerIdentityOperator(FakeOperator):
+    def get_tunnel_status(self, tunnel_id, *args, **kwargs):
+        # Security Access recovery re-publishes only against a live connector;
+        # the fixture names each tunnel after its id.
+        return {'tunnel_id': tunnel_id, 'name': tunnel_id,
+                'status': 'healthy', 'deleted_at': None,
+                'connections': [{'connector_id': 'per-identity-connector'}]}
+
     """Track app/origin and every phase by stable Access app identity."""
 
     def __init__(self):

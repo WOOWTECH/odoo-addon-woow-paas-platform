@@ -1,6 +1,12 @@
 """Known remote publication failures preserve server-owned Access identities."""
+from datetime import timedelta
+import logging
+import time
+
 from odoo import _
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 class AccessProtectionError(UserError):
     """The operator returned no usable protection identity."""
@@ -139,3 +145,169 @@ def require_tunnel_routes_receipt(result, tunnel_id, routes, domain):
     if not valid or received != expected:
         raise AccessPublicationError(_(
             'Origin publication result is not confirmed. Retry.'))
+
+
+# ---------------------------------------------------------------------------
+# Token-revocation hold (REV-01)
+#
+# Removing an allow policy closes the origin immediately (503) and asks
+# Cloudflare to revoke the app's tokens.  The provider only *accepts* that
+# request; it never proves that an old cookie is denied, and the platform has
+# no cookie to probe with.  The origin therefore stays closed for a bounded
+# hold that starts when the provider acknowledges the revocation, and is
+# re-published only after the Access state was re-confirmed.  The hold is not
+# proof of denial: the live same-cookie oracle still has to observe it.
+# ---------------------------------------------------------------------------
+ACCESS_REVOKE_HOLD_PARAM = 'woow_paas_platform.access_revoke_hold_seconds'
+ACCESS_REVOKE_HOLD_DEFAULT = 120
+ACCESS_REVOKE_HOLD_MIN = 30
+ACCESS_REVOKE_HOLD_MAX = 3600
+ACCESS_RESYNC_CRON_XMLID = 'woow_paas_platform.ir_cron_access_protection_resync'
+
+
+def access_revoke_hold_seconds(env):
+    """Configured hold after provider acceptance, clamped to a sane range.
+
+    An unset or unparsable value falls back to the default instead of
+    shortening the hold: a typo must not weaken the revocation barrier.
+    """
+    raw = env['ir.config_parameter'].sudo().get_param(ACCESS_REVOKE_HOLD_PARAM)
+    # ``get_param`` answers ``False`` for an unset (or empty) parameter and
+    # ``int(False)`` is 0, which would clamp to the *minimum* instead of the
+    # default: an unset parameter must mean the default.
+    if not raw:
+        return ACCESS_REVOKE_HOLD_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return ACCESS_REVOKE_HOLD_DEFAULT
+    return max(ACCESS_REVOKE_HOLD_MIN, min(ACCESS_REVOKE_HOLD_MAX, value))
+
+
+def access_revoke_provider_accepted(result):
+    """True only for the operator's explicit ``accepted`` acknowledgement."""
+    return type(result) is dict and result.get('token_revocation') == 'accepted'
+
+
+def access_revoke_operator_reports(result):
+    """True when the operator's receipt carries a ``token_revocation`` field.
+
+    An operator that predates the revocation contract silently ignores
+    ``revoke_tokens`` and never reports the field, so an acknowledgement would
+    never arrive.  Callers log that skew instead of waiting without a reason.
+    """
+    return type(result) is dict and 'token_revocation' in result
+
+
+def access_revoke_state(revoke_pending, accepted_at, now, hold_seconds):
+    """Classify one anchor's revocation hold.
+
+    ``none``              no revocation outstanding
+    ``await_acceptance``  the provider has not acknowledged the revocation yet
+    ``held``              acknowledged; the hold has not elapsed
+    ``releasable``        acknowledged and the hold elapsed; re-publish may proceed
+    """
+    if not revoke_pending:
+        return 'none'
+    if not accepted_at:
+        return 'await_acceptance'
+    if now < accepted_at + timedelta(seconds=hold_seconds):
+        return 'held'
+    return 'releasable'
+
+
+def schedule_access_resync(env, at):
+    """Best effort: wake the Access resync cron at ``at`` (naive UTC datetime).
+
+    The periodic cron remains the safety net, so a failure here only delays
+    recovery to the next scheduled run.
+    """
+    cron = env.ref(ACCESS_RESYNC_CRON_XMLID, raise_if_not_found=False)
+    if not cron:
+        return False
+    try:
+        with env.cr.savepoint():
+            cron.sudo()._trigger(at=at)
+    except Exception as error:  # noqa: BLE001 - never fail a sync over a wake-up
+        _logger.warning('[ACCESS] could not schedule resync at %s: %s', at, error)
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Create-or-adopt (RACE-06)
+#
+# Cloudflare keeps exactly ONE Access application per domain: a second POST for
+# the same domain is refused with HTTP 409 / error 11010
+# ``access.api.error.application_already_exists`` -- measured on the live account,
+# including 8 simultaneous POSTs (one 201, seven 409), and the domain (not the
+# name) is the key.  That is the idempotency primitive the create path needs, so a
+# create whose outcome is unknown (worker killed around the provider call) can
+# simply be repeated: either it creates the app, or the provider says it already
+# exists and we adopt the one that matches our exact name and domain.
+# ---------------------------------------------------------------------------
+ACCESS_CREATE_SETTLE_PARAM = 'woow_paas_platform.access_create_settle_seconds'
+ACCESS_CREATE_SETTLE_DEFAULT = 600
+ACCESS_CREATE_SETTLE_MIN = 30
+ACCESS_CREATE_SETTLE_MAX = 86400
+_ADOPT_REVIEW_ATTEMPTS = 3
+_ADOPT_REVIEW_PAUSE_SECONDS = 2
+
+
+def access_create_settle_seconds(env):
+    """How long an unknown create outcome is left alone before it is repeated.
+
+    The Operator finishes (or gives up) an in-flight create within its own request
+    timeouts even when the Odoo worker that asked is dead, so waiting this long
+    only avoids racing that tail; correctness never depends on it because a
+    duplicate create is refused by the provider.  Unset or unparsable means the
+    default; the value is clamped.
+    """
+    raw = env['ir.config_parameter'].sudo().get_param(ACCESS_CREATE_SETTLE_PARAM)
+    if not raw:
+        return ACCESS_CREATE_SETTLE_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return ACCESS_CREATE_SETTLE_DEFAULT
+    return max(ACCESS_CREATE_SETTLE_MIN, min(ACCESS_CREATE_SETTLE_MAX, value))
+
+
+def _adoptable_review(review):
+    return (type(review) is dict and review.get('status') == 'unique' and
+            review.get('match_count') == 1 and
+            type(review.get('app_id')) is str and bool(review['app_id'].strip()))
+
+
+def sync_access_app_create_or_adopt(client, payload):
+    """``client.sync_access_app(payload)``, adopting the existing app on a conflict.
+
+    Returns ``(result, payload_used)``.  Only a *create* (enabled, no
+    ``existing_app_id``) that the provider refused with 409 is adopted, and only
+    when a read-only exact name+domain lookup finds exactly one app: a foreign app
+    holding the domain, or several matches, is not ours to take over and the
+    original error is raised.
+    """
+    from .paas_operator import PaaSOperatorAPIError  # lazy: avoid an import cycle
+    try:
+        return client.sync_access_app(payload), payload
+    except PaaSOperatorAPIError as error:
+        if not (payload.get('enabled') is True and not payload.get('existing_app_id')
+                and error.status_code == 409):
+            raise
+        review = None
+        for attempt in range(_ADOPT_REVIEW_ATTEMPTS):
+            review = client.review_access_app(
+                payload.get('app_name'), payload.get('primary_hostname'))
+            if _adoptable_review(review):
+                break
+            if attempt + 1 < _ADOPT_REVIEW_ATTEMPTS:
+                time.sleep(_ADOPT_REVIEW_PAUSE_SECONDS)  # read-after-write lag
+        else:
+            raise error
+        _logger.warning(
+            '[ACCESS] create for %s conflicted with an existing app that matches '
+            'our exact name and domain; adopting it instead of creating',
+            payload.get('primary_hostname'))
+        adopted = dict(payload, existing_app_id=review['app_id'])
+        return client.sync_access_app(adopted), adopted

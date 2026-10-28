@@ -11,6 +11,9 @@ from . import test_custom_domain
 from . import test_cloud_api
 from . import test_paas_operator
 from . import test_smart_home
+from . import test_race06_dispatch_fence
+from . import test_race06_fence_lifecycle
+from . import test_race06_create_or_adopt
 # #859：遠端 tunnel 已刪與本地 bookkeeping 失敗不可混成待重試。
 from . import test_cleanup_tunnel_859
 from . import test_workspace_cascade_cleanup
@@ -24,6 +27,7 @@ from . import test_smart_home_subscription_flow
 from . import test_oauth2
 from . import test_oauth_subject_http_ac1011
 from . import test_oauth2_device_flow
+from . import test_auth05_replay_revocation
 from . import test_ha_api
 from . import test_ha_api_security_access
 # HA API tunnel-token 只給 owner／admin（role=user／guest 回 insufficient_role）。
@@ -816,6 +820,7 @@ from . import test_policy_anchor_ownership_guard_848
 # D4 釘住「零命中那輪也要出聲、且那一行自帶三個計數」——空手與全被擋是兩件事。
 # D5 釘住 cron 的回存過得了 #854 的 `access_app_id` 欄位級守衛。
 from . import test_access_resync_cron_803
+from . import test_fault02_durable_invalidation
 
 # feat: #36 試用中變更方案**一定**結束試用並開首期帳單——SA / SH 兩 surface。
 # `ChangePlanModal` 的警告文案逐字保證三件事（結束試用／開始計費／首期帳單），
@@ -1174,6 +1179,7 @@ from . import test_cs_sh_fail_closed_ac1011
 from . import test_actual_operator_publish_recovery_ac1011
 
 from . import test_access_publish_pending_ac1011
+from . import test_access_revoke_hold_rev01
 
 from . import test_invite_profile_identity_ac1011
 
@@ -1315,3 +1321,10 @@ from . import test_llm_paid_pilot
 
 # #2004：公開首頁 blob manifest、mobile overflow 與 a11y heading／duplicate ID。
 from . import test_public_website_hardening_2004
+# RACE-01：延遲的 sibling Access 發布不得抹掉已提交的 primary 隔離（真雙 PG
+# REPEATABLE READ 交易；兩方都必須提交，拒絕其中一方不算修好）。
+from . import test_race01_ingress_fence  # noqa: F401 - register Odoo tests
+
+# RACE-01 覆核（batch46）：圍籬鎖的壽命——放寬方的臨界區只該涵蓋「重讀已提交
+# 狀態 → 發布」，不該跟著呼叫端整筆交易（否則 resync cron 一輪會把它握到最後）。
+from . import test_race01_fence_scope  # noqa: F401 - register Odoo tests

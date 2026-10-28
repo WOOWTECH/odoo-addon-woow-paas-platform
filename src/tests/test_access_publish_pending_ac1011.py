@@ -26,6 +26,14 @@ class PendingFixture(Fixture):
         }).with_env(self.env)
         _sa_identity(sa).write({'state': 'active', 'tunnel_id': 'native-pending-sa-tunnel',
                                'tunnel_name': 'native-pending-sa-tunnel-name'})
+        # A normal SA retry fixture represents a still-serving connector. The
+        # fault test below explicitly substitutes down/stale status snapshots.
+        self.client.get_tunnel_status = lambda tunnel_id: {
+            'tunnel_id': tunnel_id, 'name': sa.tunnel_name,
+            'status': 'healthy',
+            'connections': [{'connector_id': 'fake-live-connector'}],
+            'deleted_at': None,
+        }
         return sa, route
 
     def anchor(self, kind):
@@ -85,6 +93,63 @@ class TestAccessPublishPendingAC1011(PendingFixture, TransactionCase):
     def test_cs_public_intent_pending_retry(self): self.disable_pending_and_retry('cs')
     def test_sh_public_intent_pending_retry(self): self.disable_pending_and_retry('sh')
     def test_sa_public_intent_pending_retry(self): self.disable_pending_and_retry('sa')
+
+    def test_sa_pending_recovery_requires_a_live_connector_before_release(self):
+        """A stale/down tunnel must retain its 503 fence after Access re-sync.
+
+        The initial publication failure has already parked the route and saved
+        its remote Access identity.  A later retry may receive valid Access
+        and ingress receipts while the connector itself is gone; that is not
+        sufficient evidence to unpark the hostname.
+        """
+        anchor = self.anchor('sa')
+        self.client.origin = True
+        self.fail_publish('sa')
+        self.assertTrue(anchor.write({'is_protected': True}))
+        self.assert_pending(anchor)
+        self.fail_publish('sa', False)
+        sa = anchor.security_access_id
+        self.client.get_tunnel_status = lambda tunnel_id: {
+            'tunnel_id': tunnel_id, 'name': sa.tunnel_name,
+            'status': 'down',
+            # Cloudflare may briefly retain a connection-shaped inventory row
+            # after the connector has stopped serving.
+            'connections': [{'connector_id': 'stale-connector'}],
+            'deleted_at': None,
+        }
+        self.client.events.clear()
+        self.assertTrue(anchor.write({'is_protected': True}))
+        anchor.invalidate_recordset()
+        self.assertTrue(anchor.access_publish_pending)
+        self.assertFalse(self.client.origin)
+
+        unsafe_snapshots = (
+            {'tunnel_id': 'other-tunnel', 'name': sa.tunnel_name,
+             'status': 'healthy', 'connections': [{'connector_id': 'live'}]},
+            {'tunnel_id': sa.tunnel_id, 'name': 'other-name',
+             'status': 'healthy', 'connections': [{'connector_id': 'live'}]},
+            {'tunnel_id': sa.tunnel_id, 'name': sa.tunnel_name,
+             'status': 'healthy', 'connections': [{}]},
+            {'tunnel_id': sa.tunnel_id, 'name': sa.tunnel_name,
+             'status': 'healthy', 'connections': [{'connector_id': '  '}]},
+        )
+        for snapshot in unsafe_snapshots:
+            self.client.get_tunnel_status = lambda tunnel_id, row=snapshot: row
+            self.assertTrue(anchor.write({'is_protected': True}))
+            anchor.invalidate_recordset()
+            self.assertTrue(anchor.access_publish_pending)
+            self.assertFalse(self.client.origin)
+
+        self.client.get_tunnel_status = lambda tunnel_id: {
+            'tunnel_id': tunnel_id, 'name': sa.tunnel_name,
+            'status': 'healthy',
+            'connections': [{'connector_id': 'live-connector'}],
+            'deleted_at': None,
+        }
+        self.assertTrue(anchor.write({'is_protected': True}))
+        anchor.invalidate_recordset()
+        self.assertFalse(anchor.access_publish_pending)
+        self.assertTrue(self.client.origin)
 
     def test_three_legs_pending_flag_is_server_owned_even_sudo_and_context(self):
         for kind in ('cs', 'sh', 'sa'):

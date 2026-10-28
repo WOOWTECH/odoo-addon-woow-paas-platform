@@ -50,7 +50,11 @@
 import logging
 import uuid
 from unittest.mock import MagicMock, patch
-from .publication_receipt_fixture import access_receipt, routes_receipt
+from .publication_receipt_fixture import (
+    access_receipt,
+    configure_receipt,
+    routes_receipt,
+)
 
 from odoo.tests import TransactionCase, tagged
 
@@ -121,6 +125,7 @@ class _ReapMixin:
         else:
             client.sync_access_app.return_value = result
         client.sync_tunnel_routes.side_effect = routes_receipt
+        client.configure_tunnel.side_effect = configure_receipt
         client.park_release_route.return_value = {'status': 'parked'}
         client.unpark_release_route.return_value = {'status': 'unparked'}
         return client

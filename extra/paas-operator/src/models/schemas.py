@@ -1098,6 +1098,16 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: datetime
     helm_version: Optional[str] = None
+    instance_epoch: str = Field(
+        ..., min_length=1, max_length=128,
+        description="Opaque identity for this Operator process lifetime",
+    )
+    instance_id: Optional[str] = Field(
+        None, min_length=1, max_length=128,
+        description="Stable identity of the replica (pod name). Several replicas "
+                    "answer behind one Service, each with its own epoch, so an "
+                    "epoch change is only a restart for the same instance_id.",
+    )
 
 
 class SidecarContainer(BaseModel):
@@ -1638,6 +1648,10 @@ class AccessSyncRequest(BaseModel):
     policies: List[AccessPolicySpec] = Field(default_factory=list)
     existing_app_id: Optional[str] = Field(None)
     existing_policy_ids: Optional[List[str]] = Field(None)
+    revoke_tokens: bool = Field(
+        False,
+        description="Request revocation for the existing app after its policy PUT",
+    )
 
 
 class AccessSyncResponse(BaseModel):
@@ -1656,6 +1670,11 @@ class AccessSyncResponse(BaseModel):
         description="Old reusable policies that could not be deleted after the "
                     "app was repointed — permanent CF orphans to log/alert on",
     )
+    token_revocation: Literal["not_required", "accepted", "failed"] = Field(
+        "not_required",
+        description="Provider acknowledgement only; never proof that sessions are denied",
+    )
+    token_revocation_error: Optional[str] = Field(None)
 
 
 class IdentityProviderInfo(BaseModel):
@@ -1666,6 +1685,21 @@ class IdentityProviderInfo(BaseModel):
 
 class IdentityProvidersResponse(BaseModel):
     identity_providers: List[IdentityProviderInfo]
+
+
+class AccessApplicationReviewRequest(BaseModel):
+    """Read-only lookup keys for resolving an uncertain Access POST."""
+
+    app_name: str = Field(..., min_length=1)
+    primary_hostname: str = Field(..., min_length=1)
+
+
+class AccessApplicationReviewResponse(BaseModel):
+    """A unique exact match is adoptable; zero/multiple matches stay fenced."""
+
+    status: str
+    app_id: Optional[str] = None
+    match_count: int
 
 
 # ==================== L4 reconciler（帳號級反向孤兒對帳）====================

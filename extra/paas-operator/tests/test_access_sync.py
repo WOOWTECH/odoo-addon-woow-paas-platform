@@ -75,6 +75,54 @@ class TestListIdentityProviders:
                 await cf_service.list_identity_providers()
 
 
+class TestReviewAccessApplication:
+    @pytest.mark.asyncio
+    async def test_unique_exact_match_is_adoptable_and_query_is_exact(
+            self, cf_service):
+        calls = []
+
+        async def fake_get(url, headers=None, params=None, timeout=None):
+            calls.append(params)
+            class R:
+                status_code = 200
+                @staticmethod
+                def json():
+                    return {"success": True, "result": [
+                        {"id": "app-exact", "name": "owned app",
+                         "domain": "owned.example.test"},
+                        {"id": "app-near", "name": "owned app extra",
+                         "domain": "owned.example.test"}],
+                            "result_info": {"total_pages": 1}}
+            return R()
+
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=fake_get)):
+            result = await cf_service.review_access_app_exact(
+                "owned app", "owned.example.test")
+        assert result == {"status": "unique", "app_id": "app-exact",
+                          "match_count": 1}
+        assert calls == [{"name": "owned app", "domain": "owned.example.test",
+                          "exact": "true", "page": 1, "per_page": 1000}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("apps,status,count", [
+        ([], "absent", 0),
+        ([{"id": "a", "name": "n", "domain": "h"},
+          {"id": "b", "name": "n", "domain": "h"}], "ambiguous", 2),
+    ])
+    async def test_absent_or_multiple_never_returns_an_id(
+            self, cf_service, apps, status, count):
+        class R:
+            status_code = 200
+            @staticmethod
+            def json():
+                return {"success": True, "result": apps,
+                        "result_info": {"total_pages": 1}}
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=R())):
+            result = await cf_service.review_access_app_exact("n", "h")
+        assert result == {"status": status, "app_id": None,
+                          "match_count": count}
+
+
 class TestReusablePolicyCrud:
     @pytest.mark.asyncio
     async def test_create_reusable_policy_email_domain(self, cf_service):
@@ -773,6 +821,38 @@ class TestSyncAccessApp:
         assert precs == [10, 30], \
             f"app policies must be precedence-sorted ascending: {precs}"
 
+    @pytest.mark.asyncio
+    async def test_existing_app_revoke_returns_acceptance_not_denial_proof(
+            self, cf_service):
+        cf_service._resolve_idp_ids = AsyncMock(return_value=([], []))
+        cf_service.create_reusable_policy = AsyncMock(return_value="pol-new")
+        cf_service.delete_reusable_policy = AsyncMock()
+        cf_service.revoke_access_app_tokens = AsyncMock(return_value="accepted")
+
+        class PutResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"success": True, "result": {"id": "app-owned"}}
+
+        with patch("httpx.AsyncClient.put",
+                   new=AsyncMock(return_value=PutResponse())):
+            result = await cf_service.sync_access_app(
+                canonical_name="owned", app_name="owned",
+                primary_hostname="owned.example.test",
+                protected_hostnames=["owned.example.test"],
+                session_duration="8h", login_idp_types=[],
+                policies=[{"name": "allow", "decision": "allow",
+                           "precedence": 1,
+                           "include": [{"rule_type": "everyone"}]}],
+                enabled=True, existing_app_id="app-owned",
+                existing_policy_ids=["pol-old"], revoke_tokens=True)
+
+        assert result["token_revocation"] == "accepted"
+        assert "denial" not in result
+        cf_service.revoke_access_app_tokens.assert_awaited_once_with("app-owned")
+
 
 class TestAccessPolicySpecValidation:
     """AccessPolicySpec model validators — defense in depth. Odoo enforces the
@@ -1176,3 +1256,18 @@ class TestAccessEndpoints:
         assert resp.status_code == 200
         types = [i["type"] for i in resp.json()["identity_providers"]]
         assert "google" in types and "onetimepin" in types
+
+    @sync_patch("src.api.access.cloudflare_service")
+    def test_review_application_is_read_only_exact_lookup(self, mock_cf, client):
+        mock_cf.api_token = "t"
+        mock_cf.account_id = "a"
+        mock_cf.review_access_app_exact = AsyncMock(return_value={
+            "status": "unique", "app_id": "app-owned", "match_count": 1})
+        resp = client.post("/api/access/review-application", json={
+            "app_name": "owned app",
+            "primary_hostname": "owned.example.test"})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "unique", "app_id": "app-owned",
+                               "match_count": 1}
+        mock_cf.review_access_app_exact.assert_awaited_once_with(
+            "owned app", "owned.example.test")

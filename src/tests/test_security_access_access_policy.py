@@ -673,6 +673,9 @@ class TestRouteAccessSync(TransactionCase):
         self.assertIn('cf-b', payload['existing_policy_ids'])
         self.assertIn('cf-a', payload['existing_policy_ids'])
         self.assertEqual([p['name'] for p in payload['policies']], ['p1'])
+        self.assertTrue(payload['revoke_tokens'])
+        self.assertTrue(route.access_token_revoke_pending)
+        self.assertTrue(route.access_publish_pending)
 
     def test_unlink_all_policies_carries_every_cf_id(self):
         mc = self._mock()
@@ -740,6 +743,34 @@ class TestRouteAccessSync(TransactionCase):
             with self.assertRaises(PaaSOperatorError):
                 pol.unlink()
         self.assertTrue(self.Policy.browse(pol_id).exists())
+
+    def test_policy_unlink_sync_failure_keeps_the_origin_closure_marker(self):
+        """The revoke-driven sync parks the origin before the failing call and a
+        parked edge cannot roll back: the closure must stay recorded (the cron
+        re-opens it) while nothing was deleted, so no revocation is pending."""
+        from odoo.addons.woow_paas_platform.services.paas_operator import (
+            PaaSOperatorError,
+        )
+        mc = self._mock()
+        sa, route = self._active_sa(mc, protected=True)
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            pol = self.Policy.create({
+                'route_id': route.id, 'name': 'doomed-pol',
+                'decision': 'deny', 'rule_type': 'email_domain',
+                'rule_value': 'doomed.com'})
+            mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
+            # Not ``assertRaises``: it rolls the block back, marker included. The
+            # controllers catch the error, answer success=False and commit.
+            try:
+                pol.unlink()
+            except PaaSOperatorError:
+                pass
+            else:
+                self.fail('the failing provider call must surface')
+        self.assertTrue(pol.exists())
+        route.invalidate_recordset()
+        self.assertTrue(route.access_publish_pending)
+        self.assertFalse(route.access_token_revoke_pending)
 
     def test_writeback_maps_cf_policy_id_multi_policy(self):
         """多 policy writeback 順序：zip(route.access_policy_ids.sorted, returned)
