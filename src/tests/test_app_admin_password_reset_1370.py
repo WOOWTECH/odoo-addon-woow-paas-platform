@@ -162,6 +162,26 @@ class TestAppAdminResetFlow1370(_AppAdminResetFixture):
         self.assertEqual(self.odoo_service.state, 'running')
 
     @patch(CLIENT_PATH)
+    def test_odoo_reset_still_succeeds_when_the_chart_secret_could_not_be_aligned(self, get_client):
+        """operator 回 ``secret_sync: failed``：密碼已在 app DB 生效，租戶照樣拿到新密碼；只留警告線索。
+
+        chart conf Secret 的初始密碼沒對齊成功不影響登入——平台下一次 helm upgrade 會重送目前的密碼。
+        """
+        import logging
+        client = get_client.return_value
+        client.reset_odoo_admin_password.return_value = {
+            'success': True, 'login': 'boss@example.com', 'second_factor_cleared': False,
+            'secret_sync': 'failed'}
+
+        with self.assertLogs('odoo.addons.woow_paas_platform.models.cloud_service', level=logging.WARNING) as logs:
+            result = self._reset(self.odoo_service)
+
+        self.assertTrue(result['success'], result)
+        self.assertEqual(self._secret(self.odoo_service).admin_password, result['data']['admin_password'])
+        self.assertTrue(any('could not be aligned' in line for line in logs.output))
+        self.assertFalse(any(result['data']['admin_password'] in line for line in logs.output))
+
+    @patch(CLIENT_PATH)
     def test_n8n_reset_resyncs_owner_credentials_for_post_deploy_init(self, get_client):
         client = get_client.return_value
         client.reset_n8n_owner_password.return_value = {

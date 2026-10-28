@@ -1328,3 +1328,6 @@ from . import test_race01_ingress_fence  # noqa: F401 - register Odoo tests
 # RACE-01 覆核（batch46）：圍籬鎖的壽命——放寬方的臨界區只該涵蓋「重讀已提交
 # 狀態 → 發布」，不該跟著呼叫端整筆交易（否則 resync cron 一輪會把它握到最後）。
 from . import test_race01_fence_scope  # noqa: F401 - register Odoo tests
+
+# 2026-10-28：回復版本後 woow-odoo 租戶的平台記錄（模組勾選、conf Secret 密碼）與叢集一致。
+from . import test_odoo_rollback_sync_20261028  # noqa: F401 - register Odoo tests

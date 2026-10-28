@@ -6,6 +6,11 @@ ODOO_PYTHON = "python3"
 ODOO_SERVER_LABEL = "app.kubernetes.io/component=server"
 # chart 掛 conf Secret 的位置（含 db_*）；注入租戶的 script 各自寫同值常數。
 ODOO_CONF_PATH = "/etc/odoo/odoo.conf"
+# chart 的 conf Secret（``<release>-odoo-conf``，woow-odoo templates/secrets.yaml）。tenant profile 另帶
+# 初始管理員密碼（鍵 ``admin-password``；platform profile 沒有這一格）。它只在首次 ``-i base`` 套用，
+# 之後密碼的權威在 app 自己的 DB；平台重設密碼後要把這一格對齊到目前的密碼，免得維運讀到過期憑證。
+ODOO_CONF_SECRET_SUFFIX = "-odoo-conf"
+ODOO_ADMIN_PASSWORD_SECRET_KEY = "admin-password"
 
 
 def odoo_pod_selectors(release_name: str) -> tuple[str, str]:
