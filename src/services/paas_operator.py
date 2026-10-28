@@ -846,6 +846,13 @@ class PaaSOperatorClient:
             f'/api/releases/{namespace}/{release_name}',
             params=params or None,
             timeout=HELM_OPERATION_TIMEOUT,
+            # 刪除是冪等的：租戶刪除（controller）先 uninstall、再 ``unlink()`` 的
+            # ``_cleanup_helm`` 會對同一個 release 再 uninstall 一次，lifecycle 的
+            # ``_do_cleanup`` 也一樣。三個呼叫端都有明確的 404 分支（＝要的結果已成立），
+            # 所以 404 不該先被 ``_request`` 記成 ERROR——否則每刪一個服務就多一筆假錯誤
+            # （與 #2044 的 status 路徑同一型）。仍照常 raise 帶 404 的
+            # ``PaaSOperatorAPIError``，由呼叫端分類；其他狀態碼照舊記 ERROR。
+            expected_status_codes=(404,),
         )
 
     def scale_release(

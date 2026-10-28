@@ -90,6 +90,19 @@
                         <div class="o_woow_addons_count">
                             <t t-esc="currentAddons.length"/> addon(s) selected
                         </div>
+                        <!-- 勾選只讓模組「可用」（複製進 addons_path）、不會自動安裝：提示下一步，並直達 Odoo 應用程式。 -->
+                        <div class="o_woow_editor_hint">
+                            <WoowIcon name="'info'" size="16"/>
+                            <span>Selected addons are available in Odoo Apps. Install them there before using them.</span>
+                        </div>
+                        <WoowButton
+                            t-if="odooAppsUrl"
+                            variant="'secondary'"
+                            size="'sm'"
+                            onClick.bind="openOdooApps">
+                            <WoowIcon name="'open_in_new'" size="18"/>
+                            Open Odoo Apps
+                        </WoowButton>
                     </t>
                 </WoowCard>
             </t>
@@ -100,7 +113,7 @@
                     <div class="o_woow_config_editor">
                         <div class="o_woow_editor_hint">
                             <WoowIcon name="'info'" size="16"/>
-                            <span>Select the addons to install on this Odoo instance. Changes will trigger a service upgrade.</span>
+                            <span>Choose which addons to make available on this Odoo instance. Selecting an addon does not install it: after the service finishes redeploying, install it from Odoo Apps. Changes will trigger a service upgrade.</span>
                         </div>
                         <OdooAddonSelector
                             templateId="props.service.template.id"
