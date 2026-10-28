@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { _t } from "@web/core/l10n/translation";
+import { accessMutation } from "./access_mutation";
 import { jsonRpc } from "./rpc";
 
 /**
@@ -39,9 +40,7 @@ export const smartHomeAccessService = {
           `/routes/${routeId}/access-config`,
         vals,
       );
-      return result.success
-        ? { success: true, data: result.data }
-        : { success: false, error: result.error };
+      return accessMutation(result);
     } catch (err) {
       return { success: false, error: err.message || _t("Network error") };
     }
@@ -76,9 +75,7 @@ export const smartHomeAccessService = {
         `/api/workspaces/${workspaceId}/smarthomes/${smartHomeId}/access-policies`,
         { action: "create", route_id: routeId, ...vals },
       );
-      return result.success
-        ? { success: true, data: result.data }
-        : { success: false, error: result.error };
+      return accessMutation(result);
     } catch (err) {
       return { success: false, error: err.message || _t("Network error") };
     }
@@ -90,9 +87,7 @@ export const smartHomeAccessService = {
         `/api/workspaces/${workspaceId}/smarthomes/${smartHomeId}/access-policies`,
         { action: "update", policy_id: policyId, ...vals },
       );
-      return result.success
-        ? { success: true, data: result.data }
-        : { success: false, error: result.error };
+      return accessMutation(result);
     } catch (err) {
       return { success: false, error: err.message || _t("Network error") };
     }
@@ -104,9 +99,7 @@ export const smartHomeAccessService = {
         `/api/workspaces/${workspaceId}/smarthomes/${smartHomeId}/access-policies`,
         { action: "delete", policy_id: policyId },
       );
-      return result.success
-        ? { success: true, data: result.data }
-        : { success: false, error: result.error };
+      return accessMutation(result);
     } catch (err) {
       return { success: false, error: err.message || _t("Network error") };
     }
@@ -121,9 +114,7 @@ export const smartHomeAccessService = {
         `/api/workspaces/${workspaceId}/smarthomes/${smartHomeId}/access-policies`,
         { action: "reorder", policy_ids: policyIds },
       );
-      return result.success
-        ? { success: true, data: result.data }
-        : { success: false, error: result.error };
+      return accessMutation(result);
     } catch (err) {
       return { success: false, error: err.message || _t("Network error") };
     }

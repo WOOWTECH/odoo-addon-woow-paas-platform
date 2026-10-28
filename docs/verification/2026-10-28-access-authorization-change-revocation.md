@@ -104,7 +104,21 @@ regression classes.
 
 No live Cloudflare run: the provider is the AC1011 fake, so whether an old cookie
 is denied after an edit is the same open question as for REV-01 (the hold is a
-bound, not proof).  No front-end change.  No change to the Operator.  No claim
+bound, not proof).  The front-end change is limited to reading `saved` (a stored
+change that is still being applied is shown as stored with its explanation, and
+the screen is refreshed); it was checked by syntax and code reading only, not by a
+UI run.  No change to the Operator.  No claim
 that a widening is *never* worth revoking (it is not needed for safety); the
 exemption can be switched to "revoke on any change" by a one-line change if the
 owner prefers #1707's behaviour.
+
+## Why the front-end part (production observation, 2026-10-28)
+
+The REV-01 run on production (platform 18.0.1.0.275, batch69) removed a policy through
+the product and the call came back `success: false` with "...Retry this operation."
+while the policy was already gone and the revocation hold was open (the first
+`revoke_tokens` also got an HTTP 500 from Cloudflare, so the hold lasted 12 min 22 s).
+The pages treated that as a failed write: the removed policy stayed on screen and
+"retry" was meaningless.  With `saved: true` and the reworded message, the three
+Access surfaces (Security Access detail, Smart Home access tab, Cloud Service access
+tab) and the policy modal now refresh and show the explanation.
