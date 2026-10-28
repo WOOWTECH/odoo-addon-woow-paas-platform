@@ -1611,10 +1611,18 @@ class PaaSOperatorClient:
         requested login methods with no matching CF account IdP — a fail-open
         login-widening signal the caller persists (SA.access_unresolved_idp_types).
         Idempotent.
+
+        A create (enabled, no ``existing_app_id``) answered with 409 is an
+        expected branch, not an error: the provider keeps one Access app per
+        domain and the caller adopts the exact match (see
+        ``access_state.sync_access_app_create_or_adopt``), so it is not logged as
+        an error here.
         """
+        is_create = bool(payload.get('enabled')) and not payload.get('existing_app_id')
         return self._request(
             'PUT', '/api/access/sync', data=payload,
             timeout=HELM_OPERATION_TIMEOUT,
+            expected_status_codes=(409,) if is_create else (),
         )
 
     def list_identity_providers(self) -> Dict[str, Any]:

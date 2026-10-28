@@ -120,7 +120,7 @@ class TestFenceLifecycle(Fixture, TransactionCase):
         self.client.events.clear()
         with self.assertLogs(ROUTE_LOG, level='ERROR') as logs:
             self.assertFalse(self.route._sync_access_to_operator())
-        self.assertTrue(any('provider review required' in line
+        self.assertTrue(any('outcome unknown' in line
                             for line in logs.output), logs.output)
         self.assertNotIn('access', self.names())
 

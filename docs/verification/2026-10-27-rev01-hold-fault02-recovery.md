@@ -152,9 +152,19 @@ same name on another domain is allowed).  That uniqueness is the missing primiti
   failures and 5xx keep it until the window passes.
 - A `resolved` identity starts a new cycle when the route needs a new app.
 
-Not claimed: the reusable policies of an attempt whose app landed but whose id was lost
-stay behind as unattached reusable policies (no authorization effect; the reaper's
-naming makes them findable). Only the effective authorization is single.
+Measured side effects (live, real SIGKILL of the Odoo process, one app per domain in
+every case): killed after the provider applied the create, the retry got 409, adopted
+the exact match and updated it in place (the platform's recorded policy id equals the
+attached one); killed before the provider was reached, the retry simply created the
+app; two processes doing the same operation at the same time ended with one app, the
+loser failing with PostgreSQL `SerializationFailure` (Odoo's HTTP layer retries that
+and re-pushes the desired state, which re-converges the recorded policy id).
+
+Not claimed: the reusable policies of an attempt that was killed after its app landed,
+and of a concurrent loser, stay behind as **unattached** reusable policies (no
+authorization effect; their names start with the SA's canonical name, so they are
+findable).  Only the effective authorization is single.  A garbage collector for them
+is a follow-up.
 
 ## Deployment order
 

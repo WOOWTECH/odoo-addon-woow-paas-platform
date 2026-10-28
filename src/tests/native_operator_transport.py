@@ -103,7 +103,7 @@ def load_cloudflare():
     # **改了那個檔就要同步更新這一行**（`sha256sum` 取新值），否則 full-suite 會以
     # 「Unexpected operator source」整組紅掉——#1766 給 connections 補 client_id
     # 時就是這樣紅的（PR CI 不含 Odoo 測試，只在 merge 進 develop 後才跑）。
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == '50dd0ab9e4f3319730579bf21b8ba1d1d5795dc637d1dee00e1898ccf4daa8b6', 'Unexpected operator source'
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == '4d2c3acfc9964370ad84e493707e0b61c4793cf6a412729dc44e364327840adb', 'Unexpected operator source'
     config = types.ModuleType('src.config')
     config.settings = types.SimpleNamespace(
         cloudflare_account_id='native-isolated-account',
