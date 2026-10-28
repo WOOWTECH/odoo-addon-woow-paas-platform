@@ -1496,7 +1496,7 @@ class SecurityAccess(models.Model):
         的「已刪除」—— #833 的鏡像。404 維持走下面的 except。
         """
         self.ensure_one()
-        return self._refresh_status()
+        self._refresh_status()
 
     def _refresh_status(self, park=True, fail_closed_on_error=True):
         """Shared body of the status refresh and the FAULT-02 probe.
@@ -1508,10 +1508,14 @@ class SecurityAccess(models.Model):
         nothing (Access is enforced at Cloudflare), so it must not mark tenants;
         and a closure the probe finds is parked by the resync leg that follows,
         in a transaction that cannot strand a parked edge without its marker.
+
+        Returns ``'closed'`` (this call closed the protected routes), ``'live'``
+        (valid connector inventory, nothing newly closed) or ``None`` (nothing
+        was learned: no tunnel, or the status was unreadable).
         """
         self.ensure_one()
         if not self.tunnel_id:
-            return
+            return None
         client = self._get_operator_client()
         try:
             health = client.health_check()
@@ -1555,12 +1559,13 @@ class SecurityAccess(models.Model):
                             _logger.warning(
                                 '[FAULT02] publication park failed sa=%s: %s',
                                 self.id, error)
+            return 'closed' if invalidate else 'live'
         except PaaSOperatorError as e:
             if not fail_closed_on_error:
                 _logger.warning(
                     '[FAULT02] status unreadable, not treated as a fault sa=%s: %s',
                     self.id, e.message)
-                return
+                return None
             protected = self.route_ids.filtered('is_protected')
             if protected:
                 _internal_identity(protected).access_publish_pending = True

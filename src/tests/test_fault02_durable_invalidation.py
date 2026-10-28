@@ -1,6 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+from odoo import fields
 from odoo.tests.common import TransactionCase
 from odoo.addons.woow_paas_platform.models.security_access import _internal_identity
 from odoo.addons.woow_paas_platform.services.paas_operator import PaaSOperatorError
@@ -319,3 +320,33 @@ class TestFault02DurableInvalidation(TransactionCase):
         self.assertEqual(second['probed'], 1)
         self.assertEqual(params.get_param(
             'woow_paas_platform.access_probe_cursor'), '0')
+
+    # ---- recovery wake-ups: a short connector blip must not mean a long outage --
+
+    @patch(MOCK_CLIENT)
+    def test_probe_wakes_the_resync_when_a_pending_sa_has_its_connector_back(self, get_client):
+        sa, route = self.owned_route()
+        _internal_identity(route).access_publish_pending = True  # closed earlier
+        self.client(get_client)  # inventory valid again
+        cron = self.env['woow_paas_platform.access_resync_cron']
+        with patch(CRON_SCHEDULE) as schedule:
+            counts = cron._cron_probe_security_access_faults()
+        self.assertEqual((counts['closed'], counts['recoverable']), (0, 1))
+        schedule.assert_called_once()
+        # Soon, not a whole period later.
+        wake_in = (schedule.call_args.args[1] - fields.Datetime.now()).total_seconds()
+        self.assertGreater(wake_in, 0)
+        self.assertLessEqual(wake_in, 31)
+        # The probe itself never clears the marker: recovery is the resync's job.
+        self.assertTrue(route.access_publish_pending)
+
+    @patch(MOCK_CLIENT)
+    def test_probe_does_not_wake_for_a_pending_sa_whose_connector_is_still_down(self, get_client):
+        sa, route = self.owned_route()
+        _internal_identity(route).access_publish_pending = True
+        self.client(get_client, connections=[])
+        cron = self.env['woow_paas_platform.access_resync_cron']
+        with patch(CRON_SCHEDULE) as schedule:
+            counts = cron._cron_probe_security_access_faults()
+        self.assertEqual((counts['closed'], counts['recoverable']), (0, 0))
+        schedule.assert_not_called()

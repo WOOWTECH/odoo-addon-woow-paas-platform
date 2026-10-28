@@ -42,6 +42,7 @@ issue #803 的四腿表格裡，SmartHome 那腿的錨點就是它底下的 rout
 """
 from datetime import timedelta
 import logging
+import time
 
 from odoo import api, fields, models
 from odoo.osv import expression
@@ -80,6 +81,16 @@ _RESYNC_LEGS = (
 #: previous run ('0' = start over).
 _PROBE_CURSOR_PARAM = 'woow_paas_platform.access_probe_cursor'
 
+#: How soon after a new closure / a recovery candidate the resync cron is woken.
+_WAKE_SECONDS = 30
+
+#: A resync run stops starting new rows after this long.  The cron runs the whole
+#: scan in one transaction: a run killed by the worker time limit would roll back
+#: every row it had already handled (parks and Access syncs included), leaving
+#: parked edges without their markers.  Rows left over are picked up by the
+#: self-wake below.
+_RESYNC_TIME_BOX_SECONDS = 80
+
 
 class AccessResyncCron(models.AbstractModel):
     _name = 'woow_paas_platform.access_resync_cron'
@@ -112,27 +123,38 @@ class AccessResyncCron(models.AbstractModel):
         ]
         rows = self.env['woow_paas_platform.security_access'].sudo().search(
             domain + [('id', '>', after)], limit=limit, order='id')
-        counts = {'probed': 0, 'failed': 0, 'closed': 0}
+        counts = {'probed': 0, 'failed': 0, 'closed': 0, 'recoverable': 0}
         for row in rows:
             was_pending = row._fault02_has_pending()
+            outcome = None
             try:
                 with self.env.cr.savepoint():
-                    row._refresh_status(park=False, fail_closed_on_error=False)
+                    outcome = row._refresh_status(
+                        park=False, fail_closed_on_error=False)
                 counts['probed'] += 1
             except Exception as error:  # one tenant cannot stop the cohort
                 counts['failed'] += 1
                 _logger.warning('[FAULT02] probe failed sa=%s: %s', row.id, error)
             if not was_pending and row._fault02_has_pending():
                 counts['closed'] += 1
+            elif was_pending and outcome == 'live':
+                # Closed earlier, connector inventory valid again: let the resync
+                # leg re-confirm Access and re-open now instead of waiting for
+                # its next period (a short connector blip must not mean a long
+                # outage).  Whether it is *really* releasable is still decided
+                # there: it re-checks liveness and re-syncs Access first.
+                counts['recoverable'] += 1
         params.set_param(
             _PROBE_CURSOR_PARAM, str(rows[-1].id) if len(rows) == limit else '0')
-        if counts['closed']:
-            # Only a *new* closure schedules this, so an SA whose connector
-            # stays down does not turn the cron into a tight loop.
+        if counts['closed'] or counts['recoverable']:
+            # One wake-up per probe run (not per row), and only for a *new*
+            # closure or a recovery candidate: an SA whose connector stays down
+            # does not turn the cron into a tight loop.
             schedule_access_resync(
-                self.env, fields.Datetime.now() + timedelta(seconds=120))
-        _logger.info('[FAULT02] probed=%d failed=%d closed=%d',
-                     counts['probed'], counts['failed'], counts['closed'])
+                self.env, fields.Datetime.now() + timedelta(seconds=_WAKE_SECONDS))
+        _logger.info('[FAULT02] probed=%d failed=%d closed=%d recoverable=%d',
+                     counts['probed'], counts['failed'], counts['closed'],
+                     counts['recoverable'])
         return counts
 
     # ------------------------------------------------------------------ #
@@ -189,10 +211,13 @@ class AccessResyncCron(models.AbstractModel):
                   'failed': 0}
         truncated = []
         per_leg = []
+        deadline = time.monotonic() + _RESYNC_TIME_BOX_SECONDS
+        more = False
         for model_name in _RESYNC_LEGS:
             counts, cut = self._resync_leg(
                 model_name, limit=limit, scan_batch=scan_batch,
-                max_scan=max_scan)
+                max_scan=max_scan, deadline=deadline)
+            more = more or counts.get('more', False)
             for key in totals:
                 totals[key] += counts[key]
             if cut:
@@ -230,9 +255,15 @@ class AccessResyncCron(models.AbstractModel):
         # 等於沒有訊號」的形狀。三個計數照印 ⇒ 訊號不丟，只是不再每輪拉警報。
         (_logger.warning if totals['failed'] else _logger.info)(
             "[ACCESS_RESYNC] scanned=%d pushed=%d pending=%d gated=%d "
-            "failed=%d | %s",
+            "failed=%d more=%s | %s",
             totals['scanned'], totals['pushed'], totals['pending'],
-            totals['gated'], totals['failed'], ' '.join(per_leg))
+            totals['gated'], totals['failed'], more, ' '.join(per_leg))
+        if more and totals['pushed']:
+            # Rows were left unvisited (attempt budget or time box) AND this run
+            # made progress: continue soon.  Without progress a wake-up would only
+            # repeat the same work on the same rows, so those wait for the period.
+            schedule_access_resync(
+                self.env, fields.Datetime.now() + timedelta(seconds=_WAKE_SECONDS))
         return totals['pushed']
 
     # ------------------------------------------------------------------ #
@@ -258,14 +289,20 @@ class AccessResyncCron(models.AbstractModel):
         return expression.OR(legs)
 
     @api.model
-    def _resync_leg(self, model_name, limit, scan_batch, max_scan):
-        """掃一張表。回傳 ``({counts}, 是否踩到掃描上界)``。"""
+    def _resync_leg(self, model_name, limit, scan_batch, max_scan, deadline=None):
+        """掃一張表。回傳 ``({counts}, 是否踩到掃描上界)``。
+
+        ``counts['more']`` 為真 ＝ 因為嘗試預算或 ``deadline`` 而**提早停下**、
+        後面還有沒看過的旗標列（呼叫端據此決定要不要自我喚醒）。
+        """
         Leg = self.env[model_name].sudo()
         counts = {'scanned': 0, 'pushed': 0, 'pending': 0, 'gated': 0,
-                  'failed': 0}
+                  'failed': 0, 'more': False}
         last_id = 0
+        done_id = 0
         attempted = 0
         truncated = False
+        stopped_early = False
         flagged = self._resync_domain(model_name)
         while attempted < limit:
             # `order='id'` 顯式帶上，不靠 `_order` 的預設：游標式掃描的正確性完全
@@ -280,10 +317,17 @@ class AccessResyncCron(models.AbstractModel):
             last_id = rows[-1].id
             counts['scanned'] += len(rows)
             for row in rows:
+                if deadline is not None and time.monotonic() >= deadline:
+                    stopped_early = True
+                    break
+                done_id = row.id
                 if self._resync_one(row, counts):
                     attempted += 1
                 if attempted >= limit:
+                    stopped_early = True
                     break
+            if stopped_early:
+                break
             if counts['scanned'] >= max_scan:
                 # 「是不是真的被截斷」用**實查**不用猜：拿「這一批是滿的」當代理
                 # 判準時，旗標列數剛好整除 `scan_batch`（最後一批是滿的、但後面
@@ -292,6 +336,10 @@ class AccessResyncCron(models.AbstractModel):
                     expression.AND([[('id', '>', last_id)], flagged]),
                     limit=1, order='id'))
                 break
+        if stopped_early:
+            counts['more'] = bool(Leg.search(
+                expression.AND([[('id', '>', done_id)], flagged]),
+                limit=1, order='id'))
         return counts, truncated
 
     @api.model

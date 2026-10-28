@@ -536,3 +536,89 @@ class TestFault02CronRecovery(PendingFixture, TransactionCase):
 
     def test_cs_plain_pending_recovers_through_the_cron(self):
         self.plain_pending_recovers_through_the_cron('cs')
+
+
+@tagged('post_install', '-at_install')
+class TestResyncBoundedRun(PendingFixture, TransactionCase):
+    """The resync run is time boxed and continues itself only when it progressed."""
+
+    def setUp(self):
+        super().setUp()
+        self.install_fake()
+        self.resources()
+        patcher = patch(SA_CLIENT, return_value=self.client)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cron = self.env['woow_paas_platform.access_resync_cron']
+        self.cron_module = 'odoo.addons.woow_paas_platform.models.access_resync_cron'
+
+    def flagged_rows(self, count):
+        """Plain-pending Security Access routes (the SA leg's only flagged rows)."""
+        routes = []
+        for index in range(count):
+            sa, route = self.sa_resource_n(index)
+            routes.append(route)
+        return routes
+
+    def sa_resource_n(self, index):
+        sa = self.env['woow_paas_platform.security_access'].sudo().create({
+            'name': 'Bounded run SA %d' % index, 'workspace_id': self.workspace.id})
+        route = self.env['woow_paas_platform.security_access_route'].sudo().with_context(
+            sa_skip_route_sync=True).create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'ac1011-bounded-%d' % index,
+                'service_url': 'http://own-native-origin.example.test:80',
+                'is_protected': False, 'login_google': True})
+        _sa_identity(sa).write({'state': 'active', 'tunnel_id': 'bounded-%d' % index,
+                                'tunnel_name': 'bounded-%d' % index})
+        _sa_identity(route).write({'access_publish_pending': True})
+        return sa, route
+
+    def run_cron(self, resync_one, **kw):
+        with patch.object(type(self.cron), '_resync_one', side_effect=resync_one), \
+                patch('%s.schedule_access_resync' % self.cron_module) as schedule:
+            self.cron._cron_resync_access_protection(**kw)
+        return schedule
+
+    @staticmethod
+    def progressed(row, counts):
+        counts['pushed'] += 1
+        return True
+
+    @staticmethod
+    def stuck(row, counts):
+        counts['pending'] = counts.get('pending', 0) + 1
+        return True
+
+    def test_budget_exhausted_with_progress_continues_itself(self):
+        self.flagged_rows(3)
+        schedule = self.run_cron(self.progressed, limit=2)
+        schedule.assert_called_once()
+
+    def test_budget_exhausted_without_progress_does_not_loop(self):
+        self.flagged_rows(3)
+        schedule = self.run_cron(self.stuck, limit=2)
+        schedule.assert_not_called()
+
+    def test_everything_handled_does_not_wake(self):
+        self.flagged_rows(2)
+        schedule = self.run_cron(self.progressed, limit=10)
+        schedule.assert_not_called()
+
+    def test_time_box_stops_starting_new_rows_and_continues_itself(self):
+        rows = self.flagged_rows(3)
+        calls = []
+
+        def slow_first(row, counts):
+            calls.append(row.id)
+            counts['pushed'] += 1
+            return True
+
+        # The clock jumps past the box after the first row.
+        ticks = iter([0.0, 0.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0])
+        with patch('%s.time.monotonic' % self.cron_module,
+                   side_effect=lambda: next(ticks, 1000.0)):
+            schedule = self.run_cron(slow_first)
+        self.assertEqual(len(calls), 1)
+        schedule.assert_called_once()
+        self.assertEqual(len(rows), 3)
