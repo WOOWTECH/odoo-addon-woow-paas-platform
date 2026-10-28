@@ -36,6 +36,11 @@ Cloudflare 對「一條 tunnel、多個 connector」的語意是**分流**（那
 - **guard 無條件擋所有人（含 superuser）**，解綁走明確的 `action_release_binding()`
   ——不是 `env.su` 豁免。理由見 `su-env-exempt-guard-false-green`：TransactionCase
   是 su env，用 su 當豁免條件會讓測試假綠，sudo'd controller 也會靜默繞過。
+- **設定流程的新建設定項要明確確認才能接手 legacy 綁定**（HA issue #38）。
+  `legacy → claimed` 同時是「同一台機器升級元件」與「另一台來認領」走的路，平台分不出來，
+  所以不能一律擋；改由元件在設定流程的取權杖請求帶 `new_entry=1`（這是新建設定項）與
+  `confirmed`（使用者從清單明確選了它）。只有 `new_entry` 且未 `confirmed` 才拒絕；
+  既有設定項的重啟／升級與舊版元件都不帶 `new_entry`，行為不變。
 - 綁定欄位**不是** identity anchor：解綁是正常營運動作（換機器、RMA、重裝），所以
   不走 `_IDENTITY_ANCHOR_FIELDS` 的不可變 guard。
 """
@@ -115,11 +120,20 @@ class TunnelBindingMixin(models.AbstractModel):
     )
 
     # ---- claim / release ----------------------------------------------------
-    def _tunnel_binding_claim(self, instance_uid, instance_label=''):
+    def _tunnel_binding_claim(self, instance_uid, instance_label='', *, new_entry=False, confirmed=False):
         """Record that `instance_uid` holds this tunnel, or refuse.
 
         Returns the binding_state that is now in force. Raises
         TunnelBindingConflict when somebody else holds it.
+
+        ``new_entry`` / ``confirmed`` come from the HA setup flow (HA issue #38):
+        ``new_entry`` says the claim is a NEW config entry, not an existing entry that
+        restarts or upgrades; ``confirmed`` says the user picked this service from a
+        list. A new entry over a ``legacy`` binding needs ``confirmed``. Without
+        ``new_entry`` nothing changes: ``legacy → claimed`` is the way the SAME machine
+        upgrades from the component that sent no identity, and the platform cannot tell
+        that from another machine, so it must stay open for requests that do not say
+        which of the two they are (all components before this parameter existed).
 
         ⚠ 這個 method **會寫 DB**，而呼叫端（tunnel-token 端點）在同一個
         transaction 裡接著把權杖回給對方。順序是刻意的：claim 失敗就不該有權杖
@@ -167,6 +181,19 @@ class TunnelBindingMixin(models.AbstractModel):
                   "the binding here first.",
                   label=self.bound_instance_label or holder_uid),
                 bound_to=self.bound_instance_label or holder_uid,
+                bound_at=fields.Datetime.to_string(self.bound_at) if self.bound_at else '',
+            )
+
+        if new_entry and claim_uid and state == 'legacy' and not confirmed:
+            # 設定流程沒有讓使用者明確選這個服務，卻要接手一個沒有身分的舊版元件
+            # 綁著的服務：多半是清單讀到之後又被別台綁走（競態）。拒絕，讓使用者重選。
+            raise TunnelBindingConflict(
+                _("This is connected to an older installation of the integration "
+                  "that does not identify itself, so it cannot be told apart from "
+                  "another machine. Choose this service explicitly when setting up "
+                  "the integration to take it over, or release the binding here "
+                  "first."),
+                bound_to=self.bound_instance_label or _("an older installation"),
                 bound_at=fields.Datetime.to_string(self.bound_at) if self.bound_at else '',
             )
 
