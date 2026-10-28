@@ -26,6 +26,9 @@ import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../componen
 import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
 import { ResetAdminPasswordModal } from "../../components/modal/ResetAdminPasswordModal";
 import { DataRetrievalModal } from "../../components/modal/DataRetrievalModal";
+import { McpSetupStatusNotice } from "../../components/mcp-setup-status/McpSetupStatusNotice";
+import { useMcpSetupStatus } from "../../services/mcp_setup_status";
+import { mcpSetupCondition } from "../../utils/mcp_setup_status";
 import { serviceRetrievalEndpoint } from "../../services/data_retrieval";
 import { cloudService } from "../../services/cloud_service";
 import { useServiceResources } from "../../services/service_resources";
@@ -85,6 +88,7 @@ export class ServiceDetailPage extends Component {
         AdminCredentialsModal,
         ResetAdminPasswordModal,
         DataRetrievalModal,
+        McpSetupStatusNotice,
     };
     static props = {
         workspaceId: { type: Number },
@@ -121,6 +125,16 @@ export class ServiceDetailPage extends Component {
         });
         this.router = useState(router);
         this.resources = useServiceResources(this.props.workspaceId, () => [this.props.serviceId]);
+        // 2026-10-27（#2040 第五輪）：MCP 設定狀態一頁一個 poller——頁首提示與 Overview 的 Connection Info
+        // 讀同一份結果（原本提示元件自己輪詢，Connection Info 看不到，同一頁一邊說「要設定」一邊寫 ONLINE）。
+        // 服務還沒載入時不問；`mcpSetupEnabled` 一變（剛載入、剛進出 running）就由 `_syncMcpSetupPoller`
+        // 立刻重問。
+        this.mcpSetup = useMcpSetupStatus(
+            () => this.props.workspaceId,
+            () => this.props.serviceId,
+            () => this.mcpSetupEnabled,
+        );
+        this._mcpSetupEnabled = false;
         this.pollingInterval = null;
 
         onMounted(() => {
@@ -157,6 +171,7 @@ export class ServiceDetailPage extends Component {
             this.state.error = null;
             this._publishBreadcrumb();
             this.startPollingIfNeeded();
+            this._syncMcpSetupPoller();
         } else if (!silent) {
             this.state.error = result.error || _t("Failed to load service");
         }
@@ -368,6 +383,44 @@ export class ServiceDetailPage extends Component {
      */
     get hasGateway() {
         return this.service?.has_gateway === true;
+    }
+
+    /**
+     * 2026-10-27：「MCP 尚未設定連線」提示要不要掛上。鏡射 detail payload 的 `has_mcp_setup_status`
+     * （＝後端 `_chart_has_mcp_setup_status`，mcp-server 家族、與 `/mcp-status` 端點同一個判準），
+     * 前端不用 slug 判斷。fail-closed：欄位缺席一律不掛、不輪詢。
+     */
+    get hasMcpSetupStatus() {
+        return this.service?.has_mcp_setup_status === true;
+    }
+
+    /**
+     * 2026-10-27（#2040 第五輪）：要不要問 `/mcp-status`——有這個能力（`hasMcpSetupStatus`）且服務 running。
+     * 與後端 `CloudService._mcp_setup_status` 的「只有 running 才查」同一個條件。
+     */
+    get mcpSetupEnabled() {
+        return this.hasMcpSetupStatus && this.service?.state === "running";
+    }
+
+    /**
+     * 要租戶動手的 MCP 情況（not_configured／not_running／backend_missing），沒有時 ""。頁首提示的 t-if 與
+     * 傳給 OverviewTab（Connection Info 狀態）的都是這一個值；不問的時候一律 ""（不吃上一筆殘留的結果）。
+     */
+    get mcpSetupCondition() {
+        if (!this.mcpSetupEnabled) {
+            return "";
+        }
+        return mcpSetupCondition(this.mcpSetup.state.status, this.mcpSetup.state.backend);
+    }
+
+    /** `mcpSetupEnabled` 一變就立刻重問（skipped 時 hook 會清掉舊結果），不必等下一輪 30 秒。 */
+    _syncMcpSetupPoller() {
+        const enabled = this.mcpSetupEnabled;
+        if (enabled === this._mcpSetupEnabled) {
+            return;
+        }
+        this._mcpSetupEnabled = enabled;
+        this.mcpSetup.refresh();
     }
 
     /**

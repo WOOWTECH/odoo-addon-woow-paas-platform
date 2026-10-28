@@ -466,6 +466,19 @@ class SnapshotTest(unittest.TestCase):
         self.assertIn(".agents", str(ctx.exception))
 
 
+    @unittest.skipUnless(shutil.which("python3.12"), "需要 python3.12")
+    def test_untracked_file_ignored_and_not_archived(self):
+        (self.repo / ".omnigent/config.yaml").write_text("沒進 git 的本機設定")
+        su.source_snapshot(self.repo, self.dest, ".omnigent/woow-security-sweep-launcher")
+        self.assertFalse((self.dest / ".omnigent/config.yaml").exists())
+
+    def test_staged_new_file_refused(self):
+        (self.repo / ".agents/skills/x/NEW.md").write_text("stage 了沒 commit")
+        su.run(["git", "-C", str(self.repo), "add", ".agents/skills/x/NEW.md"])
+        with self.assertRaises(su.SetupError):
+            su.source_snapshot(self.repo, self.dest, ".omnigent/woow-security-sweep-launcher")
+
+
 class SkillLayoutTest(unittest.TestCase):
     def test_claude_entry_points_to_agents_skill(self):
         for name in ("woow-security-sweep-setup", "woow-security-sweep-launch"):

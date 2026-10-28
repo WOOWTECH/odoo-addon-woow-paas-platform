@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -191,18 +192,39 @@ class CarryoverTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_round(self, name, rows, *, scanned=None, tools_ok=("semgrep",), repo="WOOWTECH/demo"):
-        """模擬一輪：寫 run 目錄 → triage → carryover。scanned=None 代表 full。"""
+    def run_round(self, name, rows, *, scanned=None, tools_ok=("semgrep",), repo="WOOWTECH/demo", head=None):
+        """模擬一輪：寫 run 目錄 → triage → carryover。scanned=None 代表 full。
+
+        head：本輪 HEAD 上存在的檔案（會建一個真的 git repo）；None 代表舊版 meta（沒有 repo_path）。
+        """
         run = self.state / "runs" / name / repo.split("/")[1]
         run.mkdir(parents=True)
         (run / "config.json").write_text(json.dumps(dict(CFG, repo={"full_name": repo})))
+        extra = {} if head is None else self.git_head(name, head)
         (run / "meta.json").write_text(json.dumps(
             {"scope": {"mode": "full" if scanned is None else "incremental", "changed": scanned},
-             **({} if scanned is None else {"scanned_files": scanned})}))
+             **({} if scanned is None else {"scanned_files": scanned}), **extra}))
         (run / "tools.json").write_text(json.dumps({t: {"status": "ok"} for t in tools_ok}))
         (run / "findings.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
         jg.triage_run(run, gates(), self.state, caller=self.caller, today=TODAY)
         return run, jg.carryover_run(run, self.state)
+
+    def git_head(self, name, files):
+        repo = self.state / "git" / name
+        for f in files:
+            (repo / f).parent.mkdir(parents=True, exist_ok=True)
+            (repo / f).write_text("x\n")
+        repo.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+        for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "--allow-empty", "-m", "c"]):
+            subprocess.run(["git", "-C", str(repo), *cmd], check=True, env=env, capture_output=True)
+        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+        return {"repo_path": str(repo), "head_sha": head}
+
+    def resolved(self):
+        return [r for r in jg.read_jsonl(self.state / "shadow.jsonl") if r.get("type") == "resolved"]
 
     def carried(self, run):
         return {r["fingerprint"] for r in jg.read_jsonl(run / "carryover.jsonl")}
@@ -256,6 +278,52 @@ class CarryoverTest(unittest.TestCase):
         self.run_round("r2", [], scanned=["a.py"])                       # fpA resolved
         self.run_round("r3", [self.two_findings()[0]], scanned=["a.py"])  # fpA 又出現
         run4, _ = self.run_round("r4", [], scanned=[])
+        self.assertEqual(self.carried(run4), {"fpA", "fpB"})
+
+    # ── 檔案已不在 HEAD（#2053） ──
+
+    def test_file_removed_resolved_without_tool(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [], scanned=[], tools_ok=(), head=["b.py"])
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpB"}, 1))
+        rec = self.resolved()[0]
+        self.assertEqual((rec["fingerprint"], rec["reason_code"]), ("fpA", "file_removed"))
+        item = jg.read_jsonl(run2 / "resolved.jsonl")[0]
+        self.assertEqual((item["path"], item["human"]), ("a.py", None))
+        run3, summary = self.run_round("r3", [], scanned=[], tools_ok=(), head=["b.py"])
+        self.assertEqual((self.carried(run3), summary["resolved"]), ({"fpB"}, 0))  # 只寫一次
+
+    def test_file_present_but_tool_failed_still_carried(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [], scanned=["a.py"], tools_ok=(), head=["a.py", "b.py"])
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpA", "fpB"}, 0))
+
+    def test_human_decided_then_file_removed_is_resolved(self):
+        self.run_round("r1", self.two_findings())
+        jg.record_human(self.state, self.decision_id("fpA"), "true_positive", "track", None)
+        run2, summary = self.run_round("r2", [], scanned=[], head=["b.py"])
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpB"}, 1))
+        item = jg.read_jsonl(run2 / "resolved.jsonl")[0]
+        self.assertEqual(item["human"], {"label": "true_positive", "action": "track"})
+        group = jg.triage_history(jg.read_jsonl(self.state / "shadow.jsonl"))[("WOOWTECH/demo", "fpA")]
+        self.assertEqual((group["last"], group["resolved"]["reason_code"]), ("resolved", "file_removed"))
+
+    def test_gitleaks_not_resolved_by_file_removal(self):
+        rows = [dict(finding("a.py"), id="fa", fingerprint="fpA", tool="gitleaks")]
+        self.run_round("r1", rows)
+        run2, summary = self.run_round("r2", [], scanned=[], head=["b.py"])
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpA"}, 0))
+
+    def test_no_repo_path_falls_back_to_old_rule(self):
+        self.run_round("r1", self.two_findings())
+        run2, summary = self.run_round("r2", [], scanned=[], tools_ok=())  # 舊 meta：沒有 repo_path
+        self.assertEqual((self.carried(run2), summary["resolved"]), ({"fpA", "fpB"}, 0))
+
+    def test_redetected_after_file_removed_is_open_again(self):
+        self.run_round("r1", self.two_findings())
+        self.run_round("r2", [], scanned=[], head=["b.py"])                       # fpA file_removed
+        self.run_round("r3", [self.two_findings()[0]], scanned=["a.py"], head=["a.py", "b.py"])
+        run4, _ = self.run_round("r4", [], scanned=[], tools_ok=(), head=["a.py", "b.py"])
         self.assertEqual(self.carried(run4), {"fpA", "fpB"})
 
     def test_other_repo_not_mixed(self):

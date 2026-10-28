@@ -8,7 +8,7 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 ``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
 
 1. **釘版**：chart mcp-server 0.1.7（OCI）；image litellm-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI
-   推的那一顆（現行＝woow-mcp-server #86 合併 1dcabf91）——換 image 時這條會紅，逼下一個人覆核啟動
+   推的那一顆（現行＝woow-mcp-server #89 合併 38a9041f（含 #87、#88））——換 image 時這條會紅，逼下一個人覆核啟動
    契約（#708 教訓）。
 2. **啟動契約**：``litellm-mcp-server``、args 只有 ``--port 8000``（launcher 硬綁 127.0.0.1，seed 不給
    host）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
@@ -55,10 +55,10 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # LaunchPolicy 維持 litellm-mcp-server、port 8000。chart0.1.8 的首次 seed 改為 create-only。
 # 2026-10-25：改釘 #84 merge fc5fa02e（預設全開＋既有服務一次性遷移）；digest 取自
 # main CI run 27630 的 push 輸出，registry 讀回一致。
-# 2026-10-27：#86 merge 1dcabf91 的 image digest 已從 registry 讀回；
+# 2026-10-27：#89 merge 38a9041f（含 #87、#88）的 image digest 已從 registry 讀回；
 # 正式服務已用同一 digest 啟動並讀取，命令、port 與 seed 的唯讀開關契約維持原樣。
 EXPECT_IMAGE_TAG = (
-    '1dcabf91baf088f4d7a445e8d34aeb55e03cfebe@sha256:e3eef5768f0406d07ca2fe6da232be675f80e6f1f6bb8de79eab87d4cda5ce38')
+    '38a9041fb44de6d8848166473facd2f443e04710@sha256:1f49fd9aa3b38ce71441ec5bb2733b243d52b891030f54686ab101ac3c582ea0')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'

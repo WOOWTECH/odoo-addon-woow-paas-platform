@@ -464,6 +464,35 @@ test("owner creation preserves the real one-time credentials helper and close na
   assert.equal(window.location.hash, "#/workspace/41/services/501");
 });
 
+test("#2040 round 5: mcp-server family creation adds the Connection next step, cleared on close", async () => {
+  const f = fixture("owner", (url, params) => params.action === "create"
+    ? { success: true, data: {
+      id: 502, admin_password: "synthetic-fixture-only",
+      admin_url: "https://paas-cs-aa-bb.example.invalid", has_mcp_setup_status: true,
+      template: { admin_password_carrier: "config_json", admin_reset_supported: true },
+    } } : undefined);
+  await f.mount();
+  assert.equal(f.page.state.oneTimeSetupHint, "");
+  validForm(f.page);
+  await f.page.onLaunch();
+  assert.deepEqual(f.page.state.oneTimeCredentials.map((c) => c.label), ["Admin Password", "Admin Page URL"]);
+  assert.match(f.page.state.oneTimeSetupHint, /^Save the connection under Connection on the admin page first/);
+  f.page.onCredentialsClose();
+  assert.equal(f.page.state.oneTimeSetupHint, "");
+  assert.equal(window.location.hash, "#/workspace/41/services/502");
+
+  const other = fixture("owner", (url, params) => params.action === "create"
+    ? { success: true, data: {
+      id: 503, admin_password: "synthetic-fixture-only", has_mcp_setup_status: false,
+      template: { admin_reset_supported: false },
+    } } : undefined);
+  await other.mount();
+  validForm(other.page);
+  await other.page.onLaunch();
+  assert.ok(other.page.state.oneTimeCredentials.length, "the dialog still opens for other templates");
+  assert.equal(other.page.state.oneTimeSetupHint, "", "only the mcp-server family gets the extra line");
+});
+
 test("unmount after launch ignores late credentials and redirect", async () => {
   const created = deferred();
   const f = fixture("admin", (url, params) => params.action === "create" ? created.promise : undefined);
