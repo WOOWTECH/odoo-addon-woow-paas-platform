@@ -463,12 +463,18 @@ class TestReleaseBindingResponse(_BindingFixture, HttpCase):
                 self.assertIs(result['data']['binding_conflict'], False)
 
     def test_release_still_succeeds_when_the_live_reading_is_unavailable(self):
+        logger = {'sh': 'odoo.addons.woow_paas_platform.controllers.smart_home',
+                  'sa': 'odoo.addons.woow_paas_platform.controllers.security_access'}
         for label, record, path in self._targets():
             for side in ({'return_value': {}}, {'side_effect': RuntimeError('operator exploded')}):
                 with self.subTest(label=label, side=sorted(side)[0]):
                     self._claim_with_stale_counts(record)
                     with patch.object(type(record), '_live_tunnel_status', **side):
-                        result = self._release(path)
+                        if 'side_effect' in side:
+                            with self.assertLogs(logger[label], level=40):  # logged, not swallowed silently
+                                result = self._release(path)
+                        else:
+                            result = self._release(path)
                     self.assertTrue(result['success'], result)
                     self.assertEqual(result['data']['binding_state'], 'unbound')
                     # no fresher reading: the stored one is shown, it is not made up

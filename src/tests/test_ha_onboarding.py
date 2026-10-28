@@ -127,7 +127,8 @@ class TestHAOnboarding(HttpCase):
         self.assertEqual(response.status_code, 200, response.text)
         item = response.json()['homes'][0]
         self.assertEqual((item['connector_count'], item['binding_conflict']), (2, True))
-        with patch.object(type(home), '_live_tunnel_status', side_effect=RuntimeError('boom')):
+        with patch.object(type(home), '_live_tunnel_status', side_effect=RuntimeError('boom')), \
+                self.assertLogs('odoo.addons.woow_paas_platform.controllers.ha_onboarding', level=40):
             response = self._options('remote_access', home.workspace_id)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['homes'][0]['connector_count'], 2)
