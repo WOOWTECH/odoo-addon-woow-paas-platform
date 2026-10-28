@@ -230,5 +230,182 @@ class PresetTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(cl.CollectError):
                 cl.cmd_preset(name, self.state)
 
+
+class UpstreamAndDeletedTest(RepoFixture):
+    """context.upstream 的唯讀快照（#2064）與增量範圍裡已刪除檔案的分列。"""
+
+    def setUp(self):
+        super().setUp()
+        root = Path(self.tmp.name)
+        origin = root / "base.git"
+        sh("git", "init", "--bare", "-b", "main", str(origin), cwd=root)
+        self.base = root / "base"
+        sh("git", "clone", "-q", str(origin), str(self.base), cwd=root)
+        sh("git", "checkout", "-q", "-b", "main", cwd=self.base)
+        (self.base / "models").mkdir()
+        (self.base / "models" / "api.py").write_text("def verify():\n    return True\n")
+        sh("git", "add", "-A", cwd=self.base)
+        sh("git", "commit", "-q", "-m", "init", cwd=self.base)
+        sh("git", "push", "-q", "origin", "HEAD:main", cwd=self.base)
+        sh("git", "fetch", "-q", "origin", cwd=self.base)
+        sh("git", "remote", "set-head", "origin", "main", cwd=self.base)
+        # 只認 origin 指向 targets 寫的 owner/repo 的 clone
+        sh("git", "remote", "set-url", "origin", "https://github.com/WOOWTECH/base.git", cwd=self.base)
+        (self.targets / "demo.yaml").write_text(
+            "context:\n  upstream: [WOOWTECH/base, WOOWTECH/missing, 'bad name']\n")
+
+    def run_once(self, mode="incremental"):
+        return cl.cmd_run(self.repo, self.runs, mode, self.state, fetch=False, targets_dir=self.targets)
+
+    def test_upstream_snapshot_and_status(self):
+        meta = self.run_once()
+        ups = {u["repo"]: u for u in meta["upstream"]}
+        self.assertEqual(ups["WOOWTECH/base"]["status"], "ok")
+        self.assertEqual(ups["WOOWTECH/base"]["path"], "upstream/base")
+        self.assertTrue((self.runs / "demo" / "upstream" / "base" / "models" / "api.py").is_file())
+        self.assertEqual(ups["WOOWTECH/missing"]["status"], "missing")
+        self.assertEqual(ups["bad name"]["status"], "error")
+        # 上游只給 worker 讀：不進掃描範圍
+        self.assertFalse(any(p.startswith("upstream") for p in meta["scanned_files"]))
+
+    def test_origin_mismatch_is_not_upstream(self):
+        sh("git", "remote", "set-url", "origin", "https://github.com/evil/base.git", cwd=self.base)
+        meta = self.run_once()
+        self.assertEqual({u["repo"]: u["status"] for u in meta["upstream"]}["WOOWTECH/base"], "missing")
+        self.assertFalse((self.runs / "demo" / "upstream").exists())
+
+    def test_deleted_files_listed_separately(self):
+        (self.repo / "models" / "y.py").write_text("c = 3\n")
+        self.commit("add y")
+        cl.cmd_commit(Path(self.run_once()["run_dir"]), self.state)
+        (self.repo / "models" / "y.py").unlink()
+        (self.repo / "models" / "x.py").write_text("a = 9\n")
+        self.commit("rm y")
+        meta = self.run_once()
+        self.assertEqual(meta["deleted_files"], ["models/y.py"])
+        self.assertEqual(meta["scanned_files"], ["models/x.py"])
+
+
+class NewFormatImportTest(RepoFixture):
+    """deep review 新回報格式：根因 fingerprint、confirmed／needs_validation、hardening、coverage、verdict、promote。"""
+
+    def setUp(self):
+        super().setUp()
+        meta = cl.cmd_run(self.repo, self.runs, "full", self.state, fetch=False, targets_dir=self.targets)
+        self.run_dir = Path(meta["run_dir"])
+        up = self.run_dir / "upstream" / "base" / "models"
+        up.mkdir(parents=True)
+        (up / "api.py").write_text("def verify():\n    return True\n")
+
+    def imp(self, rows):
+        src = Path(self.tmp.name) / "review.jsonl"
+        src.write_text("\n".join(r if isinstance(r, str) else json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
+        return cl.cmd_import(self.run_dir, src)
+
+    def nv(self, **kw):
+        row = {"type": "finding", "verdict": "needs_validation", "fingerprint": "email-claim-links-partner",
+               "title": "以 email 綁定既有 partner", "path": "models/x.py", "line": 1, "root_cause": "email 當成所有權證明",
+               "trace": [{"kind": "entrypoint", "file": "models/x.py", "line": 1, "description": "入口"},
+                         {"kind": "sink", "file": "upstream/base/models/api.py", "line": 1, "description": "上游驗證"}],
+               "blockers": ["Odoo core 的行為"], "validation_plan": {"local": "fixture 步驟"}}
+        row.update(kw)
+        return row
+
+    def findings(self):
+        return cl.read_jsonl(self.run_dir / "findings.jsonl")
+
+    def test_needs_validation_uses_root_cause_fingerprint(self):
+        out = self.imp([self.nv(severity="high")])
+        self.assertEqual(out["added"], 1)
+        self.assertTrue(any("severity" in w for w in out["warnings"]))
+        f = self.findings()[-1]
+        self.assertEqual(f["fingerprint"], "review:email-claim-links-partner")
+        self.assertEqual((f["verdict"], f["severity_tool"]), ("needs_validation", None))
+        self.assertEqual(f["trace"][-1]["file"], "upstream/base/models/api.py")
+        self.assertIn("待確認：Odoo core 的行為", f["message"])
+        # 同一根因換了行號 ⇒ 同一個 fingerprint，不會變成新的 finding
+        self.assertEqual(self.imp([self.nv(line=2)])["added"], 0)
+
+    def test_confirmed_requires_severity_and_remediation(self):
+        row = self.nv(verdict="confirmed")
+        out = self.imp([row])
+        self.assertEqual((out["added"], len(out["rejected"])), (0, 1))
+        row.update(severity="medium", remediation="綁定前驗證所有權")
+        out = self.imp([row])
+        self.assertEqual(out["added"], 1)
+        f = self.findings()[-1]
+        self.assertEqual((f["severity_tool"], f["severity"]), ("medium", "medium"))
+        self.assertNotIn("blockers", f)
+
+    def test_rejects_untrusted_rows(self):
+        bad = [self.nv(path="upstream/base/models/api.py"),  # 主要位置不能在上游
+               self.nv(fingerprint="has space"),
+               self.nv(trace=[{"kind": "sink", "file": "models/x.py", "line": 1},
+                              {"kind": "entrypoint", "file": "models/x.py", "line": 1}]),
+               self.nv(trace=[{"kind": "entrypoint", "file": "../../etc/passwd", "line": 1}]),
+               self.nv(blockers=[]),
+               {"type": "weird"}]
+        out = self.imp(bad)
+        self.assertEqual((out["added"], len(out["rejected"])), (0, 6))
+
+    def test_middle_sink_relabelled_with_warning(self):
+        row = self.nv(trace=[{"kind": "entrypoint", "file": "models/x.py", "line": 1},
+                             {"kind": "sink", "file": "models/x.py", "line": 2},
+                             {"kind": "sink", "file": "models/x.py", "line": 2}])
+        out = self.imp([row])
+        self.assertEqual(out["added"], 1)
+        self.assertEqual([s["kind"] for s in self.findings()[-1]["trace"]], ["entrypoint", "propagation", "sink"])
+        self.assertTrue(out["warnings"])
+
+    def test_prior_fingerprint_reused_verbatim(self):
+        legacy = "review:sudo-without-check:models/x.py:abc123"
+        (self.run_dir / "prior_findings.json").write_text(json.dumps([{"fingerprint": legacy}]))
+        out = self.imp([self.nv(fingerprint=legacy),
+                        {"type": "prior", "fingerprint": legacy, "status": "fixed", "note": "已加檢查"},
+                        {"type": "prior", "fingerprint": "review:never-listed", "status": "fixed"}])
+        self.assertEqual(self.findings()[-1]["fingerprint"], legacy)
+        self.assertEqual((out["prior"], len(out["rejected"])), (1, 1))
+        self.assertEqual(len(cl.read_jsonl(self.run_dir / "prior_status.jsonl")), 1)
+
+    def test_hardening_and_coverage_are_not_findings(self):
+        out = self.imp([{"type": "hardening", "path": "models/x.py", "line": 1, "note": "加上 CSP"},
+                        {"type": "coverage", "entry": "/x", "status": "reviewed", "note": "看過"},
+                        {"type": "coverage", "entry": "/y", "status": "maybe"}])
+        self.assertEqual((out["hardening"], out["coverage"], len(out["rejected"])), (1, 1, 1))
+        self.assertEqual(self.findings(), [])
+        hid = cl.read_jsonl(self.run_dir / "hardening.jsonl")[0]["id"]
+        res = cl.cmd_promote(self.run_dir, hid)
+        f = self.findings()[-1]
+        self.assertEqual((f["id"], f["verdict"], f["fingerprint"]),
+                         (res["finding_id"], "promoted_hardening", f"review:hardening/{hid}"))
+        self.assertTrue(cl.cmd_promote(self.run_dir, hid)["already"])
+        self.assertEqual(len(self.findings()), 1)
+        with self.assertRaises(cl.CollectError):
+            cl.cmd_promote(self.run_dir, "nope")
+
+    def test_verdict_rejected_then_replaced(self):
+        self.imp([self.nv(), self.nv(fingerprint="second-root-cause")])
+        a, b = self.findings()
+        v = Path(self.tmp.name) / "verdict.json"
+        v.write_text(json.dumps({"decision": "rejected", "record": {
+            "fingerprint": "email-claim-links-partner", "title": "t", "reason": "上游已驗證所有權"}}))
+        cl.cmd_verdict(self.run_dir, a["id"], v)
+        self.assertEqual([f["id"] for f in self.findings()], [b["id"]])
+        self.assertEqual(cl.read_jsonl(self.run_dir / "rejected.jsonl")[0]["reason"], "上游已驗證所有權")
+        v.write_text(json.dumps({"decision": "confirmed", "record": {
+            "fingerprint": "second-root-cause", "title": "t2", "root_cause": "rc2",
+            "trace": [{"kind": "sink", "file": "models/x.py", "line": 2}], "severity": "low", "remediation": "r"}}))
+        cl.cmd_verdict(self.run_dir, b["id"], v)
+        f = self.findings()[0]
+        self.assertEqual((f["verdict"], f["severity_tool"], f["verified"]["decision"]), ("confirmed", "low", "confirmed"))
+        self.assertNotIn("blockers", f)
+        v.write_text(json.dumps({"decision": "confirmed", "record": {"fingerprint": "another-root-cause", "title": "x"}}))
+        with self.assertRaisesRegex(cl.CollectError, "不同根因"):
+            cl.cmd_verdict(self.run_dir, b["id"], v)
+        v.write_text(json.dumps({"decision": "rejected", "record": {}, "extra": 1}))
+        with self.assertRaises(cl.CollectError):
+            cl.cmd_verdict(self.run_dir, b["id"], v)
+
+
 if __name__ == "__main__":
     unittest.main()

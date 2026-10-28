@@ -2,7 +2,8 @@
 #
 # public 規則（scan／always_human／autofix／verify）在該 repo 預設分支的
 # .security/sweep.yaml；collect.py 把兩份合併成 config.json。
-# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、history、baseline、disclosure。
+# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、review_classes、history、baseline、disclosure。
+# review_classes：deep review 工單要放哪些攻擊類別原文（檔名#類別；odoo.md 在 companions/，其餘在 third_party/）。
 
 context:
   summary: LINE 基礎層。統一的 LINE Messaging API client（token、push、media 下載）、line.user 身分模型、partner 綁定 wizard。本模組沒有 HTTP
@@ -21,6 +22,17 @@ review_focus:
 - sudo() 呼叫是否都有前置的權限或身分檢查
 - token、secret 是否可能被寫進 log、exception 訊息或 chatter
 - 對外 HTTP 呼叫是否都有 timeout 與大小上限
+review_classes:
+- 'ATTACK-CLASSES.md#Access control'
+- 'ATTACK-CLASSES.md#Cryptography and secrets'
+- 'ATTACK-CLASSES.md#Obvious things'
+- 'odoo.md#sudo() scope creep'
+- 'odoo.md#Field-level groups and related fields'
+- 'odoo.md#Public method RPC exposure'
+- 'WEB-PROTOCOL-AND-AUTH.md#JWT verification and claim binding'
+- 'WEB-PROTOCOL-AND-AUTH.md#Account linking and identity collision'
+- 'PROTOCOLS-RPC-AND-MESSAGING.md#Peer identity to application-principal confusion'
+- 'RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Unbounded buffering and cardinality'
 history:
   fixed:
   - H-7

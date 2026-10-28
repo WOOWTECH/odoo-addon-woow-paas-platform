@@ -10,10 +10,12 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 ├── AGENTS.md                 leader prompt（手改）
 ├── gates.yaml                Jev model 版本、mode（shadow／enforce）、門檻
 ├── targets/<repo>.yaml       各 repo 的 private 上下文（⚠ 不可複製到 public repo）
+├── companions/odoo.md        自己寫的 Odoo 攻擊類別（格式比照 Cloudflare companion；#2064）
+├── third_party/cloudflare-security-audit/   vendored 原文（MIT，commit c1c8a8c；見該目錄 README）
 ├── skills/
-│   ├── sec-collect/          scripts/collect.py：設定合併、增量範圍、掃描工具、findings
+│   ├── sec-collect/          scripts/collect.py：設定合併、增量範圍、上游快照、掃描工具、findings、import／verdict／promote
 │   ├── sec-gate/             scripts/jev_gate.py：Jev 閘門、路由、shadow log、校準
-│   ├── sec-dispatch/         用 woow-issue-leader/generate-worker.py 派 worker
+│   ├── sec-dispatch/         scripts/ticket.py：deep review／驗證者工單；用 woow-issue-leader/generate-worker.py 派 worker
 │   ├── sec-issue/            scripts/issue_sync.py：成立的 finding 開到 Gitea mirror-internal（#1957）
 │   └── sec-report/           report.md 與 Inbox 提問
 └── tests/                    unittest（CI：.gitea/workflows/security-sweep-tests.yml）
@@ -30,11 +32,14 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 ```mermaid
 flowchart TD
     S0["每日／每週排程<br/>或前台 agent「跑一次」"] --> S1["collect preset<br/>讀 preset、驗證本輪輸入"]
-    S1 --> S2["collect run（每個 target）<br/>增量範圍、掃描工具、findings"]
+    S1 --> S2["collect run（每個 target）<br/>增量範圍、上游唯讀快照、掃描工具、findings"]
     S2 --> D1{"符合 deep_review 條件？"}
-    D1 -- 是 --> W1["派唯讀 review worker<br/>（當輪先結束，等完成通知）"]
-    W1 --> S3["collect import 併入回報"]
-    S3 --> GA
+    D1 -- 是 --> W1["ticket review 產生工單<br/>派唯讀 review worker<br/>（當輪先結束，等完成通知）"]
+    W1 --> S3["collect import 併入回報<br/>finding／hardening／coverage／prior"]
+    S3 --> DV{"deep_review: always<br/>（每週）？"}
+    DV -- 是 --> V1["ticket verify ＋ 每筆一個驗證者<br/>collect verdict 套用"]
+    V1 --> GA
+    DV -- 否 --> GA
     D1 -- 否 --> GA["閘門 A：jev_gate triage"]
     GA -- "exit 3（key 失效）" --> GA3["全部轉人工<br/>報告第一行寫明"]
     GA3 --> CO
@@ -149,11 +154,31 @@ committed 的 mode 必須是 shadow——改成 enforce 要人拍板、改測試
 | 位置 | 內容 | 可見度 |
 |---|---|---|
 | 目標 repo 的 `.security/sweep.yaml` | `scan`、`always_human`、`autofix`、`verify` | public；**只讀 origin 預設分支** |
-| 本目錄 `targets/<repo 目錄名>.yaml` | `context`、`review_focus`、`history`、`baseline`、`disclosure` | private（本 repo） |
+| 本目錄 `targets/<repo 目錄名>.yaml` | `context`、`review_focus`、`review_classes`、`history`、`baseline`、`disclosure` | private（本 repo） |
 
-collect.py 只從 private 檔取上面五個 key，private 不能放寬 public 的規則。repo 沒有
+collect.py 只從 private 檔取上面六個 key，private 不能放寬 public 的規則。repo 沒有
 `.security/sweep.yaml` ⇒ 保守預設（不自動修、high 以上轉人工）。`.security/` 有任何變動 ⇒
 自動產生 `security-config-changed` finding、必轉人工（防止有人在 PR 裡偷加豁免）。
+
+## deep review（#2064）
+
+借用 [cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill) 的方法，試跑結論見 #2064。
+
+- **工單由 `ticket.py` 組**：方法、finding 成立條件、攻擊類別、嚴重度判準、驗證者 prompt 都從
+  `third_party/` 與 `companions/` 原文擷取。攻擊類別由 `targets/<repo>.yaml` 的 `review_classes` 指定
+  （`檔名#類別`；companion 類別自動帶上該檔的 Core discipline、Universal moves、Validation rules）。
+  `tests/test_ticket.py` 檢查每個 targets 的引用都找得到原文。
+- **上游唯讀快照**：`context.upstream` 列的 repo 要 clone 在目標 repo 的同層目錄、origin 指向同一個 repo
+  （Gitea mirror-internal 鏡像也算）。快照只給 worker 讀，finding 只開在目標 repo；找不到的上游列在 `meta.json`，
+  也只有它們能當 needs_validation 的 blocker。
+- **回報格式**：`finding`（`confirmed`＝source-confirmed，因為 sweep 不執行目標程式碼；`needs_validation`
+  必有 blocker 與驗證計畫、不給嚴重度）、`hardening`（不構成 finding，人可在 Inbox 升級）、`coverage`
+  （entry point 審過與否）、`prior`（之前的 finding 已修好）。
+- **根因 fingerprint**：`review:<根因 slug>`，不含行號；工單帶上前幾輪的 finding 要 worker 沿用，
+  舊制 `review:<rule>:<path>:<hash>` 在清單內就原樣接受，所以改制不會讓舊 finding 換號重開。
+- **驗證者**：只在 `deep_review: always`（每週）派，每筆一個新 session、每輪最多 10 筆；rejected 的移到
+  `rejected.jsonl`，下一輪工單會帶上，避免重報同一個被推翻的說法。
+- **needs_validation 一律轉人工**（`jev_gate` 路由），Jev 另外會收到 trace 與 blocker。
 
 ## Jev（TypeSafe System One）
 
@@ -235,3 +260,5 @@ bundle 不綁主機：`<WS>` 是排程的 workspace，agent 開工時由 `$OMNIG
 | fix 用 claude-native | 需 #1729 合併；之前產生器只接受 implement + pi |
 | symlink 逃逸 | 快照階段已擋並產生 high finding；fixer 在真 worktree 裡的路徑檢查仍是字串比對（見 #1729） |
 | high／critical 的 private fork | Phase 1 只產 advisory 草稿，建立 advisory 與 private fork 由人操作 |
+| deep review 的 finding 不會被判 `not_redetected` | `tools.json` 不記 `review` 的狀態，所以 worker 沒再回報不等於已修好；已修好靠 `prior` 行（只進報告）或人工結案 |
+| 驗證者成本 | 每筆約 9 萬 token、2–4 分鐘（#2064 試跑）；每週輪次每輪最多 10 筆 |

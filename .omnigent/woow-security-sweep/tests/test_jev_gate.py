@@ -427,5 +427,55 @@ class SecretHandlingTest(unittest.TestCase):
                 jg.load_api_key()
 
 
+class StructuredFindingTest(unittest.TestCase):
+    """新格式 deep review finding（#2064）：needs_validation 一律轉人工、state 帶 trace、triage --only。"""
+
+    def nv(self, **kw):
+        f = dict(finding(path="controllers/x.py"), tool="review", fingerprint="review:email-link", rule="email-link",
+                 severity_tool=None, verdict="needs_validation", title="t", root_cause="rc",
+                 blockers=["上游 bind_partner 的行為"],
+                 trace=[{"kind": "entrypoint", "file": "controllers/x.py", "line": 1, "description": "d" * 400},
+                        {"kind": "sink", "file": "upstream/base/m.py", "line": 2, "description": "s"}])
+        f.update(kw)
+        return f
+
+    def test_needs_validation_goes_human_even_if_confident(self):
+        proposed, reasons, _ = jg.route_triage(self.nv(), answers(conf=0.99), CFG, gates(), TODAY)
+        self.assertEqual(proposed, "human")
+        self.assertIn("needs_validation：上游 bind_partner 的行為", reasons[0])
+
+    def test_baseline_still_wins_over_needs_validation(self):
+        cfg = dict(CFG, baseline=[{"fingerprint": "review:email-link", "status": "tracked"}])
+        self.assertEqual(jg.route_triage(self.nv(), answers(), cfg, gates(), TODAY)[0], "drop")
+
+    def test_state_includes_structure(self):
+        st = jg.triage_state(self.nv(), CFG)["finding"]
+        self.assertEqual((st["verdict"], st["root_cause"]), ("needs_validation", "rc"))
+        self.assertEqual(st["trace"][1]["location"], "upstream/base/m.py:2")
+        self.assertLessEqual(len(st["trace"][0]["description"]), 300)
+        self.assertNotIn("trace", jg.triage_state(finding(), CFG)["finding"])
+
+    def test_severity_question_is_stack_neutral(self):
+        q = jg.triage_questions(jg.load_gates()["severity_levels"])
+        self.assertNotIn("Odoo", json.dumps(q))
+
+
+class TriageOnlyTest(unittest.TestCase):
+    setUp = TriageRunTest.setUp
+    tearDown = TriageRunTest.tearDown
+
+    def test_only_appends_without_rejudging(self):
+        caller = mock.Mock(return_value={"model": "m", "answers": answers(score=2.0)})
+        jg.triage_run(self.run, gates(), self.state, caller=caller, today=TODAY)
+        with open(self.run / "findings.jsonl", "a") as fh:
+            fh.write(json.dumps(dict(finding(), id="f4", fingerprint="fp4")) + "\n")
+        caller.reset_mock()
+        summary = jg.triage_run(self.run, gates(), self.state, caller=caller, today=TODAY, only=["f4", "f1"])
+        self.assertEqual((caller.call_count, summary["total"]), (1, 1))  # f1 已判過，不重判
+        self.assertEqual(len(jg.read_jsonl(self.run / "decisions.jsonl")), 4)
+        with self.assertRaises(jg.GateError):
+            jg.triage_run(self.run, gates(), self.state, caller=caller, today=TODAY, only=["missing"])
+
+
 if __name__ == "__main__":
     unittest.main()

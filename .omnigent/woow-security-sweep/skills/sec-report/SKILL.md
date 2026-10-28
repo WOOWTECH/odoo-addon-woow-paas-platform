@@ -19,10 +19,26 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 
 ## 待決 finding（依嚴重度排序）
 ### <decision id>｜<repo> <path>:<line>｜<level>
-- 工具：<tool> <rule>
+- 工具：<tool> <rule>（deep review 新格式另寫 `verdict`；驗證過的加「已驗證」）
 - 說明：<message 摘要>
+- 路徑：<trace 的 file:line 依序>（新格式才有）
+- 待確認：<blockers>；本機驗證：<validation_plan.local 摘要>；owner 確認：<validation_plan.deployment 摘要>（needs_validation 才有）
 - Jev：<verdict>（信心 <c>），建議 <proposed>；理由：<reasons>
 - 程式碼：<snippet，秘密值改成 ***>
+
+## 驗證者結論（每週輪次；沒派就寫「本輪未派」）
+| finding id | repo | 標題 | 驗證者結論 | 主要修正 |
+<rejected 的列在這裡（rejected.jsonl），不進待決；超過上限沒驗證的列為「未驗證」>
+
+## hardening（不構成 finding；hardening.jsonl，可在 Inbox 升級）
+| hardening id | repo | 位置 | 建議 |
+
+## entry point 涵蓋（coverage.jsonl）
+| repo | entry | 狀態 | 說明 |
+<not_reviewed／blocked 排前面；工單有 entry point 但 worker 沒回報 coverage 的，列為「未回報」>
+
+## 之前的 finding 本輪狀態（prior_status.jsonl）
+| fingerprint | repo | 狀態（fixed／not_checked） | 依據 |
 
 ## 前幾輪未決（carryover.jsonl；依嚴重度排序）
 | decision id | repo | 位置 | 工具／rule | Jev | 首次出現 | 已出現輪數 |
@@ -54,8 +70,8 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 3. Jev 建議 `drop` 的（Phase 2 最先要放開的就是它，最需要人工標記）
 4. 其餘依嚴重度；同級時 carryover 的 `seen_runs` 多的優先（拖越久越該問）
 
-題目寫法：`<repo> <path>:<line>（<level>）<一句話說明>。Jev 建議：<proposed>`；
-選項固定用（description 寫清楚後果）：
+題目寫法：`<repo> <path>:<line>（<level>）<一句話說明>。Jev 建議：<proposed>`；needs_validation 在後面加
+`待確認：<第一個 blocker>`。選項固定用（description 寫清楚後果）：
 
 | label | 後果 |
 |---|---|
@@ -64,7 +80,15 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 | 誤報 | 記為誤報，產生 baseline 片段供你決定要不要加 |
 | 接受風險 | 產生 baseline accepted 片段（6 個月後到期） |
 
-沒有待決 finding 時只問一題「本輪摘要」（選項：已閱、要求 full 重掃），讓 Inbox 有紀錄。
+**hardening 升級題**：finding 題目不到 4 題、而且本輪有 hardening 時，用剩下的一題問
+「要把哪幾條 hardening 升級成 finding？」（`multiSelect: true`；選項最多 4 條，`label` 用位置、`description` 用建議內容，
+優先挑 `context.sensitive_code` 裡的檔案）。其餘 hardening 只列在 report.md。人選了的每一條：
+
+1. `collect promote --hardening-id <id>` ⇒ 新的 `finding_id`
+2. `jev_gate triage --run-dir <dir> --only <finding_id>` ⇒ 從 decisions.jsonl 找到它的 decision id
+3. `jev_gate human --id <decision id> --label true_positive --action track --note "Inbox 升級自 hardening"`
+
+沒有待決 finding 時只問一題「本輪摘要」（選項：已閱、要求 full 重掃），讓 Inbox 有紀錄；有 hardening 時改問升級題。
 超過 4 筆的部分寫在 report.md，題目裡註明「另有 N 筆見 report.md：<路徑>」。
 沒問到的會由下一輪的 carryover 再帶出來；只有跑過 carryover 才能這樣告訴人。
 
