@@ -34,7 +34,9 @@ operator 實測數據（事故當下）：
 SH 與 SA 兩側都測：它們是鏡像端點，只收一側等於把攻擊面搬家
 （`two-layer-acl-lockstep`）。
 """
+import json
 from datetime import timedelta
+from unittest.mock import patch
 
 from odoo import fields
 from odoo.tests.common import HttpCase, TransactionCase, tagged
@@ -410,3 +412,65 @@ class TestTunnelTokenEndpointBinding(_BindingFixture, HttpCase):
         self.assertEqual(self._get(self._sh_url(UID_A, 'pi')).status_code, 200)
         self.home.action_release_binding()
         self.assertEqual(self._get(self._sh_url(UID_B, 'sho')).status_code, 200)
+
+
+@tagged('post_install', '-at_install')
+class TestReleaseBindingResponse(_BindingFixture, HttpCase):
+    """/woow 的 release_binding：回應帶解綁當下的連接器數（#38），不是解綁前快取的值。
+
+    解綁不會讓對方離線，所以 connector_count／binding_conflict 在解綁前後都要照實說；
+    只讀疊加，拿不到或出錯時退回 DB 值，解綁本身仍然成功。
+    """
+
+    PASSWORD = 'Release-binding-1766!'
+
+    def setUp(self):
+        super().setUp()
+        self._setup_fixture()
+        self.owner.sudo().write({'password': self.PASSWORD})
+        self.authenticate(self.owner.login, self.PASSWORD)
+
+    def _release(self, path):
+        body = json.dumps({'jsonrpc': '2.0', 'method': 'call',
+                           'params': {'action': 'release_binding'}})
+        response = self.url_open(path, data=body, headers={'Content-Type': 'application/json'})
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertNotIn('error', payload, payload)
+        self.env.invalidate_all()
+        return payload['result']
+
+    def _targets(self):
+        return [
+            ('sh', self.home, '/api/workspaces/%d/smarthomes/%d' % (self.workspace.id, self.home.id)),
+            ('sa', self.sa, '/api/workspaces/%d/security-accesses/%d' % (self.workspace.id, self.sa.id)),
+        ]
+
+    def _claim_with_stale_counts(self, record):
+        record.sudo()._tunnel_binding_claim(UID_A, 'old machine')
+        record.sudo().write({'connector_count': 2, 'binding_conflict': True})
+
+    def test_response_carries_the_live_connector_count(self):
+        live = {'connector_count': 1, 'binding_conflict': False, 'tunnel_status': 'connected'}
+        for label, record, path in self._targets():
+            with self.subTest(label):
+                self._claim_with_stale_counts(record)
+                with patch.object(type(record), '_live_tunnel_status', return_value=live):
+                    result = self._release(path)
+                self.assertTrue(result['success'], result)
+                self.assertEqual(result['data']['binding_state'], 'unbound')
+                self.assertEqual(result['data']['connector_count'], 1)
+                self.assertIs(result['data']['binding_conflict'], False)
+
+    def test_release_still_succeeds_when_the_live_reading_is_unavailable(self):
+        for label, record, path in self._targets():
+            for side in ({'return_value': {}}, {'side_effect': RuntimeError('operator exploded')}):
+                with self.subTest(label=label, side=sorted(side)[0]):
+                    self._claim_with_stale_counts(record)
+                    with patch.object(type(record), '_live_tunnel_status', **side):
+                        result = self._release(path)
+                    self.assertTrue(result['success'], result)
+                    self.assertEqual(result['data']['binding_state'], 'unbound')
+                    # no fresher reading: the stored one is shown, it is not made up
+                    self.assertEqual(result['data']['connector_count'], 2)
+                    self.assertIs(result['data']['binding_conflict'], True)
