@@ -69,8 +69,8 @@ class TestWoowOdooSeedContract1130(TransactionCase):
 
     def test_seed_targets_the_woow_odoo_chart(self):
         self.assertEqual(self.tpl.helm_chart_name, WOOW_ODOO_CHART_REF)
-        # 0.2.17＝charts 整合包 #254（0.2.8–0.2.17 皆為新增鍵＋chart 預設，tenant values 介面不變）。
-        self.assertEqual(self.tpl.helm_chart_version, '0.2.17')
+        # 0.2.23＝租戶 HSTS（woow-paas-charts#304）；0.2.8–0.2.23 皆為新增鍵＋chart 預設，tenant values 介面不變。
+        self.assertEqual(self.tpl.helm_chart_version, '0.2.23')
         self.assertTrue(self.tpl._is_woow_odoo_chart())
         self.assertEqual(self.values['profile'], 'tenant')
         self.assertEqual(self.tpl.post_deploy_init_type, 'odoo',
