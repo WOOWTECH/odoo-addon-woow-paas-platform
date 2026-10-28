@@ -52,12 +52,13 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.14',
+        self.assertEqual(tpl.helm_chart_version, '0.1.15',
                          '0.1.7：上游 omnigent v0.17.0（server／runner image pin，模板同 0.1.6）；'
                          '0.1.8–0.1.12＝charts 整合包 #254（runner nodeSelector tenant-schedulable——'
                          '節點 label 要先加、runner egress gate、/data 可寫 readiness、token Secret 回收、'
                          'egress-profile=web）；0.1.14＝上游 v0.19.1＋WoowTech overlay（charts #281，'
-                         '只換 image；0.1.13 保留給 charts #256）')
+                         '只換 image；0.1.13 保留給 charts #256）；0.1.15＝overlay 加 OpenCode 選模型'
+                         '（charts #305，只換 image）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；
@@ -79,12 +80,12 @@ class TestOmnigentSeed(TransactionCase):
         self.assertTrue(v['runner']['image'].startswith(OMNI_HOST_IMAGE + ':'))
         self.assertEqual(
             v['runner']['image'],
-            OMNI_HOST_IMAGE + ':20261025.1643@sha256:a1be5dd41c67fc9f6585af84415f4f58e7ae0718f8be4a43b78403736e0733dd',
-            'v0.19.1 底的 MCP 工具清單修補 runner overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #410）')
+            OMNI_HOST_IMAGE + ':20261028.1043@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34',
+            'v0.19.1 底的 MCP 工具清單＋OpenCode 模型清單修補 runner overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #486）')
         self.assertEqual(
             v['image']['tag'],
-            '20261025.1643@sha256:1fc91dd43019ff98943adafafdd5a87b43206e32e6f3983a8b89b683cb0fa434',
-            'v0.19.1 底的 isError 修補 server overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #414）')
+            '20261028.1043@sha256:9d9854607bcd180ce67b6b439ccb504b7fe75772231445aa31778630654adb12',
+            'v0.19.1 底的 isError＋OpenCode 選模型 web UI 修補 server overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #487）')
         host_tag = v['runner']['image'][len(OMNI_HOST_IMAGE) + 1:]
         self.assertRegex(host_tag, PINNED_TAG_RE,
                          'runner image 由 launcher 原樣寫進每個 Job，必須釘 digest')

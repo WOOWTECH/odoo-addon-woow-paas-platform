@@ -1,0 +1,76 @@
+{
+  "verified_at": "2026-10-28",
+  "service": "Omnigent",
+  "template": "woow_paas_platform.cloud_app_omnigent",
+  "chart": {
+    "from": "omnigent 0.1.14",
+    "to": "omnigent 0.1.15",
+    "chart_pr": "https://git-prod.woowtech.io/woow-paas/woow-paas-charts/pulls/305",
+    "chart_head": "42964eaafbf41fee8149b301b6dd3e55bfb57db9",
+    "published": "pending: fill merge_commit / publish_run / package created_at after charts #305 is merged and published",
+    "template_change": "image pins only; DB schema identical to 0.1.14"
+  },
+  "source": {
+    "upstream_release": "omnigent-ai/omnigent v0.19.1",
+    "overlay_branch": "https://github.com/WOOWTECH/omnigent/tree/fix/omnigent-v0191-overlay-opencode-picker-20261028",
+    "overlay_head": "e26dbb12c32d2b6f413d040b638820b83f55ea3e",
+    "qa_image_build": "https://github.com/WOOWTECH/omnigent/actions/runs/40660331647",
+    "server": {
+      "base": "ghcr.io/omnigent-ai/omnigent-server-kubernetes:v0.19.1@sha256:5746692f3c3a95502f76f83260c3e5ff36348ad8c3cdce1fab85784065e44dad",
+      "overlay_scope": "0.1.14 orchestration.py isError patch + rebuilt web UI: OpenCode gets the modelPicker capability, New Chat loads /v1/hosts/<id>/harnesses/opencode-native/model-options and sends model_override at create; build asserts the bundle contains the OpenCode modelPicker entry",
+      "qa_image": "ghcr.io/woowtech/omnigent-server-kubernetes@sha256:9d9854607bcd180ce67b6b439ccb504b7fe75772231445aa31778630654adb12",
+      "reproducible_bundle": "useSession-BEOjo5bM.js identical in local build, CI build and the bundle served by the rehearsal server"
+    },
+    "host": {
+      "base": "ghcr.io/omnigent-ai/omnigent-host:v0.19.1@sha256:46ddb52b8013e69bcd2068842d9746bc896d50f5884a2469d51a27a6211c5814",
+      "overlay_scope": "0.1.14 MCP proxy patches + omnigent/host/connect.py: _handle_model_options serves `opencode models` for opencode-native (upstream returns unsupported); build asserts original file sha256 and the new branch",
+      "qa_image": "ghcr.io/woowtech/omnigent-host@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34"
+    },
+    "origin": "folds the 2026-10-25 manual hotfix on service 201 (OpenCode model picker) into the overlay"
+  },
+  "mirror": {
+    "server": {
+      "pin": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261028.1043@sha256:9d9854607bcd180ce67b6b439ccb504b7fe75772231445aa31778630654adb12",
+      "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/487",
+      "publish_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/31267",
+      "jcr_image_coord_from_run": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261028.1043@sha256:9d9854607bcd180ce67b6b439ccb504b7fe75772231445aa31778630654adb12",
+      "digest_exact_match": true
+    },
+    "host": {
+      "pin": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261028.1043@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34",
+      "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/486",
+      "human_approve": "eugene 2026-10-28T13:05:20Z",
+      "publish_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/31222",
+      "jcr_image_coord_from_run": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261028.1043@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34",
+      "digest_exact_match": true
+    },
+    "preserve_digests": true
+  },
+  "chart_rehearsal": {
+    "namespace": "dev-sandbox-omnigent-0115",
+    "shapes": ["SQLite, chart defaults, runner enabled (11, 151)"],
+    "shape_not_run": "external PostgreSQL (201): no DB schema change and 201 is on hold",
+    "from": "chart 0.1.14 from woow-paas-charts main (current template pins)",
+    "upgrade_seconds_to_ready": 65,
+    "login_patch": "paas-webui: patched LoginPage-DdfQhiDX.js (username=1, password=1)",
+    "old_cookie_auth_me": 200,
+    "old_sessions_readable": "2/2; pre-upgrade managed session accepted a message (202) and the runner replied",
+    "served_bundle_has_opencode_model_picker": true,
+    "managed_runner_model_options": {
+      "chart_0_1_14_opencode_native": "502 model options are unsupported for harness 'opencode-native'",
+      "chart_0_1_15_opencode_native": "502 opencode CLI not found on PATH (new code path; the host image ships no opencode CLI)",
+      "claude_native_both": 200
+    },
+    "rollback_to_0_1_14_seconds_to_ready": 62,
+    "rollback_db_change": "none",
+    "re_upgrade_seconds_to_ready": 64,
+    "cleanup": "release uninstalled, namespace deleted with UID precondition; one Released Retain PV left for a separate delete"
+  },
+  "limits": [
+    "Managed runners (cloud work machines) cannot run OpenCode: upstream host image has no opencode CLI (EXTRA_HARNESS_CLIS empty); 0.1.14 behaves the same",
+    "User-connected hosts running upstream omnigent-host return unsupported for OpenCode model-options; New Chat shows 'Models unavailable' and still creates the session without model_override"
+  ],
+  "migration_needed": false,
+  "migration_reason": "platform 18.0.1.0.274 >= .232 (#1709) refreshes string runner.image on Redeploy; read-only inventory on 2026-10-28 shows runner_pinned = t for services 11, 151, 201",
+  "release_status": "Seed pin ready for human review; merge only after charts #305 is published. Existing services switch only on admin Redeploy. Redeploy verification does not check runner.image; verify it in stage 5."
+}
