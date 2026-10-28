@@ -1,5 +1,8 @@
 """FastAPI application entry point."""
 import logging
+import os
+import socket
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -34,6 +37,15 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Process-lifetime identity. A replacement Pod/process must produce a distinct
+# value so consumers can durably invalidate publication before reconfirming it.
+OPERATOR_INSTANCE_EPOCH = str(uuid.uuid4())
+
+# Replica identity: stable across container restarts inside one pod, distinct
+# between replicas.  Consumers pair it with the epoch so that two replicas
+# answering alternately behind one Service are not mistaken for restarts.
+OPERATOR_INSTANCE_ID = (os.environ.get("HOSTNAME") or socket.gethostname() or "")[:128] or None
 
 
 @asynccontextmanager
@@ -194,6 +206,8 @@ async def health_check():
         status="healthy" if helm_version else "degraded",
         timestamp=datetime.now(timezone.utc),
         helm_version=helm_version,
+        instance_epoch=OPERATOR_INSTANCE_EPOCH,
+        instance_id=OPERATOR_INSTANCE_ID,
     )
 
 

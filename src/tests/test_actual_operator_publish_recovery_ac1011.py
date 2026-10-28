@@ -165,6 +165,15 @@ class TestActualOperatorPublishRecoveryAC1011(Fixture, TransactionCase):
         self.assertFalse(self.client.origin)
         self.assertEqual(self.client.contract.account.next_app, 1)
         self.client.fail_publish = False
+        # A recovered provider is insufficient while its connector is down.
+        route.write({'is_protected': True})
+        self.assertTrue(route.access_publish_pending)
+        self.client.get_tunnel_status = lambda tunnel_id: {
+            'tunnel_id': tunnel_id,
+            'name': sa.tunnel_name,
+            'status': 'healthy',
+            'connections': [{'connector_id': 'native-live-connector'}],
+        }
         route.write({'is_protected': True})
         self.assert_one_app_and_policy(route)
         sa._cleanup_cloudflare()

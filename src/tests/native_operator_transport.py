@@ -37,8 +37,24 @@ class Account:
             base = '/access/' + name
             if path.endswith(base):
                 if method == 'GET':
-                    return self.ok(list(rows.values()))
+                    listed = list(rows.values())
+                    if name == 'apps':
+                        query = request.url.params
+                        for key in ('name', 'domain'):
+                            if query.get(key):
+                                listed = [row for row in listed
+                                          if row.get(key) == query[key]]
+                    return self.ok(listed)
                 if method == 'POST':
+                    if name == 'apps' and any(
+                            row.get('domain') == (body or {}).get('domain')
+                            for row in rows.values()):
+                        # Measured on the live account: one Access app per domain,
+                        # also for simultaneous creates (one 201, the rest this).
+                        return httpx.Response(409, json={
+                            'success': False,
+                            'errors': [{'code': 11010,
+                                        'message': 'access.api.error.application_already_exists'}]})
                     if name == 'apps':
                         self.next_app += 1
                         item_id = 'native-app-%d' % self.next_app
@@ -87,7 +103,7 @@ def load_cloudflare():
     # **改了那個檔就要同步更新這一行**（`sha256sum` 取新值），否則 full-suite 會以
     # 「Unexpected operator source」整組紅掉——#1766 給 connections 補 client_id
     # 時就是這樣紅的（PR CI 不含 Odoo 測試，只在 merge 進 develop 後才跑）。
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == 'd77762697b3c1a0c75763ba2c1dfff387fb45821983f157f52fe56b288cc15af', 'Unexpected operator source'
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == '4d2c3acfc9964370ad84e493707e0b61c4793cf6a412729dc44e364327840adb', 'Unexpected operator source'
     config = types.ModuleType('src.config')
     config.settings = types.SimpleNamespace(
         cloudflare_account_id='native-isolated-account',

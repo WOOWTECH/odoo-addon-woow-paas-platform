@@ -485,7 +485,7 @@ class OAuth2Controller(Controller):
     # ==================== Token Endpoint ====================
 
     @route('/oauth2/token', type='http', auth='none', methods=['POST'],
-           csrf=False, save_session=False)
+           csrf=False, save_session=False, readonly=False)
     def token(self, **kwargs: Any) -> http.Response:
         """Exchange credentials for tokens (RFC 6749 Section 4.1.3, 4.3, 6).
 
@@ -561,6 +561,8 @@ class OAuth2Controller(Controller):
         user: Any,
         scope: str,
         include_refresh: bool = True,
+        origin_code: Any = None,
+        parent_token: Any = None,
     ) -> http.Response:
         """Create and return access (and optionally refresh) tokens.
 
@@ -569,6 +571,10 @@ class OAuth2Controller(Controller):
             user: The res.users record.
             scope: Space-separated granted scopes.
             include_refresh: Whether to include a refresh token.
+            origin_code: The authorization code this lineage started from, if
+                any. Recorded (and carried across rotations) so that replaying
+                that code can invalidate everything it produced.
+            parent_token: The token this one replaces in a refresh rotation.
 
         Returns:
             JSON response with token data.
@@ -593,6 +599,8 @@ class OAuth2Controller(Controller):
             'expires_at': access_expires,
             'user_id': user.id,
             'client_id': client.id,
+            'origin_code_id': origin_code.id if origin_code else False,
+            'parent_token_id': parent_token.id if parent_token else False,
         }
 
         refresh_token_str = None
@@ -644,6 +652,29 @@ class OAuth2Controller(Controller):
 
         if not auth_code:
             return _json_error('invalid_grant', _('Authorization code not found.'))
+
+        # Replay of an already-redeemed code. RFC 6749 10.5 / RFC 9700 4.1.2:
+        # deny, and invalidate the tokens that code already produced — the
+        # server cannot tell the legitimate client from whoever replayed it,
+        # so leaving the first exchange's session live is exactly the outcome
+        # an interception attack wants.
+        #
+        # Revocation is gated on _replay_proves_possession(): a party that
+        # knows only the code value must not be able to kill a healthy session
+        # (that would turn 10.5 into a self-inflicted denial of service). The
+        # error response is byte-identical either way, so this gate adds no
+        # oracle. Expiry is handled below and is NOT a replay: an unused code
+        # that merely timed out produced nothing to revoke.
+        if auth_code.is_used:
+            if self._replay_proves_possession(auth_code, redirect_uri, code_verifier):
+                revoked = request.env['woow_paas_platform.oauth_token'].sudo() \
+                    .revoke_issued_from_code(auth_code)
+                _logger.warning(
+                    'OAuth2 authorization code replay: client=%s auth_code '
+                    'id=%s, revoked %s token(s) previously issued from it',
+                    client.name, auth_code.id, len(revoked),
+                )
+            return _json_error('invalid_grant', _('Authorization code expired or already used.'))
 
         if not auth_code.is_valid():
             return _json_error('invalid_grant', _('Authorization code expired or already used.'))
@@ -700,7 +731,30 @@ class OAuth2Controller(Controller):
             user=auth_code.user_id,
             scope=auth_code.scope or '',
             include_refresh=True,
+            origin_code=auth_code,
         )
+
+    @staticmethod
+    def _replay_proves_possession(auth_code, redirect_uri, code_verifier) -> bool:
+        """Did this replay attempt hold the rest of the code's binding?
+
+        Client authentication already ran (`_authenticate_client`), so for a
+        confidential client a matching redirect_uri is enough. A PKCE code must
+        additionally come with the right verifier: for a public client the
+        client_id is published and carries no secret, so without this the code
+        value alone would let anyone revoke the real user's session.
+        """
+        if auth_code.redirect_uri != redirect_uri:
+            return False
+        if auth_code.code_challenge:
+            if not code_verifier:
+                return False
+            return _verify_pkce(
+                code_verifier,
+                auth_code.code_challenge,
+                auth_code.code_challenge_method or 'plain',
+            )
+        return True
 
     def _handle_refresh_token(self, kwargs: dict) -> http.Response:
         """Handle grant_type=refresh_token."""
@@ -729,6 +783,21 @@ class OAuth2Controller(Controller):
         if not token:
             return _json_error('invalid_grant', _('Refresh token not found.'))
 
+        # Reuse of a refresh token that rotation already revoked. RFC 9700
+        # 4.14.2: that is evidence the token leaked, so the successors it was
+        # rotated into go with it — otherwise whoever presented it second just
+        # keeps the pair minted by the first presentation. Presenting the
+        # refresh token IS the proof of possession here, so no extra gate.
+        # A merely EXPIRED (not revoked) refresh token is not reuse.
+        if token.is_revoked:
+            family = token.revoke_family()
+            _logger.warning(
+                'OAuth2 refresh token reuse: client=%s token id=%s, revoked '
+                '%s token(s) in its rotation family',
+                client.name, token.id, len(family),
+            )
+            return _json_error('invalid_grant', _('Refresh token expired or revoked.'))
+
         if not token.is_refresh_token_valid():
             return _json_error('invalid_grant', _('Refresh token expired or revoked.'))
 
@@ -741,6 +810,8 @@ class OAuth2Controller(Controller):
             user=token.user_id,
             scope=token.scope or '',
             include_refresh=True,
+            origin_code=token.origin_code_id or None,
+            parent_token=token,
         )
 
     def _handle_client_credentials(self, kwargs: dict) -> http.Response:

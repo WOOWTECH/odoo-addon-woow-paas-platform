@@ -796,14 +796,22 @@ class TestSecurityAccessAccessControl(TransactionCase):
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             sa = self.SA.create({'name': 'AC GW',
                                  'workspace_id': self.workspace.id})
-            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-ac'})
+            _internal(sa).write({'state': 'active', 'tunnel_id': 'tun-ac',
+                                 'tunnel_name': 'tun-ac'})
             self.env['woow_paas_platform.security_access_route'].create({
                 'security_access_id': sa.id,
                 'subdomain_prefix': sa.canonical_name})
         return sa
 
     def _mock(self):
-        return install_publication_receipts(MagicMock())
+        client = install_publication_receipts(MagicMock())
+        # Pending-origin recovery needs a fresh status read with a live
+        # connector; the SA below is named after its tunnel id.
+        client.get_tunnel_status.side_effect = lambda tunnel_id: {
+            'tunnel_id': tunnel_id, 'name': tunnel_id, 'status': 'healthy',
+            'deleted_at': None,
+            'connections': [{'connector_id': 'ac-ctrl-connector'}]}
+        return client
 
     def test_update_access_config(self):
         """P2.5 bridge: access-config writes the SA's PRIMARY route's

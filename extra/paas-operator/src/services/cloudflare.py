@@ -1738,6 +1738,7 @@ class CloudflareService:
         enabled: bool = True,
         existing_app_id: Optional[str] = None,
         existing_policy_ids: Optional[List[str]] = None,
+        revoke_tokens: bool = False,
     ) -> dict:
         """Declaratively reconcile one SA's Cloudflare Access config.
 
@@ -1766,7 +1767,8 @@ class CloudflareService:
                     logger.warning("Access teardown: policy %s delete failed "
                                    "(left as orphan): %s", pid, e)
             return {"app_id": None, "policy_ids": [], "allowed_idps": [],
-                    "unresolved_idp_types": [], "orphaned_policy_ids": orphaned}
+                    "unresolved_idp_types": [], "orphaned_policy_ids": orphaned,
+                    "token_revocation": "not_required"}
 
         # Validate explicit login restrictions before any remote mutation.
         # A missing IdP or failed lookup must preserve the existing app and
@@ -1880,6 +1882,16 @@ class CloudflareService:
                 logger.warning("Access resync: old policy %s delete failed "
                                "(left as orphan): %s", pid, e)
 
+        token_revocation = "not_required"
+        token_revocation_error = None
+        if existing_app_id and revoke_tokens:
+            try:
+                token_revocation = await self.revoke_access_app_tokens(app_id)
+            except Exception as error:
+                token_revocation = "failed"
+                token_revocation_error = str(error)
+                logger.error("Access app %s token revocation failed: %s", app_id, error)
+
         return {
             "app_id": app_id,
             "policy_ids": [pid for pid, _ in new_policy_ids],
@@ -1892,7 +1904,67 @@ class CloudflareService:
             # Old reusable policies that could not be deleted after the app was
             # repointed — permanent CF orphans the caller should log/alert on.
             "orphaned_policy_ids": orphaned,
+            "token_revocation": token_revocation,
+            "token_revocation_error": token_revocation_error,
         }
+
+    async def revoke_access_app_tokens(self, app_id: str) -> str:
+        """Ask Cloudflare to revoke app tokens; 2xx is acceptance, not denial proof."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self._access_base}/apps/{app_id}/revoke_tokens",
+                headers=self._headers, timeout=30.0,
+            )
+        if response.status_code < 200 or response.status_code >= 300:
+            raise CloudflareException(
+                f"Failed to revoke access app tokens: {response.text}",
+                status_code=response.status_code,
+            )
+        return "accepted"
+    async def review_access_app_exact(
+        self, app_name: str, primary_hostname: str,
+    ) -> dict:
+        """Read back one exact Access app without remote mutation.
+
+        Cloudflare has no client idempotency key for the Access app POST, but it
+        keeps exactly one app per domain: a repeated create is refused with 409 /
+        error 11010 (measured live, also for simultaneous creates).  A caller whose
+        create outcome is unknown can therefore simply repeat it and, on a 409,
+        adopt the app this lookup returns.  An empty read is still never proof that
+        the earlier create did not land (list endpoints may lag).  Only one
+        byte-for-byte name+domain match is returned as safely adoptable.
+        """
+        matches = []
+        page = 1
+        async with httpx.AsyncClient() as client:
+            while True:
+                response = await client.get(
+                    f"{self._access_base}/apps", headers=self._headers,
+                    params={"name": app_name, "domain": primary_hostname,
+                            "exact": "true", "page": page, "per_page": 1000},
+                    timeout=30.0)
+                if response.status_code != 200:
+                    raise CloudflareException(
+                        f"Failed to review access apps: {response.text}",
+                        status_code=response.status_code)
+                data = response.json()
+                if not data.get("success"):
+                    raise CloudflareException(
+                        f"Cloudflare API error: {data.get('errors', 'Unknown')}")
+                matches.extend(
+                    app for app in data.get("result", [])
+                    if app.get("name") == app_name
+                    and app.get("domain") == primary_hostname
+                    and app.get("id"))
+                info = data.get("result_info") or {}
+                if page >= int(info.get("total_pages") or 1):
+                    break
+                page += 1
+        if len(matches) == 1:
+            return {"status": "unique", "app_id": matches[0]["id"],
+                    "match_count": 1}
+        return {"status": "absent" if not matches else "ambiguous",
+                "app_id": None, "match_count": len(matches)}
 
     @staticmethod
     def _build_access_rule(rule_type: str, rule_value: str) -> List[dict]:

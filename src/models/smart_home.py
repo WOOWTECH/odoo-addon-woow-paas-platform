@@ -1,11 +1,13 @@
 from ..services.access_state import AccessProtectionError, AccessPublicationError, require_tunnel_config_receipt
 import logging
 import re
+import time
 import uuid
+from contextlib import contextmanager, nullcontext
 
 import psycopg2.errors
 
-from odoo import _, api, fields, models
+from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
 from ..services.naming import (
@@ -33,6 +35,74 @@ _logger = logging.getLogger(__name__)
 
 #: #528 的待回收 CF Access 物件帳本（三腿共用；本檔只用它的 #794 補償入口）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+
+# ------------------------------------------------------------------------- #
+#  RACE-01：ingress 放寬圍籬（advisory lock ＋ 已提交狀態重讀）                #
+# ------------------------------------------------------------------------- #
+#
+# 缺陷的形狀（RACE-01，真雙 PG REPEATABLE READ 交易實測）：
+#
+#   R（`access_resync_cron._resync_one` → `smart_home_route.
+#      _sync_access_to_operator`）在自己的快照裡算出 `blocked=False`，然後進入
+#      operator 外呼；外呼期間
+#   M（`_do_suspend`）把 ingress 打成 `http_status:503`、寫 `state='suspended'`
+#      並**提交**；
+#   R 回來之後照著**開頭那個快照**發布 live target ⇒ 外部實際生效的是 live，
+#   而 DB 已提交的是 suspended。停權在帳上成立、在現實中被抹掉。
+#
+# 兩筆交易都不碰同一列（R 只讀 smart_home、M 寫它），REPEATABLE READ 是快照隔離、
+# 讀不加鎖也沒有 SSI ⇒ **兩邊都正常提交**，PG 不會回 40001。所以修補不能靠
+# 序列化失敗，也不該靠「把其中一方擋掉」：
+#
+#   🔴 **拒絕 M（停權）不是這個缺陷的修法。** 在 smart_home 列上取
+#   `FOR UPDATE NOWAIT` 會讓停權方 fail-closed（`LockNotAvailable` → UserError），
+#   停權被推遲到下一輪 cron——而被延後的那一方正是收緊安全的那一方，且原案要求的
+#   「兩方都提交且 primary 維持隔離」一次都沒有被證明過。
+#
+# 本圍籬改成只約束**唯一危險的方向**：
+#
+#   * **收緊**（target ＝ `http_status:503`）永遠安全、冪等、不需要排序——它是
+#     fail-closed 的方向，不可能把別人的隔離解掉。
+#   * **放寬**（target ＝ live）是唯一能抹掉別人已提交隔離的動作 ⇒ 它必須
+#     (a) 與生命週期寫入者互斥，且 (b) 以**已提交**資料而不是自己的快照裁決。
+#
+# (a) 用 **transaction advisory lock**（不是列鎖）：advisory lock 不受 MVCC 版本
+# 管制，取它不會回 40001，所以兩方都還是能提交。
+#
+# 🔴 **鎖要取在哪一條 cursor 上，就是它會被握多久**——xact advisory lock 沒有提早
+# 釋放的手段，savepoint 回捲也放不掉（實測），只有那筆交易 commit／rollback 才會。
+# 所以兩方刻意用**不同壽命**的臨界區：
+#
+#   * **收緊方**（`_do_suspend`）取在**主 cursor**：503 外呼、`state` 寫入與 commit
+#     必須一起落在臨界區內，少一樣都會留下窗口。
+#   * **放寬方**（`_sync_access_ingress`）取在 `_ingress_fence()` 開的**獨立短交易**
+#     上，離開 `with` 就釋放。臨界區只需要涵蓋「重讀已提交狀態 → 發布」；跟著呼叫端
+#     整筆交易的話，`access_resync_cron` 一輪（最多 200 列／腿、全程單一交易、逐列
+#     只包 savepoint）會把它推過的每一台的圍籬一路握到整輪結束，期間 `_do_suspend`
+#     只能輪詢到逾時 ⇒ 停權被推遲到下一個每日 cron。那就是 .251 候選那個 fail-closed
+#     形狀換到收緊方身上。⚠ 「在方法裡晚一點才取鎖」擋不住這件事：縮的是**哪些路徑**
+#     會取，不是**取了之後握多久**。
+#
+# (b) 用**獨立 cursor 重讀已提交狀態**：主交易是 REPEATABLE READ，快照在第一個查詢
+# 就定了，之後別的交易 commit 的列**讀不到**（同一個機制在
+# `smart_home_access_revision._record_confirmed_state` 的 docstring 裡逐字寫過）。
+# 重讀只下 `SELECT`、不取任何列鎖，所以不會與主交易互等。重讀就跑在 (a) 那條持鎖的
+# 獨立 cursor 上（一條連線兼兩用），因為**重讀與發布之間不得有窗口**。
+#
+# 判準刻意只重讀**家層級的生命週期**（`_is_halted()` / `_is_subscription_active()`，
+# 沿用既有裁決方法、不複寫邏輯）——route 層的 pending 旗標由呼叫端自己這一筆交易
+# 擁有（R 這一輪才剛清掉 `access_protection_lost`），拿已提交值去蓋會往反方向誤判。
+#
+#: advisory lock 的 classid（兩個 int 的鎖空間與 Odoo core 單一 bigint 的
+#: `pg_try_advisory_xact_lock(%s)`（`ir_cron`）不同空間，不可能相撞）。
+_INGRESS_FENCE_LOCK_CLASSID = 1465319425
+#: 放寬發布等這把鎖的上限。取不到＝另一筆交易正在發布同一台 ⇒ fail-closed
+#: （`AccessPublicationError`，呼叫端既有處置是標 `access_publish_pending` 重試）。
+_INGRESS_FENCE_LOCK_WAIT_S = 5.0
+_INGRESS_FENCE_LOCK_POLL_S = 0.05
+#: 已提交狀態重讀的等鎖上限（重讀不取列鎖，這是防 hang 的安全參數；同
+#: `smart_home_access_revision._LEDGER_LOCK_TIMEOUT` 的論證）。
+_INGRESS_FENCE_READ_LOCK_TIMEOUT = '3s'
 
 
 # ------------------------------------------------------------------------- #
@@ -565,6 +635,241 @@ class SmartHome(models.Model):
             return existing
         return Route.create({'smart_home_id': self.id, 'is_primary': True})
 
+    def _ingress_fence_lock(self, cr):
+        """在 ``cr`` 上取本台 SH 的 ingress 放寬圍籬鎖（transaction advisory lock）。
+
+        取不到就在上限內重試，逾時 raise ``AccessPublicationError``。
+
+        🔴 **鎖的壽命＝``cr`` 那一筆交易的壽命，不是這個呼叫的壽命**。xact advisory
+        lock 沒有提早釋放的手段：savepoint 回捲**不會**放掉它（實測
+        `B_still_blocked_after_A_savepoint_rollback=true`），只有 commit／rollback 會。
+        所以「要鎖多久」完全由呼叫端挑哪一條 cursor 決定，不是由「在方法裡晚一點才取」
+        決定：
+        * **收緊方**（:meth:`_do_suspend`）必須用**主 cursor**——503 外呼、`state` 寫入
+          與 commit 三件事要一起落在臨界區內。
+        * **放寬方**（:meth:`_sync_access_ingress`）用 :meth:`_ingress_fence` 開的
+          **獨立短交易**：臨界區只需要涵蓋「重讀已提交狀態 → 發布 live」，不需要涵蓋
+          呼叫端剩下的交易。用主 cursor 的話，resync cron（一輪最多 200 列、全程單一
+          交易、逐列只包 savepoint）會把每一台的圍籬一路握到整輪結束，期間任何
+          `_do_suspend` 都只能輪詢到逾時＝停權被推遲一整個生命週期 cron 週期。
+
+        🔴 **為什麼是 advisory lock 而不是列鎖**：兩筆交易都是 REPEATABLE READ，
+        在 smart_home 列上取 `FOR UPDATE`／`FOR SHARE` 時，若另一筆交易已經改過
+        那一列並提交，PG 直接回 ``40001``（serialization failure）＝其中一方的交易
+        被打掉；`NOWAIT` 則是回 ``LockNotAvailable`` ＝其中一方 fail-closed。
+        兩種都達不到「兩方都提交、且 primary 維持隔離」。advisory lock 不受 MVCC
+        版本管制，純粹排序臨界區，兩邊的交易都還能正常提交。
+
+        交易層（`_xact_`）而不是 session 層：commit／rollback 自動釋放，不會把鎖
+        漏在連線池裡的連線上。同一筆交易重複取是安全的（PG 計數，無需 unlock）。
+
+        ⚠ 等鎖用 `pg_try_…` 輪詢而不是會阻塞的 `pg_advisory_xact_lock`：阻塞版受
+        `lock_timeout` 影響（呼叫端可能設過，也可能沒設），逾時行為會隨環境漂移；
+        輪詢版的上限寫在這裡，與呼叫端的 session 設定無關。
+        """
+        self.ensure_one()
+        deadline = time.monotonic() + _INGRESS_FENCE_LOCK_WAIT_S
+        while True:
+            cr.execute(
+                'SELECT pg_try_advisory_xact_lock(%s, %s)',
+                (_INGRESS_FENCE_LOCK_CLASSID, self.id))
+            if cr.fetchone()[0]:
+                return
+            if time.monotonic() >= deadline:
+                _logger.warning(
+                    "[SH] ingress fence lock busy sh=%s after %ss — refusing to "
+                    "publish a live origin without a valid fence",
+                    self.id, _INGRESS_FENCE_LOCK_WAIT_S)
+                raise AccessPublicationError(_(
+                    'Another lifecycle operation is publishing this Smart '
+                    'Home origin right now. Retry this operation.'))
+            time.sleep(_INGRESS_FENCE_LOCK_POLL_S)
+
+    def _ingress_fence_held_by_main_cursor(self):
+        """主交易自己是不是已經持有本台的圍籬鎖。
+
+        PG 對**同一筆交易**重複取同一把 advisory lock 是放行的（實測
+        `A_reentrant=true`），所以舊版（放寬方也在主 cursor 上取）天生容許
+        「同一筆交易先收緊、之後再走到放寬發布」。:meth:`_ingress_fence` 改成在
+        **另一條連線**上取同一把鎖之後，那個形狀會變成跟自己互斥 ⇒ 必然輪詢到逾時。
+        這裡把那個語意補回來：自己已經持有＝臨界區已經成立，不必也不該再取一次。
+
+        判準是 `pg_locks` ＋ ``pid = pg_backend_pid()``（實測持有者看到 1、非持有者
+        看到 0）。``objsubid`` 刻意不入條件（兩個 int 的鎖是 2、單一 bigint 的是 1），
+        ``classid``／``objid`` 已經把鎖空間分開了。
+        """
+        self.ensure_one()
+        self.env.cr.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
+            "AND classid = %s AND objid = %s AND pid = pg_backend_pid() "
+            "AND granted",
+            (_INGRESS_FENCE_LOCK_CLASSID, self.id))
+        return bool(self.env.cr.fetchone()[0])
+
+    @contextmanager
+    def _ingress_fence(self):
+        """放寬發布的圍籬臨界區；``yield`` 出重讀已提交狀態要用的 cursor。
+
+        臨界區只涵蓋「重讀已提交狀態 → 發布 ingress」這一段，離開 ``with`` 就釋放，
+        **不**跟著呼叫端剩下的交易。做法是把鎖取在一條**獨立的短交易**上：
+        xact advisory lock 只在它自己那筆交易結束時釋放，所以換一條 cursor 就等於換
+        一個鎖的壽命（實測 `A_acquires_after_C_scope_closed=true`）。
+
+        🔴 **為什麼不能取在主 cursor 上**（舊版的形狀）：xact lock 沒有提早釋放的手段
+        ——savepoint 回捲放不掉它。於是 `access_resync_cron._cron_resync_access_
+        protection`（一輪最多 200 列／腿、全程**單一交易**、逐列只包 savepoint，見該檔）
+        會把它推過的**每一台**的圍籬一路握到整輪結束；連那些 savepoint 被回捲掉的列
+        也一樣握著。期間 `subscription_lifecycle_cron` 對同一台呼
+        :meth:`_do_suspend` 只能輪詢到逾時 ⇒ 停權被推遲到**下一個每日 cron**。那正是
+        本圍籬聲稱要避開的 fail-closed 形狀（`.251` 列鎖候選），只是換到收緊方身上。
+        「在方法裡晚一點才取鎖」擋不住這件事：縮的是**哪些路徑**會取，不是**取了之後
+        握多久**。
+
+        同一條 cursor 同時當鎖的持有者與重讀者是刻意的：重讀本來就需要一個獨立快照
+        （主交易是 REPEATABLE READ），所以這裡用掉的連線數與舊版相同（1 條），只是
+        它的壽命從「重讀完就關」延長到「發布完才關」——而那正是臨界區該有的長度。
+
+        ⚠ 連線被多握住一次 operator 外呼的時間。`db_maxconn` 緊的部署下，並發的放寬
+        發布數會是額外連線數的上界（每個 worker 最多 1 條）。
+        """
+        self.ensure_one()
+        if self._ingress_fence_held_by_main_cursor():
+            # 主交易已持有（例如同一筆交易剛跑過 `_do_suspend`）⇒ 已互斥。
+            yield None
+            return
+        with self.env.registry.cursor() as fence_cr:
+            fence_cr.execute('SET LOCAL lock_timeout = %s',
+                             (_INGRESS_FENCE_READ_LOCK_TIMEOUT,))
+            self._ingress_fence_lock(fence_cr)
+            yield fence_cr
+
+    def _ingress_committed_halt_reason(self, allow_halted=False, cr=None):
+        """以**已提交**資料回答「這台現在該不該被擋住」；不該擋回 ``None``。
+
+        在獨立 cursor（＝獨立交易、新快照）裡讀，因為主交易是 REPEATABLE READ：
+        快照在交易第一個查詢就定了，之後別的交易提交的 state／訂閱**讀不到**，而
+        RACE-01 的危險恰恰是「別人在我外呼期間提交了停權」。
+
+        只下 `SELECT`、不取任何列鎖 ⇒ 不會與主交易互等（主交易若正持有這一列的
+        寫鎖，MVCC 讀者也不會被阻塞）。判準沿用既有的 `_is_halted()` /
+        `_is_subscription_active()` 兩個裁決方法，**不**在這裡複寫條件——複寫就是
+        第二個真相來源，而兩者分歧時沒有任何訊號。
+
+        ⚠ 刻意**不**重讀 route 層的 pending 旗標：那些由呼叫端自己這一筆未提交的
+        交易擁有（R 這一輪才剛清掉 `access_protection_lost`），拿已提交值會往反
+        方向誤判成「要擋」。家層級生命週期才是別人的權責。
+
+        🔴 **「已提交快照裡沒有這一列」有兩個完全不同的成因，必須分開**：
+
+        a. **本交易（含子交易）自己還沒提交的 INSERT**——provision 路徑在同一筆交易
+           裡建好 home 就發布，`TransactionCase` 測試也是這個形狀。列還沒提交 ⇒
+           不可能有任何**已提交**的隔離存在 ⇒ 沒有東西需要被保護 ⇒ **不擋**。
+        b. **已提交的 DELETE**（別的交易刪掉並提交，而本交易的 REPEATABLE READ 快照
+           比那次刪除舊，所以本交易還看得到它）。home 正在消失 ⇒ **擋**。
+
+        兩個方向都踩過：
+        * 「absent 就擋」是實測的偽陽性——AC-1011 系列 `access_publish_pending`
+          契約共 31 個斷言整組反轉（證據 `adjacent-green-attempt01-31-regressions.log`）。
+        * 「absent 就放行」會把 (b) 一起放掉，等於沒有圍籬。
+
+        判準是 **xmin 那筆交易現在的 commit status**：本交易的快照看得到這一列、
+        fresh cursor 看不到、而且 ``xmin`` 的狀態是 **in progress** ⇒ 成因 (a)。
+        推論依據：另一筆**還在進行中**的交易所插入的列，本交易的快照本來就看不到；
+        既然看得到又還沒提交，那筆交易只能是本交易自己（top 或任一子交易）。
+        狀態是 ``committed``／``aborted``／問不出來 ⇒ 一律當成 (b) 並 park（fail-closed）。
+
+        🔴 **為什麼不比 xid 相等**：Odoo 幾乎所有寫入都包在 savepoint（子交易）裡，
+        列的 ``xmin`` 是**子交易 xid**，而 ``pg_current_xact_id_if_assigned()`` 依
+        PostgreSQL 文件在子交易中回的是 **top-level xid** ⇒ 等式恆不成立。實測
+        （真 PG 15.19）：``xmin=41131``、top xid ``41130``、兩種轉型下的等式都是
+        ``false``，而 ``pg_xact_status`` 對那個子交易 xid 回 ``in progress``；對照
+        組（已提交的列被別的交易刪掉並提交）回 ``committed``。證據
+        `pg-probe.log` / `pg-probe2.log`。
+
+        🔴 **也不用 `pg_visible_in_snapshot`**：文件明示它對子交易 xid 不正確。
+
+        ⚠ 成因 (a) 只在 **fresh cursor 讀不到**時才走得到。列若早已提交、本交易只是
+        UPDATE 過它，fresh cursor 看到的是**舊的已提交版本** ⇒ 走上面正常的重讀分支，
+        不會因為當前版本的 ``xmin`` 是自己的就跳過圍籬。
+        """
+        self.ensure_one()
+        # ``cr`` 是 :meth:`_ingress_fence` 已經開好、已經持有圍籬鎖的那一條（重讀
+        # 必須在鎖內，否則重讀與發布之間又有窗口）。沒帶就自己開一條（既有呼叫端與
+        # 直接單測走這一格），語意相同、只是沒有圍籬。
+        own = cr is None
+        with (self.env.registry.cursor() if own else nullcontext(cr)) as read_cr:
+            if own:
+                read_cr.execute('SET LOCAL lock_timeout = %s',
+                                (_INGRESS_FENCE_READ_LOCK_TIMEOUT,))
+            committed = api.Environment(read_cr, SUPERUSER_ID, {})[
+                self._name].browse(self.id)
+            if committed.exists():
+                if committed._is_halted() and not allow_halted:
+                    return 'committed state=%r is halted' % committed.state
+                if not committed._is_subscription_active():
+                    return 'the committed subscription is not active'
+                return None
+        status = self._row_xmin_commit_status()
+        if status == 'in progress':
+            return None
+        return ('the smart home row is absent from the committed snapshot and '
+                'its creating transaction is %s' % (status or 'unknown'))
+
+    def _row_xmin_commit_status(self):
+        """本交易快照裡這一列 ``xmin`` 那筆交易的 commit status；問不出來回 ``None``。
+
+        回 ``'in progress'`` / ``'committed'`` / ``'aborted'`` / ``None``。語意與用途
+        見 :meth:`_ingress_committed_halt_reason`，這裡只講兩個機制細節。
+
+        **epoch 安全的 xid32 → xid8 還原**：``xmin`` 是 32-bit ``xid``（會回捲），
+        ``pg_xact_status`` 吃的是 64-bit ``xid8``。直接 ``xmin::text::xid8`` 只在
+        epoch 0 正確。這裡改用 PostgreSQL 自己比較 xid 的同一套模數算術：取快照的
+        ``pg_snapshot_xmax()``（``xid8``、不回捲）當基準 ``c8``，算
+        ``dist = (xmin - low32(c8)) mod 2^32``；``dist < 2^31`` 表示 ``xmin`` 在 ``c8``
+        之後（子交易正是這一格）⇒ ``c8 + dist``，否則 ⇒ ``c8 - (2^32 - dist)``。
+        實測與 epoch 0 的裸轉型結果一致（``dist=1``、兩者都還原出 ``41139``、狀態同為
+        ``in progress``），而跨 epoch 時裸轉型會錯、這個形式不會。
+
+        **包在 savepoint 裡**：``pg_xact_status`` 對已被 clog 截斷的古老 xid 會
+        raise，而在主交易上 raise 會把整筆交易打成 aborted。savepoint ＋
+        ``except psycopg2.Error`` 讓它退化成「問不出來」（呼叫端據此 park），不會把
+        呼叫端的交易連帶弄死。
+
+        ⚠ 權限：``pg_xact_status`` 的 ``proacl`` 預設是 NULL（＝EXECUTE 給 PUBLIC）；
+        實測 PG 15.19 上一個**非** superuser 的 role 呼叫得動。正式環境是 PG 17.11，
+        本批無法進正式 pod 實測（自動審查拒絕），所以部署前要確認那個 role 也呼叫得動
+        ——問不出來只會 fail-closed（park），不會把隔離放掉，但會讓 provision 的放寬
+        發布被延後一輪。
+        """
+        self.ensure_one()
+        query = (
+            'WITH c AS (SELECT pg_snapshot_xmax(pg_current_snapshot())'
+            '                  ::text::numeric AS c8), '
+            '     r AS (SELECT t.xmin::text::numeric AS x '
+            '             FROM %s t WHERE t.id = %%s), '
+            '     d AS (SELECT c8, x, '
+            # 這四個百分號是刻意的：`% self._table` 把 `%%%%` 收成 `%%`，psycopg2
+            # 再把 `%%` 收成 `%`，所以送到 PG 的才是 SQL 的模數運算子。寫成 `%%`
+            # 會讓 psycopg2 把它當成參數佔位符（實測 IndexError）。
+            '                  ((x - (c8 %%%% 4294967296) + 4294967296) '
+            '                   %%%% 4294967296) AS dist FROM c, r) '
+            'SELECT pg_xact_status(trunc(CASE WHEN dist < 2147483648 '
+            '                                 THEN c8 + dist '
+            '                                 ELSE c8 - (4294967296 - dist) '
+            '                            END)::bigint::text::xid8)::text '
+            'FROM d' % self._table)
+        try:
+            with self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(query, (self.id,))
+                row = self.env.cr.fetchone()
+        except psycopg2.Error as error:
+            _logger.warning(
+                "[SH] could not read the xmin commit status for sh=%s: %s — "
+                "treating it as unknown (the ingress fence will park)",
+                self.id, error)
+            return None
+        return row[0] if row else None
+
     def _sync_access_ingress(self, park=False, service_url=None,
                              allow_halted=False):
         """Keep the current single primary hostname blocked until protection exists.
@@ -572,6 +877,11 @@ class SmartHome(models.Model):
         Smart Home does not yet support non-primary tunnel ingress. Use the
         authoritative primary route, including when record rules hide the row.
         API acknowledgement alone does not prove connector propagation.
+
+        RACE-01：**放寬**（算出 live target）必須整段待在 ingress 圍籬裡——取
+        advisory lock 與生命週期寫入者互斥、以已提交狀態重判一次、然後才發布，
+        三件事在同一個臨界區內。**收緊**（503）不過圍籬：它是 fail-closed 的方向，
+        冪等且不可能抹掉別人的隔離。理由與機制全文見本檔開頭 §RACE-01。
         """
         self.ensure_one()
         if not self.tunnel_id:
@@ -583,6 +893,33 @@ class SmartHome(models.Model):
             (route.is_protected and (not route.access_app_id or
                                     route.access_protection_lost))
             for route in primary)
+        if blocked:
+            # 收緊不過圍籬，也不佔鎖——否則 resync cron 的長交易會把每一台的圍籬
+            # 握到整輪結束（見 :meth:`_ingress_fence`）。
+            self._publish_ingress(True, service_url=service_url)
+            return
+        with self._ingress_fence() as fence_cr:
+            halted = self._ingress_committed_halt_reason(
+                allow_halted=allow_halted, cr=fence_cr)
+            if halted:
+                # 已提交的生命週期說這台該被擋住 ⇒ 發布 503 而不是 live。這與
+                # 停權方剛剛推出去的 target 相同（冪等），所以不是「再推一次」而是
+                # 「不要把它推回去」。出聲是刻意的：這一行代表真的有一次延遲發布
+                # 被攔下來，與「這台本來就停權」在輸出上要分得開。
+                _logger.warning(
+                    "[SH] ingress fence kept sh=%s parked instead of "
+                    "publishing a live origin: %s", self.id, halted)
+            # 發布**在圍籬內**：重讀與發布之間不得有窗口，否則收緊方可以剛好在
+            # 這兩步之間提交，而本次發布照舊把 live 推出去。
+            self._publish_ingress(bool(halted), service_url=service_url)
+
+    def _publish_ingress(self, blocked, service_url=None):
+        """把這台的 ingress target 推給 operator——本腿**唯一**的 ingress 發布處。
+
+        拆出來只為了讓收緊（圍籬外）與放寬（圍籬內）共用同一份發布碼：兩份平行的
+        發布碼會漂，而漂掉的那一份讀起來與權威版本一模一樣。
+        """
+        self.ensure_one()
         target = ('http_status:503' if blocked else
                   service_url or self.original_service_url or
                   f"http://localhost:{self.ha_port}")
@@ -1502,6 +1839,21 @@ class SmartHome(models.Model):
         )
         if self.state == 'suspended':
             return
+
+        # RACE-01：取 ingress 圍籬鎖，讓「503 外呼 ＋ 寫 suspended ＋ commit」這一段
+        # 與**放寬**發布互斥。沒有它，`_sync_access_ingress` 的已提交重讀可能剛好
+        # 在本交易提交之前完成（讀到 active），接著本交易提交停權、對方才把 live
+        # 推出去 ⇒ 圍籬被跨過。本方法本身只收緊，不需要重讀已提交狀態。
+        #
+        # 刻意放在 `try` **之外**：取不到鎖是「這一輪不要停權、下一輪重試」，不是
+        # 「停權失敗」——寫進 `state='error'` 會把一次等鎖變成要人工處理的狀態，而
+        # 生命週期 cron 每一筆都包在 savepoint ＋ `except Exception` 裡（
+        # `subscription_lifecycle_cron._cron_enforce_subscription_lifecycle`），
+        # raise 只影響這一筆、明天以新快照重判。
+        # 主 cursor：這一把必須握到本交易 commit（503 外呼、state 寫入與 commit 要
+        # 一起落在臨界區內），所以收緊方刻意**不**走 :meth:`_ingress_fence` 的獨立
+        # 短交易。
+        self._ingress_fence_lock(self.env.cr)
 
         if self.tunnel_id:
             try:

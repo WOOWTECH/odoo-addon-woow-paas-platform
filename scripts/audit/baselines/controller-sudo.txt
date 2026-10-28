@@ -12,7 +12,7 @@
 12	src/controllers/ha_paas.py
 0	src/controllers/llm.py
 6	src/controllers/notifications.py
-15	src/controllers/oauth2.py
+16	src/controllers/oauth2.py
 31	src/controllers/paas.py
 3	src/controllers/portal.py
 1	src/controllers/profile.py

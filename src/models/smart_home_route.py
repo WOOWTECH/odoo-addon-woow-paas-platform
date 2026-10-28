@@ -37,7 +37,8 @@ ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會�
 所以這裡 primary route 是**不可刪、不可改綁**的。看到「SA 沒有 primary 為什麼 SH
 有」時，答案在上一段，不是漏改。
 """
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync, sync_access_app_create_or_adopt
+from datetime import timedelta
 import logging
 
 from odoo import _, api, fields, models
@@ -78,6 +79,8 @@ _ACCESS_REVISION_MODEL = 'woow_paas_platform.smart_home_access_revision'
 # 的閘也不會再紅（見 `models/smart_home.py` 頂端同一段論證）。
 _SM_ROUTE_IDENTITY_ANCHOR_FIELDS = (
     'access_publish_pending',  # server-owned publication state
+    'access_token_revoke_pending',
+    'access_token_revoke_accepted_at',  # provider acknowledged the revocation
     'access_app_id',    # WHICH CF Access application this route configures
 )
 
@@ -340,6 +343,15 @@ class SmartHomeRoute(models.Model):
     access_publish_pending = fields.Boolean(
         string='Access Publication Pending', default=False, readonly=True,
         help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
+    access_token_revoke_pending = fields.Boolean(
+        string='Access Token Revocation Pending', default=False, readonly=True,
+        help='Authorization changed for an existing Access app. The origin stays '
+             'closed until the provider acknowledged the token revocation, the '
+             'configured hold elapsed and the Access state was re-confirmed.')
+    access_token_revoke_accepted_at = fields.Datetime(
+        string='Access Token Revocation Accepted At', copy=False, readonly=True,
+        help='When the provider acknowledged the current token revocation. The '
+             'hold before re-publication is measured from this instant.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this route has been '
@@ -514,7 +526,11 @@ class SmartHomeRoute(models.Model):
                     and any(k in vals for k in (
                         'is_protected', 'login_google', 'login_email_otp',
                         'session_duration'))):
-                deferred_release = self.filtered('access_publish_pending')
+                # A route held by a token revocation is never released by a
+                # tenant edit; only its own hold may re-publish it.
+                deferred_release = self.filtered(
+                    lambda route: route.access_publish_pending
+                    and not route.access_token_revoke_pending)
                 for route in self:
                     route._sync_access_to_operator(
                         _DEFER_ACCESS_RELEASE if deferred_release else None)
@@ -681,7 +697,85 @@ class SmartHomeRoute(models.Model):
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,
             'existing_policy_ids': self._build_existing_policy_ids(),
+            # Send the revocation until the provider acknowledged it; the
+            # hold that follows must not re-revoke on every later sync.
+            'revoke_tokens': bool(
+                self.access_app_id and self.access_token_revoke_pending
+                and not self.access_token_revoke_accepted_at),
         }
+
+    def _mark_access_token_revoke_pending(self):
+        existing = self.filtered('access_app_id')
+        if existing:
+            # A new authorization change starts a new revocation generation.
+            _internal_sm_route_identity(existing).write({
+                'access_token_revoke_pending': True,
+                'access_publish_pending': True,
+                'access_token_revoke_accepted_at': False,
+            })
+
+    def _access_keep_parked_marker(self):
+        """After a rolled-back revoke-driven sync: keep a durable closure marker.
+
+        The revoke-driven sync parks the origin before the provider call, and a
+        parked edge cannot be rolled back with the transaction.  When the
+        deletion is rolled back (the documented contract) the origin must still
+        be re-opened, so only ``access_publish_pending`` is kept (no revocation:
+        nothing was deleted); the resync cron re-confirms Access and re-opens it.
+        """
+        closed = self.filtered(
+            lambda route: route.is_protected and route.access_app_id
+            and not route.access_publish_pending)
+        if closed:
+            _internal_sm_route_identity(closed).access_publish_pending = True
+            schedule_access_resync(
+                self.env, fields.Datetime.now() + timedelta(seconds=120))
+
+    def _access_revoke_gate(self, result):
+        """Settle this sync's view of the token-revocation hold.
+
+        Returns ``none`` | ``held`` | ``releasable`` (see the SA route model).
+        """
+        self.ensure_one()
+        if not self.access_token_revoke_pending:
+            return 'none'
+        if not self.access_app_id:
+            # The app was torn down (protection turned off or lost): its tokens
+            # are moot, so there is nothing left to revoke or to wait for.
+            return 'releasable'
+        now = fields.Datetime.now()
+        accepted_at = self.access_token_revoke_accepted_at
+        hold = access_revoke_hold_seconds(self.env)
+        if not accepted_at:
+            if access_revoke_provider_accepted(result):
+                accepted_at = now
+                _internal_sm_route_identity(
+                    self).access_token_revoke_accepted_at = accepted_at
+                schedule_access_resync(
+                    self.env, accepted_at + timedelta(seconds=hold + 5))
+            elif not access_revoke_operator_reports(result):
+                _logger.error(
+                    '[ACCESS] %s %s: the operator did not report token_revocation, so '
+                    'the revocation cannot be acknowledged and the origin stays closed. '
+                    'The operator predates the revocation contract; deploy it before '
+                    'this module.', self._name, self.id)
+            elif result.get('token_revocation') == 'failed':
+                _logger.error(
+                    '[ACCESS] %s %s: the provider did not accept the token '
+                    'revocation (%s); the origin stays closed and it is retried.',
+                    self._name, self.id,
+                    result.get('token_revocation_error') or 'no detail')
+        state = access_revoke_state(True, accepted_at, now, hold)
+        return 'releasable' if state == 'releasable' else 'held'
+
+    def _access_revoke_finish(self):
+        """Close the revocation generation after a confirmed re-publication."""
+        self.ensure_one()
+        if self.access_token_revoke_pending or self.access_token_revoke_accepted_at:
+            _internal_sm_route_identity(self).write({
+                'access_token_revoke_pending': False,
+                'access_token_revoke_accepted_at': False,
+            })
 
     def _access_app_name(self):
         """CF Access app 的顯示名：一台 SH 底下多條 route 不得撞名。"""
@@ -722,7 +816,7 @@ class SmartHomeRoute(models.Model):
         home = self.smart_home_id
         forced = _is_sm_sync_hatch_open(self.env, _CTX_SM_FORCE_ACCESS_SYNC)
         if (self.is_protected and
-                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
+                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending or self.access_token_revoke_pending) and
                 not forced):
             home._sync_access_ingress(park=True)
         needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
@@ -732,8 +826,46 @@ class SmartHomeRoute(models.Model):
             not self.access_app_id or self.access_protection_lost)
         client = home._get_operator_client()
         payload = self._build_access_payload()
-        result = client.sync_access_app(payload)
-        require_access_sync_receipt(result, payload)
+        fence_claim = None
+        if payload.get('enabled') and not payload.get('existing_app_id'):
+            Fence = self.env['woow_paas_platform.access_dispatch_fence'].sudo()
+            Fence._ensure_prepared(self, payload)
+            with Fence._dispatch_guard(self, payload) as fence_claim:
+                if fence_claim['mode'] == 'adopt_only':
+                    # No provider idempotency primitive: after the durable
+                    # effect-start marker, absence and delayed visibility are
+                    # indistinguishable.  Only an exact reviewed app id may use
+                    # the normal PUT path; never turn uncertainty into a POST.
+                    if not fence_claim.get('provider_app_id'):
+                        _logger.error(
+                            '[SH] Access create outcome unknown; it is repeated '
+                            'automatically once the settle window has passed '
+                            '(or review it now) route=%s app=%s hostname=%s',
+                            self.id, payload.get('app_name'),
+                            payload.get('primary_hostname'))
+                        return False
+                    payload['existing_app_id'] = fence_claim['provider_app_id']
+                    result = client.sync_access_app(payload)
+                    require_access_sync_receipt(result, payload)
+                else:
+                    Fence._mark_effect_started(fence_claim)
+                    try:
+                        result, payload = sync_access_app_create_or_adopt(
+                            client, payload)
+                    except Exception as error:
+                        # A definitive refusal proves no app of ours exists, so
+                        # the automatic-retry window reopens; anything uncertain
+                        # (timeout, 5xx) keeps the marker until it settles.
+                        if Fence._is_definitive_rejection(error):
+                            Fence._clear_effect_started(fence_claim)
+                        raise
+                    require_access_sync_receipt(result, payload)
+                    if result.get('app_id'):
+                        Fence._record_effect_finished(
+                            fence_claim, result['app_id'])
+        else:
+            result = client.sync_access_app(payload)
+            require_access_sync_receipt(result, payload)
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(
                 "Access protection was not established. Origin publication "
@@ -769,6 +901,10 @@ class SmartHomeRoute(models.Model):
             '[SH] route %s (sh=%s)' % (self.id, self.smart_home_id.id))
         _internal_sm_route_identity(self).access_app_id = (
             result.get('app_id') or False)
+        if fence_claim and result.get('app_id'):
+            Fence._resolve_after_commit(
+                fence_claim['fence_id'], self._name, self.id,
+                result.get('app_id'))
         unresolved = result.get('unresolved_idp_types') or []
         new_unresolved = ', '.join(unresolved) if unresolved else False
         if self.access_unresolved_idp_types != new_unresolved:
@@ -790,8 +926,15 @@ class SmartHomeRoute(models.Model):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         defer_release = release_control is _DEFER_ACCESS_RELEASE
+        # Provider acceptance of a token revocation is not proof of denial:
+        # stay closed through the hold, re-publish only after this sync
+        # re-confirmed the Access state.
+        revoke_gate = self._access_revoke_gate(result)
+        revoke_pending = revoke_gate == 'held'
         _internal_sm_route_identity(self).access_publish_pending = bool(
-            defer_release and needs_release)
+            revoke_pending or (defer_release and needs_release))
+        if revoke_pending:
+            return False
         if defer_release:
             return True
         if needs_release and not forced:
@@ -802,6 +945,8 @@ class SmartHomeRoute(models.Model):
                 _internal_sm_route_identity(self).access_publish_pending = True
                 _logger.error("[SH] Access publication pending route=%s: %s", self.id, error)
                 return False
+        if revoke_gate == 'releasable':
+            self._access_revoke_finish()
         return True
 
     def _access_sync_skip_reason(self):

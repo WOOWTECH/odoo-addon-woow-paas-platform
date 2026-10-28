@@ -1496,6 +1496,25 @@ class SecurityAccessAccessPolicy(models.Model):
             if pol.cf_policy_id and anchor:
                 doomed_by_anchor.setdefault(
                     (anchor._name, anchor.id), []).append(pol.cf_policy_id)
+        reached_sync = []
+        try:
+            return self._unlink_with_revocation(
+                affected, doomed_by_anchor, reached_sync)
+        except Exception:
+            # The savepoint rolled the deletion back (the row stays, no
+            # revocation is recorded), but the revoke-driven sync parks the
+            # origin *before* its provider call and a parked edge cannot be
+            # rolled back.  Keep a durable closure marker so the resync cron
+            # re-confirms Access and re-opens it; callers that catch this
+            # (the controllers do) commit it.  Only anchors that reached the
+            # sync are marked: a failure before it (e.g. an access error on the
+            # delete itself) parked nothing.
+            for anchor in reached_sync:
+                if anchor.exists():
+                    anchor._access_keep_parked_marker()
+            raise
+
+    def _unlink_with_revocation(self, affected, doomed_by_anchor, reached_sync):
         with self.env.cr.savepoint():
             result = super().unlink()
             # #528：落帳在**推之前**，而且刻意不看 `anchor.exists()`。
@@ -1521,6 +1540,8 @@ class SecurityAccessAccessPolicy(models.Model):
                     # doomed id 由上面剛落的帳供給（`_build_existing_policy_ids`
                     # → `_pending_for` → `_pending_ids`）。這裡刻意**不帶任何
                     # context**：#783。
+                    reached_sync.append(anchor)
+                    anchor._mark_access_token_revoke_pending()
                     anchor._sync_access_to_operator()
         return result
 

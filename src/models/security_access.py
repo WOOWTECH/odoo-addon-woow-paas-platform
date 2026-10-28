@@ -1,4 +1,6 @@
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, require_access_sync_receipt, require_tunnel_routes_receipt
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, require_tunnel_routes_receipt, schedule_access_resync, sync_access_app_create_or_adopt
+from datetime import timedelta
+import json
 import logging
 import psycopg2
 import re
@@ -85,10 +87,13 @@ _IDENTITY_ANCHOR_FIELDS = (
     'tunnel_id',        # WHICH Cloudflare tunnel this row drives (#522)
     'tunnel_name',      # its CF-side name, mirrored back from create_tunnel
     'tunnel_token',     # the tunnel credential itself
+    'operator_instance_epoch',  # server-observed Operator process identity
 )
 
 _ROUTE_IDENTITY_ANCHOR_FIELDS = (
     'access_publish_pending',  # server-owned publication state
+    'access_token_revoke_pending',
+    'access_token_revoke_accepted_at',  # provider acknowledged the revocation
     'dns_record_id',    # WHICH CF DNS record this route reconciles/deletes
     'access_app_id',    # WHICH CF Access application this route configures
 )
@@ -797,6 +802,15 @@ class SecurityAccess(models.Model):
         help="cloudflared client version reported by the active connector "
              "(from the operator tunnel-status connections payload).",
     )
+    operator_instance_epoch = fields.Char(
+        string='Observed Operator Instance Epoch',
+        copy=False,
+        groups='base.group_system',
+        help='Last process epoch observed per Operator replica, as a compact '
+             'JSON map {instance_id: epoch}. Replicas answer alternately behind '
+             'one Service, so only the same instance reporting a new epoch is a '
+             'restart. A bare legacy value is treated as empty.',
+    )
     edge_connection_count = fields.Integer(
         string='Edge Connections',
         default=0,
@@ -1482,17 +1496,79 @@ class SecurityAccess(models.Model):
         的「已刪除」—— #833 的鏡像。404 維持走下面的 except。
         """
         self.ensure_one()
+        self._refresh_status()
+
+    def _refresh_status(self, park=True, fail_closed_on_error=True):
+        """Shared body of the status refresh and the FAULT-02 probe.
+
+        ``park``: also park the protected routes at the edge when this closes
+        them.  ``fail_closed_on_error``: an unreachable Operator closes the
+        routes (a user-initiated refresh).  The probe passes ``False`` for both:
+        an Operator outage or a blip says nothing about *this* tunnel and exposes
+        nothing (Access is enforced at Cloudflare), so it must not mark tenants;
+        and a closure the probe finds is parked by the resync leg that follows,
+        in a transaction that cannot strand a parked edge without its marker.
+
+        Returns ``'closed'`` (this call closed the protected routes), ``'live'``
+        (valid connector inventory, nothing newly closed) or ``None`` (nothing
+        was learned: no tunnel, or the status was unreadable).
+        """
+        self.ensure_one()
         if not self.tunnel_id:
-            return
+            return None
         client = self._get_operator_client()
         try:
+            health = client.health_check()
+            epoch = health.get('instance_epoch') if type(health) is dict else None
+            if type(epoch) is not str or not epoch.strip() or len(epoch) > 128:
+                # An Operator that predates the epoch contract: no restart
+                # evidence, but the connector rules below still apply.
+                epoch = None
+            instance_id = health.get('instance_id') if type(health) is dict else None
+            if (epoch is None or type(instance_id) is not str
+                    or not instance_id.strip() or len(instance_id) > 128):
+                instance_id = None
             result = client.get_tunnel_status(self.tunnel_id)
             vals = self._tunnel_vals_from_status(result)
+            connections = result.get('connections') if type(result) is dict else None
+            stored_epochs = self.sudo().operator_instance_epoch
+            restarted, observed_epochs = self._fault02_epoch_decision(
+                stored_epochs, instance_id, epoch)
+            invalidate = self._fault02_should_invalidate(restarted, connections)
             # 翻旗標的那一刻記一行（不是每次輪詢都記）——#1766 的現場是「平台顯示
             # 一切正常」，所以第二台接上必須在 log 裡留痕。
             self._tunnel_binding_log_conflict(vals)
             self.write(vals)
+            if observed_epochs != stored_epochs:
+                # The field is system-only; a workspace owner/admin pressing
+                # Refresh is not, and must not hit an AccessError for it.
+                _internal_identity(
+                    self.sudo()).operator_instance_epoch = observed_epochs
+            if invalidate:
+                protected = self.route_ids.filtered('is_protected')
+                if protected:
+                    _internal_identity(protected).access_publish_pending = True
+                    if park:
+                        # Make the durable state real at the edge too. A
+                        # recovered Operator can still write CF config even when
+                        # connector inventory is empty; pending routes therefore
+                        # park at 503.
+                        try:
+                            self._sync_routes_to_operator()
+                        except (PaaSOperatorError, AccessPublicationError) as error:
+                            _logger.warning(
+                                '[FAULT02] publication park failed sa=%s: %s',
+                                self.id, error)
+            return 'closed' if invalidate else 'live'
         except PaaSOperatorError as e:
+            if not fail_closed_on_error:
+                _logger.warning(
+                    '[FAULT02] status unreadable, not treated as a fault sa=%s: %s',
+                    self.id, e.message)
+                return None
+            protected = self.route_ids.filtered('is_protected')
+            if protected:
+                _internal_identity(protected).access_publish_pending = True
             self.write({
                 'tunnel_status': 'error',
                 'error_message': _(
@@ -1501,6 +1577,56 @@ class SecurityAccess(models.Model):
             _logger.warning(
                 "[SA] status refresh failed sa=%s: %s", self.id, e.message,
             )
+
+    #: Replicas remembered per SA. The Operator runs a handful of replicas; the
+    #: cap only bounds a map that would otherwise grow with every rollout.
+    _FAULT02_MAX_INSTANCES = 8
+
+    @api.model
+    def _fault02_epoch_decision(self, stored, instance_id, epoch):
+        """Pure: was an Operator replica restarted, and what to remember next.
+
+        Several Operator replicas answer behind one Service and every process has
+        its own epoch, so successive health checks legitimately alternate between
+        epochs.  A restart is the *same* ``instance_id`` (pod) reporting a
+        *different* epoch.  A replica seen for the first time is only learned;
+        a health payload without an ``instance_id`` (older Operator) gives no
+        sound basis to compare and never invalidates.  Returns
+        ``(restarted, new_stored)``.
+        """
+        try:
+            known = json.loads(stored) if stored else {}
+        except ValueError:
+            known = {}
+        if type(known) is not dict:
+            known = {}
+        known = {k: v for k, v in known.items()
+                 if type(k) is str and type(v) is str}
+        if not instance_id:
+            return False, stored or False
+        previous = known.pop(instance_id, None)
+        known[instance_id] = epoch
+        while len(known) > self._FAULT02_MAX_INSTANCES:
+            known.pop(next(iter(known)))
+        return bool(previous and previous != epoch), json.dumps(
+            known, separators=(',', ':'))
+
+    def _fault02_has_pending(self):
+        """True while any protected route of this SA is closed pending recovery."""
+        self.ensure_one()
+        return any(route.access_publish_pending
+                   for route in self.route_ids if route.is_protected)
+
+    @api.model
+    def _fault02_should_invalidate(self, restarted, connections):
+        """Pure fault decision: connector loss or a restarted Operator closes."""
+        valid_connections = (
+            type(connections) is list and bool(connections) and
+            all(type(row) is dict and
+                type(row.get('connector_id')) is str and
+                bool(row['connector_id'].strip()) for row in connections)
+        )
+        return bool(restarted) or not valid_connections
 
     @api.model
     def _tunnel_vals_from_status(self, result):
@@ -1747,6 +1873,42 @@ class SecurityAccess(models.Model):
             if rec_id and route.dns_record_id != rec_id:
                 # server-owned anchor: the CF DNS record id just returned
                 _internal_identity(route).dns_record_id = rec_id
+
+    def _access_recovery_tunnel_is_live(self):
+        """Return whether the exact tunnel can currently serve a recovery.
+
+        A successful route/access write receipt only proves that Cloudflare
+        accepted desired configuration.  It does not prove a connector is
+        still attached: Cloudflare can retain old connection inventory briefly
+        after a connector dies.  Pending-origin recovery therefore requires a
+        fresh status read with a serving tunnel state and at least one current
+        connection.  Anything malformed or unavailable stays fail-closed.
+        """
+        self.ensure_one()
+        if not self.tunnel_id:
+            return False
+        try:
+            result = self._get_operator_client().get_tunnel_status(
+                self.tunnel_id)
+        except PaaSOperatorError as error:
+            _logger.warning(
+                '[SA] Access recovery liveness unavailable sa=%s: %s',
+                self.id, error.message)
+            return False
+        if type(result) is not dict:
+            return False
+        connections = result.get('connections')
+        return bool(
+            result.get('tunnel_id') == self.tunnel_id and
+            result.get('name') == self.tunnel_name and
+            not result.get('deleted_at') and
+            result.get('status') in ('healthy', 'degraded') and
+            type(connections) is list and
+            any(type(connection) is dict and
+                type(connection.get('connector_id')) is str and
+                bool(connection['connector_id'].strip())
+                for connection in connections)
+        )
 
     # ------------------------------------------------------------------ #
     #  Access sync (declarative; P2.5 per-route — see SecurityAccessRoute) #
@@ -2357,6 +2519,15 @@ class SecurityAccessRoute(models.Model):
     access_publish_pending = fields.Boolean(
         string='Access Publication Pending', default=False, readonly=True,
         help='Access settings are saved, but the origin publication result is unconfirmed. Retry.')
+    access_token_revoke_pending = fields.Boolean(
+        string='Access Token Revocation Pending', default=False, readonly=True,
+        help='Authorization changed for an existing Access app. The origin stays '
+             'closed until the provider acknowledged the token revocation, the '
+             'configured hold elapsed and the Access state was re-confirmed.')
+    access_token_revoke_accepted_at = fields.Datetime(
+        string='Access Token Revocation Accepted At', copy=False, readonly=True,
+        help='When the provider acknowledged the current token revocation. The '
+             'hold before re-publication is measured from this instant.')
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
         help='True = the Cloudflare Access application for this route has been '
@@ -2619,7 +2790,11 @@ class SecurityAccessRoute(models.Model):
                     and any(k in vals for k in (
                         'is_protected', 'login_google', 'login_email_otp',
                         'session_duration', 'subdomain_prefix'))):
-                deferred_release = self.filtered('access_publish_pending')
+                # A route held by a token revocation is never released by a
+                # tenant edit; only its own hold may re-publish it.
+                deferred_release = self.filtered(
+                    lambda route: route.access_publish_pending
+                    and not route.access_token_revoke_pending)
                 for route in self:
                     route._sync_access_to_operator(
                         _DEFER_ACCESS_RELEASE if deferred_release else None)
@@ -2630,6 +2805,11 @@ class SecurityAccessRoute(models.Model):
                 for sa in deferred_release.mapped('security_access_id'):
                     routes = deferred_release.filtered(
                         lambda route: route.security_access_id == sa)
+                    if not sa._access_recovery_tunnel_is_live():
+                        _logger.error(
+                            '[SA] Access batch recovery remains pending routes=%s: '
+                            'tunnel has no live connector', routes.ids)
+                        continue
                     _internal_identity(routes).access_publish_pending = False
                     try:
                         sa._sync_routes_to_operator()
@@ -3018,7 +3198,88 @@ class SecurityAccessRoute(models.Model):
                 key=lambda x: (x.sequence, x.id))],
             'existing_app_id': self.access_app_id or None,
             'existing_policy_ids': self._build_existing_policy_ids(),
+            # Send the revocation until the provider acknowledged it; the
+            # hold that follows must not re-revoke on every later sync.
+            'revoke_tokens': bool(
+                self.access_app_id and self.access_token_revoke_pending
+                and not self.access_token_revoke_accepted_at),
         }
+
+    def _mark_access_token_revoke_pending(self):
+        existing = self.filtered('access_app_id')
+        if existing:
+            # A new authorization change starts a new revocation generation:
+            # forget any earlier acknowledgement so the hold restarts.
+            _internal_identity(existing).write({
+                'access_token_revoke_pending': True,
+                'access_publish_pending': True,
+                'access_token_revoke_accepted_at': False,
+            })
+
+    def _access_keep_parked_marker(self):
+        """After a rolled-back revoke-driven sync: keep a durable closure marker.
+
+        The revoke-driven sync parks the origin before the provider call, and a
+        parked edge cannot be rolled back with the transaction.  When the
+        deletion is rolled back (the documented contract) the origin must still
+        be re-opened, so only ``access_publish_pending`` is kept (no revocation:
+        nothing was deleted); the resync cron re-confirms Access and re-opens it.
+        """
+        closed = self.filtered(
+            lambda route: route.is_protected and route.access_app_id
+            and not route.access_publish_pending)
+        if closed:
+            _internal_identity(closed).access_publish_pending = True
+            schedule_access_resync(
+                self.env, fields.Datetime.now() + timedelta(seconds=120))
+
+    def _access_revoke_gate(self, result):
+        """Settle this sync's view of the token-revocation hold.
+
+        Returns ``none`` | ``held`` | ``releasable``.  The first receipt that
+        shows the provider's acknowledgement starts the hold and wakes the
+        resync cron for when it ends.  Clearing the markers is left to the
+        caller and happens only after the origin was actually re-published.
+        """
+        self.ensure_one()
+        if not self.access_token_revoke_pending:
+            return 'none'
+        if not self.access_app_id:
+            # The app was torn down (protection turned off or lost): its tokens
+            # are moot, so there is nothing left to revoke or to wait for.
+            return 'releasable'
+        now = fields.Datetime.now()
+        accepted_at = self.access_token_revoke_accepted_at
+        hold = access_revoke_hold_seconds(self.env)
+        if not accepted_at:
+            if access_revoke_provider_accepted(result):
+                accepted_at = now
+                _internal_identity(self).access_token_revoke_accepted_at = accepted_at
+                schedule_access_resync(
+                    self.env, accepted_at + timedelta(seconds=hold + 5))
+            elif not access_revoke_operator_reports(result):
+                _logger.error(
+                    '[ACCESS] %s %s: the operator did not report token_revocation, so '
+                    'the revocation cannot be acknowledged and the origin stays closed. '
+                    'The operator predates the revocation contract; deploy it before '
+                    'this module.', self._name, self.id)
+            elif result.get('token_revocation') == 'failed':
+                _logger.error(
+                    '[ACCESS] %s %s: the provider did not accept the token '
+                    'revocation (%s); the origin stays closed and it is retried.',
+                    self._name, self.id,
+                    result.get('token_revocation_error') or 'no detail')
+        state = access_revoke_state(True, accepted_at, now, hold)
+        return 'releasable' if state == 'releasable' else 'held'
+
+    def _access_revoke_finish(self):
+        """Close the revocation generation after a confirmed re-publication."""
+        self.ensure_one()
+        if self.access_token_revoke_pending or self.access_token_revoke_accepted_at:
+            _internal_identity(self).write({
+                'access_token_revoke_pending': False,
+                'access_token_revoke_accepted_at': False,
+            })
 
     def _sync_access_to_operator(self, release_control=None):
         """Push THIS route's full desired Access state to the operator
@@ -3068,13 +3329,14 @@ class SecurityAccessRoute(models.Model):
         # before attempting reconstruction. Lifecycle force callers parked the
         # full tunnel first and release it only after all routes succeed.
         if (self.is_protected and
-                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending) and
+                (not self.access_app_id or self.access_protection_lost or self.access_publish_pending or self.access_token_revoke_pending) and
                 not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)):
             sa._sync_routes_to_operator()
-        needs_release = self.access_publish_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
+        recovering_pending = self.access_publish_pending
+        needs_release = recovering_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
         client = sa._get_operator_client()
         payload = self._build_access_payload()
-        result = client.sync_access_app(payload)
+        result, payload = sync_access_app_create_or_adopt(client, payload)
         require_access_sync_receipt(result, payload)
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(
@@ -3138,17 +3400,33 @@ class SecurityAccessRoute(models.Model):
         # uses the private force sentinel and releases all routes only once every
         # Access update succeeded, so a later sibling failure stays fail-closed.
         defer_release = release_control is _DEFER_ACCESS_RELEASE
+        # Cloudflare's 2xx only *accepts* a token revocation; it is not proof
+        # that an old cookie is denied.  Keep the origin closed through the
+        # hold that starts at the provider's acknowledgement, then re-publish
+        # (below) only after this sync re-confirmed the Access state.
+        revoke_gate = self._access_revoke_gate(result)
+        revoke_pending = revoke_gate == 'held'
         _internal_identity(self).access_publish_pending = bool(
-            defer_release and needs_release)
+            revoke_pending or (defer_release and needs_release))
+        if revoke_pending:
+            return False
         if defer_release:
             return True
         if needs_release and not _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC):
+            if recovering_pending and not sa._access_recovery_tunnel_is_live():
+                _internal_identity(self).access_publish_pending = True
+                _logger.error(
+                    '[SA] Access recovery remains pending route=%s: '
+                    'tunnel has no live connector', self.id)
+                return False
             try:
                 sa._sync_routes_to_operator()
             except (PaaSOperatorError, AccessPublicationError) as error:
                 _internal_identity(self).access_publish_pending = True
                 _logger.error("[SA] Access publication pending route=%s: %s", self.id, error)
                 return False
+        if revoke_gate == 'releasable':
+            self._access_revoke_finish()
         return True
 
     def _access_sync_skip_reason(self):

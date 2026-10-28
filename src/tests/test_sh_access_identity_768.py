@@ -49,6 +49,7 @@ PR #771 就寫好了，而且寫的是 #753 的正解（**壓伺服器端值**�
 import json
 import uuid
 
+from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import HttpCase, TransactionCase, tagged
 
@@ -128,6 +129,12 @@ class _ShRouteAnchor768Fixture(TransactionCase):
         row = self.env.cr.fetchone()
         self.assertTrue(row, 'route#%s 不在 DB 裡' % record_id)
         return row[0]
+
+    def _forged_value(self, field):
+        """A value the field's type can parse; the subject here is the guard."""
+        if self.Route._fields[field].type == 'datetime':
+            return '2000-01-01 00:00:00'
+        return self.victim_app
 
     def _anchor_ctx_defaults(self, value):
         """`{'default_<每一個錨點>': value}`——迴圈跑宣告式清單，新錨點自動涵蓋。"""
@@ -274,7 +281,7 @@ class TestShRouteAnchorIrDefault(_ShRouteAnchor768Fixture):
         只堵 context 的修法會在這一格紅。
         """
         for field in _SM_ROUTE_IDENTITY_ANCHOR_FIELDS:
-            self._set_global_default(field, self.victim_app)
+            self._set_global_default(field, self._forged_value(field))
         self._set_global_default('session_duration', '8h')
 
         sh = self._smart_home()
@@ -373,7 +380,13 @@ class TestShRouteAnchorHatch(_ShRouteAnchor768Fixture):
         sh = self._smart_home()
         route = sh._ensure_primary_route()
         for field in _SM_ROUTE_IDENTITY_ANCHOR_FIELDS:
-            value = True if route._fields[field].type == 'boolean' else 'server-chosen-%s' % field
+            field_type = route._fields[field].type
+            if field_type == 'boolean':
+                value = True
+            elif field_type == 'datetime':
+                value = fields.Datetime.from_string('2026-01-02 03:04:05')
+            else:
+                value = 'server-chosen-%s' % field
             _internal_sm_route_identity(route).write(
                 {field: value})
             self.assertEqual(

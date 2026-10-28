@@ -1,0 +1,24 @@
+{
+  "mode": "test-only",
+  "namespace": "b38-test-only",
+  "owner_uid": "test-owner",
+  "ha_deployment": "owned-ha",
+  "ha_container": "home-assistant",
+  "gate_image": "registry.test/gate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "authority_image": "registry.test/odoo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "source_pvc": "test-source",
+  "state_pvc": "test-state",
+  "identity_secret": "test-identity",
+  "odoo_config_secret": "test-odoo",
+  "database": "owned_test",
+  "actor_uid": 48,
+  "canonical_name": "test-canonical",
+  "resource_identity": "test:scope",
+  "installation_id": "test-origin",
+  "issuer": "https://test.invalid",
+  "audience": "test-audience",
+  "authority_server_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "gate_client_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  ,"gate_source_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  ,"gate_requirements_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+}
