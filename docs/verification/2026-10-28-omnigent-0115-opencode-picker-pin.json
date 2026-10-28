@@ -7,7 +7,11 @@
     "to": "omnigent 0.1.15",
     "chart_pr": "https://git-prod.woowtech.io/woow-paas/woow-paas-charts/pulls/305",
     "chart_head": "42964eaafbf41fee8149b301b6dd3e55bfb57db9",
-    "published": "pending: fill merge_commit / publish_run / package created_at after charts #305 is merged and published",
+    "merge_commit": "4fe443f276593e39547f1584ed0fd7b64428500a",
+    "merged_at": "2026-10-28T15:58:32Z",
+    "publish_run": "https://git-prod.woowtech.io/woow-paas/woow-paas-charts/actions/runs/31374",
+    "publish_verify": "OK gitea omnigent:0.1.15; OK oci omnigent:0.1.15",
+    "gitea_helm_package_created_at": "2026-10-28T15:58:55Z",
     "template_change": "image pins only; DB schema identical to 0.1.14"
   },
   "source": {
@@ -72,5 +76,5 @@
   ],
   "migration_needed": false,
   "migration_reason": "platform 18.0.1.0.274 >= .232 (#1709) refreshes string runner.image on Redeploy; read-only inventory on 2026-10-28 shows runner_pinned = t for services 11, 151, 201",
-  "release_status": "Seed pin ready for human review; merge only after charts #305 is published. Existing services switch only on admin Redeploy. Redeploy verification does not check runner.image; verify it in stage 5."
+  "release_status": "Seed pin ready for human review; charts #305 merged and 0.1.15 published. Existing services switch only on admin Redeploy. Redeploy verification does not check runner.image; verify it in stage 5."
 }
