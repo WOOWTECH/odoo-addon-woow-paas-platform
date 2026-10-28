@@ -333,10 +333,10 @@ class TestFault02DurableInvalidation(TransactionCase):
             counts = cron._cron_probe_security_access_faults()
         self.assertEqual((counts['closed'], counts['recoverable']), (0, 1))
         schedule.assert_called_once()
-        # Soon, not a whole period later.
+        # Now (it only becomes visible after this transaction commits), not a
+        # whole period later.
         wake_in = (schedule.call_args.args[1] - fields.Datetime.now()).total_seconds()
-        self.assertGreater(wake_in, 0)
-        self.assertLessEqual(wake_in, 31)
+        self.assertLessEqual(abs(wake_in), 3)
         # The probe itself never clears the marker: recovery is the resync's job.
         self.assertTrue(route.access_publish_pending)
 

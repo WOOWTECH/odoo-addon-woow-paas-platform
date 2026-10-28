@@ -81,8 +81,15 @@ _RESYNC_LEGS = (
 #: previous run ('0' = start over).
 _PROBE_CURSOR_PARAM = 'woow_paas_platform.access_probe_cursor'
 
-#: How soon after a new closure / a recovery candidate the resync cron is woken.
-_WAKE_SECONDS = 30
+#: The resync cron is woken *now* after a new closure / a recovery candidate.  The
+#: trigger row only becomes visible once the probe's transaction commits (Odoo
+#: notifies post-commit), so the resync can never start before the marker is
+#: durable; waiting longer only delays parking the edge (measured: a 30 s delay
+#: plus the cron's polling granularity left a marked route published for ~60 s).
+_WAKE_NOW_SECONDS = 0
+
+#: A run that stopped early *with progress* continues after this long.
+_SELF_WAKE_SECONDS = 10
 
 #: A resync run stops starting new rows after this long.  The cron runs the whole
 #: scan in one transaction: a run killed by the worker time limit would roll back
@@ -151,7 +158,8 @@ class AccessResyncCron(models.AbstractModel):
             # closure or a recovery candidate: an SA whose connector stays down
             # does not turn the cron into a tight loop.
             schedule_access_resync(
-                self.env, fields.Datetime.now() + timedelta(seconds=_WAKE_SECONDS))
+                self.env,
+                fields.Datetime.now() + timedelta(seconds=_WAKE_NOW_SECONDS))
         _logger.info('[FAULT02] probed=%d failed=%d closed=%d recoverable=%d',
                      counts['probed'], counts['failed'], counts['closed'],
                      counts['recoverable'])
@@ -263,7 +271,8 @@ class AccessResyncCron(models.AbstractModel):
             # made progress: continue soon.  Without progress a wake-up would only
             # repeat the same work on the same rows, so those wait for the period.
             schedule_access_resync(
-                self.env, fields.Datetime.now() + timedelta(seconds=_WAKE_SECONDS))
+                self.env,
+                fields.Datetime.now() + timedelta(seconds=_SELF_WAKE_SECONDS))
         return totals['pushed']
 
     # ------------------------------------------------------------------ #

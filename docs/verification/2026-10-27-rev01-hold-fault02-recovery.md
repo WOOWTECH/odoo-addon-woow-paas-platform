@@ -106,8 +106,14 @@ again once.
   Cloudflare); a user-initiated refresh still fails closed.
 - The probe takes one batch per run and continues after the last id it handled,
   wrapping at the end, so every Security Access is probed.
-- A *new* closure wakes the resync cron about two minutes later; a connector
-  that stays down does not create a loop.
+- A *new* closure, and a pending route whose connector inventory is valid again,
+  wake the resync cron *now* (the trigger becomes visible only after the probe
+  commits, so it cannot start before the marker is durable); a connector that
+  stays down does not create a loop. A short connector blip therefore costs the
+  time until the next probe tick (15 minutes at most) plus about a minute.
+- A resync run stops starting new rows after 80 s (the scan is one transaction; a
+  run killed by the worker time limit would roll back parks it had already done)
+  and continues 10 s later only when it made progress.
 - Recovery is the existing exact Access sync: every resync leg (Security Access,
   Smart Home, Cloud Service) also scans `access_publish_pending` rows, but not
   those inside a revocation hold. A sync that parks before its provider call can
