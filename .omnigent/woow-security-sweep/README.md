@@ -21,16 +21,105 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 
 ## 流程
 
+權威是 `AGENTS.md` §每輪流程；下面兩張圖是它的圖解，改流程時兩邊一起改。
+
+### 運作流程
+
+一輪 sweep 內部的步驟。圓角框（👤）是要等人的地方。
+
+```mermaid
+flowchart TD
+    S0["每日／每週排程<br/>或前台 agent「跑一次」"] --> S1["collect preset<br/>讀 preset、驗證本輪輸入"]
+    S1 --> S2["collect run（每個 target）<br/>增量範圍、掃描工具、findings"]
+    S2 --> D1{"符合 deep_review 條件？"}
+    D1 -- 是 --> W1["派唯讀 review worker<br/>（當輪先結束，等完成通知）"]
+    W1 --> S3["collect import 併入回報"]
+    S3 --> GA
+    D1 -- 否 --> GA["閘門 A：jev_gate triage"]
+    GA -- "exit 3（key 失效）" --> GA3["全部轉人工<br/>報告第一行寫明"]
+    GA3 --> CO
+    GA --> CO["jev_gate carryover<br/>帶入前幾輪未決、結掉已解決"]
+    CO --> IS1["issue_sync sync<br/>Jev 高信心成立 ⇒ 開 sweep/jev 單<br/>已解決 ⇒ 留言關單"]
+    IS1 --> D2{"本輪＋carryover<br/>有待決 finding？"}
+    D2 -- 否 --> R0["report.md 記「無變化」<br/>不派 worker、不提問"]
+    D2 -- 是 --> R1["寫 report.md<br/>AskUserQuestion 最多 4 題進 Inbox"]
+    R1 --> H1(["👤 人在 Inbox 回答"])
+    H1 --> HM["jev_gate human<br/>記錄人的決定（與 Jev 比對）"]
+    HM --> IS2["issue_sync sync<br/>成立 ⇒ sweep/human<br/>誤報／接受風險 ⇒ 關單"]
+    IS2 --> D3{"人的決定"}
+    D3 -- "修正且 ≤ medium" --> FX["fix worker 開中性 PR<br/>→ review worker（不同 harness）<br/>→ 閘門 C：jev_gate ready"]
+    FX --> H2(["👤 再問人；merge 由人做"])
+    D3 -- "修正且 ≥ high" --> ADV["報告附 advisory 草稿<br/>（不派 worker）"]
+    D3 -- "先追蹤／誤報／接受風險" --> BL["報告附 baseline YAML 片段"]
+    R0 --> CM
+    H2 --> CM
+    ADV --> CM
+    BL --> CM["collect commit<br/>推進 last_sha"]
 ```
-排程（prompt 帶 targets）
- → collect run（每個 repo）→ [deep review worker → collect import]
- → jev_gate triage（閘門 A）→ jev_gate carryover（帶入前幾輪未決）
- → issue_sync（Jev 高信心成立 ⇒ 開 sweep/jev 單）
- → report.md ＋ AskUserQuestion（Inbox）
- → jev_gate human（記錄人的決定）→ issue_sync（人判成立開單、判誤報關單）
- → 人選「修正」且 ≤ medium ⇒ fix worker → review worker → jev_gate ready（閘門 C）→ 再問人
- → collect commit（推進 last_sha）
+
+- `collect commit` 只看閘門 A 有沒有跑完，**不等人回答**；閘門 A 失敗的 target 不 commit，下輪重掃同一段。
+- 人沒回答的題目不會遺失：完整內容在 `report.md`，下一輪由 carryover 再帶出來重問。
+
+### 人類互動流程
+
+誰在什麼時候碰到人。sweep 自己不對 GitHub 寫入、不 merge；人工關卡都在 Inbox 或 GitHub 上。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor 人
+    participant UI as Omnigent UI／Inbox
+    participant SW as sweep agent
+    participant J as Jev
+    participant GT as Gitea mirror-internal
+    participant WK as worker
+    participant GH as GitHub（public repo）
+
+    alt 定期
+        Note over SW: 排程 08:30 啟動（prompt 只有 preset 一行）
+    else 手動
+        人->>UI: 叫起前台 agent，選「跑一次」
+        UI->>SW: 觸發暫停中手動排程的立即執行
+    end
+    SW->>SW: collect（＋deep review worker）
+    SW->>J: 閘門 A triage（英文提問）
+    J-->>SW: verdict＋confidence（shadow：只記錄）
+    SW->>GT: Jev 高信心成立 ⇒ 開 sweep/jev 單
+    SW->>UI: AskUserQuestion（摘要＋最多 4 題）
+    人->>UI: 成立修正／先追蹤／誤報／接受風險
+    UI-->>SW: 回答
+    SW->>SW: jev_gate human 寫進 shadow log
+    SW->>GT: 成立 ⇒ 換 sweep/human，誤報／接受風險 ⇒ 關單
+    alt 修正且 ≤ medium
+        SW->>WK: 派 fix worker
+        WK->>UI: push 經 blast_radius 送核准
+        人->>UI: 核准 push
+        WK->>GH: 開 PR（標題與描述中性）
+        SW->>WK: 派 review worker（與 fix 不同 harness）
+        SW->>J: 閘門 C ready
+        SW->>UI: 再問一次人
+        人->>GH: 覆核後親自 merge
+    else 修正且 ≥ high
+        Note over SW: report.md 附 advisory 草稿
+        人->>GH: 建 draft advisory＋temporary private fork，本機驗證
+    else 先追蹤／誤報／接受風險
+        Note over SW: report.md 附 baseline 片段
+        人->>人: 貼進 targets/repo.yaml，走 PR commit
+    end
 ```
+
+人工關卡一覽：
+
+| 關卡 | 在哪裡 | 人做什麼 | 沒處理會怎樣 |
+|---|---|---|---|
+| 手動跑一次 | UI 叫起前台 agent | 選 preset、按「跑一次」 | 只跑定期排程 |
+| 判斷 finding | Inbox（AskUserQuestion） | 成立修正／先追蹤／誤報／接受風險 | 下輪 carryover 再問；Jev 高信心的單已先開 |
+| 本輪摘要（沒有待決時） | Inbox | 已閱，或要求 full 重掃 | 無影響 |
+| 修正 PR 的 push | Inbox（blast_radius） | 核准 push | worker 停在 push 前 |
+| 修正 PR 的 merge | GitHub | 看過覆核結論與閘門 C 後 merge | PR 一直開著；agent 不代 merge |
+| high／critical 修正 | GitHub Security Advisory | 依報告草稿建 draft advisory 與 private fork，本機驗證 | 只留在報告的待辦 |
+| baseline | 本 repo `targets/<repo>.yaml` | 貼上報告給的片段、開 PR | 該 finding 每輪仍會列在「已決未進 baseline」 |
+| Phase 2 放開門檻 | `gates.yaml` | 改 mode、改測試、走 PR | 維持 shadow，一切由人決定 |
 
 **Phase 1（shadow）**：`gates.yaml` 的 `mode: shadow` ⇒ 每筆 decision 的 `effective` 一律是
 `human`。Jev 的 `proposed` 只拿來和人的決定比對。`tests/test_jev_gate.py` 有一條測試鎖住
