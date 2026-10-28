@@ -27,13 +27,19 @@ config.json），所以既有的 reset-config（helm upgrade／exec patch config
   ＝``unknown``（不知道 commit 了沒有，平台不得宣稱「密碼未變」）。
 """
 
+import base64
 import logging
 from pathlib import Path
 
 from src.models.schemas import InitErrorKind
-from src.services.helm import KubectlException, KubernetesService
+from src.services.helm import KubectlException, KubernetesService, validate_label_value
 from src.services.n8n_init import N8nInitError, N8nInitService
-from src.services.odoo_chart_contract import ODOO_CONTAINER_NAME, ODOO_PYTHON
+from src.services.odoo_chart_contract import (
+    ODOO_ADMIN_PASSWORD_SECRET_KEY,
+    ODOO_CONF_SECRET_SUFFIX,
+    ODOO_CONTAINER_NAME,
+    ODOO_PYTHON,
+)
 from src.services.odoo_init import OdooInitError, OdooInitService, _last_json_object
 
 logger = logging.getLogger(__name__)
@@ -103,11 +109,50 @@ class AppAdminPasswordService:
         except (OdooInitError, ValueError) as exc:
             # ValueError＝namespace 不在 operator 管轄（validate_namespace）：什麼都沒碰。
             raise AppAdminResetError(str(exc), step="find_pod", kind="not_executed") from exc
-        return self._run(
+        result = self._run(
             namespace, pod_name, ODOO_CONTAINER_NAME,
             [ODOO_PYTHON, "-c", ODOO_RESET_ADMIN_SCRIPT],
             new_password, ODOO_RESET_EXEC_TIMEOUT_SECONDS, app="odoo",
         )
+        # 密碼已在 app DB commit（上面沒 raise）——chart conf Secret 裡的初始密碼對齊到新值。
+        # best-effort：同步失敗不得把「已生效」的重設翻成失敗（平台據 secret_sync 決定要不要重試）。
+        result["secret_sync"] = self.sync_odoo_admin_secret(namespace, release_name, new_password)
+        return result
+
+    def sync_odoo_admin_secret(self, namespace: str, release_name: str, password: str) -> str:
+        """把 ``<release>-odoo-conf`` 的 ``admin-password`` 對齊到目前實際的 Odoo 管理員密碼。
+
+        Odoo 的密碼權威在 app DB，chart Secret 的這一格只是「首次 ``-i base`` 的初始密碼」；
+        重設（或回復版本把 Secret 還原成舊 revision 的值）之後它會與實際不符。平台下一次
+        helm upgrade 本來就會重送目前的密碼，這裡把空窗收掉——維運讀 Secret 永遠拿到目前這把。
+
+        回傳 ``synced``／``not_applicable``（沒有這個 Secret 或這一格，例如 platform profile）／
+        ``failed``。**永不 raise、永不把密碼寫進 log**；只動 ``data.admin-password`` 一格（merge
+        patch 保留 Helm 的 ownership 標記，其他鍵與 ``odoo.conf`` 不碰）。
+        """
+        secret_name = f"{release_name}{ODOO_CONF_SECRET_SUFFIX}"
+        try:
+            validate_label_value("release", release_name)
+            items = self.k8s.get_items("secret", namespace, f"app.kubernetes.io/instance={release_name}")
+        except (KubectlException, ValueError) as exc:
+            logger.warning("Odoo admin Secret sync could not read secrets in %s for %s (%s)",
+                           namespace, release_name, type(exc).__name__)
+            return "failed"
+        target = next((item for item in items
+                       if isinstance(item, dict) and (item.get("metadata") or {}).get("name") == secret_name), None)
+        if target is None or ODOO_ADMIN_PASSWORD_SECRET_KEY not in (target.get("data") or {}):
+            return "not_applicable"
+        try:
+            self.k8s.patch_secret(
+                namespace, secret_name,
+                {ODOO_ADMIN_PASSWORD_SECRET_KEY: base64.b64encode(password.encode("utf-8")).decode("ascii")},
+            )
+        except (KubectlException, ValueError) as exc:
+            logger.warning("Odoo admin Secret sync failed for %s/%s (%s)",
+                           namespace, secret_name, type(exc).__name__)
+            return "failed"
+        logger.info("Odoo admin Secret %s/%s aligned with the live admin password", namespace, secret_name)
+        return "synced"
 
     def reset_n8n_owner(self, namespace: str, release_name: str, new_password: str) -> dict:
         try:

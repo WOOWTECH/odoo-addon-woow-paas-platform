@@ -485,6 +485,42 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_logger.error.assert_called_once()
 
     @patch('requests.Session.request')
+    def test_sync_odoo_admin_secret_sends_the_password_in_the_body_only(self, mock_request):
+        """回復版本後平台把 conf Secret 的 admin-password 補回目前密碼：只走 body、不進 URL／query。"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b'{"success": true, "secret_sync": "synced"}'
+        mock_response.json.return_value = {'success': True, 'secret_sync': 'synced'}
+        mock_request.return_value = mock_response
+
+        result = self.client.sync_odoo_admin_secret('paas-ws-a1b2c3d4', 'svc-a', 'Synthetic-Admin-Pw-1234')
+
+        self.assertEqual(result['secret_sync'], 'synced')
+        kwargs = mock_request.call_args.kwargs
+        self.assertEqual(kwargs['method'], 'POST')
+        self.assertTrue(kwargs['url'].endswith('/api/releases/paas-ws-a1b2c3d4/svc-a/odoo/admin-secret'))
+        self.assertEqual(kwargs['json'], {'password': 'Synthetic-Admin-Pw-1234'})
+        self.assertNotIn('Synthetic-Admin-Pw-1234', kwargs['url'])
+        self.assertFalse(kwargs.get('params'))
+
+    @patch('requests.Session.request')
+    def test_sync_odoo_admin_secret_missing_endpoint_is_quiet(self, mock_request):
+        """舊 operator 還沒有這個端點（404）：照常 raise 404 讓呼叫端略過，但不記 ERROR。"""
+        from ..services import paas_operator as client_module
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.json.return_value = {'detail': 'Not Found'}
+        mock_request.return_value = mock_response
+
+        with patch.object(client_module, '_logger') as mock_logger:
+            with self.assertRaises(self.PaaSOperatorAPIError) as context:
+                self.client.sync_odoo_admin_secret('paas-ws-a1b2c3d4', 'svc-a', 'Synthetic-Admin-Pw-1234')
+
+        self.assertEqual(context.exception.status_code, 404)
+        mock_logger.error.assert_not_called()
+
+    @patch('requests.Session.request')
     def test_connection_error_handling(self, mock_request):
         """Test connection error handling."""
         from requests.exceptions import ConnectionError

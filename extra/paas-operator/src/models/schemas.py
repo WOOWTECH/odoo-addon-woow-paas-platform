@@ -1258,11 +1258,32 @@ class AppAdminPasswordResetResponse(BaseModel):
     second_factor_cleared: bool = Field(
         default=False, description="Odoo TOTP / n8n MFA was enabled and has been turned off",
     )
+    secret_sync: Optional[Literal["synced", "not_applicable", "failed"]] = Field(
+        default=None,
+        description="Odoo only: whether the chart conf Secret's initial admin password was aligned with the "
+                    "new password (best-effort; never affects `success`)",
+    )
     message: Optional[str] = None
     error: Optional[str] = None
     error_step: Optional[str] = None
     error_code: Optional[AppAdminResetCode] = None
     error_kind: Optional[InitErrorKind] = None
+
+
+class OdooAdminSecretSyncRequest(BaseModel):
+    """把 chart conf Secret 的 ``admin-password`` 對齊到目前實際的密碼（不改 app DB）。
+
+    與 ``AppAdminPasswordResetRequest`` 同一紀律：密碼只在 request body，長度由 endpoint 檢查、
+    回不含原文的錯誤（不在 schema 上設長度限制，免得 422 把原文帶回）。
+    """
+
+    password: SecretStr = Field(..., description="Current Odoo admin password (12-128 chars)")
+
+
+class OdooAdminSecretSyncResponse(BaseModel):
+    success: bool
+    secret_sync: Optional[Literal["synced", "not_applicable", "failed"]] = None
+    message: Optional[str] = None
 
 
 # --- Odoo Module Management ---

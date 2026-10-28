@@ -59,3 +59,41 @@ def test_authenticated_endpoint_never_returns_other_values():
                                json={'revision': 0, 'paths': ['setting']}).status_code == 422
             assert client.post('/api/releases/paas-ws-qa/svc-qa/config-projection',
                                json={'revision': 3, 'paths': ['auth.apiServerKey']}).status_code == 422
+
+
+def test_addon_name_list_is_projected_only_for_the_allowlisted_path():
+    values = {'addons': {'selected': ['ai_base_gt', 'mail_fetchmail_durable', 'odoo_ai_assistant_chatgpt_connector']},
+              'other': {'names': ['not_allowed']}}
+    result = project_values(values, ['addons.selected'])
+    assert result == {'values': {'addons.selected': ['ai_base_gt', 'mail_fetchmail_durable',
+                                                     'odoo_ai_assistant_chatgpt_connector']}, 'missing': []}
+    # 其他路徑的清單照舊被拒（只有 LIST_PATHS 開例外）
+    with pytest.raises(ValueError):
+        project_values(values, ['other.names'])
+
+
+def test_empty_addon_list_is_a_valid_projection():
+    assert project_values({'addons': {'selected': []}}, ['addons.selected']) == {
+        'values': {'addons.selected': []}, 'missing': []}
+
+
+@pytest.mark.parametrize('selected', [
+    ['ok', 3],                       # 不是字串
+    ['has space'],                   # 字元集不合
+    ['../etc/passwd'],               # 路徑穿越形狀
+    ['x' * 129],                     # 單筆過長
+    [''],                            # 空字串
+    [{'name': 'nested'}],            # 巢狀物件
+    ['n' + str(i) for i in range(513)],  # 筆數過多
+])
+def test_addon_list_with_unbounded_items_is_refused(selected):
+    with pytest.raises(ValueError):
+        project_values({'addons': {'selected': selected}}, ['addons.selected'])
+
+
+def test_addon_list_projection_is_a_copy_not_a_reference():
+    values = {'addons': {'selected': ['a_b']}}
+    result = project_values(values, ['addons.selected'])
+    result['values']['addons.selected'].append('mutated')
+    assert values['addons']['selected'] == ['a_b']
+

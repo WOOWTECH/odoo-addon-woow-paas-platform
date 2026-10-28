@@ -282,17 +282,19 @@ def k8s():
     return k8s
 
 
-@pytest.mark.parametrize("method, container, argv0", [
-    ("reset_odoo_admin", "odoo", "python3"),
-    ("reset_n8n_owner", "n8n", "node"),
+@pytest.mark.parametrize("method, container, argv0, extra", [
+    # Odoo 另外把 chart conf Secret 的初始密碼對齊到新值；這個 fixture 沒有該 Secret ⇒ not_applicable。
+    ("reset_odoo_admin", "odoo", "python3", {"secret_sync": "not_applicable"}),
+    ("reset_n8n_owner", "n8n", "node", {}),
 ])
-def test_service_sends_password_on_stdin_only(k8s, method, container, argv0):
+def test_service_sends_password_on_stdin_only(k8s, method, container, argv0, extra):
     k8s.exec_in_pod.return_value = _ok(
         'odoo log line\n{"success": true, "login": "a@b.c", "second_factor_cleared": true}\n')
+    k8s.get_items.return_value = []
 
     result = getattr(AppAdminPasswordService(k8s), method)("paas-ws-x", "rel", NEW_PASSWORD)
 
-    assert result == {"success": True, "login": "a@b.c", "second_factor_cleared": True}
+    assert result == {"success": True, "login": "a@b.c", "second_factor_cleared": True, **extra}
     kwargs = k8s.exec_in_pod.call_args.kwargs
     assert kwargs["input_data"] == NEW_PASSWORD
     assert kwargs["container"] == container
@@ -449,3 +451,143 @@ def test_api_requires_api_key():
         resp = TestClient(app).post("/api/releases/paas-ws-x/rel/odoo/admin-password",
                                     json={"new_password": NEW_PASSWORD})
     assert resp.status_code == 401
+
+
+# --- 4. Odoo chart conf Secret 與實際密碼對齊 -------------------------------------
+
+
+def _conf_secret(release="rel", with_password=True):
+    data = {"odoo.conf": "Zm9v", "admin-email": "YWRtaW5AZXhhbXBsZS5jb20="}
+    if with_password:
+        data["admin-password"] = "aW5pdGlhbC1wYXNzd29yZA=="
+    return {"metadata": {"name": f"{release}-odoo-conf"}, "data": data}
+
+
+def _odoo_service(k8s, secrets):
+    k8s.exec_in_pod.return_value = _ok('{"success": true, "login": "a@b.c", "second_factor_cleared": false}\n')
+    k8s.get_items.return_value = secrets
+    return AppAdminPasswordService(k8s)
+
+
+def test_odoo_reset_aligns_the_chart_secret_with_the_new_password(k8s, caplog):
+    import base64
+    caplog.set_level(logging.DEBUG)
+    secrets = [{"metadata": {"name": "rel-credentials"}, "data": {"odoo-password": "eA=="}},
+               _conf_secret(), _conf_secret("other")]
+    service = _odoo_service(k8s, secrets)
+
+    result = service.reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
+
+    assert result["success"] is True and result["secret_sync"] == "synced"
+    # 只動這個 release 的 conf Secret、只動 admin-password 一格；值以 base64 交給 kubectl patch（argv 會被 operator 遮罩）。
+    k8s.get_items.assert_called_once_with("secret", "paas-ws-x", "app.kubernetes.io/instance=rel")
+    k8s.patch_secret.assert_called_once_with(
+        "paas-ws-x", "rel-odoo-conf",
+        {"admin-password": base64.b64encode(NEW_PASSWORD.encode()).decode()})
+    assert NEW_PASSWORD not in caplog.text
+
+
+@pytest.mark.parametrize("secrets", [
+    [],                                                       # Secret 不在
+    [_conf_secret(with_password=False)],                      # platform profile：conf Secret 沒有 admin-password
+    [{"metadata": {"name": "rel-credentials"}, "data": {}}],  # 只有別的 Secret
+])
+def test_odoo_reset_secret_sync_is_not_applicable_without_the_key(k8s, secrets):
+    service = _odoo_service(k8s, secrets)
+
+    result = service.reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
+
+    assert result["success"] is True and result["secret_sync"] == "not_applicable"
+    k8s.patch_secret.assert_not_called()
+
+
+def test_odoo_reset_secret_patch_failure_never_fails_the_reset(k8s, caplog):
+    caplog.set_level(logging.DEBUG)
+    service = _odoo_service(k8s, [_conf_secret()])
+    k8s.patch_secret.side_effect = KubectlException(message="boom " + NEW_PASSWORD, command="kubectl patch", stderr="")
+
+    result = service.reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
+
+    assert result["success"] is True and result["secret_sync"] == "failed"
+    assert NEW_PASSWORD not in caplog.text
+
+
+def test_odoo_reset_secret_read_failure_never_fails_the_reset(k8s):
+    service = _odoo_service(k8s, [])
+    k8s.get_items.side_effect = KubectlException(message="forbidden", command="kubectl get", stderr="")
+
+    result = service.reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
+
+    assert result["success"] is True and result["secret_sync"] == "failed"
+    k8s.patch_secret.assert_not_called()
+
+
+def test_odoo_reset_failure_does_not_touch_the_secret(k8s):
+    k8s.exec_in_pod.return_value = _ok('{"success": false, "code": "admin_missing", "error": "no admin"}\n')
+    k8s.get_items.return_value = [_conf_secret()]
+
+    with pytest.raises(AppAdminResetError):
+        AppAdminPasswordService(k8s).reset_odoo_admin("paas-ws-x", "rel", NEW_PASSWORD)
+
+    k8s.get_items.assert_not_called()
+    k8s.patch_secret.assert_not_called()
+
+
+def test_sync_odoo_admin_secret_alone_does_not_exec_into_the_pod(k8s):
+    service = AppAdminPasswordService(k8s)
+    k8s.get_items.return_value = [_conf_secret()]
+
+    assert service.sync_odoo_admin_secret("paas-ws-x", "rel", NEW_PASSWORD) == "synced"
+    k8s.exec_in_pod.assert_not_called()
+
+
+def test_api_reset_reports_secret_sync():
+    service = MagicMock()
+    service.reset_odoo_admin.return_value = {
+        "success": True, "login": "a@b.c", "second_factor_cleared": False, "secret_sync": "synced"}
+
+    resp = _post("odoo/admin-password", {"new_password": NEW_PASSWORD}, service)
+
+    assert resp.status_code == 200 and resp.json()["secret_sync"] == "synced"
+
+
+def test_api_n8n_reset_has_no_secret_sync():
+    service = MagicMock()
+    service.reset_n8n_owner.return_value = {"success": True, "login": "a@b.c", "second_factor_cleared": False}
+
+    resp = _post("n8n/owner-password", {"new_password": NEW_PASSWORD}, service)
+
+    assert resp.status_code == 200 and resp.json()["secret_sync"] is None
+
+
+@pytest.mark.parametrize("outcome, success", [("synced", True), ("not_applicable", True), ("failed", False)])
+def test_api_secret_sync_endpoint(outcome, success, caplog):
+    caplog.set_level(logging.DEBUG)
+    service = MagicMock()
+    service.sync_odoo_admin_secret.return_value = outcome
+
+    resp = _post("odoo/admin-secret", {"password": NEW_PASSWORD}, service)
+
+    assert resp.status_code == 200
+    assert (resp.json()["success"], resp.json()["secret_sync"]) == (success, outcome)
+    service.sync_odoo_admin_secret.assert_called_once_with("paas-ws-x", "rel", NEW_PASSWORD)
+    assert NEW_PASSWORD not in resp.text and NEW_PASSWORD not in caplog.text
+
+
+@pytest.mark.parametrize("password", ["short", "x" * 129])
+def test_api_secret_sync_rejects_length_without_echo(password):
+    service = MagicMock()
+
+    resp = _post("odoo/admin-secret", {"password": password}, service)
+
+    assert resp.status_code == 200 and resp.json()["success"] is False
+    assert password not in resp.text
+    service.sync_odoo_admin_secret.assert_not_called()
+
+
+def test_api_secret_sync_requires_api_key():
+    with patch("src.main.settings.api_key", "test-1370"):
+        resp = TestClient(app).post("/api/releases/paas-ws-x/rel/odoo/admin-secret",
+                                    json={"password": NEW_PASSWORD})
+    assert resp.status_code == 401
+

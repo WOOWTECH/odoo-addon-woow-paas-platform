@@ -94,6 +94,12 @@ WOOW_ODOO_SERVICE_PORT = 80
 #: `PaasController._sanitize_helm_values`。
 WOOW_ODOO_ADMIN_PASSWORD_PATH = ('conf', 'adminPassword')
 
+#: woow-odoo 租戶勾選的模組（只含 third_party／custom，見 ``_woow_odoo_selected_addons``）在 values 的路徑。
+#: 回復版本後平台要把自己記的勾選（``odoo_addon_ids``）對齊到目標 revision 實際套用的清單。
+WOOW_ODOO_ADDONS_SELECTED_PATH = 'addons.selected'
+#: 需要隨 ``addons.selected`` 一起複製進 addons_path 的來源類型（與 ``_woow_odoo_selected_addons`` 同一條篩選）。
+_ODOO_COPY_ADDON_SOURCES = ('third_party', 'custom')
+
 #: #1158：K8s storage quantity（只收二進位單位，平台與 chart 一律寫 Gi）→ GiB。
 _STORAGE_QUANTITY_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*(Mi|Gi|Ti)\s*$')
 _STORAGE_UNIT_GIB = {'Mi': 1 / 1024, 'Gi': 1, 'Ti': 1024}
@@ -3586,6 +3592,12 @@ class CloudService(models.Model):
                 result.get('error_code'), kind))
 
         login = result.get('login') or None
+        if kind == 'odoo_exec' and result.get('secret_sync') == 'failed':
+            # 密碼已在 app DB 生效；chart conf Secret 的初始密碼沒對齊成功（operator best-effort）。
+            # 不影響租戶：平台下一次 helm upgrade 會重送目前的密碼。只留線索給維運。
+            _logger.warning(
+                "[#1370] Odoo admin Secret could not be aligned after the reset for service %s (id=%s); "
+                "the next helm upgrade will", self.name, self.id)
         # ================= 提交點之後：只剩記帳（#525 B3） =================
         try:
             with self.env.cr.savepoint():
@@ -6435,6 +6447,10 @@ class CloudService(models.Model):
                 namespace=self.helm_namespace, release_name=self.helm_release_name,
                 revision=pending['revision'], paths=list(paths), excluded_paths=preserved,
             ) if paths else {'revision': pending['revision'], 'values': {}, 'missing': []}
+            # woow-odoo 租戶：回復也要讓「勾選的模組」與「conf Secret 的密碼」跟叢集一致（兩者都是
+            # best-effort，不阻擋上面的設定同步；遠端呼叫同樣放在取鎖之前）。
+            odoo_addon_names = self._rollback_odoo_addon_names(client, pending['revision'])
+            self._rollback_sync_odoo_admin_secret(client)
             # 鎖在遠端呼叫之後取得；SQL 同時重驗操作與錨點，序列化衝突下輪重試。
             rows = self._init_guarded(
                 f"SELECT id FROM {self._table} WHERE id = %s AND rollback_config_sync = %s "
@@ -6457,7 +6473,96 @@ class CloudService(models.Model):
         # 任一 DB 寫入失敗由 savepoint 回捲，保留原待辦；不要吞 DB 例外。
         with self.env.cr.savepoint():
             self._apply_helm_values(synchronized)
+            # 模組勾選與設定帳本同一個 savepoint：要嘛一起對齊目標 revision、要嘛一起保留待辦。
+            self._apply_rollback_odoo_addons(odoo_addon_names)
         return True
+
+    def _is_live_woow_odoo_tenant(self):
+        """服務是不是真的跑在 woow-odoo chart 上的租戶 Odoo（template 的 chart 名＋不是 Bitnami 時代的存量）。"""
+        self.ensure_one()
+        return bool(self.template_id._is_woow_odoo_chart()
+                    and not self._woow_odoo_legacy_release_error())
+
+    def _rollback_odoo_addon_names(self, client, revision):
+        """回復後目標 revision 的 ``addons.selected``（技術名清單）；不適用或讀不到回 ``None``。
+
+        回復只換叢集的 Helm values，平台自己記的 ``odoo_addon_ids`` 不會跟著走：回復後 Pod 只有舊
+        revision 的模組、平台與模組分頁卻仍顯示較新的勾選，而下一次「儲存設定」會用平台的記錄
+        重算 ``addons.selected`` 把服務悄悄前滾（同 image 參照的問題，見 ``_rollback_sync_paths``）。
+        舊 operator 的 projection 不收清單（回 4xx／5xx）⇒ 視為讀不到，**不擋**設定同步。
+        """
+        self.ensure_one()
+        if not self._is_live_woow_odoo_tenant():
+            return None
+        from ..services.paas_operator import PaaSOperatorError
+        try:
+            response = client.get_config_projection(
+                namespace=self.helm_namespace, release_name=self.helm_release_name,
+                revision=revision, paths=[WOOW_ODOO_ADDONS_SELECTED_PATH],
+            )
+        except PaaSOperatorError:
+            _logger.warning(
+                'Rollback addon selection sync unavailable for service id=%s (operator projection failed)', self.id)
+            return None
+        if not isinstance(response, dict) or response.get('revision') != revision:
+            return None
+        selected = (response.get('values') or {}).get(WOOW_ODOO_ADDONS_SELECTED_PATH)
+        if not isinstance(selected, list) or not all(isinstance(name, str) for name in selected):
+            return None
+        return sorted(set(selected))
+
+    def _apply_rollback_odoo_addons(self, names):
+        """把 ``odoo_addon_ids`` 的 third_party／custom 對齊到 ``names``；其他來源（built_in）不動。
+
+        ``names`` 為 ``None``＝不適用或讀不到，什麼都不做。清單裡平台目錄找不到（或已封存）的名稱只記
+        警告、略過——封存的模組與平台其他路徑一致不可選（``filtered('active')``，讀 ``odoo_addon_ids``
+        也看不到），硬補回去只會留下看不見的關聯；不得因此擋住整次同步。已經一致就不寫（不白白觸發
+        write 的副作用）。
+        """
+        self.ensure_one()
+        if names is None:
+            return
+        Addon = self.env['woow_paas_platform.cloud_odoo_addon'].sudo()
+        wanted = Addon.search([
+            ('technical_name', 'in', list(names)),
+            ('source_type', 'in', list(_ODOO_COPY_ADDON_SOURCES)),
+        ])
+        unknown = sorted(set(names) - set(wanted.mapped('technical_name')))
+        if unknown:
+            _logger.warning(
+                'Rollback addon selection sync for service id=%s: %d module(s) in the target revision are '
+                'not in the active platform catalog: %s', self.id, len(unknown), ', '.join(unknown))
+        kept = self.odoo_addon_ids.filtered(lambda addon: addon.source_type not in _ODOO_COPY_ADDON_SOURCES)
+        new_ids = set((kept | wanted).ids)
+        if new_ids != set(self.odoo_addon_ids.ids):
+            self.sudo().write({'odoo_addon_ids': [(6, 0, sorted(new_ids))]})
+            _logger.info(
+                'Rollback addon selection sync: service id=%s now has %d selected module(s) like the '
+                'restored revision', self.id, len(wanted))
+
+    def _rollback_sync_odoo_admin_secret(self, client):
+        """回復後把 conf Secret 的 ``admin-password`` 對齊到平台記的目前密碼（best-effort，永不 raise）。
+
+        Helm 回復會把 Secret 還原成目標 revision 當時渲染的初始密碼，與 app DB 實際的密碼不符；operator 在
+        重設時自己對齊，回復這條路由平台補。密碼取自 ``cloud_service_secret``（重設時已落庫）。舊 operator
+        沒有端點（404）⇒ 略過，下一次 helm upgrade 本來就會重送目前的密碼。
+        """
+        self.ensure_one()
+        if not self._is_live_woow_odoo_tenant():
+            return
+        secret = self._get_secret_record()
+        password = secret.admin_password if secret else False
+        if not password:
+            return
+        from ..services.paas_operator import PaaSOperatorError
+        try:
+            client.sync_odoo_admin_secret(
+                namespace=self.helm_namespace, release_name=self.helm_release_name, password=password)
+        except PaaSOperatorError as exc:
+            if getattr(exc, 'status_code', None) == 404:
+                _logger.info('Odoo admin Secret sync skipped for service id=%s: operator has no endpoint yet', self.id)
+            else:
+                _logger.warning('Odoo admin Secret sync after rollback failed for service id=%s', self.id)
 
     def _record_chart_version(self, version):
         """以平台身分回寫 chart 版本帳本（#1525）。
