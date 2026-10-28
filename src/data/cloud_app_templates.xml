@@ -1221,8 +1221,12 @@
                  （HA 版同一個映像以前的終端機路徑；兩邊統一 /console/，外掛頁內建「CLI 終端機」開的就是它）。
                  只改 auth-proxy ConfigMap，helm_default_values 不需改。回滾值：0.5.6。 -->
             <!-- 0.5.9（2026-10-26，charts #284）：native Paseo、同源代理與程序監督。
-                 搭配下方 0212 immutable image；origin 由每台服務的公開網址在部署時注入。 -->
-            <field name="helm_chart_version">0.5.9</field>
+                 搭配 0212 immutable image；origin 由每台服務的公開網址在部署時注入。 -->
+            <!-- 0.5.10（2026-10-26，charts 460007e／整合包 b091562，publish run 29007；JCR OCI manifest sha256:8a970887…）：
+                 console 網頁終端機分頁的 iframe 帶 ttyd base path（console.externalPath）、補原生 Omnigent 說明。
+                 與 0.5.9 相比只有 console ConfigMap 與文件／註解不同：values 鍵無新增或改名、NetworkPolicy 無變動。
+                 升版時 daemon StatefulSet 與 console Deployment 各重啟一次（PVC 保留）；既有服務要 Redeploy 才會升。 -->
+            <field name="helm_chart_version">0.5.10</field>
             <!-- 2026-10-24 image 20261018.1219 → 20261024.0713@sha256:a6c20405…（paas-odoo-ci #396，build run 26985、
                  核可單 #397；core open-design-core:20261024.0713@sha256:bdb9febc…，fork woow-od-v0.24.1-w2.3 605efab）：
                  OpenDesign「外掛」頁「已安裝」最上方多兩個內建外掛 MCP Server（開 /mcp-admin/）與 CLI 終端機（開 /console/），
@@ -1234,7 +1238,13 @@
             <!-- 2026-10-27：0212 正式 JCR 映像（Paseo runtime 0.2.2）；內部 service278 在 chart 0.5.9 上
                  驗收 GUI、Claude 兩回合對話、PVC／對話資料保留（Helm revision 6；與對話測試同一 digest）。
                  回滾映像：1751@sha256:2a19e82c2955a1e1d7edb866a2b9817cb2b1a65762c928a6fcb7839b37574cf7。 -->
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261027.0212@sha256:c58c8f2d39895421a1fbbbb13dc65e56dad0c225939799abf31b91313b11024f"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}, "paseo": {"enabled": true, "origin": ""}}</field>
+            <!-- 2026-10-29：20261029.0033 正式 JCR 映像（paas-odoo-ci 核可單 #493、promotion run 31740；core
+                 open-design-core:20261029.0033@sha256:c8cd57f07adaef23b8dddbb22a8b75f97bdf8ca42c8bfbec1b284dc60ee5a4cf，fork w2.10 6ebc63aa）：相對 1127 烤進 Paseo managed runtime（首次啟用不再執行 npm、
+                 新 daemon home 預設關本地語音）並帶 opendesign-paseo-plugin v0.2.3（全新服務自動建立 Codex／Claude／Pi
+                 家目錄，Codex 登入與模型清單可用；Pi 登入後清單不必重啟）。驗收：06 線真實 chart 0.5.10 斷網首次啟用（9 項、三個家目錄、模型清單）與 1127 到新映像的原地升級、斷網重啟、回滾全過；05 線沙盒 18 項 0 失敗；HA 0.2.11 候選（同一個 core）更新與全新安裝路徑全過。
+                 helm_default_values 其他鍵不變。回滾值：chart 0.5.10＋20261027.1127@sha256:5efa905d0d6f6faa12027f1f2595b468f208a37a143ca222e3d925c5269fe747（1127，正式站在跑）；
+                 再往前：chart 0.5.9＋20261027.0212@sha256:c58c8f2d39895421a1fbbbb13dc65e56dad0c225939799abf31b91313b11024f。 -->
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261029.0033@sha256:1a7d82cedbb3f49b6069eed106e8bb568dde7753643bc1ad18dacda621f960f0"}, "mcp": {"enabled": true}, "omnigentHost": {"enabled": false}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}, "paseo": {"enabled": true, "origin": ""}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API 金鑰", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},

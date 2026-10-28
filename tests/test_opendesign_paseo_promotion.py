@@ -103,7 +103,7 @@ def test_missing_digest_emits_no_patch_and_does_not_write_source():
 def test_real_seed_promotes_native_paseo_with_an_immutable_image_and_empty_origin():
     data = fields(CURRENT_SOURCE)
     values = json.loads(data['helm_default_values'])
-    assert data['helm_chart_version'] == '0.5.9'
+    assert data['helm_chart_version'] == '0.5.10'
     assert values['image']['repository'] == PROMOTION.IMAGE_REPOSITORY
     assert PROMOTION.IMAGE_TAG.fullmatch(values['image']['tag'])
     assert values['paseo'] == {'enabled': True, 'origin': ''}
@@ -157,7 +157,7 @@ def test_new_install_resolves_promoted_default_and_exact_public_origin():
     values = json.loads(json.dumps(merged))
     url = 'https://svc-new-install.tenant.example'
     assert inject(values, 'open-design', url) is values
-    assert target['version'] == '0.5.9'
+    assert target['version'] == '0.5.10'
     assert target['image_values']['image']['tag'] == TAG
     assert values['paseo'] == {'enabled': True, 'origin': url}
     assert values['config']['allowedOrigins'] == url
@@ -183,7 +183,7 @@ def test_pinned_instances_keep_chart_image_features_and_data(service_id):
     assert target['version'] == '0.5.8'
     assert changes == []
     assert refreshed == stored == before
-    assert data['helm_chart_version'] == '0.5.9'
+    assert data['helm_chart_version'] == '0.5.10'
 
 
 @pytest.mark.parametrize('paseo', [None, {}, {'enabled': False}, {'enabled': 'true'}])
@@ -195,7 +195,7 @@ def test_existing_default_following_service_does_not_auto_enable(paseo):
     target = resolve(data, defaults)
     refreshed, _ = NS['_refresh_image_refs'](stored, target['image_values'])
     inject(refreshed, 'open-design', 'https://legacy.tenant.example')
-    assert target['version'] == '0.5.9'
+    assert target['version'] == '0.5.10'
     assert refreshed['image']['tag'] == TAG
     assert refreshed.get('paseo') == stored.get('paseo')
     assert refreshed['persistence'] == stored['persistence']
@@ -216,7 +216,7 @@ def test_patch_updates_native_seed_contract_and_is_applyable(tmp_path):
     seed.parent.mkdir(parents=True)
     seed.write_text(SOURCE)
     native_test = (ROOT / PROMOTION.TEST).read_text()
-    promoted_assertion = ("self.assertEqual(tpl.helm_chart_version, '0.5.9')\n"
+    promoted_assertion = ("self.assertEqual(tpl.helm_chart_version, '0.5.10')\n"
                           "        self.assertEqual(self._values()['paseo'], {'enabled': True, 'origin': ''})\n"
                           "        self.assertEqual(json.loads(tpl.rollback_feature_switches)['paseo.enabled'], ['image'])")
     native_test = native_test.replace(promoted_assertion, "self.assertEqual(tpl.helm_chart_version, '0.5.7')")
@@ -225,7 +225,7 @@ def test_patch_updates_native_seed_contract_and_is_applyable(tmp_path):
     test_file.write_text(native_test)
     patch = PROMOTION.promotion_patch(tmp_path, TAG)
     assert patch.count('--- a/') == 2
-    assert "+        self.assertEqual(tpl.helm_chart_version, '0.5.9')" in patch
+    assert "+        self.assertEqual(tpl.helm_chart_version, '0.5.10')" in patch
     assert "['paseo.enabled']" in patch
     result = subprocess.run(['git', '-C', str(tmp_path), 'apply', '--check', '-'],
                             input=patch, capture_output=True, text=True)
