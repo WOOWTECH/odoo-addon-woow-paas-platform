@@ -364,7 +364,16 @@
                  （conf.logHandler 預設 werkzeug:WARNING＋nginx woow_noargs，X-SEC-002）、0.2.17 備份 Job 自我親和
                  （X-BK-006-3）。新鍵都有 chart 預設、tenant schema 沒有新的必填鍵，helm_default_values 不需改；
                  image 不變（換 chart 版本會改 checksum，web 重啟一次）。回滾值：0.2.7。 -->
-            <field name="helm_chart_version">0.2.17</field>
+            <!-- 0.2.23（2026-10-28，woow-paas-charts #304）：0.2.17 → 0.2.23 之間——0.2.18 opt-in 增量升級閘
+                 （upgradeGate.incremental 預設 false，租戶 render 多一個 WOOW_UPGRADE_INCREMENTAL=false）、
+                 0.2.19–0.2.21 platform profile 的 nginx 日誌／redirect 標頭（租戶不受影響）、0.2.22 web／cron
+                 分開的額外環境變數（webOnlyExtraEnv／cronOnlyExtraEnv，預設空）、0.2.23 租戶 nginx 補 HSTS
+                 （nginx.hsts，只在 X-Forwarded-Proto=https；Odoo 重測觀察 4，odoo-addons/woow_paas_platform#2056）。
+                 0.2.17 與 0.2.23 以相同輸入 render 租戶 chart、逐物件比對：物件集合相同，只有 nginx／scripts
+                 ConfigMap（HSTS、升級閘腳本）、Deployment 的 checksum 註解與那個新 env 不同；新鍵都有 chart
+                 預設、tenant schema 沒有新的必填鍵，helm_default_values 不需改；image 不變（換 chart 版本會改
+                 checksum，web 重啟一次）。回滾值：0.2.17。 -->
+            <field name="helm_chart_version">0.2.23</field>
             <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20261010.1604", "digest": "sha256:c0c849aac39773ba13dc81ed781da8d7622780a296c2d94affdafe164f5743dc"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "3Gi"}}, "persistence": {"size": "6Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 1, "dbMaxconn": 8}, "postgres": {"database": "odoo", "persistence": {"size": "4Gi"}}, "backup": {"persistence": {"size": "10Gi"}}}</field>
             <field name="helm_value_specs">{"required": [
                 {"key": "conf.adminEmail", "label": "管理員 Email", "type": "text",
