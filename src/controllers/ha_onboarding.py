@@ -57,7 +57,7 @@ def _live_binding_by_id(homes):
         if not home.tunnel_id or operator_down:
             continue
         try:
-            live = home.sudo()._live_tunnel_status()
+            live = home._live_tunnel_status()
         except Exception:
             _logger.exception("Live tunnel status failed for smart home id=%s", home.id)
             live = {}
