@@ -445,6 +445,46 @@ class TestPaaSOperatorClient(TransactionCase):
         mock_logger.error.assert_called_once()
 
     @patch('requests.Session.request')
+    def test_uninstall_release_not_found_raises_without_error_log(self, mock_request):
+        """刪除是冪等的：release 已不在（404）由呼叫端分類成「要的結果已成立」，不先記 ERROR。
+
+        租戶刪除先 uninstall、再 ``unlink()`` 的 ``_cleanup_helm`` 對同一個 release 再 uninstall 一次，
+        第二次必然 404；之前每刪一個服務就多一筆 ``PaaS Operator API error: DELETE … -> 404``。
+        """
+        from ..services import paas_operator as client_module
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.json.return_value = {'detail': 'Release svc-gone not found in namespace paas-ws-a1b2c3d4'}
+        mock_request.return_value = mock_response
+
+        with patch.object(client_module, '_logger') as mock_logger:
+            with self.assertRaises(self.PaaSOperatorAPIError) as context:
+                self.client.uninstall_release('paas-ws-a1b2c3d4', 'svc-gone')
+
+        # 仍帶 404 raise，呼叫端（controller／_do_cleanup／_cleanup_helm）各自依它分類。
+        self.assertEqual(context.exception.status_code, 404)
+        mock_logger.error.assert_not_called()
+        mock_logger.debug.assert_called()
+
+    @patch('requests.Session.request')
+    def test_uninstall_release_server_error_still_logs_error(self, mock_request):
+        """只有「release 已不在」是安靜的；uninstall 真的失敗（500）仍要記 ERROR。"""
+        from ..services import paas_operator as client_module
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.json.return_value = {'detail': 'helm uninstall failed'}
+        mock_request.return_value = mock_response
+
+        with patch.object(client_module, '_logger') as mock_logger:
+            with self.assertRaises(self.PaaSOperatorAPIError) as context:
+                self.client.uninstall_release('paas-ws-a1b2c3d4', 'svc-broken')
+
+        self.assertEqual(context.exception.status_code, 500)
+        mock_logger.error.assert_called_once()
+
+    @patch('requests.Session.request')
     def test_connection_error_handling(self, mock_request):
         """Test connection error handling."""
         from requests.exceptions import ConnectionError

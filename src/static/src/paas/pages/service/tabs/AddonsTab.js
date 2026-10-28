@@ -81,6 +81,12 @@ export class AddonsTab extends Component {
     return null;
   }
 
+  openOdooApps() {
+    if (this.odooAppsUrl) {
+      window.open(this.odooAppsUrl, "_blank");
+    }
+  }
+
   startEditing() {
     this.state.selectedIds = [...this.currentAddonIds];
     this.state.editing = true;

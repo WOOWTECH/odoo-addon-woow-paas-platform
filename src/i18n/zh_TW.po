@@ -11258,6 +11258,7 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/addon-removal-dialog/AddonRemovalDialog.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
 msgid "Open Odoo Apps"
 msgstr "開啟 Odoo 應用程式"
 
@@ -13707,14 +13708,25 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
 msgid ""
-"Select the addons to install on this Odoo instance. Changes will trigger a "
-"service upgrade."
-msgstr "選擇要安裝在此 Odoo 實例的模組。變更後會觸發服務升級。"
+"Choose which addons to make available on this Odoo instance. Selecting an "
+"addon does not install it: after the service finishes redeploying, install "
+"it from Odoo Apps. Changes will trigger a service upgrade."
+msgstr ""
+"選擇要提供給此 Odoo 實例使用的模組。勾選只會讓模組出現在 Odoo 應用程式清單中、"
+"不會自動安裝：服務重新部署完成後，請到 Odoo 應用程式自行安裝。變更後會觸發服務升級。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ai_assistant_form_inherit_woow
 msgid "Select tools to disable..."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
+msgid ""
+"Selected addons are available in Odoo Apps. Install them there before using "
+"them."
+msgstr "已選擇的模組會出現在 Odoo 應用程式清單中，請到那裡安裝後才能使用。"
 
 #. module: woow_paas_platform
 #. odoo-python
