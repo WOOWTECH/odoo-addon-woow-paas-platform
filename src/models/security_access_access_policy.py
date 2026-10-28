@@ -1,6 +1,9 @@
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
+from ..services.access_state import (
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_record_ids, access_revoke_savepoint)
 # #536：sync-control 的逃生門必須是模組私有 sentinel，不是任何 JSON 表達得出
 # 的值——`call_kw` 把呼叫端 context 整包換進 env，只判 truthy 的 key 租戶自己
 # 就打得開。判定與開閘 helper 都住在 SA 那支（本子模型沒有自己的 sentinel）。
@@ -17,6 +20,7 @@ from .security_access import (
     _is_sync_control,
     _reject_derived_projection_writes,
     _reject_identity_anchor_writes,
+    _rule_replace,
     _strip_identity_anchors,
 )
 
@@ -1358,8 +1362,27 @@ class SecurityAccessAccessPolicy(models.Model):
             # #744：arc 的 create 側。必須在 `super().create()` 之前——INSERT
             # 一旦送出去，擋下來的就是 PG 的 CHECK（訊息不可讀且交易 abort）。
             self._assert_anchor_arc_vals(self._add_missing_default_values(vals))
-        with self.env.cr.savepoint():
-            policies = super().create(vals_list)
+        # The anchors the new policies attach to, fingerprinted before the rows
+        # exist: afterwards the edit can be told from a pure widening (a new Allow
+        # policy only adds principals; a block / bypass policy is not that).
+        pre_anchors = []
+        for field in _ANCHOR_FIELDS:
+            ids = access_record_ids(vals.get(field) for vals in vals_list)
+            if ids:
+                pre_anchors += list(self.env[
+                    self._fields[field].comodel_name].browse(ids).exists())
+        pre_auth = access_authorization_snapshot(pre_anchors)
+        reached = []
+        with access_revoke_savepoint(self.env, reached):
+            # Inline ``rule_ids`` are created by the comodel while the parent
+            # policy itself is still being assembled.  Let the parent own the
+            # one final full-state sync: a per-rule sync here would revoke the
+            # same app once per rule and restart an already accepted hold.  The
+            # private sentinel is not JSON-forgeable (#536); ``with_env``
+            # restores the caller's env on the created rows.
+            policies = super(
+                SecurityAccessAccessPolicy, _rule_replace(self)
+            ).create(vals_list).with_env(self.env)
             # Guarantee the ≥1-include invariant even when rule_ids was absent
             # from vals (an empty policy is invalid). Fires after the nested
             # rule_ids creates so the final state is what is validated.
@@ -1368,7 +1391,10 @@ class SecurityAccessAccessPolicy(models.Model):
             # this so the row re-home does NOT call the operator (CF converges
             # via the explicit re-sync those flows issue, not per-row here).
             if not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC):
-                for anchor in policies._access_sync_targets():
+                targets = policies._access_sync_targets()
+                reached.extend(access_mark_authorization_changes(
+                    self.env, targets, pre_auth))
+                for anchor in targets:
                     anchor._sync_access_to_operator()
         return policies
 
@@ -1407,6 +1433,14 @@ class SecurityAccessAccessPolicy(models.Model):
         # 錨點是不同 model，得自己用 (model, id) 去重），而且那邊沒有「誰失去了
         # 子列」這層語意（這邊有，見下面的排序）。
         anchor_write = any(k in vals for k in _ANCHOR_FIELDS)
+        # Rules, decision, precedence and anchor moves change who the app lets
+        # in (a name does not).  Fingerprint the semantics before the write: a
+        # persisted change revokes the sessions issued under the old ones.
+        semantic_changed = ('rule_ids' in vals or anchor_write or any(
+            key in vals and any(policy[key] != vals[key] for policy in self)
+            for key in ('decision', 'sequence')))
+        pre_auth = (access_authorization_snapshot(self._access_sync_targets())
+                    if semantic_changed else {})
         pre_anchor_state = {}
         if anchor_write:
             for pol in self:
@@ -1414,8 +1448,12 @@ class SecurityAccessAccessPolicy(models.Model):
                 pre_anchor_state[pol.id] = (
                     (anchor._name, anchor.id) if anchor else None,
                     pol.cf_policy_id)
-        with self.env.cr.savepoint():
-            result = super().write(vals)
+        reached = []
+        with access_revoke_savepoint(self.env, reached):
+            # Inline rule commands belong to this policy batch: a nested rule
+            # hook would sync (and revoke) before the sibling commands landed.
+            writer = _rule_replace(self) if 'rule_ids' in vals else self
+            result = super(SecurityAccessAccessPolicy, writer).write(vals)
             lost_anchors, moved_by_anchor, to_clear = (
                 self._anchor_move_plan(pre_anchor_state)
                 if anchor_write else ([], {}, self.browse()))
@@ -1461,6 +1499,9 @@ class SecurityAccessAccessPolicy(models.Model):
                     anchor.check_access('read')
             if anchor_write:
                 self._apply_anchor_move(moved_by_anchor, to_clear)
+            if semantic_changed:
+                reached.extend(access_mark_authorization_changes(
+                    self.env, targets, pre_auth))
             for anchor in targets:
                 anchor._sync_access_to_operator()
         return result

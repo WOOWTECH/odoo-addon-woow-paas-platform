@@ -1331,3 +1331,6 @@ from . import test_race01_fence_scope  # noqa: F401 - register Odoo tests
 
 # 2026-10-28：回復版本後 woow-odoo 租戶的平台記錄（模組勾選、conf Secret 密碼）與叢集一致。
 from . import test_odoo_rollback_sync_20261028  # noqa: F401 - register Odoo tests
+
+# 2026-10-28：授權語意變更（規則／decision／precedence／登入方式／期限）也撤銷既有 Access 工作階段（#1707 的觸發範圍）。
+from . import test_access_authorization_change_revoke  # noqa: F401 - register Odoo tests

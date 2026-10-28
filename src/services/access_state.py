@@ -1,4 +1,5 @@
 """Known remote publication failures preserve server-owned Access identities."""
+import contextlib
 from datetime import timedelta
 import logging
 import time
@@ -22,8 +23,17 @@ def access_configuration_ready(anchor):
 def access_mutation_result(anchors, data):
     pending = any(anchor.access_publish_pending for anchor in anchors)
     ready = all(access_configuration_ready(anchor) for anchor in anchors)
-    result = {'success': not pending, 'access_configuration_ready': ready, 'data': data}
-    if pending:
+    # The controller calls this only after its authorized mutation persisted:
+    # ``saved`` keeps "the change is stored" apart from "the change is live".
+    result = {'success': not pending, 'saved': True,
+              'access_configuration_ready': ready, 'data': data}
+    if pending and any(anchor.access_token_revoke_pending for anchor in anchors):
+        # Retrying cannot shorten a revocation hold: say what is going on.
+        result['error'] = _(
+            'Access settings were saved. Existing sessions are being revoked '
+            'and access resumes by itself once the revocation is confirmed. '
+            'Refresh to check the status.')
+    elif pending:
         result['error'] = _(
             'Access settings were saved, but the origin publication result is '
             'not confirmed. Retry this operation.')
@@ -232,6 +242,231 @@ def schedule_access_resync(env, at):
         _logger.warning('[ACCESS] could not schedule resync at %s: %s', at, error)
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Authorization-change revocation (trigger scope of #1707)
+#
+# Removing a policy is not the only way to take access away: editing an allow
+# list, a require/exclude rule, the login methods or the session duration also
+# leaves every already-issued Access token valid until it expires.  Every
+# persisted edit that changes the app's *effective authorization semantics*
+# therefore starts the same revocation generation as a policy removal (closed
+# origin, scoped token revocation, bounded hold, re-confirmed re-publication).
+#
+# The decision compares a fingerprint taken before and after the write.  The
+# fingerprint ignores everything that is cosmetic (policy names, remote ids,
+# order / case / spacing inside a selector) and keeps everything that is not
+# (decision, precedence, the include / require / exclude sets, login methods,
+# session duration, hostnames, whether the app is enforced at all).  An edit
+# that does not change it never revokes.
+#
+# An edit that only *widens* the authorization revokes nothing either: no
+# already-issued token can have lost access.  That is decided conservatively
+# (``access_authorization_widens_only``): a new Allow policy, more addresses in
+# an Allow policy's include group, one more login method, a longer session
+# duration.  Everything else -- including anything this function cannot prove --
+# revokes.  A typo in the switch below never turns the revocation off.
+# ---------------------------------------------------------------------------
+ACCESS_REVOKE_ON_CHANGE_PARAM = 'woow_paas_platform.access_revoke_on_authorization_change'
+# Anchor fields (all three anchor kinds) whose edit changes the app's authorization semantics.
+ACCESS_AUTHORIZATION_CONFIG_FIELDS = (
+    'is_protected', 'login_google', 'login_email_otp', 'session_duration')
+_ACCESS_REVOKE_ON_CHANGE_OFF = frozenset({'0', 'false', 'off', 'no'})
+
+
+def access_revoke_on_authorization_change(env):
+    """Break-glass switch for the edit triggers; policy *removal* ignores it.
+
+    Only an explicit ``0`` / ``false`` / ``off`` / ``no`` turns the edit
+    triggers off.  Unset, empty or any other text keeps them on.
+    """
+    raw = env['ir.config_parameter'].sudo().get_param(ACCESS_REVOKE_ON_CHANGE_PARAM)
+    return not (raw and str(raw).strip().lower() in _ACCESS_REVOKE_ON_CHANGE_OFF)
+
+
+def _normalized_access_rule(rule):
+    """Canonicalize selectors whose order/case/spacing does not change auth."""
+    rule_type = rule.get('rule_type') or ''
+    value = (rule.get('rule_value') or '').strip()
+    if rule_type == 'email_list':
+        value = tuple(sorted({item.strip().lower() for item in value.split(',')
+                              if item.strip()}))
+    elif rule_type == 'email_domain':
+        value = value.lstrip('@').lower()
+    elif rule_type == 'country':
+        value = tuple(sorted({item.strip().upper() for item in value.split(',')
+                              if item.strip()}))
+    elif rule_type == 'everyone':
+        value = ''
+    return rule_type, value
+
+
+def access_authorization_fingerprint(payload):
+    """Effective authorization semantics of one Access sync payload.
+
+    Policy identity and display names are cosmetic; decision and precedence
+    are not.  Rules inside one include / require / exclude group are a set.
+    The first element is whether the app is enforced at all.
+    """
+    policies = []
+    for policy in payload.get('policies') or []:
+        groups = tuple(
+            tuple(sorted({_normalized_access_rule(rule)
+                          for rule in (policy.get(group) or [])}))
+            for group in ('include', 'require', 'exclude'))
+        policies.append((policy.get('decision'), policy.get('precedence'), groups))
+    return (
+        payload.get('enabled') is True,
+        (payload.get('primary_hostname') or '').strip().lower(),
+        tuple(sorted({hostname.strip().lower() for hostname in
+                      (payload.get('protected_hostnames') or []) if hostname})),
+        payload.get('session_duration') or '24h',
+        tuple(sorted(set(payload.get('login_idp_types') or []))),
+        tuple(sorted(set(policies), key=repr)),
+    )
+
+
+#: Seconds of every selectable session duration; an unknown value is never "longer".
+_ACCESS_SESSION_SECONDS = {
+    '30m': 1800, '1h': 3600, '8h': 28800, '24h': 86400, '168h': 604800}
+
+
+def _rule_atoms(rules):
+    """One group of normalized rules as a set of single selectors.
+
+    An e-mail / country list is split into its members, so "one more address in
+    the same rule" is a superset like "one more rule" is.
+    """
+    atoms = set()
+    for rule_type, value in rules:
+        if rule_type in ('email_list', 'country'):
+            atoms.update((rule_type, item) for item in value)
+        else:
+            atoms.add((rule_type, value))
+    return frozenset(atoms)
+
+
+def _policy_covers(after, before):
+    """True when ``after`` grants everything ``before`` granted.
+
+    Same decision, precedence, require and exclude groups; the include group of
+    an Allow policy may only have grown (its entries are alternatives).  A policy
+    of any other decision has to be identical.
+    """
+    decision, precedence, (include, require, exclude) = before
+    a_decision, a_precedence, (a_include, a_require, a_exclude) = after
+    if (decision, precedence) != (a_decision, a_precedence):
+        return False
+    if (_rule_atoms(require) != _rule_atoms(a_require) or
+            _rule_atoms(exclude) != _rule_atoms(a_exclude)):
+        return False
+    if decision == 'allow':
+        return _rule_atoms(include) <= _rule_atoms(a_include)
+    return _rule_atoms(include) == _rule_atoms(a_include)
+
+
+def access_authorization_widens_only(before, after):
+    """True only when no token valid under ``before`` can be refused under ``after``.
+
+    Both arguments are ``access_authorization_fingerprint`` results.  The test is
+    deliberately one-sided: it proves a pure widening and answers False for
+    everything else, including what it cannot decide (an unknown session
+    duration, a login-method list that was empty, a policy it cannot pair).  It
+    does not depend on how the provider orders its policies: a new Allow policy,
+    or a larger include group in an Allow policy, can only add principals.
+    """
+    if before == after:
+        return True
+    b_enabled, b_host, b_hosts, b_duration, b_idps, b_policies = before
+    a_enabled, a_host, a_hosts, a_duration, a_idps, a_policies = after
+    if not (b_enabled and a_enabled) or (b_host, b_hosts) != (a_host, a_hosts):
+        return False
+    if b_duration != a_duration:
+        old = _ACCESS_SESSION_SECONDS.get(b_duration)
+        new = _ACCESS_SESSION_SECONDS.get(a_duration)
+        if old is None or new is None or new < old:
+            return False
+    if b_idps != a_idps and (not b_idps or not set(b_idps) <= set(a_idps)):
+        # An empty list means "every provider": it must never be mistaken for the
+        # smallest set, and a method may only be added.
+        return False
+    unmatched = list(a_policies)
+    for policy in b_policies:
+        match = next((other for other in unmatched
+                      if _policy_covers(other, policy)), None)
+        if match is None:
+            return False
+        unmatched.remove(match)
+    return all(policy[0] == 'allow' for policy in unmatched)
+
+
+def access_record_ids(values):
+    """The real record ids among ``values``.
+
+    ``create`` / ``copy`` vals carry ``False`` for an empty Many2one, and in
+    Python ``False`` is an ``int``: ``browse([False])`` is an SQL error.
+    """
+    return [value for value in values
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0]
+
+
+def access_authorization_snapshot(anchors):
+    """``{(model, id): fingerprint}`` for the anchors that have an Access app.
+
+    An anchor without an app has no issued token to revoke, so it needs no
+    "before" and the payload builder is not run for it.
+    """
+    return {(anchor._name, anchor.id): anchor._access_authorization_fingerprint()
+            for anchor in anchors if anchor.exists() and anchor.access_app_id}
+
+
+@contextlib.contextmanager
+def access_revoke_savepoint(env, reached):
+    """``env.cr.savepoint()`` that keeps the edge from staying closed on failure.
+
+    A revoke-driven sync parks the origin *before* its provider call and a parked
+    edge cannot be rolled back with the transaction.  When the block fails (the
+    edit rolls back, the revocation mark with it) every anchor in ``reached``
+    gets a durable closure marker instead, so the resync cron re-confirms Access
+    and re-opens it.  Callers append an anchor right after marking it.  The
+    marker is written after the savepoint has rolled back; callers that catch
+    the error (the controllers do) commit it.
+    """
+    try:
+        with env.cr.savepoint():
+            yield
+    except Exception:
+        for anchor in reached:
+            if anchor.exists():
+                anchor._access_keep_parked_marker()
+        raise
+
+
+def access_mark_authorization_changes(env, anchors, before):
+    """Start a revocation generation on every anchor whose authorization narrowed.
+
+    ``before`` is the snapshot taken before the write; an anchor missing from it
+    counts as changed.  An edit that did not change the semantics, or only
+    widened them (``access_authorization_widens_only``), revokes nothing.  An
+    anchor that is not enforced afterwards, or has no Access app yet, has nothing
+    to revoke.  Returns the marked anchors.
+    """
+    if not access_revoke_on_authorization_change(env):
+        return []
+    marked = []
+    for anchor in anchors:
+        if not anchor.exists() or not anchor.access_app_id:
+            continue
+        after = anchor._access_authorization_fingerprint()
+        if not after[0]:
+            continue
+        previous = before.get((anchor._name, anchor.id))
+        if previous is not None and access_authorization_widens_only(previous, after):
+            continue
+        anchor._mark_access_token_revoke_pending()
+        marked.append(anchor)
+    return marked
 
 
 # ---------------------------------------------------------------------------

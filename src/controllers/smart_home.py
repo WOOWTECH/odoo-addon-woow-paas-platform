@@ -6,7 +6,9 @@ only the private context-cleaned capability, never a replacement request.env.
 """
 from __future__ import annotations
 
-from ..services.access_state import access_mutation_result
+from ..services.access_state import (
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_mutation_result)
 import logging
 from typing import Any
 
@@ -829,15 +831,24 @@ class SmartHomeController(Controller):
         reordered = []
         touched_routes = smarthome.env[_ROUTE_MODEL]
         try:
-            seq = 0
+            pinned = []
             for pid in policy_ids:
                 pol = self._sh_policy(smarthome, pid)
                 if not pol:
                     continue
+                pinned.append(pol)
+                touched_routes |= pol.smart_home_route_id
+            # Precedence is authorization: the writes below are sync-suppressed,
+            # so the revocation decision is made here, from the order before and
+            # after (a no-op reorder revokes nothing).
+            pre_auth = access_authorization_snapshot(touched_routes)
+            seq = 0
+            for pol in pinned:
                 seq += 10
                 _skip_route_sync(pol).write({"sequence": seq})
                 reordered.append(pol.id)
-                touched_routes |= pol.smart_home_route_id
+            access_mark_authorization_changes(
+                smarthome.env, touched_routes, pre_auth)
             for sh_route in touched_routes:
                 sh_route._sync_access_to_operator()
             return access_mutation_result(touched_routes, {"reordered": reordered})
