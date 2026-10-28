@@ -37,8 +37,24 @@ class Account:
             base = '/access/' + name
             if path.endswith(base):
                 if method == 'GET':
-                    return self.ok(list(rows.values()))
+                    listed = list(rows.values())
+                    if name == 'apps':
+                        query = request.url.params
+                        for key in ('name', 'domain'):
+                            if query.get(key):
+                                listed = [row for row in listed
+                                          if row.get(key) == query[key]]
+                    return self.ok(listed)
                 if method == 'POST':
+                    if name == 'apps' and any(
+                            row.get('domain') == (body or {}).get('domain')
+                            for row in rows.values()):
+                        # Measured on the live account: one Access app per domain,
+                        # also for simultaneous creates (one 201, the rest this).
+                        return httpx.Response(409, json={
+                            'success': False,
+                            'errors': [{'code': 11010,
+                                        'message': 'access.api.error.application_already_exists'}]})
                     if name == 'apps':
                         self.next_app += 1
                         item_id = 'native-app-%d' % self.next_app

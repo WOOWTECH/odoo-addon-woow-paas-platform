@@ -10,7 +10,7 @@ from ..models.cloud_service import _internal_provision,_cs_skip_access_sync,_int
 from ..models.smart_home import _internal_identity as _sh_identity
 from ..models.smart_home_route import _sm_skip_access_sync,_internal_sm_route_identity
 from ..services.naming import make_service_subdomain,make_namespace
-from ..services.paas_operator import PaaSOperatorError
+from ..services.paas_operator import PaaSOperatorAPIError,PaaSOperatorError
 from .smart_home_fixture import sh_model
 from .ns_quota_fixture import zero_managed_quota
 
@@ -23,6 +23,9 @@ class FakeOperator:
     def __init__(self):
         self.events=[];self.origin=False;self.app=False;self.history=[]
         self.fail_access=False;self.fail_park=False;self.fail_uninstall=False;self.malformed=False;self.access_status=None;self.park_status='parked';self.fail_unpark=False;self.fail_publish=False
+        # Opt-in provider model (default off): one Access app per domain, a repeated
+        # create is refused with 409, as measured on the live account.
+        self.unique_domains=False;self.domains={};self.die_after_landing=False;self.die_before_provider=False;self.next_app_no=0
     def _publish(self,target,event):
         self.origin=not target.startswith('http_status:')
         self.events.append((event,target));self.history.append((self.origin,self.app))
@@ -30,8 +33,24 @@ class FakeOperator:
         self.events.append(('access',deepcopy(payload)))
         if self.fail_access and payload['enabled']:
             raise PaaSOperatorError('Selected Access login method unavailable',status_code=409)
+        if self.die_before_provider and payload['enabled'] and not payload.get('existing_app_id'):
+            self.die_before_provider=False
+            raise RuntimeError('simulated worker death before the provider was reached')
         self.app=bool(payload['enabled'])
-        result = {'app_id':'fake-native-app' if self.app and not self.malformed else None,
+        app_id='fake-native-app'
+        if self.unique_domains and payload['enabled']:
+            domain=payload['primary_hostname'];existing=payload.get('existing_app_id')
+            if not existing and domain in self.domains:
+                raise PaaSOperatorAPIError('application_already_exists',status_code=409)
+            if existing and existing!=self.domains.get(domain,{}).get('app_id'):
+                raise PaaSOperatorAPIError('application not found',status_code=404)
+            if not existing:
+                self.next_app_no+=1
+                self.domains[domain]={'app_id':'fake-uniq-app-%d'%self.next_app_no,'name':payload['app_name']}
+            app_id=self.domains[domain]['app_id']
+        elif self.unique_domains and not payload['enabled']:
+            self.domains={d:r for d,r in self.domains.items() if d!=payload.get('primary_hostname')}
+        result = {'app_id':app_id if self.app and not self.malformed else None,
                 'policy_ids':(['fake-policy-%s' % index for index, _policy
                                in enumerate(payload.get('policies', []), 1)]
                               if self.app else []),
@@ -41,7 +60,15 @@ class FakeOperator:
                 'orphaned_policy_ids':[], 'unresolved_idp_types':[]}
         if self.access_status:
             result['status'] = self.access_status
+        if self.die_after_landing and self.unique_domains and payload['enabled'] and not payload.get('existing_app_id'):
+            self.die_after_landing=False
+            raise RuntimeError('simulated worker death after the provider applied the create')
         return result
+    def review_access_app(self,app_name,primary_hostname):
+        row=self.domains.get(primary_hostname)
+        if row and row['name']==app_name:
+            return {'status':'unique','app_id':row['app_id'],'match_count':1}
+        return {'status':'absent','app_id':None,'match_count':0}
     def park_release_route(self,*args):
         self.events.append(('park-release',None))
         if self.fail_park:raise PaaSOperatorError('fake park failed',status_code=503)

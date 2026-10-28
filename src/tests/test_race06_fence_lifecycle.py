@@ -28,14 +28,13 @@ class TestFenceRejectionClassification(TransactionCase):
 
     def test_definitive_statuses(self):
         Fence = self.env[MODEL]
-        for status in (400, 401, 403, 404, 405, 415, 422, 429):
+        for status in (400, 401, 403, 404, 405, 409, 415, 422, 429):
             self.assertTrue(Fence._is_definitive_rejection(
                 PaaSOperatorAPIError('refused', status_code=status)), status)
 
     def test_uncertain_outcomes_stay_fenced(self):
         Fence = self.env[MODEL]
         for error in (
-                PaaSOperatorAPIError('exists?', status_code=409),
                 PaaSOperatorAPIError('bad gateway', status_code=502),
                 PaaSOperatorAPIError('timeout upstream', status_code=504),
                 PaaSOperatorAPIError('crashed', status_code=500),
@@ -108,14 +107,15 @@ class TestFenceLifecycle(Fixture, TransactionCase):
         self.assertTrue(self.route.access_app_id)
         self.assertEqual(self.fence()['attempt'], 2)
 
-    def test_uncertain_create_stays_fenced_and_is_not_posted_again(self):
+    def test_uncertain_create_is_not_repeated_inside_the_settle_window(self):
         self.refuse(502)
         with self.assertRaises(PaaSOperatorAPIError):
             self.route._sync_access_to_operator()
         fence = self.fence()
         self.assertEqual(fence['state'], 'dispatching')
         self.assertTrue(fence['effect_started_at'])
-        # Back to normal, but the earlier outcome is unknown: no second create.
+        # Back to normal, but the earlier outcome may still be finishing at the
+        # provider: inside the settle window nothing is repeated.
         self.client.sync_access_app = self.sync_access_app
         self.client.events.clear()
         with self.assertLogs(ROUTE_LOG, level='ERROR') as logs:
@@ -149,3 +149,35 @@ class TestFenceLifecycle(Fixture, TransactionCase):
         fence = self.fence()
         self.assertEqual(fence['attempt'], 2)
         self.assertEqual(fence['provider_app_id'], self.route.access_app_id)
+
+    def age_fence(self, seconds):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'UPDATE woow_paas_platform_access_dispatch_fence '
+                'SET effect_started_at = effect_started_at - make_interval(secs => %s) '
+                'WHERE anchor_model=%s AND anchor_id=%s',
+                (seconds, ROUTE_MODEL, self.route.id))
+            cr.commit()
+
+    def test_uncertain_create_is_repeated_once_it_has_settled(self):
+        self.refuse(502)
+        with self.assertRaises(PaaSOperatorAPIError):
+            self.route._sync_access_to_operator()
+        self.assertEqual(self.fence()['state'], 'dispatching')
+        self.client.sync_access_app = self.sync_access_app
+        self.age_fence(3600)
+        self.assertTrue(self.route._sync_access_to_operator())
+        self.route.invalidate_recordset()
+        self.assertTrue(self.route.access_app_id)
+        self.assertEqual(self.fence()['attempt'], 2)
+
+    def test_a_domain_held_by_a_foreign_app_is_refused_and_reopens_the_fence(self):
+        """409 with no exact match of ours: not adoptable, and no app of ours exists."""
+        self.client.unique_domains = True
+        host = '%s.example.test' % self.sh.subdomain
+        self.client.domains[host] = {'app_id': 'foreign-app', 'name': 'someone-elses-app'}
+        with self.assertRaises(PaaSOperatorAPIError) as raised:
+            self.route._sync_access_to_operator()
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(self.fence()['state'], 'prepared')   # reopened, not stuck
+        self.assertEqual(self.client.domains[host]['app_id'], 'foreign-app')

@@ -37,7 +37,7 @@ ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會�
 所以這裡 primary route 是**不可刪、不可改綁**的。看到「SA 沒有 primary 為什麼 SH
 有」時，答案在上一段，不是漏改。
 """
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync, sync_access_app_create_or_adopt
 from datetime import timedelta
 import logging
 
@@ -838,8 +838,9 @@ class SmartHomeRoute(models.Model):
                     # the normal PUT path; never turn uncertainty into a POST.
                     if not fence_claim.get('provider_app_id'):
                         _logger.error(
-                            '[SH] Access create fenced after effect start; '
-                            'provider review required route=%s app=%s hostname=%s',
+                            '[SH] Access create outcome unknown; it is repeated '
+                            'automatically once the settle window has passed '
+                            '(or review it now) route=%s app=%s hostname=%s',
                             self.id, payload.get('app_name'),
                             payload.get('primary_hostname'))
                         return False
@@ -849,11 +850,12 @@ class SmartHomeRoute(models.Model):
                 else:
                     Fence._mark_effect_started(fence_claim)
                     try:
-                        result = client.sync_access_app(payload)
+                        result, payload = sync_access_app_create_or_adopt(
+                            client, payload)
                     except Exception as error:
-                        # A definitive refusal proves no app exists, so the
-                        # automatic-retry window reopens; anything uncertain
-                        # (timeout, 5xx, 409) keeps the marker.
+                        # A definitive refusal proves no app of ours exists, so
+                        # the automatic-retry window reopens; anything uncertain
+                        # (timeout, 5xx) keeps the marker until it settles.
                         if Fence._is_definitive_rejection(error):
                             Fence._clear_effect_started(fence_claim)
                         raise

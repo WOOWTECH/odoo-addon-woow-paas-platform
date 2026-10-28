@@ -1,4 +1,4 @@
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, require_tunnel_routes_receipt, schedule_access_resync
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, require_tunnel_routes_receipt, schedule_access_resync, sync_access_app_create_or_adopt
 from datetime import timedelta
 import json
 import logging
@@ -3336,7 +3336,7 @@ class SecurityAccessRoute(models.Model):
         needs_release = recovering_pending or (self.is_protected and (not self.access_app_id or self.access_protection_lost))
         client = sa._get_operator_client()
         payload = self._build_access_payload()
-        result = client.sync_access_app(payload)
+        result, payload = sync_access_app_create_or_adopt(client, payload)
         require_access_sync_receipt(result, payload)
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(

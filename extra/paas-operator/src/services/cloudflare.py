@@ -1926,9 +1926,13 @@ class CloudflareService:
     ) -> dict:
         """Read back one exact Access app without remote mutation.
 
-        Cloudflare documents exact name/domain filters but no idempotency key
-        for Access app POST. An empty read is therefore never retry authority.
-        Only one byte-for-byte match is returned as safely adoptable.
+        Cloudflare has no client idempotency key for the Access app POST, but it
+        keeps exactly one app per domain: a repeated create is refused with 409 /
+        error 11010 (measured live, also for simultaneous creates).  A caller whose
+        create outcome is unknown can therefore simply repeat it and, on a 409,
+        adopt the app this lookup returns.  An empty read is still never proof that
+        the earlier create did not land (list endpoints may lag).  Only one
+        byte-for-byte name+domain match is returned as safely adoptable.
         """
         matches = []
         page = 1

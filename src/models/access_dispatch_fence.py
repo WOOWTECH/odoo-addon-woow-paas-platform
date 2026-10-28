@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from odoo import _, api, fields, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
 
+from ..services.access_state import access_create_settle_seconds
 from ..services.paas_operator import (
     PaaSOperatorConnectionError,
     PaaSOperatorError,
@@ -24,10 +25,11 @@ _MODEL = 'woow_paas_platform.access_dispatch_fence'
 _ROUTE_MODEL = 'woow_paas_platform.smart_home_route'
 _RETRY_CONFIRMATION = 'I VERIFIED THE PROVIDER HAS NO APP FOR THIS IDENTITY'
 
-#: HTTP statuses that prove the provider refused the create before any app
-#: existed (validation, auth, not found, rate limit).  409 means "already
-#: exists" and every 5xx / transport failure is uncertain, so they are not here.
-_DEFINITIVE_REJECTION_STATUS = frozenset({400, 401, 403, 404, 405, 415, 422, 429})
+#: HTTP statuses that prove the provider refused this create (validation, auth,
+#: not found, rate limit, and 409: the domain is held and the create path already
+#: tried to adopt a matching app of ours before giving up).  Every 5xx and
+#: transport failure is uncertain, so they are not here.
+_DEFINITIVE_REJECTION_STATUS = frozenset({400, 401, 403, 404, 405, 409, 415, 422, 429})
 
 #: An administrator may authorize ONE more create for an uncertain send only
 #: after the provider had this long to make the app visible; absence from the
@@ -174,7 +176,9 @@ class AccessDispatchFence(models.Model):
             try:
                 cr.execute(
                     'SELECT id, state, provider_app_id, attempt, '
-                    'effect_started_at, effect_boundary_version FROM '
+                    'effect_started_at, effect_boundary_version, '
+                    "COALESCE(EXTRACT(EPOCH FROM (now() at time zone 'UTC' "
+                    '- effect_started_at)), 0) FROM '
                     'woow_paas_platform_access_dispatch_fence '
                     'WHERE anchor_model=%s AND anchor_id=%s AND app_name=%s '
                     'AND primary_hostname=%s FOR UPDATE',
@@ -185,10 +189,15 @@ class AccessDispatchFence(models.Model):
                     raise UserError(_(
                         'Access create was refused because its durable fence is missing.'))
                 (fence_id, state, provider_app_id, attempt,
-                 effect_started_at, boundary_version) = row
+                 effect_started_at, boundary_version, started_age) = row
+                # An unknown outcome is repeated once it has settled: the provider
+                # keeps one Access app per domain, so a repeated create either
+                # creates it or is told it exists (and adopts the exact match).
+                # Before the marker nothing was sent, which is recoverable at once.
                 recoverable = (
                     state == 'dispatching' and boundary_version == 1
-                    and not effect_started_at)
+                    and (not effect_started_at
+                         or started_age >= access_create_settle_seconds(self.env)))
                 first_send = (
                     state in ('prepared', 'retry_authorized')
                     and boundary_version == 1 and not effect_started_at)

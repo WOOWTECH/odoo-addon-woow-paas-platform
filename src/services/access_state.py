@@ -1,6 +1,7 @@
 """Known remote publication failures preserve server-owned Access identities."""
 from datetime import timedelta
 import logging
+import time
 
 from odoo import _
 from odoo.exceptions import UserError
@@ -231,3 +232,82 @@ def schedule_access_resync(env, at):
         _logger.warning('[ACCESS] could not schedule resync at %s: %s', at, error)
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Create-or-adopt (RACE-06)
+#
+# Cloudflare keeps exactly ONE Access application per domain: a second POST for
+# the same domain is refused with HTTP 409 / error 11010
+# ``access.api.error.application_already_exists`` -- measured on the live account,
+# including 8 simultaneous POSTs (one 201, seven 409), and the domain (not the
+# name) is the key.  That is the idempotency primitive the create path needs, so a
+# create whose outcome is unknown (worker killed around the provider call) can
+# simply be repeated: either it creates the app, or the provider says it already
+# exists and we adopt the one that matches our exact name and domain.
+# ---------------------------------------------------------------------------
+ACCESS_CREATE_SETTLE_PARAM = 'woow_paas_platform.access_create_settle_seconds'
+ACCESS_CREATE_SETTLE_DEFAULT = 600
+ACCESS_CREATE_SETTLE_MIN = 30
+ACCESS_CREATE_SETTLE_MAX = 86400
+_ADOPT_REVIEW_ATTEMPTS = 3
+_ADOPT_REVIEW_PAUSE_SECONDS = 2
+
+
+def access_create_settle_seconds(env):
+    """How long an unknown create outcome is left alone before it is repeated.
+
+    The Operator finishes (or gives up) an in-flight create within its own request
+    timeouts even when the Odoo worker that asked is dead, so waiting this long
+    only avoids racing that tail; correctness never depends on it because a
+    duplicate create is refused by the provider.  Unset or unparsable means the
+    default; the value is clamped.
+    """
+    raw = env['ir.config_parameter'].sudo().get_param(ACCESS_CREATE_SETTLE_PARAM)
+    if not raw:
+        return ACCESS_CREATE_SETTLE_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return ACCESS_CREATE_SETTLE_DEFAULT
+    return max(ACCESS_CREATE_SETTLE_MIN, min(ACCESS_CREATE_SETTLE_MAX, value))
+
+
+def _adoptable_review(review):
+    return (type(review) is dict and review.get('status') == 'unique' and
+            review.get('match_count') == 1 and
+            type(review.get('app_id')) is str and bool(review['app_id'].strip()))
+
+
+def sync_access_app_create_or_adopt(client, payload):
+    """``client.sync_access_app(payload)``, adopting the existing app on a conflict.
+
+    Returns ``(result, payload_used)``.  Only a *create* (enabled, no
+    ``existing_app_id``) that the provider refused with 409 is adopted, and only
+    when a read-only exact name+domain lookup finds exactly one app: a foreign app
+    holding the domain, or several matches, is not ours to take over and the
+    original error is raised.
+    """
+    from .paas_operator import PaaSOperatorAPIError  # lazy: avoid an import cycle
+    try:
+        return client.sync_access_app(payload), payload
+    except PaaSOperatorAPIError as error:
+        if not (payload.get('enabled') is True and not payload.get('existing_app_id')
+                and error.status_code == 409):
+            raise
+        review = None
+        for attempt in range(_ADOPT_REVIEW_ATTEMPTS):
+            review = client.review_access_app(
+                payload.get('app_name'), payload.get('primary_hostname'))
+            if _adoptable_review(review):
+                break
+            if attempt + 1 < _ADOPT_REVIEW_ATTEMPTS:
+                time.sleep(_ADOPT_REVIEW_PAUSE_SECONDS)  # read-after-write lag
+        else:
+            raise error
+        _logger.warning(
+            '[ACCESS] create for %s conflicted with an existing app that matches '
+            'our exact name and domain; adopting it instead of creating',
+            payload.get('primary_hostname'))
+        adopted = dict(payload, existing_app_id=review['app_id'])
+        return client.sync_access_app(adopted), adopted

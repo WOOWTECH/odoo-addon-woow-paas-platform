@@ -126,17 +126,35 @@ again once.
   live connector, a fence awaiting review) now counts against the leg's budget
   (`pending=` in the run log); only the liveness gate means "no call was made".
 
-## RACE-06: the fence must not turn one failure into an outage
+## RACE-06: unknown create outcomes converge on their own
 
-- A `resolved` fence starts a new cycle when the route needs a new app (callers
-  only create when no app id is stored). If the old app still existed the provider
-  refuses the duplicate domain (409), which stays uncertain and goes to review.
-- A provider refusal that proves no app exists (HTTP 400, 401, 403, 404, 405, 415,
-  422, 429 from the Operator) clears the effect-start marker; timeouts, transport
-  failures, 5xx and 409 keep it (adopt-only, reviewed).
-- An administrator may authorize exactly one more create for an uncertain send
-  with the exact confirmation text, but only after a settle window of 15 minutes
-  from the send; the authorization clears the marker.
+Cloudflare has no idempotency key for the Access app POST, which is why an unknown
+outcome (worker killed around the provider call) used to leave a route fenced until an
+administrator reviewed it.  It does keep **exactly one Access app per domain**
+(measured on the live account: a repeated POST is refused with HTTP 409 / error 11010
+`access.api.error.application_already_exists`; 8 simultaneous POSTs gave one 201 and
+seven 409; a second app with a different name on the same domain is refused too, the
+same name on another domain is allowed).  That uniqueness is the missing primitive:
+
+- **Create-or-adopt** (Security Access, Smart Home and Cloud Service alike): a create
+  that the provider refuses with 409 triggers a read-only lookup of the app that
+  matches our exact name **and** domain; exactly one match is adopted and updated in
+  place, anything else (a foreign app holding the domain, several matches) raises the
+  original error. Updates and teardowns are never adopted.
+- **Smart Home fence**: an unknown outcome (effect-start marker set, result lost) is
+  left alone for a settle window (`woow_paas_platform.access_create_settle_seconds`,
+  default 600 s, clamped 30-86400, so the Operator's tail of an in-flight call can
+  finish), then repeated automatically; the repeat creates the app or is told it
+  exists and adopts it.  Before the marker nothing was sent, which is recoverable at
+  once. The administrator actions remain available.
+- A provider refusal that proves no app of ours exists (HTTP 400, 401, 403, 404, 405,
+  409 after a failed adoption, 415, 422, 429) clears the marker; timeouts, transport
+  failures and 5xx keep it until the window passes.
+- A `resolved` identity starts a new cycle when the route needs a new app.
+
+Not claimed: the reusable policies of an attempt whose app landed but whose id was lost
+stay behind as unattached reusable policies (no authorization effect; the reaper's
+naming makes them findable). Only the effective authorization is single.
 
 ## Deployment order
 
@@ -163,8 +181,11 @@ hold, provider failure at removal keeps the closure and re-opens through the cro
 cron scan shape, recovery of plain pending through the cron on every leg), `test_fault02_durable_invalidation` (per-instance
 epoch rules including two alternating replicas, old Operator, workspace admin
 without the system group, mark-only probe, rotation, cron wiring),
-`test_race06_fence_lifecycle` (refused create is retryable, uncertain create stays
-fenced, re-create after teardown) and the Operator health contract tests.
+`test_race06_fence_lifecycle` (refused create is retryable, uncertain create waits for
+the settle window then converges, foreign domain refused, re-create after teardown),
+`test_race06_create_or_adopt` (the adopt helper; crash after the provider applied the
+create and crash before reaching it, retried, for Security Access, Cloud Service and
+Smart Home: always one app) and the Operator health contract tests.
 
 ## Still to prove on the released chain
 
@@ -172,4 +193,4 @@ REV-01: normal-product policy removal with the same original cookie, timed
 observations, durable pending, blocked origin, terminal denial, re-publication.
 FAULT-02: connector outage, Operator container restart, Pod rescheduling, each
 with fail-closed behaviour and recovery that re-confirms Access. RACE-06: the
-all-crash oracle against the real provider.
+all-crash oracle on the released chain.

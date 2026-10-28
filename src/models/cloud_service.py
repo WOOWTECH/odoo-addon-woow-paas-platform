@@ -1,4 +1,4 @@
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync, sync_access_app_create_or_adopt
 import psycopg2.errors
 import contextlib
 import copy
@@ -10435,7 +10435,7 @@ class CloudService(models.Model):
                                   self.access_token_revoke_pending):
             parked_for_access = self._park_access_origin(client)
         payload = self._build_access_payload()
-        result = client.sync_access_app(payload)
+        result, payload = sync_access_app_create_or_adopt(client, payload)
         require_access_sync_receipt(result, payload)
         if self.is_protected and not result.get('app_id'):
             raise AccessProtectionError(_(
