@@ -395,7 +395,7 @@
 6	test_ha_full_seed_661.TestHaFullPlansSeed
 3	test_ha_full_seed_661.TestHaFullQuotaLockstep
 15	test_ha_full_seed_661.TestHaFullSeed661
-21	test_ha_onboarding.TestHAOnboarding
+24	test_ha_onboarding.TestHAOnboarding
 16	test_ha_paas_provision.TestHAPaaSProvisionEndpoint
 3	test_ha_paas_provision.TestProvisionUniqueIndex
 10	test_ha_paas_seed_woowtech_image.TestHAPaaSWoowtechImageSeed
@@ -1216,6 +1216,7 @@
 1	test_trial_flag_stale_1010.TestTrialFlagStaleBillingPayload1010
 4	test_trial_reset_guard_367.TestTrialResetGuard367
 6	test_tunnel_binding_1766.TestConnectorCounting
+2	test_tunnel_binding_1766.TestReleaseBindingResponse
 15	test_tunnel_binding_1766.TestTunnelBindingModel
 10	test_tunnel_binding_1766.TestTunnelTokenEndpointBinding
 4	test_tunnel_config_wire_769.TestConfigureTunnelWireShape
