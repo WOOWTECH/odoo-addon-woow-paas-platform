@@ -197,6 +197,29 @@ the settle window then converges, foreign domain refused, re-create after teardo
 create and crash before reaching it, retried, for Security Access, Cloud Service and
 Smart Home: always one app) and the Operator health contract tests.
 
+## Candidate-chain observations (pre-release, not acceptance evidence)
+
+Measured on an isolated sandbox that ran the released `.273` Odoo and Operator images
+with this branch's source overlaid, against the real provider, one browser cookie, UTC:
+
+- REV-01: the policy removal parked the origin (`503`, 4-14 s), then every request with the
+  same cookie was redirected to the Access login for the rest of the observation: through
+  the hold, through the re-publication, and at least 30 s after it. The markers were
+  cleared only after the re-publication.
+- FAULT-02, one sequence: connector down -> probe tick -> all routes of the SA parked at
+  the edge (about 12 s after the tick) -> Operator Deployment scaled to 0 -> resync with no
+  Operator (stays parked) -> connector back (still parked: the Operator is needed to
+  confirm Access) -> Operator back as a new Pod (new UID, still parked until something
+  wakes the cron) -> next probe tick -> per route: Access sync, then re-publication; all
+  five routes open 50 s after the tick, markers cleared after 63 s.
+- A short blip (connector moved to another node) was not parked at all; an Operator
+  container restart (same Pod, new epoch) was parked for about 4 s.
+
+Consequences worth knowing: a quarantine that coincides with an Operator outage waits for
+the next probe tick after the Operator is back (up to one probe interval plus about a
+minute), because the resync that ran meanwhile could not reach the Operator; an Operator
+Pod that is replaced while nothing is parked is learned, not treated as a restart.
+
 ## Still to prove on the released chain
 
 REV-01: normal-product policy removal with the same original cookie, timed
