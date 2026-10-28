@@ -8,6 +8,8 @@ from src.models.schemas import (
     AppAdminPasswordResetResponse,
     N8nInitRequest,
     N8nInitResponse,
+    OdooAdminSecretSyncRequest,
+    OdooAdminSecretSyncResponse,
     OdooInitResponse,
 )
 from src.services.app_admin_password import (
@@ -197,6 +199,7 @@ def _app_admin_reset(app: str, namespace: str, release_name: str,
         success=True,
         login=result.get("login"),
         second_factor_cleared=bool(result.get("second_factor_cleared")),
+        secret_sync=result.get("secret_sync"),
         message=f"{app} admin password reset",
     )
 
@@ -212,6 +215,27 @@ def reset_odoo_admin_password(namespace: str, release_name: str,
                               request: AppAdminPasswordResetRequest):
     return _app_admin_reset("Odoo", namespace, release_name, request,
                             app_admin_password_service.reset_odoo_admin)
+
+
+@router.post(
+    "/{namespace}/{release_name}/odoo/admin-secret",
+    response_model=OdooAdminSecretSyncResponse,
+    summary="Align the Odoo chart Secret's admin password with the live password",
+    description="Patch only `data.admin-password` of `<release>-odoo-conf` to the given password. The Odoo "
+                "database is not touched (use admin-password to change it). Used after a Helm rollback "
+                "restored the Secret of an older revision. Best-effort: never raises for a missing Secret.",
+)
+def sync_odoo_admin_secret(namespace: str, release_name: str, request: OdooAdminSecretSyncRequest):
+    password = request.password.get_secret_value()
+    if not (_MIN_APP_ADMIN_PASSWORD <= len(password) <= _MAX_APP_ADMIN_PASSWORD):
+        return OdooAdminSecretSyncResponse(
+            success=False, message="password must be 12-128 characters",
+        )
+    outcome = app_admin_password_service.sync_odoo_admin_secret(namespace, release_name, password)
+    return OdooAdminSecretSyncResponse(
+        success=outcome != "failed", secret_sync=outcome,
+        message=f"odoo admin secret {outcome}",
+    )
 
 
 @router.post(

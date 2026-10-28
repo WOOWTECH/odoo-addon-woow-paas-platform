@@ -1195,6 +1195,29 @@ class PaaSOperatorClient:
             timeout=APP_ADMIN_RESET_TIMEOUT,
         )
 
+    def sync_odoo_admin_secret(
+        self,
+        namespace: str,
+        release_name: str,
+        password: str,
+    ) -> Dict[str, Any]:
+        """把租戶 Odoo chart 的 ``<release>-odoo-conf`` Secret 的 ``admin-password`` 對齊到目前密碼。
+
+        Odoo 的密碼權威在 app DB；Secret 這一格只是首次 ``-i base`` 的初始密碼。operator 在
+        「重設管理員密碼」成功後會自己對齊；**回復版本**時 Helm 會把 Secret 還原成舊 revision 的
+        值，平台在回復後呼叫本方法補回（密碼取自平台記的 ``cloud_service_secret``）。不改 app DB、
+        不重啟。404＝operator 還沒有這個端點（平台先於 operator 上線），呼叫端當作略過。
+
+        ⛔ ``password`` 只在 request body；本 client 的 log 只記 method／endpoint。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/odoo/admin-secret',
+            data={'password': password},
+            timeout=DEFAULT_TIMEOUT,
+            expected_status_codes=(404,),
+        )
+
     def reset_n8n_owner_password(
         self,
         namespace: str,
