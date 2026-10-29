@@ -341,7 +341,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.3.13。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.4.4。
 
         版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
         0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
@@ -371,8 +371,9 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
         # 0.3.7–0.3.12＝charts 整合包 #254：登入失敗鎖 IP、gateway liveness、apiServerKey ≥ 16 字元、
         # 容器加固、ttyd 改 loopback＋Basic 前門、cookie Secure、egress-profile=web；seed 不需改。
-        # 0.3.13＝#1961：Hermes 0.22.5 stable，與已合併的 seed 精確 pin 同步。
-        self.assertEqual(tpl.helm_chart_version, '0.3.13')
+        # 0.4.4＝charts #307：Hermes 0.22.5 stable；Paseo 掛載與自動更新預設關閉，
+        # 新服務渲染出的資源與 0.3.13 相同。0.4.4 另修好自動更新的 bootstrap 基準。
+        self.assertEqual(tpl.helm_chart_version, '0.4.4')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
