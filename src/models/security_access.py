@@ -1,4 +1,4 @@
-from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, require_tunnel_routes_receipt, schedule_access_resync, sync_access_app_create_or_adopt
+from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, require_tunnel_routes_receipt, schedule_access_resync, sync_access_app_create_or_adopt, ACCESS_REVOKE_RETRY_SECONDS, access_resync_wake_pending
 from ..services.access_state import (
     ACCESS_AUTHORIZATION_CONFIG_FIELDS, access_authorization_fingerprint,
     access_authorization_snapshot, access_mark_authorization_changes,
@@ -3288,6 +3288,11 @@ class SecurityAccessRoute(models.Model):
                     'revocation (%s); the origin stays closed and it is retried.',
                     self._name, self.id,
                     result.get('token_revocation_error') or 'no detail')
+                # The origin is closed until the provider accepts, so ask again soon
+                # rather than at the next periodic run; one queued wake serves all rows.
+                retry_at = now + timedelta(seconds=ACCESS_REVOKE_RETRY_SECONDS)
+                if not access_resync_wake_pending(self.env, retry_at):
+                    schedule_access_resync(self.env, retry_at)
         state = access_revoke_state(True, accepted_at, now, hold)
         return 'releasable' if state == 'releasable' else 'held'
 
