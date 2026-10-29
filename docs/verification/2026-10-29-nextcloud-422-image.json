@@ -295,7 +295,7 @@
   "verification_limitations": [
     "映像未提供 OCI source labels；來源由 65 個檔案 SHA-256 與精確 config／manifest digest 核對。",
     "首次 probe 補正 MCP readiness 等待；第二次補開 process INFO log 以驗到 child 輸出，產品映像沒有修改。",
-    "依使用者盤點：既有 23 個 live deployments 沒有 Nextcloud；沒有建立客戶實例。",
+    "依 main coordinator 工具盤點：既有 23 個 live deployments 沒有 Nextcloud；沒有建立客戶實例。",
     "沙盒驗收為 exact develop base .277 到 PR2077 候選的範本升級；不是正式 .275 到下一版的全套 migration 驗收。"
   ],
   "probe_script_sha256": "d52f13e38e9c912c4981a503412663d416194102779c78093d1095b1353a67c6",
@@ -465,7 +465,48 @@
         "clean": true,
         "tree": "fd46eecc10a9b55ee6fe876625fbb43db9b543c3"
       },
-      "prod_db_version": "last user observation .275 at 03:15 UTC; no fresh DB read; 04:26 image read is separate evidence"
+      "prod_db_version": "main coordinator observed .275 at 03:15 UTC; this lane read-only SQL at 04:45:41 UTC observes .277; historical image read at 04:26 is attributed to main coordinator",
+      "fresh_runtime_readonly": {
+        "at": "2026-10-29T04:45:41.932582+00:00",
+        "read_only": "on",
+        "runtime_manifest_version": "18.0.1.0.277",
+        "manifest_sha256": "2279bcc019127edee52bbca057a44929d66134e1b44648896f0e259a8659d14b",
+        "database": "woow_prod",
+        "db_module_state": "installed",
+        "db_module_version": "18.0.1.0.277",
+        "upgrade_marker": {
+          "digest": "sha256:18f58cee62f0d84fc374e84813e6042e340ce04b794a0f79ddc773ebca68ab3a",
+          "core_date": "18.0.20250807"
+        },
+        "nextcloud_template": [
+          {
+            "id": 27,
+            "image": {
+              "repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin",
+              "tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:ad3e4dd18f0c642e33ce9a8cafef28aaa7012fe528c8daa54d7427910a5bfbc8"
+            }
+          }
+        ]
+      },
+      "latest_develop_integration": {
+        "result": "passed",
+        "current_develop": "2cf7a40c345970f37d125185cf746d0e016c17ba",
+        "current_manifest_version": "18.0.1.0.277",
+        "pr_head": "133596320e804d4410cb00a8f2197b00a5a747f3",
+        "synthetic_merge_tree": "f7ab22232aa1344385d8264ff761e168de1495b7",
+        "merge_tree_exit": 0,
+        "only_changed_seed_value": "cloud_app_mcp_nextcloud.helm_default_values.image.tag",
+        "all_other_seed_xml_semantically_equal": true,
+        "xml_normalization": "ignore comments and whitespace-only indentation; preserve all field values and attributes",
+        "merged_opendesign_pin_preserved": true,
+        "changed_files": [
+          "docs/verification/2026-10-29-nextcloud-422-image.json",
+          "src/data/cloud_app_templates.xml",
+          "src/tests/test_mcp_nextcloud_seed.py"
+        ],
+        "odoo_tested_base": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+        "odoo_tests_rerun_after_pr2060": false
+      }
     }
   }
 }
