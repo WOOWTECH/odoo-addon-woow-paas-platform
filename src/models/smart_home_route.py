@@ -38,6 +38,10 @@ ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會�
 有」時，答案在上一段，不是漏改。
 """
 from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync, sync_access_app_create_or_adopt
+from ..services.access_state import (
+    ACCESS_AUTHORIZATION_CONFIG_FIELDS, access_authorization_fingerprint,
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_revoke_savepoint)
 from datetime import timedelta
 import logging
 
@@ -512,7 +516,14 @@ class SmartHomeRoute(models.Model):
                 and vals.get('is_protected') is False):
             unprotecting = self.filtered(
                 lambda route: route.is_protected and route.access_app_id)
-        with self.env.cr.savepoint():
+        # Same trigger scope as the SA route: login methods / session duration
+        # edits revoke the sessions issued under the old semantics.
+        authz_write = (not _is_sm_sync_hatch_open(
+                           self.env, _CTX_SM_SKIP_ACCESS_SYNC)
+                       and any(k in vals for k in ACCESS_AUTHORIZATION_CONFIG_FIELDS))
+        pre_auth = access_authorization_snapshot(self) if authz_write else {}
+        reached = []
+        with access_revoke_savepoint(self.env, reached):
             # The operator may delete Access before its response is validated;
             # park ingress first while the old protected identity is intact.
             for home in unprotecting.mapped('smart_home_id'):
@@ -526,6 +537,9 @@ class SmartHomeRoute(models.Model):
                     and any(k in vals for k in (
                         'is_protected', 'login_google', 'login_email_otp',
                         'session_duration'))):
+                if authz_write:
+                    reached.extend(access_mark_authorization_changes(
+                        self.env, self, pre_auth))
                 # A route held by a token revocation is never released by a
                 # tenant edit; only its own hold may re-publish it.
                 deferred_release = self.filtered(
@@ -703,6 +717,11 @@ class SmartHomeRoute(models.Model):
                 self.access_app_id and self.access_token_revoke_pending
                 and not self.access_token_revoke_accepted_at),
         }
+
+    def _access_authorization_fingerprint(self):
+        """Effective authorization semantics of this route's Access app."""
+        self.ensure_one()
+        return access_authorization_fingerprint(self._build_access_payload())
 
     def _mark_access_token_revoke_pending(self):
         existing = self.filtered('access_app_id')

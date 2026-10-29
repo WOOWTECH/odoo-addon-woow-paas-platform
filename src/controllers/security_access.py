@@ -8,7 +8,9 @@ All results remain explicit DTOs, not raw ORM reads.
 """
 from __future__ import annotations
 
-from ..services.access_state import access_mutation_result
+from ..services.access_state import (
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_mutation_result)
 import logging
 from typing import Any
 
@@ -1144,17 +1146,25 @@ class SecurityAccessController(Controller):
         reordered = []
         routes = sa.env["woow_paas_platform.security_access_route"]
         try:
-            seq = 0
+            pinned = []
             for pid in policy_ids:
                 pol = self._sa_policy(sa, pid)
                 if not pol:
                     continue  # cross-SA / unknown → skip (never write foreign)
+                pinned.append(pol)
+                routes |= pol.route_id
+            # Precedence is authorization: the writes below are sync-suppressed,
+            # so the revocation decision is made here, from the order before and
+            # after (a no-op reorder revokes nothing).
+            pre_auth = access_authorization_snapshot(routes)
+            seq = 0
+            for pol in pinned:
                 # Counter over the PINNED policies (not raw index) so a skipped
                 # foreign id leaves no gap; sparse 10s keep room to insert.
                 seq += 10
                 _skip_route_sync(pol).write({"sequence": seq})
                 reordered.append(pol.id)
-                routes |= pol.route_id
+            access_mark_authorization_changes(sa.env, routes, pre_auth)
             for route in routes:
                 route._sync_access_to_operator()
             return access_mutation_result(routes, {"reordered": reordered})

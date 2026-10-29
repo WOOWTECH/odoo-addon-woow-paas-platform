@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from ..services.access_state import access_mutation_result
+from ..services.access_state import (
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_mutation_result)
 import copy
 import ipaddress
 import json
@@ -3413,15 +3415,19 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('policy_ids must be a list')}
         reordered = []
         try:
+            pinned = [pol for pol in (self._service_policy(service, pid)
+                                      for pid in policy_ids) if pol]
+            # Precedence is authorization: the writes below are sync-suppressed,
+            # so the revocation decision is made here, from the order before and
+            # after (a no-op reorder revokes nothing).
+            pre_auth = access_authorization_snapshot(service)
             seq = 0
-            for pid in policy_ids:
-                pol = self._service_policy(service, pid)
-                if not pol:
-                    continue
+            for pol in pinned:
                 seq += 10
                 _skip_route_sync(pol).write({'sequence': seq})
                 reordered.append(pol.id)
             if reordered:
+                access_mark_authorization_changes(service.env, service, pre_auth)
                 service._sync_access_to_operator()
             return access_mutation_result(service, {'reordered': reordered})
         except Exception as e:

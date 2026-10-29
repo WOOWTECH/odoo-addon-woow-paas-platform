@@ -111,9 +111,11 @@ export class AccessTab extends Component {
     this.state.error = null;
     const res = await cloudServiceAccessService.updateConfig(
       this.props.workspaceId, this.serviceId, vals);
-    if (res.success) {
+    // `saved`: stored but still being applied (see services/access_mutation.js).
+    if (res.success || res.saved) {
       this.state.access = { ...EMPTY_ACCESS, ...res.data };
-    } else {
+    }
+    if (!res.success) {
       this.state.error = res.error;
     }
   }
@@ -188,9 +190,12 @@ export class AccessTab extends Component {
       this.props.workspaceId, this.serviceId, vals);
   };
 
-  onPolicySaved = async () => {
+  onPolicySaved = async (notice) => {
     this.state.showPolicyModal = false;
     await this.reloadPolicies();
+    if (notice) {
+      this.state.error = notice;
+    }
   };
 
   async deletePolicy(policy) {
@@ -199,9 +204,10 @@ export class AccessTab extends Component {
     this.state.error = null;
     const res = await cloudServiceAccessService.deletePolicy(
       this.props.workspaceId, this.serviceId, policy.id);
-    if (res.success) {
+    if (res.success || res.saved) {
       await this.reloadPolicies();
-    } else {
+    }
+    if (!res.success) {
       this.state.error = res.error;
     }
   }

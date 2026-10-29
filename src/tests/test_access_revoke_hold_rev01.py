@@ -241,7 +241,11 @@ class TestRevokeHoldRev01(PendingFixture, TransactionCase):
         self.assert_closed_in_hold(anchor)
         anchor.write({'session_duration': '8h'})
         self.assert_closed_in_hold(anchor)
-        self.assertEqual(len(self.revocations()), 1)
+        # A shorter session duration changes the authorization semantics, so the
+        # edit starts its own revocation generation (never a release); a
+        # cosmetic edit would leave the hold alone (see
+        # test_access_authorization_change_revoke).
+        self.assertEqual(len(self.revocations()), 2)
 
     def second_removal_restarts_the_hold(self, kind):
         anchor, policies = self.protected_with_two_policies(kind)

@@ -173,7 +173,9 @@ class TestCsShFailClosedAC1011(Fixture,TransactionCase):
     def test_cs_existing_app_failed_login_edit_preserves_db_and_app(self):
         self.cs_active(app=True);self.client.fail_access=True
         old=self.cs.session_duration
-        with self.assertRaises(PaaSOperatorError):self.cs.write({'session_duration':'8h'})
+        # A longer session only widens access: no revocation, so no park before the call
+        # (a narrowing edit parks first: test_access_authorization_change_revoke).
+        with self.assertRaises(PaaSOperatorError):self.cs.write({'session_duration':'168h'})
         self.cs.invalidate_recordset();self.assertEqual(self.cs.session_duration,old)
         self.assertEqual(self.cs.access_app_id,'fake-old-app');self.assertTrue(self.client.app)
         self.assertEqual(self.names(),['access'])
@@ -242,7 +244,8 @@ class TestCsShFailClosedAC1011(Fixture,TransactionCase):
         self.assertFalse(self.client.origin);self.assertEqual(self.names()[:2],['configure','access'])
     def test_sh_existing_app_failed_edit_preserves_db_and_app(self):
         self.sh_active(app=True);self.client.fail_access=True;old=self.route.session_duration
-        with self.assertRaises(PaaSOperatorError):self.route.write({'session_duration':'8h'})
+        # A longer session only widens access: no revocation, so no park before the call.
+        with self.assertRaises(PaaSOperatorError):self.route.write({'session_duration':'168h'})
         self.route.invalidate_recordset();self.assertEqual(self.route.session_duration,old);self.assertEqual(self.route.access_app_id,'fake-old-app')
         self.assertTrue(self.client.app);self.assertEqual(self.names(),['access'])
     def test_sh_malformed_app_result_does_not_release(self):

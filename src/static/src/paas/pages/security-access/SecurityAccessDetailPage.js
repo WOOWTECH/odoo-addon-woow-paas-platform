@@ -717,9 +717,12 @@ export class SecurityAccessDetailPage extends Component {
   async saveRouteAccess(route, vals) {
     const res = await securityAccessService.updateRouteAccess(
       this.props.workspaceId, this.props.saId, route.id, vals);
-    if (res.success) {
+    // `saved`: stored but still being applied (see services/access_mutation.js) -- reload
+    // so the screen shows the change, and keep the explanation visible.
+    if (res.success || res.saved) {
       await this.loadDetail();
-    } else {
+    }
+    if (!res.success) {
       this.state.actionError = res.error;
     }
   }
@@ -765,10 +768,13 @@ export class SecurityAccessDetailPage extends Component {
     this.state.showPolicyModal = true;
   }
 
-  async onPolicySaved() {
+  async onPolicySaved(notice) {
     this.state.showPolicyModal = false;
     this.state.policyModalRoute = null;
     await this.loadDetail();
+    if (notice) {
+      this.state.actionError = notice;
+    }
   }
 
   async deletePolicy(route, policy) {
@@ -779,9 +785,10 @@ export class SecurityAccessDetailPage extends Component {
     // policy under the gated SA).
     const res = await securityAccessService.deletePolicy(
       this.props.workspaceId, this.props.saId, policy.id);
-    if (res.success) {
+    if (res.success || res.saved) {
       await this.loadDetail();
-    } else {
+    }
+    if (!res.success) {
       this.state.actionError = res.error;
     }
   }
