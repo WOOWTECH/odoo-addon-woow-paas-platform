@@ -61,6 +61,7 @@ from . import smart_home_provision_operation
 from . import smart_home_access_revision
 # RACE-06: durable pre-provider create fence. Load before its route consumer.
 from . import access_dispatch_fence
+from . import tunnel_binding_event
 from . import smart_home_route
 from . import ai_assistant
 from . import mcp_server

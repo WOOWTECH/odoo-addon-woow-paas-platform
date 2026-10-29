@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- 綁定歷史（HA issue #38）：唯讀、只有 system 看得到；寫入由 binding mixin 以 sudo 進行。 -->
+    <record id="view_tunnel_binding_event_list" model="ir.ui.view">
+        <field name="name">woow_paas_platform.tunnel_binding_event.list</field>
+        <field name="model">woow_paas_platform.tunnel_binding_event</field>
+        <field name="arch" type="xml">
+            <list create="false" delete="false" edit="false"
+                        decoration-danger="event in ('refused_claim', 'refused_release')"
+                        decoration-warning="event == 'taken_over'">
+                <field name="create_date"/>
+                <field name="anchor_model"/>
+                <field name="anchor_id"/>
+                <field name="event"/>
+                <field name="previous_state"/>
+                <field name="new_state"/>
+                <field name="instance_label"/>
+                <field name="instance_uid" optional="hide"/>
+                <field name="held_by"/>
+                <field name="actor"/>
+                <field name="detail"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_tunnel_binding_event_search" model="ir.ui.view">
+        <field name="name">woow_paas_platform.tunnel_binding_event.search</field>
+        <field name="model">woow_paas_platform.tunnel_binding_event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="anchor_id"/>
+                <field name="instance_label"/>
+                <field name="instance_uid"/>
+                <field name="actor"/>
+                <filter name="refusals" string="Refusals"
+                                domain="[('event', 'in', ('refused_claim', 'refused_release'))]"/>
+                <filter name="takeovers" string="Take-overs and releases"
+                                domain="[('event', 'in', ('taken_over', 'released'))]"/>
+                <group expand="0" string="Group by">
+                    <filter name="by_anchor_model" string="Service type" context="{'group_by': 'anchor_model'}"/>
+                    <filter name="by_event" string="Event" context="{'group_by': 'event'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_tunnel_binding_event" model="ir.actions.act_window">
+        <field name="name">Tunnel Binding History</field>
+        <field name="res_model">woow_paas_platform.tunnel_binding_event</field>
+        <field name="view_mode">list</field>
+        <field name="search_view_id" ref="view_tunnel_binding_event_search"/>
+        <field name="context">{'create': False, 'delete': False}</field>
+    </record>
+
+    <menuitem id="menu_tunnel_binding_events"
+                        name="Tunnel Binding History"
+                        parent="menu_woow_paas_platform_root"
+                        action="action_tunnel_binding_event"
+                        groups="base.group_system"
+                        sequence="70"/>
+</odoo>
