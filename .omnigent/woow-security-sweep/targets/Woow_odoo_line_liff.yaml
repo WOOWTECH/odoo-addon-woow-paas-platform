@@ -2,7 +2,8 @@
 #
 # public 規則（scan／always_human／autofix／verify）在該 repo 預設分支的
 # .security/sweep.yaml；collect.py 把兩份合併成 config.json。
-# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、history、baseline、disclosure。
+# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、review_classes、history、baseline、disclosure。
+# review_classes：deep review 工單要放哪些攻擊類別原文（檔名#類別；odoo.md 在 companions/，其餘在 third_party/）。
 
 context:
   summary: LINE LIFF 整合層。webhook 接收、LIFF 登入（LINE id_token 換 Odoo session）、LIFF 頁面、rich menu、推播與 narrowcast、自動回覆。
@@ -70,6 +71,28 @@ review_focus:
 - secret 與 token 欄位是否有欄位層級的 groups 限制（目前只靠 model ACL manager-only）
 - 輸出到 HTML 的值是否都經過 escape；redirect target 是否走白名單
 - 使用者可控的 regex 與大小是否有上限
+review_classes:
+- 'ATTACK-CLASSES.md#Access control'
+- 'ATTACK-CLASSES.md#Injection'
+- 'ATTACK-CLASSES.md#Business logic'
+- 'ATTACK-CLASSES.md#Obvious things'
+- 'odoo.md#Public route before identity check'
+- 'odoo.md#csrf=False state change'
+- 'odoo.md#Session establishment outside credential check'
+- 'odoo.md#Redirect target and URL building'
+- 'odoo.md#sudo() scope creep'
+- 'odoo.md#Field-level groups and related fields'
+- 'odoo.md#Public method RPC exposure'
+- 'odoo.md#Portal and share user provisioning'
+- 'odoo.md#QWeb and Markup escaping'
+- 'odoo.md#ir.config_parameter as trust boundary'
+- 'odoo.md#Mail and notification side channels'
+- 'WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding'
+- 'WEB-PROTOCOL-AND-AUTH.md#JWT verification and claim binding'
+- 'WEB-PROTOCOL-AND-AUTH.md#Account linking and identity collision'
+- 'DATA-ISOLATION-AND-LIFECYCLE.md#Soft-delete and tombstone bypass'
+- 'DATA-ISOLATION-AND-LIFECYCLE.md#Stale authorization and derived copy use'
+- 'PROTOCOLS-RPC-AND-MESSAGING.md#Peer identity to application-principal confusion'
 history:
   fixed:
   - B-2

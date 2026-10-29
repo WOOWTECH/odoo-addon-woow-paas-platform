@@ -34,9 +34,15 @@ route 的意思：
 | `drop` | 判誤報（高信心、≤ medium）或 baseline 已接受／已追蹤 |
 | `issue_only` | 成立，但不適合自動修 |
 | `auto_fix` | 成立、≤ medium、可小範圍修正 |
-| `human` | 硬規則命中、high 以上、Jev 不確定、疑似 prompt injection、或呼叫失敗 |
+| `human` | 硬規則命中、`needs_validation`（決定性事實不在原始碼）、high 以上、Jev 不確定、疑似 prompt injection、或呼叫失敗 |
 
 **shadow mode：`effective` 一律是 `human`**。`proposed` 只是給人參考、給校準用的，你不依它行動。
+
+新格式 deep review finding 的 `trace`、`root_cause`、`conditions`、`blockers` 會一併送給 Jev。
+`verdict: needs_validation` 不論 Jev 怎麼答都是 `human`（理由欄帶前幾個 blocker）；baseline 已追蹤／接受的照樣 `drop`。
+
+只判部分 finding（hardening 升級後）：`JG triage --run-dir <本輪目錄>/<repo 名> --only <finding_id>`——
+追加到既有 `decisions.jsonl`，已判過的 id 略過，不會清掉本輪其他筆。
 
 decision 帶 `prior_human`（`label`／`action`／`ts`）⇒ 同一個 fingerprint 之前已經有人決定過、只是還沒進
 baseline。不要再問，報告列在「已決未進 baseline」。

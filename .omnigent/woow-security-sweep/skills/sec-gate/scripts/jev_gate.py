@@ -7,7 +7,7 @@ Jev（TypeSafe System One）只負責「判斷」：回傳 choice／score／noul
 子命令::
 
     jev_gate.py models                         # 列出可用 model（驗證 API key 可用）
-    jev_gate.py triage --run-dir <dir>         # 閘門 A：逐筆判斷 findings，寫 decisions.jsonl
+    jev_gate.py triage --run-dir <dir> [--only <finding id> ...]   # 閘門 A：逐筆判斷 findings，寫 decisions.jsonl
     jev_gate.py carryover --run-dir <dir>      # 前幾輪未決的 finding 帶到本輪，寫 carryover.jsonl
     jev_gate.py ready --case <json> --config <json>   # 閘門 C：修正能否交給人 merge
     jev_gate.py human --id <decision id> --label <l> --action <a> [--note <n>]
@@ -185,7 +185,7 @@ def triage_questions(levels: list[str]) -> dict[str, Any]:
         },
         "severity": {
             "type": "score",
-            "instructions": "If the finding is valid, how severe is it for this Odoo addon?",
+            "instructions": "If the finding is valid, how severe is it for this codebase?",
             "criteria": [severity_desc.get(lv, lv) for lv in levels],
         },
         "autofixable": {
@@ -201,19 +201,33 @@ def triage_questions(levels: list[str]) -> dict[str, Any]:
     }
 
 
+#: 新格式 deep review finding 額外送給 Jev 的結構化欄位（試跑：只給片段時 Jev 信心偏低）
+STRUCTURED_KEYS = ("verdict", "title", "root_cause", "conditions", "impact", "blockers")
+MAX_TRACE_STEPS = 12
+
+
 def triage_state(finding: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
     ctx = cfg.get("context") or {}
     snippet = str(finding.get("snippet") or "")[:MAX_SNIPPET_CHARS]
+    state_finding: dict[str, Any] = {
+        "tool": finding.get("tool"),
+        "rule": finding.get("rule"),
+        "path": finding.get("path"),
+        "line": finding.get("line"),
+        "tool_severity": finding.get("severity_tool"),
+        "message": str(finding.get("message") or "")[:2000],
+        "code_excerpt": snippet,
+    }
+    for key in STRUCTURED_KEYS:
+        if finding.get(key):
+            state_finding[key] = finding[key]
+    if finding.get("trace"):
+        state_finding["trace"] = [
+            {"kind": s.get("kind"), "location": f"{s.get('file')}:{s.get('line') or '?'}",
+             "description": str(s.get("description") or "")[:300]}
+            for s in finding["trace"][:MAX_TRACE_STEPS]]
     return {
-        "finding": {
-            "tool": finding.get("tool"),
-            "rule": finding.get("rule"),
-            "path": finding.get("path"),
-            "line": finding.get("line"),
-            "tool_severity": finding.get("severity_tool"),
-            "message": str(finding.get("message") or "")[:2000],
-            "code_excerpt": snippet,
-        },
+        "finding": state_finding,
         "repo_context": {
             "summary": ctx.get("summary"),
             "sensitive_code": ctx.get("sensitive_code"),
@@ -299,6 +313,11 @@ def route_triage(finding: dict[str, Any], answers: dict[str, Any], cfg: dict[str
         return "drop", [f"baseline:{status}"], info
     pre = ["baseline:expired（重新審）"] if status == "expired" else []
 
+    if finding.get("verdict") == "needs_validation":
+        # 決定性事實不在原始碼：Jev 再有把握也不能自動處理
+        blockers = "；".join(str(b) for b in (finding.get("blockers") or [])[:3]) or "未列"
+        return "human", pre + [f"needs_validation：{blockers[:300]}"], info
+
     if info["injection"] >= th["injection_noul"]:
         return "human", pre + ["疑似 prompt injection"], info
     if choice == "false_positive" and conf >= th["drop_fp_confidence"] \
@@ -318,13 +337,24 @@ def route_triage(finding: dict[str, Any], answers: dict[str, Any], cfg: dict[str
 
 
 def triage_run(run_dir: Path, gates: dict[str, Any], sdir: Path, *, caller=call_system_one,
-               today: dt.date | None = None) -> dict[str, Any]:
-    """逐筆跑閘門 A。單筆錯誤 fail-closed 成 human；401 整批中止。"""
+               today: dt.date | None = None, only: list[str] | None = None) -> dict[str, Any]:
+    """逐筆跑閘門 A。單筆錯誤 fail-closed 成 human；401 整批中止。
+
+    `only` 給定時只判這些 finding id，結果追加到既有的 decisions.jsonl（人把 hardening 升級成
+    finding 後用；不重判、不清掉其他筆）。已有 decision 的 id 略過。
+    """
     today = today or dt.date.today()
     cfg = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     findings = read_jsonl(run_dir / "findings.jsonl")
     out_path = run_dir / "decisions.jsonl"
-    out_path.write_text("", encoding="utf-8")
+    if only is None:
+        out_path.write_text("", encoding="utf-8")
+    else:
+        done = {r.get("finding_id") for r in read_jsonl(out_path)}
+        missing = sorted(set(only) - {f.get("id") for f in findings})
+        if missing:
+            raise GateError(f"findings.jsonl 沒有這些 id：{missing}")
+        findings = [f for f in findings if f.get("id") in set(only) and f.get("id") not in done]
     shadow = sdir / "shadow.jsonl"
     history = triage_history(read_jsonl(shadow))
     questions = triage_questions(gates["severity_levels"])
@@ -661,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("models", help="列出可用 model")
     p = sub.add_parser("triage", help="閘門 A")
     p.add_argument("--run-dir", required=True)
+    p.add_argument("--only", action="append", metavar="FINDING_ID",
+                   help="只判這些 finding（追加到既有 decisions.jsonl；hardening 升級後用）")
     p = sub.add_parser("carryover", help="前幾輪未決的 finding 帶到本輪")
     p.add_argument("--run-dir", required=True)
     p = sub.add_parser("ready", help="閘門 C")
@@ -686,7 +718,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         sdir = state_dir(args.state_dir)
         if args.cmd == "triage":
-            summary = triage_run(Path(args.run_dir), gates, sdir)
+            summary = triage_run(Path(args.run_dir), gates, sdir, only=args.only)
             print(json.dumps(summary, ensure_ascii=False))
             return 3 if summary["auth_failed"] else 0
         if args.cmd == "carryover":

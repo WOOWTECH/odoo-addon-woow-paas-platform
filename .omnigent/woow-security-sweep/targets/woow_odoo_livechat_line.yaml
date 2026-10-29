@@ -2,7 +2,8 @@
 #
 # public 規則（scan／always_human／autofix／verify）在該 repo 預設分支的
 # .security/sweep.yaml；collect.py 把兩份合併成 config.json。
-# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、history、baseline、disclosure。
+# 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、review_classes、history、baseline、disclosure。
+# review_classes：deep review 工單要放哪些攻擊類別原文（檔名#類別；odoo.md 在 companions/，其餘在 third_party/）。
 
 context:
   summary: LINE ↔ Odoo LiveChat 橋接。webhook 收 LINE 訊息後建立 guest 與 discuss channel，客服回覆再推回 LINE；支援多個 livechat channel
@@ -31,6 +32,19 @@ review_focus:
 - channel_id 是否可被列舉，或拿來推測其他租戶的設定
 - log 有沒有寫入 PII 或 message body（H-11）
 - 附件下載的大小與型別限制
+review_classes:
+- 'ATTACK-CLASSES.md#Access control'
+- 'ATTACK-CLASSES.md#Injection'
+- 'ATTACK-CLASSES.md#Business logic'
+- 'ATTACK-CLASSES.md#Obvious things'
+- 'odoo.md#Public route before identity check'
+- 'odoo.md#sudo() scope creep'
+- 'odoo.md#Record rule and multi-company gaps'
+- 'PROTOCOLS-RPC-AND-MESSAGING.md#Peer identity to application-principal confusion'
+- 'PROTOCOLS-RPC-AND-MESSAGING.md#Duplicate delivery and idempotency gaps'
+- 'DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement'
+- 'DATA-ISOLATION-AND-LIFECYCLE.md#Analytics, logs, traces, and diagnostics as alternate readers'
+- 'RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Unbounded buffering and cardinality'
 history:
   fixed:
   - H-11

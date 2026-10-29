@@ -16,6 +16,7 @@
 |---|---|
 | bundle | `<WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep` |
 | collect | `python3.12 <bundle>/skills/sec-collect/scripts/collect.py` |
+| ticket | `python3.12 <bundle>/skills/sec-dispatch/scripts/ticket.py`（deep review 與驗證者工單） |
 | jev_gate | `python3.12 <bundle>/skills/sec-gate/scripts/jev_gate.py` |
 | issue_sync | `python3.12 <bundle>/skills/sec-issue/scripts/issue_sync.py` |
 | 產生器 | `python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py` |
@@ -52,18 +53,23 @@ roster:                      # 選填
 ## 每輪流程
 
 1. **收集**（`sec-collect` skill）：建本輪目錄 `<state>/runs/<UTC YYYYMMDD-HHMM>`，對每個 target
-   跑 `collect run`。讀 `meta.json`、`tools.json`：`unavailable`／`error` 的工具要寫進報告。
-2. **深度審查**（`sec-dispatch` skill）：符合 deep_review 條件的 target，各派一個唯讀 review
-   worker 審快照，回報用 `collect import` 併入。派完就結束當輪，收到完成通知再繼續。
+   跑 `collect run`。讀 `meta.json`、`tools.json`：`unavailable`／`error` 的工具、`status` 不是 `ok` 的
+   `upstream` 快照都要寫進報告。
+2. **深度審查**（`sec-dispatch` skill）：符合 deep_review 條件的 target，先用 `ticket review` 產生工單
+   （⛔ 不自己寫或改工單），各派一個唯讀 review worker，回報用 `collect import` 併入。
+   `deep_review: always` 的輪次（每週）再對新格式 finding 各派一個驗證者，結論用 `collect verdict` 套用。
+   派完就結束當輪，收到完成通知再繼續；**verdict 都套完才進閘門 A**。
 3. **閘門 A**（`sec-gate` skill）：每個 target 跑 `jev_gate triage --run-dir <dir>`。
    exit 3（API key 失效）⇒ 全部轉人工，報告第一行寫明。接著跑 `jev_gate carryover --run-dir <dir>`，
    把前幾輪還沒人決定的 finding 帶進本輪（`carryover.jsonl`）。⛔ 沒跑 carryover 不能寫「下輪還會出現」。
    carryover 也會把「檔案已不在 HEAD」等已解決的 finding 結案（`resolved.jsonl`）。
    最後跑 `issue_sync sync --run-dir <dir>`（`sec-issue` skill）：Jev 高信心判成立的不等人就先開 issue，
    已解決的 open issue 留言後關閉。
-4. **報告與提問**（`sec-report` skill）：寫 `<run>/report.md`，再用 **AskUserQuestion** 把摘要與
-   最多 4 筆待決 finding（本輪＋carryover 一起排）送進 Inbox。有 `prior_human` 的不再問。
-5. **記錄人的決定**：每個回答都用 `jev_gate human` 寫回 shadow log。全部記完後，每個 target 再跑一次
+4. **報告與提問**（`sec-report` skill）：寫 `<run>/report.md`（含 hardening、entry point 涵蓋、驗證者結論），
+   再用 **AskUserQuestion** 把摘要與最多 4 筆待決 finding（本輪＋carryover 一起排）送進 Inbox；
+   還有空位而且有 hardening 時，加一題 hardening 升級。有 `prior_human` 的不再問。
+5. **記錄人的決定**：每個回答都用 `jev_gate human` 寫回 shadow log；人選了要升級的 hardening，照 `sec-report`
+   skill 先 `collect promote`、`jev_gate triage --only` 再記。全部記完後，每個 target 再跑一次
    `issue_sync sync`：人判成立的開單、人判誤報或接受風險的關單。
 6. **依人的決定行動**（`sec-dispatch` skill）：
    - 「修正」且嚴重度 ≤ medium、該 repo `autofix.enabled` ⇒ 派 fix worker，完成後派 review worker，
@@ -75,7 +81,7 @@ roster:                      # 選填
 7. **推進進度**：每個 target 的閘門 A 都跑完（不論人回答與否）⇒ `collect commit --run-dir <dir>`。
    閘門 A 失敗的 target 不 commit，下輪會重掃同一段。
 
-本輪沒有 finding、carryover 也是 0 ⇒ 不派 worker、不提問，只在報告記「無變化」（有自動結案就列出來）後結束。
+本輪沒有 finding、hardening，carryover 也是 0 ⇒ 不派 worker、不提問，只在報告記「無變化」（有自動結案就列出來）後結束。
 carryover 不是 0 ⇒ 照常寫報告、照常提問（沒有新 commit 也一樣）。
 
 ## ⛔ 鐵律
