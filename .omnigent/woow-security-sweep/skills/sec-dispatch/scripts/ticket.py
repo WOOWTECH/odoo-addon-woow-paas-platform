@@ -202,15 +202,41 @@ def _abs(run_dir: Path, rel: str) -> str:
     return str((run_dir / rel).resolve())
 
 
+#: 工單列檔時略過的二進位檔（圖片、字型、壓縮檔）：worker 讀不了，只會佔篇幅
+BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp", ".woff", ".woff2", ".ttf", ".otf",
+                   ".pdf", ".zip", ".gz", ".mp3", ".mp4")
+
+
+def _file_lines(paths: list[str]) -> list[str]:
+    shown = [p for p in paths if not p.lower().endswith(BINARY_SUFFIXES)]
+    out = [f"  - `{p}`" for p in shown]
+    if len(shown) < len(paths):
+        out.append(f"  - （另有 {len(paths) - len(shown)} 個圖片／字型等二進位檔，不用審）")
+    return out
+
+
 def _scope_lines(meta: dict[str, Any], run_dir: Path) -> list[str]:
     sc = meta.get("scope") or {}
+    fork = meta.get("fork")
+    owned = set(fork["files"]) if fork else None
     out = [f"- 目標快照：`{_abs(run_dir, 'src')}`（下文所有路徑都相對於它）"]
+    if fork:
+        out.append(f"- **只審 fork 改過的部分**：快照是上游 `{fork['remote']}` 的 fork（{fork['branch']}，"
+                   f"merge-base `{str(fork['merge_base'])[:8]}`，{str(fork.get('fork_point'))[:10]}；"
+                   f"fork 領先 {fork.get('ahead')}、落後 {fork.get('behind')} 個 commit）。"
+                   "下面列的才是審查對象；其餘程式碼是上游原樣，只當上下文讀。根因在上游原樣程式碼裡的問題，"
+                   "寫成 hardening 並註明「上游問題」，不要寫成 finding（由人決定是否照上游的回報流程通報）。")
     if sc.get("mode") == "full" or sc.get("changed") is None:
-        out.append("- 範圍：**全量**（整個快照）")
+        if owned is None:
+            out.append("- 範圍：**全量**（整個快照）")
+        else:
+            out.append(f"- 範圍：**全量**，限 fork 改過、仍存在的 {len(owned)} 個檔案：")
+            out += _file_lines(sorted(owned)) or ["  - （沒有）"]
     else:
-        existing = [p for p in sc["changed"] if p not in set(meta.get("deleted_files") or [])]
+        existing = [p for p in sc["changed"] if p not in set(meta.get("deleted_files") or [])
+                    and (owned is None or p in owned)]
         out.append(f"- 範圍：**增量** {sc.get('reason')}。優先審這些變動檔案，需要時再讀它們呼叫到的其他檔案：")
-        out += [f"  - `{p}`" for p in existing] or ["  - （沒有仍存在的變動檔案）"]
+        out += _file_lines(existing) or ["  - （沒有仍存在的變動檔案）"]
         if meta.get("deleted_files"):
             out.append("- 這段期間**已刪除**的檔案（不用審；只在判斷之前的 finding 是否已修好時參考）：")
             out += [f"  - `{p}`" for p in meta["deleted_files"]]

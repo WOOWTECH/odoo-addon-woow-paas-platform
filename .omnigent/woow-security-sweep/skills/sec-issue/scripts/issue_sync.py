@@ -17,8 +17,10 @@
 
 安全設計：
 
-- 只寫 gates.yaml 的 issues.owner（Gitea mirror-internal）；repo 名取自本輪 config.json，不接受參數。
-  ⛔ 不寫 GitHub：目標 repo 是 public，未修先開就是公開漏洞細節。
+- 開單目標取自本輪 config.json 的 `disclosure.issues_to`（targets 設定，`owner/name`）；沒寫時用
+  gates.yaml 的 issues.owner ＋ repo 名。不接受命令列參數。
+- **寫入前一定先確認目標不是 public**：repo 是 private，或所在 org 的可見度是 limited／private；
+  否則整批中止。⛔ 不寫 GitHub：目標 repo 多半是 public，未修先開就是公開漏洞細節。
 - 一律透過 `tea api --login <issues.tea_login>` 寫入，本腳本不碰 token。
 - body 不貼程式碼片段；工具訊息與人的 note 先遮蔽秘密值形狀的字串，再放進 code fence
   （finding 訊息可能來自 repo 內容，是不可信資料）；gitleaks 只寫規則與位置。
@@ -61,7 +63,8 @@ LABELS: dict[str, tuple[str, str, bool]] = {
 }
 POSITIVE_ACTIONS = ("fix", "track", "escalate")
 NEGATIVE_ACTIONS = ("drop", "accept_risk")
-NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+#: owner／repo 名：英數字開頭（擋 `.`、`..` 這類會讓 API 路徑跳層的名稱）
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 MARKER_RE = re.compile(r"<!-- woow-security-sweep:fp=([0-9a-f]{16}) -->")
 
 #: 秘密值形狀（sec-report 的遮蔽規則）
@@ -149,15 +152,24 @@ def issue_title(finding: dict[str, Any], level: str) -> str:
     return re.sub(r"\s+", " ", title)[:150]
 
 
+def blob_url(cfg: dict[str, Any], head_sha: str, path: str, line: Any) -> str:
+    """GitHub：/blob/<sha>/<path>#L<n>；Gitea：/src/commit/<sha>/<path>#L<n>。"""
+    repo = cfg.get("repo") or {}
+    base = repo.get("web_url") or f"https://github.com/{repo.get('full_name')}"
+    kind = "blob" if str(repo.get("host") or "github.com") == "github.com" else "src/commit"
+    anchor = f"#L{int(line)}" if isinstance(line, int) else ""
+    return f"{base}/{kind}/{head_sha}/{urllib.parse.quote(path)}{anchor}"
+
+
 def issue_body(*, full_name: str, owner: str, name: str, finding: dict[str, Any], decision: dict[str, Any],
-               group: dict[str, Any], head_sha: str | None, trigger: str) -> str:
+               group: dict[str, Any], head_sha: str | None, trigger: str, cfg: dict[str, Any] | None = None) -> str:
+    cfg = cfg or {"repo": {"full_name": full_name}}
     info = decision.get("info") or {}
     path = safe_path(finding.get("path"))
     line = finding.get("line")
     loc = f"`{path}{f':{line}' if line else ''}`" if path else "（路徑不安全，已省略）"
     if path and head_sha and re.fullmatch(r"[0-9a-f]{7,40}", head_sha):
-        anchor = f"#L{int(line)}" if isinstance(line, int) else ""
-        loc = f"[{loc}](https://github.com/{full_name}/blob/{head_sha}/{urllib.parse.quote(path)}{anchor})"
+        loc = f"[{loc}]({blob_url(cfg, head_sha, path, line)})"
     h = group.get("human")
     if h:
         human = f"{h.get('label')}／{h.get('action')}（{str(h.get('ts', ''))[:10]}）"
@@ -168,7 +180,8 @@ def issue_body(*, full_name: str, owner: str, name: str, finding: dict[str, Any]
     tool = str(finding.get("tool") or "?")
     level = info.get("level") or "?"
     rows = [
-        ("repo", f"[{full_name}](https://github.com/{full_name})（鏡像 `{owner}/{name}`）"),
+        ("repo", f"[{full_name}]({(cfg.get('repo') or {}).get('web_url') or 'https://github.com/' + full_name})"
+                 f"（issue 開在 `{owner}/{name}`）"),
         ("位置", loc),
         ("工具／規則", f"{tool}／`{finding.get('rule')}`"),
         ("嚴重度", f"{level}（工具標示：{finding.get('severity_tool') or '-'}）"),
@@ -179,7 +192,7 @@ def issue_body(*, full_name: str, owner: str, name: str, finding: dict[str, Any]
     ]
     parts = [
         f"> 由 **woow-security-sweep** 自動開立：{why}。",
-        "> ⛔ 內容不要轉貼到公開的 GitHub repo；嚴重度 ≥ high 走 GitHub Security Advisory（private fork）。",
+        f"> ⛔ 內容不要轉貼到公開的 repo；嚴重度 ≥ high：{jg.high_fix_text(cfg)}。",
         "",
         "| 項目 | 內容 |",
         "|---|---|",
@@ -198,7 +211,7 @@ def issue_body(*, full_name: str, owner: str, name: str, finding: dict[str, Any]
         "",
         "### 下一步",
         "",
-        "- 成立：修正後關閉本 issue；嚴重度 ≥ high 請照 report.md 的 advisory 草稿處理",
+        "- 成立：修正後關閉本 issue；嚴重度 ≥ high 請照 report.md「給人的待辦」處理",
         f"- 誤報或接受風險：在 Inbox 回答，或在 runner 執行 `jev_gate.py human --id {decision.get('id')} ...`；"
         "sweep 下一輪會留言並關閉本 issue",
         "",
@@ -216,7 +229,7 @@ class TeaForge:
         self.base = f"repos/{owner}/{name}"
         self.login = login
 
-    def _call(self, method: str, path: str, body: Any = None) -> Any:
+    def _call(self, method: str, path: str, body: Any = None, *, absolute: bool = False) -> Any:
         cmd = ["tea", "api", "-i", "--login", self.login, "-X", method]
         with tempfile.TemporaryDirectory() as tmp:
             if body is not None:
@@ -224,7 +237,8 @@ class TeaForge:
                 data.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
                 cmd += ["-d", f"@{data}"]
             try:
-                res = subprocess.run(cmd + [f"{self.base}{path}"], capture_output=True, text=True, timeout=60)
+                res = subprocess.run(cmd + [path if absolute else f"{self.base}{path}"], capture_output=True,
+                                     text=True, timeout=60)
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise IssueError(f"tea 執行失敗：{type(exc).__name__}") from exc
         m = re.search(r"^HTTP/\S+ (\d{3})", res.stderr, re.M)
@@ -233,6 +247,17 @@ class TeaForge:
             raise IssueError(f"{method} {path} 失敗（exit {res.returncode}，HTTP {status or '?'}）")
         out = res.stdout.strip()
         return json.loads(out) if out else None
+
+    def visibility(self) -> dict[str, Any]:
+        """目標 repo 是否 private、所在 org 的可見度（user 帳號底下的 repo 沒有 org，回 None）。"""
+        repo = self._call("GET", "") or {}
+        owner = ((repo.get("owner") or {}).get("login")) or self.base.split("/")[1]
+        try:
+            org = self._call("GET", f"orgs/{owner}", absolute=True) or {}
+        except IssueError:
+            org = {}
+        return {"private": bool(repo.get("private")), "org_visibility": org.get("visibility"),
+                "mirror": bool(repo.get("mirror")), "has_issues": repo.get("has_issues")}
 
     def labels(self) -> dict[str, int]:
         return {lb["name"]: lb["id"] for lb in self._call("GET", "/labels?limit=100") or []}
@@ -290,6 +315,30 @@ def _labels_for(ids: dict[str, int], source: str, level: str | None) -> list[int
     return [ids[n] for n in names]
 
 
+def issue_target(cfg: dict[str, Any], conf: dict[str, Any], full_name: str) -> tuple[str, str]:
+    """targets 的 disclosure.issues_to（owner/name）優先；沒寫用 gates.yaml 的 issues.owner ＋ repo 名。"""
+    raw = str((cfg.get("disclosure") or {}).get("issues_to") or "")
+    if raw:
+        owner, _, name = raw.partition("/")
+    else:
+        owner, name = str(conf.get("owner") or ""), full_name.rpartition("/")[2]
+    if not NAME_RE.match(owner) or not NAME_RE.match(name):
+        raise IssueError(f"不允許的開單目標：{owner}/{name}")
+    return owner, name
+
+
+def check_not_public(forge: Any, owner: str, name: str) -> dict[str, Any]:
+    """開單前的硬檢查：目標必須是 private repo，或在 limited／private 的 org 底下。查不到也當成不通過。"""
+    try:
+        vis = forge.visibility()
+    except IssueError as exc:
+        raise IssueError(f"查不到 {owner}/{name} 的可見度，不開單：{exc}") from None
+    if not (vis.get("private") or vis.get("org_visibility") in ("limited", "private")):
+        raise IssueError(f"{owner}/{name} 是 public（org 可見度 {vis.get('org_visibility') or '無'}），"
+                         "不開單：未修的 finding 不能公開")
+    return vis
+
+
 def sync_run(run_dir: Path, sdir: Path, gates: dict[str, Any], *, forge: Any = None,
              dry_run: bool = False) -> dict[str, Any]:
     conf = gates.get("issues") or {}
@@ -300,11 +349,10 @@ def sync_run(run_dir: Path, sdir: Path, gates: dict[str, Any], *, forge: Any = N
     if not conf.get("enabled"):
         summary["skipped"].append("issues.enabled=false")
         return summary
-    owner, name = str(conf.get("owner") or ""), full_name.rpartition("/")[2]
-    if owner != "mirror-internal" or not NAME_RE.match(name):
-        raise IssueError(f"不允許的目標：{owner}/{name}（owner 只能是 mirror-internal）")
+    owner, name = issue_target(cfg, conf, full_name)
     threshold = float(conf.get("jev_min_confidence", 0.85))
     forge = forge or TeaForge(owner, name, str(conf.get("tea_login") or "git-prod"))
+    check_not_public(forge, owner, name)
 
     shadow = sdir / "shadow.jsonl"
     records = jg.read_jsonl(shadow)
@@ -369,7 +417,7 @@ def sync_run(run_dir: Path, sdir: Path, gates: dict[str, Any], *, forge: Any = N
                     continue
                 title = issue_title(finding, level or "?")
                 body = issue_body(full_name=full_name, owner=owner, name=name, finding=finding, decision=decision,
-                                  group=group, head_sha=head, trigger=kind)
+                                  group=group, head_sha=head, trigger=kind, cfg=cfg)
                 issue = {"number": None, "html_url": None} if dry_run else \
                     forge.create_issue(title, body, _labels_for(ids, f"sweep/{kind}", level))
                 log("opened", fp, decision, issue, kind)

@@ -31,10 +31,17 @@ def answers(choice="true_positive", conf=0.9, score=2.0):
 
 
 class FakeForge:
-    def __init__(self):
+    def __init__(self, vis=None):
         self.label_ids: dict[str, int] = {}
         self.issues: list[dict] = []
         self.calls: list[tuple] = []
+        # 預設跟 mirror-internal 一樣：repo 非 private、org 為 limited
+        self.vis = vis or {"private": False, "org_visibility": "limited"}
+
+    def visibility(self):
+        if isinstance(self.vis, Exception):
+            raise self.vis
+        return dict(self.vis)
 
     def labels(self):
         return dict(self.label_ids)
@@ -234,11 +241,41 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.forge.calls, [])
         self.assertEqual((self.state / "shadow.jsonl").read_text(), before)
 
-    def test_only_mirror_internal_owner(self):
+    def test_public_target_refused_before_any_write(self):
         run = self.round([self.finding()], answers(conf=0.95))
-        bad = {"issues": dict(GATES["issues"], owner="WOOWTECH")}
-        with self.assertRaises(iss.IssueError):
-            iss.sync_run(run, self.state, bad, forge=self.forge)
+        for vis in ({"private": False, "org_visibility": "public"}, {"private": False, "org_visibility": None},
+                    iss.IssueError("HTTP 404")):
+            with self.subTest(vis=vis):
+                forge = FakeForge(vis)
+                with self.assertRaises(iss.IssueError):
+                    iss.sync_run(run, self.state, GATES, forge=forge)
+                self.assertEqual(forge.calls, [])
+
+    def test_private_repo_in_public_org_allowed(self):
+        run = self.round([self.finding()], answers(conf=0.95))
+        out = iss.sync_run(run, self.state, GATES, forge=FakeForge({"private": True, "org_visibility": "public"}))
+        self.assertEqual(len(out["opened"]), 1)
+
+    def test_issue_target_from_disclosure(self):
+        cfg = {"disclosure": {"issues_to": "odoo-addons/woow_paas_platform"}}
+        self.assertEqual(iss.issue_target(cfg, GATES["issues"], REPO), ("odoo-addons", "woow_paas_platform"))
+        self.assertEqual(iss.issue_target({}, GATES["issues"], REPO), ("mirror-internal", "demo"))
+        for bad in ("evil", "a/b/c", "../x", "a/ b"):
+            with self.subTest(bad=bad), self.assertRaises(iss.IssueError):
+                iss.issue_target({"disclosure": {"issues_to": bad}}, GATES["issues"], REPO)
+
+    def test_body_links_follow_forge_and_disclosure(self):
+        cfg = {"repo": {"full_name": "ha-components/demo", "host": "git-prod.woowtech.io",
+                        "web_url": "https://git-prod.woowtech.io/ha-components/demo"},
+               "disclosure": {"high_fix_via": "internal_security_repo"}}
+        f = {"path": "x.py", "line": 3, "tool": "semgrep", "rule": "r", "message": "m"}
+        group = {"decisions": [{"ts": "2026-10-29"}], "human": None}
+        body = iss.issue_body(full_name="ha-components/demo", owner="mirror-internal", name="demo", finding=f,
+                              decision={"id": "d1", "info": {}}, group=group, head_sha="a" * 40, trigger="jev",
+                              cfg=cfg)
+        self.assertIn("https://git-prod.woowtech.io/ha-components/demo/src/commit/" + "a" * 40 + "/x.py#L3", body)
+        self.assertIn("-security", body)
+        self.assertNotIn("github.com", body)
 
     def test_disabled(self):
         run = self.round([self.finding()], answers(conf=0.95))

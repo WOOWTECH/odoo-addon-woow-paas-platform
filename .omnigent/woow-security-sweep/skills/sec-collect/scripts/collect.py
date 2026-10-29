@@ -54,19 +54,19 @@ import yaml
 SWEEP_DIR = Path(__file__).resolve().parents[3]
 TARGETS_DIR = SWEEP_DIR / "targets"
 TOOL_TIMEOUT = 900
-PRIVATE_KEYS = ("context", "review_focus", "review_classes", "history", "baseline", "disclosure")
+STACKS_DIR = SWEEP_DIR / "stacks"
+PRIVATE_KEYS = ("context", "review_focus", "review_classes", "history", "baseline", "disclosure",
+                "branch", "since_upstream", "origin")
 UPSTREAM_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+STACK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
+#: since_upstream 只接受 https 的 git remote（擋 file://、ext::、本機路徑這類會讓 git 執行或讀本機的寫法）
+REMOTE_RE = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9_./-]+?(?:\.git)?$")
+FETCH_TIMEOUT = 600
 
-#: repo 沒有 .security/sweep.yaml 時的保守預設
+#: repo 沒有 .security/sweep.yaml 時的保守預設；scan／always_human 由 stack profile 的 defaults 補上
 DEFAULT_PUBLIC: dict[str, Any] = {
     "version": 1,
-    "scan": {
-        "exclude": ["tests/", "i18n/", "**/__pycache__/"],
-        "tools": {"semgrep": {"rulesets": ["p/python", "p/secrets"]}, "bandit": {"skip": ["B101"]},
-                  "gitleaks": {}},
-    },
-    "always_human": {"paths": [".security/", "security/", "migrations/", "__manifest__.py"],
-                     "severities": ["critical", "high"], "topics": []},
     "autofix": {"enabled": False, "max_prs_per_run": 0},
     "verify": {},
 }
@@ -181,26 +181,87 @@ def snapshot_upstreams(repo: Path, run_dir: Path, cfg: dict[str, Any], *, fetch:
 
 # ── 設定 ──────────────────────────────────────────────────────────────────────
 
-def load_config(repo: Path, rev: str, targets_dir: Path = TARGETS_DIR) -> dict[str, Any]:
+def parse_remote(url: str) -> tuple[str | None, str | None]:
+    """git remote URL → (host, owner/name)。支援 https、`git@host:owner/name`、`ssh://git@host/owner/name`。"""
+    url = (url or "").strip().rstrip("/").removesuffix(".git")
+    m = (re.match(r"^[a-z+]+://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$", url)
+         or re.match(r"^(?:[^@/]+@)?([^/:]+):(.+)$", url))
+    if not m:
+        return None, None
+    host, path = m.group(1).lower(), m.group(2).strip("/")
+    return (host, path) if UPSTREAM_RE.match(path) else (host, None)
+
+
+def web_url(host: str | None, full_name: str) -> str:
+    return f"https://{host or 'github.com'}/{full_name}"
+
+
+def read_target(name: str, targets_dir: Path = TARGETS_DIR) -> tuple[dict[str, Any], Path | None]:
+    path = targets_dir / f"{name}.yaml"
+    if not path.exists():
+        return {}, None
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise CollectError(f"{path} 不是 YAML mapping")
+    return data, path
+
+
+def load_stack(name: str | None, stacks_dir: Path = STACKS_DIR) -> dict[str, Any]:
+    """讀 stacks/<名>.yaml；沒指定用 generic。名稱不合法或檔案不存在 ⇒ 中止（設定錯不能靜默退回預設）。"""
+    name = name or "generic"
+    if not STACK_RE.match(str(name)):
+        raise CollectError(f"stack 名稱不合法：{name!r}")
+    path = stacks_dir / f"{name}.yaml"
+    if not path.is_file():
+        raise CollectError(f"找不到 stack profile：{path}")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if data.get("name") != name:
+        raise CollectError(f"{path} 的 name 與檔名不符")
+    return data
+
+
+def target_branch(repo: Path, private: dict[str, Any]) -> str:
+    branch = private.get("branch")
+    if branch is None:
+        return default_branch(repo)
+    branch = str(branch)
+    if not BRANCH_RE.match(branch) or ".." in branch:
+        raise CollectError(f"targets 的 branch 不合法：{branch!r}")
+    return branch
+
+
+def load_config(repo: Path, rev: str, targets_dir: Path = TARGETS_DIR,
+                stacks_dir: Path = STACKS_DIR) -> dict[str, Any]:
+    name = repo.name
+    private, private_path = read_target(name, targets_dir)
+    profile = load_stack(private.get("stack"), stacks_dir)
     raw = show_file(repo, rev, ".security/sweep.yaml")
     if raw is None:
-        public, source = json.loads(json.dumps(DEFAULT_PUBLIC)), "default"
+        public = json.loads(json.dumps(DEFAULT_PUBLIC)) | json.loads(json.dumps(profile.get("defaults") or {}))
+        source = f"default（stack {profile['name']}）"
+        # 只有在 repo 沒有自己的 .security/sweep.yaml 時，targets 才能追加排除（repo 有就以 repo 的為準）
+        extra = [str(p) for p in (private.get("scan_exclude") or []) if str(p).strip()]
+        if extra:
+            scan = public.setdefault("scan", {})
+            scan["exclude"] = list(scan.get("exclude") or []) + extra
+            source += f"＋targets scan_exclude {len(extra)} 條"
     else:
         public, source = yaml.safe_load(raw) or {}, f"{rev}:.security/sweep.yaml"
-    name = repo.name
-    private_path = targets_dir / f"{name}.yaml"
-    private: dict[str, Any] = {}
-    if private_path.exists():
-        private = yaml.safe_load(private_path.read_text(encoding="utf-8")) or {}
     cfg = dict(public)
     for key in PRIVATE_KEYS:
         if key in private:
             cfg[key] = private[key]
-    cfg.setdefault("repo", {})
+    if not cfg.get("review_classes"):
+        cfg["review_classes"] = list(profile.get("review_classes") or [])
+    cfg["stack"] = {k: profile.get(k) for k in ("name", "version_files", "fix_verify")}
+    cfg["repo"] = dict(cfg.get("repo") or {})
+    host, full = parse_remote(git(repo, "remote", "get-url", "origin", check=False))
     if not cfg["repo"].get("full_name"):
-        url = git(repo, "remote", "get-url", "origin", check=False)
-        cfg["repo"]["full_name"] = url.rstrip("/").removesuffix(".git").split(":")[-1].split("github.com/")[-1]
-    cfg["_sources"] = {"public": source, "private": str(private_path) if private else None}
+        cfg["repo"]["full_name"] = full or name
+    cfg["repo"].setdefault("host", host or "github.com")
+    cfg["repo"]["web_url"] = web_url(cfg["repo"]["host"], cfg["repo"]["full_name"])
+    cfg["_sources"] = {"public": source, "private": str(private_path) if private_path else None,
+                       "stack": profile["name"]}
     return cfg
 
 
@@ -232,6 +293,162 @@ def scope(repo: Path, head: str, last: str | None, mode: str) -> dict[str, Any]:
         return {"mode": "full", "changed": None, "reason": f"last {last[:8]} 不是 head 的祖先（force-push？）"}
     changed = [p for p in git(repo, "diff", "--name-only", last, head).splitlines() if p]
     return {"mode": "incremental", "changed": changed, "reason": f"{last[:8]}..{head[:8]}"}
+
+
+# ── fork：只掃相對上游改過的部分（targets 的 since_upstream） ──────────────────────
+
+def fork_scope(repo: Path, head: str, conf: Any, *, fetch: bool) -> dict[str, Any]:
+    """把上游 branch fetch 到 `refs/sweep/upstream/<branch>`，算出 fork 相對 merge-base 改過、仍存在的檔案。
+
+    fetch 失敗時沿用本機已有的 ref（記在 fetch_error）；連一次都沒有成功過 ⇒ 中止這個 target，
+    不退回全量掃描（全量會把整個上游當成我們的程式碼來審，人已決定只掃 WOOWTECH 的改動）。
+    """
+    if not isinstance(conf, dict):
+        raise CollectError("since_upstream 要是 mapping（remote、branch）")
+    remote, branch = str(conf.get("remote") or ""), str(conf.get("branch") or "main")
+    if not REMOTE_RE.match(remote) or ".." in remote:
+        raise CollectError(f"since_upstream.remote 只接受 https URL：{remote!r}")
+    if not BRANCH_RE.match(branch) or ".." in branch:
+        raise CollectError(f"since_upstream.branch 不合法：{branch!r}")
+    ref = f"refs/sweep/upstream/{branch}"
+    fetch_error = None
+    if fetch:
+        try:
+            res = subprocess.run(["git", "-C", str(repo), "fetch", "--quiet", "--no-tags", remote,
+                                  f"+refs/heads/{branch}:{ref}"], capture_output=True, text=True,
+                                 timeout=FETCH_TIMEOUT)
+            fetch_error = res.stderr.strip()[:300] if res.returncode else None
+        except subprocess.TimeoutExpired:
+            fetch_error = f"fetch 超過 {FETCH_TIMEOUT} 秒"
+    if not git(repo, "rev-parse", "--verify", "--quiet", ref, check=False):
+        raise CollectError(f"上游 {remote} {branch} 從未 fetch 成功：{fetch_error or '本機沒有 ' + ref}")
+    base = git(repo, "merge-base", head, ref)
+    files = [p for p in git(repo, "diff", "--name-only", "--diff-filter=d", base, head).splitlines() if p]
+    return {
+        "remote": remote, "branch": branch, "ref": ref, "merge_base": base,
+        "fork_point": git(repo, "log", "-1", "--format=%cI", base),
+        "ahead": int(git(repo, "rev-list", "--count", f"{ref}..{head}") or 0),
+        "behind": int(git(repo, "rev-list", "--count", f"{head}..{ref}") or 0),
+        "files": files, "fetch_error": fetch_error,
+    }
+
+
+# ── 上游 advisory（since_upstream.advisories） ─────────────────────────────────
+
+_PRE_RANK = {"dev": 0, "a": 1, "alpha": 1, "b": 2, "beta": 2, "pre": 3, "preview": 3, "rc": 3, "c": 3}
+_CONSTRAINT_RE = re.compile(r"^\s*(<=|>=|==|=|<|>)?\s*v?([0-9][0-9A-Za-z.+-]*)\s*$")
+
+
+def version_key(raw: str) -> tuple[int, ...] | None:
+    """PEP 440／semver 的簡化排序鍵：數字段＋預發行（dev < a < b < rc < 正式）。認不出來回 None。"""
+    m = re.match(r"^\s*v?(\d+(?:\.\d+)*)(?:[.-]?(dev|alpha|beta|preview|pre|rc|a|b|c)\.?(\d*))?", raw or "", re.I)
+    if not m:
+        return None
+    nums = [int(x) for x in m.group(1).split(".")][:6]
+    nums += [0] * (6 - len(nums))
+    tag = (m.group(2) or "").lower()
+    pre = (_PRE_RANK[tag], int(m.group(3) or 0)) if tag else (9, 0)
+    return (*nums, *pre)
+
+
+def in_range(version: str, spec: str) -> bool | None:
+    """GitHub advisory 的 vulnerable_version_range（例：`>= 1.0, < 2.0`、`<= 8.7.0`）。無法判斷回 None。"""
+    v = version_key(version)
+    if v is None or not (spec or "").strip():
+        return None
+    for part in spec.split(","):
+        m = _CONSTRAINT_RE.match(part)
+        bound = version_key(m.group(2)) if m else None
+        if bound is None:
+            return None
+        op = m.group(1) or "="
+        ok = {"<": v < bound, "<=": v <= bound, ">": v > bound, ">=": v >= bound,
+              "=": v == bound, "==": v == bound}[op]
+        if not ok:
+            return False
+    return True
+
+
+def read_version(src: Path, conf: dict[str, Any]) -> tuple[str | None, str | None, int | None]:
+    """從快照讀 fork 的版號：回傳 (版號, 檔案, 行號)。"""
+    path = str(conf.get("version_file") or "")
+    pattern = str(conf.get("version_regex") or r'^\s*version\s*=\s*"([^"]+)"')
+    target = (src / path).resolve()
+    if not path or not target.is_relative_to(src.resolve()) or not target.is_file():
+        return None, path or None, None
+    rx = re.compile(pattern)
+    for n, line in enumerate(target.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        m = rx.search(line)
+        if m:
+            return m.group(1), path, n
+    return None, path, None
+
+
+def fetch_advisories(full_name: str) -> list[dict[str, Any]]:
+    """`gh api` 只讀上游 repo 已公開的 security advisories（GET；不帶任何寫入參數）。"""
+    if not UPSTREAM_RE.match(full_name):
+        raise CollectError(f"advisories.github 要是 owner/repo：{full_name!r}")
+    _, out, _ = _run_tool(["gh", "api", "--paginate",
+                           f"repos/{full_name}/security-advisories?state=published&per_page=100"], Path.cwd())
+    data = json.loads(out or "[]")
+    return data if isinstance(data, list) else []
+
+
+def advisory_findings(src: Path, conf: dict[str, Any], advisories: list[dict[str, Any]]
+                      ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """上游已公告、而 fork 目前版號落在受影響範圍（或無法判斷）的 advisory ⇒ finding。
+
+    fingerprint 固定為 `advisory:<GHSA id>`：fork 升版但仍受影響時是同一筆，升到修正版就不再偵測到、由 carryover 結案。
+    """
+    version, path, line = read_version(src, conf)
+    package = conf.get("package")
+    out: list[dict[str, Any]] = []
+    checked = 0
+    for adv in advisories:
+        ghsa = str(adv.get("ghsa_id") or "")
+        if not re.fullmatch(r"GHSA(-[0-9a-z]{4}){3}", ghsa):
+            continue
+        for vuln in adv.get("vulnerabilities") or []:
+            pkg = (vuln.get("package") or {}).get("name")
+            if package and pkg != package:
+                continue
+            checked += 1
+            spec = str(vuln.get("vulnerable_version_range") or "")
+            hit = in_range(version or "", spec)
+            if hit is False:
+                continue
+            sev = str(adv.get("severity") or "medium").lower()
+            sev = sev if sev in VALID_SEVERITIES else "medium"
+            state = "受影響" if hit else "無法比對版本，請人確認"
+            msg = (f"上游 {conf.get('github')} 已公告 {ghsa}（{sev}）：{_text(adv.get('summary'), 300)}。"
+                   f"受影響範圍 `{spec or '?'}`，修正版 `{vuln.get('patched_versions') or '?'}`；"
+                   f"fork 目前 {package or ''} {version or '（讀不到版號）'} ⇒ {state}。")
+            f = make_finding(src, tool="advisory", rule=ghsa, path=path or "?", line=line, severity=sev, message=msg,
+                             with_snippet=bool(path and line))
+            fp = f"advisory:{ghsa}"
+            f.update(id=hashlib.sha1(fp.encode("utf-8")).hexdigest()[:12], fingerprint=fp,
+                     advisory={"ghsa_id": ghsa, "published_at": adv.get("published_at"), "range": spec,
+                               "patched": vuln.get("patched_versions"), "package": pkg, "fork_version": version,
+                               "affected": hit, "url": adv.get("html_url")})
+            out.append(f)
+            break  # 同一個 advisory 只算一筆
+    status = {"status": "ok", "count": len(out), "checked": checked, "version": version, "version_file": path}
+    if version is None:
+        status["detail"] = f"讀不到 fork 版號（{path or '未設定 version_file'}）"
+    return out, status
+
+
+def collect_advisories(src: Path, conf: Any) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+    """回傳 (findings, tools.json 狀態, 這個工具掃過的路徑)。"""
+    if not isinstance(conf, dict) or not conf.get("github"):
+        return [], {"status": "skipped", "detail": "since_upstream 沒有設定 advisories"}, []
+    if not shutil.which("gh"):
+        return [], {"status": "unavailable", "detail": "runner 上找不到 gh"}, []
+    try:
+        found, status = advisory_findings(src, conf, fetch_advisories(str(conf["github"])))
+    except (CollectError, subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as exc:
+        return [], {"status": "error", "detail": str(exc)[:500]}, []
+    return found, status, [status["version_file"]] if status.get("version_file") else []
 
 
 # ── 工具 ──────────────────────────────────────────────────────────────────────
@@ -446,7 +663,7 @@ def resolve_state_dir(explicit: str | None) -> Path:
 
 
 def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bool = True,
-            targets_dir: Path = TARGETS_DIR) -> dict[str, Any]:
+            targets_dir: Path = TARGETS_DIR, stacks_dir: Path = STACKS_DIR) -> dict[str, Any]:
     repo = repo.resolve()
     if not (repo / ".git").exists():
         raise CollectError(f"不是 git repo：{repo}")
@@ -454,21 +671,25 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
     if fetch:
         res = subprocess.run(["git", "-C", str(repo), "fetch", "--quiet", "origin"], capture_output=True, text=True)
         fetch_error = res.stderr.strip()[:300] if res.returncode else None
-    branch = default_branch(repo)
+    private, _ = read_target(repo.name, targets_dir)
+    branch = target_branch(repo, private)
     rev = f"origin/{branch}"
-    head = git(repo, "rev-parse", rev)
+    head = git(repo, "rev-parse", "--verify", rev, check=False)
+    if not head:
+        raise CollectError(f"origin 沒有 branch {branch}（targets 的 branch 寫錯，或還沒 fetch）")
     run_dir = run_root / repo.name
     if run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
 
-    cfg = load_config(repo, rev, targets_dir)
+    cfg = load_config(repo, rev, targets_dir, stacks_dir)
     last = load_state(state_dir, repo.name).get("last_sha")
     sc = scope(repo, head, last, mode)
     src = run_dir / "src"
     unsafe_members = snapshot(repo, head, src)
 
     upstreams = snapshot_upstreams(repo, run_dir, cfg, fetch=fetch)
+    fork = fork_scope(repo, head, cfg["since_upstream"], fetch=fetch) if cfg.get("since_upstream") else None
 
     excludes = (cfg.get("scan") or {}).get("exclude") or []
     if sc["changed"] is None:
@@ -479,12 +700,22 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
         # 增量範圍裡已不在 HEAD 的檔案：工單要分開列，不能叫 worker 去審不存在的檔（10-27 實例）
         deleted = [p for p in sc["changed"] if not (src / p).exists()]
     files = [f for f in files if not is_excluded(f, excludes)]
+    if fork is not None:
+        # 只掃 fork 相對上游改過的檔案（人決定只掃 WOOWTECH 的改動，上游程式碼只當上下文）
+        owned = set(fork["files"])
+        files = [f for f in files if f in owned]
     config_changed = any(p.startswith(".security/") for p in (sc["changed"] or []))
 
     if sc["mode"] == "incremental" and not sc["changed"]:
         findings, tools = [], {"_all": {"status": "skipped", "detail": "沒有新 commit"}}
     else:
         findings, tools = collect_tools(src, files, cfg.get("scan") or {}, run_dir)
+    tool_scanned: dict[str, list[str]] = {}
+    adv_conf = (cfg.get("since_upstream") or {}).get("advisories") if fork is not None else None
+    if adv_conf:
+        # 上游公告與我們有沒有新 commit 無關，每輪都查
+        adv, tools["advisory"], tool_scanned["advisory"] = collect_advisories(src, adv_conf)
+        findings += adv
     # 指向快照外的 symlink 等成員：fixer 透過它寫檔可能寫到 worktree 外，一律 high 交人工
     for member in unsafe_members:
         path = member.split("（", 1)[0]
@@ -501,7 +732,8 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
     meta = {
         "repo": cfg["repo"]["full_name"], "repo_path": str(repo), "branch": branch, "head_sha": head,
         "last_sha": last, "scope": sc, "files_scanned": len(files), "scanned_files": files,
-        "deleted_files": deleted, "upstream": upstreams,
+        "deleted_files": deleted, "upstream": upstreams, "fork": fork, "tool_scanned": tool_scanned,
+        "stack": (cfg.get("stack") or {}).get("name"),
         "config_changed": config_changed,
         "unsafe_members": unsafe_members,
         "config_sources": cfg.pop("_sources"), "fetch_error": fetch_error, "findings": len(findings),

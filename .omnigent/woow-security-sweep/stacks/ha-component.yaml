@@ -1,0 +1,28 @@
+# woow-security-sweep 技術棧 profile：Home Assistant custom component。欄位說明見 README §技術棧 profile。
+name: ha-component
+description: Home Assistant custom integration（custom_components/<domain>/、manifest.json、config flow）
+defaults:
+  scan:
+    exclude: [tests/, "**/__pycache__/", translations/]
+    tools:
+      semgrep: {rulesets: [p/python, p/secrets]}
+      gitleaks: {}
+  always_human:
+    paths: [.security/, .github/workflows/, .gitea/workflows/, manifest.json, "*/manifest.json", hacs.json]
+    severities: [critical, high]
+    topics: []
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Cryptography and secrets
+- ATTACK-CLASSES.md#Obvious things
+- ha-component.md#Unauthenticated HTTP view
+- ha-component.md#Non-admin websocket and service surface
+- ha-component.md#Config flow and outbound URL trust
+- ha-component.md#Token and credential lifecycle
+- ha-component.md#Diagnostics, logs, and events as readers
+- ha-component.md#Files under www and config paths
+- ha-component.md#Subprocess and downloaded binaries
+- WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding
+version_files: [manifest.json, "custom_components/*/manifest.json"]
+fix_verify: 在本機以 pytest-homeassistant-custom-component 跑 tests/；修正放 mirror-internal/<repo>-security 時該 repo 開 Actions 跑 CI。

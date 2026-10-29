@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import json
 import os
 import subprocess
@@ -243,6 +244,9 @@ def _path_matches(path: str, rule: str) -> bool:
         path = path[2:]
     if rule.endswith("/"):
         return path.startswith(rule) or f"/{rule}" in f"/{path}"
+    if any(ch in rule for ch in "*?["):
+        # stack profile 用 `*/__manifest__.py`、`*/config.yaml` 這類規則抓子目錄裡的同名檔（fnmatch 的 * 會跨 /）
+        return fnmatch.fnmatchcase(path, rule)
     return path == rule
 
 
@@ -291,6 +295,24 @@ def level_index(name: str | None, levels: list[str]) -> int:
     return levels.index(name) if name in levels else -1
 
 
+HIGH_FIX_TEXT = {
+    "github_security_advisory": "走 GitHub Security Advisory private fork（揭露政策 C）",
+    "internal_security_repo": "修正放 mirror-internal/<repo>-security（非鏡像），不開公開 PR",
+    "private_pr": "repo 非公開，可直接開修正 PR，仍由人決定",
+}
+
+
+def high_fix_via(cfg: dict[str, Any]) -> str:
+    """targets 的 disclosure.high_fix_via（舊欄位名 fix_via）；沒寫時用最保守的 GitHub Security Advisory。"""
+    disc = cfg.get("disclosure") or {}
+    value = str(disc.get("high_fix_via") or disc.get("fix_via") or "github_security_advisory")
+    return value if value in HIGH_FIX_TEXT else "github_security_advisory"
+
+
+def high_fix_text(cfg: dict[str, Any]) -> str:
+    return HIGH_FIX_TEXT[high_fix_via(cfg)]
+
+
 def route_triage(finding: dict[str, Any], answers: dict[str, Any], cfg: dict[str, Any],
                  gates: dict[str, Any], today: dt.date) -> tuple[str, list[str], dict[str, Any]]:
     """依硬規則→baseline→Jev 答案→門檻，算出 proposed route。純函式，方便測試。"""
@@ -329,7 +351,7 @@ def route_triage(finding: dict[str, Any], answers: dict[str, Any], cfg: dict[str
         return "human", pre + [f"判誤報但信心或嚴重度不足以自動丟棄（{conf:.2f}／{levels[level]}）"], info
     # true_positive
     if level >= levels.index(gates["private_disclosure_min_level"]):
-        return "human", pre + [f"{levels[level]}：走 Security Advisory private fork（揭露政策 C）"], info
+        return "human", pre + [f"{levels[level]}：{high_fix_text(cfg)}"], info
     autofix = (cfg.get("autofix") or {}).get("enabled", False)
     if autofix and conf >= th["fix_confidence"] and info["autofixable"] >= th["autofix_noul"]:
         return "auto_fix", pre + ["成立、嚴重度 ≤ medium、可自動修"], info
@@ -511,7 +533,10 @@ def carryover_run(run_dir: Path, sdir: Path) -> dict[str, Any]:
         if g["human"]:
             continue
         tool_ok = (tools.get(tool) or {}).get("status") == "ok"
-        if path and tool_ok and (scanned is None or path in scanned):
+        # 工具自己記了掃描範圍（例如 advisory 只看版號檔）就用它，不然用本輪 scanned_files
+        tool_paths = (meta.get("tool_scanned") or {}).get(tool)
+        paths = set(tool_paths) if isinstance(tool_paths, list) else scanned
+        if path and tool_ok and (paths is None or path in paths):
             resolve(fp, last, finding, "not_redetected", f"本輪掃到 {path}（{tool} ok）但未再偵測到", None)
             continue
         carried.append({

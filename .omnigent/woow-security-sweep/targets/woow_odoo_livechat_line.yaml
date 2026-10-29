@@ -5,6 +5,8 @@
 # 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、review_classes、history、baseline、disclosure。
 # review_classes：deep review 工單要放哪些攻擊類別原文（檔名#類別；odoo.md 在 companions/，其餘在 third_party/）。
 
+stack: odoo
+origin: https://github.com/WOOWTECH/woow_odoo_livechat_line
 context:
   summary: LINE ↔ Odoo LiveChat 橋接。webhook 收 LINE 訊息後建立 guest 與 discuss channel，客服回覆再推回 LINE；支援多個 livechat channel
     各自綁一組 LINE channel。
@@ -51,7 +53,8 @@ history:
   - H-13
 disclosure:
   findings_to: omnigent_inbox
-  fix_via: github_security_advisory
+  issues_to: mirror-internal/woow_odoo_livechat_line
+  high_fix_via: github_security_advisory
 baseline: []
 
 # baseline 格式（accepted 必須有 expires，不允許永久豁免）：

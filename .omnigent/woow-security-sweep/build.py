@@ -114,7 +114,7 @@ CEL_GITEA = f"""event.type == "tool_call"
 && event.data.name in {GEN._cel_list(GEN.SHELL_TOOLS)}
 && has(event.data.arguments.command)
 && event.data.arguments.command.matches("{GITEA_WRITE_RE}")
-? {{"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫 mirror-internal、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"}} : {{"result": "ALLOW"}}"""
+? {{"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫非 public 的 repo、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"}} : {{"result": "ALLOW"}}"""
 
 P_SECRET = GEN._cel_yaml("p_secret_no_api_key_read", CEL_SECRET)
 P_FORGE = GEN._cel_yaml("p_forge_no_public_write", CEL_FORGE)

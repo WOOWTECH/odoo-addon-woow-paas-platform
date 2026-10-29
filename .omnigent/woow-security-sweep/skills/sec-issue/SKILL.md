@@ -1,14 +1,15 @@
 ---
 name: sec-issue
-description: woow-security-sweep 自動開 issue：用 issue_sync.py 把人判成立或 Jev 高信心成立的 finding 開到 Gitea mirror-internal/<repo>，並依人的決定更新或關閉；label 規則與報告寫法。
+description: woow-security-sweep 自動開 issue：用 issue_sync.py 把人判成立或 Jev 高信心成立的 finding 開到 targets 指定的非 public Gitea repo（disclosure.issues_to，預設 mirror-internal/<repo>），並依人的決定更新或關閉；label 規則與報告寫法。
 ---
 
 # sec-issue
 
 `<WS>`＝runner workspace（取得方式見 AGENTS.md「固定路徑」），指令裡一律代入字面值。
 
-判定成立的 finding 開成 Gitea issue，讓修正有工單可追。issue 一律開在 **Gitea
-`mirror-internal/<repo>`**（三個 LINE repo 的內部鏡像）。⛔ 不開在 GitHub：目標 repo 是 public，
+判定成立的 finding 開成 Gitea issue，讓修正有工單可追。issue 開在 targets 的 **`disclosure.issues_to`**
+（沒寫時是 `mirror-internal/<repo>`）。腳本寫入前會確認目標**不是 public**（repo 是 private，或 org 是
+limited／private），否則整批中止。⛔ 不開在 GitHub，也不開在 Gitea 的 public org（例如 `ha-components`）：
 未修先開等於公開漏洞細節。
 
 ## 指令
@@ -54,7 +55,7 @@ exclusive scope，同 scope 只會留一個。缺的 label 腳本會自己建。
 
 - exit 0：正常
 - exit 4：部分動作失敗，失敗的列在 `errors`，其餘照常完成。寫進報告，下一輪會重試
-- exit 2：設定錯誤（例如 owner 不是 mirror-internal）。寫進報告第一段，本輪不再重試
+- exit 2：設定錯誤（例如 `issues_to` 格式不對、目標是 public、查不到目標的可見度）。寫進報告第一段，本輪不再重試
 
 把結果寫進 report.md 的「issue」一節（格式見 sec-report）。Inbox 摘要題可附開出的單數。
 `skipped` 原因是「遠端找不到」的，代表有人拿掉了 `woow-security-sweep` label；只回報，不重開。

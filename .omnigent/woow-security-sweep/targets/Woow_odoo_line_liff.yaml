@@ -5,6 +5,8 @@
 # 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、review_classes、history、baseline、disclosure。
 # review_classes：deep review 工單要放哪些攻擊類別原文（檔名#類別；odoo.md 在 companions/，其餘在 third_party/）。
 
+stack: odoo
+origin: https://github.com/WOOWTECH/Woow_odoo_line_liff
 context:
   summary: LINE LIFF 整合層。webhook 接收、LIFF 登入（LINE id_token 換 Odoo session）、LIFF 頁面、rich menu、推播與 narrowcast、自動回覆。
   entry_points:
@@ -107,7 +109,8 @@ history:
   - H-19
 disclosure:
   findings_to: omnigent_inbox
-  fix_via: github_security_advisory
+  issues_to: mirror-internal/Woow_odoo_line_liff
+  high_fix_via: github_security_advisory
 baseline: []
 
 # baseline 格式（accepted 必須有 expires，不允許永久豁免）：

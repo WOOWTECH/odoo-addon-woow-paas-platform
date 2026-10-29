@@ -212,6 +212,8 @@ def check_tools() -> list[dict[str, Any]]:
                else check("uvx", FAIL, "找不到 uvx", "安裝 uv（semgrep／bandit 由 uvx 執行）"))
     out.append(check("tea", OK, "tea 可用") if shutil.which("tea")
                else check("tea", FAIL, "找不到 tea", "安裝 tea 並 tea login（開 issue 用）"))
+    out.append(check("gh", OK, "gh 可用（since_upstream 的上游 advisory 用它唯讀查詢）") if shutil.which("gh")
+               else check("gh", WARN, "找不到 gh", "安裝 gh 並 gh auth login；沒有它 advisory 標 unavailable"))
     return out
 
 
@@ -235,29 +237,68 @@ def check_jev_key(ws: Path, *, call_api: bool) -> list[dict[str, Any]]:
     return out
 
 
+def read_target_conf(ws: Path, name: str) -> dict[str, Any]:
+    """主 checkout 上 bundle 的 targets/<repo 目錄名>.yaml（沒有就是空的）。"""
+    import yaml
+    path = ws / "paas/woow_paas_platform" / BUNDLE_REL / "targets" / f"{name}.yaml"
+    if not path.is_file():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _norm_remote(url: str) -> str:
+    """比對用：去掉 .git、結尾斜線、帳號，ssh 寫法換成 host/path，小寫。"""
+    u = url.strip().rstrip("/").removesuffix(".git").lower()
+    u = re.sub(r"^[a-z+]+://(?:[^@/]+@)?", "", u)
+    u = re.sub(r"^(?:[^@/]+@)?([^/:]+):(?!\d)", r"\1/", u)
+    return u
+
+
 def check_targets(ws: Path, targets: list[Path], tea_login: str) -> list[dict[str, Any]]:
     out = []
     for repo in targets:
         name = repo.name
+        conf = read_target_conf(ws, name)
+        want = str(conf.get("origin") or f"https://github.com/WOOWTECH/{name}")
         if not (repo / ".git").exists():
-            out.append(check(f"target:{name}", FAIL, f"{repo} 不是 git repo", f"git clone https://github.com/WOOWTECH/{name}.git {repo}"))
+            out.append(check(f"target:{name}", FAIL, f"{repo} 不是 git repo", f"git clone {want}.git {repo}"))
             continue
         url = run(["git", "-C", str(repo), "remote", "get-url", "origin"]).stdout.strip()
-        good = re.search(rf"github\.com[:/]WOOWTECH/{re.escape(name)}(\.git)?$", url) is not None
+        good = bool(url) and _norm_remote(url) == _norm_remote(want)
         out.append(check(f"target:{name}", OK if good else WARN, f"origin {url or '（無）'}",
-                         None if good else "origin 應指向 GitHub WOOWTECH 正本"))
-        res = run(["tea", "api", "-i", "--login", tea_login, f"repos/{ISSUE_OWNER}/{name}"], timeout=60)
+                         None if good else f"origin 應指向正本 {want}（targets 的 origin 欄位）"))
+        issues_to = str((conf.get("disclosure") or {}).get("issues_to") or f"{ISSUE_OWNER}/{name}")
+        res = run(["tea", "api", "-i", "--login", tea_login, f"repos/{issues_to}"], timeout=60)
         m = re.search(r"^HTTP/\S+ (\d{3})", res.stderr, re.M)
         code = int(m.group(1)) if m else 0
-        push = False
+        info: dict[str, Any] = {}
         if code == 200:
             try:
-                push = bool((json.loads(res.stdout).get("permissions") or {}).get("push"))
+                info = json.loads(res.stdout)
             except json.JSONDecodeError:
                 pass
-        out.append(check(f"issues:{name}", OK if push else FAIL,
-                         f"tea（{tea_login}）對 {ISSUE_OWNER}/{name}：HTTP {code or '?'}、push={push}",
-                         None if push else f"tea login 一個對 {ISSUE_OWNER}/{name} 有寫入權限的帳號"))
+        push = bool((info.get("permissions") or {}).get("push"))
+        private = bool(info.get("private"))
+        org_vis = None
+        if code == 200 and not private:
+            owner = issues_to.split("/", 1)[0]
+            r2 = run(["tea", "api", "--login", tea_login, f"orgs/{owner}"], timeout=60)
+            try:
+                org_vis = (json.loads(r2.stdout) or {}).get("visibility")
+            except json.JSONDecodeError:
+                org_vis = None
+        hidden = private or org_vis in ("limited", "private")
+        status = OK if push and hidden else FAIL
+        detail = f"tea（{tea_login}）對 {issues_to}：HTTP {code or '?'}、push={push}、private={private}、org={org_vis or '-'}"
+        fix = None
+        if code != 200:
+            fix = f"建立 {issues_to}（targets 的 disclosure.issues_to）或修正該欄位"
+        elif not hidden:
+            fix = f"{issues_to} 是 public：改成 private，或改開在 limited／private 的 org（issue_sync 會拒絕開單）"
+        elif not push:
+            fix = f"tea login 一個對 {issues_to} 有寫入權限的帳號"
+        out.append(check(f"issues:{name}", status, detail, fix))
     return out
 
 

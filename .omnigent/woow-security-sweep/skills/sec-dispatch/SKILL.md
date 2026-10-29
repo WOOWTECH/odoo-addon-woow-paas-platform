@@ -98,7 +98,8 @@ python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec
 - worktree 由 worker 自建：`git -C <repo root> worktree add <worktree> -b fix/sec-<finding id> origin/<預設分支>`
 - 先寫一支會失敗的測試重現問題，再修；finding 有 `validation_plan.local` 就原文附上，當作那支測試的規格；
   `config.json` 的 `verify.regression_tests` 不得刪除或弱化
-- 不改 `always_human.paths`（命中就停下回報）；不改 `__manifest__.py` 版號
+- 不改 `always_human.paths`（命中就停下回報）；不改 `config.json` 的 `stack.version_files` 列的版號檔
+- 修正驗證照 `stack.fix_verify` 做，結果附在回報
 - commit identity 用該 repo 慣用的 agent identity（單次 `git -c user.name=… -c user.email=…`）；
   commit message `fix: <繁中描述>`，⛔ 不寫漏洞細節與利用方式
 - push 會經 `blast_radius` 進使用者的 Inbox 核准——這是預期的人工關卡

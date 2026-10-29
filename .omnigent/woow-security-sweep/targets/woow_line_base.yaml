@@ -5,6 +5,8 @@
 # 這裡只放公開會洩漏攻擊面或未修漏洞的內容：context、review_focus、review_classes、history、baseline、disclosure。
 # review_classes：deep review 工單要放哪些攻擊類別原文（檔名#類別；odoo.md 在 companions/，其餘在 third_party/）。
 
+stack: odoo
+origin: https://github.com/WOOWTECH/woow_line_base
 context:
   summary: LINE 基礎層。統一的 LINE Messaging API client（token、push、media 下載）、line.user 身分模型、partner 綁定 wizard。本模組沒有 HTTP
     controller，對外流量都經由下游模組進來。
@@ -40,7 +42,8 @@ history:
   - H-12
 disclosure:
   findings_to: omnigent_inbox
-  fix_via: github_security_advisory
+  issues_to: mirror-internal/woow_line_base
+  high_fix_via: github_security_advisory
 baseline: []
 
 # baseline 格式（accepted 必須有 expires，不允許永久豁免）：
