@@ -295,8 +295,8 @@
   "verification_limitations": [
     "映像未提供 OCI source labels；來源由 65 個檔案 SHA-256 與精確 config／manifest digest 核對。",
     "首次 probe 補正 MCP readiness 等待；第二次補開 process INFO log 以驗到 child 輸出，產品映像沒有修改。",
-    "平台 ORM／既有 DB -u 升級測試尚未執行；本 PR 留待主線先完成沙盒驗收再合併。",
-    "依使用者盤點：既有 23 個 live deployments 沒有 Nextcloud；沒有建立客戶實例。"
+    "依使用者盤點：既有 23 個 live deployments 沒有 Nextcloud；沒有建立客戶實例。",
+    "沙盒驗收為 exact develop base .277 到 PR2077 候選的範本升級；不是正式 .275 到下一版的全套 migration 驗收。"
   ],
   "probe_script_sha256": "d52f13e38e9c912c4981a503412663d416194102779c78093d1095b1353a67c6",
   "platform_validation": {
@@ -312,12 +312,160 @@
     "noupdate": 0,
     "admin_credential": "platform-generated; has_admin_gui=True, carrier=config_json",
     "backend_credential": "tenant-provided; no secret in seed",
-    "odoo_orm_upgrade_test": "not run; required before platform PR merge",
+    "odoo_orm_upgrade_test": "passed: 184 tests, 0 failures/errors/skips; 27 template DB snapshots compared, only Nextcloud image.tag changed",
     "repo_lint": {
       "exit_code": 0,
       "result": "repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / reuse-values / seed-topology / test-env-restore / capability-gate / conceal-instances / reset-budget-ladder / transition-anchor-utc / assertlogs-numeric-level / mixin-subscription-sudo / config-parameter-uninstall / duplicate-class-methods / pattern-doc-registry / availability-reason-labels / repo-lint-docstring-registry / kubectl-ns-whitelist-sync / poll-release-facts-single-source / doc-symbol-anchor / hermes-agent-013-seed / security-rule-lifecycle / workspace-access-rule-directions / one-time-credential-render / workspace-rule-directions / provision-sentinel-allowlist / sh-subscription-group-isolation / internal-ctx-key-registry / access-gate-no-ledger-read / tunnel-config-wire-shape / test-collectability / route-contract-golden / owl-relative-import / js-i18n-template-literal / cron-wiring / indentation / bulk-grant-ruler-sync / access-payload-shape-matches-operator-schema / init-odoo-budget-ladder / status-contract-golden / init-n8n-budget-ladder / newapi-timeout-ladder）",
       "python": "3.13 (existing isolated upstream venv)"
     },
     "diff_check": "passed"
+  },
+  "sandbox_gate": {
+    "at": "2026-10-29T04:37:05.241979+00:00",
+    "result": "passed",
+    "base_commit": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+    "candidate_commit": "4ab4306fb796e1a3652f37bf68ace79f79918b02",
+    "database": "woow_nc2077_gate",
+    "module_version_before": "18.0.1.0.277",
+    "module_version_after": "18.0.1.0.277",
+    "installed_modules": 81,
+    "tests": {
+      "failed": 0,
+      "errors": 0,
+      "total": 184,
+      "skipped": 0,
+      "unique_test_starts": 184,
+      "classes": {
+        "TestMcpServerTemplateSeed": 13,
+        "TestMcpOdooTemplateSeed": 17,
+        "TestMcpN8nTemplateSeed": 14,
+        "TestMcpOdooManageTemplateSeed": 14,
+        "TestMcpK8sTemplateSeed": 14,
+        "TestMcpVkTemplateSeed": 14,
+        "TestMcpOpenDesignTemplateSeed": 14,
+        "TestMcpLitellmTemplateSeed": 14,
+        "TestMcpNextcloudTemplateSeed": 14,
+        "TestMcpServerFamilyCoverage": 2,
+        "TestMcpNextcloudSeed": 15,
+        "TestInjectWorkspaceServiceUrl": 9,
+        "TestWorkspaceServiceUrlInjection": 28,
+        "TestHealTailscaleControlPlane": 2
+      }
+    },
+    "templates_compared": 27,
+    "other_templates_unchanged": 26,
+    "changed_slug": "mcp-nextcloud",
+    "only_changed_value": "values.image.tag",
+    "nextcloud_record_id": 27,
+    "record_id_and_xmlid_preserved": true,
+    "noupdate": false,
+    "old_pin": "38a9041fb44de6d8848166473facd2f443e04710@sha256:ad3e4dd18f0c642e33ce9a8cafef28aaa7012fe528c8daa54d7427910a5bfbc8",
+    "new_pin": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c",
+    "persisted_services_before": 0,
+    "persisted_services_after": 0,
+    "source_overlay_files": 1291,
+    "source_overlay_sha256_all_equal": true,
+    "harness_corrections": [
+      "Initial UID 1001 not present in passwd: set non-secret USER/LOGNAME/HOME for Odoo CLI; no product patch.",
+      "Initial DB snapshot used system Python without psycopg2; first 184-test pass was not accepted as full upgrade gate.",
+      "Switched snapshot to Odoo venv; restored exact old base with -u, captured old DB, then candidate -u and 184 tests again.",
+      "Snapshot verification is now a required precondition to candidate upgrade."
+    ],
+    "scope": "PR2077 base-to-candidate same-version XML update; not production .275-to-release/develop full migration acceptance",
+    "artifacts_sha256": {
+      "baseline-install.log": "1892092be8a06e0f27057eb808e4e058b71627954bd555d423a28ff4d1c349d7",
+      "baseline-reset.log": "f368847da94fae1400e3d4bed541050afaaf6c2eb9a8b540a783207363e885f2",
+      "baseline-db.json": "2e8ecc2c2def1fb2e33351355f4aeeb59232b5abf0717608945b2abb81cc30dd",
+      "candidate-upgrade-tests.log": "58e23b0b92ed22e37456833a96f2433ab68396763aca2632a0498ddb2e3f9009",
+      "candidate-db.json": "210a75cf02b691cf7c4ed02e9c3b7d4d7d3af64229bb8bb72e0f7e395fafc00e",
+      "test-selection.json": "93c2bfeb048519c4d18df2581f52baf245174850d73155b97816519318762dc6",
+      "base-source.json": "e28923a3681510a90a9b975c89dc9ce40e16a1eab3e5ee53cd94d1530d36b470",
+      "candidate-source.json": "f31139bd00d756f827cce5a1226108ef2ad5c79730748c7b5ea6210696d6ec7f",
+      "isolation.json": "a9d5210c5009164fbc6a4c9b4ac32dd72db45c40be1ea4b6abac842f2b49eb05",
+      "run_gate.py": "88a10f621ef83b84e92934dd36909602acb8deb6f30ab9aeea60ba7534da4c0b",
+      "snapshot_db.py": "cf9830651af30e894f4abb085c48551dd796d8d4c19fe66c3fc977975ecf0a99",
+      "create_sandbox.py": "fec25815a8280b127c5e7ab28e996d9a3c0ffa15c4d1673392fcb02b9d5f00bb",
+      "commands.jsonl": "c31fe5a1ba2ded674f4f407a7eee2144f2e46e97d3d67f6c3fd8591a159e0432"
+    },
+    "isolation": {
+      "pod_uid": "4525a5ea-9dc3-465d-aa64-48610fa798ab",
+      "node": "ubuntuserver-31zix",
+      "images": [
+        {
+          "name": "odoo",
+          "image": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-ci:latest",
+          "imageID": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-ci@sha256:5154be091a6ee9053b4093b4b5e4fe475e3e60f92f1a85dbf87c612b5477bd2b",
+          "ready": true
+        },
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres:15",
+          "imageID": "docker.io/library/postgres@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e",
+          "ready": true
+        }
+      ],
+      "automountServiceAccountToken": false,
+      "network_policy": {
+        "podSelector": {},
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ]
+      },
+      "network_probe": {
+        "postgres_loopback": "reachable",
+        "kubernetes_tcp": "blocked"
+      },
+      "persistent_volumes": false,
+      "database_source": "new emptyDir/initdb; no clone",
+      "namespace": "dev-sandbox-nc2077-20261029",
+      "requested_images": [
+        {
+          "name": "odoo",
+          "image": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-ci@sha256:5154be091a6ee9053b4093b4b5e4fe475e3e60f92f1a85dbf87c612b5477bd2b"
+        },
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e"
+        }
+      ],
+      "secret_scope": "only existing image pull credential copied in-memory to own namespace; no application/database credentials"
+    },
+    "cleanup": {
+      "at": "2026-10-29T04:37:40.161407+00:00",
+      "namespace": "dev-sandbox-nc2077-20261029",
+      "uid": "e205d429-f0df-417d-9589-41c9cf5a35c9",
+      "resources_verified": [
+        {
+          "kind": "Pod",
+          "name": "gate",
+          "uid": "4525a5ea-9dc3-465d-aa64-48610fa798ab"
+        },
+        {
+          "kind": "NetworkPolicy",
+          "name": "deny-all",
+          "uid": "84ee4356-8bcd-4e30-9e77-dce1a73bf3bd"
+        }
+      ],
+      "pvc_count": 0,
+      "no_shared_resources_deleted": true,
+      "delete_stdout": "namespace \"dev-sandbox-nc2077-20261029\" deleted",
+      "verified_absent": true,
+      "verified_at": "2026-10-29T04:39:46.407192+00:00"
+    },
+    "coordination": {
+      "develop_version": "18.0.1.0.277",
+      "release277_tag_commit": "2e323639c760e05285e8455b0a5c38c98f445b0b",
+      "develop_base": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+      "pr2060_target": ".278 per PR2060 release-owner record",
+      "merge_tree_with_pr2060": {
+        "pr2077_head": "4ab4306fb796e1a3652f37bf68ace79f79918b02",
+        "pr2060_head": "b30d0095c4b808dec257c5400ec4ad9cea36b2af",
+        "merge_tree_exit": 0,
+        "clean": true,
+        "tree": "fd46eecc10a9b55ee6fe876625fbb43db9b543c3"
+      },
+      "prod_db_version": "last user observation .275 at 03:15 UTC; no fresh DB read; 04:26 image read is separate evidence"
+    }
   }
 }
