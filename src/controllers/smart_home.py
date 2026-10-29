@@ -6,7 +6,9 @@ only the private context-cleaned capability, never a replacement request.env.
 """
 from __future__ import annotations
 
-from ..services.access_state import access_mutation_result
+from ..services.access_state import (
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_mutation_result)
 import logging
 from typing import Any
 
@@ -153,7 +155,15 @@ class SmartHomeController(Controller):
             # 無法收回已交出的憑證。真的要斷開對方只能換權杖（刪掉重建這個家）。
             # 前端文案必須照實說，否則使用者會以為按了就安全了。
             smarthome.action_release_binding()
-            return {"success": True, "data": smarthome.to_dict()}
+            data = smarthome.to_dict()
+            # 解綁不會讓對方離線，所以回應要帶「現在」接著幾個連接器，不能是解綁前
+            # 快取的 connector_count／binding_conflict（#38）。只讀；拿不到就用 DB 值。
+            try:
+                data.update(smarthome._live_tunnel_status())
+            except Exception:
+                _logger.exception(
+                    "Live tunnel status failed after release_binding sh=%s", smarthome.id)
+            return {"success": True, "data": data}
 
         if action == "delete":
             try:
@@ -829,15 +839,24 @@ class SmartHomeController(Controller):
         reordered = []
         touched_routes = smarthome.env[_ROUTE_MODEL]
         try:
-            seq = 0
+            pinned = []
             for pid in policy_ids:
                 pol = self._sh_policy(smarthome, pid)
                 if not pol:
                     continue
+                pinned.append(pol)
+                touched_routes |= pol.smart_home_route_id
+            # Precedence is authorization: the writes below are sync-suppressed,
+            # so the revocation decision is made here, from the order before and
+            # after (a no-op reorder revokes nothing).
+            pre_auth = access_authorization_snapshot(touched_routes)
+            seq = 0
+            for pol in pinned:
                 seq += 10
                 _skip_route_sync(pol).write({"sequence": seq})
                 reordered.append(pol.id)
-                touched_routes |= pol.smart_home_route_id
+            access_mark_authorization_changes(
+                smarthome.env, touched_routes, pre_auth)
             for sh_route in touched_routes:
                 sh_route._sync_access_to_operator()
             return access_mutation_result(touched_routes, {"reordered": reordered})

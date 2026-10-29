@@ -146,8 +146,10 @@ class TestSecurityAccessFailClosedAC1011(TransactionCase):
     def test_existing_app_failure_preserves_identity_and_origin(self):
         self.activate(app=True)
         self.client.fail_access = True
+        # A longer session only widens access: no revocation, so no park before the
+        # failing call (a narrowing edit parks first: test_access_authorization_change_revoke).
         with self.assertRaises(PaaSOperatorError):
-            self.route.write({'session_duration': '8h'})
+            self.route.write({'session_duration': '168h'})
         self.route.invalidate_recordset()
         self.assertEqual(self.route.access_app_id, 'fake-old-app')
         self.assertEqual([e[0] for e in self.client.events], ['access'])

@@ -753,11 +753,21 @@ class TestRouteAccessSync(TransactionCase):
         )
         mc = self._mock()
         sa, route = self._active_sa(mc, protected=True)
+        params = self.env['ir.config_parameter'].sudo()
         with patch(MOCK_GET_CLIENT, return_value=mc):
+            # The block policy is this test's baseline, not the edit under test: on
+            # a protected route it would start a revocation by itself (see
+            # test_access_authorization_change_revoke), and this test is about the
+            # *removal* failing while nothing was deleted.
+            params.set_param(
+                'woow_paas_platform.access_revoke_on_authorization_change', '0')
             pol = self.Policy.create({
                 'route_id': route.id, 'name': 'doomed-pol',
                 'decision': 'deny', 'rule_type': 'email_domain',
                 'rule_value': 'doomed.com'})
+            params.search([('key', '=',
+                            'woow_paas_platform.access_revoke_on_authorization_change'
+                            )]).unlink()
             mc.sync_access_app.side_effect = PaaSOperatorError('cf down')
             # Not ``assertRaises``: it rolls the block back, marker included. The
             # controllers catch the error, answer success=False and commit.

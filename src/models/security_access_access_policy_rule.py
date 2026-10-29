@@ -4,6 +4,9 @@ import re
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
+from ..services.access_state import (
+    access_authorization_snapshot, access_mark_authorization_changes,
+    access_record_ids, access_revoke_savepoint)
 # #536：見 policy 子模型同一段註解——sync-control 的兩個 key 只認模組私有
 # sentinel，租戶從 RPC payload 塞 `true` 打不開。
 from .security_access import (
@@ -353,7 +356,14 @@ class SecurityAccessAccessPolicyRule(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        with self.env.cr.savepoint():
+        policy_ids = access_record_ids(vals.get('policy_id') for vals in vals_list)
+        pre_policies = self.env[
+            'woow_paas_platform.security_access_access_policy'].browse(
+                policy_ids).exists()
+        pre_auth = access_authorization_snapshot(
+            pre_policies._access_sync_targets())
+        reached = []
+        with access_revoke_savepoint(self.env, reached):
             rules = super().create(vals_list)
             policies = rules.mapped('policy_id')
             # Adding rules can only push email count OVER the cap or attach an
@@ -378,7 +388,10 @@ class SecurityAccessAccessPolicyRule(models.Model):
                 # #745：走 policy 的錨點分派（route 或 cloud_service），不是
                 # `mapped('policy_id.route_id')`——CS 錨定時那個 mapped 是空集，
                 # 症狀是「規則改了但 Cloudflare 不知道」且完全無聲。
-                for anchor in policies._access_sync_targets():
+                targets = policies._access_sync_targets()
+                reached.extend(access_mark_authorization_changes(
+                    self.env, targets, pre_auth))
+                for anchor in targets:
                     anchor._sync_access_to_operator()
         return rules
 
@@ -396,7 +409,9 @@ class SecurityAccessAccessPolicyRule(models.Model):
         # `AccessError` 而不是 `UserError`。
         _assert_rule_reparent_authorised(self, vals)
         policies = self.mapped('policy_id')
-        with self.env.cr.savepoint():
+        pre_auth = access_authorization_snapshot(policies._access_sync_targets())
+        reached = []
+        with access_revoke_savepoint(self.env, reached):
             result = super().write(vals)
             policies = (policies | self.mapped('policy_id'))
             policies._check_at_least_one_include()
@@ -415,14 +430,19 @@ class SecurityAccessAccessPolicyRule(models.Model):
                     and any(k in vals for k in (
                         'group', 'rule_type', 'rule_value', 'sequence',
                         'policy_id'))):
-                for anchor in policies._access_sync_targets():
+                targets = policies._access_sync_targets()
+                reached.extend(access_mark_authorization_changes(
+                    self.env, targets, pre_auth))
+                for anchor in targets:
                     anchor._sync_access_to_operator()
         return result
 
     def unlink(self):
         policies = self.mapped('policy_id')
         anchors = policies._access_sync_targets()
-        with self.env.cr.savepoint():
+        pre_auth = access_authorization_snapshot(anchors)
+        reached = []
+        with access_revoke_savepoint(self.env, reached):
             result = super().unlink()
             # Removing a rule can drop the last Include — re-validate surviving
             # policies (a policy deleted by cascade no longer exists → skipped).
@@ -433,9 +453,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
             if not _is_sync_control(self.env, _CTX_RULE_REPLACE):
                 policies.exists()._check_at_least_one_include()
             if not self._suppress_route_sync():
-                for anchor in anchors:
-                    if anchor.exists():
-                        anchor._sync_access_to_operator()
+                targets = [anchor for anchor in anchors if anchor.exists()]
+                reached.extend(access_mark_authorization_changes(
+                    self.env, targets, pre_auth))
+                for anchor in targets:
+                    anchor._sync_access_to_operator()
         return result
 
     def to_dict(self):

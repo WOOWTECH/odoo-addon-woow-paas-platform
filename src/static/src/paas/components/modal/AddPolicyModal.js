@@ -27,7 +27,8 @@ const BULK_GRANT_RULE_TYPES = ["email_domain", "everyone", "ip_range", "country"
  * Mirrors Cloudflare's native policy builder.
  *
  * When a `policy` prop is passed the modal is in edit mode (PUT), otherwise
- * create mode (POST). On success the parent reloads its detail via onSaved.
+ * create mode (POST). On success the parent reloads its detail via onSaved
+ * (called with the explanation when the change is stored but still being applied).
  *
  * #746：原本直接 import `securityAccessService`，等於把「policy 長什麼樣子」
  * （這個元件的職責）和「policy 存去哪裡」（呼叫端的職責）綁死在一起——Cloud
@@ -264,8 +265,9 @@ export class AddPolicyModal extends Component {
     const res = await this.props.savePolicy(
       vals, this.isEdit ? this.props.policy.id : null);
     this.state.saving = false;
-    if (res.success) {
-      this.props.onSaved();
+    if (res.success || res.saved) {
+      // `saved` without `success`: stored, still being applied -- the parent shows why.
+      this.props.onSaved(res.success ? null : res.error);
     } else {
       this.state.error = res.error;
     }

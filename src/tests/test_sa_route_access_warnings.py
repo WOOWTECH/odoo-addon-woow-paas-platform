@@ -449,7 +449,12 @@ class TestSaRouteUnresolvedIdpEndpoint(HttpCase, _HttpSaFixture):
 
         client = _client()
         with patch(MOCK_SA_CLIENT, return_value=client):
-            data = self._rpc(path, {'login_google': False, 'login_email_otp': True})
+            # No login method chosen means every provider; picking one narrows the
+            # app, so the edit starts a token revocation: saved, not yet live.
+            result = self._rpc(path, {'login_google': False, 'login_email_otp': True},
+                               expect_success=False)
+        self.assertTrue(result['saved'])
+        data = result['data']
         self.assertEqual(client.sync_access_app.call_args.args[0]['login_idp_types'],
                          ['onetimepin'])
         self.assertEqual(data['access_unresolved_idp_types'], '')

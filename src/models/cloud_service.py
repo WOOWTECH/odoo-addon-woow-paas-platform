@@ -1,4 +1,7 @@
 from ..services.access_state import AccessProtectionError, AccessPublicationError, access_configuration_ready, access_revoke_hold_seconds, access_revoke_operator_reports, access_revoke_provider_accepted, access_revoke_state, require_access_sync_receipt, schedule_access_resync, sync_access_app_create_or_adopt
+from ..services.access_state import (
+    access_authorization_fingerprint, access_authorization_snapshot,
+    access_mark_authorization_changes, access_revoke_savepoint)
 import psycopg2.errors
 import contextlib
 import copy
@@ -10383,6 +10386,11 @@ class CloudService(models.Model):
                 and not self.access_token_revoke_accepted_at),
         }
 
+    def _access_authorization_fingerprint(self):
+        """Effective authorization semantics of this service's Access app."""
+        self.ensure_one()
+        return access_authorization_fingerprint(self._build_access_payload())
+
     def _mark_access_token_revoke_pending(self):
         existing = self.filtered('access_app_id')
         if existing:
@@ -11834,9 +11842,13 @@ class CloudService(models.Model):
         if access_sync and vals.get('is_protected') is False:
             unprotecting = self.filtered(
                 lambda service: service.is_protected and service.access_app_id)
+        # Login methods / session duration decide who the app lets in: an edit
+        # revokes the sessions issued under the old semantics (see access_state).
+        pre_auth = access_authorization_snapshot(self) if access_sync else {}
+        reached = []
         with contextlib.ExitStack() as stack:
             if access_sync:
-                stack.enter_context(self.env.cr.savepoint())
+                stack.enter_context(access_revoke_savepoint(self.env, reached))
             for service in unprotecting:
                 client = service._get_operator_client()
                 service._park_access_origin(client)
@@ -11910,6 +11922,8 @@ class CloudService(models.Model):
                 for project in (projects | self.mapped('project_ids')):
                     project._reconcile_agent_runtime_reach(old.get(project.id, set()))
             if access_sync:
+                reached.extend(access_mark_authorization_changes(
+                    self.env, self, pre_auth))
                 # liveness gate 在 `_sync_access_to_operator` 裡（沒有 subdomain
                 # ／deleting／從未保護過都是 no-op），這裡只負責轉發。
                 # A service held by a token revocation is never released by a
