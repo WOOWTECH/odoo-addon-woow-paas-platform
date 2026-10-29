@@ -3273,6 +3273,9 @@
              守線：test_mcp_nextcloud_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpNextcloudTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入公開網址）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
+        <!-- 2026-10-29：#91 merge daaf8b03，422 Sabre detail 先遮罩已知憑證再截為 200 字；500 短文案不變。
+             image manifest／config digest 已從 registry 核對；來源與真映像驗收見
+             docs/verification/2026-10-29-nextcloud-422-image.json。此變更只準備 seed，尚未同步正式 DB。 -->
         <record id="cloud_app_mcp_nextcloud" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：Nextcloud</field>
             <field name="slug">mcp-nextcloud</field>
@@ -3307,7 +3310,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
-            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:ad3e4dd18f0c642e33ce9a8cafef28aaa7012fe528c8daa54d7427910a5bfbc8"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "nextcloud", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin", "tag": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c"}, "service": {"port": 8080}, "envPrefix": "NEXTCLOUD_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "nextcloud-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "NEXTCLOUD_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>

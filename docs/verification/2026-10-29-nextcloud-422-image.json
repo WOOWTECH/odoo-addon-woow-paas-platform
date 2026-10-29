@@ -1,0 +1,512 @@
+{
+  "日期": "2026-10-29",
+  "範圍": "僅 Nextcloud 範本映像 pin，未升級平台映像、正式資料庫或任何服務",
+  "source": {
+    "paas_pr": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/pulls/91",
+    "paas_head": "b3201ba657c07ed01e7e8ba8b233044f900fcf37",
+    "paas_merge": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a",
+    "merge_parents": [
+      "38a9041fb44de6d8848166473facd2f443e04710",
+      "b3201ba657c07ed01e7e8ba8b233044f900fcf37"
+    ],
+    "upstream_pr": "https://github.com/WOOWTECH/Woow_nextcloud_mcp_server/pull/1",
+    "upstream_merge": "ce59615ddbb5b5a9de71f30960c1c6f1763e51da",
+    "vendor_pin": "159410ac2c5204cd0ba4c6cd2cfa729e5bff29a7",
+    "platform_base": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+    "platform_base_branch": "develop"
+  },
+  "image": {
+    "image": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin:daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c",
+    "digest": "sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c",
+    "tag": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a",
+    "manifest_verified": true,
+    "config_verified": true,
+    "config_digest": "sha256:10afd5a5542eb6f498346a13c56168d0ea1da492af0876a4d7f090a2fe5f0ee4",
+    "architecture": "amd64",
+    "os": "linux",
+    "user": "1000:1000",
+    "labels": null,
+    "auth_source": "paas-system/jfrog-registry; in memory only; GET requests only"
+  },
+  "main_ci": {
+    "state": "success",
+    "checks": [
+      {
+        "context": "CI / changed (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35097"
+      },
+      {
+        "context": "Mirror to GitHub / mirror (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31830/jobs/35106"
+      },
+      {
+        "context": "CI / build (hermes) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35098"
+      },
+      {
+        "context": "CI / build (k8s) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35099"
+      },
+      {
+        "context": "CI / build (litellm) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35100"
+      },
+      {
+        "context": "CI / build (n8n) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35101"
+      },
+      {
+        "context": "CI / build (opendesign) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35104"
+      },
+      {
+        "context": "CI / build (odoo) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35103"
+      },
+      {
+        "context": "CI / build (nextcloud) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35102"
+      },
+      {
+        "context": "CI / core-tests (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35096"
+      },
+      {
+        "context": "CI / build (vk) (push)",
+        "status": "success",
+        "url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/31829/jobs/35105"
+      }
+    ]
+  },
+  "image_probe": {
+    "image_probe": "passed",
+    "uid": 1000,
+    "source_hashes_verified": {
+      "apps/nextcloud/nextcloud_mcp_admin/__init__.py": "763a3de50d0ca64dbbe7d488b9c3de117f9b8cd366d14e0c9ecc89d8ca1dc3fa",
+      "apps/nextcloud/nextcloud_mcp_admin/health_probes.py": "7fa362d09986415d011d47f833f5a62361bab8826f25dcfb1ba45e4db33f34c2",
+      "apps/nextcloud/nextcloud_mcp_admin/launcher.py": "3fc8fb520bcd01425bdd9a0f43d4ec3a519cbb5ec6572f999acabb916c7028ec",
+      "apps/nextcloud/nextcloud_mcp_admin/log_redaction.py": "d4790b7881f9a6e62bb0591e62f7d9a3cd68f3da536be9002874b851610b25ae",
+      "apps/nextcloud/nextcloud_mcp_admin/main.py": "ae41d5d996cb66683ec6c3ccb6a800c6888667ab84d828ce28689ec502cffb4c",
+      "apps/nextcloud/nextcloud_mcp_admin/routers/__init__.py": "707368fd284b76957619ce6691100660e512fddbd13fa55b412282093cc01ddd",
+      "apps/nextcloud/nextcloud_mcp_admin/routers/config.py": "cd478e230d730277b4d4172402f3fcc4ddde0ac19944dcfc500dc976694851e6",
+      "apps/nextcloud/nextcloud_mcp_admin/seed_defaults.py": "76ce128a579e567628a70ebe0c0774ed6f0c1c17059584885dfac81f42807ab9",
+      "apps/nextcloud/nextcloud_mcp_admin/tool_policy.py": "46884cca0d55e8d34ebec70ed658beb198198cff9a5ae7a99c3c6808f5e0b92d",
+      "apps/nextcloud/nextcloud_mcp_admin/tool_registry.py": "c3d33f692a5054b7a9ee864585c08148a79324a02c5908bf21d73d48ef7385f4",
+      "apps/nextcloud/nextcloud_mcp_server/__init__.py": "0f541abd284ed5379955acb5c8e52b56911024f2dbaf188a251bfb1be2842ff9",
+      "apps/nextcloud/nextcloud_mcp_server/caldav.py": "a6643700ae4f2b9c998020cd4ba0e4f03c3716fc33049ec1364eb39c742c921f",
+      "apps/nextcloud/nextcloud_mcp_server/client.py": "ebc19b1faf64c7b952b66545738356cf01e2f075bb4384343fdbe74052fbb3f0",
+      "apps/nextcloud/nextcloud_mcp_server/errors.py": "47c695afd7d99a050abc08e1bd431d8d3b31e923dd66fe4fdbbe349f07888800",
+      "apps/nextcloud/nextcloud_mcp_server/ical.py": "531ca3c58684ea1c7dd504b440703c80699ccbf024278e568121195d9738b9af",
+      "apps/nextcloud/nextcloud_mcp_server/paths.py": "806f187a9ad668c89ddfa71c4e827ac78f69e9649493fd76228a17683e4b7c4d",
+      "apps/nextcloud/nextcloud_mcp_server/server.py": "fa2f912301bd0d3eabeadfe5dba304f9db9fa869de5f91ea9f53f62e6fe129b2",
+      "apps/nextcloud/nextcloud_mcp_server/settings.py": "d8283658375f65ec0022a5e04e48d0109e14d49a8df1f7e6c8fcbd905ebb45ad",
+      "apps/nextcloud/nextcloud_mcp_server/tools.py": "9b22f15816e56e6808a509886d89f52a04152dec99bf9078ccd257e098fb4aa4",
+      "apps/nextcloud/nextcloud_mcp_server/webdav.py": "9b1502cacf1a8451a015a69aa680b354aec844ab1f5eb2579940f28523addb0b",
+      "packages/mcp-admin-core/mcp_admin_core/__init__.py": "6afe41d071073cc28c53954860f8829a0d787286ce6c0f5a1b0be41e1f5bce11",
+      "packages/mcp-admin-core/mcp_admin_core/app.py": "520863e1ca6ebd2549626f72d86ac5cd2968626521785fe8654c90dc852e5345",
+      "packages/mcp-admin-core/mcp_admin_core/auth/__init__.py": "0fd167eb1d9071b80e4c6dddf5bcd9f1a86633f24fa782673acb2c72d050dd4b",
+      "packages/mcp-admin-core/mcp_admin_core/auth/login_throttle.py": "6292607e258f9e9643a395fb7783da9cde902fa6a16c91e696057820f82b7e46",
+      "packages/mcp-admin-core/mcp_admin_core/auth/middleware.py": "70308bc798918b627a0f877cb2ab7f137a5f0a316f342e7c4ca9120fc4bf793a",
+      "packages/mcp-admin-core/mcp_admin_core/capabilities.py": "f29dcb3174ffbfe33a3aedbc792fa3d5fd461a026e2c500a5e3194ef9565dfa7",
+      "packages/mcp-admin-core/mcp_admin_core/config/__init__.py": "d001acd514fd5900ada33df1c3e6a298d18ae8d6742a701394e70958ad089e3d",
+      "packages/mcp-admin-core/mcp_admin_core/config/store.py": "12687db0617a57340b2f00afbe57b616618cdc34ef79ad809b2b3e604c38267d",
+      "packages/mcp-admin-core/mcp_admin_core/configuration.py": "84e8f4481f4d79a3ac22c292ef91d5a596e7f71dffc72938c0ea645cbec354c1",
+      "packages/mcp-admin-core/mcp_admin_core/connection_apply.py": "0900b029d54c5c3315bee37787c1f1829f51ece5fccea122bb4b46204a295258",
+      "packages/mcp-admin-core/mcp_admin_core/initial_token.py": "60995515951a0a4ad17f35ff42bf7af9cc13f3239d15155c15e3b0c51832981f",
+      "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629",
+      "packages/mcp-admin-core/mcp_admin_core/log_redaction.py": "a5f0476413dba7df3f321128b49396621ae51b99418fb8f262986e0297d84369",
+      "packages/mcp-admin-core/mcp_admin_core/mcp_access.py": "bf4c89a54818f2b3b39b8093b7936030447e75b98c39514e3072470da4edbbae",
+      "packages/mcp-admin-core/mcp_admin_core/mcp_sse_wrapper.py": "ed407243cad3634b7c62f83b3d8107d1b5716a011c4e25c67287ca9dc5284f49",
+      "packages/mcp-admin-core/mcp_admin_core/operation_policy.py": "b21ca550fb700944971826f55adca3535a7b24e37fc8f8bb62dcda73462e01e4",
+      "packages/mcp-admin-core/mcp_admin_core/owner_defaults.py": "d8ef77cc21234632c708cbe2c549c657c41dfe0d1a5ed35c2671d4e3c78f7bda",
+      "packages/mcp-admin-core/mcp_admin_core/process.py": "dfe729abb833bd754caebc3444de76b8e1596b07f7bcbc7036c73caaaef70e11",
+      "packages/mcp-admin-core/mcp_admin_core/protocol_era.py": "8133849fa8af7a029e03a912ee2224ac9f35d13c548d86e0642e25a96a185947",
+      "packages/mcp-admin-core/mcp_admin_core/proxy.py": "db9cb81f694ba56a6020262e5ad598055617e4a463bfa3686a912f393e8c3198",
+      "packages/mcp-admin-core/mcp_admin_core/request_body.py": "578ef87a3481fa6cf04670aa535ddf5f3b70b5671c8549981efc120700287de4",
+      "packages/mcp-admin-core/mcp_admin_core/request_limits.py": "75731c1e1f0c55d70cdcf5835236c0d9ef02e6d0d28d39082f4607e158751094",
+      "packages/mcp-admin-core/mcp_admin_core/routers/__init__.py": "ce3c476ab59712b2a010ce1cb2f868b45235e66d0e6fc31ad762300b58d24d7f",
+      "packages/mcp-admin-core/mcp_admin_core/routers/health.py": "0ee56f79266d65ac1e7a8208b02d88866240083a2b0068e44a72eff44b64f1c6",
+      "packages/mcp-admin-core/mcp_admin_core/routers/logs.py": "24a34ec9edb58e1977e66009694c90823e96f37736962db31e54050554371e2a",
+      "packages/mcp-admin-core/mcp_admin_core/routers/settings.py": "1f0589a77b7c3ffc07ce64938ae45fc83903457728e93c1510f3f07e598a6c26",
+      "packages/mcp-admin-core/mcp_admin_core/routers/tokens.py": "87a7ef8fe4bcbe9c3636588e47013006933a1a877d3f34967e371f6c007abfc9",
+      "packages/mcp-admin-core/mcp_admin_core/routers/tools.py": "74bdc4feaadf9480a7cc4b288b6e43fd540f4c22920dbb936622e943d0e31366",
+      "packages/mcp-admin-core/mcp_admin_core/security_headers.py": "fb9b7936885b0baa125dc58a3f6879b27ad20e28a619b994cdfb062da0c155c4",
+      "packages/mcp-admin-core/mcp_admin_core/session_reclaim.py": "68e5a82beda0d8e7c72417833d805d645356d288ef8adc19c7d1ad60a8fc6ad8",
+      "packages/mcp-admin-core/mcp_admin_core/setup_status.py": "f71fc9c6be346a20375b347488df8ce25abe390b230e67bd073511eaa075ae05",
+      "packages/mcp-admin-core/mcp_admin_core/tool_error_text.py": "dc40e449bbd55c5c7844d503db74a2f3149757e08a95ea2c2fe3b289ca943b8f",
+      "packages/mcp-admin-core/mcp_admin_core/tool_filter.py": "f2d5434af412549211ff2d67053996858ac9f74b3ece448623cf8da6af19d1e8",
+      "packages/mcp-admin-core/mcp_admin_core/tools/__init__.py": "d698a614cdad427037c720db6124e0e783489aabe5924fb44ff56c0e10c8102e",
+      "packages/mcp-admin-core/mcp_admin_core/tools/registry.py": "55ae4006ac2957be984b2620a4da3458ff0a91bc0818a6dffc0e5f2718e5bd3b",
+      "packages/mcp-admin-core/mcp_admin_core/util/__init__.py": "1dc562d7e3929327dc77e2c4542b2c9569b63313e7eff7c519ae89cfaab7a45b",
+      "packages/mcp-admin-core/mcp_admin_core/util/mask.py": "b9031482951b5ae318e8d15bfd71575077acefbddea312ae68185255dd3004f0",
+      "packages/mcp-admin-core/mcp_admin_core/util/net_errors.py": "446a2867f5292bc231482b205328c325a68cd58208df606aa43f0aacde006277",
+      "packages/mcp-admin-core/mcp_admin_core/util/secrets.py": "4a919dc8015da48018dc7cbbbc713b77d4bc94e481a7d0dc304e28887064813a",
+      "packages/mcp-admin-core/mcp_admin_core/util/ssrf.py": "74c25d207072cc31b7c183234ed9b694015c87dfd7c9821f6cfb68d72b5f518c",
+      "packages/mcp-admin-core/mcp_admin_core/util/xmlrpc_async.py": "1fa94325212dbd6ab536a8108357f85b981e4b3c3a809cf3cec6a04ed17d4994",
+      "apps/nextcloud/VENDORED.md": "05458412575631a56dd2c464c709eb471e655c115695472f5f28d4109d82db2b",
+      "apps/nextcloud/pyproject.toml": "17c88ed330d71ecaec92da999b0265d5c326bf029a023bb4b7dd188f8b6b6d2e",
+      "packages/mcp-admin-core/pyproject.toml": "879b036b37100d692849bbac2bd841c50c6c6dc46dee46b98eac70ec1e95cf99",
+      "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db"
+    },
+    "health": [
+      {
+        "status": "ok",
+        "mcp": "running"
+      },
+      {
+        "status": "ok",
+        "mcp": "running"
+      },
+      {
+        "status": "ok",
+        "mcp": "running"
+      },
+      {
+        "status": "ok",
+        "mcp": "running"
+      }
+    ],
+    "rows": [
+      {
+        "form": "raw",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "basic",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "url",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "json",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "base64",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "cut",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "folded",
+        "transport": "sse",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "raw",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "basic",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "url",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "json",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "base64",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "cut",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      },
+      {
+        "form": "folded",
+        "transport": "json",
+        "masked": true,
+        "detail_cap": 200,
+        "500_fixed": true
+      }
+    ],
+    "tool_calls": 42,
+    "known_credentials_in_logs": false
+  },
+  "isolation": {
+    "network": "none; only container loopback HTTP",
+    "uid": 1000,
+    "rootfs": "read-only",
+    "memory": "768MiB",
+    "cpu": 1,
+    "pids_limit": 128,
+    "capabilities": "ALL dropped",
+    "mounts": "only private tmpfs for /tmp, /data, /home/app",
+    "logging": "uvicorn log-config enables existing mcp_admin_core.process INFO logger",
+    "shared_prune": false,
+    "ha_builder_touched": false
+  },
+  "verification_limitations": [
+    "映像未提供 OCI source labels；來源由 65 個檔案 SHA-256 與精確 config／manifest digest 核對。",
+    "首次 probe 補正 MCP readiness 等待；第二次補開 process INFO log 以驗到 child 輸出，產品映像沒有修改。",
+    "依 main coordinator 工具盤點：既有 23 個 live deployments 沒有 Nextcloud；沒有建立客戶實例。",
+    "沙盒驗收為 exact develop base .277 到 PR2077 候選的範本升級；不是正式 .275 到下一版的全套 migration 驗收。"
+  ],
+  "probe_script_sha256": "d52f13e38e9c912c4981a503412663d416194102779c78093d1095b1353a67c6",
+  "platform_validation": {
+    "result": "passed",
+    "base": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+    "old_pin": "38a9041fb44de6d8848166473facd2f443e04710@sha256:ad3e4dd18f0c642e33ce9a8cafef28aaa7012fe528c8daa54d7427910a5bfbc8",
+    "new_pin": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c",
+    "only_record": "cloud_app_mcp_nextcloud",
+    "only_value": "helm_default_values.image.tag",
+    "all_other_records_and_fields_equal": true,
+    "test_logic_unchanged": true,
+    "manifest_version_unchanged": true,
+    "noupdate": 0,
+    "admin_credential": "platform-generated; has_admin_gui=True, carrier=config_json",
+    "backend_credential": "tenant-provided; no secret in seed",
+    "odoo_orm_upgrade_test": "passed: 184 tests, 0 failures/errors/skips; 27 template DB snapshots compared, only Nextcloud image.tag changed",
+    "repo_lint": {
+      "exit_code": 0,
+      "result": "repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / reuse-values / seed-topology / test-env-restore / capability-gate / conceal-instances / reset-budget-ladder / transition-anchor-utc / assertlogs-numeric-level / mixin-subscription-sudo / config-parameter-uninstall / duplicate-class-methods / pattern-doc-registry / availability-reason-labels / repo-lint-docstring-registry / kubectl-ns-whitelist-sync / poll-release-facts-single-source / doc-symbol-anchor / hermes-agent-013-seed / security-rule-lifecycle / workspace-access-rule-directions / one-time-credential-render / workspace-rule-directions / provision-sentinel-allowlist / sh-subscription-group-isolation / internal-ctx-key-registry / access-gate-no-ledger-read / tunnel-config-wire-shape / test-collectability / route-contract-golden / owl-relative-import / js-i18n-template-literal / cron-wiring / indentation / bulk-grant-ruler-sync / access-payload-shape-matches-operator-schema / init-odoo-budget-ladder / status-contract-golden / init-n8n-budget-ladder / newapi-timeout-ladder）",
+      "python": "3.13 (existing isolated upstream venv)"
+    },
+    "diff_check": "passed"
+  },
+  "sandbox_gate": {
+    "at": "2026-10-29T04:37:05.241979+00:00",
+    "result": "passed",
+    "base_commit": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+    "candidate_commit": "4ab4306fb796e1a3652f37bf68ace79f79918b02",
+    "database": "woow_nc2077_gate",
+    "module_version_before": "18.0.1.0.277",
+    "module_version_after": "18.0.1.0.277",
+    "installed_modules": 81,
+    "tests": {
+      "failed": 0,
+      "errors": 0,
+      "total": 184,
+      "skipped": 0,
+      "unique_test_starts": 184,
+      "classes": {
+        "TestMcpServerTemplateSeed": 13,
+        "TestMcpOdooTemplateSeed": 17,
+        "TestMcpN8nTemplateSeed": 14,
+        "TestMcpOdooManageTemplateSeed": 14,
+        "TestMcpK8sTemplateSeed": 14,
+        "TestMcpVkTemplateSeed": 14,
+        "TestMcpOpenDesignTemplateSeed": 14,
+        "TestMcpLitellmTemplateSeed": 14,
+        "TestMcpNextcloudTemplateSeed": 14,
+        "TestMcpServerFamilyCoverage": 2,
+        "TestMcpNextcloudSeed": 15,
+        "TestInjectWorkspaceServiceUrl": 9,
+        "TestWorkspaceServiceUrlInjection": 28,
+        "TestHealTailscaleControlPlane": 2
+      }
+    },
+    "templates_compared": 27,
+    "other_templates_unchanged": 26,
+    "changed_slug": "mcp-nextcloud",
+    "only_changed_value": "values.image.tag",
+    "nextcloud_record_id": 27,
+    "record_id_and_xmlid_preserved": true,
+    "noupdate": false,
+    "old_pin": "38a9041fb44de6d8848166473facd2f443e04710@sha256:ad3e4dd18f0c642e33ce9a8cafef28aaa7012fe528c8daa54d7427910a5bfbc8",
+    "new_pin": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c",
+    "persisted_services_before": 0,
+    "persisted_services_after": 0,
+    "source_overlay_files": 1291,
+    "source_overlay_sha256_all_equal": true,
+    "harness_corrections": [
+      "Initial UID 1001 not present in passwd: set non-secret USER/LOGNAME/HOME for Odoo CLI; no product patch.",
+      "Initial DB snapshot used system Python without psycopg2; first 184-test pass was not accepted as full upgrade gate.",
+      "Switched snapshot to Odoo venv; restored exact old base with -u, captured old DB, then candidate -u and 184 tests again.",
+      "Snapshot verification is now a required precondition to candidate upgrade."
+    ],
+    "scope": "PR2077 base-to-candidate same-version XML update; not production .275-to-release/develop full migration acceptance",
+    "artifacts_sha256": {
+      "baseline-install.log": "1892092be8a06e0f27057eb808e4e058b71627954bd555d423a28ff4d1c349d7",
+      "baseline-reset.log": "f368847da94fae1400e3d4bed541050afaaf6c2eb9a8b540a783207363e885f2",
+      "baseline-db.json": "2e8ecc2c2def1fb2e33351355f4aeeb59232b5abf0717608945b2abb81cc30dd",
+      "candidate-upgrade-tests.log": "58e23b0b92ed22e37456833a96f2433ab68396763aca2632a0498ddb2e3f9009",
+      "candidate-db.json": "210a75cf02b691cf7c4ed02e9c3b7d4d7d3af64229bb8bb72e0f7e395fafc00e",
+      "test-selection.json": "93c2bfeb048519c4d18df2581f52baf245174850d73155b97816519318762dc6",
+      "base-source.json": "e28923a3681510a90a9b975c89dc9ce40e16a1eab3e5ee53cd94d1530d36b470",
+      "candidate-source.json": "f31139bd00d756f827cce5a1226108ef2ad5c79730748c7b5ea6210696d6ec7f",
+      "isolation.json": "a9d5210c5009164fbc6a4c9b4ac32dd72db45c40be1ea4b6abac842f2b49eb05",
+      "run_gate.py": "88a10f621ef83b84e92934dd36909602acb8deb6f30ab9aeea60ba7534da4c0b",
+      "snapshot_db.py": "cf9830651af30e894f4abb085c48551dd796d8d4c19fe66c3fc977975ecf0a99",
+      "create_sandbox.py": "fec25815a8280b127c5e7ab28e996d9a3c0ffa15c4d1673392fcb02b9d5f00bb",
+      "commands.jsonl": "c31fe5a1ba2ded674f4f407a7eee2144f2e46e97d3d67f6c3fd8591a159e0432"
+    },
+    "isolation": {
+      "pod_uid": "4525a5ea-9dc3-465d-aa64-48610fa798ab",
+      "node": "ubuntuserver-31zix",
+      "images": [
+        {
+          "name": "odoo",
+          "image": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-ci:latest",
+          "imageID": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-ci@sha256:5154be091a6ee9053b4093b4b5e4fe475e3e60f92f1a85dbf87c612b5477bd2b",
+          "ready": true
+        },
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres:15",
+          "imageID": "docker.io/library/postgres@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e",
+          "ready": true
+        }
+      ],
+      "automountServiceAccountToken": false,
+      "network_policy": {
+        "podSelector": {},
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ]
+      },
+      "network_probe": {
+        "postgres_loopback": "reachable",
+        "kubernetes_tcp": "blocked"
+      },
+      "persistent_volumes": false,
+      "database_source": "new emptyDir/initdb; no clone",
+      "namespace": "dev-sandbox-nc2077-20261029",
+      "requested_images": [
+        {
+          "name": "odoo",
+          "image": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-ci@sha256:5154be091a6ee9053b4093b4b5e4fe475e3e60f92f1a85dbf87c612b5477bd2b"
+        },
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres@sha256:1b92e7a80c021647bf70f5d3eb66066a998e4f5cf43c07bb9dc9f729782cf88e"
+        }
+      ],
+      "secret_scope": "only existing image pull credential copied in-memory to own namespace; no application/database credentials"
+    },
+    "cleanup": {
+      "at": "2026-10-29T04:37:40.161407+00:00",
+      "namespace": "dev-sandbox-nc2077-20261029",
+      "uid": "e205d429-f0df-417d-9589-41c9cf5a35c9",
+      "resources_verified": [
+        {
+          "kind": "Pod",
+          "name": "gate",
+          "uid": "4525a5ea-9dc3-465d-aa64-48610fa798ab"
+        },
+        {
+          "kind": "NetworkPolicy",
+          "name": "deny-all",
+          "uid": "84ee4356-8bcd-4e30-9e77-dce1a73bf3bd"
+        }
+      ],
+      "pvc_count": 0,
+      "no_shared_resources_deleted": true,
+      "delete_stdout": "namespace \"dev-sandbox-nc2077-20261029\" deleted",
+      "verified_absent": true,
+      "verified_at": "2026-10-29T04:39:46.407192+00:00"
+    },
+    "coordination": {
+      "develop_version": "18.0.1.0.277",
+      "release277_tag_commit": "2e323639c760e05285e8455b0a5c38c98f445b0b",
+      "develop_base": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+      "pr2060_target": ".278 per PR2060 release-owner record",
+      "merge_tree_with_pr2060": {
+        "pr2077_head": "4ab4306fb796e1a3652f37bf68ace79f79918b02",
+        "pr2060_head": "b30d0095c4b808dec257c5400ec4ad9cea36b2af",
+        "merge_tree_exit": 0,
+        "clean": true,
+        "tree": "fd46eecc10a9b55ee6fe876625fbb43db9b543c3"
+      },
+      "prod_db_version": "main coordinator observed .275 at 03:15 UTC; this lane read-only SQL at 04:45:41 UTC observes .277; historical image read at 04:26 is attributed to main coordinator",
+      "fresh_runtime_readonly": {
+        "at": "2026-10-29T04:45:41.932582+00:00",
+        "read_only": "on",
+        "runtime_manifest_version": "18.0.1.0.277",
+        "manifest_sha256": "2279bcc019127edee52bbca057a44929d66134e1b44648896f0e259a8659d14b",
+        "database": "woow_prod",
+        "db_module_state": "installed",
+        "db_module_version": "18.0.1.0.277",
+        "upgrade_marker": {
+          "digest": "sha256:18f58cee62f0d84fc374e84813e6042e340ce04b794a0f79ddc773ebca68ab3a",
+          "core_date": "18.0.20250807"
+        },
+        "nextcloud_template": [
+          {
+            "id": 27,
+            "image": {
+              "repository": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin",
+              "tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:ad3e4dd18f0c642e33ce9a8cafef28aaa7012fe528c8daa54d7427910a5bfbc8"
+            }
+          }
+        ]
+      },
+      "latest_develop_integration": {
+        "result": "passed",
+        "current_develop": "2cf7a40c345970f37d125185cf746d0e016c17ba",
+        "current_manifest_version": "18.0.1.0.277",
+        "pr_head": "133596320e804d4410cb00a8f2197b00a5a747f3",
+        "synthetic_merge_tree": "f7ab22232aa1344385d8264ff761e168de1495b7",
+        "merge_tree_exit": 0,
+        "only_changed_seed_value": "cloud_app_mcp_nextcloud.helm_default_values.image.tag",
+        "all_other_seed_xml_semantically_equal": true,
+        "xml_normalization": "ignore comments and whitespace-only indentation; preserve all field values and attributes",
+        "merged_opendesign_pin_preserved": true,
+        "changed_files": [
+          "docs/verification/2026-10-29-nextcloud-422-image.json",
+          "src/data/cloud_app_templates.xml",
+          "src/tests/test_mcp_nextcloud_seed.py"
+        ],
+        "odoo_tested_base": "22aac7017fd1a5a0cb4c1d587fd70d85056be72f",
+        "odoo_tests_rerun_after_pr2060": false
+      }
+    }
+  }
+}
