@@ -56,7 +56,9 @@ roster:                      # 選填
    跑 `collect run`。讀 `meta.json`、`tools.json`：`unavailable`／`error` 的工具、`status` 不是 `ok` 的
    `upstream` 快照都要寫進報告。
 2. **深度審查**（`sec-dispatch` skill）：符合 deep_review 條件的 target，先用 `ticket review` 產生工單
-   （⛔ 不自己寫或改工單），各派一個唯讀 review worker，回報用 `collect import` 併入。
+   （⛔ 不自己寫或改工單），**每張工單**各派一個唯讀 review worker，回報用 `collect import` 併入。
+   大 repo 在 targets 設了 `review_units` 時是分塊輪審：每塊一張工單、import 要帶 `--unit`；
+   `deep_review: auto` 的增量輪次 `ticket review` 回空的 `tickets`（變動檔案不在任何塊裡）⇒ 本輪不派。
    `deep_review: always` 的輪次（每週）再對新格式 finding 各派一個驗證者，結論用 `collect verdict` 套用。
    派完就結束當輪，收到完成通知再繼續；**verdict 都套完才進閘門 A**。
 3. **閘門 A**（`sec-gate` skill）：每個 target 跑 `jev_gate triage --run-dir <dir>`。

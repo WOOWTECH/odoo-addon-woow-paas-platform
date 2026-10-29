@@ -40,8 +40,15 @@ pi worker 完成後 inbox 可能回 `no output`：⛔ 不要當失敗重派，�
 python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec-dispatch/scripts/ticket.py --state-dir <WS>/.omnigent-runtime/woow-security-sweep review --run-dir <本輪目錄>/<repo 名>
 ```
 
-輸出 JSON：`ticket`（工單路徑）、`classes`、`missing_blocks`、`prior`／`rejected`（帶進工單的前幾輪 finding 數）、
-`upstream`（各上游快照狀態）。exit 1 ＝ 有 `review_classes` 引用找不到原文：照樣派工，但報告「工具與資料缺口」寫明。
+輸出 JSON：`tickets`（每張 `{unit, ticket, classes, entry_points, prior}`）、`missing_blocks`、`prior`／`rejected`
+（帶進工單的前幾輪 finding 數）、`upstream`（各上游快照狀態）；只有一張時另有舊欄位 `ticket`、`classes`。
+exit 1 ＝ 有 `review_classes` 引用找不到原文：照樣派工，但報告「工具與資料缺口」寫明。
+
+- **一般 target**：一張工單（`unit` 是 null）。
+- **分塊輪審**（targets 有 `review_units`，`meta.json` 的 `review.mode` 是 `units`）：本輪每一塊一張
+  `tickets/review-<塊>.md`，**每張各派一個 worker**。
+- **有 `review_units` 的增量輪次**（`review.mode` 是 `changed`）：一張，只列落在分塊裡的變動檔案；
+  `tickets` 是空的（有 `skip`）⇒ 本輪不派 deep review，報告照抄 `skip`。
 
 工單內容（程式組好，你只需要確認有產生）：
 
@@ -51,12 +58,16 @@ python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec
 - Cloudflare 的方法、finding 成立條件、`review_classes` 指定的攻擊類別、嚴重度判準
 - 回報格式（finding／hardening／coverage／prior 四種 JSON 行，放在一個 jsonl 區塊）與紀律
 
-派工：`--purpose review --harness <h> --name sweep-audit-<repo 短名>-<YYYYMMDD>`，`args.input` 寫：
+派工：`--purpose review --harness <h> --name sweep-audit-<repo 短名>-<YYYYMMDD>`（分塊時名字最後加 `-<塊>`），
+`args.input` 寫：
 
 > 完整工單在 `<ticket 路徑>`。先完整讀完（很長，分段讀到結尾）再開始，照工單回報。
 
 收到回報後，把 jsonl 區塊**原樣**用 Write 寫成檔案（不增刪、不修正），再用 `sec-collect` skill 的
-`collect import` 併入。`rejected`、`warnings` 的數量寫進報告。
+`collect import` 併入（分塊的回報一定要帶 `--unit <塊>`，值用該張工單的 `unit`；沒帶或帶錯會被拒絕，
+這塊也不會記為審完）。`rejected`、`warnings` 的數量寫進報告。
+
+`spawn_bounds` 每輪最多 12 次 `sys_session_create`：分塊的 review worker 與驗證者一起算，超過就分批。
 
 ## 驗證者（`deep_review: always` 的輪次，也就是每週全量）
 
