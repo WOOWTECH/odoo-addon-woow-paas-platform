@@ -24,7 +24,7 @@ from odoo.tools import SQL, mute_logger
 from odoo.tools.sql import column_exists
 
 from ..services import backup_health, dns_probe, mcp_setup_status, rollback_config
-from ..services.chart_version import reported_helm_revision
+from ..services.chart_version import possibly_live_revisions, reported_helm_revision
 from ..services.deployment_target import resolve_deployment_target
 from ..services.tenant_secret import has_secret_refs, secret_refs, split_tenant_secret
 from ..services.paas_operator import PaaSOperatorError
@@ -6497,6 +6497,18 @@ class CloudService(models.Model):
         self.ensure_one()
         if not self._is_live_woow_odoo_tenant():
             return None
+        return self._odoo_addon_selection_at(client, revision)
+
+    def _odoo_addon_selection_at(self, client, revision):
+        """某個 Helm revision 實際套用的 ``addons.selected``（排序、去重的技術名清單）；讀不到回 ``None``。
+
+        #2069：從 ``_rollback_odoo_addon_names`` 拆出來，讓呼叫端分得出「不適用」（由呼叫端先問
+        ``_is_live_woow_odoo_tenant``）與「讀不到」（這裡回 ``None``）。回復前的模組守衛要對後者
+        fail-closed，回復後的同步則照舊當成「不擋」。路徑不存在（``missing``）、回了別的 revision、
+        清單形狀不對，一律算讀不到——不得當成空清單（空清單代表「什麼都沒勾」，會讓守衛誤判成沒有
+        模組被拿掉）。只讀，不寫任何欄位。
+        """
+        self.ensure_one()
         from ..services.paas_operator import PaaSOperatorError
         try:
             response = client.get_config_projection(
@@ -6509,10 +6521,57 @@ class CloudService(models.Model):
             return None
         if not isinstance(response, dict) or response.get('revision') != revision:
             return None
-        selected = (response.get('values') or {}).get(WOOW_ODOO_ADDONS_SELECTED_PATH)
+        values = response.get('values')
+        selected = values.get(WOOW_ODOO_ADDONS_SELECTED_PATH) if isinstance(values, dict) else None
         if not isinstance(selected, list) or not all(isinstance(name, str) for name in selected):
             return None
         return sorted(set(selected))
+
+    def _rollback_removed_odoo_addons(self, client, revisions, revision):
+        """#2069：回復到 ``revision`` 會從 ``addons.selected`` 拿掉哪些模組。回傳 ``(applicable, removed)``。
+
+        - ``applicable``：是不是 woow-odoo 租戶（``_is_live_woow_odoo_tenant``）。不是 ⇒ ``(False, [])``，
+          **不打任何 operator 呼叫**（其他服務的回復行為與加守衛前完全相同）。
+        - ``removed``：「可能正在跑」的勾選（下述各 revision 的聯集）減掉目標 revision 的勾選（排序的
+          技術名清單）；任何一個 revision 讀不到、或歷史裡沒有任何可用的 revision 號 ⇒ ``None``
+          （呼叫端 fail-closed）。
+
+        「可能正在跑」＝``possibly_live_revisions``：歷史裡有 deployed ⇒ 最新的 deployed **加上每一個
+        比它新的 revision**（failed、pending-*，不論狀態）。平台的一般升級不帶 ``--atomic``／``--wait``，
+        失敗的升級可能已經把 Deployment 換成它的勾選、租戶接著把只在那一版的模組裝起來——只看
+        deployed 會把「退回原本那一版」這個最常見的修復動作誤判成沒有模組被拿掉。歷史裡**沒有**
+        deployed（純 ``helm rollback`` 失敗會把原本 deployed 的那一版改標 superseded，叢集卻仍跑它）
+        ⇒ 釘不住是哪一版在跑，**每一個**有可用號碼的 revision 都算。「可能正在跑」也**不是**帳本的
+        ``helm_revision``——帳本在更新／回復後會落後（#1414／#1456）。
+
+        ``revisions`` 是呼叫端已讀到的 helm 歷史（``client.get_revisions``），這裡不再讀一次。每個
+        revision 的 projection 最多讀一次、依序讀，第一個讀不到就停（operator 掛掉只花一次逾時）；
+        目標若在聯集裡就沿用。「可能正在跑」只有目標本身 ⇒ 直接 ``[]``，不打 operator。
+        """
+        self.ensure_one()
+        if not self._is_live_woow_odoo_tenant():
+            return False, []
+        live = possibly_live_revisions(revisions)
+        if not live:
+            _logger.warning(
+                'Rollback addon check for service id=%s: no usable revision number in the release history',
+                self.id)
+            return True, None
+        if live == [revision]:
+            return True, []
+        selections = {}
+        for number in [*live, revision]:
+            if number in selections:
+                continue
+            selection = self._odoo_addon_selection_at(client, number)
+            if selection is None:
+                _logger.warning(
+                    'Rollback addon check for service id=%s: module selection of revision %s is unreadable '
+                    '(possibly live: %s, target: %s)', self.id, number, live, revision)
+                return True, None
+            selections[number] = selection
+        running = set().union(*(selections[number] for number in live))
+        return True, sorted(running - set(selections[revision]))
 
     def _apply_rollback_odoo_addons(self, names):
         """把 ``odoo_addon_ids`` 的 third_party／custom 對齊到 ``names``；其他來源（built_in）不動。

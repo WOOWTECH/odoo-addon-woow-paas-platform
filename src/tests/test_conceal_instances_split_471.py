@@ -29,6 +29,8 @@ test_hermes_agent_seed_424.test_conceal_instances_untouched）。
 HA PaaS 既有隱藏鏈（workspace／dashboard／billing 全鏈）的零回歸由
 `test_hidden_template_chain.py` 承擔，本檔不重複。
 """
+from unittest.mock import MagicMock, patch
+
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.exceptions import ValidationError
 from ..models.cloud_service import _internal_provision
@@ -283,6 +285,25 @@ class TestHiddenOnlyExistingServiceReachable(_ServiceMatrixCase):
             '/api/cloud-services/services/%s/check-addon-removal' % self.svc.id,
             self._ADDON_REMOVAL_PARAMS, 'check-addon-removal')
 
+    def test_check_rollback_addons_reachable(self):
+        """#2069 回復預檢：沒被隱藏 gate 擋（回的不是 'Service not found'）；實際答案見下一條。"""
+        self._assert_gate_open(
+            '/api/cloud-services/services/%s/check-rollback-addons' % self.svc.id,
+            '{"revision":1}', 'check-rollback-addons')
+
+    def test_check_rollback_addons_reports_not_applicable_without_operator(self):
+        """#2069：上面那條只證明沒被隱藏 gate 擋；這條釘住實際答案——合成 template 不是 woow-odoo，
+        直接 no_removal／applicable False，且連 operator client 都不取。"""
+        factory = MagicMock(name='get_paas_operator_client')
+        with patch('odoo.addons.woow_paas_platform.controllers.paas.get_paas_operator_client',
+                   new=factory):
+            r = self._result(
+                '/api/cloud-services/services/%s/check-rollback-addons' % self.svc.id,
+                '{"revision":1}')
+        self.assertEqual(r, {'success': True, 'code': 'no_removal', 'applicable': False,
+                             'removed': [], 'modules': {}, 'blocking': {}})
+        factory.assert_not_called()
+
     def test_service_mcp_servers_reachable(self):
         self._assert_gate_open(
             '/api/workspaces/%s/services/%s/mcp-servers' % (self.ws.id, self.svc.id),
@@ -374,6 +395,11 @@ class TestConcealTemplateOperationsBlocked(_ServiceMatrixCase):
         self._assert_gate_closed(
             '/api/cloud-services/services/%s/check-addon-removal' % self.svc.id,
             self._ADDON_REMOVAL_PARAMS, 'check-addon-removal')
+
+    def test_check_rollback_addons_blocked(self):
+        self._assert_gate_closed(
+            '/api/cloud-services/services/%s/check-rollback-addons' % self.svc.id,
+            '{"revision":1}', 'check-rollback-addons')
 
     def test_service_mcp_servers_blocked(self):
         self._assert_gate_closed(

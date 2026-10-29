@@ -240,3 +240,104 @@
         gap: 0.5rem;
     }
 }
+
+// #2069：回復預檢結果（loading／safe 為中性，blocked／failed 為錯誤，unverified 為警告）。
+// 00_variables 沒有 danger／warning 色票；顏色與同層的 .o_woow_error_message（紅）、
+// .o_woow_badge_amber（琥珀）一致，集中成區域變數，不在規則裡散落色碼。
+// danger 只用在背景色調（與 .o_woow_error_message 同色）；文字改用較深的 danger-text：
+// #ef4444 在白底對比約 3.8:1、在淡紅底約 3.3:1，達不到 14px 文字的 WCAG AA 4.5:1，
+// #b91c1c 在白底約 6.5:1、在淡紅底約 5.7:1。
+$woow-rollback-danger: #ef4444;
+$woow-rollback-danger-text: #b91c1c;
+$woow-rollback-warning: #b45309;
+$woow-rollback-warning-bg: rgba(245, 158, 11, 0.12);
+
+.o_woow_rollback_precheck {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    background: rgba($woow-primary, 0.05);
+    border-radius: $woow-radius-default;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+
+    &_title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: $woow-text-primary;
+    }
+
+    &_text {
+        margin: 0;
+    }
+
+    &_list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        margin: 0;
+        padding-left: 1.25rem;
+    }
+
+    // 模組狀態（blocked 才有）：色彩沿用共用的 .o_woow_badge_red，這裡只管間距與字面。
+    &_state {
+        margin-left: 0.5rem;
+        text-transform: none;
+    }
+
+    &_detail {
+        margin-left: 0.5rem;
+    }
+
+    &_ack {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: $woow-text-primary;
+        cursor: pointer;
+    }
+
+    &_actions {
+        display: flex;
+    }
+
+    &_blocked,
+    &_failed {
+        background: rgba($woow-rollback-danger, 0.1);
+
+        .o_woow_rollback_precheck_title {
+            color: $woow-rollback-danger-text;
+        }
+    }
+
+    &_unverified {
+        background: $woow-rollback-warning-bg;
+
+        .o_woow_rollback_precheck_title {
+            color: $woow-rollback-warning;
+        }
+    }
+}
+
+// footer 裡常駐的一行原因（確認鈕為什麼不能按）。flex-basis 讓窄畫面換到按鈕上一行。
+.o_woow_rollback_reason {
+    flex: 1 1 12rem;
+    align-self: center;
+    margin: 0;
+    color: $woow-text-secondary;
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+
+    &_blocked,
+    &_failed {
+        color: $woow-rollback-danger-text;
+    }
+
+    &_unverified {
+        color: $woow-rollback-warning;
+    }
+}

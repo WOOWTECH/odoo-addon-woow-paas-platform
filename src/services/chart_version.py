@@ -93,6 +93,34 @@ def rollback_baseline(revisions):
     return number, chart_version_from_history(revision.get('chart'))
 
 
+def possibly_live_revisions(revisions):
+    """#2069：叢集上**可能**正在跑的 revision 號（由小到大、不重複）。
+
+    - 歷史裡有 ``deployed``（不分大小寫）⇒ 起點＝最大的 deployed revision，加上每一個比它新的
+      revision（不論狀態）。平台的一般升級不帶 ``--atomic``／``--wait``（只有 reset 那條帶
+      ``--atomic``）：升級做到一半失敗（``failed``）或還在進行（``pending-upgrade``／
+      ``pending-rollback``…），helm 可能已經把前面的資源（Deployment 排在 StatefulSet／CronJob／
+      Ingress 之前）換成那個 revision 的版本。比起點舊的不算（它們已被起點取代）。
+    - 歷史裡**沒有** deployed ⇒ 叢集上跑的是哪一版釘不住，**每一個**有可用 revision 號的都算。
+      純 ``helm rollback``（不帶 ``--wait``，woow-odoo 租戶走這條）在套用時失敗，helm 會把當時
+      最新的那一列（``Releases.Last``，不論狀態）改標 ``superseded``、新的那一列標 ``failed``，叢集
+      卻仍跑原本那一版。沙盒實測（helm 3.19.5）：``[1 superseded, 2 deployed]`` 失敗一次變成
+      ``[1 s, 2 s, 3 failed]``，再失敗一次變成 ``[1 s, 2 s, 3 s, 4 failed]``，兩次之後叢集上都仍是
+      rev2——「最新的 superseded」第二次就指到 rev3，所以不能用它當起點。
+
+    沒有可用 revision 號的歷史列略過（與 ``rollback_baseline`` 同判準）；完全沒有可用 revision 號
+    ⇒ ``[]``（呼叫端 fail-closed）。``rollback_baseline``（chart 版本下限與對話框「目前」）刻意不跟著
+    改：它要的是單一一版。
+    """
+    rows = [(n, r) for r in revisions or [] if (n := _revision_number(r)) is not None]
+    numbers = sorted({n for n, _r in rows})
+    deployed = [n for n, r in rows if str(r.get('status', '')).lower() == 'deployed']
+    if not deployed:
+        return numbers
+    start = max(deployed)
+    return [n for n in numbers if n >= start]
+
+
 def rollback_target_number(revisions, requested):
     """回復的目標 revision 號（``None``／0＝上一版，與 operator／helm 同語意）。"""
     numbers = [n for r in revisions or [] if (n := _revision_number(r)) is not None]
