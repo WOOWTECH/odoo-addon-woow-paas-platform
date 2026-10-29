@@ -1,0 +1,27 @@
+# woow-security-sweep 技術棧 profile：Odoo addon。欄位說明見 README §技術棧 profile。
+name: odoo
+description: Odoo addon（__manifest__.py、controllers 的 @http.route、ORM model）
+defaults:
+  scan:
+    exclude: [tests/, i18n/, "**/__pycache__/"]
+    tools:
+      semgrep: {rulesets: [p/python, p/secrets]}
+      gitleaks: {}
+  always_human:
+    paths: [.security/, security/, migrations/, __manifest__.py, "*/__manifest__.py"]
+    severities: [critical, high]
+    topics: []
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Business logic
+- ATTACK-CLASSES.md#Obvious things
+- odoo.md#Public route before identity check
+- odoo.md#csrf=False state change
+- odoo.md#sudo() scope creep
+- odoo.md#Record rule and multi-company gaps
+- odoo.md#Field-level groups and related fields
+- odoo.md#Public method RPC exposure
+- odoo.md#QWeb and Markup escaping
+version_files: [__manifest__.py, "*/__manifest__.py"]
+fix_verify: 在本機 Odoo（K8s dev sandbox）以 `--test-tags /<module>` 跑該模組測試；GitHub Security Advisory 的 private fork 不跑 Actions。

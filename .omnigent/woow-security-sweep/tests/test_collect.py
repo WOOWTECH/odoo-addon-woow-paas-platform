@@ -91,7 +91,7 @@ class ConfigTest(RepoFixture):
         sh("git", "rm", "-q", "-r", ".security", cwd=self.repo)
         self.commit("drop config")
         cfg = cl.load_config(self.repo, "origin/main", self.targets)
-        self.assertEqual(cfg["_sources"]["public"], "default")
+        self.assertTrue(cfg["_sources"]["public"].startswith("default"))
         self.assertFalse(cfg["autofix"]["enabled"])
 
 
@@ -405,6 +405,152 @@ class NewFormatImportTest(RepoFixture):
         v.write_text(json.dumps({"decision": "rejected", "record": {}, "extra": 1}))
         with self.assertRaises(cl.CollectError):
             cl.cmd_verdict(self.run_dir, b["id"], v)
+
+
+class StackAndRemoteTest(RepoFixture):
+    """#2064 階段 B：stack profile、targets 新欄位、origin 解析。"""
+
+    def no_public(self):
+        sh("git", "rm", "-q", "-r", ".security", cwd=self.repo)
+        self.commit("drop config")
+
+    def test_parse_remote(self):
+        cases = {
+            "https://github.com/WOOWTECH/x.git": ("github.com", "WOOWTECH/x"),
+            "git@github.com:WOOWTECH/x.git": ("github.com", "WOOWTECH/x"),
+            "ssh://git@github.com/WOOWTECH/x": ("github.com", "WOOWTECH/x"),
+            "https://git-prod.woowtech.io/ha-components/Woow_ha_ai_mcp-shc.git/": (
+                "git-prod.woowtech.io", "ha-components/Woow_ha_ai_mcp-shc"),
+            "/tmp/origin.git": (None, None),
+        }
+        for url, want in cases.items():
+            with self.subTest(url=url):
+                self.assertEqual(cl.parse_remote(url), want)
+
+    def test_stack_defaults_when_repo_has_no_config(self):
+        self.no_public()
+        (self.targets / "demo.yaml").write_text("stack: odoo\n")
+        cfg = cl.load_config(self.repo, "origin/main", self.targets)
+        self.assertIn("*/__manifest__.py", cfg["always_human"]["paths"])
+        self.assertNotIn("bandit", cfg["scan"]["tools"])  # #2064：bandit 0／6 成立，預設拿掉
+        self.assertEqual(cfg["stack"]["name"], "odoo")
+        self.assertIn("odoo.md#sudo() scope creep", cfg["review_classes"])
+        self.assertEqual(cfg["_sources"]["stack"], "odoo")
+
+    def test_repo_config_wins_over_stack_and_scan_exclude(self):
+        (self.targets / "demo.yaml").write_text("stack: odoo\nscan_exclude: [models/]\n")
+        cfg = cl.load_config(self.repo, "origin/main", self.targets)
+        self.assertEqual(cfg["always_human"]["paths"], ["security/"])
+        self.assertNotIn("models/", cfg["scan"]["exclude"])  # repo 有 .security/sweep.yaml ⇒ targets 不能追加排除
+        self.no_public()
+        cfg = cl.load_config(self.repo, "origin/main", self.targets)
+        self.assertIn("models/", cfg["scan"]["exclude"])
+
+    def test_targets_review_classes_override_stack(self):
+        (self.targets / "demo.yaml").write_text("stack: odoo\nreview_classes: ['ATTACK-CLASSES.md#Injection']\n")
+        cfg = cl.load_config(self.repo, "origin/main", self.targets)
+        self.assertEqual(cfg["review_classes"], ["ATTACK-CLASSES.md#Injection"])
+
+    def test_bad_or_missing_stack_aborts(self):
+        for body in ("stack: ../x\n", "stack: nope\n"):
+            with self.subTest(body=body):
+                (self.targets / "demo.yaml").write_text(body)
+                with self.assertRaises(cl.CollectError):
+                    cl.load_config(self.repo, "origin/main", self.targets)
+
+    def test_gitea_origin_full_name_and_web_url(self):
+        sh("git", "remote", "set-url", "origin", "https://git-prod.woowtech.io/ha-components/demo.git", cwd=self.repo)
+        repo_cfg = cl.load_config(self.repo, "origin/main", self.targets)["repo"]
+        self.assertEqual(repo_cfg["host"], "git-prod.woowtech.io")
+        self.assertEqual(repo_cfg["web_url"], "https://git-prod.woowtech.io/WOOWTECH/demo")  # full_name 取自 public 設定
+
+    def test_branch_from_targets(self):
+        sh("git", "checkout", "-q", "-b", "delivery", cwd=self.repo)
+        (self.repo / "models" / "z.py").write_text("z = 1\n")
+        sh("git", "add", "-A", cwd=self.repo)
+        sh("git", "commit", "-q", "-m", "on delivery", cwd=self.repo)
+        sh("git", "push", "-q", "origin", "HEAD:delivery", cwd=self.repo)
+        sh("git", "fetch", "-q", "origin", cwd=self.repo)
+        (self.targets / "demo.yaml").write_text("branch: delivery\n")
+        meta = cl.cmd_run(self.repo, self.runs, "full", self.state, fetch=False, targets_dir=self.targets)
+        self.assertEqual(meta["branch"], "delivery")
+        self.assertIn("models/z.py", meta["scanned_files"])
+        for bad in ("nope", "../main", "-x"):
+            with self.subTest(bad=bad):
+                (self.targets / "demo.yaml").write_text(f"branch: '{bad}'\n")
+                with self.assertRaises(cl.CollectError):
+                    cl.cmd_run(self.repo, self.runs, "full", self.state, fetch=False, targets_dir=self.targets)
+
+
+class ForkScopeTest(RepoFixture):
+    """since_upstream：只掃 fork 相對上游 merge-base 改過的檔案。"""
+
+    REMOTE = "https://example.invalid/upstream/demo.git"
+
+    def setUp(self):
+        super().setUp()
+        self.base = sh("git", "rev-parse", "HEAD", cwd=self.repo)
+        sh("git", "update-ref", "refs/sweep/upstream/main", self.base, cwd=self.repo)  # 假裝上游停在 base
+        (self.repo / "models" / "mine.py").write_text("m = 1\n")
+        self.head = self.commit("fork change")
+        (self.targets / "demo.yaml").write_text(f"since_upstream: {{remote: '{self.REMOTE}', branch: main}}\n")
+
+    def test_only_fork_files_scanned(self):
+        meta = cl.cmd_run(self.repo, self.runs, "full", self.state, fetch=False, targets_dir=self.targets)
+        self.assertEqual(meta["scanned_files"], ["models/mine.py"])
+        fork = meta["fork"]
+        self.assertEqual((fork["merge_base"], fork["ahead"], fork["behind"]), (self.base, 1, 0))
+        self.assertEqual(fork["files"], ["models/mine.py"])
+
+    def test_never_fetched_aborts_instead_of_full_scan(self):
+        sh("git", "update-ref", "-d", "refs/sweep/upstream/main", cwd=self.repo)
+        with self.assertRaisesRegex(cl.CollectError, "從未 fetch 成功"):
+            cl.cmd_run(self.repo, self.runs, "full", self.state, fetch=False, targets_dir=self.targets)
+
+    def test_remote_must_be_https(self):
+        for remote in ("file:///etc", "ext::sh -c id", "/tmp/x.git", "git@github.com:a/b.git",
+                       "https://example.invalid/../x"):
+            with self.subTest(remote=remote), self.assertRaises(cl.CollectError):
+                cl.fork_scope(self.repo, self.head, {"remote": remote, "branch": "main"}, fetch=False)
+
+
+class AdvisoryTest(unittest.TestCase):
+    def test_version_range(self):
+        cases = [("7.14.1", "<= 8.7.0", True), ("7.14.1", "<= 7.13", False), ("7.14.1", ">= 7.0, < 7.14.1", False),
+                 ("9.0.0", "< 9.0.0.dev3159", False), ("9.0.0.dev3158", "< 9.0.0.dev3159", True),
+                 ("1.5", ">= 1.0, < 2.0", True), ("1.2.3", "= 1.2.3", True), ("abc", "<= 1", None),
+                 ("1.0", "", None), ("1.0", "~> 1.0", None)]
+        for version, spec, want in cases:
+            with self.subTest(version=version, spec=spec):
+                self.assertEqual(cl.in_range(version, spec), want)
+
+    def adv(self, ghsa, spec, package="ha-mcp", severity="medium"):
+        return {"ghsa_id": ghsa, "summary": "s", "severity": severity, "published_at": "2026-10-24",
+                "vulnerabilities": [{"package": {"name": package}, "vulnerable_version_range": spec,
+                                     "patched_versions": "9.0.0"}]}
+
+    def test_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "pyproject.toml").write_text('[project]\nname = "ha-mcp"\nversion = "7.14.1"\n')
+            conf = {"github": "up/ha-mcp", "package": "ha-mcp", "version_file": "pyproject.toml"}
+            advs = [self.adv("GHSA-aaaa-bbbb-cccc", "<= 8.7.0"), self.adv("GHSA-dddd-eeee-ffff", "<= 7.13"),
+                    self.adv("GHSA-gggg-hhhh-jjjj", "<= 99", package="other"), {"ghsa_id": "../x"}]
+            found, status = cl.advisory_findings(src, conf, advs)
+            self.assertEqual([f["fingerprint"] for f in found], ["advisory:GHSA-aaaa-bbbb-cccc"])
+            self.assertEqual((found[0]["path"], found[0]["line"], status["version"]), ("pyproject.toml", 3, "7.14.1"))
+            self.assertTrue(found[0]["advisory"]["affected"])
+            # 讀不到版號 ⇒ 範圍內外都無法判斷，一律列出交人
+            (src / "pyproject.toml").write_text("[project]\n")
+            found, status = cl.advisory_findings(src, conf, advs[:2])
+            self.assertEqual(len(found), 2)
+            self.assertIn("無法比對版本", found[0]["message"])
+            self.assertIn("讀不到", status["detail"])
+
+    def test_gh_missing_is_unavailable(self):
+        with mock.patch.object(cl.shutil, "which", return_value=None):
+            found, status, paths = cl.collect_advisories(Path("."), {"github": "a/b"})
+        self.assertEqual((found, status["status"], paths), ([], "unavailable", []))
 
 
 if __name__ == "__main__":

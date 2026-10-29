@@ -26,8 +26,8 @@ python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec
 
 | 檔案 | 用途 |
 |---|---|
-| `meta.json` | head／last SHA、範圍（full／incremental 與原因）、`deleted_files`、`upstream`、`config_changed`、`unsafe_members`、`fetch_error` |
-| `config.json` | 合併後設定：public `.security/sweep.yaml`（**只讀 origin 預設分支**）＋ private `targets/<repo>.yaml` |
+| `meta.json` | branch、head／last SHA、範圍（full／incremental 與原因）、`stack`、`deleted_files`、`upstream`、`fork`、`tool_scanned`、`config_changed`、`unsafe_members`、`fetch_error` |
+| `config.json` | 合併後設定：public `.security/sweep.yaml`（**只讀 origin 上的 targets `branch`，沒寫就是預設分支**；沒有這個檔就用 `stacks/<stack>.yaml` 的 defaults）＋ private `targets/<repo>.yaml`；另有 `stack`（版號檔、修正驗證方式）與 `repo.host`／`repo.web_url` |
 | `findings.jsonl` | 正規化 findings：`id`、`fingerprint`、`tool`、`rule`、`path`、`line`、`severity_tool`、`message`、`snippet`；新格式 deep review 另有 `verdict`、`title`、`root_cause`、`trace`、`conditions`、`blockers`、`validation_plan` 等 |
 | `tools.json` | 每個工具 `ok`／`unavailable`／`skipped`／`error` |
 | `src/` | 預設分支 HEAD 的快照（git archive），deep review worker 讀這裡 |
@@ -35,11 +35,17 @@ python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec
 
 要讀懂的訊號：
 
-- `config_sources.public == "default"`：repo 還沒有 `.security/sweep.yaml`，套用保守預設（不自動修）。
+- `config_sources.public` 以 `default` 開頭：repo 還沒有 `.security/sweep.yaml`，套用 stack 的保守預設（不自動修）；
+  後面有「＋targets scan_exclude」代表 targets 追加了排除路徑，報告要寫明排除了哪些。
 - `config_changed: true`：`.security/` 有變動，已自動產生一筆 `security-config-changed` finding，必轉人工。
 - `unsafe_members` 非空：快照時擋下了指向外部的 symlink 等成員，已產生 high finding。
 - `fetch_error` 非空：fetch 失敗，掃的是本機舊的 origin ref，報告要寫明。
 - `tools.json` 裡的 `unavailable`／`error`：**一定要寫進報告**，不能讓「沒掃到」看起來像「沒問題」。
+- `fork` 非空：targets 設了 `since_upstream`，只掃 fork 相對上游 merge-base 改過的檔案；報告寫出 merge-base、
+  領先／落後的 commit 數。`fork.fetch_error` 非空代表這輪沒 fetch 到上游、用的是上一次的 ref。
+  上游從沒 fetch 成功過 ⇒ `collect run` exit 2（不會退回全量），照 AGENTS.md 回報。
+- `tools.json` 的 `advisory`：上游已公告的 advisory 比對 fork 版號，命中的是 `tool: advisory` 的 finding
+  （fingerprint `advisory:<GHSA id>`），每輪都會查，與有沒有新 commit 無關。
 - `upstream` 裡 `status` 不是 `ok` 的上游（找不到 clone、git 失敗）：報告「工具與資料缺口」寫明——
   worker 會把它們的行為當成 needs_validation 的 blocker。上游 clone 要放在目標 repo 的同層目錄、origin 指向同一個 repo。
 

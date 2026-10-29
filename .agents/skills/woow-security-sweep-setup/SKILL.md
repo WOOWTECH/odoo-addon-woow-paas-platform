@@ -36,10 +36,10 @@ python3.12 <本目錄>/scripts/setup.py --workspace <WS> doctor --check-api
 |---|---|---|
 | `workspace`／`state` | `<WS>` 下有主 checkout；state 目錄存在 | state 不存在＝第一次跑會從頭掃，舊的人工決定不會帶過來（換主機要先搬 state） |
 | `python` | `python3.12`＋PyYAML＋`tarfile.data_filter` | collect.py 的快照安全檢查需要 data_filter（3.11.2 沒有） |
-| `gitleaks`／`uvx`／`tea` | 工具存在 | 缺 gitleaks 或 uvx ⇒ 該掃描工具標 unavailable；缺 tea ⇒ 不能開 issue |
+| `gitleaks`／`uvx`／`tea`／`gh` | 工具存在 | 缺 gitleaks 或 uvx ⇒ 該掃描工具標 unavailable；缺 tea ⇒ 不能開 issue；缺 gh ⇒ since_upstream 的 advisory 標 unavailable（warn） |
 | `jev_key`／`jev_api` | key 檔權限 600、`jev_gate.py models` 成功 | 沒有 key ⇒ 閘門 A 全部轉人工 |
-| `target:<repo>` | repo 是 git checkout、origin 指向 GitHub WOOWTECH 正本 | |
-| `issues:<repo>` | tea 登入對 `mirror-internal/<repo>` 有 push 權限 | issue_sync 以 tea 登入者的身分開單 |
+| `target:<repo>` | repo 是 git checkout、origin 指向 targets 的 `origin`（沒寫時是 GitHub WOOWTECH 正本） | |
+| `issues:<repo>` | tea 登入對 targets 的 `disclosure.issues_to`（預設 `mirror-internal/<repo>`）有 push 權限，且目標不是 public | issue_sync 以 tea 登入者的身分開單；目標 public 時 issue_sync 會拒絕開單 |
 | `identity`／`host` | `/v1/me`；本機 host 屬於你、online | **排程只能建在自己的主機**（server `resolve_host_owner`：別人的 host 回 403）⇒ setup 在哪台跑就裝在哪台 |
 | `agent` | `<state>/agent.json` 記錄的 anchor 讀得到、名稱與 id 相符 | session-scoped agent 對 anchor session 有 READ 權限即可使用（`validate_session_agent`） |
 | `agent_owner` | 你對 anchor 的權限等級 | 原地更新（PUT）需要 OWNER（等級 4）⇒ 共用者只能用、不能發新版（`warn`，不是錯） |

@@ -192,7 +192,8 @@ class CarryoverTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_round(self, name, rows, *, scanned=None, tools_ok=("semgrep",), repo="WOOWTECH/demo", head=None):
+    def run_round(self, name, rows, *, scanned=None, tools_ok=("semgrep",), repo="WOOWTECH/demo", head=None,
+                  tool_scanned=None):
         """模擬一輪：寫 run 目錄 → triage → carryover。scanned=None 代表 full。
 
         head：本輪 HEAD 上存在的檔案（會建一個真的 git repo）；None 代表舊版 meta（沒有 repo_path）。
@@ -203,7 +204,8 @@ class CarryoverTest(unittest.TestCase):
         extra = {} if head is None else self.git_head(name, head)
         (run / "meta.json").write_text(json.dumps(
             {"scope": {"mode": "full" if scanned is None else "incremental", "changed": scanned},
-             **({} if scanned is None else {"scanned_files": scanned}), **extra}))
+             **({} if scanned is None else {"scanned_files": scanned}),
+             **({"tool_scanned": tool_scanned} if tool_scanned else {}), **extra}))
         (run / "tools.json").write_text(json.dumps({t: {"status": "ok"} for t in tools_ok}))
         (run / "findings.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
         jg.triage_run(run, gates(), self.state, caller=self.caller, today=TODAY)
@@ -235,6 +237,15 @@ class CarryoverTest(unittest.TestCase):
 
     def two_findings(self):
         return [dict(finding("a.py"), id="fa", fingerprint="fpA"), dict(finding("b.py"), id="fb", fingerprint="fpB")]
+
+    def test_tool_scanned_paths_used_per_tool(self):
+        # advisory 只看版號檔：本輪沒有任何 commit（scanned_files 空）也能判它已不受影響
+        adv = dict(finding("pyproject.toml"), id="fv", fingerprint="advisory:GHSA-x", tool="advisory")
+        self.run_round("r1", [adv, dict(finding("a.py"), id="fa", fingerprint="fpA")], tools_ok=("advisory", "semgrep"))
+        run2, summary = self.run_round("r2", [], scanned=[], tools_ok=("advisory", "semgrep"),
+                                       tool_scanned={"advisory": ["pyproject.toml"]})
+        self.assertEqual(self.carried(run2), {"fpA"})
+        self.assertEqual([r["reason_code"] for r in self.resolved()], ["not_redetected"])
 
     def test_unanswered_carried_to_incremental_round(self):
         self.run_round("r1", self.two_findings())
@@ -475,6 +486,27 @@ class TriageOnlyTest(unittest.TestCase):
         self.assertEqual(len(jg.read_jsonl(self.run / "decisions.jsonl")), 4)
         with self.assertRaises(jg.GateError):
             jg.triage_run(self.run, gates(), self.state, caller=caller, today=TODAY, only=["missing"])
+
+
+class StackDisclosureTest(unittest.TestCase):
+    """#2064 階段 B：glob 的 always_human、依 targets 的揭露管道寫理由。"""
+
+    def test_glob_rules(self):
+        self.assertTrue(jg._path_matches("sh_document_management/__manifest__.py", "*/__manifest__.py"))
+        self.assertTrue(jg._path_matches("addons/odoo/config.yaml", "*/config.yaml"))
+        self.assertFalse(jg._path_matches("__manifest__.py", "*/__manifest__.py"))
+        self.assertFalse(jg._path_matches("models/config.yaml.bak", "*/config.yaml"))
+
+    def test_high_reason_follows_disclosure(self):
+        f = finding(sev="high")
+        for disc, want in (({}, "GitHub Security Advisory"), ({"fix_via": "github_security_advisory"}, "GitHub"),
+                           ({"high_fix_via": "internal_security_repo"}, "-security"),
+                           ({"high_fix_via": "private_pr"}, "非公開"), ({"high_fix_via": "bogus"}, "GitHub")):
+            cfg = dict(CFG, always_human={"paths": [], "severities": [], "topics": []}, disclosure=disc)
+            with self.subTest(disc=disc):
+                proposed, reasons, _ = jg.route_triage(f, answers(score=3.0), cfg, gates(), TODAY)
+                self.assertEqual(proposed, "human")
+                self.assertIn(want, reasons[-1])
 
 
 if __name__ == "__main__":

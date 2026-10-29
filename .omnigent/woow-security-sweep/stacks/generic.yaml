@@ -1,0 +1,21 @@
+# woow-security-sweep 技術棧 profile：targets 沒寫 stack 時用這份。
+# 欄位說明見 README §技術棧 profile；⛔ defaults 只在目標 repo 沒有 .security/sweep.yaml 時生效。
+name: generic
+description: 未指定技術棧時的保守預設
+defaults:
+  scan:
+    exclude: [tests/, "**/__pycache__/", node_modules/]
+    tools:
+      semgrep: {rulesets: [p/secrets]}
+      gitleaks: {}
+  always_human:
+    paths: [.security/, .github/workflows/, .gitea/workflows/]
+    severities: [critical, high]
+    topics: []
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Business logic
+- ATTACK-CLASSES.md#Obvious things
+version_files: []
+fix_verify: 依 repo 的 README 在本機跑既有測試；沒有測試時先補一支重現問題的測試。

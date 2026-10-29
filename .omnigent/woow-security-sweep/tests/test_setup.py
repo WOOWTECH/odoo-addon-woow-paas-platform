@@ -173,6 +173,59 @@ class LauncherTest(Base):
         self.assertEqual(su.check_launcher(FakeApi(self.routes(other)), self.sdir)[0]["status"], su.FAIL)
 
 
+class TargetsCheckTest(Base):
+    """#2064 階段 B：origin 與開單目標改讀 targets yaml，開單目標不能是 public。"""
+
+    def setUp(self):
+        super().setUp()
+        self.targets = self.ws / "paas/woow_paas_platform" / su.BUNDLE_REL / "targets"
+        self.targets.mkdir(parents=True)
+        self.repo = self.ws / "ha-components" / "demo"
+        (self.repo / ".git").mkdir(parents=True)
+
+    def fake_run(self, origin, repo_json, org_json=None):
+        def run(cmd, **kw):
+            out = ""
+            err = ""
+            if cmd[:2] == ["git", "-C"]:
+                out = origin
+            elif cmd[:2] == ["tea", "api"] and cmd[-1].startswith("repos/"):
+                out, err = json.dumps(repo_json), "HTTP/2.0 200 OK"
+            elif cmd[:2] == ["tea", "api"] and cmd[-1].startswith("orgs/"):
+                out = json.dumps(org_json or {})
+            self.calls.append(cmd)
+            return mock.Mock(returncode=0, stdout=out, stderr=err)
+        self.calls = []
+        return mock.patch.object(su, "run", side_effect=run)
+
+    def test_origin_and_issues_to_from_targets(self):
+        (self.targets / "demo.yaml").write_text(
+            "origin: https://git-prod.woowtech.io/ha-components/demo\n"
+            "disclosure: {issues_to: mirror-internal/demo-x}\n")
+        with self.fake_run("https://git-prod.woowtech.io/ha-components/demo.git",
+                           {"permissions": {"push": True}, "private": False}, {"visibility": "limited"}):
+            out = su.check_targets(self.ws, [self.repo], "git-prod")
+        self.assertEqual((self.status(out, "target:demo"), self.status(out, "issues:demo")), (su.OK, su.OK))
+        self.assertIn(["tea", "api", "-i", "--login", "git-prod", "repos/mirror-internal/demo-x"], self.calls)
+
+    def test_public_issue_target_fails(self):
+        (self.targets / "demo.yaml").write_text("disclosure: {issues_to: ha-components/demo}\n")
+        with self.fake_run("https://github.com/WOOWTECH/demo.git",
+                           {"permissions": {"push": True}, "private": False}, {"visibility": "public"}):
+            out = su.check_targets(self.ws, [self.repo], "git-prod")
+        issues = next(c for c in out if c["id"] == "issues:demo")
+        self.assertEqual(issues["status"], su.FAIL)
+        self.assertIn("public", issues["fix"])
+
+    def test_origin_mismatch_warns_and_default_is_github(self):
+        with self.fake_run("https://example.com/someone/demo.git", {"permissions": {"push": True}, "private": True}):
+            out = su.check_targets(self.ws, [self.repo], "git-prod")
+        target = next(c for c in out if c["id"] == "target:demo")
+        self.assertEqual(target["status"], su.WARN)
+        self.assertIn("https://github.com/WOOWTECH/demo", target["fix"])
+        self.assertEqual(self.status(out, "issues:demo"), su.OK)
+
+
 class RRuleDaysTest(unittest.TestCase):
     def test_weekly_byday(self):
         self.assertEqual(su.rrule_days("FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=8"), {"MO", "WE"})

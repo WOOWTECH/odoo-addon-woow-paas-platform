@@ -32,6 +32,15 @@ class SourceBlocksTest(unittest.TestCase):
                 self.assertEqual(missing, [])
                 self.assertTrue(blocks)
 
+    def test_every_stack_review_class_resolves(self):
+        for path in sorted((SWEEP / "stacks").glob("*.yaml")):
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            with self.subTest(stack=path.name):
+                self.assertEqual(data.get("name"), path.stem)
+                blocks, missing = tk.resolve_classes(data.get("review_classes") or [])
+                self.assertEqual(missing, [])
+                self.assertTrue(blocks)
+
     def test_default_classes_and_method_blocks(self):
         blocks, missing = tk.resolve_classes(list(tk.DEFAULT_CLASSES))
         self.assertEqual((missing, len(blocks)), ([], len(tk.DEFAULT_CLASSES)))
@@ -121,6 +130,24 @@ class TicketTest(unittest.TestCase):
         self.assertIn("**不給 `severity`**", text)
         prior = json.loads((self.run / "prior_findings.json").read_text(encoding="utf-8"))
         self.assertEqual([p["fingerprint"] for p in prior], ["review:sudo-without-check:controllers/a.py:abc"])
+
+    def test_fork_scope_lists_only_fork_files(self):
+        meta = json.loads((self.run / "meta.json").read_text(encoding="utf-8"))
+        meta["scope"] = {"mode": "full", "changed": None, "reason": "full"}
+        meta["deleted_files"] = []
+        meta["fork"] = {"remote": "https://github.com/up/demo.git", "branch": "master", "merge_base": "4911d09d" * 5,
+                        "fork_point": "2026-07-19T00:00:00+00:00", "ahead": 15, "behind": 1185,
+                        "files": ["controllers/a.py", "brand/logo.png"]}
+        (self.run / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+        text = Path(tk.review_ticket(self.run, self.state)["ticket"]).read_text(encoding="utf-8")
+        scope = text.split("## repo 上下文", 1)[0]
+        self.assertIn("只審 fork 改過的部分", scope)
+        self.assertIn("落後 1185", scope)
+        self.assertIn("限 fork 改過、仍存在的 2 個檔案", scope)
+        self.assertIn("`controllers/a.py`", scope)
+        self.assertNotIn("logo.png", scope)  # 二進位檔不列給 worker
+        self.assertIn("另有 1 個圖片", scope)
+        self.assertIn("上游問題", scope)
 
     def test_verify_ticket(self):
         row = {"id": "f9", "tool": "review", "fingerprint": "review:email-link", "verdict": "needs_validation",

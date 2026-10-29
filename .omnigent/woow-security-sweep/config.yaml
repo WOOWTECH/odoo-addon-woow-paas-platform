@@ -176,7 +176,7 @@ guardrails:
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
             && event.data.arguments.command.matches("(\\btea\\s+api\\b[\\s\\S]*(-X\\s*(POST|PATCH|PUT|DELETE)|--method\\s+(POST|PATCH|PUT|DELETE)|\\s(-d|--data|-f|-F|--field)\\s)|\\btea\\s+(issues?|i|pulls?|pr|labels?|milestones?|ms|releases?|r)\\s+(create|c|edit|e|close|reopen|open|delete|rm|merge|m|approve|reject)\\b|\\btea\\s+(comment|c)\\s|\\bcurl\\b[\\s\\S]*git-prod\\.woowtech\\.io/api)")
-            ? {"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫 mirror-internal、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"} : {"result": "ALLOW"}
+            ? {"result": "DENY", "reason": "Gitea issue 一律用 sec-issue skill 的 issue_sync.py 開（只寫非 public 的 repo、遮蔽秘密值、同一 fingerprint 只開一張）。leader 不直接用 tea／curl 寫 Gitea。"} : {"result": "ALLOW"}
     max_tool_calls_per_session:
       type: function
       function:

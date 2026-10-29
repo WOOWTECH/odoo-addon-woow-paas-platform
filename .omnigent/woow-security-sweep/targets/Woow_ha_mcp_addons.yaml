@@ -1,0 +1,86 @@
+# woow-security-sweep：WOOWTECH/Woow_ha_mcp_addons 的內部上下文（⚠ 不可複製到 public repo）
+#
+# 正本在 GitHub（public）；Gitea ha-components/Woow_ha_mcp_addons 是它的唯讀 pull mirror（public），
+# 同一份程式碼只掃一次。issue 開在 mirror-internal 的鏡像。掃 GitHub 預設分支 claude-delivery。
+# 內容依 2026-10-29 偵察（f71fb75）整理。core＝packages/mcp-admin-core/mcp_admin_core/。
+
+stack: ha-addon
+origin: https://github.com/WOOWTECH/Woow_ha_mcp_addons
+branch: claude-delivery
+# 這三個是 sha256 pin 與 secret 掃描 triage 的資料檔：gitleaks generic-api-key 對雜湊值誤報 40 筆（2026-10-29 實測）。
+# 只在 repo 沒有 .security/sweep.yaml 時生效。
+scan_exclude:
+- packaging/secret-triage.json
+- docs/tool-surface.json
+- docs/provenance/
+context:
+  summary: >-
+    HA add-on repository（0.4.2）。6 個 MCP gateway add-on（odoo、n8n、hermes、emqx、litellm、nextcloud；
+    opendesign 已下架但 addons/opendesign/config.yaml 仍在）共用 core（gateway、HA admin 驗證、子程序 supervisor）
+    與 packages/mcp-admin-ui。Ingress 面板設定後端憑證；:8081 以 Bearer token 提供 MCP，轉送給 pinned 子程序
+    apps/*；預設所有 tool 與寫入全開。add-on 權限：homeassistant_api true、apparmor true、其餘 host／docker 權限 false。
+  entry_points:
+  - {route: "POST/GET/DELETE :8081/mcp（各 add-on 共用）", file: "packages/mcp-admin-core/mcp_admin_core/gateway.py", auth: "Bearer token（帶 Origin 回 403）", note: "tools/call 引數原樣轉子程序，只查 disabled 與 write grant；可達 odoo execute_method、n8n credentials／test workflow、hermes chat／cron／mcp、emqx publish、litellm generate_key、nextcloud upload／delete"}
+  - {route: ":8081/private_<token>/mcp", file: "packages/mcp-admin-core/mcp_admin_core/gateway.py", auth: "URL 路徑內的同一把 token（錯誤回 404，不擋 Origin）", note: "給 Claude.ai；token 在 URL，靠 redact.py 洗 log"}
+  - {route: ":8081/health/ready", file: "packages/mcp-admin-core/mcp_admin_core/gateway.py", auth: none, note: "只回 ready 布林"}
+  - {route: "Ingress :8099 /api/{bootstrap,backend,policy,endpoint,token/reveal|rotate|revoke,child/restart,backend/test,diagnostics,owner-defaults/*} 與靜態 UI", file: "packages/mcp-admin-core/mcp_admin_core/gateway.py", auth: "ingress（來源 172.30.32.2＋X-Remote-User-Id＋CSRF，再即時查 HA owner／admin）", note: "改後端憑證與 policy、重啟子程序、reveal token"}
+  sensitive_code:
+  - packages/mcp-admin-core/mcp_admin_core/gateway.py
+  - packages/mcp-admin-core/mcp_admin_core/admin_auth.py
+  - packages/mcp-admin-core/mcp_admin_core/ha_role.py
+  - packages/mcp-admin-core/mcp_admin_core/access.py
+  - packages/mcp-admin-core/mcp_admin_core/policy.py
+  - packages/mcp-admin-core/mcp_admin_core/config.py
+  - packages/mcp-admin-core/mcp_admin_core/products.py
+  - packages/mcp-admin-core/mcp_admin_core/redact.py
+  - packaging/entrypoint.py
+  - packaging/management_launcher.py
+  - apps/runtime/backend_policy.py
+  - apps/n8n/n8n_adapter.py
+  - apps/hermes/vendor/hermes_mcp_server/guards.py
+  trust_boundaries:
+  - MCP client／LLM（可被 prompt injection）→ gateway tools/call → 子程序（引數不可信）
+  - 反代／LAN／Claude.ai → :8081（token 在 header 或 URL，明文 HTTP）
+  - Ingress 瀏覽器 → :8099（只信來源 IP 與 header，須 HA admin）
+  - 後端／子程序回應 → gateway → client（回應不可信，後端憑證須 redact）
+  - add-on → Supervisor Core proxy（homeassistant_api，廣泛的 Core admin）
+  upstream: []
+  downstream: []
+review_focus:
+- 預設全開加上單一共用 token：被 injection 的 LLM 可直接 execute_method、generate_key、upload_file；policy 的 child_call、mixed tool selector、denied_operations 能否被繞過
+- admin_auth.py 只憑來源 IP 與 header 認 Ingress：ha_role 版本白名單是否 fail-closed、token reveal 與 CSRF
+- /private_<token>/mcp 不擋 Origin、未見 Host 檢查：token 洩漏面與 rotate 後的撤銷
+- state.json 明文存 token 與後端憑證、子程序同 UID：management_launcher 的隔離與 child env
+- n8n WEBHOOK_SECURITY_MODE=permissive、hermes 新增 MCP URL 的 SSRF 與 DNS pin、各 launch.py 的 sha256 pin 在升版時是否漂移
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Resource and file handling
+- ATTACK-CLASSES.md#Obvious things
+- ha-addon.md#Add-on privilege surface
+- ha-addon.md#Ingress and exposed ports
+- ha-addon.md#Supervisor and Home Assistant token handling
+- ha-addon.md#Container build inputs
+- AI-AND-LLM.md#Excessive agency and confused-deputy authority
+- AI-AND-LLM.md#Tool-argument injection into a downstream sink
+- AI-AND-LLM.md#Action-confirmation and approval binding
+- AI-AND-LLM.md#MCP server and tool identity confusion
+- WEB-PROTOCOL-AND-AUTH.md#API-key scope and resource binding
+- WEB-PROTOCOL-AND-AUTH.md#API-key exposure and unsafe transport
+- SUPPLY-CHAIN-AND-RELEASE.md#Automation identity overreach
+- SUPPLY-CHAIN-AND-RELEASE.md#Release authorization and signing-policy gaps
+history:
+  fixed: []
+disclosure:
+  findings_to: omnigent_inbox
+  issues_to: mirror-internal/Woow_ha_mcp_addons
+  high_fix_via: github_security_advisory
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD

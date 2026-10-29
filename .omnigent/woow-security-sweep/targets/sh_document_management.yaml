@@ -1,0 +1,76 @@
+# woow-security-sweep：WOOWTECH/sh_document_management 的內部上下文（⚠ 不可複製到 public repo）
+#
+# 正本在 GitHub（private）；mirror-internal/sh_document_management 是它的唯讀 pull mirror，issue 開在那裡。
+# repo 非公開，high 以上可直接開修正 PR（仍由人決定）。內容依 2026-10-29 偵察（977380e）整理。
+
+stack: odoo
+origin: https://github.com/WOOWTECH/sh_document_management
+context:
+  summary: >-
+    Softhealer 第三方 Document Management（Odoo 18，OPL-1，addon 在 sh_document_management/ 子目錄）。
+    document.directory 階層資料夾、ir.attachment 擴充（directory、tags、trash）、email 分享 token 連結、ZIP 匯出、
+    /my/documents portal。depends：base、mail、web、portal、board。WOOWTECH 改動：portal controller 與模板、
+    portal ACL／rule、token 驗證（FIX-002）、回收桶（sh_trashed＋cron）、public_base_url／HTTPS、檔案屬性。
+  entry_points:
+  - {route: "/attachment/download_directories（與舊拼字 /attachment/download_directiries）", file: "sh_document_management/controllers/sh_download_directories.py", auth: public, csrf: false, note: "token 比對後 sudo 打包 ZIP；directory 模式含已 trashed 附件；GET 可用"}
+  - {route: "/my/documents、/my/documents/directories、/my/documents/files", file: "sh_document_management/controllers/portal.py", auth: user, note: "sudo 後以 sh_user_ids 過濾列表"}
+  - {route: "/my/documents/directory/<int:id>", file: "sh_document_management/controllers/portal.py", auth: user, note: "sudo；子資料夾與附件不濾 sh_trashed，子資料夾不查 sh_user_ids"}
+  - {route: "/my/documents/file/<int:id>、/my/documents/download/<int:id>", file: "sh_document_management/controllers/portal.py", auth: user, note: "以附件或父資料夾 sh_user_ids 判斷存取後 sudo 串流；不濾 trashed"}
+  - {route: "/my/documents/directory/<int:id>/upload", file: "sh_document_management/controllers/portal.py", auth: user, csrf: true, note: "sudo().create attachment；無檔名清理、MIME、配額；上限 10 檔 50MB"}
+  - {route: "RPC document.directory.action_download_as_zip", file: "sh_document_management/models/document_directory.py", auth: "任何登入者（method 無檢查）", note: "sudo().browse(context.active_ids)；directory.name 拼進 /tmp 路徑"}
+  - {route: "RPC ir.attachment.action_download_as_zip_attachment", file: "sh_document_management/models/ir_attachment.py", auth: "任何登入者", note: "sudo().browse(active_ids)"}
+  - {route: "RPC action_share_directory（document.directory 與 ir.attachment）", file: "sh_document_management/models/document_directory.py", auth: "登入者", note: "產生 token、改共用 mail.template 的 partner_to、sudo 寄信"}
+  - {route: "RPC action_trash／action_restore／action_permanent_delete", file: "sh_document_management/models/ir_attachment.py", auth: "登入者（受 record rule）", note: "permanent_delete 繞過 soft delete"}
+  sensitive_code:
+  - sh_document_management/controllers/portal.py
+  - sh_document_management/controllers/sh_download_directories.py
+  - sh_document_management/models/document_directory.py
+  - sh_document_management/models/ir_attachment.py
+  - sh_document_management/models/ir_config_parameter.py
+  - sh_document_management/security/sh_document_management_groups.xml
+  - sh_document_management/security/ir.model.access.csv
+  - sh_document_management/__init__.py
+  trust_boundaries:
+  - 匿名網路 → /attachment/download_directories（list_ids、access_token、name 不可信）
+  - portal 使用者 → /my/documents/*（id、上傳檔名／內容／大小不可信；後端全 sudo）
+  - 任何登入者 → document.directory／ir.attachment 的 RPC（context.active_ids 不可信）
+  - 資料夾／附件建立者 → 伺服器檔案系統（directory.name 與 attachment.name 拼成 /tmp 路徑）
+  - 持有分享 token 的人（含轉寄信件的收件者）→ 資料夾全部檔案（token 無期限）
+  upstream: []
+  downstream: []
+review_focus:
+- action_download_as_zip／action_download_as_zip_attachment 以 sudo().browse(context active_ids) 沒有權限檢查：登入者能否枚舉 id 打包他人資料夾或任意附件、繞過 ir.rule
+- action_download_as_zip 的 os.path.join('/tmp', directory.name) 沒有過濾 ../ 與絕對路徑：能否寫到 /tmp 以外
+- 分享 token：沒有期限與撤銷、GET＋csrf=False、directory 模式不濾 sh_trashed、在 compute 內寫 token
+- 資料夾權限：rule 只看 sh_user_ids／create_uid，被分享者可改 sh_user_ids、刪除、再分享；子資料夾不繼承；portal 全 sudo 是否繞過 multi-company rule
+- 回收桶：ir.attachment.unlink 全域改成 soft delete，其他 model 的附件是否也受影響；portal 與 /web/content 能否取得 trashed 檔；portal 上傳沒有檔名／MIME／配額限制
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Resource and file handling
+- ATTACK-CLASSES.md#Feature abuse and data leakage
+- ATTACK-CLASSES.md#Obvious things
+- odoo.md#Public route before identity check
+- odoo.md#csrf=False state change
+- odoo.md#sudo() scope creep
+- odoo.md#Record rule and multi-company gaps
+- odoo.md#Public method RPC exposure
+- odoo.md#QWeb and Markup escaping
+- odoo.md#ir.config_parameter as trust boundary
+- DATA-ISOLATION-AND-LIFECYCLE.md#Blob and signed-reference overreach
+- DATA-ISOLATION-AND-LIFECYCLE.md#Soft-delete and tombstone bypass
+- DATA-ISOLATION-AND-LIFECYCLE.md#Export and backup scope expansion
+history:
+  fixed: []
+disclosure:
+  findings_to: omnigent_inbox
+  issues_to: mirror-internal/sh_document_management
+  high_fix_via: private_pr
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD

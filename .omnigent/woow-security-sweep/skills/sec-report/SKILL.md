@@ -1,6 +1,6 @@
 ---
 name: sec-report
-description: woow-security-sweep 的報告與 Inbox 提問：report.md 格式、AskUserQuestion 的題目挑選與選項、秘密值遮蔽、advisory 草稿與 baseline 片段。
+description: woow-security-sweep 的報告與 Inbox 提問：report.md 格式、AskUserQuestion 的題目挑選與選項、秘密值遮蔽、high 以上的修正待辦（依 disclosure.high_fix_via）與 baseline 片段。
 ---
 
 # sec-report
@@ -55,7 +55,7 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 
 ## Jev 建議丟棄（供抽查）
 ## 工具與資料缺口
-## 給人的待辦（advisory 草稿／baseline 片段）
+## 給人的待辦（high 以上的修正待辦／baseline 片段）
 ```
 
 ## AskUserQuestion（送進 Inbox）
@@ -75,7 +75,7 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 
 | label | 後果 |
 |---|---|
-| 成立，修正 | ≤ medium 派 fix worker；≥ high 產生 advisory 草稿給你 |
+| 成立，修正 | ≤ medium 派 fix worker；≥ high 產生修正待辦給你（advisory 草稿或 `-security` repo 步驟） |
 | 成立，先追蹤 | 產生 baseline tracked 片段 |
 | 誤報 | 記為誤報，產生 baseline 片段供你決定要不要加 |
 | 接受風險 | 產生 baseline accepted 片段（6 個月後到期） |
@@ -98,12 +98,21 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 - 片段中長度 ≥ 20 的英數字串、`Bearer …`、`-----BEGIN … KEY-----`、`password=…` 一律改成 `***`
 - ⛔ 不貼 `config.json` 的 `context`／`baseline` 原文到 GitHub（它們是 private）
 
-## advisory 草稿（high／critical 且人選「修正」）
+## high／critical 且人選「修正」：給人的待辦
 
-寫進報告「給人的待辦」：標題（中性）、受影響版本範圍（`__manifest__.py` 版號）、影響、
-重現條件、建議修法、CVSS 估計。附上步驟：GitHub repo → Security → Advisories →
-New draft advisory → Start a temporary private fork。修正驗證要在本機 Odoo 跑（private fork
-不跑 GitHub Actions）。
+共同內容：標題（中性）、受影響版本範圍（從 `config.json` 的 `stack.version_files` 讀版號）、影響、
+重現條件（needs_validation 附 `validation_plan.local`）、建議修法、CVSS 估計、修正驗證方式（`stack.fix_verify`）。
+再依 `disclosure.high_fix_via` 附步驟：
+
+| high_fix_via | 步驟 |
+|---|---|
+| `github_security_advisory`（預設） | GitHub repo → Security → Advisories → New draft advisory → Start a temporary private fork。private fork 不跑 Actions，修正要在本機驗證 |
+| `internal_security_repo` | 在 Gitea `mirror-internal` 建**非鏡像** repo `<repo>-security`，推入正本預設分支；修正分支只推到這裡、在這裡開 PR 與跑 CI；發版時由人把修正推回 public 正本，commit 與 PR 描述保持中性 |
+| `private_pr` | repo 非公開，可直接在正本開修正 PR；仍由人決定、由人 merge |
+
+`advisory` 工具的 finding（上游已公告、fork 版號落在受影響範圍）：修法是同步上游到修正版以上，
+待辦寫出 GHSA、受影響範圍、修正版與 fork 目前版號。根因在上游原樣程式碼、上游還沒公告的問題
+（deep review 寫成 hardening「上游問題」）：附上游 SECURITY.md 的通報方式，由人整理可重現的 PoC 再通報。
 
 ## baseline 片段（追蹤／誤報／接受風險）
 

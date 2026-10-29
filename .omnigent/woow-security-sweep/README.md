@@ -10,13 +10,14 @@ woow-security-sweep/          claude-native／claude-sonnet-5-5[1m]／high／spa
 ├── AGENTS.md                 leader prompt（手改）
 ├── gates.yaml                Jev model 版本、mode（shadow／enforce）、門檻
 ├── targets/<repo>.yaml       各 repo 的 private 上下文（⚠ 不可複製到 public repo）
-├── companions/odoo.md        自己寫的 Odoo 攻擊類別（格式比照 Cloudflare companion；#2064）
+├── stacks/<stack>.yaml       技術棧 profile：generic／odoo／ha-component／ha-addon（#2064 階段 B）
+├── companions/               自己寫的攻擊類別：odoo.md、ha-component.md、ha-addon.md（格式比照 Cloudflare companion）
 ├── third_party/cloudflare-security-audit/   vendored 原文（MIT，commit c1c8a8c；見該目錄 README）
 ├── skills/
 │   ├── sec-collect/          scripts/collect.py：設定合併、增量範圍、上游快照、掃描工具、findings、import／verdict／promote
 │   ├── sec-gate/             scripts/jev_gate.py：Jev 閘門、路由、shadow log、校準
 │   ├── sec-dispatch/         scripts/ticket.py：deep review／驗證者工單；用 woow-issue-leader/generate-worker.py 派 worker
-│   ├── sec-issue/            scripts/issue_sync.py：成立的 finding 開到 Gitea mirror-internal（#1957）
+│   ├── sec-issue/            scripts/issue_sync.py：成立的 finding 開到 targets 指定的非 public Gitea repo（#1957）
 │   └── sec-report/           report.md 與 Inbox 提問
 └── tests/                    unittest（CI：.gitea/workflows/security-sweep-tests.yml）
 ```
@@ -135,8 +136,9 @@ committed 的 mode 必須是 shadow——改成 enforce 要人拍板、改測試
 
 ## issue（#1957）
 
-成立的 finding 由 `issue_sync.py` 開到 **Gitea `mirror-internal/<repo>`**（org 為 limited，匿名看不到）。
-⛔ 不開在 GitHub：目標 repo 是 public。開單條件、label 與去重見 `skills/sec-issue/SKILL.md`；
+成立的 finding 由 `issue_sync.py` 開到 targets 的 **`disclosure.issues_to`**（沒寫時是 `mirror-internal/<repo>`；
+mirror-internal 的 org 為 limited，git-prod 前面另有 Cloudflare Access，且不開放自行註冊）。寫入前腳本會確認
+目標不是 public，否則中止。⛔ 不開在 GitHub，也不開在 Gitea 的 public org。開單條件、label 與去重見 `skills/sec-issue/SKILL.md`；
 `gates.yaml` 的 `issues` 區塊控制開關與 Jev 門檻（`jev_min_confidence`，起始 0.85）。
 
 | label | 意思 |
@@ -153,12 +155,38 @@ committed 的 mode 必須是 shadow——改成 enforce 要人拍板、改測試
 
 | 位置 | 內容 | 可見度 |
 |---|---|---|
-| 目標 repo 的 `.security/sweep.yaml` | `scan`、`always_human`、`autofix`、`verify` | public；**只讀 origin 預設分支** |
-| 本目錄 `targets/<repo 目錄名>.yaml` | `context`、`review_focus`、`review_classes`、`history`、`baseline`、`disclosure` | private（本 repo） |
+| 目標 repo 的 `.security/sweep.yaml` | `scan`、`always_human`、`autofix`、`verify` | public；**只讀 origin 上的掃描分支** |
+| 本目錄 `targets/<repo 目錄名>.yaml` | 見下表 | private（本 repo） |
+| 本目錄 `stacks/<stack>.yaml` | repo 沒有 `.security/sweep.yaml` 時的 `scan`／`always_human` 預設、預設 `review_classes`、版號檔、修正驗證方式 | private（本 repo） |
 
-collect.py 只從 private 檔取上面六個 key，private 不能放寬 public 的規則。repo 沒有
-`.security/sweep.yaml` ⇒ 保守預設（不自動修、high 以上轉人工）。`.security/` 有任何變動 ⇒
+targets 的欄位：
+
+| 欄位 | 用途 |
+|---|---|
+| `stack` | 選 `stacks/<stack>.yaml`；沒寫是 `generic`，寫錯名稱整個 target 中止 |
+| `origin` | 正本的 URL（doctor 比對本機 clone 的 origin；沒寫時預設 `https://github.com/WOOWTECH/<目錄名>`） |
+| `branch` | 掃描分支；沒寫用 origin 的預設分支 |
+| `since_upstream` | fork 才寫：`remote`（https）、`branch`、`advisories`（`github`、`package`、`version_file`、`version_regex`）。只掃 fork 相對上游 merge-base 改過的檔案，並比對上游 advisory |
+| `scan_exclude` | 追加排除路徑；**只在 repo 沒有 `.security/sweep.yaml` 時生效**（repo 有自己的設定就以 repo 為準） |
+| `context`、`review_focus`、`review_classes` | deep review 工單的上下文與攻擊類別（`review_classes` 沒寫用 stack 的預設） |
+| `history`、`baseline` | 已修項目與接受／追蹤的 finding |
+| `disclosure` | `issues_to`（`owner/name`，必須非 public）、`high_fix_via`（`github_security_advisory`／`internal_security_repo`／`private_pr`；舊欄位 `fix_via` 仍可讀） |
+
+private 不能放寬 public 的規則（`scan_exclude` 只補在 stack 預設上）。`.security/` 有任何變動 ⇒
 自動產生 `security-config-changed` finding、必轉人工（防止有人在 PR 裡偷加豁免）。
+
+### 目前的 targets
+
+| target（目錄） | stack | 正本 | 掃描範圍 | issue | high 以上 |
+|---|---|---|---|---|---|
+| `WOOW/woow_line_base`、`WOOW/Woow_odoo_line_liff`、`WOOW/woow_odoo_livechat_line` | odoo | GitHub public | 全部 | mirror-internal 鏡像 | GitHub Security Advisory |
+| `WOOW/sh_document_management` | odoo | GitHub private | 全部 | mirror-internal 鏡像 | 直接開 PR |
+| `WOOW/Woow_ha_mcp_addons` | ha-addon | GitHub public（`claude-delivery`） | 全部（排除 3 個雜湊資料檔） | mirror-internal 鏡像 | GitHub Security Advisory |
+| `ha-components/woow_paas_smart_home` | ha-component | Gitea public org | 全部 | mirror-internal 鏡像 | mirror-internal `<repo>-security` |
+| `ha-components/Woow_ha_ai_mcp-shc` | ha-component | Gitea public org（homeassistant-ai/ha-mcp 的 fork） | 只掃 WOOWTECH 改過的檔案＋上游 advisory | mirror-internal 鏡像 | mirror-internal `<repo>-security`；上游問題照上游 SECURITY.md |
+
+`ha-components/Woow_ha_mcp_addons` 是 `WOOW/Woow_ha_mcp_addons` 的唯讀 mirror，不另外掃。
+`odoo-addons/woow_paas_platform` 待 #2064 階段 C（分塊輪流審）。
 
 ## deep review（#2064）
 

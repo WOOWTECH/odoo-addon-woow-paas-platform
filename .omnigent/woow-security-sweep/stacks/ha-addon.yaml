@@ -1,0 +1,26 @@
+# woow-security-sweep 技術棧 profile：Home Assistant add-on repository。欄位說明見 README §技術棧 profile。
+name: ha-addon
+description: Home Assistant add-on（<addon>/config.yaml、Dockerfile、ingress、Supervisor API）
+defaults:
+  scan:
+    exclude: [tests/, "**/__pycache__/", node_modules/, "**/dist/"]
+    tools:
+      semgrep: {rulesets: [p/python, p/javascript, p/dockerfile, p/secrets]}
+      gitleaks: {}
+  always_human:
+    paths: [.security/, .github/workflows/, .gitea/workflows/, repository.yaml, "*/config.yaml", "*/config.json", "*/build.yaml", Dockerfile, "*/Dockerfile"]
+    severities: [critical, high]
+    topics: []
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Obvious things
+- ha-addon.md#Add-on privilege surface
+- ha-addon.md#Ingress and exposed ports
+- ha-addon.md#Supervisor and Home Assistant token handling
+- ha-addon.md#Options to shell and templates
+- ha-addon.md#Container build inputs
+- SUPPLY-CHAIN-AND-RELEASE.md#Mutable and unbound build inputs
+- SUPPLY-CHAIN-AND-RELEASE.md#Build-context inclusion
+version_files: ["*/config.yaml", "*/config.json"]
+fix_verify: 在本機 build add-on image 並以 Supervisor dev 環境或 docker run 跑既有測試；GitHub Security Advisory 的 private fork 不跑 Actions。

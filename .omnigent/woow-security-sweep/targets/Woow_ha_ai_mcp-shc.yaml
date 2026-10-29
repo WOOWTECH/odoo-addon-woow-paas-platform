@@ -1,0 +1,78 @@
+# woow-security-sweep：ha-components/Woow_ha_ai_mcp-shc 的內部上下文（⚠ 不可複製到 public repo）
+#
+# 第三方開源 homeassistant-ai/ha-mcp 的 WOOWTECH fork。人決定只掃 WOOWTECH 相對上游改過的部分
+# （since_upstream），上游原樣程式碼只當上下文；上游已公告的 advisory 另外比對 fork 版號。
+# 根因在上游的問題照上游 SECURITY.md 回報（要附可重現 PoC，AI 產生的報告會被關閉），不開我們的單。
+# 內容依 2026-10-29 偵察（5e8cf614，merge-base 4911d09d）整理。
+
+stack: ha-component
+origin: https://git-prod.woowtech.io/ha-components/Woow_ha_ai_mcp-shc
+since_upstream:
+  remote: https://github.com/homeassistant-ai/ha-mcp.git
+  branch: master
+  advisories:
+    github: homeassistant-ai/ha-mcp
+    package: ha-mcp
+    version_file: pyproject.toml
+    version_regex: '^\s*version\s*=\s*"([^"]+)"'
+context:
+  summary: >-
+    ha-mcp 是以 MCP 操作 Home Assistant 的 Python server（fastmcp，走 HA REST／WebSocket，用 LLAT），
+    可作 HA add-on、custom component ha_mcp_tools 的 in-process webhook server，或獨立 stdio／HTTP 程序。
+    WOOWTECH 的改動：camera tool 改用 Pillow 實際縮圖、blueprint name 與 system health 計數修補、
+    離線 isolated wheel 安裝腳本與 Gitea CI、GitHub 通知 workflow、版號 floor 防倒退。
+  entry_points:
+  - {route: "MCP tool ha_get_camera_image", file: "src/ha_mcp/tools/tools_camera.py", auth: "MCP client 憑證（secret path／OAuth／webhook，依部署）；對 HA 用 LLAT", note: "讀 /api/camera_proxy/{entity_id} 後以 Pillow 縮圖回傳給 LLM（WOOWTECH 新增 Pillow 處理）"}
+  - {route: "MCP tool ha_get_blueprint", file: "src/ha_mcp/tools/tools_blueprints.py", auth: "同上", note: "唯讀；改為優先取 metadata.metadata.name"}
+  - {route: "MCP tool ha_get_system_health", file: "src/ha_mcp/tools/tools_system.py", auth: "同上", note: "唯讀 WebSocket system_health/info；改 component_count 算法"}
+  - {route: "CLI scripts/install_isolated.py", file: "scripts/install_isolated.py", auth: "操作者本機權限", note: "驗 wheel sha256 後建 venv、subprocess pip --no-index 安裝（WOOWTECH 新檔）"}
+  - {route: "Gitea workflow isolated-installer（pull_request、workflow_dispatch）", file: ".gitea/workflows/isolated-installer.yml", auth: "無 secret，contents:read", note: "在 runner 上 uv build、pip download、跑安裝腳本"}
+  - {route: "GitHub workflow woow-addon-sync（push、cron、workflow_run、dispatch）", file: ".github/workflows/woow-addon-sync.yml", auth: "GITHUB_TOKEN contents:write", note: "呼叫 WOOWTECH/Woow_HA_App_Store 的 reusable workflow @main"}
+  - {route: "semantic-release build_command", file: "scripts/check_release_version_floor.py", auth: "無", note: "版本低於 floor 即 exit 1"}
+  sensitive_code:
+  - src/ha_mcp/tools/tools_camera.py
+  - scripts/install_isolated.py
+  - .github/workflows/woow-addon-sync.yml
+  - .gitea/workflows/isolated-installer.yml
+  - scripts/check_release_version_floor.py
+  - pyproject.toml
+  trust_boundaries:
+  - MCP client／LLM → ha-mcp tool（entity_id、width、height、blueprint path 不可信）
+  - ha-mcp → Home Assistant API（LLAT 的權限；camera bytes 與 blueprint metadata 回應不可信）
+  - 操作者／build host → install_isolated.py（wheel 有 sha256，wheelhouse 內的依賴沒有）
+  - PR 作者 → Gitea runner（PR 內的 build backend 與腳本會被執行）
+  - 本 repo → Woow_HA_App_Store @main（外部 workflow 拿到本 repo 的 contents:write token）
+  upstream: []
+  downstream: []
+review_focus:
+- tools_camera.py 用 Pillow 處理 HA 回傳的 bytes：decompression bomb、width／height 沒有上限、content-type 與實際格式不符、錯誤訊息回給 client
+- camera tool 的 entity_id 只驗前綴就拼進帶 LLAT 的 HA API 路徑（上游既有）：WOOWTECH 的改動是否放大影響
+- install_isolated.py：sha256 只綁主 wheel、wheelhouse 依賴沒有 --require-hashes、檢查與 pip 讀檔之間的 TOCTOU、傳給 pip 的環境變數
+- woow-addon-sync.yml：reusable workflow 用浮動 @main 又給 contents:write；workflow_run 與 cron 觸發條件
+- isolated-installer.yml：pull_request 會在 runner 執行 PR 內的 build 與未 pin、無 hash 的 pip download；action 只釘 tag
+review_classes:
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Resource and file handling
+- ATTACK-CLASSES.md#Obvious things
+- AI-AND-LLM.md#Tool-argument injection into a downstream sink
+- AI-AND-LLM.md#Excessive agency and confused-deputy authority
+- RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Decompression and representation amplification
+- ha-component.md#Subprocess and downloaded binaries
+- SUPPLY-CHAIN-AND-RELEASE.md#Untrusted code in a privileged workflow
+- SUPPLY-CHAIN-AND-RELEASE.md#Mutable and unbound build inputs
+- SUPPLY-CHAIN-AND-RELEASE.md#Automation identity overreach
+history:
+  fixed: []
+disclosure:
+  findings_to: omnigent_inbox
+  issues_to: mirror-internal/Woow_ha_ai_mcp-shc
+  high_fix_via: internal_security_repo
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD

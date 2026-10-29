@@ -1,0 +1,80 @@
+# woow-security-sweep：ha-components/woow_paas_smart_home 的內部上下文（⚠ 不可複製到 public repo）
+#
+# 正本在 Gitea ha-components（public org）；issue 開在 mirror-internal 的鏡像。
+# 欄位說明見 README §設定的兩層 與 §技術棧 profile。內容依 2026-10-29 偵察（c78d4bf）整理。
+
+stack: ha-component
+origin: https://git-prod.woowtech.io/ha-components/woow_paas_smart_home
+context:
+  summary: >-
+    HA custom component（domain woow_paas_smart_home，檔案在 repo 根目錄）。以 OAuth2 PKCE 或 device flow 登入
+    WOOW PaaS（aiot.woowtech.io），向平台 /api/smarthome/*、/api/security-access/* 取 Cloudflare tunnel token，
+    下載 cloudflared 並以子行程啟動；每 30 秒輪詢平台 status，依 access_revision 重啟 tunnel 撤權，
+    並可依平台的 mcp 訂閱自動安裝 Woow_ha_ai_mcp。
+  entry_points:
+  - {route: "service woow_paas_smart_home.start_tunnel", file: "__init__.py", auth: "user（無 admin 檢查）", note: "下載並啟動 cloudflared，使用 entry 內的 tunnel_token"}
+  - {route: "service woow_paas_smart_home.stop_tunnel", file: "__init__.py", auth: "user（無 admin 檢查）", note: "停掉 tunnel 子行程"}
+  - {route: "service woow_paas_smart_home.get_status", file: "__init__.py", auth: "user（無 admin 檢查）", note: "回傳 home_id、workspace_id、tunnel 狀態（supports_response）"}
+  - {route: "HTTP GET /auth/external/woow/callback", file: "oauth_callback_view.py", auth: "none（requires_auth=False，只驗 HA state JWT）", note: "收 code／error／state 後 flow.async_configure；經公開 tunnel 可達"}
+  - {route: "config flow user／reauth／device", file: "config_flow.py", auth: "admin 開 flow；OAuth PKCE 或 RFC 8628 device code", note: "依 User-Agent 決定走 device flow；取得 access／refresh token"}
+  - {route: "config flow select_workspace／select_home／onboarding／create entry", file: "config_flow.py", auth: "oauth bearer", note: "POST /api/smarthome/onboarding 建平台服務、取 tunnel token 寫進 entry.data"}
+  - {route: "async_setup_entry 背景任務", file: "__init__.py", auth: "oauth refresh token", note: "每次啟動重取 tunnel token；cloudflared 失敗無限退避重試；MCP 安裝迴圈每 300 秒"}
+  - {route: "DataUpdateCoordinator 每 30 秒輪詢", file: "coordinator.py", auth: "oauth bearer", note: "讀平台 status／mcp／access_revision，觸發 reset_tunnel 與 MCP 安裝"}
+  - {route: "async_remove_entry", file: "__init__.py", auth: "admin（移除整合）", note: "DELETE tunnel-binding、POST /oauth2/revoke、刪 binary 目錄"}
+  sensitive_code:
+  - cloudflared_manager.py
+  - mcp_setup.py
+  - oauth_callback_view.py
+  - oauth2.py
+  - config_flow.py
+  - api_client.py
+  - access_revocation.py
+  - instance_identity.py
+  - sensor.py
+  - coordinator.py
+  - const.py
+  trust_boundaries:
+  - 網路上任何人 → HA callback view（state／code／error 參數不可信，只靠 HA JWT state）
+  - WOOW PaaS 回應 → 本機（tunnel_token、mcp 旗標、access_revision、verification_uri 由平台決定，可觸發子行程與第三方程式安裝）
+  - GitHub releases/latest → 本機（cloudflared 執行檔下載後直接執行）
+  - codeload.github.com 固定 commit 的 zip → custom_components（可執行程式碼）
+  - non-admin HA 使用者 → start／stop／get_status service
+  - 本機其他 process → cloudflared argv（--token）、entity state／recorder 裡的 MCP URL
+  upstream: []
+  downstream: []
+review_focus:
+- cloudflared 以 releases/latest 下載、只用「檔案存在」判斷已安裝，沒有 checksum／簽章與版本 pin：被替換執行檔的風險
+- tunnel token 以 argv 傳給 cloudflared、stderr 轉進 HA log：token 是否會出現在 log、diagnostics 或 /proc
+- 三個 service 沒有用 admin service 註冊：non-admin 能否中斷 tunnel 或讀到不該讀的狀態
+- 不需驗證的 OAuth callback：flow_id 重放、redirect_uri 取自 HA-Frontend-Base header、依賴 HA 私有 _decode_jwt
+- 平台的 mcp 旗標可觸發自動安裝第三方程式：MCP_COMMIT／SHA256 更新流程、zip 路徑與 symlink 檢查、MCP 秘密 URL 進 entity state／recorder
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Cryptography and secrets
+- ATTACK-CLASSES.md#Obvious things
+- ha-component.md#Unauthenticated HTTP view
+- ha-component.md#Non-admin websocket and service surface
+- ha-component.md#Config flow and outbound URL trust
+- ha-component.md#Token and credential lifecycle
+- ha-component.md#Diagnostics, logs, and events as readers
+- ha-component.md#Files under www and config paths
+- ha-component.md#Subprocess and downloaded binaries
+- WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding
+- SUPPLY-CHAIN-AND-RELEASE.md#Update metadata and rollback confusion
+- SUPPLY-CHAIN-AND-RELEASE.md#Plugin and extension trust expansion
+history:
+  fixed: []
+disclosure:
+  findings_to: omnigent_inbox
+  issues_to: mirror-internal/woow_paas_smart_home
+  high_fix_via: internal_security_repo
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD
