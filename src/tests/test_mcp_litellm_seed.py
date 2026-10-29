@@ -8,7 +8,7 @@ REPLACE、envPrefix 用 camelCase、規格對帳、方案綁定）由
 ``test_workspace_service_url_injection`` 守。本檔守本 app 專屬的契約：
 
 1. **釘版**：chart mcp-server 0.1.7（OCI）；image litellm-mcp-admin 來自 JCR、雙釘，而且釘的就是 main CI
-   推的那一顆（現行＝woow-mcp-server #92 合併 af648155（LiteLLM metadata 校正））——換 image 時這條會紅，逼下一個人覆核啟動
+   推的那一顆（現行＝woow-mcp-server #93 合併 f748090e（LiteLLM 主動操作政策））——換 image 時這條會紅，逼下一個人覆核啟動
    契約（#708 教訓）。
 2. **啟動契約**：``litellm-mcp-server``、args 只有 ``--port 8000``（launcher 硬綁 127.0.0.1，seed 不給
    host）、``mcp_server.port``＝args 的 port（core proxy 轉發目標，不一致一律 502）。
@@ -60,8 +60,13 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # 2026-10-29：#92 main af648155，CI31951/job35251 的 build／healthz／push 通過；
 # digest 來自真 registry push receipt（未獨立下載 layers）。相較 38a9041f，console script、
 # launcher／LaunchPolicy／seed_defaults／handler／Dockerfile／uv.lock 與共用 core 逐字未變。
+# 2026-10-29：#93 main f748090e；相較 af648155，pyproject.toml、main.py、launcher.py、
+# seed_defaults.py、Dockerfile、uv.lock 六檔 SHA256 相同；command／loopback／port／唯讀鍵不變。
+# 精確 9d723ff6 image 的既有隔離 runtime 收據：40 全開／15 唯讀／3 主動操作通過，
+# 使用合成 backend，設定已還原；不代表正式服務升級。來源雜湊與證據範圍見
+# docs/verification/2026-10-29-mcp93-litellm-launch-contract.json。
 EXPECT_IMAGE_TAG = (
-    'af6481551b32c27938d7d5ec5dadc6e9e648fbce@sha256:bb8bd08f39ccc0fbfbd4da3ce9c144ee792d9a066d955ae44bc00a466fcbe1f2')
+    'f748090eb782bc103edcd99ac9aa821f77294fb0@sha256:9d723ff679460da697c8b08369ee87571c4d60205542ae33dec7822ebd8d2ef8')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'
