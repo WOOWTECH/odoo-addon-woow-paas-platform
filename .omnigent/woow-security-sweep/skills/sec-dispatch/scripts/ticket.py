@@ -169,8 +169,12 @@ def load_run(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return cfg, meta
 
 
-def prior_findings(sdir: Path, run_dir: Path, repo: str, tool: str = "review") -> tuple[list[dict], list[dict]]:
-    """前幾輪同 repo 的 deep review finding（最後事件不是 resolved）與被推翻的說法。"""
+def prior_findings(sdir: Path, run_dir: Path, repo: str, tool: str = "review",
+                   limit: int | None = MAX_PRIOR) -> tuple[list[dict], list[dict]]:
+    """前幾輪同 repo 的 deep review finding（最後事件不是 resolved，新的在前）與被推翻的說法。
+
+    limit=None 回傳全部（分塊輪審先依塊的檔案過濾、再各自取前 MAX_PRIOR 筆，避免別塊的 finding 擠掉本塊的）。
+    """
     groups = jg.triage_history(jg.read_jsonl(sdir / "shadow.jsonl"))
     bodies = jg._findings_by_decision(sdir / "runs")
     open_items: list[dict] = []
@@ -194,8 +198,8 @@ def prior_findings(sdir: Path, run_dir: Path, repo: str, tool: str = "review") -
             f = r.get("finding") or {}
             if f.get("fingerprint"):
                 rejected[f["fingerprint"]] = {"fingerprint": f["fingerprint"], "title": f.get("title"),
-                                              "reason": str(r.get("reason") or "")[:300]}
-    return open_items[:MAX_PRIOR], list(rejected.values())
+                                              "path": f.get("path"), "reason": str(r.get("reason") or "")[:300]}
+    return (open_items if limit is None else open_items[:limit]), list(rejected.values())
 
 
 def _abs(run_dir: Path, rel: str) -> str:
@@ -451,26 +455,28 @@ def review_ticket(run_dir: Path, sdir: Path) -> dict[str, Any]:
     """
     cfg, meta = load_run(run_dir)
     repo = cfg.get("repo", {}).get("full_name") or run_dir.name
-    prior, rejected = prior_findings(sdir, run_dir, repo)
+    review = meta.get("review") or {}
+    # 分塊輪審先拿全部、各張工單過濾後再取前 MAX_PRIOR 筆；prior_findings.json 存全部（import 驗 fingerprint 用）
+    prior, rejected = prior_findings(sdir, run_dir, repo, limit=None if review else MAX_PRIOR)
     (run_dir / "prior_findings.json").write_text(json.dumps(prior, ensure_ascii=False, indent=2), encoding="utf-8")
     ctx = cfg.get("context") or {}
     tool_findings = [f for f in jg.read_jsonl(run_dir / "findings.jsonl") if f.get("tool") != "review"]
-    review = meta.get("review") or {}
     common = {"repo": repo, "rejected": len(rejected),
               "upstream": [{k: u.get(k) for k in ("repo", "status")} for u in meta.get("upstream") or []]}
 
-    def scoped(files: set[str]) -> tuple[list[dict], int, list[dict]]:
+    def scoped(files: set[str]) -> tuple[list[dict], int, list[dict], list[dict]]:
         mine = [p for p in prior if not p.get("path") or p["path"] in files]
-        return mine, len(prior) - len(mine), [f for f in tool_findings if f.get("path") in files]
+        rej = [r for r in rejected if not r.get("path") or r["path"] in files]
+        return mine[:MAX_PRIOR], len(prior) - len(mine), rej, [f for f in tool_findings if f.get("path") in files]
 
     tickets: list[dict[str, Any]] = []
     if review.get("mode") == "units":
         for unit in review.get("units") or []:
             files = set(unit.get("files") or [])
-            p, hidden, tools = scoped(files)
+            p, hidden, rej, tools = scoped(files)
             t = _write_review(run_dir, cfg, meta, repo=repo, refs=_unit_classes(cfg, [unit["name"]]),
                               scope=_scope_lines(meta, run_dir, unit=unit), entries=unit.get("entry_points") or [],
-                              prior=p, hidden_prior=hidden, rejected=rejected, tool_findings=tools,
+                              prior=p, hidden_prior=hidden, rejected=rej, tool_findings=tools,
                               out_name=f"review-{unit['name']}.md", title=f"／分塊 {unit['name']}")
             tickets.append({"unit": unit["name"], **t})
     elif review.get("mode") == "changed":
@@ -478,12 +484,12 @@ def review_ticket(run_dir: Path, sdir: Path) -> dict[str, Any]:
         if not files:
             return {**common, "tickets": [], "prior": len(prior), "missing_blocks": [],
                     "skip": "增量範圍裡沒有落在分塊的變動檔案，本輪不派 deep review"}
-        p, hidden, tools = scoped(files)
+        p, hidden, rej, tools = scoped(files)
         entries = list(review.get("entry_points") or [])
         entries += [e for e in ctx.get("entry_points") or [] if e.get("file") in files and e not in entries]
         t = _write_review(run_dir, cfg, meta, repo=repo, refs=_unit_classes(cfg, review.get("units") or []),
                           scope=_scope_lines(meta, run_dir), entries=entries, prior=p, hidden_prior=hidden,
-                          rejected=rejected, tool_findings=tools, out_name="review.md", title="")
+                          rejected=rej, tool_findings=tools, out_name="review.md", title="")
         tickets.append({"unit": None, **t})
     else:
         t = _write_review(run_dir, cfg, meta, repo=repo, refs=list(cfg.get("review_classes") or DEFAULT_CLASSES),

@@ -216,6 +216,28 @@ class TicketTest(unittest.TestCase):
         self.assertNotIn("odoo.md#", front)
         prior = json.loads((self.run / "prior_findings.json").read_text(encoding="utf-8"))
         self.assertEqual(len(prior), 1)  # import 驗 fingerprint 用：存全部
+        self.assertIn("`review:csp-too-wide`", unauth)  # 推翻過的說法沒有 path：每塊都列
+
+    def test_units_prior_filtered_before_cap(self):
+        """別塊的大量 finding 不能把本塊的擠出 MAX_PRIOR（先過濾再截斷）。"""
+        self.use_units()
+        prev = self.state / "runs" / "20261026-0030" / "demo"
+        prev.mkdir(parents=True)
+        rows, shadow = [], []
+        for i in range(tk.MAX_PRIOR + 5):
+            fp = f"review:other-{i}"
+            rows.append({"id": f"o{i}", "finding": {"fingerprint": fp, "path": "static/x.js", "line": i}})
+            shadow.append({"type": "decision", "gate": "triage", "id": f"o{i}", "repo": REPO, "fingerprint": fp,
+                           "ts": "2026-10-28T00:00:00+00:00"})  # 比 controllers/a.py 那筆新
+        (prev / "decisions.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        with open(self.state / "shadow.jsonl", "a", encoding="utf-8") as fh:
+            fh.write("".join(json.dumps(r) + "\n" for r in shadow))
+        out = tk.review_ticket(self.run, self.state)
+        unauth = Path(out["tickets"][0]["ticket"]).read_text(encoding="utf-8")
+        self.assertIn("review:sudo-without-check:controllers/a.py:abc", unauth)
+        self.assertEqual(out["tickets"][1]["prior"], tk.MAX_PRIOR)
+        prior = json.loads((self.run / "prior_findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(prior), tk.MAX_PRIOR + 6)
 
     def test_changed_without_unit_files_skips(self):
         self.use_units()
