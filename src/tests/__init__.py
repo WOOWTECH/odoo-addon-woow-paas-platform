@@ -1336,3 +1336,6 @@ from . import test_odoo_rollback_sync_20261028  # noqa: F401 - register Odoo tes
 
 # 2026-10-28：授權語意變更（規則／decision／precedence／登入方式／期限）也撤銷既有 Access 工作階段（#1707 的觸發範圍）。
 from . import test_access_authorization_change_revoke  # noqa: F401 - register Odoo tests
+
+# #2069：回復版本不得抽掉租戶 Odoo 仍裝著的模組（woow-odoo addons.selected 守衛＋預檢端點）。
+from . import test_rollback_addon_guard_2069  # noqa: F401 - register Odoo tests

@@ -14,6 +14,8 @@ export class WoowButton extends Component {
         // LLM-01c：同一畫面有好幾顆字一樣的按鈕（例如四顆「複製」）時，給讀屏分得出來的可讀名稱。
         // 傳 _t() 過的字串（repo-lint #2(b)：component tag 上不寫字面字串）。
         ariaLabel: { type: String, optional: true },
+        // #2069：按鈕停用的原因寫在旁邊的文字時，用它指過去（報讀器才聽得到為什麼不能按）。
+        ariaDescribedby: { type: String, optional: true },
     };
 
     get buttonClass() {

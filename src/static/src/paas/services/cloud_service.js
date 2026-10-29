@@ -19,6 +19,13 @@ import { jsonRpc } from "./rpc";
 const RESET_REQUEST_TIMEOUT_MS = 90000;
 
 /**
+ * #2069：rollbackService 的 RPC 本身丟了例外（逾時、網路中斷、伺服器例外）時回的 code。
+ * 這時「回復有沒有開始」是未知的；後端有回答的 success:false（含「Unable to connect to
+ * deployment service」）都不會帶這個 code。
+ */
+export const ROLLBACK_REQUEST_FAILED = "request_failed";
+
+/**
  * @typedef {Object} TemplateData
  * @property {number} id - Template ID
  * @property {string} name - Template name
@@ -611,6 +618,24 @@ export const cloudService = reactive({
     },
 
     /**
+     * #2069：回復到某個 revision 前的預檢——這次回復會從 addons.selected 拿掉哪些模組、
+     * 其中有沒有仍安裝在租戶 DB 的。成功只代表「能不能評估」，不代表放行（看 code／blocking）；
+     * 路由僅供對話框顯示，`_rollback_service` 在動作當下重算、才是權威。
+     * @param {number} serviceId - Service ID
+     * @param {number} revision - Target revision number
+     * @returns {Promise<{success: boolean, code?: string, applicable?: boolean, removed?: string[], modules?: Object, blocking?: Object, error?: string}>}
+     */
+    async checkRollbackAddons(serviceId, revision) {
+        try {
+            return await jsonRpc(`/api/cloud-services/services/${serviceId}/check-rollback-addons`, {
+                revision: revision,
+            }, 180000);
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    },
+
+    /**
      * Delete a service
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID
@@ -663,14 +688,32 @@ export const cloudService = reactive({
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID
      * @param {number} revision - Target revision number
-     * @returns {Promise<{success: boolean, data?: ServiceData, error?: string}>}
+     * @param {Object} [options]
+     * @param {boolean} [options.acknowledgeUnverifiedAddons] - #2069：服務沒在跑、讀不到模組狀態時，
+     *   使用者已明確勾選「我了解」才傳 true；只有 true 才會帶 acknowledge_unverified_addons。
+     * @returns {Promise<{success: boolean, data?: ServiceData, error?: string, code?: string}>}
+     *   失敗時的 `code`：後端拒絕回應有帶 `data.code` 就原樣回
+     *   （#2069：rollback_removes_installed_addons／rollback_addon_check_failed／
+     *   rollback_addon_unverified）；RPC 丟例外（結果未知）回 ROLLBACK_REQUEST_FAILED；
+     *   其餘失敗不帶 code。
      */
-    async rollbackService(workspaceId, serviceId, revision) {
+    async rollbackService(workspaceId, serviceId, revision, options = {}) {
         this.operationLoading.rollbackService = true;
         try {
-            const result = await jsonRpc(`/api/workspaces/${workspaceId}/services/${serviceId}/rollback`, {
-                revision: revision,
-            });
+            const params = { revision: revision };
+            if (options && options.acknowledgeUnverifiedAddons === true) {
+                params.acknowledge_unverified_addons = true;
+            }
+            // #2069：後端回復前可能先進租戶 Odoo 讀模組狀態再 helm 回復。典型只要幾秒，但最壞
+            // 情況是好幾段 operator 逾時相加（讀版本紀錄與設定投影各最多 30 秒、模組狀態查詢最多
+            // 150 秒、helm 回復最多 120 秒），可以超過 180 秒。預設 30 秒會讓瀏覽器在後端還在
+            // 做的時候就報逾時；放寬到 180 秒涵蓋典型與多數慢的情況，但超過時瀏覽器仍會報失敗、
+            // 後端卻會做完，所以逾時要當成「結果未知」（見 catch）而不是普通失敗。
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/rollback`,
+                params,
+                180000
+            );
             if (result.success) {
                 // Update local state if service data is returned
                 if (result.data) {
@@ -681,10 +724,17 @@ export const cloudService = reactive({
                 }
                 return { success: true, data: result.data };
             } else {
-                return { success: false, error: result.error };
+                const failure = { success: false, error: result.error };
+                // 拒絕原因碼讓對話框分辨「預檢結果過期」與一般失敗（#2069）。
+                const code = result.data && result.data.code;
+                if (typeof code === "string" && code) {
+                    failure.code = code;
+                }
+                return failure;
             }
         } catch (err) {
-            return { success: false, error: err.message };
+            // RPC 本身失敗：不知道後端有沒有開始回復，重試可能多回復一次，呼叫端要特別處理。
+            return { success: false, error: err.message, code: ROLLBACK_REQUEST_FAILED };
         } finally {
             this.operationLoading.rollbackService = false;
         }

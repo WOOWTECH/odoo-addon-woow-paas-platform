@@ -58,7 +58,7 @@ if (not service.exists() or service.workspace_id.id != workspace_id
     return {...not found...}
 ```
 
-- 實例層 9 處（`paas.py`）：詳情／更新／刪除（三 action 共用一道 gate）、rollback、revisions、change-plan、skip-trial-estimate、skip-trial、check-addon-removal、mcp-servers、**reset-admin-password**
+- 實例層 10 處（`paas.py`）：詳情／更新／刪除（三 action 共用一道 gate）、rollback、revisions、change-plan、skip-trial-estimate、skip-trial、check-addon-removal、check-rollback-addons（#2069）、mcp-servers、**reset-admin-password**。這份清單不是窮舉：之後加的 data-retrieval（#1540）等端點也有同一道 gate，完整清單以 `grep -n 'template_id.conceal_instances' src/controllers/paas.py` 為準
 - billing 側（實例層，經 hidden sub membership）：`billing.py` sub by-id、invoice by-id
 - 曝光層 4 處（`paas.py`）：marketplace list、template by-id、plans、generic create——hidden service 只能經 provision 端點建
 
@@ -101,7 +101,7 @@ if (not service.exists() or service.workspace_id.id != workspace_id
 - 兩個 SSOT 欄位＋蘊含式 constraint：`src/models/cloud_app_template.py`（`is_hidden` / `conceal_instances` / `_check_conceal_implies_hidden`，help 含定性宣告）
 - DRY helper mixin＋設計註解：`src/controllers/ha_paas.py` `HiddenChainMixin`
 - List 過濾：`src/controllers/paas.py`（marketplace domain ＋ `_list_services` 兩處）；`src/controllers/billing.py:790`、`:918`、`:1004-1005`；`src/controllers/dashboard.py:106-110`、`:190-211`
-- By-id / 操作 guard：`paas.py` 曝光層 4 處 ＋ 實例層 9 處；`billing.py:824`、`:1063`
+- By-id / 操作 guard：`paas.py` 曝光層 4 處 ＋ 實例層 10 處（上方清單，非窮舉）；`billing.py:824`、`:1063`
 - 機械 gate：`scripts/audit/repo-lint.py` `check_conceal_instances_gate`
 - 行為矩陣測試：`src/tests/test_conceal_instances_split_471.py`（兩語意成對比對）、`src/tests/test_hidden_template_chain.py`（HA PaaS 零回歸 ＋ `TestHiddenChainSsotIsConcealInstances`）
 - D2 provision 保證：`src/controllers/ha_paas.py` `_create_ha_paas_service`

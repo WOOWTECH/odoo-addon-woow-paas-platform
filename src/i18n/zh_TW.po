@@ -28774,3 +28774,194 @@ msgid ""
 "Save the connection under Connection on the admin page first: MCP starts "
 "providing tools only after that."
 msgstr "請先到管理頁 → Connection 存好連線，MCP 才會開始提供工具。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "the deployment service returned an incomplete answer"
+msgstr "部署服務回傳的結果不完整"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Could not determine which modules rolling back to revision %(revision)s "
+"would remove (%(reason)s). Rolling back is not possible until this check "
+"succeeds; please try again later."
+msgstr "無法判斷回復到 revision %(revision)s 會移除哪些模組（%(reason)s）。這項檢查成功之前無法回復，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "the module selection of the revisions could not be read"
+msgstr "讀不到這些版本勾選的模組"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"The service is not running (%(state)s), and the modules that rolling back to"
+" revision %(revision)s would remove could not be determined. If the target "
+"revision lacks a module that is installed in Odoo, Odoo will stop loading it"
+" or the service will fail to start. Roll back only if you are sure."
+msgstr ""
+"服務目前不在執行中（%(state)s），也無法判斷回復到 revision %(revision)s 會移除哪些模組。如果目標版本少了某個已安裝在 "
+"Odoo 裡的模組，Odoo 會不再載入它，或服務會無法啟動。請確定沒有問題再回復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Rolling back to revision %(revision)s removes the code of %(modules)s. The "
+"service is not running (%(state)s), so the platform cannot check whether "
+"they are still installed in Odoo. If one of them is installed, Odoo will "
+"stop loading it or the service will fail to start. Roll back only if you are"
+" sure none of them is installed."
+msgstr ""
+"回復到 revision %(revision)s 會移除 %(modules)s "
+"的程式碼。服務目前不在執行中（%(state)s），平台無法確認這些模組是否仍安裝在 Odoo 裡。只要其中有已安裝的模組，Odoo "
+"就會不再載入它，或服務會無法啟動。請確定它們都沒有安裝再回復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Rolling back to revision %(revision)s removes the code of %(modules)s, but "
+"their state in Odoo could not be checked (%(reason)s). Rolling back is not "
+"possible until this check succeeds; please try again later."
+msgstr ""
+"回復到 revision %(revision)s 會移除 %(modules)s 的程式碼，但無法確認它們在 Odoo "
+"裡的狀態（%(reason)s）。這項檢查成功之前無法回復，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"'%(module)s' (%(state)s; installed modules that depend on it: "
+"%(dependents)s)"
+msgstr "'%(module)s'（%(state)s；依賴它的已安裝模組：%(dependents)s）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Rolling back to revision %(revision)s would remove the code of modules that "
+"are still present in Odoo: %(modules)s. Uninstall them in Odoo first (Apps),"
+" or roll back to a revision that still includes them."
+msgstr ""
+"回復到 revision %(revision)s 會移除仍在 Odoo 裡的模組程式碼：%(modules)s。請先在 Odoo "
+"的「應用程式」（Apps）解除安裝這些模組，或回復到仍包含它們的版本。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"The version history of this service could not be read, so it cannot be "
+"checked which modules rolling back to revision %(revision)s would remove. "
+"Please try again later."
+msgstr "讀不到這個服務的版本紀錄，因此無法檢查回復到 revision %(revision)s 會移除哪些模組。請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Checking modules..."
+msgstr "正在檢查模組..."
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "These modules will no longer be offered after this rollback:"
+msgstr "回復後，以下模組將不再提供："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "They are not installed in Odoo, so your data is not affected."
+msgstr "這些模組沒有安裝在 Odoo，不影響你的資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Rollback blocked: modules are still installed"
+msgstr "無法回復：仍有模組處於安裝狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "This rollback would remove modules that are still installed in Odoo:"
+msgstr "這次回復會移除仍安裝在 Odoo 中的模組："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid ""
+"Uninstall them in Odoo first (Apps → Uninstall), or choose a revision that "
+"includes them."
+msgstr "請先到 Odoo 將它們解除安裝（應用程式 → 解除安裝），或改選包含這些模組的版本。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "(required by: %s)"
+msgstr "（被以下模組依賴：%s）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Installed modules cannot be checked"
+msgstr "無法確認模組是否已安裝"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid ""
+"The service is not running, so the platform cannot check whether the modules"
+" removed by this rollback are installed."
+msgstr "服務目前不在執行中，平台無法確認這次回復移除的模組是否已安裝。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid ""
+"If they are installed, Odoo will stop loading them after the rollback, or "
+"the service may fail to start. Rolling back to a revision that includes them "
+"recovers the service; no data is deleted."
+msgstr "若它們已安裝，回復後 Odoo 就不會再載入它們，或服務可能無法啟動；改回復到包含它們的版本即可讓服務回到可用的狀態，資料不會被刪除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "I understand"
+msgstr "我了解"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Tick \"I understand\" to continue."
+msgstr "請勾選「我了解」才能繼續。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Could not check the modules"
+msgstr "無法檢查模組"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "The module check failed. Please try again."
+msgstr "模組檢查失敗，請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid ""
+"The request did not finish, so the rollback may already have started. Check "
+"the service status before trying again."
+msgstr "請求沒有完成，因此回復可能已經開始。請先確認服務狀態，再重新嘗試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+msgid "Retry check"
+msgstr "重新檢查"

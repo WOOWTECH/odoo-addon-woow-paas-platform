@@ -637,6 +637,152 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - 執行 `helm rollback`
 - 顯示 revision history
 
+**4.3.1 回復版本的模組守衛（woow-odoo 租戶，#2069）**
+
+woow-odoo 租戶的模組程式碼來自 Helm value `addons.selected`（勾選不代為安裝、取消勾選也不代為
+解除安裝）。回復到沒勾某模組的 revision 會把它的程式碼抽掉、租戶 DB 卻仍記著 installed：同 image
+digest 時服務照常起來，但 Odoo 不再載入該模組（它的 model 消失、相關 RPC 回 404；真 chart＋真租戶
+image 在沙盒重現）。回復若同時換了 image digest，upgrade-gate 以 exit 4 結束、Pod 卡 `Init:Error`、
+服務停擺——這一點在沙盒是**模擬**的：叢集裡只有一顆租戶 image digest，換 digest 是改 DB 的
+`upgrade_done` marker 做出來的，沒有用真的第二顆 image 驗過（#2069 重現報告「模擬清單」）。兩種情況
+都不刪資料。取消勾選那條路有 `_assess_addon_removal`（#477），回復這條路也要擋，且用**同一個裁決**
+（`_assess_addon_removal_by_name`，safe 集合 `_ADDON_REMOVAL_SAFE_STATES`）。
+
+- **被拿掉的模組**＝「可能正在跑」的各 revision 的 `addons.selected` 聯集，減掉目標 revision 的
+  `addons.selected`，全部經 operator config projection 讀（`CloudService._rollback_removed_odoo_addons`）。
+  「可能正在跑」（`chart_version.possibly_live_revisions`，看 helm 歷史，不看帳本 `helm_revision`）：
+  - 歷史裡有 `deployed`（不分大小寫）⇒ 最新的 deployed **加上每一個比它新的 revision**（`failed`、
+    `pending-upgrade` 等，不論狀態）。理由：平台的一般升級不帶 `--atomic`／`--wait`（只有 reset 帶
+    `--atomic`），升級失敗或還沒做完時 helm 可能已經把 Deployment 換成那一版的勾選，租戶接著把只在
+    那一版的模組裝起來；只看 deployed 會把「退回原本那一版」這個最常見的修復誤判成沒有模組被拿掉。
+    比它舊的 revision 不算（已被取代）。
+  - 歷史裡**沒有** `deployed` ⇒ 叢集上跑的是哪一版釘不住，**每一個**有可用 revision 號的都算。
+    純 `helm rollback`（不帶 `--wait`；沒有平台憑證要保留的範本，含 woow-odoo，走這條）在套用時失敗，
+    helm 會把當時最新的那一列（不論狀態）改標 `superseded`、新的那一列標 `failed`，叢集卻仍跑原本
+    那一版。沙盒實測（helm 3.19.5；operator image 的 helm 3.13.3 沒有實跑）：`[1 superseded,
+    2 deployed]` 回復失敗一次變成 `[1 s, 2 s, 3 failed]`，再失敗一次變成 `[1 s, 2 s, 3 s, 4 failed]`，
+    兩次之後叢集上都仍是 rev2。所以「最新的那一列」與「最新的 superseded」都不能當起點。
+  - 沒有可用 revision 號的歷史列略過；整份歷史都沒有可用號碼 ⇒ 算不出（見下）。
+
+  聯集裡任何一個 revision 讀不到或形狀不對 ⇒ 算不出（running ⇒ `check_failed`，否則 `unverified`）。
+  歷史空的或沒有任何可用的 revision 號 ⇒ 任何 state 都是 `check_failed`（回復本身也沒有東西可以對照，
+  帶確認送出只會讓 operator 回 404）。只有 `_is_live_woow_odoo_tenant()` 的服務才算；其他服務（含
+  Bitnami 時代的存量）行為不變、不多打任何 operator 呼叫。
+  chart 版本下限與對話框「目前」用的 `rollback_baseline`（最新的 deployed，沒有就取最新的一列）**沒有**
+  跟著改：它們要的是單一一版，沒有 deployed 時同樣會取到失敗的那一列；operator 端的 chart 下限
+  （`_refuse_chart_downgrade`）讀 release 本身，是權威的那一道。
+- **operator 呼叫次數**（每次裁決，歷史由呼叫端讀一次後傳入）：「可能正在跑」只有目標本身 ⇒ 0 次
+  （直接當沒有模組被拿掉）；否則 projection 讀「可能正在跑的每一版＋目標」各一次（目標已在其中就不
+  重讀），依序讀、第一個讀不到就停；有被拿掉的模組且服務 running 時再加一次模組狀態查詢（operator
+  kubectl exec 進 Odoo 容器）。最常見的情況（沒有失敗的升級、往回退）是 2 次 projection ＋ 最多 1 次
+  exec；歷史裡沒有 deployed 時是整份歷史（最多 operator 的 `helm_history_max`，預設 20）各一次。
+- 沒有被拿掉的模組 ⇒ 不查模組狀態，任何 state 都照舊回復（含 error、operator 查不了狀態時）。
+- 有被拿掉的模組、服務 running ⇒ 查模組狀態：任一個不在 safe 集合（installed／to upgrade／
+  to install…）⇒ 拒絕，訊息列出模組與依賴它的已安裝模組，請租戶先在 Odoo「應用程式」解除安裝，
+  或回復到仍包含它們的 revision。查不成（operator 失敗、回應不完整、projection 讀不到）⇒ 拒絕。
+- 有（或算不出有沒有）被拿掉的模組、服務不是 running（error／deploying／initializing／upgrading）
+  ⇒ 平台讀不到模組狀態（operator 要 exec 進 running 的 Odoo server 容器），預設拒絕；請求帶
+  `acknowledge_unverified_addons: true` 才放行（error 狀態的服務靠回復自救，硬擋會把租戶困住）。
+- 被擋下時不寫任何欄位、不呼叫 operator 的 rollback。
+
+回復 API 被守衛擋下時回 `{success: false, error, data: {code}}`，`data.code` 三選一：
+
+| `data.code` | 意義 | 可否以 `acknowledge_unverified_addons` 覆寫 |
+| --- | --- | --- |
+| `rollback_removes_installed_addons` | 被拿掉的模組仍在租戶 Odoo 裡（另帶 `data.modules`／`data.blocking`） | 否 |
+| `rollback_addon_check_failed` | running 但查不成；或任何 state 下歷史裡沒有可用的 revision 號 | 否 |
+| `rollback_addon_unverified` | 服務不是 running，查不了模組狀態 | 是 |
+
+預檢端點（advisory，回復對話框選好 revision 時呼叫；回復時 `_rollback_service` 以同一支
+`_rollback_addon_verdict` 重新裁決，那一道才是權威）：
+
+```
+POST /api/cloud-services/services/<service_id>/check-rollback-addons
+     Body (JSON-RPC params): { revision }
+     → { success, code: no_removal|safe|blocked|unverified|check_failed, applicable,
+         removed: [技術名], modules: {名稱: {state, dependents, addon_id}},
+         blocking: {名稱: state}, error（success=false 時） }
+```
+
+權限同回復本身（工作區成員＋owner／admin、服務未被 `conceal_instances` 隱藏）；唯讀。
+`success` 只代表「查成了」，`blocked` 也是 `success: true`——擋不擋看 `code`／`blocking`。
+`unverified` 與 `check_failed` 是 `success: false`；只有 `unverified` 在回復時可確認後放行。
+
+woow-odoo 租戶的預檢依序過與 `_rollback_service` 走到守衛之前**相同**的前置閘，任一道擋下 ⇒
+`check_failed`，`error` 與回復 API 一字不差（任何 state 都一樣）：
+
+1. state 是 pending／deleting／suspended（「Cannot rollback service in … state」）
+2. init lease 持有中
+3. 沒有 operator client（「PaaS Operator not configured」）
+4. 範本的 `helm_value_specs` 讀不懂（`_rollback_preserved_value_paths` 的 UserError；seed 的 woow-odoo
+   範本讀得懂，只有範本被改壞時才會走到）
+5. 歷史讀不到、或沒有任何可用的 revision 號
+6. `_rollback_history_refusal`（預檢與回復**共用同一支**）：目標就是目前已部署的版本
+   （`already_current`）→ 目標不在歷史裡（`revision_not_found`）→ chart 版本下限（#1526）
+
+所以 `unverified` 只代表「回復本身做得了，只是服務不是 running、平台讀不到模組狀態」，對話框才會
+請租戶確認。唯一刻意不套的是訂閱閘（`_check_operation_allowed`，在回復 API 外層），那種情況回復
+API 仍會擋下。第 5 道讀歷史失敗時，預檢一律回「The version history of this service could not be
+read…」，回復 API 則照舊依例外種類回「Unable to connect…」／「Revision … cannot be restored」等
+（兩邊都拒絕，只是措辭不同）。不適用的服務（`applicable: false`）不過這些閘，照舊直接
+`no_removal`、零 operator 呼叫。
+
+**耗時**：一般幾秒鐘（一次歷史、兩次 projection、最多一次模組狀態查詢）。守衛依序呼叫 operator、
+第一個失敗就停，operator 掛掉只花一次逾時，不會乘上 revision 數。但回復請求在最壞情況下是幾段逾時
+的總和：歷史與每次 projection 各 30 秒（`DEFAULT_TIMEOUT`，requests 算的是無回應時間）、模組狀態
+查詢 client 端 150 秒（operator 的 exec 上限 `MODULE_QUERY_TIMEOUT` 120 秒）、`rollback_release`
+120 秒（`HELM_OPERATION_TIMEOUT`，operator 的 helm 名額可能還要排隊），加起來可以超過瀏覽器的 180
+秒。這時瀏覽器報失敗，後端卻會繼續把回復做完；租戶直接重試會再產生一個 revision、Pod 再重建一次。
+這些逾時與其他呼叫端共用，本變更不改。對話框把傳輸層失敗當成「結果未知」：回到選版本那一步、以
+橫幅請租戶先看服務狀態，並強制重新預檢。
+
+- **回復對話框（`RollbackModal`）的流程**（woow-odoo 租戶看得到預檢；其他租戶的預檢回
+  `no_removal`、對話框照舊）：
+  - **選到 revision 就預檢**：點選可回復的 revision（不是「目前」、也不是被 chart 版本下限擋住的）
+    就呼叫 `check-rollback-addons`；同一時間最多一個預檢請求在飛，飛行中又改選別的 revision
+    只記得最後一個，前一個回來時只進快取、不顯示。已定案的結果（`no_removal`／`safe`／`blocked`／
+    `unverified`）按 revision 在對話框存活期間快取，切走再切回來不重打；`check_failed`／RPC 失敗
+    不快取。「重新檢查」與下面的拒絕、請求沒跑完都會忽略快取重打，且重試之前的舊回應回來時會被
+    丟掉（不進快取、不顯示）。
+  - **預檢結果決定畫面**：預檢中、`blocked`、`check_failed`、`unverified` 未勾選時確認鈕都不能按；
+    `no_removal` 不多顯示任何東西，`safe` 只列出「回復後不再提供、但沒安裝」的模組。預檢面板在
+    可捲動的內容區底部，所以確認鈕旁（footer，不隨內容捲動）有一行**常駐的原因**（預檢中／無法回復／
+    無法檢查模組／請勾選「我了解」），確認鈕以 `aria-describedby` 指向它；按鈕可按時這行消失。
+  - **`unverified` 要先勾「我了解」**：只有顯示中的預檢是 `unverified` 且使用者對**這一份**結果勾了
+    框，回復請求才帶 `acknowledge_unverified_addons: true`；改選別的 revision、快取命中、重新檢查
+    都會讓勾選歸零重勾。`blocked`、`check_failed` 沒有任何放行方式。確認步驟送出前 `confirmRollback`
+    會再驗一次閘門，不只靠按鈕的 disabled。
+  - **後端拒絕**（`rollback_removes_installed_addons`／`rollback_addon_check_failed`／
+    `rollback_addon_unverified`）代表畫面上的預檢已過期：回到選版本步驟、顯示後端訊息、勾選歸零，並對
+    同一個 revision 強制重新預檢。換選別的 revision 時這則橫幅會清掉。
+  - **逾時與結果未知**：回復請求的瀏覽器逾時是 180 秒。典型只要幾秒，但最壞情況是好幾段 operator
+    逾時相加，可能超過 180 秒；那時瀏覽器報失敗、後端仍會做完。RPC 本身丟例外（逾時、網路中斷、
+    伺服器例外）時 `cloudService.rollbackService` 回 `code: "request_failed"`（後端有回答的失敗不會帶
+    這個 code）；對話框把它當「結果未知」：回到選版本步驟、橫幅改寫「請求沒有完成，因此回復可能已經
+    開始。請先確認服務狀態，再重新嘗試。」，並忽略快取強制重新預檢（回復後服務通常不在執行中，
+    預檢會變成 `unverified`，要再勾一次「我了解」才能繼續），避免租戶直接重試而多回復一次。
+  - 回復進行中對話框被卸載（例如瀏覽器上一頁）：不再送預檢、不再寫畫面狀態；回復若成功，照樣通知
+    父層重新載入服務。
+
+限制（這道守衛**不**處理的事）：
+
+- 確認旗標 `acknowledge_unverified_addons` 是布林值，**不**綁定租戶當時看到的模組清單：它放行的是
+  回復當下權威裁決算出的那份 `unverified` 清單。預檢與送出之間若冒出新的 failed／pending revision、
+  或租戶在別的分頁改了版本，放行的清單可能與畫面上的不同；窗口就是「預檢到按確認」之間。`blocked`
+  與 `check_failed` 不論帶不帶確認都不放行。
+- 回復到 Odoo core 比 DB 記錄的**舊**的 image：chart 的 upgrade-gate 方向檢查會以 exit 78 擋下
+  （Pod 卡 `Init:Error`、DB 不動，訊息指向「不支援降 core」）。這是 chart 既有的保護，與
+  `addons.selected` 無關，本守衛擋不住也不預測（#2069 重現報告 E4b；「舊 core」是改 marker 的
+  `core_date` **模擬**的）。
+- 模組技術名必須符合 operator 模組狀態查詢的名稱規則 `^[a-zA-Z_][a-zA-Z0-9_]*$`
+  （`extra/paas-operator/src/services/odoo_module.py`）。被拿掉的模組名稱不合這條規則時，operator 以
+  `[validate] Invalid module name` 拒絕整次查詢 ⇒ running 時只能得到 `check_failed`（訊息帶 operator
+  原文）；不改 operator。
+- `to install` 也算「仍在 Odoo 裡」而擋下：重現顯示被拿掉的模組若是 `to install`、回復又換了 image
+  digest，gate 會跑 `-u all`、post-verify 以 exit 7 失敗並累計 attempt，3 次後 exit 78、服務停擺
+  （重現報告 E6c）。這個情境是**模擬**的：`to install` 用 `button_install` 人為造出、換 digest 同樣是
+  改 marker；平台實際流程會不會讓租戶遇到 `to install` 未確認。
+
 **4.4 Edit Custom Domain**
 
 - Modal with domain input
@@ -995,7 +1141,10 @@ POST /api/workspaces/<workspace_id>/services/<service_id>
      Body: { action: "get" | "update" | "delete", values, version }
 
 POST /api/workspaces/<workspace_id>/services/<service_id>/rollback
-     Body: { revision }
+     Body: { revision, acknowledge_unverified_addons }   # 後者見 §4.3.1（#2069）
+
+POST /api/cloud-services/services/<service_id>/check-rollback-addons
+     Body: { revision }   # 回復會拿掉哪些 Odoo 模組（advisory，先過回復的前置閘，§4.3.1）
 
 POST /api/workspaces/<workspace_id>/services/<service_id>/revisions
      # 取得 revision history

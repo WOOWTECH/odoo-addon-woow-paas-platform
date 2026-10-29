@@ -40,12 +40,15 @@ globalThis.__rbFetch = async () => ({ success: true, data: [] });
 const modalSource = stubImports(await readPaas("components/modal/RollbackModal.js"), {
   "@odoo/owl":
     "class Component { constructor(props) { this.props = props; } } " +
-    "const useState = (value) => value; const onMounted = () => {};",
+    "const useState = (value) => value; const onMounted = () => {}; " +
+    "const useRef = () => ({ el: null }); const useEffect = () => {}; const onWillDestroy = () => {};",
   "@web/core/l10n/translation": translate,
   "../button/WoowButton": "const WoowButton = {};",
   "../icon/WoowIcon": "const WoowIcon = {};",
   "../../services/cloud_service":
-    "const cloudService = { fetchRevisions: (...args) => globalThis.__rbFetch(...args) };",
+    "const ROLLBACK_REQUEST_FAILED = 'request_failed'; " +
+    "const cloudService = { fetchRevisions: (...args) => globalThis.__rbFetch(...args), " +
+    "checkRollbackAddons: async () => ({ success: true, code: 'no_removal' }) };",
   "../../utils/datetime_helpers": "const formatUserDateTime = (value) => value;",
 });
 const { RollbackModal } = await import(toDataUrl(modalSource));
