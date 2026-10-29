@@ -149,9 +149,60 @@
                             <span t-esc="state.error"/>
                         </div>
                     </t>
+
+                    <!-- #2069：回復預檢結果（兩個步驟共用）。文字由 precheckPanel 以 _t 產生。 -->
+                    <!-- t-key＝種類：種類一變（loading→blocked 等）就換掉整個節點，
+                         輔助科技才會重新宣告 role=status／alert（同一個節點改 role 不保證會念）。
+                         不把版本或序號放進這個 key：面板裡有子元件，OWL 在同一個畫格內
+                         （點選版本、結果立刻回來）換掉含子元件的節點會在 mount 時丟例外。
+                         t-ref：種類改變後 _revealPanel 把它捲進可視範圍。 -->
+                    <div
+                        t-if="precheckPanel"
+                        t-key="precheckPanel.kind"
+                        t-ref="precheckPanel"
+                        t-att-class="'o_woow_rollback_precheck o_woow_rollback_precheck_' + precheckPanel.kind"
+                        t-att-role="precheckPanel.role">
+                        <div class="o_woow_rollback_precheck_title">
+                            <WoowIcon name="precheckPanel.icon" size="18" class="precheckPanel.iconClass or ''"/>
+                            <strong t-att-id="precheckTitleId" t-esc="precheckPanel.title"/>
+                        </div>
+                        <p t-if="precheckPanel.intro" class="o_woow_rollback_precheck_text" t-esc="precheckPanel.intro"/>
+                        <ul t-if="precheckPanel.items.length" class="o_woow_rollback_precheck_list">
+                            <li t-foreach="precheckPanel.items" t-as="item" t-key="item.name">
+                                <code t-esc="item.name"/>
+                                <span t-if="item.state" class="o_woow_badge o_woow_badge_red o_woow_rollback_precheck_state" t-esc="item.state"/>
+                                <span t-if="item.detail" class="o_woow_rollback_precheck_detail" t-esc="item.detail"/>
+                            </li>
+                        </ul>
+                        <p t-if="precheckPanel.hint" t-att-id="precheckHintId" class="o_woow_rollback_precheck_text" t-esc="precheckPanel.hint"/>
+                        <!-- t-key＝預檢序號：顯示中的預檢一換，勾選框就重建，DOM 的勾選狀態不會和
+                             state 脫節（OWL 只拿上次渲染的值比、不讀 DOM）；label 內沒有子元件，重建安全。 -->
+                        <label t-if="precheckPanel.kind === 'unverified'" t-key="state.precheck.seq" class="o_woow_rollback_precheck_ack">
+                            <input
+                                type="checkbox"
+                                t-att-checked="state.acknowledged"
+                                t-att-data-token="state.precheck.seq"
+                                t-on-change="onAcknowledge"
+                                t-att-disabled="state.rolling"
+                                t-attf-aria-describedby="{{ precheckTitleId }} {{ precheckHintId }}"/>
+                            <span t-esc="precheckPanel.ackLabel"/>
+                        </label>
+                        <div t-if="precheckPanel.retry" class="o_woow_rollback_precheck_actions">
+                            <WoowButton variant="'secondary'" size="'sm'" onClick.bind="retryPrecheck" disabled="state.rolling or precheckLoading">
+                                <WoowIcon name="'refresh'" size="16"/>
+                                Retry check
+                            </WoowButton>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="o_woow_modal_footer">
+                    <!-- 常駐在 footer（不隨 body 捲動）：按鈕為什麼不能按，與預檢面板同一份模型。 -->
+                    <p
+                        t-if="precheckReason"
+                        t-att-id="precheckReasonId"
+                        t-att-class="'o_woow_rollback_reason o_woow_rollback_reason_' + precheckPanel.kind"
+                        t-esc="precheckReason"/>
                     <WoowButton
                         t-if="state.confirming"
                         variant="'secondary'"
@@ -172,6 +223,7 @@
                         variant="'primary'"
                         size="'md'"
                         onClick.bind="onRollback"
+                        ariaDescribedby="confirmDescribedBy"
                         disabled="!canRollback">
                         <t t-if="state.rolling">
                             <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>

@@ -51,6 +51,7 @@ from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 p
 from ..services.chart_version import (
     ROLLBACK_CHART_DOWNGRADE_ERROR_CODE,
     annotate_rollback_floor,
+    possibly_live_revisions,
     reported_helm_revision,
     rollback_floor_violation,
     is_valid_rollback_revision,
@@ -2530,7 +2531,8 @@ class PaasController(HiddenChainMixin, Controller):
             row._retrieval_view)
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
-    def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
+    def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None,
+                             acknowledge_unverified_addons: bool = False, **kw: Any) -> dict[str, Any]:
         """
         Rollback a service to a previous revision.
 
@@ -2540,6 +2542,11 @@ class PaasController(HiddenChainMixin, Controller):
             revision (int): Target revision number (>= 1, must exist in the service's
                 revision history). AUDITFIX rollback-api-input-validation: a missing
                 revision or 0 is refused — it no longer means "the previous revision".
+            acknowledge_unverified_addons (bool): #2069 — only a JSON ``true`` counts. Lets a
+                woow-odoo rollback proceed when the service is not running and the module
+                states of the removed modules cannot be checked (``data.code`` =
+                ``rollback_addon_unverified``). Never overrides ``rollback_removes_installed_addons``
+                or ``rollback_addon_check_failed``.
 
         Returns:
             dict: Response containing:
@@ -2597,7 +2604,9 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False,
                     'error': _('An error occurred while rolling back the service.')}
 
-        return self._rollback_service(service, revision)
+        return self._rollback_service(
+            service, revision,
+            acknowledge_unverified_addons=acknowledge_unverified_addons is True)
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/reset-admin-password", auth="user", methods=["POST"], type="json")
     def api_service_reset_admin_password(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
@@ -3467,75 +3476,134 @@ class PaasController(HiddenChainMixin, Controller):
         ``# Fail-closed`` 的 ``except``）。safe-states 集合當時也散在兩處。抽成單一裁決
         點是為了讓「兩邊會漂開」在結構上不可能發生，不只是把當下的 diff 補齊——見
         docs/decisions/patterns/two-layer-acl-lockstep.md。
+
+        #2069：這支是 id 形的外殼（取消勾選的兩條路徑都以平台目錄的 addon id 表達）；裁決本身在
+        `_assess_addon_removal_by_name`——「回復版本」拿掉的是 Helm values 裡的**技術名**，其中可能
+        有平台目錄沒有的模組，id 形會把它們靜默濾掉。
         """
-        nothing_to_remove = {
-            'can_assess': True, 'error': None, 'modules': {}, 'blocking': {}}
         if not removed_addon_ids:
-            return nothing_to_remove
+            return self._addon_removal_verdict()
 
-        def cannot(error: str) -> dict[str, Any]:
-            return {
-                'can_assess': False, 'error': error, 'modules': {}, 'blocking': {}}
+        client, refused = self._addon_removal_precheck(service)
+        if refused:
+            return refused
 
+        CloudOdooAddon = _PaaSCapability(request.env).odoo_addons()
+        addons = CloudOdooAddon.browse(removed_addon_ids).exists()
+        if not addons:
+            return self._addon_removal_verdict()
+
+        name_to_id = {a.technical_name: a.id for a in addons}
+        return self._assess_addon_removal_by_name(
+            service, list(name_to_id), name_to_id=name_to_id, client=client)
+
+    @staticmethod
+    def _addon_removal_verdict(error: str | None = None, modules: dict | None = None,
+                               blocking: dict | None = None) -> dict[str, Any]:
+        """`_assess_addon_removal` 系列的回傳形狀；帶 ``error`` ＝無法裁決（``can_assess`` False）。"""
+        if error is not None:
+            return {'can_assess': False, 'error': error, 'modules': {}, 'blocking': {}}
+        return {'can_assess': True, 'error': None,
+                'modules': modules or {}, 'blocking': blocking or {}}
+
+    def _addon_removal_precheck(self, service: Any) -> tuple[Any, dict[str, Any] | None]:
+        """模組狀態查得了嗎：回 ``(client, None)``，查不了回 ``(None, 無法裁決的 verdict)``。"""
         # 非 running 就讀不到租戶 Odoo 的模組狀態——那是**拒絕**的理由，不是「跳過檢查」
         # 的理由（#477 縫 (b)）。上游沒有別的閘擋得住：`_update_service` 的前置閘只擋
         # pending / deleting，以及非 init 額度出口的 error（#1159 Q30 放行額度出口的 error
         # 做 reconfigure，所以 error 也可能走到這裡），`_check_operation_allowed` 是訂閱閘（判 active /
         # grace / past-grace，且 base.group_system 直接 bypass），與 service state 正交。
         if service.state != 'running':
-            return cannot(_(
+            return None, self._addon_removal_verdict(_(
                 'Service must be running to check module states '
                 '(current: %(state)s)', state=service.state))
 
         client = get_paas_operator_client(request.env)
         if not client:
-            return cannot(_('PaaS Operator not configured'))
+            return None, self._addon_removal_verdict(_('PaaS Operator not configured'))
+        return client, None
 
-        CloudOdooAddon = _PaaSCapability(request.env).odoo_addons()
-        addons = CloudOdooAddon.browse(removed_addon_ids).exists()
-        if not addons:
-            return nothing_to_remove
+    def _assess_addon_removal_by_name(
+        self, service: Any, module_names: list[str],
+        name_to_id: dict[str, int] | None = None, client: Any = None,
+    ) -> dict[str, Any]:
+        """以**技術名**裁決「把這些模組的程式碼拿掉安不安全」（#2069 從 `_assess_addon_removal` 抽出）。
 
-        name_to_id = {a.technical_name: a.id for a in addons}
+        回傳形狀與判準和 `_assess_addon_removal` 完全相同（``can_assess`` / ``error`` /
+        ``modules`` / ``blocking``，safe 集合是 `_ADDON_REMOVAL_SAFE_STATES`）。``name_to_id``
+        只用來填每個模組的 ``addon_id``（沒給或目錄沒有 ⇒ ``None``）——**不**拿來過濾要查的模組。
+        ``client`` 由已做過 `_addon_removal_precheck` 的呼叫端傳入，免得同一次裁決取兩次 client。
+
+        operator 回應逐模組驗：要查的每一個名稱都必須在回應裡、且是 dict，否則整次算「無法裁決」
+        （fail-closed）——operator 對每個要查的名稱都會回一筆（DB 沒有的回 ``not_found``），缺一筆
+        代表回應壞了，不能把沒查到的模組當成安全。state 缺值或不是字串 ⇒ ``'unknown'``（不在 safe
+        集合 ⇒ 擋）；``dependents`` 只留字串。
+
+        ⚠ 這對取消勾選那條路（id 形外殼）是**行為變更**，不只是搬家：#2069 以前只迭代回應裡有的鍵，
+        operator 漏答的模組、``modules`` 不是 dict 的回應會被靜默放行；現在一律「無法裁決」、拒絕
+        取消勾選。合法的 operator 回應不受影響（每個查詢名稱都有一筆）。
+        """
+        names = sorted(set(module_names or ()))
+        if not names:
+            return self._addon_removal_verdict()
+        if client is None:
+            client, refused = self._addon_removal_precheck(service)
+            if refused:
+                return refused
+        name_to_id = name_to_id or {}
 
         try:
             result = client.get_odoo_module_states(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
-                module_names=list(name_to_id),
+                module_names=names,
             )
         except Exception as e:
             _logger.warning(
                 "Cannot verify module states for addon removal on %s: %s",
                 service.helm_release_name, e)
-            return cannot(_('Cannot verify module states: %(reason)s', reason=e))
+            return self._addon_removal_verdict(
+                _('Cannot verify module states: %(reason)s', reason=e))
 
-        if not result.get('success'):
+        if not isinstance(result, dict) or not result.get('success'):
             # operator 對 OdooModuleError 回 HTTP 200 ＋ success:false（step 為
             # find_pod / query_modules / validate 之一），client 不 raise。**必須與上面
             # 那個 except 同處置** —— #477 縫 (a) 就是這裡當初只有 if 沒有 else。
-            error = result.get('error') or _('Unknown error')
+            error = (result.get('error') if isinstance(result, dict) else None) or _('Unknown error')
             _logger.warning(
                 "Operator could not report module states for %s: %s",
                 service.helm_release_name, error)
-            return cannot(_('Cannot verify module states: %(reason)s', reason=error))
+            return self._addon_removal_verdict(
+                _('Cannot verify module states: %(reason)s', reason=error))
+
+        reported = result.get('modules')
+        incomplete = not isinstance(reported, dict) or any(
+            not isinstance(reported.get(name), dict) for name in names)
+        if incomplete:
+            _logger.warning(
+                "Operator returned an incomplete module state answer for %s", service.helm_release_name)
+            return self._addon_removal_verdict(_(
+                'Cannot verify module states: %(reason)s',
+                reason=_('the deployment service returned an incomplete answer')))
 
         modules: dict[str, Any] = {}
         blocking: dict[str, Any] = {}
-        for name, info in (result.get('modules') or {}).items():
+        for name in names:
+            info = reported[name]
+            state = info.get('state')
+            dependents = info.get('dependents', [])
             entry = {
                 'addon_id': name_to_id.get(name),
-                'state': info.get('state', 'unknown'),
-                'dependents': info.get('dependents', []),
+                # 缺值／非字串 ⇒ 'unknown'（不在 safe 集合 ⇒ 擋）；也免得 unhashable 值在 `in` 炸掉
+                'state': state if isinstance(state, str) and state else 'unknown',
+                'dependents': ([d for d in dependents if isinstance(d, str)]
+                               if isinstance(dependents, list) else []),
             }
             modules[name] = entry
             if entry['state'] not in _ADDON_REMOVAL_SAFE_STATES:
                 blocking[name] = entry
 
-        return {
-            'can_assess': True, 'error': None,
-            'modules': modules, 'blocking': blocking,
-        }
+        return self._addon_removal_verdict(modules=modules, blocking=blocking)
 
     @staticmethod
     def _addon_removal_blocking_error(blocking: dict[str, Any]) -> str:
@@ -3605,6 +3673,305 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': verdict['error']}
 
         return {'success': True, 'modules': verdict['modules']}
+
+    # ==================== Rollback Addon Guard (#2069) ====================
+    #
+    # woow-odoo 租戶的模組程式碼來自 Helm value ``addons.selected``（勾選不代為安裝、取消勾選也
+    # 不代為解除安裝）。回復到一個沒勾某模組的 revision 會把程式碼抽掉、DB 卻仍記著 installed：
+    # 同 image 時 Odoo 靜默不載入該模組，換 image 時 upgrade-gate exit 4、Pod 卡 Init:Error。
+    # 取消勾選那條路有 `_assess_addon_removal`（#477），回復這條路以前沒有任何檢查。
+    #
+    # 「拿掉的模組」＝可能正在跑的勾選（最新的 deployed ＋ 每個比它新的 revision；歷史裡沒有 deployed
+    # 時是每一個 revision——見 `chart_version.possibly_live_revisions`）的聯集減掉目標 revision 的勾選，
+    # 見 `CloudService._rollback_removed_odoo_addons`。
+    #
+    # 裁決的五個結果（``code``）與前端契約：
+    #   no_removal   沒有模組被拿掉，或不是 woow-odoo 租戶（``applicable`` False）——照舊回復
+    #   safe         有模組被拿掉，但都不在租戶 DB 裡（`_ADDON_REMOVAL_SAFE_STATES`）
+    #   blocked      至少一個被拿掉的模組仍在 DB 裡 ⇒ 拒絕，沒有任何覆寫方式
+    #   unverified   有（或可能有）模組被拿掉，但服務不是 running、查不了模組狀態 ⇒ 預設拒絕，
+    #                回復 API 帶 ``acknowledge_unverified_addons=true`` 才放行（error 狀態的服務靠
+    #                回復自救；取消勾選那條路同樣要 running，硬擋會把租戶困住）
+    #   check_failed 其餘一切查不成的情況（running 卻讀不到 projection／模組狀態；任何 state 下歷史
+    #                裡都沒有可用的 revision 號）⇒ 拒絕，無覆寫
+    #
+    # 預檢端點（`api_check_rollback_addons`）只是 advisory；`_rollback_service` 在動手前以同一支
+    # `_rollback_addon_verdict` 重新裁決，那一道才是權威。預檢端點先套用與回復相同的前置閘（state、
+    # init lease、operator client、憑證路徑、歷史讀不讀得到，以及共用的 `_rollback_history_refusal`：
+    # already_current、revision 不在歷史裡、chart 版本下限），所以 ``unverified`` 只會出現在「回復本身
+    # 做得了、只是服務不是 running 查不了模組狀態」——不會邀租戶勾選確認、送出後才被別的理由擋下。
+
+    #: 回復 API 被模組守衛擋下時 ``data.code`` 的值（verdict code → data.code）。
+    _ROLLBACK_ADDON_REFUSAL_CODES = {
+        'blocked': 'rollback_removes_installed_addons',
+        'unverified': 'rollback_addon_unverified',
+        'check_failed': 'rollback_addon_check_failed',
+    }
+
+    @staticmethod
+    def _rollback_addon_result(
+        code: str, applicable: bool = True, removed: list[str] | None = None,
+        modules: dict | None = None, blocking: dict | None = None, error: str | None = None,
+    ) -> dict[str, Any]:
+        """回復模組守衛的回傳形狀（＝預檢端點的回應契約）。``removed`` 為 ``None`` ⇒ 不帶該鍵（未知）。"""
+        success = code in ('no_removal', 'safe', 'blocked')
+        result: dict[str, Any] = {
+            'success': success, 'code': code, 'applicable': bool(applicable),
+            'modules': modules or {}, 'blocking': blocking or {},
+        }
+        if removed is not None:
+            result['removed'] = list(removed)
+        if not success:
+            result['error'] = error or _('Unknown error')
+        return result
+
+    @staticmethod
+    def _quoted_module_list(names: list[str]) -> str:
+        return ', '.join("'%s'" % name for name in names)
+
+    @staticmethod
+    def _rollback_history_is_usable(history: Any) -> bool:
+        """歷史裡至少有一個可用的 revision 號（``possibly_live_revisions`` 非空）。"""
+        try:
+            return bool(possibly_live_revisions(history))
+        except (TypeError, AttributeError):  # 歷史不是 list（壞掉的 operator 回應）＝讀不到
+            return False
+
+    @staticmethod
+    def _rollback_history_unreadable_error(revision: int) -> str:
+        """歷史讀不到、或沒有任何可用 revision 號時的訊息（預檢端點與守衛共用同一句）。"""
+        return _(
+            'The version history of this service could not be read, so it cannot be checked '
+            'which modules rolling back to revision %(revision)s would remove. Please try '
+            'again later.', revision=revision)
+
+    def _rollback_addon_undetermined(self, service: Any, revision: int,
+                                     rollback_history: Any) -> dict[str, Any]:
+        """woow-odoo 租戶、但算不出這次回復會拿掉哪些模組。
+
+        歷史裡沒有任何可用的 revision 號 ⇒ 任何 state 都是 check_failed（與預檢端點同一句訊息）：
+        回復本身也沒有東西可以對照，帶確認送出只會讓 operator 回 404。其餘：running ⇒ check_failed，
+        否則 unverified（只有「勾選讀不到、服務又不是 running」才可確認後放行）。
+        """
+        if not self._rollback_history_is_usable(rollback_history):
+            return self._rollback_addon_result(
+                'check_failed', error=self._rollback_history_unreadable_error(revision))
+        if service.state == 'running':
+            return self._rollback_addon_result('check_failed', error=_(
+                'Could not determine which modules rolling back to revision %(revision)s would '
+                'remove (%(reason)s). Rolling back is not possible until this check succeeds; '
+                'please try again later.',
+                revision=revision,
+                reason=_('the module selection of the revisions could not be read')))
+        return self._rollback_addon_result('unverified', error=_(
+            'The service is not running (%(state)s), and the modules that rolling back to '
+            'revision %(revision)s would remove could not be determined. If the target revision '
+            'lacks a module that is installed in Odoo, Odoo will stop loading it or the service '
+            'will fail to start. Roll back only if you are sure.',
+            state=service.state, revision=revision))
+
+    def _rollback_addon_verdict(self, service: Any, client: Any, rollback_history: Any,
+                                revision: int) -> dict[str, Any]:
+        """#2069：回復到 ``revision`` 會不會抽掉租戶 Odoo 仍在用的模組——**永不 raise**（DB 錯誤除外）。
+
+        ``rollback_history`` 是呼叫端已讀到的 helm 歷史。外層 `_rollback_service` 的 ``except
+        PaaSOperatorError`` 會把 400／404 翻成「Revision … cannot be restored」，守衛自己的失敗不能
+        掉進去被誤報成 revision 問題，所以這裡把所有例外收成 fail-closed 的結果（任何例外、
+        ``None``、缺鍵都不是「放行」）。``OperationalError`` 照 repo 慣例外拋（交易已壞，不能假裝
+        還能回應）。
+        """
+        try:
+            return self._rollback_addon_verdict_inner(service, client, rollback_history, revision)
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                'Rollback addon check failed unexpectedly for service id=%s revision=%s',
+                service.id, revision)
+            try:
+                applicable = service._is_live_woow_odoo_tenant()
+            except OperationalError:
+                raise
+            except Exception:
+                applicable = True  # 連適不適用都不知道 ⇒ 當成適用（fail-closed）
+            if not applicable:
+                return self._rollback_addon_result('no_removal', applicable=False, removed=[])
+            return self._rollback_addon_undetermined(service, revision, rollback_history)
+
+    def _rollback_addon_verdict_inner(self, service: Any, client: Any, rollback_history: Any,
+                                      revision: int) -> dict[str, Any]:
+        applicable, removed = service._rollback_removed_odoo_addons(
+            client, rollback_history, revision)
+        if not applicable:
+            return self._rollback_addon_result('no_removal', applicable=False, removed=[])
+        if removed is None:
+            return self._rollback_addon_undetermined(service, revision, rollback_history)
+        if not removed:
+            return self._rollback_addon_result('no_removal', removed=[])
+        modules_text = self._quoted_module_list(removed)
+        if service.state != 'running':
+            return self._rollback_addon_result('unverified', removed=removed, error=_(
+                'Rolling back to revision %(revision)s removes the code of %(modules)s. The '
+                'service is not running (%(state)s), so the platform cannot check whether they '
+                'are still installed in Odoo. If one of them is installed, Odoo will stop loading '
+                'it or the service will fail to start. Roll back only if you are sure none of '
+                'them is installed.',
+                revision=revision, modules=modules_text, state=service.state))
+
+        catalog = _PaaSCapability(request.env).odoo_addons().search(
+            [('technical_name', 'in', removed)])
+        name_to_id: dict[str, int] = {}
+        for addon in catalog:
+            name_to_id.setdefault(addon.technical_name, addon.id)
+        verdict = self._assess_addon_removal_by_name(
+            service, removed, name_to_id=name_to_id, client=client)
+        if not verdict['can_assess']:
+            return self._rollback_addon_result('check_failed', removed=removed, error=_(
+                'Rolling back to revision %(revision)s removes the code of %(modules)s, but '
+                'their state in Odoo could not be checked (%(reason)s). Rolling back is not '
+                'possible until this check succeeds; please try again later.',
+                revision=revision, modules=modules_text, reason=verdict['error']))
+        blocking = {name: entry['state'] for name, entry in verdict['blocking'].items()}
+        return self._rollback_addon_result(
+            'blocked' if blocking else 'safe', removed=removed,
+            modules=verdict['modules'], blocking=blocking)
+
+    def _rollback_addon_blocking_error(self, revision: int, verdict: dict[str, Any]) -> str:
+        """blocked 的拒絕理由：列出模組、狀態與依賴它的已安裝模組，並給兩條出路。"""
+        parts = []
+        for name, state in sorted(verdict['blocking'].items()):
+            dependents = (verdict['modules'].get(name) or {}).get('dependents') or []
+            if dependents:
+                parts.append(_(
+                    "'%(module)s' (%(state)s; installed modules that depend on it: %(dependents)s)",
+                    module=name, state=state,
+                    dependents=self._quoted_module_list(sorted(dependents))))
+            else:
+                parts.append("'%s' (%s)" % (name, state))
+        return _(
+            'Rolling back to revision %(revision)s would remove the code of modules that are '
+            'still present in Odoo: %(modules)s. Uninstall them in Odoo first (Apps), or roll '
+            'back to a revision that still includes them.',
+            revision=revision, modules=', '.join(parts))
+
+    def _rollback_addon_refusal(self, verdict: dict[str, Any], revision: int,
+                                acknowledge_unverified_addons: bool) -> dict[str, Any] | None:
+        """把 verdict 轉成回復 API 的拒絕回應；可以回復回 ``None``。
+
+        只有 ``unverified`` 能被 ``acknowledge_unverified_addons`` 覆寫；``blocked`` 與
+        ``check_failed`` 沒有任何覆寫方式。認不得的 code 一律當 check_failed（fail-closed）。
+        """
+        code = verdict.get('code')
+        if code in ('no_removal', 'safe'):
+            return None
+        if code == 'unverified' and acknowledge_unverified_addons:
+            _logger.warning(
+                'Rollback to revision %s proceeds with unverified module removal %s '
+                '(acknowledged by the requester)', revision, verdict.get('removed', 'unknown'))
+            return None
+        if code == 'blocked':
+            return {'success': False,
+                    'error': self._rollback_addon_blocking_error(revision, verdict),
+                    'data': {'code': self._ROLLBACK_ADDON_REFUSAL_CODES['blocked'],
+                             'modules': verdict['modules'], 'blocking': verdict['blocking']}}
+        if code != 'unverified':
+            code = 'check_failed'
+        return {'success': False,
+                'error': verdict.get('error') or _('Unknown error'),
+                'data': {'code': self._ROLLBACK_ADDON_REFUSAL_CODES[code]}}
+
+    @route(
+        '/api/cloud-services/services/<int:service_id>/check-rollback-addons',
+        type='json', auth='user', methods=['POST'],
+    )
+    def api_check_rollback_addons(
+        self, service_id: int, revision: int | None = None, **kw: Any,
+    ) -> dict[str, Any]:
+        """#2069：回復到 ``revision`` 會拿掉哪些模組、它們在租戶 Odoo 裡的狀態（advisory）。
+
+        參數收在簽名裡（JSON-RPC ``params`` 展開成 kwargs，同 `api_check_addon_removal`，#474）；
+        ``**kw`` 必留。權限與回復本身相同（成員＋owner／admin、服務未被 conceal）；唯讀，不寫任何
+        欄位。``success`` 只代表「查成了」，不代表可以回復——看 ``code`` / ``blocking``。回復時
+        `_rollback_service` 會以同一支 `_rollback_addon_verdict` 重新裁決，這裡的結果不是授權。
+
+        woow-odoo 租戶先過與回復相同的前置閘（state 為 pending／deleting／suspended、init lease、
+        沒有 operator client、範本設定讀不懂、歷史讀不到或沒有可用的 revision 號，以及與回復共用的
+        `_rollback_history_refusal`：already_current、revision 不在歷史裡、chart 版本下限），任一道擋下
+        ⇒ ``check_failed``，訊息與回復 API 相同（任何 state 都一樣，不回 ``unverified``）。只有訂閱閘
+        不套。不適用的服務照舊直接 ``no_removal``、不打 operator。
+        """
+        def refused(error: str) -> dict[str, Any]:
+            return self._rollback_addon_result('check_failed', applicable=False, error=error)
+
+        service = _PaaSCapability(request.env).cloud_service(service_id)
+        if not service.exists() or service.template_id.conceal_instances:
+            return refused(_('Service not found'))
+        access = _PaaSCapability(request.env).access(service.workspace_id)
+        if not access:
+            return refused(_('Access denied'))
+        if not self._can_manage_service(access):
+            return refused(_('Permission denied'))
+
+        try:
+            applicable = service._is_live_woow_odoo_tenant()
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception('Rollback addon check: cannot tell whether service id=%s is a woow-odoo tenant',
+                              service.id)
+            applicable = True  # 不知道 ⇒ 當成適用（fail-closed）
+
+        # 與回復 API 同一套正規化（`api_service_rollback`），兩邊對同一個輸入的判斷一致。
+        try:
+            revision = int(revision)
+        except (TypeError, ValueError):
+            revision = None
+        if not is_valid_rollback_revision(revision):
+            return self._rollback_addon_result(
+                'check_failed', applicable=applicable,
+                error=self._invalid_rollback_revision_response()['error'])
+
+        # 不是 woow-odoo 租戶：不打任何 operator 呼叫（與回復本身一致）。
+        if not applicable:
+            return self._rollback_addon_result('no_removal', applicable=False, removed=[])
+
+        # 與 `_rollback_service` 走到守衛之前的前置閘同一套、同一個順序、同一句訊息。回復本身會被
+        # 這些理由擋下時，預檢不得回 ``unverified``（那會讓對話框請租戶勾選確認、送出後才失敗）。
+        # 唯一刻意不套的是訂閱閘（`_check_operation_allowed`，在回復 API 外層）。
+        if service.state in ['pending', 'deleting', 'suspended']:
+            return self._rollback_addon_result('check_failed', error=_(
+                'Cannot rollback service in %(state)s state', state=service.state))
+        if service._init_lease_active():
+            return self._rollback_addon_result(
+                'check_failed', error=self._init_in_flight_error(service))
+        client = get_paas_operator_client(request.env)
+        if not client:
+            return self._rollback_addon_result(
+                'check_failed', error=_('PaaS Operator not configured'))
+        # 範本的 helm_value_specs 讀不懂時回復本身以 UserError 拒絕（`_rollback_preserved_value_paths`）。
+        # seed 的 woow-odoo 範本讀得懂，只有範本被改壞時才走得到；同一道閘照搬，成本只是一次本機解析。
+        try:
+            service._rollback_preserved_value_paths()
+        except UserError as e:
+            return self._rollback_addon_result('check_failed', error=str(e))
+        try:
+            history = client.get_revisions(
+                namespace=service.helm_namespace,
+                release_name=service.helm_release_name,
+            ).get('revisions') or []
+        except OperationalError:
+            raise
+        except Exception as e:
+            _logger.warning('Rollback addon check: cannot read the history of service id=%s: %s',
+                            service.id, e)
+            history = None
+        if not self._rollback_history_is_usable(history):
+            return self._rollback_addon_result(
+                'check_failed', error=self._rollback_history_unreadable_error(revision))
+        history_refusal = self._rollback_history_refusal(history, revision)
+        if history_refusal:
+            return self._rollback_addon_result('check_failed', error=history_refusal['error'])
+        return self._rollback_addon_verdict(service, client, history, revision)
 
     # ==================== MCP Server API (per-service) ====================
 
@@ -5801,8 +6168,45 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('Choose the revision to roll back to (a whole number, 1 or higher).'),
                 'data': {'code': 'invalid_revision'}}
 
-    def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
-        """Rollback service to an explicit earlier revision (``revision`` >= 1)."""
+    def _rollback_history_refusal(self, rollback_history: Any, revision: int) -> dict[str, Any] | None:
+        """回復請求對照 helm 歷史就知道不成立 ⇒ 回復 API 的拒絕回應；可以往下走回 ``None``。
+
+        依序：目標就是目前已部署的版本（``already_current``）、目標不在歷史裡（``revision_not_found``）、
+        chart 版本下限（#1526，沒有 ``data``）。`_rollback_service` 與預檢端點
+        `api_check_rollback_addons`（#2069）共用這一支——預檢把拒絕轉成 ``check_failed``、沿用同一句
+        ``error``，所以預檢不會對回復本身會拒絕的目標回 ``unverified``。歷史讀不到（空）時只剩下限
+        也判不出來 ⇒ 回 ``None``（交給呼叫端）。
+        """
+        problem = rollback_request_problem(rollback_history, revision)
+        if problem == 'invalid_revision':
+            return self._invalid_rollback_revision_response()
+        # DATA-ODOO-010-1／AUDITFIX：目標就是目前已部署的版本時直接擋下，不讓 helm 白白
+        # 重建 Pod；目標不在歷史裡也在這裡擋（AI-LLM-007-2：原本交給 operator，租戶看到
+        # helm 的英文原文）。
+        if problem == 'already_current':
+            return {'success': False, 'error': _(
+                'Revision %(revision)s is the version currently deployed; '
+                'there is nothing to roll back.', revision=revision),
+                'data': {'code': 'already_current'}}
+        if problem == 'not_found':
+            return {'success': False, 'error': _(
+                'Revision %(revision)s was not found in this service\'s version history. '
+                'Refresh the list and choose another revision.', revision=revision),
+                'data': {'code': 'revision_not_found'}}
+        floor = rollback_floor_violation(rollback_history, revision)
+        if floor:
+            return {'success': False,
+                    'error': self._rollback_chart_downgrade_error(floor)}
+        return None
+
+    def _rollback_service(self, service: Any, revision: int | None,
+                          acknowledge_unverified_addons: bool = False) -> dict[str, Any]:
+        """Rollback service to an explicit earlier revision (``revision`` >= 1).
+
+        ``acknowledge_unverified_addons``（#2069）：服務不是 running、平台查不了被拿掉的模組狀態時
+        （``data.code`` ＝ ``rollback_addon_unverified``），請求方明確承擔風險才放行；對「仍裝著」
+        （``rollback_removes_installed_addons``）與「查不成」（``rollback_addon_check_failed``）無效。
+        """
         # AUDITFIX rollback-api-input-validation：helm 把 0 解讀成「上一版」，原本 None／0
         # 也照這個語意送出——誤送 0 真的回復並重啟（INFRA-EMQX-013-1、AI-PI-004-4）。
         # 回復一律要明確的 revision 號（對話框本來就只送明確的號碼）。
@@ -5850,24 +6254,20 @@ class PaasController(HiddenChainMixin, Controller):
                     namespace=service.helm_namespace,
                     release_name=service.helm_release_name,
                 ).get('revisions') or []
-            # DATA-ODOO-010-1／AUDITFIX：目標就是目前已部署的版本時直接擋下，不讓 helm 白白
-            # 重建 Pod；目標不在歷史裡也在這裡擋（AI-LLM-007-2：原本交給 operator，租戶看到
-            # helm 的英文原文）。
-            problem = rollback_request_problem(rollback_history, revision)
-            if problem == 'already_current':
-                return {'success': False, 'error': _(
-                    'Revision %(revision)s is the version currently deployed; '
-                    'there is nothing to roll back.', revision=revision),
-                    'data': {'code': 'already_current'}}
-            if problem == 'not_found':
-                return {'success': False, 'error': _(
-                    'Revision %(revision)s was not found in this service\'s version history. '
-                    'Refresh the list and choose another revision.', revision=revision),
-                    'data': {'code': 'revision_not_found'}}
-            floor = rollback_floor_violation(rollback_history, revision)
-            if floor:
-                return {'success': False,
-                        'error': self._rollback_chart_downgrade_error(floor)}
+            # already_current／revision 不在歷史裡／chart 版本下限（DATA-ODOO-010-1、AI-LLM-007-2、
+            # #1526）：#2069 起收進 `_rollback_history_refusal`，與預檢端點共用，兩邊不會再漂開。
+            history_refusal = self._rollback_history_refusal(rollback_history, revision)
+            if history_refusal:
+                return history_refusal
+
+            # #2069：woow-odoo 租戶——目標 revision 拿掉的模組若仍裝在租戶 Odoo 裡就拒絕（權威的
+            # 那一道；預檢端點只是 advisory）。`_rollback_addon_verdict` 不 raise，被擋下時什麼都
+            # 不寫、不送 operator；其他服務不打任何額外的 operator 呼叫。
+            addon_refusal = self._rollback_addon_refusal(
+                self._rollback_addon_verdict(service, client, rollback_history, revision),
+                revision, acknowledge_unverified_addons)
+            if addon_refusal:
+                return addon_refusal
 
             rollback_result = client.rollback_release(
                 namespace=service.helm_namespace,

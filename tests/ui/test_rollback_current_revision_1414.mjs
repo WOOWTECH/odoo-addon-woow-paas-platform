@@ -12,12 +12,16 @@ const source = (await readFile(
   new URL("../../src/static/src/paas/components/modal/RollbackModal.js", import.meta.url),
   "utf8",
 ))
-  .replace('import { Component, useState, onMounted } from "@odoo/owl";',
-    "class Component {} const useState = (v) => v; const onMounted = () => {};")
+  .replace(/import \{[^}]*\} from "@odoo\/owl";/,
+    // #2069：預檢排程／捲動用到的 hook 一併換成 no-op（本檔不跑 setup，只驗「目前」的判定）。
+    "class Component {} const useState = (v) => v; const onMounted = () => {}; " +
+    "const useRef = () => ({ el: null }); const useEffect = () => {}; const onWillDestroy = () => {};")
   .replace('import { _t } from "@web/core/l10n/translation";', "const _t = (m) => m;")
   .replace(/import \{ (WoowButton|WoowIcon) \} from "[^"]+";/g, "const $1 = {};")
-  .replace('import { cloudService } from "../../services/cloud_service";',
-    "const cloudService = {};")
+  .replace('import { cloudService, ROLLBACK_REQUEST_FAILED } from "../../services/cloud_service";',
+    // #2069：selectRevision 會觸發預檢；本檔只驗「目前」的判定，預檢回「沒有模組被拿掉」。
+    "const ROLLBACK_REQUEST_FAILED = 'request_failed'; " +
+    "const cloudService = { checkRollbackAddons: async () => ({ success: true, code: 'no_removal' }) };")
   .replace('import { formatUserDateTime } from "../../utils/datetime_helpers";',
     "const formatUserDateTime = (v) => v;");
 assert.doesNotMatch(source, /from "\.\.?\//, "所有相對 import 都必須被替換成 stub");
