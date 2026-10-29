@@ -116,7 +116,8 @@ class TestOpendesignTemplateSeed(TransactionCase):
         #       omnigentHost 預設關（od-mcp-merge-20261015）。
         # 0.5.1–0.5.6＝charts 整合包 #254：console／auth-proxy 加固、prune-runs、登入失敗鎖 IP、
         #       ttyd 改 loopback＋Basic 前門、log 不記查詢字串、egress-profile=web。
-        self.assertEqual(tpl.helm_chart_version, '0.5.9')
+        # 0.5.9＝native Paseo；0.5.10＝console 終端機分頁帶 ttyd base path（values 鍵與 NetworkPolicy 不變）。
+        self.assertEqual(tpl.helm_chart_version, '0.5.10')
         self.assertEqual(self._values()['paseo'], {'enabled': True, 'origin': ''})
         self.assertEqual(json.loads(tpl.rollback_feature_switches)['paseo.enabled'], ['image'])
 
@@ -128,14 +129,14 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertNotIn('mcp', repo, '完整應用 image 非 MCP image')
 
     def test_image_tag_pinned_digest(self):
-        """daemon image 使用已驗收的正式 0212 tag@sha256、不得留 latest／PENDING。chart 0.5.0 的 mcp sidecar
+        """daemon image 使用已驗收的正式 20261029.0033 tag@sha256、不得留 latest／PENDING。chart 0.5.0 的 mcp sidecar
         需要含 /opt/woow（內建 MCP runtime）的 image（paas-odoo-ci #332 起）；PENDING 佔位
         不得進 develop。"""
         tag = self._values()['image']['tag']
         self.assertNotEqual(tag, 'latest', '不得留 latest 佔位')
         self.assertNotIn('PENDING', tag, 'open-design image digest 未補（paas-odoo-ci 建置核可後必補真值）')
         self.assertRegex(tag, r'^[0-9]{8}\.[0-9]{4}@sha256:[0-9a-f]{64}$', 'image tag 必須雙釘 <時戳>@sha256')
-        self.assertEqual(tag, '20261027.0212@sha256:c58c8f2d39895421a1fbbbb13dc65e56dad0c225939799abf31b91313b11024f')
+        self.assertEqual(tag, '20261029.0033@sha256:1a7d82cedbb3f49b6069eed106e8bb568dde7753643bc1ad18dacda621f960f0')
 
     def test_console_image_pinned_digest(self):
         """console image 亦雙釘 tag@sha256（不留 latest mutable；ConfigMap 注入 app）。"""

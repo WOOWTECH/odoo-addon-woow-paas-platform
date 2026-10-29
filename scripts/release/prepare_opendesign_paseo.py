@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SEED = 'src/data/cloud_app_templates.xml'
 TEST = 'src/tests/test_opendesign_seed_380.py'
 XMLID = 'cloud_app_opendesign'
-CHART_VERSION = '0.5.9'
+CHART_VERSION = '0.5.10'
 IMAGE_REPOSITORY = 'jcr-prod.woowtech.io/woow-paas-docker-local/open-design'
 IMAGE_TAG = re.compile(r'[0-9]{8}\.[0-9]{4}@sha256:[0-9a-f]{64}\Z')
 
