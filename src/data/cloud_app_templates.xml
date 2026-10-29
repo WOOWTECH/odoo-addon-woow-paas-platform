@@ -3182,6 +3182,8 @@
              守線：test_mcp_litellm_seed（test_hidden_until_listed：上架 ⟹ image 雙釘）、
              test_mcp_server_template_seed.TestMcpLitellmTemplateSeed（家族不變式）、
              test_workspace_service_url_injection（真範本注入）。xmlid 首建於 noupdate=0 塊、-u 自建、無 migration。 -->
+        <!-- 2026-10-29：woow-mcp-server #92 main af648155；CI31951/job35251 真映像
+             build／healthz／push 通過。僅 update_model metadata 校正；handler／啟動契約未變。 -->
         <record id="cloud_app_mcp_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：AI 模型閘道（LiteLLM）</field>
             <field name="slug">mcp-litellm</field>
@@ -3211,7 +3213,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.9</field>
-            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:1f49fd9aa3b38ce71441ec5bb2733b243d52b891030f54686ab101ac3c582ea0"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "0"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
+            <field name="helm_default_values">{"app": "litellm", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin", "tag": "af6481551b32c27938d7d5ec5dadc6e9e648fbce@sha256:bb8bd08f39ccc0fbfbd4da3ce9c144ee792d9a066d955ae44bc00a466fcbe1f2"}, "service": {"port": 8080}, "envPrefix": "LITELLM_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "litellm-mcp-server", "args": ["--port", "8000"], "port": 8000, "env": {"LITELLM_MCP_READONLY": "0"}, "env_prefix": "LITELLM_MCP_"}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
