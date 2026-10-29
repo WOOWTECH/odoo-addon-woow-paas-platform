@@ -1,0 +1,358 @@
+# woow-security-sweep：odoo-addons/woow_paas_platform 的內部上下文（⚠ 不可複製到 public repo）
+#
+# 正本在 Gitea（odoo-addons org 是 private）；issue 開在 repo 本身，high 以上走一般修正 PR（仍由人決定）。
+# repo 太大（非測試 Python 約 9 MB，cloud_service.py 一個檔就 726 KB），一個 review worker 讀不完 ⇒
+# 用 review_units 分塊輪審：每次全量輪次審 per_run 塊（最久沒審的優先），增量輪次只審落在分塊裡的變動檔案。
+# 分塊順序＝風險順序（越前面越先審）。內容依 2026-10-29 develop（688bf6b1）整理。
+
+stack: odoo
+origin: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform
+branch: develop
+# repo 沒有 .security/sweep.yaml，這裡追加的排除才會生效
+scan_exclude:
+- docs/
+- src/static/lib/
+- "*.min.js"
+- "*.po"
+- .lycheecache
+context:
+  summary: >-
+    多租戶 PaaS 平台（Odoo 18 addon，模組 woow_paas_platform）。租戶在 /woow（standalone OWL app，hash routing）
+    操作 workspace、cloud service、smart home（HA）、security access（Cloudflare Access）、LLM API key 與錢包／訂閱；
+    Odoo 只透過 HTTP（API key）呼叫 extra/paas-operator（FastAPI，包 Helm／kubectl，另管 Cloudflare DNS／Tunnel）
+    部署到 K8s namespace paas-ws-<ws_hash>。extra/ 另有 newapi-proxy（LLM 代理，starlette）、publication-gate、
+    custom-domain-gateway。⚠ 審查前先讀快照裡的 CONTEXT.md：Odoo group role、Workspace、Workspace role 三節是
+    這個 repo 授權模型的權威說明（租戶帳號只有 base.group_portal；record rule 綁 group_user 的不約束租戶；
+    sudo 路徑豁免 _check_assignable_role；基礎設施命名只能吃 ws_hash，slug 受租戶影響）。
+  trust_boundaries:
+  - 匿名網路 → auth=none／public 的 route（HA REST API、HA onboarding／provision、OAuth2 device／token／introspect／revoke、billing 付款結果頁、agent runtime webhook 與 skill bundle）
+  - Portal 租戶（base.group_portal）→ /woow 的 JSON route（workspace_id、service id、成員角色、金額都不可信；授權靠 src/services/paas_capability.py 與 workspace_access role）
+  - 持 OAuth token 的 HA 元件／MCP client → HA REST API（token 擁有者的 workspace 成員與角色）
+  - 金流服務（ECPay）→ 付款回呼與結果頁（簽章、金額、訂單歸屬、重送）
+  - Odoo → paas-operator（API key）→ K8s／Helm／Cloudflare（namespace、release 名、chart values 由 Odoo 傳入）
+  - LLM 使用者 → newapi-proxy → 上游 LLM（API key 範圍、額度、計費）
+  - CI（.gitea/workflows）→ registry、部署 repo、approval gate（PR 觸發的 workflow 能拿到哪些 secret）
+  upstream:
+  # 依賴的 Odoo addon（ai_base_gt、odoo_ai_assistant_chatgpt_connector、sh_subscription*、payment_ecpay_ecpg、
+  # ecpay_invoice_tw）都在 paas-odoo-ci 的 addons/ 底下；Odoo core 本身沒有快照
+  - woow-paas/paas-odoo-ci
+  downstream: []
+review_focus:
+- 授權一律看伺服器端：workspace_id／service id 等參數與 request.env.user 的 workspace 成員與 role 是否綁在同一列（IDOR、跨 workspace）
+- sudo() 之前有沒有先驗身分與歸屬；sudo 寫入會跳過 _check_assignable_role（可授出 admin）
+- 基礎設施命名（namespace、子網域、Helm release、Cloudflare 資源）是否只吃 ws_hash 等伺服器產生的值
+- 傳給 paas-operator 的參數能否注入 Helm values、kubectl 引數或跨 namespace
+- 金流：回呼簽章、金額與訂單歸屬、重送冪等、錢包餘額競態
+review_classes:
+- ATTACK-CLASSES.md#Access control
+- ATTACK-CLASSES.md#Injection
+- ATTACK-CLASSES.md#Business logic
+- ATTACK-CLASSES.md#Obvious things
+- odoo.md#Public route before identity check
+- odoo.md#csrf=False state change
+- odoo.md#sudo() scope creep
+- odoo.md#Record rule and multi-company gaps
+- odoo.md#Field-level groups and related fields
+- odoo.md#Public method RPC exposure
+- odoo.md#QWeb and Markup escaping
+- DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+review_units:
+  per_run: 2
+  incremental_max_files: 20
+  # 這些路徑底下的檔案若不屬於任何一塊，報告會列出來（新加的 controller／API 不能默默沒人審）
+  cover:
+  - src/controllers/
+  - src/security/
+  - src/data/
+  - extra/paas-operator/src/api/
+  - extra/newapi-proxy/newapi_proxy/
+  - extra/publication-gate/publication_gate/
+  - extra/custom-domain-gateway/gateway/
+  - .gitea/workflows/
+  units:
+  - name: unauth-routes
+    focus: 不需登入的 route（auth=none／public）：token／簽章在 sudo 之前驗、token 擁有者與 workspace 角色、OAuth2 device flow 與 token 端點、付款結果頁洩漏他人訂單
+    # 只列有 auth=none／public route 的檔案；別的 controller 新增這類 route 會出現在報告的 unassigned_routes
+    paths:
+    - src/controllers/agent_runtime_skill.py
+    - src/controllers/agent_runtime_webhook.py
+    - src/controllers/billing.py
+    - src/controllers/ha_api.py
+    - src/controllers/ha_onboarding.py
+    - src/controllers/ha_paas.py
+    - src/controllers/oauth2.py
+    - src/services/paas_capability.py
+    - src/models/oauth*.py
+    entry_points: {extract: odoo-route, auth: [none, public]}
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Injection
+    - ATTACK-CLASSES.md#Cryptography and secrets
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#Public route before identity check
+    - odoo.md#csrf=False state change
+    - odoo.md#sudo() scope creep
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+    - WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding
+    - WEB-PROTOCOL-AND-AUTH.md#API-key scope and resource binding
+    - PROTOCOLS-RPC-AND-MESSAGING.md#Callback and reply-correlation confusion
+  - name: workspace-api
+    focus: /woow 的 /api/workspaces/<id>/… route：workspace 成員與 role、cloud service 的建立／變更／刪除、成員邀請與角色、sudo 授權
+    paths:
+    - src/controllers/paas.py
+    - src/controllers/workspace_invitation.py
+    - src/services/paas_capability.py
+    - src/models/workspace.py
+    - src/models/workspace_access.py
+    - src/models/cloud_service.py
+    entry_points: {extract: odoo-route, auth: [user], routes: ["/api/workspaces/*", "/api/workspace-invitations/*"]}
+  - name: paas-api
+    focus: /woow 其餘 route（cloud service 清單、template／odoo addon 市集、support project、設定）與登入後的帳號流程（邀請、connect login、auth hardening、profile、自訂網域、通知、portal 覆寫、signup 覆寫）
+    paths:
+    - src/controllers/__init__.py
+    - src/controllers/paas.py
+    - src/controllers/custom_domain.py
+    - src/controllers/dashboard.py
+    - src/controllers/notifications.py
+    - src/controllers/profile.py
+    - src/controllers/connect_login.py
+    - src/controllers/auth_hardening.py
+    - src/controllers/signup.py
+    - src/controllers/portal.py
+    - src/models/cloud_app_template.py
+    - src/models/custom_domain.py
+    - src/models/res_users*.py
+    entry_points:
+      extract: odoo-route
+      auth: [user]
+      exclude_routes: ["/api/workspaces/*"]
+      extra:
+      - {route: "/web/signup（覆寫 auth_signup 的必填檢查與身分正規化）", file: src/controllers/signup.py, auth: public}
+  - name: billing
+    focus: 登入後的帳單／付款方式／儲值／對帳 route 與入帳邏輯：金額與幣別來源、他人訂閱或錢包、ECPay 回呼簽章與冪等、餘額競態
+    paths:
+    - src/controllers/billing.py
+    - src/controllers/ecpg_callback.py
+    - src/controllers/reconcile_report.py
+    - src/models/wallet_topup.py
+    - src/models/llm_credit_order.py
+    - src/models/billing_incident.py
+    - src/models/sh_subscription*.py
+    - src/models/subscription_lifecycle*.py
+    - src/models/account_move*.py
+    - src/models/workspace_quota_policy.py
+    entry_points: {extract: odoo-route, auth: [user]}
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Business logic
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#csrf=False state change
+    - odoo.md#sudo() scope creep
+    - odoo.md#Public method RPC exposure
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+    - PROTOCOLS-RPC-AND-MESSAGING.md#Callback and reply-correlation confusion
+    - PROTOCOLS-RPC-AND-MESSAGING.md#Duplicate delivery and idempotency gaps
+  - name: llm-ai
+    focus: LLM API key 的發放、範圍與撤銷、用量與額度扣款、他人 key 或用量；AI assistant 與 agent 的工具呼叫、MCP 設定
+    paths:
+    - src/controllers/llm.py
+    - src/controllers/ai_assistant.py
+    - src/models/llm_*.py
+    - src/models/ai_*.py
+    - src/models/agent_*.py
+    - src/models/mcp_server.py
+    - src/services/newapi_client.py
+    - src/services/llm_*.py
+    - src/services/mcp_*.py
+    entry_points: {extract: odoo-route, auth: [user]}
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Business logic
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#sudo() scope creep
+    - odoo.md#Public method RPC exposure
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+    - WEB-PROTOCOL-AND-AUTH.md#API-key scope and resource binding
+    - AI-AND-LLM.md#Tool-argument injection into a downstream sink
+    - AI-AND-LLM.md#Excessive agency and confused-deputy authority
+    - AI-AND-LLM.md#Cross-session or cross-tenant context bleed
+    - AI-AND-LLM.md#Sensitive context extraction
+  - name: security-access
+    focus: Security Access（Cloudflare Access policy）的指派、變更與回收：他人 workspace 的 policy、policy rule 的 email／群組來源、reap 誤刪或漏刪
+    paths:
+    - src/controllers/security_access.py
+    - src/models/security_access*.py
+    - src/models/cf_access_policy_reap.py
+    - src/models/access_*.py
+    - src/services/access_state.py
+    entry_points: {extract: odoo-route, auth: [user]}
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Business logic
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#sudo() scope creep
+    - odoo.md#Record rule and multi-company gaps
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Stale authorization and derived copy use
+    - CLOUD-AND-DEPLOYMENT.md#Cross-account or cross-tenant role confusion
+  - name: smart-home
+    focus: 登入後的 smart home 與 OAuth2 授權頁：HA 綁定、tunnel token 的發放與釋放、OAuth2 授權碼與同意流程、帳號連結
+    paths:
+    - src/controllers/smart_home.py
+    - src/controllers/oauth2.py
+    - src/controllers/ha_*.py
+    - src/models/smart_home*.py
+    - src/models/tunnel_binding*.py
+    - src/models/oauth*.py
+    entry_points: {extract: odoo-route, auth: [user]}
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Cryptography and secrets
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#sudo() scope creep
+    - odoo.md#csrf=False state change
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+    - WEB-PROTOCOL-AND-AUTH.md#OAuth/OIDC request and callback binding
+    - WEB-PROTOCOL-AND-AUTH.md#Account linking and identity collision
+  - name: operator-releases
+    focus: paas-operator 的 API key 驗證 middleware 與 release／init／namespace API：Helm values、release 名、chart 來源與 kubectl 引數注入、namespace 邊界（只能 paas-ws-*）、tenant workload policy、秘密回傳
+    paths:
+    - extra/paas-operator/src/main.py
+    - extra/paas-operator/src/config.py
+    - extra/paas-operator/src/api/releases.py
+    - extra/paas-operator/src/api/init.py
+    - extra/paas-operator/src/api/namespaces.py
+    - extra/paas-operator/src/services/helm.py
+    - extra/paas-operator/src/models/schemas.py
+    - extra/paas-operator/src/tenant_workload_policy.py
+    entry_points:
+      extract: fastapi-route
+      extra:
+      - {route: "HTTP middleware verify_api_key（全部 API 的認證）", file: extra/paas-operator/src/main.py}
+    review_classes: &operator_classes
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Injection
+    - ATTACK-CLASSES.md#Resource and file handling
+    - ATTACK-CLASSES.md#Obvious things
+    - CLOUD-AND-DEPLOYMENT.md#Namespace and label trust confusion
+    - CLOUD-AND-DEPLOYMENT.md#Host or control-plane capability exposure
+    - CLOUD-AND-DEPLOYMENT.md#Secret exposure across workload boundaries
+    - CLOUD-AND-DEPLOYMENT.md#Workload identity overreach
+  - name: operator-network
+    focus: paas-operator 其餘 API：Cloudflare Tunnel／DNS／自訂網域、Access、agent runtime、資料取回（retrieval）、路由與觀測；跨 namespace 讀寫、SSRF、秘密回傳
+    paths: [extra/paas-operator/src/]
+    exclude_paths:
+    - extra/paas-operator/src/api/releases.py
+    - extra/paas-operator/src/api/init.py
+    - extra/paas-operator/src/api/namespaces.py
+    - extra/paas-operator/src/services/helm.py
+    entry_points: {extract: fastapi-route}
+    review_classes: *operator_classes
+  - name: edge-services
+    focus: newapi-proxy（LLM 代理：key 驗證、路由表、簽章、計費紀錄）、publication-gate、custom-domain-gateway、cloudflare post-renderer：header 信任、SSRF、驗證繞過
+    paths:
+    - extra/newapi-proxy/newapi_proxy/
+    - extra/publication-gate/publication_gate/
+    - extra/custom-domain-gateway/gateway/
+    - extra/cloudflare/post-renderer/
+    entry_points:
+      extract: fastapi-route
+      extra:
+      - {route: "newapi-proxy 的 starlette app（全部請求）", file: extra/newapi-proxy/newapi_proxy/app.py}
+      - {route: "publication-gate 入口", file: extra/publication-gate/publication_gate/main.py}
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Injection
+    - ATTACK-CLASSES.md#Obvious things
+    - WEB-PROTOCOL-AND-AUTH.md#Host and forwarded-header trust
+    - WEB-PROTOCOL-AND-AUTH.md#API-key scope and resource binding
+    - CLOUD-AND-DEPLOYMENT.md#Trusted-proxy and mesh identity bypass
+    - CLOUD-AND-DEPLOYMENT.md#Metadata and internal-service reachability
+  - name: rpc-and-acl
+    focus: 原生 Odoo 入口（/web/dataset/call_kw、/web/content、/web/image、/my portal、/report PDF）能碰到哪些 PaaS model：ir.model.access、record rule 的群組（group_user 不約束租戶）、公開 method、computed／related 欄位外洩
+    paths:
+    - src/security/
+    - src/services/paas_capability.py
+    - src/models/res_users*.py
+    - src/models/project_project.py
+    - src/controllers/portal.py
+    entry_points:
+      extra:
+      - {route: "/web/dataset/call_kw（ORM RPC）", note: "登入者對有 ACL 的 model 可呼叫任何不以 _ 開頭的 method"}
+      - {route: "/web/content、/web/image（附件與 binary 欄位）"}
+      - {route: "/my（portal）與 /report（PDF）", note: "會繞過 /woow 的呈現層過濾"}
+  - name: frontend-shell
+    focus: >-
+      /woow OWL app 的元件、服務、路由與 QWeb view。檔案多，先搜 sink（markup(、t-out、t-raw、innerHTML、outerHTML、
+      insertAdjacentHTML、window.location／href 指派、postMessage、localStorage／sessionStorage）再回推資料來源：
+      XSS、open redirect、postMessage 來源、token 存放
+    paths: [src/static/src/, src/views/]
+    exclude_paths: [src/static/src/paas/pages/, src/static/src/img/]
+    entry_points:
+      extra:
+      - {route: "/woow（OWL app；hash 路由在 src/static/src/paas/core/router.js）", file: src/static/src/paas/core/router.js}
+    review_classes: &frontend_classes
+    - ATTACK-CLASSES.md#Injection
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#QWeb and Markup escaping
+    - CLIENT-SIDE.md#DOM-based XSS
+    - CLIENT-SIDE.md#`postMessage` origin and source trust
+    - CLIENT-SIDE.md#Browser-storage disclosure and stale authorization
+    - CLIENT-SIDE.md#Client-side navigation confusion
+  - name: frontend-pages
+    focus: >-
+      /woow 各頁面（src/static/src/paas/pages/）。先搜 sink（markup(、t-out、innerHTML、window.location／href 指派、
+      postMessage、localStorage）再回推資料來源：XSS、open redirect、把他人資料顯示出來的前端過濾
+    paths: [src/static/src/paas/pages/]
+    review_classes: *frontend_classes
+  - name: cron-and-data
+    focus: cron、server action、hook、migration、wizard：以 sudo 跑時的跨租戶影響、批次刪除或回收、migration 的預設值與擁有者
+    paths:
+    - src/data/
+    - src/models/*cron*.py
+    - src/models/platform_monitor.py
+    - src/models/data_retrieval.py
+    - src/migrations/
+    - src/hooks.py
+    - src/wizard/
+    review_classes:
+    - ATTACK-CLASSES.md#Access control
+    - ATTACK-CLASSES.md#Business logic
+    - ATTACK-CLASSES.md#Obvious things
+    - odoo.md#sudo() scope creep
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or owner enforcement
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Migration default and ownership confusion
+    - DATA-ISOLATION-AND-LIFECYCLE.md#Retention and queued-work overrun
+  - name: ci-supply-chain
+    focus: CI workflow 與建置：PR 觸發的 workflow 能否拿到 secret 或推 image、workflow 內的指令注入、未釘版本的 action／image／套件、approval gate 是否可繞過
+    paths:
+    - .gitea/workflows/
+    - scripts/ci/
+    - scripts/seed/
+    - Dockerfile.dev
+    - extra/*/Dockerfile
+    - extra/*/requirements*.txt
+    - requirements.txt
+    - .sandbox/
+    review_classes:
+    - ATTACK-CLASSES.md#Obvious things
+    - SUPPLY-CHAIN-AND-RELEASE.md#Untrusted code in a privileged workflow
+    - SUPPLY-CHAIN-AND-RELEASE.md#Workflow command and expression confusion
+    - SUPPLY-CHAIN-AND-RELEASE.md#Mutable and unbound build inputs
+    - SUPPLY-CHAIN-AND-RELEASE.md#Automation identity overreach
+    - SUPPLY-CHAIN-AND-RELEASE.md#Build-to-promotion substitution
+history:
+  fixed: []
+disclosure:
+  findings_to: omnigent_inbox
+  issues_to: odoo-addons/woow_paas_platform
+  high_fix_via: private_pr
+baseline: []
+
+# baseline 格式（accepted 必須有 expires，不允許永久豁免）：
+#  - id: <自訂或 H-xx>
+#    fingerprint: <collect.py 產出的 fingerprint>
+#    status: accepted | tracked
+#    reason: ...
+#    approved_by: <人>
+#    expires: YYYY-MM-DD

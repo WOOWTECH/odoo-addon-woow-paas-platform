@@ -3,10 +3,10 @@
 
 子命令::
 
-    collect.py run --repo-path <abs> --run-root <dir> [--mode incremental|full] [--state-dir <dir>]
-    collect.py commit --run-dir <dir> [--state-dir <dir>]   # 本輪處理完才推進 last_sha
+    collect.py run --repo-path <abs> --run-root <dir> [--mode incremental|full] [--units a,b] [--state-dir <dir>]
+    collect.py commit --run-dir <dir> [--state-dir <dir>]   # 本輪處理完才推進 last_sha（與分塊輪審進度）
     collect.py preset --name <名稱> [--state-dir <dir>]    # 讀 <state>/presets/<名稱>.yaml，驗證後印出本輪輸入
-    collect.py import --run-dir <dir> --input <jsonl>       # 併入 deep review 回報（finding／hardening／coverage）
+    collect.py import --run-dir <dir> --input <jsonl> [--unit <塊>]   # 併入 deep review 回報（finding／hardening／coverage）
     collect.py verdict --run-dir <dir> --finding-id <id> --input <json>   # 套用驗證者的結論
     collect.py promote --run-dir <dir> --hardening-id <id>  # 人決定把某條 hardening 升級成 finding
 
@@ -18,6 +18,9 @@ run 的產出（<run-root>/<repo 名>/）：
     meta.json       repo、head／last SHA、模式、變動與已刪除檔案、.security/ 是否變動、upstream 快照狀態
     src/            預設分支 HEAD 的乾淨快照（git archive；不建 worktree、不碰工作目錄）
     upstream/<名>/  context.upstream 列的上游 repo 快照（只給 review worker 讀，不跑掃描工具、不產生 finding）
+
+meta.json 的 `review`：targets 有 review_units（大 repo 分塊輪審）時，本輪 deep review 審哪幾塊、各塊的檔案與
+entry point（ast 抽出的 route）、沒歸到任何一塊的檔案與 route；沒有 review_units 時是 null（照舊審整個範圍）。
 
 import 另外產生 hardening.jsonl（不構成 finding 的建議）與 coverage.jsonl（各 entry point 審過與否）；
 verdict 判 rejected 的 finding 移到 rejected.jsonl，下一輪的工單會帶上它，避免重報同一個被推翻的說法。
@@ -34,6 +37,7 @@ verdict 判 rejected 的 finding 移到 rejected.jsonl，下一輪的工單會�
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import fnmatch
 import hashlib
@@ -56,7 +60,7 @@ TARGETS_DIR = SWEEP_DIR / "targets"
 TOOL_TIMEOUT = 900
 STACKS_DIR = SWEEP_DIR / "stacks"
 PRIVATE_KEYS = ("context", "review_focus", "review_classes", "history", "baseline", "disclosure",
-                "branch", "since_upstream", "origin")
+                "branch", "since_upstream", "origin", "review_units")
 UPSTREAM_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 STACK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
@@ -331,6 +335,260 @@ def fork_scope(repo: Path, head: str, conf: Any, *, fetch: bool) -> dict[str, An
         "behind": int(git(repo, "rev-list", "--count", f"{head}..{ref}") or 0),
         "files": files, "fetch_error": fetch_error,
     }
+
+
+# ── 分塊輪審（targets 的 review_units；大 repo 一個 worker 讀不完） ──────────────────
+
+UNIT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+UNITS_KEYS = frozenset({"per_run", "incremental_max_files", "cover", "units"})
+UNIT_KEYS = frozenset({"name", "focus", "paths", "exclude_paths", "entry_points", "review_classes"})
+UNIT_EP_KEYS = frozenset({"extract", "auth", "routes", "exclude_routes", "extra"})
+#: entry point 抽取器：只 parse decorator（ast），不 import、不執行目標程式碼
+EXTRACTORS = ("odoo-route", "fastapi-route")
+FASTAPI_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "api_route", "websocket"})
+DEFAULT_PER_RUN = 2
+DEFAULT_INCREMENTAL_MAX = 20
+#: 報告裡列出的清單上限（未歸塊的檔案、route 等），其餘只給數量
+LIST_LIMIT = 50
+
+
+def _str_list(value: Any, where: str, *, required: bool = False) -> list[str]:
+    if value is None and not required:
+        return []
+    if not isinstance(value, list) or not all(isinstance(x, str) and x.strip() for x in value) \
+            or (required and not value):
+        raise CollectError(f"review_units：{where} 要是非空字串清單")
+    return [x.strip() for x in value]
+
+
+def _int(value: Any, where: str, default: int) -> int:
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise CollectError(f"review_units：{where} 要是正整數")
+    return value
+
+
+def validate_units(raw: Any) -> dict[str, Any] | None:
+    """驗證 targets 的 review_units 並補預設值。格式錯一律中止（設定錯不能靜默退回全量）。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - UNITS_KEYS:
+        raise CollectError(f"review_units 只接受 {sorted(UNITS_KEYS)}")
+    units_raw = raw.get("units")
+    if not isinstance(units_raw, list) or not units_raw:
+        raise CollectError("review_units.units 要是非空清單")
+    units: list[dict[str, Any]] = []
+    for i, u in enumerate(units_raw, 1):
+        if not isinstance(u, dict) or set(u) - UNIT_KEYS:
+            raise CollectError(f"review_units 第 {i} 塊只接受 {sorted(UNIT_KEYS)}")
+        name = str(u.get("name") or "")
+        if not UNIT_NAME_RE.match(name):
+            raise CollectError(f"review_units 第 {i} 塊的 name 不合法：{name!r}（小寫英數與 -）")
+        if any(x["name"] == name for x in units):
+            raise CollectError(f"review_units 的 name 重複：{name}")
+        ep = u.get("entry_points") or {}
+        if not isinstance(ep, dict) or set(ep) - UNIT_EP_KEYS:
+            raise CollectError(f"review_units {name}.entry_points 只接受 {sorted(UNIT_EP_KEYS)}")
+        extract = ep.get("extract")
+        if extract is not None and extract not in EXTRACTORS:
+            raise CollectError(f"review_units {name}.entry_points.extract 只能是 {EXTRACTORS}")
+        extra = ep.get("extra") or []
+        if not isinstance(extra, list) or not all(isinstance(e, dict) and isinstance(e.get("route"), str)
+                                                  and e["route"].strip() for e in extra):
+            raise CollectError(f"review_units {name}.entry_points.extra 每項都要有 route")
+        units.append({
+            "name": name, "focus": str(u.get("focus") or "").strip(),
+            "paths": _str_list(u.get("paths"), f"{name}.paths", required=True),
+            "exclude_paths": _str_list(u.get("exclude_paths"), f"{name}.exclude_paths"),
+            "entry_points": {"extract": extract, "auth": _str_list(ep.get("auth"), f"{name}.entry_points.auth"),
+                             "routes": _str_list(ep.get("routes"), f"{name}.entry_points.routes"),
+                             "exclude_routes": _str_list(ep.get("exclude_routes"),
+                                                         f"{name}.entry_points.exclude_routes"),
+                             "extra": [{k: e.get(k) for k in ("route", "file", "auth", "note") if e.get(k)}
+                                       for e in extra]},
+            "review_classes": _str_list(u.get("review_classes"), f"{name}.review_classes"),
+        })
+    return {"per_run": min(_int(raw.get("per_run"), "per_run", DEFAULT_PER_RUN), len(units)),
+            "incremental_max_files": _int(raw.get("incremental_max_files"), "incremental_max_files",
+                                          DEFAULT_INCREMENTAL_MAX),
+            "cover": _str_list(raw.get("cover"), "cover"), "units": units}
+
+
+def _glob_match(path: str, patterns: list[str]) -> bool:
+    """fnmatch（`*` 也吃 `/`）；結尾 `/` 的 pattern 視為目錄前綴。"""
+    for pat in patterns:
+        if pat.endswith("/"):
+            if path.startswith(pat):
+                return True
+        elif fnmatch.fnmatchcase(path, pat):
+            return True
+    return False
+
+
+def _const(node: ast.AST | None) -> Any:
+    if node is None:
+        return None
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.List, ast.Tuple)) and all(isinstance(e, ast.Constant) for e in node.elts):
+        return [e.value for e in node.elts]
+    return f"<{ast.unparse(node)[:80]}>"  # 不是字面值（變數、運算式）：照原樣標示，不猜
+
+
+def extract_routes(src: Path, files: list[str], kind: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """從 Python 原始碼的 decorator 抽出 route。
+
+    - `odoo-route`：`@http.route(...)`／`@route(...)`；auth 省略時是 Odoo 預設的 user、type 預設 http
+    - `fastapi-route`：`@<router>.get/post/…(path)`；router 的 prefix 不展開（只記 router 名）
+    只用 ast.parse 讀結構，不 import、不執行目標程式碼。parse 失敗的檔案列在第二個回傳值。
+    """
+    out: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for rel in files:
+        if not rel.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse((src / rel).read_text(encoding="utf-8", errors="replace"), filename=rel)
+        except (SyntaxError, ValueError, OSError) as exc:
+            errors.append(f"{rel}：{type(exc).__name__}")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                if not isinstance(dec, ast.Call):
+                    continue
+                fn = dec.func
+                attr = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else None
+                kw = {k.arg: k.value for k in dec.keywords if k.arg}
+                first = dec.args[0] if dec.args else None
+                if kind == "odoo-route":
+                    if attr != "route":
+                        continue
+                    paths = _const(first if first is not None else kw.get("route"))
+                    info = {"auth": _const(kw.get("auth")) or "user", "type": _const(kw.get("type")) or "http"}
+                    if "csrf" in kw:
+                        info["csrf"] = _const(kw["csrf"])
+                    if "methods" in kw:
+                        info["methods"] = _const(kw["methods"])
+                else:
+                    if not isinstance(fn, ast.Attribute) or attr not in FASTAPI_METHODS:
+                        continue
+                    paths = _const(first if first is not None else kw.get("path"))
+                    info = {"methods": [attr.upper()], "router": ast.unparse(fn.value)[:40]}
+                for p in (paths if isinstance(paths, list) else [paths]):
+                    out.append({"route": str(p if p is not None else "<無路徑>"), "file": rel, "line": node.lineno,
+                                "func": node.name, **info})
+    return out, errors
+
+
+def _route_filter(routes: list[dict[str, Any]], ep: dict[str, Any]) -> list[dict[str, Any]]:
+    auth = set(ep.get("auth") or [])
+    inc, exc = ep.get("routes") or [], ep.get("exclude_routes") or []
+    return [r for r in routes
+            if (not auth or str(r.get("auth")) in auth)
+            and (not inc or _glob_match(r["route"], inc))
+            and not (exc and _glob_match(r["route"], exc))]
+
+
+def unit_entry_points(src: Path, files: list[str], unit: dict[str, Any]
+                      ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """回傳 (這塊的 entry point, 這些檔案裡抽到的全部 route, parse 錯誤)。"""
+    ep = unit["entry_points"]
+    found, errors = extract_routes(src, files, ep["extract"]) if ep.get("extract") else ([], [])
+    return _route_filter(found, ep) + [dict(e) for e in ep.get("extra") or []], found, errors
+
+
+def select_units(units: list[dict[str, Any]], history: dict[str, Any], per_run: int) -> list[str]:
+    """最久沒審的塊優先（從沒審過的排最前面），同分依 targets 的順序（越前面風險越高）。"""
+    order = sorted(range(len(units)),
+                   key=lambda i: (str((history.get(units[i]["name"]) or {}).get("at") or ""), i))
+    return [units[i]["name"] for i in order[:per_run]]
+
+
+def _size(src: Path, files: list[str]) -> int:
+    return sum((src / f).stat().st_size for f in files if (src / f).is_file())
+
+
+def plan_review(src: Path, conf: dict[str, Any], all_files: list[str], sc: dict[str, Any],
+                history: dict[str, Any], forced: list[str] | None) -> dict[str, Any]:
+    """依 review_units 決定本輪 deep review 審什麼，結果寫進 meta.review（ticket.py 照它產工單）。
+
+    - 全量：挑 per_run 塊（或 --units 指定），各給檔案清單與 entry point；同時對全部塊找漂移：
+      `cover` 裡沒有歸到任何一塊的檔案、抽得到卻沒有任何一塊收的 route、對不到檔案的 paths
+    - 增量：只審落在某一塊裡的變動檔案，依塊的順序最多取 incremental_max_files 個，其餘列為 overflow
+    """
+    units = conf["units"]
+    by_name = {u["name"]: u for u in units}
+    owned = {u["name"]: sorted(f for f in all_files if _glob_match(f, u["paths"])
+                               and not _glob_match(f, u["exclude_paths"])) for u in units}
+    schedule = [{"name": u["name"], "last_reviewed": history.get(u["name"])} for u in units]
+    if sc.get("changed") is not None:
+        present = set(all_files)
+        changed = [f for f in sc["changed"] if f in present]
+        picked: list[str] = []
+        touched: list[str] = []
+        for u in units:  # 依塊的順序排變動檔案；同一個檔案可以屬於多塊（例如同檔不同 route）
+            mine_all = set(owned[u["name"]])
+            hit = [f for f in changed if f in mine_all]
+            if hit:
+                touched.append(u["name"])
+                picked += [f for f in hit if f not in picked]
+        limit = conf["incremental_max_files"]
+        files, overflow = picked[:limit], picked[limit:]
+        eps: list[dict[str, Any]] = []
+        errors: list[str] = []
+        reviewed: list[str] = []
+        for name in touched:
+            mine = [f for f in files if f in set(owned[name])]
+            if not mine:
+                continue  # 這塊的變動檔案都落在 overflow
+            reviewed.append(name)
+            got, _, err = unit_entry_points(src, mine, by_name[name])
+            eps += [e for e in got if e not in eps and (not e.get("file") or e["file"] in mine)]
+            errors += err
+        done = set(picked)
+        outside = [f for f in changed if f not in done]
+        return {"mode": "changed", "files": files, "overflow": overflow, "max_files": limit,
+                "units": reviewed, "touched_units": touched, "entry_points": eps,
+                "outside_units": outside[:LIST_LIMIT], "outside_count": len(outside),
+                "extract_errors": errors, "schedule": schedule}
+    if forced:
+        unknown = [n for n in forced if n not in by_name]
+        if unknown:
+            raise CollectError(f"--units 有不存在的塊：{unknown}（可用：{list(by_name)}）")
+        chosen = list(dict.fromkeys(forced))
+    else:
+        chosen = select_units(units, history, conf["per_run"])
+    out_units: list[dict[str, Any]] = []
+    selected_routes: set[tuple[str, str, int]] = set()
+    all_routes: dict[tuple[str, str, int], dict[str, Any]] = {}
+    errors = []
+    for idx, u in enumerate(units, 1):
+        files = owned[u["name"]]
+        eps, found, err = unit_entry_points(src, files, u)
+        errors += [e for e in err if e not in errors]
+        for r in found:
+            all_routes.setdefault((r["route"], r["file"], r["line"]), r)
+        selected_routes |= {(e["route"], e.get("file") or "", e.get("line") or 0) for e in eps}
+        if u["name"] not in chosen:
+            continue
+        # 對不到快照裡任何檔案的 pattern（設定過期）；被 exclude_paths 扣掉的不算
+        missing = [p for p in u["paths"] if not any(_glob_match(f, [p]) for f in all_files)]
+        out_units.append({"name": u["name"], "order": idx, "focus": u["focus"], "files": files,
+                          "bytes": _size(src, files), "entry_points": eps, "missing_paths": missing,
+                          "review_classes": u["review_classes"], "last_reviewed": history.get(u["name"])})
+    out_units.sort(key=lambda x: chosen.index(x["name"]))
+    in_units = {f for fs in owned.values() for f in fs}
+    unassigned = [f for f in all_files if conf["cover"] and _glob_match(f, conf["cover"]) and f not in in_units]
+    stray = [r for k, r in sorted(all_routes.items()) if k not in selected_routes]
+    nxt = [n for n in select_units(units, history | {n: {"at": "9999"} for n in chosen}, conf["per_run"])]
+    return {"mode": "units", "per_run": conf["per_run"], "total": len(units), "forced": bool(forced),
+            "units": out_units, "next_due": nxt, "schedule": schedule,
+            "unassigned_files": unassigned[:LIST_LIMIT], "unassigned_count": len(unassigned),
+            "unassigned_routes": [{k: r.get(k) for k in ("route", "file", "line", "auth")} for r in stray][:LIST_LIMIT],
+            "unassigned_route_count": len(stray), "extract_errors": errors}
 
 
 # ── 上游 advisory（since_upstream.advisories） ─────────────────────────────────
@@ -663,10 +921,13 @@ def resolve_state_dir(explicit: str | None) -> Path:
 
 
 def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bool = True,
-            targets_dir: Path = TARGETS_DIR, stacks_dir: Path = STACKS_DIR) -> dict[str, Any]:
+            targets_dir: Path = TARGETS_DIR, stacks_dir: Path = STACKS_DIR,
+            units: list[str] | None = None) -> dict[str, Any]:
     repo = repo.resolve()
     if not (repo / ".git").exists():
         raise CollectError(f"不是 git repo：{repo}")
+    if units and mode != "full":
+        raise CollectError("--units 只能搭配 --mode full（指定本輪要審的塊）")
     fetch_error = None
     if fetch:
         res = subprocess.run(["git", "-C", str(repo), "fetch", "--quiet", "origin"], capture_output=True, text=True)
@@ -683,7 +944,13 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
     run_dir.mkdir(parents=True)
 
     cfg = load_config(repo, rev, targets_dir, stacks_dir)
-    last = load_state(state_dir, repo.name).get("last_sha")
+    units_conf = validate_units(cfg.get("review_units"))
+    if units and not units_conf:
+        raise CollectError(f"targets/{repo.name}.yaml 沒有 review_units，不能用 --units")
+    if units_conf:
+        cfg["review_units"] = units_conf
+    state = load_state(state_dir, repo.name)
+    last = state.get("last_sha")
     sc = scope(repo, head, last, mode)
     src = run_dir / "src"
     unsafe_members = snapshot(repo, head, src)
@@ -705,6 +972,17 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
         owned = set(fork["files"])
         files = [f for f in files if f in owned]
     config_changed = any(p.startswith(".security/") for p in (sc["changed"] or []))
+    review = None
+    if units_conf:
+        if sc["changed"] is None:
+            universe = files
+        else:
+            universe = sorted(f for f in (str(p.relative_to(src)) for p in src.rglob("*") if p.is_file())
+                              if not is_excluded(f, excludes))
+            if fork is not None:
+                fork_files = set(fork["files"])
+                universe = [f for f in universe if f in fork_files]
+        review = plan_review(src, units_conf, universe, sc, state.get("units") or {}, units)
 
     if sc["mode"] == "incremental" and not sc["changed"]:
         findings, tools = [], {"_all": {"status": "skipped", "detail": "沒有新 commit"}}
@@ -733,7 +1011,7 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
         "repo": cfg["repo"]["full_name"], "repo_path": str(repo), "branch": branch, "head_sha": head,
         "last_sha": last, "scope": sc, "files_scanned": len(files), "scanned_files": files,
         "deleted_files": deleted, "upstream": upstreams, "fork": fork, "tool_scanned": tool_scanned,
-        "stack": (cfg.get("stack") or {}).get("name"),
+        "stack": (cfg.get("stack") or {}).get("name"), "review": review,
         "config_changed": config_changed,
         "unsafe_members": unsafe_members,
         "config_sources": cfg.pop("_sources"), "fetch_error": fetch_error, "findings": len(findings),
@@ -750,14 +1028,25 @@ def cmd_run(repo: Path, run_root: Path, mode: str, state_dir: Path, *, fetch: bo
 
 
 def cmd_commit(run_dir: Path, state_dir: Path) -> dict[str, Any]:
+    """推進 last_sha；分塊輪審的輪次另外記下哪幾塊審完（有併入回報的才算，worker 沒回報的下輪再排）。"""
     meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
     name = Path(meta["repo_path"]).name
     path = state_dir / "repos" / f"{name}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    state = {"last_sha": meta["head_sha"], "repo": meta["repo"],
-             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    state = load_state(state_dir, name) | {"last_sha": meta["head_sha"], "repo": meta["repo"], "updated_at": now}
+    review = meta.get("review") or {}
+    done: list[str] = []
+    if review.get("mode") == "units":
+        planned = {u["name"] for u in review.get("units") or []}
+        imported = {r.get("unit") for r in read_jsonl(run_dir / "review_imports.jsonl") if r.get("accepted")}
+        done = sorted(planned & imported)
+        history = dict(state.get("units") or {})
+        for unit in done:
+            history[unit] = {"at": now, "head_sha": meta["head_sha"], "run": run_dir.parent.name}
+        state["units"] = history
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    return state
+    return state | {"units_reviewed": done} if review.get("mode") == "units" else state
 
 
 VALID_SEVERITIES = ("info", "low", "medium", "high", "critical")
@@ -936,7 +1225,21 @@ def build_finding(run_dir: Path, row: dict[str, Any], tool: str, prior: set[str]
     return finding, warnings
 
 
-def cmd_import(run_dir: Path, source: Path, tool: str = "review") -> dict[str, Any]:
+def _import_unit(run_dir: Path, unit: str | None) -> str | None:
+    """分塊輪審的回報一定要帶 --unit（commit 依它記下哪塊審完）；不是分塊輪次就不能帶。"""
+    meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
+    review = meta.get("review") or {}
+    if review.get("mode") != "units":
+        if unit:
+            raise CollectError("本輪不是分塊輪審（meta.review.mode 不是 units），不用帶 --unit")
+        return None
+    names = [u["name"] for u in review.get("units") or []]
+    if unit not in names:
+        raise CollectError(f"分塊輪審的回報要帶 --unit，值是本輪的塊之一：{names}")
+    return unit
+
+
+def cmd_import(run_dir: Path, source: Path, tool: str = "review", unit: str | None = None) -> dict[str, Any]:
     """把 deep review worker 回報（JSON lines）正規化後併入本輪。
 
     每行依 `type` 分流：
@@ -947,7 +1250,10 @@ def cmd_import(run_dir: Path, source: Path, tool: str = "review") -> dict[str, A
     - 舊格式（rule、path、message；選填 line、severity）照收，fingerprint 仍用行內容
 
     worker 回報的內容不可信：路徑必須在快照內，格式錯的行一律丟棄並列在 rejected。
+    分塊輪審（meta.review.mode=units）一定要帶 unit：finding／hardening／coverage 都標上塊名，
+    並在 review_imports.jsonl 記一筆，`commit` 才會把這塊記為審完。
     """
+    unit = _import_unit(run_dir, unit)
     src = (run_dir / "src").resolve()
     existing = {f["fingerprint"] for f in read_jsonl(run_dir / "findings.jsonl")}
     prior = prior_fingerprints(run_dir)
@@ -978,14 +1284,14 @@ def cmd_import(run_dir: Path, source: Path, tool: str = "review") -> dict[str, A
                     raise ValueError("hardening 缺少 note")
                 hid = hashlib.sha1(f"{path}:{note}".encode("utf-8")).hexdigest()[:12]
                 extra["hardening"].append({"id": hid, "path": path, "line": _line(row.get("line")),
-                                           "note": note, "source": tool})
+                                           "note": note, "source": tool, **({"unit": unit} if unit else {})})
                 continue
             elif kind == "coverage":
                 status = str(row.get("status") or "")
                 if status not in COVERAGE_STATUS or not _text(row.get("entry")):
                     raise ValueError(f"coverage 要有 entry 與 status（{COVERAGE_STATUS}）")
                 extra["coverage"].append({"entry": _text(row["entry"], 300), "status": status,
-                                          "note": _text(row.get("note"), 500)})
+                                          "note": _text(row.get("note"), 500), **({"unit": unit} if unit else {})})
                 continue
             elif kind == "prior":
                 status = str(row.get("status") or "")
@@ -999,6 +1305,8 @@ def cmd_import(run_dir: Path, source: Path, tool: str = "review") -> dict[str, A
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             rejected.append(f"第 {n} 行：{exc}")
             continue
+        if unit:
+            f["unit"] = unit
         if f["fingerprint"] not in existing:
             existing.add(f["fingerprint"])
             added.append(f)
@@ -1015,8 +1323,16 @@ def cmd_import(run_dir: Path, source: Path, tool: str = "review") -> dict[str, A
             with open(run_dir / name, "a", encoding="utf-8") as fh:
                 for r in new:
                     fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-    return {"added": len(added), "hardening": len(extra["hardening"]), "coverage": len(extra["coverage"]),
-            "prior": len(extra["prior"]), "rejected": rejected, "warnings": warnings}
+    out = {"added": len(added), "hardening": len(extra["hardening"]), "coverage": len(extra["coverage"]),
+           "prior": len(extra["prior"]), "rejected": rejected, "warnings": warnings}
+    if unit:
+        accepted = len(added) + len(extra["hardening"]) + len(extra["coverage"]) + len(extra["prior"])
+        with open(run_dir / "review_imports.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"unit": unit, "accepted": accepted, "rejected": len(rejected),
+                                 "ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")},
+                                ensure_ascii=False) + "\n")
+        out["unit"] = unit
+    return out
 
 
 def cmd_verdict(run_dir: Path, finding_id: str, source: Path) -> dict[str, Any]:
@@ -1101,11 +1417,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run-root", required=True)
     p.add_argument("--mode", choices=("incremental", "full"), default="incremental")
     p.add_argument("--no-fetch", action="store_true")
+    p.add_argument("--units", help="分塊輪審：本輪指定要審的塊（逗號分隔，只能搭配 --mode full；手動試跑用）")
     p = sub.add_parser("commit")
     p.add_argument("--run-dir", required=True)
     p = sub.add_parser("import", help="併入 deep review worker 回報（finding／hardening／coverage／prior）")
     p.add_argument("--run-dir", required=True)
     p.add_argument("--input", required=True, help="JSON lines；格式見 skills/sec-dispatch/SKILL.md")
+    p.add_argument("--unit", help="分塊輪審：這份回報屬於哪一塊（ticket review 輸出的 unit）")
     p = sub.add_parser("verdict", help="套用驗證者的結論（triage 之前）")
     p.add_argument("--run-dir", required=True)
     p.add_argument("--finding-id", required=True)
@@ -1120,7 +1438,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd in ("import", "verdict", "promote"):
             run_dir = Path(args.run_dir)
             if args.cmd == "import":
-                out = cmd_import(run_dir, Path(args.input))
+                out = cmd_import(run_dir, Path(args.input), unit=args.unit)
             elif args.cmd == "verdict":
                 out = cmd_verdict(run_dir, args.finding_id, Path(args.input))
             else:
@@ -1131,7 +1449,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "preset":
             out = cmd_preset(args.name, sdir)
         elif args.cmd == "run":
-            out = cmd_run(Path(args.repo_path), Path(args.run_root), args.mode, sdir, fetch=not args.no_fetch)
+            units = [u.strip() for u in (args.units or "").split(",") if u.strip()] or None
+            out = cmd_run(Path(args.repo_path), Path(args.run_root), args.mode, sdir, fetch=not args.no_fetch,
+                          units=units)
         else:
             out = cmd_commit(Path(args.run_dir), sdir)
         print(json.dumps(out, ensure_ascii=False, indent=2))

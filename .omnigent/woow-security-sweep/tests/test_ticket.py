@@ -26,11 +26,18 @@ class SourceBlocksTest(unittest.TestCase):
 
     def test_every_target_review_class_resolves(self):
         for path in sorted((SWEEP / "targets").glob("*.yaml")):
-            refs = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("review_classes") or []
-            with self.subTest(target=path.name):
-                blocks, missing = tk.resolve_classes(refs)
-                self.assertEqual(missing, [])
-                self.assertTrue(blocks)
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            groups = {"": data.get("review_classes") or []}
+            # 分塊各自的 review_classes（#2064 階段 C）也要找得到原文
+            groups |= {f"#{u.get('name')}": u["review_classes"]
+                       for u in (data.get("review_units") or {}).get("units") or [] if u.get("review_classes")}
+            for where, refs in groups.items():
+                if not refs and where:
+                    continue
+                with self.subTest(target=path.name + where):
+                    blocks, missing = tk.resolve_classes(refs)
+                    self.assertEqual(missing, [])
+                    self.assertTrue(blocks or not data.get("review_classes"))
 
     def test_every_stack_review_class_resolves(self):
         for path in sorted((SWEEP / "stacks").glob("*.yaml")):
@@ -165,6 +172,83 @@ class TicketTest(unittest.TestCase):
             tk.verify_ticket(self.run, "t1")  # 工具 finding 不走驗證者
         with self.assertRaises(tk.TicketError):
             tk.verify_ticket(self.run, "missing")
+
+
+    def use_units(self) -> None:
+        """#2064 階段 C：分塊輪審的 meta.review 與 config.review_units。"""
+        cfg = json.loads((self.run / "config.json").read_text(encoding="utf-8"))
+        cfg["review_units"] = {"units": [{"name": "unauth", "review_classes": []},
+                                         {"name": "front", "review_classes": ["CLIENT-SIDE.md#DOM-based XSS"]}]}
+        (self.run / "config.json").write_text(json.dumps(cfg, ensure_ascii=False))
+        meta = json.loads((self.run / "meta.json").read_text(encoding="utf-8"))
+        meta["scope"] = {"mode": "full", "changed": None, "reason": "full"}
+        meta["deleted_files"] = []
+        meta["review"] = {"mode": "units", "total": 3, "units": [
+            {"name": "unauth", "order": 1, "focus": "不需登入的入口", "files": ["controllers/a.py"], "bytes": 4096,
+             "entry_points": [{"route": "/ha/a", "file": "controllers/a.py", "line": 6, "func": "a", "auth": "none",
+                               "type": "json", "csrf": False}],
+             "missing_paths": ["gone/"], "review_classes": [], "last_reviewed": None},
+            {"name": "front", "order": 3, "focus": "", "files": ["static/x.js"], "bytes": 10, "entry_points": [],
+             "missing_paths": [], "review_classes": ["CLIENT-SIDE.md#DOM-based XSS"],
+             "last_reviewed": {"at": "2026-10-20T00:00:00+00:00"}}]}
+        (self.run / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+
+    def test_units_one_ticket_per_unit(self):
+        self.use_units()
+        out = tk.review_ticket(self.run, self.state)
+        self.assertEqual([t["unit"] for t in out["tickets"]], ["unauth", "front"])
+        self.assertNotIn("ticket", out)  # 多張工單：只看 tickets
+        unauth = Path(out["tickets"][0]["ticket"]).read_text(encoding="utf-8")
+        front = Path(out["tickets"][1]["ticket"]).read_text(encoding="utf-8")
+        self.assertTrue(out["tickets"][0]["ticket"].endswith("tickets/review-unauth.md"))
+        self.assertIn("**分塊輪審**，本塊 `unauth`（targets 第 1 塊，共 3 塊；上次審：從未）", unauth)
+        self.assertIn("本塊重點：不需登入的入口", unauth)
+        self.assertIn("`gone/`", unauth)
+        self.assertIn("- `/ha/a`（controllers/a.py:6 `a`，auth=none，type=json，csrf=False）", unauth)
+        self.assertIn("review:sudo-without-check:controllers/a.py:abc", unauth)
+        self.assertIn("semgrep `python.x` controllers/a.py:1", unauth)
+        self.assertIn("### odoo.md#Validation rules", unauth)  # 沒寫 review_classes 的塊用 target 的
+        self.assertIn("上次審：2026-10-20", front)
+        self.assertNotIn("review:sudo-without-check", front)  # 別塊的 finding 不列
+        self.assertIn("另有 1 筆在本輪範圍以外的檔案", front)
+        self.assertNotIn("python.x", front)
+        self.assertIn("### CLIENT-SIDE.md#DOM-based XSS", front)
+        self.assertNotIn("odoo.md#", front)
+        prior = json.loads((self.run / "prior_findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(prior), 1)  # import 驗 fingerprint 用：存全部
+
+    def test_changed_without_unit_files_skips(self):
+        self.use_units()
+        meta = json.loads((self.run / "meta.json").read_text(encoding="utf-8"))
+        meta["review"] = {"mode": "changed", "files": [], "overflow": [], "units": [], "outside_count": 4,
+                          "entry_points": []}
+        (self.run / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+        out = tk.review_ticket(self.run, self.state)
+        self.assertEqual(out["tickets"], [])
+        self.assertIn("不派 deep review", out["skip"])
+        meta["review"] = {"mode": "changed", "files": ["controllers/a.py"], "overflow": ["static/x.js"],
+                          "max_files": 1, "units": ["front"], "outside_count": 4, "entry_points": []}
+        (self.run / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+        out = tk.review_ticket(self.run, self.state)
+        text = Path(out["ticket"]).read_text(encoding="utf-8")
+        self.assertIn("只審落在分塊裡的變動檔案（涉及的塊：front）", text)
+        self.assertIn("另有 1 個變動檔案超過本輪上限 1 個", text)
+        self.assertIn("另有 4 個變動檔案不屬於任何分塊", text)
+        self.assertIn("`/demo/login`", text)  # targets 手寫的 entry point 落在本輪檔案裡也列
+        self.assertIn("### CLIENT-SIDE.md#DOM-based XSS", text)
+
+    def test_verify_ticket_units_brief_scope(self):
+        self.use_units()
+        row = {"id": "f9", "tool": "review", "fingerprint": "review:email-link", "verdict": "needs_validation",
+               "title": "t", "path": "controllers/a.py", "line": 1, "unit": "unauth",
+               "trace": [{"kind": "sink", "file": "controllers/a.py", "line": 1, "description": "d"}],
+               "blockers": ["b"], "validation_plan": {"local": "l"}}
+        with open(self.run / "findings.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        text = Path(tk.verify_ticket(self.run, "f9")["ticket"]).read_text(encoding="utf-8")
+        scope = text.split("## repo 上下文", 1)[0]
+        self.assertIn("本輪是分塊輪審", scope)
+        self.assertNotIn("static/x.js", scope)
 
 
 if __name__ == "__main__":

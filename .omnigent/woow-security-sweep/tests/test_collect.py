@@ -553,5 +553,208 @@ class AdvisoryTest(unittest.TestCase):
         self.assertEqual((found, status["status"], paths), ([], "unavailable", []))
 
 
+
+ROUTES_A = """from odoo import http
+from odoo.http import route
+
+class A(http.Controller):
+    @http.route(['/ha/a', '/ha/b'], type='json', auth='none', csrf=False)
+    def a(self):
+        pass
+
+    @route('/api/ws/<int:wid>/x', auth='user')
+    def b(self):
+        pass
+
+    @route(ROUTE_CONST, auth='public')
+    def c(self):
+        pass
+
+    @http.route('/legacy/old', auth='user')
+    def d(self):
+        pass
+"""
+
+ROUTES_OP = """from fastapi import APIRouter
+router = APIRouter(prefix="/api")
+
+@router.get("/releases/{name}")
+async def get_release(name: str):
+    raise SystemExit("ast 不會執行這裡")
+
+@router.post(path="/releases")
+def create():
+    pass
+"""
+
+UNITS_TARGET = """review_units:
+  per_run: 1
+  incremental_max_files: 1
+  cover: [controllers/, models/]
+  units:
+    - name: unauth
+      focus: 不需登入的入口
+      paths: [controllers/a.py]
+      entry_points: {extract: odoo-route, auth: [none, public]}
+    - name: ws-api
+      paths: [controllers/a.py, models/x.py]
+      entry_points: {extract: odoo-route, auth: [user], routes: ["/api/ws/*"]}
+      review_classes: ["ATTACK-CLASSES.md#Business logic"]
+    - name: operator
+      paths: [op/*.py, gone/, controllers/]
+      exclude_paths: [controllers/]
+      entry_points: {extract: fastapi-route, extra: [{route: "kubectl exec", note: "手動列的入口"}]}
+"""
+
+
+class UnitsConfigTest(unittest.TestCase):
+    """#2064 階段 C：review_units 格式錯一律中止，不能靜默退回全量。"""
+
+    def test_defaults_and_clamp(self):
+        conf = cl.validate_units({"per_run": 9, "units": [{"name": "a", "paths": ["x/"]}]})
+        self.assertEqual((conf["per_run"], conf["incremental_max_files"]), (1, cl.DEFAULT_INCREMENTAL_MAX))
+        self.assertIsNone(cl.validate_units(None))
+
+    def test_rejects_bad_config(self):
+        bad = [
+            {"units": []},
+            {"units": [{"name": "a", "paths": ["x"]}], "extra": 1},
+            {"units": [{"name": "A b", "paths": ["x"]}]},
+            {"units": [{"name": "a", "paths": ["x"]}, {"name": "a", "paths": ["y"]}]},
+            {"units": [{"name": "a"}]},
+            {"units": [{"name": "a", "paths": ["x"], "entry_points": {"extract": "django"}}]},
+            {"units": [{"name": "a", "paths": ["x"], "entry_points": {"extra": [{"note": "沒有 route"}]}}]},
+            {"per_run": 0, "units": [{"name": "a", "paths": ["x"]}]},
+            {"per_run": True, "units": [{"name": "a", "paths": ["x"]}]},
+        ]
+        for raw in bad:
+            with self.subTest(raw=raw), self.assertRaises(cl.CollectError):
+                cl.validate_units(raw)
+
+
+class TargetsUnitsTest(unittest.TestCase):
+    def test_every_target_review_units_valid(self):
+        import yaml
+        for path in sorted((SWEEP / "targets").glob("*.yaml")):
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if "review_units" in data:
+                with self.subTest(target=path.name):
+                    conf = cl.validate_units(data["review_units"])
+                    self.assertGreaterEqual(len(conf["units"]), conf["per_run"])
+
+
+class ExtractRoutesTest(unittest.TestCase):
+    def test_odoo_and_fastapi(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "a.py").write_text(ROUTES_A)
+            (src / "op.py").write_text(ROUTES_OP)
+            (src / "broken.py").write_text("def x(:\n")
+            rows, errors = cl.extract_routes(src, ["a.py", "broken.py", "README.md"], "odoo-route")
+            by = {r["route"]: r for r in rows}
+            self.assertEqual(by["/ha/a"], {"route": "/ha/a", "file": "a.py", "line": 6, "func": "a", "auth": "none",
+                                           "type": "json", "csrf": False})
+            self.assertIn("/ha/b", by)
+            self.assertEqual(by["/api/ws/<int:wid>/x"]["auth"], "user")
+            self.assertIn("<ROUTE_CONST>", by)  # 不是字面值：照原樣標示
+            self.assertEqual(errors, ["broken.py：SyntaxError"])
+            rows, _ = cl.extract_routes(src, ["op.py"], "fastapi-route")
+            self.assertEqual([(r["route"], r["methods"], r["router"]) for r in rows],
+                             [("/releases/{name}", ["GET"], "router"), ("/releases", ["POST"], "router")])
+
+
+class UnitsRunTest(RepoFixture):
+    def setUp(self):
+        super().setUp()
+        (self.repo / "controllers").mkdir()
+        (self.repo / "controllers" / "a.py").write_text(ROUTES_A)
+        (self.repo / "models" / "y.py").write_text("z = 1\n")  # cover 內但不屬於任何塊
+        (self.repo / "op").mkdir()
+        (self.repo / "op" / "api.py").write_text(ROUTES_OP)
+        (self.repo / "README.md").write_text("doc\n")
+        self.commit("add units fixture")
+        (self.targets / "demo.yaml").write_text(UNITS_TARGET)
+
+    def run_once(self, mode="full", units=None):
+        return cl.cmd_run(self.repo, self.runs, mode, self.state, fetch=False, targets_dir=self.targets, units=units)
+
+    def report(self, run_dir: Path, rows: list[dict]) -> Path:
+        path = run_dir.parent / f"report-{len(list(run_dir.parent.glob('report-*')))}.jsonl"
+        path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
+        return path
+
+    def test_rotation_follows_imports(self):
+        meta = self.run_once()
+        review = meta["review"]
+        self.assertEqual(review["mode"], "units")
+        self.assertEqual([u["name"] for u in review["units"]], ["unauth"])
+        unit = review["units"][0]
+        self.assertEqual(unit["files"], ["controllers/a.py"])
+        self.assertEqual(sorted(e["route"] for e in unit["entry_points"]), ["/ha/a", "/ha/b", "<ROUTE_CONST>"])
+        self.assertEqual(review["next_due"], ["ws-api"])
+        self.assertEqual(review["unassigned_files"], ["models/y.py"])
+        self.assertEqual([r["route"] for r in review["unassigned_routes"]], ["/legacy/old"])
+        run_dir = Path(meta["run_dir"])
+        cov = self.report(run_dir, [{"type": "coverage", "entry": "/ha/a", "status": "reviewed"}])
+        with self.assertRaisesRegex(cl.CollectError, "--unit"):
+            cl.cmd_import(run_dir, cov)
+        with self.assertRaisesRegex(cl.CollectError, "--unit"):
+            cl.cmd_import(run_dir, cov, unit="ws-api")  # 不是本輪的塊
+        out = cl.cmd_import(run_dir, cov, unit="unauth")
+        self.assertEqual((out["coverage"], out["unit"]), (1, "unauth"))
+        cov_rows = [json.loads(x) for x in (run_dir / "coverage.jsonl").read_text().splitlines()]
+        self.assertEqual(cov_rows[0]["unit"], "unauth")
+        state = cl.cmd_commit(run_dir, self.state)
+        self.assertEqual(state["units_reviewed"], ["unauth"])
+        self.assertIn("unauth", state["units"])
+        # 第二輪輪到下一塊；last_sha 與分塊進度都保留
+        meta = self.run_once()
+        self.assertEqual([u["name"] for u in meta["review"]["units"]], ["ws-api"])
+        ws = meta["review"]["units"][0]
+        self.assertEqual([e["route"] for e in ws["entry_points"]], ["/api/ws/<int:wid>/x"])
+        self.assertEqual(ws["review_classes"], ["ATTACK-CLASSES.md#Business logic"])
+        cl.cmd_commit(Path(meta["run_dir"]), self.state)  # worker 沒回報：這塊不算審完
+        saved = json.loads((self.state / "repos" / "demo.json").read_text())
+        self.assertEqual(sorted(saved["units"]), ["unauth"])
+        self.assertEqual(saved["last_sha"], meta["head_sha"])
+        meta = self.run_once()
+        self.assertEqual([u["name"] for u in meta["review"]["units"]], ["ws-api"])
+
+    def test_forced_units_and_missing_paths(self):
+        meta = self.run_once(units=["operator"])
+        unit = meta["review"]["units"][0]
+        self.assertTrue(meta["review"]["forced"])
+        self.assertEqual(unit["files"], ["op/api.py"])
+        self.assertEqual(unit["missing_paths"], ["gone/"])
+        self.assertEqual([e["route"] for e in unit["entry_points"]], ["/releases/{name}", "/releases", "kubectl exec"])
+        with self.assertRaisesRegex(cl.CollectError, "不存在的塊"):
+            self.run_once(units=["nope"])
+        with self.assertRaisesRegex(cl.CollectError, "--mode full"):
+            self.run_once(mode="incremental", units=["unauth"])
+
+    def test_incremental_reviews_only_unit_files_with_cap(self):
+        cl.cmd_commit(Path(self.run_once()["run_dir"]), self.state)
+        (self.repo / "controllers" / "a.py").write_text(ROUTES_A + "\n# touched\n")
+        (self.repo / "op" / "api.py").write_text(ROUTES_OP + "\n# touched\n")
+        (self.repo / "README.md").write_text("doc 2\n")
+        self.commit("touch")
+        meta = self.run_once(mode="incremental")
+        review = meta["review"]
+        self.assertEqual(review["mode"], "changed")
+        self.assertEqual((review["files"], review["overflow"]), (["controllers/a.py"], ["op/api.py"]))
+        self.assertEqual((review["units"], review["outside_count"]), (["unauth", "ws-api"], 1))
+        self.assertEqual(sorted(e["route"] for e in review["entry_points"]),
+                         ["/api/ws/<int:wid>/x", "/ha/a", "/ha/b", "<ROUTE_CONST>"])
+        with self.assertRaisesRegex(cl.CollectError, "不用帶 --unit"):
+            cl.cmd_import(Path(meta["run_dir"]), self.report(Path(meta["run_dir"]), [{"type": "coverage",
+                          "entry": "x", "status": "reviewed"}]), unit="unauth")
+
+    def test_target_without_units_has_no_review(self):
+        (self.targets / "demo.yaml").write_text("context: {summary: x}\n")
+        self.assertIsNone(self.run_once()["review"])
+        with self.assertRaisesRegex(cl.CollectError, "沒有 review_units"):
+            self.run_once(units=["unauth"])
+
+
 if __name__ == "__main__":
     unittest.main()

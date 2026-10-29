@@ -171,6 +171,7 @@ targets 的欄位：
 | `context`、`review_focus`、`review_classes` | deep review 工單的上下文與攻擊類別（`review_classes` 沒寫用 stack 的預設） |
 | `history`、`baseline` | 已修項目與接受／追蹤的 finding |
 | `disclosure` | `issues_to`（`owner/name`，必須非 public）、`high_fix_via`（`github_security_advisory`／`internal_security_repo`／`private_pr`；舊欄位 `fix_via` 仍可讀） |
+| `review_units` | 大 repo 才寫：deep review 分塊輪審（見下方「分塊輪審」）。掃描工具不受影響 |
 
 private 不能放寬 public 的規則（`scan_exclude` 只補在 stack 預設上）。`.security/` 有任何變動 ⇒
 自動產生 `security-config-changed` finding、必轉人工（防止有人在 PR 裡偷加豁免）。
@@ -184,9 +185,10 @@ private 不能放寬 public 的規則（`scan_exclude` 只補在 stack 預設上
 | `WOOW/Woow_ha_mcp_addons` | ha-addon | GitHub public（`claude-delivery`） | 全部（排除 3 個雜湊資料檔） | mirror-internal 鏡像 | GitHub Security Advisory |
 | `ha-components/woow_paas_smart_home` | ha-component | Gitea public org | 全部 | mirror-internal 鏡像 | mirror-internal `<repo>-security` |
 | `ha-components/Woow_ha_ai_mcp-shc` | ha-component | Gitea public org（homeassistant-ai/ha-mcp 的 fork） | 只掃 WOOWTECH 改過的檔案＋上游 advisory | mirror-internal 鏡像 | mirror-internal `<repo>-security`；上游問題照上游 SECURITY.md |
+| `paas/woow_paas_platform` | odoo | Gitea private org（`develop`） | 工具掃全部；deep review 分 13 塊輪審 | repo 本身 | 直接開 PR |
 
 `ha-components/Woow_ha_mcp_addons` 是 `WOOW/Woow_ha_mcp_addons` 的唯讀 mirror，不另外掃。
-`odoo-addons/woow_paas_platform` 待 #2064 階段 C（分塊輪流審）。
+`woow_paas_platform` 的上游快照是同層的 `paas/paas-odoo-ci`（依賴的 Odoo addon 都在它的 `addons/`）。
 
 ## deep review（#2064）
 
@@ -207,6 +209,40 @@ private 不能放寬 public 的規則（`scan_exclude` 只補在 stack 預設上
 - **驗證者**：只在 `deep_review: always`（每週）派，每筆一個新 session、每輪最多 10 筆；rejected 的移到
   `rejected.jsonl`，下一輪工單會帶上，避免重報同一個被推翻的說法。
 - **needs_validation 一律轉人工**（`jev_gate` 路由），Jev 另外會收到 trace 與 blocker。
+
+### 分塊輪審（#2064 階段 C）
+
+repo 大到一個 worker 讀不完時（`woow_paas_platform`：`cloud_service.py` 一檔 726 KB），在 targets 寫 `review_units`：
+
+```yaml
+review_units:
+  per_run: 2                 # 每次全量輪次審幾塊（最久沒審的優先；從沒審過的依順序）
+  incremental_max_files: 20  # 增量輪次最多審幾個變動檔案（依塊的順序取，其餘列為 overflow）
+  cover: [src/controllers/]  # 這些路徑底下沒歸到任何塊的檔案會列進報告
+  units:                     # 順序＝風險順序
+    - name: unauth-routes
+      focus: 這塊要特別看什麼
+      paths: [src/controllers/]          # fnmatch，`*` 也吃 `/`；結尾 `/` 是目錄
+      exclude_paths: []                  # 從 paths 扣掉（選填）
+      entry_points:
+        extract: odoo-route              # odoo-route｜fastapi-route：用 ast 抽 decorator，不執行程式碼
+        auth: [none, public]             # odoo-route 才有 auth
+        routes: ["/api/*"]               # 只收這些 route（選填）
+        exclude_routes: []               # 排除（選填）
+        extra: [{route: "...", file: "...", note: "..."}]   # 抽不到的入口手動列
+      review_classes: []                 # 寫了就取代 target 的 review_classes
+```
+
+- **全量輪次**：挑 `per_run` 塊，每塊一張工單（`tickets/review-<塊>.md`）、各派一個 worker；工單只列這塊的檔案、
+  entry point（ast 抽出的 route，含行號）、範圍內的前幾輪 finding 與工具 finding。worker 從 entry point 順著呼叫鏈讀，
+  呼叫到別塊的檔案照樣讀。`collect import --unit <塊>` 併入後，`collect commit` 才把該塊記為審完（記在
+  `<state>/repos/<repo>.json` 的 `units`）；worker 沒回報的塊下一輪會再排到。
+- **增量輪次**：只審落在某塊裡的變動檔案，最多 `incremental_max_files` 個；沒有就不派 deep review。
+- **漂移**：`meta.review` 列出 `cover` 底下沒歸塊的檔案、抽得到卻沒有任何塊收的 route、對不到檔案的 paths，
+  報告要寫出來（新加的 controller 不能默默沒人審）。
+- **review 的 finding 不會因為某輪沒審到就結案**：carryover 只用掃描工具的狀態判斷「沒再偵測到」，
+  deep review 的 finding 要人決定或檔案刪除才結案。
+- 手動試跑：`collect run --mode full --units <塊>,<塊>`。
 
 ## Jev（TypeSafe System One）
 
