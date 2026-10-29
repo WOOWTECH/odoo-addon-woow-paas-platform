@@ -456,11 +456,19 @@ def doctor_targets(ws: Path) -> tuple[list[Path], str]:
 
     無效 preset（檔名不合規則、cmd_preset 丟例外）略過，不影響其他 preset；依出現順序去重。
     一個有效 preset 都沒有（含 presets 目錄不存在）⇒ 退回 DEFAULT_TARGETS。回傳 (targets, 來源)，來源是 presets／default。
+    沒有任何 preset 檔時不載入 collect；collect 載入失敗（例如沒裝 PyYAML）也退回 DEFAULT_TARGETS。
     """
     sdir = state_dir(ws)
-    collect = _load_collect()
+    default = ([ws / t for t in DEFAULT_TARGETS], "default")
+    files = sorted((sdir / "presets").glob("*.yaml"))
+    if not files:
+        return default
+    try:
+        collect = _load_collect()
+    except Exception:  # noqa: BLE001 —— 環境問題（缺 PyYAML 等）交給 doctor 的 python 檢查項回報，doctor 不能因此 crash
+        return default
     seen: dict[str, None] = {}
-    for path in sorted((sdir / "presets").glob("*.yaml")):
+    for path in files:
         try:
             targets = collect.cmd_preset(path.stem, sdir)["targets"]
         except Exception:  # noqa: BLE001 —— 壞 preset 只是不納入，不能讓 doctor 本身失敗
@@ -469,7 +477,7 @@ def doctor_targets(ws: Path) -> tuple[list[Path], str]:
             seen.setdefault(target)
     if seen:
         return [Path(t) for t in seen], "presets"
-    return [ws / t for t in DEFAULT_TARGETS], "default"
+    return default
 
 
 def doctor(ws: Path, targets: list[Path], *, call_api: bool, api_factory: Callable[[str, str | None], Any] = Api,

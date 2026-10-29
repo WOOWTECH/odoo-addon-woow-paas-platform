@@ -258,6 +258,15 @@ class DoctorTargetsTest(Base):
         (self.sdir / "presets" / "broken.yaml").write_text("targets: []\n")
         self.assertEqual(su.doctor_targets(self.ws)[1], "default")
 
+    def test_no_preset_does_not_load_collect(self):
+        with mock.patch.object(su, "_load_collect", side_effect=AssertionError("不該載入")):
+            self.assertEqual(su.doctor_targets(self.ws), ([self.ws / t for t in su.DEFAULT_TARGETS], "default"))
+
+    def test_collect_load_failure_falls_back_to_default(self):
+        su.write_preset(self.ws, "good", [str(self.repo("good"))], "incremental", "auto", None, None)
+        with mock.patch.object(su, "_load_collect", side_effect=ModuleNotFoundError("yaml")):
+            self.assertEqual(su.doctor_targets(self.ws), ([self.ws / t for t in su.DEFAULT_TARGETS], "default"))
+
     def test_doctor_reports_targets_from(self):
         with mock.patch.object(su, "omnigent_config", return_value={}), \
                 mock.patch.object(su, "check_python", return_value=su.check("python", su.OK, "x")), \
