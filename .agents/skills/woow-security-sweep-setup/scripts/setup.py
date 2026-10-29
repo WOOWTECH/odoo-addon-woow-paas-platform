@@ -451,8 +451,29 @@ def check_schedules(api: Any, record: dict[str, Any] | None, host_id: str | None
     return out
 
 
+def doctor_targets(ws: Path) -> tuple[list[Path], str]:
+    """doctor／launch check 沒指定 targets 時要檢查的 repo：<state>/presets 全部有效 preset 的 targets 聯集。
+
+    無效 preset（檔名不合規則、cmd_preset 丟例外）略過，不影響其他 preset；依出現順序去重。
+    一個有效 preset 都沒有（含 presets 目錄不存在）⇒ 退回 DEFAULT_TARGETS。回傳 (targets, 來源)，來源是 presets／default。
+    """
+    sdir = state_dir(ws)
+    collect = _load_collect()
+    seen: dict[str, None] = {}
+    for path in sorted((sdir / "presets").glob("*.yaml")):
+        try:
+            targets = collect.cmd_preset(path.stem, sdir)["targets"]
+        except Exception:  # noqa: BLE001 —— 壞 preset 只是不納入，不能讓 doctor 本身失敗
+            continue
+        for target in targets:
+            seen.setdefault(target)
+    if seen:
+        return [Path(t) for t in seen], "presets"
+    return [ws / t for t in DEFAULT_TARGETS], "default"
+
+
 def doctor(ws: Path, targets: list[Path], *, call_api: bool, api_factory: Callable[[str, str | None], Any] = Api,
-           tea_login: str = "git-prod") -> dict[str, Any]:
+           tea_login: str = "git-prod", targets_from: str = "args") -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     bundle = ws / "paas/woow_paas_platform" / BUNDLE_REL
     checks.append(check("workspace", OK if bundle.is_dir() else FAIL, f"workspace {ws}",
@@ -477,7 +498,7 @@ def doctor(ws: Path, targets: list[Path], *, call_api: bool, api_factory: Callab
         checks += check_schedules(api, record, conf.get("host_id"), ws)
     fails = [c["id"] for c in checks if c["status"] == FAIL]
     return {"workspace": str(ws), "host_id": conf.get("host_id"), "host_name": conf.get("host_name"),
-            "ready": not fails, "failed": fails, "checks": checks}
+            "targets_from": targets_from, "ready": not fails, "failed": fails, "checks": checks}
 
 
 # ── agent 紀錄 ────────────────────────────────────────────────────────────────
@@ -668,7 +689,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("doctor")
-    p.add_argument("--targets", nargs="*", help="repo 絕對路徑；預設 <WS>/WOOW 下的 LINE 三件組")
+    p.add_argument("--targets", nargs="*", help="repo 絕對路徑；預設 <state>/presets 全部有效 preset 的 targets 聯集，"
+                   "一個 preset 都沒有才用 <WS>/WOOW 下的 LINE 三件組")
     p.add_argument("--check-api", action="store_true", help="另外打一次 Jev API（jev_gate.py models）")
     p.add_argument("--tea-login", default="git-prod")
     agent_help = "sweep（排程跑的本體，預設）或 launcher（前台，出現在 UI picker）"
@@ -692,8 +714,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ws = workspace(args.workspace)
         if args.cmd == "doctor":
-            targets = [Path(t) for t in args.targets] if args.targets else [ws / t for t in DEFAULT_TARGETS]
-            out = doctor(ws, targets, call_api=args.check_api, tea_login=args.tea_login)
+            if args.targets:
+                targets, targets_from = [Path(t) for t in args.targets], "args"
+            else:
+                targets, targets_from = doctor_targets(ws)
+            out = doctor(ws, targets, call_api=args.check_api, tea_login=args.tea_login, targets_from=targets_from)
             print(json.dumps(out, ensure_ascii=False, indent=2))
             return 0 if out["ready"] else 1
         if args.cmd == "preset":

@@ -242,8 +242,8 @@ def list_presets(ws: Path, tasks: list[dict[str, Any]] | None = None, agent_id: 
 
 def check(ws: Path, api_factory: Callable = su.Api, tea_login: str = "git-prod") -> dict[str, Any]:
     """doctor（不打 Jev API）＋ 每個 preset 有沒有手動排程。前台 agent 沒註冊不影響啟動。"""
-    targets = [ws / t for t in su.DEFAULT_TARGETS]
-    doc = su.doctor(ws, targets, call_api=False, api_factory=api_factory, tea_login=tea_login)
+    targets, targets_from = su.doctor_targets(ws)
+    doc = su.doctor(ws, targets, call_api=False, api_factory=api_factory, tea_login=tea_login, targets_from=targets_from)
     blocking = [c for c in doc["failed"] if c != "launcher"]
     out: dict[str, Any] = {"ready": not blocking, "failed": blocking, "doctor": doc}
     record = su.load_agent_record(su.state_dir(ws), "sweep")

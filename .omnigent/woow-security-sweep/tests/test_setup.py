@@ -226,6 +226,48 @@ class TargetsCheckTest(Base):
         self.assertEqual(self.status(out, "issues:demo"), su.OK)
 
 
+class DoctorTargetsTest(Base):
+    """#2084：doctor／launch check 沒帶 --targets 時看排程實際在掃的 targets。"""
+
+    def repo(self, name):
+        path = self.ws / "WOOW" / name
+        (path / ".git").mkdir(parents=True, exist_ok=True)
+        return path.resolve()
+
+    def test_union_of_presets_deduped_in_stable_order(self):
+        a, b, c = self.repo("a"), self.repo("b"), self.repo("c")
+        su.write_preset(self.ws, "p2-weekly", [str(b), str(c)], "full", "auto", None, None)
+        su.write_preset(self.ws, "p1-daily", [str(a), str(b)], "incremental", "auto", None, None)
+        targets, source = su.doctor_targets(self.ws)
+        self.assertEqual((targets, source), ([a, b, c], "presets"))
+        self.assertEqual(su.doctor_targets(self.ws)[0], targets)
+
+    def test_no_preset_falls_back_to_default(self):
+        targets, source = su.doctor_targets(self.ws)
+        self.assertEqual((targets, source), ([self.ws / t for t in su.DEFAULT_TARGETS], "default"))
+
+    def test_invalid_preset_skipped(self):
+        good = self.repo("good")
+        su.write_preset(self.ws, "good", [str(good)], "incremental", "auto", None, None)
+        (self.sdir / "presets" / "broken.yaml").write_text("targets: []\n")
+        (self.sdir / "presets" / "Bad_Name.yaml").write_text("targets: [x]\n")
+        self.assertEqual(su.doctor_targets(self.ws), ([good], "presets"))
+
+    def test_only_invalid_presets_fall_back_to_default(self):
+        self.sdir.joinpath("presets").mkdir(parents=True)
+        (self.sdir / "presets" / "broken.yaml").write_text("targets: []\n")
+        self.assertEqual(su.doctor_targets(self.ws)[1], "default")
+
+    def test_doctor_reports_targets_from(self):
+        with mock.patch.object(su, "omnigent_config", return_value={}), \
+                mock.patch.object(su, "check_python", return_value=su.check("python", su.OK, "x")), \
+                mock.patch.object(su, "check_tools", return_value=[]), \
+                mock.patch.object(su, "check_jev_key", return_value=[]), \
+                mock.patch.object(su, "check_targets", return_value=[]):
+            self.assertEqual(su.doctor(self.ws, [], call_api=False)["targets_from"], "args")
+            self.assertEqual(su.doctor(self.ws, [], call_api=False, targets_from="presets")["targets_from"], "presets")
+
+
 class RRuleDaysTest(unittest.TestCase):
     def test_weekly_byday(self):
         self.assertEqual(su.rrule_days("FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=8"), {"MO", "WE"})

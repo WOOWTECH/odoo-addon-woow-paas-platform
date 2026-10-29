@@ -11,6 +11,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location(
@@ -293,6 +294,26 @@ class CreateScheduleTest(Base):
         with self.assertRaises(su.SetupError):
             la.create_schedule(api, self.ws, "nope", host_id="h1", manual=True)
         self.assertEqual(api.posts, [])
+
+
+class CheckTargetsTest(Base):
+    """#2084：check() 交給 doctor 的 targets 來自 preset，不是寫死的 LINE 三件組。"""
+
+    def test_check_passes_preset_targets_to_doctor(self):
+        seen = {}
+
+        def fake_doctor(ws, targets, **kw):
+            seen["targets"], seen["kw"] = targets, kw
+            return {"ready": True, "failed": [], "checks": [], "targets_from": kw["targets_from"]}
+
+        with mock.patch.object(su, "doctor", side_effect=fake_doctor), \
+                mock.patch.object(su, "omnigent_config", return_value={}):
+            out = la.check(self.ws)
+        expected = [Path(self.repos[n]).resolve() for n in ("woow_line_base", "Woow_odoo_line_liff", "other")]
+        self.assertEqual(seen["targets"], expected)
+        self.assertEqual(seen["kw"]["targets_from"], "presets")
+        self.assertEqual(out["doctor"]["targets_from"], "presets")
+        self.assertTrue(out["ready"])
 
 
 class PresetsAndStatusTest(Base):
