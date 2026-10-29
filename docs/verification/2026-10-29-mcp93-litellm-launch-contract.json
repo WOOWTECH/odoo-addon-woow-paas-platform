@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "reviewed_at": "2026-10-29",
+  "platform_pr": 2083,
+  "reviewed_platform_head": "c19fc1113b541ffd178d29b215fe80438b815377",
+  "mcp_pr": 93,
+  "previous_mcp_source": "af6481551b32c27938d7d5ec5dadc6e9e648fbce",
+  "image_mcp_source": "f748090eb782bc103edcd99ac9aa821f77294fb0",
+  "image": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin@sha256:9d723ff679460da697c8b08369ee87571c4d60205542ae33dec7822ebd8d2ef8",
+  "unchanged_source_sha256": {
+    "apps/litellm/pyproject.toml": "afd0e2b1b82d3b7314729bf6ad3a9e8228a03683aa7ea7b5f0e6296a9a86ff45",
+    "apps/litellm/litellm_mcp_admin/main.py": "eea150a7c612c480d5251c01ad5e951d40c49567805224782cc42e5e500915c9",
+    "apps/litellm/litellm_mcp_admin/launcher.py": "06b2a6636b9fc84190c248df3070da6db27e71620a273ea72713cd4c39e1cf82",
+    "apps/litellm/litellm_mcp_admin/seed_defaults.py": "b99a05e395037918bf70c9a97e6f967a926dbffe4f060196f0c7a764d8f5a0bd",
+    "apps/litellm/Dockerfile": "9f3d818a4f2b796bd71dacab299b47e5fe1de02d43d955de385202887b560512",
+    "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db"
+  },
+  "launch_contract": {
+    "console_script": "litellm-mcp-server = litellm_mcp_admin.launcher:main",
+    "host": "127.0.0.1",
+    "args": [
+      "--port",
+      "8000"
+    ],
+    "port": 8000,
+    "env_prefix": "LITELLM_MCP_",
+    "seed_env": {
+      "LITELLM_MCP_READONLY": "0"
+    },
+    "platform_seed_non_image_values_unchanged": true
+  },
+  "existing_exact_image_runtime": {
+    "completed_at": "2026-10-29T14:16:17.663664+00:00",
+    "receipt_sha256": "de8280e5107ba89f3da6033a4d3dff453028b89bfa517ef6ccb30ec46d82e485",
+    "passed": true,
+    "changed_source_files_verified": 12,
+    "all_on_tools": 40,
+    "readonly_tools": 15,
+    "active_routes_passed": 3,
+    "legacy_read_denies_no_backend_call": true,
+    "settings_restored": true,
+    "scope": "loopback synthetic HTTP; no provider or billing"
+  },
+  "failed_ci_preserved": {
+    "run": 32166,
+    "job": 35516,
+    "new_failure": "test_mcp_litellm_seed.TestMcpLitellmSeed.test_image_repin_must_recheck_launch_spec",
+    "cause": "Exact-image review sentinel still expected previous #92 pin after seed moved to #93.",
+    "remediation": "Update exact EXPECT_IMAGE_TAG after launch-contract review; preserve assertion, failure baseline and C5 workflow."
+  },
+  "scope": "Six named source files compared byte for byte between exact MCP commits; existing exact-image runtime receipt reviewed, not rerun. Other LiteLLM behavior changed in #93. No production rollout, formal platform upgrade or whole-image byte equivalence claimed."
+}
