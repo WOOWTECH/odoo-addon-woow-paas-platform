@@ -34,8 +34,14 @@ Inbox 的提問只是通知與決策入口；**完整紀錄一律在 report.md**
 | hardening id | repo | 位置 | 建議 |
 
 ## entry point 涵蓋（coverage.jsonl）
-| repo | entry | 狀態 | 說明 |
-<not_reviewed／blocked 排前面；工單有 entry point 但 worker 沒回報 coverage 的，列為「未回報」>
+| repo | 塊 | entry | 狀態 | 說明 |
+<not_reviewed／blocked 排前面；工單有 entry point 但 worker 沒回報 coverage 的，列為「未回報」；沒分塊的 repo「塊」寫 -）>
+
+## 分塊輪審（meta.review 非 null 的 repo；都沒有就省略本節）
+| repo | 本輪審的塊 | 上次審 | 檔案數／KB | entry point | worker 回報 |
+<全量：列 review.units 與 commit 輸出的 units_reviewed（沒回報的塊寫「未回報，下輪再排」）、下一輪 next_due；
+增量：列 review.files 數、overflow 數（超過上限沒審）、outside_count。
+以下非空就逐項列出，標明「targets 要更新」：unassigned_files、unassigned_routes、各塊的 missing_paths、extract_errors>
 
 ## 之前的 finding 本輪狀態（prior_status.jsonl）
 | fingerprint | repo | 狀態（fixed／not_checked） | 依據 |

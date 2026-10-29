@@ -169,8 +169,12 @@ def load_run(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return cfg, meta
 
 
-def prior_findings(sdir: Path, run_dir: Path, repo: str, tool: str = "review") -> tuple[list[dict], list[dict]]:
-    """前幾輪同 repo 的 deep review finding（最後事件不是 resolved）與被推翻的說法。"""
+def prior_findings(sdir: Path, run_dir: Path, repo: str, tool: str = "review",
+                   limit: int | None = MAX_PRIOR) -> tuple[list[dict], list[dict]]:
+    """前幾輪同 repo 的 deep review finding（最後事件不是 resolved，新的在前）與被推翻的說法。
+
+    limit=None 回傳全部（分塊輪審先依塊的檔案過濾、再各自取前 MAX_PRIOR 筆，避免別塊的 finding 擠掉本塊的）。
+    """
     groups = jg.triage_history(jg.read_jsonl(sdir / "shadow.jsonl"))
     bodies = jg._findings_by_decision(sdir / "runs")
     open_items: list[dict] = []
@@ -194,8 +198,8 @@ def prior_findings(sdir: Path, run_dir: Path, repo: str, tool: str = "review") -
             f = r.get("finding") or {}
             if f.get("fingerprint"):
                 rejected[f["fingerprint"]] = {"fingerprint": f["fingerprint"], "title": f.get("title"),
-                                              "reason": str(r.get("reason") or "")[:300]}
-    return open_items[:MAX_PRIOR], list(rejected.values())
+                                              "path": f.get("path"), "reason": str(r.get("reason") or "")[:300]}
+    return (open_items if limit is None else open_items[:limit]), list(rejected.values())
 
 
 def _abs(run_dir: Path, rel: str) -> str:
@@ -215,7 +219,74 @@ def _file_lines(paths: list[str]) -> list[str]:
     return out
 
 
-def _scope_lines(meta: dict[str, Any], run_dir: Path) -> list[str]:
+def _upstream_lines(meta: dict[str, Any], run_dir: Path) -> list[str]:
+    out: list[str] = []
+    ups = meta.get("upstream") or []
+    ok = [u for u in ups if u.get("status") == "ok"]
+    if ok:
+        out.append("- 上游唯讀快照（只當上下文：finding 只開在目標 repo；trace 可以引用 `upstream/<名>/<路徑>`）：")
+        out += [f"  - `{u['path']}` → `{_abs(run_dir, u['path'])}`（{u['repo']} @ {str(u.get('head_sha'))[:8]}）"
+                for u in ok]
+    bad = [u for u in ups if u.get("status") != "ok"]
+    if bad:
+        out.append("- 沒有快照的上游（只有它們的行為可以當 needs_validation 的 blocker）：")
+        out += [f"  - {u['repo']}：{u.get('detail') or u.get('status')}" for u in bad]
+    return out
+
+
+def _deleted_lines(meta: dict[str, Any]) -> list[str]:
+    if not meta.get("deleted_files"):
+        return []
+    return ["- 這段期間**已刪除**的檔案（不用審；只在判斷之前的 finding 是否已修好時參考）：",
+            *[f"  - `{p}`" for p in meta["deleted_files"]]]
+
+
+def _unit_scope_lines(meta: dict[str, Any], run_dir: Path, unit: dict[str, Any]) -> list[str]:
+    review = meta["review"]
+    last = unit.get("last_reviewed") or {}
+    files = unit.get("files") or []
+    out = [f"- 目標快照：`{_abs(run_dir, 'src')}`（下文所有路徑都相對於它）",
+           f"- 範圍：**分塊輪審**，本塊 `{unit['name']}`（targets 第 {unit.get('order')} 塊，共 {review.get('total')} 塊；"
+           f"上次審：{str(last.get('at'))[:10] if last.get('at') else '從未'}）。repo 太大，一個 worker 讀不完，"
+           "每輪只審幾塊、輪流涵蓋全部；其他塊不用審。"]
+    if unit.get("focus"):
+        out.append(f"- 本塊重點：{unit['focus']}")
+    out.append(f"- 本塊的主要檔案（{len(files)} 個，約 {int(unit.get('bytes') or 0) // 1024} KB）。從下方 entry point "
+               "出發、順著呼叫鏈讀需要的函式；大檔依 entry point 的行號分段讀，不必整檔讀完。呼叫到本塊以外的檔案"
+               "照樣要讀，finding 的 `path` 可以是快照內任何檔案：")
+    out += _file_lines(files) or ["  - （沒有對到任何檔案）"]
+    if unit.get("missing_paths"):
+        out.append("- targets 列了、快照裡卻對不到檔案的 paths（設定可能過期；在摘要寫出來）："
+                   + "、".join(f"`{p}`" for p in unit["missing_paths"]))
+    return out + _upstream_lines(meta, run_dir)
+
+
+def _changed_units_scope_lines(meta: dict[str, Any], run_dir: Path) -> list[str]:
+    review, sc = meta["review"], meta.get("scope") or {}
+    out = [f"- 目標快照：`{_abs(run_dir, 'src')}`（下文所有路徑都相對於它）",
+           f"- 範圍：**增量** {sc.get('reason')}，只審落在分塊裡的變動檔案（涉及的塊："
+           f"{'、'.join(review.get('units') or []) or '無'}）。優先審這些檔案，需要時再讀它們呼叫到的其他檔案："]
+    out += _file_lines(review.get("files") or []) or ["  - （沒有）"]
+    if review.get("overflow"):
+        out.append(f"- 另有 {len(review['overflow'])} 個變動檔案超過本輪上限 {review.get('max_files')} 個，本輪不審"
+                   "（輪到所屬的塊時會涵蓋）。")
+    if review.get("outside_count"):
+        out.append(f"- 另有 {review['outside_count']} 個變動檔案不屬於任何分塊（文件、工具設定等），本輪不審。")
+    return out + _deleted_lines(meta) + _upstream_lines(meta, run_dir)
+
+
+def _scope_lines(meta: dict[str, Any], run_dir: Path, unit: dict[str, Any] | None = None,
+                 brief: bool = False) -> list[str]:
+    review = meta.get("review") or {}
+    if review.get("mode") == "units":
+        if unit is not None:
+            return _unit_scope_lines(meta, run_dir, unit)
+        if brief:  # 驗證者：不列整塊的檔案，trace 裡的檔案就是審查對象
+            return [f"- 目標快照：`{_abs(run_dir, 'src')}`（下文所有路徑都相對於它）",
+                    "- 本輪是分塊輪審：這筆 finding 的 trace 列出的檔案就是審查對象；需要時讀快照內任何檔案。",
+                    *_upstream_lines(meta, run_dir)]
+    if review.get("mode") == "changed":
+        return _changed_units_scope_lines(meta, run_dir)
     sc = meta.get("scope") or {}
     fork = meta.get("fork")
     owned = set(fork["files"]) if fork else None
@@ -237,20 +308,8 @@ def _scope_lines(meta: dict[str, Any], run_dir: Path) -> list[str]:
                     and (owned is None or p in owned)]
         out.append(f"- 範圍：**增量** {sc.get('reason')}。優先審這些變動檔案，需要時再讀它們呼叫到的其他檔案：")
         out += _file_lines(existing) or ["  - （沒有仍存在的變動檔案）"]
-        if meta.get("deleted_files"):
-            out.append("- 這段期間**已刪除**的檔案（不用審；只在判斷之前的 finding 是否已修好時參考）：")
-            out += [f"  - `{p}`" for p in meta["deleted_files"]]
-    ups = meta.get("upstream") or []
-    ok = [u for u in ups if u.get("status") == "ok"]
-    if ok:
-        out.append("- 上游唯讀快照（只當上下文：finding 只開在目標 repo；trace 可以引用 `upstream/<名>/<路徑>`）：")
-        out += [f"  - `{u['path']}` → `{_abs(run_dir, u['path'])}`（{u['repo']} @ {str(u.get('head_sha'))[:8]}）"
-                for u in ok]
-    bad = [u for u in ups if u.get("status") != "ok"]
-    if bad:
-        out.append("- 沒有快照的上游（只有它們的行為可以當 needs_validation 的 blocker）：")
-        out += [f"  - {u['repo']}：{u.get('detail') or u.get('status')}" for u in bad]
-    return out
+        out += _deleted_lines(meta)
+    return out + _upstream_lines(meta, run_dir)
 
 
 REPORT_FORMAT = """\
@@ -313,28 +372,51 @@ DISCIPLINE = """\
 """
 
 
-def review_ticket(run_dir: Path, sdir: Path) -> dict[str, Any]:
-    cfg, meta = load_run(run_dir)
-    repo = cfg.get("repo", {}).get("full_name") or run_dir.name
-    refs = list(cfg.get("review_classes") or DEFAULT_CLASSES)
+def _entry_line(e: dict[str, Any]) -> str:
+    loc = str(e.get("file") or "?") + (f":{e['line']}" if e.get("line") else "")
+    if e.get("func"):
+        loc += f" `{e['func']}`"
+    bits = [loc]
+    if e.get("auth"):
+        bits.append(f"auth={e['auth']}")
+    if e.get("type") and e["type"] != "http":
+        bits.append(f"type={e['type']}")
+    if "csrf" in e:
+        bits.append(f"csrf={e['csrf']}")
+    if e.get("methods"):
+        m = e["methods"]
+        bits.append("methods=" + (",".join(map(str, m)) if isinstance(m, list) else str(m)))
+    if e.get("router"):
+        bits.append(f"router={e['router']}")
+    return f"- `{e.get('route')}`（{'，'.join(bits)}）{('：' + e['note']) if e.get('note') else ''}"
+
+
+def _unit_classes(cfg: dict[str, Any], names: list[str]) -> list[str]:
+    """分塊各自的 review_classes（沒寫的塊用 target 的）；多塊時取聯集、保持順序。"""
+    base = list(cfg.get("review_classes") or DEFAULT_CLASSES)
+    by = {u["name"]: u for u in (cfg.get("review_units") or {}).get("units") or []}
+    out: list[str] = []
+    for name in names:
+        for ref in (by.get(name) or {}).get("review_classes") or base:
+            if ref not in out:
+                out.append(ref)
+    return out or base
+
+
+def _write_review(run_dir: Path, cfg: dict[str, Any], meta: dict[str, Any], *, repo: str, refs: list[str],
+                  scope: list[str], entries: list[dict[str, Any]], prior: list[dict], hidden_prior: int,
+                  rejected: list[dict], tool_findings: list[dict], out_name: str, title: str) -> dict[str, Any]:
     blocks, missing = resolve_classes(refs)
     mb = method_blocks()
-    prior, rejected = prior_findings(sdir, run_dir, repo)
-    (run_dir / "prior_findings.json").write_text(json.dumps(prior, ensure_ascii=False, indent=2), encoding="utf-8")
-    ctx = cfg.get("context") or {}
-    entries = ctx.get("entry_points") or []
-    tool_findings = [f for f in jg.read_jsonl(run_dir / "findings.jsonl") if f.get("tool") != "review"]
-
-    parts = [f"# 【工單】deep review（唯讀）— {repo}", "",
+    parts = [f"# 【工單】deep review（唯讀）— {repo}{title}", "",
              "你是唯讀 review worker：找出原始碼上違反真實權限邊界的問題，只回報、不修改。", "",
-             "## 審查對象", "", *_scope_lines(meta, run_dir), "",
+             "## 審查對象", "", *scope, "",
              "## repo 上下文（targets 的 private 設定；⛔ 不要貼到 GitHub）", "", "```yaml",
              yaml.safe_dump({k: cfg[k] for k in ("context", "review_focus") if cfg.get(k)},
                             allow_unicode=True, sort_keys=False).rstrip(), "```", ""]
     parts += ["## entry point 清單（每一項都要回報一行 coverage）", ""]
-    parts += [f"- `{e.get('route')}`（{e.get('file')}，auth={e.get('auth')}"
-              f"{'，csrf=' + str(e['csrf']) if 'csrf' in e else ''}）{('：' + e['note']) if e.get('note') else ''}"
-              for e in entries] or ["- （targets 沒有列 entry_points：改為每個審過的主要入口各回報一行）"]
+    parts += [_entry_line(e) for e in entries] or \
+        ["- （targets 沒有列 entry_points：改為每個審過的主要入口各回報一行）"]
     parts += ["", "## 之前的 finding（同一根因沿用 fingerprint）", ""]
     if prior:
         parts += ["| fingerprint | 標題 | 位置 | 人的決定 |", "|---|---|---|---|"]
@@ -342,6 +424,8 @@ def review_ticket(run_dir: Path, sdir: Path) -> dict[str, Any]:
                   f"{p['label'] or '未決'}／{p['action'] or '-'} |" for p in prior]
     else:
         parts.append("（無）")
+    if hidden_prior:
+        parts.append(f"（另有 {hidden_prior} 筆在本輪範圍以外的檔案，不用處理、也不用回報 prior）")
     parts += ["", "被驗證者推翻過的說法（除非原始碼證據改變，否則不要再提出）：", ""]
     parts += [f"- `{r['fingerprint']}`：{r['title'] or '-'}——{r['reason']}" for r in rejected] or ["（無）"]
     parts += ["", "## 本輪工具 finding（只列位置，避免重複回報；工具誤報不用處理）", ""]
@@ -349,17 +433,75 @@ def review_ticket(run_dir: Path, sdir: Path) -> dict[str, Any]:
     parts += ["", "## 方法（cloudflare/security-audit-skill，原文）", "", mb["method"], "",
               "## finding 成立條件（原文）", "", mb["gate"], "",
               "## 攻擊類別（依 targets 的 review_classes，原文）", ""]
-    for title, text in blocks:
-        parts += [f"### {title}", "", text, ""]
+    for name, text in blocks:
+        parts += [f"### {name}", "", text, ""]
     parts += ["## 嚴重度判準（原文；只用在 confirmed）", "", mb["severity"], "",
               "## 回報格式", "", REPORT_FORMAT, "## 紀律", "", DISCIPLINE]
     out_dir = run_dir / "tickets"
     out_dir.mkdir(exist_ok=True)
-    path = out_dir / "review.md"
+    path = out_dir / out_name
     path.write_text("\n".join(parts) + "\n", encoding="utf-8")
-    return {"ticket": str(path), "repo": repo, "classes": refs, "missing_blocks": missing,
-            "prior": len(prior), "rejected": len(rejected), "entry_points": len(entries),
-            "upstream": [{k: u.get(k) for k in ("repo", "status")} for u in meta.get("upstream") or []]}
+    return {"ticket": str(path), "classes": refs, "missing_blocks": missing, "prior": len(prior),
+            "entry_points": len(entries)}
+
+
+def review_ticket(run_dir: Path, sdir: Path) -> dict[str, Any]:
+    """產生 deep review 工單。
+
+    - 沒有 review_units：一張 `tickets/review.md`（照舊審整個範圍）
+    - 分塊輪審（meta.review.mode=units）：本輪每一塊一張 `tickets/review-<塊>.md`，各派一個 worker
+    - 有 review_units 的增量輪次：一張，只列落在分塊裡的變動檔案；沒有就不產工單（`tickets` 是空的）
+    之前的 finding 與工具 finding 只列本張工單範圍內的檔案；prior_findings.json 仍存全部（import 驗 fingerprint 用）。
+    """
+    cfg, meta = load_run(run_dir)
+    repo = cfg.get("repo", {}).get("full_name") or run_dir.name
+    review = meta.get("review") or {}
+    # 分塊輪審先拿全部、各張工單過濾後再取前 MAX_PRIOR 筆；prior_findings.json 存全部（import 驗 fingerprint 用）
+    prior, rejected = prior_findings(sdir, run_dir, repo, limit=None if review else MAX_PRIOR)
+    (run_dir / "prior_findings.json").write_text(json.dumps(prior, ensure_ascii=False, indent=2), encoding="utf-8")
+    ctx = cfg.get("context") or {}
+    tool_findings = [f for f in jg.read_jsonl(run_dir / "findings.jsonl") if f.get("tool") != "review"]
+    common = {"repo": repo, "rejected": len(rejected),
+              "upstream": [{k: u.get(k) for k in ("repo", "status")} for u in meta.get("upstream") or []]}
+
+    def scoped(files: set[str]) -> tuple[list[dict], int, list[dict], list[dict]]:
+        mine = [p for p in prior if not p.get("path") or p["path"] in files]
+        rej = [r for r in rejected if not r.get("path") or r["path"] in files]
+        return mine[:MAX_PRIOR], len(prior) - len(mine), rej, [f for f in tool_findings if f.get("path") in files]
+
+    tickets: list[dict[str, Any]] = []
+    if review.get("mode") == "units":
+        for unit in review.get("units") or []:
+            files = set(unit.get("files") or [])
+            p, hidden, rej, tools = scoped(files)
+            t = _write_review(run_dir, cfg, meta, repo=repo, refs=_unit_classes(cfg, [unit["name"]]),
+                              scope=_scope_lines(meta, run_dir, unit=unit), entries=unit.get("entry_points") or [],
+                              prior=p, hidden_prior=hidden, rejected=rej, tool_findings=tools,
+                              out_name=f"review-{unit['name']}.md", title=f"／分塊 {unit['name']}")
+            tickets.append({"unit": unit["name"], **t})
+    elif review.get("mode") == "changed":
+        files = set(review.get("files") or [])
+        if not files:
+            return {**common, "tickets": [], "prior": len(prior), "missing_blocks": [],
+                    "skip": "增量範圍裡沒有落在分塊的變動檔案，本輪不派 deep review"}
+        p, hidden, rej, tools = scoped(files)
+        entries = list(review.get("entry_points") or [])
+        entries += [e for e in ctx.get("entry_points") or [] if e.get("file") in files and e not in entries]
+        t = _write_review(run_dir, cfg, meta, repo=repo, refs=_unit_classes(cfg, review.get("units") or []),
+                          scope=_scope_lines(meta, run_dir), entries=entries, prior=p, hidden_prior=hidden,
+                          rejected=rej, tool_findings=tools, out_name="review.md", title="")
+        tickets.append({"unit": None, **t})
+    else:
+        t = _write_review(run_dir, cfg, meta, repo=repo, refs=list(cfg.get("review_classes") or DEFAULT_CLASSES),
+                          scope=_scope_lines(meta, run_dir), entries=ctx.get("entry_points") or [], prior=prior,
+                          hidden_prior=0, rejected=rejected, tool_findings=tool_findings, out_name="review.md",
+                          title="")
+        tickets.append({"unit": None, **t})
+    out = {**common, "tickets": tickets, "prior": len(prior),
+           "missing_blocks": sorted({m for t in tickets for m in t["missing_blocks"]})}
+    if len(tickets) == 1:  # 單張工單時保留舊欄位
+        out |= {k: tickets[0][k] for k in ("ticket", "classes", "entry_points")}
+    return out
 
 
 VERIFY_FORMAT = """\
@@ -399,7 +541,7 @@ def verify_ticket(run_dir: Path, finding_id: str) -> dict[str, Any]:
     ctx = cfg.get("context") or {}
     parts = [f"# 【工單】驗證 finding（唯讀）— {repo} — {finding_id}", "",
              "你是驗證者：**沒有參與**找出這筆 finding。從原始碼試著推翻它。", "",
-             "## 審查對象", "", *_scope_lines(meta, run_dir), "",
+             "## 審查對象", "", *_scope_lines(meta, run_dir, brief=True), "",
              "## repo 上下文（摘要）", "", "```yaml",
              yaml.safe_dump({k: ctx.get(k) for k in ("summary", "trust_boundaries", "upstream") if ctx.get(k)},
                             allow_unicode=True, sort_keys=False).rstrip(), "```", "",
