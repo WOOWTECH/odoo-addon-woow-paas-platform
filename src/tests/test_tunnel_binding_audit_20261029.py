@@ -147,8 +147,10 @@ class TestTunnelBindingHistory(_BindingFixture, _History, TransactionCase):
         record = self.sa
         record._tunnel_binding_claim(UID_A, 'living room')
         anchor_id = record.id
-        with patch.object(type(record), '_cleanup_cloudflare'):   # deleting an SA would call the operator
-            record.sudo().unlink()
+        # the row goes away without the Cloudflare clean-up that a real delete runs (not under test)
+        self.env.cr.execute('DELETE FROM woow_paas_platform_security_access WHERE id = %s', (anchor_id,))
+        self.env.invalidate_all()
+        self.assertFalse(record.exists())
         self.assertTrue(self.env[EVENT].sudo().search_count(
             [('anchor_model', '=', 'woow_paas_platform.security_access'), ('anchor_id', '=', anchor_id)]))
 
