@@ -29,6 +29,15 @@ UID_C = 'c' * 32
 
 
 class _History:
+    def refused(self, record, *args, **kwargs):
+        """A claim that must be refused. Not `assertRaises`: Odoo's version rolls the block back, and the
+        audit line is written just before the refusal (the endpoint catches the conflict and commits)."""
+        try:
+            record._tunnel_binding_claim(*args, **kwargs)
+        except TunnelBindingConflict as conflict:
+            return conflict
+        self.fail('the claim was not refused')
+
     def lines(self, record):
         return self.env[EVENT].sudo().search(
             [('anchor_model', '=', record._name), ('anchor_id', '=', record.id)], order='id')
@@ -81,12 +90,9 @@ class TestTunnelBindingHistory(_BindingFixture, _History, TransactionCase):
             with self.subTest(label):
                 record._tunnel_binding_claim(UID_A, 'living room')
                 for _ in range(3):                                       # a retrying installation
-                    with self.assertRaises(TunnelBindingConflict):
-                        record._tunnel_binding_claim(UID_B, 'demo machine')
-                with self.assertRaises(TunnelBindingConflict):           # a different installation
-                    record._tunnel_binding_claim(UID_C, 'third machine')
-                with self.assertRaises(TunnelBindingConflict):           # no identity at all
-                    record._tunnel_binding_claim('', '')
+                    self.refused(record, UID_B, 'demo machine')
+                self.refused(record, UID_C, 'third machine')             # a different installation
+                self.refused(record, '', '')                             # no identity at all
                 lines = self.lines(record)
                 self.assertEqual(lines.mapped('event'),
                                  ['claimed', 'refused_claim', 'refused_claim', 'refused_claim'])
@@ -101,8 +107,7 @@ class TestTunnelBindingHistory(_BindingFixture, _History, TransactionCase):
         for label, record in self._records():
             with self.subTest(label):
                 record._tunnel_binding_claim('', '')
-                with self.assertRaises(TunnelBindingConflict):
-                    record._tunnel_binding_claim(UID_B, 'new machine', new_entry=True)
+                self.refused(record, UID_B, 'new machine', new_entry=True)
                 line = self.lines(record)[-1]
                 self.assertEqual(line.event, 'refused_claim')
                 self.assertIn('not confirmed', line.detail)
@@ -142,7 +147,8 @@ class TestTunnelBindingHistory(_BindingFixture, _History, TransactionCase):
         record = self.sa
         record._tunnel_binding_claim(UID_A, 'living room')
         anchor_id = record.id
-        record.sudo().unlink()
+        with patch.object(type(record), '_cleanup_cloudflare'):   # deleting an SA would call the operator
+            record.sudo().unlink()
         self.assertTrue(self.env[EVENT].sudo().search_count(
             [('anchor_model', '=', 'woow_paas_platform.security_access'), ('anchor_id', '=', anchor_id)]))
 
