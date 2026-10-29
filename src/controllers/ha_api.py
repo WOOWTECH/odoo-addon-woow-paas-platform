@@ -62,6 +62,11 @@ def _release_binding(record, kwargs: dict) -> Response:
     return _json_response({'binding_state': record.binding_state})
 
 
+def _flag(kwargs: dict, name: str) -> bool:
+    """Optional boolean query parameter; only an explicit ``1``/``true`` counts."""
+    return str(kwargs.get(name) or '').strip().lower() in ('1', 'true')
+
+
 def _claim_binding(record, kwargs: dict) -> Response | None:
     """#1766：把這條 tunnel 綁給呼叫端那一台 HA，衝突時回 409。
 
@@ -80,6 +85,8 @@ def _claim_binding(record, kwargs: dict) -> Response | None:
         record._tunnel_binding_claim(
             (kwargs.get('instance_uid') or '').strip()[:64],
             (kwargs.get('instance_label') or '').strip()[:128],
+            new_entry=_flag(kwargs, 'new_entry'),
+            confirmed=_flag(kwargs, 'confirmed'),
         )
     except TunnelBindingConflict as conflict:
         _logger.warning(

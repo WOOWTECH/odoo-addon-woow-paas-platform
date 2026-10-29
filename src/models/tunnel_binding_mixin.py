@@ -36,6 +36,11 @@ Cloudflare 對「一條 tunnel、多個 connector」的語意是**分流**（那
 - **guard 無條件擋所有人（含 superuser）**，解綁走明確的 `action_release_binding()`
   ——不是 `env.su` 豁免。理由見 `su-env-exempt-guard-false-green`：TransactionCase
   是 su env，用 su 當豁免條件會讓測試假綠，sudo'd controller 也會靜默繞過。
+- **設定流程的新建設定項要明確確認才能接手 legacy 綁定**（HA issue #38）。
+  `legacy → claimed` 同時是「同一台機器升級元件」與「另一台來認領」走的路，平台分不出來，
+  所以不能一律擋；改由元件在設定流程的取權杖請求帶 `new_entry=1`（這是新建設定項）與
+  `confirmed`（使用者從清單明確選了它）。只有 `new_entry` 且未 `confirmed` 才拒絕；
+  既有設定項的重啟／升級與舊版元件都不帶 `new_entry`，行為不變。
 - 綁定欄位**不是** identity anchor：解綁是正常營運動作（換機器、RMA、重裝），所以
   不走 `_IDENTITY_ANCHOR_FIELDS` 的不可變 guard。
 """
@@ -115,11 +120,20 @@ class TunnelBindingMixin(models.AbstractModel):
     )
 
     # ---- claim / release ----------------------------------------------------
-    def _tunnel_binding_claim(self, instance_uid, instance_label=''):
+    def _tunnel_binding_claim(self, instance_uid, instance_label='', *, new_entry=False, confirmed=False):
         """Record that `instance_uid` holds this tunnel, or refuse.
 
         Returns the binding_state that is now in force. Raises
         TunnelBindingConflict when somebody else holds it.
+
+        ``new_entry`` / ``confirmed`` come from the HA setup flow (HA issue #38):
+        ``new_entry`` says the claim is a NEW config entry, not an existing entry that
+        restarts or upgrades; ``confirmed`` says the user picked this service from a
+        list. A new entry over a ``legacy`` binding needs ``confirmed``. Without
+        ``new_entry`` nothing changes: ``legacy → claimed`` is the way the SAME machine
+        upgrades from the component that sent no identity, and the platform cannot tell
+        that from another machine, so it must stay open for requests that do not say
+        which of the two they are (all components before this parameter existed).
 
         ⚠ 這個 method **會寫 DB**，而呼叫端（tunnel-token 端點）在同一個
         transaction 裡接著把權杖回給對方。順序是刻意的：claim 失敗就不該有權杖
@@ -145,6 +159,10 @@ class TunnelBindingMixin(models.AbstractModel):
             return state
 
         if claim_uid and state == 'claimed' and holder_uid and claim_uid != holder_uid:
+            self._tunnel_binding_audit(
+                'refused_claim', previous_state=state, new_state=state, instance_uid=claim_uid,
+                instance_label=label, held_by=self.bound_instance_label or holder_uid,
+                actor='ha-instance', detail='held by another installation', dedupe_minutes=10)
             raise TunnelBindingConflict(
                 _("This is already connected to another Home Assistant "
                   "installation (%(label)s). Two installations must not share "
@@ -159,6 +177,10 @@ class TunnelBindingMixin(models.AbstractModel):
         if not claim_uid and state == 'claimed':
             # 自報身分的實例已經claim 了，現在來了一個不說自己是誰的請求。放行就
             # 等於「降版元件＝繞過綁定」。
+            self._tunnel_binding_audit(
+                'refused_claim', previous_state=state, new_state=state, instance_label=label,
+                held_by=self.bound_instance_label or holder_uid, actor='ha-instance',
+                detail='request without an installation id', dedupe_minutes=10)
             raise TunnelBindingConflict(
                 _("This is already connected to a Home Assistant installation "
                   "(%(label)s). This request did not say which installation it "
@@ -167,6 +189,24 @@ class TunnelBindingMixin(models.AbstractModel):
                   "the binding here first.",
                   label=self.bound_instance_label or holder_uid),
                 bound_to=self.bound_instance_label or holder_uid,
+                bound_at=fields.Datetime.to_string(self.bound_at) if self.bound_at else '',
+            )
+
+        if new_entry and claim_uid and state == 'legacy' and not confirmed:
+            # 設定流程沒有讓使用者明確選這個服務，卻要接手一個沒有身分的舊版元件
+            # 綁著的服務：多半是清單讀到之後又被別台綁走（競態）。拒絕，讓使用者重選。
+            self._tunnel_binding_audit(
+                'refused_claim', previous_state=state, new_state=state, instance_uid=claim_uid,
+                instance_label=label, held_by=self.bound_instance_label or 'older installation',
+                actor='ha-instance', detail='new entry over an older binding was not confirmed',
+                dedupe_minutes=10)
+            raise TunnelBindingConflict(
+                _("This is connected to an older installation of the integration "
+                  "that does not identify itself, so it cannot be told apart from "
+                  "another machine. Choose this service explicitly when setting up "
+                  "the integration to take it over, or release the binding here "
+                  "first."),
+                bound_to=self.bound_instance_label or _("an older installation"),
                 bound_at=fields.Datetime.to_string(self.bound_at) if self.bound_at else '',
             )
 
@@ -185,6 +225,14 @@ class TunnelBindingMixin(models.AbstractModel):
                 "[tunnel-binding] %s id=%s claimed by %s (%s)",
                 self._name, self.id, claim_uid or 'legacy caller', label or '-')
         self.write(vals)
+        if state != vals['binding_state']:
+            if state == 'legacy' and claim_uid:
+                event = 'taken_over' if (new_entry and confirmed) else 'upgraded'
+            else:
+                event = 'claimed' if claim_uid else 'legacy_claimed'
+            self._tunnel_binding_audit(
+                event, previous_state=state, new_state=vals['binding_state'],
+                instance_uid=claim_uid, instance_label=label, actor='ha-instance')
         return vals['binding_state']
 
     def _tunnel_binding_release(self, instance_uid=''):
@@ -214,11 +262,20 @@ class TunnelBindingMixin(models.AbstractModel):
             _logger.warning(
                 "[tunnel-binding] %s id=%s release refused: held by %s, caller %r",
                 self._name, self.id, holder_label or '-', caller_uid[:12])
+            self._tunnel_binding_audit(
+                'refused_release', previous_state=self.binding_state, new_state=self.binding_state,
+                instance_uid=caller_uid, held_by=holder_label, actor='ha-instance',
+                detail='not the holder', dedupe_minutes=10)
             return False, holder_label
 
         _logger.info(
             "[tunnel-binding] %s id=%s released by the holder itself (%s)",
             self._name, self.id, holder_label or 'legacy caller')
+        self._tunnel_binding_audit(
+            'released', previous_state=self.binding_state, new_state='unbound',
+            instance_uid=caller_uid, instance_label=self.bound_instance_label or '',
+            held_by=holder_label, actor='ha-instance',
+            detail='released by the installation itself' if caller_uid else 'released without an installation id')
         self.write({
             'bound_instance_uid': False,
             'bound_instance_label': False,
@@ -243,6 +300,12 @@ class TunnelBindingMixin(models.AbstractModel):
                 record._name, record.id, record.binding_state,
                 record.bound_instance_label or record.bound_instance_uid or '-',
                 record.env.user.login)
+            record._tunnel_binding_audit(
+                'released', previous_state=record.binding_state, new_state='unbound',
+                instance_uid=record.bound_instance_uid or '',
+                instance_label=record.bound_instance_label or '',
+                held_by=record.bound_instance_label or record.bound_instance_uid or '',
+                actor=record.env.user.login, detail='released from the portal or the backend')
             record.write({
                 'bound_instance_uid': False,
                 'bound_instance_label': False,
@@ -250,6 +313,23 @@ class TunnelBindingMixin(models.AbstractModel):
                 'binding_state': 'unbound',
             })
         return True
+
+    def action_open_binding_history(self):
+        """Open the binding history of this record (system administrators)."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Binding history'),
+            'res_model': 'woow_paas_platform.tunnel_binding_event',
+            'view_mode': 'list',
+            'domain': [('anchor_model', '=', self._name), ('anchor_id', '=', self.id)],
+            'context': {'create': False, 'delete': False},
+        }
+
+    def _tunnel_binding_audit(self, event, **kwargs):
+        """Append a line to the binding history (never raises, see `tunnel_binding_event`)."""
+        self.ensure_one()
+        return self.env['woow_paas_platform.tunnel_binding_event'].log_event(self, event, **kwargs)
 
     # ---- observation --------------------------------------------------------
     @api.model

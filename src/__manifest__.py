@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.276",
+    "version": "18.0.1.0.277",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -71,6 +71,7 @@
         "views/smart_home_template_views.xml",
         "views/security_access_template_views.xml",
         "views/security_access_views.xml",
+        "views/tunnel_binding_event_views.xml",
         "views/cloud_service_views.xml",
         "views/cloud_odoo_addon_views.xml",
         "views/mcp_server_views.xml",

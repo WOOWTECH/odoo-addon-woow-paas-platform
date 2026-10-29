@@ -70,6 +70,9 @@
                                     class="btn-secondary" colspan="2"
                                     confirm="The next Home Assistant that asks for this tunnel's token will be able to take it over. The installation that holds the token now is NOT disconnected by this — to cut it off you have to delete and recreate this access. Continue?"
                                     invisible="binding_state == 'unbound'"/>
+                            <button name="action_open_binding_history" type="object"
+                                    string="Binding history" class="btn-link" colspan="2"
+                                    groups="base.group_system"/>
                         </group>
                     </group>
                     <notebook>

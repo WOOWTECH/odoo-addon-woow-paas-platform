@@ -21,7 +21,9 @@ from ..services.access_state import (
     ACCESS_REVOKE_HOLD_MAX,
     ACCESS_REVOKE_HOLD_MIN,
     ACCESS_REVOKE_HOLD_PARAM,
+    ACCESS_REVOKE_RETRY_SECONDS,
     access_configuration_ready,
+    access_resync_wake_pending,
     access_revoke_hold_seconds,
     access_revoke_operator_reports,
     access_revoke_provider_accepted,
@@ -38,6 +40,8 @@ SCHEDULE = {kind: 'odoo.addons.woow_paas_platform.models.%s.schedule_access_resy
             % module for kind, module in (
                 ('sa', 'security_access'), ('sh', 'smart_home_route'),
                 ('cs', 'cloud_service'))}
+MODEL_LOGGER = {kind: 'odoo.addons.woow_paas_platform.models.%s' % module for kind, module in (
+    ('sa', 'security_access'), ('sh', 'smart_home_route'), ('cs', 'cloud_service'))}
 NOW = fields.Datetime.from_string('2026-10-28 00:00:00')
 
 
@@ -99,6 +103,22 @@ class TestRevokeHoldPure(TransactionCase):
         with patch.object(self.env.registry['ir.cron'], '_trigger') as trigger:
             self.assertTrue(schedule_access_resync(self.env, NOW))
         trigger.assert_called_once()
+
+    def test_one_queued_wake_serves_every_rejected_row(self):
+        """A rejected revocation asks again after the retry delay, once per window."""
+        self.assertEqual(ACCESS_REVOKE_RETRY_SECONDS, 60)
+        now = fields.Datetime.now()
+        retry_at = now + timedelta(seconds=ACCESS_REVOKE_RETRY_SECONDS)
+        self.assertFalse(access_resync_wake_pending(self.env, retry_at))
+        self.assertTrue(schedule_access_resync(self.env, now + timedelta(seconds=30)))
+        # a wake-up queued before the retry time is enough ...
+        self.assertTrue(access_resync_wake_pending(self.env, retry_at))
+        # ... but it says nothing about an earlier moment
+        self.assertFalse(access_resync_wake_pending(self.env, now + timedelta(seconds=10)))
+
+    def test_no_resync_cron_means_nothing_is_queued(self):
+        with patch.object(type(self.env), 'ref', return_value=False):
+            self.assertFalse(access_resync_wake_pending(self.env, NOW))
 
 
 @tagged('post_install', '-at_install')
@@ -341,6 +361,45 @@ class TestRevokeHoldRev01(PendingFixture, TransactionCase):
 
     def test_cs_provider_failure_at_removal_reopens_through_the_cron(self):
         self.provider_failure_at_removal_reopens_through_the_cron('cs')
+
+    def provider_rejection_asks_again_soon(self, kind):
+        """A provider 5xx must not leave the closed origin waiting for the periodic cron."""
+        anchor, policies = self.protected_with_two_policies(kind)
+        self.revoke_result = 'failed'
+        earliest = fields.Datetime.now() + timedelta(seconds=ACCESS_REVOKE_RETRY_SECONDS)
+        with patch(SCHEDULE[kind]) as schedule, \
+                self.assertLogs(MODEL_LOGGER[kind], level=40):
+            policies[1].unlink()
+        self.assert_closed_in_hold(anchor)
+        self.assertFalse(anchor.access_token_revoke_accepted_at)
+        schedule.assert_called_once()
+        wake_at = schedule.call_args.args[1]
+        self.assertGreaterEqual(wake_at, earliest)
+        self.assertLess(wake_at, earliest + timedelta(seconds=30))
+        # the woken run asks again; this time the provider accepts and the hold starts
+        self.revoke_result = 'accepted'
+        self.client.events.clear()
+        self.assertFalse(anchor._sync_access_to_operator())
+        self.assertTrue(anchor.access_token_revoke_accepted_at)
+        self.assertEqual(len(self.revocations()), 1)
+
+    def test_sa_provider_rejection_asks_again_soon(self):
+        self.provider_rejection_asks_again_soon('sa')
+
+    def test_sh_provider_rejection_asks_again_soon(self):
+        self.provider_rejection_asks_again_soon('sh')
+
+    def test_cs_provider_rejection_asks_again_soon(self):
+        self.provider_rejection_asks_again_soon('cs')
+
+    def test_an_accepted_revocation_queues_only_the_end_of_the_hold(self):
+        anchor, policies = self.protected_with_two_policies('sa')
+        with patch(SCHEDULE['sa']) as schedule:
+            policies[1].unlink()
+        schedule.assert_called_once()
+        self.assertGreater(schedule.call_args.args[1],
+                           anchor.access_token_revoke_accepted_at
+                           + timedelta(seconds=self.hold))
 
     def test_a_refused_revocation_is_logged_with_its_reason(self):
         anchor, policies = self.protected_with_two_policies('sa')

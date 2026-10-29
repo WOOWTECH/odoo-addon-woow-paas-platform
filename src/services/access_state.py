@@ -173,6 +173,9 @@ ACCESS_REVOKE_HOLD_DEFAULT = 120
 ACCESS_REVOKE_HOLD_MIN = 30
 ACCESS_REVOKE_HOLD_MAX = 3600
 ACCESS_RESYNC_CRON_XMLID = 'woow_paas_platform.ir_cron_access_protection_resync'
+# The provider rejected the token revocation (for example a Cloudflare 5xx): the origin
+# stays closed, so do not leave it to the periodic cron (15 minutes) to ask again.
+ACCESS_REVOKE_RETRY_SECONDS = 60
 
 
 def access_revoke_hold_seconds(env):
@@ -467,6 +470,20 @@ def access_mark_authorization_changes(env, anchors, before):
         anchor._mark_access_token_revoke_pending()
         marked.append(anchor)
     return marked
+
+
+def access_resync_wake_pending(env, by):
+    """True when a resync wake-up is already queued for ``by`` (naive UTC) or earlier.
+
+    Several rows can be rejected by the provider in one run; one queued wake-up is
+    enough for all of them (the resync scans every due row), so callers skip queuing
+    another. Unconsumed wake-ups that are already due count as queued.
+    """
+    cron = env.ref(ACCESS_RESYNC_CRON_XMLID, raise_if_not_found=False)
+    if not cron:
+        return False
+    return bool(env['ir.cron.trigger'].sudo().search_count(
+        [('cron_id', '=', cron.id), ('call_at', '<=', by)], limit=1))
 
 
 # ---------------------------------------------------------------------------
