@@ -114,7 +114,14 @@ class SecurityAccessController(Controller):
             # `two-layer-acl-lockstep`）。解綁只是讓下一台能接手；對方手上的權杖
             # 仍然有效，要斷開只能換權杖。
             sa.action_release_binding()
-            return {"success": True, "data": sa.to_dict()}
+            data = sa.to_dict()
+            # 同 smart_home：回應帶即時的連接器數，不是解綁前的快取值（#38）。
+            try:
+                data.update(sa._live_tunnel_status())
+            except Exception:
+                _logger.exception(
+                    "[SA] live tunnel status failed after release_binding sa=%s", sa.id)
+            return {"success": True, "data": data}
         elif action == "update":
             vals = {}
             if kwargs.get("name"):

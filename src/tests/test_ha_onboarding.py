@@ -8,6 +8,7 @@ from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests.common import HttpCase, tagged
 
+from .smart_home_fixture import open_gates
 from .wallet_fixture import fund_wallet
 
 
@@ -93,6 +94,44 @@ class TestHAOnboarding(HttpCase):
         self.assertTrue(home.subscription_id.sh_subscription_plan_id.mcp_integration)
         self.assertEqual(self._options('remote_access', home.workspace_id).json()['homes'], [])
         self.assertEqual(self._options('remote_access_mcp', home.workspace_id).json()['homes'][0]['id'], home.id)
+
+    def test_options_say_whether_a_service_is_already_used(self):
+        """HA issue #37: the component asks before taking over a service in use."""
+        home = self._create()
+        item = self._options('remote_access', home.workspace_id).json()['homes'][0]
+        self.assertEqual(item['binding_state'], 'unbound')
+        self.assertEqual((item['connector_count'], item['binding_conflict']), (0, False))
+        home._tunnel_binding_claim('a' * 32, 'Living room HA')
+        home.write({'connector_count': 2, 'binding_conflict': True})
+        item = self._options('remote_access', home.workspace_id).json()['homes'][0]
+        self.assertEqual(item['binding_state'], 'claimed')
+        self.assertEqual(item['bound_instance_label'], 'Living room HA')
+        self.assertEqual((item['connector_count'], item['binding_conflict']), (2, True))
+
+    def test_options_connector_count_comes_from_the_live_tunnel(self):
+        """An unbound service can still have a connector (released, not disconnected)."""
+        home = self._create()
+        open_gates(home).write({'tunnel_id': 'tun-onboard-live'})
+        home.write({'connector_count': 2, 'binding_conflict': True})  # stale stored reading
+        live = {'connector_count': 1, 'binding_conflict': False, 'tunnel_status': 'connected'}
+        with patch.object(type(home), '_live_tunnel_status', return_value=live):
+            item = self._options('remote_access', home.workspace_id).json()['homes'][0]
+        self.assertEqual((item['connector_count'], item['binding_conflict']), (1, False))
+
+    def test_options_keep_the_stored_reading_when_the_operator_is_silent(self):
+        home = self._create()
+        open_gates(home).write({'tunnel_id': 'tun-onboard-silent'})
+        home.write({'connector_count': 2, 'binding_conflict': True})
+        with patch.object(type(home), '_live_tunnel_status', return_value={}):
+            response = self._options('remote_access', home.workspace_id)
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()['homes'][0]
+        self.assertEqual((item['connector_count'], item['binding_conflict']), (2, True))
+        with patch.object(type(home), '_live_tunnel_status', side_effect=RuntimeError('boom')), \
+                self.assertLogs('odoo.addons.woow_paas_platform.controllers.ha_onboarding', level=40):
+            response = self._options('remote_access', home.workspace_id)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['homes'][0]['connector_count'], 2)
 
     def test_new_service_uses_ha_port_without_reconfiguring_existing_service(self):
         response = self._post({'service_kind': 'remote_access', 'ha_port': 18243})

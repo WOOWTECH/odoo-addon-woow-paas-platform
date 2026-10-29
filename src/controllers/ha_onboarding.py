@@ -1,5 +1,6 @@
 """Service-first onboarding for the HA integration (Bearer, explicit write scope)."""
 import json
+import logging
 
 from psycopg2 import IntegrityError, OperationalError
 
@@ -9,6 +10,8 @@ from odoo.exceptions import UserError
 from .ha_api import _authenticate, _capability, _json_error, _json_response
 from .smart_home import SmartHomeController
 from ..models.workspace_access import ROLE_ADMIN
+
+_logger = logging.getLogger(__name__)
 
 _KINDS = {
     'remote_access': ('plan_smarthome_monthly', '遠端存取'),
@@ -22,14 +25,48 @@ def _kind(home):
     return 'remote_access_mcp' if plan.mcp_integration else 'remote_access'
 
 
-def _home_dto(home):
+def _home_dto(home, live=None):
+    live = live or {}
     return {
         'id': home.id, 'name': home.name, 'state': home.state,
         'service_kind': _kind(home),
         'binding_state': home.binding_state,
         'bound_instance_label': home.bound_instance_label or '',
+        # Whether something is attached to the tunnel right now. The HA component
+        # asks before taking over a service that is in use (issue #37), so an
+        # unbound service that still has a connector must say so; `live` is the
+        # Operator's current reading, the stored value is the fallback.
+        'connector_count': live.get('connector_count', home.connector_count),
+        'binding_conflict': live.get('binding_conflict', home.binding_conflict),
         'subscription': home._get_subscription_info(),
     }
+
+
+def _live_binding_by_id(homes):
+    """``{home.id: {'connector_count', 'binding_conflict'}}`` read from the live tunnel.
+
+    Same bound as ``ha_api._live_tunnel_status_by_id``: once the Operator does not
+    answer (not configured, timeout, error) the remaining homes are not asked, so
+    one request costs at most one timeout; a home without a tunnel is not asked and
+    does not trip the bound. Read only. Homes missing from the result fall back to
+    their stored values.
+    """
+    out = {}
+    operator_down = False
+    for home in homes:
+        if not home.tunnel_id or operator_down:
+            continue
+        try:
+            live = home._live_tunnel_status()
+        except Exception:
+            _logger.exception("Live tunnel status failed for smart home id=%s", home.id)
+            live = {}
+        if 'connector_count' in live:
+            out[home.id] = {key: live[key] for key in ('connector_count', 'binding_conflict')
+                            if key in live}
+        else:
+            operator_down = True
+    return out
 
 
 class HAOnboardingController(Controller):
@@ -67,7 +104,8 @@ class HAOnboardingController(Controller):
             homes = workspace.env['woow_paas_platform.smart_home'].search([
                 ('workspace_id', '=', workspace.id), ('state', '!=', 'deleting'),
             ]).filtered(lambda home: _kind(home) == service_kind)
-            body['homes'] = [_home_dto(home) for home in homes]
+            live = _live_binding_by_id(homes)
+            body['homes'] = [_home_dto(home, live.get(home.id)) for home in homes]
         return _json_response(body)
 
     @route('/api/smarthome/onboarding', type='http', auth='none',
