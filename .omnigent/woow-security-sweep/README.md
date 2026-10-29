@@ -226,7 +226,7 @@ review_units:
       exclude_paths: []                  # 從 paths 扣掉（選填）
       entry_points:
         extract: odoo-route              # odoo-route｜fastapi-route：用 ast 抽 decorator，不執行程式碼
-        auth: [none, public]             # odoo-route 才有 auth
+        auth: [none, public, inherited]  # odoo-route 才有 auth；inherited＝裸 @route() 覆寫父類（auth 沿用父類，看不出來）
         routes: ["/api/*"]               # 只收這些 route（選填）
         exclude_routes: []               # 排除（選填）
         extra: [{route: "...", file: "...", note: "..."}]   # 抽不到的入口手動列

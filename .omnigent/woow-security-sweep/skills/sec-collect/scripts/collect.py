@@ -439,7 +439,9 @@ def _const(node: ast.AST | None) -> Any:
 def extract_routes(src: Path, files: list[str], kind: str) -> tuple[list[dict[str, Any]], list[str]]:
     """從 Python 原始碼的 decorator 抽出 route。
 
-    - `odoo-route`：`@http.route(...)`／`@route(...)`；auth 省略時是 Odoo 預設的 user、type 預設 http
+    - `odoo-route`：`@http.route(...)`／`@route(...)`；auth 省略時是 Odoo 預設的 user、type 預設 http。
+      沒寫路徑的 `@route()` 是覆寫父類 controller：URL、auth、type 都沿用父類（常是 Odoo core 或上游 addon 的
+      auth=none／public 入口），這個檔案看不出來，標成 `<繼承父類 route：函式名>`、auth／type 為 `inherited`
     - `fastapi-route`：`@<router>.get/post/…(path)`；router 的 prefix 不展開（只記 router 名）
     只用 ast.parse 讀結構，不 import、不執行目標程式碼。parse 失敗的檔案列在第二個回傳值。
     """
@@ -467,7 +469,12 @@ def extract_routes(src: Path, files: list[str], kind: str) -> tuple[list[dict[st
                     if attr != "route":
                         continue
                     paths = _const(first if first is not None else kw.get("route"))
-                    info = {"auth": _const(kw.get("auth")) or "user", "type": _const(kw.get("type")) or "http"}
+                    inherited = paths is None
+                    if inherited:
+                        paths = f"<繼承父類 route：{node.name}>"
+                    default = "inherited" if inherited else None
+                    info = {"auth": _const(kw.get("auth")) or default or "user",
+                            "type": _const(kw.get("type")) or default or "http"}
                     if "csrf" in kw:
                         info["csrf"] = _const(kw["csrf"])
                     if "methods" in kw:

@@ -573,6 +573,10 @@ class A(http.Controller):
     @http.route('/legacy/old', auth='user')
     def d(self):
         pass
+
+    @route()
+    def web_login(self):
+        pass
 """
 
 ROUTES_OP = """from fastapi import APIRouter
@@ -657,6 +661,9 @@ class ExtractRoutesTest(unittest.TestCase):
             self.assertIn("/ha/b", by)
             self.assertEqual(by["/api/ws/<int:wid>/x"]["auth"], "user")
             self.assertIn("<ROUTE_CONST>", by)  # 不是字面值：照原樣標示
+            # 裸 @route() 覆寫父類：auth 看不出來，不能當成 Odoo 預設的 user
+            self.assertEqual({k: by["<繼承父類 route：web_login>"][k] for k in ("auth", "type")},
+                             {"auth": "inherited", "type": "inherited"})
             self.assertEqual(errors, ["broken.py：SyntaxError"])
             rows, _ = cl.extract_routes(src, ["op.py"], "fastapi-route")
             self.assertEqual([(r["route"], r["methods"], r["router"]) for r in rows],
@@ -693,7 +700,8 @@ class UnitsRunTest(RepoFixture):
         self.assertEqual(sorted(e["route"] for e in unit["entry_points"]), ["/ha/a", "/ha/b", "<ROUTE_CONST>"])
         self.assertEqual(review["next_due"], ["ws-api"])
         self.assertEqual(review["unassigned_files"], ["models/y.py"])
-        self.assertEqual([r["route"] for r in review["unassigned_routes"]], ["/legacy/old"])
+        self.assertEqual(sorted(r["route"] for r in review["unassigned_routes"]),
+                         ["/legacy/old", "<繼承父類 route：web_login>"])
         run_dir = Path(meta["run_dir"])
         cov = self.report(run_dir, [{"type": "coverage", "entry": "/ha/a", "status": "reviewed"}])
         with self.assertRaisesRegex(cl.CollectError, "--unit"):

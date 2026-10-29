@@ -71,19 +71,32 @@ review_units:
   - .gitea/workflows/
   units:
   - name: unauth-routes
-    focus: 不需登入的 route（auth=none／public）：token／簽章在 sudo 之前驗、token 擁有者與 workspace 角色、OAuth2 device flow 與 token 端點、付款結果頁洩漏他人訂單
-    # 只列有 auth=none／public route 的檔案；別的 controller 新增這類 route 會出現在報告的 unassigned_routes
+    focus: >-
+      不需登入的 route（auth=none／public）與覆寫父類的入口（裸 @route() 沿用父類的 auth，常是 Odoo core 或上游
+      addon 的 none／public：/web/login、/web/signup、ECPay S2S 回呼）：token／簽章在 sudo 之前驗、token 擁有者與
+      workspace 角色、OAuth2 authorize／device／token 端點與 redirect_uri、付款回呼的金額與歸屬、結果頁洩漏他人訂單
+    # 只列有 auth=none／public route 或覆寫父類入口的檔案；別的 controller 新增這類 route 會出現在報告的 unassigned_routes
     paths:
     - src/controllers/agent_runtime_skill.py
     - src/controllers/agent_runtime_webhook.py
     - src/controllers/billing.py
+    - src/controllers/ecpg_callback.py
     - src/controllers/ha_api.py
     - src/controllers/ha_onboarding.py
     - src/controllers/ha_paas.py
     - src/controllers/oauth2.py
+    - src/controllers/connect_login.py
+    - src/controllers/auth_hardening.py
+    - src/controllers/signup.py
+    - src/controllers/portal.py
     - src/services/paas_capability.py
     - src/models/oauth*.py
-    entry_points: {extract: odoo-route, auth: [none, public]}
+    entry_points:
+      extract: odoo-route
+      auth: [none, public, inherited]
+      extra:
+      - {route: "/payment/ecpg/bind_callback（父類 route；本 repo 覆寫它呼叫的 _handle_bind_callback）", file: src/controllers/ecpg_callback.py, auth: public}
+      - {route: "/web/signup（父類 route；本 repo 覆寫 _prepare_signup_values）", file: src/controllers/signup.py, auth: public}
     review_classes:
     - ATTACK-CLASSES.md#Access control
     - ATTACK-CLASSES.md#Injection
@@ -117,8 +130,6 @@ review_units:
     - src/controllers/profile.py
     - src/controllers/connect_login.py
     - src/controllers/auth_hardening.py
-    - src/controllers/signup.py
-    - src/controllers/portal.py
     - src/models/cloud_app_template.py
     - src/models/custom_domain.py
     - src/models/res_users*.py
@@ -126,8 +137,6 @@ review_units:
       extract: odoo-route
       auth: [user]
       exclude_routes: ["/api/workspaces/*"]
-      extra:
-      - {route: "/web/signup（覆寫 auth_signup 的必填檢查與身分正規化）", file: src/controllers/signup.py, auth: public}
   - name: billing
     focus: 登入後的帳單／付款方式／儲值／對帳 route 與入帳邏輯：金額與幣別來源、他人訂閱或錢包、ECPay 回呼簽章與冪等、餘額競態
     paths:
