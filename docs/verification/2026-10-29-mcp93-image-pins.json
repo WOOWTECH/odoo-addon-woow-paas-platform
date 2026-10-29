@@ -6,7 +6,7 @@
   "mcp_feature_head": "3d15313a63856c8373dcda0ba254e1f64ece9793",
   "main_ci_run": 32112,
   "main_ci_all_checks": "11/11 success; eight build/smoke/publish jobs",
-  "platform_base": "ffdba762e76a7278aec28283997066b9e6c18adf",
+  "platform_base": "bf890924b882146bfd72be109ea00ddfc15a1ea5",
   "platform_module_version_changed": false,
   "images": {
     "n8n": {
@@ -365,25 +365,76 @@
   },
   "external_evidence_root": "/data/pi-agent/home/work/paas-parity-integration-evidence-20261029",
   "platform_static_verification": {
-    "at": "2026-10-29T14:18:48.258243+00:00",
+    "at": "2026-10-29T14:27:37.366318+00:00",
     "passed": true,
     "scope": "static XML semantic diff/manifest/launch-pin consistency, not Odoo ORM upgrade test",
-    "platform_base": "ffdba762e76a7278aec28283997066b9e6c18adf",
-    "eight_changed_apps": [
-      "hermes",
+    "platform_base": "bf890924b882146bfd72be109ea00ddfc15a1ea5",
+    "three_changed_apps": [
       "odoo",
       "n8n",
-      "k8s",
-      "vk",
-      "opendesign",
-      "litellm",
-      "nextcloud"
+      "litellm"
     ],
+    "unchanged_template_count": 24,
     "other_template_fields_unchanged": true,
     "all_other_records_unchanged": true,
     "chart_resource_credential_seed_unchanged": true,
     "module_version_unchanged": true,
     "odoo_launch_lockstep_matches_exact_image_runtime": true,
     "odoo_upgrade_tests": "pending normal platform sandbox gate"
-  }
+  },
+  "platform_initial_base": "ffdba762e76a7278aec28283997066b9e6c18adf",
+  "selected_template_apps": [
+    "n8n",
+    "odoo",
+    "litellm"
+  ],
+  "unchanged_template_apps": [
+    "hermes",
+    "k8s",
+    "vk",
+    "opendesign",
+    "nextcloud"
+  ],
+  "selected_template_ids": [
+    6,
+    8,
+    26
+  ],
+  "retained_chart_version": "0.1.9",
+  "retained_other_template_count": 24,
+  "planned_rollout_service_ids": [
+    144,
+    145,
+    265,
+    175,
+    176,
+    184,
+    185,
+    186,
+    187,
+    188,
+    189,
+    190,
+    191,
+    192,
+    193,
+    194,
+    195,
+    196,
+    197,
+    198,
+    266,
+    288
+  ],
+  "required_fresh_backup_service_ids": [
+    266,
+    288
+  ],
+  "rollout_inventory_handoff": {
+    "path": "/data/pi-agent/home/work/paas-parity-rollout-review-20261029/HANDOFF.md",
+    "report": "/data/pi-agent/home/work/paas-parity-rollout-review-20261029/REPORT.md",
+    "review_at": "2026-10-29T14:15:42.475364+00:00",
+    "production_mutations_by_this_lane": 0
+  },
+  "supersedes_scope": "Initial eight-pin preparation d3f2af5f; coordinator narrowed actual template mutation to three functional products after independent production inventory; eight publication receipts remain valid"
 }
