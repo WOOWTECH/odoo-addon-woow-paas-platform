@@ -65,7 +65,24 @@ disclosure:
   findings_to: omnigent_inbox
   issues_to: mirror-internal/sh_document_management
   high_fix_via: private_pr
-baseline: []
+baseline:
+  - id: c12c26d20546
+    fingerprint: review:zip-export-directory-name-path-traversal
+    status: tracked
+    reason: 第三方模組（apps.odoo.com sh_document_management 18.0），等上游修正；追蹤 mirror-internal/sh_document_management#3
+    approved_by: elmo
+  - id: 26bf34d45e8e
+    fingerprint: review:sudo-active-ids-zip-export-directory
+    status: accepted
+    reason: 人判誤報（2026-10-30 Inbox）
+    approved_by: elmo
+    expires: 2027-04-30
+  - id: aeb6ba8bd066
+    fingerprint: review:sudo-active-ids-zip-export-attachment
+    status: accepted
+    reason: 人判誤報（2026-10-30 Inbox）：內部使用者（internal user）是內部員工
+    approved_by: elmo
+    expires: 2027-04-30
 
 # baseline 格式（accepted 必須有 expires，不允許永久豁免）：
 #  - id: <自訂或 H-xx>
