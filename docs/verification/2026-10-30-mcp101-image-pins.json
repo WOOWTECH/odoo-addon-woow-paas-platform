@@ -1,0 +1,228 @@
+{
+  "source_commit": "accea2e6bee1f31e79eb1d437e807dfe0dc3d683",
+  "source_tree": "f7937575f9be4982f922a204aa88e5bbe37d131e",
+  "source_PR": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/pulls/101",
+  "normal_ci_run": {
+    "id": 32918,
+    "run_number": 1146,
+    "event": "push",
+    "head_sha": "accea2e6bee1f31e79eb1d437e807dfe0dc3d683",
+    "head_branch": "main",
+    "path": "ci.yml@refs/heads/main",
+    "status": "completed",
+    "conclusion": "success",
+    "html_url": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/actions/runs/32918",
+    "run_started_at": null,
+    "started_at": "2026-10-30T15:10:00Z",
+    "completed_at": "2026-10-30T15:17:10Z",
+    "created_at": null,
+    "updated_at": null,
+    "actor": "toypark1234",
+    "triggering_actor": null
+  },
+  "publication_receipt_sha256": "de40094c5946996d783fc22cb9c69e8378341eb2756f05dccfefed0a21039826",
+  "platform_base": "fd29b8bbeae04eedc1195b78bc71526b24b2fdce",
+  "module_version_unchanged": "18.0.1.0.283",
+  "train_base": "0940c68902cfeda63b5efa7252ec66db10b6691f",
+  "pins": {
+    "hermes": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:75106dc89347c3f826e0000efaca1367dfd77dbf0213a9f5c2ec95f2865bd27c",
+      "manifest_digest": "sha256:75106dc89347c3f826e0000efaca1367dfd77dbf0213a9f5c2ec95f2865bd27c",
+      "config_digest": "sha256:c9781c48f31481da14340ef7324f4560318298ca0bb9ee4c6710fdfa3a864856"
+    },
+    "odoo": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:e7a65c29d0fa6e71ef54cdc1088a351a10598d01ebf3ef408a6f78d111a6ccdb",
+      "manifest_digest": "sha256:e7a65c29d0fa6e71ef54cdc1088a351a10598d01ebf3ef408a6f78d111a6ccdb",
+      "config_digest": "sha256:f48a0fd736b1bf921370928cda1d6ef463b680bf6558e8d6af29dee9edaa694d"
+    },
+    "n8n": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:ba3fa807474c9e3d59c4a87365bd1c6ff81c07c3f05d14871cf7d01765fbfdb6",
+      "manifest_digest": "sha256:ba3fa807474c9e3d59c4a87365bd1c6ff81c07c3f05d14871cf7d01765fbfdb6",
+      "config_digest": "sha256:68602da4a9070966afedb601916999f195f7cc2f75118240313d3205026a3295"
+    },
+    "k8s": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:8d7283ee1e001bdb43410dcc1f82b86798243181e284de791d3c3678ce3b8c78",
+      "manifest_digest": "sha256:8d7283ee1e001bdb43410dcc1f82b86798243181e284de791d3c3678ce3b8c78",
+      "config_digest": "sha256:02cce7db0da9068d3f60dbc516f09d0e5fbefef9446164e59ee3cf47649b8ce9"
+    },
+    "vk": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:1671e652d2168362f8fae53d426df1b05b64f57425d662591d85ea8cfadfffc5",
+      "manifest_digest": "sha256:1671e652d2168362f8fae53d426df1b05b64f57425d662591d85ea8cfadfffc5",
+      "config_digest": "sha256:365b480bc6da2bdde1de1f1c97e57c09170a4ccdf1f1f67eb80bcb694ec2903c"
+    },
+    "opendesign": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:96f01bc2a9306250c26e1781f88dbaae77004bed17accaee44e5d7fb7d3f04a6",
+      "manifest_digest": "sha256:96f01bc2a9306250c26e1781f88dbaae77004bed17accaee44e5d7fb7d3f04a6",
+      "config_digest": "sha256:d2d4d922f8f9fcf9fb9ffa7ecd1c00d1d6e356ef2cc0ee6a9052c901e652025c"
+    },
+    "litellm": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470",
+      "manifest_digest": "sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470",
+      "config_digest": "sha256:dd61a54b23ee2cecce13809ff1e402cd5f0af7d4c030da34fdb85b67f569fe55"
+    },
+    "nextcloud": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin:accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:d0338a54cf88c899924a8a96bda4bc4da2a1f5f5313c1ebd645c26c37ad83205",
+      "manifest_digest": "sha256:d0338a54cf88c899924a8a96bda4bc4da2a1f5f5313c1ebd645c26c37ad83205",
+      "config_digest": "sha256:fa009bf95dcf2a2e7e8853d03bc2d84f85074fc049b1ea7b014822692dd8fd5c"
+    }
+  },
+  "publication": {
+    "all_build_verify_smoke_push_steps_success": true,
+    "manifest_config_and_app_core_copy_verified": true
+  },
+  "semantic_delta": {
+    "template_count": 28,
+    "changed_tags": 8,
+    "all_non_image_fields_unchanged": true,
+    "all_other_templates_unchanged": true,
+    "legacy_odoo_manage_unchanged": true
+  },
+  "preserved": {
+    "emqx_source": "b5ed89ca01acfc33a7ef57987f0f64a11f603ea3",
+    "emqx_digest": "sha256:f60858334f11147675a0071b5caf699692ccf31fb493347da5d856bf9a8828dc",
+    "legacy_odoo_manage": true,
+    "Pi_Agent_chart": "0.1.19 (already in develop)",
+    "Pi_Agent_image": {
+      "repository": "jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent",
+      "tag": "20261030.1101@sha256:6144c9ffb7cd5f02671c2ba3ba8a2956d254945c04f4d5377d087ffe36cf0f14"
+    },
+    "commands_credentials_ports_resources_policy": true
+  },
+  "limitations": [
+    "Git app/core sources match bounded COPY layers; no full final-rootfs or runtime acceptance claim.",
+    "Python base and some external build inputs are mutable; unchanged source is not binary reproducibility.",
+    "No platform/train pin or deployment changed.",
+    "Odoo fresh/upgrade ORM and runtime acceptance not executed for this candidate.",
+    "Future normal platform release includes already-approved Pi Agent delta vs deployed282; owner release coordination required."
+  ],
+  "production_deployment_claim": false,
+  "source_contract": {
+    "proof_sha256": "9e56ee6ab1bce580dceb4d5c41e57b9a4dda8ad69028e4cdaaf6a868db0698de",
+    "at": "2026-10-30T15:24:01.836186+00:00",
+    "base": "b2eec04ba3e22b84fe453a4948450cb162a0fda5",
+    "source": "accea2e6bee1f31e79eb1d437e807dfe0dc3d683",
+    "changed_paths": [
+      ".gitea/workflows/ci.yml",
+      "apps/hermes/docs/session-delete-contract.md",
+      "apps/hermes/hermes_mcp_server/server.py",
+      "apps/hermes/hermes_mcp_server/session_mutations.py",
+      "apps/hermes/tests/test_session_mutations.py",
+      "packages/mcp-admin-core/tests/_operation_transport_child.py",
+      "packages/mcp-admin-core/tests/test_hermes_functional.py",
+      "packages/mcp-admin-core/tests/test_operation_transports.py"
+    ],
+    "launch_contract_files_unchanged": [
+      {
+        "path": "uv.lock",
+        "sha256": "f395c4a42f20be48047364f27558c3805d2f1d94c5579854f08f2d432bbcd7e8"
+      },
+      {
+        "path": "pyproject.toml",
+        "sha256": "1668242dedd10bc8933290591a2cfc890915cdc6b084f6129f65b133913cac1f"
+      },
+      {
+        "path": "packages/mcp-admin-core/mcp_admin_core/launch_policy.py",
+        "sha256": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      {
+        "path": "apps/hermes/Dockerfile",
+        "sha256": "65c9a15e1b662edb8b3bf4280e58297bd59a3b12af380b18e948d7de1588512e"
+      },
+      {
+        "path": "apps/hermes/hermes_mcp_admin/main.py",
+        "sha256": "97911cc91262bbc3b64436a5dcb823b86bf236094d8036a8a66114069642e875"
+      },
+      {
+        "path": "apps/hermes/pyproject.toml",
+        "sha256": "0cc74297c260572759a03b03e367fb1115d5e94830192f84311066042ed6724a"
+      },
+      {
+        "path": "apps/odoo/Dockerfile",
+        "sha256": "c62b2101c286d5c89ed663fd1cdd3e319ca7f4f2bc2f403f5d532c2001679f31"
+      },
+      {
+        "path": "apps/odoo/odoo_mcp_admin/main.py",
+        "sha256": "dea0cd11f605c5dbf7740224f6fb5af96a2133dee09d37f45cfb840a47a92991"
+      },
+      {
+        "path": "apps/odoo/pyproject.toml",
+        "sha256": "51d6938ccf4357fc4c9e9bc0d9714b6901e4106b3bc84a25f7bc1e101ff1e245"
+      },
+      {
+        "path": "apps/n8n/Dockerfile",
+        "sha256": "b48ad115d35dbd400970c6e9e89e4a9677eaad7d758ad9a4ee7e50ab781fa86d"
+      },
+      {
+        "path": "apps/n8n/n8n_mcp_admin/main.py",
+        "sha256": "220a1ca3c96bf486c73e18d5ac74173fcf74e90a7c87555b1172e819e4f0cef2"
+      },
+      {
+        "path": "apps/n8n/pyproject.toml",
+        "sha256": "f89e3f1afd7f61e51ff3ef63ac0f06b800796ea7a2aeceedccd163ace902ad26"
+      },
+      {
+        "path": "apps/k8s/Dockerfile",
+        "sha256": "d5e112f61330c222c2382c66c3156e31ab957e3724305bd3b844f1011ee4116a"
+      },
+      {
+        "path": "apps/k8s/k8s_mcp_admin/main.py",
+        "sha256": "8e73bfe3544ae368ea78a427559f3d94802d1f798969a9f215919332d5357900"
+      },
+      {
+        "path": "apps/k8s/pyproject.toml",
+        "sha256": "d39005ede8c329b49b8ff4f3827d3e23e89c2fcbc0a75bb623bfb329f3604c5a"
+      },
+      {
+        "path": "apps/vk/Dockerfile",
+        "sha256": "219fd2602c01484e5d4451829cfe0d305e434ee265be966bf85cab9f263a21ef"
+      },
+      {
+        "path": "apps/vk/vk_mcp_admin/main.py",
+        "sha256": "3986ea856204ba3338403930c768d922b26884ec36b147fe5108a98bb8bebee2"
+      },
+      {
+        "path": "apps/vk/pyproject.toml",
+        "sha256": "422661678a9a33acf44ee3bbc6a206caef2fe838a85ef9903ae019c2bf8159fb"
+      },
+      {
+        "path": "apps/opendesign/Dockerfile",
+        "sha256": "dc413db7437dc5795d839d18d897cafc4a43c00c0a9ee2b36c45473b6e39f635"
+      },
+      {
+        "path": "apps/opendesign/opendesign_mcp_admin/main.py",
+        "sha256": "98dcb907c6bbcba31a5609858e3e0b8d1115253d698b26e277bf6e06c37804bb"
+      },
+      {
+        "path": "apps/opendesign/pyproject.toml",
+        "sha256": "d24fe4f25e0bbe399ce2456ce9da4450d8945d7cb34ee27bf29f43f04f0c829f"
+      },
+      {
+        "path": "apps/litellm/Dockerfile",
+        "sha256": "9f3d818a4f2b796bd71dacab299b47e5fe1de02d43d955de385202887b560512"
+      },
+      {
+        "path": "apps/litellm/litellm_mcp_admin/main.py",
+        "sha256": "eea150a7c612c480d5251c01ad5e951d40c49567805224782cc42e5e500915c9"
+      },
+      {
+        "path": "apps/litellm/pyproject.toml",
+        "sha256": "23c3d565bd999fb463388ebbbcd057104c10b4b9fd9da653f86265b754cf52ad"
+      },
+      {
+        "path": "apps/nextcloud/Dockerfile",
+        "sha256": "b260fd8a346c757c6af34c425a1fe0499eb450cf841fe4f7b850a528e9d9589e"
+      },
+      {
+        "path": "apps/nextcloud/nextcloud_mcp_admin/main.py",
+        "sha256": "ae41d5d996cb66683ec6c3ccb6a800c6888667ab84d828ce28689ec502cffb4c"
+      },
+      {
+        "path": "apps/nextcloud/pyproject.toml",
+        "sha256": "61145d1a5e4cbeefa96516280e7ff4f2539e165c9b6aa8feed6c833184324d99"
+      }
+    ],
+    "shared_core_runtime_unchanged": true,
+    "all_nonworkflow_source_unchanged_from": "052887fa68d5e67b86c622ef92f46dd7f75a08ca",
+    "limit": "Source equality only; external build inputs may change. No final-rootfs or live runtime claim."
+  }
+}

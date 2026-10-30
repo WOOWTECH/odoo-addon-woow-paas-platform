@@ -39,20 +39,20 @@ from odoo.tests.common import TransactionCase
 # 常數——兩邊各自宣告才會在 chart 改名時各自紅，而不是一起靜默失效。
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 
-# PR95 的八筆實際發布 pin；legacy odoo-manage 保留原 pin。
-# 來源與限制：docs/verification/2026-10-30-mcp95-template-pins.json。
+# PR101／CI32918 的八筆實際發布 pin；EMQX 與 legacy odoo-manage 保留原 pin。
+# 來源與限制：docs/verification/2026-10-30-mcp101-image-pins.json。
 # 換 pin 必須先覆核發布證據與每個 app 的固定 LaunchPolicy。
 EXPECTED_IMAGE_TAGS = {
     'emqx': 'b5ed89ca01acfc33a7ef57987f0f64a11f603ea3@sha256:f60858334f11147675a0071b5caf699692ccf31fb493347da5d856bf9a8828dc',
-    'hermes': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:5353b124f970ddce2e2283bac56e8f7bc7e5f9bcc3181387c687ac252595c156',
-    'k8s': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:8d7283ee1e001bdb43410dcc1f82b86798243181e284de791d3c3678ce3b8c78',
-    'litellm': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470',
-    'n8n': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:646b2d2b69bf783e5c671a47ff719480ff157bd8f871c273b791179fa196c900',
-    'nextcloud': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:cd84b60a9cd942c2c440103910a23816e52b3a2a3c21be6502aaeade0fba591a',
-    'odoo': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:aacc8e9d631f5efcfa2c63ab20180312ae5077b0ffc739d4bde9040407377d39',
+    'hermes': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:75106dc89347c3f826e0000efaca1367dfd77dbf0213a9f5c2ec95f2865bd27c',
+    'k8s': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:8d7283ee1e001bdb43410dcc1f82b86798243181e284de791d3c3678ce3b8c78',
+    'litellm': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470',
+    'n8n': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:ba3fa807474c9e3d59c4a87365bd1c6ff81c07c3f05d14871cf7d01765fbfdb6',
+    'nextcloud': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:d0338a54cf88c899924a8a96bda4bc4da2a1f5f5313c1ebd645c26c37ad83205',
+    'odoo': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:e7a65c29d0fa6e71ef54cdc1088a351a10598d01ebf3ef408a6f78d111a6ccdb',
     'odoo-manage': 'd5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:daefcdcbaecc442a0c64bf2eab9d786fa26948a326c915d2db924fe606db3f82',
-    'opendesign': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:2800cbbe04e3e8e587e5ed7d16f8dd6a4f200eb9540d2bef2a0f13d6d29986a5',
-    'vk': 'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:1671e652d2168362f8fae53d426df1b05b64f57425d662591d85ea8cfadfffc5',
+    'opendesign': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:96f01bc2a9306250c26e1781f88dbaae77004bed17accaee44e5d7fb7d3f04a6',
+    'vk': 'accea2e6bee1f31e79eb1d437e807dfe0dc3d683@sha256:1671e652d2168362f8fae53d426df1b05b64f57425d662591d85ea8cfadfffc5',
 }
 
 # chart mcp-server（0.1.5～0.1.8 皆同）的 config.nonSensitive 預設是 hermes 形的
