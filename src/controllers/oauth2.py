@@ -27,7 +27,7 @@ DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 # （#336 F1：device 同意頁原本直印 raw scope 字串、不讀此 dict，故 App 走 device
 # flow 只看到 'ha:provision' 這種機器字串。抽出後兩頁一致顯示人話描述）。
 SCOPE_DESCRIPTIONS = {
-    'smarthome:read': '讀取你的智慧家庭服務與連線狀態',
+    'smarthome:read': '讀取你的智慧平台服務與連線狀態',
     'smarthome:tunnel': '建立這台 Home Assistant 的安全連線',
     'workspace:read': '讀取你可以使用的工作區',
     'smarthome:provision': '建立缺少的工作區與七天試用服務（到期不會自動收費）',
@@ -41,7 +41,7 @@ SCOPE_DESCRIPTIONS = {
 
 def _client_display_name(client):
     return {
-        'woow-ha-smart-home': 'woowtech 智慧家庭連結',
+        'woow-ha-smart-home': 'woowtech 智慧平台連結',
         'woow-ha-app': 'woowtech Home Assistant 應用程式',
     }.get(client.client_id, client.name)
 
