@@ -64,6 +64,8 @@ PRIVATE_KEYS = ("context", "review_focus", "review_classes", "history", "baselin
 UPSTREAM_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 STACK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
+#: semgrep 的 rule id（點分式）；exclude_rules 只收這個形狀，避免設定值被當成其他參數
+SEMGREP_RULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 #: since_upstream 只接受 https 的 git remote（擋 file://、ext::、本機路徑這類會讓 git 執行或讀本機的寫法）
 REMOTE_RE = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9_./-]+?(?:\.git)?$")
 FETCH_TIMEOUT = 600
@@ -249,6 +251,14 @@ def load_config(repo: Path, rev: str, targets_dir: Path = TARGETS_DIR,
             scan = public.setdefault("scan", {})
             scan["exclude"] = list(scan.get("exclude") or []) + extra
             source += f"＋targets scan_exclude {len(extra)} 條"
+        # 整條排除 semgrep 規則：同樣只補在 stack 預設上；stack 沒開 semgrep 就不生效（不會因此開啟 semgrep）
+        rules = [str(r) for r in (private.get("semgrep_exclude_rules") or []) if str(r).strip()]
+        tools = public.get("scan", {}).get("tools") or {}
+        if rules and "semgrep" in tools:
+            semgrep = dict(tools["semgrep"] or {})
+            semgrep["exclude_rules"] = list(semgrep.get("exclude_rules") or []) + rules
+            tools["semgrep"] = semgrep
+            source += f"＋targets semgrep_exclude_rules {len(rules)} 條"
     else:
         public, source = yaml.safe_load(raw) or {}, f"{rev}:.security/sweep.yaml"
     cfg = dict(public)
@@ -762,6 +772,10 @@ def run_semgrep(src: Path, files: list[str], cfg: dict[str, Any]) -> list[dict[s
            "--disable-version-check"]
     for rs in rulesets:
         cmd += ["--config", rs]
+    for rule in cfg.get("exclude_rules") or []:
+        if not SEMGREP_RULE_RE.match(str(rule)):
+            raise CollectError(f"semgrep exclude_rules 不合法：{rule!r}")
+        cmd.append(f"--exclude-rule={rule}")
     _, out, _ = _run_tool(cmd + files, src, ok_codes=(0, 1))
     results = json.loads(out).get("results", [])
     return [make_finding(src, tool="semgrep", rule=r["check_id"], path=r["path"],
