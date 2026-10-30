@@ -332,7 +332,7 @@ class TestHAOnboarding(HttpCase):
         response = self.url_open('/web/login?redirect=%2Foauth2%2Fauthorize')
         self.assertEqual(response.status_code, 200, response.text[:400])
         self.assertIn('o_woow_connect_login', response.text)
-        self.assertIn('<title>登入並連結智慧家庭｜woowtech</title>', response.text)
+        self.assertIn('<title>登入並連結智慧平台｜woowtech</title>', response.text)
         self.assertIn('woowtech', response.text)
         self.assertIn('name="csrf_token"', response.text)
         self.assertIn('name="login"', response.text)

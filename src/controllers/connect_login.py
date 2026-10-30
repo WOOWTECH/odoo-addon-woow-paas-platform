@@ -16,10 +16,10 @@ class ConnectLogin(AuthSignupHome):
 
     @route()
     def web_login(self, redirect=None, **kw):
-        connect = self._connect_context(redirect, '登入並連結智慧家庭')
+        connect = self._connect_context(redirect, '登入並連結智慧平台')
         response = super().web_login(redirect=redirect, **kw)
         if connect and getattr(response, 'qcontext', None) is not None:
-            self._connect_context(redirect, '登入並連結智慧家庭')
+            self._connect_context(redirect, '登入並連結智慧平台')
             # Keep the standard login, CSRF, OAuth providers and redirect. Only
             # this page's lazy-render locale/brand change; no user/company edits.
             if response.qcontext.get('error') == 'Wrong login/password':

@@ -7,7 +7,7 @@
     </template>
     <template id="connect_brand" name="woowtech connect brand">
         <a href="/woow" class="oauth-logo" aria-label="woowtech 平台首頁">woowtech</a>
-        <p class="oauth-eyebrow">智慧家庭連結</p>
+        <p class="oauth-eyebrow">智慧平台連結</p>
     </template>
     <template id="connect_scopes" name="woowtech permission list">
         <div class="oauth-scopes">
