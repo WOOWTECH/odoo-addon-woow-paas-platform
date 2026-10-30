@@ -39,6 +39,21 @@ from odoo.tests.common import TransactionCase
 # 常數——兩邊各自宣告才會在 chart 改名時各自紅，而不是一起靜默失效。
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 
+# PR95 的八筆實際發布 pin；legacy odoo-manage 保留原 pin。
+# 來源與限制：docs/verification/2026-10-30-mcp95-template-pins.json。
+# 換 pin 必須先覆核發布證據與每個 app 的固定 LaunchPolicy。
+EXPECTED_IMAGE_TAGS = {
+    'hermes': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:e1c15208e2209da68959fcc817af36be59cbaab1ec7f5b33383d99103a351847',
+    'k8s': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:af1c182f5cb4f8c6e749a0f9f9ac1da38adcccfbf9be33f5f8b52afeb35ea6a4',
+    'litellm': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248',
+    'n8n': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:5ec486f13f8460892501c9c185d60daa04f58e559d86d5bce3609cc79441b7e8',
+    'nextcloud': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f7fcd1568753f92c68da191036ce852b58da8a0deb045ac945e28910cbee8bb9',
+    'odoo': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f3b5f4278e92af3cee0e05b49392903d34bb74e32ec5f1f36a72d4417cafe7d1',
+    'odoo-manage': 'd5032a72f8d8c48b00b474a5193bd2c26ac5613c@sha256:daefcdcbaecc442a0c64bf2eab9d786fa26948a326c915d2db924fe606db3f82',
+    'opendesign': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:fbac1acc092d77bf3288ee9fa4f8e8bab1302d09e6c5268945ce09ca500dc8d0',
+    'vk': '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:367cbc0b8bba003ae385c09bde87ec9df0d944a1505ebc480ba496350d0429a2',
+}
+
 # chart mcp-server（0.1.5～0.1.8 皆同）的 config.nonSensitive 預設是 hermes 形的
 # （values.yaml: config.nonSensitive.mcp_server.command）。hermes 靠它拿到啟動
 # 命令；其餘 app 必須覆寫，否則子行程從不 spawn、MCP endpoint 靜默 502 而
@@ -155,7 +170,11 @@ class _McpServerFamilyAssertions:
         # to clear it — the image-repo check below cannot catch that drift.
         self.assertEqual(values['envPrefix'], self.EXPECT_ENV_PREFIX)
         self.assertEqual(values['app'], self.APP)
-        self.assertIn(self.IMAGE_REPO_SUFFIX, values['image']['repository'])
+        self.assertEqual(values['image'], {
+            'repository': 'jcr-prod.woowtech.io/woow-paas-docker-local/'
+                          + self.IMAGE_REPO_SUFFIX,
+            'tag': EXPECTED_IMAGE_TAGS[self.APP],
+        })
         # External service port stays 8080 regardless of internal app port.
         self.assertEqual(values['service']['port'], 8080)
 
@@ -392,7 +411,8 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     # digest 取自 main CI run 27630 的 push 輸出，registry 讀回一致。
     # 2026-10-29：#93 審查方法清單仍使用 woow-odoo-mcp／streamable-http／127.0.0.1／port8000。
     # 發布映像與實際子程序覆核收據：docs/verification/2026-10-29-mcp93-image-pins.json。
-    EXPECT_IMAGE_TAG = 'f748090eb782bc103edcd99ac9aa821f77294fb0@sha256:95c38f880e97d0da7c4955cadde1b832e70a8012845051d6f23f2ee1714924d6'
+    # 2026-10-30：PR95 固定 launcher 契約不變；八筆 publication proof 已逐一核 hash。
+    EXPECT_IMAGE_TAG = EXPECTED_IMAGE_TAGS['odoo']
 
     def test_mcp_server_launch_spec_matches_image_entrypoint(self):
         """#708：只釘 command 不夠，args 整組也要釘。
@@ -652,6 +672,20 @@ class TestMcpServerFamilyCoverage(TransactionCase):
         family_xmlids = {
             t.get_external_id().get(t.id) for t in self._family_templates()
         }
+        # 發布範圍與完整家族雙向相等；EMQX 尚無模板，不得順帶新增上架。
+        self.assertEqual(family_xmlids, {
+            'woow_paas_platform.cloud_app_mcp_' + app.replace('-', '_')
+            for app in EXPECTED_IMAGE_TAGS
+        })
+        for app in EXPECTED_IMAGE_TAGS:
+            if app == 'odoo-manage':
+                continue
+            xmlid = 'cloud_app_mcp_' + app
+            metadata = self.env['ir.model.data'].search([
+                ('module', '=', 'woow_paas_platform'), ('name', '=', xmlid),
+            ])
+            self.assertEqual(len(metadata), 1)
+            self.assertFalse(metadata.noupdate, xmlid + ' 必須在模組升級時收斂')
         for cls in _all_subclasses(_McpServerFamilyAssertions):
             tmpl = getattr(cls, 'TMPL', None)
             if not tmpl:

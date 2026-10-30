@@ -64,8 +64,10 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # 2026-10-29：#91 merge daaf8b03，來源 pin 159410ac 保留；registry manifest／config SHA-256 已核對。
 # 真映像離線驗收與來源摘要：docs/verification/2026-10-29-nextcloud-422-image.json。
 # 只準備範本 pin；尚未升級正式 DB 或發行平台映像。
+# 2026-10-30：PR95 八映像發布證據與固定 LaunchPolicy 已核對；本 lane 未重跑 MCP runtime。
+# 證據：docs/verification/2026-10-30-mcp95-template-pins.json。
 EXPECT_IMAGE_TAG = (
-    'daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c')
+    '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f7fcd1568753f92c68da191036ce852b58da8a0deb045ac945e28910cbee8bb9')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 

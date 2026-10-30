@@ -1,0 +1,340 @@
+{
+  "at": "2026-10-30T04:48:48.918485+00:00",
+  "passed": true,
+  "scope": "MCP95 exact eight template source pins: real isolated Odoo upgrade/fresh-install selected tests and cleanup",
+  "tested_source_commit": "0ab778b7ec517b1f7b68fdc0b5e47a8563a5e269",
+  "source_files": 1292,
+  "namespace": "dev-sandbox-mcp95-20261030t043057z-af5c",
+  "namespace_uid": "b8515409-03d4-41d7-a935-8791e08d65d2",
+  "node": "ubuntuserver-z0v3w",
+  "node_uid": "61b090d8-2b7c-4e68-87f9-c6d3ccf8b6a7",
+  "actual_tests_total": 364,
+  "test_runs": [
+    {
+      "database": "owned_upgrade",
+      "methods": 182,
+      "classes": {
+        "TestAdminPasswordCarrierForwarded": 4,
+        "TestAdminPasswordCarrierSeed": 6,
+        "TestMcp3TypePlansSeed": 3,
+        "TestMcp3TypeTemplateSeed": 9,
+        "TestMcpK8sTemplateSeed": 14,
+        "TestMcpLitellmSeed": 15,
+        "TestMcpLitellmTemplateSeed": 14,
+        "TestMcpN8nTemplateSeed": 14,
+        "TestMcpNextcloudSeed": 15,
+        "TestMcpNextcloudTemplateSeed": 14,
+        "TestMcpOdooManageTemplateSeed": 14,
+        "TestMcpOdooTemplateSeed": 17,
+        "TestMcpOpenDesignTemplateSeed": 14,
+        "TestMcpServerFamilyCoverage": 2,
+        "TestMcpServerTemplateSeed": 13,
+        "TestMcpVkTemplateSeed": 14
+      },
+      "failed": 0,
+      "errors": 0,
+      "skip_markers": 0,
+      "actual_methods_equal_source_and_count_baseline": true,
+      "result": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_upgrade.json",
+        "sha256": "d7650bed956baccabb474dea01d76ce9861a08325100cc8160069f26710f8d97"
+      },
+      "log": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_upgrade.log",
+        "sha256": "8c8c378e99c2eaf823db5b120162fc3c99fa0850f64f5548779ec9a7e8081f36"
+      }
+    },
+    {
+      "database": "owned_fresh",
+      "methods": 182,
+      "classes": {
+        "TestAdminPasswordCarrierForwarded": 4,
+        "TestAdminPasswordCarrierSeed": 6,
+        "TestMcp3TypePlansSeed": 3,
+        "TestMcp3TypeTemplateSeed": 9,
+        "TestMcpK8sTemplateSeed": 14,
+        "TestMcpLitellmSeed": 15,
+        "TestMcpLitellmTemplateSeed": 14,
+        "TestMcpN8nTemplateSeed": 14,
+        "TestMcpNextcloudSeed": 15,
+        "TestMcpNextcloudTemplateSeed": 14,
+        "TestMcpOdooManageTemplateSeed": 14,
+        "TestMcpOdooTemplateSeed": 17,
+        "TestMcpOpenDesignTemplateSeed": 14,
+        "TestMcpServerFamilyCoverage": 2,
+        "TestMcpServerTemplateSeed": 13,
+        "TestMcpVkTemplateSeed": 14
+      },
+      "failed": 0,
+      "errors": 0,
+      "skip_markers": 0,
+      "actual_methods_equal_source_and_count_baseline": true,
+      "result": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_fresh.json",
+        "sha256": "aa7063a9785964084adf4171a574382b9d886eeaa99f8e82e4054d39596c55d0"
+      },
+      "log": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_fresh.log",
+        "sha256": "b65873a7084c60d8c8ebf1db8cc5fd5c599950ee6fc8e8dbd46cf012f7e62a17"
+      }
+    }
+  ],
+  "actual_templates": 27,
+  "changed_image_tags": 8,
+  "other19_and_non_image_fields_unchanged": true,
+  "fresh_upgraded_templates_identical": true,
+  "plans_and_metadata_unchanged": true,
+  "mcp_emqx_added": false,
+  "legacy_odoo_manage_unchanged": true,
+  "cleanup": {
+    "at": "2026-10-30T04:48:26.998310+00:00",
+    "passed": true,
+    "namespace_uid": "b8515409-03d4-41d7-a935-8791e08d65d2",
+    "namespace_absent": true,
+    "PV_Longhorn_volume_replica_objects_absent": true,
+    "bindings": [
+      {
+        "pvc": "postgres-data",
+        "pvc_uid": "f60962e8-741a-4997-9349-0a80acff1ced",
+        "pv": "pvc-f60962e8-741a-4997-9349-0a80acff1ced",
+        "pv_uid": "47674529-0e29-4016-bd3a-0fc069a2676e",
+        "volume": "pvc-f60962e8-741a-4997-9349-0a80acff1ced",
+        "volume_uid": "0728ce43-ffb7-4588-bf08-487ef43bce27"
+      },
+      {
+        "pvc": "source-filestore",
+        "pvc_uid": "5d1809b2-adb6-4c62-9360-539743848d03",
+        "pv": "pvc-5d1809b2-adb6-4c62-9360-539743848d03",
+        "pv_uid": "1e64d091-39ec-409c-b537-0e1bba89dd6a",
+        "volume": "pvc-5d1809b2-adb6-4c62-9360-539743848d03",
+        "volume_uid": "a2ed5b5d-f625-47d0-8eed-71c2290c1951"
+      }
+    ],
+    "credential_storage": "generated in memory, Kubernetes Secrets destroyed with owned namespace; no local credential files",
+    "physical_byte_erasure_claimed": false
+  },
+  "prior_collection_failure_preserved": true,
+  "baseline_install_exitcode_claimed": false,
+  "full_module_suite_claimed": false,
+  "MCP_runtime_suite_claimed": false,
+  "production_changes": false,
+  "evidence": {
+    "ORM-TEST-ACCEPTANCE.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/ORM-TEST-ACCEPTANCE.json",
+      "sha256": "ce25631b2aba425a3c00f66e5bfe57a210703beea7b8642b8b20c468bece07b3"
+    },
+    "BEFORE-DESTRUCTION.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/BEFORE-DESTRUCTION.json",
+      "sha256": "2bb315dbe954410a9117c6d2ee104d9a4ba7ef9e5f02109eedfb72b3152efc03"
+    },
+    "CLEANUP.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/CLEANUP.json",
+      "sha256": "f0320884c7a65fd9916a79765e57914b9c945978e24674c93e85685307b7eb50"
+    },
+    "PROCESS-CLEANUP.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/PROCESS-CLEANUP.json",
+      "sha256": "f60ca62aef198d29ad0cd384cd07e7a4590dbc651c80addbec1438415e8d845b"
+    },
+    "BASE-INSTALL-RECONCILIATION.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/BASE-INSTALL-RECONCILIATION.json",
+      "sha256": "e8906dfd51a4c3338bf7bbd18e6d752a98dee3ec9af9a27c3ec65a3678a6e70d"
+    },
+    "FREEZE.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/FREEZE.json",
+      "sha256": "05ef9a606fc4860f42a8a69a8b82421b8e2f72b8fc66ae449c5408484ec8be26"
+    },
+    "DURABLE-FREEZE.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/DURABLE-FREEZE.json",
+      "sha256": "9fe612db38c94e9cc59646594a9f11b116332de82767e3bcb9ac230dd3162217"
+    },
+    "IMAGES.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/IMAGES.json",
+      "sha256": "f381ce1234972fa431c248d056e066f5c4bf3c9a9c028d91e768e099269b5910"
+    },
+    "RUN-INPUTS.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/RUN-INPUTS.json",
+      "sha256": "bccac1406c6c22c7331255e4abcf51015b92fdaef008202cd1b7e6a30755b9d9"
+    },
+    "PRE-WRITE-ADMISSION.json": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/PRE-WRITE-ADMISSION.json",
+      "sha256": "ab49e9e1d6929d3c0f63caa05cd55f431149b8a355612d6b64d4c7774bb0198b"
+    }
+  },
+  "owned_aggregate_receipt_sha256": "3118cd4acb087d4d63fc7acf23928c3c5e6754abf03e461eb9b47bc08746aed7",
+  "runtime_images": {
+    "at": "2026-10-30T04:25:14.849048+00:00",
+    "postgres": {
+      "root_digest": "sha256:47af0b65960b14f1c6945aa4ccae37836c632e9a6fe0eea9160936e616e5b2e9",
+      "manifest_digest": "sha256:9a169499888c9d75ad14d0401be64839d2c325f32e399098261589faff93d65c",
+      "config_digest": "sha256:4b4956e2ab1f0aec9779dfca20366a9963a3f24c34269c3a115dd838387f0734",
+      "labels": {},
+      "image": "docker.io/pgvector/pgvector@sha256:9a169499888c9d75ad14d0401be64839d2c325f32e399098261589faff93d65c"
+    },
+    "odoo": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-official@sha256:941b92091cbf851fdca22cd5d2e67f06235ccfdaad5b2af044682823fa5011a3",
+      "manifest_digest": "sha256:941b92091cbf851fdca22cd5d2e67f06235ccfdaad5b2af044682823fa5011a3",
+      "config_digest": "sha256:5824b51df2311146864278da2847adbb81e039f38f99649d8167e62ad7605c47",
+      "compressed_layer_bytes": 857437636
+    },
+    "helper_images": [],
+    "manifest_config_hashed": true,
+    "whole_layer_download_claimed": false
+  },
+  "orm_test_receipt": {
+    "at": "2026-10-30T04:47:31.789558+00:00",
+    "passed": true,
+    "tested_source_commit": "0ab778b7ec517b1f7b68fdc0b5e47a8563a5e269",
+    "source_files": 1292,
+    "test_runs": [
+      {
+        "database": "owned_upgrade",
+        "methods": 182,
+        "classes": {
+          "TestAdminPasswordCarrierForwarded": 4,
+          "TestAdminPasswordCarrierSeed": 6,
+          "TestMcp3TypePlansSeed": 3,
+          "TestMcp3TypeTemplateSeed": 9,
+          "TestMcpK8sTemplateSeed": 14,
+          "TestMcpLitellmSeed": 15,
+          "TestMcpLitellmTemplateSeed": 14,
+          "TestMcpN8nTemplateSeed": 14,
+          "TestMcpNextcloudSeed": 15,
+          "TestMcpNextcloudTemplateSeed": 14,
+          "TestMcpOdooManageTemplateSeed": 14,
+          "TestMcpOdooTemplateSeed": 17,
+          "TestMcpOpenDesignTemplateSeed": 14,
+          "TestMcpServerFamilyCoverage": 2,
+          "TestMcpServerTemplateSeed": 13,
+          "TestMcpVkTemplateSeed": 14
+        },
+        "failed": 0,
+        "errors": 0,
+        "skip_markers": 0,
+        "actual_methods_equal_source_and_count_baseline": true,
+        "result": {
+          "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_upgrade.json",
+          "sha256": "d7650bed956baccabb474dea01d76ce9861a08325100cc8160069f26710f8d97"
+        },
+        "log": {
+          "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_upgrade.log",
+          "sha256": "8c8c378e99c2eaf823db5b120162fc3c99fa0850f64f5548779ec9a7e8081f36"
+        }
+      },
+      {
+        "database": "owned_fresh",
+        "methods": 182,
+        "classes": {
+          "TestAdminPasswordCarrierForwarded": 4,
+          "TestAdminPasswordCarrierSeed": 6,
+          "TestMcp3TypePlansSeed": 3,
+          "TestMcp3TypeTemplateSeed": 9,
+          "TestMcpK8sTemplateSeed": 14,
+          "TestMcpLitellmSeed": 15,
+          "TestMcpLitellmTemplateSeed": 14,
+          "TestMcpN8nTemplateSeed": 14,
+          "TestMcpNextcloudSeed": 15,
+          "TestMcpNextcloudTemplateSeed": 14,
+          "TestMcpOdooManageTemplateSeed": 14,
+          "TestMcpOdooTemplateSeed": 17,
+          "TestMcpOpenDesignTemplateSeed": 14,
+          "TestMcpServerFamilyCoverage": 2,
+          "TestMcpServerTemplateSeed": 13,
+          "TestMcpVkTemplateSeed": 14
+        },
+        "failed": 0,
+        "errors": 0,
+        "skip_markers": 0,
+        "actual_methods_equal_source_and_count_baseline": true,
+        "result": {
+          "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_fresh.json",
+          "sha256": "aa7063a9785964084adf4171a574382b9d886eeaa99f8e82e4054d39596c55d0"
+        },
+        "log": {
+          "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-candidate-owned_fresh.log",
+          "sha256": "b65873a7084c60d8c8ebf1db8cc5fd5c599950ee6fc8e8dbd46cf012f7e62a17"
+        }
+      }
+    ],
+    "actual_total": 364,
+    "template_count": 27,
+    "exact_changed_image_tags": 8,
+    "other19_templates_and_all_non_image_fields_unchanged": true,
+    "plan_and_xmlid_metadata_unchanged": true,
+    "fresh_and_upgraded_templates_equal": true,
+    "mcp_emqx_absent": true,
+    "previous_baseline_host_collection_failure_preserved": true,
+    "original_baseline_process_exitcode_claimed": false,
+    "cleanup_pending": true,
+    "scope": "Selected real Odoo ORM template/credential/launch/plan tests; not full module suite or eight MCP runtimes",
+    "evidence": {
+      "FREEZE.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/FREEZE.json",
+        "sha256": "05ef9a606fc4860f42a8a69a8b82421b8e2f72b8fc66ae449c5408484ec8be26"
+      },
+      "DURABLE-FREEZE.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/DURABLE-FREEZE.json",
+        "sha256": "9fe612db38c94e9cc59646594a9f11b116332de82767e3bcb9ac230dd3162217"
+      },
+      "BASE-INSTALL-RECONCILIATION.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/BASE-INSTALL-RECONCILIATION.json",
+        "sha256": "e8906dfd51a4c3338bf7bbd18e6d752a98dee3ec9af9a27c3ec65a3678a6e70d"
+      },
+      "install-base-owned_upgrade-failure.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/install-base-owned_upgrade-failure.json",
+        "sha256": "61bd85590b85d7dd2c433e16da3015d636e0d6cff9815addb69785006653b877"
+      },
+      "install-base-owned_upgrade-preserved.log": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/install-base-owned_upgrade-preserved.log",
+        "sha256": "31ca6155a2ce20c5a49d1792bf698083d79db4e0dd3a8f0f3b7176d122bd1bed"
+      },
+      "PRE-WRITE-ADMISSION.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/PRE-WRITE-ADMISSION.json",
+        "sha256": "ab49e9e1d6929d3c0f63caa05cd55f431149b8a355612d6b64d4c7774bb0198b"
+      },
+      "PROVISIONED.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/PROVISIONED.json",
+        "sha256": "746ed2f011e660c3fdf83d01aedcca8205d60ba6df1905ee6644bde2a2c11eca"
+      },
+      "UPGRADE-ORM-COMPARE.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/UPGRADE-ORM-COMPARE.json",
+        "sha256": "d8209324b748edf51efaa30d7cab118a6668610498176494fdeaf079f53368dc"
+      },
+      "readback-base-owned_upgrade.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/readback-base-owned_upgrade.json",
+        "sha256": "b0739534832102a22741ca3a6ad8e0fce839b38f3ad6df62aa1497063282026d"
+      },
+      "readback-candidate-owned_upgrade.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/readback-candidate-owned_upgrade.json",
+        "sha256": "d11fe6f8426c3383c78cc20d82f02e8ab08351b91ea4383bab2f0fd97f692d38"
+      },
+      "readback-candidate-owned_fresh.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/readback-candidate-owned_fresh.json",
+        "sha256": "efaa856cb5e3b796245caed5b20e864af855a6cdca58d2cdaa2bb1d9da99b921"
+      },
+      "install-candidate-owned_fresh.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/install-candidate-owned_fresh.json",
+        "sha256": "55174254dd490fa85399b23fd15c270801ebacc3df448e6f82640b17c0985452"
+      },
+      "install-candidate-owned_fresh.log": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/install-candidate-owned_fresh.log",
+        "sha256": "ef93961a57604ad73d45b9f9a49973ecd23f819a6d08c1ccb2c12f6500b18921"
+      },
+      "test-selector.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/test-selector.json",
+        "sha256": "da9b7b73ae522cb9e089c2280ca13548b5ff0490f049d434e04bb954d62ce203"
+      },
+      "candidate-map.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/candidate-map.json",
+        "sha256": "375e62076d8d289d9eae0cd980ce2cb0296b077eaa2f44b9c68896a802a3ea68"
+      },
+      "base-map.json": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/base-map.json",
+        "sha256": "ef0e9b79967f701a8a1eceed4b68d10660f154419c156af01b57a1eca2e13f61"
+      },
+      "collect_acceptance.py": {
+        "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-preparation/sandbox/collect_acceptance.py",
+        "sha256": "59019f2f4bc08ef3449f546105b4d1b2694a94e56e045a6dd2323a7efebd7bc2"
+      }
+    }
+  }
+}

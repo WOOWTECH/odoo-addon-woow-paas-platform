@@ -1,0 +1,268 @@
+{
+  "schema": 1,
+  "observed_at": "2026-10-30T04:12:05.245806+00:00",
+  "owner": "Avicenna",
+  "platform_base": "c42850a33d48e0c7c4ce7169bca45034e8c09844",
+  "mcp_source": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883",
+  "publication_pr": 95,
+  "inputs_sha256": "0b78ab3d579988db0904d688ec5d8156abbd46d26fcadf57f66a47253103749a",
+  "registry_proof_sha256": "e4ff7448b7810d3f5092e8ec7952fa03f5cd800ab72d2327d7fe360de0ea2843",
+  "upstream_evidence_hashes_verified": {
+    "registry-20261030T040141Z/registry-observation.json": "e444e7e9453c71469788044eb66c2da5a9b659560b39dc3524d6dcffb1f011d8",
+    "registry-20261030T040141Z/verified-source-layers/SOURCE-UI-VERIFICATION.json": "889391443f09f41cd222e6bdc0160da17755e8da9caa597fb1274a99bbe5539b",
+    "source-remotes-readback.json": "bd5779e35a1f235fcd8bcd73f8898352d2b31b096c6ec33b712a3a1abdd574f1",
+    "main-merge-result.json": "ff828292e3d3387cf6f8e640ea57b98244aa081f02f485d791ac23ec3fc7d40c",
+    "access-preflight.json": "469b63919b2f2e9a546ea4c86b7e2a0529237eb47a4d4f6189ffdedd850fa023",
+    "acceptance/RESOURCE-REQUEST.json": "b098bb1e82afc63b15c2f5e079a7168841daef5375e56e7b09d9af6aec0dc51e"
+  },
+  "manifest_config_bytes_independently_hashed": true,
+  "publication_scope": "All8 authenticated manifests/configs hashed, tag=digest=latest. FreshGET/hash16 selected core/static COPY layers; 43core runtime sourcefiles/image match merge. n8nUI assets identical to actual Chromium-tested source build. No full fresh image download claim; runtime acceptance not yet run.",
+  "images": {
+    "hermes": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:e1c15208e2209da68959fcc817af36be59cbaab1ec7f5b33383d99103a351847",
+      "manifest_digest": "sha256:e1c15208e2209da68959fcc817af36be59cbaab1ec7f5b33383d99103a351847",
+      "config_digest": "sha256:33102067664fc89c6e38fc19f8c9dee4739587e0c6d032efcec8e7e6e690237d",
+      "xmlid": "cloud_app_mcp_hermes",
+      "previous_tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:7a9c78d217e6e0c5d3861fa05c9fd046698943bcddfe0ca2e857cc6e20b49636",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:e1c15208e2209da68959fcc817af36be59cbaab1ec7f5b33383d99103a351847",
+      "non_image_values_sha256": "86cdaf80f85c12aa77df0313d29fa9902f7d713423e7afa70acf438accd6d460",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "hermes-mcp-server",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "source_files_sha256": {
+        "apps/hermes/hermes_mcp_admin/main.py": "97911cc91262bbc3b64436a5dcb823b86bf236094d8036a8a66114069642e875",
+        "apps/hermes/Dockerfile": "65c9a15e1b662edb8b3bf4280e58297bd59a3b12af380b18e948d7de1588512e",
+        "apps/hermes/pyproject.toml": "0cc74297c260572759a03b03e367fb1115d5e94830192f84311066042ed6724a",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "k8s": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:af1c182f5cb4f8c6e749a0f9f9ac1da38adcccfbf9be33f5f8b52afeb35ea6a4",
+      "manifest_digest": "sha256:af1c182f5cb4f8c6e749a0f9f9ac1da38adcccfbf9be33f5f8b52afeb35ea6a4",
+      "config_digest": "sha256:2cf03bffc707e9c0a128f26900106227959dc21a552718ae041854e724156357",
+      "xmlid": "cloud_app_mcp_k8s",
+      "previous_tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:274691eff9430f1bb6865b094b71844f6ba879a86c85a74ca4789aaa64704e36",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:af1c182f5cb4f8c6e749a0f9f9ac1da38adcccfbf9be33f5f8b52afeb35ea6a4",
+      "non_image_values_sha256": "c0c043ed675b46a29493db8e6740309e8f1574fd175dfeea58a5dc9fb88266c1",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "k8s-mcp-http",
+        "--port",
+        "8000"
+      ],
+      "source_files_sha256": {
+        "apps/k8s/k8s_mcp_admin/main.py": "8e73bfe3544ae368ea78a427559f3d94802d1f798969a9f215919332d5357900",
+        "apps/k8s/Dockerfile": "d5e112f61330c222c2382c66c3156e31ab957e3724305bd3b844f1011ee4116a",
+        "apps/k8s/pyproject.toml": "d39005ede8c329b49b8ff4f3827d3e23e89c2fcbc0a75bb623bfb329f3604c5a",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "litellm": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248",
+      "manifest_digest": "sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248",
+      "config_digest": "sha256:970e284f4a192899e8f710c1a84675967c71449f6a00d3d741929f014bbd7ec5",
+      "xmlid": "cloud_app_mcp_litellm",
+      "previous_tag": "f748090eb782bc103edcd99ac9aa821f77294fb0@sha256:9d723ff679460da697c8b08369ee87571c4d60205542ae33dec7822ebd8d2ef8",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248",
+      "non_image_values_sha256": "90817a0ac30d901d3e1cb6874a2af08055d502a116a37f865e10cadd3b2ddd0a",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "litellm-mcp-server",
+        "--port",
+        "8000"
+      ],
+      "source_files_sha256": {
+        "apps/litellm/litellm_mcp_admin/main.py": "eea150a7c612c480d5251c01ad5e951d40c49567805224782cc42e5e500915c9",
+        "apps/litellm/Dockerfile": "9f3d818a4f2b796bd71dacab299b47e5fe1de02d43d955de385202887b560512",
+        "apps/litellm/pyproject.toml": "23c3d565bd999fb463388ebbbcd057104c10b4b9fd9da653f86265b754cf52ad",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "n8n": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:5ec486f13f8460892501c9c185d60daa04f58e559d86d5bce3609cc79441b7e8",
+      "manifest_digest": "sha256:5ec486f13f8460892501c9c185d60daa04f58e559d86d5bce3609cc79441b7e8",
+      "config_digest": "sha256:53845b8d0d7dd1a1c5644c694a6bcf9df1692113628a14199f365c3fdb6c68cf",
+      "xmlid": "cloud_app_mcp_n8n",
+      "previous_tag": "f748090eb782bc103edcd99ac9aa821f77294fb0@sha256:14fa0935428906725ad04bbda6918eec687087878cd1c0da71461972b51aaf30",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:5ec486f13f8460892501c9c185d60daa04f58e559d86d5bce3609cc79441b7e8",
+      "non_image_values_sha256": "b39125889c429f2f20af330291b72478c9b7d531cef5f768345fa44e49391975",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "n8n-mcp-http",
+        "--port",
+        "3000"
+      ],
+      "source_files_sha256": {
+        "apps/n8n/n8n_mcp_admin/main.py": "220a1ca3c96bf486c73e18d5ac74173fcf74e90a7c87555b1172e819e4f0cef2",
+        "apps/n8n/Dockerfile": "b48ad115d35dbd400970c6e9e89e4a9677eaad7d758ad9a4ee7e50ab781fa86d",
+        "apps/n8n/pyproject.toml": "f89e3f1afd7f61e51ff3ef63ac0f06b800796ea7a2aeceedccd163ace902ad26",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "nextcloud": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f7fcd1568753f92c68da191036ce852b58da8a0deb045ac945e28910cbee8bb9",
+      "manifest_digest": "sha256:f7fcd1568753f92c68da191036ce852b58da8a0deb045ac945e28910cbee8bb9",
+      "config_digest": "sha256:119362db891d8ae82e4613062a6f3aece28bcc603d331ab21cfebc3c2d1882ea",
+      "xmlid": "cloud_app_mcp_nextcloud",
+      "previous_tag": "daaf8b03e092c8270f4dfd4adbafa6d551a36a4a@sha256:687071125f067290206981cb046725f7954de2140e86fb613dac70991ee5c56c",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f7fcd1568753f92c68da191036ce852b58da8a0deb045ac945e28910cbee8bb9",
+      "non_image_values_sha256": "df762793df2a3fc9e6d0d2654d9f3a40072bbb88ac70ee8b548658f5e4ca9f26",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "nextcloud-mcp-server",
+        "--port",
+        "8000"
+      ],
+      "source_files_sha256": {
+        "apps/nextcloud/nextcloud_mcp_admin/main.py": "ae41d5d996cb66683ec6c3ccb6a800c6888667ab84d828ce28689ec502cffb4c",
+        "apps/nextcloud/Dockerfile": "b260fd8a346c757c6af34c425a1fe0499eb450cf841fe4f7b850a528e9d9589e",
+        "apps/nextcloud/pyproject.toml": "61145d1a5e4cbeefa96516280e7ff4f2539e165c9b6aa8feed6c833184324d99",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "odoo": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f3b5f4278e92af3cee0e05b49392903d34bb74e32ec5f1f36a72d4417cafe7d1",
+      "manifest_digest": "sha256:f3b5f4278e92af3cee0e05b49392903d34bb74e32ec5f1f36a72d4417cafe7d1",
+      "config_digest": "sha256:41068761507fd3a347d8b2b9487228d3a0aa6f39722d4e0caffab19eab3e3935",
+      "xmlid": "cloud_app_mcp_odoo",
+      "previous_tag": "f748090eb782bc103edcd99ac9aa821f77294fb0@sha256:95c38f880e97d0da7c4955cadde1b832e70a8012845051d6f23f2ee1714924d6",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f3b5f4278e92af3cee0e05b49392903d34bb74e32ec5f1f36a72d4417cafe7d1",
+      "non_image_values_sha256": "2450288108433468f918f682b1e176e5092548e3ad3b5daa9ceeb32d0fac600e",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "woow-odoo-mcp",
+        "--transport",
+        "streamable-http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "source_files_sha256": {
+        "apps/odoo/odoo_mcp_admin/main.py": "dea0cd11f605c5dbf7740224f6fb5af96a2133dee09d37f45cfb840a47a92991",
+        "apps/odoo/Dockerfile": "c62b2101c286d5c89ed663fd1cdd3e319ca7f4f2bc2f403f5d532c2001679f31",
+        "apps/odoo/pyproject.toml": "51d6938ccf4357fc4c9e9bc0d9714b6901e4106b3bc84a25f7bc1e101ff1e245",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "opendesign": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:fbac1acc092d77bf3288ee9fa4f8e8bab1302d09e6c5268945ce09ca500dc8d0",
+      "manifest_digest": "sha256:fbac1acc092d77bf3288ee9fa4f8e8bab1302d09e6c5268945ce09ca500dc8d0",
+      "config_digest": "sha256:38e7b8f3444ff02ae3d3fc3b9c41262f7d929d45bcdddb6879d1b075cd519fcf",
+      "xmlid": "cloud_app_mcp_opendesign",
+      "previous_tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:50e2e97e6e72f14e85f572094a4d6488169deaebb07934e3546358a44af881b1",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:fbac1acc092d77bf3288ee9fa4f8e8bab1302d09e6c5268945ce09ca500dc8d0",
+      "non_image_values_sha256": "bbd2c7f8c001c28cbeb74a7cf21eb0e5bc6c4baa8fa7b0a5b29ec4c467e1d1ff",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "opendesign-mcp-server",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "source_files_sha256": {
+        "apps/opendesign/opendesign_mcp_admin/main.py": "98dcb907c6bbcba31a5609858e3e0b8d1115253d698b26e277bf6e06c37804bb",
+        "apps/opendesign/Dockerfile": "dc413db7437dc5795d839d18d897cafc4a43c00c0a9ee2b36c45473b6e39f635",
+        "apps/opendesign/pyproject.toml": "d24fe4f25e0bbe399ce2456ce9da4450d8945d7cb34ee27bf29f43f04f0c829f",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629",
+        "apps/opendesign/opendesign_mcp_admin/seed_migration.py": "b8067a6b64e5a8eee2b61331e9ed3be3e45c9f58459db5b8e7e9a4e314ff139c"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    },
+    "vk": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin:3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:367cbc0b8bba003ae385c09bde87ec9df0d944a1505ebc480ba496350d0429a2",
+      "manifest_digest": "sha256:367cbc0b8bba003ae385c09bde87ec9df0d944a1505ebc480ba496350d0429a2",
+      "config_digest": "sha256:b4472f877fb6f7cf89438c725462eb8f4b352d19840d7e3b4176a459ef1c2189",
+      "xmlid": "cloud_app_mcp_vk",
+      "previous_tag": "38a9041fb44de6d8848166473facd2f443e04710@sha256:959aa642af4d0447b2c961941ba66b04ecdc86a10c89224d11c67efef133c650",
+      "new_tag": "3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:367cbc0b8bba003ae385c09bde87ec9df0d944a1505ebc480ba496350d0429a2",
+      "non_image_values_sha256": "aa23b9274282cef9b25d87918874daa981473fe8c53eb6e841d2ccf2da64386b",
+      "chart_version": "0.1.9",
+      "effective_source_argv": [
+        "supergateway",
+        "--stdio",
+        "vibe-kanban-mcp --mode global",
+        "--port",
+        "8000",
+        "--outputTransport",
+        "streamableHttp",
+        "--healthEndpoint",
+        "/healthz"
+      ],
+      "source_files_sha256": {
+        "apps/vk/vk_mcp_admin/main.py": "3986ea856204ba3338403930c768d922b26884ec36b147fe5108a98bb8bebee2",
+        "apps/vk/Dockerfile": "219fd2602c01484e5d4451829cfe0d305e434ee265be966bf85cab9f263a21ef",
+        "apps/vk/pyproject.toml": "422661678a9a33acf44ee3bbc6a206caef2fe838a85ef9903ae019c2bf8159fb",
+        "uv.lock": "148d0433eaf9e7f012c95a4e8ae658b414a15beb8263f09f40b6b3fff414d1db",
+        "packages/mcp-admin-core/mcp_admin_core/launch_policy.py": "a70400dfb706ec023bc9d0da33c5e3bdc148b1bba25af9811045d6c4bac70629"
+      },
+      "launch_scope": "source policy/packaging checked; published app-layer runtime execution not performed by this lane"
+    }
+  },
+  "seed_before_sha256": "f840797fcca71befdc50485ad5653708abf6e334faca703506e70e32ef567bb0",
+  "seed_after_sha256": "437f4f062f9e465cd22d71f0fc424501f0581f2e00a1c25552621cb906546478",
+  "only_semantic_changes": [
+    "cloud_app_mcp_hermes.helm_default_values.image.tag",
+    "cloud_app_mcp_k8s.helm_default_values.image.tag",
+    "cloud_app_mcp_litellm.helm_default_values.image.tag",
+    "cloud_app_mcp_n8n.helm_default_values.image.tag",
+    "cloud_app_mcp_nextcloud.helm_default_values.image.tag",
+    "cloud_app_mcp_odoo.helm_default_values.image.tag",
+    "cloud_app_mcp_opendesign.helm_default_values.image.tag",
+    "cloud_app_mcp_vk.helm_default_values.image.tag"
+  ],
+  "unchanged_template_record_sha256": {
+    "cloud_app_code_server": "4b468c82fbf54b46e979abf68dd481bc3659d9d310c390388ca8421c802e4e2e",
+    "cloud_app_emqx": "e862d965b7e083d4be686977f6658dee6b9f95a934541c725772bb34ea7d36b4",
+    "cloud_app_ha_full": "d4d57c88f85066123c72186d9deac0f0915593a7b87adb21acc14c8986a805ae",
+    "cloud_app_ha_full_apporo": "be8b211e8328667f1f7109d5e8725b0f01ea7d3ab64e27ab9ed423ee53e3698e",
+    "cloud_app_ha_paas": "a25c7164c6ff0f549e37ba86a6789921ea66daa5f68d3dd9c0611d68cd767cec",
+    "cloud_app_haos": "51248fb66bf1097d7994ffa088549a3dc116c82da52f7329a7a128ea53df390d",
+    "cloud_app_headscale": "670cdfafe01172668e0687cde9685b4d4f1f188d28ed86d8ed8add9f3031e22e",
+    "cloud_app_hermes_agent": "cefd6e7e8ec61dd3e75861e2becddce4dcf26cbc4775ee10cddf99794700fff7",
+    "cloud_app_litellm": "1a2d0779302e221714c280c3e92762c5f522c692ad803fb14a6cd6bf24733c32",
+    "cloud_app_mcp_odoo_manage": "3eb4903007097b69c87441ebacf1762623824166abc270e931596e49bc094e87",
+    "cloud_app_n8n": "96e4aab18658422a30f17c7ff898ecdcfb7ee4f59dee0e09322fd11632ce379d",
+    "cloud_app_nextcloud": "c90dfc83e47669379586777f6686d599b3ff780e820de6c9c4d359cf56bcf84f",
+    "cloud_app_odoo": "c2a476dd5c6b236f6b57d940a26883be6d02f46165e040ce9932bfdfdff95bf9",
+    "cloud_app_omnigent": "6ec81a4824c7102f970ae6778f02381bfc7b299648fc9730fea71958b2b02f90",
+    "cloud_app_opendesign": "8b8c0ac1935a2b7e456e83e8cc3e3ef74a6421c499382df12dcf280c1810c21e",
+    "cloud_app_pi_agent": "8e7704dfef3547f3c25f2e8df3f9c1a4250d2130beec7e56cec15a15f5ad9b09",
+    "cloud_app_postgresql": "06f264eff21726f62e6d81b0b72d82e59b98cf8bf21245b84a331ef2fddf8e60",
+    "cloud_app_redis": "92704d3d59a33297f7c90e8b2bcd315389dce822b324712980234861b889b097",
+    "cloud_app_tailscale": "709daffe7cc939447863fcc30a9d224452ab0e7dbd09dc5f9499fe5b52317dc4"
+  },
+  "total_templates": 27,
+  "legacy_odoo_manage_unchanged": true,
+  "emqx_template_present": false,
+  "version_bump": false,
+  "cluster_resources_created": 0,
+  "production_mutations": 0,
+  "orm_sandbox_tests_executed": false,
+  "runtime_acceptance_claimed": false,
+  "compatibility": {
+    "opendesign": "Documented legacy supergateway seed remains unchanged; fixed LaunchPolicy executes opendesign-mcp-server; exact legacy marker is migrated before core lifespan.",
+    "hermes": "Existing chart default launcher remains; effective source LaunchPolicy is hermes-mcp-server on 127.0.0.1:8000.",
+    "existing_services": "Template update does not restart existing tenant services; config PVC seed-if-absent preserves configuration. This lane performs no tenant rollout."
+  },
+  "rollback": "Revert exactly these eight tags to previous_tag values, then use normal platform release process. No schema migration. No automatic rollback claim for tenant config changes after a later service rollout."
+}
