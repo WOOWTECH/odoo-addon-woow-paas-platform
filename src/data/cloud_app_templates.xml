@@ -3352,7 +3352,7 @@
             <field name="slug">mcp-emqx</field>
             <field name="description">用 MCP 讓 AI 管理 EMQX MQTT broker。7 類共 39 支工具預設全開（含寫入、刪除與 SQL 測試），可逐支或按操作停用。需自備 broker API key／secret。1 vCPU／1 GB RAM／1 GB 磁碟</field>
             <field name="full_description">讓 Claude、Hermes、pi-agent 等支援 MCP 的 AI 用戶端管理你指定的 EMQX MQTT broker：節點與監控、
-                用戶端與訂閱、認證、授權、規則、整合與管理，共 7 類、39 支工具。
+                用戶端、主題與訂閱、訊息、存取控制、診斷與資料整合，共 7 類、39 支工具。
                 **預設全開**：包含寫入、刪除等管理操作與 SQL 測試工具。請依授權範圍，在管理介面的 Tools 頁
                 逐支或按操作停用；SQL 測試（emqx_test_rule_sql）的 execute 操作可獨立撤銷。
                 **連線與憑證**：在 Connection 頁填入 broker 管理 API 的 HTTPS 網址、API key 與 API secret；
