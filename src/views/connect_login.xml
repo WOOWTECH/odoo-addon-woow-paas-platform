@@ -7,7 +7,7 @@
         <xpath expr="t" position="replace">
             <t t-if="request.env.context.get('woow_connect_login')">
                 <t t-call="web.frontend_layout">
-                    <t t-set="title" t-value="request.env.context.get('woow_connect_title', '智慧家庭連結') + '｜woowtech'"/>
+                    <t t-set="title" t-value="request.env.context.get('woow_connect_title', '智慧平台連結') + '｜woowtech'"/>
                     <t t-set="no_header" t-value="True"/>
                     <t t-set="no_footer" t-value="True"/>
                     <t t-set="body_classname" t-value="'o_woow_connect_login_page'"/>
@@ -16,7 +16,7 @@
                         <div class="card border-0 o_woow_connect_login">
                             <div class="card-body">
                                 <t t-call="woow_paas_platform.connect_brand"/>
-                                <h1 t-out="request.env.context.get('woow_connect_title', '登入並連結智慧家庭')"/>
+                                <h1 t-out="request.env.context.get('woow_connect_title', '登入並連結智慧平台')"/>
                                 <t t-out="0"/>
                             </div>
                         </div>
