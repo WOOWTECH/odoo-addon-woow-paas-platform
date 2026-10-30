@@ -36,7 +36,8 @@ python3.12 <WS>/paas/woow_paas_platform/.omnigent/woow-security-sweep/skills/sec
 要讀懂的訊號：
 
 - `config_sources.public` 以 `default` 開頭：repo 還沒有 `.security/sweep.yaml`，套用 stack 的保守預設（不自動修）；
-  後面有「＋targets scan_exclude」代表 targets 追加了排除路徑，報告要寫明排除了哪些。
+  後面有「＋targets scan_exclude」代表 targets 追加了排除路徑，報告要寫明排除了哪些；
+  「＋targets semgrep_exclude_rules」代表整條排除了 semgrep 規則（`config.json` 的 `scan.tools.semgrep.exclude_rules`），報告同樣要列出。
 - `config_changed: true`：`.security/` 有變動，已自動產生一筆 `security-config-changed` finding，必轉人工。
 - `unsafe_members` 非空：快照時擋下了指向外部的 symlink 等成員，已產生 high finding。
 - `fetch_error` 非空：fetch 失敗，掃的是本機舊的 origin ref，報告要寫明。

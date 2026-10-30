@@ -15,6 +15,12 @@ scan_exclude:
 - "*.min.js"
 - "*.po"
 - .lycheecache
+# 整條排除的 semgrep 規則（同樣只在 repo 沒有 .security/sweep.yaml 時生效）
+# python-logger-credential-disclosure：log 字串含 password／token／secret 等字就報。2026-10-30 全量輪次 48 筆
+# 由人逐筆看過全是誤報（log 只記 id、狀態、錯誤類別；KubectlException 的 str() 不含指令列）。
+# 代價：之後真的把憑證寫進 log 也不會被這條抓到，改靠每週 deep review。
+semgrep_exclude_rules:
+- python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
 context:
   summary: >-
     多租戶 PaaS 平台（Odoo 18 addon，模組 woow_paas_platform）。租戶在 /woow（standalone OWL app，hash routing）

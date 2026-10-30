@@ -168,12 +168,13 @@ targets 的欄位：
 | `branch` | 掃描分支；沒寫用 origin 的預設分支 |
 | `since_upstream` | fork 才寫：`remote`（https）、`branch`、`advisories`（`github`、`package`、`version_file`、`version_regex`）。只掃 fork 相對上游 merge-base 改過的檔案，並比對上游 advisory |
 | `scan_exclude` | 追加排除路徑；**只在 repo 沒有 `.security/sweep.yaml` 時生效**（repo 有自己的設定就以 repo 為準） |
+| `semgrep_exclude_rules` | 整條排除的 semgrep rule id（完整點分式，轉成 `--exclude-rule`）；生效條件同 `scan_exclude`，stack 沒開 semgrep 時不生效。之後這條規則的真陽性也抓不到，註解要寫明理由與人判的依據 |
 | `context`、`review_focus`、`review_classes` | deep review 工單的上下文與攻擊類別（`review_classes` 沒寫用 stack 的預設） |
 | `history`、`baseline` | 已修項目與接受／追蹤的 finding |
 | `disclosure` | `issues_to`（`owner/name`，必須非 public）、`high_fix_via`（`github_security_advisory`／`internal_security_repo`／`private_pr`；舊欄位 `fix_via` 仍可讀） |
 | `review_units` | 大 repo 才寫：deep review 分塊輪審（見下方「分塊輪審」）。掃描工具不受影響 |
 
-private 不能放寬 public 的規則（`scan_exclude` 只補在 stack 預設上）。`.security/` 有任何變動 ⇒
+private 不能放寬 public 的規則（`scan_exclude`、`semgrep_exclude_rules` 只補在 stack 預設上）。`.security/` 有任何變動 ⇒
 自動產生 `security-config-changed` finding、必轉人工（防止有人在 PR 裡偷加豁免）。
 
 ### 目前的 targets
