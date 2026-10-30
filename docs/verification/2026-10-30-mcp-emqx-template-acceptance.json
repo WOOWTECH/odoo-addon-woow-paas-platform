@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-30T05:37:08.450834+00:00",
+  "phase": "catalog_listing_source_preparation",
+  "hidden_candidate_commit": "e342b2821144e1db8ed22fc2faf6e2c4ae14ef6c",
+  "hidden_candidate_actual_ORM": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-emqx-preparation/sandbox-v2/ORM-TEST-ACCEPTANCE.json",
+    "sha256": "5e7be8127017dec80ba1d28de91579bd8b5f359d4be6894fe0f6b8375b8d4320"
+  },
+  "hidden_candidate_methods": 434,
+  "actual_backend_independent_review": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/publication97/independent-backend-review/FINAL-REVIEW.json",
+    "sha256": "ad825eb44df5b15fc5677549431fce8c75108e968fe8edba4db9c26b701615d1"
+  },
+  "listed_final_source_ORM": "Pending bounded verification on the same leased fixture; not claimed here",
+  "production_changes": false,
+  "artifact_dispatch": false
+}

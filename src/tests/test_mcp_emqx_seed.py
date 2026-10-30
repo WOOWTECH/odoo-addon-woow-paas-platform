@@ -97,15 +97,15 @@ class TestMcpEmqxSeed(TransactionCase):
         for key in ('api_key', 'api_secret', 'base_url', 'WEBHOOK_SECURITY_MODE'):
             self.assertNotIn(key, json.dumps(self._values()))
 
-    def test_hidden_until_actual_backend_and_template_acceptance(self):
+    def test_listed_after_actual_backend_and_template_acceptance(self):
         template = self._template()
         self.assertTrue(template.is_active)
-        self.assertTrue(template.is_hidden)
+        self.assertFalse(template.is_hidden)
         self.assertFalse(template.conceal_instances)
         public = self.env['woow_paas_platform.cloud_app_template'].search([
             ('is_active', '=', True), ('is_hidden', '=', False),
         ])
-        self.assertNotIn(template, public)
+        self.assertIn(template, public)
         self.assertIn(self.env.ref('woow_paas_platform.cloud_app_mcp_nextcloud'), public)
 
     def test_operator_copy_explains_actual_grants_and_credentials(self):

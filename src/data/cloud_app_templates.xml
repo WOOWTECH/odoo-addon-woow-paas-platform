@@ -3346,7 +3346,7 @@
 
         <!-- EMQX MCP：PR97 的實際發布雙釘；不是既有 EMQX broker 範本。
              39 支工具預設全開與 SQL execute 撤銷由 app 管理，平台不覆寫 tools/env/connection。
-             實際 broker 與本範本 ORM 驗收通過前維持隱藏；憑證走既有 config_json 分離通道。 -->
+             真 broker 與隱藏候選 434 ORM 驗收通過後上架；憑證走既有 config_json 分離通道。 -->
         <record id="cloud_app_mcp_emqx" model="woow_paas_platform.cloud_app_template">
             <field name="name">MCP：EMQX</field>
             <field name="slug">mcp-emqx</field>
@@ -3382,7 +3382,7 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">config_json</field>
             <field name="post_deploy_init_type">none</field>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
