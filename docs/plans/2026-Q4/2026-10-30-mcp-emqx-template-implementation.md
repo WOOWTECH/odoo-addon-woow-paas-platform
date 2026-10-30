@@ -53,3 +53,9 @@ serial順序：基底新DB安裝→確認EMQX不存在且27筆canonical snapshot
 ## 5. 交接／曝光條件
 
 本地commit與來源PR可準備；先綁Mencius exact f608真broker驗收，含允許／拒絕零效果、SQL撤銷、restart/PVC設定保留及cleanup，不能引用HA或fakebackend充當。未通過前來源保持hidden且不merge；若通過後要正式曝光，另記證據hash並只翻EMQX is_hidden，重跑相關catalog guard。Main決定是否趕上.281，不能延誤既有八pin release。
+
+## 實際完成紀錄（2026-10-30 05:56 UTC）
+
+Mencius exact-image broker 驗收與 Aristotle 獨立 review 已通過，才將正式候選 `is_hidden=False`。原 hidden 候選 e342b282 的434個方法保留獨立收據；最終 listed 候選 b5e7b799 再實際跑升級217＋全新安裝217個方法，兩次各25 classes、0 failure/error/skip，fresh／upgrade 完整seed快照相等。05:51:26 完成 namespace／兩PVC對應PV／Longhorn volume與replica物件清理，watchdog原process身份也已消失。
+
+測試基底是85a57df8：舊27模板與156方案商品紀錄不變的聲明只相對此基底。其後正常合入develop的PR2089（65795f19），以exact three-way source檢查證明只有HermesAgent chart與其測試是upstream差異，EMQX和既有MCP pins未變；不將既有434方法說成覆蓋Hermes0.4.5。來源PR不加版本號、不合併develop、不派送artifact；Main保留合併／release決策。完整hash收據見 `docs/verification/2026-10-30-mcp-emqx-template-acceptance.json`。
