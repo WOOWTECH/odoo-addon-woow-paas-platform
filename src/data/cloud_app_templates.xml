@@ -2227,18 +2227,21 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <!-- Chart 0.1.17 pairs with the 20261029.0606 PaaS Pi Agent image:
-                 root 0.3.21, Omnigent plugin 0.3.29, and Paseo 0.1.14.
-                 A container restart or a plugin-source swap no longer switches
-                 Paseo off (only a real disable does), and an empty provider
-                 model list is refreshed once after login. Omnigent and Paseo are
-                 still bound only from Settings, without a first-boot setup
-                 conversation or home-screen shortcut. Candidate run #31921 and
-                 approval issue #499 (promotion run #31953) guard the formal image
-                 tag; publish this seed only after chart 0.1.17 OCI read-back
-                 succeeds. Existing services retain their saved pins. -->
-            <field name="helm_chart_version">0.1.17</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261029.0606@sha256:7997f1db0e6e585f76677b28ba4d2496ae6264ec2b3c7779a4575f12056da2f9"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <!-- Chart 0.1.18 pairs with the 20261030.0550 PaaS Pi Agent image:
+                 root 0.3.22, Omnigent plugin 0.3.30, and Paseo 0.1.15.
+                 An image upgrade no longer signs anyone out of Omnigent: the
+                 image moves official plugin git pins to its bundled copies
+                 before Pi Web starts, and a plugin source switch keeps the
+                 approved login. Settings -> Omnigent shows the reason and next
+                 step for each issue, a broken launch chain falls back to a
+                 working pi-web, and Paseo stays on after a source switch.
+                 Omnigent and Paseo are still bound only from Settings, without a
+                 first-boot setup conversation or home-screen shortcut. Candidate
+                 run #32515 and approval issue #509 (promotion run #32555) guard the
+                 formal image tag; publish this seed only after chart 0.1.18 OCI
+                 read-back succeeds. Existing services retain their saved pins. -->
+            <field name="helm_chart_version">0.1.18</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261030.0550@sha256:ef39e877c4ee9dc114f5479106e06ab2dd1bef752f9f33d41f9996ee6dedc145"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>

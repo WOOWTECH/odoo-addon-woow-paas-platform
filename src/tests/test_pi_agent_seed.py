@@ -34,7 +34,7 @@ class TestPiAgentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, PI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.17')
+        self.assertEqual(tpl.helm_chart_version, '0.1.18')
 
     def test_admin_gui_supply_chain(self):
         """has_admin_gui + helm_secret：平台供給 config.sensitive.admin_password 給 chart Secret，
@@ -73,7 +73,7 @@ class TestPiAgentSeed(TransactionCase):
         self.assertNotEqual(build_tag, '00000000.0000', '佔位 tag 不得上架')
         self.assertEqual(
             tag,
-            '20261029.0606@sha256:7997f1db0e6e585f76677b28ba4d2496ae6264ec2b3c7779a4575f12056da2f9',
+            '20261030.0550@sha256:ef39e877c4ee9dc114f5479106e06ab2dd1bef752f9f33d41f9996ee6dedc145',
             '新開通範本必須釘住已核准並從正式 JCR 讀回的 Pi Agent 映像',
         )
 
