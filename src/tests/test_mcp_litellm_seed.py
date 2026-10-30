@@ -68,7 +68,7 @@ IMAGE_REPOSITORY = JCR + 'litellm-mcp-admin'
 # 2026-10-30：PR95 八映像發布證據與固定 LaunchPolicy 已核對；本 lane 未重跑 MCP runtime。
 # 證據：docs/verification/2026-10-30-mcp95-template-pins.json。
 EXPECT_IMAGE_TAG = (
-    '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:49ebff61914905500af77e0b3c6b8a71a881c0598ef14f98b7a1c2a26420a248')
+    'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'LITELLM_MCP_'
 READONLY_ENV = 'LITELLM_MCP_READONLY'
