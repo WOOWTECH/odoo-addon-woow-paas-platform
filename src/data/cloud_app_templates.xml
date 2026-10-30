@@ -2342,9 +2342,18 @@
                  20261028.1043@sha256:eed011d0…（#486），chart 模板不變、DB schema 同 0.1.14。證據：
                  docs/verification/2026-10-28-omnigent-0115-opencode-picker-pin.json。雲端工作機的 host image
                  沒有 opencode CLI，OpenCode 只能在使用者自己的機器上跑。回滾值：0.1.14 ＋ server 20261025.1643@sha256:1fc91dd4…、
-                 runner 20261025.1643@sha256:a1be5dd4…，不用改 DB。 -->
-            <field name="helm_chart_version">0.1.15</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261028.1043@sha256:9d9854607bcd180ce67b6b439ccb504b7fe75772231445aa31778630654adb12"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261028.1043@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+                 runner 20261025.1643@sha256:a1be5dd4…，不用改 DB。
+                 0.1.16（2026-10-30，woow-paas-charts #311）＝公開面收斂與主機刪除（審查 C1／C2）：只換 server image，
+                 runner 不變。匿名 /docs、/redoc、/openapi.json 一律 404（OMNIGENT_PUBLIC_API_DOCS=1 才開；/health、
+                 /v1/info、/v1/me 不變）；SPA 只對 web/src/App.tsx 的真實路由回殼；新增 DELETE /v1/hosts/{id}
+                 （擁有者，在線回 409）與主機清單的 created_at／last_seen（原始碼 WOOWTECH/omnigent
+                 fix/omnigent-v0191-overlay-hardening-20261029，PR #1）：server 20261030.0027@sha256:4c9e1200…
+                 （paas-odoo-ci #507），chart 模板不變、DB schema 同 0.1.15。證據：
+                 docs/verification/2026-10-30-omnigent-0116-hardening-pin.json（沙盒升級／回滾／再升級演練、
+                 pi-omnigent-plugin server-contract 12 步）。回滾值：0.1.15 ＋ server 20261028.1043@sha256:9d985460…，
+                 不用改 DB。 -->
+            <field name="helm_chart_version">0.1.16</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20261030.0027@sha256:4c9e1200218802df651bca450507247e7bcf37d0bc8a5e0399183a4cc7d0b636"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20261028.1043@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34"},"persistence":{"size":"5Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.openrouterApiKey", "label": "OpenRouter API 金鑰", "type": "password",
                 "description": "雲端工作機使用的 OpenRouter Key（選填）；pi 用 Kimi／DeepSeek／Claude 等模型，未填 Anthropic Key 時 Claude Code 也經 OpenRouter。金鑰只存放在服務內的 LLM 代理，雲端工作機只拿到本服務內有效的代用權杖、讀不到金鑰本身；但工作階段仍可經代理使用額度，請用有額度上限的專用子金鑰。從舊版升級的服務請更換一次金鑰。儲存後約一分鐘生效，新開的工作階段使用新金鑰"},

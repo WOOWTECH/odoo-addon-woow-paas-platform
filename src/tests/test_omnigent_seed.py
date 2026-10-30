@@ -52,13 +52,14 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.15',
+        self.assertEqual(tpl.helm_chart_version, '0.1.16',
                          '0.1.7：上游 omnigent v0.17.0（server／runner image pin，模板同 0.1.6）；'
                          '0.1.8–0.1.12＝charts 整合包 #254（runner nodeSelector tenant-schedulable——'
                          '節點 label 要先加、runner egress gate、/data 可寫 readiness、token Secret 回收、'
                          'egress-profile=web）；0.1.14＝上游 v0.19.1＋WoowTech overlay（charts #281，'
                          '只換 image；0.1.13 保留給 charts #256）；0.1.15＝overlay 加 OpenCode 選模型'
-                         '（charts #305，只換 image）')
+                         '（charts #305，只換 image）；0.1.16＝API 文件不公開＋擁有者刪除主機'
+                         '（charts #311，只換 server image）')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（helm 換不到密碼）；
@@ -84,8 +85,8 @@ class TestOmnigentSeed(TransactionCase):
             'v0.19.1 底的 MCP 工具清單＋OpenCode 模型清單修補 runner overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #486）')
         self.assertEqual(
             v['image']['tag'],
-            '20261028.1043@sha256:9d9854607bcd180ce67b6b439ccb504b7fe75772231445aa31778630654adb12',
-            'v0.19.1 底的 isError＋OpenCode 選模型 web UI 修補 server overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #487）')
+            '20261030.0027@sha256:4c9e1200218802df651bca450507247e7bcf37d0bc8a5e0399183a4cc7d0b636',
+            'v0.19.1 底的 isError＋OpenCode 選模型＋公開面收斂與主機刪除 server overlay 須經 JCR 鏡像後雙釘（paas-odoo-ci #507）')
         host_tag = v['runner']['image'][len(OMNI_HOST_IMAGE) + 1:]
         self.assertRegex(host_tag, PINNED_TAG_RE,
                          'runner image 由 launcher 原樣寫進每個 Job，必須釘 digest')
