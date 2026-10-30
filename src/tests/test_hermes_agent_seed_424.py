@@ -341,7 +341,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.4.5。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.4.7。
 
         版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
         0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
@@ -377,7 +377,13 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         # 所以 run.sh 改用絕對路徑（不經 shell 的 exec 會吃映像 PATH，第 3 位在租戶可寫的資料卷上），
         # 「沒新增相依」改比 runtime/package.json 與 package-lock.json，.mjs 鏡射進安全掃描，
         # 掃描签章加入命中文字，回滾中崩潰不再永久卡住更新。
-        self.assertEqual(tpl.helm_chart_version, '0.4.5')
+        # 0.4.6＝charts #312：關卡改和「實際掛載的轉接檔」比對（儀表板載入的是 chart 的
+        # ConfigMap 投影，插件樹裡那份是死的），並新增 adapter_mount_split。
+        # 0.4.7＝charts #313：啟動基準改成下限。**新服務必須至少 0.4.7**——0.4.6 及之前
+        # 在沒有帳本時要求插件完全等於一個寫死的 commit，於是拒絕插件自己的當前發行版，
+        # 新服務的自動更新器永遠起不來（0.4.3 要求 rc.5 而 rc.6 已發，0.4.6 要求 rc.6 而
+        # rc.8 已發，同一個缺陷兩次）。
+        self.assertEqual(tpl.helm_chart_version, '0.4.7')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。

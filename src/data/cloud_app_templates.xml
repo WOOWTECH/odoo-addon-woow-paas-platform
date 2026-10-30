@@ -1519,9 +1519,21 @@
                  mirrored into the security scan (the plugin runtime is entirely .mjs), the scan signature
                  includes the matched text, and a crash during rollback can no longer leave a service
                  permanently un-updated.
-                 helm_default_values unchanged: appVersion is 0.22.5 in all three chart versions.
-                 回滾值：0.4.4。 -->
-            <field name="helm_chart_version">0.4.5</field>
+                 0.4.6 makes that updater compare a candidate release against the adapter the
+                 Dashboard actually loads (the chart's ConfigMap projection) instead of the inert
+                 copy inside the plugin tree, so an adapter change ships as "roll the adapter, then
+                 publish the plugin" rather than being refused forever; it also refuses to run while
+                 a mutable ConfigMap edited in place has left the directory projection and the
+                 subPath `hermes` mount a generation apart.
+                 0.4.7 fixes a defect that blocked NEW services specifically: with no ledger yet the
+                 updater demanded the installed plugin be one frozen commit, so it refused the
+                 plugin's own current release and could never start. 0.4.6 and earlier are therefore
+                 unusable for a new service that enables Paseo. The baseline is now a floor: the
+                 installed plugin is adopted if it is a published release of the reviewed repo, on
+                 main, all required checks green, and not older than that floor.
+                 helm_default_values unchanged: appVersion is 0.22.5 in all of these chart versions.
+                 回滾值：0.4.4（0.4.5 和 0.4.6 對新服務都有上述的 bootstrap 缺陷，不要回滾到它們）。 -->
+            <field name="helm_chart_version">0.4.7</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20261025.0421@sha256:39718ca149934e1c4da240a5f41b53d45e0d5b62dba508b79c32fb0ef1aaf0f0"}, "agent": {"resources": {"requests": {"cpu": "500m", "memory": "2Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API 金鑰", "type": "password",
@@ -2227,18 +2239,21 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <!-- Chart 0.1.17 pairs with the 20261029.0606 PaaS Pi Agent image:
-                 root 0.3.21, Omnigent plugin 0.3.29, and Paseo 0.1.14.
-                 A container restart or a plugin-source swap no longer switches
-                 Paseo off (only a real disable does), and an empty provider
-                 model list is refreshed once after login. Omnigent and Paseo are
-                 still bound only from Settings, without a first-boot setup
-                 conversation or home-screen shortcut. Candidate run #31921 and
-                 approval issue #499 (promotion run #31953) guard the formal image
-                 tag; publish this seed only after chart 0.1.17 OCI read-back
-                 succeeds. Existing services retain their saved pins. -->
-            <field name="helm_chart_version">0.1.17</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261029.0606@sha256:7997f1db0e6e585f76677b28ba4d2496ae6264ec2b3c7779a4575f12056da2f9"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <!-- Chart 0.1.18 pairs with the 20261030.0550 PaaS Pi Agent image:
+                 root 0.3.22, Omnigent plugin 0.3.30, and Paseo 0.1.15.
+                 An image upgrade no longer signs anyone out of Omnigent: the
+                 image moves official plugin git pins to its bundled copies
+                 before Pi Web starts, and a plugin source switch keeps the
+                 approved login. Settings -> Omnigent shows the reason and next
+                 step for each issue, a broken launch chain falls back to a
+                 working pi-web, and Paseo stays on after a source switch.
+                 Omnigent and Paseo are still bound only from Settings, without a
+                 first-boot setup conversation or home-screen shortcut. Candidate
+                 run #32515 and approval issue #509 (promotion run #32555) guard the
+                 formal image tag; publish this seed only after chart 0.1.18 OCI
+                 read-back succeeds. Existing services retain their saved pins. -->
+            <field name="helm_chart_version">0.1.18</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261030.0550@sha256:ef39e877c4ee9dc114f5479106e06ab2dd1bef752f9f33d41f9996ee6dedc145"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"4Gi"},"limits":{"cpu":"2","memory":"8Gi"}},"nodeMaxOldSpaceMb":1536},"startupProbe":{"timeoutSeconds":5},"persistence":{"size":"30Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
