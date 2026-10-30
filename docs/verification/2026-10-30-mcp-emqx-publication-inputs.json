@@ -1,0 +1,102 @@
+{
+  "at": "2026-10-30T05:10:05.157746+00:00",
+  "source": "b5ed89ca01acfc33a7ef57987f0f64a11f603ea3",
+  "publication_proof": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/publication97/registry/20261030T044912Z/EMQX-PUBLICATION-PROOF.json",
+    "sha256": "421ecd622ead2adde3633c3344a77ff20af855336565d7d3a2e662319c75926e"
+  },
+  "image": "jcr-prod.woowtech.io/woow-paas-docker-local/emqx-mcp-admin:b5ed89ca01acfc33a7ef57987f0f64a11f603ea3@sha256:f60858334f11147675a0071b5caf699692ccf31fb493347da5d856bf9a8828dc",
+  "manifest_digest": "sha256:f60858334f11147675a0071b5caf699692ccf31fb493347da5d856bf9a8828dc",
+  "config_digest": "sha256:b8a3f5adfc1cac6752ae28c86f5d312ea98db464b6020cd2d4ac5493ad76c2a8",
+  "independent_cached_blob_hash_and_embedded_source_validation": {
+    "app": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/publication97/registry/20261030T044912Z/app-copy-layer.tar.gz",
+      "sha256": "1b673d43c69d863c61b03ceae7fb2cc3e2c8a8bee5d6f1dbde515a5f76e5aa5f",
+      "diff_id": "sha256:b4156966920f3ab53fb5c1003431ec6edceb040029fb7b087d30135d93e43f5a",
+      "independent_tracked_source_matches": 47
+    },
+    "core": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/publication97/registry/20261030T044912Z/core-copy-layer.tar.gz",
+      "sha256": "ad0f60ad06b4a7a8a634a07803a3f66cf7c00c950e5ccf99b5bb45237f4322d6",
+      "diff_id": "sha256:77e182ca79d2a89acfa25fd8eb534e81450ede259ddd95458b804db8f84f9b1d",
+      "independent_tracked_source_matches": 45
+    },
+    "ui": {
+      "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/publication97/registry/20261030T044912Z/ui-copy-layer.tar.gz",
+      "sha256": "17d340dbc71d3b4e6f33be33a1657644e836ee26230a656986983fdf9acf6850",
+      "diff_id": "sha256:94c0cbd6a1a00aa821d2b7b3fcfc9952d4be227fd557969c2c24ae6c3abe682c",
+      "independent_tracked_source_matches": 0
+    }
+  },
+  "contract_source_hashes": {
+    "apps/emqx/emqx_mcp_admin/main.py": "ff2a3b4c92777055394a974590efa6967ec923a3a518d6ddf2ac7e7233b95ae8",
+    "apps/emqx/emqx_mcp_admin/launcher.py": "014c0595b03159935b15e6a5088349cda1c2d4e732e729aebddbf189598cd130",
+    "apps/emqx/emqx_mcp_admin/tool_registry.py": "a27be84674a752264cc69414706818dfd352c44ac3538b53accf8df8e9854781",
+    "apps/emqx/emqx_mcp_server/registry.py": "c440d204de9091952ffbd6784d81cd7fd78184e266701f86cf051da332191652",
+    "apps/emqx/emqx_mcp_server/settings.py": "57ce0b7f8d7d4af1f17d662efcfdf9d5a747e7848d7f6bc46930ea74acd7d7c4",
+    "packages/mcp-admin-core/mcp_admin_core/config/store.py": "c7402a93eae1b1aac6c8c986c6997a4aa4d2aab3b947ece50b3ce85f1e23dec9"
+  },
+  "tool_names": [
+    "emqx_authz_settings",
+    "emqx_ban",
+    "emqx_broker_stats",
+    "emqx_client_subscribe",
+    "emqx_client_subscriptions",
+    "emqx_client_unsubscribe",
+    "emqx_cluster_status",
+    "emqx_create_trace",
+    "emqx_delete_retained",
+    "emqx_delete_trace",
+    "emqx_get_client",
+    "emqx_get_retained",
+    "emqx_get_rule_metrics",
+    "emqx_get_trace_log",
+    "emqx_kick_client",
+    "emqx_list_actions",
+    "emqx_list_alarms",
+    "emqx_list_authn",
+    "emqx_list_authz_sources",
+    "emqx_list_banned",
+    "emqx_list_clients",
+    "emqx_list_connectors",
+    "emqx_list_listeners",
+    "emqx_list_retained",
+    "emqx_list_rules",
+    "emqx_list_subscriptions",
+    "emqx_list_topics",
+    "emqx_list_traces",
+    "emqx_manage_authn_users",
+    "emqx_manage_authz_rules",
+    "emqx_metrics_current",
+    "emqx_metrics_history",
+    "emqx_node_detail",
+    "emqx_prometheus_stats",
+    "emqx_publish",
+    "emqx_publish_bulk",
+    "emqx_test_rule_sql",
+    "emqx_toggle_rule",
+    "emqx_unban"
+  ],
+  "tool_count": 39,
+  "reviewed_contract": {
+    "command": "emqx-mcp-server",
+    "args": [
+      "--port",
+      "8000"
+    ],
+    "port": 8000,
+    "child_host": "127.0.0.1",
+    "env_prefix": "EMQX_MCP_",
+    "connection_keys": [
+      "base_url",
+      "api_key",
+      "api_secret"
+    ],
+    "default_policy": "39 tools enabled; SQL execute individually revocable; seed must not override policy"
+  },
+  "limitations": [
+    "Independent review of producer-fetched exact registry bytes; no new registry GET claimed.",
+    "No actual broker acceptance claimed; Mencius owns that evidence.",
+    "No platform runtime or formal exposure claimed."
+  ]
+}

@@ -80,7 +80,7 @@ class TestSeedProductCorpusIntact(TransactionCase):
     # 329 → 335：Headscale、Tailscale、LiteLLM 各月/年（皆無加購變體；範本先隱藏）。
     # 335 → 337：MCP：AI 模型閘道（mcp-litellm）月/年（無加購變體；範本先隱藏，10-07 公開上架）。
     # 337 → 339：MCP：Nextcloud（mcp-nextcloud）月/年（無加購變體；範本先隱藏）。
-    _MIN_SEEDED_PRODUCTS = 339
+    _MIN_SEEDED_PRODUCTS = 341
 
     def test_no_seed_product_is_silently_dropped(self):
         imd = self.env['ir.model.data'].sudo().search([

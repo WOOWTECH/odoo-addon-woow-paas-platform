@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-30T05:57:48.657291+00:00",
+  "phase": "final_selected_ORM_accepted_and_owned_fixture_cleaned",
+  "passed": true,
+  "tested_base": "85a57df898098344dc0c2b2004954d49714da91f",
+  "tested_final_commit": "b5e7b79925db41c3cb0eed4792400216a564e6e7",
+  "final_actual_ORM": {
+    "methods": 434,
+    "upgrade": 217,
+    "fresh_install": 217,
+    "classes_per_database": 25,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0
+  },
+  "prior_hidden_candidate": {
+    "commit": "e342b2821144e1db8ed22fc2faf6e2c4ae14ef6c",
+    "methods": 434,
+    "separate_execution_not_single_combined_run": true
+  },
+  "fresh_install_and_upgraded_seed_snapshots_equal": true,
+  "existing27_templates_and156_seed_records_unchanged_relative_tested_base": true,
+  "new_template_count": 28,
+  "new_plan_product_seed_count": 160,
+  "final_catalog_listed": true,
+  "aggregate": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-emqx-preparation/ACCEPTANCE.json",
+    "sha256": "87215ee5e7584384388a29ec155c44f91cb75f159e002e4d86e35e8e99a560f9"
+  },
+  "source_reconciliation": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-emqx-preparation/SOURCE-BASE-RECONCILIATION.json",
+    "sha256": "fb6d5e4e63ef070f70768514c78f61ebd8f373009319231dd5cccbff5a27215d"
+  },
+  "cleanup": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-emqx-preparation/sandbox-v2/CLEANUP.json",
+    "sha256": "3b765fdd82474edc127a4b2d71325d03705e73469ce1ef6069f093e3b4b3089b"
+  },
+  "process_cleanup": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/platform-emqx-preparation/PROCESS-CLEANUP.json",
+    "sha256": "8f0e12e4ca63d48cd3cf06d288b8b7a1d5915e5090e641af42f49db807db7b61"
+  },
+  "actual_backend_independent_review": {
+    "path": "/data/pi-agent/home/work/mcp-parity-finalization-20261030/publication97/independent-backend-review/FINAL-REVIEW.json",
+    "sha256": "ad825eb44df5b15fc5677549431fce8c75108e968fe8edba4db9c26b701615d1"
+  },
+  "limitations": [
+    "Selected real Odoo ORM scope, not the full addon suite",
+    "Two pre-existing res_company.sh_journal_id NOT NULL install log errors also observed on unmodified base; selected test runs have zero failures/errors/skips",
+    "Independent broker proof enumerates 39 tools and executes bounded cases; this lane does not claim all39 runtime calls",
+    "Object cleanup, not physical byte erasure",
+    "PR2089 Hermes chart 0.4.5 was reconciled after the fixture; these 434 methods do not cover that upstream runtime change."
+  ],
+  "production_changes": false,
+  "artifact_dispatch": false,
+  "merge_owner": "Main"
+}

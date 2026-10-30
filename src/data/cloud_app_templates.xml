@@ -3367,6 +3367,48 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- EMQX MCP：PR97 的實際發布雙釘；不是既有 EMQX broker 範本。
+             39 支工具預設全開與 SQL execute 撤銷由 app 管理，平台不覆寫 tools/env/connection。
+             真 broker 與隱藏候選 434 ORM 驗收通過後上架；憑證走既有 config_json 分離通道。 -->
+        <record id="cloud_app_mcp_emqx" model="woow_paas_platform.cloud_app_template">
+            <field name="name">MCP：EMQX</field>
+            <field name="slug">mcp-emqx</field>
+            <field name="description">用 MCP 讓 AI 管理 EMQX MQTT broker。7 類共 39 支工具預設全開（含寫入、刪除與 SQL 測試），可逐支或按操作停用。需自備 broker API key／secret。1 vCPU／1 GB RAM／1 GB 磁碟</field>
+            <field name="full_description">讓 Claude、Hermes、pi-agent 等支援 MCP 的 AI 用戶端管理你指定的 EMQX MQTT broker：節點與監控、
+                用戶端、主題與訂閱、訊息、存取控制、診斷與資料整合，共 7 類、39 支工具。
+                **預設全開**：包含寫入、刪除等管理操作與 SQL 測試工具。請依授權範圍，在管理介面的 Tools 頁
+                逐支或按操作停用；SQL 測試（emqx_test_rule_sql）的 execute 操作可獨立撤銷。
+                **連線與憑證**：在 Connection 頁填入 broker 管理 API 的 HTTPS 網址、API key 與 API secret；
+                這不是 EMQX Dashboard 的登入帳號密碼。請在 broker 建立專用且具必要權限的 API key，
+                只連接你有權管理的 broker。平台不會代為取得、共用或預填其他服務的 broker 憑證。
+                **管理介面**：平台會產生獨立密碼，於開通時一次性顯示，之後可在服務頁重設。
+                **接上 AI 用戶端**：在 Tokens 頁建立 MCP token，端點填
+                https://你的服務網址/private_&lt;token&gt;/mcp（結尾不加斜線），傳輸方式選 Streamable HTTP。
+                此網址本身就是憑證；外洩時請撤銷 token。</field>
+            <field name="category">mcp</field>
+            <field name="tags">["mcp", "emqx", "mqtt", "mcp-server", "ai"]</field>
+
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
+            <field name="helm_chart_version">0.1.9</field>
+            <field name="helm_default_values">{"app": "emqx", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/emqx-mcp-admin", "tag": "b5ed89ca01acfc33a7ef57987f0f64a11f603ea3@sha256:f60858334f11147675a0071b5caf699692ccf31fb493347da5d856bf9a8828dc"}, "service": {"port": 8080}, "envPrefix": "EMQX_MCP_", "persistence": {"enabled": true, "size": "1Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "emqx-mcp-server", "args": ["--port", "8000"], "port": 8000, "env_prefix": "EMQX_MCP_"}}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">1</field>
+
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">config_json</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="is_hidden" eval="False"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
