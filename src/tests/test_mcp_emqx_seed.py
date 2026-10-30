@@ -200,4 +200,3 @@ class TestMcpEmqxSeed(TransactionCase):
             'config': {'sensitive': {'admin_password': new_password}},
         })
         self.assertEqual(service.helm_values, original_values)
-
