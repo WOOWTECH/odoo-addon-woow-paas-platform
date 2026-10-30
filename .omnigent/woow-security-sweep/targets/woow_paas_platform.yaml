@@ -356,7 +356,25 @@ disclosure:
   findings_to: omnigent_inbox
   issues_to: odoo-addons/woow_paas_platform
   high_fix_via: private_pr
-baseline: []
+baseline:
+  - id: c86cf8662975
+    fingerprint: gitleaks:generic-api-key:.sandbox/post-create.sh:70f626a1a6
+    status: accepted
+    reason: ECPay 公開 stage 測試商店憑證（sandbox seed 用），非真實秘密；人判誤報（2026-10-30）
+    approved_by: elmo
+    expires: 2027-04-30
+  - id: 065c8b99e243
+    fingerprint: gitleaks:generic-api-key:.claude/skills/standalone-odoo-migrate/scripts/target/neutralize-supplement.sql:01ffd02e44
+    status: accepted
+    reason: prod clone 去敏化腳本寫入的綠界電子發票公開測試商店值，非真實秘密；人判誤報（2026-10-30）
+    approved_by: elmo
+    expires: 2027-04-30
+  - id: 005ca9f525ff
+    fingerprint: gitleaks:generic-api-key:.claude/skills/woow-e2e-fixtures/scripts/prod-clone/supplement.sql:ab85ff6099
+    status: accepted
+    reason: prod clone 去敏化腳本寫入的綠界電子發票公開測試商店值，非真實秘密；人判誤報（2026-10-30）
+    approved_by: elmo
+    expires: 2027-04-30
 
 # baseline 格式（accepted 必須有 expires，不允許永久豁免）：
 #  - id: <自訂或 H-xx>
