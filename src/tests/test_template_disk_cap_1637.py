@@ -50,6 +50,7 @@ _VOLUMES = {
     'mcp-opendesign': ((('persistence', 'size'), '1Gi'),),
     'mcp-litellm': ((('persistence', 'size'), '1Gi'),),
     'mcp-nextcloud': ((('persistence', 'size'), '1Gi'),),
+    'mcp-emqx': ((('persistence', 'size'), '1Gi'),),
     'ha-paas': ((('persistence', 'size'), '5Gi'),),
     'open-design': (
         (('persistence', 'data', 'size'), '8Gi'),
@@ -92,6 +93,7 @@ EXPECTED = {
     'mcp-opendesign': (1, {'plan_mcp_opendesign_monthly': 1}),
     'mcp-litellm': (1, {'plan_mcp_litellm_monthly': 1}),
     'mcp-nextcloud': (1, {'plan_mcp_nextcloud_monthly': 1}),
+    'mcp-emqx': (1, {'plan_mcp_emqx_monthly': 1}),
     'haos': (30, {'plan_haos_monthly': 30}),
     'ha-full': (10, {'plan_ha_full_monthly': 10}),
     'code-server': (20, {'plan_code_server_monthly': 20}),
@@ -115,7 +117,7 @@ EXPECTED_MIN_STORAGE = {
     'emqx': 3, 'litellm': 5, 'open-design': 10, 'omnigent': 5, 'hermes-agent': 5, 'ha-paas': 5,
     'headscale': 1, 'tailscale': 1, 'nextcloud': 20,
     'mcp-hermes': 1, 'mcp-odoo': 1, 'mcp-odoo-manage': 1, 'mcp-n8n': 1, 'mcp-k8s': 1,
-    'mcp-vk': 1, 'mcp-opendesign': 1, 'mcp-litellm': 1, 'mcp-nextcloud': 1,
+    'mcp-vk': 1, 'mcp-opendesign': 1, 'mcp-litellm': 1, 'mcp-nextcloud': 1, 'mcp-emqx': 1,
 }
 
 
