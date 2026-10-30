@@ -1,0 +1,82 @@
+{
+  "source_commit": "b2eec04ba3e22b84fe453a4948450cb162a0fda5",
+  "source_tree": "3eeee63f1816b53e8c7d2140307d941a548dfe79",
+  "source_PR": "https://git-prod.woowtech.io/WOOWTECH/woow-mcp-server/pulls/98",
+  "platform_base": "9dd5a97d3bd8a5ef1dedfe8fd288d823a9a0645c",
+  "module_version_unchanged": "18.0.1.0.281",
+  "publication": {
+    "normal_main_CI_all_checks_green": true,
+    "registry_manifest_config_verified": true,
+    "registry_observation_sha256": "f741a9058cad6971504ad8737d87e4cb5d1a1680c26adff16b1b09ac55926f88",
+    "source_layer_receipt_sha256": "c47abb7da0e3f001e4955e8b58fad49cee64ef880380a0743c538017765c03f5",
+    "selected_layers": 27,
+    "compressed_bytes": 6266963,
+    "source_hashes_independently_rechecked": 358,
+    "source_scope": "Authenticated fresh GET of 27 selected core/app/static COPY blobs; compressed size/SHA and uncompressed diffID verified; tracked included core/app bytes compared to exact merge; static assets extracted unchanged. Final running filesystem/real child verification is pending fixture.",
+    "full_image_download_claim": false,
+    "running_filesystem_claim": false,
+    "published_UI_mocked_API_proof_sha256": "ae6076078bb49123032e18c2095868f944213216c2f37a48bbca4266fa151fb3"
+  },
+  "pins": {
+    "hermes": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:5353b124f970ddce2e2283bac56e8f7bc7e5f9bcc3181387c687ac252595c156",
+      "manifest_digest": "sha256:5353b124f970ddce2e2283bac56e8f7bc7e5f9bcc3181387c687ac252595c156",
+      "config_digest": "sha256:b512a2b7c4147726185abcff4d72f63475ea5d4be22159683517e0ebf0ea0489"
+    },
+    "odoo": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:aacc8e9d631f5efcfa2c63ab20180312ae5077b0ffc739d4bde9040407377d39",
+      "manifest_digest": "sha256:aacc8e9d631f5efcfa2c63ab20180312ae5077b0ffc739d4bde9040407377d39",
+      "config_digest": "sha256:37520182bae5b6e044d5a177b727ac86a87f166ee014b431d249cddea98d5949"
+    },
+    "n8n": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:646b2d2b69bf783e5c671a47ff719480ff157bd8f871c273b791179fa196c900",
+      "manifest_digest": "sha256:646b2d2b69bf783e5c671a47ff719480ff157bd8f871c273b791179fa196c900",
+      "config_digest": "sha256:d2b3c1bf95bbf6c6b3b36a10f381a76b0899aa958d95b3f350fae226383ad218"
+    },
+    "k8s": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/k8s-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:8d7283ee1e001bdb43410dcc1f82b86798243181e284de791d3c3678ce3b8c78",
+      "manifest_digest": "sha256:8d7283ee1e001bdb43410dcc1f82b86798243181e284de791d3c3678ce3b8c78",
+      "config_digest": "sha256:02cce7db0da9068d3f60dbc516f09d0e5fbefef9446164e59ee3cf47649b8ce9"
+    },
+    "vk": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/vk-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:1671e652d2168362f8fae53d426df1b05b64f57425d662591d85ea8cfadfffc5",
+      "manifest_digest": "sha256:1671e652d2168362f8fae53d426df1b05b64f57425d662591d85ea8cfadfffc5",
+      "config_digest": "sha256:365b480bc6da2bdde1de1f1c97e57c09170a4ccdf1f1f67eb80bcb694ec2903c"
+    },
+    "opendesign": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/opendesign-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:2800cbbe04e3e8e587e5ed7d16f8dd6a4f200eb9540d2bef2a0f13d6d29986a5",
+      "manifest_digest": "sha256:2800cbbe04e3e8e587e5ed7d16f8dd6a4f200eb9540d2bef2a0f13d6d29986a5",
+      "config_digest": "sha256:f68934ad4da7190d2f5df30d2d1144cb1bb477ae41cad2567e221e8c9545bc70"
+    },
+    "litellm": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/litellm-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470",
+      "manifest_digest": "sha256:c07db1ce1947e59621e6f862514b193236c1fd40e3d04185573ee556c5835470",
+      "config_digest": "sha256:dd61a54b23ee2cecce13809ff1e402cd5f0af7d4c030da34fdb85b67f569fe55"
+    },
+    "nextcloud": {
+      "image": "jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud-mcp-admin:b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:cd84b60a9cd942c2c440103910a23816e52b3a2a3c21be6502aaeade0fba591a",
+      "manifest_digest": "sha256:cd84b60a9cd942c2c440103910a23816e52b3a2a3c21be6502aaeade0fba591a",
+      "config_digest": "sha256:a62beed409e21c641c6baae3bf6d9943ebd8750e7f1b485fdeecc6250f6fa11f"
+    }
+  },
+  "semantic_delta": {
+    "template_count": 27,
+    "changed_tags": 8,
+    "all_non_image_fields_unchanged": true,
+    "all_other_templates_unchanged": true,
+    "legacy_odoo_manage_unchanged": true
+  },
+  "compatibility": {
+    "Nextcloud_package_version": "0.1.6",
+    "chart": "0.1.9 unchanged",
+    "credentials_ports_commands_resources_policy_defaults": "unchanged",
+    "existing_MCP_oauth_or_API_tokens": "no mutation",
+    "EMQX_template": "separate PR2094; not added",
+    "legacy_odoo_manage": "unchanged",
+    "Hermes_Agent_chart": "0.4.7 unchanged",
+    "Pi_Agent_chart": "0.1.18 unchanged"
+  },
+  "ORM_acceptance": "separate fresh isolated upgrade/fresh run required before PR merge; actual results will be linked in PR",
+  "production_deployment_claim": false,
+  "rollback": "Revert eight image tags and expected test constants together to baseline 9dd5a97; module version and chart unchanged. No production data or migrations changed by this source PR."
+}

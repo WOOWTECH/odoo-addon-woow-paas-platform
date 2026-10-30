@@ -67,7 +67,7 @@ IMAGE_REPOSITORY = JCR + 'nextcloud-mcp-admin'
 # 2026-10-30：PR95 八映像發布證據與固定 LaunchPolicy 已核對；本 lane 未重跑 MCP runtime。
 # 證據：docs/verification/2026-10-30-mcp95-template-pins.json。
 EXPECT_IMAGE_TAG = (
-    '3c93d0e727fdc948f1ea17cb5fa7d1ad1887a883@sha256:f7fcd1568753f92c68da191036ce852b58da8a0deb045ac945e28910cbee8bb9')
+    'b2eec04ba3e22b84fe453a4948450cb162a0fda5@sha256:cd84b60a9cd942c2c440103910a23816e52b3a2a3c21be6502aaeade0fba591a')
 GIT_SHA_PINNED_TAG_RE = r'^[0-9a-f]{40}@sha256:[0-9a-f]{64}$'
 ENV_PREFIX = 'NEXTCLOUD_MCP_'
 
