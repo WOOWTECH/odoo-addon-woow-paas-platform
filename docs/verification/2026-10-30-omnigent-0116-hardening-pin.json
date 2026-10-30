@@ -1,0 +1,74 @@
+{
+  "verified_at": "2026-10-30",
+  "service": "Omnigent",
+  "template": "woow_paas_platform.cloud_app_omnigent",
+  "chart": {
+    "from": "omnigent 0.1.15",
+    "to": "omnigent 0.1.16",
+    "chart_pr": "https://git-prod.woowtech.io/woow-paas/woow-paas-charts/pulls/311",
+    "chart_head": "9b9bf54",
+    "template_change": "server image pin only; runner image, templates and DB schema identical to 0.1.15",
+    "supersedes": "0.1.13, reserved for charts#256 (X-SEC-005-6 public surface)"
+  },
+  "source": {
+    "upstream_release": "omnigent-ai/omnigent v0.19.1",
+    "overlay_branch": "https://github.com/WOOWTECH/omnigent/tree/fix/omnigent-v0191-overlay-hardening-20261029",
+    "overlay_pr": "https://github.com/WOOWTECH/omnigent/pull/1",
+    "overlay_head": "1e87a0ad4847c0b79fe5be6c6646ab0b201e0257",
+    "overlay_base": "fix/omnigent-v0191-overlay-opencode-picker-20261028 (chart 0.1.15)",
+    "qa_image_build": "https://github.com/WOOWTECH/omnigent/actions/runs/40875942181",
+    "server": {
+      "overlay_scope": "0.1.15 overlay + server/app.py (API docs off unless OMNIGENT_PUBLIC_API_DOCS=1; SPA shell only for the routes in web/src/App.tsx), routes/hosts.py (owner DELETE /v1/hosts/{id}, 409 while online; created_at and last_seen in the host list), stores/host_store.py; the build checks the v0.19.1 original file sha256 before replacing and asserts the new behaviour is loaded",
+      "qa_image": "ghcr.io/woowtech/omnigent-server-kubernetes@sha256:4c9e1200218802df651bca450507247e7bcf37d0bc8a5e0399183a4cc7d0b636"
+    },
+    "host": "unchanged: omnigent-host 20261028.1043@sha256:eed011d0ee2bd0a11c112d3e9eccd48e8e3d67dfdb1b4d0999918c04c96e7a34 (the hardening touches server files only)"
+  },
+  "mirror": {
+    "server": {
+      "pin": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261030.0027@sha256:4c9e1200218802df651bca450507247e7bcf37d0bc8a5e0399183a4cc7d0b636",
+      "approval_issue": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/issues/507",
+      "approve_comment": "toypark1234 2026-10-30T01:32:29Z",
+      "publish_run": "https://git-prod.woowtech.io/woow-paas/paas-odoo-ci/actions/runs/32336",
+      "jcr_image_coord_from_run": "jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes:20261030.0027@sha256:4c9e1200218802df651bca450507247e7bcf37d0bc8a5e0399183a4cc7d0b636",
+      "digest_exact_match": true,
+      "pulled_from_jcr_in_rehearsal": true
+    },
+    "preserve_digests": true
+  },
+  "sandbox_surface_check": {
+    "namespace": "dev-sandbox-omni-hard-1030 (deleted)",
+    "image": "ghcr QA image above, env as production svc-65b75f59",
+    "anonymous_hidden_404": ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"],
+    "production_0_1_15_same_paths": 200,
+    "adapter_endpoints_unchanged": {"/health": 200, "/v1/info": 200, "/v1/me": "401 with login_url=/login"},
+    "page_routes_same_as_production": ["/", "/c/conv_abc123", "/canvas/c/conv_abc123", "/settings/general", "/settings/members", "/extensions/ext_demo/reports/weekly", "/approve/conv_abc123/elicit_abc123", "/inbox", "/tasks", "/usage", "/login", "/register", "/members", "/policies"],
+    "now_404_were_200": ["/grid (no such route in v0.19.1 web/src/App.tsx)", "/wp-admin (probe path)"],
+    "host_delete": {"anonymous": 401, "admin_unknown_id": 404}
+  },
+  "server_contract": {
+    "runner": "pi-omnigent-plugin tests/server-contract/run.py --server-url --expect-host-delete (WOOWTECH/pi-omnigent-plugin#24)",
+    "client_sdk": "omnigent 0.16.0 (what the tenants run)",
+    "steps_passed": 12,
+    "steps": ["anonymous probes", "connect with managed host", "status and catalog", "resume while running", "resume after the host process died", "identity mismatch: host id or server", "identity mismatch: another account", "disconnect", "resume after disconnect asks for login", "reconnect keeps the host identity", "owner host delete: 409 online, removed offline", "no egress"]
+  },
+  "chart_rehearsal": {
+    "namespace": "dev-sandbox-omnigent-0116 (deleted; PVC on longhorn-delete, PV removed)",
+    "shape": "SQLite, chart defaults, runner enabled, networkPolicy off so the in-namespace contract runner can reach the server, 1Gi volume",
+    "charts": "0.1.15 from woow-paas-charts main, 0.1.16 from the #311 branch; images pulled from JCR with paas-registry",
+    "install_0_1_15_seconds_to_ready": 45,
+    "before_upgrade": "docs 200 as in production; contract 11/11 (no host delete on 0.1.15); one offline host left; admin session token saved",
+    "upgrade_seconds_to_ready": 82,
+    "after_upgrade": "pre-upgrade session token /v1/me 200; the 0.1.15 host still listed and now carries created_at/last_seen; docs 404; page routes 200; /wp-admin 404; contract 12/12 including host delete; the pre-upgrade offline host deleted by its owner (200) and gone from the list",
+    "rollback_to_0_1_15_seconds_to_ready": 63,
+    "after_rollback": "session token 200; a host created on 0.1.16 is readable on 0.1.15; docs 200 again",
+    "rollback_db_change": "none",
+    "re_upgrade_seconds_to_ready": 77,
+    "after_re_upgrade": "session token 200; host listed with the new fields; docs 404"
+  },
+  "limits": [
+    "Anyone who used /docs or /openapi.json against the public server (for example ad-hoc API exploration) now gets 404; set OMNIGENT_PUBLIC_API_DOCS=1 on the server to turn them back on",
+    "Host delete removes the registration only; conversations bound to that host keep their history with host_id set to NULL (upstream HostStore.delete_host)"
+  ],
+  "migration_needed": false,
+  "release_status": "Seed pin ready for human review once charts #311 is merged and 0.1.16 is published. Existing services switch only on admin Redeploy; production svc-65b75f59 gets a backup first and needs the owner's go."
+}
