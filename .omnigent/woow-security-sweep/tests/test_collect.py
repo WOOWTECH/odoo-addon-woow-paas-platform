@@ -104,6 +104,27 @@ class ExcludeTest(unittest.TestCase):
         self.assertFalse(cl.is_excluded("models/tests_helper.py", pats))
 
 
+class SemgrepCommandTest(unittest.TestCase):
+    """exclude_rules 轉成 semgrep 的 --exclude-rule；形狀不對整個工具記 error，不靜默略過。"""
+
+    def run_semgrep(self, cfg):
+        with mock.patch.object(cl, "_run_tool", return_value=(0, '{"results": []}', "")) as run:
+            cl.run_semgrep(Path("/nonexistent"), ["a.py"], cfg)
+        return run.call_args[0][0]
+
+    def test_exclude_rules_become_flags(self):
+        cmd = self.run_semgrep({"rulesets": ["p/python"], "exclude_rules": ["a.b-c", "x_y.z"]})
+        self.assertIn("--exclude-rule=a.b-c", cmd)
+        self.assertIn("--exclude-rule=x_y.z", cmd)
+        self.assertEqual(cmd[-1], "a.py")
+        self.assertFalse(any(c.startswith("--exclude-rule") for c in self.run_semgrep({})))
+
+    def test_bad_rule_id_raises(self):
+        for bad in ("--config=evil", "-x", "a b", ""):
+            with self.subTest(bad=bad), self.assertRaises(cl.CollectError):
+                self.run_semgrep({"exclude_rules": [bad]})
+
+
 class FingerprintTest(unittest.TestCase):
     def test_stable_when_line_moves(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -445,6 +466,28 @@ class StackAndRemoteTest(RepoFixture):
         self.no_public()
         cfg = cl.load_config(self.repo, "origin/main", self.targets)
         self.assertIn("models/", cfg["scan"]["exclude"])
+
+    def test_targets_semgrep_exclude_rules(self):
+        rule = "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure"
+        (self.targets / "demo.yaml").write_text(f"stack: odoo\nsemgrep_exclude_rules: [{rule}]\n")
+        cfg = cl.load_config(self.repo, "origin/main", self.targets)
+        self.assertEqual(cfg["scan"]["tools"], {})  # repo 有 .security/sweep.yaml ⇒ targets 不能排除規則
+        self.no_public()
+        cfg = cl.load_config(self.repo, "origin/main", self.targets)
+        semgrep = cfg["scan"]["tools"]["semgrep"]
+        self.assertEqual(semgrep["exclude_rules"], [rule])
+        self.assertEqual(semgrep["rulesets"], ["p/python", "p/secrets"])  # stack 的 rulesets 保留
+        self.assertIn("semgrep_exclude_rules 1 條", cfg["_sources"]["public"])
+
+    def test_semgrep_exclude_rules_need_semgrep_in_stack(self):
+        self.no_public()
+        (self.targets / "demo.yaml").write_text("stack: generic\nsemgrep_exclude_rules: [a.b]\n")
+        stacks = Path(self.tmp.name) / "stacks"
+        stacks.mkdir()
+        (stacks / "generic.yaml").write_text("name: generic\ndefaults:\n  scan:\n    tools: {gitleaks: {}}\n")
+        cfg = cl.load_config(self.repo, "origin/main", self.targets, stacks)
+        self.assertNotIn("semgrep", cfg["scan"]["tools"])  # 不會因為寫了排除就開啟 semgrep
+        self.assertNotIn("semgrep_exclude_rules", cfg["_sources"]["public"])
 
     def test_targets_review_classes_override_stack(self):
         (self.targets / "demo.yaml").write_text("stack: odoo\nreview_classes: ['ATTACK-CLASSES.md#Injection']\n")
